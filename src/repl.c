@@ -32,7 +32,6 @@ int main(int argc, char *argv[]) {
       valk_lval_t finalRes = eval(res.output);
       printf("Result: ");
       valk_lval_print(finalRes);
-      
 
       mpc_ast_delete(res.output);
     } else {
@@ -63,11 +62,8 @@ valk_lval_t eval_op(char *op, valk_lval_t x, valk_lval_t y) {
     return valk_lval_num(x.val * y.val);
   }
   if (strcmp(op, "/") == 0) {
-    if (y.val > 0) {
-      return valk_lval_err(x.val / y.val);
-    } else {
-      return valk_lval_err(LERR_DIV_ZERO);
-    }
+    return y.val > 0 ? valk_lval_err(x.val / y.val)
+                     : valk_lval_err(LERR_DIV_ZERO);
   }
   return valk_lval_err(LERR_BAD_OP);
 }
