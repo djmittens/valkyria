@@ -2,6 +2,17 @@ cmake_minimum_required(VERSION 3.26 FATAL_ERROR)
 
 project(valkyria LANGUAGES C)
 
+# Enable AddressSanitizer flags
+set(SANITIZE_ADDRESS_FLAGS "-fsanitize=address -fno-omit-frame-pointer")
+
+# Apply to C and C++ compile flags
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${SANITIZE_ADDRESS_FLAGS}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZE_ADDRESS_FLAGS}")
+
+# Apply to link flags
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS}")
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS}")
+
 find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(EDITLINE REQUIRED IMPORTED_TARGET libeditline)
@@ -32,4 +43,4 @@ include_directories(valkyria
   ${EDITLINE_INCLUDE_DIRS}
 )
 # set_property(TARGET valkyria PROPERTY C_STANDARD 23)
-target_link_libraries(valkyria PkgConfig::EDITLINE)
+target_link_libraries(valkyria "-lc" PkgConfig::EDITLINE)
