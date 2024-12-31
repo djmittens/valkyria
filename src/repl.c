@@ -1,9 +1,10 @@
+#include "parser.h"
 #include <editline.h>
 #include <mpc.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-long eval(mpc_ast_t *ast);
+valk_lval_t eval(mpc_ast_t *ast);
 
 int main(int argc, char *argv[]) {
   printf("Hello World\n");
@@ -28,7 +29,10 @@ int main(int argc, char *argv[]) {
     if (mpc_parse("<stdin>", input, repl, &res)) {
       mpc_ast_print(res.output);
 
-      printf("Result: %li\n", eval(res.output));
+      valk_lval_t finalRes = eval(res.output);
+      printf("Result: ");
+      valk_lval_print(finalRes);
+      
 
       mpc_ast_delete(res.output);
     } else {
@@ -42,30 +46,40 @@ int main(int argc, char *argv[]) {
   return EXIT_SUCCESS;
 }
 
-long eval_op(char *op, long x, long y) {
+valk_lval_t eval_op(char *op, valk_lval_t x, valk_lval_t y) {
+  if (x.type == LVAL_ERROR) {
+    return x;
+  }
+  if (y.type == LVAL_ERROR) {
+    return y;
+  }
   if (strcmp(op, "+") == 0) {
-    return x + y;
+    return valk_lval_num(x.val + y.val);
   }
   if (strcmp(op, "-") == 0) {
-    return x - y;
+    return valk_lval_num(x.val - y.val);
   }
   if (strcmp(op, "*") == 0) {
-    return x * y;
+    return valk_lval_num(x.val * y.val);
   }
   if (strcmp(op, "/") == 0) {
-    return x / y;
+    if (y.val > 0) {
+      return valk_lval_err(x.val / y.val);
+    } else {
+      return valk_lval_err(LERR_DIV_ZERO);
+    }
   }
-  return 0;
+  return valk_lval_err(LERR_BAD_OP);
 }
 
-long eval(mpc_ast_t *ast) {
+valk_lval_t eval(mpc_ast_t *ast) {
   if (strstr(ast->tag, "number")) {
-    return atoi(ast->contents);
+    return valk_lval_num(atoi(ast->contents));
   }
 
   char *op = ast->children[1]->contents;
 
-  long x = eval(ast->children[2]);
+  valk_lval_t x = eval(ast->children[2]);
 
   // mpc_ast_t *child = ast->children[3];
   int i = 3;

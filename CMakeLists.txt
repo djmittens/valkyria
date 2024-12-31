@@ -31,5 +31,5 @@ include_directories(valkyria
   "vendor/mpc/"
   ${EDITLINE_INCLUDE_DIRS}
 )
-
+# set_property(TARGET valkyria PROPERTY C_STANDARD 23)
 target_link_libraries(valkyria PkgConfig::EDITLINE)
