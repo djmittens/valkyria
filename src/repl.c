@@ -4,24 +4,29 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-valk_lval_t eval(mpc_ast_t *ast);
+valk_lval_t *eval(mpc_ast_t *ast);
+valk_lval_t *read_ast(const mpc_ast_t *ast);
 
 int main(int argc, char *argv[]) {
   printf("Hello World\n");
   char *input;
 
   mpc_parser_t *number = mpc_new("number");
-  mpc_parser_t *operator= mpc_new("operator");
+  mpc_parser_t *symbol = mpc_new("symbol");
+  mpc_parser_t *sexpr = mpc_new("sexpr");
   mpc_parser_t *expr = mpc_new("expr");
   mpc_parser_t *repl = mpc_new("repl");
 
-  mpca_lang(MPCA_LANG_DEFAULT,
-            "number : /-?[0-9]+/;\n"
-            "operator : '+' | '-' | '*' | '/';\n"
-            "expr : <number> | '(' <operator> <expr>+ ')';\n"
-            "repl : /^/ <operator> <expr>+ /$/;\n",
+  mpca_lang(
+      MPCA_LANG_DEFAULT,
+      "number : /-?[0-9]+/;\n"
+      "symbol : '+' | '-' | '*' | '/';\n"
+      // s-expressions, or symbolic expressions, which is a list of expressions
+      "sexpr : '(' <expr>* ')';\n"
+      "expr : <number> | <symbol> | <sexpr>;\n"
+      "repl : /^/<expr>*/$/;\n",
 
-            number, operator, expr, repl);
+      number, symbol, sexpr, expr, repl);
   // This is the L in repL
   while ((input = readline("valkyria> ")) != NULL) {
     add_history(input);
@@ -29,10 +34,12 @@ int main(int argc, char *argv[]) {
     if (mpc_parse("<stdin>", input, repl, &res)) {
       mpc_ast_print(res.output);
 
-      valk_lval_t finalRes = eval(res.output);
+      valk_lval_t *finalRes = read_ast(res.output);
       printf("Result: ");
       valk_lval_print(finalRes);
+      printf("\n");
 
+      // free(finalRes);
       mpc_ast_delete(res.output);
     } else {
       mpc_err_print(res.error);
@@ -41,47 +48,94 @@ int main(int argc, char *argv[]) {
 
     free(input);
   }
-  mpc_cleanup(4, number, operator, expr, repl);
+  mpc_cleanup(5, number, symbol, sexpr, expr, repl);
   return EXIT_SUCCESS;
 }
 
-valk_lval_t eval_op(char *op, valk_lval_t x, valk_lval_t y) {
-  if (x.type == LVAL_ERROR) {
+valk_lval_t *eval_op(char *op, valk_lval_t *x, valk_lval_t *y) {
+  if (x->type == LVAL_ERR) {
     return x;
   }
-  if (y.type == LVAL_ERROR) {
+  if (y->type == LVAL_ERR) {
     return y;
   }
   if (strcmp(op, "+") == 0) {
-    return valk_lval_num(x.val + y.val);
+    return valk_lval_num(x->val + y->val);
   }
   if (strcmp(op, "-") == 0) {
-    return valk_lval_num(x.val - y.val);
+    return valk_lval_num(x->val - y->val);
   }
   if (strcmp(op, "*") == 0) {
-    return valk_lval_num(x.val * y.val);
+    return valk_lval_num(x->val * y->val);
   }
   if (strcmp(op, "/") == 0) {
-    return y.val > 0 ? valk_lval_err(x.val / y.val)
-                     : valk_lval_err(LERR_DIV_ZERO);
+    return y->val > 0 ? valk_lval_num(x->val / y->val)
+                      : valk_lval_err("Division By Zero\n");
   }
-  return valk_lval_err(LERR_BAD_OP);
+  return valk_lval_err("Error: Invalid Operation\n");
 }
 
-valk_lval_t eval(mpc_ast_t *ast) {
+valk_lval_t *eval(mpc_ast_t *ast) {
   if (strstr(ast->tag, "number")) {
     return valk_lval_num(atoi(ast->contents));
   }
 
   char *op = ast->children[1]->contents;
 
-  valk_lval_t x = eval(ast->children[2]);
+  valk_lval_t *x = eval(ast->children[2]);
 
   // mpc_ast_t *child = ast->children[3];
   int i = 3;
   while (strstr(ast->children[i]->tag, "expr")) {
     x = eval_op(op, x, eval(ast->children[i]));
     i++;
+  }
+  return x;
+}
+
+valk_lval_t *read_num(char *num) {
+  errno = 0;
+  long x = strtol(num, NULL, 10);
+  return errno != ERANGE ? valk_lval_num(x)
+                         : valk_lval_err("Number outside long range");
+}
+
+valk_lval_t *read_ast(const mpc_ast_t *ast) {
+  if (strstr(ast->tag, "number")) {
+    printf("wahoo %s, %s\n", ast->tag, ast->contents);
+    return read_num(ast->contents);
+  }
+  if (strstr(ast->tag, "symbol")) {
+    return valk_lval_sym(ast->contents);
+  }
+
+  valk_lval_t *x = NULL;
+  if (strstr(ast->tag, "sexpr") || (strcmp(ast->tag, ">") == 0)) {
+    x = valk_lval_sexpr_empty();
+  } else {
+    return valk_lval_err("Incorrect node type");
+  }
+
+  mpc_ast_t *child;
+  valk_lval_t *tChild;
+  for (int i = 0; i < ast->children_num; ++i) {
+    child = ast->children[i];
+    if (strcmp(child->contents, "(") == 0) {
+      continue;
+    }
+    if (strcmp(child->contents, ")") == 0) {
+      continue;
+    }
+    if (strcmp(child->tag, "regex") == 0) {
+      continue;
+    }
+    tChild = read_ast(child);
+    if (tChild) {
+      valk_lval_sexpr_add(x, tChild);
+    } else {
+      valk_lval_sexpr_add(x, valk_lval_err("Invalid expression"));
+      printf("Warn: Skipping unhandled token: %s\n", child->tag);
+    }
   }
   return x;
 }

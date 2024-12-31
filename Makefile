@@ -20,3 +20,8 @@ clean:
 .PHONY: repl
 repl:
 	build/valkyria
+
+
+.PHONY: debug
+debug: build
+	lldb -o "run" build/valkyria
