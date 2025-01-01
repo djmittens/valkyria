@@ -120,3 +120,8 @@ static inline void valk_lval_println(valk_lval_t *val) {
   valk_lval_print(val);
   printf("\n");
 }
+
+valk_lval_t* valk_lval_eval(valk_lval_t* sexpr);
+valk_lval_t* valk_lval_eval_sexpr(valk_lval_t* sexpr);
+valk_lval_t* valk_lval_take(valk_lval_t* lval, size_t i);
+valk_lval_t* valk_lval_pop(valk_lval_t* lval, size_t i);

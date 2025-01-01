@@ -2,16 +2,19 @@ cmake_minimum_required(VERSION 3.26 FATAL_ERROR)
 
 project(valkyria LANGUAGES C)
 
-# Enable AddressSanitizer flags
-set(SANITIZE_ADDRESS_FLAGS "-fsanitize=address -fno-omit-frame-pointer")
+if(ASAN)
+  # Enable AddressSanitizer flags
+  set(SANITIZE_ADDRESS_FLAGS "-fsanitize=address -fno-omit-frame-pointer")
+endif()
+
 
 # Apply to C and C++ compile flags
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${SANITIZE_ADDRESS_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZE_ADDRESS_FLAGS}")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${SANITIZE_ADDRESS_FLAGS} -fcolor-diagnostics")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZE_ADDRESS_FLAGS} -fcolor-diagnostics")
 
 # Apply to link flags
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS}")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS}")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS} -fcolor-diagnostics")
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS} -fcolor-diagnostics")
 
 find_package(PkgConfig REQUIRED)
 
@@ -24,11 +27,11 @@ if (HOMEBREW_CLANG)
   include (${CMAKE_CURRENT_SOURCE_DIR}/homebrew.cmake)
 endif()
 
-file(GLOB _SRC 
+file(GLOB _SRC
   src/*.c
 )
 
-# file(GLOB _HEADERS 
+# file(GLOB _HEADERS
 #   src/*.h
 #   vendor/editline/include/*.h
 # )
