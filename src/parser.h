@@ -1,10 +1,15 @@
 #pragma once
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef enum { LVAL_NUM, LVAL_SYM, LVAL_SEXPR, LVAL_ERR } valk_lres_t;
+typedef enum {
+  LVAL_NUM,
+  LVAL_SYM,
+  LVAL_QEXPR,
+  LVAL_SEXPR,
+  LVAL_ERR
+} valk_lres_t;
 
 typedef struct valk_lval_t {
   valk_lres_t type;
@@ -13,7 +18,7 @@ typedef struct valk_lval_t {
     struct valk_lval_t **cell;
     char *str;
   };
-  // only valid for sexpr
+  // only valid for (s|q)expr
   size_t count;
 } valk_lval_t;
 
@@ -54,20 +59,12 @@ static inline valk_lval_t *valk_lval_sexpr_empty() {
   return res;
 }
 
-static inline valk_lval_t *valk_lval_sexpr_add(valk_lval_t *lval,
-                                               valk_lval_t *cell) {
-  if(cell == NULL) {
-    printf("Adding null to sexpr is not allowed\n");
-    fflush(stdout);
-    raise(SIGABRT);
-  }
-  lval->count++;
-  lval->cell = realloc(lval->cell, sizeof(valk_lval_t *) * lval->count);
-  if(lval->cell == NULL) {
-    printf("uuuu busted\n");
-  }
-  lval->cell[lval->count - 1] = cell;
-  return lval;
+static inline valk_lval_t *valk_lval_qexpr_empty() {
+  valk_lval_t *res = malloc(sizeof(valk_lval_t));
+  res->type = LVAL_QEXPR;
+  res->cell = NULL;
+  res->count = 0;
+  return res;
 }
 
 static inline void valk_lval_free(valk_lval_t *lval) {
@@ -79,6 +76,7 @@ static inline void valk_lval_free(valk_lval_t *lval) {
   case LVAL_ERR:
     free(lval->str);
     break;
+  case LVAL_QEXPR:
   case LVAL_SEXPR:
     while (lval->count > 0) {
       valk_lval_free(lval->cell[lval->count - 1]);
@@ -95,10 +93,21 @@ static inline void valk_lval_free(valk_lval_t *lval) {
 static inline void valk_lval_print(valk_lval_t *val) {
   switch (val->type) {
   case LVAL_NUM:
-    printf("Num{%li}", val->val);
+    printf("Num[%li]", val->val);
     break;
   case LVAL_SYM:
-    printf("Sym{%s}", val->str);
+    printf("Sym[%s]", val->str);
+    break;
+    // TODO(main): code duplication here, do i actually care??
+  case LVAL_QEXPR:
+    printf("Qexpr{ ");
+    for (int i = 0; i < val->count; ++i) {
+      valk_lval_print(val->cell[i]);
+      if (i < val->count - 1) {
+        putchar(' ');
+      }
+    }
+    printf(" }");
     break;
   case LVAL_SEXPR:
     printf("Sexpr( ");
@@ -111,7 +120,7 @@ static inline void valk_lval_print(valk_lval_t *val) {
     printf(" )");
     break;
   case LVAL_ERR:
-    printf("Error{%s}", val->str);
+    printf("Error[%s]", val->str);
     break;
   }
 }
@@ -121,7 +130,8 @@ static inline void valk_lval_println(valk_lval_t *val) {
   printf("\n");
 }
 
-valk_lval_t* valk_lval_eval(valk_lval_t* sexpr);
-valk_lval_t* valk_lval_eval_sexpr(valk_lval_t* sexpr);
-valk_lval_t* valk_lval_take(valk_lval_t* lval, size_t i);
-valk_lval_t* valk_lval_pop(valk_lval_t* lval, size_t i);
+valk_lval_t *valk_lval_add(valk_lval_t *lval, valk_lval_t *cell);
+valk_lval_t *valk_lval_pop(valk_lval_t *lval, size_t i);
+valk_lval_t *valk_lval_eval(valk_lval_t *sexpr);
+valk_lval_t *valk_lval_eval_sexpr(valk_lval_t *sexpr);
+valk_lval_t *valk_lval_join(valk_lval_t *a, valk_lval_t *b);
