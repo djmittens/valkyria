@@ -1,5 +1,5 @@
 #include "parser.h"
-#include <signal.h>
+#include <stdio.h>
 #include <string.h>
 
 #define LVAL_ASSERT(args, cond, err)                                           \
@@ -52,6 +52,32 @@ static valk_lval_t *builtin_op(valk_lval_t *lst, char *op) {
   return x;
 }
 
+static valk_lval_t *valk_builtin_cons(valk_lval_t *a) {
+  LVAL_ASSERT(a, a->count == 2,
+              "Builtin `cons` passed incorrect number of arguments");
+  LVAL_ASSERT(a, a->cell[1]->type == LVAL_QEXPR,
+              "Builtin `cons` can only operate on Q-Expressions");
+  valk_lval_t *head = valk_lval_pop(a, 0);
+  valk_lval_t *tail = valk_lval_pop(a, 0);
+  // TODO(main): this should be implmented as push
+  tail->cell = realloc(tail->cell, sizeof(tail->cell) * (tail->count + 1));
+  memmove(&tail->cell[1], tail->cell, sizeof(tail->cell) * tail->count);
+  tail->cell[0] = head;
+  tail->count++;
+  valk_lval_free(a);
+  return tail;
+}
+
+static valk_lval_t *valk_builtin_len(valk_lval_t *a) {
+  LVAL_ASSERT(a, a->count == 1, "This function requires exactly 1 parameter");
+  // TODO(main): should this only work with Q expr?
+  LVAL_ASSERT(a, a->cell[0]->type == LVAL_QEXPR,
+              "Only works with Q expressions??? it dont have to tho");
+  valk_lval_t *res = valk_lval_num(a->cell[0]->count);
+  valk_lval_free(a);
+  return res;
+}
+
 static valk_lval_t *valk_builtin_head(valk_lval_t *a) {
   LVAL_ASSERT(a, a->count == 1, "Builtin `head` passed too many arguments");
   LVAL_ASSERT(a, a->cell[0]->type == LVAL_QEXPR,
@@ -77,6 +103,20 @@ static valk_lval_t *valk_builtin_tail(valk_lval_t *a) {
   valk_lval_free(a);
   valk_lval_free(valk_lval_pop(v, 0));
   return v;
+}
+
+static valk_lval_t *valk_builtin_init(valk_lval_t *a) {
+  // TODO(main): can i make this more flexible, that way these functions can
+  // work over argument list as well? or is that something thats too obvious
+  LVAL_ASSERT(a, a->count == 1, "Builtin `tail` works with 1 argument");
+  LVAL_ASSERT(a, a->cell[0]->type == LVAL_QEXPR,
+              "Builtin `tail` can only operate on Q-Expressions");
+  LVAL_ASSERT(a, a->cell[0]->count > 0,
+              "Builtin `tail` cannot operate on `{}`");
+  valk_lval_free(valk_lval_pop(a->cell[0], a->cell[0]->count - 1));
+  valk_lval_t* res = valk_lval_pop(a, 0);
+  valk_lval_free(a);
+  return res;
 }
 
 static valk_lval_t *valk_builtin_join(valk_lval_t *a) {
@@ -109,6 +149,15 @@ static valk_lval_t *valk_builtin_eval(valk_lval_t *a) {
 static valk_lval_t *valk_builtin(valk_lval_t *lval, char *func) {
   if (strcmp("list", func) == 0) {
     return valk_builtin_list(lval);
+  }
+  if (strcmp("cons", func) == 0) {
+    return valk_builtin_cons(lval);
+  }
+  if (strcmp("len", func) == 0) {
+    return valk_builtin_len(lval);
+  }
+  if (strcmp("init", func) == 0) {
+    return valk_builtin_init(lval);
   }
   if (strcmp("head", func) == 0) {
     return valk_builtin_head(lval);
@@ -179,12 +228,9 @@ valk_lval_t *valk_lval_eval_sexpr(valk_lval_t *sexpr) {
 }
 
 valk_lval_t *valk_lval_pop(valk_lval_t *lval, size_t i) {
-  if (i >= lval->count) {
-    printf("ERROR: trying to pop from invalid index: %ld >= %ld\n", i,
-           lval->count);
-    fflush(stdout);
-    raise(SIGABRT);
-  }
+  LVAL_ASSERT(lval, i < lval->count, "Cant pop from list at invalid position");
+  LVAL_ASSERT(lval, lval->count > 0, "Cant pop from empty");
+
   valk_lval_t *cell = lval->cell[i];
   // shift dems down
   memmove(&lval->cell[i], &lval->cell[i + 1],

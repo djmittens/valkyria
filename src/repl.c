@@ -18,22 +18,23 @@ int main(int argc, char *argv[]) {
   mpc_parser_t *expr = mpc_new("expr");
   mpc_parser_t *repl = mpc_new("repl");
 
-  mpca_lang(
-      MPCA_LANG_DEFAULT,
-      "number : /-?[0-9]+/;\n"
-      "symbol : \"list\" | \"head\"| \"tail\" "
-      "| \"join\" | \"eval\" "
-      "| '+' | '-' | '*' | '/';\n"
-      // q-expresions arent real(other lisps have Macross qith a ' macro being
-      // the same as a q-expression). That being said its a quote macro, and
-      // therefore a quote expression
-      "qexpr : '{' <expr>* '}';\n"
-      // s-expressions, or symbolic expressions, which is a list of expressions
-      "sexpr : '(' <expr>* ')';\n"
-      "expr : <number> | <symbol> | <qexpr> | <sexpr> ;\n"
-      "repl : /^/<expr>*/$/;\n",
+  mpca_lang(MPCA_LANG_DEFAULT,
+            "number : /-?[0-9]+/;\n"
+            "symbol : \"list\" | \"head\" | \"tail\" | \"init\" "
+            "| \"join\" | \"eval\" | \"cons\" | \"len\" "
+            "| '+' | '-' | '*' | '/';\n"
+            // q-expresions arent real(other lisps have Macross qith a ' macro
+            // being the same as a q-expression). That being said its a quote
+            // macro, and therefore a quote expression
+            "qexpr : '{' <expr>* '}';\n"
+            // s-expressions, or symbolic expressions, which is a list of
+            // expressions and symbols, this list can be evaluated to produce
+            // new expressions
+            "sexpr : '(' <expr>* ')';\n"
+            "expr : <number> | <symbol> | <qexpr> | <sexpr> ;\n"
+            "repl : /^/<expr>*/$/;\n",
 
-      number, symbol, qexpr, sexpr, expr, repl);
+            number, symbol, qexpr, sexpr, expr, repl);
 
   // This is the L in repL
   while ((input = readline("valkyria> ")) != NULL) {
@@ -83,8 +84,7 @@ valk_lval_t *read_ast(const mpc_ast_t *ast) {
   valk_lval_t *x = NULL;
   if (strstr(ast->tag, "qexpr")) {
     x = valk_lval_qexpr_empty();
-  }
-  else if (strstr(ast->tag, "sexpr") || (strcmp(ast->tag, ">") == 0)) {
+  } else if (strstr(ast->tag, "sexpr") || (strcmp(ast->tag, ">") == 0)) {
     x = valk_lval_sexpr_empty();
   } else {
     return valk_lval_err("Incorrect node type");
@@ -112,7 +112,7 @@ valk_lval_t *read_ast(const mpc_ast_t *ast) {
     tChild = read_ast(child);
     if (tChild) {
       x = valk_lval_add(x, tChild);
-      if(x->type == LVAL_ERR) {
+      if (x->type == LVAL_ERR) {
         // This operation can fail
         break;
       }
