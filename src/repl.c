@@ -14,19 +14,26 @@ int main(int argc, char *argv[]) {
   mpc_parser_t *number = mpc_new("number");
   mpc_parser_t *symbol = mpc_new("symbol");
   mpc_parser_t *sexpr = mpc_new("sexpr");
+  mpc_parser_t *qexpr = mpc_new("qexpr");
   mpc_parser_t *expr = mpc_new("expr");
   mpc_parser_t *repl = mpc_new("repl");
 
   mpca_lang(
       MPCA_LANG_DEFAULT,
       "number : /-?[0-9]+/;\n"
-      "symbol : '+' | '-' | '*' | '/';\n"
+      "symbol : \"list\" | \"head\"| \"tail\" "
+      "| \"join\" | \"eval\" "
+      "| '+' | '-' | '*' | '/';\n"
+      // q-expresions arent real(other lisps have Macross qith a ' macro being
+      // the same as a q-expression). That being said its a quote macro, and
+      // therefore a quote expression
+      "qexpr : '{' <expr>* '}';\n"
       // s-expressions, or symbolic expressions, which is a list of expressions
       "sexpr : '(' <expr>* ')';\n"
-      "expr : <number> | <symbol> | <sexpr>;\n"
+      "expr : <number> | <symbol> | <qexpr> | <sexpr> ;\n"
       "repl : /^/<expr>*/$/;\n",
 
-      number, symbol, sexpr, expr, repl);
+      number, symbol, qexpr, sexpr, expr, repl);
 
   // This is the L in repL
   while ((input = readline("valkyria> ")) != NULL) {
@@ -54,7 +61,7 @@ int main(int argc, char *argv[]) {
 
     free(input);
   }
-  mpc_cleanup(5, number, symbol, sexpr, expr, repl);
+  mpc_cleanup(6, number, symbol, qexpr, sexpr, expr, repl);
   return EXIT_SUCCESS;
 }
 
@@ -74,7 +81,10 @@ valk_lval_t *read_ast(const mpc_ast_t *ast) {
   }
 
   valk_lval_t *x = NULL;
-  if (strstr(ast->tag, "sexpr") || (strcmp(ast->tag, ">") == 0)) {
+  if (strstr(ast->tag, "qexpr")) {
+    x = valk_lval_qexpr_empty();
+  }
+  else if (strstr(ast->tag, "sexpr") || (strcmp(ast->tag, ">") == 0)) {
     x = valk_lval_sexpr_empty();
   } else {
     return valk_lval_err("Incorrect node type");
@@ -84,6 +94,12 @@ valk_lval_t *read_ast(const mpc_ast_t *ast) {
   valk_lval_t *tChild;
   for (int i = 0; i < ast->children_num; ++i) {
     child = ast->children[i];
+    if (strcmp(child->contents, "{") == 0) {
+      continue;
+    }
+    if (strcmp(child->contents, "}") == 0) {
+      continue;
+    }
     if (strcmp(child->contents, "(") == 0) {
       continue;
     }
@@ -95,9 +111,13 @@ valk_lval_t *read_ast(const mpc_ast_t *ast) {
     }
     tChild = read_ast(child);
     if (tChild) {
-      valk_lval_sexpr_add(x, tChild);
+      x = valk_lval_add(x, tChild);
+      if(x->type == LVAL_ERR) {
+        // This operation can fail
+        break;
+      }
     } else {
-      valk_lval_sexpr_add(x, valk_lval_err("Invalid expression"));
+      x = valk_lval_add(x, valk_lval_err("Invalid expression"));
       printf("Warn: Skipping unhandled token: %s\n", child->tag);
     }
   }
