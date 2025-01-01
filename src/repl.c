@@ -27,6 +27,7 @@ int main(int argc, char *argv[]) {
       "repl : /^/<expr>*/$/;\n",
 
       number, symbol, sexpr, expr, repl);
+
   // This is the L in repL
   while ((input = readline("valkyria> ")) != NULL) {
     add_history(input);
@@ -35,11 +36,16 @@ int main(int argc, char *argv[]) {
       mpc_ast_print(res.output);
 
       valk_lval_t *finalRes = read_ast(res.output);
+      printf("AST: ");
+      valk_lval_print(finalRes);
+      printf("\n");
+
+      finalRes = valk_lval_eval(finalRes);
       printf("Result: ");
       valk_lval_print(finalRes);
       printf("\n");
 
-      // free(finalRes);
+      // valk_lval_free(finalRes);
       mpc_ast_delete(res.output);
     } else {
       mpc_err_print(res.error);
@@ -52,47 +58,6 @@ int main(int argc, char *argv[]) {
   return EXIT_SUCCESS;
 }
 
-valk_lval_t *eval_op(char *op, valk_lval_t *x, valk_lval_t *y) {
-  if (x->type == LVAL_ERR) {
-    return x;
-  }
-  if (y->type == LVAL_ERR) {
-    return y;
-  }
-  if (strcmp(op, "+") == 0) {
-    return valk_lval_num(x->val + y->val);
-  }
-  if (strcmp(op, "-") == 0) {
-    return valk_lval_num(x->val - y->val);
-  }
-  if (strcmp(op, "*") == 0) {
-    return valk_lval_num(x->val * y->val);
-  }
-  if (strcmp(op, "/") == 0) {
-    return y->val > 0 ? valk_lval_num(x->val / y->val)
-                      : valk_lval_err("Division By Zero\n");
-  }
-  return valk_lval_err("Error: Invalid Operation\n");
-}
-
-valk_lval_t *eval(mpc_ast_t *ast) {
-  if (strstr(ast->tag, "number")) {
-    return valk_lval_num(atoi(ast->contents));
-  }
-
-  char *op = ast->children[1]->contents;
-
-  valk_lval_t *x = eval(ast->children[2]);
-
-  // mpc_ast_t *child = ast->children[3];
-  int i = 3;
-  while (strstr(ast->children[i]->tag, "expr")) {
-    x = eval_op(op, x, eval(ast->children[i]));
-    i++;
-  }
-  return x;
-}
-
 valk_lval_t *read_num(char *num) {
   errno = 0;
   long x = strtol(num, NULL, 10);
@@ -102,7 +67,6 @@ valk_lval_t *read_num(char *num) {
 
 valk_lval_t *read_ast(const mpc_ast_t *ast) {
   if (strstr(ast->tag, "number")) {
-    printf("wahoo %s, %s\n", ast->tag, ast->contents);
     return read_num(ast->contents);
   }
   if (strstr(ast->tag, "symbol")) {

@@ -1,6 +1,6 @@
 .PHONY: build
 build: 
-	cmake -B build -DCMAKE_BUILD_TYPE=Debug -DHOMEBREW_CLANG=on -G Ninja . && \
+	cmake -B build -DCMAKE_BUILD_TYPE=Debug -DASAN=on -DHOMEBREW_CLANG=on -G Ninja . && \
 	cmake --build build
 
 # This will install editline and maybe other depenedencies on linux / macos
