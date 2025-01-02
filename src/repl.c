@@ -18,23 +18,31 @@ int main(int argc, char *argv[]) {
   mpc_parser_t *expr = mpc_new("expr");
   mpc_parser_t *repl = mpc_new("repl");
 
-  mpca_lang(MPCA_LANG_DEFAULT,
-            "number : /-?[0-9]+/;\n"
-            "symbol : \"list\" | \"head\" | \"tail\" | \"init\" "
-            "| \"join\" | \"eval\" | \"cons\" | \"len\" "
-            "| '+' | '-' | '*' | '/';\n"
-            // q-expresions arent real(other lisps have Macross qith a ' macro
-            // being the same as a q-expression). That being said its a quote
-            // macro, and therefore a quote expression
-            "qexpr : '{' <expr>* '}';\n"
-            // s-expressions, or symbolic expressions, which is a list of
-            // expressions and symbols, this list can be evaluated to produce
-            // new expressions
-            "sexpr : '(' <expr>* ')';\n"
-            "expr : <number> | <symbol> | <qexpr> | <sexpr> ;\n"
-            "repl : /^/<expr>*/$/;\n",
+  mpc_err_t *err =
+      mpca_lang(MPCA_LANG_DEFAULT,
+                "number: /-?[0-9]+/;\n"
+                "symbol: /[a-zA-Z0-9_+\\-*\\/\\\\=<>!&]+/;\n"
+                // "symbol : \"list\" | \"head\" | \"tail\" | \"init\" "
+                // "| \"join\" | \"eval\" | \"cons\" | \"len\" "
+                // "| '+' | '-' | '*' | '/';\n"
+                // q-expresions arent real(other lisps have Macross qith a '
+                // macro being the same as a q-expression). That being said its
+                // a quote macro, and therefore a quote expression
+                "qexpr : '{' <expr>* '}';\n"
+                // s-expressions, or symbolic expressions, which is a list of
+                // expressions and symbols, this list can be evaluated to
+                // produce new expressions
+                "sexpr : '(' <expr>* ')';\n"
+                "expr : <number> | <symbol> | <qexpr> | <sexpr> ;\n"
+                "repl : /^/<expr>*/$/;\n",
 
-            number, symbol, qexpr, sexpr, expr, repl);
+                number, symbol, qexpr, sexpr, expr, repl);
+
+  if (err) {
+    printf("Error constructing mpca_lang: %s\n", mpc_err_string(err));
+  }
+  valk_lenv_t *env = valk_lenv_new();
+  valk_lenv_builtins(env);
 
   // This is the L in repL
   while ((input = readline("valkyria> ")) != NULL) {
@@ -48,7 +56,7 @@ int main(int argc, char *argv[]) {
       valk_lval_print(finalRes);
       printf("\n");
 
-      finalRes = valk_lval_eval(finalRes);
+      finalRes = valk_lval_eval(env, finalRes);
       printf("Result: ");
       valk_lval_print(finalRes);
       printf("\n");
@@ -62,6 +70,7 @@ int main(int argc, char *argv[]) {
 
     free(input);
   }
+  free(env);
   mpc_cleanup(6, number, symbol, qexpr, sexpr, expr, repl);
   return EXIT_SUCCESS;
 }
