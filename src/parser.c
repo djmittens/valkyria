@@ -48,6 +48,36 @@
     }                                                                          \
   } while (0)
 
+#define LVAL_ASSERT_COUNT_NEQ(args, lval, _count)                               \
+  LVAL_ASSERT(args, (lval)->count != _count,                                   \
+              "Invalid argument count, Actual[%d] != Expected[%d]",            \
+              (lval)->count, _count)
+
+#define LVAL_ASSERT_COUNT_EQ(args, lval, _count)                               \
+  LVAL_ASSERT(args, (lval)->count == _count,                                   \
+              "Invalid argument count, Actual[%d] == Expected[%d]",            \
+              (lval)->count, _count)
+
+#define LVAL_ASSERT_COUNT_LT(args, lval, _count)                               \
+  LVAL_ASSERT(args, (lval)->count < _count,                                    \
+              "Invalid argument count, Actual[%d] < Expected[%d]",             \
+              (lval)->count, _count)
+
+#define LVAL_ASSERT_COUNT_LE(args, lval, _count)                               \
+  LVAL_ASSERT(args, (lval)->count <= _count,                                   \
+              "Invalid argument count, Actual[%d] <= Expected[%d]",            \
+              (lval)->count, _count)
+
+#define LVAL_ASSERT_COUNT_GT(args, lval, _count)                               \
+  LVAL_ASSERT(args, (lval)->count > _count,                                    \
+              "Invalid argument count, Actual[%d] > Expected[%d]",             \
+              (lval)->count, _count)
+
+#define LVAL_ASSERT_COUNT_GE(args, lval, _count)                               \
+  LVAL_ASSERT(args, (lval)->count >= _count,                                   \
+              "Invalid argument count, Actual[%d] >= Expected[%d]",            \
+              (lval)->count, _count)
+
 static char *valk_c_err_format(const char *fmt, const char *file,
                                const size_t line, const char *function) {
   size_t len = snprintf(NULL, 0, "%s:%ld:%s || %s", file, line, function, fmt);
@@ -411,7 +441,7 @@ static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
 
   valk_lval_t *x = valk_lval_pop(lst, 0);
 
-  if (strcmp(op, "-") == 0 && lst->count == 1) {
+  if (strcmp(op, "-") == 0 && lst->count == 0) {
     // Negate the number if there is only 1
     x->num = -x->num;
   }
@@ -446,10 +476,7 @@ static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
 }
 
 static valk_lval_t *valk_builtin_cons(valk_lenv_t *e, valk_lval_t *a) {
-  LVAL_ASSERT(a, a->count == 2,
-              "Builtin `cons` passed incorrect number of arguments\n Got: %d, "
-              "Expected: %d",
-              a->count, 2);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
   LVAL_ASSERT_TYPE(a, a->cell[1], LVAL_QEXPR);
 
   valk_lval_t *head = valk_lval_pop(a, 0);
@@ -464,7 +491,7 @@ static valk_lval_t *valk_builtin_cons(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 static valk_lval_t *valk_builtin_len(valk_lenv_t *e, valk_lval_t *a) {
-  LVAL_ASSERT(a, a->count == 1, "This function requires exactly 1 parameter");
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
   // TODO(main): should this only work with Q expr?
   LVAL_ASSERT_TYPE(a, a->cell[0], LVAL_QEXPR);
 
@@ -476,8 +503,7 @@ static valk_lval_t *valk_builtin_len(valk_lenv_t *e, valk_lval_t *a) {
 static valk_lval_t *valk_builtin_head(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT(a, a->count == 1, "Builtin `head` passed too many arguments");
   LVAL_ASSERT_TYPE(a, a->cell[0], LVAL_QEXPR);
-  LVAL_ASSERT(a, a->cell[0]->count != 0,
-              "Builtin `head` cannot operate on `{}`");
+  LVAL_ASSERT_COUNT_GT(a, a->cell[0], 0);
   valk_lval_t *v = valk_lval_pop(a, 0);
   valk_lval_free(a);
   while (v->count > 1) {
@@ -501,10 +527,9 @@ static valk_lval_t *valk_builtin_tail(valk_lenv_t *e, valk_lval_t *a) {
 static valk_lval_t *valk_builtin_init(valk_lenv_t *e, valk_lval_t *a) {
   // TODO(main): can i make this more flexible, that way these functions can
   // work over argument list as well? or is that something thats too obvious
-  LVAL_ASSERT(a, a->count == 1, "Builtin `tail` works with 1 argument");
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, a->cell[0], LVAL_QEXPR);
-  LVAL_ASSERT(a, a->cell[0]->count > 0,
-              "Builtin `tail` cannot operate on `{}`");
+  LVAL_ASSERT_COUNT_GT(a, a->cell[0], 0);
   valk_lval_free(valk_lval_pop(a->cell[0], a->cell[0]->count - 1));
   valk_lval_t *res = valk_lval_pop(a, 0);
   valk_lval_free(a);
@@ -528,7 +553,7 @@ static valk_lval_t *valk_builtin_list(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 static valk_lval_t *valk_builtin_eval(valk_lenv_t *e, valk_lval_t *a) {
-  LVAL_ASSERT(a, a->count == 1, "Builtin `eval` passed too many arguments");
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, a->cell[0], LVAL_QEXPR);
 
   valk_lval_t *v = valk_lval_pop(a, 0);
@@ -550,19 +575,18 @@ static valk_lval_t *valk_builtin_multiply(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 static valk_lval_t *valk_builtin_def(valk_lenv_t *e, valk_lval_t *a) {
-  LVAL_ASSERT(a, a->count > 1,
-              "Builtin `def` takes symbols as first param followed by values");
+  LVAL_ASSERT_COUNT_GT(a, a, 1);
 
   valk_lval_t *syms = a->cell[0];
   LVAL_ASSERT_TYPE(a, syms, LVAL_QEXPR);
 
   for (size_t i = 0; i < syms->count; i++) {
-    LVAL_ASSERT(a, syms->cell[i],
+
+    LVAL_ASSERT(a, syms->cell[i]->type == LVAL_QEXPR,
                 "Builtin `def` can only define Q-Expressions");
   }
 
-  LVAL_ASSERT(a, syms->count == (a->count - 1),
-              "Builtin `def` mismatched count of symbols and values");
+  LVAL_ASSERT_COUNT_EQ(a, syms, (a->count - 1));
 
   for (size_t i = 0; i < syms->count; i++) {
     valk_lenv_put(e, syms->cell[i], a->cell[i + 1]);
