@@ -447,6 +447,30 @@ static valk_lval_t *valk_builtin_multiply(valk_lenv_t *e, valk_lval_t *a) {
   return builtin_math(a, "*");
 }
 
+static valk_lval_t *valk_builtin_def(valk_lenv_t *e, valk_lval_t *a) {
+  LVAL_ASSERT(a, a->count > 1,
+              "Builtin `def` takes symbols as first param followed by values");
+
+  valk_lval_t *syms = a->cell[0];
+  LVAL_ASSERT(a, syms->type == LVAL_QEXPR,
+              "Builtin `def` takes Q Expression as symbols");
+
+  for (size_t i = 0; i < syms->count; i++) {
+    LVAL_ASSERT(a, syms->cell[i],
+                "Builtin `def` can only define Q-Expressions");
+  }
+
+  LVAL_ASSERT(a, syms->count == (a->count - 1),
+              "Builtin `def` mismatched count of symbols and values");
+
+  for (size_t i = 0; i < syms->count; i++) {
+    valk_lenv_put(e, syms->cell[i], a->cell[i + 1]);
+  }
+
+  valk_lval_free(a);
+  return valk_lval_sexpr_empty();
+}
+
 void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "list", valk_builtin_list);
   valk_lenv_put_builtin(env, "cons", valk_builtin_cons);
@@ -461,4 +485,6 @@ void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "-", valk_builtin_minus);
   valk_lenv_put_builtin(env, "/", valk_builtin_divide);
   valk_lenv_put_builtin(env, "*", valk_builtin_multiply);
+
+  valk_lenv_put_builtin(env, "def", valk_builtin_def);
 }
