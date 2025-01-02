@@ -17,7 +17,7 @@ typedef enum {
   LVAL_ERR
 } valk_ltype_t;
 
-const char* valk_ltype_name(valk_ltype_t type);
+const char *valk_ltype_name(valk_ltype_t type);
 
 typedef valk_lval_t *(valk_lval_builtin_t)(valk_lenv_t *, valk_lval_t *);
 
@@ -25,12 +25,17 @@ struct valk_lval_t {
   valk_ltype_t type;
   union {
     long num;
-    struct valk_lval_t **cell;
     char *str;
-    valk_lval_builtin_t *fun;
+    struct {
+      valk_lval_builtin_t *builtin;
+      valk_lenv_t *env;
+    } fun;
+    struct {
+      struct valk_lval_t **cell;
+      // only valid for (s|q)expr
+      size_t count;
+    } expr;
   };
-  // only valid for (s|q)expr
-  size_t count;
 };
 
 //// lval Constructors ////
@@ -71,6 +76,7 @@ valk_lenv_t *valk_lenv_new(void);
 void valk_lenv_init(valk_lenv_t *env);
 //// END LEnv Constructors ////
 void valk_lenv_free(valk_lenv_t *env);
+valk_lenv_t *valk_lenv_copy(valk_lenv_t *env);
 
 valk_lval_t *valk_lenv_get(valk_lenv_t *env, valk_lval_t *key);
 void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val);
