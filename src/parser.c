@@ -48,35 +48,35 @@
     }                                                                          \
   } while (0)
 
-#define LVAL_ASSERT_COUNT_NEQ(args, lval, _count)                               \
-  LVAL_ASSERT(args, (lval)->count != _count,                                   \
+#define LVAL_ASSERT_COUNT_NEQ(args, lval, _count)                              \
+  LVAL_ASSERT(args, (lval)->expr.count != _count,                              \
               "Invalid argument count, Actual[%d] != Expected[%d]",            \
-              (lval)->count, _count)
+              (lval)->expr.count, _count)
 
 #define LVAL_ASSERT_COUNT_EQ(args, lval, _count)                               \
-  LVAL_ASSERT(args, (lval)->count == _count,                                   \
+  LVAL_ASSERT(args, (lval)->expr.count == _count,                              \
               "Invalid argument count, Actual[%d] == Expected[%d]",            \
-              (lval)->count, _count)
+              (lval)->expr.count, _count)
 
 #define LVAL_ASSERT_COUNT_LT(args, lval, _count)                               \
-  LVAL_ASSERT(args, (lval)->count < _count,                                    \
+  LVAL_ASSERT(args, (lval)->expr.count < _count,                               \
               "Invalid argument count, Actual[%d] < Expected[%d]",             \
-              (lval)->count, _count)
+              (lval)->expr.count, _count)
 
 #define LVAL_ASSERT_COUNT_LE(args, lval, _count)                               \
-  LVAL_ASSERT(args, (lval)->count <= _count,                                   \
+  LVAL_ASSERT(args, (lval)->expr.count <= _count,                              \
               "Invalid argument count, Actual[%d] <= Expected[%d]",            \
-              (lval)->count, _count)
+              (lval)->expr.count, _count)
 
 #define LVAL_ASSERT_COUNT_GT(args, lval, _count)                               \
-  LVAL_ASSERT(args, (lval)->count > _count,                                    \
+  LVAL_ASSERT(args, (lval)->expr.count > _count,                               \
               "Invalid argument count, Actual[%d] > Expected[%d]",             \
-              (lval)->count, _count)
+              (lval)->expr.count, _count)
 
 #define LVAL_ASSERT_COUNT_GE(args, lval, _count)                               \
-  LVAL_ASSERT(args, (lval)->count >= _count,                                   \
+  LVAL_ASSERT(args, (lval)->expr.count >= _count,                              \
               "Invalid argument count, Actual[%d] >= Expected[%d]",            \
-              (lval)->count, _count)
+              (lval)->expr.count, _count)
 
 static char *valk_c_err_format(const char *fmt, const char *file,
                                const size_t line, const char *function) {
@@ -123,9 +123,9 @@ const char *valk_ltype_name(valk_ltype_t type) {
   case LVAL_FUN:
     return "Function";
   case LVAL_QEXPR:
-    return "Quote-Expression";
+    return "Quote-expr";
   case LVAL_SEXPR:
-    return "Symbolic-Expression";
+    return "Symbolic-expr";
   case LVAL_ERR:
     return "Error";
   }
@@ -135,7 +135,6 @@ valk_lval_t *valk_lval_num(long x) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_NUM;
   res->num = x;
-  res->count = 0;
   return res;
 }
 
@@ -160,50 +159,51 @@ valk_lval_t *valk_lval_sym(char *sym) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_SYM;
   res->str = strndup(sym, 200);
-  res->count = 0;
+  res->expr.count = 0;
   return res;
 }
 
 valk_lval_t *valk_lval_fun(valk_lval_builtin_t *fun) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_SYM;
-  res->fun = fun;
-  res->count = 0;
+  res->fun.builtin = fun;
+  res->fun.env = NULL;
   return res;
 }
 
 valk_lval_t *valk_lval_sexpr_empty() {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_SEXPR;
-  res->cell = NULL;
-  res->count = 0;
+  res->expr.cell = NULL;
+  res->expr.count = 0;
   return res;
 }
 
 valk_lval_t *valk_lval_qexpr_empty() {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_QEXPR;
-  res->cell = NULL;
-  res->count = 0;
+  res->expr.cell = NULL;
+  res->expr.count = 0;
   return res;
 }
 
 valk_lval_t *valk_lval_copy(valk_lval_t *lval) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = lval->type;
-  res->count = lval->count;
   switch (lval->type) {
   case LVAL_NUM:
     res->num = lval->num;
     break;
   case LVAL_FUN:
-    res->fun = lval->fun;
+    res->fun.builtin = lval->fun.builtin;
+    res->fun.env = valk_lenv_copy(lval->fun.env);
     break;
   case LVAL_QEXPR:
   case LVAL_SEXPR:
-    res->cell = malloc(sizeof(res->cell) * lval->count);
-    for (int i = 0; i < lval->count; ++i) {
-      res->cell[i] = valk_lval_copy(lval->cell[i]);
+    res->expr.cell = malloc(sizeof(res->expr.cell) * lval->expr.count);
+    res->expr.count = lval->expr.count;
+    for (int i = 0; i < lval->expr.count; ++i) {
+      res->expr.cell[i] = valk_lval_copy(lval->expr.cell[i]);
     }
     break;
   case LVAL_SYM:
@@ -229,13 +229,13 @@ void valk_lval_free(valk_lval_t *lval) {
     break;
   case LVAL_QEXPR:
   case LVAL_SEXPR:
-    while (lval->count > 0) {
-      valk_lval_free(lval->cell[lval->count - 1]);
-      --lval->count;
+    while (lval->expr.count > 0) {
+      valk_lval_free(lval->expr.cell[lval->expr.count - 1]);
+      --lval->expr.count;
     }
     // Should play around with valgrind on this. Pretty interesting thing to
     // forget
-    free(lval->cell);
+    free(lval->expr.cell);
     break;
   }
   free(lval);
@@ -257,14 +257,14 @@ valk_lval_t *valk_lval_eval(valk_lenv_t *env, valk_lval_t *lval) {
 valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr) {
   LVAL_ASSERT_TYPE(sexpr, sexpr, LVAL_SEXPR);
   // no children? no problem
-  if (sexpr->count == 0) {
+  if (sexpr->expr.count == 0) {
     return sexpr;
   }
 
   // count up the chillen
-  for (int i = 0; i < sexpr->count; ++i) {
-    sexpr->cell[i] = valk_lval_eval(env, sexpr->cell[i]);
-    if (sexpr->cell[i]->type == LVAL_ERR) {
+  for (int i = 0; i < sexpr->expr.count; ++i) {
+    sexpr->expr.cell[i] = valk_lval_eval(env, sexpr->expr.cell[i]);
+    if (sexpr->expr.cell[i]->type == LVAL_ERR) {
       valk_lval_t *res = valk_lval_pop(sexpr, i);
       valk_lval_free(sexpr);
       return res;
@@ -272,7 +272,7 @@ valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr) {
   }
 
   // If we have a single node, collapse to it
-  if (sexpr->count == 1) {
+  if (sexpr->expr.count == 1) {
     valk_lval_t *res = valk_lval_pop(sexpr, 0);
     valk_lval_free(sexpr);
     return res;
@@ -284,26 +284,27 @@ valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr) {
     valk_lval_free(fun);
     valk_lval_free(sexpr);
     // TODO(main): should add more information here about the symbol
-    return valk_lval_err("S-Expression doesnt start with a <function>");
+    return valk_lval_err("S-expr doesnt start with a <function>");
   }
 
-  valk_lval_t *res = fun->fun(env, sexpr);
+  valk_lval_t *res = fun->fun.builtin(env, sexpr);
   valk_lval_free(fun);
   return res;
 }
 
 valk_lval_t *valk_lval_pop(valk_lval_t *lval, size_t i) {
-  LVAL_ASSERT(lval, i < lval->count,
+  LVAL_ASSERT(lval, i < lval->expr.count,
               "Cant pop from list at invalid position: [%d] total length: [%d]",
-              i, lval->count);
-  LVAL_ASSERT(lval, lval->count > 0, "Cant pop from empty");
+              i, lval->expr.count);
+  LVAL_ASSERT(lval, lval->expr.count > 0, "Cant pop from empty");
 
-  valk_lval_t *cell = lval->cell[i];
+  valk_lval_t *cell = lval->expr.cell[i];
   // shift dems down
-  memmove(&lval->cell[i], &lval->cell[i + 1],
-          sizeof(valk_lval_t *) * (lval->count - i - 1));
-  lval->count--;
-  lval->cell = realloc(lval->cell, sizeof(valk_lval_t *) * lval->count);
+  memmove(&lval->expr.cell[i], &lval->expr.cell[i + 1],
+          sizeof(valk_lval_t *) * (lval->expr.count - i - 1));
+  lval->expr.count--;
+  lval->expr.cell =
+      realloc(lval->expr.cell, sizeof(valk_lval_t *) * lval->expr.count);
   return cell;
 }
 
@@ -314,14 +315,15 @@ valk_lval_t *valk_lval_add(valk_lval_t *lval, valk_lval_t *cell) {
   // TODO(main): i need to invest more into null checks in this file
   LVAL_ASSERT(lval, cell != NULL, "Adding NULL to LVAL is not allowed");
 
-  lval->count++;
-  lval->cell = realloc(lval->cell, sizeof(valk_lval_t *) * lval->count);
-  lval->cell[lval->count - 1] = cell;
+  lval->expr.count++;
+  lval->expr.cell =
+      realloc(lval->expr.cell, sizeof(valk_lval_t *) * lval->expr.count);
+  lval->expr.cell[lval->expr.count - 1] = cell;
   return lval;
 }
 
 valk_lval_t *valk_lval_join(valk_lval_t *a, valk_lval_t *b) {
-  while (b->count) {
+  while (b->expr.count) {
     a = valk_lval_add(a, valk_lval_pop(b, 0));
   }
   valk_lval_free(b);
@@ -339,9 +341,9 @@ void valk_lval_print(valk_lval_t *val) {
     // TODO(main): code duplication here, do i actually care??
   case LVAL_QEXPR:
     printf("Qexpr{ ");
-    for (int i = 0; i < val->count; ++i) {
-      valk_lval_print(val->cell[i]);
-      if (i < val->count - 1) {
+    for (int i = 0; i < val->expr.count; ++i) {
+      valk_lval_print(val->expr.cell[i]);
+      if (i < val->expr.count - 1) {
         putchar(' ');
       }
     }
@@ -349,9 +351,9 @@ void valk_lval_print(valk_lval_t *val) {
     break;
   case LVAL_SEXPR:
     printf("Sexpr( ");
-    for (int i = 0; i < val->count; ++i) {
-      valk_lval_print(val->cell[i]);
-      if (i < val->count - 1) {
+    for (int i = 0; i < val->expr.count; ++i) {
+      valk_lval_print(val->expr.cell[i]);
+      if (i < val->expr.count - 1) {
         putchar(' ');
       }
     }
@@ -386,6 +388,22 @@ void valk_lenv_free(valk_lenv_t *env) {
   free(env->vals);
   free(env->symbols);
   free(env);
+}
+
+valk_lenv_t *valk_lenv_copy(valk_lenv_t *env) {
+  if (env == NULL) {
+    return NULL;
+  }
+  valk_lenv_t *res = malloc(sizeof(valk_lval_t));
+  res->count = env->count;
+  res->symbols = malloc(sizeof(env->symbols) * env->count);
+  res->vals = malloc(sizeof(env->vals) * env->count);
+
+  for (size_t i = 0; i < env->count; i++) {
+    res->symbols[i] = strdup(env->symbols[i]);
+    res->vals[i] = valk_lval_copy(env->vals[i]);
+  }
+  return res;
 }
 
 valk_lval_t *valk_lenv_get(valk_lenv_t *env, valk_lval_t *key) {
@@ -423,30 +441,30 @@ void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
 }
 
 void valk_lenv_put_builtin(valk_lenv_t *env, char *key,
-                           valk_lval_builtin_t *fun) {
+                           valk_lval_builtin_t *_fun) {
   valk_lval_t lkey = {.type = LVAL_SYM, .str = key};
 
-  valk_lval_t lfun = {.type = LVAL_FUN, .fun = fun};
+  valk_lval_t lfun = {.type = LVAL_FUN, .fun = {.builtin = _fun, .env = NULL}};
 
   valk_lenv_put(env, &lkey, &lfun);
 }
 
 static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
-  for (int i = 0; i < lst->count; ++i) {
+  for (int i = 0; i < lst->expr.count; ++i) {
     // TODO(main): Its not very straightforward to assert a type here
-    if (lst->cell[i]->type != LVAL_NUM) {
+    if (lst->expr.cell[i]->type != LVAL_NUM) {
       LVAL_RAISE(lst, "This function only supports Numbers");
     }
   }
 
   valk_lval_t *x = valk_lval_pop(lst, 0);
 
-  if (strcmp(op, "-") == 0 && lst->count == 0) {
+  if (strcmp(op, "-") == 0 && lst->expr.count == 0) {
     // Negate the number if there is only 1
     x->num = -x->num;
   }
 
-  while (lst->count > 0) {
+  while (lst->expr.count > 0) {
     valk_lval_t *y = valk_lval_pop(lst, 0);
 
     if (strcmp(op, "+") == 0) {
@@ -477,15 +495,17 @@ static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
 
 static valk_lval_t *valk_builtin_cons(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
-  LVAL_ASSERT_TYPE(a, a->cell[1], LVAL_QEXPR);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_QEXPR);
 
   valk_lval_t *head = valk_lval_pop(a, 0);
   valk_lval_t *tail = valk_lval_pop(a, 0);
   // TODO(main): this should be implmented as push
-  tail->cell = realloc(tail->cell, sizeof(tail->cell) * (tail->count + 1));
-  memmove(&tail->cell[1], tail->cell, sizeof(tail->cell) * tail->count);
-  tail->cell[0] = head;
-  tail->count++;
+  tail->expr.cell = realloc(tail->expr.cell,
+                            sizeof(tail->expr.cell) * (tail->expr.count + 1));
+  memmove(&tail->expr.cell[1], tail->expr.cell,
+          sizeof(tail->expr.cell) * tail->expr.count);
+  tail->expr.cell[0] = head;
+  tail->expr.count++;
   valk_lval_free(a);
   return tail;
 }
@@ -493,29 +513,31 @@ static valk_lval_t *valk_builtin_cons(valk_lenv_t *e, valk_lval_t *a) {
 static valk_lval_t *valk_builtin_len(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   // TODO(main): should this only work with Q expr?
-  LVAL_ASSERT_TYPE(a, a->cell[0], LVAL_QEXPR);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
 
-  valk_lval_t *res = valk_lval_num(a->cell[0]->count);
+  valk_lval_t *res = valk_lval_num(a->expr.cell[0]->expr.count);
   valk_lval_free(a);
   return res;
 }
 
 static valk_lval_t *valk_builtin_head(valk_lenv_t *e, valk_lval_t *a) {
-  LVAL_ASSERT(a, a->count == 1, "Builtin `head` passed too many arguments");
-  LVAL_ASSERT_TYPE(a, a->cell[0], LVAL_QEXPR);
-  LVAL_ASSERT_COUNT_GT(a, a->cell[0], 0);
+  LVAL_ASSERT(a, a->expr.count == 1,
+              "Builtin `head` passed too many arguments");
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
+  LVAL_ASSERT_COUNT_GT(a, a->expr.cell[0], 0);
   valk_lval_t *v = valk_lval_pop(a, 0);
   valk_lval_free(a);
-  while (v->count > 1) {
+  while (v->expr.count > 1) {
     valk_lval_free(valk_lval_pop(v, 1));
   }
   return v;
 }
 
 static valk_lval_t *valk_builtin_tail(valk_lenv_t *e, valk_lval_t *a) {
-  LVAL_ASSERT(a, a->count == 1, "Builtin `tail` passed too many arguments");
-  LVAL_ASSERT_TYPE(a, a->cell[0], LVAL_QEXPR);
-  LVAL_ASSERT(a, a->cell[0]->count != 0,
+  LVAL_ASSERT(a, a->expr.count == 1,
+              "Builtin `tail` passed too many arguments");
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
+  LVAL_ASSERT(a, a->expr.cell[0]->expr.count != 0,
               "Builtin `tail` cannot operate on `{}`");
   valk_lval_t *v = valk_lval_pop(a, 0);
 
@@ -528,19 +550,20 @@ static valk_lval_t *valk_builtin_init(valk_lenv_t *e, valk_lval_t *a) {
   // TODO(main): can i make this more flexible, that way these functions can
   // work over argument list as well? or is that something thats too obvious
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, a->cell[0], LVAL_QEXPR);
-  LVAL_ASSERT_COUNT_GT(a, a->cell[0], 0);
-  valk_lval_free(valk_lval_pop(a->cell[0], a->cell[0]->count - 1));
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
+  LVAL_ASSERT_COUNT_GT(a, a->expr.cell[0], 0);
+  valk_lval_free(
+      valk_lval_pop(a->expr.cell[0], a->expr.cell[0]->expr.count - 1));
   valk_lval_t *res = valk_lval_pop(a, 0);
   valk_lval_free(a);
   return res;
 }
 
 static valk_lval_t *valk_builtin_join(valk_lenv_t *e, valk_lval_t *a) {
-  LVAL_ASSERT_TYPE(a, a->cell[0], LVAL_QEXPR);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
 
   valk_lval_t *x = valk_lval_pop(a, 0);
-  while (a->count) {
+  while (a->expr.count) {
     x = valk_lval_join(x, valk_lval_pop(a, 0));
   }
   valk_lval_free(a);
@@ -554,7 +577,7 @@ static valk_lval_t *valk_builtin_list(valk_lenv_t *e, valk_lval_t *a) {
 
 static valk_lval_t *valk_builtin_eval(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, a->cell[0], LVAL_QEXPR);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
 
   valk_lval_t *v = valk_lval_pop(a, 0);
   v->type = LVAL_SEXPR;
@@ -577,23 +600,38 @@ static valk_lval_t *valk_builtin_multiply(valk_lenv_t *e, valk_lval_t *a) {
 static valk_lval_t *valk_builtin_def(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_COUNT_GT(a, a, 1);
 
-  valk_lval_t *syms = a->cell[0];
+  valk_lval_t *syms = a->expr.cell[0];
   LVAL_ASSERT_TYPE(a, syms, LVAL_QEXPR);
 
-  for (size_t i = 0; i < syms->count; i++) {
+  for (size_t i = 0; i < syms->expr.count; i++) {
 
-    LVAL_ASSERT(a, syms->cell[i]->type == LVAL_QEXPR,
-                "Builtin `def` can only define Q-Expressions");
+    LVAL_ASSERT(a, syms->expr.cell[i]->type == LVAL_QEXPR,
+                "Builtin `def` can only define Q-exprs");
   }
 
-  LVAL_ASSERT_COUNT_EQ(a, syms, (a->count - 1));
+  LVAL_ASSERT_COUNT_EQ(a, syms, (a->expr.count - 1));
 
-  for (size_t i = 0; i < syms->count; i++) {
-    valk_lenv_put(e, syms->cell[i], a->cell[i + 1]);
+  for (size_t i = 0; i < syms->expr.count; i++) {
+    valk_lenv_put(e, syms->expr.cell[i], a->expr.cell[i + 1]);
   }
 
   valk_lval_free(a);
   return valk_lval_sexpr_empty();
+}
+
+static valk_lval_t *valk_builtin_penv(valk_lenv_t *e, valk_lval_t *a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+
+  valk_lval_t *res = valk_lval_qexpr_empty();
+  for (size_t i = 0; i < e->count; i++) {
+
+    valk_lval_t *qexpr = valk_lval_qexpr_empty();
+    valk_lval_add(qexpr, valk_lval_sym(e->symbols[i]));
+    valk_lval_add(qexpr, valk_lval_copy(e->vals[i]));
+    valk_lval_add(res, qexpr);
+  }
+  valk_lval_free(a);
+  return res;
 }
 
 void valk_lenv_builtins(valk_lenv_t *env) {
@@ -612,4 +650,5 @@ void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "*", valk_builtin_multiply);
 
   valk_lenv_put_builtin(env, "def", valk_builtin_def);
+  valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
 }
