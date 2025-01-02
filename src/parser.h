@@ -15,12 +15,14 @@ typedef enum {
   LVAL_QEXPR,
   LVAL_SEXPR,
   LVAL_ERR
-} valk_lres_t;
+} valk_ltype_t;
+
+const char* valk_ltype_name(valk_ltype_t type);
 
 typedef valk_lval_t *(valk_lval_builtin_t)(valk_lenv_t *, valk_lval_t *);
 
 struct valk_lval_t {
-  valk_lres_t type;
+  valk_ltype_t type;
   union {
     long num;
     struct valk_lval_t **cell;
@@ -34,7 +36,7 @@ struct valk_lval_t {
 //// lval Constructors ////
 
 valk_lval_t *valk_lval_num(long x);
-valk_lval_t *valk_lval_err(char *msg);
+valk_lval_t *valk_lval_err(char *fmt, ...);
 valk_lval_t *valk_lval_sym(char *sym);
 valk_lval_t *valk_lval_fun(valk_lval_builtin_t *fun);
 valk_lval_t *valk_lval_sexpr_empty();
@@ -59,7 +61,7 @@ static inline void valk_lval_println(valk_lval_t *val) {
 }
 
 struct valk_lenv_t {
-  char **labels;
+  char **symbols;
   valk_lval_t **vals;
   size_t count;
 };
