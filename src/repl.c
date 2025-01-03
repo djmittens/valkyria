@@ -8,7 +8,7 @@ valk_lval_t *eval(mpc_ast_t *ast);
 valk_lval_t *read_ast(const mpc_ast_t *ast);
 
 int main(int argc, char *argv[]) {
-  printf("Hello World\n");
+  printf("Hello World %ld\n", sizeof(valk_lval_t));
   char *input;
 
   mpc_parser_t *number = mpc_new("number");

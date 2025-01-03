@@ -22,20 +22,23 @@ const char *valk_ltype_name(valk_ltype_t type);
 typedef valk_lval_t *(valk_lval_builtin_t)(valk_lenv_t *, valk_lval_t *);
 
 struct valk_lval_t {
-  valk_ltype_t type;
   union {
-    long num;
-    char *str;
     struct {
-      valk_lval_builtin_t *builtin;
       valk_lenv_t *env;
+      valk_lval_t *body;
+      valk_lval_t *formals;
+      // NULL if its a lambda
+      valk_lval_builtin_t *builtin;
     } fun;
     struct {
       struct valk_lval_t **cell;
       // only valid for (s|q)expr
       size_t count;
     } expr;
+    long num;
+    char *str;
   };
+  valk_ltype_t type;
 };
 
 //// lval Constructors ////
@@ -43,7 +46,8 @@ struct valk_lval_t {
 valk_lval_t *valk_lval_num(long x);
 valk_lval_t *valk_lval_err(char *fmt, ...);
 valk_lval_t *valk_lval_sym(char *sym);
-valk_lval_t *valk_lval_fun(valk_lval_builtin_t *fun);
+valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
+valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t* body);
 valk_lval_t *valk_lval_sexpr_empty();
 valk_lval_t *valk_lval_qexpr_empty();
 
