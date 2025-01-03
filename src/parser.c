@@ -78,6 +78,8 @@
               "Invalid argument count, Actual[%d] >= Expected[%d]",            \
               (lval)->expr.count, _count)
 
+static valk_lval_t *valk_builtin_eval(valk_lenv_t *e, valk_lval_t *a);
+ 
 static char *valk_c_err_format(const char *fmt, const char *file,
                                const size_t line, const char *function) {
   size_t len = snprintf(NULL, 0, "%s:%ld:%s || %s", file, line, function, fmt);
@@ -308,14 +310,53 @@ valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr) {
   valk_lval_t *fun = valk_lval_pop(sexpr, 0);
   if (fun->type != LVAL_FUN) {
     // Make sure to free this shit.
+    // TODO(main): should add more information here about the symbol
+    valk_lval_t *res = valk_lval_err(
+        "S-expr doesnt start with a <function>, Actual: %s Expected: %s",
+        valk_ltype_name(fun->type), valk_ltype_name(LVAL_FUN));
     valk_lval_free(fun);
     valk_lval_free(sexpr);
-    // TODO(main): should add more information here about the symbol
-    return valk_lval_err("S-expr doesnt start with a <function>");
   }
 
-  valk_lval_t *res = fun->fun.builtin(env, sexpr);
-  valk_lval_free(fun);
+  valk_lval_t *res = valk_lval_eval_call(env, fun, sexpr);
+  return res;
+}
+
+valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
+                                 valk_lval_t *args) {
+  if (func->fun.builtin) {
+    return func->fun.builtin(env, args);
+  }
+  size_t given = args->expr.count;
+  size_t requested = func->fun.formals->expr.count;
+  valk_lval_t *res;
+
+  if (given > requested) {
+    valk_lval_free(args);
+    valk_lval_free(func);
+    return valk_lval_err(
+        "More arguments were given than required Actual: %ld, Expected: %ld",
+        given, requested);
+  }
+
+  while (args->expr.count) {
+    valk_lval_t *sym = valk_lval_pop(func->fun.formals, 0);
+    valk_lval_t *val = valk_lval_pop(args, 0);
+    valk_lenv_put(func->fun.env, sym, val);
+    valk_lval_free(sym);
+    valk_lval_free(val);
+  }
+
+  if (func->fun.formals->expr.count == 0) {
+    func->fun.env->parent = env;
+    res = valk_builtin_eval(
+        func->fun.env,
+        valk_lval_add(valk_lval_sexpr_empty(), valk_lval_copy(func->fun.body)));
+    valk_lval_free(func);
+  } else {
+    res = func;
+  }
+  valk_lval_free(args);
   return res;
 }
 
@@ -413,6 +454,7 @@ valk_lenv_t *valk_lenv_new(void) {
   return res;
 }
 void valk_lenv_init(valk_lenv_t *env) {
+  env->parent = NULL;
   env->count = 0;
   env->symbols = NULL;
   env->vals = NULL;
@@ -429,10 +471,8 @@ void valk_lenv_free(valk_lenv_t *env) {
 }
 
 valk_lenv_t *valk_lenv_copy(valk_lenv_t *env) {
-  if (env == NULL) {
-    return NULL;
-  }
   valk_lenv_t *res = malloc(sizeof(valk_lval_t));
+  res->parent = env->parent;
   res->count = env->count;
   res->symbols = malloc(sizeof(env->symbols) * env->count);
   res->vals = malloc(sizeof(env->vals) * env->count);
@@ -452,7 +492,12 @@ valk_lval_t *valk_lenv_get(valk_lenv_t *env, valk_lval_t *key) {
       return valk_lval_copy(env->vals[i]);
     }
   }
-  return valk_lval_err("LEnv: Symbol `%s` is not bound", key->str);
+
+  if (env->parent) {
+    return valk_lenv_get(env->parent, key);
+  } else {
+    return valk_lval_err("LEnv: Symbol `%s` is not bound", key->str);
+  }
 }
 
 void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
@@ -476,6 +521,14 @@ void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
   env->vals[env->count] = valk_lval_copy(val);
 
   ++env->count;
+}
+
+// Define the key in global scope
+void valk_lenv_def(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
+  while (env->parent) {
+    env = env->parent;
+  }
+  valk_lenv_put(env, key, val);
 }
 
 void valk_lenv_put_builtin(valk_lenv_t *env, char *key,
@@ -651,6 +704,31 @@ static valk_lval_t *valk_builtin_def(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_COUNT_EQ(a, syms, (a->expr.count - 1));
 
   for (size_t i = 0; i < syms->expr.count; i++) {
+    valk_lenv_def(e, syms->expr.cell[i], a->expr.cell[i + 1]);
+  }
+
+  valk_lval_free(a);
+  return valk_lval_sexpr_empty();
+}
+
+static valk_lval_t *valk_builtin_put(valk_lenv_t *e, valk_lval_t *a) {
+  // TODO(main): should dedupe these functions perhaps? i dont care right now
+  // tho
+  LVAL_ASSERT_COUNT_GT(a, a, 1);
+
+  valk_lval_t *syms = a->expr.cell[0];
+  LVAL_ASSERT_TYPE(a, syms, LVAL_QEXPR);
+
+  for (size_t i = 1; i < syms->expr.count; i++) {
+    LVAL_ASSERT(a, syms->expr.cell[i]->type == LVAL_SYM,
+                "Builtin `def` requires that symbols parameter only has "
+                "symbols found: %s",
+                valk_ltype_name(a->expr.cell[i]->type));
+  }
+
+  LVAL_ASSERT_COUNT_EQ(a, syms, (a->expr.count - 1));
+
+  for (size_t i = 0; i < syms->expr.count; i++) {
     valk_lenv_put(e, syms->expr.cell[i], a->expr.cell[i + 1]);
   }
 
@@ -711,6 +789,7 @@ void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "*", valk_builtin_multiply);
 
   valk_lenv_put_builtin(env, "def", valk_builtin_def);
+  valk_lenv_put_builtin(env, "=", valk_builtin_put);
   valk_lenv_put_builtin(env, "\\", valk_builtin_lambda);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
 }
