@@ -163,11 +163,20 @@ valk_lval_t *valk_lval_sym(char *sym) {
   return res;
 }
 
-valk_lval_t *valk_lval_fun(valk_lval_builtin_t *fun) {
+valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_SYM;
   res->fun.builtin = fun;
   res->fun.env = NULL;
+  return res;
+}
+valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body) {
+  valk_lval_t *res = malloc(sizeof(valk_lval_t));
+  res->type = LVAL_FUN;
+  res->fun.builtin = NULL;
+  res->fun.env = valk_lenv_new();
+  res->fun.formals = formals;
+  res->fun.body = body;
   return res;
 }
 
@@ -195,8 +204,17 @@ valk_lval_t *valk_lval_copy(valk_lval_t *lval) {
     res->num = lval->num;
     break;
   case LVAL_FUN:
-    res->fun.builtin = lval->fun.builtin;
-    res->fun.env = valk_lenv_copy(lval->fun.env);
+    if (lval->fun.builtin) {
+      res->fun.builtin = lval->fun.builtin;
+      res->fun.env = NULL;
+      res->fun.body = NULL;
+      res->fun.formals = NULL;
+    } else {
+      res->fun.builtin = NULL;
+      res->fun.env = valk_lenv_copy(lval->fun.env);
+      res->fun.body = valk_lval_copy(lval->fun.body);
+      res->fun.formals = valk_lval_copy(lval->fun.formals);
+    }
     break;
   case LVAL_QEXPR:
   case LVAL_SEXPR:
@@ -218,8 +236,17 @@ valk_lval_t *valk_lval_copy(valk_lval_t *lval) {
 }
 
 void valk_lval_free(valk_lval_t *lval) {
+  if (lval == NULL) {
+    return;
+  }
   switch (lval->type) {
   case LVAL_FUN:
+    if (!lval->fun.builtin) {
+      valk_lval_free(lval->fun.body);
+      valk_lval_free(lval->fun.formals);
+      valk_lenv_free(lval->fun.env);
+    }
+    break;
   case LVAL_NUM:
     // nuttin to do but break;
     break;
@@ -331,6 +358,9 @@ valk_lval_t *valk_lval_join(valk_lval_t *a, valk_lval_t *b) {
 }
 
 void valk_lval_print(valk_lval_t *val) {
+  if (val == NULL) {
+    return;
+  }
   switch (val->type) {
   case LVAL_NUM:
     printf("Num[%li]", val->num);
@@ -363,7 +393,15 @@ void valk_lval_print(valk_lval_t *val) {
     printf("Error[%s]", val->str);
     break;
   case LVAL_FUN:
-    printf("<function>");
+    if (val->fun.builtin) {
+      printf("<builtin>");
+    } else {
+      printf("(\\ ");
+      valk_lval_print(val->fun.formals);
+      putchar(' ');
+      valk_lval_print(val->fun.body);
+      putchar(')');
+    }
     break;
   }
 }
@@ -603,10 +641,11 @@ static valk_lval_t *valk_builtin_def(valk_lenv_t *e, valk_lval_t *a) {
   valk_lval_t *syms = a->expr.cell[0];
   LVAL_ASSERT_TYPE(a, syms, LVAL_QEXPR);
 
-  for (size_t i = 0; i < syms->expr.count; i++) {
-
-    LVAL_ASSERT(a, syms->expr.cell[i]->type == LVAL_QEXPR,
-                "Builtin `def` can only define Q-exprs");
+  for (size_t i = 1; i < syms->expr.count; i++) {
+    LVAL_ASSERT(a, syms->expr.cell[i]->type == LVAL_SYM,
+                "Builtin `def` requires that symbols parameter only has "
+                "symbols found: %s",
+                valk_ltype_name(a->expr.cell[i]->type));
   }
 
   LVAL_ASSERT_COUNT_EQ(a, syms, (a->expr.count - 1));
@@ -617,6 +656,28 @@ static valk_lval_t *valk_builtin_def(valk_lenv_t *e, valk_lval_t *a) {
 
   valk_lval_free(a);
   return valk_lval_sexpr_empty();
+}
+
+static valk_lval_t *valk_builtin_lambda(valk_lenv_t *e, valk_lval_t *a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+
+  valk_lval_t *formals = a->expr.cell[0];
+  valk_lval_t *body = a->expr.cell[1];
+
+  LVAL_ASSERT_TYPE(a, formals, LVAL_QEXPR);
+  LVAL_ASSERT_TYPE(a, body, LVAL_QEXPR);
+
+  for (size_t i = 0; i < formals->expr.count; i++) {
+    LVAL_ASSERT(a, formals->expr.cell[i]->type == LVAL_SYM,
+                "Cannot use a non symbol[%s] for bind",
+                valk_ltype_name(a->expr.cell[0]->expr.cell[i]->type));
+  }
+
+  formals = valk_lval_pop(a, 0);
+  body = valk_lval_pop(a, 0);
+  valk_lval_free(a);
+
+  return valk_lval_lambda(formals, body);
 }
 
 static valk_lval_t *valk_builtin_penv(valk_lenv_t *e, valk_lval_t *a) {
@@ -650,5 +711,6 @@ void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "*", valk_builtin_multiply);
 
   valk_lenv_put_builtin(env, "def", valk_builtin_def);
+  valk_lenv_put_builtin(env, "\\", valk_builtin_lambda);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
 }
