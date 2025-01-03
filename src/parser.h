@@ -47,7 +47,7 @@ valk_lval_t *valk_lval_num(long x);
 valk_lval_t *valk_lval_err(char *fmt, ...);
 valk_lval_t *valk_lval_sym(char *sym);
 valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
-valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t* body);
+valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body);
 valk_lval_t *valk_lval_sexpr_empty();
 valk_lval_t *valk_lval_qexpr_empty();
 
@@ -62,6 +62,8 @@ valk_lval_t *valk_lval_join(valk_lval_t *a, valk_lval_t *b);
 
 valk_lval_t *valk_lval_eval(valk_lenv_t *env, valk_lval_t *lval);
 valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr);
+valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
+                                 valk_lval_t *args);
 
 void valk_lval_print(valk_lval_t *val);
 static inline void valk_lval_println(valk_lval_t *val) {
@@ -73,6 +75,7 @@ struct valk_lenv_t {
   char **symbols;
   valk_lval_t **vals;
   size_t count;
+  struct valk_lenv_t *parent;
 };
 
 //// LEnv Constructors ////
@@ -83,7 +86,10 @@ void valk_lenv_free(valk_lenv_t *env);
 valk_lenv_t *valk_lenv_copy(valk_lenv_t *env);
 
 valk_lval_t *valk_lenv_get(valk_lenv_t *env, valk_lval_t *key);
+
 void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val);
+void valk_lenv_def(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val);
+
 void valk_lenv_put_builtin(valk_lenv_t *env, char *key,
                            valk_lval_builtin_t *fun);
 void valk_lenv_builtins(valk_lenv_t *env);
