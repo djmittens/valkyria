@@ -1,6 +1,14 @@
+UNAME := $(shell uname -s)
+ifeq ($(UNAME), Linux)
+	CMAKE= cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug -S . -B build;
+endif
+ifeq ($(UNAME), Darwin)
+	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DCMAKE_BUILD_TYPE=Debug -DASAN=on -S . -B build;
+endif
+
 .PHONY: build
 build: 
-	cmake -B build -DCMAKE_BUILD_TYPE=Debug -DASAN=on -DHOMEBREW_CLANG=on -G Ninja . && \
+	$(CMAKE)
 	cmake --build build
 
 # This will install editline and maybe other depenedencies on linux / macos

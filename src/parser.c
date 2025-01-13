@@ -79,7 +79,7 @@
               (lval)->expr.count, _count)
 
 static valk_lval_t *valk_builtin_eval(valk_lenv_t *e, valk_lval_t *a);
- 
+
 static char *valk_c_err_format(const char *fmt, const char *file,
                                const size_t line, const char *function) {
   size_t len = snprintf(NULL, 0, "%s:%ld:%s || %s", file, line, function, fmt);
@@ -765,6 +765,10 @@ static valk_lval_t *valk_builtin_penv(valk_lenv_t *e, valk_lval_t *a) {
   for (size_t i = 0; i < e->count; i++) {
 
     valk_lval_t *qexpr = valk_lval_qexpr_empty();
+    // TODO(main): So each of these can fail, in that case we want to free the
+    // intermediates, im too lazy to do that tho, so memory leaks n such.
+    // really i can also check the pre-conditions here to make sure we dont even
+    // allocate anything if they arent met
     valk_lval_add(qexpr, valk_lval_sym(e->symbols[i]));
     valk_lval_add(qexpr, valk_lval_copy(e->vals[i]));
     valk_lval_add(res, qexpr);
