@@ -123,6 +123,8 @@ valk_lval_t *read_ast(const mpc_ast_t *ast) {
       x = valk_lval_add(x, tChild);
       if (x->type == LVAL_ERR) {
         // This operation can fail
+        // In which case we should discard the child
+        valk_lval_free(tChild);
         break;
       }
     } else {

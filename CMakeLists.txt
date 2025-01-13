@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.26 FATAL_ERROR)
 
+set(CMAKE_C_COMPILER "/usr/bin/clang")
+set(CMAKE_CXX_COMPILER "/usr/bin/clang++")
+
 project(valkyria LANGUAGES C)
 
 if(ASAN)
