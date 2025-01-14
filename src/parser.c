@@ -79,7 +79,8 @@
               (lval)->expr.count, _count)
 
 static valk_lval_t *valk_builtin_eval(valk_lenv_t *e, valk_lval_t *a);
- 
+static valk_lval_t *valk_builtin_list(valk_lenv_t *e, valk_lval_t *a);
+
 static char *valk_c_err_format(const char *fmt, const char *file,
                                const size_t line, const char *function) {
   size_t len = snprintf(NULL, 0, "%s:%ld:%s || %s", file, line, function, fmt);
@@ -331,22 +332,54 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
   size_t requested = func->fun.formals->expr.count;
   valk_lval_t *res;
 
-  if (given > requested) {
-    valk_lval_free(args);
-    valk_lval_free(func);
-    return valk_lval_err(
-        "More arguments were given than required Actual: %ld, Expected: %ld",
-        given, requested);
-  }
-
   while (args->expr.count) {
+    if (func->fun.formals->expr.count == 0) {
+      valk_lval_free(args);
+      valk_lval_free(func);
+      return valk_lval_err(
+          "More arguments were given than required Actual: %ld, Expected: %ld",
+          given, requested);
+    }
     valk_lval_t *sym = valk_lval_pop(func->fun.formals, 0);
+    if (strcmp(sym->str, "&") == 0) {
+      // if we encountered this, the rest of arguments are varargs
+      if (func->fun.formals->expr.count != 1) {
+        valk_lval_free(args);
+        return valk_lval_err("Invalid  function format, the vararg symbol `&` "
+                             "is not followed by others");
+      }
+      valk_lval_t *nsym = valk_lval_pop(func->fun.formals, 0);
+      valk_lenv_put(func->fun.env, nsym, valk_builtin_list(env, args));
+      valk_lval_free(sym);
+      valk_lval_free(nsym);
+      break;
+    }
     valk_lval_t *val = valk_lval_pop(args, 0);
     valk_lenv_put(func->fun.env, sym, val);
     valk_lval_free(sym);
     valk_lval_free(val);
   }
 
+  // if whats remaining is the elipsis, then we expand to empty list
+  if (func->fun.formals->expr.count > 0 &&
+      strcmp(func->fun.formals->expr.cell[0]->str, "&")) {
+
+    if (func->fun.formals->expr.count != 2) {
+      valk_lval_free(args);
+      return valk_lval_err("Invalid  function format, the vararg symbol `&` "
+                           "is not followed by others");
+    }
+
+    // discard the &
+    valk_lval_free(valk_lval_pop(func->fun.formals, 0));
+    valk_lval_t* sym = valk_lval_pop(func->fun.formals, 0);
+    valk_lval_t* val = valk_lval_qexpr_empty();
+    valk_lenv_put(env, sym, val);
+    valk_lval_free(sym);
+    valk_lval_free(val);
+  }
+
+  // If everything is bound we evalutate
   if (func->fun.formals->expr.count == 0) {
     func->fun.env->parent = env;
     res = valk_builtin_eval(
@@ -765,6 +798,10 @@ static valk_lval_t *valk_builtin_penv(valk_lenv_t *e, valk_lval_t *a) {
   for (size_t i = 0; i < e->count; i++) {
 
     valk_lval_t *qexpr = valk_lval_qexpr_empty();
+    // TODO(main): So each of these can fail, in that case we want to free the
+    // intermediates, im too lazy to do that tho, so memory leaks n such.
+    // really i can also check the pre-conditions here to make sure we dont even
+    // allocate anything if they arent met
     valk_lval_add(qexpr, valk_lval_sym(e->symbols[i]));
     valk_lval_add(qexpr, valk_lval_copy(e->vals[i]));
     valk_lval_add(res, qexpr);
