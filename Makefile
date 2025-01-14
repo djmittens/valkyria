@@ -6,6 +6,9 @@ build:
 # This will install editline and maybe other depenedencies on linux / macos
 # editline particularly uses autotools, meaning its a pain to get it to work with cmakejo
 # This way if this shit is installed globally, lame
+# To install auto tools in homebrew do :
+# `brew install autoconf automake libtool`
+#
 .PHONY: configure
 configure:
 	cd vendor/editline && \
