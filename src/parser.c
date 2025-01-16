@@ -577,7 +577,7 @@ static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
   for (int i = 0; i < lst->expr.count; ++i) {
     // TODO(main): Its not very straightforward to assert a type here
     if (lst->expr.cell[i]->type != LVAL_NUM) {
-      LVAL_RAISE(lst, "This function only supports Numbers");
+      LVAL_RAISE(lst, "This function only supports Numbers : %s", valk_ltype_name(lst->expr.cell[i]->type));
     }
   }
 
@@ -810,6 +810,32 @@ static valk_lval_t *valk_builtin_penv(valk_lenv_t *e, valk_lval_t *a) {
   return res;
 }
 
+static valk_lval_t *valk_builtin_ord(valk_lenv_t *e, valk_lval_t *a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_SYM);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_NUM);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[2], LVAL_NUM);
+
+  const char * op = a->expr.cell[0]->str;
+
+  int r;
+  if(strcmp(op, ">") == 0) {
+    r = (a->expr.cell[0]->num > a->expr.cell[1]->num );
+  }
+  if(strcmp(op, "<") == 0) {
+    r = (a->expr.cell[0]->num < a->expr.cell[0]->num );
+  }
+  if(strcmp(op, ">=") == 0) {
+    r = (a->expr.cell[0]->num >= a->expr.cell[1]->num );
+  }
+  if(strcmp(op, "<=") == 0) {
+    r = (a->expr.cell[0]->num <= a->expr.cell[0]->num );
+  }
+
+  valk_lval_free(a);
+  return valk_lval_num(r);
+}
+
 void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "list", valk_builtin_list);
   valk_lenv_put_builtin(env, "cons", valk_builtin_cons);
@@ -829,4 +855,5 @@ void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "=", valk_builtin_put);
   valk_lenv_put_builtin(env, "\\", valk_builtin_lambda);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
+  valk_lenv_put_builtin(env, "ord", valk_builtin_ord);
 }
