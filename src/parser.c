@@ -372,8 +372,8 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
 
     // discard the &
     valk_lval_free(valk_lval_pop(func->fun.formals, 0));
-    valk_lval_t* sym = valk_lval_pop(func->fun.formals, 0);
-    valk_lval_t* val = valk_lval_qexpr_empty();
+    valk_lval_t *sym = valk_lval_pop(func->fun.formals, 0);
+    valk_lval_t *val = valk_lval_qexpr_empty();
     valk_lenv_put(env, sym, val);
     valk_lval_free(sym);
     valk_lval_free(val);
@@ -577,7 +577,8 @@ static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
   for (int i = 0; i < lst->expr.count; ++i) {
     // TODO(main): Its not very straightforward to assert a type here
     if (lst->expr.cell[i]->type != LVAL_NUM) {
-      LVAL_RAISE(lst, "This function only supports Numbers : %s", valk_ltype_name(lst->expr.cell[i]->type));
+      LVAL_RAISE(lst, "This function only supports Numbers : %s",
+                 valk_ltype_name(lst->expr.cell[i]->type));
     }
   }
 
@@ -816,26 +817,46 @@ static valk_lval_t *valk_builtin_ord(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_NUM);
   LVAL_ASSERT_TYPE(a, a->expr.cell[2], LVAL_NUM);
 
-  const char * op = a->expr.cell[0]->str;
+  const char *op = a->expr.cell[0]->str;
 
   int r;
-  if(strcmp(op, ">") == 0) {
-    r = (a->expr.cell[0]->num > a->expr.cell[1]->num );
+  if (strcmp(op, ">") == 0) {
+    r = (a->expr.cell[1]->num > a->expr.cell[2]->num);
   }
-  if(strcmp(op, "<") == 0) {
-    r = (a->expr.cell[0]->num < a->expr.cell[0]->num );
+  if (strcmp(op, "<") == 0) {
+    r = (a->expr.cell[1]->num < a->expr.cell[2]->num);
   }
-  if(strcmp(op, ">=") == 0) {
-    r = (a->expr.cell[0]->num >= a->expr.cell[1]->num );
+  if (strcmp(op, ">=") == 0) {
+    r = (a->expr.cell[1]->num >= a->expr.cell[2]->num);
   }
-  if(strcmp(op, "<=") == 0) {
-    r = (a->expr.cell[0]->num <= a->expr.cell[0]->num );
+  if (strcmp(op, "<=") == 0) {
+    r = (a->expr.cell[1]->num <= a->expr.cell[2]->num);
   }
 
   valk_lval_free(a);
   return valk_lval_num(r);
 }
 
+static valk_lval_t *valk_builtin_gt(valk_lenv_t *e, valk_lval_t *a) {
+  valk_lval_t *tmp = valk_lval_sexpr_empty();
+  valk_lval_add(tmp, valk_lval_sym(">"));
+  return valk_builtin_ord(e, valk_lval_join(tmp, a));
+}
+static valk_lval_t *valk_builtin_lt(valk_lenv_t *e, valk_lval_t *a) {
+  valk_lval_t *tmp = valk_lval_sexpr_empty();
+  valk_lval_add(tmp, valk_lval_sym("<"));
+  return valk_builtin_ord(e, valk_lval_join(tmp, a));
+}
+static valk_lval_t *valk_builtin_ge(valk_lenv_t *e, valk_lval_t *a) {
+  valk_lval_t *tmp = valk_lval_sexpr_empty();
+  valk_lval_add(tmp, valk_lval_sym(">="));
+  return valk_builtin_ord(e, valk_lval_join(tmp, a));
+}
+static valk_lval_t *valk_builtin_le(valk_lenv_t *e, valk_lval_t *a) {
+  valk_lval_t *tmp = valk_lval_sexpr_empty();
+  valk_lval_add(tmp, valk_lval_sym("<="));
+  return valk_builtin_ord(e, valk_lval_join(tmp, a));
+}
 void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "list", valk_builtin_list);
   valk_lenv_put_builtin(env, "cons", valk_builtin_cons);
@@ -856,4 +877,8 @@ void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "\\", valk_builtin_lambda);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
   valk_lenv_put_builtin(env, "ord", valk_builtin_ord);
+  valk_lenv_put_builtin(env, ">", valk_builtin_gt);
+  valk_lenv_put_builtin(env, "<", valk_builtin_lt);
+  valk_lenv_put_builtin(env, ">=", valk_builtin_ge);
+  valk_lenv_put_builtin(env, "<=", valk_builtin_le);
 }
