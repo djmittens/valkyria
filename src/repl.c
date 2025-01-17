@@ -15,6 +15,7 @@ int main(int argc, char *argv[]) {
   mpc_parser_t *number = mpc_new("number");
   mpc_parser_t *string = mpc_new("string");
   mpc_parser_t *symbol = mpc_new("symbol");
+  mpc_parser_t *comment = mpc_new("comment");
   mpc_parser_t *sexpr = mpc_new("sexpr");
   mpc_parser_t *qexpr = mpc_new("qexpr");
   mpc_parser_t *expr = mpc_new("expr");
@@ -25,6 +26,7 @@ int main(int argc, char *argv[]) {
                 "number: /-?[0-9]+/;\n"
                 "string: /\"(\\\\.|[^\"])*\"/;\n"
                 "symbol: /[a-zA-Z0-9_+\\-*\\/\\\\=<>!&]+/;\n"
+                "comment: /;[^\\r\\n]*/;\n"
                 // "symbol : \"list\" | \"head\" | \"tail\" | \"init\" "
                 // "| \"join\" | \"eval\" | \"cons\" | \"len\" "
                 // "| '+' | '-' | '*' | '/';\n"
@@ -36,10 +38,10 @@ int main(int argc, char *argv[]) {
                 // expressions and symbols, this list can be evaluated to
                 // produce new expressions
                 "sexpr : '(' <expr>* ')';\n"
-                "expr : <number> | <string> | <symbol> | <qexpr> | <sexpr> ;\n"
+                "expr : <number> | <string> | <symbol> | <comment> | <qexpr> | <sexpr> ;\n"
                 "repl : /^/<expr>*/$/;\n",
 
-                number, string, symbol, qexpr, sexpr, expr, repl);
+                number, string, symbol, comment, qexpr, sexpr, expr, repl);
 
   if (err) {
     printf("Error constructing mpca_lang: %s\n", mpc_err_string(err));
@@ -74,7 +76,7 @@ int main(int argc, char *argv[]) {
     free(input);
   }
   free(env);
-  mpc_cleanup(7, number, string, symbol, qexpr, sexpr, expr, repl);
+  mpc_cleanup(8, number, string, symbol, comment, qexpr, sexpr, expr, repl);
   return EXIT_SUCCESS;
 }
 
@@ -102,7 +104,6 @@ valk_lval_t *read_ast(const mpc_ast_t *ast) {
     free(unescaped);
     return res;
   }
-
   valk_lval_t *x = NULL;
   if (strstr(ast->tag, "qexpr")) {
     x = valk_lval_qexpr_empty();
@@ -131,6 +132,10 @@ valk_lval_t *read_ast(const mpc_ast_t *ast) {
     if (strcmp(child->tag, "regex") == 0) {
       continue;
     }
+    if (strstr(child->tag, "comment")) {
+      continue;
+    }
+
     tChild = read_ast(child);
     if (tChild) {
       x = valk_lval_add(x, tChild);
