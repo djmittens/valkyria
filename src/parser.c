@@ -271,6 +271,41 @@ void valk_lval_free(valk_lval_t *lval) {
   free(lval);
 }
 
+int valk_lval_eq(valk_lval_t *x, valk_lval_t *y) {
+  if (x->type != y->type) {
+    return 0;
+  }
+
+  switch (x->type) {
+  case LVAL_NUM:
+    return (x->num == y->num);
+  case LVAL_SYM:
+  case LVAL_ERR:
+    return (strcmp(x->str, y->str));
+  case LVAL_FUN: {
+    if (x->fun.builtin || y->fun.builtin) {
+      return x->fun.builtin == y->fun.builtin;
+    } else {
+      return valk_lval_eq(x->fun.formals, y->fun.formals) &&
+             valk_lval_eq(x->fun.body, y->fun.body);
+    }
+  }
+  case LVAL_QEXPR:
+  case LVAL_SEXPR:
+    if (x->expr.count != y->expr.count) {
+      return 0;
+    }
+    for (int i = 0; i < x->expr.count; ++i) {
+      if (!valk_lval_eq(x->expr.cell[i], y->expr.cell[i])) {
+        return 0;
+      }
+    }
+    return 1;
+  }
+
+  return 0;
+}
+
 valk_lval_t *valk_lval_eval(valk_lenv_t *env, valk_lval_t *lval) {
   if (lval->type == LVAL_SYM) {
     valk_lval_t *res = valk_lenv_get(env, lval);
@@ -819,7 +854,7 @@ static valk_lval_t *valk_builtin_ord(valk_lenv_t *e, valk_lval_t *a) {
 
   const char *op = a->expr.cell[0]->str;
 
-  int r;
+  int r = 0;
   if (strcmp(op, ">") == 0) {
     r = (a->expr.cell[1]->num > a->expr.cell[2]->num);
   }
@@ -836,7 +871,31 @@ static valk_lval_t *valk_builtin_ord(valk_lenv_t *e, valk_lval_t *a) {
   valk_lval_free(a);
   return valk_lval_num(r);
 }
+static valk_lval_t *valk_builtin_cmp(valk_lenv_t *e, valk_lval_t *a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_SYM);
+  const char *op = a->expr.cell[0]->str;
+  int r = 0;
+  if (strcmp(op, "==") == 0) {
+    r = valk_lval_eq(a->expr.cell[1], a->expr.cell[2]);
+  }
+  if (strcmp(op, "!=") == 0) {
+    r = !valk_lval_eq(a->expr.cell[1], a->expr.cell[2]);
+  }
+  valk_lval_free(a);
+  return valk_lval_num(r);
+}
 
+static valk_lval_t *valk_builtin_eq(valk_lenv_t *e, valk_lval_t *a) {
+  valk_lval_t *tmp = valk_lval_sexpr_empty();
+  valk_lval_add(tmp, valk_lval_sym("=="));
+  return valk_builtin_cmp(e, valk_lval_join(tmp, a));
+}
+static valk_lval_t *valk_builtin_ne(valk_lenv_t *e, valk_lval_t *a) {
+  valk_lval_t *tmp = valk_lval_sexpr_empty();
+  valk_lval_add(tmp, valk_lval_sym("!="));
+  return valk_builtin_cmp(e, valk_lval_join(tmp, a));
+}
 static valk_lval_t *valk_builtin_gt(valk_lenv_t *e, valk_lval_t *a) {
   valk_lval_t *tmp = valk_lval_sexpr_empty();
   valk_lval_add(tmp, valk_lval_sym(">"));
@@ -857,6 +916,29 @@ static valk_lval_t *valk_builtin_le(valk_lenv_t *e, valk_lval_t *a) {
   valk_lval_add(tmp, valk_lval_sym("<="));
   return valk_builtin_ord(e, valk_lval_join(tmp, a));
 }
+
+static valk_lval_t *valk_builtin_if(valk_lenv_t *e, valk_lval_t *a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_NUM);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_QEXPR);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[2], LVAL_QEXPR);
+
+  // Make em both executable
+  valk_lval_t *x;
+  a->expr.cell[1]->type = LVAL_SEXPR;
+  a->expr.cell[2]->type = LVAL_SEXPR;
+
+  // execute only the winning one.
+  if (a->expr.cell[0]->num) {
+    x = valk_lval_eval(e, valk_lval_pop(a, 1));
+  } else {
+    x = valk_lval_eval(e, valk_lval_pop(a, 2));
+  }
+
+  valk_lval_free(a);
+  return x;
+}
+
 void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "list", valk_builtin_list);
   valk_lenv_put_builtin(env, "cons", valk_builtin_cons);
@@ -876,9 +958,15 @@ void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "=", valk_builtin_put);
   valk_lenv_put_builtin(env, "\\", valk_builtin_lambda);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
+
+  // TODO(main):  Doesnt actually work lols, no idea why
   valk_lenv_put_builtin(env, "ord", valk_builtin_ord);
+
+  valk_lenv_put_builtin(env, "if", valk_builtin_if);
   valk_lenv_put_builtin(env, ">", valk_builtin_gt);
   valk_lenv_put_builtin(env, "<", valk_builtin_lt);
   valk_lenv_put_builtin(env, ">=", valk_builtin_ge);
   valk_lenv_put_builtin(env, "<=", valk_builtin_le);
+  valk_lenv_put_builtin(env, "==", valk_builtin_eq);
+  valk_lenv_put_builtin(env, "!=", valk_builtin_ne);
 }

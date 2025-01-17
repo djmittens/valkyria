@@ -55,6 +55,7 @@ valk_lval_t *valk_lval_qexpr_empty();
 
 valk_lval_t *valk_lval_copy(valk_lval_t *lval);
 void valk_lval_free(valk_lval_t *lval);
+int valk_lval_eq(valk_lval_t *x, valk_lval_t *y);
 
 valk_lval_t *valk_lval_add(valk_lval_t *lval, valk_lval_t *cell);
 valk_lval_t *valk_lval_pop(valk_lval_t *lval, size_t i);
