@@ -18,7 +18,6 @@ mpc_parser_t *expr;
 mpc_parser_t *repl;
 
 int main(int argc, char *argv[]) {
-  printf("Hello World %ld\n", sizeof(valk_lval_t));
   char *input;
 
   number = mpc_new("number");
@@ -68,8 +67,8 @@ int main(int argc, char *argv[]) {
         while (res->expr.count) {
           valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(res, 0));
 
-          if (res->type == LVAL_ERR) {
-            valk_lval_println(res);
+          if (x->type == LVAL_ERR) {
+            valk_lval_println(x);
           }
           valk_lval_free(x);
         }

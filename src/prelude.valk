@@ -1,5 +1,7 @@
 ; This is the beginning of my fun.
 ; Default program to be parsed and loaded
 
+(print "Hello and welcome to the prelude n Shit")
+(error "And this is an error n stuff")
 (def {hi} (+ 1 2 3 4))
 (def {hell} (+  3 4))
