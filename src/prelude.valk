@@ -1,0 +1,39 @@
+; This is the beginning of my fun.
+; Default program to be parsed and loaded
+
+(print "Hello and welcome to the prelude n Shit")
+;(error "And this is an error n stuff")
+
+; Atoms
+(def {nil} {})
+(def {true} 1)
+(def {false} 0)
+
+; Function Definitions
+(def {fun} (\ {f b}  {
+   def (head f) (\ (tail f) b)
+}))
+ 
+; unpack list for a function
+(fun {unpack f l} {
+     eval (join (list f) l)
+})
+(def {curry} unpack)
+
+; Pack the list for a function
+(fun {pack f & xs} {f xs})
+(def {uncurry} pack)
+
+; Perform several things in sequence, and return the last result
+(fun {do & l} {
+     if (== l nil)
+       {nil}
+       {last l}
+})
+
+; Open a new scope
+(fun {let  b} {
+   ((\ {_} b) ())
+})
+
+

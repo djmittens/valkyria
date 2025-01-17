@@ -1,6 +1,8 @@
 #include "parser.h"
+#include "mpc.h"
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define LVAL_RAISE(args, fmt, ...)                                             \
@@ -131,6 +133,9 @@ const char *valk_ltype_name(valk_ltype_t type) {
     return "Symbolic-expr";
   case LVAL_ERR:
     return "Error";
+  case LVAL_STR:
+    return "String";
+    break;
   }
 }
 
@@ -158,10 +163,19 @@ valk_lval_t *valk_lval_err(char *fmt, ...) {
   return res;
 }
 
-valk_lval_t *valk_lval_sym(char *sym) {
+valk_lval_t *valk_lval_sym(const char *sym) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_SYM;
   res->str = strndup(sym, 200);
+  res->expr.count = 0;
+  return res;
+}
+
+valk_lval_t *valk_lval_str(const char *str) {
+  valk_lval_t *res = malloc(sizeof(valk_lval_t));
+  res->type = LVAL_STR;
+  // TODO(main): whats a reasonable max for a string length?
+  res->str = strdup(str);
   res->expr.count = 0;
   return res;
 }
@@ -234,6 +248,9 @@ valk_lval_t *valk_lval_copy(valk_lval_t *lval) {
     // Pretty cool functionality in C23
     res->str = strndup(lval->str, 2000); //  TODO(main): Whats max error length?
     break;
+  case LVAL_STR:
+    res->str = strdup(lval->str); //  TODO(main): Whats max string length?
+    break;
   }
   return res;
 }
@@ -253,6 +270,7 @@ void valk_lval_free(valk_lval_t *lval) {
   case LVAL_NUM:
     // nuttin to do but break;
     break;
+  case LVAL_STR:
   case LVAL_SYM:
   case LVAL_ERR:
     free(lval->str);
@@ -269,6 +287,42 @@ void valk_lval_free(valk_lval_t *lval) {
     break;
   }
   free(lval);
+}
+
+int valk_lval_eq(valk_lval_t *x, valk_lval_t *y) {
+  if (x->type != y->type) {
+    return 0;
+  }
+
+  switch (x->type) {
+  case LVAL_NUM:
+    return (x->num == y->num);
+  case LVAL_SYM:
+  case LVAL_STR:
+  case LVAL_ERR:
+    return (strcmp(x->str, y->str));
+  case LVAL_FUN: {
+    if (x->fun.builtin || y->fun.builtin) {
+      return x->fun.builtin == y->fun.builtin;
+    } else {
+      return valk_lval_eq(x->fun.formals, y->fun.formals) &&
+             valk_lval_eq(x->fun.body, y->fun.body);
+    }
+  }
+  case LVAL_QEXPR:
+  case LVAL_SEXPR:
+    if (x->expr.count != y->expr.count) {
+      return 0;
+    }
+    for (int i = 0; i < x->expr.count; ++i) {
+      if (!valk_lval_eq(x->expr.cell[i], y->expr.cell[i])) {
+        return 0;
+      }
+    }
+    return 1;
+  }
+
+  return 0;
 }
 
 valk_lval_t *valk_lval_eval(valk_lenv_t *env, valk_lval_t *lval) {
@@ -372,8 +426,8 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
 
     // discard the &
     valk_lval_free(valk_lval_pop(func->fun.formals, 0));
-    valk_lval_t* sym = valk_lval_pop(func->fun.formals, 0);
-    valk_lval_t* val = valk_lval_qexpr_empty();
+    valk_lval_t *sym = valk_lval_pop(func->fun.formals, 0);
+    valk_lval_t *val = valk_lval_qexpr_empty();
     valk_lenv_put(env, sym, val);
     valk_lval_free(sym);
     valk_lval_free(val);
@@ -477,6 +531,14 @@ void valk_lval_print(valk_lval_t *val) {
       putchar(')');
     }
     break;
+  case LVAL_STR: {
+    // We want to escape the string before printing
+    char *escaped = strdup(val->str);
+    escaped = mpcf_escape(escaped);
+    printf("String[%s]", escaped);
+    free(escaped);
+    break;
+  }
   }
 }
 
@@ -577,7 +639,8 @@ static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
   for (int i = 0; i < lst->expr.count; ++i) {
     // TODO(main): Its not very straightforward to assert a type here
     if (lst->expr.cell[i]->type != LVAL_NUM) {
-      LVAL_RAISE(lst, "This function only supports Numbers");
+      LVAL_RAISE(lst, "This function only supports Numbers : %s",
+                 valk_ltype_name(lst->expr.cell[i]->type));
     }
   }
 
@@ -810,7 +873,145 @@ static valk_lval_t *valk_builtin_penv(valk_lenv_t *e, valk_lval_t *a) {
   return res;
 }
 
+static valk_lval_t *valk_builtin_ord(valk_lenv_t *e, valk_lval_t *a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_SYM);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_NUM);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[2], LVAL_NUM);
+
+  const char *op = a->expr.cell[0]->str;
+
+  int r = 0;
+  if (strcmp(op, ">") == 0) {
+    r = (a->expr.cell[1]->num > a->expr.cell[2]->num);
+  }
+  if (strcmp(op, "<") == 0) {
+    r = (a->expr.cell[1]->num < a->expr.cell[2]->num);
+  }
+  if (strcmp(op, ">=") == 0) {
+    r = (a->expr.cell[1]->num >= a->expr.cell[2]->num);
+  }
+  if (strcmp(op, "<=") == 0) {
+    r = (a->expr.cell[1]->num <= a->expr.cell[2]->num);
+  }
+
+  valk_lval_free(a);
+  return valk_lval_num(r);
+}
+static valk_lval_t *valk_builtin_cmp(valk_lenv_t *e, valk_lval_t *a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_SYM);
+  const char *op = a->expr.cell[0]->str;
+  int r = 0;
+  if (strcmp(op, "==") == 0) {
+    r = valk_lval_eq(a->expr.cell[1], a->expr.cell[2]);
+  }
+  if (strcmp(op, "!=") == 0) {
+    r = !valk_lval_eq(a->expr.cell[1], a->expr.cell[2]);
+  }
+  valk_lval_free(a);
+  return valk_lval_num(r);
+}
+
+static valk_lval_t *valk_builtin_eq(valk_lenv_t *e, valk_lval_t *a) {
+  valk_lval_t *tmp = valk_lval_sexpr_empty();
+  valk_lval_add(tmp, valk_lval_sym("=="));
+  return valk_builtin_cmp(e, valk_lval_join(tmp, a));
+}
+static valk_lval_t *valk_builtin_ne(valk_lenv_t *e, valk_lval_t *a) {
+  valk_lval_t *tmp = valk_lval_sexpr_empty();
+  valk_lval_add(tmp, valk_lval_sym("!="));
+  return valk_builtin_cmp(e, valk_lval_join(tmp, a));
+}
+static valk_lval_t *valk_builtin_gt(valk_lenv_t *e, valk_lval_t *a) {
+  valk_lval_t *tmp = valk_lval_sexpr_empty();
+  valk_lval_add(tmp, valk_lval_sym(">"));
+  return valk_builtin_ord(e, valk_lval_join(tmp, a));
+}
+static valk_lval_t *valk_builtin_lt(valk_lenv_t *e, valk_lval_t *a) {
+  valk_lval_t *tmp = valk_lval_sexpr_empty();
+  valk_lval_add(tmp, valk_lval_sym("<"));
+  return valk_builtin_ord(e, valk_lval_join(tmp, a));
+}
+static valk_lval_t *valk_builtin_ge(valk_lenv_t *e, valk_lval_t *a) {
+  valk_lval_t *tmp = valk_lval_sexpr_empty();
+  valk_lval_add(tmp, valk_lval_sym(">="));
+  return valk_builtin_ord(e, valk_lval_join(tmp, a));
+}
+static valk_lval_t *valk_builtin_le(valk_lenv_t *e, valk_lval_t *a) {
+  valk_lval_t *tmp = valk_lval_sexpr_empty();
+  valk_lval_add(tmp, valk_lval_sym("<="));
+  return valk_builtin_ord(e, valk_lval_join(tmp, a));
+}
+
+static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_STR);
+
+  valk_lval_t *expr = valk_parse_file(a->expr.cell[0]->str);
+  if (expr->type == LVAL_ERR) {
+    valk_lval_free(a);
+    return expr;
+  }
+  while (expr->expr.count) {
+    valk_lval_t *x = valk_lval_eval(e, valk_lval_pop(expr, 0));
+    if (x->type == LVAL_ERR) {
+      valk_lval_println(x);
+    }
+    valk_lval_free(x);
+  }
+
+  valk_lval_free(expr);
+  valk_lval_free(a);
+
+  return valk_lval_sexpr_empty();
+}
+
+static valk_lval_t *valk_builtin_if(valk_lenv_t *e, valk_lval_t *a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_NUM);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_QEXPR);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[2], LVAL_QEXPR);
+
+  // Make em both executable
+  valk_lval_t *x;
+  a->expr.cell[1]->type = LVAL_SEXPR;
+  a->expr.cell[2]->type = LVAL_SEXPR;
+
+  // execute only the winning one.
+  if (a->expr.cell[0]->num) {
+    x = valk_lval_eval(e, valk_lval_pop(a, 1));
+  } else {
+    x = valk_lval_eval(e, valk_lval_pop(a, 2));
+  }
+
+  valk_lval_free(a);
+  return x;
+}
+
+static valk_lval_t *valk_builtin_print(valk_lenv_t *e, valk_lval_t *a) {
+  for (size_t i = 0; i < a->expr.count; i++) {
+    valk_lval_print(a->expr.cell[i]);
+    putchar(' ');
+  }
+  putchar('\n');
+  valk_lval_free(a);
+  return valk_lval_sexpr_empty();
+}
+
+static valk_lval_t *valk_builtin_error(valk_lenv_t *e, valk_lval_t *a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_STR);
+  valk_lval_t *err = valk_lval_err(a->expr.cell[0]->str);
+  valk_lval_free(a);
+  return err;
+}
+
 void valk_lenv_builtins(valk_lenv_t *env) {
+  valk_lenv_put_builtin(env, "load", valk_builtin_load);
+  valk_lenv_put_builtin(env, "print", valk_builtin_print);
+  valk_lenv_put_builtin(env, "error", valk_builtin_error);
+
   valk_lenv_put_builtin(env, "list", valk_builtin_list);
   valk_lenv_put_builtin(env, "cons", valk_builtin_cons);
   valk_lenv_put_builtin(env, "len", valk_builtin_len);
@@ -829,4 +1030,15 @@ void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "=", valk_builtin_put);
   valk_lenv_put_builtin(env, "\\", valk_builtin_lambda);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
+
+  // TODO(main):  Doesnt actually work lols, no idea why
+  valk_lenv_put_builtin(env, "ord", valk_builtin_ord);
+
+  valk_lenv_put_builtin(env, "if", valk_builtin_if);
+  valk_lenv_put_builtin(env, ">", valk_builtin_gt);
+  valk_lenv_put_builtin(env, "<", valk_builtin_lt);
+  valk_lenv_put_builtin(env, ">=", valk_builtin_ge);
+  valk_lenv_put_builtin(env, "<=", valk_builtin_le);
+  valk_lenv_put_builtin(env, "==", valk_builtin_eq);
+  valk_lenv_put_builtin(env, "!=", valk_builtin_ne);
 }

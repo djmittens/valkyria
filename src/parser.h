@@ -1,16 +1,16 @@
 #pragma once
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 // Forward declarations
 struct valk_lenv_t;
 typedef struct valk_lenv_t valk_lenv_t;
 typedef struct valk_lval_t valk_lval_t;
+valk_lval_t *valk_parse_file(const char* filename);
 
 typedef enum {
   LVAL_NUM,
   LVAL_SYM,
+  LVAL_STR,
   LVAL_FUN,
   LVAL_QEXPR,
   LVAL_SEXPR,
@@ -45,7 +45,8 @@ struct valk_lval_t {
 
 valk_lval_t *valk_lval_num(long x);
 valk_lval_t *valk_lval_err(char *fmt, ...);
-valk_lval_t *valk_lval_sym(char *sym);
+valk_lval_t *valk_lval_sym(const char *sym);
+valk_lval_t *valk_lval_str(const char *str);
 valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
 valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body);
 valk_lval_t *valk_lval_sexpr_empty();
@@ -55,6 +56,7 @@ valk_lval_t *valk_lval_qexpr_empty();
 
 valk_lval_t *valk_lval_copy(valk_lval_t *lval);
 void valk_lval_free(valk_lval_t *lval);
+int valk_lval_eq(valk_lval_t *x, valk_lval_t *y);
 
 valk_lval_t *valk_lval_add(valk_lval_t *lval, valk_lval_t *cell);
 valk_lval_t *valk_lval_pop(valk_lval_t *lval, size_t i);
@@ -93,3 +95,4 @@ void valk_lenv_def(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val);
 void valk_lenv_put_builtin(valk_lenv_t *env, char *key,
                            valk_lval_builtin_t *fun);
 void valk_lenv_builtins(valk_lenv_t *env);
+
