@@ -3,6 +3,7 @@
 #include <mpc.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 valk_lval_t *eval(mpc_ast_t *ast);
 valk_lval_t *read_ast(const mpc_ast_t *ast);
@@ -12,6 +13,7 @@ int main(int argc, char *argv[]) {
   char *input;
 
   mpc_parser_t *number = mpc_new("number");
+  mpc_parser_t *string = mpc_new("string");
   mpc_parser_t *symbol = mpc_new("symbol");
   mpc_parser_t *sexpr = mpc_new("sexpr");
   mpc_parser_t *qexpr = mpc_new("qexpr");
@@ -21,6 +23,7 @@ int main(int argc, char *argv[]) {
   mpc_err_t *err =
       mpca_lang(MPCA_LANG_DEFAULT,
                 "number: /-?[0-9]+/;\n"
+                "string: /\"(\\\\.|[^\"])*\"/;\n"
                 "symbol: /[a-zA-Z0-9_+\\-*\\/\\\\=<>!&]+/;\n"
                 // "symbol : \"list\" | \"head\" | \"tail\" | \"init\" "
                 // "| \"join\" | \"eval\" | \"cons\" | \"len\" "
@@ -33,10 +36,10 @@ int main(int argc, char *argv[]) {
                 // expressions and symbols, this list can be evaluated to
                 // produce new expressions
                 "sexpr : '(' <expr>* ')';\n"
-                "expr : <number> | <symbol> | <qexpr> | <sexpr> ;\n"
+                "expr : <number> | <string> | <symbol> | <qexpr> | <sexpr> ;\n"
                 "repl : /^/<expr>*/$/;\n",
 
-                number, symbol, qexpr, sexpr, expr, repl);
+                number, string, symbol, qexpr, sexpr, expr, repl);
 
   if (err) {
     printf("Error constructing mpca_lang: %s\n", mpc_err_string(err));
@@ -71,7 +74,7 @@ int main(int argc, char *argv[]) {
     free(input);
   }
   free(env);
-  mpc_cleanup(6, number, symbol, qexpr, sexpr, expr, repl);
+  mpc_cleanup(7, number, string, symbol, qexpr, sexpr, expr, repl);
   return EXIT_SUCCESS;
 }
 
@@ -85,9 +88,19 @@ valk_lval_t *read_num(char *num) {
 valk_lval_t *read_ast(const mpc_ast_t *ast) {
   if (strstr(ast->tag, "number")) {
     return read_num(ast->contents);
-  }
-  if (strstr(ast->tag, "symbol")) {
+  } else if (strstr(ast->tag, "symbol")) {
     return valk_lval_sym(ast->contents);
+  } else if (strstr(ast->tag, "string")) {
+    // Lets cutoff the bullshit
+    int len = strlen(ast->contents);
+    ast->contents[len - 1] = '\0';
+    char *unescaped = malloc(len - 1);
+    strcpy(unescaped, ast->contents + 1);
+    unescaped = mpcf_unescape(unescaped);
+    valk_lval_t *res;
+    res = valk_lval_str(unescaped);
+    free(unescaped);
+    return res;
   }
 
   valk_lval_t *x = NULL;

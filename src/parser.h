@@ -1,7 +1,5 @@
 #pragma once
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 // Forward declarations
 struct valk_lenv_t;
@@ -11,6 +9,7 @@ typedef struct valk_lval_t valk_lval_t;
 typedef enum {
   LVAL_NUM,
   LVAL_SYM,
+  LVAL_STR,
   LVAL_FUN,
   LVAL_QEXPR,
   LVAL_SEXPR,
@@ -45,7 +44,8 @@ struct valk_lval_t {
 
 valk_lval_t *valk_lval_num(long x);
 valk_lval_t *valk_lval_err(char *fmt, ...);
-valk_lval_t *valk_lval_sym(char *sym);
+valk_lval_t *valk_lval_sym(const char *sym);
+valk_lval_t *valk_lval_str(const char *str);
 valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
 valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body);
 valk_lval_t *valk_lval_sexpr_empty();
