@@ -8,18 +8,27 @@
 valk_lval_t *eval(mpc_ast_t *ast);
 valk_lval_t *read_ast(const mpc_ast_t *ast);
 
+mpc_parser_t *number;
+mpc_parser_t *string;
+mpc_parser_t *symbol;
+mpc_parser_t *comment;
+mpc_parser_t *sexpr;
+mpc_parser_t *qexpr;
+mpc_parser_t *expr;
+mpc_parser_t *repl;
+
 int main(int argc, char *argv[]) {
   printf("Hello World %ld\n", sizeof(valk_lval_t));
   char *input;
 
-  mpc_parser_t *number = mpc_new("number");
-  mpc_parser_t *string = mpc_new("string");
-  mpc_parser_t *symbol = mpc_new("symbol");
-  mpc_parser_t *comment = mpc_new("comment");
-  mpc_parser_t *sexpr = mpc_new("sexpr");
-  mpc_parser_t *qexpr = mpc_new("qexpr");
-  mpc_parser_t *expr = mpc_new("expr");
-  mpc_parser_t *repl = mpc_new("repl");
+  number = mpc_new("number");
+  string = mpc_new("string");
+  symbol = mpc_new("symbol");
+  comment = mpc_new("comment");
+  sexpr = mpc_new("sexpr");
+  qexpr = mpc_new("qexpr");
+  expr = mpc_new("expr");
+  repl = mpc_new("repl");
 
   mpc_err_t *err =
       mpca_lang(MPCA_LANG_DEFAULT,
@@ -38,7 +47,8 @@ int main(int argc, char *argv[]) {
                 // expressions and symbols, this list can be evaluated to
                 // produce new expressions
                 "sexpr : '(' <expr>* ')';\n"
-                "expr : <number> | <string> | <symbol> | <comment> | <qexpr> | <sexpr> ;\n"
+                "expr : <number> | <string> | <symbol> | <comment> | <qexpr> | "
+                "<sexpr> ;\n"
                 "repl : /^/<expr>*/$/;\n",
 
                 number, string, symbol, comment, qexpr, sexpr, expr, repl);
@@ -48,6 +58,26 @@ int main(int argc, char *argv[]) {
   }
   valk_lenv_t *env = valk_lenv_new();
   valk_lenv_builtins(env);
+
+  if (argc >= 2) {
+    for (int i = 1; i < argc; ++i) {
+      valk_lval_t *res = valk_parse_file(argv[i]);
+      if (res->type == LVAL_ERR) {
+        valk_lval_println(res);
+      } else {
+        while (res->expr.count) {
+          valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(res, 0));
+
+          if (res->type == LVAL_ERR) {
+            valk_lval_println(res);
+          }
+          valk_lval_free(x);
+        }
+      }
+
+      valk_lval_free(res);
+    }
+  }
 
   // This is the L in repL
   while ((input = readline("valkyria> ")) != NULL) {
@@ -151,4 +181,21 @@ valk_lval_t *read_ast(const mpc_ast_t *ast) {
     }
   }
   return x;
+}
+
+valk_lval_t *valk_parse_file(const char *filename) {
+  mpc_result_t res;
+  if (mpc_parse_contents(filename, repl, &res)) {
+    valk_lval_t *expr = read_ast(res.output);
+    mpc_ast_delete(res.output);
+
+    return expr;
+  } else {
+    char *err = mpc_err_string(res.error);
+    mpc_err_delete(res.error);
+
+    valk_lval_t *res = valk_lval_err("Could not load file %s", err);
+    free(err);
+    return res;
+  }
 }

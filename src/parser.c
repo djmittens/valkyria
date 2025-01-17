@@ -944,6 +944,29 @@ static valk_lval_t *valk_builtin_le(valk_lenv_t *e, valk_lval_t *a) {
   return valk_builtin_ord(e, valk_lval_join(tmp, a));
 }
 
+static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_STR);
+
+  valk_lval_t* expr = valk_parse_file(a->expr.cell[0]->str);
+  if(expr->type == LVAL_ERR) {
+    valk_lval_free(a);
+    return expr;
+  }
+  while(expr->expr.count) {
+    valk_lval_t* x = valk_lval_eval(e, valk_lval_pop(expr, 0));
+    if(x->type == LVAL_ERR){
+      valk_lval_println(x);
+    }
+    valk_lval_free(x);
+  }
+
+  valk_lval_free(expr);
+  valk_lval_free(a);
+
+  return valk_lval_sexpr_empty();
+}
+
 static valk_lval_t *valk_builtin_if(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 3);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_NUM);
@@ -967,6 +990,7 @@ static valk_lval_t *valk_builtin_if(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 void valk_lenv_builtins(valk_lenv_t *env) {
+  valk_lenv_put_builtin(env, "load", valk_builtin_load);
   valk_lenv_put_builtin(env, "list", valk_builtin_list);
   valk_lenv_put_builtin(env, "cons", valk_builtin_cons);
   valk_lenv_put_builtin(env, "len", valk_builtin_len);
