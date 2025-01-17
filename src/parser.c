@@ -1,6 +1,8 @@
 #include "parser.h"
+#include "mpc.h"
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define LVAL_RAISE(args, fmt, ...)                                             \
@@ -131,6 +133,9 @@ const char *valk_ltype_name(valk_ltype_t type) {
     return "Symbolic-expr";
   case LVAL_ERR:
     return "Error";
+  case LVAL_STR:
+    return "String";
+    break;
   }
 }
 
@@ -158,10 +163,19 @@ valk_lval_t *valk_lval_err(char *fmt, ...) {
   return res;
 }
 
-valk_lval_t *valk_lval_sym(char *sym) {
+valk_lval_t *valk_lval_sym(const char *sym) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_SYM;
   res->str = strndup(sym, 200);
+  res->expr.count = 0;
+  return res;
+}
+
+valk_lval_t *valk_lval_str(const char *str) {
+  valk_lval_t *res = malloc(sizeof(valk_lval_t));
+  res->type = LVAL_STR;
+  // TODO(main): whats a reasonable max for a string length?
+  res->str = strdup(str);
   res->expr.count = 0;
   return res;
 }
@@ -234,6 +248,9 @@ valk_lval_t *valk_lval_copy(valk_lval_t *lval) {
     // Pretty cool functionality in C23
     res->str = strndup(lval->str, 2000); //  TODO(main): Whats max error length?
     break;
+  case LVAL_STR:
+    res->str = strdup(lval->str); //  TODO(main): Whats max string length?
+    break;
   }
   return res;
 }
@@ -253,6 +270,7 @@ void valk_lval_free(valk_lval_t *lval) {
   case LVAL_NUM:
     // nuttin to do but break;
     break;
+  case LVAL_STR:
   case LVAL_SYM:
   case LVAL_ERR:
     free(lval->str);
@@ -280,6 +298,7 @@ int valk_lval_eq(valk_lval_t *x, valk_lval_t *y) {
   case LVAL_NUM:
     return (x->num == y->num);
   case LVAL_SYM:
+  case LVAL_STR:
   case LVAL_ERR:
     return (strcmp(x->str, y->str));
   case LVAL_FUN: {
@@ -512,6 +531,14 @@ void valk_lval_print(valk_lval_t *val) {
       putchar(')');
     }
     break;
+  case LVAL_STR: {
+    // We want to escape the string before printing
+    char *escaped = strdup(val->str);
+    escaped = mpcf_escape(escaped);
+    printf("String[%s]", escaped);
+    free(escaped);
+    break;
+  }
   }
 }
 
