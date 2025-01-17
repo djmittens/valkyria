@@ -1,0 +1,5 @@
+; This is the beginning of my fun.
+; Default program to be parsed and loaded
+
+(def {hi} (+ 1 2 3 4))
+(def {hell} (+  3 4))

@@ -5,6 +5,7 @@
 struct valk_lenv_t;
 typedef struct valk_lenv_t valk_lenv_t;
 typedef struct valk_lval_t valk_lval_t;
+valk_lval_t *valk_parse_file(const char* filename);
 
 typedef enum {
   LVAL_NUM,
@@ -94,3 +95,4 @@ void valk_lenv_def(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val);
 void valk_lenv_put_builtin(valk_lenv_t *env, char *key,
                            valk_lval_builtin_t *fun);
 void valk_lenv_builtins(valk_lenv_t *env);
+

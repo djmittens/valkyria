@@ -30,7 +30,7 @@ clean:
 
 .PHONY: repl
 repl:
-	build/valkyria
+	build/valkyria src/prelude.valk
 
 
 .PHONY: debug
