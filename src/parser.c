@@ -158,7 +158,6 @@ valk_lval_t *valk_lval_err(char *fmt, ...) {
   len = len < 512 ? len : 511;
   res->str = malloc(len + 1);
   vsnprintf(res->str, len + 1, fmt, va);
-
   va_end(va);
   return res;
 }
@@ -372,6 +371,7 @@ valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr) {
     valk_lval_free(fun);
     valk_lval_free(sexpr);
   }
+  valk_lval_err("hi");
 
   valk_lval_t *res = valk_lval_eval_call(env, fun, sexpr);
   return res;
