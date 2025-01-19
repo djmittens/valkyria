@@ -35,17 +35,16 @@ int main(int argc, char *argv[]) {
   while ((input = readline("valkyria> ")) != NULL) {
     int pos = 0;
     add_history(input);
-    valk_lval_t *expr = valk_lval_sexpr_empty();
-    valk_lval_read_expr(expr, &pos, input, '\0');
+
+    valk_lval_t *expr = valk_lval_read(&pos, input);
     printf("AST: ");
     valk_lval_println(expr);
-    valk_lval_t *finalRes = valk_lval_eval(env, finalRes);
 
-    valk_lval_println(finalRes);
+    expr = valk_lval_eval(env, expr);
+    valk_lval_println(expr);
 
     free(input);
     valk_lval_free(expr);
-    valk_lval_free(finalRes);
   }
   free(env);
   return EXIT_SUCCESS;
@@ -57,4 +56,3 @@ valk_lval_t *read_num(char *num) {
   return errno != ERANGE ? valk_lval_num(x)
                          : valk_lval_err("Number outside long range");
 }
-
