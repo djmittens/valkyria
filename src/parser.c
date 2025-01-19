@@ -1,5 +1,5 @@
 #include "parser.h"
-#include "mpc.h"
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,6 +82,14 @@
 
 static valk_lval_t *valk_builtin_eval(valk_lenv_t *e, valk_lval_t *a);
 static valk_lval_t *valk_builtin_list(valk_lenv_t *e, valk_lval_t *a);
+static const char *valk_lval_str_escape(char x);
+static char valk_lval_str_unescape(char x);
+
+/* List of possible escapable characters */
+static char *lval_str_escapable = "\a\b\f\n\r\t\v\\\'\"";
+
+/* Possible unescapable characters */
+static char *lval_str_unescapable = "abfnrtv\\\'\"";
 
 static char *valk_c_err_format(const char *fmt, const char *file,
                                const size_t line, const char *function) {
@@ -533,13 +541,222 @@ void valk_lval_print(valk_lval_t *val) {
     break;
   case LVAL_STR: {
     // We want to escape the string before printing
-    char *escaped = strdup(val->str);
-    escaped = mpcf_escape(escaped);
-    printf("String[%s]", escaped);
-    free(escaped);
+    printf("String[");
+    for (int i = 0; i < strlen(val->str); ++i) {
+      if (strchr(lval_str_escapable, val->str[i])) {
+        printf("%s", valk_lval_str_escape(val->str[i]));
+      } else {
+        putchar(val->str[i]);
+      }
+    }
+    printf("]");
     break;
   }
   }
+}
+
+static int valk_lval_read_sym(valk_lval_t *res, int *i, const char *s) {
+
+  char next;
+  int end = *i;
+  // find the end of the string
+  for (; (next = s[end]); ++end) {
+    if (strchr("abcdefghijklmnopqrstuvwxyz"
+               "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+               "0123456789_+-*\\/=<>!&",
+               next) &&
+        s[end] != '\0') {
+      continue;
+    }
+    break;
+  }
+
+  // the  length of the new string
+  size_t len = end - (*i);
+  if (len) {
+    char *sym = strndup(&s[*i], len);
+    int isNum = strchr("-0123456789", sym[0]) != 0;
+    for (int i = 1; i < len; ++i) {
+      if (!strchr("0123456789", sym[i])) {
+        isNum = 0;
+        break;
+      }
+    }
+    if (isNum) {
+      errno = 0;
+      long x = strtol(sym, NULL, 10);
+      // TODO(main): i dont like that we return this error as a success....
+      // this should yield a return 1;
+      // but im too lazy to unfuck this function
+      valk_lval_add(res, errno != ERANGE
+                             ? valk_lval_num(x)
+                             : valk_lval_err("Invalid number format %s", sym));
+    } else {
+      valk_lval_add(res, valk_lval_sym(sym));
+    }
+    *i += len;
+    free(sym);
+    return 0;
+  }
+  return 1;
+}
+
+static char valk_lval_str_unescape(char x) {
+  switch (x) {
+  case 'a':
+    return '\a';
+  case 'b':
+    return '\b';
+  case 'f':
+    return '\f';
+  case 'n':
+    return '\n';
+  case 'r':
+    return '\r';
+  case 't':
+    return '\t';
+  case 'v':
+    return '\v';
+  case '\\':
+    return '\\';
+  case '\'':
+    return '\'';
+  case '\"':
+    return '\"';
+  }
+  return '\0';
+}
+
+static const char *valk_lval_str_escape(char x) {
+  switch (x) {
+  case '\a':
+    return "\\a";
+  case '\b':
+    return "\\b";
+  case '\f':
+    return "\\f";
+  case '\n':
+    return "\\n";
+  case '\r':
+    return "\\r";
+  case '\t':
+    return "\\t";
+  case '\v':
+    return "\\v";
+  case '\\':
+    return "\\\\";
+  case '\'':
+    return "\\\'";
+  case '\"':
+    return "\\\"";
+  }
+  return "";
+}
+
+static int valk_lval_read_str(valk_lval_t *res, int *i, const char *s) {
+  // Scan the string for size
+  char next;
+  int count = 0;
+
+  for (int end = *i; (next = s[*i]) != '"'; ++end) {
+    if (next == '\0') {
+      valk_lval_add(
+          res, valk_lval_err("Unexpected  end of input at string literal"));
+      return 1;
+    }
+    if (next == '\\') {
+      ++end;
+      if (!strchr(lval_str_unescapable, s[end])) {
+        valk_lval_add(res,
+                      valk_lval_err("Invalid escape character \\%c", s[end]));
+        return 1;
+      }
+    }
+    count++;
+  }
+
+  count++;
+  // TODO(main): Hmmm can a string be so big, itll blow the stack? fun.
+  char tmp[count];
+  count = 0;
+  for (int end = *i; (next = s[*i]) != '"'; ++end) {
+    next = s[end];
+    if (next == '\\') {
+      ++end;
+      next = valk_lval_str_unescape(s[end]);
+    }
+    tmp[count++] = next;
+  }
+
+  (*i) += count;
+  valk_lval_add(res, valk_lval_str(tmp));
+  return 0;
+}
+
+int valk_lval_read_expr(valk_lval_t *res, int *i, const char *s,
+                        const char end) {
+  for (; s[*i] != end; ++(*i)) {
+    char next = s[*i];
+    if (next == end) {
+      valk_lval_add(res, valk_lval_err("Missing %c at end of input", end));
+      return 1;
+    }
+
+    // Ignore whitespace
+    if (strchr(" \t\v\r\n", next)) {
+      continue;
+    }
+
+    // Read comment
+    if (next == ';') {
+      while (next != '\n' && next != '\0') {
+        ++(*i);
+        next = s[*i];
+      }
+      continue;
+    }
+
+    // Read sexpr
+    if (next == '(') {
+      valk_lval_t *expr = valk_lval_sexpr_empty();
+      valk_lval_add(res, expr);
+      ++(*i);
+      valk_lval_read_expr(expr, i, s, ')');
+      continue;
+    }
+
+    // Read qexpr
+    if (next == '{') {
+      valk_lval_t *expr = valk_lval_qexpr_empty();
+      valk_lval_add(res, expr);
+      ++(*i);
+      valk_lval_read_expr(expr, i, s, '}');
+    }
+
+    // Lets check for a symbol
+    if (strchr("abcdefghijklmnopqrstuvwxyz"
+               "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+               "0123456789_+-*\\/=<>!&",
+               next)) {
+      if (valk_lval_read_sym(res, i, s)) {
+        return 1;
+      }
+      continue;
+    }
+
+    // Lets check for a string
+    if (strchr("\"'", next)) {
+      if (valk_lval_read_str(res, i, s)) {
+        return 1;
+      }
+
+      continue;
+    }
+
+    valk_lval_add(res, valk_lval_err("Unexpected character %c", next));
+    return 1;
+  }
+  return 0;
 }
 
 //// LEnv ////
@@ -965,6 +1182,28 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
   valk_lval_free(a);
 
   return valk_lval_sexpr_empty();
+}
+
+valk_lval_t *valk_parse_file(const char *filename) {
+  valk_lval_t *res = valk_lval_sexpr_empty();
+
+  FILE *f = fopen(filename, "rb");
+  if (f == NULL) {
+    LVAL_RAISE(res, "Could not open file %s", filename);
+  }
+
+  fseek(f, 0, SEEK_END);
+  size_t length = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  char *input = calloc(length + 1, 1);
+  fread(input, 1, length, f);
+  fclose(f);
+
+  int pos = 0;
+  valk_lval_read_expr(res, &pos, input, '\0');
+  free(input);
+
+  return res;
 }
 
 static valk_lval_t *valk_builtin_if(valk_lenv_t *e, valk_lval_t *a) {
