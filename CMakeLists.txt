@@ -4,6 +4,7 @@ set(CMAKE_C_COMPILER "/usr/bin/clang")
 set(CMAKE_CXX_COMPILER "/usr/bin/clang++")
 
 project(valkyria LANGUAGES C)
+enable_testing()
 
 if(ASAN)
   # Enable AddressSanitizer flags
@@ -30,23 +31,20 @@ if (HOMEBREW_CLANG)
   include (${CMAKE_CURRENT_SOURCE_DIR}/homebrew.cmake)
 endif()
 
-file(GLOB _SRC
-  src/*.c
+add_library(valkyria src/parser.c)
+
+add_executable(repl
+  "src/repl.c"
 )
 
-# file(GLOB _HEADERS
-#   src/*.h
-#   vendor/editline/include/*.h
-# )
-add_executable(valkyria
-  "src/repl.c"
-  "vendor/mpc/mpc.c"
-  ${_SRC}
-)
-include_directories(valkyria
+include_directories(repl
   # vendor/editline/include/
-  "vendor/mpc/"
   ${EDITLINE_INCLUDE_DIRS}
 )
 # set_property(TARGET valkyria PROPERTY C_STANDARD 23)
-target_link_libraries(valkyria "-lc" PkgConfig::EDITLINE)
+target_link_libraries(repl PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
+
+add_executable(test_parser test/test_parser.c)
+target_link_libraries(test_parser PRIVATE "-lc" valkyria)
+include_directories(test_parser src/)
+add_test(NAME TestParser COMMAND test_parser)

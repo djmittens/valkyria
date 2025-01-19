@@ -555,52 +555,6 @@ void valk_lval_print(valk_lval_t *val) {
   }
 }
 
-static int valk_lval_read_sym(valk_lval_t *res, int *i, const char *s) {
-
-  char next;
-  int end = *i;
-  // find the end of the string
-  for (; (next = s[end]); ++end) {
-    if (strchr("abcdefghijklmnopqrstuvwxyz"
-               "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-               "0123456789_+-*\\/=<>!&",
-               next) &&
-        s[end] != '\0') {
-      continue;
-    }
-    break;
-  }
-
-  // the  length of the new string
-  size_t len = end - (*i);
-  if (len) {
-    char *sym = strndup(&s[*i], len);
-    int isNum = strchr("-0123456789", sym[0]) != 0;
-    for (int i = 1; i < len; ++i) {
-      if (!strchr("0123456789", sym[i])) {
-        isNum = 0;
-        break;
-      }
-    }
-    if (isNum) {
-      errno = 0;
-      long x = strtol(sym, NULL, 10);
-      // TODO(main): i dont like that we return this error as a success....
-      // this should yield a return 1;
-      // but im too lazy to unfuck this function
-      valk_lval_add(res, errno != ERANGE
-                             ? valk_lval_num(x)
-                             : valk_lval_err("Invalid number format %s", sym));
-    } else {
-      valk_lval_add(res, valk_lval_sym(sym));
-    }
-    *i += len;
-    free(sym);
-    return 0;
-  }
-  return 1;
-}
-
 static char valk_lval_str_unescape(char x) {
   switch (x) {
   case 'a':
@@ -653,110 +607,161 @@ static const char *valk_lval_str_escape(char x) {
   return "";
 }
 
-static int valk_lval_read_str(valk_lval_t *res, int *i, const char *s) {
+static valk_lval_t *valk_lval_read_sym(int *i, const char *s) {
+
+  valk_lval_t *res;
+  char next;
+  int end = *i;
+  // find the end of the string
+  for (; (next = s[end]); ++end) {
+    if (strchr("abcdefghijklmnopqrstuvwxyz"
+               "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+               "0123456789_+-*\\/=<>!&",
+               next) &&
+        s[end] != '\0') {
+      continue;
+    }
+    break;
+  }
+
+  // the  length of the new string
+  size_t len = end - (*i);
+  if (len) {
+    char *sym = strndup(&s[*i], len);
+    int isNum = strchr("-0123456789", sym[0]) != 0;
+    for (int i = 1; i < len; ++i) {
+      if (!strchr("0123456789", sym[i])) {
+        isNum = 0;
+        break;
+      }
+    }
+    if (isNum) {
+      errno = 0;
+      long x = strtol(sym, NULL, 10);
+      // TODO(main): i dont like that we return this error as a success....
+      // this should yield a return 1;
+      // but im too lazy to unfuck this function
+      res = errno != ERANGE ? valk_lval_num(x)
+                            : valk_lval_err("Invalid number format %s", sym);
+    } else {
+      res = valk_lval_sym(sym);
+    }
+    *i += len;
+    free(sym);
+    return res;
+  }
+
+  return valk_lval_str("");
+}
+static valk_lval_t *valk_lval_read_str(int *i, const char *s) {
   // Scan the string for size
   char next;
-  int count = 0;
+  int count = 1; // Pad for nil terminator
 
-  for (int end = *i; (next = s[*i]) != '"'; ++end) {
+  // Advance to start of string
+  if (s[(*i)++] != '"') {
+    return valk_lval_err(
+        "Strings must start with `\"` but instead it started with %c", s[*i]);
+  }
+
+  // Read until the end
+  for (int end = (*i); (next = s[end]) != '"'; ++end) {
     if (next == '\0') {
-      valk_lval_add(
-          res, valk_lval_err("Unexpected  end of input at string literal"));
-      return 1;
+      return valk_lval_err("Unexpected  end of input at string literal");
     }
     if (next == '\\') {
       ++end;
       if (!strchr(lval_str_unescapable, s[end])) {
-        valk_lval_add(res,
-                      valk_lval_err("Invalid escape character \\%c", s[end]));
-        return 1;
+        return valk_lval_err("Invalid escape character \\%c", s[end]);
       }
     }
     count++;
   }
 
-  count++;
   // TODO(main): Hmmm can a string be so big, itll blow the stack? fun.
   char tmp[count];
-  count = 0;
+
+  int offset = 0;
   for (int end = *i; (next = s[*i]) != '"'; ++end) {
     next = s[end];
     if (next == '\\') {
       ++end;
       next = valk_lval_str_unescape(s[end]);
     }
-    tmp[count++] = next;
+    tmp[offset++] = next;
   }
 
-  (*i) += count;
-  valk_lval_add(res, valk_lval_str(tmp));
-  return 0;
+  (*i) += offset;
+  return valk_lval_str(tmp);
 }
 
-int valk_lval_read_expr(valk_lval_t *res, int *i, const char *s,
-                        const char end) {
-  for (; s[*i] != end; ++(*i)) {
-    char next = s[*i];
-    if (next == end) {
-      valk_lval_add(res, valk_lval_err("Missing %c at end of input", end));
-      return 1;
-    }
+valk_lval_t *valk_lval_read(int *i, const char *s) {
+  valk_lval_t *res;
 
-    // Ignore whitespace
-    if (strchr(" \t\v\r\n", next)) {
-      continue;
-    }
-
+  // Skip white space and comments
+  while (strchr(" \t\v\r\n", s[*i]) && s[*i] != '\0') {
     // Read comment
-    if (next == ';') {
-      while (next != '\n' && next != '\0') {
+    if (s[*i] == ';') {
+      while (s[*i] != '\n' && s[*i] != '\0') {
         ++(*i);
-        next = s[*i];
       }
-      continue;
     }
-
-    // Read sexpr
-    if (next == '(') {
-      valk_lval_t *expr = valk_lval_sexpr_empty();
-      valk_lval_add(res, expr);
-      ++(*i);
-      valk_lval_read_expr(expr, i, s, ')');
-      continue;
-    }
-
-    // Read qexpr
-    if (next == '{') {
-      valk_lval_t *expr = valk_lval_qexpr_empty();
-      valk_lval_add(res, expr);
-      ++(*i);
-      valk_lval_read_expr(expr, i, s, '}');
-    }
-
-    // Lets check for a symbol
-    if (strchr("abcdefghijklmnopqrstuvwxyz"
-               "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-               "0123456789_+-*\\/=<>!&",
-               next)) {
-      if (valk_lval_read_sym(res, i, s)) {
-        return 1;
-      }
-      continue;
-    }
-
-    // Lets check for a string
-    if (strchr("\"'", next)) {
-      if (valk_lval_read_str(res, i, s)) {
-        return 1;
-      }
-
-      continue;
-    }
-
-    valk_lval_add(res, valk_lval_err("Unexpected character %c", next));
-    return 1;
+    ++(*i);
   }
-  return 0;
+  if (s[*i] == '\0') {
+    return valk_lval_err("Unexpected  end of input");
+  }
+
+  if (strchr("({", s[*i])) {
+    res = valk_lval_read_expr(i, s);
+  }
+  // Lets check for a symbol
+  else if (strchr("abcdefghijklmnopqrstuvwxyz"
+                  "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                  "0123456789_+-*\\/=<>!&",
+                  s[*i])) {
+    res = valk_lval_read_sym(i, s);
+  } else if (s[*i] == '"') {
+    res = valk_lval_read_str(i, s);
+  } else {
+    res = valk_lval_err("Unexpected character %c", s[*i]);
+  }
+
+  // Skip white space and comments
+  while (strchr(" \t\v\r\n", s[*i]) && s[*i] != '\0') {
+    // Read comment
+    if (s[*i] == ';') {
+      while (s[*i] != '\n' && s[*i] != '\0') {
+        ++(*i);
+      }
+    }
+    ++(*i);
+  }
+  return res;
+}
+
+valk_lval_t *valk_lval_read_expr(int *i, const char *s) {
+  char end;
+  valk_lval_t *res;
+  if (s[++(*i)] == '{') {
+    res = valk_lval_qexpr_empty();
+    end = '{';
+  } else {
+    res = valk_lval_sexpr_empty();
+    end = ')';
+  }
+
+  while (s[*i] != end) {
+    valk_lval_t *x = valk_lval_read(i, s);
+    if (x->type == LVAL_ERR) {
+      valk_lval_free(res);
+      return x;
+    } else {
+      valk_lval_add(res, x);
+    }
+  }
+  (*i)++;
+  return res;
 }
 
 //// LEnv ////
@@ -814,8 +819,8 @@ valk_lval_t *valk_lenv_get(valk_lenv_t *env, valk_lval_t *key) {
 
 void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
   // TODO(main): technically this is a failure condition for us, but the
-  // return's void LVAL_ASSERT(NULL, key->type == LVAL_SYM, "LEnv only supports
-  // symbolic keys");
+  // return's void LVAL_ASSERT(NULL, key->type == LVAL_SYM, "LEnv only
+  // supports symbolic keys");
   for (size_t i = 0; i < env->count; i++) {
     if (strcmp(key->str, env->symbols[i]) == 0) {
       // if we found it, we destroy it
@@ -825,7 +830,8 @@ void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
     }
   }
   // TODO(main): technically we should be able to do the ammortized arraylist
-  // where we double the array on overflow, but i guess it doesnt matter for now
+  // where we double the array on overflow, but i guess it doesnt matter for
+  // now
   env->symbols = realloc(env->symbols, sizeof(env->symbols) * (env->count + 1));
   env->vals = realloc(env->vals, sizeof(env->vals) * (env->count + 1));
 
@@ -1080,8 +1086,8 @@ static valk_lval_t *valk_builtin_penv(valk_lenv_t *e, valk_lval_t *a) {
     valk_lval_t *qexpr = valk_lval_qexpr_empty();
     // TODO(main): So each of these can fail, in that case we want to free the
     // intermediates, im too lazy to do that tho, so memory leaks n such.
-    // really i can also check the pre-conditions here to make sure we dont even
-    // allocate anything if they arent met
+    // really i can also check the pre-conditions here to make sure we dont
+    // even allocate anything if they arent met
     valk_lval_add(qexpr, valk_lval_sym(e->symbols[i]));
     valk_lval_add(qexpr, valk_lval_copy(e->vals[i]));
     valk_lval_add(res, qexpr);
@@ -1185,11 +1191,10 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 valk_lval_t *valk_parse_file(const char *filename) {
-  valk_lval_t *res = valk_lval_sexpr_empty();
 
   FILE *f = fopen(filename, "rb");
   if (f == NULL) {
-    LVAL_RAISE(res, "Could not open file %s", filename);
+    LVAL_RAISE(valk_lval_sexpr_empty(), "Could not open file %s", filename);
   }
 
   fseek(f, 0, SEEK_END);
@@ -1200,7 +1205,7 @@ valk_lval_t *valk_parse_file(const char *filename) {
   fclose(f);
 
   int pos = 0;
-  valk_lval_read_expr(res, &pos, input, '\0');
+  valk_lval_t *res = valk_lval_read(&pos, input);
   free(input);
 
   return res;

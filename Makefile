@@ -29,10 +29,15 @@ clean:
 	rm -rf build
 
 .PHONY: repl
-repl:
-	build/valkyria src/prelude.valk
+repl: build
+	build/repl src/prelude.valk
 
 
 .PHONY: debug
-debug: build
-	lldb -o "run" build/valkyria
+debug: debug
+	lldb -o "run" build/repl
+
+.PHONY: test
+test: build
+	cd build && \
+	ctest --output-on-failure
