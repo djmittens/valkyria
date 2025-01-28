@@ -22,7 +22,13 @@ configure:
 	cd vendor/editline && \
 	./autogen.sh && \
 	./configure && \
-	make install
+	make install && \
+	
+.PHONY: venv
+venv:
+	python -m venv .venv && \
+	source .venv/bin/activate && \
+	pip install r Piplock
 
 .PHONY: clean
 clean:
@@ -35,9 +41,9 @@ repl: build
 
 .PHONY: debug
 debug: debug
-	lldb -o "run" build/repl
+	#lldb -o "run" build/repl src/prelude.valk
+	lldb build/repl src/prelude.valk
 
 .PHONY: test
 test: build
-	cd build && \
-	ctest --output-on-failure
+	ctest --test-dir build --output-on-failure
