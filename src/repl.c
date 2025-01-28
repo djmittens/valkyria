@@ -36,7 +36,13 @@ int main(int argc, char *argv[]) {
     int pos = 0;
     add_history(input);
 
-    valk_lval_t *expr = valk_lval_read(&pos, input);
+    valk_lval_t *expr = valk_lval_sexpr_empty();
+    valk_lval_t *tmp;
+    do {
+      tmp = valk_lval_read(&pos, input);
+      valk_lval_add(expr, tmp);
+    } while ((tmp->type != LVAL_ERR) && (input[pos] != '\0'));
+
     printf("AST: ");
     valk_lval_println(expr);
 
