@@ -21,9 +21,8 @@ void test_always_failing(VALK_TEST_ARGS()) {
 }
 
 int main(int argc, const char **argv) {
-  printf("Hello world test\n");
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
-  // valk_testsuite_add_test(suite, "test_always_failing", test_always_failing);
+  valk_testsuite_add_test(suite, "test_always_failing", test_always_failing);
   valk_testsuite_add_test(suite, "test_parsing_prelude", test_parsing_prelude);
 
   int res = valk_testsuite_run(suite);
