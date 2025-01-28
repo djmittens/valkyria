@@ -21,9 +21,9 @@
 
 #define VALK_FAIL(fmt, ...)                                                    \
   do {                                                                         \
-    int len = snprintf(NULL, 0, (fmt), ##__VA_ARGS__);                          \
-    char *buf = malloc((len * sizeof(char)) +1);                                    \
-    snprintf(buf, len, (fmt), ##__VA_ARGS__);                                        \
+    int len = snprintf(NULL, 0, (fmt), ##__VA_ARGS__);                         \
+    char *buf = calloc((len + 1) , sizeof(char));                              \
+    int res = snprintf(buf, len + 1, (fmt), ##__VA_ARGS__);                    \
     _result->type = VALK_TEST_FAIL;                                            \
     _result->stopTime = clock();                                               \
     _result->error = buf;                                                      \
