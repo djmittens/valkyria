@@ -44,7 +44,8 @@ include_directories(repl
 # set_property(TARGET valkyria PROPERTY C_STANDARD 23)
 target_link_libraries(repl PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
 
-add_executable(test_parser test/test_parser.c)
+add_executable(test_parser test/test_parser.c test/testing.c)
 target_link_libraries(test_parser PRIVATE "-lc" valkyria)
+
 include_directories(test_parser src/)
 add_test(NAME TestParser COMMAND test_parser)

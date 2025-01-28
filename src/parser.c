@@ -147,6 +147,7 @@ const char *valk_ltype_name(valk_ltype_t type) {
   }
 }
 
+
 valk_lval_t *valk_lval_num(long x) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_NUM;
@@ -679,11 +680,11 @@ static valk_lval_t *valk_lval_read_str(int *i, const char *s) {
   }
 
   // TODO(main): Hmmm can a string be so big, itll blow the stack? fun.
-  char tmp[count];
+  char tmp[count] = {};
 
   int offset = 0;
-  for (int end = *i; (next = s[*i]) != '"'; ++end) {
-    next = s[end];
+  for (int end = *i; (next = s[end]) != '"'; ++end) {
+    // next = s[end]; // why the heck is that here
     if (next == '\\') {
       ++end;
       next = valk_lval_str_unescape(s[end]);
@@ -691,7 +692,7 @@ static valk_lval_t *valk_lval_read_str(int *i, const char *s) {
     tmp[offset++] = next;
   }
 
-  (*i) += offset;
+  (*i) += offset + 1;
   return valk_lval_str(tmp);
 }
 
@@ -699,15 +700,17 @@ valk_lval_t *valk_lval_read(int *i, const char *s) {
   valk_lval_t *res;
 
   // Skip white space and comments
-  while (strchr(" \t\v\r\n", s[*i]) && s[*i] != '\0') {
+  while (strchr(" ;\t\v\r\n", s[*i]) && s[*i] != '\0') {
     // Read comment
     if (s[*i] == ';') {
       while (s[*i] != '\n' && s[*i] != '\0') {
         ++(*i);
       }
+    } else {
+      ++(*i);
     }
-    ++(*i);
   }
+
   if (s[*i] == '\0') {
     return valk_lval_err("Unexpected  end of input");
   }
