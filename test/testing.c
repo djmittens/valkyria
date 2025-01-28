@@ -34,11 +34,6 @@ void valk_testsuite_free(valk_test_suite_t *suite) {
 
   free(suite->filename);
 
-  for (size_t i = 0; i < suite->results.count; i++) {
-    free(suite->results.items[i].error);
-  }
-  free(suite->results.items);
-
   free(suite);
 }
 
@@ -88,14 +83,14 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
     valk_test_result_t *result = &suite->results.items[i];
     valk_test_t *test = &suite->tests.items[result->testOffset];
     if (result->type == VALK_TEST_PASS) {
-      printf("Test: %s .......... PASS : in %llu (ms)\n", test->name,
+      printf("Test: %s .......... PASS : in %lu (ms)\n", test->name,
              (result->stopTime - result->startTime));
     } else if (result->type == VALK_TEST_UNDEFINED) {
       printf("Test: %s .......... UNDEFINED\n", test->name);
     } else if (result->type == VALK_TEST_FAIL) {
-      printf("Test: %s .......... ERROR : in %llu (ms)\n", test->name,
+      printf("Test: %s .......... ERROR : in %lu (ms)\n", test->name,
              (result->stopTime - result->startTime));
-      printf("%s\n", result->error);
+      printf("ERROR: %s\n", result->error);
     }
   }
 }

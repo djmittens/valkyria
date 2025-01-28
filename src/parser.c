@@ -8,7 +8,8 @@
 #define LVAL_RAISE(args, fmt, ...)                                             \
   do {                                                                         \
     char *_fmt =                                                               \
-        valk_c_err_format(fmt, __FILE_NAME__, __LINE__, __FUNCTION__);         \
+        valk_c_err_format((fmt), __FILE_NAME__, __LINE__, __FUNCTION__);       \
+    printf("fmt:: %s\n", _fmt);                                                \
     valk_lval_t *err = valk_lval_err(_fmt, ##__VA_ARGS__);                     \
     valk_lval_free(args);                                                      \
     free(_fmt);                                                                \
@@ -147,7 +148,6 @@ const char *valk_ltype_name(valk_ltype_t type) {
   }
 }
 
-
 valk_lval_t *valk_lval_num(long x) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_NUM;
@@ -156,15 +156,18 @@ valk_lval_t *valk_lval_num(long x) {
 }
 
 // TODO(main): look into UTF-8 support
-valk_lval_t *valk_lval_err(char *fmt, ...) {
+valk_lval_t *valk_lval_err(const char *fmt, ...) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_ERR;
   va_list va;
   va_start(va, fmt);
 
   size_t len = vsnprintf(NULL, 0, fmt, va);
+  va_end(va);
+  va_start(va, fmt);
+
   // TODO(main): look into making this into a constant
-  len = len < 512 ? len : 511;
+  len = len < 10000 ? len : 511;
   res->str = malloc(len + 1);
   vsnprintf(res->str, len + 1, fmt, va);
   va_end(va);
@@ -727,7 +730,7 @@ valk_lval_t *valk_lval_read(int *i, const char *s) {
   } else if (s[*i] == '"') {
     res = valk_lval_read_str(i, s);
   } else {
-    res = valk_lval_err("Unexpected character %c", s[*i]);
+    res = valk_lval_err("[offset: %ld] Unexpected character %c", *i, s[*i]);
   }
 
   // Skip white space and comments
@@ -746,15 +749,21 @@ valk_lval_t *valk_lval_read(int *i, const char *s) {
 valk_lval_t *valk_lval_read_expr(int *i, const char *s) {
   char end;
   valk_lval_t *res;
-  if (s[++(*i)] == '{') {
+  if (s[(*i)++] == '{') {
     res = valk_lval_qexpr_empty();
-    end = '{';
+    end = '}';
   } else {
     res = valk_lval_sexpr_empty();
     end = ')';
   }
 
   while (s[*i] != end) {
+    if (s[*i] == '\0') {
+      LVAL_RAISE(res,
+                 "[offset: %d] Unexpted end of input reading expr, while "
+                 "looking for `%c`",
+                 *i, end);
+    }
     valk_lval_t *x = valk_lval_read(i, s);
     if (x->type == LVAL_ERR) {
       valk_lval_free(res);
@@ -764,6 +773,7 @@ valk_lval_t *valk_lval_read_expr(int *i, const char *s) {
     }
   }
   (*i)++;
+
   return res;
 }
 
@@ -1197,18 +1207,24 @@ valk_lval_t *valk_parse_file(const char *filename) {
 
   FILE *f = fopen(filename, "rb");
   if (f == NULL) {
-    LVAL_RAISE(valk_lval_sexpr_empty(), "Could not open file %s", filename);
+    LVAL_RAISE(valk_lval_sexpr_empty(), "Could not open file (%s)", filename);
   }
 
   fseek(f, 0, SEEK_END);
   size_t length = ftell(f);
   fseek(f, 0, SEEK_SET);
-  char *input = calloc(length + 1, 1);
+  char *input = calloc(length + 1, sizeof(char));
   fread(input, 1, length, f);
   fclose(f);
 
   int pos = 0;
-  valk_lval_t *res = valk_lval_read(&pos, input);
+  valk_lval_t *res = valk_lval_sexpr_empty();
+  valk_lval_t *tmp;
+  do {
+    tmp = valk_lval_read(&pos, input);
+    valk_lval_add(res, tmp);
+  } while ((tmp->type != LVAL_ERR) && (input[pos] != '\0'));
+
   free(input);
 
   return res;

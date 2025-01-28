@@ -1,14 +1,36 @@
 #include "parser.h"
 #include "testing.h"
 
+valk_lval_t *find_error(valk_lval_t *ast) {
+  switch (ast->type) {
+  case LVAL_ERR:
+    return ast;
+  case LVAL_QEXPR:
+  case LVAL_SEXPR: {
+    for (int i = 0; i < ast->expr.count; i++) {
+      if (find_error(ast->expr.cell[i])) {
+        return ast->expr.cell[i];
+      }
+    }
+  }
+  case LVAL_STR:
+  case LVAL_FUN:
+  case LVAL_NUM:
+  case LVAL_SYM:
+    return NULL;
+  }
+}
+
 void test_parsing_prelude(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_lval_t *ast = valk_parse_file("../src/prelude.valk");
   printf("Read the file as ");
   valk_lval_println(ast);
 
-  if (ast->type == LVAL_ERR) {
-    VALK_FAIL("encountered a parsing error %s", ast->str);
+  valk_lval_t *err = find_error(ast);
+  if (err) {
+    VALK_FAIL("Encountered %s, %s", valk_ltype_name(err->type), err->str);
+
   } else {
     VALK_PASS();
   }
@@ -17,7 +39,7 @@ void test_parsing_prelude(VALK_TEST_ARGS()) {
 
 void test_always_failing(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_FAIL("This is an expected failure :%s", "haaah");
+  VALK_FAIL("This is an expected failure :%s, %s", "haaah", "ehhhhe");
 }
 
 int main(int argc, const char **argv) {

@@ -1,7 +1,6 @@
 ; This is the beginning of my fun.
 ; Default program to be parsed and loaded
 (print "Hello and welcome to the prelude n Shit")
-()
 
 ;(error "And this is an error n stuff")
 ; Atoms
