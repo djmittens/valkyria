@@ -22,7 +22,7 @@
 #define VALK_FAIL(fmt, ...)                                                    \
   do {                                                                         \
     int len = snprintf(NULL, 0, (fmt), ##__VA_ARGS__);                         \
-    char *buf = calloc((len + 1) , sizeof(char));                              \
+    char *buf = calloc((len + 1), sizeof(char));                               \
     int res = snprintf(buf, len + 1, (fmt), ##__VA_ARGS__);                    \
     _result->type = VALK_TEST_FAIL;                                            \
     _result->stopTime = clock();                                               \
@@ -38,6 +38,8 @@
       VALK_FAIL((fmt), ##__VA_ARGS__);                                         \
     }                                                                          \
   } while (0)
+
+#define VALK_FIXTURE(name) (valk_testsuite_fixture_get(_suite, (name)))
 
 #define DA_INIT_CAPACITY 8
 #define da_init(arr)                                                           \
@@ -79,6 +81,7 @@ typedef struct valk_test_result_t valk_test_result_t;
 
 typedef void(valk_test_f)(valk_test_suite_t *);
 typedef void(_fixture_free_f)(void *);
+typedef void *(_fixture_copy_f)(void *);
 
 typedef enum {
   VALK_TEST_UNDEFINED,
@@ -89,6 +92,7 @@ typedef enum {
 typedef struct valk_test_fixture_t {
   void *value;
   char *name;
+  _fixture_copy_f *copy;
   _fixture_free_f *free;
 } valk_test_fixture_t;
 
@@ -136,9 +140,15 @@ void valk_testsuite_free(valk_test_suite_t *suite);
 size_t valk_testsuite_add_test(valk_test_suite_t *suite, const char *name,
                                valk_test_f *func);
 
+void valk_testsuite_fixture_add(valk_test_suite_t *suite, const char *name,
+                                void *value, _fixture_copy_f *copyFunc,
+                                _fixture_free_f *freeFunc);
+
 valk_test_result_t *valk_testsuite_new_result(valk_test_suite_t *suite,
                                               const char *testName);
 
 int valk_testsuite_run(valk_test_suite_t *suite);
 
 void valk_testsuite_print(valk_test_suite_t *suite);
+
+void *valk_testsuite_fixture_get(valk_test_suite_t *suite, const char *name);

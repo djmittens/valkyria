@@ -202,13 +202,13 @@ valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_FUN;
   res->fun.builtin = NULL;
-  res->fun.env = valk_lenv_new();
+  res->fun.env = valk_lenv_empty();
   res->fun.formals = formals;
   res->fun.body = body;
   return res;
 }
 
-valk_lval_t *valk_lval_sexpr_empty() {
+valk_lval_t *valk_lval_sexpr_empty(void) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_SEXPR;
   res->expr.cell = NULL;
@@ -216,7 +216,7 @@ valk_lval_t *valk_lval_sexpr_empty() {
   return res;
 }
 
-valk_lval_t *valk_lval_qexpr_empty() {
+valk_lval_t *valk_lval_qexpr_empty(void) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_QEXPR;
   res->expr.cell = NULL;
@@ -760,7 +760,7 @@ valk_lval_t *valk_lval_read_expr(int *i, const char *s) {
   while (s[*i] != end) {
     if (s[*i] == '\0') {
       LVAL_RAISE(res,
-                 "[offset: %d] Unexpted end of input reading expr, while "
+                 "[offset: %d] Unexpected end of input reading expr, while "
                  "looking for `%c`",
                  *i, end);
     }
@@ -778,7 +778,7 @@ valk_lval_t *valk_lval_read_expr(int *i, const char *s) {
 }
 
 //// LEnv ////
-valk_lenv_t *valk_lenv_new(void) {
+valk_lenv_t *valk_lenv_empty(void) {
   valk_lenv_t *res = malloc(sizeof(valk_lenv_t));
   valk_lenv_init(res);
   return res;
@@ -801,8 +801,13 @@ void valk_lenv_free(valk_lenv_t *env) {
 }
 
 valk_lenv_t *valk_lenv_copy(valk_lenv_t *env) {
+  if (env == NULL) {
+    return NULL;
+  }
   valk_lenv_t *res = malloc(sizeof(valk_lval_t));
-  res->parent = env->parent;
+  // TODO(main): Man lotta copying, especially deep copying, in case things
+  // change the problem with this ofcourse is that, globals cant be changed
+  res->parent = valk_lenv_copy(env->parent);
   res->count = env->count;
   res->symbols = malloc(sizeof(env->symbols) * env->count);
   res->vals = malloc(sizeof(env->vals) * env->count);

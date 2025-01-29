@@ -8,7 +8,7 @@
 int main(int argc, char *argv[]) {
   char *input;
 
-  valk_lenv_t *env = valk_lenv_new();
+  valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);
 
   if (argc >= 2) {
