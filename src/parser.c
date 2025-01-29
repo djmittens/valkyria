@@ -791,6 +791,7 @@ void valk_lenv_init(valk_lenv_t *env) {
 }
 
 void valk_lenv_free(valk_lenv_t *env) {
+  // Doesnt free the  parent
   for (int i = 0; i < env->count; ++i) {
     valk_lval_free(env->vals[i]);
     free(env->symbols[i]);
@@ -807,7 +808,7 @@ valk_lenv_t *valk_lenv_copy(valk_lenv_t *env) {
   valk_lenv_t *res = malloc(sizeof(valk_lval_t));
   // TODO(main): Man lotta copying, especially deep copying, in case things
   // change the problem with this ofcourse is that, globals cant be changed
-  res->parent = valk_lenv_copy(env->parent);
+  res->parent = env->parent;
   res->count = env->count;
   res->symbols = malloc(sizeof(env->symbols) * env->count);
   res->vals = malloc(sizeof(env->vals) * env->count);

@@ -47,7 +47,7 @@ void test_prelude_not(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_lenv_t *env = VALK_FIXTURE("env");
   int pos = 0;
-  valk_lval_t *res = valk_lval_eval(env, valk_lval_read(&pos, "(not 1)"));
+  valk_lval_t *res = valk_lval_eval(env, valk_lval_read(&pos, "(penv ())"));
   valk_lval_println(res);
 
   valk_lval_t *err = find_error(res);
@@ -79,6 +79,7 @@ int main(int argc, const char **argv) {
   // load fixtures
   valk_lval_t *ast = valk_parse_file("../src/prelude.valk");
   valk_lenv_t *env = valk_lenv_empty();
+  valk_lenv_builtins(env); // load the builtins
   valk_lval_t *r = valk_lval_eval(env, valk_lval_copy(ast));
   valk_lval_free(r);
 
