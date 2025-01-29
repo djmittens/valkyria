@@ -49,8 +49,8 @@ valk_lval_t *valk_lval_sym(const char *sym);
 valk_lval_t *valk_lval_str(const char *str);
 valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
 valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body);
-valk_lval_t *valk_lval_sexpr_empty();
-valk_lval_t *valk_lval_qexpr_empty();
+valk_lval_t *valk_lval_sexpr_empty(void);
+valk_lval_t *valk_lval_qexpr_empty(void);
 
 //// END Constructors ////
 
@@ -85,7 +85,7 @@ struct valk_lenv_t {
 };
 
 //// LEnv Constructors ////
-valk_lenv_t *valk_lenv_new(void);
+valk_lenv_t *valk_lenv_empty(void);
 void valk_lenv_init(valk_lenv_t *env);
 //// END LEnv Constructors ////
 void valk_lenv_free(valk_lenv_t *env);

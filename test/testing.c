@@ -94,3 +94,20 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
     }
   }
 }
+
+void valk_testsuite_fixture_add(valk_test_suite_t *suite, const char *name,
+                                void *value, _fixture_copy_f *copyFunc,
+                                _fixture_free_f *freeFunc) {
+  valk_test_fixture_t res = {
+      .value = value, .copy = copyFunc, .free = freeFunc, .name = strdup(name)};
+  da_add(&suite->fixtures, res);
+}
+
+void *valk_testsuite_fixture_get(valk_test_suite_t *suite, const char *name) {
+  for (size_t i = 0; i < suite->fixtures.count; i++) {
+    if (strcmp(suite->fixtures.items[i].name, name) == 0) {
+      return suite->fixtures.items[i].copy(suite->fixtures.items[i].value);
+    }
+  }
+  return NULL;
+}
