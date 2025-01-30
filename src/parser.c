@@ -9,7 +9,6 @@
   do {                                                                         \
     char *_fmt =                                                               \
         valk_c_err_format((fmt), __FILE_NAME__, __LINE__, __FUNCTION__);       \
-    printf("fmt:: %s\n", _fmt);                                                \
     valk_lval_t *err = valk_lval_err(_fmt, ##__VA_ARGS__);                     \
     valk_lval_free(args);                                                      \
     free(_fmt);                                                                \
@@ -92,7 +91,7 @@ static char *lval_str_escapable = "\a\b\f\n\r\t\v\\\'\"";
 /* Possible unescapable characters */
 static char *lval_str_unescapable = "abfnrtv\\\'\"";
 
-static char *valk_c_err_format(const char *fmt, const char *file,
+char *valk_c_err_format(const char *fmt, const char *file,
                                const size_t line, const char *function) {
   size_t len = snprintf(NULL, 0, "%s:%ld:%s || %s", file, line, function, fmt);
   char *buf = malloc(len + 1);
@@ -100,7 +99,7 @@ static char *valk_c_err_format(const char *fmt, const char *file,
   return buf;
 }
 
-static char *valk_str_join(const size_t n, const char **strs, const char *sep) {
+char *valk_str_join(const size_t n, const char **strs, const char *sep) {
   // TODO(main): I think i should get my own string type in here
   size_t res_len = 0;
   size_t sep_len = strlen(sep);
@@ -633,13 +632,18 @@ static valk_lval_t *valk_lval_read_sym(int *i, const char *s) {
   size_t len = end - (*i);
   if (len) {
     char *sym = strndup(&s[*i], len);
-    int isNum = strchr("-0123456789", sym[0]) != 0;
+    int isNum = strchr("-0123456789", sym[0]) != NULL;
     for (int i = 1; i < len; ++i) {
       if (!strchr("0123456789", sym[i])) {
         isNum = 0;
         break;
       }
     }
+    // Negative by itself is not a number
+    if (strlen(sym) == 1 && sym[0] == '-') {
+      isNum = 0;
+    }
+
     if (isNum) {
       errno = 0;
       long x = strtol(sym, NULL, 10);

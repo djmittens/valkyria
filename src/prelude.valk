@@ -120,10 +120,10 @@
 (fun {not x} {- 1 x})
 
 ; x or y 
-(fun {or x y} {+ 1 x})
+(fun {or x y} {+ x y})
 
 ; x and y
-(fun {and x y} {* 1 x})
+(fun {and x y} {* x y})
 
 ; Function functions, you know that lambda shit
 

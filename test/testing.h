@@ -1,5 +1,6 @@
 #pragma once
 
+#include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -15,26 +16,39 @@
 
 #define VALK_PASS()                                                            \
   do {                                                                         \
-    _result->type = VALK_TEST_PASS;                                            \
-    _result->stopTime = clock();                                               \
+    if (_result->type == VALK_TEST_UNDEFINED) {                                \
+      _result->type = VALK_TEST_PASS;                                          \
+      _result->stopTime = clock();                                             \
+    }                                                                          \
   } while (0)
 
 #define VALK_FAIL(fmt, ...)                                                    \
   do {                                                                         \
-    int len = snprintf(NULL, 0, (fmt), ##__VA_ARGS__);                         \
-    char *buf = calloc((len + 1), sizeof(char));                               \
-    int res = snprintf(buf, len + 1, (fmt), ##__VA_ARGS__);                    \
+    if (_result->type != VALK_TEST_UNDEFINED) {                                \
+      printf(                                                                  \
+          "%s:%d || Detected that test has already finished with result.... "  \
+          "aborting\n",                                                        \
+          __FILE__, __LINE__);                                                 \
+      fflush(stdout);                                                          \
+      abort();                                                                 \
+    }                                                                          \
+    size_t __len =                                                             \
+        snprintf(NULL, 0, "%s:%d || %s", __FILE__, __LINE__, (fmt));          \
+    char *__efmt = malloc(__len + 1);                                          \
+    snprintf(__efmt, __len + 1, "%s:%d || %s", __FILE__, __LINE__, (fmt));    \
+    __len = snprintf(NULL, 0, (__efmt), ##__VA_ARGS__);                           \
+    char *__buf = calloc((__len + 1), sizeof(char));                           \
+    snprintf(__buf, __len + 1, (__efmt), ##__VA_ARGS__);                          \
+    free(__efmt);                                                              \
     _result->type = VALK_TEST_FAIL;                                            \
     _result->stopTime = clock();                                               \
-    _result->error = buf;                                                      \
+    _result->error = __buf;                                                    \
   } while (0)
 
 //  Not very useful right now, since this tyhing doesnt cleanup the resources
 #define VALK_ASSERT(cond, fmt, ...)                                            \
   do {                                                                         \
-    if (cond) {                                                                \
-      VALK_PASS();                                                             \
-    } else {                                                                   \
+    if (_result->type == VALK_TEST_UNDEFINED && !(cond)) {                     \
       VALK_FAIL((fmt), ##__VA_ARGS__);                                         \
     }                                                                          \
   } while (0)
