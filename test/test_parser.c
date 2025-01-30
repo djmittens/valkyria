@@ -7,14 +7,8 @@ void test_parsing_prelude(VALK_TEST_ARGS()) {
 
   //  printf("Read the file as ");
   //  valk_lval_println(ast);
-
-  valk_lval_t *err = valk_lval_find_error(ast);
-  if (err) {
-    VALK_FAIL("Encountered %s, %s", valk_ltype_name(err->type), err->str);
-
-  } else {
-    VALK_PASS();
-  }
+  VALK_EXPECT_SUCCESS(ast);
+  VALK_PASS();
   valk_lval_free(ast);
 }
 
@@ -27,12 +21,11 @@ void test_prelude_not(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_lenv_t *env = VALK_FIXTURE("env");
 
-  valk_lval_t* res = valk_eval(env, "(not true)");
+  valk_lval_t *res = valk_eval(env, "(not true)");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
   VALK_ASSERT(res->num == 0, "Not true is false [%ld]", res->num);
   valk_lval_free(res);
-
 
   res = valk_eval(env, "(not false)");
   VALK_EXPECT_SUCCESS(res);
@@ -99,7 +92,7 @@ valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
   }
 }
 
-valk_lval_t *valk_eval(valk_lenv_t* env , const char* expr) {
+valk_lval_t *valk_eval(valk_lenv_t *env, const char *expr) {
   int pos = 0;
   return valk_lval_eval(env, valk_lval_read(&pos, expr));
 }
