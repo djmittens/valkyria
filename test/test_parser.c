@@ -46,8 +46,10 @@ void test_always_failing(VALK_TEST_ARGS()) {
 void test_prelude_not(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_lenv_t *env = VALK_FIXTURE("env");
+
   int pos = 0;
-  valk_lval_t *res = valk_lval_eval(env, valk_lval_read(&pos, "(penv ())"));
+  valk_lval_t *res = valk_lval_eval(env, valk_lval_read(&pos, "(not 1)"));
+
   valk_lval_println(res);
 
   valk_lval_t *err = find_error(res);
@@ -58,9 +60,10 @@ void test_prelude_not(VALK_TEST_ARGS()) {
     VALK_PASS();
   }
   valk_lenv_free(env);
+  valk_lval_free(res);
 }
 
-// aTODO(main):  ny way to avoid this boilerplate???
+// TODO(main):  ny way to avoid this boilerplate???
 static void valk_lval_free_void(void *lval) { valk_lval_free(lval); }
 static void *valk_lval_copy_void(void *lval) { return valk_lval_copy(lval); }
 

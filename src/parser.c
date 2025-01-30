@@ -382,8 +382,9 @@ valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr) {
         valk_ltype_name(fun->type), valk_ltype_name(LVAL_FUN));
     valk_lval_free(fun);
     valk_lval_free(sexpr);
+    return res;
   }
-  valk_lval_err("hi");
+  // valk_lval_err("hi");
 
   valk_lval_t *res = valk_lval_eval_call(env, fun, sexpr);
   return res;
