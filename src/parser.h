@@ -69,8 +69,8 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
 
 void valk_lval_print(valk_lval_t *val);
 
-valk_lval_t* valk_lval_read(int *i, const char *s);
-valk_lval_t* valk_lval_read_expr(int *i, const char *s);
+valk_lval_t *valk_lval_read(int *i, const char *s);
+valk_lval_t *valk_lval_read_expr(int *i, const char *s);
 
 static inline void valk_lval_println(valk_lval_t *val) {
   valk_lval_print(val);
@@ -99,3 +99,11 @@ void valk_lenv_def(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val);
 void valk_lenv_put_builtin(valk_lenv_t *env, char *key,
                            valk_lval_builtin_t *fun);
 void valk_lenv_builtins(valk_lenv_t *env);
+
+// UTILS
+// These functions should  probably not  be here, but right now they are or
+// something. Maybe there should be a string handling lib
+
+char *valk_str_join(const size_t n, const char **strs, const char *sep);
+char *valk_c_err_format(const char *fmt, const char *file, const size_t line,
+                        const char *function);

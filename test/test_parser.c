@@ -1,34 +1,14 @@
+#include "test_parser.h"
 #include "parser.h"
-#include "testing.h"
-
-valk_lval_t *find_error(valk_lval_t *ast) {
-  switch (ast->type) {
-  case LVAL_ERR:
-    return ast;
-  case LVAL_QEXPR:
-  case LVAL_SEXPR: {
-    for (int i = 0; i < ast->expr.count; i++) {
-      if (find_error(ast->expr.cell[i])) {
-        return ast->expr.cell[i];
-      }
-    }
-  }
-  case LVAL_STR:
-  case LVAL_FUN:
-  case LVAL_NUM:
-  case LVAL_SYM:
-    return NULL;
-  }
-}
 
 void test_parsing_prelude(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_lval_t *ast = VALK_FIXTURE("prelude");
 
-  printf("Read the file as ");
-  valk_lval_println(ast);
+  //  printf("Read the file as ");
+  //  valk_lval_println(ast);
 
-  valk_lval_t *err = find_error(ast);
+  valk_lval_t *err = valk_lval_find_error(ast);
   if (err) {
     VALK_FAIL("Encountered %s, %s", valk_ltype_name(err->type), err->str);
 
@@ -47,20 +27,21 @@ void test_prelude_not(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_lenv_t *env = VALK_FIXTURE("env");
 
-  int pos = 0;
-  valk_lval_t *res = valk_lval_eval(env, valk_lval_read(&pos, "(not 1)"));
-
-  valk_lval_println(res);
-
-  valk_lval_t *err = find_error(res);
-  if (err) {
-    VALK_FAIL("Encountered %s, %s", valk_ltype_name(err->type), err->str);
-
-  } else {
-    VALK_PASS();
-  }
-  valk_lenv_free(env);
+  valk_lval_t* res = valk_eval(env, "(not true)");
+  VALK_EXPECT_SUCCESS(res);
+  VALK_ASSERT_TYPE(res, LVAL_NUM);
+  VALK_ASSERT(res->num == 0, "Not true is false [%ld]", res->num);
   valk_lval_free(res);
+
+
+  res = valk_eval(env, "(not false)");
+  VALK_EXPECT_SUCCESS(res);
+  VALK_ASSERT_TYPE(res, LVAL_NUM);
+  VALK_ASSERT(res->num == 1, "Not false is true [%ld]", res->num);
+  valk_lval_free(res);
+
+  VALK_PASS();
+  valk_lenv_free(env);
 }
 
 // TODO(main):  ny way to avoid this boilerplate???
@@ -74,7 +55,7 @@ int main(int argc, const char **argv) {
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
   valk_testsuite_add_test(suite, "test_parsing_prelude", test_parsing_prelude);
-  if (1) {
+  if (0) {
     valk_testsuite_add_test(suite, "test_always_failing", test_always_failing);
   }
   valk_testsuite_add_test(suite, "test_prelude_not", test_prelude_not);
@@ -96,4 +77,29 @@ int main(int argc, const char **argv) {
   valk_testsuite_free(suite);
 
   return res;
+}
+
+valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
+  switch (ast->type) {
+  case LVAL_ERR:
+    return ast;
+  case LVAL_QEXPR:
+  case LVAL_SEXPR: {
+    for (int i = 0; i < ast->expr.count; i++) {
+      if (valk_lval_find_error(ast->expr.cell[i])) {
+        return ast->expr.cell[i];
+      }
+    }
+  }
+  case LVAL_STR:
+  case LVAL_FUN:
+  case LVAL_NUM:
+  case LVAL_SYM:
+    return NULL;
+  }
+}
+
+valk_lval_t *valk_eval(valk_lenv_t* env , const char* expr) {
+  int pos = 0;
+  return valk_lval_eval(env, valk_lval_read(&pos, expr));
 }

@@ -42,7 +42,7 @@ repl: build
 .PHONY: debug
 debug: debug
 	#lldb -o "run" build/repl src/prelude.valk
-	gdb build/repl src/prelude.valk
+	lldb build/repl src/prelude.valk
 
 .PHONY: test
 test: build
