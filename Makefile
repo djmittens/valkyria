@@ -46,4 +46,4 @@ debug: debug
 
 .PHONY: test
 test: build
-	ctest --test-dir build --output-on-failure
+	build/test_parser

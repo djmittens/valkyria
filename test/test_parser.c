@@ -90,7 +90,6 @@ void test_prelude_do(VALK_TEST_ARGS()) {
   valk_lenv_t *env = VALK_FIXTURE("env");
 
   valk_lval_t *res = valk_eval(env, "(do (= {a} 2) (+ 1 2 3) (+ 1 a))");
-  valk_lval_println(res);
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
   VALK_ASSERT(res->num == 3,
@@ -248,7 +247,7 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_prelude_not", test_prelude_not);
 
   // load fixtures
-  valk_lval_t *ast = valk_parse_file("../src/prelude.valk");
+  valk_lval_t *ast = valk_parse_file("src/prelude.valk");
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env); // load the builtins
   valk_lval_t *r = valk_lval_eval(env, valk_lval_copy(ast));
