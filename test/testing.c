@@ -11,7 +11,9 @@
 #define NS_TO_MS(ns) ((ns) / 1000000)
 #define NS_TO_US(ns) ((ns) / 1000)
 
-const int REPORT_WIDTH = 100;
+#ifndef VALK_REPORT_WIDTH
+#define VALK_REPORT_WIDTH 100
+#endif
 const char *DOT_FILL =
     ".........................................................................."
     ".........................................................................."
@@ -112,7 +114,7 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
       break;
     }
 
-    int len = REPORT_WIDTH - strlen(test->name);
+    int len = VALK_REPORT_WIDTH - strlen(test->name);
 
     switch (result->type) {
     case VALK_TEST_UNDEFINED: {
