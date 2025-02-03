@@ -36,7 +36,7 @@ clean:
 
 .PHONY: repl
 repl: build
-	build/repl src/prelude.valk
+	build/valk src/prelude.valk
 
 
 .PHONY: debug
@@ -46,4 +46,4 @@ debug: debug
 
 .PHONY: test
 test: build
-	build/test_parser
+	build/test_std

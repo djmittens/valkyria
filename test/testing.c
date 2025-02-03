@@ -118,7 +118,7 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
 
     switch (result->type) {
     case VALK_TEST_UNDEFINED: {
-      printf("%s UNDEFINED\n", test->name);
+      printf("%s%.*s  UNDEFINED\n", test->name, len, DOT_FILL);
       break;
     }
     case VALK_TEST_PASS:

@@ -1,4 +1,4 @@
-#include "test_parser.h"
+#include "test_std.h"
 #include "parser.h"
 
 void test_parsing_prelude(VALK_TEST_ARGS()) {
@@ -244,6 +244,7 @@ int main(int argc, const char **argv) {
   if (0) {
     valk_testsuite_add_test(suite, "test_always_failing", test_always_failing);
   }
+
   valk_testsuite_add_test(suite, "test_prelude_not", test_prelude_not);
 
   // load fixtures
