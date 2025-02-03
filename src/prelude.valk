@@ -1,24 +1,27 @@
 ; This is the beginning of my fun.
 ; Default program to be parsed and loaded
 (print "Hello and welcome to the prelude n Shit")
-;(error "And this is an error n stuff")
-; Atoms
-(def {nil} {})
-(def {true} 1)
-(def {false} 0)
 
 ; Function Definitions
 (def {fun} (\ {f b}  {
    def (head f) (\ (tail f) b)
 }))
+
+;(error "And this is an error n stuff")
+; Atoms
+(def {nil} {})
+(def {true} 1)
+(def {false} 0)
  
 ; unpack list for a function
+
 (fun {unpack f l} {
      eval (join (list f) l)
 })
 (def {curry} unpack)
 
 ; Pack the list for a function
+; eg for a function  f, pack (f 1 2 3) into {f { 1 2 3}}
 (fun {pack f & xs} {f xs})
 (def {uncurry} pack)
 
@@ -38,26 +41,33 @@
 ; LISTS ARE 1 BASED LIKE LUA, CAUSE FUCK YEAH
 
 ; Return first item in the list
-(fun {fst l} {eval (head l) })
+(fun {fst _l} {eval (head _l) })
 
 ; Return the second item in the list
-(fun {snd l} {eval (head (tail l)) })
+(fun {snd _y} {eval (head (tail _y)) })
 
 ; Return the third item in the list
 (fun {trd l} {eval (head (tail (tail l))) })
 
-; length of the list
-(fun {len l} {
-     if (== l nil)
-       {0}
-       {+ 1 (len (tail l))}
-})
+; length of the list (there is a builtin for that??)
+; i need to draw a line here, the builtin would be way more performant
+; and its not something  that can be native, as sexpr and stuff is also a list
+; (fun {len l} {
+;      if (== l nil)
+;        {0}
+;        {+ 1 (len (tail l))}
+; })
 
 ; Nth item in the list
-(fun {nth n l} {
-     if(== n 1)
-      {fst l}
-      {nth (- n 1) (tail l)}
+; perhaps builtin for this would not be bad either
+; LISTS ARE 1 BASED LIKE LUA, CAUSE FUCK YEAH
+; TODO(main): why the hell does calling this variable simply l reak this function?
+(fun {nth n _l} {
+    select
+       ; TODO(main): Errors dont support format strings yet
+      { (<= n 0) (error "Invalid array index (should start with 1)" ) }
+      { (== n 1) (fst _l) }
+      { otherwise (nth (- n 1) (tail _l)) }
 })
 
 ;last item in the list
@@ -77,15 +87,20 @@
      {drop (- n 1) (tail l)}
 })
 
-; Split at N 
-(fun {split n l} {list (take n l) (drop n l)})
+; Split a list at N forming two other lists as sublist
+; valkyria> split 4 {1 2 3 4 5 6 7 8}
+; Qexpr{ Qexpr{ Num[1] Num[2] Num[3] Num[4] } Qexpr{ Num[5] Num[6] Num[7] Num[8] } }
+; {{1 2 3 4} {5 6 7 8}}
+(fun {split n l} { 
+     list (take n l) (drop n l)
+})
 
-; Index an element of list
+; true if value exists inside of a list
 ; 1 BASED it starts with 1, its an index !!!
-(fun {elem x l} {
+(fun {exists x l} {
      if(== l nil)
       {false}
-      {if (== x(fst l)) { true } {elem x (tail l)}}
+      {if (== x (fst l)) { true } {exists x (tail l)}}
 })
 
 ; Apply a function to List
@@ -112,7 +127,6 @@
 ; Returns the sum of the list
 (fun {sum l} {foldl + 0 l})
 (fun {product l} {foldl * 1 l})
-
 
 ; Logics
 
@@ -143,10 +157,15 @@
 ; Compose two functions such that (comp f g) == f(g(_))
 (fun {comp f g x} {f (g x)})
 
-
 ; Coniditionals
 
 ; Basically a switch statement but allows you to specify your conditions
+;(fun {fib n} {
+; select
+;     { (== n 0) 0 }
+;     { (== n 1) 1 }
+;     { otherwise (+ (fib (- n 1)) (fib (- n 2))) }
+; })
 (fun {select & cs} {
      if (== cs nil)
        {error "No selection found"}
@@ -160,7 +179,10 @@
 (fun {case x & cs} {
      if (== cs nil)
       {error "No case found"}
-      {if (== x(fst (fst  cs))) {snd (fst cs)} {
-        unpack case (join (list x) (tail cs))
-      }}
+      { if (== x (fst (fst  cs)) ) 
+          {snd (fst cs)} 
+          {
+            unpack case (join (list x) (tail cs))
+          }
+      }
 })

@@ -27,13 +27,13 @@
     if (_result->type != VALK_TEST_UNDEFINED) {                                \
       printf(                                                                  \
           "%s:%d || Detected that test has already finished with result.... "  \
-          "aborting\n",                                                        \
-          __FILE__, __LINE__);                                                 \
+          "ABORTING \n[%d: %s]\n",                                                        \
+          __FILE__, __LINE__, _result->type, _result->error);                                                 \
       fflush(stdout);                                                          \
       abort();                                                                 \
     }                                                                          \
     size_t __len =                                                             \
-        snprintf(NULL, 0, "%s:%d || %s", __FILE__, __LINE__, (fmt));          \
+       snprintf(NULL, 0, "%s:%d || %s", __FILE__, __LINE__, (fmt));          \
     char *__efmt = malloc(__len + 1);                                          \
     snprintf(__efmt, __len + 1, "%s:%d || %s", __FILE__, __LINE__, (fmt));    \
     __len = snprintf(NULL, 0, (__efmt), ##__VA_ARGS__);                           \
