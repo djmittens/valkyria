@@ -32,17 +32,17 @@ endif()
 
 add_library(valkyria src/parser.c)
 
-add_executable(repl
+add_executable(valk
   "src/repl.c"
 )
 
-include_directories(repl
+include_directories(valk
   # vendor/editline/include/
   ${EDITLINE_INCLUDE_DIRS}
 )
 # set_property(TARGET valkyria PROPERTY C_STANDARD 23)
-target_link_libraries(repl PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
+target_link_libraries(valk PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
 
-add_executable(test_parser test/test_parser.c test/testing.c)
-target_link_libraries(test_parser PRIVATE "-lc" valkyria)
-include_directories(test_parser src/)
+add_executable(test_std test/test_std.c test/testing.c)
+target_link_libraries(test_std PRIVATE "-lc" valkyria)
+include_directories(test_std src/)
