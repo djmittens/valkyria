@@ -6,19 +6,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #define VALK_TEST_ARGS() valk_test_suite_t *_suite
 
 #define VALK_TEST()                                                            \
   valk_test_result_t *_result = valk_testsuite_new_result(_suite, __func__);   \
-  _result->startTime = clock();
+  _result->timePrecision = VALK_MICROS;                                        \
+  _result->startTime = valk_get_time(_result->timePrecision);
 
 #define VALK_PASS()                                                            \
   do {                                                                         \
     if (_result->type == VALK_TEST_UNDEFINED) {                                \
       _result->type = VALK_TEST_PASS;                                          \
-      _result->stopTime = clock();                                             \
+      _result->stopTime = valk_get_time(_result->timePrecision);               \
     }                                                                          \
   } while (0)
 
@@ -27,21 +27,21 @@
     if (_result->type != VALK_TEST_UNDEFINED) {                                \
       printf(                                                                  \
           "%s:%d || Detected that test has already finished with result.... "  \
-          "ABORTING \n[%d: %s]\n",                                                        \
-          __FILE__, __LINE__, _result->type, _result->error);                                                 \
+          "ABORTING \n[%d: %s]\n",                                             \
+          __FILE__, __LINE__, _result->type, _result->error);                  \
       fflush(stdout);                                                          \
       abort();                                                                 \
     }                                                                          \
     size_t __len =                                                             \
-       snprintf(NULL, 0, "%s:%d || %s", __FILE__, __LINE__, (fmt));          \
+        snprintf(NULL, 0, "%s:%d || %s", __FILE__, __LINE__, (fmt));           \
     char *__efmt = malloc(__len + 1);                                          \
-    snprintf(__efmt, __len + 1, "%s:%d || %s", __FILE__, __LINE__, (fmt));    \
-    __len = snprintf(NULL, 0, (__efmt), ##__VA_ARGS__);                           \
+    snprintf(__efmt, __len + 1, "%s:%d || %s", __FILE__, __LINE__, (fmt));     \
+    __len = snprintf(NULL, 0, (__efmt), ##__VA_ARGS__);                        \
     char *__buf = calloc((__len + 1), sizeof(char));                           \
-    snprintf(__buf, __len + 1, (__efmt), ##__VA_ARGS__);                          \
+    snprintf(__buf, __len + 1, (__efmt), ##__VA_ARGS__);                       \
     free(__efmt);                                                              \
     _result->type = VALK_TEST_FAIL;                                            \
-    _result->stopTime = clock();                                               \
+    _result->stopTime = valk_get_time(_result->timePrecision);                 \
     _result->error = __buf;                                                    \
   } while (0)
 
@@ -100,8 +100,14 @@ typedef void *(_fixture_copy_f)(void *);
 typedef enum {
   VALK_TEST_UNDEFINED,
   VALK_TEST_PASS,
-  VALK_TEST_FAIL
+  VALK_TEST_FAIL,
 } valk_test_result_type;
+
+typedef enum {
+  VALK_MILLIS,
+  VALK_MICROS,
+  VALK_NANOS,
+} valk_time_precision_e;
 
 typedef struct valk_test_fixture_t {
   void *value;
@@ -120,6 +126,7 @@ typedef struct valk_test_result_t {
   size_t testOffset;
   valk_test_result_type type;
   char *error;
+  valk_time_precision_e timePrecision;
   uint64_t startTime;
   uint64_t stopTime;
 } valk_test_result_t;
@@ -166,3 +173,8 @@ int valk_testsuite_run(valk_test_suite_t *suite);
 void valk_testsuite_print(valk_test_suite_t *suite);
 
 void *valk_testsuite_fixture_get(valk_test_suite_t *suite, const char *name);
+
+long valk_get_time(valk_time_precision_e p);
+long valk_get_millis(void);
+long valk_get_micros(void);
+long valk_get_nanos(void);

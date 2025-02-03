@@ -4,7 +4,6 @@ set(CMAKE_C_COMPILER "/usr/bin/clang")
 set(CMAKE_CXX_COMPILER "/usr/bin/clang++")
 
 project(valkyria LANGUAGES C)
-enable_testing()
 
 if(ASAN)
   # Enable AddressSanitizer flags
@@ -46,6 +45,4 @@ target_link_libraries(repl PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
 
 add_executable(test_parser test/test_parser.c test/testing.c)
 target_link_libraries(test_parser PRIVATE "-lc" valkyria)
-
 include_directories(test_parser src/)
-add_test(NAME TestParser COMMAND test_parser)

@@ -1,6 +1,23 @@
 #include "testing.h"
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+#define SEC_TO_MS(sec) ((sec) * 1000)
+#define SEC_TO_US(sec) ((sec) * 1000000)
+#define SEC_TO_NS(sec) ((sec) * 1000000000)
+
+#define NS_TO_SEC(ns) ((ns) / 1000000000)
+#define NS_TO_MS(ns) ((ns) / 1000000)
+#define NS_TO_US(ns) ((ns) / 1000)
+
+const int REPORT_WIDTH = 100;
+const char *DOT_FILL =
+    ".........................................................................."
+    ".........................................................................."
+    ".........................................................................."
+    ".........................................................................."
+    "....";
 
 valk_test_suite_t *valk_testsuite_empty(const char *filename) {
   valk_test_suite_t *res = malloc(sizeof(valk_test_suite_t));
@@ -82,15 +99,35 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
   for (size_t i = 0; i < suite->results.count; i++) {
     valk_test_result_t *result = &suite->results.items[i];
     valk_test_t *test = &suite->tests.items[result->testOffset];
-    if (result->type == VALK_TEST_PASS) {
-      printf("Test: %s .......... PASS : in %lu (ms)\n", test->name,
-             (result->stopTime - result->startTime));
-    } else if (result->type == VALK_TEST_UNDEFINED) {
-      printf("Test: %s .......... UNDEFINED\n", test->name);
-    } else if (result->type == VALK_TEST_FAIL) {
-      printf("Test: %s .......... ERROR : in %lu (ms)\n", test->name,
-             (result->stopTime - result->startTime));
+    char *precision;
+    switch (result->timePrecision) {
+    case VALK_MILLIS:
+      precision = "ms";
+      break;
+    case VALK_MICROS:
+      precision = "µs";
+      break;
+    case VALK_NANOS:
+      precision = "ns";
+      break;
+    }
+
+    int len = REPORT_WIDTH - strlen(test->name);
+
+    switch (result->type) {
+    case VALK_TEST_UNDEFINED: {
+      printf("%s UNDEFINED\n", test->name);
+      break;
+    }
+    case VALK_TEST_PASS:
+      printf("✅ %s%.*s  PASS : in %lu(%s)\n", test->name, len, DOT_FILL,
+             (result->stopTime - result->startTime), precision);
+      break;
+    case VALK_TEST_FAIL:
+      printf("🐞 %s%.*s  FAIL : in %lu(%s)\n", test->name, len, DOT_FILL,
+             (result->stopTime - result->startTime), precision);
       printf("ERROR: %s\n", result->error);
+      break;
     }
   }
 }
@@ -110,4 +147,33 @@ void *valk_testsuite_fixture_get(valk_test_suite_t *suite, const char *name) {
     }
   }
   return NULL;
+}
+
+long valk_get_nanos(void) {
+  struct timespec ts;
+  timespec_get(&ts, TIME_UTC);
+  return SEC_TO_NS(ts.tv_sec) + ts.tv_nsec;
+}
+
+long valk_get_millis(void) {
+  struct timespec ts;
+  timespec_get(&ts, TIME_UTC);
+  return SEC_TO_MS(ts.tv_sec) + NS_TO_MS(ts.tv_nsec);
+}
+
+long valk_get_micros(void) {
+  struct timespec ts;
+  timespec_get(&ts, TIME_UTC);
+  return SEC_TO_US(ts.tv_sec) + NS_TO_US(ts.tv_nsec);
+}
+
+long valk_get_time(valk_time_precision_e p) {
+  switch (p) {
+  case VALK_MILLIS:
+    return valk_get_millis();
+  case VALK_MICROS:
+    return valk_get_micros();
+  case VALK_NANOS:
+    return valk_get_nanos();
+  }
 }
