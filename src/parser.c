@@ -91,8 +91,8 @@ static char *lval_str_escapable = "\a\b\f\n\r\t\v\\\'\"";
 /* Possible unescapable characters */
 static char *lval_str_unescapable = "abfnrtv\\\'\"";
 
-char *valk_c_err_format(const char *fmt, const char *file,
-                               const size_t line, const char *function) {
+char *valk_c_err_format(const char *fmt, const char *file, const size_t line,
+                        const char *function) {
   size_t len = snprintf(NULL, 0, "%s:%ld:%s || %s", file, line, function, fmt);
   char *buf = malloc(len + 1);
   snprintf(buf, len + 1, "%s:%ld:%s || %s", file, line, function, fmt);
@@ -412,7 +412,8 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
       if (func->fun.formals->expr.count != 1) {
         valk_lval_free(args);
         return valk_lval_err("Invalid  function format, the vararg symbol `&` "
-                             "is not followed by others");
+                             "is not followed by others [count: %d]",
+                             func->fun.formals->expr.count);
       }
       valk_lval_t *nsym = valk_lval_pop(func->fun.formals, 0);
       valk_lenv_put(func->fun.env, nsym, valk_builtin_list(env, args));
@@ -428,12 +429,13 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
 
   // if whats remaining is the elipsis, then we expand to empty list
   if (func->fun.formals->expr.count > 0 &&
-      strcmp(func->fun.formals->expr.cell[0]->str, "&")) {
+      (strcmp(func->fun.formals->expr.cell[0]->str, "&") == 0)) {
 
     if (func->fun.formals->expr.count != 2) {
       valk_lval_free(args);
       return valk_lval_err("Invalid  function format, the vararg symbol `&` "
-                           "is not followed by others");
+                           "is not followed by others [count: %d]",
+                           func->fun.formals->expr.count);
     }
 
     // discard the &
@@ -947,6 +949,7 @@ static valk_lval_t *valk_builtin_cons(valk_lenv_t *e, valk_lval_t *a) {
 static valk_lval_t *valk_builtin_len(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   // TODO(main): should this only work with Q expr?
+  // sexpr gets evaluated immediately, so perhaps thats fine
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
 
   valk_lval_t *res = valk_lval_num(a->expr.cell[0]->expr.count);
