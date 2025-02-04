@@ -30,7 +30,10 @@ if (HOMEBREW_CLANG)
   include (${CMAKE_CURRENT_SOURCE_DIR}/homebrew.cmake)
 endif()
 
-add_library(valkyria src/parser.c)
+add_library(valkyria 
+  src/parser.c
+  src/networking.c
+)
 
 add_executable(valk
   "src/repl.c"
@@ -46,3 +49,7 @@ target_link_libraries(valk PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
 add_executable(test_std test/test_std.c test/testing.c)
 target_link_libraries(test_std PRIVATE "-lc" valkyria)
 include_directories(test_std src/)
+
+add_executable(test_networking test/test_networking.c test/testing.c)
+target_link_libraries(test_networking PRIVATE "-lc" valkyria)
+include_directories(test_networking src/)

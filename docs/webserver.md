@@ -1,0 +1,33 @@
+- [ ] Webserver
+    - [ ] Async IO
+        - [ ] Event loop
+        - [ ] Sockets
+        - [ ] Files
+        - [ ] TCP Connections
+        - [ ] GZip
+    - [ ] Logging
+    - [ ] Regex
+    - [ ] URI
+    - [ ] HTTP Support
+        - [ ] 1.1
+        - [ ] 2.0 -- How does that work??
+        - [ ] 3.0 -- is it worth supporint ?? 
+        - [ ] Server
+        - [ ] Client
+    - [ ] REST
+        - [ ] Routing
+        - [ ] Chunking
+    - [ ] CoRoutines / green threads
+    - [ ] Json Parsing
+    - [ ] Html
+        - [ ] Templating
+    - [ ] Telemetry
+    - [ ] TLS / mTLS
+    - [ ] Caching
+- [ ] DB drivers
+    - [ ] SQLite
+    - [ ] MySQL
+- [ ] GraphQL
+- [ ] Redis
+- [ ] OAuth
+- [ ] Websockets
