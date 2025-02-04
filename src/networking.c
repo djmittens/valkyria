@@ -11,11 +11,19 @@
 
 // std shit
 #include <errno.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+// get sockaddr, IPv4 or IPv6:
+void *get_in_addr(struct sockaddr *sa) {
+  if (sa->sa_family == AF_INET) {
+    return &(((struct sockaddr_in *)sa)->sin_addr);
+  }
+
+  return &(((struct sockaddr_in6 *)sa)->sin6_addr);
+}
 
 void valk_server_demo(void) {
   int status, sockfd, connfd;
@@ -47,7 +55,7 @@ void valk_server_demo(void) {
   int yes = 1;
   // char yes='1'; // Solaris people use this
   if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) == -1) {
-    perror("setsockopt");
+    perror("setsockopt\n");
     exit(1);
   }
 
@@ -63,13 +71,25 @@ void valk_server_demo(void) {
     return;
   }
 
-  socklen_t addrSize = sizeof theirAddr;
+  printf("Server: Created a socket... Waiting for client\n");
+  socklen_t addrSize = sizeof(theirAddr);
   if ((connfd = accept(sockfd, (struct sockaddr *)&theirAddr, &addrSize)) ==
       -1) {
     fprintf(stderr, "accept() error: %s \n", strerror(errno));
     close(sockfd);
     return;
   }
+
+  char buf[addrSize];
+  // This is convoluded as heck.
+  // Essentially whats happening is, theirAddr is a storage container which can
+  // hold the maximimum length of any address,  so now we need to cast it to the
+  // appropriate socket type to get the internal address of the right size, to
+  // be used with this function.
+  // .... this is painful
+  inet_ntop(theirAddr.ss_family, get_in_addr((struct sockaddr *)&theirAddr),
+            buf, sizeof(buf));
+  printf("Server: Established connection with client: %s\n", buf);
 
   char res[512];
   if (recv(connfd, &res, sizeof(res), 0) == -1) {
@@ -124,7 +144,7 @@ char *valk_client_demo(const char *domain, const char *port) {
     } else {
       break;
     }
-    usleep(1000);
+    usleep(100);
   } while (1);
 
   const char *request = "GET / HTTP/1.1\r\n"
