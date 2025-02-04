@@ -1,0 +1,20 @@
+- [ ] Dictionaries
+- [ ] Testing
+- [ ] Remove Readline from repl
+- [ ] Memory
+    - [ ] Arenas
+    - [ ] GC
+- [ ] LLVM IR compiler
+    - [ ] JIT
+- [ ] Regular Expressions
+- [ ] Boostrap
+- [ ] VM
+- [ ] Telemetry
+- [ ] Optimization
+- [ ] LSP
+- [ ] Parser Combinators
+- [ ] Strict Types
+- [ ] Monads
+- [ ] Valgrind
+- [ ] gRPC
+- [ ] Thrift

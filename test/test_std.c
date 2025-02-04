@@ -2,11 +2,9 @@
 #include "parser.h"
 
 void test_parsing_prelude(VALK_TEST_ARGS()) {
-  VALK_TEST();
   valk_lval_t *ast = VALK_FIXTURE("prelude");
+  VALK_TEST();
 
-  //  printf("Read the file as ");
-  //  valk_lval_println(ast);
   VALK_EXPECT_SUCCESS(ast);
   VALK_PASS();
   valk_lval_free(ast);
@@ -18,8 +16,8 @@ void test_always_failing(VALK_TEST_ARGS()) {
 }
 
 void test_prelude_fun(VALK_TEST_ARGS()) {
-  VALK_TEST();
   valk_lenv_t *env = VALK_FIXTURE("env");
+  VALK_TEST();
 
   valk_lval_t *res = valk_eval(env, "(fun {add a b} {+ a b})");
   VALK_EXPECT_SUCCESS(res);
@@ -53,8 +51,8 @@ void test_prelude_fun(VALK_TEST_ARGS()) {
 }
 
 void test_prelude_curry(VALK_TEST_ARGS()) {
-  VALK_TEST();
   valk_lenv_t *env = VALK_FIXTURE("env");
+  VALK_TEST();
 
   valk_lval_t *res = valk_eval(env, "((curry +) {1 2 3})");
   VALK_EXPECT_SUCCESS(res);
@@ -103,8 +101,8 @@ void test_prelude_do(VALK_TEST_ARGS()) {
 }
 
 void test_prelude_let(VALK_TEST_ARGS()) {
-  VALK_TEST();
   valk_lenv_t *env = VALK_FIXTURE("env");
+  VALK_TEST();
 
   valk_lval_t *res =
       valk_eval(env, "(do (do (= {a} 2) (+ 1 2 3) (+ 1 a)) (a))");
@@ -126,8 +124,8 @@ void test_prelude_let(VALK_TEST_ARGS()) {
 }
 
 void test_prelude_nth(VALK_TEST_ARGS()) {
-  VALK_TEST();
   valk_lenv_t *env = VALK_FIXTURE("env");
+  VALK_TEST();
 
   valk_lval_t *res = valk_eval(env, "(nth 1 {1 2 3})");
   VALK_EXPECT_SUCCESS(res);
@@ -152,8 +150,8 @@ void test_prelude_nth(VALK_TEST_ARGS()) {
 }
 
 void test_prelude_split(VALK_TEST_ARGS()) {
-  VALK_TEST();
   valk_lenv_t *env = VALK_FIXTURE("env");
+  VALK_TEST();
 
   valk_lval_t *res = valk_eval(env, "(split 0 {1 2 3 4 5 6 7 8})");
   VALK_EXPECT_SUCCESS(res);
@@ -202,8 +200,8 @@ void test_prelude_map(VALK_TEST_ARGS()) {
 }
 
 void test_prelude_not(VALK_TEST_ARGS()) {
-  VALK_TEST();
   valk_lenv_t *env = VALK_FIXTURE("env");
+  VALK_TEST();
 
   valk_lval_t *res = valk_eval(env, "(not true)");
   VALK_EXPECT_SUCCESS(res);
@@ -220,13 +218,6 @@ void test_prelude_not(VALK_TEST_ARGS()) {
   VALK_PASS();
   valk_lenv_free(env);
 }
-
-// TODO(main):  ny way to avoid this boilerplate???
-static void valk_lval_free_void(void *lval) { valk_lval_free(lval); }
-static void *valk_lval_copy_void(void *lval) { return valk_lval_copy(lval); }
-
-static void valk_lenv_free_void(void *lenv) { valk_lenv_free(lenv); }
-static void *valk_lenv_copy_void(void *lenv) { return valk_lenv_copy(lenv); }
 
 int main(int argc, const char **argv) {
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -254,10 +245,12 @@ int main(int argc, const char **argv) {
   valk_lval_t *r = valk_lval_eval(env, valk_lval_copy(ast));
   valk_lval_free(r);
 
-  valk_testsuite_fixture_add(suite, "prelude", ast, valk_lval_copy_void,
-                             valk_lval_free_void);
-  valk_testsuite_fixture_add(suite, "env", env, valk_lenv_copy_void,
-                             valk_lenv_free_void);
+  valk_testsuite_fixture_add(suite, "prelude", ast,
+                             (_fixture_copy_f *)valk_lval_copy,
+                             (_fixture_free_f *)valk_lval_free);
+  valk_testsuite_fixture_add(suite, "env", env,
+                             (_fixture_copy_f *)valk_lenv_copy,
+                             (_fixture_free_f *)valk_lenv_free);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

@@ -46,4 +46,5 @@ debug: debug
 
 .PHONY: test
 test: build
-	build/test_std
+	build/test_std;\
+	build/test_networking\
