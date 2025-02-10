@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <fcntl.h>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 
@@ -26,10 +28,11 @@ void *get_in_addr(struct sockaddr *sa) {
 }
 
 void valk_server_demo(void) {
-  int status, sockfd, connfd;
+  int status, sockfd, connfd, epollfd, num_fds;
   struct addrinfo hints = {};
   struct addrinfo *servinfo; // result
   struct sockaddr_storage theirAddr;
+  struct epoll_event ev, events[10];
 
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
@@ -45,68 +48,100 @@ void valk_server_demo(void) {
     fprintf(stderr, "socket() error: %s \n", strerror(errno));
     return;
   }
-
+  fcntl(sockfd, F_SETFL, O_NONBLOCK);
   // This binds the socket descriptor to an actual port on the OS level
   // Sometimes the port is already used, you can steal it... There is a command
   // for that something like
   //
-
   // lose the pesky "Address already in use" error message
   int yes = 1;
   // char yes='1'; // Solaris people use this
   if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) == -1) {
     perror("setsockopt\n");
-    exit(1);
+    close(sockfd);
+    close(epollfd);
+    return;
   }
 
   if (bind(sockfd, servinfo->ai_addr, servinfo->ai_addrlen) == -1) {
     fprintf(stderr, "bind() error: %s \n", strerror(errno));
     close(sockfd);
+    close(epollfd);
     return;
   }
 
   if (listen(sockfd, 15) == -1) {
     fprintf(stderr, "listen() error: %s \n", strerror(errno));
     close(sockfd);
+    close(epollfd);
     return;
   }
 
   printf("Server: Created a socket... Waiting for client\n");
-  socklen_t addrSize = sizeof(theirAddr);
-  if ((connfd = accept(sockfd, (struct sockaddr *)&theirAddr, &addrSize)) ==
-      -1) {
-    fprintf(stderr, "accept() error: %s \n", strerror(errno));
+
+  epollfd = epoll_create1(0);
+
+  if (epollfd == -1) {
+    perror("epoll_create1");
+    // exit(EXIT_FAILURE);
     close(sockfd);
     return;
   }
 
-  char buf[addrSize];
-  // This is convoluded as heck.
-  // Essentially whats happening is, theirAddr is a storage container which can
-  // hold the maximimum length of any address,  so now we need to cast it to the
-  // appropriate socket type to get the internal address of the right size, to
-  // be used with this function.
-  // .... this is painful
-  inet_ntop(theirAddr.ss_family, get_in_addr((struct sockaddr *)&theirAddr),
-            buf, sizeof(buf));
-  printf("Server: Established connection with client: %s\n", buf);
+  ev.events = EPOLLIN;
+  ev.data.fd = sockfd;
 
-  char res[512];
-  if (recv(connfd, &res, sizeof(res), 0) == -1) {
-    fprintf(stderr, "recv() error: %s \n", strerror(errno));
-    close(connfd);
+  if (epoll_ctl(epollfd, EPOLL_CTL_ADD, sockfd, &ev) == -1) {
+    perror("epoll_ctl: sockfd");
     close(sockfd);
     return;
   }
-  printf("Server: Received from client \n %s \n", res);
 
-  const char *request = "Hello World";
-  if (send(connfd, request, strlen(request), 0) == -1) {
-    fprintf(stderr, "send() error: %s \n", strerror(errno));
-    close(connfd);
-    close(sockfd);
-    return;
+  for (;;) {
+    num_fds = epoll_wait(epollfd, events, 10, -1);
+    if (epollfd == -1) {
+      perror("epoll_wait");
+      // exit(EXIT_FAILURE);
+      close(sockfd);
+      close(epollfd);
+      return;
+    }
+    for (int n = 0; n < num_fds; ++n) {
+      if (events[n].data.fd == sockfd) {
+        socklen_t addrSize = sizeof(theirAddr);
+        if ((connfd = accept(sockfd, (struct sockaddr *)&theirAddr,
+                             &addrSize)) == -1) {
+          fprintf(stderr, "accept() error: %s \n", strerror(errno));
+          close(sockfd);
+          return;
+        }
+        char buf[addrSize];
+        // This is convoluded as heck.
+        // Essentially whats happening is, theirAddr is a storage container
+        // which can hold the maximimum length of any address,  so now we need
+        // to cast it to the appropriate socket type to get the internal address
+        // of the right size, to be used with this function.
+        // .... this is painful
+        inet_ntop(theirAddr.ss_family,
+                  get_in_addr((struct sockaddr *)&theirAddr), buf, sizeof(buf));
+        printf("Server: Established connection with client: %s\n", buf);
+      } else {
+        char res[512];
+        printf("Server: Received from client \n %s \n", res);
+        int numRead = read(events[n].data.fd, res, sizeof(res));
+        res[numRead] = '\0';
+        printf("Server: Received from client \n %s \n", res);
+        const char *request = "Hello World";
+        if (write(connfd, request, strlen(request)) == -1) {
+          fprintf(stderr, "write() error: %s \n", strerror(errno));
+          close(connfd);
+          close(sockfd);
+          return;
+        }
+      }
+    }
   }
+
   close(connfd);
   close(sockfd);
   freeaddrinfo(servinfo);

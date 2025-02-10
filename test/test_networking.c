@@ -6,7 +6,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 
-void test_socket_server(VALK_TEST_ARGS()) {
+void test_demo_socket_server(VALK_TEST_ARGS()) {
   valk_lval_t *ast = VALK_FIXTURE("prelude");
   VALK_TEST();
 
@@ -48,7 +48,7 @@ void test_socket_server(VALK_TEST_ARGS()) {
 int main(int argc, const char **argv) {
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
-  valk_testsuite_add_test(suite, "test_socket_server", test_socket_server);
+  valk_testsuite_add_test(suite, "test_demo_socket_server", test_demo_socket_server);
 
   // load fixtures
   valk_lval_t *ast = valk_parse_file("src/prelude.valk");
