@@ -1,6 +1,6 @@
 UNAME := $(shell uname -s)
 ifeq ($(UNAME), Linux)
-	CMAKE= cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug -S . -B build;
+	CMAKE= cmake -G Ninja -DASAN=on -DCMAKE_BUILD_TYPE=Debug -S . -B build;
 endif
 ifeq ($(UNAME), Darwin)
 	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DCMAKE_BUILD_TYPE=Debug -S . -B build;
@@ -47,4 +47,5 @@ debug: debug
 .PHONY: test
 test: build
 	build/test_std;\
-	build/test_networking\
+	build/test_networking;\
+	build/test_concurrency;\

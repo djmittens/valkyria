@@ -1,5 +1,5 @@
 - [ ] Dictionaries
-- [ ] Testing
+- [x] Testing
 - [ ] Remove Readline from repl
 - [ ] Memory
     - [ ] Arenas

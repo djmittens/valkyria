@@ -1,4 +1,6 @@
 #include "testing.h"
+#include "collections.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -84,6 +86,7 @@ valk_test_result_t *valk_testsuite_new_result(valk_test_suite_t *suite,
 int valk_testsuite_run(valk_test_suite_t *suite) {
   for (size_t i = 0; i < suite->tests.count; i++) {
     valk_test_t *test = &suite->tests.items[i];
+    printf("🏃 Running: %s\n", test->name);
     test->func(suite);
   }
   for (size_t i = 0; i < suite->results.count; i++) {

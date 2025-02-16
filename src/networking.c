@@ -1,15 +1,18 @@
 #include "networking.h"
 
+#include "collections.h"
+
 //  Network shit
 //  Mostly for linux
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <fcntl.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+
 
 // std shit
 #include <errno.h>
@@ -17,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa) {
@@ -125,6 +129,10 @@ void valk_server_demo(void) {
         inet_ntop(theirAddr.ss_family,
                   get_in_addr((struct sockaddr *)&theirAddr), buf, sizeof(buf));
         printf("Server: Established connection with client: %s\n", buf);
+        struct epoll_event ev;
+        ev.events = EPOLLOUT | EPOLLIN;
+        ev.data.fd = connfd;
+        epoll_ctl(epollfd, EPOLL_CTL_ADD, connfd, &ev);
       } else {
         char res[512];
         printf("Server: Received from client \n %s \n", res);
@@ -144,6 +152,7 @@ void valk_server_demo(void) {
 
   close(connfd);
   close(sockfd);
+  close(epollfd);
   freeaddrinfo(servinfo);
 }
 

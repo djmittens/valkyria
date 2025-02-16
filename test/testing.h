@@ -7,6 +7,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define DISABLE_FORMAT_NONLITERAL                                              \
+  _Pragma("GCC diagnostic push")                                               \
+      _Pragma("GCC diagnostic ignored \"-Wformat-security\"")
+
+#define ENABLE_FORMAT_NONLITERAL _Pragma("GCC diagnostic pop")
+
 #define VALK_TEST_ARGS() valk_test_suite_t *_suite
 
 #define VALK_TEST()                                                            \
@@ -24,6 +30,7 @@
 
 #define VALK_FAIL(fmt, ...)                                                    \
   do {                                                                         \
+    DISABLE_FORMAT_NONLITERAL;                                                 \
     if (_result->type != VALK_TEST_UNDEFINED) {                                \
       printf(                                                                  \
           "%s:%d || Detected that test has already finished with result.... "  \
@@ -43,6 +50,7 @@
     _result->type = VALK_TEST_FAIL;                                            \
     _result->stopTime = valk_get_time(_result->timePrecision);                 \
     _result->error = __buf;                                                    \
+    ENABLE_FORMAT_NONLITERAL;                                                  \
   } while (0)
 
 //  Not very useful right now, since this tyhing doesnt cleanup the resources
@@ -54,40 +62,6 @@
   } while (0)
 
 #define VALK_FIXTURE(name) (valk_testsuite_fixture_get(_suite, (name)))
-
-#define DA_INIT_CAPACITY 8
-#define da_init(arr)                                                           \
-  do {                                                                         \
-    (arr)->count = 0;                                                          \
-    (arr)->capacity = DA_INIT_CAPACITY;                                        \
-    if ((arr)->items) {                                                        \
-      printf("Reinitializing the array for some stupid reason, probably a "    \
-             "memory leak, since items are not cleaned up\n");                 \
-      free((arr)->items);                                                      \
-    }                                                                          \
-    (arr)->items = malloc(sizeof(*(arr)->items) * DA_INIT_CAPACITY);           \
-  } while (0)
-
-#define da_free(arr)                                                           \
-  do {                                                                         \
-    free((arr)->items);                                                        \
-    free((arr));                                                               \
-  } while (0)
-
-#define da_add(arr, elem)                                                      \
-  do {                                                                         \
-    if ((arr)->count >= (arr)->capacity) {                                     \
-      (arr)->capacity =                                                        \
-          (arr)->capacity == 0 ? DA_INIT_CAPACITY : (arr)->capacity * 2;       \
-      (arr)->items =                                                           \
-          realloc((arr)->items, (arr)->capacity * sizeof(*(arr)->items));      \
-      if ((arr)->items == NULL) {                                              \
-        printf("Buy more ram LUlz\n");                                         \
-        exit(1);                                                               \
-      }                                                                        \
-    }                                                                          \
-    (arr)->items[(arr)->count++] = (elem);                                     \
-  } while (0)
 
 typedef struct valk_test_suite_t valk_test_suite_t;
 

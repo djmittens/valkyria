@@ -1,5 +1,7 @@
 #pragma once
 
+#include <unistd.h>
+
 // Host TO Network Short
 /* void htons(void); */
 /**/
@@ -14,6 +16,6 @@
 
 void valk_server_demo(void);
 
-char* valk_client_demo(const char *domain, const char *port);
+char *valk_client_demo(const char *domain, const char *port);
 
-void valk_addr_demo(const char* domain);
+void valk_addr_demo(const char *domain);
