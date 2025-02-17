@@ -7,21 +7,34 @@
     (queue)->capacity = (_capacity);                                           \
     (queue)->items = malloc(sizeof(valk_task) * _capacity);                    \
     (queue)->count = 0;                                                        \
+    (queue)->numWorkers = 0;                                                        \
     pthread_mutex_init(&(queue)->mutex, 0);                                    \
+    pthread_cond_init(&(queue)->isEmpty, 0);                                   \
     pthread_cond_init(&(queue)->notEmpty, 0);                                  \
     pthread_cond_init(&(queue)->notFull, 0);                                   \
+    pthread_cond_init(&(queue)->workerReady, 0);                               \
+    pthread_cond_init(&(queue)->workerDead, 0);                                \
   } while (0)
 
-#define valk_work_add(queue, _arg, _func, _promise)                            \
+#define valk_work_free(queue)                                                  \
+  do {                                                                         \
+    free((queue)->items);                                                      \
+    pthread_mutex_destroy(&(queue)->mutex);                                    \
+    pthread_cond_destroy(&(queue)->isEmpty);                                   \
+    pthread_cond_destroy(&(queue)->notEmpty);                                  \
+    pthread_cond_destroy(&(queue)->notFull);                                   \
+    pthread_cond_destroy(&(queue)->workerReady);                               \
+    pthread_cond_destroy(&(queue)->workerDead);                                \
+  } while (0)
+
+#define valk_work_add(queue, _task)                                            \
   ({                                                                           \
     int _err = 0;                                                              \
     do {                                                                       \
       if ((queue)->count < (queue)->capacity) {                                \
-        valk_task *_task = &(queue)->items[((queue)->idx + (queue)->count++) % \
-                                           (queue)->capacity];                 \
-        _task->arg = (_arg);                                                   \
-        _task->func = (_func);                                                 \
-        _task->promise = valk_arc_retain(_promise);                                           \
+        (queue)                                                                \
+            ->items[((queue)->idx + (queue)->count++) % (queue)->capacity] =   \
+            (_task);                                                           \
       } else {                                                                 \
         printf("ERR[%s:%d]: worker queue is full, not pushing \n", __FILE__,   \
                __LINE__);                                                      \
@@ -40,12 +53,8 @@
         printf("ERR[%s:%d]: worker queue is empty , not popping\n", __FILE__,  \
                __LINE__);                                                      \
       } else {                                                                 \
-        valk_task *__task =                                                    \
-            &(queue)->items[((queue)->idx++) % (queue)->capacity];             \
+        (*_task) = (queue)->items[((queue)->idx++) % (queue)->capacity];       \
         --(queue)->count;                                                      \
-        (_task)->arg = __task->arg;                                            \
-        (_task)->func = __task->func;                                          \
-        (_task)->promise = __task->promise;                                    \
       }                                                                        \
     } while (0);                                                               \
     _err;                                                                      \
@@ -88,7 +97,7 @@ typedef struct {
 } valk_conc_res;
 
 valk_conc_res *valk_conc_res_suc(void *succ, valk_callback_void *free);
-valk_conc_res *valk_conc_res_err(int code, int size, char *msg);
+valk_conc_res *valk_conc_res_err(int code, const char *msg);
 void valk_conc_res_release(valk_conc_res *result);
 
 typedef struct valk_future {
@@ -100,6 +109,7 @@ typedef struct valk_future {
 } valk_future;
 
 valk_future *valk_future_new(void);
+valk_future *valk_future_done(valk_conc_res *item);
 void valk_future_release(valk_future *future);
 valk_conc_res *valk_future_await(valk_future *future);
 
@@ -114,22 +124,32 @@ valk_promise *valk_promise_new(valk_future *future);
 void valk_promise_release(valk_promise *promise);
 void valk_promise_respond(valk_promise *promise, valk_conc_res *result);
 
+typedef enum { VALK_TASK, VALK_POISON } valk_task_type_t;
 typedef struct {
-  // TODO(networking): figure out the lifetime for this arg.
-  // who owns this ? when is it freed? in the callback?
-  void *arg;
-  valk_callback *func;
-  valk_promise *promise;
+  valk_task_type_t type;
+  // Task
+  struct {
+    // TODO(networking): figure out the lifetime for this arg.
+    // who owns this ? when is it freed? in the callback?
+    void *arg;
+    valk_callback *func;
+    valk_promise *promise;
+  };
 } valk_task;
 
 typedef struct {
   pthread_mutex_t mutex;
+  pthread_cond_t isEmpty;
   pthread_cond_t notEmpty;
   pthread_cond_t notFull;
+  pthread_cond_t workerReady;
+  pthread_cond_t workerDead;
   valk_task *items;
   size_t idx;
   size_t count;
   size_t capacity;
+  size_t isShuttingDown;
+  size_t numWorkers;
 } valk_task_queue;
 
 typedef struct valk_worker {
@@ -138,7 +158,7 @@ typedef struct valk_worker {
   pthread_t thread;
 } valk_worker;
 typedef struct {
-  char *name;
+  // char *name;
   // Dynamic List
   valk_worker *items;
   size_t count;
@@ -149,5 +169,5 @@ typedef struct {
 int valk_start_pool(valk_worker_pool *pool);
 valk_future *valk_schedule(valk_worker_pool *pool, void *arg,
                            valk_callback *func);
-int valk_drain_pool(valk_worker_pool *pool);
+void valk_drain_pool(valk_worker_pool *pool);
 void valk_free_pool(valk_worker_pool *pool);

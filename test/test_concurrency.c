@@ -19,7 +19,7 @@ static valk_conc_res *test_callback(test__arg *arg) {
   valk_test_result_t *_result = arg->result;
   printf("Getting called in the callback n shit \n");
   VALK_ASSERT(arg->someArg == 1337, "Expected the argument to be 1337");
-  return valk_conc_res_suc(NULL, _valk_void);
+  return valk_conc_res_suc((void *)1337, _valk_void);
 }
 
 void test_task_queue(VALK_TEST_ARGS()) {
@@ -40,10 +40,11 @@ void test_task_queue(VALK_TEST_ARGS()) {
   // addd 7 items
   for (size_t i = 0; i < 8; i++) {
 
-    valk_future *future = valk_future_new();
-    valk_promise *promise = valk_promise_new(future);
-    int res =
-        valk_work_add(&queue, &arg, (valk_callback *)test_callback, promise);
+    valk_task task = {.type = VALK_TASK,
+                      .arg = &arg,
+                      .func = (valk_callback *)test_callback,
+                      .promise = valk_promise_new(valk_future_new())};
+    int res = valk_work_add(&queue, task);
     if (i >= maxSize) {
       VALK_ASSERT(res == 1,
                   "Expected add to return an error, if the queue is full ");
@@ -61,8 +62,6 @@ void test_task_queue(VALK_TEST_ARGS()) {
           queue.count == i + 1,
           "Expected the count to be 1 more than item offset [offset: %d]", i);
     }
-    valk_future_release(future);
-    valk_promise_release(promise);
   }
 
   VALK_ASSERT(queue.count == maxSize,
@@ -74,6 +73,7 @@ void test_task_queue(VALK_TEST_ARGS()) {
   for (size_t i = 0; i < 8; i++) {
     task.func = NULL;
     task.arg = NULL;
+    task.promise = NULL;
 
     int res = valk_work_pop(&queue, &task);
     if (i >= maxSize) {
@@ -100,20 +100,22 @@ void test_task_queue(VALK_TEST_ARGS()) {
       VALK_ASSERT(
           queue.count == (maxSize - i - 1),
           "Expected the count to be 1 more than item offset [offset: %d]", i);
+      valk_promise_release(task.promise);
     }
   }
 
   VALK_PASS();
   valk_lval_free(ast);
+  valk_work_free(&queue);
 }
 
-void test_futures_simple(VALK_TEST_ARGS()) {
-  valk_lval_t *ast = VALK_FIXTURE("prelude");
-  VALK_TEST();
-
-  VALK_PASS();
-  valk_lval_free(ast);
-}
+// void test_futures_simple(VALK_TEST_ARGS()) {
+//   valk_lval_t *ast = VALK_FIXTURE("prelude");
+//   VALK_TEST();
+//
+//   VALK_PASS();
+//   valk_lval_free(ast);
+// }
 
 void test_concurrency(VALK_TEST_ARGS()) {
   valk_lval_t *ast = VALK_FIXTURE("prelude");
@@ -129,9 +131,13 @@ void test_concurrency(VALK_TEST_ARGS()) {
       valk_schedule(&pool, &arg, (valk_callback *)test_callback));
 
   VALK_ASSERT(tst->type == VALK_SUC,
-              "Expected  successfull result [result: %d]", tst->type);
-  valk_drain_pool(&pool);
+              "Expected  successfull result [result: %d, %s]", tst->type,
+              tst->err.msg);
   VALK_ASSERT(res == 0, "Threadpool didnt drain");
+  printf("Got response: %p, %p\n", tst->succ, (void *)1337);
+  valk_drain_pool(&pool);
+  printf("Bleeeh\n");
+  valk_free_pool(&pool);
   VALK_PASS();
   valk_lval_free(ast);
 }

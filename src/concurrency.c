@@ -3,24 +3,27 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-const int VALK_NUM_WORKERS = 12;
+const int VALK_NUM_WORKERS = 4;
 
 valk_conc_res *valk_conc_res_suc(void *succ, valk_callback_void *free) {
   valk_conc_res *res = malloc(sizeof(valk_conc_res));
   res->type = VALK_SUC;
   res->succ = succ;
   res->free = free;
+  res->refcount = 1;
   return res;
 }
 
-valk_conc_res *valk_conc_res_err(int code, int size, char *msg) {
+valk_conc_res *valk_conc_res_err(int code, const char *msg) {
   valk_conc_res *res = malloc(sizeof(valk_conc_res));
   res->type = VALK_ERR;
-  res->err.size = size;
+  res->err.size = strlen(msg);
   res->err.code = code;
-  res->err.msg = msg;
+  res->err.msg = strdup(msg);
   res->free = NULL;
+  res->refcount = 1;
   return res;
 }
 
@@ -51,8 +54,16 @@ valk_future *valk_future_new(void) {
   return res;
 }
 
+valk_future *valk_future_done(valk_conc_res *item) {
+  valk_future *res = valk_future_new();
+  res->done = 1;
+  res->item = item;
+  return res;
+}
+
 static void _valk_future_free(valk_future *future) {
   pthread_cond_destroy(&future->resolved);
+  pthread_mutex_destroy(&future->mutex);
   if (future->done) {
     valk_conc_res_release(future->item);
   }
@@ -76,7 +87,7 @@ valk_conc_res *valk_future_await(valk_future *future) {
 
 valk_promise *valk_promise_new(valk_future *future) {
   valk_promise *res = malloc(sizeof(valk_promise));
-  res->item = valk_arc_retain(future);
+  res->item = future;
   res->refcount = 1;
   return res;
 }
@@ -91,12 +102,13 @@ void valk_promise_release(valk_promise *promise) {
 }
 
 void valk_promise_respond(valk_promise *promise, valk_conc_res *result) {
+  printf("Respondeing ?? wht the fuck\n");
   pthread_mutex_lock(&promise->item->mutex);
   if (promise->item->done) {
-    printf("Welll... this is awward, the promise is already resolved.... what "
+    printf("Welll... this is awkward, the promise is already resolved.... what "
            "the fuck");
   } else {
-    promise->item->item = valk_arc_retain(result);
+    promise->item->item = result;
     __sync_fetch_and_add(&promise->item->done, 1);
     pthread_cond_signal(&promise->item->resolved);
   }
@@ -108,6 +120,11 @@ static void *valk_worker_routine(void *arg) {
   printf("Starting Thread : %s\n", self->name);
   valk_task_queue *queue = self->queue;
 
+  pthread_mutex_lock(&queue->mutex);
+  queue->numWorkers++;
+  // if queue became empty after the pop, signal that its now empty
+  pthread_cond_signal(&queue->workerReady);
+  pthread_mutex_unlock(&queue->mutex);
   do {
     int res = 0;
     valk_task task;
@@ -115,25 +132,43 @@ static void *valk_worker_routine(void *arg) {
     pthread_mutex_lock(&queue->mutex);
 
     if (queue->count == 0) {
-      // if queue is full block until it has space
+      // if queue is empty until it has stuff
       // this will temporarily release the lock, and will wait on full signal
       pthread_cond_wait(&queue->notEmpty, &queue->mutex);
     }
 
+    printf("Going to work\n");
     res = valk_work_pop(queue, &task);
 
     if (!res) {
-      // only signal if we successfully popped, otherwise there was a problem
-      pthread_cond_signal(&queue->notFull);
+      // Only do stuff if  pop succeeded, so nothing to do
+      if (task.type == VALK_TASK) {
+        printf("Getting to work  %d\n", res);
+        if (queue->count == 0) {
+          // if queue became empty after the pop, signal that its now empty
+          pthread_cond_signal(&queue->isEmpty);
+        }
+        if (!res) {
+          // only signal if we successfully popped, otherwise there was a
+          // problem
+          pthread_cond_signal(&queue->notFull);
 
-      // Ok now lets execute the task
+          // Ok now lets execute the task
 
-      valk_promise_respond(task.promise, task.func(task.arg));
+          printf("Respondeing ?? wht the fuck\n");
+          valk_promise_respond(task.promise, task.func(task.arg));
 
-      // TODO(networking): How do we clean up the arg? maybe the callback has to
-      // do it.
+          // TODO(networking): How do we clean up the arg? maybe the callback
+          // has to do it.
+        }
+      } else if (task.type == VALK_POISON) {
+        printf("%s : Swallowed poison\n", self->name);
+        queue->numWorkers--;
+        pthread_cond_signal(&queue->workerDead);
+        pthread_mutex_unlock(&queue->mutex);
+        break;
+      }
     }
-
     pthread_mutex_unlock(&queue->mutex);
   } while (1);
 
@@ -159,28 +194,95 @@ int valk_start_pool(valk_worker_pool *pool) {
     ++pool->count;
   }
 
+  // Wait for all workers to become ready
+  pthread_mutex_lock(&pool->queue.mutex);
+  while (pool->queue.numWorkers < VALK_NUM_WORKERS) {
+    printf("Zug Zug : %ld\n", pool->queue.numWorkers);
+    pthread_cond_wait(&pool->queue.workerReady, &pool->queue.mutex);
+  }
+  pthread_mutex_unlock(&pool->queue.mutex);
   return 0;
 }
 
-int valk_drain_pool(valk_worker_pool *pool) { return 0; }
+void valk_drain_pool(valk_worker_pool *pool) {
+  printf("Draining ???\n");
+  pthread_mutex_lock(&pool->queue.mutex);
+  if (!pool->queue.isShuttingDown) {
+    // put the queue in draining mode, to prevent incoming schedule requets
+    pool->queue.isShuttingDown = 1;
+    if (pool->queue.count > 0) {
+      // if there are remaining items, drop em
+      pthread_cond_wait(&pool->queue.isEmpty, &pool->queue.mutex);
+    }
+  } else {
+    printf("Pool is already draining, not doing anything\n");
+  }
+  pthread_mutex_unlock(&pool->queue.mutex);
+}
 
-void valk_free_pool(valk_worker_pool *pool) {}
+void valk_free_pool(valk_worker_pool *pool) {
+  printf("Waiting for a sign count: %ld\n", pool->queue.count);
+  pthread_mutex_lock(&pool->queue.mutex);
+  if (pool->queue.count > 0) {
+    // if there are remaining items, resolve them
+    // TODO(networking):  this can be avoided with recursive mutexes, through
+    // attributes
+    pthread_mutex_unlock(&pool->queue.mutex);
+    valk_drain_pool(pool);
+  } else {
+    pthread_mutex_unlock(&pool->queue.mutex);
+  }
+
+  // wait for all workers to become dead
+  pthread_mutex_lock(&pool->queue.mutex);
+  valk_task poison = {.type = VALK_POISON};
+  for (size_t i = 0; i < VALK_NUM_WORKERS; i++) {
+    valk_work_add(&pool->queue, poison);
+    pthread_cond_signal(&pool->queue.notEmpty);
+  }
+  pthread_mutex_unlock(&pool->queue.mutex);
+
+  pthread_mutex_lock(&pool->queue.mutex);
+  while (pool->queue.numWorkers > 0) {
+    printf("Zug Zug : %ld\n", pool->queue.numWorkers);
+    pthread_cond_wait(&pool->queue.workerDead, &pool->queue.mutex);
+  }
+  pthread_mutex_unlock(&pool->queue.mutex);
+
+  for (size_t i = 0; i < VALK_NUM_WORKERS; i++) {
+    // TODO(networking): More elegant  solution is poison message in queue, but
+    // im too lazy now
+    free(pool->items[i].name);
+  }
+  valk_work_free(&pool->queue);
+
+  // free(pool->name);
+}
 
 valk_future *valk_schedule(valk_worker_pool *pool, void *arg,
                            valk_callback *func) {
   valk_task_queue *queue = &pool->queue;
   pthread_mutex_lock(&queue->mutex);
-  if (queue->capacity == queue->count) {
-    // if queue is full block until it has space
-    // this will temporarily release the lock, and will wait on full signal
-    pthread_cond_wait(&queue->notFull, &queue->mutex);
-  }
-
   valk_future *res = valk_future_new();
-  valk_promise *promise = valk_promise_new(res);
-  int err = valk_work_add(queue, arg, func, promise);
-
-  pthread_cond_signal(&queue->notEmpty);
+  if (queue->isShuttingDown) {
+    res = valk_future_done(valk_conc_res_err(
+        1,
+        "Error trying to submit work to threadpool, while its shutting down"));
+  } else {
+    if (queue->capacity == queue->count) {
+      // if queue is full block until it has space
+      // this will temporarily release the lock, and will wait on full signal
+      pthread_cond_wait(&queue->notFull, &queue->mutex);
+    }
+    res = valk_arc_retain(valk_future_new());
+    valk_task task = {.type = VALK_TASK,
+                      .arg = arg,
+                      .func = func,
+                      .promise = valk_promise_new(res)};
+    int err = valk_work_add(queue, task);
+    printf("Signalling  with %d\n", err);
+    pthread_cond_signal(&queue->notEmpty);
+  }
 
   pthread_mutex_unlock(&pool->queue.mutex);
   return res;

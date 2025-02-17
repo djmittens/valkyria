@@ -27,8 +27,8 @@ valk_test_suite_t *valk_testsuite_empty(const char *filename) {
   valk_test_suite_t *res = malloc(sizeof(valk_test_suite_t));
   res->filename = strdup(filename);
   da_init(&res->tests);
-
   da_init(&res->fixtures);
+  da_init(&res->results);
 
   return res;
 }
