@@ -8,8 +8,8 @@
 
 const int VALK_NUM_WORKERS = 4;
 
-valk_conc_res *valk_conc_res_suc(void *succ, valk_callback_void *free) {
-  valk_conc_res *res = malloc(sizeof(valk_conc_res));
+valk_arc_box *valk_arc_box_suc(void *succ, valk_callback_void *free) {
+  valk_arc_box *res = malloc(sizeof(valk_arc_box));
   res->type = VALK_SUC;
   res->succ = succ;
   res->free = free;
@@ -17,8 +17,8 @@ valk_conc_res *valk_conc_res_suc(void *succ, valk_callback_void *free) {
   return res;
 }
 
-valk_conc_res *valk_conc_res_err(int code, const char *msg) {
-  valk_conc_res *res = malloc(sizeof(valk_conc_res));
+valk_arc_box *valk_arc_box_err(int code, const char *msg) {
+  valk_arc_box *res = malloc(sizeof(valk_arc_box));
   res->type = VALK_ERR;
   res->err.size = strlen(msg);
   res->err.code = code;
@@ -28,7 +28,7 @@ valk_conc_res *valk_conc_res_err(int code, const char *msg) {
   return res;
 }
 
-static void _valk_conc_res_free(valk_conc_res *result) {
+static void _valk_arc_box_free(valk_arc_box *result) {
   switch (result->type) {
   case VALK_SUC:
     result->free(result->succ);
@@ -40,8 +40,8 @@ static void _valk_conc_res_free(valk_conc_res *result) {
   free(result);
 }
 
-void valk_conc_res_release(valk_conc_res *result) {
-  valk_arc_release(result, _valk_conc_res_free);
+void valk_arc_box_release(valk_arc_box *result) {
+  valk_arc_release(result, _valk_arc_box_free);
 }
 
 valk_future *valk_future_new(void) {
@@ -55,7 +55,7 @@ valk_future *valk_future_new(void) {
   return res;
 }
 
-valk_future *valk_future_done(valk_conc_res *item) {
+valk_future *valk_future_done(valk_arc_box *item) {
   valk_future *res = valk_future_new();
   res->done = 1;
   res->item = item;
@@ -66,7 +66,7 @@ static void _valk_future_free(valk_future *future) {
   pthread_cond_destroy(&future->resolved);
   pthread_mutex_destroy(&future->mutex);
   if (future->done) {
-    valk_conc_res_release(future->item);
+    valk_arc_box_release(future->item);
   }
   free(future);
 }
@@ -75,12 +75,12 @@ void valk_future_release(valk_future *future) {
   valk_arc_release(future, _valk_future_free);
 }
 
-valk_conc_res *valk_future_await(valk_future *future) {
+valk_arc_box *valk_future_await(valk_future *future) {
   pthread_mutex_lock(&future->mutex);
   if (!future->done) {
     pthread_cond_wait(&future->resolved, &future->mutex);
   }
-  valk_conc_res *res = future->item;
+  valk_arc_box *res = future->item;
   valk_arc_retain(res);
 
   pthread_mutex_unlock(&future->mutex);
@@ -104,7 +104,7 @@ void valk_promise_release(valk_promise *promise) {
   valk_arc_release(promise, _valk_promise_free);
 }
 
-void valk_promise_respond(valk_promise *promise, valk_conc_res *result) {
+void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
   pthread_mutex_lock(&promise->item->mutex);
 
   int old = __atomic_fetch_add(&promise->item->done, 1, __ATOMIC_RELEASE);
@@ -260,13 +260,13 @@ void valk_free_pool(valk_worker_pool *pool) {
   // free(pool->name);
 }
 
-valk_future *valk_schedule(valk_worker_pool *pool, void *arg,
+valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box *arg,
                            valk_callback *func) {
   valk_task_queue *queue = &pool->queue;
   pthread_mutex_lock(&queue->mutex);
   valk_future *res;
   if (queue->isShuttingDown) {
-    res = valk_future_done(valk_conc_res_err(
+    res = valk_future_done(valk_arc_box_err(
         1,
         "Error trying to submit work to threadpool, while its shutting down"));
   } else {
@@ -275,6 +275,7 @@ valk_future *valk_schedule(valk_worker_pool *pool, void *arg,
       // this will temporarily release the lock, and will wait on full signal
       pthread_cond_wait(&queue->notFull, &queue->mutex);
     }
+
     res = valk_future_new();
     valk_arc_retain(res);
 
@@ -286,9 +287,10 @@ valk_future *valk_schedule(valk_worker_pool *pool, void *arg,
     if (err) {
       valk_promise_respond(
           task.promise,
-          valk_conc_res_err(1,
+          valk_arc_box_err(1,
                             "Could not add task to queue for pool scheduling"));
       valk_promise_release(task.promise);
+      valk_arc_box_release(task.arg);
     }
     pthread_cond_signal(&queue->notEmpty);
   }

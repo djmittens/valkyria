@@ -101,37 +101,38 @@ typedef struct {
     valk_conc_err err;
     void *succ;
   };
+
   valk_callback_void *free;
   int refcount;
-} valk_conc_res;
+} valk_arc_box;
 
-valk_conc_res *valk_conc_res_suc(void *succ, valk_callback_void *free);
-valk_conc_res *valk_conc_res_err(int code, const char *msg);
-void valk_conc_res_release(valk_conc_res *result);
+valk_arc_box *valk_arc_box_suc(void *succ, valk_callback_void *free);
+valk_arc_box *valk_arc_box_err(int code, const char *msg);
+void valk_arc_box_release(valk_arc_box *result);
 
 typedef struct valk_future {
   pthread_mutex_t mutex;
   pthread_cond_t resolved;
-  valk_conc_res *item;
+  valk_arc_box *item;
   int refcount;
   int done;
 } valk_future;
 
 valk_future *valk_future_new(void);
-valk_future *valk_future_done(valk_conc_res *item);
+valk_future *valk_future_done(valk_arc_box *item);
 void valk_future_release(valk_future *future);
-valk_conc_res *valk_future_await(valk_future *future);
+valk_arc_box *valk_future_await(valk_future *future);
 
 typedef struct valk_promise {
   valk_future *item;
   int refcount;
 } valk_promise;
 
-typedef valk_conc_res *(valk_callback)(void *);
+typedef valk_arc_box *(valk_callback)(valk_arc_box *);
 
 valk_promise *valk_promise_new(valk_future *future);
 void valk_promise_release(valk_promise *promise);
-void valk_promise_respond(valk_promise *promise, valk_conc_res *result);
+void valk_promise_respond(valk_promise *promise, valk_arc_box *result);
 
 typedef enum { VALK_TASK, VALK_POISON } valk_task_type_t;
 typedef struct {
@@ -140,7 +141,7 @@ typedef struct {
   struct {
     // TODO(networking): figure out the lifetime for this arg.
     // who owns this ? when is it freed? in the callback?
-    void *arg;
+    valk_arc_box *arg;
     valk_callback *func;
     valk_promise *promise;
   };
@@ -176,7 +177,7 @@ typedef struct {
 } valk_worker_pool;
 
 int valk_start_pool(valk_worker_pool *pool);
-valk_future *valk_schedule(valk_worker_pool *pool, void *arg,
+valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box* arg,
                            valk_callback *func);
 void valk_drain_pool(valk_worker_pool *pool);
 void valk_free_pool(valk_worker_pool *pool);
