@@ -63,21 +63,18 @@ void valk_server_demo(void) {
   if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) == -1) {
     perror("setsockopt\n");
     close(sockfd);
-    close(epollfd);
     return;
   }
 
   if (bind(sockfd, servinfo->ai_addr, servinfo->ai_addrlen) == -1) {
     fprintf(stderr, "bind() error: %s \n", strerror(errno));
     close(sockfd);
-    close(epollfd);
     return;
   }
 
   if (listen(sockfd, 15) == -1) {
     fprintf(stderr, "listen() error: %s \n", strerror(errno));
     close(sockfd);
-    close(epollfd);
     return;
   }
 
@@ -167,7 +164,7 @@ char *valk_client_demo(const char *domain, const char *port) {
   // Eg localhost, if you drop this it will bind to the passed in argument
   // hints.ai_flags = AI_PASSIVE;
 
-  if (getaddrinfo(domain, port, &hints, &servinfo) != 0) {
+  if ((status = getaddrinfo(domain, port, &hints, &servinfo)) != 0) {
     fprintf(stderr, "getaddrinfo() error: %s \n", gai_strerror(status));
     exit(1);
   }

@@ -1,4 +1,5 @@
 #include "test_std.h"
+#include "common.h"
 #include "parser.h"
 
 void test_parsing_prelude(VALK_TEST_ARGS()) {
@@ -220,6 +221,8 @@ void test_prelude_not(VALK_TEST_ARGS()) {
 }
 
 int main(int argc, const char **argv) {
+  UNUSED(argc);
+  UNUSED(argv);
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
   valk_testsuite_add_test(suite, "test_parsing_prelude", test_parsing_prelude);
@@ -265,7 +268,7 @@ valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
     return ast;
   case LVAL_QEXPR:
   case LVAL_SEXPR: {
-    for (int i = 0; i < ast->expr.count; i++) {
+    for (size_t i = 0; i < ast->expr.count; i++) {
       if (valk_lval_find_error(ast->expr.cell[i])) {
         return ast->expr.cell[i];
       }

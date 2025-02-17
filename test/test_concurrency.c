@@ -1,3 +1,4 @@
+#include "common.h"
 #include "parser.h"
 #include "testing.h"
 
@@ -11,12 +12,12 @@ typedef struct {
   int someArg;
 } test__arg;
 
-static void _valk_void(void *v) {}
+static void _valk_void(void *v) { UNUSED(v); }
 
 static valk_conc_res *test_callback(void *_arg) {
   test__arg *arg = _arg;
   // Unpack the test context from arg
-  valk_test_suite_t *_suite = arg->suite;
+  // valk_test_suite_t *_suite = arg->suite;
   valk_test_result_t *_result = arg->result;
   printf("Getting called in the callback n shit \n");
   VALK_ASSERT(arg->someArg == 1337, "Expected the argument to be 1337");
@@ -51,7 +52,6 @@ void test_task_queue(VALK_TEST_ARGS()) {
                       .promise = promise};
     printf("Trying to push %ld :: %ld\n", i, queue.count);
     int err = valk_work_add(&queue, task);
-
 
     if (err) {
       // cleanup if there was an error
@@ -156,27 +156,14 @@ void test_concurrency(VALK_TEST_ARGS()) {
   valk_lval_free(ast);
 }
 
-static void *__lval_copy(void *arg) { return valk_lval_copy(arg); }
-static void __lval_free(void *arg) { valk_lval_free(arg); }
-static void *__lenv_copy(void *arg) { return valk_lenv_copy(arg); }
-static void __lenv_free(void *arg) { valk_lenv_free(arg); }
 
 int main(int argc, const char **argv) {
+  UNUSED(argc);
+  UNUSED(argv);
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
   valk_testsuite_add_test(suite, "test_concurrency", test_concurrency);
   valk_testsuite_add_test(suite, "test_task_queue", test_task_queue);
-
-  // load fixtures
-  // valk_lval_t *ast = valk_parse_file("src/prelude.valk");
-  // valk_lenv_t *env = valk_lenv_empty();
-  // valk_lenv_builtins(env); // load the builtins
-  // valk_lval_t *r = valk_lval_eval(env, valk_lval_copy(ast));
-  // valk_lval_free(r);
-
-  // valk_testsuite_fixture_add(suite, "prelude", ast, __lval_copy,
-  // __lval_free); valk_testsuite_fixture_add(suite, "env", env, __lenv_copy,
-  // __lenv_free);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

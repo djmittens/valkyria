@@ -1,5 +1,6 @@
 #include "parser.h"
 #include "testing.h"
+#include "common.h"
 
 #include <networking.h>
 #include <sys/wait.h>
@@ -46,6 +47,8 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
 }
 
 int main(int argc, const char **argv) {
+  UNUSED(argc);
+  UNUSED(argv);
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
   valk_testsuite_add_test(suite, "test_demo_socket_server", test_demo_socket_server);
