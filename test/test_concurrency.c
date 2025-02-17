@@ -19,7 +19,6 @@ static valk_conc_res *test_callback(void *_arg) {
   // Unpack the test context from arg
   // valk_test_suite_t *_suite = arg->suite;
   valk_test_result_t *_result = arg->result;
-  printf("Getting called in the callback n shit \n");
   VALK_ASSERT(arg->someArg == 1337, "Expected the argument to be 1337");
   return valk_conc_res_suc((void *)1337, _valk_void);
 }
@@ -50,7 +49,6 @@ void test_task_queue(VALK_TEST_ARGS()) {
                       .arg = &arg,
                       .func = test_callback,
                       .promise = promise};
-    printf("Trying to push %ld :: %ld\n", i, queue.count);
     int err = valk_work_add(&queue, task);
 
     if (err) {
@@ -61,7 +59,6 @@ void test_task_queue(VALK_TEST_ARGS()) {
       VALK_ASSERT(err == 1,
                   "Expected add to return an error, if the queue is full ");
     } else {
-      printf("ACtually pushed %ld :: %ld\n", i, queue.count);
       VALK_ASSERT(err == 0,
                   "Expected the add to return success  when it has space");
       VALK_ASSERT(((test__arg *)queue.items[i].arg)->someArg == arg.someArg,
@@ -149,7 +146,6 @@ void test_concurrency(VALK_TEST_ARGS()) {
   VALK_ASSERT(res == 0, "Threadpool didnt drain");
   printf("Got response: %p, %p\n", tst->succ, (void *)1337);
   valk_drain_pool(&pool);
-  printf("Bleeeh\n");
   valk_free_pool(&pool);
   VALK_PASS();
   valk_conc_res_release(tst);

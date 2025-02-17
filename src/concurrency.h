@@ -7,7 +7,6 @@
   do {                                                                         \
     (queue)->capacity = (_capacity);                                           \
     (queue)->items = malloc(sizeof(valk_task) * (_capacity));                  \
-    printf("Mallocking %ld\n", sizeof(valk_task) * (_capacity));               \
     (queue)->count = 0;                                                        \
     (queue)->numWorkers = 0;                                                   \
     (queue)->isShuttingDown = 0;                                               \
@@ -75,13 +74,13 @@
 #define valk_arc_release(ref, _free)                                           \
   do {                                                                         \
     int old = __atomic_fetch_sub(&(ref)->refcount, 1, __ATOMIC_RELEASE);       \
-    char _buf[512];                                                            \
-    pthread_getname_np(pthread_self(), _buf, sizeof(_buf));                    \
+    /*char _buf[512];                                                          \
+    pthread_getname_np(pthread_self(), _buf, sizeof(_buf));*/                  \
     if (old == 1) {                                                            \
-      printf("[%s] Arc is freeing %d\n", _buf, old);                           \
+      /* printf("[%s] Arc is freeing %d\n", _buf, old); */                     \
       _free(ref);                                                              \
     } else {                                                                   \
-      printf("[%s] Arc is decrementing %d\n", _buf, old);                      \
+      /* printf("[%s] Arc is decrementing %d\n", _buf, old); */                \
     }                                                                          \
   } while (0)
 

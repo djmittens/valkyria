@@ -63,7 +63,6 @@ valk_future *valk_future_done(valk_conc_res *item) {
 }
 
 static void _valk_future_free(valk_future *future) {
-  printf("freeing our future %d\n", future->done);
   pthread_cond_destroy(&future->resolved);
   pthread_mutex_destroy(&future->mutex);
   if (future->done) {
@@ -73,7 +72,6 @@ static void _valk_future_free(valk_future *future) {
 }
 
 void valk_future_release(valk_future *future) {
-  printf("Releasing our future %d\n", future->done);
   valk_arc_release(future, _valk_future_free);
 }
 
@@ -85,8 +83,6 @@ valk_conc_res *valk_future_await(valk_future *future) {
   valk_conc_res *res = future->item;
   valk_arc_retain(res);
 
-  printf("Awaiting  with count future: %d  res: %d\n", future->refcount,
-         res->refcount);
   pthread_mutex_unlock(&future->mutex);
   valk_future_release(future);
   return res;
@@ -145,12 +141,10 @@ static void *valk_worker_routine(void *arg) {
       pthread_cond_wait(&queue->notEmpty, &queue->mutex);
     }
 
-    printf("Going to work\n");
     res = valk_work_pop(queue, &task);
 
     if (!res) {
       // Only do stuff if  pop succeeded, so nothing to do
-      printf("Getting to work  %d\n", res);
       if (queue->count == 0) {
         // if queue became empty after the pop, signal that its now empty
         pthread_cond_signal(&queue->isEmpty);
@@ -164,8 +158,6 @@ static void *valk_worker_routine(void *arg) {
         // Ok now lets execute the task
 
         valk_promise_respond(task.promise, task.func(task.arg));
-        printf("Realising the cracken promise: %d ::: future:  %d\n",
-               task.promise->refcount, task.promise->item->refcount);
         valk_promise_release(task.promise);
         // TODO(networking): How do we clean up the arg? maybe the callback
         // has to do it.
@@ -205,7 +197,6 @@ int valk_start_pool(valk_worker_pool *pool) {
   // Wait for all workers to become ready
   pthread_mutex_lock(&pool->queue.mutex);
   while (pool->queue.numWorkers < VALK_NUM_WORKERS) {
-    printf("Zug Zug : %ld\n", pool->queue.numWorkers);
     pthread_cond_wait(&pool->queue.workerReady, &pool->queue.mutex);
   }
   pthread_mutex_unlock(&pool->queue.mutex);
@@ -213,7 +204,6 @@ int valk_start_pool(valk_worker_pool *pool) {
 }
 
 void valk_drain_pool(valk_worker_pool *pool) {
-  printf("Draining ???\n");
   pthread_mutex_lock(&pool->queue.mutex);
   if (!pool->queue.isShuttingDown) {
     // put the queue in draining mode, to prevent incoming schedule requets
@@ -229,7 +219,6 @@ void valk_drain_pool(valk_worker_pool *pool) {
 }
 
 void valk_free_pool(valk_worker_pool *pool) {
-  printf("Waiting for a sign count: %ld\n", pool->queue.count);
   pthread_mutex_lock(&pool->queue.mutex);
   if (pool->queue.count > 0) {
     // if there are remaining items, resolve them
@@ -253,7 +242,6 @@ void valk_free_pool(valk_worker_pool *pool) {
 
   pthread_mutex_lock(&pool->queue.mutex);
   while (pool->queue.numWorkers > 0) {
-    printf("Zug Zug : %ld\n", pool->queue.numWorkers);
     pthread_cond_wait(&pool->queue.workerDead, &pool->queue.mutex);
   }
   pthread_mutex_unlock(&pool->queue.mutex);
@@ -289,7 +277,6 @@ valk_future *valk_schedule(valk_worker_pool *pool, void *arg,
     }
     res = valk_future_new();
     valk_arc_retain(res);
-    printf("Aquiring the fuut : %d\n", res->refcount);
 
     valk_task task = {.type = VALK_TASK,
                       .arg = arg,
@@ -301,15 +288,11 @@ valk_future *valk_schedule(valk_worker_pool *pool, void *arg,
           task.promise,
           valk_conc_res_err(1,
                             "Could not add task to queue for pool scheduling"));
-      printf("Errrory release %d\n", task.promise->refcount);
       valk_promise_release(task.promise);
     }
-    printf("Done scheduling promise: %d future: %d\n", task.promise->refcount,
-           task.promise->item->refcount);
     pthread_cond_signal(&queue->notEmpty);
   }
 
-  printf("Return with count %d\n", res->refcount);
   pthread_mutex_unlock(&pool->queue.mutex);
   return res;
 }
