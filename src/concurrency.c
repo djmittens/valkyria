@@ -1,5 +1,6 @@
 #include "concurrency.h"
 #include "collections.h"
+#define _GNU_SOURCE
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -81,7 +82,7 @@ valk_conc_res *valk_future_await(valk_future *future) {
   if (!future->done) {
     pthread_cond_wait(&future->resolved, &future->mutex);
   }
-  valk_conc_res *res =future->item;
+  valk_conc_res *res = future->item;
   valk_arc_retain(res);
 
   printf("Awaiting  with count future: %d  res: %d\n", future->refcount,
@@ -126,6 +127,7 @@ static void *valk_worker_routine(void *arg) {
   printf("Starting Thread : %s\n", self->name);
   valk_task_queue *queue = self->queue;
 
+  pthread_setname_np(pthread_self(), self->name);
   pthread_mutex_lock(&queue->mutex);
   queue->numWorkers++;
   // if queue became empty after the pop, signal that its now empty
@@ -259,7 +261,7 @@ void valk_free_pool(valk_worker_pool *pool) {
   for (size_t i = 0; i < numWorkers; i++) {
     // TODO(networking): More elegant  solution is poison message in queue, but
     // im too lazy now
-    void* res ;
+    void *res;
     pthread_join(pool->items[i].thread, &res);
     free(pool->items[i].name);
   }
@@ -302,7 +304,8 @@ valk_future *valk_schedule(valk_worker_pool *pool, void *arg,
       printf("Errrory release %d\n", task.promise->refcount);
       valk_promise_release(task.promise);
     }
-    printf("Done scheduling promise: %d future: %d\n", task.promise->refcount, task.promise->item->refcount);
+    printf("Done scheduling promise: %d future: %d\n", task.promise->refcount,
+           task.promise->item->refcount);
     pthread_cond_signal(&queue->notEmpty);
   }
 

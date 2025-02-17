@@ -1,4 +1,5 @@
 #include "parser.h"
+#include "common.h"
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -23,7 +24,7 @@
 #define LVAL_ASSERT_TYPE(args, lval, _type, ...)                               \
   do {                                                                         \
     char _found = 0;                                                           \
-    valk_ltype_t _expected[] = {(_type), __VA_ARGS__};                         \
+    valk_ltype_t _expected[] = {(_type), ##__VA_ARGS__};                       \
     size_t _n_expected = sizeof(_expected) / sizeof(valk_ltype_t);             \
                                                                                \
     for (size_t i = 0; i < _n_expected; i++) {                                 \
@@ -513,7 +514,7 @@ void valk_lval_print(valk_lval_t *val) {
     // TODO(main): code duplication here, do i actually care??
   case LVAL_QEXPR:
     printf("Qexpr{ ");
-    for (int i = 0; i < val->expr.count; ++i) {
+    for (size_t i = 0; i < val->expr.count; ++i) {
       valk_lval_print(val->expr.cell[i]);
       if (i < val->expr.count - 1) {
         putchar(' ');
@@ -523,7 +524,7 @@ void valk_lval_print(valk_lval_t *val) {
     break;
   case LVAL_SEXPR:
     printf("Sexpr( ");
-    for (int i = 0; i < val->expr.count; ++i) {
+    for (size_t i = 0; i < val->expr.count; ++i) {
       valk_lval_print(val->expr.cell[i]);
       if (i < val->expr.count - 1) {
         putchar(' ');
@@ -548,7 +549,7 @@ void valk_lval_print(valk_lval_t *val) {
   case LVAL_STR: {
     // We want to escape the string before printing
     printf("String[");
-    for (int i = 0; i < strlen(val->str); ++i) {
+    for (size_t i = 0; i < strlen(val->str); ++i) {
       if (strchr(lval_str_escapable, val->str[i])) {
         printf("%s", valk_lval_str_escape(val->str[i]));
       } else {
@@ -635,7 +636,7 @@ static valk_lval_t *valk_lval_read_sym(int *i, const char *s) {
   if (len) {
     char *sym = strndup(&s[*i], len);
     int isNum = strchr("-0123456789", sym[0]) != NULL;
-    for (int i = 1; i < len; ++i) {
+    for (size_t i = 1; i < len; ++i) {
       if (!strchr("0123456789", sym[i])) {
         isNum = 0;
         break;
@@ -799,7 +800,7 @@ void valk_lenv_init(valk_lenv_t *env) {
 
 void valk_lenv_free(valk_lenv_t *env) {
   // Doesnt free the  parent
-  for (int i = 0; i < env->count; ++i) {
+  for (size_t i = 0; i < env->count; ++i) {
     valk_lval_free(env->vals[i]);
     free(env->symbols[i]);
   }
@@ -885,7 +886,7 @@ void valk_lenv_put_builtin(valk_lenv_t *env, char *key,
 }
 
 static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
-  for (int i = 0; i < lst->expr.count; ++i) {
+  for (size_t i = 0; i < lst->expr.count; ++i) {
     // TODO(main): Its not very straightforward to assert a type here
     if (lst->expr.cell[i]->type != LVAL_NUM) {
       LVAL_RAISE(lst, "This function only supports Numbers : %s",
@@ -930,6 +931,7 @@ static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
 }
 
 static valk_lval_t *valk_builtin_cons(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_QEXPR);
 
@@ -947,6 +949,7 @@ static valk_lval_t *valk_builtin_cons(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 static valk_lval_t *valk_builtin_len(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   // TODO(main): should this only work with Q expr?
   // sexpr gets evaluated immediately, so perhaps thats fine
@@ -958,6 +961,7 @@ static valk_lval_t *valk_builtin_len(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 static valk_lval_t *valk_builtin_head(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   LVAL_ASSERT(a, a->expr.count == 1,
               "Builtin `head` passed too many arguments");
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
@@ -971,6 +975,7 @@ static valk_lval_t *valk_builtin_head(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 static valk_lval_t *valk_builtin_tail(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   LVAL_ASSERT(a, a->expr.count == 1,
               "Builtin `tail` passed too many arguments");
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
@@ -984,6 +989,7 @@ static valk_lval_t *valk_builtin_tail(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 static valk_lval_t *valk_builtin_init(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   // TODO(main): can i make this more flexible, that way these functions can
   // work over argument list as well? or is that something thats too obvious
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
@@ -997,6 +1003,7 @@ static valk_lval_t *valk_builtin_init(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 static valk_lval_t *valk_builtin_join(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
 
   valk_lval_t *x = valk_lval_pop(a, 0);
@@ -1008,6 +1015,7 @@ static valk_lval_t *valk_builtin_join(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 static valk_lval_t *valk_builtin_list(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   a->type = LVAL_QEXPR;
   return a;
 }
@@ -1022,15 +1030,19 @@ static valk_lval_t *valk_builtin_eval(valk_lenv_t *e, valk_lval_t *a) {
   return valk_lval_eval(e, v);
 }
 static valk_lval_t *valk_builtin_plus(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   return builtin_math(a, "+");
 }
 static valk_lval_t *valk_builtin_minus(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   return builtin_math(a, "-");
 }
 static valk_lval_t *valk_builtin_divide(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   return builtin_math(a, "/");
 }
 static valk_lval_t *valk_builtin_multiply(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   return builtin_math(a, "*");
 }
 
@@ -1083,6 +1095,7 @@ static valk_lval_t *valk_builtin_put(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 static valk_lval_t *valk_builtin_lambda(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
 
   valk_lval_t *formals = a->expr.cell[0];
@@ -1124,6 +1137,7 @@ static valk_lval_t *valk_builtin_penv(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 static valk_lval_t *valk_builtin_ord(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 3);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_SYM);
   LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_NUM);
@@ -1149,6 +1163,7 @@ static valk_lval_t *valk_builtin_ord(valk_lenv_t *e, valk_lval_t *a) {
   return valk_lval_num(r);
 }
 static valk_lval_t *valk_builtin_cmp(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 3);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_SYM);
   const char *op = a->expr.cell[0]->str;
@@ -1267,6 +1282,7 @@ static valk_lval_t *valk_builtin_if(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 static valk_lval_t *valk_builtin_print(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   for (size_t i = 0; i < a->expr.count; i++) {
     valk_lval_print(a->expr.cell[i]);
     putchar(' ');
@@ -1277,6 +1293,7 @@ static valk_lval_t *valk_builtin_print(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 static valk_lval_t *valk_builtin_error(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_STR);
   valk_lval_t *err = valk_lval_err(a->expr.cell[0]->str);

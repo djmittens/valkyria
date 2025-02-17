@@ -25,13 +25,11 @@ const char *DOT_FILL =
 
 valk_test_suite_t *valk_testsuite_empty(const char *filename) {
   valk_test_suite_t *res = malloc(sizeof(valk_test_suite_t));
+  memset(res, 0, sizeof(valk_test_suite_t));
   printf("HOt damn this is sus %ld \n", sizeof(valk_test_suite_t));
   res->filename = strdup(filename);
-  memset(&res->tests, 0, sizeof(res->tests));
   da_init(&res->tests);
-  memset(&res->fixtures, 0, sizeof(res->fixtures));
   da_init(&res->fixtures);
-  memset(&res->results, 0, sizeof(res->results));
   da_init(&res->results);
 
   printf("struping\n");

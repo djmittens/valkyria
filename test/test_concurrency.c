@@ -37,11 +37,9 @@ void test_task_queue(VALK_TEST_ARGS()) {
 
   };
 
-  printf("HTE FUCK\n");
   valk_task_queue queue = {0};
   valk_work_init(&queue, maxSize);
 
-  printf("HTE FUCK 123 size: %ld %ld\n", queue.capacity, queue.count);
   // addd 7 items
   for (size_t i = 0; i < 8; i++) {
 
@@ -51,9 +49,9 @@ void test_task_queue(VALK_TEST_ARGS()) {
                       .arg = &arg,
                       .func = test_callback,
                       .promise = promise};
+    printf("Trying to push %ld :: %ld\n", i, queue.count);
     int err = valk_work_add(&queue, task);
 
-    printf("WEll now %ld :: %ld\n", i, queue.count);
 
     if (err) {
       // cleanup if there was an error
@@ -63,7 +61,7 @@ void test_task_queue(VALK_TEST_ARGS()) {
       VALK_ASSERT(err == 1,
                   "Expected add to return an error, if the queue is full ");
     } else {
-      printf("WEll now %ld :: %d\n", i, queue.items[i].type);
+      printf("ACtually pushed %ld :: %ld\n", i, queue.count);
       VALK_ASSERT(err == 0,
                   "Expected the add to return success  when it has space");
       VALK_ASSERT(((test__arg *)queue.items[i].arg)->someArg == arg.someArg,

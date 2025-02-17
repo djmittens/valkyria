@@ -1,5 +1,6 @@
 #pragma once
 
+#define _GNU_SOURCE
 #include <pthread.h>
 
 #define valk_work_init(queue, _capacity)                                       \
@@ -74,8 +75,13 @@
 #define valk_arc_release(ref, _free)                                           \
   do {                                                                         \
     int old = __atomic_fetch_sub(&(ref)->refcount, 1, __ATOMIC_RELEASE);       \
+    char _buf[512];                                                            \
+    pthread_getname_np(pthread_self(), _buf, sizeof(_buf));                    \
     if (old == 1) {                                                            \
+      printf("[%s] Arc is freeing %d\n", _buf, old);                           \
       _free(ref);                                                              \
+    } else {                                                                   \
+      printf("[%s] Arc is decrementing %d\n", _buf, old);                      \
     }                                                                          \
   } while (0)
 
