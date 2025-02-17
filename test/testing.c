@@ -25,11 +25,16 @@ const char *DOT_FILL =
 
 valk_test_suite_t *valk_testsuite_empty(const char *filename) {
   valk_test_suite_t *res = malloc(sizeof(valk_test_suite_t));
+  printf("HOt damn this is sus %ld \n", sizeof(valk_test_suite_t));
   res->filename = strdup(filename);
+  memset(&res->tests, 0, sizeof(res->tests));
   da_init(&res->tests);
+  memset(&res->fixtures, 0, sizeof(res->fixtures));
   da_init(&res->fixtures);
+  memset(&res->results, 0, sizeof(res->results));
   da_init(&res->results);
 
+  printf("struping\n");
   return res;
 }
 
@@ -71,7 +76,7 @@ valk_test_result_t *valk_testsuite_new_result(valk_test_suite_t *suite,
                                               const char *testName) {
   valk_test_result_t res;
 
-  for (int i = 0; i < suite->tests.count; ++i) {
+  for (size_t i = 0; i < suite->tests.count; ++i) {
     if (strcmp(suite->tests.items[i].name, testName) == 0) {
       res.testOffset = i;
       res.type = VALK_TEST_UNDEFINED;

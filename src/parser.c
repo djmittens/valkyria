@@ -247,7 +247,7 @@ valk_lval_t *valk_lval_copy(valk_lval_t *lval) {
   case LVAL_SEXPR:
     res->expr.cell = malloc(sizeof(res->expr.cell) * lval->expr.count);
     res->expr.count = lval->expr.count;
-    for (int i = 0; i < lval->expr.count; ++i) {
+    for (size_t i = 0; i < lval->expr.count; ++i) {
       res->expr.cell[i] = valk_lval_copy(lval->expr.cell[i]);
     }
     break;
@@ -324,7 +324,7 @@ int valk_lval_eq(valk_lval_t *x, valk_lval_t *y) {
     if (x->expr.count != y->expr.count) {
       return 0;
     }
-    for (int i = 0; i < x->expr.count; ++i) {
+    for (size_t i = 0; i < x->expr.count; ++i) {
       if (!valk_lval_eq(x->expr.cell[i], y->expr.cell[i])) {
         return 0;
       }
@@ -356,7 +356,7 @@ valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr) {
   }
 
   // count up the chillen
-  for (int i = 0; i < sexpr->expr.count; ++i) {
+  for (size_t i = 0; i < sexpr->expr.count; ++i) {
     sexpr->expr.cell[i] = valk_lval_eval(env, sexpr->expr.cell[i]);
     if (sexpr->expr.cell[i]->type == LVAL_ERR) {
       valk_lval_t *res = valk_lval_pop(sexpr, i);

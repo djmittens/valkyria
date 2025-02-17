@@ -5,9 +5,11 @@
 #define valk_work_init(queue, _capacity)                                       \
   do {                                                                         \
     (queue)->capacity = (_capacity);                                           \
-    (queue)->items = malloc(sizeof(valk_task) * _capacity);                    \
+    (queue)->items = malloc(sizeof(valk_task) * (_capacity));                  \
+    printf("Mallocking %ld\n", sizeof(valk_task) * (_capacity));               \
     (queue)->count = 0;                                                        \
-    (queue)->numWorkers = 0;                                                        \
+    (queue)->numWorkers = 0;                                                   \
+    (queue)->isShuttingDown = 0;                                               \
     pthread_mutex_init(&(queue)->mutex, 0);                                    \
     pthread_cond_init(&(queue)->isEmpty, 0);                                   \
     pthread_cond_init(&(queue)->notEmpty, 0);                                  \
@@ -63,13 +65,15 @@
 #define valk_arc_retain(ref)                                                   \
   ({                                                                           \
     do {                                                                       \
-      __sync_fetch_and_add(&(ref)->refcount, 1);                               \
+      __atomic_fetch_add(&(ref)->refcount, 1, __ATOMIC_RELEASE);               \
     } while (0);                                                               \
     (ref);                                                                     \
   })
+
+// This is bootleg arc
 #define valk_arc_release(ref, _free)                                           \
   do {                                                                         \
-    int old = __sync_fetch_and_sub(&(ref)->refcount, 1);                       \
+    int old = __atomic_fetch_sub(&(ref)->refcount, 1, __ATOMIC_RELEASE);       \
     if (old == 1) {                                                            \
       _free(ref);                                                              \
     }                                                                          \

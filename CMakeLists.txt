@@ -7,12 +7,12 @@ project(valkyria LANGUAGES C)
 
 if(ASAN)
   # Enable AddressSanitizer flags
-  set(SANITIZE_ADDRESS_FLAGS "-fsanitize=address -fno-omit-frame-pointer")
+  set(SANITIZE_ADDRESS_FLAGS "-fsanitize=address -fno-omit-frame-pointer -fsanitize=undefined ")
 endif()
 
 
 # Apply to C and C++ compile flags
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${SANITIZE_ADDRESS_FLAGS} -fcolor-diagnostics")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${SANITIZE_ADDRESS_FLAGS} -fcolor-diagnostics -O3 -Wall -Wextra -Wpedantic ")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZE_ADDRESS_FLAGS} -fcolor-diagnostics")
 
 # Apply to link flags
@@ -23,7 +23,7 @@ find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(EDITLINE REQUIRED IMPORTED_TARGET libeditline)
 
-set(CMAKE_C_STANDARD  17) # LOL current year - 6 is gold
+set(CMAKE_C_STANDARD  23) # LOL current year - 6 is gold
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if (HOMEBREW_CLANG)

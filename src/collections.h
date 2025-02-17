@@ -9,7 +9,9 @@
       printf("Reinitializing the array for some stupid reason, probably a "    \
              "memory leak, since items are not cleaned up\n");                 \
     }                                                                          \
-    (arr)->items = malloc(sizeof((arr)->items[0]) * DA_INIT_CAPACITY);           \
+    printf("Malladfsdfsdf %ld bytes\n",                                        \
+           sizeof((arr)->items[0]) * DA_INIT_CAPACITY);                        \
+    (arr)->items = malloc(sizeof((arr)->items[0]) * DA_INIT_CAPACITY);         \
   } while (0)
 
 #define da_free(arr)                                                           \
