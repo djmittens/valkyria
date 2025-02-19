@@ -1,5 +1,6 @@
 #include "concurrency.h"
 #include "collections.h"
+#include <bits/pthreadtypes.h>
 #define _GNU_SOURCE
 #include <pthread.h>
 #include <stdio.h>
@@ -184,7 +185,15 @@ int valk_start_pool(valk_worker_pool *pool) {
     int len = snprintf(NULL, 0, "Worker [%ld]", i);
     pool->items[i].name = malloc(len + 1);
     snprintf(pool->items[i].name, len + 1, "Worker [%ld]", i);
-    int res = pthread_create(&pool->items[i].thread, NULL, valk_worker_routine,
+
+    // Setting this attribute, makes it so you dont have to join the thread
+    // when you shut it down. Since we dont care about the result its simpler to do this
+    // and saves a bit of time at the end.
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+    int res = pthread_create(&pool->items[i].thread, &attr, valk_worker_routine,
                              (void *)&pool->items[i]);
     if (res) {
       perror("pthread_create");
@@ -250,7 +259,7 @@ void valk_free_pool(valk_worker_pool *pool) {
     // TODO(networking): More elegant  solution is poison message in queue, but
     // im too lazy now
     void *res;
-    pthread_join(pool->items[i].thread, &res);
+    // pthread_join(pool->items[i].thread, &res);
     free(pool->items[i].name);
   }
   free(pool->items);
@@ -288,7 +297,7 @@ valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box *arg,
       valk_promise_respond(
           task.promise,
           valk_arc_box_err(1,
-                            "Could not add task to queue for pool scheduling"));
+                           "Could not add task to queue for pool scheduling"));
       valk_promise_release(task.promise);
       valk_arc_box_release(task.arg);
     }
