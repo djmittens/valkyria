@@ -48,7 +48,7 @@ elseif(APPLE)
   )
 elseif(UNIX)
   target_sources(valkyria PRIVATE
-    src/inet_unix.c
+    src/inet_linux.c
   )
   target_compile_definitions(valkyria PUBLIC
     PLATFORM_UNIX
