@@ -34,6 +34,14 @@ venv:
 clean:
 	rm -rf build
 
+.PHONY: cppcheck
+cppcheck:
+	cppcheck --enable=all --inconclusive --quiet -I/usr/include src/ test/
+
+.PHONY: infer
+infer:
+	docker run -v "$PWD:/mnt" -w "/mnt/build" --rm -it ghcr.io/facebook/infer:latest infer -- ninja
+
 .PHONY: repl
 repl: build
 	build/valk src/prelude.valk

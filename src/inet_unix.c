@@ -1,4 +1,4 @@
-#include "networking.h"
+#include "inet.h"
 
 #include "collections.h"
 
@@ -32,7 +32,7 @@ void *get_in_addr(struct sockaddr *sa) {
 }
 
 void valk_server_demo(void) {
-  int status, sockfd, connfd, epollfd, num_fds;
+  int status, sockfd, connfd, epollfd;
   struct addrinfo hints = {};
   struct addrinfo *servinfo; // result
   struct sockaddr_storage theirAddr;
@@ -99,7 +99,7 @@ void valk_server_demo(void) {
   }
 
   for (;;) {
-    num_fds = epoll_wait(epollfd, events, 10, -1);
+    int num_fds = epoll_wait(epollfd, events, 10, -1);
     if (epollfd == -1) {
       perror("epoll_wait");
       // exit(EXIT_FAILURE);
@@ -126,10 +126,13 @@ void valk_server_demo(void) {
         inet_ntop(theirAddr.ss_family,
                   get_in_addr((struct sockaddr *)&theirAddr), buf, sizeof(buf));
         printf("Server: Established connection with client: %s\n", buf);
-        struct epoll_event ev;
+
+        // lets reuse the ev
+        memset(&ev, 0, sizeof(struct epoll_event));
         ev.events = EPOLLOUT | EPOLLIN;
         ev.data.fd = connfd;
         epoll_ctl(epollfd, EPOLL_CTL_ADD, connfd, &ev);
+
       } else {
         char res[512];
         printf("Server: Received from client \n %s \n", res);

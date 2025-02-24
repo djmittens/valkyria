@@ -26,7 +26,6 @@ const char *DOT_FILL =
 valk_test_suite_t *valk_testsuite_empty(const char *filename) {
   valk_test_suite_t *res = malloc(sizeof(valk_test_suite_t));
   memset(res, 0, sizeof(valk_test_suite_t));
-  printf("HOt damn this is sus %ld \n", sizeof(valk_test_suite_t));
   res->filename = strdup(filename);
   da_init(&res->tests);
   da_init(&res->fixtures);
@@ -102,7 +101,7 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
 }
 
 void valk_testsuite_print(valk_test_suite_t *suite) {
-  printf("[%ld/%ld] %s Suite Results: \n", suite->results.count,
+  printf("[%zu/%zu] %s Suite Results: \n", suite->results.count,
          suite->tests.count, suite->filename);
   for (size_t i = 0; i < suite->results.count; i++) {
     valk_test_result_t *result = &suite->results.items[i];
@@ -128,11 +127,11 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
       break;
     }
     case VALK_TEST_PASS:
-      printf("✅ %s%.*s  PASS : in %lu(%s)\n", test->name, len, DOT_FILL,
+      printf("✅ %s%.*s  PASS : in %zu(%s)\n", test->name, len, DOT_FILL,
              (result->stopTime - result->startTime), precision);
       break;
     case VALK_TEST_FAIL:
-      printf("🐞 %s%.*s  FAIL : in %lu(%s)\n", test->name, len, DOT_FILL,
+      printf("🐞 %s%.*s  FAIL : in %zu(%s)\n", test->name, len, DOT_FILL,
              (result->stopTime - result->startTime), precision);
       printf("ERROR: %s\n", result->error);
       break;

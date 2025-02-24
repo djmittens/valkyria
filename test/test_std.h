@@ -32,7 +32,7 @@
 #define VALK_EXPECT_SUCCESS(lval)                                              \
   do {                                                                         \
     if (_result->type == VALK_TEST_UNDEFINED) {                                \
-      valk_lval_t *_err = valk_lval_find_error(lval);                          \
+      const valk_lval_t *_err = valk_lval_find_error(lval);                          \
       if (_err) {                                                              \
         VALK_FAIL("Expected Successfull value but found error, \n >>> %s",     \
                   _err->str);                                                  \

@@ -55,10 +55,3 @@ int main(int argc, char *argv[]) {
   free(env);
   return EXIT_SUCCESS;
 }
-
-valk_lval_t *read_num(char *num) {
-  errno = 0;
-  long x = strtol(num, NULL, 10);
-  return errno != ERANGE ? valk_lval_num(x)
-                         : valk_lval_err("Number outside long range");
-}

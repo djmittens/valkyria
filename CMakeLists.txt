@@ -33,9 +33,29 @@ endif()
 
 add_library(valkyria 
   src/parser.c
-  src/networking.c
   src/concurrency.c
 )
+
+if(WIN32)
+  message(FATAL_ERROR "Windows is not supported for networking yet")
+  target_compile_definitions(valkyria PUBLIC
+    PLATFORM_WINDOWS
+  )
+elseif(APPLE)
+  message(FATAL_ERROR "OSX is not supported for networking yet")
+  target_compile_definitions(valkyria PUBLIC
+    PLATFORM_OSX
+  )
+elseif(UNIX)
+  target_sources(valkyria PRIVATE
+    src/inet_unix.c
+  )
+  target_compile_definitions(valkyria PUBLIC
+    PLATFORM_UNIX
+  )
+else()
+  message(FATAL_ERROR "What the fuck is this operating system")
+endif()
 
 add_executable(valk
   "src/repl.c"
@@ -59,3 +79,4 @@ include_directories(test_networking src/)
 add_executable(test_concurrency test/test_concurrency.c test/testing.c)
 target_link_libraries(test_concurrency PRIVATE "-lc" valkyria)
 include_directories(test_concurrency src/)
+

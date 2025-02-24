@@ -1,5 +1,6 @@
 #pragma once
 
+#include "concurrency.h"
 #include <unistd.h>
 
 // Host TO Network Short
@@ -13,6 +14,8 @@
 /**/
 /* // Network TO Host Long */
 /* void ntohl(void); */
+
+void valk_socket_listen(valk_worker_pool* pool);
 
 void valk_server_demo(void);
 
