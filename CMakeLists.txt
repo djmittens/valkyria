@@ -22,6 +22,13 @@ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${SANITIZE_ADDRESS_F
 
 find_package(PkgConfig REQUIRED)
 
+
+set (ENABLE_LIB_ONLY on)
+set (ENABLE_DOC off)
+set (BUILD_TESTING off)
+set (ENABLE_THREADS off)
+add_subdirectory(vendor/nghttp2)
+
 pkg_check_modules(EDITLINE REQUIRED IMPORTED_TARGET libeditline)
 
 set(CMAKE_C_STANDARD  23) # LOL current year - 6 is gold
@@ -65,6 +72,7 @@ include_directories(valk
   # vendor/editline/include/
   ${EDITLINE_INCLUDE_DIRS}
 )
+
 # set_property(TARGET valkyria PROPERTY C_STANDARD 23)
 target_link_libraries(valk PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
 

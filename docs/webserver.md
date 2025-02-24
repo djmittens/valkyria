@@ -1,9 +1,8 @@
 - [ ] Webserver
     - [ ] Async IO
-        - [ ] Event loop
-        - [ ] Sockets
+        - [x] Event loop
+        - [x] Sockets
         - [ ] Files
-        - [ ] TCP Connections
         - [ ] GZip
     - [ ] Logging
     - [ ] Regex
@@ -31,3 +30,12 @@
 - [ ] Redis
 - [ ] OAuth
 - [ ] Websockets
+
+
+## Steps for hello world implmenetation
+- [ ] liburing files
+- [ ] liburing sockets
+- [ ] Submit request to a thread pool, echo 
+- [ ] nghttp 2 library request handler
+- [ ] Http webserver
+- [ ] kqueue

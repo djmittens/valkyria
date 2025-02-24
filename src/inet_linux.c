@@ -1,5 +1,6 @@
 #include "inet.h"
 
+#include "common.h"
 #include "collections.h"
 
 //  Network shit
@@ -13,6 +14,10 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
+// Http n shit
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <nghttp2/nghttp2.h>
 
 // std shit
 #include <errno.h>
@@ -20,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
 
 
 // get sockaddr, IPv4 or IPv6:
@@ -30,6 +36,25 @@ void *get_in_addr(struct sockaddr *sa) {
 
   return &(((struct sockaddr_in6 *)sa)->sin6_addr);
 }
+ 
+static int alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
+                                unsigned char *outlen, const unsigned char *in,
+                                unsigned int inlen, void *arg) {
+  UNUSED(ssl);
+  UNUSED(arg);
+
+  int rv;
+
+  rv = nghttp2_select_alpn(out, outlen, in, inlen);
+
+  if (rv != 1) {
+    return SSL_TLSEXT_ERR_NOACK;
+  }
+
+  return SSL_TLSEXT_ERR_OK;
+}
+
+
 
 void valk_server_demo(void) {
   int status, sockfd, connfd, epollfd;
