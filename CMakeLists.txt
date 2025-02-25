@@ -55,8 +55,9 @@ elseif(APPLE)
   )
 elseif(UNIX)
   target_sources(valkyria PRIVATE
-    src/inet_linux.c
+    src/inet_epoll.c
   )
+  target_link_libraries(valkyria PRIVATE "-luring" )
   target_compile_definitions(valkyria PUBLIC
     PLATFORM_UNIX
   )
