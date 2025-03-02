@@ -20,10 +20,15 @@ void valk_server_demo(void);
 char *valk_client_demo(const char *domain, const char *port);
 
 typedef struct valk_aio_system valk_aio_system;
+typedef struct valk_aio_socket valk_aio_socket;
+typedef void(valk_conn_callback)(valk_aio_system *, valk_aio_socket *);
 
 valk_aio_system *valk_aio_start(void);
 void valk_aio_stop(valk_aio_system *sys);
 
-valk_future *valk_read_file(const char *filename);
-valk_future *valk_aio_read_file(valk_aio_system *sys,
-                                const char *filename);
+valk_future *valk_aio_read_file(valk_aio_system *sys, const char *filename);
+
+valk_aio_socket *valk_aio_listen(valk_aio_system *sys, const char *host,
+                                 const char *port, valk_conn_callback *cb);
+
+void valk_aio_hangup(valk_aio_socket *socket);

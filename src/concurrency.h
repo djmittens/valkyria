@@ -185,3 +185,6 @@ valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box *arg,
                            valk_callback *func);
 void valk_drain_pool(valk_worker_pool *pool);
 void valk_free_pool(valk_worker_pool *pool);
+
+void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
+                               valk_arc_box *result);

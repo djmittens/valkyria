@@ -193,6 +193,7 @@ static void *valk_worker_routine(void *arg) {
         // only signal if we successfully popped, otherwise there was a
         // problem
         pthread_cond_signal(&queue->notFull);
+        printf("MMM yummy task!\n");
 
         // Ok now lets execute the task
 
@@ -344,4 +345,40 @@ valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box *arg,
 
   pthread_mutex_unlock(&pool->queue.mutex);
   return res;
+}
+
+typedef struct {
+  valk_promise *promise;
+  valk_arc_box *result;
+} __valk_resolve_promise;
+
+void __valk_resolve_promise_free(void *arg) {
+  __valk_resolve_promise *self = arg;
+  valk_promise_release(self->promise);
+  valk_arc_box_release(self->result);
+  free(self);
+}
+
+static valk_arc_box *__valk_pool_resolve_promise_cb(valk_arc_box *arg) {
+  if (arg->type != VALK_SUC) {
+    // cant resolve an error ??? why the heck did that even get in here
+    // TODO(networking): maybe turn this into a hard assert
+    fprintf(stderr, "ERROR: Invalid condition, could not resolve an error "
+                    "boxsed promise.\n");
+    return arg;
+  }
+  __valk_resolve_promise *a = arg->succ;
+  valk_promise_respond(a->promise, a->result);
+  return arg;
+}
+
+void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
+                               valk_arc_box *result) {
+  __valk_resolve_promise *pair = malloc(sizeof(__valk_resolve_promise));
+  pair->promise = promise;
+  pair->result = result;
+  valk_future *res =
+      valk_schedule(pool, valk_arc_box_suc(pair, __valk_resolve_promise_free),
+                    __valk_pool_resolve_promise_cb);
+  valk_future_release(res); // dont need the result
 }
