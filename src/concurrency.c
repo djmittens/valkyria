@@ -1,7 +1,7 @@
 #include "concurrency.h"
 #include "collections.h"
-#include <bits/pthreadtypes.h>
 #define _GNU_SOURCE
+#include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -89,6 +89,43 @@ valk_arc_box *valk_future_await(valk_future *future) {
   return res;
 }
 
+valk_arc_box *valk_future_await_timeout(valk_future *future, uint32_t msec) {
+  pthread_mutex_lock(&future->mutex);
+  if (!future->done) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    ts.tv_nsec += msec * 1000000;
+    if (ts.tv_nsec >= 1000000000) {
+      ts.tv_sec += ts.tv_nsec / 1000000000;
+      ts.tv_nsec = ts.tv_nsec % 1000000000;
+    }
+    int ret = pthread_cond_timedwait(&future->resolved, &future->mutex, &ts);
+    if (ret == ETIMEDOUT) {
+      char buf[1000];
+      sprintf(buf, "Timeout [%u ms] reached waiting for future", msec);
+      // TODO(networking): figure out error codes across the system for the
+      // language
+      pthread_mutex_unlock(&future->mutex);
+      valk_future_release(future);
+      return valk_arc_box_err(1, buf);
+    } else if (ret != 0) {
+      char buf[1000];
+      sprintf(buf, "Unexpected error during [pthread_cond_timedwait]: %s",
+              strerror(errno));
+      pthread_mutex_unlock(&future->mutex);
+      valk_future_release(future);
+      return valk_arc_box_err(1, buf);
+    }
+  }
+  valk_arc_box *res = future->item;
+  valk_arc_retain(res);
+
+  pthread_mutex_unlock(&future->mutex);
+  valk_future_release(future);
+  return res;
+}
+
 valk_promise *valk_promise_new(valk_future *future) {
   valk_promise *res = malloc(sizeof(valk_promise));
   res->item = future;
@@ -125,6 +162,7 @@ static void *valk_worker_routine(void *arg) {
   valk_task_queue *queue = self->queue;
 
   pthread_setname_np(pthread_self(), self->name);
+
   pthread_mutex_lock(&queue->mutex);
   queue->numWorkers++;
   // if queue became empty after the pop, signal that its now empty
@@ -187,8 +225,8 @@ int valk_start_pool(valk_worker_pool *pool) {
     snprintf(pool->items[i].name, len + 1, "Worker [%ld]", i);
 
     // Setting this attribute, makes it so you dont have to join the thread
-    // when you shut it down. Since we dont care about the result its simpler to do this
-    // and saves a bit of time at the end.
+    // when you shut it down. Since we dont care about the result its simpler to
+    // do this and saves a bit of time at the end.
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);

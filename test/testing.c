@@ -127,11 +127,11 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
       break;
     }
     case VALK_TEST_PASS:
-      printf("✅ %s%.*s  PASS : in %zu(%s)\n", test->name, len, DOT_FILL,
+      printf("✅ %s%.*s  PASS : in %lu(%s)\n", test->name, len, DOT_FILL,
              (result->stopTime - result->startTime), precision);
       break;
     case VALK_TEST_FAIL:
-      printf("🐞 %s%.*s  FAIL : in %zu(%s)\n", test->name, len, DOT_FILL,
+      printf("🐞 %s%.*s  FAIL : in %lu(%s)\n", test->name, len, DOT_FILL,
              (result->stopTime - result->startTime), precision);
       printf("ERROR: %s\n", result->error);
       break;

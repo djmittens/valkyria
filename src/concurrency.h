@@ -1,7 +1,9 @@
 #pragma once
-
+// TODO(networking): Abstract pthread away in here, only available on posix
+// system very inconsistent api across different systems too
 #define _GNU_SOURCE
 #include <pthread.h>
+#include <stdint.h>
 
 #define valk_work_init(queue, _capacity)                                       \
   do {                                                                         \
@@ -122,6 +124,7 @@ valk_future *valk_future_new(void);
 valk_future *valk_future_done(valk_arc_box *item);
 void valk_future_release(valk_future *future);
 valk_arc_box *valk_future_await(valk_future *future);
+valk_arc_box *valk_future_await_timeout(valk_future *future, uint32_t msec);
 
 typedef struct valk_promise {
   valk_future *item;
@@ -167,6 +170,7 @@ typedef struct valk_worker {
   valk_task_queue *queue;
   pthread_t thread;
 } valk_worker;
+
 typedef struct {
   // char *name;
   // Dynamic List
@@ -177,7 +181,7 @@ typedef struct {
 } valk_worker_pool;
 
 int valk_start_pool(valk_worker_pool *pool);
-valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box* arg,
+valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box *arg,
                            valk_callback *func);
 void valk_drain_pool(valk_worker_pool *pool);
 void valk_free_pool(valk_worker_pool *pool);

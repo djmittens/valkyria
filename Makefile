@@ -1,6 +1,6 @@
 UNAME := $(shell uname -s)
 ifeq ($(UNAME), Linux)
-	CMAKE= cmake -G Ninja -DASAN=0 -DCMAKE_BUILD_TYPE=Release -S . -B build ;
+	CMAKE= cmake -G Ninja -DASAN=0 -DCMAKE_BUILD_TYPE=Debug -S . -B build ;
 endif
 ifeq ($(UNAME), Darwin)
 	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DCMAKE_BUILD_TYPE=Debug -S . -B build;
@@ -36,7 +36,7 @@ clean:
 
 .PHONY: cppcheck
 cppcheck:
-	cppcheck --enable=all --inconclusive --quiet -I/usr/include src/ test/
+	cppcheck --enable=all --inconclusive --quiet src/ test/
 
 .PHONY: infer
 infer:
