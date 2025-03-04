@@ -132,6 +132,7 @@ typedef struct valk_promise {
 } valk_promise;
 
 typedef valk_arc_box *(valk_callback)(valk_arc_box *);
+typedef valk_future *(valk_callback_async)(valk_arc_box *);
 
 valk_promise *valk_promise_new(valk_future *future);
 void valk_promise_release(valk_promise *promise);
@@ -183,6 +184,7 @@ typedef struct {
 int valk_start_pool(valk_worker_pool *pool);
 valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box *arg,
                            valk_callback *func);
+
 void valk_drain_pool(valk_worker_pool *pool);
 void valk_free_pool(valk_worker_pool *pool);
 

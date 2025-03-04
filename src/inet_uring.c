@@ -3,16 +3,22 @@
 
 #include "common.h"
 
+#include <asm-generic/socket.h>
 #include <fcntl.h>
 #include <liburing.h>
+#include <liburing/io_uring.h>
 #include <linux/fs.h>
+#include <netdb.h>
+#include <netinet/in.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 typedef struct {
   off_t file_sz;
@@ -27,18 +33,16 @@ typedef enum {
   VALK_AIO_POISON
 } valk_aio_request_type;
 
-typedef struct valk_aio_request valk_aio_request;
-
 // typedef void(valk_aio_request_cb)(valk_aio_system *, valk_aio_request *);
 
-struct valk_aio_request {
+typedef struct valk_aio_request {
   valk_aio_request_type type;
   int fd; // File descriptor, socket or something
   off_t size;
   void *buffer;
   void *userData;
   valk_callback_void *freeUd;
-};
+} valk_aio_request;
 
 void valk_aio_request_free(void *arg) {
   valk_aio_request *self = arg;
@@ -75,7 +79,7 @@ char *valk_client_demo(const char *domain, const char *port) {
   return strdup("");
 }
 
-static off_t get_file_size(int fd) {
+static off_t __get_file_size(int fd) {
   struct stat st;
 
   if (fstat(fd, &st) < 0) {
@@ -100,6 +104,90 @@ static void __no_free(void *arg) { UNUSED(arg); }
 const int QUEUE_DEPTH = 10;
 const size_t BLOCK_SZ = 1024;
 
+typedef struct __conn_ctx {
+  int listenFd;
+  int connFd;
+  struct sockaddr_in addr;
+  socklen_t addrlen;
+  void *userData;
+  // initialized userData
+  valk_callback *onAccept;
+  // Uses userData
+  valk_callback *onReceive;
+  // Uses userData
+  valk_callback *onWrite;
+  // free's userData
+  valk_callback *onClose;
+} __conn_ctx;
+
+static void __accept_connection(valk_aio_system *sys, int sockFd,
+                                __conn_ctx *ctx) {
+
+  // TODO(networking): Need to put a mutex around io uring get_sqe operations
+  // multiple threads could collide in between creation and submission
+  struct io_uring_sqe *sqe = io_uring_get_sqe(&sys->uring);
+
+  ctx->listenFd = sockFd;
+  io_uring_prep_accept(sqe, sockFd, (struct sockaddr *)&ctx->addr,
+                       &ctx->addrlen, 0);
+
+  valk_aio_request *req = malloc(sizeof(*req));
+  req->type = VALK_AIO_ACCEPT;
+  req->userData = ctx;
+  req->freeUd = __no_free; // Context must not be cleaned up, direct leak should
+                           // be detected?
+
+  io_uring_sqe_set_data(sqe, valk_arc_box_suc(&req, free));
+  io_uring_submit(&sys->uring);
+}
+
+static int __socket_listen(const char *host, const char *port) {
+  int sock;
+
+  int status;
+  struct addrinfo hints = {};
+  struct addrinfo *servinfo; // result
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;
+
+  if ((status = getaddrinfo(host, port, &hints, &servinfo)) != 0) {
+    fprintf(stderr, "getaddrinfo error: %s \n", gai_strerror(status));
+    return -1;
+  }
+
+  if ((sock = socket(servinfo->ai_family, servinfo->ai_socktype,
+                     servinfo->ai_protocol)) == -1) {
+    fprintf(stderr, "socket() error: %s \n", strerror(errno));
+    return -1;
+  }
+
+  int enable = 1;
+
+  if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int))) {
+    // TODO(networking): should this function perhaps return a boxed result with
+    // error instead?
+    close(sock);
+    return -1;
+  }
+
+  // make calls non blocking?
+  // fcntl(sock, F_SETFL, O_NONBLOCK);
+
+  if (bind(sock, servinfo->ai_addr, servinfo->ai_addrlen) == -1) {
+    fprintf(stderr, "bind() error: %s \n", strerror(errno));
+    close(sock);
+    return -1;
+  }
+
+  if (listen(sock, 15) == -1) {
+    fprintf(stderr, "listen() error: %s \n", strerror(errno));
+    close(sock);
+    return -1;
+  }
+  return sock;
+}
+
 static void *__event_loop(void *arg) {
   valk_aio_system *sys = arg;
 
@@ -119,17 +207,47 @@ static void *__event_loop(void *arg) {
       return NULL;
     }
 
-    io_uring_cqe_get_data(cqe);
-
     valk_arc_box *box = io_uring_cqe_get_data(cqe);
     // TODO(networking): assert its a success
     valk_aio_request *req = box->succ;
     switch (req->type) {
     case VALK_AIO_READ:
     case VALK_AIO_WRITE:
+      // TODO(networking): figure out lifetimes here, probably should release
       valk_pool_resolve_promise(&sys->pool, req->userData, box);
       break;
     case VALK_AIO_ACCEPT:
+      __conn_ctx *ctx = req->userData;
+      // store the fd in the context
+      ctx->connFd = cqe->res;
+
+      // TODO(networking): maybe replace this with a copy constructor?
+      __conn_ctx *newCtx = malloc(sizeof(*newCtx));
+      memset(newCtx, 0, sizeof(*newCtx));
+
+      newCtx->onReceive = ctx->onReceive;
+      newCtx->onAccept = ctx->onAccept;
+      newCtx->onWrite = ctx->onWrite;
+      newCtx->onClose = ctx->onClose;
+
+      // schedule the next accept
+      __accept_connection(sys, req->fd, newCtx);
+
+      // repack the box, UNSAFE !!!
+      // TODO(networking): I should shallow clone  or something, but i need to
+      // unwrap the request inline
+      box->succ = ctx;
+
+      free(req); // want to free the request, but leave the UD out.. eg unwrap,
+                 // i should encapsulate this somehow
+
+      // trampoline the request
+      // TODO(networking): need to strip off internal datastructures before
+      // trampolinning perhaps ?
+      valk_future *fut = valk_schedule(&sys->pool, box, ctx->onAccept);
+      valk_future_release(fut); // toss the result
+
+      break;
     case VALK_AIO_HANGUP:
       break;
     case VALK_AIO_POISON:
@@ -203,7 +321,7 @@ valk_future *valk_aio_read_file(valk_aio_system *sys, const char *filename) {
   // release a dangling one so this retain should potentially turn into a
   // release (eg noop in this case because it returns it to the caller)
   valk_arc_retain(res);
-  req->size = get_file_size(fd);
+  req->size = __get_file_size(fd);
 
   printf("Allocating buffer for file, %s is %lu\n", filename, req->size);
   req->buffer = malloc(req->size);

@@ -28,7 +28,7 @@ void valk_aio_stop(valk_aio_system *sys);
 
 valk_future *valk_aio_read_file(valk_aio_system *sys, const char *filename);
 
-valk_aio_socket *valk_aio_listen(valk_aio_system *sys, const char *host,
+valk_arc_box *valk_aio_listen(valk_aio_system *sys, const char *host,
                                  const char *port, valk_conn_callback *cb);
 
 void valk_aio_hangup(valk_aio_socket *socket);
