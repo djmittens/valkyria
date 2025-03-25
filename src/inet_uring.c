@@ -1,7 +1,9 @@
 #include "concurrency.h"
 #include "inet.h"
 
+#include "collections.h"
 #include "common.h"
+#include "memory.h"
 
 #include <asm-generic/socket.h>
 #include <fcntl.h>
@@ -49,6 +51,10 @@ void valk_aio_request_free(void *arg) {
   close(self->fd);
   // free(self->buffer);
   self->freeUd(self->userData);
+
+  if(self->buffer) {
+    valk_mem_free(self->buffer);
+  }
   free(self);
 }
 
@@ -69,9 +75,10 @@ char *valk_client_demo(const char *domain, const char *port) {
 
   if (res->type == VALK_ERR) {
     fprintf(stderr, "Got an error back: %s\n", res->err.msg);
+
   } else {
-    valk_aio_request *req = res->succ;
-    printf("%s", (char *)req->buffer);
+    // valk_aio_request *req = res->succ;
+    printf("%s", (char *)res->succ);
   }
 
   valk_arc_box_release(res);
@@ -105,6 +112,7 @@ const int QUEUE_DEPTH = 10;
 const size_t BLOCK_SZ = 1024;
 
 typedef struct __conn_ctx {
+  int poolId;
   int listenFd;
   int connFd;
   struct sockaddr_in addr;
@@ -137,7 +145,7 @@ static void __accept_connection(valk_aio_system *sys, int sockFd,
   req->freeUd = __no_free; // Context must not be cleaned up, direct leak should
                            // be detected?
 
-  io_uring_sqe_set_data(sqe, valk_arc_box_suc(&req, free));
+  io_uring_sqe_set_data(sqe, req);
   io_uring_submit(&sys->uring);
 }
 
@@ -188,8 +196,20 @@ static int __socket_listen(const char *host, const char *port) {
   return sock;
 }
 
+typedef struct {
+  size_t numFree;
+  size_t capacity;
+  __conn_ctx *items;
+  size_t *free;
+} __connection_pool;
+
 static void *__event_loop(void *arg) {
   valk_aio_system *sys = arg;
+
+  // Use malloc for now
+  valk_mem_init_malloc();
+  __connection_pool conPool;
+  valk_pool_init(&conPool, 5);
 
   do {
 
@@ -207,16 +227,18 @@ static void *__event_loop(void *arg) {
       return NULL;
     }
 
-    valk_arc_box *box = io_uring_cqe_get_data(cqe);
-    // TODO(networking): assert its a success
-    valk_aio_request *req = box->succ;
+    valk_aio_request *req = io_uring_cqe_get_data(cqe);
     switch (req->type) {
     case VALK_AIO_READ:
-    case VALK_AIO_WRITE:
+    case VALK_AIO_WRITE: {
+      valk_arc_box *box = valk_arc_box_suc(req->buffer, free);
+      req->buffer = NULL;
       // TODO(networking): figure out lifetimes here, probably should release
       valk_pool_resolve_promise(&sys->pool, req->userData, box);
+      valk_aio_request_free(req);
       break;
-    case VALK_AIO_ACCEPT:
+    }
+    case VALK_AIO_ACCEPT: {
       __conn_ctx *ctx = req->userData;
       // store the fd in the context
       ctx->connFd = cqe->res;
@@ -233,10 +255,10 @@ static void *__event_loop(void *arg) {
       // schedule the next accept
       __accept_connection(sys, req->fd, newCtx);
 
+      valk_arc_box *box = valk_arc_box_suc(ctx, free);
       // repack the box, UNSAFE !!!
       // TODO(networking): I should shallow clone  or something, but i need to
       // unwrap the request inline
-      box->succ = ctx;
 
       free(req); // want to free the request, but leave the UD out.. eg unwrap,
                  // i should encapsulate this somehow
@@ -248,6 +270,7 @@ static void *__event_loop(void *arg) {
       valk_future_release(fut); // toss the result
 
       break;
+    }
     case VALK_AIO_HANGUP:
       break;
     case VALK_AIO_POISON:
@@ -291,7 +314,7 @@ void valk_aio_stop(valk_aio_system *sys) {
   io_uring_prep_nop(sqe);
   valk_aio_request req;
   req.type = VALK_AIO_POISON;
-  io_uring_sqe_set_data(sqe, valk_arc_box_suc(&req, __no_free));
+  io_uring_sqe_set_data(sqe, &req);
   io_uring_submit(&sys->uring);
   // Wait for it to exit
   void *ret;
@@ -309,6 +332,7 @@ valk_future *valk_aio_read_file(valk_aio_system *sys, const char *filename) {
     return valk_future_done(valk_arc_box_err(1, "Open had an oopsie"));
   }
 
+  // TODO(networking): this is not freed yet
   valk_aio_request *req = malloc(sizeof(valk_aio_request));
 
   req->type = VALK_AIO_READ;
@@ -328,7 +352,7 @@ valk_future *valk_aio_read_file(valk_aio_system *sys, const char *filename) {
 
   struct io_uring_sqe *sqe = io_uring_get_sqe(&sys->uring);
   io_uring_prep_read(sqe, fd, req->buffer, req->size, 0);
-  io_uring_sqe_set_data(sqe, valk_arc_box_suc(req, valk_aio_request_free));
+  io_uring_sqe_set_data(sqe, req);
   io_uring_submit(&sys->uring);
 
   return res;

@@ -380,5 +380,6 @@ void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
   valk_future *res =
       valk_schedule(pool, valk_arc_box_suc(pair, __valk_resolve_promise_free),
                     __valk_pool_resolve_promise_cb);
+  valk_arc_retain(promise);
   valk_future_release(res); // dont need the result
 }

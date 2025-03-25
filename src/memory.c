@@ -1,0 +1,40 @@
+#include "memory.h"
+#include "common.h"
+#include <stdlib.h>
+
+__thread valk_thread_context_t valk_thread_ctx = {0};
+
+static void *__valk_mem_malloc(void *heap, size_t bytes) {
+  UNUSED(heap);
+  return malloc(bytes);
+}
+
+static void __valk_mem_malloc_free(void *heap, void *ptr) {
+  UNUSED(heap);
+  free(ptr);
+}
+
+void valk_mem_init_malloc() {
+  valk_thread_ctx.allocType = VALK_ALLOC_MALLOC;
+  valk_thread_ctx.heap = NULL;
+  valk_thread_ctx.alloc = __valk_mem_malloc;
+  valk_thread_ctx.free = __valk_mem_malloc_free;
+}
+
+
+/// ARENA ALLOCATOR
+typedef struct {
+  size_t offset;
+  size_t capacity;
+  void* data;
+} valk_mem_arena_t;
+
+static void *__valk_mem_arena(void *heap, size_t bytes) {
+
+}
+
+static void __valk_mem_arena_free(void *heap, void *ptr) {
+  UNUSED(heap);
+  UNUSED(ptr);
+  // Frees are disabled for arenas
+}

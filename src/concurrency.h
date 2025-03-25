@@ -2,6 +2,7 @@
 // TODO(networking): Abstract pthread away in here, only available on posix
 // system very inconsistent api across different systems too
 #define _GNU_SOURCE
+#include "memory.h"
 #include <pthread.h>
 #include <stdint.h>
 

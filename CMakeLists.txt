@@ -40,6 +40,7 @@ endif()
 
 add_library(valkyria 
   src/parser.c
+  src/memory.c
   src/concurrency.c
 )
 

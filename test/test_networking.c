@@ -1,11 +1,12 @@
+#include "common.h"
+#include "memory.h"
 #include "parser.h"
 #include "testing.h"
-#include "common.h"
 
 #include <inet.h>
+#include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <stdlib.h>
 
 void test_demo_socket_server(VALK_TEST_ARGS()) {
   valk_lval_t *ast = VALK_FIXTURE("prelude");
@@ -46,13 +47,31 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   free(response);
 }
 
+int get_ctx() { return (int)valk_thread_ctx.heap; }
+
+void test_implicit_arena_alloc(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_thread_ctx.heap = (void *)6969;
+  valk_thread_context_t ctx = {.heap = (void *)-1};
+  VALK_WITH_CTX(ctx) {
+    // The function gets context we set
+    VALK_ASSERT(get_ctx() == -1, "expected some stuff %d", (int)get_ctx());
+  }
+  // VALK_WITH_CTX reset the context back to original
+  VALK_ASSERT(get_ctx() == 6969, "expected some stuff %d", (int)get_ctx());
+  VALK_PASS();
+}
+
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
 
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
-  valk_testsuite_add_test(suite, "test_demo_socket_server", test_demo_socket_server);
+  valk_testsuite_add_test(suite, "test_demo_socket_server",
+                          test_demo_socket_server);
+  valk_testsuite_add_test(suite, "test_implicit_arena_alloc",
+                          test_implicit_arena_alloc);
 
   // load fixtures
   valk_lval_t *ast = valk_parse_file("src/prelude.valk");
