@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdint.h>
 #include <stdio.h>
 
 #define VALK_WITH_CTX(_ctx_)                                                   \
@@ -10,6 +11,15 @@
        __ctx.exec; valk_thread_ctx = __ctx.old_ctx)                            \
     for (valk_thread_ctx = (_ctx_); __ctx.exec; __ctx.exec = 0)
 
+
+typedef struct {
+  size_t capacity;
+  size_t count;
+  void *items;
+} valk_buffer_t;
+
+void valk_alloc_buffer(valk_buffer_t *buf, size_t capacity);
+
 typedef enum {
   VALK_ALLOC_MALLOC,
   VALK_ALLOC_ARENA,
@@ -17,6 +27,7 @@ typedef enum {
 
 typedef struct {
   valk_mem_allocator_e allocType;
+  // TODO(networking): use valk_buffer_t for this 
   void *heap;
   void *(*alloc)(void *heap, size_t bytes);
   void (*free)(void *heap, void *ptr);

@@ -66,6 +66,10 @@ int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
 
+  // Use malloc for now, by default
+  // probably should think of how to add this by default everywhere
+  valk_mem_init_malloc();
+
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
   valk_testsuite_add_test(suite, "test_demo_socket_server",

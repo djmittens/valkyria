@@ -40,10 +40,9 @@ typedef enum {
 typedef struct valk_aio_request {
   valk_aio_request_type type;
   int fd; // File descriptor, socket or something
-  off_t size;
-  void *buffer;
   void *userData;
   valk_callback_void *freeUd;
+  valk_buffer_t buffer;
 } valk_aio_request;
 
 void valk_aio_request_free(void *arg) {
@@ -52,10 +51,10 @@ void valk_aio_request_free(void *arg) {
   // free(self->buffer);
   self->freeUd(self->userData);
 
-  if(self->buffer) {
-    valk_mem_free(self->buffer);
+  if (self->buffer.items) {
+    valk_mem_free(self->buffer.items);
   }
-  free(self);
+  valk_mem_free(self);
 }
 
 struct valk_aio_system {
@@ -63,28 +62,6 @@ struct valk_aio_system {
   valk_worker_pool pool;
   pthread_t eventloop;
 };
-
-void valk_server_demo(void) {}
-
-char *valk_client_demo(const char *domain, const char *port) {
-  // valk_read_file("Makefile");
-
-  valk_aio_system *aio = valk_aio_start();
-  valk_future *fres = valk_aio_read_file(aio, "Makefile");
-  valk_arc_box *res = valk_future_await_timeout(fres, 5000); // wait for 5 secs
-
-  if (res->type == VALK_ERR) {
-    fprintf(stderr, "Got an error back: %s\n", res->err.msg);
-
-  } else {
-    // valk_aio_request *req = res->succ;
-    printf("%s", (char *)res->succ);
-  }
-
-  valk_arc_box_release(res);
-  valk_aio_stop(aio);
-  return strdup("");
-}
 
 static off_t __get_file_size(int fd) {
   struct stat st;
@@ -112,7 +89,6 @@ const int QUEUE_DEPTH = 10;
 const size_t BLOCK_SZ = 1024;
 
 typedef struct __conn_ctx {
-  int poolId;
   int listenFd;
   int connFd;
   struct sockaddr_in addr;
@@ -139,7 +115,7 @@ static void __accept_connection(valk_aio_system *sys, int sockFd,
   io_uring_prep_accept(sqe, sockFd, (struct sockaddr *)&ctx->addr,
                        &ctx->addrlen, 0);
 
-  valk_aio_request *req = malloc(sizeof(*req));
+  valk_aio_request *req = valk_mem_alloc(sizeof(*req));
   req->type = VALK_AIO_ACCEPT;
   req->userData = ctx;
   req->freeUd = __no_free; // Context must not be cleaned up, direct leak should
@@ -231,8 +207,10 @@ static void *__event_loop(void *arg) {
     switch (req->type) {
     case VALK_AIO_READ:
     case VALK_AIO_WRITE: {
-      valk_arc_box *box = valk_arc_box_suc(req->buffer, free);
-      req->buffer = NULL;
+      // TODO(networking): So this free should be using same context as it was
+      // created in
+      valk_arc_box *box = valk_arc_box_suc(req->buffer.items, valk_mem_free);
+      req->buffer.items = NULL;
       // TODO(networking): figure out lifetimes here, probably should release
       valk_pool_resolve_promise(&sys->pool, req->userData, box);
       valk_aio_request_free(req);
@@ -324,7 +302,6 @@ void valk_aio_stop(valk_aio_system *sys) {
 }
 
 valk_future *valk_aio_read_file(valk_aio_system *sys, const char *filename) {
-  valk_future *res = valk_future_new();
 
   int fd = open(filename, O_RDONLY);
   if (fd < 0) {
@@ -332,28 +309,58 @@ valk_future *valk_aio_read_file(valk_aio_system *sys, const char *filename) {
     return valk_future_done(valk_arc_box_err(1, "Open had an oopsie"));
   }
 
-  // TODO(networking): this is not freed yet
-  valk_aio_request *req = malloc(sizeof(valk_aio_request));
-
-  req->type = VALK_AIO_READ;
-  req->userData = valk_promise_new(res);
-  req->freeUd = (valk_callback_void *)valk_promise_release;
-
+  valk_future *res = valk_future_new();
   // TODO(networking): need to establish a rule that :
   // if something plans to own a reference, eg promise, it must retain
   // internally if something is planning to only forward the reference, it must
   // release a dangling one so this retain should potentially turn into a
   // release (eg noop in this case because it returns it to the caller)
   valk_arc_retain(res);
-  req->size = __get_file_size(fd);
 
-  printf("Allocating buffer for file, %s is %lu\n", filename, req->size);
-  req->buffer = malloc(req->size);
+  // TODO(networking): this is not freed yet
+  valk_aio_request *req = valk_mem_alloc(sizeof(valk_aio_request));
+
+  req->type = VALK_AIO_READ;
+  req->userData = valk_promise_new(res);
+  req->freeUd = (valk_callback_void *)valk_promise_release;
+
+  valk_alloc_buffer(&req->buffer, __get_file_size(fd));
+
+  printf("Allocated buffer for file, %s is %lu\n", filename,
+         req->buffer.capacity);
 
   struct io_uring_sqe *sqe = io_uring_get_sqe(&sys->uring);
-  io_uring_prep_read(sqe, fd, req->buffer, req->size, 0);
+  io_uring_prep_read(sqe, fd, req->buffer.items, req->buffer.capacity, 0);
   io_uring_sqe_set_data(sqe, req);
   io_uring_submit(&sys->uring);
 
   return res;
+}
+
+void valk_server_demo(void) {
+  valk_aio_system *aio = valk_aio_start();
+  int sfd = __socket_listen("", "6969");
+  __conn_ctx *ctx = valk_mem_alloc(sizeof(__conn_ctx));
+  __accept_connection(aio, sfd, ctx);
+  valk_aio_stop(aio);
+}
+
+char *valk_client_demo(const char *domain, const char *port) {
+  // valk_read_file("Makefile");
+
+  valk_aio_system *aio = valk_aio_start();
+  valk_future *fres = valk_aio_read_file(aio, "Makefile");
+  valk_arc_box *res = valk_future_await_timeout(fres, 5000); // wait for 5 secs
+
+  if (res->type == VALK_ERR) {
+    fprintf(stderr, "Got an error back: %s\n", res->err.msg);
+
+  } else {
+    // valk_aio_request *req = res->succ;
+    printf("%s", (char *)res->succ);
+  }
+
+  valk_arc_box_release(res);
+  valk_aio_stop(aio);
+  return strdup("");
 }

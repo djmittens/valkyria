@@ -21,20 +21,24 @@ void valk_mem_init_malloc() {
   valk_thread_ctx.free = __valk_mem_malloc_free;
 }
 
-
 /// ARENA ALLOCATOR
 typedef struct {
   size_t offset;
   size_t capacity;
-  void* data;
+  void *data;
 } valk_mem_arena_t;
 
-static void *__valk_mem_arena(void *heap, size_t bytes) {
-
-}
+static void *__valk_mem_arena(void *heap, size_t bytes) {}
 
 static void __valk_mem_arena_free(void *heap, void *ptr) {
   UNUSED(heap);
   UNUSED(ptr);
   // Frees are disabled for arenas
+}
+
+void valk_alloc_buffer(valk_buffer_t *buf, size_t capacity) {
+  buf->capacity = capacity;
+  buf->count = 0;
+  // TODO(networking): use mmap with page aligned shit for this instead
+  buf->items = valk_mem_alloc(capacity);
 }

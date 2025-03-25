@@ -157,6 +157,10 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
 }
 
 static void *valk_worker_routine(void *arg) {
+  // Use malloc for now, by default
+  // probably should think of how to add this by default everywhere
+  valk_mem_init_malloc();
+
   valk_worker *self = arg;
   printf("Starting Thread : %s\n", self->name);
   valk_task_queue *queue = self->queue;
