@@ -57,7 +57,8 @@ elseif(APPLE)
 elseif(UNIX)
   target_sources(valkyria PRIVATE
     # src/inet_epoll.c
-    src/inet_uring.c
+    # TODO(networking): need to detect if the platform supports uring, otherwise we use libuv
+    src/aio_uv.c
   )
   target_link_libraries(valkyria PRIVATE "-luring" )
   target_compile_definitions(valkyria PUBLIC

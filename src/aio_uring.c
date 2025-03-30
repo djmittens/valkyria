@@ -22,6 +22,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <nghttp2/nghttp2.h>
 typedef struct {
   off_t file_sz;
   struct iovec iovecs[];
@@ -94,14 +95,6 @@ typedef struct __conn_ctx {
   struct sockaddr_in addr;
   socklen_t addrlen;
   void *userData;
-  // initialized userData
-  valk_callback *onAccept;
-  // Uses userData
-  valk_callback *onReceive;
-  // Uses userData
-  valk_callback *onWrite;
-  // free's userData
-  valk_callback *onClose;
 } __conn_ctx;
 
 static void __accept_connection(valk_aio_system *sys, int sockFd,
@@ -225,11 +218,6 @@ static void *__event_loop(void *arg) {
       __conn_ctx *newCtx = malloc(sizeof(*newCtx));
       memset(newCtx, 0, sizeof(*newCtx));
 
-      newCtx->onReceive = ctx->onReceive;
-      newCtx->onAccept = ctx->onAccept;
-      newCtx->onWrite = ctx->onWrite;
-      newCtx->onClose = ctx->onClose;
-
       // schedule the next accept
       __accept_connection(sys, req->fd, newCtx);
 
@@ -244,8 +232,8 @@ static void *__event_loop(void *arg) {
       // trampoline the request
       // TODO(networking): need to strip off internal datastructures before
       // trampolinning perhaps ?
-      valk_future *fut = valk_schedule(&sys->pool, box, ctx->onAccept);
-      valk_future_release(fut); // toss the result
+      // valk_future *fut = valk_schedule(&sys->pool, box, ctx->onAccept);
+      // valk_future_release(fut); // toss the result
 
       break;
     }
@@ -340,6 +328,9 @@ valk_future *valk_aio_read_file(valk_aio_system *sys, const char *filename) {
 void valk_server_demo(void) {
   valk_aio_system *aio = valk_aio_start();
   int sfd = __socket_listen("", "6969");
+
+  nghttp2_session_del *session_data;
+
   __conn_ctx *ctx = valk_mem_alloc(sizeof(__conn_ctx));
   __accept_connection(aio, sfd, ctx);
   valk_aio_stop(aio);

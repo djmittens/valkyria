@@ -2,8 +2,8 @@
 #include "memory.h"
 #include "parser.h"
 #include "testing.h"
+#include "aio.h"
 
-#include <inet.h>
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
