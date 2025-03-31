@@ -150,24 +150,42 @@ static ssize_t __http_send_callback(nghttp2_session *session,
 
   return (ssize_t)length;
 }
+static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
+                                         int32_t stream_id, uint8_t *buf,
+                                         size_t length, uint32_t *data_flags,
+                                         nghttp2_data_source *source,
+                                         void *user_data) {
+  memcpy(buf, source->ptr, strlen(source->ptr));
+  return length;
+}
 
 static int __demo_response(nghttp2_session *session, int stream_id) {
 
   printf("WE ARE sending a response ??\n");
   /* Prepare some pseudo-headers: */
   const nghttp2_nv response_headers[] = {
-      MAKE_NV2(":status", "200"), MAKE_NV2("content-type", "text/plain")};
+      MAKE_NV2(":status", "200"),
+      MAKE_NV2("content-type", "text/plain"),
+      //MAKE_NV2("fuckyou", "this is something else aint it"),
+  };
 
   /* Send HEADERS frame */
-  nghttp2_submit_headers(
-      session, NGHTTP2_FLAG_END_HEADERS, stream_id, NULL, response_headers,
-      sizeof(response_headers) / sizeof(response_headers[0]), NULL);
+  /* nghttp2_submit_headers( */
+  /*     session, NGHTTP2_FLAG_END_HEADERS, stream_id, NULL, response_headers, */
+  /*     sizeof(response_headers) / sizeof(response_headers[0]), NULL); */
 
   /* Send DATA frame */
-  const char *body = "Hello HTTP/2 from libuv + nghttp2\n";
+  char *body = "Hello HTTP/2 from libuv + nghttp2\n";
+  nghttp2_data_provider2 data_prd;
+  data_prd.source.ptr = body;
+  data_prd.read_callback = __http_byte_body_cb;
 
-  return nghttp2_submit_push_promise(session, 0, stream_id, response_headers, 2,
-                                     (void *)body);
+  /* return nghttp2_submit_push_promise(session, 0, stream_id, response_headers,
+   * 2, */
+  /*                                    (void *)body); */
+  return nghttp2_submit_response2(
+      session, stream_id, response_headers,
+      sizeof(response_headers) / sizeof(response_headers[0]), &data_prd);
 }
 
 /* Called when a frame is fully received. For a request, we might respond here.
