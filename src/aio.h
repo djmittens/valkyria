@@ -22,7 +22,9 @@ char *valk_client_demo(const char *domain, const char *port);
 typedef struct valk_aio_system valk_aio_system;
 typedef struct valk_aio_socket valk_aio_socket;
 
-valk_aio_system *valk_aio_start(void);
+typedef struct valk_aio_http_server valk_aio_http_server;
+
+void valk_aio_start(valk_aio_system *sys);
 void valk_aio_stop(valk_aio_system *sys);
 
 valk_future *valk_aio_read_file(valk_aio_system *sys, const char *filename);
@@ -35,7 +37,7 @@ typedef struct {
   char *body;
 } valk_http_response_t;
 
-valk_arc_box *valk_aio_http_listen(valk_aio_system *sys, const char *host,
-                                   const char *port);
+void valk_aio_http_listen(valk_aio_http_server *srv, valk_aio_system *sys,
+                          const char *interface, const int port);
 
 void valk_aio_hangup(valk_aio_socket *socket);

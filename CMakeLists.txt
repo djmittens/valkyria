@@ -60,7 +60,7 @@ elseif(UNIX)
     # TODO(networking): need to detect if the platform supports uring, otherwise we use libuv
     src/aio_uv.c
   )
-  target_link_libraries(valkyria PRIVATE "-luring" )
+  target_link_libraries(valkyria PRIVATE "-luv" )
   target_compile_definitions(valkyria PUBLIC
     PLATFORM_UNIX
   )
@@ -77,6 +77,7 @@ include_directories(valk
   ${EDITLINE_INCLUDE_DIRS}
 )
 
+target_link_libraries(valkyria PRIVATE nghttp2::nghttp2 )
 # set_property(TARGET valkyria PROPERTY C_STANDARD 23)
 target_link_libraries(valk PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
 
