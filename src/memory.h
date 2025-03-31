@@ -40,6 +40,7 @@ static inline void *valk_mem_alloc(size_t bytes) {
 }
 
 static inline void valk_mem_free(void *ptr) {
+  printf("Freeing %p\n", ptr);
   valk_thread_ctx.free(valk_thread_ctx.heap, ptr);
 }
 

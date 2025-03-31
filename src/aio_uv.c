@@ -120,7 +120,13 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
   }
   return 0;
 }
-
+static void __http_tcp_on_write_cb(uv_write_t *handle, int status) {
+  if (status) {
+    fprintf(stderr, "On Write error: %s \n", uv_strerror(status));
+  }
+  printf("Sent out some shizz\n");
+  // valk_mem_free(handle);
+}
 /*
  * Called whenever nghttp2 wants to send data to the peer.
  * We'll buffer that data in client->send_buf, then schedule a uv_write.
@@ -130,6 +136,9 @@ static ssize_t __http_send_callback(nghttp2_session *session,
                                     int flags, void *user_data) {
   struct valk_aio_http_conn *client = (struct valk_aio_http_conn *)user_data;
 
+  printf("Sending some shit\n");
+  // TODO(networking): this is very sussy, if we dont have enough space, should
+  // probably do something else like EWOULDBLOCK
   /* Grow our send buffer and copy data in. */
   size_t old_len = client->send_buf.len;
   client->send_buf.base = realloc(client->send_buf.base, old_len + length);
@@ -137,11 +146,14 @@ static ssize_t __http_send_callback(nghttp2_session *session,
   memcpy(client->send_buf.base + old_len, data, length);
   client->send_buf.len += length;
 
+  printf("Sending some shit %ld %ld\n", old_len, length);
+
   return (ssize_t)length;
 }
 
 static int __demo_response(nghttp2_session *session, int stream_id) {
 
+  printf("WE ARE sending a response ??\n");
   /* Prepare some pseudo-headers: */
   const nghttp2_nv response_headers[] = {
       MAKE_NV2(":status", "200"), MAKE_NV2("content-type", "text/plain")};
@@ -163,11 +175,24 @@ static int __demo_response(nghttp2_session *session, int stream_id) {
 static int __http_on_frame_recv_callback(nghttp2_session *session,
                                          const nghttp2_frame *frame,
                                          void *user_data) {
+  struct valk_aio_http_conn *client = (struct valk_aio_http_conn *)user_data;
+
   if (frame->hd.type == NGHTTP2_HEADERS &&
       frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
     /* Example: respond with a small HEADERS + DATA for "Hello HTTP/2" */
     int stream_id = frame->hd.stream_id;
     __demo_response(session, stream_id);
+    if (nghttp2_session_send(session) < 0) {
+      fprintf(stderr, "nghttp2_session_send error\n");
+      // uv_close((uv_handle_t *)&client->handle, NULL);
+      return 0;
+    }
+
+    uv_write_t *req = malloc(sizeof(uv_write_t));
+    uv_write(req, (uv_stream_t *)&client->handle, &client->send_buf, 1,
+             __http_tcp_on_write_cb);
+  } else {
+    printf("Not sending a response ??\n");
   }
 
   return 0;
@@ -175,23 +200,29 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
 
 static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
                                const uv_buf_t *buf) {
+
   struct valk_aio_http_conn *client = (struct valk_aio_http_conn *)stream->data;
+
   if (nread < 0) {
     // Error or EOF
     if (nread != UV_EOF) {
       fprintf(stderr, "Read error: %s\n", uv_strerror((int)nread));
+    } else {
+      printf("EOF infact\n");
     }
     uv_close((uv_handle_t *)stream, NULL);
-    valk_mem_free(buf->base);
+    // valk_mem_free(buf->base);
     return;
   }
+
+  printf("Feeding data to http %ld\n", nread);
   // Feed data to nghttp2
   ssize_t rv = nghttp2_session_mem_recv2(client->session,
-                                        (const uint8_t *)buf->base, nread);
+                                         (const uint8_t *)buf->base, nread);
   if (rv < 0) {
     fprintf(stderr, "nghttp2_session_mem_recv error: %zd\n", rv);
     uv_close((uv_handle_t *)stream, NULL);
-    valk_mem_free(buf->base);
+    // valk_mem_free(buf->base);
     return;
   }
 }
@@ -252,8 +283,8 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
     static nghttp2_session_callbacks *callbacks = NULL;
     if (!callbacks) {
       nghttp2_session_callbacks_new(&callbacks);
-      nghttp2_session_callbacks_set_send_callback(callbacks,
-                                                  __http_send_callback);
+      nghttp2_session_callbacks_set_send_callback2(callbacks,
+                                                   __http_send_callback);
       nghttp2_session_callbacks_set_on_begin_headers_callback(
           callbacks, __http_on_begin_headers_callback);
       nghttp2_session_callbacks_set_on_header_callback(
