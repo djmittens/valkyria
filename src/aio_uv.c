@@ -21,7 +21,11 @@
   }
 
 void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
-                      uv_buf_t *buf) {}
+                      uv_buf_t *buf) {
+  // TODO(networking): replace it with memory arena for the request
+  buf->base = valk_mem_alloc(suggested_size);
+  buf->len = suggested_size;
+}
 
 struct valk_aio_task {
   valk_arc_box *arg;
@@ -55,6 +59,7 @@ struct valk_aio_http_conn {
 
 static void __event_loop(void *arg) {
   valk_aio_system *sys = arg;
+  valk_mem_init_malloc();
   uv_run(sys->eventloop, UV_RUN_DEFAULT);
 }
 
@@ -181,7 +186,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     return;
   }
   // Feed data to nghttp2
-  ssize_t rv = nghttp2_session_mem_recv(client->session,
+  ssize_t rv = nghttp2_session_mem_recv2(client->session,
                                         (const uint8_t *)buf->base, nread);
   if (rv < 0) {
     fprintf(stderr, "nghttp2_session_mem_recv error: %zd\n", rv);
@@ -212,13 +217,38 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
 
     return;
   }
-  printf("Accepting new connection \n");
   struct valk_aio_http_conn *conn =
       valk_mem_alloc(sizeof(struct valk_aio_http_conn));
   uv_tcp_init(server->loop, &conn->handle);
   conn->handle.data = conn;
   int res = uv_accept(server, (uv_stream_t *)&conn->handle);
-  if (res) {
+
+  if (!res) {
+    // Get the client IP address
+    struct sockaddr_storage client_addr;
+    int addr_len = sizeof(client_addr);
+
+    if (uv_tcp_getpeername(&conn->handle, (struct sockaddr *)&client_addr,
+                           &addr_len) == 0) {
+      char ip[INET6_ADDRSTRLEN];
+      memset(ip, 0, sizeof(ip));
+      uint16_t port = 0;
+      if (client_addr.ss_family == AF_INET) {
+        // IPv4
+        struct sockaddr_in *addr4 = (struct sockaddr_in *)&client_addr;
+        uv_ip4_name(addr4, ip, sizeof(ip));
+        port = ntohs(addr4->sin_port);
+      } else if (client_addr.ss_family == AF_INET6) {
+        // IPv6
+        struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&client_addr;
+        uv_ip6_name(addr6, ip, sizeof(ip));
+        port = ntohs(addr6->sin6_port);
+      }
+
+      printf("Accepted connection from IP: %s:%d\n", ip, port);
+    } else {
+      fprintf(stderr, "Could not get peer name\n");
+    }
     static nghttp2_session_callbacks *callbacks = NULL;
     if (!callbacks) {
       nghttp2_session_callbacks_new(&callbacks);
@@ -236,18 +266,17 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
 
     // Send settings to the client
     __http_send_server_connection_header(conn->session);
+
     uv_read_start((uv_stream_t *)&conn->handle, __alloc_callback,
                   __http_tcp_read_cb);
   } else {
+    fprintf(stderr, "Fuck closing %s\n", uv_strerror(res));
     uv_close((uv_handle_t *)&conn->handle, NULL);
     valk_mem_free(conn);
   }
 }
 
-static void __http_not_listencb(uv_work_t *req) {
-  printf("Not listeing duuuh \n");
-}
-static void __http_listen_cb(valk_arc_box* box) {
+static void __http_listen_cb(valk_arc_box *box) {
   int r;
   struct sockaddr_in addr;
   valk_aio_http_server *srv = box->succ;
