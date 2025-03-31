@@ -41,7 +41,7 @@ cppcheck:
 
 .PHONY: infer
 infer:
-	docker run -v "$PWD:/mnt" -w "/mnt/build" --rm -it ghcr.io/facebook/infer:latest infer -- ninja
+	docker run -v "$(PWD):/mnt" -w "/mnt/build" --rm -it ghcr.io/facebook/infer:latest infer -- ninja
 
 .PHONY: repl
 repl: build/.stamp
