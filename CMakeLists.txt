@@ -25,8 +25,14 @@ find_package(PkgConfig REQUIRED)
 
 set (ENABLE_LIB_ONLY on)
 set (ENABLE_DOC off)
+set (ENABLE_FAILMALLOC OFF)
 set (BUILD_TESTING off)
 set (ENABLE_THREADS off)
+set (WITH_JEMALLOC off)
+set (WITH_MRUBY off)
+set (WITH_NEVERBLEED off)
+set (WITH_LIBBPF off)
+set (WITH_WOLFSSL off)
 add_subdirectory(vendor/nghttp2)
 
 pkg_check_modules(EDITLINE REQUIRED IMPORTED_TARGET libeditline)
@@ -44,29 +50,21 @@ add_library(valkyria
   src/concurrency.c
 )
 
-if(WIN32)
-  message(FATAL_ERROR "Windows is not supported for networking yet")
-  target_compile_definitions(valkyria PUBLIC
-    PLATFORM_WINDOWS
-  )
-elseif(APPLE)
-  message(FATAL_ERROR "OSX is not supported for networking yet")
-  target_compile_definitions(valkyria PUBLIC
-    PLATFORM_OSX
-  )
-elseif(UNIX)
-  target_sources(valkyria PRIVATE
-    # src/inet_epoll.c
-    # TODO(networking): need to detect if the platform supports uring, otherwise we use libuv
-    src/aio_uv.c
-  )
-  target_link_libraries(valkyria PRIVATE "-luv" )
-  target_compile_definitions(valkyria PUBLIC
-    PLATFORM_UNIX
-  )
-else()
-  message(FATAL_ERROR "What the fuck is this operating system")
-endif()
+
+# link_directories(valkyria ${LIBUV_LIBRARY_DIRS})
+
+
+find_path(LIBUV_INCLUDE_DIR NAMES uv.h)
+find_library(LIBUV_LIBRARIES NAMES uv libuv)
+target_include_directories(valkyria PRIVATE ${LIBUV_INCLUDE_DIRS})
+target_link_libraries(valkyria PRIVATE ${LIBUV_LIBRARIES} )
+
+
+# TODO(networking): if should detect uring and if we have it we can get it here instead of libuv.
+target_sources(valkyria PRIVATE
+  # TODO(networking): need to detect if the platform supports uring, otherwise we use libuv
+  src/aio_uv.c
+)
 
 add_executable(valk
   "src/repl.c"

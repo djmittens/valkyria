@@ -165,7 +165,7 @@ static void *valk_worker_routine(void *arg) {
   printf("Starting Thread : %s\n", self->name);
   valk_task_queue *queue = self->queue;
 
-  pthread_setname_np(pthread_self(), self->name);
+  // pthread_setname_np(pthread_self(), self->name);
 
   pthread_mutex_lock(&queue->mutex);
   queue->numWorkers++;
