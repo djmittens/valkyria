@@ -8,6 +8,8 @@
 #include <uv.h>
 #include <uv/unix.h>
 
+#define HTTP2_MAX_SEND_BYTES 2048
+
 #define MAKE_NV(NAME, VALUE, VALUELEN)                                         \
   {                                                                            \
     (uint8_t *)NAME, (uint8_t *)VALUE, sizeof(NAME) - 1, VALUELEN,             \
@@ -54,6 +56,7 @@ struct valk_aio_http_conn {
   uv_tcp_t handle;
   nghttp2_session *session;
   uv_buf_t send_buf;
+  size_t send_capacity;
   int closed;
 };
 
@@ -121,10 +124,32 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
   return 0;
 }
 static void __http_tcp_on_write_cb(uv_write_t *handle, int status) {
+  struct valk_aio_http_conn *client = (struct valk_aio_http_conn *)handle->data;
+  fflush(stdout);
+  printf("Receiving on write CB\n");
   if (status) {
     fprintf(stderr, "On Write error: %s \n", uv_strerror(status));
+  } else {
+
+    const uint8_t *data;
+    int len = nghttp2_session_mem_send2(client->session, &data);
+    if (len < 0) {
+      printf("ERR: writing shit %s", nghttp2_strerror(len));
+    } else if (len) {
+      client->send_buf.base = (char *)data;
+      client->send_buf.len = len;
+
+      printf("Sent out some shizz %d\n", len);
+      // Got some shit to send
+      uv_write_t *req = malloc(sizeof(uv_write_t));
+      req->data = client;
+      uv_write(req, (uv_stream_t *)&client->handle, &client->send_buf, 1,
+               __http_tcp_on_write_cb);
+    } else {
+      printf("Found no data to send Skipping CB\n");
+    }
   }
-  printf("Sent out some shizz\n");
+
   // valk_mem_free(handle);
 }
 /*
@@ -155,8 +180,8 @@ static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
                                          size_t length, uint32_t *data_flags,
                                          nghttp2_data_source *source,
                                          void *user_data) {
-  memcpy(buf, source->ptr, strlen(source->ptr));
-  return length;
+  memcpy(buf, source->ptr, strlen(source->ptr) + 1);
+  return strlen(source->ptr) + 1;
 }
 
 static int __demo_response(nghttp2_session *session, int stream_id) {
@@ -164,20 +189,19 @@ static int __demo_response(nghttp2_session *session, int stream_id) {
   printf("WE ARE sending a response ??\n");
   /* Prepare some pseudo-headers: */
   const nghttp2_nv response_headers[] = {
-      MAKE_NV2(":status", "200"),
-      MAKE_NV2("content-type", "text/plain"),
-      //MAKE_NV2("fuckyou", "this is something else aint it"),
+      MAKE_NV2(":status", "200"), MAKE_NV2("content-type", "text/plain"),
+      // MAKE_NV2("fuckyou", "this is something else aint it"),
   };
 
   /* Send HEADERS frame */
   /* nghttp2_submit_headers( */
-  /*     session, NGHTTP2_FLAG_END_HEADERS, stream_id, NULL, response_headers, */
+  /*     session, NGHTTP2_FLAG_END_HEADERS, stream_id, NULL, response_headers,
+   */
   /*     sizeof(response_headers) / sizeof(response_headers[0]), NULL); */
 
   /* Send DATA frame */
-  char *body = "Hello HTTP/2 from libuv + nghttp2\n";
   nghttp2_data_provider2 data_prd;
-  data_prd.source.ptr = body;
+  data_prd.source.ptr = "Hello HTTP/2 from libuv + nghttp2\n";
   data_prd.read_callback = __http_byte_body_cb;
 
   /* return nghttp2_submit_push_promise(session, 0, stream_id, response_headers,
@@ -200,15 +224,15 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
     /* Example: respond with a small HEADERS + DATA for "Hello HTTP/2" */
     int stream_id = frame->hd.stream_id;
     __demo_response(session, stream_id);
-    if (nghttp2_session_send(session) < 0) {
-      fprintf(stderr, "nghttp2_session_send error\n");
-      // uv_close((uv_handle_t *)&client->handle, NULL);
-      return 0;
-    }
 
-    uv_write_t *req = malloc(sizeof(uv_write_t));
-    uv_write(req, (uv_stream_t *)&client->handle, &client->send_buf, 1,
-             __http_tcp_on_write_cb);
+    /* if (nghttp2_session_send(session) < 0) { */
+    /*   fprintf(stderr, "nghttp2_session_send error\n"); */
+    /*   // uv_close((uv_handle_t *)&client->handle, NULL); */
+    /*   return 0; */
+    /* } */
+    /* uv_write_t *req = malloc(sizeof(uv_write_t)); */
+    /* uv_write(req, (uv_stream_t *)&client->handle, &client->send_buf, 1, */
+    /*          __http_tcp_on_write_cb); */
   } else {
     printf("Not sending a response ??\n");
   }
@@ -243,6 +267,11 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     // valk_mem_free(buf->base);
     return;
   }
+
+  // Call the write callback directly, to start writing !
+  uv_write_t req;
+  req.data = client;
+  __http_tcp_on_write_cb(&req, 0);
 }
 
 static int __http_send_server_connection_header(nghttp2_session *session) {
@@ -270,6 +299,10 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
       valk_mem_alloc(sizeof(struct valk_aio_http_conn));
   uv_tcp_init(server->loop, &conn->handle);
   conn->handle.data = conn;
+  conn->send_capacity = HTTP2_MAX_SEND_BYTES;
+
+  // dont neet for now because we are using nghttp2 mem buffer for send
+  // conn->send_buf.base = valk_mem_alloc(MAX_SEND_BYTES);
   int res = uv_accept(server, (uv_stream_t *)&conn->handle);
 
   if (!res) {
@@ -301,8 +334,8 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
     static nghttp2_session_callbacks *callbacks = NULL;
     if (!callbacks) {
       nghttp2_session_callbacks_new(&callbacks);
-      nghttp2_session_callbacks_set_send_callback2(callbacks,
-                                                   __http_send_callback);
+      // nghttp2_session_callbacks_set_send_callback2(callbacks,
+      //                                              __http_send_callback);
       nghttp2_session_callbacks_set_on_begin_headers_callback(
           callbacks, __http_on_begin_headers_callback);
       nghttp2_session_callbacks_set_on_header_callback(

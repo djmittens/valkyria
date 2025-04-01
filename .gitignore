@@ -1,3 +1,6 @@
+# Helps with debugging
+.gdbinit
+
 .cache
 build/
 .venv/

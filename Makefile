@@ -6,11 +6,14 @@ ifeq ($(UNAME), Darwin)
 	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DCMAKE_BUILD_TYPE=Debug -S . -B build;
 endif
 
-
-build/.stamp: CMakeLists.txt homebrew.cmake
+.PHONY: cmake
+cmake build/.cmake: CMakeLists.txt homebrew.cmake
 	$(CMAKE)
+	touch build/.cmake
+
+.PHONY: build
+build : build/.cmake
 	cmake --build build
-	touch build/.stamp
 
 # This will install editline and maybe other depenedencies on linux / macos
 # editline particularly uses autotools, meaning its a pain to get it to work with cmakejo
@@ -44,7 +47,7 @@ infer:
 	docker run -v "$(PWD):/mnt" -w "/mnt/build" --rm -it ghcr.io/facebook/infer:latest infer -- ninja
 
 .PHONY: repl
-repl: build/.stamp
+repl: build
 	build/valk src/prelude.valk
 
 
@@ -54,7 +57,7 @@ debug: debug
 	lldb build/repl src/prelude.valk
 
 .PHONY: test
-test: build/.stamp
+test: build
 	build/test_std &&\
 	build/test_networking&&\
 	build/test_concurrency\
