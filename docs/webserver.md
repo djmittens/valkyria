@@ -39,3 +39,51 @@
 - [ ] nghttp 2 library request handler
 - [ ] Http webserver
 - [ ] kqueue
+
+# HTTP2 Server
+- [ ] Send `Hello World` over http 2 to the browser
+    - [x] Figure out why the buffer grows indefinitely
+        ```txt
+        Starting server
+        Listening on 0.0.0.0:6969
+        Accepted connection from IP: 127.0.0.1:38714
+        Feeding data to http 103
+        Not sending a response ??
+        Not sending a response ??
+        >>> Received HTTP/2 request (stream_id=1)
+        HDR: :method: GET
+        HDR: :scheme: http
+        HDR: :authority: 127.0.0.1:6969
+        HDR: :path: /
+        HDR: user-agent: curl/8.12.1
+        HDR: accept: */*
+        WE ARE sending a response ??
+        Sending some shit
+        Sending some shit 0 15
+        Sending some shit
+        Sending some shit 15 9
+        Sending some shit
+        Sending some shit 24 19
+        Sending some shit
+        Sending some shit 43 44
+        Sending some shit
+        Sending some shit 87 44
+        Sending some shit
+        Sending some shit 131 44
+        Sending some shit
+        ```
+        > I didnt set a very important flag signfiying the end of stream for the response
+        > you can see it like 
+        ```c
+          // This marks that with this call we reached the end of the file, and dont
+          // call us back again
+          *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+        ```
+        - [x] Why does the buffer keep getting resized in the first place ?
+    - [x] Send text/html in a single frame through a buffer
+    - [x] Send it only a single time
+    - [ ] Setup ALPN with TLS
+        Turns out i cant just have the browser talk to myserver, its too stupid to know that its http2
+        Only way is with openssl
+- [ ] Send 2 MB worth of html data to the browser
+

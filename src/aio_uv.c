@@ -123,33 +123,19 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
   }
   return 0;
 }
+
 static void __http_tcp_on_write_cb(uv_write_t *handle, int status) {
-  struct valk_aio_http_conn *client = (struct valk_aio_http_conn *)handle->data;
   fflush(stdout);
-  printf("Receiving on write CB\n");
   if (status) {
     fprintf(stderr, "On Write error: %s \n", uv_strerror(status));
   } else {
-
-    const uint8_t *data;
-    int len = nghttp2_session_mem_send2(client->session, &data);
-    if (len < 0) {
-      printf("ERR: writing shit %s", nghttp2_strerror(len));
-    } else if (len) {
-      client->send_buf.base = (char *)data;
-      client->send_buf.len = len;
-
-      printf("Sent out some shizz %d\n", len);
-      // Got some shit to send
-      uv_write_t *req = malloc(sizeof(uv_write_t));
-      req->data = client;
-      uv_write(req, (uv_stream_t *)&client->handle, &client->send_buf, 1,
-               __http_tcp_on_write_cb);
-    } else {
-      printf("Found no data to send Skipping CB\n");
-    }
+    printf("Receiving on write CB\n");
   }
 
+  uv_buf_t *buf = handle->data;
+  valk_mem_free(buf->base);
+  valk_mem_free(buf);
+  valk_mem_free(handle);
   // valk_mem_free(handle);
 }
 /*
@@ -181,6 +167,9 @@ static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
                                          nghttp2_data_source *source,
                                          void *user_data) {
   memcpy(buf, source->ptr, strlen(source->ptr) + 1);
+  // This marks that with this call we reached the end of the file, and dont
+  // call us back again
+  *data_flags |= NGHTTP2_DATA_FLAG_EOF;
   return strlen(source->ptr) + 1;
 }
 
@@ -240,6 +229,49 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
   return 0;
 }
 
+static void __http2_flush_frames(struct valk_aio_http_conn *conn) {
+  uv_buf_t *send_buf = valk_mem_alloc(sizeof(uv_buf_t));
+  send_buf->base = malloc(HTTP2_MAX_SEND_BYTES);
+  send_buf->len = 0;
+
+  const uint8_t *data;
+
+  int len = 0;
+  do {
+    len = nghttp2_session_mem_send2(conn->session, &data);
+    if (len < 0) {
+      printf("ERR: writing shit %s", nghttp2_strerror(len));
+    } else if (len) {
+      // TODO(networking): wht the fuck. This buffer needs to live until next
+      // callback, which has to clean it up.
+
+      memcpy(&send_buf->base[send_buf->len], data, len);
+      send_buf->len += len;
+
+      if (send_buf->len + len >= HTTP2_MAX_SEND_BYTES) {
+        // We fill the whole buffer with the same message basically...
+        break;
+      }
+      printf("Buffed frame data %d :: %ld\n", len, send_buf->len);
+    } else {
+      printf("Found no data to send Skipping CB\n");
+    }
+  } while (len > 0);
+
+  bool haveDataToSend = len >= 0 && send_buf->len > 0;
+  if (haveDataToSend) {
+    printf("Flushing %ld bytes\n", send_buf->len);
+    uv_write_t *req = malloc(sizeof(uv_write_t));
+    req->data = send_buf;
+    uv_write(req, (uv_stream_t *)&conn->handle, send_buf, 1,
+             __http_tcp_on_write_cb);
+  } else {
+    printf("Nothing to flush %d :: %d :: %ld\n", len, haveDataToSend,
+           send_buf->len);
+    valk_mem_free(send_buf->base);
+    valk_mem_free(send_buf);
+  }
+}
 static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
                                const uv_buf_t *buf) {
 
@@ -268,10 +300,8 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     return;
   }
 
-  // Call the write callback directly, to start writing !
-  uv_write_t req;
-  req.data = client;
-  __http_tcp_on_write_cb(&req, 0);
+  // Flushies
+  __http2_flush_frames(client);
 }
 
 static int __http_send_server_connection_header(nghttp2_session *session) {
