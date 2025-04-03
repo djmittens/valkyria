@@ -166,6 +166,7 @@ static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
                                          size_t length, uint32_t *data_flags,
                                          nghttp2_data_source *source,
                                          void *user_data) {
+  printf("Looking to get %ld bytes\n", length);
   memcpy(buf, source->ptr, strlen(source->ptr) + 1);
   // This marks that with this call we reached the end of the file, and dont
   // call us back again
@@ -279,10 +280,10 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
 
   if (nread < 0) {
     // Error or EOF
-    if (nread != UV_EOF) {
-      fprintf(stderr, "Read error: %s\n", uv_strerror((int)nread));
-    } else {
+    if (nread == UV_EOF) {
       printf("EOF infact\n");
+    } else {
+      fprintf(stderr, "Read error: %s\n", uv_strerror((int)nread));
     }
     uv_close((uv_handle_t *)stream, NULL);
     // valk_mem_free(buf->base);
