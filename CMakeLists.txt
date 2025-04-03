@@ -22,7 +22,6 @@ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${SANITIZE_ADDRESS_F
 
 find_package(PkgConfig REQUIRED)
 
-
 set (ENABLE_LIB_ONLY on)
 set (ENABLE_DOC off)
 set (ENABLE_FAILMALLOC OFF)
@@ -56,8 +55,11 @@ add_library(valkyria
 
 find_path(LIBUV_INCLUDE_DIR NAMES uv.h)
 find_library(LIBUV_LIBRARIES NAMES uv libuv)
+
+find_package(OpenSSL REQUIRED)
+
 target_include_directories(valkyria PRIVATE ${LIBUV_INCLUDE_DIRS})
-target_link_libraries(valkyria PRIVATE ${LIBUV_LIBRARIES} )
+target_link_libraries(valkyria PRIVATE ${LIBUV_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto)
 
 
 # TODO(networking): if should detect uring and if we have it we can get it here instead of libuv.

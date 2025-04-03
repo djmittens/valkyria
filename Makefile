@@ -6,9 +6,16 @@ ifeq ($(UNAME), Darwin)
 	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DCMAKE_BUILD_TYPE=Debug -S . -B build;
 endif
 
+.ONESHELL:
 .PHONY: cmake
 cmake build/.cmake: CMakeLists.txt homebrew.cmake
 	$(CMAKE)
+	openssl req -x509 -newkey rsa:2048 -nodes \
+		-keyout build/server.key \
+		-out build/server.crt \
+		-sha256 \
+		-days 365 \
+		-subj "/C=US/ST=SomeState/L=SomeCity/O=MyOrg/CN=localhost"
 	touch build/.cmake
 
 .PHONY: build

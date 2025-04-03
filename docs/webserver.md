@@ -86,4 +86,8 @@
         Turns out i cant just have the browser talk to myserver, its too stupid to know that its http2
         Only way is with openssl
 - [ ] Send 2 MB worth of html data to the browser
+- [ ] Handle timeouts
+- [ ] Handle errors 
+- [ ] Handle request cancellations
+- [ ]
 

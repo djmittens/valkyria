@@ -37,7 +37,8 @@ typedef struct {
   char *body;
 } valk_http_response_t;
 
-void valk_aio_http_listen(valk_aio_http_server *srv, valk_aio_system *sys,
-                          const char *interface, const int port);
+int valk_aio_http2_listen(valk_aio_http_server *srv, valk_aio_system *sys,
+                          const char *interface, const int port,
+                          const char *keyfile, const char *certfile);
 
 void valk_aio_hangup(valk_aio_socket *socket);

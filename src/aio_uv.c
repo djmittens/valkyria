@@ -4,6 +4,9 @@
 #include "memory.h"
 #include <netinet/in.h>
 #include <nghttp2/nghttp2.h>
+#include <openssl/conf.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
 #include <string.h>
 #include <uv.h>
 #include <uv/unix.h>
@@ -47,6 +50,7 @@ struct valk_aio_system {
 
 struct valk_aio_http_server {
   uv_loop_t *eventloop;
+  SSL_CTX *ssl_ctx;
   uv_tcp_t server;
   char *interface;
   int port;
@@ -55,6 +59,9 @@ struct valk_aio_http_server {
 struct valk_aio_http_conn {
   uv_tcp_t handle;
   nghttp2_session *session;
+  SSL *ssl;
+  BIO *read_bio;
+  BIO *write_bio;
   uv_buf_t send_buf;
   size_t send_capacity;
   int closed;
@@ -161,6 +168,7 @@ static ssize_t __http_send_callback(nghttp2_session *session,
 
   return (ssize_t)length;
 }
+
 static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
                                          int32_t stream_id, uint8_t *buf,
                                          size_t length, uint32_t *data_flags,
@@ -276,7 +284,7 @@ static void __http2_flush_frames(struct valk_aio_http_conn *conn) {
 static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
                                const uv_buf_t *buf) {
 
-  struct valk_aio_http_conn *client = (struct valk_aio_http_conn *)stream->data;
+  struct valk_aio_http_conn *conn = (struct valk_aio_http_conn *)stream->data;
 
   if (nread < 0) {
     // Error or EOF
@@ -290,9 +298,24 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     return;
   }
 
+  BIO_write(conn->read_bio, buf->base, nread);
+  while(1) {
+    int rc = SSL_read(conn->ssl, buf->base, buf->len);
+    if(rc <= 0) {
+      rc = SSL_get_error(conn->ssl, rc);
+      if(rc != SSL_ERROR_WANT_READ) {
+        // TODO(networking):  is this how you close this shit ?
+        conn->handle.close_cb((uv_handle_t*)&conn->handle);
+        break;
+      }
+      __maybe_flush_ssl(conn);
+      break;
+    }
+  }
+
   printf("Feeding data to http %ld\n", nread);
   // Feed data to nghttp2
-  ssize_t rv = nghttp2_session_mem_recv2(client->session,
+  ssize_t rv = nghttp2_session_mem_recv2(conn->session,
                                          (const uint8_t *)buf->base, nread);
   if (rv < 0) {
     fprintf(stderr, "nghttp2_session_mem_recv error: %zd\n", rv);
@@ -302,7 +325,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   }
 
   // Flushies
-  __http2_flush_frames(client);
+  __http2_flush_frames(conn);
 }
 
 static int __http_send_server_connection_header(nghttp2_session *session) {
@@ -376,6 +399,14 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
     }
 
     nghttp2_session_server_new(&conn->session, callbacks, conn);
+    valk_aio_http_server *srv = server->data;
+    conn->ssl = SSL_new(srv->ssl_ctx);
+
+    conn->read_bio = BIO_new(BIO_s_mem());
+    conn->write_bio = BIO_new(BIO_s_mem());
+
+    SSL_set_bio(conn->ssl, conn->read_bio, conn->write_bio);
+    SSL_set_accept_state(conn->ssl);
 
     // Send settings to the client
     __http_send_server_connection_header(conn->session);
@@ -394,6 +425,8 @@ static void __http_listen_cb(valk_arc_box *box) {
   struct sockaddr_in addr;
   valk_aio_http_server *srv = box->succ;
   r = uv_tcp_init(srv->eventloop, &srv->server);
+  uv_tcp_nodelay(&srv->server, 1);
+
   if (r) {
     fprintf(stderr, "TcpInit err: %s \n", uv_strerror(r));
     return;
@@ -403,12 +436,14 @@ static void __http_listen_cb(valk_arc_box *box) {
     fprintf(stderr, "Addr err: %s \n", uv_strerror(r));
     return;
   }
-  r = uv_tcp_bind(&srv->server, (const struct sockaddr *)&addr, 0);
+  r = uv_tcp_bind(&srv->server, (const struct sockaddr *)&addr,
+                  UV_TCP_REUSEPORT);
   if (r) {
     fprintf(stderr, "Bind err: %s \n", uv_strerror(r));
     return;
   }
 
+  srv->server.data = srv;
   r = uv_listen((uv_stream_t *)&srv->server, 128, __http_connection_cb);
   if (r) {
     fprintf(stderr, "Listen err: %s \n", uv_strerror(r));
@@ -419,15 +454,91 @@ static void __http_listen_cb(valk_arc_box *box) {
   valk_arc_box_release(box);
 }
 
+static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
+                                  unsigned char *outlen,
+                                  const unsigned char *in, unsigned int inlen,
+                                  void *arg) {
+  int rv;
+  UNUSED(ssl);
+  UNUSED(arg);
+
+  rv = nghttp2_select_alpn(out, outlen, in, inlen);
+
+  if (rv != 1) {
+    return SSL_TLSEXT_ERR_NOACK;
+  }
+
+  return SSL_TLSEXT_ERR_OK;
+}
+
 static void __no_free(void *arg) { UNUSED(arg); }
-void valk_aio_http_listen(valk_aio_http_server *srv, valk_aio_system *sys,
-                          const char *interface, const int port) {
+int valk_aio_http2_listen(valk_aio_http_server *srv, valk_aio_system *sys,
+                          const char *interface, const int port,
+                          const char *keyfile, const char *certfile) {
   srv->eventloop = sys->eventloop;
   srv->interface = strdup(interface);
   srv->port = port;
 
   uv_mutex_lock(&sys->taskLock);
   struct valk_aio_task task;
+
+  srv->ssl_ctx = SSL_CTX_new(TLS_server_method());
+  if (!srv->ssl_ctx) {
+    fprintf(stderr, "Could not create SSL/TLS context: %s\n",
+            ERR_error_string(ERR_get_error(), NULL));
+    uv_mutex_unlock(&sys->taskLock);
+    return 1;
+  }
+
+  SSL_CTX_set_options(srv->ssl_ctx,
+                      SSL_OP_ALL | SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 |
+                          SSL_OP_NO_COMPRESSION |
+                          SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION);
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+  if (SSL_CTX_set1_curves_list(srv->ssl_ctx, "P-256") != 1) {
+    fprintf(stderr, "SSL_CTX_set1_curves_list failed: %s\n",
+            ERR_error_string(ERR_get_error(), NULL));
+    SSL_CTX_free(srv->ssl_ctx);
+    srv->ssl_ctx = NULL;
+    uv_mutex_unlock(&sys->taskLock);
+    return 1;
+  }
+#else  /* !(OPENSSL_VERSION_NUMBER >= 0x30000000L) */
+  {
+    EC_KEY *ecdh;
+    ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+    if (!ecdh) {
+      fprintf(stderr, "EC_KEY_new_by_curv_name failed: %s\n",
+              ERR_error_string(ERR_get_error(), NULL));
+      SSL_CTX_free(srv->ssl_ctx);
+      srv->ssl_ctx = NULL;
+      uv_mutex_unlock(&sys->taskLock);
+      return 1;
+    }
+    SSL_CTX_set_tmp_ecdh(ssl_ctx, ecdh);
+    EC_KEY_free(ecdh);
+  }
+#endif /* !(OPENSSL_VERSION_NUMBER >= 0x30000000L) */
+
+  if (SSL_CTX_use_PrivateKey_file(srv->ssl_ctx, keyfile, SSL_FILETYPE_PEM) !=
+      1) {
+    fprintf(stderr, "Could not read private key file %s\n", keyfile);
+    SSL_CTX_free(srv->ssl_ctx);
+    srv->ssl_ctx = NULL;
+    uv_mutex_unlock(&sys->taskLock);
+    return 1;
+  }
+
+  if (SSL_CTX_use_certificate_chain_file(srv->ssl_ctx, certfile) != 1) {
+    fprintf(stderr, "Could not read certificate file %s\n", certfile);
+    SSL_CTX_free(srv->ssl_ctx);
+    srv->ssl_ctx = NULL;
+    uv_mutex_unlock(&sys->taskLock);
+    return 1;
+  }
+
+  SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
+
   task.arg = valk_arc_box_suc(srv, __no_free);
   task.callback = __http_listen_cb;
 
@@ -435,6 +546,7 @@ void valk_aio_http_listen(valk_aio_http_server *srv, valk_aio_system *sys,
 
   uv_mutex_unlock(&sys->taskLock);
   uv_async_send(&sys->taskHandle);
+  return 0;
 }
 
 void valk_aio_hangup(valk_aio_socket *socket);
@@ -443,7 +555,8 @@ void valk_server_demo(void) {
   valk_aio_system *sys = valk_mem_alloc(sizeof(valk_aio_system));
   valk_aio_http_server *srv = valk_mem_alloc(sizeof(valk_aio_http_server));
   valk_aio_start(sys);
-  valk_aio_http_listen(srv, sys, "0.0.0.0", 6969);
+  valk_aio_http2_listen(srv, sys, "0.0.0.0", 6969, "build/server.key",
+                        "build/server.crt");
   uv_thread_join(&sys->loopThread);
   valk_aio_stop(sys);
   valk_mem_free(sys);
