@@ -1,6 +1,7 @@
 #include "memory.h"
 #include "common.h"
 #include <stdlib.h>
+#include <string.h>
 
 __thread valk_thread_context_t valk_thread_ctx = {0};
 
@@ -36,9 +37,18 @@ static void __valk_mem_arena_free(void *heap, void *ptr) {
   // Frees are disabled for arenas
 }
 
-void valk_alloc_buffer(valk_buffer_t *buf, size_t capacity) {
+void valk_buffer_alloc(valk_buffer_t *buf, size_t capacity) {
   buf->capacity = capacity;
   buf->count = 0;
   // TODO(networking): use mmap with page aligned shit for this instead
   buf->items = valk_mem_alloc(capacity);
+}
+
+void valk_buffer_append(valk_buffer_t *buf, void *bytes, size_t len) {
+  VALK_ASSERT(
+      buf->capacity > (buf->count + len),
+      "Buffer too small !!!  capacity [%ld] :: count [%ld] :: new bytes [%ld]",
+      buf->capacity, buf->count, len);
+  memcpy(&((char *)buf->items)[buf->count], bytes, len);
+  buf->count += len;
 }

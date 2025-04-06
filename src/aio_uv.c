@@ -1,9 +1,17 @@
 #include "aio.h"
+#include "aio_ssl.h"
+
 #include "common.h"
 #include "concurrency.h"
 #include "memory.h"
+
 #include <netinet/in.h>
 #include <nghttp2/nghttp2.h>
+#include <openssl/bio.h>
+#include <openssl/conf.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#include <stdio.h>
 #include <string.h>
 #include <uv.h>
 #include <uv/unix.h>
@@ -22,6 +30,8 @@
         NGHTTP2_NV_FLAG_NONE,                                                  \
   }
 
+static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
+                               const uv_buf_t *buf);
 void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
                       uv_buf_t *buf) {
   // TODO(networking): replace it with memory arena for the request
@@ -47,16 +57,16 @@ struct valk_aio_system {
 
 struct valk_aio_http_server {
   uv_loop_t *eventloop;
+  valk_aio_ssl_ctx_t sslCtx;
   uv_tcp_t server;
   char *interface;
   int port;
 };
 
 struct valk_aio_http_conn {
-  uv_tcp_t handle;
+  uv_tcp_t tcpHandle;
+  valk_aio_ssl_t ssl;
   nghttp2_session *session;
-  uv_buf_t send_buf;
-  size_t send_capacity;
   int closed;
 };
 
@@ -138,29 +148,7 @@ static void __http_tcp_on_write_cb(uv_write_t *handle, int status) {
   valk_mem_free(handle);
   // valk_mem_free(handle);
 }
-/*
- * Called whenever nghttp2 wants to send data to the peer.
- * We'll buffer that data in client->send_buf, then schedule a uv_write.
- */
-static ssize_t __http_send_callback(nghttp2_session *session,
-                                    const uint8_t *data, size_t length,
-                                    int flags, void *user_data) {
-  struct valk_aio_http_conn *client = (struct valk_aio_http_conn *)user_data;
 
-  printf("Sending some shit\n");
-  // TODO(networking): this is very sussy, if we dont have enough space, should
-  // probably do something else like EWOULDBLOCK
-  /* Grow our send buffer and copy data in. */
-  size_t old_len = client->send_buf.len;
-  client->send_buf.base = realloc(client->send_buf.base, old_len + length);
-
-  memcpy(client->send_buf.base + old_len, data, length);
-  client->send_buf.len += length;
-
-  printf("Sending some shit %ld %ld\n", old_len, length);
-
-  return (ssize_t)length;
-}
 static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
                                          int32_t stream_id, uint8_t *buf,
                                          size_t length, uint32_t *data_flags,
@@ -231,9 +219,6 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
 }
 
 static void __http2_flush_frames(struct valk_aio_http_conn *conn) {
-  uv_buf_t *send_buf = valk_mem_alloc(sizeof(uv_buf_t));
-  send_buf->base = malloc(HTTP2_MAX_SEND_BYTES);
-  send_buf->len = 0;
 
   const uint8_t *data;
 
@@ -246,37 +231,38 @@ static void __http2_flush_frames(struct valk_aio_http_conn *conn) {
       // TODO(networking): wht the fuck. This buffer needs to live until next
       // callback, which has to clean it up.
 
-      memcpy(&send_buf->base[send_buf->len], data, len);
-      send_buf->len += len;
+      valk_buffer_append(&conn->ssl.unencrypted, (void *)data, len);
 
-      if (send_buf->len + len >= HTTP2_MAX_SEND_BYTES) {
+      if (conn->ssl.unencrypted.count + len >= HTTP2_MAX_SEND_BYTES) {
         // We fill the whole buffer with the same message basically...
         break;
       }
-      printf("Buffed frame data %d :: %ld\n", len, send_buf->len);
+      printf("Buffed frame data %d :: %ld\n", len, conn->ssl.unencrypted.count);
     } else {
       printf("Found no data to send Skipping CB\n");
     }
   } while (len > 0);
+}
 
-  bool haveDataToSend = len >= 0 && send_buf->len > 0;
-  if (haveDataToSend) {
-    printf("Flushing %ld bytes\n", send_buf->len);
-    uv_write_t *req = malloc(sizeof(uv_write_t));
-    req->data = send_buf;
-    uv_write(req, (uv_stream_t *)&conn->handle, send_buf, 1,
-             __http_tcp_on_write_cb);
-  } else {
-    printf("Nothing to flush %d :: %d :: %ld\n", len, haveDataToSend,
-           send_buf->len);
-    valk_mem_free(send_buf->base);
-    valk_mem_free(send_buf);
+static void __http_tcp_unencrypted_read_cb(void *arg,
+                                           const valk_buffer_t *buf) {
+
+  struct valk_aio_http_conn *conn = arg;
+
+  // Feed data to nghttp2
+  ssize_t rv = nghttp2_session_mem_recv2(
+      conn->session, (const uint8_t *)buf->items, buf->count);
+  if (rv < 0) {
+    fprintf(stderr, "nghttp2_session_mem_recv error: %zd\n", rv);
+    uv_close((uv_handle_t *)&conn->tcpHandle, NULL);
+    // valk_mem_free(buf->base);
   }
 }
+
 static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
                                const uv_buf_t *buf) {
 
-  struct valk_aio_http_conn *client = (struct valk_aio_http_conn *)stream->data;
+  struct valk_aio_http_conn *conn = stream->data;
 
   if (nread < 0) {
     // Error or EOF
@@ -290,19 +276,37 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     return;
   }
 
+  // Buffer ssl bytes
+  conn->ssl.staging.count = 0;
+  valk_buffer_append(&conn->ssl.staging, buf->base, nread);
+
   printf("Feeding data to http %ld\n", nread);
-  // Feed data to nghttp2
-  ssize_t rv = nghttp2_session_mem_recv2(client->session,
-                                         (const uint8_t *)buf->base, nread);
-  if (rv < 0) {
-    fprintf(stderr, "nghttp2_session_mem_recv error: %zd\n", rv);
-    uv_close((uv_handle_t *)stream, NULL);
-    // valk_mem_free(buf->base);
-    return;
-  }
+
+  valk_aio_ssl_on_read(&conn->ssl, conn, __http_tcp_unencrypted_read_cb);
 
   // Flushies
-  __http2_flush_frames(client);
+  __http2_flush_frames(conn);
+
+  // Encrypt the new data n stuff
+  valk_aio_ssl_encrypt(&conn->ssl);
+  int wantToSend = conn->ssl.encrypted.count > 0;
+
+  if (wantToSend) {
+    // TODO(networking): Should not be allocating the write buffer
+    uv_buf_t *sbuf = valk_mem_alloc(sizeof(uv_buf_t));
+    sbuf->base = valk_mem_alloc(HTTP2_MAX_SEND_BYTES);
+    memmove(sbuf->base, conn->ssl.encrypted.items, conn->ssl.encrypted.count);
+    conn->ssl.encrypted.count = 0;
+    sbuf->len = conn->ssl.encrypted.count;
+
+    printf("Sending %ld bytes\n", sbuf->len);
+    uv_write_t *req = malloc(sizeof(uv_write_t));
+    req->data = sbuf;
+    uv_write(req, (uv_stream_t *)&conn->tcpHandle, sbuf, 1,
+             __http_tcp_on_write_cb);
+  } else {
+    printf("Nothing to send %d \n", wantToSend);
+  }
 }
 
 static int __http_send_server_connection_header(nghttp2_session *session) {
@@ -328,20 +332,19 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
   }
   struct valk_aio_http_conn *conn =
       valk_mem_alloc(sizeof(struct valk_aio_http_conn));
-  uv_tcp_init(server->loop, &conn->handle);
-  conn->handle.data = conn;
-  conn->send_capacity = HTTP2_MAX_SEND_BYTES;
+  uv_tcp_init(server->loop, &conn->tcpHandle);
+  conn->tcpHandle.data = conn;
 
   // dont neet for now because we are using nghttp2 mem buffer for send
   // conn->send_buf.base = valk_mem_alloc(MAX_SEND_BYTES);
-  int res = uv_accept(server, (uv_stream_t *)&conn->handle);
+  int res = uv_accept(server, (uv_stream_t *)&conn->tcpHandle);
 
   if (!res) {
     // Get the client IP address
     struct sockaddr_storage client_addr;
     int addr_len = sizeof(client_addr);
 
-    if (uv_tcp_getpeername(&conn->handle, (struct sockaddr *)&client_addr,
+    if (uv_tcp_getpeername(&conn->tcpHandle, (struct sockaddr *)&client_addr,
                            &addr_len) == 0) {
       char ip[INET6_ADDRSTRLEN];
       memset(ip, 0, sizeof(ip));
@@ -377,14 +380,23 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
 
     nghttp2_session_server_new(&conn->session, callbacks, conn);
 
+    valk_aio_http_server *srv = server->data;
+    valk_aio_ssl_accept(&conn->ssl, &srv->sslCtx);
+
+    // allocate ssl buffers should be max send bytes ? or maybe bigger?
+    valk_buffer_alloc(&conn->ssl.encrypted, HTTP2_MAX_SEND_BYTES);
+    valk_buffer_alloc(&conn->ssl.unencrypted, HTTP2_MAX_SEND_BYTES);
+    valk_buffer_alloc(&conn->ssl.staging, HTTP2_MAX_SEND_BYTES);
+
     // Send settings to the client
     __http_send_server_connection_header(conn->session);
 
-    uv_read_start((uv_stream_t *)&conn->handle, __alloc_callback,
+    // start the connection off by listening, (SSL expects client to send first)
+    uv_read_start((uv_stream_t *)&conn->tcpHandle, __alloc_callback,
                   __http_tcp_read_cb);
   } else {
     fprintf(stderr, "Fuck closing %s\n", uv_strerror(res));
-    uv_close((uv_handle_t *)&conn->handle, NULL);
+    uv_close((uv_handle_t *)&conn->tcpHandle, NULL);
     valk_mem_free(conn);
   }
 }
@@ -394,6 +406,8 @@ static void __http_listen_cb(valk_arc_box *box) {
   struct sockaddr_in addr;
   valk_aio_http_server *srv = box->succ;
   r = uv_tcp_init(srv->eventloop, &srv->server);
+  uv_tcp_nodelay(&srv->server, 1);
+
   if (r) {
     fprintf(stderr, "TcpInit err: %s \n", uv_strerror(r));
     return;
@@ -403,12 +417,14 @@ static void __http_listen_cb(valk_arc_box *box) {
     fprintf(stderr, "Addr err: %s \n", uv_strerror(r));
     return;
   }
-  r = uv_tcp_bind(&srv->server, (const struct sockaddr *)&addr, 0);
+  r = uv_tcp_bind(&srv->server, (const struct sockaddr *)&addr,
+                  UV_TCP_REUSEPORT);
   if (r) {
     fprintf(stderr, "Bind err: %s \n", uv_strerror(r));
     return;
   }
 
+  srv->server.data = srv;
   r = uv_listen((uv_stream_t *)&srv->server, 128, __http_connection_cb);
   if (r) {
     fprintf(stderr, "Listen err: %s \n", uv_strerror(r));
@@ -419,15 +435,37 @@ static void __http_listen_cb(valk_arc_box *box) {
   valk_arc_box_release(box);
 }
 
+static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
+                                  unsigned char *outlen,
+                                  const unsigned char *in, unsigned int inlen,
+                                  void *arg) {
+  int rv;
+  UNUSED(ssl);
+  UNUSED(arg);
+
+  rv = nghttp2_select_alpn(out, outlen, in, inlen);
+
+  if (rv != 1) {
+    return SSL_TLSEXT_ERR_NOACK;
+  }
+
+  return SSL_TLSEXT_ERR_OK;
+}
+
 static void __no_free(void *arg) { UNUSED(arg); }
-void valk_aio_http_listen(valk_aio_http_server *srv, valk_aio_system *sys,
-                          const char *interface, const int port) {
+int valk_aio_http2_listen(valk_aio_http_server *srv, valk_aio_system *sys,
+                          const char *interface, const int port,
+                          const char *keyfile, const char *certfile) {
   srv->eventloop = sys->eventloop;
   srv->interface = strdup(interface);
   srv->port = port;
 
   uv_mutex_lock(&sys->taskLock);
   struct valk_aio_task task;
+
+  valk_aio_ssl_server_init(&srv->sslCtx, keyfile, certfile);
+  SSL_CTX_set_alpn_select_cb(srv->sslCtx.ssl_ctx, __alpn_select_proto_cb, NULL);
+
   task.arg = valk_arc_box_suc(srv, __no_free);
   task.callback = __http_listen_cb;
 
@@ -435,6 +473,7 @@ void valk_aio_http_listen(valk_aio_http_server *srv, valk_aio_system *sys,
 
   uv_mutex_unlock(&sys->taskLock);
   uv_async_send(&sys->taskHandle);
+  return 0;
 }
 
 void valk_aio_hangup(valk_aio_socket *socket);
@@ -443,7 +482,8 @@ void valk_server_demo(void) {
   valk_aio_system *sys = valk_mem_alloc(sizeof(valk_aio_system));
   valk_aio_http_server *srv = valk_mem_alloc(sizeof(valk_aio_http_server));
   valk_aio_start(sys);
-  valk_aio_http_listen(srv, sys, "0.0.0.0", 6969);
+  valk_aio_http2_listen(srv, sys, "0.0.0.0", 6969, "build/server.key",
+                        "build/server.crt");
   uv_thread_join(&sys->loopThread);
   valk_aio_stop(sys);
   valk_mem_free(sys);
@@ -459,3 +499,7 @@ char *valk_client_demo(const char *domain, const char *port) {
   valk_mem_free(sys);
   return strdup("");
 }
+
+// reference code for openssl setup
+//
+// https://github.com/darrenjs/openssl_examples

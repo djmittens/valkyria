@@ -1,5 +1,6 @@
 - [ ] Dictionaries
 - [x] Testing
+- [ ] Runtime Asserts
 - [ ] Remove Readline from repl
 - [ ] Memory
     - [ ] Arenas
@@ -16,5 +17,7 @@
 - [ ] Strict Types
 - [ ] Monads
 - [ ] Valgrind
+     So for this thing ... since im using clang, combination of asan and lsan could be enough
+     ON linux and mac, valgrind doesnt work.  Unless I run everything through docker since manjaro dont support it
 - [ ] gRPC
 - [ ] Thrift

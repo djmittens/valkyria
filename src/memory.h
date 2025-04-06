@@ -18,7 +18,8 @@ typedef struct {
   void *items;
 } valk_buffer_t;
 
-void valk_alloc_buffer(valk_buffer_t *buf, size_t capacity);
+void valk_buffer_alloc(valk_buffer_t *buf, size_t capacity);
+void valk_buffer_append(valk_buffer_t *buf, void* bytes, size_t len);
 
 typedef enum {
   VALK_ALLOC_MALLOC,
