@@ -30,8 +30,8 @@
         NGHTTP2_NV_FLAG_NONE,                                                  \
   }
 
-    static void
-    __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf);
+static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
+                               const uv_buf_t *buf);
 void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
                       uv_buf_t *buf) {
   // TODO(networking): replace it with memory arena for the request
@@ -167,7 +167,7 @@ static int __demo_response(nghttp2_session *session, int stream_id) {
   printf("WE ARE sending a response ??\n");
   /* Prepare some pseudo-headers: */
   const nghttp2_nv response_headers[] = {
-      MAKE_NV2(":status", "200"), MAKE_NV2("content-type", "text/plain"),
+      MAKE_NV2(":status", "200"), MAKE_NV2("content-type", "text/html; charset=utf-8"),
       // MAKE_NV2("fuckyou", "this is something else aint it"),
   };
 
@@ -179,7 +179,7 @@ static int __demo_response(nghttp2_session *session, int stream_id) {
 
   /* Send DATA frame */
   nghttp2_data_provider2 data_prd;
-  data_prd.source.ptr = "Hello HTTP/2 from libuv + nghttp2\n";
+  data_prd.source.ptr = "<h1>Hello HTTP/2 from libuv + nghttp2</h1>\n";
   data_prd.read_callback = __http_byte_body_cb;
 
   /* return nghttp2_submit_push_promise(session, 0, stream_id, response_headers,
@@ -296,8 +296,8 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     uv_buf_t *sbuf = valk_mem_alloc(sizeof(uv_buf_t));
     sbuf->base = valk_mem_alloc(HTTP2_MAX_SEND_BYTES);
     memmove(sbuf->base, conn->ssl.encrypted.items, conn->ssl.encrypted.count);
-    conn->ssl.encrypted.count = 0;
     sbuf->len = conn->ssl.encrypted.count;
+    conn->ssl.encrypted.count = 0;
 
     printf("Sending %ld bytes\n", sbuf->len);
     uv_write_t *req = malloc(sizeof(uv_write_t));
@@ -439,10 +439,11 @@ static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
                                   unsigned char *outlen,
                                   const unsigned char *in, unsigned int inlen,
                                   void *arg) {
-  int rv;
   UNUSED(ssl);
   UNUSED(arg);
 
+#if 0
+  int rv;
   rv = nghttp2_select_alpn(out, outlen, in, inlen);
 
   if (rv != 1) {
@@ -450,6 +451,15 @@ static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
   }
 
   return SSL_TLSEXT_ERR_OK;
+
+#else
+  int rv;
+  rv = nghttp2_select_alpn(out, outlen, in, inlen);
+  if (rv == -1) {
+    return SSL_TLSEXT_ERR_NOACK;
+  }
+  return SSL_TLSEXT_ERR_OK;
+#endif
 }
 
 static void __no_free(void *arg) { UNUSED(arg); }

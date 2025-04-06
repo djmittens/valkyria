@@ -9,8 +9,10 @@
     - [ ] URI
     - [ ] HTTP Support
         - [ ] 1.1
-        - [ ] 2.0 -- How does that work??
-        - [ ] 3.0 -- is it worth supporint ?? 
+        - [x] 2.0
+        - [?] 3.0
+            This thing i based On QUIC and requires UDP, so im not going to implement it unless i absolutely must.
+            NGHttp3 is experimental, and doesnt even support most of it.
         - [ ] Server
         - [ ] Client
     - [ ] REST
@@ -82,12 +84,21 @@
         - [x] Why does the buffer keep getting resized in the first place ?
     - [x] Send text/html in a single frame through a buffer
     - [x] Send it only a single time
-    - [ ] Setup ALPN with TLS
+    - [x] Setup ALPN with TLS
         Turns out i cant just have the browser talk to myserver, its too stupid to know that its http2
         Only way is with openssl
+    - [x] Get browser to recognize html markup
+    - [ ] Upgrade http to https.
+    - [ ] Fix buffer sizes so that its not busted 
+        ```
+            Accepted connection from IP: 127.0.0.1:33292
+            memory.c:51:valk_buffer_append || Buffer too small !!!  capacity [2048] :: count [0] :: new bytes [2385]i^Cmake: *** [Makefile:68: test] Interrupt
+        ```
+
+
 - [ ] Send 2 MB worth of html data to the browser
 - [ ] Handle timeouts
 - [ ] Handle errors 
 - [ ] Handle request cancellations
-- [ ]
+- [ ] Handle memory allocation
 
