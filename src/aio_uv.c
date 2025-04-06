@@ -30,8 +30,8 @@
         NGHTTP2_NV_FLAG_NONE,                                                  \
   }
 
-static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
-                               const uv_buf_t *buf);
+    static void
+    __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf);
 void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
                       uv_buf_t *buf) {
   // TODO(networking): replace it with memory arena for the request
