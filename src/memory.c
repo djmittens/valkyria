@@ -52,3 +52,7 @@ void valk_buffer_append(valk_buffer_t *buf, void *bytes, size_t len) {
   memcpy(&((char *)buf->items)[buf->count], bytes, len);
   buf->count += len;
 }
+
+int valk_buffer_is_full(valk_buffer_t *buf) {
+  return (buf->capacity - buf->count) < 1;
+}

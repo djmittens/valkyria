@@ -17,8 +17,6 @@
 #include <uv.h>
 #include <uv/unix.h>
 
-#define HTTP2_MAX_SEND_BYTES 2048
-
 #define MAKE_NV(NAME, VALUE, VALUELEN)                                         \
   {                                                                            \
     (uint8_t *)NAME, (uint8_t *)VALUE, sizeof(NAME) - 1, VALUELEN,             \
@@ -58,7 +56,7 @@ struct valk_aio_system {
 
 struct valk_aio_http_server {
   uv_loop_t *eventloop;
-  valk_aio_ssl_ctx_t sslCtx;
+  SSL_CTX *ssl_ctx;
   uv_tcp_t server;
   char *interface;
   int port;
@@ -224,7 +222,8 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
   return 0;
 }
 
-static void __http2_flush_frames(struct valk_aio_http_conn *conn) {
+static void __http2_flush_frames(valk_buffer_t *buf,
+                                 struct valk_aio_http_conn *conn) {
 
   const uint8_t *data;
 
@@ -234,16 +233,17 @@ static void __http2_flush_frames(struct valk_aio_http_conn *conn) {
     if (len < 0) {
       printf("ERR: writing shit %s", nghttp2_strerror(len));
     } else if (len) {
-      // TODO(networking): wht the fuck. This buffer needs to live until next
-      // callback, which has to clean it up.
+      // TODO(networking): Need to handle data greater than the buffer size here
 
-      valk_buffer_append(&conn->ssl.unencrypted, (void *)data, len);
+      valk_buffer_append(buf, (void *)data, len);
 
-      if (conn->ssl.unencrypted.count + len >= HTTP2_MAX_SEND_BYTES) {
-        // We fill the whole buffer with the same message basically...
+      if (buf->count + len > buf->capacity) {
+        // if we read the same amount of data again, we would overflow, so lets
+        // stop for now
         break;
       }
-      printf("Buffed frame data %d :: %ld\n", len, conn->ssl.unencrypted.count);
+
+      printf("Buffed frame data %d :: %ld\n", len, buf->count);
     } else {
       printf("Found no data to send Skipping CB\n");
     }
@@ -282,28 +282,31 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     return;
   }
 
-  // Buffer ssl bytes
-  conn->ssl.staging.count = 0;
-  valk_buffer_append(&conn->ssl.staging, buf->base, nread);
+  printf("Feeding data to OpenSSL %ld\n", nread);
 
-  printf("Feeding data to http %ld\n", nread);
+  valk_buffer_t In = {
+      .items = buf->base, .count = nread, .capacity = SSL3_RT_MAX_PACKET_SIZE};
 
-  valk_aio_ssl_on_read(&conn->ssl, conn, __http_tcp_unencrypted_read_cb);
+  valk_buffer_t Out = {.items = valk_mem_alloc(SSL3_RT_MAX_PACKET_SIZE),
+                       .count = 0,
+                       .capacity = SSL3_RT_MAX_PACKET_SIZE};
+
+  valk_aio_ssl_on_read(&conn->ssl, &In, &Out, conn,
+                        __http_tcp_unencrypted_read_cb);
 
   // Flushies
-  __http2_flush_frames(conn);
+  In.count = 0;
+  __http2_flush_frames(&In, conn);
 
   // Encrypt the new data n stuff
-  valk_aio_ssl_encrypt(&conn->ssl);
-  int wantToSend = conn->ssl.encrypted.count > 0;
+  valk_aio_ssl_encrypt(&conn->ssl, &In, &Out);
 
+  int wantToSend = Out.count > 0;
   if (wantToSend) {
     // TODO(networking): Should not be allocating the write buffer
     uv_buf_t *sbuf = valk_mem_alloc(sizeof(uv_buf_t));
-    sbuf->base = valk_mem_alloc(HTTP2_MAX_SEND_BYTES);
-    memmove(sbuf->base, conn->ssl.encrypted.items, conn->ssl.encrypted.count);
-    sbuf->len = conn->ssl.encrypted.count;
-    conn->ssl.encrypted.count = 0;
+    sbuf->base = Out.items;
+    sbuf->len = Out.count;
 
     printf("Sending %ld bytes\n", sbuf->len);
     uv_write_t *req = malloc(sizeof(uv_write_t));
@@ -312,7 +315,10 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
              __http_tcp_on_write_cb);
   } else {
     printf("Nothing to send %d \n", wantToSend);
+    valk_mem_free(Out.items);
   }
+
+  valk_mem_free(In.items);
 }
 
 static int __http_send_server_connection_header(nghttp2_session *session) {
@@ -387,12 +393,7 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
     nghttp2_session_server_new(&conn->session, callbacks, conn);
 
     valk_aio_http_server *srv = server->data;
-    valk_aio_ssl_accept(&conn->ssl, &srv->sslCtx);
-
-    // allocate ssl buffers should be max send bytes ? or maybe bigger?
-    valk_buffer_alloc(&conn->ssl.encrypted, SSL3_RT_MAX_PACKET_SIZE);
-    valk_buffer_alloc(&conn->ssl.unencrypted, SSL3_RT_MAX_PACKET_SIZE);
-    valk_buffer_alloc(&conn->ssl.staging, SSL3_RT_MAX_PACKET_SIZE);
+    valk_aio_ssl_accept(&conn->ssl, srv->ssl_ctx);
 
     // Send settings to the client
     __http_send_server_connection_header(conn->session);
@@ -479,8 +480,8 @@ int valk_aio_http2_listen(valk_aio_http_server *srv, valk_aio_system *sys,
   uv_mutex_lock(&sys->taskLock);
   struct valk_aio_task task;
 
-  valk_aio_ssl_server_init(&srv->sslCtx, keyfile, certfile);
-  SSL_CTX_set_alpn_select_cb(srv->sslCtx.ssl_ctx, __alpn_select_proto_cb, NULL);
+  valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
+  SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
 
   task.arg = valk_arc_box_suc(srv, __no_free);
   task.callback = __http_listen_cb;

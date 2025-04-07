@@ -19,6 +19,7 @@ typedef struct {
 
 void valk_buffer_alloc(valk_buffer_t *buf, size_t capacity);
 void valk_buffer_append(valk_buffer_t *buf, void *bytes, size_t len);
+int valk_buffer_is_full(valk_buffer_t *buf);
 
 typedef struct {
   size_t slabSize;
