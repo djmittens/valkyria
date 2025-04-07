@@ -56,3 +56,80 @@ void valk_buffer_append(valk_buffer_t *buf, void *bytes, size_t len) {
 int valk_buffer_is_full(valk_buffer_t *buf) {
   return (buf->capacity - buf->count) < 1;
 }
+
+static inline size_t __valk_slab_alloc_item_size(valk_slab_t *self) {
+  return sizeof(valk_slab_item_t) + self->itemSize;
+}
+
+void valk_slab_alloc_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
+  // TODO(networking): do like mmap and some platform specific slab code
+  self->heap = valk_mem_alloc(
+      (sizeof(size_t) + sizeof(valk_slab_item_t) + itemSize) * numItems);
+
+  self->itemSize = itemSize;
+  self->numItems = numItems;
+  self->numFree = numItems;
+
+  const size_t itemlen = sizeof(valk_slab_item_t) + itemSize;
+  const size_t freelen = sizeof(size_t) * numItems;
+
+  for (size_t i = 0; i < numItems; i++) {
+    ((size_t *)self->heap)[i] = i;
+    valk_slab_item_t *item =
+        (valk_slab_item_t *)&(((char *)self->heap)[(freelen) + (itemlen * i)]);
+    item->handle = i;
+  }
+
+  // for (size_t i = 0; i < numItems; i++) {
+  //   printf(
+  //       "Slab Init: %ld ::: %ld\n", ((size_t *)self->heap)[i],
+  //       ((valk_slab_item_t *)&((char *)self->heap)[(freelen) + (itemlen * i)])
+  //           ->handle);
+  // }
+}
+
+valk_slab_item_t *valk_slab_alloc_aquire(valk_slab_t *self) {
+  if (self->numFree <= 0) {
+    return NULL;
+  }
+
+  // pop  free item
+  size_t offset = ((size_t *)self->heap)[0];
+  ((size_t *)self->heap)[0] = ((size_t *)self->heap)[self->numFree - 1];
+  ((size_t *)self->heap)[self->numFree - 1] = offset;
+  --self->numFree;
+
+  // Lookup this item in the slab and return
+  const size_t freeLen = (sizeof(size_t) * self->numItems);
+  const size_t itemsLen = __valk_slab_alloc_item_size(self) * offset;
+  valk_slab_item_t *res = (void *)&((char *)self->heap)[freeLen + itemsLen];
+  printf("Aquiring slab: %ld :: idx : %ld : swap %ld\n", res->handle, offset,
+         ((size_t *)self->heap)[0]);
+  return res;
+}
+
+void valk_slab_alloc_release(valk_slab_t *self, valk_slab_item_t *item) {
+  // find the slab handle
+  for (size_t i = 0; i < self->numItems; ++i) {
+    if (((size_t *)self->heap)[i] == item->handle) {
+      // Swap it out with a stale one
+      size_t offset = ((size_t *)self->heap)[i];
+      ((size_t *)self->heap)[i] = ((size_t *)self->heap)[self->numFree - 1];
+      ((size_t *)self->heap)[self->numFree - 1] = offset;
+      ++self->numFree;
+      printf("Releasing slab: %ld : idx: %ld\n", item->handle, i);
+      return;
+    }
+  }
+
+  VALK_RAISE("Hey man, the slab item you tried to release was bullshit %ld",
+             item->handle);
+  // Swap it in as free
+}
+
+void valk_slab_alloc_release_ptr(valk_slab_t *self, void *data) {
+  // This function will look back item size bytes in the array, to figure out
+  // the handle and then free that shit
+  valk_slab_alloc_release(
+      self, (valk_slab_item_t *)(&((char *)data)[-sizeof(valk_slab_item_t)]));
+}

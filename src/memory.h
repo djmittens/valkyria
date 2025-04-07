@@ -22,32 +22,32 @@ void valk_buffer_append(valk_buffer_t *buf, void *bytes, size_t len);
 int valk_buffer_is_full(valk_buffer_t *buf);
 
 typedef struct {
-  size_t slabSize;
-  size_t numSlabs;
-  size_t numFree;
-  // Memory layout
-  // [sizeof(size_t) * numSlabs | freeList] 
-  // [sizeof(size_t) | handle]
-  // [sizeof(valk_slab_t + (size_t * numSlabs)) * capacity | slabs]
-  char heap [];
-} valk_slab_alloc_t;
-
-typedef struct {
   size_t handle;
   // size_t size; // todo(networking): i should add this to the layout if i need
   // it. i dont think this will ever be useful tho, so save a few bytes of
   // overhead
   char data[];
+} valk_slab_item_t;
+
+typedef struct {
+  size_t itemSize;
+  size_t numItems;
+  size_t numFree;
+  // Memory layout
+  // [sizeof(size_t) * numSlabs | freeList]
+  // [sizeof(valk_slab_t + (size_t * numSlabs)) * capacity | slabs]
+  void *heap;
 } valk_slab_t;
 
-void *valk_slab_alloc_init(valk_slab_alloc_t *self, size_t slabsize,
-                           size_t numslabs);
+void valk_slab_alloc_init(valk_slab_t *self, size_t itemSize, size_t numItems);
 
-void *valk_slab_alloc_reset(valk_slab_alloc_t *self);
-void *valk_slab_alloc_free(valk_slab_alloc_t *self);
+void *valk_slab_alloc_reset(valk_slab_t *self);
+void *valk_slab_alloc_free(valk_slab_t *self);
 
-valk_slab_t *valk_slab_alloc_aquire(valk_slab_alloc_t *self);
-void valk_slab_alloc_release(valk_slab_alloc_t *self, valk_slab_t *slab);
+valk_slab_item_t *valk_slab_alloc_aquire(valk_slab_t *self);
+
+void valk_slab_alloc_release(valk_slab_t *self, valk_slab_item_t *item);
+void valk_slab_alloc_release_ptr(valk_slab_t *self, void *data);
 
 typedef enum {
   VALK_ALLOC_MALLOC,

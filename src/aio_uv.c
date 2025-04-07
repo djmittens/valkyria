@@ -29,12 +29,18 @@
         NGHTTP2_NV_FLAG_NONE,                                                  \
   }
 
+// times 2 just for fun
+#define HTTP_SLAB_ITEM_SIZE (SSL3_RT_MAX_PACKET_SIZE * 2)
+#define HTTP_MAX_IO_REQUESTS (1024)
+
+static __thread valk_slab_t slab;
+
 static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
                                const uv_buf_t *buf);
 void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
                       uv_buf_t *buf) {
   // TODO(networking): replace it with memory arena for the request
-  buf->base = valk_mem_alloc(suggested_size);
+  buf->base = valk_slab_alloc_aquire(&slab)->data;
   buf->len = suggested_size;
 }
 
@@ -72,6 +78,8 @@ struct valk_aio_http_conn {
 static void __event_loop(void *arg) {
   valk_aio_system *sys = arg;
   valk_mem_init_malloc();
+  printf("Allocating some shit\n");
+  valk_slab_alloc_init(&slab, HTTP_SLAB_ITEM_SIZE, HTTP_MAX_IO_REQUESTS);
   uv_run(sys->eventloop, UV_RUN_DEFAULT);
 }
 
@@ -147,7 +155,7 @@ static void __http_tcp_on_write_cb(uv_write_t *handle, int status) {
   }
 
   uv_buf_t *buf = handle->data;
-  valk_mem_free(buf->base);
+  valk_slab_alloc_release_ptr(&slab, buf->base);
   valk_mem_free(buf);
   valk_mem_free(handle);
 }
@@ -285,14 +293,14 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   printf("Feeding data to OpenSSL %ld\n", nread);
 
   valk_buffer_t In = {
-      .items = buf->base, .count = nread, .capacity = SSL3_RT_MAX_PACKET_SIZE};
+      .items = buf->base, .count = nread, .capacity = HTTP_SLAB_ITEM_SIZE};
 
-  valk_buffer_t Out = {.items = valk_mem_alloc(SSL3_RT_MAX_PACKET_SIZE),
+  valk_buffer_t Out = {.items = valk_slab_alloc_aquire(&slab)->data,
                        .count = 0,
-                       .capacity = SSL3_RT_MAX_PACKET_SIZE};
+                       .capacity = HTTP_SLAB_ITEM_SIZE};
 
   valk_aio_ssl_on_read(&conn->ssl, &In, &Out, conn,
-                        __http_tcp_unencrypted_read_cb);
+                       __http_tcp_unencrypted_read_cb);
 
   // Flushies
   In.count = 0;
@@ -315,10 +323,10 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
              __http_tcp_on_write_cb);
   } else {
     printf("Nothing to send %d \n", wantToSend);
-    valk_mem_free(Out.items);
+    valk_slab_alloc_release_ptr(&slab, Out.items);
   }
 
-  valk_mem_free(In.items);
+  valk_slab_alloc_release_ptr(&slab, In.items);
 }
 
 static int __http_send_server_connection_header(nghttp2_session *session) {
@@ -342,13 +350,13 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
 
     return;
   }
+
   struct valk_aio_http_conn *conn =
       valk_mem_alloc(sizeof(struct valk_aio_http_conn));
+
   uv_tcp_init(server->loop, &conn->tcpHandle);
   conn->tcpHandle.data = conn;
 
-  // dont neet for now because we are using nghttp2 mem buffer for send
-  // conn->send_buf.base = valk_mem_alloc(MAX_SEND_BYTES);
   int res = uv_accept(server, (uv_stream_t *)&conn->tcpHandle);
 
   if (!res) {
@@ -509,9 +517,9 @@ void valk_server_demo(void) {
 
 char *valk_client_demo(const char *domain, const char *port) {
   valk_aio_system *sys = valk_mem_alloc(sizeof(valk_aio_system));
-  valk_aio_start(sys);
   while (1)
     ;
+  valk_aio_start(sys);
   valk_aio_stop(sys);
   valk_mem_free(sys);
   return strdup("");
