@@ -94,15 +94,14 @@ static valk_err_e __valk_aio_ssl_handshake(valk_aio_ssl_t *ssl) {
   case SSL_ERROR_SYSCALL:
   case SSL_ERROR_NONE:
     // TODO(networking): get proper string for this error
-    fprintf(stderr, "OpenSSL error during handshake %d",
+    fprintf(stderr, "OpenSSL error during handshake %d\n",
             SSL_get_error(ssl->ssl, n));
   }
   return VALK_ERR_SUCCESS;
 }
 
-valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl,
-                                void* arg,
-                                void(onRead)(void*, const valk_buffer_t *)) {
+valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, void *arg,
+                                void(onRead)(void *, const valk_buffer_t *)) {
   int n, err;
   n = BIO_write(ssl->read_bio, ssl->staging.items, ssl->staging.count);
   // TODO(networking): need proper error handling in case this  fails
@@ -116,7 +115,6 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl,
               "OpenSSL BIO_write, should write exactly once, because it should "
               "grow to accomodate %ld out of %ld",
               (size_t)n, ssl->staging.count);
-
 
   if (!SSL_is_init_finished(ssl->ssl)) {
     err = __valk_aio_ssl_handshake(ssl);
@@ -151,11 +149,13 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl,
       }
     } while (n > 0);
     break;
-  case SSL_ERROR_ZERO_RETURN:
   case SSL_ERROR_SYSCALL:
-  case SSL_ERROR_NONE:
     // TODO(networking): get proper string for this error
-    fprintf(stderr, "OpenSSL error during read %d", SSL_get_error(ssl->ssl, n));
+    fprintf(stderr, "OpenSSL error during read SSL_ERROR_SYSCALL\n");
+    return VALK_ERR_SSL_READ;
+    break;
+  case SSL_ERROR_ZERO_RETURN:
+  case SSL_ERROR_NONE:
   }
   return VALK_ERR_SUCCESS;
 }
@@ -202,6 +202,6 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl) {
 }
 
 void valk_aio_ssl_print_state(valk_aio_ssl_t *ssl) {
-  const char * st = SSL_state_string_long(ssl->ssl);
+  const char *st = SSL_state_string_long(ssl->ssl);
   printf("SSL-State: %s\n", st);
 }

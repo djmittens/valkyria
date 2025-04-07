@@ -11,7 +11,6 @@
        __ctx.exec; valk_thread_ctx = __ctx.old_ctx)                            \
     for (valk_thread_ctx = (_ctx_); __ctx.exec; __ctx.exec = 0)
 
-
 typedef struct {
   size_t capacity;
   size_t count;
@@ -19,7 +18,35 @@ typedef struct {
 } valk_buffer_t;
 
 void valk_buffer_alloc(valk_buffer_t *buf, size_t capacity);
-void valk_buffer_append(valk_buffer_t *buf, void* bytes, size_t len);
+void valk_buffer_append(valk_buffer_t *buf, void *bytes, size_t len);
+
+typedef struct {
+  size_t slabSize;
+  size_t numSlabs;
+  size_t numFree;
+  // Memory layout
+  // [sizeof(size_t) * numSlabs | freeList] 
+  // [sizeof(size_t) | handle]
+  // [sizeof(valk_slab_t + (size_t * numSlabs)) * capacity | slabs]
+  char heap [];
+} valk_slab_alloc_t;
+
+typedef struct {
+  size_t handle;
+  // size_t size; // todo(networking): i should add this to the layout if i need
+  // it. i dont think this will ever be useful tho, so save a few bytes of
+  // overhead
+  char data[];
+} valk_slab_t;
+
+void *valk_slab_alloc_init(valk_slab_alloc_t *self, size_t slabsize,
+                           size_t numslabs);
+
+void *valk_slab_alloc_reset(valk_slab_alloc_t *self);
+void *valk_slab_alloc_free(valk_slab_alloc_t *self);
+
+valk_slab_t *valk_slab_alloc_aquire(valk_slab_alloc_t *self);
+void valk_slab_alloc_release(valk_slab_alloc_t *self, valk_slab_t *slab);
 
 typedef enum {
   VALK_ALLOC_MALLOC,
@@ -28,7 +55,7 @@ typedef enum {
 
 typedef struct {
   valk_mem_allocator_e allocType;
-  // TODO(networking): use valk_buffer_t for this 
+  // TODO(networking): use valk_buffer_t for this
   void *heap;
   void *(*alloc)(void *heap, size_t bytes);
   void (*free)(void *heap, void *ptr);

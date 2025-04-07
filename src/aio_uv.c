@@ -11,6 +11,7 @@
 #include <openssl/conf.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <openssl/ssl3.h>
 #include <stdio.h>
 #include <string.h>
 #include <uv.h>
@@ -94,6 +95,12 @@ void valk_aio_start(valk_aio_system *sys) {
   sys->capacity = 10;
   sys->items = valk_mem_alloc(sizeof(struct valk_aio_task) * 10);
 
+  // On linux definitely turn sigpipe off
+  // Otherwise shit crashes.
+  // When the socket dissapears a write may be queued in the event loop
+  // In that case we just want to do proper error handling without the signal
+  struct sigaction sa = {.sa_handler = SIG_IGN};
+  sigaction(SIGPIPE, &sa, NULL);
   uv_mutex_init(&sys->taskLock);
   uv_async_init(sys->eventloop, &sys->taskHandle, __task_cb);
   sys->taskHandle.data = sys;
@@ -167,7 +174,8 @@ static int __demo_response(nghttp2_session *session, int stream_id) {
   printf("WE ARE sending a response ??\n");
   /* Prepare some pseudo-headers: */
   const nghttp2_nv response_headers[] = {
-      MAKE_NV2(":status", "200"), MAKE_NV2("content-type", "text/html; charset=utf-8"),
+      MAKE_NV2(":status", "200"),
+      MAKE_NV2("content-type", "text/html; charset=utf-8"),
       // MAKE_NV2("fuckyou", "this is something else aint it"),
   };
 
@@ -384,9 +392,9 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
     valk_aio_ssl_accept(&conn->ssl, &srv->sslCtx);
 
     // allocate ssl buffers should be max send bytes ? or maybe bigger?
-    valk_buffer_alloc(&conn->ssl.encrypted, HTTP2_MAX_SEND_BYTES);
-    valk_buffer_alloc(&conn->ssl.unencrypted, HTTP2_MAX_SEND_BYTES);
-    valk_buffer_alloc(&conn->ssl.staging, HTTP2_MAX_SEND_BYTES);
+    valk_buffer_alloc(&conn->ssl.encrypted, SSL3_RT_MAX_PACKET_SIZE);
+    valk_buffer_alloc(&conn->ssl.unencrypted, SSL3_RT_MAX_PACKET_SIZE);
+    valk_buffer_alloc(&conn->ssl.staging, SSL3_RT_MAX_PACKET_SIZE);
 
     // Send settings to the client
     __http_send_server_connection_header(conn->session);
