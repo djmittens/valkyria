@@ -137,8 +137,6 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, void *arg,
 
   switch (SSL_get_error(ssl->ssl, n)) {
   case SSL_ERROR_WANT_READ:
-    printf("Why we want tto read ??\n");
-    break;
   case SSL_ERROR_WANT_WRITE:
     do {
       n = BIO_read(ssl->write_bio, ssl->staging.items, ssl->staging.capacity);

@@ -142,9 +142,8 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
 }
 
 static void __http_tcp_on_write_cb(uv_write_t *handle, int status) {
-  fflush(stdout);
   if (status) {
-    fprintf(stderr, "On Write error: %s \n", uv_strerror(status));
+    fprintf(stderr, "Socket On Write error: %s \n", uv_strerror(status));
   } else {
     printf("Receiving on write CB\n");
   }
@@ -153,7 +152,6 @@ static void __http_tcp_on_write_cb(uv_write_t *handle, int status) {
   valk_mem_free(buf->base);
   valk_mem_free(buf);
   valk_mem_free(handle);
-  // valk_mem_free(handle);
 }
 
 static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
@@ -187,7 +185,7 @@ static int __demo_response(nghttp2_session *session, int stream_id) {
 
   /* Send DATA frame */
   nghttp2_data_provider2 data_prd;
-  data_prd.source.ptr = "<h1>Hello HTTP/2 from libuv + nghttp2</h1>\n";
+  data_prd.source.ptr = "<h1>Valkyria, GOD's lil messenger</h1>\n";
   data_prd.read_callback = __http_byte_body_cb;
 
   /* return nghttp2_submit_push_promise(session, 0, stream_id, response_headers,
