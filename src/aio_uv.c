@@ -9,10 +9,12 @@
 #include <nghttp2/nghttp2.h>
 #include <openssl/bio.h>
 #include <openssl/conf.h>
+#include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/ssl3.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <uv.h>
 #include <uv/unix.h>
@@ -29,7 +31,9 @@
         NGHTTP2_NV_FLAG_NONE,                                                  \
   }
 
-#define AIO_QUEUE_SIZE (100)
+// It houses requests to the event loop
+#define AIO_QUEUE_SIZE (10)
+
 // times 2 just for fun
 #define HTTP_SLAB_ITEM_SIZE (SSL3_RT_MAX_PACKET_SIZE * 2)
 #define HTTP_MAX_IO_REQUESTS (1024)
@@ -112,15 +116,31 @@ static void __task_cb(uv_async_t *handle) {
   uv_mutex_unlock(&sys->taskLock);
 }
 
+void *__CRYPTO_malloc_fn(size_t num, const char *file, int line) {
+  return valk_mem_alloc(num);
+}
+
+void *__CRYPTO_realloc_fn(void *addr, size_t num, const char *file, int line) {
+  // TODO(networking): implement realloc ??? for arenas its even dumber....
+  return realloc(addr, num);
+}
+
+void __CRYPTO_free_fn(void *addr, const char *file, int line) {
+  valk_mem_free(addr);
+}
+
 void valk_aio_start(valk_aio_system *sys) {
   sys->eventloop = uv_default_loop();
   sys->count = 0;
   sys->capacity = 10;
 
+  CRYPTO_set_mem_functions(__CRYPTO_malloc_fn, __CRYPTO_realloc_fn,
+                           __CRYPTO_free_fn);
   // On linux definitely turn sigpipe off
   // Otherwise shit crashes.
   // When the socket dissapears a write may be queued in the event loop
-  // In that case we just want to do proper error handling without the signal
+  // In that case we just want to do proper error handling without the
+  // signal
   struct sigaction sa = {.sa_handler = SIG_IGN};
   sigaction(SIGPIPE, &sa, NULL);
   uv_mutex_init(&sys->taskLock);
@@ -460,24 +480,12 @@ static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
   UNUSED(ssl);
   UNUSED(arg);
 
-#if 0
-  int rv;
-  rv = nghttp2_select_alpn(out, outlen, in, inlen);
-
-  if (rv != 1) {
-    return SSL_TLSEXT_ERR_NOACK;
-  }
-
-  return SSL_TLSEXT_ERR_OK;
-
-#else
   int rv;
   rv = nghttp2_select_alpn(out, outlen, in, inlen);
   if (rv == -1) {
     return SSL_TLSEXT_ERR_NOACK;
   }
   return SSL_TLSEXT_ERR_OK;
-#endif
 }
 
 static void __no_free(void *arg) { UNUSED(arg); }
@@ -522,7 +530,6 @@ char *valk_client_demo(const char *domain, const char *port) {
     ;
   valk_aio_start(&sys);
   valk_aio_stop(&sys);
-  valk_mem_free(&sys);
   return strdup("");
 }
 

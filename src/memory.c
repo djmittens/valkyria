@@ -79,13 +79,6 @@ void valk_slab_alloc_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
         (valk_slab_item_t *)&(((char *)self->heap)[(freelen) + (itemlen * i)]);
     item->handle = i;
   }
-
-  // for (size_t i = 0; i < numItems; i++) {
-  //   printf(
-  //       "Slab Init: %ld ::: %ld\n", ((size_t *)self->heap)[i],
-  //       ((valk_slab_item_t *)&((char *)self->heap)[(freelen) + (itemlen * i)])
-  //           ->handle);
-  // }
 }
 
 valk_slab_item_t *valk_slab_alloc_aquire(valk_slab_t *self) {

@@ -101,13 +101,16 @@
     - [x] Slab allocate buffers
     - [ ] Slab allocate arenas
         - [ ] Connection slab
-            - [ ] NGHttp connection 
-            - [ ] Random uv buffer objects (ring buffer ???)
-                - write requests
-                    - uv_write_t
-                    - uv_buf_t
-                    - SSL3_RT_MAX_PACKET_SIZE
-                - write buffers
+            - [ ] valk_aio_http_conn
+            - [ ] NGHttp session Arena
+            - [ ] OpenSSL Arena
+        - [ ] Random uv buffer objects (ring buffer ???)
+            - write buffers
+                - uv_write_t
+                - uv_buf_t
+                - SSL3_RT_MAX_PACKET_SIZE
+            - read buffers
+                - since those dont need requets or handles, i can just use raw
     - [ ] Arenas for requests
 - [ ] Send 2 MB worth of html data to the browser
 - [ ] Handle errors 
@@ -115,6 +118,9 @@
     - [ ] Handle request cancellations
     - [ ] Handle too many connections
     - [ ] Handle too many requests
+- [ ] Replace OpenSSL with a lighter TLS library, like WolfSSL
+
+
 
 ## Settings
 - [ ] Dynamic settings
