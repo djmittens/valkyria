@@ -41,7 +41,7 @@ typedef struct {
 
 void valk_slab_alloc_init(valk_slab_t *self, size_t itemSize, size_t numItems);
 
-void *valk_slab_alloc_reset(valk_slab_t *self);
+void *valk_slab_alloc_reset(valk_slab_t *self, size_t safePoint);
 void *valk_slab_alloc_free(valk_slab_t *self);
 
 valk_slab_item_t *valk_slab_alloc_aquire(valk_slab_t *self);

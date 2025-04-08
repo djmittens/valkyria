@@ -98,10 +98,41 @@
 
 
 - [ ] Handle memory allocation
-    - [ ] Slab allocatte buffers
+    - [x] Slab allocate buffers
+    - [ ] Slab allocate arenas
+        - [ ] Connection slab
+            - [ ] NGHttp connection 
+            - [ ] Random uv buffer objects (ring buffer ???)
+                - write requests
+                    - uv_write_t
+                    - uv_buf_t
+                    - SSL3_RT_MAX_PACKET_SIZE
+                - write buffers
     - [ ] Arenas for requests
 - [ ] Send 2 MB worth of html data to the browser
 - [ ] Handle errors 
     - [ ] Handle timeouts
     - [ ] Handle request cancellations
+    - [ ] Handle too many connections
+    - [ ] Handle too many requests
+
+## Settings
+- [ ] Dynamic settings
+- [ ] Static configuration loading
+
+## Admin Endpoints
+- [ ] Visualizations
+    - [ ] Slab Allocators
+        - [ ] Heatmap of memory changes
+        - [ ] Timelapse of changes
+        - [ ] Configurable resolution
+    - [ ] Arena Allocatttors
+        - [ ] Request Arena
+        - [ ] Heatmap of memory changes
+        - [ ] Timelapse of changes
+        - [ ] Configurable resolution
+- [ ] Metrics
+    - [ ] Prometheus endpoint
+        - [ ] Counters
+        - [ ] Gauges
 
