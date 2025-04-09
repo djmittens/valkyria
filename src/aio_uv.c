@@ -432,8 +432,12 @@ static void __http_listen_cb(valk_arc_box *box) {
     fprintf(stderr, "Addr err: %s \n", uv_strerror(r));
     return;
   }
+#ifdef __linux__
   r = uv_tcp_bind(&srv->server, (const struct sockaddr *)&addr,
                   UV_TCP_REUSEPORT);
+#else
+  r = uv_tcp_bind(&srv->server, (const struct sockaddr *)&addr, 0);
+#endif
   if (r) {
     fprintf(stderr, "Bind err: %s \n", uv_strerror(r));
     return;
