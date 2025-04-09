@@ -9,10 +9,12 @@
 #include <nghttp2/nghttp2.h>
 #include <openssl/bio.h>
 #include <openssl/conf.h>
+#include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/ssl3.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <uv.h>
 #include <uv/unix.h>
@@ -29,18 +31,35 @@
         NGHTTP2_NV_FLAG_NONE,                                                  \
   }
 
+// It houses requests to the event loop
+#define AIO_QUEUE_SIZE (10)
+
 // times 2 just for fun
 #define HTTP_SLAB_ITEM_SIZE (SSL3_RT_MAX_PACKET_SIZE * 2)
 #define HTTP_MAX_IO_REQUESTS (1024)
+#define HTTP_MAX_CONNECTIONS (10)
+#define HTTP_MAX_CONNECTION_HEAP (1024)
+#define HTTP_MAX_CONCURRENT_REQUESTS (1024)
+#define HTTP_MAX_REQUEST_SIZE_BYTES (8e6)
 
-static __thread valk_slab_t slab;
+#define HTTP_CONNECTION_STATE_SIZE
+
+static __thread valk_slab_t tcp_buffer_slab;
+typedef struct {
+  uv_write_t req;
+  uv_buf_t buf;
+  char data[SSL3_RT_MAX_PACKET_SIZE];
+} __tcp_buffer_slab_item_t;
+
+static __thread valk_slab_t tcp_connection_slab;
+static __thread valk_slab_t tcp_request_arena_slab;
 
 static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
                                const uv_buf_t *buf);
 void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
                       uv_buf_t *buf) {
   // TODO(networking): replace it with memory arena for the request
-  buf->base = valk_slab_alloc_aquire(&slab)->data;
+  buf->base = valk_slab_alloc_aquire(&tcp_buffer_slab)->data;
   buf->len = suggested_size;
 }
 
@@ -52,7 +71,7 @@ struct valk_aio_task {
 struct valk_aio_system {
   uv_loop_t *eventloop;
   uv_thread_t loopThread;
-  struct valk_aio_task *items;
+  struct valk_aio_task items[AIO_QUEUE_SIZE];
   size_t idx;
   size_t count;
   size_t capacity;
@@ -72,14 +91,19 @@ struct valk_aio_http_conn {
   uv_tcp_t tcpHandle;
   valk_aio_ssl_t ssl;
   nghttp2_session *session;
-  int closed;
+  valk_mem_arena_t *arena;
 };
 
 static void __event_loop(void *arg) {
   valk_aio_system *sys = arg;
   valk_mem_init_malloc();
   printf("Allocating some shit\n");
-  valk_slab_alloc_init(&slab, HTTP_SLAB_ITEM_SIZE, HTTP_MAX_IO_REQUESTS);
+  valk_slab_alloc_init(&tcp_buffer_slab, HTTP_SLAB_ITEM_SIZE,
+                       HTTP_MAX_IO_REQUESTS);
+  valk_slab_alloc_init(&tcp_connection_slab, HTTP_MAX_CONNECTION_HEAP,
+                       HTTP_MAX_CONNECTIONS);
+  valk_slab_alloc_init(&tcp_request_arena_slab, HTTP_MAX_REQUEST_SIZE_BYTES,
+                       HTTP_MAX_CONCURRENT_REQUESTS);
   uv_run(sys->eventloop, UV_RUN_DEFAULT);
 }
 
@@ -95,16 +119,31 @@ static void __task_cb(uv_async_t *handle) {
   uv_mutex_unlock(&sys->taskLock);
 }
 
+void *__CRYPTO_malloc_fn(size_t num, const char *file, int line) {
+  return valk_mem_alloc(num);
+}
+
+void *__CRYPTO_realloc_fn(void *addr, size_t num, const char *file, int line) {
+  // TODO(networking): implement realloc ??? for arenas its even dumber....
+  return realloc(addr, num);
+}
+
+void __CRYPTO_free_fn(void *addr, const char *file, int line) {
+  valk_mem_free(addr);
+}
+
 void valk_aio_start(valk_aio_system *sys) {
   sys->eventloop = uv_default_loop();
   sys->count = 0;
   sys->capacity = 10;
-  sys->items = valk_mem_alloc(sizeof(struct valk_aio_task) * 10);
 
+  CRYPTO_set_mem_functions(__CRYPTO_malloc_fn, __CRYPTO_realloc_fn,
+                           __CRYPTO_free_fn);
   // On linux definitely turn sigpipe off
   // Otherwise shit crashes.
   // When the socket dissapears a write may be queued in the event loop
-  // In that case we just want to do proper error handling without the signal
+  // In that case we just want to do proper error handling without the
+  // signal
   struct sigaction sa = {.sa_handler = SIG_IGN};
   sigaction(SIGPIPE, &sa, NULL);
   uv_mutex_init(&sys->taskLock);
@@ -154,10 +193,7 @@ static void __http_tcp_on_write_cb(uv_write_t *handle, int status) {
     printf("Receiving on write CB\n");
   }
 
-  uv_buf_t *buf = handle->data;
-  valk_slab_alloc_release_ptr(&slab, buf->base);
-  valk_mem_free(buf);
-  valk_mem_free(handle);
+  valk_slab_alloc_release_ptr(&tcp_buffer_slab, handle);
 }
 
 static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
@@ -211,18 +247,11 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
 
   if (frame->hd.type == NGHTTP2_HEADERS &&
       frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
+
     /* Example: respond with a small HEADERS + DATA for "Hello HTTP/2" */
     int stream_id = frame->hd.stream_id;
     __demo_response(session, stream_id);
 
-    /* if (nghttp2_session_send(session) < 0) { */
-    /*   fprintf(stderr, "nghttp2_session_send error\n"); */
-    /*   // uv_close((uv_handle_t *)&client->handle, NULL); */
-    /*   return 0; */
-    /* } */
-    /* uv_write_t *req = malloc(sizeof(uv_write_t)); */
-    /* uv_write(req, (uv_stream_t *)&client->handle, &client->send_buf, 1, */
-    /*          __http_tcp_on_write_cb); */
   } else {
     printf("Not sending a response ??\n");
   }
@@ -269,7 +298,6 @@ static void __http_tcp_unencrypted_read_cb(void *arg,
   if (rv < 0) {
     fprintf(stderr, "nghttp2_session_mem_recv error: %zd\n", rv);
     uv_close((uv_handle_t *)&conn->tcpHandle, NULL);
-    // valk_mem_free(buf->base);
   }
 }
 
@@ -286,7 +314,6 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
       fprintf(stderr, "Read error: %s\n", uv_strerror((int)nread));
     }
     uv_close((uv_handle_t *)stream, NULL);
-    // valk_mem_free(buf->base);
     return;
   }
 
@@ -295,9 +322,11 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   valk_buffer_t In = {
       .items = buf->base, .count = nread, .capacity = HTTP_SLAB_ITEM_SIZE};
 
-  valk_buffer_t Out = {.items = valk_slab_alloc_aquire(&slab)->data,
-                       .count = 0,
-                       .capacity = HTTP_SLAB_ITEM_SIZE};
+  __tcp_buffer_slab_item_t *slabItem =
+      (void *)valk_slab_alloc_aquire(&tcp_buffer_slab)->data;
+
+  valk_buffer_t Out = {
+      .items = slabItem->data, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
 
   valk_aio_ssl_on_read(&conn->ssl, &In, &Out, conn,
                        __http_tcp_unencrypted_read_cb);
@@ -311,22 +340,19 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
 
   int wantToSend = Out.count > 0;
   if (wantToSend) {
-    // TODO(networking): Should not be allocating the write buffer
-    uv_buf_t *sbuf = valk_mem_alloc(sizeof(uv_buf_t));
-    sbuf->base = Out.items;
-    sbuf->len = Out.count;
 
-    printf("Sending %ld bytes\n", sbuf->len);
-    uv_write_t *req = malloc(sizeof(uv_write_t));
-    req->data = sbuf;
-    uv_write(req, (uv_stream_t *)&conn->tcpHandle, sbuf, 1,
+    slabItem->buf.base = Out.items;
+    slabItem->buf.len = Out.count;
+
+    printf("Sending %ld bytes\n", Out.count);
+    uv_write(&slabItem->req, (uv_stream_t *)&conn->tcpHandle, &slabItem->buf, 1,
              __http_tcp_on_write_cb);
   } else {
     printf("Nothing to send %d \n", wantToSend);
-    valk_slab_alloc_release_ptr(&slab, Out.items);
+    valk_slab_alloc_release_ptr(&tcp_buffer_slab, slabItem);
   }
 
-  valk_slab_alloc_release_ptr(&slab, In.items);
+  valk_slab_alloc_release_ptr(&tcp_buffer_slab, In.items);
 }
 
 static int __http_send_server_connection_header(nghttp2_session *session) {
@@ -351,8 +377,15 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
     return;
   }
 
+  // Init the arena
+  valk_mem_arena_t *arena =
+      (void *)valk_slab_alloc_aquire(&tcp_connection_slab)->data;
+  arena->capacity = HTTP_MAX_CONNECTION_HEAP - sizeof(valk_mem_arena_t);
+  arena->offset = 0;
+
   struct valk_aio_http_conn *conn =
-      valk_mem_alloc(sizeof(struct valk_aio_http_conn));
+      valk_mem_arena_alloc(arena, sizeof(struct valk_aio_http_conn));
+  conn->arena = arena;
 
   uv_tcp_init(server->loop, &conn->tcpHandle);
   conn->tcpHandle.data = conn;
@@ -412,7 +445,9 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
   } else {
     fprintf(stderr, "Fuck closing %s\n", uv_strerror(res));
     uv_close((uv_handle_t *)&conn->tcpHandle, NULL);
-    valk_mem_free(conn);
+    // TODO(networking): should probably have a function for properly disposing
+    // of the connection objects
+    valk_slab_alloc_release_ptr(&tcp_connection_slab, conn->arena);
   }
 }
 
@@ -461,24 +496,12 @@ static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
   UNUSED(ssl);
   UNUSED(arg);
 
-#if 0
-  int rv;
-  rv = nghttp2_select_alpn(out, outlen, in, inlen);
-
-  if (rv != 1) {
-    return SSL_TLSEXT_ERR_NOACK;
-  }
-
-  return SSL_TLSEXT_ERR_OK;
-
-#else
   int rv;
   rv = nghttp2_select_alpn(out, outlen, in, inlen);
   if (rv == -1) {
     return SSL_TLSEXT_ERR_NOACK;
   }
   return SSL_TLSEXT_ERR_OK;
-#endif
 }
 
 static void __no_free(void *arg) { UNUSED(arg); }
@@ -508,24 +531,21 @@ int valk_aio_http2_listen(valk_aio_http_server *srv, valk_aio_system *sys,
 void valk_aio_hangup(valk_aio_socket *socket);
 
 void valk_server_demo(void) {
-  valk_aio_system *sys = valk_mem_alloc(sizeof(valk_aio_system));
-  valk_aio_http_server *srv = valk_mem_alloc(sizeof(valk_aio_http_server));
-  valk_aio_start(sys);
-  valk_aio_http2_listen(srv, sys, "0.0.0.0", 6969, "build/server.key",
+  valk_aio_system sys;
+  valk_aio_http_server srv;
+  valk_aio_start(&sys);
+  valk_aio_http2_listen(&srv, &sys, "0.0.0.0", 6969, "build/server.key",
                         "build/server.crt");
-  uv_thread_join(&sys->loopThread);
-  valk_aio_stop(sys);
-  valk_mem_free(sys);
-  valk_mem_free(srv);
+  uv_thread_join(&sys.loopThread);
+  valk_aio_stop(&sys);
 }
 
 char *valk_client_demo(const char *domain, const char *port) {
-  valk_aio_system *sys = valk_mem_alloc(sizeof(valk_aio_system));
+  valk_aio_system sys;
   while (1)
     ;
-  valk_aio_start(sys);
-  valk_aio_stop(sys);
-  valk_mem_free(sys);
+  valk_aio_start(&sys);
+  valk_aio_stop(&sys);
   return strdup("");
 }
 

@@ -22,21 +22,6 @@ void valk_mem_init_malloc() {
   valk_thread_ctx.free = __valk_mem_malloc_free;
 }
 
-/// ARENA ALLOCATOR
-typedef struct {
-  size_t offset;
-  size_t capacity;
-  void *data;
-} valk_mem_arena_t;
-
-static void *__valk_mem_arena(void *heap, size_t bytes) {}
-
-static void __valk_mem_arena_free(void *heap, void *ptr) {
-  UNUSED(heap);
-  UNUSED(ptr);
-  // Frees are disabled for arenas
-}
-
 void valk_buffer_alloc(valk_buffer_t *buf, size_t capacity) {
   buf->capacity = capacity;
   buf->count = 0;
@@ -79,13 +64,6 @@ void valk_slab_alloc_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
         (valk_slab_item_t *)&(((char *)self->heap)[(freelen) + (itemlen * i)]);
     item->handle = i;
   }
-
-  // for (size_t i = 0; i < numItems; i++) {
-  //   printf(
-  //       "Slab Init: %ld ::: %ld\n", ((size_t *)self->heap)[i],
-  //       ((valk_slab_item_t *)&((char *)self->heap)[(freelen) + (itemlen * i)])
-  //           ->handle);
-  // }
 }
 
 valk_slab_item_t *valk_slab_alloc_aquire(valk_slab_t *self) {
@@ -132,4 +110,23 @@ void valk_slab_alloc_release_ptr(valk_slab_t *self, void *data) {
   // the handle and then free that shit
   valk_slab_alloc_release(
       self, (valk_slab_item_t *)(&((char *)data)[-sizeof(valk_slab_item_t)]));
+}
+
+void valk_mem_arena_reset(valk_mem_arena_t *self) {
+  __atomic_store_n(&self->offset, 0, __ATOMIC_SEQ_CST);
+}
+void *valk_mem_arena_alloc(valk_mem_arena_t *self, size_t bytes) {
+  size_t oldVal = __atomic_load_n(&self->offset, __ATOMIC_RELAXED);
+  do {
+
+    size_t newVal = oldVal + bytes + sizeof(size_t);
+    VALK_ASSERT(newVal < self->capacity,
+                "Arena ran out of memory during alloc, %ld + %ld > %ld", oldVal,
+                bytes, self->capacity);
+    if (__atomic_compare_exchange_n(&self->offset, &oldVal, newVal, 1,
+                                    __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
+      (self->heap)[newVal - bytes - sizeof(size_t)] = bytes;
+      return &(self->heap)[newVal - bytes];
+    }
+  } while (1);
 }
