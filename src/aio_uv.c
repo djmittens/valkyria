@@ -38,6 +38,7 @@
 #define HTTP_SLAB_ITEM_SIZE (SSL3_RT_MAX_PACKET_SIZE * 2)
 #define HTTP_MAX_IO_REQUESTS (1024)
 #define HTTP_MAX_CONNECTIONS (10)
+#define HTTP_MAX_CONNECTION_HEAP (1024)
 #define HTTP_MAX_CONCURRENT_REQUESTS (1024)
 #define HTTP_MAX_REQUEST_SIZE_BYTES (8e6)
 
@@ -90,6 +91,7 @@ struct valk_aio_http_conn {
   uv_tcp_t tcpHandle;
   valk_aio_ssl_t ssl;
   nghttp2_session *session;
+  valk_mem_arena_t *arena;
 };
 
 static void __event_loop(void *arg) {
@@ -98,7 +100,8 @@ static void __event_loop(void *arg) {
   printf("Allocating some shit\n");
   valk_slab_alloc_init(&tcp_buffer_slab, HTTP_SLAB_ITEM_SIZE,
                        HTTP_MAX_IO_REQUESTS);
-  // valk_slab_alloc_init(&tcp_connection_slab, , HTTP_MAX_CONNECTIONS);
+  valk_slab_alloc_init(&tcp_connection_slab, HTTP_MAX_CONNECTION_HEAP,
+                       HTTP_MAX_CONNECTIONS);
   valk_slab_alloc_init(&tcp_request_arena_slab, HTTP_MAX_REQUEST_SIZE_BYTES,
                        HTTP_MAX_CONCURRENT_REQUESTS);
   uv_run(sys->eventloop, UV_RUN_DEFAULT);
@@ -374,8 +377,15 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
     return;
   }
 
+  // Init the arena
+  valk_mem_arena_t *arena =
+      (void *)valk_slab_alloc_aquire(&tcp_connection_slab)->data;
+  arena->capacity = HTTP_MAX_CONNECTION_HEAP - sizeof(valk_mem_arena_t);
+  arena->offset = 0;
+
   struct valk_aio_http_conn *conn =
-      valk_mem_alloc(sizeof(struct valk_aio_http_conn));
+      valk_mem_arena_alloc(arena, sizeof(struct valk_aio_http_conn));
+  conn->arena = arena;
 
   uv_tcp_init(server->loop, &conn->tcpHandle);
   conn->tcpHandle.data = conn;
@@ -435,7 +445,9 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
   } else {
     fprintf(stderr, "Fuck closing %s\n", uv_strerror(res));
     uv_close((uv_handle_t *)&conn->tcpHandle, NULL);
-    valk_mem_free(conn);
+    // TODO(networking): should probably have a function for properly disposing
+    // of the connection objects
+    valk_slab_alloc_release_ptr(&tcp_connection_slab, conn->arena);
   }
 }
 

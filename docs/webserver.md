@@ -119,7 +119,7 @@
     - [ ] Handle too many connections
     - [ ] Handle too many requests
 - [ ] Replace OpenSSL with a lighter TLS library, like WolfSSL
-
+- [ ] Redirect to https if the request is http 1.1
 
 
 ## Settings

@@ -11,6 +11,9 @@
        __ctx.exec; valk_thread_ctx = __ctx.old_ctx)                            \
     for (valk_thread_ctx = (_ctx_); __ctx.exec; __ctx.exec = 0)
 
+// Maximum checkpoints in an arena
+#define VALK_ARENA_MAX_CHECKPOINTS 10
+
 typedef struct {
   size_t capacity;
   size_t count;
@@ -73,4 +76,15 @@ static inline void valk_mem_free(void *ptr) {
   valk_thread_ctx.free(valk_thread_ctx.heap, ptr);
 }
 
+typedef struct {
+  size_t capacity;
+  size_t offset;
+  char heap[];
+} valk_mem_arena_t;
+
+void valk_mem_arena_reset(valk_mem_arena_t* self);
+void* valk_mem_arena_alloc(valk_mem_arena_t* self, size_t bytes);
+
+
 void valk_mem_init_malloc();
+
