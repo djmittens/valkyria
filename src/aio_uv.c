@@ -38,7 +38,8 @@
 #define HTTP_SLAB_ITEM_SIZE (SSL3_RT_MAX_PACKET_SIZE * 2)
 #define HTTP_MAX_IO_REQUESTS (1024)
 #define HTTP_MAX_CONNECTIONS (10)
-#define HTTP_MAX_CONNECTION_HEAP (1024)
+// TODO(networking): Figure out a good initial value for this.
+#define HTTP_MAX_CONNECTION_HEAP (1024000)
 #define HTTP_MAX_CONCURRENT_REQUESTS (1024)
 #define HTTP_MAX_REQUEST_SIZE_BYTES (8e6)
 
@@ -91,6 +92,7 @@ struct valk_aio_http_conn {
   uv_tcp_t tcpHandle;
   valk_aio_ssl_t ssl;
   nghttp2_session *session;
+  nghttp2_mem session_allocator;
   valk_mem_arena_t *arena;
 };
 
@@ -163,6 +165,56 @@ void valk_aio_stop(valk_aio_system *sys) {
 }
 
 valk_future *valk_aio_read_file(valk_aio_system *sys, const char *filename);
+
+/**
+ * @functypedef
+ *
+ * Custom memory allocator to replace malloc().  The |mem_user_data|
+ * is the mem_user_data member of :type:`nghttp2_mem` structure.
+ */
+void *__nghttp2_malloc(size_t size, void *mem_user_data) {
+  printf("HTTP2:: Malloc %ld\n", size);
+  return valk_mem_arena_alloc(mem_user_data, size);
+}
+
+/**
+ * @functypedef
+ *
+ * Custom memory allocator to replace free().  The |mem_user_data| is
+ * the mem_user_data member of :type:`nghttp2_mem` structure.
+ */
+void __nghttp2_free(void *ptr, void *mem_user_data) {
+  printf("HTTP2:: Free %p\n", ptr);
+}
+
+/**
+ * @functypedef
+ *
+ * Custom memory allocator to replace calloc().  The |mem_user_data|
+ * is the mem_user_data member of :type:`nghttp2_mem` structure.
+ */
+void *__nghttp2_calloc(size_t nmemb, size_t size, void *mem_user_data) {
+  printf("HTTP2:: Calloc %ld, %ld\n", nmemb, size);
+  void *res = valk_mem_arena_alloc(mem_user_data, nmemb * size);
+  memset(res, 0, nmemb * size);
+  return res;
+}
+
+/**
+ * @functypedef
+ *
+ * Custom memory allocator to replace realloc().  The |mem_user_data|
+ * is the mem_user_data member of :type:`nghttp2_mem` structure.
+ */
+void *__nghttp2_realloc(void *ptr, size_t size, void *mem_user_data) {
+  printf("HTTP2:: Realloc %p, %ld\n", ptr, size);
+  void *res = valk_mem_arena_alloc(mem_user_data, size);
+  if (ptr != NULL) {
+    size_t origSize = ((size_t *)ptr)[-1];
+    memcpy(res, ptr, origSize);
+  }
+  return res;
+}
 
 static int __http_on_header_callback(nghttp2_session *session,
                                      const nghttp2_frame *frame,
@@ -417,7 +469,30 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
       printf("Accepted connection from IP: %s:%d\n", ip, port);
     } else {
       fprintf(stderr, "Could not get peer name\n");
-    }
+    };
+
+    /**
+     * An arbitrary user supplied data.  This is passed to each
+     * allocator function.
+     */
+    conn->session_allocator.mem_user_data = conn->arena;
+    /**
+     * Custom allocator function to replace malloc().
+     */
+    conn->session_allocator.malloc = __nghttp2_malloc;
+    /**
+     * Custom allocator function to replace free().
+     */
+    conn->session_allocator.free = __nghttp2_free;
+    /**
+     * Custom allocator function to replace calloc().
+     */
+    conn->session_allocator.calloc = __nghttp2_calloc;
+    /**
+     * Custom allocator function to replace realloc().
+     */
+    conn->session_allocator.realloc = __nghttp2_realloc;
+
     static nghttp2_session_callbacks *callbacks = NULL;
     if (!callbacks) {
       nghttp2_session_callbacks_new(&callbacks);
@@ -431,7 +506,8 @@ static void __http_connection_cb(uv_stream_t *server, int status) {
           callbacks, __http_on_frame_recv_callback);
     }
 
-    nghttp2_session_server_new(&conn->session, callbacks, conn);
+    nghttp2_session_server_new3(&conn->session, callbacks, conn, NULL,
+                                &conn->session_allocator);
 
     valk_aio_http_server *srv = server->data;
     valk_aio_ssl_accept(&conn->ssl, srv->ssl_ctx);

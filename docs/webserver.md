@@ -99,12 +99,12 @@
 
 - [ ] Handle memory allocation
     - [x] Slab allocate buffers
-    - [ ] Slab allocate arenas
-        - [ ] Connection slab
-            - [ ] valk_aio_http_conn
-            - [ ] NGHttp session Arena
-            - [ ] OpenSSL Arena
-        - [ ] Random uv buffer objects (ring buffer ???)
+    - [x] Slab allocate arenas
+        - [x] Connection slab
+            - [x] valk_aio_http_conn
+            - [x] NGHttp session Arena
+            - [x] OpenSSL Arena
+        - [x] Random uv buffer objects (ring buffer ???)
             - write buffers
                 - uv_write_t
                 - uv_buf_t
@@ -120,6 +120,9 @@
     - [ ] Handle too many requests
 - [ ] Replace OpenSSL with a lighter TLS library, like WolfSSL
 - [ ] Redirect to https if the request is http 1.1
+- [ ] Figure out the proper allocation size for a session.
+    I get a vey eerie feeling that nghttp2 will allocate state on every message, in the session memory pool.
+    If thats the case, i might need to consider on moving that memory alloc to request level or at least consider timeout or something like that
 
 
 ## Settings
