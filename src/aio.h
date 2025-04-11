@@ -23,6 +23,7 @@ typedef struct valk_aio_system valk_aio_system;
 typedef struct valk_aio_socket valk_aio_socket;
 
 typedef struct valk_aio_http_server valk_aio_http_server;
+typedef struct valk_aio_http2_client valk_aio_http2_client;
 
 void valk_aio_start(valk_aio_system *sys);
 void valk_aio_stop(valk_aio_system *sys);
@@ -40,5 +41,9 @@ typedef struct {
 int valk_aio_http2_listen(valk_aio_http_server *srv, valk_aio_system *sys,
                           const char *interface, const int port,
                           const char *keyfile, const char *certfile);
+
+void valk_aio_http2_connect(valk_aio_http2_client *client, valk_aio_system *sys,
+                           const char *interface, const int port,
+                           const char *certfile);
 
 void valk_aio_hangup(valk_aio_socket *socket);

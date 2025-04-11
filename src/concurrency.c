@@ -1,6 +1,7 @@
 #include "concurrency.h"
 #include "collections.h"
 #define _GNU_SOURCE
+#include "memory.h"
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -10,7 +11,7 @@
 const int VALK_NUM_WORKERS = 4;
 
 valk_arc_box *valk_arc_box_suc(void *succ, valk_callback_void *free) {
-  valk_arc_box *res = malloc(sizeof(valk_arc_box));
+  valk_arc_box *res = valk_mem_alloc(sizeof(valk_arc_box));
   res->type = VALK_SUC;
   res->succ = succ;
   res->free = free;
@@ -19,7 +20,7 @@ valk_arc_box *valk_arc_box_suc(void *succ, valk_callback_void *free) {
 }
 
 valk_arc_box *valk_arc_box_err(int code, const char *msg) {
-  valk_arc_box *res = malloc(sizeof(valk_arc_box));
+  valk_arc_box *res = valk_mem_alloc(sizeof(valk_arc_box));
   res->type = VALK_ERR;
   res->err.size = strlen(msg);
   res->err.code = code;
@@ -378,7 +379,7 @@ static valk_arc_box *__valk_pool_resolve_promise_cb(valk_arc_box *arg) {
 
 void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
                                valk_arc_box *result) {
-  __valk_resolve_promise *pair = malloc(sizeof(__valk_resolve_promise));
+  __valk_resolve_promise *pair = valk_mem_alloc(sizeof(__valk_resolve_promise));
   pair->promise = promise;
   pair->result = result;
   valk_future *res =

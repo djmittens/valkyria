@@ -421,11 +421,10 @@ static int __http_send_server_connection_header(nghttp2_session *session) {
   return 0;
 }
 
-static void __http_connection_cb(uv_stream_t *server, int status) {
+static void __http_server_connection_cb(uv_stream_t *server, int status) {
   if (status < 0) {
     fprintf(stderr, "New connection error %s\n", uv_strerror(status));
     // error!
-
     return;
   }
 
@@ -555,7 +554,7 @@ static void __http_listen_cb(valk_arc_box *box) {
   }
 
   srv->server.data = srv;
-  r = uv_listen((uv_stream_t *)&srv->server, 128, __http_connection_cb);
+  r = uv_listen((uv_stream_t *)&srv->server, 128, __http_server_connection_cb);
   if (r) {
     fprintf(stderr, "Listen err: %s \n", uv_strerror(r));
     return;
@@ -616,11 +615,80 @@ void valk_server_demo(void) {
   valk_aio_stop(&sys);
 }
 
+//// HTTP2 CLIENT
+
+struct valk_aio_http2_client {
+  uv_loop_t *eventloop;
+  SSL_CTX *ssl_ctx;
+  uv_tcp_t connection;
+  uv_connect_t connectionRequest;
+  char *interface;
+  int port;
+};
+
+static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
+  if (status < 0) {
+    fprintf(stderr, "Client Connection err: %s\n", uv_strerror(status));
+    // error!
+
+    return;
+  }
+  printf("Gurr we connected\n");
+}
+
+static void __aio_connect_cb(valk_arc_box *box) {
+
+  int r;
+  struct sockaddr_in addr;
+  valk_aio_http2_client *client = box->succ;
+
+  r = uv_tcp_init(client->eventloop, &client->connection);
+  uv_tcp_nodelay(&client->connection, 1);
+
+  if (r) {
+    fprintf(stderr, "TcpInit err: %s \n", uv_strerror(r));
+    return;
+  }
+  r = uv_ip4_addr(client->interface, client->port, &addr);
+  if (r) {
+    fprintf(stderr, "Addr err: %s \n", uv_strerror(r));
+    return;
+  }
+  client->connectionRequest.data = client;
+  uv_tcp_connect(&client->connectionRequest, &client->connection,
+                 (const struct sockaddr *)&addr, __uv_http2_connect_cb);
+}
+
+void valk_aio_http2_connect(valk_aio_http2_client *client, valk_aio_system *sys,
+                            const char *interface, const int port,
+                            const char *certfile) {
+
+  client->eventloop = sys->eventloop;
+  client->interface = strdup(interface);
+  client->port = port;
+
+  uv_mutex_lock(&sys->taskLock);
+  struct valk_aio_task task;
+
+  valk_aio_ssl_client_init(&client->ssl_ctx);
+
+  task.arg = valk_arc_box_suc(client, __no_free);
+  task.callback = __aio_connect_cb;
+
+  valk_work_add(sys, task);
+
+  uv_mutex_unlock(&sys->taskLock);
+  uv_async_send(&sys->taskHandle);
+}
+
 char *valk_client_demo(const char *domain, const char *port) {
   valk_aio_system sys;
+  valk_aio_http2_client client;
+  valk_aio_start(&sys);
+  valk_aio_http2_connect(&client, &sys, "127.0.0.1", 6969, "");
+
   while (1)
     ;
-  valk_aio_start(&sys);
   valk_aio_stop(&sys);
   return strdup("");
 }

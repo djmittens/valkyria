@@ -47,6 +47,8 @@ add_library(valkyria
   src/parser.c
   src/memory.c
   src/concurrency.c
+# TODO(networking): if should detect uring and if we have it we can get it here instead of libuv.
+  src/aio_uv.c
   src/aio_ssl.c
 )
 
@@ -62,12 +64,6 @@ find_package(OpenSSL REQUIRED)
 target_include_directories(valkyria PRIVATE ${LIBUV_INCLUDE_DIRS})
 target_link_libraries(valkyria PRIVATE ${LIBUV_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto)
 
-
-# TODO(networking): if should detect uring and if we have it we can get it here instead of libuv.
-target_sources(valkyria PRIVATE
-  # TODO(networking): need to detect if the platform supports uring, otherwise we use libuv
-  src/aio_uv.c
-)
 
 add_executable(valk
   "src/repl.c"

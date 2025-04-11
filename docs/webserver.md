@@ -91,7 +91,8 @@
     - [x] Fix buffer sizes so that its not busted 
         ```
             Accepted connection from IP: 127.0.0.1:33292
-            memory.c:51:valk_buffer_append || Buffer too small !!!  capacity [2048] :: count [0] :: new bytes [2385]i^Cmake: *** [Makefile:68: test] Interrupt
+            memory.c:51:valk_buffer_append || Buffer too small !!!  capacity [2048] :: count [0] :: new bytes [2385]
+            i^Cmake: *** [Makefile:68: test] Interrupt
         ```
         Max frame size for http2 is negotiated by the protocol, on connection startup, so based on that we will know the size to allocate to it.
         Thats not something we want.  We want a set size by the server, and let the client know that is what we are working with to avoid dynamic allocation of said buffers

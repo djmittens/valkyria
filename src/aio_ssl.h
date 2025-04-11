@@ -19,6 +19,8 @@ typedef struct valk_aio_ssl_t {
 valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
                                     const char *certfile);
 
+valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx);
+
 void valk_aio_ssl_accept(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx);
 
 void valk_aio_ssl_close(valk_aio_ssl_t *ssl);
