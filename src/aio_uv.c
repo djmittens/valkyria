@@ -279,7 +279,7 @@ static int __demo_response(nghttp2_session *session, int stream_id) {
 
   /* Send DATA frame */
   nghttp2_data_provider2 data_prd;
-  data_prd.source.ptr = "<h1>Valkyria, GOD's lil messenger</h1>\n";
+  data_prd.source.ptr = "<h1>Valkyria, valhallas treasure</h1>\n";
   data_prd.read_callback = __http_byte_body_cb;
 
   /* return nghttp2_submit_push_promise(session, 0, stream_id, response_headers,
@@ -297,9 +297,13 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
                                          void *user_data) {
   struct valk_aio_http_conn *client = (struct valk_aio_http_conn *)user_data;
 
+  if (frame->hd.type == NGHTTP2_GOAWAY) {
+    printf("Received GO AWAY frame\n");
+  }
+
   if (frame->hd.type == NGHTTP2_HEADERS &&
       frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
-
+    printf("Received HEADERS frame(meaning request).. pushing response\n");
     /* Example: respond with a small HEADERS + DATA for "Hello HTTP/2" */
     int stream_id = frame->hd.stream_id;
     __demo_response(session, stream_id);
@@ -326,13 +330,15 @@ static void __http2_flush_frames(valk_buffer_t *buf,
 
       valk_buffer_append(buf, (void *)data, len);
 
-      if (buf->count + len > buf->capacity) {
+      if ((buf->count + len) > buf->capacity) {
         // if we read the same amount of data again, we would overflow, so lets
         // stop for now
+        printf("Fuck... couldnt cache it all %ld\n", buf->count + len);
         break;
       }
 
-      printf("Buffed frame data %d :: %ld\n", len, buf->count);
+      printf("Buffed frame data %d :: %ld :: capacity %ld, %s\n", len,
+             buf->count, buf->capacity, data);
     } else {
       printf("Found no data to send Skipping CB\n");
     }
@@ -380,19 +386,22 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   valk_buffer_t Out = {
       .items = slabItem->data, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
 
-  valk_aio_ssl_on_read(&conn->ssl, &In, &Out, conn,
-                       __http_tcp_unencrypted_read_cb);
+  int status = valk_aio_ssl_on_read(&conn->ssl, &In, &Out, conn,
+                                    __http_tcp_unencrypted_read_cb);
 
-  // Flushies
-  In.count = 0;
-  __http2_flush_frames(&In, conn);
+  // Only do this if ssl is established:
+  if (!status) {
+    // Flushies
+    In.count = 0;
+    memset(In.items, 0, In.capacity);
+    __http2_flush_frames(&In, conn);
 
-  // Encrypt the new data n stuff
-  valk_aio_ssl_encrypt(&conn->ssl, &In, &Out);
+    // Encrypt the new data n stuff
+    valk_aio_ssl_encrypt(&conn->ssl, &In, &Out);
+  }
 
   int wantToSend = Out.count > 0;
   if (wantToSend) {
-
     slabItem->buf.base = Out.items;
     slabItem->buf.len = Out.count;
 
@@ -441,6 +450,8 @@ static void __http_server_connection_cb(uv_stream_t *server, int status) {
   uv_tcp_init(server->loop, &conn->tcpHandle);
   conn->tcpHandle.data = conn;
 
+  // dont need for now because we are using nghttp2 mem buffer for send
+  // conn->send_buf.base = valk_mem_alloc(MAX_SEND_BYTES);
   int res = uv_accept(server, (uv_stream_t *)&conn->tcpHandle);
 
   if (!res) {
@@ -507,9 +518,9 @@ static void __http_server_connection_cb(uv_stream_t *server, int status) {
 
     nghttp2_session_server_new3(&conn->session, callbacks, conn, NULL,
                                 &conn->session_allocator);
-
     valk_aio_http_server *srv = server->data;
     valk_aio_ssl_accept(&conn->ssl, srv->ssl_ctx);
+
 
     // Send settings to the client
     __http_send_server_connection_header(conn->session);

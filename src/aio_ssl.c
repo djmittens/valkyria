@@ -23,7 +23,7 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
     fprintf(stderr, "SSL_CTX_set1_curves_list failed: %s\n",
             ERR_error_string(ERR_get_error(), NULL));
     SSL_CTX_free(*ssl_ctx);
-    ssl_ctx = NULL;
+    *ssl_ctx = NULL;
     return VALK_ERR_SSL_INIT;
   }
 #else  /* !(OPENSSL_VERSION_NUMBER >= 0x30000000L) */
@@ -33,11 +33,11 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
     if (!ecdh) {
       fprintf(stderr, "EC_KEY_new_by_curv_name failed: %s\n",
               ERR_error_string(ERR_get_error(), NULL));
-      SSL_CTX_free(ctx->ssl_ctx);
-      ctx->ssl_ctx = NULL;
+      SSL_CTX_free(*ssl_ctx);
+      *ssl_ctx = NULL;
       return VALK_ERR_SSL_INIT;
     }
-    SSL_CTX_set_tmp_ecdh(ssl_ctx, ecdh);
+    SSL_CTX_set_tmp_ecdh(*ssl_ctx, ecdh);
     EC_KEY_free(ecdh);
   }
 #endif /* !(OPENSSL_VERSION_NUMBER >= 0x30000000L) */
@@ -45,7 +45,7 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
   if (SSL_CTX_use_PrivateKey_file(*ssl_ctx, keyfile, SSL_FILETYPE_PEM) != 1) {
     fprintf(stderr, "Could not read private key file %s\n", keyfile);
     SSL_CTX_free(*ssl_ctx);
-    ssl_ctx = NULL;
+    *ssl_ctx = NULL;
 
     return VALK_ERR_SSL_INIT;
   }
@@ -53,7 +53,7 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
   if (SSL_CTX_use_certificate_chain_file(*ssl_ctx, certfile) != 1) {
     fprintf(stderr, "Could not read certificate file %s\n", certfile);
     SSL_CTX_free(*ssl_ctx);
-    ssl_ctx = NULL;
+    *ssl_ctx = NULL;
 
     return VALK_ERR_SSL_INIT;
   }
@@ -147,12 +147,13 @@ static valk_err_e __valk_aio_ssl_handshake(valk_aio_ssl_t *ssl,
       }
     } while (n > 0);
     break;
-  case SSL_ERROR_ZERO_RETURN:
   case SSL_ERROR_SYSCALL:
-  case SSL_ERROR_NONE:
     // TODO(networking): get proper string for this error
     fprintf(stderr, "OpenSSL error during handshake %d\n",
             SSL_get_error(ssl->ssl, n));
+    break;
+  case SSL_ERROR_ZERO_RETURN:
+  case SSL_ERROR_NONE:
   }
   return VALK_ERR_SUCCESS;
 }
@@ -183,7 +184,7 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
     }
     if (!SSL_is_init_finished(ssl->ssl)) {
       // Still need to do init
-      return VALK_ERR_SUCCESS;
+      return VALK_ERR_SSL_RE_NEGOTIATE;
     }
   }
 

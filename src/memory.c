@@ -39,7 +39,7 @@ void valk_buffer_append(valk_buffer_t *buf, void *bytes, size_t len) {
 }
 
 int valk_buffer_is_full(valk_buffer_t *buf) {
-  return (buf->capacity - buf->count) < 1;
+  return (buf->capacity - buf->count) == 0;
 }
 
 static inline size_t __valk_slab_alloc_item_size(valk_slab_t *self) {
