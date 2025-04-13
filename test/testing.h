@@ -53,8 +53,8 @@
     ENABLE_FORMAT_NONLITERAL;                                                  \
   } while (0)
 
-//  Not very useful right now, since this tyhing doesnt cleanup the resources
-#define VALK_ASSERT(cond, fmt, ...)                                            \
+//  Not very useful right now, since this thing doesnt cleanup the resources
+#define VALK_TEST_ASSERT(cond, fmt, ...)                                            \
   do {                                                                         \
     if (_result->type == VALK_TEST_UNDEFINED && !(cond)) {                     \
       VALK_FAIL((fmt), ##__VA_ARGS__);                                         \

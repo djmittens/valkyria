@@ -1,7 +1,10 @@
 #pragma once
 
+#include "common.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define VALK_WITH_CTX(_ctx_)                                                   \
   for (struct {                                                                \
@@ -11,8 +14,43 @@
        __ctx.exec; valk_thread_ctx = __ctx.old_ctx)                            \
     for (valk_thread_ctx = (_ctx_); __ctx.exec; __ctx.exec = 0)
 
-// Maximum checkpoints in an arena
-#define VALK_ARENA_MAX_CHECKPOINTS 10
+#define VALK_WITH_ALLOC(_alloc_)                                               \
+  for (                                                                        \
+      struct {                                                                 \
+        int exec;                                                              \
+        valk_mem_allocator_e old_type;                                         \
+        void *old_alloc;                                                       \
+      } __ctx = {1, valk_thread_ctx.alloctype, valk_thread_ctx.allocator};     \
+      __ctx.exec; valk_thread_ctx.allocator = __ctx.old_alloc,                 \
+        valk_thread_ctx.alloctype = __ctx.old_type)                            \
+    for (valk_thread_ctx->alloctype = (_ctx_.type),                            \
+        valk_thread_ctx->allocator = (_ctx_);                                  \
+         __ctx.exec; __ctx.exec = 0)
+
+#define valk_mem_alloc(__bytes)                                                \
+  valk_mem_allocator_alloc(valk_thread_ctx.allocator, (__bytes))
+
+#define valk_mem_realloc(__ptr, __new_size)                                    \
+  valk_mem_allocator_realloc(valk_thread_ctx.allocator, (__ptr), (__new_size))
+
+#define valk_mem_calloc(__num, __size)                                         \
+  valk_mem_allocator_calloc(valk_thread_ctx.allocator, (__num), (__size))
+
+#define valk_mem_free(__ptr)                                                   \
+  valk_mem_allocator_free(valk_thread_ctx.allocator, __ptr)
+
+typedef enum {
+  VALK_ALLOC_NULL,
+  VALK_ALLOC_MALLOC,
+  VALK_ALLOC_ARENA,
+  VALK_ALLOC_SLAB,
+} valk_mem_allocator_e;
+
+char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self);
+
+typedef struct {
+  valk_mem_allocator_e type;
+} valk_mem_allocator_t;
 
 typedef struct {
   size_t capacity;
@@ -33,6 +71,7 @@ typedef struct {
 } valk_slab_item_t;
 
 typedef struct {
+  valk_mem_allocator_e type;
   size_t itemSize;
   size_t numItems;
   size_t numFree;
@@ -52,39 +91,28 @@ valk_slab_item_t *valk_slab_alloc_aquire(valk_slab_t *self);
 void valk_slab_alloc_release(valk_slab_t *self, valk_slab_item_t *item);
 void valk_slab_alloc_release_ptr(valk_slab_t *self, void *data);
 
-typedef enum {
-  VALK_ALLOC_MALLOC,
-  VALK_ALLOC_ARENA,
-} valk_mem_allocator_e;
-
 typedef struct {
-  valk_mem_allocator_e allocType;
-  // TODO(networking): use valk_buffer_t for this
-  void *heap;
-  void *(*alloc)(void *heap, size_t bytes);
-  void (*free)(void *heap, void *ptr);
-} valk_thread_context_t;
-
-extern __thread valk_thread_context_t valk_thread_ctx;
-
-static inline void *valk_mem_alloc(size_t bytes) {
-  return valk_thread_ctx.alloc(valk_thread_ctx.heap, bytes);
-}
-
-static inline void valk_mem_free(void *ptr) {
-  //printf("Freeing %p\n", ptr);
-  valk_thread_ctx.free(valk_thread_ctx.heap, ptr);
-}
-
-typedef struct {
+  valk_mem_allocator_e type;
   size_t capacity;
   size_t offset;
   char heap[];
 } valk_mem_arena_t;
 
-void valk_mem_arena_reset(valk_mem_arena_t* self);
-void* valk_mem_arena_alloc(valk_mem_arena_t* self, size_t bytes);
+void valk_mem_arena_init(valk_mem_arena_t *self, size_t capacity);
+void valk_mem_arena_reset(valk_mem_arena_t *self);
+void *valk_mem_arena_alloc(valk_mem_arena_t *self, size_t bytes);
 
+typedef struct {
+  valk_mem_allocator_t *allocator;
+} valk_thread_context_t;
+
+extern __thread valk_thread_context_t valk_thread_ctx;
+
+void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes);
+void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
+                                 size_t new_size);
+void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, size_t num,
+                                size_t size);
+void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr);
 
 void valk_mem_init_malloc();
-

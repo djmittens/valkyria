@@ -5,22 +5,22 @@
 
 __thread valk_thread_context_t valk_thread_ctx = {0};
 
-static void *__valk_mem_malloc(void *heap, size_t bytes) {
-  UNUSED(heap);
-  return malloc(bytes);
+char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self) {
+  switch (self) {
+  case VALK_ALLOC_NULL:
+    return "NULL Alloc";
+  case VALK_ALLOC_MALLOC:
+    return "Malloc Alloc";
+  case VALK_ALLOC_ARENA:
+    return "Arena Alloc";
+  case VALK_ALLOC_SLAB:
+    return "Slab Alloc";
+  }
 }
 
-static void __valk_mem_malloc_free(void *heap, void *ptr) {
-  UNUSED(heap);
-  free(ptr);
-}
+static valk_mem_allocator_t __allocator_malloc = {.type = VALK_ALLOC_MALLOC};
 
-void valk_mem_init_malloc() {
-  valk_thread_ctx.allocType = VALK_ALLOC_MALLOC;
-  valk_thread_ctx.heap = NULL;
-  valk_thread_ctx.alloc = __valk_mem_malloc;
-  valk_thread_ctx.free = __valk_mem_malloc_free;
-}
+void valk_mem_init_malloc() { valk_thread_ctx.allocator = &__allocator_malloc; }
 
 void valk_buffer_alloc(valk_buffer_t *buf, size_t capacity) {
   buf->capacity = capacity;
@@ -48,6 +48,8 @@ static inline size_t __valk_slab_alloc_item_size(valk_slab_t *self) {
 
 void valk_slab_alloc_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
   // TODO(networking): do like mmap and some platform specific slab code
+  self->type = VALK_ALLOC_SLAB;
+
   self->heap = valk_mem_alloc(
       (sizeof(size_t) + sizeof(valk_slab_item_t) + itemSize) * numItems);
 
@@ -112,6 +114,12 @@ void valk_slab_alloc_release_ptr(valk_slab_t *self, void *data) {
       self, (valk_slab_item_t *)(&((char *)data)[-sizeof(valk_slab_item_t)]));
 }
 
+void valk_mem_arena_init(valk_mem_arena_t *self, size_t capacity) {
+  self->type = VALK_ALLOC_ARENA;
+  self->capacity = capacity;
+  self->offset = 0;
+}
+
 void valk_mem_arena_reset(valk_mem_arena_t *self) {
   __atomic_store_n(&self->offset, 0, __ATOMIC_SEQ_CST);
 }
@@ -129,4 +137,104 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, size_t bytes) {
       return &(self->heap)[newVal - bytes];
     }
   } while (1);
+}
+
+void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes) {
+  VALK_ASSERT(self,
+              "Thread Local ALLOCATOR has not been initialized, please "
+              "initialize it with something like valk_mem_init_malloc()\n "
+              "Failed while trying to alloc %ld",
+              bytes);
+  // Order by performance.
+  switch (self->type) {
+  case VALK_ALLOC_NULL:
+    VALK_RAISE("Alloc on NULL allocator %ld", bytes);
+    return NULL;
+  case VALK_ALLOC_ARENA:
+    return valk_mem_arena_alloc((void *)self, bytes);
+  case VALK_ALLOC_SLAB:
+    return (void *)valk_slab_alloc_aquire((void *)self)->data;
+  case VALK_ALLOC_MALLOC:
+    return malloc(bytes);
+  }
+}
+
+void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, size_t num,
+                                size_t size) {
+  VALK_ASSERT(self,
+              "Thread Local ALLOCATOR has not been initialized, please "
+              "initialize it with something like valk_mem_init_malloc()\n "
+              "Failed while trying to calloc %ld :: size: %ld",
+              num, size);
+  void *res;
+  // Order by performance.
+  switch (self->type) {
+  case VALK_ALLOC_NULL:
+    VALK_RAISE("Calloc on NULL allocator num: %ld :: size: %ld", num, size);
+    res = NULL;
+    break;
+  case VALK_ALLOC_ARENA:
+    res = valk_mem_arena_alloc((void *)self, num * size);
+    memset(res, 0, num * size);
+    break;
+  case VALK_ALLOC_SLAB:
+    res = valk_slab_alloc_aquire((void *)self);
+    memset(res, 0, num * size);
+    break;
+  case VALK_ALLOC_MALLOC:
+    res = calloc(num, size);
+    break;
+  }
+  return res;
+}
+
+void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
+                                 size_t new_size) {
+  VALK_ASSERT(self,
+              "Thread Local ALLOCATOR has not been initialized, please "
+              "initialize it with something like valk_mem_init_malloc()\n "
+              "Failed while trying to calloc %p :: size: %ld",
+              ptr, new_size);
+
+  // Order by performance.
+  switch (self->type) {
+  case VALK_ALLOC_NULL:
+    VALK_RAISE("Realloc on NULL allocator ptr: %p :: size: %ld", ptr, new_size);
+    return NULL;
+  case VALK_ALLOC_ARENA:
+    // cant really free in arenas soo... just make a new one i guess
+    return valk_mem_arena_alloc((void *)self, new_size);
+  case VALK_ALLOC_SLAB:
+    // slabs are all of the same size, make sure we dont try to resize it to
+    // something bigger than the slab
+    size_t slabSize = ((valk_slab_t *)self)->itemSize;
+    VALK_ASSERT(
+        new_size <= slabSize,
+        "Realloc with slab allocator is unsafe,\n  tried to allocate more "
+        "memory than fits in a slab\n %ld wanted, but %ld is the size",
+        new_size, slabSize);
+    return ptr;
+  case VALK_ALLOC_MALLOC:
+    return realloc(ptr, new_size);
+  }
+}
+
+void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
+  VALK_ASSERT(self,
+              "Thread Local ALLOCATOR has not been initialized, please "
+              "initialize it with something like valk_mem_init_malloc()\n "
+              "Failed while trying to calloc %p", ptr);
+  // printf("Freeing %p\n", ptr);
+  switch (self->type) {
+  case VALK_ALLOC_NULL:
+    VALK_RAISE("Free on NULL allocator %p", ptr);
+  case VALK_ALLOC_ARENA:
+    return;
+  case VALK_ALLOC_SLAB:
+    valk_slab_alloc_release_ptr((void *)self, ptr);
+    return;
+  case VALK_ALLOC_MALLOC:
+    free(ptr);
+    return;
+  }
 }

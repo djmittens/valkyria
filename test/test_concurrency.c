@@ -1,4 +1,5 @@
 #include "common.h"
+#include "memory.h"
 #include "parser.h"
 #include "testing.h"
 
@@ -15,12 +16,14 @@ typedef struct {
 static void _valk_void(void *v) { UNUSED(v); }
 
 static valk_arc_box *test_callback(valk_arc_box *_arg) {
-  test__arg *arg = _arg->succ;
+  test__arg *arg = _arg->item;
   // Unpack the test context from arg
   // valk_test_suite_t *_suite = arg->suite;
   valk_test_result_t *_result = arg->result;
-  VALK_ASSERT(arg->someArg == 1337, "Expected the argument to be 1337");
-  return valk_arc_box_suc((void *)1337, _valk_void);
+  VALK_TEST_ASSERT(arg->someArg == 1337, "Expected the argument to be 1337");
+  valk_arc_box *res = valk_arc_box_new(VALK_SUC, 0);
+  res->item = (void *)1337;
+  return res;
 }
 
 void test_task_queue(VALK_TEST_ARGS()) {
@@ -30,14 +33,14 @@ void test_task_queue(VALK_TEST_ARGS()) {
   size_t maxSize = 5;
 
   // Should i make this a fixture ?
-  test__arg arg = {
+  test__arg testArg = {
       .suite = _suite,
       .result = _result,
       .someArg = 1337,
-
   };
 
-  valk_arc_box *argBox = valk_arc_box_suc(&arg, _valk_void);
+  valk_arc_box *argBox = valk_arc_box_new(VALK_SUC, sizeof(test__arg));
+  *(test__arg *)argBox->item = testArg;
 
   valk_task_queue queue = {0};
   valk_work_init(&queue, maxSize);
@@ -46,41 +49,44 @@ void test_task_queue(VALK_TEST_ARGS()) {
   for (size_t i = 0; i < 8; i++) {
 
     valk_future *fut = valk_future_new();
-    valk_promise *promise = valk_promise_new(fut);
+
+    valk_arc_retain(argBox);
+
     valk_task task = {.type = VALK_TASK,
                       .arg = argBox,
                       .func = test_callback,
-                      .promise = promise};
+                      .promise = valk_promise_new(fut)};
     int err = valk_work_add(&queue, task);
 
     if (err) {
       // cleanup if there was an error
-      valk_promise_release(task.promise);
+      valk_arc_release(task.promise);
     }
     if (i >= maxSize) {
-      VALK_ASSERT(err == 1,
-                  "Expected add to return an error, if the queue is full ");
+      VALK_TEST_ASSERT(
+          err == 1, "Expected add to return an error, if the queue is full ");
     } else {
-      VALK_ASSERT(err == 0,
-                  "Expected the add to return success  when it has space");
-      VALK_ASSERT(
-          ((test__arg *)queue.items[i].arg->succ)->someArg == arg.someArg,
-          "Expected the arg to be the one we constructed [offset: %d] %d", i,
-          ((test__arg *)queue.items[i].arg->succ)->someArg);
-      VALK_ASSERT(
+      VALK_TEST_ASSERT(err == 0,
+                       "Expected the add to return success  when it has space");
+      VALK_TEST_ASSERT(
+          ((test__arg *)queue.items[i].arg->item)->someArg == testArg.someArg,
+          "Expected the arg to be the one we constructed [offset: %d] expected "
+          "%d, but but got %d",
+          i, testArg.someArg, ((test__arg *)queue.items[i].arg->item)->someArg);
+      VALK_TEST_ASSERT(
           queue.items[i].func == test_callback,
           "Expected the item to be the test callback [offset: %d] [ptr: %ld]",
           i, queue.items[i].func);
-      VALK_ASSERT(
+      VALK_TEST_ASSERT(
           queue.count == i + 1,
           "Expected the count to be 1 more than item offset [offset: %d]", i);
     }
   }
 
-  VALK_ASSERT(queue.count == maxSize,
-              "Expected the count to be the maximum size of the queue");
+  VALK_TEST_ASSERT(queue.count == maxSize,
+                   "Expected the count to be the maximum size of the queue");
 
-  VALK_ASSERT(queue.count == maxSize, "Expected the count to be 5");
+  VALK_TEST_ASSERT(queue.count == maxSize, "Expected the count to be 5");
   // pop 2 items
   valk_task task;
   for (size_t i = 0; i < 8; i++) {
@@ -90,30 +96,30 @@ void test_task_queue(VALK_TEST_ARGS()) {
 
     int res = valk_work_pop(&queue, &task);
     if (i >= maxSize) {
-      VALK_ASSERT(
+      VALK_TEST_ASSERT(
           res == 1,
           "Expected pop to return an error, if the queue is empty [offset: %d]",
           i);
-      VALK_ASSERT(
+      VALK_TEST_ASSERT(
           queue.count == 0,
           "Expected pop to return an error, if the queue is empty [offset: %d]",
           i);
     } else {
-      VALK_ASSERT(
+      VALK_TEST_ASSERT(
           res == 0,
           "Expected the add to return success  when it has space [offset: %d]",
           i);
-      VALK_ASSERT(
+      VALK_TEST_ASSERT(
           task.func == test_callback,
           "Expected the item to be the test callback [offset: %d] [ptr: %ld]",
           i, task.func);
-      VALK_ASSERT(((test__arg *)queue.items[i].arg->succ) == (void *)&arg,
-                  "Expected the arg to be the one we constructed [offset: %d]",
-                  i);
-      VALK_ASSERT(
+      VALK_TEST_ASSERT(
+          (queue.items[i].arg) == argBox,
+          "Expected the arg to be the one we constructed [offset: %d]", i);
+      VALK_TEST_ASSERT(
           queue.count == (maxSize - i - 1),
           "Expected the count to be 1 more than item offset [offset: %d]", i);
-      valk_promise_release(task.promise);
+      valk_arc_release(task.promise);
     }
   }
 
@@ -134,34 +140,37 @@ void test_concurrency(VALK_TEST_ARGS()) {
   valk_lval_t *ast = VALK_FIXTURE("prelude");
   VALK_TEST();
   // Should i make this a fixture ?
-  test__arg arg = {
+  test__arg testArg = {
       .suite = _suite,
       .result = _result,
       .someArg = 1337,
   };
-  valk_arc_box *argBox = valk_arc_box_suc(&arg, _valk_void);
+
+  valk_arc_box *argBox = valk_arc_box_new(VALK_SUC, sizeof(test__arg));
+  *(test__arg *)argBox->item = testArg;
 
   valk_worker_pool pool = {0};
   int res = valk_start_pool(&pool);
-  VALK_ASSERT(res == 0, "Threadpool didnt start [status: %d]", res);
+  VALK_TEST_ASSERT(res == 0, "Threadpool didnt start [status: %d]", res);
   valk_arc_box *tst =
       valk_future_await(valk_schedule(&pool, argBox, test_callback));
 
-  VALK_ASSERT(tst->type == VALK_SUC,
-              "Expected  successfull result [result: %d, %s]", tst->type,
-              tst->err.msg);
-  VALK_ASSERT(res == 0, "Threadpool didnt drain");
-  printf("Got response: %p, %p\n", tst->succ, (void *)1337);
+  VALK_TEST_ASSERT(tst->type == VALK_SUC,
+                   "Expected  successfull result [result: %d, %s]", tst->type,
+                   tst->item);
+  VALK_TEST_ASSERT(res == 0, "Threadpool didnt drain");
+  printf("Got response: %p, %p\n", tst->item, (void *)1337);
   valk_drain_pool(&pool);
   valk_free_pool(&pool);
   VALK_PASS();
-  valk_arc_box_release(tst);
+  valk_arc_release(tst);
   valk_lval_free(ast);
 }
 
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
+  valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
   valk_testsuite_add_test(suite, "test_concurrency", test_concurrency);

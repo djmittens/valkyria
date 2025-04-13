@@ -10,71 +10,81 @@
 
 const int VALK_NUM_WORKERS = 4;
 
-valk_arc_box *valk_arc_box_suc(void *succ, valk_callback_void *free) {
-  valk_arc_box *res = valk_mem_alloc(sizeof(valk_arc_box));
-  res->type = VALK_SUC;
-  res->succ = succ;
-  res->free = free;
+// Capture the allocator from the context, it MUST be concurrency safe. \
+  // This context is going to be threaded through the continuations for \
+  // callbacks \
+  // Should probably be request context or something instead perhaps, but \
+  // keeping it simple for now
+#define __assert_thread_safe_allocator()                                       \
+  do {                                                                         \
+    static valk_mem_allocator_e supported[] = {VALK_ALLOC_MALLOC,              \
+                                               VALK_ALLOC_ARENA};              \
+    bool found = 0;                                                            \
+    for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) {    \
+      if (supported[i] == valk_thread_ctx.allocator->type) {                   \
+        found = 1;                                                             \
+      }                                                                        \
+    }                                                                          \
+    VALK_ASSERT(                                                               \
+        found, "Current Allocator Context is not supported: %s",               \
+        valk_mem_allocator_e_to_string(valk_thread_ctx.allocator->type));      \
+  } while (0)
+
+valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity) {
+  valk_arc_box *res = valk_mem_alloc(sizeof(valk_arc_box) + capacity);
+  res->type = type;
   res->refcount = 1;
+  res->capacity = capacity;
+  res->item = &((char*)res)[sizeof(valk_arc_box)];
+
+  __assert_thread_safe_allocator();
+  res->allocator = valk_thread_ctx.allocator;
+
   return res;
 }
 
-valk_arc_box *valk_arc_box_err(int code, const char *msg) {
-  valk_arc_box *res = valk_mem_alloc(sizeof(valk_arc_box));
+valk_arc_box *valk_arc_box_err(const char *msg) {
+  int len = strlen(msg);
+  valk_arc_box *res = valk_mem_alloc(sizeof(valk_arc_box) + len + 1);
+  memset(res, 0, sizeof(valk_arc_box) + len + 1);
   res->type = VALK_ERR;
-  res->err.size = strlen(msg);
-  res->err.code = code;
-  res->err.msg = strdup(msg);
-  res->free = NULL;
   res->refcount = 1;
+  res->item = &((char*)res)[sizeof(valk_arc_box)];
+  __assert_thread_safe_allocator();
+  res->allocator = valk_thread_ctx.allocator;
+
+  strncpy(res->item, msg, len);
   return res;
 }
 
-static void _valk_arc_box_free(valk_arc_box *result) {
-  switch (result->type) {
-  case VALK_SUC:
-    result->free(result->succ);
-    break;
-  case VALK_ERR:
-    free(result->err.msg);
-    break;
-  };
-  free(result);
+void valk_future_free(valk_future *self) {
+  pthread_cond_destroy(&self->resolved);
+  pthread_mutex_destroy(&self->mutex);
+  valk_arc_release(self->item);
+  valk_mem_allocator_free(self->allocator, self);
 }
 
-void valk_arc_box_release(valk_arc_box *result) {
-  valk_arc_release(result, _valk_arc_box_free);
-}
+valk_future *valk_future_new() {
 
-valk_future *valk_future_new(void) {
-  valk_future *res = malloc(sizeof(valk_future));
-  pthread_mutex_init(&res->mutex, 0);
-  pthread_cond_init(&res->resolved, 0);
+  valk_future *self = valk_mem_alloc(sizeof(valk_future));
+  pthread_mutex_init(&self->mutex, 0);
+  pthread_cond_init(&self->resolved, 0);
 
-  res->refcount = 1;
-  res->done = 0;
-  res->item = NULL;
-  return res;
+  self->refcount = 1;
+  self->done = 0;
+  self->item = NULL;
+  __assert_thread_safe_allocator();
+  self->allocator = valk_thread_ctx.allocator;
+  self->free = valk_future_free;
+  return self;
 }
 
 valk_future *valk_future_done(valk_arc_box *item) {
-  valk_future *res = valk_future_new();
-  res->done = 1;
-  res->item = item;
-  return res;
-}
-
-static void _valk_future_free(valk_future *future) {
-  pthread_cond_destroy(&future->resolved);
-  pthread_mutex_destroy(&future->mutex);
-  if (future->done) {
-    valk_arc_box_release(future->item);
-  }
-  free(future);
-}
-
-void valk_future_release(valk_future *future) {
-  valk_arc_release(future, _valk_future_free);
+  valk_future *self = valk_future_new();
+  self->done = 1;
+  self->item = item;
+  valk_arc_retain(item);
+  return self;
 }
 
 valk_arc_box *valk_future_await(valk_future *future) {
@@ -82,11 +92,12 @@ valk_arc_box *valk_future_await(valk_future *future) {
   if (!future->done) {
     pthread_cond_wait(&future->resolved, &future->mutex);
   }
+
   valk_arc_box *res = future->item;
   valk_arc_retain(res);
 
   pthread_mutex_unlock(&future->mutex);
-  valk_future_release(future);
+  valk_arc_release(future);
   return res;
 }
 
@@ -108,39 +119,37 @@ valk_arc_box *valk_future_await_timeout(valk_future *future, uint32_t msec) {
       // TODO(networking): figure out error codes across the system for the
       // language
       pthread_mutex_unlock(&future->mutex);
-      valk_future_release(future);
-      return valk_arc_box_err(1, buf);
+      valk_arc_release(future);
+      return valk_arc_box_err(buf);
     } else if (ret != 0) {
       char buf[1000];
       sprintf(buf, "Unexpected error during [pthread_cond_timedwait]: %s",
               strerror(errno));
       pthread_mutex_unlock(&future->mutex);
-      valk_future_release(future);
-      return valk_arc_box_err(1, buf);
+      valk_arc_release(future);
+      return valk_arc_box_err(buf);
     }
   }
   valk_arc_box *res = future->item;
   valk_arc_retain(res);
 
   pthread_mutex_unlock(&future->mutex);
-  valk_future_release(future);
+  valk_arc_release(future);
   return res;
 }
 
 valk_promise *valk_promise_new(valk_future *future) {
-  valk_promise *res = malloc(sizeof(valk_promise));
-  res->item = future;
-  res->refcount = 1;
-  return res;
+  valk_promise *self = valk_mem_alloc(sizeof(valk_promise));
+  self->item = future;
+  self->refcount = 1;
+  self->allocator = valk_thread_ctx.allocator;
+  valk_arc_retain(future);
+  return self;
 }
 
-static void _valk_promise_free(valk_promise *promise) {
-  valk_future_release(promise->item);
-  free(promise);
-}
-
-void valk_promise_release(valk_promise *promise) {
-  valk_arc_release(promise, _valk_promise_free);
+void valk_promise_free(valk_promise *self) {
+  valk_arc_release(self->item);
+  valk_mem_allocator_free(self->allocator, self);
 }
 
 void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
@@ -203,7 +212,7 @@ static void *valk_worker_routine(void *arg) {
         // Ok now lets execute the task
 
         valk_promise_respond(task.promise, task.func(task.arg));
-        valk_promise_release(task.promise);
+        valk_arc_release(task.promise);
         // TODO(networking): How do we clean up the arg? maybe the callback
         // has to do it.
       } else if (task.type == VALK_POISON) {
@@ -221,7 +230,7 @@ static void *valk_worker_routine(void *arg) {
 }
 
 int valk_start_pool(valk_worker_pool *pool) {
-  pool->items = malloc(sizeof(valk_worker) * VALK_NUM_WORKERS);
+  pool->items = valk_mem_alloc(sizeof(valk_worker) * VALK_NUM_WORKERS);
   valk_work_init(&pool->queue, 8);
 
   for (size_t i = 0; i < VALK_NUM_WORKERS; i++) {
@@ -314,14 +323,15 @@ void valk_free_pool(valk_worker_pool *pool) {
 }
 
 valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box *arg,
-                           valk_callback *func) {
+                           valk_arc_box *(*func)(valk_arc_box *)) {
   valk_task_queue *queue = &pool->queue;
   pthread_mutex_lock(&queue->mutex);
   valk_future *res;
+
   if (queue->isShuttingDown) {
-    res = valk_future_done(valk_arc_box_err(
-        1,
-        "Error trying to submit work to threadpool, while its shutting down"));
+    res = valk_future_done(
+        valk_arc_box_err("Error trying to submit work to threadpool, "
+                         "while its shutting down"));
   } else {
     if (queue->capacity == queue->count) {
       // if queue is full block until it has space
@@ -330,20 +340,19 @@ valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box *arg,
     }
 
     res = valk_future_new();
-    valk_arc_retain(res);
 
     valk_task task = {.type = VALK_TASK,
                       .arg = arg,
                       .func = func,
                       .promise = valk_promise_new(res)};
+
     int err = valk_work_add(queue, task);
     if (err) {
       valk_promise_respond(
           task.promise,
-          valk_arc_box_err(1,
-                           "Could not add task to queue for pool scheduling"));
-      valk_promise_release(task.promise);
-      valk_arc_box_release(task.arg);
+          valk_arc_box_err("Could not add task to queue for pool scheduling"));
+      valk_arc_release(task.promise);
+      valk_arc_release(task.arg);
     }
     pthread_cond_signal(&queue->notEmpty);
   }
@@ -357,13 +366,6 @@ typedef struct {
   valk_arc_box *result;
 } __valk_resolve_promise;
 
-void __valk_resolve_promise_free(void *arg) {
-  __valk_resolve_promise *self = arg;
-  valk_promise_release(self->promise);
-  valk_arc_box_release(self->result);
-  free(self);
-}
-
 static valk_arc_box *__valk_pool_resolve_promise_cb(valk_arc_box *arg) {
   if (arg->type != VALK_SUC) {
     // cant resolve an error ??? why the heck did that even get in here
@@ -372,19 +374,21 @@ static valk_arc_box *__valk_pool_resolve_promise_cb(valk_arc_box *arg) {
                     "boxsed promise.\n");
     return arg;
   }
-  __valk_resolve_promise *a = arg->succ;
+  __valk_resolve_promise *a = arg->item;
   valk_promise_respond(a->promise, a->result);
   return arg;
 }
 
 void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
                                valk_arc_box *result) {
-  __valk_resolve_promise *pair = valk_mem_alloc(sizeof(__valk_resolve_promise));
+
+  valk_arc_box *arg =
+      valk_arc_box_new(VALK_SUC, sizeof(__valk_resolve_promise));
+  __valk_resolve_promise *pair = arg->item;
   pair->promise = promise;
   pair->result = result;
-  valk_future *res =
-      valk_schedule(pool, valk_arc_box_suc(pair, __valk_resolve_promise_free),
-                    __valk_pool_resolve_promise_cb);
+
+  valk_future *res = valk_schedule(pool, arg, __valk_pool_resolve_promise_cb);
   valk_arc_retain(promise);
-  valk_future_release(res); // dont need the result
+  valk_arc_release(res); // dont need the result
 }

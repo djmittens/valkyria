@@ -529,7 +529,7 @@ static void __http_server_connection_cb(uv_stream_t *server, int status) {
 static void __http_listen_cb(valk_arc_box *box) {
   int r;
   struct sockaddr_in addr;
-  valk_aio_http_server *srv = box->succ;
+  valk_aio_http_server *srv = box->item;
   r = uv_tcp_init(srv->eventloop, &srv->server);
   uv_tcp_nodelay(&srv->server, 1);
 
@@ -561,7 +561,7 @@ static void __http_listen_cb(valk_arc_box *box) {
   } else {
     printf("Listening on %s:%d\n", srv->interface, srv->port);
   }
-  valk_arc_box_release(box);
+  valk_arc_release(box);
 }
 
 static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
@@ -593,7 +593,9 @@ int valk_aio_http2_listen(valk_aio_http_server *srv, valk_aio_system *sys,
   valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
   SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
 
-  task.arg = valk_arc_box_suc(srv, __no_free);
+  // TODO(networking): consider shove srv into a box to begin with, this is otherwise sus
+  task.arg = valk_arc_box_new(VALK_SUC, sizeof(void*));
+  task.arg->item = srv;
   task.callback = __http_listen_cb;
 
   valk_work_add(sys, task);
@@ -640,7 +642,7 @@ static void __aio_connect_cb(valk_arc_box *box) {
 
   int r;
   struct sockaddr_in addr;
-  valk_aio_http2_client *client = box->succ;
+  valk_aio_http2_client *client = box->item;
 
   r = uv_tcp_init(client->eventloop, &client->connection);
   uv_tcp_nodelay(&client->connection, 1);
@@ -672,7 +674,9 @@ void valk_aio_http2_connect(valk_aio_http2_client *client, valk_aio_system *sys,
 
   valk_aio_ssl_client_init(&client->ssl_ctx);
 
-  task.arg = valk_arc_box_suc(client, __no_free);
+  // TODO(networking): do i even need boxes here?? 🤔
+  task.arg = valk_arc_box_new(VALK_SUC, sizeof(void*));
+  task.arg->item = client;
   task.callback = __aio_connect_cb;
 
   valk_work_add(sys, task);

@@ -13,6 +13,8 @@
     (queue)->count = 0;                                                        \
     (queue)->numWorkers = 0;                                                   \
     (queue)->isShuttingDown = 0;                                               \
+    valk_slab_alloc_init(&(queue)->futureSlab, sizeof(valk_future), 1000);     \
+    valk_slab_alloc_init(&(queue)->promiseSlab, sizeof(valk_promise), 100);    \
     pthread_mutex_init(&(queue)->mutex, 0);                                    \
     pthread_cond_init(&(queue)->isEmpty, 0);                                   \
     pthread_cond_init(&(queue)->notEmpty, 0);                                  \
@@ -74,14 +76,19 @@
   })
 
 // This is bootleg arc
-#define valk_arc_release(ref, _free)                                           \
+#define valk_arc_release(ref)                                                  \
   do {                                                                         \
     int old = __atomic_fetch_sub(&(ref)->refcount, 1, __ATOMIC_RELEASE);       \
     /*char _buf[512];                                                          \
     pthread_getname_np(pthread_self(), _buf, sizeof(_buf));*/                  \
     if (old == 1) {                                                            \
       /* printf("[%s] Arc is freeing %d\n", _buf, old); */                     \
-      _free(ref);                                                              \
+      /* Only free using the allocator if a custom one is not defined*/        \
+      if ((ref)->free) {                                                       \
+        (ref)->free(ref);                                                      \
+      } else {                                                                 \
+        valk_mem_allocator_free((ref)->allocator, (ref));                      \
+      }                                                                        \
     } else {                                                                   \
       /* printf("[%s] Arc is decrementing %d\n", _buf, old); */                \
     }                                                                          \
@@ -91,52 +98,47 @@ typedef void(valk_callback_void)(void *);
 
 typedef enum { VALK_SUC, VALK_ERR } valk_res_t;
 
-typedef struct {
-  int code;
-  int size;
-  char *msg;
-} valk_conc_err;
-
-typedef struct {
+typedef struct valk_arc_box {
   valk_res_t type;
-
-  union {
-    valk_conc_err err;
-    void *succ;
-  };
-
-  valk_callback_void *free;
   int refcount;
+  valk_mem_allocator_t *allocator;
+  size_t capacity;
+  void (*free)(struct valk_arc_box *);
+  void *item;
 } valk_arc_box;
 
-valk_arc_box *valk_arc_box_suc(void *succ, valk_callback_void *free);
-valk_arc_box *valk_arc_box_err(int code, const char *msg);
-void valk_arc_box_release(valk_arc_box *result);
+valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity);
 
+valk_arc_box *valk_arc_box_err(const char *msg);
+
+typedef void(valk_future_free_cb)(void *userData, void *future);
 typedef struct valk_future {
+  int done;
   pthread_mutex_t mutex;
   pthread_cond_t resolved;
   valk_arc_box *item;
   int refcount;
-  int done;
+  void (*free)(struct valk_future *);
+  valk_mem_allocator_t *allocator;
 } valk_future;
 
-valk_future *valk_future_new(void);
+valk_future *valk_future_new();
 valk_future *valk_future_done(valk_arc_box *item);
-void valk_future_release(valk_future *future);
+
+void valk_future_free(valk_future *self);
+
 valk_arc_box *valk_future_await(valk_future *future);
 valk_arc_box *valk_future_await_timeout(valk_future *future, uint32_t msec);
 
 typedef struct valk_promise {
   valk_future *item;
   int refcount;
+  valk_mem_allocator_t *allocator;
+  void (*free)(struct valk_promise *);
 } valk_promise;
 
-typedef valk_arc_box *(valk_callback)(valk_arc_box *);
-typedef valk_future *(valk_callback_async)(valk_arc_box *);
-
 valk_promise *valk_promise_new(valk_future *future);
-void valk_promise_release(valk_promise *promise);
+void valk_promise_free(valk_promise *self);
 void valk_promise_respond(valk_promise *promise, valk_arc_box *result);
 
 typedef enum { VALK_TASK, VALK_POISON } valk_task_type_t;
@@ -147,7 +149,7 @@ typedef struct {
     // TODO(networking): figure out the lifetime for this arg.
     // who owns this ? when is it freed? in the callback?
     valk_arc_box *arg;
-    valk_callback *func;
+    valk_arc_box *(*func)(valk_arc_box *);
     valk_promise *promise;
   };
 } valk_task;
@@ -159,6 +161,8 @@ typedef struct {
   pthread_cond_t notFull;
   pthread_cond_t workerReady;
   pthread_cond_t workerDead;
+  valk_slab_t futureSlab;
+  valk_slab_t promiseSlab;
   valk_task *items;
   size_t idx;
   size_t count;
@@ -184,7 +188,7 @@ typedef struct {
 
 int valk_start_pool(valk_worker_pool *pool);
 valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box *arg,
-                           valk_callback *func);
+                           valk_arc_box *(*func)(valk_arc_box *));
 
 void valk_drain_pool(valk_worker_pool *pool);
 void valk_free_pool(valk_worker_pool *pool);

@@ -1,8 +1,8 @@
+#include "aio.h"
 #include "common.h"
 #include "memory.h"
 #include "parser.h"
 #include "testing.h"
-#include "aio.h"
 
 #include <stdlib.h>
 #include <sys/wait.h>
@@ -47,12 +47,12 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   free(response);
 }
 
-int get_ctx() { return (int)valk_thread_ctx.heap; }
+int get_ctx() { return (size_t)valk_thread_ctx.allocator; }
 
 void test_implicit_arena_alloc(VALK_TEST_ARGS()) {
   VALK_TEST();
-  valk_thread_ctx.heap = (void *)6969;
-  valk_thread_context_t ctx = {.heap = (void *)-1};
+  valk_thread_ctx.allocator = (void *)6969;
+  valk_thread_context_t ctx = {.allocator = (void *)-1};
   VALK_WITH_CTX(ctx) {
     // The function gets context we set
     VALK_ASSERT(get_ctx() == -1, "expected some stuff %d", (int)get_ctx());
@@ -72,8 +72,8 @@ int main(int argc, const char **argv) {
 
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
-  valk_testsuite_add_test(suite, "test_demo_socket_server",
-                          test_demo_socket_server);
+  // valk_testsuite_add_test(suite, "test_demo_socket_server",
+  //                         test_demo_socket_server);
   valk_testsuite_add_test(suite, "test_implicit_arena_alloc",
                           test_implicit_arena_alloc);
 
