@@ -72,8 +72,8 @@ int main(int argc, const char **argv) {
 
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
-  // valk_testsuite_add_test(suite, "test_demo_socket_server",
-  //                         test_demo_socket_server);
+  valk_testsuite_add_test(suite, "test_demo_socket_server",
+                          test_demo_socket_server);
   valk_testsuite_add_test(suite, "test_implicit_arena_alloc",
                           test_implicit_arena_alloc);
 
