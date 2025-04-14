@@ -678,8 +678,24 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
   static nghttp2_session_callbacks *callbacks = NULL;
   if (!callbacks) {
     nghttp2_session_callbacks_new(&callbacks);
-    // nghttp2_session_callbacks_set_send_callback2(callbacks,
-    //                                              __http_send_callback);
+    /*
+
+      nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks,
+                                                           on_frame_recv_callback);
+
+      nghttp2_session_callbacks_set_on_data_chunk_recv_callback(
+        callbacks, on_data_chunk_recv_callback);
+
+      nghttp2_session_callbacks_set_on_stream_close_callback(
+        callbacks, on_stream_close_callback);
+
+      nghttp2_session_callbacks_set_on_header_callback(callbacks,
+                                                       on_header_callback);
+
+      nghttp2_session_callbacks_set_on_begin_headers_callback(
+        callbacks, on_begin_headers_callback);
+          */
+
     nghttp2_session_callbacks_set_on_begin_headers_callback(
         callbacks, __http_on_begin_headers_callback);
     nghttp2_session_callbacks_set_on_header_callback(callbacks,
@@ -760,15 +776,54 @@ void valk_aio_http2_connect(valk_aio_http2_client *client, valk_aio_system *sys,
 
   valk_work_add(sys, task);
 
-  uv_async_send(&sys->taskHandle);
   uv_mutex_unlock(&sys->taskLock);
+  uv_async_send(&sys->taskHandle);
+
+}
+
+static void __http2_submit_demo_request(valk_arc_box *arg) {
+  valk_aio_http_conn *conn = arg->item;
+  int32_t stream_id;
+  // http2_stream_data *stream_data = session_data->stream_data;
+  // const char *uri = "local/";
+  // const struct http_parser_url *u = stream_data->u;
+
+  nghttp2_nv hdrs[] = {MAKE_NV2(":method", "GET"), MAKE_NV2(":scheme", "https"),
+                       MAKE_NV2(":authority", "google.com"),
+                       // stream_data->authoritylen),
+                       MAKE_NV2(":path", "/")};
+  // fprintf(stderr, "Request headers:\n");
+  // print_headers(stderr, hdrs, ARRLEN(hdrs));
+
+  stream_id = nghttp2_submit_request2(
+      conn->session, NULL, hdrs, sizeof(hdrs) / sizeof(hdrs[0]), NULL, conn);
+
+  if (stream_id < 0) {
+    fprintf(stderr, "Could not submit HTTP request: %s\n",
+            nghttp2_strerror(stream_id));
+  }
+
+  printf("Submitted request with stream id %d\n", stream_id);
+
+  // return stream_id;
 }
 
 char *valk_client_demo(const char *domain, const char *port) {
   valk_aio_system sys;
   valk_aio_http2_client client;
   valk_aio_start(&sys);
-  valk_aio_http2_connect(&client, &sys, "127.0.0.1", 6969, "");
+  valk_aio_http2_connect(&client, &sys, "142.250.191.78", 443, "");
+  sleep(1);
+
+  printf("well tthis is awk\n");
+  uv_mutex_lock(&sys.taskLock);
+  struct valk_aio_task task;
+  task.arg = valk_arc_box_new(VALK_SUC, 0);
+  task.arg->item = &client.httpSession;
+  task.callback = __http2_submit_demo_request;
+
+  valk_work_add(&sys, task);
+  uv_mutex_unlock(&sys.taskLock);
 
   while (1)
     ;
