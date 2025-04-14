@@ -13,6 +13,7 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/ssl3.h>
+#include <openssl/tls1.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -135,6 +136,7 @@ void __CRYPTO_free_fn(void *addr, const char *file, int line) {
 }
 
 void valk_aio_start(valk_aio_system *sys) {
+  valk_asio_ssl_start();
   sys->eventloop = uv_default_loop();
   sys->count = 0;
   sys->capacity = 10;
@@ -386,11 +388,11 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   valk_buffer_t Out = {
       .items = slabItem->data, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
 
-  int status = valk_aio_ssl_on_read(&conn->ssl, &In, &Out, conn,
-                                    __http_tcp_unencrypted_read_cb);
+  int err = valk_aio_ssl_on_read(&conn->ssl, &In, &Out, conn,
+                                 __http_tcp_unencrypted_read_cb);
 
   // Only do this if ssl is established:
-  if (!status) {
+  if (!err) {
     // Flushies
     In.count = 0;
     memset(In.items, 0, In.capacity);
@@ -430,7 +432,7 @@ static int __http_send_server_connection_header(nghttp2_session *session) {
   return 0;
 }
 
-static void __http_server_connection_cb(uv_stream_t *server, int status) {
+static void __http_server_accept_cb(uv_stream_t *server, int status) {
   if (status < 0) {
     fprintf(stderr, "New connection error %s\n", uv_strerror(status));
     // error!
@@ -445,6 +447,7 @@ static void __http_server_connection_cb(uv_stream_t *server, int status) {
 
   struct valk_aio_http_conn *conn =
       valk_mem_arena_alloc(arena, sizeof(struct valk_aio_http_conn));
+  // haha point back to thy self
   conn->arena = arena;
 
   uv_tcp_init(server->loop, &conn->tcpHandle);
@@ -521,7 +524,6 @@ static void __http_server_connection_cb(uv_stream_t *server, int status) {
     valk_aio_http_server *srv = server->data;
     valk_aio_ssl_accept(&conn->ssl, srv->ssl_ctx);
 
-
     // Send settings to the client
     __http_send_server_connection_header(conn->session);
 
@@ -565,7 +567,7 @@ static void __http_listen_cb(valk_arc_box *box) {
   }
 
   srv->server.data = srv;
-  r = uv_listen((uv_stream_t *)&srv->server, 128, __http_server_connection_cb);
+  r = uv_listen((uv_stream_t *)&srv->server, 128, __http_server_accept_cb);
   if (r) {
     fprintf(stderr, "Listen err: %s \n", uv_strerror(r));
     return;
@@ -604,8 +606,9 @@ int valk_aio_http2_listen(valk_aio_http_server *srv, valk_aio_system *sys,
   valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
   SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
 
-  // TODO(networking): consider shove srv into a box to begin with, this is otherwise sus
-  task.arg = valk_arc_box_new(VALK_SUC, sizeof(void*));
+  // TODO(networking): consider shove srv into a box to begin with, this is
+  // otherwise sus
+  task.arg = valk_arc_box_new(VALK_SUC, sizeof(void *));
   task.arg->item = srv;
   task.callback = __http_listen_cb;
 
@@ -633,11 +636,29 @@ void valk_server_demo(void) {
 struct valk_aio_http2_client {
   uv_loop_t *eventloop;
   SSL_CTX *ssl_ctx;
-  uv_tcp_t connection;
+  uv_tcp_t tcpHandle;
+  valk_aio_http_conn httpSession;
   uv_connect_t connectionRequest;
   char *interface;
   int port;
 };
+
+static int __http_client_on_frame_recv_callback(nghttp2_session *session,
+                                                const nghttp2_frame *frame,
+                                                void *user_data) {
+  if (frame->hd.type == NGHTTP2_GOAWAY) {
+    printf("[Client]Received GO AWAY frame\n");
+  }
+
+  if (frame->hd.type == NGHTTP2_HEADERS &&
+      frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
+    printf("Received HEADERS frame(meaning response)..\n");
+  } else {
+    printf("Not sending a response ??\n");
+  }
+
+  return 0;
+}
 
 static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
   if (status < 0) {
@@ -647,16 +668,64 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     return;
   }
   printf("Gurr we connected\n");
+
+  __tcp_buffer_slab_item_t *slabItem =
+      (void *)valk_slab_alloc_aquire(&tcp_buffer_slab)->data;
+
+  valk_buffer_t Out = {
+      .items = slabItem->data, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
+
+  static nghttp2_session_callbacks *callbacks = NULL;
+  if (!callbacks) {
+    nghttp2_session_callbacks_new(&callbacks);
+    // nghttp2_session_callbacks_set_send_callback2(callbacks,
+    //                                              __http_send_callback);
+    nghttp2_session_callbacks_set_on_begin_headers_callback(
+        callbacks, __http_on_begin_headers_callback);
+    nghttp2_session_callbacks_set_on_header_callback(callbacks,
+                                                     __http_on_header_callback);
+    nghttp2_session_callbacks_set_on_frame_recv_callback(
+        callbacks, __http_client_on_frame_recv_callback);
+  }
+
+  valk_aio_http2_client *client = req->data;
+  nghttp2_session_client_new(&client->httpSession.session, callbacks, client);
+
+  valk_aio_ssl_client_init(&client->ssl_ctx);
+  valk_aio_ssl_connect(&client->httpSession.ssl, client->ssl_ctx);
+  SSL_set_tlsext_host_name(client->httpSession.ssl.ssl, "localhost");
+
+  char buf[SSL3_RT_MAX_PACKET_SIZE] = {0};
+
+  valk_buffer_t Tmp = {
+      .items = &buf, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
+
+  valk_aio_ssl_handshake(&client->httpSession.ssl, &Out);
+
+  int wantToSend = Out.count > 0;
+  if (wantToSend) {
+    slabItem->buf.base = Out.items;
+    slabItem->buf.len = Out.count;
+
+    printf("[Client] Sending %ld bytes\n", Out.count);
+    uv_write(&slabItem->req, (uv_stream_t *)&client->tcpHandle, &slabItem->buf,
+             1, __http_tcp_on_write_cb);
+  } else {
+    valk_slab_alloc_release_ptr(&tcp_buffer_slab, Out.items);
+  }
+
+  uv_read_start((uv_stream_t *)&client->tcpHandle, __alloc_callback,
+                __http_tcp_read_cb);
 }
 
-static void __aio_connect_cb(valk_arc_box *box) {
+static void __aio_client_connect_cb(valk_arc_box *box) {
 
   int r;
   struct sockaddr_in addr;
   valk_aio_http2_client *client = box->item;
 
-  r = uv_tcp_init(client->eventloop, &client->connection);
-  uv_tcp_nodelay(&client->connection, 1);
+  r = uv_tcp_init(client->eventloop, &client->tcpHandle);
+  uv_tcp_nodelay(&client->tcpHandle, 1);
 
   if (r) {
     fprintf(stderr, "TcpInit err: %s \n", uv_strerror(r));
@@ -667,33 +736,32 @@ static void __aio_connect_cb(valk_arc_box *box) {
     fprintf(stderr, "Addr err: %s \n", uv_strerror(r));
     return;
   }
+
   client->connectionRequest.data = client;
-  uv_tcp_connect(&client->connectionRequest, &client->connection,
+  uv_tcp_connect(&client->connectionRequest, &client->tcpHandle,
                  (const struct sockaddr *)&addr, __uv_http2_connect_cb);
 }
 
 void valk_aio_http2_connect(valk_aio_http2_client *client, valk_aio_system *sys,
                             const char *interface, const int port,
                             const char *certfile) {
+  uv_mutex_lock(&sys->taskLock);
 
   client->eventloop = sys->eventloop;
   client->interface = strdup(interface);
   client->port = port;
 
-  uv_mutex_lock(&sys->taskLock);
   struct valk_aio_task task;
 
-  valk_aio_ssl_client_init(&client->ssl_ctx);
-
   // TODO(networking): do i even need boxes here?? 🤔
-  task.arg = valk_arc_box_new(VALK_SUC, sizeof(void*));
+  task.arg = valk_arc_box_new(VALK_SUC, sizeof(void *));
   task.arg->item = client;
-  task.callback = __aio_connect_cb;
+  task.callback = __aio_client_connect_cb;
 
   valk_work_add(sys, task);
 
-  uv_mutex_unlock(&sys->taskLock);
   uv_async_send(&sys->taskHandle);
+  uv_mutex_unlock(&sys->taskLock);
 }
 
 char *valk_client_demo(const char *domain, const char *port) {

@@ -2,7 +2,15 @@
 #include "common.h"
 #include "memory.h"
 #include <openssl/bio.h>
+#include <openssl/err.h>
+#include <openssl/evp.h>
 #include <openssl/ssl.h>
+
+void valk_asio_ssl_start(){
+  SSL_library_init();
+  OpenSSL_add_all_algorithms();
+  ERR_load_crypto_strings();
+}
 
 valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
                                     const char *certfile) {
@@ -63,7 +71,7 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
 
 valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx) {
 
-  *ssl_ctx = SSL_CTX_new(TLS_server_method());
+  *ssl_ctx = SSL_CTX_new(TLS_client_method());
   if (!*ssl_ctx) {
     fprintf(stderr, "Could not create SSL/TLS context: %s\n",
             ERR_error_string(ERR_get_error(), NULL));
@@ -102,7 +110,6 @@ valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx) {
 }
 
 void valk_aio_ssl_accept(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
-
   ssl->ssl = SSL_new(ssl_ctx);
 
   ssl->read_bio = BIO_new(BIO_s_mem());
@@ -113,7 +120,6 @@ void valk_aio_ssl_accept(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
 }
 
 void valk_aio_ssl_connect(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
-
   ssl->ssl = SSL_new(ssl_ctx);
 
   ssl->read_bio = BIO_new(BIO_s_mem());
@@ -123,8 +129,7 @@ void valk_aio_ssl_connect(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
   SSL_set_connect_state(ssl->ssl);
 }
 
-static valk_err_e __valk_aio_ssl_handshake(valk_aio_ssl_t *ssl,
-                                           valk_buffer_t *Out) {
+valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {
   valk_aio_ssl_print_state(ssl);
   int n = SSL_do_handshake(ssl->ssl);
   valk_aio_ssl_print_state(ssl);
@@ -178,7 +183,7 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
   In->count = 0;
 
   if (!SSL_is_init_finished(ssl->ssl)) {
-    err = __valk_aio_ssl_handshake(ssl, Out);
+    err = valk_aio_ssl_handshake(ssl, Out);
     if (err) {
       return err;
     }

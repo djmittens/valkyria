@@ -22,6 +22,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
     exit(0);
   }
 
+  sleep(1);
   char *response = valk_client_demo("127.0.0.1", "8080");
   kill(pid, SIGTERM);
   printf("Waiting for server to die\n");
