@@ -369,7 +369,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   if (nread < 0) {
     // Error or EOF
     if (nread == UV_EOF) {
-      printf("EOF infact\n");
+      printf("Received EOF on tcp stream\n");
     } else {
       fprintf(stderr, "Read error: %s\n", uv_strerror((int)nread));
     }
@@ -422,6 +422,21 @@ static int __http_send_server_connection_header(nghttp2_session *session) {
   nghttp2_settings_entry iv[1] = {
       {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100}};
   int rv;
+
+  rv = nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv,
+                               sizeof(iv) / sizeof(iv[0]));
+  if (rv != 0) {
+    fprintf(stderr, "Fatal error: %s", nghttp2_strerror(rv));
+    return -1;
+  }
+  return 0;
+}
+
+static int __http_send_client_connection_header(nghttp2_session *session) {
+  nghttp2_settings_entry iv[1] = {
+      {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100}};
+  int rv;
+  printf("[http2 Client] Sending connection frame\n");
 
   rv = nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv,
                                sizeof(iv) / sizeof(iv[0]));
@@ -645,6 +660,7 @@ struct valk_aio_http2_client {
 static int __http_client_on_frame_recv_callback(nghttp2_session *session,
                                                 const nghttp2_frame *frame,
                                                 void *user_data) {
+  printf("ON_RECV callback \n");
   if (frame->hd.type == NGHTTP2_GOAWAY) {
     printf("[Client]Received GO AWAY frame\n");
   }
@@ -707,7 +723,11 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
   nghttp2_session_client_new(&client->httpConnection.session, callbacks,
                              client);
 
+  __http_send_client_connection_header(client->httpConnection.session);
+
   valk_aio_ssl_client_init(&client->ssl_ctx);
+  SSL_CTX_set_alpn_protos(client->ssl_ctx, (const unsigned char *)"\x02h2", 3);
+
   valk_aio_ssl_connect(&client->httpConnection.ssl, client->ssl_ctx);
   SSL_set_tlsext_host_name(client->httpConnection.ssl.ssl, "localhost");
 
@@ -782,6 +802,9 @@ void valk_aio_http2_connect(valk_aio_http2_client *client, valk_aio_system *sys,
 }
 
 static void __http2_submit_demo_request(valk_arc_box *arg) {
+
+  printf("Need to write some shit or something\n");
+
   valk_aio_http_conn *conn = arg->item;
   int32_t stream_id;
   // http2_stream_data *stream_data = session_data->stream_data;
@@ -805,6 +828,33 @@ static void __http2_submit_demo_request(valk_arc_box *arg) {
 
   printf("Submitted request with stream id %d\n", stream_id);
 
+  char buf[SSL3_RT_MAX_PACKET_SIZE];
+  memset(buf, 0, sizeof(buf));
+  valk_buffer_t In = {
+      .items = buf, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
+  __tcp_buffer_slab_item_t *slabItem =
+      (void *)valk_slab_alloc_aquire(&tcp_buffer_slab)->data;
+
+  valk_buffer_t Out = {
+      .items = slabItem->data, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
+
+  __http2_flush_frames(&In, conn);
+
+  // Encrypt the new data n stuff
+  valk_aio_ssl_encrypt(&conn->ssl, &In, &Out);
+
+  int wantToSend = Out.count > 0;
+  if (wantToSend) {
+    slabItem->buf.base = Out.items;
+    slabItem->buf.len = Out.count;
+
+    printf("Sending %ld bytes\n", Out.count);
+    uv_write(&slabItem->req, (uv_stream_t *)&conn->tcpHandle, &slabItem->buf, 1,
+             __http_tcp_on_write_cb);
+  } else {
+    printf("Nothing to send %d \n", wantToSend);
+    valk_slab_alloc_release_ptr(&tcp_buffer_slab, slabItem);
+  }
   // return stream_id;
 }
 
@@ -812,7 +862,10 @@ char *valk_client_demo(const char *domain, const char *port) {
   valk_aio_system sys;
   valk_aio_http2_client client;
   valk_aio_start(&sys);
-  valk_aio_http2_connect(&client, &sys, "142.250.191.78", 443, "");
+  // GOOGLE
+  // valk_aio_http2_connect(&client, &sys, "142.250.191.78", 443, "");
+  // Local
+  valk_aio_http2_connect(&client, &sys, "127.0.0.1", 3000, "");
   sleep(1);
 
   printf("well tthis is awk\n");
@@ -824,6 +877,7 @@ char *valk_client_demo(const char *domain, const char *port) {
 
   valk_work_add(&sys, task);
   uv_mutex_unlock(&sys.taskLock);
+  uv_async_send(&sys.taskHandle);
 
   while (1)
     ;

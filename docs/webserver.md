@@ -33,12 +33,12 @@
 
 
 ## Steps for hello world implmenetation
+- [x] Http webserver
+- [x] Submit request to a thread pool, echo 
+- [x] nghttp 2 library request handler
+- [x] Http client
 - [ ] liburing files
 - [ ] liburing sockets
-- [ ] Submit request to a thread pool, echo 
-- [ ] nghttp 2 library request handler
-- [ ] Http webserver
-- [ ] kqueue
 
 # HTTP2 Server
 - [ ] Send `Hello World` over http 2 to the browser
@@ -345,7 +345,39 @@ when connection is initialized i generate the settings frame in here
   }
 ```
 
-essentially if ssl connection is not established  we cannot flush the buffer, which means that when i try to do that
-it will essentially endup in /dev/null and dissapear.  Browser is chill about not receiving settings, as the immediate next
-data will come through with the response, but curl is really anal about the protocol
-because settings frame is required from both parties in the beginning of the session
+essentially if ssl connection is not established  we cannot flush the buffer,
+which means that when i try to do that it will essentially endup in /dev/null
+and dissapear.  Browser is chill about not receiving settings, as the immediate
+next data will come through with the response, but curl is really anal about
+the protocol because settings frame is required from both parties in the
+beginning of the session
+
+# Http2 Client
+- [ ] TCP
+    - [ ] connection
+    - [ ] pooling ? 
+        - is that even necessary anymore?
+- [ ] SSL connection
+    - [x] handshake
+    - [x] ALPN upgrade
+    - [ ] cert validation
+    - [ ] Connection pooling
+- [ ] Http2 session
+    - [ ] Initialization, with simple settings frame
+    - [ ] Session pooling
+- [ ] Http2 request response
+
+# Testing
+## nghttpx proxy
+In order to debug the protocol handling for various conditions it might be
+useful to setup a reverse proxy to google or another website thats already setup.
+That way you can log the interaction for ssl and the http2 frames.
+
+This can be done using the nghttp2 utility as follows:
+
+```bash
+    nghttpx -L INFO -b 'google.com,443;;tls' build/server.key build/server.crt
+```
+
+this will start a server on `localhost:3000` by default, and then you can use
+it like normal
