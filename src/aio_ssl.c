@@ -6,7 +6,7 @@
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
 
-void valk_asio_ssl_start(){
+void valk_asio_ssl_start() {
   SSL_library_init();
   OpenSSL_add_all_algorithms();
   ERR_load_crypto_strings();
@@ -166,11 +166,16 @@ valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {
 valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
                                 valk_buffer_t *Out, void *arg,
                                 void(onRead)(void *, const valk_buffer_t *)) {
+  if (In->count == 0) {
+    printf("Didnt receive any data ??? just return then i guess\n");
+    return VALK_ERR_SUCCESS;
+  }
+
   int n, err;
   n = BIO_write(ssl->read_bio, In->items, In->count);
   // TODO(networking): need proper error handling in case this  fails
   // Since i am assuming BIO_s_mem() here, it should never fail.
-  VALK_ASSERT(n > 0,
+  VALK_ASSERT(n >= 0,
               "OpenSSL BIO_write must be able to write !!! what the heck, got "
               "an error instead %d",
               n);

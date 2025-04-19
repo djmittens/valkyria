@@ -636,8 +636,7 @@ void valk_server_demo(void) {
 struct valk_aio_http2_client {
   uv_loop_t *eventloop;
   SSL_CTX *ssl_ctx;
-  uv_tcp_t tcpHandle;
-  valk_aio_http_conn httpSession;
+  valk_aio_http_conn httpConnection;
   uv_connect_t connectionRequest;
   char *interface;
   int port;
@@ -705,18 +704,19 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
   }
 
   valk_aio_http2_client *client = req->data;
-  nghttp2_session_client_new(&client->httpSession.session, callbacks, client);
+  nghttp2_session_client_new(&client->httpConnection.session, callbacks,
+                             client);
 
   valk_aio_ssl_client_init(&client->ssl_ctx);
-  valk_aio_ssl_connect(&client->httpSession.ssl, client->ssl_ctx);
-  SSL_set_tlsext_host_name(client->httpSession.ssl.ssl, "localhost");
+  valk_aio_ssl_connect(&client->httpConnection.ssl, client->ssl_ctx);
+  SSL_set_tlsext_host_name(client->httpConnection.ssl.ssl, "localhost");
 
   char buf[SSL3_RT_MAX_PACKET_SIZE] = {0};
 
   valk_buffer_t Tmp = {
       .items = &buf, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
 
-  valk_aio_ssl_handshake(&client->httpSession.ssl, &Out);
+  valk_aio_ssl_handshake(&client->httpConnection.ssl, &Out);
 
   int wantToSend = Out.count > 0;
   if (wantToSend) {
@@ -724,14 +724,14 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     slabItem->buf.len = Out.count;
 
     printf("[Client] Sending %ld bytes\n", Out.count);
-    uv_write(&slabItem->req, (uv_stream_t *)&client->tcpHandle, &slabItem->buf,
-             1, __http_tcp_on_write_cb);
+    uv_write(&slabItem->req, (uv_stream_t *)&client->httpConnection.tcpHandle,
+             &slabItem->buf, 1, __http_tcp_on_write_cb);
   } else {
     valk_slab_alloc_release_ptr(&tcp_buffer_slab, Out.items);
   }
 
-  uv_read_start((uv_stream_t *)&client->tcpHandle, __alloc_callback,
-                __http_tcp_read_cb);
+  uv_read_start((uv_stream_t *)&client->httpConnection.tcpHandle,
+                __alloc_callback, __http_tcp_read_cb);
 }
 
 static void __aio_client_connect_cb(valk_arc_box *box) {
@@ -740,8 +740,9 @@ static void __aio_client_connect_cb(valk_arc_box *box) {
   struct sockaddr_in addr;
   valk_aio_http2_client *client = box->item;
 
-  r = uv_tcp_init(client->eventloop, &client->tcpHandle);
-  uv_tcp_nodelay(&client->tcpHandle, 1);
+  r = uv_tcp_init(client->eventloop, &client->httpConnection.tcpHandle);
+  uv_tcp_nodelay(&client->httpConnection.tcpHandle, 1);
+  client->httpConnection.tcpHandle.data = &client->httpConnection;
 
   if (r) {
     fprintf(stderr, "TcpInit err: %s \n", uv_strerror(r));
@@ -754,7 +755,7 @@ static void __aio_client_connect_cb(valk_arc_box *box) {
   }
 
   client->connectionRequest.data = client;
-  uv_tcp_connect(&client->connectionRequest, &client->tcpHandle,
+  uv_tcp_connect(&client->connectionRequest, &client->httpConnection.tcpHandle,
                  (const struct sockaddr *)&addr, __uv_http2_connect_cb);
 }
 
@@ -778,7 +779,6 @@ void valk_aio_http2_connect(valk_aio_http2_client *client, valk_aio_system *sys,
 
   uv_mutex_unlock(&sys->taskLock);
   uv_async_send(&sys->taskHandle);
-
 }
 
 static void __http2_submit_demo_request(valk_arc_box *arg) {
@@ -819,7 +819,7 @@ char *valk_client_demo(const char *domain, const char *port) {
   uv_mutex_lock(&sys.taskLock);
   struct valk_aio_task task;
   task.arg = valk_arc_box_new(VALK_SUC, 0);
-  task.arg->item = &client.httpSession;
+  task.arg->item = &client.httpConnection;
   task.callback = __http2_submit_demo_request;
 
   valk_work_add(&sys, task);
