@@ -863,9 +863,9 @@ char *valk_client_demo(const char *domain, const char *port) {
   valk_aio_http2_client client;
   valk_aio_start(&sys);
   // GOOGLE
-  // valk_aio_http2_connect(&client, &sys, "142.250.191.78", 443, "");
+  valk_aio_http2_connect(&client, &sys, "142.250.191.78", 443, "");
   // Local
-  valk_aio_http2_connect(&client, &sys, "127.0.0.1", 3000, "");
+  // valk_aio_http2_connect(&client, &sys, "127.0.0.1", 3000, "");
   sleep(1);
 
   printf("well tthis is awk\n");
