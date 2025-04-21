@@ -12,39 +12,37 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   valk_lval_t *ast = VALK_FIXTURE("prelude");
   VALK_TEST();
 
-  // pid_t pid;
-  // pid = fork();
-  // if (pid < 0) {
-  //   perror("Forky fork failed 😤\n");
-  // } else if (pid == 0) {
-  //   printf("Starting server\n");
-  //   valk_server_demo();
-  //   exit(0);
-  // }
-  //
-  // sleep(1);
-  // char *response = valk_client_demo("127.0.0.1", "8080");
-  // kill(pid, SIGTERM);
-  // printf("Waiting for server to die\n");
-  //
-  // int res;
-  // waitpid(pid, &res, 0);
-  //
-  // if (WIFSIGNALED(res)) {
-  //   printf("Server killed by signal, %d\n", WTERMSIG(res));
-  // } else if (WIFEXITED(res)) {
-  //   printf("Server exited with code %d\n", WEXITSTATUS(res));
-  // } else if (WTERMSIG(res)) {
-  //   printf("Server stopped code %d\n", WTERMSIG(res));
-  // }
-  //
-  // if (strcmp(response, "Hello World")) {
-  //   VALK_FAIL("Did not receive the expected result from the servier Expected: "
-  //             "[%s]  Actual: [%s]",
-  //             "Hello World", response);
-  // }
-  // VALK_PASS();
+  pid_t pid;
+  pid = fork();
+  if (pid < 0) {
+    perror("Forky fork failed 😤\n");
+  } else if (pid == 0) {
+    printf("Starting server\n");
+    valk_server_demo();
+    exit(0);
+  }
+
   char *response = valk_client_demo("127.0.0.1", "8080");
+  kill(pid, SIGTERM);
+  printf("Waiting for server to die\n");
+
+  int res;
+  waitpid(pid, &res, 0);
+
+  if (WIFSIGNALED(res)) {
+    printf("Server killed by signal, %d\n", WTERMSIG(res));
+  } else if (WIFEXITED(res)) {
+    printf("Server exited with code %d\n", WEXITSTATUS(res));
+  } else if (WTERMSIG(res)) {
+    printf("Server stopped code %d\n", WTERMSIG(res));
+  }
+
+  if (strcmp(response, VALK_HTTP_MOTD)) {
+    VALK_FAIL("Did not receive the expected result from the servier Expected: "
+              "[%s]  Actual: [%s]",
+              VALK_HTTP_MOTD, response);
+  }
+  VALK_PASS();
   valk_lval_free(ast);
   free(response);
 }

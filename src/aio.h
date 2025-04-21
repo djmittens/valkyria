@@ -3,6 +3,8 @@
 #include "concurrency.h"
 #include <unistd.h>
 
+#define VALK_HTTP_MOTD  "<h1>Valkyria, valhallas treasure</h1>"
+
 // Host TO Network Short
 /* void htons(void); */
 /**/

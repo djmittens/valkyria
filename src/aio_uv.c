@@ -53,15 +53,15 @@ typedef struct {
   char data[SSL3_RT_MAX_PACKET_SIZE];
 } __tcp_buffer_slab_item_t;
 
-struct __http2_connect_req {
+typedef struct __http2_connect_req {
   valk_aio_system *sys;
   valk_aio_http2_client *client;
-};
+} __http2_connect_req;
 
-struct __http2_client_req {
+typedef struct __http2_client_req {
   valk_aio_http2_client *client;
   valk_promise *promise;
-};
+} __http2_client_req;
 
 static __thread valk_slab_t tcp_connection_slab;
 static __thread valk_slab_t tcp_request_arena_slab;
@@ -294,7 +294,7 @@ static int __demo_response(nghttp2_session *session, int stream_id) {
 
   /* Send DATA frame */
   nghttp2_data_provider2 data_prd;
-  data_prd.source.ptr = "<h1>Valkyria, valhallas treasure</h1>\n";
+  data_prd.source.ptr = VALK_HTTP_MOTD;
   data_prd.read_callback = __http_byte_body_cb;
 
   /* return nghttp2_submit_push_promise(session, 0, stream_id, response_headers,
@@ -697,17 +697,23 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
                                               uint8_t flags, int32_t stream_id,
                                               const uint8_t *data, size_t len,
                                               void *user_data) {
-  struct Request *req;
   (void)flags;
   (void)user_data;
 
-  req = nghttp2_session_get_stream_user_data(session, stream_id);
-  if (req) {
+  valk_promise *promise =
+      nghttp2_session_get_stream_user_data(session, stream_id);
+  if (promise) {
     printf("[INFO] C <---------------------------- S (DATA chunk)\n"
            "%lu bytes\n",
            (unsigned long int)len);
     fwrite(data, 1, len, stdout);
     printf("\n");
+
+    valk_arc_box *res = valk_arc_box_new(VALK_SUC, len + 1);
+    memcpy(res->item, data, len);
+    ((char *)res->item)[len] = '\0';
+
+    valk_promise_respond(promise, res);
   }
   return 0;
 }
@@ -867,7 +873,9 @@ valk_future *valk_aio_http2_connect(valk_aio_system *sys, const char *interface,
 
 static void __http2_submit_demo_request_cb(valk_arc_box *arg) {
 
-  valk_aio_http2_client *client = arg->item;
+  __http2_client_req *req = arg->item;
+
+  valk_aio_http2_client *client = req->client;
 
   printf("Constructing a request on client %p\n", (void *)client);
   valk_aio_http_conn *conn = &client->connection;
@@ -883,12 +891,17 @@ static void __http2_submit_demo_request_cb(valk_arc_box *arg) {
   // fprintf(stderr, "Request headers:\n");
   // print_headers(stderr, hdrs, ARRLEN(hdrs));
 
-  stream_id = nghttp2_submit_request2(
-      conn->session, NULL, hdrs, sizeof(hdrs) / sizeof(hdrs[0]), NULL, conn);
+  stream_id = nghttp2_submit_request2(conn->session, NULL, hdrs,
+                                      sizeof(hdrs) / sizeof(hdrs[0]), NULL,
+                                      req->promise);
 
   if (stream_id < 0) {
     fprintf(stderr, "Could not submit HTTP request: %s\n",
             nghttp2_strerror(stream_id));
+    valk_promise_respond(req->promise,
+                         valk_arc_box_err("Could not submit HTTP request"));
+    valk_arc_release(arg);
+    return;
   }
 
   printf("Submitted request with stream id %d\n", stream_id);
@@ -928,37 +941,51 @@ static void __http2_submit_demo_request_cb(valk_arc_box *arg) {
   // return stream_id;
 }
 
-static void __http2_submit_demo_request(valk_arc_box *arg) {}
+static valk_future *__http2_submit_demo_request(valk_aio_system *sys,
+                                                valk_aio_http2_client *client) {
+
+  valk_future *res = valk_future_new();
+  uv_mutex_lock(&sys->taskLock);
+  struct valk_aio_task task;
+
+  valk_arc_box *box = valk_arc_box_new(VALK_SUC, sizeof(__http2_client_req));
+  __http2_client_req *req = box->item;
+  req->client = client;
+  req->promise = valk_promise_new(res);
+
+  task.arg = box;
+  task.callback = __http2_submit_demo_request_cb;
+
+  valk_work_add(sys, task);
+  uv_mutex_unlock(&sys->taskLock);
+  uv_async_send(&sys->taskHandle);
+  return res;
+}
 
 char *valk_client_demo(const char *domain, const char *port) {
   valk_aio_system sys;
   valk_aio_start(&sys);
 
   // GOOGLE
-  valk_arc_box *clientBox = valk_future_await(
-      valk_aio_http2_connect(&sys, "142.250.191.78", 443, ""));
+  // valk_arc_box *box = valk_future_await(
+  //     valk_aio_http2_connect(&sys, "142.250.191.78", 443, ""));
 
   // Local
-  // valk_aio_http2_connect(&client, &sys, "127.0.0.1", 3000, "");
-  // valk_arc_box *clientBox =
-  //     valk_future_await(valk_aio_http2_connect(&sys, "127.0.0.1", 3000, ""));
+  valk_arc_box *box =
+      valk_future_await(valk_aio_http2_connect(&sys, "127.0.0.1", 6969, ""));
 
-  VALK_ASSERT(clientBox->type == VALK_SUC, "Error creating client: %s",
-              clientBox->item);
+  VALK_ASSERT(box->type == VALK_SUC, "Error creating client: %s", box->item);
 
-  uv_mutex_lock(&sys.taskLock);
-  struct valk_aio_task task;
-  task.arg = clientBox;
-  task.callback = __http2_submit_demo_request_cb;
+  box = valk_future_await(__http2_submit_demo_request(&sys, box->item));
 
-  valk_work_add(&sys, task);
-  uv_mutex_unlock(&sys.taskLock);
-  uv_async_send(&sys.taskHandle);
+  VALK_ASSERT(box->type == VALK_SUC, "Error from the response: %s", box->item);
 
-  while (1)
-    ;
+  printf("Got response %s\n", (char *)box->item);
+  char *res = strdup(box->item);
+  valk_arc_release(box);
+
   valk_aio_stop(&sys);
-  return strdup("");
+  return res;
 }
 
 // reference code for openssl setup
