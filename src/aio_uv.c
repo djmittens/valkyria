@@ -655,6 +655,7 @@ void valk_server_demo(void) {
   valk_aio_start(&sys);
   valk_aio_http2_listen(&srv, &sys, "0.0.0.0", 6969, "build/server.key",
                         "build/server.crt");
+  kill(getppid(), SIGUSR1);
   uv_thread_join(&sys.loopThread);
   valk_aio_stop(&sys);
 }

@@ -4,13 +4,26 @@
 #include "parser.h"
 #include "testing.h"
 
+#include <signal.h>
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+
+void handle_sigusr1(int sig)  {
+
+}
+
 void test_demo_socket_server(VALK_TEST_ARGS()) {
   valk_lval_t *ast = VALK_FIXTURE("prelude");
   VALK_TEST();
+
+  struct sigaction sa;
+  sa.sa_flags = 0;
+  sa.sa_handler = handle_sigusr1;
+  sigemptyset(&sa.sa_mask);
+
+  sigaction(SIGUSR1, &sa, NULL);
 
   pid_t pid;
   pid = fork();
@@ -21,6 +34,8 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
     valk_server_demo();
     exit(0);
   }
+
+  pause();
 
   char *response = valk_client_demo("127.0.0.1", "8080");
   kill(pid, SIGTERM);
