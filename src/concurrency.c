@@ -37,6 +37,7 @@ valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity) {
   res->capacity = capacity;
   res->item = &((char*)res)[sizeof(valk_arc_box)];
 
+  res->free = NULL;
   __assert_thread_safe_allocator();
   res->allocator = valk_thread_ctx.allocator;
 
@@ -50,6 +51,7 @@ valk_arc_box *valk_arc_box_err(const char *msg) {
   res->type = VALK_ERR;
   res->refcount = 1;
   res->item = &((char*)res)[sizeof(valk_arc_box)];
+  res->free = NULL;
   __assert_thread_safe_allocator();
   res->allocator = valk_thread_ctx.allocator;
 

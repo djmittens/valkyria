@@ -114,7 +114,6 @@
             - read buffers
                 - since those dont need requets or handles, i can just use raw
     - [ ] Arenas for requests
-- [ ] Send 2 MB worth of html data to the browser
 - [ ] Handle errors 
     - [ ] Handle timeouts
     - [ ] Handle request cancellations
@@ -122,6 +121,7 @@
     - [ ] Handle too many requests
 - [ ] Replace OpenSSL with a lighter TLS library, like WolfSSL
 - [ ] Redirect to https if the request is http 1.1
+- [ ] Send 2 MB worth of html data to the browser
 - [ ] Figure out the proper allocation size for a session.
     I get a vey eerie feeling that nghttp2 will allocate state on every message, in the session memory pool.
     If thats the case, i might need to consider on moving that memory alloc to request level or at least consider timeout or something like that
@@ -360,12 +360,13 @@ beginning of the session
 - [ ] SSL connection
     - [x] handshake
     - [x] ALPN upgrade
-    - [ ] cert validation
+    - [ ] Cert validation
     - [ ] Connection pooling
 - [ ] Http2 session
-    - [ ] Initialization, with simple settings frame
+    - [x] Initialization, with simple settings frame
     - [ ] Session pooling
 - [ ] Http2 request response
+- [ ] Stream 2MB worth of data into Lisp
 
 # Testing
 ## nghttpx proxy
