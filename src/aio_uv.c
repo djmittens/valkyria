@@ -89,15 +89,17 @@ struct valk_aio_system {
   size_t capacity;
   uv_mutex_t taskLock;
   uv_async_t taskHandle;
+  uv_async_t stopper;
 };
 
-struct valk_aio_http_server {
+typedef struct valk_aio_http_server {
   uv_loop_t *eventloop;
   SSL_CTX *ssl_ctx;
-  uv_tcp_t server;
+  valk_promise *promise;
+  uv_tcp_t listener;
   char *interface;
   int port;
-};
+} valk_aio_http_server;
 
 typedef struct valk_aio_http_conn {
   uv_connect_t req;
@@ -148,7 +150,12 @@ void __CRYPTO_free_fn(void *addr, const char *file, int line) {
   valk_mem_free(addr);
 }
 
-void valk_aio_start(valk_aio_system *sys) {
+static void __aio_uv_stop (uv_async_t * h) {
+  uv_stop(h->loop);
+}
+
+valk_aio_system *valk_aio_start() {
+  valk_aio_system *sys = valk_mem_alloc(sizeof(valk_aio_system));
   valk_asio_ssl_start();
   sys->eventloop = uv_default_loop();
   sys->count = 0;
@@ -165,18 +172,23 @@ void valk_aio_start(valk_aio_system *sys) {
   sigaction(SIGPIPE, &sa, NULL);
   uv_mutex_init(&sys->taskLock);
   uv_async_init(sys->eventloop, &sys->taskHandle, __task_cb);
+  uv_async_init(sys->eventloop, &sys->stopper, __aio_uv_stop);
   sys->taskHandle.data = sys;
 
   int status = uv_thread_create(&sys->loopThread, __event_loop, sys);
   if (status) {
     perror("pthread_create");
   }
+  return sys;
 }
 
+
 void valk_aio_stop(valk_aio_system *sys) {
-  uv_stop(sys->eventloop);
-  uv_loop_close(sys->eventloop);
+  uv_async_send(&sys->stopper);
   uv_thread_join(&sys->loopThread);
+  uv_loop_close(sys->eventloop);
+  // TODO(networking): need to properly free the system too
+  // valk_mem_free(sys);
 }
 
 valk_future *valk_aio_read_file(valk_aio_system *sys, const char *filename);
@@ -571,38 +583,47 @@ static void __http_listen_cb(valk_arc_box *box) {
   int r;
   struct sockaddr_in addr;
   valk_aio_http_server *srv = box->item;
-  r = uv_tcp_init(srv->eventloop, &srv->server);
-  uv_tcp_nodelay(&srv->server, 1);
+
+  r = uv_tcp_init(srv->eventloop, &srv->listener);
+  uv_tcp_nodelay(&srv->listener, 1);
 
   if (r) {
     fprintf(stderr, "TcpInit err: %s \n", uv_strerror(r));
+    valk_promise_respond(srv->promise, valk_arc_box_err("Error on TcpInit"));
+    valk_arc_release(box);
     return;
   }
   r = uv_ip4_addr(srv->interface, srv->port, &addr);
   if (r) {
     fprintf(stderr, "Addr err: %s \n", uv_strerror(r));
+    valk_promise_respond(srv->promise, valk_arc_box_err("Error on Addr"));
+    valk_arc_release(box);
     return;
   }
 #ifdef __linux__
-  r = uv_tcp_bind(&srv->server, (const struct sockaddr *)&addr,
+  r = uv_tcp_bind(&srv->listener, (const struct sockaddr *)&addr,
                   UV_TCP_REUSEPORT);
 #else
   r = uv_tcp_bind(&srv->server, (const struct sockaddr *)&addr, 0);
 #endif
   if (r) {
     fprintf(stderr, "Bind err: %s \n", uv_strerror(r));
+    valk_promise_respond(srv->promise, valk_arc_box_err("Error on Bind"));
+    valk_arc_release(box);
     return;
   }
 
-  srv->server.data = srv;
-  r = uv_listen((uv_stream_t *)&srv->server, 128, __http_server_accept_cb);
+  srv->listener.data = srv;
+  r = uv_listen((uv_stream_t *)&srv->listener, 128, __http_server_accept_cb);
   if (r) {
     fprintf(stderr, "Listen err: %s \n", uv_strerror(r));
+    valk_promise_respond(srv->promise, valk_arc_box_err("Error on Listening"));
+    valk_arc_release(box);
     return;
   } else {
     printf("Listening on %s:%d\n", srv->interface, srv->port);
+    valk_promise_respond(srv->promise, box);
   }
-  valk_arc_release(box);
 }
 
 static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
@@ -621,12 +642,17 @@ static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
 }
 
 static void __no_free(void *arg) { UNUSED(arg); }
-int valk_aio_http2_listen(valk_aio_http_server *srv, valk_aio_system *sys,
-                          const char *interface, const int port,
-                          const char *keyfile, const char *certfile) {
+valk_future *valk_aio_http2_listen(valk_aio_system *sys, const char *interface,
+                                   const int port, const char *keyfile,
+                                   const char *certfile) {
+  valk_arc_box *box = valk_arc_box_new(VALK_SUC, sizeof(valk_aio_http_server));
+  valk_aio_http_server *srv = box->item;
+  valk_future *res = valk_future_new();
+
   srv->eventloop = sys->eventloop;
   srv->interface = strdup(interface);
   srv->port = port;
+  srv->promise = valk_promise_new(res);
 
   uv_mutex_lock(&sys->taskLock);
   struct valk_aio_task task;
@@ -634,31 +660,17 @@ int valk_aio_http2_listen(valk_aio_http_server *srv, valk_aio_system *sys,
   valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
   SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
 
-  // TODO(networking): consider shove srv into a box to begin with, this is
-  // otherwise sus
-  task.arg = valk_arc_box_new(VALK_SUC, sizeof(void *));
-  task.arg->item = srv;
+  task.arg = box;
   task.callback = __http_listen_cb;
 
   valk_work_add(sys, task);
 
   uv_mutex_unlock(&sys->taskLock);
   uv_async_send(&sys->taskHandle);
-  return 0;
+  return res;
 }
 
 void valk_aio_hangup(valk_aio_socket *socket);
-
-void valk_server_demo(void) {
-  valk_aio_system sys;
-  valk_aio_http_server srv;
-  valk_aio_start(&sys);
-  valk_aio_http2_listen(&srv, &sys, "0.0.0.0", 6969, "build/server.key",
-                        "build/server.crt");
-  kill(getppid(), SIGUSR1);
-  uv_thread_join(&sys.loopThread);
-  valk_aio_stop(&sys);
-}
 
 //// HTTP2 CLIENT
 
@@ -963,9 +975,8 @@ static valk_future *__http2_submit_demo_request(valk_aio_system *sys,
   return res;
 }
 
-char *valk_client_demo(const char *domain, const char *port) {
-  valk_aio_system sys;
-  valk_aio_start(&sys);
+char *valk_client_demo(valk_aio_system *sys, const char *domain,
+                       const char *port) {
 
   // GOOGLE
   // valk_arc_box *box = valk_future_await(
@@ -973,11 +984,11 @@ char *valk_client_demo(const char *domain, const char *port) {
 
   // Local
   valk_arc_box *box =
-      valk_future_await(valk_aio_http2_connect(&sys, "127.0.0.1", 6969, ""));
+      valk_future_await(valk_aio_http2_connect(sys, "127.0.0.1", 6969, ""));
 
   VALK_ASSERT(box->type == VALK_SUC, "Error creating client: %s", box->item);
 
-  box = valk_future_await(__http2_submit_demo_request(&sys, box->item));
+  box = valk_future_await(__http2_submit_demo_request(sys, box->item));
 
   VALK_ASSERT(box->type == VALK_SUC, "Error from the response: %s", box->item);
 
@@ -985,7 +996,7 @@ char *valk_client_demo(const char *domain, const char *port) {
   char *res = strdup(box->item);
   valk_arc_release(box);
 
-  valk_aio_stop(&sys);
+  valk_aio_stop(sys);
   return res;
 }
 

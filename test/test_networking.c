@@ -9,48 +9,19 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-
-void handle_sigusr1(int sig)  {
-
-}
+void handle_sigusr1(int sig) {}
 
 void test_demo_socket_server(VALK_TEST_ARGS()) {
   valk_lval_t *ast = VALK_FIXTURE("prelude");
+  valk_aio_system *sys = valk_aio_start();
+
   VALK_TEST();
 
-  struct sigaction sa;
-  sa.sa_flags = 0;
-  sa.sa_handler = handle_sigusr1;
-  sigemptyset(&sa.sa_mask);
+  valk_future_await(valk_aio_http2_listen(
+      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt"));
+  printf("What the fudge\n");
 
-  sigaction(SIGUSR1, &sa, NULL);
-
-  pid_t pid;
-  pid = fork();
-  if (pid < 0) {
-    perror("Forky fork failed 😤\n");
-  } else if (pid == 0) {
-    printf("Starting server\n");
-    valk_server_demo();
-    exit(0);
-  }
-
-  pause();
-
-  char *response = valk_client_demo("127.0.0.1", "8080");
-  kill(pid, SIGTERM);
-  printf("Waiting for server to die\n");
-
-  int res;
-  waitpid(pid, &res, 0);
-
-  if (WIFSIGNALED(res)) {
-    printf("Server killed by signal, %d\n", WTERMSIG(res));
-  } else if (WIFEXITED(res)) {
-    printf("Server exited with code %d\n", WEXITSTATUS(res));
-  } else if (WTERMSIG(res)) {
-    printf("Server stopped code %d\n", WTERMSIG(res));
-  }
+  char *response = valk_client_demo(sys, "127.0.0.1", "8080");
 
   if (strcmp(response, VALK_HTTP_MOTD)) {
     VALK_FAIL("Did not receive the expected result from the servier Expected: "
@@ -58,6 +29,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
               VALK_HTTP_MOTD, response);
   }
   VALK_PASS();
+  valk_aio_stop(sys);
   valk_lval_free(ast);
   free(response);
 }

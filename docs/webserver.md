@@ -123,6 +123,8 @@
         - [ ] Handle too many concurrent connections
     - [ ] TLS
         - [ ] Invalid certs
+        - [ ] Handshake re-negotiation
+        - [ ] Invalid packets
     - [ ] Http
         - [ ] Handle timeouts
         - [ ] Handle too many streams
