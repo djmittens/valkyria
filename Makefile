@@ -18,8 +18,10 @@ cmake build/.cmake: CMakeLists.txt homebrew.cmake
 		-subj "/C=US/ST=SomeState/L=SomeCity/O=MyOrg/CN=localhost"
 	touch build/.cmake
 
+.ONESHELL:
 .PHONY: build
 build : build/.cmake
+	run-clang-tidy -p build 
 	cmake --build build
 
 # This will install editline and maybe other depenedencies on linux / macos

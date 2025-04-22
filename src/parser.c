@@ -24,8 +24,8 @@
 #define LVAL_ASSERT_TYPE(args, lval, _type, ...)                               \
   do {                                                                         \
     char _found = 0;                                                           \
-    valk_ltype_t _expected[] = {(_type), ##__VA_ARGS__};                       \
-    size_t _n_expected = sizeof(_expected) / sizeof(valk_ltype_t);             \
+    valk_ltype_e _expected[] = {(_type), ##__VA_ARGS__};                       \
+    size_t _n_expected = sizeof(_expected) / sizeof(valk_ltype_e);             \
                                                                                \
     for (size_t i = 0; i < _n_expected; i++) {                                 \
       if ((lval)->type == _expected[i]) {                                      \
@@ -128,7 +128,7 @@ char *valk_str_join(const size_t n, const char **strs, const char *sep) {
   return res;
 }
 
-const char *valk_ltype_name(valk_ltype_t type) {
+const char *valk_ltype_name(valk_ltype_e type) {
   switch (type) {
   case LVAL_NUM:
     return "Number";

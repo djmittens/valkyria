@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.26 FATAL_ERROR)
 set(CMAKE_C_COMPILER "/usr/bin/clang")
 set(CMAKE_CXX_COMPILER "/usr/bin/clang++")
 
+
 project(valkyria LANGUAGES C)
 
 if(ASAN)
@@ -19,6 +20,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${EXTRA_FLAGS}
 # Apply to link flags
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${EXTRA_FLAGS}")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${EXTRA_FLAGS}")
+
 
 find_package(PkgConfig REQUIRED)
 
@@ -43,6 +45,13 @@ if (HOMEBREW_CLANG)
   include (${CMAKE_CURRENT_SOURCE_DIR}/homebrew.cmake)
 endif()
 
+
+find_path(LIBUV_INCLUDE_DIR NAMES uv.h)
+find_library(LIBUV_LIBRARIES NAMES uv libuv)
+
+find_package(OpenSSL REQUIRED)
+
+## LIB
 add_library(valkyria 
   src/parser.c
   src/memory.c
@@ -52,31 +61,34 @@ add_library(valkyria
   src/aio_ssl.c
 )
 
+target_include_directories(valkyria SYSTEM PRIVATE 
+  ${LIBUV_INCLUDE_DIRS}
+  ${PROJECT_SOURCE_DIR}/vendor
+)
 
-# link_directories(valkyria ${LIBUV_LIBRARY_DIRS})
+target_link_libraries(valkyria PRIVATE 
+  nghttp2::nghttp2 
+  ${LIBUV_LIBRARIES} 
+  OpenSSL::SSL 
+  OpenSSL::Crypto)
 
 
-find_path(LIBUV_INCLUDE_DIR NAMES uv.h)
-find_library(LIBUV_LIBRARIES NAMES uv libuv)
-
-find_package(OpenSSL REQUIRED)
-
-target_include_directories(valkyria PRIVATE ${LIBUV_INCLUDE_DIRS})
-target_link_libraries(valkyria PRIVATE ${LIBUV_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto)
 
 
+### REPL
 add_executable(valk
   "src/repl.c"
 )
 
-include_directories(valk
+target_link_libraries(valk PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
+target_include_directories(valk SYSTEM PRIVATE
   # vendor/editline/include/
   ${EDITLINE_INCLUDE_DIRS}
+  ${PROJECT_SOURCE_DIR}/vendor
+  ${MACOS_SDK_PATH}
 )
 
-target_link_libraries(valkyria PRIVATE nghttp2::nghttp2 )
-# set_property(TARGET valkyria PROPERTY C_STANDARD 23)
-target_link_libraries(valk PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
+# TESTS
 
 add_executable(test_std test/test_std.c test/testing.c)
 target_link_libraries(test_std PRIVATE "-lc" valkyria)

@@ -1,15 +1,12 @@
+#include <stdlib.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include "aio.h"
 #include "common.h"
 #include "memory.h"
 #include "parser.h"
 #include "testing.h"
-
-#include <signal.h>
-#include <stdlib.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-void handle_sigusr1(int sig) {}
 
 void test_demo_socket_server(VALK_TEST_ARGS()) {
   valk_lval_t *ast = VALK_FIXTURE("prelude");
@@ -24,9 +21,10 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   char *response = valk_client_demo(sys, "127.0.0.1", "8080");
 
   if (strcmp(response, VALK_HTTP_MOTD)) {
-    VALK_FAIL("Did not receive the expected result from the servier Expected: "
-              "[%s]  Actual: [%s]",
-              VALK_HTTP_MOTD, response);
+    VALK_FAIL(
+        "Did not receive the expected result from the servier Expected: "
+        "[%s]  Actual: [%s]",
+        VALK_HTTP_MOTD, response);
   }
   VALK_PASS();
   valk_aio_stop(sys);
@@ -34,18 +32,22 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   free(response);
 }
 
-int get_ctx() { return (size_t)valk_thread_ctx.allocator; }
-
 void test_implicit_arena_alloc(VALK_TEST_ARGS()) {
   VALK_TEST();
-  valk_thread_ctx.allocator = (void *)6969;
-  valk_thread_context_t ctx = {.allocator = (void *)-1};
+  valk_mem_allocator_t alloc_old;
+  valk_mem_allocator_t alloc_new;
+
+  valk_thread_ctx.allocator = &alloc_old;
+  valk_thread_context_t ctx = {.allocator = &alloc_new};
   VALK_WITH_CTX(ctx) {
     // The function gets context we set
-    VALK_TEST_ASSERT(get_ctx() == -1, "expected some stuff %d", (int)get_ctx());
+    VALK_TEST_ASSERT(valk_thread_ctx.allocator == &alloc_new,
+                     "expected some stuff %d", &alloc_new);
   }
   // VALK_WITH_CTX reset the context back to original
-  VALK_TEST_ASSERT(get_ctx() == 6969, "expected some stuff %d", (int)get_ctx());
+  VALK_TEST_ASSERT(valk_thread_ctx.allocator == &alloc_old,
+                   "expected some stuff %d", &alloc_old);
+  valk_thread_ctx.allocator = nullptr;
   VALK_PASS();
 }
 
@@ -67,7 +69,7 @@ int main(int argc, const char **argv) {
   // load fixtures
   valk_lval_t *ast = valk_parse_file("src/prelude.valk");
   valk_lenv_t *env = valk_lenv_empty();
-  valk_lenv_builtins(env); // load the builtins
+  valk_lenv_builtins(env);  // load the builtins
   valk_lval_t *r = valk_lval_eval(env, valk_lval_copy(ast));
   valk_lval_free(r);
 

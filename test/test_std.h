@@ -7,8 +7,8 @@
   do {                                                                         \
     if (_result->type == VALK_TEST_UNDEFINED) {                                \
       char _found = 0;                                                         \
-      valk_ltype_t _expected[] = {(_type), __VA_ARGS__};                       \
-      size_t _n_expected = sizeof(_expected) / sizeof(valk_ltype_t);           \
+      valk_ltype_e _expected[] = {(_type), __VA_ARGS__};                       \
+      size_t _n_expected = sizeof(_expected) / sizeof(valk_ltype_e);           \
       for (size_t i = 0; i < _n_expected; i++) {                               \
         if ((lval)->type == _expected[i]) {                                    \
           _found = 1;                                                          \

@@ -1,0 +1,4 @@
+Checks: 'modernize-*,performance-*,-modernize-use-trailing-return-type'
+WarningsAsErrors: 'clang-analyzer-*'
+HeaderFilterRegex: '^src/'
+UseColor: true

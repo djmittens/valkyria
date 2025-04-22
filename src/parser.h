@@ -15,9 +15,9 @@ typedef enum {
   LVAL_QEXPR,
   LVAL_SEXPR,
   LVAL_ERR
-} valk_ltype_t;
+} valk_ltype_e;
 
-const char *valk_ltype_name(valk_ltype_t type);
+const char *valk_ltype_name(valk_ltype_e type);
 
 typedef valk_lval_t *(valk_lval_builtin_t)(valk_lenv_t *, valk_lval_t *);
 
@@ -38,7 +38,7 @@ struct valk_lval_t {
     long num;
     char *str;
   };
-  valk_ltype_t type;
+  valk_ltype_e type;
 };
 
 //// lval Constructors ////
@@ -104,6 +104,6 @@ void valk_lenv_builtins(valk_lenv_t *env);
 // These functions should  probably not  be here, but right now they are or
 // something. Maybe there should be a string handling lib
 
-char *valk_str_join(const size_t n, const char **strs, const char *sep);
-char *valk_c_err_format(const char *fmt, const char *file, const size_t line,
+char *valk_str_join(size_t n, const char **strs, const char *sep);
+char *valk_c_err_format(const char *fmt, const char *file, size_t line,
                         const char *function);

@@ -169,7 +169,7 @@ valk_aio_system *valk_aio_start() {
   // In that case we just want to do proper error handling without the
   // signal
   struct sigaction sa = {.sa_handler = SIG_IGN};
-  sigaction(SIGPIPE, &sa, NULL);
+  sigaction(SIGPIPE, &sa, nullptr);
   uv_mutex_init(&sys->taskLock);
   uv_async_init(sys->eventloop, &sys->taskHandle, __task_cb);
   uv_async_init(sys->eventloop, &sys->stopper, __aio_uv_stop);
@@ -398,7 +398,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     } else {
       fprintf(stderr, "Read error: %s\n", uv_strerror((int)nread));
     }
-    uv_close((uv_handle_t *)stream, NULL);
+    uv_close((uv_handle_t *)stream, nullptr);
     return;
   }
 
@@ -546,7 +546,7 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
      */
     conn->session_allocator.realloc = __nghttp2_realloc;
 
-    static nghttp2_session_callbacks *callbacks = NULL;
+    static nghttp2_session_callbacks *callbacks = nullptr;
     if (!callbacks) {
       nghttp2_session_callbacks_new(&callbacks);
       // nghttp2_session_callbacks_set_send_callback2(callbacks,
@@ -559,7 +559,7 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
           callbacks, __http_on_frame_recv_callback);
     }
 
-    nghttp2_session_server_new3(&conn->session, callbacks, conn, NULL,
+    nghttp2_session_server_new3(&conn->session, callbacks, conn, nullptr,
                                 &conn->session_allocator);
     valk_aio_http_server *srv = server->data;
     valk_aio_ssl_accept(&conn->ssl, srv->ssl_ctx);
@@ -572,7 +572,7 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
                   __http_tcp_read_cb);
   } else {
     fprintf(stderr, "Fuck closing %s\n", uv_strerror(res));
-    uv_close((uv_handle_t *)&conn->tcpHandle, NULL);
+    uv_close((uv_handle_t *)&conn->tcpHandle, nullptr);
     // TODO(networking): should probably have a function for properly disposing
     // of the connection objects
     valk_slab_alloc_release_ptr(&tcp_connection_slab, conn->arena);
@@ -604,7 +604,7 @@ static void __http_listen_cb(valk_arc_box *box) {
   r = uv_tcp_bind(&srv->listener, (const struct sockaddr *)&addr,
                   UV_TCP_REUSEPORT);
 #else
-  r = uv_tcp_bind(&srv->server, (const struct sockaddr *)&addr, 0);
+  r = uv_tcp_bind(&srv->listener, (const struct sockaddr *)&addr, 0);
 #endif
   if (r) {
     fprintf(stderr, "Bind err: %s \n", uv_strerror(r));
@@ -750,7 +750,7 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
   valk_buffer_t Out = {
       .items = slabItem->data, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
 
-  static nghttp2_session_callbacks *callbacks = NULL;
+  static nghttp2_session_callbacks *callbacks = nullptr;
   if (!callbacks) {
     nghttp2_session_callbacks_new(&callbacks);
     /*
@@ -791,11 +791,6 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
 
   valk_aio_ssl_connect(&client->connection.ssl, client->ssl_ctx);
   SSL_set_tlsext_host_name(client->connection.ssl.ssl, "localhost");
-
-  char buf[SSL3_RT_MAX_PACKET_SIZE] = {0};
-
-  valk_buffer_t Tmp = {
-      .items = &buf, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
 
   valk_aio_ssl_handshake(&client->connection.ssl, &Out);
 
@@ -904,8 +899,8 @@ static void __http2_submit_demo_request_cb(valk_arc_box *arg) {
   // fprintf(stderr, "Request headers:\n");
   // print_headers(stderr, hdrs, ARRLEN(hdrs));
 
-  stream_id = nghttp2_submit_request2(conn->session, NULL, hdrs,
-                                      sizeof(hdrs) / sizeof(hdrs[0]), NULL,
+  stream_id = nghttp2_submit_request2(conn->session, nullptr, hdrs,
+                                      sizeof(hdrs) / sizeof(hdrs[0]), nullptr,
                                       req->promise);
 
   if (stream_id < 0) {
