@@ -4,15 +4,9 @@
         - [x] Sockets
         - [ ] Files
         - [ ] GZip
+    - [ ] URI
     - [ ] Logging
     - [ ] Regex
-    - [ ] URI
-    - [ ] HTTP Support
-        - [ ] 1.1
-        - [x] 2.0
-        - [?] 3.0
-            This thing i based On QUIC and requires UDP, so im not going to implement it unless i absolutely must.
-            NGHttp3 is experimental, and doesnt even support most of it.
     - [ ] REST
         - [ ] Routing
         - [ ] Chunking
@@ -21,8 +15,19 @@
     - [ ] Html
         - [ ] Templating
     - [ ] Telemetry
-    - [ ] TLS / mTLS
+    - [x] TLS 
+    - [ ] mTLS
     - [ ] Caching
+        - Memcache?
+    - [x] HTTP Support
+        - [ ] 1.1
+        - [x] 2.0
+        - [?] 3.0
+            This thing i based On QUIC and requires UDP, so im not going to
+            implement it unless i absolutely must. NGHttp3 is experimental, and
+            doesnt even support most of it.
+    - [ ] gRPC
+    - [ ] MQTT
 - [ ] DB drivers
     - [ ] SQLite
     - [ ] MySQL
@@ -30,7 +35,6 @@
 - [ ] Redis
 - [ ] OAuth
 - [ ] Websockets
-
 
 ## Steps for hello world implmenetation
 - [x] Http webserver
@@ -96,7 +100,6 @@
         ```
         Max frame size for http2 is negotiated by the protocol, on connection startup, so based on that we will know the size to allocate to it.
         Thats not something we want.  We want a set size by the server, and let the client know that is what we are working with to avoid dynamic allocation of said buffers
-    - [ ] Gracefully handle errors and disconnects
     - [x] Randomly broke curl again, hopefully this will be caught by some of my regression testing in the future 
 
 - [ ] Handle memory allocation
@@ -114,14 +117,23 @@
             - read buffers
                 - since those dont need requets or handles, i can just use raw
     - [ ] Arenas for requests
-- [ ] Handle errors 
-    - [ ] Handle timeouts
-    - [ ] Handle request cancellations
-    - [ ] Handle too many connections
-    - [ ] Handle too many requests
+- [ ] Handle server errors 
+    - [ ] Tcp
+        - [ ] Gracefully handle disconnects
+        - [ ] Handle too many concurrent connections
+    - [ ] TLS
+        - [ ] Invalid certs
+    - [ ] Http
+        - [ ] Handle timeouts
+        - [ ] Handle too many streams
+        - [ ] Handle request cancellations
 - [ ] Replace OpenSSL with a lighter TLS library, like WolfSSL
 - [ ] Redirect to https if the request is http 1.1
 - [ ] Send 2 MB worth of html data to the browser
+- [ ] Dynamic flow control 
+    - [ ] Initial window size with BDP (bandwidth - delay protocol)
+    - [ ] Stream level window
+    - [ ] Connection level window
 - [ ] Figure out the proper allocation size for a session.
     I get a vey eerie feeling that nghttp2 will allocate state on every message, in the session memory pool.
     If thats the case, i might need to consider on moving that memory alloc to request level or at least consider timeout or something like that

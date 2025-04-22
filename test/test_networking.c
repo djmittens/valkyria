@@ -70,10 +70,10 @@ void test_implicit_arena_alloc(VALK_TEST_ARGS()) {
   valk_thread_context_t ctx = {.allocator = (void *)-1};
   VALK_WITH_CTX(ctx) {
     // The function gets context we set
-    VALK_ASSERT(get_ctx() == -1, "expected some stuff %d", (int)get_ctx());
+    VALK_TEST_ASSERT(get_ctx() == -1, "expected some stuff %d", (int)get_ctx());
   }
   // VALK_WITH_CTX reset the context back to original
-  VALK_ASSERT(get_ctx() == 6969, "expected some stuff %d", (int)get_ctx());
+  VALK_TEST_ASSERT(get_ctx() == 6969, "expected some stuff %d", (int)get_ctx());
   VALK_PASS();
 }
 
