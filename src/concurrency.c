@@ -1,12 +1,12 @@
 #include "concurrency.h"
-#include "collections.h"
 #define _GNU_SOURCE
-#include "memory.h"
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "memory.h"
 
 const int VALK_NUM_WORKERS = 4;
 
@@ -15,19 +15,19 @@ const int VALK_NUM_WORKERS = 4;
   // callbacks \
   // Should probably be request context or something instead perhaps, but \
   // keeping it simple for now
-#define __assert_thread_safe_allocator()                                       \
-  do {                                                                         \
-    static valk_mem_allocator_e supported[] = {VALK_ALLOC_MALLOC,              \
-                                               VALK_ALLOC_ARENA};              \
-    bool found = 0;                                                            \
-    for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) {    \
-      if (supported[i] == valk_thread_ctx.allocator->type) {                   \
-        found = 1;                                                             \
-      }                                                                        \
-    }                                                                          \
-    VALK_ASSERT(                                                               \
-        found, "Current Allocator Context is not supported: %s",               \
-        valk_mem_allocator_e_to_string(valk_thread_ctx.allocator->type));      \
+#define __assert_thread_safe_allocator()                                    \
+  do {                                                                      \
+    static valk_mem_allocator_e supported[] = {VALK_ALLOC_MALLOC,           \
+                                               VALK_ALLOC_ARENA};           \
+    bool found = 0;                                                         \
+    for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) { \
+      if (supported[i] == valk_thread_ctx.allocator->type) {                \
+        found = 1;                                                          \
+      }                                                                     \
+    }                                                                       \
+    VALK_ASSERT(                                                            \
+        found, "Current Allocator Context is not supported: %s",            \
+        valk_mem_allocator_e_to_string(valk_thread_ctx.allocator->type));   \
   } while (0)
 
 valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity) {
@@ -35,9 +35,9 @@ valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity) {
   res->type = type;
   res->refcount = 1;
   res->capacity = capacity;
-  res->item = &((char*)res)[sizeof(valk_arc_box)];
+  res->item = &((char *)res)[sizeof(valk_arc_box)];
 
-  res->free = NULL;
+  res->free = nullptr;
   __assert_thread_safe_allocator();
   res->allocator = valk_thread_ctx.allocator;
 
@@ -50,8 +50,8 @@ valk_arc_box *valk_arc_box_err(const char *msg) {
   memset(res, 0, sizeof(valk_arc_box) + len + 1);
   res->type = VALK_ERR;
   res->refcount = 1;
-  res->item = &((char*)res)[sizeof(valk_arc_box)];
-  res->free = NULL;
+  res->item = &((char *)res)[sizeof(valk_arc_box)];
+  res->free = nullptr;
   __assert_thread_safe_allocator();
   res->allocator = valk_thread_ctx.allocator;
 
@@ -67,14 +67,13 @@ void valk_future_free(valk_future *self) {
 }
 
 valk_future *valk_future_new() {
-
   valk_future *self = valk_mem_alloc(sizeof(valk_future));
-  pthread_mutex_init(&self->mutex, 0);
-  pthread_cond_init(&self->resolved, 0);
+  pthread_mutex_init(&self->mutex, nullptr);
+  pthread_cond_init(&self->resolved, nullptr);
 
   self->refcount = 1;
   self->done = 0;
-  self->item = NULL;
+  self->item = nullptr;
   __assert_thread_safe_allocator();
   self->allocator = valk_thread_ctx.allocator;
   self->free = valk_future_free;
@@ -159,8 +158,9 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
 
   int old = __atomic_fetch_add(&promise->item->done, 1, __ATOMIC_RELEASE);
   if (old) {
-    printf("Welll... this is awkward, the promise is already resolved.... what "
-           "the fuck");
+    printf(
+        "Welll... this is awkward, the promise is already resolved.... what "
+        "the fuck");
   } else {
     promise->item->item = result;
     pthread_cond_signal(&promise->item->resolved);
@@ -313,7 +313,7 @@ void valk_free_pool(valk_worker_pool *pool) {
   for (size_t i = 0; i < numWorkers; i++) {
     // TODO(networking): More elegant  solution is poison message in queue, but
     // im too lazy now
-    void *res;
+    // void *res;
     // pthread_join(pool->items[i].thread, &res);
     free(pool->items[i].name);
   }
@@ -372,8 +372,10 @@ static valk_arc_box *__valk_pool_resolve_promise_cb(valk_arc_box *arg) {
   if (arg->type != VALK_SUC) {
     // cant resolve an error ??? why the heck did that even get in here
     // TODO(networking): maybe turn this into a hard assert
-    fprintf(stderr, "ERROR: Invalid condition, could not resolve an error "
-                    "boxsed promise.\n");
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+    fprintf(stderr,
+            "ERROR: Invalid condition, could not resolve an error "
+            "boxsed promise.\n");
     return arg;
   }
   __valk_resolve_promise *a = arg->item;
@@ -383,7 +385,6 @@ static valk_arc_box *__valk_pool_resolve_promise_cb(valk_arc_box *arg) {
 
 void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
                                valk_arc_box *result) {
-
   valk_arc_box *arg =
       valk_arc_box_new(VALK_SUC, sizeof(__valk_resolve_promise));
   __valk_resolve_promise *pair = arg->item;
@@ -392,5 +393,5 @@ void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
 
   valk_future *res = valk_schedule(pool, arg, __valk_pool_resolve_promise_cb);
   valk_arc_retain(promise);
-  valk_arc_release(res); // dont need the result
+  valk_arc_release(res);  // dont need the result
 }

@@ -38,7 +38,9 @@ add_subdirectory(vendor/nghttp2)
 
 pkg_check_modules(EDITLINE REQUIRED IMPORTED_TARGET libeditline)
 
-set(CMAKE_C_STANDARD  23) # LOL current year - 6 is gold
+set(CMAKE_C_STANDARD 23) # LOL current year - 6 is gold
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if (HOMEBREW_CLANG)

@@ -21,7 +21,7 @@ cmake build/.cmake: CMakeLists.txt homebrew.cmake
 .ONESHELL:
 .PHONY: build
 build : build/.cmake
-	run-clang-tidy -p build 
+	run-clang-tidy -p build -extra-arg=-std=c23
 	cmake --build build
 
 # This will install editline and maybe other depenedencies on linux / macos

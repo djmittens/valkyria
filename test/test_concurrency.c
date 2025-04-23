@@ -4,6 +4,7 @@
 #include "testing.h"
 
 #include <concurrency.h>
+#include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -12,8 +13,6 @@ typedef struct {
   valk_test_result_t *result;
   int someArg;
 } test__arg;
-
-static void _valk_void(void *v) { UNUSED(v); }
 
 static valk_arc_box *test_callback(valk_arc_box *_arg) {
   test__arg *arg = _arg->item;
@@ -90,9 +89,9 @@ void test_task_queue(VALK_TEST_ARGS()) {
   // pop 2 items
   valk_task task;
   for (size_t i = 0; i < 8; i++) {
-    task.func = NULL;
-    task.arg = NULL;
-    task.promise = NULL;
+    task.func = nullptr;
+    task.arg = nullptr;
+    task.promise = nullptr;
 
     int res = valk_work_pop(&queue, &task);
     if (i >= maxSize) {
@@ -149,7 +148,9 @@ void test_concurrency(VALK_TEST_ARGS()) {
   valk_arc_box *argBox = valk_arc_box_new(VALK_SUC, sizeof(test__arg));
   *(test__arg *)argBox->item = testArg;
 
-  valk_worker_pool pool = {0};
+  valk_worker_pool pool;
+  memset(&pool, 0, sizeof(valk_worker_pool));
+
   int res = valk_start_pool(&pool);
   VALK_TEST_ASSERT(res == 0, "Threadpool didnt start [status: %d]", res);
   valk_arc_box *tst =

@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-__thread valk_thread_context_t valk_thread_ctx = {0};
+__thread valk_thread_context_t valk_thread_ctx = {nullptr};
 
 char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self) {
   switch (self) {
@@ -70,7 +70,7 @@ void valk_slab_alloc_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
 
 valk_slab_item_t *valk_slab_alloc_aquire(valk_slab_t *self) {
   if (self->numFree <= 0) {
-    return NULL;
+    return nullptr;
   }
 
   // pop  free item
