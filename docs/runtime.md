@@ -22,6 +22,10 @@
      ON linux and mac, valgrind doesnt work.  Unless I run everything through docker since manjaro dont support it
 - [ ] gRPC
 - [ ] Thrift
+- [ ] Centralize memory management in `memory.h`
+    i have a bunch of  `//NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)`
+    all over the place, but thats because memory handling is not centralized and
+    considered unsafe, i need a containment zone for this code
 
 ## Subtitle or something
 Doing something

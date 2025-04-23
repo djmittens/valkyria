@@ -15,19 +15,19 @@ const int VALK_NUM_WORKERS = 4;
   // callbacks \
   // Should probably be request context or something instead perhaps, but \
   // keeping it simple for now
-#define __assert_thread_safe_allocator()                                    \
-  do {                                                                      \
-    static valk_mem_allocator_e supported[] = {VALK_ALLOC_MALLOC,           \
-                                               VALK_ALLOC_ARENA};           \
-    bool found = 0;                                                         \
-    for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) { \
-      if (supported[i] == valk_thread_ctx.allocator->type) {                \
-        found = 1;                                                          \
-      }                                                                     \
-    }                                                                       \
-    VALK_ASSERT(                                                            \
-        found, "Current Allocator Context is not supported: %s",            \
-        valk_mem_allocator_e_to_string(valk_thread_ctx.allocator->type));   \
+#define __assert_thread_safe_allocator()                                       \
+  do {                                                                         \
+    static valk_mem_allocator_e supported[] = {VALK_ALLOC_MALLOC,              \
+                                               VALK_ALLOC_ARENA};              \
+    bool found = 0;                                                            \
+    for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) {    \
+      if (supported[i] == valk_thread_ctx.allocator->type) {                   \
+        found = 1;                                                             \
+      }                                                                        \
+    }                                                                          \
+    VALK_ASSERT(                                                               \
+        found, "Current Allocator Context is not supported: %s",               \
+        valk_mem_allocator_e_to_string(valk_thread_ctx.allocator->type));      \
   } while (0)
 
 valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity) {
@@ -47,6 +47,7 @@ valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity) {
 valk_arc_box *valk_arc_box_err(const char *msg) {
   int len = strlen(msg);
   valk_arc_box *res = valk_mem_alloc(sizeof(valk_arc_box) + len + 1);
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memset(res, 0, sizeof(valk_arc_box) + len + 1);
   res->type = VALK_ERR;
   res->refcount = 1;
@@ -55,6 +56,7 @@ valk_arc_box *valk_arc_box_err(const char *msg) {
   __assert_thread_safe_allocator();
   res->allocator = valk_thread_ctx.allocator;
 
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   strncpy(res->item, msg, len);
   return res;
 }
@@ -116,6 +118,7 @@ valk_arc_box *valk_future_await_timeout(valk_future *future, uint32_t msec) {
     int ret = pthread_cond_timedwait(&future->resolved, &future->mutex, &ts);
     if (ret == ETIMEDOUT) {
       char buf[1000];
+      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       sprintf(buf, "Timeout [%u ms] reached waiting for future", msec);
       // TODO(networking): figure out error codes across the system for the
       // language
@@ -124,6 +127,7 @@ valk_arc_box *valk_future_await_timeout(valk_future *future, uint32_t msec) {
       return valk_arc_box_err(buf);
     } else if (ret != 0) {
       char buf[1000];
+      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       sprintf(buf, "Unexpected error during [pthread_cond_timedwait]: %s",
               strerror(errno));
       pthread_mutex_unlock(&future->mutex);
@@ -158,9 +162,8 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
 
   int old = __atomic_fetch_add(&promise->item->done, 1, __ATOMIC_RELEASE);
   if (old) {
-    printf(
-        "Welll... this is awkward, the promise is already resolved.... what "
-        "the fuck");
+    printf("Welll... this is awkward, the promise is already resolved.... what "
+           "the fuck");
   } else {
     promise->item->item = result;
     pthread_cond_signal(&promise->item->resolved);
@@ -237,8 +240,10 @@ int valk_start_pool(valk_worker_pool *pool) {
 
   for (size_t i = 0; i < VALK_NUM_WORKERS; i++) {
     pool->items[i].queue = &pool->queue;
-    int len = snprintf(NULL, 0, "Worker [%ld]", i);
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+    int len = snprintf(nullptr, 0, "Worker [%ld]", i);
     pool->items[i].name = malloc(len + 1);
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     snprintf(pool->items[i].name, len + 1, "Worker [%ld]", i);
 
     // Setting this attribute, makes it so you dont have to join the thread
@@ -373,9 +378,8 @@ static valk_arc_box *__valk_pool_resolve_promise_cb(valk_arc_box *arg) {
     // cant resolve an error ??? why the heck did that even get in here
     // TODO(networking): maybe turn this into a hard assert
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr,
-            "ERROR: Invalid condition, could not resolve an error "
-            "boxsed promise.\n");
+    fprintf(stderr, "ERROR: Invalid condition, could not resolve an error "
+                    "boxsed promise.\n");
     return arg;
   }
   __valk_resolve_promise *a = arg->item;
@@ -393,5 +397,5 @@ void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
 
   valk_future *res = valk_schedule(pool, arg, __valk_pool_resolve_promise_cb);
   valk_arc_retain(promise);
-  valk_arc_release(res);  // dont need the result
+  valk_arc_release(res); // dont need the result
 }

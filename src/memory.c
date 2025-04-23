@@ -34,6 +34,7 @@ void valk_buffer_append(valk_buffer_t *buf, void *bytes, size_t len) {
       buf->capacity > (buf->count + len),
       "Buffer too small !!!  capacity [%ld] :: count [%ld] :: new bytes [%ld]",
       buf->capacity, buf->count, len);
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memcpy(&((char *)buf->items)[buf->count], bytes, len);
   buf->count += len;
 }
@@ -175,10 +176,12 @@ void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, size_t num,
     break;
   case VALK_ALLOC_ARENA:
     res = valk_mem_arena_alloc((void *)self, num * size);
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     memset(res, 0, num * size);
     break;
   case VALK_ALLOC_SLAB:
     res = valk_slab_alloc_aquire((void *)self);
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     memset(res, 0, num * size);
     break;
   case VALK_ALLOC_MALLOC:
@@ -223,7 +226,8 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
   VALK_ASSERT(self,
               "Thread Local ALLOCATOR has not been initialized, please "
               "initialize it with something like valk_mem_init_malloc()\n "
-              "Failed while trying to calloc %p", ptr);
+              "Failed while trying to calloc %p",
+              ptr);
   // printf("Freeing %p\n", ptr);
   switch (self->type) {
   case VALK_ALLOC_NULL:

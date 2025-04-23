@@ -27,13 +27,13 @@ const char *DOT_FILL =
 
 valk_test_suite_t *valk_testsuite_empty(const char *filename) {
   valk_test_suite_t *res = malloc(sizeof(valk_test_suite_t));
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memset(res, 0, sizeof(valk_test_suite_t));
   res->filename = strdup(filename);
   da_init(&res->tests);
   da_init(&res->fixtures);
   da_init(&res->results);
 
-  printf("struping\n");
   return res;
 }
 

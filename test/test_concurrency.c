@@ -149,6 +149,7 @@ void test_concurrency(VALK_TEST_ARGS()) {
   *(test__arg *)argBox->item = testArg;
 
   valk_worker_pool pool;
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memset(&pool, 0, sizeof(valk_worker_pool));
 
   int res = valk_start_pool(&pool);

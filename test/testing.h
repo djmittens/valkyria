@@ -28,6 +28,7 @@
     }                                                                          \
   } while (0)
 
+// NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 #define VALK_FAIL(fmt, ...)                                                    \
   do {                                                                         \
     DISABLE_FORMAT_NONLITERAL;                                                 \
@@ -52,9 +53,10 @@
     _result->error = __buf;                                                    \
     ENABLE_FORMAT_NONLITERAL;                                                  \
   } while (0)
+// NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 
 //  Not very useful right now, since this thing doesnt cleanup the resources
-#define VALK_TEST_ASSERT(cond, fmt, ...)                                            \
+#define VALK_TEST_ASSERT(cond, fmt, ...)                                       \
   do {                                                                         \
     if (_result->type == VALK_TEST_UNDEFINED && !(cond)) {                     \
       VALK_FAIL((fmt), ##__VA_ARGS__);                                         \

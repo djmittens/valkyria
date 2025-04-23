@@ -21,8 +21,11 @@ cmake build/.cmake: CMakeLists.txt homebrew.cmake
 .ONESHELL:
 .PHONY: build
 build : build/.cmake
-	run-clang-tidy -p build -extra-arg=-std=c23
 	cmake --build build
+
+.PHONY: lint
+lint : build/.cmake 
+	run-clang-tidy -p build -j $(shell nproc) -extra-arg=-std=c23
 
 # This will install editline and maybe other depenedencies on linux / macos
 # editline particularly uses autotools, meaning its a pain to get it to work with cmakejo

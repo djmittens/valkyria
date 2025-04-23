@@ -1,3 +1,6 @@
+#define _POSIX_C_SOURCE                                                        \
+  200809L // The fuck is this ? turns out sigaction and shit has to be enabled
+          // separately in strict mode
 #include <netinet/in.h>
 #include <nghttp2/nghttp2.h>
 #include <openssl/bio.h>
@@ -7,6 +10,7 @@
 #include <openssl/ssl.h>
 #include <openssl/ssl3.h>
 #include <openssl/tls1.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,16 +23,16 @@
 #include "concurrency.h"
 #include "memory.h"
 
-#define MAKE_NV(NAME, VALUE, VALUELEN)                         \
-  {                                                            \
-      (uint8_t *)NAME, (uint8_t *)VALUE,     sizeof(NAME) - 1, \
-      VALUELEN,        NGHTTP2_NV_FLAG_NONE,                   \
+#define MAKE_NV(NAME, VALUE, VALUELEN)                                         \
+  {                                                                            \
+    (uint8_t *)NAME, (uint8_t *)VALUE, sizeof(NAME) - 1, VALUELEN,             \
+        NGHTTP2_NV_FLAG_NONE,                                                  \
   }
 
-#define MAKE_NV2(NAME, VALUE)                                    \
-  {                                                              \
-      (uint8_t *)NAME,   (uint8_t *)VALUE,     sizeof(NAME) - 1, \
-      sizeof(VALUE) - 1, NGHTTP2_NV_FLAG_NONE,                   \
+#define MAKE_NV2(NAME, VALUE)                                                  \
+  {                                                                            \
+    (uint8_t *)NAME, (uint8_t *)VALUE, sizeof(NAME) - 1, sizeof(VALUE) - 1,    \
+        NGHTTP2_NV_FLAG_NONE,                                                  \
   }
 
 // It houses requests to the event loop
@@ -174,6 +178,7 @@ valk_aio_system *valk_aio_start() {
   // signal
   struct sigaction sa = {.sa_handler = SIG_IGN};
   sigaction(SIGPIPE, &sa, nullptr);
+
   uv_mutex_init(&sys->taskLock);
   uv_async_init(sys->eventloop, &sys->taskHandle, __task_cb);
   uv_async_init(sys->eventloop, &sys->stopper, __aio_uv_stop);
@@ -227,6 +232,7 @@ void __nghttp2_free(void *ptr, void *mem_user_data) {
 void *__nghttp2_calloc(size_t nmemb, size_t size, void *mem_user_data) {
   printf("HTTP2:: Calloc %ld, %ld\n", nmemb, size);
   void *res = valk_mem_arena_alloc(mem_user_data, nmemb * size);
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memset(res, 0, nmemb * size);
   return res;
 }
@@ -242,6 +248,7 @@ void *__nghttp2_realloc(void *ptr, size_t size, void *mem_user_data) {
   void *res = valk_mem_arena_alloc(mem_user_data, size);
   if (ptr != NULL) {
     size_t origSize = ((size_t *)ptr)[-1];
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     memcpy(res, ptr, origSize);
   }
   return res;
@@ -261,7 +268,7 @@ static int __http_on_header_callback(nghttp2_session *session,
   fprintf(stderr, "HDR: %.*s: %.*s\n", (int)namelen, name, (int)valuelen,
           value);
 
-  return 0;  // success
+  return 0; // success
 }
 static int __http_on_begin_headers_callback(nghttp2_session *session,
                                             const nghttp2_frame *frame,
@@ -298,6 +305,7 @@ static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
   UNUSED(user_data);
 
   printf("Looking to get %ld bytes\n", length);
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memcpy(buf, source->ptr, strlen(source->ptr) + 1);
   // This marks that with this call we reached the end of the file, and dont
   // call us back again
@@ -436,6 +444,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   if (!err) {
     // Flushies
     In.count = 0;
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     memset(In.items, 0, In.capacity);
     __http2_flush_frames(&In, conn);
 
@@ -524,6 +533,7 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
     if (uv_tcp_getpeername(&conn->tcpHandle, (struct sockaddr *)&client_addr,
                            &addr_len) == 0) {
       char ip[INET6_ADDRSTRLEN];
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memset(ip, 0, sizeof(ip));
       uint16_t port = 0;
       if (client_addr.ss_family == AF_INET) {
@@ -718,17 +728,17 @@ static int __http_client_on_frame_recv_callback(nghttp2_session *session,
   printf("ON_RECV callback \n");
 
   switch (frame->hd.type) {
-    case NGHTTP2_HEADERS:
-      break;
-    case NGHTTP2_RST_STREAM:
-      printf("[INFO] C <---------------------------- S (RST_STREAM) %d\n",
-             frame->hd.stream_id);
-      break;
-    case NGHTTP2_GOAWAY:
-      printf("[INFO] C <---------------------------- S (GOAWAY) %d\n",
-             frame->hd.stream_id);
-      printf("[Client]Received GO AWAY frame\n");
-      break;
+  case NGHTTP2_HEADERS:
+    break;
+  case NGHTTP2_RST_STREAM:
+    printf("[INFO] C <---------------------------- S (RST_STREAM) %d\n",
+           frame->hd.stream_id);
+    break;
+  case NGHTTP2_GOAWAY:
+    printf("[INFO] C <---------------------------- S (GOAWAY) %d\n",
+           frame->hd.stream_id);
+    printf("[Client]Received GO AWAY frame\n");
+    break;
   }
 
   return 0;
@@ -744,14 +754,14 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
   valk_promise *promise =
       nghttp2_session_get_stream_user_data(session, stream_id);
   if (promise) {
-    printf(
-        "[INFO] C <---------------------------- S (DATA chunk)\n"
-        "%lu bytes\n",
-        (unsigned long int)len);
+    printf("[INFO] C <---------------------------- S (DATA chunk)\n"
+           "%lu bytes\n",
+           (unsigned long int)len);
     fwrite(data, 1, len, stdout);
     printf("\n");
 
     valk_arc_box *res = valk_arc_box_new(VALK_SUC, len + 1);
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     memcpy(res->item, data, len);
     ((char *)res->item)[len] = '\0';
 
@@ -947,6 +957,7 @@ static void __http2_submit_demo_request_cb(valk_arc_box *arg) {
   printf("Submitted request with stream id %d\n", stream_id);
 
   char buf[SSL3_RT_MAX_PACKET_SIZE];
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memset(buf, 0, sizeof(buf));
   valk_buffer_t In = {
       .items = buf, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
