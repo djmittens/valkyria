@@ -67,7 +67,7 @@ typedef struct {
   // size_t size; // todo(networking): i should add this to the layout if i need
   // it. i dont think this will ever be useful tho, so save a few bytes of
   // overhead
-  char data[];
+  uint8_t data[];
 } valk_slab_item_t;
 
 typedef struct {

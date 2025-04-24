@@ -4,6 +4,7 @@
 
 #include "aio.h"
 #include "common.h"
+#include "concurrency.h"
 #include "memory.h"
 #include "parser.h"
 #include "testing.h"
@@ -49,6 +50,17 @@ void test_implicit_arena_alloc(VALK_TEST_ARGS()) {
                    "expected some stuff %d", &alloc_old);
   valk_thread_ctx.allocator = nullptr;
   VALK_PASS();
+}
+
+void test_tcp_client_disconnect(VALK_TEST_ARGS()) {
+  valk_aio_system *sys = valk_aio_start();
+  VALK_TEST();
+
+  valk_arc_box *res = valk_future_await(valk_aio_http2_listen(
+      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt"));
+  valk_arc_release(res);
+  VALK_PASS();
+  valk_aio_stop(sys);
 }
 
 int main(int argc, const char **argv) {

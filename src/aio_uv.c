@@ -103,6 +103,7 @@ typedef struct valk_aio_http_server {
   uv_tcp_t listener;
   char *interface;
   int port;
+  valk_http2_handler_t handler;
 } valk_aio_http_server;
 
 typedef struct valk_aio_http_conn {
@@ -163,6 +164,14 @@ void __CRYPTO_free_fn(void *addr, const char *file, int line) {
 static void __aio_uv_stop(uv_async_t *h) { uv_stop(h->loop); }
 
 valk_aio_system *valk_aio_start() {
+  // On linux definitely turn sigpipe off
+  // Otherwise shit crashes.
+  // When the socket dissapears a write may be queued in the event loop
+  // In that case we just want to do proper error handling without the
+  // signal
+  struct sigaction sa = {.sa_handler = SIG_IGN};
+  sigaction(SIGPIPE, &sa, nullptr);
+
   valk_aio_system *sys = valk_mem_alloc(sizeof(valk_aio_system));
   valk_asio_ssl_start();
   sys->eventloop = uv_default_loop();
@@ -171,13 +180,6 @@ valk_aio_system *valk_aio_start() {
 
   CRYPTO_set_mem_functions(__CRYPTO_malloc_fn, __CRYPTO_realloc_fn,
                            __CRYPTO_free_fn);
-  // On linux definitely turn sigpipe off
-  // Otherwise shit crashes.
-  // When the socket dissapears a write may be queued in the event loop
-  // In that case we just want to do proper error handling without the
-  // signal
-  struct sigaction sa = {.sa_handler = SIG_IGN};
-  sigaction(SIGPIPE, &sa, nullptr);
 
   uv_mutex_init(&sys->taskLock);
   uv_async_init(sys->eventloop, &sys->taskHandle, __task_cb);
@@ -533,7 +535,7 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
     if (uv_tcp_getpeername(&conn->tcpHandle, (struct sockaddr *)&client_addr,
                            &addr_len) == 0) {
       char ip[INET6_ADDRSTRLEN];
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memset(ip, 0, sizeof(ip));
       uint16_t port = 0;
       if (client_addr.ss_family == AF_INET) {
@@ -679,7 +681,8 @@ static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
 // static void __no_free(void *arg) { UNUSED(arg); }
 valk_future *valk_aio_http2_listen(valk_aio_system *sys, const char *interface,
                                    const int port, const char *keyfile,
-                                   const char *certfile) {
+                                   const char *certfile,
+                                   valk_http2_handler_t handler) {
   valk_arc_box *box = valk_arc_box_new(VALK_SUC, sizeof(valk_aio_http_server));
   valk_aio_http_server *srv = box->item;
   valk_future *res = valk_future_new();
@@ -688,6 +691,7 @@ valk_future *valk_aio_http2_listen(valk_aio_system *sys, const char *interface,
   srv->interface = strdup(interface);
   srv->port = port;
   srv->promise = valk_promise_new(res);
+  srv->handler = handler;
 
   uv_mutex_lock(&sys->taskLock);
   struct valk_aio_task task;
@@ -761,7 +765,7 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
     printf("\n");
 
     valk_arc_box *res = valk_arc_box_new(VALK_SUC, len + 1);
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     memcpy(res->item, data, len);
     ((char *)res->item)[len] = '\0';
 

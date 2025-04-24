@@ -115,6 +115,11 @@ typedef struct valk_test_results_t {
 
 typedef struct valk_test_t {
   char *name;
+  struct {
+    char** items;
+    size_t count;
+    size_t capacity;
+  } labels;
   valk_test_f *func;
 } valk_test_t;
 

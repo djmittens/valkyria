@@ -41,11 +41,35 @@
 - [x] Submit request to a thread pool, echo 
 - [x] nghttp 2 library request handler
 - [x] Http client
-- [ ] liburing files
-- [ ] liburing sockets
+- [💀] liburing files
+- [💀] liburing sockets
 
 # HTTP2 Server
-- [ ] Send `Hello World` over http 2 to the browser
+- [ ] Handle server errors 
+    - [ ] Tcp
+        - [ ] Gracefully handle disconnects
+        - [ ] Handle too many concurrent connections
+    - [ ] TLS
+        - [ ] Invalid certs
+        - [ ] Handshake re-negotiation
+        - [ ] Invalid packets
+    - [ ] Http
+        - [ ] Handle timeouts
+        - [ ] Handle too many streams
+        - [ ] Handle request cancellations
+
+- [ ] Replace OpenSSL with a lighter TLS library, like WolfSSL
+- [ ] Redirect to https if the request is http 1.1
+- [ ] Send 2 MB worth of html data to the browser
+- [ ] Dynamic flow control 
+    - [ ] Initial window size with BDP (bandwidth - delay protocol)
+    - [ ] Stream level window
+    - [ ] Connection level window
+- [ ] Figure out the proper allocation size for a session.
+    I get a vey eerie feeling that nghttp2 will allocate state on every message, in the session memory pool.
+    If thats the case, i might need to consider on moving that memory alloc to request level or at least consider timeout or something like that
+
+- [x] Send `Hello World` over http 2 to the browser
     - [x] Figure out why the buffer grows indefinitely
         ```txt
         Starting server
@@ -117,28 +141,6 @@
             - read buffers
                 - since those dont need requets or handles, i can just use raw
     - [ ] Arenas for requests
-- [ ] Handle server errors 
-    - [ ] Tcp
-        - [ ] Gracefully handle disconnects
-        - [ ] Handle too many concurrent connections
-    - [ ] TLS
-        - [ ] Invalid certs
-        - [ ] Handshake re-negotiation
-        - [ ] Invalid packets
-    - [ ] Http
-        - [ ] Handle timeouts
-        - [ ] Handle too many streams
-        - [ ] Handle request cancellations
-- [ ] Replace OpenSSL with a lighter TLS library, like WolfSSL
-- [ ] Redirect to https if the request is http 1.1
-- [ ] Send 2 MB worth of html data to the browser
-- [ ] Dynamic flow control 
-    - [ ] Initial window size with BDP (bandwidth - delay protocol)
-    - [ ] Stream level window
-    - [ ] Connection level window
-- [ ] Figure out the proper allocation size for a session.
-    I get a vey eerie feeling that nghttp2 will allocate state on every message, in the session memory pool.
-    If thats the case, i might need to consider on moving that memory alloc to request level or at least consider timeout or something like that
 
 
 ## Settings
@@ -367,20 +369,20 @@ the protocol because settings frame is required from both parties in the
 beginning of the session
 
 # Http2 Client
-- [ ] TCP
-    - [ ] connection
-    - [ ] pooling ? 
+- [x] TCP
+    - [x] connection
+    - [💀] pooling ? 
         - is that even necessary anymore?
 - [ ] SSL connection
     - [x] handshake
     - [x] ALPN upgrade
     - [ ] Cert validation
-    - [ ] Connection pooling
-- [ ] Http2 session
+- [x] Http2 session
     - [x] Initialization, with simple settings frame
-    - [ ] Session pooling
-- [ ] Http2 request response
-- [ ] Stream 2MB worth of data into Lisp
+- [x] Http2 request response
+- [ ] Lisp interface
+- [ ] Upload 2MB worth of data
+- [ ] Download 2MB worth of data
 
 # Testing
 ## nghttpx proxy

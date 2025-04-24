@@ -6,6 +6,7 @@
 #include <time.h>
 
 #include "collections.h"
+#include "memory.h"
 
 #define SEC_TO_MS(sec) ((sec) * 1000)
 #define SEC_TO_US(sec) ((sec) * 1000000)
@@ -65,6 +66,7 @@ void valk_testsuite_free(valk_test_suite_t *suite) {
 size_t valk_testsuite_add_test(valk_test_suite_t *suite, const char *name,
                                valk_test_f *func) {
   valk_test_t test = {.name = strdup(name), .func = func};
+  da_init(&test.labels);
   da_add(&suite->tests, test);
 
   return suite->tests.count;
