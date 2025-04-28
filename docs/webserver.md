@@ -398,3 +398,26 @@ This can be done using the nghttp2 utility as follows:
 
 this will start a server on `localhost:3000` by default, and then you can use
 it like normal
+
+
+
+1. Connection slabs per thread
+2. Server ARC
+
+
+- Start connection
+    - Create SSL instance from context
+    - Create HTTP session
+    - Begin ssl handshake / read loop
+    - Call `onConnect` callback
+
+- Kill connection
+    - [Do i want connection drain ?] -- not initially, lets just drop
+        everything
+    - Complete or cancel inflight requests
+        - Terminate HTTP session
+        - Terminate SSL session
+        - Terminate TCP connection
+    - Cleanup 
+    - Call the handler with `onDisconnect`
+

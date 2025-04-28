@@ -25,13 +25,36 @@
           (arr)->capacity == 0 ? DA_INIT_CAPACITY : (arr)->capacity * 2;       \
       (arr)->items =                                                           \
           realloc((arr)->items, (arr)->capacity * sizeof(*(arr)->items));      \
-      if ((arr)->items == NULL) {                                              \
-        printf("Buy more ram LUlz\n");                                         \
-        exit(1);                                                               \
-      }                                                                        \
+      VALK_ASSERT((arr)->items != NULL, "Buy more ram LUlz %d\n", 0);          \
     }                                                                          \
     (arr)->items[(arr)->count++] = (elem);                                     \
   } while (0)
+
+/// @brief Swap an element out at idx
+/// Put the end element in the place of the specified element, returning it as a
+/// result
+/// This will mess up the order the array but its more performant than pop
+/// as it wont have to copy any other element
+///
+/// Example:
+/// idx = 2
+/// [ a b c d e f]
+///       ^
+/// [ a b d e f] c
+/// return c
+///
+/// @param[in] arr the dynamic array to perform the operation
+/// @param[in] idx the id of the element to swap to
+/// @return the value swapped out
+#define da_xpop(arr, idx)                                                      \
+  ({                                                                           \
+    VALK_ASSERT(0, "Not implemented yet");                                     \
+    VALK_ASSERT((arr)->count > 0, "Cannot pop from empty array %ld",           \
+                (arr)->count);                                                 \
+    int idx = (arr)->count;                                                    \
+    if ((arr)->count == (arr->capacity)) {                                     \
+    }                                                                          \
+  })
 
 #define valk_pool_init(pool, size)                                             \
   do {                                                                         \

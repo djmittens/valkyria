@@ -7,6 +7,7 @@
 #include "concurrency.h"
 #include "memory.h"
 #include "parser.h"
+#include "test_networking.h"
 #include "testing.h"
 
 void test_demo_socket_server(VALK_TEST_ARGS()) {
@@ -15,18 +16,31 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
 
   VALK_TEST();
 
+  valk_srv_state_t arg = {0};
+  valk_http2_handler_t handler = {
+      .arg = &arg,
+      .onConnect = cb_onConnect,
+      .onDisconnect = cb_onDisconnect,
+      .onHeader = cb_onHeader,
+      .onBody = cb_onBody,
+  };
+
   valk_future_await(valk_aio_http2_listen(
-      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt"));
-  printf("What the fudge\n");
+      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt", &handler));
 
   char *response = valk_client_demo(sys, "127.0.0.1", "8080");
 
   if (strcmp(response, VALK_HTTP_MOTD)) {
-    VALK_FAIL(
-        "Did not receive the expected result from the servier Expected: "
-        "[%s]  Actual: [%s]",
-        VALK_HTTP_MOTD, response);
+    VALK_FAIL("Did not receive the expected result from the servier Expected: "
+              "[%s] Actual: [%s]",
+              VALK_HTTP_MOTD, response);
   }
+
+  VALK_TEST_ASSERT(arg.connectedCount == arg.disconnectedCount == 1,
+              "Expected a single client connection %d, %d",
+              arg.connectedCount, arg.disconnectedCount);
+
+
   VALK_PASS();
   valk_aio_stop(sys);
   valk_lval_free(ast);
@@ -55,9 +69,17 @@ void test_implicit_arena_alloc(VALK_TEST_ARGS()) {
 void test_tcp_client_disconnect(VALK_TEST_ARGS()) {
   valk_aio_system *sys = valk_aio_start();
   VALK_TEST();
+  valk_srv_state_t arg = {0};
+  valk_http2_handler_t handler = {
+      .arg = &arg,
+      .onConnect = cb_onConnect,
+      .onDisconnect = cb_onDisconnect,
+      .onHeader = cb_onHeader,
+      .onBody = cb_onBody,
+  };
 
   valk_arc_box *res = valk_future_await(valk_aio_http2_listen(
-      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt"));
+      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt", &handler));
   valk_arc_release(res);
   VALK_PASS();
   valk_aio_stop(sys);
@@ -81,7 +103,7 @@ int main(int argc, const char **argv) {
   // load fixtures
   valk_lval_t *ast = valk_parse_file("src/prelude.valk");
   valk_lenv_t *env = valk_lenv_empty();
-  valk_lenv_builtins(env);  // load the builtins
+  valk_lenv_builtins(env); // load the builtins
   valk_lval_t *r = valk_lval_eval(env, valk_lval_copy(ast));
   valk_lval_free(r);
 
@@ -98,3 +120,20 @@ int main(int argc, const char **argv) {
 
   return res;
 }
+
+void cb_onConnect(void *arg, valk_aio_http_conn *) {
+  valk_srv_state_t *handler = arg;
+  handler->connectedCount++;
+}
+
+void cb_onDisconnect(void *arg, valk_aio_http_conn *) {
+  valk_srv_state_t *handler = arg;
+  handler->disconnectedCount--;
+}
+
+void cb_onHeader(void *arg, valk_aio_http_conn *, size_t stream, char *name,
+                 char *value) {
+
+}
+void cb_onBody(void *arg, valk_aio_http_conn *, size_t stream, uint8_t flags,
+               valk_buffer_t *buf) {}

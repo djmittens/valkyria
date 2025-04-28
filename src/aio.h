@@ -43,11 +43,11 @@ typedef struct {
 
 typedef struct {
   void *arg;
-  void (*onConnect)(void *, valk_aio_http_conn *);
-  void (*onDisconnect)(void *, valk_aio_http_conn *);
-  void (*onHeaders)(void *, valk_aio_http_conn *, size_t stream, char *names,
-                    char *values, size_t num);
-  void (*onBody)(void *, valk_aio_http_conn *, size_t stream, uint8_t flags,
+  void (*onConnect)(void *arg,valk_aio_http_conn *);
+  void (*onDisconnect)(void *arg, valk_aio_http_conn *);
+  void (*onHeader)(void *arg, valk_aio_http_conn *, size_t stream, char *name,
+                    char *value);
+  void (*onBody)(void *arg, valk_aio_http_conn *, size_t stream, uint8_t flags,
                  valk_buffer_t *buf);
 } valk_http2_handler_t;
 
@@ -62,7 +62,7 @@ typedef struct {
 valk_future *valk_aio_http2_listen(valk_aio_system *sys, const char *interface,
                                    const int port, const char *keyfile,
                                    const char *certfile,
-                                   valk_http2_handler_t handler);
+                                   valk_http2_handler_t *handler);
 
 ///
 /// @return returns a future with a boxed `valk_aio_http2_client`
@@ -70,4 +70,9 @@ valk_future *valk_aio_http2_listen(valk_aio_system *sys, const char *interface,
 valk_future *valk_aio_http2_connect(valk_aio_system *sys, const char *interface,
                                     const int port, const char *certfile);
 
-void valk_aio_hangup(valk_aio_socket *socket);
+///
+/// @return future with a boxed `void`
+///
+valk_future *valk_aio_http2_disconnect(valk_aio_system *sys,
+                                       valk_aio_http_conn *conn);
+
