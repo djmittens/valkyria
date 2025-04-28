@@ -80,7 +80,15 @@ typedef struct valk_aio_task {
   void (*callback)(valk_aio_system *, valk_arc_box *, valk_promise *);
 } valk_aio_task;
 
+typedef enum {
+  VALK_CONN_INIT,
+  VALK_CONN_ESTABLISHED,
+  VALK_CONN_CLOSING,
+  VALK_CONN_CLOSED
+} __aio_http_conn_e;
+
 typedef struct valk_aio_http_conn {
+  __aio_http_conn_e state;
   uv_connect_t req;
   uv_tcp_t tcpHandle;
   valk_aio_ssl_t ssl;
@@ -161,26 +169,51 @@ static void __uv_http_on_tcp_disconnect_cb(uv_handle_t *handle) {
   valk_aio_http_conn *conn = handle->data;
   conn->handler->onDisconnect(conn, conn->handler->arg);
 
-  // Releasing the connection arena, essentially gets rid of the slab
-  valk_slab_alloc_release_ptr(&tcp_connection_slab, conn->arena);
+  if (conn->arena != nullptr) {
+    // Releasing the connection arena, essentially gets rid of the slab
+    valk_slab_alloc_release_ptr(&tcp_connection_slab, conn->arena);
+  }
+}
+
+static void __valk_aio_http2_disconnect_cb(valk_aio_system *sys,
+                                           valk_arc_box *arg,
+                                           valk_promise *promise) {
+
+  // TODO(networking): This is where continuations come into play
+  valk_aio_http_conn *conn = arg->item;
+
+  if (conn->state != VALK_CONN_ESTABLISHED) {
+    valk_promise_respond(
+        promise,
+        valk_arc_box_err(
+            "ERR: Connectoin cant be closed as its not established \n"));
+    valk_arc_release(arg);
+  }
+  conn->tcpHandle.data = promise;
+  uv_close((uv_handle_t *)&conn->tcpHandle, __uv_http_on_tcp_disconnect_cb);
 }
 
 valk_future *valk_aio_http2_disconnect(valk_aio_system *sys,
-                                       valk_aio_http_conn *conn) {
+                                       valk_arc_box *conn) {
   valk_future *res = valk_future_new();
-  // uv_mutex_lock(&sys->taskLock);
-  // struct valk_aio_task task;
-  //
-  // task.arg = box;
-  // task.callback = ;
-  //
-  // valk_work_add(sys, task);
-  // uv_mutex_unlock(&sys->taskLock);
-  // uv_async_send(&sys->taskHandle);
+  uv_mutex_lock(&sys->taskLock);
+  struct valk_aio_task task;
+
+  task.arg = conn;
+  valk_arc_retain(conn);
+  task.promise = valk_promise_new(res);
+  task.callback = __valk_aio_http2_disconnect_cb;
+
+  valk_work_add(sys, task);
+  uv_mutex_unlock(&sys->taskLock);
+  uv_async_send(&sys->taskHandle);
+
   return res;
 }
+
 static void __aio_uv_stop(uv_async_t *h) { uv_stop(h->loop); }
 
+//
 valk_aio_system *valk_aio_start() {
   // On linux definitely turn sigpipe off
   // Otherwise shit crashes.

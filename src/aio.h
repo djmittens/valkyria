@@ -43,10 +43,10 @@ typedef struct {
 
 typedef struct {
   void *arg;
-  void (*onConnect)(void *arg,valk_aio_http_conn *);
+  void (*onConnect)(void *arg, valk_aio_http_conn *);
   void (*onDisconnect)(void *arg, valk_aio_http_conn *);
   void (*onHeader)(void *arg, valk_aio_http_conn *, size_t stream, char *name,
-                    char *value);
+                   char *value);
   void (*onBody)(void *arg, valk_aio_http_conn *, size_t stream, uint8_t flags,
                  valk_buffer_t *buf);
 } valk_http2_handler_t;
@@ -74,5 +74,4 @@ valk_future *valk_aio_http2_connect(valk_aio_system *sys, const char *interface,
 /// @return future with a boxed `void`
 ///
 valk_future *valk_aio_http2_disconnect(valk_aio_system *sys,
-                                       valk_aio_http_conn *conn);
-
+                                       valk_arc_box *conn);
