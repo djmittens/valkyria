@@ -94,8 +94,6 @@
     }                                                                          \
   } while (0)
 
-typedef void(valk_callback_void)(void *);
-
 typedef enum { VALK_SUC, VALK_ERR } valk_res_t;
 
 typedef struct valk_arc_box {
@@ -111,19 +109,31 @@ valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity);
 
 valk_arc_box *valk_arc_box_err(const char *msg);
 
+struct valk_future_and_then {
+  void *arg;
+  void (*cb)(void *, valk_arc_box *);
+};
+
 typedef void(valk_future_free_cb)(void *userData, void *future);
 typedef struct valk_future {
   int done;
+  int refcount;
   pthread_mutex_t mutex;
   pthread_cond_t resolved;
   valk_arc_box *item;
-  int refcount;
   void (*free)(struct valk_future *);
   valk_mem_allocator_t *allocator;
+  struct {
+    struct valk_future_and_then *items;
+    size_t count;
+    size_t capacity;
+  } andThen;
 } valk_future;
 
 valk_future *valk_future_new();
 valk_future *valk_future_done(valk_arc_box *item);
+void valk_future_and_then(valk_future *self,
+                          struct valk_future_and_then *callback);
 
 void valk_future_free(valk_future *self);
 

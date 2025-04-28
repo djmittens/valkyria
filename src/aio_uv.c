@@ -166,13 +166,10 @@ void __CRYPTO_free_fn(void *addr, const char *file, int line) {
 }
 
 static void __uv_http_on_tcp_disconnect_cb(uv_handle_t *handle) {
-  valk_aio_http_conn *conn = handle->data;
-  conn->handler->onDisconnect(conn, conn->handler->arg);
-
-  if (conn->arena != nullptr) {
-    // Releasing the connection arena, essentially gets rid of the slab
-    valk_slab_alloc_release_ptr(&tcp_connection_slab, conn->arena);
-  }
+  // TODO(networking): tecnically dont need an allocation here, can probably
+  // have a unit box  out there somwhere.
+  valk_arc_box *box = valk_arc_box_new(VALK_SUC, 0);
+  valk_promise_respond(handle->data, box);
 }
 
 static void __valk_aio_http2_disconnect_cb(valk_aio_system *sys,
@@ -186,16 +183,34 @@ static void __valk_aio_http2_disconnect_cb(valk_aio_system *sys,
     valk_promise_respond(
         promise,
         valk_arc_box_err(
-            "ERR: Connectoin cant be closed as its not established \n"));
+            "ERR: Connection cant be closed as its not established \n"));
     valk_arc_release(arg);
   }
   conn->tcpHandle.data = promise;
   uv_close((uv_handle_t *)&conn->tcpHandle, __uv_http_on_tcp_disconnect_cb);
 }
 
+void valk_aio_http2_client_free(void *arg, valk_arc_box *box) {
+  // TODO(networking): add function for unwrapping boxes
+  valk_arc_box *argBox = arg;
+  valk_aio_http_conn *conn = argBox->item;
+  if (conn->handler && conn->handler->onDisconnect) {
+    // IFF the callback is available
+    conn->handler->onDisconnect(conn->handler->arg, conn);
+  }
+
+  valk_arc_release(box);
+  valk_arc_release(argBox);
+}
+
 valk_future *valk_aio_http2_disconnect(valk_aio_system *sys,
                                        valk_arc_box *conn) {
   valk_future *res = valk_future_new();
+
+  struct valk_future_and_then cb = {.arg = conn,
+                                    .cb = valk_aio_http2_client_free};
+  valk_future_and_then(res, &cb);
+
   uv_mutex_lock(&sys->taskLock);
   struct valk_aio_task task;
 
@@ -961,6 +976,7 @@ valk_future *valk_aio_http2_connect(valk_aio_system *sys, const char *interface,
   valk_future *res = valk_future_new();
   // TODO(networking): do i even need boxes here?? 🤔
   task.arg = valk_arc_box_new(VALK_SUC, sizeof(valk_aio_http2_client));
+  memset(task.arg->item, 0, sizeof(valk_aio_http2_client));
 
   valk_aio_http2_client *client = task.arg->item;
   client->interface = strdup(interface);
@@ -1090,6 +1106,9 @@ char *valk_client_demo(valk_aio_system *sys, const char *domain,
 
   printf("Got response %s\n", (char *)response->item);
   char *res = strdup(response->item);
+
+  valk_arc_release(response);
+  response = valk_future_await(valk_aio_http2_disconnect(sys, client));
 
   valk_arc_release(response);
 

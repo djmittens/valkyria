@@ -1,4 +1,5 @@
 #include "concurrency.h"
+#include "collections.h"
 #define _GNU_SOURCE
 #include <errno.h>
 #include <pthread.h>
@@ -70,6 +71,8 @@ void valk_future_free(valk_future *self) {
 
 valk_future *valk_future_new() {
   valk_future *self = valk_mem_alloc(sizeof(valk_future));
+  memset(self, 0, sizeof(valk_future));
+
   pthread_mutex_init(&self->mutex, nullptr);
   pthread_cond_init(&self->resolved, nullptr);
 
@@ -79,6 +82,8 @@ valk_future *valk_future_new() {
   __assert_thread_safe_allocator();
   self->allocator = valk_thread_ctx.allocator;
   self->free = valk_future_free;
+  da_init(&self->andThen);
+
   return self;
 }
 
@@ -88,6 +93,17 @@ valk_future *valk_future_done(valk_arc_box *item) {
   self->item = item;
   valk_arc_retain(item);
   return self;
+}
+
+void valk_future_and_then(valk_future *self,
+                          struct valk_future_and_then *callback) {
+  pthread_mutex_lock(&self->mutex);
+  if (self->done) {
+    callback->cb(callback->arg, self->item);
+  } else {
+    da_add(&self->andThen, *callback);
+  }
+  pthread_mutex_unlock(&self->mutex);
 }
 
 valk_arc_box *valk_future_await(valk_future *future) {
@@ -104,42 +120,51 @@ valk_arc_box *valk_future_await(valk_future *future) {
   return res;
 }
 
-valk_arc_box *valk_future_await_timeout(valk_future *future, uint32_t msec) {
-  pthread_mutex_lock(&future->mutex);
-  if (!future->done) {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
+valk_arc_box *valk_future_await_timeout(valk_future *self, uint32_t msec) {
+  valk_arc_box *res;
+  if (self->done) {
+    res = self->item;
+    valk_arc_retain(res);
 
-    ts.tv_nsec += msec * 1000000;
-    if (ts.tv_nsec >= 1000000000) {
-      ts.tv_sec += ts.tv_nsec / 1000000000;
-      ts.tv_nsec = ts.tv_nsec % 1000000000;
-    }
-    int ret = pthread_cond_timedwait(&future->resolved, &future->mutex, &ts);
-    if (ret == ETIMEDOUT) {
-      char buf[1000];
-      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-      sprintf(buf, "Timeout [%u ms] reached waiting for future", msec);
-      // TODO(networking): figure out error codes across the system for the
-      // language
-      pthread_mutex_unlock(&future->mutex);
-      valk_arc_release(future);
-      return valk_arc_box_err(buf);
-    } else if (ret != 0) {
-      char buf[1000];
-      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-      sprintf(buf, "Unexpected error during [pthread_cond_timedwait]: %s",
-              strerror(errno));
-      pthread_mutex_unlock(&future->mutex);
-      valk_arc_release(future);
-      return valk_arc_box_err(buf);
-    }
+    valk_arc_release(self);
+    return res;
   }
-  valk_arc_box *res = future->item;
+
+  pthread_mutex_lock(&self->mutex);
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+
+  ts.tv_nsec += msec * 1000000;
+  if (ts.tv_nsec >= 1000000000) {
+    ts.tv_sec += ts.tv_nsec / 1000000000;
+    ts.tv_nsec = ts.tv_nsec % 1000000000;
+  }
+  int ret = pthread_cond_timedwait(&self->resolved, &self->mutex, &ts);
+
+  if (ret == ETIMEDOUT) {
+    char buf[1000];
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+    sprintf(buf, "Timeout [%u ms] reached waiting for future", msec);
+    // TODO(networking): figure out error codes across the system for the
+    // language
+    self->done = 1;
+    self->item = valk_arc_box_err(buf);
+    pthread_cond_signal(&self->resolved);
+  } else if (ret != 0) {
+    char buf[1000];
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+    sprintf(buf, "Unexpected error during [pthread_cond_timedwait]: %s",
+            strerror(errno));
+    self->done = 1;
+    self->item = valk_arc_box_err(buf);
+    pthread_cond_signal(&self->resolved);
+  }
+  res = self->item;
+  pthread_mutex_unlock(&self->mutex);
+
   valk_arc_retain(res);
 
-  pthread_mutex_unlock(&future->mutex);
-  valk_arc_release(future);
+  valk_arc_release(self);
   return res;
 }
 
@@ -158,17 +183,37 @@ void valk_promise_free(valk_promise *self) {
 }
 
 void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
-  pthread_mutex_lock(&promise->item->mutex);
 
-  int old = __atomic_fetch_add(&promise->item->done, 1, __ATOMIC_RELEASE);
+  valk_future *fut = promise->item;
+  size_t count = 0;
+  struct valk_future_and_then buf[10];
+
+  pthread_mutex_lock(&fut->mutex);
+
+  int old = __atomic_fetch_add(&fut->done, 1, __ATOMIC_RELEASE);
   if (old) {
     printf("Welll... this is awkward, the promise is already resolved.... what "
            "the fuck");
   } else {
-    promise->item->item = result;
-    pthread_cond_signal(&promise->item->resolved);
+    fut->item = result;
+
+    count = __atomic_exchange_n(&fut->andThen.count, 0, __ATOMIC_ACQ_REL);
+    VALK_ASSERT(count < 10, "Number of continuations is greater than  10 %ld",
+                count);
+    if (count > 0) {
+      memcpy(buf, fut->andThen.items,
+             sizeof(struct valk_future_and_then) * count);
+    }
+    pthread_cond_signal(&fut->resolved);
   }
-  pthread_mutex_unlock(&promise->item->mutex);
+  pthread_mutex_unlock(&fut->mutex);
+
+  // Process the callbacks
+  while (count > 0) {
+    struct valk_future_and_then *item = &fut->andThen.items[count - 1];
+    item->cb(item->arg, fut->item);
+    count--;
+  }
 }
 
 static void *valk_worker_routine(void *arg) {
