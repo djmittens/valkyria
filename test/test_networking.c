@@ -11,7 +11,7 @@
 #include "testing.h"
 
 void test_demo_socket_server(VALK_TEST_ARGS()) {
-  valk_lval_t *ast = VALK_FIXTURE("prelude");
+  //valk_lval_t *ast = VALK_FIXTURE("prelude");
   valk_aio_system *sys = valk_aio_start();
 
   VALK_TEST();
@@ -43,7 +43,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
 
   VALK_PASS();
   valk_aio_stop(sys);
-  valk_lval_free(ast);
+  //valk_lval_free(ast);
   free(response);
 }
 
@@ -101,18 +101,18 @@ int main(int argc, const char **argv) {
                           test_implicit_arena_alloc);
 
   // load fixtures
-  valk_lval_t *ast = valk_parse_file("src/prelude.valk");
-  valk_lenv_t *env = valk_lenv_empty();
-  valk_lenv_builtins(env); // load the builtins
-  valk_lval_t *r = valk_lval_eval(env, valk_lval_copy(ast));
-  valk_lval_free(r);
-
-  valk_testsuite_fixture_add(suite, "prelude", ast,
-                             (_fixture_copy_f *)valk_lval_copy,
-                             (_fixture_free_f *)valk_lval_free);
-  valk_testsuite_fixture_add(suite, "env", env,
-                             (_fixture_copy_f *)valk_lenv_copy,
-                             (_fixture_free_f *)valk_lenv_free);
+  // valk_lval_t *ast = valk_parse_file("src/prelude.valk");
+  // valk_lenv_t *env = valk_lenv_empty();
+  // valk_lenv_builtins(env); // load the builtins
+  // valk_lval_t *r = valk_lval_eval(env, valk_lval_copy(ast));
+  // valk_lval_free(r);
+  //
+  // valk_testsuite_fixture_add(suite, "prelude", ast,
+  //                            (_fixture_copy_f *)valk_lval_copy,
+  //                            (_fixture_free_f *)valk_lval_free);
+  // valk_testsuite_fixture_add(suite, "env", env,
+  //                            (_fixture_copy_f *)valk_lenv_copy,
+  //                            (_fixture_free_f *)valk_lenv_free);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

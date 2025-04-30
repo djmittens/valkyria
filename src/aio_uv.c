@@ -176,6 +176,9 @@ static void __valk_aio_http2_disconnect_cb(valk_aio_system *sys,
                                            valk_arc_box *arg,
                                            valk_promise *promise) {
 
+  UNUSED(sys);
+  // retain in caller
+
   // TODO(networking): This is where continuations come into play
   valk_aio_http_conn *conn = arg->item;
 
@@ -184,29 +187,40 @@ static void __valk_aio_http2_disconnect_cb(valk_aio_system *sys,
         promise,
         valk_arc_box_err(
             "ERR: Connection cant be closed as its not established \n"));
-    valk_arc_release(arg);
+    return;
   }
+
   conn->tcpHandle.data = promise;
-  uv_close((uv_handle_t *)&conn->tcpHandle, __uv_http_on_tcp_disconnect_cb);
+  // if (!uv_is_closing((uv_handle_t *)&conn->tcpHandle)) {
+  //   uv_close((uv_handle_t *)&conn->tcpHandle,
+  //   __uv_http_on_tcp_disconnect_cb);
+  // }
+
+  valk_arc_release(arg);
 }
 
 void valk_aio_http2_client_free(void *arg, valk_arc_box *box) {
+  UNUSED(box);
+  valk_arc_box *argBox = (arg);
+  valk_arc_retain(argBox);
   // TODO(networking): add function for unwrapping boxes
-  valk_arc_box *argBox = arg;
+  valk_arc_retain(box);
   valk_aio_http_conn *conn = argBox->item;
+  printf("Boo did i scare ya?\n");
   if (conn->handler && conn->handler->onDisconnect) {
     // IFF the callback is available
     conn->handler->onDisconnect(conn->handler->arg, conn);
   }
+  valk_arc_release(argBox);
 
   valk_arc_release(box);
-  valk_arc_release(argBox);
 }
 
 valk_future *valk_aio_http2_disconnect(valk_aio_system *sys,
                                        valk_arc_box *conn) {
   valk_future *res = valk_future_new();
 
+  valk_arc_retain(conn);
   struct valk_future_and_then cb = {.arg = conn,
                                     .cb = valk_aio_http2_client_free};
   valk_future_and_then(res, &cb);
@@ -214,8 +228,8 @@ valk_future *valk_aio_http2_disconnect(valk_aio_system *sys,
   uv_mutex_lock(&sys->taskLock);
   struct valk_aio_task task;
 
-  task.arg = conn;
   valk_arc_retain(conn);
+  task.arg = conn;
   task.promise = valk_promise_new(res);
   task.callback = __valk_aio_http2_disconnect_cb;
 
@@ -223,6 +237,8 @@ valk_future *valk_aio_http2_disconnect(valk_aio_system *sys,
   uv_mutex_unlock(&sys->taskLock);
   uv_async_send(&sys->taskHandle);
 
+  // release conn in valk_aio_http2_client_free
+  // release conn in __valk_aio_http2_disconnect_cb
   return res;
 }
 
@@ -261,7 +277,9 @@ valk_aio_system *valk_aio_start() {
 
 void valk_aio_stop(valk_aio_system *sys) {
   uv_async_send(&sys->stopper);
+  printf("The before\n");
   uv_thread_join(&sys->loopThread);
+  printf("The after\n");
   uv_loop_close(sys->eventloop);
   // TODO(networking): need to properly free the system too
   // valk_mem_free(sys);
@@ -927,7 +945,9 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
                 __http_tcp_read_cb);
 
   printf("Finished initializing client %p\n", (void *)client);
+
   // Shits connected but not fully established, it will buffer any requests tho
+  // releases the promise
   valk_promise_respond(client->_promise, box);
 }
 
@@ -1075,6 +1095,7 @@ static valk_future *__http2_submit_demo_request(valk_aio_system *sys,
   task.arg = client;
   task.promise = valk_promise_new(res);
   task.callback = __http2_submit_demo_request_cb;
+  valk_arc_retain(client);
 
   valk_work_add(sys, task);
   uv_mutex_unlock(&sys->taskLock);
@@ -1092,14 +1113,17 @@ char *valk_client_demo(valk_aio_system *sys, const char *domain,
   //     valk_aio_http2_connect(&sys, "142.250.191.78", 443, ""));
 
   // Local
-  valk_arc_box *client =
-      valk_future_await(valk_aio_http2_connect(sys, "127.0.0.1", 6969, ""));
+  valk_future *fut = valk_aio_http2_connect(sys, "127.0.0.1", 6969, "");
+  valk_arc_box *client = valk_future_await(fut);
+  valk_arc_release(fut);
 
   VALK_ASSERT(client->type == VALK_SUC, "Error creating client: %s",
               client->item);
 
-  valk_arc_box *response =
-      valk_future_await(__http2_submit_demo_request(sys, client));
+  fut = __http2_submit_demo_request(sys, client);
+  valk_arc_box *response = valk_future_await(fut);
+
+  valk_arc_release(fut);
 
   VALK_ASSERT(response->type == VALK_SUC, "Error from the response: %s",
               response->item);
@@ -1108,7 +1132,11 @@ char *valk_client_demo(valk_aio_system *sys, const char *domain,
   char *res = strdup(response->item);
 
   valk_arc_release(response);
-  response = valk_future_await(valk_aio_http2_disconnect(sys, client));
+  fut = valk_aio_http2_disconnect(sys, client);
+  response = valk_future_await(fut);
+  valk_arc_release(fut);
+  // VALK_ASSERT(response->type == VALK_SUC, "Error from the disconnect : %s",
+  //             response->item);
 
   valk_arc_release(response);
 

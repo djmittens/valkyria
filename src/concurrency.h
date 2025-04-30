@@ -135,7 +135,6 @@ valk_future *valk_future_done(valk_arc_box *item);
 void valk_future_and_then(valk_future *self,
                           struct valk_future_and_then *callback);
 
-void valk_future_free(valk_future *self);
 
 valk_arc_box *valk_future_await(valk_future *future);
 valk_arc_box *valk_future_await_timeout(valk_future *future, uint32_t msec);

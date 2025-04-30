@@ -97,6 +97,7 @@ valk_future *valk_future_done(valk_arc_box *item) {
 
 void valk_future_and_then(valk_future *self,
                           struct valk_future_and_then *callback) {
+  valk_arc_retain(self);
   pthread_mutex_lock(&self->mutex);
   if (self->done) {
     callback->cb(callback->arg, self->item);
@@ -104,9 +105,11 @@ void valk_future_and_then(valk_future *self,
     da_add(&self->andThen, *callback);
   }
   pthread_mutex_unlock(&self->mutex);
+  valk_arc_release(self);
 }
 
 valk_arc_box *valk_future_await(valk_future *future) {
+  valk_arc_retain(future);
   pthread_mutex_lock(&future->mutex);
   if (!future->done) {
     pthread_cond_wait(&future->resolved, &future->mutex);
@@ -170,10 +173,10 @@ valk_arc_box *valk_future_await_timeout(valk_future *self, uint32_t msec) {
 
 valk_promise *valk_promise_new(valk_future *future) {
   valk_promise *self = valk_mem_alloc(sizeof(valk_promise));
+  valk_arc_retain(future);
   self->item = future;
   self->refcount = 1;
   self->allocator = valk_thread_ctx.allocator;
-  valk_arc_retain(future);
   return self;
 }
 
@@ -186,7 +189,8 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
 
   valk_future *fut = promise->item;
   size_t count = 0;
-  struct valk_future_and_then buf[10];
+  valk_arc_retain(fut);
+  valk_arc_retain(result);
 
   pthread_mutex_lock(&fut->mutex);
 
@@ -194,16 +198,15 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
   if (old) {
     printf("Welll... this is awkward, the promise is already resolved.... what "
            "the fuck");
+
+    valk_arc_release(fut);
+    valk_arc_release(result);
+    pthread_mutex_unlock(&fut->mutex);
+    return;
   } else {
     fut->item = result;
 
     count = __atomic_exchange_n(&fut->andThen.count, 0, __ATOMIC_ACQ_REL);
-    VALK_ASSERT(count < 10, "Number of continuations is greater than  10 %ld",
-                count);
-    if (count > 0) {
-      memcpy(buf, fut->andThen.items,
-             sizeof(struct valk_future_and_then) * count);
-    }
     pthread_cond_signal(&fut->resolved);
   }
   pthread_mutex_unlock(&fut->mutex);
@@ -214,6 +217,9 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
     item->cb(item->arg, fut->item);
     count--;
   }
+  // TODO(networking): Release the promise cracken !!
+  valk_arc_release(fut);
+  // valk_arc_release(result) in fut
 }
 
 static void *valk_worker_routine(void *arg) {

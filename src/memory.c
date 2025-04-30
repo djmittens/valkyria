@@ -1,5 +1,6 @@
 #include "memory.h"
 #include "common.h"
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -124,6 +125,17 @@ void valk_mem_arena_init(valk_mem_arena_t *self, size_t capacity) {
 void valk_mem_arena_reset(valk_mem_arena_t *self) {
   __atomic_store_n(&self->offset, 0, __ATOMIC_SEQ_CST);
 }
+
+static size_t __alignment_adjustment(void *ptr) {
+  size_t alignment = alignof(max_align_t);
+
+  size_t offset = (uintptr_t)(ptr) & (alignment - 1);
+  if (offset != 0) {
+    offset -= alignment;
+  }
+  return offset;
+}
+
 void *valk_mem_arena_alloc(valk_mem_arena_t *self, size_t bytes) {
   size_t oldVal = __atomic_load_n(&self->offset, __ATOMIC_RELAXED);
   do {
