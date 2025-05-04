@@ -17,19 +17,20 @@ typedef struct valk_aio_ssl_t {
 } valk_aio_ssl_t;
 
 void valk_aio_ssl_start();
-void valk_asio_ssl_stop();
 
 valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
                                     const char *certfile);
 
 valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx);
 
+
 void valk_aio_ssl_connect(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx);
 void valk_aio_ssl_accept(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx);
 
+void valk_aio_ssl_free(valk_aio_ssl_t *ssl);
+
 valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out);
 
-void valk_aio_ssl_close(valk_aio_ssl_t *ssl);
 
 valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
                                 valk_buffer_t *Out, void *arg,

@@ -25,7 +25,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
-  valk_future_await(valk_aio_http2_listen(
+  valk_arc_box * server = valk_future_await(valk_aio_http2_listen(
       sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt", &handler));
 
   char *response = valk_client_demo(sys, "127.0.0.1", "8080");
@@ -41,6 +41,8 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
                    arg.connectedCount, arg.disconnectedCount);
 
   VALK_PASS();
+
+  valk_arc_release(server);
   valk_aio_stop(sys);
   // valk_lval_free(ast);
   free(response);

@@ -6,10 +6,35 @@
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
 
+void *__CRYPTO_malloc_fn(size_t num, const char *file, int line) {
+  UNUSED(file);
+  UNUSED(line);
+  return valk_mem_alloc(num);
+}
+
+void *__CRYPTO_realloc_fn(void *addr, size_t num, const char *file, int line) {
+  UNUSED(file);
+  UNUSED(line);
+  // TODO(networking): implement realloc ??? for arenas its even dumber....
+  return realloc(addr, num);
+}
+
+void __CRYPTO_free_fn(void *addr, const char *file, int line) {
+  UNUSED(file);
+  UNUSED(line);
+  valk_mem_free(addr);
+}
+
 void valk_aio_ssl_start() {
-  SSL_library_init();
-  OpenSSL_add_all_algorithms();
-  ERR_load_crypto_strings();
+  static int uninitialized = true;
+  if (uninitialized) {
+    // !!!! must be called first before any other ssl call !!!!
+    CRYPTO_set_mem_functions(__CRYPTO_malloc_fn, __CRYPTO_realloc_fn,
+                             __CRYPTO_free_fn);
+    SSL_library_init();
+    OpenSSL_add_all_algorithms();
+    ERR_load_crypto_strings();
+  }
 }
 
 valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
@@ -124,6 +149,8 @@ void valk_aio_ssl_accept(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
   ssl->write_bio = BIO_new(BIO_s_mem());
 
   SSL_set_bio(ssl->ssl, ssl->read_bio, ssl->write_bio);
+  SSL_alloc_buffers(ssl->ssl);
+
   SSL_set_accept_state(ssl->ssl);
 }
 
@@ -134,7 +161,19 @@ void valk_aio_ssl_connect(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
   ssl->write_bio = BIO_new(BIO_s_mem());
 
   SSL_set_bio(ssl->ssl, ssl->read_bio, ssl->write_bio);
+  SSL_alloc_buffers(ssl->ssl);
+
   SSL_set_connect_state(ssl->ssl);
+}
+
+void valk_aio_ssl_free(valk_aio_ssl_t *ssl) {
+  SSL_free_buffers(ssl->ssl);
+  SSL_free(ssl->ssl);
+
+  BIO_free_all(ssl->read_bio);
+  BIO_free_all(ssl->write_bio);
+
+  ssl->ssl = nullptr;
 }
 
 valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {

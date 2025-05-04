@@ -191,6 +191,7 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
 
     valk_arc_release(fut);
     valk_arc_release(result);
+
     pthread_mutex_unlock(&fut->mutex);
     return;
   } else {

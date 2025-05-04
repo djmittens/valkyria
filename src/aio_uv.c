@@ -151,30 +151,14 @@ static void __task_cb(uv_async_t *handle) {
   uv_mutex_unlock(&sys->taskLock);
 }
 
-void *__CRYPTO_malloc_fn(size_t num, const char *file, int line) {
-  UNUSED(file);
-  UNUSED(line);
-  return valk_mem_alloc(num);
-}
-
-void *__CRYPTO_realloc_fn(void *addr, size_t num, const char *file, int line) {
-  UNUSED(file);
-  UNUSED(line);
-  // TODO(networking): implement realloc ??? for arenas its even dumber....
-  return realloc(addr, num);
-}
-
-void __CRYPTO_free_fn(void *addr, const char *file, int line) {
-  UNUSED(file);
-  UNUSED(line);
-  valk_mem_free(addr);
-}
 
 static void __uv_http_on_tcp_disconnect_cb(uv_handle_t *handle) {
   // TODO(networking): tecnically dont need an allocation here, can probably
   // have a unit box  out there somwhere.
   valk_arc_box *box = valk_arc_box_new(VALK_SUC, 0);
+  printf("Disconnection handle -> %p\n", handle->data);
   valk_promise_respond(handle->data, box);
+  valk_arc_release(box);
 }
 
 static void __valk_aio_http2_disconnect_cb(valk_aio_system *sys,
@@ -267,9 +251,6 @@ valk_aio_system *valk_aio_start() {
   sys->eventloop = uv_default_loop();
   sys->count = 0;
   sys->capacity = 10;
-
-  CRYPTO_set_mem_functions(__CRYPTO_malloc_fn, __CRYPTO_realloc_fn,
-                           __CRYPTO_free_fn);
 
   uv_mutex_init(&sys->taskLock);
   uv_async_init(sys->eventloop, &sys->taskHandle, __task_cb);
