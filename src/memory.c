@@ -44,33 +44,49 @@ int valk_buffer_is_full(valk_buffer_t *buf) {
   return (buf->capacity - buf->count) == 0;
 }
 
-static inline size_t __valk_slab_alloc_item_size(valk_slab_t *self) {
-  return sizeof(valk_slab_item_t) + self->itemSize;
+/// helper: round x up to next multiple of A (A must be a power of two)
+/// return multiple of A
+static inline size_t __valk_mem_align_up(size_t x, size_t A) {
+  return (x + A - 1) & ~(A - 1);
 }
 
-void valk_slab_alloc_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
+static inline size_t __valk_slab_item_size(valk_slab_t *self) {
+  return __valk_mem_align_up(sizeof(valk_slab_item_t) + self->itemSize,
+                             alignof(max_align_t));
+  // return sizeof(valk_slab_item_t) + self->itemSize;
+}
+
+valk_slab_t *valk_slab_new(size_t itemSize, size_t numItems) {
+  size_t stride = (sizeof(size_t) + sizeof(valk_slab_item_t) + itemSize);
+  stride = __valk_mem_align_up(stride, alignof(max_align_t));
+  const size_t freelen = sizeof(size_t) * numItems; // guranteed alignment
+
+  valk_slab_t *res =
+      valk_mem_alloc(sizeof(valk_slab_t) + freelen + (stride * numItems));
+  valk_slab_init(res, itemSize, numItems);
+  return res;
+}
+
+void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
   // TODO(networking): do like mmap and some platform specific slab code
   self->type = VALK_ALLOC_SLAB;
-
-  self->heap = valk_mem_alloc(
-      (sizeof(size_t) + sizeof(valk_slab_item_t) + itemSize) * numItems);
 
   self->itemSize = itemSize;
   self->numItems = numItems;
   self->numFree = numItems;
 
-  const size_t itemlen = sizeof(valk_slab_item_t) + itemSize;
+  const size_t itemlen = __valk_slab_item_size(self);
   const size_t freelen = sizeof(size_t) * numItems;
 
   for (size_t i = 0; i < numItems; i++) {
     ((size_t *)self->heap)[i] = i;
     valk_slab_item_t *item =
-        (valk_slab_item_t *)&(((char *)self->heap)[(freelen) + (itemlen * i)]);
+        (valk_slab_item_t *)&((self->heap)[(freelen) + (itemlen * i)]);
     item->handle = i;
   }
 }
 
-valk_slab_item_t *valk_slab_alloc_aquire(valk_slab_t *self) {
+valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   if (self->numFree <= 0) {
     return nullptr;
   }
@@ -83,14 +99,15 @@ valk_slab_item_t *valk_slab_alloc_aquire(valk_slab_t *self) {
 
   // Lookup this item in the slab and return
   const size_t freeLen = (sizeof(size_t) * self->numItems);
-  const size_t itemsLen = __valk_slab_alloc_item_size(self) * offset;
+  const size_t itemsLen = __valk_slab_item_size(self) * offset;
+
   valk_slab_item_t *res = (void *)&((char *)self->heap)[freeLen + itemsLen];
   printf("Aquiring slab: %ld :: idx : %ld : swap %ld\n", res->handle, offset,
          ((size_t *)self->heap)[0]);
   return res;
 }
 
-void valk_slab_alloc_release(valk_slab_t *self, valk_slab_item_t *item) {
+void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
   // find the slab handle
   for (size_t i = 0; i < self->numItems; ++i) {
     if (((size_t *)self->heap)[i] == item->handle) {
@@ -109,45 +126,43 @@ void valk_slab_alloc_release(valk_slab_t *self, valk_slab_item_t *item) {
   // Swap it in as free
 }
 
-void valk_slab_alloc_release_ptr(valk_slab_t *self, void *data) {
+void valk_slab_release_ptr(valk_slab_t *self, void *data) {
   // This function will look back item size bytes in the array, to figure out
   // the handle and then free that shit
-  valk_slab_alloc_release(
-      self, (valk_slab_item_t *)(&((char *)data)[-sizeof(valk_slab_item_t)]));
+  valk_slab_release(self, valk_container_of(data, valk_slab_item_t, data));
+}
+
+//
+/* alignment = power‑of‑two */
+static inline size_t __alignment_adjustment(void *ptr, size_t alignment) {
+  uintptr_t addr = (uintptr_t)ptr;
+  uintptr_t mask = alignment - 1;               /* 0b…111 */
+  uintptr_t misalign = addr & mask;             /* how far we’re off */
+  return misalign ? (alignment - misalign) : 0; /* bytes to *add* forward */
 }
 
 void valk_mem_arena_init(valk_mem_arena_t *self, size_t capacity) {
   self->type = VALK_ALLOC_ARENA;
   self->capacity = capacity;
-  self->offset = 0;
+  self->offset = __alignment_adjustment(&self->heap, alignof(max_align_t));
 }
 
 void valk_mem_arena_reset(valk_mem_arena_t *self) {
   __atomic_store_n(&self->offset, 0, __ATOMIC_SEQ_CST);
 }
 
-static size_t __alignment_adjustment(void *ptr) {
-  size_t alignment = alignof(max_align_t);
-
-  size_t offset = (uintptr_t)(ptr) & (alignment - 1);
-  if (offset != 0) {
-    offset -= alignment;
-  }
-  return offset;
-}
-
+// TODO(networking): should probably write some unit tests for all this math
 void *valk_mem_arena_alloc(valk_mem_arena_t *self, size_t bytes) {
   size_t oldVal = __atomic_load_n(&self->offset, __ATOMIC_RELAXED);
   do {
-
-    size_t newVal = oldVal + bytes + sizeof(size_t);
-    VALK_ASSERT(newVal < self->capacity,
+    size_t newVal = oldVal + bytes;
+    newVal += __alignment_adjustment(&self->heap[newVal], alignof(max_align_t));
+    VALK_ASSERT((newVal) < self->capacity,
                 "Arena ran out of memory during alloc, %ld + %ld > %ld", oldVal,
                 bytes, self->capacity);
     if (__atomic_compare_exchange_n(&self->offset, &oldVal, newVal, 1,
                                     __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
-      (self->heap)[newVal - bytes - sizeof(size_t)] = bytes;
-      return &(self->heap)[newVal - bytes];
+      return &(self->heap)[oldVal];
     }
   } while (1);
 }
@@ -166,7 +181,7 @@ void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes) {
   case VALK_ALLOC_ARENA:
     return valk_mem_arena_alloc((void *)self, bytes);
   case VALK_ALLOC_SLAB:
-    return (void *)valk_slab_alloc_aquire((void *)self)->data;
+    return (void *)valk_slab_aquire((void *)self)->data;
   case VALK_ALLOC_MALLOC:
     return malloc(bytes);
   }
@@ -192,7 +207,7 @@ void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, size_t num,
     memset(res, 0, num * size);
     break;
   case VALK_ALLOC_SLAB:
-    res = valk_slab_alloc_aquire((void *)self);
+    res = valk_slab_aquire((void *)self);
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     memset(res, 0, num * size);
     break;
@@ -247,7 +262,7 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
   case VALK_ALLOC_ARENA:
     return;
   case VALK_ALLOC_SLAB:
-    valk_slab_alloc_release_ptr((void *)self, ptr);
+    valk_slab_release_ptr((void *)self, ptr);
     return;
   case VALK_ALLOC_MALLOC:
     free(ptr);

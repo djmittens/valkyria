@@ -39,6 +39,11 @@
 #define valk_mem_free(__ptr)                                                   \
   valk_mem_allocator_free(valk_thread_ctx.allocator, __ptr)
 
+
+/* generic helper, same as Linux kernel’s container_of */
+#define valk_container_of(ptr, type, member) \
+    ((type *)((char *)(ptr) - offsetof(type, member)))
+
 typedef enum {
   VALK_ALLOC_NULL,
   VALK_ALLOC_MALLOC,
@@ -78,24 +83,25 @@ typedef struct {
   // Memory layout
   // [sizeof(size_t) * numSlabs | freeList]
   // [sizeof(valk_slab_t + (size_t * numSlabs)) * capacity | slabs]
-  void *heap;
+  uint8_t heap[];
 } valk_slab_t;
 
-void valk_slab_alloc_init(valk_slab_t *self, size_t itemSize, size_t numItems);
+valk_slab_t * valk_slab_new(size_t itemSize, size_t numItems);
+void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems);
 
-void *valk_slab_alloc_reset(valk_slab_t *self, size_t safePoint);
-void *valk_slab_alloc_free(valk_slab_t *self);
+void *valk_slab_reset(valk_slab_t *self, size_t safePoint);
+void *valk_slab_free(valk_slab_t *self);
 
-valk_slab_item_t *valk_slab_alloc_aquire(valk_slab_t *self);
+valk_slab_item_t *valk_slab_aquire(valk_slab_t *self);
 
-void valk_slab_alloc_release(valk_slab_t *self, valk_slab_item_t *item);
-void valk_slab_alloc_release_ptr(valk_slab_t *self, void *data);
+void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item);
+void valk_slab_release_ptr(valk_slab_t *self, void *data);
 
 typedef struct {
   valk_mem_allocator_e type;
   size_t capacity;
   size_t offset;
-  char heap[];
+  uint8_t heap[];
 } valk_mem_arena_t;
 
 void valk_mem_arena_init(valk_mem_arena_t *self, size_t capacity);

@@ -49,7 +49,8 @@ enum {
 
 // times 2 just for fun
 
-static __thread valk_slab_t tcp_buffer_slab;
+static __thread valk_slab_t *tcp_buffer_slab;
+
 typedef struct {
   uv_write_t req;
   uv_buf_t buf;
@@ -61,8 +62,8 @@ typedef struct __http2_connect_req {
   valk_aio_http2_client *client;
 } __http2_connect_req;
 
-static __thread valk_slab_t tcp_connection_slab;
-static __thread valk_slab_t tcp_request_arena_slab;
+static __thread valk_slab_t *tcp_connection_slab;
+static __thread valk_slab_t *tcp_request_arena_slab;
 
 static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
                                const uv_buf_t *buf);
@@ -70,7 +71,7 @@ void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
                       uv_buf_t *buf) {
   UNUSED(handle);
   // TODO(networking): replace it with memory arena for the request
-  buf->base = (char *)valk_slab_alloc_aquire(&tcp_buffer_slab)->data;
+  buf->base = (char *)valk_slab_aquire(tcp_buffer_slab)->data;
   buf->len = suggested_size;
 }
 
@@ -125,12 +126,11 @@ static void __event_loop(void *arg) {
   valk_aio_system *sys = arg;
   valk_mem_init_malloc();
   printf("Allocating some shit\n");
-  valk_slab_alloc_init(&tcp_buffer_slab, HTTP_SLAB_ITEM_SIZE,
-                       HTTP_MAX_IO_REQUESTS);
-  valk_slab_alloc_init(&tcp_connection_slab, HTTP_MAX_CONNECTION_HEAP,
-                       HTTP_MAX_CONNECTIONS);
-  valk_slab_alloc_init(&tcp_request_arena_slab, HTTP_MAX_REQUEST_SIZE_BYTES,
-                       HTTP_MAX_CONCURRENT_REQUESTS);
+  tcp_buffer_slab = valk_slab_new(HTTP_SLAB_ITEM_SIZE, HTTP_MAX_IO_REQUESTS);
+  tcp_connection_slab =
+      valk_slab_new(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
+  tcp_request_arena_slab =
+      valk_slab_new(HTTP_MAX_REQUEST_SIZE_BYTES, HTTP_MAX_CONCURRENT_REQUESTS);
   uv_run(sys->eventloop, UV_RUN_DEFAULT);
 }
 
@@ -378,7 +378,7 @@ static void __http_tcp_on_write_cb(uv_write_t *handle, int status) {
     printf("Receiving on write CB\n");
   }
 
-  valk_slab_alloc_release_ptr(&tcp_buffer_slab, handle);
+  valk_slab_release_ptr(tcp_buffer_slab, handle);
 }
 
 static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
@@ -518,7 +518,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
       .items = buf->base, .count = nread, .capacity = HTTP_SLAB_ITEM_SIZE};
 
   __tcp_buffer_slab_item_t *slabItem =
-      (void *)valk_slab_alloc_aquire(&tcp_buffer_slab)->data;
+      (void *)valk_slab_aquire(tcp_buffer_slab)->data;
 
   valk_buffer_t Out = {
       .items = slabItem->data, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
@@ -548,10 +548,10 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
              __http_tcp_on_write_cb);
   } else {
     printf("Nothing to send %d \n", wantToSend);
-    valk_slab_alloc_release_ptr(&tcp_buffer_slab, slabItem);
+    valk_slab_release_ptr(tcp_buffer_slab, slabItem);
   }
 
-  valk_slab_alloc_release_ptr(&tcp_buffer_slab, In.items);
+  valk_slab_release_ptr(tcp_buffer_slab, In.items);
 }
 
 static int __http_send_server_connection_header(nghttp2_session *session) {
@@ -596,9 +596,9 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
   valk_aio_http_server *srv = server->data;
   // Init the arena
   valk_mem_arena_t *arena =
-      (void *)valk_slab_alloc_aquire(&tcp_connection_slab)->data;
-  arena->capacity = HTTP_MAX_CONNECTION_HEAP - sizeof(valk_mem_arena_t);
-  arena->offset = 0;
+      (void *)valk_slab_aquire(tcp_connection_slab)->data;
+  valk_mem_arena_init(arena,
+                      HTTP_MAX_CONNECTION_HEAP - sizeof(valk_mem_arena_t));
 
   struct valk_aio_http_conn *conn =
       valk_mem_arena_alloc(arena, sizeof(struct valk_aio_http_conn));
@@ -684,7 +684,9 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
     // Send settings to the client
     __http_send_server_connection_header(conn->session);
 
-    conn->handler->onConnect(conn->handler->arg, conn);
+    if (conn->handler) {
+      conn->handler->onConnect(conn->handler->arg, conn);
+    }
 
     // start the connection off by listening, (SSL expects client to send first)
     uv_read_start((uv_stream_t *)&conn->tcpHandle, __alloc_callback,
@@ -695,7 +697,7 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
     uv_close((uv_handle_t *)&conn->tcpHandle, __uv_http_on_tcp_disconnect_cb);
     // TODO(networking): should probably have a function for properly disposing
     // of the connection objects
-    valk_slab_alloc_release_ptr(&tcp_connection_slab, conn->arena);
+    valk_slab_release_ptr(tcp_connection_slab, conn->arena);
   }
 }
 
@@ -880,7 +882,7 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
   printf("Gurr we connected\n");
 
   __tcp_buffer_slab_item_t *slabItem =
-      (void *)valk_slab_alloc_aquire(&tcp_buffer_slab)->data;
+      (void *)valk_slab_aquire(tcp_buffer_slab)->data;
 
   valk_buffer_t Out = {
       .items = slabItem->data, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
@@ -938,7 +940,7 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     uv_write(&slabItem->req, (uv_stream_t *)&client->connection.tcpHandle,
              &slabItem->buf, 1, __http_tcp_on_write_cb);
   } else {
-    valk_slab_alloc_release_ptr(&tcp_buffer_slab, Out.items);
+    valk_slab_release_ptr(tcp_buffer_slab, Out.items);
   }
 
   uv_read_start((uv_stream_t *)&client->connection.tcpHandle, __alloc_callback,
@@ -1056,7 +1058,7 @@ static void __http2_submit_demo_request_cb(valk_aio_system *sys,
   valk_buffer_t In = {
       .items = buf, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
   __tcp_buffer_slab_item_t *slabItem =
-      (void *)valk_slab_alloc_aquire(&tcp_buffer_slab)->data;
+      (void *)valk_slab_aquire(tcp_buffer_slab)->data;
 
   valk_buffer_t Out = {
       .items = slabItem->data, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
@@ -1078,7 +1080,7 @@ static void __http2_submit_demo_request_cb(valk_aio_system *sys,
                1, __http_tcp_on_write_cb);
     } else {
       printf("Nothing to send %d \n", wantToSend);
-      valk_slab_alloc_release_ptr(&tcp_buffer_slab, slabItem);
+      valk_slab_release_ptr(tcp_buffer_slab, slabItem);
     }
   }
 

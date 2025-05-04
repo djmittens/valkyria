@@ -13,8 +13,8 @@
     (queue)->count = 0;                                                        \
     (queue)->numWorkers = 0;                                                   \
     (queue)->isShuttingDown = 0;                                               \
-    valk_slab_alloc_init(&(queue)->futureSlab, sizeof(valk_future), 1000);     \
-    valk_slab_alloc_init(&(queue)->promiseSlab, sizeof(valk_promise), 100);    \
+    (queue)->futureSlab = valk_slab_new(sizeof(valk_future), 1000);            \
+    (queue)->promiseSlab = valk_slab_new(sizeof(valk_promise), 100);           \
     pthread_mutex_init(&(queue)->mutex, 0);                                    \
     pthread_cond_init(&(queue)->isEmpty, 0);                                   \
     pthread_cond_init(&(queue)->notEmpty, 0);                                  \
@@ -135,7 +135,6 @@ valk_future *valk_future_done(valk_arc_box *item);
 void valk_future_and_then(valk_future *self,
                           struct valk_future_and_then *callback);
 
-
 valk_arc_box *valk_future_await(valk_future *future);
 valk_arc_box *valk_future_await_timeout(valk_future *future, uint32_t msec);
 
@@ -170,8 +169,8 @@ typedef struct {
   pthread_cond_t notFull;
   pthread_cond_t workerReady;
   pthread_cond_t workerDead;
-  valk_slab_t futureSlab;
-  valk_slab_t promiseSlab;
+  valk_slab_t *futureSlab;
+  valk_slab_t *promiseSlab;
   valk_task *items;
   size_t idx;
   size_t count;
