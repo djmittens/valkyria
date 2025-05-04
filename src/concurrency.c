@@ -65,8 +65,11 @@ valk_arc_box *valk_arc_box_err(const char *msg) {
 void valk_future_free(valk_future *self) {
   pthread_cond_destroy(&self->resolved);
   pthread_mutex_destroy(&self->mutex);
-  valk_arc_release(self->item);
-  valk_mem_allocator_free(self->allocator, self);
+  VALK_WITH_ALLOC(self->allocator) {
+    valk_arc_release(self->item);
+    da_free(&self->andThen); // args leaked for now
+    valk_mem_free(self);
+  }
 }
 
 valk_future *valk_future_new() {
@@ -171,25 +174,12 @@ valk_arc_box *valk_future_await_timeout(valk_future *self, uint32_t msec) {
   return res;
 }
 
-valk_promise *valk_promise_new(valk_future *future) {
-  valk_promise *self = valk_mem_alloc(sizeof(valk_promise));
-  valk_arc_retain(future);
-  self->item = future;
-  self->refcount = 1;
-  self->allocator = valk_thread_ctx.allocator;
-  return self;
-}
-
-void valk_promise_free(valk_promise *self) {
-  valk_arc_release(self->item);
-  valk_mem_allocator_free(self->allocator, self);
-}
-
+// TODO(networking): do i want a ptr to ptr here, or just a copy?
 void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
 
   valk_future *fut = promise->item;
   size_t count = 0;
-  valk_arc_retain(fut);
+  // valk_arc_retain(fut); in the caller to promise
   valk_arc_retain(result);
 
   pthread_mutex_lock(&fut->mutex);
@@ -217,9 +207,7 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
     item->cb(item->arg, fut->item);
     count--;
   }
-  // TODO(networking): Release the promise cracken !!
   valk_arc_release(fut);
-  // valk_arc_release(result) in fut
 }
 
 static void *valk_worker_routine(void *arg) {
@@ -267,8 +255,8 @@ static void *valk_worker_routine(void *arg) {
 
         // Ok now lets execute the task
 
-        valk_promise_respond(task.promise, task.func(task.arg));
-        valk_arc_release(task.promise);
+        valk_promise_respond(&task.promise, task.func(task.arg));
+
         // TODO(networking): How do we clean up the arg? maybe the callback
         // has to do it.
       } else if (task.type == VALK_POISON) {
@@ -399,17 +387,16 @@ valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box *arg,
 
     res = valk_future_new();
 
-    valk_task task = {.type = VALK_TASK,
-                      .arg = arg,
-                      .func = func,
-                      .promise = valk_promise_new(res)};
+    valk_task task = {
+        .type = VALK_TASK, .arg = arg, .func = func, .promise = {res}};
 
     int err = valk_work_add(queue, task);
     if (err) {
-      valk_promise_respond(
-          task.promise,
-          valk_arc_box_err("Could not add task to queue for pool scheduling"));
-      valk_arc_release(task.promise);
+      valk_arc_box *berr =
+          valk_arc_box_err("Could not add task to queue for pool scheduling");
+      valk_promise_respond(&task.promise, berr);
+      valk_arc_release(berr);
+      valk_arc_release(task.promise.item);
       valk_arc_release(task.arg);
     }
     pthread_cond_signal(&queue->notEmpty);
@@ -435,6 +422,7 @@ static valk_arc_box *__valk_pool_resolve_promise_cb(valk_arc_box *arg) {
   }
   __valk_resolve_promise *a = arg->item;
   valk_promise_respond(a->promise, a->result);
+  valk_arc_release(a->result);
   return arg;
 }
 
@@ -447,6 +435,5 @@ void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
   pair->result = result;
 
   valk_future *res = valk_schedule(pool, arg, __valk_pool_resolve_promise_cb);
-  valk_arc_retain(promise);
   valk_arc_release(res); // dont need the result
 }

@@ -77,7 +77,7 @@ void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
 
 typedef struct valk_aio_task {
   valk_arc_box *arg;
-  valk_promise *promise;
+  valk_promise promise;
   void (*callback)(valk_aio_system *, valk_arc_box *, valk_promise *);
 } valk_aio_task;
 
@@ -131,7 +131,12 @@ static void __event_loop(void *arg) {
       valk_slab_new(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
   tcp_request_arena_slab =
       valk_slab_new(HTTP_MAX_REQUEST_SIZE_BYTES, HTTP_MAX_CONCURRENT_REQUESTS);
+
   uv_run(sys->eventloop, UV_RUN_DEFAULT);
+
+  valk_slab_free(tcp_buffer_slab);
+  valk_slab_free(tcp_connection_slab);
+  valk_slab_free(tcp_request_arena_slab);
 }
 
 static void __task_cb(uv_async_t *handle) {
@@ -140,7 +145,7 @@ static void __task_cb(uv_async_t *handle) {
   while (sys->count > 0) {
     struct valk_aio_task task;
     if (!valk_work_pop(sys, &task)) {
-      task.callback(sys, task.arg, task.promise);
+      task.callback(sys, task.arg, &task.promise);
     }
   }
   uv_mutex_unlock(&sys->taskLock);
@@ -183,10 +188,10 @@ static void __valk_aio_http2_disconnect_cb(valk_aio_system *sys,
   valk_aio_http_conn *conn = arg->item;
 
   if (conn->state != VALK_CONN_ESTABLISHED) {
-    valk_promise_respond(
-        promise,
-        valk_arc_box_err(
-            "ERR: Connection cant be closed as its not established \n"));
+    valk_arc_box *err = valk_arc_box_err(
+        "ERR: Connection cant be closed as its not established \n");
+    valk_promise_respond(promise, err);
+    valk_arc_release(err);
     return;
   }
 
@@ -228,17 +233,20 @@ valk_future *valk_aio_http2_disconnect(valk_aio_system *sys,
   uv_mutex_lock(&sys->taskLock);
   struct valk_aio_task task;
 
-  valk_arc_retain(conn);
   task.arg = conn;
-  task.promise = valk_promise_new(res);
+  task.promise.item = res;
   task.callback = __valk_aio_http2_disconnect_cb;
+
+  valk_arc_retain(conn);
+  // release conn in valk_aio_http2_client_free
+  // release conn in __valk_aio_http2_disconnect_cb
+  valk_arc_retain(res);
+  // valk_arc_retain(res);  in promise_resolve
 
   valk_work_add(sys, task);
   uv_mutex_unlock(&sys->taskLock);
   uv_async_send(&sys->taskHandle);
 
-  // release conn in valk_aio_http2_client_free
-  // release conn in __valk_aio_http2_disconnect_cb
   return res;
 }
 
@@ -597,8 +605,7 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
 
   valk_aio_http_server *srv = server->data;
   // Init the arena
-  valk_mem_arena_t *arena =
-      (void *)valk_slab_aquire(tcp_connection_slab)->data;
+  valk_mem_arena_t *arena = (void *)valk_slab_aquire(tcp_connection_slab)->data;
   valk_mem_arena_init(arena,
                       HTTP_MAX_CONNECTION_HEAP - sizeof(valk_mem_arena_t));
 
@@ -716,7 +723,9 @@ static void __http_listen_cb(valk_aio_system *sys, valk_arc_box *box,
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "TcpInit err: %s \n", uv_strerror(r));
-    valk_promise_respond(promise, valk_arc_box_err("Error on TcpInit"));
+    valk_arc_box *err = valk_arc_box_err("Error on TcpInit");
+    valk_promise_respond(promise, err);
+    valk_arc_release(err);
     valk_arc_release(box);
     return;
   }
@@ -724,7 +733,9 @@ static void __http_listen_cb(valk_aio_system *sys, valk_arc_box *box,
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Addr err: %s \n", uv_strerror(r));
-    valk_promise_respond(promise, valk_arc_box_err("Error on Addr"));
+    valk_arc_box *err = valk_arc_box_err("Error on Addr");
+    valk_promise_respond(promise, err);
+    valk_arc_release(err);
     valk_arc_release(box);
     return;
   }
@@ -737,7 +748,9 @@ static void __http_listen_cb(valk_aio_system *sys, valk_arc_box *box,
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Bind err: %s \n", uv_strerror(r));
-    valk_promise_respond(promise, valk_arc_box_err("Error on Bind"));
+    valk_arc_box *err = valk_arc_box_err("Error on Bind");
+    valk_promise_respond(promise, err);
+    valk_arc_release(err);
     valk_arc_release(box);
     return;
   }
@@ -747,13 +760,16 @@ static void __http_listen_cb(valk_aio_system *sys, valk_arc_box *box,
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Listen err: %s \n", uv_strerror(r));
-    valk_promise_respond(promise, valk_arc_box_err("Error on Listening"));
+    valk_arc_box *err = valk_arc_box_err("Error on Listening");
+    valk_promise_respond(promise, err);
+    valk_arc_release(err);
     valk_arc_release(box);
     return;
   } else {
     printf("Listening on %s:%d\n", srv->interface, srv->port);
     valk_promise_respond(promise, box);
   }
+  valk_arc_release(box);
 }
 
 static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
@@ -792,7 +808,7 @@ valk_future *valk_aio_http2_listen(valk_aio_system *sys, const char *interface,
   SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
 
   task.arg = box;
-  task.promise = valk_promise_new(res);
+  task.promise.item = res;
   task.callback = __http_listen_cb;
 
   valk_work_add(sys, task);
@@ -813,7 +829,7 @@ typedef struct valk_aio_http2_client {
   char *interface;
   int port;
   // Totally internal, totally unneccessary, but i wanna avoid a tuple
-  valk_promise *_promise;
+  valk_promise _promise;
 } valk_aio_http2_client;
 
 static int __http_client_on_frame_recv_callback(nghttp2_session *session,
@@ -857,13 +873,15 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
     fwrite(data, 1, len, stdout);
     printf("\n");
 
-    valk_arc_box *res = valk_arc_box_new(VALK_SUC, len + 1);
+    valk_arc_box *box = valk_arc_box_new(VALK_SUC, len + 1);
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    memcpy(res->item, data, len);
-    ((char *)res->item)[len] = '\0';
+    memcpy(box->item, data, len);
+    ((char *)box->item)[len] = '\0';
 
-    valk_promise_respond(promise, res);
+    valk_promise_respond(promise, box);
+    valk_arc_release(box);
   }
+  valk_mem_free(promise);
   return 0;
 }
 
@@ -875,8 +893,9 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
   if (status < 0) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Client Connection err: %s\n", uv_strerror(status));
-    valk_promise_respond(client->_promise,
-                         valk_arc_box_err("Client Connection err"));
+    valk_arc_box *err = valk_arc_box_err("Client Connection err");
+    valk_promise_respond(&client->_promise, err);
+    valk_arc_release(err);
     valk_arc_release(box);
     return;
   }
@@ -952,7 +971,8 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
 
   // Shits connected but not fully established, it will buffer any requests tho
   // releases the promise
-  valk_promise_respond(client->_promise, box);
+  valk_promise_respond(&client->_promise, box);
+  valk_arc_release(box);
 }
 
 static void __aio_client_connect_cb(valk_aio_system *sys, valk_arc_box *box,
@@ -967,7 +987,9 @@ static void __aio_client_connect_cb(valk_aio_system *sys, valk_arc_box *box,
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "TcpInit err: %s \n", uv_strerror(r));
-    valk_promise_respond(promise, valk_arc_box_err("TcpInit err"));
+    valk_arc_box *err = valk_arc_box_err("TcpInit err");
+    valk_promise_respond(promise, err);
+    valk_arc_release(err);
     valk_arc_release(box);
     return;
   }
@@ -979,13 +1001,15 @@ static void __aio_client_connect_cb(valk_aio_system *sys, valk_arc_box *box,
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Addr err: %s \n", uv_strerror(r));
-    valk_promise_respond(promise, valk_arc_box_err("Addr err"));
+    valk_arc_box *err = valk_arc_box_err("Addr err");
+    valk_promise_respond(promise, err);
+    valk_arc_release(err);
     valk_arc_release(box);
     return;
   }
 
   client->connection.req.data = box;
-  client->_promise = promise;
+  client->_promise = *promise;
   uv_tcp_connect(&client->connection.req, &client->connection.tcpHandle,
                  (const struct sockaddr *)&addr, __uv_http2_connect_cb);
 }
@@ -1006,8 +1030,10 @@ valk_future *valk_aio_http2_connect(valk_aio_system *sys, const char *interface,
   client->interface = strdup(interface);
   client->port = port;
 
-  task.promise = valk_promise_new(res);
+  task.promise.item = res;
   task.callback = __aio_client_connect_cb;
+  valk_arc_retain(res);
+  // valk_arc_release(res) in resolve
 
   valk_work_add(sys, task);
 
@@ -1038,16 +1064,23 @@ static void __http2_submit_demo_request_cb(valk_aio_system *sys,
   // fprintf(stderr, "Request headers:\n");
   // print_headers(stderr, hdrs, ARRLEN(hdrs));
 
+  // TODO(networking): Allocating this promise here temporarily, ideally need to
+  // be passing a request object with a promise on it
+  valk_promise *prom = valk_mem_alloc(sizeof(valk_promise));
+  // valk_mem_free(sizeof(valk_promise)); in callback to nghttp2 recv
+  *prom = *promise; // copy this shit
+
   stream_id =
       nghttp2_submit_request2(conn->session, nullptr, hdrs,
-                              sizeof(hdrs) / sizeof(hdrs[0]), nullptr, promise);
+                              sizeof(hdrs) / sizeof(hdrs[0]), nullptr, prom);
 
   if (stream_id < 0) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Could not submit HTTP request: %s\n",
             nghttp2_strerror(stream_id));
-    valk_promise_respond(promise,
-                         valk_arc_box_err("Could not submit HTTP request"));
+    valk_arc_box *err = valk_arc_box_err("Could not submit HTTP request");
+    valk_promise_respond(promise, err);
+    valk_arc_release(err);
     valk_arc_release(arg);
     return;
   }
@@ -1097,9 +1130,13 @@ static valk_future *__http2_submit_demo_request(valk_aio_system *sys,
   struct valk_aio_task task;
 
   task.arg = client;
-  task.promise = valk_promise_new(res);
+  task.promise.item = res;
   task.callback = __http2_submit_demo_request_cb;
   valk_arc_retain(client);
+  valk_arc_retain(res);
+
+  // valk_arc_release(client); in callback
+  // valk_arc_release(res); in resolve
 
   valk_work_add(sys, task);
   uv_mutex_unlock(&sys->taskLock);
@@ -1118,8 +1155,11 @@ char *valk_client_demo(valk_aio_system *sys, const char *domain,
 
   // Local
   valk_future *fut = valk_aio_http2_connect(sys, "127.0.0.1", 6969, "");
+  printf("Arc count of fut : %d\n", fut->refcount);
   valk_arc_box *client = valk_future_await(fut);
+  printf("Arc count of fut : %d\n", fut->refcount);
   valk_arc_release(fut);
+  // printf("Arc count of fut : %d\n", fut->refcount);
 
   VALK_ASSERT(client->type == VALK_SUC, "Error creating client: %s",
               client->item);

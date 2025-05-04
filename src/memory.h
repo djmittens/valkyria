@@ -15,17 +15,12 @@
     for (valk_thread_ctx = (_ctx_); __ctx.exec; __ctx.exec = 0)
 
 #define VALK_WITH_ALLOC(_alloc_)                                               \
-  for (                                                                        \
-      struct {                                                                 \
-        int exec;                                                              \
-        valk_mem_allocator_e old_type;                                         \
-        void *old_alloc;                                                       \
-      } __ctx = {1, valk_thread_ctx.alloctype, valk_thread_ctx.allocator};     \
-      __ctx.exec; valk_thread_ctx.allocator = __ctx.old_alloc,                 \
-        valk_thread_ctx.alloctype = __ctx.old_type)                            \
-    for (valk_thread_ctx->alloctype = (_ctx_.type),                            \
-        valk_thread_ctx->allocator = (_ctx_);                                  \
-         __ctx.exec; __ctx.exec = 0)
+  for (struct {                                                                \
+         int exec;                                                             \
+         void *old_alloc;                                                      \
+       } __ctx = {1, valk_thread_ctx.allocator};                               \
+       __ctx.exec; valk_thread_ctx.allocator = __ctx.old_alloc)                \
+    for (valk_thread_ctx.allocator = (_alloc_); __ctx.exec; __ctx.exec = 0)
 
 #define valk_mem_alloc(__bytes)                                                \
   valk_mem_allocator_alloc(valk_thread_ctx.allocator, (__bytes))
@@ -39,10 +34,9 @@
 #define valk_mem_free(__ptr)                                                   \
   valk_mem_allocator_free(valk_thread_ctx.allocator, __ptr)
 
-
 /* generic helper, same as Linux kernel’s container_of */
-#define valk_container_of(ptr, type, member) \
-    ((type *)((char *)(ptr) - offsetof(type, member)))
+#define valk_container_of(ptr, type, member)                                   \
+  ((type *)((char *)(ptr) - offsetof(type, member)))
 
 typedef enum {
   VALK_ALLOC_NULL,
@@ -86,11 +80,10 @@ typedef struct {
   uint8_t heap[];
 } valk_slab_t;
 
-valk_slab_t * valk_slab_new(size_t itemSize, size_t numItems);
+valk_slab_t *valk_slab_new(size_t itemSize, size_t numItems);
 void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems);
 
-void *valk_slab_reset(valk_slab_t *self, size_t safePoint);
-void *valk_slab_free(valk_slab_t *self);
+void valk_slab_free(valk_slab_t *self);
 
 valk_slab_item_t *valk_slab_aquire(valk_slab_t *self);
 

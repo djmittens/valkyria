@@ -85,6 +85,9 @@ void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
   }
 }
 
+// TODO(networking): do we even need this? might be useful for debugging
+void valk_slab_free(valk_slab_t *self) { valk_mem_free(self); }
+
 valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   if (self->numFree <= 0) {
     return nullptr;

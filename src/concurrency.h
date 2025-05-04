@@ -110,7 +110,7 @@ valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity);
 valk_arc_box *valk_arc_box_err(const char *msg);
 
 struct valk_future_and_then {
-  void *arg;
+  void *arg; // TODO(networking): should i provide a free callback for this?
   void (*cb)(void *, valk_arc_box *);
 };
 
@@ -140,13 +140,8 @@ valk_arc_box *valk_future_await_timeout(valk_future *future, uint32_t msec);
 
 typedef struct valk_promise {
   valk_future *item;
-  int refcount;
-  valk_mem_allocator_t *allocator;
-  void (*free)(struct valk_promise *);
 } valk_promise;
 
-valk_promise *valk_promise_new(valk_future *future);
-void valk_promise_free(valk_promise *self);
 void valk_promise_respond(valk_promise *promise, valk_arc_box *result);
 
 typedef enum { VALK_TASK, VALK_POISON } valk_task_type_t;
@@ -158,7 +153,7 @@ typedef struct {
     // who owns this ? when is it freed? in the callback?
     valk_arc_box *arg;
     valk_arc_box *(*func)(valk_arc_box *);
-    valk_promise *promise;
+    valk_promise promise;
   };
 } valk_task;
 

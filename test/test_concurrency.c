@@ -54,12 +54,12 @@ void test_task_queue(VALK_TEST_ARGS()) {
     valk_task task = {.type = VALK_TASK,
                       .arg = argBox,
                       .func = test_callback,
-                      .promise = valk_promise_new(fut)};
+                      .promise = {fut}};
     int err = valk_work_add(&queue, task);
 
     if (err) {
       // cleanup if there was an error
-      valk_arc_release(task.promise);
+      valk_arc_release(task.promise.item);
     }
     if (i >= maxSize) {
       VALK_TEST_ASSERT(
@@ -91,7 +91,7 @@ void test_task_queue(VALK_TEST_ARGS()) {
   for (size_t i = 0; i < 8; i++) {
     task.func = nullptr;
     task.arg = nullptr;
-    task.promise = nullptr;
+    task.promise.item = nullptr;
 
     int res = valk_work_pop(&queue, &task);
     if (i >= maxSize) {
@@ -118,7 +118,7 @@ void test_task_queue(VALK_TEST_ARGS()) {
       VALK_TEST_ASSERT(
           queue.count == (maxSize - i - 1),
           "Expected the count to be 1 more than item offset [offset: %d]", i);
-      valk_arc_release(task.promise);
+      valk_arc_release(task.promise.item);
     }
   }
 
