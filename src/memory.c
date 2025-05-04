@@ -53,7 +53,6 @@ static inline size_t __valk_mem_align_up(size_t x, size_t A) {
 static inline size_t __valk_slab_item_size(valk_slab_t *self) {
   return __valk_mem_align_up(sizeof(valk_slab_item_t) + self->itemSize,
                              alignof(max_align_t));
-  // return sizeof(valk_slab_item_t) + self->itemSize;
 }
 
 valk_slab_t *valk_slab_new(size_t itemSize, size_t numItems) {

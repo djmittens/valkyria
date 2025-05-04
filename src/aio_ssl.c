@@ -6,7 +6,7 @@
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
 
-void valk_asio_ssl_start() {
+void valk_aio_ssl_start() {
   SSL_library_init();
   OpenSSL_add_all_algorithms();
   ERR_load_crypto_strings();

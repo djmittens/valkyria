@@ -255,7 +255,7 @@ valk_aio_system *valk_aio_start() {
   sigaction(SIGPIPE, &sa, nullptr);
 
   valk_aio_system *sys = valk_mem_alloc(sizeof(valk_aio_system));
-  valk_asio_ssl_start();
+  valk_aio_ssl_start();
   sys->eventloop = uv_default_loop();
   sys->count = 0;
   sys->capacity = 10;
@@ -278,11 +278,13 @@ valk_aio_system *valk_aio_start() {
 void valk_aio_stop(valk_aio_system *sys) {
   uv_async_send(&sys->stopper);
   printf("The before\n");
+  printf("Processing the stopper\n");
   uv_thread_join(&sys->loopThread);
+  printf("AFTER the Processing the stopper\n");
   printf("The after\n");
   uv_loop_close(sys->eventloop);
   // TODO(networking): need to properly free the system too
-  // valk_mem_free(sys);
+  valk_mem_free(sys);
 }
 
 valk_future *valk_aio_read_file(valk_aio_system *sys, const char *filename);
@@ -1144,7 +1146,6 @@ char *valk_client_demo(valk_aio_system *sys, const char *domain,
 
   valk_arc_release(client);
 
-  valk_aio_stop(sys);
   return res;
 }
 

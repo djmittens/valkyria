@@ -41,6 +41,7 @@ valk_test_suite_t *valk_testsuite_empty(const char *filename) {
 void valk_testsuite_free(valk_test_suite_t *suite) {
   for (size_t i = 0; i < suite->tests.count; i++) {
     free(suite->tests.items[i].name);
+    da_free(&suite->tests.items[i].labels);
   }
   free(suite->tests.items);
 

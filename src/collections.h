@@ -14,8 +14,7 @@
 
 #define da_free(arr)                                                           \
   do {                                                                         \
-    free((arr)->items);                                                        \
-    free((arr));                                                               \
+    valk_mem_free((arr)->items);                                                        \
   } while (0)
 
 #define da_add(arr, elem)                                                      \

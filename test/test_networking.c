@@ -11,7 +11,7 @@
 #include "testing.h"
 
 void test_demo_socket_server(VALK_TEST_ARGS()) {
-  //valk_lval_t *ast = VALK_FIXTURE("prelude");
+  // valk_lval_t *ast = VALK_FIXTURE("prelude");
   valk_aio_system *sys = valk_aio_start();
 
   VALK_TEST();
@@ -37,13 +37,12 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   }
 
   VALK_TEST_ASSERT(arg.connectedCount == arg.disconnectedCount == 1,
-              "Expected a single client connection %d, %d",
-              arg.connectedCount, arg.disconnectedCount);
-
+                   "Expected a single client connection %d, %d",
+                   arg.connectedCount, arg.disconnectedCount);
 
   VALK_PASS();
   valk_aio_stop(sys);
-  //valk_lval_free(ast);
+  // valk_lval_free(ast);
   free(response);
 }
 
@@ -116,6 +115,11 @@ int main(int argc, const char **argv) {
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
+// TODO(networking): Something blows malloc away from the context, meaning its
+// not properly reset
+#if 1
+  valk_mem_init_malloc();
+#endif
   valk_testsuite_free(suite);
 
   return res;
@@ -132,8 +136,6 @@ void cb_onDisconnect(void *arg, valk_aio_http_conn *) {
 }
 
 void cb_onHeader(void *arg, valk_aio_http_conn *, size_t stream, char *name,
-                 char *value) {
-
-}
+                 char *value) {}
 void cb_onBody(void *arg, valk_aio_http_conn *, size_t stream, uint8_t flags,
                valk_buffer_t *buf) {}
