@@ -254,6 +254,7 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
               "initialize it with something like valk_mem_init_malloc()\n "
               "Failed while trying to calloc %p",
               ptr);
+
   // printf("Freeing %p\n", ptr);
   switch (self->type) {
   case VALK_ALLOC_NULL:

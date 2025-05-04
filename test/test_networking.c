@@ -48,6 +48,8 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
 
 void test_implicit_arena_alloc(VALK_TEST_ARGS()) {
   VALK_TEST();
+  valk_thread_context_t ctxBackup = valk_thread_ctx;
+
   valk_mem_allocator_t alloc_old;
   valk_mem_allocator_t alloc_new;
 
@@ -61,7 +63,8 @@ void test_implicit_arena_alloc(VALK_TEST_ARGS()) {
   // VALK_WITH_CTX reset the context back to original
   VALK_TEST_ASSERT(valk_thread_ctx.allocator == &alloc_old,
                    "expected some stuff %d", &alloc_old);
-  valk_thread_ctx.allocator = nullptr;
+
+  valk_thread_ctx = ctxBackup;
   VALK_PASS();
 }
 
@@ -115,11 +118,6 @@ int main(int argc, const char **argv) {
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
-// TODO(networking): Something blows malloc away from the context, meaning its
-// not properly reset
-#if 1
-  valk_mem_init_malloc();
-#endif
   valk_testsuite_free(suite);
 
   return res;
