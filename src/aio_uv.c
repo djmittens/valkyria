@@ -62,9 +62,6 @@ typedef struct __http2_connect_req {
   valk_aio_http2_client *client;
 } __http2_connect_req;
 
-static __thread valk_slab_t *tcp_connection_slab;
-static __thread valk_slab_t *tcp_request_arena_slab;
-
 static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
                                const uv_buf_t *buf);
 void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
@@ -74,6 +71,8 @@ void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
   buf->base = (char *)valk_slab_aquire(tcp_buffer_slab)->data;
   buf->len = suggested_size;
 }
+
+static __thread valk_slab_t *tcp_request_arena_slab;
 
 typedef struct valk_aio_task {
   valk_arc_box *arg;
@@ -117,9 +116,10 @@ typedef struct valk_aio_http_server {
   uv_loop_t *eventloop;
   SSL_CTX *ssl_ctx;
   uv_tcp_t listener;
-  char *interface;
+  char interface[200];
   int port;
   valk_http2_handler_t handler;
+  valk_slab_t *connectionSlab;
 } valk_aio_http_server;
 
 static void __event_loop(void *arg) {
@@ -127,15 +127,12 @@ static void __event_loop(void *arg) {
   valk_mem_init_malloc();
   printf("Allocating some shit\n");
   tcp_buffer_slab = valk_slab_new(HTTP_SLAB_ITEM_SIZE, HTTP_MAX_IO_REQUESTS);
-  tcp_connection_slab =
-      valk_slab_new(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
   tcp_request_arena_slab =
       valk_slab_new(HTTP_MAX_REQUEST_SIZE_BYTES, HTTP_MAX_CONCURRENT_REQUESTS);
 
   uv_run(sys->eventloop, UV_RUN_DEFAULT);
 
   valk_slab_free(tcp_buffer_slab);
-  valk_slab_free(tcp_connection_slab);
   valk_slab_free(tcp_request_arena_slab);
 }
 
@@ -150,7 +147,6 @@ static void __task_cb(uv_async_t *handle) {
   }
   uv_mutex_unlock(&sys->taskLock);
 }
-
 
 static void __uv_http_on_tcp_disconnect_cb(uv_handle_t *handle) {
   // TODO(networking): tecnically dont need an allocation here, can probably
@@ -586,7 +582,7 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
 
   valk_aio_http_server *srv = server->data;
   // Init the arena
-  valk_mem_arena_t *arena = (void *)valk_slab_aquire(tcp_connection_slab)->data;
+  valk_mem_arena_t *arena = (void *)valk_slab_aquire(srv->connectionSlab)->data;
   valk_mem_arena_init(arena,
                       HTTP_MAX_CONNECTION_HEAP - sizeof(valk_mem_arena_t));
 
@@ -687,7 +683,7 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
     uv_close((uv_handle_t *)&conn->tcpHandle, __uv_http_on_tcp_disconnect_cb);
     // TODO(networking): should probably have a function for properly disposing
     // of the connection objects
-    valk_slab_release_ptr(tcp_connection_slab, conn->arena);
+    valk_slab_release_ptr(srv->connectionSlab, conn->arena);
   }
 }
 
@@ -700,6 +696,9 @@ static void __http_listen_cb(valk_aio_system *sys, valk_arc_box *box,
 
   r = uv_tcp_init(srv->eventloop, &srv->listener);
   uv_tcp_nodelay(&srv->listener, 1);
+
+  srv->connectionSlab =
+      valk_slab_new(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
 
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -778,7 +777,9 @@ valk_future *valk_aio_http2_listen(valk_aio_system *sys, const char *interface,
   valk_future *res = valk_future_new();
 
   srv->eventloop = sys->eventloop;
-  srv->interface = strdup(interface);
+
+  //srv->interface = strdup(interface);
+  strncpy(srv->interface, interface, 200);
   srv->port = port;
   srv->handler = *handler;
 
