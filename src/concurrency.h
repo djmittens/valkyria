@@ -86,7 +86,7 @@
       /* Only free using the allocator if a custom one is not defined*/        \
       if ((ref)->free) {                                                       \
         (ref)->free(ref);                                                      \
-      } else {                                                                 \
+      } else if ((ref)->allocator) {                                           \
         valk_mem_allocator_free((ref)->allocator, (ref));                      \
       }                                                                        \
     } else {                                                                   \
@@ -106,6 +106,7 @@ typedef struct valk_arc_box {
 } valk_arc_box;
 
 valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity);
+void valk_arc_box_init(valk_arc_box *self, valk_res_t type, size_t capacity);
 
 valk_arc_box *valk_arc_box_err(const char *msg);
 

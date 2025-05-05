@@ -7,6 +7,7 @@
 
 #include "collections.h"
 #include "memory.h"
+#include "common.h"
 
 #define SEC_TO_MS(sec) ((sec) * 1000)
 #define SEC_TO_US(sec) ((sec) * 1000000)

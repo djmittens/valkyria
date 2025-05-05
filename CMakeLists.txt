@@ -104,3 +104,6 @@ add_executable(test_concurrency test/test_concurrency.c test/testing.c)
 target_link_libraries(test_concurrency PRIVATE "-lc" valkyria)
 include_directories(test_concurrency src/)
 
+add_executable(test_memory test/test_memory.c test/testing.c)
+target_link_libraries(test_memory PRIVATE "-lc" valkyria)
+include_directories(test_memory src/)

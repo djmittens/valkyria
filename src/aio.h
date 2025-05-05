@@ -18,20 +18,20 @@
 /* // Network TO Host Long */
 /* void ntohl(void); */
 
-typedef struct valk_aio_system valk_aio_system;
+typedef struct valk_aio_system valk_aio_system_t;
 typedef struct valk_aio_socket valk_aio_socket;
 
 typedef struct valk_aio_http_server valk_aio_http_server;
 typedef struct valk_aio_http2_client valk_aio_http2_client;
 typedef struct valk_aio_http_conn valk_aio_http_conn;
 
-char *valk_client_demo(valk_aio_system *sys, const char *domain,
+char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
                        const char *port);
 
-valk_aio_system *valk_aio_start();
-void valk_aio_stop(valk_aio_system *sys);
+valk_aio_system_t *valk_aio_start();
+void valk_aio_stop(valk_aio_system_t *sys);
 
-valk_future *valk_aio_read_file(valk_aio_system *sys, const char *filename);
+valk_future *valk_aio_read_file(valk_aio_system_t *sys, const char *filename);
 
 typedef struct {
   char *body;
@@ -59,19 +59,23 @@ typedef struct {
 /// @param[in] sys the aio system that will run the shit
 /// @return returns a future with a boxed `valk_aio_http2_server`
 ///
-valk_future *valk_aio_http2_listen(valk_aio_system *sys, const char *interface,
+valk_future *valk_aio_http2_listen(valk_aio_system_t *sys, const char *interface,
                                    const int port, const char *keyfile,
                                    const char *certfile,
                                    valk_http2_handler_t *handler);
 
+/// @return returns a future with a boxed `unit`
+///
+valk_future *valk_aio_http2_shutdown(valk_aio_http_server *srv);
+
 ///
 /// @return returns a future with a boxed `valk_aio_http2_client`
 ///
-valk_future *valk_aio_http2_connect(valk_aio_system *sys, const char *interface,
+valk_future *valk_aio_http2_connect(valk_aio_system_t *sys, const char *interface,
                                     const int port, const char *certfile);
 
 ///
 /// @return future with a boxed `void`
 ///
-valk_future *valk_aio_http2_disconnect(valk_aio_system *sys,
+valk_future *valk_aio_http2_disconnect(valk_aio_system_t *sys,
                                        valk_arc_box *conn);

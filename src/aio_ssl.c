@@ -9,6 +9,10 @@
 void *__CRYPTO_malloc_fn(size_t num, const char *file, int line) {
   UNUSED(file);
   UNUSED(line);
+  if(valk_thread_ctx.allocator == nullptr) {
+    // This is a hack as some openssl (cough macos cough) use internal threads
+    valk_mem_init_malloc();
+  }
   return valk_mem_alloc(num);
 }
 

@@ -50,18 +50,10 @@ static inline size_t __valk_mem_align_up(size_t x, size_t A) {
   return (x + A - 1) & ~(A - 1);
 }
 
-static inline size_t __valk_slab_item_size(valk_slab_t *self) {
-  return __valk_mem_align_up(sizeof(valk_slab_item_t) + self->itemSize,
-                             alignof(max_align_t));
-}
-
 valk_slab_t *valk_slab_new(size_t itemSize, size_t numItems) {
-  size_t stride = (sizeof(size_t) + sizeof(valk_slab_item_t) + itemSize);
-  stride = __valk_mem_align_up(stride, alignof(max_align_t));
-  const size_t freelen = sizeof(size_t) * numItems; // guranteed alignment
-
-  valk_slab_t *res =
-      valk_mem_alloc(sizeof(valk_slab_t) + freelen + (stride * numItems));
+  size_t slabSize = valk_slab_size(itemSize, numItems);
+  printf("Calculating slab size to be %ld\n", slabSize);
+  valk_slab_t *res = valk_mem_alloc(slabSize);
   valk_slab_init(res, itemSize, numItems);
   return res;
 }
@@ -74,19 +66,34 @@ void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
   self->numItems = numItems;
   self->numFree = numItems;
 
-  const size_t itemlen = __valk_slab_item_size(self);
+  const size_t stride = valk_slab_item_stride(itemSize);
   const size_t freelen = sizeof(size_t) * numItems;
 
   for (size_t i = 0; i < numItems; i++) {
     ((size_t *)self->heap)[i] = i;
     valk_slab_item_t *item =
-        (valk_slab_item_t *)&((self->heap)[(freelen) + (itemlen * i)]);
+        (valk_slab_item_t *)&((self->heap)[(freelen) + (stride * i)]);
     item->handle = i;
   }
 }
 
 // TODO(networking): do we even need this? might be useful for debugging
 void valk_slab_free(valk_slab_t *self) { valk_mem_free(self); }
+
+size_t valk_slab_item_stride(size_t itemSize) {
+  // TODO(networking): when implementing AVX or other instruciton sets might
+  // need to expand alignment parameters
+  return __valk_mem_align_up(sizeof(valk_slab_item_t) + itemSize,
+                             alignof(max_align_t));
+}
+
+size_t valk_slab_size(size_t itemSize, size_t numItems) {
+  size_t stride = valk_slab_item_stride(itemSize);
+  printf("Calculated stride %ld\n", stride);
+  const size_t freelen = sizeof(size_t) * numItems; // guranteed alignment
+
+  return sizeof(valk_slab_t) + freelen + (stride * numItems);
+}
 
 valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   if (self->numFree <= 0) {
@@ -101,7 +108,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
 
   // Lookup this item in the slab and return
   const size_t freeLen = (sizeof(size_t) * self->numItems);
-  const size_t itemsLen = __valk_slab_item_size(self) * offset;
+  const size_t itemsLen = valk_slab_item_stride(self->itemSize) * offset;
 
   valk_slab_item_t *res = (void *)&((char *)self->heap)[freeLen + itemsLen];
   printf("Aquiring slab: %ld :: idx : %ld : swap %ld\n", res->handle, offset,

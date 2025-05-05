@@ -1,10 +1,7 @@
 #pragma once
 
-#include "common.h"
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #define VALK_WITH_CTX(_ctx_)                                                   \
   for (struct {                                                                \
@@ -34,7 +31,7 @@
 #define valk_mem_free(__ptr)                                                   \
   valk_mem_allocator_free(valk_thread_ctx.allocator, __ptr)
 
-/* generic helper, same as Linux kernel’s container_of */
+/// generic helper, same as Linux kernel’s container_of 
 #define valk_container_of(ptr, type, member)                                   \
   ((type *)((char *)(ptr) - offsetof(type, member)))
 
@@ -69,7 +66,7 @@ typedef struct {
   uint8_t data[];
 } valk_slab_item_t;
 
-typedef struct {
+typedef struct { // extends valk_mem_allocator_t;
   valk_mem_allocator_e type;
   size_t itemSize;
   size_t numItems;
@@ -85,12 +82,26 @@ void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems);
 
 void valk_slab_free(valk_slab_t *self);
 
+/// @brief estimate the amount of bytes that are needed to contain the entire
+/// slab
+/// @return the total size that should be allocated, to initialize slab
+size_t valk_slab_size(size_t itemSize, size_t numItems);
+
+/// @brief estimate the the total chunk size in bytes of each item in the array
+///
+/// this is useful in cases where one would want to iterate over the chunks or
+/// perhaps access a chunk at a particular offset
+/// @param itemSize the concrete size of item without padding or headers
+/// @return the actual size of the the item in memory including padding and
+/// headers
+size_t valk_slab_item_stride(size_t itemSize);
+
 valk_slab_item_t *valk_slab_aquire(valk_slab_t *self);
 
 void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item);
 void valk_slab_release_ptr(valk_slab_t *self, void *data);
 
-typedef struct {
+typedef struct { // extends valk_mem_allocator_t;
   valk_mem_allocator_e type;
   size_t capacity;
   size_t offset;

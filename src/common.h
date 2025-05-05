@@ -1,5 +1,6 @@
 #pragma once
 #include <signal.h>
+#include <sys/types.h>
 
 #define UNUSED(x) ({ (void)x; })
 
@@ -28,3 +29,4 @@ typedef enum {
   VALK_ERR_SSL_READ,
   VALK_ERR_SSL_ENCRYPT,
 } valk_err_e;
+

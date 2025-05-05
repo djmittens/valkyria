@@ -1,5 +1,8 @@
 #include "concurrency.h"
 #include "collections.h"
+#include "memory.h"
+#include "common.h"
+
 #define _GNU_SOURCE
 #include <errno.h>
 #include <pthread.h>
@@ -7,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "memory.h"
+
 
 const int VALK_NUM_WORKERS = 4;
 
@@ -33,16 +36,19 @@ const int VALK_NUM_WORKERS = 4;
 
 valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity) {
   valk_arc_box *res = valk_mem_alloc(sizeof(valk_arc_box) + capacity);
-  res->type = type;
-  res->refcount = 1;
-  res->capacity = capacity;
-  res->item = &((char *)res)[sizeof(valk_arc_box)];
-
-  res->free = nullptr;
+  valk_arc_box_init(res, type, capacity);
   __assert_thread_safe_allocator();
   res->allocator = valk_thread_ctx.allocator;
-
   return res;
+}
+
+void valk_arc_box_init(valk_arc_box *self, valk_res_t type, size_t capacity) {
+  self->type = type;
+  self->refcount = 1;
+  self->capacity = capacity;
+  self->item = &((char *)self)[sizeof(valk_arc_box)];
+  self->allocator = nullptr;
+  self->free = nullptr;
 }
 
 valk_arc_box *valk_arc_box_err(const char *msg) {

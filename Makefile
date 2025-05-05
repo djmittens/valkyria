@@ -1,6 +1,6 @@
 UNAME := $(shell uname -s)
 ifeq ($(UNAME), Linux)
-	CMAKE= cmake -G Ninja -DASAN=1 -DCMAKE_BUILD_TYPE=Debug -S . -B build ;
+	CMAKE= cmake -G Ninja -DASAN=0 -DCMAKE_BUILD_TYPE=Debug -S . -B build ;
 endif
 ifeq ($(UNAME), Darwin)
 	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DCMAKE_BUILD_TYPE=Debug -S . -B build;
@@ -68,8 +68,17 @@ debug: debug
 	#lldb -o "run" build/repl src/prelude.valk
 	lldb build/repl src/prelude.valk
 
+.ONESHELL:
+.PHONY: asan
+asan: build
+	export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
+	export LSAN_OPTIONS=verbosity=1:log_threads=1
+	build/test_networking && echo "exit code = $?"
+
 .PHONY: test
 test: build
 	build/test_std &&\
+	build/test_memory &&\
 	build/test_networking&&\
-	build/test_concurrency\
+	build/test_concurrency
+
