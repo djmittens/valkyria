@@ -1,7 +1,7 @@
 #include "concurrency.h"
 #include "collections.h"
-#include "memory.h"
 #include "common.h"
+#include "memory.h"
 
 #define _GNU_SOURCE
 #include <errno.h>
@@ -9,8 +9,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-
 
 const int VALK_NUM_WORKERS = 4;
 
@@ -21,8 +19,8 @@ const int VALK_NUM_WORKERS = 4;
   // keeping it simple for now
 #define __assert_thread_safe_allocator()                                       \
   do {                                                                         \
-    static valk_mem_allocator_e supported[] = {VALK_ALLOC_MALLOC,              \
-                                               VALK_ALLOC_ARENA};              \
+    static valk_mem_allocator_e supported[] = {                                \
+        VALK_ALLOC_MALLOC, VALK_ALLOC_SLAB, VALK_ALLOC_ARENA};                \
     bool found = 0;                                                            \
     for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) {    \
       if (supported[i] == valk_thread_ctx.allocator->type) {                   \
@@ -30,7 +28,7 @@ const int VALK_NUM_WORKERS = 4;
       }                                                                        \
     }                                                                          \
     VALK_ASSERT(                                                               \
-        found, "Current Allocator Context is not supported: %s",               \
+        found, "Current context is not thread safe: %s",                       \
         valk_mem_allocator_e_to_string(valk_thread_ctx.allocator->type));      \
   } while (0)
 

@@ -32,6 +32,7 @@
   valk_mem_allocator_free(valk_thread_ctx.allocator, __ptr)
 
 /// generic helper, same as Linux kernel’s container_of 
+/// @return the ptr of the right type
 #define valk_container_of(ptr, type, member)                                   \
   ((type *)((char *)(ptr) - offsetof(type, member)))
 
