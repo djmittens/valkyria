@@ -120,13 +120,15 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
 void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
   // find the slab handle
   for (size_t i = 0; i < self->numItems; ++i) {
-    const size_t  handle = ((size_t *)self->heap)[i];
+    const size_t handle = ((size_t *)self->heap)[i];
 
     if (handle == item->handle) {
+      const size_t target = self->numFree;
       // Swap it out with a stale one
-      printf("Releasing slab: %ld : swaping with %ld\n", item->handle, handle);
-      ((size_t *)self->heap)[i] = ((size_t *)self->heap)[self->numFree - 1];
-      ((size_t *)self->heap)[self->numFree - 1] = handle;
+      printf("Releasing slab: %ld [idx: %ld]: swaping with %ld[idx: %ld]\n",
+             item->handle, i, ((size_t *)self->heap)[target], target);
+      ((size_t *)self->heap)[i] = ((size_t *)self->heap)[target];
+      ((size_t *)self->heap)[target] = handle;
       ++self->numFree;
       return;
     }
