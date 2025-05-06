@@ -1,8 +1,11 @@
 #include "memory.h"
 #include "common.h"
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define VALK_SLAB_TRIBER
 
 __thread valk_thread_context_t valk_thread_ctx = {nullptr};
 
@@ -49,6 +52,19 @@ int valk_buffer_is_full(valk_buffer_t *buf) {
 static inline size_t __valk_mem_align_up(size_t x, size_t A) {
   return (x + A - 1) & ~(A - 1);
 }
+static inline valk_slab_item_t *valk_slab_item_at(valk_slab_t *self,
+                                                  size_t offset) {
+
+#ifdef VALK_SLAB_TRIBER
+  // No free list in concurrency
+  const size_t freeLen = 0;
+#else
+  const size_t freeLen = (sizeof(size_t) * self->numItems);
+#endif
+  const size_t itemsLen = valk_slab_item_stride(self->itemSize) * offset;
+
+  return (void *)&((char *)self->heap)[freeLen + itemsLen];
+}
 
 valk_slab_t *valk_slab_new(size_t itemSize, size_t numItems) {
   size_t slabSize = valk_slab_size(itemSize, numItems);
@@ -64,18 +80,25 @@ void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
 
   self->itemSize = itemSize;
   self->numItems = numItems;
-  self->numFree = numItems;
 
-  const size_t stride = valk_slab_item_stride(itemSize);
-  const size_t freelen = sizeof(size_t) * numItems;
+  atomic_init(&self->numFree, numItems);
+  atomic_init(&self->top, nullptr);
 
+  valk_slab_item_t *prev = nullptr;
   for (size_t i = 0; i < numItems; i++) {
-    ((size_t *)self->heap)[i] = i;
-    valk_slab_item_t *item =
-        (valk_slab_item_t *)&((self->heap)[(freelen) + (stride * i)]);
+
+    valk_slab_item_t *item = valk_slab_item_at(self, i);
     item->handle = i;
+#ifdef VALK_SLAB_TRIBER // Treiber list
+    atomic_init(&item->next, prev);
+    prev = item;
+#else
+    ((size_t *)self->heap)[i] = i;
+#endif
   }
+  atomic_store_explicit(&self->top, prev, memory_order_relaxed);
 }
+
 
 // TODO(networking): do we even need this? might be useful for debugging
 void valk_slab_free(valk_slab_t *self) { valk_mem_free(self); }
@@ -99,7 +122,21 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   VALK_ASSERT(self->numFree > 0,
               "Attempted to aquire, when the slab is already full",
               self->numFree);
+  valk_slab_item_t *res;
+#ifdef VALK_SLAB_TRIBER // Threadsafe
+    valk_slab_item_t *head;
+    valk_slab_item_t *next;
 
+    do {
+        head = atomic_load_explicit(&self->top, memory_order_acquire);
+        if (!head) return NULL;
+        next = atomic_load_explicit(&head->next, memory_order_acquire);
+    } while (!atomic_compare_exchange_weak_explicit(&self->top, &head, next,
+                                                   memory_order_acq_rel, memory_order_relaxed));
+
+    atomic_fetch_sub_explicit(&self->numFree, 1, memory_order_relaxed);
+    return head;
+#else // Not threadsafe
   // pop  free item
   size_t offset = ((size_t *)self->heap)[0];
   ((size_t *)self->heap)[0] = ((size_t *)self->heap)[self->numFree - 1];
@@ -110,14 +147,26 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   const size_t freeLen = (sizeof(size_t) * self->numItems);
   const size_t itemsLen = valk_slab_item_stride(self->itemSize) * offset;
 
-  valk_slab_item_t *res = (void *)&((char *)self->heap)[freeLen + itemsLen];
+  res = (void *)&((char *)self->heap)[freeLen + itemsLen];
   const size_t swapTo = ((size_t *)self->heap)[0];
   printf("Aquiring slab: %ld :: idx : %ld : swap %ld\n", res->handle, offset,
          swapTo);
+#endif
   return res;
 }
 
 void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
+#if 1
+    valk_slab_item_t *head;
+
+    do {
+        head = atomic_load_explicit(&self->top, memory_order_acquire);
+        atomic_store_explicit(&item->next, head, memory_order_relaxed);
+    } while (!atomic_compare_exchange_weak_explicit(&self->top, &head, item,
+                                                   memory_order_acq_rel, memory_order_relaxed));
+
+    atomic_fetch_add_explicit(&self->numFree, 1, memory_order_relaxed);
+#else
   // find the slab handle
   for (size_t i = 0; i < self->numItems; ++i) {
     const size_t handle = ((size_t *)self->heap)[i];
@@ -133,9 +182,10 @@ void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
       return;
     }
   }
-
   VALK_RAISE("Hey man, the slab item you tried to release was bullshit %ld",
              item->handle);
+#endif
+
   // Swap it in as free
 }
 

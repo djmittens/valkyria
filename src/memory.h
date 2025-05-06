@@ -31,7 +31,7 @@
 #define valk_mem_free(__ptr)                                                   \
   valk_mem_allocator_free(valk_thread_ctx.allocator, __ptr)
 
-/// generic helper, same as Linux kernel’s container_of 
+/// generic helper, same as Linux kernel’s container_of
 /// @return the ptr of the right type
 #define valk_container_of(ptr, type, member)                                   \
   ((type *)((char *)(ptr) - offsetof(type, member)))
@@ -59,8 +59,9 @@ void valk_buffer_alloc(valk_buffer_t *buf, size_t capacity);
 void valk_buffer_append(valk_buffer_t *buf, void *bytes, size_t len);
 int valk_buffer_is_full(valk_buffer_t *buf);
 
-typedef struct {
+typedef struct valk_slab_item_t {
   size_t handle;
+  _Atomic(struct valk_slab_item_t *) next;
   // size_t size; // todo(networking): i should add this to the layout if i need
   // it. i dont think this will ever be useful tho, so save a few bytes of
   // overhead
@@ -71,11 +72,13 @@ typedef struct { // extends valk_mem_allocator_t;
   valk_mem_allocator_e type;
   size_t itemSize;
   size_t numItems;
-  size_t numFree;
+  _Atomic size_t numFree;
+  // treiber list top
+  _Atomic(valk_slab_item_t *) top;
   // Memory layout
   // [sizeof(size_t) * numSlabs | freeList]
   // [sizeof(valk_slab_t + (size_t * numSlabs)) * capacity | slabs]
-  uint8_t heap[];
+  _Atomic uint8_t heap[];
 } valk_slab_t;
 
 valk_slab_t *valk_slab_new(size_t itemSize, size_t numItems);
