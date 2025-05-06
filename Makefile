@@ -82,3 +82,6 @@ test: build
 	build/test_networking&&\
 	build/test_concurrency
 
+.PHONY: todo
+todo:
+	rg "TODO\($(shell git rev-parse --abbrev-ref HEAD)\)"

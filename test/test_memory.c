@@ -3,6 +3,7 @@
 #include "memory.h"
 #include "testing.h"
 #include <math.h>
+#include <pthread.h>
 #include <time.h>
 
 void test_implicit_alloc(VALK_TEST_ARGS()) {
@@ -28,24 +29,14 @@ void test_implicit_alloc(VALK_TEST_ARGS()) {
 }
 
 void test_slab_alloc(VALK_TEST_ARGS()) {
-  struct timespec ts;
-  timespec_get(&ts, TIME_UTC);
-  printf("Seeding rand with %ld\n", ts.tv_sec);
 
   const char msg[] = "Get fucked";
-
-  srand(1746481318);
-  // srand(ts.tv_sec);
 
   VALK_TEST();
 
   int itemLen = sizeof(valk_arc_box) + sizeof(msg);
   size_t numItems = rand() % 1000;
-  #if 0
-  valk_slab_t *slab = valk_slab_new(itemLen, numItems + 1);
-  #else
   valk_slab_t *slab = valk_slab_new(itemLen, numItems);
-  #endif
 
   valk_arc_box *boxes[numItems];
   size_t slabIds[numItems];
@@ -95,7 +86,7 @@ void test_slab_alloc(VALK_TEST_ARGS()) {
       if (boxes[reapId]) {
         printf("Reaping  box n: %ld : slabId: %ld\n", reapId, slabIds[reapId]);
 
-        if (1) {
+        if (rand() % 2) {
           valk_slab_release_ptr(slab, boxes[reapId]);
         } else {
           VALK_WITH_ALLOC((valk_mem_allocator_t *)slab) {
@@ -137,9 +128,174 @@ void test_slab_alloc(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+typedef struct {
+  size_t id;
+  valk_slab_t *slab;
+  valk_arc_box **boxes;
+  size_t numItems;
+  size_t rand;
+} shuffle_thread_arg_t;
+
+static size_t __next_thread_rand(size_t *state) {
+  // TODO(networking): i dont trust chatgpt what the heck does this do?
+  size_t x = *state;
+  x ^= x << 13;
+  x ^= x >> 17;
+  x ^= x << 5;
+  *state = x;
+  return x;
+}
+
+static void *_slab_shuffle_thread(void *arg) {
+
+  shuffle_thread_arg_t *params = arg;
+  size_t numBoxes = 0;
+  for (size_t j = 0; j < params->numItems; ++j) {
+    if (params->boxes[j] != nullptr) {
+      ++numBoxes;
+    }
+  }
+  printf("[T%ld] Starting service thread with %ld boxes \n", params->id,
+         numBoxes);
+
+  // lets get to it
+  valk_arc_box *myBoxes[numBoxes];
+  for (size_t j = 0, remBoxes = numBoxes; j < params->numItems; ++j) {
+    if (params->boxes[j] != nullptr) {
+      myBoxes[remBoxes--] = params->boxes[j];
+    }
+  }
+
+  for (size_t iteration = __next_thread_rand(&params->rand) % 100;
+       iteration > 0; --iteration) {
+    // randomly allocate / release the handles
+    size_t randomBox = (__next_thread_rand(&params->rand)) % numBoxes;
+    // Do something or skip it
+    if ((__next_thread_rand(&params->rand)) % 2) {
+
+      if (myBoxes[randomBox]) {
+        valk_slab_release_ptr(params->slab, myBoxes[randomBox]);
+        myBoxes[randomBox] = nullptr;
+      } else {
+        myBoxes[randomBox] =
+            (valk_arc_box *)valk_slab_aquire(params->slab)->data;
+      }
+    }
+
+    // TODO(networking): maybe should ald some logic to randomly pause for
+    // microsecs
+  }
+
+  return 0;
+}
+
+void test_slab_concurrency(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  const char msg[] = "Get fucked";
+  int itemLen = sizeof(valk_arc_box) + sizeof(msg);
+  size_t numItems = rand() % 1000;
+
+  valk_slab_t *slab = valk_slab_new(itemLen, numItems);
+
+  valk_arc_box *boxes[numItems];
+  printf("Aquiring %ld boxes\n", numItems);
+
+  size_t slabIds[numItems];
+
+  // allocate everything
+  for (size_t i = 0; i < numItems; ++i) {
+    if (rand() % 2) {
+      valk_slab_item_t *item = valk_slab_aquire(slab);
+      boxes[i] = (valk_arc_box *)item->data;
+      valk_arc_box_init(boxes[i], VALK_SUC, sizeof(msg));
+      boxes[i]->allocator = (valk_mem_allocator_t *)slab;
+      slabIds[i] = item->handle;
+    } else {
+      VALK_WITH_ALLOC((valk_mem_allocator_t *)slab) {
+        boxes[i] = valk_arc_box_new(VALK_SUC, sizeof(msg));
+        slabIds[i] =
+            valk_container_of(boxes[i], valk_slab_item_t, data)->handle;
+      }
+    }
+
+    printf("Aquired box i: %ld ::: slabId: %ld\n", i, slabIds[i]);
+    strncpy(boxes[i]->item, msg, sizeof(msg));
+  }
+  VALK_TEST_ASSERT(slab->numFree == 0, "Shit should be full %d", slab->numFree);
+
+  // Split the boxes randomly between threads
+  size_t numThreads = rand() % 10;
+  valk_arc_box *splitBoxes[numThreads][numItems];
+
+  for (size_t i = 0; i < numThreads; ++i) {
+    for (size_t j = 0; j < numItems; ++j) {
+      splitBoxes[i][j] = nullptr;
+    }
+  }
+
+  // TODO(networking): this is unix specific threading code using pthreads
+  // Eventually want to support windows so should replace it with my own
+  // conurrency
+
+  for (size_t i = 0; i < numItems; ++i) {
+    size_t tId = rand() % numThreads;
+    do {
+      size_t reapId = rand() % numItems;
+      if (boxes[reapId]) {
+        printf("Select  box n: %ld : slabId: %ld : Tid: %ld\n", reapId,
+               slabIds[reapId], tId);
+        splitBoxes[tId][reapId] = boxes[reapId];
+        boxes[reapId] = nullptr;
+        break;
+      }
+    } while (true);
+  }
+
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_t threadIds[numThreads];
+
+  shuffle_thread_arg_t args[numThreads];
+  for (size_t i = 0; i < numThreads; ++i) {
+    args[i].id = i;
+    args[i].boxes = splitBoxes[i];
+    args[i].slab = slab;
+    args[i].numItems = numItems;
+    args[i].rand = rand();
+
+    int res =
+        pthread_create(&threadIds[i], &attr, _slab_shuffle_thread, &args[i]);
+    if (res) {
+      printf("Failed creating thread [%ld]\n", i);
+    }
+  }
+
+  for (size_t i = 0; i < numThreads; ++i) {
+    void *foo;
+    pthread_join(threadIds[i], &foo);
+    VALK_TEST_ASSERT(foo == 0,
+                     "Expected the result of a thread to be success %d",
+                     (size_t)foo);
+  }
+
+  VALK_PASS();
+}
+
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
+
+  size_t seed;
+#if 1
+  seed = 1746502782; // 8 threads with 1000 items
+#else
+  struct timespec ts;
+  timespec_get(&ts, TIME_UTC);
+  seed = ts.tv_sec;
+#endif
+  srand(seed);
+  printf("Seeding rand with %ld\n", seed);
 
   // Use malloc for now, by default
   // probably should think of how to add this by default everywhere
@@ -150,6 +306,8 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_implicit_alloc", test_implicit_alloc);
 
   valk_testsuite_add_test(suite, "test_slab_alloc", test_slab_alloc);
+  valk_testsuite_add_test(suite, "test_slab_concurrency",
+                          test_slab_concurrency);
   // load fixtures
   // valk_lval_t *ast = valk_parse_file("src/prelude.valk");
   // valk_lenv_t *env = valk_lenv_empty();
