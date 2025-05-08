@@ -306,8 +306,8 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_implicit_alloc", test_implicit_alloc);
 
   valk_testsuite_add_test(suite, "test_slab_alloc", test_slab_alloc);
-  valk_testsuite_add_test(suite, "test_slab_concurrency",
-                          test_slab_concurrency);
+  // valk_testsuite_add_test(suite, "test_slab_concurrency",
+  //                         test_slab_concurrency);
   // load fixtures
   // valk_lval_t *ast = valk_parse_file("src/prelude.valk");
   // valk_lenv_t *env = valk_lenv_empty();

@@ -61,7 +61,7 @@ int valk_buffer_is_full(valk_buffer_t *buf);
 
 typedef struct valk_slab_item_t {
   size_t handle;
-  _Atomic(struct valk_slab_item_t *) next;
+  uint64_t next;
   // size_t size; // todo(networking): i should add this to the layout if i need
   // it. i dont think this will ever be useful tho, so save a few bytes of
   // overhead
@@ -72,13 +72,13 @@ typedef struct { // extends valk_mem_allocator_t;
   valk_mem_allocator_e type;
   size_t itemSize;
   size_t numItems;
-  _Atomic size_t numFree;
+  size_t numFree;
+  uint64_t head;
   // treiber list top
-  _Atomic(valk_slab_item_t *) top;
   // Memory layout
   // [sizeof(size_t) * numSlabs | freeList]
   // [sizeof(valk_slab_t + (size_t * numSlabs)) * capacity | slabs]
-  _Atomic uint8_t heap[];
+  uint8_t heap[];
 } valk_slab_t;
 
 valk_slab_t *valk_slab_new(size_t itemSize, size_t numItems);

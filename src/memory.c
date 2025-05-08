@@ -81,24 +81,20 @@ void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
   self->itemSize = itemSize;
   self->numItems = numItems;
 
-  atomic_init(&self->numFree, numItems);
-  atomic_init(&self->top, nullptr);
-
-  valk_slab_item_t *prev = nullptr;
   for (size_t i = 0; i < numItems; i++) {
 
     valk_slab_item_t *item = valk_slab_item_at(self, i);
     item->handle = i;
 #ifdef VALK_SLAB_TRIBER // Treiber list
-    atomic_init(&item->next, prev);
-    prev = item;
+    __atomic_store_n(&item->next, (i < numItems - 1) ? i + 1 : SIZE_MAX,
+                     __ATOMIC_RELAXED);
 #else
     ((size_t *)self->heap)[i] = i;
 #endif
   }
-  atomic_store_explicit(&self->top, prev, memory_order_relaxed);
+  __atomic_store_n(&self->head, 0, __ATOMIC_RELAXED);
+  __atomic_store_n(&self->numFree, numItems, __ATOMIC_RELAXED);
 }
-
 
 // TODO(networking): do we even need this? might be useful for debugging
 void valk_slab_free(valk_slab_t *self) { valk_mem_free(self); }
@@ -118,24 +114,37 @@ size_t valk_slab_size(size_t itemSize, size_t numItems) {
   return sizeof(valk_slab_t) + freelen + (stride * numItems);
 }
 
+static inline size_t __valk_slab_offset_unpack(uint64_t tag, size_t *version) {
+  *version = tag >> 32;
+  return tag & 0xFFFFFFFF;
+}
+
+static inline uint64_t __valk_slab_offset_pack(size_t offset, size_t version) {
+  return ((uint64_t)version << 32) | (offset & 0xFFFFFFFF);
+}
+
 valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   VALK_ASSERT(self->numFree > 0,
               "Attempted to aquire, when the slab is already full",
               self->numFree);
   valk_slab_item_t *res;
 #ifdef VALK_SLAB_TRIBER // Threadsafe
-    valk_slab_item_t *head;
-    valk_slab_item_t *next;
+  uint64_t oldTag, newTag;
+  size_t head, next, version;
+  do {
+    oldTag = __atomic_load_n(&self->head, __ATOMIC_ACQUIRE);
+    head = __valk_slab_offset_unpack(oldTag, &version);
+    VALK_ASSERT(head != SIZE_MAX, "Shits fully busy");
+    next =
+        __atomic_load_n(&valk_slab_item_at(self, head)->next, __ATOMIC_ACQUIRE);
+    newTag = __valk_slab_offset_pack(next, version + 1);
+  } while (!__atomic_compare_exchange_n(&self->head, &oldTag, newTag, false,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_RELAXED));
 
-    do {
-        head = atomic_load_explicit(&self->top, memory_order_acquire);
-        if (!head) return NULL;
-        next = atomic_load_explicit(&head->next, memory_order_acquire);
-    } while (!atomic_compare_exchange_weak_explicit(&self->top, &head, next,
-                                                   memory_order_acq_rel, memory_order_relaxed));
+  __atomic_fetch_sub(&self->numFree, 1, __ATOMIC_RELAXED);
 
-    atomic_fetch_sub_explicit(&self->numFree, 1, memory_order_relaxed);
-    return head;
+  return valk_slab_item_at(self, head);
+
 #else // Not threadsafe
   // pop  free item
   size_t offset = ((size_t *)self->heap)[0];
@@ -157,15 +166,18 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
 
 void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
 #if 1
-    valk_slab_item_t *head;
+  uint64_t oldTag, newTag;
+  size_t head, version;
+  do {
+    oldTag = __atomic_load_n(&self->head, __ATOMIC_ACQUIRE);
+    head = __valk_slab_offset_unpack(oldTag, &version);
+    __atomic_store_n(&item->next, head, __ATOMIC_ACQUIRE);
+    newTag = __valk_slab_offset_pack(item->handle, version + 1);
+  } while (!__atomic_compare_exchange_n(&self->head, &oldTag, newTag, false,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_RELAXED));
 
-    do {
-        head = atomic_load_explicit(&self->top, memory_order_acquire);
-        atomic_store_explicit(&item->next, head, memory_order_relaxed);
-    } while (!atomic_compare_exchange_weak_explicit(&self->top, &head, item,
-                                                   memory_order_acq_rel, memory_order_relaxed));
+  __atomic_fetch_add(&self->numFree, 1, __ATOMIC_RELAXED);
 
-    atomic_fetch_add_explicit(&self->numFree, 1, memory_order_relaxed);
 #else
   // find the slab handle
   for (size_t i = 0; i < self->numItems; ++i) {
