@@ -1,3 +1,4 @@
+#include "test_memory.h"
 #include "common.h"
 #include "concurrency.h"
 #include "memory.h"
@@ -147,7 +148,7 @@ static size_t __next_thread_rand(size_t *state) {
   return x;
 }
 
-static void *_slab_shuffle_thread(void *arg) {
+void *slab_shuffle_thread(void *arg) {
 
   shuffle_thread_arg_t *params = arg;
   size_t numBoxes = 0;
@@ -272,7 +273,7 @@ void test_slab_concurrency(VALK_TEST_ARGS()) {
     args[i].rand = rand();
 
     int res =
-        pthread_create(&threadIds[i], &attr, _slab_shuffle_thread, &args[i]);
+        pthread_create(&threadIds[i], &attr, slab_shuffle_thread, &args[i]);
     if (res) {
       printf("Failed creating thread [%ld]\n", i);
     }

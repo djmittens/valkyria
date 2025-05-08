@@ -1,11 +1,14 @@
 # This is title
 - [ ] Dictionaries
 - [x] Testing
+    - [x] C Runtime testing
+    - [ ] Native Language testing
 - [ ] Runtime Asserts
 - [ ] Remove Readline from repl
 - [ ] Memory
     - [ ] Arenas
-    - [ ] GC
+        - This can be supported by my threadsafe slab allocator
+    - [ ] GC? (do i need this part ?)
 - [ ] LLVM IR compiler
     - [ ] JIT
 - [ ] Regular Expressions
