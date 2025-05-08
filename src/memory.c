@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// #define VALK_SLAB_TRIBER
+#define VALK_SLAB_TREIBER_STACK
 
 __thread valk_thread_context_t valk_thread_ctx = {nullptr};
 
@@ -54,7 +54,7 @@ static inline size_t __valk_mem_align_up(size_t x, size_t A) {
 }
 static inline valk_slab_item_t *valk_slab_item_at(valk_slab_t *self,
                                                   size_t offset) {
-#ifdef VALK_SLAB_TRIBER
+#ifdef VALK_SLAB_TREIBER_STACK
   // No free list in concurrency
   const size_t freeLen = 0;
 #else
@@ -87,7 +87,7 @@ void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
 
     valk_slab_item_t *item = valk_slab_item_at(self, i);
     item->handle = i;
-#ifdef VALK_SLAB_TRIBER // Treiber list
+#ifdef VALK_SLAB_TREIBER_STACK // Treiber list
     __atomic_store_n(&item->next, (i < numItems - 1) ? i + 1 : SIZE_MAX,
                      __ATOMIC_RELAXED);
 #else
@@ -132,7 +132,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
               "Attempted to aquire, when the slab is already full",
               self->numFree);
   valk_slab_item_t *res;
-#ifdef VALK_SLAB_TRIBER // Threadsafe
+#ifdef VALK_SLAB_TREIBER_STACK // Threadsafe
   uint64_t oldTag, newTag;
   size_t head, next, version;
   do {
@@ -169,7 +169,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
 }
 
 void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
-#ifdef VALK_SLAB_TRIBER
+#ifdef VALK_SLAB_TREIBER_STACK
   uint64_t oldTag, newTag;
   size_t head, version;
   do {

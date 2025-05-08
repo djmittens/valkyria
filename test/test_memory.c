@@ -5,6 +5,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <time.h>
+#include <unistd.h>
 
 void test_implicit_alloc(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -155,8 +156,14 @@ static void *_slab_shuffle_thread(void *arg) {
       ++numBoxes;
     }
   }
-  printf("[T%ld] Starting service thread with %ld boxes \n", params->id,
-         numBoxes);
+  if (numBoxes > 0) {
+    printf("[T%ld] Starting service thread with %ld boxes \n", params->id,
+           numBoxes);
+
+  } else {
+    printf("[T%ld] Did not receive any boxes, shutting down\n", params->id);
+    return nullptr;
+  }
 
   // lets get to it
   valk_arc_box *myBoxes[numBoxes];
@@ -225,8 +232,7 @@ void test_slab_concurrency(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(slab->numFree == 0, "Shit should be full %d", slab->numFree);
 
   // Split the boxes randomly between threads
-  size_t numThreads =
-      1 + rand() % 10; // must have at least 1 thread... like cmon
+  size_t numThreads = 1 + rand() % 10;
   valk_arc_box *splitBoxes[numThreads][numItems];
 
   for (size_t i = 0; i < numThreads; ++i) {
@@ -288,11 +294,12 @@ int main(int argc, const char **argv) {
   UNUSED(argv);
 
   size_t seed;
-#if 1
+#if 0
   // seed = 1746502782; // 8 threads with 1000 items
   // seed = 1746685013; // floating point exception
   seed = 1746685993; // crashig singlethreaded
 #else
+
   struct timespec ts;
   timespec_get(&ts, TIME_UTC);
   seed = ts.tv_sec;
