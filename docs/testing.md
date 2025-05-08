@@ -26,3 +26,6 @@ implement whatever features i need
     - Test should be reproducible and random see should be configured globally
     for the run for it to be reproducible.
     - should be passable through the test harness arguments
+- [ ] Support for regression seeds, to be run at every test run
+- [ ] My own random algorithm to make tests extra deterministic across
+    platforms
