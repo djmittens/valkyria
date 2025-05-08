@@ -162,8 +162,8 @@ static void *_slab_shuffle_thread(void *arg) {
   valk_arc_box *myBoxes[numBoxes];
   for (size_t j = 0, remBoxes = numBoxes; j < params->numItems; ++j) {
     if (params->boxes[j] != nullptr) {
-      myBoxes[remBoxes--] = params->boxes[j];
-    }
+      myBoxes[--remBoxes] = params->boxes[j];
+    }  
   }
 
   for (size_t iteration = __next_thread_rand(&params->rand) % 100;
@@ -173,12 +173,12 @@ static void *_slab_shuffle_thread(void *arg) {
     // Do something or skip it
     if ((__next_thread_rand(&params->rand)) % 2) {
 
-      if (myBoxes[randomBox]) {
-        valk_slab_release_ptr(params->slab, myBoxes[randomBox]);
-        myBoxes[randomBox] = nullptr;
-      } else {
+      if (myBoxes[randomBox] == nullptr) {
         myBoxes[randomBox] =
             (valk_arc_box *)valk_slab_aquire(params->slab)->data;
+      } else {
+        valk_slab_release_ptr(params->slab, myBoxes[randomBox]);
+        myBoxes[randomBox] = nullptr;
       }
     }
 
@@ -242,7 +242,7 @@ void test_slab_concurrency(VALK_TEST_ARGS()) {
     size_t tId = rand() % numThreads;
     do {
       size_t reapId = rand() % numItems;
-      if (boxes[reapId]) {
+      if (boxes[reapId] != nullptr) {
         printf("Select  box n: %ld : slabId: %ld : Tid: %ld\n", reapId,
                slabIds[reapId], tId);
         splitBoxes[tId][reapId] = boxes[reapId];
@@ -288,7 +288,8 @@ int main(int argc, const char **argv) {
 
   size_t seed;
 #if 1
-  seed = 1746502782; // 8 threads with 1000 items
+  // seed = 1746502782; // 8 threads with 1000 items
+  seed = 1746685013; // floating point exception
 #else
   struct timespec ts;
   timespec_get(&ts, TIME_UTC);
@@ -306,8 +307,8 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_implicit_alloc", test_implicit_alloc);
 
   valk_testsuite_add_test(suite, "test_slab_alloc", test_slab_alloc);
-  // valk_testsuite_add_test(suite, "test_slab_concurrency",
-  //                         test_slab_concurrency);
+  valk_testsuite_add_test(suite, "test_slab_concurrency",
+                          test_slab_concurrency);
   // load fixtures
   // valk_lval_t *ast = valk_parse_file("src/prelude.valk");
   // valk_lenv_t *env = valk_lenv_empty();

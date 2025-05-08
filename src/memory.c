@@ -54,7 +54,6 @@ static inline size_t __valk_mem_align_up(size_t x, size_t A) {
 }
 static inline valk_slab_item_t *valk_slab_item_at(valk_slab_t *self,
                                                   size_t offset) {
-
 #ifdef VALK_SLAB_TRIBER
   // No free list in concurrency
   const size_t freeLen = 0;
@@ -63,6 +62,9 @@ static inline valk_slab_item_t *valk_slab_item_at(valk_slab_t *self,
 #endif
   const size_t itemsLen = valk_slab_item_stride(self->itemSize) * offset;
 
+  VALK_ASSERT(offset < self->numItems,
+              "Offset passed in is out of bounds offset: %ld  numItems %ld",
+              offset, self->numItems);
   return (void *)&((char *)self->heap)[freeLen + itemsLen];
 }
 
@@ -102,8 +104,10 @@ void valk_slab_free(valk_slab_t *self) { valk_mem_free(self); }
 size_t valk_slab_item_stride(size_t itemSize) {
   // TODO(networking): when implementing AVX or other instruciton sets might
   // need to expand alignment parameters
-  return __valk_mem_align_up(sizeof(valk_slab_item_t) + itemSize,
-                             alignof(max_align_t));
+  // alignof(max_align_t)  <<- is the minimal required
+  // 64 according to chatgpt is the cacheline alignment, which is better for
+  // slabs
+  return __valk_mem_align_up(sizeof(valk_slab_item_t) + itemSize, 64);
 }
 
 size_t valk_slab_size(size_t itemSize, size_t numItems) {
@@ -116,11 +120,11 @@ size_t valk_slab_size(size_t itemSize, size_t numItems) {
 
 static inline size_t __valk_slab_offset_unpack(uint64_t tag, size_t *version) {
   *version = tag >> 32;
-  return tag & 0xFFFFFFFF;
+  return tag & (size_t)UINT32_MAX;
 }
 
 static inline uint64_t __valk_slab_offset_pack(size_t offset, size_t version) {
-  return ((uint64_t)version << 32) | (offset & 0xFFFFFFFF);
+  return ((uint64_t)version << 32) | (offset & (size_t)UINT32_MAX);
 }
 
 valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
@@ -171,7 +175,7 @@ void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
   do {
     oldTag = __atomic_load_n(&self->head, __ATOMIC_ACQUIRE);
     head = __valk_slab_offset_unpack(oldTag, &version);
-    __atomic_store_n(&item->next, head, __ATOMIC_ACQUIRE);
+    __atomic_store_n(&item->next, head, __ATOMIC_RELEASE);
     newTag = __valk_slab_offset_pack(item->handle, version + 1);
   } while (!__atomic_compare_exchange_n(&self->head, &oldTag, newTag, false,
                                         __ATOMIC_ACQ_REL, __ATOMIC_RELAXED));
