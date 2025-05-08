@@ -163,7 +163,7 @@ static void *_slab_shuffle_thread(void *arg) {
   for (size_t j = 0, remBoxes = numBoxes; j < params->numItems; ++j) {
     if (params->boxes[j] != nullptr) {
       myBoxes[--remBoxes] = params->boxes[j];
-    }  
+    }
   }
 
   for (size_t iteration = __next_thread_rand(&params->rand) % 100;
@@ -225,7 +225,8 @@ void test_slab_concurrency(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(slab->numFree == 0, "Shit should be full %d", slab->numFree);
 
   // Split the boxes randomly between threads
-  size_t numThreads = rand() % 10;
+  size_t numThreads =
+      1 + rand() % 10; // must have at least 1 thread... like cmon
   valk_arc_box *splitBoxes[numThreads][numItems];
 
   for (size_t i = 0; i < numThreads; ++i) {
@@ -289,7 +290,8 @@ int main(int argc, const char **argv) {
   size_t seed;
 #if 1
   // seed = 1746502782; // 8 threads with 1000 items
-  seed = 1746685013; // floating point exception
+  // seed = 1746685013; // floating point exception
+  seed = 1746685993; // crashig singlethreaded
 #else
   struct timespec ts;
   timespec_get(&ts, TIME_UTC);

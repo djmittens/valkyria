@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define VALK_SLAB_TRIBER
+// #define VALK_SLAB_TRIBER
 
 __thread valk_thread_context_t valk_thread_ctx = {nullptr};
 
@@ -169,7 +169,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
 }
 
 void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
-#if 1
+#ifdef VALK_SLAB_TRIBER
   uint64_t oldTag, newTag;
   size_t head, version;
   do {
