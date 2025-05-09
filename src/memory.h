@@ -59,6 +59,20 @@ void valk_buffer_alloc(valk_buffer_t *buf, size_t capacity);
 void valk_buffer_append(valk_buffer_t *buf, void *bytes, size_t len);
 int valk_buffer_is_full(valk_buffer_t *buf);
 
+typedef struct {
+  size_t capacity;
+  size_t offset;
+  uint64_t items[];
+} valk_ring_t;
+
+/// @param[out] self buffer to initialize
+/// @param[in] capcity capacity of the ring buffer in bytes
+void valk_ring_init(valk_ring_t *self, size_t capacity);
+void valk_ring_append(valk_ring_t *self, uint8_t* data,  size_t len);
+
+// @brief print the contents of the buffer into a file
+void valk_ring_print(valk_ring_t *self, FILE* f);
+
 typedef struct valk_slab_item_t {
   size_t handle;
   uint64_t next;

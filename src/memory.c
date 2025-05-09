@@ -6,6 +6,7 @@
 #include <string.h>
 
 #define VALK_SLAB_TREIBER_STACK
+#define VALK_SLAB_VERSIONS
 
 __thread valk_thread_context_t valk_thread_ctx = {nullptr};
 
@@ -45,6 +46,26 @@ void valk_buffer_append(valk_buffer_t *buf, void *bytes, size_t len) {
 
 int valk_buffer_is_full(valk_buffer_t *buf) {
   return (buf->capacity - buf->count) == 0;
+}
+
+void valk_ring_init(valk_ring_t *self, size_t capacity) {
+  self->offset = 0;
+  self->capacity = capacity;
+  memset(self->items, 0, capacity);
+}
+
+void valk_ring_append(valk_ring_t *self, uint8_t *data, size_t len) {
+  const uint8_t *p = data;
+  while (len--) {
+    ((uint8_t *)self->items)[self->offset % self->capacity] = *p++;
+    self->offset++;
+  }
+}
+
+void valk_ring_print(valk_ring_t *self, FILE *f) {
+  fwrite(&((uint8_t *)self->items)[self->offset], 1,
+         self->capacity - self->offset, f);
+  fwrite(&((uint8_t *)self->items)[0], 1, self->offset, f);
 }
 
 /// helper: round x up to next multiple of A (A must be a power of two)
@@ -119,12 +140,20 @@ size_t valk_slab_size(size_t itemSize, size_t numItems) {
 }
 
 static inline size_t __valk_slab_offset_unpack(uint64_t tag, size_t *version) {
+#ifdef VALK_SLAB_VERSIONS
   *version = tag >> 32;
+#else
+  *version = 0;
+#endif
   return tag & (size_t)UINT32_MAX;
 }
 
 static inline uint64_t __valk_slab_offset_pack(size_t offset, size_t version) {
+#ifdef VALK_SLAB_VERSIONS
   return ((uint64_t)version << 32) | (offset & (size_t)UINT32_MAX);
+#else
+  return (offset & (size_t)UINT32_MAX);
+#endif
 }
 
 valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
