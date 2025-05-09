@@ -175,7 +175,7 @@ void *slab_shuffle_thread(void *arg) {
     }
   }
 
-  for (size_t iteration = __next_thread_rand(&params->rand) % 100;
+  for (size_t iteration = __next_thread_rand(&params->rand) % 1000000;
        iteration > 0; --iteration) {
     // randomly allocate / release the handles
     size_t randomBox = (__next_thread_rand(&params->rand)) % numBoxes;
