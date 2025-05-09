@@ -3,6 +3,8 @@
 For testing the C runtime, i have created a fun framework and now i get to
 implement whatever features i need
 
+- [ ] Capturing stderr / stdout only on failure tests
+    - Intercept these for the process, and only print it on error
 - [ ] Argument parsing and printing I would like to have proper argument
     support, i dont know how to implement it necessarily
 - [ ] Animated progress while running
@@ -13,8 +15,6 @@ implement whatever features i need
     - [ ] Accept random seed from user.
 - [ ] Sandboxed processes that can crash and report on segfaults.
 - [ ] Distributed workers (maybe even remote workers / runners?)
-- [ ] Capturing stderr / stdout only on failure tests
-    - Intercept these for the process, and only print it on error
 - [ ] Dynamic test conditions such that for parametrized tests we can stress,
     random numbers for a period and report on any failures found
     - For this specifically i would like to have 2 modes, fail fast and try X

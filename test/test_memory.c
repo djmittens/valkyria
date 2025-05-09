@@ -8,6 +8,8 @@
 #include <time.h>
 #include <unistd.h>
 
+const char *THREAD_FMT = "T%ldT%ldT%ld";
+
 void test_implicit_alloc(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_thread_context_t ctxBackup = valk_thread_ctx;
@@ -158,6 +160,7 @@ void *slab_shuffle_thread(void *arg) {
       ++numBoxes;
     }
   }
+
   if (numBoxes > 0) {
     printf("[T%ld] Starting service thread with %ld boxes \n", params->id,
            numBoxes);
@@ -175,17 +178,31 @@ void *slab_shuffle_thread(void *arg) {
     }
   }
 
+  int count =
+      snprintf(nullptr, 0, THREAD_FMT, params->id, params->id, params->id);
+  char msg[++count];
+  memset(msg, 0, count);
+  snprintf(msg, count, THREAD_FMT, params->id, params->id, params->id);
+
   for (size_t iteration = __next_thread_rand(&params->rand) % 1000000;
        iteration > 0; --iteration) {
     // randomly allocate / release the handles
     size_t randomBox = (__next_thread_rand(&params->rand)) % numBoxes;
+
     // Do something or skip it
     if ((__next_thread_rand(&params->rand)) % 2) {
 
       if (myBoxes[randomBox] == nullptr) {
         myBoxes[randomBox] =
             (valk_arc_box *)valk_slab_aquire(params->slab)->data;
+        strncpy(myBoxes[randomBox]->item, msg, count);
       } else {
+        // check if we have our message in this box, and then release it
+        if (strcmp(myBoxes[randomBox]->item, msg) != 0) {
+          printf("ERROR: Box did not contain our text: got: %s expected: %s\n",
+                 (char *)myBoxes[randomBox]->item, msg);
+          return (void *)1;
+        }
         valk_slab_release_ptr(params->slab, myBoxes[randomBox]);
         myBoxes[randomBox] = nullptr;
       }
@@ -255,6 +272,9 @@ void test_slab_concurrency(VALK_TEST_ARGS()) {
         printf("Select  box n: %ld : slabId: %ld : Tid: %ld\n", reapId,
                slabIds[reapId], tId);
         splitBoxes[tId][reapId] = boxes[reapId];
+        int count = snprintf(nullptr, 0, THREAD_FMT, tId, tId, tId);
+        snprintf(boxes[reapId]->item, count + 1, THREAD_FMT, tId, tId, tId);
+
         boxes[reapId] = nullptr;
         break;
       }
