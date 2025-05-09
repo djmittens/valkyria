@@ -151,70 +151,6 @@ static size_t __next_thread_rand(size_t *state) {
   return x;
 }
 
-void *slab_shuffle_thread(void *arg) {
-
-  shuffle_thread_arg_t *params = arg;
-  size_t numBoxes = 0;
-  for (size_t j = 0; j < params->numItems; ++j) {
-    if (params->boxes[j] != nullptr) {
-      ++numBoxes;
-    }
-  }
-
-  if (numBoxes > 0) {
-    printf("[T%ld] Starting service thread with %ld boxes \n", params->id,
-           numBoxes);
-
-  } else {
-    printf("[T%ld] Did not receive any boxes, shutting down\n", params->id);
-    return nullptr;
-  }
-
-  // lets get to it
-  valk_arc_box *myBoxes[numBoxes];
-  for (size_t j = 0, remBoxes = numBoxes; j < params->numItems; ++j) {
-    if (params->boxes[j] != nullptr) {
-      myBoxes[--remBoxes] = params->boxes[j];
-    }
-  }
-
-  int count =
-      snprintf(nullptr, 0, THREAD_FMT, params->id, params->id, params->id);
-  char msg[++count];
-  memset(msg, 0, count);
-  snprintf(msg, count, THREAD_FMT, params->id, params->id, params->id);
-
-  for (size_t iteration = __next_thread_rand(&params->rand) % 1000000;
-       iteration > 0; --iteration) {
-    // randomly allocate / release the handles
-    size_t randomBox = (__next_thread_rand(&params->rand)) % numBoxes;
-
-    // Do something or skip it
-    if ((__next_thread_rand(&params->rand)) % 2) {
-
-      if (myBoxes[randomBox] == nullptr) {
-        myBoxes[randomBox] =
-            (valk_arc_box *)valk_slab_aquire(params->slab)->data;
-        strncpy(myBoxes[randomBox]->item, msg, count);
-      } else {
-        // check if we have our message in this box, and then release it
-        if (strcmp(myBoxes[randomBox]->item, msg) != 0) {
-          printf("ERROR: Box did not contain our text: got: %s expected: %s\n",
-                 (char *)myBoxes[randomBox]->item, msg);
-          return (void *)1;
-        }
-        valk_slab_release_ptr(params->slab, myBoxes[randomBox]);
-        myBoxes[randomBox] = nullptr;
-      }
-    }
-
-    // TODO(networking): maybe should ald some logic to randomly pause for
-    // microsecs
-  }
-
-  return 0;
-}
-
 void test_slab_concurrency(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -360,4 +296,68 @@ int main(int argc, const char **argv) {
   valk_testsuite_free(suite);
 
   return res;
+}
+
+void *slab_shuffle_thread(void *arg) {
+
+  shuffle_thread_arg_t *params = arg;
+  size_t numBoxes = 0;
+  for (size_t j = 0; j < params->numItems; ++j) {
+    if (params->boxes[j] != nullptr) {
+      ++numBoxes;
+    }
+  }
+
+  if (numBoxes > 0) {
+    printf("[T%ld] Starting service thread with %ld boxes \n", params->id,
+           numBoxes);
+
+  } else {
+    printf("[T%ld] Did not receive any boxes, shutting down\n", params->id);
+    return nullptr;
+  }
+
+  // lets get to it
+  valk_arc_box *myBoxes[numBoxes];
+  for (size_t j = 0, remBoxes = numBoxes; j < params->numItems; ++j) {
+    if (params->boxes[j] != nullptr) {
+      myBoxes[--remBoxes] = params->boxes[j];
+    }
+  }
+
+  int count =
+      snprintf(nullptr, 0, THREAD_FMT, params->id, params->id, params->id);
+  char msg[++count];
+  memset(msg, 0, count);
+  snprintf(msg, count, THREAD_FMT, params->id, params->id, params->id);
+
+  for (size_t iteration = __next_thread_rand(&params->rand) % 1000000;
+       iteration > 0; --iteration) {
+    // randomly allocate / release the handles
+    size_t randomBox = (__next_thread_rand(&params->rand)) % numBoxes;
+
+    // Do something or skip it
+    if ((__next_thread_rand(&params->rand)) % 2) {
+
+      if (myBoxes[randomBox] == nullptr) {
+        myBoxes[randomBox] =
+            (valk_arc_box *)valk_slab_aquire(params->slab)->data;
+        strncpy(myBoxes[randomBox]->item, msg, count);
+      } else {
+        // check if we have our message in this box, and then release it
+        if (strcmp(myBoxes[randomBox]->item, msg) != 0) {
+          printf("ERROR: Box did not contain our text: got: %s expected: %s\n",
+                 (char *)myBoxes[randomBox]->item, msg);
+          return (void *)1;
+        }
+        valk_slab_release_ptr(params->slab, myBoxes[randomBox]);
+        myBoxes[randomBox] = nullptr;
+      }
+    }
+
+    // TODO(networking): maybe should ald some logic to randomly pause for
+    // microsecs
+  }
+
+  return 0;
 }

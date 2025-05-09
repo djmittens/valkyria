@@ -48,6 +48,26 @@ int valk_buffer_is_full(valk_buffer_t *buf) {
   return (buf->capacity - buf->count) == 0;
 }
 
+void valk_ring_init(valk_ring_t *self, size_t capacity) {
+  self->offset = 0;
+  self->capacity = capacity;
+  memset(self->items, 0, capacity);
+}
+
+void valk_ring_append(valk_ring_t *self, uint8_t *data, size_t len) {
+  const uint8_t *p = data;
+  while (len--) {
+    ((uint8_t *)self->items)[self->offset % self->capacity] = *p++;
+    self->offset++;
+  }
+}
+
+void valk_ring_print(valk_ring_t *self, FILE *f) {
+  fwrite(&((uint8_t *)self->items)[self->offset], 1,
+         self->capacity - self->offset, f);
+  fwrite(&((uint8_t *)self->items)[0], 1, self->offset, f);
+}
+
 /// helper: round x up to next multiple of A (A must be a power of two)
 /// return multiple of A
 static inline size_t __valk_mem_align_up(size_t x, size_t A) {
