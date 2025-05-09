@@ -3,8 +3,14 @@
 For testing the C runtime, i have created a fun framework and now i get to
 implement whatever features i need
 
+- [ ] Distributed test runner
+    - Using ipc be able to run other test artifacts
 - [ ] Argument parsing and printing I would like to have proper argument
     support, i dont know how to implement it necessarily
+- [ ] Globbing
+    -  Just a simple implementation to hold us over. And shit.
+- [ ] Central test runner
+- [ ] Filter tests based on a regular expression (and the name).
 - [ ] Animated progress while running
     - [ ] Can i detect the terminal, and if its used as stdin /stdout pipe,
     turn animations off
