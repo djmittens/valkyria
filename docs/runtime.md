@@ -5,6 +5,7 @@
     - [ ] Native Language testing
 - [ ] Runtime Asserts
 - [ ] Remove Readline from repl
+- [ ] Windows support
 - [ ] Memory
     - [ ] Arenas
         - This can be supported by my threadsafe slab allocator

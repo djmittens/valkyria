@@ -1,5 +1,6 @@
 #pragma once
 
+#include "memory.h"
 #include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -7,60 +8,57 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DISABLE_FORMAT_NONLITERAL                                              \
-  _Pragma("GCC diagnostic push")                                               \
+#define DISABLE_FORMAT_NONLITERAL \
+  _Pragma("GCC diagnostic push")  \
       _Pragma("GCC diagnostic ignored \"-Wformat-security\"")
 
 #define ENABLE_FORMAT_NONLITERAL _Pragma("GCC diagnostic pop")
 
-#define VALK_TEST_ARGS() valk_test_suite_t *_suite
+#define VALK_TEST_ARGS() valk_test_result_t *_result
 
-#define VALK_TEST()                                                            \
-  valk_test_result_t *_result = valk_testsuite_new_result(_suite, __func__);   \
-  _result->timePrecision = VALK_MICROS;                                        \
+#define VALK_TEST()                     \
+  _result->timePrecision = VALK_MICROS; \
   _result->startTime = valk_get_time(_result->timePrecision);
 
-#define VALK_PASS()                                                            \
-  do {                                                                         \
-    if (_result->type == VALK_TEST_UNDEFINED) {                                \
-      _result->type = VALK_TEST_PASS;                                          \
-      _result->stopTime = valk_get_time(_result->timePrecision);               \
-    }                                                                          \
+#define VALK_PASS()                                              \
+  do {                                                           \
+    if (_result->type == VALK_TEST_UNDEFINED) {                  \
+      _result->type = VALK_TEST_PASS;                            \
+      _result->stopTime = valk_get_time(_result->timePrecision); \
+    }                                                            \
   } while (0)
 
 // NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-#define VALK_FAIL(fmt, ...)                                                    \
-  do {                                                                         \
-    DISABLE_FORMAT_NONLITERAL;                                                 \
-    if (_result->type != VALK_TEST_UNDEFINED) {                                \
-      printf(                                                                  \
-          "%s:%d || Detected that test has already finished with result.... "  \
-          "ABORTING \n[%d: %s]\n",                                             \
-          __FILE__, __LINE__, _result->type, _result->error);                  \
-      fflush(stdout);                                                          \
-      abort();                                                                 \
-    }                                                                          \
-    size_t __len =                                                             \
-        snprintf(NULL, 0, "%s:%d || %s", __FILE__, __LINE__, (fmt));           \
-    char *__efmt = malloc(__len + 1);                                          \
-    snprintf(__efmt, __len + 1, "%s:%d || %s", __FILE__, __LINE__, (fmt));     \
-    __len = snprintf(NULL, 0, (__efmt), ##__VA_ARGS__);                        \
-    char *__buf = calloc((__len + 1), sizeof(char));                           \
-    snprintf(__buf, __len + 1, (__efmt), ##__VA_ARGS__);                       \
-    free(__efmt);                                                              \
-    _result->type = VALK_TEST_FAIL;                                            \
-    _result->stopTime = valk_get_time(_result->timePrecision);                 \
-    _result->error = __buf;                                                    \
-    ENABLE_FORMAT_NONLITERAL;                                                  \
+#define VALK_FAIL(fmt, ...)                                                   \
+  do {                                                                        \
+    DISABLE_FORMAT_NONLITERAL;                                                \
+    if (_result->type != VALK_TEST_UNDEFINED) {                               \
+      printf(                                                                 \
+          "%s:%d || Detected that test has already finished with result.... " \
+          "ABORTING \n[%d]\n",                                                \
+          __FILE__, __LINE__, _result->type);                                 \
+      fflush(stdout);                                                         \
+      abort();                                                                \
+    }                                                                         \
+    size_t __len =                                                            \
+        snprintf(NULL, 0, "%s:%d || %s", __FILE__, __LINE__, (fmt));          \
+    char *__efmt = malloc(__len + 1);                                         \
+    snprintf(__efmt, __len + 1, "%s:%d || %s", __FILE__, __LINE__, (fmt));    \
+    __len = snprintf(NULL, 0, );                                              \
+    fprintf((__efmt), ##__VA_ARGS__);                                         \
+    free(__efmt);                                                             \
+    _result->type = VALK_TEST_FAIL;                                           \
+    _result->stopTime = valk_get_time(_result->timePrecision);                \
+    ENABLE_FORMAT_NONLITERAL;                                                 \
   } while (0)
 // NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 
 //  Not very useful right now, since this thing doesnt cleanup the resources
-#define VALK_TEST_ASSERT(cond, fmt, ...)                                       \
-  do {                                                                         \
-    if (_result->type == VALK_TEST_UNDEFINED && !(cond)) {                     \
-      VALK_FAIL((fmt), ##__VA_ARGS__);                                         \
-    }                                                                          \
+#define VALK_TEST_ASSERT(cond, fmt, ...)                   \
+  do {                                                     \
+    if (_result->type == VALK_TEST_UNDEFINED && !(cond)) { \
+      VALK_FAIL((fmt), ##__VA_ARGS__);                     \
+    }                                                      \
   } while (0)
 
 #define VALK_FIXTURE(name) (valk_testsuite_fixture_get(_suite, (name)))
@@ -69,7 +67,7 @@ typedef struct valk_test_suite_t valk_test_suite_t;
 
 typedef struct valk_test_result_t valk_test_result_t;
 
-typedef void(valk_test_f)(valk_test_suite_t *);
+typedef void(valk_test_f)(VALK_TEST_ARGS());
 typedef void(_fixture_free_f)(void *);
 typedef void *(_fixture_copy_f)(void *);
 
@@ -92,48 +90,40 @@ typedef struct valk_test_fixture_t {
   _fixture_free_f *free;
 } valk_test_fixture_t;
 
-typedef struct valk_test_fixtures_t {
-  valk_test_fixture_t *items;
-  size_t count;
-  size_t capacity;
-} valk_test_fixtures_t;
-
 typedef struct valk_test_result_t {
   size_t testOffset;
   valk_test_result_type type;
-  char *error;
   valk_time_precision_e timePrecision;
   uint64_t startTime;
   uint64_t stopTime;
 } valk_test_result_t;
 
-typedef struct valk_test_results_t {
-  valk_test_result_t *items;
-  size_t count;
-  size_t capacity;
-} valk_test_results_t;
-
 typedef struct valk_test_t {
   char *name;
+  valk_test_f *func;
   struct {
-    char** items;
+    char **items;
     size_t count;
     size_t capacity;
   } labels;
-  valk_test_f *func;
+  valk_test_result_t result;
+  valk_ring_t *stdout;
+  valk_ring_t *stderr;
 } valk_test_t;
-
-typedef struct valk_tests_t {
-  valk_test_t *items;
-  size_t count;
-  size_t capacity;
-} valk_tests_t;
 
 typedef struct valk_test_suite_t {
   char *filename;
-  valk_tests_t tests;
-  valk_test_fixtures_t fixtures;
-  valk_test_results_t results;
+  struct {
+    size_t capacity;
+    size_t count;
+    valk_test_t *items;
+  } tests;
+
+  struct {
+    size_t capacity;
+    size_t count;
+    valk_test_fixture_t *items;
+  } fixtures;
 } valk_test_suite_t;
 
 valk_test_suite_t *valk_testsuite_empty(const char *filename);
