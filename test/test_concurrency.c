@@ -58,8 +58,11 @@ void test_task_queue(VALK_TEST_ARGS()) {
     int err = valk_work_add(&queue, task);
 
     if (err) {
+      valk_arc_box *bres = valk_arc_box_err("Cancelled");
+      valk_promise_respond(&task.promise, bres);
       // cleanup if there was an error
       valk_arc_release(task.promise.item);
+      valk_arc_release(bres);
     }
     if (i >= maxSize) {
       VALK_TEST_ASSERT(
@@ -118,7 +121,12 @@ void test_task_queue(VALK_TEST_ARGS()) {
       VALK_TEST_ASSERT(
           queue.count == (maxSize - i - 1),
           "Expected the count to be 1 more than item offset [offset: %d]", i);
+
+      // Release the promise
+      valk_arc_box *bres = valk_arc_box_err("Cancelled");
+      valk_promise_respond(&task.promise, bres);
       valk_arc_release(task.promise.item);
+      valk_arc_release(bres);
     }
   }
 

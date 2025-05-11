@@ -20,7 +20,7 @@ const int VALK_NUM_WORKERS = 4;
 #define __assert_thread_safe_allocator()                                       \
   do {                                                                         \
     static valk_mem_allocator_e supported[] = {                                \
-        VALK_ALLOC_MALLOC, VALK_ALLOC_SLAB, VALK_ALLOC_ARENA};                \
+        VALK_ALLOC_MALLOC, VALK_ALLOC_SLAB, VALK_ALLOC_ARENA};                 \
     bool found = 0;                                                            \
     for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) {    \
       if (supported[i] == valk_thread_ctx.allocator->type) {                   \
@@ -52,6 +52,7 @@ void valk_arc_box_init(valk_arc_box *self, valk_res_t type, size_t capacity) {
 valk_arc_box *valk_arc_box_err(const char *msg) {
   int len = strlen(msg);
   valk_arc_box *res = valk_mem_alloc(sizeof(valk_arc_box) + len + 1);
+
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memset(res, 0, sizeof(valk_arc_box) + len + 1);
   res->type = VALK_ERR;
@@ -67,11 +68,20 @@ valk_arc_box *valk_arc_box_err(const char *msg) {
 }
 
 void valk_future_free(valk_future *self) {
-  pthread_cond_destroy(&self->resolved);
-  pthread_mutex_destroy(&self->mutex);
   VALK_WITH_ALLOC(self->allocator) {
+
+    pthread_mutex_lock(&self->mutex);
+    VALK_ASSERT(self->done,
+                "Attempting to free an unresolved future, means "
+                "there is a hanging promise(pointer) out there %p",
+                (void *)self);
     valk_arc_release(self->item);
+    pthread_mutex_unlock(&self->mutex);
+
     da_free(&self->andThen); // args leaked for now
+    pthread_cond_destroy(&self->resolved);
+    pthread_mutex_destroy(&self->mutex);
+
     valk_mem_free(self);
   }
 }
