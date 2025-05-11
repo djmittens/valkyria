@@ -24,6 +24,9 @@
 #ifndef VALK_REPORT_WIDTH
 #define VALK_REPORT_WIDTH 100
 #endif
+
+// #define VALK_TEST_FORK 1
+
 const char *DOT_FILL =
     ".........................................................................."
     ".........................................................................."
@@ -123,6 +126,57 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
   return pid;
 }
 
+void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
+  while (1) {
+    int r = poll(fds, 2, -1);
+
+    if (r <= 0)
+      continue;
+    uint8_t buf[256];
+
+    if (fds[0].revents & POLLIN) {
+      ssize_t n = read(fds[0].fd, buf, sizeof buf);
+      if (n > 0) {
+        valk_ring_write(test->_stdout, buf, (size_t)n);
+      }
+    }
+    if (fds[1].revents & POLLIN) {
+      ssize_t n = read(fds[1].fd, buf, sizeof buf);
+      if (n > 0) {
+        valk_ring_write(test->_stderr, buf, (size_t)n);
+      }
+    }
+    if (fds[0].revents & POLLHUP && fds[1].revents & POLLHUP) {
+      break;
+    }
+  }
+
+  close(fds[0].fd);
+  close(fds[1].fd);
+
+  int wstatus;
+  waitpid(pid, &wstatus, 0);
+  if (WIFEXITED(wstatus)) {
+    //  TODO(networking): Probably should record the exit status at some point
+    if (WEXITSTATUS(wstatus)) {
+    } else {
+    }
+
+    valk_ring_rewind(test->_stderr, sizeof(test->result));
+    valk_ring_read(test->_stderr, sizeof(test->result), &test->result);
+  } else if (WIFSIGNALED(wstatus)) {
+    test->result.type = VALK_TEST_CRSH;
+
+    size_t len = snprintf(nullptr, 0, "Child died because of signal %d\n",
+                          WTERMSIG(wstatus));
+    char buf[++len];
+
+    snprintf(buf, len, "Child died because of signal %d\n", WTERMSIG(wstatus));
+
+    valk_ring_write(test->_stderr, (void *)buf, len);
+  }
+}
+
 int valk_testsuite_run(valk_test_suite_t *suite) {
   static size_t ring_size = 0;
   static valk_slab_t *slab = nullptr;
@@ -132,66 +186,20 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
   }
 
   for (size_t i = 0; i < suite->tests.count; i++) {
-    struct pollfd fds[2];
     valk_test_t *test = &suite->tests.items[i];
-
-    int pid = valk_test_fork(test, suite, fds);
 
     test->_stdout = (void *)valk_slab_aquire(slab)->data;
     valk_ring_init(test->_stdout, ring_size);
-
     test->_stderr = (void *)valk_slab_aquire(slab)->data;
     valk_ring_init(test->_stderr, ring_size);
-
-    while (1) {
-      int r = poll(fds, 2, -1);
-
-      if (r <= 0)
-        continue;
-      uint8_t buf[256];
-
-      if (fds[0].revents & POLLIN) {
-        ssize_t n = read(fds[0].fd, buf, sizeof buf);
-        if (n > 0) {
-          valk_ring_write(test->_stdout, buf, (size_t)n);
-        }
-      }
-      if (fds[1].revents & POLLIN) {
-        ssize_t n = read(fds[1].fd, buf, sizeof buf);
-        if (n > 0) {
-          valk_ring_write(test->_stderr, buf, (size_t)n);
-        }
-      }
-      if (fds[0].revents & POLLHUP && fds[1].revents & POLLHUP) {
-        break;
-      }
-    }
-
-    close(fds[0].fd);
-    close(fds[1].fd);
-
-    int wstatus;
-    waitpid(pid, &wstatus, 0);
-    if (WIFEXITED(wstatus)) {
-      //  TODO(networking): Probably should record the exit status at some point
-      if (WEXITSTATUS(wstatus)) {
-      } else {
-      }
-
-      valk_ring_rewind(test->_stderr, sizeof(test->result));
-      valk_ring_read(test->_stderr, sizeof(test->result), &test->result);
-    } else if (WIFSIGNALED(wstatus)) {
-      test->result.type = VALK_TEST_CRSH;
-
-      size_t len = snprintf(nullptr, 0, "Child died because of signal %d\n",
-                            WTERMSIG(wstatus));
-      char buf[++len];
-
-      snprintf(buf, len, "Child died because of signal %d\n",
-               WTERMSIG(wstatus));
-
-      valk_ring_write(test->_stderr, (void *)buf, len);
-    }
+    #ifdef VALK_TEST_FORK
+    struct pollfd fds[2];
+    int pid = valk_test_fork(test, suite, fds);
+    valk_test_fork_await(test, pid, fds);
+    #else
+    printf("🏃 Running: %s\n", test->name);
+    test->func(suite, &test->result);
+    #endif
   }
 
   // for (size_t i = 0; i < suite->results.count; i++) {
@@ -243,7 +251,7 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
       // valk_ring_print(test->_stdout, stdout);
       printf("\n[STDERR]%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
       valk_ring_fread(test->_stderr, test->_stderr->capacity, stdout);
-      printf("\n%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
+      printf("\n________%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
 
       break;
     case VALK_TEST_CRSH:
