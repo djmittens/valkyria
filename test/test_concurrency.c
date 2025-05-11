@@ -161,6 +161,7 @@ void test_concurrency(VALK_TEST_ARGS()) {
                    "Expected  successfull result [result: %d, %s]", tst->type,
                    tst->item);
   VALK_TEST_ASSERT(res == 0, "Threadpool didnt drain");
+  VALK_FAIL("FUUCK");
   printf("Got response: %p, %p\n", tst->item, (void *)1337);
   valk_drain_pool(&pool);
   valk_free_pool(&pool);

@@ -36,6 +36,32 @@
 #define valk_container_of(ptr, type, member)                                   \
   ((type *)((char *)(ptr) - offsetof(type, member)))
 
+/// @brief efficient way to calculate the next pow2 to store this shit
+/// chatgpt, cooked up this shit
+static inline size_t valk_next_pow2(size_t x) {
+  if (x <= 1)
+    return 1;
+
+#if defined(__clang__) || defined(__GNUC__)
+#if SIZE_MAX <= UINT32_MAX
+  return 1u << (32 - __builtin_clz((uint32_t)(x - 1)));
+#else
+  return 1ull << (64 - __builtin_clzll((uint64_t)(x - 1)));
+#endif
+#else /* portable smear–add-one method */
+  x--;
+  x |= x >> 1;
+  x |= x >> 2;
+  x |= x >> 4;
+  x |= x >> 8;
+  x |= x >> 16;
+#if SIZE_MAX > UINT32_MAX
+  x |= x >> 32;
+#endif
+  return x + 1;
+#endif
+}
+
 typedef enum {
   VALK_ALLOC_NULL,
   VALK_ALLOC_MALLOC,
@@ -68,10 +94,19 @@ typedef struct {
 /// @param[out] self buffer to initialize
 /// @param[in] capcity capacity of the ring buffer in bytes
 void valk_ring_init(valk_ring_t *self, size_t capacity);
-void valk_ring_append(valk_ring_t *self, uint8_t* data,  size_t len);
+
+void valk_ring_write(valk_ring_t *self, uint8_t *data, size_t len);
+
+void valk_ring_rewind(valk_ring_t *self, size_t n);
+
+// @brief read the contents of the buffer into a buffer dst
+void valk_ring_read(valk_ring_t *self, size_t n, void *dst);
+
+// @brief read the contents of the buffer into a file
+void valk_ring_fread(valk_ring_t *self, size_t n, FILE *f);
 
 // @brief print the contents of the buffer into a file
-void valk_ring_print(valk_ring_t *self, FILE* f);
+void valk_ring_print(valk_ring_t *self, FILE *f);
 
 typedef struct valk_slab_item_t {
   size_t handle;

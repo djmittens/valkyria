@@ -2,6 +2,7 @@
 
 #include <inttypes.h>
 #include <poll.h>
+#include <stdckdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
@@ -30,14 +31,20 @@ const char *DOT_FILL =
     ".........................................................................."
     "....";
 
+const char *UND_FILL =
+    "__________________________________________________________________________"
+    "__________________________________________________________________________"
+    "__________________________________________________________________________"
+    "__________________________________________________________________________"
+    "____";
 valk_test_suite_t *valk_testsuite_empty(const char *filename) {
   valk_test_suite_t *res = malloc(sizeof(valk_test_suite_t));
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memset(res, 0, sizeof(valk_test_suite_t));
   res->filename = strdup(filename);
+
   da_init(&res->tests);
   da_init(&res->fixtures);
-  da_init(&res->results);
 
   return res;
 }
@@ -56,13 +63,6 @@ void valk_testsuite_free(valk_test_suite_t *suite) {
 
   free(suite->fixtures.items);
 
-  for (size_t i = 0; i < suite->results.count; i++) {
-    if (suite->results.items[i].type == VALK_TEST_FAIL) {
-      free(suite->results.items[i].error);
-    }
-  }
-  free(suite->results.items);
-
   free(suite->filename);
 
   free(suite);
@@ -75,22 +75,6 @@ size_t valk_testsuite_add_test(valk_test_suite_t *suite, const char *name,
   da_add(&suite->tests, test);
 
   return suite->tests.count;
-}
-
-valk_test_result_t *valk_testsuite_new_result(valk_test_suite_t *suite,
-                                              const char *testName) {
-  valk_test_result_t res;
-
-  for (size_t i = 0; i < suite->tests.count; ++i) {
-    if (strcmp(suite->tests.items[i].name, testName) == 0) {
-      res.testOffset = i;
-      res.type = VALK_TEST_UNDEFINED;
-      da_add(&suite->results, res);
-      return &suite->results.items[suite->results.count - 1];
-    }
-  }
-
-  return nullptr;
 }
 
 int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
@@ -106,13 +90,24 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
     dup2(perr[1], STDERR_FILENO);
 
     // route all the stuff
+    // close(pout[1]);
+    // close(perr[1]);
     close(pout[0]);
     close(perr[0]);
-    close(pout[1]);
-    close(perr[1]);
 
     printf("🏃 Running: %s\n", self->name);
-    self->func(&suite->results.items[0]);
+    self->func(suite, &self->result);
+
+    uint8_t *p = (void *)&self->result;
+    size_t size = sizeof(self->result);
+
+    // write  out the result
+    while (size) {
+      size_t n = fwrite(p, 1, size, stderr);
+      p += n;
+      size -= n;
+    }
+
     exit(0);
   }
 
@@ -129,30 +124,43 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
 }
 
 int valk_testsuite_run(valk_test_suite_t *suite) {
-  valk_ring_t *bout = valk_mem_alloc(sizeof(valk_ring_t) + 64 * 10);
-  valk_ring_t *berr = valk_mem_alloc(sizeof(valk_ring_t) + 64 * 10);
+  static size_t ring_size = 0;
+  static valk_slab_t *slab = nullptr;
+  if (slab == nullptr) {
+    ring_size = valk_next_pow2(64 * 100);
+    slab = valk_slab_new(sizeof(valk_ring_t) + ring_size, 100);
+    printf("INitialized? %ld\n", ring_size);
+  }
+
   for (size_t i = 0; i < suite->tests.count; i++) {
     struct pollfd fds[2];
-    int pid = valk_test_fork(&suite->tests.items[i], suite, fds);
+    valk_test_t *test = &suite->tests.items[i];
 
-    valk_ring_init(bout, 64 * 10);
-    valk_ring_init(berr, 64 * 10);
+    int pid = valk_test_fork(test, suite, fds);
+
+    test->_stdout = (void *)valk_slab_aquire(slab)->data;
+    valk_ring_init(test->_stdout, ring_size);
+
+    test->_stderr = (void *)valk_slab_aquire(slab)->data;
+    valk_ring_init(test->_stderr, ring_size);
+
     while (1) {
       int r = poll(fds, 2, -1);
 
-      if (r <= 0) continue;
+      if (r <= 0)
+        continue;
       uint8_t buf[256];
 
       if (fds[0].revents & POLLIN) {
         ssize_t n = read(fds[0].fd, buf, sizeof buf);
         if (n > 0) {
-          valk_ring_append(bout, buf, (size_t)n);
+          valk_ring_write(test->_stdout, buf, (size_t)n);
         }
       }
       if (fds[1].revents & POLLIN) {
         ssize_t n = read(fds[1].fd, buf, sizeof buf);
         if (n > 0) {
-          valk_ring_append(bout, buf, (size_t)n);
+          valk_ring_write(test->_stderr, buf, (size_t)n);
         }
       }
       if (fds[0].revents & POLLHUP && fds[1].revents & POLLHUP) {
@@ -160,26 +168,30 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
       }
     }
 
-    close(fds[1].fd);
+    close(fds[0].fd);
     close(fds[1].fd);
 
     int wstatus;
     waitpid(pid, &wstatus, 0);
     if (WIFEXITED(wstatus)) {
+      //  TODO(networking): Probably should record the exit status at some point
       if (WEXITSTATUS(wstatus)) {
-        printf("STDOUT ----- \n");
-        valk_ring_print(bout, stdout);
-        printf("STDERR ----- \n");
-        valk_ring_print(berr, stderr);
+      } else {
       }
-      printf("SUCCESS\n");
 
+      valk_ring_rewind(test->_stderr, sizeof(test->result));
+      valk_ring_read(test->_stderr, sizeof(test->result), &test->result);
     } else if (WIFSIGNALED(wstatus)) {
-      printf("STDOUT ----- \n");
-      valk_ring_print(bout, stdout);
-      printf("STDERR ----- \n");
-      valk_ring_print(berr, stderr);
-      printf("FAILURE %d\n", WTERMSIG(wstatus));
+      test->result.type = VALK_TEST_CRSH;
+
+      size_t len = snprintf(nullptr, 0, "Child died because of signal %d\n",
+                            WTERMSIG(wstatus));
+      char buf[128] = {0};
+
+      snprintf(&buf[10], len + 1, "Child died because of signal %d\n",
+               WTERMSIG(wstatus));
+
+      valk_ring_write(test->_stderr, (void *)buf, len + 11);
     }
   }
 
@@ -190,46 +202,60 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
   //   }
   // }
 
-  valk_mem_free(bout);
-  valk_mem_free(berr);
   return 0;
 }
 
 void valk_testsuite_print(valk_test_suite_t *suite) {
-  printf("[%zu/%zu] %s Suite Results: \n", suite->results.count,
+  printf("[%zu/%zu] %s Suite Results: \n", suite->tests.count,
          suite->tests.count, suite->filename);
-  for (size_t i = 0; i < suite->results.count; i++) {
-    valk_test_result_t *result = &suite->results.items[i];
-    valk_test_t *test = &suite->tests.items[result->testOffset];
+  for (size_t i = 0; i < suite->tests.count; i++) {
+    valk_test_t *test = &suite->tests.items[i];
+    valk_test_result_t *result = &test->result;
     char *precision;
     switch (result->timePrecision) {
-      case VALK_MILLIS:
-        precision = "ms";
-        break;
-      case VALK_MICROS:
-        precision = "µs";
-        break;
-      case VALK_NANOS:
-        precision = "ns";
-        break;
+    case VALK_MILLIS:
+      precision = "ms";
+      break;
+    case VALK_MICROS:
+      precision = "µs";
+      break;
+    case VALK_NANOS:
+      precision = "ns";
+      break;
     }
 
     int len = VALK_REPORT_WIDTH - strlen(test->name);
 
     switch (result->type) {
-      case VALK_TEST_UNDEFINED: {
-        printf("%s%.*s  UNDEFINED\n", test->name, len, DOT_FILL);
-        break;
-      }
-      case VALK_TEST_PASS:
-        printf("✅ %s%.*s  PASS : in %" PRIu64 "(%s)\n", test->name, len,
-               DOT_FILL, (result->stopTime - result->startTime), precision);
-        break;
-      case VALK_TEST_FAIL:
-        printf("🐞 %s%.*s  FAIL : in %" PRIu64 "(%s)\n", test->name, len,
-               DOT_FILL, (result->stopTime - result->startTime), precision);
-        printf("ERROR\n");
-        break;
+    case VALK_TEST_UNDEFINED: {
+      printf("%s%.*s  UNDEFINED\n", test->name, len, DOT_FILL);
+      break;
+    }
+    case VALK_TEST_PASS:
+      printf("✅ %s%.*s  PASS : in %" PRIu64 "(%s)\n", test->name, len,
+             DOT_FILL, (result->stopTime - result->startTime), precision);
+      break;
+    case VALK_TEST_FAIL:
+      printf("🐞 %s%.*s  FAIL : in %" PRIu64 "(%s)\n", test->name, len,
+             DOT_FILL, (result->stopTime - result->startTime), precision);
+
+      printf("(STDOUT) %.*s \n", VALK_REPORT_WIDTH, UND_FILL);
+      valk_ring_fread(test->_stdout, test->_stdout->capacity, stdout);
+      printf("(STDERR) %.*s \n", VALK_REPORT_WIDTH, UND_FILL);
+      valk_ring_fread(test->_stderr,
+                      test->_stderr->capacity - sizeof(test->result), stdout);
+      printf("\n");
+      break;
+    case VALK_TEST_CRSH:
+      printf("🌀 %s%.*s  CRSH : in %" PRIu64 "(%s)\n", test->name, len,
+             DOT_FILL, (result->stopTime - result->startTime), precision);
+
+      printf("(STDOUT) %.*s \n", VALK_REPORT_WIDTH, UND_FILL);
+      valk_ring_fread(test->_stdout, test->_stdout->capacity, stdout);
+      printf("(STDERR) %.*s \n", VALK_REPORT_WIDTH, UND_FILL);
+      valk_ring_fread(test->_stderr, test->_stderr->capacity, stdout);
+      printf("\n");
+      break;
     }
   }
 }
@@ -271,11 +297,11 @@ long valk_get_micros(void) {
 
 long valk_get_time(valk_time_precision_e p) {
   switch (p) {
-    case VALK_MILLIS:
-      return valk_get_millis();
-    case VALK_MICROS:
-      return valk_get_micros();
-    case VALK_NANOS:
-      return valk_get_nanos();
+  case VALK_MILLIS:
+    return valk_get_millis();
+  case VALK_MICROS:
+    return valk_get_micros();
+  case VALK_NANOS:
+    return valk_get_nanos();
   }
 }

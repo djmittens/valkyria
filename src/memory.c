@@ -48,18 +48,71 @@ int valk_buffer_is_full(valk_buffer_t *buf) {
   return (buf->capacity - buf->count) == 0;
 }
 
+static inline bool is_pow2(size_t x) { return x && ((x & (x - 1)) == 0); }
+
 void valk_ring_init(valk_ring_t *self, size_t capacity) {
+  VALK_ASSERT(is_pow2(capacity),
+              "Ring buffer capacity must be pow of 2, to reduce branching, %ld",
+              capacity);
   self->offset = 0;
   self->capacity = capacity;
   memset(self->items, 0, capacity);
 }
 
-void valk_ring_append(valk_ring_t *self, uint8_t *data, size_t len) {
+void valk_ring_write(valk_ring_t *self, uint8_t *data, size_t len) {
   const uint8_t *p = data;
   while (len--) {
     ((uint8_t *)self->items)[self->offset % self->capacity] = *p++;
     self->offset++;
   }
+}
+
+void valk_ring_rewind(valk_ring_t *self, size_t n) {
+  size_t mask = self->capacity - 1;         /* 0111… pattern */
+  self->offset = (self->offset - n) & mask; /* subtract, then wrap by masking */
+}
+
+void valk_ring_read(valk_ring_t *self, size_t n, void *dst) {
+  /* --- normalise inputs ------------------------------------------ */
+  size_t cap = self->capacity;
+  size_t head = self->offset % cap; /* in case callers misbehave  */
+  n %= cap;                         /* ignore full extra laps     */
+
+  /* --- split request into contiguous chunks ---------------------- */
+  size_t first = cap - head; /* bytes until physical end   */
+  if (first > n)
+    first = n;               /* clamp to what we need      */
+  size_t second = n - first; /* 0 if we stayed in-range    */
+
+  const uint8_t *buf = (const uint8_t *)self->items;
+  uint8_t *out = (uint8_t *)dst;
+
+  memcpy(out, buf + head, first);
+  if (second)
+    memcpy(out + first, buf, second);
+
+  /* ── advance head (optional: keep the ring consistent) ─────────── */
+  self->offset = (head + n) & (cap - 1); /* cap is power-of-2 – cheap */
+}
+
+void valk_ring_fread(valk_ring_t *self, size_t n, FILE *f) {
+  const uint8_t *base = (const uint8_t *)self->items;
+  size_t cap = self->capacity;
+  size_t head = self->offset; /* local copy for speed   */
+
+  while (n) {
+    /* contiguous bytes left in this lap */
+    size_t chunk = cap - head;
+    if (chunk > n)
+      chunk = n;
+
+    fwrite(base + head, 1, chunk, f);
+
+    /* advance */
+    head = (head + chunk) & (cap - 1); /* ring wrap (use % if cap not pow-2) */
+    n -= chunk;
+  }
+  self->offset = head; /* commit the consumer cursor */
 }
 
 void valk_ring_print(valk_ring_t *self, FILE *f) {

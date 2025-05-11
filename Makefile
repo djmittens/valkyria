@@ -79,8 +79,8 @@ asan: build
 test: build
 	build/test_std &&\
 	build/test_memory &&\
-	build/test_networking&&\
-	build/test_concurrency
+	build/test_concurrency &&\
+	build/test_networking
 
 .PHONY: todo
 todo:

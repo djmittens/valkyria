@@ -22,7 +22,7 @@ void test_implicit_alloc(VALK_TEST_ARGS()) {
   VALK_WITH_CTX(ctx) {
     // The function gets context we set
     VALK_TEST_ASSERT(valk_thread_ctx.allocator == &alloc_new,
-                     "expected some stuff %d", &alloc_new);
+                     "expected some stuff %p", &alloc_new);
   }
   // VALK_WITH_CTX reset the context back to original
   VALK_TEST_ASSERT(valk_thread_ctx.allocator == &alloc_old,
