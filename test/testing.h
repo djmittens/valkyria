@@ -17,6 +17,7 @@
 #define VALK_TEST_ARGS() valk_test_suite_t *_suite, valk_test_result_t *_result
 
 #define VALK_TEST()                                                            \
+  (void *)_suite;                                                              \
   _result->timePrecision = VALK_MICROS;                                        \
   _result->startTime = valk_get_time(_result->timePrecision);
 

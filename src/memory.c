@@ -60,11 +60,32 @@ void valk_ring_init(valk_ring_t *self, size_t capacity) {
 }
 
 void valk_ring_write(valk_ring_t *self, uint8_t *data, size_t len) {
-  const uint8_t *p = data;
-  while (len--) {
-    ((uint8_t *)self->items)[self->offset % self->capacity] = *p++;
-    self->offset++;
+  size_t offset = self->offset;
+  uint8_t *buf = (void *)self->items;
+
+  // printf("Offset: %ld\n", offset);
+  /// 0 1 2 3 4 5 6
+  ///     ^           7
+
+  while (len) {
+    size_t dt = self->capacity - offset;
+
+    if (len < dt) {
+      // printf("copying offset %ld: dt: %ld, end: %c\n", offset, len, data[len - 1]);
+      memcpy(buf + offset, data, len);
+      offset = offset + len;
+      break;
+    } else {
+      // printf("copying offset %ld: dt: %ld, end: %c\n", offset, dt, data[dt - 1]);
+      memcpy(buf + offset, data, dt);
+      offset = 0;
+    }
+
+    data += dt;
+    len -= dt;
   }
+
+  self->offset = offset % self->capacity;
 }
 
 void valk_ring_rewind(valk_ring_t *self, size_t n) {

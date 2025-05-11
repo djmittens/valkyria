@@ -127,9 +127,8 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
   static size_t ring_size = 0;
   static valk_slab_t *slab = nullptr;
   if (slab == nullptr) {
-    ring_size = valk_next_pow2(64 * 100);
+    ring_size = valk_next_pow2(642);
     slab = valk_slab_new(sizeof(valk_ring_t) + ring_size, 100);
-    printf("INitialized? %ld\n", ring_size);
   }
 
   for (size_t i = 0; i < suite->tests.count; i++) {
@@ -186,12 +185,12 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
 
       size_t len = snprintf(nullptr, 0, "Child died because of signal %d\n",
                             WTERMSIG(wstatus));
-      char buf[128] = {0};
+      char buf[++len];
 
-      snprintf(&buf[10], len + 1, "Child died because of signal %d\n",
+      snprintf(buf, len, "Child died because of signal %d\n",
                WTERMSIG(wstatus));
 
-      valk_ring_write(test->_stderr, (void *)buf, len + 11);
+      valk_ring_write(test->_stderr, (void *)buf, len);
     }
   }
 
@@ -239,22 +238,25 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
       printf("🐞 %s%.*s  FAIL : in %" PRIu64 "(%s)\n", test->name, len,
              DOT_FILL, (result->stopTime - result->startTime), precision);
 
-      printf("(STDOUT) %.*s \n", VALK_REPORT_WIDTH, UND_FILL);
-      valk_ring_fread(test->_stdout, test->_stdout->capacity, stdout);
-      printf("(STDERR) %.*s \n", VALK_REPORT_WIDTH, UND_FILL);
-      valk_ring_fread(test->_stderr,
-                      test->_stderr->capacity - sizeof(test->result), stdout);
-      printf("\n");
+      printf("\n[STDOUT]%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
+      valk_ring_fread(test->_stdout, test->_stdout->capacity + 1, stdout);
+      // valk_ring_print(test->_stdout, stdout);
+      printf("\n[STDERR]%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
+      valk_ring_fread(test->_stderr, test->_stderr->capacity, stdout);
+      printf("\n%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
+
       break;
     case VALK_TEST_CRSH:
       printf("🌀 %s%.*s  CRSH : in %" PRIu64 "(%s)\n", test->name, len,
              DOT_FILL, (result->stopTime - result->startTime), precision);
 
-      printf("(STDOUT) %.*s \n", VALK_REPORT_WIDTH, UND_FILL);
-      valk_ring_fread(test->_stdout, test->_stdout->capacity, stdout);
-      printf("(STDERR) %.*s \n", VALK_REPORT_WIDTH, UND_FILL);
+      printf("\n[STDOUT]%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
+      valk_ring_fread(test->_stdout, test->_stdout->capacity + 1, stdout);
+      // valk_ring_print(test->_stdout, stdout);
+      printf("\n[STDERR]%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
       valk_ring_fread(test->_stderr, test->_stderr->capacity, stdout);
-      printf("\n");
+      printf("\n________%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
+
       break;
     }
   }
