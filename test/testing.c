@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "testing.h"
 
 #include <inttypes.h>
@@ -25,7 +26,7 @@
 #define VALK_REPORT_WIDTH 100
 #endif
 
-// #define VALK_TEST_FORK 1
+#define VALK_TEST_FORK 1
 
 const char *DOT_FILL =
     ".........................................................................."
@@ -166,12 +167,14 @@ void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
     valk_ring_read(test->_stderr, sizeof(test->result), &test->result);
   } else if (WIFSIGNALED(wstatus)) {
     test->result.type = VALK_TEST_CRSH;
+    int sig = WTERMSIG(wstatus);
+    char *name = strsignal(sig);
 
-    size_t len = snprintf(nullptr, 0, "Child died because of signal %d\n",
-                          WTERMSIG(wstatus));
+    size_t len = snprintf(nullptr, 0, "Child died because of signal %d(%s)\n",
+                          sig, name);
     char buf[++len];
 
-    snprintf(buf, len, "Child died because of signal %d\n", WTERMSIG(wstatus));
+    snprintf(buf, len, "Child died because of signal %d(%s)\n", sig, name);
 
     valk_ring_write(test->_stderr, (void *)buf, len);
   }
@@ -192,14 +195,15 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
     valk_ring_init(test->_stdout, ring_size);
     test->_stderr = (void *)valk_slab_aquire(slab)->data;
     valk_ring_init(test->_stderr, ring_size);
-    #ifdef VALK_TEST_FORK
+
+#ifdef VALK_TEST_FORK
     struct pollfd fds[2];
     int pid = valk_test_fork(test, suite, fds);
     valk_test_fork_await(test, pid, fds);
-    #else
+#else
     printf("🏃 Running: %s\n", test->name);
     test->func(suite, &test->result);
-    #endif
+#endif
   }
 
   // for (size_t i = 0; i < suite->results.count; i++) {
