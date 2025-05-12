@@ -24,8 +24,10 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
-  valk_arc_box *server = valk_future_await(valk_aio_http2_listen(
-      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt", &handler));
+  valk_future *fserv = valk_aio_http2_listen(
+      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt", &handler);
+
+  valk_arc_box *server = valk_future_await(fserv);
 
   char *response = valk_client_demo(sys, "127.0.0.1", "8080");
 
@@ -35,12 +37,13 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
               VALK_HTTP_MOTD, response);
   }
 
-  // VALK_TEST_ASSERT(arg.connectedCount == arg.disconnectedCount == 1,
-  //                  "Expected a single client connection %d, %d",
-  //                  arg.connectedCount, arg.disconnectedCount);
+  VALK_TEST_ASSERT(arg.connectedCount == arg.disconnectedCount == 1,
+                   "Expected a single client connection %d, %d",
+                   arg.connectedCount, arg.disconnectedCount);
 
   VALK_PASS();
 
+  // valk_arc_release(fserv);
   valk_arc_release(server);
   valk_aio_stop(sys);
   // valk_lval_free(ast);

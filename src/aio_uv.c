@@ -1,6 +1,6 @@
-#define _POSIX_C_SOURCE \
-  200809L  // The fuck is this ? turns out sigaction and shit has to be enabled
-           // separately in strict mode
+#define _POSIX_C_SOURCE                                                        \
+  200809L // The fuck is this ? turns out sigaction and shit has to be enabled
+          // separately in strict mode
 #include <netinet/in.h>
 #include <nghttp2/nghttp2.h>
 #include <openssl/bio.h>
@@ -23,16 +23,16 @@
 #include "concurrency.h"
 #include "memory.h"
 
-#define MAKE_NV(NAME, VALUE, VALUELEN)                         \
-  {                                                            \
-      (uint8_t *)NAME, (uint8_t *)VALUE,     sizeof(NAME) - 1, \
-      VALUELEN,        NGHTTP2_NV_FLAG_NONE,                   \
+#define MAKE_NV(NAME, VALUE, VALUELEN)                                         \
+  {                                                                            \
+      (uint8_t *)NAME, (uint8_t *)VALUE,     sizeof(NAME) - 1,                 \
+      VALUELEN,        NGHTTP2_NV_FLAG_NONE,                                   \
   }
 
-#define MAKE_NV2(NAME, VALUE)                                    \
-  {                                                              \
-      (uint8_t *)NAME,   (uint8_t *)VALUE,     sizeof(NAME) - 1, \
-      sizeof(VALUE) - 1, NGHTTP2_NV_FLAG_NONE,                   \
+#define MAKE_NV2(NAME, VALUE)                                                  \
+  {                                                                            \
+      (uint8_t *)NAME,   (uint8_t *)VALUE,     sizeof(NAME) - 1,               \
+      sizeof(VALUE) - 1, NGHTTP2_NV_FLAG_NONE,                                 \
   }
 
 // It houses requests to the event loop
@@ -240,7 +240,7 @@ valk_future *valk_aio_http2_disconnect(valk_aio_system_t *sys,
 static void __aio_uv_walk_close(uv_handle_t *h, void *arg) {
   if (!uv_is_closing(h)) {
     printf("Shit was open, so now im closing son \n");
-    uv_close(h, NULL);
+    uv_close(h, nullptr);
   }
 }
 
@@ -368,7 +368,7 @@ static int __http_on_header_callback(nghttp2_session *session,
   fprintf(stderr, "HDR: %.*s: %.*s\n", (int)namelen, name, (int)valuelen,
           value);
 
-  return 0;  // success
+  return 0; // success
 }
 static int __http_on_begin_headers_callback(nghttp2_session *session,
                                             const nghttp2_frame *frame,
@@ -697,6 +697,7 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
     // Send settings to the client
     __http_send_server_connection_header(conn->session);
 
+    //  TODO(networking): Maybe i should call this on the first read?
     if (conn->handler) {
       conn->handler->onConnect(conn->handler->arg, conn);
     }
@@ -869,17 +870,17 @@ static int __http_client_on_frame_recv_callback(nghttp2_session *session,
   printf("ON_RECV callback \n");
 
   switch (frame->hd.type) {
-    case NGHTTP2_HEADERS:
-      break;
-    case NGHTTP2_RST_STREAM:
-      printf("[INFO] C <---------------------------- S (RST_STREAM) %d\n",
-             frame->hd.stream_id);
-      break;
-    case NGHTTP2_GOAWAY:
-      printf("[INFO] C <---------------------------- S (GOAWAY) %d\n",
-             frame->hd.stream_id);
-      printf("[Client]Received GO AWAY frame\n");
-      break;
+  case NGHTTP2_HEADERS:
+    break;
+  case NGHTTP2_RST_STREAM:
+    printf("[INFO] C <---------------------------- S (RST_STREAM) %d\n",
+           frame->hd.stream_id);
+    break;
+  case NGHTTP2_GOAWAY:
+    printf("[INFO] C <---------------------------- S (GOAWAY) %d\n",
+           frame->hd.stream_id);
+    printf("[Client]Received GO AWAY frame\n");
+    break;
   }
 
   return 0;
@@ -895,10 +896,9 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
   valk_promise *promise =
       nghttp2_session_get_stream_user_data(session, stream_id);
   if (promise) {
-    printf(
-        "[INFO] C <---------------------------- S (DATA chunk)\n"
-        "%lu bytes\n",
-        (unsigned long int)len);
+    printf("[INFO] C <---------------------------- S (DATA chunk)\n"
+           "%lu bytes\n",
+           (unsigned long int)len);
     fwrite(data, 1, len, stdout);
     printf("\n");
 

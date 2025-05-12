@@ -254,7 +254,8 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
       valk_ring_fread(test->_stdout, test->_stdout->capacity + 1, stdout);
       // valk_ring_print(test->_stdout, stdout);
       printf("\n[STDERR]%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
-      valk_ring_fread(test->_stderr, test->_stderr->capacity, stdout);
+      valk_ring_fread(test->_stderr,
+                      test->_stderr->capacity - sizeof(test->result), stdout);
       printf("\n________%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
 
       break;
