@@ -3,7 +3,8 @@
         - [x] Event loop
         - [x] Sockets
         - [ ] Files
-        - [ ] GZip
+        - [ ] GZip (is this even needed? im pretty sure SSL has stream
+            compression)
     - [ ] URI
     - [ ] Logging
     - [ ] Regex
@@ -122,8 +123,11 @@
             memory.c:51:valk_buffer_append || Buffer too small !!!  capacity [2048] :: count [0] :: new bytes [2385]
             i^Cmake: *** [Makefile:68: test] Interrupt
         ```
-        Max frame size for http2 is negotiated by the protocol, on connection startup, so based on that we will know the size to allocate to it.
-        Thats not something we want.  We want a set size by the server, and let the client know that is what we are working with to avoid dynamic allocation of said buffers
+        Max frame size for http2 is negotiated by the protocol, on connection
+        startup, so based on that we will know the size to allocate to it.
+        Thats not something we want.  We want a set size by the server, and let
+        the client know that is what we are working with to avoid dynamic
+        allocation of said buffers
     - [x] Randomly broke curl again, hopefully this will be caught by some of my regression testing in the future 
 
 - [ ] Handle memory allocation
@@ -141,6 +145,42 @@
             - read buffers
                 - since those dont need requets or handles, i can just use raw
     - [ ] Arenas for requests
+
+## Architecture
+Ok so kindly i want to think through, what the architecture for a server could
+look like.
+
+ChatGPT as usual is giving me some fire advice for using a `Reactor` pattern
+for async callbacks and stuff. Also suggesting for using command buffers to
+communicate with my languages vm. Does that mean i have to get a vm for my
+language now ? I really would like it to be a native llvm language.
+
+ ┌───────────────────────────────────────────────┐
+ │ 7. Lisp “surface” ▸ routers / middle-ware     │
+ │    (λ (GET "/users/:id") …)                   │
+ ├───────────────────────────────────────────────┤
+ │ 6. Async Abstractions ▸ promise / await       │
+ │    Lisp objects backed by C futures           │
+ ├───────────────────────────────────────────────┤
+ │ 5. FFI Shims ▸ thin C ↔ Lisp glue             │
+ │    – convert GC handles <--> C pointers       │
+ ├───────────────────────────────────────────────┤
+ │ 4. Scheduler Bridge ▸ “green-thread” runtime  │
+ │    runs inside the VM, drives event loop      │
+ ├───────────────────────────────────────────────┤
+ │ 3. Event Loop ▸ libuv / io_uring / kqueue     │
+ │    non-blocking sockets, timers, signals      │
+ ├───────────────────────────────────────────────┤
+ │ 2. Protocol Engine ▸ HTTP/1.1 & (opt) H2      │
+ │    parsing, HPACK, keep-alive, chunking       │
+ ├───────────────────────────────────────────────┤
+ │ 1. OS Layer ▸ epoll/kqueue/sendfile etc.      │
+ └───────────────────────────────────────────────┘
+
+This while thing hinges around:
+1. MPSC (multiple publishers single subscriber) Queue
+2. Reactor(thats the server in my architecture) and handles
+3. Continuations and lisp shit
 
 
 ## Settings

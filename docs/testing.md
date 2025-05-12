@@ -7,8 +7,8 @@ implement whatever features i need
     - Intercept these for the process, and only print it on error
 - [ ] ASAN integration
     - [ ] Swap in malloc instead of custom allocators
-    - [ ] Disable process forking, run everything in the parent process one at
-        a time
+    - [x] Toggle process forking, run everything in the parent process one at
+        a time.
 - [ ] Valk Test runner
     - [ ] Animated spinner
     - [ ] Pooled execution
