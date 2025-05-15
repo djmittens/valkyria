@@ -221,6 +221,12 @@ void test_prelude_not(VALK_TEST_ARGS()) {
   valk_lenv_free(env);
 }
 
+void test_prelude_not(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_PASS();
+}
+
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);

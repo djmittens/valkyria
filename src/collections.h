@@ -14,7 +14,7 @@
 
 #define da_free(arr)                                                           \
   do {                                                                         \
-    valk_mem_free((arr)->items);                                                        \
+    valk_mem_free((arr)->items);                                               \
   } while (0)
 
 #define da_add(arr, elem)                                                      \
@@ -68,6 +68,31 @@
     for (size_t i = 0; i < (pool)->capacity; ++i) {                            \
       (pool)->free[i] = i;                                                     \
     }                                                                          \
+  } while (0)
+
+#define valk_dll_insert_after(node_a, node_b)                                  \
+  do {                                                                         \
+    if ((head) != NULL) {                                                      \
+      __typeof__(head) __cur = (head);                                         \
+      while (__cur->next)                                                      \
+        __cur = __cur->next;                                                   \
+      __cur->next = (target)->next;                                            \
+      if ((target)->next)                                                      \
+        (target)->next->prev = __cur;                                          \
+      (head)->prev = (target);                                                 \
+      (target)->next = (head);                                                 \
+    }                                                                          \
+  } while (0)
+
+#define valk_dll_pop(node_a)                                                   \
+  do {                                                                         \
+    do {                                                                       \
+      if ((node)->prev)                                                        \
+        (node)->prev->next = (node)->next;                                     \
+      if ((node)->next)                                                        \
+        (node)->next->prev = (node)->prev;                                     \
+      (node)->prev = NULL;                                                     \
+      (node)->next = NULL;                                                     \
   } while (0)
 
 // TODO(networking): add dynamic resizing at some point, but its kinda

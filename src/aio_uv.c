@@ -95,6 +95,7 @@ typedef enum {
 
 typedef struct valk_aio_http_conn {
   __aio_http_conn_e state;
+  struct valk_aio_http_conn *prev, *next;
   uv_connect_t req;
   uv_tcp_t tcpHandle;
   valk_aio_ssl_t ssl;
