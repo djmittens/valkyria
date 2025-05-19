@@ -1,5 +1,4 @@
 #include "concurrency.h"
-#include "inet.h"
 
 #include "collections.h"
 #include "common.h"
@@ -58,11 +57,11 @@ void valk_aio_request_free(void *arg) {
   valk_mem_free(self);
 }
 
-struct valk_aio_system {
+typedef struct valk_aio_system {
   struct io_uring uring;
   valk_worker_pool pool;
   pthread_t eventloop;
-};
+} valk_aio_system;
 
 static off_t __get_file_size(int fd) {
   struct stat st;
@@ -178,7 +177,22 @@ static void *__event_loop(void *arg) {
   // Use malloc for now
   valk_mem_init_malloc();
   __connection_pool conPool;
-  valk_pool_init(&conPool, 5);
+
+  do {
+    (&conPool)->numFree = (5) + 1;
+    (&conPool)->capacity = (5) + 1;
+    if ((&conPool)->items) {
+      printf("Reinitializing the pool for some stupid reason, probably a "
+             "memory leak, since items are not cleaned up\n");
+    }
+    (&conPool)->items = valk_mem_allocator_alloc(
+        valk_thread_ctx.allocator, (sizeof((&conPool)->items[0]) * ((5) + 1)));
+    (&conPool)->free = valk_mem_allocator_alloc(
+        valk_thread_ctx.allocator, (sizeof((&conPool)->free[0]) * ((5) + 1)));
+    for (size_t i = 0; i < (&conPool)->capacity; ++i) {
+      (&conPool)->free[i] = i;
+    }
+  } while (0);
 
   do {
 

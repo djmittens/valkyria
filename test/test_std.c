@@ -1,7 +1,9 @@
 #include "test_std.h"
+#include "collections.h"
 #include "common.h"
 #include "memory.h"
 #include "parser.h"
+#include "testing.h"
 
 void test_parsing_prelude(VALK_TEST_ARGS()) {
   valk_lval_t *ast = VALK_FIXTURE("prelude");
@@ -221,9 +223,112 @@ void test_prelude_not(VALK_TEST_ARGS()) {
   valk_lenv_free(env);
 }
 
-void test_prelude_not(VALK_TEST_ARGS()) {
+void test_dynamic_lists(VALK_TEST_ARGS()) {
   VALK_TEST();
+  struct node {
+    struct node *next;
+    struct node *prev;
+    size_t val;
+  };
 
+  constexpr size_t size = 100;
+  struct node buf[size] = {0};
+
+  struct node *head = &buf[0];
+  struct node *end = nullptr;
+
+  { // init list
+    for (size_t i = 0; i < size; i++) {
+      buf[i].val = i;
+      valk_dll_insert_after(end, &buf[i]);
+      end = &buf[i];
+    }
+
+    size_t count = valk_dll_count(head);
+
+    VALK_TEST_ASSERT(count == size,
+                     "Expected linked list count to be %d, but was %d", size,
+                     count);
+
+    valk_dll_foreach(head) {
+      if (item->prev != nullptr) {
+        VALK_TEST_ASSERT(item->prev->val == (item->val - 1),
+                         "Items are out of order: %d < %d", item->prev->val,
+                         item->val);
+      }
+    }
+  }
+
+  { // test removing nodes
+    size_t start = 15;
+    size_t popNum = 25;
+
+    size_t numPop = 0;
+    while (true) {
+      if (popNum == numPop) {
+        break;
+      }
+      valk_dll_pop(valk_dll_at(head, start));
+      numPop++;
+    }
+
+    VALK_TEST_ASSERT(
+        popNum == numPop,
+        "Expected to pop the exact number of elements  %d, but was %d", popNum,
+        numPop);
+
+    size_t count = valk_dll_count(head);
+
+    VALK_TEST_ASSERT(count == (size - popNum),
+                     "Expected linked list count to be %d, but was %d",
+                     (size - popNum), count);
+
+    valk_dll_foreach(head) {
+      // check values pre-deletion
+      if (item->val > (start)) {
+        break;
+      }
+      if (item->prev != nullptr) {
+        VALK_TEST_ASSERT(item->prev->val == (item->val - 1),
+                         "Items are out of order: %d < %d", item->prev->val,
+                         item->val);
+      }
+    }
+
+    valk_dll_foreach(head) {
+      // check remaining values after deletion ()
+      if (item->val <= start || item->prev->val == (start - 1)) {
+        continue;
+      }
+      if (item->prev != nullptr) {
+        VALK_TEST_ASSERT(item->prev->val == (item->val - 1),
+                         "Items are out of order: %d < %d", item->prev->val,
+                         item->val);
+      }
+    }
+  }
+
+  { // test inserting nodes
+    struct node item = {0};
+    item.val = 9999;
+
+    size_t pos = 40;
+    valk_dll_insert_after(valk_dll_at(head, pos), &item);
+
+    struct node item2 = {0};
+    item2.val = 8888;
+    valk_dll_insert_after(valk_dll_at(head, pos), &item2);
+
+    VALK_TEST_ASSERT(valk_dll_at(head, pos + 1)->val == item2.val,
+                     "Inserted item is not in the expected position expected, "
+                     "%d , but was %d",
+                     valk_dll_at(head, pos + 1)->val, item2.val);
+
+    VALK_TEST_ASSERT(valk_dll_at(head, pos + 2)->val == item.val,
+                     "Inserted item is not in the expected position expected, "
+                     "%d , but was %d",
+                     valk_dll_at(head, pos + 2)->val, item.val);
+  }
   VALK_PASS();
 }
 
@@ -242,12 +347,13 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_prelude_nth", test_prelude_nth);
   valk_testsuite_add_test(suite, "test_prelude_split", test_prelude_split);
   valk_testsuite_add_test(suite, "test_prelude_map", test_prelude_map);
+  valk_testsuite_add_test(suite, "test_prelude_not", test_prelude_not);
 
   if (0) {
     valk_testsuite_add_test(suite, "test_always_failing", test_always_failing);
   }
 
-  valk_testsuite_add_test(suite, "test_prelude_not", test_prelude_not);
+  valk_testsuite_add_test(suite, "test_dynamic_lists", test_dynamic_lists);
 
   // load fixtures
   valk_lval_t *ast = valk_parse_file("src/prelude.valk");

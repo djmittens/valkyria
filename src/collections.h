@@ -55,24 +55,13 @@
     }                                                                          \
   })
 
-#define valk_pool_init(pool, size)                                             \
+#define valk_dll_insert_after(target, head)                                    \
   do {                                                                         \
-    (pool)->numFree = (size) + 1;                                              \
-    (pool)->capacity = (size) + 1;                                             \
-    if ((pool)->items) {                                                       \
-      printf("Reinitializing the pool for some stupid reason, probably a "     \
-             "memory leak, since items are not cleaned up\n");                 \
-    }                                                                          \
-    (pool)->items = valk_mem_alloc(sizeof((pool)->items[0]) * ((size) + 1));   \
-    (pool)->free = valk_mem_alloc(sizeof((pool)->free[0]) * ((size) + 1));     \
-    for (size_t i = 0; i < (pool)->capacity; ++i) {                            \
-      (pool)->free[i] = i;                                                     \
-    }                                                                          \
-  } while (0)
-
-#define valk_dll_insert_after(node_a, node_b)                                  \
-  do {                                                                         \
-    if ((head) != NULL) {                                                      \
+    if ((head) != nullptr) {                                                   \
+      if (target == nullptr) {                                                 \
+        (head)->prev = nullptr;                                                \
+        break;                                                                 \
+      }                                                                        \
       __typeof__(head) __cur = (head);                                         \
       while (__cur->next)                                                      \
         __cur = __cur->next;                                                   \
@@ -84,43 +73,32 @@
     }                                                                          \
   } while (0)
 
-#define valk_dll_pop(node_a)                                                   \
+#define valk_dll_pop(node)                                                     \
   do {                                                                         \
-    do {                                                                       \
-      if ((node)->prev)                                                        \
-        (node)->prev->next = (node)->next;                                     \
-      if ((node)->next)                                                        \
-        (node)->next->prev = (node)->prev;                                     \
-      (node)->prev = NULL;                                                     \
-      (node)->next = NULL;                                                     \
+    __typeof__(node) __n = (node);                                             \
+    if (__n->prev)                                                             \
+      __n->prev->next = __n->next;                                             \
+    if (__n->next)                                                             \
+      __n->next->prev = __n->prev;                                             \
+    __n->prev = nullptr;                                                       \
+    __n->next = nullptr;                                                       \
   } while (0)
 
-// TODO(networking): add dynamic resizing at some point, but its kinda
-// complicated with id rebalancing
+#define valk_dll_foreach(head)                                                 \
+  for (__typeof__(head) item = (head); item != nullptr; item = item->next)
 
-#define valk_pool_request(pool)                                                \
+#define valk_dll_at(head, n)                                                   \
   ({                                                                           \
-    if (pool->numFree == 1) {                                                  \
-      printf("Pool is out of shit returning invalid index");                   \
-      return 0;                                                                \
-    }                                                                          \
-    size_t tmp = (pool)->free[0];                                              \
-    (pool)->free[1] = (pool)->free[(pool)->numFree];                           \
-    (pool)->free[(pool)->numFree] = tmp;                                       \
-    (pool)->numFree--;                                                         \
-    tmp;                                                                       \
+    __typeof__(head) __it = (head);                                            \
+    size_t __i = (n);                                                          \
+    while (__i-- > 0 && __it != NULL)                                          \
+      __it = __it->next;                                                       \
+    __it;                                                                      \
   })
 
-// TODO(networking):  add edge case assertions for missing id's and 0 index
-#define valk_pool_release(pool, idx)                                           \
-  do {                                                                         \
-    for (size_t i = 0; i < (pool)->capacity; ++i) {                            \
-      if ((pool)->free[i] == (idx)) {                                          \
-        size_t tmp = (pool)->items[(pool)->numFree];                           \
-        (pool)->items[(pool)->numFree] = (pool->items[i]);                     \
-        (pool)->items[i] = tmp;                                                \
-        (pool)->numFree++;                                                     \
-        break;                                                                 \
-      }                                                                        \
-    }                                                                          \
-  } while (0)
+#define valk_dll_count(head)                                                   \
+  ({                                                                           \
+    size_t __count = 0;                                                        \
+    valk_dll_foreach(head) { __count++; }                                      \
+    __count;                                                                   \
+  })

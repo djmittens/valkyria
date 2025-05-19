@@ -41,6 +41,22 @@ const char *UND_FILL =
     "__________________________________________________________________________"
     "__________________________________________________________________________"
     "____";
+
+#define ANSI_YELLOW_BG "\033[43m"
+#define ANSI_BLACK_FG "\033[30m"
+#define ANSI_RESET "\033[0m"
+
+// Nerd Font: U+E0B8 =  , U+E0BE = 
+#define NF_SLANT ""
+
+static void valk_print_police_tape_line(int tiles) {
+  printf(ANSI_YELLOW_BG ANSI_BLACK_FG);
+  for (int i = 0; i < tiles; ++i) {
+    printf(NF_SLANT);
+  }
+  printf(ANSI_RESET);
+}
+
 valk_test_suite_t *valk_testsuite_empty(const char *filename) {
   valk_test_suite_t *res = malloc(sizeof(valk_test_suite_t));
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -216,6 +232,28 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
   return 0;
 }
 
+static void valk_print_io(valk_test_t *test) {
+  putc('\n', stdout);
+  valk_print_police_tape_line(1);
+  printf("[STDOUT]");
+  valk_print_police_tape_line(VALK_REPORT_WIDTH / 2);
+  putc('\n', stdout);
+
+  valk_ring_fread(test->_stdout, test->_stdout->capacity + 1, stdout);
+
+  // valk_ring_print(test->_stdout, stdout);
+  putc('\n', stdout);
+  valk_print_police_tape_line(1);
+  printf("[STDERR]");
+  valk_print_police_tape_line(VALK_REPORT_WIDTH / 2);
+  putc('\n', stdout);
+  valk_ring_fread(test->_stderr, test->_stderr->capacity - sizeof(test->result),
+                  stdout);
+  putc('\n', stdout);
+  valk_print_police_tape_line(VALK_REPORT_WIDTH / 2 + 5);
+  putc('\n', stdout);
+}
+
 void valk_testsuite_print(valk_test_suite_t *suite) {
   printf("[%zu/%zu] %s Suite Results: \n", suite->tests.count,
          suite->tests.count, suite->filename);
@@ -249,27 +287,14 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
     case VALK_TEST_FAIL:
       printf("🐞 %s%.*s  FAIL : in %" PRIu64 "(%s)\n", test->name, len,
              DOT_FILL, (result->stopTime - result->startTime), precision);
-
-      printf("\n[STDOUT]%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
-      valk_ring_fread(test->_stdout, test->_stdout->capacity + 1, stdout);
-      // valk_ring_print(test->_stdout, stdout);
-      printf("\n[STDERR]%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
-      valk_ring_fread(test->_stderr,
-                      test->_stderr->capacity - sizeof(test->result), stdout);
-      printf("\n________%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
+      valk_print_io(test);
 
       break;
     case VALK_TEST_CRSH:
       printf("🌀 %s%.*s  CRSH : in %" PRIu64 "(%s)\n", test->name, len,
              DOT_FILL, (result->stopTime - result->startTime), precision);
 
-      printf("\n[STDOUT]%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
-      valk_ring_fread(test->_stdout, test->_stdout->capacity + 1, stdout);
-      // valk_ring_print(test->_stdout, stdout);
-      printf("\n[STDERR]%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
-      valk_ring_fread(test->_stderr, test->_stderr->capacity, stdout);
-      printf("\n________%.*s\n", VALK_REPORT_WIDTH + 3, UND_FILL);
-
+      valk_print_io(test);
       break;
     }
   }
