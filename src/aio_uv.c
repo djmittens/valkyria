@@ -1,6 +1,8 @@
-#define _POSIX_C_SOURCE                                                        \
-  200809L // The fuck is this ? turns out sigaction and shit has to be enabled
-          // separately in strict mode
+#include "collections.h"
+#define _POSIX_C_SOURCE \
+  200809L  // The fuck is this ? turns out sigaction and shit has to be enabled
+           // separately in strict mode
+
 #include <netinet/in.h>
 #include <nghttp2/nghttp2.h>
 #include <openssl/bio.h>
@@ -23,22 +25,24 @@
 #include "concurrency.h"
 #include "memory.h"
 
-#define MAKE_NV(NAME, VALUE, VALUELEN)                                         \
-  {                                                                            \
-      (uint8_t *)NAME, (uint8_t *)VALUE,     sizeof(NAME) - 1,                 \
-      VALUELEN,        NGHTTP2_NV_FLAG_NONE,                                   \
+#define MAKE_NV(NAME, VALUE, VALUELEN)                         \
+  {                                                            \
+      (uint8_t *)NAME, (uint8_t *)VALUE,     sizeof(NAME) - 1, \
+      VALUELEN,        NGHTTP2_NV_FLAG_NONE,                   \
   }
 
-#define MAKE_NV2(NAME, VALUE)                                                  \
-  {                                                                            \
-      (uint8_t *)NAME,   (uint8_t *)VALUE,     sizeof(NAME) - 1,               \
-      sizeof(VALUE) - 1, NGHTTP2_NV_FLAG_NONE,                                 \
+#define MAKE_NV2(NAME, VALUE)                                    \
+  {                                                              \
+      (uint8_t *)NAME,   (uint8_t *)VALUE,     sizeof(NAME) - 1, \
+      sizeof(VALUE) - 1, NGHTTP2_NV_FLAG_NONE,                   \
   }
 
 // It houses requests to the event loop
 enum {
   AIO_QUEUE_SIZE = 10,
+  AIO_MAX_HANDLES = 2056,
   HTTP_MAX_SERVERS = 3,
+  HTTP_MAX_CLIENTS = 3,
   HTTP_SLAB_ITEM_SIZE = (SSL3_RT_MAX_PACKET_SIZE * 2),
   HTTP_MAX_IO_REQUESTS = (1024),
   HTTP_MAX_CONNECTIONS = (10),
@@ -62,6 +66,30 @@ typedef struct __http2_connect_req {
   valk_aio_system_t *sys;
   valk_aio_http2_client *client;
 } __http2_connect_req;
+
+typedef enum {
+  VALK_TCP_STREAM,
+  VALK_TCP_LISTENER,
+  // VALK_TIMER,
+  // VALK_FILE,
+  // VALK_SIGNAL,
+  // VALK_USER_TASK,
+} handle_kind_t;
+
+typedef struct valk_aio_handle_t {
+  handle_kind_t kind;
+  int fd;
+  valk_aio_handle_t *prev;
+  valk_aio_handle_t *next;
+  void *ctx;
+  valk_aio_system_t *sys;
+  void (*onOpen)(valk_aio_handle_t *);
+  void (*onClose)(valk_aio_handle_t *);
+
+  union {
+    uv_tcp_t tcp;
+  } uv;
+} valk_aio_handle_t;
 
 static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
                                const uv_buf_t *buf);
@@ -117,19 +145,23 @@ typedef struct valk_aio_system {
   uv_mutex_t taskLock;
   uv_async_t taskHandle;
   uv_async_t stopper;
-  valk_slab_t *servers;
-  valk_slab_t *clients;
+  valk_slab_t *httpServers;
+  valk_slab_t *httpClients;
+  valk_slab_t *httpConnections;
+  valk_slab_t *handles;
+  valk_aio_handle_t *liveHandles;
+  bool shuttingDown;
 } valk_aio_system_t;
 
 typedef struct valk_aio_http_server {
   __aio_http_srv_e state;
-  uv_loop_t *eventloop;
+  valk_aio_system_t *sys;
   SSL_CTX *ssl_ctx;
-  uv_tcp_t listener;
+  valk_aio_handle_t *listener;
   char interface[200];
   int port;
   valk_http2_handler_t handler;
-  valk_slab_t *connectionSlab;
+  bool shuttingDown;
 } valk_aio_http_server;
 
 static void __event_loop(void *arg) {
@@ -171,7 +203,6 @@ static void __uv_http_on_tcp_disconnect_cb(uv_handle_t *handle) {
 static void __valk_aio_http2_disconnect_cb(valk_aio_system_t *sys,
                                            valk_arc_box *arg,
                                            valk_promise *promise) {
-
   UNUSED(sys);
   // retain in caller
 
@@ -248,7 +279,7 @@ static void __aio_uv_walk_close(uv_handle_t *h, void *arg) {
 static void __aio_uv_stop(uv_async_t *h) {
   uv_stop(h->loop);
   uv_walk(h->loop, __aio_uv_walk_close, NULL);
-  uv_run(h->loop, UV_RUN_ONCE); // close shit out
+  uv_run(h->loop, UV_RUN_ONCE);  // close shit out
 }
 
 //
@@ -261,21 +292,20 @@ valk_aio_system_t *valk_aio_start() {
   struct sigaction sa = {.sa_handler = SIG_IGN};
   sigaction(SIGPIPE, &sa, nullptr);
 
-  const size_t srvLen =
-      sizeof(valk_arc_box) + sizeof(valk_aio_http_server) +
-      valk_slab_size(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
-
-  valk_aio_system_t *sys = valk_mem_alloc(
-      sizeof(valk_aio_system_t) + valk_slab_size(srvLen, HTTP_MAX_SERVERS));
+  valk_aio_system_t *sys = valk_mem_alloc(sizeof(valk_aio_system_t));
 
   valk_aio_ssl_start();
 
   sys->eventloop = uv_default_loop();
   sys->count = 0;
   sys->capacity = 10;
-  sys->servers = (valk_slab_t *)&((uint8_t *)sys)[sizeof(valk_aio_system_t)];
 
-  valk_slab_init(sys->servers, srvLen, HTTP_MAX_SERVERS);
+  const size_t srvLen =
+      sizeof(valk_arc_box) + sizeof(valk_aio_http_server) +
+      valk_slab_size(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
+  sys->httpServers = valk_slab_new(srvLen, HTTP_MAX_SERVERS);
+  sys->httpClients = valk_slab_new(srvLen, HTTP_MAX_CLIENTS);
+  sys->handles = valk_slab_new(srvLen, AIO_MAX_HANDLES);
 
   uv_mutex_init(&sys->taskLock);
   uv_async_init(sys->eventloop, &sys->taskHandle, __task_cb);
@@ -297,6 +327,9 @@ void valk_aio_stop(valk_aio_system_t *sys) {
   // while (UV_EBUSY == uv_loop_close(sys->eventloop)) {
   // };
   // TODO(networking): need to properly free the system too
+  valk_mem_free(sys->httpServers);
+  valk_mem_free(sys->httpClients);
+  valk_mem_free(sys->handles);
   valk_mem_free(sys);
 }
 
@@ -369,7 +402,7 @@ static int __http_on_header_callback(nghttp2_session *session,
   fprintf(stderr, "HDR: %.*s: %.*s\n", (int)namelen, name, (int)valuelen,
           value);
 
-  return 0; // success
+  return 0;  // success
 }
 static int __http_on_begin_headers_callback(nghttp2_session *session,
                                             const nghttp2_frame *frame,
@@ -610,7 +643,7 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
 
   valk_aio_http_server *srv = server->data;
   // Init the arena
-  valk_mem_arena_t *arena = (void *)valk_slab_aquire(srv->connectionSlab)->data;
+  valk_mem_arena_t *arena = (void *)valk_slab_aquire(srv->sys->connectionSlab)->data;
   valk_mem_arena_init(arena,
                       HTTP_MAX_CONNECTION_HEAP - sizeof(valk_mem_arena_t));
 
@@ -722,12 +755,10 @@ static void __http_listen_cb(valk_aio_system_t *sys, valk_arc_box *box,
   int r;
   struct sockaddr_in addr;
   valk_aio_http_server *srv = box->item;
+  srv->listener = (void *)valk_slab_aquire(sys->handles)->data;
 
-  r = uv_tcp_init(srv->eventloop, &srv->listener);
-  uv_tcp_nodelay(&srv->listener, 1);
-
-  srv->connectionSlab =
-      valk_slab_new(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
+  r = uv_tcp_init(srv->eventloop, &srv->listener->uv.tcp);
+  uv_tcp_nodelay(&srv->listener->uv.tcp, 1);
 
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -736,8 +767,10 @@ static void __http_listen_cb(valk_aio_system_t *sys, valk_arc_box *box,
     valk_promise_respond(promise, err);
     valk_arc_release(err);
     valk_arc_release(box);
+    valk_slab_release_ptr(sys->handles, srv->listener);
     return;
   }
+
   r = uv_ip4_addr(srv->interface, srv->port, &addr);
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -746,10 +779,11 @@ static void __http_listen_cb(valk_aio_system_t *sys, valk_arc_box *box,
     valk_promise_respond(promise, err);
     valk_arc_release(err);
     valk_arc_release(box);
+    valk_slab_release_ptr(sys->handles, srv->listener);
     return;
   }
 #ifdef __linux__
-  r = uv_tcp_bind(&srv->listener, (const struct sockaddr *)&addr,
+  r = uv_tcp_bind(&srv->listener->uv.tcp, (const struct sockaddr *)&addr,
                   UV_TCP_REUSEPORT);
 #else
   r = uv_tcp_bind(&srv->listener, (const struct sockaddr *)&addr, 0);
@@ -761,11 +795,13 @@ static void __http_listen_cb(valk_aio_system_t *sys, valk_arc_box *box,
     valk_promise_respond(promise, err);
     valk_arc_release(err);
     valk_arc_release(box);
+    valk_slab_release_ptr(sys->handles, srv->listener);
     return;
   }
 
-  srv->listener.data = srv;
-  r = uv_listen((uv_stream_t *)&srv->listener, 128, __http_server_accept_cb);
+  srv->listener->ctx = srv;
+  r = uv_listen((uv_stream_t *)&srv->listener->uv.tcp, 128,
+                __http_server_accept_cb);
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Listen err: %s \n", uv_strerror(r));
@@ -773,10 +809,16 @@ static void __http_listen_cb(valk_aio_system_t *sys, valk_arc_box *box,
     valk_promise_respond(promise, err);
     valk_arc_release(err);
     valk_arc_release(box);
+    valk_slab_release_ptr(sys->handles, srv->listener);
     return;
   } else {
     printf("Listening on %s:%d\n", srv->interface, srv->port);
     valk_promise_respond(promise, box);
+    if (sys->liveHandles != nullptr) {
+      valk_dll_insert_after(sys->liveHandles, srv->listener);
+    } else {
+      sys->liveHandles = srv->listener;
+    }
   }
   valk_arc_release(box);
 }
@@ -803,19 +845,15 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
                                    valk_http2_handler_t *handler) {
   // valk_arc_box *box = valk_arc_box_new(VALK_SUC,
   // sizeof(valk_aio_http_server));
-  valk_slab_item_t *slab = valk_slab_aquire(sys->servers);
+  valk_slab_item_t *slab = valk_slab_aquire(sys->httpServers);
   valk_future *res = valk_future_new();
 
   valk_arc_box *box = (valk_arc_box *)slab->data;
   valk_aio_http_server *srv;
   {
-    const size_t srvLen =
-        sizeof(valk_aio_http_server) +
-        valk_slab_size(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
+    valk_arc_box_init(box, VALK_SUC, sizeof(valk_aio_http_server));
 
-    valk_arc_box_init(box, VALK_SUC, srvLen);
-
-    box->allocator = (valk_mem_allocator_t *)sys->servers;
+    box->allocator = (valk_mem_allocator_t *)sys->httpServers;
 
     srv = box->item;
     srv->eventloop = sys->eventloop;
@@ -824,11 +862,6 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
     strncpy(srv->interface, interface, 200);
     srv->port = port;
     srv->handler = *handler;
-
-    srv->connectionSlab =
-        (valk_slab_t *)&((uint8_t *)srv)[sizeof(valk_aio_http_server)];
-    valk_slab_init(srv->connectionSlab, HTTP_MAX_CONNECTION_HEAP,
-                   HTTP_MAX_CONNECTIONS);
   }
 
   uv_mutex_lock(&sys->taskLock);
@@ -847,8 +880,6 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
   uv_async_send(&sys->taskHandle);
   return res;
 }
-
-void valk_aio_hangup(valk_aio_socket *socket);
 
 //// HTTP2 CLIENT
 
@@ -871,17 +902,17 @@ static int __http_client_on_frame_recv_callback(nghttp2_session *session,
   printf("ON_RECV callback \n");
 
   switch (frame->hd.type) {
-  case NGHTTP2_HEADERS:
-    break;
-  case NGHTTP2_RST_STREAM:
-    printf("[INFO] C <---------------------------- S (RST_STREAM) %d\n",
-           frame->hd.stream_id);
-    break;
-  case NGHTTP2_GOAWAY:
-    printf("[INFO] C <---------------------------- S (GOAWAY) %d\n",
-           frame->hd.stream_id);
-    printf("[Client]Received GO AWAY frame\n");
-    break;
+    case NGHTTP2_HEADERS:
+      break;
+    case NGHTTP2_RST_STREAM:
+      printf("[INFO] C <---------------------------- S (RST_STREAM) %d\n",
+             frame->hd.stream_id);
+      break;
+    case NGHTTP2_GOAWAY:
+      printf("[INFO] C <---------------------------- S (GOAWAY) %d\n",
+             frame->hd.stream_id);
+      printf("[Client]Received GO AWAY frame\n");
+      break;
   }
 
   return 0;
@@ -897,9 +928,10 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
   valk_promise *promise =
       nghttp2_session_get_stream_user_data(session, stream_id);
   if (promise) {
-    printf("[INFO] C <---------------------------- S (DATA chunk)\n"
-           "%lu bytes\n",
-           (unsigned long int)len);
+    printf(
+        "[INFO] C <---------------------------- S (DATA chunk)\n"
+        "%lu bytes\n",
+        (unsigned long int)len);
     fwrite(data, 1, len, stdout);
     printf("\n");
 
@@ -1099,7 +1131,7 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
   // be passing a request object with a promise on it
   valk_promise *prom = valk_mem_alloc(sizeof(valk_promise));
   // valk_mem_free(sizeof(valk_promise)); in callback to nghttp2 recv
-  *prom = *promise; // copy this shit
+  *prom = *promise;  // copy this shit
 
   stream_id =
       nghttp2_submit_request2(conn->session, nullptr, hdrs,

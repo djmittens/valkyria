@@ -19,11 +19,11 @@
 /* void ntohl(void); */
 
 typedef struct valk_aio_system valk_aio_system_t;
-typedef struct valk_aio_socket valk_aio_socket;
 
 typedef struct valk_aio_http_server valk_aio_http_server;
 typedef struct valk_aio_http2_client valk_aio_http2_client;
 typedef struct valk_aio_http_conn valk_aio_http_conn;
+typedef struct valk_aio_handle_t valk_aio_handle_t;
 
 char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
                        const char *port);

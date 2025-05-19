@@ -250,8 +250,8 @@ static void valk_print_io(valk_test_t *test) {
   valk_ring_fread(test->_stderr, test->_stderr->capacity - sizeof(test->result),
                   stdout);
   putc('\n', stdout);
-  valk_print_police_tape_line(VALK_REPORT_WIDTH / 2 + 5);
-  putc('\n', stdout);
+  // valk_print_police_tape_line(VALK_REPORT_WIDTH / 2 + 5);
+  // putc('\n', stdout);
 }
 
 void valk_testsuite_print(valk_test_suite_t *suite) {

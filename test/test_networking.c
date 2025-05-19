@@ -38,9 +38,9 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   }
 
   // TODO(networking): refactor the codebase to allow this test
-  // VALK_TEST_ASSERT(arg.connectedCount == arg.disconnectedCount == 1,
-  //                  "Expected a single client connection %d, %d",
-  //                  arg.connectedCount, arg.disconnectedCount);
+  VALK_TEST_ASSERT(arg.connectedCount == arg.disconnectedCount == 1,
+                   "Expected a single client connection %d, %d",
+                   arg.connectedCount, arg.disconnectedCount);
 
   VALK_PASS();
 
