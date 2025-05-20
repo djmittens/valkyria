@@ -125,15 +125,16 @@ typedef enum {
 typedef struct valk_aio_http_conn {
   __aio_http_conn_e state;
   struct valk_aio_http_conn *prev, *next;
-  uv_connect_t req;
-  uv_tcp_t tcpHandle;
   valk_aio_ssl_t ssl;
   // TODO(networking): Sessions could be pooled
   nghttp2_session *session;
   nghttp2_mem session_allocator;
   // connection memory arena
   valk_mem_arena_t *arena;
-  valk_http2_handler_t *handler;
+  valk_http2_handler_t *httpHandler;
+  valk_aio_handle_t *handle;
+  // random UV primitive i dont wanna allocate
+  uv_connect_t req;
 } valk_aio_http_conn;
 
 typedef struct valk_aio_system {
@@ -196,8 +197,8 @@ static void __uv_http_on_tcp_disconnect_cb(uv_handle_t *handle) {
   // with any handle
   valk_aio_handle_t *hndl = handle->data;
   hndl->onClose(hndl);
-  valk_dll_pop(hndl); // remove this handle from live handles
-  valk_slab_release_ptr(hndl->sys->handles, hndl); // finally release it
+  valk_dll_pop(hndl);  // remove this handle from live handles
+  valk_slab_release_ptr(hndl->sys->handles, hndl);  // finally release it
 }
 
 static void __valk_aio_http2_disconnect_cb(valk_aio_system_t *sys,
@@ -217,9 +218,8 @@ static void __valk_aio_http2_disconnect_cb(valk_aio_system_t *sys,
     return;
   }
 
-  conn->tcpHandle.data = promise;
-  if (!uv_is_closing((uv_handle_t *)&conn->tcpHandle)) {
-    uv_close((uv_handle_t *)&conn->tcpHandle, __uv_http_on_tcp_disconnect_cb);
+  if (!uv_is_closing((uv_handle_t *)&conn->handle->uv.tcp)) {
+    uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_http_on_tcp_disconnect_cb);
   }
 }
 
@@ -231,9 +231,9 @@ void valk_aio_http2_client_free(void *arg, valk_arc_box *box) {
   valk_arc_retain(box);
   valk_aio_http_conn *conn = argBox->item;
   printf("Boo did i scare ya?\n");
-  if (conn->handler && conn->handler->onDisconnect) {
+  if (conn->httpHandler && conn->httpHandler->onDisconnect) {
     // IFF the callback is available
-    conn->handler->onDisconnect(conn->handler->arg, conn);
+    conn->httpHandler->onDisconnect(conn->httpHandler->arg, conn);
   }
   valk_arc_release(argBox);
 
@@ -281,7 +281,6 @@ static void __aio_uv_stop(uv_async_t *h) {
   uv_walk(h->loop, __aio_uv_walk_close, NULL);
   uv_run(h->loop, UV_RUN_ONCE);  // close shit out
 }
-
 
 valk_future *valk_aio_read_file(valk_aio_system_t *sys, const char *filename);
 
@@ -490,7 +489,7 @@ static void __http_tcp_unencrypted_read_cb(void *arg,
   if (rv < 0) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "nghttp2_session_mem_recv error: %zd\n", rv);
-    uv_close((uv_handle_t *)&conn->tcpHandle, __uv_http_on_tcp_disconnect_cb);
+    uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_http_on_tcp_disconnect_cb);
   }
 }
 
@@ -506,7 +505,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       fprintf(stderr, "Read error: %s\n", uv_strerror((int)nread));
     }
-    uv_close((uv_handle_t *)&conn->tcpHandle, __uv_http_on_tcp_disconnect_cb);
+    uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_http_on_tcp_disconnect_cb);
     return;
   }
 
@@ -542,7 +541,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     slabItem->buf.len = Out.count;
 
     printf("Sending %ld bytes\n", Out.count);
-    uv_write(&slabItem->req, (uv_stream_t *)&conn->tcpHandle, &slabItem->buf, 1,
+    uv_write(&slabItem->req, (uv_stream_t *)&conn->handle->uv.tcp, &slabItem->buf, 1,
              __http_tcp_on_write_cb);
   } else {
     printf("Nothing to send %d \n", wantToSend);
@@ -604,20 +603,20 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
   // haha point back to thy self
   conn->arena = arena;
 
-  uv_tcp_init(server->loop, &conn->tcpHandle);
-  conn->tcpHandle.data = conn;
-  conn->handler = &srv->handler;
+  uv_tcp_init(server->loop, &conn->handle->uv.tcp);
+  conn->handle->uv.tcp.data = conn;
+  conn->httpHandler = &srv->handler;
 
   // dont need for now because we are using nghttp2 mem buffer for send
   // conn->send_buf.base = valk_mem_alloc(MAX_SEND_BYTES);
-  int res = uv_accept(server, (uv_stream_t *)&conn->tcpHandle);
+  int res = uv_accept(server, (uv_stream_t *)&conn->handle->uv.tcp);
 
   if (!res) {
     // Get the client IP address
     struct sockaddr_storage client_addr;
     int addr_len = sizeof(client_addr);
 
-    if (uv_tcp_getpeername(&conn->tcpHandle, (struct sockaddr *)&client_addr,
+    if (uv_tcp_getpeername(&conn->handle->uv.tcp, (struct sockaddr *)&client_addr,
                            &addr_len) == 0) {
       char ip[INET6_ADDRSTRLEN];
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -684,23 +683,23 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
     __http_send_server_connection_header(conn->session);
 
     //  TODO(networking): Maybe i should call this on the first read?
-    if (conn->handler) {
-      conn->handler->onConnect(conn->handler->arg, conn);
+    if (conn->httpHandler) {
+      conn->httpHandler->onConnect(conn->httpHandler->arg, conn);
     }
 
     // start the connection off by listening, (SSL expects client to send first)
-    uv_read_start((uv_stream_t *)&conn->tcpHandle, __alloc_callback,
+    uv_read_start((uv_stream_t *)&conn->handle->uv.tcp, __alloc_callback,
                   __http_tcp_read_cb);
   } else {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Fuck closing %s\n", uv_strerror(res));
-    uv_close((uv_handle_t *)&conn->tcpHandle, __uv_http_on_tcp_disconnect_cb);
+    uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_http_on_tcp_disconnect_cb);
     // TODO(networking): should probably have a function for properly disposing
     // of the connection objects
     valk_slab_release_ptr(srv->sys->httpConnections, conn->arena);
   }
 }
-static void __http_shutdown_cb(valk_aio_handle_t* hndl) {
+static void __http_shutdown_cb(valk_aio_handle_t *hndl) {
   printf("TODO: Shutdown the server cleanly\n");
 }
 
@@ -843,7 +842,7 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
 typedef struct valk_aio_http2_client {
   SSL_CTX *ssl_ctx;
   // TODO(networking):  connections could be pooled
-  valk_aio_http_conn connection;
+  valk_aio_http_conn *connection;
   char *interface;
   int port;
   // Totally internal, totally unneccessary, but i wanna avoid a tuple
@@ -959,17 +958,17 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
         callbacks, __http_on_data_chunk_recv_callback);
   }
 
-  nghttp2_session_client_new(&client->connection.session, callbacks, client);
+  nghttp2_session_client_new(&client->connection->session, callbacks, client);
 
-  __http_send_client_connection_header(client->connection.session);
+  __http_send_client_connection_header(client->connection->session);
 
   valk_aio_ssl_client_init(&client->ssl_ctx);
   SSL_CTX_set_alpn_protos(client->ssl_ctx, (const unsigned char *)"\x02h2", 3);
 
-  valk_aio_ssl_connect(&client->connection.ssl, client->ssl_ctx);
-  SSL_set_tlsext_host_name(client->connection.ssl.ssl, "localhost");
+  valk_aio_ssl_connect(&client->connection->ssl, client->ssl_ctx);
+  SSL_set_tlsext_host_name(client->connection->ssl.ssl, "localhost");
 
-  valk_aio_ssl_handshake(&client->connection.ssl, &Out);
+  valk_aio_ssl_handshake(&client->connection->ssl, &Out);
 
   int wantToSend = Out.count > 0;
   if (wantToSend) {
@@ -977,14 +976,14 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     slabItem->buf.len = Out.count;
 
     printf("[Client] Sending %ld bytes\n", Out.count);
-    uv_write(&slabItem->req, (uv_stream_t *)&client->connection.tcpHandle,
+    uv_write(&slabItem->req, (uv_stream_t *)&client->connection->handle->uv.tcp,
              &slabItem->buf, 1, __http_tcp_on_write_cb);
   } else {
     valk_slab_release_ptr(tcp_buffer_slab, Out.items);
   }
 
-  uv_read_start((uv_stream_t *)&client->connection.tcpHandle, __alloc_callback,
-                __http_tcp_read_cb);
+  uv_read_start((uv_stream_t *)&client->connection->handle->uv.tcp,
+                __alloc_callback, __http_tcp_read_cb);
 
   printf("Finished initializing client %p\n", (void *)client);
 
@@ -1000,8 +999,20 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys, valk_arc_box *box,
   struct sockaddr_in addr;
 
   valk_aio_http2_client *client = box->item;
+  client->connection->arena =
+      (valk_mem_arena_t *)valk_slab_aquire(sys->httpConnections)->data;
 
-  r = uv_tcp_init(sys->eventloop, &client->connection.tcpHandle);
+  valk_mem_arena_init(client->connection->arena,
+                      HTTP_MAX_CONNECTION_HEAP - sizeof(valk_mem_arena_t));
+  client->connection = valk_mem_arena_alloc(client->connection->arena,
+                                            sizeof(valk_aio_http_conn));
+
+  client->connection->httpHandler = nullptr;
+  client->connection->prev = nullptr;
+  client->connection->next = nullptr;
+  client->connection->handle->uv.tcp.data = client->connection;
+
+  r = uv_tcp_init(sys->eventloop, &client->connection->handle->uv.tcp);
 
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -1013,8 +1024,7 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys, valk_arc_box *box,
     return;
   }
 
-  uv_tcp_nodelay(&client->connection.tcpHandle, 1);
-  client->connection.tcpHandle.data = &client->connection;
+  uv_tcp_nodelay(&client->connection->handle->uv.tcp, 1);
 
   r = uv_ip4_addr(client->interface, client->port, &addr);
   if (r) {
@@ -1027,9 +1037,9 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys, valk_arc_box *box,
     return;
   }
 
-  client->connection.req.data = box;
+  client->connection->req.data = box;
   client->_promise = *promise;
-  uv_tcp_connect(&client->connection.req, &client->connection.tcpHandle,
+  uv_tcp_connect(&client->connection->req, &client->connection->handle->uv.tcp,
                  (const struct sockaddr *)&addr, __uv_http2_connect_cb);
 }
 
@@ -1071,7 +1081,7 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
   valk_aio_http2_client *client = arg->item;
 
   printf("Constructing a request on client %p\n", (void *)client);
-  valk_aio_http_conn *conn = &client->connection;
+  valk_aio_http_conn *conn = client->connection;
   int32_t stream_id;
   // http2_stream_data *stream_data = session_data->stream_data;
   // const char *uri = "local/";
@@ -1119,7 +1129,7 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
       .items = slabItem->data, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
 
   // Only write stuff if ssl is established
-  if (SSL_is_init_finished(client->connection.ssl.ssl)) {
+  if (SSL_is_init_finished(client->connection->ssl.ssl)) {
     __http2_flush_frames(&In, conn);
 
     // Encrypt the new data n stuff
@@ -1131,8 +1141,8 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
       slabItem->buf.len = Out.count;
 
       printf("Sending %ld bytes\n", Out.count);
-      uv_write(&slabItem->req, (uv_stream_t *)&conn->tcpHandle, &slabItem->buf,
-               1, __http_tcp_on_write_cb);
+      uv_write(&slabItem->req, (uv_stream_t *)&conn->handle->uv.tcp,
+               &slabItem->buf, 1, __http_tcp_on_write_cb);
     } else {
       printf("Nothing to send %d \n", wantToSend);
       valk_slab_release_ptr(tcp_buffer_slab, slabItem);
@@ -1229,9 +1239,8 @@ valk_aio_system_t *valk_aio_start() {
 
   sys->httpServers = valk_slab_new(
       sizeof(valk_arc_box) + sizeof(valk_aio_http_server), HTTP_MAX_SERVERS);
-  sys->httpClients =
-      valk_slab_new(sizeof(valk_arc_box) + sizeof(valk_aio_http2_client),
-                    HTTP_MAX_CLIENTS);
+  sys->httpClients = valk_slab_new(
+      sizeof(valk_arc_box) + sizeof(valk_aio_http2_client), HTTP_MAX_CLIENTS);
   sys->httpConnections = sys->handles =
       valk_slab_new(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
 
