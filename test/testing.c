@@ -1,6 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "testing.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <poll.h>
 #include <stdckdint.h>
@@ -97,6 +99,15 @@ size_t valk_testsuite_add_test(valk_test_suite_t *suite, const char *name,
   return suite->tests.count;
 }
 
+static void valk_set_nonblocking(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags == -1) {
+    perror("fcntl");
+    VALK_RAISE("could not set the forked shit non-blocking");
+  }
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
 int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
                    struct pollfd fds[2]) {
   int pout[2], perr[2];
@@ -137,39 +148,66 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
   close(perr[1]);
 
   fds[0].fd = pout[0];
+  valk_set_nonblocking(fds[0].fd);
   fds[0].events = POLLIN;
   fds[1].fd = perr[0];
+  valk_set_nonblocking(fds[1].fd);
   fds[1].events = POLLIN;
   return pid;
 }
 
 void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
-  while (1) {
+  size_t timeoutSeconds = 5;
+  size_t timeoutNanos = timeoutSeconds * 1000000000;
+  struct timespec ts;
+  ts.tv_sec = 0;
+  ts.tv_nsec = 10000;
+  do {
     int r = poll(fds, 2, -1);
 
-    if (r <= 0)
-      continue;
+    if (r <= 0) continue;
     uint8_t buf[256];
 
     if (fds[0].revents & POLLIN) {
       ssize_t n = read(fds[0].fd, buf, sizeof buf);
       if (n > 0) {
         valk_ring_write(test->_stdout, buf, (size_t)n);
+      } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      } else {
+        perror("read");
+        break;
       }
     }
     if (fds[1].revents & POLLIN) {
       ssize_t n = read(fds[1].fd, buf, sizeof buf);
       if (n > 0) {
         valk_ring_write(test->_stderr, buf, (size_t)n);
+      } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      } else {
+        perror("read");
+        break;
       }
     }
     if (fds[0].revents & POLLHUP && fds[1].revents & POLLHUP) {
       break;
     }
-  }
+    nanosleep(&ts, nullptr);
+    timeoutNanos -= ts.tv_nsec;
+  } while (timeoutNanos);
 
   close(fds[0].fd);
   close(fds[1].fd);
+
+  if (timeoutNanos == 0) {
+    // Timeout was reached
+
+    size_t len = snprintf(nullptr, 0, "Test timed out after %ld seconds\n", timeoutSeconds);
+    char buf[++len];
+
+    snprintf(buf, len, "Test timed out after %ld seconds\n", timeoutSeconds);
+    valk_ring_write(test->_stderr, (void *)buf, len);
+    return;
+  }
 
   int wstatus;
   waitpid(pid, &wstatus, 0);
@@ -262,40 +300,40 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
     valk_test_result_t *result = &test->result;
     char *precision;
     switch (result->timePrecision) {
-    case VALK_MILLIS:
-      precision = "ms";
-      break;
-    case VALK_MICROS:
-      precision = "µs";
-      break;
-    case VALK_NANOS:
-      precision = "ns";
-      break;
+      case VALK_MILLIS:
+        precision = "ms";
+        break;
+      case VALK_MICROS:
+        precision = "µs";
+        break;
+      case VALK_NANOS:
+        precision = "ns";
+        break;
     }
 
     int len = VALK_REPORT_WIDTH - strlen(test->name);
 
     switch (result->type) {
-    case VALK_TEST_UNDEFINED: {
-      printf("%s%.*s  UNDEFINED\n", test->name, len, DOT_FILL);
-      break;
-    }
-    case VALK_TEST_PASS:
-      printf("✅ %s%.*s  PASS : in %" PRIu64 "(%s)\n", test->name, len,
-             DOT_FILL, (result->stopTime - result->startTime), precision);
-      break;
-    case VALK_TEST_FAIL:
-      printf("🐞 %s%.*s  FAIL : in %" PRIu64 "(%s)\n", test->name, len,
-             DOT_FILL, (result->stopTime - result->startTime), precision);
-      valk_print_io(test);
+      case VALK_TEST_UNDEFINED: {
+        printf("%s%.*s  UNDEFINED\n", test->name, len, DOT_FILL);
+        break;
+      }
+      case VALK_TEST_PASS:
+        printf("✅ %s%.*s  PASS : in %" PRIu64 "(%s)\n", test->name, len,
+               DOT_FILL, (result->stopTime - result->startTime), precision);
+        break;
+      case VALK_TEST_FAIL:
+        printf("🐞 %s%.*s  FAIL : in %" PRIu64 "(%s)\n", test->name, len,
+               DOT_FILL, (result->stopTime - result->startTime), precision);
+        valk_print_io(test);
 
-      break;
-    case VALK_TEST_CRSH:
-      printf("🌀 %s%.*s  CRSH : in %" PRIu64 "(%s)\n", test->name, len,
-             DOT_FILL, (result->stopTime - result->startTime), precision);
+        break;
+      case VALK_TEST_CRSH:
+        printf("🌀 %s%.*s  CRSH : in %" PRIu64 "(%s)\n", test->name, len,
+               DOT_FILL, (result->stopTime - result->startTime), precision);
 
-      valk_print_io(test);
-      break;
+        valk_print_io(test);
+        break;
     }
   }
 }
@@ -337,11 +375,11 @@ long valk_get_micros(void) {
 
 long valk_get_time(valk_time_precision_e p) {
   switch (p) {
-  case VALK_MILLIS:
-    return valk_get_millis();
-  case VALK_MICROS:
-    return valk_get_micros();
-  case VALK_NANOS:
-    return valk_get_nanos();
+    case VALK_MILLIS:
+      return valk_get_millis();
+    case VALK_MICROS:
+      return valk_get_micros();
+    case VALK_NANOS:
+      return valk_get_nanos();
   }
 }

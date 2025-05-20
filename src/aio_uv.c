@@ -56,7 +56,7 @@ enum {
 
 static __thread valk_slab_t *tcp_buffer_slab;
 
-typedef struct {
+typedef struct __tcp_buffer_slab_item_t {
   uv_write_t req;
   uv_buf_t buf;
   char data[SSL3_RT_MAX_PACKET_SIZE];
@@ -67,7 +67,7 @@ typedef struct __http2_connect_req {
   valk_aio_http2_client *client;
 } __http2_connect_req;
 
-typedef enum {
+typedef enum handle_kind_t {
   VALK_TCP_STREAM,
   VALK_TCP_LISTENER,
   // VALK_TIMER,
@@ -83,6 +83,7 @@ typedef struct valk_aio_handle_t {
   valk_aio_handle_t *next;
   void *ctx;
   valk_aio_system_t *sys;
+
   void (*onOpen)(valk_aio_handle_t *);
   void (*onClose)(valk_aio_handle_t *);
 
@@ -161,7 +162,6 @@ typedef struct valk_aio_http_server {
   char interface[200];
   int port;
   valk_http2_handler_t handler;
-  bool shuttingDown;
 } valk_aio_http_server;
 
 static void __event_loop(void *arg) {
@@ -192,12 +192,12 @@ static void __task_cb(uv_async_t *handle) {
 }
 
 static void __uv_http_on_tcp_disconnect_cb(uv_handle_t *handle) {
-  // TODO(networking): tecnically dont need an allocation here, can probably
-  // have a unit box  out there somwhere.
-  valk_arc_box *box = valk_arc_box_new(VALK_SUC, 0);
-  printf("Disconnection handle -> %p\n", handle->data);
-  valk_promise_respond(handle->data, box);
-  valk_arc_release(box);
+  // TODO(networking): Rename this to something more generic as it can be used
+  // with any handle
+  valk_aio_handle_t *hndl = handle->data;
+  hndl->onClose(hndl);
+  valk_dll_pop(hndl); // remove this handle from live handles
+  valk_slab_release_ptr(hndl->sys->handles, hndl); // finally release it
 }
 
 static void __valk_aio_http2_disconnect_cb(valk_aio_system_t *sys,
@@ -282,56 +282,6 @@ static void __aio_uv_stop(uv_async_t *h) {
   uv_run(h->loop, UV_RUN_ONCE);  // close shit out
 }
 
-//
-valk_aio_system_t *valk_aio_start() {
-  // On linux definitely turn sigpipe off
-  // Otherwise shit crashes.
-  // When the socket dissapears a write may be queued in the event loop
-  // In that case we just want to do proper error handling without the
-  // signal
-  struct sigaction sa = {.sa_handler = SIG_IGN};
-  sigaction(SIGPIPE, &sa, nullptr);
-
-  valk_aio_system_t *sys = valk_mem_alloc(sizeof(valk_aio_system_t));
-
-  valk_aio_ssl_start();
-
-  sys->eventloop = uv_default_loop();
-  sys->count = 0;
-  sys->capacity = 10;
-
-  const size_t srvLen =
-      sizeof(valk_arc_box) + sizeof(valk_aio_http_server) +
-      valk_slab_size(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
-  sys->httpServers = valk_slab_new(srvLen, HTTP_MAX_SERVERS);
-  sys->httpClients = valk_slab_new(srvLen, HTTP_MAX_CLIENTS);
-  sys->handles = valk_slab_new(srvLen, AIO_MAX_HANDLES);
-
-  uv_mutex_init(&sys->taskLock);
-  uv_async_init(sys->eventloop, &sys->taskHandle, __task_cb);
-  uv_async_init(sys->eventloop, &sys->stopper, __aio_uv_stop);
-  sys->taskHandle.data = sys;
-
-  int status = uv_thread_create(&sys->loopThread, __event_loop, sys);
-  if (status) {
-    perror("pthread_create");
-  }
-  return sys;
-}
-
-void valk_aio_stop(valk_aio_system_t *sys) {
-  uv_async_send(&sys->stopper);
-  printf("Processing the stopper\n");
-  uv_thread_join(&sys->loopThread);
-  printf("AFTER the Processing the stopper\n");
-  // while (UV_EBUSY == uv_loop_close(sys->eventloop)) {
-  // };
-  // TODO(networking): need to properly free the system too
-  valk_mem_free(sys->httpServers);
-  valk_mem_free(sys->httpClients);
-  valk_mem_free(sys->handles);
-  valk_mem_free(sys);
-}
 
 valk_future *valk_aio_read_file(valk_aio_system_t *sys, const char *filename);
 
@@ -642,8 +592,10 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
   }
 
   valk_aio_http_server *srv = server->data;
+
   // Init the arena
-  valk_mem_arena_t *arena = (void *)valk_slab_aquire(srv->sys->connectionSlab)->data;
+  valk_mem_arena_t *arena =
+      (void *)valk_slab_aquire(srv->sys->httpConnections)->data;
   valk_mem_arena_init(arena,
                       HTTP_MAX_CONNECTION_HEAP - sizeof(valk_mem_arena_t));
 
@@ -745,8 +697,11 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
     uv_close((uv_handle_t *)&conn->tcpHandle, __uv_http_on_tcp_disconnect_cb);
     // TODO(networking): should probably have a function for properly disposing
     // of the connection objects
-    valk_slab_release_ptr(srv->connectionSlab, conn->arena);
+    valk_slab_release_ptr(srv->sys->httpConnections, conn->arena);
   }
+}
+static void __http_shutdown_cb(valk_aio_handle_t* hndl) {
+  printf("TODO: Shutdown the server cleanly\n");
 }
 
 static void __http_listen_cb(valk_aio_system_t *sys, valk_arc_box *box,
@@ -755,9 +710,15 @@ static void __http_listen_cb(valk_aio_system_t *sys, valk_arc_box *box,
   int r;
   struct sockaddr_in addr;
   valk_aio_http_server *srv = box->item;
+  // Initialize the listener handle
   srv->listener = (void *)valk_slab_aquire(sys->handles)->data;
+  srv->listener->kind = VALK_TCP_LISTENER;
+  srv->listener->ctx = srv;
+  srv->listener->onOpen = nullptr;
+  srv->listener->onClose = __http_shutdown_cb;
+  srv->listener->uv.tcp.data = srv;
 
-  r = uv_tcp_init(srv->eventloop, &srv->listener->uv.tcp);
+  r = uv_tcp_init(srv->sys->eventloop, &srv->listener->uv.tcp);
   uv_tcp_nodelay(&srv->listener->uv.tcp, 1);
 
   if (r) {
@@ -799,7 +760,6 @@ static void __http_listen_cb(valk_aio_system_t *sys, valk_arc_box *box,
     return;
   }
 
-  srv->listener->ctx = srv;
   r = uv_listen((uv_stream_t *)&srv->listener->uv.tcp, 128,
                 __http_server_accept_cb);
   if (r) {
@@ -843,12 +803,9 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
                                    const char *interface, const int port,
                                    const char *keyfile, const char *certfile,
                                    valk_http2_handler_t *handler) {
-  // valk_arc_box *box = valk_arc_box_new(VALK_SUC,
-  // sizeof(valk_aio_http_server));
-  valk_slab_item_t *slab = valk_slab_aquire(sys->httpServers);
+  valk_arc_box *box = (valk_arc_box *)valk_slab_aquire(sys->httpServers)->data;
   valk_future *res = valk_future_new();
 
-  valk_arc_box *box = (valk_arc_box *)slab->data;
   valk_aio_http_server *srv;
   {
     valk_arc_box_init(box, VALK_SUC, sizeof(valk_aio_http_server));
@@ -856,19 +813,19 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
     box->allocator = (valk_mem_allocator_t *)sys->httpServers;
 
     srv = box->item;
-    srv->eventloop = sys->eventloop;
+    memset(srv, 0, sizeof(valk_aio_http_server));
+    srv->sys = sys;
 
     // srv->interface = strdup(interface);
     strncpy(srv->interface, interface, 200);
     srv->port = port;
     srv->handler = *handler;
+    valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
+    SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
   }
 
   uv_mutex_lock(&sys->taskLock);
   struct valk_aio_task task;
-
-  valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
-  SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
 
   task.arg = box;
   task.promise.item = res;
@@ -1250,6 +1207,58 @@ char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
   valk_arc_release(client);
 
   return res;
+}
+
+//
+valk_aio_system_t *valk_aio_start() {
+  // On linux definitely turn sigpipe off
+  // Otherwise ''hit crashes.
+  // When the socket dissapears a write may be queued in the event loop
+  // In that case we just want to do proper error handling without the
+  // signal
+  struct sigaction sa = {.sa_handler = SIG_IGN};
+  sigaction(SIGPIPE, &sa, nullptr);
+
+  valk_aio_system_t *sys = valk_mem_alloc(sizeof(valk_aio_system_t));
+
+  valk_aio_ssl_start();
+
+  sys->eventloop = uv_default_loop();
+  sys->count = 0;
+  sys->capacity = 10;
+
+  sys->httpServers = valk_slab_new(
+      sizeof(valk_arc_box) + sizeof(valk_aio_http_server), HTTP_MAX_SERVERS);
+  sys->httpClients =
+      valk_slab_new(sizeof(valk_arc_box) + sizeof(valk_aio_http2_client),
+                    HTTP_MAX_CLIENTS);
+  sys->httpConnections = sys->handles =
+      valk_slab_new(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
+
+  uv_mutex_init(&sys->taskLock);
+  uv_async_init(sys->eventloop, &sys->taskHandle, __task_cb);
+  uv_async_init(sys->eventloop, &sys->stopper, __aio_uv_stop);
+  sys->taskHandle.data = sys;
+
+  int status = uv_thread_create(&sys->loopThread, __event_loop, sys);
+  if (status) {
+    perror("pthread_create");
+  }
+  return sys;
+}
+
+void valk_aio_stop(valk_aio_system_t *sys) {
+  uv_async_send(&sys->stopper);
+  printf("Processing the stopper\n");
+  uv_thread_join(&sys->loopThread);
+  printf("AFTER the Processing the stopper\n");
+  // while (UV_EBUSY == uv_loop_close(sys->eventloop)) {
+  // };
+  // TODO(networking): need to properly free the system too
+  valk_mem_free(sys->httpServers);
+  valk_mem_free(sys->httpClients);
+  valk_mem_free(sys->handles);
+  valk_mem_free(sys);
 }
 
 // reference code for openssl setup
