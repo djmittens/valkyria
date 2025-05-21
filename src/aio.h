@@ -74,8 +74,3 @@ valk_future *valk_aio_http2_shutdown(valk_aio_http_server *srv);
 valk_future *valk_aio_http2_connect(valk_aio_system_t *sys, const char *interface,
                                     const int port, const char *certfile);
 
-///
-/// @return future with a boxed `void`
-///
-valk_future *valk_aio_http2_disconnect(valk_aio_system_t *sys,
-                                       valk_arc_box *conn);

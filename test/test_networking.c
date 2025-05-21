@@ -1,3 +1,5 @@
+#include "test_networking.h"
+
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -6,7 +8,6 @@
 #include "common.h"
 #include "concurrency.h"
 #include "memory.h"
-#include "test_networking.h"
 #include "testing.h"
 
 void test_demo_socket_server(VALK_TEST_ARGS()) {
@@ -32,15 +33,23 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   char *response = valk_client_demo(sys, "127.0.0.1", "8080");
 
   if (strcmp(response, VALK_HTTP_MOTD)) {
-    VALK_FAIL("Did not receive the expected result from the servier Expected: "
-              "[%s] Actual: [%s]",
-              VALK_HTTP_MOTD, response);
+    VALK_FAIL(
+        "Did not receive the expected result from the servier Expected: "
+        "[%s] Actual: [%s]",
+        VALK_HTTP_MOTD, response);
   }
 
+  // these are atomics because, we read it from main thread end write in event
+  // loop
+  size_t connected = __atomic_load_n(&arg.connectedCount, __ATOMIC_ACQUIRE);
+
+  size_t disconnected =
+      __atomic_load_n(&arg.disconnectedCount, __ATOMIC_ACQUIRE);
+
   // TODO(networking): refactor the codebase to allow this test
-  VALK_TEST_ASSERT(arg.connectedCount == arg.disconnectedCount == 1,
-                   "Expected a single client connection %d, %d",
-                   arg.connectedCount, arg.disconnectedCount);
+  VALK_TEST_ASSERT(connected == disconnected == 1,
+                   "Expected a single client connection %d, %d", connected,
+                   disconnected);
 
   VALK_PASS();
 
@@ -106,12 +115,14 @@ int main(int argc, const char **argv) {
 
 void cb_onConnect(void *arg, valk_aio_http_conn *) {
   valk_srv_state_t *handler = arg;
-  handler->connectedCount++;
+
+  __atomic_fetch_add(&handler->connectedCount, 1, __ATOMIC_RELAXED);
 }
 
 void cb_onDisconnect(void *arg, valk_aio_http_conn *) {
   valk_srv_state_t *handler = arg;
-  handler->disconnectedCount--;
+  printf("HOLLYYEE got called, %d\n", handler->disconnectedCount);
+  __atomic_fetch_add(&handler->disconnectedCount, 1, __ATOMIC_RELAXED);
 }
 
 void cb_onHeader(void *arg, valk_aio_http_conn *, size_t stream, char *name,
