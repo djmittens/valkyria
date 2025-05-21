@@ -1,7 +1,7 @@
 #include "collections.h"
-#define _POSIX_C_SOURCE \
-  200809L  // The fuck is this ? turns out sigaction and shit has to be enabled
-           // separately in strict mode
+#define _POSIX_C_SOURCE                                                        \
+  200809L // The fuck is this ? turns out sigaction and shit has to be enabled
+          // separately in strict mode
 
 #include <netinet/in.h>
 #include <nghttp2/nghttp2.h>
@@ -25,16 +25,16 @@
 #include "concurrency.h"
 #include "memory.h"
 
-#define MAKE_NV(NAME, VALUE, VALUELEN)                         \
-  {                                                            \
-      (uint8_t *)NAME, (uint8_t *)VALUE,     sizeof(NAME) - 1, \
-      VALUELEN,        NGHTTP2_NV_FLAG_NONE,                   \
+#define MAKE_NV(NAME, VALUE, VALUELEN)                                         \
+  {                                                                            \
+      (uint8_t *)NAME, (uint8_t *)VALUE,     sizeof(NAME) - 1,                 \
+      VALUELEN,        NGHTTP2_NV_FLAG_NONE,                                   \
   }
 
-#define MAKE_NV2(NAME, VALUE)                                    \
-  {                                                              \
-      (uint8_t *)NAME,   (uint8_t *)VALUE,     sizeof(NAME) - 1, \
-      sizeof(VALUE) - 1, NGHTTP2_NV_FLAG_NONE,                   \
+#define MAKE_NV2(NAME, VALUE)                                                  \
+  {                                                                            \
+      (uint8_t *)NAME,   (uint8_t *)VALUE,     sizeof(NAME) - 1,               \
+      sizeof(VALUE) - 1, NGHTTP2_NV_FLAG_NONE,                                 \
   }
 
 // It houses requests to the event loop
@@ -68,8 +68,8 @@ typedef struct __http2_connect_req {
 } __http2_connect_req;
 
 typedef enum handle_kind_t {
-  VALK_TCP_STREAM,
-  VALK_TCP_LISTENER,
+  VALK_HNDL_EMPTY,
+  VALK_HNDL_TCP,
   // VALK_TIMER,
   // VALK_FILE,
   // VALK_SIGNAL,
@@ -78,10 +78,8 @@ typedef enum handle_kind_t {
 
 typedef struct valk_aio_handle_t {
   handle_kind_t kind;
-  int fd;
   valk_aio_handle_t *prev;
   valk_aio_handle_t *next;
-  void *ctx;
   valk_aio_system_t *sys;
 
   void (*onOpen)(valk_aio_handle_t *);
@@ -151,7 +149,7 @@ typedef struct valk_aio_system {
   valk_slab_t *httpClients;
   valk_slab_t *httpConnections;
   valk_slab_t *handles;
-  valk_aio_handle_t *liveHandles;
+  valk_aio_handle_t liveHandles;
   bool shuttingDown;
 } valk_aio_system_t;
 
@@ -196,9 +194,11 @@ static void __uv_http_on_tcp_disconnect_cb(uv_handle_t *handle) {
   // TODO(networking): Rename this to something more generic as it can be used
   // with any handle
   valk_aio_handle_t *hndl = handle->data;
-  hndl->onClose(hndl);
-  valk_dll_pop(hndl);  // remove this handle from live handles
-  valk_slab_release_ptr(hndl->sys->handles, hndl);  // finally release it
+  if (hndl->onClose != nullptr) {
+    hndl->onClose(hndl);
+  }
+  valk_dll_pop(hndl); // remove this handle from live handles
+  valk_slab_release_ptr(hndl->sys->handles, hndl); // finally release it
 }
 
 static void __valk_aio_http2_disconnect_cb(valk_aio_system_t *sys,
@@ -219,7 +219,8 @@ static void __valk_aio_http2_disconnect_cb(valk_aio_system_t *sys,
   }
 
   if (!uv_is_closing((uv_handle_t *)&conn->handle->uv.tcp)) {
-    uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_http_on_tcp_disconnect_cb);
+    uv_close((uv_handle_t *)&conn->handle->uv.tcp,
+             __uv_http_on_tcp_disconnect_cb);
   }
 }
 
@@ -279,7 +280,7 @@ static void __aio_uv_walk_close(uv_handle_t *h, void *arg) {
 static void __aio_uv_stop(uv_async_t *h) {
   uv_stop(h->loop);
   uv_walk(h->loop, __aio_uv_walk_close, NULL);
-  uv_run(h->loop, UV_RUN_ONCE);  // close shit out
+  uv_run(h->loop, UV_RUN_ONCE); // close shit out
 }
 
 valk_future *valk_aio_read_file(valk_aio_system_t *sys, const char *filename);
@@ -351,7 +352,7 @@ static int __http_on_header_callback(nghttp2_session *session,
   fprintf(stderr, "HDR: %.*s: %.*s\n", (int)namelen, name, (int)valuelen,
           value);
 
-  return 0;  // success
+  return 0; // success
 }
 static int __http_on_begin_headers_callback(nghttp2_session *session,
                                             const nghttp2_frame *frame,
@@ -489,7 +490,8 @@ static void __http_tcp_unencrypted_read_cb(void *arg,
   if (rv < 0) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "nghttp2_session_mem_recv error: %zd\n", rv);
-    uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_http_on_tcp_disconnect_cb);
+    uv_close((uv_handle_t *)&conn->handle->uv.tcp,
+             __uv_http_on_tcp_disconnect_cb);
   }
 }
 
@@ -505,7 +507,8 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       fprintf(stderr, "Read error: %s\n", uv_strerror((int)nread));
     }
-    uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_http_on_tcp_disconnect_cb);
+    uv_close((uv_handle_t *)&conn->handle->uv.tcp,
+             __uv_http_on_tcp_disconnect_cb);
     return;
   }
 
@@ -541,8 +544,8 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     slabItem->buf.len = Out.count;
 
     printf("Sending %ld bytes\n", Out.count);
-    uv_write(&slabItem->req, (uv_stream_t *)&conn->handle->uv.tcp, &slabItem->buf, 1,
-             __http_tcp_on_write_cb);
+    uv_write(&slabItem->req, (uv_stream_t *)&conn->handle->uv.tcp,
+             &slabItem->buf, 1, __http_tcp_on_write_cb);
   } else {
     printf("Nothing to send %d \n", wantToSend);
     valk_slab_release_ptr(tcp_buffer_slab, slabItem);
@@ -602,10 +605,18 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
       valk_mem_arena_alloc(arena, sizeof(struct valk_aio_http_conn));
   // haha point back to thy self
   conn->arena = arena;
+  conn->handle =
+      (valk_aio_handle_t *)valk_slab_aquire(srv->sys->httpConnections)->data;
+
+  conn->handle->kind = VALK_HNDL_TCP;
+  conn->handle->sys = srv->sys;
+  conn->handle->uv.tcp.data = conn;
+
+  conn->httpHandler = &srv->handler;
+
+  valk_dll_insert_after(&srv->sys->liveHandles, conn->handle);
 
   uv_tcp_init(server->loop, &conn->handle->uv.tcp);
-  conn->handle->uv.tcp.data = conn;
-  conn->httpHandler = &srv->handler;
 
   // dont need for now because we are using nghttp2 mem buffer for send
   // conn->send_buf.base = valk_mem_alloc(MAX_SEND_BYTES);
@@ -616,8 +627,8 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
     struct sockaddr_storage client_addr;
     int addr_len = sizeof(client_addr);
 
-    if (uv_tcp_getpeername(&conn->handle->uv.tcp, (struct sockaddr *)&client_addr,
-                           &addr_len) == 0) {
+    if (uv_tcp_getpeername(&conn->handle->uv.tcp,
+                           (struct sockaddr *)&client_addr, &addr_len) == 0) {
       char ip[INET6_ADDRSTRLEN];
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memset(ip, 0, sizeof(ip));
@@ -693,7 +704,8 @@ static void __http_server_accept_cb(uv_stream_t *server, int status) {
   } else {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Fuck closing %s\n", uv_strerror(res));
-    uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_http_on_tcp_disconnect_cb);
+    uv_close((uv_handle_t *)&conn->handle->uv.tcp,
+             __uv_http_on_tcp_disconnect_cb);
     // TODO(networking): should probably have a function for properly disposing
     // of the connection objects
     valk_slab_release_ptr(srv->sys->httpConnections, conn->arena);
@@ -711,8 +723,7 @@ static void __http_listen_cb(valk_aio_system_t *sys, valk_arc_box *box,
   valk_aio_http_server *srv = box->item;
   // Initialize the listener handle
   srv->listener = (void *)valk_slab_aquire(sys->handles)->data;
-  srv->listener->kind = VALK_TCP_LISTENER;
-  srv->listener->ctx = srv;
+  srv->listener->kind = VALK_HNDL_TCP;
   srv->listener->onOpen = nullptr;
   srv->listener->onClose = __http_shutdown_cb;
   srv->listener->uv.tcp.data = srv;
@@ -746,7 +757,7 @@ static void __http_listen_cb(valk_aio_system_t *sys, valk_arc_box *box,
   r = uv_tcp_bind(&srv->listener->uv.tcp, (const struct sockaddr *)&addr,
                   UV_TCP_REUSEPORT);
 #else
-  r = uv_tcp_bind(&srv->listener, (const struct sockaddr *)&addr, 0);
+  r = uv_tcp_bind(&srv->listener->uv.tcp, (const struct sockaddr *)&addr, 0);
 #endif
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -773,11 +784,7 @@ static void __http_listen_cb(valk_aio_system_t *sys, valk_arc_box *box,
   } else {
     printf("Listening on %s:%d\n", srv->interface, srv->port);
     valk_promise_respond(promise, box);
-    if (sys->liveHandles != nullptr) {
-      valk_dll_insert_after(sys->liveHandles, srv->listener);
-    } else {
-      sys->liveHandles = srv->listener;
-    }
+    valk_dll_insert_after(&sys->liveHandles, srv->listener);
   }
   valk_arc_release(box);
 }
@@ -858,17 +865,17 @@ static int __http_client_on_frame_recv_callback(nghttp2_session *session,
   printf("ON_RECV callback \n");
 
   switch (frame->hd.type) {
-    case NGHTTP2_HEADERS:
-      break;
-    case NGHTTP2_RST_STREAM:
-      printf("[INFO] C <---------------------------- S (RST_STREAM) %d\n",
-             frame->hd.stream_id);
-      break;
-    case NGHTTP2_GOAWAY:
-      printf("[INFO] C <---------------------------- S (GOAWAY) %d\n",
-             frame->hd.stream_id);
-      printf("[Client]Received GO AWAY frame\n");
-      break;
+  case NGHTTP2_HEADERS:
+    break;
+  case NGHTTP2_RST_STREAM:
+    printf("[INFO] C <---------------------------- S (RST_STREAM) %d\n",
+           frame->hd.stream_id);
+    break;
+  case NGHTTP2_GOAWAY:
+    printf("[INFO] C <---------------------------- S (GOAWAY) %d\n",
+           frame->hd.stream_id);
+    printf("[Client]Received GO AWAY frame\n");
+    break;
   }
 
   return 0;
@@ -884,10 +891,9 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
   valk_promise *promise =
       nghttp2_session_get_stream_user_data(session, stream_id);
   if (promise) {
-    printf(
-        "[INFO] C <---------------------------- S (DATA chunk)\n"
-        "%lu bytes\n",
-        (unsigned long int)len);
+    printf("[INFO] C <---------------------------- S (DATA chunk)\n"
+           "%lu bytes\n",
+           (unsigned long int)len);
     fwrite(data, 1, len, stdout);
     printf("\n");
 
@@ -999,18 +1005,31 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys, valk_arc_box *box,
   struct sockaddr_in addr;
 
   valk_aio_http2_client *client = box->item;
-  client->connection->arena =
+
+  valk_mem_arena_t *arena =
       (valk_mem_arena_t *)valk_slab_aquire(sys->httpConnections)->data;
 
-  valk_mem_arena_init(client->connection->arena,
+  valk_mem_arena_init(arena,
                       HTTP_MAX_CONNECTION_HEAP - sizeof(valk_mem_arena_t));
-  client->connection = valk_mem_arena_alloc(client->connection->arena,
-                                            sizeof(valk_aio_http_conn));
+  client->connection = valk_mem_arena_alloc(arena, sizeof(valk_aio_http_conn));
 
+  VALK_ASSERT(client->connection != NULL,
+              "Client connection must be allocated");
+
+  client->connection->arena = arena;
   client->connection->httpHandler = nullptr;
   client->connection->prev = nullptr;
   client->connection->next = nullptr;
+
+  client->connection->handle =
+      (valk_aio_handle_t *)valk_slab_aquire(sys->handles)->data;
+
+  client->connection->handle->kind = VALK_HNDL_TCP;
+  client->connection->handle->sys = sys;
   client->connection->handle->uv.tcp.data = client->connection;
+
+  // activate the handle
+  valk_dll_insert_after(&sys->liveHandles, client->connection->handle);
 
   r = uv_tcp_init(sys->eventloop, &client->connection->handle->uv.tcp);
 
@@ -1098,7 +1117,7 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
   // be passing a request object with a promise on it
   valk_promise *prom = valk_mem_alloc(sizeof(valk_promise));
   // valk_mem_free(sizeof(valk_promise)); in callback to nghttp2 recv
-  *prom = *promise;  // copy this shit
+  *prom = *promise; // copy this shit
 
   stream_id =
       nghttp2_submit_request2(conn->session, nullptr, hdrs,
@@ -1236,6 +1255,10 @@ valk_aio_system_t *valk_aio_start() {
   sys->eventloop = uv_default_loop();
   sys->count = 0;
   sys->capacity = 10;
+
+  sys->liveHandles.kind = VALK_HNDL_EMPTY;
+  sys->liveHandles.next = nullptr;
+  sys->liveHandles.prev = nullptr;
 
   sys->httpServers = valk_slab_new(
       sizeof(valk_arc_box) + sizeof(valk_aio_http_server), HTTP_MAX_SERVERS);

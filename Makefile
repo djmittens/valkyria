@@ -6,6 +6,8 @@ ifeq ($(UNAME), Darwin)
 	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DCMAKE_BUILD_TYPE=Debug -S . -B build;
 endif
 
+JOBS := $(shell nproc 2>/dev/null || echo 12)
+
 .ONESHELL:
 .PHONY: cmake
 cmake build/.cmake: CMakeLists.txt homebrew.cmake
@@ -25,7 +27,7 @@ build : build/.cmake
 
 .PHONY: lint
 lint : build/.cmake 
-	run-clang-tidy -p build -j $(shell nproc) -extra-arg=-std=c23
+	run-clang-tidy -p build -j $(JOBS) -extra-arg=-std=c23
 
 # This will install editline and maybe other depenedencies on linux / macos
 # editline particularly uses autotools, meaning its a pain to get it to work with cmakejo

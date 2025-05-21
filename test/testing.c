@@ -165,7 +165,8 @@ void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
   do {
     int r = poll(fds, 2, -1);
 
-    if (r <= 0) continue;
+    if (r <= 0)
+      continue;
     uint8_t buf[256];
 
     if (fds[0].revents & POLLIN) {
@@ -201,7 +202,8 @@ void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
   if (timeoutNanos == 0) {
     // Timeout was reached
 
-    size_t len = snprintf(nullptr, 0, "Test timed out after %ld seconds\n", timeoutSeconds);
+    size_t len = snprintf(nullptr, 0, "Test timed out after %ld seconds\n",
+                          timeoutSeconds);
     char buf[++len];
 
     snprintf(buf, len, "Test timed out after %ld seconds\n", timeoutSeconds);
@@ -221,14 +223,15 @@ void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
     valk_ring_read(test->_stderr, sizeof(test->result), &test->result);
   } else if (WIFSIGNALED(wstatus)) {
     test->result.type = VALK_TEST_CRSH;
-    int sig = WTERMSIG(wstatus);
-    char *name = strsignal(sig);
 
-    size_t len = snprintf(nullptr, 0, "Child died because of signal %d(%s)\n",
+    int sig = WTERMSIG(wstatus);
+    const char *name = strsignal(sig);
+
+    size_t len = snprintf(nullptr, 0, "Child died because of signal %d (%s)\n",
                           sig, name);
     char buf[++len];
 
-    snprintf(buf, len, "Child died because of signal %d(%s)\n", sig, name);
+    snprintf(buf, len, "Child died because of signal %d (%s)\n", sig, name);
 
     valk_ring_write(test->_stderr, (void *)buf, len);
   }
@@ -285,8 +288,13 @@ static void valk_print_io(valk_test_t *test) {
   printf("[STDERR]");
   valk_print_police_tape_line(VALK_REPORT_WIDTH / 2);
   putc('\n', stdout);
-  valk_ring_fread(test->_stderr, test->_stderr->capacity - sizeof(test->result),
-                  stdout);
+  if (test->result.type == VALK_TEST_CRSH) {
+    // if the test crash then there were no results in stderr
+    valk_ring_fread(test->_stderr, test->_stderr->capacity, stdout);
+  } else {
+    valk_ring_fread(test->_stderr,
+                    test->_stderr->capacity - sizeof(test->result), stdout);
+  }
   putc('\n', stdout);
   // valk_print_police_tape_line(VALK_REPORT_WIDTH / 2 + 5);
   // putc('\n', stdout);
@@ -300,40 +308,45 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
     valk_test_result_t *result = &test->result;
     char *precision;
     switch (result->timePrecision) {
-      case VALK_MILLIS:
-        precision = "ms";
-        break;
-      case VALK_MICROS:
-        precision = "µs";
-        break;
-      case VALK_NANOS:
-        precision = "ns";
-        break;
+    case VALK_MILLIS:
+      precision = "ms";
+      break;
+    case VALK_MICROS:
+      precision = "µs";
+      break;
+    case VALK_NANOS:
+      precision = "ns";
+      break;
     }
 
     int len = VALK_REPORT_WIDTH - strlen(test->name);
 
     switch (result->type) {
-      case VALK_TEST_UNDEFINED: {
-        printf("%s%.*s  UNDEFINED\n", test->name, len, DOT_FILL);
-        break;
-      }
-      case VALK_TEST_PASS:
-        printf("✅ %s%.*s  PASS : in %" PRIu64 "(%s)\n", test->name, len,
-               DOT_FILL, (result->stopTime - result->startTime), precision);
-        break;
-      case VALK_TEST_FAIL:
-        printf("🐞 %s%.*s  FAIL : in %" PRIu64 "(%s)\n", test->name, len,
-               DOT_FILL, (result->stopTime - result->startTime), precision);
-        valk_print_io(test);
+    case VALK_TEST_UNDEFINED: {
+      printf("%s%.*s  UNDEFINED\n", test->name, len, DOT_FILL);
+      break;
+    }
+    case VALK_TEST_PASS:
+      printf("✅ %s%.*s  PASS : in %" PRIu64 "(%s)\n", test->name, len,
+             DOT_FILL, (result->stopTime - result->startTime), precision);
+      break;
+    case VALK_TEST_FAIL:
+      printf("🐞 %s%.*s  FAIL : in %" PRIu64 "(%s)\n", test->name, len,
+             DOT_FILL, (result->stopTime - result->startTime), precision);
 
-        break;
-      case VALK_TEST_CRSH:
-        printf("🌀 %s%.*s  CRSH : in %" PRIu64 "(%s)\n", test->name, len,
-               DOT_FILL, (result->stopTime - result->startTime), precision);
+#ifdef VALK_TEST_FORK
+      valk_print_io(test);
+#endif
 
-        valk_print_io(test);
-        break;
+      break;
+    case VALK_TEST_CRSH:
+      printf("🌀 %s%.*s  CRSH : in %" PRIu64 "(%s)\n", test->name, len,
+             DOT_FILL, (result->stopTime - result->startTime), precision);
+
+#ifdef VALK_TEST_FORK
+      valk_print_io(test);
+#endif
+      break;
     }
   }
 }
@@ -375,11 +388,11 @@ long valk_get_micros(void) {
 
 long valk_get_time(valk_time_precision_e p) {
   switch (p) {
-    case VALK_MILLIS:
-      return valk_get_millis();
-    case VALK_MICROS:
-      return valk_get_micros();
-    case VALK_NANOS:
-      return valk_get_nanos();
+  case VALK_MILLIS:
+    return valk_get_millis();
+  case VALK_MICROS:
+    return valk_get_micros();
+  case VALK_NANOS:
+    return valk_get_nanos();
   }
 }
