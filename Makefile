@@ -3,7 +3,7 @@ ifeq ($(UNAME), Linux)
 	CMAKE= cmake -G Ninja -DASAN=0 -DCMAKE_BUILD_TYPE=Debug -S . -B build ;
 endif
 ifeq ($(UNAME), Darwin)
-	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DCMAKE_BUILD_TYPE=Debug -S . -B build;
+	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DASAN=1 -DCMAKE_BUILD_TYPE=Debug -S . -B build;
 endif
 
 JOBS := $(shell nproc 2>/dev/null || echo 12)

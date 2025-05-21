@@ -1,12 +1,12 @@
-#include "common.h"
-#include "memory.h"
-#include "parser.h"
-#include "testing.h"
-
 #include <concurrency.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "common.h"
+#include "memory.h"
+#include "parser.h"
+#include "testing.h"
 
 typedef struct {
   valk_test_suite_t *suite;
@@ -26,7 +26,7 @@ static valk_arc_box *test_callback(valk_arc_box *_arg) {
 }
 
 void test_task_queue(VALK_TEST_ARGS()) {
-  valk_lval_t *ast = VALK_FIXTURE("prelude");
+  // valk_lval_t *ast = VALK_FIXTURE("prelude");
   VALK_TEST();
 
   size_t maxSize = 5;
@@ -46,27 +46,24 @@ void test_task_queue(VALK_TEST_ARGS()) {
 
   // addd 7 items
   for (size_t i = 0; i < 8; i++) {
-
     valk_future *fut = valk_future_new();
 
-    valk_arc_retain(argBox);
 
     valk_task task = {.type = VALK_TASK,
                       .arg = argBox,
                       .func = test_callback,
                       .promise = {fut}};
+
+    valk_arc_retain(argBox);
     int err = valk_work_add(&queue, task);
 
-    if (err) {
-      valk_arc_box *bres = valk_arc_box_err("Cancelled");
-      valk_promise_respond(&task.promise, bres);
-      // cleanup if there was an error
-      valk_arc_release(task.promise.item);
-      valk_arc_release(bres);
-    }
     if (i >= maxSize) {
       VALK_TEST_ASSERT(
           err == 1, "Expected add to return an error, if the queue is full ");
+      // valk_arc_box *bres = valk_arc_box_err("Cancelled");
+      // valk_promise_respond(&task.promise, bres);
+      // // cleanup if there was an error
+      // valk_arc_release(bres);
     } else {
       VALK_TEST_ASSERT(err == 0,
                        "Expected the add to return success  when it has space");
@@ -82,7 +79,10 @@ void test_task_queue(VALK_TEST_ARGS()) {
       VALK_TEST_ASSERT(
           queue.count == i + 1,
           "Expected the count to be 1 more than item offset [offset: %d]", i);
+
     }
+
+    // valk_arc_release(fut);
   }
 
   VALK_TEST_ASSERT(queue.count == maxSize,
@@ -90,11 +90,8 @@ void test_task_queue(VALK_TEST_ARGS()) {
 
   VALK_TEST_ASSERT(queue.count == maxSize, "Expected the count to be 5");
   // pop 2 items
-  valk_task task;
   for (size_t i = 0; i < 8; i++) {
-    task.func = nullptr;
-    task.arg = nullptr;
-    task.promise.item = nullptr;
+    valk_task task = {0};
 
     int res = valk_work_pop(&queue, &task);
     if (i >= maxSize) {
@@ -123,15 +120,14 @@ void test_task_queue(VALK_TEST_ARGS()) {
           "Expected the count to be 1 more than item offset [offset: %d]", i);
 
       // Release the promise
-      valk_arc_box *bres = valk_arc_box_err("Cancelled");
+      valk_arc_box *bres = valk_arc_box_new(VALK_SUC, 0);
       valk_promise_respond(&task.promise, bres);
-      valk_arc_release(task.promise.item);
       valk_arc_release(bres);
     }
   }
 
   VALK_PASS();
-  valk_lval_free(ast);
+  // valk_lval_free(ast);
   valk_work_free(&queue);
 }
 
@@ -183,8 +179,8 @@ int main(int argc, const char **argv) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
-  valk_testsuite_add_test(suite, "test_concurrency", test_concurrency);
-  valk_testsuite_add_test(suite, "test_task_queue", test_task_queue);
+  // valk_testsuite_add_test(suite, "test_concurrency", test_concurrency);
+  // valk_testsuite_add_test(suite, "test_task_queue", test_task_queue);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

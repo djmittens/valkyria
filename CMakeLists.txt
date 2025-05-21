@@ -1,7 +1,12 @@
 cmake_minimum_required(VERSION 3.26 FATAL_ERROR)
 
-set(CMAKE_C_COMPILER "/usr/bin/clang")
-set(CMAKE_CXX_COMPILER "/usr/bin/clang++")
+
+if (HOMEBREW_CLANG)
+  include (${CMAKE_CURRENT_SOURCE_DIR}/homebrew.cmake)
+else()
+  set(CMAKE_C_COMPILER "/usr/bin/clang")
+  set(CMAKE_CXX_COMPILER "/usr/bin/clang++")
+endif()
 
 
 project(valkyria LANGUAGES C)
@@ -42,10 +47,6 @@ set(CMAKE_C_STANDARD 23) # LOL current year - 6 is gold
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-if (HOMEBREW_CLANG)
-  include (${CMAKE_CURRENT_SOURCE_DIR}/homebrew.cmake)
-endif()
 
 
 find_path(LIBUV_INCLUDE_DIR NAMES uv.h)
