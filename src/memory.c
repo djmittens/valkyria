@@ -1,9 +1,11 @@
 #include "memory.h"
-#include "common.h"
+
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "common.h"
 
 #define VALK_SLAB_TREIBER_STACK
 #define VALK_SLAB_VERSIONS
@@ -12,14 +14,14 @@ __thread valk_thread_context_t valk_thread_ctx = {nullptr};
 
 char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self) {
   switch (self) {
-  case VALK_ALLOC_NULL:
-    return "NULL Alloc";
-  case VALK_ALLOC_MALLOC:
-    return "Malloc Alloc";
-  case VALK_ALLOC_ARENA:
-    return "Arena Alloc";
-  case VALK_ALLOC_SLAB:
-    return "Slab Alloc";
+    case VALK_ALLOC_NULL:
+      return "NULL Alloc";
+    case VALK_ALLOC_MALLOC:
+      return "Malloc Alloc";
+    case VALK_ALLOC_ARENA:
+      return "Arena Alloc";
+    case VALK_ALLOC_SLAB:
+      return "Slab Alloc";
   }
 }
 
@@ -71,12 +73,14 @@ void valk_ring_write(valk_ring_t *self, uint8_t *data, size_t len) {
     size_t dt = self->capacity - offset;
 
     if (len < dt) {
-      // printf("copying offset %ld: dt: %ld, end: %c\n", offset, len, data[len - 1]);
+      // printf("copying offset %ld: dt: %ld, end: %c\n", offset, len, data[len
+      // - 1]);
       memcpy(buf + offset, data, len);
       offset = offset + len;
       break;
     } else {
-      // printf("copying offset %ld: dt: %ld, end: %c\n", offset, dt, data[dt - 1]);
+      // printf("copying offset %ld: dt: %ld, end: %c\n", offset, dt, data[dt -
+      // 1]);
       memcpy(buf + offset, data, dt);
       offset = 0;
     }
@@ -101,16 +105,14 @@ void valk_ring_read(valk_ring_t *self, size_t n, void *dst) {
 
   /* --- split request into contiguous chunks ---------------------- */
   size_t first = cap - head; /* bytes until physical end   */
-  if (first > n)
-    first = n;               /* clamp to what we need      */
+  if (first > n) first = n;  /* clamp to what we need      */
   size_t second = n - first; /* 0 if we stayed in-range    */
 
   const uint8_t *buf = (const uint8_t *)self->items;
   uint8_t *out = (uint8_t *)dst;
 
   memcpy(out, buf + head, first);
-  if (second)
-    memcpy(out + first, buf, second);
+  if (second) memcpy(out + first, buf, second);
 
   /* ── advance head (optional: keep the ring consistent) ─────────── */
   self->offset = (head + n) & (cap - 1); /* cap is power-of-2 – cheap */
@@ -124,8 +126,7 @@ void valk_ring_fread(valk_ring_t *self, size_t n, FILE *f) {
   while (n) {
     /* contiguous bytes left in this lap */
     size_t chunk = cap - head;
-    if (chunk > n)
-      chunk = n;
+    if (chunk > n) chunk = n;
 
     fwrite(base + head, 1, chunk, f);
 
@@ -179,10 +180,9 @@ void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
   self->numItems = numItems;
 
   for (size_t i = 0; i < numItems; i++) {
-
     valk_slab_item_t *item = valk_slab_item_at(self, i);
     item->handle = i;
-#ifdef VALK_SLAB_TREIBER_STACK // Treiber list
+#ifdef VALK_SLAB_TREIBER_STACK  // Treiber list
     __atomic_store_n(&item->next, (i < numItems - 1) ? i + 1 : SIZE_MAX,
                      __ATOMIC_RELAXED);
 #else
@@ -208,7 +208,7 @@ size_t valk_slab_item_stride(size_t itemSize) {
 size_t valk_slab_size(size_t itemSize, size_t numItems) {
   size_t stride = valk_slab_item_stride(itemSize);
   printf("Calculated stride %ld\n", stride);
-  const size_t freelen = sizeof(size_t) * numItems; // guranteed alignment
+  const size_t freelen = sizeof(size_t) * numItems;  // guranteed alignment
 
   return sizeof(valk_slab_t) + freelen + (stride * numItems);
 }
@@ -235,7 +235,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
               "Attempted to aquire, when the slab is already full",
               self->numFree);
   valk_slab_item_t *res;
-#ifdef VALK_SLAB_TREIBER_STACK // Threadsafe
+#ifdef VALK_SLAB_TREIBER_STACK  // Threadsafe
   uint64_t oldTag, newTag;
   size_t head, next, version;
   do {
@@ -249,10 +249,12 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
                                         __ATOMIC_ACQ_REL, __ATOMIC_RELAXED));
 
   __atomic_fetch_sub(&self->numFree, 1, __ATOMIC_RELAXED);
+  res = valk_slab_item_at(self, head);
+  // printf("Slab Aquired %ld %p\n", head, res->data);
 
-  return valk_slab_item_at(self, head);
+  return res;
 
-#else // Not threadsafe
+#else  // Not threadsafe
   // pop  free item
   size_t offset = ((size_t *)self->heap)[0];
   ((size_t *)self->heap)[0] = ((size_t *)self->heap)[self->numFree - 1];
@@ -311,6 +313,10 @@ void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
 void valk_slab_release_ptr(valk_slab_t *self, void *data) {
   // This function will look back item size bytes in the array, to figure out
   // the handle and then free that shit
+  uint64_t v;
+  size_t offset = __valk_slab_offset_unpack(
+      valk_container_of(data, valk_slab_item_t, data)->handle, &v);
+  // printf("Slab Releasing %ld %p\n", offset, data);
   valk_slab_release(self, valk_container_of(data, valk_slab_item_t, data));
 }
 
@@ -357,15 +363,15 @@ void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes) {
               bytes);
   // Order by performance.
   switch (self->type) {
-  case VALK_ALLOC_NULL:
-    VALK_RAISE("Alloc on NULL allocator %ld", bytes);
-    return NULL;
-  case VALK_ALLOC_ARENA:
-    return valk_mem_arena_alloc((void *)self, bytes);
-  case VALK_ALLOC_SLAB:
-    return (void *)valk_slab_aquire((void *)self)->data;
-  case VALK_ALLOC_MALLOC:
-    return malloc(bytes);
+    case VALK_ALLOC_NULL:
+      VALK_RAISE("Alloc on NULL allocator %ld", bytes);
+      return NULL;
+    case VALK_ALLOC_ARENA:
+      return valk_mem_arena_alloc((void *)self, bytes);
+    case VALK_ALLOC_SLAB:
+      return (void *)valk_slab_aquire((void *)self)->data;
+    case VALK_ALLOC_MALLOC:
+      return malloc(bytes);
   }
 }
 
@@ -379,23 +385,23 @@ void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, size_t num,
   void *res;
   // Order by performance.
   switch (self->type) {
-  case VALK_ALLOC_NULL:
-    VALK_RAISE("Calloc on NULL allocator num: %ld :: size: %ld", num, size);
-    res = NULL;
-    break;
-  case VALK_ALLOC_ARENA:
-    res = valk_mem_arena_alloc((void *)self, num * size);
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    memset(res, 0, num * size);
-    break;
-  case VALK_ALLOC_SLAB:
-    res = valk_slab_aquire((void *)self);
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    memset(res, 0, num * size);
-    break;
-  case VALK_ALLOC_MALLOC:
-    res = calloc(num, size);
-    break;
+    case VALK_ALLOC_NULL:
+      VALK_RAISE("Calloc on NULL allocator num: %ld :: size: %ld", num, size);
+      res = NULL;
+      break;
+    case VALK_ALLOC_ARENA:
+      res = valk_mem_arena_alloc((void *)self, num * size);
+      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+      memset(res, 0, num * size);
+      break;
+    case VALK_ALLOC_SLAB:
+      res = valk_slab_aquire((void *)self);
+      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+      memset(res, 0, num * size);
+      break;
+    case VALK_ALLOC_MALLOC:
+      res = calloc(num, size);
+      break;
   }
   return res;
 }
@@ -410,24 +416,25 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
 
   // Order by performance.
   switch (self->type) {
-  case VALK_ALLOC_NULL:
-    VALK_RAISE("Realloc on NULL allocator ptr: %p :: size: %ld", ptr, new_size);
-    return NULL;
-  case VALK_ALLOC_ARENA:
-    // cant really free in arenas soo... just make a new one i guess
-    return valk_mem_arena_alloc((void *)self, new_size);
-  case VALK_ALLOC_SLAB:
-    // slabs are all of the same size, make sure we dont try to resize it to
-    // something bigger than the slab
-    size_t slabSize = ((valk_slab_t *)self)->itemSize;
-    VALK_ASSERT(
-        new_size <= slabSize,
-        "Realloc with slab allocator is unsafe,\n  tried to allocate more "
-        "memory than fits in a slab\n %ld wanted, but %ld is the size",
-        new_size, slabSize);
-    return ptr;
-  case VALK_ALLOC_MALLOC:
-    return realloc(ptr, new_size);
+    case VALK_ALLOC_NULL:
+      VALK_RAISE("Realloc on NULL allocator ptr: %p :: size: %ld", ptr,
+                 new_size);
+      return NULL;
+    case VALK_ALLOC_ARENA:
+      // cant really free in arenas soo... just make a new one i guess
+      return valk_mem_arena_alloc((void *)self, new_size);
+    case VALK_ALLOC_SLAB:
+      // slabs are all of the same size, make sure we dont try to resize it to
+      // something bigger than the slab
+      size_t slabSize = ((valk_slab_t *)self)->itemSize;
+      VALK_ASSERT(
+          new_size <= slabSize,
+          "Realloc with slab allocator is unsafe,\n  tried to allocate more "
+          "memory than fits in a slab\n %ld wanted, but %ld is the size",
+          new_size, slabSize);
+      return ptr;
+    case VALK_ALLOC_MALLOC:
+      return realloc(ptr, new_size);
   }
 }
 
@@ -440,15 +447,15 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
 
   // printf("Freeing %p\n", ptr);
   switch (self->type) {
-  case VALK_ALLOC_NULL:
-    VALK_RAISE("Free on NULL allocator %p", ptr);
-  case VALK_ALLOC_ARENA:
-    return;
-  case VALK_ALLOC_SLAB:
-    valk_slab_release_ptr((void *)self, ptr);
-    return;
-  case VALK_ALLOC_MALLOC:
-    free(ptr);
-    return;
+    case VALK_ALLOC_NULL:
+      VALK_RAISE("Free on NULL allocator %p", ptr);
+    case VALK_ALLOC_ARENA:
+      return;
+    case VALK_ALLOC_SLAB:
+      valk_slab_release_ptr((void *)self, ptr);
+      return;
+    case VALK_ALLOC_MALLOC:
+      free(ptr);
+      return;
   }
 }

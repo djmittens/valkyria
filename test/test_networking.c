@@ -39,12 +39,17 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
         VALK_HTTP_MOTD, response);
   }
 
+  // TODO(networking): This will close all connections passing the test
+  // obviously now need to implement tthe proper shutdown procedures
+  valk_aio_stop(sys);
+
   // these are atomics because, we read it from main thread end write in event
   // loop
   size_t connected = __atomic_load_n(&arg.connectedCount, __ATOMIC_ACQUIRE);
 
   size_t disconnected =
       __atomic_load_n(&arg.disconnectedCount, __ATOMIC_ACQUIRE);
+
 
   // TODO(networking): refactor the codebase to allow this test
   VALK_TEST_ASSERT(connected == disconnected == 1,
@@ -55,7 +60,6 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
 
   // valk_arc_release(fserv);
   valk_arc_release(server);
-  valk_aio_stop(sys);
   // valk_lval_free(ast);
   free(response);
 }
