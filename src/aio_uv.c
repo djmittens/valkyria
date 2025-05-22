@@ -549,6 +549,7 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
 
   conn->handle =
       (valk_aio_handle_t *)valk_slab_aquire(srv->sys->httpConnections)->data;
+  memset(conn->handle, 0, sizeof(valk_aio_handle_t));
 
   conn->handle->kind = VALK_HNDL_TCP;
   conn->handle->sys = srv->sys;
@@ -985,6 +986,8 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
   valk_mem_arena_t *arena =
       (valk_mem_arena_t *)valk_slab_aquire(sys->httpConnections)->data;
 
+  memset(arena, 0, sizeof(HTTP_MAX_CONNECTION_HEAP));
+
   valk_mem_arena_init(arena,
                       HTTP_MAX_CONNECTION_HEAP - sizeof(valk_mem_arena_t));
   client->connection = valk_mem_arena_alloc(arena, sizeof(valk_aio_http_conn));
@@ -999,6 +1002,7 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
 
   client->connection->handle =
       (valk_aio_handle_t *)valk_slab_aquire(sys->handleSlab)->data;
+  memset(client->connection->handle, 0, sizeof(valk_aio_handle_t));
 
   client->connection->handle->kind = VALK_HNDL_TCP;
   client->connection->handle->sys = sys;

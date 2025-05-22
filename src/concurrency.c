@@ -192,6 +192,7 @@ valk_arc_box *valk_future_await_timeout(valk_future *self, uint32_t msec) {
 void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
 
   valk_future *fut = promise->item;
+  valk_arc_retain(fut);
   size_t count = 0;
   // valk_arc_retain(fut); in the caller to promise
   valk_arc_retain(result);

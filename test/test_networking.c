@@ -58,8 +58,10 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
 
   VALK_PASS();
 
-  // valk_arc_release(fserv);
-  valk_arc_release(server);
+  // All of these are void, after i kill the system.. turns out when everything
+  // is with done with slabs, we dont need to free individual shit i will need
+  // to uncomment, once i implement graceful shutdown valk_arc_release(fserv);
+  // valk_arc_release(server);
   // valk_lval_free(ast);
   free(response);
 }
