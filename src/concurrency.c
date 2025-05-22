@@ -190,11 +190,9 @@ valk_arc_box *valk_future_await_timeout(valk_future *self, uint32_t msec) {
 
 // TODO(networking): do i want a ptr to ptr here, or just a copy?
 void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
-
+  size_t count = 0;
   valk_future *fut = promise->item;
   valk_arc_retain(fut);
-  size_t count = 0;
-  // valk_arc_retain(fut); in the caller to promise
   valk_arc_retain(result);
 
   pthread_mutex_lock(&fut->mutex);
@@ -208,6 +206,8 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
     return;
   } else {
     fut->item = result;
+    // grab ourselves a lil reference here.
+    valk_arc_retain(result);
 
     count = __atomic_exchange_n(&fut->andThen.count, 0, __ATOMIC_ACQ_REL);
     pthread_cond_signal(&fut->resolved);
@@ -220,6 +220,7 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
     item->cb(item->arg, fut->item);
     count--;
   }
+  valk_arc_release(result);
   valk_arc_release(fut);
 }
 

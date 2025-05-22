@@ -180,10 +180,13 @@ void valk_aio_ssl_connect(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
 
 void valk_aio_ssl_free(valk_aio_ssl_t *ssl) {
   SSL_free_buffers(ssl->ssl);
-  SSL_free(ssl->ssl);
 
-  BIO_free_all(ssl->read_bio);
-  BIO_free_all(ssl->write_bio);
+  // Seems like the ssl object itself frees the bio's associated?
+  // I hate this library desing, should try wolf ssl or something with better
+  // memory management BIO_free_all(ssl->write_bio);
+  // BIO_free_all(ssl->read_bio);
+
+  SSL_free(ssl->ssl);
 
   ssl->ssl = nullptr;
 }

@@ -98,7 +98,7 @@ typedef enum { VALK_SUC, VALK_ERR } valk_res_t;
 
 typedef struct valk_arc_box {
   valk_res_t type;
-  int refcount;
+  size_t refcount;
   valk_mem_allocator_t *allocator;
   size_t capacity;
   void (*free)(struct valk_arc_box *);
