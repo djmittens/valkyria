@@ -41,6 +41,7 @@ valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity) {
 }
 
 void valk_arc_box_init(valk_arc_box *self, valk_res_t type, size_t capacity) {
+  memset(self, 0, sizeof(valk_arc_box) + capacity);
   self->type = type;
   self->refcount = 1;
   self->capacity = capacity;
@@ -133,7 +134,9 @@ valk_arc_box *valk_future_await(valk_future *future) {
   }
 
   valk_arc_box *res = future->item;
-  valk_arc_retain(res);
+  // Maintain ownership of this shit
+  // so we dont release
+  // valk_arc_retain(res);
 
   pthread_mutex_unlock(&future->mutex);
   valk_arc_release(future);
@@ -207,6 +210,7 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
   } else {
     fut->item = result;
     // grab ourselves a lil reference here.
+    // this reference will be freed on await
     valk_arc_retain(result);
 
     count = __atomic_exchange_n(&fut->andThen.count, 0, __ATOMIC_ACQ_REL);

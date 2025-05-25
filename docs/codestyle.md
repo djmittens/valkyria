@@ -4,6 +4,11 @@
 Im new to C, so the coding style is going to be rather simple. I want to keep
 things loosey goosey for now but eventually will need to enforce it somehow.
 
+
+### Clang formatting
+- [ ] Make a clang-format file to make formatting consistent, it seems like its
+randomly changing causing unnecessary changes over time
+
 ### Namespacing
 ### Types
 ### Structs 
@@ -41,3 +46,5 @@ When using in the async scenario there is a transfer of ownership so, you
 should document the omission To adhere to the above rule of Callee having the
 responsibility for grabbing itself a reference , when resolving a future it
 will also grab a second reference
+
+

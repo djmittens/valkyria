@@ -670,9 +670,10 @@ static void __http_listen_cb(valk_aio_system_t *sys,
                              struct valk_aio_task_new *task) {
   int r;
   struct sockaddr_in addr;
+  // We accept the transfer of ownership for box here
+  // therefore we dont aquire it, but are responsible for releasing it 
   valk_arc_box *box = task->arg;
-  // TODO(networking): Ok this is lame as fuck, i need to retain it indefinitely
-  valk_arc_retain(box);
+
   valk_aio_http_server *srv = box->item;
   // Initialize the listener handle
   srv->listener = (void *)valk_slab_aquire(sys->handleSlab)->data;
@@ -832,6 +833,7 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
   task->callback = __http_listen_cb;
 
   __uv_exec_task(sys, task);
+
   return res;
 }
 
