@@ -18,6 +18,11 @@ endif()
 
 set(EXTRA_FLAGS "-fcolor-diagnostics -Wall -Wextra -Wpedantic -Wno-gnu-zero-variadic-macro-arguments -Wno-gnu-statement-expression-from-macro-expansion")
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_link_options("-rdynamic")
+    # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_GNU_SOURCE")
+endif()
+
 # Apply to C and C++ compile flags
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${EXTRA_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${EXTRA_FLAGS}")
@@ -61,6 +66,7 @@ add_library(valkyria
   src/concurrency.c
 # TODO(networking): if should detect uring and if we have it we can get it here instead of libuv.
   src/aio_uv.c
+  src/debug.c
   src/aio_ssl.c
 )
 
@@ -72,10 +78,10 @@ target_include_directories(valkyria SYSTEM PRIVATE
 target_link_libraries(valkyria PRIVATE 
   nghttp2::nghttp2 
   ${LIBUV_LIBRARIES} 
+  dl  # Dynamic linking library for stack traces... guh
+  backtrace
   OpenSSL::SSL 
   OpenSSL::Crypto)
-
-
 
 
 ### REPL

@@ -1175,13 +1175,13 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
 static valk_future *__http2_submit_demo_request(valk_aio_system_t *sys,
                                                 valk_arc_box *client) {
   valk_future *res = valk_future_new();
+  valk_arc_retain(client);
   struct valk_aio_task_new *task = valk_mem_alloc(sizeof(valk_aio_task_new));
 
   task->arg = client;
+  valk_arc_retain(res);
   task->promise.item = res;
   task->callback = __http2_submit_demo_request_cb;
-  valk_arc_retain(client);
-  valk_arc_retain(res);
 
   // valk_arc_release(client); in callback
   // valk_arc_release(res); in resolve
@@ -1211,8 +1211,8 @@ char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
 
   fut = __http2_submit_demo_request(sys, client);
   valk_arc_box *response = valk_future_await(fut);
-
   valk_arc_release(fut);
+  valk_arc_trace_report_print(fut);
 
   VALK_ASSERT(response->type == VALK_SUC, "Error from the response: %s",
               response->item);

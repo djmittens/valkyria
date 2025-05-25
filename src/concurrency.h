@@ -1,13 +1,13 @@
 #pragma once
+#define _GNU_SOURCE
 // TODO(networking): Abstract pthread away in here, only available on posix
 // system very inconsistent api across different systems too
-#define _GNU_SOURCE
 #include <pthread.h>
 #include <stdint.h>
 
 #include "memory.h"
 
-// #define VALK_ARC_DEBUG
+#define VALK_ARC_DEBUG
 #define VALK_ARC_TRACE_DEPTH 10
 
 #define valk_work_init(queue, _capacity)                             \
@@ -101,6 +101,7 @@
 typedef enum { VALK_SUC, VALK_ERR } valk_res_t;
 
 #ifdef VALK_ARC_DEBUG
+#include <dlfcn.h>
 #include <execinfo.h>
 #define VALK_ARC_TRACE_MAX 50
 
@@ -112,7 +113,7 @@ typedef struct valk_arc_trace_info {
   int line;
   size_t refcount;
   void *stack[VALK_ARC_TRACE_DEPTH];
-  int size;
+  size_t size;
 } valk_arc_trace_info;
 
 #define valk_capture_trace(_kind, _refcount, ref)                             \
@@ -131,25 +132,10 @@ typedef struct valk_arc_trace_info {
   } while (0)
 
 #define valk_arc_trace_report_print(report) \
-  valk_print_trace_report((report)->traces, (report)->nextTrace)
+  __valk_arc_trace_report_print((report)->traces, (report)->nextTrace)
 
-static inline void valk_print_trace_report(valk_arc_trace_info *traces,
-                                           size_t num) {
-  for (size_t i = 0; i < num; i++) {
-    const char *shit;
-    switch (traces->kind) {
-      case VALK_TRACE_ACQUIRE:
-        shit = "ACQUIRE";
-        break;
-      case VALK_TRACE_RELEASE:
-        shit = "RELEASE";
-        break;
-    }
-    fprintf(stderr, "[%s] refcount[%ld] %s()|%s:%d \n", shit, traces->refcount,
-            traces->function, traces->file, traces->line);
-    traces++;
-  }
-}
+void __valk_arc_trace_report_print(valk_arc_trace_info *traces, size_t num);
+
 #else
 #define valk_capture_trace(_kind, _refcount, ref)
 #define valk_arc_trace_report_print(report)

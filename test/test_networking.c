@@ -41,7 +41,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
 
   size_t count = __atomic_load_n(&server->refcount, __ATOMIC_ACQUIRE);
   printf("Da fuck %ld\n", count);
-  valk_arc_trace_report_print(server);
+  // valk_arc_trace_report_print(server);
   valk_arc_release(server);
 
   // TODO(networking): This will close all connections passing the test

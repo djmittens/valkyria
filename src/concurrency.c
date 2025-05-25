@@ -1,4 +1,5 @@
 #include "concurrency.h"
+
 #include "collections.h"
 #include "common.h"
 #include "memory.h"
@@ -17,19 +18,19 @@ const int VALK_NUM_WORKERS = 4;
   // callbacks \
   // Should probably be request context or something instead perhaps, but \
   // keeping it simple for now
-#define __assert_thread_safe_allocator()                                       \
-  do {                                                                         \
-    static valk_mem_allocator_e supported[] = {                                \
-        VALK_ALLOC_MALLOC, VALK_ALLOC_SLAB, VALK_ALLOC_ARENA};                 \
-    bool found = 0;                                                            \
-    for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) {    \
-      if (supported[i] == valk_thread_ctx.allocator->type) {                   \
-        found = 1;                                                             \
-      }                                                                        \
-    }                                                                          \
-    VALK_ASSERT(                                                               \
-        found, "Current context is not thread safe: %s",                       \
-        valk_mem_allocator_e_to_string(valk_thread_ctx.allocator->type));      \
+#define __assert_thread_safe_allocator()                                    \
+  do {                                                                      \
+    static valk_mem_allocator_e supported[] = {                             \
+        VALK_ALLOC_MALLOC, VALK_ALLOC_SLAB, VALK_ALLOC_ARENA};              \
+    bool found = 0;                                                         \
+    for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) { \
+      if (supported[i] == valk_thread_ctx.allocator->type) {                \
+        found = 1;                                                          \
+      }                                                                     \
+    }                                                                       \
+    VALK_ASSERT(                                                            \
+        found, "Current context is not thread safe: %s",                    \
+        valk_mem_allocator_e_to_string(valk_thread_ctx.allocator->type));   \
   } while (0)
 
 valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity) {
@@ -70,7 +71,6 @@ valk_arc_box *valk_arc_box_err(const char *msg) {
 
 void valk_future_free(valk_future *self) {
   VALK_WITH_ALLOC(self->allocator) {
-
     pthread_mutex_lock(&self->mutex);
     VALK_ASSERT(self->done,
                 "Attempting to free an unresolved future, means "
@@ -79,7 +79,7 @@ void valk_future_free(valk_future *self) {
     valk_arc_release(self->item);
     pthread_mutex_unlock(&self->mutex);
 
-    da_free(&self->andThen); // args leaked for now
+    da_free(&self->andThen);  // args leaked for now
     pthread_cond_destroy(&self->resolved);
     pthread_mutex_destroy(&self->mutex);
 
@@ -202,10 +202,13 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
 
   int old = __atomic_fetch_add(&fut->done, 1, __ATOMIC_RELEASE);
   if (old) {
-    printf("Welll... this is awkward, the promise is already resolved.... what "
-           "the fuck");
+    printf(
+        "Welll... this is awkward, the promise is already resolved.... what "
+        "the fuck");
 
     pthread_mutex_unlock(&fut->mutex);
+    valk_arc_release(result);
+    valk_arc_release(fut);
     return;
   } else {
     fut->item = result;
@@ -434,8 +437,9 @@ static valk_arc_box *__valk_pool_resolve_promise_cb(valk_arc_box *arg) {
     // cant resolve an error ??? why the heck did that even get in here
     // TODO(networking): maybe turn this into a hard assert
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, "ERROR: Invalid condition, could not resolve an error "
-                    "boxsed promise.\n");
+    fprintf(stderr,
+            "ERROR: Invalid condition, could not resolve an error "
+            "boxsed promise.\n");
     return arg;
   }
   __valk_resolve_promise *a = arg->item;
@@ -453,5 +457,26 @@ void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
   pair->result = result;
 
   valk_future *res = valk_schedule(pool, arg, __valk_pool_resolve_promise_cb);
-  valk_arc_release(res); // dont need the result
+  valk_arc_release(res);  // dont need the result
 }
+
+#ifdef VALK_ARC_DEBUG
+#include "debug.h"
+void __valk_arc_trace_report_print(valk_arc_trace_info *traces, size_t num) {
+  for (size_t i = 0; i < num; i++) {
+    const char *shit;
+    switch (traces->kind) {
+      case VALK_TRACE_ACQUIRE:
+        shit = "ACQUIRE";
+        break;
+      case VALK_TRACE_RELEASE:
+        shit = "RELEASE";
+        break;
+    }
+    fprintf(stderr, "[%s] refcount[%ld] %s()|%s:%d \n", shit, traces->refcount,
+            traces->function, traces->file, traces->line);
+    valk_trace_print(traces->stack, traces->size);
+    traces++;
+  }
+}
+#endif
