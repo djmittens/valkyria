@@ -21,6 +21,7 @@ void valk_aio_ssl_start();
 valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
                                     const char *certfile);
 
+
 valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx);
 
 

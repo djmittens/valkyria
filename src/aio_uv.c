@@ -102,17 +102,16 @@ void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
   buf->len = suggested_size;
 }
 
-typedef struct valk_aio_task {
-  valk_arc_box *arg;
-  valk_promise promise;
-  void (*callback)(valk_aio_system_t *, valk_arc_box *, valk_promise *);
-} valk_aio_task;
-
 typedef struct valk_aio_task_new {
   void *arg;
   valk_promise promise;
   void (*callback)(valk_aio_system_t *, struct valk_aio_task_new *);
 } valk_aio_task_new;
+
+typedef struct {
+  valk_aio_http2_client *client;
+  valk_http2_request_t *req;
+} __valk_request_client_pair_t;
 
 typedef enum {
   VALK_CONN_INIT,
@@ -839,6 +838,7 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
 //// HTTP2 CLIENT
 
 typedef struct valk_aio_http2_client {
+  valk_aio_system_t *sys;
   SSL_CTX *ssl_ctx;
   // TODO(networking):  connections could be pooled
   valk_aio_http_conn *connection;
@@ -860,8 +860,10 @@ static int __http_client_on_frame_recv_callback(nghttp2_session *session,
     case NGHTTP2_HEADERS:
       break;
     case NGHTTP2_RST_STREAM:
-      printf("[INFO] C <---------------------------- S (RST_STREAM) %d\n",
-             frame->hd.stream_id);
+      printf(
+          "[INFO] C <---------------------------- S (RST_STREAM) stream=%d, "
+          "error_code=%d\n",
+          frame->hd.stream_id, frame->rst_stream.error_code);
       break;
     case NGHTTP2_GOAWAY:
       printf("[INFO] C <---------------------------- S (GOAWAY) %d\n",
@@ -1078,7 +1080,7 @@ valk_future *valk_aio_http2_connect(valk_aio_system_t *sys,
                                     const char *certfile) {
   UNUSED(certfile);
 
-  struct valk_aio_task_new *task = valk_mem_alloc(sizeof(valk_aio_task));
+  struct valk_aio_task_new *task = valk_mem_alloc(sizeof(valk_aio_task_new));
 
   valk_future *res = valk_future_new();
   // TODO(networking): do i even need boxes here?? 🤔
@@ -1090,6 +1092,7 @@ valk_future *valk_aio_http2_connect(valk_aio_system_t *sys,
 
   valk_aio_http2_client *client = box->item;
   strncpy(client->interface, interface, 200);
+  client->sys = sys;
   client->port = port;
 
   task->promise.item = res;
@@ -1112,6 +1115,7 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
 
   printf("Constructing a request on client %p\n", (void *)client);
   valk_aio_http_conn *conn = client->connection;
+
   int32_t stream_id;
   // http2_stream_data *stream_data = session_data->stream_data;
   // const char *uri = "local/";
@@ -1212,9 +1216,9 @@ char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
 
   // Local
   valk_future *fut = valk_aio_http2_connect(sys, "127.0.0.1", 6969, "");
-  printf("Arc count of fut : %d\n", fut->refcount);
+  printf("Arc count of fut : %ld\n", fut->refcount);
   valk_arc_box *client = valk_future_await(fut);
-  printf("Arc count of fut : %d\n", fut->refcount);
+  printf("Arc count of fut : %ld\n", fut->refcount);
   // valk_arc_release(fut);
   // printf("Arc count of fut : %d\n", fut->refcount);
 
@@ -1241,6 +1245,148 @@ char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
   valk_arc_release(response);
   valk_arc_release(client);
 
+  return res;
+}
+
+static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
+                                             struct valk_aio_task_new *task) {
+  UNUSED(sys);
+  __valk_request_client_pair_t *pair = task->arg;
+
+  // TODO(networking): Allocating this promise here temporarily, ideally need
+  // to be passing a request object with a promise on it
+  // the reason its not done on the arena, is because it will be freed by a
+  // callback
+  valk_promise *prom = valk_mem_alloc(sizeof(valk_promise));
+  valk_aio_http2_client *client = pair->client;
+  printf("Client's ready to go : %s: %d\n", client->interface, client->port);
+  printf("req : %s%s\n", pair->req->authority, pair->req->path);
+
+  printf("Constructing a request on client %p\n", (void *)client);
+  valk_aio_http_conn *conn = client->connection;
+
+  VALK_WITH_ALLOC(pair->req->allocator) {
+    int32_t stream_id;
+    size_t hdrCount = pair->req->headers.count + 4;
+    struct valk_http2_header_t *phds = pair->req->headers.items;
+
+    nghttp2_nv hdrs[hdrCount];
+
+    hdrs[0].name = (uint8_t *)":method";
+    hdrs[0].value = (uint8_t *)pair->req->method;
+    hdrs[0].namelen = sizeof(":method") - 1;
+    hdrs[0].valuelen = strlen(pair->req->method);
+    hdrs[0].flags =
+        NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
+
+    hdrs[1].name = (uint8_t *)":scheme";
+    hdrs[1].value = (uint8_t *)pair->req->scheme;
+    hdrs[1].namelen = sizeof(":scheme") - 1;
+    hdrs[1].valuelen = strlen(pair->req->scheme);
+    hdrs[1].flags =
+        NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
+
+    hdrs[2].name = (uint8_t *)":authority";
+    hdrs[2].value = (uint8_t *)pair->req->authority;
+    hdrs[2].namelen = sizeof(":authority") - 1;
+    hdrs[2].valuelen = strlen(pair->req->authority);
+    hdrs[2].flags =
+        NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
+
+    hdrs[3].name = (uint8_t *)":path";
+    hdrs[3].value = (uint8_t *)pair->req->path;
+    hdrs[3].namelen = sizeof(":path") - 1;
+    hdrs[3].valuelen = strlen(pair->req->path);
+    hdrs[3].flags =
+        NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
+
+    for (size_t i = 4; i < hdrCount; ++i) {
+      hdrs[i].name = phds[i].name;
+      hdrs[i].value = phds[i].value;
+      hdrs[i].namelen = phds[i].nameLen;
+      hdrs[i].valuelen = phds[i].valueLen;
+      hdrs[i].flags =
+          NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
+    }
+
+    // valk_mem_free(sizeof(valk_promise)); in callback to nghttp2 recv
+    *prom = task->promise;  // copy this shit
+
+    stream_id = nghttp2_submit_request2(conn->session, nullptr, hdrs, hdrCount,
+                                        nullptr, prom);
+
+    if (stream_id < 0) {
+      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+      fprintf(stderr, "Could not submit HTTP request: %s\n",
+              nghttp2_strerror(stream_id));
+      valk_arc_box *err = valk_arc_box_err("Could not submit HTTP request");
+      valk_promise_respond(prom, err);
+      valk_arc_release(err);
+      valk_mem_free(prom);
+      return;
+    }
+
+    printf("Submitted request with stream id %d\n", stream_id);
+  }
+
+  // Not request allocated... its connection allocated.
+  // Event though technically the buffer could be part of the request maybe
+  char buf[SSL3_RT_MAX_PACKET_SIZE];
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+  memset(buf, 0, sizeof(buf));
+  valk_buffer_t In = {
+      .items = buf, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
+  __tcp_buffer_slab_item_t *slabItem =
+      (void *)valk_slab_aquire(tcp_buffer_slab)->data;
+
+  valk_buffer_t Out = {
+      .items = slabItem->data, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
+
+  // Only write stuff if ssl is established
+  if (SSL_is_init_finished(client->connection->ssl.ssl)) {
+    __http2_flush_frames(&In, conn);
+
+    // Encrypt the new data n stuff
+    valk_aio_ssl_encrypt(&conn->ssl, &In, &Out);
+
+    int wantToSend = Out.count > 0;
+    if (wantToSend) {
+      slabItem->buf.base = Out.items;
+      slabItem->buf.len = Out.count;
+
+      printf("Sending %ld bytes\n", Out.count);
+      uv_write(&slabItem->req, (uv_stream_t *)&conn->handle->uv.tcp,
+               &slabItem->buf, 1, __http_tcp_on_write_cb);
+    } else {
+      printf("Nothing to send %d \n", wantToSend);
+      valk_slab_release_ptr(tcp_buffer_slab, slabItem);
+    }
+  }
+}
+
+valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
+                                         valk_aio_http2_client *client) {
+  printf("Client's ready to go : %s: %d :: %p\n", client->interface,
+         client->port, (void *)client);
+  valk_future *res;
+  valk_aio_task_new *task = valk_mem_alloc(sizeof(valk_aio_task_new));
+
+  VALK_WITH_ALLOC(req->allocator) {
+    res = valk_future_new();
+    __valk_request_client_pair_t *pair =
+        valk_mem_alloc(sizeof(__valk_request_client_pair_t));
+
+    pair->client = client;
+    pair->req = req;
+
+    task->arg = pair;
+    task->promise.item = res;
+    task->callback = __valk_aio_http2_request_send_cb;
+    printf("Client's NOT ready to go : %s: %d :: %p :: %p\n",
+           pair->client->interface, pair->client->port, (void *)pair->client,
+           (void *)__valk_aio_http2_request_send_cb);
+  }
+  __uv_exec_task(client->sys, task);
   return res;
 }
 

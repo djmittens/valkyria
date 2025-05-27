@@ -3,7 +3,7 @@
         - [x] Event loop
         - [x] Sockets
         - [ ] Files
-        - [ ] GZip (is this even needed? im pretty sure SSL has stream
+        - [-] GZip (is this even needed? im pretty sure SSL has stream
             compression)
     - [ ] URI
     - [ ] Logging
@@ -11,7 +11,7 @@
     - [ ] REST
         - [ ] Routing
         - [ ] Chunking
-    - [ ] CoRoutines / green threads
+    - [x] Contiuations / green threads
     - [ ] Json Parsing
     - [ ] Html
         - [ ] Templating
@@ -46,21 +46,22 @@
 - [💀] liburing sockets
 
 # HTTP2 Server
+- [ ] Lisp FFI interface
+- [ ] Redirect to https if the request is http 1.1
 - [ ] Handle server errors 
-    - [ ] Tcp
-        - [ ] Gracefully handle disconnects
+    - [x] Tcp
+        - [x] Gracefully handle disconnects
         - [ ] Handle too many concurrent connections
     - [ ] TLS
         - [ ] Invalid certs
-        - [ ] Handshake re-negotiation
-        - [ ] Invalid packets
+        - [x] Handshake re-negotiation
+        - [x] Invalid packets
     - [ ] Http
         - [ ] Handle timeouts
         - [ ] Handle too many streams
         - [ ] Handle request cancellations
 
 - [ ] Replace OpenSSL with a lighter TLS library, like WolfSSL
-- [ ] Redirect to https if the request is http 1.1
 - [ ] Send 2 MB worth of html data to the browser
 - [ ] Dynamic flow control 
     - [ ] Initial window size with BDP (bandwidth - delay protocol)
@@ -129,6 +130,8 @@
         the client know that is what we are working with to avoid dynamic
         allocation of said buffers
     - [x] Randomly broke curl again, hopefully this will be caught by some of my regression testing in the future 
+
+- [ ] Arenas for futures,  (to avoid mutex alloc with pthreads, should make things much faster)
 
 - [ ] Handle memory allocation
     - [x] Slab allocate buffers
@@ -421,8 +424,17 @@ beginning of the session
     - [x] Initialization, with simple settings frame
 - [x] Http2 request response
 - [ ] Lisp FFI
+    - [ ] Request / Response hanlders
+    - [ ] Continuation support
+    - [ ] Lisp api for making web requests
+    - [ ] Async API for awaiting on futures / promises
+    - [ ] Test with a lisp client
+- [ ] Streaming callback
 - [ ] Upload 2MB worth of data
 - [ ] Download 2MB worth of data
+- [ ] Connection pooling
+- [ ] Request cancellation
+- [ ] Retries
 
 # Testing
 ## nghttpx proxy

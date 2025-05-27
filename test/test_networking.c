@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include "aio.h"
+#include "collections.h"
 #include "common.h"
 #include "concurrency.h"
 #include "memory.h"
@@ -25,12 +26,50 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
+  uint8_t buf[sizeof(valk_mem_arena_t) + 10048];
+  valk_mem_arena_t *arena = (void *)buf;
+  valk_mem_arena_init(arena, 10048);
+  valk_http2_request_t *req;
+
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)arena) {
+    req = valk_mem_alloc(sizeof(valk_http2_request_t));
+    req->allocator = (void *)arena;
+    req->method = "GET";
+    req->scheme = "https";
+    req->authority = "google.com";
+    req->path = "/";
+    req->body = (uint8_t *)"";
+    req->bodyLen = 0;
+
+    da_init(&req->headers);
+  }
+
   valk_future *fserv = valk_aio_http2_listen(
       sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt", &handler);
 
   valk_arc_box *server = valk_future_await(fserv);
 
-  char *response = valk_client_demo(sys, "127.0.0.1", "8080");
+  valk_future *fut = valk_aio_http2_connect(sys, "127.0.0.1", 6969, "");
+  printf("Arc count of fut : %ld\n", fut->refcount);
+  valk_arc_box *clientBox = valk_future_await(fut);
+
+  printf("Arc count of fut : %ld\n", fut->refcount);
+  printf("Arc count of box : %ld\n", clientBox->refcount);
+
+  // valk_arc_release(fut);
+  // printf("Arc count of fut : %d\n", fut->refcount);
+
+  valk_arc_release(fut);
+  VALK_ASSERT(clientBox->type == VALK_SUC, "Error creating client: %s",
+              clientBox->item);
+
+  valk_aio_http2_client *client = clientBox->item;
+
+  // valk_arc_trace_report_print(fut);
+
+  valk_future *fres = valk_aio_http2_request_send(req, client);
+  valk_arc_box *res = valk_future_await(fres);
+  char *response = res->item;
 
   if (strcmp(response, VALK_HTTP_MOTD)) {
     VALK_FAIL(
@@ -39,12 +78,20 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
         VALK_HTTP_MOTD, response);
   }
 
+  // if (strcmp((char *)response->body, VALK_HTTP_MOTD)) {
+  //   VALK_FAIL(
+  //       "Did not receive the expected result from the servier Expected: "
+  //       "[%s] Actual: [%s]",
+  //       VALK_HTTP_MOTD, response);
+  // }
+
   size_t count = __atomic_load_n(&server->refcount, __ATOMIC_ACQUIRE);
   printf("Da fuck %ld\n", count);
   valk_arc_release(server);
 
-  valk_arc_trace_report_print(fserv);
+  // valk_arc_trace_report_print(fserv);
   valk_arc_release(fserv);
+  valk_arc_release(fres);
 
   // TODO(networking): This will close all connections passing the test
   // obviously now need to implement tthe proper shutdown procedures
@@ -71,7 +118,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   // to uncomment, once i implement graceful shutdown valk_arc_release(fserv);
   // valk_arc_release(server);
   // valk_lval_free(ast);
-  free(response);
+  // free(response);
 }
 
 void test_tcp_client_disconnect(VALK_TEST_ARGS()) {
@@ -141,5 +188,6 @@ void cb_onDisconnect(void *arg, valk_aio_http_conn *) {
 
 void cb_onHeader(void *arg, valk_aio_http_conn *, size_t stream, char *name,
                  char *value) {}
+
 void cb_onBody(void *arg, valk_aio_http_conn *, size_t stream, uint8_t flags,
                valk_buffer_t *buf) {}

@@ -1,4 +1,12 @@
 # This is title
+- [ ] Single place for build time configuration
+    - [ ] Turning ASAN on / off
+    - [ ] Controlling module specific config, such as max number of concurrent
+      requests
+        - [ ] AIO / HTTP config
+        - [ ] Test config (eg. Fork or not to fork)
+    - [ ] Toolchain config, eg target windows + clang vs linux + clang
+- [ ] Symbolizer support for stack traces
 - [ ] Dictionaries
 - [x] Testing
     - [x] C Runtime testing
@@ -8,8 +16,7 @@
 - [ ] Windows support
 - [ ] Memory
     - [ ] Arenas
-        - This can be supported by my threadsafe slab allocator
-    - [ ] GC? (do i need this part ?)
+        - This can be supported by my threadsafe slab allocator [ ] GC? (do i need this part ?)
 - [ ] LLVM IR compiler
     - [ ] JIT
 - [ ] Regular Expressions
