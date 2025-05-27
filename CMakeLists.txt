@@ -104,7 +104,7 @@ target_link_libraries(test_std PRIVATE "-lc" valkyria)
 include_directories(test_std src/)
 
 add_executable(test_networking test/test_networking.c test/testing.c)
-target_link_libraries(test_networking PRIVATE "-lc" valkyria)
+target_link_libraries(test_networking PRIVATE "-lc" "-ldl" valkyria)
 include_directories(test_networking src/)
 
 add_executable(test_concurrency test/test_concurrency.c test/testing.c)

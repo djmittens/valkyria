@@ -420,7 +420,7 @@ beginning of the session
 - [x] Http2 session
     - [x] Initialization, with simple settings frame
 - [x] Http2 request response
-- [ ] Lisp interface
+- [ ] Lisp FFI
 - [ ] Upload 2MB worth of data
 - [ ] Download 2MB worth of data
 

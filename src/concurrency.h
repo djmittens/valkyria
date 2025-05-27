@@ -82,6 +82,7 @@
 #define valk_arc_release(ref)                                               \
   do {                                                                      \
     size_t old = __atomic_fetch_sub(&(ref)->refcount, 1, __ATOMIC_RELEASE); \
+    valk_capture_trace(VALK_TRACE_RELEASE, old - 1, ref);                   \
     /*char _buf[512];                                                       \
     pthread_getname_np(pthread_self(), _buf, sizeof(_buf));*/               \
     if (old == 1) {                                                         \
@@ -95,7 +96,6 @@
     } else {                                                                \
       /* printf("[%s] Arc is decrementing %d\n", _buf, old); */             \
     }                                                                       \
-    valk_capture_trace(VALK_TRACE_RELEASE, old - 1, ref);                   \
   } while (0)
 
 typedef enum { VALK_SUC, VALK_ERR } valk_res_t;
@@ -121,7 +121,7 @@ typedef struct valk_arc_trace_info {
     size_t _old = __atomic_fetch_add(&(ref)->nextTrace, 1, __ATOMIC_RELEASE); \
     VALK_ASSERT(                                                              \
         _old < VALK_ARC_TRACE_MAX,                                            \
-        "Cannot kep tracing this variable, please increase the max traces");  \
+        "Cannot keep tracing this variable, please increase the max traces");  \
     (ref)->traces[_old].kind = (_kind);                                       \
     (ref)->traces[_old].file = __FILE__;                                      \
     (ref)->traces[_old].function = __func__;                                  \

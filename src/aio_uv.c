@@ -196,7 +196,7 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
 
   // TODO Tear down http and ssl context's only through the slab... make sure
   // they dont escape into malloc
- 
+
   valk_aio_ssl_free(&conn->ssl);
   nghttp2_session_del(conn->session);
   valk_slab_release_ptr(handle->sys->httpConnections, conn);
@@ -388,7 +388,6 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
     /* Example: respond with a small HEADERS + DATA for "Hello HTTP/2" */
     int stream_id = frame->hd.stream_id;
     __demo_response(session, stream_id);
-
   } else {
     printf("Not sending a response ??\n");
   }
@@ -671,7 +670,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
   int r;
   struct sockaddr_in addr;
   // We accept the transfer of ownership for box here
-  // therefore we dont aquire it, but are responsible for releasing it 
+  // therefore we dont aquire it, but are responsible for releasing it
   valk_arc_box *box = task->arg;
 
   valk_aio_http_server *srv = box->item;
@@ -738,7 +737,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
     valk_arc_release(box);
     valk_slab_release_ptr(sys->handleSlab, srv->listener);
     return;
-  } 
+  }
 
   printf("Listening on %s:%d\n", srv->interface, srv->port);
   valk_promise_respond(&task->promise, box);
@@ -792,7 +791,7 @@ static void __uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task) {
   uv_async_send(&hndl->uv.task);
 }
 
-static void __valk_aio_http2_server_free(valk_arc_box * box) {
+static void __valk_aio_http2_server_free(valk_arc_box *box) {
   printf("FREERDOM\n");
   valk_aio_http_server *srv = box->item;
   SSL_CTX_free(srv->ssl_ctx);
@@ -843,7 +842,7 @@ typedef struct valk_aio_http2_client {
   SSL_CTX *ssl_ctx;
   // TODO(networking):  connections could be pooled
   valk_aio_http_conn *connection;
-  char *interface;
+  char interface[200];
   int port;
   // Totally internal, totally unneccessary, but i wanna avoid a tuple
   valk_promise _promise;
@@ -899,6 +898,9 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
     valk_promise_respond(promise, box);
     valk_arc_release(box);
   }
+
+  // Terminate the promise
+  valk_arc_release(promise->item);
   valk_mem_free(promise);
   return 0;
 }
@@ -1064,6 +1066,13 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
                  (const struct sockaddr *)&addr, __uv_http2_connect_cb);
 }
 
+static void __valk_aio_http2_client_free(valk_arc_box *box) {
+  printf("FREERDOM2 -> the client edition\n");
+  valk_aio_http2_client *client = box->item;
+  SSL_CTX_free(client->ssl_ctx);
+  valk_mem_allocator_free(box->allocator, box);
+}
+
 valk_future *valk_aio_http2_connect(valk_aio_system_t *sys,
                                     const char *interface, const int port,
                                     const char *certfile) {
@@ -1074,16 +1083,18 @@ valk_future *valk_aio_http2_connect(valk_aio_system_t *sys,
   valk_future *res = valk_future_new();
   // TODO(networking): do i even need boxes here?? 🤔
   valk_arc_box *box = valk_arc_box_new(VALK_SUC, sizeof(valk_aio_http2_client));
+  box->free = __valk_aio_http2_client_free;
+
   task->arg = box;
   memset(box->item, 0, sizeof(valk_aio_http2_client));
 
   valk_aio_http2_client *client = box->item;
-  client->interface = strdup(interface);
+  strncpy(client->interface, interface, 200);
   client->port = port;
 
   task->promise.item = res;
   task->callback = __aio_client_connect_cb;
-  valk_arc_retain(res);
+  // valk_arc_retain(res);
   // valk_arc_release(res) in resolve
 
   printf("Initializing client %p\n", (void *)client);
@@ -1128,9 +1139,10 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
     fprintf(stderr, "Could not submit HTTP request: %s\n",
             nghttp2_strerror(stream_id));
     valk_arc_box *err = valk_arc_box_err("Could not submit HTTP request");
-    valk_promise_respond(&task->promise, err);
+    valk_promise_respond(prom, err);
     valk_arc_release(err);
     valk_arc_release(box);
+    valk_mem_free(prom);
     return;
   }
 
@@ -1209,10 +1221,16 @@ char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
   VALK_ASSERT(client->type == VALK_SUC, "Error creating client: %s",
               client->item);
 
+  // valk_arc_trace_report_print(fut);
+  valk_arc_release(fut);
+
   fut = __http2_submit_demo_request(sys, client);
   valk_arc_box *response = valk_future_await(fut);
+  // future release is gonna eat that shit for breakfast
+  valk_arc_retain(response);
   valk_arc_release(fut);
-  valk_arc_trace_report_print(fut);
+  // valk_arc_trace_report_print(fut);
+  // valk_arc_trace_report_print(response);
 
   VALK_ASSERT(response->type == VALK_SUC, "Error from the response: %s",
               response->item);
@@ -1221,7 +1239,6 @@ char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
   char *res = strdup(response->item);
 
   valk_arc_release(response);
-
   valk_arc_release(client);
 
   return res;
@@ -1280,6 +1297,7 @@ void valk_aio_stop(valk_aio_system_t *sys) {
   // TODO(networking): need to properly free the system too
   valk_mem_free(sys->httpServers);
   valk_mem_free(sys->httpClients);
+  valk_mem_free(sys->httpConnections);
   valk_mem_free(sys->handleSlab);
   valk_mem_free(sys);
 }

@@ -24,7 +24,7 @@ void *__CRYPTO_realloc_fn(void *addr, size_t num, const char *file, int line) {
     valk_mem_init_malloc();
   }
   // TODO(networking): implement realloc ??? for arenas its even dumber....
-  return realloc(addr, num);
+  return valk_mem_realloc(addr, num);
 }
 
 void __CRYPTO_free_fn(void *addr, const char *file, int line) {
