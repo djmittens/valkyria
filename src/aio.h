@@ -35,6 +35,7 @@ struct valk_http2_header_t {
 
 typedef struct valk_http2_request_t {
   valk_mem_allocator_t *allocator;
+  valk_promise _promise;
   char *method;
   char *scheme;
   char *authority;
@@ -50,6 +51,8 @@ typedef struct valk_http2_request_t {
 } valk_http2_request_t;
 
 typedef struct valk_http2_response_t {
+  int32_t stream_id;
+
   // valk_mem_arena_t *arena;
   valk_http2_request_t *req;
   const char *status;
@@ -59,8 +62,14 @@ typedef struct valk_http2_response_t {
     size_t capacity;
   } headers;
 
+  bool headersReceived;
+  bool bodyReceived;
+
   uint8_t *body;
   size_t bodyLen;
+  size_t bodyCapacity;
+
+  valk_promise _promise;
 } valk_http2_response_t;
 
 char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
@@ -104,7 +113,6 @@ valk_future *valk_aio_http2_shutdown(valk_aio_http_server *srv);
 valk_future *valk_aio_http2_connect(valk_aio_system_t *sys,
                                     const char *interface, const int port,
                                     const char *certfile);
-
 
 valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
                                          valk_aio_http2_client *client);

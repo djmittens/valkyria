@@ -26,9 +26,9 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
-  uint8_t buf[sizeof(valk_mem_arena_t) + 10048];
+  uint8_t buf[sizeof(valk_mem_arena_t) + (24048 + (int)8e6)];
   valk_mem_arena_t *arena = (void *)buf;
-  valk_mem_arena_init(arena, 10048);
+  valk_mem_arena_init(arena, (24048 + (int)8e6));
   valk_http2_request_t *req;
 
   VALK_WITH_ALLOC((valk_mem_allocator_t *)arena) {
@@ -69,13 +69,13 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
 
   valk_future *fres = valk_aio_http2_request_send(req, client);
   valk_arc_box *res = valk_future_await(fres);
-  char *response = res->item;
+  valk_http2_response_t *response = res->item;
 
-  if (strcmp(response, VALK_HTTP_MOTD)) {
+  if (strcmp((char*)response->body, VALK_HTTP_MOTD) != 0) {
     VALK_FAIL(
         "Did not receive the expected result from the servier Expected: "
         "[%s] Actual: [%s]",
-        VALK_HTTP_MOTD, response);
+        VALK_HTTP_MOTD, response->body);
   }
 
   // if (strcmp((char *)response->body, VALK_HTTP_MOTD)) {

@@ -49,7 +49,8 @@ enum {
   // TODO(networking): Figure out a good initial value for this.
   HTTP_MAX_CONNECTION_HEAP = (1024000),
   HTTP_MAX_CONCURRENT_REQUESTS = (1024),
-  HTTP_MAX_REQUEST_SIZE_BYTES = ((int)8e6)
+  HTTP_MAX_REQUEST_SIZE_BYTES = ((int)8e6),
+  HTTP_MAX_RESPONSE_SIZE_BYTES = ((int)8e6)
 };
 
 // times 2 just for fun
@@ -298,6 +299,7 @@ static int __http_on_header_callback(nghttp2_session *session,
 
   return 0;  // success
 }
+
 static int __http_on_begin_headers_callback(nghttp2_session *session,
                                             const nghttp2_frame *frame,
                                             void *user_data) {
@@ -310,6 +312,29 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
             frame->hd.stream_id);
   }
   return 0;
+}
+
+static int __http2_on_response_header_callback(
+    nghttp2_session *session, const nghttp2_frame *frame, const uint8_t *name,
+    size_t namelen, const uint8_t *value, size_t valuelen, uint8_t flags,
+    void *user_data) {
+  UNUSED(session);
+  UNUSED(frame);
+  UNUSED(flags);
+  UNUSED(user_data);
+
+  valk_arc_box *box =
+      nghttp2_session_get_stream_user_data(session, frame->hd.stream_id);
+  valk_arc_retain(box);
+  valk_http2_response_t *res = box->item;
+
+  /* For demonstration, just print incoming headers. */
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+  fprintf(stderr, "HDR: %.*s: %.*s\n", (int)namelen, name, (int)valuelen,
+          value);
+
+  valk_arc_release(box);
+  return 0;  // success
 }
 
 static void __http_tcp_on_write_cb(uv_write_t *handle, int status) {
@@ -882,9 +907,11 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
   (void)flags;
   (void)user_data;
 
-  valk_promise *promise =
-      nghttp2_session_get_stream_user_data(session, stream_id);
-  if (promise) {
+  valk_arc_box *box = nghttp2_session_get_stream_user_data(session, stream_id);
+
+  if (box) {
+    valk_http2_response_t *res = box->item;
+
     printf(
         "[INFO] C <---------------------------- S (DATA chunk)\n"
         "%lu bytes\n",
@@ -892,18 +919,18 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
     fwrite(data, 1, len, stdout);
     printf("\n");
 
-    valk_arc_box *box = valk_arc_box_new(VALK_SUC, len + 1);
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    memcpy(box->item, data, len);
-    ((char *)box->item)[len] = '\0';
+    VALK_ASSERT(len < res->bodyCapacity, "Response was too big %ld > %ld", len,
+                res->bodyCapacity);
 
-    valk_promise_respond(promise, box);
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+    memcpy(res->body, data, len);
+    ((char *)res->body)[len] = '\0';
+    res->bodyLen = len;
+    valk_promise_respond(&res->_promise, box);
     valk_arc_release(box);
+    valk_arc_release(res->_promise.item);
   }
 
-  // Terminate the promise
-  valk_arc_release(promise->item);
-  valk_mem_free(promise);
   return 0;
 }
 
@@ -954,8 +981,8 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
 
     // nghttp2_session_callbacks_set_on_begin_headers_callback(
     //     callbacks, __http_on_begin_headers_callback);
-    nghttp2_session_callbacks_set_on_header_callback(callbacks,
-                                                     __http_on_header_callback);
+    nghttp2_session_callbacks_set_on_header_callback(
+        callbacks, __http2_on_response_header_callback);
     nghttp2_session_callbacks_set_on_frame_recv_callback(
         callbacks, __http_client_on_frame_recv_callback);
 
@@ -1257,7 +1284,6 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
   // to be passing a request object with a promise on it
   // the reason its not done on the arena, is because it will be freed by a
   // callback
-  valk_promise *prom = valk_mem_alloc(sizeof(valk_promise));
   valk_aio_http2_client *client = pair->client;
   printf("Client's ready to go : %s: %d\n", client->interface, client->port);
   printf("req : %s%s\n", pair->req->authority, pair->req->path);
@@ -1309,20 +1335,28 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
           NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
     }
 
-    // valk_mem_free(sizeof(valk_promise)); in callback to nghttp2 recv
-    *prom = task->promise;  // copy this shit
+    valk_arc_box *box =
+        valk_arc_box_new(VALK_SUC, sizeof(valk_http2_response_t));
+
+    valk_http2_response_t *response = box->item;
+    memset(response, 0, sizeof(valk_http2_response_t));
+    response->_promise = task->promise;
 
     stream_id = nghttp2_submit_request2(conn->session, nullptr, hdrs, hdrCount,
-                                        nullptr, prom);
+                                        nullptr, box);
+    response->stream_id = stream_id;
+
+    response->body = valk_mem_alloc(HTTP_MAX_RESPONSE_SIZE_BYTES);
+    response->bodyLen = 0;
+    response->bodyCapacity = HTTP_MAX_RESPONSE_SIZE_BYTES;
 
     if (stream_id < 0) {
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       fprintf(stderr, "Could not submit HTTP request: %s\n",
               nghttp2_strerror(stream_id));
       valk_arc_box *err = valk_arc_box_err("Could not submit HTTP request");
-      valk_promise_respond(prom, err);
+      valk_promise_respond(&task->promise, err);
       valk_arc_release(err);
-      valk_mem_free(prom);
       return;
     }
 
