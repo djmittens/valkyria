@@ -11,6 +11,8 @@ endif()
 
 project(valkyria LANGUAGES C)
 
+set (CMAKE_EXECUTABLE_ENABLE_EXPORTS on )
+
 if(ASAN)
   # Enable AddressSanitizer flags
   set(SANITIZE_ADDRESS_FLAGS "-fsanitize=address -fno-omit-frame-pointer -fsanitize=undefined ")
@@ -18,10 +20,6 @@ endif()
 
 set(EXTRA_FLAGS "-fcolor-diagnostics -Wall -Wextra -Wpedantic -Wno-gnu-zero-variadic-macro-arguments -Wno-gnu-statement-expression-from-macro-expansion")
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_link_options("-rdynamic")
-    # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_GNU_SOURCE")
-endif()
 
 # Apply to C and C++ compile flags
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${EXTRA_FLAGS}")
@@ -57,10 +55,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_path(LIBUV_INCLUDE_DIR NAMES uv.h)
 find_library(LIBUV_LIBRARIES NAMES uv libuv)
 
+find_path(BACKTRACE_INCLUDE_DIR NAMES backtrace.h)
+find_library(BACKTRACE_LIBRARIES NAMES backtrace)
+
 find_package(OpenSSL REQUIRED)
 
 ## LIB
-add_library(valkyria 
+add_library(valkyria
   src/parser.c
   src/memory.c
   src/concurrency.c
@@ -70,17 +71,17 @@ add_library(valkyria
   src/aio_ssl.c
 )
 
-target_include_directories(valkyria SYSTEM PRIVATE 
+target_include_directories(valkyria SYSTEM PRIVATE
   ${LIBUV_INCLUDE_DIRS}
   ${PROJECT_SOURCE_DIR}/vendor
+  ${BACKTRACE_INCLUDE_DIR}
 )
 
-target_link_libraries(valkyria PRIVATE 
-  nghttp2::nghttp2 
-  ${LIBUV_LIBRARIES} 
-  dl  # Dynamic linking library for stack traces... guh
-  backtrace
-  OpenSSL::SSL 
+target_link_libraries(valkyria PRIVATE
+  nghttp2::nghttp2
+  ${LIBUV_LIBRARIES}
+  ${BACKTRACE_LIBRARIES}
+  OpenSSL::SSL
   OpenSSL::Crypto)
 
 
@@ -104,7 +105,7 @@ target_link_libraries(test_std PRIVATE "-lc" valkyria)
 include_directories(test_std src/)
 
 add_executable(test_networking test/test_networking.c test/testing.c)
-target_link_libraries(test_networking PRIVATE "-lc" "-ldl" valkyria)
+target_link_libraries(test_networking PRIVATE "-lc" valkyria)
 include_directories(test_networking src/)
 
 add_executable(test_concurrency test/test_concurrency.c test/testing.c)
