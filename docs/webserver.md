@@ -424,10 +424,10 @@ beginning of the session
     - [x] Initialization, with simple settings frame
 - [x] Http2 request response
 - [ ] Lisp FFI
-    - [ ] Request / Response hanlders
-    - [ ] Continuation support
-    - [ ] Lisp api for making web requests
     - [ ] Async API for awaiting on futures / promises
+    - [ ] Continuation support
+    - [ ] Request / Response hanlders
+    - [ ] Lisp api for making web requests
     - [ ] Test with a lisp client
 - [ ] Streaming callback
 - [ ] Upload 2MB worth of data
