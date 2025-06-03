@@ -34,7 +34,7 @@
 /// generic helper, same as Linux kernel’s container_of
 /// @return the ptr of the right type
 #define valk_container_of(ptr, type, member)                                   \
-  ((type *)((char *)(ptr) - offsetof(type, member)))
+  ((type *)((uint8_t *)(ptr) - offsetof(type, member)))
 
 /// @brief efficient way to calculate the next pow2 to store this shit
 /// chatgpt, cooked up this shit

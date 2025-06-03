@@ -35,7 +35,6 @@ struct valk_http2_header_t {
 
 typedef struct valk_http2_request_t {
   valk_mem_allocator_t *allocator;
-  valk_promise _promise;
   char *method;
   char *scheme;
   char *authority;
@@ -48,6 +47,7 @@ typedef struct valk_http2_request_t {
   void *ctx;
   uint8_t *body;
   size_t bodyLen;
+  size_t bodyCapacity;
 } valk_http2_request_t;
 
 typedef struct valk_http2_response_t {

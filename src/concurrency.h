@@ -89,6 +89,7 @@
       /* printf("[%s] Arc is freeing %d\n", _buf, old); */                  \
       /* Only free using the allocator if a custom one is not defined*/     \
       if ((ref)->free) {                                                    \
+        valk_arc_trace_report_print(ref);                                   \
         (ref)->free(ref);                                                   \
       } else if ((ref)->allocator) {                                        \
         valk_mem_allocator_free((ref)->allocator, (ref));                   \
@@ -121,7 +122,7 @@ typedef struct valk_arc_trace_info {
     size_t _old = __atomic_fetch_add(&(ref)->nextTrace, 1, __ATOMIC_RELEASE); \
     VALK_ASSERT(                                                              \
         _old < VALK_ARC_TRACE_MAX,                                            \
-        "Cannot keep tracing this variable, please increase the max traces");  \
+        "Cannot keep tracing this variable, please increase the max traces"); \
     (ref)->traces[_old].kind = (_kind);                                       \
     (ref)->traces[_old].file = __FILE__;                                      \
     (ref)->traces[_old].function = __func__;                                  \

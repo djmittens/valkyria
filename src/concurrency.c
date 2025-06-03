@@ -134,9 +134,7 @@ valk_arc_box *valk_future_await(valk_future *future) {
   }
 
   valk_arc_box *res = future->item;
-  // Maintain ownership of this shit
-  // so we dont release
-  // valk_arc_retain(res);
+  // Future still maintains ownership of the box
 
   pthread_mutex_unlock(&future->mutex);
   valk_arc_release(future);
@@ -210,15 +208,15 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
     valk_arc_release(result);
     valk_arc_release(fut);
     return;
-  } else {
-    fut->item = result;
-    // grab ourselves a lil reference here.
-    // this reference will be freed on await
-    valk_arc_retain(result);
+  } 
 
-    count = __atomic_exchange_n(&fut->andThen.count, 0, __ATOMIC_ACQ_REL);
-    pthread_cond_signal(&fut->resolved);
-  }
+  fut->item = result;
+
+  // We transfer the reference to the future
+  // valk_arc_release(result);
+
+  count = __atomic_exchange_n(&fut->andThen.count, 0, __ATOMIC_ACQ_REL);
+  pthread_cond_signal(&fut->resolved);
   pthread_mutex_unlock(&fut->mutex);
 
   // Process the callbacks
@@ -227,7 +225,6 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
     item->cb(item->arg, fut->item);
     count--;
   }
-  valk_arc_release(result);
   valk_arc_release(fut);
 }
 
