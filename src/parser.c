@@ -1,89 +1,90 @@
 #include "parser.h"
 
-#include <stdint.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "common.h"
+#include "concurrency.h"
 #include "memory.h"
 
-#define LVAL_RAISE(args, fmt, ...)                                             \
-  do {                                                                         \
-    char *_fmt =                                                               \
-        valk_c_err_format((fmt), __FILE_NAME__, __LINE__, __FUNCTION__);       \
-    valk_lval_t *err = valk_lval_err(_fmt, ##__VA_ARGS__);                     \
-    valk_lval_free(args);                                                      \
-    free(_fmt);                                                                \
-    return err;                                                                \
+#define LVAL_RAISE(args, fmt, ...)                                       \
+  do {                                                                   \
+    char *_fmt =                                                         \
+        valk_c_err_format((fmt), __FILE_NAME__, __LINE__, __FUNCTION__); \
+    valk_lval_t *err = valk_lval_err(_fmt, ##__VA_ARGS__);               \
+    valk_lval_free(args);                                                \
+    free(_fmt);                                                          \
+    return err;                                                          \
   } while (0)
 
-#define LVAL_ASSERT(args, cond, fmt, ...)                                      \
-  if ((cond)) {                                                                \
-  } else {                                                                     \
-    LVAL_RAISE(args, fmt, ##__VA_ARGS__);                                      \
+#define LVAL_ASSERT(args, cond, fmt, ...) \
+  if ((cond)) {                           \
+  } else {                                \
+    LVAL_RAISE(args, fmt, ##__VA_ARGS__); \
   }
 
-#define LVAL_ASSERT_TYPE(args, lval, _type, ...)                               \
-  do {                                                                         \
-    char _found = 0;                                                           \
-    valk_ltype_e _expected[] = {(_type), ##__VA_ARGS__};                       \
-    size_t _n_expected = sizeof(_expected) / sizeof(valk_ltype_e);             \
-                                                                               \
-    for (size_t i = 0; i < _n_expected; i++) {                                 \
-      if ((lval)->type == _expected[i]) {                                      \
-        _found = 1;                                                            \
-        break;                                                                 \
-      }                                                                        \
-    }                                                                          \
-    if (!_found) {                                                             \
-      char const *_expect_str[_n_expected];                                    \
-      for (size_t i = 0; i < _n_expected; i++) {                               \
-        _expect_str[i] = valk_ltype_name(_expected[i]);                        \
-      }                                                                        \
-      char *_estr = valk_str_join(_n_expected, _expect_str, ", ");             \
-                                                                               \
-      char *_fmt = valk_c_err_format("Actual: %s, Expected(One-Of): [%s]",     \
-                                     __FILE_NAME__, __LINE__, __FUNCTION__);   \
-      valk_lval_t *err =                                                       \
-          valk_lval_err(_fmt, valk_ltype_name((lval)->type), _estr);           \
-      free(_estr);                                                             \
-      free(_fmt);                                                              \
-      valk_lval_free(args);                                                    \
-      return err;                                                              \
-    }                                                                          \
+#define LVAL_ASSERT_TYPE(args, lval, _type, ...)                             \
+  do {                                                                       \
+    char _found = 0;                                                         \
+    valk_ltype_e _expected[] = {(_type), ##__VA_ARGS__};                     \
+    size_t _n_expected = sizeof(_expected) / sizeof(valk_ltype_e);           \
+                                                                             \
+    for (size_t i = 0; i < _n_expected; i++) {                               \
+      if ((lval)->type == _expected[i]) {                                    \
+        _found = 1;                                                          \
+        break;                                                               \
+      }                                                                      \
+    }                                                                        \
+    if (!_found) {                                                           \
+      char const *_expect_str[_n_expected];                                  \
+      for (size_t i = 0; i < _n_expected; i++) {                             \
+        _expect_str[i] = valk_ltype_name(_expected[i]);                      \
+      }                                                                      \
+      char *_estr = valk_str_join(_n_expected, _expect_str, ", ");           \
+                                                                             \
+      char *_fmt = valk_c_err_format("Actual: %s, Expected(One-Of): [%s]",   \
+                                     __FILE_NAME__, __LINE__, __FUNCTION__); \
+      valk_lval_t *err =                                                     \
+          valk_lval_err(_fmt, valk_ltype_name((lval)->type), _estr);         \
+      free(_estr);                                                           \
+      free(_fmt);                                                            \
+      valk_lval_free(args);                                                  \
+      return err;                                                            \
+    }                                                                        \
   } while (0)
 
-#define LVAL_ASSERT_COUNT_NEQ(args, lval, _count)                              \
-  LVAL_ASSERT(args, (lval)->expr.count != _count,                              \
-              "Invalid argument count, Actual[%d] != Expected[%d]",            \
+#define LVAL_ASSERT_COUNT_NEQ(args, lval, _count)                   \
+  LVAL_ASSERT(args, (lval)->expr.count != _count,                   \
+              "Invalid argument count, Actual[%d] != Expected[%d]", \
               (lval)->expr.count, _count)
 
-#define LVAL_ASSERT_COUNT_EQ(args, lval, _count)                               \
-  LVAL_ASSERT(args, (lval)->expr.count == _count,                              \
-              "Invalid argument count, Actual[%d] == Expected[%d]",            \
+#define LVAL_ASSERT_COUNT_EQ(args, lval, _count)                    \
+  LVAL_ASSERT(args, (lval)->expr.count == _count,                   \
+              "Invalid argument count, Actual[%d] == Expected[%d]", \
               (lval)->expr.count, _count)
 
-#define LVAL_ASSERT_COUNT_LT(args, lval, _count)                               \
-  LVAL_ASSERT(args, (lval)->expr.count < _count,                               \
-              "Invalid argument count, Actual[%d] < Expected[%d]",             \
+#define LVAL_ASSERT_COUNT_LT(args, lval, _count)                   \
+  LVAL_ASSERT(args, (lval)->expr.count < _count,                   \
+              "Invalid argument count, Actual[%d] < Expected[%d]", \
               (lval)->expr.count, _count)
 
-#define LVAL_ASSERT_COUNT_LE(args, lval, _count)                               \
-  LVAL_ASSERT(args, (lval)->expr.count <= _count,                              \
-              "Invalid argument count, Actual[%d] <= Expected[%d]",            \
+#define LVAL_ASSERT_COUNT_LE(args, lval, _count)                    \
+  LVAL_ASSERT(args, (lval)->expr.count <= _count,                   \
+              "Invalid argument count, Actual[%d] <= Expected[%d]", \
               (lval)->expr.count, _count)
 
-#define LVAL_ASSERT_COUNT_GT(args, lval, _count)                               \
-  LVAL_ASSERT(args, (lval)->expr.count > _count,                               \
-              "Invalid argument count, Actual[%d] > Expected[%d]",             \
+#define LVAL_ASSERT_COUNT_GT(args, lval, _count)                   \
+  LVAL_ASSERT(args, (lval)->expr.count > _count,                   \
+              "Invalid argument count, Actual[%d] > Expected[%d]", \
               (lval)->expr.count, _count)
 
-#define LVAL_ASSERT_COUNT_GE(args, lval, _count)                               \
-  LVAL_ASSERT(args, (lval)->expr.count >= _count,                              \
-              "Invalid argument count, Actual[%d] >= Expected[%d]",            \
+#define LVAL_ASSERT_COUNT_GE(args, lval, _count)                    \
+  LVAL_ASSERT(args, (lval)->expr.count >= _count,                   \
+              "Invalid argument count, Actual[%d] >= Expected[%d]", \
               (lval)->expr.count, _count)
 
 static valk_lval_t *valk_builtin_eval(valk_lenv_t *e, valk_lval_t *a);
@@ -140,22 +141,32 @@ char *valk_str_join(const size_t n, const char **strs, const char *sep) {
 
 const char *valk_ltype_name(valk_ltype_e type) {
   switch (type) {
-  case LVAL_NUM:
-    return "Number";
-  case LVAL_SYM:
-    return "Symbol";
-  case LVAL_FUN:
-    return "Function";
-  case LVAL_QEXPR:
-    return "Quote-expr";
-  case LVAL_SEXPR:
-    return "Symbolic-expr";
-  case LVAL_ERR:
-    return "Error";
-  case LVAL_STR:
-    return "String";
-    break;
+    case LVAL_NUM:
+      return "Number";
+    case LVAL_SYM:
+      return "Symbol";
+    case LVAL_FUN:
+      return "Function";
+    case LVAL_QEXPR:
+      return "Quote-expr";
+    case LVAL_SEXPR:
+      return "Symbolic-expr";
+    case LVAL_ERR:
+      return "Error";
+    case LVAL_STR:
+      return "String";
+    case LVAL_REF:
+      return "Reference";
   }
+}
+
+valk_lval_t *valk_lval_ref(const char *type, void *ptr, void (*free)(void *)) {
+  valk_lval_t *res = malloc(sizeof(valk_lval_t));
+  res->type = LVAL_REF;
+  res->ref.type = strndup(type, 100);
+  res->ref.ptr = ptr;
+  res->ref.free = free;
+  return res;
 }
 
 valk_lval_t *valk_lval_num(long x) {
@@ -204,13 +215,14 @@ valk_lval_t *valk_lval_str(const char *str) {
   return res;
 }
 
-valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun) {
-  valk_lval_t *res = malloc(sizeof(valk_lval_t));
-  res->type = LVAL_SYM;
-  res->fun.builtin = fun;
-  res->fun.env = nullptr;
-  return res;
-}
+// valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun) {
+//   valk_lval_t *res = malloc(sizeof(valk_lval_t));
+//   res->type = LVAL_SYM;
+//   res->fun.builtin = fun;
+//   res->fun.env = nullptr;
+//   return res;
+// }
+
 valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = LVAL_FUN;
@@ -241,40 +253,46 @@ valk_lval_t *valk_lval_copy(valk_lval_t *lval) {
   valk_lval_t *res = malloc(sizeof(valk_lval_t));
   res->type = lval->type;
   switch (lval->type) {
-  case LVAL_NUM:
-    res->num = lval->num;
-    break;
-  case LVAL_FUN:
-    if (lval->fun.builtin) {
-      res->fun.builtin = lval->fun.builtin;
-      res->fun.env = nullptr;
-      res->fun.body = nullptr;
-      res->fun.formals = nullptr;
-    } else {
-      res->fun.builtin = nullptr;
-      res->fun.env = valk_lenv_copy(lval->fun.env);
-      res->fun.body = valk_lval_copy(lval->fun.body);
-      res->fun.formals = valk_lval_copy(lval->fun.formals);
-    }
-    break;
-  case LVAL_QEXPR:
-  case LVAL_SEXPR:
-    res->expr.cell = valk_mem_alloc(sizeof(res->expr.cell) * lval->expr.count);
-    res->expr.count = lval->expr.count;
-    for (size_t i = 0; i < lval->expr.count; ++i) {
-      res->expr.cell[i] = valk_lval_copy(lval->expr.cell[i]);
-    }
-    break;
-  case LVAL_SYM:
-    res->str = strndup(lval->str, 200); //  TODO(main): Whats max symbol length?
-    break;
-  case LVAL_ERR:
-    // Pretty cool functionality in C23
-    res->str = strndup(lval->str, 2000); //  TODO(main): Whats max error length?
-    break;
-  case LVAL_STR:
-    res->str = strdup(lval->str); //  TODO(main): Whats max string length?
-    break;
+    case LVAL_NUM:
+      res->num = lval->num;
+      break;
+    case LVAL_FUN:
+      if (lval->fun.builtin) {
+        res->fun.builtin = lval->fun.builtin;
+        res->fun.env = nullptr;
+        res->fun.body = nullptr;
+        res->fun.formals = nullptr;
+      } else {
+        res->fun.builtin = nullptr;
+        res->fun.env = valk_lenv_copy(lval->fun.env);
+        res->fun.body = valk_lval_copy(lval->fun.body);
+        res->fun.formals = valk_lval_copy(lval->fun.formals);
+      }
+      break;
+    case LVAL_QEXPR:
+    case LVAL_SEXPR:
+      res->expr.cell =
+          valk_mem_alloc(sizeof(res->expr.cell) * lval->expr.count);
+      res->expr.count = lval->expr.count;
+      for (size_t i = 0; i < lval->expr.count; ++i) {
+        res->expr.cell[i] = valk_lval_copy(lval->expr.cell[i]);
+      }
+      break;
+    case LVAL_SYM:
+      res->str =
+          strndup(lval->str, 200);  //  TODO(main): Whats max symbol length?
+      break;
+    case LVAL_ERR:
+      // Pretty cool functionality in C23
+      res->str =
+          strndup(lval->str, 2000);  //  TODO(main): Whats max error length?
+      break;
+    case LVAL_STR:
+      res->str = strdup(lval->str);  //  TODO(main): Whats max string length?
+      break;
+    case LVAL_REF:
+      res->ref = lval->ref;
+      break;
   }
   return res;
 }
@@ -284,31 +302,35 @@ void valk_lval_free(valk_lval_t *lval) {
     return;
   }
   switch (lval->type) {
-  case LVAL_FUN:
-    if (!lval->fun.builtin) {
-      valk_lval_free(lval->fun.body);
-      valk_lval_free(lval->fun.formals);
-      valk_lenv_free(lval->fun.env);
-    }
-    break;
-  case LVAL_NUM:
-    // nuttin to do but break;
-    break;
-  case LVAL_STR:
-  case LVAL_SYM:
-  case LVAL_ERR:
-    free(lval->str);
-    break;
-  case LVAL_QEXPR:
-  case LVAL_SEXPR:
-    while (lval->expr.count > 0) {
-      valk_lval_free(lval->expr.cell[lval->expr.count - 1]);
-      --lval->expr.count;
-    }
-    // Should play around with valgrind on this. Pretty interesting thing to
-    // forget
-    free(lval->expr.cell);
-    break;
+    case LVAL_FUN:
+      if (!lval->fun.builtin) {
+        valk_lval_free(lval->fun.body);
+        valk_lval_free(lval->fun.formals);
+        valk_lenv_free(lval->fun.env);
+      }
+      break;
+    case LVAL_NUM:
+      // nuttin to do but break;
+      break;
+    case LVAL_STR:
+    case LVAL_SYM:
+    case LVAL_ERR:
+      free(lval->str);
+      break;
+    case LVAL_QEXPR:
+    case LVAL_SEXPR:
+      while (lval->expr.count > 0) {
+        valk_lval_free(lval->expr.cell[lval->expr.count - 1]);
+        --lval->expr.count;
+      }
+      // Should play around with valgrind on this. Pretty interesting thing to
+      // forget
+      free(lval->expr.cell);
+      break;
+    case LVAL_REF:
+      lval->ref.free(lval->ref.ptr);
+      free(lval->ref.type);
+      break;
   }
   free(lval);
 }
@@ -319,31 +341,33 @@ int valk_lval_eq(valk_lval_t *x, valk_lval_t *y) {
   }
 
   switch (x->type) {
-  case LVAL_NUM:
-    return (x->num == y->num);
-  case LVAL_SYM:
-  case LVAL_STR:
-  case LVAL_ERR:
-    return (strcmp(x->str, y->str));
-  case LVAL_FUN: {
-    if (x->fun.builtin || y->fun.builtin) {
-      return x->fun.builtin == y->fun.builtin;
-    } else {
-      return valk_lval_eq(x->fun.formals, y->fun.formals) &&
-             valk_lval_eq(x->fun.body, y->fun.body);
-    }
-  }
-  case LVAL_QEXPR:
-  case LVAL_SEXPR:
-    if (x->expr.count != y->expr.count) {
-      return 0;
-    }
-    for (size_t i = 0; i < x->expr.count; ++i) {
-      if (!valk_lval_eq(x->expr.cell[i], y->expr.cell[i])) {
-        return 0;
+    case LVAL_NUM:
+      return (x->num == y->num);
+    case LVAL_SYM:
+    case LVAL_STR:
+    case LVAL_ERR:
+      return (strcmp(x->str, y->str));
+    case LVAL_FUN: {
+      if (x->fun.builtin || y->fun.builtin) {
+        return x->fun.builtin == y->fun.builtin;
+      } else {
+        return valk_lval_eq(x->fun.formals, y->fun.formals) &&
+               valk_lval_eq(x->fun.body, y->fun.body);
       }
     }
-    return 1;
+    case LVAL_QEXPR:
+    case LVAL_SEXPR:
+      if (x->expr.count != y->expr.count) {
+        return 0;
+      }
+      for (size_t i = 0; i < x->expr.count; ++i) {
+        if (!valk_lval_eq(x->expr.cell[i], y->expr.cell[i])) {
+          return 0;
+        }
+      }
+      return 1;
+    case LVAL_REF:
+      return (x->ref.ptr == y->ref.ptr) && (x->ref.free == y->ref.free);
   }
 
   return 0;
@@ -425,9 +449,10 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
       // if we encountered this, the rest of arguments are varargs
       if (func->fun.formals->expr.count != 1) {
         valk_lval_free(args);
-        return valk_lval_err("Invalid  function format, the vararg symbol `&` "
-                             "is not followed by others [count: %d]",
-                             func->fun.formals->expr.count);
+        return valk_lval_err(
+            "Invalid  function format, the vararg symbol `&` "
+            "is not followed by others [count: %d]",
+            func->fun.formals->expr.count);
       }
       valk_lval_t *nsym = valk_lval_pop(func->fun.formals, 0);
       valk_lenv_put(func->fun.env, nsym, valk_builtin_list(env, args));
@@ -446,9 +471,10 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
       (strcmp(func->fun.formals->expr.cell[0]->str, "&") == 0)) {
     if (func->fun.formals->expr.count != 2) {
       valk_lval_free(args);
-      return valk_lval_err("Invalid  function format, the vararg symbol `&` "
-                           "is not followed by others [count: %d]",
-                           func->fun.formals->expr.count);
+      return valk_lval_err(
+          "Invalid  function format, the vararg symbol `&` "
+          "is not followed by others [count: %d]",
+          func->fun.formals->expr.count);
     }
 
     // discard the &
@@ -522,111 +548,114 @@ void valk_lval_print(valk_lval_t *val) {
     return;
   }
   switch (val->type) {
-  case LVAL_NUM:
-    printf("Num[%li]", val->num);
-    break;
-  case LVAL_SYM:
-    printf("Sym[%s]", val->str);
-    break;
-    // TODO(main): code duplication here, do i actually care??
-  case LVAL_QEXPR:
-    printf("Qexpr{ ");
-    for (size_t i = 0; i < val->expr.count; ++i) {
-      valk_lval_print(val->expr.cell[i]);
-      if (i < val->expr.count - 1) {
-        putchar(' ');
+    case LVAL_NUM:
+      printf("Num[%li]", val->num);
+      break;
+    case LVAL_SYM:
+      printf("Sym[%s]", val->str);
+      break;
+      // TODO(main): code duplication here, do i actually care??
+    case LVAL_QEXPR:
+      printf("Qexpr{ ");
+      for (size_t i = 0; i < val->expr.count; ++i) {
+        valk_lval_print(val->expr.cell[i]);
+        if (i < val->expr.count - 1) {
+          putchar(' ');
+        }
       }
-    }
-    printf(" }");
-    break;
-  case LVAL_SEXPR:
-    printf("Sexpr( ");
-    for (size_t i = 0; i < val->expr.count; ++i) {
-      valk_lval_print(val->expr.cell[i]);
-      if (i < val->expr.count - 1) {
-        putchar(' ');
+      printf(" }");
+      break;
+    case LVAL_SEXPR:
+      printf("Sexpr( ");
+      for (size_t i = 0; i < val->expr.count; ++i) {
+        valk_lval_print(val->expr.cell[i]);
+        if (i < val->expr.count - 1) {
+          putchar(' ');
+        }
       }
-    }
-    printf(" )");
-    break;
-  case LVAL_ERR:
-    printf("Error[%s]", val->str);
-    break;
-  case LVAL_FUN:
-    if (val->fun.builtin) {
-      printf("<builtin>");
-    } else {
-      printf("(\\ ");
-      valk_lval_print(val->fun.formals);
-      putchar(' ');
-      valk_lval_print(val->fun.body);
-      putchar(')');
-    }
-    break;
-  case LVAL_STR: {
-    // We want to escape the string before printing
-    printf("String[");
-    for (size_t i = 0; i < strlen(val->str); ++i) {
-      if (strchr(lval_str_escapable, val->str[i])) {
-        printf("%s", valk_lval_str_escape(val->str[i]));
+      printf(" )");
+      break;
+    case LVAL_ERR:
+      printf("Error[%s]", val->str);
+      break;
+    case LVAL_FUN:
+      if (val->fun.builtin) {
+        printf("<builtin>");
       } else {
-        putchar(val->str[i]);
+        printf("(\\ ");
+        valk_lval_print(val->fun.formals);
+        putchar(' ');
+        valk_lval_print(val->fun.body);
+        putchar(')');
       }
+      break;
+    case LVAL_STR: {
+      // We want to escape the string before printing
+      printf("String[");
+      for (size_t i = 0; i < strlen(val->str); ++i) {
+        if (strchr(lval_str_escapable, val->str[i])) {
+          printf("%s", valk_lval_str_escape(val->str[i]));
+        } else {
+          putchar(val->str[i]);
+        }
+      }
+      printf("]");
+      break;
     }
-    printf("]");
-    break;
-  }
+    case LVAL_REF:
+      printf("Reference[%p]", val->ref.ptr);
+      break;
   }
 }
 
 static char valk_lval_str_unescape(char x) {
   switch (x) {
-  case 'a':
-    return '\a';
-  case 'b':
-    return '\b';
-  case 'f':
-    return '\f';
-  case 'n':
-    return '\n';
-  case 'r':
-    return '\r';
-  case 't':
-    return '\t';
-  case 'v':
-    return '\v';
-  case '\\':
-    return '\\';
-  case '\'':
-    return '\'';
-  case '\"':
-    return '\"';
+    case 'a':
+      return '\a';
+    case 'b':
+      return '\b';
+    case 'f':
+      return '\f';
+    case 'n':
+      return '\n';
+    case 'r':
+      return '\r';
+    case 't':
+      return '\t';
+    case 'v':
+      return '\v';
+    case '\\':
+      return '\\';
+    case '\'':
+      return '\'';
+    case '\"':
+      return '\"';
   }
   return '\0';
 }
 
 static const char *valk_lval_str_escape(char x) {
   switch (x) {
-  case '\a':
-    return "\\a";
-  case '\b':
-    return "\\b";
-  case '\f':
-    return "\\f";
-  case '\n':
-    return "\\n";
-  case '\r':
-    return "\\r";
-  case '\t':
-    return "\\t";
-  case '\v':
-    return "\\v";
-  case '\\':
-    return "\\\\";
-  case '\'':
-    return "\\\'";
-  case '\"':
-    return "\\\"";
+    case '\a':
+      return "\\a";
+    case '\b':
+      return "\\b";
+    case '\f':
+      return "\\f";
+    case '\n':
+      return "\\n";
+    case '\r':
+      return "\\r";
+    case '\t':
+      return "\\t";
+    case '\v':
+      return "\\v";
+    case '\\':
+      return "\\\\";
+    case '\'':
+      return "\\\'";
+    case '\"':
+      return "\\\"";
   }
   return "";
 }
@@ -684,7 +713,7 @@ static valk_lval_t *valk_lval_read_sym(int *i, const char *s) {
 static valk_lval_t *valk_lval_read_str(int *i, const char *s) {
   // Scan the string for size
   char next;
-  int count = 1; // Pad for nil terminator
+  int count = 1;  // Pad for nil terminator
 
   // Advance to start of string
   if (s[(*i)++] != '"') {
@@ -956,8 +985,8 @@ static valk_lval_t *valk_builtin_cons(valk_lenv_t *e, valk_lval_t *a) {
   valk_lval_t *head = valk_lval_pop(a, 0);
   valk_lval_t *tail = valk_lval_pop(a, 0);
   // TODO(main): this should be implmented as push
-  tail->expr.cell = realloc(tail->expr.cell, sizeof(tail->expr.cell[0]) *
-                                                 (tail->expr.count + 1));
+  tail->expr.cell = realloc(
+      tail->expr.cell, sizeof(tail->expr.cell[0]) * (tail->expr.count + 1));
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memmove(&tail->expr.cell[1], tail->expr.cell,
           sizeof(tail->expr.cell) * tail->expr.count);
@@ -1325,7 +1354,28 @@ static valk_lval_t *valk_builtin_error(valk_lenv_t *e, valk_lval_t *a) {
   return err;
 }
 
+static void __valk_arc_box_release(void *arg) {
+  valk_arc_release((valk_arc_box *)arg);
+}
+
+static valk_lval_t *valk_builtin_await(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_REF);
+  LVAL_ASSERT(a, strcmp(a->expr.cell[0]->ref.type, "future") == 0,
+              "Await only works with futures but received: %s",
+              a->expr.cell[0]->ref.type);
+
+  valk_arc_box *res =
+      valk_future_await_timeout(a->expr.cell[0]->ref.ptr, 100000);
+
+  valk_lval_free(a);
+
+  return valk_lval_ref("box", res, __valk_arc_box_release);
+}
+
 void valk_lenv_builtins(valk_lenv_t *env) {
+  valk_lenv_put_builtin(env, "error", valk_builtin_error);
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
   valk_lenv_put_builtin(env, "print", valk_builtin_print);
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
@@ -1359,4 +1409,9 @@ void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "<=", valk_builtin_le);
   valk_lenv_put_builtin(env, "==", valk_builtin_eq);
   valk_lenv_put_builtin(env, "!=", valk_builtin_ne);
+
+  // Async
+  valk_lenv_put_builtin(env, "await", valk_builtin_await);
+
+  // HTTP
 }

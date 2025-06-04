@@ -7,7 +7,7 @@
 
 #include "memory.h"
 
-#define VALK_ARC_DEBUG
+// #define VALK_ARC_DEBUG
 #define VALK_ARC_TRACE_DEPTH 10
 
 #define valk_work_init(queue, _capacity)                             \

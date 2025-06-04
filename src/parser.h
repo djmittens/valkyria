@@ -1,6 +1,8 @@
 #pragma once
 #include <stdio.h>
 
+#include "memory.h"
+
 // Forward declarations
 struct valk_lenv_t;
 typedef struct valk_lenv_t valk_lenv_t;
@@ -12,6 +14,7 @@ typedef enum {
   LVAL_SYM,
   LVAL_STR,
   LVAL_FUN,
+  LVAL_REF,
   LVAL_QEXPR,
   LVAL_SEXPR,
   LVAL_ERR
@@ -35,6 +38,11 @@ struct valk_lval_t {
       // only valid for (s|q)expr
       size_t count;
     } expr;
+    struct {
+      char *type;
+      void *ptr;
+      void (*free)(void*);
+    } ref;
     long num;
     char *str;
   };
@@ -43,11 +51,14 @@ struct valk_lval_t {
 
 //// lval Constructors ////
 
+valk_lval_t *valk_lval_ref(const char *type, void *ptr,
+                           void (*free)(void*));
+
 valk_lval_t *valk_lval_num(long x);
 valk_lval_t *valk_lval_err(const char *fmt, ...);
 valk_lval_t *valk_lval_sym(const char *sym);
 valk_lval_t *valk_lval_str(const char *str);
-valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
+// valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
 valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body);
 valk_lval_t *valk_lval_sexpr_empty(void);
 valk_lval_t *valk_lval_qexpr_empty(void);

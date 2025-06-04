@@ -15,7 +15,7 @@
 - [ ] Remove Readline from repl
 - [ ] Windows support
 - [ ] Memory
-    - [ ] Arenas
+    - [ ] LVAL Arenas
         - This can be supported by my threadsafe slab allocator [ ] GC? (do i need this part ?)
 - [ ] LLVM IR compiler
     - [ ] JIT
