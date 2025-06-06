@@ -6,11 +6,11 @@
         - [ ] AIO / HTTP config
         - [ ] Test config (eg. Fork or not to fork)
     - [ ] Toolchain config, eg target windows + clang vs linux + clang
-- [ ] Symbolizer support for stack traces
 - [ ] Dictionaries
 - [x] Testing
     - [x] C Runtime testing
     - [ ] Native Language testing
+- [ ] Symbolizer support for stack traces
 - [ ] Runtime Asserts
 - [ ] Remove Readline from repl
 - [ ] Windows support

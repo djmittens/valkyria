@@ -7,9 +7,6 @@
 
 #include "memory.h"
 
-// #define VALK_ARC_DEBUG
-#define VALK_ARC_TRACE_DEPTH 10
-
 #define valk_work_init(queue, _capacity)                             \
   do {                                                               \
     (queue)->capacity = (_capacity);                                 \
@@ -100,47 +97,6 @@
   } while (0)
 
 typedef enum { VALK_SUC, VALK_ERR } valk_res_t;
-
-#ifdef VALK_ARC_DEBUG
-#include <dlfcn.h>
-#include <execinfo.h>
-#define VALK_ARC_TRACE_MAX 50
-
-typedef enum { VALK_TRACE_ACQUIRE, VALK_TRACE_RELEASE } valk_trace_kind_e;
-typedef struct valk_arc_trace_info {
-  valk_trace_kind_e kind;
-  const char *file;
-  const char *function;
-  int line;
-  size_t refcount;
-  void *stack[VALK_ARC_TRACE_DEPTH];
-  size_t size;
-} valk_arc_trace_info;
-
-#define valk_capture_trace(_kind, _refcount, ref)                             \
-  do {                                                                        \
-    size_t _old = __atomic_fetch_add(&(ref)->nextTrace, 1, __ATOMIC_RELEASE); \
-    VALK_ASSERT(                                                              \
-        _old < VALK_ARC_TRACE_MAX,                                            \
-        "Cannot keep tracing this variable, please increase the max traces"); \
-    (ref)->traces[_old].kind = (_kind);                                       \
-    (ref)->traces[_old].file = __FILE__;                                      \
-    (ref)->traces[_old].function = __func__;                                  \
-    (ref)->traces[_old].line = __LINE__;                                      \
-    (ref)->traces[_old].refcount = (_refcount);                               \
-    (ref)->traces[_old].size =                                                \
-        backtrace((ref)->traces[_old].stack, VALK_ARC_TRACE_DEPTH);           \
-  } while (0)
-
-#define valk_arc_trace_report_print(report) \
-  __valk_arc_trace_report_print((report)->traces, (report)->nextTrace)
-
-void __valk_arc_trace_report_print(valk_arc_trace_info *traces, size_t num);
-
-#else
-#define valk_capture_trace(_kind, _refcount, ref)
-#define valk_arc_trace_report_print(report)
-#endif
 
 typedef struct valk_arc_box {
   valk_res_t type;

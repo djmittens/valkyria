@@ -424,6 +424,7 @@ beginning of the session
     - [x] Initialization, with simple settings frame
 - [x] Http2 request response
 - [ ] Lisp FFI
+    - [x] Pointers / References support
     - [ ] Async API for awaiting on futures / promises
     - [ ] Continuation support
     - [ ] Request / Response hanlders

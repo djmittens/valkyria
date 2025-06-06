@@ -25,6 +25,14 @@ const char *valk_ltype_name(valk_ltype_e type);
 typedef valk_lval_t *(valk_lval_builtin_t)(valk_lenv_t *, valk_lval_t *);
 
 struct valk_lval_t {
+  valk_ltype_e type;
+  size_t refcount;
+  valk_mem_allocator_t *allocator;
+#ifdef VALK_ARC_DEBUG
+  valk_arc_trace_info traces[VALK_ARC_TRACE_MAX];
+  size_t nextTrace;
+#endif
+  void (*free)(struct valk_lval_t *);
   union {
     struct {
       valk_lenv_t *env;
@@ -41,18 +49,16 @@ struct valk_lval_t {
     struct {
       char *type;
       void *ptr;
-      void (*free)(void*);
+      void (*free)(void *);
     } ref;
     long num;
     char *str;
   };
-  valk_ltype_e type;
 };
 
 //// lval Constructors ////
 
-valk_lval_t *valk_lval_ref(const char *type, void *ptr,
-                           void (*free)(void*));
+valk_lval_t *valk_lval_ref(const char *type, void *ptr, void (*free)(void *));
 
 valk_lval_t *valk_lval_num(long x);
 valk_lval_t *valk_lval_err(const char *fmt, ...);

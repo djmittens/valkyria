@@ -1,6 +1,10 @@
 #pragma once
+#include <dlfcn.h>
+#include <execinfo.h>
 #include <signal.h>
 #include <sys/types.h>
+
+#include "debug.h"
 
 #define UNUSED(x) ({ (void)x; })
 
@@ -9,6 +13,9 @@
   do {                                                                  \
     fprintf(stderr, "%s:%d:%s || " __msg "\n", __FILE_NAME__, __LINE__, \
             __FUNCTION__, ##__VA_ARGS__);                               \
+    void *stack[50];                                                    \
+    int _size = backtrace(stack, 50);                                   \
+    valk_trace_print(stack, _size);                                     \
     raise(SIGTRAP);                                                     \
   } while (0)
 // NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)

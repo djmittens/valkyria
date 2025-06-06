@@ -1,4 +1,6 @@
+#include "memory.h"
 #include "parser.h"
+#include "common.h"
 #include <editline.h>
 #include <errno.h>
 #include <stdio.h>
@@ -7,6 +9,8 @@
 
 int main(int argc, char *argv[]) {
   char *input;
+
+  valk_mem_init_malloc();
 
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);
@@ -23,11 +27,11 @@ int main(int argc, char *argv[]) {
           if (x->type == LVAL_ERR) {
             valk_lval_println(x);
           }
-          valk_lval_free(x);
+          valk_release(x);
         }
       }
 
-      valk_lval_free(res);
+      valk_release(res);
     }
   }
 
@@ -50,7 +54,7 @@ int main(int argc, char *argv[]) {
     valk_lval_println(expr);
 
     free(input);
-    valk_lval_free(expr);
+    valk_release(expr);
   }
   free(env);
   return EXIT_SUCCESS;

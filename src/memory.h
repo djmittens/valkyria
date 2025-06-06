@@ -3,44 +3,115 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define VALK_WITH_CTX(_ctx_)                                                   \
-  for (struct {                                                                \
-         int exec;                                                             \
-         valk_thread_context_t old_ctx;                                        \
-       } __ctx = {1, valk_thread_ctx};                                         \
-       __ctx.exec; valk_thread_ctx = __ctx.old_ctx)                            \
+#define VALK_ARC_DEBUG
+#define VALK_ARC_TRACE_DEPTH 10
+
+#define VALK_WITH_CTX(_ctx_)                        \
+  for (struct {                                     \
+         int exec;                                  \
+         valk_thread_context_t old_ctx;             \
+       } __ctx = {1, valk_thread_ctx};              \
+       __ctx.exec; valk_thread_ctx = __ctx.old_ctx) \
     for (valk_thread_ctx = (_ctx_); __ctx.exec; __ctx.exec = 0)
 
-#define VALK_WITH_ALLOC(_alloc_)                                               \
-  for (struct {                                                                \
-         int exec;                                                             \
-         void *old_alloc;                                                      \
-       } __ctx = {1, valk_thread_ctx.allocator};                               \
-       __ctx.exec; valk_thread_ctx.allocator = __ctx.old_alloc)                \
+#define VALK_WITH_ALLOC(_alloc_)                                \
+  for (struct {                                                 \
+         int exec;                                              \
+         void *old_alloc;                                       \
+       } __ctx = {1, valk_thread_ctx.allocator};                \
+       __ctx.exec; valk_thread_ctx.allocator = __ctx.old_alloc) \
     for (valk_thread_ctx.allocator = (_alloc_); __ctx.exec; __ctx.exec = 0)
 
-#define valk_mem_alloc(__bytes)                                                \
+#define valk_mem_alloc(__bytes) \
   valk_mem_allocator_alloc(valk_thread_ctx.allocator, (__bytes))
 
-#define valk_mem_realloc(__ptr, __new_size)                                    \
+#define valk_mem_realloc(__ptr, __new_size) \
   valk_mem_allocator_realloc(valk_thread_ctx.allocator, (__ptr), (__new_size))
 
-#define valk_mem_calloc(__num, __size)                                         \
+#define valk_mem_calloc(__num, __size) \
   valk_mem_allocator_calloc(valk_thread_ctx.allocator, (__num), (__size))
 
-#define valk_mem_free(__ptr)                                                   \
+#define valk_mem_free(__ptr) \
   valk_mem_allocator_free(valk_thread_ctx.allocator, __ptr)
+
+#define valk_retain(ref)                                          \
+  ({                                                              \
+    (ref)->refcount++;                                            \
+    valk_capture_trace(VALK_TRACE_ACQUIRE, (ref)->refcount, ref); \
+    (ref);                                                        \
+  })
+
+// This is bootleg arc
+#define valk_release(ref)                                               \
+  do {                                                                  \
+    (ref)->refcount--;                                                  \
+    valk_capture_trace(VALK_TRACE_RELEASE, (ref)->refcount, ref);       \
+    /*char _buf[512];                                                   \
+    pthread_getname_np(pthread_self(), _buf, sizeof(_buf));*/           \
+    if ((ref)->refcount == 0) {                                         \
+      /* printf("[%s] Arc is freeing %d\n", _buf, old); */              \
+      /* Only free using the allocator if a custom one is not defined*/ \
+      if ((ref)->free) {                                                \
+        valk_arc_trace_report_print(ref);                               \
+        (ref)->free(ref);                                               \
+      } else if ((ref)->allocator) {                                    \
+        valk_mem_allocator_free((ref)->allocator, (ref));               \
+      }                                                                 \
+    } else {                                                            \
+      /* printf("[%s] Arc is decrementing %d\n", _buf, old); */         \
+    }                                                                   \
+  } while (0)
+
+#ifdef VALK_ARC_DEBUG
+#include <dlfcn.h>
+#include <execinfo.h>
+#define VALK_ARC_TRACE_MAX 50
+
+typedef enum { VALK_TRACE_ACQUIRE, VALK_TRACE_RELEASE } valk_trace_kind_e;
+typedef struct valk_arc_trace_info {
+  valk_trace_kind_e kind;
+  const char *file;
+  const char *function;
+  int line;
+  size_t refcount;
+  void *stack[VALK_ARC_TRACE_DEPTH];
+  size_t size;
+} valk_arc_trace_info;
+
+#define valk_capture_trace(_kind, _refcount, ref)                             \
+  do {                                                                        \
+    size_t _old = __atomic_fetch_add(&(ref)->nextTrace, 1, __ATOMIC_RELEASE); \
+    VALK_ASSERT(                                                              \
+        _old < VALK_ARC_TRACE_MAX,                                            \
+        "Cannot keep tracing this variable, please increase the max traces"); \
+    (ref)->traces[_old].kind = (_kind);                                       \
+    (ref)->traces[_old].file = __FILE__;                                      \
+    (ref)->traces[_old].function = __func__;                                  \
+    (ref)->traces[_old].line = __LINE__;                                      \
+    (ref)->traces[_old].refcount = (_refcount);                               \
+    (ref)->traces[_old].size =                                                \
+        backtrace((ref)->traces[_old].stack, VALK_ARC_TRACE_DEPTH);           \
+  } while (0)
+
+#define valk_arc_trace_report_print(report) \
+  __valk_arc_trace_report_print((report)->traces, (report)->nextTrace)
+
+void __valk_arc_trace_report_print(valk_arc_trace_info *traces, size_t num);
+
+#else
+#define valk_capture_trace(_kind, _refcount, ref) UNUSED((_refcount));
+#define valk_arc_trace_report_print(report)
+#endif
 
 /// generic helper, same as Linux kernel’s container_of
 /// @return the ptr of the right type
-#define valk_container_of(ptr, type, member)                                   \
+#define valk_container_of(ptr, type, member) \
   ((type *)((uint8_t *)(ptr) - offsetof(type, member)))
 
 /// @brief efficient way to calculate the next pow2 to store this shit
 /// chatgpt, cooked up this shit
 static inline size_t valk_next_pow2(size_t x) {
-  if (x <= 1)
-    return 1;
+  if (x <= 1) return 1;
 
 #if defined(__clang__) || defined(__GNUC__)
 #if SIZE_MAX <= UINT32_MAX
@@ -117,7 +188,7 @@ typedef struct valk_slab_item_t {
   uint8_t data[];
 } valk_slab_item_t;
 
-typedef struct { // extends valk_mem_allocator_t;
+typedef struct {  // extends valk_mem_allocator_t;
   valk_mem_allocator_e type;
   size_t itemSize;
   size_t numItems;
@@ -154,7 +225,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self);
 void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item);
 void valk_slab_release_ptr(valk_slab_t *self, void *data);
 
-typedef struct { // extends valk_mem_allocator_t;
+typedef struct {  // extends valk_mem_allocator_t;
   valk_mem_allocator_e type;
   size_t capacity;
   size_t offset;
