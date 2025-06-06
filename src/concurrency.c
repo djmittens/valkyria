@@ -49,22 +49,13 @@ void valk_arc_box_init(valk_arc_box *self, valk_res_t type, size_t capacity) {
   self->item = &((char *)self)[sizeof(valk_arc_box)];
   self->allocator = nullptr;
   self->free = nullptr;
+  valk_capture_trace(VALK_TRACE_NEW, 1, self);
 }
 
 valk_arc_box *valk_arc_box_err(const char *msg) {
   int len = strlen(msg);
   valk_arc_box *res = valk_mem_alloc(sizeof(valk_arc_box) + len + 1);
-
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  memset(res, 0, sizeof(valk_arc_box) + len + 1);
-  res->type = VALK_ERR;
-  res->refcount = 1;
-  res->item = &((char *)res)[sizeof(valk_arc_box)];
-  res->free = nullptr;
-  __assert_thread_safe_allocator();
-  res->allocator = valk_thread_ctx.allocator;
-
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+  valk_arc_box_init(res, VALK_ERR, len + 1);
   strncpy(res->item, msg, len);
   return res;
 }
@@ -457,23 +448,3 @@ void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
   valk_arc_release(res);  // dont need the result
 }
 
-#ifdef VALK_ARC_DEBUG
-#include "debug.h"
-void __valk_arc_trace_report_print(valk_arc_trace_info *traces, size_t num) {
-  for (size_t i = 0; i < num; i++) {
-    const char *shit;
-    switch (traces->kind) {
-      case VALK_TRACE_ACQUIRE:
-        shit = "ACQUIRE";
-        break;
-      case VALK_TRACE_RELEASE:
-        shit = "RELEASE";
-        break;
-    }
-    fprintf(stderr, "[%s] refcount[%ld] %s()|%s:%d \n", shit, traces->refcount,
-            traces->function, traces->file, traces->line);
-    valk_trace_print(traces->stack, traces->size);
-    traces++;
-  }
-}
-#endif

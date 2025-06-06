@@ -171,6 +171,8 @@ valk_lval_t *valk_lval_ref(const char *type, void *ptr, void (*free)(void *)) {
   res->ref.type = strndup(type, 100);
   res->ref.ptr = ptr;
   res->ref.free = free;
+
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -181,6 +183,7 @@ valk_lval_t *valk_lval_num(long x) {
   res->free = valk_lval_free;
   res->refcount = 1;
   res->num = x;
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -205,6 +208,7 @@ valk_lval_t *valk_lval_err(const char *fmt, ...) {
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   vsnprintf(res->str, len + 1, fmt, va);
   va_end(va);
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -217,6 +221,7 @@ valk_lval_t *valk_lval_sym(const char *sym) {
   res->refcount = 1;
   res->str = strndup(sym, 200);
   res->expr.count = 0;
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -229,6 +234,7 @@ valk_lval_t *valk_lval_str(const char *str) {
   // TODO(main): whats a reasonable max for a string length?
   res->str = strdup(str);
   res->expr.count = 0;
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -250,6 +256,7 @@ valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body) {
   res->fun.env = valk_lenv_empty();
   res->fun.formals = formals;
   res->fun.body = body;
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -261,6 +268,7 @@ valk_lval_t *valk_lval_sexpr_empty(void) {
   res->refcount = 1;
   res->expr.cell = nullptr;
   res->expr.count = 0;
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -272,6 +280,7 @@ valk_lval_t *valk_lval_qexpr_empty(void) {
   res->refcount = 1;
   res->expr.cell = nullptr;
   res->expr.count = 0;
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -630,7 +639,7 @@ void valk_lval_print(valk_lval_t *val) {
       break;
     }
     case LVAL_REF:
-      printf("Reference[%p]", val->ref.ptr);
+      printf("Reference[%s:%p]", val->ref.type, val->ref.ptr);
       break;
   }
 }
@@ -901,7 +910,7 @@ valk_lenv_t *valk_lenv_copy(valk_lenv_t *env) {
 }
 
 valk_lval_t *valk_lenv_get(valk_lenv_t *env, valk_lval_t *key) {
-  LVAL_ASSERT_TYPE((valk_lval_t*)nullptr, key, LVAL_SYM);
+  LVAL_ASSERT_TYPE((valk_lval_t *)nullptr, key, LVAL_SYM);
 
   for (size_t i = 0; i < env->count; i++) {
     if (strcmp(key->str, env->symbols[i]) == 0) {
@@ -951,12 +960,13 @@ void valk_lenv_def(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
 
 void valk_lenv_put_builtin(valk_lenv_t *env, char *key,
                            valk_lval_builtin_t *_fun) {
-  valk_lval_t lkey = {.type = LVAL_SYM, .str = key};
+  valk_lval_t *lfun = valk_mem_alloc(sizeof(valk_lval_t));
 
-  valk_lval_t lfun = {.type = LVAL_FUN,
-                      .fun = {.builtin = _fun, .env = nullptr}};
+  lfun->type = LVAL_FUN;
+  lfun->fun.builtin = _fun;
+  lfun->fun.env = nullptr;
 
-  valk_lenv_put(env, &lkey, &lfun);
+  valk_lenv_put(env, valk_lval_sym(key), lfun);
 }
 
 static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
@@ -1070,8 +1080,7 @@ static valk_lval_t *valk_builtin_init(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
   LVAL_ASSERT_COUNT_GT(a, a->expr.cell[0], 0);
-  valk_release(
-      valk_lval_pop(a->expr.cell[0], a->expr.cell[0]->expr.count - 1));
+  valk_release(valk_lval_pop(a->expr.cell[0], a->expr.cell[0]->expr.count - 1));
   valk_lval_t *res = valk_lval_pop(a, 0);
   valk_release(a);
   return res;

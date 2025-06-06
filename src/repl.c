@@ -1,11 +1,15 @@
-#include "memory.h"
-#include "parser.h"
-#include "common.h"
 #include <editline.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "aio.h"
+#include "common.h"
+#include "memory.h"
+#include "parser.h"
+
+static void __aio_free(void *system) { valk_aio_stop(system); }
 
 int main(int argc, char *argv[]) {
   char *input;
@@ -14,6 +18,10 @@ int main(int argc, char *argv[]) {
 
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);
+
+  valk_aio_system_t *aio = valk_aio_start();
+  valk_lenv_put(env, valk_lval_sym("aio"),
+                valk_lval_ref("aio_system", aio, __aio_free));
 
   if (argc >= 2) {
     for (int i = 1; i < argc; ++i) {

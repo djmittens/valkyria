@@ -45,12 +45,12 @@
 #define valk_release(ref)                                               \
   do {                                                                  \
     (ref)->refcount--;                                                  \
-    valk_capture_trace(VALK_TRACE_RELEASE, (ref)->refcount, ref);       \
     /*char _buf[512];                                                   \
     pthread_getname_np(pthread_self(), _buf, sizeof(_buf));*/           \
     if ((ref)->refcount == 0) {                                         \
       /* printf("[%s] Arc is freeing %d\n", _buf, old); */              \
       /* Only free using the allocator if a custom one is not defined*/ \
+      valk_capture_trace(VALK_TRACE_FREE, (ref)->refcount, ref);        \
       if ((ref)->free) {                                                \
         valk_arc_trace_report_print(ref);                               \
         (ref)->free(ref);                                               \
@@ -59,6 +59,7 @@
       }                                                                 \
     } else {                                                            \
       /* printf("[%s] Arc is decrementing %d\n", _buf, old); */         \
+      valk_capture_trace(VALK_TRACE_RELEASE, (ref)->refcount, ref);     \
     }                                                                   \
   } while (0)
 
@@ -67,7 +68,13 @@
 #include <execinfo.h>
 #define VALK_ARC_TRACE_MAX 50
 
-typedef enum { VALK_TRACE_ACQUIRE, VALK_TRACE_RELEASE } valk_trace_kind_e;
+typedef enum {
+  VALK_TRACE_NEW,
+  VALK_TRACE_ACQUIRE,
+  VALK_TRACE_RELEASE,
+  VALK_TRACE_FREE
+} valk_trace_kind_e;
+
 typedef struct valk_arc_trace_info {
   valk_trace_kind_e kind;
   const char *file;

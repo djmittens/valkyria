@@ -12,6 +12,33 @@
 
 __thread valk_thread_context_t valk_thread_ctx = {nullptr};
 
+#ifdef VALK_ARC_DEBUG
+#include "debug.h"
+void __valk_arc_trace_report_print(valk_arc_trace_info *traces, size_t num) {
+  for (size_t i = 0; i < num; i++) {
+    const char *shit;
+    switch (traces->kind) {
+      case VALK_TRACE_ACQUIRE:
+        shit = "ACQUIRE";
+        break;
+      case VALK_TRACE_RELEASE:
+        shit = "RELEASE";
+        break;
+      case VALK_TRACE_NEW:
+        shit = "NEW";
+        break;
+      case VALK_TRACE_FREE:
+        shit = "FREE";
+        break;
+    }
+    fprintf(stderr, "[%s] refcount[%ld] %s()|%s:%d \n", shit, traces->refcount,
+            traces->function, traces->file, traces->line);
+    valk_trace_print(traces->stack, traces->size);
+    traces++;
+  }
+}
+#endif
+
 char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self) {
   switch (self) {
     case VALK_ALLOC_NULL:
