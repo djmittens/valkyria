@@ -13,7 +13,8 @@ size_t valk_trace_capture(void** stack, size_t n) {
 
 static int __valk_trace_info_cb(void* data, uintptr_t pc, const char* filename,
                                 int lineno, const char* function) {
-  fprintf(stderr, "  → %s:%d\n", filename ? filename : "??", lineno);
+  fprintf(stderr, "  → %s() %s:%d\n", function, filename ? filename : "??",
+          lineno);
   return 0;
 }
 static void __valk_trace_error_cb(void* data, const char* msg, int errnum) {

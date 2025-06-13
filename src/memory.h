@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define VALK_ARC_DEBUG
+// #define VALK_ARC_DEBUG
 #define VALK_ARC_TRACE_DEPTH 10
 
 #define VALK_WITH_CTX(_ctx_)                        \
@@ -34,16 +34,19 @@
 #define valk_mem_free(__ptr) \
   valk_mem_allocator_free(valk_thread_ctx.allocator, __ptr)
 
-#define valk_retain(ref)                                          \
-  ({                                                              \
-    (ref)->refcount++;                                            \
-    valk_capture_trace(VALK_TRACE_ACQUIRE, (ref)->refcount, ref); \
-    (ref);                                                        \
+#define valk_retain(ref)                                            \
+  ({                                                                \
+    if (ref != nullptr) {                                           \
+      (ref)->refcount++;                                            \
+      valk_capture_trace(VALK_TRACE_ACQUIRE, (ref)->refcount, ref); \
+    }                                                               \
+    (ref);                                                          \
   })
 
 // This is bootleg arc
 #define valk_release(ref)                                               \
   do {                                                                  \
+    if (ref == nullptr) break;                                          \
     (ref)->refcount--;                                                  \
     /*char _buf[512];                                                   \
     pthread_getname_np(pthread_self(), _buf, sizeof(_buf));*/           \
@@ -257,3 +260,22 @@ void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, size_t num,
 void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr);
 
 void valk_mem_init_malloc();
+
+typedef struct valk_gc_header_t {
+  bool marked;
+  struct valk_gc_header_t *next;
+  struct valk_gc_header_t *prev;
+} valk_gc_header_t;
+
+typedef struct {
+  size_t capacity;
+  size_t free;
+  valk_mem_allocator_t *allocator;
+  valk_gc_header_t * sentinel;
+} valk_gc_heap_t;
+
+void valk_gc_init(valk_gc_heap_t* self, size_t capacity);
+void valk_gc_init(valk_gc_heap_t* self, size_t capacity);
+void *valk_gc_alloc(valk_gc_heap_t* heap, size_t size);
+void *valk_gc_realloc(valk_gc_heap_t* heap, void* ptr, size_t size);
+void valk_gc_sweep(valk_gc_heap_t* self);

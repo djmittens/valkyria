@@ -12,7 +12,6 @@ void test_parsing_prelude(VALK_TEST_ARGS()) {
 
   VALK_EXPECT_SUCCESS(ast);
   VALK_PASS();
-  valk_release(ast);
 }
 
 void test_always_failing(VALK_TEST_ARGS()) {
@@ -27,32 +26,27 @@ void test_prelude_fun(VALK_TEST_ARGS()) {
   valk_lval_t *res = valk_eval(env, "(fun {add a b} {+ a b})");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_SEXPR);
-  VALK_ASSERT(res->expr.count == 0,
-              "Defining a new function must result in an empty sexpr [%ld]",
-              res->num);
-  valk_release(res);
+  VALK_TEST_ASSERT(
+      res->expr.count == 0,
+      "Defining a new function must result in an empty sexpr [%ld]", res->num);
 
   res = valk_eval(env, "(add 10 100)");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
-  VALK_ASSERT(res->num == 110, "Defined function must be callable [%ld]",
-              res->num);
-  valk_release(res);
+  VALK_TEST_ASSERT(res->num == 110, "Defined function must be callable [%ld]",
+                   res->num);
 
   res = valk_eval(env, "(fun {_add a b} {+ a undefined})");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_SEXPR);
-  VALK_ASSERT(res->expr.count == 0,
-              "Defining a new function must result in an empty sexpr [%ld]",
-              res->num);
-  valk_release(res);
+  VALK_TEST_ASSERT(
+      res->expr.count == 0,
+      "Defining a new function must result in an empty sexpr [%ld]", res->num);
 
   res = valk_eval(env, "(_add 10 100)");
   VALK_EXPECT_ERROR(res, "LEnv: Symbol `undefined` is not bound");
-  valk_release(res);
 
   VALK_PASS();
-  valk_lenv_free(env);
 }
 
 void test_prelude_curry(VALK_TEST_ARGS()) {
@@ -66,10 +60,8 @@ void test_prelude_curry(VALK_TEST_ARGS()) {
       res->num == 6,
       "Currying + should result in a new function that takes a list [%ld]",
       res->num);
-  valk_release(res);
 
   VALK_PASS();
-  valk_lenv_free(env);
 }
 
 void test_prelude_uncurry(VALK_TEST_ARGS()) {
@@ -83,7 +75,6 @@ void test_prelude_uncurry(VALK_TEST_ARGS()) {
               "Uncurrying a curried function should apply to several  "
               "arguments [result: %ld]",
               res->num);
-  valk_release(res);
 
   VALK_PASS();
 }
@@ -99,10 +90,8 @@ void test_prelude_do(VALK_TEST_ARGS()) {
               "Do operation should let you preform several actions returning "
               "the last result [result: %ld]",
               res->num);
-  valk_release(res);
 
   VALK_PASS();
-  valk_lenv_free(env);
 }
 
 void test_prelude_let(VALK_TEST_ARGS()) {
@@ -115,17 +104,14 @@ void test_prelude_let(VALK_TEST_ARGS()) {
   VALK_ASSERT_TYPE(res, LVAL_NUM);
   VALK_ASSERT(res->num == 2, "Do operations will leak scope [result: %ld]",
               res->num);
-  valk_release(res);
 
   res = valk_eval(env, "(do (let {do (= {b} 2) (+ 1 2 3) (+ 1 b)}) (b))");
   // Let opens a new scope, which is not shared with the outside do
   // therefore the last expression (b) should result in an error, as its bound
   // inside a let now
   VALK_EXPECT_ERROR(res, "LEnv: Symbol `b` is not bound");
-  valk_release(res);
 
   VALK_PASS();
-  valk_lenv_free(env);
 }
 
 void test_prelude_nth(VALK_TEST_ARGS()) {
@@ -137,21 +123,17 @@ void test_prelude_nth(VALK_TEST_ARGS()) {
   VALK_ASSERT_TYPE(res, LVAL_NUM);
   VALK_ASSERT(res->num == 1, "first element should return 1 [result: %ld]",
               res->num);
-  valk_release(res);
 
   res = valk_eval(env, "(nth 0 {1 2 3})");
   VALK_EXPECT_ERROR(res, "Invalid array index (should start with 1)");
-  valk_release(res);
 
   res = valk_eval(env, "(nth 4 {99 2 3 40 5 6})");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
   VALK_ASSERT(res->num == 40, "4th of array should return 40 [result: %ld]",
               res->num);
-  valk_release(res);
 
   VALK_PASS();
-  valk_lenv_free(env);
 }
 
 void test_prelude_split(VALK_TEST_ARGS()) {
@@ -165,7 +147,6 @@ void test_prelude_split(VALK_TEST_ARGS()) {
       res->expr.count == 2,
       "splitting at anything less than 1 should still work [result: %zu]",
       res->expr.count);
-  valk_release(res);
 
   res = valk_eval(env, "(split 3 {1 2 3 4 5 6 7 8})");
   VALK_EXPECT_SUCCESS(res);
@@ -180,10 +161,8 @@ void test_prelude_split(VALK_TEST_ARGS()) {
   VALK_ASSERT(res->expr.cell[1]->expr.count == 5,
               "rhs should have 5 things in it [result: %zu]",
               res->expr.cell[1]->expr.count);
-  valk_release(res);
 
   VALK_PASS();
-  valk_lenv_free(env);
 }
 
 void test_prelude_map(VALK_TEST_ARGS()) {
@@ -198,10 +177,8 @@ void test_prelude_map(VALK_TEST_ARGS()) {
               "using map with a lambda should double the elements numbers "
               "[result: %ld]",
               res->num);
-  valk_release(res);
 
   VALK_PASS();
-  valk_lenv_free(env);
 }
 
 void test_prelude_not(VALK_TEST_ARGS()) {
@@ -212,16 +189,13 @@ void test_prelude_not(VALK_TEST_ARGS()) {
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
   VALK_ASSERT(res->num == 0, "Not true is false [%ld]", res->num);
-  valk_release(res);
 
   res = valk_eval(env, "(not false)");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
   VALK_ASSERT(res->num == 1, "Not false is true [%ld]", res->num);
-  valk_release(res);
 
   VALK_PASS();
-  valk_lenv_free(env);
 }
 
 void test_dynamic_lists(VALK_TEST_ARGS()) {
@@ -333,11 +307,13 @@ void test_dynamic_lists(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-static void *__lval_retain(void *lval) {
-  return valk_retain((valk_lval_t *)lval);
-}
+static void *__lval_retain(void *lval) { return (valk_lval_t *)lval; }
 
-static void __lval_free(void *lval) { valk_release((valk_lval_t *)lval); }
+static void __lval_release(void *lval) { (valk_lval_t *)lval; }
+
+static void *__lenv_retain(void *lenv) { return (valk_lenv_t *)lenv; }
+
+static void __lenv_release(void *lenv) { (valk_lenv_t *)lenv; }
 
 int main(int argc, const char **argv) {
   UNUSED(argc);
@@ -366,11 +342,12 @@ int main(int argc, const char **argv) {
   valk_lval_t *ast = valk_parse_file("src/prelude.valk");
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);  // load the builtins
-  valk_lval_t *r = valk_lval_eval(env, valk_retain(ast));
-  valk_release(r);
 
-  valk_testsuite_fixture_add(suite, "prelude", ast, __lval_retain, __lval_free);
-  valk_testsuite_fixture_add(suite, "env", env, __lval_retain, __lval_free);
+  valk_lval_eval(env, ast);
+
+  valk_testsuite_fixture_add(suite, "prelude", ast, __lval_retain,
+                             __lval_release);
+  valk_testsuite_fixture_add(suite, "env", env, __lenv_retain, __lenv_release);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
@@ -380,7 +357,7 @@ int main(int argc, const char **argv) {
 }
 
 valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
-  switch (ast->type) {
+  switch (LVAL_TYPE(ast)) {
     case LVAL_ERR:
       return ast;
     case LVAL_QEXPR:

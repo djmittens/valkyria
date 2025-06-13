@@ -170,7 +170,6 @@ void test_concurrency(VALK_TEST_ARGS()) {
   valk_free_pool(&pool);
   VALK_PASS();
   valk_arc_release(tst);
-  valk_release(ast);
 }
 
 int main(int argc, const char **argv) {
