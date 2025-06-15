@@ -24,5 +24,7 @@ void valk_vm_stack_init(valk_vm_stack_t* self, size_t capacity);
 valk_vm_frame_t* valk_vm_frame_start(valk_vm_t* vm);
 valk_lval_t* valk_vm_frame_end(valk_vm_t* vm, valk_lval_t* lval);
 
+valk_lval_t* valk_vm_exec(valk_vm_t* vm, valk_lval_t* lval);
+
 void* valk_vm_frame_push_str(valk_vm_stack_t* stack, const char* str);
 void* valk_vm_frame_push_num(valk_vm_stack_t* stack, int64_t num);
