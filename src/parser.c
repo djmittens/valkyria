@@ -157,6 +157,9 @@ const char *valk_ltype_name(valk_ltype_e type) {
       return "String";
     case LVAL_REF:
       return "Reference";
+    case LVAL_UNDEFINED:
+      return "UNDEFINED";
+      break;
   }
 }
 
@@ -378,6 +381,9 @@ int valk_lval_eq(valk_lval_t *x, valk_lval_t *y) {
       return 1;
     case LVAL_REF:
       return (x->ref.ptr == y->ref.ptr) && (x->ref.free == y->ref.free);
+    case LVAL_UNDEFINED:
+      VALK_RAISE("LVAL is undefined, something went wrong");
+      break;
   }
 
   return 0;
@@ -598,6 +604,9 @@ void valk_lval_print(valk_lval_t *val) {
     }
     case LVAL_REF:
       printf("Reference[%s:%p]", val->ref.type, val->ref.ptr);
+      break;
+    case LVAL_UNDEFINED:
+      printf("[Undefined]");
       break;
   }
 }
@@ -1347,7 +1356,6 @@ void valk_lenv_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
   valk_lenv_put_builtin(env, "print", valk_builtin_print);
-  valk_lenv_put_builtin(env, "error", valk_builtin_error);
 
   valk_lenv_put_builtin(env, "list", valk_builtin_list);
   valk_lenv_put_builtin(env, "cons", valk_builtin_cons);

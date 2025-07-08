@@ -18,6 +18,7 @@ typedef struct valk_lval_t valk_lval_t;
 valk_lval_t *valk_parse_file(const char *filename);
 
 typedef enum {
+  LVAL_UNDEFINED,
   LVAL_NUM,
   LVAL_SYM,
   LVAL_STR,

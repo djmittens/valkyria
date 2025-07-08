@@ -57,7 +57,6 @@ static valk_lenv_t* __valk_vm_lenv_escape(valk_vm_t* vm, valk_lenv_t* lenv) {
   res->vals = (valk_lval_t**)(offset);
   offset += lenv->count;
 
-
   for (size_t i = 0; i < lenv->count; i++) {
     memcpy(offset, lenv->symbols[i], lens[i]);
     lenv->vals[i] = __valk_vm_escape(vm, lenv->vals[i]);
@@ -113,6 +112,9 @@ static valk_lval_t* __valk_vm_escape(valk_vm_t* vm, valk_lval_t* lval) {
       }
       case LVAL_REF:
         break;
+      case LVAL_UNDEFINED:
+        VALK_RAISE("LVAL is undefined, something went wrong");
+        break;
     }
   }
   res->flags |= LVAL_FLAG_GC;
@@ -125,8 +127,7 @@ valk_lval_t* valk_vm_frame_end(valk_vm_t* vm, valk_lval_t* lval) {
   return __valk_vm_escape(vm, lval);
 }
 
-valk_lval_t* valk_vm_exec(valk_vm_t* vm, valk_lval_t* lval) {
-}
+valk_lval_t* valk_vm_exec(valk_vm_t* vm, valk_lval_t* lval) {}
 
 void* valk_vm_frame_push_str(valk_vm_stack_t* stack, const char* str);
 void* valk_vm_frame_push_num(valk_vm_stack_t* stack, int64_t num);

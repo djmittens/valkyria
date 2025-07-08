@@ -260,8 +260,7 @@ static inline uint64_t __valk_slab_offset_pack(size_t offset, size_t version) {
 
 valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   VALK_ASSERT(self->numFree > 0,
-              "Attempted to aquire, when the slab is already full",
-              self->numFree);
+              "Attempted to aquire, when the slab is already full");
   valk_slab_item_t *res;
 #ifdef VALK_SLAB_TREIBER_STACK  // Threadsafe
   uint64_t oldTag, newTag;

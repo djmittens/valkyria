@@ -56,10 +56,10 @@ void test_prelude_curry(VALK_TEST_ARGS()) {
   valk_lval_t *res = valk_eval(env, "((curry +) {1 2 3})");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
-  VALK_ASSERT(
+  VALK_TEST_ASSERT(
       res->num == 6,
-      "Currying + should result in a new function that takes a list [%ld]",
-      res->num);
+      "Currying + should result in a new function that takes a list [%ld != %ld]",
+      res->num, 6L);
 
   VALK_PASS();
 }
@@ -71,7 +71,7 @@ void test_prelude_uncurry(VALK_TEST_ARGS()) {
   valk_lval_t *res = valk_eval(env, "((uncurry (curry +)) 1 2 3)");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
-  VALK_ASSERT(res->num == 6,
+  VALK_TEST_ASSERT(res->num == 6,
               "Uncurrying a curried function should apply to several  "
               "arguments [result: %ld]",
               res->num);
@@ -86,7 +86,7 @@ void test_prelude_do(VALK_TEST_ARGS()) {
   valk_lval_t *res = valk_eval(env, "(do (= {a} 2) (+ 1 2 3) (+ 1 a))");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
-  VALK_ASSERT(res->num == 3,
+  VALK_TEST_ASSERT(res->num == 3,
               "Do operation should let you preform several actions returning "
               "the last result [result: %ld]",
               res->num);
@@ -102,7 +102,7 @@ void test_prelude_let(VALK_TEST_ARGS()) {
       valk_eval(env, "(do (do (= {a} 2) (+ 1 2 3) (+ 1 a)) (a))");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
-  VALK_ASSERT(res->num == 2, "Do operations will leak scope [result: %ld]",
+  VALK_TEST_ASSERT(res->num == 2, "Do operations will leak scope [result: %ld]",
               res->num);
 
   res = valk_eval(env, "(do (let {do (= {b} 2) (+ 1 2 3) (+ 1 b)}) (b))");
@@ -121,7 +121,7 @@ void test_prelude_nth(VALK_TEST_ARGS()) {
   valk_lval_t *res = valk_eval(env, "(nth 1 {1 2 3})");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
-  VALK_ASSERT(res->num == 1, "first element should return 1 [result: %ld]",
+  VALK_TEST_ASSERT(res->num == 1, "first element should return 1 [result: %ld]",
               res->num);
 
   res = valk_eval(env, "(nth 0 {1 2 3})");
@@ -130,7 +130,7 @@ void test_prelude_nth(VALK_TEST_ARGS()) {
   res = valk_eval(env, "(nth 4 {99 2 3 40 5 6})");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
-  VALK_ASSERT(res->num == 40, "4th of array should return 40 [result: %ld]",
+  VALK_TEST_ASSERT(res->num == 40, "4th of array should return 40 [result: %ld]",
               res->num);
 
   VALK_PASS();
@@ -143,7 +143,7 @@ void test_prelude_split(VALK_TEST_ARGS()) {
   valk_lval_t *res = valk_eval(env, "(split 0 {1 2 3 4 5 6 7 8})");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_QEXPR);
-  VALK_ASSERT(
+  VALK_TEST_ASSERT(
       res->expr.count == 2,
       "splitting at anything less than 1 should still work [result: %zu]",
       res->expr.count);
@@ -151,14 +151,14 @@ void test_prelude_split(VALK_TEST_ARGS()) {
   res = valk_eval(env, "(split 3 {1 2 3 4 5 6 7 8})");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_QEXPR);
-  VALK_ASSERT(
+  VALK_TEST_ASSERT(
       res->expr.count == 2,
       "splitting at 3rd index should yield lhs and rhs in a list [result: %zu]",
       res->expr.count);
-  VALK_ASSERT(res->expr.cell[0]->expr.count == 3,
+  VALK_TEST_ASSERT(res->expr.cell[0]->expr.count == 3,
               "lhs should have 3 things in it [result: %zu]",
               res->expr.cell[0]->expr.count);
-  VALK_ASSERT(res->expr.cell[1]->expr.count == 5,
+  VALK_TEST_ASSERT(res->expr.cell[1]->expr.count == 5,
               "rhs should have 5 things in it [result: %zu]",
               res->expr.cell[1]->expr.count);
 
@@ -173,7 +173,7 @@ void test_prelude_map(VALK_TEST_ARGS()) {
       valk_eval(env, "(== (map (\\ {x} {* 2 x}) { 1 2 3} ) {2 4 6 })");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
-  VALK_ASSERT(res->num == 1,
+  VALK_TEST_ASSERT(res->num == 1,
               "using map with a lambda should double the elements numbers "
               "[result: %ld]",
               res->num);
@@ -188,12 +188,12 @@ void test_prelude_not(VALK_TEST_ARGS()) {
   valk_lval_t *res = valk_eval(env, "(not true)");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
-  VALK_ASSERT(res->num == 0, "Not true is false [%ld]", res->num);
+  VALK_TEST_ASSERT(res->num == 0, "Not true is false [%ld]", res->num);
 
   res = valk_eval(env, "(not false)");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
-  VALK_ASSERT(res->num == 1, "Not false is true [%ld]", res->num);
+  VALK_TEST_ASSERT(res->num == 1, "Not false is true [%ld]", res->num);
 
   VALK_PASS();
 }
@@ -373,6 +373,7 @@ valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
     case LVAL_NUM:
     case LVAL_REF:
     case LVAL_SYM:
+    case LVAL_UNDEFINED:
       return nullptr;
   }
 }
