@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define VALK_ARC_DEBUG
+// #define VALK_ARC_DEBUG
 #define VALK_ARC_TRACE_DEPTH 10
 
 #define VALK_WITH_CTX(_ctx_)                        \

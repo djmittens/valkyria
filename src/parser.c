@@ -205,7 +205,7 @@ valk_lval_t *valk_lval_err(const char *fmt, ...) {
   // TODO(main): look into making this into a constant
   len = len < 10000 ? len : 511;
   res->str = malloc(len + 1);
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+  //NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   vsnprintf(res->str, len + 1, fmt, va);
   va_end(va);
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -213,7 +213,7 @@ valk_lval_t *valk_lval_err(const char *fmt, ...) {
 }
 
 valk_lval_t *valk_lval_sym(const char *sym) {
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+  //NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   valk_lval_t *res = valk_mem_alloc(sizeof(valk_lval_t));
   res->type = LVAL_SYM;
   res->allocator = valk_thread_ctx.allocator;
