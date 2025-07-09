@@ -3,6 +3,14 @@
 
 #include "memory.h"
 
+#define LVAL_TYPE_BITS 8ULL
+#define LVAL_TYPE_MASK 0x00000000000000FFULL
+#define LVAL_FLAGS_MASK 0xFFFFFFFFFFFFFF00ULL
+
+#define LVAL_TYPE(_lval) (valk_ltype_e)(_lval->flags & LVAL_TYPE_MASK)
+
+#define LVAL_FLAG_GC  (1 << (LVAL_TYPE_BITS + 1))
+
 // Forward declarations
 struct valk_lenv_t;
 typedef struct valk_lenv_t valk_lenv_t;
@@ -10,6 +18,7 @@ typedef struct valk_lval_t valk_lval_t;
 valk_lval_t *valk_parse_file(const char *filename);
 
 typedef enum {
+  LVAL_UNDEFINED,
   LVAL_NUM,
   LVAL_SYM,
   LVAL_STR,
@@ -25,18 +34,12 @@ const char *valk_ltype_name(valk_ltype_e type);
 typedef valk_lval_t *(valk_lval_builtin_t)(valk_lenv_t *, valk_lval_t *);
 
 struct valk_lval_t {
-  valk_ltype_e type;
-  size_t refcount;
-  valk_mem_allocator_t *allocator;
-#ifdef VALK_ARC_DEBUG
-  valk_arc_trace_info traces[VALK_ARC_TRACE_MAX];
-  size_t nextTrace;
-#endif
-  void (*free)(struct valk_lval_t *);
+  uint64_t flags;
   union {
     struct {
       valk_lenv_t *env;
       valk_lval_t *body;
+      // formal parameters, to the function, eg names
       valk_lval_t *formals;
       // NULL if its a lambda
       valk_lval_builtin_t *builtin;
@@ -71,7 +74,7 @@ valk_lval_t *valk_lval_qexpr_empty(void);
 
 //// END Constructors ////
 
-valk_lval_t *valk_lval_copy(valk_lval_t *lval);
+// valk_lval_t *valk_lval_copy(valk_lval_t *lval);
 void valk_lval_free(valk_lval_t *lval);
 int valk_lval_eq(valk_lval_t *x, valk_lval_t *y);
 
@@ -95,6 +98,7 @@ static inline void valk_lval_println(valk_lval_t *val) {
 }
 
 struct valk_lenv_t {
+  uint64_t flags;
   char **symbols;
   valk_lval_t **vals;
   size_t count;

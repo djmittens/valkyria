@@ -5,7 +5,6 @@
 #include <string.h>
 
 #include "aio.h"
-#include "common.h"
 #include "memory.h"
 #include "parser.h"
 
@@ -26,20 +25,18 @@ int main(int argc, char *argv[]) {
   if (argc >= 2) {
     for (int i = 1; i < argc; ++i) {
       valk_lval_t *res = valk_parse_file(argv[i]);
-      if (res->type == LVAL_ERR) {
+      if (res->flags == LVAL_ERR) {
         valk_lval_println(res);
       } else {
         while (res->expr.count) {
           valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(res, 0));
 
-          if (x->type == LVAL_ERR) {
+          if (x->flags == LVAL_ERR) {
             valk_lval_println(x);
           }
-          valk_release(x);
         }
       }
 
-      valk_release(res);
     }
   }
 
@@ -53,7 +50,7 @@ int main(int argc, char *argv[]) {
     do {
       tmp = valk_lval_read(&pos, input);
       valk_lval_add(expr, tmp);
-    } while ((tmp->type != LVAL_ERR) && (input[pos] != '\0'));
+    } while ((tmp->flags != LVAL_ERR) && (input[pos] != '\0'));
 
     printf("AST: ");
     valk_lval_println(expr);
@@ -62,7 +59,6 @@ int main(int argc, char *argv[]) {
     valk_lval_println(expr);
 
     free(input);
-    valk_release(expr);
   }
   free(env);
   return EXIT_SUCCESS;

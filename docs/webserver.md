@@ -424,6 +424,10 @@ beginning of the session
     - [x] Initialization, with simple settings frame
 - [x] Http2 request response
 - [ ] Lisp FFI
+    - [x] Lval reference counting
+        - [x] Lenv reference counting
+    - [ ] Refactor lvals to arenas
+        - Right now the memory management is all fucked up...
     - [x] Pointers / References support
     - [ ] Async API for awaiting on futures / promises
     - [ ] Continuation support

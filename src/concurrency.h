@@ -106,8 +106,8 @@ typedef struct valk_arc_box {
   valk_arc_trace_info traces[VALK_ARC_TRACE_MAX];
   size_t nextTrace;
 #endif
-  size_t capacity;
   void (*free)(struct valk_arc_box *);
+  size_t capacity;
   void *item;
 } valk_arc_box;
 

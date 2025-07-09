@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "collections.h"
 #include "common.h"
 
 #define VALK_SLAB_TREIBER_STACK
@@ -259,8 +260,7 @@ static inline uint64_t __valk_slab_offset_pack(size_t offset, size_t version) {
 
 valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   VALK_ASSERT(self->numFree > 0,
-              "Attempted to aquire, when the slab is already full",
-              self->numFree);
+              "Attempted to aquire, when the slab is already full");
   valk_slab_item_t *res;
 #ifdef VALK_SLAB_TREIBER_STACK  // Threadsafe
   uint64_t oldTag, newTag;
@@ -484,5 +484,48 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
     case VALK_ALLOC_MALLOC:
       free(ptr);
       return;
+  }
+}
+
+void valk_gc_init(valk_gc_heap_t *self, size_t capacity) {
+  self->free = capacity;
+  self->capacity = capacity;
+  self->allocator = valk_thread_ctx.allocator;
+  self->sentinel = valk_mem_allocator_alloc(valk_thread_ctx.allocator,
+                                            sizeof(valk_gc_header_t));
+  self->sentinel->next = self->sentinel;
+  self->sentinel->prev = self->sentinel;
+  self->sentinel->marked = 1;
+}
+
+void *valk_gc_alloc(valk_gc_heap_t *heap, size_t size) {
+  valk_gc_header_t *res = valk_mem_allocator_alloc(
+      heap->allocator, size + sizeof(valk_gc_header_t));
+  res->marked = 0;
+  valk_dll_insert_node(heap->sentinel, res);
+  return res + 1;  // skip over to the good stuff
+}
+
+void *valk_gc_realloc(valk_gc_heap_t *heap, void *ptr, size_t size) {
+  valk_gc_header_t *self = ptr;
+  --self;  // get ourselves the header
+  self = valk_mem_allocator_realloc(heap->allocator, self,
+                                    size + sizeof(valk_gc_heap_t));
+  self->prev->next = self;
+  self->next->prev = self;
+  return self + 1;  // uhhh yeah the good shit
+}
+
+void valk_gc_sweep(valk_gc_heap_t *self) {
+  valk_gc_header_t *node = self->sentinel->next;
+  while (node != self->sentinel) {
+    if (!node->marked) {
+      // Eject this shit
+      valk_dll_pop(node);
+      valk_mem_allocator_free(self->allocator, node);
+    } else {
+      // reset this bad boii for the next time
+      node->marked = 0;
+    }
   }
 }

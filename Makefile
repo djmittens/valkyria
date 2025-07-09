@@ -3,7 +3,7 @@ ifeq ($(UNAME), Linux)
 	CMAKE= cmake -G Ninja -DASAN=0 -DCMAKE_BUILD_TYPE=Debug -S . -B build ;
 endif
 ifeq ($(UNAME), Darwin)
-	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DASAN=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo -S . -B build;
+	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DASAN=1 -DCMAKE_BUILD_TYPE=Debug -S . -B build;
 endif
 
 JOBS := $(shell nproc 2>/dev/null || echo 12)
@@ -23,7 +23,14 @@ cmake build/.cmake: CMakeLists.txt homebrew.cmake Makefile
 .ONESHELL:
 .PHONY: build
 build : build/.cmake
+	touch build/.cmake
 	cmake --build build
+	# Only link the symbols in like this if we are on macos
+	# Also take into account which ones were actually built this run
+	if [ "$(UNAME)" == "Darwin" ]; then \
+		find build/ -maxdepth 1 -type f -perm -111 -newer build/.cmake -exec \
+				dsymutil {} \; -print; \
+	fi
 
 .PHONY: lint
 lint : build/.cmake 

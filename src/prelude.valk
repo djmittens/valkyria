@@ -18,6 +18,7 @@
 (fun {unpack f l} {
      eval (join (list f) l)
 })
+
 (def {curry} unpack)
 
 ; Pack the list for a function

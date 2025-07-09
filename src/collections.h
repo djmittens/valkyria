@@ -55,6 +55,21 @@
     }                                                                          \
   })
 
+#define valk_dll_insert_node(target, node)                                    \
+  do {                                                                         \
+    if ((node) != nullptr) {                                                   \
+      if (target == nullptr) {                                                 \
+        (node)->prev = nullptr;                                                \
+        break;                                                                 \
+      }                                                                        \
+      node->next = (target)->next;                                            \
+      if ((target)->next)                                                      \
+        (target)->next->prev = node;                                          \
+      (node)->prev = (target);                                                 \
+      (target)->next = (node);                                                 \
+    }                                                                          \
+  } while (0)
+
 #define valk_dll_insert_after(target, head)                                    \
   do {                                                                         \
     if ((head) != nullptr) {                                                   \
