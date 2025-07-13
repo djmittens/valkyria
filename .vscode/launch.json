@@ -1,38 +1,42 @@
 {
   "version": "0.2.0",
   "configurations": [
-      {
-          "type": "python",
-          "request": "launch",
-          "name": "Launch",
-          "program": "${input:myPrompt}"
+    {
+      "type": "python",
+      "request": "launch",
+      "name": "Launch",
+      "program": "${input:myPrompt}"
+    },
+    {
+      "type": "cppdbg",
+      "request": "launch",
+      "name": "Launch CPP",
+      "program": "build/${input:myPrompt}",
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": true,
+      "linux": {
+        "MIMode": "gdb",
+        "miDebuggerPath": "/usr/bin/gdb"
       },
-      {
-
-        "type": "cppdbg",
-        "request": "launch",
-        "name": "Launch CPP",
-        "linux": {
-          "MIMode": "gdb",
-          "miDebuggerPath": "/usr/bin/gdb"
-        },
-        "osx": {
-          "MIMode": "lldb",
-          "miDebuggerPath": "/usr/local/bin/lldb-mi"
-        },
-        "windows": {
-          "MIMode": "gdb",
-          "miDebuggerPath": "C:\\MinGw\\bin\\gdb.exe"
-        }
+      "osx": {
+        "MIMode": "lldb",
+        "miDebuggerPath": "/usr/local/bin/lldb-mi"
+      },
+      "windows": {
+        "MIMode": "gdb",
+        "miDebuggerPath": "C:\\MinGw\\bin\\gdb.exe"
       }
+    }
   ],
   "inputs": [
-      {
-          "id": "myPrompt",
-          "type": "pickString",
-          "description": "Program to run: ",
-          "default": "foobar"
-      }
-    ]
+    {
+      "id": "myPrompt",
+      "type": "pickString",
+      "description": "Program to run: ",
+      "default": "test_std",
+      "options": [
+        "test_std"
+      ]
+    }
+  ]
 }
-
