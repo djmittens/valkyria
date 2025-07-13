@@ -61,7 +61,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
 
   valk_arc_release(fut);
   VALK_ASSERT(clientBox->type == VALK_SUC, "Error creating client: %s",
-              clientBox->item);
+              (char*)clientBox->item);
 
   valk_aio_http2_client *client = clientBox->item;
 

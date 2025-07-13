@@ -883,6 +883,11 @@ valk_lval_t *valk_lenv_get(valk_lenv_t *env, valk_lval_t *key) {
 }
 
 void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
+  // TODO: obviously this should probably not be void ???
+  // especially since i cant assert this shit
+  // LVAL_ASSERT_TYPE((valk_lval_t *)nullptr, key, LVAL_SYM);
+  printf("Putting this dogshit bullshit %s \n", key->str);
+
   // TODO(main): technically this is a failure condition for us, but the
   // return's void LVAL_ASSERT(nullptr, key->type == LVAL_SYM, "LEnv only
   // supports symbolic keys");
@@ -898,8 +903,8 @@ void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
   // where we double the array on overflow, but i guess it doesnt matter for
   // now
   env->symbols =
-      realloc(env->symbols, sizeof(env->symbols[0]) * (env->count + 1));
-  env->vals = realloc(env->vals, sizeof(env->vals[0]) * (env->count + 1));
+      valk_mem_realloc(env->symbols, sizeof(env->symbols[0]) * (env->count + 1));
+  env->vals = valk_mem_realloc(env->vals, sizeof(env->vals[0]) * (env->count + 1));
 
   // TODO(networking): Maybe have env builder ?? this should be a copy perhaps
   // or something??

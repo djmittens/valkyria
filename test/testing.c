@@ -28,7 +28,7 @@
 #define VALK_REPORT_WIDTH 100
 #endif
 
-#define VALK_TEST_FORK 0
+// #define VALK_TEST_FORK 0
 
 const char *DOT_FILL =
     ".........................................................................."
