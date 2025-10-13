@@ -373,6 +373,7 @@ valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
     case LVAL_NUM:
     case LVAL_REF:
     case LVAL_SYM:
+    case LVAL_LVAL:
     case LVAL_UNDEFINED:
       return nullptr;
   }

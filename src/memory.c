@@ -491,23 +491,41 @@ void valk_gc_init(valk_gc_heap_t *self, size_t capacity) {
   self->free = capacity;
   self->capacity = capacity;
   self->allocator = valk_thread_ctx.allocator;
-  self->sentinel = valk_mem_allocator_alloc(valk_thread_ctx.allocator,
-                                            sizeof(valk_gc_header_t));
-  self->sentinel->next = self->sentinel;
-  self->sentinel->prev = self->sentinel;
-  self->sentinel->marked = 1;
+  self->sentinel.next = &self->sentinel;
+  self->sentinel.prev = &self->sentinel;
+  self->sentinel.marked = 1;
+}
+
+void valk_gc_mark(valk_gc_heap_t *self, void *ptr) {
+  valk_gc_chunk_t *chunk = (valk_gc_chunk_t *)ptr - 1;
+  if (self->mark) {
+    self->mark(chunk);
+  } else {
+    chunk->marked = 1;
+  }
 }
 
 void *valk_gc_alloc(valk_gc_heap_t *heap, size_t size) {
-  valk_gc_header_t *res = valk_mem_allocator_alloc(
-      heap->allocator, size + sizeof(valk_gc_header_t));
-  res->marked = 0;
-  valk_dll_insert_node(heap->sentinel, res);
+  if ((heap->free - size) == 0) {
+    // Try to free some memory to allocate this thing.
+    valk_gc_sweep(heap);
+    VALK_ASSERT(
+        (heap->free - size) == 0,
+        "Failed free enough memory to allocate %ld bytes on heap with %ld size",
+        size, heap->capacity);
+  }
+
+  valk_gc_chunk_t *res =
+      valk_mem_allocator_alloc(heap->allocator, size + sizeof(valk_gc_chunk_t));
+  heap->free -= size;
+
+  res->marked = 1;
+  valk_dll_insert_node(&heap->sentinel, res);
   return res + 1;  // skip over to the good stuff
 }
 
 void *valk_gc_realloc(valk_gc_heap_t *heap, void *ptr, size_t size) {
-  valk_gc_header_t *self = ptr;
+  valk_gc_chunk_t *self = ptr;
   --self;  // get ourselves the header
   self = valk_mem_allocator_realloc(heap->allocator, self,
                                     size + sizeof(valk_gc_heap_t));
@@ -517,12 +535,16 @@ void *valk_gc_realloc(valk_gc_heap_t *heap, void *ptr, size_t size) {
 }
 
 void valk_gc_sweep(valk_gc_heap_t *self) {
-  valk_gc_header_t *node = self->sentinel->next;
-  while (node != self->sentinel) {
+  valk_gc_chunk_t *node = self->sentinel.next;
+  while (node != &self->sentinel) {
     if (!node->marked) {
-      // Eject this shit
-      valk_dll_pop(node);
-      valk_mem_allocator_free(self->allocator, node);
+      if (self->finalize) {
+        self->finalize(node);
+      } else {
+        // Eject this shit
+        valk_dll_pop(node);
+        valk_mem_allocator_free(self->allocator, node);
+      }
     } else {
       // reset this bad boii for the next time
       node->marked = 0;

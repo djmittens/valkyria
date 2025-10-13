@@ -26,12 +26,21 @@ typedef enum {
   LVAL_REF,
   LVAL_QEXPR,
   LVAL_SEXPR,
-  LVAL_ERR
+  LVAL_ERR,
+  LVAL_ENV,
 } valk_ltype_e;
 
 const char *valk_ltype_name(valk_ltype_e type);
 
 typedef valk_lval_t *(valk_lval_builtin_t)(valk_lenv_t *, valk_lval_t *);
+
+struct valk_lenv_t {
+  uint64_t flags;
+  char **symbols;
+  valk_lval_t **vals;
+  size_t count;
+  struct valk_lenv_t *parent;
+};
 
 struct valk_lval_t {
   uint64_t flags;
@@ -55,6 +64,7 @@ struct valk_lval_t {
       void *ptr;
       void (*free)(void *);
     } ref;
+    struct valk_lenv_t env;
     long num;
     char *str;
   };
@@ -76,7 +86,7 @@ valk_lval_t *valk_lval_qexpr_empty(void);
 //// END Constructors ////
 
 // valk_lval_t *valk_lval_copy(valk_lval_t *lval);
-void valk_lval_free(valk_lval_t *lval);
+void valk_lval_finalize(valk_lval_t *lval);
 int valk_lval_eq(valk_lval_t *x, valk_lval_t *y);
 
 valk_lval_t *valk_lval_add(valk_lval_t *lval, valk_lval_t *cell);
@@ -98,19 +108,11 @@ static inline void valk_lval_println(valk_lval_t *val) {
   printf("\n");
 }
 
-struct valk_lenv_t {
-  uint64_t flags;
-  char **symbols;
-  valk_lval_t **vals;
-  size_t count;
-  struct valk_lenv_t *parent;
-};
 
 //// LEnv Constructors ////
 valk_lenv_t *valk_lenv_empty(void);
 void valk_lenv_init(valk_lenv_t *env);
 //// END LEnv Constructors ////
-void valk_lenv_free(valk_lenv_t *env);
 valk_lenv_t *valk_lenv_copy(valk_lenv_t *env);
 
 valk_lval_t *valk_lenv_get(valk_lenv_t *env, valk_lval_t *key);

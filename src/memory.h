@@ -261,21 +261,27 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr);
 
 void valk_mem_init_malloc();
 
-typedef struct valk_gc_header_t {
+typedef struct valk_gc_chunk_t valk_gc_chunk_t;
+typedef void(valk_gc_finalize_f)(valk_gc_chunk_t *);
+typedef void(valk_gc_mark_f)(valk_gc_chunk_t *);
+
+typedef struct valk_gc_chunk_t {
   bool marked;
-  struct valk_gc_header_t *next;
-  struct valk_gc_header_t *prev;
-} valk_gc_header_t;
+  struct valk_gc_chunk_t *next;
+  struct valk_gc_chunk_t *prev;
+} valk_gc_chunk_t;
 
 typedef struct {
   size_t capacity;
   size_t free;
   valk_mem_allocator_t *allocator;
-  valk_gc_header_t * sentinel;
+  valk_gc_chunk_t sentinel;
+  valk_gc_mark_f *mark;
+  valk_gc_finalize_f *finalize;
 } valk_gc_heap_t;
 
-void valk_gc_init(valk_gc_heap_t* self, size_t capacity);
-void valk_gc_init(valk_gc_heap_t* self, size_t capacity);
-void *valk_gc_alloc(valk_gc_heap_t* heap, size_t size);
-void *valk_gc_realloc(valk_gc_heap_t* heap, void* ptr, size_t size);
-void valk_gc_sweep(valk_gc_heap_t* self);
+void valk_gc_init(valk_gc_heap_t *self, size_t capacity);
+void valk_gc_mark(valk_gc_heap_t *self, void *ptr);
+void *valk_gc_alloc(valk_gc_heap_t *heap, size_t size);
+void *valk_gc_realloc(valk_gc_heap_t *heap, void *ptr, size_t size);
+void valk_gc_sweep(valk_gc_heap_t *self);
