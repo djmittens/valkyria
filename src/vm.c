@@ -110,6 +110,7 @@ static valk_lval_t* __valk_vm_escape(valk_vm_t* vm, valk_lval_t* lval) {
         res->fun.body = __valk_vm_escape(vm, lval->fun.body);
         break;
       }
+      case LVAL_ENV:
       case LVAL_REF:
         break;
       case LVAL_UNDEFINED:

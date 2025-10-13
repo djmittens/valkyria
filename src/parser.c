@@ -168,6 +168,7 @@ valk_lval_t *valk_lval_ref(const char *type, void *ptr, void (*free)(void *)) {
   res->flags = LVAL_REF;
   res->ref.type = strndup(type, 100);
   res->ref.ptr = ptr;
+  res->ref.free = free;
 
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
@@ -381,6 +382,9 @@ int valk_lval_eq(valk_lval_t *x, valk_lval_t *y) {
       return 1;
     case LVAL_REF:
       return (x->ref.ptr == y->ref.ptr) && (x->ref.free == y->ref.free);
+    case LVAL_ENV:
+      VALK_RAISE("LVAL is LENV, comparison unimplemented, something went wrong");
+      break;
     case LVAL_UNDEFINED:
       VALK_RAISE("LVAL is undefined, something went wrong");
       break;
@@ -463,7 +467,7 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
             func->fun.formals->expr.count);
       }
       valk_lval_t *nsym = valk_lval_pop(func->fun.formals, 0);
-      valk_lenv_put(func->fun.env, nsym, valk_builtin_list(env, args));
+      valk_lenv_put(func->fun.env, nsym, valk_builtin_list(nullptr, args));
       break;
     }
     valk_lval_t *val = valk_lval_pop(args, 0);
@@ -604,6 +608,9 @@ void valk_lval_print(valk_lval_t *val) {
     }
     case LVAL_REF:
       printf("Reference[%s:%p]", val->ref.type, val->ref.ptr);
+      break;
+    case LVAL_ENV:
+      printf("[LEnv]");
       break;
     case LVAL_UNDEFINED:
       printf("[Undefined]");
