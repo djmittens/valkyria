@@ -434,12 +434,16 @@ valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr) {
   }
   // valk_lval_err("hi");
 
+  valk_lval_println(sexpr);
   valk_lval_t *res = valk_lval_eval_call(env, fun, sexpr);
   return res;
 }
 
 valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
                                  valk_lval_t *args) {
+  LVAL_ASSERT_TYPE(args, func, LVAL_FUN);
+  LVAL_ASSERT_TYPE(args, args, LVAL_SEXPR);
+
   if (func->fun.builtin) {
     return func->fun.builtin(env, args);
   }
@@ -449,9 +453,11 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
 
   while (args->expr.count) {
     if (func->fun.formals->expr.count == 0) {
+      valk_lval_println(func);
       return valk_lval_err(
-          "More arguments were given than required Actual: %ld, Expected: %ld",
-          given, requested);
+          "More arguments were given than required Actual [ %p ]: %ld, "
+          "Expected: %ld",
+          func, given, requested);
     }
     valk_lval_t *sym = valk_lval_pop(func->fun.formals, 0);
     if (strcmp(sym->str, "&") == 0) {
@@ -902,9 +908,10 @@ void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
   // TODO(main): technically we should be able to do the ammortized arraylist
   // where we double the array on overflow, but i guess it doesnt matter for
   // now
-  env->symbols =
-      valk_mem_realloc(env->symbols, sizeof(env->symbols[0]) * (env->count + 1));
-  env->vals = valk_mem_realloc(env->vals, sizeof(env->vals[0]) * (env->count + 1));
+  env->symbols = valk_mem_realloc(env->symbols,
+                                  sizeof(env->symbols[0]) * (env->count + 1));
+  env->vals =
+      valk_mem_realloc(env->vals, sizeof(env->vals[0]) * (env->count + 1));
 
   // TODO(networking): Maybe have env builder ?? this should be a copy perhaps
   // or something??

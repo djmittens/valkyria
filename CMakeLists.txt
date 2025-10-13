@@ -44,7 +44,7 @@ set (WITH_LIBBPF off)
 set (WITH_WOLFSSL off)
 add_subdirectory(vendor/nghttp2)
 
-pkg_check_modules(EDITLINE REQUIRED IMPORTED_TARGET libedit libeditline)
+pkg_check_modules(EDITLINE REQUIRED IMPORTED_TARGET libedit)
 
 set(CMAKE_C_STANDARD 23) # LOL current year - 6 is gold
 set(CMAKE_C_STANDARD_REQUIRED ON)

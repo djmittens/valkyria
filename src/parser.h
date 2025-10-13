@@ -46,8 +46,9 @@ struct valk_lval_t {
     } fun;
     struct {
       struct valk_lval_t **cell;
-      // only valid for (s|q)expr
       size_t count;
+      // char* file;
+      // size_t line;
     } expr;
     struct {
       char *type;
