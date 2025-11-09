@@ -12,8 +12,18 @@ static void __aio_free(void *system) { valk_aio_stop(system); }
 
 int main(int argc, char *argv[]) {
   char *input;
+  // Initialize global arena (persistent) and scratch arena (ephemeral)
+  size_t const GLOBAL_ARENA_BYTES = 16 * 1024 * 1024;   // 16 MiB
+  size_t const SCRATCH_ARENA_BYTES = 4 * 1024 * 1024;   // 4 MiB
 
-  valk_mem_init_malloc();
+  valk_mem_arena_t *global_arena = malloc(GLOBAL_ARENA_BYTES);
+  valk_mem_arena_init(global_arena, GLOBAL_ARENA_BYTES - sizeof(*global_arena));
+
+  valk_mem_arena_t *scratch = malloc(SCRATCH_ARENA_BYTES);
+  valk_mem_arena_init(scratch, SCRATCH_ARENA_BYTES - sizeof(*scratch));
+
+  // Set thread allocator to global for persistent structures
+  valk_thread_ctx.allocator = (void *)global_arena;
 
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);
@@ -24,19 +34,23 @@ int main(int argc, char *argv[]) {
 
   if (argc >= 2) {
     for (int i = 1; i < argc; ++i) {
-      valk_lval_t *res = valk_parse_file(argv[i]);
+      valk_lval_t *res;
+      VALK_WITH_ALLOC((void *)scratch) { res = valk_parse_file(argv[i]); }
       if (res->flags == LVAL_ERR) {
         valk_lval_println(res);
       } else {
         while (res->expr.count) {
-          valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(res, 0));
+          valk_lval_t *x;
+          VALK_WITH_ALLOC((void *)scratch) {
+            x = valk_lval_eval(env, valk_lval_pop(res, 0));
+          }
 
           if (x->flags == LVAL_ERR) {
             valk_lval_println(x);
           }
         }
       }
-
+      valk_mem_arena_reset(scratch);
     }
   }
 
@@ -45,21 +59,25 @@ int main(int argc, char *argv[]) {
     int pos = 0;
     add_history(input);
 
-    valk_lval_t *expr = valk_lval_sexpr_empty();
-    valk_lval_t *tmp;
-    do {
-      tmp = valk_lval_read(&pos, input);
-      valk_lval_add(expr, tmp);
-    } while ((tmp->flags != LVAL_ERR) && (input[pos] != '\0'));
+    valk_lval_t *expr;
+    VALK_WITH_ALLOC((void *)scratch) {
+      expr = valk_lval_sexpr_empty();
+      valk_lval_t *tmp;
+      do {
+        tmp = valk_lval_read(&pos, input);
+        valk_lval_add(expr, tmp);
+      } while ((tmp->flags != LVAL_ERR) && (input[pos] != '\0'));
 
-    printf("AST: ");
-    valk_lval_println(expr);
+      printf("AST: ");
+      valk_lval_println(expr);
 
-    expr = valk_lval_eval(env, expr);
+      expr = valk_lval_eval(env, expr);
+    }
     valk_lval_println(expr);
 
     free(input);
+    valk_mem_arena_reset(scratch);
   }
-  free(env);
+  // No frees for arena-backed data; OS reclaim on exit.
   return EXIT_SUCCESS;
 }

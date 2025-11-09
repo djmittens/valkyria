@@ -1,6 +1,7 @@
 #pragma once
 
 #include "parser.h"
+#include "memory.h"
 typedef struct valk_vm_frame_t {
   struct valk_vm_frame_t* prev;
   struct valk_vm_frame_t* next;

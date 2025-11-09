@@ -1,7 +1,6 @@
 #pragma once
+#include <stdint.h>
 #include <stdio.h>
-
-#include "memory.h"
 
 #define LVAL_TYPE_BITS 8ULL
 #define LVAL_TYPE_MASK 0x00000000000000FFULL
@@ -40,10 +39,15 @@ struct valk_lenv_t {
   valk_lval_t **vals;
   size_t count;
   struct valk_lenv_t *parent;
+  // Allocator where persistent env data lives (globals/closures)
+  void *allocator;
 };
 
 struct valk_lval_t {
   uint64_t flags;
+#ifdef VALK_DEBUG_ALLOC
+  void * __origin_allocator;
+#endif
   union {
     struct {
       valk_lenv_t *env;
@@ -78,6 +82,7 @@ valk_lval_t *valk_lval_num(long x);
 valk_lval_t *valk_lval_err(const char *fmt, ...);
 valk_lval_t *valk_lval_sym(const char *sym);
 valk_lval_t *valk_lval_str(const char *str);
+
 // valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
 valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body);
 valk_lval_t *valk_lval_sexpr_empty(void);
@@ -86,6 +91,11 @@ valk_lval_t *valk_lval_qexpr_empty(void);
 //// END Constructors ////
 
 // valk_lval_t *valk_lval_copy(valk_lval_t *lval);
+valk_lval_t *valk_lval_copy(valk_lval_t *lval);
+
+// Persist a value into the environment's allocator (arena/malloc).
+// Returns a deep-copied value owned by `env`.
+valk_lval_t *valk_intern(valk_lenv_t *env, valk_lval_t *val);
 void valk_lval_finalize(valk_lval_t *lval);
 int valk_lval_eq(valk_lval_t *x, valk_lval_t *y);
 

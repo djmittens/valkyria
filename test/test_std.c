@@ -343,7 +343,14 @@ int main(int argc, const char **argv) {
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);  // load the builtins
 
-  valk_lval_eval(env, ast);
+  // Evaluate prelude sequentially (program semantics)
+  while (ast->expr.count) {
+    valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(ast, 0));
+    if (LVAL_TYPE(x) == LVAL_ERR) {
+      // Stop early if prelude fails; tests will surface the error
+      break;
+    }
+  }
 
   valk_testsuite_fixture_add(suite, "prelude", ast, __lval_retain,
                              __lval_release);
@@ -373,7 +380,7 @@ valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
     case LVAL_NUM:
     case LVAL_REF:
     case LVAL_SYM:
-    case LVAL_LVAL:
+    case LVAL_ENV:
     case LVAL_UNDEFINED:
       return nullptr;
   }
