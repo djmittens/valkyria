@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 // #define VALK_ARC_DEBUG
 #define VALK_ARC_TRACE_DEPTH 10
@@ -285,3 +286,6 @@ void valk_gc_mark(valk_gc_heap_t *self, void *ptr);
 void *valk_gc_alloc(valk_gc_heap_t *heap, size_t size);
 void *valk_gc_realloc(valk_gc_heap_t *heap, void *ptr, size_t size);
 void valk_gc_sweep(valk_gc_heap_t *self);
+
+// No extra resize helper; rely on valk_mem_allocator_realloc which now performs
+// copy-on-realloc semantics for arena as well as malloc allocators.

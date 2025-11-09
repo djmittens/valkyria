@@ -194,7 +194,7 @@ static inline valk_slab_item_t *valk_slab_item_at(valk_slab_t *self,
 
 valk_slab_t *valk_slab_new(size_t itemSize, size_t numItems) {
   size_t slabSize = valk_slab_size(itemSize, numItems);
-  printf("Calculating slab size to be %ld\n", slabSize);
+  VALK_DEBUG("Slab size = %ld", slabSize);
   valk_slab_t *res = valk_mem_alloc(slabSize);
   valk_slab_init(res, itemSize, numItems);
   return res;
@@ -235,7 +235,7 @@ size_t valk_slab_item_stride(size_t itemSize) {
 
 size_t valk_slab_size(size_t itemSize, size_t numItems) {
   size_t stride = valk_slab_item_stride(itemSize);
-  printf("Calculated stride %ld\n", stride);
+  VALK_DEBUG("Slab stride = %ld", stride);
   const size_t freelen = sizeof(size_t) * numItems;  // guranteed alignment
 
   return sizeof(valk_slab_t) + freelen + (stride * numItems);
@@ -294,7 +294,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
 
   res = (void *)&((char *)self->heap)[freeLen + itemsLen];
   const size_t swapTo = ((size_t *)self->heap)[0];
-  printf("Aquiring slab: %ld :: idx : %ld : swap %ld\n", res->handle, offset,
+  VALK_TRACE("Acquiring slab: handle=%ld idx=%ld swap=%ld", res->handle, offset,
          swapTo);
 #endif
   return res;
@@ -322,8 +322,7 @@ void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
     if (handle == item->handle) {
       const size_t target = self->numFree;
       // Swap it out with a stale one
-      printf("Releasing slab: %ld [idx: %ld]: swaping with %ld[idx: %ld]\n",
-             item->handle, i, ((size_t *)self->heap)[target], target);
+      VALK_TRACE("Releasing slab: handle=%ld idx=%ld swap=%ld", item->handle, i, ((size_t *)self->heap)[target]);
       ((size_t *)self->heap)[i] = ((size_t *)self->heap)[target];
       ((size_t *)self->heap)[target] = handle;
       ++self->numFree;
@@ -368,18 +367,25 @@ void valk_mem_arena_reset(valk_mem_arena_t *self) {
 
 // TODO(networking): should probably write some unit tests for all this math
 void *valk_mem_arena_alloc(valk_mem_arena_t *self, size_t bytes) {
-  size_t oldVal = __atomic_load_n(&self->offset, __ATOMIC_RELAXED);
-  do {
-    size_t newVal = oldVal + bytes;
-    newVal += __alignment_adjustment(&self->heap[newVal], alignof(max_align_t));
-    VALK_ASSERT((newVal) < self->capacity,
-                "Arena ran out of memory during alloc, %ld + %ld > %ld", oldVal,
+  // Layout: [optional padding][size_t size][padding to align payload][payload]
+  size_t old = __atomic_load_n(&self->offset, __ATOMIC_RELAXED);
+  for (;;) {
+    size_t hdr = old + sizeof(size_t);
+    // Align payload after header to max_align_t
+    size_t adj = __alignment_adjustment(&self->heap[hdr], alignof(max_align_t));
+    size_t payload = hdr + adj;
+    size_t end = payload + bytes;
+    VALK_ASSERT(end < self->capacity,
+                "Arena OOM: %ld + sizeof(size) + %ld + %ld > %ld", old, adj,
                 bytes, self->capacity);
-    if (__atomic_compare_exchange_n(&self->offset, &oldVal, newVal, 1,
+    if (__atomic_compare_exchange_n(&self->offset, &old, end, 1,
                                     __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
-      return &(self->heap)[oldVal];
+      // Store payload size right before payload pointer
+      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+      *((size_t *)&self->heap[payload] - 1) = bytes;
+      return &self->heap[payload];
     }
-  } while (1);
+  }
 }
 
 void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes) {
@@ -447,9 +453,20 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
       VALK_RAISE("Realloc on NULL allocator ptr: %p :: size: %ld", ptr,
                  new_size);
       return NULL;
-    case VALK_ALLOC_ARENA:
-      // cant really free in arenas soo... just make a new one i guess
-      return valk_mem_arena_alloc((void *)self, new_size);
+    case VALK_ALLOC_ARENA: {
+      // Copy-alloc semantics for arena realloc
+      size_t old_size = 0;
+      if (ptr) {
+        old_size = *(((size_t *)ptr) - 1);
+      }
+      void *np = valk_mem_arena_alloc((void *)self, new_size);
+      if (ptr && np) {
+        size_t n = old_size < new_size ? old_size : new_size;
+        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+        memcpy(np, ptr, n);
+      }
+      return np;
+    }
     case VALK_ALLOC_SLAB:
       // slabs are all of the same size, make sure we dont try to resize it to
       // something bigger than the slab

@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "aio.h"
+#include "log.h"
 #include "memory.h"
 #include "parser.h"
 
@@ -28,9 +29,12 @@ int main(int argc, char *argv[]) {
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);
 
-  valk_aio_system_t *aio = valk_aio_start();
-  valk_lenv_put(env, valk_lval_sym("aio"),
-                valk_lval_ref("aio_system", aio, __aio_free));
+  const char *enable_aio = getenv("VALK_ENABLE_AIO");
+  if (enable_aio && enable_aio[0] != '\0') {
+    valk_aio_system_t *aio = valk_aio_start();
+    valk_lenv_put(env, valk_lval_sym("aio"),
+                  valk_lval_ref("aio_system", aio, __aio_free));
+  }
 
   if (argc >= 2) {
     for (int i = 1; i < argc; ++i) {
@@ -68,8 +72,10 @@ int main(int argc, char *argv[]) {
         valk_lval_add(expr, tmp);
       } while ((tmp->flags != LVAL_ERR) && (input[pos] != '\0'));
 
-      printf("AST: ");
-      valk_lval_println(expr);
+      if (valk_log_would_log(VALK_LOG_TRACE)) {
+        fprintf(stdout, "AST: ");
+        valk_lval_println(expr);
+      }
 
       expr = valk_lval_eval(env, expr);
     }

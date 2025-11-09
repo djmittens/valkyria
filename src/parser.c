@@ -525,7 +525,10 @@ valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr) {
   }
 
   valk_lval_t *fun = vals[0];
-  valk_lval_println(args);
+  if (valk_log_would_log(VALK_LOG_TRACE)) {
+    VALK_TRACE("EVAL call with args:");
+    valk_lval_println(args);
+  }
   return valk_lval_eval_call(env, fun, args);
 }
 
@@ -545,7 +548,10 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
 
   while (args->expr.count) {
     if (func->fun.formals->expr.count == 0) {
-      valk_lval_println(func);
+      if (valk_log_would_log(VALK_LOG_TRACE)) {
+        VALK_TRACE("Too many args for function:");
+        valk_lval_println(func);
+      }
       return valk_lval_err(
           "More arguments were given than required Actual [ %p ]: %ld, "
           "Expected: %ld",
@@ -611,12 +617,15 @@ valk_lval_t *valk_lval_pop(valk_lval_t *lval, size_t i) {
   memmove(&lval->expr.cell[i], &lval->expr.cell[i + 1],
           sizeof(valk_lval_t *) * (lval->expr.count - i - 1));
   lval->expr.count--;
-  // clang-tidy is a monster, i have to do this to shut it up
+  // Reallocate safely under arena: allocate new block and copy
   if (lval->expr.count > 0) {
+    valk_lval_t **new_cells =
+        valk_mem_alloc(sizeof(valk_lval_t *) * lval->expr.count);
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    lval->expr.cell = valk_mem_realloc(lval->expr.cell,
-                                       sizeof(valk_lval_t *) *
-                                           lval->expr.count);
+    memcpy(new_cells, lval->expr.cell, sizeof(valk_lval_t *) * lval->expr.count);
+    lval->expr.cell = new_cells;
+  } else {
+    lval->expr.cell = nullptr;
   }
   return cell;
 }
@@ -628,10 +637,17 @@ valk_lval_t *valk_lval_add(valk_lval_t *lval, valk_lval_t *cell) {
   // TODO(main): i need to invest more into null checks in this file
   LVAL_ASSERT(lval, cell != nullptr, "Adding nullptr to LVAL is not allowed");
 
-  lval->expr.count++;
-  lval->expr.cell = valk_mem_realloc(lval->expr.cell,
-                                     sizeof(valk_lval_t *) * lval->expr.count);
-  lval->expr.cell[lval->expr.count - 1] = cell;
+  size_t old_count = lval->expr.count;
+  size_t new_count = old_count + 1;
+  valk_lval_t **new_cells =
+      valk_mem_alloc(sizeof(valk_lval_t *) * new_count);
+  if (old_count) {
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+    memcpy(new_cells, lval->expr.cell, sizeof(valk_lval_t *) * old_count);
+  }
+  new_cells[new_count - 1] = cell;
+  lval->expr.cell = new_cells;
+  lval->expr.count = new_count;
   return lval;
 }
 
@@ -977,8 +993,13 @@ valk_lval_t *valk_lenv_get(valk_lenv_t *env, valk_lval_t *key) {
   LVAL_ASSERT_TYPE((valk_lval_t *)nullptr, key, LVAL_SYM);
 
   for (size_t i = 0; i < env->count; i++) {
+    if (env->symbols == NULL || env->symbols[i] == NULL) {
+      break;
+    }
     if (strcmp(key->str, env->symbols[i]) == 0) {
-      printf("Searching %ld %s\n", i, env->symbols[i]);
+      if (valk_log_would_log(VALK_LOG_TRACE)) {
+        VALK_TRACE("env get idx=%zu key=%s", i, env->symbols[i]);
+      }
       return env->vals[i];
     }
   }
@@ -994,12 +1015,17 @@ void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
   // TODO: obviously this should probably not be void ???
   // especially since i cant assert this shit
   // LVAL_ASSERT_TYPE((valk_lval_t *)nullptr, key, LVAL_SYM);
-  printf("Putting this dogshit bullshit %s \n", key->str);
+  if (valk_log_would_log(VALK_LOG_DEBUG)) {
+    VALK_DEBUG("env put: %s", key->str);
+  }
 
   // TODO(main): technically this is a failure condition for us, but the
   // return's void LVAL_ASSERT(nullptr, key->type == LVAL_SYM, "LEnv only
   // supports symbolic keys");
   for (size_t i = 0; i < env->count; i++) {
+    if (env->symbols == NULL || env->symbols[i] == NULL) {
+      break;
+    }
     if (strcmp(key->str, env->symbols[i]) == 0) {
       // if we found it, we destroy it
       env->vals[i] = valk_intern(env, val);
@@ -1010,13 +1036,19 @@ void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
   // where we double the array on overflow, but i guess it doesnt matter for
   // now
   VALK_WITH_ALLOC(env->allocator) {
-    env->symbols = valk_mem_realloc(env->symbols, sizeof(env->symbols[0]) *
-                                                       (env->count + 1));
-    env->vals =
-        valk_mem_realloc(env->vals, sizeof(env->vals[0]) * (env->count + 1));
+    size_t new_count = env->count + 1;
+    char **new_symbols = valk_mem_alloc(sizeof(env->symbols[0]) * new_count);
+    valk_lval_t **new_vals =
+        valk_mem_alloc(sizeof(env->vals[0]) * new_count);
+    if (env->count > 0) {
+      // Copy old arrays into the new ones
+      memcpy(new_symbols, env->symbols, sizeof(env->symbols[0]) * env->count);
+      memcpy(new_vals, env->vals, sizeof(env->vals[0]) * env->count);
+    }
+    env->symbols = new_symbols;
+    env->vals = new_vals;
 
-  // TODO(networking): Maybe have env builder ?? this should be a copy perhaps
-  // or something??
+    // Allocate and copy the new key
     env->symbols[env->count] = valk_mem_alloc(201);
     strncpy(env->symbols[env->count], key->str, 200);
     env->symbols[env->count][200] = '\0';
@@ -1037,6 +1069,7 @@ void valk_lenv_def(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
 
 void valk_lenv_put_builtin(valk_lenv_t *env, char *key,
                            valk_lval_builtin_t *_fun) {
+  VALK_INFO("install builtin: %s (count=%zu)", key, env->count);
   VALK_WITH_ALLOC(env->allocator) {
     valk_lval_t *lfun = valk_mem_alloc(sizeof(valk_lval_t));
     lfun->flags = LVAL_FUN;
@@ -1093,14 +1126,17 @@ static valk_lval_t *valk_builtin_cons(valk_lenv_t *e, valk_lval_t *a) {
 
   valk_lval_t *head = valk_lval_pop(a, 0);
   valk_lval_t *tail = valk_lval_pop(a, 0);
-  // TODO(main): this should be implmented as push
-  tail->expr.cell = valk_mem_realloc(
-      tail->expr.cell, sizeof(tail->expr.cell[0]) * (tail->expr.count + 1));
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  memmove(&tail->expr.cell[1], tail->expr.cell,
-          sizeof(tail->expr.cell) * tail->expr.count);
-  tail->expr.cell[0] = head;
-  tail->expr.count++;
+  // Prepend non-mutating under arena semantics
+  size_t oldc = tail->expr.count;
+  valk_lval_t **new_cells =
+      valk_mem_alloc(sizeof(tail->expr.cell[0]) * (oldc + 1));
+  new_cells[0] = head;
+  if (oldc) {
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+    memcpy(&new_cells[1], tail->expr.cell, sizeof(tail->expr.cell[0]) * oldc);
+  }
+  tail->expr.cell = new_cells;
+  tail->expr.count = oldc + 1;
   return tail;
 }
 

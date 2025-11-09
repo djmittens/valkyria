@@ -1,4 +1,6 @@
 #pragma once
+#include "log.h"
+#include "memory.h"
 
 #define DA_INIT_CAPACITY 8
 #define da_init(arr)                                                           \
@@ -6,8 +8,7 @@
     (arr)->count = 0;                                                          \
     (arr)->capacity = DA_INIT_CAPACITY;                                        \
     if ((arr)->items) {                                                        \
-      printf("Reinitializing the array for some stupid reason, probably a "    \
-             "memory leak, since items are not cleaned up\n");                 \
+      VALK_WARN("Reinitializing array (items not cleaned up?)");              \
     }                                                                          \
     (arr)->items = valk_mem_alloc(sizeof((arr)->items[0]) * DA_INIT_CAPACITY); \
   } while (0)
@@ -23,7 +24,7 @@
       (arr)->capacity =                                                        \
           (arr)->capacity == 0 ? DA_INIT_CAPACITY : (arr)->capacity * 2;       \
       (arr)->items =                                                           \
-          realloc((arr)->items, (arr)->capacity * sizeof(*(arr)->items));      \
+          valk_mem_realloc((arr)->items, (arr)->capacity * sizeof(*(arr)->items)); \
       VALK_ASSERT((arr)->items != NULL, "Buy more ram LUlz %d\n", 0);          \
     }                                                                          \
     (arr)->items[(arr)->count++] = (elem);                                     \

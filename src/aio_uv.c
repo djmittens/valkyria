@@ -24,6 +24,7 @@
 #include "common.h"
 #include "concurrency.h"
 #include "memory.h"
+#include "log.h"
 
 #define MAKE_NV(NAME, VALUE, VALUELEN)                         \
   {                                                            \
@@ -181,7 +182,7 @@ typedef struct valk_aio_http_server {
 static void __event_loop(void *arg) {
   valk_aio_system_t *sys = arg;
   valk_mem_init_malloc();
-  printf("Allocating some shit\n");
+  VALK_DEBUG("Initializing UV event loop thread");
   tcp_buffer_slab = valk_slab_new(HTTP_SLAB_ITEM_SIZE, HTTP_MAX_IO_REQUESTS);
   // tcp_request_arena_slab =
   //     valk_slab_new(HTTP_MAX_REQUEST_SIZE_BYTES,
@@ -194,10 +195,10 @@ static void __event_loop(void *arg) {
 }
 
 static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
-  printf("Http2 Disconnect connection called\n");
+  VALK_DEBUG("HTTP/2 disconnect called");
   valk_aio_http_conn *conn = handle->arg;
   if (conn->httpHandler && conn->httpHandler->onDisconnect) {
-    printf("Http2 onDisconnect called\n");
+    VALK_TRACE("HTTP/2 onDisconnect handler");
     conn->httpHandler->onDisconnect(conn->httpHandler->arg, conn);
   }
 
@@ -213,9 +214,9 @@ static void __uv_handle_closed_cb(uv_handle_t *handle) {
   // TODO(networking): Rename this to something more generic as it can be used
   // with any handle
   valk_aio_handle_t *hndl = handle->data;
-  printf("UV handle closed %p\n", handle->data);
+  VALK_TRACE("UV handle closed %p", handle->data);
   if (hndl->onClose != nullptr) {
-    printf("Calling onClose callback\n");
+    VALK_TRACE("Calling onClose callback");
     hndl->onClose(hndl);
   }
   valk_dll_pop(hndl);  // remove this handle from live handles
@@ -223,8 +224,9 @@ static void __uv_handle_closed_cb(uv_handle_t *handle) {
 }
 
 static void __aio_uv_walk_close(uv_handle_t *h, void *arg) {
+  UNUSED(arg);
   if (!uv_is_closing(h)) {
-    printf("Shit was open, so now im closing son \n");
+    VALK_DEBUG("Closing open UV handle");
     uv_close(h, __uv_handle_closed_cb);
   }
 }
@@ -242,7 +244,7 @@ static void __aio_uv_stop(uv_async_t *h) {
  * is the mem_user_data member of :type:`nghttp2_mem` structure.
  */
 void *__nghttp2_malloc(size_t size, void *mem_user_data) {
-  printf("HTTP2:: Malloc %ld\n", size);
+  VALK_TRACE("HTTP2 malloc %zu", size);
   return valk_mem_arena_alloc(mem_user_data, size);
 }
 
@@ -254,7 +256,7 @@ void *__nghttp2_malloc(size_t size, void *mem_user_data) {
  */
 void __nghttp2_free(void *ptr, void *mem_user_data) {
   UNUSED(mem_user_data);
-  printf("HTTP2:: Free %p\n", ptr);
+  VALK_TRACE("HTTP2 free %p", ptr);
 }
 
 /**
@@ -264,7 +266,7 @@ void __nghttp2_free(void *ptr, void *mem_user_data) {
  * is the mem_user_data member of :type:`nghttp2_mem` structure.
  */
 void *__nghttp2_calloc(size_t nmemb, size_t size, void *mem_user_data) {
-  printf("HTTP2:: Calloc %ld, %ld\n", nmemb, size);
+  VALK_TRACE("HTTP2 calloc %zu x %zu", nmemb, size);
   void *res = valk_mem_arena_alloc(mem_user_data, nmemb * size);
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memset(res, 0, nmemb * size);
@@ -278,7 +280,7 @@ void *__nghttp2_calloc(size_t nmemb, size_t size, void *mem_user_data) {
  * is the mem_user_data member of :type:`nghttp2_mem` structure.
  */
 void *__nghttp2_realloc(void *ptr, size_t size, void *mem_user_data) {
-  printf("HTTP2:: Realloc %p, %ld\n", ptr, size);
+  VALK_TRACE("HTTP2 realloc %p -> %zu", ptr, size);
   void *res = valk_mem_arena_alloc(mem_user_data, size);
   if (ptr != NULL) {
     size_t origSize = ((size_t *)ptr)[-1];
@@ -299,8 +301,7 @@ static int __http_on_header_callback(nghttp2_session *session,
   UNUSED(user_data);
   /* For demonstration, just print incoming headers. */
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  fprintf(stderr, "HDR: %.*s: %.*s\n", (int)namelen, name, (int)valuelen,
-          value);
+  VALK_TRACE("HDR: %.*s: %.*s", (int)namelen, name, (int)valuelen, value);
 
   return 0;  // success
 }
@@ -313,8 +314,8 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
   if (frame->hd.type == NGHTTP2_HEADERS &&
       frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, ">>> Received HTTP/2 request (stream_id=%d)\n",
-            frame->hd.stream_id);
+    VALK_DEBUG(">>> Received HTTP/2 request (stream_id=%d)",
+               frame->hd.stream_id);
   }
   return 0;
 }
@@ -336,8 +337,7 @@ static int __http2_client_on_header_cb(nghttp2_session *session,
     // no retain here we should be responding to the original guy
     /* For demonstration, just print incoming headers. */
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, "HDR: %.*s: %.*s\n", (int)namelen, name, (int)valuelen,
-            value);
+    VALK_TRACE("HDR: %.*s: %.*s", (int)namelen, name, (int)valuelen, value);
   }
   return 0;  // success
 }
@@ -432,7 +432,7 @@ static void __http2_flush_frames(valk_buffer_t *buf,
   do {
     len = nghttp2_session_mem_send2(conn->session, &data);
     if (len < 0) {
-      printf("ERR: writing shit %s", nghttp2_strerror(len));
+      VALK_ERROR("nghttp2_session_mem_send2 error: %s", nghttp2_strerror((int)len));
     } else if (len) {
       // TODO(networking): Need to handle data greater than the buffer size here
 
@@ -441,14 +441,14 @@ static void __http2_flush_frames(valk_buffer_t *buf,
       if ((buf->count + len) > buf->capacity) {
         // if we read the same amount of data again, we would overflow, so lets
         // stop for now
-        printf("Fuck... couldnt cache it all %ld\n", buf->count + len);
+      VALK_WARN("Send buffer overflow risk: %ld", buf->count + len);
         break;
       }
 
-      printf("Buffed frame data %d :: %ld :: capacity %ld, %s\n", len,
-             buf->count, buf->capacity, data);
+      VALK_TRACE("Buffered frame len=%ld count=%ld capacity=%ld", (long)len,
+                 (long)buf->count, (long)buf->capacity);
     } else {
-      printf("Found no data to send Skipping CB\n");
+      VALK_TRACE("No data to send");
     }
   } while (len > 0);
 }
@@ -462,7 +462,7 @@ static void __http_tcp_unencrypted_read_cb(void *arg,
       conn->session, (const uint8_t *)buf->items, buf->count);
   if (rv < 0) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, "nghttp2_session_mem_recv error: %zd\n", rv);
+    VALK_ERROR("nghttp2_session_mem_recv error: %zd", rv);
     uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_handle_closed_cb);
   }
 }
@@ -484,7 +484,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     return;
   }
 
-  printf("Feeding data to OpenSSL %ld\n", nread);
+  VALK_TRACE("Feeding data to OpenSSL %ld", nread);
 
   valk_buffer_t In = {
       .items = buf->base, .count = nread, .capacity = HTTP_SLAB_ITEM_SIZE};
@@ -515,11 +515,11 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     slabItem->buf.base = Out.items;
     slabItem->buf.len = Out.count;
 
-    printf("Sending %ld bytes\n", Out.count);
+    VALK_TRACE("Sending %ld bytes", Out.count);
     uv_write(&slabItem->req, (uv_stream_t *)&conn->handle->uv.tcp,
              &slabItem->buf, 1, __http_tcp_on_write_cb);
   } else {
-    printf("Nothing to send %d \n", wantToSend);
+    VALK_TRACE("Nothing to send: %d", wantToSend);
     valk_slab_release_ptr(tcp_buffer_slab, slabItem);
   }
 
@@ -545,13 +545,13 @@ static int __http_send_client_connection_header(nghttp2_session *session) {
   nghttp2_settings_entry iv[1] = {
       {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100}};
   int rv;
-  printf("[http2 Client] Sending connection frame\n");
+  VALK_DEBUG("[http2 Client] Sending connection frame");
 
   rv = nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv,
                                sizeof(iv) / sizeof(iv[0]));
   if (rv != 0) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, "Fatal error: %s", nghttp2_strerror(rv));
+    VALK_ERROR("Fatal error: %s", nghttp2_strerror(rv));
     return -1;
   }
   return 0;
@@ -625,10 +625,10 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
         port = ntohs(addr6->sin6_port);
       }
 
-      printf("Accepted connection from IP: %s:%d\n", ip, port);
+      VALK_INFO("Accepted connection from %s:%d", ip, port);
     } else {
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-      fprintf(stderr, "Could not get peer name\n");
+      VALK_WARN("Could not get peer name");
     };
 
     /**
@@ -683,7 +683,7 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
                   __http_tcp_read_cb);
   } else {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, "Fuck closing %s\n", uv_strerror(res));
+    VALK_WARN("Close error: %s", uv_strerror(res));
     uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_handle_closed_cb);
     // TODO(networking): should probably have a function for properly disposing
     // of the connection objects
@@ -691,7 +691,8 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
   }
 }
 static void __http_shutdown_cb(valk_aio_handle_t *hndl) {
-  printf("TODO: Shutdown the server cleanly\n");
+  UNUSED(hndl);
+  VALK_INFO("TODO: shutdown the server cleanly");
 }
 
 static void __http_listen_cb(valk_aio_system_t *sys,
@@ -718,7 +719,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
 
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, "TcpInit err: %s \n", uv_strerror(r));
+    VALK_ERROR("Tcp init error: %s", uv_strerror(r));
     valk_arc_box *err = valk_arc_box_err("Error on TcpInit");
     valk_promise_respond(&task->promise, err);
     valk_arc_release(err);
@@ -730,7 +731,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
   r = uv_ip4_addr(srv->interface, srv->port, &addr);
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, "Addr err: %s \n", uv_strerror(r));
+    VALK_ERROR("Get addr error: %s", uv_strerror(r));
     valk_arc_box *err = valk_arc_box_err("Error on Addr");
     valk_promise_respond(&task->promise, err);
     valk_arc_release(err);
@@ -746,7 +747,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
 #endif
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, "Bind err: %s \n", uv_strerror(r));
+    VALK_ERROR("Bind error: %s", uv_strerror(r));
     valk_arc_box *err = valk_arc_box_err("Error on Bind");
     valk_promise_respond(&task->promise, err);
     valk_arc_release(err);
@@ -759,7 +760,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
                 __http_server_accept_cb);
   if (r) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, "Listen err: %s \n", uv_strerror(r));
+    VALK_ERROR("Listen error: %s", uv_strerror(r));
     valk_arc_box *err = valk_arc_box_err("Error on Listening");
     valk_promise_respond(&task->promise, err);
     valk_arc_release(err);
@@ -768,7 +769,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
     return;
   }
 
-  printf("Listening on %s:%d\n", srv->interface, srv->port);
+  VALK_INFO("Listening on %s:%d", srv->interface, srv->port);
   valk_promise_respond(&task->promise, box);
   valk_dll_insert_after(&sys->liveHandles, srv->listener);
   valk_arc_release(box);
@@ -885,21 +886,18 @@ static int __http_client_on_frame_recv_callback(nghttp2_session *session,
   UNUSED(session);
   UNUSED(user_data);
 
-  printf("ON_RECV callback \n");
+  VALK_TRACE("on_recv callback");
 
   switch (frame->hd.type) {
     case NGHTTP2_HEADERS:
       break;
     case NGHTTP2_RST_STREAM:
-      printf(
-          "[INFO] C <---------------------------- S (RST_STREAM) stream=%d, "
-          "error_code=%d\n",
-          frame->hd.stream_id, frame->rst_stream.error_code);
+      VALK_INFO("C <--- S (RST_STREAM) stream=%d error=%d", frame->hd.stream_id,
+               frame->rst_stream.error_code);
       break;
     case NGHTTP2_GOAWAY:
-      printf("[INFO] C <---------------------------- S (GOAWAY) %d\n",
-             frame->hd.stream_id);
-      printf("[Client]Received GO AWAY frame\n");
+      VALK_INFO("C <--- S (GOAWAY) %d", frame->hd.stream_id);
+      VALK_INFO("Client received GOAWAY");
       break;
   }
 
@@ -919,12 +917,7 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
   if (reqres) {
     // no retain here we should be responding to the original guy
     // valk_arc_retain(reqres->promise.item);
-    printf(
-        "[INFO] C <---------------------------- S (DATA chunk)\n"
-        "%lu bytes\n",
-        (unsigned long int)len);
-    fwrite(data, 1, len, stdout);
-    printf("\n");
+    VALK_INFO("C <--- S (DATA chunk) len=%lu", (unsigned long)len);
 
     VALK_ASSERT(len < reqres->res->bodyCapacity,
                 "Response was too big %ld > %ld", len,
@@ -1138,7 +1131,7 @@ valk_future *valk_aio_http2_connect(valk_aio_system_t *sys,
   // valk_arc_retain(res);
   // valk_arc_release(res) in resolve
 
-  printf("Initializing client %p\n", (void *)client);
+  VALK_DEBUG("Initializing client %p", (void *)client);
   __uv_exec_task(sys, task);
 
   return res;
@@ -1151,7 +1144,7 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
   valk_arc_box *box = task->arg;
   valk_aio_http2_client *client = box->item;
 
-  printf("Constructing a request on client %p\n", (void *)client);
+  VALK_DEBUG("Constructing request on client %p", (void *)client);
   valk_aio_http_conn *conn = client->connection;
 
   int32_t stream_id;
@@ -1177,9 +1170,7 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
                               sizeof(hdrs) / sizeof(hdrs[0]), nullptr, prom);
 
   if (stream_id < 0) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, "Could not submit HTTP request: %s\n",
-            nghttp2_strerror(stream_id));
+    VALK_ERROR("Could not submit HTTP request: %s", nghttp2_strerror(stream_id));
     valk_arc_box *err = valk_arc_box_err("Could not submit HTTP request");
     valk_promise_respond(prom, err);
     valk_arc_release(err);
@@ -1188,7 +1179,7 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
     return;
   }
 
-  printf("Submitted request with stream id %d\n", stream_id);
+  VALK_INFO("Submitted request stream_id=%d", stream_id);
 
   char buf[SSL3_RT_MAX_PACKET_SIZE];
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -1261,7 +1252,7 @@ char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
   // printf("Arc count of fut : %d\n", fut->refcount);
 
   VALK_ASSERT(client->type == VALK_SUC, "Error creating client: %s",
-              client->item);
+              (char *)client->item);
 
   // valk_arc_trace_report_print(fut);
   valk_arc_release(fut);
@@ -1275,7 +1266,7 @@ char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
   // valk_arc_trace_report_print(response);
 
   VALK_ASSERT(response->type == VALK_SUC, "Error from the response: %s",
-              response->item);
+              (char *)response->item);
 
   printf("Got response %s\n", (char *)response->item);
   char *res = strdup(response->item);
@@ -1296,10 +1287,10 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
   // the reason its not done on the arena, is because it will be freed by a
   // callback
   valk_aio_http2_client *client = pair->client;
-  printf("Client's ready to go : %s: %d\n", client->interface, client->port);
-  printf("req : %s%s\n", pair->req->authority, pair->req->path);
+  VALK_INFO("Client ready: %s:%d", client->interface, client->port);
+  VALK_DEBUG("req: %s%s", pair->req->authority, pair->req->path);
 
-  printf("Constructing a request on client %p\n", (void *)client);
+  VALK_DEBUG("Constructing request on client %p", (void *)client);
   valk_aio_http_conn *conn = client->connection;
 
   VALK_WITH_ALLOC(pair->req->allocator) {
@@ -1354,8 +1345,7 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
 
     reqres->res = box->item;
 
-    printf("Box: %p, item: %p, container_of: %p\n", box, box->item,
-           ((uint8_t *)box->item - sizeof(valk_arc_box)));
+    VALK_TRACE("Box: %p, item: %p", (void*)box, box->item);
 
     memset(reqres->res, 0, sizeof(valk_http2_response_t));
 
@@ -1369,8 +1359,8 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
 
     if (reqres->streamid < 0) {
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-      fprintf(stderr, "Could not submit HTTP request: %s\n",
-              nghttp2_strerror(reqres->streamid));
+      VALK_ERROR("Could not submit HTTP request: %s",
+                 nghttp2_strerror(reqres->streamid));
       valk_arc_box *err = valk_arc_box_err("Could not submit HTTP request");
       valk_promise_respond(&task->promise, err);
       valk_arc_release(err);
@@ -1378,7 +1368,7 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
       return;
     }
 
-    printf("Submitted request with stream id %ld\n", reqres->streamid);
+    VALK_INFO("Submitted request stream_id=%ld", reqres->streamid);
   }
 
   // Not request allocated... its connection allocated. Event though technically

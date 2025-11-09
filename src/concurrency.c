@@ -3,6 +3,7 @@
 #include "collections.h"
 #include "common.h"
 #include "memory.h"
+#include "log.h"
 
 #define _GNU_SOURCE
 #include <errno.h>
@@ -225,7 +226,7 @@ static void *valk_worker_routine(void *arg) {
   valk_mem_init_malloc();
 
   valk_worker *self = arg;
-  printf("Starting Thread : %s\n", self->name);
+  VALK_INFO("Starting thread: %s", self->name);
   valk_task_queue *queue = self->queue;
 
   // pthread_setname_np(pthread_self(), self->name);
@@ -260,7 +261,7 @@ static void *valk_worker_routine(void *arg) {
         // only signal if we successfully popped, otherwise there was a
         // problem
         pthread_cond_signal(&queue->notFull);
-        printf("MMM yummy task!\n");
+        VALK_TRACE("Worker executing task");
 
         // Ok now lets execute the task
 
@@ -269,7 +270,7 @@ static void *valk_worker_routine(void *arg) {
         // TODO(networking): How do we clean up the arg? maybe the callback
         // has to do it.
       } else if (task.type == VALK_POISON) {
-        printf("%s : Swallowed poison\n", self->name);
+        VALK_INFO("%s: received poison pill (shutdown)", self->name);
         queue->numWorkers--;
         pthread_cond_signal(&queue->workerDead);
         pthread_mutex_unlock(&queue->mutex);
@@ -330,7 +331,7 @@ void valk_drain_pool(valk_worker_pool *pool) {
       pthread_cond_wait(&pool->queue.isEmpty, &pool->queue.mutex);
     }
   } else {
-    printf("Pool is already draining, not doing anything\n");
+    VALK_WARN("Pool is already draining; not doing anything");
   }
   pthread_mutex_unlock(&pool->queue.mutex);
 }
@@ -447,4 +448,3 @@ void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
   valk_future *res = valk_schedule(pool, arg, __valk_pool_resolve_promise_cb);
   valk_arc_release(res);  // dont need the result
 }
-

@@ -3,6 +3,7 @@
 // TODO(networking): Abstract pthread away in here, only available on posix
 // system very inconsistent api across different systems too
 #include <pthread.h>
+#include "log.h"
 #include <stdint.h>
 
 #include "memory.h"
@@ -44,8 +45,7 @@
             ->items[((queue)->idx + (queue)->count++) % (queue)->capacity] = \
             (_task);                                                         \
       } else {                                                               \
-        printf("ERR[%s:%d]: worker queue is full, not pushing \n", __FILE__, \
-               __LINE__);                                                    \
+        VALK_ERROR("worker queue is full, not pushing");                    \
         _err = 1;                                                            \
       }                                                                      \
     } while (0);                                                             \
@@ -58,8 +58,7 @@
     do {                                                                      \
       if ((queue)->count == 0) {                                              \
         _err = 1;                                                             \
-        printf("ERR[%s:%d]: worker queue is empty , not popping\n", __FILE__, \
-               __LINE__);                                                     \
+        VALK_ERROR("worker queue is empty, not popping");                    \
       } else {                                                                \
         (*_task) = (queue)->items[((queue)->idx++) % (queue)->capacity];      \
         --(queue)->count;                                                     \

@@ -70,6 +70,7 @@ add_library(valkyria
   src/debug.c
   src/aio_ssl.c
   src/vm.c
+  src/log.c
 )
 
 target_include_directories(valkyria SYSTEM PRIVATE

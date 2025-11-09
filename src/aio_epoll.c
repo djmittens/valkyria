@@ -1,5 +1,6 @@
 #include "concurrency.h"
 #include "inet.h"
+#include "log.h"
 
 #include "common.h"
 
@@ -64,13 +65,13 @@ void valk_server_demo(void) {
   hints.ai_flags = AI_PASSIVE;
 
   if ((status = getaddrinfo(NULL, "8080", &hints, &servinfo)) != 0) {
-    fprintf(stderr, "getaddrinfo error: %s \n", gai_strerror(status));
+    VALK_ERROR("getaddrinfo: %s", gai_strerror(status));
     return;
   }
 
   if ((sockfd = socket(servinfo->ai_family, servinfo->ai_socktype,
                        servinfo->ai_protocol)) == -1) {
-    fprintf(stderr, "socket() error: %s \n", strerror(errno));
+    VALK_ERROR("socket() error: %s", strerror(errno));
     return;
   }
   fcntl(sockfd, F_SETFL, O_NONBLOCK);
@@ -82,29 +83,29 @@ void valk_server_demo(void) {
   int yes = 1;
   // char yes='1'; // Solaris people use this
   if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) == -1) {
-    perror("setsockopt\n");
+    VALK_ERROR("setsockopt failed: %s", strerror(errno));
     close(sockfd);
     return;
   }
 
   if (bind(sockfd, servinfo->ai_addr, servinfo->ai_addrlen) == -1) {
-    fprintf(stderr, "bind() error: %s \n", strerror(errno));
+    VALK_ERROR("bind() error: %s", strerror(errno));
     close(sockfd);
     return;
   }
 
   if (listen(sockfd, 15) == -1) {
-    fprintf(stderr, "listen() error: %s \n", strerror(errno));
+    VALK_ERROR("listen() error: %s", strerror(errno));
     close(sockfd);
     return;
   }
 
-  printf("Server: Created a socket... Waiting for client\n");
+  VALK_INFO("Server: socket created, waiting for client");
 
   epollfd = epoll_create1(0);
 
   if (epollfd == -1) {
-    perror("epoll_create1");
+    VALK_ERROR("epoll_create1 failed: %s", strerror(errno));
     // exit(EXIT_FAILURE);
     close(sockfd);
     return;
@@ -114,7 +115,7 @@ void valk_server_demo(void) {
   ev.data.fd = sockfd;
 
   if (epoll_ctl(epollfd, EPOLL_CTL_ADD, sockfd, &ev) == -1) {
-    perror("epoll_ctl: sockfd");
+    VALK_ERROR("epoll_ctl add sockfd failed: %s", strerror(errno));
     close(sockfd);
     return;
   }
@@ -122,7 +123,7 @@ void valk_server_demo(void) {
   for (;;) {
     int num_fds = epoll_wait(epollfd, events, 10, -1);
     if (epollfd == -1) {
-      perror("epoll_wait");
+      VALK_ERROR("epoll_wait failed: %s", strerror(errno));
       // exit(EXIT_FAILURE);
       close(sockfd);
       close(epollfd);
@@ -133,7 +134,7 @@ void valk_server_demo(void) {
         socklen_t addrSize = sizeof(theirAddr);
         if ((connfd = accept(sockfd, (struct sockaddr *)&theirAddr,
                              &addrSize)) == -1) {
-          fprintf(stderr, "accept() error: %s \n", strerror(errno));
+          VALK_ERROR("accept() error: %s", strerror(errno));
           close(sockfd);
           return;
         }
@@ -146,7 +147,7 @@ void valk_server_demo(void) {
         // .... this is painful
         inet_ntop(theirAddr.ss_family,
                   get_in_addr((struct sockaddr *)&theirAddr), buf, sizeof(buf));
-        printf("Server: Established connection with client: %s\n", buf);
+        VALK_INFO("Server: connection established: %s", buf);
 
         // lets reuse the ev
         memset(&ev, 0, sizeof(struct epoll_event));
@@ -156,13 +157,13 @@ void valk_server_demo(void) {
 
       } else {
         char res[512];
-        printf("Server: Received from client \n %s \n", res);
+        VALK_TRACE("Server: received from client: %s", res);
         int numRead = read(events[n].data.fd, res, sizeof(res));
         res[numRead] = '\0';
-        printf("Server: Received from client \n %s \n", res);
+        VALK_TRACE("Server: received from client: %s", res);
         const char *request = "Hello World";
         if (write(connfd, request, strlen(request)) == -1) {
-          fprintf(stderr, "write() error: %s \n", strerror(errno));
+          VALK_ERROR("write() error: %s", strerror(errno));
           close(connfd);
           close(sockfd);
           return;
@@ -189,13 +190,13 @@ char *valk_client_demo(const char *domain, const char *port) {
   // hints.ai_flags = AI_PASSIVE;
 
   if ((status = getaddrinfo(domain, port, &hints, &servinfo)) != 0) {
-    fprintf(stderr, "getaddrinfo() error: %s \n", gai_strerror(status));
+    VALK_ERROR("getaddrinfo() error: %s", gai_strerror(status));
     exit(1);
   }
 
   if ((sockfd = socket(servinfo->ai_family, servinfo->ai_socktype,
                        servinfo->ai_protocol)) == -1) {
-    fprintf(stderr, "socket() error: %s \n", strerror(errno));
+    VALK_ERROR("socket() error: %s", strerror(errno));
     exit(1);
   }
 
@@ -205,7 +206,7 @@ char *valk_client_demo(const char *domain, const char *port) {
     // random free port to establish the connection. Meaning we get the bind
     // call for free when we call it
     if (connect(sockfd, servinfo->ai_addr, servinfo->ai_addrlen) == -1) {
-      fprintf(stderr, "connect() error: %s \n", strerror(errno));
+      VALK_ERROR("connect() error: %s", strerror(errno));
     } else {
       break;
     }
@@ -217,7 +218,7 @@ char *valk_client_demo(const char *domain, const char *port) {
                         "Connection: close\r\n"
                         "\r\n";
   if (send(sockfd, request, strlen(request), 0) == -1) {
-    fprintf(stderr, "send() error: %s \n", strerror(errno));
+    VALK_ERROR("send() error: %s", strerror(errno));
     exit(1);
   }
   char res[512];
@@ -238,11 +239,11 @@ void valk_addr_demo(const char *domain) {
   hints.ai_socktype = SOCK_STREAM;
 
   if ((status = getaddrinfo(domain, NULL, &hints, &servinfo)) != 0) {
-    fprintf(stderr, "getaddrinfo error: %s \n", gai_strerror(status));
+    VALK_ERROR("getaddrinfo error: %s", gai_strerror(status));
     exit(1);
   }
 
-  printf("IP addressses for %s : \n", domain);
+  VALK_INFO("IP addresses for %s:", domain);
   for (p = servinfo; p != NULL; p = p->ai_next) {
     void *addr;
     char *ipver;
@@ -258,9 +259,8 @@ void valk_addr_demo(const char *domain) {
     }
 
     inet_ntop(p->ai_family, addr, ipstr, sizeof ipstr);
-    printf("  %s: %s\n", ipver, ipstr);
+    VALK_INFO("  %s: %s", ipver, ipstr);
   }
 
   freeaddrinfo(servinfo);
 }
-
