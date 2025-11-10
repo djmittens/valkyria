@@ -115,5 +115,11 @@ valk_future *valk_aio_http2_connect(valk_aio_system_t *sys,
                                     const char *interface, const int port,
                                     const char *certfile);
 
+// Connect to an IP with an explicit SNI/hostname used for TLS and HTTP/2.
+// Returns a future with a boxed `valk_aio_http2_client`.
+valk_future *valk_aio_http2_connect_host(valk_aio_system_t *sys,
+                                         const char *ip, const int port,
+                                         const char *hostname);
+
 valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
                                          valk_aio_http2_client *client);

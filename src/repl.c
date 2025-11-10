@@ -13,6 +13,7 @@ static void __aio_free(void *system) { valk_aio_stop(system); }
 
 int main(int argc, char *argv[]) {
   char *input;
+  int script_mode = 0;
   // Initialize global arena (persistent) and scratch arena (ephemeral)
   size_t const GLOBAL_ARENA_BYTES = 16 * 1024 * 1024;   // 16 MiB
   size_t const SCRATCH_ARENA_BYTES = 4 * 1024 * 1024;   // 4 MiB
@@ -29,8 +30,14 @@ int main(int argc, char *argv[]) {
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);
 
-  const char *enable_aio = getenv("VALK_ENABLE_AIO");
-  if (enable_aio && enable_aio[0] != '\0') {
+  // If we got here, we processed files but did not request exit; drop into REPL.
+  // Set mode to repl now so shutdown inside REPL performs teardown.
+  valk_lenv_put(env, valk_lval_sym("VALK_MODE"), valk_lval_str("init"));
+
+  // Default: enable AIO/event loop in REPL so async/network builtins are usable.
+  // Opt-out by setting VALK_DISABLE_AIO to a non-empty value.
+  const char *disable_aio = getenv("VALK_DISABLE_AIO");
+  if (!(disable_aio && disable_aio[0] != '\0')) {
     valk_aio_system_t *aio = valk_aio_start();
     valk_lenv_put(env, valk_lval_sym("aio"),
                   valk_lval_ref("aio_system", aio, __aio_free));
@@ -38,6 +45,10 @@ int main(int argc, char *argv[]) {
 
   if (argc >= 2) {
     for (int i = 1; i < argc; ++i) {
+      if (strcmp(argv[i], "--script") == 0) {
+        script_mode = 1;
+        continue;
+      }
       valk_lval_t *res;
       VALK_WITH_ALLOC((void *)scratch) { res = valk_parse_file(argv[i]); }
       if (res->flags == LVAL_ERR) {
@@ -51,12 +62,17 @@ int main(int argc, char *argv[]) {
 
           if (x->flags == LVAL_ERR) {
             valk_lval_println(x);
+            break;
           }
         }
       }
       valk_mem_arena_reset(scratch);
     }
   }
+
+  // If we got here, we processed files but did not request exit; drop into REPL.
+  // Set mode to repl now so shutdown inside REPL performs teardown.
+  valk_lenv_put(env, valk_lval_sym("VALK_MODE"), valk_lval_str("repl"));
 
   // This is the L in repL
   while ((input = readline("valkyria> ")) != NULL) {
@@ -84,6 +100,13 @@ int main(int argc, char *argv[]) {
     free(input);
     valk_mem_arena_reset(scratch);
   }
+
   // No frees for arena-backed data; OS reclaim on exit.
+  // Gracefully stop AIO on REPL exit if present
+  valk_lval_t *sym = valk_lval_sym("aio");
+  valk_lval_t *val = valk_lenv_get(env, sym);
+  if (val->flags != LVAL_ERR && val->flags && strcmp(val->ref.type, "aio_system") == 0) {
+    valk_aio_stop((valk_aio_system_t *)val->ref.ptr);
+  }
   return EXIT_SUCCESS;
 }

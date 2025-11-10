@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "aio.h"
+#include "collections.h"
 #include "common.h"
 #include "concurrency.h"
 #include "memory.h"
@@ -15,9 +17,9 @@
 // anymore
 #define LVAL_RAISE(args, fmt, ...)                                       \
   do {                                                                   \
-    char *_fmt =                                                         \
+    char* _fmt =                                                         \
         valk_c_err_format((fmt), __FILE_NAME__, __LINE__, __FUNCTION__); \
-    valk_lval_t *err = valk_lval_err(_fmt, ##__VA_ARGS__);               \
+    valk_lval_t* err = valk_lval_err(_fmt, ##__VA_ARGS__);               \
     free(_fmt);                                                          \
     return err;                                                          \
   } while (0)
@@ -41,15 +43,15 @@
       }                                                                      \
     }                                                                        \
     if (!_found) {                                                           \
-      char const *_expect_str[_n_expected];                                  \
+      char const* _expect_str[_n_expected];                                  \
       for (size_t i = 0; i < _n_expected; i++) {                             \
         _expect_str[i] = valk_ltype_name(_expected[i]);                      \
       }                                                                      \
-      char *_estr = valk_str_join(_n_expected, _expect_str, ", ");           \
+      char* _estr = valk_str_join(_n_expected, _expect_str, ", ");           \
                                                                              \
-      char *_fmt = valk_c_err_format("Actual: %s, Expected(One-Of): [%s]",   \
+      char* _fmt = valk_c_err_format("Actual: %s, Expected(One-Of): [%s]",   \
                                      __FILE_NAME__, __LINE__, __FUNCTION__); \
-      valk_lval_t *err =                                                     \
+      valk_lval_t* err =                                                     \
           valk_lval_err(_fmt, valk_ltype_name(LVAL_TYPE(lval)), _estr);      \
       free(_estr);                                                           \
       free(_fmt);                                                            \
@@ -87,29 +89,29 @@
               "Invalid argument count, Actual[%d] >= Expected[%d]", \
               (lval)->expr.count, _count)
 
-static valk_lval_t *valk_builtin_eval(valk_lenv_t *e, valk_lval_t *a);
-static valk_lval_t *valk_builtin_list(valk_lenv_t *e, valk_lval_t *a);
-static const char *valk_lval_str_escape(char x);
+static valk_lval_t* valk_builtin_eval(valk_lenv_t* e, valk_lval_t* a);
+static valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a);
+static const char* valk_lval_str_escape(char x);
 static char valk_lval_str_unescape(char x);
 
 /* List of possible escapable characters */
-static char *lval_str_escapable = "\a\b\f\n\r\t\v\\\'\"";
+static char* lval_str_escapable = "\a\b\f\n\r\t\v\\\'\"";
 
 /* Possible unescapable characters */
-static char *lval_str_unescapable = "abfnrtv\\\'\"";
+static char* lval_str_unescapable = "abfnrtv\\\'\"";
 
-char *valk_c_err_format(const char *fmt, const char *file, const size_t line,
-                        const char *function) {
+char* valk_c_err_format(const char* fmt, const char* file, const size_t line,
+                        const char* function) {
   // NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   size_t len =
       snprintf(nullptr, 0, "%s:%ld:%s || %s", file, line, function, fmt);
-  char *buf = malloc(len + 1);
+  char* buf = malloc(len + 1);
   snprintf(buf, len + 1, "%s:%ld:%s || %s", file, line, function, fmt);
   // NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   return buf;
 }
 
-char *valk_str_join(const size_t n, const char **strs, const char *sep) {
+char* valk_str_join(const size_t n, const char** strs, const char* sep) {
   // TODO(main): I think i should get my own string type in here
   size_t res_len = 0;
   size_t sep_len = strlen(sep);
@@ -122,7 +124,7 @@ char *valk_str_join(const size_t n, const char **strs, const char *sep) {
       res_len += sep_len;
     }
   }
-  char *res = malloc(res_len + 1);
+  char* res = malloc(res_len + 1);
   size_t offset = 0;
   for (size_t i = 0; i < n; i++) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -139,7 +141,7 @@ char *valk_str_join(const size_t n, const char **strs, const char *sep) {
   return res;
 }
 
-const char *valk_ltype_name(valk_ltype_e type) {
+const char* valk_ltype_name(valk_ltype_e type) {
   switch (type) {
     case LVAL_NUM:
       return "Number";
@@ -163,8 +165,8 @@ const char *valk_ltype_name(valk_ltype_e type) {
   }
 }
 
-valk_lval_t *valk_lval_ref(const char *type, void *ptr, void (*free)(void *)) {
-  valk_lval_t *res = valk_mem_alloc(sizeof(valk_lval_t));
+valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_REF;
 #ifdef VALK_DEBUG_ALLOC
   res->__origin_allocator = valk_thread_ctx.allocator;
@@ -182,8 +184,8 @@ valk_lval_t *valk_lval_ref(const char *type, void *ptr, void (*free)(void *)) {
   return res;
 }
 
-valk_lval_t *valk_lval_num(long x) {
-  valk_lval_t *res = valk_mem_alloc(sizeof(valk_lval_t));
+valk_lval_t* valk_lval_num(long x) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_NUM;
 #ifdef VALK_DEBUG_ALLOC
   res->__origin_allocator = valk_thread_ctx.allocator;
@@ -194,8 +196,8 @@ valk_lval_t *valk_lval_num(long x) {
 }
 
 // TODO(main): look into UTF-8 support
-valk_lval_t *valk_lval_err(const char *fmt, ...) {
-  valk_lval_t *res = valk_mem_alloc(sizeof(valk_lval_t));
+valk_lval_t* valk_lval_err(const char* fmt, ...) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_ERR;
 #ifdef VALK_DEBUG_ALLOC
   res->__origin_allocator = valk_thread_ctx.allocator;
@@ -211,16 +213,16 @@ valk_lval_t *valk_lval_err(const char *fmt, ...) {
   // TODO(main): look into making this into a constant
   len = len < 10000 ? len : 511;
   res->str = valk_mem_alloc(len + 1);
-  //NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   vsnprintf(res->str, len + 1, fmt, va);
   va_end(va);
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
-valk_lval_t *valk_lval_sym(const char *sym) {
-  //NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  valk_lval_t *res = valk_mem_alloc(sizeof(valk_lval_t));
+valk_lval_t* valk_lval_sym(const char* sym) {
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_SYM;
 #ifdef VALK_DEBUG_ALLOC
   res->__origin_allocator = valk_thread_ctx.allocator;
@@ -236,8 +238,8 @@ valk_lval_t *valk_lval_sym(const char *sym) {
   return res;
 }
 
-valk_lval_t *valk_lval_str(const char *str) {
-  valk_lval_t *res = valk_mem_alloc(sizeof(valk_lval_t));
+valk_lval_t* valk_lval_str(const char* str) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_STR;
 #ifdef VALK_DEBUG_ALLOC
   res->__origin_allocator = valk_thread_ctx.allocator;
@@ -252,6 +254,20 @@ valk_lval_t *valk_lval_str(const char *str) {
   return res;
 }
 
+valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  res->flags = LVAL_STR;
+#ifdef VALK_DEBUG_ALLOC
+  res->__origin_allocator = valk_thread_ctx.allocator;
+#endif
+  res->str = valk_mem_alloc(n + 1);
+  if (n) memcpy(res->str, bytes, n);
+  res->str[n] = '\0';
+  res->expr.count = 0;
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
+  return res;
+}
+
 // valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun) {
 //   valk_lval_t *res = malloc(sizeof(valk_lval_t));
 //   res->type = LVAL_SYM;
@@ -260,8 +276,8 @@ valk_lval_t *valk_lval_str(const char *str) {
 //   return res;
 // }
 
-valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body) {
-  valk_lval_t *res = valk_mem_alloc(sizeof(valk_lval_t));
+valk_lval_t* valk_lval_lambda(valk_lval_t* formals, valk_lval_t* body) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_FUN;
 #ifdef VALK_DEBUG_ALLOC
   res->__origin_allocator = valk_thread_ctx.allocator;
@@ -274,8 +290,8 @@ valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body) {
   return res;
 }
 
-valk_lval_t *valk_lval_sexpr_empty(void) {
-  valk_lval_t *res = valk_mem_alloc(sizeof(valk_lval_t));
+valk_lval_t* valk_lval_sexpr_empty(void) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_SEXPR;
 #ifdef VALK_DEBUG_ALLOC
   res->__origin_allocator = valk_thread_ctx.allocator;
@@ -286,8 +302,8 @@ valk_lval_t *valk_lval_sexpr_empty(void) {
   return res;
 }
 
-valk_lval_t *valk_lval_qexpr_empty(void) {
-  valk_lval_t *res = valk_mem_alloc(sizeof(valk_lval_t));
+valk_lval_t* valk_lval_qexpr_empty(void) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_QEXPR;
 #ifdef VALK_DEBUG_ALLOC
   res->__origin_allocator = valk_thread_ctx.allocator;
@@ -298,9 +314,9 @@ valk_lval_t *valk_lval_qexpr_empty(void) {
   return res;
 }
 
-valk_lval_t *valk_lval_copy(valk_lval_t *lval) {
+valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
   if (lval == nullptr) return nullptr;
-  valk_lval_t *res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = lval->flags & (LVAL_FLAGS_MASK | LVAL_TYPE_MASK);
 #ifdef VALK_DEBUG_ALLOC
   res->__origin_allocator = valk_thread_ctx.allocator;
@@ -326,8 +342,7 @@ valk_lval_t *valk_lval_copy(valk_lval_t *lval) {
     case LVAL_SEXPR: {
       res->expr.count = lval->expr.count;
       if (res->expr.count) {
-        res->expr.cell =
-            valk_mem_alloc(sizeof(valk_lval_t *) * res->expr.count);
+        res->expr.cell = valk_mem_alloc(sizeof(valk_lval_t*) * res->expr.count);
         for (size_t i = 0; i < res->expr.count; ++i) {
           res->expr.cell[i] = valk_lval_copy(lval->expr.cell[i]);
         }
@@ -382,14 +397,14 @@ valk_lval_t *valk_lval_copy(valk_lval_t *lval) {
   return res;
 }
 
-valk_lval_t *valk_intern(valk_lenv_t *env, valk_lval_t *val) {
+valk_lval_t* valk_intern(valk_lenv_t* env, valk_lval_t* val) {
   if (env == nullptr) return val;
 #ifdef VALK_DEBUG_ALLOC
   if (val && val->__origin_allocator == env->allocator) {
     return val;
   }
 #endif
-  valk_lval_t *res;
+  valk_lval_t* res;
   VALK_WITH_ALLOC(env->allocator) { res = valk_lval_copy(val); }
 #ifdef VALK_DEBUG_ALLOC
   if (res) res->__origin_allocator = env->allocator;
@@ -437,7 +452,7 @@ valk_lval_t *valk_intern(valk_lenv_t *env, valk_lval_t *val) {
 //   valk_mem_free(lval);
 // }
 
-int valk_lval_eq(valk_lval_t *x, valk_lval_t *y) {
+int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
   if (x->flags != y->flags) {
     return 0;
   }
@@ -471,7 +486,8 @@ int valk_lval_eq(valk_lval_t *x, valk_lval_t *y) {
     case LVAL_REF:
       return (x->ref.ptr == y->ref.ptr) && (x->ref.free == y->ref.free);
     case LVAL_ENV:
-      VALK_RAISE("LVAL is LENV, comparison unimplemented, something went wrong");
+      VALK_RAISE(
+          "LVAL is LENV, comparison unimplemented, something went wrong");
       break;
     case LVAL_UNDEFINED:
       VALK_RAISE("LVAL is undefined, something went wrong");
@@ -481,9 +497,9 @@ int valk_lval_eq(valk_lval_t *x, valk_lval_t *y) {
   return 0;
 }
 
-valk_lval_t *valk_lval_eval(valk_lenv_t *env, valk_lval_t *lval) {
+valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
   if (LVAL_TYPE(lval) == LVAL_SYM) {
-    valk_lval_t *res = valk_lenv_get(env, lval);
+    valk_lval_t* res = valk_lenv_get(env, lval);
     return res;
   }
   if (LVAL_TYPE(lval) == LVAL_SEXPR) {
@@ -493,7 +509,7 @@ valk_lval_t *valk_lval_eval(valk_lenv_t *env, valk_lval_t *lval) {
   return lval;
 }
 
-valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr) {
+valk_lval_t* valk_lval_eval_sexpr(valk_lenv_t* env, valk_lval_t* sexpr) {
   LVAL_ASSERT_TYPE(sexpr, sexpr, LVAL_SEXPR);
   size_t n = sexpr->expr.count;
   if (n == 0) {
@@ -501,7 +517,7 @@ valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr) {
   }
 
   // Evaluate children into a fresh array to avoid mutating the input list
-  valk_lval_t **vals = valk_mem_alloc(sizeof(valk_lval_t *) * n);
+  valk_lval_t** vals = valk_mem_alloc(sizeof(valk_lval_t*) * n);
   for (size_t i = 0; i < n; ++i) {
     vals[i] = valk_lval_eval(env, sexpr->expr.cell[i]);
     if (LVAL_TYPE(vals[i]) == LVAL_ERR) {
@@ -519,12 +535,12 @@ valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr) {
   }
 
   // Construct a fresh args list without mutating the original
-  valk_lval_t *args = valk_lval_sexpr_empty();
+  valk_lval_t* args = valk_lval_sexpr_empty();
   for (size_t i = 1; i < n; ++i) {
     valk_lval_add(args, vals[i]);
   }
 
-  valk_lval_t *fun = vals[0];
+  valk_lval_t* fun = vals[0];
   if (valk_log_would_log(VALK_LOG_TRACE)) {
     VALK_TRACE("EVAL call with args:");
     valk_lval_println(args);
@@ -532,8 +548,8 @@ valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr) {
   return valk_lval_eval_call(env, fun, args);
 }
 
-valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
-                                 valk_lval_t *args) {
+valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
+                                 valk_lval_t* args) {
   LVAL_ASSERT_TYPE(args, func, LVAL_FUN);
   LVAL_ASSERT_TYPE(args, args, LVAL_SEXPR);
 
@@ -544,7 +560,7 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
   func = valk_lval_copy(func);
   size_t given = args->expr.count;
   size_t requested = func->fun.formals->expr.count;
-  valk_lval_t *res;
+  valk_lval_t* res;
 
   while (args->expr.count) {
     if (func->fun.formals->expr.count == 0) {
@@ -557,7 +573,7 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
           "Expected: %ld",
           func, given, requested);
     }
-    valk_lval_t *sym = valk_lval_pop(func->fun.formals, 0);
+    valk_lval_t* sym = valk_lval_pop(func->fun.formals, 0);
     if (strcmp(sym->str, "&") == 0) {
       // if we encountered this, the rest of arguments are varargs
       if (func->fun.formals->expr.count != 1) {
@@ -566,11 +582,11 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
             "is not followed by others [count: %d]",
             func->fun.formals->expr.count);
       }
-      valk_lval_t *nsym = valk_lval_pop(func->fun.formals, 0);
+      valk_lval_t* nsym = valk_lval_pop(func->fun.formals, 0);
       valk_lenv_put(func->fun.env, nsym, valk_builtin_list(nullptr, args));
       break;
     }
-    valk_lval_t *val = valk_lval_pop(args, 0);
+    valk_lval_t* val = valk_lval_pop(args, 0);
     valk_lenv_put(func->fun.env, sym, val);
   }
 
@@ -586,8 +602,8 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
 
     // discard the &
     valk_lval_pop(func->fun.formals, 0);
-    valk_lval_t *sym = valk_lval_pop(func->fun.formals, 0);
-    valk_lval_t *val = valk_lval_qexpr_empty();
+    valk_lval_t* sym = valk_lval_pop(func->fun.formals, 0);
+    valk_lval_t* val = valk_lval_qexpr_empty();
     valk_lenv_put(env, sym, val);
   }
 
@@ -604,25 +620,25 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
   return res;
 }
 
-valk_lval_t *valk_lval_pop(valk_lval_t *lval, size_t i) {
+valk_lval_t* valk_lval_pop(valk_lval_t* lval, size_t i) {
   // TODO(networking): should this delete the lval or no ?
-  LVAL_ASSERT((valk_lval_t *)0, i < lval->expr.count,
+  LVAL_ASSERT((valk_lval_t*)0, i < lval->expr.count,
               "Cant pop from list at invalid position: [%d] total length: [%d]",
               i, lval->expr.count);
-  LVAL_ASSERT((valk_lval_t *)0, lval->expr.count > 0, "Cant pop from empty");
+  LVAL_ASSERT((valk_lval_t*)0, lval->expr.count > 0, "Cant pop from empty");
 
-  valk_lval_t *cell = lval->expr.cell[i];
+  valk_lval_t* cell = lval->expr.cell[i];
   // shift dems down
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memmove(&lval->expr.cell[i], &lval->expr.cell[i + 1],
-          sizeof(valk_lval_t *) * (lval->expr.count - i - 1));
+          sizeof(valk_lval_t*) * (lval->expr.count - i - 1));
   lval->expr.count--;
   // Reallocate safely under arena: allocate new block and copy
   if (lval->expr.count > 0) {
-    valk_lval_t **new_cells =
-        valk_mem_alloc(sizeof(valk_lval_t *) * lval->expr.count);
+    valk_lval_t** new_cells =
+        valk_mem_alloc(sizeof(valk_lval_t*) * lval->expr.count);
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    memcpy(new_cells, lval->expr.cell, sizeof(valk_lval_t *) * lval->expr.count);
+    memcpy(new_cells, lval->expr.cell, sizeof(valk_lval_t*) * lval->expr.count);
     lval->expr.cell = new_cells;
   } else {
     lval->expr.cell = nullptr;
@@ -630,7 +646,7 @@ valk_lval_t *valk_lval_pop(valk_lval_t *lval, size_t i) {
   return cell;
 }
 
-valk_lval_t *valk_lval_add(valk_lval_t *lval, valk_lval_t *cell) {
+valk_lval_t* valk_lval_add(valk_lval_t* lval, valk_lval_t* cell) {
   // TODO(main):  this will leak the cell, i need to expand this macro to free
   // more than 1 thing
   LVAL_ASSERT_TYPE(lval, lval, LVAL_SEXPR, LVAL_QEXPR);
@@ -639,11 +655,10 @@ valk_lval_t *valk_lval_add(valk_lval_t *lval, valk_lval_t *cell) {
 
   size_t old_count = lval->expr.count;
   size_t new_count = old_count + 1;
-  valk_lval_t **new_cells =
-      valk_mem_alloc(sizeof(valk_lval_t *) * new_count);
+  valk_lval_t** new_cells = valk_mem_alloc(sizeof(valk_lval_t*) * new_count);
   if (old_count) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    memcpy(new_cells, lval->expr.cell, sizeof(valk_lval_t *) * old_count);
+    memcpy(new_cells, lval->expr.cell, sizeof(valk_lval_t*) * old_count);
   }
   new_cells[new_count - 1] = cell;
   lval->expr.cell = new_cells;
@@ -651,14 +666,14 @@ valk_lval_t *valk_lval_add(valk_lval_t *lval, valk_lval_t *cell) {
   return lval;
 }
 
-valk_lval_t *valk_lval_join(valk_lval_t *a, valk_lval_t *b) {
+valk_lval_t* valk_lval_join(valk_lval_t* a, valk_lval_t* b) {
   while (b->expr.count) {
     a = valk_lval_add(a, valk_lval_pop(b, 0));
   }
   return a;
 }
 
-void valk_lval_print(valk_lval_t *val) {
+void valk_lval_print(valk_lval_t* val) {
   if (val == nullptr) {
     return;
   }
@@ -755,7 +770,7 @@ static char valk_lval_str_unescape(char x) {
   return '\0';
 }
 
-static const char *valk_lval_str_escape(char x) {
+static const char* valk_lval_str_escape(char x) {
   switch (x) {
     case '\a':
       return "\\a";
@@ -781,8 +796,8 @@ static const char *valk_lval_str_escape(char x) {
   return "";
 }
 
-static valk_lval_t *valk_lval_read_sym(int *i, const char *s) {
-  valk_lval_t *res;
+static valk_lval_t* valk_lval_read_sym(int* i, const char* s) {
+  valk_lval_t* res;
   char next;
   int end = *i;
   // find the end of the string
@@ -800,7 +815,7 @@ static valk_lval_t *valk_lval_read_sym(int *i, const char *s) {
   // the  length of the new string
   size_t len = end - (*i);
   if (len) {
-    char *sym = strndup(&s[*i], len);
+    char* sym = strndup(&s[*i], len);
     int isNum = strchr("-0123456789", sym[0]) != nullptr;
     for (size_t i = 1; i < len; ++i) {
       if (!strchr("0123456789", sym[i])) {
@@ -831,7 +846,7 @@ static valk_lval_t *valk_lval_read_sym(int *i, const char *s) {
 
   return valk_lval_str("");
 }
-static valk_lval_t *valk_lval_read_str(int *i, const char *s) {
+static valk_lval_t* valk_lval_read_str(int* i, const char* s) {
   // Scan the string for size
   char next;
   int count = 1;  // Pad for nil terminator
@@ -873,8 +888,8 @@ static valk_lval_t *valk_lval_read_str(int *i, const char *s) {
   return valk_lval_str(tmp);
 }
 
-valk_lval_t *valk_lval_read(int *i, const char *s) {
-  valk_lval_t *res;
+valk_lval_t* valk_lval_read(int* i, const char* s) {
+  valk_lval_t* res;
 
   // Skip white space and comments
   while (strchr(" ;\t\v\r\n", s[*i]) && s[*i] != '\0') {
@@ -920,9 +935,9 @@ valk_lval_t *valk_lval_read(int *i, const char *s) {
   return res;
 }
 
-valk_lval_t *valk_lval_read_expr(int *i, const char *s) {
+valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
   char end;
-  valk_lval_t *res;
+  valk_lval_t* res;
   if (s[(*i)++] == '{') {
     res = valk_lval_qexpr_empty();
     end = '}';
@@ -938,7 +953,7 @@ valk_lval_t *valk_lval_read_expr(int *i, const char *s) {
                  "looking for `%c`",
                  *i, end);
     }
-    valk_lval_t *x = valk_lval_read(i, s);
+    valk_lval_t* x = valk_lval_read(i, s);
     if (LVAL_TYPE(x) == LVAL_ERR) {
       return x;
     } else {
@@ -951,13 +966,13 @@ valk_lval_t *valk_lval_read_expr(int *i, const char *s) {
 }
 
 //// LEnv ////
-valk_lenv_t *valk_lenv_empty(void) {
-  valk_lenv_t *res = valk_mem_alloc(sizeof(valk_lenv_t));
+valk_lenv_t* valk_lenv_empty(void) {
+  valk_lenv_t* res = valk_mem_alloc(sizeof(valk_lenv_t));
   memset(res, 0, sizeof(valk_lenv_t));
   valk_lenv_init(res);
   return res;
 }
-void valk_lenv_init(valk_lenv_t *env) {
+void valk_lenv_init(valk_lenv_t* env) {
   env->parent = nullptr;
   env->count = 0;
   env->symbols = nullptr;
@@ -966,11 +981,11 @@ void valk_lenv_init(valk_lenv_t *env) {
   env->allocator = valk_thread_ctx.allocator;
 }
 
-valk_lenv_t *valk_lenv_copy(valk_lenv_t *env) {
+valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
   if (env == nullptr) {
     return nullptr;
   }
-  valk_lenv_t *res = valk_mem_alloc(sizeof(valk_lenv_t));
+  valk_lenv_t* res = valk_mem_alloc(sizeof(valk_lenv_t));
   // TODO(main): Man lotta copying, especially deep copying, in case things
   // change the problem with this ofcourse is that, globals cant be changed
   res->parent = env->parent;
@@ -989,8 +1004,8 @@ valk_lenv_t *valk_lenv_copy(valk_lenv_t *env) {
   return res;
 }
 
-valk_lval_t *valk_lenv_get(valk_lenv_t *env, valk_lval_t *key) {
-  LVAL_ASSERT_TYPE((valk_lval_t *)nullptr, key, LVAL_SYM);
+valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
+  LVAL_ASSERT_TYPE((valk_lval_t*)nullptr, key, LVAL_SYM);
 
   for (size_t i = 0; i < env->count; i++) {
     if (env->symbols == NULL || env->symbols[i] == NULL) {
@@ -1011,7 +1026,7 @@ valk_lval_t *valk_lenv_get(valk_lenv_t *env, valk_lval_t *key) {
   }
 }
 
-void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
+void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   // TODO: obviously this should probably not be void ???
   // especially since i cant assert this shit
   // LVAL_ASSERT_TYPE((valk_lval_t *)nullptr, key, LVAL_SYM);
@@ -1037,9 +1052,8 @@ void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
   // now
   VALK_WITH_ALLOC(env->allocator) {
     size_t new_count = env->count + 1;
-    char **new_symbols = valk_mem_alloc(sizeof(env->symbols[0]) * new_count);
-    valk_lval_t **new_vals =
-        valk_mem_alloc(sizeof(env->vals[0]) * new_count);
+    char** new_symbols = valk_mem_alloc(sizeof(env->symbols[0]) * new_count);
+    valk_lval_t** new_vals = valk_mem_alloc(sizeof(env->vals[0]) * new_count);
     if (env->count > 0) {
       // Copy old arrays into the new ones
       memcpy(new_symbols, env->symbols, sizeof(env->symbols[0]) * env->count);
@@ -1060,18 +1074,18 @@ void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
 }
 
 // Define the key in global scope
-void valk_lenv_def(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
+void valk_lenv_def(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   while (env->parent) {
     env = env->parent;
   }
   valk_lenv_put(env, key, val);
 }
 
-void valk_lenv_put_builtin(valk_lenv_t *env, char *key,
-                           valk_lval_builtin_t *_fun) {
+void valk_lenv_put_builtin(valk_lenv_t* env, char* key,
+                           valk_lval_builtin_t* _fun) {
   VALK_INFO("install builtin: %s (count=%zu)", key, env->count);
   VALK_WITH_ALLOC(env->allocator) {
-    valk_lval_t *lfun = valk_mem_alloc(sizeof(valk_lval_t));
+    valk_lval_t* lfun = valk_mem_alloc(sizeof(valk_lval_t));
     lfun->flags = LVAL_FUN;
     lfun->fun.builtin = _fun;
     lfun->fun.env = nullptr;
@@ -1079,7 +1093,7 @@ void valk_lenv_put_builtin(valk_lenv_t *env, char *key,
   }
 }
 
-static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
+static valk_lval_t* valk_builtin_math(valk_lval_t* lst, char* op) {
   for (size_t i = 0; i < lst->expr.count; ++i) {
     // TODO(main): Its not very straightforward to assert a type here
     if (LVAL_TYPE(lst->expr.cell[i]) != LVAL_NUM) {
@@ -1088,7 +1102,7 @@ static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
     }
   }
 
-  valk_lval_t *x = valk_lval_pop(lst, 0);
+  valk_lval_t* x = valk_lval_pop(lst, 0);
 
   if (strcmp(op, "-") == 0 && lst->expr.count == 0) {
     // Negate the number if there is only 1
@@ -1096,7 +1110,7 @@ static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
   }
 
   while (lst->expr.count > 0) {
-    valk_lval_t *y = valk_lval_pop(lst, 0);
+    valk_lval_t* y = valk_lval_pop(lst, 0);
 
     if (strcmp(op, "+") == 0) {
       x->num += y->num;
@@ -1119,16 +1133,16 @@ static valk_lval_t *builtin_math(valk_lval_t *lst, char *op) {
   return x;
 }
 
-static valk_lval_t *valk_builtin_cons(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_cons(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_QEXPR);
 
-  valk_lval_t *head = valk_lval_pop(a, 0);
-  valk_lval_t *tail = valk_lval_pop(a, 0);
+  valk_lval_t* head = valk_lval_pop(a, 0);
+  valk_lval_t* tail = valk_lval_pop(a, 0);
   // Prepend non-mutating under arena semantics
   size_t oldc = tail->expr.count;
-  valk_lval_t **new_cells =
+  valk_lval_t** new_cells =
       valk_mem_alloc(sizeof(tail->expr.cell[0]) * (oldc + 1));
   new_cells[0] = head;
   if (oldc) {
@@ -1140,32 +1154,39 @@ static valk_lval_t *valk_builtin_cons(valk_lenv_t *e, valk_lval_t *a) {
   return tail;
 }
 
-static valk_lval_t *valk_builtin_len(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_len(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  // TODO(main): should this only work with Q expr?
-  // sexpr gets evaluated immediately, so perhaps thats fine
-  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
-
-  valk_lval_t *res = valk_lval_num(a->expr.cell[0]->expr.count);
-  return res;
+  valk_lval_t* arg = a->expr.cell[0];
+  switch (LVAL_TYPE(arg)) {
+    case LVAL_QEXPR:
+      return valk_lval_num(arg->expr.count);
+    case LVAL_STR: {
+      size_t n = strlen(arg->str);
+      return valk_lval_num((long)n);
+    }
+    default:
+      LVAL_RAISE(a, "Actual: %s, Expected(One-Of): [Quote-expr, String]",
+                 valk_ltype_name(LVAL_TYPE(arg)));
+      return valk_lval_err("len invalid type");
+  }
 }
 
-static valk_lval_t *valk_builtin_head(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_head(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT(a, a->expr.count == 1,
               "Builtin `head` passed too many arguments");
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
   LVAL_ASSERT_COUNT_GT(a, a->expr.cell[0], 0);
   // Non-mutating: work on a copy of the list
-  valk_lval_t *list = valk_lval_copy(a->expr.cell[0]);
+  valk_lval_t* list = valk_lval_copy(a->expr.cell[0]);
   while (list->expr.count > 1) {
     valk_lval_pop(list, 1);
   }
   return list;
 }
 
-static valk_lval_t *valk_builtin_tail(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_tail(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT(a, a->expr.count == 1,
               "Builtin `tail` passed too many arguments");
@@ -1173,12 +1194,12 @@ static valk_lval_t *valk_builtin_tail(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT(a, a->expr.cell[0]->expr.count != 0,
               "Builtin `tail` cannot operate on `{}`");
   // Non-mutating: work on a copy of the list
-  valk_lval_t *v = valk_lval_copy(a->expr.cell[0]);
+  valk_lval_t* v = valk_lval_copy(a->expr.cell[0]);
   valk_lval_pop(v, 0);
   return v;
 }
 
-static valk_lval_t *valk_builtin_init(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_init(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   // TODO(main): can i make this more flexible, that way these functions can
   // work over argument list as well? or is that something thats too obvious
@@ -1186,15 +1207,15 @@ static valk_lval_t *valk_builtin_init(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
   LVAL_ASSERT_COUNT_GT(a, a->expr.cell[0], 0);
   valk_lval_pop(a->expr.cell[0], a->expr.cell[0]->expr.count - 1);
-  valk_lval_t *res = valk_lval_pop(a, 0);
+  valk_lval_t* res = valk_lval_pop(a, 0);
   return res;
 }
 
-static valk_lval_t *valk_builtin_join(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_join(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
 
-  valk_lval_t *x = valk_lval_pop(a, 0);
+  valk_lval_t* x = valk_lval_pop(a, 0);
   while (a->expr.count) {
     x = valk_lval_join(x, valk_lval_pop(a, 0));
   }
@@ -1202,50 +1223,49 @@ static valk_lval_t *valk_builtin_join(valk_lenv_t *e, valk_lval_t *a) {
   return x;
 }
 
-static valk_lval_t *valk_builtin_list(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   a->flags = ((a->flags & LVAL_FLAGS_MASK) | LVAL_QEXPR);
   return a;
 }
 
-static inline valk_lval_t *valk_resolve_symbol(valk_lenv_t *e,
-                                               valk_lval_t *v) {
+static inline valk_lval_t* valk_resolve_symbol(valk_lenv_t* e, valk_lval_t* v) {
   if (LVAL_TYPE(v) == LVAL_SYM) {
     return valk_lenv_get(e, v);
   }
   return v;
 }
 
-static valk_lval_t *valk_builtin_eval(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_eval(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
 
-  valk_lval_t *v = valk_lval_pop(a, 0);
+  valk_lval_t* v = valk_lval_pop(a, 0);
 
   v->flags = ((v->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
   return valk_lval_eval(e, v);
 }
-static valk_lval_t *valk_builtin_plus(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_plus(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  return builtin_math(a, "+");
+  return valk_builtin_math(a, "+");
 }
-static valk_lval_t *valk_builtin_minus(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_minus(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  return builtin_math(a, "-");
+  return valk_builtin_math(a, "-");
 }
-static valk_lval_t *valk_builtin_divide(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_divide(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  return builtin_math(a, "/");
+  return valk_builtin_math(a, "/");
 }
-static valk_lval_t *valk_builtin_multiply(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_multiply(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  return builtin_math(a, "*");
+  return valk_builtin_math(a, "*");
 }
 
-static valk_lval_t *valk_builtin_def(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_GT(a, a, 1);
 
-  valk_lval_t *syms = a->expr.cell[0];
+  valk_lval_t* syms = a->expr.cell[0];
   LVAL_ASSERT_TYPE(a, syms, LVAL_QEXPR);
 
   for (size_t i = 1; i < syms->expr.count; i++) {
@@ -1258,7 +1278,7 @@ static valk_lval_t *valk_builtin_def(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_COUNT_EQ(a, syms, (a->expr.count - 1));
 
   for (size_t i = 0; i < syms->expr.count; i++) {
-    valk_lval_t *val = valk_resolve_symbol(e, a->expr.cell[i + 1]);
+    valk_lval_t* val = valk_resolve_symbol(e, a->expr.cell[i + 1]);
     if (LVAL_TYPE(val) == LVAL_ERR) return val;
     valk_lenv_def(e, syms->expr.cell[i], val);
   }
@@ -1266,12 +1286,12 @@ static valk_lval_t *valk_builtin_def(valk_lenv_t *e, valk_lval_t *a) {
   return valk_lval_sexpr_empty();
 }
 
-static valk_lval_t *valk_builtin_put(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_put(valk_lenv_t* e, valk_lval_t* a) {
   // TODO(main): should dedupe these functions perhaps? i dont care right now
   // tho
   LVAL_ASSERT_COUNT_GT(a, a, 1);
 
-  valk_lval_t *syms = a->expr.cell[0];
+  valk_lval_t* syms = a->expr.cell[0];
   LVAL_ASSERT_TYPE(a, syms, LVAL_QEXPR);
 
   for (size_t i = 1; i < syms->expr.count; i++) {
@@ -1284,7 +1304,7 @@ static valk_lval_t *valk_builtin_put(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_COUNT_EQ(a, syms, (a->expr.count - 1));
 
   for (size_t i = 0; i < syms->expr.count; i++) {
-    valk_lval_t *val = valk_resolve_symbol(e, a->expr.cell[i + 1]);
+    valk_lval_t* val = valk_resolve_symbol(e, a->expr.cell[i + 1]);
     if (LVAL_TYPE(val) == LVAL_ERR) return val;
     valk_lenv_put(e, syms->expr.cell[i], val);
   }
@@ -1292,12 +1312,12 @@ static valk_lval_t *valk_builtin_put(valk_lenv_t *e, valk_lval_t *a) {
   return valk_lval_sexpr_empty();
 }
 
-static valk_lval_t *valk_builtin_lambda(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
 
-  valk_lval_t *formals = a->expr.cell[0];
-  valk_lval_t *body = a->expr.cell[1];
+  valk_lval_t* formals = a->expr.cell[0];
+  valk_lval_t* body = a->expr.cell[1];
 
   LVAL_ASSERT_TYPE(a, formals, LVAL_QEXPR);
   LVAL_ASSERT_TYPE(a, body, LVAL_QEXPR);
@@ -1314,12 +1334,12 @@ static valk_lval_t *valk_builtin_lambda(valk_lenv_t *e, valk_lval_t *a) {
   return valk_lval_lambda(formals, body);
 }
 
-static valk_lval_t *valk_builtin_penv(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
 
-  valk_lval_t *res = valk_lval_qexpr_empty();
+  valk_lval_t* res = valk_lval_qexpr_empty();
   for (size_t i = 0; i < e->count; i++) {
-    valk_lval_t *qexpr = valk_lval_qexpr_empty();
+    valk_lval_t* qexpr = valk_lval_qexpr_empty();
     // TODO(main): So each of these can fail, in that case we want to free the
     // intermediates, im too lazy to do that tho, so memory leaks n such.
     // really i can also check the pre-conditions here to make sure we dont
@@ -1331,14 +1351,14 @@ static valk_lval_t *valk_builtin_penv(valk_lenv_t *e, valk_lval_t *a) {
   return res;
 }
 
-static valk_lval_t *valk_builtin_ord(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_ord(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 3);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_SYM);
   LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_NUM);
   LVAL_ASSERT_TYPE(a, a->expr.cell[2], LVAL_NUM);
 
-  const char *op = a->expr.cell[0]->str;
+  const char* op = a->expr.cell[0]->str;
 
   int r = 0;
   if (strcmp(op, ">") == 0) {
@@ -1356,11 +1376,11 @@ static valk_lval_t *valk_builtin_ord(valk_lenv_t *e, valk_lval_t *a) {
 
   return valk_lval_num(r);
 }
-static valk_lval_t *valk_builtin_cmp(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_cmp(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 3);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_SYM);
-  const char *op = a->expr.cell[0]->str;
+  const char* op = a->expr.cell[0]->str;
   int r = 0;
   if (strcmp(op, "==") == 0) {
     r = valk_lval_eq(a->expr.cell[1], a->expr.cell[2]);
@@ -1371,57 +1391,76 @@ static valk_lval_t *valk_builtin_cmp(valk_lenv_t *e, valk_lval_t *a) {
   return valk_lval_num(r);
 }
 
-static valk_lval_t *valk_builtin_eq(valk_lenv_t *e, valk_lval_t *a) {
-  valk_lval_t *tmp = valk_lval_sexpr_empty();
+static valk_lval_t* valk_builtin_eq(valk_lenv_t* e, valk_lval_t* a) {
+  valk_lval_t* tmp = valk_lval_sexpr_empty();
   valk_lval_add(tmp, valk_lval_sym("=="));
   return valk_builtin_cmp(e, valk_lval_join(tmp, a));
 }
-static valk_lval_t *valk_builtin_ne(valk_lenv_t *e, valk_lval_t *a) {
-  valk_lval_t *tmp = valk_lval_sexpr_empty();
+static valk_lval_t* valk_builtin_ne(valk_lenv_t* e, valk_lval_t* a) {
+  valk_lval_t* tmp = valk_lval_sexpr_empty();
   valk_lval_add(tmp, valk_lval_sym("!="));
   return valk_builtin_cmp(e, valk_lval_join(tmp, a));
 }
-static valk_lval_t *valk_builtin_gt(valk_lenv_t *e, valk_lval_t *a) {
-  valk_lval_t *tmp = valk_lval_sexpr_empty();
+static valk_lval_t* valk_builtin_gt(valk_lenv_t* e, valk_lval_t* a) {
+  valk_lval_t* tmp = valk_lval_sexpr_empty();
   valk_lval_add(tmp, valk_lval_sym(">"));
   return valk_builtin_ord(e, valk_lval_join(tmp, a));
 }
-static valk_lval_t *valk_builtin_lt(valk_lenv_t *e, valk_lval_t *a) {
-  valk_lval_t *tmp = valk_lval_sexpr_empty();
+static valk_lval_t* valk_builtin_lt(valk_lenv_t* e, valk_lval_t* a) {
+  valk_lval_t* tmp = valk_lval_sexpr_empty();
   valk_lval_add(tmp, valk_lval_sym("<"));
   return valk_builtin_ord(e, valk_lval_join(tmp, a));
 }
-static valk_lval_t *valk_builtin_ge(valk_lenv_t *e, valk_lval_t *a) {
-  valk_lval_t *tmp = valk_lval_sexpr_empty();
+static valk_lval_t* valk_builtin_ge(valk_lenv_t* e, valk_lval_t* a) {
+  valk_lval_t* tmp = valk_lval_sexpr_empty();
   valk_lval_add(tmp, valk_lval_sym(">="));
   return valk_builtin_ord(e, valk_lval_join(tmp, a));
 }
-static valk_lval_t *valk_builtin_le(valk_lenv_t *e, valk_lval_t *a) {
-  valk_lval_t *tmp = valk_lval_sexpr_empty();
+static valk_lval_t* valk_builtin_le(valk_lenv_t* e, valk_lval_t* a) {
+  valk_lval_t* tmp = valk_lval_sexpr_empty();
   valk_lval_add(tmp, valk_lval_sym("<="));
   return valk_builtin_ord(e, valk_lval_join(tmp, a));
 }
 
-static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_STR);
 
-  valk_lval_t *expr = valk_parse_file(a->expr.cell[0]->str);
+  valk_lval_t* expr = valk_parse_file(a->expr.cell[0]->str);
   if (LVAL_TYPE(expr) == LVAL_ERR) {
     return expr;
   }
+  // Temporarily set mode to a non-repl value during load evaluation so
+  // shutdown returns an exit code (ignored by REPL) instead of stopping
+  // subsystems.
+  valk_lval_t* prev_mode = valk_lenv_get(e, valk_lval_sym("VALK_MODE"));
+  valk_lenv_put(e, valk_lval_sym("VALK_MODE"), valk_lval_str("load"));
+  valk_lval_t* last = nullptr;
   while (expr->expr.count) {
-    valk_lval_t *x = valk_lval_eval(e, valk_lval_pop(expr, 0));
+    valk_lval_t* x = valk_lval_eval(e, valk_lval_pop(expr, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
+    } else {
+      last = x;
     }
+  }
+  // Restore previous mode
+  if (LVAL_TYPE(prev_mode) == LVAL_STR) {
+    valk_lenv_put(e, valk_lval_sym("VALK_MODE"), prev_mode);
+  } else {
+    valk_lenv_put(e, valk_lval_sym("VALK_MODE"), valk_lval_str(""));
+  }
+
+  // Persist the last successful value for REPL/script capture
+  if (last) {
+    valk_lenv_put(e, valk_lval_sym("VALK_LAST_VALUE"), valk_intern(e, last));
   }
 
   return valk_lval_sexpr_empty();
 }
 
-valk_lval_t *valk_parse_file(const char *filename) {
-  FILE *f = fopen(filename, "rb");
+valk_lval_t* valk_parse_file(const char* filename) {
+  FILE* f = fopen(filename, "rb");
   if (f == nullptr) {
     LVAL_RAISE(valk_lval_sexpr_empty(), "Could not open file (%s)", filename);
   }
@@ -1436,13 +1475,13 @@ valk_lval_t *valk_parse_file(const char *filename) {
                filename);
   }
 
-  char *input = calloc(length + 1, sizeof(char));
+  char* input = calloc(length + 1, sizeof(char));
   fread(input, 1, length, f);
   fclose(f);
 
   int pos = 0;
-  valk_lval_t *res = valk_lval_sexpr_empty();
-  valk_lval_t *tmp;
+  valk_lval_t* res = valk_lval_sexpr_empty();
+  valk_lval_t* tmp;
   do {
     tmp = valk_lval_read(&pos, input);
     valk_lval_add(res, tmp);
@@ -1453,14 +1492,14 @@ valk_lval_t *valk_parse_file(const char *filename) {
   return res;
 }
 
-static valk_lval_t *valk_builtin_if(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 3);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_NUM);
   LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_QEXPR);
   LVAL_ASSERT_TYPE(a, a->expr.cell[2], LVAL_QEXPR);
 
   // Make em both executable
-  valk_lval_t *x;
+  valk_lval_t* x;
   a->expr.cell[1]->flags = ((a->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
   a->expr.cell[2]->flags = ((a->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
 
@@ -1474,7 +1513,7 @@ static valk_lval_t *valk_builtin_if(valk_lenv_t *e, valk_lval_t *a) {
   return x;
 }
 
-static valk_lval_t *valk_builtin_print(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_print(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   for (size_t i = 0; i < a->expr.count; i++) {
     valk_lval_print(a->expr.cell[i]);
@@ -1484,19 +1523,23 @@ static valk_lval_t *valk_builtin_print(valk_lenv_t *e, valk_lval_t *a) {
   return valk_lval_sexpr_empty();
 }
 
-static valk_lval_t *valk_builtin_error(valk_lenv_t *e, valk_lval_t *a) {
+static valk_lval_t* valk_builtin_error(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_STR);
-  valk_lval_t *err = valk_lval_err(a->expr.cell[0]->str);
+  valk_lval_t* err = valk_lval_err(a->expr.cell[0]->str);
   return err;
 }
 
-static void __valk_arc_box_release(void *arg) {
-  valk_arc_release((valk_arc_box *)arg - 1);
+static void __valk_arc_box_release(void* arg) {
+  valk_arc_release((valk_arc_box*)arg - 1);
 }
 
-static valk_lval_t *valk_builtin_await(valk_lenv_t *e, valk_lval_t *a) {
+static void __valk_future_release(void* arg) {
+  valk_arc_release((valk_future*)arg);
+}
+
+static valk_lval_t* valk_builtin_await(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_REF);
@@ -1504,10 +1547,11 @@ static valk_lval_t *valk_builtin_await(valk_lenv_t *e, valk_lval_t *a) {
               "Await only works with futures but received: %s",
               a->expr.cell[0]->ref.type);
 
-  valk_future *fut = a->expr.cell[0]->ref.ptr;
-  valk_arc_box *box = valk_future_await_timeout(fut, 100000);
+  valk_future* fut = a->expr.cell[0]->ref.ptr;
+  // Await with a reasonable timeout to prevent long hangs in tests
+  valk_arc_box* box = valk_future_await_timeout(fut, 15000);
 
-  valk_lval_t *res;
+  valk_lval_t* res;
   if (box->type == VALK_SUC) {
     res = valk_lval_ref("success", box->item, __valk_arc_box_release);
     valk_arc_retain(box);
@@ -1518,7 +1562,233 @@ static valk_lval_t *valk_builtin_await(valk_lenv_t *e, valk_lval_t *a) {
   return res;
 }
 
-void valk_lenv_builtins(valk_lenv_t *env) {
+// http2/connect: (http2/connect aio ip port hostname?) -> future
+static valk_lval_t* valk_builtin_http2_connect(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT(a, a->expr.count == 3 || a->expr.count == 4,
+              "http2/connect expects 3 or 4 args: (aio ip port [hostname])");
+  valk_lval_t* aio_ref = a->expr.cell[0];
+  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "First arg must be an aio_system ref, got %s", aio_ref->ref.type);
+
+  valk_lval_t* ip = a->expr.cell[1];
+  LVAL_ASSERT_TYPE(a, ip, LVAL_STR);
+  valk_lval_t* port = a->expr.cell[2];
+  LVAL_ASSERT_TYPE(a, port, LVAL_NUM);
+
+  const char* hostname = NULL;
+  if (a->expr.count == 4) {
+    LVAL_ASSERT_TYPE(a, a->expr.cell[3], LVAL_STR);
+    hostname = a->expr.cell[3]->str;
+  }
+
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  valk_future* fut = valk_aio_http2_connect_host(sys, ip->str, (int)port->num,
+                                                 hostname ? hostname : ip->str);
+  return valk_lval_ref("future", fut, __valk_future_release);
+}
+
+static void __valk_http2_request_release(void* arg) {
+  valk_http2_request_t* req = (valk_http2_request_t*)arg;
+  // The request and all of its allocations live inside this arena buffer.
+  free((void*)req->allocator);
+}
+
+// http2/request: (http2/request method scheme authority path) -> http2_request
+static valk_lval_t* valk_builtin_http2_request(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 4);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_STR);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_STR);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[2], LVAL_STR);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[3], LVAL_STR);
+
+  // Allocate a dedicated arena so the request can be freed in one go.
+  // HTTP client currently reserves up to ~8MB for response body buffers.
+  // Use a generous arena (8 MiB + 64 KiB) to avoid OOM in tests.
+  size_t arena_bytes =
+      sizeof(valk_mem_arena_t) + (8 * 1024 * 1024) + (64 * 1024);
+  valk_mem_arena_t* arena = malloc(arena_bytes);
+  valk_mem_arena_init(arena, arena_bytes - sizeof(*arena));
+
+  valk_http2_request_t* req =
+      valk_mem_arena_alloc(arena, sizeof(valk_http2_request_t));
+  memset(req, 0, sizeof(*req));
+  req->allocator = (valk_mem_allocator_t*)arena;
+
+  // Copy strings into request arena scope
+  VALK_WITH_ALLOC(req->allocator) {
+    size_t len;
+    len = strlen(a->expr.cell[0]->str);
+    req->method = valk_mem_alloc(len + 1);
+    memcpy(req->method, a->expr.cell[0]->str, len + 1);
+
+    len = strlen(a->expr.cell[1]->str);
+    req->scheme = valk_mem_alloc(len + 1);
+    memcpy(req->scheme, a->expr.cell[1]->str, len + 1);
+
+    len = strlen(a->expr.cell[2]->str);
+    req->authority = valk_mem_alloc(len + 1);
+    memcpy(req->authority, a->expr.cell[2]->str, len + 1);
+
+    len = strlen(a->expr.cell[3]->str);
+    req->path = valk_mem_alloc(len + 1);
+    memcpy(req->path, a->expr.cell[3]->str, len + 1);
+
+    req->body = (uint8_t*)"";
+    req->bodyLen = 0;
+    req->bodyCapacity = 0;
+    da_init(&req->headers);
+  }
+
+  return valk_lval_ref("http2_request", req, __valk_http2_request_release);
+}
+
+// http2/request-add-header: (http2/request-add-header req name value) -> unit
+static valk_lval_t* valk_builtin_http2_request_add_header(valk_lenv_t* e,
+                                                          valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_REF);
+  LVAL_ASSERT(a, strcmp(a->expr.cell[0]->ref.type, "http2_request") == 0,
+              "First arg must be http2_request ref, got %s",
+              a->expr.cell[0]->ref.type);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_STR);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[2], LVAL_STR);
+
+  valk_http2_request_t* req = a->expr.cell[0]->ref.ptr;
+
+  VALK_WITH_ALLOC(req->allocator) {
+    struct valk_http2_header_t hdr;
+    size_t nlen = strlen(a->expr.cell[1]->str);
+    size_t vlen = strlen(a->expr.cell[2]->str);
+    uint8_t* n = valk_mem_alloc(nlen + 1);
+    uint8_t* v = valk_mem_alloc(vlen + 1);
+    memcpy(n, a->expr.cell[1]->str, nlen + 1);
+    memcpy(v, a->expr.cell[2]->str, vlen + 1);
+    hdr.name = n;
+    hdr.value = v;
+    hdr.nameLen = nlen;
+    hdr.valueLen = vlen;
+    da_add(&req->headers, hdr);
+  }
+
+  return valk_lval_sexpr_empty();
+}
+
+// http2/send: (http2/send req client) -> future
+static valk_lval_t* valk_builtin_http2_send(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_REF);
+  LVAL_ASSERT(a, strcmp(a->expr.cell[0]->ref.type, "http2_request") == 0,
+              "First arg must be http2_request ref");
+  LVAL_ASSERT_TYPE(a, a->expr.cell[1], LVAL_REF);
+  // We expect a client inside a success ref from (await ...)
+  LVAL_ASSERT(a, strcmp(a->expr.cell[1]->ref.type, "success") == 0,
+              "Second arg must be a success ref holding a client");
+
+  valk_http2_request_t* req = a->expr.cell[0]->ref.ptr;
+  valk_aio_http2_client* client = a->expr.cell[1]->ref.ptr;
+  valk_future* fut = valk_aio_http2_request_send(req, client);
+  return valk_lval_ref("future", fut, __valk_future_release);
+}
+
+// http2/response-body: (http2/response-body res) -> string
+static valk_lval_t* valk_builtin_http2_response_body(valk_lenv_t* e,
+                                                     valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_REF);
+  LVAL_ASSERT(a, strcmp(a->expr.cell[0]->ref.type, "success") == 0,
+              "Argument must be a success ref holding a response");
+  valk_http2_response_t* res = a->expr.cell[0]->ref.ptr;
+  if (!res || !res->body) {
+    return valk_lval_str("");
+  }
+  return valk_lval_str_n((const char*)res->body, res->bodyLen);
+}
+
+// http2/response-status: (http2/response-status res) -> string
+static valk_lval_t* valk_builtin_http2_response_status(valk_lenv_t* e,
+                                                       valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_REF);
+  LVAL_ASSERT(a, strcmp(a->expr.cell[0]->ref.type, "success") == 0,
+              "Argument must be a success ref holding a response");
+  valk_http2_response_t* res = a->expr.cell[0]->ref.ptr;
+  if (!res || !res->status) return valk_lval_str("");
+  return valk_lval_str((const char*)res->status);
+}
+
+// http2/response-headers: (http2/response-headers res) -> qexpr of [name value]
+static valk_lval_t* valk_builtin_http2_response_headers(valk_lenv_t* e,
+                                                        valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_REF);
+  LVAL_ASSERT(a, strcmp(a->expr.cell[0]->ref.type, "success") == 0,
+              "Argument must be a success ref holding a response");
+  valk_http2_response_t* res = a->expr.cell[0]->ref.ptr;
+  valk_lval_t* lst = valk_lval_qexpr_empty();
+  if (!res) return lst;
+  for (size_t i = 0; i < res->headers.count; ++i) {
+    struct valk_http2_header_t* h = &res->headers.items[i];
+    valk_lval_t* pair = valk_lval_qexpr_empty();
+    valk_lval_add(pair, valk_lval_str((const char*)h->name));
+    valk_lval_add(pair, valk_lval_str((const char*)h->value));
+    valk_lval_add(lst, pair);
+  }
+  return lst;
+}
+
+// exit: (exit code) -> never returns; terminates process with status code
+static valk_lval_t* valk_builtin_exit(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_NUM);
+  int code = (int)a->expr.cell[0]->num;
+  fflush(stdout);
+  fflush(stderr);
+  exit(code);
+}
+
+// shutdown: ([code]) -> never returns; gracefully stops subsystems then exits
+static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_LE(a, a, 1);
+  int code = 0;
+  if (a->expr.count == 1) {
+    LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_NUM);
+    code = (int)a->expr.cell[0]->num;
+  }
+  // If running inside interactive REPL or test mode, ignore.
+  // Also ignore if called while evaluating via `load` (module semantics).
+  valk_lval_t* mode = valk_lenv_get(e, valk_lval_sym("VALK_MODE"));
+  int has_mode = (LVAL_TYPE(mode) == LVAL_STR);
+
+  // NOOP when in repl or test mode, just return the code
+  if (has_mode && (strcmp(mode->str, "repl") == 0 || strcmp(mode->str, "test") == 0)) {
+    return valk_lval_num(code);
+  } 
+
+  // Gracefully stop AIO if present in env under symbol 'aio'
+  valk_lval_t* val = valk_lenv_get(e, valk_lval_sym("aio"));
+  if (LVAL_TYPE(val) != LVAL_ERR && LVAL_TYPE(val) == LVAL_REF &&
+      strcmp(val->ref.type, "aio_system") == 0 && val->ref.ptr) {
+    valk_aio_stop((valk_aio_system_t*)val->ref.ptr);
+  }
+
+  fflush(stdout);
+  fflush(stderr);
+  exit(code);
+}
+
+// module: (module value) -> value; captures as VALK_LAST_MODULE
+// (no module/program builtins; use VALK_LAST_VALUE set by `load`)
+
+void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
   valk_lenv_put_builtin(env, "print", valk_builtin_print);
@@ -1555,7 +1825,24 @@ void valk_lenv_builtins(valk_lenv_t *env) {
 
   // Async
   valk_lenv_put_builtin(env, "await", valk_builtin_await);
-  valk_lenv_put_builtin(env, "http2-client", valk_builtin_await);
+  // HTTP/2 client + request API
+  valk_lenv_put_builtin(env, "http2/connect", valk_builtin_http2_connect);
+  valk_lenv_put_builtin(env, "http2/request", valk_builtin_http2_request);
+  valk_lenv_put_builtin(env, "http2/request-add-header",
+                        valk_builtin_http2_request_add_header);
+  valk_lenv_put_builtin(env, "http2/send", valk_builtin_http2_send);
+  valk_lenv_put_builtin(env, "http2/response-body",
+                        valk_builtin_http2_response_body);
+  // System utilities
+  valk_lenv_put_builtin(env, "exit", valk_builtin_exit);
+  valk_lenv_put_builtin(env, "shutdown", valk_builtin_shutdown);
+  // Terse alias: shutdown with default code 0
+  valk_lenv_put_builtin(env, "shutdown!", valk_builtin_shutdown);
+  valk_lenv_put_builtin(env, "http2/response-status",
+                        valk_builtin_http2_response_status);
+  valk_lenv_put_builtin(env, "http2/response-headers",
+                        valk_builtin_http2_response_headers);
+  // Script classification helpers are implicit via CLI flags; no new builtins
 
   // HTTP
 }

@@ -82,6 +82,7 @@ valk_lval_t *valk_lval_num(long x);
 valk_lval_t *valk_lval_err(const char *fmt, ...);
 valk_lval_t *valk_lval_sym(const char *sym);
 valk_lval_t *valk_lval_str(const char *str);
+valk_lval_t *valk_lval_str_n(const char *bytes, size_t n);
 
 // valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
 valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body);

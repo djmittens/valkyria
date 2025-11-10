@@ -73,6 +73,15 @@ add_library(valkyria
   src/log.c
 )
 
+# On glibc-based Linux, expose required pthread and POSIX interfaces
+# for libuv headers (e.g. pthread_rwlock_t) without enabling non-portable APIs.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_compile_definitions(valkyria PRIVATE _XOPEN_SOURCE=700)
+  # Some distros still gate rwlocks behind GNU feature selection; enable it
+  # for this target only. This is a no-op on non-glibc platforms.
+  target_compile_definitions(valkyria PRIVATE _GNU_SOURCE)
+endif()
+
 target_include_directories(valkyria SYSTEM PRIVATE
   ${LIBUV_INCLUDE_DIRS}
   ${PROJECT_SOURCE_DIR}/vendor
@@ -109,6 +118,10 @@ include_directories(test_std src/)
 add_executable(test_networking test/test_networking.c test/testing.c)
 target_link_libraries(test_networking PRIVATE "-lc" valkyria)
 include_directories(test_networking src/)
+
+add_executable(test_networking_lisp test/test_networking_lisp.c test/testing.c)
+target_link_libraries(test_networking_lisp PRIVATE "-lc" valkyria)
+include_directories(test_networking_lisp src/)
 
 add_executable(test_concurrency test/test_concurrency.c test/testing.c)
 target_link_libraries(test_concurrency PRIVATE "-lc" valkyria)

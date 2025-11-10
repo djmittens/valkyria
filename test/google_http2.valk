@@ -1,0 +1,28 @@
+; Minimal HTTP/2 GET to Google using the HTTP/2 client builtins
+
+(do
+  ; Connect to google.com with SNI, letting the client resolve DNS
+  (= {client} (await (http2/connect aio "google.com" 443)))
+  (= {req} (http2/request "GET" "https" "google.com" "/"))
+  (http2/request-add-header req "user-agent" "valk/0.1")
+  (http2/request-add-header req "accept-encoding" "identity")
+  (= {f} (http2/send req client))
+  (= {res} (await f))
+  (= {status} (http2/response-status res))
+  (= {headers} (http2/response-headers res))
+  (= {body} (http2/response-body res))
+  (print "status" status)
+  (print "headers" headers)
+  (print "body-len" (len body))
+
+  ; Validate response - check for non-empty status and body
+  (if (== (len status) 0)
+    {error "Expected non-empty status"}
+    {})
+  (if (== (len body) 0)
+    {error "Expected non-empty response body"}
+    {})
+
+  (print "SUCCESS: Received valid HTTP/2 response")
+  (shutdown 0)
+)

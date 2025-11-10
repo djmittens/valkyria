@@ -263,7 +263,8 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
     test->func(suite, &test->result);
     return
 #endif
-    result |= (test->result.type != VALK_TEST_PASS);
+    result |= !(test->result.type == VALK_TEST_PASS ||
+                test->result.type == VALK_TEST_SKIP);
   }
 
   // for (size_t i = 0; i < suite->results.count; i++) {
@@ -331,6 +332,10 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
       }
       case VALK_TEST_PASS:
         printf("✅ %s%.*s  PASS : in %" PRIu64 "(%s)\n", test->name, len,
+               DOT_FILL, (result->stopTime - result->startTime), precision);
+        break;
+      case VALK_TEST_SKIP:
+        printf("⏭️  %s%.*s  SKIP : in %" PRIu64 "(%s)\n", test->name, len,
                DOT_FILL, (result->stopTime - result->startTime), precision);
         break;
       case VALK_TEST_FAIL:

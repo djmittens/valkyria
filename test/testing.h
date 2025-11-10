@@ -30,6 +30,21 @@
     }                                                            \
   } while (0)
 
+// Mark test as skipped and optionally log a reason to stderr
+// NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+#define VALK_SKIP(fmt, ...)                                                    \
+  do {                                                                         \
+    if (_result->type == VALK_TEST_UNDEFINED) {                                \
+      if ((fmt) && *(fmt)) {                                                   \
+        fprintf(stderr, "SKIP: %s:%d || " fmt "\n", __FILE__, __LINE__,      \
+                ##__VA_ARGS__);                                                \
+      }                                                                        \
+      _result->type = VALK_TEST_SKIP;                                          \
+      _result->stopTime = valk_get_time(_result->timePrecision);               \
+    }                                                                          \
+  } while (0)
+// NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+
 // NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 #define VALK_FAIL(fmt, ...)                                                   \
   do {                                                                        \
@@ -76,6 +91,7 @@ typedef enum {
   VALK_TEST_PASS,
   VALK_TEST_FAIL,
   VALK_TEST_CRSH,
+  VALK_TEST_SKIP,
 } valk_test_result_type;
 
 typedef enum {

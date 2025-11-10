@@ -1,0 +1,35 @@
+; Test HTTP/2 RST_STREAM error handling
+; Send a request with invalid headers to trigger server rejection
+
+(do
+  (print "Testing RST_STREAM error handling...")
+
+  ; Connect to google.com (should work)
+  (= {client} (await (http2/connect aio "google.com" 443)))
+  (print "Connected to server")
+
+  ; Create a request with headers likely to be rejected
+  ; Some servers reject requests without proper user-agent or with suspicious headers
+  (= {req} (http2/request "GET" "https" "google.com" "/"))
+
+  ; Add some potentially problematic headers
+  ; Note: This might not always trigger RST_STREAM, depends on server behavior
+  (http2/request-add-header req "user-agent" "")
+  (http2/request-add-header req "host" "invalid.example.com")
+
+  (print "Sending request with suspicious headers...")
+  (= {f} (http2/send req client))
+  (= {res} (await f))
+
+  ; If we get here, the server accepted the request (or sent an error response)
+  (= {status} (http2/response-status res))
+  (print "Response status:" status)
+
+  ; Check if we got an error status (4xx or 5xx would indicate rejection)
+  (if (== (len status) 0)
+    {error "Expected response or error but got empty status"}
+    {})
+
+  (print "SUCCESS: Request completed (accepted or rejected)")
+  (shutdown 0)
+)

@@ -6,35 +6,24 @@
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
 
+// Use libc allocator for all OpenSSL allocations to avoid cross-thread
+// allocator mismatches and reallocation of arena/slab pointers.
 void *__CRYPTO_malloc_fn(size_t num, const char *file, int line) {
   UNUSED(file);
   UNUSED(line);
-  if(valk_thread_ctx.allocator == nullptr) {
-    // This is a hack as some openssl (cough macos cough) use internal threads
-    valk_mem_init_malloc();
-  }
-  return valk_mem_alloc(num);
+  return malloc(num);
 }
 
 void *__CRYPTO_realloc_fn(void *addr, size_t num, const char *file, int line) {
   UNUSED(file);
   UNUSED(line);
-  if(valk_thread_ctx.allocator == nullptr) {
-    // This is a hack as some openssl (cough macos cough) use internal threads
-    valk_mem_init_malloc();
-  }
-  // TODO(networking): implement realloc ??? for arenas its even dumber....
-  return valk_mem_realloc(addr, num);
+  return realloc(addr, num);
 }
 
 void __CRYPTO_free_fn(void *addr, const char *file, int line) {
   UNUSED(file);
   UNUSED(line);
-  if(valk_thread_ctx.allocator == nullptr) {
-    // This is a hack as some openssl (cough macos cough) use internal threads
-    valk_mem_init_malloc();
-  }
-  valk_mem_free(addr);
+  free(addr);
 }
 
 void valk_aio_ssl_start() {

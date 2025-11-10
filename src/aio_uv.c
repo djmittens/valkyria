@@ -1,9 +1,13 @@
 #include "collections.h"
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
 #define _POSIX_C_SOURCE \
   200809L  // The fuck is this ? turns out sigaction and shit has to be enabled
            // separately in strict mode
 
 #include <netinet/in.h>
+#include <netdb.h>
 #include <nghttp2/nghttp2.h>
 #include <openssl/bio.h>
 #include <openssl/conf.h>
@@ -13,11 +17,11 @@
 #include <openssl/ssl3.h>
 #include <openssl/tls1.h>
 #include <signal.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
-#include <uv/unix.h>
 
 #include "aio.h"
 #include "aio_ssl.h"
@@ -57,6 +61,7 @@ enum {
 // times 2 just for fun
 
 static __thread valk_slab_t *tcp_buffer_slab;
+static void __valk_http2_response_free(valk_arc_box *box);
 
 typedef struct __http2_req_res_t {
   size_t streamid;
@@ -107,14 +112,17 @@ void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
                       uv_buf_t *buf) {
   UNUSED(handle);
   // TODO(networking): replace it with memory arena for the request
-  buf->base = (char *)valk_slab_aquire(tcp_buffer_slab)->data;
-  buf->len = suggested_size;
+  void *base = (void *)valk_slab_aquire(tcp_buffer_slab)->data;
+  buf->base = (char *)base;  // start of payload region
+  // Clamp to the configured slab payload size
+  buf->len = HTTP_SLAB_ITEM_SIZE;
 }
 
 typedef struct valk_aio_task_new {
   void *arg;
   valk_promise promise;
   void (*callback)(valk_aio_system_t *, struct valk_aio_task_new *);
+  valk_mem_allocator_t *allocator; // allocator used for this task
 } valk_aio_task_new;
 
 typedef struct __valk_request_client_pair_t {
@@ -183,12 +191,22 @@ static void __event_loop(void *arg) {
   valk_aio_system_t *sys = arg;
   valk_mem_init_malloc();
   VALK_DEBUG("Initializing UV event loop thread");
+  // Slab for TCP buffers using the compile-time constant size
+  // HTTP_SLAB_ITEM_SIZE is chosen to be >= any struct we overlay for writes
   tcp_buffer_slab = valk_slab_new(HTTP_SLAB_ITEM_SIZE, HTTP_MAX_IO_REQUESTS);
   // tcp_request_arena_slab =
   //     valk_slab_new(HTTP_MAX_REQUEST_SIZE_BYTES,
   //     HTTP_MAX_CONCURRENT_REQUESTS);
 
+  // Run the loop until stop is requested
   uv_run(sys->eventloop, UV_RUN_DEFAULT);
+
+  // Drain pending close callbacks and timers cleanly. uv_stop only requests
+  // the loop to stop; we still need to spin the loop to let close callbacks
+  // run to completion.
+  while (uv_loop_alive(sys->eventloop)) {
+    uv_run(sys->eventloop, UV_RUN_NOWAIT);
+  }
 
   valk_slab_free(tcp_buffer_slab);
   // valk_slab_free(tcp_request_arena_slab);
@@ -334,10 +352,24 @@ static int __http2_client_on_header_cb(nghttp2_session *session,
       nghttp2_session_get_stream_user_data(session, frame->hd.stream_id);
 
   if (reqres) {
-    // no retain here we should be responding to the original guy
-    /* For demonstration, just print incoming headers. */
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    VALK_TRACE("HDR: %.*s: %.*s", (int)namelen, name, (int)valuelen, value);
+    // Cache headers into the response object for later inspection
+    if (namelen == 7 && memcmp(name, ":status", 7) == 0) {
+      char *st = valk_mem_alloc(valuelen + 1);
+      memcpy(st, value, valuelen);
+      st[valuelen] = '\0';
+      reqres->res->status = st;
+    } else {
+      struct valk_http2_header_t h = {0};
+      h.name = valk_mem_alloc(namelen + 1);
+      h.value = valk_mem_alloc(valuelen + 1);
+      memcpy(h.name, name, namelen);
+      memcpy(h.value, value, valuelen);
+      h.name[namelen] = '\0';
+      h.value[valuelen] = '\0';
+      h.nameLen = namelen;
+      h.valueLen = valuelen;
+      da_add(&reqres->res->headers, h);
+    }
   }
   return 0;  // success
 }
@@ -350,7 +382,9 @@ static void __http_tcp_on_write_cb(uv_write_t *handle, int status) {
     printf("Receiving on write CB\n");
   }
 
-  valk_slab_release_ptr(tcp_buffer_slab, handle);
+  __tcp_buffer_slab_item_t *item =
+      valk_container_of(handle, __tcp_buffer_slab_item_t, req);
+  valk_slab_release_ptr(tcp_buffer_slab, item);
 }
 
 static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
@@ -802,7 +836,9 @@ static void __uv_task_cb_new(uv_async_t *handle) {
   printf("Releasing exec\n");
   uv_close((uv_handle_t *)&hndl->uv.task, __uv_handle_closed_cb);
 
-  valk_mem_free(task);
+  // Free using the original allocator captured at allocation time to
+  // avoid cross-thread allocator mismatch.
+  valk_mem_allocator_free(task->allocator, task);
 }
 
 static void __uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task) {
@@ -855,7 +891,11 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
     SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
   }
 
-  struct valk_aio_task_new *task = valk_mem_alloc(sizeof(valk_aio_task_new));
+  struct valk_aio_task_new *task;
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)sys->handleSlab) {
+    task = valk_mem_alloc(sizeof(valk_aio_task_new));
+  }
+  task->allocator = (valk_mem_allocator_t *)sys->handleSlab;
 
   task->arg = box;
   task->promise.item = res;
@@ -876,6 +916,8 @@ typedef struct valk_aio_http2_client {
   valk_aio_http_conn *connection;
   char interface[200];
   int port;
+  // Hostname used for TLS SNI and HTTP/2 authority defaults
+  char hostname[200];
   // Totally internal, totally unneccessary, but i wanna avoid a tuple
   valk_promise _promise;
 } valk_aio_http2_client;
@@ -904,6 +946,32 @@ static int __http_client_on_frame_recv_callback(nghttp2_session *session,
   return 0;
 }
 
+static int __http_client_on_stream_close_callback(nghttp2_session *session,
+                                                  int32_t stream_id,
+                                                  uint32_t error_code,
+                                                  void *user_data) {
+  UNUSED(user_data);
+  __http2_req_res_t *reqres =
+      nghttp2_session_get_stream_user_data(session, stream_id);
+  if (reqres) {
+    if (error_code != NGHTTP2_NO_ERROR) {
+      // Stream was reset or closed with an error - reject the promise
+      char errmsg[256];
+      snprintf(errmsg, sizeof(errmsg), "HTTP/2 stream error: %s (code=%u)",
+               nghttp2_http2_strerror(error_code), error_code);
+      valk_arc_box *err = valk_arc_box_err(errmsg);
+      valk_promise_respond(&reqres->promise, err);
+      valk_arc_release(err);
+    } else {
+      // Normal close - resolve with the response (even if no DATA arrived)
+      valk_arc_box *box = ((valk_arc_box *)reqres->res) - 1;
+      valk_promise_respond(&reqres->promise, box);
+    }
+    valk_arc_release(reqres->promise.item);
+  }
+  return 0;
+}
+
 static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
                                               uint8_t flags, int32_t stream_id,
                                               const uint8_t *data, size_t len,
@@ -915,23 +983,15 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
       nghttp2_session_get_stream_user_data(session, stream_id);
 
   if (reqres) {
-    // no retain here we should be responding to the original guy
-    // valk_arc_retain(reqres->promise.item);
     VALK_INFO("C <--- S (DATA chunk) len=%lu", (unsigned long)len);
-
-    VALK_ASSERT(len < reqres->res->bodyCapacity,
-                "Response was too big %ld > %ld", len,
+    size_t offset = reqres->res->bodyLen;
+    VALK_ASSERT((offset + len) < reqres->res->bodyCapacity,
+                "Response was too big %ld > %ld", offset + len,
                 reqres->res->bodyCapacity);
-
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    memcpy(reqres->res->body, data, len);
-    ((char *)reqres->res->body)[len] = '\0';
-    reqres->res->bodyLen = len;
-    // TODO(networking): change the api of boxes to fetch item from offset
-    // instead of storing the offset. Need to mediate on this some more
-    valk_promise_respond(&reqres->promise,
-                         (valk_arc_box *)reqres->res - 1);
-    valk_arc_release(reqres->promise.item);
+    // Append into body buffer
+    memcpy((char *)reqres->res->body + offset, data, len);
+    reqres->res->bodyLen = offset + len;
+    ((char *)reqres->res->body)[reqres->res->bodyLen] = '\0';
   }
 
   return 0;
@@ -991,6 +1051,8 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
 
     nghttp2_session_callbacks_set_on_data_chunk_recv_callback(
         callbacks, __http_on_data_chunk_recv_callback);
+    nghttp2_session_callbacks_set_on_stream_close_callback(
+        callbacks, __http_client_on_stream_close_callback);
   }
 
   nghttp2_session_client_new(&client->connection->session, callbacks, client);
@@ -1001,7 +1063,8 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
   SSL_CTX_set_alpn_protos(client->ssl_ctx, (const unsigned char *)"\x02h2", 3);
 
   valk_aio_ssl_connect(&client->connection->ssl, client->ssl_ctx);
-  SSL_set_tlsext_host_name(client->connection->ssl.ssl, "localhost");
+  const char *sni = (client->hostname[0] != '\0') ? client->hostname : "localhost";
+  SSL_set_tlsext_host_name(client->connection->ssl.ssl, sni);
 
   valk_aio_ssl_handshake(&client->connection->ssl, &Out);
 
@@ -1014,7 +1077,35 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     uv_write(&slabItem->req, (uv_stream_t *)&client->connection->handle->uv.tcp,
              &slabItem->buf, 1, __http_tcp_on_write_cb);
   } else {
-    valk_slab_release_ptr(tcp_buffer_slab, Out.items);
+    valk_slab_release_ptr(tcp_buffer_slab, slabItem);
+  }
+
+  // After handshake, flush any pending HTTP/2 frames (client preface, SETTINGS,
+  // or requests submitted before handshake completion).
+  if (SSL_is_init_finished(client->connection->ssl.ssl)) {
+    char inbuf[SSL3_RT_MAX_PACKET_SIZE];
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+    memset(inbuf, 0, sizeof(inbuf));
+    valk_buffer_t In = {
+        .items = inbuf, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
+
+    __tcp_buffer_slab_item_t *slab2 =
+        (void *)valk_slab_aquire(tcp_buffer_slab)->data;
+    valk_buffer_t Out2 = {.items = slab2->data,
+                          .count = 0,
+                          .capacity = SSL3_RT_MAX_PACKET_SIZE};
+
+    __http2_flush_frames(&In, client->connection);
+    valk_aio_ssl_encrypt(&client->connection->ssl, &In, &Out2);
+
+    if (Out2.count > 0) {
+      slab2->buf.base = Out2.items;
+      slab2->buf.len = Out2.count;
+      uv_write(&slab2->req, (uv_stream_t *)&client->connection->handle->uv.tcp,
+               &slab2->buf, 1, __http_tcp_on_write_cb);
+    } else {
+      valk_slab_release_ptr(tcp_buffer_slab, slab2);
+    }
   }
 
   uv_read_start((uv_stream_t *)&client->connection->handle->uv.tcp,
@@ -1081,15 +1172,29 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
 
   uv_tcp_nodelay(&client->connection->handle->uv.tcp, 1);
 
+  // Try numeric IPv4 first; if it fails, resolve hostname.
   r = uv_ip4_addr(client->interface, client->port, &addr);
   if (r) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, "Addr err: %s \n", uv_strerror(r));
-    valk_arc_box *err = valk_arc_box_err("Addr err");
-    valk_promise_respond(&task->promise, err);
-    valk_arc_release(err);
-    valk_arc_release(box);
-    return;
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    char portstr[16];
+    snprintf(portstr, sizeof portstr, "%d", client->port);
+    int gai = getaddrinfo(client->interface, portstr, &hints, &res);
+    if (gai == 0 && res) {
+      memcpy(&addr, res->ai_addr, sizeof(struct sockaddr_in));
+      freeaddrinfo(res);
+    } else {
+      if (res) freeaddrinfo(res);
+      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+      fprintf(stderr, "Addr resolve err: %s\n", gai_strerror(gai));
+      valk_arc_box *err = valk_arc_box_err("Addr err");
+      valk_promise_respond(&task->promise, err);
+      valk_arc_release(err);
+      valk_arc_release(box);
+      return;
+    }
   }
 
   client->connection->req.data = box;
@@ -1105,15 +1210,17 @@ static void __valk_aio_http2_client_free(valk_arc_box *box) {
   valk_mem_allocator_free(box->allocator, box);
 }
 
-valk_future *valk_aio_http2_connect(valk_aio_system_t *sys,
-                                    const char *interface, const int port,
-                                    const char *certfile) {
-  UNUSED(certfile);
+valk_future *valk_aio_http2_connect_host(valk_aio_system_t *sys,
+                                         const char *ip, const int port,
+                                         const char *hostname) {
 
-  struct valk_aio_task_new *task = valk_mem_alloc(sizeof(valk_aio_task_new));
+  struct valk_aio_task_new *task;
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)sys->handleSlab) {
+    task = valk_mem_alloc(sizeof(valk_aio_task_new));
+  }
+  task->allocator = (valk_mem_allocator_t *)sys->handleSlab;
 
   valk_future *res = valk_future_new();
-  // TODO(networking): do i even need boxes here?? 🤔
   valk_arc_box *box = valk_arc_box_new(VALK_SUC, sizeof(valk_aio_http2_client));
   box->free = __valk_aio_http2_client_free;
 
@@ -1121,20 +1228,35 @@ valk_future *valk_aio_http2_connect(valk_aio_system_t *sys,
   memset(box->item, 0, sizeof(valk_aio_http2_client));
 
   valk_aio_http2_client *client = box->item;
-  strncpy(client->interface, interface, 200);
+  // Store IP for uv connect
+  strncpy(client->interface, ip, sizeof(client->interface) - 1);
+  client->interface[sizeof(client->interface) - 1] = '\0';
+  // Store hostname for SNI
+  if (hostname) {
+    strncpy(client->hostname, hostname, sizeof(client->hostname) - 1);
+    client->hostname[sizeof(client->hostname) - 1] = '\0';
+  } else {
+    client->hostname[0] = '\0';
+  }
   client->sys = sys;
   client->port = port;
 
   task->promise.item = res;
   valk_arc_retain(res);
   task->callback = __aio_client_connect_cb;
-  // valk_arc_retain(res);
-  // valk_arc_release(res) in resolve
 
   VALK_DEBUG("Initializing client %p", (void *)client);
   __uv_exec_task(sys, task);
 
   return res;
+}
+
+valk_future *valk_aio_http2_connect(valk_aio_system_t *sys,
+                                    const char *interface, const int port,
+                                    const char *certfile) {
+  UNUSED(certfile);
+  // Backward-compatible connect that uses provided interface and defaults SNI
+  return valk_aio_http2_connect_host(sys, interface, port, "localhost");
 }
 
 static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
@@ -1221,7 +1343,11 @@ static valk_future *__http2_submit_demo_request(valk_aio_system_t *sys,
                                                 valk_arc_box *client) {
   valk_future *res = valk_future_new();
   valk_arc_retain(client);
-  struct valk_aio_task_new *task = valk_mem_alloc(sizeof(valk_aio_task_new));
+  struct valk_aio_task_new *task;
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)sys->handleSlab) {
+    task = valk_mem_alloc(sizeof(valk_aio_task_new));
+  }
+  task->allocator = (valk_mem_allocator_t *)sys->handleSlab;
 
   task->arg = client;
   valk_arc_retain(res);
@@ -1236,15 +1362,11 @@ static valk_future *__http2_submit_demo_request(valk_aio_system_t *sys,
 
 char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
                        const char *port) {
-  UNUSED(domain);
   UNUSED(port);
-
-  // GOOGLE
-  // valk_arc_box *box = valk_future_await(
-  //     valk_aio_http2_connect(&sys, "142.250.191.78", 443, ""));
-
-  // Local
-  valk_future *fut = valk_aio_http2_connect(sys, "127.0.0.1", 6969, "");
+  // Demo: connect to Google over HTTP/2 TLS using a known IPv4 and SNI
+  (void)domain; // future: parse/use
+  valk_future *fut =
+      valk_aio_http2_connect_host(sys, "142.250.191.78", 443, "google.com");
   printf("Arc count of fut : %ld\n", fut->refcount);
   valk_arc_box *client = valk_future_await(fut);
   printf("Arc count of fut : %ld\n", fut->refcount);
@@ -1293,8 +1415,32 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
   VALK_DEBUG("Constructing request on client %p", (void *)client);
   valk_aio_http_conn *conn = client->connection;
 
+  // Allocate request/response context using malloc (event loop thread allocator)
+  __http2_req_res_t *reqres = valk_mem_alloc(sizeof(__http2_req_res_t));
+  reqres->req = pair->req;
+  reqres->promise = task->promise;
+
+  // Allocate and initialize response using malloc allocator
+  // (must match event loop thread where headers/body will be populated)
+  valk_arc_box *box =
+      valk_arc_box_new(VALK_SUC, sizeof(valk_http2_response_t));
+  box->free = __valk_http2_response_free;
+
+  reqres->res = box->item;
+  memset(reqres->res, 0, sizeof(valk_http2_response_t));
+  da_init(&reqres->res->headers);
+
+  reqres->res->body = valk_mem_alloc(HTTP_MAX_RESPONSE_SIZE_BYTES);
+  reqres->res->bodyLen = 0;
+  reqres->res->bodyCapacity = HTTP_MAX_RESPONSE_SIZE_BYTES;
+
+  VALK_TRACE("Box: %p, item: %p", (void*)box, reqres->res);
+
+  // Build HTTP/2 headers from request (use request allocator for reading)
   VALK_WITH_ALLOC(pair->req->allocator) {
-    size_t hdrCount = pair->req->headers.count + 4;
+    // HTTP/2 requires these 4 pseudo-headers
+    const size_t NUM_PSEUDO_HEADERS = 4;
+    size_t hdrCount = pair->req->headers.count + NUM_PSEUDO_HEADERS;
     struct valk_http2_header_t *phds = pair->req->headers.items;
 
     nghttp2_nv hdrs[hdrCount];
@@ -1327,35 +1473,18 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
     hdrs[3].flags =
         NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
 
-    for (size_t i = 4; i < hdrCount; ++i) {
-      hdrs[i].name = phds[i].name;
-      hdrs[i].value = phds[i].value;
-      hdrs[i].namelen = phds[i].nameLen;
-      hdrs[i].valuelen = phds[i].valueLen;
-      hdrs[i].flags =
+    // Add custom headers from the request
+    for (size_t i = 0; i < pair->req->headers.count; ++i) {
+      hdrs[NUM_PSEUDO_HEADERS + i].name = phds[i].name;
+      hdrs[NUM_PSEUDO_HEADERS + i].value = phds[i].value;
+      hdrs[NUM_PSEUDO_HEADERS + i].namelen = phds[i].nameLen;
+      hdrs[NUM_PSEUDO_HEADERS + i].valuelen = phds[i].valueLen;
+      hdrs[NUM_PSEUDO_HEADERS + i].flags =
           NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
     }
 
-    __http2_req_res_t *reqres = valk_mem_alloc(sizeof(__http2_req_res_t));
-    reqres->req = pair->req;
-    reqres->promise = task->promise;
-
-    valk_arc_box *box =
-        valk_arc_box_new(VALK_SUC, sizeof(valk_http2_response_t));
-
-    reqres->res = box->item;
-
-    VALK_TRACE("Box: %p, item: %p", (void*)box, box->item);
-
-    memset(reqres->res, 0, sizeof(valk_http2_response_t));
-
-    reqres->res->body = valk_mem_alloc(HTTP_MAX_RESPONSE_SIZE_BYTES);
-    reqres->res->bodyLen = 0;
-    reqres->res->bodyCapacity = HTTP_MAX_RESPONSE_SIZE_BYTES;
-
     reqres->streamid = nghttp2_submit_request2(conn->session, nullptr, hdrs,
                                                hdrCount, nullptr, reqres);
-    reqres->res->stream_id = reqres->streamid;
 
     if (reqres->streamid < 0) {
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -1368,6 +1497,7 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
       return;
     }
 
+    reqres->res->stream_id = reqres->streamid;
     VALK_INFO("Submitted request stream_id=%ld", reqres->streamid);
   }
 
@@ -1411,7 +1541,11 @@ valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
   printf("Client's ready to go : %s: %d :: %p\n", client->interface,
          client->port, (void *)client);
   valk_future *res;
-  valk_aio_task_new *task = valk_mem_alloc(sizeof(valk_aio_task_new));
+  valk_aio_task_new *task;
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)client->sys->handleSlab) {
+    task = valk_mem_alloc(sizeof(valk_aio_task_new));
+  }
+  task->allocator = (valk_mem_allocator_t *)client->sys->handleSlab;
 
   VALK_WITH_ALLOC(req->allocator) {
     res = valk_future_new();
@@ -1440,8 +1574,8 @@ valk_aio_system_t *valk_aio_start() {
   // When the socket dissapears a write may be queued in the event loop
   // In that case we just want to do proper error handling without the
   // signal
-  struct sigaction sa = {.sa_handler = SIG_IGN};
-  sigaction(SIGPIPE, &sa, nullptr);
+  // Simpler portable ignore of SIGPIPE to avoid crashes on broken pipe
+  signal(SIGPIPE, SIG_IGN);
 
   valk_aio_system_t *sys = valk_mem_alloc(sizeof(valk_aio_system_t));
 
@@ -1493,4 +1627,19 @@ void valk_aio_stop(valk_aio_system_t *sys) {
 
 // reference code for openssl setup
 //
+static void __valk_http2_response_free(valk_arc_box *box) {
+  valk_http2_response_t *res = box->item;
+  if (res) {
+    if (res->body) free(res->body);
+    if (res->status) free((void *)res->status);
+    if (res->headers.items) {
+      for (size_t i = 0; i < res->headers.count; ++i) {
+        if (res->headers.items[i].name) free(res->headers.items[i].name);
+        if (res->headers.items[i].value) free(res->headers.items[i].value);
+      }
+      free(res->headers.items);
+    }
+  }
+  valk_mem_allocator_free(box->allocator, box);
+}
 // https://github.com/darrenjs/openssl_examples

@@ -147,10 +147,13 @@ valk_arc_box *valk_future_await_timeout(valk_future *self, uint32_t msec) {
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);
 
-  ts.tv_nsec += msec * 1000000;
-  if (ts.tv_nsec >= 1000000000) {
-    ts.tv_sec += ts.tv_nsec / 1000000000;
-    ts.tv_nsec = ts.tv_nsec % 1000000000;
+  // Add timeout using 64-bit-safe arithmetic to avoid overflow
+  ts.tv_sec += (time_t)(msec / 1000);
+  unsigned long add_ns = (unsigned long)(msec % 1000) * 1000000ul;
+  ts.tv_nsec += (long)add_ns;
+  if (ts.tv_nsec >= 1000000000L) {
+    ts.tv_sec += ts.tv_nsec / 1000000000L;
+    ts.tv_nsec = ts.tv_nsec % 1000000000L;
   }
   int ret = pthread_cond_timedwait(&self->resolved, &self->mutex, &ts);
 
