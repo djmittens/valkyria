@@ -340,7 +340,7 @@ void valk_slab_release_ptr(valk_slab_t *self, void *data) {
   // This function will look back item size bytes in the array, to figure out
   // the handle and then free that shit
   uint64_t v;
-  size_t offset = __valk_slab_offset_unpack(
+  __valk_slab_offset_unpack(
       valk_container_of(data, valk_slab_item_t, data)->handle, &v);
   // printf("Slab Releasing %ld %p\n", offset, data);
   valk_slab_release(self, valk_container_of(data, valk_slab_item_t, data));

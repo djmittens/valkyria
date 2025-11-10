@@ -128,7 +128,11 @@ valk_lval_t* valk_vm_frame_end(valk_vm_t* vm, valk_lval_t* lval) {
   return __valk_vm_escape(vm, lval);
 }
 
-valk_lval_t* valk_vm_exec(valk_vm_t* vm, valk_lval_t* lval) {}
+valk_lval_t* valk_vm_exec(valk_vm_t* vm, valk_lval_t* lval) {
+  UNUSED(vm);
+  UNUSED(lval);
+  return NULL;
+}
 
 void* valk_vm_frame_push_str(valk_vm_stack_t* stack, const char* str);
 void* valk_vm_frame_push_num(valk_vm_stack_t* stack, int64_t num);

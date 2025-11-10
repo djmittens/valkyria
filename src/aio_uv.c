@@ -111,6 +111,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
 void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
                       uv_buf_t *buf) {
   UNUSED(handle);
+  UNUSED(suggested_size);
   // TODO(networking): replace it with memory arena for the request
   void *base = (void *)valk_slab_aquire(tcp_buffer_slab)->data;
   buf->base = (char *)base;  // start of payload region

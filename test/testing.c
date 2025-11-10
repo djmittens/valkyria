@@ -113,7 +113,6 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
   int pout[2], perr[2];
   pipe(pout);
   pipe(perr);
-  valk_test_result_t res = {0};
   pid_t pid = fork();
   if (pid == 0) {
     // child

@@ -190,13 +190,13 @@ valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {
   case SSL_ERROR_WANT_READ:
     do {
       VALK_ASSERT(!valk_buffer_is_full(Out),
-                  "Output buffer is full to append %d", Out->count);
+                  "Output buffer is full to append %zu", Out->count);
       n = BIO_read(ssl->write_bio, &((char *)Out->items)[Out->count],
                    Out->capacity - Out->count);
       if (n > 0) {
         Out->count += n;
         VALK_ASSERT(!valk_buffer_is_full(Out),
-                    "Output buffer is too full after append %d",
+                    "Output buffer is too full after append %zu",
                     Out->count + n);
       } else if (!BIO_should_retry(ssl->write_bio)) {
         return VALK_ERR_SSL_READ;
@@ -266,13 +266,13 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
   case SSL_ERROR_WANT_WRITE:
     do {
       VALK_ASSERT(!valk_buffer_is_full(Out),
-                  "Output buffer is full to append %d", Out->count);
+                  "Output buffer is full to append %zu", Out->count);
       n = BIO_read(ssl->write_bio, &((char *)Out->items)[Out->count],
                    Out->capacity - Out->count);
       if (n > 0) {
         Out->count += n;
         VALK_ASSERT(!valk_buffer_is_full(Out),
-                    "Output buffer is too full after append %d",
+                    "Output buffer is too full after append %zu",
                     Out->count + n);
       } else if (!BIO_should_retry(ssl->write_bio)) {
         return VALK_ERR_SSL_READ;
@@ -318,13 +318,13 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
       // Now stuff the encrypted result into the output buffer
       do {
         VALK_ASSERT(!valk_buffer_is_full(Out),
-                    "Output buffer is full to append %d", Out->count);
+                    "Output buffer is full to append %zu", Out->count);
         n = BIO_read(ssl->write_bio, &((char *)Out->items)[Out->count],
                      Out->capacity - Out->count);
         if (n > 0) {
           Out->count += n;
           VALK_ASSERT(!valk_buffer_is_full(Out),
-                      "Output buffer is too full after append %d",
+                      "Output buffer is too full after append %zu",
                       Out->count + n);
         } else if (!BIO_should_retry(ssl->write_bio)) {
           return VALK_ERR_SSL_READ;

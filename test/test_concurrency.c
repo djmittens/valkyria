@@ -141,6 +141,7 @@ void test_task_queue(VALK_TEST_ARGS()) {
 
 void test_concurrency(VALK_TEST_ARGS()) {
   valk_lval_t *ast = VALK_FIXTURE("prelude");
+  UNUSED(ast);
   VALK_TEST();
   // Should i make this a fixture ?
   test__arg testArg = {

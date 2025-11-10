@@ -309,11 +309,11 @@ void test_dynamic_lists(VALK_TEST_ARGS()) {
 
 static void *__lval_retain(void *lval) { return (valk_lval_t *)lval; }
 
-static void __lval_release(void *lval) { (valk_lval_t *)lval; }
+static void __lval_release(void *lval) { UNUSED(lval); }
 
 static void *__lenv_retain(void *lenv) { return (valk_lenv_t *)lenv; }
 
-static void __lenv_release(void *lenv) { (valk_lenv_t *)lenv; }
+static void __lenv_release(void *lenv) { UNUSED(lenv); }
 
 int main(int argc, const char **argv) {
   UNUSED(argc);

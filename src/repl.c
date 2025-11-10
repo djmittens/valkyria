@@ -13,7 +13,6 @@ static void __aio_free(void *system) { valk_aio_stop(system); }
 
 int main(int argc, char *argv[]) {
   char *input;
-  int script_mode = 0;
   // Initialize global arena (persistent) and scratch arena (ephemeral)
   size_t const GLOBAL_ARENA_BYTES = 16 * 1024 * 1024;   // 16 MiB
   size_t const SCRATCH_ARENA_BYTES = 4 * 1024 * 1024;   // 4 MiB
@@ -46,7 +45,6 @@ int main(int argc, char *argv[]) {
   if (argc >= 2) {
     for (int i = 1; i < argc; ++i) {
       if (strcmp(argv[i], "--script") == 0) {
-        script_mode = 1;
         continue;
       }
       valk_lval_t *res;

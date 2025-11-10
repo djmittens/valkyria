@@ -1,4 +1,5 @@
 #include "debug.h"
+#include "common.h"
 
 #include <backtrace.h>
 #include <dlfcn.h>
@@ -13,11 +14,14 @@ size_t valk_trace_capture(void** stack, size_t n) {
 
 static int __valk_trace_info_cb(void* data, uintptr_t pc, const char* filename,
                                 int lineno, const char* function) {
+  UNUSED(data);
+  UNUSED(pc);
   fprintf(stderr, "  → %s() %s:%d\n", function, filename ? filename : "??",
           lineno);
   return 0;
 }
 static void __valk_trace_error_cb(void* data, const char* msg, int errnum) {
+  UNUSED(data);
   fprintf(stderr, "   [symbol resolution error: %s (%d)]\n", msg, errnum);
 }
 

@@ -186,8 +186,20 @@ void cb_onDisconnect(void *arg, valk_aio_http_conn *) {
   __atomic_fetch_add(&handler->disconnectedCount, 1, __ATOMIC_RELAXED);
 }
 
-void cb_onHeader(void *arg, valk_aio_http_conn *, size_t stream, char *name,
-                 char *value) {}
+void cb_onHeader(void *arg, valk_aio_http_conn *conn, size_t stream, char *name,
+                 char *value) {
+  UNUSED(arg);
+  UNUSED(conn);
+  UNUSED(stream);
+  UNUSED(name);
+  UNUSED(value);
+}
 
-void cb_onBody(void *arg, valk_aio_http_conn *, size_t stream, uint8_t flags,
-               valk_buffer_t *buf) {}
+void cb_onBody(void *arg, valk_aio_http_conn *conn, size_t stream, uint8_t flags,
+               valk_buffer_t *buf) {
+  UNUSED(arg);
+  UNUSED(conn);
+  UNUSED(stream);
+  UNUSED(flags);
+  UNUSED(buf);
+}

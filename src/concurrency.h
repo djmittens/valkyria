@@ -1,5 +1,7 @@
 #pragma once
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 // TODO(networking): Abstract pthread away in here, only available on posix
 // system very inconsistent api across different systems too
 #include <pthread.h>

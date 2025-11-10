@@ -159,10 +159,12 @@ const char* valk_ltype_name(valk_ltype_e type) {
       return "String";
     case LVAL_REF:
       return "Reference";
+    case LVAL_ENV:
+      return "Environment";
     case LVAL_UNDEFINED:
       return "UNDEFINED";
-      break;
   }
+  return "Unknown";
 }
 
 valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
