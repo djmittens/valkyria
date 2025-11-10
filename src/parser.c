@@ -1562,6 +1562,37 @@ static valk_lval_t* valk_builtin_await(valk_lenv_t* e, valk_lval_t* a) {
   return res;
 }
 
+// http2/listen: (http2/listen aio interface port keyfile certfile) -> future
+// Returns a future that resolves to an http2_server ref
+// Uses a demo handler that returns "Hello from Valk HTTP/2 server!"
+static valk_lval_t* valk_builtin_http2_listen(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 5);
+
+  valk_lval_t* aio_ref = a->expr.cell[0];
+  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "First arg must be an aio_system ref, got %s", aio_ref->ref.type);
+
+  valk_lval_t* interface = a->expr.cell[1];
+  LVAL_ASSERT_TYPE(a, interface, LVAL_STR);
+
+  valk_lval_t* port = a->expr.cell[2];
+  LVAL_ASSERT_TYPE(a, port, LVAL_NUM);
+
+  valk_lval_t* keyfile = a->expr.cell[3];
+  LVAL_ASSERT_TYPE(a, keyfile, LVAL_STR);
+
+  valk_lval_t* certfile = a->expr.cell[4];
+  LVAL_ASSERT_TYPE(a, certfile, LVAL_STR);
+
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  valk_future* fut = valk_aio_http2_listen(sys, interface->str, (int)port->num,
+                                           keyfile->str, certfile->str,
+                                           valk_aio_http2_demo_handler());
+  return valk_lval_ref("future", fut, __valk_future_release);
+}
+
 // http2/connect: (http2/connect aio ip port hostname?) -> future
 static valk_lval_t* valk_builtin_http2_connect(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -1826,6 +1857,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   // Async
   valk_lenv_put_builtin(env, "await", valk_builtin_await);
   // HTTP/2 client + request API
+  valk_lenv_put_builtin(env, "http2/listen", valk_builtin_http2_listen);
   valk_lenv_put_builtin(env, "http2/connect", valk_builtin_http2_connect);
   valk_lenv_put_builtin(env, "http2/request", valk_builtin_http2_request);
   valk_lenv_put_builtin(env, "http2/request-add-header",
@@ -1836,8 +1868,6 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   // System utilities
   valk_lenv_put_builtin(env, "exit", valk_builtin_exit);
   valk_lenv_put_builtin(env, "shutdown", valk_builtin_shutdown);
-  // Terse alias: shutdown with default code 0
-  valk_lenv_put_builtin(env, "shutdown!", valk_builtin_shutdown);
   valk_lenv_put_builtin(env, "http2/response-status",
                         valk_builtin_http2_response_status);
   valk_lenv_put_builtin(env, "http2/response-headers",

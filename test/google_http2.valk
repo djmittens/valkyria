@@ -14,6 +14,7 @@
   (print "status" status)
   (print "headers" headers)
   (print "body-len" (len body))
+  (print "body" body)
 
   ; Validate response - check for non-empty status and body
   (if (== (len status) 0)

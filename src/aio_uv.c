@@ -458,6 +458,17 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
   return 0;
 }
 
+// Export a demo handler for testing
+valk_http2_handler_t *valk_aio_http2_demo_handler(void) {
+  static valk_http2_handler_t handler = {0};
+  static int initialized = 0;
+  if (!initialized) {
+    // This handler will be used by the server callbacks setup
+    initialized = 1;
+  }
+  return &handler;
+}
+
 static void __http2_flush_frames(valk_buffer_t *buf,
                                  struct valk_aio_http_conn *conn) {
   const uint8_t *data;
@@ -708,7 +719,7 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
     __http_send_server_connection_header(conn->session);
 
     //  TODO(networking): Maybe i should call this on the first read?
-    if (conn->httpHandler) {
+    if (conn->httpHandler && conn->httpHandler->onConnect) {
       conn->httpHandler->onConnect(conn->httpHandler->arg, conn);
     }
 

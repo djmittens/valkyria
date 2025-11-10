@@ -264,6 +264,57 @@ static void test_http2_rst_stream_handling(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static void test_http2_server_client(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Setup language env and builtins
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lenv_builtins(env);
+
+  // Set VALK_MODE to "test" to stub out shutdown
+  valk_lenv_put(env, valk_lval_sym("VALK_MODE"), valk_lval_str("test"));
+
+  // Start async runtime
+  valk_aio_system_t *aio = valk_aio_start();
+  valk_lenv_put(env, valk_lval_sym("aio"),
+                valk_lval_ref("aio_system", aio, __aio_free));
+
+  // Load prelude
+  valk_lval_t *prelude = valk_parse_file("src/prelude.valk");
+  while (prelude->expr.count) {
+    valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(prelude, 0));
+    if (LVAL_TYPE(x) == LVAL_ERR) {
+      valk_lval_println(x);
+      VALK_FAIL("Prelude eval failed");
+      return;
+    }
+  }
+
+  // Evaluate the server/client test script
+  valk_lval_t *script = valk_parse_file("test/http2_server_client.valk");
+  valk_lval_t *last_result = NULL;
+  while (script->expr.count) {
+    valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(script, 0));
+    if (LVAL_TYPE(x) == LVAL_ERR) {
+      valk_lval_println(x);
+      VALK_FAIL("Script eval failed: %s", x->str);
+      return;
+    } else {
+      valk_lval_println(x);
+      last_result = x;
+    }
+  }
+
+  // Verify shutdown was called with exit code 0
+  VALK_TEST_ASSERT(last_result != NULL, "Expected script to produce a result");
+  VALK_TEST_ASSERT(LVAL_TYPE(last_result) == LVAL_NUM,
+                   "Expected shutdown to return a number");
+  VALK_TEST_ASSERT(last_result->num == 0,
+                   "Expected shutdown to be called with exit code 0");
+
+  VALK_PASS();
+}
+
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
@@ -276,6 +327,8 @@ int main(int argc, const char **argv) {
                           test_http2_error_handling);
   valk_testsuite_add_test(suite, "test_http2_rst_stream_handling",
                           test_http2_rst_stream_handling);
+  valk_testsuite_add_test(suite, "test_http2_server_client",
+                          test_http2_server_client);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

@@ -1,0 +1,45 @@
+; Test HTTP/2 server and client together
+; Start a server on localhost and connect to it
+
+(do
+  (print "Starting HTTP/2 server on localhost:8443...")
+
+  ; Start server (returns immediately with a future)
+  (= {server-future} (http2/listen aio "127.0.0.1" 8443
+                                   "build/server.key" "build/server.crt"))
+  (= {server} (await server-future))
+  (print "Server started!")
+
+  ; Give the server a moment to start listening
+  ; TODO: Add a proper wait/sleep builtin
+  (print "Connecting to server...")
+
+  ; Connect to our local server
+  (= {client} (await (http2/connect aio "127.0.0.1" 8443 "localhost")))
+  (print "Connected to server!")
+
+  ; Send a request
+  (= {req} (http2/request "GET" "https" "localhost" "/test"))
+  (http2/request-add-header req "user-agent" "valk-test/0.1")
+  (= {response-future} (http2/send req client))
+  (= {res} (await response-future))
+
+  ; Check the response
+  (= {status} (http2/response-status res))
+  (= {body} (http2/response-body res))
+
+  (print "Response status:" status)
+  (print "Response body:" body)
+
+  ; Validate response
+  ; Check status is non-empty (comparison operators may not work on strings)
+  (if (== (len status) 0)
+    {error "Expected non-empty status"}
+    {})
+  (if (== (len body) 0)
+    {error "Expected non-empty response body"}
+    {})
+
+  (print "SUCCESS: Server and client communication works!")
+  (shutdown 0)
+)
