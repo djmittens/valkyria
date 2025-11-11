@@ -8,6 +8,12 @@
 static void valk_gc_mark_lval(valk_lval_t* v);
 static void valk_gc_mark_env(valk_lenv_t* env);
 
+// Check if GC should run (arena nearly full)
+bool valk_gc_should_collect_arena(valk_mem_arena_t* arena) {
+  // Trigger GC when arena is 90% full
+  return (arena->offset > (arena->capacity * 9 / 10));
+}
+
 // Mark a single lval and recursively mark its children
 static void valk_gc_mark_lval(valk_lval_t* v) {
   if (v == nullptr) return;
@@ -70,121 +76,92 @@ static void valk_gc_mark_env(valk_lenv_t* env) {
   valk_gc_mark_env(env->parent);
 }
 
-// Clear all GC marks in preparation for next GC cycle
-static void valk_gc_clear_marks_in_arena(valk_mem_arena_t* arena) {
-  // We need to iterate through the arena and clear marks
-  // This is tricky because arena doesn't track individual allocations
-  // For now, we'll scan the entire arena looking for lval pointers
+// Clear all GC marks recursively
+static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
+  if (v == nullptr) return;
 
-  uint8_t* ptr = arena->heap;
-  uint8_t* end = arena->heap + arena->offset;
+  // Already cleared - avoid infinite loops
+  if (!(v->flags & LVAL_FLAG_GC_MARK)) return;
 
-  while (ptr < end) {
-    // Try to interpret this as an lval
-    valk_lval_t* v = (valk_lval_t*)ptr;
+  // Clear mark
+  v->flags &= ~LVAL_FLAG_GC_MARK;
 
-    // Check if this looks like a valid lval (basic sanity check)
-    if ((v->flags & LVAL_TYPE_MASK) <= LVAL_ENV) {
-      // Clear the GC mark
-      v->flags &= ~LVAL_FLAG_GC_MARK;
-    }
-
-    // Move to next potential object
-    // This is approximate - we don't know exact object sizes
-    ptr += sizeof(valk_lval_t);
-  }
-}
-
-// Compact arena by copying live objects to a new arena
-static size_t valk_gc_compact_arena(valk_mem_arena_t* old_arena, valk_mem_arena_t* new_arena) {
-  size_t reclaimed = 0;
-
-  // Scan old arena and copy marked objects to new arena
-  uint8_t* ptr = old_arena->heap;
-  uint8_t* end = old_arena->heap + old_arena->offset;
-
-  while (ptr < end) {
-    valk_lval_t* v = (valk_lval_t*)ptr;
-
-    // Check if this is a marked (live) object
-    if ((v->flags & LVAL_FLAG_GC_MARK) &&
-        (v->flags & LVAL_TYPE_MASK) <= LVAL_ENV) {
-
-      // Determine object size (approximate)
-      size_t obj_size = sizeof(valk_lval_t);
-
-      // For strings and symbols, include string data
-      if (LVAL_TYPE(v) == LVAL_STR || LVAL_TYPE(v) == LVAL_SYM || LVAL_TYPE(v) == LVAL_ERR) {
-        if (v->str != nullptr) {
-          obj_size += strlen(v->str) + 1;
+  // Clear marks on children
+  switch (LVAL_TYPE(v)) {
+    case LVAL_FUN:
+      if (v->fun.env) {
+        for (size_t i = 0; i < v->fun.env->count; i++) {
+          valk_gc_clear_marks_recursive(v->fun.env->vals[i]);
         }
       }
+      valk_gc_clear_marks_recursive(v->fun.formals);
+      valk_gc_clear_marks_recursive(v->fun.body);
+      break;
 
-      // Allocate in new arena and copy
-      void* new_ptr = valk_mem_arena_alloc(new_arena, obj_size);
-      if (new_ptr) {
-        memcpy(new_ptr, v, obj_size);
+    case LVAL_QEXPR:
+    case LVAL_SEXPR:
+      valk_gc_clear_marks_recursive(v->cons.head);
+      valk_gc_clear_marks_recursive(v->cons.tail);
+      break;
 
-        // TODO: Update all pointers to this object
-        // This is the hard part - we need pointer forwarding
+    case LVAL_ENV:
+      for (size_t i = 0; i < v->env.count; i++) {
+        valk_gc_clear_marks_recursive(v->env.vals[i]);
       }
-    } else {
-      // Dead object - count as reclaimed
-      reclaimed += sizeof(valk_lval_t);
-    }
+      break;
 
-    ptr += sizeof(valk_lval_t);
+    default:
+      break;
   }
-
-  return reclaimed;
 }
 
-// Main GC function - mark & sweep with compaction
-size_t valk_gc_collect(valk_lenv_t* root_env, valk_mem_arena_t* arena) {
+// Main GC function - mark & count dead objects (informational only for now)
+size_t valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena) {
+  if (root_env == NULL) {
+    VALK_WARN("GC collect called with no root environment");
+    return 0;
+  }
+
   VALK_INFO("GC: Starting collection (arena used: %zu/%zu bytes)",
             arena->offset, arena->capacity);
 
-  // Phase 1: Clear all marks
-  valk_gc_clear_marks_in_arena(arena);
-
-  // Phase 2: Mark from roots
+  // Phase 1: Mark from roots
   valk_gc_mark_env(root_env);
 
-  // Phase 3: Compact (sweep)
-  // For arena allocator, we need to compact because we can't free individual objects
-  // This is complex - for now, just report what would be collected
-
-  // Count unmarked objects
+  // Phase 2: Count unmarked objects in arena (can't actually sweep arena without compaction)
+  // This is informational only - actual memory reclamation happens via scratch arena resets
   size_t dead_count = 0;
   size_t live_count = 0;
-  size_t dead_bytes = 0;
 
+  // Scan arena to count marked vs unmarked objects
+  // Note: This is approximate since we don't track individual allocations in arena
   uint8_t* ptr = arena->heap;
   uint8_t* end = arena->heap + arena->offset;
 
   while (ptr < end) {
     valk_lval_t* v = (valk_lval_t*)ptr;
 
+    // Basic sanity check - looks like an lval?
     if ((v->flags & LVAL_TYPE_MASK) <= LVAL_ENV) {
       if (v->flags & LVAL_FLAG_GC_MARK) {
         live_count++;
       } else {
         dead_count++;
-        dead_bytes += sizeof(valk_lval_t);
       }
     }
 
     ptr += sizeof(valk_lval_t);
   }
 
-  VALK_INFO("GC: Complete - live: %zu, dead: %zu, reclaimed: %zu bytes",
-            live_count, dead_count, dead_bytes);
+  // Phase 3: Clear marks for next collection
+  for (size_t i = 0; i < root_env->count; i++) {
+    valk_gc_clear_marks_recursive(root_env->vals[i]);
+  }
 
-  return dead_bytes;
-}
+  size_t estimated_dead_bytes = dead_count * sizeof(valk_lval_t);
 
-// Simple GC trigger - collect when arena is nearly full
-bool valk_gc_should_collect(valk_mem_arena_t* arena) {
-  // Trigger GC when arena is 90% full
-  return (arena->offset > (arena->capacity * 9 / 10));
+  VALK_INFO("GC: Complete - live: %zu, dead: %zu (est. %zu bytes reclaimable)",
+            live_count, dead_count, estimated_dead_bytes);
+
+  return estimated_dead_bytes;
 }

@@ -49,8 +49,8 @@
 ### Tasks
 
 #### 2.1. Add Immutability Infrastructure
-- [ ] Add `LVAL_FLAG_FROZEN` bit to `parser.h`
-- [ ] Implement `valk_lval_freeze(lval)` - recursively freezes value tree
+- [x] Add `LVAL_FLAG_FROZEN` bit to `parser.h`
+- [x] Implement `valk_lval_freeze(lval)` - recursively freezes value tree
 - [ ] Implement `valk_lval_assert_mutable(lval)` - crashes if frozen
 - [ ] Add `VALK_ENABLE_FREEZE_CHECKS` compile flag
 
@@ -61,13 +61,13 @@
 - [ ] Add freeze checks to all identified `->str = ` sites
 
 #### 2.3. Freeze at Boundary Points
-- [ ] Freeze values returned from `valk_lval_eval`
-- [ ] Freeze values after parsing completes (`valk_lval_read`)
-- [ ] Do NOT freeze during construction (while building in `valk_lval_add`)
+- [x] Freeze values returned from `valk_lval_eval` (via default frozen literals)
+- [x] Freeze values after parsing completes (literals are frozen by default)
+- [x] Do NOT freeze during construction (while building in `valk_lval_add`)
 
 #### 2.4. Special Case: Environment Mutation
-- [ ] Allow global env to remain mutable
-- [ ] Freeze local envs after function evaluation
+- [x] Allow global env to remain mutable
+- [x] Freeze local envs after function evaluation
 - [ ] Add `valk_lenv_freeze` for local environments
 
 ### Test Plan
@@ -148,25 +148,25 @@ void test_eval_returns_frozen() {
 ### Tasks
 
 #### 3.1. Fix `tail` - Should Create New List
-- [ ] Modify `valk_builtin_tail` to create new QEXPR
-- [ ] Copy references (not deep copy) from original list
-- [ ] Freeze result before returning
+- [x] Modify `valk_builtin_tail` to create new QEXPR (uses cons.tail now)
+- [x] Copy references (not deep copy) from original list
+- [x] Freeze result before returning (literals frozen by default)
 
 #### 3.2. Fix `head` - Should Create New List
-- [ ] Modify `valk_builtin_head` to create new QEXPR
-- [ ] Copy first element reference
-- [ ] Freeze result before returning
+- [x] Modify `valk_builtin_head` to create new QEXPR (uses cons.head now)
+- [x] Copy first element reference
+- [x] Freeze result before returning (literals frozen by default)
 
 #### 3.3. Fix `join` - Should Create New List
-- [ ] Modify `valk_lval_join` to create new QEXPR
-- [ ] Copy references from both input lists
-- [ ] Do NOT mutate input `x` parameter
-- [ ] Freeze result before returning
+- [x] Modify `valk_lval_join` to create new QEXPR
+- [x] Copy references from both input lists
+- [x] Do NOT mutate input `x` parameter
+- [x] Freeze result before returning (literals frozen by default)
 
 #### 3.4. Verify Other Builtins
-- [ ] Audit `init`, `cons`, `len` for mutations
-- [ ] Fix any that mutate inputs
-- [ ] Ensure all return frozen values
+- [x] Audit `init`, `cons`, `len` for mutations
+- [x] Fix any that mutate inputs (valk_builtin_eval, valk_builtin_if fixed)
+- [x] Ensure all return frozen values (via valk_intern fix)
 
 ### Test Plan
 **Validation Method**: Regression tests + new tests
@@ -702,12 +702,36 @@ Each phase is independently testable and can be disabled without breaking earlie
 
 ## Current Status
 
-**Completed**:
-- ✅ Added `origin_allocator` tracking to all lvals
-- ✅ Identified core problem (mutation of shared values)
-- ✅ Created comprehensive implementation plan
+**Completed Phases**:
+- ✅ **Phase 1**: Mutation Audit (informal - identified key mutation points)
+- ✅ **Phase 2**: Freeze Infrastructure (LVAL_FLAG_FROZEN, literals frozen by default)
+- ✅ **Phase 3**: Fix Mutation Bugs (cons operations, valk_intern allocator-aware, eval/if copy before mutate)
+- 🔄 **Phase 4**: Heap GC - PARTIAL
+  - ✅ 4.1: Basic GC structures (gc.c/gc.h added)
+  - ✅ 4.2: Mark phase (valk_gc_mark traverses from roots)
+  - ❌ 4.3: Sweep phase - **ONLY COUNTS, DOESN'T FREE**
+  - ✅ 4.4: Collection trigger (90% threshold in REPL)
+  - ❌ 4.5: Heap allocator - **NOT IMPLEMENTED**
+- ❌ **Phase 5**: Escape Analysis & Optimization - NOT STARTED
+- ❌ **Phase 6**: Integration & Validation - NOT STARTED
 
-**Next Step**:
-→ **Begin Phase 1: Mutation Audit** ←
+**Current Solution**:
+- ✅ Scratch arena resets solve temporary value OOM (MAIN FIX)
+- ✅ Allocator-aware valk_intern prevents scratch pointers in global env
+- ✅ GC infrastructure identifies dead objects in global arena (informational)
+- ⚠️ Global arena still accumulates dead persistent values (not reclaimed yet)
 
-Start with: `grep -rn "->expr.cell\[.*\] =" src/`
+**Why OOM is Solved**:
+The critical fix was making `valk_intern` check `origin_allocator`. This ensures:
+1. Temporaries stay in scratch arena
+2. Scratch arena resets after each REPL line
+3. Only persistent values (from `def`) go to global arena
+4. Global arena grows much slower (only actual persistent data)
+
+**Next Steps for Full GC**:
+→ **Phase 4.5: Implement malloc-based heap allocator** ←
+- Replace global arena with GC heap using malloc
+- Actually free() dead objects in sweep phase
+- For now, 64MB global arena is sufficient with current optimizations
+
+**Last Updated**: 2025-01-11 (OOM solved, GC infrastructure in place)

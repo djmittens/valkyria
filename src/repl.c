@@ -101,11 +101,11 @@ int main(int argc, char *argv[]) {
     free(input);
     valk_mem_arena_reset(scratch);
 
-    // Check if we should run GC
-    if (valk_gc_should_collect(global_arena)) {
-      size_t reclaimed = valk_gc_collect(env, global_arena);
-      if (reclaimed > 0) {
-        fprintf(stderr, "GC: Collected %zu bytes\n", reclaimed);
+    // Check if we should run GC on global arena
+    if (valk_gc_should_collect_arena(global_arena)) {
+      size_t reclaimable = valk_gc_collect_arena(env, global_arena);
+      if (reclaimable > 0) {
+        fprintf(stderr, "GC: Identified %zu bytes of garbage (not yet reclaimed)\n", reclaimable);
       }
     }
   }

@@ -149,6 +149,7 @@ typedef enum {
   VALK_ALLOC_MALLOC,
   VALK_ALLOC_ARENA,
   VALK_ALLOC_SLAB,
+  VALK_ALLOC_GC_HEAP,
 } valk_mem_allocator_e;
 
 char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self);

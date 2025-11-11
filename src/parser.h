@@ -67,6 +67,7 @@ struct valk_lenv_t {
 struct valk_lval_t {
   uint64_t flags;
   void *origin_allocator;  // Always track where this value was allocated
+  struct valk_lval_t *gc_next;  // Linked list for GC heap tracking
   union {
     struct {
       valk_lenv_t *env;
