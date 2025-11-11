@@ -90,7 +90,11 @@ test: build
 	build/test_memory &&\
 	build/test_concurrency &&\
 	build/test_networking &&\
-	build/test_networking_lisp
+	build/test_networking_lisp &&\
+	build/valk test/test_prelude.valk &&\
+	build/valk test/test_simple.valk &&\
+	build/valk test/test_namespace.valk &&\
+	build/valk test/test_varargs.valk
 
 .PHONY: todo
 todo:

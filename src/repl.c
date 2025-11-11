@@ -14,8 +14,10 @@ static void __aio_free(void *system) { valk_aio_stop(system); }
 int main(int argc, char *argv[]) {
   char *input;
   // Initialize global arena (persistent) and scratch arena (ephemeral)
-  size_t const GLOBAL_ARENA_BYTES = 16 * 1024 * 1024;   // 16 MiB
-  size_t const SCRATCH_ARENA_BYTES = 4 * 1024 * 1024;   // 4 MiB
+  // TODO(arena-gc): Global arena needs GC or better reclamation - currently accumulates
+  // garbage from map/filter/join intermediate allocations during script execution
+  size_t const GLOBAL_ARENA_BYTES = 64 * 1024 * 1024;   // 64 MiB
+  size_t const SCRATCH_ARENA_BYTES = 16 * 1024 * 1024;  // 16 MiB
 
   valk_mem_arena_t *global_arena = malloc(GLOBAL_ARENA_BYTES);
   valk_mem_arena_init(global_arena, GLOBAL_ARENA_BYTES - sizeof(*global_arena));
@@ -48,13 +50,14 @@ int main(int argc, char *argv[]) {
         continue;
       }
       valk_lval_t *res;
-      VALK_WITH_ALLOC((void *)scratch) { res = valk_parse_file(argv[i]); }
+      // Use global arena for script execution - values persist across expressions
+      VALK_WITH_ALLOC((void *)global_arena) { res = valk_parse_file(argv[i]); }
       if (res->flags == LVAL_ERR) {
         valk_lval_println(res);
       } else {
         while (res->expr.count) {
           valk_lval_t *x;
-          VALK_WITH_ALLOC((void *)scratch) {
+          VALK_WITH_ALLOC((void *)global_arena) {
             x = valk_lval_eval(env, valk_lval_pop(res, 0));
           }
 
@@ -64,7 +67,6 @@ int main(int argc, char *argv[]) {
           }
         }
       }
-      valk_mem_arena_reset(scratch);
     }
   }
 

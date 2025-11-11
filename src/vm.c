@@ -34,7 +34,7 @@ valk_vm_frame_t* valk_vm_frame_start(valk_vm_t* vm) {
 
 static valk_lval_t* __valk_vm_escape(valk_vm_t* vm, valk_lval_t* lval);
 static valk_lenv_t* __valk_vm_lenv_escape(valk_vm_t* vm, valk_lenv_t* lenv) {
-  if (LVAL_FLAG_GC & lenv->flags || lenv == nullptr) {
+  if (LVAL_FLAG_GC_MARK & lenv->flags || lenv == nullptr) {
     // We did it, we are fully gc !
     return lenv;
   }
@@ -64,7 +64,7 @@ static valk_lenv_t* __valk_vm_lenv_escape(valk_vm_t* vm, valk_lenv_t* lenv) {
   }
 
   // TODO(networking): Should this really be like... Something lenv related?
-  res->flags |= LVAL_FLAG_GC;
+  res->flags |= LVAL_FLAG_GC_MARK;
 
   // if(lenv->parent == nullptr)
   return res;
@@ -72,7 +72,7 @@ static valk_lenv_t* __valk_vm_lenv_escape(valk_vm_t* vm, valk_lenv_t* lenv) {
 
 static valk_lval_t* __valk_vm_escape(valk_vm_t* vm, valk_lval_t* lval) {
   valk_lval_t* res = lval;
-  if (!(LVAL_FLAG_GC & lval->flags)) {
+  if (!(LVAL_FLAG_GC_MARK & lval->flags)) {
     size_t xtra = 0;
     switch (LVAL_TYPE(lval)) {
       case LVAL_NUM:
@@ -110,6 +110,18 @@ static valk_lval_t* __valk_vm_escape(valk_vm_t* vm, valk_lval_t* lval) {
         res->fun.body = __valk_vm_escape(vm, lval->fun.body);
         break;
       }
+      case LVAL_CONS:
+        res = valk_gc_alloc(vm->heap, sizeof(valk_lval_t));
+        memcpy(res, lval, sizeof(valk_lval_t));
+        res->cons.car = __valk_vm_escape(vm, lval->cons.car);
+        res->cons.cdr = __valk_vm_escape(vm, lval->cons.cdr);
+        break;
+      case LVAL_NIL:
+        res = valk_gc_alloc(vm->heap, sizeof(valk_lval_t));
+        memcpy(res, lval, sizeof(valk_lval_t));
+        res->cons.car = nullptr;
+        res->cons.cdr = nullptr;
+        break;
       case LVAL_ENV:
       case LVAL_REF:
         break;
@@ -118,7 +130,7 @@ static valk_lval_t* __valk_vm_escape(valk_vm_t* vm, valk_lval_t* lval) {
         break;
     }
   }
-  res->flags |= LVAL_FLAG_GC;
+  res->flags |= LVAL_FLAG_GC_MARK;
   return res;
 }
 

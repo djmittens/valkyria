@@ -1,0 +1,14 @@
+; Minimal test to verify test framework works
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Simple test - note: body must be quoted!
+(test/define "addition"
+  {(test/assert-eq 2 (+ 1 1) "1 + 1 should equal 2")})
+
+(test/define "list-len"
+  {(test/assert-eq 3 (len {1 2 3}) "list should have 3 elements")})
+
+; Run tests
+(test/run {})

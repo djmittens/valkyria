@@ -1,0 +1,104 @@
+; Simple test framework for Valkyria
+
+(def {*test-registry*} {})
+(def {*test-passed*} 0)
+(def {*test-failed*} 0)
+
+(fun {test/define name body} {
+  (def {*test-registry*} (join *test-registry* (list (list name body))))
+})
+
+(fun {test/assert cond msg} {
+  if cond
+    {true}
+    {error msg}
+})
+
+(fun {test/assert-eq expected actual msg} {
+  (test/assert (== expected actual) msg)
+})
+
+; Repeat a string n times
+(fun {*test-repeat* str n} {
+  if (<= n 0)
+    {""}
+    {str}
+})
+
+; Pad string to width with dots - simple approach to avoid arena OOM
+; (Arena doesn't have GC yet, see repl.c:17-18)
+(fun {*test-pad-dots* str width} {
+  do
+    (printf "%s" str)
+    (= {name-len} (len str))
+    (= {dots-needed} (- width name-len))
+
+    ; Just print the right number of dots using a simple approach
+    ; Can't use recursion or huge case statements due to arena limitations
+    (if (> dots-needed 60)
+      {printf "............................................................"}
+      {(if (> dots-needed 40)
+        {printf "........................................"}
+        {(if (> dots-needed 20)
+          {printf "...................."}
+          {(if (> dots-needed 10)
+            {printf ".........."}
+            {(if (> dots-needed 5)
+              {printf "....."}
+              {(if (> dots-needed 0)
+                {printf "."}
+                {nil})})})})})})
+})
+
+(fun {*test-run-one* test} {
+  do
+    (= {test-name} (nth 1 test))
+    (= {test-body} (nth 2 test))
+
+    ; Print test name with dot padding (80 chars total)
+    (*test-pad-dots* test-name 80)
+
+    ; Time the test
+    (= {start-time} (time-us {}))
+    (= {result} (eval test-body))
+    (= {end-time} (time-us {}))
+    (= {elapsed} (- end-time start-time))
+
+    ; Check if result is truthy (not error, not 0)
+    (= {passed} (if (== result true) {1} {0}))
+
+    ; Print result with timing
+    (if (== passed 1)
+      {do (printf "  ✅ PASS") (printf " : in %ld(us)\n" elapsed)}
+      {do (printf "  ❌ FAIL") (printf " : in %ld(us)\n" elapsed)})
+
+    (if (== passed 1)
+      {(def {*test-passed*} (+ *test-passed* 1))}
+      {(def {*test-failed*} (+ *test-failed* 1))})
+
+    result
+})
+
+(fun {test/run & _} {
+  do
+    (def {*test-passed*} 0)
+    (def {*test-failed*} 0)
+    (= {total} (len *test-registry*))
+
+    (printf "🧪 [%ld/%ld] Valkyria Test Suite\n" total total)
+
+    (map *test-run-one* *test-registry*)
+
+    ; Print summary
+    (printf "\n🏁 Test Results: ")
+    (if (== *test-failed* 0)
+      {printf "✨ All %ld tests passed! ✨\n" *test-passed*}
+      {printf "⚠️  %ld passed, %ld failed\n" *test-passed* *test-failed*})
+
+    ; Exit with appropriate code
+    (if (== *test-failed* 0)
+      {(shutdown 0)}
+      {(shutdown 1)})
+})
+
+(print "Test module loaded")

@@ -1,0 +1,18 @@
+; Regression test: variadic and zero-argument functions
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Test variadic functions (& args)
+(test/define "variadic-functions"
+  {(do
+    (fun {my-list & items} {items})
+    (test/assert-eq 3 (len (my-list 1 2 3)) "variadic list should work"))})
+
+; Test zero-arg functions (need & _ workaround)
+(test/define "zero-arg-functions"
+  {(do
+    (fun {get-answer & _} {42})
+    (test/assert-eq 42 (get-answer {}) "zero-arg function should work with {}"))})
+
+(test/run {})

@@ -8,7 +8,20 @@
 
 #define LVAL_TYPE(_lval) (valk_ltype_e)(_lval->flags & LVAL_TYPE_MASK)
 
-#define LVAL_FLAG_GC  (1 << (LVAL_TYPE_BITS + 1))
+// Allocation flags - where this value was allocated
+#define LVAL_ALLOC_BITS 2
+#define LVAL_ALLOC_SHIFT (LVAL_TYPE_BITS)
+#define LVAL_ALLOC_MASK (0x3ULL << LVAL_ALLOC_SHIFT)
+
+#define LVAL_ALLOC_SCRATCH  (0ULL << LVAL_ALLOC_SHIFT)  // Scratch arena (ephemeral)
+#define LVAL_ALLOC_GLOBAL   (1ULL << LVAL_ALLOC_SHIFT)  // Global arena (persistent)
+#define LVAL_ALLOC_HEAP     (2ULL << LVAL_ALLOC_SHIFT)  // GC heap (persistent)
+
+// GC mark bit
+#define LVAL_FLAG_GC_MARK   (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS))
+
+// Helper to get allocation type
+#define LVAL_ALLOC(_lval) ((_lval)->flags & LVAL_ALLOC_MASK)
 
 // Forward declarations
 struct valk_lenv_t;
@@ -27,6 +40,8 @@ typedef enum {
   LVAL_SEXPR,
   LVAL_ERR,
   LVAL_ENV,
+  LVAL_CONS,  // Cons cell (car/cdr linked list)
+  LVAL_NIL,   // Empty list
 } valk_ltype_e;
 
 const char *valk_ltype_name(valk_ltype_e type);
@@ -45,9 +60,7 @@ struct valk_lenv_t {
 
 struct valk_lval_t {
   uint64_t flags;
-#ifdef VALK_DEBUG_ALLOC
-  void * __origin_allocator;
-#endif
+  void *origin_allocator;  // Always track where this value was allocated
   union {
     struct {
       valk_lenv_t *env;
@@ -63,6 +76,10 @@ struct valk_lval_t {
       // char* file;
       // size_t line;
     } expr;
+    struct {
+      valk_lval_t *car;  // Head element
+      valk_lval_t *cdr;  // Tail (rest of list)
+    } cons;
     struct {
       char *type;
       void *ptr;
@@ -88,6 +105,13 @@ valk_lval_t *valk_lval_str_n(const char *bytes, size_t n);
 valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body);
 valk_lval_t *valk_lval_sexpr_empty(void);
 valk_lval_t *valk_lval_qexpr_empty(void);
+
+// Cons cell constructors
+valk_lval_t *valk_lval_nil(void);                              // Empty list
+valk_lval_t *valk_lval_cons(valk_lval_t *car, valk_lval_t *cdr);  // Cons cell
+valk_lval_t *valk_lval_car(valk_lval_t *cons);                    // Get head
+valk_lval_t *valk_lval_cdr(valk_lval_t *cons);                    // Get tail
+int valk_lval_is_nil(valk_lval_t *v);                             // Check if nil
 
 //// END Constructors ////
 

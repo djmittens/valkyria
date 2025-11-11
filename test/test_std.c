@@ -374,7 +374,14 @@ valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
           return ast->expr.cell[i];
         }
       }
+      return nullptr;
     }
+    case LVAL_CONS: {
+      valk_lval_t *err = valk_lval_find_error(ast->cons.car);
+      if (err) return err;
+      return valk_lval_find_error(ast->cons.cdr);
+    }
+    case LVAL_NIL:
     case LVAL_STR:
     case LVAL_FUN:
     case LVAL_NUM:
@@ -384,6 +391,7 @@ valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
     case LVAL_UNDEFINED:
       return nullptr;
   }
+  return nullptr;
 }
 
 valk_lval_t *valk_eval(valk_lenv_t *env, const char *expr) {

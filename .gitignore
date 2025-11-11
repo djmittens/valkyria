@@ -4,3 +4,5 @@
 .cache
 build/
 .venv/
+.mcp.json
+cclsp.json

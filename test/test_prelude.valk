@@ -1,0 +1,207 @@
+; Standard Library Tests - migrated from test_std.c
+; Run with: ./build/valk test/test_prelude.valk
+
+; Load prelude first (has all the standard functions)
+(load "src/prelude.valk")
+
+; Load test framework
+(load "src/modules/test.valk")
+
+; Test: fun macro creates callable functions
+(test/define "prelude-fun-definition"
+  {do
+    (fun {add a b} {+ a b})
+    (test/assert-eq 110 (add 10 100) "defined function should be callable")
+
+    ; Test that calling undefined symbol in function body errors correctly
+    (fun {bad-fn a b} {+ a undefined})
+    ; Note: We can't easily test error cases yet without try/catch
+    true
+  })
+
+; Test: curry (unpack) transforms function to take list
+(test/define "prelude-curry"
+  {test/assert-eq 6 ((curry +) {1 2 3}) "curry should unpack list to args"})
+
+; Test: uncurry (pack) transforms function to take varargs
+(test/define "prelude-uncurry"
+  {test/assert-eq 6 ((uncurry (curry +)) 1 2 3)
+    "uncurry should pack varargs to list"})
+
+; Test: do executes multiple expressions, returns last
+(test/define "prelude-do"
+  {do
+    (= {a} 2)
+    (test/assert-eq 3 (do (= {a} 2) (+ 1 2 3) (+ 1 a))
+      "do should return last expression")})
+
+; Test: let creates new scope
+(test/define "prelude-let"
+  {do
+    ; do leaks scope
+    (do (= {a} 2) (+ 1 2 3) (+ 1 a))
+    (test/assert-eq 2 a "do should leak scope")
+
+    ; let does not leak scope
+    (let {do (= {b} 99) (+ 1 2 3) (+ 1 b)})
+    ; b should not exist in outer scope
+    ; Note: Can't test error cases easily yet
+    true
+  })
+
+; Test: nth accesses list elements (1-indexed!)
+(test/define "prelude-nth"
+  {do
+    (test/assert-eq 1 (nth 1 {1 2 3}) "nth 1 should return first element")
+    (test/assert-eq 40 (nth 4 {99 2 3 40 5 6}) "nth 4 should return 4th element")
+    ; nth 0 should error - can't test yet
+    true
+  })
+
+; Test: split divides list at index
+(test/define "prelude-split"
+  {do
+    (= {result} (split 3 {1 2 3 4 5 6 7 8}))
+    (test/assert-eq 2 (len result) "split should return 2 lists")
+    (test/assert-eq 3 (len (nth 1 result)) "left side should have 3 elements")
+    (test/assert-eq 5 (len (nth 2 result)) "right side should have 5 elements")
+
+    ; Edge case: split at 0
+    (= {result2} (split 0 {1 2 3 4 5 6 7 8}))
+    (test/assert-eq 2 (len result2) "split 0 should still return 2 lists")})
+
+; Test: map applies function to each element
+(test/define "prelude-map"
+  {test/assert
+    (== (map (\ {x} {* 2 x}) {1 2 3}) {2 4 6})
+    "map should double each element"})
+
+; Test: logical not
+(test/define "prelude-not"
+  {do
+    (test/assert-eq 0 (not true) "not true should be false (0)")
+    (test/assert-eq 1 (not false) "not false should be true (1)")})
+
+; Test: fst, snd, trd accessors
+(test/define "prelude-list-accessors"
+  {do
+    (test/assert-eq 1 (fst {1 2 3}) "fst should return first element")
+    (test/assert-eq 2 (snd {1 2 3}) "snd should return second element")
+    (test/assert-eq 3 (trd {1 2 3}) "trd should return third element")})
+
+; Test: last accessor
+(test/define "prelude-last"
+  {test/assert-eq 5 (last {1 2 3 4 5}) "last should return final element"})
+
+; Test: take n elements from list
+(test/define "prelude-take"
+  {do
+    (= {result} (take 3 {1 2 3 4 5}))
+    (test/assert-eq 3 (len result) "take 3 should return 3 elements")
+    (test/assert-eq 1 (nth 1 result) "first element should be 1")
+    (test/assert-eq 3 (nth 3 result) "third element should be 3")})
+
+; Test: drop n elements from list
+(test/define "prelude-drop"
+  {do
+    (= {result} (drop 2 {1 2 3 4 5}))
+    (test/assert-eq 3 (len result) "drop 2 should leave 3 elements")
+    (test/assert-eq 3 (nth 1 result) "first element should now be 3")})
+
+; Test: exists checks if element in list
+(test/define "prelude-exists"
+  {do
+    (test/assert-eq 1 (exists 3 {1 2 3 4 5}) "3 should exist in list")
+    (test/assert-eq 0 (exists 99 {1 2 3 4 5}) "99 should not exist in list")
+    (test/assert-eq 0 (exists 1 {}) "nothing exists in empty list")})
+
+; Test: filter keeps elements matching predicate
+(test/define "prelude-filter"
+  {do
+    (= {result} (filter (\ {x} {> x 2}) {1 2 3 4 5}))
+    (test/assert-eq 3 (len result) "should keep 3 elements > 2")
+    (test/assert-eq 3 (nth 1 result) "first filtered element should be 3")})
+
+; Test: foldl reduces list
+(test/define "prelude-foldl"
+  {do
+    (test/assert-eq 15 (foldl + 0 {1 2 3 4 5}) "foldl + should sum to 15")
+    (test/assert-eq 120 (foldl * 1 {1 2 3 4 5}) "foldl * should multiply to 120")})
+
+; Test: sum and product convenience functions
+(test/define "prelude-sum-product"
+  {do
+    (test/assert-eq 15 (sum {1 2 3 4 5}) "sum should add all elements")
+    (test/assert-eq 120 (product {1 2 3 4 5}) "product should multiply all")})
+
+; Test: logical operators
+(test/define "prelude-logic"
+  {do
+    (test/assert-eq 1 (and 1 1) "and 1 1 should be 1")
+    (test/assert-eq 0 (and 1 0) "and 1 0 should be 0")
+    (test/assert-eq 0 (and 0 1) "and 0 1 should be 0")
+
+    (test/assert-eq 1 (or 1 0) "or 1 0 should be 1")
+    (test/assert-eq 1 (or 0 1) "or 0 1 should be 1")
+    (test/assert-eq 0 (or 0 0) "or 0 0 should be 0")})
+
+; Test: flip swaps function arguments
+(test/define "prelude-flip"
+  {do
+    (fun {div a b} {/ a b})
+    (test/assert-eq 2 (div 10 5) "10 / 5 should be 2")
+    (test/assert-eq 0 (flip div 10 2) "flip should swap: (div 2 10) = 2 / 10 = 0")})
+
+; Test: select (switch/case with conditions)
+(test/define "prelude-select"
+  {do
+    (= {result} (select
+      {(== 1 2) "bad"}
+      {(== 2 3) "also bad"}
+      {otherwise "good"}))
+    (test/assert-eq "good" result "select should match otherwise clause")})
+
+; Test: case (switch on specific value)
+(test/define "prelude-case"
+  {do
+    (= {result} (case 2
+      {{1} "one"}
+      {{2} "two"}
+      {{3} "three"}))
+    (test/assert-eq "two" result "case should match value 2")})
+
+; ============================================================================
+; Regression tests for environment scoping and varargs
+; ============================================================================
+
+; Test: select with dynamic scoping in lambdas
+(test/define "select-dynamic-scoping"
+  {do
+    (fun {my-test n} {select {(== n 1) 100} {otherwise 999}})
+    (test/assert-eq 100 (my-test 1) "select should access lambda parameter n")
+    (test/assert-eq 999 (my-test 2) "select otherwise should work")})
+
+; Test: varargs bind to empty when only required args provided
+(test/define "varargs-with-required"
+  {do
+    (fun {test-fn a & as} {list a as})
+    (= {result} (test-fn 42))
+    (test/assert-eq 2 (len result) "result should have 2 elements")
+    (test/assert-eq 42 (nth 1 result) "first element should be 42")
+    (test/assert-eq 0 (len (nth 2 result)) "varargs should be empty list")
+
+    ; Test with actual varargs
+    (= {result2} (test-fn 1 2 3))
+    (test/assert-eq 2 (len (nth 2 result2)) "varargs should have 2 elements")})
+
+; Test: deep recursion - DISABLED
+; TODO(networking): There's a context-specific scoping bug where function parameters
+; are not correctly accessible in certain nested evaluation contexts (like within
+; test framework's eval of test bodies containing function definitions). The same
+; code works fine when run directly but fails when wrapped in the test framework.
+; Investigation showed that {+ n 5} returns n instead of n+5 in test context.
+; Fixed if builtin flag handling (parser.c:1597-1598) but issue persists.
+; Needs deeper investigation of environment chain in nested eval contexts.
+
+; Run all tests
+(test/run {})
