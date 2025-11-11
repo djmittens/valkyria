@@ -133,6 +133,11 @@ int valk_lval_eq(valk_lval_t *x, valk_lval_t *y);
 void valk_lval_freeze(valk_lval_t *lval);      // Recursively freeze value tree
 void valk_lval_assert_mutable(valk_lval_t *lval);  // Crash if frozen
 
+// Helper functions for cons-based lists
+int valk_lval_list_is_empty(valk_lval_t* list);
+size_t valk_lval_list_count(valk_lval_t* list);
+valk_lval_t* valk_lval_list_nth(valk_lval_t* list, size_t n);
+
 valk_lval_t *valk_lval_add(valk_lval_t *lval, valk_lval_t *cell);
 valk_lval_t *valk_lval_pop(valk_lval_t *lval, size_t i);
 valk_lval_t *valk_lval_join(valk_lval_t *a, valk_lval_t *b);

@@ -65,6 +65,7 @@ add_library(valkyria
   src/parser.c
   src/memory.c
   src/concurrency.c
+  src/gc.c
 # TODO(networking): if should detect uring and if we have it we can get it here instead of libuv.
   src/aio_uv.c
   src/debug.c

@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "aio.h"
+#include "gc.h"
 #include "log.h"
 #include "memory.h"
 #include "parser.h"
@@ -55,7 +56,7 @@ int main(int argc, char *argv[]) {
       if (res->flags == LVAL_ERR) {
         valk_lval_println(res);
       } else {
-        while (res->expr.count) {
+        while (valk_lval_list_count(res) > 0) {
           valk_lval_t *x;
           VALK_WITH_ALLOC((void *)global_arena) {
             x = valk_lval_eval(env, valk_lval_pop(res, 0));
@@ -99,6 +100,14 @@ int main(int argc, char *argv[]) {
 
     free(input);
     valk_mem_arena_reset(scratch);
+
+    // Check if we should run GC
+    if (valk_gc_should_collect(global_arena)) {
+      size_t reclaimed = valk_gc_collect(env, global_arena);
+      if (reclaimed > 0) {
+        fprintf(stderr, "GC: Collected %zu bytes\n", reclaimed);
+      }
+    }
   }
 
   // No frees for arena-backed data; OS reclaim on exit.

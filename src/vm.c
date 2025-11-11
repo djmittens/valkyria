@@ -90,15 +90,12 @@ static valk_lval_t* __valk_vm_escape(valk_vm_t* vm, valk_lval_t* lval) {
         break;
       case LVAL_QEXPR:
       case LVAL_SEXPR:
-        xtra = lval->expr.count * sizeof(lval->expr.cell[0]);
-        res = valk_gc_alloc(vm->heap, sizeof(valk_lval_t) + xtra);
-        memcpy(res, lval, sizeof(valk_lval_t) + xtra);
-        res->expr.cell = (valk_lval_t**)(res + 1);
-        // copy over our cells
-        memcpy(res->expr.cell, lval->expr.cell, xtra);
-        for (size_t i = 0; i < lval->expr.count; i++) {
-          res->expr.cell[i] = __valk_vm_escape(vm, lval->expr.cell[i]);
-        }
+      case LVAL_CONS:
+        // Cons-based lists: recursively escape head and tail
+        res = valk_gc_alloc(vm->heap, sizeof(valk_lval_t));
+        memcpy(res, lval, sizeof(valk_lval_t));
+        res->cons.head = __valk_vm_escape(vm, lval->cons.head);
+        res->cons.tail = __valk_vm_escape(vm, lval->cons.tail);
         break;
       case LVAL_FUN: {
         // copy env
@@ -110,12 +107,6 @@ static valk_lval_t* __valk_vm_escape(valk_vm_t* vm, valk_lval_t* lval) {
         res->fun.body = __valk_vm_escape(vm, lval->fun.body);
         break;
       }
-      case LVAL_CONS:
-        res = valk_gc_alloc(vm->heap, sizeof(valk_lval_t));
-        memcpy(res, lval, sizeof(valk_lval_t));
-        res->cons.head = __valk_vm_escape(vm, lval->cons.head);
-        res->cons.tail = __valk_vm_escape(vm, lval->cons.tail);
-        break;
       case LVAL_NIL:
         res = valk_gc_alloc(vm->heap, sizeof(valk_lval_t));
         memcpy(res, lval, sizeof(valk_lval_t));

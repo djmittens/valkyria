@@ -27,7 +27,7 @@ void test_prelude_fun(VALK_TEST_ARGS()) {
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_SEXPR);
   VALK_TEST_ASSERT(
-      res->expr.count == 0,
+      valk_lval_list_count(res) == 0,
       "Defining a new function must result in an empty sexpr [%ld]", res->num);
 
   res = valk_eval(env, "(add 10 100)");
@@ -40,7 +40,7 @@ void test_prelude_fun(VALK_TEST_ARGS()) {
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_SEXPR);
   VALK_TEST_ASSERT(
-      res->expr.count == 0,
+      valk_lval_list_count(res) == 0,
       "Defining a new function must result in an empty sexpr [%ld]", res->num);
 
   res = valk_eval(env, "(_add 10 100)");
@@ -144,23 +144,23 @@ void test_prelude_split(VALK_TEST_ARGS()) {
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_QEXPR);
   VALK_TEST_ASSERT(
-      res->expr.count == 2,
+      valk_lval_list_count(res) == 2,
       "splitting at anything less than 1 should still work [result: %zu]",
-      res->expr.count);
+      valk_lval_list_count(res));
 
   res = valk_eval(env, "(split 3 {1 2 3 4 5 6 7 8})");
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_QEXPR);
   VALK_TEST_ASSERT(
-      res->expr.count == 2,
+      valk_lval_list_count(res) == 2,
       "splitting at 3rd index should yield lhs and rhs in a list [result: %zu]",
-      res->expr.count);
-  VALK_TEST_ASSERT(res->expr.cell[0]->expr.count == 3,
+      valk_lval_list_count(res));
+  VALK_TEST_ASSERT(valk_lval_list_count(valk_lval_list_nth(res, 0)) == 3,
               "lhs should have 3 things in it [result: %zu]",
-              res->expr.cell[0]->expr.count);
-  VALK_TEST_ASSERT(res->expr.cell[1]->expr.count == 5,
+              valk_lval_list_count(valk_lval_list_nth(res, 0)));
+  VALK_TEST_ASSERT(valk_lval_list_count(valk_lval_list_nth(res, 1)) == 5,
               "rhs should have 5 things in it [result: %zu]",
-              res->expr.cell[1]->expr.count);
+              valk_lval_list_count(valk_lval_list_nth(res, 1)));
 
   VALK_PASS();
 }
@@ -344,7 +344,7 @@ int main(int argc, const char **argv) {
   valk_lenv_builtins(env);  // load the builtins
 
   // Evaluate prelude sequentially (program semantics)
-  while (ast->expr.count) {
+  while (valk_lval_list_count(ast)) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(ast, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       // Stop early if prelude fails; tests will surface the error
@@ -369,9 +369,10 @@ valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
       return ast;
     case LVAL_QEXPR:
     case LVAL_SEXPR: {
-      for (size_t i = 0; i < ast->expr.count; i++) {
-        if (valk_lval_find_error(ast->expr.cell[i])) {
-          return ast->expr.cell[i];
+      for (size_t i = 0; i < valk_lval_list_count(ast); i++) {
+        valk_lval_t* child = valk_lval_list_nth(ast, i);
+        if (valk_lval_find_error(child)) {
+          return child;
         }
       }
       return nullptr;

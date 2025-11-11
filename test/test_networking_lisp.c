@@ -88,7 +88,7 @@ static void test_http2_google_script(VALK_TEST_ARGS()) {
 
   // Load prelude
   valk_lval_t *prelude = valk_parse_file("src/prelude.valk");
-  while (prelude->expr.count) {
+  while (valk_lval_list_count(prelude)) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(prelude, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
@@ -100,7 +100,7 @@ static void test_http2_google_script(VALK_TEST_ARGS()) {
   // Evaluate the google HTTP/2 script; any error fails the test
   valk_lval_t *script = valk_parse_file("test/google_http2.valk");
   valk_lval_t *last_result = NULL;
-  while (script->expr.count) {
+  while (valk_lval_list_count(script)) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(script, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
@@ -139,7 +139,7 @@ static void test_http2_error_handling(VALK_TEST_ARGS()) {
 
   // Load prelude
   valk_lval_t *prelude = valk_parse_file("src/prelude.valk");
-  while (prelude->expr.count) {
+  while (valk_lval_list_count(prelude)) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(prelude, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
@@ -151,7 +151,7 @@ static void test_http2_error_handling(VALK_TEST_ARGS()) {
   // Evaluate the error handling script - we EXPECT this to fail
   valk_lval_t *script = valk_parse_file("test/http2_error_handling.valk");
   int got_expected_error = 0;
-  while (script->expr.count) {
+  while (valk_lval_list_count(script)) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(script, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       // We expect an error from the connection failure
@@ -227,7 +227,7 @@ static void test_http2_rst_stream_handling(VALK_TEST_ARGS()) {
 
   // Load prelude
   valk_lval_t *prelude = valk_parse_file("src/prelude.valk");
-  while (prelude->expr.count) {
+  while (valk_lval_list_count(prelude)) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(prelude, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
@@ -240,7 +240,7 @@ static void test_http2_rst_stream_handling(VALK_TEST_ARGS()) {
   // This may result in either an error (if server sends RST_STREAM)
   // or success (if server accepts the request)
   valk_lval_t *script = valk_parse_file("test/http2_rst_stream.valk");
-  while (script->expr.count) {
+  while (valk_lval_list_count(script)) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(script, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       // If we get an error, it should be an HTTP/2 stream error
@@ -281,7 +281,7 @@ static void test_http2_server_client(VALK_TEST_ARGS()) {
 
   // Load prelude
   valk_lval_t *prelude = valk_parse_file("src/prelude.valk");
-  while (prelude->expr.count) {
+  while (valk_lval_list_count(prelude)) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(prelude, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
@@ -293,7 +293,7 @@ static void test_http2_server_client(VALK_TEST_ARGS()) {
   // Evaluate the server/client test script
   valk_lval_t *script = valk_parse_file("test/http2_server_client.valk");
   valk_lval_t *last_result = NULL;
-  while (script->expr.count) {
+  while (valk_lval_list_count(script)) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(script, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
