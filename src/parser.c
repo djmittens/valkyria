@@ -309,32 +309,32 @@ valk_lval_t* valk_lval_nil(void) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_NIL;
   res->origin_allocator = valk_thread_ctx.allocator;
-  res->cons.car = nullptr;
-  res->cons.cdr = nullptr;
+  res->cons.head = nullptr;
+  res->cons.tail = nullptr;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
-valk_lval_t* valk_lval_cons(valk_lval_t* car, valk_lval_t* cdr) {
+valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_CONS;
   res->origin_allocator = valk_thread_ctx.allocator;
-  res->cons.car = car;
-  res->cons.cdr = cdr;
+  res->cons.head = head;
+  res->cons.tail = tail;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
-valk_lval_t* valk_lval_car(valk_lval_t* cons) {
+valk_lval_t* valk_lval_head(valk_lval_t* cons) {
   VALK_ASSERT(LVAL_TYPE(cons) == LVAL_CONS, "Expected cons cell, got %s",
               valk_ltype_name(LVAL_TYPE(cons)));
-  return cons->cons.car;
+  return cons->cons.head;
 }
 
-valk_lval_t* valk_lval_cdr(valk_lval_t* cons) {
+valk_lval_t* valk_lval_tail(valk_lval_t* cons) {
   VALK_ASSERT(LVAL_TYPE(cons) == LVAL_CONS, "Expected cons cell, got %s",
               valk_ltype_name(LVAL_TYPE(cons)));
-  return cons->cons.cdr;
+  return cons->cons.tail;
 }
 
 int valk_lval_is_nil(valk_lval_t* v) {
@@ -364,11 +364,59 @@ valk_lval_t* valk_cons_to_qexpr(valk_lval_t* cons) {
 
   valk_lval_t* curr = cons;
   while (LVAL_TYPE(curr) == LVAL_CONS) {
-    valk_lval_add(qexpr, curr->cons.car);
-    curr = curr->cons.cdr;
+    valk_lval_add(qexpr, curr->cons.head);
+    curr = curr->cons.tail;
   }
 
   return qexpr;
+}
+
+// Recursively freeze a value tree, making it immutable
+void valk_lval_freeze(valk_lval_t* lval) {
+  if (lval == nullptr) return;
+  if (LVAL_IS_FROZEN(lval)) return;  // Already frozen
+
+  // Set freeze bit
+  lval->flags |= LVAL_FLAG_FROZEN;
+
+  // Recursively freeze children based on type
+  switch (LVAL_TYPE(lval)) {
+    case LVAL_SEXPR:
+    case LVAL_QEXPR:
+      for (size_t i = 0; i < lval->expr.count; i++) {
+        valk_lval_freeze(lval->expr.cell[i]);
+      }
+      break;
+    case LVAL_CONS:
+      valk_lval_freeze(lval->cons.head);
+      valk_lval_freeze(lval->cons.tail);
+      break;
+    case LVAL_FUN:
+      if (!lval->fun.builtin) {
+        valk_lval_freeze(lval->fun.formals);
+        valk_lval_freeze(lval->fun.body);
+        // Note: Don't freeze env - it may be shared/mutable
+      }
+      break;
+    case LVAL_ENV:
+      // Freeze all values in environment
+      for (size_t i = 0; i < lval->env.count; i++) {
+        valk_lval_freeze(lval->env.vals[i]);
+      }
+      break;
+    default:
+      // Atoms (NUM, SYM, STR, ERR, NIL, REF) have no children
+      break;
+  }
+}
+
+// Assert that a value is mutable (not frozen) - crash if frozen
+void valk_lval_assert_mutable(valk_lval_t* lval) {
+  if (lval == nullptr) return;
+
+  VALK_ASSERT(!LVAL_IS_FROZEN(lval),
+              "Attempted to mutate frozen value of type %s",
+              valk_ltype_name(LVAL_TYPE(lval)));
 }
 
 valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
@@ -444,13 +492,13 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
       break;
     }
     case LVAL_CONS:
-      res->cons.car = valk_lval_copy(lval->cons.car);
-      res->cons.cdr = valk_lval_copy(lval->cons.cdr);
+      res->cons.head = valk_lval_copy(lval->cons.head);
+      res->cons.tail = valk_lval_copy(lval->cons.tail);
       break;
     case LVAL_NIL:
       // Nil has no data to copy
-      res->cons.car = nullptr;
-      res->cons.cdr = nullptr;
+      res->cons.head = nullptr;
+      res->cons.tail = nullptr;
       break;
     case LVAL_UNDEFINED:
       break;
@@ -545,8 +593,8 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
       }
       return 1;
     case LVAL_CONS:
-      return valk_lval_eq(x->cons.car, y->cons.car) &&
-             valk_lval_eq(x->cons.cdr, y->cons.cdr);
+      return valk_lval_eq(x->cons.head, y->cons.head) &&
+             valk_lval_eq(x->cons.tail, y->cons.tail);
     case LVAL_NIL:
       return 1;  // All nils are equal
     case LVAL_REF:
@@ -693,6 +741,9 @@ valk_lval_t* valk_lval_pop(valk_lval_t* lval, size_t i) {
               i, lval->expr.count);
   LVAL_ASSERT((valk_lval_t*)0, lval->expr.count > 0, "Cant pop from empty");
 
+  // Check if value is frozen (immutable)
+  valk_lval_assert_mutable(lval);
+
   valk_lval_t* cell = lval->expr.cell[i];
   // shift dems down
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -718,6 +769,9 @@ valk_lval_t* valk_lval_add(valk_lval_t* lval, valk_lval_t* cell) {
   LVAL_ASSERT_TYPE(lval, lval, LVAL_SEXPR, LVAL_QEXPR);
   // TODO(main): i need to invest more into null checks in this file
   LVAL_ASSERT(lval, cell != nullptr, "Adding nullptr to LVAL is not allowed");
+
+  // Check if value is frozen (immutable)
+  valk_lval_assert_mutable(lval);
 
   size_t old_count = lval->expr.count;
   size_t new_count = old_count + 1;
@@ -812,8 +866,8 @@ void valk_lval_print(valk_lval_t* val) {
       printf("(");
       valk_lval_t* curr = val;
       while (LVAL_TYPE(curr) == LVAL_CONS) {
-        valk_lval_print(curr->cons.car);
-        curr = curr->cons.cdr;
+        valk_lval_print(curr->cons.head);
+        curr = curr->cons.tail;
         if (LVAL_TYPE(curr) == LVAL_CONS) {
           printf(" ");
         }
@@ -1275,7 +1329,7 @@ static valk_lval_t* valk_builtin_head(valk_lenv_t* e, valk_lval_t* a) {
 
   // Convert to cons list, extract head (zero-copy!), convert back to QEXPR
   valk_lval_t* cons = valk_qexpr_to_cons(a->expr.cell[0]);
-  valk_lval_t* head_cons = valk_lval_cons(cons->cons.car, valk_lval_nil());
+  valk_lval_t* head_cons = valk_lval_cons(cons->cons.head, valk_lval_nil());
   return valk_cons_to_qexpr(head_cons);
 }
 
@@ -1289,7 +1343,22 @@ static valk_lval_t* valk_builtin_tail(valk_lenv_t* e, valk_lval_t* a) {
 
   // Convert to cons list, extract tail (zero-copy!), convert back to QEXPR
   valk_lval_t* cons = valk_qexpr_to_cons(a->expr.cell[0]);
-  return valk_cons_to_qexpr(cons->cons.cdr);
+  return valk_cons_to_qexpr(cons->cons.tail);
+}
+
+// Helper: Build cons list without last element (all but last)
+static valk_lval_t* valk_cons_init(valk_lval_t* cons) {
+  if (valk_lval_is_nil(cons)) {
+    return valk_lval_nil();  // Empty list -> empty list
+  }
+
+  // If next is nil, we're at the last element - return empty
+  if (valk_lval_is_nil(cons->cons.tail)) {
+    return valk_lval_nil();
+  }
+
+  // Otherwise cons current element with init of rest
+  return valk_lval_cons(cons->cons.head, valk_cons_init(cons->cons.tail));
 }
 
 static valk_lval_t* valk_builtin_init(valk_lenv_t* e, valk_lval_t* a) {
@@ -1298,13 +1367,10 @@ static valk_lval_t* valk_builtin_init(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, a->expr.cell[0], LVAL_QEXPR);
   LVAL_ASSERT_COUNT_GT(a, a->expr.cell[0], 0);
 
-  // Create new list without last element (non-mutating)
-  valk_lval_t* res = valk_lval_qexpr_empty();
-  valk_lval_t* list = a->expr.cell[0];
-  for (size_t i = 0; i < list->expr.count - 1; i++) {
-    valk_lval_add(res, list->expr.cell[i]);
-  }
-  return res;
+  // Convert to cons list, remove last element, convert back
+  valk_lval_t* cons = valk_qexpr_to_cons(a->expr.cell[0]);
+  valk_lval_t* init_cons = valk_cons_init(cons);
+  return valk_cons_to_qexpr(init_cons);
 }
 
 static valk_lval_t* valk_builtin_join(valk_lenv_t* e, valk_lval_t* a) {

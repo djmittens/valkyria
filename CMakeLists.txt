@@ -130,3 +130,7 @@ include_directories(test_concurrency src/)
 add_executable(test_memory test/test_memory.c test/testing.c)
 target_link_libraries(test_memory PRIVATE "-lc" "-lm" valkyria)
 include_directories(test_memory src/)
+
+add_executable(test_freeze test/test_freeze.c test/testing.c)
+target_link_libraries(test_freeze PRIVATE "-lc" valkyria)
+include_directories(test_freeze src/)

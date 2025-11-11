@@ -20,8 +20,14 @@
 // GC mark bit
 #define LVAL_FLAG_GC_MARK   (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS))
 
+// Freeze bit - marks immutable values
+#define LVAL_FLAG_FROZEN    (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 1))
+
 // Helper to get allocation type
 #define LVAL_ALLOC(_lval) ((_lval)->flags & LVAL_ALLOC_MASK)
+
+// Helper to check if frozen
+#define LVAL_IS_FROZEN(_lval) ((_lval)->flags & LVAL_FLAG_FROZEN)
 
 // Forward declarations
 struct valk_lenv_t;
@@ -70,16 +76,15 @@ struct valk_lval_t {
       // NULL if its a lambda
       valk_lval_builtin_t *builtin;
     } fun;
+    // DEPRECATED: Use cons field instead (for SEXPR/QEXPR migration)
     struct {
       struct valk_lval_t **cell;
       size_t count;
-      // char* file;
-      // size_t line;
     } expr;
     struct {
-      valk_lval_t *car;  // Head element
-      valk_lval_t *cdr;  // Tail (rest of list)
-    } cons;
+      valk_lval_t *head;  // First element
+      valk_lval_t *tail;  // Rest of list
+    } cons;  // Used by LVAL_CONS, LVAL_SEXPR, LVAL_QEXPR
     struct {
       char *type;
       void *ptr;
@@ -107,11 +112,11 @@ valk_lval_t *valk_lval_sexpr_empty(void);
 valk_lval_t *valk_lval_qexpr_empty(void);
 
 // Cons cell constructors
-valk_lval_t *valk_lval_nil(void);                              // Empty list
-valk_lval_t *valk_lval_cons(valk_lval_t *car, valk_lval_t *cdr);  // Cons cell
-valk_lval_t *valk_lval_car(valk_lval_t *cons);                    // Get head
-valk_lval_t *valk_lval_cdr(valk_lval_t *cons);                    // Get tail
-int valk_lval_is_nil(valk_lval_t *v);                             // Check if nil
+valk_lval_t *valk_lval_nil(void);                                   // Empty list
+valk_lval_t *valk_lval_cons(valk_lval_t *head, valk_lval_t *tail);  // Cons cell
+valk_lval_t *valk_lval_head(valk_lval_t *cons);                     // Get head
+valk_lval_t *valk_lval_tail(valk_lval_t *cons);                     // Get tail
+int valk_lval_is_nil(valk_lval_t *v);                               // Check if nil
 
 //// END Constructors ////
 
@@ -123,6 +128,10 @@ valk_lval_t *valk_lval_copy(valk_lval_t *lval);
 valk_lval_t *valk_intern(valk_lenv_t *env, valk_lval_t *val);
 void valk_lval_finalize(valk_lval_t *lval);
 int valk_lval_eq(valk_lval_t *x, valk_lval_t *y);
+
+// Immutability support
+void valk_lval_freeze(valk_lval_t *lval);      // Recursively freeze value tree
+void valk_lval_assert_mutable(valk_lval_t *lval);  // Crash if frozen
 
 valk_lval_t *valk_lval_add(valk_lval_t *lval, valk_lval_t *cell);
 valk_lval_t *valk_lval_pop(valk_lval_t *lval, size_t i);

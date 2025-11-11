@@ -113,14 +113,14 @@ static valk_lval_t* __valk_vm_escape(valk_vm_t* vm, valk_lval_t* lval) {
       case LVAL_CONS:
         res = valk_gc_alloc(vm->heap, sizeof(valk_lval_t));
         memcpy(res, lval, sizeof(valk_lval_t));
-        res->cons.car = __valk_vm_escape(vm, lval->cons.car);
-        res->cons.cdr = __valk_vm_escape(vm, lval->cons.cdr);
+        res->cons.head = __valk_vm_escape(vm, lval->cons.head);
+        res->cons.tail = __valk_vm_escape(vm, lval->cons.tail);
         break;
       case LVAL_NIL:
         res = valk_gc_alloc(vm->heap, sizeof(valk_lval_t));
         memcpy(res, lval, sizeof(valk_lval_t));
-        res->cons.car = nullptr;
-        res->cons.cdr = nullptr;
+        res->cons.head = nullptr;
+        res->cons.tail = nullptr;
         break;
       case LVAL_ENV:
       case LVAL_REF:

@@ -377,9 +377,9 @@ valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
       return nullptr;
     }
     case LVAL_CONS: {
-      valk_lval_t *err = valk_lval_find_error(ast->cons.car);
+      valk_lval_t *err = valk_lval_find_error(ast->cons.head);
       if (err) return err;
-      return valk_lval_find_error(ast->cons.cdr);
+      return valk_lval_find_error(ast->cons.tail);
     }
     case LVAL_NIL:
     case LVAL_STR:
