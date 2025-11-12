@@ -55,12 +55,12 @@
 - [x] Add `LVAL_IS_FROZEN` macro for checking frozen status
 
 #### 2.2. Protect Mutation Operations
-- [ ] ~~Add freeze check to `valk_lval_add`~~ (not implemented - using freeze-by-default)
-- [ ] ~~Add freeze check to `valk_lval_pop`~~ (not implemented - using freeze-by-default)
+- [x] Add freeze check to `valk_lval_add` (parser.c:911)
+- [x] Add freeze check to `valk_lval_pop` (parser.c:870)
 - [x] No direct `->expr.cell[i] = ` sites exist (verified in mutation audit)
 - [x] No direct `->str = ` sites exist (verified in mutation audit)
 
-**Note**: Instead of runtime freeze checks, we implemented freeze-by-default for literals.
+**Note**: Runtime checks ARE implemented via `valk_lval_assert_mutable()` AND we use freeze-by-default for literals.
 
 #### 2.3. Freeze at Boundary Points
 - [x] Freeze values returned from `valk_lval_eval` (via default frozen literals)
