@@ -50,6 +50,8 @@ char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self) {
       return "Arena Alloc";
     case VALK_ALLOC_SLAB:
       return "Slab Alloc";
+    case VALK_ALLOC_GC_HEAP:
+      return "GC Heap Alloc";
   }
 }
 
@@ -405,7 +407,13 @@ void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes) {
       return (void *)valk_slab_aquire((void *)self)->data;
     case VALK_ALLOC_MALLOC:
       return malloc(bytes);
+    case VALK_ALLOC_GC_HEAP: {
+      // Forward declare - actual implementation in gc.c
+      extern void* valk_gc_malloc_heap_alloc(void* heap, size_t bytes);
+      return valk_gc_malloc_heap_alloc((void *)self, bytes);
+    }
   }
+  return NULL;
 }
 
 void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, size_t num,
