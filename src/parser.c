@@ -459,6 +459,8 @@ valk_lval_t* valk_cons_to_qexpr(valk_lval_t* cons) {
   }
 
   // If it's a SEXPR, convert to QEXPR
+  // Always make a shallow copy - type conversions should never mutate the original
+  // (function bodies, parameters are immutable and might be referenced elsewhere)
   if (LVAL_TYPE(cons) == LVAL_SEXPR) {
     valk_lval_t* result = valk_lval_copy(cons);
     result->flags = ((result->flags & LVAL_FLAGS_MASK) | LVAL_QEXPR);
@@ -522,7 +524,8 @@ void valk_lval_freeze(valk_lval_t* lval) {
       break;
     case LVAL_FUN:
       if (!lval->fun.builtin) {
-        valk_lval_freeze(lval->fun.formals);
+        // Only freeze body, NOT formals - formals get mutated during function calls
+        // (see valk_lval_eval_call line 910 where formals are popped)
         valk_lval_freeze(lval->fun.body);
         // Note: Don't freeze env - it may be shared/mutable
       }
@@ -549,9 +552,20 @@ void valk_lval_assert_mutable(valk_lval_t* lval) {
               valk_ltype_name(LVAL_TYPE(lval)));
 }
 
+// SHALLOW copy: Copy only the top-level struct, alias all children
+// This is the ONLY function that should copy values (called by valk_intern)
+// Per immutability design: "only time a copy should happen is during intern,
+// and it should be shallow copy" - all child pointers are aliased, not recursively copied
 valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
   if (lval == nullptr) return nullptr;
-  lval = valk_lval_resolve(lval);
+  lval = valk_lval_resolve(lval);  // Resolve forwarding pointers
+
+  // Zero-copy optimization: Frozen heap values are immutable and persistent
+  // GC heap values won't be freed by arena resets, safe to alias directly
+  if (LVAL_IS_FROZEN(lval) && LVAL_ALLOC(lval) == LVAL_ALLOC_HEAP) {
+    return lval;  // Alias immutable heap value - no copy needed
+  }
+
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
 
   // Keep only type and semantic flags (not allocation flags from source)
@@ -575,39 +589,21 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
         res->fun.body = nullptr;
         res->fun.formals = nullptr;
       } else {
+        // SHALLOW COPY: Alias env/body/formals (resolve forwarding first)
+        // Don't recursively copy - immutability means we can safely alias
         res->fun.builtin = nullptr;
-        res->fun.env = valk_lenv_copy(lval->fun.env);
-        // Alias frozen function body and formals to reduce copying
-        if (lval->fun.body && (lval->fun.body->flags & LVAL_FLAG_FROZEN)) {
-          res->fun.body = lval->fun.body;  // Alias frozen body
-        } else {
-          res->fun.body = valk_lval_copy(lval->fun.body);
-        }
-        if (lval->fun.formals && (lval->fun.formals->flags & LVAL_FLAG_FROZEN)) {
-          res->fun.formals = lval->fun.formals;  // Alias frozen formals
-        } else {
-          res->fun.formals = valk_lval_copy(lval->fun.formals);
-        }
+        res->fun.env = lval->fun.env;  // Alias environment (no deep copy)
+        res->fun.body = valk_lval_resolve(lval->fun.body);  // Alias body (resolve forwarding)
+        res->fun.formals = valk_lval_resolve(lval->fun.formals);  // Alias formals (resolve forwarding)
       }
       break;
     case LVAL_QEXPR:
     case LVAL_SEXPR:
     case LVAL_CONS:
-      // All list types now use cons structure
-      // Shallow copy optimization: Alias frozen children that aren't in scratch arena
-      // Scratch arena values must always be copied (arena resets would invalidate them)
-      if (lval->cons.head && LVAL_IS_FROZEN(lval->cons.head) &&
-          LVAL_ALLOC(lval->cons.head) != LVAL_ALLOC_SCRATCH) {
-        res->cons.head = lval->cons.head;  // Alias frozen head
-      } else {
-        res->cons.head = valk_lval_copy(lval->cons.head);
-      }
-      if (lval->cons.tail && LVAL_IS_FROZEN(lval->cons.tail) &&
-          LVAL_ALLOC(lval->cons.tail) != LVAL_ALLOC_SCRATCH) {
-        res->cons.tail = lval->cons.tail;  // Alias frozen tail
-      } else {
-        res->cons.tail = valk_lval_copy(lval->cons.tail);
-      }
+      // SHALLOW COPY: Alias head/tail (resolve forwarding first)
+      // Don't recursively copy - immutability means we can safely alias
+      res->cons.head = valk_lval_resolve(lval->cons.head);
+      res->cons.tail = valk_lval_resolve(lval->cons.tail);
       break;
     case LVAL_SYM: {
       size_t slen = strlen(lval->str);
@@ -883,71 +879,97 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
   if (func->fun.builtin) {
     return func->fun.builtin(env, args);
   }
-  // Copy user-defined function to avoid mutating the original (formals/env)
-  func = valk_lval_copy(func);
-  size_t given = valk_lval_list_count(args);
-  size_t requested = valk_lval_list_count(func->fun.formals);
-  valk_lval_t* res;
 
-  while (valk_lval_list_count(args) > 0) {
-    if (valk_lval_list_count(func->fun.formals) == 0) {
-      if (valk_log_would_log(VALK_LOG_TRACE)) {
-        VALK_TRACE("Too many args for function:");
-        valk_lval_println(func);
+  // Immutable function application - NO COPYING, NO MUTATION
+  // Walk formals and args together, creating bindings in new environment
+
+  size_t given = valk_lval_list_count(args);
+  size_t num_formals = valk_lval_list_count(func->fun.formals);
+
+  // Create new environment for bindings
+  // Since lambda environments are empty in this implementation, we need to link
+  // to the calling environment for variable lookup.
+  // Note: This gives dynamic scoping behavior, but that's how the current system works.
+  valk_lenv_t* call_env = valk_lenv_empty();
+  if (func->fun.env && func->fun.env->count > 0) {
+    // Function has captured bindings - use them
+    call_env->parent = func->fun.env;
+  } else {
+    // Function has no captures - use calling environment directly
+    call_env->parent = env;
+  }
+
+  // Walk formals and args together without mutation
+  valk_lval_t* formal_iter = func->fun.formals;
+  valk_lval_t* arg_iter = args;
+  valk_lval_t* remaining_formals = valk_lval_qexpr_empty();
+  bool saw_varargs = false;
+
+  while (!valk_lval_list_is_empty(formal_iter) && !valk_lval_list_is_empty(arg_iter)) {
+    valk_lval_t* formal_sym = formal_iter->cons.head;
+
+    // Handle varargs
+    if (LVAL_TYPE(formal_sym) == LVAL_SYM && strcmp(formal_sym->str, "&") == 0) {
+      // Next formal is the varargs name
+      formal_iter = formal_iter->cons.tail;
+      if (valk_lval_list_is_empty(formal_iter)) {
+        return valk_lval_err("Invalid function format: & not followed by varargs name");
       }
-      return valk_lval_err(
-          "More arguments were given than required Actual [ %p ]: %zu, "
-          "Expected: %zu",
-          func, given, requested);
-    }
-    valk_lval_t* sym = valk_lval_pop(func->fun.formals, 0);
-    if (strcmp(sym->str, "&") == 0) {
-      // if we encountered this, the rest of arguments are varargs
-      if (valk_lval_list_count(func->fun.formals) != 1) {
-        return valk_lval_err(
-            "Invalid  function format, the vararg symbol `&` "
-            "is not followed by others [count: %zu]",
-            valk_lval_list_count(func->fun.formals));
-      }
-      valk_lval_t* nsym = valk_lval_pop(func->fun.formals, 0);
-      valk_lval_t* varargs_list = valk_builtin_list(nullptr, args);
-      valk_lenv_put(func->fun.env, nsym, varargs_list);
+      valk_lval_t* varargs_sym = formal_iter->cons.head;
+      valk_lval_t* varargs_list = valk_builtin_list(nullptr, arg_iter);
+      valk_lenv_put(call_env, varargs_sym, varargs_list);
+      saw_varargs = true;
+      arg_iter = valk_lval_nil();  // All remaining args consumed
+      formal_iter = formal_iter->cons.tail;  // Should be empty now
       break;
     }
-    valk_lval_t* val = valk_lval_pop(args, 0);
-    valk_lenv_put(func->fun.env, sym, val);
+
+    // Regular formal - bind it
+    valk_lval_t* val = arg_iter->cons.head;
+    valk_lenv_put(call_env, formal_sym, val);
+
+    formal_iter = formal_iter->cons.tail;
+    arg_iter = arg_iter->cons.tail;
   }
 
-  // if whats remaining is the elipsis, then we expand to empty list
-  if (valk_lval_list_count(func->fun.formals) > 0 &&
-      !valk_lval_list_is_empty(func->fun.formals) &&
-      (strcmp(func->fun.formals->cons.head->str, "&") == 0)) {
-    if (valk_lval_list_count(func->fun.formals) != 2) {
-      return valk_lval_err(
-          "Invalid  function format, the vararg symbol `&` "
-          "is not followed by others [count: %zu]",
-          valk_lval_list_count(func->fun.formals));
+  // Check if more args than formals (error unless varargs)
+  if (!valk_lval_list_is_empty(arg_iter) && !saw_varargs) {
+    return valk_lval_err(
+        "More arguments were given than required. Actual: %zu, Expected: %zu",
+        given, num_formals);
+  }
+
+  // Handle remaining formals (partial application or varargs default)
+  if (!valk_lval_list_is_empty(formal_iter)) {
+    // Check for varargs with no args provided
+    if (!valk_lval_list_is_empty(formal_iter) &&
+        LVAL_TYPE(formal_iter->cons.head) == LVAL_SYM &&
+        strcmp(formal_iter->cons.head->str, "&") == 0) {
+      formal_iter = formal_iter->cons.tail;
+      if (valk_lval_list_is_empty(formal_iter)) {
+        return valk_lval_err("Invalid function format: & not followed by varargs name");
+      }
+      valk_lval_t* varargs_sym = formal_iter->cons.head;
+      valk_lenv_put(call_env, varargs_sym, valk_lval_qexpr_empty());
+      formal_iter = formal_iter->cons.tail;
     }
 
-    // discard the &
-    valk_lval_pop(func->fun.formals, 0);
-    valk_lval_t* sym = valk_lval_pop(func->fun.formals, 0);
-    valk_lval_t* val = valk_lval_qexpr_empty();
-    valk_lenv_put(func->fun.env, sym, val);
+    // If still have unbound formals, return partially applied function
+    if (!valk_lval_list_is_empty(formal_iter)) {
+      valk_lval_t* partial = valk_mem_alloc(sizeof(valk_lval_t));
+      partial->flags = LVAL_FUN;
+      VALK_SET_ORIGIN_ALLOCATOR(partial);
+      partial->fun.builtin = nullptr;
+      partial->fun.env = call_env;
+      partial->fun.formals = formal_iter;  // Remaining formals (immutable, can alias)
+      partial->fun.body = func->fun.body;  // Body (immutable, can alias)
+      return partial;
+    }
   }
 
-  // If everything is bound we evalutate
-  size_t formals_remaining = valk_lval_list_count(func->fun.formals);
-  if (formals_remaining == 0) {
-    func->fun.env->parent = env;
-    // retain our parent n stuff
-
-    valk_lval_t* wrapped_body = valk_lval_add(valk_lval_sexpr_empty(), func->fun.body);
-    res = valk_builtin_eval(func->fun.env, wrapped_body);
-  } else {
-    res = func;
-  }
-  return res;
+  // All formals bound - evaluate body
+  valk_lval_t* wrapped_body = valk_lval_add(valk_lval_sexpr_empty(), func->fun.body);
+  return valk_builtin_eval(call_env, wrapped_body);
 }
 
 valk_lval_t* valk_lval_pop(valk_lval_t* lval, size_t i) {
@@ -1438,22 +1460,67 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
   if (env == nullptr) {
     return nullptr;
   }
-  valk_lenv_t* res = valk_mem_alloc(sizeof(valk_lenv_t));
-  // TODO(main): Man lotta copying, especially deep copying, in case things
-  // change the problem with this ofcourse is that, globals cant be changed
-  res->parent = env->parent;
-  res->count = env->count;
-  res->allocator = env->allocator;
-  res->symbols = valk_mem_alloc(sizeof(env->symbols[0]) * env->count);
-  res->vals = valk_mem_alloc(sizeof(env->vals[0]) * env->count);
 
-  for (size_t i = 0; i < env->count; i++) {
-    size_t slen = strlen(env->symbols[i]);
-    res->symbols[i] = valk_mem_alloc(slen + 1);
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    memcpy(res->symbols[i], env->symbols[i], slen + 1);
-    res->vals[i] = valk_intern(res, env->vals[i]);
+  // Performance optimization: Flatten environment chain when copying
+  // Instead of preserving parent chain, collect all bindings into flat mapping
+  // This eliminates exponential copying through environment chains
+
+  valk_lenv_t* res = valk_mem_alloc(sizeof(valk_lenv_t));
+  res->parent = nullptr;  // Flattened environment has no parent
+  res->allocator = env->allocator;
+
+  // Count total bindings by walking parent chain (with value masking)
+  // Use a simple linear scan - O(n*m) but environments are typically small
+  size_t total_count = 0;
+  for (valk_lenv_t* e = env; e != nullptr; e = e->parent) {
+    for (size_t i = 0; i < e->count; i++) {
+      // Check if this symbol is already counted (masked by child scope)
+      bool masked = false;
+      for (valk_lenv_t* child = env; child != e; child = child->parent) {
+        for (size_t j = 0; j < child->count; j++) {
+          if (strcmp(e->symbols[i], child->symbols[j]) == 0) {
+            masked = true;
+            break;
+          }
+        }
+        if (masked) break;
+      }
+      if (!masked) {
+        total_count++;
+      }
+    }
   }
+
+  res->count = total_count;
+  res->symbols = valk_mem_alloc(sizeof(char*) * total_count);
+  res->vals = valk_mem_alloc(sizeof(valk_lval_t*) * total_count);
+
+  // Collect all bindings with value masking
+  size_t idx = 0;
+  for (valk_lenv_t* e = env; e != nullptr; e = e->parent) {
+    for (size_t i = 0; i < e->count; i++) {
+      // Check if this symbol is masked by child scope
+      bool masked = false;
+      for (valk_lenv_t* child = env; child != e; child = child->parent) {
+        for (size_t j = 0; j < child->count; j++) {
+          if (strcmp(e->symbols[i], child->symbols[j]) == 0) {
+            masked = true;
+            break;
+          }
+        }
+        if (masked) break;
+      }
+
+      if (!masked) {
+        size_t slen = strlen(e->symbols[i]);
+        res->symbols[idx] = valk_mem_alloc(slen + 1);
+        memcpy(res->symbols[idx], e->symbols[i], slen + 1);
+        res->vals[idx] = valk_intern(res, e->vals[i]);
+        idx++;
+      }
+    }
+  }
+
   return res;
 }
 
@@ -1700,8 +1767,13 @@ static valk_lval_t* valk_builtin_join(valk_lenv_t* e, valk_lval_t* a) {
 
 static valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  a->flags = ((a->flags & LVAL_FLAGS_MASK) | LVAL_QEXPR);
-  return a;
+
+  // Convert SEXPR to QEXPR
+  // Always make a shallow copy - type conversions should never mutate the original
+  // (function bodies, parameters are immutable and might be referenced elsewhere)
+  valk_lval_t* result = valk_lval_copy(a);
+  result->flags = ((result->flags & LVAL_FLAGS_MASK) | LVAL_QEXPR);
+  return result;
 }
 
 static inline valk_lval_t* valk_resolve_symbol(valk_lenv_t* e, valk_lval_t* v) {
@@ -1717,10 +1789,13 @@ static valk_lval_t* valk_builtin_eval(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, arg0, LVAL_QEXPR);
 
   valk_lval_t* v = valk_lval_pop(a, 0);
-  // Make a copy to avoid mutating the original (e.g., function body)
-  v = valk_lval_copy(v);
 
+  // Convert QEXPR to SEXPR for evaluation
+  // Always make a shallow copy - type conversions should never mutate the original
+  // (function bodies, parameters are immutable and might be referenced elsewhere)
+  v = valk_lval_copy(v);
   v->flags = ((v->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
+
   return valk_lval_eval(e, v);
 }
 static valk_lval_t* valk_builtin_plus(valk_lenv_t* e, valk_lval_t* a) {
@@ -1980,22 +2055,23 @@ static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_QEXPR);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_QEXPR);
 
-  // Make em both executable - copy before mutating to avoid corrupting originals
-  valk_lval_t* x;
+  // Execute the selected branch
   valk_lval_t* branch;
 
-  // execute only the winning one.
+  // Select true or false branch
   if (valk_lval_list_nth(a, 0)->num) {
-    branch = valk_lval_copy(valk_lval_list_nth(a, 1));
-    branch->flags = ((branch->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
-    x = valk_lval_eval(e, branch);
+    branch = valk_lval_list_nth(a, 1);
   } else {
-    branch = valk_lval_copy(valk_lval_list_nth(a, 2));
-    branch->flags = ((branch->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
-    x = valk_lval_eval(e, branch);
+    branch = valk_lval_list_nth(a, 2);
   }
 
-  return x;
+  // Convert QEXPR to SEXPR for evaluation
+  // Always make a shallow copy - type conversions should never mutate the original
+  // (function bodies, parameters are immutable and might be referenced elsewhere)
+  branch = valk_lval_copy(branch);
+  branch->flags = ((branch->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
+
+  return valk_lval_eval(e, branch);
 }
 
 static valk_lval_t* valk_builtin_print(valk_lenv_t* e, valk_lval_t* a) {

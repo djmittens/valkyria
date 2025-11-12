@@ -17,6 +17,9 @@ typedef struct valk_gc_header_t {
   // User data follows immediately after this header
 } valk_gc_header_t;
 
+// Forward declare slab allocator
+struct valk_slab_t;
+
 // GC malloc heap - malloc-based allocator with mark & sweep collection
 typedef struct {
   valk_mem_allocator_e type;  // VALK_ALLOC_GC_HEAP
@@ -27,6 +30,8 @@ typedef struct {
   valk_lenv_t* root_env;      // Root environment for marking
   valk_gc_header_t* free_list;  // Free-list for fast reuse of swept objects
   size_t free_list_size;      // Number of objects in free list
+  struct valk_slab_t* lval_slab;  // Fast slab allocator for valk_lval_t objects
+  size_t lval_size;           // Size of valk_lval_t for slab allocation
 } valk_gc_malloc_heap_t;
 
 // Initialize GC malloc heap with threshold

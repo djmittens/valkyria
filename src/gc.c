@@ -34,6 +34,26 @@ valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold) {
   heap->free_list = NULL;
   heap->free_list_size = 0;
 
+  // Create fast slab allocator for valk_lval_t objects
+  // Fixed large size - simple and fast, no threshold complexity
+  extern size_t __valk_lval_size;  // Defined in parser.c
+  heap->lval_size = __valk_lval_size;
+
+  // Fixed slab size: 256K objects = ~64MB for 256-byte lval_t+header
+  // Large enough for most workloads, avoids exhaustion during heavy copying
+  size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
+  size_t num_lvals = 256 * 1024;  // 256K objects
+
+  size_t slab_size = valk_slab_size(slab_item_size, num_lvals);
+  heap->lval_slab = malloc(slab_size);
+  if (heap->lval_slab == NULL) {
+    VALK_WARN("Failed to allocate lval slab, will fall back to malloc");
+  } else {
+    valk_slab_init(heap->lval_slab, slab_item_size, num_lvals);
+    VALK_INFO("GC slab allocated: %zu objects, %.1f MB (%zu bytes header + %zu bytes lval per object)",
+              num_lvals, slab_size / (1024.0 * 1024.0), sizeof(valk_gc_header_t), heap->lval_size);
+  }
+
   VALK_INFO("GC heap initialized with threshold: %zu bytes (%.1f MB)",
             gc_threshold, gc_threshold / (1024.0 * 1024.0));
 
@@ -64,10 +84,20 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
 
   valk_gc_header_t* header = NULL;
   size_t total_size = sizeof(valk_gc_header_t) + bytes;
+  bool from_slab = false;
   bool from_free_list = false;
 
+  // Fastest path: Slab allocator for valk_lval_t objects (most common case)
+  if (bytes == heap->lval_size && heap->lval_slab != NULL) {
+    header = valk_mem_allocator_alloc((void*)heap->lval_slab, total_size);
+    if (header != NULL) {
+      from_slab = true;
+      VALK_TRACE("GC alloc: %zu bytes from slab at %p", bytes, (void*)(header + 1));
+    }
+  }
+
   // Fast path: Pop from free list if exact size match (O(1) stack operation)
-  if (heap->free_list != NULL && heap->free_list->size == bytes) {
+  if (header == NULL && heap->free_list != NULL && heap->free_list->size == bytes) {
     header = heap->free_list;
     heap->free_list = header->gc_next;
     heap->free_list_size--;
@@ -75,7 +105,7 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
     VALK_TRACE("GC alloc: %zu bytes from free list at %p", bytes, (void*)(header + 1));
   }
 
-  // Slow path: malloc if free list empty or size mismatch
+  // Slow path: malloc if not found in slab or free list
   if (header == NULL) {
     header = malloc(total_size);
     if (header == NULL) {
@@ -93,8 +123,8 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
   header->gc_next = heap->objects;
   header->size = bytes;
 
-  // Zero out user data only for fresh malloc (free-list objects will be reinitialized by caller)
-  if (!from_free_list) {
+  // Zero out user data only for fresh malloc (slab/free-list objects will be reinitialized by caller)
+  if (!from_slab && !from_free_list) {
     void* user_data = (void*)(header + 1);
     memset(user_data, 0, bytes);
   }
@@ -286,7 +316,7 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
       // Object is live - keep it
       header_ptr = &header->gc_next;
     } else {
-      // Object is garbage - add to free list for reuse
+      // Object is garbage - return to slab or free list for reuse
       *header_ptr = header->gc_next;  // Remove from live objects list
 
       // TODO: For now, only free the lval struct itself, not string data
@@ -297,10 +327,16 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
       reclaimed += total_size;
       freed_count++;
 
-      // Add to free list for fast reuse
-      header->gc_next = heap->free_list;
-      heap->free_list = header;
-      heap->free_list_size++;
+      // Return to slab if it's a valk_lval_t, otherwise add to free list
+      if (header->size == heap->lval_size && heap->lval_slab != NULL) {
+        valk_mem_allocator_free((void*)heap->lval_slab, header);
+        VALK_TRACE("GC sweep: returned %p to slab", user_data);
+      } else {
+        // Add to free list for fast reuse
+        header->gc_next = heap->free_list;
+        heap->free_list = header;
+        heap->free_list_size++;
+      }
     }
   }
 
@@ -450,24 +486,52 @@ void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
   while (current != NULL) {
     valk_gc_header_t* next = current->gc_next;
 
-    // TODO: Deep free strings/buffers in lval_t objects
-    // For now just free the allocation itself (header + user data)
-    size_t total_size = sizeof(valk_gc_header_t) + current->size;
-    freed_bytes += total_size;
-    freed_count++;
+    // Only free malloc'd objects, not slab objects
+    // Slab objects will be freed when we free the slab itself
+    // Check: if object pointer is within slab memory range, skip free
+    bool from_slab = false;
+    if (heap->lval_slab != NULL) {
+      uintptr_t slab_start = (uintptr_t)heap->lval_slab;
+      size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
+      size_t slab_total_size = valk_slab_size(slab_item_size, 256 * 1024);
+      uintptr_t slab_end = slab_start + slab_total_size;
+      uintptr_t obj_addr = (uintptr_t)current;
+      from_slab = (obj_addr >= slab_start && obj_addr < slab_end);
+    }
 
-    free(current);
+    if (!from_slab) {
+      size_t total_size = sizeof(valk_gc_header_t) + current->size;
+      freed_bytes += total_size;
+      freed_count++;
+      free(current);
+    }
     current = next;
   }
 
   VALK_INFO("GC: Freed %zu objects (%zu bytes)", freed_count, freed_bytes);
 
-  // Also free the free list
+  // Also free the free list (again, skip slab objects)
   current = heap->free_list;
   while (current != NULL) {
     valk_gc_header_t* next = current->gc_next;
-    free(current);
+    bool from_slab = false;
+    if (heap->lval_slab != NULL) {
+      uintptr_t slab_start = (uintptr_t)heap->lval_slab;
+      size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
+      size_t slab_total_size = valk_slab_size(slab_item_size, 256 * 1024);
+      uintptr_t slab_end = slab_start + slab_total_size;
+      uintptr_t obj_addr = (uintptr_t)current;
+      from_slab = (obj_addr >= slab_start && obj_addr < slab_end);
+    }
+    if (!from_slab) {
+      free(current);
+    }
     current = next;
+  }
+
+  // Free the slab allocator
+  if (heap->lval_slab != NULL) {
+    valk_slab_free(heap->lval_slab);
   }
 
   // Free the heap structure itself
