@@ -344,13 +344,18 @@ int main(int argc, const char **argv) {
   valk_lenv_builtins(env);  // load the builtins
 
   // Evaluate prelude sequentially (program semantics)
+  size_t expr_count = 0;
   while (valk_lval_list_count(ast)) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(ast, 0));
+    expr_count++;
     if (LVAL_TYPE(x) == LVAL_ERR) {
       // Stop early if prelude fails; tests will surface the error
+      fprintf(stderr, "Prelude loading error at expression %zu: ", expr_count);
+      valk_lval_println(x);
       break;
     }
   }
+  fprintf(stderr, "Prelude loaded %zu expressions\n", expr_count);
 
   valk_testsuite_fixture_add(suite, "prelude", ast, __lval_retain,
                              __lval_release);

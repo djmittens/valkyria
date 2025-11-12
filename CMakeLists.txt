@@ -135,3 +135,7 @@ include_directories(test_memory src/)
 add_executable(test_freeze test/test_freeze.c test/testing.c)
 target_link_libraries(test_freeze PRIVATE "-lc" valkyria)
 include_directories(test_freeze src/)
+
+add_executable(test_escape test/test_escape.c test/testing.c)
+target_link_libraries(test_escape PRIVATE "-lc" valkyria)
+include_directories(test_escape src/)

@@ -49,6 +49,14 @@ make debug
 
 # Find TODOs for current branch
 make todo
+
+# Create test Lisp files for debugging
+# IMPORTANT: Use test/ folder (NOT /tmp) for test files
+# Example:
+cat > test/debug_issue.valk << 'EOF'
+(print "test code here")
+EOF
+./build/valk test/debug_issue.valk
 ```
 
 ### Clean Build

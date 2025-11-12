@@ -89,6 +89,7 @@ test: build
 	build/test_std &&\
 	build/test_memory &&\
 	build/test_freeze &&\
+	build/test_escape &&\
 	build/test_concurrency &&\
 	build/test_networking &&\
 	build/test_networking_lisp &&\

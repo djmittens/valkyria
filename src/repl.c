@@ -1,5 +1,6 @@
 #include <editline.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,23 +15,26 @@ static void __aio_free(void *system) { valk_aio_stop(system); }
 
 int main(int argc, char *argv[]) {
   char *input;
-  // Initialize global arena (persistent) and scratch arena (ephemeral)
-  // TODO(arena-gc): Global arena needs GC or better reclamation - currently accumulates
-  // garbage from map/filter/join intermediate allocations during script execution
-  size_t const GLOBAL_ARENA_BYTES = 64 * 1024 * 1024;   // 64 MiB
-  size_t const SCRATCH_ARENA_BYTES = 16 * 1024 * 1024;  // 16 MiB
+  // GC heap + scratch arena approach (Phase 5 complete with forwarding)
+  // - GC heap for persistent values (managed by mark & sweep)
+  // - Scratch arena for temporary values during evaluation
+  // - Forwarding pointers allow scratch values to be promoted to GC heap
+  size_t const GC_THRESHOLD_BYTES = 16 * 1024 * 1024;  // 16 MiB GC threshold
+  size_t const SCRATCH_ARENA_BYTES = 4 * 1024 * 1024;  // 4 MiB scratch
 
-  valk_mem_arena_t *global_arena = malloc(GLOBAL_ARENA_BYTES);
-  valk_mem_arena_init(global_arena, GLOBAL_ARENA_BYTES - sizeof(*global_arena));
+  valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES);
 
   valk_mem_arena_t *scratch = malloc(SCRATCH_ARENA_BYTES);
   valk_mem_arena_init(scratch, SCRATCH_ARENA_BYTES - sizeof(*scratch));
 
-  // Set thread allocator to global for persistent structures
-  valk_thread_ctx.allocator = (void *)global_arena;
+  // Set thread allocator to GC heap for persistent structures
+  valk_thread_ctx.allocator = (void *)gc_heap;
 
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);
+
+  // Set root environment for GC marking
+  valk_gc_malloc_set_root(gc_heap, env);
 
   // If we got here, we processed files but did not request exit; drop into REPL.
   // Set mode to repl now so shutdown inside REPL performs teardown.
@@ -45,20 +49,23 @@ int main(int argc, char *argv[]) {
                   valk_lval_ref("aio_system", aio, __aio_free));
   }
 
+  bool script_mode = false;
   if (argc >= 2) {
     for (int i = 1; i < argc; ++i) {
       if (strcmp(argv[i], "--script") == 0) {
+        script_mode = true;
         continue;
       }
+      script_mode = true;  // Any file argument implies script mode
       valk_lval_t *res;
-      // Use global arena for script execution - values persist across expressions
-      VALK_WITH_ALLOC((void *)global_arena) { res = valk_parse_file(argv[i]); }
+      // Use GC heap for script execution
+      VALK_WITH_ALLOC((void *)gc_heap) { res = valk_parse_file(argv[i]); }
       if (res->flags == LVAL_ERR) {
         valk_lval_println(res);
       } else {
         while (valk_lval_list_count(res) > 0) {
           valk_lval_t *x;
-          VALK_WITH_ALLOC((void *)global_arena) {
+          VALK_WITH_ALLOC((void *)gc_heap) {
             x = valk_lval_eval(env, valk_lval_pop(res, 0));
           }
 
@@ -71,7 +78,17 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // If we got here, we processed files but did not request exit; drop into REPL.
+  // If script mode, cleanup and exit instead of entering REPL
+  if (script_mode) {
+    valk_lval_t *sym = valk_lval_sym("aio");
+    valk_lval_t *val = valk_lenv_get(env, sym);
+    if (val->flags != LVAL_ERR && val->flags && strcmp(val->ref.type, "aio_system") == 0) {
+      valk_aio_stop((valk_aio_system_t *)val->ref.ptr);
+    }
+    return EXIT_SUCCESS;
+  }
+
+  // If we got here, we processed no files; drop into REPL.
   // Set mode to repl now so shutdown inside REPL performs teardown.
   valk_lenv_put(env, valk_lval_sym("VALK_MODE"), valk_lval_str("repl"));
 
@@ -100,14 +117,6 @@ int main(int argc, char *argv[]) {
 
     free(input);
     valk_mem_arena_reset(scratch);
-
-    // Check if we should run GC on global arena
-    if (valk_gc_should_collect_arena(global_arena)) {
-      size_t reclaimable = valk_gc_collect_arena(env, global_arena);
-      if (reclaimable > 0) {
-        fprintf(stderr, "GC: Identified %zu bytes of garbage (not yet reclaimed)\n", reclaimable);
-      }
-    }
   }
 
   // No frees for arena-backed data; OS reclaim on exit.

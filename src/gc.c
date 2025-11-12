@@ -61,6 +61,9 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
     return NULL;
   }
 
+  // Zero out the memory to avoid garbage data
+  memset(obj, 0, bytes);
+
   // Initialize GC tracking
   obj->origin_allocator = heap;
   obj->gc_next = heap->objects;
@@ -78,6 +81,9 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
 
 static void valk_gc_mark_lval(valk_lval_t* v) {
   if (v == NULL) return;
+
+  // Only mark objects allocated by the GC heap - don't mark scratch/arena objects
+  if (LVAL_ALLOC(v) != LVAL_ALLOC_HEAP) return;
 
   // Already marked - avoid infinite loops
   if (v->flags & LVAL_FLAG_GC_MARK) return;
@@ -145,6 +151,14 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
   while (*obj_ptr != NULL) {
     valk_lval_t* obj = *obj_ptr;
 
+    // Safety check: only free objects that were actually allocated by GC heap
+    if (obj->origin_allocator != heap) {
+      VALK_ERROR("GC sweep found object with wrong allocator! Expected GC heap, got %p", obj->origin_allocator);
+      // Skip this object to avoid double free
+      obj_ptr = &obj->gc_next;
+      continue;
+    }
+
     if (obj->flags & LVAL_FLAG_GC_MARK) {
       // Object is live - keep it
       obj_ptr = &obj->gc_next;
@@ -179,6 +193,9 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
 
 static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
   if (v == NULL) return;
+
+  // Only clear marks on GC heap objects - don't touch scratch/arena objects
+  if (LVAL_ALLOC(v) != LVAL_ALLOC_HEAP) return;
 
   // Already cleared
   if (!(v->flags & LVAL_FLAG_GC_MARK)) return;

@@ -1,0 +1,24 @@
+; Test that GC properly collects garbage
+; This test creates many temporary values that should be collected
+
+; Create a function that allocates lots of temporary data
+(def allocate-garbage (fn (n) (
+  if (<= n 0)
+    {}
+    {
+      ; Create a large list of numbers
+      (def temp (list 1 2 3 4 5 6 7 8 9 10))
+      ; Create nested lists
+      (def temp2 (list temp temp temp temp temp))
+      ; Recursively allocate more
+      (allocate-garbage (- n 1))
+    }
+)))
+
+; Allocate garbage multiple times to trigger GC
+(allocate-garbage 100)
+(allocate-garbage 100)
+(allocate-garbage 100)
+
+; If we get here without crashing, GC is working
+(print "GC test passed - no crashes or OOM")

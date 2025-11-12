@@ -1,0 +1,22 @@
+; Aggressive GC test - allocate enough data to trigger GC collection
+; Each iteration creates a 1000-element list
+
+(def make-big-list (fn (n) (
+  if (<= n 0)
+    {}
+    (join (list n) (make-big-list (- n 1)))
+)))
+
+; Create many large lists to exceed GC threshold
+(def iterate (fn (count) (
+  if (<= count 0)
+    {}
+    {
+      (def big-list (make-big-list 1000))
+      (iterate (- count 1))
+    }
+)))
+
+(print "Starting GC stress test...")
+(iterate 50)
+(print "GC stress test complete!")

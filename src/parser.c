@@ -112,6 +112,19 @@ char* valk_c_err_format(const char* fmt, const char* file, const size_t line,
   return buf;
 }
 
+// Helper: Get allocation flags from current allocator context
+uint64_t valk_alloc_flags_from_allocator(void* allocator) {
+  if (allocator == NULL) return LVAL_ALLOC_SCRATCH;
+  valk_mem_allocator_t* alloc = (valk_mem_allocator_t*)allocator;
+  switch (alloc->type) {
+    case VALK_ALLOC_ARENA: return LVAL_ALLOC_SCRATCH;
+    case VALK_ALLOC_MALLOC: return LVAL_ALLOC_GLOBAL;
+    case VALK_ALLOC_GC_HEAP: return LVAL_ALLOC_HEAP;
+    case VALK_ALLOC_SLAB: return LVAL_ALLOC_GLOBAL;
+    default: return LVAL_ALLOC_SCRATCH;
+  }
+}
+
 char* valk_str_join(const size_t n, const char** strs, const char* sep) {
   // TODO(main): I think i should get my own string type in here
   size_t res_len = 0;
@@ -174,7 +187,7 @@ const char* valk_ltype_name(valk_ltype_e type) {
 
 valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = LVAL_REF;
+  res->flags = LVAL_REF | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   res->origin_allocator = valk_thread_ctx.allocator;
   size_t tlen = strlen(type);
   if (tlen > 100) tlen = 100;
@@ -191,7 +204,7 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
 
 valk_lval_t* valk_lval_num(long x) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = LVAL_NUM | LVAL_FLAG_FROZEN;  // Numbers are immutable
+  res->flags = LVAL_NUM | LVAL_FLAG_FROZEN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   res->origin_allocator = valk_thread_ctx.allocator;
   res->num = x;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -201,7 +214,7 @@ valk_lval_t* valk_lval_num(long x) {
 // TODO(main): look into UTF-8 support
 valk_lval_t* valk_lval_err(const char* fmt, ...) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = LVAL_ERR;
+  res->flags = LVAL_ERR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   res->origin_allocator = valk_thread_ctx.allocator;
   va_list va;
   va_start(va, fmt);
@@ -224,7 +237,7 @@ valk_lval_t* valk_lval_err(const char* fmt, ...) {
 valk_lval_t* valk_lval_sym(const char* sym) {
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = LVAL_SYM | LVAL_FLAG_FROZEN;  // Symbols are immutable
+  res->flags = LVAL_SYM | LVAL_FLAG_FROZEN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   res->origin_allocator = valk_thread_ctx.allocator;
   size_t slen = strlen(sym);
   if (slen > 200) slen = 200;
@@ -239,7 +252,7 @@ valk_lval_t* valk_lval_sym(const char* sym) {
 
 valk_lval_t* valk_lval_str(const char* str) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = LVAL_STR | LVAL_FLAG_FROZEN;  // Strings are immutable
+  res->flags = LVAL_STR | LVAL_FLAG_FROZEN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   res->origin_allocator = valk_thread_ctx.allocator;
   // TODO(main): whats a reasonable max for a string length?
   size_t slen = strlen(str);
@@ -253,7 +266,7 @@ valk_lval_t* valk_lval_str(const char* str) {
 
 valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = LVAL_STR;
+  res->flags = LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   res->origin_allocator = valk_thread_ctx.allocator;
   res->str = valk_mem_alloc(n + 1);
   if (n) memcpy(res->str, bytes, n);
@@ -273,10 +286,13 @@ valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
 
 valk_lval_t* valk_lval_lambda(valk_lval_t* formals, valk_lval_t* body) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = LVAL_FUN;
+  res->flags = LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   res->origin_allocator = valk_thread_ctx.allocator;
   res->fun.builtin = nullptr;
   res->fun.env = valk_lenv_empty();
+  // Mark formals and body as escaping since they're captured by lambda
+  formals->flags |= LVAL_FLAG_ESCAPES;
+  body->flags |= LVAL_FLAG_ESCAPES;
   res->fun.formals = formals;
   res->fun.body = body;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -285,7 +301,7 @@ valk_lval_t* valk_lval_lambda(valk_lval_t* formals, valk_lval_t* body) {
 
 valk_lval_t* valk_lval_sexpr_empty(void) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = LVAL_SEXPR;
+  res->flags = LVAL_SEXPR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   res->origin_allocator = valk_thread_ctx.allocator;
   res->cons.head = nullptr;
   res->cons.tail = nullptr;
@@ -307,7 +323,7 @@ valk_lval_t* valk_lval_qexpr_empty(void) {
 
 valk_lval_t* valk_lval_nil(void) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = LVAL_NIL;
+  res->flags = LVAL_NIL | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   res->origin_allocator = valk_thread_ctx.allocator;
   res->cons.head = nullptr;
   res->cons.tail = nullptr;
@@ -317,7 +333,7 @@ valk_lval_t* valk_lval_nil(void) {
 
 valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = LVAL_CONS;
+  res->flags = LVAL_CONS | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   res->origin_allocator = valk_thread_ctx.allocator;
   res->cons.head = head;
   res->cons.tail = tail;
@@ -326,24 +342,28 @@ valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
 }
 
 valk_lval_t* valk_lval_head(valk_lval_t* cons) {
+  cons = valk_lval_resolve(cons);
   VALK_ASSERT(LVAL_TYPE(cons) == LVAL_CONS, "Expected cons cell, got %s",
               valk_ltype_name(LVAL_TYPE(cons)));
   return cons->cons.head;
 }
 
 valk_lval_t* valk_lval_tail(valk_lval_t* cons) {
+  cons = valk_lval_resolve(cons);
   VALK_ASSERT(LVAL_TYPE(cons) == LVAL_CONS, "Expected cons cell, got %s",
               valk_ltype_name(LVAL_TYPE(cons)));
   return cons->cons.tail;
 }
 
 int valk_lval_is_nil(valk_lval_t* v) {
+  v = valk_lval_resolve(v);
   return v != nullptr && LVAL_TYPE(v) == LVAL_NIL;
 }
 
 // Helper: check if a list is empty (head is nullptr)
 int valk_lval_list_is_empty(valk_lval_t* list) {
   if (list == nullptr) return 1;
+  list = valk_lval_resolve(list);
   valk_ltype_e type = LVAL_TYPE(list);
   if (type == LVAL_NIL) return 1;
   if (type == LVAL_SEXPR || type == LVAL_QEXPR || type == LVAL_CONS) {
@@ -354,15 +374,15 @@ int valk_lval_list_is_empty(valk_lval_t* list) {
 
 // Helper: count elements in a cons list
 size_t valk_lval_list_count(valk_lval_t* list) {
+  list = valk_lval_resolve(list);
   if (valk_lval_list_is_empty(list)) return 0;
 
   size_t count = 0;
   valk_lval_t* curr = list;
-  valk_ltype_e type = LVAL_TYPE(list);
 
   while (curr != nullptr && !valk_lval_list_is_empty(curr)) {
     count++;
-    curr = curr->cons.tail;
+    curr = valk_lval_resolve(curr->cons.tail);
   }
 
   return count;
@@ -370,9 +390,10 @@ size_t valk_lval_list_count(valk_lval_t* list) {
 
 // Helper: get nth element from a list (0-indexed)
 valk_lval_t* valk_lval_list_nth(valk_lval_t* list, size_t n) {
+  list = valk_lval_resolve(list);
   valk_lval_t* curr = list;
   for (size_t i = 0; i < n && curr != nullptr && !valk_lval_list_is_empty(curr); i++) {
-    curr = curr->cons.tail;
+    curr = valk_lval_resolve(curr->cons.tail);
   }
   if (curr != nullptr && !valk_lval_list_is_empty(curr)) {
     return curr->cons.head;
@@ -474,6 +495,7 @@ valk_lval_t* valk_cons_to_qexpr(valk_lval_t* cons) {
 // Recursively freeze a value tree, making it immutable
 void valk_lval_freeze(valk_lval_t* lval) {
   if (lval == nullptr) return;
+  lval = valk_lval_resolve(lval);
   if (LVAL_IS_FROZEN(lval)) return;  // Already frozen
 
   // Set freeze bit
@@ -510,6 +532,7 @@ void valk_lval_freeze(valk_lval_t* lval) {
 // Assert that a value is mutable (not frozen) - crash if frozen
 void valk_lval_assert_mutable(valk_lval_t* lval) {
   if (lval == nullptr) return;
+  lval = valk_lval_resolve(lval);
 
   VALK_ASSERT(!LVAL_IS_FROZEN(lval),
               "Attempted to mutate frozen value of type %s",
@@ -518,8 +541,10 @@ void valk_lval_assert_mutable(valk_lval_t* lval) {
 
 valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
   if (lval == nullptr) return nullptr;
+  lval = valk_lval_resolve(lval);
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = lval->flags & (LVAL_FLAGS_MASK | LVAL_TYPE_MASK);
+  // Keep only type and semantic flags (not allocation flags from source)
+  res->flags = lval->flags & (LVAL_TYPE_MASK | LVAL_FLAG_FROZEN | LVAL_FLAG_ESCAPES);
   res->origin_allocator = valk_thread_ctx.allocator;
   switch (LVAL_TYPE(lval)) {
     case LVAL_NUM:
@@ -551,13 +576,16 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
     case LVAL_SEXPR:
     case LVAL_CONS:
       // All list types now use cons structure
-      // If sub-values are frozen, alias them instead of copying
-      if (lval->cons.head && (lval->cons.head->flags & LVAL_FLAG_FROZEN)) {
+      // Shallow copy optimization: Alias frozen children that aren't in scratch arena
+      // Scratch arena values must always be copied (arena resets would invalidate them)
+      if (lval->cons.head && LVAL_IS_FROZEN(lval->cons.head) &&
+          LVAL_ALLOC(lval->cons.head) != LVAL_ALLOC_SCRATCH) {
         res->cons.head = lval->cons.head;  // Alias frozen head
       } else {
         res->cons.head = valk_lval_copy(lval->cons.head);
       }
-      if (lval->cons.tail && (lval->cons.tail->flags & LVAL_FLAG_FROZEN)) {
+      if (lval->cons.tail && LVAL_IS_FROZEN(lval->cons.tail) &&
+          LVAL_ALLOC(lval->cons.tail) != LVAL_ALLOC_SCRATCH) {
         res->cons.tail = lval->cons.tail;  // Alias frozen tail
       } else {
         res->cons.tail = valk_lval_copy(lval->cons.tail);
@@ -614,8 +642,32 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
   return res;
 }
 
+// Resolve forwarding pointers (follow chain to actual value)
+valk_lval_t* valk_lval_resolve(valk_lval_t* val) {
+  if (val == nullptr) return nullptr;
+
+  // Follow forwarding chain (limit depth to prevent infinite loops)
+  int depth = 0;
+  while ((val->flags & LVAL_FLAG_FORWARDED) && depth < 10) {
+    // Forwarding pointer is stored in cons.head (repurposed field)
+    val = val->cons.head;
+    depth++;
+  }
+
+  return val;
+}
+
 valk_lval_t* valk_intern(valk_lenv_t* env, valk_lval_t* val) {
   if (env == nullptr) return val;
+
+  // Resolve any forwarding first
+  val = valk_lval_resolve(val);
+
+  // Zero-copy optimization: Frozen heap values can be shared without copying
+  // GC heap values are persistent and won't be freed by arena resets
+  if (val != nullptr && LVAL_IS_FROZEN(val) && LVAL_ALLOC(val) == LVAL_ALLOC_HEAP) {
+    return val;  // Zero-copy sharing of immutable heap value
+  }
 
   // Check if value is already in the target allocator
   if (val != nullptr && val->origin_allocator == env->allocator) {
@@ -623,11 +675,24 @@ valk_lval_t* valk_intern(valk_lenv_t* env, valk_lval_t* val) {
   }
 
   // Value is from a different allocator (e.g., scratch arena)
-  // We need to copy it to the target allocator (e.g., global arena)
-  // Even if it's frozen, we must copy because the source arena might reset
-  valk_lval_t* res;
-  VALK_WITH_ALLOC(env->allocator) { res = valk_lval_copy(val); }
-  if (res) res->origin_allocator = env->allocator;
+  // We need to copy it to the target allocator (e.g., GC heap)
+  // IMPORTANT: Save and restore thread allocator to avoid intermediate allocations in scratch
+  void* saved_allocator = valk_thread_ctx.allocator;
+  valk_thread_ctx.allocator = env->allocator;
+  valk_lval_t* res = valk_lval_copy(val);
+  valk_thread_ctx.allocator = saved_allocator;
+
+  if (res) {
+    res->origin_allocator = env->allocator;
+
+    // Set up forwarding pointer in original value (if from scratch/arena)
+    // This allows existing references to find the new location
+    if (LVAL_ALLOC(val) != LVAL_ALLOC_HEAP) {
+      val->flags |= LVAL_FLAG_FORWARDED;
+      val->cons.head = res;  // Store forwarding pointer
+    }
+  }
+
   return res;
 }
 
@@ -680,7 +745,16 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
     return 0;  // One NULL, one not
   }
 
-  if (x->flags != y->flags) {
+  // Resolve forwarding pointers
+  x = valk_lval_resolve(x);
+  y = valk_lval_resolve(y);
+
+  // Compare only type and semantic flags, not allocation/lifetime flags
+  // Values are equal regardless of where they're allocated or if they escape
+  // LVAL_FLAG_ESCAPES is a lifetime/allocation flag, not a semantic property
+  uint64_t x_semantic = x->flags & (LVAL_TYPE_MASK | LVAL_FLAG_FROZEN);
+  uint64_t y_semantic = y->flags & (LVAL_TYPE_MASK | LVAL_FLAG_FROZEN);
+  if (x_semantic != y_semantic) {
     return 0;
   }
 
@@ -860,6 +934,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
 
 valk_lval_t* valk_lval_pop(valk_lval_t* lval, size_t i) {
   // Pop i-th element from a cons-based list
+  lval = valk_lval_resolve(lval);
   size_t count = valk_lval_list_count(lval);
   LVAL_ASSERT((valk_lval_t*)0, i < count,
               "Cant pop from list at invalid position: [%zu] total length: [%zu]",
@@ -868,8 +943,6 @@ valk_lval_t* valk_lval_pop(valk_lval_t* lval, size_t i) {
 
   // Check if value is frozen (immutable)
   valk_lval_assert_mutable(lval);
-
-  valk_ltype_e type = LVAL_TYPE(lval);
 
   if (i == 0) {
     // Pop first element
@@ -889,7 +962,7 @@ valk_lval_t* valk_lval_pop(valk_lval_t* lval, size_t i) {
   // Pop from middle/end: traverse to i-1'th element
   valk_lval_t* prev = lval;
   for (size_t j = 0; j < i - 1; j++) {
-    prev = prev->cons.tail;
+    prev = valk_lval_resolve(prev->cons.tail);
   }
 
   // Extract element at position i
@@ -904,13 +977,12 @@ valk_lval_t* valk_lval_pop(valk_lval_t* lval, size_t i) {
 
 valk_lval_t* valk_lval_add(valk_lval_t* lval, valk_lval_t* cell) {
   // Add element to end of cons-based list
+  lval = valk_lval_resolve(lval);
   LVAL_ASSERT_TYPE(lval, lval, LVAL_SEXPR, LVAL_QEXPR);
   LVAL_ASSERT(lval, cell != nullptr, "Adding nullptr to LVAL is not allowed");
 
   // Check if value is frozen (immutable)
   valk_lval_assert_mutable(lval);
-
-  valk_ltype_e type = LVAL_TYPE(lval);
 
   // If list is empty, set head
   if (valk_lval_list_is_empty(lval)) {
@@ -922,12 +994,12 @@ valk_lval_t* valk_lval_add(valk_lval_t* lval, valk_lval_t* cell) {
   // Traverse to end of list
   valk_lval_t* curr = lval;
   while (curr->cons.tail != nullptr && !valk_lval_list_is_empty(curr->cons.tail)) {
-    curr = curr->cons.tail;
+    curr = valk_lval_resolve(curr->cons.tail);
   }
 
   // Add new node at end
   valk_lval_t* new_node = valk_mem_alloc(sizeof(valk_lval_t));
-  new_node->flags = type;
+  new_node->flags = LVAL_TYPE(lval);  // Preserve list type (SEXPR or QEXPR)
   new_node->origin_allocator = valk_thread_ctx.allocator;
   new_node->cons.head = cell;
   new_node->cons.tail = nullptr;
@@ -940,20 +1012,22 @@ valk_lval_t* valk_lval_add(valk_lval_t* lval, valk_lval_t* cell) {
 
 valk_lval_t* valk_lval_join(valk_lval_t* a, valk_lval_t* b) {
   // Create new QEXPR instead of mutating a
+  a = valk_lval_resolve(a);
+  b = valk_lval_resolve(b);
   valk_lval_t* res = valk_lval_qexpr_empty();
 
   // Copy all elements from a
   valk_lval_t* curr = a;
   while (curr != nullptr && !valk_lval_list_is_empty(curr)) {
     valk_lval_add(res, curr->cons.head);
-    curr = curr->cons.tail;
+    curr = valk_lval_resolve(curr->cons.tail);
   }
 
   // Copy all elements from b
   curr = b;
   while (curr != nullptr && !valk_lval_list_is_empty(curr)) {
     valk_lval_add(res, curr->cons.head);
-    curr = curr->cons.tail;
+    curr = valk_lval_resolve(curr->cons.tail);
   }
 
   return res;
@@ -1404,6 +1478,8 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     }
     if (strcmp(key->str, env->symbols[i]) == 0) {
       // if we found it, we destroy it
+      // Mark value as escaping since it's being stored in environment
+      val->flags |= LVAL_FLAG_ESCAPES;
       env->vals[i] = valk_intern(env, val);
       return;
     }
@@ -1429,6 +1505,8 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     env->symbols[env->count][200] = '\0';
   }
 
+  // Mark value as escaping since it's being stored in environment
+  val->flags |= LVAL_FLAG_ESCAPES;
   env->vals[env->count] = valk_intern(env, val);
 
   ++env->count;
@@ -1652,7 +1730,6 @@ static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, syms, LVAL_QEXPR);
 
   // Verify all elements in syms (starting from index 1) are symbols
-  valk_lval_t* sym_curr = syms->cons.tail;  // Skip first element
   for (size_t i = 1; i < valk_lval_list_count(syms); i++) {
     valk_lval_t* sym_elem = valk_lval_list_nth(syms, i);
     LVAL_ASSERT(a, LVAL_TYPE(sym_elem) == LVAL_SYM,
