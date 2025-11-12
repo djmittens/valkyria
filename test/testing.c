@@ -322,6 +322,7 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
         break;
     }
 
+    // Base padding calculation (for lines without emoji)
     int len = VALK_REPORT_WIDTH - strlen(test->name);
 
     switch (result->type) {
@@ -330,15 +331,18 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
         break;
       }
       case VALK_TEST_PASS:
-        printf("✅ %s%.*s  PASS : in %" PRIu64 "(%s)\n", test->name, len,
+        // Emoji ✅ + space = 3 display columns
+        printf("✅ %s%.*s  PASS : in %" PRIu64 "(%s)\n", test->name, len - 3,
                DOT_FILL, (result->stopTime - result->startTime), precision);
         break;
       case VALK_TEST_SKIP:
-        printf("⏭️  %s%.*s  SKIP : in %" PRIu64 "(%s)\n", test->name, len,
+        // Emoji ⏭️ + space = 3 display columns
+        printf("⏭️  %s%.*s  SKIP : in %" PRIu64 "(%s)\n", test->name, len - 3,
                DOT_FILL, (result->stopTime - result->startTime), precision);
         break;
       case VALK_TEST_FAIL:
-        printf("🐞 %s%.*s  FAIL : in %" PRIu64 "(%s)\n", test->name, len,
+        // Emoji 🐞 + space = 3 display columns
+        printf("🐞 %s%.*s  FAIL : in %" PRIu64 "(%s)\n", test->name, len - 3,
                DOT_FILL, (result->stopTime - result->startTime), precision);
 
 #ifdef VALK_TEST_FORK
@@ -347,7 +351,8 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
 
         break;
       case VALK_TEST_CRSH:
-        printf("🌀 %s%.*s  CRSH : in %" PRIu64 "(%s)\n", test->name, len,
+        // Emoji 🌀 + space = 3 display columns
+        printf("🌀 %s%.*s  CRSH : in %" PRIu64 "(%s)\n", test->name, len - 3,
                DOT_FILL, (result->stopTime - result->startTime), precision);
 
 #ifdef VALK_TEST_FORK

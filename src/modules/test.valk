@@ -55,9 +55,6 @@
     (= {test-name} (nth 1 test))
     (= {test-body} (nth 2 test))
 
-    ; Print test name with dot padding (80 chars total)
-    (*test-pad-dots* test-name 80)
-
     ; Time the test
     (= {start-time} (time-us {}))
     (= {result} (eval test-body))
@@ -67,10 +64,11 @@
     ; Check if result is truthy (not error, not 0)
     (= {passed} (if (== result true) {1} {0}))
 
-    ; Print result with timing
+    ; Print result with emoji first, then name + dots (aligned with C tests)
+    ; C tests use 100 char width: emoji(3) + name + dots = 97 total before "  PASS"
     (if (== passed 1)
-      {do (printf "  ✅ PASS") (printf " : in %ld(us)\n" elapsed)}
-      {do (printf "  ❌ FAIL") (printf " : in %ld(us)\n" elapsed)})
+      {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(us)\n" elapsed)}
+      {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(us)\n" elapsed)})
 
     (if (== passed 1)
       {(def {*test-passed*} (+ *test-passed* 1))}
