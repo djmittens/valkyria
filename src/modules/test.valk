@@ -25,29 +25,13 @@
     {str}
 })
 
-; Pad string to width with dots - simple approach to avoid arena OOM
-; (Arena doesn't have GC yet, see repl.c:17-18)
+; Pad string to width with dots using repeat primitive
 (fun {*test-pad-dots* str width} {
   do
     (printf "%s" str)
-    (= {name-len} (len str))
-    (= {dots-needed} (- width name-len))
-
-    ; Just print the right number of dots using a simple approach
-    ; Can't use recursion or huge case statements due to arena limitations
-    (if (> dots-needed 60)
-      {printf "............................................................"}
-      {(if (> dots-needed 40)
-        {printf "........................................"}
-        {(if (> dots-needed 20)
-          {printf "...................."}
-          {(if (> dots-needed 10)
-            {printf ".........."}
-            {(if (> dots-needed 5)
-              {printf "....."}
-              {(if (> dots-needed 0)
-                {printf "."}
-                {nil})})})})})})
+    (= {dots-needed} (- width (len str)))
+    ; Use repeat to print dots n times without recursion
+    (repeat (\ {_} {printf "."}) dots-needed)
 })
 
 (fun {*test-run-one* test} {

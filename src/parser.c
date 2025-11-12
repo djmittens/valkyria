@@ -1765,6 +1765,64 @@ static valk_lval_t* valk_builtin_join(valk_lenv_t* e, valk_lval_t* a) {
   return x;
 }
 
+// range: (range start end) -> {start start+1 ... end-1}
+// Generate a list of numbers from start (inclusive) to end (exclusive)
+// This is a fundamental primitive that enables iteration without recursion
+// Usage: (range 0 5) -> {0 1 2 3 4}
+//        (range 2 4) -> {2 3}
+static valk_lval_t* valk_builtin_range(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+
+  long start = valk_lval_list_nth(a, 0)->num;
+  long end = valk_lval_list_nth(a, 1)->num;
+
+  // Empty range if start >= end
+  if (start >= end) {
+    return valk_lval_qexpr_empty();
+  }
+
+  // Build list from end to start (so we can cons efficiently)
+  // Create proper QEXPR cons cells
+  valk_lval_t* result = valk_lval_qexpr_empty();
+  for (long i = end - 1; i >= start; i--) {
+    valk_lval_t* num = valk_lval_num(i);
+    valk_lval_t* new_node = valk_mem_alloc(sizeof(valk_lval_t));
+    new_node->flags = LVAL_QEXPR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+    VALK_SET_ORIGIN_ALLOCATOR(new_node);
+    new_node->cons.head = num;
+    new_node->cons.tail = result;
+    valk_capture_trace(VALK_TRACE_NEW, 1, new_node);
+    result = new_node;
+  }
+
+  return result;
+}
+
+// repeat: (repeat func n) -> executes func n times without recursion
+// Usage: (repeat (\ {_} {printf "."}) 10) prints 10 dots
+// This is more efficient than (map func (range 0 n)) for side effects
+static valk_lval_t* valk_builtin_repeat(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+
+  valk_lval_t* func = valk_lval_list_nth(a, 0);
+  long count = valk_lval_list_nth(a, 1)->num;
+
+  // Call function count times in C loop (no stack buildup)
+  for (long i = 0; i < count; i++) {
+    valk_lval_t* args = valk_lval_sexpr_empty();
+    valk_lval_add(args, valk_lval_num(i));
+    valk_lval_t* result = valk_lval_eval_call(e, func, args);
+    // Ignore result, we're just calling for side effects
+    (void)result;
+  }
+
+  return valk_lval_qexpr_empty();
+}
+
 static valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
 
@@ -2463,6 +2521,8 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "head", valk_builtin_head);
   valk_lenv_put_builtin(env, "tail", valk_builtin_tail);
   valk_lenv_put_builtin(env, "join", valk_builtin_join);
+  valk_lenv_put_builtin(env, "range", valk_builtin_range);
+  valk_lenv_put_builtin(env, "repeat", valk_builtin_repeat);
   valk_lenv_put_builtin(env, "eval", valk_builtin_eval);
 
   valk_lenv_put_builtin(env, "+", valk_builtin_plus);
