@@ -13,23 +13,23 @@
 - Document the mutation surface area
 
 ### Tasks
-- [ ] 1.1. Search for all `lval->expr.cell[i] = ` assignments
-- [ ] 1.2. Search for all `lval->expr.count` modifications
-- [ ] 1.3. Search for all `lval->str` reassignments
-- [ ] 1.4. Find all calls to `valk_lval_pop`, `valk_lval_add`
-- [ ] 1.5. Document each mutation site with category in `docs/MUTATION_AUDIT.md`
+- [x] 1.1. Search for all `lval->expr.cell[i] = ` assignments (0 found)
+- [x] 1.2. Search for all `lval->expr.count` modifications (0 direct, all via add/pop)
+- [x] 1.3. Search for all `lval->str` reassignments (0 found)
+- [x] 1.4. Find all calls to `valk_lval_pop`, `valk_lval_add` (42 sites found)
+- [x] 1.5. Document each mutation site with category in `docs/MUTATION_AUDIT.md`
 
 ### Test Plan
 **Validation Method**: Code audit + documentation
 - **Success Criteria**:
-  - [ ] Complete list of all mutation sites in `MUTATION_AUDIT.md`
-  - [ ] Each site categorized as: CONSTRUCTION, ILLEGAL, or NECESSARY
-  - [ ] Identified at least 3 illegal mutation bugs
+  - [x] Complete list of all mutation sites in `MUTATION_AUDIT.md` (42 sites)
+  - [x] Each site categorized as: CONSTRUCTION (24), ILLEGAL (5), or NECESSARY (13)
+  - [x] Identified 5 illegal mutation bugs (exceeds "at least 3" requirement)
 - **How to Verify**:
   ```bash
   # Check documentation exists and is complete
   cat docs/MUTATION_AUDIT.md
-  # Should show categorized list of all mutation sites
+  # Shows 42 mutation sites, 5 bugs identified (join, head, init, cons, tail)
   ```
 
 ### Expected Findings
