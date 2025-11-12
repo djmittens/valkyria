@@ -1,0 +1,22 @@
+; Test GC with safe-point collection
+; Allocate lots of temporary lists to trigger GC
+(def make-big-list (\ {n}
+  (if (<= n 0)
+    {}
+    (join (list n) (make-big-list (- n 1))))))
+
+; Create 100 lists of varying sizes to trigger GC
+(def result {})
+(def i 1)
+(def loop (\ {i max}
+  (if (> i max)
+    {}
+    {
+      (def temp (make-big-list (* i 10)))
+      (def result (join result (list (len temp))))
+      (loop (+ i 1) max)
+    })))
+
+(loop 1 100)
+(print "GC safe-point test completed")
+(print "Result count:" (len result))

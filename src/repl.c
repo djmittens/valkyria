@@ -20,7 +20,7 @@ int main(int argc, char *argv[]) {
   // - Scratch arena for temporary values during evaluation
   // - Forwarding pointers allow scratch values to be promoted to GC heap
   size_t const GC_THRESHOLD_BYTES = 16 * 1024 * 1024;  // 16 MiB GC threshold
-  size_t const SCRATCH_ARENA_BYTES = 4 * 1024 * 1024;  // 4 MiB scratch
+  size_t const SCRATCH_ARENA_BYTES = 4 * 1024 * 1024;  // 4 MiB scratch (REPL only)
 
   valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES);
 
@@ -58,20 +58,22 @@ int main(int argc, char *argv[]) {
       }
       script_mode = true;  // Any file argument implies script mode
       valk_lval_t *res;
-      // Use GC heap for script execution
+      // Parse into GC heap (persistent)
       VALK_WITH_ALLOC((void *)gc_heap) { res = valk_parse_file(argv[i]); }
       if (res->flags == LVAL_ERR) {
         valk_lval_println(res);
       } else {
         while (valk_lval_list_count(res) > 0) {
-          valk_lval_t *x;
-          VALK_WITH_ALLOC((void *)gc_heap) {
-            x = valk_lval_eval(env, valk_lval_pop(res, 0));
-          }
+          valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(res, 0));
 
           if (x->flags == LVAL_ERR) {
             valk_lval_println(x);
             break;
+          }
+
+          // GC safe point: expression evaluated, only env is live
+          if (valk_gc_malloc_should_collect(gc_heap)) {
+            valk_gc_malloc_collect(gc_heap);
           }
         }
       }
@@ -85,6 +87,11 @@ int main(int argc, char *argv[]) {
     if (val->flags != LVAL_ERR && val->flags && strcmp(val->ref.type, "aio_system") == 0) {
       valk_aio_stop((valk_aio_system_t *)val->ref.ptr);
     }
+
+    // Clean up GC heap for LeakSanitizer
+    valk_gc_malloc_heap_destroy(gc_heap);
+    free(scratch);
+
     return EXIT_SUCCESS;
   }
 
@@ -117,14 +124,24 @@ int main(int argc, char *argv[]) {
 
     free(input);
     valk_mem_arena_reset(scratch);
+
+    // GC safe point: all evaluation done, scratch reset, only environment is live
+    // Classic Lisp approach - collect between expressions, never during evaluation
+    if (valk_gc_malloc_should_collect(gc_heap)) {
+      valk_gc_malloc_collect(gc_heap);
+    }
   }
 
-  // No frees for arena-backed data; OS reclaim on exit.
   // Gracefully stop AIO on REPL exit if present
   valk_lval_t *sym = valk_lval_sym("aio");
   valk_lval_t *val = valk_lenv_get(env, sym);
   if (val->flags != LVAL_ERR && val->flags && strcmp(val->ref.type, "aio_system") == 0) {
     valk_aio_stop((valk_aio_system_t *)val->ref.ptr);
   }
+
+  // Clean up GC heap for LeakSanitizer
+  valk_gc_malloc_heap_destroy(gc_heap);
+  free(scratch);
+
   return EXIT_SUCCESS;
 }

@@ -408,9 +408,18 @@ void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes) {
     case VALK_ALLOC_MALLOC:
       return malloc(bytes);
     case VALK_ALLOC_GC_HEAP: {
+      // GC heap ONLY allocates valk_lval_t structures!
+      // All other allocations (strings, arrays, etc.) must use malloc
       // Forward declare - actual implementation in gc.c
       extern void* valk_gc_malloc_heap_alloc(void* heap, size_t bytes);
-      return valk_gc_malloc_heap_alloc((void *)self, bytes);
+      // Check if this is a valk_lval_t allocation
+      extern size_t __valk_lval_size;  // Defined in parser.c
+      if (bytes == __valk_lval_size) {
+        return valk_gc_malloc_heap_alloc((void *)self, bytes);
+      } else {
+        // Not a valk_lval_t - use malloc for auxiliary data
+        return malloc(bytes);
+      }
     }
   }
   return NULL;

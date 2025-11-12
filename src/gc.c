@@ -4,11 +4,14 @@
 #include "log.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <pthread.h>
 
 // Forward declarations
 static void valk_gc_mark_lval(valk_lval_t* v);
 static void valk_gc_mark_env(valk_lenv_t* env);
 static void valk_gc_clear_marks_recursive(valk_lval_t* v);
+static void valk_gc_scan_stack(valk_gc_malloc_heap_t* heap);
 
 // ============================================================================
 // GC Heap - Malloc-based allocator with mark & sweep
@@ -28,6 +31,8 @@ valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold) {
   heap->num_collections = 0;
   heap->objects = NULL;
   heap->root_env = NULL;
+  heap->free_list = NULL;
+  heap->free_list_size = 0;
 
   VALK_INFO("GC heap initialized with threshold: %zu bytes (%.1f MB)",
             gc_threshold, gc_threshold / (1024.0 * 1024.0));
@@ -45,34 +50,141 @@ bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap) {
   return heap->allocated_bytes > heap->gc_threshold;
 }
 
-// Allocate from GC heap
+// Allocate from GC heap with header-based tracking
 void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
-  // Trigger GC before allocation if needed
+  // TODO: Auto-GC disabled - conservative stack scanning doesn't work with ASAN
+  // ASAN uses shadow stacks that break pointer scanning. Need explicit root registration.
+  #if 0
   if (valk_gc_malloc_should_collect(heap) && heap->root_env != NULL) {
     VALK_INFO("GC triggered before allocation (%zu/%zu bytes)",
               heap->allocated_bytes, heap->gc_threshold);
     valk_gc_malloc_collect(heap);
   }
+  #endif
 
-  // Allocate using malloc
-  valk_lval_t* obj = malloc(bytes);
-  if (obj == NULL) {
-    VALK_ERROR("GC heap malloc failed for %zu bytes", bytes);
-    return NULL;
+  valk_gc_header_t* header = NULL;
+  size_t total_size = sizeof(valk_gc_header_t) + bytes;
+  bool from_free_list = false;
+
+  // Fast path: Pop from free list if exact size match (O(1) stack operation)
+  if (heap->free_list != NULL && heap->free_list->size == bytes) {
+    header = heap->free_list;
+    heap->free_list = header->gc_next;
+    heap->free_list_size--;
+    from_free_list = true;
+    VALK_TRACE("GC alloc: %zu bytes from free list at %p", bytes, (void*)(header + 1));
   }
 
-  // Zero out the memory to avoid garbage data
-  memset(obj, 0, bytes);
+  // Slow path: malloc if free list empty or size mismatch
+  if (header == NULL) {
+    header = malloc(total_size);
+    if (header == NULL) {
+      VALK_ERROR("GC heap malloc failed for %zu bytes (+ %zu header)",
+                 bytes, sizeof(valk_gc_header_t));
+      return NULL;
+    }
+    // Track allocation (header + user data)
+    heap->allocated_bytes += total_size;
+    VALK_TRACE("GC alloc: %zu bytes via malloc at %p", bytes, (void*)(header + 1));
+  }
 
-  // Initialize GC tracking
-  obj->origin_allocator = heap;
-  obj->gc_next = heap->objects;
-  heap->objects = obj;
+  // Initialize header
+  header->origin_allocator = heap;
+  header->gc_next = heap->objects;
+  header->size = bytes;
 
-  // Track allocation
-  heap->allocated_bytes += bytes;
+  // Zero out user data only for fresh malloc (free-list objects will be reinitialized by caller)
+  if (!from_free_list) {
+    void* user_data = (void*)(header + 1);
+    memset(user_data, 0, bytes);
+  }
 
-  return obj;
+  // Add to live objects linked list
+  heap->objects = header;
+
+  // Return pointer to user data (NOT header!)
+  return (void*)(header + 1);
+}
+
+// ============================================================================
+// Conservative Stack Scanning - Mark objects referenced from C stack
+// ============================================================================
+
+// Helper: Check if a pointer-sized value looks like it points into GC heap
+static bool valk_gc_is_heap_pointer(valk_gc_malloc_heap_t* heap, void* ptr) {
+  if (ptr == NULL) return false;
+
+  // Conservative scan: check if this pointer matches any object in our heap
+  for (valk_gc_header_t* header = heap->objects; header != NULL; header = header->gc_next) {
+    void* user_data = (void*)(header + 1);
+    // Check if ptr points to this allocation (within user data range)
+    if (ptr >= user_data && ptr < (void*)((uint8_t*)user_data + header->size)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Conservative stack scanner - scans C stack for heap pointers
+static void valk_gc_scan_stack(valk_gc_malloc_heap_t* heap) {
+  // Get current stack pointer
+  int stack_var;
+  void* stack_current = (void*)&stack_var;
+
+  // Get pthread stack bounds
+  pthread_attr_t attr;
+  void* pthread_stack_base;
+  size_t pthread_stack_size;
+
+  pthread_getattr_np(pthread_self(), &attr);
+  pthread_attr_getstack(&attr, &pthread_stack_base, &pthread_stack_size);
+  pthread_attr_destroy(&attr);
+
+  void* pthread_stack_end = (void*)((uint8_t*)pthread_stack_base + pthread_stack_size);
+
+  // Validate stack pointer is within pthread bounds
+  if (stack_current >= pthread_stack_base && stack_current <= pthread_stack_end) {
+    // Normal case - scan from pthread base to current
+    void* stack_bottom = pthread_stack_base;
+    void* stack_top = stack_current;
+
+    VALK_TRACE("GC: Scanning pthread stack from %p to %p (size: %zu bytes)",
+               stack_bottom, stack_top,
+               (size_t)((uint8_t*)stack_top - (uint8_t*)stack_bottom));
+
+    // Scan every pointer-sized word
+    uintptr_t* ptr = (uintptr_t*)stack_bottom;
+    uintptr_t* end = (uintptr_t*)stack_top;
+
+    size_t marked_from_stack = 0;
+    for (; ptr < end; ptr++) {
+      void* potential_ptr = (void*)(*ptr);
+      if (valk_gc_is_heap_pointer(heap, potential_ptr)) {
+        valk_lval_t* obj = (valk_lval_t*)potential_ptr;
+        if (!(obj->flags & LVAL_FLAG_GC_MARK)) {
+          valk_gc_mark_lval(obj);
+          marked_from_stack++;
+        }
+      }
+    }
+    VALK_TRACE("GC: Marked %zu objects from stack", marked_from_stack);
+    return;
+  }
+
+  // Fallback: stack pointer not in pthread bounds - might be ASAN shadow stack
+  // or custom allocator arena. Scan conservatively around current location.
+  VALK_WARN("GC: Stack pointer %p outside pthread range [%p, %p] - using conservative scan",
+            stack_current, pthread_stack_base, pthread_stack_end);
+
+  // Scan 2MB below current stack pointer (conservative estimate)
+  void* scan_start = (void*)((uintptr_t)stack_current - (2 * 1024 * 1024));
+  void* scan_end = stack_current;
+
+  VALK_TRACE("GC: Scanning conservative range from %p to %p", scan_start, scan_end);
+
+  // Don't actually scan in fallback mode - it's too dangerous without proper bounds
+  // Instead, disable GC collection when we can't determine stack bounds
+  VALK_WARN("GC: Skipping stack scan - cannot determine safe bounds");
 }
 
 // ============================================================================
@@ -146,36 +258,49 @@ static void valk_gc_mark_env(valk_lenv_t* env) {
 static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
   size_t reclaimed = 0;
   size_t freed_count = 0;
-  valk_lval_t** obj_ptr = &heap->objects;
+  valk_gc_header_t** header_ptr = &heap->objects;
 
-  while (*obj_ptr != NULL) {
-    valk_lval_t* obj = *obj_ptr;
+  while (*header_ptr != NULL) {
+    valk_gc_header_t* header = *header_ptr;
+    void* user_data = (void*)(header + 1);
 
-    // Safety check: only free objects that were actually allocated by GC heap
-    if (obj->origin_allocator != heap) {
-      VALK_ERROR("GC sweep found object with wrong allocator! Expected GC heap, got %p", obj->origin_allocator);
-      // Skip this object to avoid double free
-      obj_ptr = &obj->gc_next;
-      continue;
+    // Safety check: verify allocator pointer
+    if (header->origin_allocator != heap) {
+      VALK_ERROR("GC sweep found header with wrong allocator!");
+      VALK_ERROR("  Expected GC heap: %p", heap);
+      VALK_ERROR("  Got allocator: %p", header->origin_allocator);
+      VALK_ERROR("  Header pointer: %p", header);
+      VALK_ERROR("  User data: %p", user_data);
+      VALK_ERROR("  Header size: %zu", header->size);
+
+      VALK_ERROR("BREAKING TRAVERSAL to prevent infinite loop");
+      // Break the list here to prevent following corrupted pointers
+      *header_ptr = NULL;
+      break;
     }
+
+    // Cast user data to valk_lval_t and check mark bit
+    valk_lval_t* obj = (valk_lval_t*)user_data;
 
     if (obj->flags & LVAL_FLAG_GC_MARK) {
       // Object is live - keep it
-      obj_ptr = &obj->gc_next;
+      header_ptr = &header->gc_next;
     } else {
-      // Object is garbage - free it
-      *obj_ptr = obj->gc_next;  // Remove from list
+      // Object is garbage - add to free list for reuse
+      *header_ptr = header->gc_next;  // Remove from live objects list
 
       // TODO: For now, only free the lval struct itself, not string data
       // String data might be in scratch arena or shared (frozen aliased values)
       // Need proper ownership tracking to safely free string data
 
-      size_t obj_size = sizeof(valk_lval_t);
-      reclaimed += obj_size;
+      size_t total_size = sizeof(valk_gc_header_t) + header->size;
+      reclaimed += total_size;
       freed_count++;
 
-      // Free the object itself
-      free(obj);
+      // Add to free list for fast reuse
+      header->gc_next = heap->free_list;
+      heap->free_list = header;
+      heap->free_list_size++;
     }
   }
 
@@ -203,7 +328,8 @@ static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
   // Clear mark
   v->flags &= ~LVAL_FLAG_GC_MARK;
 
-  // Clear children
+  // Clear children - note that children might have been freed if unmarked,
+  // so the recursive calls will check marks before accessing
   switch (LVAL_TYPE(v)) {
     case LVAL_FUN:
       if (v->fun.env) {
@@ -236,6 +362,36 @@ static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
 // Main GC Collection
 // ============================================================================
 
+void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
+  if (heap == NULL) return;
+
+  // Count live objects by traversing headers
+  size_t object_count = 0;
+  size_t traversal_limit = 1000000;  // Safety limit
+  for (valk_gc_header_t* header = heap->objects;
+       header != NULL && object_count < traversal_limit;
+       header = header->gc_next) {
+    void* user_data = (void*)(header + 1);
+    valk_lval_t* obj = (valk_lval_t*)user_data;
+
+    // Skip forwarded values (they're scratch-allocated, not GC heap)
+    if (!(obj->flags & LVAL_FLAG_FORWARDED)) {
+      object_count++;
+    }
+  }
+
+  fprintf(stderr, "\n=== GC Heap Statistics ===\n");
+  fprintf(stderr, "Allocated bytes: %zu / %zu (%.1f%% full)\n",
+          heap->allocated_bytes,
+          heap->gc_threshold,
+          100.0 * heap->allocated_bytes / heap->gc_threshold);
+  fprintf(stderr, "Live objects: %zu\n", object_count);
+  fprintf(stderr, "Collections: %zu\n", heap->num_collections);
+  fprintf(stderr, "Avg allocation per object: %.1f bytes\n",
+          object_count > 0 ? (double)heap->allocated_bytes / object_count : 0.0);
+  fprintf(stderr, "=========================\n\n");
+}
+
 size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap) {
   if (heap->root_env == NULL) {
     VALK_WARN("GC collect called with no root environment");
@@ -250,15 +406,20 @@ size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap) {
             heap->gc_threshold,
             100.0 * before / heap->gc_threshold);
 
-  // Phase 1: Mark reachable objects
+  // Phase 1: Mark reachable objects from root environment
+  // GC only runs at safe points (between expressions) where there are no
+  // temporary stack objects - everything live is in the environment!
   valk_gc_mark_env(heap->root_env);
 
   // Phase 2: Sweep unreachable objects
   size_t reclaimed = valk_gc_malloc_sweep(heap);
 
   // Phase 3: Clear marks for next collection
-  for (size_t i = 0; i < heap->root_env->count; i++) {
-    valk_gc_clear_marks_recursive(heap->root_env->vals[i]);
+  // Walk the object list (which now only contains live objects after sweep)
+  for (valk_gc_header_t* header = heap->objects; header != NULL; header = header->gc_next) {
+    void* user_data = (void*)(header + 1);
+    valk_lval_t* obj = (valk_lval_t*)user_data;
+    obj->flags &= ~LVAL_FLAG_GC_MARK;
   }
 
   size_t after = heap->allocated_bytes;
@@ -269,6 +430,48 @@ size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap) {
             100.0 * reclaimed / before);
 
   return reclaimed;
+}
+
+// ============================================================================
+// GC Heap Cleanup - Free all allocations for clean shutdown
+// ============================================================================
+
+void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
+  if (heap == NULL) return;
+
+  VALK_INFO("GC: Destroying heap, freeing all %zu remaining objects",
+            heap->allocated_bytes);
+
+  // Free all objects in the linked list
+  valk_gc_header_t* current = heap->objects;
+  size_t freed_count = 0;
+  size_t freed_bytes = 0;
+
+  while (current != NULL) {
+    valk_gc_header_t* next = current->gc_next;
+
+    // TODO: Deep free strings/buffers in lval_t objects
+    // For now just free the allocation itself (header + user data)
+    size_t total_size = sizeof(valk_gc_header_t) + current->size;
+    freed_bytes += total_size;
+    freed_count++;
+
+    free(current);
+    current = next;
+  }
+
+  VALK_INFO("GC: Freed %zu objects (%zu bytes)", freed_count, freed_bytes);
+
+  // Also free the free list
+  current = heap->free_list;
+  while (current != NULL) {
+    valk_gc_header_t* next = current->gc_next;
+    free(current);
+    current = next;
+  }
+
+  // Free the heap structure itself
+  free(heap);
 }
 
 // ============================================================================

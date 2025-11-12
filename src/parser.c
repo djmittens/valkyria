@@ -14,6 +14,9 @@
 #include "concurrency.h"
 #include "memory.h"
 
+// GC heap allocator size check - ONLY allocate valk_lval_t structures
+size_t __valk_lval_size = sizeof(valk_lval_t);
+
 // TODO(networking): get rid of args everywhere, cause we dont need to release
 // anymore
 #define LVAL_RAISE(args, fmt, ...)                                       \
@@ -23,6 +26,13 @@
     valk_lval_t* err = valk_lval_err(_fmt, ##__VA_ARGS__);               \
     free(_fmt);                                                          \
     return err;                                                          \
+  } while (0)
+
+// Helper: Set origin_allocator
+// Note: GC heap zeroes memory, malloc doesn't - always set to be safe
+#define VALK_SET_ORIGIN_ALLOCATOR(obj) \
+  do { \
+    (obj)->origin_allocator = valk_thread_ctx.allocator; \
   } while (0)
 
 #define LVAL_ASSERT(args, cond, fmt, ...) \
@@ -188,10 +198,10 @@ const char* valk_ltype_name(valk_ltype_e type) {
 valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_REF | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  res->origin_allocator = valk_thread_ctx.allocator;
+  VALK_SET_ORIGIN_ALLOCATOR(res);
   size_t tlen = strlen(type);
   if (tlen > 100) tlen = 100;
-  res->ref.type = valk_mem_alloc(tlen + 1);
+  res->ref.type = malloc(tlen + 1);
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memcpy(res->ref.type, type, tlen);
   res->ref.type[tlen] = '\0';
@@ -205,7 +215,7 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
 valk_lval_t* valk_lval_num(long x) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_NUM | LVAL_FLAG_FROZEN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  res->origin_allocator = valk_thread_ctx.allocator;
+  VALK_SET_ORIGIN_ALLOCATOR(res);
   res->num = x;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
@@ -215,7 +225,7 @@ valk_lval_t* valk_lval_num(long x) {
 valk_lval_t* valk_lval_err(const char* fmt, ...) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_ERR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  res->origin_allocator = valk_thread_ctx.allocator;
+  VALK_SET_ORIGIN_ALLOCATOR(res);
   va_list va;
   va_start(va, fmt);
 
@@ -226,7 +236,7 @@ valk_lval_t* valk_lval_err(const char* fmt, ...) {
 
   // TODO(main): look into making this into a constant
   len = len < 10000 ? len : 511;
-  res->str = valk_mem_alloc(len + 1);
+  res->str = malloc(len + 1);
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   vsnprintf(res->str, len + 1, fmt, va);
   va_end(va);
@@ -238,10 +248,10 @@ valk_lval_t* valk_lval_sym(const char* sym) {
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_SYM | LVAL_FLAG_FROZEN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  res->origin_allocator = valk_thread_ctx.allocator;
+  VALK_SET_ORIGIN_ALLOCATOR(res);
   size_t slen = strlen(sym);
   if (slen > 200) slen = 200;
-  res->str = valk_mem_alloc(slen + 1);
+  res->str = malloc(slen + 1);
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memcpy(res->str, sym, slen);
   res->str[slen] = '\0';
@@ -253,10 +263,10 @@ valk_lval_t* valk_lval_sym(const char* sym) {
 valk_lval_t* valk_lval_str(const char* str) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_STR | LVAL_FLAG_FROZEN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  res->origin_allocator = valk_thread_ctx.allocator;
+  VALK_SET_ORIGIN_ALLOCATOR(res);
   // TODO(main): whats a reasonable max for a string length?
   size_t slen = strlen(str);
-  res->str = valk_mem_alloc(slen + 1);
+  res->str = malloc(slen + 1);
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memcpy(res->str, str, slen + 1);
 
@@ -267,8 +277,8 @@ valk_lval_t* valk_lval_str(const char* str) {
 valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  res->origin_allocator = valk_thread_ctx.allocator;
-  res->str = valk_mem_alloc(n + 1);
+  VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->str = malloc(n + 1);
   if (n) memcpy(res->str, bytes, n);
   res->str[n] = '\0';
   
@@ -287,7 +297,7 @@ valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
 valk_lval_t* valk_lval_lambda(valk_lval_t* formals, valk_lval_t* body) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  res->origin_allocator = valk_thread_ctx.allocator;
+  VALK_SET_ORIGIN_ALLOCATOR(res);
   res->fun.builtin = nullptr;
   res->fun.env = valk_lenv_empty();
   // Mark formals and body as escaping since they're captured by lambda
@@ -302,7 +312,7 @@ valk_lval_t* valk_lval_lambda(valk_lval_t* formals, valk_lval_t* body) {
 valk_lval_t* valk_lval_sexpr_empty(void) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_SEXPR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  res->origin_allocator = valk_thread_ctx.allocator;
+  VALK_SET_ORIGIN_ALLOCATOR(res);
   res->cons.head = nullptr;
   res->cons.tail = nullptr;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -312,7 +322,7 @@ valk_lval_t* valk_lval_sexpr_empty(void) {
 valk_lval_t* valk_lval_qexpr_empty(void) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_QEXPR;
-  res->origin_allocator = valk_thread_ctx.allocator;
+  VALK_SET_ORIGIN_ALLOCATOR(res);
   res->cons.head = nullptr;
   res->cons.tail = nullptr;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -324,7 +334,7 @@ valk_lval_t* valk_lval_qexpr_empty(void) {
 valk_lval_t* valk_lval_nil(void) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_NIL | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  res->origin_allocator = valk_thread_ctx.allocator;
+  VALK_SET_ORIGIN_ALLOCATOR(res);
   res->cons.head = nullptr;
   res->cons.tail = nullptr;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -334,7 +344,7 @@ valk_lval_t* valk_lval_nil(void) {
 valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_CONS | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  res->origin_allocator = valk_thread_ctx.allocator;
+  VALK_SET_ORIGIN_ALLOCATOR(res);
   res->cons.head = head;
   res->cons.tail = tail;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -464,7 +474,7 @@ valk_lval_t* valk_cons_to_qexpr(valk_lval_t* cons) {
       // First element
       result = valk_mem_alloc(sizeof(valk_lval_t));
       result->flags = LVAL_QEXPR;
-      result->origin_allocator = valk_thread_ctx.allocator;
+      VALK_SET_ORIGIN_ALLOCATOR(result);
       result->cons.head = curr->cons.head;
       result->cons.tail = nullptr;
       valk_capture_trace(VALK_TRACE_NEW, 1, result);
@@ -476,7 +486,7 @@ valk_lval_t* valk_cons_to_qexpr(valk_lval_t* cons) {
       }
       valk_lval_t* new_node = valk_mem_alloc(sizeof(valk_lval_t));
       new_node->flags = LVAL_QEXPR;
-      new_node->origin_allocator = valk_thread_ctx.allocator;
+      VALK_SET_ORIGIN_ALLOCATOR(new_node);
       new_node->cons.head = curr->cons.head;
       new_node->cons.tail = nullptr;
       valk_capture_trace(VALK_TRACE_NEW, 1, new_node);
@@ -543,9 +553,17 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
   if (lval == nullptr) return nullptr;
   lval = valk_lval_resolve(lval);
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+
   // Keep only type and semantic flags (not allocation flags from source)
   res->flags = lval->flags & (LVAL_TYPE_MASK | LVAL_FLAG_FROZEN | LVAL_FLAG_ESCAPES);
-  res->origin_allocator = valk_thread_ctx.allocator;
+  // NOTE: Don't overwrite origin_allocator - the allocator already set it correctly!
+  // (GC heap allocator sets it to heap pointer, which is the authoritative source)
+  // Overwriting it with valk_thread_ctx.allocator can introduce corruption if
+  // valk_thread_ctx.allocator was corrupted.
+  if (res->origin_allocator == NULL) {
+    // Only set if allocator didn't set it (e.g., for malloc/arena allocators)
+    VALK_SET_ORIGIN_ALLOCATOR(res);
+  }
   switch (LVAL_TYPE(lval)) {
     case LVAL_NUM:
       res->num = lval->num;
@@ -594,7 +612,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
     case LVAL_SYM: {
       size_t slen = strlen(lval->str);
       if (slen > 200) slen = 200;
-      res->str = valk_mem_alloc(slen + 1);
+      res->str = malloc(slen + 1);
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memcpy(res->str, lval->str, slen);
       res->str[slen] = '\0';
@@ -603,7 +621,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
     case LVAL_ERR: {
       size_t slen = strlen(lval->str);
       if (slen > 2000) slen = 2000;
-      res->str = valk_mem_alloc(slen + 1);
+      res->str = malloc(slen + 1);
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memcpy(res->str, lval->str, slen);
       res->str[slen] = '\0';
@@ -611,7 +629,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
     }
     case LVAL_STR: {
       size_t slen = strlen(lval->str);
-      res->str = valk_mem_alloc(slen + 1);
+      res->str = malloc(slen + 1);
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memcpy(res->str, lval->str, slen + 1);
       break;
@@ -620,7 +638,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
       // Shallow copy ref payload, but duplicate type string into allocator
       size_t tlen = strlen(lval->ref.type);
       if (tlen > 100) tlen = 100;
-      res->ref.type = valk_mem_alloc(tlen + 1);
+      res->ref.type = malloc(tlen + 1);
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memcpy(res->ref.type, lval->ref.type, tlen);
       res->ref.type[tlen] = '\0';
@@ -1000,7 +1018,7 @@ valk_lval_t* valk_lval_add(valk_lval_t* lval, valk_lval_t* cell) {
   // Add new node at end
   valk_lval_t* new_node = valk_mem_alloc(sizeof(valk_lval_t));
   new_node->flags = LVAL_TYPE(lval);  // Preserve list type (SEXPR or QEXPR)
-  new_node->origin_allocator = valk_thread_ctx.allocator;
+  VALK_SET_ORIGIN_ALLOCATOR(new_node);
   new_node->cons.head = cell;
   new_node->cons.tail = nullptr;
   valk_capture_trace(VALK_TRACE_NEW, 1, new_node);
@@ -1371,7 +1389,7 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
       // First iteration: create list with one element
       result = valk_mem_alloc(sizeof(valk_lval_t));
       result->flags = type;
-      result->origin_allocator = valk_thread_ctx.allocator;
+      VALK_SET_ORIGIN_ALLOCATOR(result);
       result->cons.head = elements[j - 1];
       result->cons.tail = nullptr;  // Empty tail
       valk_capture_trace(VALK_TRACE_NEW, 1, result);
@@ -1379,7 +1397,7 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
       // Subsequent iterations: cons element onto existing list
       valk_lval_t* new_node = valk_mem_alloc(sizeof(valk_lval_t));
       new_node->flags = type;
-      new_node->origin_allocator = valk_thread_ctx.allocator;
+      VALK_SET_ORIGIN_ALLOCATOR(new_node);
       new_node->cons.head = elements[j - 1];
       new_node->cons.tail = result;
       valk_capture_trace(VALK_TRACE_NEW, 1, new_node);
@@ -1391,7 +1409,7 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
   if (result == nullptr) {
     result = valk_mem_alloc(sizeof(valk_lval_t));
     result->flags = type;
-    result->origin_allocator = valk_thread_ctx.allocator;
+    VALK_SET_ORIGIN_ALLOCATOR(result);
     result->cons.head = nullptr;
     result->cons.tail = nullptr;
     valk_capture_trace(VALK_TRACE_NEW, 1, result);
@@ -1487,23 +1505,22 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   // TODO(main): technically we should be able to do the ammortized arraylist
   // where we double the array on overflow, but i guess it doesnt matter for
   // now
-  VALK_WITH_ALLOC(env->allocator) {
-    size_t new_count = env->count + 1;
-    char** new_symbols = valk_mem_alloc(sizeof(env->symbols[0]) * new_count);
-    valk_lval_t** new_vals = valk_mem_alloc(sizeof(env->vals[0]) * new_count);
-    if (env->count > 0) {
-      // Copy old arrays into the new ones
-      memcpy(new_symbols, env->symbols, sizeof(env->symbols[0]) * env->count);
-      memcpy(new_vals, env->vals, sizeof(env->vals[0]) * env->count);
-    }
-    env->symbols = new_symbols;
-    env->vals = new_vals;
-
-    // Allocate and copy the new key
-    env->symbols[env->count] = valk_mem_alloc(201);
-    strncpy(env->symbols[env->count], key->str, 200);
-    env->symbols[env->count][200] = '\0';
+  // NOTE: Use malloc for auxiliary data (arrays, strings) - GC heap is ONLY for valk_lval_t
+  size_t new_count = env->count + 1;
+  char** new_symbols = malloc(sizeof(env->symbols[0]) * new_count);
+  valk_lval_t** new_vals = malloc(sizeof(env->vals[0]) * new_count);
+  if (env->count > 0) {
+    // Copy old arrays into the new ones
+    memcpy(new_symbols, env->symbols, sizeof(env->symbols[0]) * env->count);
+    memcpy(new_vals, env->vals, sizeof(env->vals[0]) * env->count);
   }
+  env->symbols = new_symbols;
+  env->vals = new_vals;
+
+  // Allocate and copy the new key
+  env->symbols[env->count] = malloc(201);
+  strncpy(env->symbols[env->count], key->str, 200);
+  env->symbols[env->count][200] = '\0';
 
   // Mark value as escaping since it's being stored in environment
   val->flags |= LVAL_FLAG_ESCAPES;

@@ -1,0 +1,5 @@
+; Test GC with header-based allocation
+(def x (list 1 2 3 4 5))
+(def y (list 6 7 8 9 10))
+(def z (+ (nth x 2) (nth y 3)))
+(print "GC header test:" z)

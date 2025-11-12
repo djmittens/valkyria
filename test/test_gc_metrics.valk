@@ -1,0 +1,57 @@
+; GC Metrics Test - Allocate enough to trigger multiple collections
+; This test creates large data structures to exceed the 16MB GC threshold
+
+(print "Starting GC metrics test...")
+
+; Helper: Create a list of n numbers
+(def range (fn (start end) (
+  if (> start end)
+    {}
+    (join (list start) (range (+ start 1) end))
+)))
+
+; Test 1: Allocate large lists repeatedly
+(print "Test 1: Creating 100 lists of 10000 elements each...")
+(def test1 (fn (n) (
+  if (<= n 0)
+    {}
+    {
+      (def big-list (range 1 10000))
+      (test1 (- n 1))
+    }
+)))
+(test1 100)
+
+(print "Test 1 complete!")
+
+; Test 2: Nested data structures
+(print "Test 2: Creating nested structures...")
+(def test2 (fn (n) (
+  if (<= n 0)
+    {}
+    {
+      (def nested (list
+        (range 1 1000)
+        (range 1 1000)
+        (range 1 1000)))
+      (test2 (- n 1))
+    }
+)))
+(test2 100)
+
+(print "Test 2 complete!")
+
+; Test 3: Map over large lists (creates many intermediate values)
+(print "Test 3: Mapping over large lists...")
+(def double (fn (x) (* 2 x)))
+(def test3 (fn (n) (
+  if (<= n 0)
+    {}
+    {
+      (map double (range 1 5000))
+      (test3 (- n 1))
+    }
+)))
+(test3 20)
+
+(print "GC metrics test complete! Check log for collection statistics.")
