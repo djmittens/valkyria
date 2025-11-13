@@ -182,10 +182,13 @@ void test_function_return_escapes(VALK_TEST_ARGS()) {
   valk_lval_t* lambda = valk_lval_lambda(formals, body);
 
   // Call the lambda with an argument: ((\ {x} {x}) 42)
-  valk_lval_t* args = valk_lval_sexpr_empty();
-  valk_lval_add(args, valk_lval_num(42));
+  // Build S-expr: (lambda 42)
+  valk_lval_t* call_sexpr = valk_lval_sexpr_empty();
+  valk_lval_add(call_sexpr, lambda);
+  valk_lval_add(call_sexpr, valk_lval_num(42));
 
-  valk_lval_t* result = valk_lval_eval_call(env, lambda, args);
+  // Evaluate through valk_lval_eval to properly handle thunks
+  valk_lval_t* result = valk_lval_eval(env, call_sexpr);
 
   // The return value should be marked as escaping
   VALK_TEST_ASSERT(LVAL_ESCAPES(result),

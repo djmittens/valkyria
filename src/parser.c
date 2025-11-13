@@ -1,4 +1,7 @@
 #include "parser.h"
+#include "bytecode.h"
+#include "bc_vm.h"
+#include "compiler.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -173,6 +176,8 @@ const char* valk_ltype_name(valk_ltype_e type) {
       return "Symbol";
     case LVAL_FUN:
       return "Function";
+    case LVAL_BC_FUN:
+      return "Bytecode-Function";
     case LVAL_QEXPR:
       return "Quote-expr";
     case LVAL_SEXPR:
@@ -189,6 +194,8 @@ const char* valk_ltype_name(valk_ltype_e type) {
       return "Cons";
     case LVAL_NIL:
       return "Nil";
+    case LVAL_THUNK:
+      return "Thunk";
     case LVAL_UNDEFINED:
       return "UNDEFINED";
   }
@@ -309,6 +316,17 @@ valk_lval_t* valk_lval_lambda(valk_lval_t* formals, valk_lval_t* body) {
   return res;
 }
 
+valk_lval_t* valk_lval_bc_fun(valk_chunk_t* chunk, int arity, const char* name) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  res->flags = LVAL_BC_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+  VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->bc_fun.chunk = chunk;
+  res->bc_fun.arity = arity;
+  res->bc_fun.name = name ? strdup(name) : nullptr;
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
+  return res;
+}
+
 valk_lval_t* valk_lval_sexpr_empty(void) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_SEXPR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
@@ -368,6 +386,17 @@ valk_lval_t* valk_lval_tail(valk_lval_t* cons) {
 int valk_lval_is_nil(valk_lval_t* v) {
   v = valk_lval_resolve(v);
   return v != nullptr && LVAL_TYPE(v) == LVAL_NIL;
+}
+
+// Thunk constructor (for TCO trampoline)
+valk_lval_t* valk_lval_thunk(valk_lenv_t* env, valk_lval_t* expr) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  res->flags = LVAL_THUNK | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+  VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->thunk.env = env;
+  res->thunk.expr = expr;
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
+  return res;
 }
 
 // Helper: check if a list is empty (head is nullptr)
@@ -647,6 +676,11 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
       res->cons.head = nullptr;
       res->cons.tail = nullptr;
       break;
+    case LVAL_THUNK:
+      // Shallow copy thunk fields (resolve forwarding)
+      res->thunk.env = lval->thunk.env;
+      res->thunk.expr = valk_lval_resolve(lval->thunk.expr);
+      break;
     case LVAL_UNDEFINED:
       break;
     case LVAL_ENV:
@@ -817,16 +851,95 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
   return 0;
 }
 
-valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
-  if (LVAL_TYPE(lval) == LVAL_SYM) {
-    valk_lval_t* res = valk_lenv_get(env, lval);
-    return res;
-  }
-  if (LVAL_TYPE(lval) == LVAL_SEXPR) {
-    return valk_lval_eval_sexpr(env, lval);
+// Bytecode evaluation: compile and run with bytecode VM
+static valk_lval_t* valk_lval_eval_bytecode(valk_lenv_t* env, valk_lval_t* lval) {
+  // Compile the expression to bytecode
+  valk_chunk_t* chunk = valk_compile(lval, env);
+
+  // Create VM and run
+  valk_bc_vm_t vm;
+  vm.chunk = NULL;
+  vm.ip = NULL;
+  vm.stack_top = vm.stack;
+  vm.frame_count = 0;
+  vm.globals = env;  // Use the passed-in environment (which already has builtins)
+
+  valk_bc_vm_result_e result = valk_bc_vm_run(&vm, chunk);
+
+  // Get result from stack
+  valk_lval_t* ret_val;
+  if (result == BC_VM_OK && vm.stack_top > vm.stack) {
+    ret_val = vm.stack[0];  // Top of stack is the result
+  } else if (result == BC_VM_RUNTIME_ERROR) {
+    ret_val = valk_lval_err("Bytecode runtime error");
+  } else {
+    ret_val = valk_lval_nil();  // Empty result
   }
 
-  return lval;
+  valk_bc_vm_free(&vm);
+  // Note: Don't free chunk yet as it might be referenced by functions
+  // TODO: Add proper cleanup when functions are GC'd
+
+  return ret_val;
+}
+
+valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
+  // Check if bytecode mode is enabled
+  static int use_bytecode = -1;  // -1 = uninitialized, 0 = no, 1 = yes
+  if (use_bytecode == -1) {
+    const char* mode = getenv("VALK_BYTECODE");
+    use_bytecode = (mode && strcmp(mode, "1") == 0) ? 1 : 0;
+    if (use_bytecode) {
+      fprintf(stderr, "Bytecode VM enabled (O(1) TCO)\n");
+    }
+  }
+
+  // Use bytecode VM if enabled
+  if (use_bytecode) {
+    return valk_lval_eval_bytecode(env, lval);
+  }
+
+  // Otherwise use tree-walker (with thunk-based TCO)
+  // Trampoline loop: Keep evaluating thunks until we get a final value
+  // This enables proper TCO for tail calls inside control flow (if, do, let)
+  while (1) {
+    // Safety check: NULL values should never reach here
+    if (lval == nullptr) {
+      return valk_lval_err("Internal error: NULL value in eval");
+    }
+
+    valk_ltype_e type = LVAL_TYPE(lval);
+
+    // If it's a thunk, unpack and continue evaluating the expression
+    if (type == LVAL_THUNK) {
+      env = lval->thunk.env;
+      lval = lval->thunk.expr;
+      continue;  // Loop back to evaluate the expression (might be another thunk)
+    }
+
+    // Normal evaluation (not a thunk)
+    if (type == LVAL_SYM) {
+      lval = valk_lenv_get(env, lval);
+      // If symbol resolved to a thunk, continue loop to evaluate it
+      // Otherwise we're done
+      if (LVAL_TYPE(lval) == LVAL_THUNK) {
+        continue;
+      }
+      return lval;
+    }
+    if (type == LVAL_SEXPR) {
+      lval = valk_lval_eval_sexpr(env, lval);
+      // If sexpr evaluated to a thunk, continue loop to evaluate it
+      // Otherwise we're done
+      if (LVAL_TYPE(lval) == LVAL_THUNK) {
+        continue;
+      }
+      return lval;
+    }
+
+    // Base case: return the final value (not a thunk, symbol, or sexpr)
+    return lval;
+  }
 }
 
 valk_lval_t* valk_lval_eval_sexpr(valk_lenv_t* env, valk_lval_t* sexpr) {
@@ -873,6 +986,9 @@ valk_lval_t* valk_lval_eval_sexpr(valk_lenv_t* env, valk_lval_t* sexpr) {
 
 valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
                                  valk_lval_t* args) {
+  // Tail call optimization: loop instead of recursing
+  tco_restart:
+
   LVAL_ASSERT_TYPE(args, func, LVAL_FUN);
   LVAL_ASSERT_TYPE(args, args, LVAL_SEXPR);
 
@@ -1527,23 +1643,24 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
 valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
   LVAL_ASSERT_TYPE((valk_lval_t*)nullptr, key, LVAL_SYM);
 
-  for (size_t i = 0; i < env->count; i++) {
-    if (env->symbols == NULL || env->symbols[i] == NULL) {
-      break;
-    }
-    if (strcmp(key->str, env->symbols[i]) == 0) {
-      if (valk_log_would_log(VALK_LOG_TRACE)) {
-        VALK_TRACE("env get idx=%zu key=%s", i, env->symbols[i]);
+  // Iterative lookup to avoid stack overflow with deep environment chains
+  // (important for tail call optimization which creates environment chains)
+  while (env) {
+    for (size_t i = 0; i < env->count; i++) {
+      if (env->symbols == NULL || env->symbols[i] == NULL) {
+        break;
       }
-      return env->vals[i];
+      if (strcmp(key->str, env->symbols[i]) == 0) {
+        if (valk_log_would_log(VALK_LOG_TRACE)) {
+          VALK_TRACE("env get idx=%zu key=%s", i, env->symbols[i]);
+        }
+        return env->vals[i];
+      }
     }
+    env = env->parent;  // Move to parent environment
   }
 
-  if (env->parent) {
-    return valk_lenv_get(env->parent, key);
-  } else {
-    return valk_lval_err("LEnv: Symbol `%s` is not bound", key->str);
-  }
+  return valk_lval_err("LEnv: Symbol `%s` is not bound", key->str);
 }
 
 void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
@@ -1854,7 +1971,9 @@ static valk_lval_t* valk_builtin_eval(valk_lenv_t* e, valk_lval_t* a) {
   v = valk_lval_copy(v);
   v->flags = ((v->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
 
-  return valk_lval_eval(e, v);
+  // Return thunk for TCO - function bodies are in tail position when called from eval_call
+  // The trampoline will unwrap this without adding a stack frame
+  return valk_lval_thunk(e, v);
 }
 static valk_lval_t* valk_builtin_plus(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -2129,7 +2248,8 @@ static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
   branch = valk_lval_copy(branch);
   branch->flags = ((branch->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
 
-  return valk_lval_eval(e, branch);
+  // Return thunk instead of recursing - enables proper TCO
+  return valk_lval_thunk(e, branch);
 }
 
 static valk_lval_t* valk_builtin_print(valk_lenv_t* e, valk_lval_t* a) {

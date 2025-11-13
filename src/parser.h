@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "bytecode.h"  // For valk_chunk_t
+
 #define LVAL_TYPE_BITS 8ULL
 #define LVAL_TYPE_MASK 0x00000000000000FFULL
 #define LVAL_FLAGS_MASK 0xFFFFFFFFFFFFFF00ULL
@@ -58,6 +60,9 @@
 // Forwarding flag: value has been moved to new location (pointer forwarding for scratch->heap promotion)
 #define LVAL_FLAG_FORWARDED (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 3))
 
+// Tail call flag: marks expressions that are in tail position (for TCO)
+#define LVAL_FLAG_TAIL_CALL (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 4))
+
 // Helper to get allocation type
 #define LVAL_ALLOC(_lval) ((_lval)->flags & LVAL_ALLOC_MASK)
 
@@ -83,6 +88,7 @@ typedef enum {
   LVAL_SYM,
   LVAL_STR,
   LVAL_FUN,
+  LVAL_BC_FUN,  // Bytecode compiled function
   LVAL_REF,
   LVAL_QEXPR,
   LVAL_SEXPR,
@@ -90,6 +96,7 @@ typedef enum {
   LVAL_ENV,
   LVAL_CONS,  // Cons cell (car/cdr linked list)
   LVAL_NIL,   // Empty list
+  LVAL_THUNK, // Unevaluated tail call (for TCO trampoline)
 } valk_ltype_e;
 
 const char *valk_ltype_name(valk_ltype_e type);
@@ -119,6 +126,11 @@ struct valk_lval_t {
       // NULL if its a lambda
       valk_lval_builtin_t *builtin;
     } fun;
+    struct {
+      valk_chunk_t *chunk;   // Compiled bytecode
+      int arity;             // Number of parameters
+      char *name;            // Function name (for debugging)
+    } bc_fun;  // Bytecode function
     // DEPRECATED: Use cons field instead (for SEXPR/QEXPR migration)
     struct {
       struct valk_lval_t **cell;
@@ -133,6 +145,10 @@ struct valk_lval_t {
       void *ptr;
       void (*free)(void *);
     } ref;
+    struct {
+      valk_lenv_t *env;   // Environment for evaluation
+      valk_lval_t *expr;  // Expression to evaluate (in tail position)
+    } thunk;  // Unevaluated tail expression (for TCO trampoline)
     struct valk_lenv_t env;
     long num;
     char *str;
@@ -151,6 +167,7 @@ valk_lval_t *valk_lval_str_n(const char *bytes, size_t n);
 
 // valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
 valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body);
+valk_lval_t *valk_lval_bc_fun(valk_chunk_t *chunk, int arity, const char *name);
 valk_lval_t *valk_lval_sexpr_empty(void);
 valk_lval_t *valk_lval_qexpr_empty(void);
 
@@ -160,6 +177,9 @@ valk_lval_t *valk_lval_cons(valk_lval_t *head, valk_lval_t *tail);  // Cons cell
 valk_lval_t *valk_lval_head(valk_lval_t *cons);                     // Get head
 valk_lval_t *valk_lval_tail(valk_lval_t *cons);                     // Get tail
 int valk_lval_is_nil(valk_lval_t *v);                               // Check if nil
+
+// Thunk constructor (for TCO trampoline)
+valk_lval_t *valk_lval_thunk(valk_lenv_t *env, valk_lval_t *expr);
 
 //// END Constructors ////
 

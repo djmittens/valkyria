@@ -1,0 +1,9 @@
+; Minimal TCO test
+(def {countdown} (\ {n}
+  {if (== n 0)
+    {0}
+    {countdown (- n 1)}}))
+
+(print "Testing 100 iterations...")
+(print (countdown 100))
+(print "Success!")

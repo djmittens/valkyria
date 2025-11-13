@@ -90,6 +90,7 @@ test: build
 	ASAN_OPTIONS=detect_leaks=0 build/test_memory &&\
 	ASAN_OPTIONS=detect_leaks=0 build/test_freeze &&\
 	ASAN_OPTIONS=detect_leaks=0 build/test_escape &&\
+	ASAN_OPTIONS=detect_leaks=0 build/test_bytecode &&\
 	ASAN_OPTIONS=detect_leaks=0 build/test_concurrency &&\
 	ASAN_OPTIONS=detect_leaks=0 build/test_networking &&\
 	ASAN_OPTIONS=detect_leaks=0 build/test_networking_lisp &&\

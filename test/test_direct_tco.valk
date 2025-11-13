@@ -1,0 +1,12 @@
+; Test direct tail recursion (without if)
+(def {loop} (\ {n f} {f n}))
+(def {countdown-cont} (\ {n cont}
+  {loop n (\ {x} {cont x})}))
+
+; Simpler: identity recursion
+(def {identity-rec} (\ {n}
+  {n}))
+
+(print "Testing identity recursion...")
+(print (identity-rec 42))
+(print "Done")

@@ -1,0 +1,11 @@
+;; Test tail call optimization with bytecode VM
+;; This should use O(1) space with bytecode VM
+
+(def {countdown} (\ {n} {
+  (if (== n 0)
+    {0}
+    {(countdown (- n 1))})
+}))
+
+;; This would overflow with tree-walker but should work with bytecode VM
+(print (countdown 100000))

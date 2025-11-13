@@ -1,0 +1,6 @@
+; Ultra minimal debug test
+(def {test} (\ {n} {if (== n 0) {42} {99}}))
+(print "Testing simple if...")
+(print (test 0))
+(print (test 1))
+(print "Done")

@@ -72,6 +72,9 @@ add_library(valkyria
   src/aio_ssl.c
   src/vm.c
   src/log.c
+  src/bytecode.c
+  src/bc_vm.c
+  src/compiler.c
 )
 
 # On glibc-based Linux, expose required pthread and POSIX interfaces
@@ -139,3 +142,7 @@ include_directories(test_freeze src/)
 add_executable(test_escape test/test_escape.c test/testing.c)
 target_link_libraries(test_escape PRIVATE "-lc" valkyria)
 include_directories(test_escape src/)
+
+add_executable(test_bytecode test/test_bytecode.c test/testing.c)
+target_link_libraries(test_bytecode PRIVATE "-lc" valkyria)
+include_directories(test_bytecode src/)

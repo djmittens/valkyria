@@ -1,0 +1,10 @@
+;; Simple test without prelude
+;; Set VALK_BYTECODE=1 before loading this
+
+(print "Testing simple arithmetic...")
+(print (+ 1 2))
+
+(print "Testing if...")
+(print (if (== 1 1) {42} {0}))
+
+(print "SUCCESS!")
