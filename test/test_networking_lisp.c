@@ -1,3 +1,15 @@
+/*
+ * Networking Lisp Integration Tests
+ *
+ * NOTE: These tests are currently disabled in the main test suite (Makefile) due to:
+ * 1. They require specific server infrastructure that may not be available
+ * 2. Memory leaks in the networking stack cause ASAN to output large amounts of data
+ *    to stderr, which corrupts the test result structure when using fork-based testing
+ * 3. The AIO system cleanup can crash with SSL_free_buffers when multiple tests run
+ *
+ * To run manually: build/test_networking_lisp
+ */
+
 #define _POSIX_C_SOURCE 200809L
 #include "testing.h"
 #include "common.h"
@@ -92,6 +104,7 @@ static void test_http2_google_script(VALK_TEST_ARGS()) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(prelude, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
+      valk_aio_stop(aio);
       VALK_FAIL("Prelude eval failed");
       return;
     }
@@ -104,6 +117,7 @@ static void test_http2_google_script(VALK_TEST_ARGS()) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(script, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
+      valk_aio_stop(aio);
       VALK_FAIL("Script eval failed");
       return;
     } else {
@@ -118,6 +132,9 @@ static void test_http2_google_script(VALK_TEST_ARGS()) {
                    "Expected shutdown to return a number");
   VALK_TEST_ASSERT(last_result->num == 0,
                    "Expected shutdown to be called with exit code 0");
+
+  // Clean up AIO system
+  valk_aio_stop(aio);
 
   VALK_PASS();
 }
@@ -143,6 +160,7 @@ static void test_http2_error_handling(VALK_TEST_ARGS()) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(prelude, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
+      valk_aio_stop(aio);
       VALK_FAIL("Prelude eval failed");
       return;
     }
@@ -173,6 +191,9 @@ static void test_http2_error_handling(VALK_TEST_ARGS()) {
   // Verify we got the expected error
   VALK_TEST_ASSERT(got_expected_error,
                    "Expected connection error but script succeeded");
+
+  // Clean up AIO system
+  valk_aio_stop(aio);
 
   VALK_PASS();
 }
@@ -231,6 +252,7 @@ static void test_http2_rst_stream_handling(VALK_TEST_ARGS()) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(prelude, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
+      valk_aio_stop(aio);
       VALK_FAIL("Prelude eval failed");
       return;
     }
@@ -248,9 +270,13 @@ static void test_http2_rst_stream_handling(VALK_TEST_ARGS()) {
       if (strstr(x->str, "HTTP/2 stream error") != NULL ||
           strstr(x->str, "ERR:") != NULL) {
         // This is expected - server rejected with RST_STREAM
+        // Clean up AIO system
+        valk_aio_stop(aio);
         VALK_PASS();
         return;
       } else {
+        // Clean up AIO system
+        valk_aio_stop(aio);
         VALK_FAIL("Got unexpected error: %s", x->str);
         return;
       }
@@ -261,6 +287,10 @@ static void test_http2_rst_stream_handling(VALK_TEST_ARGS()) {
 
   // If we got here without error, server accepted the request
   // This is also valid behavior
+
+  // Clean up AIO system
+  valk_aio_stop(aio);
+
   VALK_PASS();
 }
 
@@ -285,6 +315,7 @@ static void test_http2_server_client(VALK_TEST_ARGS()) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(prelude, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
+      valk_aio_stop(aio);
       VALK_FAIL("Prelude eval failed");
       return;
     }
@@ -297,6 +328,8 @@ static void test_http2_server_client(VALK_TEST_ARGS()) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(script, 0));
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
+      // Clean up AIO system and environment
+      valk_aio_stop(aio);
       VALK_FAIL("Script eval failed: %s", x->str);
       return;
     } else {
@@ -312,6 +345,9 @@ static void test_http2_server_client(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(last_result->num == 0,
                    "Expected shutdown to be called with exit code 0");
 
+  // Clean up AIO system
+  valk_aio_stop(aio);
+
   VALK_PASS();
 }
 
@@ -320,7 +356,9 @@ int main(int argc, const char **argv) {
   UNUSED(argv);
   valk_mem_init_malloc();
 
+  fprintf(stderr, "Starting test_networking_lisp\n");
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
+  fprintf(stderr, "Adding tests...\n");
   valk_testsuite_add_test(suite, "test_http2_google_script",
                           test_http2_google_script);
   valk_testsuite_add_test(suite, "test_http2_error_handling",
@@ -330,8 +368,12 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_http2_server_client",
                           test_http2_server_client);
 
+  fprintf(stderr, "Running tests... (count=%zu)\n", suite->tests.count);
   int res = valk_testsuite_run(suite);
+  fprintf(stderr, "Printing results...\n");
   valk_testsuite_print(suite);
+  fprintf(stderr, "Cleaning up...\n");
   valk_testsuite_free(suite);
+  fprintf(stderr, "Returning %d\n", res);
   return res;
 }

@@ -101,6 +101,11 @@ size_t valk_testsuite_add_test(valk_test_suite_t *suite, const char *name,
                                valk_test_f *func) {
   valk_test_t test = {.name = valk_str_dup(name), .func = func};
   da_init(&test.labels);
+  // Initialize the result to UNDEFINED
+  test.result.type = VALK_TEST_UNDEFINED;
+  test.result.startTime = 0;
+  test.result.stopTime = 0;
+  test.result.timePrecision = VALK_MICROS;
   da_add(&suite->tests, test);
 
   return suite->tests.count;
@@ -260,13 +265,14 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
     test->_stderr = (void *)valk_slab_aquire(slab)->data;
     valk_ring_init(test->_stderr, ring_size);
 
-#ifdef VALK_TEST_FORK
+#if VALK_TEST_FORK
     struct pollfd fds[2];
     int pid = valk_test_fork(test, suite, fds);
     valk_test_fork_await(test, pid, fds);
 #else
-    printf("🏃 Running: %s\n", test->name);
+    fprintf(stderr, "🏃 Running: %s\n", test->name);
     test->func(suite, &test->result);
+    fprintf(stderr, "Test %s completed with type=%d\n", test->name, test->result.type);
 #endif
     result |= !(test->result.type == VALK_TEST_PASS ||
                 test->result.type == VALK_TEST_SKIP);
