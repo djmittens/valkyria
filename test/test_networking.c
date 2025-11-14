@@ -93,6 +93,10 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   valk_arc_release(fserv);
   valk_arc_release(fres);
 
+  // Release the response and client boxes
+  valk_arc_release(res);
+  valk_arc_release(clientBox);
+
   // TODO(networking): This will close all connections passing the test
   // obviously now need to implement tthe proper shutdown procedures
   valk_aio_stop(sys);

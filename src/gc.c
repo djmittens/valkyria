@@ -273,8 +273,8 @@ static void valk_gc_mark_env(valk_lenv_t* env) {
   if (env == NULL) return;
 
   // Mark all values in this environment
-  for (size_t i = 0; i < env->count; i++) {
-    valk_gc_mark_lval(env->vals[i]);
+  for (size_t i = 0; i < env->vals.count; i++) {
+    valk_gc_mark_lval(env->vals.items[i]);
   }
 
   // Mark parent environment
@@ -316,26 +316,34 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
       // Object is live - keep it
       header_ptr = &header->gc_next;
     } else {
-      // Object is garbage - return to slab or free list for reuse
+      // Object is garbage - free based on allocation source (slab vs malloc)
       *header_ptr = header->gc_next;  // Remove from live objects list
-
-      // TODO: For now, only free the lval struct itself, not string data
-      // String data might be in scratch arena or shared (frozen aliased values)
-      // Need proper ownership tracking to safely free string data
 
       size_t total_size = sizeof(valk_gc_header_t) + header->size;
       reclaimed += total_size;
       freed_count++;
 
-      // Return to slab if it's a valk_lval_t, otherwise add to free list
-      if (header->size == heap->lval_size && heap->lval_slab != NULL) {
+      // Check if object is from slab via address range check
+      bool from_slab = false;
+      if (heap->lval_slab != NULL) {
+        uintptr_t slab_start = (uintptr_t)heap->lval_slab;
+        size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
+        size_t slab_total_size = valk_slab_size(slab_item_size, 256 * 1024);
+        uintptr_t slab_end = slab_start + slab_total_size;
+        uintptr_t obj_addr = (uintptr_t)header;
+        from_slab = (obj_addr >= slab_start && obj_addr < slab_end);
+      }
+
+      if (from_slab) {
+        // Return to slab allocator
         valk_mem_allocator_free((void*)heap->lval_slab, header);
         VALK_TRACE("GC sweep: returned %p to slab", user_data);
       } else {
-        // Add to free list for fast reuse
+        // Add to free list for fast reuse (malloc'd objects)
         header->gc_next = heap->free_list;
         heap->free_list = header;
         heap->free_list_size++;
+        VALK_TRACE("GC sweep: added %p to free list", user_data);
       }
     }
   }
@@ -369,8 +377,8 @@ static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
   switch (LVAL_TYPE(v)) {
     case LVAL_FUN:
       if (v->fun.env) {
-        for (size_t i = 0; i < v->fun.env->count; i++) {
-          valk_gc_clear_marks_recursive(v->fun.env->vals[i]);
+        for (size_t i = 0; i < v->fun.env->vals.count; i++) {
+          valk_gc_clear_marks_recursive(v->fun.env->vals.items[i]);
         }
       }
       valk_gc_clear_marks_recursive(v->fun.formals);
@@ -384,8 +392,8 @@ static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
       break;
 
     case LVAL_ENV:
-      for (size_t i = 0; i < v->env.count; i++) {
-        valk_gc_clear_marks_recursive(v->env.vals[i]);
+      for (size_t i = 0; i < v->env.vals.count; i++) {
+        valk_gc_clear_marks_recursive(v->env.vals.items[i]);
       }
       break;
 
@@ -469,6 +477,53 @@ size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap) {
 }
 
 // ============================================================================
+// GC Heap Object Management
+// ============================================================================
+
+// Explicitly free a single GC heap object
+// Used when explicitly freeing an object (e.g., when switching allocators)
+void valk_gc_free_object(void* heap_ptr, void* user_ptr) {
+  if (user_ptr == NULL) return;
+
+  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)heap_ptr;
+
+  // Get header (it's right before the user data)
+  valk_gc_header_t* header = ((valk_gc_header_t*)user_ptr) - 1;
+
+  // Remove from objects list
+  valk_gc_header_t** current_ptr = &heap->objects;
+  while (*current_ptr != NULL) {
+    if (*current_ptr == header) {
+      *current_ptr = header->gc_next;
+      break;
+    }
+    current_ptr = &(*current_ptr)->gc_next;
+  }
+
+  // Determine if from slab or malloc and free accordingly
+  bool from_slab = false;
+  if (heap->lval_slab != NULL) {
+    uintptr_t slab_start = (uintptr_t)heap->lval_slab;
+    size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
+    size_t slab_total_size = valk_slab_size(slab_item_size, 256 * 1024);
+    uintptr_t slab_end = slab_start + slab_total_size;
+    uintptr_t obj_addr = (uintptr_t)header;
+    from_slab = (obj_addr >= slab_start && obj_addr < slab_end);
+  }
+
+  size_t total_size = sizeof(valk_gc_header_t) + header->size;
+
+  if (from_slab) {
+    // Return to slab allocator
+    valk_mem_allocator_free((void*)heap->lval_slab, header);
+  } else {
+    // Free malloc'd memory
+    heap->allocated_bytes -= total_size;
+    free(header);
+  }
+}
+
+// ============================================================================
 // GC Heap Cleanup - Free all allocations for clean shutdown
 // ============================================================================
 
@@ -486,9 +541,7 @@ void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
   while (current != NULL) {
     valk_gc_header_t* next = current->gc_next;
 
-    // Only free malloc'd objects, not slab objects
-    // Slab objects will be freed when we free the slab itself
-    // Check: if object pointer is within slab memory range, skip free
+    // Check if object is from slab via address range check
     bool from_slab = false;
     if (heap->lval_slab != NULL) {
       uintptr_t slab_start = (uintptr_t)heap->lval_slab;
@@ -500,6 +553,7 @@ void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
     }
 
     if (!from_slab) {
+      // Free malloc'd objects (slab objects freed with slab itself)
       size_t total_size = sizeof(valk_gc_header_t) + current->size;
       freed_bytes += total_size;
       freed_count++;
@@ -529,9 +583,9 @@ void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
     current = next;
   }
 
-  // Free the slab allocator
+  // Free the slab allocator directly (don't use valk_slab_free which goes through valk_mem_free)
   if (heap->lval_slab != NULL) {
-    valk_slab_free(heap->lval_slab);
+    free(heap->lval_slab);
   }
 
   // Free the heap structure itself
@@ -573,8 +627,8 @@ size_t valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena) {
   }
 
   // Clear marks
-  for (size_t i = 0; i < root_env->count; i++) {
-    valk_gc_clear_marks_recursive(root_env->vals[i]);
+  for (size_t i = 0; i < root_env->vals.count; i++) {
+    valk_gc_clear_marks_recursive(root_env->vals.items[i]);
   }
 
   return dead_count * sizeof(valk_lval_t);

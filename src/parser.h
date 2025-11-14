@@ -63,6 +63,9 @@
 // Tail call flag: marks expressions that are in tail position (for TCO)
 #define LVAL_FLAG_TAIL_CALL (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 4))
 
+// Macro flag: function receives unevaluated arguments (like Lisp macros)
+#define LVAL_FLAG_MACRO     (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 5))
+
 // Helper to get allocation type
 #define LVAL_ALLOC(_lval) ((_lval)->flags & LVAL_ALLOC_MASK)
 
@@ -105,9 +108,18 @@ typedef valk_lval_t *(valk_lval_builtin_t)(valk_lenv_t *, valk_lval_t *);
 
 struct valk_lenv_t {
   uint64_t flags;
-  char **symbols;
-  valk_lval_t **vals;
-  size_t count;
+  // Dynamic array of symbol names (char*)
+  struct {
+    char **items;
+    size_t count;
+    size_t capacity;
+  } symbols;
+  // Dynamic array of values (valk_lval_t*)
+  struct {
+    valk_lval_t **items;
+    size_t count;
+    size_t capacity;
+  } vals;
   struct valk_lenv_t *parent;
   // Allocator where persistent env data lives (globals/closures)
   void *allocator;
@@ -131,11 +143,6 @@ struct valk_lval_t {
       int arity;             // Number of parameters
       char *name;            // Function name (for debugging)
     } bc_fun;  // Bytecode function
-    // DEPRECATED: Use cons field instead (for SEXPR/QEXPR migration)
-    struct {
-      struct valk_lval_t **cell;
-      size_t count;
-    } expr;
     struct {
       valk_lval_t *head;  // First element
       valk_lval_t *tail;  // Rest of list
@@ -203,6 +210,9 @@ valk_lval_t *valk_lval_promote_to_heap(valk_lval_t *val);
 void valk_lval_finalize(valk_lval_t *lval);
 int valk_lval_eq(valk_lval_t *x, valk_lval_t *y);
 
+// Memory management
+// REMOVED: valk_lval_cleanup - no longer needed with GC heap for all allocations
+
 // Immutability support
 void valk_lval_freeze(valk_lval_t *lval);      // Recursively freeze value tree
 void valk_lval_assert_mutable(valk_lval_t *lval);  // Crash if frozen
@@ -235,6 +245,7 @@ static inline void valk_lval_println(valk_lval_t *val) {
 //// LEnv Constructors ////
 valk_lenv_t *valk_lenv_empty(void);
 void valk_lenv_init(valk_lenv_t *env);
+// REMOVED: valk_lenv_cleanup - no longer needed with GC heap for all allocations
 //// END LEnv Constructors ////
 valk_lenv_t *valk_lenv_copy(valk_lenv_t *env);
 

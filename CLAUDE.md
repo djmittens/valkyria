@@ -13,20 +13,15 @@ Valkyria is a Lisp interpreter written in C23 with built-in concurrency primitiv
 # Initial build (generates TLS test certificates in build/)
 make build
 
-# Run all tests
+# Run all tests (ALWAYS use 'make test', NOT direct binary execution)
+# Note: Leak detection is enabled. The GC properly cleans up auxiliary data
+# (environment arrays, strings) when destroying the heap or sweeping during GC.
 make test
-
-# Run individual test suites
-build/test_std
-build/test_memory
-build/test_concurrency
-build/test_networking
-build/test_networking_lisp
 
 # Run REPL with prelude
 make repl
 
-# Run with AddressSanitizer
+# Run with AddressSanitizer (for debugging)
 make asan
 ```
 
@@ -174,3 +169,15 @@ The project uses branch-specific TODO comments. Use `make todo` to find TODOs ta
 # Example: TODO(networking): comment about networking work
 make todo  # on networking branch finds all TODO(networking) items
 ```
+
+## Future Improvements
+
+### Test Runner Tool
+Plan to create a test runner utility that allows:
+- Running specific tests by name or pattern (e.g., `./test_runner test_std::test_parser_numbers`)
+- Filtering tests by category or tag
+- Parallel test execution
+- Better test output formatting and filtering
+- Integration with the existing test framework in `test/testing.{c,h}`
+
+This will complement the existing Makefile targets and provide more granular control over test execution.

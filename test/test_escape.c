@@ -74,8 +74,8 @@ void test_zero_copy_frozen_heap_values(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(interned == original,
                    "Interning frozen heap value should return same pointer (zero copy)");
 
-  // Note: no destroy function for GC heap, memory will be freed at program exit
-  (void)heap; // Suppress unused warning
+  // Clean up GC heap to avoid memory leaks
+  valk_gc_malloc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -117,8 +117,8 @@ void test_shallow_copy_frozen_children(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(valk_lval_list_nth(list_copy, 1) == elem2,
                    "Frozen heap child should be aliased, not deep copied");
 
-  // Note: no destroy function for GC heap, memory will be freed at program exit
-  (void)heap; // Suppress unused warning
+  // Clean up GC heap to avoid memory leaks
+  valk_gc_malloc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -200,7 +200,10 @@ int main(int argc, const char** argv) {
   (void)argc;
   (void)argv;
 
-  valk_mem_init_malloc();
+  // Use GC heap for everything, including test suite
+  size_t const GC_THRESHOLD_BYTES = 16 * 1024 * 1024;  // 16 MiB
+  valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES);
+  valk_thread_ctx.allocator = (void *)gc_heap;
 
   valk_test_suite_t* suite = valk_testsuite_empty(__FILE__);
 
@@ -219,7 +222,11 @@ int main(int argc, const char** argv) {
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
+
   valk_testsuite_free(suite);
+
+  // Clean up GC heap to avoid memory leaks
+  valk_gc_malloc_heap_destroy(gc_heap);
 
   return res;
 }

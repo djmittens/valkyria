@@ -2,6 +2,7 @@
 
 #include "collections.h"
 #include "common.h"
+#include "gc.h"
 #include "memory.h"
 #include "parser.h"
 #include "testing.h"
@@ -308,17 +309,20 @@ void test_dynamic_lists(VALK_TEST_ARGS()) {
 }
 
 static void *__lval_retain(void *lval) { return (valk_lval_t *)lval; }
-
 static void __lval_release(void *lval) { UNUSED(lval); }
 
 static void *__lenv_retain(void *lenv) { return (valk_lenv_t *)lenv; }
-
 static void __lenv_release(void *lenv) { UNUSED(lenv); }
 
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
-  valk_mem_init_malloc();
+
+  // Use GC heap for everything, including test suite
+  size_t const GC_THRESHOLD_BYTES = 16 * 1024 * 1024;  // 16 MiB
+  valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES);
+  valk_thread_ctx.allocator = (void *)gc_heap;
+
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
   valk_testsuite_add_test(suite, "test_parsing_prelude", test_parsing_prelude);
@@ -331,11 +335,9 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_prelude_split", test_prelude_split);
   valk_testsuite_add_test(suite, "test_prelude_map", test_prelude_map);
   valk_testsuite_add_test(suite, "test_prelude_not", test_prelude_not);
-
   if (0) {
     valk_testsuite_add_test(suite, "test_always_failing", test_always_failing);
   }
-
   valk_testsuite_add_test(suite, "test_dynamic_lists", test_dynamic_lists);
 
   // load fixtures
@@ -369,7 +371,11 @@ int main(int argc, const char **argv) {
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
+
   valk_testsuite_free(suite);
+
+  // Clean up GC heap to avoid memory leaks
+  valk_gc_malloc_heap_destroy(gc_heap);
 
   return res;
 }

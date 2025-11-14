@@ -91,9 +91,9 @@ valk_future *valk_future_new() {
   self->refcount = 1;
   self->done = 0;
   self->item = nullptr;
+  self->free = valk_future_free;
   __assert_thread_safe_allocator();
   self->allocator = valk_thread_ctx.allocator;
-  self->free = valk_future_free;
   da_init(&self->andThen);
 
   return self;

@@ -7,6 +7,7 @@
 
 #include "collections.h"
 #include "common.h"
+#include "gc.h"
 
 #define VALK_SLAB_TREIBER_STACK
 #define VALK_SLAB_VERSIONS
@@ -408,18 +409,10 @@ void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes) {
     case VALK_ALLOC_MALLOC:
       return malloc(bytes);
     case VALK_ALLOC_GC_HEAP: {
-      // GC heap ONLY allocates valk_lval_t structures!
-      // All other allocations (strings, arrays, etc.) must use malloc
-      // Forward declare - actual implementation in gc.c
-      extern void* valk_gc_malloc_heap_alloc(void* heap, size_t bytes);
-      // Check if this is a valk_lval_t allocation
-      extern size_t __valk_lval_size;  // Defined in parser.c
-      if (bytes == __valk_lval_size) {
-        return valk_gc_malloc_heap_alloc((void *)self, bytes);
-      } else {
-        // Not a valk_lval_t - use malloc for auxiliary data
-        return malloc(bytes);
-      }
+      // GC heap allocates ALL structures (lval_t + auxiliary data like arrays/strings)
+      // Slab is used for lval_t, malloc fallback for other sizes
+      // Everything goes through unified GC interface for proper tracking
+      return valk_gc_malloc_heap_alloc((valk_gc_malloc_heap_t *)self, bytes);
     }
   }
   return NULL;
@@ -451,6 +444,10 @@ void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, size_t num,
       break;
     case VALK_ALLOC_MALLOC:
       res = calloc(num, size);
+      break;
+    case VALK_ALLOC_GC_HEAP:
+      res = valk_gc_malloc_heap_alloc((valk_gc_malloc_heap_t *)self, num * size);
+      memset(res, 0, num * size);
       break;
   }
   return res;
@@ -494,6 +491,29 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
           "memory than fits in a slab\n %ld wanted, but %ld is the size",
           new_size, slabSize);
       return ptr;
+    case VALK_ALLOC_GC_HEAP: {
+      // For GC heap, implement realloc as alloc + copy + free
+      if (ptr == NULL) {
+        return valk_mem_allocator_alloc(self, new_size);
+      }
+
+      // Get the old size from the header
+      valk_gc_header_t* header = ((valk_gc_header_t*)ptr) - 1;
+      size_t old_size = header->size;
+
+      // If new size fits in old allocation, just return the same pointer
+      if (new_size <= old_size) {
+        return ptr;
+      }
+
+      // Allocate new memory, copy, and free old
+      void* new_ptr = valk_mem_allocator_alloc(self, new_size);
+      if (new_ptr && ptr) {
+        memcpy(new_ptr, ptr, old_size < new_size ? old_size : new_size);
+      }
+      valk_mem_allocator_free(self, ptr);
+      return new_ptr;
+    }
     case VALK_ALLOC_MALLOC:
       return realloc(ptr, new_size);
   }
@@ -518,6 +538,16 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
     case VALK_ALLOC_MALLOC:
       free(ptr);
       return;
+    case VALK_ALLOC_GC_HEAP: {
+      // For GC heap objects, we need to properly free them by removing from tracking
+      // and returning memory to the appropriate source (slab or malloc)
+      if (ptr == NULL) return;
+
+      // Get header (it's right before the user data)
+      extern void valk_gc_free_object(void* heap, void* ptr);
+      valk_gc_free_object((void*)self, ptr);
+      return;
+    }
   }
 }
 

@@ -27,11 +27,8 @@
 (def {uncurry} pack)
 
 ; Perform several things in sequence, and return the last result
-(fun {do & l} {
-     if (== l nil)
-       {nil}
-       {last l}
-})
+; NOTE: 'do' is a builtin (parser.c:valk_builtin_do) for TCO support
+; This is a necessary primitive for control flow with side effects
 
 ; Open a new scope
 (fun {let  b} {

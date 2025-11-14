@@ -55,6 +55,9 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap);
 // Free all GC heap allocations and the heap itself (for clean shutdown)
 void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap);
 
+// Explicitly free a single GC heap object (for cleanup when switching allocators)
+void valk_gc_free_object(void* heap, void* ptr);
+
 // Arena-based GC (informational only, for backward compatibility)
 size_t valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena);
 bool valk_gc_should_collect_arena(valk_mem_arena_t* arena);

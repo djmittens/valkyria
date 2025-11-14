@@ -836,25 +836,32 @@ static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
   return SSL_TLSEXT_ERR_OK;
 }
 
+static void __uv_task_close_cb(uv_handle_t *handle) {
+  valk_aio_handle_t *hndl = handle->data;
+  valk_aio_task_new *task = hndl->arg;
+
+  // Release the future reference held by the task
+  valk_arc_release(task->promise.item);
+
+  // Free using the original allocator captured at allocation time
+  valk_mem_allocator_free(task->allocator, task);
+
+  // Now release the handle
+  valk_dll_pop(hndl);
+  valk_slab_release_ptr(hndl->sys->handleSlab, hndl);
+}
+
 static void __uv_task_cb_new(uv_async_t *handle) {
   valk_aio_handle_t *hndl = handle->data;
   valk_aio_task_new *task = hndl->arg;
-  printf("Heeyy, calling in \n");
 
   task->callback(hndl->sys, task);
-  printf("Heeyy, responding \n");
 
-  // valk_mem_free(task);
-  printf("Releasing exec\n");
-  uv_close((uv_handle_t *)&hndl->uv.task, __uv_handle_closed_cb);
-
-  // Free using the original allocator captured at allocation time to
-  // avoid cross-thread allocator mismatch.
-  valk_mem_allocator_free(task->allocator, task);
+  // Close the UV handle - cleanup will happen in the close callback
+  uv_close((uv_handle_t *)&hndl->uv.task, __uv_task_close_cb);
 }
 
 static void __uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task) {
-  printf("Aquiring exec\n");
   valk_aio_handle_t *hndl =
       (valk_aio_handle_t *)valk_slab_aquire(sys->handleSlab)->data;
   memset(hndl, 0, sizeof(valk_aio_handle_t));
@@ -980,6 +987,8 @@ static int __http_client_on_stream_close_callback(nghttp2_session *session,
       valk_promise_respond(&reqres->promise, box);
     }
     valk_arc_release(reqres->promise.item);
+    // Free the reqres struct itself
+    valk_mem_free(reqres);
   }
   return 0;
 }

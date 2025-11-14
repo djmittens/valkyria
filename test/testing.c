@@ -59,11 +59,18 @@ static void valk_print_police_tape_line(int tiles) {
   printf(ANSI_RESET);
 }
 
+static char* valk_str_dup(const char* str) {
+  size_t len = strlen(str) + 1;
+  char* copy = valk_mem_alloc(len);
+  memcpy(copy, str, len);
+  return copy;
+}
+
 valk_test_suite_t *valk_testsuite_empty(const char *filename) {
-  valk_test_suite_t *res = malloc(sizeof(valk_test_suite_t));
+  valk_test_suite_t *res = valk_mem_alloc(sizeof(valk_test_suite_t));
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memset(res, 0, sizeof(valk_test_suite_t));
-  res->filename = strdup(filename);
+  res->filename = valk_str_dup(filename);
 
   da_init(&res->tests);
   da_init(&res->fixtures);
@@ -73,26 +80,26 @@ valk_test_suite_t *valk_testsuite_empty(const char *filename) {
 
 void valk_testsuite_free(valk_test_suite_t *suite) {
   for (size_t i = 0; i < suite->tests.count; i++) {
-    free(suite->tests.items[i].name);
+    valk_mem_free(suite->tests.items[i].name);
     da_free(&suite->tests.items[i].labels);
   }
-  free(suite->tests.items);
+  valk_mem_free(suite->tests.items);
 
   for (size_t i = 0; i < suite->fixtures.count; i++) {
-    free(suite->fixtures.items[i].name);
+    valk_mem_free(suite->fixtures.items[i].name);
     suite->fixtures.items[i].free(suite->fixtures.items[i].value);
   }
 
-  free(suite->fixtures.items);
+  valk_mem_free(suite->fixtures.items);
 
-  free(suite->filename);
+  valk_mem_free(suite->filename);
 
-  free(suite);
+  valk_mem_free(suite);
 }
 
 size_t valk_testsuite_add_test(valk_test_suite_t *suite, const char *name,
                                valk_test_f *func) {
-  valk_test_t test = {.name = strdup(name), .func = func};
+  valk_test_t test = {.name = valk_str_dup(name), .func = func};
   da_init(&test.labels);
   da_add(&suite->tests, test);
 
@@ -260,7 +267,6 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
 #else
     printf("🏃 Running: %s\n", test->name);
     test->func(suite, &test->result);
-    return
 #endif
     result |= !(test->result.type == VALK_TEST_PASS ||
                 test->result.type == VALK_TEST_SKIP);
@@ -367,7 +373,7 @@ void valk_testsuite_fixture_add(valk_test_suite_t *suite, const char *name,
                                 void *value, _fixture_copy_f *copyFunc,
                                 _fixture_free_f *freeFunc) {
   valk_test_fixture_t res = {
-      .value = value, .copy = copyFunc, .free = freeFunc, .name = strdup(name)};
+      .value = value, .copy = copyFunc, .free = freeFunc, .name = valk_str_dup(name)};
   da_add(&suite->fixtures, res);
 }
 

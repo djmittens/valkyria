@@ -40,26 +40,26 @@ static valk_lenv_t* __valk_vm_lenv_escape(valk_vm_t* vm, valk_lenv_t* lenv) {
   }
 
   size_t xtra =
-      lenv->count * (sizeof(lenv->symbols[0]) + sizeof(lenv->vals[0]));
+      lenv->symbols.count * (sizeof(lenv->symbols.items[0]) + sizeof(lenv->vals.items[0]));
 
-  size_t lens[lenv->count];
-  for (size_t i = 0; i < lenv->count; i++) {
-    lens[i] = strlen(lenv->symbols[i]) + 1;
+  size_t lens[lenv->symbols.count];
+  for (size_t i = 0; i < lenv->symbols.count; i++) {
+    lens[i] = strlen(lenv->symbols.items[i]) + 1;
     xtra += lens[i];
   }
 
   valk_lenv_t* res = valk_gc_alloc(vm->heap, sizeof(valk_lval_t) + xtra);
 
   char* offset = (char*)res + sizeof(valk_lval_t);
-  res->symbols = (char**)(offset);
-  offset += lenv->count;
+  res->symbols.items = (char**)(offset);
+  offset += lenv->symbols.count;
 
-  res->vals = (valk_lval_t**)(offset);
-  offset += lenv->count;
+  res->vals.items = (valk_lval_t**)(offset);
+  offset += lenv->vals.count;
 
-  for (size_t i = 0; i < lenv->count; i++) {
-    memcpy(offset, lenv->symbols[i], lens[i]);
-    lenv->vals[i] = __valk_vm_escape(vm, lenv->vals[i]);
+  for (size_t i = 0; i < lenv->symbols.count; i++) {
+    memcpy(offset, lenv->symbols.items[i], lens[i]);
+    lenv->vals.items[i] = __valk_vm_escape(vm, lenv->vals.items[i]);
     offset += lens[i];
   }
 

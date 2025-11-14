@@ -15,6 +15,7 @@
 #include "collections.h"
 #include "common.h"
 #include "concurrency.h"
+#include "gc.h"
 #include "memory.h"
 
 // GC heap allocator size check - ONLY allocate valk_lval_t structures
@@ -119,7 +120,7 @@ char* valk_c_err_format(const char* fmt, const char* file, const size_t line,
   // NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   size_t len =
       snprintf(nullptr, 0, "%s:%ld:%s || %s", file, line, function, fmt);
-  char* buf = malloc(len + 1);
+  char* buf = valk_mem_alloc(len + 1);
   snprintf(buf, len + 1, "%s:%ld:%s || %s", file, line, function, fmt);
   // NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   return buf;
@@ -151,7 +152,7 @@ char* valk_str_join(const size_t n, const char** strs, const char* sep) {
       res_len += sep_len;
     }
   }
-  char* res = malloc(res_len + 1);
+  char* res = valk_mem_alloc(res_len + 1);
   size_t offset = 0;
   for (size_t i = 0; i < n; i++) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -208,7 +209,7 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
   VALK_SET_ORIGIN_ALLOCATOR(res);
   size_t tlen = strlen(type);
   if (tlen > 100) tlen = 100;
-  res->ref.type = malloc(tlen + 1);
+  res->ref.type = valk_mem_alloc(tlen + 1);
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memcpy(res->ref.type, type, tlen);
   res->ref.type[tlen] = '\0';
@@ -243,7 +244,7 @@ valk_lval_t* valk_lval_err(const char* fmt, ...) {
 
   // TODO(main): look into making this into a constant
   len = len < 10000 ? len : 511;
-  res->str = malloc(len + 1);
+  res->str = valk_mem_alloc(len + 1);
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   vsnprintf(res->str, len + 1, fmt, va);
   va_end(va);
@@ -258,7 +259,7 @@ valk_lval_t* valk_lval_sym(const char* sym) {
   VALK_SET_ORIGIN_ALLOCATOR(res);
   size_t slen = strlen(sym);
   if (slen > 200) slen = 200;
-  res->str = malloc(slen + 1);
+  res->str = valk_mem_alloc(slen + 1);
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memcpy(res->str, sym, slen);
   res->str[slen] = '\0';
@@ -273,7 +274,7 @@ valk_lval_t* valk_lval_str(const char* str) {
   VALK_SET_ORIGIN_ALLOCATOR(res);
   // TODO(main): whats a reasonable max for a string length?
   size_t slen = strlen(str);
-  res->str = malloc(slen + 1);
+  res->str = valk_mem_alloc(slen + 1);
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memcpy(res->str, str, slen + 1);
 
@@ -285,7 +286,7 @@ valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
-  res->str = malloc(n + 1);
+  res->str = valk_mem_alloc(n + 1);
   if (n) memcpy(res->str, bytes, n);
   res->str[n] = '\0';
   
@@ -533,6 +534,13 @@ valk_lval_t* valk_cons_to_qexpr(valk_lval_t* cons) {
   return result;
 }
 
+// Free auxiliary data owned by an lval (strings, arrays allocated with malloc)
+// Does NOT recursively free child lvals - those are managed by GC
+// This is called by GC when freeing an lval
+// REMOVED: Type-specific cleanup is no longer needed
+// All auxiliary data (strings, arrays, etc.) is allocated from GC heap
+// The sweep algorithm handles freeing based on slab vs malloc detection
+
 // Recursively freeze a value tree, making it immutable
 void valk_lval_freeze(valk_lval_t* lval) {
   if (lval == nullptr) return;
@@ -561,8 +569,8 @@ void valk_lval_freeze(valk_lval_t* lval) {
       break;
     case LVAL_ENV:
       // Freeze all values in environment
-      for (size_t i = 0; i < lval->env.count; i++) {
-        valk_lval_freeze(lval->env.vals[i]);
+      for (size_t i = 0; i < lval->env.vals.count; i++) {
+        valk_lval_freeze(lval->env.vals.items[i]);
       }
       break;
     default:
@@ -637,7 +645,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
     case LVAL_SYM: {
       size_t slen = strlen(lval->str);
       if (slen > 200) slen = 200;
-      res->str = malloc(slen + 1);
+      res->str = valk_mem_alloc(slen + 1);
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memcpy(res->str, lval->str, slen);
       res->str[slen] = '\0';
@@ -646,7 +654,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
     case LVAL_ERR: {
       size_t slen = strlen(lval->str);
       if (slen > 2000) slen = 2000;
-      res->str = malloc(slen + 1);
+      res->str = valk_mem_alloc(slen + 1);
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memcpy(res->str, lval->str, slen);
       res->str[slen] = '\0';
@@ -654,7 +662,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
     }
     case LVAL_STR: {
       size_t slen = strlen(lval->str);
-      res->str = malloc(slen + 1);
+      res->str = valk_mem_alloc(slen + 1);
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memcpy(res->str, lval->str, slen + 1);
       break;
@@ -663,7 +671,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
       // Shallow copy ref payload, but duplicate type string into allocator
       size_t tlen = strlen(lval->ref.type);
       if (tlen > 100) tlen = 100;
-      res->ref.type = malloc(tlen + 1);
+      res->ref.type = valk_mem_alloc(tlen + 1);
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memcpy(res->ref.type, lval->ref.type, tlen);
       res->ref.type[tlen] = '\0';
@@ -902,10 +910,26 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
   // Otherwise use tree-walker (with thunk-based TCO)
   // Trampoline loop: Keep evaluating thunks until we get a final value
   // This enables proper TCO for tail calls inside control flow (if, do, let)
+  size_t trampoline_iterations = 0;
   while (1) {
     // Safety check: NULL values should never reach here
     if (lval == nullptr) {
       return valk_lval_err("Internal error: NULL value in eval");
+    }
+
+    // GC safepoint: Collect garbage periodically during long-running loops
+    // This prevents OOM during deeply recursive tail calls
+    if (++trampoline_iterations % 10 == 0) {
+      valk_mem_allocator_t* allocator = valk_thread_ctx.allocator;
+      if (allocator && allocator->type == VALK_ALLOC_GC_HEAP) {
+        valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)allocator;
+        if (valk_gc_malloc_should_collect(heap)) {
+          // Update root to current environment before collecting
+          // This ensures we mark from the active execution context
+          valk_gc_malloc_set_root(heap, env);
+          valk_gc_malloc_collect(heap);
+        }
+      }
     }
 
     valk_ltype_e type = LVAL_TYPE(lval);
@@ -949,19 +973,40 @@ valk_lval_t* valk_lval_eval_sexpr(valk_lenv_t* env, valk_lval_t* sexpr) {
     return sexpr;
   }
 
-  // Evaluate children into a fresh array to avoid mutating the input list
-  valk_lval_t** vals = valk_mem_alloc(sizeof(valk_lval_t*) * n);
+  // Always evaluate the first element (the function/operator)
   valk_lval_t* curr = sexpr;
-  for (size_t i = 0; i < n; ++i) {
-    vals[i] = valk_lval_eval(env, curr->cons.head);
-    if (LVAL_TYPE(vals[i]) == LVAL_ERR) {
-      return vals[i];
-    }
-    curr = curr->cons.tail;
+  valk_lval_t* first = valk_lval_eval(env, curr->cons.head);
+  if (LVAL_TYPE(first) == LVAL_ERR) {
+    return first;
   }
 
   if (n == 1) {
-    return vals[0];
+    return first;
+  }
+
+  // Check if the function is a macro (receives unevaluated arguments)
+  bool is_macro = (LVAL_TYPE(first) == LVAL_FUN) && (first->flags & LVAL_FLAG_MACRO);
+
+  // Evaluate remaining arguments (or leave as QEXPR for macros)
+  valk_lval_t** vals = valk_mem_alloc(sizeof(valk_lval_t*) * n);
+  vals[0] = first;
+  curr = sexpr->cons.tail;
+
+  for (size_t i = 1; i < n; ++i) {
+    if (is_macro) {
+      // For macros, wrap each argument as QEXPR (unevaluated)
+      valk_lval_t* arg = curr->cons.head;
+      valk_lval_t* quoted = valk_lval_qexpr_empty();
+      valk_lval_add(quoted, arg);
+      vals[i] = quoted;
+    } else {
+      // For normal functions, evaluate arguments
+      vals[i] = valk_lval_eval(env, curr->cons.head);
+      if (LVAL_TYPE(vals[i]) == LVAL_ERR) {
+        return vals[i];
+      }
+    }
+    curr = curr->cons.tail;
   }
 
   if (LVAL_TYPE(vals[0]) != LVAL_FUN) {
@@ -1007,7 +1052,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
   // to the calling environment for variable lookup.
   // Note: This gives dynamic scoping behavior, but that's how the current system works.
   valk_lenv_t* call_env = valk_lenv_empty();
-  if (func->fun.env && func->fun.env->count > 0) {
+  if (func->fun.env && func->fun.env->symbols.count > 0) {
     // Function has captured bindings - use them
     call_env->parent = func->fun.env;
   } else {
@@ -1492,13 +1537,15 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
     end = ')';
   }
 
-  // Collect elements in a temporary array
+  // Collect elements in a temporary array (allocated from GC heap)
+  // These arrays will be swept when unreachable after parsing completes
   size_t capacity = 16;
   size_t count = 0;
   valk_lval_t** elements = valk_mem_alloc(sizeof(valk_lval_t*) * capacity);
 
   while (s[*i] != end) {
     if (s[*i] == '\0') {
+      // No cleanup needed - GC will sweep unreachable arrays
       valk_lval_t* err = valk_lval_err(
           "[offset: %d] Unexpected end of input reading expr, while looking for `%c`",
           *i, end);
@@ -1506,6 +1553,7 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
     }
     valk_lval_t* x = valk_lval_read(i, s);
     if (LVAL_TYPE(x) == LVAL_ERR) {
+      // No cleanup needed - GC will sweep unreachable arrays
       return x;
     }
 
@@ -1514,6 +1562,7 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
       capacity *= 2;
       valk_lval_t** new_elements = valk_mem_alloc(sizeof(valk_lval_t*) * capacity);
       memcpy(new_elements, elements, sizeof(valk_lval_t*) * count);
+      // Old array becomes unreachable and will be swept by GC
       elements = new_elements;
     }
     elements[count++] = x;
@@ -1553,6 +1602,7 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
     valk_capture_trace(VALK_TRACE_NEW, 1, result);
   }
 
+  // No need to free - GC will sweep unreachable elements array
   return result;
 }
 
@@ -1565,12 +1615,19 @@ valk_lenv_t* valk_lenv_empty(void) {
 }
 void valk_lenv_init(valk_lenv_t* env) {
   env->parent = nullptr;
-  env->count = 0;
-  env->symbols = nullptr;
-  env->vals = nullptr;
+  env->symbols.count = 0;
+  env->symbols.capacity = 0;
+  env->symbols.items = nullptr;
+  env->vals.count = 0;
+  env->vals.capacity = 0;
+  env->vals.items = nullptr;
   // capture the current allocator for persistent allocations
   env->allocator = valk_thread_ctx.allocator;
 }
+
+// REMOVED: Type-specific cleanup is no longer needed
+// All auxiliary data (symbol arrays, strings, etc.) is allocated from GC heap
+// The sweep algorithm handles freeing based on slab vs malloc detection
 
 valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
   if (env == nullptr) {
@@ -1589,12 +1646,12 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
   // Use a simple linear scan - O(n*m) but environments are typically small
   size_t total_count = 0;
   for (valk_lenv_t* e = env; e != nullptr; e = e->parent) {
-    for (size_t i = 0; i < e->count; i++) {
+    for (size_t i = 0; i < e->symbols.count; i++) {
       // Check if this symbol is already counted (masked by child scope)
       bool masked = false;
       for (valk_lenv_t* child = env; child != e; child = child->parent) {
-        for (size_t j = 0; j < child->count; j++) {
-          if (strcmp(e->symbols[i], child->symbols[j]) == 0) {
+        for (size_t j = 0; j < child->symbols.count; j++) {
+          if (strcmp(e->symbols.items[i], child->symbols.items[j]) == 0) {
             masked = true;
             break;
           }
@@ -1607,19 +1664,23 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
     }
   }
 
-  res->count = total_count;
-  res->symbols = valk_mem_alloc(sizeof(char*) * total_count);
-  res->vals = valk_mem_alloc(sizeof(valk_lval_t*) * total_count);
+  // Initialize dynamic arrays from GC heap
+  res->symbols.items = valk_mem_alloc(sizeof(char*) * total_count);
+  res->symbols.count = total_count;
+  res->symbols.capacity = total_count;
+  res->vals.items = valk_mem_alloc(sizeof(valk_lval_t*) * total_count);
+  res->vals.count = total_count;
+  res->vals.capacity = total_count;
 
   // Collect all bindings with value masking
   size_t idx = 0;
   for (valk_lenv_t* e = env; e != nullptr; e = e->parent) {
-    for (size_t i = 0; i < e->count; i++) {
+    for (size_t i = 0; i < e->symbols.count; i++) {
       // Check if this symbol is masked by child scope
       bool masked = false;
       for (valk_lenv_t* child = env; child != e; child = child->parent) {
-        for (size_t j = 0; j < child->count; j++) {
-          if (strcmp(e->symbols[i], child->symbols[j]) == 0) {
+        for (size_t j = 0; j < child->symbols.count; j++) {
+          if (strcmp(e->symbols.items[i], child->symbols.items[j]) == 0) {
             masked = true;
             break;
           }
@@ -1628,10 +1689,10 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
       }
 
       if (!masked) {
-        size_t slen = strlen(e->symbols[i]);
-        res->symbols[idx] = valk_mem_alloc(slen + 1);
-        memcpy(res->symbols[idx], e->symbols[i], slen + 1);
-        res->vals[idx] = valk_intern(res, e->vals[i]);
+        size_t slen = strlen(e->symbols.items[i]);
+        res->symbols.items[idx] = valk_mem_alloc(slen + 1);
+        memcpy(res->symbols.items[idx], e->symbols.items[i], slen + 1);
+        res->vals.items[idx] = valk_intern(res, e->vals.items[i]);
         idx++;
       }
     }
@@ -1646,15 +1707,15 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
   // Iterative lookup to avoid stack overflow with deep environment chains
   // (important for tail call optimization which creates environment chains)
   while (env) {
-    for (size_t i = 0; i < env->count; i++) {
-      if (env->symbols == NULL || env->symbols[i] == NULL) {
+    for (size_t i = 0; i < env->symbols.count; i++) {
+      if (env->symbols.items == NULL || env->symbols.items[i] == NULL) {
         break;
       }
-      if (strcmp(key->str, env->symbols[i]) == 0) {
+      if (strcmp(key->str, env->symbols.items[i]) == 0) {
         if (valk_log_would_log(VALK_LOG_TRACE)) {
-          VALK_TRACE("env get idx=%zu key=%s", i, env->symbols[i]);
+          VALK_TRACE("env get idx=%zu key=%s", i, env->symbols.items[i]);
         }
-        return env->vals[i];
+        return env->vals.items[i];
       }
     }
     env = env->parent;  // Move to parent environment
@@ -1674,43 +1735,58 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   // TODO(main): technically this is a failure condition for us, but the
   // return's void LVAL_ASSERT(nullptr, key->type == LVAL_SYM, "LEnv only
   // supports symbolic keys");
-  for (size_t i = 0; i < env->count; i++) {
-    if (env->symbols == NULL || env->symbols[i] == NULL) {
+
+  // Check if symbol already exists - if so, update it
+  for (size_t i = 0; i < env->symbols.count; i++) {
+    if (env->symbols.items == NULL || env->symbols.items[i] == NULL) {
       break;
     }
-    if (strcmp(key->str, env->symbols[i]) == 0) {
-      // if we found it, we destroy it
+    if (strcmp(key->str, env->symbols.items[i]) == 0) {
+      // if we found it, we update it
       // Mark value as escaping since it's being stored in environment
       val->flags |= LVAL_FLAG_ESCAPES;
-      env->vals[i] = valk_intern(env, val);
+      env->vals.items[i] = valk_intern(env, val);
       return;
     }
   }
-  // TODO(main): technically we should be able to do the ammortized arraylist
-  // where we double the array on overflow, but i guess it doesnt matter for
-  // now
-  // NOTE: Use malloc for auxiliary data (arrays, strings) - GC heap is ONLY for valk_lval_t
-  size_t new_count = env->count + 1;
-  char** new_symbols = malloc(sizeof(env->symbols[0]) * new_count);
-  valk_lval_t** new_vals = malloc(sizeof(env->vals[0]) * new_count);
-  if (env->count > 0) {
-    // Copy old arrays into the new ones
-    memcpy(new_symbols, env->symbols, sizeof(env->symbols[0]) * env->count);
-    memcpy(new_vals, env->vals, sizeof(env->vals[0]) * env->count);
-  }
-  env->symbols = new_symbols;
-  env->vals = new_vals;
 
-  // Allocate and copy the new key
-  env->symbols[env->count] = malloc(201);
-  strncpy(env->symbols[env->count], key->str, 200);
-  env->symbols[env->count][200] = '\0';
+  // Symbol not found - add new binding using GC heap
+  // All auxiliary data (arrays, strings) allocated from GC heap for automatic management
+
+  // Allocate and copy the new key string from GC heap
+  size_t slen = strlen(key->str);
+  char* new_symbol = valk_mem_alloc(slen + 1);
+  memcpy(new_symbol, key->str, slen + 1);
 
   // Mark value as escaping since it's being stored in environment
   val->flags |= LVAL_FLAG_ESCAPES;
-  env->vals[env->count] = valk_intern(env, val);
+  valk_lval_t* interned_val = valk_intern(env, val);
 
-  ++env->count;
+  // Resize arrays if needed (amortized doubling)
+  if (env->symbols.count >= env->symbols.capacity) {
+    size_t new_capacity = env->symbols.capacity == 0 ? 8 : env->symbols.capacity * 2;
+    char** new_items = valk_mem_alloc(sizeof(char*) * new_capacity);
+    if (env->symbols.count > 0) {
+      memcpy(new_items, env->symbols.items, sizeof(char*) * env->symbols.count);
+    }
+    // Old array becomes unreachable and will be swept by GC
+    env->symbols.items = new_items;
+    env->symbols.capacity = new_capacity;
+  }
+  if (env->vals.count >= env->vals.capacity) {
+    size_t new_capacity = env->vals.capacity == 0 ? 8 : env->vals.capacity * 2;
+    valk_lval_t** new_items = valk_mem_alloc(sizeof(valk_lval_t*) * new_capacity);
+    if (env->vals.count > 0) {
+      memcpy(new_items, env->vals.items, sizeof(valk_lval_t*) * env->vals.count);
+    }
+    // Old array becomes unreachable and will be swept by GC
+    env->vals.items = new_items;
+    env->vals.capacity = new_capacity;
+  }
+
+  // Add to arrays
+  env->symbols.items[env->symbols.count++] = new_symbol;
+  env->vals.items[env->vals.count++] = interned_val;
 }
 
 // Define the key in global scope
@@ -1723,7 +1799,7 @@ void valk_lenv_def(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
 
 void valk_lenv_put_builtin(valk_lenv_t* env, char* key,
                            valk_lval_builtin_t* _fun) {
-  VALK_INFO("install builtin: %s (count=%zu)", key, env->count);
+  VALK_INFO("install builtin: %s (count=%zu)", key, env->symbols.count);
   VALK_WITH_ALLOC(env->allocator) {
     valk_lval_t* lfun = valk_mem_alloc(sizeof(valk_lval_t));
     lfun->flags = LVAL_FUN;
@@ -2059,7 +2135,7 @@ static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
   for (size_t i = 0; i < valk_lval_list_count(formals); i++) {
     LVAL_ASSERT(a, LVAL_TYPE(valk_lval_list_nth(formals, i)) == LVAL_SYM,
                 "Cannot use a non symbol[%s] for bind",
-                valk_ltype_name(LVAL_TYPE(valk_lval_list_nth(a, 0)->expr.cell[i])));
+                valk_ltype_name(LVAL_TYPE(valk_lval_list_nth(formals, i))));
   }
 
   formals = valk_lval_pop(a, 0);
@@ -2068,18 +2144,43 @@ static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_lambda(formals, body);
 }
 
+static valk_lval_t* valk_builtin_macro(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+
+  valk_lval_t* formals = valk_lval_list_nth(a, 0);
+  valk_lval_t* body = valk_lval_list_nth(a, 1);
+
+  LVAL_ASSERT_TYPE(a, formals, LVAL_QEXPR);
+  LVAL_ASSERT_TYPE(a, body, LVAL_QEXPR);
+
+  for (size_t i = 0; i < valk_lval_list_count(formals); i++) {
+    LVAL_ASSERT(a, LVAL_TYPE(valk_lval_list_nth(formals, i)) == LVAL_SYM,
+                "Cannot use a non symbol[%s] for bind",
+                valk_ltype_name(LVAL_TYPE(valk_lval_list_nth(formals, i))));
+  }
+
+  formals = valk_lval_pop(a, 0);
+  body = valk_lval_pop(a, 0);
+
+  // Create lambda and set MACRO flag
+  valk_lval_t* mac = valk_lval_lambda(formals, body);
+  mac->flags |= LVAL_FLAG_MACRO;
+  return mac;
+}
+
 static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
 
   valk_lval_t* res = valk_lval_qexpr_empty();
-  for (size_t i = 0; i < e->count; i++) {
+  for (size_t i = 0; i < e->symbols.count; i++) {
     valk_lval_t* qexpr = valk_lval_qexpr_empty();
     // TODO(main): So each of these can fail, in that case we want to free the
     // intermediates, im too lazy to do that tho, so memory leaks n such.
     // really i can also check the pre-conditions here to make sure we dont
     // even allocate anything if they arent met
-    valk_lval_add(qexpr, valk_lval_sym(e->symbols[i]));
-    valk_lval_add(qexpr, e->vals[i]);
+    valk_lval_add(qexpr, valk_lval_sym(e->symbols.items[i]));
+    valk_lval_add(qexpr, e->vals.items[i]);
     valk_lval_add(res, qexpr);
   }
   return res;
@@ -2250,6 +2351,35 @@ static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
 
   // Return thunk instead of recursing - enables proper TCO
   return valk_lval_thunk(e, branch);
+}
+
+static valk_lval_t* valk_builtin_do(valk_lenv_t* e, valk_lval_t* a) {
+  // Evaluate all expressions except the last one for side effects
+  size_t count = valk_lval_list_count(a);
+
+  if (count == 0) {
+    return valk_lval_sexpr_empty();
+  }
+
+  // Evaluate first n-1 expressions for side effects
+  for (size_t i = 0; i < count - 1; i++) {
+    valk_lval_t* expr = valk_lval_list_nth(a, i);
+    // Convert QEXPR to SEXPR if needed
+    if (LVAL_TYPE(expr) == LVAL_QEXPR) {
+      expr = valk_lval_copy(expr);
+      expr->flags = ((expr->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
+    }
+    // Evaluate and discard result
+    valk_lval_eval(e, expr);
+  }
+
+  // Return last expression as thunk for TCO
+  valk_lval_t* last = valk_lval_list_nth(a, count - 1);
+  if (LVAL_TYPE(last) == LVAL_QEXPR) {
+    last = valk_lval_copy(last);
+    last->flags = ((last->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
+  }
+  return valk_lval_thunk(e, last);
 }
 
 static valk_lval_t* valk_builtin_print(valk_lenv_t* e, valk_lval_t* a) {
@@ -2653,12 +2783,14 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "def", valk_builtin_def);
   valk_lenv_put_builtin(env, "=", valk_builtin_put);
   valk_lenv_put_builtin(env, "\\", valk_builtin_lambda);
+  valk_lenv_put_builtin(env, "macro", valk_builtin_macro);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
 
   // TODO(main):  Doesnt actually work lols, no idea why
   valk_lenv_put_builtin(env, "ord", valk_builtin_ord);
 
   valk_lenv_put_builtin(env, "if", valk_builtin_if);
+  valk_lenv_put_builtin(env, "do", valk_builtin_do);
   valk_lenv_put_builtin(env, ">", valk_builtin_gt);
   valk_lenv_put_builtin(env, "<", valk_builtin_lt);
   valk_lenv_put_builtin(env, ">=", valk_builtin_ge);

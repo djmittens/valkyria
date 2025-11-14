@@ -18,20 +18,17 @@
   (test/assert (== expected actual) msg)
 })
 
-; Repeat a string n times
-(fun {*test-repeat* str n} {
+; Tail-recursive helper to print n dots
+(fun {*test-pad-dots-helper* n} {
   if (<= n 0)
-    {""}
-    {str}
+    {{}}
+    {do (printf ".") (*test-pad-dots-helper* (- n 1))}
 })
 
-; Pad string to width with dots using repeat primitive
 (fun {*test-pad-dots* str width} {
   do
     (printf "%s" str)
-    (= {dots-needed} (- width (len str)))
-    ; Use repeat to print dots n times without recursion
-    (repeat (\ {_} {printf "."}) dots-needed)
+    (*test-pad-dots-helper* (- width (len str)))
 })
 
 (fun {*test-run-one* test} {
@@ -51,8 +48,8 @@
     ; Print result with emoji first, then name + dots (aligned with C tests)
     ; C tests use 100 char width: emoji(3) + name + dots = 97 total before "  PASS"
     (if (== passed 1)
-      {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(us)\n" elapsed)}
-      {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(us)\n" elapsed)})
+      {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
+      {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)})
 
     (if (== passed 1)
       {(def {*test-passed*} (+ *test-passed* 1))}
