@@ -100,6 +100,7 @@ typedef enum {
   LVAL_CONS,  // Cons cell (car/cdr linked list)
   LVAL_NIL,   // Empty list
   LVAL_THUNK, // Unevaluated tail call (for TCO trampoline)
+  LVAL_CONT,  // Continuation (for async/await)
 } valk_ltype_e;
 
 const char *valk_ltype_name(valk_ltype_e type);
@@ -156,6 +157,11 @@ struct valk_lval_t {
       valk_lenv_t *env;   // Environment for evaluation
       valk_lval_t *expr;  // Expression to evaluate (in tail position)
     } thunk;  // Unevaluated tail expression (for TCO trampoline)
+    struct {
+      void *resume_fn;    // Function to resume continuation
+      valk_lenv_t *env;   // Captured environment
+      void *user_data;    // User data (for libuv handle, etc)
+    } cont;  // Continuation for async/await
     struct valk_lenv_t env;
     long num;
     char *str;
@@ -181,6 +187,9 @@ valk_lval_t *valk_lval_qexpr_empty(void);
 // Cons cell constructors
 valk_lval_t *valk_lval_nil(void);                                   // Empty list
 valk_lval_t *valk_lval_cons(valk_lval_t *head, valk_lval_t *tail);  // Cons cell
+
+// Continuation constructor
+valk_lval_t *valk_lval_cont(valk_lenv_t *env, void *resume_fn, void *user_data);
 valk_lval_t *valk_lval_head(valk_lval_t *cons);                     // Get head
 valk_lval_t *valk_lval_tail(valk_lval_t *cons);                     // Get tail
 int valk_lval_is_nil(valk_lval_t *v);                               // Check if nil

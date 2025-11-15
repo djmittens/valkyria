@@ -1,0 +1,34 @@
+; Simple async/await using shift/reset without full continuation capture
+; This is a pragmatic approach that works with existing futures
+
+; async-run: Run async code that can use await-async
+(def {async-run} (macro {body} {
+  (reset body)
+}))
+
+; await-async: Suspend and wait for future, then resume
+; Unlike full shift/reset, this just blocks on the future
+(def {await-async} (macro {future-expr} {
+  (do
+    (def {__fut} future-expr)
+    (def {__result} (await __fut))
+    __result)
+}))
+
+; async-all: Wait for multiple futures
+(def {async-all} (fn {futures} {
+  (map await futures)
+}))
+
+; async-race: Return first resolved future
+(def {async-race} (fn {futures} {
+  ; For now just return first - could be improved
+  (await (head futures))
+}))
+
+; Example usage:
+; (async-run {
+;   (def {client} (await-async (http2/connect aio "google.com" 443)))
+;   (def {response} (await-async (http2/send req client)))
+;   (print "Got response!")
+; })

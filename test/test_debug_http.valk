@@ -1,0 +1,6 @@
+(print "1: Starting")
+(print "2: aio =" aio)
+(print "3: Creating future...")
+(def {fut} (http2/connect aio "93.184.215.14" 443 "example.com"))
+(print "4: Future created")
+(print "5: Done")

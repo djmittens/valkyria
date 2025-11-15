@@ -1,9 +1,0 @@
-; Test TCO with 10,000 iterations
-(def {countdown} (\ {n}
-  {if (== n 0)
-    {0}
-    {countdown (- n 1)}}))
-
-(print "Testing 10,000 iterations...")
-(print (countdown 10000))
-(print "Success!")

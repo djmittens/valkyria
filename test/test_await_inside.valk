@@ -1,0 +1,19 @@
+(load "src/prelude.valk")
+
+(print "Testing await inside async-reset")
+
+; Mock async function
+(def {mock-async} (\ {value k} {
+  (print "Mock async called with:" value "and continuation:" k)
+  (k (* value 2))
+}))
+
+(async-reset {
+  (print "Before async-shift")
+  (def {result} (async-shift {k}
+    (mock-async 21 k)))
+  (print "After async-shift, result:" result)
+})
+
+(print "Done")
+(shutdown 0)

@@ -1,0 +1,51 @@
+; Working async/await test with simplified API
+(load "src/prelude.valk")
+(load "src/async_lib.valk")
+
+(print "=== Working Async/Await Test ===\n")
+
+; Mock async function - takes value and continuation
+(def {fetch-data} (\ {value k} {
+  (print "  Fetching data for:" value)
+  (k (* value 2))
+}))
+
+; Test 1: Simple async operation
+(print "Test 1: Simple async operation")
+(def {result1} (async-reset {
+  (async-shift {k} {(fetch-data 21 k)})
+}))
+(print "  Result:" result1)
+(if (== result1 42)
+  (print "✓ Test 1 passed\n")
+  (print "✗ Test 1 failed\n"))
+
+; Test 2: Sequential async operations
+(print "Test 2: Sequential async operations")
+(def {result2} (async-reset {
+  (def {step1} (async-shift {k} {(fetch-data 5 k)}))
+  (print "  Step 1 result:" step1)
+  (def {step2} (async-shift {k} {(fetch-data step1 k)}))
+  (print "  Step 2 result:" step2)
+  step2
+}))
+(print "  Final result:" result2)
+(if (== result2 20)
+  (print "✓ Test 2 passed\n")
+  (print "✗ Test 2 failed\n"))
+
+; Test 3: Async with conditional
+(print "Test 3: Async with conditional")
+(def {result3} (async-reset {
+  (def {x} (async-shift {k} {(fetch-data 10 k)}))
+  (if (> x 15)
+    {(async-shift {k} {(fetch-data 100 k)})}
+    {(async-shift {k} {(fetch-data 1 k)})})
+}))
+(print "  Result:" result3)
+(if (== result3 200)
+  (print "✓ Test 3 passed\n")
+  (print "✗ Test 3 failed\n"))
+
+(print "=== All Tests Completed ===")
+(shutdown 0)

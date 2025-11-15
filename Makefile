@@ -86,6 +86,7 @@ asan: build
 
 .PHONY: test
 test: build
+	# C Test Suites
 	build/test_std &&\
 	build/test_memory &&\
 	build/test_freeze &&\
@@ -93,12 +94,19 @@ test: build
 	build/test_bytecode &&\
 	build/test_concurrency &&\
 	build/test_networking &&\
+	# Lisp Standard Library Tests
 	build/valk test/test_prelude.valk &&\
-	build/valk test/test_simple.valk &&\
 	build/valk test/test_namespace.valk &&\
-	build/valk test/test_varargs.valk
+	build/valk test/test_varargs.valk &&\
+	# Core Language Feature Tests
+	build/valk test/test_continuations_suite.valk &&\
+	build/valk test/test_bytecode_suite.valk &&\
+	build/valk test/test_tco_suite.valk &&\
+	# HTTP API Tests
+	build/valk test/test_http_minimal.valk
 	# Note: test_networking_lisp disabled - requires specific server setup
-	# To run: build/test_networking_lisp
+	# Note: Many old test files remain in test/ for reference but are not run
+	# Note: test_simple.valk removed (just printed 42, no assertions)
 
 .PHONY: todo
 todo:

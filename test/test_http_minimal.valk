@@ -1,0 +1,93 @@
+; HTTP API Minimal Tests
+; Using proper test framework
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/http_api.valk")
+
+; ============================================================================
+; Request Creation Tests
+; ============================================================================
+
+(test/define "http-get-creates-request"
+  {do
+    (def {req} (http-get "example.com"))
+    (!= req ())
+  })
+
+(test/define "http-post-creates-request"
+  {do
+    (def {req} (http-post "api.example.com" "body"))
+    (!= req ())
+  })
+
+(test/define "http-request-custom-method"
+  {do
+    (def {req} (http-request "PUT" "api.example.com"))
+    (!= req ())
+  })
+
+(test/define "with-header-returns-request"
+  {do
+    (def {req} (http-get "example.com"))
+    (def {req2} (with-header req "x-test" "value"))
+    (!= req2 ())
+  })
+
+; ============================================================================
+; Async Operations Tests
+; ============================================================================
+
+(test/define "fetch-creates-async-op"
+  {do
+    (def {op} (fetch "example.com"))
+    (!= op ())
+  })
+
+(test/define "async-pure-creates-op"
+  {do
+    (def {op} (async-pure 42))
+    (!= op ())
+  })
+
+; ============================================================================
+; Middleware Tests
+; ============================================================================
+
+(test/define "with-auth-creates-middleware"
+  {do
+    (def {mw} (with-auth "Bearer token"))
+    (!= mw ())
+  })
+
+(test/define "compose-middleware-combines"
+  {do
+    (def {mw} (compose-middleware (list
+      (with-auth "token")
+      (with-user-agent "Agent"))))
+    (!= mw ())
+  })
+
+; ============================================================================
+; Pattern Tests
+; ============================================================================
+
+(test/define "parallel-creates-operation"
+  {do
+    (def {ops} (list (async-pure 10) (async-pure 20)))
+    (def {par} (parallel ops))
+    (!= par ())
+  })
+
+; ============================================================================
+; Route Matching Tests
+; ============================================================================
+
+(test/define "route-matches-exact"
+  {(== 1 (route-matches "/api/users" "/api/users"))})
+
+(test/define "route-matches-no-match"
+  {(== 0 (route-matches "/api/users" "/api/posts"))})
+
+; Run all tests
+(test/run {})

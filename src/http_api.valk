@@ -1,0 +1,379 @@
+; High-Level HTTP API for Valkyria
+; Built on top of async monadic combinators and http2 primitives
+;
+; Architecture:
+;   1. Request/Response abstraction layer
+;   2. Client API with connection management
+;   3. Route matching and handler system
+;   4. Middleware composition
+;   5. Error handling patterns
+
+(load "src/async_monadic.valk")
+
+; ============================================================================
+; PART 1: Request/Response Helpers
+; ============================================================================
+
+; Create a GET request
+(def {http-get} (\ {url} {
+  (def {req} (http2/request "GET" "https" url "/"))
+  (http2/request-add-header req ":method" "GET")
+  (http2/request-add-header req "user-agent" "Valkyria/1.0")
+  req
+}))
+
+; Create a POST request with body
+(def {http-post} (\ {url body} {
+  (def {req} (http2/request "POST" "https" url "/"))
+  (http2/request-add-header req ":method" "POST")
+  (http2/request-add-header req "content-type" "application/json")
+  (http2/request-add-header req "user-agent" "Valkyria/1.0")
+  ; TODO: Add body support
+  req
+}))
+
+; Create a request with custom method
+(def {http-request} (\ {method url} {
+  (def {req} (http2/request method "https" url "/"))
+  (http2/request-add-header req ":method" method)
+  (http2/request-add-header req "user-agent" "Valkyria/1.0")
+  req
+}))
+
+; Add header to request (chainable)
+(def {with-header} (\ {req name value} {
+  (http2/request-add-header req name value)
+  req
+}))
+
+; Add multiple headers
+(def {with-headers} (\ {req headers} {
+  (def {add-header} (\ {r h} {
+    (with-header r (head h) (head (tail h)))
+  }))
+  (foldl add-header req headers)
+}))
+
+; Extract response status
+(def {response-status} (\ {resp} {
+  (http2/response-status resp)
+}))
+
+; Extract response body as string
+(def {response-body} (\ {resp} {
+  (http2/response-body resp)
+}))
+
+; Extract response headers
+(def {response-headers} (\ {resp} {
+  (http2/response-headers resp)
+}))
+
+; Check if response is success (2xx)
+(def {response-ok} (\ {resp} {
+  (def {status} (response-status resp))
+  (if (>= status 200)
+    {(< status 300)}
+    {0})
+}))
+
+; ============================================================================
+; PART 2: Async HTTP Client API
+; ============================================================================
+
+; Low-level: Connect and send request (returns async operation)
+(def {http-fetch-async} (\ {url request} {
+  (\ {k} {
+    ; First connect to server
+    (http2/connect-async url (\ {client} {
+      ; Then send request
+      (http2/send-async client request (\ {response} {
+        ; Return response via continuation
+        (k response)
+      }))
+    }))
+  })
+}))
+
+; High-level: Fetch URL with GET request
+(def {fetch} (\ {url} {
+  (def {req} (http-get url))
+  (http-fetch-async url req)
+}))
+
+; Fetch with custom request
+(def {fetch-with-request} (\ {url request} {
+  (http-fetch-async url request)
+}))
+
+; Fetch and extract body
+(def {fetch-text} (\ {url} {
+  (async-bind (fetch url) (\ {resp} {
+    (async-pure (response-body resp))
+  }))
+}))
+
+; Fetch and check if successful
+(def {fetch-ok} (\ {url} {
+  (async-bind (fetch url) (\ {resp} {
+    (async-pure (response-ok resp))
+  }))
+}))
+
+; ============================================================================
+; PART 3: Batch Operations
+; ============================================================================
+
+; Fetch multiple URLs in sequence
+(def {fetch-all} (\ {urls} {
+  (async-map-list fetch urls)
+}))
+
+; Fetch multiple URLs and extract bodies
+(def {fetch-all-text} (\ {urls} {
+  (async-map-list fetch-text urls)
+}))
+
+; Fetch with retry logic (simple version)
+(def {fetch-retry} (\ {url max-retries} {
+  (\ {k} {
+    (def {try-fetch} (\ {retries} {
+      (fetch url (\ {resp} {
+        (if (response-ok resp)
+          {(k resp)}
+          {(if (> retries 0)
+            {(try-fetch (- retries 1))}
+            {(k resp)})})
+      }))
+    }))
+    (try-fetch max-retries)
+  })
+}))
+
+; ============================================================================
+; PART 4: Request Pipeline & Middleware
+; ============================================================================
+
+; Middleware: function that transforms request → async request
+; Type: Request → (Request → k) → k
+
+; Add authentication header
+(def {with-auth} (\ {token} {
+  (\ {req} {
+    (with-header req "authorization" token)
+  })
+}))
+
+; Add custom user agent
+(def {with-user-agent} (\ {agent} {
+  (\ {req} {
+    (with-header req "user-agent" agent)
+  })
+}))
+
+; Log request before sending
+(def {with-logging} (\ {req} {
+  (print "HTTP Request:" req)
+  req
+}))
+
+; Apply middleware to request
+(def {apply-middleware} (\ {req middleware} {
+  (middleware req)
+}))
+
+; Compose multiple middleware functions
+(def {compose-middleware} (\ {middleware-list} {
+  (\ {req} {
+    (foldl (\ {r mw} {(mw r)}) req middleware-list)
+  })
+}))
+
+; ============================================================================
+; PART 5: Response Pipeline
+; ============================================================================
+
+; Response middleware: function that transforms response → async response
+; Type: Response → (Response → k) → k
+
+; Log response
+(def {log-response} (\ {resp} {
+  (print "HTTP Response:" (response-status resp))
+  resp
+}))
+
+; Extract JSON body (placeholder - needs JSON parser)
+(def {parse-json-response} (\ {resp} {
+  ; TODO: Implement JSON parsing
+  (response-body resp)
+}))
+
+; Validate response status
+(def {validate-status} (\ {expected-status} {
+  (\ {resp} {
+    (def {status} (response-status resp))
+    (if (== status expected-status)
+      {resp}
+      {(error "Unexpected status:" status)})
+  })
+}))
+
+; ============================================================================
+; PART 6: Route Matching (for server-side, future)
+; ============================================================================
+
+; Route: (method, path-pattern, handler)
+; Handler: Request → (Response → k) → k
+
+; Simple path matching (exact match for now)
+(def {route-matches} (\ {pattern path} {
+  (== pattern path)
+}))
+
+; Find matching route
+(def {find-route} (\ {routes method path} {
+  (def {matches} (\ {route} {
+    (if (== (head route) method)
+      {(route-matches (head (tail route)) path)}
+      {0})
+  }))
+  (head (filter matches routes))
+}))
+
+; ============================================================================
+; PART 7: Error Handling
+; ============================================================================
+
+; Try-catch pattern for async operations
+(def {async-try} (\ {async-op error-handler} {
+  (\ {k} {
+    ; Execute async operation
+    (async-op (\ {result} {
+      ; On success, pass result
+      ; On error, call error handler
+      ; TODO: Need error detection mechanism
+      (k result)
+    }))
+  })
+}))
+
+; Provide default value on error
+(def {async-or-default} (\ {async-op default-value} {
+  (async-try async-op (\ {error} {
+    (async-pure default-value)
+  }))
+}))
+
+; ============================================================================
+; PART 8: Common Patterns
+; ============================================================================
+
+; Parallel requests (currently sequential due to implementation)
+(def {parallel} (\ {async-ops} {
+  (async-collect async-ops)
+}))
+
+; Sequential requests with dependencies
+(def {sequential} (\ {async-ops} {
+  (async-sequence async-ops)
+}))
+
+; Fan-out pattern: fetch related resources
+(def {fan-out} (\ {url extractors} {
+  (async-bind (fetch url) (\ {resp} {
+    (def {urls} (map (\ {ext} {(ext resp)}) extractors))
+    (fetch-all urls)
+  }))
+}))
+
+; Aggregate pattern: fetch and combine
+(def {aggregate} (\ {urls combiner} {
+  (async-bind (fetch-all urls) (\ {responses} {
+    (async-pure (combiner responses))
+  }))
+}))
+
+; ============================================================================
+; PART 9: Convenience Functions
+; ============================================================================
+
+; Simple synchronous-style fetch (using run-async)
+(def {fetch-sync} (\ {url} {
+  (run-async (fetch url))
+}))
+
+; Fetch and print response
+(def {fetch-and-print} (\ {url} {
+  (def {resp} (fetch-sync url))
+  (print "Status:" (response-status resp))
+  (print "Body:" (response-body resp))
+  resp
+}))
+
+; Health check endpoint
+(def {health-check} (\ {url} {
+  (async-bind (fetch url) (\ {resp} {
+    (async-pure (response-ok resp))
+  }))
+}))
+
+; Batch health checks
+(def {health-check-all} (\ {urls} {
+  (async-map-list health-check urls)
+}))
+
+; ============================================================================
+; PART 10: Builder Pattern
+; ============================================================================
+
+; Request builder for fluent API
+(def {request-builder} (\ {method url} {
+  (list
+    (list "method" method)
+    (list "url" url)
+    (list "headers" ())
+  )
+}))
+
+; Add header to builder
+(def {builder-add-header} (\ {builder name value} {
+  ; TODO: Implement proper builder pattern
+  builder
+}))
+
+; Build final request from builder
+(def {builder-build} (\ {builder} {
+  ; TODO: Convert builder to actual request
+  (http-request
+    (head (tail (head builder)))
+    (head (tail (head (tail builder)))))
+}))
+
+; ============================================================================
+; EXPORTS / PUBLIC API
+; ============================================================================
+
+; Core request creation
+; - http-get, http-post, http-request
+; - with-header, with-headers
+
+; Fetching
+; - fetch, fetch-text, fetch-ok
+; - fetch-all, fetch-all-text
+; - fetch-sync, fetch-and-print
+
+; Response handling
+; - response-status, response-body, response-headers, response-ok
+
+; Middleware
+; - with-auth, with-user-agent, with-logging
+; - compose-middleware, apply-middleware
+
+; Patterns
+; - parallel, sequential, fan-out, aggregate
+; - health-check, health-check-all
+
+; Error handling
+; - async-try, async-or-default
+
+(print "HTTP API loaded")

@@ -1,0 +1,94 @@
+; Bytecode Test Suite
+; Tests for bytecode compilation and execution
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; ============================================================================
+; Basic Bytecode Tests
+; ============================================================================
+
+(test/define "bytecode-arithmetic"
+  {do
+    (def {result} (+ 40 2))
+    (== result 42)
+  })
+
+(test/define "bytecode-function-call"
+  {do
+    (def {add} (\ {a b} {(+ a b)}))
+    (def {result} (add 20 22))
+    (== result 42)
+  })
+
+(test/define "bytecode-nested-calls"
+  {do
+    (def {double} (\ {x} {(* x 2)}))
+    (def {add-ten} (\ {x} {(+ x 10)}))
+    (def {result} (add-ten (double 16)))
+    (== result 42)
+  })
+
+; ============================================================================
+; Control Flow
+; ============================================================================
+
+(test/define "bytecode-if-statement"
+  {do
+    (def {result} (if (> 5 3) {42} {0}))
+    (== result 42)
+  })
+
+(test/define "bytecode-nested-if"
+  {do
+    (def {result} (if (> 5 3)
+      {(if (< 10 20) {42} {0})}
+      {0}))
+    (== result 42)
+  })
+
+; ============================================================================
+; Recursion
+; ============================================================================
+
+(test/define "bytecode-simple-recursion"
+  {do
+    (def {countdown} (\ {n} {
+      (if (<= n 0)
+        {0}
+        {(countdown (- n 1))})
+    }))
+    (def {result} (countdown 10))
+    (== result 0)
+  })
+
+(test/define "bytecode-accumulator-recursion"
+  {do
+    (def {sum-to} (\ {n acc} {
+      (if (<= n 0)
+        {acc}
+        {(sum-to (- n 1) (+ acc n))})
+    }))
+    (def {result} (sum-to 10 0))
+    (== result 55)
+  })
+
+; ============================================================================
+; List Operations
+; ============================================================================
+
+(test/define "bytecode-list-creation"
+  {do
+    (def {lst} (list 1 2 3))
+    (== (len lst) 3)
+  })
+
+(test/define "bytecode-list-operations"
+  {do
+    (def {lst} (list 1 2 3))
+    (def {sum} (foldl + 0 lst))
+    (== sum 6)
+  })
+
+; Run all bytecode tests
+(test/run {})

@@ -1,7 +1,0 @@
-; Check memory usage during tail recursion
-(def {countdown} (\ {n}
-  {if (== n 0) {0} {countdown (- n 1)}}))
-
-(print "Starting countdown from 100000...")
-(print (countdown 100000))
-(print "Done!")

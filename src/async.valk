@@ -1,0 +1,55 @@
+; Async/await implementation using simplified continuations
+; This provides async/await on top of the existing futures system
+
+; Create an async context - similar to JavaScript's async function
+(def {async} (macro {body}
+  {(reset body)}))
+
+; Await a future/promise - suspends until ready
+(def {await} (macro {expr}
+  {(shift {k}
+    (let {(future expr)}
+      (if (future-ready? future)
+        (k (future-value future))
+        (future-then future k))))}))
+
+; Simple promise-like construct
+(def {promise} (\ {}
+  {(list 'pending nil {})}))
+
+(def {promise-resolve!} (\ {p val}
+  {(do
+    (set-car! p 'resolved)
+    (set-car! (cdr p) val)
+    ; Call all waiting continuations
+    (map (\ {k} {k val}) (car (cdr (cdr p))))
+    nil)}))
+
+(def {promise-ready?} (\ {p}
+  {(== (car p) 'resolved)}))
+
+(def {promise-value} (\ {p}
+  {(car (cdr p))}))
+
+(def {promise-then} (\ {p k}
+  {(if (promise-ready? p)
+    (k (promise-value p))
+    (do
+      (set-car! (cdr (cdr p))
+        (cons k (car (cdr (cdr p)))))
+      nil))}))
+
+; Example async function
+(def {fetch-data} (\ {}
+  {(let {(p (promise))}
+    (do
+      ; Simulate async operation
+      (set-timer 100 (\ {} {(promise-resolve! p "data loaded")}))
+      p))}))
+
+; Usage example
+; (async {
+;   (print "Starting...")
+;   (def {data} (await (fetch-data)))
+;   (print "Got data:" data)
+; })

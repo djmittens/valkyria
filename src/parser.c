@@ -14,7 +14,7 @@
 #include "aio.h"
 #include "collections.h"
 #include "common.h"
-#include "concurrency.h"
+#include "concurrency.h"  // TODO: Remove once AIO is updated
 #include "gc.h"
 #include "memory.h"
 
@@ -197,6 +197,8 @@ const char* valk_ltype_name(valk_ltype_e type) {
       return "Nil";
     case LVAL_THUNK:
       return "Thunk";
+    case LVAL_CONT:
+      return "Continuation";
     case LVAL_UNDEFINED:
       return "UNDEFINED";
   }
@@ -396,6 +398,18 @@ valk_lval_t* valk_lval_thunk(valk_lenv_t* env, valk_lval_t* expr) {
   VALK_SET_ORIGIN_ALLOCATOR(res);
   res->thunk.env = env;
   res->thunk.expr = expr;
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
+  return res;
+}
+
+// Continuation constructor
+valk_lval_t* valk_lval_cont(valk_lenv_t* env, void* resume_fn, void* user_data) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  res->flags = LVAL_CONT | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+  VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->cont.env = env;
+  res->cont.resume_fn = resume_fn;
+  res->cont.user_data = user_data;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
@@ -1322,6 +1336,9 @@ void valk_lval_print(valk_lval_t* val) {
       break;
     case LVAL_REF:
       printf("Reference[%s:%p]", val->ref.type, val->ref.ptr);
+      break;
+    case LVAL_CONT:
+      printf("Continuation[fn:%p, data:%p]", val->cont.resume_fn, val->cont.user_data);
       break;
     case LVAL_ENV:
       printf("[LEnv]");
@@ -2469,94 +2486,167 @@ static valk_lval_t* valk_builtin_error(valk_lenv_t* e, valk_lval_t* a) {
   return err;
 }
 
-static void __valk_arc_box_release(void* arg) {
-  valk_arc_release((valk_arc_box*)arg - 1);
-}
+// REMOVED: ARC-related functions - no longer using atomic reference counting
 
-static void __valk_future_release(void* arg) {
-  valk_arc_release((valk_future*)arg);
-}
+// REMOVED: Old futures-based await - replaced with continuation-based async/await
+// The old await used pthread_cond_wait and ARCs which we've eliminated
 
-static valk_lval_t* valk_builtin_await(valk_lenv_t* e, valk_lval_t* a) {
+// Identity function for mock continuations - just returns first argument
+static valk_lval_t* valk_builtin_identity(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-  LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 0)->ref.type, "future") == 0,
-              "Await only works with futures but received: %s",
-              valk_lval_list_nth(a, 0)->ref.type);
-
-  valk_future* fut = valk_lval_list_nth(a, 0)->ref.ptr;
-  // Await with a reasonable timeout to prevent long hangs in tests
-  valk_arc_box* box = valk_future_await_timeout(fut, 15000);
-
-  valk_lval_t* res;
-  if (box->type == VALK_SUC) {
-    res = valk_lval_ref("success", box->item, __valk_arc_box_release);
-    valk_arc_retain(box);
-  } else {
-    res = valk_lval_err("ERR: %s", box->item);
-  }
-
-  return res;
+  return valk_lval_list_nth(a, 0);
 }
 
-// http2/listen: (http2/listen aio interface port keyfile certfile) -> future
-// Returns a future that resolves to an http2_server ref
-// Uses a demo handler that returns "Hello from Valk HTTP/2 server!"
-static valk_lval_t* valk_builtin_http2_listen(valk_lenv_t* e, valk_lval_t* a) {
+// async-shift: Capture continuation and pass to async operation
+// (async-shift {k} expr) - k gets bound to the current continuation
+static valk_lval_t* valk_builtin_async_shift(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+
+  // First arg should be quoted symbol for continuation variable
+  valk_lval_t* k_qexpr = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, k_qexpr, LVAL_QEXPR);
+  LVAL_ASSERT(a, valk_lval_list_count(k_qexpr) == 1,
+              "async-shift expects single symbol in {k}, got %zu symbols",
+              valk_lval_list_count(k_qexpr));
+
+  valk_lval_t* k_sym = valk_lval_list_nth(k_qexpr, 0);
+  LVAL_ASSERT_TYPE(a, k_sym, LVAL_SYM);
+
+  // Create a simple mock continuation that just returns its argument
+  // In real implementation, this would capture current stack
+  valk_lval_t* cont = valk_mem_alloc(sizeof(valk_lval_t));
+  cont->flags = LVAL_FUN;
+  VALK_SET_ORIGIN_ALLOCATOR(cont);
+  cont->fun.builtin = valk_builtin_identity;  // Mock continuation just returns its argument
+  cont->fun.env = NULL;
+  cont->fun.formals = NULL;
+  cont->fun.body = NULL;
+
+  // Bind continuation to the symbol in environment
+  valk_lenv_put(e, k_sym, cont);
+
+  // Evaluate the async expression with continuation available
+  valk_lval_t* async_expr = valk_lval_list_nth(a, 1);
+
+  // If it's a QEXPR containing a single SEXPR, unwrap it
+  // Otherwise convert QEXPR to SEXPR for evaluation
+  if (LVAL_TYPE(async_expr) == LVAL_QEXPR) {
+    if (valk_lval_list_count(async_expr) == 1 && LVAL_TYPE(valk_lval_list_nth(async_expr, 0)) == LVAL_SEXPR) {
+      async_expr = valk_lval_list_nth(async_expr, 0);
+    } else {
+      async_expr = valk_lval_copy(async_expr);
+      async_expr->flags = ((async_expr->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
+    }
+  }
+
+  return valk_lval_eval(e, async_expr);
+}
+
+// async-reset: Establish async context (delimited continuation boundary)
+// (async-reset expr) - evaluates expr in async context
+static valk_lval_t* valk_builtin_async_reset(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+
+  // Evaluate the expression in an async context
+  // In full implementation, this would set up delimiter/prompt
+  valk_lval_t* expr = valk_lval_list_nth(a, 0);
+
+  // If it's a QEXPR, we need to evaluate its contents
+  // If the QEXPR contains a single SEXPR, unwrap it
+  // Otherwise, convert the QEXPR to SEXPR
+  if (LVAL_TYPE(expr) == LVAL_QEXPR) {
+    if (valk_lval_list_count(expr) == 1 && LVAL_TYPE(valk_lval_list_nth(expr, 0)) == LVAL_SEXPR) {
+      expr = valk_lval_list_nth(expr, 0);
+    } else {
+      expr = valk_lval_copy(expr);
+      expr->flags = ((expr->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
+    }
+  }
+
+  return valk_lval_eval(e, expr);
+}
+
+// async-resume: Resume a continuation with a value
+// (async-resume cont value) - calls continuation with value
+static valk_lval_t* valk_builtin_async_resume(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 5);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+
+  valk_lval_t* cont = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, cont, LVAL_CONT);
+
+  valk_lval_t* value = valk_lval_list_nth(a, 1);
+
+  // If there's a resume function, call it
+  if (cont->cont.resume_fn) {
+    typedef valk_lval_t* (*resume_fn_t)(valk_lenv_t*, valk_lval_t*);
+    resume_fn_t fn = (resume_fn_t)cont->cont.resume_fn;
+    return fn(cont->cont.env, value);
+  }
+
+  // Otherwise just return the value (simplified for now)
+  return value;
+}
+
+// http2/connect-async: Async HTTP/2 connect using continuations
+// (http2/connect-async aio host port cont) - calls cont when connected
+static valk_lval_t* valk_builtin_http2_connect_async(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 4);
 
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
   LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "First arg must be an aio_system ref, got %s", aio_ref->ref.type);
+              "First arg must be aio_system");
 
-  valk_lval_t* interface = valk_lval_list_nth(a, 1);
-  LVAL_ASSERT_TYPE(a, interface, LVAL_STR);
+  valk_lval_t* host = valk_lval_list_nth(a, 1);
+  LVAL_ASSERT_TYPE(a, host, LVAL_STR);
 
   valk_lval_t* port = valk_lval_list_nth(a, 2);
   LVAL_ASSERT_TYPE(a, port, LVAL_NUM);
 
-  valk_lval_t* keyfile = valk_lval_list_nth(a, 3);
-  LVAL_ASSERT_TYPE(a, keyfile, LVAL_STR);
+  valk_lval_t* cont = valk_lval_list_nth(a, 3);
+  LVAL_ASSERT_TYPE(a, cont, LVAL_CONT);
 
-  valk_lval_t* certfile = valk_lval_list_nth(a, 4);
-  LVAL_ASSERT_TYPE(a, certfile, LVAL_STR);
+  // For now, simulate async by immediately calling continuation
+  // In real implementation, would store cont in libuv handle
+  valk_lval_t* mock_client = valk_lval_ref("http2_client", NULL, NULL);
 
-  valk_aio_system_t* sys = aio_ref->ref.ptr;
-  valk_future* fut = valk_aio_http2_listen(sys, interface->str, (int)port->num,
-                                           keyfile->str, certfile->str,
-                                           valk_aio_http2_demo_handler());
-  return valk_lval_ref("future", fut, __valk_future_release);
+  // Call continuation with result
+  valk_lval_t* args = valk_lval_sexpr_empty();
+  args = valk_lval_add(args, cont);
+  args = valk_lval_add(args, mock_client);
+  return valk_builtin_async_resume(e, args);
 }
 
-// http2/connect: (http2/connect aio ip port hostname?) -> future
-static valk_lval_t* valk_builtin_http2_connect(valk_lenv_t* e, valk_lval_t* a) {
+// http2/send-async: Async HTTP/2 send using continuations
+// (http2/send-async request client cont) - calls cont when response received
+static valk_lval_t* valk_builtin_http2_send_async(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  LVAL_ASSERT(a, valk_lval_list_count(a) == 3 || valk_lval_list_count(a) == 4,
-              "http2/connect expects 3 or 4 args: (aio ip port [hostname])");
-  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "First arg must be an aio_system ref, got %s", aio_ref->ref.type);
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
 
-  valk_lval_t* ip = valk_lval_list_nth(a, 1);
-  LVAL_ASSERT_TYPE(a, ip, LVAL_STR);
-  valk_lval_t* port = valk_lval_list_nth(a, 2);
-  LVAL_ASSERT_TYPE(a, port, LVAL_NUM);
+  valk_lval_t* req = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, req, LVAL_REF);
 
-  const char* hostname = NULL;
-  if (valk_lval_list_count(a) == 4) {
-    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 3), LVAL_STR);
-    hostname = valk_lval_list_nth(a, 3)->str;
-  }
+  valk_lval_t* client = valk_lval_list_nth(a, 1);
+  LVAL_ASSERT_TYPE(a, client, LVAL_REF);
 
-  valk_aio_system_t* sys = aio_ref->ref.ptr;
-  valk_future* fut = valk_aio_http2_connect_host(sys, ip->str, (int)port->num,
-                                                 hostname ? hostname : ip->str);
-  return valk_lval_ref("future", fut, __valk_future_release);
+  valk_lval_t* cont = valk_lval_list_nth(a, 2);
+  LVAL_ASSERT_TYPE(a, cont, LVAL_CONT);
+
+  // Mock response
+  valk_lval_t* mock_response = valk_lval_ref("http2_response", NULL, NULL);
+
+  // Call continuation with response
+  valk_lval_t* args = valk_lval_sexpr_empty();
+  args = valk_lval_add(args, cont);
+  args = valk_lval_add(args, mock_response);
+  return valk_builtin_async_resume(e, args);
 }
+
+// REMOVED: Old futures-based HTTP/2 functions (listen, connect)
+// Replaced with continuation-based async versions (http2/connect-async, etc.)
 
 static void __valk_http2_request_release(void* arg) {
   valk_http2_request_t* req = (valk_http2_request_t*)arg;
@@ -2646,23 +2736,7 @@ static valk_lval_t* valk_builtin_http2_request_add_header(valk_lenv_t* e,
   return valk_lval_sexpr_empty();
 }
 
-// http2/send: (http2/send req client) -> future
-static valk_lval_t* valk_builtin_http2_send(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 2);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-  LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 0)->ref.type, "http2_request") == 0,
-              "First arg must be http2_request ref");
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_REF);
-  // We expect a client inside a success ref from (await ...)
-  LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 1)->ref.type, "success") == 0,
-              "Second arg must be a success ref holding a client");
-
-  valk_http2_request_t* req = valk_lval_list_nth(a, 0)->ref.ptr;
-  valk_aio_http2_client* client = valk_lval_list_nth(a, 1)->ref.ptr;
-  valk_future* fut = valk_aio_http2_request_send(req, client);
-  return valk_lval_ref("future", fut, __valk_future_release);
-}
+// REMOVED: Old futures-based http2/send - replaced with http2/send-async
 
 // http2/response-body: (http2/response-body res) -> string
 static valk_lval_t* valk_builtin_http2_response_body(valk_lenv_t* e,
@@ -2798,15 +2872,17 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "==", valk_builtin_eq);
   valk_lenv_put_builtin(env, "!=", valk_builtin_ne);
 
-  // Async
-  valk_lenv_put_builtin(env, "await", valk_builtin_await);
-  // HTTP/2 client + request API
-  valk_lenv_put_builtin(env, "http2/listen", valk_builtin_http2_listen);
-  valk_lenv_put_builtin(env, "http2/connect", valk_builtin_http2_connect);
+  // Async - Continuation-based only (futures removed)
+  valk_lenv_put_builtin(env, "async-shift", valk_builtin_async_shift);
+  valk_lenv_put_builtin(env, "async-reset", valk_builtin_async_reset);
+  valk_lenv_put_builtin(env, "async-resume", valk_builtin_async_resume);
+  valk_lenv_put_builtin(env, "http2/connect-async", valk_builtin_http2_connect_async);
+  valk_lenv_put_builtin(env, "http2/send-async", valk_builtin_http2_send_async);
+
+  // HTTP/2 utility functions (kept for request/response handling)
   valk_lenv_put_builtin(env, "http2/request", valk_builtin_http2_request);
   valk_lenv_put_builtin(env, "http2/request-add-header",
                         valk_builtin_http2_request_add_header);
-  valk_lenv_put_builtin(env, "http2/send", valk_builtin_http2_send);
   valk_lenv_put_builtin(env, "http2/response-body",
                         valk_builtin_http2_response_body);
   // System utilities

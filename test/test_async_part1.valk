@@ -1,0 +1,81 @@
+; Comprehensive async/await tests using continuation-based API
+; Tests multiple real-world async patterns
+
+(load "src/prelude.valk")
+
+(print "=== Comprehensive Async/Await Test Suite ===\n")
+
+; === Mock Async Services ===
+
+(def {fetch-user} (\ {user-id k} {
+  (print "  [User Service] Fetching user" user-id)
+  (k (list "user" user-id (join "User" (str user-id))))
+}))
+
+(def {fetch-posts} (\ {user-id k} {
+  (print "  [Posts Service] Fetching posts for user" user-id)
+  (k (list
+    (list "post" 1 user-id "First post")
+    (list "post" 2 user-id "Second post")
+    (list "post" 3 user-id "Third post")))
+}))
+
+(def {fetch-comments} (\ {post-id k} {
+  (print "  [Comments Service] Fetching comments for post" post-id)
+  (k (list
+    (list "comment" 1 post-id "Great!")
+    (list "comment" 2 post-id "Thanks!")))
+}))
+
+(def {fetch-analytics} (\ {entity-type entity-id k} {
+  (print "  [Analytics] Fetching" entity-type "analytics for" entity-id)
+  (k (list entity-type entity-id "views" (* entity-id 100)))
+}))
+
+; === Test 1: Simple Sequential Operations ===
+(print "\nTest 1: Sequential Operations")
+(def {test1-result} (async-reset {
+  (def {user} (async-shift {k} {(fetch-user 42 k)}))
+  (print "  Got user:" (nth 2 user))
+
+  (def {posts} (async-shift {k} {(fetch-posts 42 k)}))
+  (print "  Got" (len posts) "posts")
+
+  (def {analytics} (async-shift {k} {(fetch-analytics "user" 42 k)}))
+  (print "  Analytics:" (nth 3 analytics) "views")
+
+  (list user posts analytics)
+}))
+
+(if (== (len test1-result) 3)
+  (print "✓ Test 1 passed: Sequential operations completed\n")
+  (print "✗ Test 1 failed\n"))
+
+; === Test 2: Nested Async Operations ===
+(print "Test 2: Nested Data Fetching")
+(def {test2-result} (async-reset {
+  (def {user-id} 7)
+
+  ; Fetch user
+  (def {user} (async-shift {k} {(fetch-user user-id k)}))
+  (print "  Fetched user:" (nth 2 user))
+
+  ; Fetch posts for that user
+  (def {posts} (async-shift {k} {(fetch-posts user-id k)}))
+  (print "  Fetched" (len posts) "posts")
+
+  ; Fetch comments for first post
+  (def {first-post} (head posts))
+  (def {post-id} (nth 1 first-post))
+  (def {comments} (async-shift {k} {(fetch-comments post-id k)}))
+  (print "  Fetched" (len comments) "comments for post" post-id)
+
+  ; Fetch analytics for that post
+  (def {post-analytics} (async-shift {k} {(fetch-analytics "post" post-id k)}))
+  (print "  Post views:" (nth 3 post-analytics))
+
+  ; Build enriched post data
+  (list first-post comments post-analytics)
+}))
+
+(shutdown 0)

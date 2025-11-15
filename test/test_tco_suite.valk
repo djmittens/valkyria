@@ -1,0 +1,70 @@
+; Tail Call Optimization Test Suite
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; ============================================================================
+; Basic TCO Tests
+; ============================================================================
+
+(test/define "tco-simple-countdown"
+  {do
+    (def {countdown} (\ {n} {
+      (if (<= n 0)
+        {0}
+        {(countdown (- n 1))})
+    }))
+    (def {result} (countdown 100))
+    (== result 0)
+  })
+
+(test/define "tco-accumulator"
+  {do
+    (def {sum} (\ {n acc} {
+      (if (<= n 0)
+        {acc}
+        {(sum (- n 1) (+ acc n))})
+    }))
+    (def {result} (sum 100 0))
+    (== result 5050)
+  })
+
+(test/define "tco-factorial-tail"
+  {do
+    (def {factorial} (\ {n acc} {
+      (if (<= n 1)
+        {acc}
+        {(factorial (- n 1) (* n acc))})
+    }))
+    (def {result} (factorial 5 1))
+    (== result 120)
+  })
+
+; ============================================================================
+; Medium Depth TCO Tests
+; ============================================================================
+
+(test/define "tco-1000-iterations"
+  {do
+    (def {count} (\ {n} {
+      (if (<= n 0)
+        {0}
+        {(count (- n 1))})
+    }))
+    (def {result} (count 1000))
+    (== result 0)
+  })
+
+(test/define "tco-large-sum"
+  {do
+    (def {sum} (\ {n acc} {
+      (if (<= n 0)
+        {acc}
+        {(sum (- n 1) (+ acc n))})
+    }))
+    (def {result} (sum 1000 0))
+    (== result 500500)
+  })
+
+; Run all TCO tests
+(test/run {})

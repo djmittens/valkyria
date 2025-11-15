@@ -1,0 +1,27 @@
+; HTTP API Tests - Using Test Framework
+; Simpler version to debug
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/http_api.valk")
+
+(test/define "http-get-creates-request"
+  {do
+    (def {req} (http-get "example.com"))
+    (!= req ())
+  })
+
+(test/define "http-post-creates-request"
+  {do
+    (def {req} (http-post "api.example.com" "body"))
+    (!= req ())
+  })
+
+(test/define "async-pure-works"
+  {do
+    (def {op} (async-pure 42))
+    (def {result} (run-async op))
+    (== result 42)
+  })
+
+(test/run)

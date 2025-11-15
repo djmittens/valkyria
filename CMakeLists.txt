@@ -64,7 +64,7 @@ find_package(OpenSSL REQUIRED)
 add_library(valkyria
   src/parser.c
   src/memory.c
-  src/concurrency.c
+  src/concurrency.c  # TODO: Remove once AIO is updated to use continuations
   src/gc.c
 # TODO(networking): if should detect uring and if we have it we can get it here instead of libuv.
   src/aio_uv.c
@@ -127,9 +127,10 @@ add_executable(test_networking_lisp test/test_networking_lisp.c test/testing.c)
 target_link_libraries(test_networking_lisp PRIVATE "-lc" valkyria)
 include_directories(test_networking_lisp src/)
 
-add_executable(test_concurrency test/test_concurrency.c test/testing.c)
-target_link_libraries(test_concurrency PRIVATE "-lc" valkyria)
-include_directories(test_concurrency src/)
+# REMOVED: test_concurrency - no longer using futures/ARCs
+# add_executable(test_concurrency test/test_concurrency.c test/testing.c)
+# target_link_libraries(test_concurrency PRIVATE "-lc" valkyria)
+# include_directories(test_concurrency src/)
 
 add_executable(test_memory test/test_memory.c test/testing.c)
 target_link_libraries(test_memory PRIVATE "-lc" "-lm" valkyria)

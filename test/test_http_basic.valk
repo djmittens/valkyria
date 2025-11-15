@@ -1,0 +1,30 @@
+; Basic HTTP API Test - Minimal version to isolate issues
+
+(load "src/prelude.valk")
+
+(print "Testing HTTP API loading...")
+
+; Test just loading the async library first
+(load "src/async_monadic.valk")
+(print "✓ Async monadic library loaded")
+
+; Now try to load HTTP API
+(load "src/http_api.valk")
+(print "✓ HTTP API loaded")
+
+; Test basic request creation
+(def {get-req} (http-get "example.com"))
+(print "✓ Created GET request:" get-req)
+
+; Test with-header
+(def {req2} (with-header get-req "x-test" "value"))
+(print "✓ Added header to request:" req2)
+
+; Test creating POST request
+(def {post-req} (http-post "example.com" "body"))
+(print "✓ Created POST request:" post-req)
+
+(print "")
+(print "✨ Basic HTTP API tests passed!")
+
+(shutdown 0)

@@ -1,0 +1,37 @@
+; Demonstration of working async/await with continuations
+
+(load "src/prelude.valk")
+
+(print "=== Async/Await Demonstration ===\n")
+
+; Mock async services
+(def {fetch-user} (\ {id k} {
+  (print "  Fetching user" id)
+  (k (list id (join "User" (str id))))
+}))
+
+(def {fetch-posts} (\ {user-id k} {
+  (print "  Fetching posts for user" user-id)
+  (k 3)  ; Return count of posts
+}))
+
+(print "Test: Sequential async operations")
+(def {result} (async-reset {
+  (print "  Step 1: Fetch user")
+  (def {user} (async-shift {k} {(fetch-user 42 k)}))
+  (def {user-id} (head user))
+  (print "  Got user ID:" user-id)
+
+  (print "  Step 2: Fetch posts")
+  (def {post-count} (async-shift {k} {(fetch-posts user-id k)}))
+  (print "  Got post count:" post-count)
+
+  post-count
+}))
+
+(print "Final result:" result)
+(if (== result 3)
+  (print "✓ Test passed!")
+  (print "✗ Test failed"))
+
+(shutdown 0)

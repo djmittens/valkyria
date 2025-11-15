@@ -1,0 +1,19 @@
+(load "src/prelude.valk")
+
+(print "Two sequential async operations")
+
+(def {fetch} (\ {value k} {
+  (print "  Fetching:" value)
+  (k (* value 2))
+}))
+
+(def {result} (async-reset {
+  (def {first} (async-shift {k} {(fetch 10 k)}))
+  (print "  First result:" first)
+  (def {second} (async-shift {k} {(fetch first k)}))
+  (print "  Second result:" second)
+  second
+}))
+
+(print "Final:" result)
+(shutdown 0)
