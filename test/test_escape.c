@@ -1,6 +1,7 @@
 #include "../src/memory.h"
 #include "../src/parser.h"
 #include "../src/gc.h"
+#include "../src/bc_vm.h"
 #include "testing.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -204,6 +205,13 @@ int main(int argc, const char** argv) {
   size_t const GC_THRESHOLD_BYTES = 16 * 1024 * 1024;  // 16 MiB
   valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES);
   valk_thread_ctx.allocator = (void *)gc_heap;
+
+  // Initialize global VM for bytecode execution
+  valk_bc_vm_t vm;
+  valk_bc_vm_init(&vm);
+  vm.globals = valk_lenv_empty();
+  valk_lenv_builtins(vm.globals);
+  valk_thread_ctx.vm = &vm;
 
   valk_test_suite_t* suite = valk_testsuite_empty(__FILE__);
 

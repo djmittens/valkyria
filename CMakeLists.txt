@@ -123,9 +123,7 @@ add_executable(test_networking test/test_networking.c test/testing.c)
 target_link_libraries(test_networking PRIVATE "-lc" valkyria)
 include_directories(test_networking src/)
 
-add_executable(test_networking_lisp test/test_networking_lisp.c test/testing.c)
-target_link_libraries(test_networking_lisp PRIVATE "-lc" valkyria)
-include_directories(test_networking_lisp src/)
+# test_networking_lisp removed - redundant tests
 
 # REMOVED: test_concurrency - no longer using futures/ARCs
 # add_executable(test_concurrency test/test_concurrency.c test/testing.c)

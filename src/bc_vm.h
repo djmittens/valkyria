@@ -10,6 +10,7 @@
 
 // Call frame for function calls
 typedef struct {
+  valk_chunk_t* chunk;     // Chunk to return to (for restoring after call)
   uint8_t* ip;             // Instruction pointer (return address)
   valk_lval_t** slots;     // Pointer to this frame's locals on the stack
   size_t slot_count;       // Number of local slots in this frame

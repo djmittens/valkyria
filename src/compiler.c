@@ -356,6 +356,23 @@ static void compile_sexpr(valk_compiler_t* c, valk_lval_t* expr, bool is_tail) {
       return;
     }
 
+    // do is special - evaluates expressions in sequence, returns last
+    if (strcmp(name, "do") == 0) {
+      if (count == 1) {
+        // (do) with no args returns nil
+        valk_emit_byte(c, OP_NIL);
+        return;
+      }
+      // Compile all expressions except the last, popping their results
+      for (size_t i = 1; i < count - 1; i++) {
+        valk_compile_expr(c, valk_lval_list_nth(expr, i), false);
+        valk_emit_byte(c, OP_POP);  // Discard result
+      }
+      // Compile last expression (tail position inherited)
+      valk_compile_expr(c, valk_lval_list_nth(expr, count - 1), is_tail);
+      return;
+    }
+
     // eval is special - compile to OP_EVAL instruction
     if (strcmp(name, "eval") == 0) {
       if (count != 2) {
@@ -575,13 +592,14 @@ valk_chunk_t* valk_compile_lambda_body(valk_lenv_t* globals, valk_lval_t* formal
       // Single expression - compile it
       valk_compile_expr(&compiler, valk_lval_list_nth(body, 0), true);
     } else if (body_count > 1) {
-      // Multiple elements - treat as a single S-expression (unquote the qexpr)
-      // Example: { eval (join ...) } becomes (eval (join ...))
-      valk_lval_t* sexpr = valk_lval_sexpr_empty();
+      // Multiple expressions - wrap in implicit do
+      // Example: { (printf "x") 123 } becomes (do (printf "x") 123)
+      valk_lval_t* do_call = valk_lval_sexpr_empty();
+      valk_lval_add(do_call, valk_lval_sym("do"));
       for (size_t i = 0; i < body_count; i++) {
-        valk_lval_add(sexpr, valk_lval_list_nth(body, i));
+        valk_lval_add(do_call, valk_lval_list_nth(body, i));
       }
-      valk_compile_expr(&compiler, sexpr, true);
+      valk_compile_expr(&compiler, do_call, true);
     } else {
       // Empty body - return nil
       valk_emit_byte(&compiler, OP_NIL);

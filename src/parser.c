@@ -311,6 +311,7 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals, valk_lval_
   valk_chunk_t* chunk = valk_compile_lambda_body(env, formals, body);
 
   if (!chunk) {
+    fprintf(stderr, "[ERROR] Lambda compilation failed for lambda\n");
     return valk_lval_err("Lambda compilation failed");
   }
 
@@ -351,6 +352,10 @@ valk_lval_t* valk_lval_bc_fun(valk_chunk_t* chunk, int arity, const char* name) 
   res->fun.env = nullptr;
   res->fun.formals = nullptr;
   res->fun.body = nullptr;
+
+  if (!chunk) {
+    fprintf(stderr, "[WARN] Creating function '%s' with NULL chunk\n", name ? name : "<unnamed>");
+  }
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
@@ -909,34 +914,33 @@ static valk_lval_t* valk_lval_eval_bytecode(valk_lenv_t* env, valk_lval_t* lval)
     return valk_lval_err("No VM available in thread context");
   }
 
-  // Save current VM state
-  valk_chunk_t* saved_chunk = vm->chunk;
-  uint8_t* saved_ip = vm->ip;
+  // Save stack pointer for nested evaluation (builtins can call valk_lval_eval)
   valk_lval_t** saved_stack_top = vm->stack_top;
 
   // Run the compiled chunk
   valk_bc_vm_result_e result = valk_bc_vm_run(vm, chunk);
 
-  // Get result from stack
+  // Get result from stack (should be the only value added since saved_stack_top)
   valk_lval_t* ret_val;
-  if (result == BC_VM_OK && vm->stack_top > vm->stack) {
-    ret_val = vm->stack[0];  // Top of stack is the result
+  if (result == BC_VM_OK && vm->stack_top > saved_stack_top) {
+    ret_val = *(vm->stack_top - 1);  // Top of stack is the result
+    // Pop the result and restore stack pointer
+    vm->stack_top = saved_stack_top;
   } else if (result == BC_VM_RUNTIME_ERROR) {
     ret_val = valk_lval_err("Bytecode runtime error");
+    // Restore stack pointer on error too
+    vm->stack_top = saved_stack_top;
   } else {
     ret_val = valk_lval_nil();  // Empty result
+    // Restore stack pointer
+    vm->stack_top = saved_stack_top;
   }
 
   // Mark return value as escaping (it's being returned to caller)
   ret_val->flags |= LVAL_FLAG_ESCAPES;
 
-  // Restore VM state
-  vm->chunk = saved_chunk;
-  vm->ip = saved_ip;
-  vm->stack_top = saved_stack_top;
-
   // Note: Don't free chunk yet as it might be referenced by functions
-  // TODO: Add proper cleanup when functions are GC'd
+  // Chunks are GC'd when no longer referenced
 
   return ret_val;
 }
@@ -1079,6 +1083,36 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
     return func->fun.builtin(env, args);
   }
 
+  // If function has bytecode, call through bytecode VM
+  if (func->fun.chunk) {
+    // Build sexpr: (func arg1 arg2 ...)
+    valk_lval_t* call_expr = valk_lval_sexpr_empty();
+    valk_lval_add(call_expr, func);
+    for (size_t i = 0; i < valk_lval_list_count(args); i++) {
+      valk_lval_add(call_expr, valk_lval_list_nth(args, i));
+    }
+
+    // Save VM state before nested bytecode evaluation
+    // This is necessary because valk_lval_eval will call valk_bc_vm_run,
+    // which modifies vm->chunk and vm->ip. If we're being called from
+    // within an already-executing bytecode chunk, we need to restore
+    // these values after the nested call completes.
+    valk_bc_vm_t* vm = valk_thread_ctx.vm;
+    valk_chunk_t* saved_chunk = vm ? vm->chunk : NULL;
+    uint8_t* saved_ip = vm ? vm->ip : NULL;
+
+    // Evaluate through bytecode (this may nest valk_bc_vm_run calls)
+    valk_lval_t* result = valk_lval_eval(env, call_expr);
+
+    // Restore VM state after nested call
+    if (vm) {
+      vm->chunk = saved_chunk;
+      vm->ip = saved_ip;
+    }
+
+    return result;
+  }
+
   // Immutable function application - NO COPYING, NO MUTATION
   // Walk formals and args together, creating bindings in new environment
 
@@ -1159,6 +1193,9 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
       partial->flags = LVAL_FUN;
       VALK_SET_ORIGIN_ALLOCATOR(partial);
       partial->fun.builtin = nullptr;
+      partial->fun.chunk = func->fun.chunk;  // Keep original bytecode chunk
+      partial->fun.arity = func->fun.arity;   // Keep original arity
+      partial->fun.name = func->fun.name;     // Keep original name
       partial->fun.env = call_env;
       partial->fun.formals = formal_iter;  // Remaining formals (immutable, can alias)
       partial->fun.body = func->fun.body;  // Body (immutable, can alias)

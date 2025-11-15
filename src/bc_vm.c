@@ -126,6 +126,11 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
           valk_bc_call_frame_t* frame = &vm->frames[vm->frame_count - 1];
           // slot 0 is the function itself, slot 1+ are arguments
           valk_lval_t* value = frame->slots[slot + 1];
+          // Check if local value is an error
+          if (LVAL_TYPE(value) == LVAL_ERR) {
+            valk_bc_vm_push(vm, value);
+            return BC_VM_RUNTIME_ERROR;
+          }
           valk_bc_vm_push(vm, value);
         } else {
           valk_bc_vm_runtime_error(vm, "No call frame for local access");
@@ -154,6 +159,11 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
           return BC_VM_RUNTIME_ERROR;
         }
         valk_lval_t* value = valk_lenv_get(vm->globals, name);
+        // Check if variable lookup returned an error
+        if (LVAL_TYPE(value) == LVAL_ERR) {
+          valk_bc_vm_push(vm, value);
+          return BC_VM_RUNTIME_ERROR;
+        }
         valk_bc_vm_push(vm, value);
         break;
       }
@@ -283,9 +293,25 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
             valk_bc_vm_pop(vm);
           }
 
+          // Save VM state before calling builtin (in case it nests valk_bc_vm_run)
+          // This is necessary because builtins can call user functions, which may
+          // trigger nested bytecode execution that would corrupt vm->chunk and vm->ip
+          valk_chunk_t* saved_chunk = vm->chunk;
+          uint8_t* saved_ip = vm->ip;
+
           // Call builtin with closure environment (if available) or global environment
           valk_lenv_t* env = func->fun.env ? func->fun.env : vm->globals;
           valk_lval_t* result = func->fun.builtin(env, args);
+
+          // Restore VM state after builtin call
+          vm->chunk = saved_chunk;
+          vm->ip = saved_ip;
+
+          // Check if builtin returned an error - if so, propagate it
+          if (LVAL_TYPE(result) == LVAL_ERR) {
+            valk_bc_vm_push(vm, result);
+            return BC_VM_RUNTIME_ERROR;
+          }
 
           // Push result (builtins use the thread-local VM, no thunks needed)
           valk_bc_vm_push(vm, result);
@@ -299,6 +325,13 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
           } else {
             valk_bc_vm_runtime_error(vm, "Can only call functions, got: %s", valk_ltype_name(LVAL_TYPE(func)));
           }
+          return BC_VM_RUNTIME_ERROR;
+        }
+
+        // Check if it has bytecode
+        if (func->fun.chunk == nullptr) {
+          const char* name = func->fun.name ? func->fun.name : "<unnamed>";
+          valk_bc_vm_runtime_error(vm, "Function '%s' has no bytecode chunk in OP_CALL", name);
           return BC_VM_RUNTIME_ERROR;
         }
 
@@ -352,6 +385,7 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
 
         // Push new call frame
         valk_bc_call_frame_t* frame = &vm->frames[vm->frame_count++];
+        frame->chunk = vm->chunk;  // Save current chunk
         frame->ip = vm->ip;  // Save return address
         frame->slots = vm->stack_top - arg_count - 1;  // Point to func slot
         frame->slot_count = arg_count + 1;  // func + args
@@ -382,9 +416,25 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
             valk_bc_vm_pop(vm);
           }
 
+          // Save VM state before calling builtin (in case it nests valk_bc_vm_run)
+          // This is necessary because builtins can call user functions, which may
+          // trigger nested bytecode execution that would corrupt vm->chunk and vm->ip
+          valk_chunk_t* saved_chunk = vm->chunk;
+          uint8_t* saved_ip = vm->ip;
+
           // Call builtin with closure environment (if available) or global environment
           valk_lenv_t* env = func->fun.env ? func->fun.env : vm->globals;
           valk_lval_t* result = func->fun.builtin(env, args);
+
+          // Restore VM state after builtin call
+          vm->chunk = saved_chunk;
+          vm->ip = saved_ip;
+
+          // Check if builtin returned an error - if so, propagate it
+          if (LVAL_TYPE(result) == LVAL_ERR) {
+            valk_bc_vm_push(vm, result);
+            return BC_VM_RUNTIME_ERROR;
+          }
 
           // Push result (builtins use the thread-local VM, no thunks needed)
           valk_bc_vm_push(vm, result);
@@ -402,7 +452,8 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
 
         // Check if it has bytecode or is a builtin
         if (func->fun.chunk == nullptr && func->fun.builtin == nullptr) {
-          valk_bc_vm_runtime_error(vm, "Function has no bytecode or builtin implementation");
+          const char* name = func->fun.name ? func->fun.name : "<unnamed>";
+          valk_bc_vm_runtime_error(vm, "Function '%s' has no bytecode or builtin implementation", name);
           return BC_VM_RUNTIME_ERROR;
         }
 
@@ -457,6 +508,7 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
         if (vm->frame_count == 0) {
           // Top-level tail call - treat as regular call
           valk_bc_call_frame_t* frame = &vm->frames[vm->frame_count++];
+          frame->chunk = vm->chunk;  // Save current chunk
           frame->ip = vm->ip;
           frame->slots = vm->stack_top - arg_count - 1;
           frame->slot_count = arg_count + 1;
@@ -489,22 +541,49 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
         return BC_VM_OK;
 
       case OP_EVAL: {
-        // Pop qexpr from stack, convert to sexpr, and evaluate
+        // Pop qexpr from stack, convert to sexpr
         valk_lval_t* qexpr = valk_bc_vm_pop(vm);
         valk_lval_t* sexpr = valk_lval_copy(qexpr);
         sexpr->flags = ((sexpr->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
 
-        // Evaluate using the thread-local VM (same VM, no nesting!)
-        valk_lval_t* result = valk_lval_eval(vm->globals, sexpr);
+        // Compile the sexpr to bytecode
+        valk_chunk_t* eval_chunk = valk_compile(sexpr, vm->globals);
 
-        // Push result
-        valk_bc_vm_push(vm, result);
+        // Create a function that wraps this chunk (no parameters)
+        valk_lval_t* eval_fn = valk_lval_lambda(vm->globals,
+                                                 valk_lval_qexpr_empty(),
+                                                 valk_lval_qexpr_empty());
+        eval_fn->fun.chunk = eval_chunk;
+        eval_fn->fun.arity = 0;
+
+        // Push the function on the stack (needed for call frame setup)
+        valk_bc_vm_push(vm, eval_fn);
+
+        // Create a new call frame for this evaluation
+        if (vm->frame_count >= VALK_FRAMES_MAX) {
+          fprintf(stderr, "Stack overflow in OP_EVAL\n");
+          return BC_VM_RUNTIME_ERROR;
+        }
+
+        valk_bc_call_frame_t* frame = &vm->frames[vm->frame_count++];
+        frame->chunk = vm->chunk;  // Save current chunk
+        frame->ip = vm->ip;  // Save return address
+        frame->slots = vm->stack_top - 1;  // Point to function slot
+        frame->slot_count = 1;  // Just the function, no args
+
+        // Jump to the compiled bytecode
+        vm->chunk = eval_chunk;
+        vm->ip = eval_chunk->code;
+
         break;
       }
 
       case OP_RETURN: {
         // Pop return value
         valk_lval_t* result = valk_bc_vm_pop(vm);
+
+        // Mark return value as escaping (critical for memory safety)
+        result->flags |= LVAL_FLAG_ESCAPES;
 
         // If no frames, we're done (top-level return)
         if (vm->frame_count == 0) {
@@ -519,23 +598,28 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
         // Restore stack to just before the call
         vm->stack_top = frame->slots;
 
+        // Check if return value is an error - if so, propagate it
+        if (LVAL_TYPE(result) == LVAL_ERR) {
+          valk_bc_vm_push(vm, result);
+          // Restore IP and chunk before returning error
+          vm->chunk = frame->chunk;
+          vm->ip = frame->ip;
+          return BC_VM_RUNTIME_ERROR;
+        }
+
         // Push return value
         valk_bc_vm_push(vm, result);
 
-        // Restore IP and chunk
+        // Restore IP and chunk from saved frame
+        vm->chunk = frame->chunk;
         vm->ip = frame->ip;
-        if (vm->frame_count > 0) {
-          // Get chunk from previous frame's function
-          valk_bc_call_frame_t* prev_frame = &vm->frames[vm->frame_count - 1];
-          // Need to reconstruct chunk from frame... for now assume we're in same chunk
-          // This will need refinement when we have multiple chunks
-        }
 
         break;
       }
 
       default:
-        valk_bc_vm_runtime_error(vm, "Unknown opcode %d", instruction);
+        valk_bc_vm_runtime_error(vm, "Unknown opcode %d at offset %ld",
+                                 instruction, (long)(vm->ip - vm->chunk->code - 1));
         return BC_VM_RUNTIME_ERROR;
     }
   }
