@@ -46,6 +46,7 @@ typedef enum {
   OP_CALL,          // Call function [arg_count:u8]
   OP_TAIL_CALL,     // Tail call (TCO) [arg_count:u8]
   OP_RETURN,        // Return from function
+  OP_EVAL,          // Evaluate qexpr as sexpr (converts qexpr to sexpr and evaluates)
 
   // Lists (cons-based)
   OP_LIST,          // Create list from stack [count:u8]

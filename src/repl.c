@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "aio.h"
+#include "bc_vm.h"
 #include "gc.h"
 #include "log.h"
 #include "memory.h"
@@ -35,6 +36,12 @@ int main(int argc, char *argv[]) {
 
   // Set root environment for GC marking
   valk_gc_malloc_set_root(gc_heap, env);
+
+  // Create single global VM for this thread
+  valk_bc_vm_t vm;
+  valk_bc_vm_init(&vm);
+  vm.globals = env;
+  valk_thread_ctx.vm = &vm;
 
   // If we got here, we processed files but did not request exit; drop into REPL.
   // Set mode to repl now so shutdown inside REPL performs teardown.

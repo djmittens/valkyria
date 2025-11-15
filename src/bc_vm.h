@@ -45,6 +45,9 @@ void valk_bc_vm_free(valk_bc_vm_t* vm);
 // Execute a chunk of bytecode
 valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk);
 
+// Execute a chunk and return the top stack value (for nested execution)
+valk_lval_t* valk_bc_vm_execute_chunk(valk_bc_vm_t* vm, valk_chunk_t* chunk);
+
 // Push/pop stack operations
 void valk_bc_vm_push(valk_bc_vm_t* vm, valk_lval_t* value);
 valk_lval_t* valk_bc_vm_pop(valk_bc_vm_t* vm);

@@ -12,7 +12,7 @@
 #define VALK_SLAB_TREIBER_STACK
 #define VALK_SLAB_VERSIONS
 
-__thread valk_thread_context_t valk_thread_ctx = {nullptr};
+__thread valk_thread_context_t valk_thread_ctx = {.allocator = nullptr, .vm = nullptr};
 
 #ifdef VALK_ARC_DEBUG
 #include "debug.h"

@@ -1,8 +1,10 @@
 #include "bc_vm.h"
 #include "bytecode.h"
+#include "compiler.h"
 #include "parser.h"
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // Macros for bytecode reading
@@ -91,7 +93,16 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
 
     switch (instruction) {
       case OP_CONST: {
-        valk_lval_t* constant = READ_CONSTANT();
+        uint16_t const_idx = READ_SHORT();
+        if (const_idx >= vm->chunk->const_count) {
+          fprintf(stderr, "[ERROR] Constant index %d out of bounds (count=%zu)\n", const_idx, vm->chunk->const_count);
+          return BC_VM_RUNTIME_ERROR;
+        }
+        valk_lval_t* constant = vm->chunk->constants[const_idx];
+        if (!constant) {
+          fprintf(stderr, "[ERROR] Constant at index %d is NULL\n", const_idx);
+          return BC_VM_RUNTIME_ERROR;
+        }
         valk_bc_vm_push(vm, constant);
         break;
       }
@@ -110,13 +121,11 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
 
       case OP_GET_LOCAL: {
         uint8_t slot = READ_BYTE();
-        fprintf(stderr, "[DEBUG OP_GET_LOCAL] slot=%d\n", slot);
         // Get from current frame's slots
         if (vm->frame_count > 0) {
           valk_bc_call_frame_t* frame = &vm->frames[vm->frame_count - 1];
           // slot 0 is the function itself, slot 1+ are arguments
           valk_lval_t* value = frame->slots[slot + 1];
-          fprintf(stderr, "[DEBUG OP_GET_LOCAL] Retrieved value type=%s\n", valk_ltype_name(LVAL_TYPE(value)));
           valk_bc_vm_push(vm, value);
         } else {
           valk_bc_vm_runtime_error(vm, "No call frame for local access");
@@ -260,15 +269,8 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
         // func is at position -(arg_count + 1) from top
         valk_lval_t* func = valk_bc_vm_peek(vm, arg_count);
 
-        // Debug: what type is func?
-        fprintf(stderr, "[DEBUG] OP_CALL: func type=%s, is_builtin=%d\n",
-                valk_ltype_name(LVAL_TYPE(func)),
-                (LVAL_TYPE(func) == LVAL_FUN) ? (func->fun.builtin != NULL) : 0);
-
         // Check if it's a builtin function
         if (LVAL_TYPE(func) == LVAL_FUN && func->fun.builtin != NULL) {
-          fprintf(stderr, "[DEBUG OP_CALL builtin] Calling builtin (name=%s)\n",
-                  func->fun.name ? func->fun.name : "unnamed");
           // Call builtin directly
           // Build args list from stack
           valk_lval_t* args = valk_lval_sexpr_empty();
@@ -285,7 +287,7 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
           valk_lenv_t* env = func->fun.env ? func->fun.env : vm->globals;
           valk_lval_t* result = func->fun.builtin(env, args);
 
-          // Push result
+          // Push result (builtins use the thread-local VM, no thunks needed)
           valk_bc_vm_push(vm, result);
           break;
         }
@@ -324,15 +326,11 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
           return BC_VM_RUNTIME_ERROR;
         }
 
-        fprintf(stderr, "[DEBUG OP_CALL] Calling bytecode function with %d args (arity=%d)\n", arg_count, func->fun.arity);
-
         // Handle variadic arguments
         if (func->fun.arity < 0) {
           // Variadic function: arity = -(min_args + 1)
           int min_args = -(func->fun.arity + 1);
           int extra_args = arg_count - min_args;
-
-          fprintf(stderr, "[DEBUG OP_CALL variadic] min_args=%d, extra_args=%d\n", min_args, extra_args);
 
           // Create qexpr containing extra args
           valk_lval_t* variadic_list = valk_lval_qexpr_empty();
@@ -350,8 +348,6 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
 
           // Update arg_count to reflect min_args + 1 (for variadic list)
           arg_count = min_args + 1;
-
-          fprintf(stderr, "[DEBUG OP_CALL variadic] Packed %d args into variadic list, new arg_count=%d\n", extra_args, arg_count);
         }
 
         // Push new call frame
@@ -364,8 +360,6 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
         vm->chunk = func->fun.chunk;
         vm->ip = func->fun.chunk->code;
 
-        fprintf(stderr, "[DEBUG OP_CALL] Jumped to bytecode, first opcode: %d\n", *vm->ip);
-
         break;
       }
 
@@ -374,15 +368,6 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
 
         // Stack layout: [func, arg1, arg2, ..., argN]
         valk_lval_t* func = valk_bc_vm_peek(vm, arg_count);
-
-        fprintf(stderr, "[DEBUG OP_TAIL_CALL] Stack before tail call (arg_count=%d):\n", arg_count);
-        for (int i = arg_count; i >= 0; i--) {
-          valk_lval_t* item = valk_bc_vm_peek(vm, i);
-          fprintf(stderr, "  [%d]: type=%s\n", i, valk_ltype_name(LVAL_TYPE(item)));
-          if (LVAL_TYPE(item) == LVAL_ERR) {
-            fprintf(stderr, "       error=%s\n", item->str);
-          }
-        }
 
         // Check if it's a builtin function - tail calls to builtins are just regular calls
         if (LVAL_TYPE(func) == LVAL_FUN && func->fun.builtin != NULL) {
@@ -401,14 +386,13 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
           valk_lenv_t* env = func->fun.env ? func->fun.env : vm->globals;
           valk_lval_t* result = func->fun.builtin(env, args);
 
-          // Push result
+          // Push result (builtins use the thread-local VM, no thunks needed)
           valk_bc_vm_push(vm, result);
           break;
         }
 
         if (LVAL_TYPE(func) != LVAL_FUN) {
           if (LVAL_TYPE(func) == LVAL_ERR) {
-            fprintf(stderr, "[DEBUG OP_TAIL_CALL] Got error instead of function: %s\n", func->str);
             valk_bc_vm_runtime_error(vm, "Can only call functions in tail position, got Error: %s", func->str);
           } else {
             valk_bc_vm_runtime_error(vm, "Can only call functions in tail position, got: %s", valk_ltype_name(LVAL_TYPE(func)));
@@ -440,15 +424,11 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
           }
         }
 
-        fprintf(stderr, "[DEBUG OP_TAIL_CALL] Tail-calling bytecode function with %d args (arity=%d)\n", arg_count, func->fun.arity);
-
         // Handle variadic arguments
         if (func->fun.arity < 0) {
           // Variadic function: arity = -(min_args + 1)
           int min_args = -(func->fun.arity + 1);
           int extra_args = arg_count - min_args;
-
-          fprintf(stderr, "[DEBUG OP_TAIL_CALL variadic] min_args=%d, extra_args=%d\n", min_args, extra_args);
 
           // Create qexpr containing extra args
           valk_lval_t* variadic_list = valk_lval_qexpr_empty();
@@ -466,19 +446,6 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
 
           // Update arg_count to reflect min_args + 1 (for variadic list)
           arg_count = min_args + 1;
-
-          fprintf(stderr, "[DEBUG OP_TAIL_CALL variadic] Packed %d args into variadic list, new arg_count=%d\n", extra_args, arg_count);
-
-          // Debug: show stack after packing
-          fprintf(stderr, "[DEBUG OP_TAIL_CALL variadic] Stack after packing (arg_count=%d):\n", arg_count);
-          for (int i = arg_count; i >= 0; i--) {
-            valk_lval_t* item = valk_bc_vm_peek(vm, i);
-            fprintf(stderr, "  [%d]: type=%s", i, valk_ltype_name(LVAL_TYPE(item)));
-            if (LVAL_TYPE(item) == LVAL_QEXPR) {
-              fprintf(stderr, " (qexpr with %zu elements)", valk_lval_list_count(item));
-            }
-            fprintf(stderr, "\n");
-          }
         }
 
         // TAIL CALL OPTIMIZATION: Reuse the current frame!
@@ -515,13 +482,25 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
         vm->chunk = func->fun.chunk;
         vm->ip = func->fun.chunk->code;
 
-        fprintf(stderr, "[DEBUG OP_TAIL_CALL] Jumped to bytecode, first opcode: %d\n", *vm->ip);
-
         break;
       }
 
       case OP_HALT:
         return BC_VM_OK;
+
+      case OP_EVAL: {
+        // Pop qexpr from stack, convert to sexpr, and evaluate
+        valk_lval_t* qexpr = valk_bc_vm_pop(vm);
+        valk_lval_t* sexpr = valk_lval_copy(qexpr);
+        sexpr->flags = ((sexpr->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
+
+        // Evaluate using the thread-local VM (same VM, no nesting!)
+        valk_lval_t* result = valk_lval_eval(vm->globals, sexpr);
+
+        // Push result
+        valk_bc_vm_push(vm, result);
+        break;
+      }
 
       case OP_RETURN: {
         // Pop return value
@@ -562,4 +541,33 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
   }
 
   return BC_VM_OK;
+}
+
+// Execute a chunk and return the result value
+// This is used for nested execution (e.g., compiling and running thunks)
+valk_lval_t* valk_bc_vm_execute_chunk(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
+  // Save current VM state
+  valk_chunk_t* saved_chunk = vm->chunk;
+  uint8_t* saved_ip = vm->ip;
+  valk_lval_t** saved_stack_top = vm->stack_top;
+
+  // Execute the new chunk
+  valk_bc_vm_result_e result = valk_bc_vm_run(vm, chunk);
+
+  // Get the result from the stack (should be top value)
+  valk_lval_t* return_value = NULL;
+  if (result == BC_VM_OK && vm->stack_top > vm->stack) {
+    return_value = valk_bc_vm_pop(vm);
+  } else if (result != BC_VM_OK) {
+    return_value = valk_lval_err("Thunk execution failed");
+  } else {
+    return_value = valk_lval_nil();
+  }
+
+  // Restore VM state
+  vm->chunk = saved_chunk;
+  vm->ip = saved_ip;
+  vm->stack_top = saved_stack_top;
+
+  return return_value;
 }

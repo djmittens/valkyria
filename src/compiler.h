@@ -33,6 +33,9 @@ void valk_compile_expr(valk_compiler_t* c, valk_lval_t* expr, bool is_tail);
 // Compile a top-level expression (convenience wrapper)
 valk_chunk_t* valk_compile(valk_lval_t* expr, valk_lenv_t* globals);
 
+// Compile lambda body directly (for runtime lambda creation)
+valk_chunk_t* valk_compile_lambda_body(valk_lenv_t* globals, valk_lval_t* formals, valk_lval_t* body);
+
 // Emit bytecode instructions
 void valk_emit_byte(valk_compiler_t* c, uint8_t byte);
 void valk_emit_bytes(valk_compiler_t* c, uint8_t byte1, uint8_t byte2);

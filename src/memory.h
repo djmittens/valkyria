@@ -250,6 +250,7 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, size_t bytes);
 
 typedef struct {
   valk_mem_allocator_t *allocator;
+  struct valk_bc_vm_t *vm;  // Current bytecode VM (one per thread)
 } valk_thread_context_t;
 
 extern __thread valk_thread_context_t valk_thread_ctx;

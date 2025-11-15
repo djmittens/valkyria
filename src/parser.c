@@ -303,29 +303,16 @@ valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
 // }
 
 valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals, valk_lval_t* body) {
-  fprintf(stderr, "[DEBUG valk_lval_lambda] Creating lambda with formals type=%s, body type=%s\n",
-          valk_ltype_name(LVAL_TYPE(formals)), valk_ltype_name(LVAL_TYPE(body)));
-
   // Mark formals and body as escaping (they're captured by the lambda)
   formals->flags |= LVAL_FLAG_ESCAPES;
   body->flags |= LVAL_FLAG_ESCAPES;
 
-  // Compile lambda to bytecode
-  // Build a lambda expression: (\ formals body)
-  valk_lval_t* lambda_expr = valk_lval_sexpr_empty();
-  valk_lval_add(lambda_expr, valk_lval_sym("\\"));
-  valk_lval_add(lambda_expr, formals);
-  valk_lval_add(lambda_expr, body);
-
-  fprintf(stderr, "[DEBUG valk_lval_lambda] Compiling lambda expression...\n");
-  // Compile it with the closure environment
-  valk_chunk_t* chunk = valk_compile(lambda_expr, env);
+  // Compile the lambda body directly using compile_lambda_body
+  valk_chunk_t* chunk = valk_compile_lambda_body(env, formals, body);
 
   if (!chunk) {
-    fprintf(stderr, "[DEBUG valk_lval_lambda] Compilation returned NULL!\n");
     return valk_lval_err("Lambda compilation failed");
   }
-  fprintf(stderr, "[DEBUG valk_lval_lambda] Compilation succeeded\n");
 
   // Count arity (handle variadic)
   // Use negative arity for variadic: -(min_args + 1)
@@ -916,20 +903,24 @@ static valk_lval_t* valk_lval_eval_bytecode(valk_lenv_t* env, valk_lval_t* lval)
   // Compile the expression to bytecode
   valk_chunk_t* chunk = valk_compile(lval, env);
 
-  // Create VM and run
-  valk_bc_vm_t vm;
-  vm.chunk = NULL;
-  vm.ip = NULL;
-  vm.stack_top = vm.stack;
-  vm.frame_count = 0;
-  vm.globals = env;  // Use the passed-in environment (which already has builtins)
+  // Use thread-local VM (one VM per thread)
+  valk_bc_vm_t* vm = valk_thread_ctx.vm;
+  if (!vm) {
+    return valk_lval_err("No VM available in thread context");
+  }
 
-  valk_bc_vm_result_e result = valk_bc_vm_run(&vm, chunk);
+  // Save current VM state
+  valk_chunk_t* saved_chunk = vm->chunk;
+  uint8_t* saved_ip = vm->ip;
+  valk_lval_t** saved_stack_top = vm->stack_top;
+
+  // Run the compiled chunk
+  valk_bc_vm_result_e result = valk_bc_vm_run(vm, chunk);
 
   // Get result from stack
   valk_lval_t* ret_val;
-  if (result == BC_VM_OK && vm.stack_top > vm.stack) {
-    ret_val = vm.stack[0];  // Top of stack is the result
+  if (result == BC_VM_OK && vm->stack_top > vm->stack) {
+    ret_val = vm->stack[0];  // Top of stack is the result
   } else if (result == BC_VM_RUNTIME_ERROR) {
     ret_val = valk_lval_err("Bytecode runtime error");
   } else {
@@ -939,7 +930,11 @@ static valk_lval_t* valk_lval_eval_bytecode(valk_lenv_t* env, valk_lval_t* lval)
   // Mark return value as escaping (it's being returned to caller)
   ret_val->flags |= LVAL_FLAG_ESCAPES;
 
-  valk_bc_vm_free(&vm);
+  // Restore VM state
+  vm->chunk = saved_chunk;
+  vm->ip = saved_ip;
+  vm->stack_top = saved_stack_top;
+
   // Note: Don't free chunk yet as it might be referenced by functions
   // TODO: Add proper cleanup when functions are GC'd
 
@@ -1837,11 +1832,6 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
 
 // Define the key in global scope
 void valk_lenv_def(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
-  fprintf(stderr, "[DEBUG valk_lenv_def] Defining '%s' with value type=%s\n", key->str, valk_ltype_name(LVAL_TYPE(val)));
-  if (LVAL_TYPE(val) == LVAL_FUN) {
-    fprintf(stderr, "[DEBUG valk_lenv_def] Function: builtin=%p, chunk=%p, arity=%d\n",
-            (void*)val->fun.builtin, (void*)val->fun.chunk, val->fun.arity);
-  }
   while (env->parent) {
     env = env->parent;
   }
@@ -2098,9 +2088,8 @@ static valk_lval_t* valk_builtin_eval(valk_lenv_t* e, valk_lval_t* a) {
   v = valk_lval_copy(v);
   v->flags = ((v->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
 
-  // Return thunk for TCO - function bodies are in tail position when called from eval_call
-  // The trampoline will unwrap this without adding a stack frame
-  return valk_lval_thunk(e, v);
+  // Evaluate using the thread-local VM (no nested VMs!)
+  return valk_lval_eval(e, v);
 }
 static valk_lval_t* valk_builtin_plus(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -2120,7 +2109,6 @@ static valk_lval_t* valk_builtin_multiply(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
-  fprintf(stderr, "[DEBUG def] def called with %zu args\n", valk_lval_list_count(a));
   LVAL_ASSERT_COUNT_GT(a, a, 1);
 
   valk_lval_t* syms = valk_lval_list_nth(a, 0);
@@ -2139,16 +2127,11 @@ static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
 
   for (size_t i = 0; i < valk_lval_list_count(syms); i++) {
     valk_lval_t* sym = valk_lval_list_nth(syms, i);
-    fprintf(stderr, "[DEBUG def] Defining symbol: %s (env=%p, env->parent=%p)\n", sym->str, (void*)e, (void*)(e ? e->parent : NULL));
     valk_lval_t* val = valk_resolve_symbol(e, valk_lval_list_nth(a, i + 1));
-    fprintf(stderr, "[DEBUG def] Resolved value type: %s\n", valk_ltype_name(LVAL_TYPE(val)));
     if (LVAL_TYPE(val) == LVAL_ERR) {
-      fprintf(stderr, "[DEBUG def] Got error, returning it: %s\n", val->str);
       return val;
     }
-    fprintf(stderr, "[DEBUG def] About to call valk_lenv_def\n");
     valk_lenv_def(e, sym, val);
-    fprintf(stderr, "[DEBUG def] Successfully defined %s\n", sym->str);
   }
 
   return valk_lval_sexpr_empty();
@@ -2183,14 +2166,10 @@ static valk_lval_t* valk_builtin_put(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
-  fprintf(stderr, "[DEBUG builtin_lambda] Called with %zu args\n", valk_lval_list_count(a));
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
 
   valk_lval_t* formals = valk_lval_list_nth(a, 0);
   valk_lval_t* body = valk_lval_list_nth(a, 1);
-
-  fprintf(stderr, "[DEBUG builtin_lambda] formals type=%s, body type=%s\n",
-          valk_ltype_name(LVAL_TYPE(formals)), valk_ltype_name(LVAL_TYPE(body)));
 
   LVAL_ASSERT_TYPE(a, formals, LVAL_QEXPR);
   LVAL_ASSERT_TYPE(a, body, LVAL_QEXPR);
@@ -2411,8 +2390,8 @@ static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
   branch = valk_lval_copy(branch);
   branch->flags = ((branch->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
 
-  // Return thunk instead of recursing - enables proper TCO
-  return valk_lval_thunk(e, branch);
+  // Evaluate using the thread-local VM (no nested VMs!)
+  return valk_lval_eval(e, branch);
 }
 
 static valk_lval_t* valk_builtin_do(valk_lenv_t* e, valk_lval_t* a) {
@@ -2435,13 +2414,13 @@ static valk_lval_t* valk_builtin_do(valk_lenv_t* e, valk_lval_t* a) {
     valk_lval_eval(e, expr);
   }
 
-  // Return last expression as thunk for TCO
+  // Evaluate and return last expression using thread-local VM
   valk_lval_t* last = valk_lval_list_nth(a, count - 1);
   if (LVAL_TYPE(last) == LVAL_QEXPR) {
     last = valk_lval_copy(last);
     last->flags = ((last->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
   }
-  return valk_lval_thunk(e, last);
+  return valk_lval_eval(e, last);
 }
 
 static valk_lval_t* valk_builtin_print(valk_lenv_t* e, valk_lval_t* a) {
