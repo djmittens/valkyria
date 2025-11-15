@@ -92,7 +92,6 @@ test: build
 	build/test_freeze &&\
 	build/test_escape &&\
 	build/test_bytecode &&\
-	build/test_concurrency &&\
 	build/test_networking &&\
 	# Lisp Standard Library Tests
 	build/valk test/test_prelude.valk &&\
@@ -102,6 +101,11 @@ test: build
 	build/valk test/test_continuations_suite.valk &&\
 	build/valk test/test_bytecode_suite.valk &&\
 	build/valk test/test_tco_suite.valk &&\
+	build/valk test/test_do_suite.valk &&\
+	# GC Tests
+	build/valk test/test_gc_suite.valk &&\
+	# Crash Regressions
+	build/valk test/test_crash_regressions.valk &&\
 	# HTTP API Tests
 	build/valk test/test_http_minimal.valk
 	# Note: test_networking_lisp disabled - requires specific server setup

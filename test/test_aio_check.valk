@@ -1,5 +1,0 @@
-; Check if aio is defined
-(print "Testing aio...")
-
-; Try to print aio directly
-(print aio)

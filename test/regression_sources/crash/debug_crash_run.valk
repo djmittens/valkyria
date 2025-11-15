@@ -1,0 +1,10 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(printf "Defining test\n")
+(test/define "test1" {do {(printf "body\n")}})
+
+(printf "Running test\n")
+(test/run "test1")
+
+(printf "Done\n")

@@ -118,7 +118,9 @@ static void compile_symbol(valk_compiler_t* c, valk_lval_t* expr) {
 
   // Try local variables first
   int local = valk_resolve_local(c, name);
+  fprintf(stderr, "[COMPILER] Looking up symbol '%s': local=%d, local_count=%d\n", name, local, c->local_count);
   if (local != -1) {
+    fprintf(stderr, "[COMPILER] Emitting OP_GET_LOCAL %d for '%s'\n", local, name);
     valk_emit_bytes(c, OP_GET_LOCAL, (uint8_t)local);
     return;
   }
@@ -143,11 +145,12 @@ static void compile_lambda(valk_compiler_t* c, valk_lval_t* expr) {
   valk_lval_t* body = valk_lval_list_nth(expr, 2);
 
   // Count the number of parameters
+  // Formals can be QEXPR or SEXPR (when evaluated from fun macro)
   int arity = 0;
-  if (LVAL_TYPE(formals) == LVAL_QEXPR) {
+  if (LVAL_TYPE(formals) == LVAL_QEXPR || LVAL_TYPE(formals) == LVAL_SEXPR) {
     arity = valk_lval_list_count(formals);
   } else {
-    fprintf(stderr, "lambda formals must be a qexpr\n");
+    fprintf(stderr, "lambda formals must be a list, got: %s\n", valk_ltype_name(LVAL_TYPE(formals)));
     return;
   }
 
@@ -164,6 +167,19 @@ static void compile_lambda(valk_compiler_t* c, valk_lval_t* expr) {
   for (int i = 0; i < arity; i++) {
     valk_lval_t* param = valk_lval_list_nth(formals, i);
     if (LVAL_TYPE(param) == LVAL_SYM) {
+      // Check for variadic marker '&'
+      if (strcmp(param->str, "&") == 0) {
+        // Next parameter is the variadic args name
+        if (i + 1 < arity) {
+          i++;  // Skip to variadic parameter name
+          param = valk_lval_list_nth(formals, i);
+          if (LVAL_TYPE(param) == LVAL_SYM) {
+            valk_add_local(&func_compiler, param->str);
+          }
+        }
+        // TODO: Handle variadic args properly in bytecode
+        continue;
+      }
       valk_add_local(&func_compiler, param->str);
     } else {
       fprintf(stderr, "lambda parameter must be a symbol\n");
@@ -198,6 +214,9 @@ static void compile_lambda(valk_compiler_t* c, valk_lval_t* expr) {
 
   // Create bytecode function value
   valk_lval_t* bc_fun = valk_lval_bc_fun(func_chunk, arity, "<lambda>");
+
+  // Set closure environment so the function can access variables from its creation context
+  bc_fun->fun.env = c->globals;
 
   // Emit it as a constant
   valk_emit_constant(c, bc_fun);
@@ -330,13 +349,25 @@ static void compile_sexpr(valk_compiler_t* c, valk_lval_t* expr, bool is_tail) {
       return;
     }
 
-    // lambda is special
+    // lambda is special - but only if formals and body are literal qexprs
+    // If they're variables/expressions, compile as regular function call
     if (strcmp(name, "\\") == 0) {
-      compile_lambda(c, expr);
-      return;
+      if (count == 3) {
+        valk_lval_t* formals = valk_lval_list_nth(expr, 1);
+        valk_lval_t* body = valk_lval_list_nth(expr, 2);
+        // Only use special compilation if both are literal qexprs
+        if (LVAL_TYPE(formals) == LVAL_QEXPR && LVAL_TYPE(body) == LVAL_QEXPR) {
+          compile_lambda(c, expr);
+          return;
+        }
+      }
+      // Fall through to compile as regular function call
     }
 
     // def is special - (def {x y} val1 val2)
+    // DISABLED: This optimization breaks the fun macro which uses (def (head f) ...)
+    // Let def be called as a regular builtin instead
+    /*
     if (strcmp(name, "def") == 0) {
       if (count < 3) {
         fprintf(stderr, "def requires at least 2 arguments\n");
@@ -382,6 +413,7 @@ static void compile_sexpr(valk_compiler_t* c, valk_lval_t* expr, bool is_tail) {
       valk_emit_byte(c, OP_NIL);
       return;
     }
+    */
 
     // Check if it's a builtin operator
     if (strcmp(name, "+") == 0 || strcmp(name, "-") == 0 ||
@@ -446,6 +478,21 @@ void valk_compile_expr(valk_compiler_t* c, valk_lval_t* expr, bool is_tail) {
       valk_emit_byte(c, OP_NIL);
       break;
 
+    case LVAL_FUN:
+      // Functions as values - emit as constant
+      valk_emit_constant(c, expr);
+      break;
+
+    case LVAL_ERR:
+    case LVAL_REF:
+    case LVAL_ENV:
+    case LVAL_CONS:
+    case LVAL_THUNK:
+    case LVAL_CONT:
+      // These types can be emitted as constants
+      valk_emit_constant(c, expr);
+      break;
+
     default:
       fprintf(stderr, "Cannot compile type: %s\n", valk_ltype_name(LVAL_TYPE(expr)));
       valk_emit_byte(c, OP_NIL);
@@ -455,6 +502,7 @@ void valk_compile_expr(valk_compiler_t* c, valk_lval_t* expr, bool is_tail) {
 
 // Compile a top-level expression
 valk_chunk_t* valk_compile(valk_lval_t* expr, valk_lenv_t* globals) {
+  fprintf(stderr, "[COMPILER valk_compile] Compiling expression type=%s\n", valk_ltype_name(LVAL_TYPE(expr)));
   valk_compiler_t compiler;
   valk_compiler_init(&compiler, globals);
 

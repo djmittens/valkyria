@@ -37,7 +37,7 @@ void test_lambda_captures_escape(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(!LVAL_ESCAPES(body), "Body should not escape initially");
 
   // Create lambda (captures formals and body)
-  valk_lval_t* lambda = valk_lval_lambda(formals, body);
+  valk_lval_t* lambda = valk_lval_lambda(nullptr, formals, body);
 
   // Should be marked as escaping after lambda creation
   VALK_TEST_ASSERT(LVAL_ESCAPES(formals), "Formals should escape after lambda creation");
@@ -179,7 +179,7 @@ void test_function_return_escapes(VALK_TEST_ARGS()) {
   valk_lval_t* body = valk_lval_qexpr_empty();
   valk_lval_add(body, valk_lval_sym("x"));
 
-  valk_lval_t* lambda = valk_lval_lambda(formals, body);
+  valk_lval_t* lambda = valk_lval_lambda(env, formals, body);
 
   // Call the lambda with an argument: ((\ {x} {x}) 42)
   // Build S-expr: (lambda 42)

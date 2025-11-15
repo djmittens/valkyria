@@ -90,8 +90,7 @@ typedef enum {
   LVAL_NUM,
   LVAL_SYM,
   LVAL_STR,
-  LVAL_FUN,
-  LVAL_BC_FUN,  // Bytecode compiled function
+  LVAL_FUN,  // Function (bytecode or builtin)
   LVAL_REF,
   LVAL_QEXPR,
   LVAL_SEXPR,
@@ -132,18 +131,18 @@ struct valk_lval_t {
   struct valk_lval_t *gc_next;  // Linked list for GC heap tracking
   union {
     struct {
-      valk_lenv_t *env;
-      valk_lval_t *body;
-      // formal parameters, to the function, eg names
-      valk_lval_t *formals;
-      // NULL if its a lambda
+      // Builtin function pointer (NULL for bytecode functions)
       valk_lval_builtin_t *builtin;
+      // Bytecode (NULL for builtins)
+      valk_chunk_t *chunk;
+      int arity;
+      char *name;
+      // For closures
+      valk_lenv_t *env;
+      // DEPRECATED: For old tree-walker lambdas (will be removed)
+      valk_lval_t *formals;
+      valk_lval_t *body;
     } fun;
-    struct {
-      valk_chunk_t *chunk;   // Compiled bytecode
-      int arity;             // Number of parameters
-      char *name;            // Function name (for debugging)
-    } bc_fun;  // Bytecode function
     struct {
       valk_lval_t *head;  // First element
       valk_lval_t *tail;  // Rest of list
@@ -179,7 +178,7 @@ valk_lval_t *valk_lval_str(const char *str);
 valk_lval_t *valk_lval_str_n(const char *bytes, size_t n);
 
 // valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
-valk_lval_t *valk_lval_lambda(valk_lval_t *formals, valk_lval_t *body);
+valk_lval_t *valk_lval_lambda(valk_lenv_t *env, valk_lval_t *formals, valk_lval_t *body);
 valk_lval_t *valk_lval_bc_fun(valk_chunk_t *chunk, int arity, const char *name);
 valk_lval_t *valk_lval_sexpr_empty(void);
 valk_lval_t *valk_lval_qexpr_empty(void);

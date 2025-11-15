@@ -110,11 +110,14 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
 
       case OP_GET_LOCAL: {
         uint8_t slot = READ_BYTE();
+        fprintf(stderr, "[DEBUG OP_GET_LOCAL] slot=%d\n", slot);
         // Get from current frame's slots
         if (vm->frame_count > 0) {
           valk_bc_call_frame_t* frame = &vm->frames[vm->frame_count - 1];
           // slot 0 is the function itself, slot 1+ are arguments
-          valk_bc_vm_push(vm, frame->slots[slot + 1]);
+          valk_lval_t* value = frame->slots[slot + 1];
+          fprintf(stderr, "[DEBUG OP_GET_LOCAL] Retrieved value type=%s\n", valk_ltype_name(LVAL_TYPE(value)));
+          valk_bc_vm_push(vm, value);
         } else {
           valk_bc_vm_runtime_error(vm, "No call frame for local access");
           return BC_VM_RUNTIME_ERROR;
@@ -264,6 +267,8 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
 
         // Check if it's a builtin function
         if (LVAL_TYPE(func) == LVAL_FUN && func->fun.builtin != NULL) {
+          fprintf(stderr, "[DEBUG OP_CALL builtin] Calling builtin (name=%s)\n",
+                  func->fun.name ? func->fun.name : "unnamed");
           // Call builtin directly
           // Build args list from stack
           valk_lval_t* args = valk_lval_sexpr_empty();
@@ -276,35 +281,77 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
             valk_bc_vm_pop(vm);
           }
 
-          // Call builtin
-          valk_lval_t* result = func->fun.builtin(vm->globals, args);
+          // Call builtin with closure environment (if available) or global environment
+          valk_lenv_t* env = func->fun.env ? func->fun.env : vm->globals;
+          valk_lval_t* result = func->fun.builtin(env, args);
 
           // Push result
           valk_bc_vm_push(vm, result);
           break;
         }
 
-        // Check if it's a tree-walker lambda - we can't call those from bytecode
-        if (LVAL_TYPE(func) == LVAL_FUN) {
-          valk_bc_vm_runtime_error(vm, "Cannot call tree-walker lambda from bytecode");
+        // Check if it's a function
+        if (LVAL_TYPE(func) != LVAL_FUN) {
+          if (LVAL_TYPE(func) == LVAL_ERR) {
+            valk_bc_vm_runtime_error(vm, "Can only call functions, got Error: %s", func->str);
+          } else {
+            valk_bc_vm_runtime_error(vm, "Can only call functions, got: %s", valk_ltype_name(LVAL_TYPE(func)));
+          }
           return BC_VM_RUNTIME_ERROR;
         }
 
-        if (LVAL_TYPE(func) != LVAL_BC_FUN) {
-          valk_bc_vm_runtime_error(vm, "Can only call bytecode functions, got: %s", valk_ltype_name(LVAL_TYPE(func)));
-          return BC_VM_RUNTIME_ERROR;
-        }
-
-        if (func->bc_fun.arity != arg_count) {
-          valk_bc_vm_runtime_error(vm, "Expected %d arguments but got %d",
-                                   func->bc_fun.arity, arg_count);
-          return BC_VM_RUNTIME_ERROR;
+        // Check arity (negative means variadic)
+        if (func->fun.arity >= 0) {
+          // Non-variadic: exact match required
+          if (func->fun.arity != arg_count) {
+            valk_bc_vm_runtime_error(vm, "Expected %d arguments but got %d",
+                                     func->fun.arity, arg_count);
+            return BC_VM_RUNTIME_ERROR;
+          }
+        } else {
+          // Variadic: arity = -(min_args + 1)
+          int min_args = -(func->fun.arity + 1);
+          if (arg_count < min_args) {
+            valk_bc_vm_runtime_error(vm, "Expected at least %d arguments but got %d",
+                                     min_args, arg_count);
+            return BC_VM_RUNTIME_ERROR;
+          }
         }
 
         // Check if we have space for a new frame
         if (vm->frame_count >= VALK_FRAMES_MAX) {
           valk_bc_vm_runtime_error(vm, "Stack overflow");
           return BC_VM_RUNTIME_ERROR;
+        }
+
+        fprintf(stderr, "[DEBUG OP_CALL] Calling bytecode function with %d args (arity=%d)\n", arg_count, func->fun.arity);
+
+        // Handle variadic arguments
+        if (func->fun.arity < 0) {
+          // Variadic function: arity = -(min_args + 1)
+          int min_args = -(func->fun.arity + 1);
+          int extra_args = arg_count - min_args;
+
+          fprintf(stderr, "[DEBUG OP_CALL variadic] min_args=%d, extra_args=%d\n", min_args, extra_args);
+
+          // Create qexpr containing extra args
+          valk_lval_t* variadic_list = valk_lval_qexpr_empty();
+          for (int i = 0; i < extra_args; i++) {
+            // Args are at: stack_top - extra_args + i
+            valk_lval_t* arg = *(vm->stack_top - extra_args + i);
+            valk_lval_add(variadic_list, arg);
+          }
+
+          // Remove extra args from stack
+          vm->stack_top -= extra_args;
+
+          // Push the variadic list
+          valk_bc_vm_push(vm, variadic_list);
+
+          // Update arg_count to reflect min_args + 1 (for variadic list)
+          arg_count = min_args + 1;
+
+          fprintf(stderr, "[DEBUG OP_CALL variadic] Packed %d args into variadic list, new arg_count=%d\n", extra_args, arg_count);
         }
 
         // Push new call frame
@@ -314,8 +361,10 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
         frame->slot_count = arg_count + 1;  // func + args
 
         // Jump to function code
-        vm->chunk = func->bc_fun.chunk;
-        vm->ip = func->bc_fun.chunk->code;
+        vm->chunk = func->fun.chunk;
+        vm->ip = func->fun.chunk->code;
+
+        fprintf(stderr, "[DEBUG OP_CALL] Jumped to bytecode, first opcode: %d\n", *vm->ip);
 
         break;
       }
@@ -325,6 +374,15 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
 
         // Stack layout: [func, arg1, arg2, ..., argN]
         valk_lval_t* func = valk_bc_vm_peek(vm, arg_count);
+
+        fprintf(stderr, "[DEBUG OP_TAIL_CALL] Stack before tail call (arg_count=%d):\n", arg_count);
+        for (int i = arg_count; i >= 0; i--) {
+          valk_lval_t* item = valk_bc_vm_peek(vm, i);
+          fprintf(stderr, "  [%d]: type=%s\n", i, valk_ltype_name(LVAL_TYPE(item)));
+          if (LVAL_TYPE(item) == LVAL_ERR) {
+            fprintf(stderr, "       error=%s\n", item->str);
+          }
+        }
 
         // Check if it's a builtin function - tail calls to builtins are just regular calls
         if (LVAL_TYPE(func) == LVAL_FUN && func->fun.builtin != NULL) {
@@ -339,23 +397,88 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
             valk_bc_vm_pop(vm);
           }
 
-          // Call builtin
-          valk_lval_t* result = func->fun.builtin(vm->globals, args);
+          // Call builtin with closure environment (if available) or global environment
+          valk_lenv_t* env = func->fun.env ? func->fun.env : vm->globals;
+          valk_lval_t* result = func->fun.builtin(env, args);
 
           // Push result
           valk_bc_vm_push(vm, result);
           break;
         }
 
-        if (LVAL_TYPE(func) != LVAL_BC_FUN) {
-          valk_bc_vm_runtime_error(vm, "Can only call bytecode functions in tail position");
+        if (LVAL_TYPE(func) != LVAL_FUN) {
+          if (LVAL_TYPE(func) == LVAL_ERR) {
+            fprintf(stderr, "[DEBUG OP_TAIL_CALL] Got error instead of function: %s\n", func->str);
+            valk_bc_vm_runtime_error(vm, "Can only call functions in tail position, got Error: %s", func->str);
+          } else {
+            valk_bc_vm_runtime_error(vm, "Can only call functions in tail position, got: %s", valk_ltype_name(LVAL_TYPE(func)));
+          }
           return BC_VM_RUNTIME_ERROR;
         }
 
-        if (func->bc_fun.arity != arg_count) {
-          valk_bc_vm_runtime_error(vm, "Expected %d arguments but got %d",
-                                   func->bc_fun.arity, arg_count);
+        // Check if it has bytecode or is a builtin
+        if (func->fun.chunk == nullptr && func->fun.builtin == nullptr) {
+          valk_bc_vm_runtime_error(vm, "Function has no bytecode or builtin implementation");
           return BC_VM_RUNTIME_ERROR;
+        }
+
+        // Check arity (negative means variadic)
+        if (func->fun.arity >= 0) {
+          // Non-variadic: exact match required
+          if (func->fun.arity != arg_count) {
+            valk_bc_vm_runtime_error(vm, "Expected %d arguments but got %d",
+                                     func->fun.arity, arg_count);
+            return BC_VM_RUNTIME_ERROR;
+          }
+        } else {
+          // Variadic: arity = -(min_args + 1)
+          int min_args = -(func->fun.arity + 1);
+          if (arg_count < min_args) {
+            valk_bc_vm_runtime_error(vm, "Expected at least %d arguments but got %d",
+                                     min_args, arg_count);
+            return BC_VM_RUNTIME_ERROR;
+          }
+        }
+
+        fprintf(stderr, "[DEBUG OP_TAIL_CALL] Tail-calling bytecode function with %d args (arity=%d)\n", arg_count, func->fun.arity);
+
+        // Handle variadic arguments
+        if (func->fun.arity < 0) {
+          // Variadic function: arity = -(min_args + 1)
+          int min_args = -(func->fun.arity + 1);
+          int extra_args = arg_count - min_args;
+
+          fprintf(stderr, "[DEBUG OP_TAIL_CALL variadic] min_args=%d, extra_args=%d\n", min_args, extra_args);
+
+          // Create qexpr containing extra args
+          valk_lval_t* variadic_list = valk_lval_qexpr_empty();
+          for (int i = 0; i < extra_args; i++) {
+            // Args are at: stack_top - extra_args + i
+            valk_lval_t* arg = *(vm->stack_top - extra_args + i);
+            valk_lval_add(variadic_list, arg);
+          }
+
+          // Remove extra args from stack
+          vm->stack_top -= extra_args;
+
+          // Push the variadic list
+          valk_bc_vm_push(vm, variadic_list);
+
+          // Update arg_count to reflect min_args + 1 (for variadic list)
+          arg_count = min_args + 1;
+
+          fprintf(stderr, "[DEBUG OP_TAIL_CALL variadic] Packed %d args into variadic list, new arg_count=%d\n", extra_args, arg_count);
+
+          // Debug: show stack after packing
+          fprintf(stderr, "[DEBUG OP_TAIL_CALL variadic] Stack after packing (arg_count=%d):\n", arg_count);
+          for (int i = arg_count; i >= 0; i--) {
+            valk_lval_t* item = valk_bc_vm_peek(vm, i);
+            fprintf(stderr, "  [%d]: type=%s", i, valk_ltype_name(LVAL_TYPE(item)));
+            if (LVAL_TYPE(item) == LVAL_QEXPR) {
+              fprintf(stderr, " (qexpr with %zu elements)", valk_lval_list_count(item));
+            }
+            fprintf(stderr, "\n");
+          }
         }
 
         // TAIL CALL OPTIMIZATION: Reuse the current frame!
@@ -389,8 +512,10 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
         }
 
         // Jump to function code
-        vm->chunk = func->bc_fun.chunk;
-        vm->ip = func->bc_fun.chunk->code;
+        vm->chunk = func->fun.chunk;
+        vm->ip = func->fun.chunk->code;
+
+        fprintf(stderr, "[DEBUG OP_TAIL_CALL] Jumped to bytecode, first opcode: %d\n", *vm->ip);
 
         break;
       }
