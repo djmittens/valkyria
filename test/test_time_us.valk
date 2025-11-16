@@ -1,0 +1,7 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/define "test1" {true})
+(test/define "test2" {true})
+
+(test/run {})

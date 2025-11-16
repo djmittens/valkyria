@@ -1,0 +1,14 @@
+(printf "Test 1: eval symbol\n")
+(= {result1} (eval {+}))
+(printf "Type: %ld\n" (type result1))
+
+(printf "\nTest 2: eval number\n")
+(= {result2} (eval {42}))
+(printf "Result: %ld\n" result2)
+
+(printf "\nTest 3: eval defined symbol\n")
+(def {true} 1)
+(= {result3} (eval {true}))
+(printf "Result: %ld\n" result3)
+
+(shutdown 0)

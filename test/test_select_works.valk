@@ -1,0 +1,15 @@
+(load "src/prelude.valk")
+
+; Test map directly
+(printf "Test 1: Simple map\n")
+(= {result1} (map (\ {x} {* 2 x}) {1 2 3}))
+(printf "Result: ")
+(print result1)
+
+; Test with a function that returns true
+(printf "\nTest 2: Map with function returning true\n")
+(= {result2} (map (\ {x} {true}) {1 2 3}))
+(printf "Result: ")
+(print result2)
+
+(shutdown 0)

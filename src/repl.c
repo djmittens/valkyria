@@ -40,7 +40,6 @@ int main(int argc, char *argv[]) {
   // Create single global VM for this thread
   valk_bc_vm_t vm;
   valk_bc_vm_init(&vm);
-  vm.globals = env;
   valk_thread_ctx.vm = &vm;
 
   // If we got here, we processed files but did not request exit; drop into REPL.

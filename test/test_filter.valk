@@ -1,0 +1,10 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/define "test1" {true})
+
+(printf "Running test manually:\n")
+(= {t1} (nth 1 *test-registry*))
+(*test-run-one* t1)
+
+(shutdown 0)

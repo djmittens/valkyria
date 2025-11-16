@@ -1,0 +1,14 @@
+(load "src/prelude.valk")
+
+(printf "Test 1: nth with select\n")
+(printf "nth 1: %ld\n" (nth 1 {100 200 300}))
+(printf "nth 2: %ld\n" (nth 2 {100 200 300}))
+(printf "nth 3: %ld\n" (nth 3 {100 200 300}))
+
+(printf "\nTest 2: select directly\n")
+(= {result} (select
+  {(== 1 1) 42}
+  {otherwise 99}))
+(printf "Result: %ld\n" result)
+
+(shutdown 0)

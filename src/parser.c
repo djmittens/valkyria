@@ -337,6 +337,9 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals, valk_lval_
   valk_lval_t* func = valk_lval_bc_fun(chunk, arity, "<lambda>");
   // Set closure environment
   func->fun.env = env;
+  // Save formals for eval to access parameter names
+  func->fun.formals = formals;
+  func->fun.body = body;
   return func;
 }
 
@@ -885,8 +888,8 @@ static valk_lval_t* valk_lval_eval_bytecode(valk_lenv_t* env, valk_lval_t* lval)
     return valk_lval_err("No VM available in thread context");
   }
 
-  // Run the compiled chunk - VM operates as a state machine
-  valk_bc_vm_result_e result = valk_bc_vm_run(vm, chunk);
+  // Run the compiled chunk - VM operates as a state machine with the given environment
+  valk_bc_vm_result_e result = valk_bc_vm_run(vm, chunk, env);
 
   // Get result from stack
   valk_lval_t* ret_val;

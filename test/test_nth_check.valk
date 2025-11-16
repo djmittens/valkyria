@@ -1,0 +1,7 @@
+(load "src/prelude.valk")
+
+(printf "Calling nth 1 {100 200 300}\n")
+(= {result} (nth 1 {100 200 300}))
+(printf "Result: %ld\n" result)
+
+(shutdown 0)

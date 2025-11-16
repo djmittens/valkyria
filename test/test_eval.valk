@@ -1,0 +1,15 @@
+(load "src/prelude.valk")
+
+(printf "Test 1: direct eval\n")
+(= {result1} (eval {(+ 1 2 3)}))
+(printf "Result: %ld\n" result1)
+
+(printf "\nTest 2: eval with printf\n")
+(= {result2} (eval {(printf "HELLO FROM EVAL\n")}))
+(printf "After eval\n")
+
+(printf "\nTest 3: eval stored in variable\n")
+(= {expr} {(printf "FROM VARIABLE\n")})
+(= {result3} (eval expr))
+
+(shutdown 0)

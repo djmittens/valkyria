@@ -1,0 +1,23 @@
+(load "src/prelude.valk")
+
+(printf "Test 1: Simple nth\n")
+(= {mylist} {{a b} {c d}})
+(printf "List length: %ld\n" (len mylist))
+(= {first} (nth 1 mylist))
+(printf "First element length: %ld\n" (len first))
+
+(printf "\nTest 2: nth on nested list\n")
+(= {test-data} {{"test1" {(printf "BODY1\n")}}})
+(printf "Test data length: %ld\n" (len test-data))
+(= {item} (nth 1 test-data))
+(printf "Item length: %ld\n" (len item))
+(= {name} (nth 1 item))
+(= {body} (nth 2 item))
+(printf "Name: %s\n" name)
+(printf "Body type: %ld\n" (type body))
+(printf "Body length: %ld\n" (len body))
+
+(printf "\nTest 3: Eval the body\n")
+(eval body)
+
+(shutdown 0)

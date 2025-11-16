@@ -1,0 +1,19 @@
+(load "src/prelude.valk")
+
+(print "Test: if with do and def")
+(def {test-fn} (\ {mylist} {
+  if (== mylist nil)
+    {do (print "Is nil") 0}
+    {do
+      (print "Not nil, calling fst")
+      (def {myfirst} (fst mylist))
+      (print "Got myfirst:")
+      (print myfirst)
+      myfirst
+    }
+}))
+
+(print "Calling with nil:")
+(print (test-fn nil))
+(print "Calling with {10 20 30}:")
+(print (test-fn {10 20 30}))

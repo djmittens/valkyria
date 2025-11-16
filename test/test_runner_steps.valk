@@ -1,0 +1,20 @@
+(load "src/prelude.valk")
+
+; Define debug-select step by step
+(printf "Step 1: Define debug-select\n")
+(fun {debug-select & cs} {
+  do
+    (= {first_cs} (fst cs))
+    (= {cond} (fst first_cs))
+    (if cond {(snd first_cs)} {999})
+})
+
+(printf "Step 2: Test simple call\n")
+(= {r1} (debug-select {true 42}))
+(printf "r1: %ld\n" r1)
+
+(printf "Step 3: Test with evaluated condition\n")
+(= {r2} (debug-select {(== 1 1) 100}))
+(printf "r2: %ld\n" r2)
+
+(shutdown 0)

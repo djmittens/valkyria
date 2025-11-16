@@ -1,8 +1,18 @@
-; Check fst implementation
 (load "src/prelude.valk")
 
-(print "Testing fst {5}:")
-(print (fst {5}))
+(printf "Test 1: fst on simple qexpr\n")
+(= {simple} {100 200})
+(printf "Simple: ")
+(print simple)
+(= {result1} (fst simple))
+(printf "Result: %ld\n" result1)
 
-(print "Testing (eval (head {5})):")
-(print (eval (head {5})))
+(printf "\nTest 2: fst on qexpr with sexpr\n")
+(= {with_sexpr} {(== 1 1) 42})
+(printf "With sexpr: ")
+(print with_sexpr)
+(printf "About to call fst...\n")
+(= {result2} (fst with_sexpr))
+(printf "Result: %ld\n" result2)
+
+(shutdown 0)

@@ -44,7 +44,7 @@ static void test_vm_const(VALK_TEST_ARGS()) {
   valk_bc_vm_t vm;
   valk_bc_vm_init(&vm);
 
-  valk_bc_vm_result_e result = valk_bc_vm_run(&vm, &chunk);
+  valk_bc_vm_result_e result = valk_bc_vm_run(&vm, &chunk, valk_lenv_empty());
 
   VALK_TEST_ASSERT(result == BC_VM_OK, "VM should execute successfully");
   VALK_TEST_ASSERT(vm.stack_top == vm.stack + 1, "Should have 1 value on stack");
@@ -81,7 +81,7 @@ static void test_vm_add(VALK_TEST_ARGS()) {
   valk_bc_vm_t vm;
   valk_bc_vm_init(&vm);
 
-  valk_bc_vm_result_e result = valk_bc_vm_run(&vm, &chunk);
+  valk_bc_vm_result_e result = valk_bc_vm_run(&vm, &chunk, valk_lenv_empty());
 
   VALK_TEST_ASSERT(result == BC_VM_OK, "VM should execute successfully");
   VALK_TEST_ASSERT(vm.stack_top == vm.stack + 1, "Should have 1 value on stack");
@@ -120,7 +120,7 @@ static void test_vm_compare(VALK_TEST_ARGS()) {
   valk_bc_vm_init(&vm);
 
   printf("Expected output: (none, result on stack)\n");
-  valk_bc_vm_result_e result = valk_bc_vm_run(&vm, &chunk);
+  valk_bc_vm_result_e result = valk_bc_vm_run(&vm, &chunk, valk_lenv_empty());
 
   VALK_TEST_ASSERT(result == BC_VM_OK, "VM should execute successfully");
   VALK_TEST_ASSERT(vm.stack[0]->num == 1, "5 > 3 should be true (1)");

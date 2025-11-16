@@ -1,16 +1,10 @@
 (load "src/prelude.valk")
 
-(printf "Test 1: eval {10}\n")
-(= {r1} (eval {10}))
-(printf "r1 = ")
-(print r1)
+(printf "Test: eval simple values\n")
 
-(printf "\nTest 2: if 1 {10} {20}\n")
-(= {r2} (if 1 {10} {20}))
-(printf "r2 = ")
-(print r2)
+(= {x} 42)
+(printf "x = %ld\n" x)
+(printf "eval {x} = %ld\n" (eval {x}))
+(printf "eval {42} = %ld\n" (eval {42}))
 
-(printf "\nTest 3: fst {10 20 30}\n")
-(= {r3} (fst {10 20 30}))
-(printf "r3 = ")
-(print r3)
+(shutdown 0)

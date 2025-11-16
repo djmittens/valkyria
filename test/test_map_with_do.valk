@@ -1,0 +1,33 @@
+(load "src/prelude.valk")
+
+; Redefine select without varargs for testing
+(fun {select-novar branches} {
+  if (== branches nil)
+    {error "No selection"}
+    {do
+      (= {first_branch} (fst branches))
+      (= {cond} (fst first_branch))
+      (if cond
+        {snd first_branch}
+        {select-novar (tail branches)})
+    }
+})
+
+; Redefine nth to use select-novar
+(fun {nth2 n _l} {
+  select-novar {
+    {(<= n 0) (error "bad index")}
+    {(== n 1) (fst _l)}
+    {otherwise (nth2 (- n 1) (tail _l))}
+  }
+})
+
+(printf "Test nth2:\n")
+(= {result} (nth2 1 {100 200 300}))
+(printf "Result: %ld\n" result)
+
+(printf "\nTest nth2 with index 2:\n")
+(= {result2} (nth2 2 {100 200 300}))
+(printf "Result: %ld\n" result2)
+
+(shutdown 0)

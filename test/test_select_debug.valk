@@ -1,6 +1,17 @@
 (load "src/prelude.valk")
 
-(printf "Calling select with one match\n")
-(= {result} (select { 1 42 }))
-(printf "result = ")
-(print result)
+(printf "Testing select:\n")
+
+(= {result} (select {true 100} {otherwise 999}))
+(printf "select with true: %ld\n" result)
+
+(fun {test n} {
+  (select
+    {(== n 1) 100}
+    {otherwise 999})
+})
+
+(= {r1} (test 1))
+(printf "test 1: %ld\n" r1)
+
+(shutdown 0)

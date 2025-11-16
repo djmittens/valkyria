@@ -1,0 +1,8 @@
+(load "src/prelude.valk")
+
+(printf "Before nth\n")
+(= {result} (nth 1 {100 200}))
+(printf "After nth, type check\n")
+(printf "Result type: %ld\n" (type result))
+
+(shutdown 0)

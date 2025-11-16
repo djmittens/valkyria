@@ -1,0 +1,7 @@
+(load "src/prelude.valk")
+
+(= {n} 1)
+(printf "n = %ld\n" n)
+(printf "select result: %ld\n" (select {(== n 1) 100} {otherwise 999}))
+
+(shutdown 0)

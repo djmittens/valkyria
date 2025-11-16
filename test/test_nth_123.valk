@@ -1,0 +1,10 @@
+(load "src/prelude.valk")
+
+(printf "Calling: (nth 1 {1 2 3})\n")
+(= {result} (nth 1 {1 2 3}))
+(printf "Type of result: checking...\n")
+(if (== result 1)
+  {printf "SUCCESS: result == 1\n"}
+  {printf "FAIL: result != 1\n"})
+
+(shutdown 0)

@@ -1,0 +1,14 @@
+(load "src/prelude.valk")
+
+(fun {test-eval n} {
+  do
+    (printf "n = %ld\n" n)
+    (printf "Testing eval of {n}:\n")
+    (= {result} (eval {n}))
+    (printf "Result: %ld\n" result)
+})
+
+(printf "Calling test-eval:\n")
+(test-eval 42)
+
+(shutdown 0)

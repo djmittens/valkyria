@@ -21,7 +21,7 @@
 ; Tail-recursive helper to print n dots
 (fun {*test-pad-dots-helper* n} {
   if (<= n 0)
-    {{}}
+    {true}
     {do (printf ".") (*test-pad-dots-helper* (- n 1))}
 })
 
@@ -55,7 +55,8 @@
       {(def {*test-passed*} (+ *test-passed* 1))}
       {(def {*test-failed*} (+ *test-failed* 1))})
 
-    result
+    ; Return true to indicate test ran (even if it failed)
+    true
 })
 
 (fun {test/run & _} {
@@ -64,9 +65,26 @@
     (def {*test-failed*} 0)
     (= {total} (len *test-registry*))
 
+    ; Check if we have any tests to run
+    (if (== total 0)
+      {do
+        (printf "❌ No tests registered!\n")
+        (shutdown 1)}
+      {true}
+    )
+
     (printf "🧪 [%ld/%ld] Valkyria Test Suite\n" total total)
 
-    (map *test-run-one* *test-registry*)
+    ; Run tests and collect results
+    (= {run-results} (map *test-run-one* *test-registry*))
+    (= {tests-executed} (len run-results))
+
+    ; Check if all tests executed
+    (if (!= tests-executed total)
+      {do
+        (printf "\n❌ ERROR: Only %ld/%ld tests executed!\n" tests-executed total)
+        (shutdown 1)}
+      {true})
 
     ; Print summary
     (printf "\n🏁 Test Results: ")

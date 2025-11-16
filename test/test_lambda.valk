@@ -1,0 +1,8 @@
+(printf "Testing lambda\n")
+
+(def {add} (\ {a b} (+ a b)))
+
+(= {result} (add 1 2))
+(printf "add 1 2 = %ld\n" result)
+
+(shutdown 0)

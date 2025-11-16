@@ -16,10 +16,9 @@ typedef enum {
   OP_FALSE,         // Push false (0)
 
   // Variables
-  OP_GET_LOCAL,     // Push local variable [slot:u8]
-  OP_SET_LOCAL,     // Pop and store to local [slot:u8]
-  OP_GET_GLOBAL,    // Push global variable [name_index:u16]
-  OP_SET_GLOBAL,    // Pop and store to global [name_index:u16]
+  OP_GET,           // Push variable [name_index:u16]
+  OP_LET,           // Pop and store to local environment [name_index:u16]
+  OP_DEF,           // Pop and store to global environment [name_index:u16]
 
   // Arithmetic - pop b, pop a, push result
   OP_ADD,           // a + b

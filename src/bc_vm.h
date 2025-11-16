@@ -14,6 +14,7 @@ typedef struct {
   uint8_t* ip;             // Instruction pointer (return address)
   valk_lval_t** slots;     // Pointer to this frame's locals on the stack
   size_t slot_count;       // Number of local slots in this frame
+  valk_lenv_t* env;        // Environment for this frame (function's closure env)
 } valk_bc_call_frame_t;
 
 // Virtual machine state
@@ -43,11 +44,11 @@ void valk_bc_vm_init(valk_bc_vm_t* vm);
 // Free VM resources
 void valk_bc_vm_free(valk_bc_vm_t* vm);
 
-// Execute a chunk of bytecode
-valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk);
+// Execute a chunk of bytecode with given environment
+valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk, valk_lenv_t* env);
 
 // Execute a chunk and return the top stack value (for nested execution)
-valk_lval_t* valk_bc_vm_execute_chunk(valk_bc_vm_t* vm, valk_chunk_t* chunk);
+valk_lval_t* valk_bc_vm_execute_chunk(valk_bc_vm_t* vm, valk_chunk_t* chunk, valk_lenv_t* env);
 
 // Push/pop stack operations
 void valk_bc_vm_push(valk_bc_vm_t* vm, valk_lval_t* value);

@@ -116,16 +116,9 @@ static void compile_string(valk_compiler_t* c, valk_lval_t* expr) {
 static void compile_symbol(valk_compiler_t* c, valk_lval_t* expr) {
   const char* name = expr->str;
 
-  // Try local variables first
-  int local = valk_resolve_local(c, name);
-  if (local != -1) {
-    valk_emit_bytes(c, OP_GET_LOCAL, (uint8_t)local);
-    return;
-  }
-
-  // Global variable
+  // Use unified OP_GET for all variable lookups
   size_t name_idx = valk_chunk_add_constant(c->chunk, valk_lval_sym(name));
-  valk_emit_byte(c, OP_GET_GLOBAL);
+  valk_emit_byte(c, OP_GET);
   valk_emit_byte(c, (name_idx >> 8) & 0xFF);
   valk_emit_byte(c, name_idx & 0xFF);
 }
@@ -278,9 +271,9 @@ static void compile_if(valk_compiler_t* c, valk_lval_t* expr, bool is_tail) {
       // Single element qexpr {x} just evaluates to x
       valk_compile_expr(c, valk_lval_list_nth(then_branch, 0), is_tail);
     } else {
-      // Multi-element qexpr {a b c} converts to sexpr (a b c) and evaluates
-      valk_compile_expr(c, then_branch, false);
-      valk_emit_byte(c, OP_EVAL);
+      // Multi-element qexpr {a b c} converts to sexpr (a b c) and compiles it
+      valk_lval_t* as_sexpr = valk_qexpr_to_sexpr(then_branch);
+      valk_compile_expr(c, as_sexpr, is_tail);
     }
   } else {
     valk_compile_expr(c, then_branch, is_tail);
@@ -303,9 +296,9 @@ static void compile_if(valk_compiler_t* c, valk_lval_t* expr, bool is_tail) {
       // Single element qexpr {x} just evaluates to x
       valk_compile_expr(c, valk_lval_list_nth(else_branch, 0), is_tail);
     } else {
-      // Multi-element qexpr {a b c} converts to sexpr (a b c) and evaluates
-      valk_compile_expr(c, else_branch, false);
-      valk_emit_byte(c, OP_EVAL);
+      // Multi-element qexpr {a b c} converts to sexpr (a b c) and compiles it
+      valk_lval_t* as_sexpr = valk_qexpr_to_sexpr(else_branch);
+      valk_compile_expr(c, as_sexpr, is_tail);
     }
   } else {
     valk_compile_expr(c, else_branch, is_tail);
@@ -460,13 +453,13 @@ static void compile_sexpr(valk_compiler_t* c, valk_lval_t* expr, bool is_tail) {
         // Compile the value
         valk_compile_expr(c, val, false);
 
-        // Emit SET_GLOBAL with symbol name
+        // Emit OP_DEF with symbol name
         size_t name_idx = valk_chunk_add_constant(c->chunk, sym);
-        valk_emit_byte(c, OP_SET_GLOBAL);
+        valk_emit_byte(c, OP_DEF);
         valk_emit_byte(c, (name_idx >> 8) & 0xFF);
         valk_emit_byte(c, name_idx & 0xFF);
 
-        // Pop the value (OP_SET_GLOBAL leaves it on stack)
+        // Pop the value (OP_DEF leaves it on stack)
         valk_emit_byte(c, OP_POP);
       }
 

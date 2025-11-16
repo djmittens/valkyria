@@ -1,0 +1,23 @@
+(load "src/prelude.valk")
+
+; Define identity function
+(fun {id x} {x})
+
+(printf "Test 1: unpack identity on single element\n")
+(= {mylist} {100 200 300})
+(= {first_qexpr} (head mylist))
+(printf "First as qexpr: ")
+(print first_qexpr)
+(= {first_val} (unpack id first_qexpr))
+(printf "First unpacked: %ld\n" first_val)
+
+(printf "\nTest 2: Redefine fst\n")
+(fun {newfst _l} {unpack id (head _l)})
+(= {result} (newfst {100 200 300}))
+(printf "Result: %ld\n" result)
+
+(printf "\nTest 3: Test in select\n")
+(= {result2} (select {(== 1 1) 500}))
+(printf "Result: %ld\n" result2)
+
+(shutdown 0)

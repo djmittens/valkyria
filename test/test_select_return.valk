@@ -1,0 +1,17 @@
+(load "src/prelude.valk")
+
+(printf "Test 1: What does select return?\n")
+(= {result} (select {true 42}))
+(printf "Type: %ld\n" (type result))
+(printf "Value: %ld\n" result)
+
+(printf "\nTest 2: Select with expression\n")
+(= {result2} (select {true (+ 1 2 3)}))
+(printf "Value: %ld\n" result2)
+
+(printf "\nTest 3: Select returning qexpr\n")
+(= {result3} (select {true {10 20 30}}))
+(printf "Type: %ld, Len: %ld\n" (type result3) (len result3))
+(print result3)
+
+(shutdown 0)

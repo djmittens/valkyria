@@ -1,0 +1,18 @@
+(load "src/prelude.valk")
+
+(printf "Manual extraction:\n")
+(= {myqexpr} {100})
+(printf "Qexpr: ")
+(print myqexpr)
+(printf "Type: %ld, Len: %ld\n" (type myqexpr) (len myqexpr))
+
+; Try different approaches
+(printf "\nApproach 1: eval on sexpr form\n")
+; This is what eval does - convert to sexpr and evaluate
+; But this fails for non-function values
+
+(printf "\nApproach 2: list syntax\n")
+(= {extracted} (eval (list head myqexpr)))
+(printf "Extracted: %ld\n" extracted)
+
+(shutdown 0)

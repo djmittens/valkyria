@@ -1,0 +1,33 @@
+(load "src/prelude.valk")
+
+; Simplified test
+(def {*test-registry*} {})
+
+(fun {test/define name body} {
+  (def {*test-registry*} (join *test-registry* (list (list name body))))
+})
+
+(fun {*test-run-one* test} {
+  do
+    (= {test-name} (nth 1 test))
+    (= {test-body} (nth 2 test))
+    (printf "Running: %s\n" test-name)
+    (= {result} (eval test-body))
+    (printf "Result: %ld\n" result)
+    result
+})
+
+(test/define "test1" {(printf "TEST1\n") true})
+(test/define "test2" {(printf "TEST2\n") true})
+
+(printf "Registry has %ld tests\n" (len *test-registry*))
+
+; Try running without map first
+(printf "Running test 1 directly:\n")
+(*test-run-one* (nth 1 *test-registry*))
+
+(printf "\nNow trying with map:\n")
+(map *test-run-one* *test-registry*)
+
+(printf "\nDone\n")
+(shutdown 0)

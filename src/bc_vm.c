@@ -72,9 +72,19 @@ void valk_bc_vm_runtime_error(valk_bc_vm_t* vm, const char* format, ...) {
   vm->stack_top = vm->stack;
 }
 
-valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
+valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk, valk_lenv_t* env) {
   vm->chunk = chunk;
   vm->ip = chunk->code;
+
+  // Create an initial frame with the given environment if not already in a call
+  if (vm->frame_count == 0 && env) {
+    valk_bc_call_frame_t* frame = &vm->frames[vm->frame_count++];
+    frame->chunk = NULL;  // No return point for top-level
+    frame->ip = NULL;
+    frame->slots = vm->stack;  // Empty stack
+    frame->slot_count = 0;
+    frame->env = env;
+  }
 
   for (;;) {
 #ifdef VALK_DEBUG_TRACE_EXECUTION
@@ -119,46 +129,19 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
         valk_bc_vm_push(vm, valk_lval_num(0));
         break;
 
-      case OP_GET_LOCAL: {
-        uint8_t slot = READ_BYTE();
-        // Get from current frame's slots
-        if (vm->frame_count > 0) {
-          valk_bc_call_frame_t* frame = &vm->frames[vm->frame_count - 1];
-          // slot 0 is the function itself, slot 1+ are arguments
-          valk_lval_t* value = frame->slots[slot + 1];
-          // Check if local value is an error
-          if (LVAL_TYPE(value) == LVAL_ERR) {
-            valk_bc_vm_push(vm, value);
-            return BC_VM_RUNTIME_ERROR;
-          }
-          valk_bc_vm_push(vm, value);
-        } else {
-          valk_bc_vm_runtime_error(vm, "No call frame for local access");
-          return BC_VM_RUNTIME_ERROR;
-        }
-        break;
-      }
-
-      case OP_SET_LOCAL: {
-        uint8_t slot = READ_BYTE();
-        valk_lval_t* value = valk_bc_vm_peek(vm, 0);  // Don't pop yet
-        if (vm->frame_count > 0) {
-          valk_bc_call_frame_t* frame = &vm->frames[vm->frame_count - 1];
-          frame->slots[slot + 1] = value;
-        } else {
-          valk_bc_vm_runtime_error(vm, "No call frame for local access");
-          return BC_VM_RUNTIME_ERROR;
-        }
-        break;
-      }
-
-      case OP_GET_GLOBAL: {
+      case OP_GET: {
         valk_lval_t* name = READ_CONSTANT();
         if (LVAL_TYPE(name) != LVAL_SYM) {
-          valk_bc_vm_runtime_error(vm, "Global name must be a symbol");
+          valk_bc_vm_runtime_error(vm, "Variable name must be a symbol");
           return BC_VM_RUNTIME_ERROR;
         }
-        valk_lval_t* value = valk_lenv_get(vm->globals, name);
+        // Get environment from current frame, fall back to globals
+        valk_lenv_t* env = vm->globals;
+        if (vm->frame_count > 0) {
+          env = vm->frames[vm->frame_count - 1].env;
+        }
+
+        valk_lval_t* value = valk_lenv_get(env, name);
         // Check if variable lookup returned an error
         if (LVAL_TYPE(value) == LVAL_ERR) {
           valk_bc_vm_push(vm, value);
@@ -168,14 +151,39 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
         break;
       }
 
-      case OP_SET_GLOBAL: {
+      case OP_LET: {
         valk_lval_t* name = READ_CONSTANT();
         if (LVAL_TYPE(name) != LVAL_SYM) {
-          valk_bc_vm_runtime_error(vm, "Global name must be a symbol");
+          valk_bc_vm_runtime_error(vm, "Variable name must be a symbol");
           return BC_VM_RUNTIME_ERROR;
         }
         valk_lval_t* value = valk_bc_vm_peek(vm, 0);  // Don't pop
-        valk_lenv_def(vm->globals, name, value);
+
+        // Put in current frame's environment, fall back to globals
+        valk_lenv_t* env = vm->globals;
+        if (vm->frame_count > 0) {
+          env = vm->frames[vm->frame_count - 1].env;
+        }
+
+        valk_lenv_put(env, name, value);
+        break;
+      }
+
+      case OP_DEF: {
+        valk_lval_t* name = READ_CONSTANT();
+        if (LVAL_TYPE(name) != LVAL_SYM) {
+          valk_bc_vm_runtime_error(vm, "Variable name must be a symbol");
+          return BC_VM_RUNTIME_ERROR;
+        }
+        valk_lval_t* value = valk_bc_vm_peek(vm, 0);  // Don't pop
+
+        // Def in global environment (walk up to root)
+        valk_lenv_t* env = vm->globals;
+        if (vm->frame_count > 0) {
+          env = vm->frames[vm->frame_count - 1].env;
+        }
+
+        valk_lenv_def(env, name, value);
         break;
       }
 
@@ -390,6 +398,34 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
         frame->slots = vm->stack_top - arg_count - 1;  // Point to func slot
         frame->slot_count = arg_count + 1;  // func + args
 
+        // Create local environment for parameters
+        valk_lenv_t* local_env = valk_lenv_empty();
+        local_env->parent = func->fun.env;  // Parent is the closure environment
+
+        // Bind parameters to local environment
+        if (func->fun.formals) {
+          valk_lval_t* formals = func->fun.formals;
+          size_t param_idx = 0;
+
+          for (size_t i = 0; i < valk_lval_list_count(formals); i++) {
+            valk_lval_t* formal = valk_lval_list_nth(formals, i);
+
+            // Skip variadic marker
+            if (LVAL_TYPE(formal) == LVAL_SYM && strcmp(formal->str, "&") == 0) {
+              continue;
+            }
+
+            // Bind parameter
+            if (LVAL_TYPE(formal) == LVAL_SYM && param_idx < arg_count) {
+              valk_lval_t* arg_value = frame->slots[param_idx + 1];  // +1 to skip function
+              valk_lenv_put(local_env, formal, arg_value);
+              param_idx++;
+            }
+          }
+        }
+
+        frame->env = local_env;  // Set local environment for this call
+
         // Jump to function code
         vm->chunk = func->fun.chunk;
         vm->ip = func->fun.chunk->code;
@@ -499,40 +535,82 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
           arg_count = min_args + 1;
         }
 
-        // TAIL CALL OPTIMIZATION: Reuse the current frame!
-        // Instead of pushing a new frame, we:
-        // 1. Copy arguments to the current frame's base
-        // 2. Reset IP to function start
-        // 3. Keep frame_count the same (O(1) space!)
+        // TAIL CALL OPTIMIZATION: Loop within the same frame
+        // Instead of creating a new frame, we:
+        // 1. Keep the same frame and environment (preserves access to all vars)
+        // 2. The new function and args are already on the stack
+        // 3. Update frame->slots to point to the new function
+        // 4. Loop by jumping to the new function's code
+        // This achieves O(1) space while preserving environment accessibility
 
         if (vm->frame_count == 0) {
-          // Top-level tail call - treat as regular call
+          // Top-level tail call - create initial frame
           valk_bc_call_frame_t* frame = &vm->frames[vm->frame_count++];
           frame->chunk = vm->chunk;  // Save current chunk
           frame->ip = vm->ip;
           frame->slots = vm->stack_top - arg_count - 1;
           frame->slot_count = arg_count + 1;
+          frame->env = func->fun.env;
+
+          // Jump to function code
+          vm->chunk = func->fun.chunk;
+          vm->ip = func->fun.chunk->code;
         } else {
-          // Reuse current frame
+          // TCO: Keep the same frame, just loop with new function
           valk_bc_call_frame_t* frame = &vm->frames[vm->frame_count - 1];
 
-          // Copy func and args to current frame's slots
-          valk_lval_t** src = vm->stack_top - arg_count - 1;
+          // Stack layout before TCO:
+          // [... old_func old_arg1 old_arg2 ... new_func new_arg1 new_arg2]
+          //      ^frame->slots                 ^stack_top - arg_count - 1
+          //
+          // We need to move the new function and args to where the old function was
+
+          valk_lval_t** new_func_pos = vm->stack_top - arg_count - 1;
+
+          // Move new function and args to the frame's base position
           for (int i = 0; i <= arg_count; i++) {
-            frame->slots[i] = src[i];
+            frame->slots[i] = new_func_pos[i];
           }
 
-          // Reset stack top to just after the arguments
+          // Reset stack top to just after the new arguments
           vm->stack_top = frame->slots + arg_count + 1;
 
-          // Note: We DON'T save return address - we'll return to the
-          // same place the current function would have returned to.
-          // This is the key to O(1) space!
-        }
+          // Update slot count
+          frame->slot_count = arg_count + 1;
 
-        // Jump to function code
-        vm->chunk = func->fun.chunk;
-        vm->ip = func->fun.chunk->code;
+          // Create NEW local environment for the new function's parameters
+          // Keep the SAME parent (closure env) to preserve environment chain
+          valk_lenv_t* local_env = valk_lenv_empty();
+          local_env->parent = func->fun.env;  // Parent is new function's closure environment
+
+          // Bind new function's parameters to local environment
+          if (func->fun.formals) {
+            valk_lval_t* formals = func->fun.formals;
+            size_t param_idx = 0;
+
+            for (size_t i = 0; i < valk_lval_list_count(formals); i++) {
+              valk_lval_t* formal = valk_lval_list_nth(formals, i);
+
+              // Skip variadic marker
+              if (LVAL_TYPE(formal) == LVAL_SYM && strcmp(formal->str, "&") == 0) {
+                continue;
+              }
+
+              // Bind parameter
+              if (LVAL_TYPE(formal) == LVAL_SYM && param_idx < arg_count) {
+                valk_lval_t* arg_value = frame->slots[param_idx + 1];  // +1 to skip function
+                valk_lenv_put(local_env, formal, arg_value);
+                param_idx++;
+              }
+            }
+          }
+
+          frame->env = local_env;  // Update to new local environment
+
+          // Loop: Jump to new function's bytecode
+          vm->chunk = func->fun.chunk;
+          vm->ip = func->fun.chunk->code;
+        }
 
         break;
       }
@@ -593,9 +671,13 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
         // Mark return value as escaping (critical for memory safety)
         result->flags |= LVAL_FLAG_ESCAPES;
 
-        // If no frames, we're done (top-level return)
-        if (vm->frame_count == 0) {
+        // If no frames or returning from initial frame, we're done
+        if (vm->frame_count == 0 || (vm->frame_count == 1 && vm->frames[0].chunk == NULL)) {
           valk_bc_vm_push(vm, result);
+          // Clean up the initial frame if it exists
+          if (vm->frame_count > 0) {
+            vm->frame_count--;
+          }
           return BC_VM_OK;
         }
 
@@ -637,14 +719,14 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
 
 // Execute a chunk and return the result value
 // This is used for nested execution (e.g., compiling and running thunks)
-valk_lval_t* valk_bc_vm_execute_chunk(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
+valk_lval_t* valk_bc_vm_execute_chunk(valk_bc_vm_t* vm, valk_chunk_t* chunk, valk_lenv_t* env) {
   // Save current VM state
   valk_chunk_t* saved_chunk = vm->chunk;
   uint8_t* saved_ip = vm->ip;
   valk_lval_t** saved_stack_top = vm->stack_top;
 
   // Execute the new chunk
-  valk_bc_vm_result_e result = valk_bc_vm_run(vm, chunk);
+  valk_bc_vm_result_e result = valk_bc_vm_run(vm, chunk, env);
 
   // Get the result from the stack (should be top value)
   valk_lval_t* return_value = NULL;

@@ -1,0 +1,15 @@
+(load "src/prelude.valk")
+
+(printf "Test: select with function parameters\n")
+(fun {test-select n} {
+  select
+    {(== n 1) 100}
+    {(== n 2) 200}
+    {otherwise 999}
+})
+
+(printf "test-select 1: %ld\n" (test-select 1))
+(printf "test-select 2: %ld\n" (test-select 2))
+(printf "test-select 3: %ld\n" (test-select 3))
+
+(shutdown 0)

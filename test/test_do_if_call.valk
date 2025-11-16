@@ -1,0 +1,31 @@
+(load "src/prelude.valk")
+
+; Redefine select with debug output
+(fun {debug-select & cs} {
+  do
+    (printf "DEBUG: select called with %ld branches\n" (len cs))
+    (if (== cs nil)
+      {do (printf "DEBUG: No selection\n") (error "No selection found")}
+      {do
+        (printf "DEBUG: Checking first branch\n")
+        (= {first_cs} (fst cs))
+        (printf "DEBUG: First branch type: %ld, len: %ld\n" (type first_cs) (len first_cs))
+        (= {cond} (fst first_cs))
+        (printf "DEBUG: Condition: %ld\n" cond)
+        (if cond
+          {do
+            (printf "DEBUG: Condition true, returning value\n")
+            (snd first_cs)
+          }
+          {do
+            (printf "DEBUG: Condition false, recursing\n")
+            (unpack debug-select (tail cs))
+          })
+      })
+})
+
+(printf "Test: Call debug-select\n")
+(= {result} (debug-select {(== 1 1) 42} {otherwise 999}))
+(printf "Result: %ld\n" result)
+
+(shutdown 0)

@@ -160,7 +160,6 @@ int main(int argc, const char **argv) {
   valk_lval_t *ast = valk_parse_file("src/prelude.valk");
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);  // load the builtins
-  vm.globals = env;  // Set VM globals to use the same environment
 
   // Evaluate prelude sequentially (program semantics)
   size_t expr_count = 0;

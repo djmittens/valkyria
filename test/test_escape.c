@@ -209,8 +209,6 @@ int main(int argc, const char** argv) {
   // Initialize global VM for bytecode execution
   valk_bc_vm_t vm;
   valk_bc_vm_init(&vm);
-  vm.globals = valk_lenv_empty();
-  valk_lenv_builtins(vm.globals);
   valk_thread_ctx.vm = &vm;
 
   valk_test_suite_t* suite = valk_testsuite_empty(__FILE__);

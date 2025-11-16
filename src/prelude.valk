@@ -38,14 +38,17 @@
 ; list functions and shit
 ; LISTS ARE 1 BASED LIKE LUA, CAUSE FUCK YEAH
 
+; Identity function for unpacking
+(fun {id x} {x})
+
 ; Return first item in the list
-(fun {fst _l} {eval (head _l) })
+(fun {fst _l} {unpack id (head _l)})
 
 ; Return the second item in the list
-(fun {snd _y} {eval (head (tail _y)) })
+(fun {snd _y} {unpack id (head (tail _y))})
 
 ; Return the third item in the list
-(fun {trd l} {eval (head (tail (tail l))) })
+(fun {trd l} {unpack id (head (tail (tail l)))})
 
 ; length of the list (there is a builtin for that??)
 ; i need to draw a line here, the builtin would be way more performant

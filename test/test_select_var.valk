@@ -1,0 +1,14 @@
+(load "src/prelude.valk")
+
+(printf "Test with variable assignment:\n")
+
+(fun {test-select n} {
+  select
+    {(== n 1) 100}
+    {otherwise 999}
+})
+
+(= {r1} (test-select 1))
+(printf "r1 = %ld\n" r1)
+
+(shutdown 0)

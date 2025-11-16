@@ -1,0 +1,5 @@
+(load "src/prelude.valk")
+
+(printf "Test fst: %ld\n" (fst {100 200 300}))
+
+(shutdown 0)

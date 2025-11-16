@@ -1,18 +1,21 @@
 (load "src/prelude.valk")
 
-(printf "Test 1: simple select\n")
-(= {r1} (select
-  { (== 1 1) 42 }
-  { otherwise 99 }
-))
-(printf "r1 = ")
-(print r1)
+(printf "Test 1: Simple select with true\n")
+(= {result} (select {true 100}))
+(printf "Result: %ld\n" result)
 
-(printf "\nTest 2: select second option\n")
-(= {r2} (select
-  { (== 1 2) 42 }
-  { (== 2 2) 100 }
-  { otherwise 99 }
-))
-(printf "r2 = ")
-(print r2)
+(printf "\nTest 2: Select with condition\n")
+(= {result2} (select {(== 1 1) 200}))
+(printf "Result: %ld\n" result2)
+
+(printf "\nTest 3: Select with two branches\n")
+(= {result3} (select {(== 1 2) 300} {otherwise 400}))
+(printf "Result: %ld\n" result3)
+
+(printf "\nTest 4: Test fst and snd\n")
+(= {pair} {true 500})
+(printf "Pair length: %ld\n" (len pair))
+(printf "Fst: %ld\n" (fst pair))
+(printf "Snd: %ld\n" (snd pair))
+
+(shutdown 0)
