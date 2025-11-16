@@ -1,0 +1,5 @@
+; Test lambda builtin directly
+(print "Creating lambda")
+(def {mylambda} (\ {x} {(+ x 1)}))
+(print "Lambda created")
+(print (mylambda 41))

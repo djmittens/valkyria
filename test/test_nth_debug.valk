@@ -1,0 +1,14 @@
+(load "src/prelude.valk")
+
+(= {my-list} {{a b} {c d} {e f}})
+(printf "List: ")
+(print my-list)
+
+(printf "nth 1: ")
+(print (nth 1 my-list))
+
+(printf "nth 2: ")
+(print (nth 2 my-list))
+
+(printf "nth 3: ")
+(print (nth 3 my-list))

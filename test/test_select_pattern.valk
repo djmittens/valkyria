@@ -1,0 +1,16 @@
+(load "src/prelude.valk")
+
+(fun {test-select & cs} {
+     if (== cs nil)
+       {error "No selection found"}
+       {if (fst (fst cs)) {snd (fst cs)} {unpack test-select (tail cs)}}
+})
+
+(printf "Testing select pattern\n")
+(= {result} (test-select
+  { (== 1 2) "wrong" }
+  { (== 2 2) "correct" }
+  { otherwise "default" }
+))
+(printf "Result: ")
+(print result)

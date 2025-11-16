@@ -1,0 +1,20 @@
+(load "src/prelude.valk")
+
+(print "Testing fst")
+(print (fst {1 2 3}))
+
+(print "Testing lambda call")
+(def {double} (\ {x} {* 2 x}))
+(print (double 5))
+
+(print "Testing (f (fst l))")
+(print (double (fst {1 2 3})))
+
+(print "Testing list construction")
+(print (list (double (fst {1 2 3}))))
+
+(print "Testing tail")
+(print (tail {1 2 3}))
+
+(print "Testing join")
+(print (join (list 2) {4 6}))

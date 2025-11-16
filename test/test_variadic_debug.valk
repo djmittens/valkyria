@@ -1,0 +1,17 @@
+; Debug variadic function test
+(printf "Before defining test-variadic\n")
+
+(def {test-variadic}
+  (fn {x & rest} {
+    (printf "Inside test-variadic, x = %s\n" x)
+    (printf "rest = %s\n" rest)
+    rest
+  })
+)
+
+(printf "After defining test-variadic\n")
+(printf "About to call test-variadic\n")
+
+(test-variadic 1 2 3 4)
+
+(printf "After calling test-variadic\n")

@@ -1,0 +1,17 @@
+; Test the actual fun macro pattern
+((\ {f b} {
+  (print "f =")
+  (print f)
+  (print "b =")
+  (print b)
+  (print "head f =")
+  (print (head f))
+  (print "tail f =")
+  (print (tail f))
+  (print "Creating lambda")
+  (def {my-lambda} (\ (tail f) b))
+  (print "Lambda created:")
+  (print my-lambda)
+  (print "Doing def (head f) (...)")
+  def (head f) (\ (tail f) b)
+}) {test x} {(print x)})

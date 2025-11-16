@@ -1,0 +1,16 @@
+(load "src/prelude.valk")
+
+(= {cs} {{ (== 1 1) 42 } { otherwise 99 }})
+(printf "cs = ")
+(print cs)
+
+(printf "\nfst cs = ")
+(print (fst cs))
+
+(printf "\nfst (fst cs) = ")
+(print (fst (fst cs)))
+
+(printf "\nTest: if 1 {snd (fst cs)} {999}\n")
+(= {r} (if 1 {snd (fst cs)} {999}))
+(printf "r = ")
+(print r)

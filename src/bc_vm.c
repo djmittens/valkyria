@@ -547,7 +547,15 @@ valk_bc_vm_result_e valk_bc_vm_run(valk_bc_vm_t* vm, valk_chunk_t* chunk) {
         sexpr->flags = ((sexpr->flags & LVAL_FLAGS_MASK) | LVAL_SEXPR);
 
         // Compile the sexpr to bytecode
-        valk_chunk_t* eval_chunk = valk_compile(sexpr, vm->globals);
+        // Use is_tail=true since OP_EVAL creates its own call frame
+        // The expression will return via OP_RETURN to the caller
+        valk_compiler_t eval_compiler;
+        valk_compiler_init(&eval_compiler, vm->globals);
+        valk_chunk_t* eval_chunk = malloc(sizeof(valk_chunk_t));
+        valk_chunk_init(eval_chunk);
+        eval_compiler.chunk = eval_chunk;
+        valk_compile_expr(&eval_compiler, sexpr, true);  // is_tail = true
+        valk_emit_return(&eval_compiler);
 
         // Create a function that wraps this chunk (no parameters)
         valk_lval_t* eval_fn = valk_lval_lambda(vm->globals,

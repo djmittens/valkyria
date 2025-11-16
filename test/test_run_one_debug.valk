@@ -1,0 +1,16 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/define "simple-test"
+  {test/assert-eq 5 (+ 2 3) "2 + 3 should equal 5"})
+
+(printf "Registry: ")
+(print *test-registry*)
+
+(printf "About to run first test\n")
+(= {first-test} (nth 1 *test-registry*))
+(printf "First test: ")
+(print first-test)
+
+(*test-run-one* first-test)
+(printf "After running test\n")

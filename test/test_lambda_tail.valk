@@ -1,0 +1,12 @@
+; Test lambda with tail as formals
+(def {f} {test x})
+(def {b} {(+ x 1)})
+
+(print "Creating lambda with (tail f) and b:")
+(def {mylambda} (\ (tail f) b))
+
+(print "Lambda created:")
+(print mylambda)
+
+(print "Calling lambda with 41:")
+(print (mylambda 41))

@@ -1,0 +1,11 @@
+(load "src/prelude.valk")
+
+(printf "Test 1: map with lambda\n")
+(= {result} (map (\ {x} {(* x 2)}) {1 2 3}))
+(printf "result = ")
+(print result)
+
+(printf "\nTest 2: simple join test\n")
+(= {r2} (join (list 2) (join (list 4) {})))
+(printf "r2 = ")
+(print r2)

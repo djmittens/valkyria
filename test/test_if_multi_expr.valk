@@ -1,0 +1,6 @@
+(load "src/prelude.valk")
+
+(printf "Test: if with multiple expressions in qexpr (should eval all, return last)\n")
+(= {r} (if 1 {(printf "first\n") (printf "second\n") 42} {99}))
+(printf "r = ")
+(print r)

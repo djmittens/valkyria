@@ -144,9 +144,9 @@ static void compile_lambda(valk_compiler_t* c, valk_lval_t* expr) {
 
   // Count the number of parameters
   // Formals can be QEXPR or SEXPR (when evaluated from fun macro)
-  int arity = 0;
+  int param_count = 0;
   if (LVAL_TYPE(formals) == LVAL_QEXPR || LVAL_TYPE(formals) == LVAL_SEXPR) {
-    arity = valk_lval_list_count(formals);
+    param_count = valk_lval_list_count(formals);
   } else {
     fprintf(stderr, "lambda formals must be a list, got: %s\n", valk_ltype_name(LVAL_TYPE(formals)));
     return;
@@ -161,22 +161,41 @@ static void compile_lambda(valk_compiler_t* c, valk_lval_t* expr) {
   valk_chunk_init(func_chunk);
   func_compiler.chunk = func_chunk;
 
-  // Add parameters as local variables
-  for (int i = 0; i < arity; i++) {
+  // Detect variadic parameters and add all parameters as local variables
+  // Arity encoding:
+  // - Non-variadic: arity = number of parameters
+  // - Variadic: arity = -(min_required_args + 1)
+  int arity = 0;
+  bool is_variadic = false;
+  int min_required_args = 0;
+
+  for (int i = 0; i < param_count; i++) {
     valk_lval_t* param = valk_lval_list_nth(formals, i);
     if (LVAL_TYPE(param) == LVAL_SYM) {
       // Check for variadic marker '&'
       if (strcmp(param->str, "&") == 0) {
         // Next parameter is the variadic args name
-        if (i + 1 < arity) {
+        if (i + 1 < param_count) {
+          is_variadic = true;
+          min_required_args = i;  // Number of params before '&'
           i++;  // Skip to variadic parameter name
           param = valk_lval_list_nth(formals, i);
           if (LVAL_TYPE(param) == LVAL_SYM) {
             valk_add_local(&func_compiler, param->str);
+          } else {
+            fprintf(stderr, "variadic parameter name must be a symbol\n");
+            return;
           }
+        } else {
+          fprintf(stderr, "variadic marker '&' must be followed by parameter name\n");
+          return;
         }
-        // TODO: Handle variadic args properly in bytecode
-        continue;
+        // No more parameters allowed after variadic
+        if (i + 1 < param_count) {
+          fprintf(stderr, "no parameters allowed after variadic parameter\n");
+          return;
+        }
+        break;
       }
       valk_add_local(&func_compiler, param->str);
     } else {
@@ -185,27 +204,32 @@ static void compile_lambda(valk_compiler_t* c, valk_lval_t* expr) {
     }
   }
 
+  // Calculate final arity
+  if (is_variadic) {
+    arity = -(min_required_args + 1);
+  } else {
+    arity = param_count;
+  }
+
   // Compile body (in tail position)
-  // If body is a qexpr, unwrap it to sexpr for execution
+  // Body is a qexpr that should be evaluated as code
+  // {+ x 1} is treated as an implicit sexpr: (+ x 1)
   if (LVAL_TYPE(body) == LVAL_QEXPR) {
     size_t body_count = valk_lval_list_count(body);
-    if (body_count == 1) {
-      // Single expression - compile it
-      valk_compile_expr(&func_compiler, valk_lval_list_nth(body, 0), true);
-    } else if (body_count > 1) {
-      // Multiple elements - treat as a single S-expression (unquote the qexpr)
-      // Example: { eval (join ...) } becomes (eval (join ...))
-      valk_lval_t* sexpr = valk_lval_sexpr_empty();
-      for (size_t i = 0; i < body_count; i++) {
-        valk_lval_add(sexpr, valk_lval_list_nth(body, i));
-      }
-      valk_compile_expr(&func_compiler, sexpr, true);
-    } else {
+    if (body_count == 0) {
       // Empty body - return nil
       valk_emit_byte(&func_compiler, OP_NIL);
+    } else if (body_count == 1) {
+      // Single expression - compile it in tail position
+      valk_compile_expr(&func_compiler, valk_lval_list_nth(body, 0), true);
+    } else {
+      // Multiple elements: {+ x 1}
+      // Convert to sexpr and compile: (+ x 1)
+      valk_lval_t* as_sexpr = valk_qexpr_to_sexpr(body);
+      valk_compile_expr(&func_compiler, as_sexpr, true);
     }
   } else {
-    // Body is not a qexpr - compile it directly
+    // Body is not a qexpr - compile it directly in tail position
     valk_compile_expr(&func_compiler, body, true);
   }
 
@@ -243,21 +267,20 @@ static void compile_if(valk_compiler_t* c, valk_lval_t* expr, bool is_tail) {
   valk_emit_byte(c, OP_POP);  // Pop condition
 
   // Compile then branch
-  // If it's a qexpr, we need to eval it
+  // If it's a qexpr, we need to evaluate it
   if (LVAL_TYPE(then_branch) == LVAL_QEXPR) {
-    // Convert qexpr to sexpr for evaluation
-    if (valk_lval_list_count(then_branch) == 1) {
+    size_t count = valk_lval_list_count(then_branch);
+    if (count == 0) {
+      // Empty qexpr {} evaluates to empty sexpr ()
+      valk_compile_expr(c, then_branch, false);
+      valk_emit_byte(c, OP_EVAL);
+    } else if (count == 1) {
+      // Single element qexpr {x} just evaluates to x
       valk_compile_expr(c, valk_lval_list_nth(then_branch, 0), is_tail);
     } else {
-      // Multiple expressions - compile them in sequence
-      size_t then_count = valk_lval_list_count(then_branch);
-      for (size_t i = 0; i < then_count; i++) {
-        bool is_last = (i == then_count - 1);
-        valk_compile_expr(c, valk_lval_list_nth(then_branch, i), is_tail && is_last);
-        if (!is_last) {
-          valk_emit_byte(c, OP_POP);  // Discard intermediate results
-        }
-      }
+      // Multi-element qexpr {a b c} converts to sexpr (a b c) and evaluates
+      valk_compile_expr(c, then_branch, false);
+      valk_emit_byte(c, OP_EVAL);
     }
   } else {
     valk_compile_expr(c, then_branch, is_tail);
@@ -271,17 +294,18 @@ static void compile_if(valk_compiler_t* c, valk_lval_t* expr, bool is_tail) {
   valk_emit_byte(c, OP_POP);  // Pop condition
 
   if (LVAL_TYPE(else_branch) == LVAL_QEXPR) {
-    if (valk_lval_list_count(else_branch) == 1) {
+    size_t count = valk_lval_list_count(else_branch);
+    if (count == 0) {
+      // Empty qexpr {} evaluates to empty sexpr ()
+      valk_compile_expr(c, else_branch, false);
+      valk_emit_byte(c, OP_EVAL);
+    } else if (count == 1) {
+      // Single element qexpr {x} just evaluates to x
       valk_compile_expr(c, valk_lval_list_nth(else_branch, 0), is_tail);
     } else {
-      size_t else_count = valk_lval_list_count(else_branch);
-      for (size_t i = 0; i < else_count; i++) {
-        bool is_last = (i == else_count - 1);
-        valk_compile_expr(c, valk_lval_list_nth(else_branch, i), is_tail && is_last);
-        if (!is_last) {
-          valk_emit_byte(c, OP_POP);
-        }
-      }
+      // Multi-element qexpr {a b c} converts to sexpr (a b c) and evaluates
+      valk_compile_expr(c, else_branch, false);
+      valk_emit_byte(c, OP_EVAL);
     }
   } else {
     valk_compile_expr(c, else_branch, is_tail);
@@ -586,26 +610,25 @@ valk_chunk_t* valk_compile_lambda_body(valk_lenv_t* globals, valk_lval_t* formal
   }
 
   // Compile body (in tail position)
+  // Body is a qexpr that should be evaluated as code
+  // {def {x} {+ a b}} is treated as an implicit sexpr: (def {x} {+ a b})
   if (LVAL_TYPE(body) == LVAL_QEXPR) {
     size_t body_count = valk_lval_list_count(body);
-    if (body_count == 1) {
-      // Single expression - compile it
-      valk_compile_expr(&compiler, valk_lval_list_nth(body, 0), true);
-    } else if (body_count > 1) {
-      // Multiple expressions - wrap in implicit do
-      // Example: { (printf "x") 123 } becomes (do (printf "x") 123)
-      valk_lval_t* do_call = valk_lval_sexpr_empty();
-      valk_lval_add(do_call, valk_lval_sym("do"));
-      for (size_t i = 0; i < body_count; i++) {
-        valk_lval_add(do_call, valk_lval_list_nth(body, i));
-      }
-      valk_compile_expr(&compiler, do_call, true);
-    } else {
+    if (body_count == 0) {
       // Empty body - return nil
       valk_emit_byte(&compiler, OP_NIL);
+    } else if (body_count == 1) {
+      // Single element body - compile it directly
+      valk_lval_t* elem = valk_lval_list_nth(body, 0);
+      valk_compile_expr(&compiler, elem, true);
+    } else {
+      // Multiple elements: {def {x} {+ a b}}
+      // Convert to sexpr and compile: (def {x} {+ a b})
+      valk_lval_t* as_sexpr = valk_qexpr_to_sexpr(body);
+      valk_compile_expr(&compiler, as_sexpr, true);
     }
   } else {
-    // Body is not a qexpr - compile it directly
+    // Body is not a qexpr - compile it directly in tail position
     valk_compile_expr(&compiler, body, true);
   }
 

@@ -1,0 +1,31 @@
+(load "src/prelude.valk")
+
+(fun {debug-select & cs} {
+  (printf "debug-select called with cs = ")
+  (print cs)
+  (printf "cs == nil? %ld\n" (== cs nil))
+
+  (if (== cs nil)
+    {error "No selection found"}
+    {do
+      (printf "fst cs = ")
+      (print (fst cs))
+      (printf "fst (fst cs) = ")
+      (print (fst (fst cs)))
+      (printf "Evaluating branch...\n")
+      (if (fst (fst cs))
+        {do
+          (printf "Taking true branch: snd (fst cs)\n")
+          (snd (fst cs))
+        }
+        {do
+          (printf "Taking false branch: recursive call\n")
+          (unpack debug-select (tail cs))
+        })
+    })
+})
+
+(printf "Calling debug-select\n")
+(= {result} (debug-select { 1 42 }))
+(printf "result = ")
+(print result)

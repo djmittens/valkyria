@@ -1,0 +1,7 @@
+(load "src/prelude.valk")
+
+(printf "Test: nested if in qexpr\n")
+(= {r} (if 0 {10} {if 1 {20} {30}}))
+(printf "r = ")
+(print r)
+(printf "Expected: 20\n")

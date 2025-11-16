@@ -1,0 +1,13 @@
+; Test fun macro
+(def {fun} (\ {f b}  {
+   def (head f) (\ (tail f) b)
+}))
+
+(print "Defining add with fun:")
+(fun {add x y} {(+ x y)})
+
+(print "Is add defined?")
+(print add)
+
+(print "Calling add:")
+(print (add 10 32))

@@ -1,0 +1,12 @@
+; Test new lambda syntax - fun macro now works without inner parens too!
+(def {fun} (\ {f b} {def (head f) (\ (tail f) b)}))
+
+; Test simple function with implicit sexpr body
+(fun {add a b} {+ a b})
+(print "Testing (add 10 20):")
+(print (add 10 20))
+
+; Test function with explicit sexpr (backward compatible)  
+(fun {mul a b} {(* a b)})
+(print "Testing (mul 5 7):")
+(print (mul 5 7))

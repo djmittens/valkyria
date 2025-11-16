@@ -1,0 +1,18 @@
+(load "src/prelude.valk")
+
+(printf "Test 1: simple select\n")
+(= {r1} (select
+  { (== 1 1) 42 }
+  { otherwise 99 }
+))
+(printf "r1 = ")
+(print r1)
+
+(printf "\nTest 2: select second option\n")
+(= {r2} (select
+  { (== 1 2) 42 }
+  { (== 2 2) 100 }
+  { otherwise 99 }
+))
+(printf "r2 = ")
+(print r2)

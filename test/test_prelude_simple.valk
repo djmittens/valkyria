@@ -1,0 +1,14 @@
+; Simple test of prelude functions
+(load "src/prelude.valk")
+
+(print "Testing add with fun:")
+(fun {add a b} {(+ a b)})
+(print (add 10 20))
+
+(print "Testing sum:")
+(print (sum {1 2 3 4 5}))
+
+(print "Testing foldl:")
+(print (foldl + 0 {1 2 3 4 5}))
+
+(print "All tests passed!")

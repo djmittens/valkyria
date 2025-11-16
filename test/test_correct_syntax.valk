@@ -1,0 +1,14 @@
+; Test correct qexpr syntax for lambda bodies
+(def {fun} (\ {f b} {def (head f) (\ (tail f) b)}))
+
+; Simple function - body is {+ a b} which becomes (+ a b) when evaluated
+(fun {add a b} {+ a b})
+(print "Testing (add 10 20):")
+(print (add 10 20))
+
+; Function with nested qexprs
+(fun {test x} {def {result} {+ x 10}})
+(print "Calling test 5:")
+(test 5)
+(print "result should be 15:")
+(print result)

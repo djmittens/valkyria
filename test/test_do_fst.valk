@@ -1,0 +1,11 @@
+(load "src/prelude.valk")
+
+(= {my-list} {10 20 30})
+
+(printf "Test: do with fst\n")
+(= {r} (do
+  (printf "Inside do\n")
+  (fst my-list)
+))
+(printf "r = ")
+(print r)

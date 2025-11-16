@@ -1,0 +1,12 @@
+(load "src/prelude.valk")
+
+(printf "Test 1: if 1 {+ 2 3} {99}\n")
+(= {r1} (if 1 {+ 2 3} {99}))
+(printf "r1 = ")
+(print r1)
+(printf "Expected: 5\n")
+
+(printf "\nTest 2: eval {+ 2 3}\n")
+(= {r2} (eval {+ 2 3}))
+(printf "r2 = ")
+(print r2)

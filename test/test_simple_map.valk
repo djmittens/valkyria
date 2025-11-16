@@ -1,0 +1,14 @@
+(load "src/prelude.valk")
+
+(print "Simplified map test")
+(fun {simple-map f l} {
+  if (== l nil)
+    {nil}
+    {join (list (f (fst l))) (simple-map f (tail l))}
+})
+
+(def {double} (\ {x} {* 2 x}))
+(print "Calling simple-map")
+(def {result} (simple-map double {1 2 3}))
+(print "Result:")
+(print result)

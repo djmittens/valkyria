@@ -1,0 +1,12 @@
+; Test single-element qexpr body
+(print "Test 1: Direct lambda with single qexpr element")
+(def {test1} (\ {x} {(+ x 1)}))
+(print (test1 41))
+
+(print "Test 2: Lambda created by fun macro")
+(def {fun} (\ {f b}  {
+   def (head f) (\ (tail f) b)
+}))
+
+(fun {test2 x} {(+ x 1)})
+(print (test2 41))

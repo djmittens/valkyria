@@ -1,0 +1,14 @@
+(print "Testing fun macro")
+(def {fun} (\ {f b} {def (head f) (\ (tail f) b)}))
+
+(print "Defining add with fun")
+(fun {add a b} {+ a b})
+
+(print "Calling add 5 3")
+(print (add 5 3))
+
+(print "Defining print-and-return with fun")
+(fun {print-and-return x} {do (printf "Got: %ld\n" x) x})
+
+(print "Calling print-and-return 42")
+(print (print-and-return 42))

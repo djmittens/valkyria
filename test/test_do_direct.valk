@@ -1,0 +1,9 @@
+(load "src/prelude.valk")
+
+(print "Test do with 2 statements")
+(print (do (print "Statement 1") (+ 10 20)))
+
+(print "Test if with do")
+(print (if (== 1 1)
+  {do (print "True branch") 100}
+  {do (print "False branch") 200}))

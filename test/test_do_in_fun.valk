@@ -1,0 +1,21 @@
+(load "src/prelude.valk")
+
+(print "Test 1: Simple do")
+(fun {test1 x} {do (print "in test1") x})
+(print (test1 42))
+
+(print "Test 2: do with multiple statements")
+(fun {test2 x} {do (print "step 1") (print "step 2") x})
+(print (test2 99))
+
+(print "Test 3: do with if")
+(fun {test3 x} {
+  do
+    (print "before if")
+    (if (== x 1)
+      {print "x is 1"}
+      {print "x is not 1"})
+    (print "after if")
+    x
+})
+(print (test3 1))

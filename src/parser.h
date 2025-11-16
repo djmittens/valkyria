@@ -182,6 +182,7 @@ valk_lval_t *valk_lval_lambda(valk_lenv_t *env, valk_lval_t *formals, valk_lval_
 valk_lval_t *valk_lval_bc_fun(valk_chunk_t *chunk, int arity, const char *name);
 valk_lval_t *valk_lval_sexpr_empty(void);
 valk_lval_t *valk_lval_qexpr_empty(void);
+valk_lval_t *valk_qexpr_to_sexpr(valk_lval_t *qexpr);
 
 // Cons cell constructors
 valk_lval_t *valk_lval_nil(void);                                   // Empty list

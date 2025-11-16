@@ -1,0 +1,36 @@
+(load "src/prelude.valk")
+
+(print "Manual map implementation")
+(fun {my-map f l} {
+  do
+    (printf "my-map called with l=")
+    (print l)
+    (if (== l nil)
+      {do (print "l is nil, returning nil") nil}
+      {do
+        (print "l is not nil, processing")
+        (printf "fst l = ")
+        (print (fst l))
+        (printf "calling f on fst...")
+        (def {result-elem} (f (fst l)))
+        (printf "result: ")
+        (print result-elem)
+        (printf "tail l = ")
+        (print (tail l))
+        (printf "recursing...")
+        (def {rest} (my-map f (tail l)))
+        (printf "rest = ")
+        (print rest)
+        (printf "joining...")
+        (def {final} (join (list result-elem) rest))
+        (printf "final = ")
+        (print final)
+        final
+      })
+})
+
+(def {double} (\ {x} {* 2 x}))
+(print "Calling my-map")
+(def {result} (my-map double {1 2 3}))
+(print "Result:")
+(print result)

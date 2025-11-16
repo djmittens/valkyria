@@ -1,0 +1,17 @@
+; Test fun macro with unpack
+(def {fun} (\ {f b}  {
+   def (head f) (\ (tail f) b)
+}))
+
+(print "Defining unpack with fun:")
+(fun {unpack f l} {
+     eval (join (list f) l)
+})
+
+(print "Checking if unpack is defined:")
+(print unpack)
+
+(print "Calling unpack:")
+(def {result} (unpack + {1 2 3}))
+(print "Result:")
+(print result)

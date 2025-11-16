@@ -1,0 +1,16 @@
+; Test that fun macro works end-to-end
+
+; Define fun macro with fixed parentheses
+(def {fun} (\ {f b} {
+  (def (head f) (\ (tail f) b))
+}))
+
+; Define a simple function using fun - body needs parentheses
+(fun {add a b} {(+ a b)})
+
+; Test it
+(print "Testing (add 10 20):")
+(print (add 10 20))
+
+(print "Testing (add 100 200):")
+(print (add 100 200))

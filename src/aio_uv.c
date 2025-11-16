@@ -251,9 +251,12 @@ static void __aio_uv_walk_close(uv_handle_t *h, void *arg) {
 }
 
 static void __aio_uv_stop(uv_async_t *h) {
-  uv_stop(h->loop);
+  // Just mark all handles for closing. The drain loop in __event_loop
+  // (lines 208-210) will properly complete the shutdown by running until
+  // all handles are closed.
   uv_walk(h->loop, __aio_uv_walk_close, NULL);
-  uv_run(h->loop, UV_RUN_ONCE);  // close shit out
+  // Call uv_stop to break out of UV_RUN_DEFAULT
+  uv_stop(h->loop);
 }
 
 /**
@@ -1634,16 +1637,30 @@ valk_aio_system_t *valk_aio_start() {
 void valk_aio_stop(valk_aio_system_t *sys) {
   uv_async_send(&sys->stopperHandle->uv.task);
   printf("Processing the stopper\n");
+  fflush(stdout);
   uv_thread_join(&sys->loopThread);
   printf("AFTER the Processing the stopper\n");
+  fflush(stdout);
   // while (UV_EBUSY == uv_loop_close(sys->eventloop)) {
   // };
   // TODO(networking): need to properly free the system too
+  printf("Freeing httpServers\n");
+  fflush(stdout);
   valk_mem_free(sys->httpServers);
+  printf("Freeing httpClients\n");
+  fflush(stdout);
   valk_mem_free(sys->httpClients);
+  printf("Freeing httpConnections\n");
+  fflush(stdout);
   valk_mem_free(sys->httpConnections);
+  printf("Freeing handleSlab\n");
+  fflush(stdout);
   valk_mem_free(sys->handleSlab);
+  printf("Freeing sys\n");
+  fflush(stdout);
   valk_mem_free(sys);
+  printf("Done freeing\n");
+  fflush(stdout);
 }
 
 // reference code for openssl setup

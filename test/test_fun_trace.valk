@@ -1,0 +1,16 @@
+; Trace fun macro execution
+; The body should be a qexpr containing a SINGLE sexpr
+(def {fun} (\ {f b} {
+  (def (head f) (\ (tail f) b))
+}))
+
+(print "Calling fun:")
+(fun {test2 x} {+ x 1})
+
+(print "test2 should be defined now")
+(print "Calling (test2 10):")
+(print (test2 10))
+(print "Calling (test2 41):")
+(print (test2 41))
+(print "Calling (test2 99):")
+(print (test2 99))

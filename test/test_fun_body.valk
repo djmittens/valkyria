@@ -1,0 +1,25 @@
+; Test what the fun macro body contains
+(def {f} {add a b})
+(def {b} {+ a b})
+
+(print "f:")
+(print f)
+(print "b:")
+(print b)
+(print "head f:")
+(print (head f))
+(print "tail f:")
+(print (tail f))
+
+(print "Creating lambda:")
+(def {my-lambda} (\ (tail f) b))
+(print my-lambda)
+
+(print "Now calling def:")
+(def (head f) my-lambda)
+
+(print "Checking if add exists:")
+add
+
+(print "Calling add:")
+(print (add 10 20))

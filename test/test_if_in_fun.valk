@@ -1,0 +1,13 @@
+(load "src/prelude.valk")
+
+(print "Test if in function")
+(fun {test-if x} {
+  if (== x 1)
+    {100}
+    {200}
+})
+
+(print "Calling test-if 1")
+(print (test-if 1))
+(print "Calling test-if 2")
+(print (test-if 2))

@@ -1,0 +1,10 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/define "simple" {+ 1 1})
+
+(print "Registry:")
+(print *test-registry*)
+
+(print "Running tests...")
+(test/run {})

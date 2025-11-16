@@ -1,0 +1,14 @@
+; Check if empty qexpr equals nil
+(load "src/prelude.valk")
+
+(print "nil:")
+(print nil)
+
+(print "{}:")
+(print {})
+
+(print "(== {} nil):")
+(print (== {} nil))
+
+(print "(== nil {}):")
+(print (== nil {}))

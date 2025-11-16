@@ -1,0 +1,9 @@
+(load "src/prelude.valk")
+
+(= {my-list} {10 20 30})
+(printf "List: ")
+(print my-list)
+
+(= {r} (nth 1 my-list))
+(printf "nth 1 result: ")
+(print r)

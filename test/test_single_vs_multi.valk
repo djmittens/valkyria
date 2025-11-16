@@ -1,0 +1,8 @@
+; Test single element vs multi element bodies
+(print "Single element body (explicit sexpr):")
+(def {add1} (\ {x} {(+ x 1)}))
+(print (add1 10))
+
+(print "Multi element body:")
+(def {add2} (\ {x} {+ x 1}))
+(print (add2 10))

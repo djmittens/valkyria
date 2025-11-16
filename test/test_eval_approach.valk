@@ -1,0 +1,8 @@
+; Test if eval is working at all
+(print "Testing eval:")
+(print (eval {+ 10 20}))
+
+; Test lambda with multi-element body
+(def {test-lambda} (\ {x} {+ x 5}))
+(print "Calling test-lambda 10:")
+(print (test-lambda 10))

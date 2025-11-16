@@ -1,0 +1,15 @@
+; Manually expand what foldl should do
+(load "src/prelude.valk")
+
+(print "Step 1: l={5}, check if l == nil:")
+(print (== {5} nil))
+
+(print "Step 2: compute (+ 0 (fst {5})):")
+(print (+ 0 (fst {5})))
+
+(print "Step 3: compute (tail {5}):")
+(print (tail {5}))
+
+(print "Step 4: recursively call foldl + 5 {}:")
+(print "This should check if {} == nil and return 5")
+(print (foldl + 5 {}))

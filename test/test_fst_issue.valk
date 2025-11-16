@@ -1,0 +1,8 @@
+; Check fst implementation
+(load "src/prelude.valk")
+
+(print "Testing fst {5}:")
+(print (fst {5}))
+
+(print "Testing (eval (head {5})):")
+(print (eval (head {5})))

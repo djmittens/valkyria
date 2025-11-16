@@ -1,0 +1,6 @@
+(load "src/prelude.valk")
+
+(printf "Calling select with one match\n")
+(= {result} (select { 1 42 }))
+(printf "result = ")
+(print result)

@@ -1,0 +1,20 @@
+(load "src/prelude.valk")
+
+(= {test-list} {{42 99}})
+(printf "test-list = ")
+(print test-list)
+
+(printf "\nTest fst (fst test-list)\n")
+(= {first-elem} (fst test-list))
+(printf "first-elem = ")
+(print first-elem)
+
+(printf "\nTest fst of first-elem: (fst first-elem)\n")
+(= {cond-part} (fst first-elem))
+(printf "cond-part = ")
+(print cond-part)
+
+(printf "\nTest snd of first-elem: (snd first-elem)\n")
+(= {value-part} (snd first-elem))
+(printf "value-part = ")
+(print value-part)

@@ -1,0 +1,13 @@
+; Test unpack function
+(def {fun} (\ {f b}  {
+   def (head f) (\ (tail f) b)
+}))
+
+(fun {unpack f l} {
+     eval (join (list f) l)
+})
+
+(print "Testing unpack:")
+(def {result} (unpack + {1 2 3}))
+(print "Result:")
+(print result)

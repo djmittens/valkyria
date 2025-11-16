@@ -1,0 +1,11 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/define "simple-test"
+  {test/assert-eq 5 (+ 2 3) "2 + 3 should equal 5"})
+
+(test/define "another-test"
+  {test/assert-eq 10 (* 2 5) "2 * 5 should equal 10"})
+
+(printf "About to run tests\n")
+(test/run {})

@@ -1,0 +1,12 @@
+(load "src/prelude.valk")
+
+(fun {test1 & xs} {
+  (printf "xs = ")
+  (print xs)
+  100
+})
+
+(printf "Test: (test1 1 2 3)\n")
+(= {r} (test1 1 2 3))
+(printf "r = ")
+(print r)

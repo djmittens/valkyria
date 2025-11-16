@@ -1,0 +1,5 @@
+; Debug foldl
+(load "src/prelude.valk")
+
+(print "Testing direct foldl call:")
+(print (foldl + 0 {1 2 3}))

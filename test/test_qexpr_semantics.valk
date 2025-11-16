@@ -1,0 +1,6 @@
+; Test what a qexpr with multiple elements means
+(print "Qexpr with 2 elements:")
+(print {(+ 1 2) (* 3 4)})
+
+(print "Evaluating it:")
+(print (eval {(+ 1 2) (* 3 4)}))

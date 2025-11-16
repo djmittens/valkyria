@@ -1,0 +1,10 @@
+; Debug lambda creation
+(def {fun} (\ {f b} {def (head f) (\ (tail f) b)}))
+
+(print "Defining add...")
+(fun {add a b} {+ a b})
+
+(print "Checking if add exists:")
+(print add)
+
+(print "Done")

@@ -1,0 +1,7 @@
+(load "src/prelude.valk")
+
+(printf "Test: if with 3-element qexpr\n")
+(= {result} (if 0 {1} {unpack + {2 3}}))
+(printf "Result: ")
+(print result)
+(printf "Expected: 5\n")

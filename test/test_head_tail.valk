@@ -1,0 +1,11 @@
+; Test head and tail on local variables
+(def {test-func} (\ {x} {
+  (print "x =")
+  (print x)
+  (print "head x =")
+  (print (head x))
+  (print "tail x =")
+  (print (tail x))
+}))
+
+(test-func {1 2 3})

@@ -1,0 +1,9 @@
+(load "src/prelude.valk")
+
+(print "Defining double function")
+(def {double} (\ {x} {do (printf "Doubling %ld\n" x) (* 2 x)}))
+
+(print "Testing map with {1 2 3}")
+(def {result} (map double {1 2 3}))
+(print "Map returned:")
+(print result)

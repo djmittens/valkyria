@@ -311,7 +311,6 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals, valk_lval_
   valk_chunk_t* chunk = valk_compile_lambda_body(env, formals, body);
 
   if (!chunk) {
-    fprintf(stderr, "[ERROR] Lambda compilation failed for lambda\n");
     return valk_lval_err("Lambda compilation failed");
   }
 
@@ -532,50 +531,22 @@ valk_lval_t* valk_cons_to_qexpr(valk_lval_t* cons) {
     return cons;
   }
 
-  // If it's a SEXPR, convert to QEXPR
-  // Always make a shallow copy - type conversions should never mutate the original
+  // If it's a SEXPR or CONS, convert to QEXPR by aliasing the cons structure
+  // Type conversions should never mutate the original
   // (function bodies, parameters are immutable and might be referenced elsewhere)
-  if (LVAL_TYPE(cons) == LVAL_SEXPR) {
-    valk_lval_t* result = valk_lval_copy(cons);
-    result->flags = ((result->flags & LVAL_FLAGS_MASK) | LVAL_QEXPR);
+  if (LVAL_TYPE(cons) == LVAL_SEXPR || LVAL_TYPE(cons) == LVAL_CONS) {
+    valk_lval_t* result = valk_mem_alloc(sizeof(valk_lval_t));
+    result->flags = LVAL_QEXPR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+    VALK_SET_ORIGIN_ALLOCATOR(result);
+    // Alias the cons structure (immutable, so safe to share)
+    result->cons.head = cons->cons.head;
+    result->cons.tail = cons->cons.tail;
+    valk_capture_trace(VALK_TRACE_NEW, 1, result);
     return result;
   }
 
-  // Build QEXPR from CONS
-  valk_lval_t* result = nullptr;
-  valk_lval_t* curr = cons;
-
-  while (LVAL_TYPE(curr) == LVAL_CONS && curr->cons.head != nullptr) {
-    if (result == nullptr) {
-      // First element
-      result = valk_mem_alloc(sizeof(valk_lval_t));
-      result->flags = LVAL_QEXPR;
-      VALK_SET_ORIGIN_ALLOCATOR(result);
-      result->cons.head = curr->cons.head;
-      result->cons.tail = nullptr;
-      valk_capture_trace(VALK_TRACE_NEW, 1, result);
-    } else {
-      // Find the last node and extend
-      valk_lval_t* last = result;
-      while (last->cons.tail != nullptr && last->cons.tail->cons.head != nullptr) {
-        last = last->cons.tail;
-      }
-      valk_lval_t* new_node = valk_mem_alloc(sizeof(valk_lval_t));
-      new_node->flags = LVAL_QEXPR;
-      VALK_SET_ORIGIN_ALLOCATOR(new_node);
-      new_node->cons.head = curr->cons.head;
-      new_node->cons.tail = nullptr;
-      valk_capture_trace(VALK_TRACE_NEW, 1, new_node);
-      last->cons.tail = new_node;
-    }
-    curr = curr->cons.tail;
-  }
-
-  if (result == nullptr) {
-    return valk_lval_qexpr_empty();
-  }
-
-  return result;
+  // Unknown type - return empty qexpr
+  return valk_lval_qexpr_empty();
 }
 
 // Free auxiliary data owned by an lval (strings, arrays allocated with malloc)
@@ -914,26 +885,17 @@ static valk_lval_t* valk_lval_eval_bytecode(valk_lenv_t* env, valk_lval_t* lval)
     return valk_lval_err("No VM available in thread context");
   }
 
-  // Save stack pointer for nested evaluation (builtins can call valk_lval_eval)
-  valk_lval_t** saved_stack_top = vm->stack_top;
-
-  // Run the compiled chunk
+  // Run the compiled chunk - VM operates as a state machine
   valk_bc_vm_result_e result = valk_bc_vm_run(vm, chunk);
 
-  // Get result from stack (should be the only value added since saved_stack_top)
+  // Get result from stack
   valk_lval_t* ret_val;
-  if (result == BC_VM_OK && vm->stack_top > saved_stack_top) {
+  if (result == BC_VM_OK && vm->stack_top > vm->stack) {
     ret_val = *(vm->stack_top - 1);  // Top of stack is the result
-    // Pop the result and restore stack pointer
-    vm->stack_top = saved_stack_top;
   } else if (result == BC_VM_RUNTIME_ERROR) {
     ret_val = valk_lval_err("Bytecode runtime error");
-    // Restore stack pointer on error too
-    vm->stack_top = saved_stack_top;
   } else {
     ret_val = valk_lval_nil();  // Empty result
-    // Restore stack pointer
-    vm->stack_top = saved_stack_top;
   }
 
   // Mark return value as escaping (it's being returned to caller)
@@ -2094,6 +2056,18 @@ static valk_lval_t* valk_builtin_repeat(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_qexpr_empty();
 }
 
+// Convert QEXPR to SEXPR by creating a new lval that aliases the cons structure
+valk_lval_t* valk_qexpr_to_sexpr(valk_lval_t* qexpr) {
+  valk_lval_t* sexpr = valk_mem_alloc(sizeof(valk_lval_t));
+  sexpr->flags = LVAL_SEXPR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+  VALK_SET_ORIGIN_ALLOCATOR(sexpr);
+  // Alias the cons structure (immutable, so safe to share)
+  sexpr->cons.head = qexpr->cons.head;
+  sexpr->cons.tail = qexpr->cons.tail;
+  valk_capture_trace(VALK_TRACE_NEW, 1, sexpr);
+  return sexpr;
+}
+
 static valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
 
@@ -2524,6 +2498,7 @@ static valk_lval_t* valk_builtin_printf(valk_lenv_t* e, valk_lval_t* a) {
     }
   }
 
+  fflush(stdout);  // Flush output to ensure it's visible immediately
   return valk_lval_sexpr_empty();
 }
 
@@ -2886,6 +2861,8 @@ static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
 
   fflush(stdout);
   fflush(stderr);
+  printf("About to exit with code %d\n", code);
+  fflush(stdout);
   exit(code);
 }
 

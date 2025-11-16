@@ -1,0 +1,8 @@
+; Test if converting qexpr to sexpr works
+(def {my-qexpr} {+ 10 20})
+(print "my-qexpr:")
+(print my-qexpr)
+
+(def {test-lambda} (\ {x} {+ x 5}))
+(print "Calling test-lambda 10:")
+(print (test-lambda 10))
