@@ -4,8 +4,6 @@
  */
 
 #include "../src/parser.h"
-#include "../src/compiler.h"
-#include "../src/bc_vm.h"
 #include "../src/memory.h"
 #include "testing.h"
 

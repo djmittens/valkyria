@@ -1,0 +1,6 @@
+(printf "Testing direct call\n")
+
+(def {add} (\ {a b} (+ a b)))
+(add 1 2)
+
+(shutdown 0)

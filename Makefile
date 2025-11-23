@@ -91,7 +91,6 @@ test: build
 	build/test_memory &&\
 	build/test_freeze &&\
 	build/test_escape &&\
-	build/test_bytecode &&\
 	build/test_networking &&\
 	# Lisp Standard Library Tests
 	build/valk test/test_prelude.valk &&\
@@ -99,7 +98,6 @@ test: build
 	build/valk test/test_varargs.valk &&\
 	# Core Language Feature Tests
 	build/valk test/test_continuations_suite.valk &&\
-	build/valk test/test_bytecode_suite.valk &&\
 	build/valk test/test_tco_suite.valk &&\
 	build/valk test/test_do_suite.valk &&\
 	# GC Tests

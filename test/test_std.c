@@ -5,7 +5,6 @@
 #include "gc.h"
 #include "memory.h"
 #include "parser.h"
-#include "bc_vm.h"
 #include "testing.h"
 
 void test_parsing_prelude(VALK_TEST_ARGS()) {
@@ -143,11 +142,6 @@ int main(int argc, const char **argv) {
   valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES);
   valk_thread_ctx.allocator = (void *)gc_heap;
 
-  // Initialize global VM for bytecode execution
-  valk_bc_vm_t vm;
-  valk_bc_vm_init(&vm);
-  valk_thread_ctx.vm = &vm;
-
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
   valk_testsuite_add_test(suite, "test_parsing_prelude", test_parsing_prelude);
@@ -189,9 +183,6 @@ int main(int argc, const char **argv) {
   valk_testsuite_print(suite);
 
   valk_testsuite_free(suite);
-
-  // Clean up VM
-  valk_bc_vm_free(&vm);
 
   // Final GC collection before destroying heap
   // This collects any remaining unreachable objects

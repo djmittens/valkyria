@@ -2,8 +2,6 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "bytecode.h"  // For valk_chunk_t
-
 #define LVAL_TYPE_BITS 8ULL
 #define LVAL_TYPE_MASK 0x00000000000000FFULL
 #define LVAL_FLAGS_MASK 0xFFFFFFFFFFFFFF00ULL
@@ -98,7 +96,6 @@ typedef enum {
   LVAL_ENV,
   LVAL_CONS,  // Cons cell (car/cdr linked list)
   LVAL_NIL,   // Empty list
-  LVAL_THUNK, // Unevaluated tail call (for TCO trampoline)
   LVAL_CONT,  // Continuation (for async/await)
 } valk_ltype_e;
 
@@ -131,15 +128,13 @@ struct valk_lval_t {
   struct valk_lval_t *gc_next;  // Linked list for GC heap tracking
   union {
     struct {
-      // Builtin function pointer (NULL for bytecode functions)
+      // Builtin function pointer (NULL for lambdas)
       valk_lval_builtin_t *builtin;
-      // Bytecode (NULL for builtins)
-      valk_chunk_t *chunk;
       int arity;
       char *name;
       // For closures
       valk_lenv_t *env;
-      // DEPRECATED: For old tree-walker lambdas (will be removed)
+      // For tree-walker lambdas
       valk_lval_t *formals;
       valk_lval_t *body;
     } fun;
@@ -152,10 +147,6 @@ struct valk_lval_t {
       void *ptr;
       void (*free)(void *);
     } ref;
-    struct {
-      valk_lenv_t *env;   // Environment for evaluation
-      valk_lval_t *expr;  // Expression to evaluate (in tail position)
-    } thunk;  // Unevaluated tail expression (for TCO trampoline)
     struct {
       void *resume_fn;    // Function to resume continuation
       valk_lenv_t *env;   // Captured environment
@@ -179,23 +170,18 @@ valk_lval_t *valk_lval_str_n(const char *bytes, size_t n);
 
 // valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
 valk_lval_t *valk_lval_lambda(valk_lenv_t *env, valk_lval_t *formals, valk_lval_t *body);
-valk_lval_t *valk_lval_bc_fun(valk_chunk_t *chunk, int arity, const char *name);
 valk_lval_t *valk_lval_sexpr_empty(void);
 valk_lval_t *valk_lval_qexpr_empty(void);
-valk_lval_t *valk_qexpr_to_sexpr(valk_lval_t *qexpr);
+valk_lval_t *valk_cons_to_sexpr(valk_lval_t *qexpr);
 
 // Cons cell constructors
 valk_lval_t *valk_lval_nil(void);                                   // Empty list
 valk_lval_t *valk_lval_cons(valk_lval_t *head, valk_lval_t *tail);  // Cons cell
 
 // Continuation constructor
-valk_lval_t *valk_lval_cont(valk_lenv_t *env, void *resume_fn, void *user_data);
 valk_lval_t *valk_lval_head(valk_lval_t *cons);                     // Get head
 valk_lval_t *valk_lval_tail(valk_lval_t *cons);                     // Get tail
 int valk_lval_is_nil(valk_lval_t *v);                               // Check if nil
-
-// Thunk constructor (for TCO trampoline)
-valk_lval_t *valk_lval_thunk(valk_lenv_t *env, valk_lval_t *expr);
 
 //// END Constructors ////
 
