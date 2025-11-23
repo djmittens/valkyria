@@ -3,6 +3,8 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
+(test/suite "Namespace Tests")
+
 ; Test that / works in symbol names (module namespacing)
 (test/define "namespaced-symbols"
   {(do

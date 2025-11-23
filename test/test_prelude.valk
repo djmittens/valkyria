@@ -7,6 +7,9 @@
 ; Load test framework
 (load "src/modules/test.valk")
 
+; Set the test suite name
+(test/suite "Prelude Tests")
+
 ; Test: fun macro creates callable functions
 (test/define "prelude-fun-definition"
   {do

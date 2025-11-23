@@ -2052,14 +2052,6 @@ static valk_lval_t* valk_builtin_put(valk_lenv_t* e, valk_lval_t* a) {
     if (LVAL_TYPE(val) == LVAL_ERR) return val;
 
     valk_lval_t* sym = valk_lval_list_nth(syms, i);
-    fprintf(stderr, "DEBUG builtin_put: Storing '%s' = type %d\n", sym->str,
-            LVAL_TYPE(val));
-    if (LVAL_TYPE(val) == LVAL_FUN) {
-      fprintf(stderr, "DEBUG builtin_put:   func(builtin=%p)\n",
-              (void*)val->fun.builtin);
-    }
-    fflush(stderr);
-
     valk_lenv_put(e, sym, val);
   }
 

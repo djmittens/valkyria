@@ -1618,7 +1618,7 @@ valk_aio_system_t *valk_aio_start() {
       valk_slab_new(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
   sys->handleSlab = valk_slab_new(sizeof(valk_aio_handle_t), AIO_MAX_HANDLES);
 
-  printf("Aquiring stopper\n");
+  // printf("Aquiring stopper\n");
   sys->stopperHandle = (valk_aio_handle_t *)valk_slab_aquire(sys->handleSlab);
   memset(sys->stopperHandle, 0, sizeof(valk_aio_handle_t));
   sys->stopperHandle->kind = VALK_HNDL_TASK;
@@ -1636,31 +1636,31 @@ valk_aio_system_t *valk_aio_start() {
 
 void valk_aio_stop(valk_aio_system_t *sys) {
   uv_async_send(&sys->stopperHandle->uv.task);
-  printf("Processing the stopper\n");
-  fflush(stdout);
+  // printf("Processing the stopper\n");
+  // fflush(stdout);
   uv_thread_join(&sys->loopThread);
-  printf("AFTER the Processing the stopper\n");
-  fflush(stdout);
+  // printf("AFTER the Processing the stopper\n");
+  // fflush(stdout);
   // while (UV_EBUSY == uv_loop_close(sys->eventloop)) {
   // };
   // TODO(networking): need to properly free the system too
-  printf("Freeing httpServers\n");
-  fflush(stdout);
+  // printf("Freeing httpServers\n");
+  // fflush(stdout);
   valk_mem_free(sys->httpServers);
-  printf("Freeing httpClients\n");
-  fflush(stdout);
+  // printf("Freeing httpClients\n");
+  // fflush(stdout);
   valk_mem_free(sys->httpClients);
-  printf("Freeing httpConnections\n");
-  fflush(stdout);
+  // printf("Freeing httpConnections\n");
+  // fflush(stdout);
   valk_mem_free(sys->httpConnections);
-  printf("Freeing handleSlab\n");
-  fflush(stdout);
+  // printf("Freeing handleSlab\n");
+  // fflush(stdout);
   valk_mem_free(sys->handleSlab);
-  printf("Freeing sys\n");
-  fflush(stdout);
+  // printf("Freeing sys\n");
+  // fflush(stdout);
   valk_mem_free(sys);
-  printf("Done freeing\n");
-  fflush(stdout);
+  // printf("Done freeing\n");
+  // fflush(stdout);
 }
 
 // reference code for openssl setup

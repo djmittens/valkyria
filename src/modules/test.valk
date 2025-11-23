@@ -3,6 +3,11 @@
 (def {*test-registry*} {})
 (def {*test-passed*} 0)
 (def {*test-failed*} 0)
+(def {*test-suite-name*} "Valkyria Test Suite")
+
+(fun {test/suite name} {
+  (def {*test-suite-name*} name)
+})
 
 (fun {test/define name body} {
   (def {*test-registry*} (join *test-registry* (list (list name body))))
@@ -33,8 +38,8 @@
 
 (fun {*test-run-one* test} {
   do
-    (= {test-name} (nth 1 test))
-    (= {test-body} (nth 2 test))
+    (= {test-name} (fst test))
+    (= {test-body} (snd test))
 
     ; Time the test
     (= {start-time} (time-us {}))
@@ -59,11 +64,14 @@
     true
 })
 
-(fun {test/run & _} {
+(fun {test/run & args} {
   do
     (def {*test-passed*} 0)
     (def {*test-failed*} 0)
     (= {total} (len *test-registry*))
+
+    ; Get suite name from args or from global variable
+    (= {suite-name} *test-suite-name*)
 
     ; Check if we have any tests to run
     (if (== total 0)
@@ -73,7 +81,7 @@
       {true}
     )
 
-    (printf "🧪 [%ld/%ld] Valkyria Test Suite\n" total total)
+    (printf "🧪 [%ld/%ld] %s\n" total total suite-name)
 
     ; Run tests and collect results
     (= {run-results} (map *test-run-one* *test-registry*))

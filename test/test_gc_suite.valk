@@ -4,6 +4,9 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
+; Set the test suite name
+(test/suite "Garbage Collection Tests")
+
 ; ============================================================================
 ; Basic GC Tests
 ; ============================================================================
