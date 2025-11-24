@@ -1,0 +1,26 @@
+(load "src/prelude.valk")
+
+(printf "What does unpack expect?\n\n")
+
+(printf "Test 1: unpack + on {1 2 3}:\n")
+(= {result1} (unpack + {1 2 3}))
+(printf "Result: %ld\n" result1)
+
+(printf "\nTest 2: Manual construction:\n")
+(= {nums} {1 2 3})
+(= {expr} (join (list +) nums))
+(printf "Expression: ")
+(print expr)
+(= {result2} (eval expr))
+(printf "Result: %ld\n" result2)
+
+(printf "\nTest 3: What fst does:\n")
+(= {lst} {10 20})
+(printf "List: ")
+(print lst)
+(printf "head lst: ")
+(print (head lst))
+(printf "fst lst (unpack id (head lst)): ")
+(print (fst lst))
+
+(shutdown 0)

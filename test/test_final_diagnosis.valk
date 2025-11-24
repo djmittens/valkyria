@@ -1,0 +1,51 @@
+(load "src/prelude.valk")
+
+(printf "Final diagnosis of the issue:\n\n")
+
+; Test that everything works outside of select
+(fun {test-outside n _l} {
+  (printf "Outside select: n=%ld, _l=" n)
+  (print _l)
+  (printf "fst _l = ")
+  (print (fst _l))
+  (fst _l)
+})
+
+; Test inside select
+(fun {test-inside n _l} {
+  (printf "\nInside select: n=%ld, _l=" n)
+  (print _l)
+  select
+    {(== n 1) (fst _l)}
+    {otherwise "not 1"}
+})
+
+; Test with renamed parameter
+(fun {test-renamed n lst} {
+  (printf "\nWith renamed param: n=%ld, lst=" n)
+  (print lst)
+  select
+    {(== n 1) (fst lst)}
+    {otherwise "not 1"}
+})
+
+(= {mylist} {10 20 30})
+
+(printf "\n1. Testing outside select:\n")
+(= {r1} (test-outside 1 mylist))
+(printf "Result: ")
+(print r1)
+
+(printf "\n2. Testing inside select:\n")
+(= {r2} (test-inside 1 mylist))
+(printf "Result: ")
+(print r2)
+
+(printf "\n3. Testing with renamed param:\n")
+(= {r3} (test-renamed 1 mylist))
+(printf "Result: ")
+(print r3)
+
+(printf "\nConclusion: The underscore in parameter name '_l' breaks variable resolution in select!\n")
+
+(shutdown 0)

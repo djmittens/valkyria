@@ -1,0 +1,35 @@
+(load "src/prelude.valk")
+
+(printf "Testing snd:\n")
+(= {pair} {a b})
+(printf "Pair: ")
+(print pair)
+
+(printf "\nStep by step:\n")
+(printf "1. tail of pair: ")
+(= {t} (tail pair))
+(print t)
+
+(printf "2. head of tail: ")
+(= {ht} (head t))
+(print ht)
+
+(printf "3. unpack id on head of tail:\n")
+(= {result} (unpack id ht))
+(printf "   Result: ")
+(print result)
+
+(printf "\nUsing snd directly:\n")
+(= {snd-result} (snd pair))
+(printf "snd result: ")
+(print snd-result)
+
+(printf "\nTesting with select branch format:\n")
+(= {branch} {(== 1 1) (fst {10 20})})
+(printf "Branch: ")
+(print branch)
+(printf "snd of branch: ")
+(= {branch-snd} (snd branch))
+(print branch-snd)
+
+(shutdown 0)

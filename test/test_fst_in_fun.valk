@@ -1,0 +1,20 @@
+(load "src/prelude.valk")
+
+(printf "Testing fst in function:\n")
+
+(fun {test1 x} {
+  (printf "In test1, x=")
+  (print x)
+  (printf "Calling fst: ")
+  (= {r} (fst x))
+  (print r)
+  r
+})
+
+(= {lst} {10 20 30})
+(printf "\nCalling test1:\n")
+(= {result} (test1 lst))
+(printf "Final: ")
+(print result)
+
+(shutdown 0)

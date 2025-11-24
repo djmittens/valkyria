@@ -1,33 +1,14 @@
+; Simple test runner to debug the issue
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 
-; Simplified test
+; Reset the test registry
 (def {*test-registry*} {})
 
-(fun {test/define name body} {
-  (def {*test-registry*} (join *test-registry* (list (list name body))))
-})
+; Define just a few tests to isolate the issue
+(test/define "test-1" {true})
+(test/define "test-2" {true})
+(test/define "test-3" {true})
 
-(fun {*test-run-one* test} {
-  do
-    (= {test-name} (nth 1 test))
-    (= {test-body} (nth 2 test))
-    (printf "Running: %s\n" test-name)
-    (= {result} (eval test-body))
-    (printf "Result: %ld\n" result)
-    result
-})
-
-(test/define "test1" {(printf "TEST1\n") true})
-(test/define "test2" {(printf "TEST2\n") true})
-
-(printf "Registry has %ld tests\n" (len *test-registry*))
-
-; Try running without map first
-(printf "Running test 1 directly:\n")
-(*test-run-one* (nth 1 *test-registry*))
-
-(printf "\nNow trying with map:\n")
-(map *test-run-one* *test-registry*)
-
-(printf "\nDone\n")
-(shutdown 0)
+(printf "About to run tests...\n")
+(test/run)

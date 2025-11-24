@@ -1,0 +1,40 @@
+(load "src/prelude.valk")
+
+(printf "Debugging snd problem:\n\n")
+
+(= {lst} {10 20})
+(printf "List: ")
+(print lst)
+
+(printf "\nStep 1 - tail:\n")
+(= {t} (tail lst))
+(printf "tail result: ")
+(print t)
+
+(printf "\nStep 2 - head of tail:\n")
+(= {ht} (head t))
+(printf "head of tail: ")
+(print ht)
+
+(printf "\nStep 3 - create expression for unpack:\n")
+(= {expr} (join (list id) ht))
+(printf "join (list id) ht: ")
+(print expr)
+
+(printf "\nStep 4 - eval:\n")
+(= {result} (eval expr))
+(printf "Result: ")
+(print result)
+(printf "Result is nil? %ld\n" (== result nil))
+
+(printf "\nDirect snd call:\n")
+(= {snd-result} (snd lst))
+(printf "snd result: ")
+(print snd-result)
+
+(printf "\nDirect second element access:\n")
+(= {second} (eval (head (tail lst))))
+(printf "eval (head (tail lst)): ")
+(print second)
+
+(shutdown 0)

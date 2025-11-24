@@ -16,4 +16,4 @@
 (printf "Item type: %ld, len: %ld\n" (type item) (len item))
 (print item)
 
-(shutdown 0)
+;; (shutdown 0)

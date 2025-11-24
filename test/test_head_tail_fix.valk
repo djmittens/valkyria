@@ -1,0 +1,31 @@
+; Test head and tail functions after fix
+(printf "Testing head and tail functions after fix\n")
+
+; Test 1: Simple head
+(= {test1} {a b c})
+(printf "Test 1 - head of {a b c}: ")
+(print (head test1))
+
+; Test 2: Simple tail
+(printf "Test 2 - tail of {a b c}: ")
+(print (tail test1))
+
+; Test 3: Head of single element
+(= {test2} {x})
+(printf "Test 3 - head of {x}: ")
+(print (head test2))
+
+; Test 4: Tail of single element (should be empty)
+(printf "Test 4 - tail of {x}: ")
+(print (tail test2))
+
+; Test 5: Nested - head of tail
+(printf "Test 5 - head of tail of {a b c}: ")
+(print (head (tail test1)))
+
+; Test 6: Multiple operations
+(= {test3} {1 2 3 4 5})
+(printf "Test 6 - tail of tail of {1 2 3 4 5}: ")
+(print (tail (tail test3)))
+
+(printf "\nAll tests completed successfully!\n")

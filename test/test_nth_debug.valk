@@ -1,14 +1,29 @@
 (load "src/prelude.valk")
 
-(= {my-list} {{a b} {c d} {e f}})
-(printf "List: ")
-(print my-list)
+(printf "Redefining nth with debug output:\n")
 
-(printf "nth 1: ")
-(print (nth 1 my-list))
+(fun {nth-debug n _l} {
+    (printf "  nth-debug called with n=%ld, list=" n)
+    (print _l)
+    (= {result} (select
+      { (<= n 0) (error "Invalid array index (should start with 1)" ) }
+      { (== n 1) (fst _l) }
+      { otherwise (nth-debug (- n 1) (tail _l)) }))
+    (printf "  nth-debug returning: ")
+    (print result)
+    result
+})
 
-(printf "nth 2: ")
-(print (nth 2 my-list))
+(printf "\nTesting nth-debug:\n")
+(= {mylist} {10 20 30})
+(= {result} (nth-debug 1 mylist))
+(printf "Final result: ")
+(print result)
 
-(printf "nth 3: ")
-(print (nth 3 my-list))
+(printf "\nTesting original nth:\n")
+(= {result2} (nth 1 mylist))
+(printf "Original nth result: ")
+(print result2)
+(printf "Result2 is null? %ld\n" (== result2 nil))
+
+(shutdown 0)

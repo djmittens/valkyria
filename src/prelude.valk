@@ -62,7 +62,6 @@
 ; Nth item in the list
 ; perhaps builtin for this would not be bad either
 ; LISTS ARE 1 BASED LIKE LUA, CAUSE FUCK YEAH
-; TODO(main): why the hell does calling this variable simply l reak this function?
 (fun {nth n _l} {
     select
        ; TODO(main): Errors dont support format strings yet

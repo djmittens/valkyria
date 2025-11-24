@@ -1,13 +1,37 @@
-; Test unpack function
-(def {fun} (\ {f b}  {
-   def (head f) (\ (tail f) b)
-}))
+(load "src/prelude.valk")
 
-(fun {unpack f l} {
-     eval (join (list f) l)
-})
+(printf "Testing unpack:\n")
 
-(print "Testing unpack:")
-(def {result} (unpack + {1 2 3}))
-(print "Result:")
+(printf "\n1. Basic unpack test:\n")
+(= {arg} {x})
+(printf "  arg: ")
+(print arg)
+(= {expr} (join (list id) arg))
+(printf "  join (list id) arg: ")
+(print expr)
+(= {result} (eval expr))
+(printf "  eval result: ")
 (print result)
+
+(printf "\n2. What head of tail returns:\n")
+(= {lst} {a b})
+(= {tl} (tail lst))
+(printf "  tail of {a b}: ")
+(print tl)
+(= {ht} (head tl))
+(printf "  head of tail: ")
+(print ht)
+(printf "  Type of ht: ")
+(print (type ht))
+
+(printf "\n3. Joining with id:\n")
+(= {joined} (join (list id) ht))
+(printf "  join (list id) ht: ")
+(print joined)
+
+(printf "\n4. Evaluating the join:\n")
+(= {evaled} (eval joined))
+(printf "  Result: ")
+(print evaled)
+
+(shutdown 0)

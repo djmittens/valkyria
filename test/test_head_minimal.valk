@@ -1,0 +1,13 @@
+(printf "Testing head minimal:\n")
+
+(def {test} (\ {x} {
+  (printf "Calling head... ")
+  (head x)
+}))
+
+(= {lst} {10 20 30})
+(printf "Before test\n")
+(test lst)
+(printf "After test\n")
+
+(shutdown 0)

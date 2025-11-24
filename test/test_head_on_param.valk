@@ -1,0 +1,19 @@
+(load "src/prelude.valk")
+
+(printf "Testing head on parameter:\n")
+
+(fun {test x} {
+  (printf "In test, x = ")
+  (print x)
+  (printf "Calling head on x: ")
+  (= {h} (head x))
+  (print h)
+  h
+})
+
+(= {lst} {10 20 30})
+(printf "\nCalling test:\n")
+(test lst)
+
+(printf "\nDone\n")
+(shutdown 0)

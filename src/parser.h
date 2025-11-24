@@ -177,6 +177,7 @@ valk_lval_t *valk_cons_to_sexpr(valk_lval_t *qexpr);
 // Cons cell constructors
 valk_lval_t *valk_lval_nil(void);                                   // Empty list
 valk_lval_t *valk_lval_cons(valk_lval_t *head, valk_lval_t *tail);  // Cons cell
+valk_lval_t *valk_lval_list(valk_lval_t *arr[], size_t count);
 
 // Continuation constructor
 valk_lval_t *valk_lval_head(valk_lval_t *cons);                     // Get head
@@ -217,7 +218,6 @@ int valk_lval_list_is_empty(valk_lval_t* list);
 size_t valk_lval_list_count(valk_lval_t* list);
 valk_lval_t* valk_lval_list_nth(valk_lval_t* list, size_t n);
 
-valk_lval_t *valk_lval_add(valk_lval_t *lval, valk_lval_t *cell);
 valk_lval_t *valk_lval_pop(valk_lval_t *lval, size_t i);
 valk_lval_t *valk_lval_join(valk_lval_t *a, valk_lval_t *b);
 

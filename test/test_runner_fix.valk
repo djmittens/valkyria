@@ -1,0 +1,14 @@
+; Test the test runner with the fixed head/tail functions
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Define a few simple tests
+(test/define "test-addition" {== (+ 1 2) 3})
+(test/define "test-subtraction" {== (- 5 3) 2})
+(test/define "test-multiplication" {== (* 4 3) 12})
+(test/define "test-division" {== (/ 10 2) 5})
+(test/define "test-list-head" {== (eval (head {x y z})) x})
+(test/define "test-list-tail" {== (len (tail {a b c})) 2})
+
+; Run all tests
+(test/run)

@@ -38,8 +38,11 @@
 
 (fun {*test-run-one* test} {
   do
-    (= {test-name} (fst test))
-    (= {test-body} (snd test))
+    ; Extract from the Q-expression
+    ; head returns {name} so we eval it to get name
+    ; tail returns {body} so head tail returns body which we keep as-is
+    (= {test-name} (eval (head test)))
+    (= {test-body} (eval (head (tail test))))
 
     ; Time the test
     (= {start-time} (time-us {}))
