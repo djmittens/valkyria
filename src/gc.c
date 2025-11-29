@@ -251,12 +251,13 @@ static void valk_gc_mark_lval(valk_lval_t* v) {
       valk_gc_mark_lval(v->fun.body);
       break;
 
-    case LVAL_QEXPR:
-    case LVAL_SEXPR:
     case LVAL_CONS:
       // Mark cons list
       valk_gc_mark_lval(v->cons.head);
       valk_gc_mark_lval(v->cons.tail);
+      break;
+    case LVAL_NIL:
+      // Nil has no children
       break;
 
     case LVAL_ENV:
@@ -385,10 +386,12 @@ static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
       valk_gc_clear_marks_recursive(v->fun.body);
       break;
 
-    case LVAL_QEXPR:
-    case LVAL_SEXPR:
+    case LVAL_CONS:
       valk_gc_clear_marks_recursive(v->cons.head);
       valk_gc_clear_marks_recursive(v->cons.tail);
+      break;
+    case LVAL_NIL:
+      // Nil has no children
       break;
 
     case LVAL_ENV:

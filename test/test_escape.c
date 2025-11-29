@@ -29,10 +29,10 @@ void test_env_put_marks_escaping(VALK_TEST_ARGS()) {
 void test_lambda_captures_escape(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_lval_t* formals =
-      valk_lval_cons(valk_lval_sym("x"), valk_lval_qexpr_empty());
+      valk_lval_cons(valk_lval_sym("x"), valk_lval_nil());
 
   valk_lval_t* body =
-      valk_lval_cons(valk_lval_sym("x"), valk_lval_qexpr_empty());
+      valk_lval_cons(valk_lval_sym("x"), valk_lval_nil());
 
   // Initially not marked as escaping
   VALK_TEST_ASSERT(!LVAL_ESCAPES(formals),

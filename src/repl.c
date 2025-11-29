@@ -106,23 +106,30 @@ int main(int argc, char* argv[]) {
     int pos = 0;
     add_history(input);
 
-    valk_lval_t* expr;
+    valk_lval_t* result = valk_lval_nil();
     VALK_WITH_ALLOC((void*)scratch) {
-      expr = valk_lval_sexpr_empty();
-      valk_lval_t* tmp;
-      do {
-        tmp = valk_lval_read(&pos, input);
-        valk_lval_cons(tmp, expr);
-      } while ((tmp->flags != LVAL_ERR) && (input[pos] != '\0'));
+      // Parse and evaluate each expression in the input
+      while (input[pos] != '\0') {
+        // Skip whitespace
+        while (input[pos] && strchr(" \t\n\r", input[pos])) pos++;
+        if (input[pos] == '\0') break;
 
-      if (valk_log_would_log(VALK_LOG_TRACE)) {
-        fprintf(stdout, "AST: ");
-        valk_lval_println(expr);
+        valk_lval_t* expr = valk_lval_read(&pos, input);
+        if (LVAL_TYPE(expr) == LVAL_ERR) {
+          result = expr;
+          break;
+        }
+
+        if (valk_log_would_log(VALK_LOG_TRACE)) {
+          fprintf(stdout, "AST: ");
+          valk_lval_println(expr);
+        }
+
+        result = valk_lval_eval(env, expr);
+        if (LVAL_TYPE(result) == LVAL_ERR) break;
       }
-
-      expr = valk_lval_eval(env, expr);
     }
-    valk_lval_println(expr);
+    valk_lval_println(result);
 
     free(input);
     valk_mem_arena_reset(scratch);

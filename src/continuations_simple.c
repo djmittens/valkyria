@@ -41,17 +41,12 @@ valk_lval_t* valk_continuation_resume(valk_lval_t* cont_ref, valk_lval_t* value)
 }
 
 // Builtin: async-shift - captures continuation for async operation
-// (async-shift {k} async-op) where async-op gets passed k
+// (async-shift k async-op) where async-op gets passed k
 valk_lval_t* valk_builtin_async_shift(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
 
-  // First arg should be quoted symbol for continuation variable
-  valk_lval_t* k_qexpr = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, k_qexpr, LVAL_QEXPR);
-  LVAL_ASSERT(a, valk_lval_list_count(k_qexpr) == 1,
-              "async-shift expects single symbol in {k}");
-
-  valk_lval_t* k_sym = valk_lval_list_nth(k_qexpr, 0);
+  // First arg should be a symbol for continuation variable
+  valk_lval_t* k_sym = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_TYPE(a, k_sym, LVAL_SYM);
 
   // Create a continuation

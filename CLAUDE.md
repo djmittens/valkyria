@@ -70,8 +70,10 @@ make configure
 ### Core Components
 
 **Parser & VM (src/parser.{c,h}, src/vm.{c,h})**
-- Lisp S-expression parser with support for numbers, symbols, strings, quoted expressions, and S-expressions
-- Value types defined in `valk_ltype_e`: LVAL_NUM, LVAL_SYM, LVAL_STR, LVAL_FUN, LVAL_REF, LVAL_QEXPR, LVAL_SEXPR, LVAL_ERR, LVAL_ENV
+- Lisp S-expression parser with support for numbers, symbols, strings, quoted expressions, and cons cells
+- Value types defined in `valk_ltype_e`: LVAL_NUM, LVAL_SYM, LVAL_STR, LVAL_FUN, LVAL_REF, LVAL_NIL, LVAL_CONS, LVAL_ERR, LVAL_ENV, LVAL_CONT
+- Uses traditional Lisp cons cells (LVAL_CONS) with proper nil termination (LVAL_NIL)
+- Quote is a special form - `'x` or `{x}` syntax produces `(quote x)` which prevents evaluation
 - `valk_lval_t` represents all Lisp values using tagged union pattern with flags field (lower 8 bits for type, upper bits for flags like GC marking)
 - VM uses stack frames for evaluation (`valk_vm_frame_t`) with escape analysis to promote stack values to heap when needed
 - Environments (`valk_lenv_t`) store symbol bindings with parent-pointer for lexical scoping

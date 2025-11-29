@@ -90,11 +90,10 @@ typedef enum {
   LVAL_STR,
   LVAL_FUN,  // Function (bytecode or builtin)
   LVAL_REF,
-  LVAL_QEXPR,
-  LVAL_SEXPR,
+  LVAL_NIL,   // Empty list / nil value
+  LVAL_CONS,  // Cons cell (car/cdr linked list)
   LVAL_ERR,
   LVAL_ENV,
-  LVAL_CONS,  // Cons cell (car/cdr linked list)
   LVAL_CONT,  // Continuation (for async/await)
 } valk_ltype_e;
 
@@ -140,7 +139,7 @@ struct valk_lval_t {
     struct {
       valk_lval_t *head;  // First element
       valk_lval_t *tail;  // Rest of list
-    } cons;  // Used by LVAL_CONS, LVAL_SEXPR, LVAL_QEXPR
+    } cons;  // Used by LVAL_CONS
     struct {
       char *type;
       void *ptr;
@@ -169,18 +168,15 @@ valk_lval_t *valk_lval_str_n(const char *bytes, size_t n);
 
 // valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
 valk_lval_t *valk_lval_lambda(valk_lenv_t *env, valk_lval_t *formals, valk_lval_t *body);
-valk_lval_t *valk_lval_sexpr_empty(void);
-valk_lval_t *valk_lval_qexpr_empty(void);
-valk_lval_t *valk_cons_to_sexpr(valk_lval_t *qexpr);
 
 // Cons cell constructors
-valk_lval_t *valk_lval_nil(void);                                   // Empty list
+valk_lval_t *valk_lval_nil(void);                                   // Empty list (LVAL_NIL)
 valk_lval_t *valk_lval_cons(valk_lval_t *head, valk_lval_t *tail);  // Cons cell
-valk_lval_t *valk_lval_list(valk_lval_t *arr[], size_t count);
+valk_lval_t *valk_lval_list(valk_lval_t *arr[], size_t count);      // Build list from array
 
-// Continuation constructor
-valk_lval_t *valk_lval_head(valk_lval_t *cons);                     // Get head
-valk_lval_t *valk_lval_tail(valk_lval_t *cons);                     // Get tail
+// Cons cell accessors
+valk_lval_t *valk_lval_head(valk_lval_t *cons);                     // Get head (car)
+valk_lval_t *valk_lval_tail(valk_lval_t *cons);                     // Get tail (cdr)
 
 //// END Constructors ////
 
@@ -220,7 +216,6 @@ valk_lval_t *valk_lval_pop(valk_lval_t *lval, size_t i);
 valk_lval_t *valk_lval_join(valk_lval_t *a, valk_lval_t *b);
 
 valk_lval_t *valk_lval_eval(valk_lenv_t *env, valk_lval_t *lval);
-valk_lval_t *valk_lval_eval_sexpr(valk_lenv_t *env, valk_lval_t *sexpr);
 valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
                                  valk_lval_t *args);
 

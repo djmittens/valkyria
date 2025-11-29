@@ -8,7 +8,7 @@
 // Test 1: Basic freeze functionality
 void test_freeze_basic(VALK_TEST_ARGS()) {
   VALK_TEST();
-  valk_lval_t* v = valk_lval_qexpr_empty();
+  valk_lval_t* v = valk_lval_nil();
 
   // Should not be frozen initially
   VALK_TEST_ASSERT(!LVAL_IS_FROZEN(v), "Value should not be frozen initially");
