@@ -253,6 +253,7 @@ static void valk_gc_mark_lval(valk_lval_t* v) {
 
     case LVAL_QEXPR:
     case LVAL_SEXPR:
+    case LVAL_CONS:
       // Mark cons list
       valk_gc_mark_lval(v->cons.head);
       valk_gc_mark_lval(v->cons.tail);
@@ -263,8 +264,7 @@ static void valk_gc_mark_lval(valk_lval_t* v) {
       break;
 
     case LVAL_UNDEFINED:
-    case LVAL_CONS:
-    case LVAL_NIL:
+    case LVAL_CONT:
       break;
   }
 }

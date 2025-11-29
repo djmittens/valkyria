@@ -8,9 +8,10 @@
 #include "testing.h"
 
 void test_parsing_prelude(VALK_TEST_ARGS()) {
-  valk_lval_t *ast = VALK_FIXTURE("prelude");
   VALK_TEST();
+  valk_lval_t *ast = VALK_FIXTURE("prelude");
 
+  valk_lval_println(ast);
   VALK_EXPECT_SUCCESS(ast);
   VALK_PASS();
 }
@@ -200,27 +201,22 @@ valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
     case LVAL_ERR:
       return ast;
     case LVAL_QEXPR:
-    case LVAL_SEXPR: {
-      for (size_t i = 0; i < valk_lval_list_count(ast); i++) {
-        valk_lval_t* child = valk_lval_list_nth(ast, i);
-        if (valk_lval_find_error(child)) {
-          return child;
-        }
-      }
-      return nullptr;
-    }
+    case LVAL_SEXPR:
     case LVAL_CONS: {
+      if(valk_lval_list_is_empty(ast)) return nullptr;
       valk_lval_t *err = valk_lval_find_error(ast->cons.head);
       if (err) return err;
+      // If the tail is not found return null
+      if (ast->cons.tail == nullptr) return nullptr;
       return valk_lval_find_error(ast->cons.tail);
     }
-    case LVAL_NIL:
     case LVAL_STR:
     case LVAL_FUN:
     case LVAL_NUM:
     case LVAL_REF:
     case LVAL_SYM:
     case LVAL_ENV:
+    case LVAL_CONT:
     case LVAL_UNDEFINED:
       return nullptr;
   }

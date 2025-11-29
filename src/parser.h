@@ -6,7 +6,7 @@
 #define LVAL_TYPE_MASK 0x00000000000000FFULL
 #define LVAL_FLAGS_MASK 0xFFFFFFFFFFFFFF00ULL
 
-#define LVAL_TYPE(_lval) (valk_ltype_e)(_lval->flags & LVAL_TYPE_MASK)
+#define LVAL_TYPE(_lval) ((valk_ltype_e)(_lval->flags & LVAL_TYPE_MASK))
 
 // Allocation flags - where this value was allocated
 #define LVAL_ALLOC_BITS 2
@@ -95,7 +95,6 @@ typedef enum {
   LVAL_ERR,
   LVAL_ENV,
   LVAL_CONS,  // Cons cell (car/cdr linked list)
-  LVAL_NIL,   // Empty list
   LVAL_CONT,  // Continuation (for async/await)
 } valk_ltype_e;
 
@@ -182,7 +181,6 @@ valk_lval_t *valk_lval_list(valk_lval_t *arr[], size_t count);
 // Continuation constructor
 valk_lval_t *valk_lval_head(valk_lval_t *cons);                     // Get head
 valk_lval_t *valk_lval_tail(valk_lval_t *cons);                     // Get tail
-int valk_lval_is_nil(valk_lval_t *v);                               // Check if nil
 
 //// END Constructors ////
 

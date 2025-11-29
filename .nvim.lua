@@ -25,7 +25,7 @@ local function run_valk_file()
   end
 
   -- Construct the command
-  local cmd = valk_executable .. ' ' .. vim.fn.shellescape(filepath)
+  local cmd = 'make build && ' .. valk_executable .. ' ' .. vim.fn.shellescape(filepath)
 
   -- Run the command in a terminal split
   vim.cmd('split | terminal ' .. cmd)
@@ -64,7 +64,73 @@ vim.api.nvim_create_autocmd({'BufRead', 'BufNewFile'}, {
 })
 
 -- Setup the build command
---
 vim.keymap.set('n', '<leader>b', ":mak build<CR>", {
-  desc = 'Run current .valk file',
+  desc = 'Build project',
 })
+
+-- DAP debug configurations
+local dap = require('dap')
+local cwd = vim.fn.getcwd()
+
+dap.configurations.c = {
+  {
+    name = 'test_prelude_valk',
+    type = 'gdb',
+    request = 'launch',
+    program = cwd .. '/build/valk',
+    args = { 'test/test_prelude.valk' },
+    cwd = cwd,
+    stopAtBeginningOfMainSubprogram = true,
+    env = { ASAN_OPTIONS = 'detect_leaks=0' },
+  },
+  {
+    name = 'valk',
+    type = 'gdb',
+    request = 'launch',
+    program = cwd .. '/build/valk',
+    args = function()
+      return { vim.fn.expand('%:p') }
+    end,
+    cwd = cwd,
+  },
+  {
+    name = 'test_std',
+    type = 'gdb',
+    request = 'launch',
+    program = cwd .. '/build/test_std',
+    cwd = cwd,
+    env = { ASAN_OPTIONS = 'detect_leaks=0' },
+  },
+  {
+    name = 'test_memory',
+    type = 'gdb',
+    request = 'launch',
+    program = cwd .. '/build/test_memory',
+    cwd = cwd,
+    env = { ASAN_OPTIONS = 'detect_leaks=0' },
+  },
+  {
+    name = 'test_concurrency',
+    type = 'gdb',
+    request = 'launch',
+    program = cwd .. '/build/test_concurrency',
+    cwd = cwd,
+    env = { ASAN_OPTIONS = 'detect_leaks=0' },
+  },
+  {
+    name = 'test_networking',
+    type = 'gdb',
+    request = 'launch',
+    program = cwd .. '/build/test_networking',
+    cwd = cwd,
+    env = { ASAN_OPTIONS = 'detect_leaks=0' },
+  },
+  {
+    name = 'test_networking_lisp',
+    type = 'gdb',
+    request = 'launch',
+    program = cwd .. '/build/test_networking_lisp',
+    cwd = cwd,
+    env = { ASAN_OPTIONS = 'detect_leaks=0' },
+  },
+}
