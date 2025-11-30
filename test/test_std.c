@@ -16,6 +16,72 @@ void test_parsing_prelude(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_prelude_definitions(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_lenv_t *env = VALK_FIXTURE("env");
+
+  // Test 'fun' - should be a user-defined lambda, not builtin
+  valk_lval_t *fun = valk_lenv_get(env, valk_lval_sym("fun"));
+  VALK_TEST_ASSERT(LVAL_TYPE(fun) == LVAL_FUN,
+                   "fun should be a function, got %s",
+                   valk_ltype_name(LVAL_TYPE(fun)));
+  VALK_TEST_ASSERT(fun->fun.builtin == NULL,
+                   "fun should be a lambda, not a builtin");
+  VALK_TEST_ASSERT(valk_lval_list_count(fun->fun.formals) == 2,
+                   "fun should take 2 args (f b), got %zu",
+                   valk_lval_list_count(fun->fun.formals));
+
+  // Test 'map' - should be a user-defined lambda
+  valk_lval_t *map = valk_lenv_get(env, valk_lval_sym("map"));
+  VALK_TEST_ASSERT(LVAL_TYPE(map) == LVAL_FUN,
+                   "map should be a function, got %s",
+                   valk_ltype_name(LVAL_TYPE(map)));
+  VALK_TEST_ASSERT(map->fun.builtin == NULL,
+                   "map should be a lambda, not a builtin");
+  VALK_TEST_ASSERT(valk_lval_list_count(map->fun.formals) == 2,
+                   "map should take 2 args (f l), got %zu",
+                   valk_lval_list_count(map->fun.formals));
+
+  // Test 'foldl' - should be a user-defined lambda with 3 args
+  valk_lval_t *foldl = valk_lenv_get(env, valk_lval_sym("foldl"));
+  VALK_TEST_ASSERT(LVAL_TYPE(foldl) == LVAL_FUN,
+                   "foldl should be a function, got %s",
+                   valk_ltype_name(LVAL_TYPE(foldl)));
+  VALK_TEST_ASSERT(foldl->fun.builtin == NULL,
+                   "foldl should be a lambda, not a builtin");
+  VALK_TEST_ASSERT(valk_lval_list_count(foldl->fun.formals) == 3,
+                   "foldl should take 3 args (f z l), got %zu",
+                   valk_lval_list_count(foldl->fun.formals));
+
+  // Test 'true' and 'false' - should be numbers
+  valk_lval_t *true_val = valk_lenv_get(env, valk_lval_sym("true"));
+  VALK_TEST_ASSERT(LVAL_TYPE(true_val) == LVAL_NUM,
+                   "true should be a number, got %s",
+                   valk_ltype_name(LVAL_TYPE(true_val)));
+  VALK_TEST_ASSERT(true_val->num == 1,
+                   "true should be 1, got %ld", true_val->num);
+
+  valk_lval_t *false_val = valk_lenv_get(env, valk_lval_sym("false"));
+  VALK_TEST_ASSERT(LVAL_TYPE(false_val) == LVAL_NUM,
+                   "false should be a number, got %s",
+                   valk_ltype_name(LVAL_TYPE(false_val)));
+  VALK_TEST_ASSERT(false_val->num == 0,
+                   "false should be 0, got %ld", false_val->num);
+
+  // Test 'nil' - should be an empty list
+  valk_lval_t *nil_val = valk_lenv_get(env, valk_lval_sym("nil"));
+  VALK_TEST_ASSERT(valk_lval_list_is_empty(nil_val),
+                   "nil should be an empty list");
+
+  // Test that lambdas are marked as escaping (they persist beyond definition)
+  VALK_TEST_ASSERT(LVAL_ESCAPES(fun),
+                   "fun should be marked as escaping");
+  VALK_TEST_ASSERT(LVAL_ESCAPES(map),
+                   "map should be marked as escaping");
+
+  VALK_PASS();
+}
+
 // Removed redundant tests - these are all tested in test/test_prelude.valk
 // Only keeping infrastructure tests (parsing, C linked lists)
 
@@ -146,6 +212,7 @@ int main(int argc, const char **argv) {
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
   valk_testsuite_add_test(suite, "test_parsing_prelude", test_parsing_prelude);
+  valk_testsuite_add_test(suite, "test_prelude_definitions", test_prelude_definitions);
   valk_testsuite_add_test(suite, "test_dynamic_lists", test_dynamic_lists);
 
   // All functional tests have been moved to test/test_prelude.valk
