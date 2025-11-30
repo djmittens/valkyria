@@ -423,13 +423,7 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
   for (valk_gc_header_t* header = heap->objects;
        header != NULL && object_count < traversal_limit;
        header = header->gc_next) {
-    void* user_data = (void*)(header + 1);
-    valk_lval_t* obj = (valk_lval_t*)user_data;
-
-    // Skip forwarded values (they're scratch-allocated, not GC heap)
-    if (!(obj->flags & LVAL_FLAG_FORWARDED)) {
-      object_count++;
-    }
+    object_count++;
   }
 
   fprintf(stderr, "\n=== GC Heap Statistics ===\n");

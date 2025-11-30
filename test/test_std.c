@@ -73,12 +73,6 @@ void test_prelude_definitions(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(valk_lval_list_is_empty(nil_val),
                    "nil should be an empty list");
 
-  // Test that lambdas are marked as escaping (they persist beyond definition)
-  VALK_TEST_ASSERT(LVAL_ESCAPES(fun),
-                   "fun should be marked as escaping");
-  VALK_TEST_ASSERT(LVAL_ESCAPES(map),
-                   "map should be marked as escaping");
-
   VALK_PASS();
 }
 

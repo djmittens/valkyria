@@ -20,58 +20,14 @@
 // GC mark bit
 #define LVAL_FLAG_GC_MARK   (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS))
 
-// Freeze bit - marks immutable values
-#define LVAL_FLAG_FROZEN    (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 1))
-
-// Escape bit - marks values that outlive their creation scope
-// Escaping values need heap allocation, non-escaping can use scratch
-//
-// ESCAPE ANALYSIS - When to mark values as escaping:
-//
-// A value ESCAPES if it:
-//   1. Is stored in an environment (def, =, lambda captures)
-//      - valk_lenv_put should mark value as escaping
-//      - Closure environments should mark captures as escaping
-//
-//   2. Is captured by a lambda/function closure
-//      - valk_builtin_lambda should mark formals/body/env as escaping
-//      - Captured variables outlive the function definition scope
-//
-//   3. Is returned from a function
-//      - Function return values may outlive the call frame
-//      - valk_lval_eval should mark return values as escaping
-//
-//   4. Is assigned to a data structure that outlives the current scope
-//      - Values added to lists/expressions that escape also escape
-//
-// A value DOES NOT ESCAPE if it:
-//   - Is a temporary during evaluation (intermediate results)
-//   - Is used only within the current scope and not stored
-//   - Is an argument that's consumed immediately
-//
-// Optimization strategy:
-//   - Non-escaping values can use scratch arena (fast bump allocation)
-//   - Escaping values must use GC heap (persistent, garbage collected)
-//   - This enables zero-copy sharing of frozen heap values (via valk_intern)
-#define LVAL_FLAG_ESCAPES   (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 2))
-
-// Forwarding flag: value has been moved to new location (pointer forwarding for scratch->heap promotion)
-#define LVAL_FLAG_FORWARDED (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 3))
-
 // Tail call flag: marks expressions that are in tail position (for TCO)
-#define LVAL_FLAG_TAIL_CALL (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 4))
+#define LVAL_FLAG_TAIL_CALL (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 1))
 
 // Macro flag: function receives unevaluated arguments (like Lisp macros)
-#define LVAL_FLAG_MACRO     (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 5))
+#define LVAL_FLAG_MACRO     (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 2))
 
 // Helper to get allocation type
 #define LVAL_ALLOC(_lval) ((_lval)->flags & LVAL_ALLOC_MASK)
-
-// Helper to check if frozen
-#define LVAL_IS_FROZEN(_lval) ((_lval)->flags & LVAL_FLAG_FROZEN)
-
-// Helper to check if value escapes
-#define LVAL_ESCAPES(_lval) ((_lval)->flags & LVAL_FLAG_ESCAPES)
 
 // Helper to get allocation flags from allocator type
 // Implemented in parser.c
@@ -188,29 +144,8 @@ valk_lval_t *valk_lval_tail(valk_lval_t *cons);                     // Get tail 
 // valk_lval_t *valk_lval_copy(valk_lval_t *lval);
 valk_lval_t *valk_lval_copy(valk_lval_t *lval);
 
-// Persist a value into the environment's allocator (arena/malloc).
-// Returns a deep-copied value owned by `env`.
-// Sets up forwarding pointer if value was in scratch arena.
-valk_lval_t *valk_intern(valk_lenv_t *env, valk_lval_t *val);
-
-// Resolve forwarding pointers (follow chain to final value)
-// Returns the actual value, following any forwarding pointers
-valk_lval_t *valk_lval_resolve(valk_lval_t *val);
-
-// Promote a value to GC heap if it's not already there.
-// Useful for escaping values that were initially allocated in scratch.
-// Returns heap-allocated value (may be same as input if already on heap).
-valk_lval_t *valk_lval_promote_to_heap(valk_lval_t *val);
-
 void valk_lval_finalize(valk_lval_t *lval);
 int valk_lval_eq(valk_lval_t *x, valk_lval_t *y);
-
-// Memory management
-// REMOVED: valk_lval_cleanup - no longer needed with GC heap for all allocations
-
-// Immutability support
-void valk_lval_freeze(valk_lval_t *lval);      // Recursively freeze value tree
-void valk_lval_assert_mutable(valk_lval_t *lval);  // Crash if frozen
 
 // Helper functions for cons-based lists
 int valk_lval_list_is_empty(valk_lval_t* list);
