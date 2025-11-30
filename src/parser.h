@@ -20,12 +20,6 @@
 // GC mark bit
 #define LVAL_FLAG_GC_MARK   (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS))
 
-// Tail call flag: marks expressions that are in tail position (for TCO)
-#define LVAL_FLAG_TAIL_CALL (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 1))
-
-// Macro flag: function receives unevaluated arguments (like Lisp macros)
-#define LVAL_FLAG_MACRO     (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 2))
-
 // Helper to get allocation type
 #define LVAL_ALLOC(_lval) ((_lval)->flags & LVAL_ALLOC_MASK)
 

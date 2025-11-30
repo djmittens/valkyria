@@ -11,7 +11,6 @@
 static void valk_gc_mark_lval(valk_lval_t* v);
 static void valk_gc_mark_env(valk_lenv_t* env);
 static void valk_gc_clear_marks_recursive(valk_lval_t* v);
-static void valk_gc_scan_stack(valk_gc_malloc_heap_t* heap);
 
 // ============================================================================
 // GC Heap - Malloc-based allocator with mark & sweep
@@ -141,6 +140,7 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
 // ============================================================================
 
 // Helper: Check if a pointer-sized value looks like it points into GC heap
+__attribute__((unused))
 static bool valk_gc_is_heap_pointer(valk_gc_malloc_heap_t* heap, void* ptr) {
   if (ptr == NULL) return false;
 
@@ -153,68 +153,6 @@ static bool valk_gc_is_heap_pointer(valk_gc_malloc_heap_t* heap, void* ptr) {
     }
   }
   return false;
-}
-
-// Conservative stack scanner - scans C stack for heap pointers
-static void valk_gc_scan_stack(valk_gc_malloc_heap_t* heap) {
-  // Get current stack pointer
-  int stack_var;
-  void* stack_current = (void*)&stack_var;
-
-  // Get pthread stack bounds
-  pthread_attr_t attr;
-  void* pthread_stack_base;
-  size_t pthread_stack_size;
-
-  pthread_getattr_np(pthread_self(), &attr);
-  pthread_attr_getstack(&attr, &pthread_stack_base, &pthread_stack_size);
-  pthread_attr_destroy(&attr);
-
-  void* pthread_stack_end = (void*)((uint8_t*)pthread_stack_base + pthread_stack_size);
-
-  // Validate stack pointer is within pthread bounds
-  if (stack_current >= pthread_stack_base && stack_current <= pthread_stack_end) {
-    // Normal case - scan from pthread base to current
-    void* stack_bottom = pthread_stack_base;
-    void* stack_top = stack_current;
-
-    VALK_TRACE("GC: Scanning pthread stack from %p to %p (size: %zu bytes)",
-               stack_bottom, stack_top,
-               (size_t)((uint8_t*)stack_top - (uint8_t*)stack_bottom));
-
-    // Scan every pointer-sized word
-    uintptr_t* ptr = (uintptr_t*)stack_bottom;
-    uintptr_t* end = (uintptr_t*)stack_top;
-
-    size_t marked_from_stack = 0;
-    for (; ptr < end; ptr++) {
-      void* potential_ptr = (void*)(*ptr);
-      if (valk_gc_is_heap_pointer(heap, potential_ptr)) {
-        valk_lval_t* obj = (valk_lval_t*)potential_ptr;
-        if (!(obj->flags & LVAL_FLAG_GC_MARK)) {
-          valk_gc_mark_lval(obj);
-          marked_from_stack++;
-        }
-      }
-    }
-    VALK_TRACE("GC: Marked %zu objects from stack", marked_from_stack);
-    return;
-  }
-
-  // Fallback: stack pointer not in pthread bounds - might be ASAN shadow stack
-  // or custom allocator arena. Scan conservatively around current location.
-  VALK_WARN("GC: Stack pointer %p outside pthread range [%p, %p] - using conservative scan",
-            stack_current, pthread_stack_base, pthread_stack_end);
-
-  // Scan 2MB below current stack pointer (conservative estimate)
-  void* scan_start = (void*)((uintptr_t)stack_current - (2 * 1024 * 1024));
-  void* scan_end = stack_current;
-
-  VALK_TRACE("GC: Scanning conservative range from %p to %p", scan_start, scan_end);
-
-  // Don't actually scan in fallback mode - it's too dangerous without proper bounds
-  // Instead, disable GC collection when we can't determine stack bounds
-  VALK_WARN("GC: Skipping stack scan - cannot determine safe bounds");
 }
 
 // ============================================================================
@@ -612,16 +550,13 @@ size_t valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena) {
 
   // Count dead objects (can't actually free from arena)
   size_t dead_count = 0;
-  size_t live_count = 0;
   uint8_t* ptr = arena->heap;
   uint8_t* end = arena->heap + arena->offset;
 
   while (ptr < end) {
     valk_lval_t* v = (valk_lval_t*)ptr;
     if ((v->flags & LVAL_TYPE_MASK) <= LVAL_ENV) {
-      if (v->flags & LVAL_FLAG_GC_MARK) {
-        live_count++;
-      } else {
+      if (!(v->flags & LVAL_FLAG_GC_MARK)) {
         dead_count++;
       }
     }

@@ -1929,31 +1929,6 @@ static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
   return func;
 }
 
-static valk_lval_t* valk_builtin_macro(valk_lenv_t* e, valk_lval_t* a) {
-  LVAL_ASSERT_COUNT_EQ(a, a, 2);
-
-  valk_lval_t* formals = valk_lval_list_nth(a, 0);
-  valk_lval_t* body = valk_lval_list_nth(a, 1);
-
-  // Accept both QEXPR and CONS for formals and body
-  LVAL_ASSERT_TYPE(a, formals, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
-  LVAL_ASSERT_TYPE(a, body, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
-
-  for (size_t i = 0; i < valk_lval_list_count(formals); i++) {
-    LVAL_ASSERT(a, LVAL_TYPE(valk_lval_list_nth(formals, i)) == LVAL_SYM,
-                "Cannot use a non symbol[%s] for bind",
-                valk_ltype_name(LVAL_TYPE(valk_lval_list_nth(formals, i))));
-  }
-
-  formals = valk_lval_pop(a, 0);
-  body = valk_lval_pop(a, 0);
-
-  // Create lambda and set MACRO flag
-  valk_lval_t* mac = valk_lval_lambda(e, formals, body);
-  mac->flags |= LVAL_FLAG_MACRO;
-  return mac;
-}
-
 static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(a);
   valk_lval_t* res = valk_lval_nil();
@@ -2681,7 +2656,6 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "def", valk_builtin_def);
   valk_lenv_put_builtin(env, "=", valk_builtin_put);
   valk_lenv_put_builtin(env, "\\", valk_builtin_lambda);
-  valk_lenv_put_builtin(env, "macro", valk_builtin_macro);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
 
   // TODO(main):  Doesnt actually work lols, no idea why
