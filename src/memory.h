@@ -251,6 +251,7 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, size_t bytes);
 // TODO(networking): Maybe these types should be in thread local context or something
 typedef struct {
   valk_mem_allocator_t *allocator;
+  size_t call_depth;  // Current function call depth (for TCO testing/debugging)
 } valk_thread_context_t;
 
 extern __thread valk_thread_context_t valk_thread_ctx;

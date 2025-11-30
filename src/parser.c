@@ -880,12 +880,21 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
 
 valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
                                  valk_lval_t* args) {
-  // Tail call optimization: loop instead of recursing
+  // TODO(llvm): Proper tail call optimization requires either:
+  // 1. An explicit evaluation stack (stack machine) instead of using C's call stack
+  // 2. LLVM backend with tail call attribute
+  // The current tree-walking interpreter cannot do TCO for calls through
+  // if/do/let/etc because those create C stack frames that we can't eliminate.
+  // For now, deep recursion will use stack space. With malloc fallback from slab,
+  // reasonable depths are supported.
   LVAL_ASSERT_TYPE(args, func, LVAL_FUN);
 
   if (func->fun.builtin) {
     return func->fun.builtin(env, args);
   }
+
+  // Track call depth for user-defined functions (not builtins)
+  valk_thread_ctx.call_depth++;
 
   // Immutable function application - NO COPYING, NO MUTATION
   // Walk formals and args together, creating bindings in new environment
@@ -926,6 +935,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
       // Next formal is the varargs name
       formal_iter = formal_iter->cons.tail;
       if (valk_lval_list_is_empty(formal_iter)) {
+        valk_thread_ctx.call_depth--;
         return valk_lval_err(
             "Invalid function format: & not followed by varargs name");
       }
@@ -948,6 +958,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
 
   // Check if more args than formals (error unless varargs)
   if (!valk_lval_list_is_empty(arg_iter) && !saw_varargs) {
+    valk_thread_ctx.call_depth--;
     return valk_lval_err(
         "More arguments were given than required. Actual: %zu, Expected: %zu",
         given, num_formals);
@@ -961,6 +972,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
         strcmp(formal_iter->cons.head->str, "&") == 0) {
       formal_iter = formal_iter->cons.tail;
       if (valk_lval_list_is_empty(formal_iter)) {
+        valk_thread_ctx.call_depth--;
         return valk_lval_err(
             "Invalid function format: & not followed by varargs name");
       }
@@ -982,6 +994,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
       partial->fun.formals =
           formal_iter;  // Remaining formals (immutable, can alias)
       partial->fun.body = func->fun.body;  // Body (immutable, can alias)
+      valk_thread_ctx.call_depth--;
       return partial;
     }
   }
@@ -1015,17 +1028,23 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
       valk_lval_t* result = valk_lval_nil();
       valk_lval_t* curr = body;
       while (!valk_lval_list_is_empty(curr)) {
-        result = valk_lval_eval(call_env, curr->cons.head);
+        valk_lval_t* expr = curr->cons.head;
+        result = valk_lval_eval(call_env, expr);
         if (LVAL_TYPE(result) == LVAL_ERR) {
+          valk_thread_ctx.call_depth--;
           return result;
         }
         curr = curr->cons.tail;
       }
+      valk_thread_ctx.call_depth--;
       return result;
     }
   }
-  // Single expression body
-  return valk_lval_eval(call_env, body);
+
+  // Single expression body - evaluate it
+  valk_lval_t* result = valk_lval_eval(call_env, body);
+  valk_thread_ctx.call_depth--;
+  return result;
 }
 
 valk_lval_t* valk_lval_pop(valk_lval_t* lval, size_t i) {
@@ -2394,6 +2413,13 @@ static valk_lval_t* valk_builtin_time_us(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_num(us);
 }
 
+// stack-depth: Returns current function call depth (for TCO testing)
+static valk_lval_t* valk_builtin_stack_depth(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+  return valk_lval_num((long)valk_thread_ctx.call_depth);
+}
+
 static valk_lval_t* valk_builtin_error(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
@@ -2806,6 +2832,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "print", valk_builtin_print);
   valk_lenv_put_builtin(env, "printf", valk_builtin_printf);
   valk_lenv_put_builtin(env, "time-us", valk_builtin_time_us);
+  valk_lenv_put_builtin(env, "stack-depth", valk_builtin_stack_depth);
 
   valk_lenv_put_builtin(env, "list", valk_builtin_list);
   valk_lenv_put_builtin(env, "cons", valk_builtin_cons);
