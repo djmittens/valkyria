@@ -158,6 +158,9 @@ typedef struct {
   valk_mem_allocator_e type;
 } valk_mem_allocator_t;
 
+// Global malloc allocator for use with VALK_WITH_ALLOC
+extern valk_mem_allocator_t valk_malloc_allocator;
+
 typedef struct {
   size_t capacity;
   size_t count;

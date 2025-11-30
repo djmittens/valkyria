@@ -1,5 +1,7 @@
+#define _POSIX_C_SOURCE 200809L
 #include <editline.h>
 #include <errno.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +14,20 @@
 #include "parser.h"
 
 static void __aio_free(void* system) { valk_aio_stop(system); }
+
+// Global pointers for signal handler (Phase 8: Telemetry)
+static valk_mem_arena_t* g_scratch_for_signal = NULL;
+static valk_gc_malloc_heap_t* g_heap_for_signal = NULL;
+
+// SIGUSR1 handler: Print memory statistics to stderr
+// Usage: kill -USR1 <pid>
+static void sigusr1_handler(int sig) {
+  (void)sig;
+  if (g_scratch_for_signal != NULL && g_heap_for_signal != NULL) {
+    fprintf(stderr, "\n[SIGUSR1] Memory statistics requested:\n");
+    valk_memory_print_stats(g_scratch_for_signal, g_heap_for_signal, stderr);
+  }
+}
 
 int main(int argc, char* argv[]) {
   char* input;
@@ -49,6 +65,17 @@ int main(int argc, char* argv[]) {
   valk_gc_malloc_set_root(gc_heap, env);
   valk_thread_ctx.root_env = env;
 
+  // Set up SIGUSR1 handler for runtime memory stats (Phase 8: Telemetry)
+  // Usage: kill -USR1 <pid> to print memory statistics
+  g_scratch_for_signal = scratch;
+  g_heap_for_signal = gc_heap;
+  struct sigaction sa = {
+      .sa_handler = sigusr1_handler,
+      .sa_flags = SA_RESTART,  // Restart interrupted syscalls (e.g., readline)
+  };
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGUSR1, &sa, NULL);
+
   // If we got here, we processed files but did not request exit; drop into
   // REPL. Set mode to repl now so shutdown inside REPL performs teardown.
   valk_lenv_put(env, valk_lval_sym("VALK_MODE"), valk_lval_str("init"));
@@ -63,10 +90,15 @@ int main(int argc, char* argv[]) {
   }
 
   bool script_mode = false;
+  bool force_repl = false;
   if (argc >= 2) {
     for (int i = 1; i < argc; ++i) {
       if (strcmp(argv[i], "--script") == 0) {
         script_mode = true;
+        continue;
+      }
+      if (strcmp(argv[i], "--repl") == 0) {
+        force_repl = true;
         continue;
       }
       script_mode = true;  // Any file argument implies script mode
@@ -101,8 +133,8 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  // If script mode, cleanup and exit instead of entering REPL
-  if (script_mode) {
+  // If script mode (and not forced REPL), cleanup and exit instead of entering REPL
+  if (script_mode && !force_repl) {
     valk_lval_t* sym = valk_lval_sym("aio");
     valk_lval_t* val = valk_lenv_get(env, sym);
     if (val->flags != LVAL_ERR && val->flags &&

@@ -15,6 +15,9 @@
 
 __thread valk_thread_context_t valk_thread_ctx = {.allocator = nullptr, .heap = nullptr};
 
+// Global malloc allocator for use with VALK_WITH_ALLOC when malloc is needed
+valk_mem_allocator_t valk_malloc_allocator = {.type = VALK_ALLOC_MALLOC};
+
 #ifdef VALK_ARC_DEBUG
 #include "debug.h"
 void __valk_arc_trace_report_print(valk_arc_trace_info *traces, size_t num) {

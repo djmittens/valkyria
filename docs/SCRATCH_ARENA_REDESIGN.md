@@ -1,6 +1,6 @@
 # Scratch Arena Redesign: Checkpoint-Based Memory Management
 
-## Current Status: COMPLETE (Phases 1-7)
+## Current Status: COMPLETE (Phases 1-8)
 
 All core phases are implemented and tested. The checkpoint-based memory management
 system is fully operational.
@@ -12,6 +12,8 @@ system is fully operational.
 - **Pointer fixup** updates all references after evacuation
 - **Overflow fallback** gracefully falls back to heap when scratch is full
 - **All tests pass** including edge cases and stress tests
+- **SIGUSR1 handler** for runtime memory stats: `kill -USR1 <pid>`
+- **DEBUG logging** for checkpoint phases (when VALK_LOG_LEVEL=debug)
 
 ### Key Design Decisions
 1. **Checkpoint is internal-only** - Not exposed to user code. Calling checkpoint during
@@ -768,49 +770,41 @@ exposed: `(checkpoint-stats)`, `(arena-usage)`, `(arena-capacity)`.
 
 ---
 
-### Phase 8: Telemetry Dashboard (TODO)
+### Phase 8: Telemetry Dashboard ✅ COMPLETE
 
 **Goal**: Runtime observability
 
-**Status**: Not yet implemented. This phase is optional for core functionality.
+**Status**: Complete.
 
-#### Task 8.1: Enhanced Statistics Output
+#### Task 8.1: Enhanced Statistics Output ✅
 
 **File**: `src/gc.c`
 
-- [ ] Update `valk_memory_print_stats()` to include:
-  - [ ] Section header formatting
-  - [ ] Scratch arena: current, high water, total allocs, resets, checkpoints
-  - [ ] GC heap: allocated, collections, evacuations received
-  - [ ] Derived: avg values/checkpoint, avg bytes/checkpoint, evacuation rate
-  - [ ] Format numbers with commas for readability (optional)
+- [x] `valk_memory_print_stats()` outputs comprehensive stats including:
+  - Scratch arena: current usage, high water, resets, checkpoints
+  - GC heap: allocated, collections, evacuations received
+  - Derived metrics: avg values/checkpoint, evacuation rate
 
-#### Task 8.2: SIGUSR1 Signal Handler
+#### Task 8.2: SIGUSR1 Signal Handler ✅
 
 **File**: `src/repl.c`
 
-- [ ] Add `#include <signal.h>`
-- [ ] Add static globals for signal handler:
-  - [ ] `static valk_mem_arena_t* g_scratch_for_signal`
-  - [ ] `static valk_gc_malloc_heap_t* g_heap_for_signal`
-- [ ] Implement `static void sigusr1_handler(int sig)`
-  - [ ] Call valk_memory_print_stats to stderr
-- [ ] In main(), after allocator setup:
-  - [ ] Set g_scratch_for_signal = scratch
-  - [ ] Set g_heap_for_signal = gc_heap
-  - [ ] Call signal(SIGUSR1, sigusr1_handler)
-- [ ] Document usage: `kill -USR1 <pid>`
+- [x] Added `#include <signal.h>`
+- [x] Added static globals `g_scratch_for_signal` and `g_heap_for_signal`
+- [x] Implemented `sigusr1_handler(int sig)` to print stats to stderr
+- [x] Signal handler registered in `main()` after allocator setup
+- [x] Usage: `kill -USR1 <pid>` prints memory statistics
 
-#### Task 8.3: Verbose Checkpoint Logging
+#### Task 8.3: Verbose Checkpoint Logging ✅
 
 **File**: `src/gc.c`
 
-- [ ] Add VALK_DEBUG level logs in valk_checkpoint:
-  - [ ] Before Phase 1: "Starting evacuation from scratch"
-  - [ ] After Phase 1: "Evacuated N values, M bytes"
-  - [ ] Before Phase 2: "Starting pointer fixup"
-  - [ ] After Phase 2: "Fixed N pointers"
-- [ ] Ensure logs respect log level settings
+- [x] VALK_DEBUG level logs in `valk_checkpoint()`:
+  - "Checkpoint Phase 1: Starting evacuation from scratch arena"
+  - "Checkpoint Phase 1: Evacuated N values (M bytes)"
+  - "Checkpoint Phase 2: Fixing pointers in N evacuated values"
+  - "Checkpoint Phase 2: Fixed N pointers"
+- [x] Logs respect VALK_LOG_LEVEL environment variable
 
 #### Task 8.4: Telemetry Tests
 
@@ -883,11 +877,10 @@ Phase 7: Testing ✅
    └── 7.5 Regression tests ✅
          │
          ▼
-Phase 8: Telemetry Dashboard (optional, not started)
-   ├── 8.1 Enhanced stats output
-   ├── 8.2 SIGUSR1 handler
-   ├── 8.3 Verbose logging
-   └── 8.4 Telemetry tests
+Phase 8: Telemetry Dashboard ✅
+   ├── 8.1 Enhanced stats output ✅
+   ├── 8.2 SIGUSR1 handler ✅
+   └── 8.3 Verbose logging ✅
 ```
 
 ---

@@ -1610,13 +1610,16 @@ valk_aio_system_t *valk_aio_start() {
   sys->liveHandles.kind = VALK_HNDL_EMPTY;
   memset(&sys->liveHandles, 0, sizeof(valk_aio_handle_t));
 
-  sys->httpServers = valk_slab_new(
-      sizeof(valk_arc_box) + sizeof(valk_aio_http_server), HTTP_MAX_SERVERS);
-  sys->httpClients = valk_slab_new(
-      sizeof(valk_arc_box) + sizeof(valk_aio_http2_client), HTTP_MAX_CLIENTS);
-  sys->httpConnections =
-      valk_slab_new(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
-  sys->handleSlab = valk_slab_new(sizeof(valk_aio_handle_t), AIO_MAX_HANDLES);
+  // Allocate AIO slabs with malloc allocator (not GC heap)
+  VALK_WITH_ALLOC(&valk_malloc_allocator) {
+    sys->httpServers = valk_slab_new(
+        sizeof(valk_arc_box) + sizeof(valk_aio_http_server), HTTP_MAX_SERVERS);
+    sys->httpClients = valk_slab_new(
+        sizeof(valk_arc_box) + sizeof(valk_aio_http2_client), HTTP_MAX_CLIENTS);
+    sys->httpConnections =
+        valk_slab_new(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
+    sys->handleSlab = valk_slab_new(sizeof(valk_aio_handle_t), AIO_MAX_HANDLES);
+  }
 
   // printf("Aquiring stopper\n");
   sys->stopperHandle = (valk_aio_handle_t *)valk_slab_aquire(sys->handleSlab);
@@ -1644,18 +1647,13 @@ void valk_aio_stop(valk_aio_system_t *sys) {
   // while (UV_EBUSY == uv_loop_close(sys->eventloop)) {
   // };
   // TODO(networking): need to properly free the system too
-  // printf("Freeing httpServers\n");
-  // fflush(stdout);
-  valk_mem_free(sys->httpServers);
-  // printf("Freeing httpClients\n");
-  // fflush(stdout);
-  valk_mem_free(sys->httpClients);
-  // printf("Freeing httpConnections\n");
-  // fflush(stdout);
-  valk_mem_free(sys->httpConnections);
-  // printf("Freeing handleSlab\n");
-  // fflush(stdout);
-  valk_mem_free(sys->handleSlab);
+  // Slabs were allocated with malloc allocator, so free with malloc allocator
+  VALK_WITH_ALLOC(&valk_malloc_allocator) {
+    valk_slab_free(sys->httpServers);
+    valk_slab_free(sys->httpClients);
+    valk_slab_free(sys->httpConnections);
+    valk_slab_free(sys->handleSlab);
+  }
   // printf("Freeing sys\n");
   // fflush(stdout);
   valk_mem_free(sys);

@@ -2247,14 +2247,13 @@ static valk_lval_t* valk_builtin_stack_depth(valk_lenv_t* e, valk_lval_t* a) {
 // Memory Statistics Builtins
 // ============================================================================
 
-// (memory-stats) - Print combined memory statistics to stderr
+// (memory-stats) - Print combined memory statistics to stdout
 static valk_lval_t* valk_builtin_memory_stats(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
+  valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
   valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
-  // Note: scratch arena not currently exposed via thread context
-  // For now just print heap stats
-  valk_gc_malloc_print_stats(heap);
+  valk_memory_print_stats(scratch, heap, stdout);
   return valk_lval_nil();
 }
 

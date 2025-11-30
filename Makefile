@@ -69,7 +69,7 @@ infer:
 
 .PHONY: repl
 repl: build
-	build/valk src/prelude.valk
+	build/valk --repl src/prelude.valk
 
 
 .PHONY: debug

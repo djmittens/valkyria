@@ -495,37 +495,50 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
   fprintf(stderr, "=========================\n\n");
 }
 
+// Print a line with box drawing, auto-padded to width
+static void print_boxed_line(FILE* out, const char* content) {
+  int len = (int)strlen(content);
+  int padding = 64 - len;
+  if (padding < 0) padding = 0;
+  fprintf(out, "║ %s%*s ║\n", content, padding, "");
+}
+
 // Print combined memory statistics (scratch arena + GC heap)
 void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap, FILE* out) {
   if (out == NULL) out = stderr;
+  char buf[256];
 
   fprintf(out, "\n╔══════════════════════════════════════════════════════════════════╗\n");
-  fprintf(out, "║                    MEMORY STATISTICS                              ║\n");
+  print_boxed_line(out, "                   MEMORY STATISTICS");
   fprintf(out, "╠══════════════════════════════════════════════════════════════════╣\n");
 
   if (scratch != NULL) {
-    fprintf(out, "║ SCRATCH ARENA                                                    ║\n");
-    fprintf(out, "║   Current usage:     %10zu / %10zu bytes (%5.1f%%)        ║\n",
+    print_boxed_line(out, "SCRATCH ARENA");
+    snprintf(buf, sizeof(buf), "  Current usage:     %10zu / %10zu bytes (%5.1f%%)",
             scratch->offset, scratch->capacity,
             100.0 * scratch->offset / scratch->capacity);
-    fprintf(out, "║   High water mark:   %10zu bytes (%5.1f%%)                   ║\n",
+    print_boxed_line(out, buf);
+    snprintf(buf, sizeof(buf), "  High water mark:   %10zu bytes (%5.1f%%)",
             scratch->stats.high_water_mark,
             100.0 * scratch->stats.high_water_mark / scratch->capacity);
-    fprintf(out, "║   Total allocations: %10zu                                  ║\n",
-            scratch->stats.total_allocations);
-    fprintf(out, "║   Resets:            %10zu                                  ║\n",
-            scratch->stats.num_resets);
-    fprintf(out, "║   Checkpoints:       %10zu                                  ║\n",
-            scratch->stats.num_checkpoints);
+    print_boxed_line(out, buf);
+    snprintf(buf, sizeof(buf), "  Total allocations: %10zu", scratch->stats.total_allocations);
+    print_boxed_line(out, buf);
+    snprintf(buf, sizeof(buf), "  Resets:            %10zu", scratch->stats.num_resets);
+    print_boxed_line(out, buf);
+    snprintf(buf, sizeof(buf), "  Checkpoints:       %10zu", scratch->stats.num_checkpoints);
+    print_boxed_line(out, buf);
 
     if (scratch->stats.num_checkpoints > 0) {
-      fprintf(out, "║   Avg values/chkpt:  %10.1f                                  ║\n",
+      snprintf(buf, sizeof(buf), "  Avg values/chkpt:  %10.1f",
               (double)scratch->stats.values_evacuated / scratch->stats.num_checkpoints);
+      print_boxed_line(out, buf);
     }
 
     if (scratch->stats.overflow_fallbacks > 0) {
-      fprintf(out, "║   ⚠️  Overflow fallbacks: %6zu (%zu bytes)                      ║\n",
+      snprintf(buf, sizeof(buf), "  [!] Overflow fallbacks: %zu (%zu bytes)",
               scratch->stats.overflow_fallbacks, scratch->stats.overflow_bytes);
+      print_boxed_line(out, buf);
     }
     fprintf(out, "╠══════════════════════════════════════════════════════════════════╣\n");
   }
@@ -537,28 +550,31 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* h
       object_count++;
     }
 
-    fprintf(out, "║ GC HEAP                                                          ║\n");
-    fprintf(out, "║   Allocated:         %10zu / %10zu bytes (%5.1f%%)        ║\n",
+    print_boxed_line(out, "GC HEAP");
+    snprintf(buf, sizeof(buf), "  Allocated:         %10zu / %10zu bytes (%5.1f%%)",
             heap->allocated_bytes, heap->gc_threshold,
             100.0 * heap->allocated_bytes / heap->gc_threshold);
-    fprintf(out, "║   Hard limit:        %10zu bytes (%5.1f%% used)             ║\n",
+    print_boxed_line(out, buf);
+    snprintf(buf, sizeof(buf), "  Hard limit:        %10zu bytes (%5.1f%% used)",
             heap->hard_limit,
             100.0 * heap->allocated_bytes / heap->hard_limit);
-    fprintf(out, "║   Peak usage:        %10zu bytes                            ║\n",
-            heap->stats.peak_usage);
-    fprintf(out, "║   Live objects:      %10zu                                  ║\n",
-            object_count);
-    fprintf(out, "║   Collections:       %10zu                                  ║\n",
-            heap->num_collections);
+    print_boxed_line(out, buf);
+    snprintf(buf, sizeof(buf), "  Peak usage:        %10zu bytes", heap->stats.peak_usage);
+    print_boxed_line(out, buf);
+    snprintf(buf, sizeof(buf), "  Live objects:      %10zu", object_count);
+    print_boxed_line(out, buf);
+    snprintf(buf, sizeof(buf), "  Collections:       %10zu", heap->num_collections);
+    print_boxed_line(out, buf);
 
     if (heap->stats.emergency_collections > 0) {
-      fprintf(out, "║   ⚠️  Emergency GCs:     %6zu                                   ║\n",
-              heap->stats.emergency_collections);
+      snprintf(buf, sizeof(buf), "  [!] Emergency GCs: %zu", heap->stats.emergency_collections);
+      print_boxed_line(out, buf);
     }
 
     if (heap->stats.evacuations_from_scratch > 0) {
-      fprintf(out, "║   Evacuations recv'd:%10zu (%zu bytes)                     ║\n",
+      snprintf(buf, sizeof(buf), "  Evacuations recv'd:%10zu (%zu bytes)",
               heap->stats.evacuations_from_scratch, heap->stats.evacuation_bytes);
+      print_boxed_line(out, buf);
     }
   }
 
@@ -1209,6 +1225,7 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
   evac_ctx_init(&ctx);
 
   // Phase 1: Evacuate all reachable values from root environment
+  VALK_DEBUG("Checkpoint Phase 1: Starting evacuation from scratch arena");
   if (root_env != NULL) {
     valk_evacuate_env(&ctx, root_env);
 
@@ -1218,9 +1235,13 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
       valk_evacuate_children(&ctx, v);
     }
   }
+  VALK_DEBUG("Checkpoint Phase 1: Evacuated %zu values (%zu bytes)",
+             ctx.values_copied, ctx.bytes_copied);
 
   // Phase 2: Fix all pointers in evacuated values only
   // This avoids iterating heap->objects which may contain non-value allocations
+  VALK_DEBUG("Checkpoint Phase 2: Fixing pointers in %zu evacuated values",
+             ctx.evacuated_count);
   for (size_t i = 0; i < ctx.evacuated_count; i++) {
     valk_fix_pointers(&ctx, ctx.evacuated[i]);
   }
@@ -1229,6 +1250,7 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
   if (root_env != NULL) {
     valk_fix_env_pointers(&ctx, root_env);
   }
+  VALK_DEBUG("Checkpoint Phase 2: Fixed %zu pointers", ctx.pointers_fixed);
 
   // Update scratch arena stats
   scratch->stats.num_checkpoints++;
