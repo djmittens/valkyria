@@ -1,0 +1,88 @@
+; Phase 5 Integration Tests
+; Tests for checkpoint integration with evaluation
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "Checkpoint Integration Tests")
+
+; Test that many top-level defs work (exercises checkpoint between expressions)
+(def {integration-var-1} 1)
+(def {integration-var-2} 2)
+(def {integration-var-3} 3)
+(def {integration-var-4} 4)
+(def {integration-var-5} 5)
+
+(test/define "many-defs-survive"
+  {== (+ integration-var-1 integration-var-2 integration-var-3
+         integration-var-4 integration-var-5) 15})
+
+; Test function definitions survive checkpoint
+(def {integration-add} (\ {x y} {+ x y}))
+(def {integration-mul} (\ {x y} {* x y}))
+
+(test/define "function-defs-survive"
+  {and (== (integration-add 3 4) 7)
+       (== (integration-mul 3 4) 12)})
+
+; Test closures survive checkpoint
+(def {make-counter} (\ {start} {\ {n} {+ start n}}))
+(def {counter-from-10} (make-counter 10))
+(def {counter-from-100} (make-counter 100))
+
+(test/define "closures-survive-checkpoint"
+  {and (== (counter-from-10 5) 15)
+       (== (counter-from-100 5) 105)})
+
+; Test map over moderate list
+(test/define "map-over-list"
+  {do
+    (= {nums} {1 2 3 4 5 6 7 8 9 10})
+    (= {doubled} (map (\ {x} {* x 2}) nums))
+    (== (sum doubled) 110)})
+
+; Test filter over list (filter numbers > 5)
+(test/define "filter-over-list"
+  {do
+    (= {nums} {1 2 3 4 5 6 7 8 9 10})
+    (= {big} (filter (\ {x} {> x 5}) nums))
+    (== (sum big) 40)})
+
+; Test foldl over list
+(test/define "foldl-over-list"
+  {do
+    (= {nums} {1 2 3 4 5})
+    (== (foldl + 0 nums) 15)})
+
+; Test recursive function with many calls
+(def {countdown} (\ {n} {
+  if (<= n 0) {0} {countdown (- n 1)}
+}))
+
+(test/define "recursive-function-many-calls"
+  {== (countdown 100) 0})
+
+; Test checkpoint-stats returns valid data
+(test/define "checkpoint-stats-valid"
+  {do
+    (= {stats} (checkpoint-stats))
+    (>= (head stats) 0)})
+
+; Test arena-usage returns reasonable value
+(test/define "arena-usage-reasonable"
+  {do
+    (= {usage} (arena-usage))
+    (= {capacity} (arena-capacity))
+    (< usage capacity)})
+
+; Test multiple sequential checkpoints don't corrupt state
+(test/define "sequential-checkpoints-safe"
+  {do
+    (= {a} 100)
+    (checkpoint)
+    (= {b} 200)
+    (checkpoint)
+    (= {c} 300)
+    (checkpoint)
+    (== (+ a b c) 600)})
+
+(test/run)

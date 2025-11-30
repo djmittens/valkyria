@@ -2082,8 +2082,13 @@ valk_lval_t* valk_parse_file(const char* filename) {
 
   do {
     da_add(&tmp, valk_lval_read(&pos, input));
-  } while ((LVAL_TYPE(tmp.items[tmp.count - 1]->cons.head) != LVAL_ERR) &&
-           (input[pos] != '\0'));
+    // Check if we got an error - errors are not cons cells
+    valk_lval_t* last = tmp.items[tmp.count - 1];
+    if (LVAL_TYPE(last) == LVAL_ERR) break;
+    // Also check if the parsed expression itself contains an error
+    if (LVAL_TYPE(last) == LVAL_CONS && LVAL_TYPE(last->cons.head) == LVAL_ERR)
+      break;
+  } while (input[pos] != '\0');
 
   free(input);
   valk_lval_t* res = valk_lval_list(tmp.items, tmp.count);

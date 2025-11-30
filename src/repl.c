@@ -77,9 +77,13 @@ int main(int argc, char* argv[]) {
         valk_lval_println(res);
       } else {
         while (valk_lval_list_count(res) > 0) {
-          valk_lval_t* x = valk_lval_eval(env, valk_lval_pop(res, 0));
+          valk_lval_t* x;
+          // Evaluate in scratch arena - checkpoint will evacuate survivors
+          VALK_WITH_ALLOC((void*)scratch) {
+            x = valk_lval_eval(env, valk_lval_pop(res, 0));
+          }
 
-          if (x->flags == LVAL_ERR) {
+          if (LVAL_TYPE(x) == LVAL_ERR) {
             valk_lval_println(x);
             break;
           }
