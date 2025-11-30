@@ -804,8 +804,7 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
 
   // Symbols are looked up in the environment
   if (LVAL_TYPE(lval) == LVAL_SYM) {
-    valk_lval_t* result = valk_lenv_get(env, lval);
-    return result;
+    return valk_lenv_get(env, lval);
   }
 
   // Cons cells are evaluated as function calls
@@ -2424,12 +2423,20 @@ static valk_lval_t* valk_builtin_identity(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 // async-shift: Capture continuation and pass to async operation
-// (async-shift k expr) - k gets bound to the current continuation
+// (async-shift {k} expr) - k gets bound to the current continuation
 static valk_lval_t* valk_builtin_async_shift(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
 
-  // First arg should be a symbol for continuation variable
-  valk_lval_t* k_sym = valk_lval_list_nth(a, 0);
+  // First arg should be a QEXPR containing the symbol for continuation variable
+  // e.g., {k} from (async-shift {k} {...})
+  valk_lval_t* k_arg = valk_lval_list_nth(a, 0);
+  valk_lval_t* k_sym;
+  if (LVAL_TYPE(k_arg) == LVAL_QEXPR || LVAL_TYPE(k_arg) == LVAL_CONS) {
+    // Extract symbol from list
+    k_sym = k_arg->cons.head;
+  } else {
+    k_sym = k_arg;
+  }
   LVAL_ASSERT_TYPE(a, k_sym, LVAL_SYM);
 
   // Create a simple mock continuation that just returns its argument
@@ -2450,6 +2457,34 @@ static valk_lval_t* valk_builtin_async_shift(valk_lenv_t* e, valk_lval_t* a) {
   // Evaluate the async expression with continuation available
   valk_lval_t* async_expr = valk_lval_list_nth(a, 1);
 
+  // Handle QEXPR body - may contain multiple expressions
+  if (LVAL_TYPE(async_expr) == LVAL_QEXPR && valk_lval_list_count(async_expr) > 0) {
+    valk_lval_t* first_elem = async_expr->cons.head;
+    // Check if this looks like a sequence (first element is a list, not a symbol)
+    if (valk_is_list_type(LVAL_TYPE(first_elem))) {
+      // Implicit do: evaluate each expression, return last
+      valk_lval_t* result = valk_lval_nil();
+      valk_lval_t* curr = async_expr;
+      while (!valk_lval_list_is_empty(curr)) {
+        result = valk_lval_eval(e, curr->cons.head);
+        if (LVAL_TYPE(result) == LVAL_ERR) {
+          return result;
+        }
+        curr = curr->cons.tail;
+      }
+      return result;
+    }
+    // Single expression - convert QEXPR to CONS for evaluation
+    size_t count = valk_lval_list_count(async_expr);
+    valk_lval_t* items[count];
+    valk_lval_t* curr = async_expr;
+    for (size_t i = 0; i < count; i++) {
+      items[i] = curr->cons.head;
+      curr = curr->cons.tail;
+    }
+    async_expr = valk_lval_list(items, count);
+  }
+
   return valk_lval_eval(e, async_expr);
 }
 
@@ -2460,9 +2495,37 @@ static valk_lval_t* valk_builtin_async_reset(valk_lenv_t* e, valk_lval_t* a) {
 
   // Evaluate the expression in an async context
   // In full implementation, this would set up delimiter/prompt
-  valk_lval_t* expr = valk_lval_list_nth(a, 0);
+  valk_lval_t* body = valk_lval_list_nth(a, 0);
 
-  return valk_lval_eval(e, expr);
+  // Handle QEXPR body - may contain multiple expressions
+  if (LVAL_TYPE(body) == LVAL_QEXPR && valk_lval_list_count(body) > 0) {
+    valk_lval_t* first_elem = body->cons.head;
+    // Check if this looks like a sequence (first element is a list, not a symbol)
+    if (valk_is_list_type(LVAL_TYPE(first_elem))) {
+      // Implicit do: evaluate each expression, return last
+      valk_lval_t* result = valk_lval_nil();
+      valk_lval_t* curr = body;
+      while (!valk_lval_list_is_empty(curr)) {
+        result = valk_lval_eval(e, curr->cons.head);
+        if (LVAL_TYPE(result) == LVAL_ERR) {
+          return result;
+        }
+        curr = curr->cons.tail;
+      }
+      return result;
+    }
+    // Single expression in QEXPR - convert to CONS for evaluation
+    size_t count = valk_lval_list_count(body);
+    valk_lval_t* items[count];
+    valk_lval_t* curr = body;
+    for (size_t i = 0; i < count; i++) {
+      items[i] = curr->cons.head;
+      curr = curr->cons.tail;
+    }
+    body = valk_lval_list(items, count);
+  }
+
+  return valk_lval_eval(e, body);
 }
 
 // async-resume: Resume a continuation with a value

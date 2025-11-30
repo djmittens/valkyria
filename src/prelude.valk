@@ -3,8 +3,8 @@
 (print "Hello and welcome to the prelude n Shit")
 
 ; Function Definitions
-(def {fun} (\ {f b}  {
-   def (head f) (\ (tail f) b)
+(def {fun} (\ {_fn _body}  {
+   def (head _fn) (\ (tail _fn) _body)
 }))
 
 ;(error "And this is an error n stuff")
