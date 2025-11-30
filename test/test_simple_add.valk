@@ -1,6 +1,0 @@
-; Simpler test - just define add directly
-(def {add} (\ {x y} {+ x y}))
-(print "add defined:")
-(print add)
-(print "calling add 5 3:")
-(print (add 5 3))

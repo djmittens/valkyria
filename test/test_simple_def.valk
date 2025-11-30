@@ -1,9 +1,0 @@
-; Test simple def and call
-(def {test} (\ {x} {
-  (print "Inside test, x =")
-  (print x)
-}))
-
-(print "About to call test")
-(test 42)
-(print "After calling test")

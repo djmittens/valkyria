@@ -1,5 +1,0 @@
-; Debug foldl with one element
-(load "src/prelude.valk")
-
-(print "foldl + 0 {5}:")
-(print (foldl + 0 {5}))

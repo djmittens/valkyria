@@ -1,7 +1,0 @@
-(load "src/prelude.valk")
-
-(printf "Test: select with literal values\n")
-(= {result} (select {true 100} {otherwise 999}))
-(printf "Result: %ld\n" result)
-
-(shutdown 0)

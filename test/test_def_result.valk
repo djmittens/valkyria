@@ -1,6 +1,0 @@
-; Test what def returns
-(print "Result of (def {x} 42):")
-(print (def {x} 42))
-
-(print "Is x defined?")
-(print x)

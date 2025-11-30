@@ -1,2 +1,0 @@
-; Test if literal lambda triggers debug output
-(\ {x} {(+ x 1)})

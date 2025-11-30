@@ -1,8 +1,0 @@
-(load "src/prelude.valk")
-
-(= {n} 41)
-(printf "n = %ld\n" n)
-(printf "eval {(+ n 1)} = %ld\n" (eval {(+ n 1)}))
-(printf "eval {+ n 1} = %ld\n" (eval {+ n 1}))
-
-(shutdown 0)

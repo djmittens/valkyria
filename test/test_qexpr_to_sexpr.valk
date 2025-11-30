@@ -1,7 +1,0 @@
-; Test qexpr to sexpr conversion
-(def {my-qexpr} {+ 10 20})
-(print "my-qexpr:")
-(print my-qexpr)
-
-(print "Evaluating with eval:")
-(print (eval my-qexpr))

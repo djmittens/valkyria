@@ -1,5 +1,0 @@
-; Very simple test
-(def {fun} (\ {f b} {def (head f) (\ (tail f) b)}))
-
-(fun {add x y} {+ x y})
-(print (add 5 3))

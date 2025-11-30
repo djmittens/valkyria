@@ -1,5 +1,0 @@
-; Test variadic function
-((\ {x & rest} {
-  (print x)
-  (print rest)
-}) 1 2 3 4)

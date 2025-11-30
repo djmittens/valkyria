@@ -1,5 +1,0 @@
-(load "src/prelude.valk")
-
-(= {result} (nth 1 {100 200 300}))
-
-(shutdown 0)

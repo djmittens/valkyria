@@ -1,6 +1,0 @@
-; Test single element sexpr
-(print "Testing (45)")
-(print (45))
-(print "Testing eval of {45}")
-(print (eval {45}))
-(print "Done")

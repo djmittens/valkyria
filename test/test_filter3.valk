@@ -1,8 +1,0 @@
-(load "src/prelude.valk")
-(load "src/modules/test.valk")
-
-(test/define "test1" {do true})
-(test/define "test2" {do (printf "TEST2\n") true})
-
-(printf "Running tests:\n")
-(test/run {})

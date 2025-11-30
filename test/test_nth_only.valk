@@ -1,6 +1,0 @@
-(load "src/prelude.valk")
-
-(printf "Test: nth function\n")
-(printf "nth 1 {100 200 300}: %ld\n" (nth 1 {100 200 300}))
-
-(shutdown 0)

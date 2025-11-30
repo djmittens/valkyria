@@ -1,2 +1,0 @@
-; Simplest possible lambda test
-((\ {x} {(print x)}) 42)

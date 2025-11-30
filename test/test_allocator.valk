@@ -1,5 +1,0 @@
-; Test which allocator is being used
-(printf "Testing allocator usage\n")
-(= {x} {1 2 3})
-(printf "Created list\n")
-(shutdown 0)

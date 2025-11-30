@@ -1,8 +1,0 @@
-(printf "Testing lambda\n")
-
-(def {add} (\ {a b} (+ a b)))
-
-(printf "About to call add\n")
-(printf "Result: %ld\n" (add 1 2))
-
-(shutdown 0)

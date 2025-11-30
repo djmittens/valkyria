@@ -1,4 +1,0 @@
-(load "src/prelude.valk")
-(printf "Before test\n")
-(printf "Testing printf\n")
-(printf "After test\n")

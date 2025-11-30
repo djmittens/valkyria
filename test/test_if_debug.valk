@@ -1,5 +1,0 @@
-; Test if statement behavior
-(print "Testing if with qexpr branches")
-(def {result} (if 1 {42} {0}))
-(print result)
-(print "Done")

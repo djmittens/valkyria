@@ -1,6 +1,0 @@
-(load "src/prelude.valk")
-
-(print "Testing map")
-(def {result} (map (\ {x} {do (print x) (* 2 x)}) {1 2 3}))
-(print "Result:")
-(print result)

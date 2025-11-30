@@ -1,8 +1,0 @@
-(load "src/prelude.valk")
-
-(printf "Direct number: %ld\n" 100)
-(= {x} 100)
-(printf "Via variable: %ld\n" x)
-(printf "Via fst: %ld\n" (fst {100 200}))
-
-(shutdown 0)
