@@ -4,6 +4,7 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 (load "src/http_api.valk")
+(test/suite "HTTP API Tests")
 
 ; ============================================================================
 ; Request Creation Tests

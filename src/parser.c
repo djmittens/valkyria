@@ -1128,7 +1128,7 @@ valk_lval_t* valk_lval_join(valk_lval_t* a, valk_lval_t* b) {
     valk_lval_t** items;
     size_t count;
     size_t capacity;
-  } tmp;
+  } tmp = {0};
 
   da_init(&tmp);
 
@@ -2247,7 +2247,7 @@ valk_lval_t* valk_parse_file(const char* filename) {
     valk_lval_t** items;
     size_t count;
     size_t capacity;
-  } tmp;
+  } tmp = {0};
 
   da_init(&tmp);
 

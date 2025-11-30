@@ -1,6 +1,0 @@
-(load "src/prelude.valk")
-
-(printf "Step 1: Load test module\n")
-(load "src/modules/test.valk")
-
-(printf "Step 2: Test module loaded\n")

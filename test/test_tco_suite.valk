@@ -2,6 +2,7 @@
 
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
+(test/suite "TCO Tests")
 
 ; ============================================================================
 ; Basic TCO Tests

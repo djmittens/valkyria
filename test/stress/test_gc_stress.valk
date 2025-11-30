@@ -3,6 +3,7 @@
 
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
+(test/suite "GC Stress Tests")
 
 ; ============================================================================
 ; Allocation Stress Tests

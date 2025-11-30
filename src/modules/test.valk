@@ -4,6 +4,11 @@
 (def {*test-passed*} 0)
 (def {*test-failed*} 0)
 (def {*test-suite-name*} "Valkyria Test Suite")
+(def {*test-debug*} 0)  ; Set to 1 to enable debug output
+
+(fun {test/debug enabled} {
+  (def {*test-debug*} enabled)
+})
 
 (fun {test/suite name} {
   (def {*test-suite-name*} name)
@@ -38,38 +43,40 @@
 
 (fun {*test-run-one* test} {
   do
-    ; Debug: print raw test structure
-    (printf "[DEBUG] Running test: ")
-    (print test)
-
     ; Extract from the Q-expression
     ; head returns {name} so we eval it to get name
-    ; tail returns {body} so head tail returns body which we keep as-is
+    ; tail returns {body} - keep as qexpr, don't eval yet!
     (= {test-name} (eval (head test)))
-    (printf "[DEBUG] Test name extracted: %s\n" test-name)
+    (= {test-body} (head (tail test)))
 
-    (= {test-body} (eval (head (tail test))))
-    (printf "[DEBUG] Test body extracted: ")
-    (print test-body)
+    ; Debug output if enabled
+    (if (== *test-debug* 1)
+      {do
+        (printf "[DEBUG] Running test: ")
+        (print test)
+        (printf "[DEBUG] Test name: %s\n" test-name)
+        (printf "[DEBUG] Test body: ")
+        (print test-body)}
+      {true})
 
-    ; Time the test
+    ; Time the test - eval the body here
     (= {start-time} (time-us {}))
-    (printf "[DEBUG] About to eval test body...\n")
     (= {result} (eval test-body))
-    (printf "[DEBUG] Test body result: ")
-    (print result)
     (= {end-time} (time-us {}))
     (= {elapsed} (- end-time start-time))
 
-    ; Check if result is an error
-    (= {is-error} (error? result))
-    (if is-error
-      {printf "[DEBUG] Result is an ERROR!\n"}
+    ; Debug output if enabled
+    (if (== *test-debug* 1)
+      {do
+        (printf "[DEBUG] Result: ")
+        (print result)
+        (if (error? result)
+          {printf "[DEBUG] Result is an ERROR!\n"}
+          {true})}
       {true})
 
     ; Check if result is truthy (not error, not 0)
     (= {passed} (if (== result true) {1} {0}))
-    (printf "[DEBUG] Passed = %ld\n" passed)
 
     ; Print result with emoji first, then name + dots (aligned with C tests)
     ; C tests use 100 char width: emoji(3) + name + dots = 97 total before "  PASS"

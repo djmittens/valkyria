@@ -4,6 +4,7 @@
 
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
+(test/suite "Networking Stress Tests")
 
 ; ============================================================================
 ; Request Object Creation Stress

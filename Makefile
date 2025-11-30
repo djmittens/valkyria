@@ -105,10 +105,12 @@ test: build
 	# Crash Regressions
 	build/valk test/test_crash_regressions.valk &&\
 	# HTTP API Tests
-	build/valk test/test_http_minimal.valk
+	build/valk test/test_http_minimal.valk &&\
+	# Stress Tests
+	build/valk test/stress/test_gc_stress.valk &&\
+	build/valk test/stress/test_networking_stress.valk
 	# Note: test_networking_lisp disabled - requires specific server setup
-	# Note: Many old test files remain in test/ for reference but are not run
-	# Note: test_simple.valk removed (just printed 42, no assertions)
+	# Note: test_recursion_stress.valk disabled - hangs on deep recursion tests
 
 .PHONY: todo
 todo:

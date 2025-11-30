@@ -5,6 +5,7 @@
 
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
+(test/suite "Do Block Tests")
 
 ; ============================================================================
 ; Basic Do Block Tests

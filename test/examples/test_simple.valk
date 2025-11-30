@@ -1,2 +1,0 @@
-; Test without if - just function call
-(print 42)
