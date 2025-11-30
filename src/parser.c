@@ -197,6 +197,8 @@ const char* valk_ltype_name(valk_ltype_e type) {
       return "Environment";
     case LVAL_CONT:
       return "Continuation";
+    case LVAL_FORWARD:
+      return "Forward";
     case LVAL_UNDEFINED:
       return "UNDEFINED";
   }
@@ -535,6 +537,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
     }
     case LVAL_ENV:
     case LVAL_CONT:
+    case LVAL_FORWARD:
     case LVAL_UNDEFINED:
       break;
   }
@@ -628,6 +631,7 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
       VALK_RAISE("LVAL is undefined, something went wrong");
       break;
     case LVAL_CONT:
+    case LVAL_FORWARD:
       break;
   }
 
@@ -1097,6 +1101,9 @@ void valk_lval_print(valk_lval_t* val) {
       break;
     case LVAL_ENV:
       printf("[LEnv]");
+      break;
+    case LVAL_FORWARD:
+      printf("<forward:%p>", (void*)val->forward);
       break;
     case LVAL_UNDEFINED:
       printf("[Undefined]");

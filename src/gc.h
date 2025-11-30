@@ -81,3 +81,49 @@ void valk_gc_free_object(void* heap, void* ptr);
 // Arena-based GC (informational only, for backward compatibility)
 size_t valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena);
 bool valk_gc_should_collect_arena(valk_mem_arena_t* arena);
+
+// ============================================================================
+// Forwarding Pointer Helpers (for scratch evacuation)
+// ============================================================================
+
+// Set forwarding pointer: mark src as forwarded, point to dst
+void valk_lval_set_forward(valk_lval_t* src, valk_lval_t* dst);
+
+// Check if value is a forwarding pointer
+bool valk_lval_is_forwarded(valk_lval_t* v);
+
+// Follow forwarding pointer chain to find final destination
+valk_lval_t* valk_lval_follow_forward(valk_lval_t* v);
+
+// ============================================================================
+// Evacuation Context (for checkpoint-based memory management)
+// ============================================================================
+
+// Context for evacuation from scratch arena to GC heap
+typedef struct {
+  valk_mem_arena_t* scratch;      // Source arena
+  valk_gc_malloc_heap_t* heap;    // Destination heap
+  valk_lval_t** worklist;         // Stack of values to process children
+  size_t worklist_count;          // Current worklist size
+  size_t worklist_capacity;       // Allocated capacity
+  size_t values_copied;           // Stats for this evacuation
+  size_t bytes_copied;            // Stats for this evacuation
+  size_t pointers_fixed;          // Stats for this evacuation
+} valk_evacuation_ctx_t;
+
+// ============================================================================
+// Checkpoint API
+// ============================================================================
+
+// Default threshold for triggering checkpoint (75% of scratch capacity)
+#define VALK_CHECKPOINT_THRESHOLD_DEFAULT 0.75f
+
+// Check if checkpoint should be triggered based on scratch usage
+bool valk_should_checkpoint(valk_mem_arena_t* scratch, float threshold);
+
+// Perform checkpoint: evacuate reachable values from scratch to heap, then reset
+void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
+                     valk_lenv_t* root_env);
+
+// Add a value to the GC heap's object list (for evacuated values)
+void valk_gc_add_to_objects(valk_gc_malloc_heap_t* heap, valk_lval_t* v);

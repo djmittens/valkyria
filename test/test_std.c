@@ -279,6 +279,7 @@ valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
     case LVAL_SYM:
     case LVAL_ENV:
     case LVAL_CONT:
+    case LVAL_FORWARD:
     case LVAL_UNDEFINED:
       return nullptr;
   }

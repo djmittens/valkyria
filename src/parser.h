@@ -45,7 +45,8 @@ typedef enum {
   LVAL_QEXPR,  // Cons cell - Q-expression (quoted data, not code)
   LVAL_ERR,
   LVAL_ENV,
-  LVAL_CONT,  // Continuation (for async/await)
+  LVAL_CONT,     // Continuation (for async/await)
+  LVAL_FORWARD,  // Forwarding pointer - only valid during scratch evacuation
 } valk_ltype_e;
 
 const char *valk_ltype_name(valk_ltype_e type);
@@ -108,6 +109,7 @@ struct valk_lval_t {
     struct valk_lenv_t env;
     long num;
     char *str;
+    valk_lval_t *forward;  // Forwarding pointer to new location (for LVAL_FORWARD)
   };
 };
 

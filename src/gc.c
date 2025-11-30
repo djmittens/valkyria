@@ -13,6 +13,30 @@ static void valk_gc_mark_env(valk_lenv_t* env);
 static void valk_gc_clear_marks_recursive(valk_lval_t* v);
 
 // ============================================================================
+// Forwarding Pointer Helpers (for scratch evacuation)
+// ============================================================================
+
+// Set forwarding pointer: mark src as forwarded, point to dst
+void valk_lval_set_forward(valk_lval_t* src, valk_lval_t* dst) {
+  // Preserve allocation bits but set type to LVAL_FORWARD
+  src->flags = LVAL_FORWARD | (src->flags & ~LVAL_TYPE_MASK);
+  src->forward = dst;
+}
+
+// Check if value is a forwarding pointer
+bool valk_lval_is_forwarded(valk_lval_t* v) {
+  return v != NULL && LVAL_TYPE(v) == LVAL_FORWARD;
+}
+
+// Follow forwarding pointer chain to find final destination
+valk_lval_t* valk_lval_follow_forward(valk_lval_t* v) {
+  while (v != NULL && LVAL_TYPE(v) == LVAL_FORWARD) {
+    v = v->forward;
+  }
+  return v;
+}
+
+// ============================================================================
 // GC Heap - Malloc-based allocator with mark & sweep
 // ============================================================================
 
@@ -266,6 +290,9 @@ static void valk_gc_mark_lval(valk_lval_t* v) {
 
     case LVAL_UNDEFINED:
     case LVAL_CONT:
+    case LVAL_FORWARD:
+      // Forwarding pointers should not exist during GC marking
+      // (they only exist transiently during evacuation)
       break;
   }
 }
@@ -731,4 +758,441 @@ size_t valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena) {
   }
 
   return dead_count * sizeof(valk_lval_t);
+}
+
+// ============================================================================
+// Checkpoint-based Evacuation (Phase 3)
+// ============================================================================
+
+// Initial worklist capacity
+#define EVAC_WORKLIST_INITIAL_CAPACITY 256
+
+// Initialize evacuation worklist
+static void evac_worklist_init(valk_evacuation_ctx_t* ctx) {
+  ctx->worklist = malloc(EVAC_WORKLIST_INITIAL_CAPACITY * sizeof(valk_lval_t*));
+  ctx->worklist_count = 0;
+  ctx->worklist_capacity = EVAC_WORKLIST_INITIAL_CAPACITY;
+}
+
+// Free evacuation worklist
+static void evac_worklist_free(valk_evacuation_ctx_t* ctx) {
+  if (ctx->worklist) {
+    free(ctx->worklist);
+    ctx->worklist = NULL;
+  }
+  ctx->worklist_count = 0;
+  ctx->worklist_capacity = 0;
+}
+
+// Push value to worklist
+static void evac_worklist_push(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
+  if (v == NULL) return;
+
+  // Grow if at capacity
+  if (ctx->worklist_count >= ctx->worklist_capacity) {
+    size_t new_cap = ctx->worklist_capacity * 2;
+    valk_lval_t** new_list = realloc(ctx->worklist, new_cap * sizeof(valk_lval_t*));
+    if (new_list == NULL) {
+      VALK_ERROR("Failed to grow evacuation worklist");
+      return;
+    }
+    ctx->worklist = new_list;
+    ctx->worklist_capacity = new_cap;
+  }
+
+  ctx->worklist[ctx->worklist_count++] = v;
+}
+
+// Pop value from worklist
+static valk_lval_t* evac_worklist_pop(valk_evacuation_ctx_t* ctx) {
+  if (ctx->worklist_count == 0) return NULL;
+  return ctx->worklist[--ctx->worklist_count];
+}
+
+// Add an already-allocated value to GC heap's object tracking list
+void valk_gc_add_to_objects(valk_gc_malloc_heap_t* heap, valk_lval_t* v) {
+  // Get the header (it's right before the user data)
+  valk_gc_header_t* header = ((valk_gc_header_t*)v) - 1;
+
+  // Add to live objects linked list
+  header->gc_next = heap->objects;
+  heap->objects = header;
+}
+
+// Check if checkpoint should be triggered
+bool valk_should_checkpoint(valk_mem_arena_t* scratch, float threshold) {
+  if (scratch == NULL) return false;
+  return (float)scratch->offset / scratch->capacity > threshold;
+}
+
+// Forward declarations for evacuation helpers
+static valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
+static void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
+static void valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env);
+static void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
+static void valk_fix_env_pointers(valk_evacuation_ctx_t* ctx, valk_lenv_t* env);
+
+// ============================================================================
+// Phase 1: Copy Values from Scratch to Heap
+// ============================================================================
+
+// Evacuate a single value from scratch to heap
+// Returns the new location (or original if not in scratch or already forwarded)
+static valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
+  if (v == NULL) return NULL;
+
+  // Already forwarded? Return destination
+  if (LVAL_TYPE(v) == LVAL_FORWARD) {
+    return v->forward;
+  }
+
+  // Not in scratch? Return as-is (already in heap or global)
+  if (LVAL_ALLOC(v) != LVAL_ALLOC_SCRATCH) {
+    return v;
+  }
+
+  // Allocate new value in heap
+  valk_lval_t* new_val = NULL;
+  VALK_WITH_ALLOC((void*)ctx->heap) {
+    new_val = valk_mem_alloc(sizeof(valk_lval_t));
+  }
+
+  if (new_val == NULL) {
+    VALK_ERROR("Failed to allocate value during evacuation");
+    return v;
+  }
+
+  // Copy the value data
+  memcpy(new_val, v, sizeof(valk_lval_t));
+
+  // Update allocation flags: clear scratch, set heap
+  new_val->flags = (new_val->flags & ~LVAL_ALLOC_MASK) | LVAL_ALLOC_HEAP;
+  new_val->origin_allocator = ctx->heap;
+
+  // Copy strings for string types (they're also in scratch arena)
+  switch (LVAL_TYPE(new_val)) {
+    case LVAL_SYM:
+    case LVAL_STR:
+    case LVAL_ERR:
+      if (new_val->str != NULL && valk_ptr_in_arena(ctx->scratch, new_val->str)) {
+        size_t len = strlen(v->str) + 1;
+        VALK_WITH_ALLOC((void*)ctx->heap) {
+          new_val->str = valk_mem_alloc(len);
+        }
+        if (new_val->str) {
+          memcpy(new_val->str, v->str, len);
+          ctx->bytes_copied += len;
+        }
+      }
+      break;
+
+    case LVAL_FUN:
+      // Copy function name if it's a lambda (not builtin) and in scratch
+      if (new_val->fun.name != NULL && new_val->fun.builtin == NULL &&
+          valk_ptr_in_arena(ctx->scratch, new_val->fun.name)) {
+        size_t len = strlen(v->fun.name) + 1;
+        VALK_WITH_ALLOC((void*)ctx->heap) {
+          new_val->fun.name = valk_mem_alloc(len);
+        }
+        if (new_val->fun.name) {
+          memcpy(new_val->fun.name, v->fun.name, len);
+          ctx->bytes_copied += len;
+        }
+      }
+      break;
+
+    default:
+      break;
+  }
+
+  // Set forwarding pointer in old location
+  valk_lval_set_forward(v, new_val);
+
+  // Update stats
+  ctx->values_copied++;
+  ctx->bytes_copied += sizeof(valk_lval_t);
+
+  return new_val;
+}
+
+// Evacuate children of a value (push to worklist for processing)
+static void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
+  if (v == NULL) return;
+
+  switch (LVAL_TYPE(v)) {
+    case LVAL_CONS:
+    case LVAL_QEXPR:
+      // Evacuate and queue head
+      if (v->cons.head != NULL) {
+        valk_lval_t* new_head = valk_evacuate_value(ctx, v->cons.head);
+        if (new_head != v->cons.head) {
+          v->cons.head = new_head;
+        }
+        if (new_head != NULL && LVAL_ALLOC(new_head) == LVAL_ALLOC_HEAP) {
+          evac_worklist_push(ctx, new_head);
+        }
+      }
+      // Evacuate and queue tail
+      if (v->cons.tail != NULL) {
+        valk_lval_t* new_tail = valk_evacuate_value(ctx, v->cons.tail);
+        if (new_tail != v->cons.tail) {
+          v->cons.tail = new_tail;
+        }
+        if (new_tail != NULL && LVAL_ALLOC(new_tail) == LVAL_ALLOC_HEAP) {
+          evac_worklist_push(ctx, new_tail);
+        }
+      }
+      break;
+
+    case LVAL_FUN:
+      if (v->fun.builtin == NULL) {
+        // Evacuate formals
+        if (v->fun.formals != NULL) {
+          valk_lval_t* new_formals = valk_evacuate_value(ctx, v->fun.formals);
+          if (new_formals != v->fun.formals) {
+            v->fun.formals = new_formals;
+          }
+          if (new_formals != NULL) {
+            evac_worklist_push(ctx, new_formals);
+          }
+        }
+        // Evacuate body
+        if (v->fun.body != NULL) {
+          valk_lval_t* new_body = valk_evacuate_value(ctx, v->fun.body);
+          if (new_body != v->fun.body) {
+            v->fun.body = new_body;
+          }
+          if (new_body != NULL) {
+            evac_worklist_push(ctx, new_body);
+          }
+        }
+        // Evacuate closure environment
+        if (v->fun.env != NULL) {
+          valk_evacuate_env(ctx, v->fun.env);
+        }
+      }
+      break;
+
+    case LVAL_ENV:
+      valk_evacuate_env(ctx, &v->env);
+      break;
+
+    default:
+      // Leaf types (NUM, SYM, STR, ERR, REF, NIL) have no children
+      break;
+  }
+}
+
+// Evacuate an environment's arrays and values
+static void valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
+  if (env == NULL) return;
+
+  // Evacuate symbol strings array if in scratch
+  if (env->symbols.items != NULL && valk_ptr_in_arena(ctx->scratch, env->symbols.items)) {
+    size_t array_size = env->symbols.capacity * sizeof(char*);
+    char** new_items = NULL;
+    VALK_WITH_ALLOC((void*)ctx->heap) {
+      new_items = valk_mem_alloc(array_size);
+    }
+    if (new_items) {
+      memcpy(new_items, env->symbols.items, env->symbols.count * sizeof(char*));
+      env->symbols.items = new_items;
+      ctx->bytes_copied += array_size;
+    }
+  }
+
+  // Evacuate individual symbol strings if in scratch
+  for (size_t i = 0; i < env->symbols.count; i++) {
+    if (env->symbols.items[i] != NULL &&
+        valk_ptr_in_arena(ctx->scratch, env->symbols.items[i])) {
+      size_t len = strlen(env->symbols.items[i]) + 1;
+      char* new_str = NULL;
+      VALK_WITH_ALLOC((void*)ctx->heap) {
+        new_str = valk_mem_alloc(len);
+      }
+      if (new_str) {
+        memcpy(new_str, env->symbols.items[i], len);
+        env->symbols.items[i] = new_str;
+        ctx->bytes_copied += len;
+      }
+    }
+  }
+
+  // Evacuate values array if in scratch
+  if (env->vals.items != NULL && valk_ptr_in_arena(ctx->scratch, env->vals.items)) {
+    size_t array_size = env->vals.capacity * sizeof(valk_lval_t*);
+    valk_lval_t** new_items = NULL;
+    VALK_WITH_ALLOC((void*)ctx->heap) {
+      new_items = valk_mem_alloc(array_size);
+    }
+    if (new_items) {
+      memcpy(new_items, env->vals.items, env->vals.count * sizeof(valk_lval_t*));
+      env->vals.items = new_items;
+      ctx->bytes_copied += array_size;
+    }
+  }
+
+  // Evacuate each value in the environment
+  for (size_t i = 0; i < env->vals.count; i++) {
+    valk_lval_t* val = env->vals.items[i];
+    if (val != NULL) {
+      valk_lval_t* new_val = valk_evacuate_value(ctx, val);
+      if (new_val != val) {
+        env->vals.items[i] = new_val;
+      }
+      // Push to worklist for child processing
+      if (new_val != NULL) {
+        evac_worklist_push(ctx, new_val);
+      }
+    }
+  }
+
+  // Recursively evacuate parent and fallback environments
+  valk_evacuate_env(ctx, env->parent);
+  valk_evacuate_env(ctx, env->fallback);
+}
+
+// ============================================================================
+// Phase 2: Fix Pointers to Use New Locations
+// ============================================================================
+
+// Fix pointers in a value to follow forwarding pointers
+static void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
+  if (v == NULL) return;
+
+  // Skip if still in scratch (shouldn't happen after proper evacuation)
+  if (LVAL_ALLOC(v) == LVAL_ALLOC_SCRATCH) return;
+
+  switch (LVAL_TYPE(v)) {
+    case LVAL_CONS:
+    case LVAL_QEXPR:
+      if (v->cons.head != NULL && valk_lval_is_forwarded(v->cons.head)) {
+        v->cons.head = valk_lval_follow_forward(v->cons.head);
+        ctx->pointers_fixed++;
+      }
+      if (v->cons.tail != NULL && valk_lval_is_forwarded(v->cons.tail)) {
+        v->cons.tail = valk_lval_follow_forward(v->cons.tail);
+        ctx->pointers_fixed++;
+      }
+      break;
+
+    case LVAL_FUN:
+      if (v->fun.builtin == NULL) {
+        if (v->fun.formals != NULL && valk_lval_is_forwarded(v->fun.formals)) {
+          v->fun.formals = valk_lval_follow_forward(v->fun.formals);
+          ctx->pointers_fixed++;
+        }
+        if (v->fun.body != NULL && valk_lval_is_forwarded(v->fun.body)) {
+          v->fun.body = valk_lval_follow_forward(v->fun.body);
+          ctx->pointers_fixed++;
+        }
+        if (v->fun.env != NULL) {
+          valk_fix_env_pointers(ctx, v->fun.env);
+        }
+      }
+      break;
+
+    case LVAL_ENV:
+      valk_fix_env_pointers(ctx, &v->env);
+      break;
+
+    default:
+      // Leaf types have no pointer children
+      break;
+  }
+}
+
+// Fix pointers in an environment
+static void valk_fix_env_pointers(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
+  if (env == NULL) return;
+
+  // Fix all value pointers
+  for (size_t i = 0; i < env->vals.count; i++) {
+    valk_lval_t* val = env->vals.items[i];
+    if (val != NULL && valk_lval_is_forwarded(val)) {
+      env->vals.items[i] = valk_lval_follow_forward(val);
+      ctx->pointers_fixed++;
+    }
+  }
+
+  // Recursively fix parent and fallback environments
+  valk_fix_env_pointers(ctx, env->parent);
+  valk_fix_env_pointers(ctx, env->fallback);
+}
+
+// ============================================================================
+// Checkpoint: Evacuate and Reset
+// ============================================================================
+
+void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
+                     valk_lenv_t* root_env) {
+  if (scratch == NULL || heap == NULL) {
+    VALK_WARN("Checkpoint called with NULL scratch or heap");
+    return;
+  }
+
+  VALK_INFO("Checkpoint: arena at %zu/%zu bytes (%.1f%%)",
+            scratch->offset, scratch->capacity,
+            100.0 * scratch->offset / scratch->capacity);
+
+  // Log overflow stats if any occurred
+  if (scratch->stats.overflow_fallbacks > 0) {
+    VALK_WARN("Checkpoint: %zu allocations (%zu bytes) overflowed to heap",
+              scratch->stats.overflow_fallbacks, scratch->stats.overflow_bytes);
+  }
+
+  // Initialize evacuation context
+  valk_evacuation_ctx_t ctx = {
+    .scratch = scratch,
+    .heap = heap,
+    .worklist = NULL,
+    .worklist_count = 0,
+    .worklist_capacity = 0,
+    .values_copied = 0,
+    .bytes_copied = 0,
+    .pointers_fixed = 0,
+  };
+
+  evac_worklist_init(&ctx);
+
+  // Phase 1: Evacuate all reachable values from root environment
+  if (root_env != NULL) {
+    valk_evacuate_env(&ctx, root_env);
+
+    // Process worklist until empty (evacuate children)
+    while (ctx.worklist_count > 0) {
+      valk_lval_t* v = evac_worklist_pop(&ctx);
+      valk_evacuate_children(&ctx, v);
+    }
+  }
+
+  // Phase 2: Fix all pointers in heap objects
+  for (valk_gc_header_t* h = heap->objects; h != NULL; h = h->gc_next) {
+    valk_lval_t* v = (valk_lval_t*)(h + 1);
+    valk_fix_pointers(&ctx, v);
+  }
+
+  // Fix pointers in root environment
+  if (root_env != NULL) {
+    valk_fix_env_pointers(&ctx, root_env);
+  }
+
+  // Update scratch arena stats
+  scratch->stats.num_checkpoints++;
+  scratch->stats.bytes_evacuated += ctx.bytes_copied;
+  scratch->stats.values_evacuated += ctx.values_copied;
+
+  // Update heap stats
+  heap->stats.evacuations_from_scratch += ctx.values_copied;
+  heap->stats.evacuation_bytes += ctx.bytes_copied;
+  heap->stats.evacuation_pointer_fixups += ctx.pointers_fixed;
+
+  VALK_INFO("Checkpoint: evacuated %zu values (%zu bytes), fixed %zu pointers",
+            ctx.values_copied, ctx.bytes_copied, ctx.pointers_fixed);
+
+  // Reset scratch arena for next round of allocations
+  valk_mem_arena_reset(scratch);
+
+  // Cleanup
+  evac_worklist_free(&ctx);
 }

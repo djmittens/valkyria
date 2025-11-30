@@ -3,6 +3,7 @@
 #include "concurrency.h"
 #include "gc.h"
 #include "memory.h"
+#include "parser.h"
 #include "testing.h"
 #include <math.h>
 #include <pthread.h>
@@ -441,6 +442,149 @@ void test_arena_overflow_fallback(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// Phase 2: Test forwarding pointer set/check
+void test_forward_set_and_check(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Create a GC heap for test allocations
+  size_t threshold = 16 * 1024 * 1024;  // 16 MB
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+
+  // Save and set up thread context
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)heap;
+  valk_thread_ctx.heap = heap;
+
+  // Create two lvals
+  valk_lval_t *src = valk_lval_num(42);
+  valk_lval_t *dst = valk_lval_num(100);
+
+  // Initially, neither should be forwarded
+  VALK_TEST_ASSERT(!valk_lval_is_forwarded(src),
+                   "src should not be forwarded initially");
+  VALK_TEST_ASSERT(!valk_lval_is_forwarded(dst),
+                   "dst should not be forwarded initially");
+  VALK_TEST_ASSERT(LVAL_TYPE(src) == LVAL_NUM,
+                   "src should be LVAL_NUM initially");
+
+  // Set forwarding pointer
+  valk_lval_set_forward(src, dst);
+
+  // Now src should be forwarded
+  VALK_TEST_ASSERT(valk_lval_is_forwarded(src),
+                   "src should be forwarded after set_forward");
+  VALK_TEST_ASSERT(LVAL_TYPE(src) == LVAL_FORWARD,
+                   "src type should be LVAL_FORWARD");
+  VALK_TEST_ASSERT(src->forward == dst,
+                   "src->forward should point to dst");
+
+  // dst should NOT be forwarded
+  VALK_TEST_ASSERT(!valk_lval_is_forwarded(dst),
+                   "dst should not be forwarded");
+
+  // Test NULL handling
+  VALK_TEST_ASSERT(!valk_lval_is_forwarded(NULL),
+                   "NULL should not be forwarded");
+
+  // Restore context and cleanup
+  valk_thread_ctx = old_ctx;
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
+// Phase 2: Test following forwarding pointer chains
+void test_forward_follow_chain(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Create a GC heap for test allocations
+  size_t threshold = 16 * 1024 * 1024;  // 16 MB
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+
+  // Save and set up thread context
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)heap;
+  valk_thread_ctx.heap = heap;
+
+  // Create a chain: a -> b -> c -> d (final destination)
+  valk_lval_t *a = valk_lval_num(1);
+  valk_lval_t *b = valk_lval_num(2);
+  valk_lval_t *c = valk_lval_num(3);
+  valk_lval_t *d = valk_lval_num(4);  // Final destination
+
+  // Build the chain
+  valk_lval_set_forward(a, b);
+  valk_lval_set_forward(b, c);
+  valk_lval_set_forward(c, d);
+
+  // Following from any point should reach d
+  valk_lval_t *result_a = valk_lval_follow_forward(a);
+  VALK_TEST_ASSERT(result_a == d,
+                   "Following from a should reach d");
+
+  valk_lval_t *result_b = valk_lval_follow_forward(b);
+  VALK_TEST_ASSERT(result_b == d,
+                   "Following from b should reach d");
+
+  valk_lval_t *result_c = valk_lval_follow_forward(c);
+  VALK_TEST_ASSERT(result_c == d,
+                   "Following from c should reach d");
+
+  // Following from d should return d (not forwarded)
+  valk_lval_t *result_d = valk_lval_follow_forward(d);
+  VALK_TEST_ASSERT(result_d == d,
+                   "Following from d should return d itself");
+
+  // Following NULL should return NULL
+  valk_lval_t *result_null = valk_lval_follow_forward(NULL);
+  VALK_TEST_ASSERT(result_null == NULL,
+                   "Following NULL should return NULL");
+
+  // Restore context and cleanup
+  valk_thread_ctx = old_ctx;
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
+// Phase 2: Test forwarding preserves allocation flags
+void test_forward_preserves_alloc_flags(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Create a GC heap for test allocations
+  size_t threshold = 16 * 1024 * 1024;  // 16 MB
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+
+  // Save and set up thread context
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)heap;
+  valk_thread_ctx.heap = heap;
+
+  valk_lval_t *src = valk_lval_num(42);
+  valk_lval_t *dst = valk_lval_num(100);
+
+  // Get original allocation flags
+  uint64_t orig_alloc_flags = LVAL_ALLOC(src);
+
+  // Set forwarding pointer
+  valk_lval_set_forward(src, dst);
+
+  // Check that allocation flags are preserved
+  uint64_t new_alloc_flags = LVAL_ALLOC(src);
+  VALK_TEST_ASSERT(new_alloc_flags == orig_alloc_flags,
+                   "Allocation flags should be preserved after forwarding, "
+                   "got %llu expected %llu",
+                   (unsigned long long)new_alloc_flags,
+                   (unsigned long long)orig_alloc_flags);
+
+  // Type should still be LVAL_FORWARD
+  VALK_TEST_ASSERT(LVAL_TYPE(src) == LVAL_FORWARD,
+                   "Type should be LVAL_FORWARD");
+
+  // Restore context and cleanup
+  valk_thread_ctx = old_ctx;
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
 // Test total_bytes_allocated tracking
 void test_arena_total_bytes(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -472,6 +616,301 @@ void test_arena_total_bytes(VALK_TEST_ARGS()) {
                    "total_bytes_allocated should accumulate across resets");
 
   free(arena);
+  VALK_PASS();
+}
+
+// Phase 3: Test valk_should_checkpoint threshold check
+void test_should_checkpoint(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 10 * 1024;  // 10 KB
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  // Initially empty - should not trigger checkpoint
+  VALK_TEST_ASSERT(!valk_should_checkpoint(arena, 0.75f),
+                   "Empty arena should not trigger checkpoint");
+
+  // Fill to 50% - still below 75% threshold
+  size_t half = (arena->capacity * 50) / 100;
+  arena->offset = half;
+  VALK_TEST_ASSERT(!valk_should_checkpoint(arena, 0.75f),
+                   "50% full should not trigger checkpoint at 75% threshold");
+
+  // Fill to 76% - should trigger
+  size_t over_threshold = (arena->capacity * 76) / 100;
+  arena->offset = over_threshold;
+  VALK_TEST_ASSERT(valk_should_checkpoint(arena, 0.75f),
+                   "76% full should trigger checkpoint at 75% threshold");
+
+  // Fill to 100%
+  arena->offset = arena->capacity;
+  VALK_TEST_ASSERT(valk_should_checkpoint(arena, 0.75f),
+                   "100% full should trigger checkpoint");
+
+  // Test with different threshold (50%)
+  arena->offset = half;
+  VALK_TEST_ASSERT(!valk_should_checkpoint(arena, 0.50f),
+                   "50% full should not trigger at exact 50% threshold");
+
+  arena->offset = half + 1;
+  VALK_TEST_ASSERT(valk_should_checkpoint(arena, 0.50f),
+                   "50%+1 should trigger at 50% threshold");
+
+  // NULL arena should not crash and return false
+  VALK_TEST_ASSERT(!valk_should_checkpoint(NULL, 0.75f),
+                   "NULL arena should return false");
+
+  free(arena);
+  VALK_PASS();
+}
+
+// Phase 3: Test checkpoint with empty arena
+void test_checkpoint_empty(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Create scratch arena
+  size_t arena_size = 64 * 1024;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  // Create heap
+  size_t threshold = 16 * 1024 * 1024;
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+
+  // Create a simple root environment (empty)
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)heap;
+  valk_thread_ctx.heap = heap;
+
+  valk_lenv_t *env = valk_lenv_empty();
+
+  // Run checkpoint on empty arena
+  valk_checkpoint(arena, heap, env);
+
+  // Stats should show 0 evacuations
+  VALK_TEST_ASSERT(arena->stats.num_checkpoints == 1,
+                   "num_checkpoints should be 1");
+  VALK_TEST_ASSERT(arena->stats.values_evacuated == 0,
+                   "values_evacuated should be 0 for empty arena");
+  VALK_TEST_ASSERT(arena->offset == 0,
+                   "Arena offset should be 0 after checkpoint");
+
+  valk_thread_ctx = old_ctx;
+  free(arena);
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
+// Phase 3: Test checkpoint evacuates number values
+void test_checkpoint_evacuate_number(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Create scratch arena
+  size_t arena_size = 64 * 1024;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  // Create heap
+  size_t threshold = 16 * 1024 * 1024;
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+
+  // Set up thread context
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)arena;
+  valk_thread_ctx.heap = heap;
+
+  // Create environment in heap
+  VALK_WITH_ALLOC((void *)heap) {
+    valk_lenv_t *env = valk_lenv_empty();
+    valk_gc_malloc_set_root(heap, env);
+
+    // Allocate a number in scratch arena
+    VALK_WITH_ALLOC((void *)arena) {
+      valk_lval_t *num = valk_lval_num(42);
+      VALK_TEST_ASSERT(LVAL_ALLOC(num) == LVAL_ALLOC_SCRATCH,
+                       "Number should be in scratch");
+      VALK_TEST_ASSERT(num->num == 42, "Number value should be 42");
+
+      // Put the number in environment
+      valk_lenv_put(env, valk_lval_sym("x"), num);
+    }
+
+    // Verify value is in environment
+    VALK_WITH_ALLOC((void *)heap) {
+      valk_lval_t *retrieved = valk_lenv_get(env, valk_lval_sym("x"));
+      VALK_TEST_ASSERT(LVAL_TYPE(retrieved) == LVAL_NUM,
+                       "Retrieved should be number");
+      // Note: retrieved may point to scratch value which will be evacuated
+    }
+
+    // Run checkpoint
+    size_t arena_before = arena->offset;
+    VALK_TEST_ASSERT(arena_before > 0, "Arena should have allocations");
+
+    valk_checkpoint(arena, heap, env);
+
+    // Verify arena was reset
+    VALK_TEST_ASSERT(arena->offset == 0,
+                     "Arena should be reset after checkpoint");
+
+    // Verify value was evacuated
+    VALK_TEST_ASSERT(arena->stats.values_evacuated > 0,
+                     "Should have evacuated at least one value");
+
+    // Verify we can still get the value from environment
+    VALK_WITH_ALLOC((void *)heap) {
+      valk_lval_t *after = valk_lenv_get(env, valk_lval_sym("x"));
+      VALK_TEST_ASSERT(LVAL_TYPE(after) == LVAL_NUM,
+                       "Retrieved after checkpoint should be number");
+      VALK_TEST_ASSERT(after->num == 42,
+                       "Number value should still be 42 after checkpoint");
+      VALK_TEST_ASSERT(LVAL_ALLOC(after) == LVAL_ALLOC_HEAP,
+                       "After checkpoint, value should be in heap");
+    }
+  }
+
+  valk_thread_ctx = old_ctx;
+  free(arena);
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
+// Phase 3: Test checkpoint evacuates cons/list structures
+void test_checkpoint_evacuate_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Create scratch arena
+  size_t arena_size = 64 * 1024;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  // Create heap
+  size_t threshold = 16 * 1024 * 1024;
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+
+  // Set up thread context
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)arena;
+  valk_thread_ctx.heap = heap;
+
+  VALK_WITH_ALLOC((void *)heap) {
+    valk_lenv_t *env = valk_lenv_empty();
+    valk_gc_malloc_set_root(heap, env);
+
+    // Create a list (1 2 3) in scratch
+    VALK_WITH_ALLOC((void *)arena) {
+      valk_lval_t *nums[3] = {
+        valk_lval_num(1),
+        valk_lval_num(2),
+        valk_lval_num(3)
+      };
+      valk_lval_t *list = valk_lval_list(nums, 3);
+
+      // Verify it's in scratch
+      VALK_TEST_ASSERT(LVAL_ALLOC(list) == LVAL_ALLOC_SCRATCH,
+                       "List should be in scratch");
+
+      // Put in environment
+      valk_lenv_put(env, valk_lval_sym("mylist"), list);
+    }
+
+    // Run checkpoint
+    valk_checkpoint(arena, heap, env);
+
+    // Verify we can traverse the list after checkpoint
+    VALK_WITH_ALLOC((void *)heap) {
+      valk_lval_t *after = valk_lenv_get(env, valk_lval_sym("mylist"));
+      VALK_TEST_ASSERT(LVAL_TYPE(after) == LVAL_QEXPR || LVAL_TYPE(after) == LVAL_CONS,
+                       "Retrieved should be list-like");
+      VALK_TEST_ASSERT(LVAL_ALLOC(after) == LVAL_ALLOC_HEAP,
+                       "List should be in heap after checkpoint");
+
+      // Verify list contents
+      size_t count = valk_lval_list_count(after);
+      VALK_TEST_ASSERT(count == 3, "List should have 3 elements, got %zu", count);
+
+      valk_lval_t *first = valk_lval_list_nth(after, 0);
+      VALK_TEST_ASSERT(LVAL_TYPE(first) == LVAL_NUM, "First should be num");
+      VALK_TEST_ASSERT(first->num == 1, "First should be 1");
+      VALK_TEST_ASSERT(LVAL_ALLOC(first) == LVAL_ALLOC_HEAP,
+                       "First element should be in heap");
+
+      valk_lval_t *second = valk_lval_list_nth(after, 1);
+      VALK_TEST_ASSERT(second->num == 2, "Second should be 2");
+
+      valk_lval_t *third = valk_lval_list_nth(after, 2);
+      VALK_TEST_ASSERT(third->num == 3, "Third should be 3");
+    }
+  }
+
+  valk_thread_ctx = old_ctx;
+  free(arena);
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
+// Phase 3: Test checkpoint stats are updated correctly
+void test_checkpoint_stats(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 64 * 1024;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  size_t threshold = 16 * 1024 * 1024;
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)arena;
+  valk_thread_ctx.heap = heap;
+
+  VALK_WITH_ALLOC((void *)heap) {
+    valk_lenv_t *env = valk_lenv_empty();
+    valk_gc_malloc_set_root(heap, env);
+
+    // Initial stats
+    VALK_TEST_ASSERT(arena->stats.num_checkpoints == 0,
+                     "Initial checkpoints should be 0");
+    VALK_TEST_ASSERT(heap->stats.evacuations_from_scratch == 0,
+                     "Initial evacuations should be 0");
+
+    // Create some values in scratch
+    VALK_WITH_ALLOC((void *)arena) {
+      valk_lenv_put(env, valk_lval_sym("a"), valk_lval_num(1));
+      valk_lenv_put(env, valk_lval_sym("b"), valk_lval_num(2));
+      valk_lenv_put(env, valk_lval_sym("c"), valk_lval_num(3));
+    }
+
+    // First checkpoint
+    valk_checkpoint(arena, heap, env);
+
+    VALK_TEST_ASSERT(arena->stats.num_checkpoints == 1,
+                     "num_checkpoints should be 1");
+    size_t evac1 = arena->stats.values_evacuated;
+    VALK_TEST_ASSERT(evac1 > 0, "Should have evacuated some values");
+
+    // Create more values
+    VALK_WITH_ALLOC((void *)arena) {
+      valk_lenv_put(env, valk_lval_sym("d"), valk_lval_num(4));
+    }
+
+    // Second checkpoint
+    valk_checkpoint(arena, heap, env);
+
+    VALK_TEST_ASSERT(arena->stats.num_checkpoints == 2,
+                     "num_checkpoints should be 2");
+    VALK_TEST_ASSERT(arena->stats.values_evacuated > evac1,
+                     "Total evacuations should have increased");
+
+    // Heap should track evacuations received
+    VALK_TEST_ASSERT(heap->stats.evacuations_from_scratch > 0,
+                     "Heap should track evacuations received");
+  }
+
+  valk_thread_ctx = old_ctx;
+  free(arena);
+  valk_gc_malloc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -566,6 +1005,18 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_gc_heap_stats", test_gc_heap_stats);
   valk_testsuite_add_test(suite, "test_arena_overflow_fallback", test_arena_overflow_fallback);
   valk_testsuite_add_test(suite, "test_arena_total_bytes", test_arena_total_bytes);
+
+  // Phase 2 forwarding pointer tests
+  valk_testsuite_add_test(suite, "test_forward_set_and_check", test_forward_set_and_check);
+  valk_testsuite_add_test(suite, "test_forward_follow_chain", test_forward_follow_chain);
+  valk_testsuite_add_test(suite, "test_forward_preserves_alloc_flags", test_forward_preserves_alloc_flags);
+
+  // Phase 3 checkpoint/evacuation tests
+  valk_testsuite_add_test(suite, "test_should_checkpoint", test_should_checkpoint);
+  valk_testsuite_add_test(suite, "test_checkpoint_empty", test_checkpoint_empty);
+  valk_testsuite_add_test(suite, "test_checkpoint_evacuate_number", test_checkpoint_evacuate_number);
+  valk_testsuite_add_test(suite, "test_checkpoint_evacuate_list", test_checkpoint_evacuate_list);
+  valk_testsuite_add_test(suite, "test_checkpoint_stats", test_checkpoint_stats);
 
   // load fixtures
   // valk_lval_t *ast = valk_parse_file("src/prelude.valk");
