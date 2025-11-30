@@ -48,17 +48,35 @@
     (= {stats} (checkpoint-stats))
     (== (len stats) 4)})
 
-; Note: Tests for value/list/function/closure survival are in C test suite (test_memory.c)
-; The Lisp test framework has an issue with checkpoint + local assignments via eval
-; See test_checkpoint_evacuate_number/list tests in test_memory.c for coverage
+; Test basic value survives checkpoint
+(test/define "value-survives-checkpoint"
+  {do
+    (= {x} 42)
+    (checkpoint)
+    (== x 42)})
 
-; Test checkpoint can be called (smoke test)
-(test/define "checkpoint-runs"
-  {do (checkpoint) true})
+; Test list survives checkpoint
+(test/define "list-survives-checkpoint"
+  {do
+    (= {lst} {1 2 3 4 5})
+    (checkpoint)
+    (== (len lst) 5)})
 
-; Test multiple checkpoints in sequence
-(test/define "multiple-checkpoints"
-  {do (checkpoint) (checkpoint) (checkpoint) true})
+; Test function survives checkpoint
+; Note: Must use \ syntax (not fn) due to eval context limitations
+(test/define "function-survives-checkpoint"
+  {do
+    (def {add-ten} (\ {x} {+ x 10}))
+    (checkpoint)
+    (== (add-ten 5) 15)})
+
+; Test closure survives checkpoint
+(test/define "closure-survives-checkpoint"
+  {do
+    (def {make-adder} (\ {n} {\ {x} {+ x n}}))
+    (def {add5} (make-adder 5))
+    (checkpoint)
+    (== (add5 10) 15)})
 
 ; Run all tests
 (test/run)

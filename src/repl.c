@@ -84,6 +84,13 @@ int main(int argc, char* argv[]) {
             break;
           }
 
+          // Checkpoint if scratch arena usage exceeds threshold
+          if (valk_thread_ctx.checkpoint_enabled &&
+              valk_should_checkpoint(scratch,
+                                     valk_thread_ctx.checkpoint_threshold)) {
+            valk_checkpoint(scratch, gc_heap, env);
+          }
+
           // GC safe point: expression evaluated, only env is live
           if (valk_gc_malloc_should_collect(gc_heap)) {
             valk_gc_malloc_collect(gc_heap);
@@ -144,7 +151,10 @@ int main(int argc, char* argv[]) {
     valk_lval_println(result);
 
     free(input);
-    valk_mem_arena_reset(scratch);
+
+    // Checkpoint: evacuate any values stored in env (via def) to GC heap,
+    // then reset scratch arena. This replaces the simple arena reset.
+    valk_checkpoint(scratch, gc_heap, env);
 
     // GC safe point: all evaluation done, scratch reset, only environment is
     // live Classic Lisp approach - collect between expressions, never during
