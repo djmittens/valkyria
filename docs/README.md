@@ -1,15 +1,22 @@
-# Documentation
+# Valkyria Documentation
 
-## Active Documentation
+## Documentation
 
-See [`/roadmap`](../roadmap) for current development plans and phases.
+- **[LANGUAGE.md](LANGUAGE.md)** - Language reference: syntax, features, semantics
+- **[ROADMAP.md](ROADMAP.md)** - Project roadmap and future plans
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Development setup, code style, testing
 
-## Legacy Documentation
+## API Reference
 
-Archived documentation from previous planning sessions is in `/docs/archive`.
+- **[HTTP_API.md](HTTP_API.md)** - High-level HTTP API documentation
+- **[HTTP_API_QUICK_REFERENCE.md](HTTP_API_QUICK_REFERENCE.md)** - HTTP API quick reference
 
-## Key Files
+## Source Files
 
-- [`/README.md`](../README.md) - Project overview
-- [`/CLAUDE.md`](../CLAUDE.md) - AI assistant instructions
-- [`/roadmap/README.md`](../roadmap/README.md) - Development roadmap
+- `src/prelude.valk` - Standard library
+- `src/http_api.valk` - HTTP API implementation
+- `src/modules/test.valk` - Test framework
+
+## Archive
+
+Historical planning documents and implementation summaries are in `archive/`.
