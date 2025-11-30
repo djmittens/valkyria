@@ -23,13 +23,21 @@ int main(int argc, char* argv[]) {
   size_t const SCRATCH_ARENA_BYTES =
       4 * 1024 * 1024;  // 4 MiB scratch (REPL only)
 
-  valk_gc_malloc_heap_t* gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES);
+  // Check for hard limit env var, default to threshold * 2
+  size_t hard_limit = 0;
+  const char* hard_limit_env = getenv("VALK_HEAP_HARD_LIMIT");
+  if (hard_limit_env && hard_limit_env[0] != '\0') {
+    hard_limit = strtoull(hard_limit_env, NULL, 10);
+  }
+
+  valk_gc_malloc_heap_t* gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES, hard_limit);
 
   valk_mem_arena_t* scratch = malloc(SCRATCH_ARENA_BYTES);
   valk_mem_arena_init(scratch, SCRATCH_ARENA_BYTES - sizeof(*scratch));
 
   // Set thread allocator to GC heap for persistent structures
   valk_thread_ctx.allocator = (void*)gc_heap;
+  valk_thread_ctx.heap = gc_heap;  // Also set as fallback for arena overflow
 
   valk_lenv_t* env = valk_lenv_empty();
   valk_lenv_builtins(env);

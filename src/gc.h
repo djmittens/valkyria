@@ -20,22 +20,39 @@ typedef struct valk_gc_header_t {
 // Forward declare slab allocator
 struct valk_slab_t;
 
+// GC heap statistics for telemetry
+typedef struct {
+  size_t overflow_allocations;      // Allocations received from scratch overflow
+  size_t evacuations_from_scratch;  // Values received from scratch evacuation
+  size_t evacuation_bytes;          // Bytes received from scratch evacuation
+  size_t evacuation_pointer_fixups; // Pointer updates during evacuation
+  size_t emergency_collections;     // Emergency GCs triggered at hard limit
+  size_t peak_usage;                // Maximum allocated_bytes ever reached
+} valk_gc_heap_stats_t;
+
 // GC malloc heap - malloc-based allocator with mark & sweep collection
 typedef struct {
   valk_mem_allocator_e type;  // VALK_ALLOC_GC_HEAP
   size_t allocated_bytes;     // Current memory usage
   size_t gc_threshold;        // Trigger GC when allocated exceeds this
+  size_t hard_limit;          // Absolute maximum heap size (abort if exceeded)
   size_t num_collections;     // Number of GC runs performed
+  bool in_emergency_gc;       // Prevent recursive emergency GC
   valk_gc_header_t* objects;  // Linked list of all allocated object headers
   valk_lenv_t* root_env;      // Root environment for marking
   valk_gc_header_t* free_list;  // Free-list for fast reuse of swept objects
   size_t free_list_size;      // Number of objects in free list
   valk_slab_t* lval_slab;  // Fast slab allocator for valk_lval_t objects
   size_t lval_size;           // Size of valk_lval_t for slab allocation
+  valk_gc_heap_stats_t stats; // Telemetry statistics
 } valk_gc_malloc_heap_t;
 
-// Initialize GC malloc heap with threshold
-valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold);
+// Initialize GC malloc heap with threshold and hard limit
+// If hard_limit is 0, defaults to gc_threshold * 2
+valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold, size_t hard_limit);
+
+// Set hard limit for GC heap (must be >= current allocated_bytes)
+void valk_gc_set_hard_limit(valk_gc_malloc_heap_t* heap, size_t limit);
 
 // Allocate from GC malloc heap (uses malloc, triggers GC if needed)
 void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes);
@@ -51,6 +68,9 @@ bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap);
 
 // Print GC statistics
 void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap);
+
+// Print combined memory statistics (scratch arena + GC heap)
+void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap, FILE* out);
 
 // Free all GC heap allocations and the heap itself (for clean shutdown)
 void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap);

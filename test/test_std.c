@@ -200,8 +200,9 @@ int main(int argc, const char **argv) {
 
   // Use GC heap for everything, including test suite
   size_t const GC_THRESHOLD_BYTES = 16 * 1024 * 1024;  // 16 MiB
-  valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES);
+  valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES, 0);
   valk_thread_ctx.allocator = (void *)gc_heap;
+  valk_thread_ctx.heap = gc_heap;
 
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 

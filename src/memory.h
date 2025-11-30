@@ -237,10 +237,25 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self);
 void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item);
 void valk_slab_release_ptr(valk_slab_t *self, void *data);
 
+// Arena statistics for telemetry
+typedef struct {
+  size_t total_allocations;      // Count of alloc calls
+  size_t total_bytes_allocated;  // Sum of all requested bytes
+  size_t high_water_mark;        // Maximum offset reached
+  size_t num_resets;             // Count of arena_reset calls
+  size_t num_checkpoints;        // Count of checkpoint evacuations
+  size_t bytes_evacuated;        // Total bytes copied to heap
+  size_t values_evacuated;       // Count of values copied to heap
+  size_t overflow_fallbacks;     // Count of heap fallback allocations due to full arena
+  size_t overflow_bytes;         // Bytes allocated via heap fallback
+} valk_arena_stats_t;
+
 typedef struct {  // extends valk_mem_allocator_t;
   valk_mem_allocator_e type;
   size_t capacity;
   size_t offset;
+  bool warned_overflow;          // Reset each checkpoint cycle
+  valk_arena_stats_t stats;      // Telemetry statistics
   uint8_t heap[];
 } valk_mem_arena_t;
 
@@ -248,9 +263,15 @@ void valk_mem_arena_init(valk_mem_arena_t *self, size_t capacity);
 void valk_mem_arena_reset(valk_mem_arena_t *self);
 void *valk_mem_arena_alloc(valk_mem_arena_t *self, size_t bytes);
 
+// Arena statistics API
+void valk_mem_arena_print_stats(valk_mem_arena_t *arena, FILE *out);
+void valk_mem_arena_reset_stats(valk_mem_arena_t *arena);
+bool valk_ptr_in_arena(valk_mem_arena_t *arena, void *ptr);
+
 // TODO(networking): Maybe these types should be in thread local context or something
 typedef struct {
   valk_mem_allocator_t *allocator;
+  void *heap;         // Fallback GC heap for arena overflow (valk_gc_malloc_heap_t*)
   size_t call_depth;  // Current function call depth (for TCO testing/debugging)
 } valk_thread_context_t;
 

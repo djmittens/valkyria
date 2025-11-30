@@ -8,11 +8,12 @@
 #include "collections.h"
 #include "common.h"
 #include "gc.h"
+#include "log.h"
 
 #define VALK_SLAB_TREIBER_STACK
 #define VALK_SLAB_VERSIONS
 
-__thread valk_thread_context_t valk_thread_ctx = {.allocator = nullptr};
+__thread valk_thread_context_t valk_thread_ctx = {.allocator = nullptr, .heap = nullptr};
 
 #ifdef VALK_ARC_DEBUG
 #include "debug.h"
@@ -379,10 +380,24 @@ void valk_mem_arena_init(valk_mem_arena_t *self, size_t capacity) {
   self->type = VALK_ALLOC_ARENA;
   self->capacity = capacity;
   self->offset = __alignment_adjustment(&self->heap, alignof(max_align_t));
+  self->warned_overflow = false;
+
+  // Initialize statistics to zero
+  self->stats.total_allocations = 0;
+  self->stats.total_bytes_allocated = 0;
+  self->stats.high_water_mark = 0;
+  self->stats.num_resets = 0;
+  self->stats.num_checkpoints = 0;
+  self->stats.bytes_evacuated = 0;
+  self->stats.values_evacuated = 0;
+  self->stats.overflow_fallbacks = 0;
+  self->stats.overflow_bytes = 0;
 }
 
 void valk_mem_arena_reset(valk_mem_arena_t *self) {
   __atomic_store_n(&self->offset, 0, __ATOMIC_SEQ_CST);
+  self->warned_overflow = false;
+  self->stats.num_resets++;
 }
 
 // TODO(networking): should probably write some unit tests for all this math
@@ -395,17 +410,99 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, size_t bytes) {
     size_t adj = __alignment_adjustment(&self->heap[hdr], alignof(max_align_t));
     size_t payload = hdr + adj;
     size_t end = payload + bytes;
-    VALK_ASSERT(end < self->capacity,
-                "Arena OOM: %ld + sizeof(size) + %ld + %ld > %ld", old, adj,
-                bytes, self->capacity);
+
+    // Check if allocation would exceed capacity - fall back to heap
+    if (end >= self->capacity) {
+      // OVERFLOW: Fall back to heap allocation
+      self->stats.overflow_fallbacks++;
+      self->stats.overflow_bytes += bytes;
+
+      // Emit warning once per checkpoint cycle
+      if (!self->warned_overflow) {
+        VALK_WARN("Scratch arena full (%zu/%zu bytes, %.1f%%), "
+                  "falling back to heap. Consider increasing SCRATCH_ARENA_BYTES.",
+                  self->offset, self->capacity,
+                  100.0 * self->offset / self->capacity);
+        self->warned_overflow = true;
+      }
+
+      // Allocate from heap instead - value will have LVAL_ALLOC_HEAP flag
+      // and will be in GC object list, so no evacuation needed
+      valk_gc_malloc_heap_t *heap = (valk_gc_malloc_heap_t *)valk_thread_ctx.heap;
+      if (heap == NULL) {
+        VALK_ERROR("Scratch overflow but no heap available!");
+        abort();
+      }
+      return valk_gc_malloc_heap_alloc(heap, bytes);
+    }
+
     if (__atomic_compare_exchange_n(&self->offset, &old, end, 1,
                                     __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
       // Store payload size right before payload pointer
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       *((size_t *)&self->heap[payload] - 1) = bytes;
+
+      // Update statistics
+      self->stats.total_allocations++;
+      self->stats.total_bytes_allocated += bytes;
+      if (end > self->stats.high_water_mark) {
+        self->stats.high_water_mark = end;
+      }
+
       return &self->heap[payload];
     }
   }
+}
+
+// Print arena statistics to a file stream
+void valk_mem_arena_print_stats(valk_mem_arena_t *arena, FILE *out) {
+  if (arena == NULL || out == NULL) return;
+
+  fprintf(out, "\n=== Scratch Arena Statistics ===\n");
+  fprintf(out, "Current usage:     %zu / %zu bytes (%.1f%%)\n",
+          arena->offset, arena->capacity,
+          100.0 * arena->offset / arena->capacity);
+  fprintf(out, "High water mark:   %zu bytes (%.1f%%)\n",
+          arena->stats.high_water_mark,
+          100.0 * arena->stats.high_water_mark / arena->capacity);
+  fprintf(out, "Total allocations: %zu\n", arena->stats.total_allocations);
+  fprintf(out, "Total bytes:       %zu\n", arena->stats.total_bytes_allocated);
+  fprintf(out, "Reset count:       %zu\n", arena->stats.num_resets);
+  fprintf(out, "Checkpoints:       %zu\n", arena->stats.num_checkpoints);
+  fprintf(out, "Values evacuated:  %zu\n", arena->stats.values_evacuated);
+  fprintf(out, "Bytes evacuated:   %zu\n", arena->stats.bytes_evacuated);
+
+  if (arena->stats.overflow_fallbacks > 0) {
+    fprintf(out, "⚠️  Overflow fallbacks: %zu (%zu bytes)\n",
+            arena->stats.overflow_fallbacks, arena->stats.overflow_bytes);
+  }
+  fprintf(out, "================================\n\n");
+}
+
+// Reset arena statistics (except high_water_mark which tracks lifetime max)
+void valk_mem_arena_reset_stats(valk_mem_arena_t *arena) {
+  if (arena == NULL) return;
+
+  arena->stats.total_allocations = 0;
+  arena->stats.total_bytes_allocated = 0;
+  // Note: high_water_mark is intentionally NOT reset
+  arena->stats.num_resets = 0;
+  arena->stats.num_checkpoints = 0;
+  arena->stats.bytes_evacuated = 0;
+  arena->stats.values_evacuated = 0;
+  arena->stats.overflow_fallbacks = 0;
+  arena->stats.overflow_bytes = 0;
+}
+
+// Check if a pointer is within the arena's address range
+bool valk_ptr_in_arena(valk_mem_arena_t *arena, void *ptr) {
+  if (arena == NULL || ptr == NULL) return false;
+
+  uint8_t *start = arena->heap;
+  uint8_t *end = arena->heap + arena->capacity;
+  uint8_t *p = (uint8_t *)ptr;
+
+  return p >= start && p < end;
 }
 
 void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes) {

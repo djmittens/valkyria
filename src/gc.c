@@ -17,7 +17,7 @@ static void valk_gc_clear_marks_recursive(valk_lval_t* v);
 // ============================================================================
 
 // Initialize GC heap
-valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold) {
+valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold, size_t hard_limit) {
   valk_gc_malloc_heap_t* heap = malloc(sizeof(valk_gc_malloc_heap_t));
   if (!heap) {
     VALK_ERROR("Failed to allocate GC heap structure");
@@ -27,11 +27,21 @@ valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold) {
   heap->type = VALK_ALLOC_GC_HEAP;
   heap->allocated_bytes = 0;
   heap->gc_threshold = gc_threshold;
+  heap->hard_limit = hard_limit > 0 ? hard_limit : gc_threshold * 2;
   heap->num_collections = 0;
+  heap->in_emergency_gc = false;
   heap->objects = NULL;
   heap->root_env = NULL;
   heap->free_list = NULL;
   heap->free_list_size = 0;
+
+  // Initialize statistics to zero
+  heap->stats.overflow_allocations = 0;
+  heap->stats.evacuations_from_scratch = 0;
+  heap->stats.evacuation_bytes = 0;
+  heap->stats.evacuation_pointer_fixups = 0;
+  heap->stats.emergency_collections = 0;
+  heap->stats.peak_usage = 0;
 
   // Create fast slab allocator for valk_lval_t objects
   // Fixed large size - simple and fast, no threshold complexity
@@ -53,10 +63,23 @@ valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold) {
               num_lvals, slab_size / (1024.0 * 1024.0), sizeof(valk_gc_header_t), heap->lval_size);
   }
 
-  VALK_INFO("GC heap initialized with threshold: %zu bytes (%.1f MB)",
-            gc_threshold, gc_threshold / (1024.0 * 1024.0));
+  VALK_INFO("GC heap: threshold=%zu (%.1f MB), hard_limit=%zu (%.1f MB)",
+            gc_threshold, gc_threshold / (1024.0 * 1024.0),
+            heap->hard_limit, heap->hard_limit / (1024.0 * 1024.0));
 
   return heap;
+}
+
+// Set hard limit for GC heap
+void valk_gc_set_hard_limit(valk_gc_malloc_heap_t* heap, size_t limit) {
+  if (limit < heap->allocated_bytes) {
+    VALK_WARN("Cannot set hard limit below current usage (%zu < %zu)",
+              limit, heap->allocated_bytes);
+    return;
+  }
+  heap->hard_limit = limit;
+  VALK_INFO("GC heap hard limit set to %zu bytes (%.1f MB)",
+            limit, limit / (1024.0 * 1024.0));
 }
 
 // Set root environment for GC marking
@@ -71,18 +94,51 @@ bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap) {
 
 // Allocate from GC heap with header-based tracking
 void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
-  // TODO: Auto-GC disabled - conservative stack scanning doesn't work with ASAN
-  // ASAN uses shadow stacks that break pointer scanning. Need explicit root registration.
-  #if 0
-  if (valk_gc_malloc_should_collect(heap) && heap->root_env != NULL) {
-    VALK_INFO("GC triggered before allocation (%zu/%zu bytes)",
-              heap->allocated_bytes, heap->gc_threshold);
-    valk_gc_malloc_collect(heap);
+  size_t total_size = sizeof(valk_gc_header_t) + bytes;
+
+  // Check hard limit BEFORE allocation - trigger emergency GC if approaching
+  if (heap->allocated_bytes + total_size > heap->hard_limit) {
+    // Try emergency GC if not already in one
+    if (!heap->in_emergency_gc && heap->root_env != NULL) {
+      heap->in_emergency_gc = true;
+      VALK_WARN("Heap approaching hard limit (%zu/%zu bytes, %.1f%%), "
+                "triggering emergency GC",
+                heap->allocated_bytes, heap->hard_limit,
+                100.0 * heap->allocated_bytes / heap->hard_limit);
+
+      size_t before = heap->allocated_bytes;
+      valk_gc_malloc_collect(heap);
+      size_t reclaimed = before - heap->allocated_bytes;
+
+      heap->stats.emergency_collections++;
+      heap->in_emergency_gc = false;
+
+      VALK_INFO("Emergency GC reclaimed %zu bytes (%.1f%%)",
+                reclaimed, before > 0 ? 100.0 * reclaimed / before : 0.0);
+    }
+
+    // Re-check after emergency GC
+    if (heap->allocated_bytes + total_size > heap->hard_limit) {
+      // Still can't allocate - fatal error
+      VALK_ERROR("=== FATAL: HEAP EXHAUSTED ===");
+      VALK_ERROR("Requested: %zu bytes (+ %zu header = %zu total)",
+                 bytes, sizeof(valk_gc_header_t), total_size);
+      VALK_ERROR("Current:   %zu bytes", heap->allocated_bytes);
+      VALK_ERROR("Hard limit: %zu bytes", heap->hard_limit);
+      VALK_ERROR("Shortfall: %zu bytes",
+                 (heap->allocated_bytes + total_size) - heap->hard_limit);
+
+      // Dump full diagnostics
+      valk_gc_malloc_print_stats(heap);
+
+      VALK_ERROR("Consider increasing VALK_HEAP_HARD_LIMIT environment variable");
+      VALK_ERROR("Current: VALK_HEAP_HARD_LIMIT=%zu", heap->hard_limit);
+
+      abort();
+    }
   }
-  #endif
 
   valk_gc_header_t* header = NULL;
-  size_t total_size = sizeof(valk_gc_header_t) + bytes;
   bool from_slab = false;
   bool from_free_list = false;
 
@@ -130,6 +186,11 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
 
   // Add to live objects linked list
   heap->objects = header;
+
+  // Track peak usage
+  if (heap->allocated_bytes > heap->stats.peak_usage) {
+    heap->stats.peak_usage = heap->allocated_bytes;
+  }
 
   // Return pointer to user data (NOT header!)
   return (void*)(header + 1);
@@ -263,7 +324,6 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
       *header_ptr = header->gc_next;  // Remove from live objects list
 
       size_t total_size = sizeof(valk_gc_header_t) + header->size;
-      reclaimed += total_size;
       freed_count++;
 
       // Check if object is from slab via address range check
@@ -278,11 +338,15 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
       }
 
       if (from_slab) {
-        // Return to slab allocator
+        // Return to slab allocator - don't count towards reclaimed bytes
+        // since slab allocations aren't tracked in allocated_bytes
         valk_mem_allocator_free((void*)heap->lval_slab, header);
         VALK_TRACE("GC sweep: returned %p to slab", user_data);
       } else {
         // Add to free list for fast reuse (malloc'd objects)
+        // Only malloc'd objects count towards reclaimed bytes since
+        // slab allocations don't add to allocated_bytes
+        reclaimed += total_size;
         header->gc_next = heap->free_list;
         heap->free_list = header;
         heap->free_list_size++;
@@ -291,7 +355,15 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
     }
   }
 
-  heap->allocated_bytes -= reclaimed;
+  // Only subtract reclaimed bytes (from malloc'd objects) from allocated_bytes
+  if (reclaimed <= heap->allocated_bytes) {
+    heap->allocated_bytes -= reclaimed;
+  } else {
+    // Safety: prevent underflow
+    VALK_WARN("GC sweep: reclaimed (%zu) > allocated_bytes (%zu), resetting to 0",
+              reclaimed, heap->allocated_bytes);
+    heap->allocated_bytes = 0;
+  }
 
   VALK_INFO("GC sweep: freed %zu objects, reclaimed %zu bytes",
             freed_count, reclaimed);
@@ -365,15 +437,105 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
   }
 
   fprintf(stderr, "\n=== GC Heap Statistics ===\n");
-  fprintf(stderr, "Allocated bytes: %zu / %zu (%.1f%% full)\n",
+  fprintf(stderr, "Allocated bytes:  %zu / %zu (%.1f%% of threshold)\n",
           heap->allocated_bytes,
           heap->gc_threshold,
           100.0 * heap->allocated_bytes / heap->gc_threshold);
-  fprintf(stderr, "Live objects: %zu\n", object_count);
-  fprintf(stderr, "Collections: %zu\n", heap->num_collections);
-  fprintf(stderr, "Avg allocation per object: %.1f bytes\n",
+  fprintf(stderr, "Hard limit:       %zu bytes (%.1f%% used)\n",
+          heap->hard_limit,
+          100.0 * heap->allocated_bytes / heap->hard_limit);
+  fprintf(stderr, "Peak usage:       %zu bytes\n", heap->stats.peak_usage);
+  fprintf(stderr, "Live objects:     %zu\n", object_count);
+  fprintf(stderr, "Collections:      %zu\n", heap->num_collections);
+  fprintf(stderr, "Emergency GCs:    %zu\n", heap->stats.emergency_collections);
+  fprintf(stderr, "Avg allocation:   %.1f bytes/object\n",
           object_count > 0 ? (double)heap->allocated_bytes / object_count : 0.0);
+
+  // Evacuation stats (from scratch arena)
+  if (heap->stats.evacuations_from_scratch > 0) {
+    fprintf(stderr, "--- Evacuation Stats ---\n");
+    fprintf(stderr, "Values evacuated: %zu\n", heap->stats.evacuations_from_scratch);
+    fprintf(stderr, "Bytes evacuated:  %zu\n", heap->stats.evacuation_bytes);
+    fprintf(stderr, "Pointers fixed:   %zu\n", heap->stats.evacuation_pointer_fixups);
+  }
+
+  // Overflow stats
+  if (heap->stats.overflow_allocations > 0) {
+    fprintf(stderr, "--- Overflow Stats ---\n");
+    fprintf(stderr, "⚠️  Overflow allocs: %zu\n", heap->stats.overflow_allocations);
+  }
+
   fprintf(stderr, "=========================\n\n");
+}
+
+// Print combined memory statistics (scratch arena + GC heap)
+void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap, FILE* out) {
+  if (out == NULL) out = stderr;
+
+  fprintf(out, "\n╔══════════════════════════════════════════════════════════════════╗\n");
+  fprintf(out, "║                    MEMORY STATISTICS                              ║\n");
+  fprintf(out, "╠══════════════════════════════════════════════════════════════════╣\n");
+
+  if (scratch != NULL) {
+    fprintf(out, "║ SCRATCH ARENA                                                    ║\n");
+    fprintf(out, "║   Current usage:     %10zu / %10zu bytes (%5.1f%%)        ║\n",
+            scratch->offset, scratch->capacity,
+            100.0 * scratch->offset / scratch->capacity);
+    fprintf(out, "║   High water mark:   %10zu bytes (%5.1f%%)                   ║\n",
+            scratch->stats.high_water_mark,
+            100.0 * scratch->stats.high_water_mark / scratch->capacity);
+    fprintf(out, "║   Total allocations: %10zu                                  ║\n",
+            scratch->stats.total_allocations);
+    fprintf(out, "║   Resets:            %10zu                                  ║\n",
+            scratch->stats.num_resets);
+    fprintf(out, "║   Checkpoints:       %10zu                                  ║\n",
+            scratch->stats.num_checkpoints);
+
+    if (scratch->stats.num_checkpoints > 0) {
+      fprintf(out, "║   Avg values/chkpt:  %10.1f                                  ║\n",
+              (double)scratch->stats.values_evacuated / scratch->stats.num_checkpoints);
+    }
+
+    if (scratch->stats.overflow_fallbacks > 0) {
+      fprintf(out, "║   ⚠️  Overflow fallbacks: %6zu (%zu bytes)                      ║\n",
+              scratch->stats.overflow_fallbacks, scratch->stats.overflow_bytes);
+    }
+    fprintf(out, "╠══════════════════════════════════════════════════════════════════╣\n");
+  }
+
+  if (heap != NULL) {
+    // Count live objects
+    size_t object_count = 0;
+    for (valk_gc_header_t* h = heap->objects; h != NULL && object_count < 1000000; h = h->gc_next) {
+      object_count++;
+    }
+
+    fprintf(out, "║ GC HEAP                                                          ║\n");
+    fprintf(out, "║   Allocated:         %10zu / %10zu bytes (%5.1f%%)        ║\n",
+            heap->allocated_bytes, heap->gc_threshold,
+            100.0 * heap->allocated_bytes / heap->gc_threshold);
+    fprintf(out, "║   Hard limit:        %10zu bytes (%5.1f%% used)             ║\n",
+            heap->hard_limit,
+            100.0 * heap->allocated_bytes / heap->hard_limit);
+    fprintf(out, "║   Peak usage:        %10zu bytes                            ║\n",
+            heap->stats.peak_usage);
+    fprintf(out, "║   Live objects:      %10zu                                  ║\n",
+            object_count);
+    fprintf(out, "║   Collections:       %10zu                                  ║\n",
+            heap->num_collections);
+
+    if (heap->stats.emergency_collections > 0) {
+      fprintf(out, "║   ⚠️  Emergency GCs:     %6zu                                   ║\n",
+              heap->stats.emergency_collections);
+    }
+
+    if (heap->stats.evacuations_from_scratch > 0) {
+      fprintf(out, "║   Evacuations recv'd:%10zu (%zu bytes)                     ║\n",
+              heap->stats.evacuations_from_scratch, heap->stats.evacuation_bytes);
+    }
+  }
+
+  fprintf(out, "╚══════════════════════════════════════════════════════════════════╝\n\n");
 }
 
 size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap) {

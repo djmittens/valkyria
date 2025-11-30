@@ -2223,6 +2223,87 @@ static valk_lval_t* valk_builtin_stack_depth(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_num((long)valk_thread_ctx.call_depth);
 }
 
+// ============================================================================
+// Memory Statistics Builtins
+// ============================================================================
+
+// (memory-stats) - Print combined memory statistics to stderr
+static valk_lval_t* valk_builtin_memory_stats(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  // Note: scratch arena not currently exposed via thread context
+  // For now just print heap stats
+  valk_gc_malloc_print_stats(heap);
+  return valk_lval_nil();
+}
+
+// (heap-usage) - Return current GC heap allocated bytes
+static valk_lval_t* valk_builtin_heap_usage(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  if (heap == NULL) {
+    return valk_lval_num(0);
+  }
+  return valk_lval_num((long)heap->allocated_bytes);
+}
+
+// (gc-stats) - Print GC statistics to stderr
+static valk_lval_t* valk_builtin_gc_stats(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  valk_gc_malloc_print_stats(heap);
+  return valk_lval_nil();
+}
+
+// (gc-collect) - Trigger manual garbage collection
+static valk_lval_t* valk_builtin_gc_collect(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  if (heap == NULL) {
+    return valk_lval_num(0);
+  }
+  size_t reclaimed = valk_gc_malloc_collect(heap);
+  return valk_lval_num((long)reclaimed);
+}
+
+// (heap-hard-limit) - Return current hard limit
+static valk_lval_t* valk_builtin_heap_hard_limit(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  if (heap == NULL) {
+    return valk_lval_num(0);
+  }
+  return valk_lval_num((long)heap->hard_limit);
+}
+
+// (set-heap-hard-limit n) - Set hard limit, return previous value
+static valk_lval_t* valk_builtin_set_heap_hard_limit(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+
+  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  if (heap == NULL) {
+    return valk_lval_err("No GC heap available");
+  }
+
+  size_t new_limit = (size_t)valk_lval_list_nth(a, 0)->num;
+  size_t old_limit = heap->hard_limit;
+
+  if (new_limit < heap->allocated_bytes) {
+    return valk_lval_err("Cannot set hard limit below current usage (%zu < %zu)",
+                         new_limit, heap->allocated_bytes);
+  }
+
+  valk_gc_set_hard_limit(heap, new_limit);
+  return valk_lval_num((long)old_limit);
+}
+
 static valk_lval_t* valk_builtin_error(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
@@ -2693,5 +2774,11 @@ void valk_lenv_builtins(valk_lenv_t* env) {
                         valk_builtin_http2_response_headers);
   // Script classification helpers are implicit via CLI flags; no new builtins
 
-  // HTTP
+  // Memory / GC statistics
+  valk_lenv_put_builtin(env, "memory-stats", valk_builtin_memory_stats);
+  valk_lenv_put_builtin(env, "heap-usage", valk_builtin_heap_usage);
+  valk_lenv_put_builtin(env, "gc-stats", valk_builtin_gc_stats);
+  valk_lenv_put_builtin(env, "gc-collect", valk_builtin_gc_collect);
+  valk_lenv_put_builtin(env, "heap-hard-limit", valk_builtin_heap_hard_limit);
+  valk_lenv_put_builtin(env, "set-heap-hard-limit", valk_builtin_set_heap_hard_limit);
 }
