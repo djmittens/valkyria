@@ -1,0 +1,64 @@
+; Checkpoint API Tests (Phase 4)
+; Run with: ./build/valk test/test_checkpoint.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "Checkpoint API Tests")
+
+; Test arena-capacity returns a positive number
+(test/define "arena-capacity-positive"
+  {> (arena-capacity) 0})
+
+; Test arena-usage returns a non-negative number
+(test/define "arena-usage-returns-number"
+  {>= (arena-usage) 0})
+
+; Test checkpoint-threshold returns default (75)
+(test/define "checkpoint-threshold-default"
+  {== (checkpoint-threshold) 75})
+
+; Test set-checkpoint-threshold returns old value
+(test/define "set-checkpoint-threshold-returns-old"
+  {do
+    (= {old} (set-checkpoint-threshold 50))
+    (= {new} (checkpoint-threshold))
+    (set-checkpoint-threshold old) ; restore
+    (and (== old 75) (== new 50))})
+
+; Test checkpoint-enabled? returns true by default
+(test/define "checkpoint-enabled-default"
+  {== (checkpoint-enabled?) 1})
+
+; Test set-checkpoint-enabled toggles state
+(test/define "set-checkpoint-enabled-toggle"
+  {do
+    (= {old} (set-checkpoint-enabled 0))
+    (= {disabled} (checkpoint-enabled?))
+    (set-checkpoint-enabled old) ; restore
+    (and (== old 1) (== disabled 0))})
+
+; Test should-checkpoint? returns a boolean-like value
+(test/define "should-checkpoint-returns-number"
+  {or (== (should-checkpoint?) 0) (== (should-checkpoint?) 1)})
+
+; Test checkpoint-stats returns a list of 4 numbers
+(test/define "checkpoint-stats-returns-list"
+  {do
+    (= {stats} (checkpoint-stats))
+    (== (len stats) 4)})
+
+; Note: Tests for value/list/function/closure survival are in C test suite (test_memory.c)
+; The Lisp test framework has an issue with checkpoint + local assignments via eval
+; See test_checkpoint_evacuate_number/list tests in test_memory.c for coverage
+
+; Test checkpoint can be called (smoke test)
+(test/define "checkpoint-runs"
+  {do (checkpoint) true})
+
+; Test multiple checkpoints in sequence
+(test/define "multiple-checkpoints"
+  {do (checkpoint) (checkpoint) (checkpoint) true})
+
+; Run all tests
+(test/run)

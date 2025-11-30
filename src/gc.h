@@ -106,6 +106,9 @@ typedef struct {
   valk_lval_t** worklist;         // Stack of values to process children
   size_t worklist_count;          // Current worklist size
   size_t worklist_capacity;       // Allocated capacity
+  valk_lval_t** evacuated;        // List of evacuated values (for pointer fixing)
+  size_t evacuated_count;         // Number of evacuated values
+  size_t evacuated_capacity;      // Allocated capacity for evacuated list
   size_t values_copied;           // Stats for this evacuation
   size_t bytes_copied;            // Stats for this evacuation
   size_t pointers_fixed;          // Stats for this evacuation

@@ -268,11 +268,18 @@ void valk_mem_arena_print_stats(valk_mem_arena_t *arena, FILE *out);
 void valk_mem_arena_reset_stats(valk_mem_arena_t *arena);
 bool valk_ptr_in_arena(valk_mem_arena_t *arena, void *ptr);
 
+// Forward declaration for root environment
+struct valk_lenv_t;
+
 // TODO(networking): Maybe these types should be in thread local context or something
 typedef struct {
   valk_mem_allocator_t *allocator;
-  void *heap;         // Fallback GC heap for arena overflow (valk_gc_malloc_heap_t*)
-  size_t call_depth;  // Current function call depth (for TCO testing/debugging)
+  void *heap;                     // Fallback GC heap for arena overflow (valk_gc_malloc_heap_t*)
+  valk_mem_arena_t *scratch;      // Scratch arena for temporary allocations
+  struct valk_lenv_t *root_env;   // Root environment for checkpoint evacuation
+  float checkpoint_threshold;     // Threshold for automatic checkpointing (0.0-1.0)
+  bool checkpoint_enabled;        // Whether automatic checkpointing is enabled
+  size_t call_depth;              // Current function call depth (for TCO testing/debugging)
 } valk_thread_context_t;
 
 extern __thread valk_thread_context_t valk_thread_ctx;

@@ -38,12 +38,16 @@ int main(int argc, char* argv[]) {
   // Set thread allocator to GC heap for persistent structures
   valk_thread_ctx.allocator = (void*)gc_heap;
   valk_thread_ctx.heap = gc_heap;  // Also set as fallback for arena overflow
+  valk_thread_ctx.scratch = scratch;
+  valk_thread_ctx.checkpoint_threshold = VALK_CHECKPOINT_THRESHOLD_DEFAULT;
+  valk_thread_ctx.checkpoint_enabled = true;
 
   valk_lenv_t* env = valk_lenv_empty();
   valk_lenv_builtins(env);
 
-  // Set root environment for GC marking
+  // Set root environment for GC marking and checkpoint evacuation
   valk_gc_malloc_set_root(gc_heap, env);
+  valk_thread_ctx.root_env = env;
 
   // If we got here, we processed files but did not request exit; drop into
   // REPL. Set mode to repl now so shutdown inside REPL performs teardown.
