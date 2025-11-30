@@ -252,7 +252,8 @@ static void valk_gc_mark_lval(valk_lval_t* v) {
       break;
 
     case LVAL_CONS:
-      // Mark cons list
+    case LVAL_QEXPR:
+      // Mark cons/qexpr list (both have same structure)
       valk_gc_mark_lval(v->cons.head);
       valk_gc_mark_lval(v->cons.tail);
       break;
@@ -390,6 +391,7 @@ static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
       break;
 
     case LVAL_CONS:
+    case LVAL_QEXPR:
       valk_gc_clear_marks_recursive(v->cons.head);
       valk_gc_clear_marks_recursive(v->cons.tail);
       break;

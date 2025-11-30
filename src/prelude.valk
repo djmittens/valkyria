@@ -174,22 +174,27 @@
 ; })
 ; select - conditional selection like a switch statement
 ; Each case is a list: { condition result }
-(fun {select & cs} {
+; Helper: takes cases as a single list (allows recursion without unpack)
+(fun {select-impl cs} {
      if (== cs nil)
        {error "No selection found"}
-       {if (fst (fst cs)) {snd (fst cs)} {unpack select (tail cs)}}
+       {if (eval (fst (fst cs))) {eval (snd (fst cs))} {select-impl (tail cs)}}
 })
+(fun {select & cs} {select-impl cs})
 
 ; This is a default case and stuff, i guess its useful, just an alias to true tho
 (def  {otherwise} true)
 
 ; Convenient way to match on some shit instead of a select, to match on specific value
 ; Usage: (case val {{1} "one"} {{2} "two"} {{3} "three"})
-(fun {case x & cs} {
+; Helper: takes x and cases as separate args (allows recursion without unpack)
+; With QEXPR: {1} evals directly to 1, so no fst needed after eval
+(fun {case-impl x cs} {
      if (== cs nil)
       {error "No case found"}
-      { if (== x (fst (fst cs)))
+      {if (== x (eval (fst (fst cs))))
           {snd (fst cs)}
-          {unpack case (join (list x) (tail cs))}
+          {case-impl x (tail cs)}
       }
 })
+(fun {case x & cs} {case-impl x cs})

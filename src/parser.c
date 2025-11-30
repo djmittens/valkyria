@@ -184,7 +184,9 @@ const char* valk_ltype_name(valk_ltype_e type) {
     case LVAL_NIL:
       return "Nil";
     case LVAL_CONS:
-      return "Cons";
+      return "S-Expr";
+    case LVAL_QEXPR:
+      return "Q-Expr";
     case LVAL_ERR:
       return "Error";
     case LVAL_STR:
@@ -374,6 +376,18 @@ valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
   return res;
 }
 
+// Q-expression cons cell (quoted data, not code)
+valk_lval_t* valk_lval_qcons(valk_lval_t* head, valk_lval_t* tail) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  res->flags =
+      LVAL_QEXPR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+  VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->cons.head = head;
+  res->cons.tail = tail;
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
+  return res;
+}
+
 valk_lval_t* valk_lval_list(valk_lval_t* arr[], size_t count) {
   valk_lval_t* res = valk_lval_nil();
   for (size_t i = count; i > 0; i--) {
@@ -382,29 +396,45 @@ valk_lval_t* valk_lval_list(valk_lval_t* arr[], size_t count) {
   return res;
 }
 
+// Build a Q-expression list from array
+valk_lval_t* valk_lval_qlist(valk_lval_t* arr[], size_t count) {
+  valk_lval_t* res = valk_lval_nil();
+  for (size_t i = count; i > 0; i--) {
+    res = valk_lval_qcons(arr[i - 1], res);
+  }
+  return res;
+}
+
+// Check if type is a list (CONS, QEXPR, or NIL)
+static inline int valk_is_list_type(valk_ltype_e type) {
+  return type == LVAL_CONS || type == LVAL_QEXPR || type == LVAL_NIL;
+}
+
 valk_lval_t* valk_lval_head(valk_lval_t* cons) {
   cons = valk_lval_resolve(cons);
-  VALK_ASSERT(LVAL_TYPE(cons) == LVAL_CONS || LVAL_TYPE(cons) == LVAL_NIL,
-              "Expected cons cell or nil, got %s",
+  VALK_ASSERT(valk_is_list_type(LVAL_TYPE(cons)),
+              "Expected list (S-Expr, Q-Expr, or Nil), got %s",
               valk_ltype_name(LVAL_TYPE(cons)));
   return cons->cons.head;
 }
 
 valk_lval_t* valk_lval_tail(valk_lval_t* cons) {
   cons = valk_lval_resolve(cons);
-  VALK_ASSERT(LVAL_TYPE(cons) == LVAL_CONS || LVAL_TYPE(cons) == LVAL_NIL,
-              "Expected cons cell or nil, got %s",
+  VALK_ASSERT(valk_is_list_type(LVAL_TYPE(cons)),
+              "Expected list (S-Expr, Q-Expr, or Nil), got %s",
               valk_ltype_name(LVAL_TYPE(cons)));
   return cons->cons.tail;
 }
 
-// Helper: check if a list is empty (nil type, null, or cons with null head)
+// Helper: check if a list is empty (nil type, null, or cons/qexpr with null head)
 int valk_lval_list_is_empty(valk_lval_t* list) {
   list = valk_lval_resolve(list);
   if (list == nullptr) return 1;
   if (LVAL_TYPE(list) == LVAL_NIL) return 1;
-  // Also check for cons cell with null head (can happen after pop empties list)
-  if (LVAL_TYPE(list) == LVAL_CONS && list->cons.head == nullptr) return 1;
+  // Also check for cons/qexpr cell with null head (can happen after pop empties list)
+  if ((LVAL_TYPE(list) == LVAL_CONS || LVAL_TYPE(list) == LVAL_QEXPR) &&
+      list->cons.head == nullptr)
+    return 1;
   return 0;
 }
 
@@ -545,6 +575,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
       }
       break;
     case LVAL_CONS:
+    case LVAL_QEXPR:
       // SHALLOW COPY: Alias head/tail (resolve forwarding first)
       // Don't recursively copy - immutability means we can safely alias
       res->cons.head = valk_lval_resolve(lval->cons.head);
@@ -734,7 +765,8 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
     case LVAL_NIL:
       return 1;  // Both are nil (types already matched)
     case LVAL_CONS:
-      // Compare cons cells recursively
+    case LVAL_QEXPR:
+      // Compare cons/qexpr cells recursively
       return valk_lval_eq(x->cons.head, y->cons.head) &&
              valk_lval_eq(x->cons.tail, y->cons.tail);
     case LVAL_REF:
@@ -762,9 +794,11 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
   }
 
   // Return literals as-is (self-evaluating forms)
+  // QEXPR is quoted data - it evaluates to itself, not executed as code
   if (LVAL_TYPE(lval) == LVAL_NUM || LVAL_TYPE(lval) == LVAL_STR ||
       LVAL_TYPE(lval) == LVAL_FUN || LVAL_TYPE(lval) == LVAL_ERR ||
-      LVAL_TYPE(lval) == LVAL_NIL || LVAL_TYPE(lval) == LVAL_REF) {
+      LVAL_TYPE(lval) == LVAL_NIL || LVAL_TYPE(lval) == LVAL_REF ||
+      LVAL_TYPE(lval) == LVAL_QEXPR) {
     return lval;
   }
 
@@ -954,13 +988,30 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
   }
 
   // All formals bound - evaluate body
+  // If body is a QEXPR, convert it to CONS for evaluation
+  // The body was stored as QEXPR (quoted) to prevent evaluation during
+  // definition, but now we need to execute it
+  valk_lval_t* body = func->fun.body;
+  if (LVAL_TYPE(body) == LVAL_QEXPR) {
+    // Convert QEXPR to CONS for execution
+    size_t count = valk_lval_list_count(body);
+    valk_lval_t* items[count];
+    valk_lval_t* curr = body;
+    for (size_t i = 0; i < count; i++) {
+      items[i] = curr->cons.head;
+      curr = curr->cons.tail;
+    }
+    body = valk_lval_list(items, count);
+  }
+
   // If body is a list of expressions (first element is also a list),
   // evaluate each expression and return the last result (implicit do)
-  valk_lval_t* body = func->fun.body;
-  if (LVAL_TYPE(body) == LVAL_CONS && valk_lval_list_count(body) > 0) {
+  if (valk_is_list_type(LVAL_TYPE(body)) && valk_lval_list_count(body) > 0) {
     valk_lval_t* first_elem = body->cons.head;
     // Check if this looks like a sequence (first element is a list, not a symbol)
-    if (LVAL_TYPE(first_elem) == LVAL_CONS) {
+    // For QEXPR bodies, the first element being a CONS or QEXPR means we have
+    // multiple expressions to evaluate
+    if (valk_is_list_type(LVAL_TYPE(first_elem))) {
       // Implicit do: evaluate each expression, return last
       valk_lval_t* result = valk_lval_nil();
       valk_lval_t* curr = body;
@@ -1024,20 +1075,56 @@ valk_lval_t* valk_lval_pop(valk_lval_t* lval, size_t i) {
 }
 
 valk_lval_t* valk_lval_join(valk_lval_t* a, valk_lval_t* b) {
-  // Create new QEXPR instead of mutating a
+  // Create new list instead of mutating a
+  // Preserve the type of the first argument (QEXPR or CONS)
   a = valk_lval_resolve(a);
   b = valk_lval_resolve(b);
 
+  // Determine if result should be QEXPR (if first arg is QEXPR)
+  bool is_qexpr = (LVAL_TYPE(a) == LVAL_QEXPR);
+
   size_t lena = valk_lval_list_count(a);
 
-  // If b is not a list/cons/nil, wrap it in a proper list
+  // If b is not a list type, wrap it
   // This ensures join always produces proper lists
   valk_lval_t* res;
-  if (LVAL_TYPE(b) != LVAL_CONS && LVAL_TYPE(b) != LVAL_NIL) {
-    res = valk_lval_cons(b, valk_lval_nil());
+  if (LVAL_TYPE(b) != LVAL_CONS && LVAL_TYPE(b) != LVAL_QEXPR &&
+      LVAL_TYPE(b) != LVAL_NIL) {
+    res = is_qexpr ? valk_lval_qcons(b, valk_lval_nil())
+                   : valk_lval_cons(b, valk_lval_nil());
   } else {
-    res = b;
+    // If b has different type, we need to rebuild it with the target type
+    if (is_qexpr && LVAL_TYPE(b) == LVAL_CONS) {
+      // Convert CONS to QEXPR - rebuild the list
+      size_t lenb = valk_lval_list_count(b);
+      res = valk_lval_nil();
+      valk_lval_t* items[lenb];
+      valk_lval_t* curr = b;
+      for (size_t i = 0; i < lenb; i++) {
+        items[i] = curr->cons.head;
+        curr = curr->cons.tail;
+      }
+      for (size_t i = lenb; i > 0; i--) {
+        res = valk_lval_qcons(items[i - 1], res);
+      }
+    } else if (!is_qexpr && LVAL_TYPE(b) == LVAL_QEXPR) {
+      // Convert QEXPR to CONS - rebuild the list
+      size_t lenb = valk_lval_list_count(b);
+      res = valk_lval_nil();
+      valk_lval_t* items[lenb];
+      valk_lval_t* curr = b;
+      for (size_t i = 0; i < lenb; i++) {
+        items[i] = curr->cons.head;
+        curr = curr->cons.tail;
+      }
+      for (size_t i = lenb; i > 0; i--) {
+        res = valk_lval_cons(items[i - 1], res);
+      }
+    } else {
+      res = b;
+    }
   }
+
   struct {
     valk_lval_t** items;
     size_t count;
@@ -1052,7 +1139,11 @@ valk_lval_t* valk_lval_join(valk_lval_t* a, valk_lval_t* b) {
   }
 
   for (size_t i = lena; i > 0; i--) {
-    res = valk_lval_cons(tmp.items[i - 1], res);
+    if (is_qexpr) {
+      res = valk_lval_qcons(tmp.items[i - 1], res);
+    } else {
+      res = valk_lval_cons(tmp.items[i - 1], res);
+    }
   }
 
   da_free(&tmp);
@@ -1091,6 +1182,25 @@ void valk_lval_print(valk_lval_t* val) {
         valk_lval_print(curr);
       }
       printf(")");
+      break;
+    }
+    case LVAL_QEXPR: {
+      // Q-expressions print with {} to show they are quoted data
+      printf("{");
+      valk_lval_t* curr = val;
+      int first = 1;
+      while (curr != nullptr && LVAL_TYPE(curr) == LVAL_QEXPR) {
+        if (!first) putchar(' ');
+        valk_lval_print(curr->cons.head);
+        curr = curr->cons.tail;
+        first = 0;
+      }
+      // Check for improper list (tail is not nil)
+      if (curr != nullptr && LVAL_TYPE(curr) != LVAL_NIL) {
+        printf(" . ");
+        valk_lval_print(curr);
+      }
+      printf("}");
       break;
     }
     case LVAL_ERR:
@@ -1302,16 +1412,15 @@ valk_lval_t* valk_lval_read(int* i, const char* s) {
     return valk_lval_err("Unexpected  end of input");
   }
 
-  // Quote syntax: 'x -> (quote x)
+  // Quote syntax: 'x -> Q-expression containing x
   if (s[*i] == '\'') {
     (*i)++;  // consume the quote
     valk_lval_t* quoted = valk_lval_read(i, s);
     if (LVAL_TYPE(quoted) == LVAL_ERR) {
       return quoted;
     }
-    // Build (quote <quoted>)
-    res = valk_lval_cons(valk_lval_sym("quote"),
-                         valk_lval_cons(quoted, valk_lval_nil()));
+    // Build a QEXPR containing the quoted element
+    res = valk_lval_qcons(quoted, valk_lval_nil());
   } else if (strchr("({", s[*i])) {
     res = valk_lval_read_expr(i, s);
   }
@@ -1386,16 +1495,15 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
   }
   (*i)++;
 
-  // Build cons list from right to left, properly terminated with NIL
+  // Build list from right to left, properly terminated with NIL
+  // Use QEXPR for {} syntax (quoted data), CONS for () syntax (code)
   valk_lval_t* result = valk_lval_nil();  // Start with nil terminator
   for (size_t j = count; j > 0; j--) {
-    result = valk_lval_cons(elements[j - 1], result);
-  }
-
-  // If {} syntax was used, wrap in (quote ...)
-  if (is_quoted) {
-    result = valk_lval_cons(valk_lval_sym("quote"),
-                            valk_lval_cons(result, valk_lval_nil()));
+    if (is_quoted) {
+      result = valk_lval_qcons(elements[j - 1], result);
+    } else {
+      result = valk_lval_cons(elements[j - 1], result);
+    }
   }
 
   // No need to free - GC will sweep unreachable elements array
@@ -1681,6 +1789,7 @@ static valk_lval_t* valk_builtin_len(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* arg = valk_lval_list_nth(a, 0);
   switch (LVAL_TYPE(arg)) {
     case LVAL_CONS:
+    case LVAL_QEXPR:
     case LVAL_NIL:
       return valk_lval_num(valk_lval_list_count(arg));
     case LVAL_STR: {
@@ -1688,7 +1797,7 @@ static valk_lval_t* valk_builtin_len(valk_lenv_t* e, valk_lval_t* a) {
       return valk_lval_num((long)n);
     }
     default:
-      LVAL_RAISE(a, "Actual: %s, Expected(One-Of): [Cons, Nil, String]",
+      LVAL_RAISE(a, "Actual: %s, Expected(One-Of): [Cons, Qexpr, Nil, String]",
                  valk_ltype_name(LVAL_TYPE(arg)));
       return valk_lval_err("len invalid type");
   }
@@ -1699,7 +1808,7 @@ static valk_lval_t* valk_builtin_head(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT(a, valk_lval_list_count(a) == 1,
               "Builtin `head` passed too many arguments");
   valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS);
+  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS, LVAL_QEXPR);
   LVAL_ASSERT_COUNT_GT(a, arg0, 0);
 
   return arg0->cons.head;
@@ -1710,43 +1819,51 @@ static valk_lval_t* valk_builtin_tail(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT(a, valk_lval_list_count(a) == 1,
               "Builtin `tail` passed too many arguments");
   valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS);
+  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS, LVAL_QEXPR);
   LVAL_ASSERT(a, !valk_lval_list_is_empty(arg0),
               "Builtin `tail` cannot operate on empty list");
 
+  // Preserve the type (QEXPR stays QEXPR, CONS stays CONS)
+  // The tail is already the right type since we're just returning the existing tail
   return arg0->cons.tail;
 }
 
-// Helper: Build cons list without last element (all but last)
-static valk_lval_t* valk_cons_init(valk_lval_t* cons) {
-  if (valk_lval_list_is_empty(cons)) {
+// Helper: Build list without last element (all but last)
+// Preserves QEXPR vs CONS type
+static valk_lval_t* valk_list_init(valk_lval_t* list, bool is_qexpr) {
+  if (valk_lval_list_is_empty(list)) {
     return valk_lval_nil();  // Empty list -> empty list
   }
 
   // If next is nil, we're at the last element - return empty
-  if (valk_lval_list_is_empty(cons->cons.tail)) {
+  if (valk_lval_list_is_empty(list->cons.tail)) {
     return valk_lval_nil();
   }
 
-  // Otherwise cons current element with init of rest
-  return valk_lval_cons(cons->cons.head, valk_cons_init(cons->cons.tail));
+  // Otherwise cons/qcons current element with init of rest
+  if (is_qexpr) {
+    return valk_lval_qcons(list->cons.head, valk_list_init(list->cons.tail, is_qexpr));
+  } else {
+    return valk_lval_cons(list->cons.head, valk_list_init(list->cons.tail, is_qexpr));
+  }
 }
 
 static valk_lval_t* valk_builtin_init(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS);
+  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS, LVAL_QEXPR);
   LVAL_ASSERT_COUNT_GT(a, arg0, 0);
 
-  // Remove last element
-  return valk_cons_init(arg0);
+  // Remove last element, preserving type
+  bool is_qexpr = (LVAL_TYPE(arg0) == LVAL_QEXPR);
+  return valk_list_init(arg0, is_qexpr);
 }
 
 static valk_lval_t* valk_builtin_join(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS, LVAL_NIL);
+  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
 
   // Don't mutate args - extract without popping
   valk_lval_t* x = arg0;
@@ -1811,7 +1928,20 @@ static valk_lval_t* valk_builtin_repeat(valk_lenv_t* e, valk_lval_t* a) {
 
 static valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  return a;
+  // Convert argument list (CONS) to QEXPR (data, not code)
+  // The arguments have already been evaluated, so we just change the type
+  if (LVAL_TYPE(a) == LVAL_QEXPR || LVAL_TYPE(a) == LVAL_NIL) {
+    return a;  // Already a QEXPR or empty
+  }
+  // Rebuild as QEXPR
+  size_t count = valk_lval_list_count(a);
+  valk_lval_t* items[count];
+  valk_lval_t* curr = a;
+  for (size_t i = 0; i < count; i++) {
+    items[i] = curr->cons.head;
+    curr = curr->cons.tail;
+  }
+  return valk_lval_qlist(items, count);
 }
 
 static inline valk_lval_t* valk_resolve_symbol(valk_lenv_t* e, valk_lval_t* v) {
@@ -1825,7 +1955,20 @@ static valk_lval_t* valk_builtin_eval(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
   // Eval can accept any type - numbers, strings, etc evaluate to themselves
-  // Only CONS cells are evaluated as code
+  // QEXPR is converted to CONS (code) and then evaluated
+  // This is how quoted data becomes executable code
+
+  if (LVAL_TYPE(arg0) == LVAL_QEXPR) {
+    // Convert QEXPR to CONS (S-expression) for evaluation
+    size_t count = valk_lval_list_count(arg0);
+    valk_lval_t* items[count];
+    valk_lval_t* curr = arg0;
+    for (size_t i = 0; i < count; i++) {
+      items[i] = curr->cons.head;
+      curr = curr->cons.tail;
+    }
+    arg0 = valk_lval_list(items, count);
+  }
 
   return valk_lval_eval(e, arg0);
 }
@@ -1858,7 +2001,8 @@ static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   valk_lval_t* syms = first_arg;
-  LVAL_ASSERT_TYPE(a, syms, LVAL_CONS, LVAL_NIL);
+  // Accept QEXPR for symbol lists like {x y z}
+  LVAL_ASSERT_TYPE(a, syms, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
 
   // Verify all elements in syms (starting from index 1) are symbols
   for (size_t i = 1; i < valk_lval_list_count(syms); i++) {
@@ -1889,7 +2033,8 @@ static valk_lval_t* valk_builtin_put(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_GT(a, a, 1);
 
   valk_lval_t* syms = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, syms, LVAL_CONS, LVAL_NIL);
+  // Accept QEXPR for symbol lists like {x y z}
+  LVAL_ASSERT_TYPE(a, syms, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
 
   // Verify all elements in syms (starting from index 1) are symbols
   for (size_t i = 1; i < valk_lval_list_count(syms); i++) {
@@ -1919,8 +2064,9 @@ static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* formals = valk_lval_list_nth(a, 0);
   valk_lval_t* body = valk_lval_list_nth(a, 1);
 
-  LVAL_ASSERT_TYPE(a, formals, LVAL_CONS, LVAL_NIL);
-  LVAL_ASSERT_TYPE(a, body, LVAL_CONS, LVAL_NIL);
+  // Accept both QEXPR and CONS for formals and body
+  LVAL_ASSERT_TYPE(a, formals, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
+  LVAL_ASSERT_TYPE(a, body, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
 
   for (size_t i = 0; i < valk_lval_list_count(formals); i++) {
     LVAL_ASSERT(a, LVAL_TYPE(valk_lval_list_nth(formals, i)) == LVAL_SYM,
@@ -1943,8 +2089,9 @@ static valk_lval_t* valk_builtin_macro(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* formals = valk_lval_list_nth(a, 0);
   valk_lval_t* body = valk_lval_list_nth(a, 1);
 
-  LVAL_ASSERT_TYPE(a, formals, LVAL_CONS, LVAL_NIL);
-  LVAL_ASSERT_TYPE(a, body, LVAL_CONS, LVAL_NIL);
+  // Accept both QEXPR and CONS for formals and body
+  LVAL_ASSERT_TYPE(a, formals, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
+  LVAL_ASSERT_TYPE(a, body, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
 
   for (size_t i = 0; i < valk_lval_list_count(formals); i++) {
     LVAL_ASSERT(a, LVAL_TYPE(valk_lval_list_nth(formals, i)) == LVAL_SYM,
@@ -2119,8 +2266,8 @@ valk_lval_t* valk_parse_file(const char* filename) {
 static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 3);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_CONS, LVAL_NIL);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_CONS, LVAL_NIL);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
 
   // Select true or false branch based on condition
   valk_lval_t* branch;
@@ -2128,6 +2275,18 @@ static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
     branch = valk_lval_list_nth(a, 1);
   } else {
     branch = valk_lval_list_nth(a, 2);
+  }
+
+  // If branch is QEXPR, convert to CONS for evaluation
+  if (LVAL_TYPE(branch) == LVAL_QEXPR) {
+    size_t count = valk_lval_list_count(branch);
+    valk_lval_t* items[count];
+    valk_lval_t* curr = branch;
+    for (size_t i = 0; i < count; i++) {
+      items[i] = curr->cons.head;
+      curr = curr->cons.tail;
+    }
+    branch = valk_lval_list(items, count);
   }
 
   // Evaluate the selected branch

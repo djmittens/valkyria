@@ -90,8 +90,9 @@ typedef enum {
   LVAL_STR,
   LVAL_FUN,  // Function (bytecode or builtin)
   LVAL_REF,
-  LVAL_NIL,   // Empty list / nil value
-  LVAL_CONS,  // Cons cell (car/cdr linked list)
+  LVAL_NIL,    // Empty list / nil value
+  LVAL_CONS,   // Cons cell - S-expression (code to execute)
+  LVAL_QEXPR,  // Cons cell - Q-expression (quoted data, not code)
   LVAL_ERR,
   LVAL_ENV,
   LVAL_CONT,  // Continuation (for async/await)
