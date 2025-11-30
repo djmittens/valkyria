@@ -156,4 +156,4 @@
       {(shutdown 1)})
 })
 
-(print "Test module loaded")
+; Test module loaded - no debug output

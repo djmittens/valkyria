@@ -328,4 +328,4 @@
   })
 }))
 
-(print "Monadic async API loaded - Higher-level combinators ready!")
+; Monadic async API loaded

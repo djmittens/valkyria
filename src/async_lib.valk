@@ -171,4 +171,4 @@
   (async-all ops)
 }))
 
-(print "Async library loaded - Continuation-based async/await ready!")
+; Async library loaded

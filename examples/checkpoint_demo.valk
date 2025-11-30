@@ -1,0 +1,119 @@
+; Checkpoint-Based Memory Management Demo
+; ========================================
+;
+; This demonstrates Valkyria's checkpoint system under memory pressure.
+; Uses builtins (range) to create load faster than recursive functions.
+;
+; Run with: ./build/valk examples/checkpoint_demo.valk
+
+(load "src/prelude.valk")
+
+(println "")
+(println "=== Checkpoint Memory Management Demo ===")
+(println "")
+
+(println "Initial state:")
+(memory-stats)
+
+; -----------------------------------------------------------------------------
+; Phase 1: Allocate many large lists (using range builtin - fast)
+; -----------------------------------------------------------------------------
+(println "")
+(println "--- Phase 1: Allocating Large Lists ---")
+
+; Each range creates a linked list of N cons cells
+(def {list1} (range 0 5000))
+(def {list2} (range 0 5000))
+(def {list3} (range 0 5000))
+(def {list4} (range 0 5000))
+(def {list5} (range 0 5000))
+(def {list6} (range 0 5000))
+(def {list7} (range 0 5000))
+(def {list8} (range 0 5000))
+(def {list9} (range 0 5000))
+(def {list10} (range 0 5000))
+
+(println "Created 10 lists of 5000 elements each (50,000 cons cells)")
+(memory-stats)
+
+; -----------------------------------------------------------------------------
+; Phase 2: Create temporary lists that get thrown away
+; -----------------------------------------------------------------------------
+(println "")
+(println "--- Phase 2: Temporary Allocations (no def) ---")
+
+; These are not saved - they should be reclaimed at checkpoint
+(println "Length of temp lists: %d %d %d %d %d"
+  (len (range 0 3000))
+  (len (range 0 3000))
+  (len (range 0 3000))
+  (len (range 0 3000))
+  (len (range 0 3000)))
+
+(println "After 5 temporary 3k-element lists:")
+(memory-stats)
+
+; -----------------------------------------------------------------------------
+; Phase 3: More persistent data to push heap usage up
+; -----------------------------------------------------------------------------
+(println "")
+(println "--- Phase 3: More Persistent Data ---")
+
+(def {big1} (range 0 8000))
+(def {big2} (range 0 8000))
+(def {big3} (range 0 8000))
+(def {big4} (range 0 8000))
+(def {big5} (range 0 8000))
+
+(println "Added 5 more lists of 8000 elements (40,000 more cons cells)")
+(memory-stats)
+
+; -----------------------------------------------------------------------------
+; Phase 4: Push toward heap limit with more allocations
+; -----------------------------------------------------------------------------
+(println "")
+(println "--- Phase 4: Pushing Heap Pressure ---")
+
+(def {huge1} (range 0 10000))
+(def {huge2} (range 0 10000))
+(def {huge3} (range 0 10000))
+(def {huge4} (range 0 10000))
+(def {huge5} (range 0 10000))
+(def {huge6} (range 0 10000))
+
+(println "Added 6 lists of 10000 elements (60,000 more cons cells)")
+(memory-stats)
+
+; -----------------------------------------------------------------------------
+; Phase 5: More temporaries - should NOT grow heap
+; -----------------------------------------------------------------------------
+(println "")
+(println "--- Phase 5: Temporaries (heap should stay stable) ---")
+
+(println "Length of temp lists: %d %d %d %d %d"
+  (len (range 0 3000))
+  (len (range 0 3000))
+  (len (range 0 3000))
+  (len (range 0 3000))
+  (len (range 0 3000)))
+
+(println "After 5 more temporary 3k-element lists:")
+(memory-stats)
+
+; -----------------------------------------------------------------------------
+; Summary
+; -----------------------------------------------------------------------------
+(println "")
+(println "=== Summary ===")
+(println "Total persistent cons cells: ~210,000")
+(println "- list1-10:  50,000 (10 x 5000)")
+(println "- big1-5:    40,000 (5 x 8000)")
+(println "- huge1-6:   60,000 (6 x 10000)")
+(println "")
+(println "Key observations:")
+(println "- Temporary allocations (no def) don't grow heap")
+(println "- Only def'd values are evacuated to GC heap")
+(println "- Checkpoint count = expressions evaluated")
+(println "- Evacuations show values moved from arena to heap")
+(println "")
+(println "Demo complete!")

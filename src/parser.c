@@ -2224,6 +2224,17 @@ static valk_lval_t* valk_builtin_printf(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_nil();
 }
 
+// Println - printf with automatic newline
+// Usage: (println "format string" arg1 arg2 ...)
+static valk_lval_t* valk_builtin_println(valk_lenv_t* e, valk_lval_t* a) {
+  valk_lval_t* result = valk_builtin_printf(e, a);
+  if (LVAL_TYPE(result) != LVAL_ERR) {
+    putchar('\n');
+    fflush(stdout);
+  }
+  return result;
+}
+
 // Get current time in microseconds
 static valk_lval_t* valk_builtin_time_us(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -2787,6 +2798,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
   valk_lenv_put_builtin(env, "print", valk_builtin_print);
   valk_lenv_put_builtin(env, "printf", valk_builtin_printf);
+  valk_lenv_put_builtin(env, "println", valk_builtin_println);
   valk_lenv_put_builtin(env, "time-us", valk_builtin_time_us);
   valk_lenv_put_builtin(env, "stack-depth", valk_builtin_stack_depth);
 
