@@ -11,7 +11,6 @@
 #include "aio.h"
 #include "collections.h"
 #include "common.h"
-#include "concurrency.h"  // TODO: Remove once AIO is updated
 #include "gc.h"
 #include "memory.h"
 
@@ -784,9 +783,15 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
       return valk_lval_nil();
     }
 
-    // Single element list evaluates to that element
+    // Single element list - evaluate the element
+    // If it evaluates to a function, call it with no arguments
     if (count == 1) {
-      return valk_lval_eval(env, valk_lval_list_nth(lval, 0));
+      valk_lval_t* first = valk_lval_eval(env, valk_lval_list_nth(lval, 0));
+      if (LVAL_TYPE(first) == LVAL_FUN) {
+        // Call function with empty args list
+        return valk_lval_eval_call(env, first, valk_lval_nil());
+      }
+      return first;
     }
 
     // Check for special forms BEFORE evaluating first element
@@ -856,18 +861,22 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
   size_t num_formals = valk_lval_list_count(func->fun.formals);
 
   // Create new environment for bindings
-  // Since lambda environments are empty in this implementation, we need to link
-  // to the calling environment for variable lookup.
-  // Note: This gives dynamic scoping behavior, but that's how the current
-  // system works.
+  // Hybrid scoping using fallback:
+  // - Primary lookup: call_env -> func->fun.env chain (lexical/captured bindings)
+  // - Fallback lookup: calling env chain (dynamic/caller's bindings)
+  // This allows closures to work (curry captures 'f') while also supporting
+  // dynamic access to caller's variables (select can see local 'n').
   valk_lenv_t* call_env = valk_lenv_empty();
-  if (func->fun.env && func->fun.env->symbols.count > 0) {
-    // Function has captured bindings - use them
+  if (func->fun.env) {
+    // Function has captured environment - use as parent for lexical scoping
     call_env->parent = func->fun.env;
   } else {
-    // Function has no captures - use calling environment directly
+    // No captures - parent is calling environment
     call_env->parent = env;
   }
+  // Always set fallback to calling environment for dynamic scoping.
+  // This is only used when lexical lookup fails.
+  call_env->fallback = env;
 
   // Walk formals and args together without mutation
   valk_lval_t* formal_iter = func->fun.formals;
@@ -1021,7 +1030,14 @@ valk_lval_t* valk_lval_join(valk_lval_t* a, valk_lval_t* b) {
 
   size_t lena = valk_lval_list_count(a);
 
-  valk_lval_t* res = b;
+  // If b is not a list/cons/nil, wrap it in a proper list
+  // This ensures join always produces proper lists
+  valk_lval_t* res;
+  if (LVAL_TYPE(b) != LVAL_CONS && LVAL_TYPE(b) != LVAL_NIL) {
+    res = valk_lval_cons(b, valk_lval_nil());
+  } else {
+    res = b;
+  }
   struct {
     valk_lval_t** items;
     size_t count;
@@ -1180,7 +1196,7 @@ static valk_lval_t* valk_lval_read_sym(int* i, const char* s) {
   for (; (next = s[end]); ++end) {
     if (strchr("abcdefghijklmnopqrstuvwxyz"
                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-               "0123456789_+-*\\/=<>!&",
+               "0123456789_+-*\\/=<>!&?",
                next) &&
         s[end] != '\0') {
       continue;
@@ -1302,13 +1318,15 @@ valk_lval_t* valk_lval_read(int* i, const char* s) {
   // Lets check for a symbol
   else if (strchr("abcdefghijklmnopqrstuvwxyz"
                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                  "0123456789_+-*\\/=<>!&",
+                  "0123456789_+-*\\/=<>!&?",
                   s[*i])) {
     res = valk_lval_read_sym(i, s);
   } else if (s[*i] == '"') {
     res = valk_lval_read_str(i, s);
   } else {
     res = valk_lval_err("[offset: %ld] Unexpected character %c", *i, s[*i]);
+    // Skip the unexpected character to avoid infinite loop
+    ++(*i);
   }
 
   // Skip white space and comments
@@ -1484,6 +1502,7 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
 
   // Iterative lookup to avoid stack overflow with deep environment chains
   // (important for tail call optimization which creates environment chains)
+  valk_lenv_t* start_env = env;  // Remember start for fallback lookup
   while (env) {
     for (size_t i = 0; i < env->symbols.count; i++) {
       if (env->symbols.items == NULL || env->symbols.items[i] == NULL) {
@@ -1497,6 +1516,12 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
       }
     }
     env = env->parent;  // Move to parent environment
+  }
+
+  // Parent chain exhausted - try fallback chain (for dynamic scoping).
+  // The fallback allows access to caller's environment when lexical lookup fails.
+  if (start_env->fallback) {
+    return valk_lenv_get(start_env->fallback, key);
   }
 
   return valk_lval_err("LEnv: Symbol `%s` is not bound", key->str);
@@ -1799,9 +1824,9 @@ static inline valk_lval_t* valk_resolve_symbol(valk_lenv_t* e, valk_lval_t* v) {
 static valk_lval_t* valk_builtin_eval(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS, LVAL_NIL);
+  // Eval can accept any type - numbers, strings, etc evaluate to themselves
+  // Only CONS cells are evaluated as code
 
-  // Evaluate the quoted expression
   return valk_lval_eval(e, arg0);
 }
 
@@ -2008,11 +2033,6 @@ static valk_lval_t* valk_builtin_le(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
-  printf("Loading bullshit (%ld)%s\n",
-         valk_lval_list_count(valk_lval_list_nth(a, 0)),
-         valk_lval_list_nth(a, 0)->str);
-  valk_lval_println(a);
-  valk_lval_println(valk_lval_list_nth(a, 1));
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
 
@@ -2033,6 +2053,11 @@ static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
       valk_lval_println(x);
     } else {
       last = x;
+    }
+    // GC safe point: expression evaluated, collect if needed
+    valk_gc_malloc_heap_t* gc_heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.allocator;
+    if (gc_heap->type == VALK_ALLOC_GC_HEAP && valk_gc_malloc_should_collect(gc_heap)) {
+      valk_gc_malloc_collect(gc_heap);
     }
   }
   // Restore previous mode
@@ -2217,6 +2242,13 @@ static valk_lval_t* valk_builtin_error(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
   valk_lval_t* err = valk_lval_err(valk_lval_list_nth(a, 0)->str);
   return err;
+}
+
+static valk_lval_t* valk_builtin_error_p(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  return valk_lval_num(LVAL_TYPE(v) == LVAL_ERR ? 1 : 0);
 }
 
 // REMOVED: ARC-related functions - no longer using atomic reference counting
@@ -2547,6 +2579,7 @@ static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
 
 void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
+  valk_lenv_put_builtin(env, "error?", valk_builtin_error_p);
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
   valk_lenv_put_builtin(env, "print", valk_builtin_print);
   valk_lenv_put_builtin(env, "printf", valk_builtin_printf);

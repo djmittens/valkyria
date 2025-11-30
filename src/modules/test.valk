@@ -38,20 +38,38 @@
 
 (fun {*test-run-one* test} {
   do
+    ; Debug: print raw test structure
+    (printf "[DEBUG] Running test: ")
+    (print test)
+
     ; Extract from the Q-expression
     ; head returns {name} so we eval it to get name
     ; tail returns {body} so head tail returns body which we keep as-is
     (= {test-name} (eval (head test)))
+    (printf "[DEBUG] Test name extracted: %s\n" test-name)
+
     (= {test-body} (eval (head (tail test))))
+    (printf "[DEBUG] Test body extracted: ")
+    (print test-body)
 
     ; Time the test
     (= {start-time} (time-us {}))
+    (printf "[DEBUG] About to eval test body...\n")
     (= {result} (eval test-body))
+    (printf "[DEBUG] Test body result: ")
+    (print result)
     (= {end-time} (time-us {}))
     (= {elapsed} (- end-time start-time))
 
+    ; Check if result is an error
+    (= {is-error} (error? result))
+    (if is-error
+      {printf "[DEBUG] Result is an ERROR!\n"}
+      {true})
+
     ; Check if result is truthy (not error, not 0)
     (= {passed} (if (== result true) {1} {0}))
+    (printf "[DEBUG] Passed = %ld\n" passed)
 
     ; Print result with emoji first, then name + dots (aligned with C tests)
     ; C tests use 100 char width: emoji(3) + name + dots = 97 total before "  PASS"

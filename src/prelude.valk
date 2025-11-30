@@ -22,9 +22,16 @@
 (def {curry} unpack)
 
 ; Pack the list for a function
-; eg for a function  f, pack (f 1 2 3) into {f { 1 2 3}}
+; eg for a function f, (pack f 1 2 3) becomes (f {1 2 3})
+; Note: pack requires at least one argument beyond f to work
+; For currying/uncurrying, use the curry/uncurry wrappers
 (fun {pack f & xs} {f xs})
-(def {uncurry} pack)
+
+; uncurry: Takes a function that expects a list and returns one that takes varargs
+; (uncurry f) returns a function that collects args into a list and calls f
+(fun {uncurry f} {
+  (\ {& args} {f args})
+})
 
 ; Perform several things in sequence, and return the last result
 ; NOTE: 'do' is a builtin (parser.c:valk_builtin_do) for TCO support
@@ -42,13 +49,13 @@
 (fun {id x} {x})
 
 ; Return first item in the list
-(fun {fst _l} {unpack id (head _l)})
+(fun {fst _l} {head _l})
 
 ; Return the second item in the list
-(fun {snd _y} {unpack id (head (tail _y))})
+(fun {snd _y} {head (tail _y)})
 
 ; Return the third item in the list
-(fun {trd l} {unpack id (head (tail (tail l)))})
+(fun {trd l} {head (tail (tail l))})
 
 ; length of the list (there is a builtin for that??)
 ; i need to draw a line here, the builtin would be way more performant
@@ -60,24 +67,24 @@
 ; })
 
 ; Nth item in the list
-; perhaps builtin for this would not be bad either
 ; LISTS ARE 1 BASED LIKE LUA, CAUSE FUCK YEAH
+; Using if-else instead of select due to scoping limitations
 (fun {nth n _l} {
-    select
-       ; TODO(main): Errors dont support format strings yet
-      { (<= n 0) (error "Invalid array index (should start with 1)" ) }
-      { (== n 1) (fst _l) }
-      { otherwise (nth (- n 1) (tail _l)) }
+    if (<= n 0)
+      {error "Invalid array index (should start with 1)"}
+      {if (== n 1)
+        {fst _l}
+        {nth (- n 1) (tail _l)}}
 })
 
 ;last item in the list
 (fun {last l} {nth (len l) l})
 
 ; Take N items from the front of the list
-(fun { take n l} {
+(fun {take n l} {
      if (== n 0)
       {nil}
-      {join (head l) (take (- n 1) (tail l))}
+      {join (list (head l)) (take (- n 1) (tail l))}
 })
 
 ; Drop N items from the front of the list
@@ -96,32 +103,31 @@
 })
 
 ; true if value exists inside of a list
-; 1 BASED it starts with 1, its an index !!!
 (fun {exists x l} {
      if(== l nil)
       {false}
-      {if (== x (fst l)) { true } {exists x (tail l)}}
+      {if (== x (head l)) { true } {exists x (tail l)}}
 })
 
 ; Apply a function to List
 (fun {map f l} {
      if(== l nil)
       {nil}
-      {join (list (f (fst l))) (map f (tail l))}
+      {join (list (f (head l))) (map f (tail l))}
 })
 
 ; Filter the list n stuff
 (fun {filter f l} {
      if(== l nil)
        {nil}
-       {join (if (f (fst l)) {head l} {nil}) (filter f (tail l))}
+       {join (if (f (head l)) {list (head l)} {nil}) (filter f (tail l))}
 })
 
 ; fold left or something
 (fun {foldl f z l} {
      if (== l nil)
       {z}
-      {foldl f (f z (fst l)) (tail  l)}
+      {foldl f (f z (head l)) (tail  l)}
 })
 
 ; Returns the sum of the list
@@ -166,6 +172,8 @@
 ;     { (== n 1) 1 }
 ;     { otherwise (+ (fib (- n 1)) (fib (- n 2))) }
 ; })
+; select - conditional selection like a switch statement
+; Each case is a list: { condition result }
 (fun {select & cs} {
      if (== cs nil)
        {error "No selection found"}
@@ -176,13 +184,12 @@
 (def  {otherwise} true)
 
 ; Convenient way to match on some shit instead of a select, to match on specific value
+; Usage: (case val {{1} "one"} {{2} "two"} {{3} "three"})
 (fun {case x & cs} {
      if (== cs nil)
       {error "No case found"}
-      { if (== x (fst (fst (fst cs))) )
+      { if (== x (fst (fst cs)))
           {snd (fst cs)}
-          {
-            unpack case (join (list x) (tail cs))
-          }
+          {unpack case (join (list x) (tail cs))}
       }
 })

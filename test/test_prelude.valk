@@ -177,7 +177,8 @@
 ; Regression tests for environment scoping and varargs
 ; ============================================================================
 
-; Test: select with dynamic scoping in lambdas
+; Test: select with dynamic scoping - accessing caller's local variables
+; Uses hybrid scoping: lexical (parent chain) with dynamic fallback
 (test/define "select-dynamic-scoping"
   {do
     (fun {my-test n} {select {(== n 1) 100} {otherwise 999}})

@@ -116,6 +116,10 @@ struct valk_lenv_t {
     size_t capacity;
   } vals;
   struct valk_lenv_t *parent;
+  // Fallback environment for dynamic scoping - checked when parent chain fails.
+  // This allows lexical closures (via parent chain) to coexist with dynamic
+  // access to caller's variables (via fallback chain).
+  struct valk_lenv_t *fallback;
   // Allocator where persistent env data lives (globals/closures)
   void *allocator;
 };

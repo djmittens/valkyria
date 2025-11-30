@@ -278,8 +278,11 @@ static void valk_gc_mark_env(valk_lenv_t* env) {
     valk_gc_mark_lval(env->vals.items[i]);
   }
 
-  // Mark parent environment
+  // Mark parent environment (lexical chain)
   valk_gc_mark_env(env->parent);
+
+  // Mark fallback environment (dynamic scoping chain)
+  valk_gc_mark_env(env->fallback);
 }
 
 // ============================================================================

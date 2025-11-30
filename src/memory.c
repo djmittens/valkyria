@@ -262,29 +262,46 @@ static inline uint64_t __valk_slab_offset_pack(size_t offset, size_t version) {
 }
 
 valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
-  VALK_ASSERT(self->numFree > 0,
-              "Attempted to aquire, when the slab is already full");
   valk_slab_item_t *res;
 #ifdef VALK_SLAB_TREIBER_STACK  // Threadsafe
+  // Atomically check and decrement numFree to avoid TOCTOU race
+  size_t expected, desired;
+  do {
+    expected = __atomic_load_n(&self->numFree, __ATOMIC_ACQUIRE);
+    if (expected == 0) {
+      return NULL;  // Slab exhausted - caller should fall back to malloc
+    }
+    desired = expected - 1;
+  } while (!__atomic_compare_exchange_n(&self->numFree, &expected, desired,
+                                        false, __ATOMIC_ACQ_REL,
+                                        __ATOMIC_RELAXED));
+
   uint64_t oldTag, newTag;
   size_t head, next, version;
   do {
     oldTag = __atomic_load_n(&self->head, __ATOMIC_ACQUIRE);
     head = __valk_slab_offset_unpack(oldTag, &version);
-    VALK_ASSERT(head != SIZE_MAX, "Shits fully busy");
+    if (head == SIZE_MAX) {
+      // Shouldn't happen - we reserved a slot but free list is empty
+      // Restore numFree and return NULL
+      __atomic_fetch_add(&self->numFree, 1, __ATOMIC_RELAXED);
+      return NULL;
+    }
     next =
         __atomic_load_n(&valk_slab_item_at(self, head)->next, __ATOMIC_ACQUIRE);
     newTag = __valk_slab_offset_pack(next, version + 1);
   } while (!__atomic_compare_exchange_n(&self->head, &oldTag, newTag, false,
                                         __ATOMIC_ACQ_REL, __ATOMIC_RELAXED));
-
-  __atomic_fetch_sub(&self->numFree, 1, __ATOMIC_RELAXED);
   res = valk_slab_item_at(self, head);
   // printf("Slab Aquired %ld %p\n", head, res->data);
 
   return res;
 
 #else  // Not threadsafe
+  // Return NULL when slab is exhausted
+  if (self->numFree == 0) {
+    return NULL;
+  }
   // pop  free item
   size_t offset = ((size_t *)self->heap)[0];
   ((size_t *)self->heap)[0] = ((size_t *)self->heap)[self->numFree - 1];
@@ -404,8 +421,10 @@ void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes) {
       return NULL;
     case VALK_ALLOC_ARENA:
       return valk_mem_arena_alloc((void *)self, bytes);
-    case VALK_ALLOC_SLAB:
-      return (void *)valk_slab_aquire((void *)self)->data;
+    case VALK_ALLOC_SLAB: {
+      valk_slab_item_t *item = valk_slab_aquire((void *)self);
+      return item ? (void *)item->data : NULL;
+    }
     case VALK_ALLOC_MALLOC:
       return malloc(bytes);
     case VALK_ALLOC_GC_HEAP: {
