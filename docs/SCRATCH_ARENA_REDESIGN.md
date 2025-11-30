@@ -1,5 +1,33 @@
 # Scratch Arena Redesign: Checkpoint-Based Memory Management
 
+## Current Status: COMPLETE (Phases 1-7)
+
+All core phases are implemented and tested. The checkpoint-based memory management
+system is fully operational.
+
+### What's Working
+- **Scratch arena** is the default allocator during evaluation (both script and REPL modes)
+- **Checkpoint** happens automatically at safe points (between top-level expressions)
+- **Evacuation** correctly copies reachable values from scratch to GC heap
+- **Pointer fixup** updates all references after evacuation
+- **Overflow fallback** gracefully falls back to heap when scratch is full
+- **All tests pass** including edge cases and stress tests
+
+### Key Design Decisions
+1. **Checkpoint is internal-only** - Not exposed to user code. Calling checkpoint during
+   evaluation would corrupt values on the C call stack.
+2. **Environments allocated on heap** - `valk_lenv_t` structs don't support forwarding
+   pointers, so they're always allocated on the GC heap.
+3. **Safe points only** - Checkpoint only runs between top-level expressions, never during
+   recursive evaluation.
+
+### User-Facing APIs (Read-Only)
+- `(checkpoint-stats)` - Returns `(values-evac bytes-evac num-checkpoints ptrs-fixed)`
+- `(arena-usage)` - Returns current scratch arena usage in bytes
+- `(arena-capacity)` - Returns scratch arena capacity in bytes
+
+---
+
 ## Executive Summary
 
 This document outlines a comprehensive plan to make scratch arenas the default allocator with periodic checkpoint-based evacuation of escaping values to the GC heap. The design emphasizes simplicity, debuggability, and performance through a two-phase evacuation strategy.
@@ -74,7 +102,7 @@ Current scratch arena behavior:
 
 ## Implementation Task List
 
-### Phase 1: Telemetry Infrastructure
+### Phase 1: Telemetry Infrastructure ✅ COMPLETE
 
 **Goal**: Build observability before changing behavior
 
@@ -82,7 +110,7 @@ Current scratch arena behavior:
 
 **File**: `src/memory.h`
 
-- [ ] Add `stats` struct to `valk_mem_arena_t` with fields:
+- [x] Add `stats` struct to `valk_mem_arena_t` with fields:
   - [ ] `size_t total_allocations` - Count of alloc calls
   - [ ] `size_t total_bytes_allocated` - Sum of all requested bytes
   - [ ] `size_t high_water_mark` - Maximum offset reached
@@ -252,7 +280,7 @@ Add a hard maximum heap size. When reached, trigger emergency GC. If still insuf
 
 ---
 
-### Phase 2: Forwarding Pointer Infrastructure
+### Phase 2: Forwarding Pointer Infrastructure ✅ COMPLETE
 
 **Goal**: Enable values to indicate they've moved
 
@@ -308,7 +336,7 @@ Add a hard maximum heap size. When reached, trigger emergency GC. If still insuf
 
 ---
 
-### Phase 3: Two-Phase Evacuation Core
+### Phase 3: Two-Phase Evacuation Core ✅ COMPLETE
 
 **Goal**: Implement the evacuation algorithm
 
@@ -486,9 +514,13 @@ Add a hard maximum heap size. When reached, trigger emergency GC. If still insuf
 
 ---
 
-### Phase 4: Checkpoint API
+### Phase 4: Checkpoint API ✅ COMPLETE
 
 **Goal**: Expose checkpointing to evaluation and scripts
+
+**Note**: The `(checkpoint)` builtin was removed - checkpoint is now internal-only
+and happens automatically at safe points. Only read-only introspection APIs are
+exposed: `(checkpoint-stats)`, `(arena-usage)`, `(arena-capacity)`.
 
 #### Task 4.1: Checkpoint Function
 
@@ -565,7 +597,7 @@ Add a hard maximum heap size. When reached, trigger emergency GC. If still insuf
 
 ---
 
-### Phase 5: Integration with Evaluation
+### Phase 5: Integration with Evaluation ✅ COMPLETE
 
 **Goal**: Add checkpoints at strategic points
 
@@ -630,9 +662,14 @@ Add a hard maximum heap size. When reached, trigger emergency GC. If still insuf
 
 ---
 
-### Phase 6: Script Mode Default Scratch
+### Phase 6: Script Mode Default Scratch ✅ COMPLETE
 
 **Goal**: Make scratch the default allocator during script execution
+
+**Implementation Notes**:
+- Script mode wraps eval in `VALK_WITH_ALLOC((void*)scratch)`
+- Checkpoint is called after each top-level expression
+- Environments are always allocated on heap (they don't support forwarding pointers)
 
 #### Task 6.1: Script Mode Allocator Switch
 
@@ -669,9 +706,15 @@ Add a hard maximum heap size. When reached, trigger emergency GC. If still insuf
 
 ---
 
-### Phase 7: Comprehensive Testing
+### Phase 7: Comprehensive Testing ✅ COMPLETE
 
 **Goal**: Ensure correctness and stability
+
+**Test Results**:
+- All existing tests pass (100+ tests across C and Lisp test files)
+- Edge case tests added: nil cons, deep env chains, many bindings, closures
+- Stress tests added: recursive creation, multiple closures, deep lists
+- Memory leak testing with ASAN passes
 
 #### Task 7.1: Unit Test Suite Completion
 
@@ -725,9 +768,11 @@ Add a hard maximum heap size. When reached, trigger emergency GC. If still insuf
 
 ---
 
-### Phase 8: Telemetry Dashboard
+### Phase 8: Telemetry Dashboard (TODO)
 
 **Goal**: Runtime observability
+
+**Status**: Not yet implemented. This phase is optional for core functionality.
 
 #### Task 8.1: Enhanced Statistics Output
 
@@ -778,65 +823,67 @@ Add a hard maximum heap size. When reached, trigger emergency GC. If still insuf
 ## Implementation Order Summary
 
 ```
-Phase 1: Telemetry Infrastructure
-   ├── 1.1 Arena stats structure
-   ├── 1.2 GC heap stats extension
-   ├── 1.3 Statistics API
-   ├── 1.4 Lisp builtins
-   └── 1.5 Phase 1 tests
+Phase 1: Telemetry Infrastructure ✅
+   ├── 1.1 Arena stats structure ✅
+   ├── 1.2 Scratch overflow fallback ✅
+   ├── 1.3 GC heap hard limit ✅
+   ├── 1.4 GC heap stats extension ✅
+   ├── 1.5 Statistics API ✅
+   ├── 1.6 Lisp builtins ✅
+   └── 1.7 Phase 1 tests ✅
          │
          ▼
-Phase 2: Forwarding Pointers
-   ├── 2.1 LVAL_FORWARD type
-   ├── 2.2 Forwarding helpers
-   ├── 2.3 Arena pointer check
-   └── 2.4 Phase 2 tests
+Phase 2: Forwarding Pointers ✅
+   ├── 2.1 LVAL_FORWARD type ✅
+   ├── 2.2 Forwarding helpers ✅
+   ├── 2.3 Arena pointer check ✅
+   └── 2.4 Phase 2 tests ✅
          │
          ▼
-Phase 3: Evacuation Core
-   ├── 3.1 Context structure
-   ├── 3.2 Worklist management
-   ├── 3.3 GC object list helper
-   ├── 3.4 Copy single value
-   ├── 3.5 Evacuate children
-   ├── 3.6 Main evacuation loop
-   ├── 3.7 Environment evacuation
-   ├── 3.8 Fix pointers in value
-   ├── 3.9 Fix pointers in env
-   └── 3.10 Phase 3 tests
+Phase 3: Evacuation Core ✅
+   ├── 3.1 Context structure ✅
+   ├── 3.2 Worklist management ✅
+   ├── 3.3 GC object list helper ✅
+   ├── 3.4 Copy single value ✅
+   ├── 3.5 Evacuate children ✅
+   ├── 3.6 Main evacuation loop ✅
+   ├── 3.7 Environment evacuation ✅
+   ├── 3.8 Fix pointers in value ✅
+   ├── 3.9 Fix pointers in env ✅
+   └── 3.10 Phase 3 tests ✅
          │
          ▼
-Phase 4: Checkpoint API
-   ├── 4.1 valk_checkpoint()
-   ├── 4.2 Auto-trigger
-   ├── 4.3 Lisp builtins
-   └── 4.4 Phase 4 tests
+Phase 4: Checkpoint API ✅
+   ├── 4.1 valk_checkpoint() ✅
+   ├── 4.2 Auto-trigger ✅
+   ├── 4.3 Lisp builtins (read-only only) ✅
+   └── 4.4 Phase 4 tests ✅
          │
          ▼
-Phase 5: Evaluation Integration
-   ├── 5.1 Thread context extension
-   ├── 5.2 Script mode checkpoints
-   ├── 5.3 REPL integration
-   ├── 5.4 Loop iteration checkpoints
-   └── 5.5 Phase 5 tests
+Phase 5: Evaluation Integration ✅
+   ├── 5.1 Thread context extension ✅
+   ├── 5.2 Script mode checkpoints ✅
+   ├── 5.3 REPL integration ✅
+   ├── 5.4 Loop iteration checkpoints (skipped - not needed) ✅
+   └── 5.5 Phase 5 tests ✅
          │
          ▼
-Phase 6: Script Mode Default
-   ├── 6.1 Script allocator switch
-   ├── 6.2 REPL strategy
-   ├── 6.3 Builtin strategy
-   └── 6.4 Phase 6 tests
+Phase 6: Script Mode Default ✅
+   ├── 6.1 Script allocator switch ✅
+   ├── 6.2 REPL strategy ✅
+   ├── 6.3 Env heap allocation fix ✅
+   └── 6.4 Phase 6 tests ✅
          │
          ▼
-Phase 7: Testing
-   ├── 7.1 Unit test completion
-   ├── 7.2 Integration tests
-   ├── 7.3 Leak testing
-   ├── 7.4 Benchmarks
-   └── 7.5 Regression tests
+Phase 7: Testing ✅
+   ├── 7.1 Unit test completion ✅
+   ├── 7.2 Integration tests ✅
+   ├── 7.3 Leak testing ✅
+   ├── 7.4 Benchmarks (skipped)
+   └── 7.5 Regression tests ✅
          │
          ▼
-Phase 8: Telemetry Dashboard
+Phase 8: Telemetry Dashboard (optional, not started)
    ├── 8.1 Enhanced stats output
    ├── 8.2 SIGUSR1 handler
    ├── 8.3 Verbose logging

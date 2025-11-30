@@ -1377,7 +1377,15 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
 
 //// LEnv ////
 valk_lenv_t* valk_lenv_empty(void) {
-  valk_lenv_t* res = valk_mem_alloc(sizeof(valk_lenv_t));
+  // Always allocate environments on heap, not scratch.
+  // Environments are not valk_lval_t values and don't support forwarding
+  // pointers, so they cannot be safely evacuated during checkpoint.
+  valk_lenv_t* res;
+  if (valk_thread_ctx.heap != NULL) {
+    res = valk_gc_malloc_heap_alloc(valk_thread_ctx.heap, sizeof(valk_lenv_t));
+  } else {
+    res = valk_mem_alloc(sizeof(valk_lenv_t));
+  }
   memset(res, 0, sizeof(valk_lenv_t));
   valk_lenv_init(res);
   return res;
@@ -2317,31 +2325,11 @@ static valk_lval_t* valk_builtin_set_heap_hard_limit(valk_lenv_t* e, valk_lval_t
 }
 
 // ============================================================================
-// Checkpoint Builtins (Phase 4)
+// Memory Introspection Builtins (Phase 4)
 // ============================================================================
-
-// (checkpoint) - Trigger manual checkpoint evacuation
-static valk_lval_t* valk_builtin_checkpoint(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  UNUSED(a);
-
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
-  valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
-  valk_lenv_t* root_env = valk_thread_ctx.root_env;
-
-  if (heap == NULL) {
-    return valk_lval_err("No GC heap available");
-  }
-  if (scratch == NULL) {
-    return valk_lval_err("No scratch arena available");
-  }
-  if (root_env == NULL) {
-    return valk_lval_err("No root environment available");
-  }
-
-  valk_checkpoint(scratch, heap, root_env);
-  return valk_lval_nil();
-}
+// NOTE: checkpoint() is NOT exposed to user code - it can only be called at
+// safe points (between top-level expressions) by the runtime. These builtins
+// provide read-only access to memory statistics.
 
 // (checkpoint-stats) - Return checkpoint statistics as a list
 static valk_lval_t* valk_builtin_checkpoint_stats(valk_lenv_t* e, valk_lval_t* a) {
@@ -2387,60 +2375,6 @@ static valk_lval_t* valk_builtin_arena_capacity(valk_lenv_t* e, valk_lval_t* a) 
     return valk_lval_num(0);
   }
   return valk_lval_num((long)scratch->capacity);
-}
-
-// (checkpoint-threshold) - Return current checkpoint threshold (0.0-1.0)
-static valk_lval_t* valk_builtin_checkpoint_threshold(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  UNUSED(a);
-  // Return as integer percentage (0-100) since we don't have float type
-  return valk_lval_num((long)(valk_thread_ctx.checkpoint_threshold * 100));
-}
-
-// (set-checkpoint-threshold n) - Set checkpoint threshold (0-100 as percentage)
-static valk_lval_t* valk_builtin_set_checkpoint_threshold(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
-
-  long percent = valk_lval_list_nth(a, 0)->num;
-  if (percent < 0 || percent > 100) {
-    return valk_lval_err("Checkpoint threshold must be between 0 and 100, got %ld", percent);
-  }
-
-  long old_percent = (long)(valk_thread_ctx.checkpoint_threshold * 100);
-  valk_thread_ctx.checkpoint_threshold = (float)percent / 100.0f;
-  return valk_lval_num(old_percent);
-}
-
-// (checkpoint-enabled?) - Return whether automatic checkpointing is enabled
-static valk_lval_t* valk_builtin_checkpoint_enabled(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  UNUSED(a);
-  return valk_lval_num(valk_thread_ctx.checkpoint_enabled ? 1 : 0);
-}
-
-// (set-checkpoint-enabled b) - Enable/disable automatic checkpointing
-static valk_lval_t* valk_builtin_set_checkpoint_enabled(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
-
-  bool old_value = valk_thread_ctx.checkpoint_enabled;
-  valk_thread_ctx.checkpoint_enabled = valk_lval_list_nth(a, 0)->num != 0;
-  return valk_lval_num(old_value ? 1 : 0);
-}
-
-// (should-checkpoint?) - Check if checkpoint should be triggered
-static valk_lval_t* valk_builtin_should_checkpoint(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  UNUSED(a);
-
-  valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
-  if (scratch == NULL) {
-    return valk_lval_num(0);
-  }
-  return valk_lval_num(valk_should_checkpoint(scratch, valk_thread_ctx.checkpoint_threshold) ? 1 : 0);
 }
 
 static valk_lval_t* valk_builtin_error(valk_lenv_t* e, valk_lval_t* a) {
@@ -2921,14 +2855,12 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "heap-hard-limit", valk_builtin_heap_hard_limit);
   valk_lenv_put_builtin(env, "set-heap-hard-limit", valk_builtin_set_heap_hard_limit);
 
-  // Checkpoint builtins (Phase 4)
-  valk_lenv_put_builtin(env, "checkpoint", valk_builtin_checkpoint);
+  // Memory introspection builtins (read-only, safe to call anytime)
   valk_lenv_put_builtin(env, "checkpoint-stats", valk_builtin_checkpoint_stats);
   valk_lenv_put_builtin(env, "arena-usage", valk_builtin_arena_usage);
   valk_lenv_put_builtin(env, "arena-capacity", valk_builtin_arena_capacity);
-  valk_lenv_put_builtin(env, "checkpoint-threshold", valk_builtin_checkpoint_threshold);
-  valk_lenv_put_builtin(env, "set-checkpoint-threshold", valk_builtin_set_checkpoint_threshold);
-  valk_lenv_put_builtin(env, "checkpoint-enabled?", valk_builtin_checkpoint_enabled);
-  valk_lenv_put_builtin(env, "set-checkpoint-enabled", valk_builtin_set_checkpoint_enabled);
-  valk_lenv_put_builtin(env, "should-checkpoint?", valk_builtin_should_checkpoint);
+
+  // NOTE: checkpoint is NOT exposed to user code. It can only be called at safe
+  // points (between top-level expressions) by the runtime. Calling checkpoint
+  // during evaluation would corrupt values on the C call stack.
 }

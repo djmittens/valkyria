@@ -1,5 +1,9 @@
 ; Checkpoint API Tests (Phase 4)
 ; Run with: ./build/valk test/test_checkpoint.valk
+;
+; NOTE: Checkpoint is NOT exposed to user code. It happens automatically
+; at safe points (between top-level expressions) in the REPL. These tests
+; verify the read-only introspection APIs work correctly.
 
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
@@ -14,69 +18,26 @@
 (test/define "arena-usage-returns-number"
   {>= (arena-usage) 0})
 
-; Test checkpoint-threshold returns default (75)
-(test/define "checkpoint-threshold-default"
-  {== (checkpoint-threshold) 75})
-
-; Test set-checkpoint-threshold returns old value
-(test/define "set-checkpoint-threshold-returns-old"
-  {do
-    (= {old} (set-checkpoint-threshold 50))
-    (= {new} (checkpoint-threshold))
-    (set-checkpoint-threshold old) ; restore
-    (and (== old 75) (== new 50))})
-
-; Test checkpoint-enabled? returns true by default
-(test/define "checkpoint-enabled-default"
-  {== (checkpoint-enabled?) 1})
-
-; Test set-checkpoint-enabled toggles state
-(test/define "set-checkpoint-enabled-toggle"
-  {do
-    (= {old} (set-checkpoint-enabled 0))
-    (= {disabled} (checkpoint-enabled?))
-    (set-checkpoint-enabled old) ; restore
-    (and (== old 1) (== disabled 0))})
-
-; Test should-checkpoint? returns a boolean-like value
-(test/define "should-checkpoint-returns-number"
-  {or (== (should-checkpoint?) 0) (== (should-checkpoint?) 1)})
-
 ; Test checkpoint-stats returns a list of 4 numbers
 (test/define "checkpoint-stats-returns-list"
   {do
     (= {stats} (checkpoint-stats))
     (== (len stats) 4)})
 
-; Test basic value survives checkpoint
-(test/define "value-survives-checkpoint"
+; Test checkpoint-stats values are non-negative
+(test/define "checkpoint-stats-valid-values"
   {do
-    (= {x} 42)
-    (checkpoint)
-    (== x 42)})
+    (= {stats} (checkpoint-stats))
+    (= {values-evac} (head stats))
+    (= {bytes-evac} (head (tail stats)))
+    (= {num-checkpoints} (head (tail (tail stats))))
+    (= {ptrs-fixed} (head (tail (tail (tail stats)))))
+    (and (and (>= values-evac 0) (>= bytes-evac 0))
+         (and (>= num-checkpoints 0) (>= ptrs-fixed 0)))})
 
-; Test list survives checkpoint
-(test/define "list-survives-checkpoint"
-  {do
-    (= {lst} {1 2 3 4 5})
-    (checkpoint)
-    (== (len lst) 5)})
-
-; Test function survives checkpoint
-; Note: Must use \ syntax (not fn) due to eval context limitations
-(test/define "function-survives-checkpoint"
-  {do
-    (def {add-ten} (\ {x} {+ x 10}))
-    (checkpoint)
-    (== (add-ten 5) 15)})
-
-; Test closure survives checkpoint
-(test/define "closure-survives-checkpoint"
-  {do
-    (def {make-adder} (\ {n} {\ {x} {+ x n}}))
-    (def {add5} (make-adder 5))
-    (checkpoint)
-    (== (add5 10) 15)})
+; Test arena-usage is less than capacity
+(test/define "arena-usage-less-than-capacity"
+  {< (arena-usage) (arena-capacity)})
 
 ; Run all tests
 (test/run)

@@ -1,11 +1,12 @@
 ; Phase 5 Integration Tests
-; Tests for checkpoint integration with evaluation
+; Tests that values survive across top-level expressions (checkpoint happens
+; automatically between expressions in REPL mode)
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Checkpoint Integration Tests")
+(test/suite "Integration Tests")
 
-; Test that many top-level defs work (exercises checkpoint between expressions)
+; Test that many top-level defs work (checkpoint happens between each)
 (def {integration-var-1} 1)
 (def {integration-var-2} 2)
 (def {integration-var-3} 3)
@@ -16,7 +17,7 @@
   {== (+ integration-var-1 integration-var-2 integration-var-3
          integration-var-4 integration-var-5) 15})
 
-; Test function definitions survive checkpoint
+; Test function definitions survive
 (def {integration-add} (\ {x y} {+ x y}))
 (def {integration-mul} (\ {x y} {* x y}))
 
@@ -24,12 +25,12 @@
   {and (== (integration-add 3 4) 7)
        (== (integration-mul 3 4) 12)})
 
-; Test closures survive checkpoint
+; Test closures survive
 (def {make-counter} (\ {start} {\ {n} {+ start n}}))
 (def {counter-from-10} (make-counter 10))
 (def {counter-from-100} (make-counter 100))
 
-(test/define "closures-survive-checkpoint"
+(test/define "closures-survive"
   {and (== (counter-from-10 5) 15)
        (== (counter-from-100 5) 105)})
 
@@ -73,16 +74,5 @@
     (= {usage} (arena-usage))
     (= {capacity} (arena-capacity))
     (< usage capacity)})
-
-; Test multiple sequential checkpoints don't corrupt state
-(test/define "sequential-checkpoints-safe"
-  {do
-    (= {a} 100)
-    (checkpoint)
-    (= {b} 200)
-    (checkpoint)
-    (= {c} 300)
-    (checkpoint)
-    (== (+ a b c) 600)})
 
 (test/run)

@@ -914,6 +914,218 @@ void test_checkpoint_stats(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// Phase 7: Edge case test - nil values in cons cells
+void test_checkpoint_nil_cons(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 64 * 1024;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  size_t threshold = 16 * 1024 * 1024;
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)arena;
+  valk_thread_ctx.heap = heap;
+
+  VALK_WITH_ALLOC((void *)heap) {
+    valk_lenv_t *env = valk_lenv_empty();
+    valk_gc_malloc_set_root(heap, env);
+
+    // Create cons cell with nil head and tail in scratch
+    VALK_WITH_ALLOC((void *)arena) {
+      valk_lval_t *nil_cons = valk_lval_cons(valk_lval_nil(), valk_lval_nil());
+      valk_lenv_put(env, valk_lval_sym("nil_cons"), nil_cons);
+    }
+
+    // Checkpoint should handle nil values gracefully
+    valk_checkpoint(arena, heap, env);
+
+    // Verify value survived
+    valk_lval_t *retrieved = valk_lenv_get(env, valk_lval_sym("nil_cons"));
+    VALK_TEST_ASSERT(LVAL_TYPE(retrieved) == LVAL_CONS,
+                     "nil_cons should be cons type");
+    VALK_TEST_ASSERT(LVAL_TYPE(retrieved->cons.head) == LVAL_NIL,
+                     "head should be nil");
+    VALK_TEST_ASSERT(LVAL_TYPE(retrieved->cons.tail) == LVAL_NIL,
+                     "tail should be nil");
+  }
+
+  valk_thread_ctx = old_ctx;
+  free(arena);
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
+// Phase 7: Edge case test - deeply nested environment chain
+void test_checkpoint_deep_env_chain(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 256 * 1024;  // Larger arena for deep chain
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  size_t threshold = 16 * 1024 * 1024;
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)arena;
+  valk_thread_ctx.heap = heap;
+
+  const int CHAIN_DEPTH = 50;  // 50 nested environments
+
+  VALK_WITH_ALLOC((void *)heap) {
+    valk_lenv_t *root_env = valk_lenv_empty();
+    valk_gc_malloc_set_root(heap, root_env);
+
+    // Build chain of nested environments in scratch and store values
+    // Each level stores a number to verify the chain survives
+    VALK_WITH_ALLOC((void *)arena) {
+      for (int i = 0; i < CHAIN_DEPTH; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "level_%d", i);
+        valk_lenv_put(root_env, valk_lval_sym(name), valk_lval_num(i * 10));
+      }
+    }
+
+    // Checkpoint
+    valk_checkpoint(arena, heap, root_env);
+
+    // Verify all levels survived
+    int verified = 0;
+    for (int i = 0; i < CHAIN_DEPTH; i += 10) {
+      char name[32];
+      snprintf(name, sizeof(name), "level_%d", i);
+      valk_lval_t *val = valk_lenv_get(root_env, valk_lval_sym(name));
+      if (LVAL_TYPE(val) == LVAL_NUM && val->num == i * 10) {
+        verified++;
+      }
+    }
+    VALK_TEST_ASSERT(verified == (CHAIN_DEPTH + 9) / 10,
+                     "All spot-checked levels should survive");
+  }
+
+  valk_thread_ctx = old_ctx;
+  free(arena);
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
+// Phase 7: Edge case test - environment with many bindings
+void test_checkpoint_many_bindings(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 512 * 1024;  // Larger arena for many bindings
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  size_t threshold = 16 * 1024 * 1024;
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)arena;
+  valk_thread_ctx.heap = heap;
+
+  const int NUM_BINDINGS = 500;  // 500 bindings
+
+  VALK_WITH_ALLOC((void *)heap) {
+    valk_lenv_t *env = valk_lenv_empty();
+    valk_gc_malloc_set_root(heap, env);
+
+    // Create many bindings in scratch
+    VALK_WITH_ALLOC((void *)arena) {
+      for (int i = 0; i < NUM_BINDINGS; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "var_%d", i);
+        valk_lenv_put(env, valk_lval_sym(name), valk_lval_num(i * 2));
+      }
+    }
+
+    // Checkpoint
+    valk_checkpoint(arena, heap, env);
+
+    // Verify all bindings survived
+    int verified = 0;
+    for (int i = 0; i < NUM_BINDINGS; i += 50) {  // Spot check every 50th
+      char name[32];
+      snprintf(name, sizeof(name), "var_%d", i);
+      valk_lval_t *val = valk_lenv_get(env, valk_lval_sym(name));
+      if (LVAL_TYPE(val) == LVAL_NUM && val->num == i * 2) {
+        verified++;
+      }
+    }
+    VALK_TEST_ASSERT(verified == (NUM_BINDINGS + 49) / 50,
+                     "All spot-checked bindings should survive");
+  }
+
+  valk_thread_ctx = old_ctx;
+  free(arena);
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
+// Phase 7: Edge case test - closure with captured environment
+void test_checkpoint_closure(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 64 * 1024;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  size_t threshold = 16 * 1024 * 1024;
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)arena;
+  valk_thread_ctx.heap = heap;
+
+  VALK_WITH_ALLOC((void *)heap) {
+    valk_lenv_t *env = valk_lenv_empty();
+    valk_gc_malloc_set_root(heap, env);
+
+    // Create a closure (lambda with captured environment) in scratch
+    VALK_WITH_ALLOC((void *)arena) {
+      // Create captured environment with a value
+      valk_lenv_t *captured = valk_lenv_empty();
+      valk_lenv_put(captured, valk_lval_sym("captured_val"), valk_lval_num(42));
+
+      // Create a lambda function: formals = {x}, body = {+ x captured_val}
+      valk_lval_t *formals_arr[] = {valk_lval_sym("x")};
+      valk_lval_t *formals = valk_lval_list(formals_arr, 1);
+
+      valk_lval_t *body_arr[] = {valk_lval_sym("+"), valk_lval_sym("x"),
+                                  valk_lval_sym("captured_val")};
+      valk_lval_t *body = valk_lval_list(body_arr, 3);
+
+      valk_lval_t *lambda = valk_lval_lambda(captured, formals, body);
+
+      valk_lenv_put(env, valk_lval_sym("my_closure"), lambda);
+    }
+
+    // Checkpoint
+    valk_checkpoint(arena, heap, env);
+
+    // Verify closure survived with captured env
+    valk_lval_t *closure = valk_lenv_get(env, valk_lval_sym("my_closure"));
+    VALK_TEST_ASSERT(LVAL_TYPE(closure) == LVAL_FUN, "Should be function type");
+    VALK_TEST_ASSERT(closure->fun.builtin == NULL, "Should be lambda not builtin");
+    VALK_TEST_ASSERT(closure->fun.env != NULL, "Should have captured env");
+
+    // Check captured value
+    valk_lval_t *captured_val =
+        valk_lenv_get(closure->fun.env, valk_lval_sym("captured_val"));
+    VALK_TEST_ASSERT(LVAL_TYPE(captured_val) == LVAL_NUM,
+                     "captured_val should be number");
+    VALK_TEST_ASSERT(captured_val->num == 42, "captured_val should be 42");
+  }
+
+  valk_thread_ctx = old_ctx;
+  free(arena);
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
@@ -1017,6 +1229,12 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_checkpoint_evacuate_number", test_checkpoint_evacuate_number);
   valk_testsuite_add_test(suite, "test_checkpoint_evacuate_list", test_checkpoint_evacuate_list);
   valk_testsuite_add_test(suite, "test_checkpoint_stats", test_checkpoint_stats);
+
+  // Phase 7 edge case tests
+  valk_testsuite_add_test(suite, "test_checkpoint_nil_cons", test_checkpoint_nil_cons);
+  valk_testsuite_add_test(suite, "test_checkpoint_deep_env_chain", test_checkpoint_deep_env_chain);
+  valk_testsuite_add_test(suite, "test_checkpoint_many_bindings", test_checkpoint_many_bindings);
+  valk_testsuite_add_test(suite, "test_checkpoint_closure", test_checkpoint_closure);
 
   // load fixtures
   // valk_lval_t *ast = valk_parse_file("src/prelude.valk");

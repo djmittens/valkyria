@@ -71,14 +71,14 @@ int main(int argc, char* argv[]) {
       }
       script_mode = true;  // Any file argument implies script mode
       valk_lval_t* res;
-      // Parse into GC heap (persistent)
+      // Parse into GC heap (persistent - AST must survive checkpoints)
       VALK_WITH_ALLOC((void*)gc_heap) { res = valk_parse_file(argv[i]); }
       if (res->flags == LVAL_ERR) {
         valk_lval_println(res);
       } else {
         while (valk_lval_list_count(res) > 0) {
-          valk_lval_t* x;
           // Evaluate in scratch arena - checkpoint will evacuate survivors
+          valk_lval_t* x;
           VALK_WITH_ALLOC((void*)scratch) {
             x = valk_lval_eval(env, valk_lval_pop(res, 0));
           }
@@ -88,12 +88,9 @@ int main(int argc, char* argv[]) {
             break;
           }
 
-          // Checkpoint if scratch arena usage exceeds threshold
-          if (valk_thread_ctx.checkpoint_enabled &&
-              valk_should_checkpoint(scratch,
-                                     valk_thread_ctx.checkpoint_threshold)) {
-            valk_checkpoint(scratch, gc_heap, env);
-          }
+          // Checkpoint at safe point: between top-level expressions
+          // This evacuates any values stored in env (via def) to GC heap
+          valk_checkpoint(scratch, gc_heap, env);
 
           // GC safe point: expression evaluated, only env is live
           if (valk_gc_malloc_should_collect(gc_heap)) {
