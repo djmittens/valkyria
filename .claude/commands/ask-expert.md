@@ -6,12 +6,23 @@ You are helping the user with compiler development questions using the valkyria-
 
 IMPORTANT: Follow these steps to answer the question:
 
-1. **Search the knowledge base** using the almanac-rag tool:
+1. **Determine question type** and search strategy:
+   - If asking "how/why/what are/explain/design/tradeoffs/strategies/approaches" → Use `--prioritize-docs` flag
+   - If asking about specific implementation details or looking for code → Use standard search
+
+2. **Search the knowledge base** using the appropriate strategy:
+
+   For conceptual/design questions:
+   ```bash
+   ~/src/expert-lab/.venv/bin/python ~/src/expert-lab/bin/almanac-rag "{{question}}" --top-k 10 --prioritize-docs
+   ```
+
+   For implementation/code questions:
    ```bash
    ~/src/expert-lab/.venv/bin/python ~/src/expert-lab/bin/almanac-rag "{{question}}" --top-k 10
    ```
 
-2. **Analyze the search results** to understand what information is available
+3. **Analyze the search results** to understand what information is available
 
 3. **Answer the user's question** concisely using the context from the search results. Include:
    - Direct answer to their question (2-3 paragraphs max)
