@@ -250,7 +250,7 @@ int main(int argc, const char **argv) {
   // Final GC collection before destroying heap
   // This collects any remaining unreachable objects
   valk_gc_malloc_set_root(gc_heap, NULL);
-  valk_gc_malloc_collect(gc_heap);
+  valk_gc_malloc_collect(gc_heap, NULL);  // No additional roots in cleanup
 
   // Clean up GC heap to avoid memory leaks
   valk_gc_malloc_heap_destroy(gc_heap);

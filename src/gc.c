@@ -10,6 +10,7 @@
 // Forward declarations
 static void valk_gc_mark_lval(valk_lval_t* v);
 static void valk_gc_mark_env(valk_lenv_t* env);
+static void valk_gc_mark_allocation(void* ptr);
 static void valk_gc_clear_marks_recursive(valk_lval_t* v);
 
 // ============================================================================
@@ -131,7 +132,7 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
                 100.0 * heap->allocated_bytes / heap->hard_limit);
 
       size_t before = heap->allocated_bytes;
-      valk_gc_malloc_collect(heap);
+      valk_gc_malloc_collect(heap, NULL);  // Emergency GC, no additional roots
       size_t reclaimed = before - heap->allocated_bytes;
 
       heap->stats.emergency_collections++;
@@ -164,7 +165,6 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
 
   valk_gc_header_t* header = NULL;
   bool from_slab = false;
-  bool from_free_list = false;
 
   // Fastest path: Slab allocator for valk_lval_t objects (most common case)
   if (bytes == heap->lval_size && heap->lval_slab != NULL) {
@@ -175,16 +175,7 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
     }
   }
 
-  // Fast path: Pop from free list if exact size match (O(1) stack operation)
-  if (header == NULL && heap->free_list != NULL && heap->free_list->size == bytes) {
-    header = heap->free_list;
-    heap->free_list = header->gc_next;
-    heap->free_list_size--;
-    from_free_list = true;
-    VALK_TRACE("GC alloc: %zu bytes from free list at %p", bytes, (void*)(header + 1));
-  }
-
-  // Slow path: malloc if not found in slab or free list
+  // Slow path: malloc if not found in slab
   if (header == NULL) {
     header = malloc(total_size);
     if (header == NULL) {
@@ -202,11 +193,9 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
   header->gc_next = heap->objects;
   header->size = bytes;
 
-  // Zero out user data only for fresh malloc (slab/free-list objects will be reinitialized by caller)
-  if (!from_slab && !from_free_list) {
-    void* user_data = (void*)(header + 1);
-    memset(user_data, 0, bytes);
-  }
+  // Always zero out user data for safety - whether from slab or malloc
+  void* user_data = (void*)(header + 1);
+  memset(user_data, 0, bytes);
 
   // Add to live objects linked list
   heap->objects = header;
@@ -244,6 +233,9 @@ static bool valk_gc_is_heap_pointer(valk_gc_malloc_heap_t* heap, void* ptr) {
 // Mark Phase - Traverse from roots and mark reachable objects
 // ============================================================================
 
+// Thread-local heap pointer for safe marking checks
+static __thread valk_gc_malloc_heap_t* gc_current_heap = NULL;
+
 static void valk_gc_mark_lval(valk_lval_t* v) {
   if (v == NULL) return;
 
@@ -258,14 +250,34 @@ static void valk_gc_mark_lval(valk_lval_t* v) {
 
   switch (LVAL_TYPE(v)) {
     case LVAL_NUM:
+      // True leaf type - no children
+      break;
+
+    case LVAL_REF:
+      // Mark the type string if it's GC-allocated
+      if (v->ref.type != NULL) {
+        valk_gc_mark_allocation(v->ref.type);
+      }
+      // Mark the ref ptr if it's GC-allocated (e.g., aio_system)
+      if (v->ref.ptr != NULL) {
+        valk_gc_mark_allocation(v->ref.ptr);
+      }
+      break;
+
     case LVAL_SYM:
     case LVAL_STR:
     case LVAL_ERR:
-    case LVAL_REF:
-      // Leaf types - no children
+      // Mark the string data if it's GC-allocated (evacuated from scratch)
+      if (v->str != NULL) {
+        valk_gc_mark_allocation(v->str);
+      }
       break;
 
     case LVAL_FUN:
+      // Mark function name string if it's GC-allocated
+      if (v->fun.name != NULL) {
+        valk_gc_mark_allocation(v->fun.name);
+      }
       // Mark function environment, formals, body
       if (v->fun.env) {
         valk_gc_mark_env(v->fun.env);
@@ -300,16 +312,65 @@ static void valk_gc_mark_lval(valk_lval_t* v) {
 static void valk_gc_mark_env(valk_lenv_t* env) {
   if (env == NULL) return;
 
-  // Mark all values in this environment
+  // First, mark the environment structure itself if it's GC-allocated
+  // (environments allocated via valk_lenv_empty use valk_gc_malloc_heap_alloc)
+  valk_gc_mark_allocation(env);
+
+  // Mark all lval values in this environment (recursive - each lval marks its children)
   for (size_t i = 0; i < env->vals.count; i++) {
     valk_gc_mark_lval(env->vals.items[i]);
   }
 
-  // Mark parent environment (lexical chain)
+  // Mark the arrays themselves if they're GC-allocated (evacuated from scratch)
+  if (env->symbols.items != NULL) {
+    valk_gc_mark_allocation(env->symbols.items);
+  }
+  if (env->vals.items != NULL) {
+    valk_gc_mark_allocation(env->vals.items);
+  }
+
+  // Mark individual symbol strings if they're GC-allocated (evacuated from scratch)
+  for (size_t i = 0; i < env->symbols.count; i++) {
+    if (env->symbols.items[i] != NULL) {
+      valk_gc_mark_allocation(env->symbols.items[i]);
+    }
+  }
+
+  // Recursively mark parent environment (lexical chain)
   valk_gc_mark_env(env->parent);
 
-  // Mark fallback environment (dynamic scoping chain)
+  // Recursively mark fallback environment (dynamic scoping chain)
   valk_gc_mark_env(env->fallback);
+}
+
+// Mark an arbitrary GC heap allocation (for evacuated strings/arrays)
+// This function should ONLY be called on GC-allocated pointers.
+// NOTE: GC can only run at checkpoint boundaries (between expressions).
+// During expression evaluation, scratch arena pointers are not safe to mark.
+static void valk_gc_mark_allocation(void* ptr) {
+  if (ptr == NULL || gc_current_heap == NULL) return;
+
+  // Skip scratch arena pointers - they don't have GC headers and aren't managed by GC yet
+  // They'll be evacuated at the next checkpoint if they're still reachable
+  // This is the ONLY check we need - O(1) range check instead of O(n) list scan
+  if (valk_thread_ctx.scratch && valk_ptr_in_arena(valk_thread_ctx.scratch, ptr)) {
+    return;  // Scratch pointer - wait for evacuation at checkpoint
+  }
+
+  // If not in scratch arena, it must be GC heap or libc malloc
+  // Both can be safely freed with valk_mem_free
+  // Trust the pointer and dereference the header
+  valk_gc_header_t* header = ((valk_gc_header_t*)ptr) - 1;
+
+  // Short-circuit: if already marked, return immediately (O(1))
+  // This makes repeated marking of the same object very fast
+  if ((uintptr_t)header->origin_allocator & 1) {
+    return;  // Already marked
+  }
+
+  // Mark it by setting the low bit of origin_allocator
+  void* allocator = (void*)((uintptr_t)header->origin_allocator & ~(uintptr_t)1);
+  header->origin_allocator = (void*)((uintptr_t)allocator | 1);
 }
 
 // ============================================================================
@@ -325,11 +386,15 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
     valk_gc_header_t* header = *header_ptr;
     void* user_data = (void*)(header + 1);
 
-    // Safety check: verify allocator pointer
-    if (header->origin_allocator != heap) {
+    // Extract mark bit from origin_allocator (we use low bit as mark flag)
+    bool is_marked = ((uintptr_t)header->origin_allocator & 1) != 0;
+    void* origin_allocator = (void*)((uintptr_t)header->origin_allocator & ~(uintptr_t)1);
+
+    // Safety check: verify allocator pointer (after clearing mark bit)
+    if (origin_allocator != heap) {
       VALK_ERROR("GC sweep found header with wrong allocator!");
       VALK_ERROR("  Expected GC heap: %p", heap);
-      VALK_ERROR("  Got allocator: %p", header->origin_allocator);
+      VALK_ERROR("  Got allocator: %p (mark bit: %d)", origin_allocator, is_marked);
       VALK_ERROR("  Header pointer: %p", header);
       VALK_ERROR("  User data: %p", user_data);
       VALK_ERROR("  Header size: %zu", header->size);
@@ -340,11 +405,20 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
       break;
     }
 
-    // Cast user data to valk_lval_t and check mark bit
-    valk_lval_t* obj = (valk_lval_t*)user_data;
+    // Check if this is an lval object or a raw allocation (string/array)
+    bool is_lval = (header->size == heap->lval_size);
+    bool lval_marked = false;
 
-    if (obj->flags & LVAL_FLAG_GC_MARK) {
-      // Object is live - keep it
+    if (is_lval) {
+      // Cast to lval and check its mark bit too
+      valk_lval_t* obj = (valk_lval_t*)user_data;
+      lval_marked = (obj->flags & LVAL_FLAG_GC_MARK) != 0;
+    }
+
+    // Object is live if either the header mark bit OR the lval mark bit is set
+    if (is_marked || lval_marked) {
+      // Object is live - keep it and clear mark bit for next GC cycle
+      header->origin_allocator = origin_allocator;
       header_ptr = &header->gc_next;
     } else {
       // Object is garbage - free based on allocation source (slab vs malloc)
@@ -370,14 +444,11 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
         valk_mem_allocator_free((void*)heap->lval_slab, header);
         VALK_TRACE("GC sweep: returned %p to slab", user_data);
       } else {
-        // Add to free list for fast reuse (malloc'd objects)
-        // Only malloc'd objects count towards reclaimed bytes since
-        // slab allocations don't add to allocated_bytes
+        // Free malloc'd objects directly
+        // Count towards reclaimed bytes since malloc'd objects are tracked in allocated_bytes
         reclaimed += total_size;
-        header->gc_next = heap->free_list;
-        heap->free_list = header;
-        heap->free_list_size++;
-        VALK_TRACE("GC sweep: added %p to free list", user_data);
+        free(header);
+        VALK_TRACE("GC sweep: freed %p (malloc)", user_data);
       }
     }
   }
@@ -808,7 +879,7 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* h
   fprintf(out, "╚══════════════════════════════════════════════════════════════════╝\n\n");
 }
 
-size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap) {
+size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root) {
   if (heap->root_env == NULL) {
     VALK_WARN("GC collect called with no root environment");
     return 0;
@@ -822,20 +893,35 @@ size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap) {
             heap->gc_threshold,
             100.0 * before / heap->gc_threshold);
 
-  // Phase 1: Mark reachable objects from root environment
-  // GC only runs at safe points (between expressions) where there are no
-  // temporary stack objects - everything live is in the environment!
+  // Set thread-local heap pointer for safe marking checks
+  gc_current_heap = heap;
+
+  // Phase 1: Mark reachable objects from root environment and any additional roots
+  // GC only runs at safe points (between expressions). Most live data is in the
+  // environment, but parsed ASTs waiting for evaluation must also be marked.
   valk_gc_mark_env(heap->root_env);
+  if (additional_root != NULL) {
+    valk_gc_mark_lval(additional_root);
+  }
 
   // Phase 2: Sweep unreachable objects
   size_t reclaimed = valk_gc_malloc_sweep(heap);
 
+  // Clear thread-local heap pointer
+  gc_current_heap = NULL;
+
   // Phase 3: Clear marks for next collection
   // Walk the object list (which now only contains live objects after sweep)
   for (valk_gc_header_t* header = heap->objects; header != NULL; header = header->gc_next) {
-    void* user_data = (void*)(header + 1);
-    valk_lval_t* obj = (valk_lval_t*)user_data;
-    obj->flags &= ~LVAL_FLAG_GC_MARK;
+    // Clear header mark bit (used for non-lval allocations like strings/arrays)
+    header->origin_allocator = (void*)((uintptr_t)header->origin_allocator & ~(uintptr_t)1);
+
+    // Clear lval mark bit only for lval-sized allocations
+    if (header->size == heap->lval_size) {
+      void* user_data = (void*)(header + 1);
+      valk_lval_t* obj = (valk_lval_t*)user_data;
+      obj->flags &= ~LVAL_FLAG_GC_MARK;
+    }
   }
 
   size_t after = heap->allocated_bytes;
@@ -889,7 +975,7 @@ void valk_gc_free_object(void* heap_ptr, void* user_ptr) {
     // Return to slab allocator
     valk_mem_allocator_free((void*)heap->lval_slab, header);
   } else {
-    // Free malloc'd memory
+    // Free malloc'd memory directly
     heap->allocated_bytes -= total_size;
     free(header);
   }
@@ -925,7 +1011,7 @@ void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
     }
 
     if (!from_slab) {
-      // Free malloc'd objects (slab objects freed with slab itself)
+      // Free malloc'd objects directly (slab objects freed with slab itself)
       size_t total_size = sizeof(valk_gc_header_t) + current->size;
       freed_bytes += total_size;
       freed_count++;
@@ -1259,8 +1345,24 @@ static void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
       valk_evacuate_env(ctx, &v->env);
       break;
 
+    case LVAL_STR:
+    case LVAL_SYM:
+    case LVAL_ERR:
+      // Evacuate string data if it's in scratch
+      if (v->str != NULL && valk_ptr_in_arena(ctx->scratch, v->str)) {
+        size_t len = strlen(v->str) + 1;
+        char* new_str = NULL;
+        VALK_WITH_ALLOC((void*)ctx->heap) { new_str = valk_mem_alloc(len); }
+        if (new_str) {
+          memcpy(new_str, v->str, len);
+          v->str = new_str;
+          ctx->bytes_copied += len;
+        }
+      }
+      break;
+
     default:
-      // Leaf types (NUM, SYM, STR, ERR, REF, NIL) have no children
+      // Leaf types (NUM, REF, NIL) have no children
       break;
   }
 }
@@ -1398,9 +1500,46 @@ static void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
 static void valk_fix_env_pointers(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
   if (env == NULL) return;
 
-  // Skip if vals.items array is in scratch (not evacuated, would be garbage after reset)
+  // Evacuate symbols.items array if in scratch
+  if (env->symbols.items != NULL && valk_ptr_in_arena(ctx->scratch, env->symbols.items)) {
+    size_t array_size = env->symbols.capacity * sizeof(char*);
+    char** new_items = NULL;
+    VALK_WITH_ALLOC((void*)ctx->heap) { new_items = valk_mem_alloc(array_size); }
+    if (new_items) {
+      if (env->symbols.count > 0) {
+        memcpy(new_items, env->symbols.items, env->symbols.count * sizeof(char*));
+      }
+      env->symbols.items = new_items;
+      ctx->bytes_copied += array_size;
+    }
+  }
+
+  // Evacuate individual symbol strings if in scratch
+  for (size_t i = 0; i < env->symbols.count; i++) {
+    if (env->symbols.items[i] && valk_ptr_in_arena(ctx->scratch, env->symbols.items[i])) {
+      size_t len = strlen(env->symbols.items[i]) + 1;
+      char* new_str = NULL;
+      VALK_WITH_ALLOC((void*)ctx->heap) { new_str = valk_mem_alloc(len); }
+      if (new_str) {
+        memcpy(new_str, env->symbols.items[i], len);
+        env->symbols.items[i] = new_str;
+        ctx->bytes_copied += len;
+      }
+    }
+  }
+
+  // Evacuate vals.items array if in scratch
   if (env->vals.items != NULL && valk_ptr_in_arena(ctx->scratch, env->vals.items)) {
-    return;
+    size_t array_size = env->vals.capacity * sizeof(valk_lval_t*);
+    valk_lval_t** new_items = NULL;
+    VALK_WITH_ALLOC((void*)ctx->heap) { new_items = valk_mem_alloc(array_size); }
+    if (new_items) {
+      if (env->vals.count > 0) {
+        memcpy(new_items, env->vals.items, env->vals.count * sizeof(valk_lval_t*));
+      }
+      env->vals.items = new_items;
+      ctx->bytes_copied += array_size;
+    }
   }
 
   // Fix all value pointers using the helper

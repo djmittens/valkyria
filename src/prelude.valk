@@ -1,6 +1,6 @@
 ; This is the beginning of my fun.
 ; Default program to be parsed and loaded
-(println "Hello and welcome to the prelude n Shit")
+; Valkyria Standard Prelude
 
 ; Function Definitions
 (def {fun} (\ {_fn _body}  {

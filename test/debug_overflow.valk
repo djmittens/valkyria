@@ -1,0 +1,7 @@
+(load "src/prelude.valk")
+(println "Creating first large list...")
+(def {big1} (range 0 5000))
+(println "Creating second large list...")
+(def {big2} (range 0 5000))
+(println "Done")
+(memory-stats)

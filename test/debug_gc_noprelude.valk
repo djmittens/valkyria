@@ -1,0 +1,5 @@
+(println "Start")
+(def {x} "test")
+(println "Forcing GC...")
+(mem/gc/collect)
+(println "Done")

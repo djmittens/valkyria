@@ -2040,7 +2040,7 @@ static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
     // GC safe point: expression evaluated, collect if needed
     valk_gc_malloc_heap_t* gc_heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.allocator;
     if (gc_heap->type == VALK_ALLOC_GC_HEAP && valk_gc_malloc_should_collect(gc_heap)) {
-      valk_gc_malloc_collect(gc_heap);
+      valk_gc_malloc_collect(gc_heap, NULL);  // No additional roots needed here
     }
   }
   // Restore previous mode
@@ -2296,7 +2296,7 @@ static valk_lval_t* valk_builtin_gc_collect(valk_lenv_t* e, valk_lval_t* a) {
   if (heap == NULL) {
     return valk_lval_num(0);
   }
-  size_t reclaimed = valk_gc_malloc_collect(heap);
+  size_t reclaimed = valk_gc_malloc_collect(heap, NULL);  // No additional roots needed
   return valk_lval_num((long)reclaimed);
 }
 
@@ -2332,6 +2332,55 @@ static valk_lval_t* valk_builtin_set_heap_hard_limit(valk_lenv_t* e, valk_lval_t
 
   valk_gc_set_hard_limit(heap, new_limit);
   return valk_lval_num((long)old_limit);
+}
+
+// (gc-threshold) - Return current GC routine threshold
+static valk_lval_t* valk_builtin_gc_threshold(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  if (heap == NULL) {
+    return valk_lval_num(0);
+  }
+  return valk_lval_num((long)heap->gc_threshold);
+}
+
+// (set-gc-threshold n) - Set routine GC threshold, return previous value
+static valk_lval_t* valk_builtin_set_gc_threshold(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+
+  long new_thr = valk_lval_list_nth(a, 0)->num;
+  if (new_thr < 0) new_thr = 0;
+
+  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  if (heap == NULL) {
+    return valk_lval_num(0);
+  }
+
+  size_t old_thr = heap->gc_threshold;
+  heap->gc_threshold = (size_t)new_thr;
+  return valk_lval_num((long)old_thr);
+}
+
+// (set-log-level "error|warn|info|debug|trace") - set log level
+static valk_lval_t* valk_builtin_set_log_level(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* s = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, s, LVAL_STR);
+
+  const char* v = s->str;
+  valk_log_level_e lvl = VALK_LOG_WARN;
+  if (strcasecmp(v, "error") == 0) lvl = VALK_LOG_ERROR;
+  else if (strcasecmp(v, "warn") == 0 || strcasecmp(v, "warning") == 0) lvl = VALK_LOG_WARN;
+  else if (strcasecmp(v, "info") == 0) lvl = VALK_LOG_INFO;
+  else if (strcasecmp(v, "debug") == 0) lvl = VALK_LOG_DEBUG;
+  else if (strcasecmp(v, "trace") == 0) lvl = VALK_LOG_TRACE;
+
+  valk_log_set_level(lvl);
+  return valk_lval_str(s->str);
 }
 
 // ============================================================================
@@ -2385,6 +2434,18 @@ static valk_lval_t* valk_builtin_arena_capacity(valk_lenv_t* e, valk_lval_t* a) 
     return valk_lval_num(0);
   }
   return valk_lval_num((long)scratch->capacity);
+}
+
+// (arena-high-water) - Return scratch arena high water mark
+static valk_lval_t* valk_builtin_arena_high_water(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+
+  valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
+  if (scratch == NULL) {
+    return valk_lval_num(0);
+  }
+  return valk_lval_num((long)scratch->stats.high_water_mark);
 }
 
 static valk_lval_t* valk_builtin_error(valk_lenv_t* e, valk_lval_t* a) {
@@ -2858,18 +2919,22 @@ void valk_lenv_builtins(valk_lenv_t* env) {
                         valk_builtin_http2_response_headers);
   // Script classification helpers are implicit via CLI flags; no new builtins
 
-  // Memory / GC statistics
-  valk_lenv_put_builtin(env, "memory-stats", valk_builtin_memory_stats);
-  valk_lenv_put_builtin(env, "heap-usage", valk_builtin_heap_usage);
-  valk_lenv_put_builtin(env, "gc-stats", valk_builtin_gc_stats);
-  valk_lenv_put_builtin(env, "gc-collect", valk_builtin_gc_collect);
-  valk_lenv_put_builtin(env, "heap-hard-limit", valk_builtin_heap_hard_limit);
-  valk_lenv_put_builtin(env, "set-heap-hard-limit", valk_builtin_set_heap_hard_limit);
+  // Memory / GC statistics (path-style naming for better organization)
+  valk_lenv_put_builtin(env, "mem/stats", valk_builtin_memory_stats);
+  valk_lenv_put_builtin(env, "mem/heap/usage", valk_builtin_heap_usage);
+  valk_lenv_put_builtin(env, "mem/heap/hard-limit", valk_builtin_heap_hard_limit);
+  valk_lenv_put_builtin(env, "mem/heap/set-hard-limit", valk_builtin_set_heap_hard_limit);
+  valk_lenv_put_builtin(env, "mem/gc/stats", valk_builtin_gc_stats);
+  valk_lenv_put_builtin(env, "mem/gc/collect", valk_builtin_gc_collect);
+  valk_lenv_put_builtin(env, "mem/gc/threshold", valk_builtin_gc_threshold);
+  valk_lenv_put_builtin(env, "mem/gc/set-threshold", valk_builtin_set_gc_threshold);
+  valk_lenv_put_builtin(env, "mem/arena/usage", valk_builtin_arena_usage);
+  valk_lenv_put_builtin(env, "mem/arena/capacity", valk_builtin_arena_capacity);
+  valk_lenv_put_builtin(env, "mem/arena/high-water", valk_builtin_arena_high_water);
+  valk_lenv_put_builtin(env, "mem/checkpoint/stats", valk_builtin_checkpoint_stats);
 
-  // Memory introspection builtins (read-only, safe to call anytime)
-  valk_lenv_put_builtin(env, "checkpoint-stats", valk_builtin_checkpoint_stats);
-  valk_lenv_put_builtin(env, "arena-usage", valk_builtin_arena_usage);
-  valk_lenv_put_builtin(env, "arena-capacity", valk_builtin_arena_capacity);
+  // Logging configuration
+  valk_lenv_put_builtin(env, "sys/log/set-level", valk_builtin_set_log_level);
 
   // NOTE: checkpoint is NOT exposed to user code. It can only be called at safe
   // points (between top-level expressions) by the runtime. Calling checkpoint

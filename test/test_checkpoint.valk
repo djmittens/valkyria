@@ -12,11 +12,11 @@
 
 ; Test arena-capacity returns a positive number
 (test/define "arena-capacity-positive"
-  {> (arena-capacity) 0})
+  {> (mem/arena/capacity) 0})
 
 ; Test arena-usage returns a non-negative number
 (test/define "arena-usage-returns-number"
-  {>= (arena-usage) 0})
+  {>= (mem/arena/usage) 0})
 
 ; Test checkpoint-stats returns a list of 4 numbers
 (test/define "checkpoint-stats-returns-list"
@@ -37,7 +37,7 @@
 
 ; Test arena-usage is less than capacity
 (test/define "arena-usage-less-than-capacity"
-  {< (arena-usage) (arena-capacity)})
+  {< (mem/arena/usage) (mem/arena/capacity)})
 
 ; Run all tests
 (test/run)

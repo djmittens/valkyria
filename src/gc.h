@@ -61,7 +61,8 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes);
 void valk_gc_malloc_set_root(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env);
 
 // Perform mark & sweep collection
-size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap);
+// If additional_root is non-NULL, it will be marked in addition to root_env
+size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root);
 
 // Check if GC should run
 bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap);

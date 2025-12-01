@@ -1,170 +1,201 @@
-; Checkpoint-Based Memory Management Demo
-; ========================================
+; Checkpoint + GC Memory Demo (number‑driven)
+; ==========================================
+; Run: ./build/valk examples/checkpoint_demo.valk
 ;
-; This demonstrates Valkyria's two-region memory system:
-;   - SCRATCH ARENA: Fast bump allocator for temporaries (reset each checkpoint)
-;   - GC HEAP: Mark-and-sweep for persistent values (reachable from def'd bindings)
-;
-; The key insight: values only move to heap when they "escape" via def.
-;
-; Run with: ./build/valk examples/checkpoint_demo.valk
+; What you’ll see, with real numbers printed as we go:
+; - Temporaries allocated in the scratch arena, then reclaimed at checkpoint
+; - Scratch overflow falling back to heap, then GC reclaiming those bytes
+; - Values evacuated from scratch into the GC heap when they escape via def
+; - GC collections occur only at safe checkpoints (and can be triggered)
+; - When the slab is saturated, allocations safely fall back to malloc
 
 (load "src/prelude.valk")
 
+; Small helpers to keep numbers readable
+(fun {show-bytes label b}
+  { println "%s: %ld bytes" label b })
+
+; Friendly tips and glossary
+(sys/log/set-level "error")
+(println "Tip: log level set to 'error' for clean output (hide WARN lines)")
+(println "Glossary: evacuation = scratch→heap on def; overflow fallback = scratch full→heap; slab = fast pool for values; malloc = heap fallback")
+
+; Configure GC so routine threshold equals hard-limit; GC then runs only near exhaustion
+(def {thr0} (mem/gc/threshold))
+(def {hl0} (mem/heap/hard-limit))
+(def {thr_old} (mem/gc/set-threshold hl0))
+(println "Configured GC: routine threshold set to hard-limit (%ld → %ld). GC runs only near exhaustion." thr0 (mem/gc/threshold))
+
+; Toggle heavy slab saturation phase (set to 1 to run it)
+(def {run_heavy} 0)
+
+; Capture baseline numbers
+(def {arena_cap} (mem/arena/capacity))
+(def {h0} (mem/heap/usage))
+(def {a0} (mem/arena/usage))
+(def {ck0} (mem/checkpoint/stats))      ; {count evacuated bytes fixed}
+
 (println "")
-(println "=== Checkpoint Memory Management Demo ===")
-(println "")
+(println "=== Checkpoint + GC Demo (Scratch %ld bytes) ===" arena_cap)
+(println "Look for: SCRATCH ARENA usage bar and GC HEAP initial state")
+(mem/stats)
 
-(println "Initial state (after loading prelude):")
-(println "  -> Look at: Live objects ~2800, Evacuations ~867")
-(memory-stats)
+; ---------------------------------------------------------------------------
+; Phase 1 — Scratch arena allocations reclaimed at checkpoint
+; ---------------------------------------------------------------------------
+(println "\n--- Phase 1: Temporaries live in scratch, then vanish at checkpoint ---")
 
-; -----------------------------------------------------------------------------
-; Phase 1: Persistent allocations - these ESCAPE to heap
-; -----------------------------------------------------------------------------
-(println "")
-(println "--- Phase 1: Persistent Lists (def = escape to heap) ---")
+; In this expression we allocate a list that fits in the arena. We print
+; live arena usage before/after to prove it grows here, then resets next expr.
+(do
+  (def {a1_before} (mem/arena/usage))
+  (def {tmp_len} (len (range 0 10000)))  ; ~10k cons cells
+  (def {a1_after} (mem/arena/usage))
+  (println "Allocated a 10k-element list (length: %ld)" tmp_len)
+  (show-bytes "Scratch during expr" a1_after)
+  (println "(will reset after checkpoint)")
+)
 
-; Each range creates a linked list of N cons cells in scratch
-; The def causes evacuation to GC heap
-(def {list1} (range 0 5000))
-(def {list2} (range 0 5000))
-(def {list3} (range 0 5000))
-(def {list4} (range 0 5000))
-(def {list5} (range 0 5000))
-(def {list6} (range 0 5000))
-(def {list7} (range 0 5000))
-(def {list8} (range 0 5000))
-(def {list9} (range 0 5000))
-(def {list10} (range 0 5000))
+; Bonus: Show scratch at (or near) 100% BEFORE checkpoint (graphs include current usage).
+; Allocate another ~10k list in the same expression, then call memory-stats inline.
+(do
+  (len (range 0 10000))
+  (len (range 0 10000))
+  (println "Scratch status inside expression (before checkpoint):")
+  (println "  usage=%ld / cap=%ld" (mem/arena/usage) (mem/arena/capacity))
+  (println "Look for: SCRATCH ARENA [███] 4.00 MB / 4.00 MB (full before checkpoint)")
+  (mem/stats)
+)
 
-(println "Created 10 lists x 5000 elements = 50,000 cons cells")
-(println "  -> Look at: Live objects jumped to ~102k (+100k)")
-(println "  -> Look at: Evacuations jumped to ~100k (values moved arena->heap)")
-(println "  -> Look at: Scratch arena reset to 112 bytes (temporaries reclaimed)")
-(memory-stats)
+; Checkpoint runs between top-level expressions
+(def {a1_reset} (mem/arena/usage))
+(println "After checkpoint: scratch reset from %ld -> %ld bytes" a1_after a1_reset)
+(mem/stats)
 
-; -----------------------------------------------------------------------------
-; Phase 2: Lambda evacuation - closures survive checkpoint
-; -----------------------------------------------------------------------------
-(println "")
-(println "--- Phase 2: Lambda Evacuation Test ---")
-(println "Closures allocated in scratch must preserve their captured environment")
+; ---------------------------------------------------------------------------
+; Phase 2 — Scratch overflow falls back to heap, GC reclaims at checkpoint
+; ---------------------------------------------------------------------------
 
-; Create a curried function that returns a closure
+(println "\n--- Phase 2: Scratch overflow → heap fallback → GC at checkpoint ---")
+
+; In one expression, exceed the 4MiB arena so allocations spill to heap.
+; We measure heap bytes before/after, proving real fallback occurred.
+(def {h2_before} (mem/heap/usage))
+(do
+  (def {big_tmp_len} (len (range 0 20000))) ; large enough to overflow 4MiB
+  (println "Built a 20k-element temporary list (length: %ld)" big_tmp_len)
+  (println "(it overflows scratch; some nodes were allocated on heap)")
+)
+
+; Safe point now: checkpoint ran, then GC may run automatically.
+(def {h2_after} (mem/heap/usage))
+(show-bytes "Heap delta across checkpoint (overflow spill via malloc)" (- h2_after h2_before))
+(println "Look for: [!] Overflow fallbacks count/bytes and GCs counter in GC HEAP")
+(mem/stats)
+
+; ---------------------------------------------------------------------------
+; Phase 3 — Evacuation: def causes values to escape to the GC heap
+; ---------------------------------------------------------------------------
+(println "\n--- Phase 3: Evacuation from scratch to heap (def = escape) ---")
+
+; Record checkpoint stats, then create persistent lists in one top-level expr.
+(def {ck_before} (mem/checkpoint/stats))
+(do
+  (def {list1} (range 0 20000))
+  (def {list2} (range 0 20000))
+  (def {list3} (range 0 20000))
+  (def {list4} (range 0 20000))
+  (def {list5} (range 0 20000))
+  (println "Defined 5x persistent lists (each 20k elements = 100k total)")
+)
+
+; After checkpoint, evacuated counters moved by real amounts.
+(def {ck_after} (mem/checkpoint/stats))
+(def {evac_count} (- (nth 2 ck_after) (nth 2 ck_before)))
+(def {evac_bytes} (- (nth 3 ck_after) (nth 3 ck_before)))
+(println "Evacuated values: +%ld  |  Evacuated bytes: +%ld" evac_count evac_bytes)
+
+; Also show the heap grew accordingly
+(def {h3} (mem/heap/usage))
+(println "Heap bytes now: %ld (baseline was %ld, delta %ld)" h3 h0 (- h3 h0))
+(println "Look for: GC HEAP live objects grew; Evacuations counter increased")
+(mem/stats)
+
+; ---------------------------------------------------------------------------
+; GC Showcase — briefly lower routine threshold to force a visible collection
+; ---------------------------------------------------------------------------
+(println "\n--- GC Showcase: Temporary low threshold to demonstrate GC ---")
+(def {thr_prev} (mem/gc/threshold))
+(def {hu_now} (mem/heap/usage))
+(def {thr_tmp} (+ hu_now 2048))
+(def {thr_old2} (mem/gc/set-threshold thr_tmp))
+(do
+  (println "Lowered GC threshold to %ld (prev %ld); allocating small malloc-backed data" thr_tmp thr_prev)
+  (def {slist}
+       (map (\ {n} {"aaaaaaaaaaaaaaaaaaaaaaaa"}) (range 1 200)))
+  (println "Allocated %ld small strings; checkpoint will now trigger routine GC if over threshold" (len slist))
+)
+(mem/gc/set-threshold thr_prev)
+(println "Restored GC threshold")
+(println "Look for: GC HEAP GCs counter incremented (routine GC)")
+(mem/stats)
+
+; ---------------------------------------------------------------------------
+; Phase 4 — GC policy (explanation only)
+; ---------------------------------------------------------------------------
+(println "\n--- Phase 4: GC policy ---")
+(println "Routine GC runs only near exhaustion (threshold = hard limit).")
+(println "We already triggered a routine GC in the 'GC Showcase' above.")
+(println "Checkpointing ensures evaluation safely evacuates and resets scratch.")
+
+; ---------------------------------------------------------------------------
+; Phase 5 — Slab saturation: malloc fallback kicks in for new values
+; ---------------------------------------------------------------------------
+(println "\n--- Phase 5: Slab vs Malloc region (short demo) ---")
+(if run_heavy
+  { do
+      (println "Heavy mode ON: saturating slab may take time…")
+      ; Enough persistent cons cells to exceed the fixed slab (256k objects)
+      (def {h5_before} (mem/heap/usage))
+      (def {slab_filler}
+           (map (\ {n} {range 0 5000}) (range 1 62)))
+      (def {h5_after} (mem/heap/usage))
+      (println "Malloc-region heap grew by: %ld bytes" (- h5_after h5_before))
+      (println "Inspect bars: '├─Slab' should be near full; '└─Malloc' > 0")
+      (mem/stats)
+    }
+  { do
+      (println "Heavy mode OFF: quick peek instead (no slab saturation)")
+      (def {h5_before} (mem/heap/usage))
+      ; Create a moderate number of persistent lists to show slab growth
+      (def {moderate}
+           (map (\ {n} {range 0 2000}) (range 1 8)))
+      (def {h5_after} (mem/heap/usage))
+      (println "Persisted 7 lists × 2000 = 14,000 cons cells")
+      (show-bytes "Heap delta (mostly slab-backed lvals; malloc handles non-lval bytes)" (- h5_after h5_before))
+      (println "Note: malloc region handles non-lval data; slab handles lvals.")
+      (mem/stats)
+    }
+)
+
+; ---------------------------------------------------------------------------
+; Epilogue — A tiny functional check with closures (still work post-evacuation)
+; ---------------------------------------------------------------------------
+(println "\n--- Epilogue: Closures survive evacuation ---")
 (def {make-mult} (\ {n} {\ {x} {* x n}}))
-
-; Build list of 100 lambdas - each captures a different n value (1-100)
-; These are allocated in scratch, then evacuated to heap via def
 (def {multipliers} (map make-mult (range 1 101)))
+(println "x1*7=%ld  x50*3=%ld  x100*5=%ld"
+         ((head multipliers) 7)
+         ((nth 50 multipliers) 3)
+         ((last multipliers) 5))
 
-(println "")
-(println "Created 100 lambda functions, each capturing a different multiplier")
-(println "  -> Evacuations increased by ~400 (lambdas + their environments)")
-(println "")
-(println "Testing that closures work after evacuation:")
-(println "  (x1)  * 7  = %d  (expect 7)"   ((head multipliers) 7))
-(println "  (x50) * 3  = %d (expect 150)" ((nth 50 multipliers) 3))
-(println "  (x100)* 5  = %d (expect 500)" ((last multipliers) 5))
-(memory-stats)
-
-; Execute ALL 100 lambdas - proves closure environments survived
-(println "")
-(println "Mapping all 100 multipliers over value 2, then summing:")
-(def {results} (map (\ {f} {f 2}) multipliers))
-(println "  Sum = %d (expect 10100 = 2*(1+2+...+100) = 2*5050)" (foldl + 0 results))
-(println "  -> Live objects increased slightly (results list)")
-(memory-stats)
-
-; -----------------------------------------------------------------------------
-; Phase 3: Temporary allocations - these DON'T escape
-; -----------------------------------------------------------------------------
-(println "")
-(println "--- Phase 3: Temporaries (no def = no escape) ---")
-(println "These lists are created and immediately consumed - never def'd")
-
-; These get GC'd at checkpoint - no evacuation needed
-(println "")
-(println "Creating 5 lists of 3000 elements each (15,000 cons cells total)...")
-(println "Lengths: %d %d %d %d %d"
-  (len (range 0 3000))
-  (len (range 0 3000))
-  (len (range 0 3000))
-  (len (range 0 3000))
-  (len (range 0 3000)))
-
-(println "")
-(println "  -> KEY INSIGHT: Live objects UNCHANGED (~104k)")
-(println "  -> KEY INSIGHT: Evacuations UNCHANGED (~101k)")
-(println "  -> KEY INSIGHT: Scratch high water mark jumped to 80% (used arena)")
-(println "  -> This is the power of checkpoint memory: temps are FREE to reclaim")
-(memory-stats)
-
-; -----------------------------------------------------------------------------
-; Phase 4-5: More persistent data to show heap growth
-; -----------------------------------------------------------------------------
-(println "")
-(println "--- Phase 4-5: Growing the Heap ---")
-
-(def {big1} (range 0 5000))
-(def {big2} (range 0 5000))
-(def {big3} (range 0 5000))
-(def {big4} (range 0 5000))
-(def {big5} (range 0 5000))
-
-(println "Added 5 x 5000 = 25,000 more persistent cons cells")
-(println "  -> Live objects grew, slab usage increased")
-(memory-stats)
-
-(def {huge1} (range 0 5000))
-(def {huge2} (range 0 5000))
-(def {huge3} (range 0 5000))
-
-(println "")
-(println "Added 3 x 5000 = 15,000 more persistent cons cells")
-(println "  -> Slab continues to fill")
-(memory-stats)
-
-; -----------------------------------------------------------------------------
-; Phase 6: Prove temporaries still don't grow heap
-; -----------------------------------------------------------------------------
-(println "")
-(println "--- Phase 6: Final Proof ---")
-(println "Even with heap partially used, temporaries don't grow it further")
-
-(println "")
-(println "Creating 5 more temporary lists of 3000 elements...")
-(println "Lengths: %d %d %d %d %d"
-  (len (range 0 3000))
-  (len (range 0 3000))
-  (len (range 0 3000))
-  (len (range 0 3000))
-  (len (range 0 3000)))
-
-(println "")
-(println "  -> Live objects: UNCHANGED")
-(println "  -> Slab objects: UNCHANGED")
-(println "  -> Only scratch high water mark changed (temps used arena)")
-(memory-stats)
-
-; -----------------------------------------------------------------------------
 ; Summary
-; -----------------------------------------------------------------------------
-(println "")
-(println "=== THE STORY IN NUMBERS ===")
-(println "")
-(println "1. ESCAPE ANALYSIS WORKS:")
-(println "   - def'd values: evacuated to heap (Live objects grew)")
-(println "   - non-def'd values: reclaimed at checkpoint (no growth)")
-(println "")
-(println "2. CLOSURES SURVIVE EVACUATION:")
-(println "   - 100 lambdas created in scratch arena")
-(println "   - Each captured a unique environment (n=1..100)")
-(println "   - After evacuation: (x50)*3=150, (x100)*5=500 - CORRECT!")
-(println "")
-(println "3. CHECKPOINT EFFICIENCY:")
-(println "   - Scratch arena always resets to ~112 bytes")
-(println "   - 15,000 temp cons cells allocated, 0 bytes heap growth")
-(println "   - This is O(1) reclamation vs O(n) GC sweep")
-(println "")
-(println "Demo complete!")
+(println "\n=== Summary (real counters) ===")
+(def {ck_final} (mem/checkpoint/stats))
+(def {hwm} (mem/arena/high-water))
+(println "Checkpoints: %ld  Evacuated: %ld values  %ld bytes  Pointers fixed: %ld"
+         (nth 1 ck_final) (nth 2 ck_final) (nth 3 ck_final) (nth 4 ck_final))
+(show-bytes "Scratch high-water mark" hwm)
+(println "Tip: VALK_LOG=error hides WARN lines if you only want the boxes")
+
+(println "\n=== Demo complete (all numbers above come from the runtime) ===")

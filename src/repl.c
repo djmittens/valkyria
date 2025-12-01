@@ -124,9 +124,9 @@ int main(int argc, char* argv[]) {
           // This evacuates any values stored in env (via def) to GC heap
           valk_checkpoint(scratch, gc_heap, env);
 
-          // GC safe point: expression evaluated, only env is live
+          // GC safe point: expression evaluated, env and remaining AST (res) are live
           if (valk_gc_malloc_should_collect(gc_heap)) {
-            valk_gc_malloc_collect(gc_heap);
+            valk_gc_malloc_collect(gc_heap, res);  // Mark res as additional root
           }
         }
       }
@@ -193,7 +193,7 @@ int main(int argc, char* argv[]) {
     // live Classic Lisp approach - collect between expressions, never during
     // evaluation
     if (valk_gc_malloc_should_collect(gc_heap)) {
-      valk_gc_malloc_collect(gc_heap);
+      valk_gc_malloc_collect(gc_heap, NULL);  // No additional roots in REPL
     }
   }
 

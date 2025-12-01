@@ -1,0 +1,8 @@
+(load "src/prelude.valk")
+
+; Force a GC by lowering threshold and allocating
+(def {old_thr} (mem/gc/set-threshold 1000))
+(def {data} (range 1 100))
+(println "Allocated data, GC should trigger")
+(mem/gc/set-threshold old_thr)
+(println "Done")
