@@ -1311,6 +1311,18 @@ static void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
       break;
 
     case LVAL_FUN:
+      // Evacuate function name string (for both builtin and user functions)
+      if (v->fun.name != NULL) {
+        size_t len = strlen(v->fun.name) + 1;
+        char* new_name = NULL;
+        VALK_WITH_ALLOC((void*)ctx->heap) { new_name = valk_mem_alloc(len); }
+        if (new_name && new_name != v->fun.name) {
+          memcpy(new_name, v->fun.name, len);
+          v->fun.name = new_name;
+          ctx->bytes_copied += len;
+        }
+      }
+
       if (v->fun.builtin == NULL) {
         // Evacuate formals (only if freshly evacuated)
         if (v->fun.formals != NULL) {
@@ -1348,12 +1360,13 @@ static void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
     case LVAL_STR:
     case LVAL_SYM:
     case LVAL_ERR:
-      // Evacuate string data if it's in scratch
-      if (v->str != NULL && valk_ptr_in_arena(ctx->scratch, v->str)) {
+      // Evacuate ALL string data to GC heap unconditionally
+      // This ensures GC heap self-containment (handles scratch AND libc malloc strings)
+      if (v->str != NULL) {
         size_t len = strlen(v->str) + 1;
         char* new_str = NULL;
         VALK_WITH_ALLOC((void*)ctx->heap) { new_str = valk_mem_alloc(len); }
-        if (new_str) {
+        if (new_str && new_str != v->str) {  // Only copy if got NEW allocation
           memcpy(new_str, v->str, len);
           v->str = new_str;
           ctx->bytes_copied += len;
@@ -1385,20 +1398,25 @@ static void valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
     }
   }
 
-  // Evacuate individual symbol strings if in scratch
+  // Evacuate ALL symbol strings to GC heap unconditionally
+  // This ensures GC heap self-containment:
+  // - Scratch strings get evacuated (normal case)
+  // - Libc malloc strings get evacuated (builtins registered before GC init)
+  // After first checkpoint, all symbols will be in GC heap
   for (size_t i = 0; i < env->symbols.count; i++) {
-    if (env->symbols.items[i] != NULL &&
-        valk_ptr_in_arena(ctx->scratch, env->symbols.items[i])) {
-      size_t len = strlen(env->symbols.items[i]) + 1;
-      char* new_str = NULL;
-      VALK_WITH_ALLOC((void*)ctx->heap) {
-        new_str = valk_mem_alloc(len);
-      }
-      if (new_str) {
-        memcpy(new_str, env->symbols.items[i], len);
-        env->symbols.items[i] = new_str;
-        ctx->bytes_copied += len;
-      }
+    char* sym = env->symbols.items[i];
+    if (sym == NULL) continue;
+
+    // Allocate new string in GC heap
+    size_t len = strlen(sym) + 1;
+    char* new_str = NULL;
+    VALK_WITH_ALLOC((void*)ctx->heap) {
+      new_str = valk_mem_alloc(len);
+    }
+    if (new_str && new_str != sym) {  // Only copy if we got a NEW allocation
+      memcpy(new_str, sym, len);
+      env->symbols.items[i] = new_str;
+      ctx->bytes_copied += len;
     }
   }
 
@@ -1432,8 +1450,13 @@ static void valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
   }
 
   // Recursively evacuate parent and fallback environments
-  valk_evacuate_env(ctx, env->parent);
-  valk_evacuate_env(ctx, env->fallback);
+  // Skip if already evacuated (not in scratch) to prevent infinite recursion on cycles
+  if (env->parent != NULL && valk_ptr_in_arena(ctx->scratch, env->parent)) {
+    valk_evacuate_env(ctx, env->parent);
+  }
+  if (env->fallback != NULL && valk_ptr_in_arena(ctx->scratch, env->fallback)) {
+    valk_evacuate_env(ctx, env->fallback);
+  }
 }
 
 // ============================================================================
