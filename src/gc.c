@@ -495,49 +495,218 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
   fprintf(stderr, "=========================\n\n");
 }
 
+// Format bytes with human-readable units into provided buffer
+// Buffer should be at least 12 chars. Output is 10 chars wide for alignment.
+static void format_bytes_buf(char* out, size_t outsize, size_t bytes) {
+  if (bytes >= 1024 * 1024 * 1024) {
+    snprintf(out, outsize, "%7.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+  } else if (bytes >= 1024 * 1024) {
+    snprintf(out, outsize, "%7.2f MB", bytes / (1024.0 * 1024.0));
+  } else if (bytes >= 1024) {
+    snprintf(out, outsize, "%7.2f KB", bytes / 1024.0);
+  } else {
+    snprintf(out, outsize, "%8zu B", bytes);
+  }
+}
+
+// Format a progress bar into buffer. Width is number of cells (each 1 char wide visually).
+// Uses bordered style: [████░░░░░░] with filled and empty blocks
+static void format_progress_bar(char* out, size_t outsize, double fraction, int width) {
+  if (fraction < 0.0) fraction = 0.0;
+  if (fraction > 1.0) fraction = 1.0;
+
+  int filled = (int)(fraction * width + 0.5);
+  if (filled > width) filled = width;
+
+  char* p = out;
+  char* end = out + outsize - 1;
+
+  // Opening bracket
+  if (p < end) *p++ = '[';
+
+  // Filled blocks (█ = U+2588, 3 bytes in UTF-8)
+  for (int i = 0; i < filled && p + 3 < end; i++) {
+    *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x88';  // █
+  }
+
+  // Empty blocks (░ = U+2591, 3 bytes in UTF-8)
+  for (int i = filled; i < width && p + 3 < end; i++) {
+    *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x91';  // ░
+  }
+
+  // Closing bracket
+  if (p < end) *p++ = ']';
+  *p = '\0';
+}
+
+// Format a segmented progress bar for a region within a larger bar (no brackets).
+// - total_width: total bar width in characters
+// - region_start: where this region starts (0.0-1.0 fraction of total)
+// - region_end: where this region ends (0.0-1.0 fraction of total)
+// - fill_fraction: how much of THIS region is filled (0.0-1.0)
+// Outputs: spaces before region, filled░empty for region, spaces after (total_width chars)
+static void format_segment_bar(char* out, size_t outsize, int total_width,
+                               double region_start, double region_end,
+                               double fill_fraction) {
+  if (fill_fraction < 0.0) fill_fraction = 0.0;
+  if (fill_fraction > 1.0) fill_fraction = 1.0;
+
+  int start_col = (int)(region_start * total_width + 0.5);
+  int end_col = (int)(region_end * total_width + 0.5);
+  if (start_col < 0) start_col = 0;
+  if (end_col > total_width) end_col = total_width;
+  int region_width = end_col - start_col;
+  if (region_width < 1) region_width = 1;
+
+  int filled = (int)(fill_fraction * region_width + 0.5);
+  if (filled > region_width) filled = region_width;
+
+  char* p = out;
+  char* end = out + outsize - 1;
+
+  // Leading spaces (before this region)
+  for (int i = 0; i < start_col && p < end; i++) {
+    *p++ = ' ';
+  }
+
+  // Filled blocks (█ = U+2588)
+  for (int i = 0; i < filled && p + 3 < end; i++) {
+    *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x88';
+  }
+
+  // Empty blocks (░ = U+2591)
+  for (int i = filled; i < region_width && p + 3 < end; i++) {
+    *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x91';
+  }
+
+  // Trailing spaces (after this region)
+  for (int i = end_col; i < total_width && p < end; i++) {
+    *p++ = ' ';
+  }
+
+  *p = '\0';
+}
+
+// Calculate display width (accounts for multi-byte UTF-8 characters)
+static int display_width(const char* s) {
+  int width = 0;
+  while (*s) {
+    // UTF-8: if high bit set, it's a multi-byte sequence
+    if ((*s & 0x80) == 0) {
+      // ASCII character
+      width++;
+      s++;
+    } else if ((*s & 0xE0) == 0xC0) {
+      // 2-byte UTF-8 (display width 1)
+      width++;
+      s += 2;
+    } else if ((*s & 0xF0) == 0xE0) {
+      // 3-byte UTF-8 (display width 1) - box drawing chars
+      width++;
+      s += 3;
+    } else if ((*s & 0xF8) == 0xF0) {
+      // 4-byte UTF-8 (display width 1 or 2 for emoji, assume 1)
+      width++;
+      s += 4;
+    } else {
+      // Invalid UTF-8, treat as 1 byte
+      width++;
+      s++;
+    }
+  }
+  return width;
+}
+
 // Print a line with box drawing, auto-padded to width
 static void print_boxed_line(FILE* out, const char* content) {
-  int len = (int)strlen(content);
+  int len = display_width(content);
   int padding = 64 - len;
   if (padding < 0) padding = 0;
   fprintf(out, "║ %s%*s ║\n", content, padding, "");
+}
+
+// Pad a label to a fixed display width (accounting for UTF-8 multi-byte chars)
+// Returns pointer to static buffer - use immediately or copy
+static const char* pad_label(const char* label, int target_width) {
+  static char padded[64];
+  int dw = display_width(label);
+  int pad = target_width - dw;
+  if (pad < 0) pad = 0;
+  snprintf(padded, sizeof(padded), "%s%*s", label, pad, "");
+  return padded;
 }
 
 // Print combined memory statistics (scratch arena + GC heap)
 void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap, FILE* out) {
   if (out == NULL) out = stderr;
   char buf[256];
+  char fmt1[16], fmt2[16];  // For formatted byte values
+  char bar[128];            // For progress bars
+
+  // Calculate capacities to determine relative bar sizes
+  size_t scratch_capacity = scratch ? scratch->capacity : 0;
+  size_t heap_capacity = 0;
+  size_t slab_capacity = 0;
+  size_t malloc_capacity = 0;
+  if (heap) {
+    if (heap->lval_slab) {
+      slab_capacity = heap->lval_slab->numItems * heap->lval_slab->itemSize;
+    }
+    malloc_capacity = heap->hard_limit;
+    heap_capacity = slab_capacity + malloc_capacity;
+  }
+
+  // Find max capacity for scaling bars (compare all memory regions)
+  size_t max_capacity = 0;
+  if (scratch_capacity > max_capacity) max_capacity = scratch_capacity;
+  if (heap_capacity > max_capacity) max_capacity = heap_capacity;
+  if (max_capacity == 0) max_capacity = 1;  // Avoid division by zero
+
+  // Calculate max bar width dynamically
+  // Box content width is 64 chars. Line format with padded labels is:
+  // "GC HEAP             [BAR] XXXXX.XX KB / XXXXX.XX MB"
+  //  ^-- 20 chars --^   ^2^   ^-- 10 --^    ^-- 10 --^
+  // = LABEL_WIDTH(20) + "[" (1) + BAR + "] " (2) + value (10) + " / " (3) + value (10) = 46 + BAR
+  const int BOX_CONTENT_WIDTH = 64;
+  const int LABEL_WIDTH = 20;       // display width for label column
+  const int FIXED_TEXT_WIDTH = LABEL_WIDTH + 1 + 2 + 10 + 3 + 10;  // 46 chars
+  const int MAX_BAR_WIDTH = BOX_CONTENT_WIDTH - FIXED_TEXT_WIDTH;  // 18 chars
 
   fprintf(out, "\n╔══════════════════════════════════════════════════════════════════╗\n");
   print_boxed_line(out, "                   MEMORY STATISTICS");
   fprintf(out, "╠══════════════════════════════════════════════════════════════════╣\n");
 
   if (scratch != NULL) {
-    print_boxed_line(out, "SCRATCH ARENA");
-    snprintf(buf, sizeof(buf), "  Current usage:     %10zu / %10zu bytes (%5.1f%%)",
-            scratch->offset, scratch->capacity,
-            100.0 * scratch->offset / scratch->capacity);
-    print_boxed_line(out, buf);
-    snprintf(buf, sizeof(buf), "  High water mark:   %10zu bytes (%5.1f%%)",
-            scratch->stats.high_water_mark,
-            100.0 * scratch->stats.high_water_mark / scratch->capacity);
-    print_boxed_line(out, buf);
-    snprintf(buf, sizeof(buf), "  Total allocations: %10zu", scratch->stats.total_allocations);
-    print_boxed_line(out, buf);
-    snprintf(buf, sizeof(buf), "  Resets:            %10zu", scratch->stats.num_resets);
-    print_boxed_line(out, buf);
-    snprintf(buf, sizeof(buf), "  Checkpoints:       %10zu", scratch->stats.num_checkpoints);
+    double scratch_frac = (double)scratch->offset / scratch->capacity;
+    double hwm_frac = (double)scratch->stats.high_water_mark / scratch->capacity;
+    int scratch_bar_width = (int)((double)scratch_capacity / max_capacity * MAX_BAR_WIDTH + 0.5);
+    if (scratch_bar_width < 3) scratch_bar_width = 3;
+
+    // SCRATCH ARENA header with bar
+    format_bytes_buf(fmt1, sizeof(fmt1), scratch->offset);
+    format_bytes_buf(fmt2, sizeof(fmt2), scratch->capacity);
+    format_progress_bar(bar, sizeof(bar), scratch_frac, scratch_bar_width);
+    snprintf(buf, sizeof(buf), "%s%s %s / %s",
+            pad_label("SCRATCH ARENA", LABEL_WIDTH), bar, fmt1, fmt2);
     print_boxed_line(out, buf);
 
-    if (scratch->stats.num_checkpoints > 0) {
-      snprintf(buf, sizeof(buf), "  Avg values/chkpt:  %10.1f",
-              (double)scratch->stats.values_evacuated / scratch->stats.num_checkpoints);
-      print_boxed_line(out, buf);
-    }
+    // High water mark
+    format_bytes_buf(fmt1, sizeof(fmt1), scratch->stats.high_water_mark);
+    format_progress_bar(bar, sizeof(bar), hwm_frac, scratch_bar_width);
+    snprintf(buf, sizeof(buf), "%s%s %s (hwm)",
+            pad_label("", LABEL_WIDTH), bar, fmt1);
+    print_boxed_line(out, buf);
+
+    // Stats (no bars)
+    snprintf(buf, sizeof(buf), "  Allocations: %zu  Resets: %zu  Checkpoints: %zu",
+            scratch->stats.total_allocations, scratch->stats.num_resets,
+            scratch->stats.num_checkpoints);
+    print_boxed_line(out, buf);
 
     if (scratch->stats.overflow_fallbacks > 0) {
-      snprintf(buf, sizeof(buf), "  [!] Overflow fallbacks: %zu (%zu bytes)",
-              scratch->stats.overflow_fallbacks, scratch->stats.overflow_bytes);
+      format_bytes_buf(fmt1, sizeof(fmt1), scratch->stats.overflow_bytes);
+      snprintf(buf, sizeof(buf), "  [!] Overflow fallbacks: %zu (%s)",
+              scratch->stats.overflow_fallbacks, fmt1);
       print_boxed_line(out, buf);
     }
     fprintf(out, "╠══════════════════════════════════════════════════════════════════╣\n");
@@ -550,32 +719,90 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* h
       object_count++;
     }
 
-    print_boxed_line(out, "GC HEAP");
-    snprintf(buf, sizeof(buf), "  Allocated:         %10zu / %10zu bytes (%5.1f%%)",
-            heap->allocated_bytes, heap->gc_threshold,
-            100.0 * heap->allocated_bytes / heap->gc_threshold);
-    print_boxed_line(out, buf);
-    snprintf(buf, sizeof(buf), "  Hard limit:        %10zu bytes (%5.1f%% used)",
-            heap->hard_limit,
-            100.0 * heap->allocated_bytes / heap->hard_limit);
-    print_boxed_line(out, buf);
-    snprintf(buf, sizeof(buf), "  Peak usage:        %10zu bytes", heap->stats.peak_usage);
-    print_boxed_line(out, buf);
-    snprintf(buf, sizeof(buf), "  Live objects:      %10zu", object_count);
-    print_boxed_line(out, buf);
-    snprintf(buf, sizeof(buf), "  Collections:       %10zu", heap->num_collections);
+    // Calculate slab stats
+    size_t slab_used = 0, slab_total = 0, slab_bytes_used = 0, slab_bytes_total = 0;
+    if (heap->lval_slab != NULL) {
+      slab_used = heap->lval_slab->numItems - heap->lval_slab->numFree;
+      slab_total = heap->lval_slab->numItems;
+      size_t slab_item_size = heap->lval_slab->itemSize;
+      slab_bytes_used = slab_used * slab_item_size;
+      slab_bytes_total = slab_total * slab_item_size;
+    }
+
+    // Total heap = slab + malloc tracked
+    size_t total_heap_used = slab_bytes_used + heap->allocated_bytes;
+    size_t total_heap_capacity = slab_bytes_total + heap->hard_limit;
+
+    // Calculate heap bar width relative to max capacity
+    int heap_bar_width = (int)((double)heap_capacity / max_capacity * MAX_BAR_WIDTH + 0.5);
+    if (heap_bar_width < 3) heap_bar_width = 3;
+
+    // Calculate region boundaries for stacked bar visualization
+    // Slab is first (starts at 0), malloc is second (starts after slab)
+    double slab_region_end = (double)slab_bytes_total / total_heap_capacity;
+    double malloc_region_start = slab_region_end;
+    double slab_fill = slab_bytes_total > 0 ? (double)slab_bytes_used / slab_bytes_total : 0;
+    double malloc_fill = heap->gc_threshold > 0 ? (double)heap->allocated_bytes / heap->gc_threshold : 0;
+
+    // Build combined heap bar
+    {
+      char* p = bar;
+      char* end = bar + sizeof(bar) - 1;
+      int slab_cols = (int)(slab_region_end * heap_bar_width + 0.5);
+      int malloc_cols = heap_bar_width - slab_cols;
+      int slab_filled = (int)(slab_fill * slab_cols + 0.5);
+      int malloc_filled = (int)(malloc_fill * malloc_cols + 0.5);
+
+      if (p < end) *p++ = '[';
+      for (int i = 0; i < slab_filled && p + 3 < end; i++) {
+        *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x88';
+      }
+      for (int i = slab_filled; i < slab_cols && p + 3 < end; i++) {
+        *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x91';
+      }
+      for (int i = 0; i < malloc_filled && p + 3 < end; i++) {
+        *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x88';
+      }
+      for (int i = malloc_filled; i < malloc_cols && p + 3 < end; i++) {
+        *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x91';
+      }
+      if (p < end) *p++ = ']';
+      *p = '\0';
+    }
+
+    // GC HEAP header with bar
+    format_bytes_buf(fmt1, sizeof(fmt1), total_heap_used);
+    format_bytes_buf(fmt2, sizeof(fmt2), total_heap_capacity);
+    snprintf(buf, sizeof(buf), "%s%s %s / %s",
+            pad_label("GC HEAP", LABEL_WIDTH), bar, fmt1, fmt2);
     print_boxed_line(out, buf);
 
-    if (heap->stats.emergency_collections > 0) {
-      snprintf(buf, sizeof(buf), "  [!] Emergency GCs: %zu", heap->stats.emergency_collections);
+    // Stats under heap (no bars, indented)
+    snprintf(buf, sizeof(buf), "  Live: %zu  GCs: %zu  Evacuations: %zu",
+            object_count, heap->num_collections, heap->stats.evacuations_from_scratch);
+    print_boxed_line(out, buf);
+
+    // Slab sub-allocator
+    if (heap->lval_slab != NULL) {
+      format_segment_bar(bar, sizeof(bar), heap_bar_width, 0.0, slab_region_end, slab_fill);
+      format_bytes_buf(fmt1, sizeof(fmt1), slab_bytes_used);
+      format_bytes_buf(fmt2, sizeof(fmt2), slab_bytes_total);
+      snprintf(buf, sizeof(buf), "%s[%s] %s / %s",
+              pad_label("  ├─Slab", LABEL_WIDTH), bar, fmt1, fmt2);
+      print_boxed_line(out, buf);
+      snprintf(buf, sizeof(buf), "  │   Objects: %zu / %zu", slab_used, slab_total);
       print_boxed_line(out, buf);
     }
 
-    if (heap->stats.evacuations_from_scratch > 0) {
-      snprintf(buf, sizeof(buf), "  Evacuations recv'd:%10zu (%zu bytes)",
-              heap->stats.evacuations_from_scratch, heap->stats.evacuation_bytes);
-      print_boxed_line(out, buf);
-    }
+    // Malloc sub-allocator
+    format_segment_bar(bar, sizeof(bar), heap_bar_width, malloc_region_start, 1.0, malloc_fill);
+    format_bytes_buf(fmt1, sizeof(fmt1), heap->allocated_bytes);
+    format_bytes_buf(fmt2, sizeof(fmt2), heap->hard_limit);
+    snprintf(buf, sizeof(buf), "%s[%s] %s / %s",
+            pad_label("  └─Malloc", LABEL_WIDTH), bar, fmt1, fmt2);
+    print_boxed_line(out, buf);
+    snprintf(buf, sizeof(buf), "      Free list: %zu objects", heap->free_list_size);
+    print_boxed_line(out, buf);
   }
 
   fprintf(out, "╚══════════════════════════════════════════════════════════════════╝\n\n");
