@@ -1,0 +1,19 @@
+(load "src/prelude.valk")
+
+(print "Starting HTTP server with Lisp handler...")
+
+(def {sys} (aio/start))
+
+(def {handler} (eval {\ {req} {
+  (print "Received request:")
+  (print req)
+  {:status "200" :body "Hello from Lisp handler!"}
+}}))
+
+(print "Starting server on port 8443...")
+(http2/server-listen sys 8443 handler)
+
+(print "Server running on https://localhost:8443")
+(print "Press Ctrl+C to stop")
+
+(aio/run sys)

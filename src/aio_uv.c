@@ -22,11 +22,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
+#include <execinfo.h>
 
 #include "aio.h"
 #include "aio_ssl.h"
 #include "common.h"
 #include "concurrency.h"
+#include "parser.h"  // For valk_lval_t in HTTP queue
 #include "memory.h"
 #include "log.h"
 
@@ -159,7 +161,69 @@ typedef struct valk_aio_http_conn {
   valk_aio_handle_t *handle;
   // random UV primitive i dont wanna allocate
   uv_connect_t req;
+  // Server this connection belongs to (for accessing handler_fn)
+  valk_aio_http_server *server;
 } valk_aio_http_conn;
+
+// Escape analysis: intern value to GC heap for cross-thread sharing
+// Takes arena-allocated value, returns GC heap-allocated deep copy
+static inline valk_lval_t* valk_http_intern_to_heap(valk_lval_t* arena_val) {
+  valk_lval_t* heap_val;
+  VALK_WITH_ALLOC((valk_mem_allocator_t*)valk_thread_ctx.heap) {
+    heap_val = valk_lval_copy(arena_val);
+  }
+  return heap_val;
+}
+
+// Server-side incoming request data (arena-allocated, per stream)
+typedef struct {
+  char *method;              // :method pseudo-header
+  char *scheme;              // :scheme pseudo-header
+  char *authority;           // :authority pseudo-header
+  char *path;                // :path pseudo-header
+  struct {
+    struct valk_http2_header_t *items;
+    size_t count;
+    size_t capacity;
+  } headers;                 // Regular headers
+  uint8_t *body;             // Request body data
+  size_t bodyLen;
+  size_t bodyCapacity;
+  valk_aio_http_conn *conn;  // Connection this request came from
+  int32_t stream_id;         // HTTP/2 stream ID
+} valk_http2_server_request_t;
+
+// HTTP request item - event loop -> main thread
+typedef struct {
+  valk_lval_t* request;      // Request qexpr (GC heap)
+  valk_lval_t* handler_fn;   // Handler lambda (GC heap)
+  valk_aio_http_conn* conn;  // Connection handle
+  int32_t stream_id;         // HTTP/2 stream ID
+} valk_http_request_item_t;
+
+// HTTP response item - main thread -> event loop
+typedef struct {
+  valk_lval_t* response;     // Response qexpr {status body headers}
+  valk_aio_http_conn* conn;  // Connection to send on
+  int32_t stream_id;         // Stream to respond to
+} valk_http_response_item_t;
+
+// Queue for cross-thread HTTP request/response communication
+typedef struct {
+  pthread_mutex_t request_mutex;
+  pthread_cond_t request_ready;
+  valk_http_request_item_t* request_items;
+  size_t request_idx;
+  size_t request_count;
+  size_t request_capacity;
+
+  pthread_mutex_t response_mutex;
+  pthread_cond_t response_ready;
+  valk_http_response_item_t* response_items;
+  size_t response_idx;
+  size_t response_count;
+  size_t response_capacity;
+} valk_http_queue_t;
 
 typedef struct valk_aio_system {
   // everything  past this point only accessed inside of event loop
@@ -176,6 +240,9 @@ typedef struct valk_aio_system {
   valk_aio_handle_t liveHandles;
 
   bool shuttingDown;
+
+  // HTTP request/response queues for Lisp handlers
+  valk_http_queue_t http_queue;
 } valk_aio_system_t;
 
 typedef struct valk_aio_http_server {
@@ -186,6 +253,7 @@ typedef struct valk_aio_http_server {
   char interface[200];
   int port;
   valk_http2_handler_t handler;
+  valk_lval_t* lisp_handler_fn;  // Lisp lambda for request handling (GC heap)
 } valk_aio_http_server;
 
 static void __event_loop(void *arg) {
@@ -317,13 +385,60 @@ static int __http_on_header_callback(nghttp2_session *session,
                                      const uint8_t *name, size_t namelen,
                                      const uint8_t *value, size_t valuelen,
                                      uint8_t flags, void *user_data) {
-  UNUSED(session);
-  UNUSED(frame);
   UNUSED(flags);
   UNUSED(user_data);
-  /* For demonstration, just print incoming headers. */
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   VALK_TRACE("HDR: %.*s: %.*s", (int)namelen, name, (int)valuelen, value);
+
+  // Get request attached to this stream
+  valk_http2_server_request_t *req =
+      nghttp2_session_get_stream_user_data(session, frame->hd.stream_id);
+
+  if (!req) return 0;
+
+  // Allocate strings on connection arena
+  valk_aio_http_conn *conn = req->conn;
+  VALK_WITH_ALLOC((valk_mem_allocator_t*)conn->arena) {
+    // Handle pseudo-headers
+    if (namelen > 0 && name[0] == ':') {
+      char *str = valk_mem_alloc(valuelen + 1);
+      memcpy(str, value, valuelen);
+      str[valuelen] = '\0';
+
+      if (namelen == 7 && memcmp(name, ":method", 7) == 0) {
+        req->method = str;
+      } else if (namelen == 7 && memcmp(name, ":scheme", 7) == 0) {
+        req->scheme = str;
+      } else if (namelen == 10 && memcmp(name, ":authority", 10) == 0) {
+        req->authority = str;
+      } else if (namelen == 5 && memcmp(name, ":path", 5) == 0) {
+        req->path = str;
+      }
+    } else {
+      // Regular header - add to headers array
+      if (req->headers.count >= req->headers.capacity) {
+        size_t new_cap = req->headers.capacity == 0 ? 8 : req->headers.capacity * 2;
+        struct valk_http2_header_t *new_items = valk_mem_alloc(
+            new_cap * sizeof(struct valk_http2_header_t));
+        if (req->headers.items) {
+          memcpy(new_items, req->headers.items,
+                 req->headers.count * sizeof(struct valk_http2_header_t));
+        }
+        req->headers.items = new_items;
+        req->headers.capacity = new_cap;
+      }
+
+      struct valk_http2_header_t *h = &req->headers.items[req->headers.count++];
+      h->name = valk_mem_alloc(namelen + 1);
+      h->value = valk_mem_alloc(valuelen + 1);
+      memcpy(h->name, name, namelen);
+      memcpy(h->value, value, valuelen);
+      h->name[namelen] = '\0';
+      h->value[valuelen] = '\0';
+      h->nameLen = namelen;
+      h->valueLen = valuelen;
+    }
+  }
 
   return 0;  // success
 }
@@ -331,13 +446,25 @@ static int __http_on_header_callback(nghttp2_session *session,
 static int __http_on_begin_headers_callback(nghttp2_session *session,
                                             const nghttp2_frame *frame,
                                             void *user_data) {
-  UNUSED(session);
-  UNUSED(user_data);
+  valk_aio_http_conn *conn = (valk_aio_http_conn *)user_data;
+
   if (frame->hd.type == NGHTTP2_HEADERS &&
       frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     VALK_DEBUG(">>> Received HTTP/2 request (stream_id=%d)",
                frame->hd.stream_id);
+
+    // Allocate request object on connection arena
+    valk_http2_server_request_t *req;
+    VALK_WITH_ALLOC((valk_mem_allocator_t*)conn->arena) {
+      req = valk_mem_alloc(sizeof(valk_http2_server_request_t));
+      memset(req, 0, sizeof(valk_http2_server_request_t));
+      req->conn = conn;
+      req->stream_id = frame->hd.stream_id;
+    }
+
+    // Attach request to stream
+    nghttp2_session_set_stream_user_data(session, frame->hd.stream_id, req);
   }
   return 0;
 }
@@ -437,37 +564,223 @@ static int __demo_response(nghttp2_session *session, int stream_id) {
       sizeof(response_headers) / sizeof(response_headers[0]), &data_prd);
 }
 
+// Extract value for a keyword from qexpr like {:key "value" ...}
+static valk_lval_t* __http_qexpr_get(valk_lval_t* qexpr, const char* key) {
+  if (LVAL_TYPE(qexpr) != LVAL_QEXPR && LVAL_TYPE(qexpr) != LVAL_CONS) {
+    return NULL;
+  }
+
+  // Iterate through the qexpr looking for the keyword
+  valk_lval_t* curr = qexpr;
+  while (!valk_lval_list_is_empty(curr)) {
+    valk_lval_t* k = valk_lval_head(curr);
+    curr = valk_lval_tail(curr);
+
+    if (valk_lval_list_is_empty(curr)) break;
+
+    valk_lval_t* v = valk_lval_head(curr);
+    curr = valk_lval_tail(curr);
+
+    // Check if key matches
+    if (LVAL_TYPE(k) == LVAL_SYM && strcmp(k->str, key) == 0) {
+      return v;
+    }
+  }
+
+  return NULL;
+}
+
+// Send HTTP/2 response from Lisp qexpr {:status "200" :body "..." :headers {...}}
+static int __http_send_response(nghttp2_session *session, int stream_id,
+                                 valk_lval_t* response_qexpr, valk_mem_arena_t* arena) {
+  // Extract status (default "200")
+  const char* status = "200";
+  valk_lval_t* status_val = __http_qexpr_get(response_qexpr, ":status");
+  if (status_val && LVAL_TYPE(status_val) == LVAL_STR) {
+    status = status_val->str;
+  }
+
+  // Extract body (default "")
+  const char* body = "";
+  valk_lval_t* body_val = __http_qexpr_get(response_qexpr, ":body");
+  if (body_val && LVAL_TYPE(body_val) == LVAL_STR) {
+    body = body_val->str;
+  }
+
+  // Build response headers on arena
+  nghttp2_nv* headers;
+  size_t header_count = 2; // :status and content-type
+
+  VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
+    headers = valk_mem_alloc(sizeof(nghttp2_nv) * header_count);
+    headers[0] = (nghttp2_nv)MAKE_NV2(":status", status);
+    headers[1] = (nghttp2_nv)MAKE_NV2("content-type", "text/plain; charset=utf-8");
+  }
+
+  // Setup data provider for body
+  nghttp2_data_provider2 data_prd;
+  data_prd.source.ptr = (void*)body;
+  data_prd.read_callback = __http_byte_body_cb;
+
+  return nghttp2_submit_response2(session, stream_id, headers, header_count, &data_prd);
+}
+
+// Build Lisp qexpr from HTTP/2 request (on arena)
+// Returns qexpr like: {:method "GET" :path "/" :headers {{name value}...} :body ""}
+static valk_lval_t* __http_build_request_qexpr(valk_http2_server_request_t *req) {
+  valk_aio_http_conn *conn = req->conn;
+  valk_lval_t *qexpr;
+
+  VALK_WITH_ALLOC((valk_mem_allocator_t*)conn->arena) {
+    // Build headers list (in reverse order, will be reversed by qcons)
+    valk_lval_t *headers_list = valk_lval_nil();
+    for (size_t i = req->headers.count; i > 0; i--) {
+      valk_lval_t *pair_items[2] = {
+        valk_lval_str((char*)req->headers.items[i-1].name),
+        valk_lval_str((char*)req->headers.items[i-1].value)
+      };
+      valk_lval_t *pair = valk_lval_qlist(pair_items, 2);
+      headers_list = valk_lval_qcons(pair, headers_list);
+    }
+
+    // Build main qexpr {... } in correct order
+    valk_lval_t *items[8];
+    size_t item_count = 0;
+
+    // Add method and value
+    items[item_count++] = valk_lval_sym(":method");
+    items[item_count++] = valk_lval_str(req->method ? req->method : "GET");
+
+    // Add path and value
+    items[item_count++] = valk_lval_sym(":path");
+    items[item_count++] = valk_lval_str(req->path ? req->path : "/");
+
+    // Add authority if present
+    if (req->authority) {
+      items[item_count++] = valk_lval_sym(":authority");
+      items[item_count++] = valk_lval_str(req->authority);
+    }
+
+    // Add headers and list
+    items[item_count++] = valk_lval_sym(":headers");
+    items[item_count++] = headers_list;
+
+    // Add :body and value
+    // items[item_count++] = valk_lval_sym(":body");
+    // items[item_count++] = valk_lval_str(req->body && req->bodyLen > 0 ? (char*)req->body : "");
+
+    qexpr = valk_lval_qlist(items, item_count);
+  }
+
+  return qexpr;
+}
+
 /* Called when a frame is fully received. For a request, we might respond here.
  */
 static int __http_on_frame_recv_callback(nghttp2_session *session,
                                          const nghttp2_frame *frame,
                                          void *user_data) {
-  UNUSED(user_data);
-  // struct valk_aio_http_conn *client = (struct valk_aio_http_conn *)user_data;
+  valk_aio_http_conn *conn = (valk_aio_http_conn *)user_data;
 
   if (frame->hd.type == NGHTTP2_GOAWAY) {
-    printf("Received GO AWAY frame\n");
+    VALK_DEBUG("Received GO AWAY frame");
+    return 0;
   }
 
   if (frame->hd.type == NGHTTP2_HEADERS &&
       frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
-    printf("Received HEADERS frame(meaning request).. pushing response\n");
-    /* Example: respond with a small HEADERS + DATA for "Hello HTTP/2" */
-    int stream_id = frame->hd.stream_id;
-    __demo_response(session, stream_id);
-  } else {
-    printf("Not sending a response ??\n");
+    VALK_DEBUG(">>> Received complete HTTP/2 request (stream_id=%d)", frame->hd.stream_id);
+
+    // Get request data attached to this stream
+    valk_http2_server_request_t *req =
+        nghttp2_session_get_stream_user_data(session, frame->hd.stream_id);
+
+    if (!req) {
+      VALK_WARN("No request data for stream %d", frame->hd.stream_id);
+      return 0;
+    }
+
+    // Check if there's a Lisp handler
+    if (conn->server && conn->server->lisp_handler_fn) {
+      // Build request qexpr on arena
+      valk_lval_t *arena_qexpr = __http_build_request_qexpr(req);
+
+      // Call handler: (handler request)
+      valk_lval_t *handler = conn->server->lisp_handler_fn;
+      valk_lval_t *args;
+      VALK_WITH_ALLOC((valk_mem_allocator_t*)conn->arena) {
+        args = valk_lval_cons(arena_qexpr, valk_lval_nil());
+      }
+
+      // Evaluate handler with request - lambda has captured environment
+      valk_lval_t *response = valk_lval_eval_call(handler->fun.env, handler, args);
+
+      // Send response based on handler result
+      if (LVAL_TYPE(response) == LVAL_ERR) {
+        VALK_WARN("Handler returned error: %s", response->str);
+        // Send 500 error response
+        VALK_WITH_ALLOC((valk_mem_allocator_t*)conn->arena) {
+          valk_lval_t* error_items[] = {
+            valk_lval_sym(":status"), valk_lval_str("500"),
+            valk_lval_sym(":body"), valk_lval_str(response->str)
+          };
+          valk_lval_t* error_resp = valk_lval_qlist(error_items, 4);
+          __http_send_response(session, frame->hd.stream_id, error_resp, conn->arena);
+        }
+      } else {
+        // Send handler's response
+        VALK_DEBUG("Handler returned: %s", valk_ltype_name(LVAL_TYPE(response)));
+        __http_send_response(session, frame->hd.stream_id, response, conn->arena);
+      }
+    } else {
+      // Fall back to demo response
+      VALK_DEBUG("No Lisp handler, using demo response");
+      __demo_response(session, frame->hd.stream_id);
+    }
   }
 
   return 0;
 }
 
+// Simple no-op callbacks for demo handler
+static void __demo_on_connect(void *arg, valk_aio_http_conn *conn) {
+  UNUSED(arg);
+  UNUSED(conn);
+}
+
+static void __demo_on_disconnect(void *arg, valk_aio_http_conn *conn) {
+  UNUSED(arg);
+  UNUSED(conn);
+}
+
+static void __demo_on_header(void *arg, valk_aio_http_conn *conn, size_t stream,
+                             char *name, char *value) {
+  UNUSED(arg);
+  UNUSED(conn);
+  UNUSED(stream);
+  UNUSED(name);
+  UNUSED(value);
+}
+
+static void __demo_on_body(void *arg, valk_aio_http_conn *conn, size_t stream,
+                           uint8_t flags, valk_buffer_t *buf) {
+  UNUSED(arg);
+  UNUSED(conn);
+  UNUSED(stream);
+  UNUSED(flags);
+  UNUSED(buf);
+}
+
 // Export a demo handler for testing
 valk_http2_handler_t *valk_aio_http2_demo_handler(void) {
-  static valk_http2_handler_t handler = {0};
+  static valk_http2_handler_t handler;
   static int initialized = 0;
   if (!initialized) {
-    // This handler will be used by the server callbacks setup
+    handler.arg = NULL;
+    handler.onConnect = __demo_on_connect;
+    handler.onDisconnect = __demo_on_disconnect;
+    handler.onHeader = __demo_on_header;
+    handler.onBody = __demo_on_body;
     initialized = 1;
   }
   return &handler;
@@ -512,7 +825,9 @@ static void __http_tcp_unencrypted_read_cb(void *arg,
   if (rv < 0) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     VALK_ERROR("nghttp2_session_mem_recv error: %zd", rv);
-    uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_handle_closed_cb);
+    if (!uv_is_closing((uv_handle_t *)&conn->handle->uv.tcp)) {
+      uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_handle_closed_cb);
+    }
   }
 }
 
@@ -524,12 +839,20 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   if (nread < 0) {
     // Error or EOF
     if (nread == UV_EOF) {
-      printf("Received EOF on tcp stream\n");
+      printf("[DEBUG] Received EOF on tcp stream\n");
     } else {
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-      fprintf(stderr, "Read error: %s\n", uv_strerror((int)nread));
+      fprintf(stderr, "[DEBUG] Read error: %s\n", uv_strerror((int)nread));
     }
-    uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_handle_closed_cb);
+    printf("[DEBUG] Attempting to close handle %p, is_closing=%d\n",
+           (void*)&conn->handle->uv.tcp,
+           uv_is_closing((uv_handle_t *)&conn->handle->uv.tcp));
+    if (!uv_is_closing((uv_handle_t *)&conn->handle->uv.tcp)) {
+      printf("[DEBUG] Calling uv_close\n");
+      uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_handle_closed_cb);
+    } else {
+      printf("[DEBUG] Skipping uv_close - already closing\n");
+    }
     return;
   }
 
@@ -629,9 +952,10 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
 
   // haha point back to thy self
   conn->arena = arena;
+  conn->server = srv;  // Store server for accessing Lisp handler
 
   conn->handle =
-      (valk_aio_handle_t *)valk_slab_aquire(srv->sys->httpConnections)->data;
+      (valk_aio_handle_t *)valk_slab_aquire(srv->sys->handleSlab);
   memset(conn->handle, 0, sizeof(valk_aio_handle_t));
 
   conn->handle->kind = VALK_HNDL_TCP;
@@ -927,6 +1251,10 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
   __uv_exec_task(sys, task);
 
   return res;
+}
+
+void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_fn) {
+  srv->lisp_handler_fn = (valk_lval_t*)handler_fn;
 }
 
 //// HTTP2 CLIENT
@@ -1620,6 +1948,22 @@ valk_aio_system_t *valk_aio_start() {
         valk_slab_new(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
     sys->handleSlab = valk_slab_new(sizeof(valk_aio_handle_t), AIO_MAX_HANDLES);
   }
+
+  // Initialize HTTP request/response queues for Lisp handlers
+  #define HTTP_QUEUE_CAPACITY 256
+  sys->http_queue.request_items = malloc(sizeof(valk_http_request_item_t) * HTTP_QUEUE_CAPACITY);
+  sys->http_queue.request_idx = 0;
+  sys->http_queue.request_count = 0;
+  sys->http_queue.request_capacity = HTTP_QUEUE_CAPACITY;
+  pthread_mutex_init(&sys->http_queue.request_mutex, NULL);
+  pthread_cond_init(&sys->http_queue.request_ready, NULL);
+
+  sys->http_queue.response_items = malloc(sizeof(valk_http_response_item_t) * HTTP_QUEUE_CAPACITY);
+  sys->http_queue.response_idx = 0;
+  sys->http_queue.response_count = 0;
+  sys->http_queue.response_capacity = HTTP_QUEUE_CAPACITY;
+  pthread_mutex_init(&sys->http_queue.response_mutex, NULL);
+  pthread_cond_init(&sys->http_queue.response_ready, NULL);
 
   // printf("Aquiring stopper\n");
   sys->stopperHandle = (valk_aio_handle_t *)valk_slab_aquire(sys->handleSlab);

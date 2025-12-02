@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <uv.h>
 
 #include "aio.h"
 #include "collections.h"
@@ -1171,7 +1172,7 @@ static valk_lval_t* valk_lval_read_sym(int* i, const char* s) {
   for (; (next = s[end]); ++end) {
     if (strchr("abcdefghijklmnopqrstuvwxyz"
                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-               "0123456789_+-*\\/=<>!&?",
+               "0123456789_+-*\\/=<>!&?:",
                next) &&
         s[end] != '\0') {
       continue;
@@ -1292,7 +1293,7 @@ valk_lval_t* valk_lval_read(int* i, const char* s) {
   // Lets check for a symbol
   else if (strchr("abcdefghijklmnopqrstuvwxyz"
                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                  "0123456789_+-*\\/=<>!&?",
+                  "0123456789_+-*\\/=<>!&?:",
                   s[*i])) {
     res = valk_lval_read_sym(i, s);
   } else if (s[*i] == '"') {
@@ -2806,6 +2807,140 @@ static valk_lval_t* valk_builtin_http2_response_headers(valk_lenv_t* e,
   return lst;
 }
 
+// ============================================================================
+// ASYNC I/O SYSTEM BUILTINS
+// ============================================================================
+
+// aio/start: () -> aio_system
+// Creates and starts the async I/O system (libuv event loop)
+static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 0);
+
+  // AIO system must be allocated with malloc, not arena
+  valk_aio_system_t* sys;
+  VALK_WITH_ALLOC(&valk_malloc_allocator) {
+    sys = valk_aio_start();
+  }
+
+  if (!sys) {
+    return valk_lval_err("Failed to start AIO system");
+  }
+
+  // Create ref on GC heap so it survives scratch arena resets
+  valk_lval_t* ref;
+  VALK_WITH_ALLOC((valk_mem_allocator_t*)valk_thread_ctx.heap) {
+    ref = valk_lval_ref("aio_system", sys, NULL);
+  }
+
+  return ref;
+}
+
+// aio/run: (aio/run aio-system) -> never returns
+// Runs the event loop (blocks until event loop stops)
+static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "Argument must be aio_system");
+
+  // The event loop is already running in a background thread (created in valk_aio_start).
+  // We just need to keep the main thread alive. In a real application, this would
+  // wait for a signal or condition. For now, just sleep forever (Ctrl+C will stop it).
+  while (1) {
+    sleep(1);
+  }
+
+  return valk_lval_nil();
+}
+
+// ============================================================================
+// HTTP/2 SERVER BUILTINS
+// ============================================================================
+
+// http2/server-listen: (http2/server-listen aio port) -> future<server>
+// Creates HTTP/2 server listening on port with default demo handler
+// For now, just uses the built-in C demo handler - we'll add Lisp handlers later
+static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);  // aio system
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);  // port
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_FUN);  // handler lambda
+
+  valk_aio_system_t* sys = valk_lval_list_nth(a, 0)->ref.ptr;
+  int port = (int)valk_lval_list_nth(a, 1)->num;
+  valk_lval_t* handler_fn = valk_lval_list_nth(a, 2);
+
+  printf("[DEBUG] http2/server-listen: port=%d\n", port);
+
+  // Copy handler to GC heap (shared across requests, lives as long as server)
+  valk_lval_t* heap_handler;
+  VALK_WITH_ALLOC((valk_mem_allocator_t*)valk_thread_ctx.heap) {
+    printf("[DEBUG] Copying handler to heap...\n");
+    heap_handler = valk_lval_copy(handler_fn);
+    printf("[DEBUG] Handler copied\n");
+  }
+
+  // Use the demo handler for now (C-level callbacks)
+  valk_http2_handler_t* c_handler = valk_aio_http2_demo_handler();
+
+  printf("[DEBUG] Starting server...\n");
+  // Start server (no future - just starts immediately)
+  valk_future* fut = valk_aio_http2_listen(
+    sys,
+    "0.0.0.0",  // Listen on all interfaces
+    port,
+    "build/server.key",
+    "build/server.crt",
+    c_handler
+  );
+  printf("[DEBUG] Server started, fut=%p\n", (void*)fut);
+
+  // Extract server from future and set Lisp handler
+  // Future resolves synchronously in this case since we're just setting up listeners
+  printf("[DEBUG] Extracting server from future...\n");
+  valk_arc_box* box = fut->item;
+  printf("[DEBUG] Got box=%p\n", (void*)box);
+  valk_aio_http_server* server = (valk_aio_http_server*)box->item;
+  printf("[DEBUG] Got server=%p\n", (void*)server);
+  valk_aio_http2_server_set_handler(server, heap_handler);
+  printf("[DEBUG] Handler set\n");
+
+  // Return nil (server runs in background via event loop)
+  return valk_lval_nil();
+}
+
+// http2/server-handle: (server-ref handler-fn) -> registers Lisp request handler
+// handler-fn signature: (lambda {req k} ...) where k is continuation
+static valk_lval_t* valk_builtin_http2_server_handle(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);  // server ref
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_FUN);  // handler lambda
+
+  valk_lval_t* server_ref = valk_lval_list_nth(a, 0);
+  valk_lval_t* handler_fn = valk_lval_list_nth(a, 1);
+
+  // Extract server from arc_box
+  valk_arc_box* box = (valk_arc_box*)server_ref->ref.ptr;
+  valk_aio_http_server* server = (valk_aio_http_server*)box->item;
+
+  // Copy handler function to GC heap (will be shared across requests)
+  valk_lval_t* heap_handler;
+  VALK_WITH_ALLOC((valk_mem_allocator_t*)valk_thread_ctx.heap) {
+    heap_handler = valk_lval_copy(handler_fn);
+  }
+
+  // Set the handler on the server
+  valk_aio_http2_server_set_handler(server, heap_handler);
+
+  return valk_lval_nil();
+}
+
 // exit: (exit code) -> never returns; terminates process with status code
 static valk_lval_t* valk_builtin_exit(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -2917,6 +3052,17 @@ void valk_lenv_builtins(valk_lenv_t* env) {
                         valk_builtin_http2_response_status);
   valk_lenv_put_builtin(env, "http2/response-headers",
                         valk_builtin_http2_response_headers);
+
+  // Async I/O System
+  valk_lenv_put_builtin(env, "aio/start", valk_builtin_aio_start);
+  valk_lenv_put_builtin(env, "aio/run", valk_builtin_aio_run);
+
+  // HTTP/2 Server
+  valk_lenv_put_builtin(env, "http2/server-listen",
+                        valk_builtin_http2_server_listen);
+  valk_lenv_put_builtin(env, "http2/server-handle",
+                        valk_builtin_http2_server_handle);
+
   // Script classification helpers are implicit via CLI flags; no new builtins
 
   // Memory / GC statistics (path-style naming for better organization)

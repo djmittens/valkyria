@@ -130,6 +130,8 @@ valk_lval_t *valk_lval_lambda(valk_lenv_t *env, valk_lval_t *formals, valk_lval_
 valk_lval_t *valk_lval_nil(void);                                   // Empty list (LVAL_NIL)
 valk_lval_t *valk_lval_cons(valk_lval_t *head, valk_lval_t *tail);  // Cons cell
 valk_lval_t *valk_lval_list(valk_lval_t *arr[], size_t count);      // Build list from array
+valk_lval_t *valk_lval_qcons(valk_lval_t *head, valk_lval_t *tail); // Q-expression cons cell
+valk_lval_t *valk_lval_qlist(valk_lval_t *arr[], size_t count);     // Build qexpr from array
 
 // Cons cell accessors
 valk_lval_t *valk_lval_head(valk_lval_t *cons);                     // Get head (car)

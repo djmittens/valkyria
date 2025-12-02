@@ -1,0 +1,8 @@
+; Debug AIO system
+(print "Creating AIO...")
+(def {aio} (aio/start))
+(print "Created!")
+(print "Type check:")
+(print aio)
+(print "Calling aio/run...")
+(aio/run aio)
