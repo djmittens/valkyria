@@ -62,6 +62,10 @@ enum {
 
 // times 2 just for fun
 
+// Singleton: only one AIO system can exist per process
+// This prevents accidentally starting multiple event loops which causes race conditions
+static valk_aio_system_t *global_aio_system = NULL;
+
 static __thread valk_slab_t *tcp_buffer_slab;
 static void __valk_http2_response_free(valk_arc_box *box);
 
@@ -294,7 +298,8 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
 
   valk_aio_ssl_free(&conn->ssl);
   nghttp2_session_del(conn->session);
-  valk_slab_release_ptr(handle->sys->httpConnections, conn);
+  // Release the arena, not the conn pointer (conn is inside the arena)
+  valk_slab_release_ptr(handle->sys->httpConnections, conn->arena);
 }
 
 static void __uv_handle_closed_cb(uv_handle_t *handle) {
@@ -527,13 +532,17 @@ static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
   UNUSED(stream_id);
   UNUSED(user_data);
 
-  printf("Looking to get %ld bytes\n", length);
+  size_t body_len = strlen(source->ptr);
+  printf("Looking to get %ld bytes, body has %ld bytes\n", length, body_len);
+
+  // Don't include null terminator in HTTP response body
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  memcpy(buf, source->ptr, strlen(source->ptr) + 1);
+  memcpy(buf, source->ptr, body_len);
+
   // This marks that with this call we reached the end of the file, and dont
   // call us back again
   *data_flags |= NGHTTP2_DATA_FLAG_EOF;
-  return strlen(source->ptr) + 1;
+  return body_len;
 }
 
 static int __demo_response(nghttp2_session *session, int stream_id) {
@@ -613,7 +622,7 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
 
   VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
     headers = valk_mem_alloc(sizeof(nghttp2_nv) * header_count);
-    headers[0] = (nghttp2_nv)MAKE_NV2(":status", status);
+    headers[0] = (nghttp2_nv)MAKE_NV(":status", status, strlen(status));
     headers[1] = (nghttp2_nv)MAKE_NV2("content-type", "text/plain; charset=utf-8");
   }
 
@@ -955,7 +964,7 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
   conn->server = srv;  // Store server for accessing Lisp handler
 
   conn->handle =
-      (valk_aio_handle_t *)valk_slab_aquire(srv->sys->handleSlab);
+      (valk_aio_handle_t *)valk_slab_aquire(srv->sys->handleSlab)->data;
   memset(conn->handle, 0, sizeof(valk_aio_handle_t));
 
   conn->handle->kind = VALK_HNDL_TCP;
@@ -1056,10 +1065,12 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
                   __http_tcp_read_cb);
   } else {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    VALK_WARN("Close error: %s", uv_strerror(res));
-    uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_handle_closed_cb);
-    // TODO(networking): should probably have a function for properly disposing
-    // of the connection objects
+    VALK_WARN("Accept error: %s", uv_strerror(res));
+    // Only close if not already closing
+    if (!uv_is_closing((uv_handle_t *)&conn->handle->uv.tcp)) {
+      uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_handle_closed_cb);
+    }
+    // Release arena immediately - the close callback handles other cleanup
     valk_slab_release_ptr(srv->sys->httpConnections, conn->arena);
   }
 }
@@ -1214,7 +1225,8 @@ static void __valk_aio_http2_server_free(valk_arc_box *box) {
 valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
                                    const char *interface, const int port,
                                    const char *keyfile, const char *certfile,
-                                   valk_http2_handler_t *handler) {
+                                   valk_http2_handler_t *handler,
+                                   void *lisp_handler) {
   valk_arc_box *box = (valk_arc_box *)valk_slab_aquire(sys->httpServers)->data;
   valk_future *res = valk_future_new();
 
@@ -1232,7 +1244,11 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
     // srv->interface = strdup(interface);
     strncpy(srv->interface, interface, 200);
     srv->port = port;
-    srv->handler = *handler;
+    // handler struct is already zeroed by memset above, so just copy if provided
+    if (handler) {
+      srv->handler = *handler;  // Copy C handler struct
+    }
+    srv->lisp_handler_fn = (valk_lval_t*)lisp_handler;  // Set Lisp handler
     valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
     SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
   }
@@ -1921,6 +1937,13 @@ valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
 
 //
 valk_aio_system_t *valk_aio_start() {
+  // Singleton guard: check if AIO system is already running
+  if (global_aio_system != NULL) {
+    VALK_WARN("AIO system already started - returning existing instance. "
+              "Multiple AIO systems are not supported and can cause race conditions.");
+    return global_aio_system;
+  }
+
   // On linux definitely turn sigpipe off
   // Otherwise ''hit crashes.
   // When the socket dissapears a write may be queued in the event loop
@@ -1930,6 +1953,7 @@ valk_aio_system_t *valk_aio_start() {
   signal(SIGPIPE, SIG_IGN);
 
   valk_aio_system_t *sys = valk_mem_alloc(sizeof(valk_aio_system_t));
+  global_aio_system = sys;  // Store singleton reference
 
   valk_aio_ssl_start();
 
@@ -1966,7 +1990,7 @@ valk_aio_system_t *valk_aio_start() {
   pthread_cond_init(&sys->http_queue.response_ready, NULL);
 
   // printf("Aquiring stopper\n");
-  sys->stopperHandle = (valk_aio_handle_t *)valk_slab_aquire(sys->handleSlab);
+  sys->stopperHandle = (valk_aio_handle_t *)valk_slab_aquire(sys->handleSlab)->data;
   memset(sys->stopperHandle, 0, sizeof(valk_aio_handle_t));
   sys->stopperHandle->kind = VALK_HNDL_TASK;
   sys->stopperHandle->sys = sys;
@@ -1998,6 +2022,12 @@ void valk_aio_stop(valk_aio_system_t *sys) {
     valk_slab_free(sys->httpConnections);
     valk_slab_free(sys->handleSlab);
   }
+
+  // Reset singleton so AIO can be restarted if needed
+  if (global_aio_system == sys) {
+    global_aio_system = NULL;
+  }
+
   // printf("Freeing sys\n");
   // fflush(stdout);
   valk_mem_free(sys);

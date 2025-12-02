@@ -102,7 +102,8 @@ typedef struct {
 valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
                                    const char *interface, const int port,
                                    const char *keyfile, const char *certfile,
-                                   valk_http2_handler_t *handler);
+                                   valk_http2_handler_t *handler,
+                                   void *lisp_handler);
 
 /// @brief Get a demo HTTP/2 handler that returns "Hello from Valk!"
 /// @return Pointer to a static demo handler

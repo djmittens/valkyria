@@ -106,6 +106,7 @@ size_t __valk_lval_size = sizeof(valk_lval_t);
 
 static valk_lval_t* valk_builtin_eval(valk_lenv_t* e, valk_lval_t* a);
 static valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a);
+static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a);
 static const char* valk_lval_str_escape(char x);
 static char valk_lval_str_unescape(char x);
 
@@ -226,8 +227,8 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
 
 valk_lval_t* valk_lval_num(long x) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = LVAL_NUM |
-               valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+  res->flags =
+      LVAL_NUM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
   res->num = x;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -260,8 +261,8 @@ valk_lval_t* valk_lval_err(const char* fmt, ...) {
 
 valk_lval_t* valk_lval_sym(const char* sym) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = LVAL_SYM |
-               valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+  res->flags =
+      LVAL_SYM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
   size_t slen = strlen(sym);
   if (slen > 200) slen = 200;
@@ -275,8 +276,8 @@ valk_lval_t* valk_lval_sym(const char* sym) {
 
 valk_lval_t* valk_lval_str(const char* str) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags = LVAL_STR |
-               valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+  res->flags =
+      LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
   // TODO(main): whats a reasonable max for a string length?
   size_t slen = strlen(str);
@@ -421,11 +422,13 @@ valk_lval_t* valk_lval_tail(valk_lval_t* cons) {
   return cons->cons.tail;
 }
 
-// Helper: check if a list is empty (nil type, null, or cons/qexpr with null head)
+// Helper: check if a list is empty (nil type, null, or cons/qexpr with null
+// head)
 int valk_lval_list_is_empty(valk_lval_t* list) {
   if (list == nullptr) return 1;
   if (LVAL_TYPE(list) == LVAL_NIL) return 1;
-  // Also check for cons/qexpr cell with null head (can happen after pop empties list)
+  // Also check for cons/qexpr cell with null head (can happen after pop empties
+  // list)
   if ((LVAL_TYPE(list) == LVAL_CONS || LVAL_TYPE(list) == LVAL_QEXPR) &&
       list->cons.head == nullptr)
     return 1;
@@ -465,7 +468,6 @@ valk_lval_t* valk_lval_list_nth(valk_lval_t* list, size_t n) {
 // All auxiliary data (strings, arrays, etc.) is allocated from GC heap
 // The sweep algorithm handles freeing based on slab vs malloc detection
 
-
 // SHALLOW copy: Copy only the top-level struct, alias all children
 valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
   if (lval == nullptr) return nullptr;
@@ -473,9 +475,8 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
 
   // Keep type, add allocation flags from the current allocator
-  res->flags =
-      (lval->flags & LVAL_TYPE_MASK) |
-      valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+  res->flags = (lval->flags & LVAL_TYPE_MASK) |
+               valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   if (res->origin_allocator == NULL) {
     VALK_SET_ORIGIN_ALLOCATOR(res);
   }
@@ -544,7 +545,6 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
   }
   return res;
 }
-
 
 // void valk_lval_free(valk_lval_t *lval) {
 //   if (lval == nullptr) {
@@ -694,7 +694,8 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
       }
 
       // Note: \ (lambda) and def are regular builtins, not special forms
-      // They receive evaluated arguments, which works with the prelude's macro patterns
+      // They receive evaluated arguments, which works with the prelude's macro
+      // patterns
     }
 
     // Multi-element list is function application
@@ -732,12 +733,13 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
 valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
                                  valk_lval_t* args) {
   // TODO(llvm): Proper tail call optimization requires either:
-  // 1. An explicit evaluation stack (stack machine) instead of using C's call stack
+  // 1. An explicit evaluation stack (stack machine) instead of using C's call
+  // stack
   // 2. LLVM backend with tail call attribute
   // The current tree-walking interpreter cannot do TCO for calls through
   // if/do/let/etc because those create C stack frames that we can't eliminate.
-  // For now, deep recursion will use stack space. With malloc fallback from slab,
-  // reasonable depths are supported.
+  // For now, deep recursion will use stack space. With malloc fallback from
+  // slab, reasonable depths are supported.
   LVAL_ASSERT_TYPE(args, func, LVAL_FUN);
 
   if (func->fun.builtin) {
@@ -755,7 +757,8 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
 
   // Create new environment for bindings
   // Hybrid scoping using fallback:
-  // - Primary lookup: call_env -> func->fun.env chain (lexical/captured bindings)
+  // - Primary lookup: call_env -> func->fun.env chain (lexical/captured
+  // bindings)
   // - Fallback lookup: calling env chain (dynamic/caller's bindings)
   // This allows closures to work (curry captures 'f') while also supporting
   // dynamic access to caller's variables (select can see local 'n').
@@ -871,9 +874,9 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
   // evaluate each expression and return the last result (implicit do)
   if (valk_is_list_type(LVAL_TYPE(body)) && valk_lval_list_count(body) > 0) {
     valk_lval_t* first_elem = body->cons.head;
-    // Check if this looks like a sequence (first element is a list, not a symbol)
-    // For QEXPR bodies, the first element being a CONS or QEXPR means we have
-    // multiple expressions to evaluate
+    // Check if this looks like a sequence (first element is a list, not a
+    // symbol) For QEXPR bodies, the first element being a CONS or QEXPR means
+    // we have multiple expressions to evaluate
     if (valk_is_list_type(LVAL_TYPE(first_elem))) {
       // Implicit do: evaluate each expression, return last
       valk_lval_t* result = valk_lval_nil();
@@ -1501,7 +1504,8 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
   }
 
   // Parent chain exhausted - try fallback chain (for dynamic scoping).
-  // The fallback allows access to caller's environment when lexical lookup fails.
+  // The fallback allows access to caller's environment when lexical lookup
+  // fails.
   if (start_env->fallback) {
     return valk_lenv_get(start_env->fallback, key);
   }
@@ -1686,7 +1690,8 @@ static valk_lval_t* valk_builtin_tail(valk_lenv_t* e, valk_lval_t* a) {
               "Builtin `tail` cannot operate on empty list");
 
   // Preserve the type (QEXPR stays QEXPR, CONS stays CONS)
-  // The tail is already the right type since we're just returning the existing tail
+  // The tail is already the right type since we're just returning the existing
+  // tail
   return arg0->cons.tail;
 }
 
@@ -1704,9 +1709,11 @@ static valk_lval_t* valk_list_init(valk_lval_t* list, bool is_qexpr) {
 
   // Otherwise cons/qcons current element with init of rest
   if (is_qexpr) {
-    return valk_lval_qcons(list->cons.head, valk_list_init(list->cons.tail, is_qexpr));
+    return valk_lval_qcons(list->cons.head,
+                           valk_list_init(list->cons.tail, is_qexpr));
   } else {
-    return valk_lval_cons(list->cons.head, valk_list_init(list->cons.tail, is_qexpr));
+    return valk_lval_cons(list->cons.head,
+                          valk_list_init(list->cons.tail, is_qexpr));
   }
 }
 
@@ -2039,8 +2046,10 @@ static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
       last = x;
     }
     // GC safe point: expression evaluated, collect if needed
-    valk_gc_malloc_heap_t* gc_heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.allocator;
-    if (gc_heap->type == VALK_ALLOC_GC_HEAP && valk_gc_malloc_should_collect(gc_heap)) {
+    valk_gc_malloc_heap_t* gc_heap =
+        (valk_gc_malloc_heap_t*)valk_thread_ctx.allocator;
+    if (gc_heap->type == VALK_ALLOC_GC_HEAP &&
+        valk_gc_malloc_should_collect(gc_heap)) {
       valk_gc_malloc_collect(gc_heap, NULL);  // No additional roots needed here
     }
   }
@@ -2071,8 +2080,7 @@ valk_lval_t* valk_parse_file(const char* filename) {
 
   if (length == UINT64_MAX) {
     fclose(f);
-    LVAL_RAISE(valk_lval_nil(), "File is way too big buddy (%s)",
-               filename);
+    LVAL_RAISE(valk_lval_nil(), "File is way too big buddy (%s)", filename);
   }
 
   char* input = calloc(length + 1, sizeof(char));
@@ -2108,8 +2116,10 @@ valk_lval_t* valk_parse_file(const char* filename) {
 static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 3);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_CONS, LVAL_QEXPR,
+                   LVAL_NIL);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_CONS, LVAL_QEXPR,
+                   LVAL_NIL);
 
   // Select true or false branch based on condition
   valk_lval_t* branch;
@@ -2153,16 +2163,6 @@ static valk_lval_t* valk_builtin_do(valk_lenv_t* e, valk_lval_t* a) {
   // Evaluate and return last expression using thread-local VM
   valk_lval_t* last = valk_lval_list_nth(a, count - 1);
   return valk_lval_eval(e, last);
-}
-
-static valk_lval_t* valk_builtin_print(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  for (size_t i = 0; i < valk_lval_list_count(a); i++) {
-    valk_lval_print(valk_lval_list_nth(a, i));
-    putchar(' ');
-  }
-  putchar('\n');
-  return valk_lval_nil();
 }
 
 // Printf - formatted output like C printf
@@ -2221,7 +2221,42 @@ static valk_lval_t* valk_builtin_printf(valk_lenv_t* e, valk_lval_t* a) {
     }
   }
 
-  fflush(stdout);  // Flush output to ensure it's visible immediately
+  return valk_lval_nil();
+}
+
+static valk_lval_t* valk_builtin_print(valk_lenv_t* e, valk_lval_t* a) {
+  // Print each argument separated by space
+  // Automatically converts non-strings using str()
+  for (size_t i = 0; i < valk_lval_list_count(a); i++) {
+    valk_lval_t* arg = valk_lval_list_nth(a, i);
+
+    // Convert to string if needed
+    const char* str_to_print;
+    valk_lval_t* str_val = nullptr;
+
+    if (LVAL_TYPE(arg) == LVAL_STR) {
+      str_to_print = arg->str;
+    } else {
+      // Call str() builtin to convert
+      valk_lval_t* str_args_arr[1] = {arg};
+      valk_lval_t* str_args = valk_lval_list(str_args_arr, 1);
+      str_val = valk_builtin_str(e, str_args);
+
+      if (LVAL_TYPE(str_val) == LVAL_ERR) {
+        return str_val;  // Propagate error
+      }
+
+      str_to_print = str_val->str;
+    }
+
+    printf("%s", str_to_print);
+
+    // Add space between arguments
+    if (i < valk_lval_list_count(a) - 1) {
+      putchar(' ');
+    }
+  }
+  putchar('\n');
   return valk_lval_nil();
 }
 
@@ -2231,9 +2266,123 @@ static valk_lval_t* valk_builtin_println(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* result = valk_builtin_printf(e, a);
   if (LVAL_TYPE(result) != LVAL_ERR) {
     putchar('\n');
-    fflush(stdout);
   }
   return result;
+}
+
+// Helper: Print value to string in user-facing format (no debug info)
+static void valk_lval_print_user(valk_lval_t* val) {
+  if (val == nullptr) {
+    printf("nil");
+    return;
+  }
+  switch (LVAL_TYPE(val)) {
+    case LVAL_NUM:
+      printf("%li", val->num);
+      break;
+    case LVAL_SYM:
+      printf("%s", val->str);
+      break;
+    case LVAL_NIL:
+      printf("()");
+      break;
+    case LVAL_CONS: {
+      printf("(");
+      valk_lval_t* curr = val;
+      int first = 1;
+      while (curr != nullptr && LVAL_TYPE(curr) == LVAL_CONS) {
+        if (!first) putchar(' ');
+        valk_lval_print_user(curr->cons.head);
+        curr = curr->cons.tail;
+        first = 0;
+      }
+      if (curr != nullptr && LVAL_TYPE(curr) != LVAL_NIL) {
+        printf(" . ");
+        valk_lval_print_user(curr);
+      }
+      printf(")");
+      break;
+    }
+    case LVAL_QEXPR: {
+      printf("{");
+      valk_lval_t* curr = val;
+      int first = 1;
+      while (curr != nullptr && LVAL_TYPE(curr) == LVAL_QEXPR) {
+        if (!first) putchar(' ');
+        valk_lval_print_user(curr->cons.head);
+        curr = curr->cons.tail;
+        first = 0;
+      }
+      if (curr != nullptr && LVAL_TYPE(curr) != LVAL_NIL) {
+        printf(" . ");
+        valk_lval_print_user(curr);
+      }
+      printf("}");
+      break;
+    }
+    case LVAL_ERR:
+      printf("Error: %s", val->str);
+      break;
+    case LVAL_FUN:
+      if (val->fun.builtin) {
+        printf("<builtin>");
+      } else {
+        printf("<lambda>");
+      }
+      break;
+    case LVAL_STR:
+      // Print string without quotes for str()
+      printf("%s", val->str);
+      break;
+    case LVAL_REF:
+      printf("<ref:%s>", val->ref.type);
+      break;
+    case LVAL_CONT:
+      printf("<continuation>");
+      break;
+    case LVAL_ENV:
+      printf("<environment>");
+      break;
+    case LVAL_FORWARD:
+      printf("<forward>");
+      break;
+    case LVAL_UNDEFINED:
+      printf("<undefined>");
+      break;
+  }
+}
+
+// str: Convert any value to its string representation
+// Usage: (str value)
+static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+
+  valk_lval_t* val = valk_lval_list_nth(a, 0);
+
+  // If it's already a string, return it as-is
+  if (LVAL_TYPE(val) == LVAL_STR) {
+    return valk_lval_str(val->str);
+  }
+
+  // For other types, capture output to a string
+  char buffer[4096];
+  FILE* stream = fmemopen(buffer, sizeof(buffer), "w");
+  if (!stream) {
+    return valk_lval_err("str: failed to allocate string buffer");
+  }
+
+  // Temporarily redirect stdout
+  FILE* old_stdout = stdout;
+  stdout = stream;
+
+  valk_lval_print_user(val);
+
+  // Restore stdout
+  stdout = old_stdout;
+  fclose(stream);
+
+  return valk_lval_str(buffer);
 }
 
 // Get current time in microseconds
@@ -2297,12 +2446,14 @@ static valk_lval_t* valk_builtin_gc_collect(valk_lenv_t* e, valk_lval_t* a) {
   if (heap == NULL) {
     return valk_lval_num(0);
   }
-  size_t reclaimed = valk_gc_malloc_collect(heap, NULL);  // No additional roots needed
+  size_t reclaimed =
+      valk_gc_malloc_collect(heap, NULL);  // No additional roots needed
   return valk_lval_num((long)reclaimed);
 }
 
 // (heap-hard-limit) - Return current hard limit
-static valk_lval_t* valk_builtin_heap_hard_limit(valk_lenv_t* e, valk_lval_t* a) {
+static valk_lval_t* valk_builtin_heap_hard_limit(valk_lenv_t* e,
+                                                 valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
   valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
@@ -2313,7 +2464,8 @@ static valk_lval_t* valk_builtin_heap_hard_limit(valk_lenv_t* e, valk_lval_t* a)
 }
 
 // (set-heap-hard-limit n) - Set hard limit, return previous value
-static valk_lval_t* valk_builtin_set_heap_hard_limit(valk_lenv_t* e, valk_lval_t* a) {
+static valk_lval_t* valk_builtin_set_heap_hard_limit(valk_lenv_t* e,
+                                                     valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
@@ -2327,8 +2479,9 @@ static valk_lval_t* valk_builtin_set_heap_hard_limit(valk_lenv_t* e, valk_lval_t
   size_t old_limit = heap->hard_limit;
 
   if (new_limit < heap->allocated_bytes) {
-    return valk_lval_err("Cannot set hard limit below current usage (%zu < %zu)",
-                         new_limit, heap->allocated_bytes);
+    return valk_lval_err(
+        "Cannot set hard limit below current usage (%zu < %zu)", new_limit,
+        heap->allocated_bytes);
   }
 
   valk_gc_set_hard_limit(heap, new_limit);
@@ -2347,7 +2500,8 @@ static valk_lval_t* valk_builtin_gc_threshold(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 // (set-gc-threshold n) - Set routine GC threshold, return previous value
-static valk_lval_t* valk_builtin_set_gc_threshold(valk_lenv_t* e, valk_lval_t* a) {
+static valk_lval_t* valk_builtin_set_gc_threshold(valk_lenv_t* e,
+                                                  valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
@@ -2374,11 +2528,16 @@ static valk_lval_t* valk_builtin_set_log_level(valk_lenv_t* e, valk_lval_t* a) {
 
   const char* v = s->str;
   valk_log_level_e lvl = VALK_LOG_WARN;
-  if (strcasecmp(v, "error") == 0) lvl = VALK_LOG_ERROR;
-  else if (strcasecmp(v, "warn") == 0 || strcasecmp(v, "warning") == 0) lvl = VALK_LOG_WARN;
-  else if (strcasecmp(v, "info") == 0) lvl = VALK_LOG_INFO;
-  else if (strcasecmp(v, "debug") == 0) lvl = VALK_LOG_DEBUG;
-  else if (strcasecmp(v, "trace") == 0) lvl = VALK_LOG_TRACE;
+  if (strcasecmp(v, "error") == 0)
+    lvl = VALK_LOG_ERROR;
+  else if (strcasecmp(v, "warn") == 0 || strcasecmp(v, "warning") == 0)
+    lvl = VALK_LOG_WARN;
+  else if (strcasecmp(v, "info") == 0)
+    lvl = VALK_LOG_INFO;
+  else if (strcasecmp(v, "debug") == 0)
+    lvl = VALK_LOG_DEBUG;
+  else if (strcasecmp(v, "trace") == 0)
+    lvl = VALK_LOG_TRACE;
 
   valk_log_set_level(lvl);
   return valk_lval_str(s->str);
@@ -2392,7 +2551,8 @@ static valk_lval_t* valk_builtin_set_log_level(valk_lenv_t* e, valk_lval_t* a) {
 // provide read-only access to memory statistics.
 
 // (checkpoint-stats) - Return checkpoint statistics as a list
-static valk_lval_t* valk_builtin_checkpoint_stats(valk_lenv_t* e, valk_lval_t* a) {
+static valk_lval_t* valk_builtin_checkpoint_stats(valk_lenv_t* e,
+                                                  valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
 
@@ -2403,13 +2563,13 @@ static valk_lval_t* valk_builtin_checkpoint_stats(valk_lenv_t* e, valk_lval_t* a
     return valk_lval_nil();
   }
 
-  // Return list: (num-checkpoints values-evacuated bytes-evacuated pointers-fixed)
+  // Return list: (num-checkpoints values-evacuated bytes-evacuated
+  // pointers-fixed)
   valk_lval_t* stats[4] = {
-    valk_lval_num((long)scratch->stats.num_checkpoints),
-    valk_lval_num((long)scratch->stats.values_evacuated),
-    valk_lval_num((long)scratch->stats.bytes_evacuated),
-    valk_lval_num((long)heap->stats.evacuation_pointer_fixups)
-  };
+      valk_lval_num((long)scratch->stats.num_checkpoints),
+      valk_lval_num((long)scratch->stats.values_evacuated),
+      valk_lval_num((long)scratch->stats.bytes_evacuated),
+      valk_lval_num((long)heap->stats.evacuation_pointer_fixups)};
   return valk_lval_list(stats, 4);
 }
 
@@ -2426,7 +2586,8 @@ static valk_lval_t* valk_builtin_arena_usage(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 // (arena-capacity) - Return scratch arena capacity
-static valk_lval_t* valk_builtin_arena_capacity(valk_lenv_t* e, valk_lval_t* a) {
+static valk_lval_t* valk_builtin_arena_capacity(valk_lenv_t* e,
+                                                valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
 
@@ -2438,7 +2599,8 @@ static valk_lval_t* valk_builtin_arena_capacity(valk_lenv_t* e, valk_lval_t* a) 
 }
 
 // (arena-high-water) - Return scratch arena high water mark
-static valk_lval_t* valk_builtin_arena_high_water(valk_lenv_t* e, valk_lval_t* a) {
+static valk_lval_t* valk_builtin_arena_high_water(valk_lenv_t* e,
+                                                  valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
 
@@ -2513,9 +2675,11 @@ static valk_lval_t* valk_builtin_async_shift(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* async_expr = valk_lval_list_nth(a, 1);
 
   // Handle QEXPR body - may contain multiple expressions
-  if (LVAL_TYPE(async_expr) == LVAL_QEXPR && valk_lval_list_count(async_expr) > 0) {
+  if (LVAL_TYPE(async_expr) == LVAL_QEXPR &&
+      valk_lval_list_count(async_expr) > 0) {
     valk_lval_t* first_elem = async_expr->cons.head;
-    // Check if this looks like a sequence (first element is a list, not a symbol)
+    // Check if this looks like a sequence (first element is a list, not a
+    // symbol)
     if (valk_is_list_type(LVAL_TYPE(first_elem))) {
       // Implicit do: evaluate each expression, return last
       valk_lval_t* result = valk_lval_nil();
@@ -2555,7 +2719,8 @@ static valk_lval_t* valk_builtin_async_reset(valk_lenv_t* e, valk_lval_t* a) {
   // Handle QEXPR body - may contain multiple expressions
   if (LVAL_TYPE(body) == LVAL_QEXPR && valk_lval_list_count(body) > 0) {
     valk_lval_t* first_elem = body->cons.head;
-    // Check if this looks like a sequence (first element is a list, not a symbol)
+    // Check if this looks like a sequence (first element is a list, not a
+    // symbol)
     if (valk_is_list_type(LVAL_TYPE(first_elem))) {
       // Implicit do: evaluate each expression, return last
       valk_lval_t* result = valk_lval_nil();
@@ -2819,9 +2984,7 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
 
   // AIO system must be allocated with malloc, not arena
   valk_aio_system_t* sys;
-  VALK_WITH_ALLOC(&valk_malloc_allocator) {
-    sys = valk_aio_start();
-  }
+  VALK_WITH_ALLOC(&valk_malloc_allocator) { sys = valk_aio_start(); }
 
   if (!sys) {
     return valk_lval_err("Failed to start AIO system");
@@ -2847,9 +3010,10 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
               "Argument must be aio_system");
 
-  // The event loop is already running in a background thread (created in valk_aio_start).
-  // We just need to keep the main thread alive. In a real application, this would
-  // wait for a signal or condition. For now, just sleep forever (Ctrl+C will stop it).
+  // The event loop is already running in a background thread (created in
+  // valk_aio_start). We just need to keep the main thread alive. In a real
+  // application, this would wait for a signal or condition. For now, just sleep
+  // forever (Ctrl+C will stop it).
   while (1) {
     sleep(1);
   }
@@ -2863,8 +3027,10 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
 
 // http2/server-listen: (http2/server-listen aio port) -> future<server>
 // Creates HTTP/2 server listening on port with default demo handler
-// For now, just uses the built-in C demo handler - we'll add Lisp handlers later
-static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e, valk_lval_t* a) {
+// For now, just uses the built-in C demo handler - we'll add Lisp handlers
+// later
+static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e,
+                                                     valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 3);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);  // aio system
@@ -2875,48 +3041,31 @@ static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e, valk_lval_t
   int port = (int)valk_lval_list_nth(a, 1)->num;
   valk_lval_t* handler_fn = valk_lval_list_nth(a, 2);
 
-  printf("[DEBUG] http2/server-listen: port=%d\n", port);
-
   // Copy handler to GC heap (shared across requests, lives as long as server)
   valk_lval_t* heap_handler;
   VALK_WITH_ALLOC((valk_mem_allocator_t*)valk_thread_ctx.heap) {
-    printf("[DEBUG] Copying handler to heap...\n");
     heap_handler = valk_lval_copy(handler_fn);
-    printf("[DEBUG] Handler copied\n");
   }
 
-  // Use the demo handler for now (C-level callbacks)
-  valk_http2_handler_t* c_handler = valk_aio_http2_demo_handler();
+  // Start server - pass NULL for C handler since we have Lisp handler
+  valk_future* fut =
+      valk_aio_http2_listen(sys,
+                            "0.0.0.0",  // Listen on all interfaces
+                            port, "build/server.key", "build/server.crt",
+                            NULL,         // No C handler
+                            heap_handler  // Lisp handler
+      );
 
-  printf("[DEBUG] Starting server...\n");
-  // Start server (no future - just starts immediately)
-  valk_future* fut = valk_aio_http2_listen(
-    sys,
-    "0.0.0.0",  // Listen on all interfaces
-    port,
-    "build/server.key",
-    "build/server.crt",
-    c_handler
-  );
-  printf("[DEBUG] Server started, fut=%p\n", (void*)fut);
-
-  // Extract server from future and set Lisp handler
-  // Future resolves synchronously in this case since we're just setting up listeners
-  printf("[DEBUG] Extracting server from future...\n");
-  valk_arc_box* box = fut->item;
-  printf("[DEBUG] Got box=%p\n", (void*)box);
-  valk_aio_http_server* server = (valk_aio_http_server*)box->item;
-  printf("[DEBUG] Got server=%p\n", (void*)server);
-  valk_aio_http2_server_set_handler(server, heap_handler);
-  printf("[DEBUG] Handler set\n");
+  (void)fut;  // Future unused - server runs in background
 
   // Return nil (server runs in background via event loop)
   return valk_lval_nil();
 }
 
-// http2/server-handle: (server-ref handler-fn) -> registers Lisp request handler
-// handler-fn signature: (lambda {req k} ...) where k is continuation
-static valk_lval_t* valk_builtin_http2_server_handle(valk_lenv_t* e, valk_lval_t* a) {
+// http2/server-handle: (server-ref handler-fn) -> registers Lisp request
+// handler handler-fn signature: (lambda {req k} ...) where k is continuation
+static valk_lval_t* valk_builtin_http2_server_handle(valk_lenv_t* e,
+                                                     valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);  // server ref
@@ -2995,6 +3144,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "print", valk_builtin_print);
   valk_lenv_put_builtin(env, "printf", valk_builtin_printf);
   valk_lenv_put_builtin(env, "println", valk_builtin_println);
+  valk_lenv_put_builtin(env, "str", valk_builtin_str);
   valk_lenv_put_builtin(env, "time-us", valk_builtin_time_us);
   valk_lenv_put_builtin(env, "stack-depth", valk_builtin_stack_depth);
 
@@ -3068,16 +3218,21 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   // Memory / GC statistics (path-style naming for better organization)
   valk_lenv_put_builtin(env, "mem/stats", valk_builtin_memory_stats);
   valk_lenv_put_builtin(env, "mem/heap/usage", valk_builtin_heap_usage);
-  valk_lenv_put_builtin(env, "mem/heap/hard-limit", valk_builtin_heap_hard_limit);
-  valk_lenv_put_builtin(env, "mem/heap/set-hard-limit", valk_builtin_set_heap_hard_limit);
+  valk_lenv_put_builtin(env, "mem/heap/hard-limit",
+                        valk_builtin_heap_hard_limit);
+  valk_lenv_put_builtin(env, "mem/heap/set-hard-limit",
+                        valk_builtin_set_heap_hard_limit);
   valk_lenv_put_builtin(env, "mem/gc/stats", valk_builtin_gc_stats);
   valk_lenv_put_builtin(env, "mem/gc/collect", valk_builtin_gc_collect);
   valk_lenv_put_builtin(env, "mem/gc/threshold", valk_builtin_gc_threshold);
-  valk_lenv_put_builtin(env, "mem/gc/set-threshold", valk_builtin_set_gc_threshold);
+  valk_lenv_put_builtin(env, "mem/gc/set-threshold",
+                        valk_builtin_set_gc_threshold);
   valk_lenv_put_builtin(env, "mem/arena/usage", valk_builtin_arena_usage);
   valk_lenv_put_builtin(env, "mem/arena/capacity", valk_builtin_arena_capacity);
-  valk_lenv_put_builtin(env, "mem/arena/high-water", valk_builtin_arena_high_water);
-  valk_lenv_put_builtin(env, "mem/checkpoint/stats", valk_builtin_checkpoint_stats);
+  valk_lenv_put_builtin(env, "mem/arena/high-water",
+                        valk_builtin_arena_high_water);
+  valk_lenv_put_builtin(env, "mem/checkpoint/stats",
+                        valk_builtin_checkpoint_stats);
 
   // Logging configuration
   valk_lenv_put_builtin(env, "sys/log/set-level", valk_builtin_set_log_level);

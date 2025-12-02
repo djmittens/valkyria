@@ -1,5 +1,0 @@
-; Test AIO system creation
-(print "Testing aio/start...")
-(def {aio} (aio/start))
-(print "AIO system created!")
-(print aio)

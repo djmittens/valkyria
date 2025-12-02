@@ -45,7 +45,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   }
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt", &handler);
+      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt", &handler, NULL);
 
   valk_arc_box *server = valk_future_await(fserv);
 
@@ -138,7 +138,7 @@ void test_tcp_client_disconnect(VALK_TEST_ARGS()) {
   };
 
   valk_arc_box *res = valk_future_await(valk_aio_http2_listen(
-      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt", &handler));
+      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt", &handler, NULL));
   valk_arc_release(res);
   VALK_PASS();
   valk_aio_stop(sys);

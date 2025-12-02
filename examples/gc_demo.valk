@@ -1,6 +1,6 @@
-; Checkpoint + GC Memory Demo (number‑driven)
-; ==========================================
-; Run: ./build/valk examples/checkpoint_demo.valk
+; Garbage Collection & Memory Management Demo
+; ============================================
+; Run: ./build/valk examples/gc_demo.valk
 ;
 ; What you’ll see, with real numbers printed as we go:
 ; - Temporaries allocated in the scratch arena, then reclaimed at checkpoint

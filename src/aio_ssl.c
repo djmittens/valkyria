@@ -53,6 +53,10 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
                       SSL_OP_ALL | SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 |
                           SSL_OP_NO_COMPRESSION |
                           SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION);
+
+  // Session caching is safe since we have a single event loop thread handling
+  // all SSL operations. This improves performance by allowing session resumption.
+  SSL_CTX_set_session_cache_mode(*ssl_ctx, SSL_SESS_CACHE_SERVER);
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
   if (SSL_CTX_set1_curves_list(*ssl_ctx, "P-256") != 1) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
