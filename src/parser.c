@@ -111,6 +111,7 @@ size_t __valk_lval_size = sizeof(valk_lval_t);
 static valk_lval_t* valk_builtin_eval(valk_lenv_t* e, valk_lval_t* a);
 static valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a);
 static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a);
+static valk_lval_t* valk_builtin_def_sandbox_error(valk_lenv_t* e, valk_lval_t* a);
 static const char* valk_lval_str_escape(char x);
 static char valk_lval_str_unescape(char x);
 
@@ -1750,6 +1751,17 @@ void valk_lenv_put_builtin(valk_lenv_t* env, char* key,
   }
 }
 
+// Create a sandboxed environment for request handler evaluation.
+// Shadows 'def' with an error to prevent global state mutation.
+// The sandbox env is a child of the handler's captured environment,
+// so all symbol lookups still work but 'def' is blocked.
+valk_lenv_t* valk_lenv_sandboxed(valk_lenv_t* parent) {
+  valk_lenv_t* env = valk_lenv_empty();
+  env->parent = parent;
+  valk_lenv_put_builtin(env, "def", valk_builtin_def_sandbox_error);
+  return env;
+}
+
 static valk_lval_t* valk_builtin_math(valk_lval_t* lst, char* op) {
   // Verify all elements are numbers
   valk_lval_t* curr = lst;
@@ -2053,6 +2065,16 @@ static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   return valk_lval_nil();
+}
+
+// Error builtin for def in sandboxed (request handler) context
+// Prevents accidental global state mutation from non-main threads
+static valk_lval_t* valk_builtin_def_sandbox_error(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+  return valk_lval_err(
+      "def cannot be used in request handler context. "
+      "Use = for local bindings instead.");
 }
 
 static valk_lval_t* valk_builtin_put(valk_lenv_t* e, valk_lval_t* a) {

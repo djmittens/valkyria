@@ -1,7 +1,7 @@
 // Valkyria AIO Debug Dashboard
 
 (function() {
-  var POLL_INTERVAL_MS = 250;
+  var POLL_INTERVAL_MS = 1000;
   var METRICS_ENDPOINT = '/debug/metrics';
 
   function metric(label, value) {

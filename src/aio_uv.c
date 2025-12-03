@@ -60,9 +60,9 @@ enum {
   HTTP_MAX_REQUEST_SIZE_BYTES = ((int)8e6),
   HTTP_MAX_RESPONSE_SIZE_BYTES = ((int)8e6),
   // Per-stream arena configuration
-  HTTP_STREAM_ARENA_SIZE = (65536),           // 64KB per stream arena
+  HTTP_STREAM_ARENA_SIZE = (67108864),        // 64MB per stream arena (generous for handler eval)
   HTTP_MAX_STREAMS_PER_CONNECTION = (128),    // Max concurrent streams per conn
-  HTTP_STREAM_ARENA_POOL_SIZE = (1024),       // Total stream arenas in pool
+  HTTP_STREAM_ARENA_POOL_SIZE = (64),         // Total stream arenas in pool (64 * 64MB = 4GB max)
 };
 
 // times 2 just for fun
@@ -161,18 +161,11 @@ typedef struct valk_aio_http_conn {
   struct valk_aio_http_conn *prev, *next;
 
   valk_aio_ssl_t ssl;
-  // TODO(networking): Sessions could be pooled
   nghttp2_session *session;
-  nghttp2_mem session_allocator;
-  // connection memory arena
-  valk_mem_arena_t *arena;
   valk_http2_handler_t *httpHandler;
   valk_aio_handle_t *handle;
-  // random UV primitive i dont wanna allocate
   uv_connect_t req;
-  // Server this connection belongs to (for accessing handler_fn)
   valk_aio_http_server *server;
-  // Track active streams for arena reset
   int active_streams;
 } valk_aio_http_conn;
 
@@ -252,7 +245,6 @@ typedef struct valk_aio_system {
 
   valk_slab_t *httpServers;
   valk_slab_t *httpClients;
-  valk_slab_t *httpConnections;
   valk_slab_t *httpStreamArenas;    // Pool of per-stream arenas
 
   valk_slab_t *handleSlab;
@@ -277,6 +269,7 @@ typedef struct valk_aio_http_server {
   int port;
   valk_http2_handler_t handler;
   valk_lval_t* lisp_handler_fn;  // Lisp lambda for request handling (GC heap)
+  valk_lenv_t* sandbox_env;      // Sandbox env that shadows def (created once at startup)
 } valk_aio_http_server;
 
 static void __event_loop(void *arg) {
@@ -331,8 +324,7 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
 
   valk_aio_ssl_free(&conn->ssl);
   nghttp2_session_del(conn->session);
-  // Release the arena, not the conn pointer (conn is inside the arena)
-  valk_slab_release_ptr(handle->sys->httpConnections, conn->arena);
+  free(conn);
 }
 
 static void __uv_handle_closed_cb(uv_handle_t *handle) {
@@ -363,59 +355,6 @@ static void __aio_uv_stop(uv_async_t *h) {
   uv_walk(h->loop, __aio_uv_walk_close, NULL);
   // Call uv_stop to break out of UV_RUN_DEFAULT
   uv_stop(h->loop);
-}
-
-/**
- * @functypedef
- *
- * Custom memory allocator to replace malloc().  The |mem_user_data|
- * is the mem_user_data member of :type:`nghttp2_mem` structure.
- */
-void *__nghttp2_malloc(size_t size, void *mem_user_data) {
-  VALK_TRACE("HTTP2 malloc %zu", size);
-  return valk_mem_arena_alloc(mem_user_data, size);
-}
-
-/**
- * @functypedef
- *
- * Custom memory allocator to replace free().  The |mem_user_data| is
- * the mem_user_data member of :type:`nghttp2_mem` structure.
- */
-void __nghttp2_free(void *ptr, void *mem_user_data) {
-  UNUSED(mem_user_data);
-  VALK_TRACE("HTTP2 free %p", ptr);
-}
-
-/**
- * @functypedef
- *
- * Custom memory allocator to replace calloc().  The |mem_user_data|
- * is the mem_user_data member of :type:`nghttp2_mem` structure.
- */
-void *__nghttp2_calloc(size_t nmemb, size_t size, void *mem_user_data) {
-  VALK_TRACE("HTTP2 calloc %zu x %zu", nmemb, size);
-  void *res = valk_mem_arena_alloc(mem_user_data, nmemb * size);
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  memset(res, 0, nmemb * size);
-  return res;
-}
-
-/**
- * @functypedef
- *
- * Custom memory allocator to replace realloc().  The |mem_user_data|
- * is the mem_user_data member of :type:`nghttp2_mem` structure.
- */
-void *__nghttp2_realloc(void *ptr, size_t size, void *mem_user_data) {
-  VALK_TRACE("HTTP2 realloc %p -> %zu", ptr, size);
-  void *res = valk_mem_arena_alloc(mem_user_data, size);
-  if (ptr != NULL) {
-    size_t origSize = ((size_t *)ptr)[-1];
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    memcpy(res, ptr, origSize);
-  }
-  return res;
 }
 
 static int __http_on_header_callback(nghttp2_session *session,
@@ -834,14 +773,14 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
       valk_lval_t *arena_qexpr = __http_build_request_qexpr(req);
 
       // Call handler: (handler request)
+      // Use pre-created sandbox env (shadows 'def') and stream arena for allocations
       valk_lval_t *handler = conn->server->lisp_handler_fn;
-      valk_lval_t *args;
+      valk_lenv_t *sandbox_env = conn->server->sandbox_env;
+      valk_lval_t *response;
       VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
-        args = valk_lval_cons(arena_qexpr, valk_lval_nil());
+        valk_lval_t *args = valk_lval_cons(arena_qexpr, valk_lval_nil());
+        response = valk_lval_eval_call(sandbox_env, handler, args);
       }
-
-      // Evaluate handler with request - lambda has captured environment
-      valk_lval_t *response = valk_lval_eval_call(handler->fun.env, handler, args);
 
       // Send response based on handler result
       if (LVAL_TYPE(response) == LVAL_ERR) {
@@ -1067,19 +1006,13 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
   valk_aio_handle_t *hndl = stream->data;
   valk_aio_http_server *srv = hndl->arg;
 
-  // Init the arena
-  valk_mem_arena_t *arena =
-      (void *)valk_slab_aquire(srv->sys->httpConnections)->data;
-  valk_mem_arena_init(arena,
-                      HTTP_MAX_CONNECTION_HEAP - sizeof(valk_mem_arena_t));
-
-  struct valk_aio_http_conn *conn =
-      valk_mem_arena_alloc(arena, sizeof(struct valk_aio_http_conn));
+  struct valk_aio_http_conn *conn = malloc(sizeof(struct valk_aio_http_conn));
+  if (!conn) {
+    VALK_ERROR("Failed to allocate connection");
+    return;
+  }
   memset(conn, 0, sizeof(struct valk_aio_http_conn));
-
-  // haha point back to thy self
-  conn->arena = arena;
-  conn->server = srv;  // Store server for accessing Lisp handler
+  conn->server = srv;
 
   conn->handle =
       (valk_aio_handle_t *)valk_slab_aquire(srv->sys->handleSlab)->data;
@@ -1131,33 +1064,9 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
       VALK_WARN("Could not get peer name");
     };
 
-    /**
-     * An arbitrary user supplied data.  This is passed to each
-     * allocator function.
-     */
-    conn->session_allocator.mem_user_data = conn->arena;
-    /**
-     * Custom allocator function to replace malloc().
-     */
-    conn->session_allocator.malloc = __nghttp2_malloc;
-    /**
-     * Custom allocator function to replace free().
-     */
-    conn->session_allocator.free = __nghttp2_free;
-    /**
-     * Custom allocator function to replace calloc().
-     */
-    conn->session_allocator.calloc = __nghttp2_calloc;
-    /**
-     * Custom allocator function to replace realloc().
-     */
-    conn->session_allocator.realloc = __nghttp2_realloc;
-
     static nghttp2_session_callbacks *callbacks = nullptr;
     if (!callbacks) {
       nghttp2_session_callbacks_new(&callbacks);
-      // nghttp2_session_callbacks_set_send_callback2(callbacks,
-      //                                              __http_send_callback);
       nghttp2_session_callbacks_set_on_begin_headers_callback(
           callbacks, __http_on_begin_headers_callback);
       nghttp2_session_callbacks_set_on_header_callback(
@@ -1169,7 +1078,7 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
     }
 
     nghttp2_session_server_new3(&conn->session, callbacks, conn, nullptr,
-                                &conn->session_allocator);
+                                nullptr);
     valk_aio_ssl_accept(&conn->ssl, srv->ssl_ctx);
 
     // Send settings to the client
@@ -1201,8 +1110,7 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
     if (!uv_is_closing((uv_handle_t *)&conn->handle->uv.tcp)) {
       uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_handle_closed_cb);
     }
-    // Release arena immediately - the close callback handles other cleanup
-    valk_slab_release_ptr(srv->sys->httpConnections, conn->arena);
+    free(conn);
   }
 }
 static void __http_shutdown_cb(valk_aio_handle_t *hndl) {
@@ -1380,6 +1288,11 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
       srv->handler = *handler;  // Copy C handler struct
     }
     srv->lisp_handler_fn = (valk_lval_t*)lisp_handler;  // Set Lisp handler
+    // Create sandbox env once at startup - wraps handler's captured env
+    // This shadows 'def' to prevent global state mutation from request handlers
+    if (lisp_handler) {
+      srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)lisp_handler)->fun.env);
+    }
     valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
     SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
   }
@@ -1402,6 +1315,10 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
 
 void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_fn) {
   srv->lisp_handler_fn = (valk_lval_t*)handler_fn;
+  // Create sandbox env once - wraps handler's captured env to shadow 'def'
+  if (handler_fn) {
+    srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)handler_fn)->fun.env);
+  }
 }
 
 //// HTTP2 CLIENT
@@ -1626,22 +1543,10 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
   valk_arc_box *box = task->arg;
   valk_aio_http2_client *client = box->item;
 
-  valk_mem_arena_t *arena =
-      (valk_mem_arena_t *)valk_slab_aquire(sys->httpConnections)->data;
-
-  memset(arena, 0, sizeof(HTTP_MAX_CONNECTION_HEAP));
-
-  valk_mem_arena_init(arena,
-                      HTTP_MAX_CONNECTION_HEAP - sizeof(valk_mem_arena_t));
-  client->connection = valk_mem_arena_alloc(arena, sizeof(valk_aio_http_conn));
-
+  client->connection = malloc(sizeof(valk_aio_http_conn));
   VALK_ASSERT(client->connection != NULL,
               "Client connection must be allocated");
-
-  client->connection->arena = arena;
-  client->connection->httpHandler = nullptr;
-  client->connection->prev = nullptr;
-  client->connection->next = nullptr;
+  memset(client->connection, 0, sizeof(valk_aio_http_conn));
 
   client->connection->handle =
       (valk_aio_handle_t *)valk_slab_aquire(sys->handleSlab)->data;
@@ -2099,8 +2004,6 @@ valk_aio_system_t *valk_aio_start() {
         sizeof(valk_arc_box) + sizeof(valk_aio_http_server), HTTP_MAX_SERVERS);
     sys->httpClients = valk_slab_new(
         sizeof(valk_arc_box) + sizeof(valk_aio_http2_client), HTTP_MAX_CLIENTS);
-    sys->httpConnections =
-        valk_slab_new(HTTP_MAX_CONNECTION_HEAP, HTTP_MAX_CONNECTIONS);
     sys->handleSlab = valk_slab_new(sizeof(valk_aio_handle_t), AIO_MAX_HANDLES);
   }
 
@@ -2154,7 +2057,6 @@ void valk_aio_stop(valk_aio_system_t *sys) {
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     valk_slab_free(sys->httpServers);
     valk_slab_free(sys->httpClients);
-    valk_slab_free(sys->httpConnections);
     valk_slab_free(sys->handleSlab);
   }
 

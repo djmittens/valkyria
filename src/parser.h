@@ -170,6 +170,7 @@ static inline void valk_lval_println(valk_lval_t *val) {
 
 //// LEnv Constructors ////
 valk_lenv_t *valk_lenv_empty(void);
+valk_lenv_t* valk_lenv_sandboxed(valk_lenv_t* parent);
 void valk_lenv_init(valk_lenv_t *env);
 // REMOVED: valk_lenv_cleanup - no longer needed with GC heap for all allocations
 //// END LEnv Constructors ////
