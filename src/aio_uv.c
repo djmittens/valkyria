@@ -26,6 +26,7 @@
 
 #include "aio.h"
 #include "aio_ssl.h"
+#include "aio_metrics.h"
 #include "common.h"
 #include "concurrency.h"
 #include "parser.h"  // For valk_lval_t in HTTP queue
@@ -203,6 +204,11 @@ typedef struct {
   int32_t stream_id;         // HTTP/2 stream ID
   valk_mem_arena_t *stream_arena;       // Per-stream arena
   valk_slab_item_t *arena_slab_item;    // For releasing back to slab
+#ifdef VALK_METRICS_ENABLED
+  uint64_t start_time_us;    // Request start time for metrics
+  uint64_t bytes_sent;       // Bytes sent in response
+  uint64_t bytes_recv;       // Bytes received in request
+#endif
 } valk_http2_server_request_t;
 
 // HTTP request item - event loop -> main thread
@@ -256,6 +262,10 @@ typedef struct valk_aio_system {
 
   // HTTP request/response queues for Lisp handlers
   valk_http_queue_t http_queue;
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_metrics_t metrics;
+#endif
 } valk_aio_system_t;
 
 typedef struct valk_aio_http_server {
@@ -310,6 +320,11 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
     VALK_TRACE("HTTP/2 onDisconnect handler");
     conn->httpHandler->onDisconnect(conn->httpHandler->arg, conn);
   }
+
+#ifdef VALK_METRICS_ENABLED
+  // Record connection close
+  valk_aio_metrics_on_close(&handle->sys->metrics);
+#endif
 
   // TODO Tear down http and ssl context's only through the slab... make sure
   // they dont escape into malloc
@@ -479,6 +494,11 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
     // Track active streams for arena lifecycle
     conn->active_streams++;
 
+#ifdef VALK_METRICS_ENABLED
+    // Record stream start
+    valk_aio_metrics_on_stream_start(&conn->server->sys->metrics);
+#endif
+
     // Acquire per-stream arena from slab
     valk_slab_item_t *arena_item = valk_slab_aquire(conn->server->sys->httpStreamArenas);
     if (!arena_item) {
@@ -499,6 +519,11 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
       req->stream_id = frame->hd.stream_id;
       req->stream_arena = stream_arena;
       req->arena_slab_item = arena_item;
+#ifdef VALK_METRICS_ENABLED
+      req->start_time_us = uv_hrtime() / 1000;  // Record start time
+      req->bytes_sent = 0;
+      req->bytes_recv = 0;
+#endif
     }
 
     // Attach request to stream
@@ -547,8 +572,6 @@ static void __http_tcp_on_write_cb(uv_write_t *handle, int status) {
   if (status) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Socket On Write error: %s \n", uv_strerror(status));
-  } else {
-    printf("Receiving on write CB\n");
   }
 
   __tcp_buffer_slab_item_t *item =
@@ -743,6 +766,17 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
       nghttp2_session_get_stream_user_data(session, stream_id);
 
   if (req && req->arena_slab_item) {
+#ifdef VALK_METRICS_ENABLED
+    // Record stream end metrics
+    uint64_t end_time_us = uv_hrtime() / 1000;
+    uint64_t duration_us = end_time_us - req->start_time_us;
+    bool is_error = (error_code != NGHTTP2_NO_ERROR);
+    // Use bodyLen as bytes_recv, bytes_sent remains what was tracked
+    uint64_t bytes_recv = req->bodyLen;
+    valk_aio_metrics_on_stream_end(&conn->server->sys->metrics, is_error,
+                                     duration_us, req->bytes_sent, bytes_recv);
+#endif
+
     // Release stream arena back to slab (instant cleanup)
     valk_slab_release(conn->server->sys->httpStreamArenas, req->arena_slab_item);
     VALK_DEBUG("Stream %d closed, arena released", stream_id);
@@ -1131,12 +1165,23 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
       conn->httpHandler->onConnect(conn->httpHandler->arg, conn);
     }
 
+#ifdef VALK_METRICS_ENABLED
+    // Record successful connection
+    valk_aio_metrics_on_connection(&srv->sys->metrics, true);
+#endif
+
     // start the connection off by listening, (SSL expects client to send first)
     uv_read_start((uv_stream_t *)&conn->handle->uv.tcp, __alloc_callback,
                   __http_tcp_read_cb);
   } else {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     VALK_WARN("Accept error: %s", uv_strerror(res));
+
+#ifdef VALK_METRICS_ENABLED
+    // Record failed connection
+    valk_aio_metrics_on_connection(&srv->sys->metrics, false);
+#endif
+
     // Only close if not already closing
     if (!uv_is_closing((uv_handle_t *)&conn->handle->uv.tcp)) {
       uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_handle_closed_cb);
@@ -2060,6 +2105,10 @@ valk_aio_system_t *valk_aio_start() {
   pthread_mutex_init(&sys->http_queue.response_mutex, NULL);
   pthread_cond_init(&sys->http_queue.response_ready, NULL);
 
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_metrics_init(&sys->metrics);
+#endif
+
   // printf("Aquiring stopper\n");
   sys->stopperHandle = (valk_aio_handle_t *)valk_slab_aquire(sys->handleSlab)->data;
   memset(sys->stopperHandle, 0, sizeof(valk_aio_handle_t));
@@ -2105,6 +2154,14 @@ void valk_aio_stop(valk_aio_system_t *sys) {
   // printf("Done freeing\n");
   // fflush(stdout);
 }
+
+#ifdef VALK_METRICS_ENABLED
+// Get metrics from AIO system
+valk_aio_metrics_t* valk_aio_get_metrics(valk_aio_system_t* sys) {
+  if (!sys) return nullptr;
+  return &sys->metrics;
+}
+#endif
 
 // reference code for openssl setup
 //

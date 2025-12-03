@@ -133,3 +133,10 @@ valk_future *valk_aio_http2_connect_host(valk_aio_system_t *sys,
 
 valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
                                          valk_aio_http2_client *client);
+
+#ifdef VALK_METRICS_ENABLED
+#include "aio_metrics.h"
+
+// Get metrics from AIO system (returns NULL if metrics not enabled)
+valk_aio_metrics_t* valk_aio_get_metrics(valk_aio_system_t* sys);
+#endif

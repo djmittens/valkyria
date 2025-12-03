@@ -15,6 +15,10 @@
 #include "gc.h"
 #include "memory.h"
 
+#ifdef VALK_METRICS_ENABLED
+#include "aio_metrics.h"
+#endif
+
 // TODO(networking): temp forward declare for debugging
 static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a);
 
@@ -3213,6 +3217,144 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_nil();
 }
 
+// aio/metrics: (aio/metrics aio-system) -> qexpr with metric values
+// Returns metrics as a Q-expression data structure
+static valk_lval_t* valk_builtin_aio_metrics(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "Argument must be aio_system");
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  const valk_aio_metrics_t* m = valk_aio_get_metrics(sys);
+
+  // Build qexpr with metric values as nested structures
+  // Format: {:uptime 3600 :connections {:total 1234 :active 5 :failed 3} ...}
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  uint64_t now_us = ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
+
+  valk_lval_t* uptime_key = valk_lval_sym(":uptime");
+  valk_lval_t* uptime_val = valk_lval_num(
+      (long)((now_us - m->start_time_us) / 1000000));
+
+  valk_lval_t* conn_key = valk_lval_sym(":connections");
+  valk_lval_t* conn_total_key = valk_lval_sym(":total");
+  valk_lval_t* conn_total_val =
+      valk_lval_num((long)atomic_load(&m->connections_total));
+  valk_lval_t* conn_active_key = valk_lval_sym(":active");
+  valk_lval_t* conn_active_val =
+      valk_lval_num((long)atomic_load(&m->connections_active));
+  valk_lval_t* conn_failed_key = valk_lval_sym(":failed");
+  valk_lval_t* conn_failed_val =
+      valk_lval_num((long)atomic_load(&m->connections_failed));
+
+  valk_lval_t* conn_map_items[] = {conn_total_key,  conn_total_val,
+                                    conn_active_key, conn_active_val,
+                                    conn_failed_key, conn_failed_val};
+  valk_lval_t* conn_val = valk_lval_qlist(conn_map_items, 6);
+
+  valk_lval_t* streams_key = valk_lval_sym(":streams");
+  valk_lval_t* streams_total_key = valk_lval_sym(":total");
+  valk_lval_t* streams_total_val =
+      valk_lval_num((long)atomic_load(&m->streams_total));
+  valk_lval_t* streams_active_key = valk_lval_sym(":active");
+  valk_lval_t* streams_active_val =
+      valk_lval_num((long)atomic_load(&m->streams_active));
+
+  valk_lval_t* streams_map_items[] = {streams_total_key, streams_total_val,
+                                       streams_active_key, streams_active_val};
+  valk_lval_t* streams_val = valk_lval_qlist(streams_map_items, 4);
+
+  valk_lval_t* requests_key = valk_lval_sym(":requests");
+  valk_lval_t* req_total_key = valk_lval_sym(":total");
+  valk_lval_t* req_total_val =
+      valk_lval_num((long)atomic_load(&m->requests_total));
+  valk_lval_t* req_active_key = valk_lval_sym(":active");
+  valk_lval_t* req_active_val =
+      valk_lval_num((long)atomic_load(&m->requests_active));
+  valk_lval_t* req_errors_key = valk_lval_sym(":errors");
+  valk_lval_t* req_errors_val =
+      valk_lval_num((long)atomic_load(&m->requests_errors));
+
+  valk_lval_t* req_map_items[] = {req_total_key,  req_total_val,
+                                   req_active_key, req_active_val,
+                                   req_errors_key, req_errors_val};
+  valk_lval_t* req_val = valk_lval_qlist(req_map_items, 6);
+
+  valk_lval_t* bytes_key = valk_lval_sym(":bytes");
+  valk_lval_t* bytes_sent_key = valk_lval_sym(":sent_total");
+  valk_lval_t* bytes_sent_val =
+      valk_lval_num((long)atomic_load(&m->bytes_sent_total));
+  valk_lval_t* bytes_recv_key = valk_lval_sym(":recv_total");
+  valk_lval_t* bytes_recv_val =
+      valk_lval_num((long)atomic_load(&m->bytes_recv_total));
+
+  valk_lval_t* bytes_map_items[] = {bytes_sent_key, bytes_sent_val,
+                                     bytes_recv_key, bytes_recv_val};
+  valk_lval_t* bytes_val = valk_lval_qlist(bytes_map_items, 4);
+
+  valk_lval_t* result_items[] = {uptime_key,   uptime_val, conn_key,
+                                  conn_val,     streams_key, streams_val,
+                                  requests_key, req_val,    bytes_key,
+                                  bytes_val};
+  valk_lval_t* result = valk_lval_qlist(result_items, 10);
+
+  return result;
+#else
+  return valk_lval_err(
+      "Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
+// aio/metrics-json: (aio/metrics-json aio-system) -> JSON string
+// Returns metrics as a JSON string using the C formatting function
+static valk_lval_t* valk_builtin_aio_metrics_json(valk_lenv_t* e,
+                                                   valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "Argument must be aio_system");
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
+  char* json = valk_aio_metrics_to_json(metrics, (struct valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  return valk_lval_str(json);
+#else
+  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
+// aio/metrics-prometheus: (aio/metrics-prometheus aio-system) -> Prometheus text
+// Returns metrics in Prometheus exposition format
+static valk_lval_t* valk_builtin_aio_metrics_prometheus(valk_lenv_t* e,
+                                                         valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "Argument must be aio_system");
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
+  char* prom = valk_aio_metrics_to_prometheus(metrics, (struct valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  return valk_lval_str(prom);
+#else
+  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
 // ============================================================================
 // HTTP/2 SERVER BUILTINS
 // ============================================================================
@@ -3398,6 +3540,10 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   // Async I/O System
   valk_lenv_put_builtin(env, "aio/start", valk_builtin_aio_start);
   valk_lenv_put_builtin(env, "aio/run", valk_builtin_aio_run);
+  valk_lenv_put_builtin(env, "aio/metrics", valk_builtin_aio_metrics);
+  valk_lenv_put_builtin(env, "aio/metrics-json", valk_builtin_aio_metrics_json);
+  valk_lenv_put_builtin(env, "aio/metrics-prometheus",
+                        valk_builtin_aio_metrics_prometheus);
 
   // HTTP/2 Server
   valk_lenv_put_builtin(env, "http2/server-listen",

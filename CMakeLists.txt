@@ -68,10 +68,14 @@ add_library(valkyria
   src/gc.c
 # TODO(networking): if should detect uring and if we have it we can get it here instead of libuv.
   src/aio_uv.c
+  src/aio_metrics.c
   src/debug.c
   src/aio_ssl.c
   src/log.c
 )
+
+# Enable AIO metrics collection
+target_compile_definitions(valkyria PRIVATE VALK_METRICS_ENABLED)
 
 # On glibc-based Linux, expose required pthread and POSIX interfaces
 # for libuv headers (e.g. pthread_rwlock_t) without enabling non-portable APIs.
@@ -141,3 +145,8 @@ include_directories(test_escape src/)
 add_executable(test_per_stream_arena test/test_per_stream_arena.c test/testing.c)
 target_link_libraries(test_per_stream_arena PRIVATE "-lc" valkyria)
 include_directories(test_per_stream_arena src/)
+
+add_executable(test_aio_metrics test/test_aio_metrics.c test/testing.c)
+target_link_libraries(test_aio_metrics PRIVATE "-lc" valkyria)
+target_compile_definitions(test_aio_metrics PRIVATE VALK_METRICS_ENABLED)
+include_directories(test_aio_metrics src/)
