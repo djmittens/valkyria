@@ -105,7 +105,7 @@ int main(int argc, char* argv[]) {
       valk_lval_t* res;
       // Parse into GC heap (persistent - AST must survive checkpoints)
       VALK_WITH_ALLOC((void*)gc_heap) { res = valk_parse_file(argv[i]); }
-      if (res->flags == LVAL_ERR) {
+      if (LVAL_TYPE(res) == LVAL_ERR) {
         valk_lval_println(res);
       } else {
         while (valk_lval_list_count(res) > 0) {
@@ -137,7 +137,7 @@ int main(int argc, char* argv[]) {
   if (script_mode && !force_repl) {
     valk_lval_t* sym = valk_lval_sym("aio");
     valk_lval_t* val = valk_lenv_get(env, sym);
-    if (val->flags != LVAL_ERR && val->flags &&
+    if (LVAL_TYPE(val) != LVAL_ERR && LVAL_TYPE(val) == LVAL_REF &&
         strcmp(val->ref.type, "aio_system") == 0) {
       valk_aio_stop((valk_aio_system_t*)val->ref.ptr);
     }
@@ -200,7 +200,7 @@ int main(int argc, char* argv[]) {
   // Gracefully stop AIO on REPL exit if present
   valk_lval_t* sym = valk_lval_sym("aio");
   valk_lval_t* val = valk_lenv_get(env, sym);
-  if (val->flags != LVAL_ERR && val->flags &&
+  if (LVAL_TYPE(val) != LVAL_ERR && LVAL_TYPE(val) == LVAL_REF &&
       strcmp(val->ref.type, "aio_system") == 0) {
     valk_aio_stop((valk_aio_system_t*)val->ref.ptr);
   }

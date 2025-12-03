@@ -236,6 +236,50 @@ static bool valk_gc_is_heap_pointer(valk_gc_malloc_heap_t* heap, void* ptr) {
 // Thread-local heap pointer for safe marking checks
 static __thread valk_gc_malloc_heap_t* gc_current_heap = NULL;
 
+// Environment worklist for iterative traversal (avoids stack overflow)
+#define ENV_WORKLIST_INITIAL_CAPACITY 64
+
+typedef struct {
+  valk_lenv_t** items;
+  size_t count;
+  size_t capacity;
+} valk_env_worklist_t;
+
+static void env_worklist_init(valk_env_worklist_t* wl) {
+  wl->items = malloc(ENV_WORKLIST_INITIAL_CAPACITY * sizeof(valk_lenv_t*));
+  wl->count = 0;
+  wl->capacity = ENV_WORKLIST_INITIAL_CAPACITY;
+}
+
+static void env_worklist_free(valk_env_worklist_t* wl) {
+  if (wl->items) {
+    free(wl->items);
+    wl->items = NULL;
+  }
+  wl->count = 0;
+  wl->capacity = 0;
+}
+
+static void env_worklist_push(valk_env_worklist_t* wl, valk_lenv_t* env) {
+  if (env == NULL) return;
+  if (wl->count >= wl->capacity) {
+    size_t new_cap = wl->capacity * 2;
+    valk_lenv_t** new_items = realloc(wl->items, new_cap * sizeof(valk_lenv_t*));
+    if (new_items == NULL) {
+      VALK_ERROR("Failed to grow env worklist");
+      return;
+    }
+    wl->items = new_items;
+    wl->capacity = new_cap;
+  }
+  wl->items[wl->count++] = env;
+}
+
+static valk_lenv_t* env_worklist_pop(valk_env_worklist_t* wl) {
+  if (wl->count == 0) return NULL;
+  return wl->items[--wl->count];
+}
+
 static void valk_gc_mark_lval(valk_lval_t* v) {
   if (v == NULL) return;
 
@@ -309,19 +353,31 @@ static void valk_gc_mark_lval(valk_lval_t* v) {
   }
 }
 
-static void valk_gc_mark_env(valk_lenv_t* env) {
-  if (env == NULL) return;
+// Helper to check if env is already marked (uses same marking scheme as valk_gc_mark_allocation)
+static bool valk_gc_env_is_marked(valk_lenv_t* env) {
+  if (env == NULL) return true;  // NULL counts as "already processed"
 
-  // First, mark the environment structure itself if it's GC-allocated
-  // (environments allocated via valk_lenv_empty use valk_gc_malloc_heap_alloc)
+  // Skip scratch arena environments - they're not GC-managed yet
+  if (valk_thread_ctx.scratch && valk_ptr_in_arena(valk_thread_ctx.scratch, env)) {
+    return false;  // Not marked, but safe to skip
+  }
+
+  // Check if already marked by looking at header's origin_allocator low bit
+  valk_gc_header_t* header = ((valk_gc_header_t*)env) - 1;
+  return ((uintptr_t)header->origin_allocator & 1) != 0;
+}
+
+// Process a single environment (marks its direct contents, returns parent/fallback for worklist)
+static void valk_gc_mark_env_contents(valk_lenv_t* env, valk_env_worklist_t* wl) {
+  // Mark the environment structure itself if it's GC-allocated
   valk_gc_mark_allocation(env);
 
-  // Mark all lval values in this environment (recursive - each lval marks its children)
+  // Mark all lval values in this environment
   for (size_t i = 0; i < env->vals.count; i++) {
     valk_gc_mark_lval(env->vals.items[i]);
   }
 
-  // Mark the arrays themselves if they're GC-allocated (evacuated from scratch)
+  // Mark the arrays themselves if they're GC-allocated
   if (env->symbols.items != NULL) {
     valk_gc_mark_allocation(env->symbols.items);
   }
@@ -329,18 +385,44 @@ static void valk_gc_mark_env(valk_lenv_t* env) {
     valk_gc_mark_allocation(env->vals.items);
   }
 
-  // Mark individual symbol strings if they're GC-allocated (evacuated from scratch)
+  // Mark individual symbol strings if they're GC-allocated
   for (size_t i = 0; i < env->symbols.count; i++) {
     if (env->symbols.items[i] != NULL) {
       valk_gc_mark_allocation(env->symbols.items[i]);
     }
   }
 
-  // Recursively mark parent environment (lexical chain)
-  valk_gc_mark_env(env->parent);
+  // Push parent and fallback to worklist for iterative processing
+  if (env->parent != NULL && !valk_gc_env_is_marked(env->parent)) {
+    env_worklist_push(wl, env->parent);
+  }
+  if (env->fallback != NULL && !valk_gc_env_is_marked(env->fallback)) {
+    env_worklist_push(wl, env->fallback);
+  }
+}
 
-  // Recursively mark fallback environment (dynamic scoping chain)
-  valk_gc_mark_env(env->fallback);
+static void valk_gc_mark_env(valk_lenv_t* env) {
+  if (env == NULL) return;
+
+  // Use iterative worklist to avoid stack overflow on deep env chains
+  valk_env_worklist_t worklist;
+  env_worklist_init(&worklist);
+
+  // Push initial environment
+  env_worklist_push(&worklist, env);
+
+  // Process all environments iteratively
+  while (worklist.count > 0) {
+    valk_lenv_t* current = env_worklist_pop(&worklist);
+    if (current == NULL) continue;
+
+    // Skip if already marked (prevents infinite loops on cycles)
+    if (valk_gc_env_is_marked(current)) continue;
+
+    valk_gc_mark_env_contents(current, &worklist);
+  }
+
+  env_worklist_free(&worklist);
 }
 
 // Mark an arbitrary GC heap allocation (for evacuated strings/arrays)
@@ -1380,10 +1462,8 @@ static void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
   }
 }
 
-// Evacuate an environment's arrays and values
-static void valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
-  if (env == NULL) return;
-
+// Process a single environment's arrays and values (non-recursive)
+static void valk_evacuate_env_single(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
   // Evacuate symbol strings array if in scratch
   if (env->symbols.items != NULL && valk_ptr_in_arena(ctx->scratch, env->symbols.items)) {
     size_t array_size = env->symbols.capacity * sizeof(char*);
@@ -1448,15 +1528,53 @@ static void valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
       }
     }
   }
+}
 
-  // Recursively evacuate parent and fallback environments
-  // Skip if already evacuated (not in scratch) to prevent infinite recursion on cycles
-  if (env->parent != NULL && valk_ptr_in_arena(ctx->scratch, env->parent)) {
-    valk_evacuate_env(ctx, env->parent);
+// Evacuate an environment's arrays and values (iterative to avoid stack overflow)
+static void valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
+  if (env == NULL) return;
+
+  // Use iterative worklist to avoid stack overflow on deep env chains
+  valk_env_worklist_t worklist;
+  env_worklist_init(&worklist);
+
+  // Track visited environments to prevent infinite loops on cycles
+  valk_env_worklist_t visited;
+  env_worklist_init(&visited);
+
+  env_worklist_push(&worklist, env);
+
+  while (worklist.count > 0) {
+    valk_lenv_t* current = env_worklist_pop(&worklist);
+    if (current == NULL) continue;
+
+    // Check if already visited (linear search, but usually small number of envs)
+    bool already_visited = false;
+    for (size_t i = 0; i < visited.count; i++) {
+      if (visited.items[i] == current) {
+        already_visited = true;
+        break;
+      }
+    }
+    if (already_visited) continue;
+
+    // Mark as visited
+    env_worklist_push(&visited, current);
+
+    // Process this environment
+    valk_evacuate_env_single(ctx, current);
+
+    // Queue parent and fallback for processing (only if in scratch)
+    if (current->parent != NULL && valk_ptr_in_arena(ctx->scratch, current->parent)) {
+      env_worklist_push(&worklist, current->parent);
+    }
+    if (current->fallback != NULL && valk_ptr_in_arena(ctx->scratch, current->fallback)) {
+      env_worklist_push(&worklist, current->fallback);
+    }
   }
-  if (env->fallback != NULL && valk_ptr_in_arena(ctx->scratch, env->fallback)) {
-    valk_evacuate_env(ctx, env->fallback);
-  }
+
+  env_worklist_free(&worklist);
+  env_worklist_free(&visited);
 }
 
 // ============================================================================
@@ -1519,10 +1637,8 @@ static void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
   }
 }
 
-// Fix pointers in an environment
-static void valk_fix_env_pointers(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
-  if (env == NULL) return;
-
+// Process a single environment for pointer fixing (non-recursive)
+static void valk_fix_env_pointers_single(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
   // Evacuate symbols.items array if in scratch
   if (env->symbols.items != NULL && valk_ptr_in_arena(ctx->scratch, env->symbols.items)) {
     size_t array_size = env->symbols.capacity * sizeof(char*);
@@ -1569,10 +1685,54 @@ static void valk_fix_env_pointers(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) 
   for (size_t i = 0; i < env->vals.count; i++) {
     fix_scratch_pointer(ctx, &env->vals.items[i]);
   }
+}
 
-  // Recursively fix parent and fallback environments
-  valk_fix_env_pointers(ctx, env->parent);
-  valk_fix_env_pointers(ctx, env->fallback);
+// Fix pointers in an environment (iterative to avoid stack overflow)
+static void valk_fix_env_pointers(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
+  if (env == NULL) return;
+
+  // Use iterative worklist to avoid stack overflow on deep env chains
+  valk_env_worklist_t worklist;
+  env_worklist_init(&worklist);
+
+  // Simple visited tracking using a separate list
+  // (environments don't have a "fixed" flag, so we track what we've processed)
+  valk_env_worklist_t visited;
+  env_worklist_init(&visited);
+
+  env_worklist_push(&worklist, env);
+
+  while (worklist.count > 0) {
+    valk_lenv_t* current = env_worklist_pop(&worklist);
+    if (current == NULL) continue;
+
+    // Check if already visited (linear search, but usually small number of envs)
+    bool already_visited = false;
+    for (size_t i = 0; i < visited.count; i++) {
+      if (visited.items[i] == current) {
+        already_visited = true;
+        break;
+      }
+    }
+    if (already_visited) continue;
+
+    // Mark as visited
+    env_worklist_push(&visited, current);
+
+    // Process this environment
+    valk_fix_env_pointers_single(ctx, current);
+
+    // Queue parent and fallback for processing
+    if (current->parent != NULL) {
+      env_worklist_push(&worklist, current->parent);
+    }
+    if (current->fallback != NULL) {
+      env_worklist_push(&worklist, current->fallback);
+    }
+  }
+
+  env_worklist_free(&worklist);
+  env_worklist_free(&visited);
 }
 
 // ============================================================================

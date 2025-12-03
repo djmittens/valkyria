@@ -92,6 +92,7 @@ test: build
 	build/test_freeze &&\
 	build/test_escape &&\
 	build/test_networking &&\
+	build/test_per_stream_arena &&\
 	# Lisp Standard Library Tests
 	build/valk test/test_prelude.valk &&\
 	build/valk test/test_namespace.valk &&\
@@ -106,6 +107,11 @@ test: build
 	build/valk test/test_crash_regressions.valk &&\
 	# HTTP API Tests
 	build/valk test/test_http_minimal.valk &&\
+	# Checkpoint & Integration Tests
+	build/valk test/test_checkpoint.valk &&\
+	build/valk test/test_integration.valk &&\
+	# Quasiquote Tests
+	build/valk test/test_quasiquote.valk &&\
 	# Stress Tests
 	build/valk test/stress/test_gc_stress.valk &&\
 	build/valk test/stress/test_networking_stress.valk

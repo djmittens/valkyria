@@ -639,6 +639,124 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
   return 0;
 }
 
+// Helper: check if lval is a list starting with a specific symbol
+static bool valk_is_tagged_list(valk_lval_t* lval, const char* tag) {
+  if (LVAL_TYPE(lval) != LVAL_CONS && LVAL_TYPE(lval) != LVAL_QEXPR) {
+    return false;
+  }
+  if (LVAL_TYPE(lval) == LVAL_NIL) {
+    return false;
+  }
+  valk_lval_t* first = lval->cons.head;
+  return LVAL_TYPE(first) == LVAL_SYM && strcmp(first->str, tag) == 0;
+}
+
+// Quasiquote expansion: recursively process template, evaluating unquote forms
+// This implements the standard Lisp quasiquote semantics:
+//   `x          -> x (quoted)
+//   `,x         -> (eval x)
+//   `(a ,b c)   -> (list 'a (eval b) 'c)
+//   `(a ,@b c)  -> (concat (list 'a) b (list 'c))
+static valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) {
+  // Atoms (non-lists) are returned as-is (quoted)
+  if (LVAL_TYPE(form) != LVAL_CONS && LVAL_TYPE(form) != LVAL_QEXPR) {
+    return form;
+  }
+
+  // Empty list returns as-is
+  if (LVAL_TYPE(form) == LVAL_NIL) {
+    return form;
+  }
+
+  // Check for (unquote x) - evaluate and return
+  if (valk_is_tagged_list(form, "unquote")) {
+    if (valk_lval_list_count(form) != 2) {
+      return valk_lval_err("unquote expects exactly 1 argument");
+    }
+    valk_lval_t* arg = valk_lval_list_nth(form, 1);
+    return valk_lval_eval(env, arg);
+  }
+
+  // Check for (unquote-splicing x) at top level - error
+  if (valk_is_tagged_list(form, "unquote-splicing")) {
+    return valk_lval_err("unquote-splicing (,@) not valid at top level of quasiquote");
+  }
+
+  // It's a list - process each element
+  // We need to handle unquote-splicing specially
+  bool is_qexpr = (LVAL_TYPE(form) == LVAL_QEXPR);
+
+  // Collect expanded elements, handling splicing
+  size_t capacity = 16;
+  size_t count = 0;
+  valk_lval_t** elements = valk_mem_alloc(sizeof(valk_lval_t*) * capacity);
+
+  valk_lval_t* curr = form;
+  while (LVAL_TYPE(curr) != LVAL_NIL) {
+    valk_lval_t* elem = curr->cons.head;
+
+    // Check for (unquote-splicing x) - evaluate and splice
+    if (valk_is_tagged_list(elem, "unquote-splicing")) {
+      if (valk_lval_list_count(elem) != 2) {
+        return valk_lval_err("unquote-splicing expects exactly 1 argument");
+      }
+      valk_lval_t* splice_arg = valk_lval_list_nth(elem, 1);
+      valk_lval_t* splice_result = valk_lval_eval(env, splice_arg);
+      if (LVAL_TYPE(splice_result) == LVAL_ERR) {
+        return splice_result;
+      }
+
+      // Splice each element of the result list into our list
+      if (LVAL_TYPE(splice_result) != LVAL_NIL &&
+          LVAL_TYPE(splice_result) != LVAL_CONS &&
+          LVAL_TYPE(splice_result) != LVAL_QEXPR) {
+        return valk_lval_err("unquote-splicing requires a list, got %s",
+                             valk_ltype_name(LVAL_TYPE(splice_result)));
+      }
+
+      valk_lval_t* splice_curr = splice_result;
+      while (LVAL_TYPE(splice_curr) != LVAL_NIL) {
+        if (count >= capacity) {
+          capacity *= 2;
+          valk_lval_t** new_elements = valk_mem_alloc(sizeof(valk_lval_t*) * capacity);
+          memcpy(new_elements, elements, sizeof(valk_lval_t*) * count);
+          elements = new_elements;
+        }
+        elements[count++] = splice_curr->cons.head;
+        splice_curr = splice_curr->cons.tail;
+      }
+    } else {
+      // Recursively expand the element
+      valk_lval_t* expanded = valk_quasiquote_expand(env, elem);
+      if (LVAL_TYPE(expanded) == LVAL_ERR) {
+        return expanded;
+      }
+
+      if (count >= capacity) {
+        capacity *= 2;
+        valk_lval_t** new_elements = valk_mem_alloc(sizeof(valk_lval_t*) * capacity);
+        memcpy(new_elements, elements, sizeof(valk_lval_t*) * count);
+        elements = new_elements;
+      }
+      elements[count++] = expanded;
+    }
+
+    curr = curr->cons.tail;
+  }
+
+  // Build result list from right to left
+  valk_lval_t* result = valk_lval_nil();
+  for (size_t j = count; j > 0; j--) {
+    if (is_qexpr) {
+      result = valk_lval_qcons(elements[j - 1], result);
+    } else {
+      result = valk_lval_cons(elements[j - 1], result);
+    }
+  }
+
+  return result;
+}
+
 valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
   // Tree-walker evaluation
 
@@ -691,6 +809,16 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
                                count - 1);
         }
         return valk_lval_list_nth(lval, 1);
+      }
+
+      // quasiquote: template with selective evaluation via unquote/unquote-splicing
+      if (strcmp(first->str, "quasiquote") == 0) {
+        if (count != 2) {
+          return valk_lval_err("quasiquote expects exactly 1 argument, got %zu",
+                               count - 1);
+        }
+        valk_lval_t* arg = valk_lval_list_nth(lval, 1);
+        return valk_quasiquote_expand(env, arg);
       }
 
       // Note: \ (lambda) and def are regular builtins, not special forms
@@ -1290,6 +1418,33 @@ valk_lval_t* valk_lval_read(int* i, const char* s) {
     }
     // Build a QEXPR containing the quoted element
     res = valk_lval_qcons(quoted, valk_lval_nil());
+  }
+  // Quasiquote syntax: `x -> (quasiquote x)
+  else if (s[*i] == '`') {
+    (*i)++;  // consume the backtick
+    valk_lval_t* quoted = valk_lval_read(i, s);
+    if (LVAL_TYPE(quoted) == LVAL_ERR) {
+      return quoted;
+    }
+    // Build (quasiquote x) as S-expression for evaluation
+    valk_lval_t* sym = valk_lval_sym("quasiquote");
+    res = valk_lval_cons(sym, valk_lval_cons(quoted, valk_lval_nil()));
+  }
+  // Unquote syntax: ,x -> (unquote x) or ,@x -> (unquote-splicing x)
+  else if (s[*i] == ',') {
+    (*i)++;  // consume the comma
+    bool splicing = false;
+    if (s[*i] == '@') {
+      (*i)++;  // consume the @
+      splicing = true;
+    }
+    valk_lval_t* unquoted = valk_lval_read(i, s);
+    if (LVAL_TYPE(unquoted) == LVAL_ERR) {
+      return unquoted;
+    }
+    // Build (unquote x) or (unquote-splicing x)
+    valk_lval_t* sym = valk_lval_sym(splicing ? "unquote-splicing" : "unquote");
+    res = valk_lval_cons(sym, valk_lval_cons(unquoted, valk_lval_nil()));
   } else if (strchr("({", s[*i])) {
     res = valk_lval_read_expr(i, s);
   }
@@ -2257,6 +2412,7 @@ static valk_lval_t* valk_builtin_print(valk_lenv_t* e, valk_lval_t* a) {
     }
   }
   putchar('\n');
+  fflush(stdout);
   return valk_lval_nil();
 }
 
@@ -2266,6 +2422,7 @@ static valk_lval_t* valk_builtin_println(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* result = valk_builtin_printf(e, a);
   if (LVAL_TYPE(result) != LVAL_ERR) {
     putchar('\n');
+    fflush(stdout);
   }
   return result;
 }
@@ -2352,36 +2509,53 @@ static void valk_lval_print_user(valk_lval_t* val) {
   }
 }
 
-// str: Convert any value to its string representation
-// Usage: (str value)
+// str: Convert values to string and concatenate
+// (str)           -> ""
+// (str x)         -> "x"
+// (str x y z ...) -> "xyz..."
 static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
 
-  valk_lval_t* val = valk_lval_list_nth(a, 0);
+  size_t count = valk_lval_list_count(a);
 
-  // If it's already a string, return it as-is
-  if (LVAL_TYPE(val) == LVAL_STR) {
-    return valk_lval_str(val->str);
+  // No arguments - return empty string
+  if (count == 0) {
+    return valk_lval_str("");
   }
 
-  // For other types, capture output to a string
+  // Use a buffer to accumulate all strings
   char buffer[4096];
-  FILE* stream = fmemopen(buffer, sizeof(buffer), "w");
-  if (!stream) {
-    return valk_lval_err("str: failed to allocate string buffer");
+  size_t offset = 0;
+
+  for (size_t i = 0; i < count; i++) {
+    valk_lval_t* val = valk_lval_list_nth(a, i);
+
+    if (LVAL_TYPE(val) == LVAL_STR) {
+      // Directly copy string content
+      size_t len = strlen(val->str);
+      if (offset + len < sizeof(buffer)) {
+        memcpy(buffer + offset, val->str, len);
+        offset += len;
+      }
+    } else {
+      // For other types, capture output to remaining buffer space
+      FILE* stream = fmemopen(buffer + offset, sizeof(buffer) - offset, "w");
+      if (!stream) {
+        buffer[offset] = '\0';
+        return valk_lval_str(buffer);
+      }
+
+      FILE* old_stdout = stdout;
+      stdout = stream;
+      valk_lval_print_user(val);
+      stdout = old_stdout;
+      fclose(stream);
+
+      offset += strlen(buffer + offset);
+    }
   }
 
-  // Temporarily redirect stdout
-  FILE* old_stdout = stdout;
-  stdout = stream;
-
-  valk_lval_print_user(val);
-
-  // Restore stdout
-  stdout = old_stdout;
-  fclose(stream);
-
+  buffer[offset] = '\0';
   return valk_lval_str(buffer);
 }
 

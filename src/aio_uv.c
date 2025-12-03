@@ -57,7 +57,11 @@ enum {
   HTTP_MAX_CONNECTION_HEAP = (1024000),
   HTTP_MAX_CONCURRENT_REQUESTS = (1024),
   HTTP_MAX_REQUEST_SIZE_BYTES = ((int)8e6),
-  HTTP_MAX_RESPONSE_SIZE_BYTES = ((int)8e6)
+  HTTP_MAX_RESPONSE_SIZE_BYTES = ((int)8e6),
+  // Per-stream arena configuration
+  HTTP_STREAM_ARENA_SIZE = (65536),           // 64KB per stream arena
+  HTTP_MAX_STREAMS_PER_CONNECTION = (128),    // Max concurrent streams per conn
+  HTTP_STREAM_ARENA_POOL_SIZE = (1024),       // Total stream arenas in pool
 };
 
 // times 2 just for fun
@@ -167,6 +171,8 @@ typedef struct valk_aio_http_conn {
   uv_connect_t req;
   // Server this connection belongs to (for accessing handler_fn)
   valk_aio_http_server *server;
+  // Track active streams for arena reset
+  int active_streams;
 } valk_aio_http_conn;
 
 // Escape analysis: intern value to GC heap for cross-thread sharing
@@ -195,6 +201,8 @@ typedef struct {
   size_t bodyCapacity;
   valk_aio_http_conn *conn;  // Connection this request came from
   int32_t stream_id;         // HTTP/2 stream ID
+  valk_mem_arena_t *stream_arena;       // Per-stream arena
+  valk_slab_item_t *arena_slab_item;    // For releasing back to slab
 } valk_http2_server_request_t;
 
 // HTTP request item - event loop -> main thread
@@ -239,6 +247,7 @@ typedef struct valk_aio_system {
   valk_slab_t *httpServers;
   valk_slab_t *httpClients;
   valk_slab_t *httpConnections;
+  valk_slab_t *httpStreamArenas;    // Pool of per-stream arenas
 
   valk_slab_t *handleSlab;
   valk_aio_handle_t liveHandles;
@@ -267,9 +276,18 @@ static void __event_loop(void *arg) {
   // Slab for TCP buffers using the compile-time constant size
   // HTTP_SLAB_ITEM_SIZE is chosen to be >= any struct we overlay for writes
   tcp_buffer_slab = valk_slab_new(HTTP_SLAB_ITEM_SIZE, HTTP_MAX_IO_REQUESTS);
-  // tcp_request_arena_slab =
-  //     valk_slab_new(HTTP_MAX_REQUEST_SIZE_BYTES,
-  //     HTTP_MAX_CONCURRENT_REQUESTS);
+
+  // Initialize per-stream arena pool
+  // Each slab item contains: valk_mem_arena_t header + arena heap space
+  sys->httpStreamArenas = valk_slab_new(
+      sizeof(valk_mem_arena_t) + HTTP_STREAM_ARENA_SIZE,
+      HTTP_STREAM_ARENA_POOL_SIZE);
+  if (!sys->httpStreamArenas) {
+    VALK_ERROR("Failed to allocate stream arena slab");
+    return;
+  }
+  VALK_INFO("Initialized %d stream arenas (%zuKB each)",
+            HTTP_STREAM_ARENA_POOL_SIZE, HTTP_STREAM_ARENA_SIZE / 1024);
 
   // Run the loop until stop is requested
   uv_run(sys->eventloop, UV_RUN_DEFAULT);
@@ -282,7 +300,7 @@ static void __event_loop(void *arg) {
   }
 
   valk_slab_free(tcp_buffer_slab);
-  // valk_slab_free(tcp_request_arena_slab);
+  valk_slab_free(sys->httpStreamArenas);
 }
 
 static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
@@ -401,9 +419,8 @@ static int __http_on_header_callback(nghttp2_session *session,
 
   if (!req) return 0;
 
-  // Allocate strings on connection arena
-  valk_aio_http_conn *conn = req->conn;
-  VALK_WITH_ALLOC((valk_mem_allocator_t*)conn->arena) {
+  // Allocate strings on per-stream arena
+  VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
     // Handle pseudo-headers
     if (namelen > 0 && name[0] == ':') {
       char *str = valk_mem_alloc(valuelen + 1);
@@ -459,13 +476,29 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
     VALK_DEBUG(">>> Received HTTP/2 request (stream_id=%d)",
                frame->hd.stream_id);
 
-    // Allocate request object on connection arena
+    // Track active streams for arena lifecycle
+    conn->active_streams++;
+
+    // Acquire per-stream arena from slab
+    valk_slab_item_t *arena_item = valk_slab_aquire(conn->server->sys->httpStreamArenas);
+    if (!arena_item) {
+      VALK_ERROR("Stream arena pool exhausted for stream %d", frame->hd.stream_id);
+      // Return error to reject the stream
+      return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+    }
+
+    valk_mem_arena_t *stream_arena = (valk_mem_arena_t *)arena_item->data;
+    valk_mem_arena_init(stream_arena, HTTP_STREAM_ARENA_SIZE);
+
+    // Allocate request object on STREAM arena
     valk_http2_server_request_t *req;
-    VALK_WITH_ALLOC((valk_mem_allocator_t*)conn->arena) {
+    VALK_WITH_ALLOC((valk_mem_allocator_t*)stream_arena) {
       req = valk_mem_alloc(sizeof(valk_http2_server_request_t));
       memset(req, 0, sizeof(valk_http2_server_request_t));
       req->conn = conn;
       req->stream_id = frame->hd.stream_id;
+      req->stream_arena = stream_arena;
+      req->arena_slab_item = arena_item;
     }
 
     // Attach request to stream
@@ -533,7 +566,6 @@ static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
   UNUSED(user_data);
 
   size_t body_len = strlen(source->ptr);
-  printf("Looking to get %ld bytes, body has %ld bytes\n", length, body_len);
 
   // Don't include null terminator in HTTP response body
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -609,11 +641,24 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
     status = status_val->str;
   }
 
-  // Extract body (default "")
+  // Extract body (default "") - must copy to arena so it outlives this call
   const char* body = "";
   valk_lval_t* body_val = __http_qexpr_get(response_qexpr, ":body");
   if (body_val && LVAL_TYPE(body_val) == LVAL_STR) {
-    body = body_val->str;
+    // Copy body string to arena so it remains valid when body callback is invoked
+    size_t body_len = strlen(body_val->str);
+    VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
+      char* body_copy = valk_mem_alloc(body_len + 1);
+      memcpy(body_copy, body_val->str, body_len + 1);
+      body = body_copy;
+    }
+  }
+
+  // Extract content-type (default "text/plain; charset=utf-8")
+  const char* content_type = "text/plain; charset=utf-8";
+  valk_lval_t* ct_val = __http_qexpr_get(response_qexpr, ":content-type");
+  if (ct_val && LVAL_TYPE(ct_val) == LVAL_STR) {
+    content_type = ct_val->str;
   }
 
   // Build response headers on arena
@@ -623,7 +668,7 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
   VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
     headers = valk_mem_alloc(sizeof(nghttp2_nv) * header_count);
     headers[0] = (nghttp2_nv)MAKE_NV(":status", status, strlen(status));
-    headers[1] = (nghttp2_nv)MAKE_NV2("content-type", "text/plain; charset=utf-8");
+    headers[1] = (nghttp2_nv)MAKE_NV("content-type", content_type, strlen(content_type));
   }
 
   // Setup data provider for body
@@ -637,10 +682,9 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
 // Build Lisp qexpr from HTTP/2 request (on arena)
 // Returns qexpr like: {:method "GET" :path "/" :headers {{name value}...} :body ""}
 static valk_lval_t* __http_build_request_qexpr(valk_http2_server_request_t *req) {
-  valk_aio_http_conn *conn = req->conn;
   valk_lval_t *qexpr;
 
-  VALK_WITH_ALLOC((valk_mem_allocator_t*)conn->arena) {
+  VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
     // Build headers list (in reverse order, will be reversed by qcons)
     valk_lval_t *headers_list = valk_lval_nil();
     for (size_t i = req->headers.count; i > 0; i--) {
@@ -684,6 +728,32 @@ static valk_lval_t* __http_build_request_qexpr(valk_http2_server_request_t *req)
   return qexpr;
 }
 
+/* Called when a stream is closed (server-side).
+ * Release per-stream arena immediately for instant memory reclamation.
+ */
+static int __http_server_on_stream_close_callback(nghttp2_session *session,
+                                                  int32_t stream_id,
+                                                  uint32_t error_code,
+                                                  void *user_data) {
+  UNUSED(error_code);
+  valk_aio_http_conn *conn = (valk_aio_http_conn *)user_data;
+
+  // Get request data to access stream arena
+  valk_http2_server_request_t *req =
+      nghttp2_session_get_stream_user_data(session, stream_id);
+
+  if (req && req->arena_slab_item) {
+    // Release stream arena back to slab (instant cleanup)
+    valk_slab_release(conn->server->sys->httpStreamArenas, req->arena_slab_item);
+    VALK_DEBUG("Stream %d closed, arena released", stream_id);
+  }
+
+  conn->active_streams--;
+  VALK_DEBUG("%d active streams remaining", conn->active_streams);
+
+  return 0;
+}
+
 /* Called when a frame is fully received. For a request, we might respond here.
  */
 static int __http_on_frame_recv_callback(nghttp2_session *session,
@@ -711,13 +781,13 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
 
     // Check if there's a Lisp handler
     if (conn->server && conn->server->lisp_handler_fn) {
-      // Build request qexpr on arena
+      // Build request qexpr on stream arena
       valk_lval_t *arena_qexpr = __http_build_request_qexpr(req);
 
       // Call handler: (handler request)
       valk_lval_t *handler = conn->server->lisp_handler_fn;
       valk_lval_t *args;
-      VALK_WITH_ALLOC((valk_mem_allocator_t*)conn->arena) {
+      VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
         args = valk_lval_cons(arena_qexpr, valk_lval_nil());
       }
 
@@ -728,18 +798,17 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
       if (LVAL_TYPE(response) == LVAL_ERR) {
         VALK_WARN("Handler returned error: %s", response->str);
         // Send 500 error response
-        VALK_WITH_ALLOC((valk_mem_allocator_t*)conn->arena) {
+        VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
           valk_lval_t* error_items[] = {
             valk_lval_sym(":status"), valk_lval_str("500"),
             valk_lval_sym(":body"), valk_lval_str(response->str)
           };
           valk_lval_t* error_resp = valk_lval_qlist(error_items, 4);
-          __http_send_response(session, frame->hd.stream_id, error_resp, conn->arena);
+          __http_send_response(session, frame->hd.stream_id, error_resp, req->stream_arena);
         }
       } else {
         // Send handler's response
-        VALK_DEBUG("Handler returned: %s", valk_ltype_name(LVAL_TYPE(response)));
-        __http_send_response(session, frame->hd.stream_id, response, conn->arena);
+        __http_send_response(session, frame->hd.stream_id, response, req->stream_arena);
       }
     } else {
       // Fall back to demo response
@@ -1046,6 +1115,8 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
           callbacks, __http_on_header_callback);
       nghttp2_session_callbacks_set_on_frame_recv_callback(
           callbacks, __http_on_frame_recv_callback);
+      nghttp2_session_callbacks_set_on_stream_close_callback(
+          callbacks, __http_server_on_stream_close_callback);
     }
 
     nghttp2_session_server_new3(&conn->session, callbacks, conn, nullptr,

@@ -1,5 +1,0 @@
-(load "src/prelude.valk")
-(= {x} 42)
-(print "A")
-(print x)
-(print "B")

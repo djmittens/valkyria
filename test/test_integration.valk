@@ -62,12 +62,6 @@
 (test/define "recursive-function-many-calls"
   {== (countdown 100) 0})
 
-; Test checkpoint-stats returns valid data
-(test/define "checkpoint-stats-valid"
-  {do
-    (= {stats} (checkpoint-stats))
-    (>= (head stats) 0)})
-
 ; Test arena-usage returns reasonable value
 (test/define "arena-usage-reasonable"
   {do

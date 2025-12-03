@@ -137,3 +137,7 @@ include_directories(test_freeze src/)
 add_executable(test_escape test/test_escape.c test/testing.c)
 target_link_libraries(test_escape PRIVATE "-lc" valkyria)
 include_directories(test_escape src/)
+
+add_executable(test_per_stream_arena test/test_per_stream_arena.c test/testing.c)
+target_link_libraries(test_per_stream_arena PRIVATE "-lc" valkyria)
+include_directories(test_per_stream_arena src/)

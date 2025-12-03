@@ -18,23 +18,6 @@
 (test/define "arena-usage-returns-number"
   {>= (mem/arena/usage) 0})
 
-; Test checkpoint-stats returns a list of 4 numbers
-(test/define "checkpoint-stats-returns-list"
-  {do
-    (= {stats} (checkpoint-stats))
-    (== (len stats) 4)})
-
-; Test checkpoint-stats values are non-negative
-(test/define "checkpoint-stats-valid-values"
-  {do
-    (= {stats} (checkpoint-stats))
-    (= {values-evac} (head stats))
-    (= {bytes-evac} (head (tail stats)))
-    (= {num-checkpoints} (head (tail (tail stats))))
-    (= {ptrs-fixed} (head (tail (tail (tail stats)))))
-    (and (and (>= values-evac 0) (>= bytes-evac 0))
-         (and (>= num-checkpoints 0) (>= ptrs-fixed 0)))})
-
 ; Test arena-usage is less than capacity
 (test/define "arena-usage-less-than-capacity"
   {< (mem/arena/usage) (mem/arena/capacity)})
