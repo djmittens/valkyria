@@ -112,6 +112,8 @@ test: build
 	build/valk test/test_integration.valk &&\
 	# Quasiquote Tests
 	build/valk test/test_quasiquote.valk &&\
+	# File I/O Tests
+	build/valk test/test_read_file.valk &&\
 	# Stress Tests
 	build/valk test/stress/test_gc_stress.valk &&\
 	build/valk test/stress/test_networking_stress.valk

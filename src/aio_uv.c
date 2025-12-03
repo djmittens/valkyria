@@ -434,6 +434,11 @@ static int __http_on_header_callback(nghttp2_session *session,
 
   if (!req) return 0;
 
+#ifdef VALK_METRICS_ENABLED
+  // Track received bytes for headers (name + value + overhead for ': ' and \r\n)
+  req->bytes_recv += namelen + valuelen + 4;
+#endif
+
   // Allocate strings on per-stream arena
   VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
     // Handle pseudo-headers
@@ -666,16 +671,26 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
 
   // Extract body (default "") - must copy to arena so it outlives this call
   const char* body = "";
+  size_t body_len = 0;
   valk_lval_t* body_val = __http_qexpr_get(response_qexpr, ":body");
   if (body_val && LVAL_TYPE(body_val) == LVAL_STR) {
     // Copy body string to arena so it remains valid when body callback is invoked
-    size_t body_len = strlen(body_val->str);
+    body_len = strlen(body_val->str);
     VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
       char* body_copy = valk_mem_alloc(body_len + 1);
       memcpy(body_copy, body_val->str, body_len + 1);
       body = body_copy;
     }
   }
+
+#ifdef VALK_METRICS_ENABLED
+  // Track bytes sent for metrics
+  valk_http2_server_request_t *req =
+      nghttp2_session_get_stream_user_data(session, stream_id);
+  if (req) {
+    req->bytes_sent = body_len;
+  }
+#endif
 
   // Extract content-type (default "text/plain; charset=utf-8")
   const char* content_type = "text/plain; charset=utf-8";
@@ -771,8 +786,8 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
     uint64_t end_time_us = uv_hrtime() / 1000;
     uint64_t duration_us = end_time_us - req->start_time_us;
     bool is_error = (error_code != NGHTTP2_NO_ERROR);
-    // Use bodyLen as bytes_recv, bytes_sent remains what was tracked
-    uint64_t bytes_recv = req->bodyLen;
+    // Add body length to bytes_recv (headers already tracked in on_header callback)
+    uint64_t bytes_recv = req->bytes_recv + req->bodyLen;
     valk_aio_metrics_on_stream_end(&conn->server->sys->metrics, is_error,
                                      duration_us, req->bytes_sent, bytes_recv);
 #endif

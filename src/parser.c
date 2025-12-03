@@ -2227,6 +2227,41 @@ static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_nil();
 }
 
+// Read a file and return its contents as a string
+static valk_lval_t* valk_builtin_read_file(valk_lenv_t* e, valk_lval_t* a) {
+  (void)e;
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  const char* filename = valk_lval_list_nth(a, 0)->str;
+  FILE* f = fopen(filename, "rb");
+  if (f == nullptr) {
+    LVAL_RAISE(a, "Could not open file (%s)", filename);
+  }
+
+  fseek(f, 0, SEEK_END);
+  size_t length = ftell(f);
+  fseek(f, 0, SEEK_SET);
+
+  if (length == UINT64_MAX) {
+    fclose(f);
+    LVAL_RAISE(a, "File is too large (%s)", filename);
+  }
+
+  char* content = calloc(length + 1, sizeof(char));
+  size_t read_len = fread(content, 1, length, f);
+  fclose(f);
+
+  if (read_len != length) {
+    free(content);
+    LVAL_RAISE(a, "Failed to read file (%s)", filename);
+  }
+
+  valk_lval_t* result = valk_lval_str(content);
+  free(content);
+  return result;
+}
+
 valk_lval_t* valk_parse_file(const char* filename) {
   FILE* f = fopen(filename, "rb");
   if (f == nullptr) {
@@ -2546,7 +2581,8 @@ static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   // Use a buffer to accumulate all strings
-  char buffer[4096];
+  // Increased from 4096 to 65536 for larger string concatenations
+  char buffer[65536];
   size_t offset = 0;
 
   for (size_t i = 0; i < count; i++) {
@@ -3475,6 +3511,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
   valk_lenv_put_builtin(env, "error?", valk_builtin_error_p);
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
+  valk_lenv_put_builtin(env, "read-file", valk_builtin_read_file);
   valk_lenv_put_builtin(env, "print", valk_builtin_print);
   valk_lenv_put_builtin(env, "printf", valk_builtin_printf);
   valk_lenv_put_builtin(env, "println", valk_builtin_println);
