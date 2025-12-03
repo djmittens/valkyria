@@ -2252,7 +2252,21 @@ valk_lval_t* valk_parse_file(const char* filename) {
 
   da_init(&tmp);
 
-  do {
+  // Helper macro to skip whitespace AND comments (same as valk_lval_read)
+  #define SKIP_WS_AND_COMMENTS() do { \
+    while (strchr(" ;\t\v\r\n", input[pos]) && input[pos] != '\0') { \
+      if (input[pos] == ';') { \
+        while (input[pos] != '\n' && input[pos] != '\0') pos++; \
+      } else { \
+        pos++; \
+      } \
+    } \
+  } while(0)
+
+  // Skip leading whitespace and comments before entering the loop
+  SKIP_WS_AND_COMMENTS();
+
+  while (input[pos] != '\0') {
     da_add(&tmp, valk_lval_read(&pos, input));
     // Check if we got an error - errors are not cons cells
     valk_lval_t* last = tmp.items[tmp.count - 1];
@@ -2260,7 +2274,11 @@ valk_lval_t* valk_parse_file(const char* filename) {
     // Also check if the parsed expression itself contains an error
     if (LVAL_TYPE(last) == LVAL_CONS && LVAL_TYPE(last->cons.head) == LVAL_ERR)
       break;
-  } while (input[pos] != '\0');
+    // Skip whitespace and comments before next expression
+    SKIP_WS_AND_COMMENTS();
+  }
+
+  #undef SKIP_WS_AND_COMMENTS
 
   free(input);
   valk_lval_t* res = valk_lval_list(tmp.items, tmp.count);

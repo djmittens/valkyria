@@ -198,3 +198,53 @@
       }
 })
 (fun {case x & cs} {case-impl x cs})
+
+; Property Lists (plists)
+; A plist is a flat list of alternating keys and values: {:key1 val1 :key2 val2 ...}
+; Common in Lisp for lightweight key-value storage without a dedicated map type
+
+; Get value for key from plist, returns nil if not found
+; Usage: (plist/get {:name "Alice" :age 30} :name) => "Alice"
+(fun {plist/get pl key} {
+  if (== pl nil)
+    {nil}
+    {if (== (head pl) key)
+      {head (tail pl)}
+      {plist/get (tail (tail pl)) key}}
+})
+
+; Set/update a key in plist, returns new plist
+; Usage: (plist/set {:name "Alice"} :age 30) => {:name "Alice" :age 30}
+(fun {plist/set pl key val} {
+  if (== pl nil)
+    {list key val}
+    {if (== (head pl) key)
+      {join (list key val) (tail (tail pl))}
+      {join (list (head pl) (head (tail pl))) (plist/set (tail (tail pl)) key val)}}
+})
+
+; Check if key exists in plist
+; Usage: (plist/has? {:name "Alice"} :name) => true
+(fun {plist/has? pl key} {
+  if (== pl nil)
+    {false}
+    {if (== (head pl) key)
+      {true}
+      {plist/has? (tail (tail pl)) key}}
+})
+
+; Get all keys from plist
+; Usage: (plist/keys {:name "Alice" :age 30}) => {:name :age}
+(fun {plist/keys pl} {
+  if (== pl nil)
+    {nil}
+    {join (list (head pl)) (plist/keys (tail (tail pl)))}
+})
+
+; Get all values from plist
+; Usage: (plist/vals {:name "Alice" :age 30}) => {"Alice" 30}
+(fun {plist/vals pl} {
+  if (== pl nil)
+    {nil}
+    {join (list (head (tail pl))) (plist/vals (tail (tail pl)))}
+})
