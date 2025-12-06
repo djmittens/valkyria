@@ -225,5 +225,15 @@ void valk_aio_update_queue_stats(valk_aio_system_t* sys);
 // Get the event loop from AIO system (returns NULL if no loop available)
 struct uv_loop_s* valk_aio_get_event_loop(valk_aio_system_t* sys);
 
+// Forward declarations for Lisp types (defined in parser.h)
+struct valk_lval_t;
+struct valk_lenv_t;
+
+// Async delay - schedules callback after delay_ms milliseconds
+// Must be called from within an HTTP request handler
+// Returns :deferred symbol on success to indicate async response
+struct valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, uint64_t delay_ms,
+                                    struct valk_lval_t* continuation, struct valk_lenv_t* env);
+
 // Global active AIO system (set by valk_aio_start, cleared by valk_aio_stop)
 extern valk_aio_system_t* valk_aio_active_system;

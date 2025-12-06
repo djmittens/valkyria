@@ -228,6 +228,31 @@ static __thread uv_timer_t *backpressure_timer = NULL;
 #define BACKPRESSURE_CHECK_INTERVAL_MS 100  // Check every 100ms
 #define BACKPRESSURE_TIMEOUT_MS 30000  // Close connections after 30s under backpressure
 
+// Forward declaration for server request type (defined below)
+typedef struct valk_http2_server_request valk_http2_server_request_t;
+
+// Thread-local context for current HTTP request (used by aio/delay)
+typedef struct {
+  nghttp2_session *session;
+  int32_t stream_id;
+  valk_aio_http_conn *conn;
+  valk_http2_server_request_t *req;
+  valk_lenv_t *env;
+} valk_http_request_ctx_t;
+
+static __thread valk_http_request_ctx_t *current_request_ctx = NULL;
+
+// Timer callback data for aio/delay
+typedef struct {
+  uv_timer_t timer;
+  valk_lval_t *continuation;  // Lambda to call after delay
+  nghttp2_session *session;
+  int32_t stream_id;
+  valk_aio_http_conn *conn;
+  valk_mem_arena_t *stream_arena;
+  valk_lenv_t *env;
+} valk_delay_timer_t;
+
 // Add connection to backpressure list
 static void __backpressure_list_add(struct valk_aio_http_conn *conn) {
   if (conn->backpressure) return;  // Already in list
@@ -406,7 +431,7 @@ static inline valk_lval_t* valk_http_intern_to_heap(valk_lval_t* arena_val) {
 }
 
 // Server-side incoming request data (arena-allocated, per stream)
-typedef struct {
+struct valk_http2_server_request {
   char *method;              // :method pseudo-header
   char *scheme;              // :scheme pseudo-header
   char *authority;           // :authority pseudo-header
@@ -429,7 +454,7 @@ typedef struct {
   uint64_t bytes_recv;       // Bytes received in request
   int status_code;           // HTTP status code for response (for new metrics)
 #endif
-} valk_http2_server_request_t;
+};
 
 // HTTP request item - event loop -> main thread
 typedef struct {
@@ -1255,9 +1280,30 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
       valk_lval_t *handler = conn->server->lisp_handler_fn;
       valk_lenv_t *sandbox_env = conn->server->sandbox_env;
       valk_lval_t *response;
+
+      // Set up request context for aio/delay
+      valk_http_request_ctx_t req_ctx = {
+        .session = session,
+        .stream_id = frame->hd.stream_id,
+        .conn = conn,
+        .req = req,
+        .env = sandbox_env
+      };
+      current_request_ctx = &req_ctx;
+
       VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
         valk_lval_t *args = valk_lval_cons(arena_qexpr, valk_lval_nil());
         response = valk_lval_eval_call(sandbox_env, handler, args);
+      }
+
+      // Clear request context
+      current_request_ctx = NULL;
+
+      // Check for deferred response (aio/delay was called)
+      if (LVAL_TYPE(response) == LVAL_SYM && strcmp(response->str, ":deferred") == 0) {
+        // Response will be sent later by timer callback
+        // Don't release stream arena yet - it's owned by the timer
+        return 0;
       }
 
       // Send response based on handler result
@@ -3092,6 +3138,109 @@ void valk_aio_update_queue_stats(valk_aio_system_t* sys) {
 uv_loop_t* valk_aio_get_event_loop(valk_aio_system_t* sys) {
   if (!sys) return nullptr;
   return sys->eventloop;
+}
+
+// Timer callback for aio/delay - called when timer fires
+static void __delay_timer_cb(uv_timer_t *handle) {
+  valk_delay_timer_t *timer_data = (valk_delay_timer_t *)handle->data;
+  VALK_INFO("aio/delay timer fired for stream %d", timer_data->stream_id);
+
+  // Call the continuation lambda
+  if (timer_data->continuation && timer_data->env) {
+    valk_lval_t *response;
+    VALK_WITH_ALLOC((valk_mem_allocator_t*)timer_data->stream_arena) {
+      // Call continuation with no arguments: (continuation)
+      valk_lval_t *args = valk_lval_nil();
+      response = valk_lval_eval_call(timer_data->env, timer_data->continuation, args);
+    }
+
+    VALK_INFO("aio/delay continuation returned type %d", LVAL_TYPE(response));
+
+    // Send the response
+    if (LVAL_TYPE(response) == LVAL_ERR) {
+      VALK_WARN("Delay continuation returned error: %s", response->str);
+      VALK_WITH_ALLOC((valk_mem_allocator_t*)timer_data->stream_arena) {
+        valk_lval_t* error_items[] = {
+          valk_lval_sym(":status"), valk_lval_str("500"),
+          valk_lval_sym(":body"), valk_lval_str(response->str)
+        };
+        valk_lval_t* error_resp = valk_lval_qlist(error_items, 4);
+        __http_send_response(timer_data->session, timer_data->stream_id,
+                             error_resp, timer_data->stream_arena);
+      }
+    } else {
+      VALK_INFO("aio/delay sending response for stream %d", timer_data->stream_id);
+      __http_send_response(timer_data->session, timer_data->stream_id,
+                           response, timer_data->stream_arena);
+    }
+
+    // Flush the queued HTTP/2 frames to the wire
+    // __http_send_response only queues the response in nghttp2's session,
+    // we need to explicitly flush it since we're outside the normal read callback flow
+    __http_continue_pending_send(timer_data->conn);
+  } else {
+    VALK_WARN("aio/delay timer fired but no continuation or env");
+  }
+
+  // Stop and close the timer
+  uv_timer_stop(handle);
+  uv_close((uv_handle_t *)handle, NULL);
+  free(timer_data);
+}
+
+// aio/delay implementation - schedules a timer and calls continuation after delay
+// Returns a special "deferred" symbol to indicate response will be sent later
+valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, uint64_t delay_ms,
+                            valk_lval_t* continuation, valk_lenv_t* env) {
+  UNUSED(env);
+  VALK_INFO("aio/delay called with delay_ms=%lu", (unsigned long)delay_ms);
+
+  // Check if we're in a request context
+  if (!current_request_ctx) {
+    VALK_WARN("aio/delay called outside request context");
+    return valk_lval_err("aio/delay can only be used within an HTTP request handler");
+  }
+
+  // Allocate timer data
+  valk_delay_timer_t *timer_data = malloc(sizeof(valk_delay_timer_t));
+  if (!timer_data) {
+    return valk_lval_err("Failed to allocate timer");
+  }
+
+  // Copy continuation using malloc allocator so it survives arena reset
+  // Note: We use malloc allocator since event loop thread doesn't have GC heap
+  valk_lval_t *heap_continuation;
+  VALK_WITH_ALLOC(&valk_malloc_allocator) {
+    heap_continuation = valk_lval_copy(continuation);
+  }
+
+  // Store context
+  timer_data->continuation = heap_continuation;
+  timer_data->session = current_request_ctx->session;
+  timer_data->stream_id = current_request_ctx->stream_id;
+  timer_data->conn = current_request_ctx->conn;
+  timer_data->stream_arena = current_request_ctx->req->stream_arena;
+  timer_data->env = current_request_ctx->env;
+  timer_data->timer.data = timer_data;
+
+  // Initialize and start timer on the event loop
+  uv_loop_t *loop = sys->eventloop;
+  int r = uv_timer_init(loop, &timer_data->timer);
+  VALK_INFO("uv_timer_init returned %d", r);
+  r = uv_timer_start(&timer_data->timer, __delay_timer_cb, delay_ms, 0);
+  VALK_INFO("uv_timer_start returned %d for stream %d", r, timer_data->stream_id);
+
+  // Return special "deferred" symbol to indicate async response
+  return valk_lval_sym(":deferred");
+}
+
+// Get/set current request context (for aio/delay to access)
+valk_http_request_ctx_t* valk_http_get_request_ctx(void) {
+  return current_request_ctx;
+}
+
+void valk_http_set_request_ctx(valk_http_request_ctx_t* ctx) {
+  current_request_ctx = ctx;
 }
 
 // reference code for openssl setup

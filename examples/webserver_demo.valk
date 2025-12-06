@@ -83,7 +83,7 @@
 (def {sys} (aio/start {:max-connections 500
                        :max-concurrent-streams 100
                        :tcp-buffer-pool-size 20000
-                       :arena-pool-size 20}))  ; Small pool to test 503 overload response
+                       :arena-pool-size 5}))  ; Tiny pool to force 503 overload responses
 
 (println "  ✓ AIO system ready")
 (println "    • max-connections: 500")
@@ -195,21 +195,26 @@
     ; Increment request counter with method and path labels (demonstrates new modular metrics)
     (metrics/counter-inc "http_demo_requests_total" "method" method "path" path)
 
-    ; Route based on path
-    (= {response} (select
-      {(== path "/favicon.svg") `{:status "200" :content-type "image/svg+xml" :body ,favicon-svg}}
-      {(== path "/stress/100mb") `{:status "200" :content-type "text/plain" :body ,stress-100mb}}
-      {otherwise                `{:status "200" :content-type "text/html; charset=utf-8" :body ,html-body}}))
+    ; Handle /slow endpoint specially - returns :deferred and response sent later
+    (if (== path "/slow")
+      {(aio/delay sys 2000 (\ {} {{:status "200" :content-type "text/plain" :body "slept 2s (async)"}}))}
+      {
+        ; Route based on path
+        (= {response} (select
+          {(== path "/favicon.svg") `{:status "200" :content-type "image/svg+xml" :body ,favicon-svg}}
+          {(== path "/stress/100mb") `{:status "200" :content-type "text/plain" :body ,stress-100mb}}
+          {otherwise                `{:status "200" :content-type "text/html; charset=utf-8" :body ,html-body}}))
 
-    ; Increment status code counter (demonstrates label-based metrics)
-    (= {status} (plist/get response (head {:status})))
-    (metrics/counter-inc "http_demo_responses_total" "status" status "path" path)
+        ; Increment status code counter (demonstrates label-based metrics)
+        (= {status} (plist/get response (head {:status})))
+        (metrics/counter-inc "http_demo_responses_total" "status" status "path" path)
 
-    ; Log request with timing
-    (= {elapsed} (- (time-us) start))
-    (printf "┌─ %s %s → %s (%dµs)\n│ %s\n└─\n" method path status elapsed (str req))
+        ; Log request with timing
+        (= {elapsed} (- (time-us) start))
+        (printf "┌─ %s %s → %s (%dµs)\n│ %s\n└─\n" method path status elapsed (str req))
 
-    response
+        response
+      })
   }))
 
 (println "  ✓ Handler defined and ready")

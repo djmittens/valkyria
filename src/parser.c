@@ -2061,6 +2061,11 @@ static valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a) {
 
 static inline valk_lval_t* valk_resolve_symbol(valk_lenv_t* e, valk_lval_t* v) {
   if (LVAL_TYPE(v) == LVAL_SYM) {
+    // Keyword symbols (starting with :) are self-evaluating - don't look them up
+    // This allows :deferred, :status, :body etc. to be used as literal values
+    if (v->str[0] == ':') {
+      return v;
+    }
     return valk_lenv_get(e, v);
   }
   return v;
@@ -2825,6 +2830,24 @@ static valk_lval_t* valk_builtin_time_us(valk_lenv_t* e, valk_lval_t* a) {
   long us = ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 
   return valk_lval_num(us);
+}
+
+// (sleep ms) - Sleep for the specified number of milliseconds
+static valk_lval_t* valk_builtin_sleep(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* arg = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, arg, LVAL_NUM);
+
+  long ms = arg->num;
+  if (ms > 0) {
+    struct timespec ts = {
+      .tv_sec = ms / 1000,
+      .tv_nsec = (ms % 1000) * 1000000
+    };
+    nanosleep(&ts, NULL);
+  }
+  return valk_lval_nil();
 }
 
 // stack-depth: Returns current function call depth (for TCO testing)
@@ -3635,6 +3658,27 @@ static valk_lval_t* valk_builtin_aio_metrics_prometheus(valk_lenv_t* e,
 #endif
 }
 
+// aio/delay: (aio/delay sys ms continuation) -> :deferred
+// Schedules continuation to be called after ms milliseconds
+// Must be called within an HTTP request handler
+// The continuation receives no arguments and should return a response qexpr
+static valk_lval_t* valk_builtin_aio_delay(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);   // aio system
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);   // delay ms
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_FUN);   // continuation
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "First argument must be aio_system");
+
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  uint64_t delay_ms = (uint64_t)valk_lval_list_nth(a, 1)->num;
+  valk_lval_t* continuation = valk_lval_list_nth(a, 2);
+
+  return valk_aio_delay(sys, delay_ms, continuation, e);
+}
+
 // ============================================================================
 // VM METRICS BUILTINS (GC, Interpreter, Event Loop)
 // ============================================================================
@@ -3924,6 +3968,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "str", valk_builtin_str);
   valk_lenv_put_builtin(env, "make-string", valk_builtin_make_string);
   valk_lenv_put_builtin(env, "time-us", valk_builtin_time_us);
+  valk_lenv_put_builtin(env, "sleep", valk_builtin_sleep);
   valk_lenv_put_builtin(env, "stack-depth", valk_builtin_stack_depth);
 
   valk_lenv_put_builtin(env, "list", valk_builtin_list);
@@ -3988,6 +4033,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "aio/metrics-json", valk_builtin_aio_metrics_json);
   valk_lenv_put_builtin(env, "aio/metrics-prometheus",
                         valk_builtin_aio_metrics_prometheus);
+  valk_lenv_put_builtin(env, "aio/delay", valk_builtin_aio_delay);
 
   // VM Metrics (GC, Interpreter, Event Loop)
   valk_lenv_put_builtin(env, "vm/metrics-json", valk_builtin_vm_metrics_json);
