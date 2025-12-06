@@ -82,7 +82,8 @@
 ; to handle the burst of concurrent TLS handshakes and HTTP/2 streams.
 (def {sys} (aio/start {:max-connections 500
                        :max-concurrent-streams 100
-                       :tcp-buffer-pool-size 20000}))  ; Override for extreme load
+                       :tcp-buffer-pool-size 20000
+                       :arena-pool-size 20}))  ; Small pool to test 503 overload response
 
 (println "  ✓ AIO system ready")
 (println "    • max-connections: 500")

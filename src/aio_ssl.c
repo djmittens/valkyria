@@ -253,12 +253,22 @@ valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {
       char err_buf[256];
       ERR_error_string_n(err_code, err_buf, sizeof(err_buf));
       VALK_ERROR("SSL handshake SYSCALL error: %s", err_buf);
+      return VALK_ERR_SSL_SYSCALL;
     } else if (n == 0) {
-      VALK_ERROR("SSL handshake: unexpected EOF");
+      // Peer closed connection - not an error under load, just cleanup
+      VALK_DEBUG("SSL handshake: peer closed connection");
+      return VALK_ERR_SSL_PEER_CLOSED;
+    } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      // Non-blocking socket needs more data - not an error
+      break;
+    } else if (errno == 0) {
+      // Peer reset connection - common under load testing
+      VALK_DEBUG("SSL handshake: connection reset by peer");
+      return VALK_ERR_SSL_PEER_CLOSED;
     } else {
-      VALK_ERROR("SSL handshake: I/O error (errno=%d)", errno);
+      VALK_ERROR("SSL handshake: I/O error (errno=%d: %s)", errno, strerror(errno));
+      return VALK_ERR_SSL_SYSCALL;
     }
-    return VALK_ERR_SSL_SYSCALL;
   }
   case SSL_ERROR_SSL: {
     unsigned long err_code = ERR_get_error();

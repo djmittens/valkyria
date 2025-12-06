@@ -35,4 +35,5 @@ typedef enum {
   VALK_ERR_SSL_BUFFER_FULL,  // Output buffer is full
   VALK_ERR_SSL_SYSCALL,      // System call error during SSL operation
   VALK_ERR_SSL_PROTOCOL,     // SSL protocol error
+  VALK_ERR_SSL_PEER_CLOSED,  // Peer closed connection (not an error under load)
 } valk_err_e;

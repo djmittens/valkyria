@@ -316,7 +316,9 @@ static void __backpressure_try_resume_one(void) {
     backpressure_list_size--;
 
     // Resume reading if connection is still valid
-    if (conn->state == VALK_CONN_ESTABLISHED) {
+    // Include VALK_CONN_INIT to resume connections that were mid-handshake
+    // when backpressure was applied
+    if (conn->state == VALK_CONN_ESTABLISHED || conn->state == VALK_CONN_INIT) {
       uv_read_start((uv_stream_t *)&conn->handle->uv.tcp,
                     __alloc_callback, __http_tcp_read_cb);
       resumed++;
@@ -1584,6 +1586,15 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     // Apply backpressure: stop reading from this connection until buffers free up
     // This propagates TCP flow control to the client, slowing them down
     VALK_WARN("TCP buffer slab exhausted - applying backpressure on connection");
+
+    // CRITICAL: Feed the incoming data to OpenSSL's BIO before stopping reads.
+    // The BIO will buffer this data, preserving SSL record boundaries.
+    // Without this, we'd drop encrypted bytes mid-record causing "bad record mac" errors.
+    int n = BIO_write(conn->ssl.read_bio, buf->base, nread);
+    if (n != nread) {
+      VALK_ERROR("BIO_write during backpressure failed: wrote %d of %ld", n, nread);
+    }
+
     uv_read_stop((uv_stream_t *)&conn->handle->uv.tcp);
     __backpressure_list_add(conn);
 
