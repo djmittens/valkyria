@@ -102,6 +102,7 @@ static void __valk_http2_response_free(valk_arc_box *box);
 static void __backpressure_list_add(struct valk_aio_http_conn *conn);
 static void __backpressure_list_remove(struct valk_aio_http_conn *conn);
 static void __backpressure_try_resume_one(void);
+static void __uv_handle_closed_cb(uv_handle_t *handle);
 
 typedef struct __http2_req_res_t {
   size_t streamid;
@@ -215,13 +216,17 @@ typedef struct valk_aio_http_conn {
   // Backpressure: true when we stopped reading due to buffer exhaustion
   bool backpressure;
   struct valk_aio_http_conn *backpressure_next;  // Next in backpressure list
+  uint64_t backpressure_start_time;  // When backpressure was applied (for timeout)
 } valk_aio_http_conn;
 
 // Linked list of connections under backpressure (waiting for TCP buffers)
 // Thread-local since event loop is single-threaded
 static __thread struct valk_aio_http_conn *backpressure_list_head = NULL;
 static __thread size_t backpressure_list_size = 0;
+static __thread uv_timer_t *backpressure_timer = NULL;
 #define BACKPRESSURE_LIST_MAX_SIZE 1000
+#define BACKPRESSURE_CHECK_INTERVAL_MS 100  // Check every 100ms
+#define BACKPRESSURE_TIMEOUT_MS 30000  // Close connections after 30s under backpressure
 
 // Add connection to backpressure list
 static void __backpressure_list_add(struct valk_aio_http_conn *conn) {
@@ -236,6 +241,7 @@ static void __backpressure_list_add(struct valk_aio_http_conn *conn) {
   }
 
   conn->backpressure = true;
+  conn->backpressure_start_time = uv_now(conn->handle->uv.tcp.loop);
   conn->backpressure_next = backpressure_list_head;
   backpressure_list_head = conn;
   backpressure_list_size++;
@@ -320,6 +326,70 @@ static void __backpressure_try_resume_one(void) {
   if (resumed > 0) {
     VALK_DEBUG("Resumed %zu backpressured connections (available buffers: %zu, usage: %.1f%%)",
                resumed, available, usage * 100);
+  }
+}
+
+// Timer callback to periodically check for backpressure recovery
+static void __backpressure_timer_cb(uv_timer_t *handle) {
+  if (!backpressure_list_head) {
+    // Stop timer if no more backpressured connections
+    if (backpressure_timer) {
+      VALK_DEBUG("Backpressure timer: all connections resumed, stopping timer");
+      uv_timer_stop(backpressure_timer);
+    }
+    return;
+  }
+
+  uint64_t now = uv_now(handle->loop);
+  size_t available = valk_slab_available(tcp_buffer_slab);
+  size_t total = tcp_buffer_slab->numItems;
+  VALK_DEBUG("Backpressure timer: %zu connections waiting, buffers %zu/%zu (%.1f%% used)",
+             backpressure_list_size, total - available, total,
+             (1.0f - (float)available / total) * 100);
+
+  // First, close any timed-out connections to free resources
+  struct valk_aio_http_conn **pp = &backpressure_list_head;
+  while (*pp) {
+    struct valk_aio_http_conn *conn = *pp;
+    uint64_t elapsed = now - conn->backpressure_start_time;
+
+    if (elapsed >= BACKPRESSURE_TIMEOUT_MS) {
+      VALK_WARN("Backpressure timeout: closing connection after %llu ms",
+                (unsigned long long)elapsed);
+
+      // Remove from list
+      *pp = conn->backpressure_next;
+      conn->backpressure_next = NULL;
+      conn->backpressure = false;
+      backpressure_list_size--;
+
+      // Close the connection
+      if (conn->state != VALK_CONN_CLOSING && conn->state != VALK_CONN_CLOSED) {
+        conn->state = VALK_CONN_CLOSING;
+        uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_handle_closed_cb);
+      }
+      // Don't advance pp, we already moved to next via *pp = conn->backpressure_next
+    } else {
+      pp = &(*pp)->backpressure_next;
+    }
+  }
+
+  // Try to resume remaining connections
+  __backpressure_try_resume_one();
+}
+
+// Start backpressure timer if not already running
+static void __backpressure_timer_start(uv_loop_t *loop) {
+  if (!backpressure_timer) {
+    backpressure_timer = malloc(sizeof(uv_timer_t));
+    if (!backpressure_timer) return;
+    uv_timer_init(loop, backpressure_timer);
+  }
+
+  // Start/restart timer if we have backpressured connections
+  if (backpressure_list_head && !uv_is_active((uv_handle_t *)backpressure_timer)) {
+    uv_timer_start(backpressure_timer, __backpressure_timer_cb,
+                   BACKPRESSURE_CHECK_INTERVAL_MS, BACKPRESSURE_CHECK_INTERVAL_MS);
   }
 }
 
@@ -506,6 +576,12 @@ static void __event_loop(void *arg) {
   // run to completion.
   while (uv_loop_alive(sys->eventloop)) {
     uv_run(sys->eventloop, UV_RUN_NOWAIT);
+  }
+
+  // Clean up backpressure timer
+  if (backpressure_timer) {
+    uv_close((uv_handle_t *)backpressure_timer, (uv_close_cb)free);
+    backpressure_timer = NULL;
   }
 
   valk_slab_free(tcp_buffer_slab);
@@ -1490,6 +1566,11 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
       conn->state = VALK_CONN_CLOSING;
       uv_close((uv_handle_t *)&conn->handle->uv.tcp, __uv_handle_closed_cb);
     }
+
+    // Release the input buffer from alloc_callback (may be NULL if alloc failed)
+    if (buf->base) {
+      valk_slab_release_ptr(tcp_buffer_slab, buf->base);
+    }
     return;
   }
 
@@ -1505,6 +1586,9 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     VALK_WARN("TCP buffer slab exhausted - applying backpressure on connection");
     uv_read_stop((uv_stream_t *)&conn->handle->uv.tcp);
     __backpressure_list_add(conn);
+
+    // Start timer to periodically check for recovery
+    __backpressure_timer_start(conn->handle->uv.tcp.loop);
 
 #ifdef VALK_METRICS_ENABLED
     atomic_fetch_add(&conn->server->sys->system_stats.tcp_buffer_overflow, 1);
@@ -1624,6 +1708,11 @@ static int __http_send_client_connection_header(nghttp2_session *session, valk_a
   return 0;
 }
 
+// Close callback for load-shed rejected connections
+static void __load_shed_close_cb(uv_handle_t *handle) {
+  free(handle);
+}
+
 static void __http_server_accept_cb(uv_stream_t *stream, int status) {
   if (status < 0) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -1653,12 +1742,16 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
 #ifdef VALK_METRICS_ENABLED
     atomic_fetch_add(&srv->sys->system_stats.connections_rejected_load, 1);
 #endif
-    // Accept and immediately close with a TCP RST to signal overload
-    uv_tcp_t temp_tcp;
-    uv_tcp_init(stream->loop, &temp_tcp);
-    if (uv_accept(stream, (uv_stream_t *)&temp_tcp) == 0) {
-      // Send RST by closing without graceful shutdown
-      uv_close((uv_handle_t *)&temp_tcp, NULL);
+    // Accept and immediately close to reject the connection
+    // Must heap-allocate because uv_close is async
+    uv_tcp_t *reject_tcp = malloc(sizeof(uv_tcp_t));
+    if (reject_tcp) {
+      uv_tcp_init(stream->loop, reject_tcp);
+      if (uv_accept(stream, (uv_stream_t *)reject_tcp) == 0) {
+        uv_close((uv_handle_t *)reject_tcp, __load_shed_close_cb);
+      } else {
+        free(reject_tcp);
+      }
     }
     return;
   }
@@ -1674,10 +1767,14 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
 #ifdef VALK_METRICS_ENABLED
       atomic_fetch_add(&srv->sys->system_stats.connections_rejected_load, 1);
 #endif
-      uv_tcp_t temp_tcp;
-      uv_tcp_init(stream->loop, &temp_tcp);
-      if (uv_accept(stream, (uv_stream_t *)&temp_tcp) == 0) {
-        uv_close((uv_handle_t *)&temp_tcp, NULL);
+      uv_tcp_t *reject_tcp = malloc(sizeof(uv_tcp_t));
+      if (reject_tcp) {
+        uv_tcp_init(stream->loop, reject_tcp);
+        if (uv_accept(stream, (uv_stream_t *)reject_tcp) == 0) {
+          uv_close((uv_handle_t *)reject_tcp, __load_shed_close_cb);
+        } else {
+          free(reject_tcp);
+        }
       }
       return;
     }

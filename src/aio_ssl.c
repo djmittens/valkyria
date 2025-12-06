@@ -213,10 +213,8 @@ valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {
     return VALK_ERR_SSL_INVALID;
   }
 
-  valk_aio_ssl_print_state(ssl);
   int n = SSL_do_handshake(ssl->ssl);
   int ssl_err = SSL_get_error(ssl->ssl, n);
-  valk_aio_ssl_print_state(ssl);
 
   switch (ssl_err) {
   case SSL_ERROR_WANT_WRITE:
