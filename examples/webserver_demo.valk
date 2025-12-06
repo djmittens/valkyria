@@ -196,25 +196,25 @@
     (metrics/counter-inc "http_demo_requests_total" "method" method "path" path)
 
     ; Handle /slow endpoint specially - returns :deferred and response sent later
-    (if (== path "/slow")
-      {(aio/delay sys 2000 (\ {} {{:status "200" :content-type "text/plain" :body "slept 2s (async)"}}))}
-      {
-        ; Route based on path
-        (= {response} (select
-          {(== path "/favicon.svg") `{:status "200" :content-type "image/svg+xml" :body ,favicon-svg}}
-          {(== path "/stress/100mb") `{:status "200" :content-type "text/plain" :body ,stress-100mb}}
-          {otherwise                `{:status "200" :content-type "text/html; charset=utf-8" :body ,html-body}}))
+    
+    {
+      ; Route based on path
+      (= {response} (select
+        {(== path "/slow") {(aio/delay sys 2000 (\ {} {{:status "200" :content-type "text/plain" :body "slept 2s (async)"}}))}}
+        {(== path "/favicon.svg") `{:status "200" :content-type "image/svg+xml" :body ,favicon-svg}}
+        {(== path "/stress/100mb") `{:status "200" :content-type "text/plain" :body ,stress-100mb}}
+        {otherwise                `{:status "200" :content-type "text/html; charset=utf-8" :body ,html-body}}))
 
-        ; Increment status code counter (demonstrates label-based metrics)
-        (= {status} (plist/get response (head {:status})))
-        (metrics/counter-inc "http_demo_responses_total" "status" status "path" path)
+      ; Increment status code counter (demonstrates label-based metrics)
+      (= {status} (plist/get response (head {:status})))
+      (metrics/counter-inc "http_demo_responses_total" "status" status "path" path)
 
-        ; Log request with timing
-        (= {elapsed} (- (time-us) start))
-        (printf "┌─ %s %s → %s (%dµs)\n│ %s\n└─\n" method path status elapsed (str req))
+      ; Log request with timing
+      (= {elapsed} (- (time-us) start))
+      (printf "┌─ %s %s → %s (%dµs)\n│ %s\n└─\n" method path status elapsed (str req))
 
-        response
-      })
+      response
+    }
   }))
 
 (println "  ✓ Handler defined and ready")
