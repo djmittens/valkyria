@@ -139,4 +139,16 @@ valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
 
 // Get metrics from AIO system (returns NULL if metrics not enabled)
 valk_aio_metrics_t* valk_aio_get_metrics(valk_aio_system_t* sys);
+
+// Get system stats from AIO system (returns NULL if metrics not enabled)
+valk_aio_system_stats_t* valk_aio_get_system_stats(valk_aio_system_t* sys);
+
+// Update queue stats from HTTP queue (call before rendering metrics)
+void valk_aio_update_queue_stats(valk_aio_system_t* sys);
 #endif
+
+// Get the event loop from AIO system (returns NULL if no loop available)
+struct uv_loop_s* valk_aio_get_event_loop(valk_aio_system_t* sys);
+
+// Global active AIO system (set by valk_aio_start, cleared by valk_aio_stop)
+extern valk_aio_system_t* valk_aio_active_system;

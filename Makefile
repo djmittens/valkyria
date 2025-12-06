@@ -1,9 +1,13 @@
 UNAME := $(shell uname -s)
+
+# Feature flags
+VALK_METRICS ?= 1
+
 ifeq ($(UNAME), Linux)
-	CMAKE= cmake -G Ninja -DASAN=0 -DCMAKE_BUILD_TYPE=Debug -S . -B build ;
+	CMAKE= cmake -G Ninja -DASAN=0 -DVALK_METRICS=1 -DCMAKE_BUILD_TYPE=Debug -DVALK_METRICS=$(VALK_METRICS) -S . -B build ;
 endif
 ifeq ($(UNAME), Darwin)
-	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DASAN=1 -DCMAKE_BUILD_TYPE=Debug -S . -B build;
+	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DASAN=1 -DCMAKE_BUILD_TYPE=Debug -DVALK_METRICS=$(VALK_METRICS) -S . -B build;
 endif
 
 JOBS := $(shell nproc 2>/dev/null || echo 12)
@@ -93,6 +97,19 @@ test: build
 	build/test_escape &&\
 	build/test_networking &&\
 	build/test_per_stream_arena &&\
+	# Metrics Tests (only when VALK_METRICS=1)
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f build/test_aio_metrics ]; then \
+		build/test_aio_metrics || exit 1; \
+	fi &&\
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f build/test_loop_metrics ]; then \
+		build/test_loop_metrics || exit 1; \
+	fi &&\
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f build/test_eval_metrics ]; then \
+		build/test_eval_metrics || exit 1; \
+	fi &&\
+	if [ "$(VALK_METRICS)" = "1" ]; then \
+		build/valk test/test_metrics.valk || exit 1; \
+	fi &&\
 	# Lisp Standard Library Tests
 	build/valk test/test_prelude.valk &&\
 	build/valk test/test_namespace.valk &&\
@@ -123,3 +140,11 @@ test: build
 .PHONY: todo
 todo:
 	rg "TODO\($(shell git rev-parse --abbrev-ref HEAD)\)"
+
+.PHONY: build-metrics
+build-metrics:
+	$(MAKE) build VALK_METRICS=1
+
+.PHONY: test-metrics
+test-metrics:
+	$(MAKE) test VALK_METRICS=1

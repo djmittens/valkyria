@@ -31,4 +31,8 @@ typedef enum {
   VALK_ERR_SSL_RE_NEGOTIATE,
   VALK_ERR_SSL_READ,
   VALK_ERR_SSL_ENCRYPT,
+  VALK_ERR_SSL_INVALID,      // SSL context is NULL or freed
+  VALK_ERR_SSL_BUFFER_FULL,  // Output buffer is full
+  VALK_ERR_SSL_SYSCALL,      // System call error during SSL operation
+  VALK_ERR_SSL_PROTOCOL,     // SSL protocol error
 } valk_err_e;

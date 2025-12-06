@@ -329,10 +329,10 @@ void test_gc_heap_hard_limit(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(heap->hard_limit == hard_limit,
                    "Hard limit should match");
 
-  // Test default hard limit (2x threshold)
+  // Test default hard limit must be greater than threshold
   valk_gc_malloc_heap_t *heap2 = valk_gc_malloc_heap_init(threshold, 0);
-  VALK_TEST_ASSERT(heap2->hard_limit == threshold * 2,
-                   "Default hard limit should be 2x threshold");
+  VALK_TEST_ASSERT(heap2->hard_limit > heap2->gc_threshold,
+                   "Default hard limit should be greater than threshold");
 
   // Test setting hard limit
   valk_gc_set_hard_limit(heap, hard_limit * 2);

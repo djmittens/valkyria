@@ -101,6 +101,17 @@
 (println "  • Handler receives request details")
 (println "  • Returns response map {:status ... :body ...}")
 
+; ──────────────────────────────────────────────────────────────────────────────
+; Stress Test: 100MB Response
+; ──────────────────────────────────────────────────────────────────────────────
+; Pre-generate the large string at startup (one-time cost)
+(println "→ Pre-generating 100MB stress test payload...")
+(def {STRESS_SIZE} 104857600)  ; 100MB = 104857600 bytes
+(def {stress-pattern} "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz./")
+(def {stress-100mb} (make-string (/ STRESS_SIZE 64) stress-pattern))
+(printf "  ✓ Generated %d bytes for /stress/100mb\n" (len stress-100mb))
+(println "")
+
 ; Valkyria favicon - a stylized V with wings (SVG)
 (def {favicon-svg}
   (str "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\">"
@@ -157,14 +168,22 @@
     (= {method} (plist/get req (head {:method})))
     (= {path} (plist/get req (head {:path})))
 
+    ; Increment request counter with method and path labels (demonstrates new modular metrics)
+    (metrics/counter-inc "http_demo_requests_total" "method" method "path" path)
+
     ; Route based on path
     (= {response} (select
       {(== path "/favicon.svg") `{:status "200" :content-type "image/svg+xml" :body ,favicon-svg}}
+      {(== path "/stress/100mb") `{:status "200" :content-type "text/plain" :body ,stress-100mb}}
       {otherwise                `{:status "200" :content-type "text/html; charset=utf-8" :body ,html-body}}))
+
+    ; Increment status code counter (demonstrates label-based metrics)
+    (= {status} (plist/get response (head {:status})))
+    (metrics/counter-inc "http_demo_responses_total" "status" status "path" path)
 
     ; Log request with timing
     (= {elapsed} (- (time-us) start))
-    (printf "┌─ %s %s → %s (%dµs)\n│ %s\n└─\n" method path (plist/get response (head {:status})) elapsed (str req))
+    (printf "┌─ %s %s → %s (%dµs)\n│ %s\n└─\n" method path status elapsed (str req))
 
     response
   }))
@@ -262,6 +281,7 @@
 (println "  • Debug dashboard:    curl -k https://localhost:8443/debug/")
 (println "  • JSON metrics:       curl -k https://localhost:8443/debug/metrics")
 (println "  • Prometheus metrics: curl -k https://localhost:8443/metrics")
+(println "  • Stress test 100MB:  curl -k https://localhost:8443/stress/100mb -o /dev/null")
 (println "  • In browser:         https://localhost:8443")
 (println "                        (accept security warning for self-signed cert)")
 (println "")

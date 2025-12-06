@@ -1,0 +1,77 @@
+; Test server that serves a 50MB response
+; Run: ./build/valk test/test_50mb_server.valk
+; Test: curl -k -o /dev/null -w "%{size_download}\n" https://localhost:8443/big
+
+(load "src/prelude.valk")
+
+(println "=== 50MB Response Test Server ===")
+(println "")
+
+; Define a string repeat helper using recursion
+(def {repeat-str} (\ {s n acc} {
+  (if (<= n 0)
+    {acc}
+    {(repeat-str s (- n 1) (str acc s))})
+}))
+
+; Create a 50MB string (50 * 1024 * 1024 = 52428800 bytes)
+; We'll create a base pattern and repeat it
+(println "Creating 50MB string...")
+(= {start-time} (time-us))
+
+; Create 1KB block (1024 chars) - use a 64-char pattern repeated 16 times
+(= {pattern} "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz+/")
+(= {kb-block} (repeat-str pattern 16 ""))
+
+(println "Created 1KB block")
+
+; Create 1MB iteratively (1024 x 1KB)
+(def {build-mb} (\ {n acc} {
+  (if (<= n 0)
+    {acc}
+    {(build-mb (- n 1) (str acc kb-block))})
+}))
+
+(= {mb-block} (build-mb 1024 ""))
+(printf "Created 1MB block: %d bytes\n" (len mb-block))
+
+; Create 50MB iteratively (50 x 1MB)
+(def {build-50mb} (\ {n acc} {
+  (if (<= n 0)
+    {acc}
+    {(build-50mb (- n 1) (str acc mb-block))})
+}))
+
+(println "Building 50MB string (this may take a while)...")
+(= {big-string} (build-50mb 50 ""))
+
+(= {elapsed} (- (time-us) start-time))
+(printf "Created string of %d bytes in %d ms\n" (len big-string) (/ elapsed 1000))
+(println "")
+
+; Initialize AIO
+(def {sys} aio)
+
+; Define handler that returns the 50MB string
+(def {request-handler}
+  (\ {req} {
+    (= {path} (plist/get req (head {:path})))
+    (select
+      {(== path "/big")
+       `{:status "200" :content-type "text/plain" :body ,big-string}}
+      {otherwise
+       {:status "200" :content-type "text/plain" :body "Request /big for 50MB response"}})
+  }))
+
+; Start server
+(println "Starting server on https://localhost:8443")
+(println "Request /big for 50MB response")
+(println "")
+(println "Test with: curl -k -o /dev/null -w '%{size_download}\\n' https://localhost:8443/big")
+(printf "Expected:  %d bytes\n" (len big-string))
+(println "")
+(println "Press Ctrl+C to stop")
+(println "")
+
+(http2/server-listen sys 8443 request-handler)
+(aio/run sys)

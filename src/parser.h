@@ -1,4 +1,5 @@
 #pragma once
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -192,3 +193,29 @@ void valk_lenv_builtins(valk_lenv_t *env);
 char *valk_str_join(size_t n, const char **strs, const char *sep);
 char *valk_c_err_format(const char *fmt, const char *file, size_t line,
                         const char *function);
+
+// ============================================================================
+// Interpreter Runtime Metrics
+// ============================================================================
+
+// Interpreter metrics for observability
+typedef struct {
+  _Atomic uint64_t evals_total;        // Total lval_eval() calls
+  _Atomic uint64_t function_calls;     // User-defined function invocations
+  _Atomic uint64_t builtin_calls;      // Builtin function invocations
+  _Atomic uint32_t stack_depth;        // Current call stack depth
+  uint32_t stack_depth_max;            // Peak call stack depth ever reached
+  _Atomic uint64_t closures_created;   // Lambda closures created
+  _Atomic uint64_t env_lookups;        // Symbol resolution lookups
+} valk_eval_metrics_t;
+
+// Global interpreter metrics instance
+extern valk_eval_metrics_t g_eval_metrics;
+
+// Initialize interpreter metrics (call at startup)
+void valk_eval_metrics_init(void);
+
+// Get current interpreter metrics (thread-safe)
+void valk_eval_metrics_get(uint64_t* evals, uint64_t* func_calls,
+                            uint64_t* builtin_calls, uint32_t* stack_max,
+                            uint64_t* closures, uint64_t* lookups);

@@ -1,0 +1,43 @@
+; Test 2MB+ string concatenation
+; Uses a single block scope to avoid Valkyria scoping issues
+(load "src/prelude.valk")
+
+(print "=== Building 2MB+ String ===")
+
+; All variables must be in a single block scope using let/do
+(do {
+  ; Start with a 1KB block (1024 bytes)
+  (= {kb} "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv")
+
+  (print (str "1KB block: " (len kb) " bytes"))
+
+  ; 4KB = 4 x 1KB
+  (= {kb4} (str kb kb kb kb))
+  (print (str "4KB: " (len kb4) " bytes"))
+
+  ; 16KB = 4 x 4KB
+  (= {kb16} (str kb4 kb4 kb4 kb4))
+  (print (str "16KB: " (len kb16) " bytes"))
+
+  ; 64KB = 4 x 16KB (this was the old limit!)
+  (= {kb64} (str kb16 kb16 kb16 kb16))
+  (print (str "64KB: " (len kb64) " bytes"))
+
+  ; 256KB = 4 x 64KB
+  (= {kb256} (str kb64 kb64 kb64 kb64))
+  (print (str "256KB: " (len kb256) " bytes"))
+
+  ; 1MB = 4 x 256KB
+  (= {mb1} (str kb256 kb256 kb256 kb256))
+  (print (str "1MB: " (len mb1) " bytes"))
+
+  ; 2MB = 2 x 1MB
+  (= {mb2} (str mb1 mb1))
+  (print (str "2MB: " (len mb2) " bytes"))
+
+  ; 4MB = 2 x 2MB (really pushing it)
+  (= {mb4} (str mb2 mb2))
+  (print (str "4MB: " (len mb4) " bytes"))
+
+  (print "=== SUCCESS: Created 4MB+ string! ===")
+})

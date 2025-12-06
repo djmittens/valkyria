@@ -2,6 +2,8 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdatomic.h>
+#include <stdint.h>
 #include "memory.h"
 
 // Forward declarations
@@ -30,6 +32,17 @@ typedef struct {
   size_t peak_usage;                // Maximum allocated_bytes ever reached
 } valk_gc_heap_stats_t;
 
+// GC runtime metrics for observability (live counters, not telemetry snapshots)
+typedef struct {
+  _Atomic uint64_t cycles_total;           // Total GC collections
+  _Atomic uint64_t pause_us_total;         // Cumulative pause time (microseconds)
+  _Atomic uint64_t pause_us_max;           // Worst-case pause time
+  _Atomic uint64_t reclaimed_bytes_total;  // Total bytes reclaimed across all cycles
+  _Atomic uint64_t objects_marked;         // Objects marked in last cycle
+  _Atomic uint64_t objects_swept;          // Objects swept in last cycle
+  uint64_t last_cycle_start_us;            // Timing for current cycle (internal)
+} valk_gc_runtime_metrics_t;
+
 // GC malloc heap - malloc-based allocator with mark & sweep collection
 typedef struct {
   valk_mem_allocator_e type;  // VALK_ALLOC_GC_HEAP
@@ -45,6 +58,7 @@ typedef struct {
   valk_slab_t* lval_slab;  // Fast slab allocator for valk_lval_t objects
   size_t lval_size;           // Size of valk_lval_t for slab allocation
   valk_gc_heap_stats_t stats; // Telemetry statistics
+  valk_gc_runtime_metrics_t runtime_metrics; // Runtime metrics for observability
 } valk_gc_malloc_heap_t;
 
 // Initialize GC malloc heap with threshold and hard limit
@@ -75,6 +89,12 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* h
 
 // Free all GC heap allocations and the heap itself (for clean shutdown)
 void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap);
+
+// Get GC runtime metrics for export (thread-safe reads)
+void valk_gc_get_runtime_metrics(valk_gc_malloc_heap_t* heap,
+                                  uint64_t* cycles, uint64_t* pause_us_total,
+                                  uint64_t* pause_us_max, uint64_t* reclaimed,
+                                  size_t* heap_used, size_t* heap_total);
 
 // Explicitly free a single GC heap object (for cleanup when switching allocators)
 void valk_gc_free_object(void* heap, void* ptr);

@@ -11,6 +11,9 @@ endif()
 
 project(valkyria LANGUAGES C)
 
+# Feature flags
+option(VALK_METRICS "Enable metrics collection" OFF)
+
 set (CMAKE_EXECUTABLE_ENABLE_EXPORTS on )
 
 if(ASAN)
@@ -61,21 +64,33 @@ find_library(BACKTRACE_LIBRARIES NAMES backtrace)
 find_package(OpenSSL REQUIRED)
 
 ## LIB
-add_library(valkyria
+set(VALKYRIA_SOURCES
   src/parser.c
   src/memory.c
   src/concurrency.c  # TODO: Remove once AIO is updated to use continuations
   src/gc.c
 # TODO(networking): if should detect uring and if we have it we can get it here instead of libuv.
   src/aio_uv.c
-  src/aio_metrics.c
   src/debug.c
   src/aio_ssl.c
   src/log.c
 )
 
-# Enable AIO metrics collection
-target_compile_definitions(valkyria PRIVATE VALK_METRICS_ENABLED)
+# Conditionally add metrics sources
+if(VALK_METRICS)
+  list(APPEND VALKYRIA_SOURCES src/aio_metrics.c)
+  # Add src/metrics.c when it exists (future implementation)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/metrics.c")
+    list(APPEND VALKYRIA_SOURCES src/metrics.c)
+  endif()
+endif()
+
+add_library(valkyria ${VALKYRIA_SOURCES})
+
+# Conditionally enable metrics
+if(VALK_METRICS)
+  target_compile_definitions(valkyria PRIVATE VALK_METRICS_ENABLED=1)
+endif()
 
 # On glibc-based Linux, expose required pthread and POSIX interfaces
 # for libuv headers (e.g. pthread_rwlock_t) without enabling non-portable APIs.
@@ -123,6 +138,10 @@ add_executable(test_networking test/test_networking.c test/testing.c)
 target_link_libraries(test_networking PRIVATE "-lc" valkyria)
 include_directories(test_networking src/)
 
+add_executable(test_large_response test/test_large_response.c test/testing.c)
+target_link_libraries(test_large_response PRIVATE "-lc" valkyria)
+include_directories(test_large_response src/)
+
 # test_networking_lisp removed - redundant tests
 
 # REMOVED: test_concurrency - no longer using futures/ARCs
@@ -146,7 +165,28 @@ add_executable(test_per_stream_arena test/test_per_stream_arena.c test/testing.c
 target_link_libraries(test_per_stream_arena PRIVATE "-lc" valkyria)
 include_directories(test_per_stream_arena src/)
 
-add_executable(test_aio_metrics test/test_aio_metrics.c test/testing.c)
-target_link_libraries(test_aio_metrics PRIVATE "-lc" valkyria)
-target_compile_definitions(test_aio_metrics PRIVATE VALK_METRICS_ENABLED)
-include_directories(test_aio_metrics src/)
+add_executable(test_gc_metrics test/test_gc_metrics.c test/testing.c)
+target_link_libraries(test_gc_metrics PRIVATE "-lc" "-lm" valkyria uv)
+include_directories(test_gc_metrics src/)
+
+# Metrics tests (only built when VALK_METRICS is enabled)
+if(VALK_METRICS)
+  add_executable(test_aio_metrics test/test_aio_metrics.c test/testing.c)
+  target_link_libraries(test_aio_metrics PRIVATE "-lc" valkyria)
+  target_compile_definitions(test_aio_metrics PRIVATE VALK_METRICS_ENABLED=1)
+  include_directories(test_aio_metrics src/)
+
+  add_executable(test_metrics test/test_metrics.c test/testing.c)
+  target_link_libraries(test_metrics PRIVATE "-lc" valkyria)
+  target_compile_definitions(test_metrics PRIVATE VALK_METRICS_ENABLED=1)
+  include_directories(test_metrics src/)
+
+  add_executable(test_loop_metrics test/test_loop_metrics.c test/testing.c)
+  target_link_libraries(test_loop_metrics PRIVATE "-lc" valkyria uv)
+  target_compile_definitions(test_loop_metrics PRIVATE VALK_METRICS_ENABLED=1)
+  include_directories(test_loop_metrics src/)
+
+  add_executable(test_eval_metrics test/test_eval_metrics.c test/testing.c)
+  target_link_libraries(test_eval_metrics PRIVATE "-lc" valkyria)
+  include_directories(test_eval_metrics src/)
+endif()

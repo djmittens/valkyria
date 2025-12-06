@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <uv.h>
 
 // Forward declarations
 static void valk_gc_mark_lval(valk_lval_t* v);
@@ -52,7 +53,7 @@ valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold, size_t hard
   heap->type = VALK_ALLOC_GC_HEAP;
   heap->allocated_bytes = 0;
   heap->gc_threshold = gc_threshold;
-  heap->hard_limit = hard_limit > 0 ? hard_limit : gc_threshold * 2;
+  heap->hard_limit = hard_limit > 0 ? hard_limit : 250 * 1024 * 1024;  // 250 MiB default
   heap->num_collections = 0;
   heap->in_emergency_gc = false;
   heap->objects = NULL;
@@ -67,6 +68,15 @@ valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold, size_t hard
   heap->stats.evacuation_pointer_fixups = 0;
   heap->stats.emergency_collections = 0;
   heap->stats.peak_usage = 0;
+
+  // Initialize runtime metrics
+  atomic_store(&heap->runtime_metrics.cycles_total, 0);
+  atomic_store(&heap->runtime_metrics.pause_us_total, 0);
+  atomic_store(&heap->runtime_metrics.pause_us_max, 0);
+  atomic_store(&heap->runtime_metrics.reclaimed_bytes_total, 0);
+  atomic_store(&heap->runtime_metrics.objects_marked, 0);
+  atomic_store(&heap->runtime_metrics.objects_swept, 0);
+  heap->runtime_metrics.last_cycle_start_us = 0;
 
   // Create fast slab allocator for valk_lval_t objects
   // Fixed large size - simple and fast, no threshold complexity
@@ -84,13 +94,7 @@ valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold, size_t hard
     VALK_WARN("Failed to allocate lval slab, will fall back to malloc");
   } else {
     valk_slab_init(heap->lval_slab, slab_item_size, num_lvals);
-    VALK_INFO("GC slab allocated: %zu objects, %.1f MB (%zu bytes header + %zu bytes lval per object)",
-              num_lvals, slab_size / (1024.0 * 1024.0), sizeof(valk_gc_header_t), heap->lval_size);
   }
-
-  VALK_INFO("GC heap: threshold=%zu (%.1f MB), hard_limit=%zu (%.1f MB)",
-            gc_threshold, gc_threshold / (1024.0 * 1024.0),
-            heap->hard_limit, heap->hard_limit / (1024.0 * 1024.0));
 
   return heap;
 }
@@ -103,8 +107,6 @@ void valk_gc_set_hard_limit(valk_gc_malloc_heap_t* heap, size_t limit) {
     return;
   }
   heap->hard_limit = limit;
-  VALK_INFO("GC heap hard limit set to %zu bytes (%.1f MB)",
-            limit, limit / (1024.0 * 1024.0));
 }
 
 // Set root environment for GC marking
@@ -126,10 +128,6 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
     // Try emergency GC if not already in one
     if (!heap->in_emergency_gc && heap->root_env != NULL) {
       heap->in_emergency_gc = true;
-      VALK_WARN("Heap approaching hard limit (%zu/%zu bytes, %.1f%%), "
-                "triggering emergency GC",
-                heap->allocated_bytes, heap->hard_limit,
-                100.0 * heap->allocated_bytes / heap->hard_limit);
 
       size_t before = heap->allocated_bytes;
       valk_gc_malloc_collect(heap, NULL);  // Emergency GC, no additional roots
@@ -138,8 +136,6 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
       heap->stats.emergency_collections++;
       heap->in_emergency_gc = false;
 
-      VALK_INFO("Emergency GC reclaimed %zu bytes (%.1f%%)",
-                reclaimed, before > 0 ? 100.0 * reclaimed / before : 0.0);
     }
 
     // Re-check after emergency GC
@@ -459,7 +455,7 @@ static void valk_gc_mark_allocation(void* ptr) {
 // Sweep Phase - Free unmarked objects
 // ============================================================================
 
-static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
+static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap, size_t* out_freed_count) {
   size_t reclaimed = 0;
   size_t freed_count = 0;
   valk_gc_header_t** header_ptr = &heap->objects;
@@ -548,6 +544,9 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap) {
   VALK_INFO("GC sweep: freed %zu objects, reclaimed %zu bytes",
             freed_count, reclaimed);
 
+  if (out_freed_count) {
+    *out_freed_count = freed_count;
+  }
   return reclaimed;
 }
 
@@ -967,6 +966,9 @@ size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* addition
     return 0;
   }
 
+  // Record start time for pause measurement
+  uint64_t start_time_us = uv_hrtime() / 1000;
+
   size_t before = heap->allocated_bytes;
 
   VALK_INFO("GC: Starting collection #%zu (allocated: %zu/%zu bytes, %.1f%% full)",
@@ -981,13 +983,30 @@ size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* addition
   // Phase 1: Mark reachable objects from root environment and any additional roots
   // GC only runs at safe points (between expressions). Most live data is in the
   // environment, but parsed ASTs waiting for evaluation must also be marked.
+  size_t objects_marked = 0;  // Will be counted during mark phase
   valk_gc_mark_env(heap->root_env);
   if (additional_root != NULL) {
     valk_gc_mark_lval(additional_root);
   }
 
+  // Count marked objects
+  for (valk_gc_header_t* header = heap->objects; header != NULL; header = header->gc_next) {
+    bool is_marked = ((uintptr_t)header->origin_allocator & 1) != 0;
+    if (header->size == heap->lval_size) {
+      void* user_data = (void*)(header + 1);
+      valk_lval_t* obj = (valk_lval_t*)user_data;
+      if ((obj->flags & LVAL_FLAG_GC_MARK) != 0) {
+        is_marked = true;
+      }
+    }
+    if (is_marked) {
+      objects_marked++;
+    }
+  }
+
   // Phase 2: Sweep unreachable objects
-  size_t reclaimed = valk_gc_malloc_sweep(heap);
+  size_t objects_swept = 0;
+  size_t reclaimed = valk_gc_malloc_sweep(heap, &objects_swept);
 
   // Clear thread-local heap pointer
   gc_current_heap = NULL;
@@ -1009,9 +1028,28 @@ size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* addition
   size_t after = heap->allocated_bytes;
   heap->num_collections++;
 
-  VALK_INFO("GC: Complete - reclaimed %zu bytes (before: %zu, after: %zu, %.1f%% freed)",
+  // Calculate pause time
+  uint64_t end_time_us = uv_hrtime() / 1000;
+  uint64_t pause_us = end_time_us - start_time_us;
+
+  // Update runtime metrics atomically
+  atomic_fetch_add(&heap->runtime_metrics.cycles_total, 1);
+  atomic_fetch_add(&heap->runtime_metrics.pause_us_total, pause_us);
+  atomic_fetch_add(&heap->runtime_metrics.reclaimed_bytes_total, reclaimed);
+  atomic_store(&heap->runtime_metrics.objects_marked, objects_marked);
+  atomic_store(&heap->runtime_metrics.objects_swept, objects_swept);
+
+  // Update max pause time using compare-exchange
+  uint64_t current_max = atomic_load(&heap->runtime_metrics.pause_us_max);
+  while (pause_us > current_max) {
+    if (atomic_compare_exchange_weak(&heap->runtime_metrics.pause_us_max, &current_max, pause_us)) {
+      break;
+    }
+  }
+
+  VALK_INFO("GC: Complete - reclaimed %zu bytes (before: %zu, after: %zu, %.1f%% freed), pause: %llu us",
             reclaimed, before, after,
-            100.0 * reclaimed / before);
+            100.0 * reclaimed / before, (unsigned long long)pause_us);
 
   return reclaimed;
 }
@@ -1130,6 +1168,24 @@ void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
 
   // Free the heap structure itself
   free(heap);
+}
+
+// ============================================================================
+// GC Runtime Metrics Export
+// ============================================================================
+
+void valk_gc_get_runtime_metrics(valk_gc_malloc_heap_t* heap,
+                                  uint64_t* cycles, uint64_t* pause_us_total,
+                                  uint64_t* pause_us_max, uint64_t* reclaimed,
+                                  size_t* heap_used, size_t* heap_total) {
+  if (!heap) return;
+
+  if (cycles) *cycles = atomic_load(&heap->runtime_metrics.cycles_total);
+  if (pause_us_total) *pause_us_total = atomic_load(&heap->runtime_metrics.pause_us_total);
+  if (pause_us_max) *pause_us_max = atomic_load(&heap->runtime_metrics.pause_us_max);
+  if (reclaimed) *reclaimed = atomic_load(&heap->runtime_metrics.reclaimed_bytes_total);
+  if (heap_used) *heap_used = heap->allocated_bytes;
+  if (heap_total) *heap_total = heap->hard_limit;
 }
 
 // ============================================================================
@@ -1564,11 +1620,14 @@ static void valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
     // Process this environment
     valk_evacuate_env_single(ctx, current);
 
-    // Queue parent and fallback for processing (only if in scratch)
-    if (current->parent != NULL && valk_ptr_in_arena(ctx->scratch, current->parent)) {
+    // Queue parent and fallback for processing unconditionally.
+    // We must traverse ALL reachable environments, not just scratch-allocated ones,
+    // because heap-allocated environments may contain pointers to scratch-allocated
+    // values that need to be evacuated.
+    if (current->parent != NULL) {
       env_worklist_push(&worklist, current->parent);
     }
-    if (current->fallback != NULL && valk_ptr_in_arena(ctx->scratch, current->fallback)) {
+    if (current->fallback != NULL) {
       env_worklist_push(&worklist, current->fallback);
     }
   }
@@ -1746,15 +1805,7 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
     return;
   }
 
-  VALK_INFO("Checkpoint: arena at %zu/%zu bytes (%.1f%%)",
-            scratch->offset, scratch->capacity,
-            100.0 * scratch->offset / scratch->capacity);
 
-  // Log overflow stats if any occurred
-  if (scratch->stats.overflow_fallbacks > 0) {
-    VALK_WARN("Checkpoint: %zu allocations (%zu bytes) overflowed to heap",
-              scratch->stats.overflow_fallbacks, scratch->stats.overflow_bytes);
-  }
 
   // Initialize evacuation context
   valk_evacuation_ctx_t ctx = {

@@ -1,0 +1,66 @@
+; test_large_response_handler.valk
+; Parameterized Lisp handler for testing large responses of various sizes
+; This handler supports multiple endpoints to test different response sizes
+; Used for regression testing to ensure no data loss on large responses
+
+; Define response sizes - all should end on 64-byte boundaries for pattern verification
+; Pattern: 64 characters that repeat to fill the response
+(def {pattern} "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz./")
+
+; Size definitions (all divisible by 64 for clean pattern repetition)
+(def {SIZE_1MB}   1048576)      ; 1 MB = 1024 * 1024
+(def {SIZE_2MB}   2097152)      ; 2 MB
+(def {SIZE_5MB}   5242880)      ; 5 MB
+(def {SIZE_10MB} 10485760)      ; 10 MB
+(def {SIZE_25MB} 26214400)      ; 25 MB
+(def {SIZE_50MB} 52428800)      ; 50 MB
+
+; Pre-allocate response strings for efficiency
+; These are created once at handler load time
+(def {str-1mb}  (make-string (/ SIZE_1MB 64) pattern))
+(def {str-2mb}  (make-string (/ SIZE_2MB 64) pattern))
+(def {str-5mb}  (make-string (/ SIZE_5MB 64) pattern))
+(def {str-10mb} (make-string (/ SIZE_10MB 64) pattern))
+(def {str-25mb} (make-string (/ SIZE_25MB 64) pattern))
+(def {str-50mb} (make-string (/ SIZE_50MB 64) pattern))
+
+(printf "[handler] Pre-allocated response strings:\n")
+(printf "  /1mb:  %d bytes\n" (len str-1mb))
+(printf "  /2mb:  %d bytes\n" (len str-2mb))
+(printf "  /5mb:  %d bytes\n" (len str-5mb))
+(printf "  /10mb: %d bytes\n" (len str-10mb))
+(printf "  /25mb: %d bytes\n" (len str-25mb))
+(printf "  /50mb: %d bytes\n" (len str-50mb))
+
+; Handler function - returns appropriate response based on path
+(def {handler}
+  (\ {req} {
+    (= {path} (plist/get req (head {:path})))
+    (printf "[handler] Request for path: %s\n" path)
+    (select
+      {(== path "/1mb")
+       `{:status "200" :content-type "text/plain" :body ,str-1mb}}
+      {(== path "/2mb")
+       `{:status "200" :content-type "text/plain" :body ,str-2mb}}
+      {(== path "/5mb")
+       `{:status "200" :content-type "text/plain" :body ,str-5mb}}
+      {(== path "/10mb")
+       `{:status "200" :content-type "text/plain" :body ,str-10mb}}
+      {(== path "/25mb")
+       `{:status "200" :content-type "text/plain" :body ,str-25mb}}
+      {(== path "/50mb")
+       `{:status "200" :content-type "text/plain" :body ,str-50mb}}
+      {(== path "/big")
+       `{:status "200" :content-type "text/plain" :body ,str-50mb}}
+      {(== path "/health")
+       {:status "200" :content-type "text/plain" :body "OK"}}
+      {(== path "/sizes")
+       {:status "200" :content-type "application/json"
+        :body "{\"1mb\":1048576,\"2mb\":2097152,\"5mb\":5242880,\"10mb\":10485760,\"25mb\":26214400,\"50mb\":52428800}"}}
+      {otherwise
+       {:status "200" :content-type "text/plain"
+        :body "Available: /1mb /2mb /5mb /10mb /25mb /50mb /health /sizes"}})
+  }))
+
+; Export the handler
+handler

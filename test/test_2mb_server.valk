@@ -1,0 +1,58 @@
+; Test serving 2MB+ responses
+; This tests the dynamic string allocation fix in valk_builtin_str
+
+(load "src/prelude.valk")
+
+(print "=== 2MB Server Test ===")
+(print "Building 2MB response body (this takes a moment)...")
+
+; Build the body using a single large expression to avoid scoping issues
+; We'll build this in 64KB chunks using direct concatenation
+(def {body-64kb}
+  (str
+    ; 64 x 1KB blocks = 64KB
+    "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"))
+
+(print (str "64KB block created: " (len body-64kb) " bytes"))
+
+; Build 256KB from 4 x 64KB
+(def {body-256kb} (str body-64kb body-64kb body-64kb body-64kb))
+(print (str "256KB block created: " (len body-256kb) " bytes"))
+
+; Build 1MB from 4 x 256KB
+(def {body-1mb} (str body-256kb body-256kb body-256kb body-256kb))
+(print (str "1MB block created: " (len body-1mb) " bytes"))
+
+; Build 2MB from 2 x 1MB
+(def {body-2mb} (str body-1mb body-1mb))
+(print (str "2MB block created: " (len body-2mb) " bytes"))
+
+(print "=== SUCCESS: Created 2MB+ string! ===")
+(print "Now serving via HTTP...")
+
+; Initialize AIO
+(def {sys} aio)
+
+; Define handler that returns the 2MB string
+(def {request-handler}
+  (\ {req} {
+    (= {path} (plist/get req (head {:path})))
+    (select
+      {(== path "/big")
+       {`{:status "200" :content-type "text/plain" :body ,body-2mb}}}
+      {otherwise
+       {{:status "200" :content-type "text/plain" :body "Request /big for 2MB response"}}})
+  }))
+
+; Start server
+(print "Starting server on https://localhost:8443")
+(print "Request /big for 2MB response")
+(print "")
+(print "Test with: curl -k -o /dev/null -w '%{size_download}\\n' https://localhost:8443/big")
+(print (str "Expected:  " (len body-2mb) " bytes"))
+(print "")
+(print "Press Ctrl+C to stop")
+(print "")
+
+(http2/server-listen sys 8443 request-handler)
+(aio/run sys)

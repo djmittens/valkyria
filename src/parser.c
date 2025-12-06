@@ -17,6 +17,7 @@
 
 #ifdef VALK_METRICS_ENABLED
 #include "aio_metrics.h"
+#include "metrics.h"
 #endif
 
 // TODO(networking): temp forward declare for debugging
@@ -24,6 +25,30 @@ static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a);
 
 // GC heap allocator size check - ONLY allocate valk_lval_t structures
 size_t __valk_lval_size = sizeof(valk_lval_t);
+
+// Global interpreter metrics instance
+valk_eval_metrics_t g_eval_metrics = {0};
+
+void valk_eval_metrics_init(void) {
+  atomic_store(&g_eval_metrics.evals_total, 0);
+  atomic_store(&g_eval_metrics.function_calls, 0);
+  atomic_store(&g_eval_metrics.builtin_calls, 0);
+  atomic_store(&g_eval_metrics.stack_depth, 0);
+  g_eval_metrics.stack_depth_max = 0;
+  atomic_store(&g_eval_metrics.closures_created, 0);
+  atomic_store(&g_eval_metrics.env_lookups, 0);
+}
+
+void valk_eval_metrics_get(uint64_t* evals, uint64_t* func_calls,
+                            uint64_t* builtin_calls, uint32_t* stack_max,
+                            uint64_t* closures, uint64_t* lookups) {
+  if (evals) *evals = atomic_load(&g_eval_metrics.evals_total);
+  if (func_calls) *func_calls = atomic_load(&g_eval_metrics.function_calls);
+  if (builtin_calls) *builtin_calls = atomic_load(&g_eval_metrics.builtin_calls);
+  if (stack_max) *stack_max = g_eval_metrics.stack_depth_max;
+  if (closures) *closures = atomic_load(&g_eval_metrics.closures_created);
+  if (lookups) *lookups = atomic_load(&g_eval_metrics.env_lookups);
+}
 
 // TODO(networking): get rid of args everywhere, cause we dont need to release
 // anymore
@@ -317,6 +342,8 @@ valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
 
 valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
                               valk_lval_t* body) {
+  atomic_fetch_add(&g_eval_metrics.closures_created, 1);
+
   // Create tree-walker lambda function
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
@@ -764,6 +791,7 @@ static valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) 
 
 valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
   // Tree-walker evaluation
+  atomic_fetch_add(&g_eval_metrics.evals_total, 1);
 
   // Handle NULL gracefully
   if (lval == NULL) {
@@ -875,9 +903,20 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
   // slab, reasonable depths are supported.
   LVAL_ASSERT_TYPE(args, func, LVAL_FUN);
 
-  if (func->fun.builtin) {
-    return func->fun.builtin(env, args);
+  // Track stack depth and function call metrics
+  uint32_t depth = atomic_fetch_add(&g_eval_metrics.stack_depth, 1) + 1;
+  if (depth > g_eval_metrics.stack_depth_max) {
+    g_eval_metrics.stack_depth_max = depth;
   }
+
+  if (func->fun.builtin) {
+    atomic_fetch_add(&g_eval_metrics.builtin_calls, 1);
+    valk_lval_t* result = func->fun.builtin(env, args);
+    atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+    return result;
+  }
+
+  atomic_fetch_add(&g_eval_metrics.function_calls, 1);
 
   // Track call depth for user-defined functions (not builtins)
   valk_thread_ctx.call_depth++;
@@ -923,6 +962,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
       formal_iter = formal_iter->cons.tail;
       if (valk_lval_list_is_empty(formal_iter)) {
         valk_thread_ctx.call_depth--;
+        atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
         return valk_lval_err(
             "Invalid function format: & not followed by varargs name");
       }
@@ -946,6 +986,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
   // Check if more args than formals (error unless varargs)
   if (!valk_lval_list_is_empty(arg_iter) && !saw_varargs) {
     valk_thread_ctx.call_depth--;
+    atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
     return valk_lval_err(
         "More arguments were given than required. Actual: %zu, Expected: %zu",
         given, num_formals);
@@ -960,6 +1001,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
       formal_iter = formal_iter->cons.tail;
       if (valk_lval_list_is_empty(formal_iter)) {
         valk_thread_ctx.call_depth--;
+        atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
         return valk_lval_err(
             "Invalid function format: & not followed by varargs name");
       }
@@ -982,6 +1024,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
           formal_iter;  // Remaining formals (immutable, can alias)
       partial->fun.body = func->fun.body;  // Body (immutable, can alias)
       valk_thread_ctx.call_depth--;
+      atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
       return partial;
     }
   }
@@ -1019,11 +1062,13 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
         result = valk_lval_eval(call_env, expr);
         if (LVAL_TYPE(result) == LVAL_ERR) {
           valk_thread_ctx.call_depth--;
+          atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
           return result;
         }
         curr = curr->cons.tail;
       }
       valk_thread_ctx.call_depth--;
+      atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
       return result;
     }
   }
@@ -1031,6 +1076,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
   // Single expression body - evaluate it
   valk_lval_t* result = valk_lval_eval(call_env, body);
   valk_thread_ctx.call_depth--;
+  atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
   return result;
 }
 
@@ -1643,6 +1689,8 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
 }
 
 valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
+  atomic_fetch_add(&g_eval_metrics.env_lookups, 1);
+
   LVAL_ASSERT_TYPE((valk_lval_t*)nullptr, key, LVAL_SYM);
 
   // Iterative lookup to avoid stack overflow with deep environment chains
@@ -2602,10 +2650,31 @@ static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_str("");
   }
 
-  // Use a buffer to accumulate all strings
-  // Increased from 4096 to 65536 for larger string concatenations
-  char buffer[65536];
+  // First pass: calculate total size needed
+  // For strings, use their length; for other types, estimate conservatively
+  size_t total_size = 0;
+  for (size_t i = 0; i < count; i++) {
+    valk_lval_t* val = valk_lval_list_nth(a, i);
+    if (LVAL_TYPE(val) == LVAL_STR) {
+      total_size += strlen(val->str);
+    } else {
+      // Conservative estimate for non-string types (numbers, symbols, etc.)
+      // Most printed representations are under 256 bytes
+      total_size += 256;
+    }
+  }
+
+  // Add space for null terminator
+  total_size += 1;
+
+  // Dynamically allocate buffer - no arbitrary limit
+  char* buffer = malloc(total_size);
+  if (!buffer) {
+    return valk_lval_err("str: out of memory allocating %zu bytes", total_size);
+  }
+
   size_t offset = 0;
+  size_t remaining = total_size;
 
   for (size_t i = 0; i < count; i++) {
     valk_lval_t* val = valk_lval_list_nth(a, i);
@@ -2613,16 +2682,17 @@ static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
     if (LVAL_TYPE(val) == LVAL_STR) {
       // Directly copy string content
       size_t len = strlen(val->str);
-      if (offset + len < sizeof(buffer)) {
-        memcpy(buffer + offset, val->str, len);
-        offset += len;
-      }
+      memcpy(buffer + offset, val->str, len);
+      offset += len;
+      remaining -= len;
     } else {
       // For other types, capture output to remaining buffer space
-      FILE* stream = fmemopen(buffer + offset, sizeof(buffer) - offset, "w");
+      FILE* stream = fmemopen(buffer + offset, remaining, "w");
       if (!stream) {
         buffer[offset] = '\0';
-        return valk_lval_str(buffer);
+        valk_lval_t* result = valk_lval_str(buffer);
+        free(buffer);
+        return result;
       }
 
       FILE* old_stdout = stdout;
@@ -2631,12 +2701,91 @@ static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
       stdout = old_stdout;
       fclose(stream);
 
-      offset += strlen(buffer + offset);
+      size_t written = strlen(buffer + offset);
+      offset += written;
+      remaining -= written;
     }
   }
 
   buffer[offset] = '\0';
-  return valk_lval_str(buffer);
+  valk_lval_t* result = valk_lval_str(buffer);
+  free(buffer);
+  return result;
+}
+
+// (make-string count char)    -> string of count copies of char
+// (make-string count "str")   -> string of count copies of str
+// Used for efficiently creating large strings, e.g., for testing
+static valk_lval_t* valk_builtin_make_string(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+
+  valk_lval_t* count_val = valk_lval_list_nth(a, 0);
+  valk_lval_t* pattern_val = valk_lval_list_nth(a, 1);
+
+  LVAL_ASSERT(a, LVAL_TYPE(count_val) == LVAL_NUM,
+              "make-string: first argument must be a number");
+
+  long count = count_val->num;
+  if (count < 0) {
+    return valk_lval_err("make-string: count must be non-negative");
+  }
+  if (count == 0) {
+    return valk_lval_str("");
+  }
+
+  // Get the pattern to repeat
+  const char* pattern;
+  size_t pattern_len;
+
+  if (LVAL_TYPE(pattern_val) == LVAL_STR) {
+    pattern = pattern_val->str;
+    pattern_len = strlen(pattern);
+  } else if (LVAL_TYPE(pattern_val) == LVAL_NUM) {
+    // Treat as ASCII character code
+    static char char_buf[2];
+    char_buf[0] = (char)pattern_val->num;
+    char_buf[1] = '\0';
+    pattern = char_buf;
+    pattern_len = 1;
+  } else {
+    return valk_lval_err("make-string: second argument must be string or number (char code)");
+  }
+
+  if (pattern_len == 0) {
+    return valk_lval_str("");
+  }
+
+  // Calculate total size needed
+  size_t total_size = (size_t)count * pattern_len;
+
+  // Sanity check - don't allocate more than 100MB
+  if (total_size > 100 * 1024 * 1024) {
+    return valk_lval_err("make-string: requested size %zu exceeds 100MB limit", total_size);
+  }
+
+  // Allocate the result string directly in the GC heap
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  res->flags = LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+  VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->str = valk_mem_alloc(total_size + 1);
+
+  // Fill the buffer efficiently
+  if (pattern_len == 1) {
+    // Fast path for single character
+    memset(res->str, pattern[0], total_size);
+  } else {
+    // Multi-character pattern
+    char* ptr = res->str;
+    for (long i = 0; i < count; i++) {
+      memcpy(ptr, pattern, pattern_len);
+      ptr += pattern_len;
+    }
+  }
+  res->str[total_size] = '\0';
+
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
+  return res;
 }
 
 // Get current time in microseconds
@@ -3383,8 +3532,10 @@ static valk_lval_t* valk_builtin_aio_metrics_json(valk_lenv_t* e,
 
 #ifdef VALK_METRICS_ENABLED
   valk_aio_system_t* sys = aio_ref->ref.ptr;
+  valk_aio_update_queue_stats(sys);  // Update queue stats before reading metrics
   valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
-  char* json = valk_aio_metrics_to_json(metrics, (struct valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  valk_aio_system_stats_t* system_stats = valk_aio_get_system_stats(sys);
+  char* json = valk_aio_combined_to_json(metrics, system_stats, (struct valk_mem_allocator_t*)valk_thread_ctx.allocator);
   return valk_lval_str(json);
 #else
   return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
@@ -3407,6 +3558,56 @@ static valk_lval_t* valk_builtin_aio_metrics_prometheus(valk_lenv_t* e,
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
   char* prom = valk_aio_metrics_to_prometheus(metrics, (struct valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  return valk_lval_str(prom);
+#else
+  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
+// ============================================================================
+// VM METRICS BUILTINS (GC, Interpreter, Event Loop)
+// ============================================================================
+
+// vm/metrics-json: (vm/metrics-json) -> JSON string
+// Returns combined VM metrics (GC, interpreter, event loop) as JSON
+static valk_lval_t* valk_builtin_vm_metrics_json(valk_lenv_t* e,
+                                                  valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 0);
+
+#ifdef VALK_METRICS_ENABLED
+  valk_vm_metrics_t vm;
+  valk_vm_metrics_collect(&vm,
+    (valk_gc_malloc_heap_t*)valk_thread_ctx.heap,
+    valk_aio_active_system ? valk_aio_get_event_loop(valk_aio_active_system) : NULL);
+
+  char* json = valk_vm_metrics_to_json(&vm, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  if (!json) {
+    return valk_lval_err("Failed to generate VM metrics JSON");
+  }
+  return valk_lval_str(json);
+#else
+  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
+// vm/metrics-prometheus: (vm/metrics-prometheus) -> Prometheus text
+// Returns VM metrics in Prometheus exposition format
+static valk_lval_t* valk_builtin_vm_metrics_prometheus(valk_lenv_t* e,
+                                                        valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 0);
+
+#ifdef VALK_METRICS_ENABLED
+  valk_vm_metrics_t vm;
+  valk_vm_metrics_collect(&vm,
+    (valk_gc_malloc_heap_t*)valk_thread_ctx.heap,
+    valk_aio_active_system ? valk_aio_get_event_loop(valk_aio_active_system) : NULL);
+
+  char* prom = valk_vm_metrics_to_prometheus(&vm, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  if (!prom) {
+    return valk_lval_err("Failed to generate VM metrics Prometheus");
+  }
   return valk_lval_str(prom);
 #else
   return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
@@ -3529,6 +3730,75 @@ static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
 // module: (module value) -> value; captures as VALK_LAST_MODULE
 // (no module/program builtins; use VALK_LAST_VALUE set by `load`)
 
+#ifdef VALK_METRICS_ENABLED
+
+// (metrics/json) -> string
+// Returns JSON representation of all metrics
+static valk_lval_t* builtin_metrics_json(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 0);
+
+  char buf[65536];
+  size_t len = valk_metrics_json(buf, sizeof(buf));
+  return valk_lval_str_n(buf, len);
+}
+
+// (metrics/prometheus) -> string
+// Returns Prometheus format representation of all metrics
+static valk_lval_t* builtin_metrics_prometheus(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 0);
+
+  char buf[65536];
+  size_t len = valk_metrics_prometheus(buf, sizeof(buf));
+  return valk_lval_str_n(buf, len);
+}
+
+// (metrics/counter-inc "name" "key1" "val1" "key2" "val2" ...) -> nil
+// Increments a counter with optional labels
+static valk_lval_t* builtin_metrics_counter_inc(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_GE(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  const char* name = valk_lval_list_nth(a, 0)->str;
+
+  // Build label arrays from remaining args (must be pairs)
+  size_t remaining_args = valk_lval_list_count(a) - 1;
+  if (remaining_args % 2 != 0) {
+    LVAL_RAISE(a, "metrics/counter-inc: labels must be key-value pairs");
+  }
+
+  size_t label_count = remaining_args / 2;
+  if (label_count > VALK_METRICS_MAX_LABELS) {
+    LVAL_RAISE(a, "metrics/counter-inc: too many labels (max %d)",
+               VALK_METRICS_MAX_LABELS);
+  }
+
+  const char* keys[VALK_METRICS_MAX_LABELS];
+  const char* vals[VALK_METRICS_MAX_LABELS];
+
+  for (size_t i = 0; i < label_count; i++) {
+    valk_lval_t* key = valk_lval_list_nth(a, 1 + i * 2);
+    valk_lval_t* val = valk_lval_list_nth(a, 2 + i * 2);
+
+    LVAL_ASSERT_TYPE(a, key, LVAL_STR);
+    LVAL_ASSERT_TYPE(a, val, LVAL_STR);
+
+    keys[i] = key->str;
+    vals[i] = val->str;
+  }
+
+  valk_counter_t* c = valk_metric_counter_labels(name, keys, vals, label_count);
+  if (c) {
+    valk_counter_inc(c);
+  }
+
+  return valk_lval_nil();
+}
+
+#endif // VALK_METRICS_ENABLED
+
 void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
   valk_lenv_put_builtin(env, "error?", valk_builtin_error_p);
@@ -3538,6 +3808,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "printf", valk_builtin_printf);
   valk_lenv_put_builtin(env, "println", valk_builtin_println);
   valk_lenv_put_builtin(env, "str", valk_builtin_str);
+  valk_lenv_put_builtin(env, "make-string", valk_builtin_make_string);
   valk_lenv_put_builtin(env, "time-us", valk_builtin_time_us);
   valk_lenv_put_builtin(env, "stack-depth", valk_builtin_stack_depth);
 
@@ -3604,6 +3875,11 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "aio/metrics-prometheus",
                         valk_builtin_aio_metrics_prometheus);
 
+  // VM Metrics (GC, Interpreter, Event Loop)
+  valk_lenv_put_builtin(env, "vm/metrics-json", valk_builtin_vm_metrics_json);
+  valk_lenv_put_builtin(env, "vm/metrics-prometheus",
+                        valk_builtin_vm_metrics_prometheus);
+
   // HTTP/2 Server
   valk_lenv_put_builtin(env, "http2/server-listen",
                         valk_builtin_http2_server_listen);
@@ -3633,6 +3909,13 @@ void valk_lenv_builtins(valk_lenv_t* env) {
 
   // Logging configuration
   valk_lenv_put_builtin(env, "sys/log/set-level", valk_builtin_set_log_level);
+
+#ifdef VALK_METRICS_ENABLED
+  // Metrics system builtins
+  valk_lenv_put_builtin(env, "metrics/json", builtin_metrics_json);
+  valk_lenv_put_builtin(env, "metrics/prometheus", builtin_metrics_prometheus);
+  valk_lenv_put_builtin(env, "metrics/counter-inc", builtin_metrics_counter_inc);
+#endif
 
   // NOTE: checkpoint is NOT exposed to user code. It can only be called at safe
   // points (between top-level expressions) by the runtime. Calling checkpoint

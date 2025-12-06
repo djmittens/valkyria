@@ -420,14 +420,8 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, size_t bytes) {
       self->stats.overflow_fallbacks++;
       self->stats.overflow_bytes += bytes;
 
-      // Emit warning once per checkpoint cycle
-      if (!self->warned_overflow) {
-        VALK_WARN("Scratch arena full (%zu/%zu bytes, %.1f%%), "
-                  "falling back to heap. Consider increasing SCRATCH_ARENA_BYTES.",
-                  self->offset, self->capacity,
-                  100.0 * self->offset / self->capacity);
-        self->warned_overflow = true;
-      }
+      // Track that overflow occurred (logged at checkpoint)
+      self->warned_overflow = true;
 
       // Allocate from heap instead - value will have LVAL_ALLOC_HEAP flag
       // and will be in GC object list, so no evacuation needed
