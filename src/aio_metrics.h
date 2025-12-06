@@ -28,6 +28,8 @@ typedef struct {
   _Atomic uint64_t connections_total;
   _Atomic uint64_t connections_active;
   _Atomic uint64_t connections_failed;
+  _Atomic uint64_t connections_rejected;       // Rejected at connection limit
+  _Atomic uint64_t connections_rejected_load;  // Rejected due to buffer pressure
   _Atomic uint64_t streams_total;
   _Atomic uint64_t streams_active;
 
@@ -59,6 +61,9 @@ typedef struct {
   // Overflow tracking (cumulative)
   _Atomic uint64_t arena_pool_overflow;     // Arena acquire failures
   _Atomic uint64_t tcp_buffer_overflow;      // TCP buffer acquire failures
+
+  // Load shedding
+  _Atomic uint64_t connections_rejected_load;  // Rejected due to buffer pressure
 } valk_aio_system_stats_t;
 
 // Forward declaration for libuv loop

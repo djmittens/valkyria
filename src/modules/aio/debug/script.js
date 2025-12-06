@@ -201,10 +201,16 @@
     html += '</div>';
 
     // Memory Pools card
+    var bufUtil = sys.tcp_buffers_total > 0
+      ? ((sys.tcp_buffers_used / sys.tcp_buffers_total) * 100).toFixed(1)
+      : 0;
+    var bufClass = bufUtil > 95 ? 'red' : bufUtil > 85 ? 'ylw' : bufUtil > 50 ? 'blu' : '';
+
     html += '<div class="sub-card">';
     html += '<h3>Memory Pools</h3>';
     html += row('Stream Arenas', (sys.arenas_used || 0) + '/' + (sys.arenas_total || 0));
     html += row('TCP Buffers', (sys.tcp_buffers_used || 0) + '/' + (sys.tcp_buffers_total || 0));
+    html += row('Buffer Util', bufUtil + '%', bufClass);
     html += '</div>';
 
     // Event Loop card (libuv metrics)
@@ -221,6 +227,16 @@
     html += row('Queue Depth', sys.queue_depth || 0);
     html += row('Pending Reqs', sys.pending_requests || 0);
     html += row('Pending Resp', sys.pending_responses || 0);
+    html += '</div>';
+
+    // Backpressure Status card
+    html += '<div class="sub-card">';
+    html += '<h3>Backpressure</h3>';
+    var bpSize = sys.backpressure_list_size || 0;
+    html += row('Paused Conns', bpSize, bpSize > 0 ? 'ylw' : '');
+    var connAvail = sys.conn_slab_available || 0;
+    var connTotal = sys.conn_slab_total || 0;
+    html += row('Conn Slots', connAvail + '/' + connTotal);
     html += '</div>';
 
     html += '</div>'; // sub-grid
@@ -249,6 +265,8 @@
       html += row('Active', c.active || 0, c.active > 0 ? 'grn' : '');
       html += row('Total', c.total || 0);
       html += row('Failed', c.failed || 0, c.failed > 0 ? 'red' : '');
+      html += row('Rejected (Limit)', c.rejected || 0, c.rejected > 0 ? 'ylw' : '');
+      html += row('Rejected (Load)', c.rejected_load || 0, c.rejected_load > 0 ? 'ylw' : '');
       html += '</div>';
 
       // Streams card

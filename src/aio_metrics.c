@@ -23,6 +23,8 @@ void valk_aio_metrics_init(valk_aio_metrics_t* m) {
   atomic_store(&m->connections_total, 0);
   atomic_store(&m->connections_active, 0);
   atomic_store(&m->connections_failed, 0);
+  atomic_store(&m->connections_rejected, 0);
+  atomic_store(&m->connections_rejected_load, 0);
   atomic_store(&m->streams_total, 0);
   atomic_store(&m->streams_active, 0);
 
@@ -350,6 +352,8 @@ char* valk_aio_combined_to_json(const valk_aio_metrics_t* m,
   uint64_t connections_total = atomic_load(&m->connections_total);
   uint64_t connections_active = atomic_load(&m->connections_active);
   uint64_t connections_failed = atomic_load(&m->connections_failed);
+  uint64_t connections_rejected = atomic_load(&m->connections_rejected);
+  uint64_t connections_rejected_load = atomic_load(&m->connections_rejected_load);
   uint64_t streams_total = atomic_load(&m->streams_total);
   uint64_t streams_active = atomic_load(&m->streams_active);
 
@@ -410,7 +414,9 @@ char* valk_aio_combined_to_json(const valk_aio_metrics_t* m,
     "  \"connections\": {\n"
     "    \"total\": %lu,\n"
     "    \"active\": %lu,\n"
-    "    \"failed\": %lu\n"
+    "    \"failed\": %lu,\n"
+    "    \"rejected\": %lu,\n"
+    "    \"rejected_load\": %lu\n"
     "  },\n"
     "  \"streams\": {\n"
     "    \"total\": %lu,\n"
@@ -429,6 +435,7 @@ char* valk_aio_combined_to_json(const valk_aio_metrics_t* m,
     tcp_buffers_used, s->tcp_buffers_total,
     queue_depth, pending_requests, pending_responses,
     connections_total, connections_active, connections_failed,
+    connections_rejected, connections_rejected_load,
     streams_total, streams_active,
     bytes_sent_total, bytes_recv_total, sent_rate_kbps, recv_rate_kbps
   );

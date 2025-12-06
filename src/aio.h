@@ -121,6 +121,11 @@ typedef struct valk_aio_system_config {
   // MEMORY SIZING
   size_t   arena_size;               // Default: 64MB per arena
   size_t   max_request_body_size;    // Default: 8MB (required - requests are buffered)
+
+  // BACKPRESSURE SETTINGS
+  float    buffer_high_watermark;     // Default: 0.85 (85%) - start load shedding
+  float    buffer_critical_watermark; // Default: 0.95 (95%) - reject all new conns
+  uint32_t min_buffers_per_conn;      // Default: 4 (BUFFERS_PER_CONNECTION)
 } valk_aio_system_config_t;
 
 // Default system configuration

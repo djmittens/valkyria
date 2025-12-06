@@ -220,13 +220,25 @@ typedef struct valk_aio_http_conn {
 // Linked list of connections under backpressure (waiting for TCP buffers)
 // Thread-local since event loop is single-threaded
 static __thread struct valk_aio_http_conn *backpressure_list_head = NULL;
+static __thread size_t backpressure_list_size = 0;
+#define BACKPRESSURE_LIST_MAX_SIZE 1000
 
 // Add connection to backpressure list
 static void __backpressure_list_add(struct valk_aio_http_conn *conn) {
   if (conn->backpressure) return;  // Already in list
+
+  // Check if list is at capacity - log warning
+  // TODO(networking): Implement eviction policy when list reaches max size
+  if (backpressure_list_size >= BACKPRESSURE_LIST_MAX_SIZE) {
+    VALK_WARN("Backpressure list at maximum size (%zu), cannot add more connections",
+              BACKPRESSURE_LIST_MAX_SIZE);
+    return;  // Don't add to list if at capacity
+  }
+
   conn->backpressure = true;
   conn->backpressure_next = backpressure_list_head;
   backpressure_list_head = conn;
+  backpressure_list_size++;
 }
 
 // Remove connection from backpressure list
@@ -240,6 +252,7 @@ static void __backpressure_list_remove(struct valk_aio_http_conn *conn) {
     if (*pp == conn) {
       *pp = conn->backpressure_next;
       conn->backpressure_next = NULL;
+      backpressure_list_size--;
       return;
     }
     pp = &(*pp)->backpressure_next;
@@ -258,7 +271,23 @@ static void __backpressure_try_resume_one(void) {
 
   // Check available buffers - only resume if we have headroom
   size_t available = valk_slab_available(tcp_buffer_slab);
-  if (available < BUFFERS_PER_CONNECTION) {
+  size_t total = tcp_buffer_slab->numItems;
+  float usage = 1.0f - ((float)available / total);
+
+  // Adaptive resume threshold based on current pressure
+  uint32_t min_buffers;
+  if (usage < 0.5f) {
+    // Low pressure: resume aggressively
+    min_buffers = 2;
+  } else if (usage < 0.75f) {
+    // Medium pressure: normal threshold
+    min_buffers = BUFFERS_PER_CONNECTION;
+  } else {
+    // High pressure: conservative threshold
+    min_buffers = BUFFERS_PER_CONNECTION * 2;
+  }
+
+  if (available < min_buffers) {
     // Not enough buffers to safely resume - wait for more to free
     return;
   }
@@ -267,7 +296,7 @@ static void __backpressure_try_resume_one(void) {
   // Leave some buffer headroom (25%) for active connections
   size_t headroom = available / 4;
   size_t usable = available - headroom;
-  size_t max_resume = usable / BUFFERS_PER_CONNECTION;
+  size_t max_resume = usable / min_buffers;
   if (max_resume == 0) max_resume = 1;
 
   size_t resumed = 0;
@@ -278,6 +307,7 @@ static void __backpressure_try_resume_one(void) {
     backpressure_list_head = conn->backpressure_next;
     conn->backpressure_next = NULL;
     conn->backpressure = false;
+    backpressure_list_size--;
 
     // Resume reading if connection is still valid
     if (conn->state == VALK_CONN_ESTABLISHED) {
@@ -288,8 +318,8 @@ static void __backpressure_try_resume_one(void) {
   }
 
   if (resumed > 0) {
-    VALK_DEBUG("Resumed %zu backpressured connections (available buffers: %zu)",
-               resumed, available);
+    VALK_DEBUG("Resumed %zu backpressured connections (available buffers: %zu, usage: %.1f%%)",
+               resumed, available, usage * 100);
   }
 }
 
@@ -1605,6 +1635,54 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
   valk_aio_handle_t *hndl = stream->data;
   valk_aio_http_server *srv = hndl->arg;
 
+  // Load shedding: check buffer pool usage before accepting
+  size_t available = valk_slab_available(tcp_buffer_slab);
+  size_t total = tcp_buffer_slab->numItems;
+  float usage = 1.0f - ((float)available / total);
+
+  // Get watermarks from config (use defaults if zero)
+  float high_watermark = srv->sys->config.buffer_high_watermark;
+  float critical_watermark = srv->sys->config.buffer_critical_watermark;
+  if (high_watermark <= 0.0f) high_watermark = 0.85f;
+  if (critical_watermark <= 0.0f) critical_watermark = 0.95f;
+
+  // Critical: reject all new connections
+  if (usage >= critical_watermark) {
+    VALK_WARN("Load shedding: rejecting connection (buffer usage %.1f%% >= critical %.1f%%)",
+              usage * 100, critical_watermark * 100);
+#ifdef VALK_METRICS_ENABLED
+    atomic_fetch_add(&srv->sys->system_stats.connections_rejected_load, 1);
+#endif
+    // Accept and immediately close with a TCP RST to signal overload
+    uv_tcp_t temp_tcp;
+    uv_tcp_init(stream->loop, &temp_tcp);
+    if (uv_accept(stream, (uv_stream_t *)&temp_tcp) == 0) {
+      // Send RST by closing without graceful shutdown
+      uv_close((uv_handle_t *)&temp_tcp, NULL);
+    }
+    return;
+  }
+
+  // High watermark: probabilistic load shedding
+  if (usage >= high_watermark) {
+    // Linear probability from 0% at high_watermark to 100% at critical_watermark
+    float shed_probability = (usage - high_watermark) / (critical_watermark - high_watermark);
+    float random_val = (float)rand() / (float)RAND_MAX;
+    if (random_val < shed_probability) {
+      VALK_WARN("Load shedding: probabilistically rejecting connection (buffer usage %.1f%%, p=%.2f)",
+                usage * 100, shed_probability);
+#ifdef VALK_METRICS_ENABLED
+      atomic_fetch_add(&srv->sys->system_stats.connections_rejected_load, 1);
+#endif
+      uv_tcp_t temp_tcp;
+      uv_tcp_init(stream->loop, &temp_tcp);
+      if (uv_accept(stream, (uv_stream_t *)&temp_tcp) == 0) {
+        uv_close((uv_handle_t *)&temp_tcp, NULL);
+      }
+      return;
+    }
+  }
+
   struct valk_aio_http_conn *conn = malloc(sizeof(struct valk_aio_http_conn));
   if (!conn) {
     VALK_ERROR("Failed to allocate connection");
@@ -2688,6 +2766,22 @@ int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
 
   if (cfg->queue_capacity == 0)
     cfg->queue_capacity = cfg->max_connections * 2;
+
+  // Backpressure defaults
+  if (cfg->buffer_high_watermark == 0.0f)
+    cfg->buffer_high_watermark = 0.85f;
+
+  if (cfg->buffer_critical_watermark == 0.0f)
+    cfg->buffer_critical_watermark = 0.95f;
+
+  if (cfg->min_buffers_per_conn == 0)
+    cfg->min_buffers_per_conn = BUFFERS_PER_CONNECTION;
+
+  // Validate watermarks
+  if (cfg->buffer_high_watermark >= cfg->buffer_critical_watermark) {
+    fprintf(stderr, "AIO config error: buffer_high_watermark must be < buffer_critical_watermark\n");
+    return -1;
+  }
 
   // Validate
   const char *err = valk_aio_system_config_validate(cfg);
