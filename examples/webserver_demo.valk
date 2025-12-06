@@ -51,21 +51,44 @@
 ; operations including HTTP/2 networking. It wraps libuv's event loop.
 ;
 ; Key Functions:
-;   (aio/start)    - Creates and initializes a new AIO system
-;   (aio/run sys)  - Runs the event loop (blocks until interrupted)
+;   (aio/start)         - Creates AIO system with default config (100 connections)
+;   (aio/start config)  - Creates AIO system with custom configuration
+;   (aio/run sys)       - Runs the event loop (blocks until interrupted)
 ;
-; Note: The REPL automatically creates a global 'aio' variable for convenience.
-; In a standalone script, you would call (aio/start) yourself.
+; Configuration Options (two primary tuning parameters):
+;   :max-connections          - Maximum concurrent TCP connections (default: 100)
+;   :max-concurrent-streams   - HTTP/2 streams per connection (default: 100)
+;
+; Derived settings (auto-calculated if not specified):
+;   :tcp-buffer-pool-size     - TCP buffer slab size (default: max_conn × (2 + streams/8))
+;   :arena-pool-size          - Request arena pool size (default: max_conn × 2)
+;   :arena-size               - Size of each arena in bytes (default: 64MB)
+;   :max-request-body-size    - Max request body size (default: 8MB)
 
 (println "→ Initializing Async I/O System")
 (println "  • Using libuv for event loop management")
 (println "  • Background thread handles all I/O operations")
 
-; Use the REPL's pre-created AIO system (singleton pattern)
-; If running outside REPL, you'd use: (def {sys} (aio/start))
-(def {sys} aio)
+; Configure the AIO system for high concurrency
+; NOTE: If running via REPL, the REPL pre-creates an AIO system with defaults.
+;       To use custom config, run with: VALK_DISABLE_AIO=1 build/valk examples/webserver_demo.valk
+;
+; With 500 connections and 100 streams per connection, the system auto-derives:
+;   tcp-buffer-pool-size = 500 × (2 + 100/8) = 7,250 buffers
+;   arena-pool-size = 500 × 2 = 1,000 arenas
+;   queue-capacity = 500 × 2 = 1,000
+;
+; For extreme load testing (e.g., hey -n 5000000 -c 500), override tcp-buffer-pool-size
+; to handle the burst of concurrent TLS handshakes and HTTP/2 streams.
+(def {sys} (aio/start {:max-connections 500
+                       :max-concurrent-streams 100
+                       :tcp-buffer-pool-size 20000}))  ; Override for extreme load
 
 (println "  ✓ AIO system ready")
+(println "    • max-connections: 500")
+(println "    • max-concurrent-streams: 100 per connection")
+(println "    • tcp-buffer-pool-size: 20000 (override for load testing)")
+(println "    • arena-pool-size: 1000 (auto-derived)")
 (println "")
 
 ; ──────────────────────────────────────────────────────────────────────────────

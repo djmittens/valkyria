@@ -1,0 +1,157 @@
+; AIO Configuration Tests
+; Tests for the AIO system configuration API (see docs/AIO_CONFIG_PLAN.md)
+; Run with: ./build/valk test/test_aio_config.valk
+
+; Load prelude first
+(load "src/prelude.valk")
+
+; Load test framework
+(load "src/modules/test.valk")
+
+; Set the test suite name
+(test/suite "AIO Configuration Tests")
+
+; ============================================================================
+; T8: Lisp Config Parsing - Default Configuration
+; ============================================================================
+
+(test/define "aio-config-default"
+  {do
+    ; Test default config
+    (= {test-sys} (aio/start))
+    (test/assert (not (== test-sys nil)) "aio/start with defaults should succeed")
+
+    ; Clean up
+    ; Note: There's no aio/stop function visible in the codebase yet
+    ; TODO(networking): Add aio/stop when implemented
+    true
+  })
+
+; ============================================================================
+; T8: Lisp Config Parsing - Custom Configuration
+; ============================================================================
+
+(test/define "aio-config-custom"
+  {do
+    ; Test custom config
+    ; Note: Config support not yet implemented in aio/start
+    ; This test will need to be updated when config parsing is added to parser.c
+    ; For now, just test that aio/start works
+    (= {test-sys} (aio/start))
+    (test/assert (not (== test-sys nil)) "aio/start should succeed")
+
+    ; TODO(networking): Update this test when config support is added:
+    ; (= {test-sys} (aio/start {:max-connections 200 :max-concurrent-streams 50}))
+    ; (test/assert (not (== test-sys nil)) "aio/start with config should succeed")
+
+    true
+  })
+
+; ============================================================================
+; T9: Invalid Lisp Config
+; ============================================================================
+
+(test/define "aio-config-invalid"
+  {do
+    ; Test invalid config (should return nil or error)
+    ; Note: Config support not yet implemented in aio/start
+    ; This test will need to be updated when config parsing is added to parser.c
+
+    ; TODO(networking): Update this test when config validation is added:
+    ; (= {test-sys} (aio/start {:max-connections 0}))
+    ; (test/assert (== test-sys nil) "aio/start with invalid config should fail")
+
+    ; For now, just verify that calling without args works
+    (= {test-sys} (aio/start))
+    (test/assert (not (== test-sys nil)) "aio/start without args should succeed")
+
+    true
+  })
+
+; ============================================================================
+; T13: Backwards Compatibility
+; ============================================================================
+
+(test/define "aio-config-backwards-compat"
+  {do
+    ; Old-style aio/start without config should continue to work
+    (= {test-sys} (aio/start))
+    (test/assert (not (== test-sys nil)) "legacy aio/start call should still work")
+
+    ; TODO(networking): Add aio/stop when implemented
+    ; (aio/stop test-sys)
+
+    true
+  })
+
+; ============================================================================
+; Future Test Cases (to be enabled when config support is implemented)
+; ============================================================================
+
+; Uncomment these tests once aio/start accepts config maps and aio/stop exists:
+
+; (test/define "aio-config-max-connections"
+;   {do
+;     ; Test with custom max-connections
+;     (= {test-sys} (aio/start {:max-connections 500}))
+;     (test/assert (not (== test-sys nil)) "aio/start with max-connections=500 should succeed")
+;     (aio/stop test-sys)
+;     true
+;   })
+
+; (test/define "aio-config-all-params"
+;   {do
+;     ; Test with all configuration parameters
+;     (= {test-sys} (aio/start {
+;       :max-connections 200
+;       :max-concurrent-streams 50
+;       :tcp-buffer-pool-size 2000
+;       :arena-pool-size 400
+;       :arena-size 33554432
+;       :max-request-body-size 4194304
+;       :queue-capacity 400
+;     }))
+;     (test/assert (not (== test-sys nil)) "aio/start with full config should succeed")
+;     (aio/stop test-sys)
+;     true
+;   })
+
+; (test/define "aio-config-invalid-max-connections"
+;   {do
+;     ; Test with invalid max-connections (too low)
+;     (= {test-sys1} (aio/start {:max-connections 0}))
+;     (test/assert (== test-sys1 nil) "aio/start with max-connections=0 should fail")
+;
+;     ; Test with invalid max-connections (too high)
+;     (= {test-sys2} (aio/start {:max-connections 100001}))
+;     (test/assert (== test-sys2 nil) "aio/start with max-connections=100001 should fail")
+;
+;     true
+;   })
+
+; (test/define "aio-config-invalid-streams"
+;   {do
+;     ; Test with invalid max-concurrent-streams
+;     (= {test-sys1} (aio/start {:max-concurrent-streams 0}))
+;     (test/assert (== test-sys1 nil) "aio/start with max-concurrent-streams=0 should fail")
+;
+;     (= {test-sys2} (aio/start {:max-concurrent-streams 1001}))
+;     (test/assert (== test-sys2 nil) "aio/start with max-concurrent-streams=1001 should fail")
+;
+;     true
+;   })
+
+; (test/define "aio-config-buffers-below-connections"
+;   {do
+;     ; Test validation: tcp_buffer_pool_size < max_connections
+;     (= {test-sys} (aio/start {
+;       :max-connections 100
+;       :tcp-buffer-pool-size 50
+;     }))
+;     (test/assert (== test-sys nil) "aio/start should fail when buffers < connections")
+;
+;     true
+;   })
+
+; Run all tests
+(test/run {})

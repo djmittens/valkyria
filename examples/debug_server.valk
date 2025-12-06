@@ -16,10 +16,15 @@
 (println "════════════════════════════════════════════════════════════════")
 (println "")
 
-; Initialize the AIO system
+; Initialize the AIO system with custom configuration
+; The two primary tuning parameters are:
+;   :max-connections        - Maximum concurrent TCP connections
+;   :max-concurrent-streams - HTTP/2 streams per connection
+; Other settings are auto-derived from these values
 (println "→ Initializing Async I/O System")
-(def {sys} aio)  ; Use REPL's pre-created AIO system
-(println "  ✓ AIO system ready")
+(def {sys} (aio/start {:max-connections 200
+                       :max-concurrent-streams 100}))
+(println "  ✓ AIO system ready (200 connections, 100 streams/conn)")
 (println "")
 
 ; Define application routes
@@ -27,7 +32,7 @@
 
 ; Simple application handler for the home page
 (def {app-handler}
-  (\ {req}
+  (\ {req} {
     (= {path} (plist/get req (head {:path})))
 
     ; Handle application routes
@@ -57,7 +62,8 @@
                     "<p><strong>Architecture:</strong> Valkyria Lisp + libuv + nghttp2 + OpenSSL</p>"
                     "</div>"
                     "</body></html>")}
-      nil)))
+      nil)
+  }))
 
 (println "  ✓ Application handler defined")
 (println "")
@@ -68,14 +74,15 @@
 (def {debug-handler} (aio/debug-handler sys))
 
 (def {combined-handler}
-  (\ {req}
+  (\ {req} {
     ; Try debug handler first
     (= {debug-response} (debug-handler req))
 
     ; If debug handler returned nil, use app handler
     (if (== debug-response nil)
       (app-handler req)
-      debug-response)))
+      debug-response)
+  }))
 
 (println "  ✓ Combined handler ready")
 (println "")

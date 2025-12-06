@@ -226,6 +226,7 @@ void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
   }
   __atomic_store_n(&self->head, 0, __ATOMIC_RELAXED);
   __atomic_store_n(&self->numFree, numItems, __ATOMIC_RELAXED);
+  __atomic_store_n(&self->overflowCount, 0, __ATOMIC_RELAXED);
 }
 
 // TODO(networking): do we even need this? might be useful for debugging
@@ -273,6 +274,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   do {
     expected = __atomic_load_n(&self->numFree, __ATOMIC_ACQUIRE);
     if (expected == 0) {
+      __atomic_fetch_add(&self->overflowCount, 1, __ATOMIC_RELAXED);
       return NULL;  // Slab exhausted - caller should fall back to malloc
     }
     desired = expected - 1;
@@ -304,6 +306,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
 #else  // Not threadsafe
   // Return NULL when slab is exhausted
   if (self->numFree == 0) {
+    __atomic_fetch_add(&self->overflowCount, 1, __ATOMIC_RELAXED);
     return NULL;
   }
   // pop  free item

@@ -62,6 +62,7 @@
 ;        (handler request) => response map or nil
 (fun {aio/debug-handler sys}
   {
-    (\ {req} {aio/debug-handle-request sys req})
+    (= {captured-sys} sys)
+    (\ {req} {aio/debug-handle-request captured-sys req})
   })
 

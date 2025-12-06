@@ -23,6 +23,8 @@
 // TODO(networking): temp forward declare for debugging
 static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a);
 
+// Forward declaration is in aio.h (valk_aio_http2_listen_with_config)
+
 // GC heap allocator size check - ONLY allocate valk_lval_t structures
 size_t __valk_lval_size = sizeof(valk_lval_t);
 
@@ -491,6 +493,31 @@ valk_lval_t* valk_lval_list_nth(valk_lval_t* list, size_t n) {
     return curr->cons.head;
   }
   return nullptr;
+}
+
+// Get value from property list (plist) by key symbol
+// Plist format: {:key1 val1 :key2 val2 ...}
+static valk_lval_t* valk_plist_get(valk_lval_t* plist, const char* key_str) {
+  if (!plist || LVAL_TYPE(plist) != LVAL_QEXPR) return NULL;
+
+  valk_lval_t* curr = plist;
+  while (curr && LVAL_TYPE(curr) == LVAL_CONS) {
+    if (valk_lval_list_is_empty(curr)) break;
+
+    valk_lval_t* key = curr->cons.head;
+    valk_lval_t* rest = curr->cons.tail;
+
+    if (!rest || valk_lval_list_is_empty(rest)) break;
+
+    valk_lval_t* val = rest->cons.head;
+
+    if (LVAL_TYPE(key) == LVAL_SYM && strcmp(key->str, key_str) == 0) {
+      return val;
+    }
+
+    curr = rest->cons.tail;  // Skip key and value
+  }
+  return NULL;
 }
 
 // Free auxiliary data owned by an lval (strings, arrays allocated with malloc)
@@ -3380,14 +3407,58 @@ static valk_lval_t* valk_builtin_http2_response_headers(valk_lenv_t* e,
 // ============================================================================
 
 // aio/start: () -> aio_system
+// aio/start: ({:max-connections N ...}) -> aio_system
 // Creates and starts the async I/O system (libuv event loop)
+// Optional config map can specify:
+//   :max-connections          - Primary tuning parameter (default: 100)
+//   :max-concurrent-streams   - Primary tuning parameter (default: 100)
+//   :tcp-buffer-pool-size     - Override derived value
+//   :arena-pool-size          - Override derived value
+//   :arena-size               - Override derived value (bytes)
+//   :max-request-body-size    - Override derived value (bytes)
 static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 0);
+  int argc = valk_lval_list_count(a);
+  LVAL_ASSERT(a, argc == 0 || argc == 1, "Expected 0 or 1 arguments");
 
   // AIO system must be allocated with malloc, not arena
   valk_aio_system_t* sys;
-  VALK_WITH_ALLOC(&valk_malloc_allocator) { sys = valk_aio_start(); }
+
+  // Check if config map provided
+  if (argc >= 1 && LVAL_TYPE(valk_lval_list_nth(a, 0)) == LVAL_QEXPR) {
+    valk_lval_t* config_map = valk_lval_list_nth(a, 0);
+    valk_aio_system_config_t config = valk_aio_system_config_default();
+
+    // Parse configuration options from plist
+    valk_lval_t* val;
+
+    if ((val = valk_plist_get(config_map, ":max-connections")) && LVAL_TYPE(val) == LVAL_NUM)
+      config.max_connections = (uint32_t)val->num;
+
+    if ((val = valk_plist_get(config_map, ":max-concurrent-streams")) && LVAL_TYPE(val) == LVAL_NUM)
+      config.max_concurrent_streams = (uint32_t)val->num;
+
+    if ((val = valk_plist_get(config_map, ":tcp-buffer-pool-size")) && LVAL_TYPE(val) == LVAL_NUM)
+      config.tcp_buffer_pool_size = (uint32_t)val->num;
+
+    if ((val = valk_plist_get(config_map, ":arena-pool-size")) && LVAL_TYPE(val) == LVAL_NUM)
+      config.arena_pool_size = (uint32_t)val->num;
+
+    if ((val = valk_plist_get(config_map, ":arena-size")) && LVAL_TYPE(val) == LVAL_NUM)
+      config.arena_size = (size_t)val->num;
+
+    if ((val = valk_plist_get(config_map, ":max-request-body-size")) && LVAL_TYPE(val) == LVAL_NUM)
+      config.max_request_body_size = (size_t)val->num;
+
+    VALK_WITH_ALLOC(&valk_malloc_allocator) {
+      sys = valk_aio_start_with_config(&config);
+    }
+  } else {
+    // No config provided, use defaults
+    VALK_WITH_ALLOC(&valk_malloc_allocator) {
+      sys = valk_aio_start_with_config(NULL);
+    }
+  }
 
   if (!sys) {
     return valk_lval_err("Failed to start AIO system");
@@ -3618,14 +3689,15 @@ static valk_lval_t* valk_builtin_vm_metrics_prometheus(valk_lenv_t* e,
 // HTTP/2 SERVER BUILTINS
 // ============================================================================
 
-// http2/server-listen: (http2/server-listen aio port) -> future<server>
-// Creates HTTP/2 server listening on port with default demo handler
-// For now, just uses the built-in C demo handler - we'll add Lisp handlers
-// later
+// http2/server-listen: (http2/server-listen aio port handler [config]) -> nil
+// Creates HTTP/2 server listening on port with Lisp handler
+// Optional config map: {:max-concurrent-streams N :error-handler fn}
 static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e,
                                                      valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  // Accept 3 or 4 arguments
+  size_t argc = valk_lval_list_count(a);
+  LVAL_ASSERT(a, argc >= 3 && argc <= 4,
+              "http2/server-listen expects 3 or 4 arguments, got %zu", argc);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);  // aio system
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);  // port
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_FUN);  // handler lambda
@@ -3634,19 +3706,61 @@ static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e,
   int port = (int)valk_lval_list_nth(a, 1)->num;
   valk_lval_t* handler_fn = valk_lval_list_nth(a, 2);
 
+  // Start with default config
+  valk_http_server_config_t config = valk_http_server_config_default();
+
+  // Parse optional config map
+  if (argc == 4) {
+    valk_lval_t* config_qexpr = valk_lval_list_nth(a, 3);
+    LVAL_ASSERT_TYPE(a, config_qexpr, LVAL_QEXPR);
+
+    valk_lval_t* val;
+
+    // NOTE: max_concurrent_streams is now in system config (aio-start),
+    // not server config. This is intentionally removed.
+
+    // Pre-render error handler at startup
+    val = valk_plist_get(config_qexpr, ":error-handler");
+    if (val && LVAL_TYPE(val) == LVAL_FUN) {
+      // Call (error-handler 503) once at startup to get the body string
+      valk_lval_t* args_arr[] = { valk_lval_num(503) };
+      valk_lval_t* args = valk_lval_list(args_arr, 1);
+
+      valk_lval_t* result = valk_lval_eval_call(e, val, args);
+
+      if (LVAL_TYPE(result) == LVAL_STR) {
+        // Copy rendered body to GC heap for persistence
+        VALK_WITH_ALLOC((valk_mem_allocator_t*)valk_thread_ctx.heap) {
+          size_t len = strlen(result->str);
+          char* body_copy = valk_mem_alloc(len + 1);
+          memcpy(body_copy, result->str, len + 1);
+          config.error_503_body = body_copy;
+          config.error_503_body_len = len;
+        }
+      } else if (LVAL_TYPE(result) == LVAL_ERR) {
+        VALK_WARN("Error handler returned error: %s, using default 503 page",
+                  result->str);
+      } else {
+        VALK_WARN("Error handler must return string, got %s, using default 503 page",
+                  valk_ltype_name(LVAL_TYPE(result)));
+      }
+    }
+  }
+
   // Copy handler to GC heap (shared across requests, lives as long as server)
   valk_lval_t* heap_handler;
   VALK_WITH_ALLOC((valk_mem_allocator_t*)valk_thread_ctx.heap) {
     heap_handler = valk_lval_copy(handler_fn);
   }
 
-  // Start server - pass NULL for C handler since we have Lisp handler
+  // Start server with config
   valk_future* fut =
-      valk_aio_http2_listen(sys,
+      valk_aio_http2_listen_with_config(sys,
                             "0.0.0.0",  // Listen on all interfaces
                             port, "build/server.key", "build/server.crt",
                             NULL,         // No C handler
-                            heap_handler  // Lisp handler
+                            heap_handler, // Lisp handler
+                            &config       // Server config
       );
 
   (void)fut;  // Future unused - server runs in background

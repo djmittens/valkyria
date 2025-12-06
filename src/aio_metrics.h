@@ -55,6 +55,10 @@ typedef struct {
   _Atomic uint64_t queue_depth;         // HTTP queue depth
   _Atomic uint64_t pending_requests;    // Pending HTTP requests
   _Atomic uint64_t pending_responses;   // Pending HTTP responses
+
+  // Overflow tracking (cumulative)
+  _Atomic uint64_t arena_pool_overflow;     // Arena acquire failures
+  _Atomic uint64_t tcp_buffer_overflow;      // TCP buffer acquire failures
 } valk_aio_system_stats_t;
 
 // Forward declaration for libuv loop

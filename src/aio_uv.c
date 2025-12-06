@@ -57,6 +57,7 @@ typedef struct {
   valk_histogram_t* request_duration;
   valk_counter_t* bytes_sent;
   valk_counter_t* bytes_recv;
+  valk_counter_t* overload_responses;
 } valk_server_metrics_t;
 #endif
 
@@ -96,6 +97,11 @@ static valk_gauge_t* client_connections_active = NULL;
 
 static __thread valk_slab_t *tcp_buffer_slab;
 static void __valk_http2_response_free(valk_arc_box *box);
+
+// Forward declarations for backpressure functions (defined after valk_aio_http_conn)
+static void __backpressure_list_add(struct valk_aio_http_conn *conn);
+static void __backpressure_list_remove(struct valk_aio_http_conn *conn);
+static void __backpressure_try_resume_one(void);
 
 typedef struct __http2_req_res_t {
   size_t streamid;
@@ -205,7 +211,87 @@ typedef struct valk_aio_http_conn {
   // nghttp2_session_mem_send2 returns data that must be consumed immediately
   uint8_t *spillover_data;
   size_t spillover_len;
+
+  // Backpressure: true when we stopped reading due to buffer exhaustion
+  bool backpressure;
+  struct valk_aio_http_conn *backpressure_next;  // Next in backpressure list
 } valk_aio_http_conn;
+
+// Linked list of connections under backpressure (waiting for TCP buffers)
+// Thread-local since event loop is single-threaded
+static __thread struct valk_aio_http_conn *backpressure_list_head = NULL;
+
+// Add connection to backpressure list
+static void __backpressure_list_add(struct valk_aio_http_conn *conn) {
+  if (conn->backpressure) return;  // Already in list
+  conn->backpressure = true;
+  conn->backpressure_next = backpressure_list_head;
+  backpressure_list_head = conn;
+}
+
+// Remove connection from backpressure list
+static void __backpressure_list_remove(struct valk_aio_http_conn *conn) {
+  if (!conn->backpressure) return;
+  conn->backpressure = false;
+
+  // Remove from list
+  struct valk_aio_http_conn **pp = &backpressure_list_head;
+  while (*pp) {
+    if (*pp == conn) {
+      *pp = conn->backpressure_next;
+      conn->backpressure_next = NULL;
+      return;
+    }
+    pp = &(*pp)->backpressure_next;
+  }
+}
+
+// Minimum buffers needed per connection to safely resume reading
+// (1 for input, 1 for output, plus margin for TLS/HTTP2 framing)
+#define BUFFERS_PER_CONNECTION 4
+
+// Try to resume backpressured connections based on available buffers
+// Only resumes connections if we have enough buffer headroom to avoid
+// immediate re-exhaustion
+static void __backpressure_try_resume_one(void) {
+  if (!backpressure_list_head) return;
+
+  // Check available buffers - only resume if we have headroom
+  size_t available = valk_slab_available(tcp_buffer_slab);
+  if (available < BUFFERS_PER_CONNECTION) {
+    // Not enough buffers to safely resume - wait for more to free
+    return;
+  }
+
+  // Calculate how many connections we can resume based on available buffers
+  // Leave some buffer headroom (25%) for active connections
+  size_t headroom = available / 4;
+  size_t usable = available - headroom;
+  size_t max_resume = usable / BUFFERS_PER_CONNECTION;
+  if (max_resume == 0) max_resume = 1;
+
+  size_t resumed = 0;
+  while (backpressure_list_head && resumed < max_resume) {
+    struct valk_aio_http_conn *conn = backpressure_list_head;
+
+    // Remove from list
+    backpressure_list_head = conn->backpressure_next;
+    conn->backpressure_next = NULL;
+    conn->backpressure = false;
+
+    // Resume reading if connection is still valid
+    if (conn->state == VALK_CONN_ESTABLISHED) {
+      uv_read_start((uv_stream_t *)&conn->handle->uv.tcp,
+                    __alloc_callback, __http_tcp_read_cb);
+      resumed++;
+    }
+  }
+
+  if (resumed > 0) {
+    VALK_DEBUG("Resumed %zu backpressured connections (available buffers: %zu)",
+               resumed, available);
+  }
+}
 
 // Escape analysis: intern value to GC heap for cross-thread sharing
 // Takes arena-allocated value, returns GC heap-allocated deep copy
@@ -276,6 +362,8 @@ typedef struct {
 } valk_http_queue_t;
 
 typedef struct valk_aio_system {
+  valk_aio_system_config_t config;  // Resolved configuration
+
   // everything  past this point only accessed inside of event loop
   uv_loop_t *eventloop;
   uv_thread_t loopThread;
@@ -285,6 +373,7 @@ typedef struct valk_aio_system {
   valk_slab_t *httpServers;
   valk_slab_t *httpClients;
   valk_slab_t *httpStreamArenas;    // Pool of per-stream arenas
+  valk_slab_t *tcpBufferSlab;       // TCP buffer pool (for metrics access)
 
   valk_slab_t *handleSlab;
   valk_aio_handle_t liveHandles;
@@ -310,6 +399,7 @@ typedef struct valk_aio_http_server {
   valk_http2_handler_t handler;
   valk_lval_t* lisp_handler_fn;  // Lisp lambda for request handling (GC heap)
   valk_lenv_t* sandbox_env;      // Sandbox env that shadows def (created once at startup)
+  valk_http_server_config_t config;  // Server configuration
 #ifdef VALK_METRICS_ENABLED
   valk_server_metrics_t metrics;
 #endif
@@ -348,6 +438,9 @@ static void server_metrics_init(valk_server_metrics_t* m,
 
   m->bytes_recv = valk_metric_counter("http_bytes_recv_total",
     "server", name, "port", port_str, NULL);
+
+  m->overload_responses = valk_metric_counter("http_overload_responses_total",
+    "server", name, "port", port_str, NULL);
 }
 #endif
 
@@ -358,19 +451,22 @@ static void __event_loop(void *arg) {
   // Slab for TCP buffers - must use sizeof the struct we overlay (which
   // includes uv_write_t + uv_buf_t + data buffer), not just the data size
   tcp_buffer_slab =
-      valk_slab_new(sizeof(__tcp_buffer_slab_item_t), HTTP_MAX_IO_REQUESTS);
+      valk_slab_new(sizeof(__tcp_buffer_slab_item_t), sys->config.tcp_buffer_pool_size);
+  sys->tcpBufferSlab = tcp_buffer_slab;  // Store for metrics access
+  VALK_INFO("Initialized %u TCP buffers (%zuKB each)",
+            sys->config.tcp_buffer_pool_size, HTTP_SLAB_ITEM_SIZE / 1024);
 
   // Initialize per-stream arena pool
   // Each slab item contains: valk_mem_arena_t header + arena heap space
   sys->httpStreamArenas = valk_slab_new(
-      sizeof(valk_mem_arena_t) + HTTP_STREAM_ARENA_SIZE,
-      HTTP_STREAM_ARENA_POOL_SIZE);
+      sizeof(valk_mem_arena_t) + sys->config.arena_size,
+      sys->config.arena_pool_size);
   if (!sys->httpStreamArenas) {
     VALK_ERROR("Failed to allocate stream arena slab");
     return;
   }
-  VALK_INFO("Initialized %d stream arenas (%zuKB each)",
-            HTTP_STREAM_ARENA_POOL_SIZE, HTTP_STREAM_ARENA_SIZE / 1024);
+  VALK_INFO("Initialized %u stream arenas (%zuKB each)",
+            sys->config.arena_pool_size, sys->config.arena_size / 1024);
 
   // Run the loop until stop is requested
   uv_run(sys->eventloop, UV_RUN_DEFAULT);
@@ -389,6 +485,9 @@ static void __event_loop(void *arg) {
 static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
   VALK_DEBUG("HTTP/2 disconnect called");
   valk_aio_http_conn *conn = handle->arg;
+
+  // Remove from backpressure list if present
+  __backpressure_list_remove(conn);
 
   // Mark connection as closed to prevent any further operations
   conn->state = VALK_CONN_CLOSED;
@@ -523,6 +622,11 @@ static int __http_on_header_callback(nghttp2_session *session,
   return 0;  // success
 }
 
+// Forward declaration for overload response
+static int __http_send_overload_response(nghttp2_session *session,
+                                          int32_t stream_id,
+                                          valk_aio_http_conn *conn);
+
 static int __http_on_begin_headers_callback(nghttp2_session *session,
                                             const nghttp2_frame *frame,
                                             void *user_data) {
@@ -545,13 +649,23 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
     // Acquire per-stream arena from slab
     valk_slab_item_t *arena_item = valk_slab_aquire(conn->server->sys->httpStreamArenas);
     if (!arena_item) {
-      VALK_ERROR("Stream arena pool exhausted for stream %d", frame->hd.stream_id);
-      // Return error to reject the stream
-      return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+      // Pool exhausted - send 503 response instead of RST_STREAM
+      VALK_WARN("Stream arena pool exhausted for stream %d, sending 503",
+                frame->hd.stream_id);
+      conn->active_streams--;
+
+#ifdef VALK_METRICS_ENABLED
+      // Track overflow in system stats
+      atomic_fetch_add(&conn->server->sys->system_stats.arena_pool_overflow, 1);
+      valk_counter_inc(conn->server->metrics.overload_responses);
+#endif
+
+      __http_send_overload_response(session, frame->hd.stream_id, conn);
+      return 0;  // Success - we handled it with 503
     }
 
     valk_mem_arena_t *stream_arena = (valk_mem_arena_t *)arena_item->data;
-    valk_mem_arena_init(stream_arena, HTTP_STREAM_ARENA_SIZE);
+    valk_mem_arena_init(stream_arena, conn->server->sys->config.arena_size);
 
 #ifdef VALK_METRICS_ENABLED
     // Track arena acquisition
@@ -633,6 +747,9 @@ static void __http_tcp_on_write_cb(uv_write_t *handle, int status) {
 
   valk_slab_release_ptr(tcp_buffer_slab, item);
 
+  // Buffer freed - try to resume a backpressured connection
+  __backpressure_try_resume_one();
+
   // If write succeeded and there's pending data, continue sending
   if (status == 0 && conn && conn->pending_write) {
     __http_continue_pending_send(conn);
@@ -645,6 +762,44 @@ typedef struct {
   size_t body_len;    // Total body length
   size_t offset;      // Current offset (how much sent so far)
 } http_body_source_t;
+
+// Default 503 error page HTML
+static const char valk_http_default_503_html[] =
+  "<!DOCTYPE html>\n"
+  "<html>\n"
+  "<head>\n"
+  "  <title>503 Service Unavailable</title>\n"
+  "  <style>\n"
+  "    body {\n"
+  "      font-family: system-ui, -apple-system, sans-serif;\n"
+  "      max-width: 600px;\n"
+  "      margin: 100px auto;\n"
+  "      padding: 20px;\n"
+  "      text-align: center;\n"
+  "      color: #333;\n"
+  "    }\n"
+  "    h1 {\n"
+  "      font-size: 72px;\n"
+  "      margin: 0;\n"
+  "      color: #e53935;\n"
+  "    }\n"
+  "    p {\n"
+  "      font-size: 18px;\n"
+  "      color: #666;\n"
+  "      margin-top: 20px;\n"
+  "    }\n"
+  "  </style>\n"
+  "</head>\n"
+  "<body>\n"
+  "  <h1>503</h1>\n"
+  "  <p>Server is temporarily at capacity.<br>Please try again shortly.</p>\n"
+  "</body>\n"
+  "</html>\n";
+
+static const size_t valk_http_default_503_html_len = sizeof(valk_http_default_503_html) - 1;
+
+// Thread-local body source for overload responses (event loop is single-threaded)
+static _Thread_local http_body_source_t __overload_body_src;
 
 static nghttp2_ssize __http_byte_body_cb(nghttp2_session *session,
                                          int32_t stream_id, uint8_t *buf,
@@ -695,6 +850,50 @@ static int __demo_response(nghttp2_session *session, int stream_id) {
   return nghttp2_submit_response2(
       session, stream_id, response_headers,
       sizeof(response_headers) / sizeof(response_headers[0]), &data_prd);
+}
+
+// Forward declaration for server config access
+static int __http_send_overload_response(nghttp2_session *session,
+                                          int32_t stream_id,
+                                          valk_aio_http_conn *conn);
+
+// Send HTTP 503 response for overload conditions
+// Uses thread-local storage for body source (safe - event loop is single-threaded)
+static int __http_send_overload_response(nghttp2_session *session,
+                                          int32_t stream_id,
+                                          valk_aio_http_conn *conn) {
+  const char* body;
+  size_t body_len;
+
+  // Use pre-rendered custom body if available, otherwise default
+  if (conn->server->config.error_503_body) {
+    body = conn->server->config.error_503_body;
+    body_len = conn->server->config.error_503_body_len;
+  } else {
+    body = valk_http_default_503_html;
+    body_len = valk_http_default_503_html_len;
+  }
+
+  // Setup thread-local body source
+  __overload_body_src.body = body;
+  __overload_body_src.body_len = body_len;
+  __overload_body_src.offset = 0;
+
+  // Build response headers (stack allocation OK - nghttp2 copies them)
+  nghttp2_nv headers[] = {
+    MAKE_NV2(":status", "503"),
+    MAKE_NV2("content-type", "text/html; charset=utf-8"),
+    MAKE_NV2("retry-after", "1"),
+  };
+
+  // Submit response using nghttp2_data_provider2 (modern API)
+  nghttp2_data_provider2 data_prd = {
+    .source.ptr = &__overload_body_src,
+    .read_callback = __http_byte_body_cb,
+  };
+
+  return nghttp2_submit_response2(session, stream_id, headers,
+                                   sizeof(headers) / sizeof(headers[0]), &data_prd);
 }
 
 // Extract value for a keyword from qexpr like {:key "value" ...}
@@ -1271,8 +1470,19 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
 
   valk_slab_item_t *slabItemRaw = valk_slab_aquire(tcp_buffer_slab);
   if (!slabItemRaw) {
-    VALK_ERROR("TCP buffer slab exhausted - dropping incoming data");
+    // Apply backpressure: stop reading from this connection until buffers free up
+    // This propagates TCP flow control to the client, slowing them down
+    VALK_WARN("TCP buffer slab exhausted - applying backpressure on connection");
+    uv_read_stop((uv_stream_t *)&conn->handle->uv.tcp);
+    __backpressure_list_add(conn);
+
+#ifdef VALK_METRICS_ENABLED
+    atomic_fetch_add(&conn->server->sys->system_stats.tcp_buffer_overflow, 1);
+#endif
+
     valk_slab_release_ptr(tcp_buffer_slab, buf->base);
+    // Try to resume another connection since we just freed a buffer
+    __backpressure_try_resume_one();
     return;
   }
   __tcp_buffer_slab_item_t *slabItem = (void *)slabItemRaw->data;
@@ -1353,9 +1563,9 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   valk_slab_release_ptr(tcp_buffer_slab, In.items);
 }
 
-static int __http_send_server_connection_header(nghttp2_session *session) {
+static int __http_send_server_connection_header(nghttp2_session *session, valk_aio_system_t *sys) {
   nghttp2_settings_entry iv[1] = {
-      {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100}};
+      {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, sys->config.max_concurrent_streams}};
   int rv;
 
   rv = nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv,
@@ -1368,9 +1578,9 @@ static int __http_send_server_connection_header(nghttp2_session *session) {
   return 0;
 }
 
-static int __http_send_client_connection_header(nghttp2_session *session) {
+static int __http_send_client_connection_header(nghttp2_session *session, valk_aio_system_t *sys) {
   nghttp2_settings_entry iv[1] = {
-      {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100}};
+      {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, sys->config.max_concurrent_streams}};
   int rv;
   VALK_DEBUG("[http2 Client] Sending connection frame");
 
@@ -1472,7 +1682,7 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
     valk_aio_ssl_accept(&conn->ssl, srv->ssl_ctx);
 
     // Send settings to the client
-    __http_send_server_connection_header(conn->session);
+    __http_send_server_connection_header(conn->session, srv->sys);
 
     //  TODO(networking): Maybe i should call this on the first read?
     if (conn->httpHandler && conn->httpHandler->onConnect) {
@@ -1671,6 +1881,17 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
                                    const char *keyfile, const char *certfile,
                                    valk_http2_handler_t *handler,
                                    void *lisp_handler) {
+  return valk_aio_http2_listen_with_config(sys, interface, port, keyfile, certfile,
+                                            handler, lisp_handler, NULL);
+}
+
+// HTTP/2 server listen with configuration
+valk_future *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
+                                   const char *interface, const int port,
+                                   const char *keyfile, const char *certfile,
+                                   valk_http2_handler_t *handler,
+                                   void *lisp_handler,
+                                   valk_http_server_config_t *config) {
   valk_arc_box *box = (valk_arc_box *)valk_slab_aquire(sys->httpServers)->data;
   valk_future *res = valk_future_new();
 
@@ -1685,19 +1906,23 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
     memset(srv, 0, sizeof(valk_aio_http_server));
     srv->sys = sys;
 
-    // srv->interface = strdup(interface);
     strncpy(srv->interface, interface, 200);
     srv->port = port;
-    // handler struct is already zeroed by memset above, so just copy if provided
     if (handler) {
-      srv->handler = *handler;  // Copy C handler struct
+      srv->handler = *handler;
     }
-    srv->lisp_handler_fn = (valk_lval_t*)lisp_handler;  // Set Lisp handler
-    // Create sandbox env once at startup - wraps handler's captured env
-    // This shadows 'def' to prevent global state mutation from request handlers
+    srv->lisp_handler_fn = (valk_lval_t*)lisp_handler;
     if (lisp_handler) {
       srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)lisp_handler)->fun.env);
     }
+
+    // Apply config if provided, otherwise use defaults
+    if (config) {
+      srv->config = *config;
+    } else {
+      srv->config = valk_http_server_config_default();
+    }
+
     valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
     SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
   }
@@ -1891,7 +2116,7 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
 
   nghttp2_session_client_new(&client->connection->session, callbacks, client);
 
-  __http_send_client_connection_header(client->connection->session);
+  __http_send_client_connection_header(client->connection->session, client->sys);
 
   valk_aio_ssl_client_init(&client->ssl_ctx);
   SSL_CTX_set_alpn_protos(client->ssl_ctx, (const unsigned char *)"\x02h2", 3);
@@ -2262,9 +2487,13 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
   memset(reqres->res, 0, sizeof(valk_http2_response_t));
   da_init(&reqres->res->headers);
 
-  reqres->res->body = valk_mem_alloc(HTTP_MAX_RESPONSE_SIZE_BYTES);
+  // For client responses, use a generous 64MB limit (responses are fully buffered)
+  // This is separate from server-side max_request_body_size since client may receive
+  // large responses from external servers
+  size_t client_response_limit = 64 * 1024 * 1024;
+  reqres->res->body = valk_mem_alloc(client_response_limit);
   reqres->res->bodyLen = 0;
-  reqres->res->bodyCapacity = HTTP_MAX_RESPONSE_SIZE_BYTES;
+  reqres->res->bodyCapacity = client_response_limit;
 
   VALK_TRACE("Box: %p, item: %p", (void*)box, reqres->res);
 
@@ -2404,12 +2633,94 @@ valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
 }
 
 //
+const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg) {
+  // Hard limits
+  if (cfg->max_connections < 1 || cfg->max_connections > 100000)
+    return "max_connections must be between 1 and 100,000";
+
+  if (cfg->max_concurrent_streams < 1 || cfg->max_concurrent_streams > 1000)
+    return "max_concurrent_streams must be between 1 and 1,000";
+
+  if (cfg->tcp_buffer_pool_size < 16 || cfg->tcp_buffer_pool_size > 1000000)
+    return "tcp_buffer_pool_size must be between 16 and 1,000,000";
+
+  if (cfg->arena_pool_size < 1 || cfg->arena_pool_size > 10000)
+    return "arena_pool_size must be between 1 and 10,000";
+
+  if (cfg->arena_size < (1 << 20) || cfg->arena_size > (256ULL << 20))
+    return "arena_size must be between 1MB and 256MB";
+
+  if (cfg->max_request_body_size < (1 << 10) || cfg->max_request_body_size > (1ULL << 30))
+    return "max_request_body_size must be between 1KB and 1GB";
+
+  if (cfg->queue_capacity < 16 || cfg->queue_capacity > 100000)
+    return "queue_capacity must be between 16 and 100,000";
+
+  // Relationship validations
+  if (cfg->tcp_buffer_pool_size < cfg->max_connections)
+    return "tcp_buffer_pool_size must be >= max_connections";
+
+  if (cfg->arena_pool_size < cfg->max_connections / 10)
+    return "arena_pool_size must be >= max_connections / 10";
+
+  return NULL; // Valid
+}
+
+int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
+  // Set defaults for primary parameters
+  if (cfg->max_connections == 0) cfg->max_connections = 100;
+  if (cfg->max_concurrent_streams == 0) cfg->max_concurrent_streams = 100;
+
+  // Derive dependent values (new formulas based on research)
+  if (cfg->tcp_buffer_pool_size == 0) {
+    uint32_t stream_overhead = cfg->max_concurrent_streams / 8;
+    cfg->tcp_buffer_pool_size = cfg->max_connections * (2 + stream_overhead);
+  }
+
+  if (cfg->arena_pool_size == 0)
+    cfg->arena_pool_size = cfg->max_connections * 2;
+
+  if (cfg->arena_size == 0)
+    cfg->arena_size = 64 * 1024 * 1024;
+
+  if (cfg->max_request_body_size == 0)
+    cfg->max_request_body_size = 8 * 1024 * 1024;
+
+  if (cfg->queue_capacity == 0)
+    cfg->queue_capacity = cfg->max_connections * 2;
+
+  // Validate
+  const char *err = valk_aio_system_config_validate(cfg);
+  if (err) {
+    fprintf(stderr, "AIO config error: %s\n", err);
+    return -1;
+  }
+
+  return 0;
+}
+
 valk_aio_system_t *valk_aio_start() {
+  return valk_aio_start_with_config(NULL);
+}
+
+valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) {
   // Singleton guard: check if AIO system is already running
   if (global_aio_system != NULL) {
     VALK_WARN("AIO system already started - returning existing instance. "
               "Multiple AIO systems are not supported and can cause race conditions.");
     return global_aio_system;
+  }
+
+  // Resolve configuration
+  valk_aio_system_config_t resolved;
+  if (config) {
+    resolved = *config;
+  } else {
+    resolved = valk_aio_system_config_default();
+  }
+
+  if (valk_aio_system_config_resolve(&resolved) != 0) {
+    return NULL;
   }
 
   // On linux definitely turn sigpipe off
@@ -2421,6 +2732,7 @@ valk_aio_system_t *valk_aio_start() {
   signal(SIGPIPE, SIG_IGN);
 
   valk_aio_system_t *sys = valk_mem_alloc(sizeof(valk_aio_system_t));
+  sys->config = resolved;  // Store resolved configuration
   global_aio_system = sys;  // Store singleton reference
   valk_aio_active_system = sys;  // Export for metrics access
 
@@ -2449,18 +2761,17 @@ valk_aio_system_t *valk_aio_start() {
   }
 
   // Initialize HTTP request/response queues for Lisp handlers
-  #define HTTP_QUEUE_CAPACITY 256
-  sys->http_queue.request_items = malloc(sizeof(valk_http_request_item_t) * HTTP_QUEUE_CAPACITY);
+  sys->http_queue.request_items = malloc(sizeof(valk_http_request_item_t) * sys->config.queue_capacity);
   sys->http_queue.request_idx = 0;
   sys->http_queue.request_count = 0;
-  sys->http_queue.request_capacity = HTTP_QUEUE_CAPACITY;
+  sys->http_queue.request_capacity = sys->config.queue_capacity;
   pthread_mutex_init(&sys->http_queue.request_mutex, NULL);
   pthread_cond_init(&sys->http_queue.request_ready, NULL);
 
-  sys->http_queue.response_items = malloc(sizeof(valk_http_response_item_t) * HTTP_QUEUE_CAPACITY);
+  sys->http_queue.response_items = malloc(sizeof(valk_http_response_item_t) * sys->config.queue_capacity);
   sys->http_queue.response_idx = 0;
   sys->http_queue.response_count = 0;
-  sys->http_queue.response_capacity = HTTP_QUEUE_CAPACITY;
+  sys->http_queue.response_capacity = sys->config.queue_capacity;
   pthread_mutex_init(&sys->http_queue.response_mutex, NULL);
   pthread_cond_init(&sys->http_queue.response_ready, NULL);
 
@@ -2475,8 +2786,8 @@ valk_aio_system_t *valk_aio_start() {
   valk_aio_metrics_init(&sys->metrics);
   // Initialize AIO system stats with pool sizes
   valk_aio_system_stats_init(&sys->system_stats,
-                              HTTP_STREAM_ARENA_POOL_SIZE,  // arenas_total
-                              0);  // tcp_buffers_total (none currently)
+                              sys->config.arena_pool_size,  // arenas_total
+                              sys->config.tcp_buffer_pool_size);  // tcp_buffers_total
 #endif
 
   // printf("Aquiring stopper\n");
@@ -2556,6 +2867,22 @@ void valk_aio_update_queue_stats(valk_aio_system_t* sys) {
 
   // Update the atomic stats
   valk_aio_system_stats_update_queue(&sys->system_stats, pending_requests, pending_responses);
+
+  // Update buffer pool stats (calculate used from available)
+  if (sys->tcpBufferSlab) {
+    size_t available = valk_slab_available(sys->tcpBufferSlab);
+    size_t total = sys->config.tcp_buffer_pool_size;
+    size_t used = (available <= total) ? (total - available) : 0;
+    atomic_store(&sys->system_stats.tcp_buffers_used, used);
+  }
+
+  // Update arena pool stats
+  if (sys->httpStreamArenas) {
+    size_t available = valk_slab_available(sys->httpStreamArenas);
+    size_t total = sys->config.arena_pool_size;
+    size_t used = (available <= total) ? (total - available) : 0;
+    atomic_store(&sys->system_stats.arenas_used, used);
+  }
 }
 #endif
 

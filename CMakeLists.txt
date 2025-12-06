@@ -169,6 +169,10 @@ add_executable(test_gc_metrics test/test_gc_metrics.c test/testing.c)
 target_link_libraries(test_gc_metrics PRIVATE "-lc" "-lm" valkyria uv)
 include_directories(test_gc_metrics src/)
 
+add_executable(test_aio_config test/test_aio_config.c test/testing.c)
+target_link_libraries(test_aio_config PRIVATE "-lc" valkyria)
+include_directories(test_aio_config src/)
+
 # Metrics tests (only built when VALK_METRICS is enabled)
 if(VALK_METRICS)
   add_executable(test_aio_metrics test/test_aio_metrics.c test/testing.c)

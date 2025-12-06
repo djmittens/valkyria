@@ -1126,6 +1126,43 @@ void test_checkpoint_closure(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_slab_overflow_counter(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Create tiny slab with 2 items
+  valk_slab_t* slab = valk_slab_new(64, 2);
+
+  // Verify initial state
+  VALK_TEST_ASSERT(slab->overflowCount == 0, "overflowCount should start at 0");
+
+  // Acquire all items
+  valk_slab_item_t* item1 = valk_slab_aquire(slab);
+  valk_slab_item_t* item2 = valk_slab_aquire(slab);
+
+  VALK_TEST_ASSERT(item1 != NULL, "First acquire should succeed");
+  VALK_TEST_ASSERT(item2 != NULL, "Second acquire should succeed");
+
+  // This should fail and increment overflow counter
+  valk_slab_item_t* item3 = valk_slab_aquire(slab);
+  VALK_TEST_ASSERT(item3 == NULL, "Third acquire should fail");
+  VALK_TEST_ASSERT(slab->overflowCount == 1, "overflowCount should be 1 after first overflow");
+
+  // Try again - should increment again
+  valk_slab_item_t* item4 = valk_slab_aquire(slab);
+  VALK_TEST_ASSERT(item4 == NULL, "Fourth acquire should also fail");
+  VALK_TEST_ASSERT(slab->overflowCount == 2, "overflowCount should be 2 after second overflow");
+
+  // Release one and try again
+  valk_slab_release(slab, item1);
+
+  valk_slab_item_t* item5 = valk_slab_aquire(slab);
+  VALK_TEST_ASSERT(item5 != NULL, "Fifth acquire should succeed after release");
+  VALK_TEST_ASSERT(slab->overflowCount == 2, "overflowCount should still be 2 after successful acquire");
+
+  valk_slab_free(slab);
+  VALK_PASS();
+}
+
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
@@ -1210,6 +1247,8 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_slab_alloc", test_slab_alloc);
   valk_testsuite_add_test(suite, "test_slab_concurrency",
                           test_slab_concurrency);
+  valk_testsuite_add_test(suite, "test_slab_overflow_counter",
+                          test_slab_overflow_counter);
 
   // Phase 1 telemetry tests
   valk_testsuite_add_test(suite, "test_arena_stats", test_arena_stats);

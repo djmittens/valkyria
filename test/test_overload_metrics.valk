@@ -1,0 +1,18 @@
+; Test: Metrics Verification for Overload
+; This creates a server that exposes metrics to verify overflow tracking
+
+(load "src/prelude.valk")
+
+(def aio (aio/start))
+
+(def handler (lambda {req respond}
+  (if (= (plist/get req :path) "/metrics")
+    ; Return prometheus metrics
+    (respond 200 {"content-type" "text/plain"} (metrics/prometheus))
+    (respond 200 {"content-type" "text/plain"} "OK"))))
+
+(http2/server-listen aio 8443 handler)
+(print "Check metrics at https://localhost:8443/metrics")
+(print "Look for: http_arena_pool_overflow_total")
+(print "Look for: http_overload_responses_total")
+(aio/run aio)

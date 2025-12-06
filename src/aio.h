@@ -21,6 +21,7 @@
 /* void ntohl(void); */
 
 typedef struct valk_aio_system valk_aio_system_t;
+typedef struct valk_aio_system_config valk_aio_system_config_t;
 typedef struct valk_aio_http_conn valk_aio_http_conn;
 
 typedef struct valk_aio_http_server valk_aio_http_server;
@@ -77,6 +78,21 @@ char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
                        const char *port);
 
 valk_aio_system_t *valk_aio_start();
+
+/// @brief Start AIO system with custom configuration
+/// @param config System configuration (NULL for defaults)
+/// @return AIO system handle
+valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config);
+
+/// @brief Resolve derived values (called automatically by valk_aio_start_with_config)
+/// Fills in any 0-valued fields with derived/default values
+/// Returns 0 on success, -1 on validation failure
+int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg);
+
+/// @brief Validate configuration
+/// Returns NULL on success, or error message on failure
+const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg);
+
 void valk_aio_stop(valk_aio_system_t *sys);
 
 valk_future *valk_aio_read_file(valk_aio_system_t *sys, const char *filename);
@@ -91,6 +107,43 @@ typedef struct {
                  valk_buffer_t *buf);
 } valk_http2_handler_t;
 
+// System configuration for AIO pools
+typedef struct valk_aio_system_config {
+  // PRIMARY TUNING PARAMETERS
+  uint32_t max_connections;          // Default: 100
+  uint32_t max_concurrent_streams;   // Default: 100 (per connection, sent via SETTINGS)
+
+  // DERIVED SETTINGS (set to 0 for auto-calculation)
+  uint32_t tcp_buffer_pool_size;     // Auto: max_connections × (2 + streams/8)
+  uint32_t arena_pool_size;          // Auto: max_connections × 2
+  uint32_t queue_capacity;           // Auto: max_connections × 2
+
+  // MEMORY SIZING
+  size_t   arena_size;               // Default: 64MB per arena
+  size_t   max_request_body_size;    // Default: 8MB (required - requests are buffered)
+} valk_aio_system_config_t;
+
+// Default system configuration
+static inline valk_aio_system_config_t valk_aio_system_config_default(void) {
+  return (valk_aio_system_config_t){0};
+}
+
+// Server configuration for HTTP/2 server behavior
+typedef struct valk_http_server_config {
+  size_t      max_response_body_size;  // Default: 64MB (Lisp API limit, not C runtime)
+  const char* error_503_body;          // Pre-rendered overload response
+  size_t      error_503_body_len;
+} valk_http_server_config_t;
+
+// Default server configuration
+static inline valk_http_server_config_t valk_http_server_config_default(void) {
+  return (valk_http_server_config_t){
+    .max_response_body_size = 64 * 1024 * 1024,  // 64MB
+    .error_503_body = NULL,
+    .error_503_body_len = 0,
+  };
+}
+
 ///
 /// @brief start a new htt2 listening server on a port
 ///
@@ -104,6 +157,23 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
                                    const char *keyfile, const char *certfile,
                                    valk_http2_handler_t *handler,
                                    void *lisp_handler);
+
+/// @brief Start HTTP/2 server with custom configuration
+/// @param[in] sys the aio system that will run the server
+/// @param[in] interface the interface to bind to (e.g., "0.0.0.0")
+/// @param[in] port the port number to listen on
+/// @param[in] keyfile path to TLS private key file
+/// @param[in] certfile path to TLS certificate file
+/// @param[in] handler C function handler (optional, can be NULL)
+/// @param[in] lisp_handler Lisp function handler (optional, can be NULL)
+/// @param[in] config server configuration (optional, uses defaults if NULL)
+/// @return returns a future with a boxed `valk_aio_http2_server`
+valk_future *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
+                                   const char *interface, const int port,
+                                   const char *keyfile, const char *certfile,
+                                   valk_http2_handler_t *handler,
+                                   void *lisp_handler,
+                                   valk_http_server_config_t *config);
 
 /// @brief Get a demo HTTP/2 handler that returns "Hello from Valk!"
 /// @return Pointer to a static demo handler

@@ -208,6 +208,7 @@ typedef struct {  // extends valk_mem_allocator_t;
   size_t itemSize;
   size_t numItems;
   size_t numFree;
+  uint64_t overflowCount;
   uint64_t head;
   // treiber list top
   // Memory layout
@@ -239,6 +240,12 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self);
 
 void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item);
 void valk_slab_release_ptr(valk_slab_t *self, void *data);
+
+/// @brief Get number of available (free) items in the slab
+/// @return Current count of free items (may change due to concurrent access)
+static inline size_t valk_slab_available(valk_slab_t *self) {
+  return __atomic_load_n(&self->numFree, __ATOMIC_ACQUIRE);
+}
 
 // Arena statistics for telemetry
 typedef struct {
