@@ -83,6 +83,8 @@ if(VALK_METRICS)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/metrics.c")
     list(APPEND VALKYRIA_SOURCES src/metrics.c)
   endif()
+  # SSE diagnostics for memory visualization
+  list(APPEND VALKYRIA_SOURCES src/aio_sse_diagnostics.c)
 endif()
 
 add_library(valkyria ${VALKYRIA_SOURCES})

@@ -1,0 +1,68 @@
+#ifndef VALK_AIO_SSE_DIAGNOSTICS_H
+#define VALK_AIO_SSE_DIAGNOSTICS_H
+
+#include "aio.h"
+#include "memory.h"
+#include "gc.h"
+#include <stdint.h>
+#include <stdbool.h>
+
+// Forward declarations
+typedef struct uv_timer_s uv_timer_t;
+
+// SSE connection context for memory diagnostics
+typedef struct valk_sse_diag_conn {
+  valk_aio_handle_t *handle;      // TCP connection handle
+  uv_timer_t *timer;               // Push timer (100ms)
+  uint64_t last_event_id;         // For resumption
+  valk_aio_system_t *aio_system;  // AIO system reference
+  char write_buffer[16384];       // Event buffer
+  bool active;                    // Connection alive
+} valk_sse_diag_conn_t;
+
+// Memory snapshot for SSE transmission
+typedef struct valk_mem_snapshot {
+  // Slab bitmaps (hex-encoded)
+  struct {
+    const char *name;
+    uint8_t *bitmap;      // Actual bitmap data
+    size_t bitmap_bytes;  // Size of bitmap
+    size_t total_slots;
+    size_t used_slots;
+    size_t overflow_count;
+  } slabs[8];
+  size_t slab_count;
+
+  // Arena gauges
+  struct {
+    const char *name;
+    size_t used_bytes;
+    size_t capacity_bytes;
+    size_t high_water_mark;
+    size_t overflow_fallbacks;
+  } arenas[16];
+  size_t arena_count;
+
+  // GC heap stats
+  struct {
+    size_t allocated_bytes;
+    size_t peak_usage;
+    size_t gc_threshold;
+    uint64_t gc_cycles;
+    uint64_t emergency_collections;
+  } gc_heap;
+} valk_mem_snapshot_t;
+
+// Initialize SSE diagnostics for an HTTP connection
+void valk_sse_diag_init(valk_aio_handle_t *conn, valk_aio_system_t *aio);
+
+// Stop SSE stream
+void valk_sse_diag_stop(valk_sse_diag_conn_t *sse_conn);
+
+// Collect memory snapshot (called by timer)
+void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot, valk_aio_system_t *aio);
+
+// Encode snapshot to SSE event
+int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf, size_t buf_size, uint64_t event_id);
+
+#endif // VALK_AIO_SSE_DIAGNOSTICS_H

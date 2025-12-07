@@ -8,6 +8,38 @@
   var MAX_BACKOFF = 30000;
   var GAUGE_CIRCUMFERENCE = 251.2;  // 2 * PI * 40
 
+  // Adaptive interval system
+  var adaptiveInterval = {
+    min: 500,
+    normal: 1000,
+    slow: 5000,
+    current: 1000,
+    lastValues: {}
+  };
+
+  function calculateChangeRate(metrics) {
+    var changes = 0;
+    var total = 0;
+    var keys = ['requestRate', 'errorRate', 'heapPct'];
+
+    keys.forEach(function(key) {
+      var current = metrics[key] || 0;
+      var last = adaptiveInterval.lastValues[key] || current;
+      var change = Math.abs(current - last) / Math.max(last, 1);
+      changes += change;
+      total++;
+      adaptiveInterval.lastValues[key] = current;
+    });
+
+    return total > 0 ? changes / total : 0;
+  }
+
+  function getAdaptiveInterval(changeRate) {
+    if (changeRate > 0.10) return adaptiveInterval.min;
+    if (changeRate > 0.02) return adaptiveInterval.normal;
+    return adaptiveInterval.slow;
+  }
+
   // ==================== State ====================
   var currentBackoff = POLL_INTERVAL;
   var history = {
@@ -535,6 +567,7 @@
             <div class="entity-stat-label">Req</div>
           </div>
         </div>
+        <button class="expand-toggle" onclick="this.closest('.entity-card').classList.toggle('collapsed')" aria-label="Toggle details" title="Expand/collapse card details">▼</button>
       </div>
       <div class="entity-body">
         <!-- Status Codes Section -->
@@ -965,6 +998,8 @@
 
   // ==================== Main Update Function ====================
   function updateDashboard(data) {
+    hideLoadingState();
+
     var now = Date.now();
     var deltaSeconds = prevTimestamp ? (now - prevTimestamp) / 1000 : 1;
     prevTimestamp = now;
@@ -1036,6 +1071,26 @@
     $('health-heap-pct').innerHTML = fmt(heapPct, 0) + '<span style="font-size: 14px; font-weight: 400;">%</span>';
     $('health-heap-usage').textContent = fmtBytes(heapUsed) + ' / ' + fmtBytes(heapTotal);
 
+    // Update health card statuses
+    function updateHealthCardStatus(cardEl, value, warningThreshold, criticalThreshold, inverse) {
+      if (!cardEl) return;
+      var card = cardEl.closest('.health-card');
+      if (!card) return;
+
+      card.classList.remove('status-ok', 'status-warning', 'status-critical');
+
+      var isWarning = inverse ? value < warningThreshold : value > warningThreshold;
+      var isCritical = inverse ? value < criticalThreshold : value > criticalThreshold;
+
+      if (isCritical) card.classList.add('status-critical');
+      else if (isWarning) card.classList.add('status-warning');
+      else card.classList.add('status-ok');
+    }
+
+    updateHealthCardStatus($('health-error-rate'), errorRate, 1, 5, false);
+    updateHealthCardStatus($('health-heap-pct'), heapPct, 70, 90, false);
+    updateHealthCardStatus($('health-avg-latency'), avgLatency, 100, 500, false);
+
     // ========== VM Section Badges ==========
     $('vm-gc-badge').textContent = fmtCompact(gc.cycles_total || 0) + ' cycles';
     $('vm-heap-badge').textContent = fmtBytes(heapUsed) + ' heap';
@@ -1104,6 +1159,14 @@
       timestamp: now
     };
 
+    // Update adaptive interval
+    var changeRate = calculateChangeRate({
+      requestRate: requestRate,
+      errorRate: errorRate,
+      heapPct: heapPct
+    });
+    adaptiveInterval.current = getAdaptiveInterval(changeRate);
+
     // Update global status
     updateConnectionStatus(true);
   }
@@ -1146,6 +1209,19 @@
     if (banner) banner.style.display = 'none';
   };
 
+  // ==================== Loading State Management ====================
+  function showLoadingState() {
+    document.querySelectorAll('.health-card-value').forEach(function(el) {
+      el.classList.add('loading');
+    });
+  }
+
+  function hideLoadingState() {
+    document.querySelectorAll('.health-card-value').forEach(function(el) {
+      el.classList.remove('loading');
+    });
+  }
+
   // ==================== Polling ====================
   function poll() {
     fetch('/debug/metrics')
@@ -1157,7 +1233,7 @@
         updateDashboard(data);
         dismissError();
         currentBackoff = POLL_INTERVAL;
-        setTimeout(poll, POLL_INTERVAL);
+        setTimeout(poll, adaptiveInterval.current);
       })
       .catch(function(error) {
         showError('Connection error: ' + error.message);
@@ -1179,4 +1255,362 @@
   } else {
     init();
   }
+
+  // ==================== Memory Diagnostics SSE Connection ====================
+  class MemoryDiagnostics {
+    constructor() {
+      this.eventSource = null;
+      this.reconnectAttempts = 0;
+      this.maxReconnectAttempts = 10;
+      this.lastEventId = null;
+
+      // DOM references
+      this.grids = {};
+      this.arenaGauges = {};
+
+      // State for delta detection
+      this.previousState = {};
+    }
+
+    connect() {
+      var url = '/debug/diagnostics/memory';
+      this.eventSource = new EventSource(url);
+
+      var self = this;
+      this.eventSource.addEventListener('memory', function(e) {
+        self.lastEventId = e.lastEventId;
+        self.handleMemoryUpdate(JSON.parse(e.data));
+      });
+
+      this.eventSource.onopen = function() {
+        self.reconnectAttempts = 0;
+        self.updateConnectionStatus(true);
+        console.log('[MemDiag] SSE connected');
+      };
+
+      this.eventSource.onerror = function(e) {
+        if (self.eventSource.readyState === EventSource.CLOSED) {
+          self.updateConnectionStatus(false);
+          self.scheduleReconnect();
+        }
+      };
+    }
+
+    scheduleReconnect() {
+      if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+        console.error('[MemDiag] Max reconnection attempts reached');
+        return;
+      }
+
+      this.reconnectAttempts++;
+      var delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+      console.log('[MemDiag] Reconnecting in ' + delay + 'ms...');
+
+      var self = this;
+      setTimeout(function() {
+        if (self.eventSource) {
+          self.eventSource.close();
+        }
+        self.connect();
+      }, delay);
+    }
+
+    updateConnectionStatus(connected) {
+      var dot = document.querySelector('.sse-dot');
+      if (dot) {
+        dot.style.background = connected ? 'var(--color-ok)' : 'var(--color-error)';
+      }
+
+      var sseWarning = document.getElementById('sse-warning');
+      var sseLastUpdate = document.getElementById('sse-last-update');
+      if (connected) {
+        if (sseWarning) sseWarning.classList.remove('visible');
+        if (sseLastUpdate) sseLastUpdate.textContent = new Date().toLocaleTimeString();
+        document.querySelectorAll('.memory-slab-panel, .memory-arena-section').forEach(function(el) {
+          el.classList.remove('stale');
+        });
+      } else {
+        if (sseWarning) sseWarning.classList.add('visible');
+        document.querySelectorAll('.memory-slab-panel, .memory-arena-section').forEach(function(el) {
+          el.classList.add('stale');
+        });
+      }
+    }
+
+    handleMemoryUpdate(data) {
+      var self = this;
+      // Update slab grids
+      if (data.slabs) {
+        data.slabs.forEach(function(slab) {
+          self.updateSlabGrid(slab);
+        });
+      }
+
+      // Update arena gauges
+      if (data.arenas) {
+        data.arenas.forEach(function(arena) {
+          self.updateArenaGauge(arena);
+        });
+      }
+
+      // Update GC stats
+      if (data.gc) {
+        self.updateGCStats(data.gc);
+      }
+    }
+
+    updateSlabGrid(slab) {
+      var gridId = slab.name.replace(/_/g, '-') + '-grid';
+      var grid = document.getElementById(gridId);
+      if (!grid) return;
+
+      // Convert hex bitmap to bit array
+      var bitmap = this.hexToBitArray(slab.bitmap);
+      var cells = grid.children;
+
+      // Track previous state for flash animation
+      var prevKey = 'slab_' + slab.name;
+      var prevBitmap = this.previousState[prevKey] || [];
+
+      var self = this;
+      requestAnimationFrame(function() {
+        // For large slabs, use aggregation
+        if (slab.total > 500) {
+          self.renderAggregatedGrid(grid, bitmap, slab.total, prevBitmap);
+        } else {
+          self.renderDirectGrid(grid, bitmap, prevBitmap);
+        }
+      });
+
+      this.previousState[prevKey] = bitmap;
+
+      // Update stats
+      var statsEl = grid.closest('.memory-slab-panel');
+      if (statsEl) {
+        statsEl = statsEl.querySelector('.slab-stats');
+      }
+      if (statsEl) {
+        var usedCount = statsEl.querySelector('.used-count');
+        if (usedCount) usedCount.textContent = slab.used.toLocaleString();
+
+        var overflowEl = statsEl.querySelector('.overflow-warning');
+        if (overflowEl) {
+          if (slab.overflow > 0) {
+            overflowEl.textContent = '⚠ ' + slab.overflow + ' overflows';
+            overflowEl.style.display = '';
+          } else {
+            overflowEl.style.display = 'none';
+          }
+        }
+      }
+
+      // Update ARIA label
+      var ariaLabel = slab.name.replace(/_/g, ' ') + ': ' + slab.used + ' of ' + slab.total + ' slots used (' + Math.round(slab.used/slab.total*100) + '%)';
+      if (slab.overflow > 0) {
+        ariaLabel += ', ' + slab.overflow + ' overflows detected';
+      }
+      grid.setAttribute('aria-label', ariaLabel);
+    }
+
+    renderDirectGrid(grid, bitmap, prevBitmap) {
+      // Ensure grid has correct number of cells
+      while (grid.children.length < bitmap.length) {
+        var cell = document.createElement('div');
+        cell.className = 'slab-cell free';
+        grid.appendChild(cell);
+      }
+      while (grid.children.length > bitmap.length) {
+        grid.removeChild(grid.lastChild);
+      }
+
+      // Update cells with flash on change
+      for (var i = 0; i < bitmap.length; i++) {
+        var cell = grid.children[i];
+        var newState = bitmap[i] ? 'used' : 'free';
+        var oldState = prevBitmap[i] ? 'used' : 'free';
+
+        if (newState !== oldState) {
+          // State changed - flash animation
+          cell.className = 'slab-cell flash';
+          setTimeout(function(c, s) {
+            return function() {
+              c.className = 'slab-cell ' + s;
+            };
+          }(cell, newState), 300);
+        } else if (!cell.classList.contains(newState)) {
+          cell.className = 'slab-cell ' + newState;
+        }
+      }
+    }
+
+    renderAggregatedGrid(grid, bitmap, totalSlots, prevBitmap) {
+      // For large slabs, aggregate to displayable size
+      var gridCols = 32;
+      var gridRows = 32;
+      var cellsPerSlot = Math.ceil(totalSlots / (gridCols * gridRows));
+
+      var aggregated = new Array(gridCols * gridRows).fill(0);
+      var prevAggregated = new Array(gridCols * gridRows).fill(0);
+
+      for (var i = 0; i < bitmap.length; i++) {
+        var aggIdx = Math.floor(i / cellsPerSlot);
+        if (aggIdx < aggregated.length) {
+          aggregated[aggIdx] += bitmap[i] ? 1 : 0;
+          prevAggregated[aggIdx] += (prevBitmap[i] || 0) ? 1 : 0;
+        }
+      }
+
+      // Normalize to 0-1
+      var threshold = cellsPerSlot / 2;
+      for (var i = 0; i < aggregated.length; i++) {
+        aggregated[i] = aggregated[i] > threshold ? 1 : 0;
+        prevAggregated[i] = prevAggregated[i] > threshold ? 1 : 0;
+      }
+
+      this.renderDirectGrid(grid, aggregated, prevAggregated);
+    }
+
+    updateArenaGauge(arena) {
+      var gauge = document.querySelector('[data-arena="' + arena.name + '"]');
+      if (!gauge) return;
+
+      var percentage = (arena.used / arena.capacity) * 100;
+      var hwmPercentage = (arena.hwm / arena.capacity) * 100;
+
+      // Update bar
+      var bar = gauge.querySelector('.arena-bar');
+      if (bar) {
+        bar.style.width = percentage + '%';
+
+        // Color based on usage
+        bar.className = 'arena-bar';
+        if (percentage >= 90) {
+          bar.classList.add('critical');
+        } else if (percentage >= 70) {
+          bar.classList.add('warning');
+        } else {
+          bar.classList.add('healthy');
+        }
+      }
+
+      // Update high water mark
+      var hwm = gauge.querySelector('.arena-hwm');
+      if (hwm) {
+        hwm.style.left = hwmPercentage + '%';
+      }
+
+      // Update label
+      var label = gauge.querySelector('.arena-label');
+      if (label) {
+        var usedStr = this.formatBytes(arena.used);
+        var capacityStr = this.formatBytes(arena.capacity);
+        label.innerHTML = '<span class="pct">' + percentage.toFixed(0) + '%</span> &mdash; ' + usedStr + ' / ' + capacityStr;
+      }
+
+      // After updating the label, add ARIA updates
+      gauge.setAttribute('aria-valuenow', Math.round(percentage));
+      gauge.setAttribute('aria-label', arena.name + ': ' + percentage.toFixed(0) + '% used, ' + usedStr + ' of ' + capacityStr);
+
+      // Update overflow indicator
+      if (arena.overflow > 0) {
+        gauge.classList.add('has-overflow');
+      } else {
+        gauge.classList.remove('has-overflow');
+      }
+    }
+
+    updateGCStats(gc) {
+      // Update GC panel if it exists
+      var gcPanel = document.querySelector('.gc-stats-panel');
+      if (!gcPanel) return;
+
+      var allocated = gcPanel.querySelector('[data-gc="allocated"]');
+      var peak = gcPanel.querySelector('[data-gc="peak"]');
+      var cycles = gcPanel.querySelector('[data-gc="cycles"]');
+
+      if (allocated) allocated.textContent = this.formatBytes(gc.allocated);
+      if (peak) peak.textContent = this.formatBytes(gc.peak);
+      if (cycles) cycles.textContent = gc.cycles.toLocaleString();
+    }
+
+    // Utility functions
+    hexToBitArray(hex) {
+      var bits = [];
+      for (var i = 0; i < hex.length; i += 2) {
+        var byte = parseInt(hex.substr(i, 2), 16);
+        for (var b = 7; b >= 0; b--) {
+          bits.push((byte >> b) & 1);
+        }
+      }
+      return bits;
+    }
+
+    formatBytes(bytes) {
+      if (bytes < 1024) return bytes + 'B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'KB';
+      if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'MB';
+      return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'GB';
+    }
+
+    disconnect() {
+      if (this.eventSource) {
+        this.eventSource.close();
+        this.eventSource = null;
+      }
+    }
+  }
+
+  // Initialize on page load
+  var memoryDiagnostics = null;
+  document.addEventListener('DOMContentLoaded', function() {
+    memoryDiagnostics = new MemoryDiagnostics();
+    memoryDiagnostics.connect();
+  });
+
+  // ==================== Keyboard Shortcuts ====================
+  document.addEventListener('keydown', function(e) {
+    if (!e.altKey) return;
+
+    var shortcuts = {
+      'h': '#health-title',
+      'v': '#vm-section-title',
+      'r': '#resources-section-title',
+      'a': '#aio-section-title',
+      's': '#http-section-title'
+    };
+
+    var target = shortcuts[e.key.toLowerCase()];
+    if (target) {
+      e.preventDefault();
+      var el = document.querySelector(target);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        el.focus();
+      }
+    }
+  });
+
+  // ==================== Custom Tooltips ====================
+  function initializeTooltips() {
+    document.querySelectorAll('[data-tooltip]').forEach(function(el) {
+      var tooltipText = el.getAttribute('data-tooltip');
+      var tooltipTitle = el.getAttribute('data-tooltip-title') || '';
+
+      el.classList.add('has-tooltip');
+      el.removeAttribute('title');
+
+      var tooltip = document.createElement('div');
+      tooltip.className = 'tooltip';
+      tooltip.setAttribute('role', 'tooltip');
+      tooltip.innerHTML = (tooltipTitle ? '<div class="tooltip-title">' + tooltipTitle + '</div>' : '') +
+                          '<div class="tooltip-body">' + tooltipText + '</div>';
+
+      var tooltipId = 'tooltip-' + Math.random().toString(36).substr(2, 9);
+      tooltip.id = tooltipId;
+      el.setAttribute('aria-describedby', tooltipId);
+      el.appendChild(tooltip);
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', initializeTooltips);
 })();

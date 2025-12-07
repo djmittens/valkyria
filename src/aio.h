@@ -292,6 +292,13 @@ void valk_aio_update_queue_stats(valk_aio_system_t* sys);
 
 // Get GC heap from AIO system (returns NULL if metrics not enabled)
 valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
+
+// Get slab allocators for memory diagnostics
+valk_slab_t* valk_aio_get_tcp_buffer_slab(valk_aio_system_t* sys);
+valk_slab_t* valk_aio_get_handle_slab(valk_aio_system_t* sys);
+valk_slab_t* valk_aio_get_stream_arenas_slab(valk_aio_system_t* sys);
+valk_slab_t* valk_aio_get_http_servers_slab(valk_aio_system_t* sys);
+valk_slab_t* valk_aio_get_http_clients_slab(valk_aio_system_t* sys);
 #endif
 
 // Get the event loop from AIO system (returns NULL if no loop available)

@@ -26,6 +26,7 @@
 #include "aio.h"
 #include "aio_ssl.h"
 #include "aio_metrics.h"
+#include "aio_sse_diagnostics.h"
 #include "metrics.h"
 #include "common.h"
 #include "concurrency.h"
@@ -1093,6 +1094,72 @@ static valk_lval_t* __http_qexpr_get(valk_lval_t* qexpr, const char* key) {
 // Send HTTP/2 response from Lisp qexpr {:status "200" :body "..." :headers {...}}
 static int __http_send_response(nghttp2_session *session, int stream_id,
                                  valk_lval_t* response_qexpr, valk_mem_arena_t* arena) {
+#ifdef VALK_METRICS_ENABLED
+  // Check for SSE stream body type
+  valk_lval_t* body_type_val = __http_qexpr_get(response_qexpr, ":body-type");
+  if (body_type_val && LVAL_TYPE(body_type_val) == LVAL_SYM &&
+      strcmp(body_type_val->str, ":sse-stream") == 0) {
+    // This is an SSE stream request - set up the SSE connection
+    valk_http2_server_request_t *req =
+        nghttp2_session_get_stream_user_data(session, stream_id);
+    if (req && req->conn && req->conn->http.server && req->conn->http.server->sys) {
+      VALK_INFO("Setting up SSE diagnostics stream for stream %d", stream_id);
+      // Note: SSE over HTTP/2 is complex - for now we return a placeholder
+      // The proper implementation would require keeping the stream open and
+      // pushing DATA frames via nghttp2_submit_data periodically.
+      // For a simpler approach, we'll return a stub that tells the client to retry.
+      // TODO(networking): Implement proper HTTP/2 SSE streaming
+
+      // For now, send an immediate response with current snapshot data
+      valk_mem_snapshot_t snapshot = {0};
+      valk_mem_snapshot_collect(&snapshot, req->conn->http.server->sys);
+
+      // Format as SSE event
+      char sse_buf[16384];
+      int len = valk_mem_snapshot_to_sse(&snapshot, sse_buf, sizeof(sse_buf), 1);
+
+      // Free snapshot bitmaps
+      for (size_t i = 0; i < snapshot.slab_count; i++) {
+        free(snapshot.slabs[i].bitmap);
+      }
+
+      if (len <= 0) {
+        VALK_ERROR("Failed to format SSE snapshot");
+        len = snprintf(sse_buf, sizeof(sse_buf), "event: error\ndata: {\"error\":\"snapshot failed\"}\n\n");
+      }
+
+      // Send as regular response with SSE content
+      const char* content_type = "text/event-stream; charset=utf-8";
+      nghttp2_nv headers[] = {
+        MAKE_NV2(":status", "200"),
+        MAKE_NV("content-type", content_type, strlen(content_type)),
+        MAKE_NV2("cache-control", "no-cache"),
+      };
+
+      // Copy body to arena
+      char* body_copy;
+      VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
+        body_copy = valk_mem_alloc(len + 1);
+        memcpy(body_copy, sse_buf, len + 1);
+      }
+
+      http_body_source_t *body_src;
+      VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
+        body_src = valk_mem_alloc(sizeof(http_body_source_t));
+        body_src->body = body_copy;
+        body_src->body_len = len;
+        body_src->offset = 0;
+      }
+
+      nghttp2_data_provider2 data_prd;
+      data_prd.source.ptr = (void*)body_src;
+      data_prd.read_callback = __http_byte_body_cb;
+
+      return nghttp2_submit_response2(session, stream_id, headers, 3, &data_prd);
+    }
+  }
+#endif
+
   // Extract status (default "200")
   const char* status = "200";
   valk_lval_t* status_val = __http_qexpr_get(response_qexpr, ":status");
@@ -3255,6 +3322,32 @@ void valk_aio_set_name(valk_aio_system_t* sys, const char* name) {
 valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys) {
   if (!sys) return nullptr;
   return sys->gc_heap;
+}
+
+// Get slab allocators for memory diagnostics
+valk_slab_t* valk_aio_get_tcp_buffer_slab(valk_aio_system_t* sys) {
+  if (!sys) return nullptr;
+  return sys->tcpBufferSlab;
+}
+
+valk_slab_t* valk_aio_get_handle_slab(valk_aio_system_t* sys) {
+  if (!sys) return nullptr;
+  return sys->handleSlab;
+}
+
+valk_slab_t* valk_aio_get_stream_arenas_slab(valk_aio_system_t* sys) {
+  if (!sys) return nullptr;
+  return sys->httpStreamArenas;
+}
+
+valk_slab_t* valk_aio_get_http_servers_slab(valk_aio_system_t* sys) {
+  if (!sys) return nullptr;
+  return sys->httpServers;
+}
+
+valk_slab_t* valk_aio_get_http_clients_slab(valk_aio_system_t* sys) {
+  if (!sys) return nullptr;
+  return sys->httpClients;
 }
 #endif
 

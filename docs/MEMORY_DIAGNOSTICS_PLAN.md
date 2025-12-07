@@ -1653,7 +1653,75 @@ From mockup comparison section (lines 656-664):
 
 ---
 
-## 10. Sources
+## 10. Implementation Notes (2024-12-07)
+
+### What Was Implemented
+
+The memory diagnostics system was implemented with the following components:
+
+**Backend (C):**
+- `src/aio_sse_diagnostics.h` - Header with `valk_sse_diag_conn_t` and `valk_mem_snapshot_t` structures
+- `src/aio_sse_diagnostics.c` - Implementation with:
+  - `slab_to_bitmap()` - Walks Treiber stack free lists using atomic loads
+  - `bitmap_to_hex()` - Converts bitmap bytes to hex strings
+  - `valk_mem_snapshot_collect()` - Collects all slab/arena/GC heap stats
+  - `valk_mem_snapshot_to_sse()` - Formats snapshot as SSE JSON event
+- `src/aio.h` - Added 5 slab accessor functions (required because `valk_aio_system_t` is opaque):
+  - `valk_aio_get_tcp_buffer_slab()`
+  - `valk_aio_get_handle_slab()`
+  - `valk_aio_get_stream_arenas_slab()`
+  - `valk_aio_get_http_servers_slab()`
+  - `valk_aio_get_http_clients_slab()`
+- `src/aio_uv.c` - Implemented accessor functions and SSE response handling in `__http_send_response()`
+- `CMakeLists.txt` - Added `src/aio_sse_diagnostics.c` under `VALK_METRICS` conditional
+
+**Lisp:**
+- `src/modules/aio/debug.valk` - Added route `/debug/diagnostics/memory` with `:body-type :sse-stream`
+
+**Frontend:**
+- `src/modules/aio/debug/body.html` - Memory Diagnostics section with 6 slab grids, arena gauges, legend
+- `src/modules/aio/debug/script.js` - `MemoryDiagnostics` class with EventSource, reconnection, grid rendering
+- `src/modules/aio/debug/style.css` - Comprehensive CSS for grids, gauges, animations, responsive layout
+
+### Deviations from Plan
+
+1. **Route path changed**: `/api/diagnostics/memory/stream` → `/debug/diagnostics/memory` (to match debug handler namespace)
+
+2. **No persistent SSE streaming yet**: The current implementation sends a single snapshot per request rather than keeping the HTTP/2 stream open with periodic DATA frames. This is because:
+   - HTTP/2 SSE requires complex nghttp2 state management to keep streams open
+   - The `nghttp2_submit_response2` API closes the stream after sending
+   - True SSE would require using `NGHTTP2_DATA_FLAG_NO_END_STREAM` and periodic `nghttp2_submit_data` calls
+
+3. **Lisp builtin not added**: `aio/sse-memory-start` was not needed because the SSE handling is done entirely in C within `__http_send_response()` when it detects `:body-type :sse-stream`.
+
+4. **Parser-side SSE setup not required**: The C code handles the SSE response directly without needing a Lisp builtin to set up the connection.
+
+### Current Behavior
+
+The frontend uses EventSource which will:
+1. Connect to `/debug/diagnostics/memory`
+2. Receive a single snapshot
+3. Connection closes (HTTP/2 stream ends)
+4. EventSource triggers `onerror` and reconnects
+5. Exponential backoff prevents hammering the server
+
+This provides near-real-time updates (every ~1-2 seconds with reconnection overhead) without true push-based streaming.
+
+### Future Work (TODO)
+
+To implement true SSE streaming over HTTP/2:
+
+1. **Keep stream open**: Use `NGHTTP2_DATA_FLAG_NO_END_STREAM` in the initial response
+2. **Timer-based pushes**: Set up a `uv_timer_t` that calls `nghttp2_submit_data()` every 100ms
+3. **Track SSE connections**: Maintain a list of active SSE streams per connection
+4. **Handle disconnects**: Clean up timers when streams are reset or connection closes
+5. **Backpressure**: Check `nghttp2_session_get_stream_remote_window_size()` before pushing
+
+This would require significant changes to the HTTP/2 data flow in `aio_uv.c`.
+
+---
+
+## 11. Sources
 
 - [Memory Heat Map: Anomaly detection in real-time embedded systems](https://ieeexplore.ieee.org/document/7167219)
 - [Arena allocator tips and tricks](https://nullprogram.com/blog/2023/09/27/)

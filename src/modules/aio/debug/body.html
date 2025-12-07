@@ -35,6 +35,11 @@
       <button class="error-banner-dismiss" onclick="dismissError()" aria-label="Dismiss">×</button>
     </div>
 
+    <!-- SSE Disconnection Warning -->
+    <div class="sse-status-warning" id="sse-warning" role="alert">
+      <span>Memory diagnostics stream disconnected. Last update: <span id="sse-last-update">--</span></span>
+    </div>
+
     <!-- ==================== HEALTH OVERVIEW ==================== -->
     <section class="health-overview" aria-labelledby="health-title">
       <h2 id="health-title">System Health Overview</h2>
@@ -63,7 +68,7 @@
     </section>
 
     <!-- ==================== VM METRICS ==================== -->
-    <section class="section-group" aria-labelledby="vm-section-title">
+    <section class="section-group vm-section" aria-labelledby="vm-section-title">
       <div class="section-header">
         <div class="section-icon vm" aria-hidden="true">VM</div>
         <h2 class="section-title" id="vm-section-title">Virtual Machine</h2>
@@ -74,7 +79,7 @@
         </div>
       </div>
 
-      <div class="grid-3">
+      <div class="grid-2">
         <!-- GC Panel -->
         <article class="panel" aria-labelledby="gc-panel-title">
           <div class="panel-header">
@@ -111,47 +116,6 @@
               <div class="gc-stat" role="listitem" title="Total memory freed by GC. High reclaim rate with stable heap indicates healthy turnover. Low reclaim with growing heap suggests memory leak - investigate long-lived allocations.">
                 <div class="gc-stat-value" id="gc-reclaimed">--<span class="unit">MB</span></div>
                 <div class="gc-stat-label">Reclaimed</div>
-              </div>
-            </div>
-          </div>
-        </article>
-
-        <!-- Heap Memory -->
-        <article class="panel" aria-labelledby="heap-panel-title">
-          <div class="panel-header">
-            <div class="panel-icon mem" aria-hidden="true">M</div>
-            <h3 class="panel-title" id="heap-panel-title">Heap Memory</h3>
-          </div>
-          <div class="panel-body">
-            <div class="gauge-container">
-              <div class="gauge" role="img" aria-label="Heap memory usage" title="Visual gauge of heap utilization. Yellow zone (70-90%) indicates GC pressure. Red zone (>90%) indicates critical memory pressure with risk of OOM.">
-                <svg viewBox="0 0 100 100" aria-hidden="true">
-                  <circle class="gauge-bg" cx="50" cy="50" r="40"/>
-                  <circle class="gauge-threshold warning" cx="50" cy="50" r="40"
-                          stroke-dasharray="251.2" stroke-dashoffset="75.4"/>
-                  <circle class="gauge-threshold critical" cx="50" cy="50" r="40"
-                          stroke-dasharray="251.2" stroke-dashoffset="25.1"/>
-                  <circle class="gauge-fill" id="heap-gauge-fill" cx="50" cy="50" r="40"
-                          stroke-dasharray="251.2" stroke-dashoffset="251.2"/>
-                </svg>
-                <div class="gauge-center">
-                  <div class="gauge-value"><span id="heap-gauge-value">--</span>%</div>
-                  <div class="gauge-label">Used</div>
-                </div>
-              </div>
-              <div class="gauge-details">
-                <div class="metric-row" title="Current heap memory in use by live objects. Sudden increases may indicate allocation spikes or memory leaks.">
-                  <span class="metric-label">Used</span>
-                  <span class="metric-value" id="heap-used">--</span>
-                </div>
-                <div class="metric-row" title="Total heap memory allocated from the OS. This is the upper limit before OOM. Consider increasing if consistently near capacity.">
-                  <span class="metric-label">Total</span>
-                  <span class="metric-value" id="heap-total">--</span>
-                </div>
-                <div class="metric-row" title="Cumulative memory freed by GC since process start. Compare rate of reclamation vs allocation to assess memory efficiency.">
-                  <span class="metric-label">Reclaimed</span>
-                  <span class="metric-value" id="heap-reclaimed">--</span>
-                </div>
               </div>
             </div>
           </div>
@@ -195,10 +159,226 @@
           </div>
         </article>
       </div>
+
+      <!-- VM Memory (Consolidated) -->
+      <div class="subsection-header">
+        <h3 class="subsection-title">VM Memory</h3>
+        <div class="section-badges">
+          <span class="section-badge">
+            <span class="sse-dot"></span> Live
+          </span>
+        </div>
+      </div>
+
+      <div class="vm-memory-consolidated">
+        <!-- GC Heap (LVAL Slab) -->
+        <div class="memory-block gc-heap-block">
+          <div class="memory-block-header">
+            <div class="memory-block-title">
+              <span class="memory-icon gc">GC</span>
+              GC Heap (LVAL Objects)
+            </div>
+            <div class="memory-block-summary">
+              <span class="usage-pct" id="heap-gauge-value">--</span>% used
+              <span class="usage-detail">(<span id="heap-used">--</span> / <span id="heap-total">--</span>)</span>
+            </div>
+          </div>
+          <div class="memory-block-body">
+            <div class="slab-with-legend">
+              <div class="memory-slab-panel wide" id="lval-panel">
+                <div class="slab-header">
+                  <span class="slab-name">LVAL Slab</span>
+                  <span class="slab-type-badge">Slab</span>
+                  <span class="slab-badge">0% used</span>
+                </div>
+                <div class="slab-canvas">
+                  <div class="slab-grid" id="lval-grid"
+                       role="img"
+                       aria-label="LVAL Object Slab: loading..."
+                       aria-live="polite"
+                       style="grid-template-columns: repeat(32, 1fr);"></div>
+                </div>
+                <div class="slab-stats">
+                  <span><span class="used-count">0</span> / 262,144 slots</span>
+                  <span class="overflow-warning" style="display:none"></span>
+                </div>
+              </div>
+              <!-- Inline legend for this visualization -->
+              <div class="memory-legend-inline">
+                <div class="legend-item"><div class="legend-dot free"></div><span>Free</span></div>
+                <div class="legend-item"><div class="legend-dot used"></div><span>Used</span></div>
+                <div class="legend-item"><div class="legend-dot flash"></div><span>Changed</span></div>
+              </div>
+            </div>
+            <!-- Heap details -->
+            <div class="heap-details-row">
+              <div class="heap-gauge-mini" role="img" aria-label="Heap memory usage" title="Visual gauge of heap utilization. Yellow zone (70-90%) indicates GC pressure. Red zone (>90%) indicates critical memory pressure with risk of OOM.">
+                <svg viewBox="0 0 100 100" aria-hidden="true">
+                  <circle class="gauge-bg" cx="50" cy="50" r="40"/>
+                  <circle class="gauge-threshold warning" cx="50" cy="50" r="40"
+                          stroke-dasharray="251.2" stroke-dashoffset="75.4"/>
+                  <circle class="gauge-threshold critical" cx="50" cy="50" r="40"
+                          stroke-dasharray="251.2" stroke-dashoffset="25.1"/>
+                  <circle class="gauge-fill" id="heap-gauge-fill" cx="50" cy="50" r="40"
+                          stroke-dasharray="251.2" stroke-dashoffset="251.2"/>
+                </svg>
+              </div>
+              <div class="heap-metrics">
+                <div class="metric-row" title="Cumulative memory freed by GC since process start. Compare rate of reclamation vs allocation to assess memory efficiency.">
+                  <span class="metric-label">Reclaimed</span>
+                  <span class="metric-value" id="heap-reclaimed">--</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Scratch Arena -->
+        <div class="memory-block scratch-block">
+          <div class="memory-block-header">
+            <div class="memory-block-title">
+              <span class="memory-icon scratch">S</span>
+              Scratch Arena
+            </div>
+            <div class="memory-block-summary">
+              <span class="pct" id="scratch-pct">0%</span>
+              <span class="usage-detail" id="scratch-usage">0B / 0B</span>
+            </div>
+          </div>
+          <div class="memory-block-body">
+            <div class="arena-gauge" data-arena="scratch"
+                 role="progressbar"
+                 aria-valuenow="0"
+                 aria-valuemin="0"
+                 aria-valuemax="100"
+                 aria-label="Scratch Arena: 0% used">
+              <div class="arena-track">
+                <div class="arena-bar healthy" style="width: 0%;"></div>
+                <div class="arena-hwm" style="left: 0%;"></div>
+              </div>
+            </div>
+            <div class="memory-legend-inline">
+              <div class="legend-item"><div class="legend-dot hwm"></div><span>High Water Mark</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== SYSTEM RESOURCES ==================== -->
+    <section class="section-group resources-section" aria-labelledby="resources-section-title">
+      <div class="section-header">
+        <div class="section-icon resources" aria-hidden="true">R</div>
+        <h2 class="section-title" id="resources-section-title">System Resources</h2>
+        <span class="section-subtitle">Global Allocator Pools</span>
+        <div class="section-badges">
+          <span class="section-badge">
+            <span class="sse-dot"></span> Live
+          </span>
+        </div>
+      </div>
+
+      <p class="section-description">
+        Pre-allocated fixed-size memory pools shared across all AIO systems. Each cell represents one slot.
+      </p>
+
+      <div class="memory-slab-grid">
+        <!-- TCP Buffers -->
+        <div class="memory-slab-panel" id="tcp-buffers-panel">
+          <div class="slab-header">
+            <span class="slab-name">TCP Buffers</span>
+            <span class="slab-type-badge">Slab</span>
+            <span class="slab-badge">0% used</span>
+          </div>
+          <div class="slab-canvas">
+            <div class="slab-grid" id="tcp-buffers-grid"
+                 style="grid-template-columns: repeat(20, 1fr);"></div>
+          </div>
+          <div class="slab-stats">
+            <span><span class="used-count">0</span> / 200 slots</span>
+            <span class="overflow-warning" style="display:none"></span>
+          </div>
+        </div>
+
+        <!-- Handles -->
+        <div class="memory-slab-panel" id="handles-panel">
+          <div class="slab-header">
+            <span class="slab-name">Handles</span>
+            <span class="slab-type-badge">Slab</span>
+            <span class="slab-badge">0% used</span>
+          </div>
+          <div class="slab-canvas">
+            <div class="slab-grid" id="handles-grid"
+                 style="grid-template-columns: repeat(32, 1fr);"></div>
+          </div>
+          <div class="slab-stats">
+            <span><span class="used-count">0</span> / 2056 slots</span>
+            <span class="overflow-warning" style="display:none"></span>
+          </div>
+        </div>
+
+        <!-- Stream Arenas -->
+        <div class="memory-slab-panel" id="stream-arenas-panel">
+          <div class="slab-header">
+            <span class="slab-name">Stream Arenas</span>
+            <span class="slab-type-badge">Slab</span>
+            <span class="slab-badge">0% used</span>
+          </div>
+          <div class="slab-canvas">
+            <div class="slab-grid" id="stream-arenas-grid"
+                 style="grid-template-columns: repeat(8, 1fr);"></div>
+          </div>
+          <div class="slab-stats">
+            <span><span class="used-count">0</span> / 64 slots</span>
+            <span class="overflow-warning" style="display:none"></span>
+          </div>
+        </div>
+
+        <!-- HTTP Servers -->
+        <div class="memory-slab-panel" id="http-servers-panel">
+          <div class="slab-header">
+            <span class="slab-name">HTTP Servers</span>
+            <span class="slab-type-badge">Slab</span>
+            <span class="slab-badge">0% used</span>
+          </div>
+          <div class="slab-canvas">
+            <div class="slab-grid" id="http-servers-grid"
+                 style="grid-template-columns: repeat(3, 1fr); padding: 20px;"></div>
+          </div>
+          <div class="slab-stats">
+            <span><span class="used-count">0</span> / 3 slots</span>
+            <span class="overflow-warning" style="display:none"></span>
+          </div>
+        </div>
+
+        <!-- HTTP Clients -->
+        <div class="memory-slab-panel" id="http-clients-panel">
+          <div class="slab-header">
+            <span class="slab-name">HTTP Clients</span>
+            <span class="slab-type-badge">Slab</span>
+            <span class="slab-badge">0% used</span>
+          </div>
+          <div class="slab-canvas">
+            <div class="slab-grid" id="http-clients-grid"
+                 style="grid-template-columns: repeat(3, 1fr); padding: 20px;"></div>
+          </div>
+          <div class="slab-stats">
+            <span><span class="used-count">0</span> / 3 slots</span>
+            <span class="overflow-warning" style="display:none"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Inline legend -->
+      <div class="memory-legend-inline resources-legend">
+        <div class="legend-item"><div class="legend-dot free"></div><span>Free slot</span></div>
+        <div class="legend-item"><div class="legend-dot used"></div><span>Used slot</span></div>
+        <div class="legend-item"><div class="legend-dot flash"></div><span>State change</span></div>
+      </div>
     </section>
 
     <!-- ==================== AIO SYSTEMS ==================== -->
-    <section class="section-group" aria-labelledby="aio-section-title">
+    <section class="section-group aio-section" aria-labelledby="aio-section-title">
       <div class="section-header">
         <div class="section-icon aio" aria-hidden="true">AIO</div>
         <h2 class="section-title" id="aio-section-title">Async I/O Systems</h2>
@@ -220,7 +400,7 @@
     </section>
 
     <!-- ==================== HTTP SERVERS ==================== -->
-    <section class="section-group" aria-labelledby="http-section-title">
+    <section class="section-group http-section" aria-labelledby="http-section-title">
       <div class="section-header">
         <div class="section-icon http" aria-hidden="true">HTTP</div>
         <h2 class="section-title" id="http-section-title">HTTP Servers</h2>
