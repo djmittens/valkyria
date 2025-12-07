@@ -3667,6 +3667,209 @@ static valk_lval_t* valk_builtin_aio_metrics_prometheus(valk_lenv_t* e,
 #endif
 }
 
+// aio/system-stats-prometheus: (aio/system-stats-prometheus aio-system) -> Prometheus text
+// Returns AIO system stats in Prometheus exposition format
+static valk_lval_t* valk_builtin_aio_system_stats_prometheus(valk_lenv_t* e,
+                                                               valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "Argument must be aio_system");
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  valk_aio_system_stats_t* stats = valk_aio_get_system_stats(sys);
+  char* prom = valk_aio_system_stats_to_prometheus(stats, (struct valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  if (!prom) {
+    return valk_lval_err("Failed to generate system stats Prometheus");
+  }
+  return valk_lval_str(prom);
+#else
+  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
+// aio/systems-json: (aio/systems-json aio-system) -> JSON array of AIO systems
+// Returns metrics as a JSON array for multi-system dashboard support
+static valk_lval_t* valk_builtin_aio_systems_json(valk_lenv_t* e,
+                                                   valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "Argument must be aio_system");
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  valk_aio_update_queue_stats(sys);
+  valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
+  valk_aio_system_stats_t* system_stats = valk_aio_get_system_stats(sys);
+  const char* name = valk_aio_get_name(sys);
+
+  // Get the JSON for this system
+  char* sys_json = valk_aio_combined_to_json_named(name, metrics, system_stats,
+    (struct valk_mem_allocator_t*)valk_thread_ctx.allocator);
+
+  // Wrap in array (for future multi-system support)
+  size_t len = strlen(sys_json);
+  char* result = valk_mem_alloc(len + 3);  // "[" + json + "]" + null
+  snprintf(result, len + 3, "[%s]", sys_json);
+
+  return valk_lval_str(result);
+#else
+  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
+// http-client/register: (http-client/register sys name type pool-size) -> client-id
+// Registers an HTTP client for metrics tracking
+static valk_lval_t* valk_builtin_http_client_register(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 4);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);   // aio system
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);   // name
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_STR);   // type
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 3), LVAL_NUM);   // pool_size
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "Argument 0 must be aio_system");
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  const char* name = valk_lval_list_nth(a, 1)->str;
+  const char* type = valk_lval_list_nth(a, 2)->str;
+  long pool_size = valk_lval_list_nth(a, 3)->num;
+
+  if (pool_size < 0) {
+    return valk_lval_err("pool-size must be non-negative");
+  }
+
+  valk_http_clients_registry_t* reg = valk_aio_get_http_clients_registry(sys);
+  int client_id = valk_http_client_register(reg, name, type, (uint64_t)pool_size);
+
+  if (client_id < 0) {
+    return valk_lval_err("Failed to register HTTP client (max clients reached)");
+  }
+
+  return valk_lval_num(client_id);
+#else
+  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
+// http-client/on-operation: (http-client/on-operation sys client-id duration-us error? retry?) -> nil
+// Records an operation on an HTTP client
+static valk_lval_t* valk_builtin_http_client_on_operation(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 5);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);   // aio system
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);   // client_id
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_NUM);   // duration_us
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "Argument 0 must be aio_system");
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  long client_id = valk_lval_list_nth(a, 1)->num;
+  long duration_us = valk_lval_list_nth(a, 2)->num;
+  valk_lval_t* error_arg = valk_lval_list_nth(a, 3);
+  valk_lval_t* retry_arg = valk_lval_list_nth(a, 4);
+
+  if (client_id < 0) {
+    return valk_lval_err("client-id must be non-negative");
+  }
+  if (duration_us < 0) {
+    return valk_lval_err("duration-us must be non-negative");
+  }
+
+  valk_http_clients_registry_t* reg = valk_aio_get_http_clients_registry(sys);
+  uint32_t count = atomic_load(&reg->count);
+
+  if ((uint32_t)client_id >= count) {
+    return valk_lval_err("Invalid client-id");
+  }
+
+  bool error = (LVAL_TYPE(error_arg) == LVAL_SYM && strcmp(error_arg->str, "true") == 0);
+  bool retry = (LVAL_TYPE(retry_arg) == LVAL_SYM && strcmp(retry_arg->str, "true") == 0);
+
+  valk_http_client_on_operation(&reg->clients[client_id], (uint64_t)duration_us, error, retry);
+
+  return valk_lval_nil();
+#else
+  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
+// http-client/on-cache: (http-client/on-cache sys client-id hit?) -> nil
+// Records a cache hit or miss for an HTTP client
+static valk_lval_t* valk_builtin_http_client_on_cache(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);   // aio system
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);   // client_id
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "Argument 0 must be aio_system");
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  long client_id = valk_lval_list_nth(a, 1)->num;
+  valk_lval_t* hit_arg = valk_lval_list_nth(a, 2);
+
+  if (client_id < 0) {
+    return valk_lval_err("client-id must be non-negative");
+  }
+
+  valk_http_clients_registry_t* reg = valk_aio_get_http_clients_registry(sys);
+  uint32_t count = atomic_load(&reg->count);
+
+  if ((uint32_t)client_id >= count) {
+    return valk_lval_err("Invalid client-id");
+  }
+
+  bool hit = (LVAL_TYPE(hit_arg) == LVAL_SYM && strcmp(hit_arg->str, "true") == 0);
+
+  valk_http_client_on_cache(&reg->clients[client_id], hit);
+
+  return valk_lval_nil();
+#else
+  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
+// http-client/metrics-prometheus: (http-client/metrics-prometheus sys) -> string
+// Exports HTTP client metrics in Prometheus format
+static valk_lval_t* valk_builtin_http_client_metrics_prometheus(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "Argument must be aio_system");
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  valk_http_clients_registry_t* reg = valk_aio_get_http_clients_registry(sys);
+  char* prom = valk_http_clients_to_prometheus(reg, (struct valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  if (!prom) {
+    return valk_lval_str("");  // Return empty string if no clients registered
+  }
+  return valk_lval_str(prom);
+#else
+  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
 // aio/delay: (aio/delay sys ms continuation) -> :deferred
 // Schedules continuation to be called after ms milliseconds
 // Must be called within an HTTP request handler
@@ -3700,9 +3903,14 @@ static valk_lval_t* valk_builtin_vm_metrics_json(valk_lenv_t* e,
   LVAL_ASSERT_COUNT_EQ(a, a, 0);
 
 #ifdef VALK_METRICS_ENABLED
+  // Get heap from AIO system if available, otherwise fall back to thread context
+  valk_gc_malloc_heap_t* heap = valk_aio_active_system && valk_aio_get_gc_heap(valk_aio_active_system)
+    ? valk_aio_get_gc_heap(valk_aio_active_system)
+    : (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+
   valk_vm_metrics_t vm;
   valk_vm_metrics_collect(&vm,
-    (valk_gc_malloc_heap_t*)valk_thread_ctx.heap,
+    heap,
     valk_aio_active_system ? valk_aio_get_event_loop(valk_aio_active_system) : NULL);
 
   char* json = valk_vm_metrics_to_json(&vm, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
@@ -3723,9 +3931,14 @@ static valk_lval_t* valk_builtin_vm_metrics_prometheus(valk_lenv_t* e,
   LVAL_ASSERT_COUNT_EQ(a, a, 0);
 
 #ifdef VALK_METRICS_ENABLED
+  // Get heap from AIO system if available, otherwise fall back to thread context
+  valk_gc_malloc_heap_t* heap = valk_aio_active_system && valk_aio_get_gc_heap(valk_aio_active_system)
+    ? valk_aio_get_gc_heap(valk_aio_active_system)
+    : (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+
   valk_vm_metrics_t vm;
   valk_vm_metrics_collect(&vm,
-    (valk_gc_malloc_heap_t*)valk_thread_ctx.heap,
+    heap,
     valk_aio_active_system ? valk_aio_get_event_loop(valk_aio_active_system) : NULL);
 
   char* prom = valk_vm_metrics_to_prometheus(&vm, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
@@ -4040,9 +4253,22 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "aio/run", valk_builtin_aio_run);
   valk_lenv_put_builtin(env, "aio/metrics", valk_builtin_aio_metrics);
   valk_lenv_put_builtin(env, "aio/metrics-json", valk_builtin_aio_metrics_json);
+  valk_lenv_put_builtin(env, "aio/systems-json", valk_builtin_aio_systems_json);
   valk_lenv_put_builtin(env, "aio/metrics-prometheus",
                         valk_builtin_aio_metrics_prometheus);
+  valk_lenv_put_builtin(env, "aio/system-stats-prometheus",
+                        valk_builtin_aio_system_stats_prometheus);
   valk_lenv_put_builtin(env, "aio/delay", valk_builtin_aio_delay);
+
+  // HTTP Client Metrics Builtins
+  valk_lenv_put_builtin(env, "http-client/register",
+                        valk_builtin_http_client_register);
+  valk_lenv_put_builtin(env, "http-client/on-operation",
+                        valk_builtin_http_client_on_operation);
+  valk_lenv_put_builtin(env, "http-client/on-cache",
+                        valk_builtin_http_client_on_cache);
+  valk_lenv_put_builtin(env, "http-client/metrics-prometheus",
+                        valk_builtin_http_client_metrics_prometheus);
 
   // Async Handle Builtins (from aio_uv.c)
   valk_register_async_handle_builtins(env);

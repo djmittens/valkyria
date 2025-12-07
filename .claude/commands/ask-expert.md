@@ -27,18 +27,18 @@ You are a smart query router with access to multiple expert knowledge bases. Ana
 
    For **compiler/language** questions:
    ```bash
-   ~/src/expert-lab/.venv/bin/python ~/src/expert-lab/bin/almanac-rag "{{question}}" --expert valkyria-compiler --top-k 10
+   ~/src/expert-lab/.venv/bin/python ~/src/expert-lab/bin/almanac-rag "{{question}}" --expert valkyria-compiler --top-k 50
    ```
 
    For **dashboard/frontend** questions:
    ```bash
-   ~/src/expert-lab/.venv/bin/python ~/src/expert-lab/bin/almanac-rag "{{question}}" --expert frontend-dashboard-design --top-k 10
+   ~/src/expert-lab/.venv/bin/python ~/src/expert-lab/bin/almanac-rag "{{question}}" --expert frontend-dashboard-design --top-k 50
    ```
 
    For **mixed/unclear** questions, query BOTH:
    ```bash
-   ~/src/expert-lab/.venv/bin/python ~/src/expert-lab/bin/almanac-rag "{{question}}" --expert valkyria-compiler --top-k 5
-   ~/src/expert-lab/.venv/bin/python ~/src/expert-lab/bin/almanac-rag "{{question}}" --expert frontend-dashboard-design --top-k 5
+   ~/src/expert-lab/.venv/bin/python ~/src/expert-lab/bin/almanac-rag "{{question}}" --expert valkyria-compiler --top-k 50
+   ~/src/expert-lab/.venv/bin/python ~/src/expert-lab/bin/almanac-rag "{{question}}" --expert frontend-dashboard-design --top-k 50
    ```
 
 3. **For conceptual/design questions** (how/why/explain/tradeoffs), add `--prioritize-docs` flag
