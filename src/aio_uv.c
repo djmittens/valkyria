@@ -3626,6 +3626,198 @@ static valk_lval_t* valk_builtin_aio_let(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_eval(e, result);
 }
 
+// ============================================================================
+// aio/do - Monadic do-notation for async operations with interleaved effects
+// ============================================================================
+//
+// Syntax: (aio/do stmt1 stmt2 ... final-expr)
+//   Each stmt can be:
+//     - A regular expression (executed for side effects, result discarded)
+//     - (<- var expr) - Bind async result to var, then continue
+//   The final expression is the result.
+//
+// Example:
+//   (aio/do
+//     (println "Before sleep 1")
+//     (<- step1 (aio/sleep 1000))
+//     (println "After sleep 1, before sleep 2")
+//     (<- step2 (aio/sleep 1000))
+//     (println "After sleep 2")
+//     {:status "200" :body "done"})
+//
+// Transforms to:
+//   (do
+//     (println "Before sleep 1")
+//     (aio/then (aio/sleep 1000) (\ {step1}
+//       (do
+//         (println "After sleep 1, before sleep 2")
+//         (aio/then (aio/sleep 1000) (\ {step2}
+//           (do
+//             (println "After sleep 2")
+//             (aio/pure {:status "200" :body "done"}))))))))
+
+// Helper: Check if expression is (<- var expr) form
+static inline bool is_bind_form(valk_lval_t *expr) {
+  if (LVAL_TYPE(expr) != LVAL_CONS && LVAL_TYPE(expr) != LVAL_QEXPR) return false;
+  if (valk_lval_list_is_empty(expr)) return false;
+  valk_lval_t *head = expr->cons.head;
+  return LVAL_TYPE(head) == LVAL_SYM && strcmp(head->str, "<-") == 0;
+}
+
+// Recursively build the aio/do chain from statements
+// stmts is a list (curr...rest), we process curr and recurse on rest
+static valk_lval_t* aio_do_build_chain(valk_lenv_t *env, valk_lval_t *stmts) {
+  if (valk_lval_list_is_empty(stmts)) {
+    // No statements - return nil wrapped in aio/pure
+    return valk_lval_cons(
+      valk_lval_sym("aio/pure"),
+      valk_lval_cons(valk_lval_nil(), valk_lval_nil()));
+  }
+
+  valk_lval_t *curr = stmts->cons.head;
+  valk_lval_t *rest = stmts->cons.tail;
+
+  // Check if this is the last statement
+  bool is_last = valk_lval_list_is_empty(rest);
+
+  if (is_bind_form(curr)) {
+    // (<- var expr) form
+    // Extract var and expr from (<- var expr)
+    valk_lval_t *var = valk_lval_list_nth(curr, 1);
+    valk_lval_t *expr = valk_lval_list_nth(curr, 2);
+
+    if (is_last) {
+      // Last statement is a bind - just return the expression directly
+      // (it's async and its result becomes the overall result)
+      return valk_lval_copy(expr);
+    }
+
+    // Build continuation: (aio/then expr (\ {var} <rest>))
+    valk_lval_t *continuation = aio_do_build_chain(env, rest);
+
+    // formals = {var}
+    valk_lval_t *formals = valk_lval_qcons(valk_lval_copy(var), valk_lval_nil());
+    valk_lval_t *lambda = valk_lval_lambda(env, formals, continuation);
+
+    return valk_lval_cons(
+      valk_lval_sym("aio/then"),
+      valk_lval_cons(valk_lval_copy(expr),
+        valk_lval_cons(lambda, valk_lval_nil())));
+  } else {
+    // Regular expression (side effect)
+    if (is_last) {
+      // Last statement - wrap in aio/pure
+      return valk_lval_cons(
+        valk_lval_sym("aio/pure"),
+        valk_lval_cons(valk_lval_copy(curr), valk_lval_nil()));
+    }
+
+    // Not last - execute this, then continue with rest
+    // Build: (do curr (aio/then (aio/pure nil) (\ {_} <rest>)))
+    // Actually simpler: since sync exprs are immediate, we can collect them
+    // into a (do ...) block until we hit the next async bind or end
+
+    // Collect consecutive sync expressions
+    valk_lval_t *sync_exprs = valk_lval_nil();
+    sync_exprs = valk_lval_cons(valk_lval_copy(curr), sync_exprs);
+
+    valk_lval_t *remaining = rest;
+    while (!valk_lval_list_is_empty(remaining) && !is_bind_form(remaining->cons.head)) {
+      valk_lval_t *next = remaining->cons.head;
+      remaining = remaining->cons.tail;
+
+      if (valk_lval_list_is_empty(remaining)) {
+        // This is the last statement (sync) - add to sync_exprs, then wrap result
+        sync_exprs = valk_lval_cons(valk_lval_copy(next), sync_exprs);
+        break;
+      }
+      sync_exprs = valk_lval_cons(valk_lval_copy(next), sync_exprs);
+    }
+
+    // Reverse sync_exprs to get correct order
+    valk_lval_t *reversed = valk_lval_nil();
+    while (!valk_lval_list_is_empty(sync_exprs)) {
+      reversed = valk_lval_cons(sync_exprs->cons.head, reversed);
+      sync_exprs = sync_exprs->cons.tail;
+    }
+
+    if (valk_lval_list_is_empty(remaining)) {
+      // All remaining statements were sync - wrap last in aio/pure
+      // Build: (do expr1 expr2 ... (aio/pure last-expr))
+      valk_lval_t *do_body = valk_lval_cons(valk_lval_sym("do"), valk_lval_nil());
+      valk_lval_t *do_tail = do_body;
+
+      valk_lval_t *rev_curr = reversed;
+      valk_lval_t *last_sync = NULL;
+      while (!valk_lval_list_is_empty(rev_curr)) {
+        if (valk_lval_list_is_empty(rev_curr->cons.tail)) {
+          // This is the last one
+          last_sync = rev_curr->cons.head;
+        } else {
+          do_tail->cons.tail = valk_lval_cons(valk_lval_copy(rev_curr->cons.head), valk_lval_nil());
+          do_tail = do_tail->cons.tail;
+        }
+        rev_curr = rev_curr->cons.tail;
+      }
+
+      // Wrap last in aio/pure
+      valk_lval_t *pure_last = valk_lval_cons(
+        valk_lval_sym("aio/pure"),
+        valk_lval_cons(valk_lval_copy(last_sync), valk_lval_nil()));
+      do_tail->cons.tail = valk_lval_cons(pure_last, valk_lval_nil());
+
+      return do_body;
+    } else {
+      // There's a bind form in remaining - build continuation
+      // Build: (do expr1 expr2 ... <continuation>)
+      valk_lval_t *continuation = aio_do_build_chain(env, remaining);
+
+      valk_lval_t *do_body = valk_lval_cons(valk_lval_sym("do"), valk_lval_nil());
+      valk_lval_t *do_tail = do_body;
+
+      valk_lval_t *rev_curr = reversed;
+      while (!valk_lval_list_is_empty(rev_curr)) {
+        do_tail->cons.tail = valk_lval_cons(valk_lval_copy(rev_curr->cons.head), valk_lval_nil());
+        do_tail = do_tail->cons.tail;
+        rev_curr = rev_curr->cons.tail;
+      }
+
+      do_tail->cons.tail = valk_lval_cons(continuation, valk_lval_nil());
+      return do_body;
+    }
+  }
+}
+
+static valk_lval_t* valk_builtin_aio_do(valk_lenv_t* e, valk_lval_t* a) {
+  // aio/do receives all statements as arguments (unevaluated - it's a special form)
+  // Actually, aio/do needs to be a macro/special form that doesn't evaluate args
+  // For now, it receives a QEXPR containing the statements
+
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/do: expected 1 argument (qexpr of statements)");
+  }
+
+  valk_lval_t *stmts = valk_lval_list_nth(a, 0);
+
+  if (LVAL_TYPE(stmts) != LVAL_QEXPR) {
+    return valk_lval_err("aio/do: argument must be a qexpr {stmt1 stmt2 ...}");
+  }
+
+  if (valk_lval_list_is_empty(stmts)) {
+    // Empty do block - return aio/pure nil
+    valk_lval_t *pure = valk_lval_cons(
+      valk_lval_sym("aio/pure"),
+      valk_lval_cons(valk_lval_nil(), valk_lval_nil()));
+    return valk_lval_eval(e, pure);
+  }
+
+  // Build the chain of operations
+  valk_lval_t *chain = aio_do_build_chain(e, stmts);
+
+  // Evaluate the generated code
+  return valk_lval_eval(e, chain);
+}
+
 // Get/set current request context (for aio/delay to access)
 valk_http_request_ctx_t* valk_http_get_request_ctx(void) {
   return current_request_ctx;
@@ -4096,6 +4288,11 @@ static void valk_async_propagate_completion(valk_async_handle_t *source) {
               // Inner still running - link child to inner
               valk_async_handle_add_child(inner, child);
               child->parent = inner;
+              // IMPORTANT: Clear the transform function - we already called it
+              // and now we're waiting for inner. If we don't clear this, when
+              // inner completes and propagates to child, it will call on_complete
+              // again, creating an infinite loop.
+              child->on_complete = NULL;
               // Transfer HTTP context from child to inner, so the inner can
               // eventually send the HTTP response when it completes
               if (child->session && !inner->session) {
@@ -4974,6 +5171,7 @@ void valk_register_async_handle_builtins(valk_lenv_t *env) {
   // Timer and monadic operations
   valk_lenv_put_builtin(env, "aio/sleep", valk_builtin_aio_sleep);
   valk_lenv_put_builtin(env, "aio/let", valk_builtin_aio_let);
+  valk_lenv_put_builtin(env, "aio/do", valk_builtin_aio_do);
 
   // Resource safety operations (Phase 3)
   valk_lenv_put_builtin(env, "aio/bracket", valk_builtin_aio_bracket);

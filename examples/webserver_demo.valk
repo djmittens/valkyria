@@ -200,26 +200,31 @@
     ; Route based on path
     (select
       ; ================================================================
-      ; /slow - Demonstrates aio/let with single async binding
+      ; /slow - Demonstrates aio/do with interleaved side effects
       ; ================================================================
       {(== path "/slow")
-       (aio/let
-         {((_ (aio/sleep 2000)))}
-         {:status "200" :content-type "text/plain" :body "slept 2s (async)"})}
+       (aio/do {
+         (println "  [/slow] Starting 2s sleep...")
+         (<- _ (aio/sleep 2000))
+         (println "  [/slow] Done sleeping!")
+         {:status "200" :content-type "text/plain" :body "slept 2s (async)"}})}
 
       ; ================================================================
-      ; /slow-chain - Demonstrates sequential async operations
+      ; /slow-chain - Demonstrates aio/do with sequential sleeps
       ; ================================================================
       {(== path "/slow-chain")
-       (aio/let
-         {((step1 (aio/sleep 1000))
-           :then
-           (step2 (aio/sleep 1000)))}
+       (aio/do {
+         (println "  [/slow-chain] Starting first 5s sleep...")
+         (<- step1 (aio/sleep 5000))
+         (println "  [/slow-chain] First sleep done, starting second...")
+         (<- step2 (aio/sleep 5000))
+         (println "  [/slow-chain] Both sleeps done!")
          {:status "200" :content-type "text/plain"
-          :body "slept 2s (1s + 1s sequential)"})}
+          :body "slept 10s (5s + 5s sequential)"}})}
 
       ; ================================================================
-      ; /slow-parallel - Demonstrates parallel async operations
+      ; /slow-parallel - Demonstrates aio/let for parallel operations
+      ; (aio/do is sequential, use aio/let for parallel)
       ; ================================================================
       {(== path "/slow-parallel")
        (aio/let
@@ -230,7 +235,7 @@
           :body "slept ~1s (3x1s parallel)"})}
 
       ; ================================================================
-      ; /complex - Demonstrates mixed parallel/sequential
+      ; /complex - Demonstrates mixed parallel/sequential with aio/let
       ; ================================================================
       {(== path "/complex")
        (aio/let
