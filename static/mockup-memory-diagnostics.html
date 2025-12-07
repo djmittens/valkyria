@@ -5,24 +5,55 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Memory Diagnostics Mockup - Valkyria Dashboard</title>
   <style>
+    /*
+     * CSS Variables aligned with src/modules/aio/debug/style.css
+     * This mockup uses the same variable names as the production dashboard
+     */
     :root {
-      --bg: #0f172a;
-      --bg-darker: #020617;
-      --card-bg: #1e293b;
-      --border: #334155;
-      --text: #f1f5f9;
-      --text-muted: #94a3b8;
-      --success: #22c55e;
-      --warning: #f59e0b;
-      --error: #ef4444;
-      --info: #3b82f6;
-      --radius-sm: 4px;
-      --radius-md: 8px;
+      /* Background colors - from dashboard */
+      --bg-primary: #0d1117;
+      --bg-secondary: #161b22;
+      --bg-tertiary: #1c2128;
+      --bg-elevated: #21262d;
+
+      /* Border colors - from dashboard */
+      --border-default: #30363d;
+      --border-muted: #21262d;
+
+      /* Text colors - from dashboard */
+      --text-primary: #f0f6fc;
+      --text-secondary: #c9d1d9;
+      --text-muted: #8b949e;
+      --text-faint: #6e7681;
+
+      /* Semantic colors - from dashboard */
+      --color-ok: #3fb950;
+      --color-ok-muted: #238636;
+      --color-ok-bg: rgba(63, 185, 80, 0.15);
+      --color-warning: #d29922;
+      --color-warning-muted: #9e6a03;
+      --color-warning-bg: rgba(210, 153, 34, 0.15);
+      --color-error: #f85149;
+      --color-error-muted: #da3633;
+      --color-error-bg: rgba(248, 81, 73, 0.15);
+      --color-info: #58a6ff;
+      --color-info-muted: #1f6feb;
+      --color-info-bg: rgba(88, 166, 255, 0.15);
+      --color-purple: #a371f7;
+      --color-purple-muted: #8957e5;
+
+      /* Spacing - from dashboard */
       --space-xs: 4px;
       --space-sm: 8px;
-      --space-md: 16px;
-      --space-lg: 24px;
-      --space-xl: 32px;
+      --space-md: 12px;
+      --space-lg: 16px;
+      --space-xl: 24px;
+      --space-2xl: 32px;
+
+      /* Border radius - from dashboard */
+      --radius-sm: 4px;
+      --radius-md: 6px;
+      --radius-lg: 8px;
     }
 
     * {
@@ -32,36 +63,39 @@
     }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      padding: var(--space-lg);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      background: var(--bg-primary);
+      color: var(--text-secondary);
+      padding: var(--space-xl);
       min-height: 100vh;
     }
 
     h1 {
       font-size: 24px;
+      color: var(--text-primary);
       margin-bottom: var(--space-xs);
     }
 
     .subtitle {
       color: var(--text-muted);
       font-size: 14px;
-      margin-bottom: var(--space-lg);
+      margin-bottom: var(--space-xl);
     }
 
     /* Section Header */
     .section-group {
-      margin-bottom: var(--space-xl);
+      margin-bottom: var(--space-2xl);
     }
 
     .section-header {
       display: flex;
       align-items: center;
-      gap: var(--space-md);
-      margin-bottom: var(--space-md);
+      gap: var(--space-lg);
+      margin-bottom: var(--space-lg);
       padding-bottom: var(--space-sm);
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--border-default);
     }
 
     .section-icon {
@@ -73,12 +107,14 @@
       justify-content: center;
       font-weight: 700;
       font-size: 12px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: var(--text-primary);
+      background: linear-gradient(135deg, var(--color-purple), var(--color-purple-muted));
     }
 
     .section-title {
       font-size: 18px;
       font-weight: 600;
+      color: var(--text-primary);
     }
 
     .section-subtitle {
@@ -93,8 +129,8 @@
     }
 
     .section-badge {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-default);
       border-radius: 12px;
       padding: 4px 10px;
       font-size: 11px;
@@ -108,7 +144,7 @@
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background: var(--success);
+      background: var(--color-ok);
       animation: pulse 2s infinite;
     }
 
@@ -121,15 +157,15 @@
     .memory-slab-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: var(--space-md);
-      margin-bottom: var(--space-lg);
+      gap: var(--space-lg);
+      margin-bottom: var(--space-xl);
     }
 
     .memory-slab-panel {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      padding: var(--space-md);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-lg);
+      padding: var(--space-lg);
       display: flex;
       flex-direction: column;
     }
@@ -139,7 +175,7 @@
     }
 
     .memory-slab-panel.critical {
-      border-color: var(--warning);
+      border-color: var(--color-warning);
     }
 
     .slab-header {
@@ -160,21 +196,21 @@
     .slab-badge {
       font-size: 10px;
       padding: 2px 6px;
-      border-radius: 4px;
-      background: var(--bg-darker);
+      border-radius: var(--radius-sm);
+      background: var(--bg-tertiary);
       color: var(--text-muted);
     }
 
     .slab-badge.warning {
-      background: rgba(245, 158, 11, 0.2);
-      color: var(--warning);
+      background: var(--color-warning-bg);
+      color: var(--color-warning);
     }
 
     .slab-canvas {
       flex: 1;
       min-height: 100px;
       border-radius: var(--radius-sm);
-      background: var(--bg-darker);
+      background: var(--bg-tertiary);
       position: relative;
       overflow: hidden;
     }
@@ -193,21 +229,21 @@
     }
 
     .slab-cell.free {
-      background: var(--bg-darker);
+      background: var(--bg-tertiary);
     }
 
     .slab-cell.used {
-      background: var(--success);
+      background: var(--color-ok);
     }
 
     .slab-cell.flash {
-      background: var(--warning);
+      background: var(--color-warning);
       animation: flash 300ms ease-out;
     }
 
     @keyframes flash {
-      0% { background: var(--warning); }
-      100% { background: var(--success); }
+      0% { background: var(--color-warning); }
+      100% { background: var(--color-ok); }
     }
 
     .slab-stats {
@@ -220,21 +256,21 @@
     }
 
     .slab-stats .used-count {
-      color: var(--success);
+      color: var(--color-ok);
       font-weight: 600;
     }
 
     .slab-stats .overflow-warning {
-      color: var(--error);
+      color: var(--color-error);
       font-size: 10px;
     }
 
     /* Arena Section */
     .memory-arena-section {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      padding: var(--space-md);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-lg);
+      padding: var(--space-lg);
     }
 
     .arena-title {
@@ -243,7 +279,7 @@
       color: var(--text-muted);
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      margin-bottom: var(--space-md);
+      margin-bottom: var(--space-lg);
     }
 
     .arena-list {
@@ -255,26 +291,27 @@
     .arena-gauge {
       display: flex;
       align-items: center;
-      gap: var(--space-md);
+      gap: var(--space-lg);
       padding: var(--space-sm);
-      background: var(--bg-darker);
+      background: var(--bg-tertiary);
       border-radius: var(--radius-sm);
     }
 
     .arena-gauge.has-overflow {
-      border: 1px solid var(--warning);
+      border: 1px solid var(--color-warning);
     }
 
     .arena-name {
       min-width: 120px;
       font-size: 12px;
       font-weight: 500;
+      color: var(--text-secondary);
     }
 
     .arena-track {
       flex: 1;
       height: 12px;
-      background: var(--bg);
+      background: var(--bg-primary);
       border-radius: 6px;
       position: relative;
       overflow: hidden;
@@ -287,15 +324,15 @@
     }
 
     .arena-bar.healthy {
-      background: linear-gradient(90deg, var(--success), #16a34a);
+      background: linear-gradient(90deg, var(--color-ok), var(--color-ok-muted));
     }
 
     .arena-bar.warning {
-      background: linear-gradient(90deg, var(--warning), #d97706);
+      background: linear-gradient(90deg, var(--color-warning), var(--color-warning-muted));
     }
 
     .arena-bar.critical {
-      background: linear-gradient(90deg, var(--error), #dc2626);
+      background: linear-gradient(90deg, var(--color-error), var(--color-error-muted));
     }
 
     .arena-hwm {
@@ -303,7 +340,7 @@
       top: 0;
       bottom: 0;
       width: 2px;
-      background: var(--warning);
+      background: var(--color-warning);
       opacity: 0.8;
     }
 
@@ -314,7 +351,7 @@
       left: 50%;
       transform: translateX(-50%);
       font-size: 8px;
-      color: var(--warning);
+      color: var(--color-warning);
       white-space: nowrap;
     }
 
@@ -326,17 +363,17 @@
     }
 
     .arena-label .pct {
-      color: var(--text);
+      color: var(--text-primary);
       font-weight: 600;
     }
 
     /* Legend */
     .legend {
       display: flex;
-      gap: var(--space-lg);
-      margin-top: var(--space-lg);
-      padding-top: var(--space-md);
-      border-top: 1px solid var(--border);
+      gap: var(--space-xl);
+      margin-top: var(--space-xl);
+      padding-top: var(--space-lg);
+      border-top: 1px solid var(--border-default);
     }
 
     .legend-item {
@@ -353,39 +390,40 @@
       border-radius: 2px;
     }
 
-    .legend-dot.free { background: var(--bg-darker); border: 1px solid var(--border); }
-    .legend-dot.used { background: var(--success); }
-    .legend-dot.flash { background: var(--warning); }
-    .legend-dot.hwm { background: var(--warning); width: 2px; height: 12px; }
+    .legend-dot.free { background: var(--bg-tertiary); border: 1px solid var(--border-default); }
+    .legend-dot.used { background: var(--color-ok); }
+    .legend-dot.flash { background: var(--color-warning); }
+    .legend-dot.hwm { background: var(--color-warning); width: 2px; height: 12px; }
 
     /* Comparison Section */
     .comparison {
-      margin-top: var(--space-xl);
-      padding-top: var(--space-lg);
-      border-top: 2px solid var(--border);
+      margin-top: var(--space-2xl);
+      padding-top: var(--space-xl);
+      border-top: 2px solid var(--border-default);
     }
 
     .comparison h2 {
       font-size: 16px;
-      margin-bottom: var(--space-md);
+      margin-bottom: var(--space-lg);
       color: var(--text-muted);
     }
 
     .comparison-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: var(--space-lg);
+      gap: var(--space-xl);
     }
 
     .comparison-panel {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      padding: var(--space-md);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-lg);
+      padding: var(--space-lg);
     }
 
     .comparison-panel h3 {
       font-size: 14px;
+      color: var(--text-primary);
       margin-bottom: var(--space-sm);
       display: flex;
       align-items: center;
@@ -395,18 +433,18 @@
     .comparison-panel h3 .badge {
       font-size: 10px;
       padding: 2px 6px;
-      border-radius: 4px;
+      border-radius: var(--radius-sm);
       font-weight: normal;
     }
 
     .comparison-panel h3 .badge.old {
-      background: rgba(239, 68, 68, 0.2);
-      color: var(--error);
+      background: var(--color-error-bg);
+      color: var(--color-error);
     }
 
     .comparison-panel h3 .badge.new {
-      background: rgba(34, 197, 94, 0.2);
-      color: var(--success);
+      background: var(--color-ok-bg);
+      color: var(--color-ok);
     }
 
     /* Old decorative grid */
@@ -415,7 +453,7 @@
       gap: 2px;
       flex-wrap: wrap;
       padding: var(--space-sm);
-      background: var(--bg-darker);
+      background: var(--bg-tertiary);
       border-radius: var(--radius-sm);
     }
 
@@ -426,9 +464,10 @@
     }
 
     .feature-list {
-      margin-top: var(--space-md);
+      margin-top: var(--space-lg);
       font-size: 12px;
       color: var(--text-muted);
+      list-style: none;
     }
 
     .feature-list li {
@@ -445,12 +484,12 @@
 
     .feature-list li.pro::before {
       content: '✓';
-      color: var(--success);
+      color: var(--color-ok);
     }
 
     .feature-list li.con::before {
       content: '✗';
-      color: var(--error);
+      color: var(--color-error);
     }
 
     /* Responsive */
@@ -497,7 +536,7 @@
           <span class="slab-badge warning">87% used</span>
         </div>
         <div class="slab-canvas">
-          <div class="slab-grid" id="tcp-buffer-grid" style="grid-template-columns: repeat(20, 1fr);"></div>
+          <div class="slab-grid" id="tcp-buffers-grid" style="grid-template-columns: repeat(20, 1fr);"></div>
         </div>
         <div class="slab-stats">
           <span><span class="used-count">174</span> / 200 slots</span>
@@ -512,7 +551,7 @@
           <span class="slab-badge">12% used</span>
         </div>
         <div class="slab-canvas">
-          <div class="slab-grid" id="handle-grid" style="grid-template-columns: repeat(25, 1fr);"></div>
+          <div class="slab-grid" id="handles-grid" style="grid-template-columns: repeat(32, 1fr);"></div>
         </div>
         <div class="slab-stats">
           <span><span class="used-count">247</span> / 2056 slots</span>
@@ -527,7 +566,7 @@
           <span class="slab-badge">28% used</span>
         </div>
         <div class="slab-canvas">
-          <div class="slab-grid" id="arena-grid" style="grid-template-columns: repeat(8, 1fr);"></div>
+          <div class="slab-grid" id="stream-arenas-grid" style="grid-template-columns: repeat(8, 1fr);"></div>
         </div>
         <div class="slab-stats">
           <span><span class="used-count">18</span> / 64 slots</span>
@@ -542,7 +581,7 @@
           <span class="slab-badge">33% used</span>
         </div>
         <div class="slab-canvas">
-          <div class="slab-grid" id="server-grid" style="grid-template-columns: repeat(3, 1fr); padding: 20px;"></div>
+          <div class="slab-grid" id="http-servers-grid" style="grid-template-columns: repeat(3, 1fr); padding: 20px;"></div>
         </div>
         <div class="slab-stats">
           <span><span class="used-count">1</span> / 3 slots</span>
@@ -557,7 +596,7 @@
           <span class="slab-badge">0% used</span>
         </div>
         <div class="slab-canvas">
-          <div class="slab-grid" id="client-grid" style="grid-template-columns: repeat(3, 1fr); padding: 20px;"></div>
+          <div class="slab-grid" id="http-clients-grid" style="grid-template-columns: repeat(3, 1fr); padding: 20px;"></div>
         </div>
         <div class="slab-stats">
           <span><span class="used-count">0</span> / 3 slots</span>
@@ -585,7 +624,7 @@
     <div class="memory-arena-section">
       <div class="arena-title">Arena Allocators</div>
       <div class="arena-list">
-        <div class="arena-gauge">
+        <div class="arena-gauge" data-arena="scratch">
           <span class="arena-name">Scratch Arena</span>
           <div class="arena-track">
             <div class="arena-bar healthy" style="width: 23%;"></div>
@@ -593,7 +632,7 @@
           </div>
           <span class="arena-label"><span class="pct">23%</span> &mdash; 940KB / 4MB</span>
         </div>
-        <div class="arena-gauge has-overflow">
+        <div class="arena-gauge has-overflow" data-arena="stream_1">
           <span class="arena-name">Stream Arena #1</span>
           <div class="arena-track">
             <div class="arena-bar warning" style="width: 78%;"></div>
@@ -601,7 +640,7 @@
           </div>
           <span class="arena-label"><span class="pct">78%</span> &mdash; 50MB / 64MB</span>
         </div>
-        <div class="arena-gauge">
+        <div class="arena-gauge" data-arena="stream_2">
           <span class="arena-name">Stream Arena #2</span>
           <div class="arena-track">
             <div class="arena-bar healthy" style="width: 12%;"></div>
@@ -650,7 +689,7 @@
       </div>
       <div class="comparison-panel">
         <h3>New Design <span class="badge new">Functional</span></h3>
-        <div style="text-align: center; padding: var(--space-md); color: var(--text-muted); font-size: 12px;">
+        <div style="text-align: center; padding: var(--space-lg); color: var(--text-muted); font-size: 12px;">
           (See mockup above)
         </div>
         <ul class="feature-list">
@@ -694,32 +733,32 @@
       ).join('');
     }
 
-    // TCP Buffers: 200 slots, 87% used, high flash
-    generateSlabCells('tcp-buffer-grid', 200, 174, 0.08);
+    // TCP Buffers: 200 slots (20x10), 87% used, high flash
+    generateSlabCells('tcp-buffers-grid', 200, 174, 0.08);
 
-    // Handles: 250 slots shown (scaled from 2056), 12% used
-    generateSlabCells('handle-grid', 250, 30, 0.03);
+    // Handles: 256 slots shown (32x8, scaled from 2056), 12% used
+    generateSlabCells('handles-grid', 256, 31, 0.03);
 
-    // Stream Arenas: 64 slots, 28% used
-    generateSlabCells('arena-grid', 64, 18, 0.05);
+    // Stream Arenas: 64 slots (8x8), 28% used
+    generateSlabCells('stream-arenas-grid', 64, 18, 0.05);
 
     // HTTP Servers: 3 slots, 1 used
-    generateSlabCells('server-grid', 3, 1, 0);
+    generateSlabCells('http-servers-grid', 3, 1, 0);
 
     // HTTP Clients: 3 slots, 0 used
-    generateSlabCells('client-grid', 3, 0, 0);
+    generateSlabCells('http-clients-grid', 3, 0, 0);
 
-    // LVAL: 256 shown (scaled from 262144), 45% used
+    // LVAL: 256 shown (32x8, aggregated from 262144), 45% used
     generateSlabCells('lval-grid', 256, 115, 0.02);
 
     // Old decorative grid (current implementation)
     const oldGrid = document.getElementById('old-grid');
     const oldStates = ['active', 'idle', 'closing', ''];
     const oldColors = {
-      'active': 'var(--success)',
-      'idle': 'var(--info)',
-      'closing': 'var(--warning)',
-      '': 'var(--bg-darker)'
+      'active': 'var(--color-ok)',
+      'idle': 'var(--color-info)',
+      'closing': 'var(--color-warning)',
+      '': 'var(--bg-tertiary)'
     };
 
     for (let i = 0; i < 50; i++) {
@@ -733,7 +772,7 @@
     // Simulate live updates
     setInterval(() => {
       // Flash random cells to simulate activity
-      const grids = ['tcp-buffer-grid', 'handle-grid', 'lval-grid'];
+      const grids = ['tcp-buffers-grid', 'handles-grid', 'lval-grid'];
       grids.forEach(gridId => {
         const cells = document.querySelectorAll(`#${gridId} .slab-cell.used`);
         if (cells.length > 0) {
