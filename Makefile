@@ -94,6 +94,7 @@ test: build
 	build/test_std &&\
 	build/test_memory &&\
 	build/test_networking &&\
+	build/test_large_response &&\
 	build/test_per_stream_arena &&\
 	# Metrics Tests (only when VALK_METRICS=1)
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f build/test_aio_metrics ]; then \

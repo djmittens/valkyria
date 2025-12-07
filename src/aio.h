@@ -22,7 +22,6 @@
 
 typedef struct valk_aio_system valk_aio_system_t;
 typedef struct valk_aio_system_config valk_aio_system_config_t;
-typedef struct valk_aio_http_conn valk_aio_http_conn;
 
 typedef struct valk_aio_http_server valk_aio_http_server;
 typedef struct valk_aio_http2_client valk_aio_http2_client;
@@ -73,7 +72,7 @@ struct valk_async_handle_t {
   // HTTP context (for sending response after async completion)
   void *session;
   int32_t stream_id;
-  struct valk_aio_http_conn *conn;
+  valk_aio_handle_t *conn;
   struct valk_mem_arena *stream_arena;
 
   // Structured cancellation (parent/child hierarchy)
@@ -166,11 +165,11 @@ valk_future *valk_aio_read_file(valk_aio_system_t *sys, const char *filename);
 
 typedef struct {
   void *arg;
-  void (*onConnect)(void *arg, valk_aio_http_conn *);
-  void (*onDisconnect)(void *arg, valk_aio_http_conn *);
-  void (*onHeader)(void *arg, valk_aio_http_conn *, size_t stream, char *name,
+  void (*onConnect)(void *arg, valk_aio_handle_t *);
+  void (*onDisconnect)(void *arg, valk_aio_handle_t *);
+  void (*onHeader)(void *arg, valk_aio_handle_t *, size_t stream, char *name,
                    char *value);
-  void (*onBody)(void *arg, valk_aio_http_conn *, size_t stream, uint8_t flags,
+  void (*onBody)(void *arg, valk_aio_handle_t *, size_t stream, uint8_t flags,
                  valk_buffer_t *buf);
 } valk_http2_handler_t;
 

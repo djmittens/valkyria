@@ -357,19 +357,21 @@ int main(int argc, const char **argv) {
   return res;
 }
 
-void cb_onConnect(void *arg, valk_aio_http_conn *) {
+void cb_onConnect(void *arg, valk_aio_handle_t *conn) {
+  UNUSED(conn);
   valk_srv_state_t *handler = arg;
 
   __atomic_fetch_add(&handler->connectedCount, 1, __ATOMIC_RELAXED);
 }
 
-void cb_onDisconnect(void *arg, valk_aio_http_conn *) {
+void cb_onDisconnect(void *arg, valk_aio_handle_t *conn) {
+  UNUSED(conn);
   valk_srv_state_t *handler = arg;
   printf("HOLLYYEE got called, %d\n", handler->disconnectedCount);
   __atomic_fetch_add(&handler->disconnectedCount, 1, __ATOMIC_RELAXED);
 }
 
-void cb_onHeader(void *arg, valk_aio_http_conn *conn, size_t stream, char *name,
+void cb_onHeader(void *arg, valk_aio_handle_t *conn, size_t stream, char *name,
                  char *value) {
   UNUSED(arg);
   UNUSED(conn);
@@ -378,7 +380,7 @@ void cb_onHeader(void *arg, valk_aio_http_conn *conn, size_t stream, char *name,
   UNUSED(value);
 }
 
-void cb_onBody(void *arg, valk_aio_http_conn *conn, size_t stream, uint8_t flags,
+void cb_onBody(void *arg, valk_aio_handle_t *conn, size_t stream, uint8_t flags,
                valk_buffer_t *buf) {
   UNUSED(arg);
   UNUSED(conn);

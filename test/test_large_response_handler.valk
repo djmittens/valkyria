@@ -53,12 +53,12 @@
       {(== path "/big")
        `{:status "200" :content-type "text/plain" :body ,str-50mb}}
       {(== path "/health")
-       {:status "200" :content-type "text/plain" :body "OK"}}
+       `{:status "200" :content-type "text/plain" :body "OK"}}
       {(== path "/sizes")
-       {:status "200" :content-type "application/json"
+       `{:status "200" :content-type "application/json"
         :body "{\"1mb\":1048576,\"2mb\":2097152,\"5mb\":5242880,\"10mb\":10485760,\"25mb\":26214400,\"50mb\":52428800}"}}
       {otherwise
-       {:status "200" :content-type "text/plain"
+       `{:status "200" :content-type "text/plain"
         :body "Available: /1mb /2mb /5mb /10mb /25mb /50mb /health /sizes"}})
   }))
 
