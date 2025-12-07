@@ -22,22 +22,22 @@ valk_mem_allocator_t valk_malloc_allocator = {.type = VALK_ALLOC_MALLOC};
 #include "debug.h"
 void __valk_arc_trace_report_print(valk_arc_trace_info *traces, size_t num) {
   for (size_t i = 0; i < num; i++) {
-    const char *shit;
+    const char *kind_str;
     switch (traces->kind) {
       case VALK_TRACE_ACQUIRE:
-        shit = "ACQUIRE";
+        kind_str = "ACQUIRE";
         break;
       case VALK_TRACE_RELEASE:
-        shit = "RELEASE";
+        kind_str = "RELEASE";
         break;
       case VALK_TRACE_NEW:
-        shit = "NEW";
+        kind_str = "NEW";
         break;
       case VALK_TRACE_FREE:
-        shit = "FREE";
+        kind_str = "FREE";
         break;
     }
-    fprintf(stderr, "[%s] refcount[%ld] %s()|%s:%d \n", shit, traces->refcount,
+    fprintf(stderr, "[%s] refcount[%ld] %s()|%s:%d \n", kind_str, traces->refcount,
             traces->function, traces->file, traces->line);
     valk_trace_print(traces->stack, traces->size);
     traces++;
@@ -67,7 +67,7 @@ void valk_mem_init_malloc() { valk_thread_ctx.allocator = &__allocator_malloc; }
 void valk_buffer_alloc(valk_buffer_t *buf, size_t capacity) {
   buf->capacity = capacity;
   buf->count = 0;
-  // TODO(networking): use mmap with page aligned shit for this instead
+  // TODO(networking): use mmap with page-aligned memory for this instead
   buf->items = valk_mem_alloc(capacity);
 }
 
@@ -365,7 +365,7 @@ void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
 
 void valk_slab_release_ptr(valk_slab_t *self, void *data) {
   // This function will look back item size bytes in the array, to figure out
-  // the handle and then free that shit
+  // the handle and then free it
   uint64_t v;
   __valk_slab_offset_unpack(
       valk_container_of(data, valk_slab_item_t, data)->handle, &v);
@@ -711,7 +711,7 @@ void *valk_gc_realloc(valk_gc_heap_t *heap, void *ptr, size_t size) {
                                     size + sizeof(valk_gc_heap_t));
   self->prev->next = self;
   self->next->prev = self;
-  return self + 1;  // uhhh yeah the good shit
+  return self + 1;  // return pointer to data after header
 }
 
 void valk_gc_sweep(valk_gc_heap_t *self) {
@@ -721,7 +721,7 @@ void valk_gc_sweep(valk_gc_heap_t *self) {
       if (self->finalize) {
         self->finalize(node);
       } else {
-        // Eject this shit
+        // Remove from list and free
         valk_dll_pop(node);
         valk_mem_allocator_free(self->allocator, node);
       }

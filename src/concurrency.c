@@ -197,10 +197,7 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
 
   int old = __atomic_fetch_add(&fut->done, 1, __ATOMIC_RELEASE);
   if (old) {
-    printf(
-        "Welll... this is awkward, the promise is already resolved.... what "
-        "the fuck");
-
+    fprintf(stderr, "ERROR: Promise already resolved, cannot resolve twice.\n");
     pthread_mutex_unlock(&fut->mutex);
     valk_arc_release(result);
     valk_arc_release(fut);
@@ -428,7 +425,7 @@ typedef struct {
 
 static valk_arc_box *__valk_pool_resolve_promise_cb(valk_arc_box *arg) {
   if (arg->type != VALK_SUC) {
-    // cant resolve an error ??? why the heck did that even get in here
+    // Cannot resolve an error - this should not happen
     // TODO(networking): maybe turn this into a hard assert
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr,

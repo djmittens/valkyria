@@ -297,8 +297,7 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
   if (In->count > 0) {
     n = BIO_write(ssl->read_bio, In->items, In->count);
     VALK_ASSERT(n >= 0,
-                "OpenSSL BIO_write must be able to write !!! what the heck, got "
-                "an error instead %d",
+                "OpenSSL BIO_write must be able to write, got error %d",
                 n);
 
     VALK_ASSERT((size_t)n == In->count,

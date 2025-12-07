@@ -1463,7 +1463,7 @@ static valk_lval_t* valk_lval_read_str(int* i, const char* s) {
   int offset = 0;
   int end;
   for (end = *i; (next = s[end]) != '"'; ++end) {
-    // next = s[end]; // why the heck is that here
+    // next = s[end]; // redundant - already assigned in loop condition
     if (next == '\\') {
       ++end;
       next = valk_lval_str_unescape(s[end]);
@@ -1759,7 +1759,7 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
 
 void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   // TODO: obviously this should probably not be void ???
-  // especially since i cant assert this shit
+  // especially since we can't assert in a void function
   // LVAL_ASSERT_TYPE((valk_lval_t *)nullptr, key, LVAL_SYM);
   if (valk_log_would_log(VALK_LOG_DEBUG)) {
     VALK_DEBUG("env put: %s", key->str);

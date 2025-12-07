@@ -3,8 +3,7 @@
 #define _XOPEN_SOURCE 700
 #endif
 #define _POSIX_C_SOURCE \
-  200809L  // The fuck is this ? turns out sigaction and shit has to be enabled
-           // separately in strict mode
+  200809L  // Required to enable sigaction and related POSIX features in strict mode
 
 #include <netinet/in.h>
 #include <netdb.h>
@@ -2175,7 +2174,6 @@ static void __uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task) {
 }
 
 static void __valk_aio_http2_server_free(valk_arc_box *box) {
-  printf("FREERDOM\n");
   valk_aio_http_server *srv = box->item;
 #ifdef VALK_METRICS_ENABLED
   // Track server stop in system stats
@@ -2369,8 +2367,6 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     return;
   }
 
-  printf("Gurr we connected\n");
-
 #ifdef VALK_METRICS_ENABLED
   // Initialize client connections gauge lazily
   if (!client_connections_active) {
@@ -2442,7 +2438,6 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     slabItem->buf.base = Out.items;
     slabItem->buf.len = Out.count;
 
-    printf("[Client] Sending %ld bytes\n", Out.count);
     uv_write(&slabItem->req, (uv_stream_t *)&client->connection->handle->uv.tcp,
              &slabItem->buf, 1, __http_tcp_on_write_cb);
   } else {
@@ -2484,9 +2479,7 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
   uv_read_start((uv_stream_t *)&client->connection->handle->uv.tcp,
                 __alloc_callback, __http_tcp_read_cb);
 
-  printf("Finished initializing client %p\n", (void *)client);
-
-  // Shits connected but not fully established, it will buffer any requests tho
+  // Connected but not fully established, it will buffer any requests
   // releases the promise
   valk_promise_respond(&client->_promise, box);
   valk_arc_release(box);
@@ -2566,7 +2559,6 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
 }
 
 static void __valk_aio_http2_client_free(valk_arc_box *box) {
-  printf("FREERDOM2 -> the client edition\n");
   valk_aio_http2_client *client = box->item;
   SSL_CTX_free(client->ssl_ctx);
   valk_mem_allocator_free(box->allocator, box);
@@ -2647,7 +2639,7 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
   // be passing a request object with a promise on it
   valk_promise *prom = valk_mem_alloc(sizeof(valk_promise));
   // valk_mem_free(sizeof(valk_promise)); in callback to nghttp2 recv
-  *prom = task->promise;  // copy this shit
+  *prom = task->promise;  // copy the promise struct
 
   stream_id =
       nghttp2_submit_request2(conn->session, nullptr, hdrs,
@@ -2692,11 +2684,9 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
       slabItem->buf.base = Out.items;
       slabItem->buf.len = Out.count;
 
-      printf("Sending %ld bytes\n", Out.count);
       uv_write(&slabItem->req, (uv_stream_t *)&conn->handle->uv.tcp,
                &slabItem->buf, 1, __http_tcp_on_write_cb);
     } else {
-      printf("Nothing to send %d \n", wantToSend);
       valk_slab_release_ptr(tcp_buffer_slab, slabItem);
     }
   }
@@ -2733,30 +2723,21 @@ char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
   (void)domain; // future: parse/use
   valk_future *fut =
       valk_aio_http2_connect_host(sys, "142.250.191.78", 443, "google.com");
-  printf("Arc count of fut : %ld\n", fut->refcount);
   valk_arc_box *client = valk_future_await(fut);
-  printf("Arc count of fut : %ld\n", fut->refcount);
-  // valk_arc_release(fut);
-  // printf("Arc count of fut : %d\n", fut->refcount);
 
   VALK_ASSERT(client->type == VALK_SUC, "Error creating client: %s",
               (char *)client->item);
 
-  // valk_arc_trace_report_print(fut);
   valk_arc_release(fut);
 
   fut = __http2_submit_demo_request(sys, client);
   valk_arc_box *response = valk_future_await(fut);
-  // future release is gonna eat that shit for breakfast
   valk_arc_retain(response);
   valk_arc_release(fut);
-  // valk_arc_trace_report_print(fut);
-  // valk_arc_trace_report_print(response);
 
   VALK_ASSERT(response->type == VALK_SUC, "Error from the response: %s",
               (char *)response->item);
 
-  printf("Got response %s\n", (char *)response->item);
   char *res = strdup(response->item);
 
   valk_arc_release(response);
@@ -2901,11 +2882,9 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
       slabItem->buf.base = Out.items;
       slabItem->buf.len = Out.count;
 
-      printf("Sending %ld bytes\n", Out.count);
       uv_write(&slabItem->req, (uv_stream_t *)&conn->handle->uv.tcp,
                &slabItem->buf, 1, __http_tcp_on_write_cb);
     } else {
-      printf("Nothing to send %d \n", wantToSend);
       valk_slab_release_ptr(tcp_buffer_slab, slabItem);
     }
   }
@@ -2913,8 +2892,6 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
 
 valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
                                          valk_aio_http2_client *client) {
-  printf("Client's ready to go : %s: %d :: %p\n", client->interface,
-         client->port, (void *)client);
   valk_future *res;
   valk_aio_task_new *task;
   VALK_WITH_ALLOC((valk_mem_allocator_t *)client->sys->handleSlab) {
@@ -2934,9 +2911,6 @@ valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
     task->promise.item = res;
     valk_arc_retain(res);
     task->callback = __valk_aio_http2_request_send_cb;
-    printf("Client's NOT ready to go : %s: %d :: %p :: %p\n",
-           pair->client->interface, pair->client->port, (void *)pair->client,
-           (void *)__valk_aio_http2_request_send_cb);
   }
   __uv_exec_task(client->sys, task);
   return res;

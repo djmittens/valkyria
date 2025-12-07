@@ -219,9 +219,8 @@ static inline valk_http_server_config_t valk_http_server_config_default(void) {
 ///
 /// @brief start a new htt2 listening server on a port
 ///
-/// Hey *THis* is not **Sparta**
 /// @param[out] srv the server that will be running
-/// @param[in] sys the aio system that will run the shit
+/// @param[in] sys the aio system that will run the server
 /// @return returns a future with a boxed `valk_aio_http2_server`
 ///
 valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,

@@ -197,12 +197,12 @@ Valkyria supports shift/reset style delimited continuations for advanced control
 ### async-reset - Establish Delimiter
 
 ```lisp
-(async-reset
+(async-reset {
   (print "before")
-  (async-shift k
+  (async-shift {k} {
     (print "captured continuation")
-    (k 42))             ; Resume with value 42
-  (print "after"))
+    (k 42)})            ; Resume with value 42
+  (print "after")})
 ```
 
 ### async-shift - Capture Continuation
@@ -210,19 +210,23 @@ Valkyria supports shift/reset style delimited continuations for advanced control
 Within an `async-reset`, `async-shift` captures the continuation up to the delimiter:
 
 ```lisp
-(async-reset
-  (+ 1 (async-shift k
-         (k (k 5)))))   ; Returns 7: (+ 1 (+ 1 5))
+(async-reset {
+  (+ 1 (async-shift {k} {
+         (k (k 5))}))}) ; Returns 7: (+ 1 (+ 1 5))
 ```
 
-### Async/Await Pattern
+### Async Pattern
 
-Continuations enable async/await style programming:
+Continuations enable asynchronous programming by suspending execution until a value is available:
 
 ```lisp
-(async-reset
-  (= {response} (await (fetch "example.com")))
-  (print (response-body response)))
+; Example: Suspending execution and resuming with a value
+(async-reset {
+  (def {x} (async-shift {k} {
+    ; k is the continuation - call it when result is ready
+    (k 42)
+  }))
+  (+ x 1)})  ; Returns 43
 ```
 
 ## HTTP/2 Networking

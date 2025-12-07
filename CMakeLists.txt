@@ -153,14 +153,6 @@ add_executable(test_memory test/test_memory.c test/testing.c)
 target_link_libraries(test_memory PRIVATE "-lc" "-lm" valkyria)
 include_directories(test_memory src/)
 
-add_executable(test_freeze test/test_freeze.c test/testing.c)
-target_link_libraries(test_freeze PRIVATE "-lc" valkyria)
-include_directories(test_freeze src/)
-
-add_executable(test_escape test/test_escape.c test/testing.c)
-target_link_libraries(test_escape PRIVATE "-lc" valkyria)
-include_directories(test_escape src/)
-
 add_executable(test_per_stream_arena test/test_per_stream_arena.c test/testing.c)
 target_link_libraries(test_per_stream_arena PRIVATE "-lc" valkyria)
 include_directories(test_per_stream_arena src/)

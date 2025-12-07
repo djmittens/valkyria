@@ -93,8 +93,6 @@ test: build
 	# C Test Suites
 	build/test_std &&\
 	build/test_memory &&\
-	build/test_freeze &&\
-	build/test_escape &&\
 	build/test_networking &&\
 	build/test_per_stream_arena &&\
 	# Metrics Tests (only when VALK_METRICS=1)

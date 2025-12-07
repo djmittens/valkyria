@@ -119,8 +119,7 @@ void __valk_arc_trace_report_print(valk_arc_trace_info *traces, size_t num);
 #define valk_container_of(ptr, type, member) \
   ((type *)((uint8_t *)(ptr) - offsetof(type, member)))
 
-/// @brief efficient way to calculate the next pow2 to store this shit
-/// chatgpt, cooked up this shit
+/// @brief efficient way to calculate the next power of 2 for a given size
 static inline size_t valk_next_pow2(size_t x) {
   if (x <= 1) return 1;
 

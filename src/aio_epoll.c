@@ -4,8 +4,7 @@
 
 #include "common.h"
 
-//  Network shit
-//  Mostly for linux
+// Network includes (Linux)
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -15,12 +14,12 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
-// Http n shit
+// HTTP/2 includes
 #include <nghttp2/nghttp2.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
-// std shit
+// Standard library includes
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -139,7 +138,7 @@ void valk_server_demo(void) {
           return;
         }
         char buf[addrSize];
-        // This is convoluded as heck.
+        // This is convoluted.
         // Essentially whats happening is, theirAddr is a storage container
         // which can hold the maximimum length of any address,  so now we need
         // to cast it to the appropriate socket type to get the internal address

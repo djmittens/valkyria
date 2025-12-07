@@ -42,8 +42,8 @@
    ((\ {_} b) ())
 })
 
-; list functions and shit
-; LISTS ARE 1 BASED LIKE LUA, CAUSE FUCK YEAH
+; List functions
+; LISTS ARE 1-BASED LIKE LUA
 
 ; Identity function for unpacking
 (fun {id x} {x})
@@ -67,7 +67,7 @@
 ; })
 
 ; Nth item in the list
-; LISTS ARE 1 BASED LIKE LUA, CAUSE FUCK YEAH
+; LISTS ARE 1-BASED LIKE LUA
 ; Using if-else instead of select due to scoping limitations
 (fun {nth n _l} {
     if (<= n 0)
@@ -145,10 +145,10 @@
 ; x and y
 (fun {and x y} {* x y})
 
-; Function functions, you know that lambda shit
+; Higher-order function utilities
 
 ; TODO(main): there is a bug where partial application doesnt work
-; definitely need to look into that.  Also the error message is fucked too
+; definitely need to look into that. Also the error message is broken
 ; valkyria> flip def
 ; > 
 ;   regex 
@@ -185,7 +185,7 @@
 ; This is a default case and stuff, i guess its useful, just an alias to true tho
 (def  {otherwise} true)
 
-; Convenient way to match on some shit instead of a select, to match on specific value
+; Convenient way to match on a specific value instead of using select
 ; Usage: (case val {{1} "one"} {{2} "two"} {{3} "three"})
 ; Helper: takes x and cases as separate args (allows recursion without unpack)
 ; With QEXPR: {1} evals directly to 1, so no fst needed after eval
