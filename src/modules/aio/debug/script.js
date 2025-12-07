@@ -314,60 +314,122 @@
     var id = 'aio-sys-' + index;
 
     var html =
-      '<article class="panel aio-system-panel" id="' + id + '" aria-labelledby="' + id + '-title">' +
+      '<article class="panel aio-system-panel aio-expanded" id="' + id + '" aria-labelledby="' + id + '-title">' +
         '<div class="panel-header">' +
           '<div class="panel-icon aio" aria-hidden="true">' + (index + 1) + '</div>' +
           '<h3 class="panel-title" id="' + id + '-title">' + name.charAt(0).toUpperCase() + name.slice(1) + ' AIO</h3>' +
-          '<div class="panel-badge aio-sys-servers" title="Number of HTTP servers bound to this AIO system">-- servers</div>' +
+          '<div class="panel-badges">' +
+            '<div class="panel-badge aio-sys-servers" title="Number of HTTP servers bound to this AIO system">-- servers</div>' +
+            '<span class="section-badge"><span class="sse-dot"></span> Live</span>' +
+          '</div>' +
         '</div>' +
         '<div class="panel-body">' +
-          '<div class="mini-stats" role="list" style="margin-bottom: var(--space-md);">' +
-            '<div class="mini-stat" role="listitem" title="Event loop iterations. Each iteration polls for I/O events. High iteration count with low events may indicate busy-waiting or tight polling.">' +
-              '<div class="mini-stat-value aio-sys-iterations">--</div>' +
-              '<div class="mini-stat-label">Loop Iters</div>' +
-            '</div>' +
-            '<div class="mini-stat" role="listitem" title="Total I/O events processed (reads, writes, connections, timers). Low event count with high latency suggests blocking operations in handlers.">' +
-              '<div class="mini-stat-value aio-sys-events">--</div>' +
-              '<div class="mini-stat-label">Events</div>' +
-            '</div>' +
-            '<div class="mini-stat" role="listitem" title="Active libuv handles (sockets, timers, signals). Handle leaks cause memory growth. Compare with expected connection count to detect leaks.">' +
-              '<div class="mini-stat-value aio-sys-handles">--</div>' +
-              '<div class="mini-stat-label">Handles</div>' +
+          // Event Loop Stats Row
+          '<div class="aio-stats-row">' +
+            '<div class="mini-stats" role="list">' +
+              '<div class="mini-stat" role="listitem" title="Event loop iterations. Each iteration polls for I/O events.">' +
+                '<div class="mini-stat-value aio-sys-iterations">--</div>' +
+                '<div class="mini-stat-label">Loop Iters</div>' +
+              '</div>' +
+              '<div class="mini-stat" role="listitem" title="Total I/O events processed (reads, writes, connections, timers).">' +
+                '<div class="mini-stat-value aio-sys-events">--</div>' +
+                '<div class="mini-stat-label">Events</div>' +
+              '</div>' +
+              '<div class="mini-stat" role="listitem" title="Active libuv handles (sockets, timers, signals).">' +
+                '<div class="mini-stat-value aio-sys-handles">--</div>' +
+                '<div class="mini-stat-label">Handles</div>' +
+              '</div>' +
             '</div>' +
           '</div>' +
-          '<div style="margin-bottom: var(--space-md);" title="Connection pool showing active (processing requests), idle (keep-alive waiting), and closing (graceful shutdown) connections.">' +
-            '<div class="pool-header">' +
-              '<span class="pool-name">Connection Pool</span>' +
+          // Connection Pool Section
+          '<div class="aio-resource-section">' +
+            '<div class="aio-subsection-header">' +
+              '<span class="aio-subsection-title">Connection Pool</span>' +
               '<span class="pool-usage aio-sys-conn-usage">-- / --</span>' +
             '</div>' +
             '<div class="conn-pool-bar" role="img" aria-label="Connection pool breakdown">' +
-              '<div class="conn-pool-segment active aio-sys-conn-active" style="width: 0%" title="Active connections currently processing requests"></div>' +
-              '<div class="conn-pool-segment idle aio-sys-conn-idle" style="width: 0%" title="Idle connections in keep-alive state, waiting for new requests"></div>' +
-              '<div class="conn-pool-segment closing aio-sys-conn-closing" style="width: 0%" title="Connections being gracefully closed"></div>' +
+              '<div class="conn-pool-segment active aio-sys-conn-active" style="width: 0%"></div>' +
+              '<div class="conn-pool-segment idle aio-sys-conn-idle" style="width: 0%"></div>' +
+              '<div class="conn-pool-segment closing aio-sys-conn-closing" style="width: 0%"></div>' +
             '</div>' +
-            '<div class="conn-pool-mini aio-sys-conn-grid" role="img" aria-label="Connection pool state" title="Visual grid of connection states. Each cell represents a connection slot. Green=active, blue=idle, yellow=closing, gray=available."></div>' +
+            '<div class="conn-pool-mini aio-sys-conn-grid" role="img" aria-label="Connection pool state"></div>' +
             '<div class="conn-pool-mini-legend">' +
-              '<div class="legend-item" title="Connections actively handling a request"><div class="legend-dot active"></div><span>Active</span></div>' +
-              '<div class="legend-item" title="Keep-alive connections waiting for next request"><div class="legend-dot idle"></div><span>Idle</span></div>' +
-              '<div class="legend-item" title="Connections in graceful shutdown"><div class="legend-dot closing"></div><span>Closing</span></div>' +
+              '<div class="legend-item"><div class="legend-dot active"></div><span>Active</span></div>' +
+              '<div class="legend-item"><div class="legend-dot idle"></div><span>Idle</span></div>' +
+              '<div class="legend-item"><div class="legend-dot closing"></div><span>Closing</span></div>' +
             '</div>' +
           '</div>' +
-          '<div class="pool-item" title="Memory arenas for stream processing. Each arena provides scratch memory for request/response handling. High usage may require increasing arena pool size.">' +
-            '<div class="pool-header">' +
-              '<span class="pool-name">Stream Arenas</span>' +
-              '<span class="pool-usage aio-sys-arenas-usage">-- / --</span>' +
+          // Memory Slabs Section
+          '<div class="aio-resource-section">' +
+            '<div class="aio-subsection-header">' +
+              '<span class="aio-subsection-title">Memory Pools</span>' +
             '</div>' +
-            '<div class="progress-bar">' +
-              '<div class="progress-fill aio-sys-arenas-bar" style="width: 0%"></div>' +
+            '<div class="aio-slab-grid">' +
+              // Handles Slab
+              '<div class="memory-slab-panel compact" id="' + id + '-handles-panel">' +
+                '<div class="slab-header">' +
+                  '<span class="slab-name">Handles</span>' +
+                  '<span class="slab-badge aio-sys-handles-pct">0%</span>' +
+                '</div>' +
+                '<div class="slab-canvas">' +
+                  '<div class="slab-grid aio-sys-handles-grid" style="grid-template-columns: repeat(25, 1fr);"></div>' +
+                '</div>' +
+                '<div class="slab-stats">' +
+                  '<span><span class="aio-sys-handles-used">0</span> / <span class="aio-sys-handles-total">2056</span></span>' +
+                '</div>' +
+              '</div>' +
+              // TCP Buffers Slab
+              '<div class="memory-slab-panel compact" id="' + id + '-tcp-buffers-panel">' +
+                '<div class="slab-header">' +
+                  '<span class="slab-name">TCP Buffers</span>' +
+                  '<span class="slab-badge aio-sys-tcp-pct">0%</span>' +
+                '</div>' +
+                '<div class="slab-canvas">' +
+                  '<div class="slab-grid aio-sys-tcp-grid" style="grid-template-columns: repeat(20, 1fr);"></div>' +
+                '</div>' +
+                '<div class="slab-stats">' +
+                  '<span><span class="aio-sys-tcp-used">0</span> / <span class="aio-sys-tcp-total">200</span></span>' +
+                '</div>' +
+              '</div>' +
+              // Stream Arenas Slab
+              '<div class="memory-slab-panel compact" id="' + id + '-stream-arenas-panel">' +
+                '<div class="slab-header">' +
+                  '<span class="slab-name">Stream Arenas</span>' +
+                  '<span class="slab-badge aio-sys-arenas-pct">0%</span>' +
+                '</div>' +
+                '<div class="slab-canvas">' +
+                  '<div class="slab-grid aio-sys-arenas-grid" style="grid-template-columns: repeat(8, 1fr);"></div>' +
+                '</div>' +
+                '<div class="slab-stats">' +
+                  '<span><span class="aio-sys-arenas-used">0</span> / <span class="aio-sys-arenas-total">64</span></span>' +
+                '</div>' +
+              '</div>' +
             '</div>' +
-          '</div>' +
-          '<div class="pool-item" title="Pre-allocated TCP read/write buffers. Exhaustion causes allocation fallback and performance degradation. Increase pool size if consistently above 80%.">' +
-            '<div class="pool-header">' +
-              '<span class="pool-name">TCP Buffers</span>' +
-              '<span class="pool-usage aio-sys-buffers-usage">-- / --</span>' +
+            // HTTP Resources (smaller, inline)
+            '<div class="aio-http-resources">' +
+              '<div class="memory-slab-panel mini" id="' + id + '-http-servers-panel">' +
+                '<div class="slab-header">' +
+                  '<span class="slab-name">HTTP Servers</span>' +
+                  '<span class="slab-badge aio-sys-servers-pct">0/3</span>' +
+                '</div>' +
+                '<div class="slab-canvas">' +
+                  '<div class="slab-grid aio-sys-servers-grid" style="grid-template-columns: repeat(3, 1fr);"></div>' +
+                '</div>' +
+              '</div>' +
+              '<div class="memory-slab-panel mini" id="' + id + '-http-clients-panel">' +
+                '<div class="slab-header">' +
+                  '<span class="slab-name">HTTP Clients</span>' +
+                  '<span class="slab-badge aio-sys-clients-pct">0/3</span>' +
+                '</div>' +
+                '<div class="slab-canvas">' +
+                  '<div class="slab-grid aio-sys-clients-grid" style="grid-template-columns: repeat(3, 1fr);"></div>' +
+                '</div>' +
+              '</div>' +
             '</div>' +
-            '<div class="progress-bar">' +
-              '<div class="progress-fill aio-sys-buffers-bar" style="width: 0%"></div>' +
+            '<div class="memory-legend-inline">' +
+              '<div class="legend-item"><div class="legend-dot free"></div><span>Free</span></div>' +
+              '<div class="legend-item"><div class="legend-dot used"></div><span>Used</span></div>' +
+              '<div class="legend-item"><div class="legend-dot flash"></div><span>Changed</span></div>' +
             '</div>' +
           '</div>' +
         '</div>' +
@@ -411,11 +473,8 @@
     // Connection pool mini-grid
     renderConnPoolMiniInContainer(panel.querySelector('.aio-sys-conn-grid'), active, idle, closing, total);
 
-    // Resource pool progress bars
-    updateProgressBarInPanel(panel, '.aio-sys-arenas-bar', '.aio-sys-arenas-usage',
-      sysStats.arenas_used || 0, sysStats.arenas_total || 0);
-    updateProgressBarInPanel(panel, '.aio-sys-buffers-bar', '.aio-sys-buffers-usage',
-      sysStats.tcp_buffers_used || 0, sysStats.tcp_buffers_total || 0);
+    // Note: Slab grids (handles, tcp buffers, stream arenas, http servers/clients)
+    // are updated via SSE memory diagnostics stream, not from polling metrics
   }
 
   function updateProgressBarInPanel(panel, barSel, usageSel, used, total) {
@@ -1360,16 +1419,47 @@
     }
 
     updateSlabGrid(slab) {
+      // Map slab names to CSS class selectors used in AIO panels
+      var slabClassMap = {
+        'tcp_buffers': '.aio-sys-tcp-grid',
+        'handles': '.aio-sys-handles-grid',
+        'stream_arenas': '.aio-sys-arenas-grid',
+        'http_servers': '.aio-sys-servers-grid',
+        'http_clients': '.aio-sys-clients-grid',
+        'lval': '#lval-grid'
+      };
+
+      // Find all matching grids (there may be multiple AIO panels)
+      var selector = slabClassMap[slab.name];
+      var grids = selector ? document.querySelectorAll(selector) : [];
+
+      // Also try the legacy global ID for backwards compatibility
       var gridId = slab.name.replace(/_/g, '-') + '-grid';
-      var grid = document.getElementById(gridId);
+      var legacyGrid = document.getElementById(gridId);
+      if (legacyGrid) {
+        grids = Array.from(grids);
+        grids.push(legacyGrid);
+      }
+
+      if (grids.length === 0) return;
+
+      // Update each grid (typically just one per slab type)
+      var self = this;
+      grids.forEach(function(grid) {
+        self.updateSingleSlabGrid(grid, slab);
+      });
+    }
+
+    updateSingleSlabGrid(grid, slab) {
       if (!grid) return;
 
       // Convert hex bitmap to bit array
       var bitmap = this.hexToBitArray(slab.bitmap);
       var cells = grid.children;
 
-      // Track previous state for flash animation
-      var prevKey = 'slab_' + slab.name;
+      // Track previous state for flash animation using grid's unique ID/selector
+      var gridKey = grid.id || grid.className;
+      var prevKey = 'slab_' + slab.name + '_' + gridKey;
       var prevBitmap = this.previousState[prevKey] || [];
 
       var self = this;
@@ -1384,14 +1474,36 @@
 
       this.previousState[prevKey] = bitmap;
 
-      // Update stats
-      var statsEl = grid.closest('.memory-slab-panel');
-      if (statsEl) {
-        statsEl = statsEl.querySelector('.slab-stats');
+      // Find the parent panel
+      var panel = grid.closest('.memory-slab-panel');
+      if (!panel) return;
+
+      var pct = slab.total > 0 ? Math.round((slab.used / slab.total) * 100) : 0;
+
+      // Update slab badge (percentage or count)
+      var badge = panel.querySelector('.slab-badge');
+      if (badge) {
+        if (slab.total <= 10) {
+          // For small slabs like HTTP servers/clients, show count
+          badge.textContent = slab.used + '/' + slab.total;
+        } else {
+          badge.textContent = pct + '%';
+        }
+        // Add warning/critical class
+        badge.classList.remove('warning', 'critical');
+        if (pct >= 90) badge.classList.add('critical');
+        else if (pct >= 70) badge.classList.add('warning');
       }
+
+      // Update stats row (used-count, totals)
+      var statsEl = panel.querySelector('.slab-stats');
       if (statsEl) {
-        var usedCount = statsEl.querySelector('.used-count');
+        var usedCount = statsEl.querySelector('.used-count') ||
+                        statsEl.querySelector('[class*="-used"]');
         if (usedCount) usedCount.textContent = slab.used.toLocaleString();
+
+        var totalCount = statsEl.querySelector('[class*="-total"]');
+        if (totalCount) totalCount.textContent = slab.total.toLocaleString();
 
         var overflowEl = statsEl.querySelector('.overflow-warning');
         if (overflowEl) {
@@ -1404,8 +1516,42 @@
         }
       }
 
+      // Update AIO panel specific elements (for grids inside AIO panels)
+      var slabClassToAio = {
+        'aio-sys-handles-grid': { pct: '.aio-sys-handles-pct', used: '.aio-sys-handles-used', total: '.aio-sys-handles-total' },
+        'aio-sys-tcp-grid': { pct: '.aio-sys-tcp-pct', used: '.aio-sys-tcp-used', total: '.aio-sys-tcp-total' },
+        'aio-sys-arenas-grid': { pct: '.aio-sys-arenas-pct', used: '.aio-sys-arenas-used', total: '.aio-sys-arenas-total' },
+        'aio-sys-servers-grid': { pct: '.aio-sys-servers-pct' },
+        'aio-sys-clients-grid': { pct: '.aio-sys-clients-pct' }
+      };
+
+      for (var cls in slabClassToAio) {
+        if (grid.classList.contains(cls)) {
+          var selectors = slabClassToAio[cls];
+          if (selectors.pct) {
+            var pctEl = panel.querySelector(selectors.pct);
+            if (pctEl) {
+              if (slab.total <= 10) {
+                pctEl.textContent = slab.used + '/' + slab.total;
+              } else {
+                pctEl.textContent = pct + '%';
+              }
+            }
+          }
+          if (selectors.used) {
+            var usedEl = panel.querySelector(selectors.used);
+            if (usedEl) usedEl.textContent = slab.used;
+          }
+          if (selectors.total) {
+            var totalEl = panel.querySelector(selectors.total);
+            if (totalEl) totalEl.textContent = slab.total;
+          }
+          break;
+        }
+      }
+
       // Update ARIA label
-      var ariaLabel = slab.name.replace(/_/g, ' ') + ': ' + slab.used + ' of ' + slab.total + ' slots used (' + Math.round(slab.used/slab.total*100) + '%)';
+      var ariaLabel = slab.name.replace(/_/g, ' ') + ': ' + slab.used + ' of ' + slab.total + ' slots used (' + pct + '%)';
       if (slab.overflow > 0) {
         ariaLabel += ', ' + slab.overflow + ' overflows detected';
       }

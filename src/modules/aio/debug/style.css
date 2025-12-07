@@ -318,12 +318,7 @@ main[role="main"] {
   margin: 0 calc(-1 * var(--space-lg)) var(--space-2xl);
 }
 
-.section-group.resources-section {
-  background: linear-gradient(135deg, rgba(210, 153, 34, 0.02) 0%, transparent 50%);
-  border-radius: var(--radius-lg);
-  padding: var(--space-lg);
-  margin: 0 calc(-1 * var(--space-lg)) var(--space-2xl);
-}
+/* Note: .resources-section was removed - resources are now inside AIO panels */
 
 .section-group.http-section {
   background: linear-gradient(135deg, rgba(88, 166, 255, 0.02) 0%, transparent 50%);
@@ -368,10 +363,7 @@ main[role="main"] {
   max-width: 600px;
 }
 
-.resources-legend {
-  margin-top: var(--space-lg);
-  justify-content: center;
-}
+/* .resources-legend removed - no longer needed */
 
 .section-title {
   font-size: 16px;
@@ -1357,7 +1349,6 @@ main[role="main"] {
 
   .section-group.vm-section,
   .section-group.aio-section,
-  .section-group.resources-section,
   .section-group.http-section {
     padding: var(--space-md);
     margin-left: calc(-1 * var(--space-md));
@@ -2018,4 +2009,142 @@ main[role="main"] {
 
 .value-updated {
   animation: value-update 0.5s ease-out;
+}
+
+/* ===== EXPANDED AIO SYSTEM PANELS ===== */
+.aio-system-panel.aio-expanded {
+  grid-column: span 2;  /* Take full width */
+}
+
+.aio-system-panel .panel-badges {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+  margin-left: auto;
+}
+
+.aio-system-panel .panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+/* Event loop stats row */
+.aio-stats-row {
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid var(--border-muted);
+}
+
+/* Resource sections within AIO panel */
+.aio-resource-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.aio-subsection-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.aio-subsection-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Slab grid layout within AIO panel */
+.aio-slab-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-md);
+}
+
+/* Compact slab panels inside AIO */
+.memory-slab-panel.compact {
+  padding: var(--space-sm);
+}
+
+.memory-slab-panel.compact .slab-header {
+  margin-bottom: var(--space-xs);
+}
+
+.memory-slab-panel.compact .slab-name {
+  font-size: 11px;
+}
+
+.memory-slab-panel.compact .slab-canvas {
+  min-height: 60px;
+}
+
+.memory-slab-panel.compact .slab-stats {
+  font-size: 10px;
+  margin-top: var(--space-xs);
+}
+
+/* Mini slab panels for HTTP servers/clients */
+.memory-slab-panel.mini {
+  padding: var(--space-xs) var(--space-sm);
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.memory-slab-panel.mini .slab-header {
+  margin-bottom: 0;
+  min-width: 90px;
+}
+
+.memory-slab-panel.mini .slab-canvas {
+  min-height: 30px;
+  flex: 1;
+}
+
+.memory-slab-panel.mini .slab-grid {
+  padding: 2px;
+}
+
+.memory-slab-panel.mini .slab-cell {
+  border-radius: 3px;
+  min-height: 20px;
+}
+
+/* HTTP resources row */
+.aio-http-resources {
+  display: flex;
+  gap: var(--space-md);
+}
+
+.aio-http-resources .memory-slab-panel {
+  flex: 1;
+}
+
+/* Warning/critical badge colors */
+.slab-badge.critical {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+/* Responsive: Stack slab grids on narrow screens */
+@media (max-width: 1200px) {
+  .aio-slab-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .aio-system-panel.aio-expanded {
+    grid-column: span 1;
+  }
+
+  .aio-slab-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .aio-http-resources {
+    flex-direction: column;
+  }
 }
