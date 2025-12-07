@@ -1,0 +1,144 @@
+; Async Handles Library - Higher-level utilities for the handle-based async system
+; This builds on the C builtins: aio/pure, aio/fail, aio/then, aio/catch,
+; aio/finally, aio/all, aio/race, aio/any, aio/cancel, aio/on-cancel,
+; aio/bracket, aio/scope, aio/status, aio/cancelled?
+
+; ============================================================================
+; Helper: Check if a value is a handle
+; ============================================================================
+
+(def {handle?} (\ {x}
+  (== (aio/status x) :pending) :or
+  (== (aio/status x) :running) :or
+  (== (aio/status x) :completed) :or
+  (== (aio/status x) :failed) :or
+  (== (aio/status x) :cancelled)))
+
+; ============================================================================
+; Helper: Convert any value to a handle
+; ============================================================================
+
+(def {as-handle} (\ {x}
+  (if (handle? x)
+    x
+    (aio/pure x))))
+
+; ============================================================================
+; Timeout Combinator
+; ============================================================================
+
+; with-timeout: Race a handle against a timeout
+; Returns first to complete - either the result or a timeout error
+(def {with-timeout} (\ {ms handle}
+  (aio/race (list
+    handle
+    (aio/then (aio/delay ms (\ {} nil))
+              (\ {_} (aio/fail :timeout)))))))
+
+; ============================================================================
+; Retry with Exponential Backoff
+; ============================================================================
+
+; retry-backoff: Retry an operation with exponential backoff
+; n: number of retries remaining
+; base-ms: initial delay (doubles each retry)
+; handle-fn: function that returns a handle
+(def {retry-backoff} (\ {n base-ms handle-fn}
+  (if (<= n 0)
+    (handle-fn)
+    (aio/catch
+      (handle-fn)
+      (\ {err}
+        (aio/then
+          (aio/delay base-ms (\ {} nil))
+          (\ {_} (retry-backoff (- n 1) (* base-ms 2) handle-fn))))))))
+
+; ============================================================================
+; Graceful Shutdown Helper
+; ============================================================================
+
+; graceful-shutdown: Wait for handles to complete, with timeout force-cancel
+; handles: list of handles to wait for
+; timeout-ms: max time to wait before force cancelling
+(def {graceful-shutdown} (\ {handles timeout-ms}
+  (aio/race (list
+    (aio/all handles)
+    (aio/then
+      (aio/delay timeout-ms (\ {} nil))
+      (\ {_}
+        (map aio/cancel handles)
+        :timeout))))))
+
+; ============================================================================
+; Sequential Chain Helper
+; ============================================================================
+
+; chain: Chain multiple functions, each receiving the previous result
+; start: initial handle
+; fns: list of (\ {result} ...) functions
+(def {chain} (\ {start fns}
+  (if (nil? fns)
+    start
+    (chain (aio/then start (head fns)) (tail fns)))))
+
+; ============================================================================
+; Try Pattern - Convert errors to result values
+; ============================================================================
+
+; aio/try: Wrap a handle to catch errors and return {:ok value} or {:err error}
+(def {aio/try} (\ {handle}
+  (aio/catch
+    (aio/then handle (\ {result} {:ok result}))
+    (\ {err} {:err err}))))
+
+; ============================================================================
+; Delay with Value Helper
+; ============================================================================
+
+; delay-value: Like aio/delay but also returns a value
+(def {delay-value} (\ {ms value}
+  (aio/delay ms (\ {} value))))
+
+; ============================================================================
+; Map: Transform the result of a handle
+; ============================================================================
+
+; aio/map: Like aio/then but for pure functions (no async in transform)
+; Usage: (aio/map handle (\ {x} (* x 2)))
+(def {aio/map} (\ {handle fn}
+  (aio/then handle (\ {x} (aio/pure (fn x))))))
+
+; ============================================================================
+; Parallel Map
+; ============================================================================
+
+; parallel-map: Apply async function to each item in parallel
+; fn: function that takes an item and returns a handle
+; items: list of items to process
+(def {parallel-map} (\ {fn items}
+  (aio/all (map fn items))))
+
+; ============================================================================
+; Sequential Map
+; ============================================================================
+
+; sequential-map: Apply async function to each item sequentially
+; fn: function that takes an item and returns a handle
+; items: list of items to process
+(def {sequential-map} (\ {fn items}
+  (if (nil? items)
+    (aio/pure ())
+    (aio/then
+      (fn (head items))
+      (\ {first-result}
+        (aio/then
+          (sequential-map fn (tail items))
+          (\ {rest-results}
+            (cons first-result rest-results))))))))
+
+; ============================================================================
+; Async library loaded notification
+; ============================================================================
+
+; Note: To use this library, include it in your Lisp file with:
+; (load "src/async_handles.valk")

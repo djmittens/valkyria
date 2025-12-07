@@ -13,8 +13,6 @@
 #include "memory.h"
 #include "parser.h"
 
-static void __aio_free(void* system) { valk_aio_stop(system); }
-
 // Global pointers for signal handler (Phase 8: Telemetry)
 static valk_mem_arena_t* g_scratch_for_signal = NULL;
 static valk_gc_malloc_heap_t* g_heap_for_signal = NULL;
@@ -80,14 +78,9 @@ int main(int argc, char* argv[]) {
   // REPL. Set mode to repl now so shutdown inside REPL performs teardown.
   valk_lenv_put(env, valk_lval_sym("VALK_MODE"), valk_lval_str("init"));
 
-  // Default: enable AIO/event loop in REPL so async/network builtins are
-  // usable. Opt-out by setting VALK_DISABLE_AIO to a non-empty value.
-  const char* disable_aio = getenv("VALK_DISABLE_AIO");
-  if (!(disable_aio && disable_aio[0] != '\0')) {
-    valk_aio_system_t* aio = valk_aio_start();
-    valk_lenv_put(env, valk_lval_sym("aio"),
-                  valk_lval_ref("aio_system", aio, __aio_free));
-  }
+  // AIO system is NOT auto-created. Scripts must explicitly call (aio/start)
+  // with their desired configuration to use async/networking features.
+  // This avoids singleton confusion and ensures config is always explicit.
 
   bool script_mode = false;
   bool force_repl = false;

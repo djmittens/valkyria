@@ -27,6 +27,73 @@ typedef struct valk_aio_http_conn valk_aio_http_conn;
 typedef struct valk_aio_http_server valk_aio_http_server;
 typedef struct valk_aio_http2_client valk_aio_http2_client;
 typedef struct valk_aio_handle_t valk_aio_handle_t;
+typedef struct valk_async_handle_t valk_async_handle_t;
+
+// Forward declarations for parser.h types
+struct valk_lval_t;
+struct valk_lenv_t;
+struct valk_mem_arena;
+
+// ============================================================================
+// Async Handle Status
+// ============================================================================
+
+typedef enum valk_async_status_t {
+  VALK_ASYNC_PENDING,     // Created but not started
+  VALK_ASYNC_RUNNING,     // Operation in progress
+  VALK_ASYNC_COMPLETED,   // Finished successfully
+  VALK_ASYNC_FAILED,      // Finished with error
+  VALK_ASYNC_CANCELLED,   // Cancelled before completion
+} valk_async_status_t;
+
+// Async handle - represents an in-flight async operation
+// This is the main structure for composable async operations
+struct valk_async_handle_t {
+  // Identity
+  uint64_t id;
+  valk_async_status_t status;
+
+  // Cancellation (use atomic operations on this field)
+  int cancel_requested;
+
+  // libuv integration (opaque - actual uv handles are in aio_uv.c)
+  void *uv_handle_ptr;
+  void *loop;
+
+  // Callbacks (all are valk_lval_t* - lambdas to call)
+  struct valk_lval_t *on_complete;       // (\ {result} ...)
+  struct valk_lval_t *on_error;          // (\ {error} ...)
+  struct valk_lval_t *on_cancel;         // (\ {} ...)
+  struct valk_lenv_t *env;               // Environment for callback evaluation
+
+  // Result storage
+  struct valk_lval_t *result;            // Success value (or nil)
+  struct valk_lval_t *error;             // Error value (or nil)
+
+  // HTTP context (for sending response after async completion)
+  void *session;
+  int32_t stream_id;
+  struct valk_aio_http_conn *conn;
+  struct valk_mem_arena *stream_arena;
+
+  // Structured cancellation (parent/child hierarchy)
+  struct valk_async_handle_t *parent;
+  struct {
+    struct valk_async_handle_t **items;
+    size_t count;
+    size_t capacity;
+  } children;
+
+  // Memory management
+  valk_mem_allocator_t *allocator;
+
+  // Linked list for handle tracking
+  struct valk_async_handle_t *prev;
+  struct valk_async_handle_t *next;
+};
+
+// Register async handle builtins
+void valk_register_async_handle_builtins(struct valk_lenv_t *env);
 
 struct valk_http2_header_t {
   uint8_t *name;

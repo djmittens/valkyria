@@ -231,6 +231,8 @@ const char* valk_ltype_name(valk_ltype_e type) {
       return "Environment";
     case LVAL_CONT:
       return "Continuation";
+    case LVAL_HANDLE:
+      return "Handle";
     case LVAL_FORWARD:
       return "Forward";
     case LVAL_UNDEFINED:
@@ -499,9 +501,11 @@ valk_lval_t* valk_lval_list_nth(valk_lval_t* list, size_t n) {
 // Plist format: {:key1 val1 :key2 val2 ...}
 static valk_lval_t* valk_plist_get(valk_lval_t* plist, const char* key_str) {
   if (!plist || LVAL_TYPE(plist) != LVAL_QEXPR) return NULL;
+  if (valk_lval_list_is_empty(plist)) return NULL;
 
+  // Iterate over the QEXPR - the root has type QEXPR, tail nodes have type CONS
   valk_lval_t* curr = plist;
-  while (curr && LVAL_TYPE(curr) == LVAL_CONS) {
+  while (curr && (LVAL_TYPE(curr) == LVAL_CONS || LVAL_TYPE(curr) == LVAL_QEXPR)) {
     if (valk_lval_list_is_empty(curr)) break;
 
     valk_lval_t* key = curr->cons.head;
@@ -600,6 +604,10 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
     case LVAL_CONT:
     case LVAL_FORWARD:
     case LVAL_UNDEFINED:
+      break;
+    case LVAL_HANDLE:
+      // Handles share the underlying async_handle - just copy the pointer
+      res->async.handle = lval->async.handle;
       break;
   }
   return res;
@@ -827,10 +835,11 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
 
   // Return literals as-is (self-evaluating forms)
   // QEXPR is quoted data - it evaluates to itself, not executed as code
+  // LVAL_HANDLE is an async handle - it evaluates to itself
   if (LVAL_TYPE(lval) == LVAL_NUM || LVAL_TYPE(lval) == LVAL_STR ||
       LVAL_TYPE(lval) == LVAL_FUN || LVAL_TYPE(lval) == LVAL_ERR ||
       LVAL_TYPE(lval) == LVAL_NIL || LVAL_TYPE(lval) == LVAL_REF ||
-      LVAL_TYPE(lval) == LVAL_QEXPR) {
+      LVAL_TYPE(lval) == LVAL_QEXPR || LVAL_TYPE(lval) == LVAL_HANDLE) {
     return lval;
   }
 
@@ -4034,6 +4043,9 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "aio/metrics-prometheus",
                         valk_builtin_aio_metrics_prometheus);
   valk_lenv_put_builtin(env, "aio/delay", valk_builtin_aio_delay);
+
+  // Async Handle Builtins (from aio_uv.c)
+  valk_register_async_handle_builtins(env);
 
   // VM Metrics (GC, Interpreter, Event Loop)
   valk_lenv_put_builtin(env, "vm/metrics-json", valk_builtin_vm_metrics_json);

@@ -2,6 +2,7 @@
 #include "parser.h"
 #include "memory.h"
 #include "log.h"
+#include "aio.h"  // For valk_async_handle_t
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -345,6 +346,22 @@ static void valk_gc_mark_lval(valk_lval_t* v) {
     case LVAL_FORWARD:
       // Forwarding pointers should not exist during GC marking
       // (they only exist transiently during evacuation)
+      break;
+
+    case LVAL_HANDLE:
+      // Mark the async handle's stored lval pointers
+      // Note: The handle struct itself is malloc'd, not GC-allocated,
+      // but the lvals it references (callbacks, result, error) may be GC-allocated
+      if (v->async.handle != NULL) {
+        valk_gc_mark_lval(v->async.handle->on_complete);
+        valk_gc_mark_lval(v->async.handle->on_error);
+        valk_gc_mark_lval(v->async.handle->on_cancel);
+        valk_gc_mark_lval(v->async.handle->result);
+        valk_gc_mark_lval(v->async.handle->error);
+        if (v->async.handle->env) {
+          valk_gc_mark_env(v->async.handle->env);
+        }
+      }
       break;
   }
 }

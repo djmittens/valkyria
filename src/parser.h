@@ -32,6 +32,7 @@ uint64_t valk_alloc_flags_from_allocator(void* allocator);
 struct valk_lenv_t;
 typedef struct valk_lenv_t valk_lenv_t;
 typedef struct valk_lval_t valk_lval_t;
+typedef struct valk_async_handle_t valk_async_handle_t;  // Async handle (defined in aio_uv.c)
 valk_lval_t *valk_parse_file(const char *filename);
 
 typedef enum {
@@ -47,6 +48,7 @@ typedef enum {
   LVAL_ERR,
   LVAL_ENV,
   LVAL_CONT,     // Continuation (for async/await)
+  LVAL_HANDLE,   // Async operation handle (cancellable promise)
   LVAL_FORWARD,  // Forwarding pointer - only valid during scratch evacuation
 } valk_ltype_e;
 
@@ -107,6 +109,9 @@ struct valk_lval_t {
       valk_lenv_t *env;   // Captured environment
       void *user_data;    // User data (for libuv handle, etc)
     } cont;  // Continuation for async/await
+    struct {
+      valk_async_handle_t *handle;  // Pointer to the async handle struct
+    } async;  // LVAL_HANDLE - async operation handle
     struct valk_lenv_t env;
     long num;
     char *str;
@@ -137,6 +142,9 @@ valk_lval_t *valk_lval_qlist(valk_lval_t *arr[], size_t count);     // Build qex
 // Cons cell accessors
 valk_lval_t *valk_lval_head(valk_lval_t *cons);                     // Get head (car)
 valk_lval_t *valk_lval_tail(valk_lval_t *cons);                     // Get tail (cdr)
+
+// Async handle constructor (implemented in aio_uv.c)
+valk_lval_t *valk_lval_handle(valk_async_handle_t *handle);
 
 //// END Constructors ////
 

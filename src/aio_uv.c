@@ -128,10 +128,35 @@ typedef enum handle_kind_t {
   VALK_HNDL_EMPTY,
   VALK_HNDL_TCP,
   VALK_HNDL_TASK,
-  // VALK_TIMER,
+  VALK_HNDL_TIMER,  // For aio/delay async handles
   // VALK_FILE,
   // VALK_SIGNAL,
 } handle_kind_t;
+
+// ============================================================================
+// Async Handle System (for composable async operations)
+// ============================================================================
+// The valk_async_handle_t struct and valk_async_status_t enum are defined in aio.h
+
+// Extended handle data for libuv integration (internal to aio_uv.c)
+typedef struct valk_async_handle_uv_data {
+  union {
+    uv_timer_t timer;
+    // Future: uv_tcp_t, uv_fs_t, etc.
+  } uv;
+  valk_async_handle_t *handle;  // Back-pointer to the handle
+} valk_async_handle_uv_data_t;
+
+// Global handle ID counter (use atomic operations for thread safety)
+static uint64_t g_async_handle_id = 0;
+
+// Forward declarations for async handle functions
+static valk_async_handle_t* valk_async_handle_new(uv_loop_t *loop, valk_lenv_t *env);
+static void valk_async_handle_free(valk_async_handle_t *handle);
+static void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result);
+static void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
+static bool valk_async_handle_cancel(valk_async_handle_t *handle);
+static void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_handle_t *child);
 
 typedef struct valk_aio_handle_t {
   handle_kind_t kind;
@@ -1299,10 +1324,63 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
       // Clear request context
       current_request_ctx = NULL;
 
-      // Check for deferred response (aio/delay was called)
+      // Check for deferred response (aio/delay was called - legacy pattern)
       if (LVAL_TYPE(response) == LVAL_SYM && strcmp(response->str, ":deferred") == 0) {
         // Response will be sent later by timer callback
         // Don't release stream arena yet - it's owned by the timer
+        return 0;
+      }
+
+      // Check for LVAL_HANDLE return (new async pattern)
+      // When handler returns a handle, we wait for it to complete
+      if (LVAL_TYPE(response) == LVAL_HANDLE) {
+        valk_async_handle_t *handle = response->async.handle;
+
+        // Store HTTP context in the handle for sending response when complete
+        handle->session = session;
+        handle->stream_id = frame->hd.stream_id;
+        handle->conn = conn;
+        handle->stream_arena = (struct valk_mem_arena*)req->stream_arena;
+        handle->env = sandbox_env;
+
+        // If handle is already completed, send response immediately
+        if (handle->status == VALK_ASYNC_COMPLETED) {
+          valk_lval_t *result = handle->result;
+          if (LVAL_TYPE(result) == LVAL_ERR) {
+            VALK_WARN("Handle completed with error: %s", result->str);
+            VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
+              valk_lval_t* error_items[] = {
+                valk_lval_sym(":status"), valk_lval_str("500"),
+                valk_lval_sym(":body"), valk_lval_str(result->str)
+              };
+              valk_lval_t* error_resp = valk_lval_qlist(error_items, 4);
+              __http_send_response(session, frame->hd.stream_id, error_resp, req->stream_arena);
+            }
+          } else {
+            __http_send_response(session, frame->hd.stream_id, result, req->stream_arena);
+          }
+        } else if (handle->status == VALK_ASYNC_FAILED) {
+          // Handle failed - send error response
+          valk_lval_t *err = handle->error ? handle->error : valk_lval_err("Handle failed");
+          VALK_WARN("Handle failed: %s", LVAL_TYPE(err) == LVAL_ERR ? err->str : "unknown error");
+          VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
+            const char *err_msg = LVAL_TYPE(err) == LVAL_ERR ? err->str : "Async operation failed";
+            valk_lval_t* error_items[] = {
+              valk_lval_sym(":status"), valk_lval_str("500"),
+              valk_lval_sym(":body"), valk_lval_str(err_msg)
+            };
+            valk_lval_t* error_resp = valk_lval_qlist(error_items, 4);
+            __http_send_response(session, frame->hd.stream_id, error_resp, req->stream_arena);
+          }
+        } else if (handle->status == VALK_ASYNC_CANCELLED) {
+          // Handle was cancelled - don't send response (client likely disconnected)
+          VALK_DEBUG("Handle cancelled, not sending response for stream %d", frame->hd.stream_id);
+        } else {
+          // Handle is still running - response will be sent when it completes
+          // The completion callback will use the stored context to send response
+          VALK_DEBUG("Handle pending/running, will send response when complete");
+          return 0;  // Don't release arena yet
+        }
         return 0;
       }
 
@@ -3234,6 +3312,320 @@ valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, uint64_t delay_ms,
   return valk_lval_sym(":deferred");
 }
 
+// ============================================================================
+// aio/sleep - Timer that returns a handle (no callback)
+// ============================================================================
+// Usage: (aio/sleep ms) -> handle that completes with nil after ms milliseconds
+//
+// This is the handle-based equivalent of aio/delay. Instead of taking a
+// callback, it returns a handle that can be composed with aio/then.
+//
+// Example:
+//   (aio/then (aio/sleep 2000) (\ {_} {:status "200" :body "done"}))
+
+static void __sleep_timer_cb(uv_timer_t *timer_handle) {
+  valk_async_handle_uv_data_t *data = (valk_async_handle_uv_data_t *)timer_handle->data;
+  valk_async_handle_t *async_handle = data->handle;
+
+  // Complete with nil value
+  valk_lval_t *result = valk_lval_nil();
+  valk_async_handle_complete(async_handle, result);
+
+  // Cleanup timer
+  uv_timer_stop(timer_handle);
+  uv_close((uv_handle_t *)timer_handle, NULL);
+}
+
+static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
+  // Validate: (aio/sleep ms)
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/sleep: expected 1 argument (ms)");
+  }
+  valk_lval_t *ms_arg = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(ms_arg) != LVAL_NUM) {
+    return valk_lval_err("aio/sleep: expected number argument");
+  }
+
+  uint64_t delay_ms = (uint64_t)ms_arg->num;
+
+  // Get event loop - prefer current request context, fall back to global AIO system
+  // The fallback is needed for aio/sleep calls inside aio/then callbacks where
+  // the HTTP request context is no longer set
+  uv_loop_t *loop = NULL;
+  if (current_request_ctx) {
+    valk_aio_system_t *sys = current_request_ctx->conn->server->sys;
+    loop = sys->eventloop;
+  } else if (global_aio_system) {
+    loop = global_aio_system->eventloop;
+  } else {
+    return valk_lval_err("aio/sleep requires an active AIO system");
+  }
+
+  // Create async handle
+  // Note: We don't set HTTP context on inner handles like aio/sleep - only the
+  // outermost handle returned to the HTTP handler should have HTTP context.
+  // The HTTP handler will set context on that handle, and propagation will
+  // route the response through it.
+  valk_async_handle_t *async_handle = valk_async_handle_new(loop, e);
+
+  // Allocate timer data
+  valk_async_handle_uv_data_t *timer_data = malloc(sizeof(valk_async_handle_uv_data_t));
+  timer_data->handle = async_handle;
+  timer_data->uv.timer.data = timer_data;
+
+  async_handle->uv_handle_ptr = timer_data;
+  async_handle->status = VALK_ASYNC_RUNNING;
+
+  // Initialize and start timer
+  uv_timer_init(loop, &timer_data->uv.timer);
+  uv_timer_start(&timer_data->uv.timer, __sleep_timer_cb, delay_ms, 0);
+
+  VALK_INFO("aio/sleep started: %lu ms, handle id=%lu", delay_ms, async_handle->id);
+
+  return valk_lval_handle(async_handle);
+}
+
+// ============================================================================
+// aio/let - Monadic let-bindings for async operations
+// ============================================================================
+//
+// Syntax: (aio/let bindings body)
+//   bindings: q-expr of ((var1 expr1) (var2 expr2) :then (var3 expr3) ...)
+//   body: expression to evaluate with all bindings in scope
+//
+// Behavior:
+//   - Bindings in same group (before :then) run in PARALLEL via aio/all
+//   - Groups separated by :then run SEQUENTIALLY
+//   - Body evaluates after all bindings complete
+//
+// Example:
+//   (aio/let {((user (fetch-user id))
+//             (settings (fetch-settings id))
+//             :then
+//             (posts (fetch-posts (user :id))))}
+//     {:user user :settings settings :posts posts})
+
+// Helper: Check if lval is the :then barrier keyword
+static inline bool is_then_barrier(valk_lval_t *item) {
+  return LVAL_TYPE(item) == LVAL_SYM && strcmp(item->str, ":then") == 0;
+}
+
+// Binding group for parallel execution
+typedef struct {
+  valk_lval_t **bindings;  // Array of (var expr) pairs
+  size_t count;
+  size_t capacity;
+} aio_let_group_t;
+
+// Parsed binding groups
+typedef struct {
+  aio_let_group_t *groups;
+  size_t count;
+  size_t capacity;
+} aio_let_parsed_t;
+
+static aio_let_parsed_t* aio_let_parse_bindings(valk_lval_t *bindings) {
+  aio_let_parsed_t *result = malloc(sizeof(aio_let_parsed_t));
+  result->groups = malloc(sizeof(aio_let_group_t) * 16);
+  result->count = 1;
+  result->capacity = 16;
+
+  // Initialize first group
+  aio_let_group_t *current = &result->groups[0];
+  current->bindings = malloc(sizeof(valk_lval_t*) * 32);
+  current->count = 0;
+  current->capacity = 32;
+
+  // The bindings argument is a QEXPR containing the bindings list
+  // For syntax: (aio/let {((a expr1) (b expr2) :then (c expr3))} body)
+  // bindings = {((a expr1) (b expr2) :then (c expr3))}
+  // We need to get the inner list and iterate over it
+  valk_lval_t *curr = bindings;
+
+  // If bindings is a QEXPR with one element that is a list, unwrap it
+  if (LVAL_TYPE(bindings) == LVAL_QEXPR && !valk_lval_list_is_empty(bindings)) {
+    valk_lval_t *first = bindings->cons.head;
+    if (LVAL_TYPE(first) == LVAL_CONS || LVAL_TYPE(first) == LVAL_QEXPR) {
+      // The first element is a list - this is our bindings list
+      curr = first;
+    }
+  }
+
+  // Walk bindings list - both CONS and QEXPR use cons.head/cons.tail
+  while ((LVAL_TYPE(curr) == LVAL_CONS || LVAL_TYPE(curr) == LVAL_QEXPR) &&
+         !valk_lval_list_is_empty(curr)) {
+    valk_lval_t *item = curr->cons.head;
+
+    if (is_then_barrier(item)) {
+      // Start new group (only if current has bindings)
+      if (current->count > 0) {
+        result->count++;
+        if (result->count >= result->capacity) {
+          result->capacity *= 2;
+          result->groups = realloc(result->groups,
+                                   sizeof(aio_let_group_t) * result->capacity);
+        }
+        current = &result->groups[result->count - 1];
+        current->bindings = malloc(sizeof(valk_lval_t*) * 32);
+        current->count = 0;
+        current->capacity = 32;
+      }
+    } else {
+      // Add binding to current group
+      if (current->count >= current->capacity) {
+        current->capacity *= 2;
+        current->bindings = realloc(current->bindings,
+                                    sizeof(valk_lval_t*) * current->capacity);
+      }
+      current->bindings[current->count++] = item;
+    }
+
+    curr = curr->cons.tail;
+  }
+
+  return result;
+}
+
+static void aio_let_free_parsed(aio_let_parsed_t *parsed) {
+  for (size_t i = 0; i < parsed->count; i++) {
+    free(parsed->groups[i].bindings);
+  }
+  free(parsed->groups);
+  free(parsed);
+}
+
+// Generate code for a single group of bindings
+// Returns: (aio/then (aio/all exprs) (\ {results} (def vars) inner))
+static valk_lval_t* aio_let_gen_group(valk_lenv_t *env,
+                                       aio_let_group_t *group,
+                                       valk_lval_t *inner) {
+  if (group->count == 0) {
+    return inner;
+  }
+
+  if (group->count == 1) {
+    // Single binding: (aio/then expr (\ {var} inner))
+    valk_lval_t *binding = group->bindings[0];
+    valk_lval_t *var = valk_lval_list_nth(binding, 0);
+    valk_lval_t *expr = valk_lval_list_nth(binding, 1);
+
+    // Build: (aio/then expr (\ {var} inner))
+    // formals = {var}
+    valk_lval_t *formals = valk_lval_qcons(valk_lval_copy(var), valk_lval_nil());
+
+    valk_lval_t *lambda = valk_lval_lambda(env, formals, inner);
+
+    valk_lval_t *then_call = valk_lval_cons(
+      valk_lval_sym("aio/then"),
+      valk_lval_cons(valk_lval_copy(expr),
+        valk_lval_cons(lambda, valk_lval_nil())));
+
+    return then_call;
+  }
+
+  // Multiple bindings: use aio/all for parallel execution
+  // Build: (aio/then (aio/all (list e1 e2 ...)) (\ {_results} (= {v1} (nth _results 0)) ... inner))
+
+  // Build expression list for aio/all
+  valk_lval_t *expr_list = valk_lval_nil();
+  for (int i = group->count - 1; i >= 0; i--) {
+    valk_lval_t *binding = group->bindings[i];
+    valk_lval_t *expr = valk_lval_list_nth(binding, 1);
+    expr_list = valk_lval_cons(valk_lval_copy(expr), expr_list);
+  }
+
+  // (list e1 e2 ...)
+  valk_lval_t *list_call = valk_lval_cons(valk_lval_sym("list"), expr_list);
+
+  // (aio/all (list ...))
+  valk_lval_t *all_call = valk_lval_cons(
+    valk_lval_sym("aio/all"),
+    valk_lval_cons(list_call, valk_lval_nil()));
+
+  // Build lambda body: (do (= {v1} (nth _results 0)) (= {v2} (nth _results 1)) ... inner)
+  valk_lval_t *body = valk_lval_cons(valk_lval_sym("do"), valk_lval_nil());
+  valk_lval_t *body_tail = body;
+
+  for (size_t i = 0; i < group->count; i++) {
+    valk_lval_t *binding = group->bindings[i];
+    valk_lval_t *var = valk_lval_list_nth(binding, 0);
+
+    // (= {var} (nth _results (i+1)))  -- nth is 1-based in prelude
+    // var_qexpr = {var}
+    valk_lval_t *var_qexpr = valk_lval_qcons(valk_lval_copy(var), valk_lval_nil());
+
+    valk_lval_t *nth_call = valk_lval_cons(
+      valk_lval_sym("nth"),
+      valk_lval_cons(valk_lval_num(i + 1),  // 1-based indexing
+        valk_lval_cons(valk_lval_sym("_results"), valk_lval_nil())));
+
+    valk_lval_t *assign = valk_lval_cons(
+      valk_lval_sym("="),
+      valk_lval_cons(var_qexpr,
+        valk_lval_cons(nth_call, valk_lval_nil())));
+
+    body_tail->cons.tail = valk_lval_cons(assign, valk_lval_nil());
+    body_tail = body_tail->cons.tail;
+  }
+
+  // Add inner expression at end
+  body_tail->cons.tail = valk_lval_cons(inner, valk_lval_nil());
+
+  // Build lambda: (\ {_results} body)
+  // formals = {_results}
+  valk_lval_t *formals = valk_lval_qcons(valk_lval_sym("_results"), valk_lval_nil());
+  valk_lval_t *lambda = valk_lval_lambda(env, formals, body);
+
+  // (aio/then (aio/all ...) lambda)
+  valk_lval_t *then_call = valk_lval_cons(
+    valk_lval_sym("aio/then"),
+    valk_lval_cons(all_call,
+      valk_lval_cons(lambda, valk_lval_nil())));
+
+  return then_call;
+}
+
+static valk_lval_t* valk_builtin_aio_let(valk_lenv_t* e, valk_lval_t* a) {
+  // aio/let receives: (bindings body)
+  // bindings is a QEXPR of binding pairs + :then barriers
+  // body is also a QEXPR to prevent premature evaluation
+
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("aio/let: expected 2 arguments (bindings body)");
+  }
+
+  valk_lval_t *bindings = valk_lval_list_nth(a, 0);
+  valk_lval_t *body = valk_lval_list_nth(a, 1);
+
+  // Parse bindings into groups separated by :then
+  aio_let_parsed_t *parsed = aio_let_parse_bindings(bindings);
+
+  if (parsed->count == 0 || (parsed->count == 1 && parsed->groups[0].count == 0)) {
+    aio_let_free_parsed(parsed);
+    // No bindings - wrap body in aio/pure and evaluate
+    valk_lval_t *evaled_body = valk_lval_eval(e, valk_lval_copy(body));
+    valk_lval_t *pure_call = valk_lval_cons(
+      valk_lval_sym("aio/pure"),
+      valk_lval_cons(evaled_body, valk_lval_nil()));
+    return valk_lval_eval(e, pure_call);
+  }
+
+  // Build nested aio/then chain from innermost (body) outward
+  // Work backwards: last group wraps body, previous groups wrap that, etc.
+  valk_lval_t *result = valk_lval_cons(
+    valk_lval_sym("aio/pure"),
+    valk_lval_cons(valk_lval_copy(body), valk_lval_nil()));
+
+  for (int g = parsed->count - 1; g >= 0; g--) {
+    result = aio_let_gen_group(e, &parsed->groups[g], result);
+  }
+
+  aio_let_free_parsed(parsed);
+
+  // Evaluate the generated code
+  return valk_lval_eval(e, result);
+}
+
 // Get/set current request context (for aio/delay to access)
 valk_http_request_ctx_t* valk_http_get_request_ctx(void) {
   return current_request_ctx;
@@ -3261,3 +3653,1329 @@ static void __valk_http2_response_free(valk_arc_box *box) {
   valk_mem_allocator_free(box->allocator, box);
 }
 // https://github.com/darrenjs/openssl_examples
+
+// ============================================================================
+// Async Handle Implementation
+// ============================================================================
+
+// Forward declaration for completion propagation (defined in Phase 2 section)
+static void valk_async_propagate_completion(valk_async_handle_t *source);
+
+// Forward declarations for aio/all parent notification
+// (Implementations are after valk_builtin_aio_all)
+#define VALK_ALL_CTX_MAGIC_EARLY 0xA11C7821
+static void valk_async_notify_all_parent(valk_async_handle_t *child);
+
+// Send HTTP response from a completed handle (if it has HTTP context)
+static void valk_async_send_http_response(valk_async_handle_t *handle) {
+  // Check if this handle has HTTP context attached
+  if (!handle->session || handle->stream_id == 0 || !handle->conn) {
+    return;  // No HTTP context - nothing to send
+  }
+
+  nghttp2_session *session = (nghttp2_session*)handle->session;
+  int32_t stream_id = handle->stream_id;
+  struct valk_aio_http_conn *conn = handle->conn;
+  valk_mem_arena_t *arena = (valk_mem_arena_t*)handle->stream_arena;
+
+  if (handle->status == VALK_ASYNC_COMPLETED) {
+    valk_lval_t *result = handle->result;
+    if (LVAL_TYPE(result) == LVAL_ERR) {
+      VALK_WARN("Handle completed with error for stream %d: %s", stream_id, result->str);
+      VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
+        valk_lval_t* error_items[] = {
+          valk_lval_sym(":status"), valk_lval_str("500"),
+          valk_lval_sym(":body"), valk_lval_str(result->str)
+        };
+        valk_lval_t* error_resp = valk_lval_qlist(error_items, 4);
+        __http_send_response(session, stream_id, error_resp, arena);
+      }
+    } else {
+      VALK_INFO("Sending async response for stream %d", stream_id);
+      __http_send_response(session, stream_id, result, arena);
+    }
+    __http_continue_pending_send(conn);
+  } else if (handle->status == VALK_ASYNC_FAILED) {
+    valk_lval_t *err = handle->error ? handle->error : valk_lval_err("Async operation failed");
+    VALK_WARN("Handle failed for stream %d: %s",
+              stream_id, LVAL_TYPE(err) == LVAL_ERR ? err->str : "unknown");
+    VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
+      const char *err_msg = LVAL_TYPE(err) == LVAL_ERR ? err->str : "Async operation failed";
+      valk_lval_t* error_items[] = {
+        valk_lval_sym(":status"), valk_lval_str("500"),
+        valk_lval_sym(":body"), valk_lval_str(err_msg)
+      };
+      valk_lval_t* error_resp = valk_lval_qlist(error_items, 4);
+      __http_send_response(session, stream_id, error_resp, arena);
+    }
+    __http_continue_pending_send(conn);
+  }
+  // For CANCELLED, don't send anything (client disconnected)
+}
+
+// Create a new async handle
+static valk_async_handle_t* valk_async_handle_new(uv_loop_t *loop, valk_lenv_t *env) {
+  valk_async_handle_t *handle = malloc(sizeof(valk_async_handle_t));
+  if (!handle) return NULL;
+
+  memset(handle, 0, sizeof(valk_async_handle_t));
+  handle->id = __atomic_fetch_add(&g_async_handle_id, 1, __ATOMIC_RELAXED);
+  handle->status = VALK_ASYNC_PENDING;
+  __atomic_store_n(&handle->cancel_requested, 0, __ATOMIC_RELAXED);
+  handle->loop = loop;
+  handle->env = env;
+  handle->allocator = &valk_malloc_allocator;
+
+  return handle;
+}
+
+// Free an async handle and its resources
+static void valk_async_handle_free(valk_async_handle_t *handle) {
+  if (!handle) return;
+
+  // Free children array
+  if (handle->children.items) {
+    free(handle->children.items);
+  }
+
+  free(handle);
+}
+
+// Mark handle as completed with a result
+static void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result) {
+  if (!handle) return;
+  if (handle->status != VALK_ASYNC_PENDING && handle->status != VALK_ASYNC_RUNNING) {
+    return;  // Already in terminal state
+  }
+
+  handle->status = VALK_ASYNC_COMPLETED;
+  handle->result = result;
+
+  // Call on_complete callback if registered (for direct callbacks, not chaining)
+  // Note: For aio/then chaining, on_complete stores the transform function
+  // and is handled by valk_async_propagate_completion instead
+  if (handle->on_complete && handle->env && handle->stream_arena) {
+    VALK_WITH_ALLOC((valk_mem_allocator_t*)handle->stream_arena) {
+      valk_lval_t *args = valk_lval_cons(result, valk_lval_nil());
+      valk_lval_eval_call(handle->env, handle->on_complete, args);
+    }
+  }
+
+  // Notify aio/all parent if this handle is a child of one
+  valk_async_notify_all_parent(handle);
+
+  // Send HTTP response if this handle has HTTP context attached
+  valk_async_send_http_response(handle);
+
+  // Propagate completion to chained handles (aio/then, aio/catch, etc.)
+  valk_async_propagate_completion(handle);
+}
+
+// Mark handle as failed with an error
+static void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
+  if (!handle) return;
+  if (handle->status != VALK_ASYNC_PENDING && handle->status != VALK_ASYNC_RUNNING) {
+    return;  // Already in terminal state
+  }
+
+  handle->status = VALK_ASYNC_FAILED;
+  handle->error = error;
+
+  // Call on_error callback if registered (for direct callbacks)
+  if (handle->on_error && handle->env && handle->stream_arena) {
+    VALK_WITH_ALLOC((valk_mem_allocator_t*)handle->stream_arena) {
+      valk_lval_t *args = valk_lval_cons(error, valk_lval_nil());
+      valk_lval_eval_call(handle->env, handle->on_error, args);
+    }
+  }
+
+  // Notify aio/all parent if this handle is a child of one
+  valk_async_notify_all_parent(handle);
+
+  // Send HTTP error response if this handle has HTTP context attached
+  valk_async_send_http_response(handle);
+
+  // Propagate failure to chained handles
+  valk_async_propagate_completion(handle);
+}
+
+// Request cancellation of a handle
+// Returns true if cancellation was requested, false if already in terminal state
+static bool valk_async_handle_cancel(valk_async_handle_t *handle) {
+  if (!handle) return false;
+  if (handle->status != VALK_ASYNC_PENDING && handle->status != VALK_ASYNC_RUNNING) {
+    return false;  // Already in terminal state
+  }
+
+  // Set atomic cancel flag
+  __atomic_store_n(&handle->cancel_requested, 1, __ATOMIC_RELEASE);
+
+  // If it's a timer, stop it
+  if (handle->status == VALK_ASYNC_RUNNING && handle->uv_handle_ptr) {
+    valk_async_handle_uv_data_t *uv_data = handle->uv_handle_ptr;
+    uv_timer_stop(&uv_data->uv.timer);
+  }
+
+  handle->status = VALK_ASYNC_CANCELLED;
+
+  // Call on_cancel callback if registered
+  if (handle->on_cancel && handle->env) {
+    VALK_WITH_ALLOC((valk_mem_allocator_t*)handle->stream_arena) {
+      valk_lval_t *args = valk_lval_nil();
+      valk_lval_eval_call(handle->env, handle->on_cancel, args);
+    }
+  }
+
+  // Cancel all children
+  for (size_t i = 0; i < handle->children.count; i++) {
+    valk_async_handle_cancel(handle->children.items[i]);
+  }
+
+  return true;
+}
+
+// Add a child handle to a parent (for structured cancellation)
+static void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_handle_t *child) {
+  if (!parent || !child) return;
+
+  child->parent = parent;
+
+  // Grow children array if needed
+  if (parent->children.count >= parent->children.capacity) {
+    size_t new_cap = parent->children.capacity == 0 ? 4 : parent->children.capacity * 2;
+    valk_async_handle_t **new_items = realloc(parent->children.items,
+                                               new_cap * sizeof(valk_async_handle_t*));
+    if (!new_items) return;  // Allocation failed
+    parent->children.items = new_items;
+    parent->children.capacity = new_cap;
+  }
+
+  parent->children.items[parent->children.count++] = child;
+}
+
+// Convert status enum to symbol for Lisp
+static valk_lval_t* valk_async_status_to_sym(valk_async_status_t status) {
+  switch (status) {
+    case VALK_ASYNC_PENDING:   return valk_lval_sym(":pending");
+    case VALK_ASYNC_RUNNING:   return valk_lval_sym(":running");
+    case VALK_ASYNC_COMPLETED: return valk_lval_sym(":completed");
+    case VALK_ASYNC_FAILED:    return valk_lval_sym(":failed");
+    case VALK_ASYNC_CANCELLED: return valk_lval_sym(":cancelled");
+    default:                   return valk_lval_sym(":unknown");
+  }
+}
+
+// ============================================================================
+// LVAL_HANDLE Constructor
+// ============================================================================
+
+valk_lval_t *valk_lval_handle(valk_async_handle_t *handle) {
+  valk_lval_t *res = valk_mem_alloc(sizeof(valk_lval_t));
+  res->flags = LVAL_HANDLE | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+  res->origin_allocator = valk_thread_ctx.allocator;
+  res->gc_next = NULL;
+  res->async.handle = handle;
+  return res;
+}
+
+// ============================================================================
+// Async Handle Builtins
+// ============================================================================
+
+// aio/cancel: (aio/cancel handle) -> bool
+// Request cancellation of an async handle
+static valk_lval_t* valk_builtin_aio_cancel(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/cancel: expected 1 argument");
+  }
+  valk_lval_t *handle_lval = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(handle_lval) != LVAL_HANDLE) {
+    return valk_lval_err("aio/cancel: expected handle argument");
+  }
+
+  valk_async_handle_t *handle = handle_lval->async.handle;
+  bool cancelled = valk_async_handle_cancel(handle);
+
+  return valk_lval_sym(cancelled ? ":true" : ":false");
+}
+
+// aio/cancelled?: (aio/cancelled? handle) -> bool
+// Check if an async handle has been cancelled
+static valk_lval_t* valk_builtin_aio_cancelled(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/cancelled?: expected 1 argument");
+  }
+  valk_lval_t *handle_lval = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(handle_lval) != LVAL_HANDLE) {
+    return valk_lval_err("aio/cancelled?: expected handle argument");
+  }
+
+  valk_async_handle_t *handle = handle_lval->async.handle;
+  bool cancelled = handle->status == VALK_ASYNC_CANCELLED ||
+                   __atomic_load_n(&handle->cancel_requested, __ATOMIC_ACQUIRE);
+
+  return valk_lval_sym(cancelled ? ":true" : ":false");
+}
+
+// aio/status: (aio/status handle) -> symbol
+// Get the current status of an async handle
+static valk_lval_t* valk_builtin_aio_status(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/status: expected 1 argument");
+  }
+  valk_lval_t *handle_lval = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(handle_lval) != LVAL_HANDLE) {
+    return valk_lval_err("aio/status: expected handle argument");
+  }
+
+  valk_async_handle_t *handle = handle_lval->async.handle;
+  return valk_async_status_to_sym(handle->status);
+}
+
+// aio/pure: (aio/pure value) -> handle
+// Create an immediately completed handle with the given value
+static valk_lval_t* valk_builtin_aio_pure(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/pure: expected 1 argument");
+  }
+  valk_lval_t *value = valk_lval_list_nth(a, 0);
+
+  // Create a handle that's already completed
+  valk_async_handle_t *handle = valk_async_handle_new(NULL, e);
+  if (!handle) {
+    return valk_lval_err("Failed to allocate async handle");
+  }
+
+  handle->status = VALK_ASYNC_COMPLETED;
+  handle->result = value;
+
+  return valk_lval_handle(handle);
+}
+
+// aio/fail: (aio/fail error) -> handle
+// Create an immediately failed handle with the given error
+static valk_lval_t* valk_builtin_aio_fail(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/fail: expected 1 argument");
+  }
+  valk_lval_t *error = valk_lval_list_nth(a, 0);
+
+  // Create a handle that's already failed
+  valk_async_handle_t *handle = valk_async_handle_new(NULL, e);
+  if (!handle) {
+    return valk_lval_err("Failed to allocate async handle");
+  }
+
+  handle->status = VALK_ASYNC_FAILED;
+  handle->error = error;
+
+  return valk_lval_handle(handle);
+}
+
+// ============================================================================
+// Composition Builtins (Phase 2)
+// ============================================================================
+
+// aio/then: (aio/then source-handle fn) -> handle
+// Chain: when source completes, call fn with result, return new handle
+static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("aio/then: expected 2 arguments (handle fn)");
+  }
+  valk_lval_t *source_lval = valk_lval_list_nth(a, 0);
+  valk_lval_t *fn = valk_lval_list_nth(a, 1);
+
+  if (LVAL_TYPE(source_lval) != LVAL_HANDLE) {
+    return valk_lval_err("aio/then: first argument must be a handle");
+  }
+  if (LVAL_TYPE(fn) != LVAL_FUN) {
+    return valk_lval_err("aio/then: second argument must be a function");
+  }
+
+  valk_async_handle_t *source = source_lval->async.handle;
+
+  // Create the result handle
+  valk_async_handle_t *result = valk_async_handle_new(source->loop, e);
+  if (!result) {
+    return valk_lval_err("Failed to allocate async handle");
+  }
+
+  // If source is already completed, run the transform immediately
+  if (source->status == VALK_ASYNC_COMPLETED) {
+    valk_lval_t *args = valk_lval_cons(source->result, valk_lval_nil());
+    valk_lval_t *transformed = valk_lval_eval_call(e, fn, args);
+    if (LVAL_TYPE(transformed) == LVAL_ERR) {
+      result->status = VALK_ASYNC_FAILED;
+      result->error = transformed;
+    } else if (LVAL_TYPE(transformed) == LVAL_HANDLE) {
+      // fn returned a handle - chain to it
+      valk_async_handle_t *inner = transformed->async.handle;
+      if (inner->status == VALK_ASYNC_COMPLETED) {
+        result->status = VALK_ASYNC_COMPLETED;
+        result->result = inner->result;
+      } else if (inner->status == VALK_ASYNC_FAILED) {
+        result->status = VALK_ASYNC_FAILED;
+        result->error = inner->error;
+      } else {
+        // Inner handle still running - register callbacks to forward
+        result->status = VALK_ASYNC_RUNNING;
+        inner->on_complete = valk_lval_lambda(e,
+          valk_lval_qcons(valk_lval_sym("x"), valk_lval_nil()),
+          valk_lval_nil());  // Placeholder - completion forwarded below
+        valk_async_handle_add_child(result, inner);
+      }
+    } else {
+      result->status = VALK_ASYNC_COMPLETED;
+      result->result = transformed;
+    }
+    return valk_lval_handle(result);
+  }
+
+  // If source already failed, propagate error
+  if (source->status == VALK_ASYNC_FAILED) {
+    result->status = VALK_ASYNC_FAILED;
+    result->error = source->error;
+    return valk_lval_handle(result);
+  }
+
+  // If source already cancelled, propagate
+  if (source->status == VALK_ASYNC_CANCELLED) {
+    result->status = VALK_ASYNC_CANCELLED;
+    return valk_lval_handle(result);
+  }
+
+  // Source is still pending/running - set up chaining
+  // The result handle will be notified when source completes via propagation
+  result->status = VALK_ASYNC_RUNNING;
+  result->env = e;
+  result->on_complete = fn;  // Store transform function - called when source completes
+  result->on_error = NULL;   // Errors propagate without transformation
+  result->parent = source;   // Mark as waiting on source
+
+  // Add result as child of source for:
+  // 1. Cancellation propagation (if source cancelled, cancel result)
+  // 2. Completion propagation (valk_async_propagate_completion handles this)
+  valk_async_handle_add_child(source, result);
+
+  return valk_lval_handle(result);
+}
+
+// Modified completion propagation - called after source completes
+// Propagates to chained children (aio/then handles)
+static void valk_async_propagate_completion(valk_async_handle_t *source) {
+  if (!source) return;
+
+  for (size_t i = 0; i < source->children.count; i++) {
+    valk_async_handle_t *child = source->children.items[i];
+    // Check if child is a "then" handle (waiting on us)
+    if (child->status == VALK_ASYNC_RUNNING && child->parent == source) {
+      // Child is waiting for our result
+      if (source->status == VALK_ASYNC_COMPLETED) {
+        // Call child's transform function with our result
+        if (child->on_complete && child->env) {
+          valk_lval_t *args = valk_lval_cons(source->result, valk_lval_nil());
+          valk_lval_t *transformed = valk_lval_eval_call(child->env, child->on_complete, args);
+          if (LVAL_TYPE(transformed) == LVAL_ERR) {
+            child->status = VALK_ASYNC_FAILED;
+            child->error = transformed;
+          } else if (LVAL_TYPE(transformed) == LVAL_HANDLE) {
+            // Transform returned a handle - need to chain further
+            valk_async_handle_t *inner = transformed->async.handle;
+            if (inner->status == VALK_ASYNC_COMPLETED) {
+              child->status = VALK_ASYNC_COMPLETED;
+              child->result = inner->result;
+            } else if (inner->status == VALK_ASYNC_FAILED) {
+              child->status = VALK_ASYNC_FAILED;
+              child->error = inner->error;
+            } else if (inner->status == VALK_ASYNC_CANCELLED) {
+              child->status = VALK_ASYNC_CANCELLED;
+            } else {
+              // Inner still running - link child to inner
+              valk_async_handle_add_child(inner, child);
+              child->parent = inner;
+              // Transfer HTTP context from child to inner, so the inner can
+              // eventually send the HTTP response when it completes
+              if (child->session && !inner->session) {
+                inner->session = child->session;
+                inner->stream_id = child->stream_id;
+                inner->conn = child->conn;
+                inner->stream_arena = child->stream_arena;
+                inner->env = child->env;
+                // Clear child's HTTP context so it doesn't try to send response
+                child->session = NULL;
+                child->stream_id = 0;
+                child->conn = NULL;
+              }
+              // child stays RUNNING, will complete when inner does
+              continue;
+            }
+          } else {
+            child->status = VALK_ASYNC_COMPLETED;
+            child->result = transformed;
+          }
+        } else {
+          // No transform, just forward result
+          child->status = VALK_ASYNC_COMPLETED;
+          child->result = source->result;
+        }
+        // Send HTTP response if this handle has HTTP context
+        valk_async_send_http_response(child);
+        // Recursively propagate to child's dependents
+        valk_async_propagate_completion(child);
+      } else if (source->status == VALK_ASYNC_FAILED) {
+        // Check if child has error handler (for aio/catch)
+        if (child->on_error && child->env) {
+          valk_lval_t *args = valk_lval_cons(source->error, valk_lval_nil());
+          valk_lval_t *recovered = valk_lval_eval_call(child->env, child->on_error, args);
+          if (LVAL_TYPE(recovered) == LVAL_ERR) {
+            child->status = VALK_ASYNC_FAILED;
+            child->error = recovered;
+          } else {
+            child->status = VALK_ASYNC_COMPLETED;
+            child->result = recovered;
+          }
+        } else {
+          // Propagate failure
+          child->status = VALK_ASYNC_FAILED;
+          child->error = source->error;
+        }
+        // Send HTTP response if this handle has HTTP context
+        valk_async_send_http_response(child);
+        valk_async_propagate_completion(child);
+      }
+    }
+  }
+}
+
+// aio/catch: (aio/catch source-handle fn) -> handle
+// Handle errors: if source fails, call fn with error
+static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("aio/catch: expected 2 arguments (handle fn)");
+  }
+  valk_lval_t *source_lval = valk_lval_list_nth(a, 0);
+  valk_lval_t *fn = valk_lval_list_nth(a, 1);
+
+  if (LVAL_TYPE(source_lval) != LVAL_HANDLE) {
+    return valk_lval_err("aio/catch: first argument must be a handle");
+  }
+  if (LVAL_TYPE(fn) != LVAL_FUN) {
+    return valk_lval_err("aio/catch: second argument must be a function");
+  }
+
+  valk_async_handle_t *source = source_lval->async.handle;
+
+  // Create the result handle
+  valk_async_handle_t *catch_handle = valk_async_handle_new(source->loop, e);
+  if (!catch_handle) {
+    return valk_lval_err("Failed to allocate async handle");
+  }
+
+  // If source already completed successfully, pass through
+  if (source->status == VALK_ASYNC_COMPLETED) {
+    catch_handle->status = VALK_ASYNC_COMPLETED;
+    catch_handle->result = source->result;
+    return valk_lval_handle(catch_handle);
+  }
+
+  // If source already failed, run the error handler
+  if (source->status == VALK_ASYNC_FAILED) {
+    valk_lval_t *args = valk_lval_cons(source->error, valk_lval_nil());
+    valk_lval_t *recovered = valk_lval_eval_call(e, fn, args);
+    if (LVAL_TYPE(recovered) == LVAL_ERR) {
+      catch_handle->status = VALK_ASYNC_FAILED;
+      catch_handle->error = recovered;
+    } else {
+      catch_handle->status = VALK_ASYNC_COMPLETED;
+      catch_handle->result = recovered;
+    }
+    return valk_lval_handle(catch_handle);
+  }
+
+  // If source cancelled, propagate
+  if (source->status == VALK_ASYNC_CANCELLED) {
+    catch_handle->status = VALK_ASYNC_CANCELLED;
+    return valk_lval_handle(catch_handle);
+  }
+
+  // Source still running - register for notification
+  catch_handle->status = VALK_ASYNC_RUNNING;
+  catch_handle->env = e;
+  catch_handle->on_complete = NULL;  // Pass through on success
+  catch_handle->on_error = fn;       // Handle errors
+  catch_handle->parent = source;
+
+  valk_async_handle_add_child(source, catch_handle);
+
+  return valk_lval_handle(catch_handle);
+}
+
+// aio/finally: (aio/finally source-handle fn) -> handle
+// Always run cleanup fn, regardless of success/failure/cancel
+static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("aio/finally: expected 2 arguments (handle fn)");
+  }
+  valk_lval_t *source_lval = valk_lval_list_nth(a, 0);
+  valk_lval_t *fn = valk_lval_list_nth(a, 1);
+
+  if (LVAL_TYPE(source_lval) != LVAL_HANDLE) {
+    return valk_lval_err("aio/finally: first argument must be a handle");
+  }
+  if (LVAL_TYPE(fn) != LVAL_FUN) {
+    return valk_lval_err("aio/finally: second argument must be a function");
+  }
+
+  valk_async_handle_t *source = source_lval->async.handle;
+
+  // Create the result handle
+  valk_async_handle_t *finally_handle = valk_async_handle_new(source->loop, e);
+  if (!finally_handle) {
+    return valk_lval_err("Failed to allocate async handle");
+  }
+
+  // If source already in terminal state, run cleanup now and preserve outcome
+  if (source->status == VALK_ASYNC_COMPLETED) {
+    valk_lval_t *args = valk_lval_nil();
+    valk_lval_eval_call(e, fn, args);  // Run cleanup, ignore result
+    finally_handle->status = VALK_ASYNC_COMPLETED;
+    finally_handle->result = source->result;
+    return valk_lval_handle(finally_handle);
+  }
+  if (source->status == VALK_ASYNC_FAILED) {
+    valk_lval_t *args = valk_lval_nil();
+    valk_lval_eval_call(e, fn, args);  // Run cleanup, ignore result
+    finally_handle->status = VALK_ASYNC_FAILED;
+    finally_handle->error = source->error;
+    return valk_lval_handle(finally_handle);
+  }
+  if (source->status == VALK_ASYNC_CANCELLED) {
+    valk_lval_t *args = valk_lval_nil();
+    valk_lval_eval_call(e, fn, args);  // Run cleanup, ignore result
+    finally_handle->status = VALK_ASYNC_CANCELLED;
+    return valk_lval_handle(finally_handle);
+  }
+
+  // Source still running - register for notification
+  finally_handle->status = VALK_ASYNC_RUNNING;
+  finally_handle->env = e;
+  finally_handle->on_cancel = fn;  // Store cleanup function here (used for finally)
+  finally_handle->parent = source;
+
+  valk_async_handle_add_child(source, finally_handle);
+
+  return valk_lval_handle(finally_handle);
+}
+
+// Magic marker to identify aio/all contexts
+#define VALK_ALL_CTX_MAGIC 0xA11C7821
+
+// Context for aio/all
+typedef struct {
+  uint32_t magic;                       // Magic marker to identify this context
+  valk_async_handle_t *all_handle;
+  valk_lval_t **results;
+  valk_async_handle_t **handles;        // Array of child handles for index lookup
+  size_t total;
+  size_t completed;
+  bool failed;
+  valk_lval_t *first_error;
+} valk_all_ctx_t;
+
+// Forward declaration for parent notification
+static void valk_async_all_child_completed(valk_async_handle_t *child);
+static void valk_async_all_child_failed(valk_async_handle_t *child, valk_lval_t *error);
+
+// aio/all: (aio/all handles-list) -> handle
+// Wait for all handles to complete, return list of results
+static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/all: expected 1 argument (list of handles)");
+  }
+  valk_lval_t *handles_list = valk_lval_list_nth(a, 0);
+
+  // Count handles and validate
+  size_t count = 0;
+  valk_lval_t *iter = handles_list;
+  while (LVAL_TYPE(iter) != LVAL_NIL) {
+    if (LVAL_TYPE(iter) != LVAL_CONS && LVAL_TYPE(iter) != LVAL_QEXPR) {
+      return valk_lval_err("aio/all: expected a list of handles");
+    }
+    valk_lval_t *h = valk_lval_head(iter);
+    if (LVAL_TYPE(h) != LVAL_HANDLE) {
+      return valk_lval_err("aio/all: all elements must be handles");
+    }
+    count++;
+    iter = valk_lval_tail(iter);
+  }
+
+  if (count == 0) {
+    // Empty list - return immediately completed handle with empty list
+    valk_async_handle_t *result = valk_async_handle_new(NULL, e);
+    result->status = VALK_ASYNC_COMPLETED;
+    result->result = valk_lval_nil();
+    return valk_lval_handle(result);
+  }
+
+  // Create the all_handle
+  valk_async_handle_t *all_handle = valk_async_handle_new(NULL, e);
+  if (!all_handle) {
+    return valk_lval_err("Failed to allocate async handle");
+  }
+
+  // Allocate results array
+  valk_lval_t **results = calloc(count, sizeof(valk_lval_t*));
+  if (!results) {
+    valk_async_handle_free(all_handle);
+    return valk_lval_err("Failed to allocate results array");
+  }
+
+  // Check all handles and collect results
+  size_t completed = 0;
+  bool any_pending = false;
+  bool any_failed = false;
+  valk_lval_t *first_error = NULL;
+
+  iter = handles_list;
+  for (size_t i = 0; i < count; i++) {
+    valk_lval_t *h = valk_lval_head(iter);
+    valk_async_handle_t *handle = h->async.handle;
+
+    if (handle->status == VALK_ASYNC_COMPLETED) {
+      results[i] = handle->result;
+      completed++;
+    } else if (handle->status == VALK_ASYNC_FAILED) {
+      any_failed = true;
+      if (!first_error) first_error = handle->error;
+    } else if (handle->status == VALK_ASYNC_CANCELLED) {
+      any_failed = true;
+      if (!first_error) first_error = valk_lval_err("cancelled");
+    } else {
+      any_pending = true;
+      // Get event loop from first pending handle
+      if (!all_handle->loop && handle->loop) {
+        all_handle->loop = handle->loop;
+      }
+    }
+    iter = valk_lval_tail(iter);
+  }
+
+  // If any failed, fail immediately and cancel others
+  if (any_failed) {
+    free(results);
+    all_handle->status = VALK_ASYNC_FAILED;
+    all_handle->error = first_error;
+
+    // Cancel any pending handles
+    iter = handles_list;
+    for (size_t i = 0; i < count; i++) {
+      valk_lval_t *h = valk_lval_head(iter);
+      valk_async_handle_t *handle = h->async.handle;
+      if (handle->status == VALK_ASYNC_PENDING || handle->status == VALK_ASYNC_RUNNING) {
+        valk_async_handle_cancel(handle);
+      }
+      iter = valk_lval_tail(iter);
+    }
+    return valk_lval_handle(all_handle);
+  }
+
+  // If all completed, return results immediately
+  if (!any_pending) {
+    // Build result list
+    valk_lval_t *result_list = valk_lval_nil();
+    for (size_t i = count; i > 0; i--) {
+      result_list = valk_lval_cons(results[i-1], result_list);
+    }
+    free(results);
+    all_handle->status = VALK_ASYNC_COMPLETED;
+    all_handle->result = result_list;
+    return valk_lval_handle(all_handle);
+  }
+
+  // Some handles still pending - set up tracking
+  all_handle->status = VALK_ASYNC_RUNNING;
+  all_handle->env = e;
+
+  // Allocate handles array for index lookup
+  valk_async_handle_t **handles = calloc(count, sizeof(valk_async_handle_t*));
+  if (!handles) {
+    free(results);
+    valk_async_handle_free(all_handle);
+    return valk_lval_err("Failed to allocate handles array");
+  }
+
+  // Store results array in handle (hacky: use uv_handle_ptr)
+  valk_all_ctx_t *ctx = malloc(sizeof(valk_all_ctx_t));
+  if (!ctx) {
+    free(results);
+    free(handles);
+    valk_async_handle_free(all_handle);
+    return valk_lval_err("Failed to allocate all context");
+  }
+  ctx->magic = VALK_ALL_CTX_MAGIC;
+  ctx->all_handle = all_handle;
+  ctx->results = results;
+  ctx->handles = handles;
+  ctx->total = count;
+  ctx->completed = completed;
+  ctx->failed = false;
+  ctx->first_error = NULL;
+  all_handle->uv_handle_ptr = ctx;
+
+  // Link all source handles as children and populate handles array
+  iter = handles_list;
+  for (size_t i = 0; i < count; i++) {
+    valk_lval_t *h = valk_lval_head(iter);
+    valk_async_handle_t *handle = h->async.handle;
+    handles[i] = handle;
+    valk_async_handle_add_child(all_handle, handle);
+    iter = valk_lval_tail(iter);
+  }
+
+  return valk_lval_handle(all_handle);
+}
+
+// Helper: Check if a handle's parent is an aio/all context
+static inline valk_all_ctx_t* valk_async_get_all_ctx(valk_async_handle_t *handle) {
+  if (!handle || !handle->parent) return NULL;
+  valk_async_handle_t *parent = handle->parent;
+  if (!parent->uv_handle_ptr) return NULL;
+  valk_all_ctx_t *ctx = (valk_all_ctx_t*)parent->uv_handle_ptr;
+  if (ctx->magic != VALK_ALL_CTX_MAGIC) return NULL;
+  return ctx;
+}
+
+// Find the index of a child handle in the aio/all context
+static inline ssize_t valk_async_all_find_index(valk_all_ctx_t *ctx, valk_async_handle_t *child) {
+  for (size_t i = 0; i < ctx->total; i++) {
+    if (ctx->handles[i] == child) return (ssize_t)i;
+  }
+  return -1;
+}
+
+// Called when a child of aio/all completes successfully
+static void valk_async_all_child_completed(valk_async_handle_t *child) {
+  valk_all_ctx_t *ctx = valk_async_get_all_ctx(child);
+  if (!ctx) return;
+  if (ctx->failed) return;  // Already failed, ignore further completions
+
+  // Find our index in the handles array
+  ssize_t idx = valk_async_all_find_index(ctx, child);
+  if (idx < 0) return;
+
+  // Store result at our index
+  ctx->results[idx] = child->result;
+  ctx->completed++;
+
+  // Check if all children have completed
+  if (ctx->completed == ctx->total) {
+    // Build result list
+    valk_lval_t *result_list = valk_lval_nil();
+    for (size_t i = ctx->total; i > 0; i--) {
+      result_list = valk_lval_cons(ctx->results[i-1], result_list);
+    }
+
+    // Complete the all_handle
+    ctx->all_handle->status = VALK_ASYNC_COMPLETED;
+    ctx->all_handle->result = result_list;
+
+    // Send HTTP response if the all_handle has HTTP context
+    valk_async_send_http_response(ctx->all_handle);
+
+    // Propagate to any dependents of all_handle (e.g., aio/then chained on it)
+    valk_async_propagate_completion(ctx->all_handle);
+  }
+}
+
+// Called when a child of aio/all fails
+static void valk_async_all_child_failed(valk_async_handle_t *child, valk_lval_t *error) {
+  valk_all_ctx_t *ctx = valk_async_get_all_ctx(child);
+  if (!ctx) return;
+  if (ctx->failed) return;  // Already failed
+
+  ctx->failed = true;
+  ctx->first_error = error;
+
+  // Fail the all_handle immediately
+  ctx->all_handle->status = VALK_ASYNC_FAILED;
+  ctx->all_handle->error = error;
+
+  // Cancel all other pending children
+  for (size_t i = 0; i < ctx->total; i++) {
+    valk_async_handle_t *h = ctx->handles[i];
+    if (h != child && (h->status == VALK_ASYNC_PENDING || h->status == VALK_ASYNC_RUNNING)) {
+      valk_async_handle_cancel(h);
+    }
+  }
+
+  // Send HTTP response if the all_handle has HTTP context
+  valk_async_send_http_response(ctx->all_handle);
+
+  // Propagate to any dependents
+  valk_async_propagate_completion(ctx->all_handle);
+}
+
+// Unified parent notification function called from valk_async_handle_complete/fail
+// This checks if the handle's parent is an aio/all context and notifies it
+static void valk_async_notify_all_parent(valk_async_handle_t *child) {
+  if (!child || !child->parent) return;
+
+  valk_async_handle_t *parent = child->parent;
+  if (!parent->uv_handle_ptr) return;
+
+  // Check magic to see if this is an aio/all context
+  // Note: We use VALK_ALL_CTX_MAGIC_EARLY which is defined before this function
+  uint32_t *magic_ptr = (uint32_t*)parent->uv_handle_ptr;
+  if (*magic_ptr != VALK_ALL_CTX_MAGIC_EARLY) return;
+
+  // It's an aio/all parent - dispatch based on child status
+  if (child->status == VALK_ASYNC_COMPLETED) {
+    valk_async_all_child_completed(child);
+  } else if (child->status == VALK_ASYNC_FAILED) {
+    valk_async_all_child_failed(child, child->error);
+  }
+  // Note: CANCELLED is not handled - the parent will fail eventually if needed
+}
+
+// aio/race: (aio/race handles-list) -> handle
+// Return first handle to complete (success or failure)
+static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/race: expected 1 argument (list of handles)");
+  }
+  valk_lval_t *handles_list = valk_lval_list_nth(a, 0);
+
+  // Validate and find first completed
+  size_t count = 0;
+  valk_async_handle_t *first_done = NULL;
+  valk_lval_t *iter = handles_list;
+
+  while (LVAL_TYPE(iter) != LVAL_NIL) {
+    if (LVAL_TYPE(iter) != LVAL_CONS && LVAL_TYPE(iter) != LVAL_QEXPR) {
+      return valk_lval_err("aio/race: expected a list of handles");
+    }
+    valk_lval_t *h = valk_lval_head(iter);
+    if (LVAL_TYPE(h) != LVAL_HANDLE) {
+      return valk_lval_err("aio/race: all elements must be handles");
+    }
+    valk_async_handle_t *handle = h->async.handle;
+    count++;
+
+    // Check if this one is already done
+    if (!first_done && (handle->status == VALK_ASYNC_COMPLETED ||
+                        handle->status == VALK_ASYNC_FAILED)) {
+      first_done = handle;
+    }
+    iter = valk_lval_tail(iter);
+  }
+
+  if (count == 0) {
+    return valk_lval_err("aio/race: cannot race empty list");
+  }
+
+  // Create race handle
+  valk_async_handle_t *race_handle = valk_async_handle_new(NULL, e);
+  if (!race_handle) {
+    return valk_lval_err("Failed to allocate async handle");
+  }
+
+  // If we have a winner already, complete immediately and cancel others
+  if (first_done) {
+    if (first_done->status == VALK_ASYNC_COMPLETED) {
+      race_handle->status = VALK_ASYNC_COMPLETED;
+      race_handle->result = first_done->result;
+    } else {
+      race_handle->status = VALK_ASYNC_FAILED;
+      race_handle->error = first_done->error;
+    }
+
+    // Cancel all other handles
+    iter = handles_list;
+    while (LVAL_TYPE(iter) != LVAL_NIL) {
+      valk_lval_t *h = valk_lval_head(iter);
+      valk_async_handle_t *handle = h->async.handle;
+      if (handle != first_done &&
+          (handle->status == VALK_ASYNC_PENDING || handle->status == VALK_ASYNC_RUNNING)) {
+        valk_async_handle_cancel(handle);
+      }
+      iter = valk_lval_tail(iter);
+    }
+    return valk_lval_handle(race_handle);
+  }
+
+  // All handles still pending - set up race
+  race_handle->status = VALK_ASYNC_RUNNING;
+  race_handle->env = e;
+
+  // Get event loop from first handle
+  iter = handles_list;
+  if (LVAL_TYPE(iter) != LVAL_NIL) {
+    valk_lval_t *h = valk_lval_head(iter);
+    valk_async_handle_t *handle = h->async.handle;
+    race_handle->loop = handle->loop;
+  }
+
+  // Link all source handles as children
+  iter = handles_list;
+  while (LVAL_TYPE(iter) != LVAL_NIL) {
+    valk_lval_t *h = valk_lval_head(iter);
+    valk_async_handle_t *handle = h->async.handle;
+    valk_async_handle_add_child(race_handle, handle);
+    iter = valk_lval_tail(iter);
+  }
+
+  return valk_lval_handle(race_handle);
+}
+
+// aio/any: (aio/any handles-list) -> handle
+// Return first handle to succeed (ignore failures until all fail)
+static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/any: expected 1 argument (list of handles)");
+  }
+  valk_lval_t *handles_list = valk_lval_list_nth(a, 0);
+
+  // Count and validate
+  size_t count = 0;
+  size_t failed_count = 0;
+  valk_async_handle_t *first_success = NULL;
+  valk_lval_t *last_error = NULL;
+  valk_lval_t *iter = handles_list;
+
+  while (LVAL_TYPE(iter) != LVAL_NIL) {
+    if (LVAL_TYPE(iter) != LVAL_CONS && LVAL_TYPE(iter) != LVAL_QEXPR) {
+      return valk_lval_err("aio/any: expected a list of handles");
+    }
+    valk_lval_t *h = valk_lval_head(iter);
+    if (LVAL_TYPE(h) != LVAL_HANDLE) {
+      return valk_lval_err("aio/any: all elements must be handles");
+    }
+    valk_async_handle_t *handle = h->async.handle;
+    count++;
+
+    if (handle->status == VALK_ASYNC_COMPLETED && !first_success) {
+      first_success = handle;
+    } else if (handle->status == VALK_ASYNC_FAILED ||
+               handle->status == VALK_ASYNC_CANCELLED) {
+      failed_count++;
+      last_error = handle->error ? handle->error : valk_lval_err("cancelled");
+    }
+    iter = valk_lval_tail(iter);
+  }
+
+  if (count == 0) {
+    return valk_lval_err("aio/any: cannot use with empty list");
+  }
+
+  // Create any handle
+  valk_async_handle_t *any_handle = valk_async_handle_new(NULL, e);
+  if (!any_handle) {
+    return valk_lval_err("Failed to allocate async handle");
+  }
+
+  // If we have a success, complete immediately and cancel others
+  if (first_success) {
+    any_handle->status = VALK_ASYNC_COMPLETED;
+    any_handle->result = first_success->result;
+
+    // Cancel remaining
+    iter = handles_list;
+    while (LVAL_TYPE(iter) != LVAL_NIL) {
+      valk_lval_t *h = valk_lval_head(iter);
+      valk_async_handle_t *handle = h->async.handle;
+      if (handle != first_success &&
+          (handle->status == VALK_ASYNC_PENDING || handle->status == VALK_ASYNC_RUNNING)) {
+        valk_async_handle_cancel(handle);
+      }
+      iter = valk_lval_tail(iter);
+    }
+    return valk_lval_handle(any_handle);
+  }
+
+  // If all failed, fail with last error
+  if (failed_count == count) {
+    any_handle->status = VALK_ASYNC_FAILED;
+    any_handle->error = last_error;
+    return valk_lval_handle(any_handle);
+  }
+
+  // Some handles still pending
+  any_handle->status = VALK_ASYNC_RUNNING;
+  any_handle->env = e;
+
+  // Get event loop from first pending handle
+  iter = handles_list;
+  while (LVAL_TYPE(iter) != LVAL_NIL) {
+    valk_lval_t *h = valk_lval_head(iter);
+    valk_async_handle_t *handle = h->async.handle;
+    if (handle->loop) {
+      any_handle->loop = handle->loop;
+      break;
+    }
+    iter = valk_lval_tail(iter);
+  }
+
+  // Link all source handles as children
+  iter = handles_list;
+  while (LVAL_TYPE(iter) != LVAL_NIL) {
+    valk_lval_t *h = valk_lval_head(iter);
+    valk_async_handle_t *handle = h->async.handle;
+    valk_async_handle_add_child(any_handle, handle);
+    iter = valk_lval_tail(iter);
+  }
+
+  return valk_lval_handle(any_handle);
+}
+
+// aio/on-cancel: (aio/on-cancel handle fn) -> handle
+// Register a callback to run if handle is cancelled
+static valk_lval_t* valk_builtin_aio_on_cancel(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("aio/on-cancel: expected 2 arguments (handle fn)");
+  }
+  valk_lval_t *handle_lval = valk_lval_list_nth(a, 0);
+  valk_lval_t *fn = valk_lval_list_nth(a, 1);
+
+  if (LVAL_TYPE(handle_lval) != LVAL_HANDLE) {
+    return valk_lval_err("aio/on-cancel: first argument must be a handle");
+  }
+  if (LVAL_TYPE(fn) != LVAL_FUN) {
+    return valk_lval_err("aio/on-cancel: second argument must be a function");
+  }
+
+  valk_async_handle_t *handle = handle_lval->async.handle;
+
+  // If already cancelled, run callback immediately
+  if (handle->status == VALK_ASYNC_CANCELLED) {
+    valk_lval_t *args = valk_lval_nil();
+    valk_lval_eval_call(e, fn, args);
+    return handle_lval;
+  }
+
+  // Register the callback
+  handle->on_cancel = fn;
+  if (!handle->env) handle->env = e;
+
+  return handle_lval;
+}
+
+// ============================================================================
+// Resource Safety Builtins (Phase 3)
+// ============================================================================
+
+// aio/bracket: (aio/bracket acquire release use) -> handle
+// Safe resource management: acquire, use, ALWAYS release
+// - acquire: handle that produces a resource
+// - release: (\ {resource} ...) called ALWAYS after use completes/fails/cancels
+// - use: (\ {resource} ...) the main operation
+static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 3) {
+    return valk_lval_err("aio/bracket: expected 3 arguments (acquire release use)");
+  }
+  valk_lval_t *acquire_lval = valk_lval_list_nth(a, 0);
+  valk_lval_t *release_fn = valk_lval_list_nth(a, 1);
+  valk_lval_t *use_fn = valk_lval_list_nth(a, 2);
+
+  if (LVAL_TYPE(acquire_lval) != LVAL_HANDLE) {
+    return valk_lval_err("aio/bracket: first argument must be a handle");
+  }
+  if (LVAL_TYPE(release_fn) != LVAL_FUN) {
+    return valk_lval_err("aio/bracket: second argument must be a function");
+  }
+  if (LVAL_TYPE(use_fn) != LVAL_FUN) {
+    return valk_lval_err("aio/bracket: third argument must be a function");
+  }
+
+  valk_async_handle_t *acquire = acquire_lval->async.handle;
+
+  // Create the bracket handle
+  valk_async_handle_t *bracket_handle = valk_async_handle_new(acquire->loop, e);
+  if (!bracket_handle) {
+    return valk_lval_err("Failed to allocate async handle");
+  }
+
+  // If acquire already completed, run use immediately
+  if (acquire->status == VALK_ASYNC_COMPLETED) {
+    valk_lval_t *resource = acquire->result;
+
+    // Call use with resource
+    valk_lval_t *use_args = valk_lval_cons(resource, valk_lval_nil());
+    valk_lval_t *use_result = valk_lval_eval_call(e, use_fn, use_args);
+
+    // Check if use returned a handle
+    if (LVAL_TYPE(use_result) == LVAL_HANDLE) {
+      valk_async_handle_t *use_handle = use_result->async.handle;
+
+      // Wait for use handle to complete, then run release
+      if (use_handle->status == VALK_ASYNC_COMPLETED ||
+          use_handle->status == VALK_ASYNC_FAILED ||
+          use_handle->status == VALK_ASYNC_CANCELLED) {
+        // Use already done - run release now
+        valk_lval_t *release_args = valk_lval_cons(resource, valk_lval_nil());
+        valk_lval_eval_call(e, release_fn, release_args);  // Ignore release result
+
+        if (use_handle->status == VALK_ASYNC_COMPLETED) {
+          bracket_handle->status = VALK_ASYNC_COMPLETED;
+          bracket_handle->result = use_handle->result;
+        } else if (use_handle->status == VALK_ASYNC_FAILED) {
+          bracket_handle->status = VALK_ASYNC_FAILED;
+          bracket_handle->error = use_handle->error;
+        } else {
+          bracket_handle->status = VALK_ASYNC_CANCELLED;
+        }
+      } else {
+        // Use handle still running - set up finally for release
+        bracket_handle->status = VALK_ASYNC_RUNNING;
+        bracket_handle->env = e;
+        bracket_handle->parent = use_handle;
+
+        // Store release_fn and resource for later
+        // We use on_cancel to store the release function
+        // and uv_handle_ptr to store the resource
+        bracket_handle->on_cancel = release_fn;
+        bracket_handle->result = resource;  // Temporarily store resource here
+
+        valk_async_handle_add_child(use_handle, bracket_handle);
+      }
+    } else if (LVAL_TYPE(use_result) == LVAL_ERR) {
+      // Use failed synchronously - run release and propagate error
+      valk_lval_t *release_args = valk_lval_cons(resource, valk_lval_nil());
+      valk_lval_eval_call(e, release_fn, release_args);
+
+      bracket_handle->status = VALK_ASYNC_FAILED;
+      bracket_handle->error = use_result;
+    } else {
+      // Use returned a non-handle value - run release and complete
+      valk_lval_t *release_args = valk_lval_cons(resource, valk_lval_nil());
+      valk_lval_eval_call(e, release_fn, release_args);
+
+      bracket_handle->status = VALK_ASYNC_COMPLETED;
+      bracket_handle->result = use_result;
+    }
+
+    return valk_lval_handle(bracket_handle);
+  }
+
+  // If acquire failed, fail immediately (no release needed)
+  if (acquire->status == VALK_ASYNC_FAILED) {
+    bracket_handle->status = VALK_ASYNC_FAILED;
+    bracket_handle->error = acquire->error;
+    return valk_lval_handle(bracket_handle);
+  }
+
+  // If acquire cancelled, cancel bracket (no release needed)
+  if (acquire->status == VALK_ASYNC_CANCELLED) {
+    bracket_handle->status = VALK_ASYNC_CANCELLED;
+    return valk_lval_handle(bracket_handle);
+  }
+
+  // Acquire still running - set up continuation
+  bracket_handle->status = VALK_ASYNC_RUNNING;
+  bracket_handle->env = e;
+
+  // Store use_fn in on_complete and release_fn in on_cancel
+  // When acquire completes, propagation will call on_complete (use_fn)
+  // Then we need to ensure release is called after use completes
+  bracket_handle->on_complete = use_fn;
+  bracket_handle->on_cancel = release_fn;
+  bracket_handle->parent = acquire;
+
+  valk_async_handle_add_child(acquire, bracket_handle);
+
+  return valk_lval_handle(bracket_handle);
+}
+
+// aio/scope: (aio/scope fn) -> handle
+// Creates a cancellation scope. All handles created inside fn are children of this scope.
+// fn receives a scope parameter that can be used to track child handles
+static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/scope: expected 1 argument (fn)");
+  }
+  valk_lval_t *fn = valk_lval_list_nth(a, 0);
+
+  if (LVAL_TYPE(fn) != LVAL_FUN) {
+    return valk_lval_err("aio/scope: argument must be a function");
+  }
+
+  // Create the scope handle
+  valk_async_handle_t *scope_handle = valk_async_handle_new(NULL, e);
+  if (!scope_handle) {
+    return valk_lval_err("Failed to allocate async handle");
+  }
+  scope_handle->status = VALK_ASYNC_RUNNING;
+  scope_handle->env = e;
+
+  // Create an lval for the scope handle to pass to fn
+  valk_lval_t *scope_lval = valk_lval_handle(scope_handle);
+
+  // Call fn with the scope handle
+  // User can use this to manually add children if needed
+  valk_lval_t *args = valk_lval_cons(scope_lval, valk_lval_nil());
+  valk_lval_t *result = valk_lval_eval_call(e, fn, args);
+
+  // Check what fn returned
+  if (LVAL_TYPE(result) == LVAL_ERR) {
+    scope_handle->status = VALK_ASYNC_FAILED;
+    scope_handle->error = result;
+    return scope_lval;
+  }
+
+  if (LVAL_TYPE(result) == LVAL_HANDLE) {
+    // fn returned a handle - scope waits for that handle
+    valk_async_handle_t *inner = result->async.handle;
+
+    // Add inner as child of scope
+    valk_async_handle_add_child(scope_handle, inner);
+
+    if (inner->status == VALK_ASYNC_COMPLETED) {
+      scope_handle->status = VALK_ASYNC_COMPLETED;
+      scope_handle->result = inner->result;
+    } else if (inner->status == VALK_ASYNC_FAILED) {
+      scope_handle->status = VALK_ASYNC_FAILED;
+      scope_handle->error = inner->error;
+    } else if (inner->status == VALK_ASYNC_CANCELLED) {
+      scope_handle->status = VALK_ASYNC_CANCELLED;
+    } else {
+      // Inner still running - scope stays running
+      scope_handle->parent = inner;  // Wait on inner
+      inner->on_complete = NULL;  // Use propagation
+    }
+    return scope_lval;
+  }
+
+  // fn returned a regular value - scope completes immediately
+  scope_handle->status = VALK_ASYNC_COMPLETED;
+  scope_handle->result = result;
+  return scope_lval;
+}
+
+// Register the async handle builtins
+void valk_register_async_handle_builtins(valk_lenv_t *env) {
+  // Core operations (Phase 1)
+  valk_lenv_put_builtin(env, "aio/cancel", valk_builtin_aio_cancel);
+  valk_lenv_put_builtin(env, "aio/cancelled?", valk_builtin_aio_cancelled);
+  valk_lenv_put_builtin(env, "aio/status", valk_builtin_aio_status);
+  valk_lenv_put_builtin(env, "aio/pure", valk_builtin_aio_pure);
+  valk_lenv_put_builtin(env, "aio/fail", valk_builtin_aio_fail);
+
+  // Composition operations (Phase 2)
+  valk_lenv_put_builtin(env, "aio/then", valk_builtin_aio_then);
+  valk_lenv_put_builtin(env, "aio/catch", valk_builtin_aio_catch);
+  valk_lenv_put_builtin(env, "aio/finally", valk_builtin_aio_finally);
+  valk_lenv_put_builtin(env, "aio/all", valk_builtin_aio_all);
+  valk_lenv_put_builtin(env, "aio/race", valk_builtin_aio_race);
+  valk_lenv_put_builtin(env, "aio/any", valk_builtin_aio_any);
+  valk_lenv_put_builtin(env, "aio/on-cancel", valk_builtin_aio_on_cancel);
+
+  // Timer and monadic operations
+  valk_lenv_put_builtin(env, "aio/sleep", valk_builtin_aio_sleep);
+  valk_lenv_put_builtin(env, "aio/let", valk_builtin_aio_let);
+
+  // Resource safety operations (Phase 3)
+  valk_lenv_put_builtin(env, "aio/bracket", valk_builtin_aio_bracket);
+  valk_lenv_put_builtin(env, "aio/scope", valk_builtin_aio_scope);
+}

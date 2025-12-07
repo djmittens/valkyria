@@ -31,6 +31,7 @@
 ;   {:method "GET" :path "/api/users" :headers {...} :body "..."}
 
 (load "src/prelude.valk")
+(load "src/async_handles.valk")
 (load "src/modules/aio/debug.valk")
 
 ; ╔════════════════════════════════════════════════════════════════════════════╗
@@ -80,16 +81,16 @@
 ;
 ; For extreme load testing (e.g., hey -n 5000000 -c 500), override tcp-buffer-pool-size
 ; to handle the burst of concurrent TLS handshakes and HTTP/2 streams.
-(def {sys} (aio/start {:max-connections 500
-                       :max-concurrent-streams 100
-                       :tcp-buffer-pool-size 20000
-                       :arena-pool-size 5}))  ; Tiny pool to force 503 overload responses
+(def {sys} (aio/start {:max-connections 50
+                       :max-concurrent-streams 10
+                       :tcp-buffer-pool-size 500
+                       :arena-pool-size 5}))  ; Tiny pool (5) to force 503 overload responses
 
 (println "  ✓ AIO system ready")
-(println "    • max-connections: 500")
-(println "    • max-concurrent-streams: 100 per connection")
-(println "    • tcp-buffer-pool-size: 20000 (override for load testing)")
-(println "    • arena-pool-size: 1000 (auto-derived)")
+(println "    • max-connections: 50")
+(println "    • max-concurrent-streams: 10 per connection")
+(println "    • tcp-buffer-pool-size: 500")
+(println "    • arena-pool-size: 5 (for load shedding testing)")
 (println "")
 
 ; ──────────────────────────────────────────────────────────────────────────────
@@ -182,39 +183,71 @@
        "</body>"
        "</html>"))
 
-; Create a comprehensive handler that demonstrates available features
+; Request handler using new aio/let syntax
+; For async routes: uses aio/let with aio/sleep (returns handle)
+; For sync routes: returns response map directly
 (def {request-handler}
   (\ {req} {
-    ; Start timing
-    (= {start} (time-us))
-
     ; Extract request info
     (= {method} (plist/get req (head {:method})))
     (= {path} (plist/get req (head {:path})))
+    (= {start} (time-us))
 
-    ; Increment request counter with method and path labels (demonstrates new modular metrics)
+    ; Log request
     (metrics/counter-inc "http_demo_requests_total" "method" method "path" path)
+    (printf "┌─ %s %s (%dµs)\n└─\n" method path (- (time-us) start))
 
-    ; Handle /slow endpoint specially - returns :deferred and response sent later
-    
-    {
-      ; Route based on path
-      (= {response} (select
-        {(== path "/slow") {(aio/delay sys 2000 (\ {} {{:status "200" :content-type "text/plain" :body "slept 2s (async)"}}))}}
-        {(== path "/favicon.svg") `{:status "200" :content-type "image/svg+xml" :body ,favicon-svg}}
-        {(== path "/stress/100mb") `{:status "200" :content-type "text/plain" :body ,stress-100mb}}
-        {otherwise                `{:status "200" :content-type "text/html; charset=utf-8" :body ,html-body}}))
+    ; Route based on path
+    (select
+      ; ================================================================
+      ; /slow - Demonstrates aio/let with single async binding
+      ; ================================================================
+      {(== path "/slow")
+       (aio/let
+         {((_ (aio/sleep 2000)))}
+         {:status "200" :content-type "text/plain" :body "slept 2s (async)"})}
 
-      ; Increment status code counter (demonstrates label-based metrics)
-      (= {status} (plist/get response (head {:status})))
-      (metrics/counter-inc "http_demo_responses_total" "status" status "path" path)
+      ; ================================================================
+      ; /slow-chain - Demonstrates sequential async operations
+      ; ================================================================
+      {(== path "/slow-chain")
+       (aio/let
+         {((step1 (aio/sleep 1000))
+           :then
+           (step2 (aio/sleep 1000)))}
+         {:status "200" :content-type "text/plain"
+          :body "slept 2s (1s + 1s sequential)"})}
 
-      ; Log request with timing
-      (= {elapsed} (- (time-us) start))
-      (printf "┌─ %s %s → %s (%dµs)\n│ %s\n└─\n" method path status elapsed (str req))
+      ; ================================================================
+      ; /slow-parallel - Demonstrates parallel async operations
+      ; ================================================================
+      {(== path "/slow-parallel")
+       (aio/let
+         {((a (aio/sleep 1000))
+           (b (aio/sleep 1000))
+           (c (aio/sleep 1000)))}
+         {:status "200" :content-type "text/plain"
+          :body "slept ~1s (3x1s parallel)"})}
 
-      response
-    }
+      ; ================================================================
+      ; /complex - Demonstrates mixed parallel/sequential
+      ; ================================================================
+      {(== path "/complex")
+       (aio/let
+         {((user-data (aio/sleep 500))
+           (settings-data (aio/sleep 500))
+           :then
+           (posts-data (aio/sleep 300)))}
+         {:status "200" :content-type "application/json"
+          :body "{\"user\":\"loaded\",\"settings\":\"loaded\",\"posts\":\"loaded\"}"})}
+
+      ; Static routes (unchanged)
+      {(== path "/favicon.svg")
+       `{:status "200" :content-type "image/svg+xml" :body ,favicon-svg}}
+      {(== path "/stress/100mb")
+       `{:status "200" :content-type "text/plain" :body ,stress-100mb}}
+      {otherwise
+       `{:status "200" :content-type "text/html; charset=utf-8" :body ,html-body}})
   }))
 
 (println "  ✓ Handler defined and ready")
@@ -307,12 +340,28 @@
 (println "Test Commands:")
 (println "  • Basic request:      curl -k https://localhost:8443")
 (println "  • With headers:       curl -k -v https://localhost:8443")
+(println "  • Async endpoints:    curl -k https://localhost:8443/slow")
+(println "                        curl -k https://localhost:8443/slow-chain")
+(println "                        curl -k https://localhost:8443/slow-parallel")
 (println "  • Debug dashboard:    curl -k https://localhost:8443/debug/")
 (println "  • JSON metrics:       curl -k https://localhost:8443/debug/metrics")
 (println "  • Prometheus metrics: curl -k https://localhost:8443/metrics")
 (println "  • Stress test 100MB:  curl -k https://localhost:8443/stress/100mb -o /dev/null")
 (println "  • In browser:         https://localhost:8443")
 (println "                        (accept security warning for self-signed cert)")
+(println "")
+(println "Load Shedding Demo:")
+(println "  The server is configured with arena-pool-size: 5 to demonstrate")
+(println "  load shedding. When all arenas are in use, new requests get 503.")
+(println "")
+(println "  Test with concurrent requests to /slow (holds arena for 2s):")
+(println "    for i in $(seq 1 20); do \\")
+(println "      curl -sk -w \"req$i: %{http_code}\\n\" -o /dev/null \\")
+(println "        https://localhost:8443/slow & \\")
+(println "    done; wait")
+(println "")
+(println "  Then check overload metrics:")
+(println "    curl -k https://localhost:8443/metrics | grep overload")
 (println "")
 (println "The -k flag tells curl to accept the self-signed certificate.")
 (println "In production, you would use a certificate from a trusted CA.")
