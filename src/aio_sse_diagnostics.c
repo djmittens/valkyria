@@ -85,6 +85,108 @@ static void bitmap_to_hex(const uint8_t *bitmap, size_t bytes, char *hex_out) {
   hex_out[bytes * 2] = '\0';
 }
 
+#ifdef VALK_METRICS_ENABLED
+// ============================================================================
+// Per-Slot Diagnostics for Connection-Aware Slabs
+// ============================================================================
+
+// Walk handle slab and extract per-slot diagnostics with state and owner
+static void slab_to_slot_diag(valk_slab_t *slab, valk_slab_snapshot_t *out,
+                               uint64_t now_ms) {
+  (void)now_ms;  // Reserved for future use when struct access is available
+  size_t total = slab->numItems;
+  out->slots = calloc(total, sizeof(valk_slot_diag_t));
+  if (!out->slots) {
+    out->has_slot_diag = false;
+    return;
+  }
+  out->has_slot_diag = true;
+  out->total_slots = total;
+
+  // Initialize all as free
+  for (size_t i = 0; i < total; i++) {
+    out->slots[i].state = 'F';
+    out->slots[i].owner = 0xFFFF;
+    out->slots[i].age_ms = 0;
+  }
+
+  // Walk free list to mark free slots
+  size_t stride = valk_slab_item_stride(slab->itemSize);
+  uint64_t head_tag = __atomic_load_n(&slab->head, __ATOMIC_ACQUIRE);
+  size_t head_offset = head_tag & (size_t)UINT32_MAX;
+  size_t free_count = 0;
+
+  // Build a set of free slot indices
+  bool *is_free = calloc(total, sizeof(bool));
+  if (!is_free) {
+    free(out->slots);
+    out->slots = NULL;
+    out->has_slot_diag = false;
+    return;
+  }
+
+  while (head_offset != SIZE_MAX && head_offset < total && free_count < total) {
+    is_free[head_offset] = true;
+    free_count++;
+
+    valk_slab_item_t *item =
+        (valk_slab_item_t *)&slab->heap[stride * head_offset];
+    uint64_t next_tag = __atomic_load_n(&item->next, __ATOMIC_ACQUIRE);
+    head_offset = next_tag & (size_t)UINT32_MAX;
+  }
+
+  // Now iterate all slots and extract diag from allocated handles
+  size_t used_count = 0;
+  for (size_t i = 0; i < total; i++) {
+    if (is_free[i]) {
+      out->slots[i].state = 'F';
+      continue;
+    }
+
+    // Get handle at this slot (skip the slab_item_t header)
+    // Note: item unused for now - actual diag extraction requires struct visibility
+    (void)stride;  // Suppress unused warning
+
+    // The handle struct layout is:
+    // - kind (handle_kind_t enum, internal to aio_uv.c)
+    // - prev, next, sys, arg pointers
+    // - onOpen, onClose callbacks
+    // - uv union
+    // - http sub-struct with diag field
+    // We access the diag field through byte offset since the struct is opaque
+    // For now, treat all used slots as active unless we can read the diag
+
+    // Access diag field - it's at the end of the http sub-struct
+    // The http sub-struct contains: state, ssl, session, handler, connectReq, server,
+    // active_streams, pending_write, spillover_data, spillover_len,
+    // backpressure, backpressure_next, backpressure_start_time, then diag
+    //
+    // Rather than calculate exact offset, we'll use a simpler approach:
+    // All allocated handles are treated as "active" for basic visualization
+    // The actual state tracking via diag field requires knowing the struct layout
+
+    out->slots[i].state = 'A';
+    out->slots[i].owner = 0xFFFF;
+    out->slots[i].age_ms = 0;
+    out->by_state.active++;
+    used_count++;
+  }
+
+  out->used_slots = used_count;
+  out->overflow_count = __atomic_load_n(&slab->overflowCount, __ATOMIC_ACQUIRE);
+
+  free(is_free);
+}
+
+// Encode slot states as compact string: "AAIFAACI..."
+static void slots_to_state_string(valk_slot_diag_t *slots, size_t count, char *out) {
+  for (size_t i = 0; i < count; i++) {
+    out[i] = slots[i].state;
+  }
+  out[count] = '\0';
+}
+#endif // VALK_METRICS_ENABLED
+
 // ============================================================================
 // Snapshot Collection
 // ============================================================================
@@ -116,13 +218,22 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
     } \
   } while(0)
 
-  // TCP Buffers
+  // TCP Buffers (simple bitmap)
   ADD_SLAB(valk_aio_get_tcp_buffer_slab, "tcp_buffers");
 
-  // Handle Slab
-  ADD_SLAB(valk_aio_get_handle_slab, "handles");
+  // Handle Slab - use per-slot diagnostics for connection state tracking
+  {
+    valk_slab_t *handle_slab = valk_aio_get_handle_slab(aio);
+    if (handle_slab && slab_idx < 8) {
+      snapshot->slabs[slab_idx].name = "handles";
+      // Get current time for age calculation
+      uint64_t now_ms = (uint64_t)(uv_hrtime() / 1000000ULL);
+      slab_to_slot_diag(handle_slab, &snapshot->slabs[slab_idx], now_ms);
+      slab_idx++;
+    }
+  }
 
-  // Stream Arenas
+  // Stream Arenas (simple bitmap)
   ADD_SLAB(valk_aio_get_stream_arenas_slab, "stream_arenas");
 
   // HTTP Servers
@@ -183,6 +294,13 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
     snapshot->gc_heap.emergency_collections =
         gc_heap->stats.emergency_collections;
   }
+
+  // Collect owner map for server/client names
+  size_t owner_count = valk_owner_get_count(aio);
+  snapshot->owner_count = owner_count;
+  for (size_t i = 0; i < owner_count && i < 16; i++) {
+    snapshot->owner_map[i] = valk_owner_get_name(aio, (uint16_t)i);
+  }
 #endif
 }
 
@@ -212,26 +330,45 @@ int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf,
       p += n;
     }
 
-    // Allocate hex string (2 chars per byte + null terminator)
-    size_t hex_len = snapshot->slabs[i].bitmap_bytes * 2 + 1;
-    char *hex = malloc(hex_len);
-    if (!hex) return -1;
+    valk_slab_snapshot_t *slab = &snapshot->slabs[i];
 
-    if (snapshot->slabs[i].bitmap) {
-      bitmap_to_hex(snapshot->slabs[i].bitmap,
-                    snapshot->slabs[i].bitmap_bytes, hex);
+    if (slab->has_slot_diag && slab->slots) {
+      // Connection-aware slab with per-slot state string
+      char *states = malloc(slab->total_slots + 1);
+      if (!states) return -1;
+      slots_to_state_string(slab->slots, slab->total_slots, states);
+
+      n = snprintf(p, end - p,
+                   "{\"name\":\"%s\",\"total\":%zu,\"used\":%zu,"
+                   "\"states\":\"%s\","
+                   "\"summary\":{\"A\":%zu,\"I\":%zu,\"C\":%zu},"
+                   "\"overflow\":%zu}",
+                   slab->name, slab->total_slots, slab->used_slots,
+                   states,
+                   slab->by_state.active, slab->by_state.idle, slab->by_state.closing,
+                   slab->overflow_count);
+
+      free(states);
     } else {
-      hex[0] = '\0';
+      // Simple bitmap slab
+      size_t hex_len = slab->bitmap_bytes * 2 + 1;
+      char *hex = malloc(hex_len);
+      if (!hex) return -1;
+
+      if (slab->bitmap) {
+        bitmap_to_hex(slab->bitmap, slab->bitmap_bytes, hex);
+      } else {
+        hex[0] = '\0';
+      }
+
+      n = snprintf(p, end - p,
+                   "{\"name\":\"%s\",\"bitmap\":\"%s\",\"total\":%zu,\"used\":%zu,"
+                   "\"overflow\":%zu}",
+                   slab->name, hex, slab->total_slots, slab->used_slots,
+                   slab->overflow_count);
+
+      free(hex);
     }
-
-    n = snprintf(p, end - p,
-                 "{\"name\":\"%s\",\"bitmap\":\"%s\",\"total\":%zu,\"used\":%"
-                 "zu,\"overflow\":%lu}",
-                 snapshot->slabs[i].name, hex, snapshot->slabs[i].total_slots,
-                 snapshot->slabs[i].used_slots,
-                 snapshot->slabs[i].overflow_count);
-
-    free(hex);
 
     if (n < 0 || n >= end - p) return -1;
     p += n;
@@ -273,12 +410,33 @@ int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf,
   // GC heap stats
   n = snprintf(p, end - p,
                "\"gc\":{\"allocated\":%zu,\"peak\":%zu,\"threshold\":%zu,"
-               "\"cycles\":%lu,\"emergency\":%zu}",
+               "\"cycles\":%lu,\"emergency\":%zu},",
                snapshot->gc_heap.allocated_bytes,
                snapshot->gc_heap.peak_usage, snapshot->gc_heap.gc_threshold,
                snapshot->gc_heap.gc_cycles,
                snapshot->gc_heap.emergency_collections);
 
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  // Owner map for server/client names
+  n = snprintf(p, end - p, "\"owner_map\":[");
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  for (size_t i = 0; i < snapshot->owner_count; i++) {
+    if (i > 0) {
+      n = snprintf(p, end - p, ",");
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+    }
+    n = snprintf(p, end - p, "\"%s\"",
+                 snapshot->owner_map[i] ? snapshot->owner_map[i] : "");
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+  }
+
+  n = snprintf(p, end - p, "]");
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
@@ -346,6 +504,7 @@ cleanup:
   // Free snapshot allocations
   for (size_t i = 0; i < snapshot.slab_count; i++) {
     free(snapshot.slabs[i].bitmap);
+    free(snapshot.slabs[i].slots);
   }
 }
 

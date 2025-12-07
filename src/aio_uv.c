@@ -201,6 +201,11 @@ typedef struct valk_aio_handle_t {
     bool backpressure;
     valk_aio_handle_t *backpressure_next;
     uint64_t backpressure_start_time;
+
+    // Connection diagnostics (for SSE memory dashboard)
+#ifdef VALK_METRICS_ENABLED
+    valk_handle_diag_t diag;
+#endif
   } http;
 } valk_aio_handle_t;
 
@@ -417,6 +422,10 @@ static void __backpressure_timer_cb(uv_timer_t *handle) {
       // Close the connection
       if (conn->http.state != VALK_CONN_CLOSING && conn->http.state != VALK_CONN_CLOSED) {
         conn->http.state = VALK_CONN_CLOSING;
+#ifdef VALK_METRICS_ENABLED
+        conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
+        conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+#endif
         uv_close((uv_handle_t *)&conn->uv.tcp, __uv_handle_closed_cb);
       }
       // Don't advance pp, we already moved to next via *pp = conn->http.backpressure_next
@@ -514,6 +523,27 @@ typedef struct {
   size_t response_capacity;
 } valk_http_queue_t;
 
+// ============================================================================
+// Owner Registry Types (defined before valk_aio_system_t which uses them)
+// ============================================================================
+#ifdef VALK_METRICS_ENABLED
+
+// Owner registry size is derived from server + client pool sizes
+#define VALK_MAX_OWNERS (HTTP_MAX_SERVERS + HTTP_MAX_CLIENTS)
+
+struct valk_owner_entry {
+  char name[32];           // e.g., ":8080", "client:postgres"
+  uint8_t type;            // 0=server, 1=client
+  void *ptr;               // Pointer to server/client struct
+};
+
+struct valk_owner_registry {
+  valk_owner_entry_t entries[VALK_MAX_OWNERS];
+  uint16_t count;
+};
+
+#endif
+
 typedef struct valk_aio_system {
   valk_aio_system_config_t config;  // Resolved configuration
   char name[64];                    // System name for metrics/dashboard
@@ -542,6 +572,7 @@ typedef struct valk_aio_system {
   valk_aio_system_stats_t system_stats;
   valk_http_clients_registry_t http_clients;
   valk_gc_malloc_heap_t* gc_heap;  // For metrics access
+  valk_owner_registry_t owner_registry;  // Server/client attribution for diagnostics
 #endif
 } valk_aio_system_t;
 
@@ -558,6 +589,7 @@ typedef struct valk_aio_http_server {
   valk_http_server_config_t config;  // Server configuration
 #ifdef VALK_METRICS_ENABLED
   valk_server_metrics_t metrics;
+  uint16_t owner_idx;  // Index in owner registry for connection attribution
 #endif
 } valk_aio_http_server;
 
@@ -604,6 +636,39 @@ static void server_metrics_init(valk_server_metrics_t* m,
   m->overload_responses = valk_metric_counter("http_overload_responses_total",
     "server", name, "port", port_str, "protocol", protocol, NULL);
 }
+
+// ============================================================================
+// Owner Registry API Implementation
+// ============================================================================
+
+uint16_t valk_owner_register(valk_aio_system_t *sys, const char *name, uint8_t type, void *ptr) {
+  if (!sys || sys->owner_registry.count >= VALK_MAX_OWNERS) {
+    return UINT16_MAX;  // Invalid index
+  }
+
+  uint16_t idx = sys->owner_registry.count++;
+  valk_owner_entry_t *entry = &sys->owner_registry.entries[idx];
+
+  strncpy(entry->name, name, sizeof(entry->name) - 1);
+  entry->name[sizeof(entry->name) - 1] = '\0';
+  entry->type = type;
+  entry->ptr = ptr;
+
+  return idx;
+}
+
+const char* valk_owner_get_name(valk_aio_system_t *sys, uint16_t idx) {
+  if (!sys || idx >= sys->owner_registry.count) {
+    return NULL;
+  }
+  return sys->owner_registry.entries[idx].name;
+}
+
+size_t valk_owner_get_count(valk_aio_system_t *sys) {
+  if (!sys) return 0;
+  return sys->owner_registry.count;
+}
+
 #endif
 
 static void __event_loop(void *arg) {
@@ -1729,6 +1794,10 @@ static void __http_tcp_unencrypted_read_cb(void *arg,
     VALK_ERROR("nghttp2_session_mem_recv error: %zd", rv);
     if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
       conn->http.state = VALK_CONN_CLOSING;
+#ifdef VALK_METRICS_ENABLED
+      conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
+      conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+#endif
       uv_close((uv_handle_t *)&conn->uv.tcp, __uv_handle_closed_cb);
     }
   }
@@ -1796,6 +1865,10 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     // Close the connection
     if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
       conn->http.state = VALK_CONN_CLOSING;
+#ifdef VALK_METRICS_ENABLED
+      conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
+      conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+#endif
       uv_close((uv_handle_t *)&conn->uv.tcp, __uv_handle_closed_cb);
     }
 
@@ -1853,6 +1926,10 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     // Mark connection as established once SSL handshake is complete
     if (conn->http.state == VALK_CONN_INIT && SSL_is_init_finished(conn->http.ssl.ssl)) {
       conn->http.state = VALK_CONN_ESTABLISHED;
+#ifdef VALK_METRICS_ENABLED
+      conn->http.diag.state = VALK_DIAG_CONN_ACTIVE;
+      conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+#endif
     }
     // Flushies
     In.count = 0;
@@ -2039,6 +2116,13 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
   conn->http.server = srv;
   conn->http.httpHandler = &srv->handler;
 
+#ifdef VALK_METRICS_ENABLED
+  // Initialize connection diagnostics
+  conn->http.diag.state = VALK_DIAG_CONN_CONNECTING;
+  conn->http.diag.owner_idx = srv->owner_idx;
+  conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+#endif
+
   valk_dll_insert_after(&srv->sys->liveHandles, conn);
 
   uv_tcp_init(stream->loop, &conn->uv.tcp);
@@ -2124,6 +2208,10 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
     // Only close if not already closing
     if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
       conn->http.state = VALK_CONN_CLOSING;
+#ifdef VALK_METRICS_ENABLED
+      conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
+      conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+#endif
       uv_close((uv_handle_t *)&conn->uv.tcp, __uv_handle_closed_cb);
     }
     // Note: handle is released back to slab in __uv_handle_closed_cb
@@ -2195,6 +2283,19 @@ static void __http_listen_cb(valk_aio_system_t *sys,
     return;
   }
 
+#ifdef VALK_METRICS_ENABLED
+  // Initialize server metrics BEFORE uv_listen to avoid race with accept callback
+  const char* protocol = srv->ssl_ctx ? "https" : "http";
+  server_metrics_init(&srv->metrics, srv->interface, srv->port, protocol);
+  // Track server start in system stats
+  valk_aio_system_stats_on_server_start(&sys->system_stats);
+
+  // Register server in owner registry for connection attribution
+  char owner_name[32];
+  snprintf(owner_name, sizeof(owner_name), ":%d", srv->port);
+  srv->owner_idx = valk_owner_register(sys, owner_name, 0, srv);
+#endif
+
   r = uv_listen((uv_stream_t *)&srv->listener->uv.tcp, 128,
                 __http_server_accept_cb);
   if (r) {
@@ -2209,14 +2310,6 @@ static void __http_listen_cb(valk_aio_system_t *sys,
   }
 
   VALK_INFO("Listening on %s:%d", srv->interface, srv->port);
-
-#ifdef VALK_METRICS_ENABLED
-  // Initialize server metrics with protocol label
-  const char* protocol = srv->ssl_ctx ? "https" : "http";
-  server_metrics_init(&srv->metrics, srv->interface, srv->port, protocol);
-  // Track server start in system stats
-  valk_aio_system_stats_on_server_start(&sys->system_stats);
-#endif
 
   valk_promise_respond(&task->promise, box);
   valk_dll_insert_after(&sys->liveHandles, srv->listener);
@@ -3195,6 +3288,8 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   atomic_store(&sys->http_clients.count, 0);
   // Store GC heap pointer for metrics access
   sys->gc_heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  // Initialize owner registry for connection attribution
+  memset(&sys->owner_registry, 0, sizeof(sys->owner_registry));
 #endif
 
   // printf("Aquiring stopper\n");

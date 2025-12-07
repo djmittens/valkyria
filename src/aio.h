@@ -293,6 +293,35 @@ void valk_aio_update_queue_stats(valk_aio_system_t* sys);
 // Get GC heap from AIO system (returns NULL if metrics not enabled)
 valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
 
+// ============================================================================
+// Connection Diagnostics Types (for SSE memory diagnostics)
+// ============================================================================
+
+// Connection states for dashboard visualization
+typedef enum {
+  VALK_DIAG_CONN_FREE = 0,      // Slot not allocated
+  VALK_DIAG_CONN_CONNECTING,    // TCP handshake in progress
+  VALK_DIAG_CONN_ACTIVE,        // Processing request/response
+  VALK_DIAG_CONN_IDLE,          // Pooled, awaiting reuse
+  VALK_DIAG_CONN_CLOSING,       // Graceful shutdown
+} valk_diag_conn_state_e;
+
+// Per-handle diagnostics metadata
+typedef struct {
+  valk_diag_conn_state_e state;
+  uint16_t owner_idx;          // Index into owner registry (server/client ID)
+  uint64_t state_change_time;  // Timestamp of last state change (ms since epoch)
+} valk_handle_diag_t;
+
+// Owner registry for server/client attribution (defined in aio_uv.c)
+typedef struct valk_owner_entry valk_owner_entry_t;
+typedef struct valk_owner_registry valk_owner_registry_t;
+
+// Owner registry API
+uint16_t valk_owner_register(valk_aio_system_t *sys, const char *name, uint8_t type, void *ptr);
+const char* valk_owner_get_name(valk_aio_system_t *sys, uint16_t idx);
+size_t valk_owner_get_count(valk_aio_system_t *sys);
+
 // Get slab allocators for memory diagnostics
 valk_slab_t* valk_aio_get_tcp_buffer_slab(valk_aio_system_t* sys);
 valk_slab_t* valk_aio_get_handle_slab(valk_aio_system_t* sys);

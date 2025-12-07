@@ -20,18 +20,45 @@ typedef struct valk_sse_diag_conn {
   bool active;                    // Connection alive
 } valk_sse_diag_conn_t;
 
+// Per-slot state for connection-aware slabs
+typedef struct {
+  char state;        // 'A'=active, 'I'=idle, 'C'=closing, 'F'=free
+  uint16_t owner;    // Owner index (0xFFFF = none)
+  uint32_t age_ms;   // Time since last state change
+} valk_slot_diag_t;
+
+// Enhanced slab snapshot with optional per-slot diagnostics
+typedef struct {
+  const char *name;
+  size_t total_slots;
+  size_t used_slots;
+  size_t overflow_count;
+
+  // Binary bitmap (for simple slabs like LVAL, TCP buffers)
+  uint8_t *bitmap;
+  size_t bitmap_bytes;
+
+  // Per-slot diagnostics (for connection slabs like handles)
+  valk_slot_diag_t *slots;  // NULL for simple bitmap slabs
+  bool has_slot_diag;
+
+  // Summary stats (for connection slabs)
+  struct {
+    size_t active;
+    size_t idle;
+    size_t closing;
+  } by_state;
+} valk_slab_snapshot_t;
+
 // Memory snapshot for SSE transmission
 typedef struct valk_mem_snapshot {
-  // Slab bitmaps (hex-encoded)
-  struct {
-    const char *name;
-    uint8_t *bitmap;      // Actual bitmap data
-    size_t bitmap_bytes;  // Size of bitmap
-    size_t total_slots;
-    size_t used_slots;
-    size_t overflow_count;
-  } slabs[8];
+  // Slab snapshots
+  valk_slab_snapshot_t slabs[8];
   size_t slab_count;
+
+  // Owner map for server/client names
+  const char *owner_map[16];
+  size_t owner_count;
 
   // Arena gauges
   struct {
