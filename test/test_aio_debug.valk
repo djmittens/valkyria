@@ -103,10 +103,21 @@
       "/ should return nil")
     (test/assert-eq nil (aio/debug-handle-request mock-sys {:path "/api/data"})
       "/api/data should return nil")
-    (test/assert-eq nil (aio/debug-handle-request mock-sys {:path "/debug"})
-      "/debug (no trailing slash) should return nil")
     (test/assert-eq nil (aio/debug-handle-request mock-sys {:path "/debug/unknown"})
       "/debug/unknown should return nil")
+    true
+  })
+
+; Test: /debug (no trailing slash) also works
+(test/define "route-debug-no-slash-returns-html"
+  {do
+    (= {req} {:path "/debug"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (plist/get resp (head {:status}))
+      "status should be 200")
+    (test/assert-eq "text/html; charset=utf-8" (plist/get resp (head {:content-type}))
+      "content-type should be text/html")
     true
   })
 

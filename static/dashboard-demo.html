@@ -1,0 +1,2258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valkyria Dashboard - Demo</title>
+  <style>
+    :root {
+      --bg-primary: #0d1117;
+      --bg-secondary: #161b22;
+      --bg-tertiary: #1c2128;
+      --bg-elevated: #21262d;
+      --border-default: #30363d;
+      --border-muted: #21262d;
+      --text-primary: #f0f6fc;
+      --text-secondary: #c9d1d9;
+      --text-muted: #8b949e;
+      --text-faint: #6e7681;
+
+      --color-ok: #3fb950;
+      --color-ok-muted: #238636;
+      --color-ok-bg: rgba(63, 185, 80, 0.15);
+      --color-warning: #d29922;
+      --color-warning-muted: #9e6a03;
+      --color-warning-bg: rgba(210, 153, 34, 0.15);
+      --color-error: #f85149;
+      --color-error-muted: #da3633;
+      --color-error-bg: rgba(248, 81, 73, 0.15);
+      --color-info: #58a6ff;
+      --color-info-muted: #1f6feb;
+      --color-info-bg: rgba(88, 166, 255, 0.15);
+      --color-purple: #a371f7;
+      --color-purple-muted: #8957e5;
+      --color-purple-bg: rgba(163, 113, 247, 0.15);
+      --color-cyan: #39d4d4;
+      --color-cyan-muted: #2b9e9e;
+      --color-cyan-bg: rgba(57, 212, 212, 0.15);
+      --color-pink: #db61a2;
+      --color-pink-muted: #bf4b8a;
+      --color-pink-bg: rgba(219, 97, 162, 0.15);
+
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 12px;
+      --space-lg: 16px;
+      --space-xl: 24px;
+      --space-2xl: 32px;
+
+      --radius-sm: 4px;
+      --radius-md: 6px;
+      --radius-lg: 8px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      background: var(--bg-primary);
+      color: var(--text-secondary);
+      min-height: 100vh;
+    }
+
+    /* Screen reader only utility */
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    /* Focus styles for keyboard navigation */
+    :focus-visible {
+      outline: 2px solid var(--color-info);
+      outline-offset: 2px;
+    }
+
+    /* Skip link for accessibility */
+    .skip-link {
+      position: absolute;
+      top: -40px;
+      left: 0;
+      background: var(--color-info);
+      color: white;
+      padding: var(--space-sm) var(--space-md);
+      z-index: 1000;
+      border-radius: var(--radius-sm);
+    }
+    .skip-link:focus {
+      top: var(--space-sm);
+      left: var(--space-sm);
+    }
+
+    /* ===== HEADER ===== */
+    header[role="banner"] {
+      display: flex;
+      align-items: center;
+      gap: var(--space-lg);
+      padding: var(--space-lg) var(--space-xl);
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-default);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+
+    .logo-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, var(--color-info) 0%, var(--color-purple) 100%);
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 16px;
+      color: white;
+    }
+
+    .logo-text {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .logo-text span {
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: var(--color-ok-bg);
+      border: 1px solid var(--color-ok-muted);
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--color-ok);
+    }
+
+    .status-badge.error {
+      background: var(--color-error-bg);
+      border-color: var(--color-error-muted);
+      color: var(--color-error);
+    }
+
+    .status-badge .pulse {
+      width: 8px;
+      height: 8px;
+      background: currentColor;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    /* Status icons for color blindness support */
+    .status-icon {
+      font-size: 11px;
+      margin-right: 2px;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(0.9); }
+    }
+
+    .header-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: var(--space-xl);
+    }
+
+    .header-stat {
+      text-align: right;
+    }
+
+    .header-stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .header-stat-value {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ===== LAYOUT ===== */
+    main[role="main"] {
+      padding: var(--space-xl);
+      max-width: 1800px;
+      margin: 0 auto;
+    }
+
+    /* ===== HEALTH OVERVIEW PANEL ===== */
+    .health-overview {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-lg);
+      padding: var(--space-lg);
+      margin-bottom: var(--space-2xl);
+    }
+
+    .health-overview h2 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: var(--space-md);
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+
+    .health-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--space-lg);
+    }
+
+    .health-card {
+      background: var(--bg-tertiary);
+      border-radius: var(--radius-md);
+      padding: var(--space-md);
+      text-align: center;
+    }
+
+    .health-card-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: var(--space-xs);
+    }
+
+    .health-card-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .health-card-value.ok { color: var(--color-ok); }
+    .health-card-value.warning { color: var(--color-warning); }
+    .health-card-value.error { color: var(--color-error); }
+
+    .health-card-subtitle {
+      font-size: 11px;
+      color: var(--text-faint);
+      margin-top: 2px;
+    }
+
+    /* ===== SECTION GROUPS ===== */
+    .section-group {
+      margin-bottom: var(--space-2xl);
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+      margin-bottom: var(--space-lg);
+      padding-bottom: var(--space-sm);
+      border-bottom: 1px solid var(--border-muted);
+    }
+
+    .section-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .section-icon.vm { background: var(--color-purple-bg); color: var(--color-purple); }
+    .section-icon.aio { background: var(--color-cyan-bg); color: var(--color-cyan); }
+    .section-icon.http { background: var(--color-info-bg); color: var(--color-info); }
+    .section-icon.client { background: var(--color-pink-bg); color: var(--color-pink); }
+
+    .section-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .section-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-left: var(--space-sm);
+    }
+
+    .section-badges {
+      margin-left: auto;
+      display: flex;
+      gap: var(--space-sm);
+    }
+
+    .section-badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--bg-elevated);
+      color: var(--text-muted);
+    }
+
+    .section-badge.ok { background: var(--color-ok-bg); color: var(--color-ok); }
+    .section-badge.warning { background: var(--color-warning-bg); color: var(--color-warning); }
+
+    /* ===== GRID LAYOUTS ===== */
+    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-lg); }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-lg); }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-lg); }
+    .span-2 { grid-column: span 2; }
+
+    /* ===== PANEL ===== */
+    .panel {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: var(--space-md) var(--space-lg);
+      border-bottom: 1px solid var(--border-default);
+      background: var(--bg-tertiary);
+    }
+
+    .panel-icon {
+      width: 20px;
+      height: 20px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .panel-icon.gc { background: var(--color-ok-bg); color: var(--color-ok); }
+    .panel-icon.mem { background: var(--color-purple-bg); color: var(--color-purple); }
+    .panel-icon.interp { background: var(--color-warning-bg); color: var(--color-warning); }
+    .panel-icon.aio { background: var(--color-cyan-bg); color: var(--color-cyan); }
+    .panel-icon.http { background: var(--color-info-bg); color: var(--color-info); }
+    .panel-icon.client { background: var(--color-pink-bg); color: var(--color-pink); }
+
+    .panel-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .panel-badge {
+      margin-left: auto;
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: var(--bg-elevated);
+      color: var(--text-muted);
+    }
+
+    .panel-body {
+      padding: var(--space-lg);
+    }
+
+    /* ===== SERVER/CLIENT CARDS ===== */
+    .entity-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .entity-card:focus-within {
+      border-color: var(--color-info);
+    }
+
+    .entity-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: var(--space-md) var(--space-lg);
+      background: var(--bg-tertiary);
+      border-bottom: 1px solid var(--border-default);
+    }
+
+    .entity-status {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--color-ok);
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    /* Color blindness: add icon overlay */
+    .entity-status::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      top: 0; right: 0; bottom: 0; left: 0; /* Fallback for inset */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 7px;
+      color: white;
+      font-weight: bold;
+    }
+
+    .entity-status.ok::after { content: '✓'; }
+    .entity-status.warning { background: var(--color-warning); }
+    .entity-status.warning::after { content: '!'; }
+    .entity-status.error { background: var(--color-error); }
+    .entity-status.error::after { content: '✕'; }
+
+    .entity-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      font-family: 'SF Mono', Monaco, monospace;
+    }
+
+    .entity-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 2px 8px;
+      background: var(--bg-elevated);
+      border-radius: 999px;
+    }
+
+    .entity-stats {
+      margin-left: auto;
+      display: flex;
+      gap: var(--space-lg);
+    }
+
+    .entity-stat {
+      text-align: right;
+    }
+
+    .entity-stat-value {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .entity-stat-label {
+      font-size: 11px;
+      color: var(--text-faint);
+      text-transform: uppercase;
+    }
+
+    .entity-body {
+      padding: var(--space-lg);
+    }
+
+    .entity-section {
+      margin-bottom: var(--space-lg);
+    }
+
+    .entity-section:last-child {
+      margin-bottom: 0;
+    }
+
+    .entity-section-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-faint);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: var(--space-sm);
+    }
+
+    /* ===== MINI STATS ===== */
+    .mini-stats {
+      display: flex;
+      gap: var(--space-sm);
+    }
+
+    .mini-stat {
+      flex: 1;
+      padding: var(--space-sm);
+      background: var(--bg-tertiary);
+      border-radius: var(--radius-sm);
+      text-align: center;
+    }
+
+    .mini-stat-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .mini-stat-value.ok { color: var(--color-ok); }
+    .mini-stat-value.warning { color: var(--color-warning); }
+    .mini-stat-value.error { color: var(--color-error); }
+
+    .mini-stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* ===== METRIC ROWS ===== */
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--border-muted);
+      line-height: 1.4;
+    }
+
+    .metric-row:last-child { border-bottom: none; }
+
+    .metric-label {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .metric-value {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .metric-value.ok { color: var(--color-ok); }
+    .metric-value.warning { color: var(--color-warning); }
+    .metric-value.error { color: var(--color-error); }
+
+    /* ===== PROGRESS BARS ===== */
+    .progress-bar {
+      height: 8px;
+      background: var(--bg-elevated);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: var(--space-xs);
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: var(--color-info);
+      transition: width 0.3s ease;
+    }
+
+    .progress-fill.ok { background: var(--color-ok); }
+    .progress-fill.warning {
+      background: var(--color-warning);
+      /* Striped pattern for color blindness */
+      background-image: repeating-linear-gradient(
+        45deg,
+        transparent,
+        transparent 3px,
+        rgba(255,255,255,0.1) 3px,
+        rgba(255,255,255,0.1) 6px
+      );
+    }
+    .progress-fill.critical {
+      background: var(--color-error);
+      background-image: repeating-linear-gradient(
+        45deg,
+        transparent,
+        transparent 2px,
+        rgba(255,255,255,0.15) 2px,
+        rgba(255,255,255,0.15) 4px
+      );
+    }
+
+    /* ===== GAUGE ===== */
+    .gauge-container {
+      display: flex;
+      align-items: center;
+      gap: var(--space-lg);
+    }
+
+    .gauge {
+      width: 100px;
+      height: 100px;
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .gauge svg { transform: rotate(-90deg); }
+
+    .gauge-bg {
+      fill: none;
+      stroke: var(--bg-tertiary);
+      stroke-width: 10;
+    }
+
+    .gauge-threshold {
+      fill: none;
+      stroke-width: 10;
+      opacity: 0.3;
+    }
+
+    .gauge-threshold.warning {
+      stroke: var(--color-warning);
+    }
+
+    .gauge-threshold.critical {
+      stroke: var(--color-error);
+    }
+
+    .gauge-fill {
+      fill: none;
+      stroke: var(--color-ok);
+      stroke-width: 10;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 0.5s ease, stroke 0.3s ease;
+    }
+
+    .gauge-fill.warning { stroke: var(--color-warning); }
+    .gauge-fill.critical { stroke: var(--color-error); }
+
+    .gauge-center {
+      position: absolute;
+      inset: 0;
+      top: 0; right: 0; bottom: 0; left: 0; /* Fallback */
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .gauge-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .gauge-trend {
+      font-size: 12px;
+      margin-left: 2px;
+    }
+
+    .gauge-trend.up { color: var(--color-warning); }
+    .gauge-trend.down { color: var(--color-ok); }
+    .gauge-trend.stable { color: var(--text-muted); }
+
+    .gauge-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+
+    .gauge-details { flex: 1; }
+
+    /* ===== HISTOGRAM ===== */
+    .histogram {
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 50px;
+    }
+
+    .histogram-bar {
+      flex: 1;
+      border-radius: 2px 2px 0 0;
+      background: var(--color-info);
+      transition: height 0.3s ease, background-color 0.3s ease;
+      min-height: 2px;
+      cursor: pointer;
+    }
+
+    .histogram-bar:hover { filter: brightness(1.2); }
+    .histogram-bar:focus-visible {
+      outline: 2px solid var(--text-primary);
+      outline-offset: 1px;
+    }
+    .histogram-bar.p50 { background: var(--color-ok); }
+    .histogram-bar.p95 { background: var(--color-warning); }
+    .histogram-bar.p99 { background: var(--color-error); }
+
+    .histogram-meta {
+      display: flex;
+      justify-content: space-between;
+      margin-top: var(--space-xs);
+      font-size: 11px;
+      color: var(--text-faint);
+    }
+
+    .percentiles {
+      display: flex;
+      gap: var(--space-md);
+      margin-top: var(--space-sm);
+    }
+
+    .percentile {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+    }
+
+    .percentile-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 6px;
+      color: white;
+    }
+
+    .percentile-dot.p50 { background: var(--color-ok); }
+    .percentile-dot.p95 { background: var(--color-warning); }
+    .percentile-dot.p99 { background: var(--color-error); }
+
+    .percentile-label { color: var(--text-muted); }
+    .percentile-value { color: var(--text-primary); font-weight: 600; }
+
+    /* ===== GC TIMELINE ===== */
+    .gc-timeline {
+      height: 60px;
+      position: relative;
+      background: var(--bg-tertiary);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+
+    /* Time axis for GC timeline */
+    .gc-timeline-axis {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 14px;
+      background: rgba(0,0,0,0.2);
+      display: flex;
+      justify-content: space-between;
+      padding: 0 var(--space-sm);
+      font-size: 9px;
+      color: var(--text-faint);
+      align-items: center;
+    }
+
+    /* Threshold line */
+    .gc-timeline-threshold {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: var(--color-warning);
+      opacity: 0.5;
+    }
+
+    .gc-timeline-threshold-label {
+      position: absolute;
+      right: var(--space-xs);
+      font-size: 9px;
+      color: var(--color-warning);
+      transform: translateY(-100%);
+    }
+
+    .gc-event {
+      position: absolute;
+      bottom: 14px;
+      width: 3px;
+      background: var(--color-ok);
+      border-radius: 2px 2px 0 0;
+      cursor: pointer;
+    }
+
+    .gc-event:hover {
+      filter: brightness(1.3);
+    }
+
+    .gc-event.major { background: var(--color-warning); width: 4px; }
+    .gc-event.long { background: var(--color-error); }
+
+    .gc-stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--space-sm);
+      margin-top: var(--space-md);
+    }
+
+    .gc-stat {
+      text-align: center;
+      padding: var(--space-sm);
+      background: var(--bg-tertiary);
+      border-radius: var(--radius-sm);
+    }
+
+    .gc-stat-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .gc-stat-value .unit {
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--text-muted);
+    }
+
+    .gc-stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* ===== CONNECTION POOL - STACKED BAR ===== */
+    .conn-pool-bar {
+      height: 24px;
+      background: var(--bg-elevated);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      display: flex;
+    }
+
+    .conn-pool-segment {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 600;
+      color: white;
+      min-width: 0;
+      transition: width 0.3s ease;
+    }
+
+    .conn-pool-segment.active { background: var(--color-ok); }
+    .conn-pool-segment.idle { background: var(--color-info-muted); }
+    .conn-pool-segment.closing { background: var(--color-warning); }
+
+    .conn-pool-segment span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      padding: 0 4px;
+    }
+
+    .conn-legend {
+      display: flex;
+      gap: var(--space-md);
+      margin-top: var(--space-sm);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+    }
+
+    /* Small grid for visual detail (optional, shown below bar) */
+    .conn-grid-mini {
+      display: grid;
+      grid-template-columns: repeat(50, 1fr);
+      gap: 1px;
+      margin-top: var(--space-sm);
+      height: 16px;
+    }
+
+    .conn-slot-mini {
+      border-radius: 1px;
+      background: var(--bg-elevated);
+    }
+
+    .conn-slot-mini.active { background: var(--color-ok); }
+    .conn-slot-mini.idle { background: var(--color-info-muted); }
+    .conn-slot-mini.closing { background: var(--color-warning); }
+
+    /* ===== SPARKLINE ===== */
+    .sparkline-container {
+      position: relative;
+    }
+
+    .sparkline {
+      height: 40px;
+      background: var(--bg-tertiary);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+
+    .sparkline svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    .sparkline-path {
+      fill: none;
+      stroke-width: 1.5;
+    }
+
+    .sparkline-area {
+      opacity: 0.2;
+    }
+
+    .sparkline-time-label {
+      position: absolute;
+      bottom: 2px;
+      font-size: 9px;
+      color: var(--text-faint);
+      pointer-events: none;
+    }
+
+    .sparkline-time-label.start { left: 4px; }
+    .sparkline-time-label.end { right: 4px; }
+
+    .sparkline-meta {
+      display: flex;
+      justify-content: space-between;
+      margin-top: var(--space-xs);
+      font-size: 11px;
+    }
+
+    .sparkline-stat {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .sparkline-dot {
+      width: 8px;
+      height: 3px;
+      border-radius: 1px;
+    }
+
+    .sparkline-dot.in { background: var(--color-ok); }
+    .sparkline-dot.out { background: var(--color-info); }
+
+    .sparkline-label { color: var(--text-muted); }
+    .sparkline-value { color: var(--text-primary); font-weight: 600; }
+
+    /* ===== STATUS BREAKDOWN ===== */
+    .status-row {
+      display: flex;
+      gap: var(--space-sm);
+    }
+
+    .status-chip {
+      flex: 1;
+      padding: var(--space-xs) var(--space-sm);
+      border-radius: var(--radius-sm);
+      text-align: center;
+      border: 1px solid transparent;
+    }
+
+    .status-chip.s2xx { background: var(--color-ok-bg); border-color: var(--color-ok-muted); }
+    .status-chip.s4xx { background: var(--color-warning-bg); border-color: var(--color-warning-muted); }
+    .status-chip.s5xx { background: var(--color-error-bg); border-color: var(--color-error-muted); }
+
+    .status-chip-value {
+      font-size: 14px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .status-chip.s2xx .status-chip-value { color: var(--color-ok); }
+    .status-chip.s4xx .status-chip-value { color: var(--color-warning); }
+    .status-chip.s5xx .status-chip-value { color: var(--color-error); }
+
+    .status-chip-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }
+
+    /* Icons for color blindness */
+    .status-chip-label .icon {
+      font-size: 10px;
+    }
+
+    .status-bar {
+      height: 8px;
+      background: var(--bg-tertiary);
+      border-radius: 999px;
+      overflow: hidden;
+      display: flex;
+      margin-top: var(--space-sm);
+    }
+
+    .status-segment {
+      height: 100%;
+      min-width: 2px; /* Ensure visibility of small segments */
+    }
+    .status-segment.s2xx { background: var(--color-ok); }
+    .status-segment.s4xx { background: var(--color-warning); }
+    .status-segment.s5xx { background: var(--color-error); }
+
+    /* ===== POOL ITEMS ===== */
+    .pool-item {
+      margin-bottom: var(--space-md);
+    }
+
+    .pool-item:last-child { margin-bottom: 0; }
+
+    .pool-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: var(--space-xs);
+    }
+
+    .pool-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .pool-usage {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* ===== ERROR BANNER ===== */
+    .error-banner {
+      display: none;
+      background: var(--color-error-bg);
+      border: 1px solid var(--color-error-muted);
+      border-radius: var(--radius-md);
+      padding: var(--space-md) var(--space-lg);
+      margin-bottom: var(--space-lg);
+      color: var(--color-error);
+      align-items: center;
+      gap: var(--space-sm);
+    }
+
+    .error-banner.visible {
+      display: flex;
+    }
+
+    .error-banner-icon {
+      font-size: 16px;
+    }
+
+    .error-banner-text {
+      flex: 1;
+    }
+
+    .error-banner-retry {
+      background: var(--color-error);
+      color: white;
+      border: none;
+      padding: var(--space-xs) var(--space-md);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .error-banner-retry:hover {
+      filter: brightness(1.1);
+    }
+
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 1400px) {
+      .grid-4 { grid-template-columns: repeat(2, 1fr); }
+      .grid-3 { grid-template-columns: repeat(2, 1fr); }
+      .health-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 900px) {
+      .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; }
+      .span-2 { grid-column: span 1; }
+      .health-grid { grid-template-columns: 1fr; }
+
+      header[role="banner"] {
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+      }
+
+      .header-right {
+        width: 100%;
+        justify-content: space-between;
+      }
+
+      .entity-header {
+        flex-wrap: wrap;
+      }
+
+      .entity-stats {
+        width: 100%;
+        margin-top: var(--space-sm);
+        margin-left: 0;
+        justify-content: flex-start;
+      }
+    }
+
+    /* Reduced motion */
+    @media (prefers-reduced-motion: reduce) {
+      .pulse { animation: none; }
+      .progress-fill, .gauge-fill, .histogram-bar { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Skip link for keyboard users -->
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <header role="banner" aria-label="Dashboard header">
+    <div class="logo">
+      <div class="logo-icon" aria-hidden="true">V</div>
+      <div class="logo-text">Valkyria <span>Dashboard</span></div>
+    </div>
+    <div class="status-badge" role="status" aria-live="polite" id="global-status">
+      <span class="pulse" aria-hidden="true"></span>
+      <span class="status-icon" aria-hidden="true">✓</span>
+      <span>All Systems Healthy</span>
+    </div>
+    <div class="header-right">
+      <div class="header-stat">
+        <div class="header-stat-label" id="uptime-label">Uptime</div>
+        <div class="header-stat-value" aria-labelledby="uptime-label">2d 14h 32m</div>
+      </div>
+      <div class="header-stat">
+        <div class="header-stat-label" id="update-label">Last Update</div>
+        <div class="header-stat-value" id="timestamp" aria-labelledby="update-label" aria-live="polite">--:--:--</div>
+      </div>
+    </div>
+  </header>
+
+  <main role="main" id="main-content">
+
+    <!-- Error Banner (hidden by default) -->
+    <div class="error-banner" role="alert" aria-live="assertive" id="error-banner">
+      <span class="error-banner-icon" aria-hidden="true">⚠</span>
+      <span class="error-banner-text">Connection lost. Metrics may be stale.</span>
+      <button class="error-banner-retry" onclick="retryConnection()">Retry</button>
+    </div>
+
+    <!-- ==================== HEALTH OVERVIEW ==================== -->
+    <section class="health-overview" aria-labelledby="health-title">
+      <h2 id="health-title">
+        <span aria-hidden="true">📊</span>
+        System Health Overview
+      </h2>
+      <div class="health-grid" role="list">
+        <div class="health-card" role="listitem">
+          <div class="health-card-label">Request Rate</div>
+          <div class="health-card-value">1,552<span style="font-size: 14px; font-weight: 400;">/s</span></div>
+          <div class="health-card-subtitle">Total across all servers</div>
+        </div>
+        <div class="health-card" role="listitem">
+          <div class="health-card-label">Error Rate</div>
+          <div class="health-card-value ok">0.28<span style="font-size: 14px; font-weight: 400;">%</span></div>
+          <div class="health-card-subtitle">4xx + 5xx responses</div>
+        </div>
+        <div class="health-card" role="listitem">
+          <div class="health-card-label">P99 Latency</div>
+          <div class="health-card-value">42<span style="font-size: 14px; font-weight: 400;">ms</span></div>
+          <div class="health-card-subtitle">99th percentile</div>
+        </div>
+        <div class="health-card" role="listitem">
+          <div class="health-card-label">Heap Usage</div>
+          <div class="health-card-value">67<span style="font-size: 14px; font-weight: 400;">%</span></div>
+          <div class="health-card-subtitle">128 MB / 192 MB</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== VM METRICS ==================== -->
+    <section class="section-group" aria-labelledby="vm-section-title">
+      <div class="section-header">
+        <div class="section-icon vm" aria-hidden="true">VM</div>
+        <h2 class="section-title" id="vm-section-title">Virtual Machine</h2>
+        <span class="section-subtitle">Interpreter, GC, and Memory</span>
+        <div class="section-badges" aria-label="Section status">
+          <span class="section-badge ok"><span aria-hidden="true">✓</span> GC OK</span>
+          <span class="section-badge">67% Heap</span>
+        </div>
+      </div>
+
+      <div class="grid-3">
+        <!-- GC Panel -->
+        <article class="panel" aria-labelledby="gc-panel-title">
+          <div class="panel-header">
+            <div class="panel-icon gc" aria-hidden="true">G</div>
+            <h3 class="panel-title" id="gc-panel-title">Garbage Collector</h3>
+            <div class="panel-badge">142 cycles</div>
+          </div>
+          <div class="panel-body">
+            <div class="gc-timeline"
+                 id="gc-timeline"
+                 role="img"
+                 aria-label="GC pause timeline showing 142 collection events over the last 60 seconds. Max pause 2.4ms, average 0.8ms.">
+              <div class="gc-timeline-threshold" style="bottom: 40px;">
+                <span class="gc-timeline-threshold-label">10ms</span>
+              </div>
+              <div class="gc-timeline-axis">
+                <span>-60s</span>
+                <span>-30s</span>
+                <span>now</span>
+              </div>
+            </div>
+            <div class="gc-stats" role="list" aria-label="GC statistics">
+              <div class="gc-stat" role="listitem">
+                <div class="gc-stat-value">142</div>
+                <div class="gc-stat-label">Cycles</div>
+              </div>
+              <div class="gc-stat" role="listitem">
+                <div class="gc-stat-value">2.4<span class="unit">ms</span></div>
+                <div class="gc-stat-label">Max Pause</div>
+              </div>
+              <div class="gc-stat" role="listitem">
+                <div class="gc-stat-value">0.8<span class="unit">ms</span></div>
+                <div class="gc-stat-label">Avg Pause</div>
+              </div>
+              <div class="gc-stat" role="listitem">
+                <div class="gc-stat-value">24<span class="unit">MB</span></div>
+                <div class="gc-stat-label">Reclaimed</div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- Heap Memory -->
+        <article class="panel" aria-labelledby="heap-panel-title">
+          <div class="panel-header">
+            <div class="panel-icon mem" aria-hidden="true">M</div>
+            <h3 class="panel-title" id="heap-panel-title">Heap Memory</h3>
+          </div>
+          <div class="panel-body">
+            <div class="gauge-container">
+              <div class="gauge" role="img" aria-label="Heap memory usage: 67% of 192 MB used. Status: Normal. Trend: stable.">
+                <svg viewBox="0 0 100 100" aria-hidden="true">
+                  <circle class="gauge-bg" cx="50" cy="50" r="40"/>
+                  <!-- Threshold markers -->
+                  <circle class="gauge-threshold warning" cx="50" cy="50" r="40"
+                          stroke-dasharray="251.2" stroke-dashoffset="75.4"/>
+                  <circle class="gauge-threshold critical" cx="50" cy="50" r="40"
+                          stroke-dasharray="251.2" stroke-dashoffset="25.1"/>
+                  <!-- Actual fill -->
+                  <circle class="gauge-fill" cx="50" cy="50" r="40"
+                          stroke-dasharray="251.2" stroke-dashoffset="82.9"/>
+                </svg>
+                <div class="gauge-center">
+                  <div class="gauge-value">67%<span class="gauge-trend stable" aria-label="stable">→</span></div>
+                  <div class="gauge-label">Used</div>
+                </div>
+              </div>
+              <div class="gauge-details">
+                <div class="metric-row">
+                  <span class="metric-label">Used</span>
+                  <span class="metric-value">128 MB</span>
+                </div>
+                <div class="metric-row">
+                  <span class="metric-label">Total</span>
+                  <span class="metric-value">192 MB</span>
+                </div>
+                <div class="metric-row">
+                  <span class="metric-label">Peak</span>
+                  <span class="metric-value">156 MB</span>
+                </div>
+                <div class="metric-row">
+                  <span class="metric-label">GC Trigger</span>
+                  <span class="metric-value">160 MB</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- Interpreter -->
+        <article class="panel" aria-labelledby="interp-panel-title">
+          <div class="panel-header">
+            <div class="panel-icon interp" aria-hidden="true">I</div>
+            <h3 class="panel-title" id="interp-panel-title">Interpreter</h3>
+          </div>
+          <div class="panel-body">
+            <div class="mini-stats" role="list" aria-label="Interpreter statistics">
+              <div class="mini-stat" role="listitem">
+                <div class="mini-stat-value">1.2M</div>
+                <div class="mini-stat-label">Evals (total)</div>
+              </div>
+              <div class="mini-stat" role="listitem">
+                <div class="mini-stat-value">847K</div>
+                <div class="mini-stat-label">Fn Calls (total)</div>
+              </div>
+              <div class="mini-stat" role="listitem">
+                <div class="mini-stat-value">156K</div>
+                <div class="mini-stat-label">Builtins (total)</div>
+              </div>
+            </div>
+            <div style="margin-top: var(--space-md);">
+              <div class="metric-row">
+                <span class="metric-label">Max Stack Depth</span>
+                <span class="metric-value">42</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Closures Created</span>
+                <span class="metric-value">12,847</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">Env Lookups</span>
+                <span class="metric-value">2.4M</span>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ==================== AIO SYSTEMS ==================== -->
+    <section class="section-group" aria-labelledby="aio-section-title">
+      <div class="section-header">
+        <div class="section-icon aio" aria-hidden="true">AIO</div>
+        <h2 class="section-title" id="aio-section-title">Async I/O Systems</h2>
+        <span class="section-subtitle">Event Loops, Connections, and Buffers</span>
+        <div class="section-badges">
+          <span class="section-badge">2 systems</span>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <!-- AIO System 1 -->
+        <article class="panel" aria-labelledby="aio1-title">
+          <div class="panel-header">
+            <div class="panel-icon aio" aria-hidden="true">1</div>
+            <h3 class="panel-title" id="aio1-title">Main AIO</h3>
+            <div class="panel-badge">primary</div>
+          </div>
+          <div class="panel-body">
+            <div class="mini-stats" style="margin-bottom: var(--space-lg);" role="list">
+              <div class="mini-stat" role="listitem">
+                <div class="mini-stat-value ok">847K</div>
+                <div class="mini-stat-label">Loop Iters</div>
+              </div>
+              <div class="mini-stat" role="listitem">
+                <div class="mini-stat-value">1.2M</div>
+                <div class="mini-stat-label">Events</div>
+              </div>
+              <div class="mini-stat" role="listitem">
+                <div class="mini-stat-value">12</div>
+                <div class="mini-stat-label">Handles</div>
+              </div>
+            </div>
+
+            <div style="margin-bottom: var(--space-lg);">
+              <div class="pool-header">
+                <span class="pool-name">Connection Pool</span>
+                <span class="pool-usage">397 / 500 (79%)</span>
+              </div>
+              <!-- Stacked bar for better readability -->
+              <div class="conn-pool-bar"
+                   role="img"
+                   aria-label="Connection pool: 247 active (49%), 142 idle (28%), 8 closing (2%), 103 empty (21%)">
+                <div class="conn-pool-segment active" style="width: 49.4%"><span>247</span></div>
+                <div class="conn-pool-segment idle" style="width: 28.4%"><span>142</span></div>
+                <div class="conn-pool-segment closing" style="width: 1.6%"></div>
+              </div>
+              <div class="conn-legend">
+                <div class="legend-item"><div class="legend-dot" style="background: var(--color-ok);"></div> Active (247)</div>
+                <div class="legend-item"><div class="legend-dot" style="background: var(--color-info-muted);"></div> Idle (142)</div>
+                <div class="legend-item"><div class="legend-dot" style="background: var(--color-warning);"></div> Closing (8)</div>
+              </div>
+              <!-- Mini grid for visual detail -->
+              <div class="conn-grid-mini" id="conn-pool-1-mini" aria-hidden="true"></div>
+            </div>
+
+            <div class="pool-item">
+              <div class="pool-header">
+                <span class="pool-name">Stream Arenas</span>
+                <span class="pool-usage">24 / 32 (75%)</span>
+              </div>
+              <div class="progress-bar" role="progressbar" aria-valuenow="75" aria-valuemin="0" aria-valuemax="100" aria-label="Stream arenas: 75% used">
+                <div class="progress-fill warning" style="width: 75%"></div>
+              </div>
+            </div>
+            <div class="pool-item">
+              <div class="pool-header">
+                <span class="pool-name">TCP Buffers</span>
+                <span class="pool-usage">156 / 256 (61%)</span>
+              </div>
+              <div class="progress-bar" role="progressbar" aria-valuenow="61" aria-valuemin="0" aria-valuemax="100" aria-label="TCP buffers: 61% used">
+                <div class="progress-fill" style="width: 61%"></div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- AIO System 2 -->
+        <article class="panel" aria-labelledby="aio2-title">
+          <div class="panel-header">
+            <div class="panel-icon aio" aria-hidden="true">2</div>
+            <h3 class="panel-title" id="aio2-title">Background AIO</h3>
+            <div class="panel-badge">workers</div>
+          </div>
+          <div class="panel-body">
+            <div class="mini-stats" style="margin-bottom: var(--space-lg);" role="list">
+              <div class="mini-stat" role="listitem">
+                <div class="mini-stat-value">124K</div>
+                <div class="mini-stat-label">Loop Iters</div>
+              </div>
+              <div class="mini-stat" role="listitem">
+                <div class="mini-stat-value">89K</div>
+                <div class="mini-stat-label">Events</div>
+              </div>
+              <div class="mini-stat" role="listitem">
+                <div class="mini-stat-value">4</div>
+                <div class="mini-stat-label">Handles</div>
+              </div>
+            </div>
+
+            <div style="margin-bottom: var(--space-lg);">
+              <div class="pool-header">
+                <span class="pool-name">Connection Pool</span>
+                <span class="pool-usage">68 / 100 (68%)</span>
+              </div>
+              <div class="conn-pool-bar"
+                   role="img"
+                   aria-label="Connection pool: 23 active (23%), 45 idle (45%), 32 empty (32%)">
+                <div class="conn-pool-segment active" style="width: 23%"><span>23</span></div>
+                <div class="conn-pool-segment idle" style="width: 45%"><span>45</span></div>
+              </div>
+              <div class="conn-legend">
+                <div class="legend-item"><div class="legend-dot" style="background: var(--color-ok);"></div> Active (23)</div>
+                <div class="legend-item"><div class="legend-dot" style="background: var(--color-info-muted);"></div> Idle (45)</div>
+              </div>
+              <div class="conn-grid-mini" id="conn-pool-2-mini" aria-hidden="true"></div>
+            </div>
+
+            <div class="pool-item">
+              <div class="pool-header">
+                <span class="pool-name">Stream Arenas</span>
+                <span class="pool-usage">4 / 16 (25%)</span>
+              </div>
+              <div class="progress-bar" role="progressbar" aria-valuenow="25" aria-valuemin="0" aria-valuemax="100" aria-label="Stream arenas: 25% used">
+                <div class="progress-fill ok" style="width: 25%"></div>
+              </div>
+            </div>
+            <div class="pool-item">
+              <div class="pool-header">
+                <span class="pool-name">TCP Buffers</span>
+                <span class="pool-usage">32 / 64 (50%)</span>
+              </div>
+              <div class="progress-bar" role="progressbar" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100" aria-label="TCP buffers: 50% used">
+                <div class="progress-fill" style="width: 50%"></div>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ==================== HTTP SERVERS ==================== -->
+    <section class="section-group" aria-labelledby="http-section-title">
+      <div class="section-header">
+        <div class="section-icon http" aria-hidden="true">HTTP</div>
+        <h2 class="section-title" id="http-section-title">HTTP Servers</h2>
+        <span class="section-subtitle">Inbound Request Handling</span>
+        <div class="section-badges">
+          <span class="section-badge ok"><span aria-hidden="true">✓</span> 3 servers</span>
+          <span class="section-badge">1.5K req/s</span>
+        </div>
+      </div>
+
+      <div class="grid-3">
+        <!-- Server 1: Main HTTPS -->
+        <article class="entity-card" aria-labelledby="server1-name">
+          <div class="entity-header">
+            <div class="entity-status ok" role="img" aria-label="Status: Healthy"></div>
+            <h3 class="entity-name" id="server1-name">0.0.0.0:8443</h3>
+            <div class="entity-label">HTTPS</div>
+            <div class="entity-stats">
+              <div class="entity-stat">
+                <div class="entity-stat-value">247</div>
+                <div class="entity-stat-label">Conns</div>
+              </div>
+              <div class="entity-stat">
+                <div class="entity-stat-value">1.2K/s</div>
+                <div class="entity-stat-label">Req</div>
+              </div>
+            </div>
+          </div>
+          <div class="entity-body">
+            <!-- Status Codes -->
+            <div class="entity-section">
+              <div class="entity-section-title">Response Codes (last 5 min)</div>
+              <div class="status-row" role="list">
+                <div class="status-chip s2xx" role="listitem">
+                  <div class="status-chip-value">45,231</div>
+                  <div class="status-chip-label"><span class="icon" aria-hidden="true">✓</span> 2xx</div>
+                </div>
+                <div class="status-chip s4xx" role="listitem">
+                  <div class="status-chip-value">127</div>
+                  <div class="status-chip-label"><span class="icon" aria-hidden="true">!</span> 4xx</div>
+                </div>
+                <div class="status-chip s5xx" role="listitem">
+                  <div class="status-chip-value">3</div>
+                  <div class="status-chip-label"><span class="icon" aria-hidden="true">✕</span> 5xx</div>
+                </div>
+              </div>
+              <div class="status-bar" role="img" aria-label="Response code breakdown: 99.7% success, 0.28% client errors, 0.01% server errors">
+                <div class="status-segment s2xx" style="width: 99.7%"></div>
+                <div class="status-segment s4xx" style="width: 0.28%"></div>
+                <div class="status-segment s5xx" style="width: 0.02%"></div>
+              </div>
+            </div>
+
+            <!-- Latency -->
+            <div class="entity-section">
+              <div class="entity-section-title">Latency Distribution</div>
+              <div class="histogram" id="hist-server-1" role="img" aria-label="Latency histogram: P50 at 4ms, P95 at 18ms, P99 at 42ms"></div>
+              <div class="histogram-meta">
+                <span>0ms</span>
+                <span>500ms+</span>
+              </div>
+              <div class="percentiles" role="list" aria-label="Latency percentiles">
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p50" aria-hidden="true"></div>
+                  <span class="percentile-label">P50</span>
+                  <span class="percentile-value">4ms</span>
+                </div>
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p95" aria-hidden="true"></div>
+                  <span class="percentile-label">P95</span>
+                  <span class="percentile-value">18ms</span>
+                </div>
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p99" aria-hidden="true"></div>
+                  <span class="percentile-label">P99</span>
+                  <span class="percentile-value">42ms</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Throughput -->
+            <div class="entity-section">
+              <div class="entity-section-title">Throughput</div>
+              <div class="sparkline-container">
+                <div class="sparkline" id="spark-server-1" role="img" aria-label="Throughput chart: 2.1 MB/s in, 16.4 MB/s out over last 5 minutes"></div>
+                <span class="sparkline-time-label start">-5m</span>
+                <span class="sparkline-time-label end">now</span>
+              </div>
+              <div class="sparkline-meta">
+                <div class="sparkline-stat">
+                  <div class="sparkline-dot in" aria-hidden="true"></div>
+                  <span class="sparkline-label">In</span>
+                  <span class="sparkline-value">2.1 MB/s</span>
+                </div>
+                <div class="sparkline-stat">
+                  <div class="sparkline-dot out" aria-hidden="true"></div>
+                  <span class="sparkline-label">Out</span>
+                  <span class="sparkline-value">16.4 MB/s</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- Server 2: HTTP -->
+        <article class="entity-card" aria-labelledby="server2-name">
+          <div class="entity-header">
+            <div class="entity-status ok" role="img" aria-label="Status: Healthy"></div>
+            <h3 class="entity-name" id="server2-name">0.0.0.0:8080</h3>
+            <div class="entity-label">HTTP</div>
+            <div class="entity-stats">
+              <div class="entity-stat">
+                <div class="entity-stat-value">89</div>
+                <div class="entity-stat-label">Conns</div>
+              </div>
+              <div class="entity-stat">
+                <div class="entity-stat-value">340/s</div>
+                <div class="entity-stat-label">Req</div>
+              </div>
+            </div>
+          </div>
+          <div class="entity-body">
+            <div class="entity-section">
+              <div class="entity-section-title">Response Codes (last 5 min)</div>
+              <div class="status-row" role="list">
+                <div class="status-chip s2xx" role="listitem">
+                  <div class="status-chip-value">12,847</div>
+                  <div class="status-chip-label"><span class="icon" aria-hidden="true">✓</span> 2xx</div>
+                </div>
+                <div class="status-chip s4xx" role="listitem">
+                  <div class="status-chip-value">42</div>
+                  <div class="status-chip-label"><span class="icon" aria-hidden="true">!</span> 4xx</div>
+                </div>
+                <div class="status-chip s5xx" role="listitem">
+                  <div class="status-chip-value">0</div>
+                  <div class="status-chip-label"><span class="icon" aria-hidden="true">✕</span> 5xx</div>
+                </div>
+              </div>
+              <div class="status-bar" role="img" aria-label="Response code breakdown: 99.67% success, 0.33% client errors">
+                <div class="status-segment s2xx" style="width: 99.67%"></div>
+                <div class="status-segment s4xx" style="width: 0.33%"></div>
+              </div>
+            </div>
+
+            <div class="entity-section">
+              <div class="entity-section-title">Latency Distribution</div>
+              <div class="histogram" id="hist-server-2" role="img" aria-label="Latency histogram: P50 at 2ms, P95 at 8ms, P99 at 15ms"></div>
+              <div class="histogram-meta">
+                <span>0ms</span>
+                <span>500ms+</span>
+              </div>
+              <div class="percentiles" role="list">
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p50" aria-hidden="true"></div>
+                  <span class="percentile-label">P50</span>
+                  <span class="percentile-value">2ms</span>
+                </div>
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p95" aria-hidden="true"></div>
+                  <span class="percentile-label">P95</span>
+                  <span class="percentile-value">8ms</span>
+                </div>
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p99" aria-hidden="true"></div>
+                  <span class="percentile-label">P99</span>
+                  <span class="percentile-value">15ms</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="entity-section">
+              <div class="entity-section-title">Throughput</div>
+              <div class="sparkline-container">
+                <div class="sparkline" id="spark-server-2" role="img" aria-label="Throughput chart over last 5 minutes"></div>
+                <span class="sparkline-time-label start">-5m</span>
+                <span class="sparkline-time-label end">now</span>
+              </div>
+              <div class="sparkline-meta">
+                <div class="sparkline-stat">
+                  <div class="sparkline-dot in" aria-hidden="true"></div>
+                  <span class="sparkline-label">In</span>
+                  <span class="sparkline-value">0.3 MB/s</span>
+                </div>
+                <div class="sparkline-stat">
+                  <div class="sparkline-dot out" aria-hidden="true"></div>
+                  <span class="sparkline-label">Out</span>
+                  <span class="sparkline-value">2.1 MB/s</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- Server 3: Admin -->
+        <article class="entity-card" aria-labelledby="server3-name">
+          <div class="entity-header">
+            <div class="entity-status warning" role="img" aria-label="Status: Warning - elevated latency"></div>
+            <h3 class="entity-name" id="server3-name">127.0.0.1:9090</h3>
+            <div class="entity-label">Admin</div>
+            <div class="entity-stats">
+              <div class="entity-stat">
+                <div class="entity-stat-value">3</div>
+                <div class="entity-stat-label">Conns</div>
+              </div>
+              <div class="entity-stat">
+                <div class="entity-stat-value">12/s</div>
+                <div class="entity-stat-label">Req</div>
+              </div>
+            </div>
+          </div>
+          <div class="entity-body">
+            <div class="entity-section">
+              <div class="entity-section-title">Response Codes (last 5 min)</div>
+              <div class="status-row" role="list">
+                <div class="status-chip s2xx" role="listitem">
+                  <div class="status-chip-value">1,024</div>
+                  <div class="status-chip-label"><span class="icon" aria-hidden="true">✓</span> 2xx</div>
+                </div>
+                <div class="status-chip s4xx" role="listitem">
+                  <div class="status-chip-value">12</div>
+                  <div class="status-chip-label"><span class="icon" aria-hidden="true">!</span> 4xx</div>
+                </div>
+                <div class="status-chip s5xx" role="listitem">
+                  <div class="status-chip-value">1</div>
+                  <div class="status-chip-label"><span class="icon" aria-hidden="true">✕</span> 5xx</div>
+                </div>
+              </div>
+              <div class="status-bar" role="img" aria-label="Response code breakdown: 98.7% success, 1.16% client errors, 0.1% server errors">
+                <div class="status-segment s2xx" style="width: 98.7%"></div>
+                <div class="status-segment s4xx" style="width: 1.16%"></div>
+                <div class="status-segment s5xx" style="width: 0.1%"></div>
+              </div>
+            </div>
+
+            <div class="entity-section">
+              <div class="entity-section-title">Latency Distribution</div>
+              <div class="histogram" id="hist-server-3" role="img" aria-label="Latency histogram: P50 at 12ms, P95 at 85ms, P99 at 142ms. Warning: elevated latency."></div>
+              <div class="histogram-meta">
+                <span>0ms</span>
+                <span>500ms+</span>
+              </div>
+              <div class="percentiles" role="list">
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p50" aria-hidden="true"></div>
+                  <span class="percentile-label">P50</span>
+                  <span class="percentile-value">12ms</span>
+                </div>
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p95" aria-hidden="true"></div>
+                  <span class="percentile-label">P95</span>
+                  <span class="percentile-value">85ms</span>
+                </div>
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p99" aria-hidden="true"></div>
+                  <span class="percentile-label">P99</span>
+                  <span class="percentile-value">142ms</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="entity-section">
+              <div class="entity-section-title">Throughput</div>
+              <div class="sparkline-container">
+                <div class="sparkline" id="spark-server-3" role="img" aria-label="Throughput chart over last 5 minutes"></div>
+                <span class="sparkline-time-label start">-5m</span>
+                <span class="sparkline-time-label end">now</span>
+              </div>
+              <div class="sparkline-meta">
+                <div class="sparkline-stat">
+                  <div class="sparkline-dot in" aria-hidden="true"></div>
+                  <span class="sparkline-label">In</span>
+                  <span class="sparkline-value">12 KB/s</span>
+                </div>
+                <div class="sparkline-stat">
+                  <div class="sparkline-dot out" aria-hidden="true"></div>
+                  <span class="sparkline-label">Out</span>
+                  <span class="sparkline-value">89 KB/s</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ==================== HTTP CLIENTS ==================== -->
+    <section class="section-group" aria-labelledby="client-section-title">
+      <div class="section-header">
+        <div class="section-icon client" aria-hidden="true">CLI</div>
+        <h2 class="section-title" id="client-section-title">HTTP Clients</h2>
+        <span class="section-subtitle">Outbound Connections</span>
+        <div class="section-badges">
+          <span class="section-badge">3 clients</span>
+        </div>
+      </div>
+
+      <div class="grid-3">
+        <!-- Client 1: Database -->
+        <article class="entity-card" aria-labelledby="client1-name">
+          <div class="entity-header">
+            <div class="entity-status ok" role="img" aria-label="Status: Healthy"></div>
+            <h3 class="entity-name" id="client1-name">postgres-primary</h3>
+            <div class="entity-label">Database</div>
+          </div>
+          <div class="entity-body">
+            <div class="entity-section">
+              <div class="mini-stats" role="list">
+                <div class="mini-stat" role="listitem">
+                  <div class="mini-stat-value ok">12</div>
+                  <div class="mini-stat-label">Conns</div>
+                </div>
+                <div class="mini-stat" role="listitem">
+                  <div class="mini-stat-value">4.2K</div>
+                  <div class="mini-stat-label">Queries (total)</div>
+                </div>
+                <div class="mini-stat" role="listitem">
+                  <div class="mini-stat-value ok">0</div>
+                  <div class="mini-stat-label">Errors</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="entity-section">
+              <div class="entity-section-title">Latency Distribution</div>
+              <div class="histogram" id="hist-client-1" role="img" aria-label="Query latency: P50 at 1.2ms, P95 at 4.8ms, P99 at 12ms"></div>
+              <div class="histogram-meta">
+                <span>0ms</span>
+                <span>500ms+</span>
+              </div>
+              <div class="percentiles" role="list">
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p50" aria-hidden="true"></div>
+                  <span class="percentile-label">P50</span>
+                  <span class="percentile-value">1.2ms</span>
+                </div>
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p95" aria-hidden="true"></div>
+                  <span class="percentile-label">P95</span>
+                  <span class="percentile-value">4.8ms</span>
+                </div>
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p99" aria-hidden="true"></div>
+                  <span class="percentile-label">P99</span>
+                  <span class="percentile-value">12ms</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="entity-section">
+              <div class="entity-section-title">Query Rate</div>
+              <div class="sparkline-container">
+                <div class="sparkline" id="spark-client-1" role="img" aria-label="Query rate: 142/s current, 287/s peak over last 5 minutes"></div>
+                <span class="sparkline-time-label start">-5m</span>
+                <span class="sparkline-time-label end">now</span>
+              </div>
+              <div class="sparkline-meta">
+                <div class="sparkline-stat">
+                  <span class="sparkline-label">Current</span>
+                  <span class="sparkline-value">142/s</span>
+                </div>
+                <div class="sparkline-stat">
+                  <span class="sparkline-label">Peak</span>
+                  <span class="sparkline-value">287/s</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- Client 2: Redis -->
+        <article class="entity-card" aria-labelledby="client2-name">
+          <div class="entity-header">
+            <div class="entity-status ok" role="img" aria-label="Status: Healthy"></div>
+            <h3 class="entity-name" id="client2-name">redis-cache</h3>
+            <div class="entity-label">Cache</div>
+          </div>
+          <div class="entity-body">
+            <div class="entity-section">
+              <div class="mini-stats" role="list">
+                <div class="mini-stat" role="listitem">
+                  <div class="mini-stat-value ok">8</div>
+                  <div class="mini-stat-label">Conns</div>
+                </div>
+                <div class="mini-stat" role="listitem">
+                  <div class="mini-stat-value">124K</div>
+                  <div class="mini-stat-label">Ops (total)</div>
+                </div>
+                <div class="mini-stat" role="listitem">
+                  <div class="mini-stat-value ok">94.2%</div>
+                  <div class="mini-stat-label">Hit Rate</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="entity-section">
+              <div class="entity-section-title">Latency Distribution</div>
+              <div class="histogram" id="hist-client-2" role="img" aria-label="Operation latency: P50 at 0.2ms, P95 at 0.8ms, P99 at 2.1ms"></div>
+              <div class="histogram-meta">
+                <span>0ms</span>
+                <span>500ms+</span>
+              </div>
+              <div class="percentiles" role="list">
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p50" aria-hidden="true"></div>
+                  <span class="percentile-label">P50</span>
+                  <span class="percentile-value">0.2ms</span>
+                </div>
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p95" aria-hidden="true"></div>
+                  <span class="percentile-label">P95</span>
+                  <span class="percentile-value">0.8ms</span>
+                </div>
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p99" aria-hidden="true"></div>
+                  <span class="percentile-label">P99</span>
+                  <span class="percentile-value">2.1ms</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="entity-section">
+              <div class="entity-section-title">Op Rate</div>
+              <div class="sparkline-container">
+                <div class="sparkline" id="spark-client-2" role="img" aria-label="Operation rate: 2.4K/s current, 4.1K/s peak"></div>
+                <span class="sparkline-time-label start">-5m</span>
+                <span class="sparkline-time-label end">now</span>
+              </div>
+              <div class="sparkline-meta">
+                <div class="sparkline-stat">
+                  <span class="sparkline-label">Current</span>
+                  <span class="sparkline-value">2.4K/s</span>
+                </div>
+                <div class="sparkline-stat">
+                  <span class="sparkline-label">Peak</span>
+                  <span class="sparkline-value">4.1K/s</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- Client 3: External API -->
+        <article class="entity-card" aria-labelledby="client3-name">
+          <div class="entity-header">
+            <div class="entity-status warning" role="img" aria-label="Status: Warning - elevated errors"></div>
+            <h3 class="entity-name" id="client3-name">payment-gateway</h3>
+            <div class="entity-label">External API</div>
+          </div>
+          <div class="entity-body">
+            <div class="entity-section">
+              <div class="mini-stats" role="list">
+                <div class="mini-stat" role="listitem">
+                  <div class="mini-stat-value">4</div>
+                  <div class="mini-stat-label">Conns</div>
+                </div>
+                <div class="mini-stat" role="listitem">
+                  <div class="mini-stat-value">847</div>
+                  <div class="mini-stat-label">Requests (total)</div>
+                </div>
+                <div class="mini-stat" role="listitem">
+                  <div class="mini-stat-value warning">7</div>
+                  <div class="mini-stat-label">Errors</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="entity-section">
+              <div class="entity-section-title">Latency Distribution</div>
+              <div class="histogram" id="hist-client-3" role="img" aria-label="Request latency: P50 at 89ms, P95 at 245ms, P99 at 512ms. Warning: elevated latency."></div>
+              <div class="histogram-meta">
+                <span>0ms</span>
+                <span>500ms+</span>
+              </div>
+              <div class="percentiles" role="list">
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p50" aria-hidden="true"></div>
+                  <span class="percentile-label">P50</span>
+                  <span class="percentile-value">89ms</span>
+                </div>
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p95" aria-hidden="true"></div>
+                  <span class="percentile-label">P95</span>
+                  <span class="percentile-value">245ms</span>
+                </div>
+                <div class="percentile" role="listitem">
+                  <div class="percentile-dot p99" aria-hidden="true"></div>
+                  <span class="percentile-label">P99</span>
+                  <span class="percentile-value">512ms</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="entity-section">
+              <div class="entity-section-title">Request Rate</div>
+              <div class="sparkline-container">
+                <div class="sparkline" id="spark-client-3" role="img" aria-label="Request rate: 12/s current, 3% retries"></div>
+                <span class="sparkline-time-label start">-5m</span>
+                <span class="sparkline-time-label end">now</span>
+              </div>
+              <div class="sparkline-meta">
+                <div class="sparkline-stat">
+                  <span class="sparkline-label">Current</span>
+                  <span class="sparkline-value">12/s</span>
+                </div>
+                <div class="sparkline-stat">
+                  <span class="sparkline-label">Retries</span>
+                  <span class="sparkline-value warning">3%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    (function() {
+      'use strict';
+
+      // Polling state
+      let pollTimer = null;
+      let retryDelay = 1000;
+      const POLL_INTERVAL = 1000;
+
+      // Update timestamp
+      function updateTime() {
+        const el = document.getElementById('timestamp');
+        if (el) el.textContent = new Date().toLocaleTimeString();
+      }
+
+      // Show/hide error banner
+      function showError(show) {
+        const banner = document.getElementById('error-banner');
+        if (banner) {
+          banner.classList.toggle('visible', show);
+        }
+        const status = document.getElementById('global-status');
+        if (status) {
+          status.classList.toggle('error', show);
+          if (show) {
+            status.innerHTML = '<span class="pulse" aria-hidden="true"></span><span class="status-icon" aria-hidden="true">!</span><span>Connection Error</span>';
+          } else {
+            status.innerHTML = '<span class="pulse" aria-hidden="true"></span><span class="status-icon" aria-hidden="true">✓</span><span>All Systems Healthy</span>';
+          }
+        }
+      }
+
+      // Retry connection
+      window.retryConnection = function() {
+        showError(false);
+        retryDelay = 1000;
+        startPolling();
+      };
+
+      // Polling with error handling and exponential backoff
+      async function pollMetrics() {
+        try {
+          // In production, fetch from /debug/metrics
+          // const response = await fetch('/debug/metrics');
+          // if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          // const data = await response.json();
+          // updateDashboard(data);
+
+          // For demo, just update timestamp
+          updateTime();
+          showError(false);
+          retryDelay = 1000;
+        } catch (error) {
+          console.error('Polling error:', error);
+          showError(true);
+
+          // Exponential backoff
+          clearInterval(pollTimer);
+          setTimeout(startPolling, retryDelay);
+          retryDelay = Math.min(retryDelay * 2, 30000);
+        }
+      }
+
+      function startPolling() {
+        pollMetrics();
+        pollTimer = setInterval(pollMetrics, POLL_INTERVAL);
+      }
+
+      function stopPolling() {
+        if (pollTimer) clearInterval(pollTimer);
+      }
+
+      // Pause polling when tab is hidden (battery saving)
+      document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+          stopPolling();
+        } else {
+          retryDelay = 1000;
+          startPolling();
+        }
+      });
+
+      // Generate histogram with given distribution
+      function renderHistogram(id, buckets) {
+        const container = document.getElementById(id);
+        if (!container) return;
+        const max = Math.max(...buckets.map(b => b.count));
+
+        container.innerHTML = buckets.map((b, i) => {
+          const height = Math.max((b.count / max) * 100, 4); // Min 4% for visibility
+          const pClass = b.p || '';
+          return `<div class="histogram-bar ${pClass}"
+                       style="height: ${height}%"
+                       tabindex="0"
+                       role="button"
+                       aria-label="Bucket ${i+1}: ${b.count} requests${b.p ? ', ' + b.p.toUpperCase() : ''}"></div>`;
+        }).join('');
+      }
+
+      // Different distributions for different servers/clients
+      renderHistogram('hist-server-1', [
+        { count: 80 }, { count: 220 }, { count: 480, p: 'p50' }, { count: 320 },
+        { count: 180 }, { count: 90, p: 'p95' }, { count: 25, p: 'p99' }, { count: 8 }, { count: 2 }, { count: 1 }
+      ]);
+      renderHistogram('hist-server-2', [
+        { count: 320 }, { count: 580, p: 'p50' }, { count: 280 }, { count: 120, p: 'p95' },
+        { count: 45, p: 'p99' }, { count: 12 }, { count: 4 }, { count: 1 }, { count: 0 }, { count: 0 }
+      ]);
+      renderHistogram('hist-server-3', [
+        { count: 45 }, { count: 120 }, { count: 280, p: 'p50' }, { count: 320 },
+        { count: 180 }, { count: 120, p: 'p95' }, { count: 85, p: 'p99' }, { count: 42 }, { count: 18 }, { count: 8 }
+      ]);
+      renderHistogram('hist-client-1', [
+        { count: 180 }, { count: 420, p: 'p50' }, { count: 280 }, { count: 120, p: 'p95' },
+        { count: 45, p: 'p99' }, { count: 12 }, { count: 4 }, { count: 1 }, { count: 0 }, { count: 0 }
+      ]);
+      renderHistogram('hist-client-2', [
+        { count: 520, p: 'p50' }, { count: 280 }, { count: 120, p: 'p95' }, { count: 45, p: 'p99' },
+        { count: 12 }, { count: 4 }, { count: 1 }, { count: 0 }, { count: 0 }, { count: 0 }
+      ]);
+      renderHistogram('hist-client-3', [
+        { count: 25 }, { count: 45 }, { count: 120, p: 'p50' }, { count: 180 },
+        { count: 220 }, { count: 180, p: 'p95' }, { count: 120, p: 'p99' }, { count: 65 }, { count: 32 }, { count: 15 }
+      ]);
+
+      // Generate sparklines with smoother paths
+      function renderSparkline(id, color1, color2) {
+        const container = document.getElementById(id);
+        if (!container) return;
+
+        // Generate smoother random path with moving average
+        function generatePoints(baseLevel, variance) {
+          const raw = [];
+          for (let i = 0; i <= 30; i++) {
+            raw.push(baseLevel + (Math.random() - 0.5) * variance);
+          }
+          // Simple moving average for smoothing
+          const smoothed = [];
+          for (let i = 0; i < raw.length; i++) {
+            const start = Math.max(0, i - 2);
+            const end = Math.min(raw.length, i + 3);
+            const avg = raw.slice(start, end).reduce((a, b) => a + b, 0) / (end - start);
+            smoothed.push({ x: (i / 30) * 200, y: avg });
+          }
+          return smoothed;
+        }
+
+        const points1 = generatePoints(20, 15);
+        const points2 = color2 ? generatePoints(25, 12) : null;
+
+        const path1 = points1.map((p, i) => (i === 0 ? 'M' : 'L') + p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
+        const area1 = path1 + ' L200,40 L0,40 Z';
+
+        let svg = `
+          <svg viewBox="0 0 200 40" preserveAspectRatio="none" aria-hidden="true">
+            <path class="sparkline-area" fill="${color1}" d="${area1}"/>
+            <path class="sparkline-path" stroke="${color1}" d="${path1}"/>
+        `;
+
+        if (points2) {
+          const path2 = points2.map((p, i) => (i === 0 ? 'M' : 'L') + p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
+          const area2 = path2 + ' L200,40 L0,40 Z';
+          svg += `
+            <path class="sparkline-area" fill="${color2}" d="${area2}"/>
+            <path class="sparkline-path" stroke="${color2}" d="${path2}"/>
+          `;
+        }
+
+        svg += '</svg>';
+        container.innerHTML = svg;
+      }
+
+      renderSparkline('spark-server-1', 'var(--color-ok)', 'var(--color-info)');
+      renderSparkline('spark-server-2', 'var(--color-ok)', 'var(--color-info)');
+      renderSparkline('spark-server-3', 'var(--color-ok)', 'var(--color-info)');
+      renderSparkline('spark-client-1', 'var(--color-pink)', null);
+      renderSparkline('spark-client-2', 'var(--color-pink)', null);
+      renderSparkline('spark-client-3', 'var(--color-pink)', null);
+
+      // Generate GC timeline with proper positioning
+      function renderGCTimeline() {
+        const container = document.getElementById('gc-timeline');
+        if (!container) return;
+
+        // Keep the axis and threshold elements
+        const axis = container.querySelector('.gc-timeline-axis');
+        const threshold = container.querySelector('.gc-timeline-threshold');
+
+        // Use DocumentFragment for efficient DOM updates
+        const fragment = document.createDocumentFragment();
+
+        // Generate events with actual time-based positions
+        const events = [];
+        for (let i = 0; i < 40; i++) {
+          events.push({
+            time: Math.random() * 60, // seconds ago
+            pause: Math.random() * 4 + 0.1, // 0.1ms to 4.1ms
+            major: Math.random() > 0.92
+          });
+        }
+
+        // Sort by time
+        events.sort((a, b) => b.time - a.time);
+
+        events.forEach(event => {
+          const div = document.createElement('div');
+          const isMajor = event.major;
+          const isLong = event.pause > 3;
+
+          div.className = 'gc-event' + (isMajor ? ' major' : '') + (isLong ? ' long' : '');
+          div.style.left = ((60 - event.time) / 60 * 98 + 1) + '%';
+          div.style.height = Math.min(Math.log(event.pause + 1) * 20, 44) + 'px'; // Log scale, max 44px
+          div.title = `Pause: ${event.pause.toFixed(1)}ms${isMajor ? ' (major)' : ''}`;
+          fragment.appendChild(div);
+        });
+
+        // Clear old events and append new ones
+        const oldEvents = container.querySelectorAll('.gc-event');
+        oldEvents.forEach(e => e.remove());
+        container.appendChild(fragment);
+      }
+      renderGCTimeline();
+
+      // Generate mini connection pool grids
+      function renderConnPoolMini(id, total, active, idle, closing) {
+        const container = document.getElementById(id);
+        if (!container) return;
+
+        // Limit to 50 slots for mini view
+        const displayTotal = Math.min(total, 50);
+        const scale = displayTotal / total;
+
+        const displayActive = Math.round(active * scale);
+        const displayIdle = Math.round(idle * scale);
+        const displayClosing = Math.round((closing || 0) * scale);
+
+        const states = [];
+        for (let i = 0; i < displayActive; i++) states.push('active');
+        for (let i = 0; i < displayIdle; i++) states.push('idle');
+        for (let i = 0; i < displayClosing; i++) states.push('closing');
+        while (states.length < displayTotal) states.push('');
+
+        // Shuffle for visual distribution
+        for (let i = states.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [states[i], states[j]] = [states[j], states[i]];
+        }
+
+        container.innerHTML = states.map(s => `<div class="conn-slot-mini ${s}"></div>`).join('');
+      }
+
+      renderConnPoolMini('conn-pool-1-mini', 500, 247, 142, 8);
+      renderConnPoolMini('conn-pool-2-mini', 100, 23, 45, 0);
+
+      // Start polling
+      startPolling();
+
+      // Cleanup on page unload
+      window.addEventListener('beforeunload', stopPolling);
+    })();
+  </script>
+</body>
+</html>

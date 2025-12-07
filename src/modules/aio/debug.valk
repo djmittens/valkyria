@@ -19,13 +19,16 @@
 ; The AIO metrics JSON is a single object, the modular metrics JSON is also an object,
 ; and the VM metrics JSON is also an object.
 ; We need to merge them into a single JSON object with three top-level keys.
+; Note: aio_systems is now an array to support multiple AIO systems in the future.
 (fun {aio/debug-merge-metrics-json sys}
   {
     (= {aio-json} (aio/metrics-json sys))
+    (= {aio-systems-json} (aio/systems-json sys))
     (= {modular-json} (metrics/json))
     (= {vm-json} (vm/metrics-json))
-    ; Create combined JSON with all three metrics systems
-    (str "{\"aio_metrics\":" aio-json ",\"modular_metrics\":" modular-json ",\"vm_metrics\":" vm-json "}")
+    ; Create combined JSON with all metrics systems
+    ; aio_metrics is kept for backwards compatibility, aio_systems is the new array format
+    (str "{\"aio_metrics\":" aio-json ",\"aio_systems\":" aio-systems-json ",\"modular_metrics\":" modular-json ",\"vm_metrics\":" vm-json "}")
   })
 
 ; Helper: Merge AIO metrics, modular metrics, and VM metrics into combined Prometheus format
@@ -33,10 +36,11 @@
 (fun {aio/debug-merge-metrics-prometheus sys}
   {
     (= {aio-prom} (aio/metrics-prometheus sys))
+    (= {sys-prom} (aio/system-stats-prometheus sys))
     (= {modular-prom} (metrics/prometheus))
     (= {vm-prom} (vm/metrics-prometheus))
     ; Concatenate all Prometheus outputs with comment separators
-    (str aio-prom "\n# Modular metrics\n" modular-prom "\n# VM metrics\n" vm-prom)
+    (str aio-prom "\n# AIO system stats\n" sys-prom "\n# Modular metrics\n" modular-prom "\n# VM metrics\n" vm-prom)
   })
 
 ; Create a debug handler that routes debug requests

@@ -276,6 +276,7 @@ valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
 
 #ifdef VALK_METRICS_ENABLED
 #include "aio_metrics.h"
+#include "gc.h"
 
 // Get metrics from AIO system (returns NULL if metrics not enabled)
 valk_aio_metrics_t* valk_aio_get_metrics(valk_aio_system_t* sys);
@@ -283,12 +284,24 @@ valk_aio_metrics_t* valk_aio_get_metrics(valk_aio_system_t* sys);
 // Get system stats from AIO system (returns NULL if metrics not enabled)
 valk_aio_system_stats_t* valk_aio_get_system_stats(valk_aio_system_t* sys);
 
+// Get HTTP clients registry from AIO system (returns NULL if metrics not enabled)
+valk_http_clients_registry_t* valk_aio_get_http_clients_registry(valk_aio_system_t* sys);
+
 // Update queue stats from HTTP queue (call before rendering metrics)
 void valk_aio_update_queue_stats(valk_aio_system_t* sys);
+
+// Get GC heap from AIO system (returns NULL if metrics not enabled)
+valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
 #endif
 
 // Get the event loop from AIO system (returns NULL if no loop available)
 struct uv_loop_s* valk_aio_get_event_loop(valk_aio_system_t* sys);
+
+// Get the system name (for metrics/dashboard)
+const char* valk_aio_get_name(valk_aio_system_t* sys);
+
+// Set the system name (for metrics/dashboard)
+void valk_aio_set_name(valk_aio_system_t* sys, const char* name);
 
 // Forward declarations for Lisp types (defined in parser.h)
 struct valk_lval_t;

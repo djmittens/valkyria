@@ -2,15 +2,244 @@
   </style>
 </head>
 <body>
-  <div class="hdr">
-    <span class="dot" id="st"></span>
-    <h1>Valkyria Debug</h1>
-    <span class="ts" id="ts">--:--:--</span>
-  </div>
-  <div class="err-box" id="err"></div>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
 
-  <div class="tree" id="tree">
-    <!-- Tree structure will be built by JS -->
-  </div>
+  <header role="banner" aria-label="Dashboard header">
+    <div class="logo">
+      <div class="logo-icon" aria-hidden="true">V</div>
+      <div class="logo-text">Valkyria <span>Dashboard</span></div>
+    </div>
+    <div class="status-badge" role="status" aria-live="polite" id="global-status" title="Dashboard connection status. Green indicates live metrics streaming. Red indicates connection failure - metrics may be stale.">
+      <span class="pulse" aria-hidden="true"></span>
+      <span class="status-icon" aria-hidden="true">✓</span>
+      <span id="global-status-text">Connecting...</span>
+    </div>
+    <div class="header-right">
+      <div class="header-stat" title="Time since the Valkyria process started. Use to correlate with deployment times or restarts.">
+        <div class="header-stat-label">Uptime</div>
+        <div class="header-stat-value" id="uptime-value">--</div>
+      </div>
+      <div class="header-stat" title="Time of last successful metrics fetch. If stale, check network connectivity to the server.">
+        <div class="header-stat-label">Last Update</div>
+        <div class="header-stat-value" id="timestamp" aria-live="polite">--:--:--</div>
+      </div>
+    </div>
+  </header>
+
+  <main role="main" id="main-content">
+
+    <!-- Error Banner (hidden by default) -->
+    <div class="error-banner" role="alert" aria-live="assertive" id="error-banner">
+      <span class="error-banner-icon" aria-hidden="true">⚠</span>
+      <span class="error-banner-text" id="error-text">Connection lost. Metrics may be stale.</span>
+      <button class="error-banner-dismiss" onclick="dismissError()" aria-label="Dismiss">×</button>
+    </div>
+
+    <!-- ==================== HEALTH OVERVIEW ==================== -->
+    <section class="health-overview" aria-labelledby="health-title">
+      <h2 id="health-title">System Health Overview</h2>
+      <div class="health-grid" role="list">
+        <div class="health-card" role="listitem" title="Requests per second across all HTTP servers. A sudden drop may indicate upstream issues, network problems, or server overload. A spike may signal a traffic surge or potential DDoS.">
+          <div class="health-card-label">Request Rate</div>
+          <div class="health-card-value" id="health-request-rate">--<span style="font-size: 14px; font-weight: 400;">/s</span></div>
+          <div class="health-card-subtitle">Total across all servers</div>
+        </div>
+        <div class="health-card" role="listitem" title="Percentage of requests returning 4xx (client errors) or 5xx (server errors). High error rates indicate application bugs, invalid requests, or infrastructure issues. Investigate server logs when this exceeds your SLO threshold.">
+          <div class="health-card-label">Error Rate</div>
+          <div class="health-card-value" id="health-error-rate">--<span style="font-size: 14px; font-weight: 400;">%</span></div>
+          <div class="health-card-subtitle">4xx + 5xx responses</div>
+        </div>
+        <div class="health-card" role="listitem" title="Mean response time across all requests. Rising latency often precedes failures - check GC pauses, connection pool saturation, or downstream service health. Compare with P95/P99 in server cards for outlier detection.">
+          <div class="health-card-label">Avg Latency</div>
+          <div class="health-card-value" id="health-avg-latency">--<span style="font-size: 14px; font-weight: 400;">ms</span></div>
+          <div class="health-card-subtitle">Average response time</div>
+        </div>
+        <div class="health-card" role="listitem" title="GC heap memory utilization. Above 70% triggers more frequent GC cycles affecting latency. Above 90% risks OOM crashes. If consistently high, consider increasing heap size or investigating memory leaks via allocation patterns.">
+          <div class="health-card-label">Heap Usage</div>
+          <div class="health-card-value" id="health-heap-pct">--<span style="font-size: 14px; font-weight: 400;">%</span></div>
+          <div class="health-card-subtitle" id="health-heap-usage">-- / --</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== VM METRICS ==================== -->
+    <section class="section-group" aria-labelledby="vm-section-title">
+      <div class="section-header">
+        <div class="section-icon vm" aria-hidden="true">VM</div>
+        <h2 class="section-title" id="vm-section-title">Virtual Machine</h2>
+        <span class="section-subtitle">Interpreter, GC, and Memory</span>
+        <div class="section-badges" aria-label="Section status">
+          <span class="section-badge" id="vm-gc-badge">-- cycles</span>
+          <span class="section-badge" id="vm-heap-badge">-- heap</span>
+        </div>
+      </div>
+
+      <div class="grid-3">
+        <!-- GC Panel -->
+        <article class="panel" aria-labelledby="gc-panel-title">
+          <div class="panel-header">
+            <div class="panel-icon gc" aria-hidden="true">G</div>
+            <h3 class="panel-title" id="gc-panel-title">Garbage Collector</h3>
+            <div class="panel-badge" id="gc-cycles-badge" title="Total number of GC cycles since process start">-- cycles</div>
+          </div>
+          <div class="panel-body">
+            <div class="gc-timeline" id="gc-timeline" role="img" aria-label="GC pause timeline" title="Timeline showing GC pause durations over the last 60 seconds. Tall bars indicate long stop-the-world pauses that may cause request latency spikes. Yellow bars exceed 10ms, red bars exceed 50ms.">
+              <div class="gc-timeline-threshold" style="bottom: 40px;">
+                <span class="gc-timeline-threshold-label">10ms</span>
+              </div>
+              <div class="gc-timeline-axis">
+                <span>-60s</span>
+                <span>-45s</span>
+                <span>-30s</span>
+                <span>-15s</span>
+                <span>now</span>
+              </div>
+            </div>
+            <div class="gc-stats" role="list" aria-label="GC statistics">
+              <div class="gc-stat" role="listitem" title="Total GC cycles since process start. Rapidly increasing cycle count indicates high allocation rate or memory pressure. Compare with heap usage to assess GC efficiency.">
+                <div class="gc-stat-value" id="gc-cycles">--</div>
+                <div class="gc-stat-label">Cycles</div>
+              </div>
+              <div class="gc-stat" role="listitem" title="Longest single GC pause observed. Pauses >10ms impact P99 latency. Pauses >100ms may cause connection timeouts. Reduce by lowering heap size or optimizing allocation patterns.">
+                <div class="gc-stat-value" id="gc-max-pause">--<span class="unit">ms</span></div>
+                <div class="gc-stat-label">Max Pause</div>
+              </div>
+              <div class="gc-stat" role="listitem" title="Average GC pause duration. Should stay under 5ms for low-latency services. If avg is high but max is similar, GC is consistently slow - consider heap tuning.">
+                <div class="gc-stat-value" id="gc-avg-pause">--<span class="unit">ms</span></div>
+                <div class="gc-stat-label">Avg Pause</div>
+              </div>
+              <div class="gc-stat" role="listitem" title="Total memory freed by GC. High reclaim rate with stable heap indicates healthy turnover. Low reclaim with growing heap suggests memory leak - investigate long-lived allocations.">
+                <div class="gc-stat-value" id="gc-reclaimed">--<span class="unit">MB</span></div>
+                <div class="gc-stat-label">Reclaimed</div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- Heap Memory -->
+        <article class="panel" aria-labelledby="heap-panel-title">
+          <div class="panel-header">
+            <div class="panel-icon mem" aria-hidden="true">M</div>
+            <h3 class="panel-title" id="heap-panel-title">Heap Memory</h3>
+          </div>
+          <div class="panel-body">
+            <div class="gauge-container">
+              <div class="gauge" role="img" aria-label="Heap memory usage" title="Visual gauge of heap utilization. Yellow zone (70-90%) indicates GC pressure. Red zone (>90%) indicates critical memory pressure with risk of OOM.">
+                <svg viewBox="0 0 100 100" aria-hidden="true">
+                  <circle class="gauge-bg" cx="50" cy="50" r="40"/>
+                  <circle class="gauge-threshold warning" cx="50" cy="50" r="40"
+                          stroke-dasharray="251.2" stroke-dashoffset="75.4"/>
+                  <circle class="gauge-threshold critical" cx="50" cy="50" r="40"
+                          stroke-dasharray="251.2" stroke-dashoffset="25.1"/>
+                  <circle class="gauge-fill" id="heap-gauge-fill" cx="50" cy="50" r="40"
+                          stroke-dasharray="251.2" stroke-dashoffset="251.2"/>
+                </svg>
+                <div class="gauge-center">
+                  <div class="gauge-value"><span id="heap-gauge-value">--</span>%</div>
+                  <div class="gauge-label">Used</div>
+                </div>
+              </div>
+              <div class="gauge-details">
+                <div class="metric-row" title="Current heap memory in use by live objects. Sudden increases may indicate allocation spikes or memory leaks.">
+                  <span class="metric-label">Used</span>
+                  <span class="metric-value" id="heap-used">--</span>
+                </div>
+                <div class="metric-row" title="Total heap memory allocated from the OS. This is the upper limit before OOM. Consider increasing if consistently near capacity.">
+                  <span class="metric-label">Total</span>
+                  <span class="metric-value" id="heap-total">--</span>
+                </div>
+                <div class="metric-row" title="Cumulative memory freed by GC since process start. Compare rate of reclamation vs allocation to assess memory efficiency.">
+                  <span class="metric-label">Reclaimed</span>
+                  <span class="metric-value" id="heap-reclaimed">--</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- Interpreter -->
+        <article class="panel" aria-labelledby="interp-panel-title">
+          <div class="panel-header">
+            <div class="panel-icon interp" aria-hidden="true">I</div>
+            <h3 class="panel-title" id="interp-panel-title">Interpreter</h3>
+          </div>
+          <div class="panel-body">
+            <div class="mini-stats" role="list" aria-label="Interpreter statistics">
+              <div class="mini-stat" role="listitem" title="Total expression evaluations. High eval count per request indicates complex logic. Compare with request rate to find average evals/request for performance baseline.">
+                <div class="mini-stat-value" id="interp-evals">--</div>
+                <div class="mini-stat-label">Evals</div>
+              </div>
+              <div class="mini-stat" role="listitem" title="User-defined function invocations. Deep call chains increase stack usage and latency. High ratio of fn calls to evals suggests well-factored code.">
+                <div class="mini-stat-value" id="interp-fn-calls">--</div>
+                <div class="mini-stat-label">Fn Calls</div>
+              </div>
+              <div class="mini-stat" role="listitem" title="Built-in function calls (str, +, cons, etc). These are optimized C functions. High builtin usage is generally efficient; profile if specific builtins dominate.">
+                <div class="mini-stat-value" id="interp-builtins">--</div>
+                <div class="mini-stat-label">Builtins</div>
+              </div>
+            </div>
+            <div style="margin-top: var(--space-md);">
+              <div class="metric-row" title="Deepest call stack observed. The interpreter uses the C stack, so deep recursion risks stack overflow. Consider tail-call optimization or trampolining for recursive algorithms.">
+                <span class="metric-label">Max Stack Depth</span>
+                <span class="metric-value" id="interp-stack-depth">--</span>
+              </div>
+              <div class="metric-row" title="Lambda/closure allocations. Each closure captures its environment, consuming heap memory. High closure creation rate increases GC pressure.">
+                <span class="metric-label">Closures Created</span>
+                <span class="metric-value" id="interp-closures">--</span>
+              </div>
+              <div class="metric-row" title="Variable resolution operations. High lookup count may indicate deeply nested scopes or missing local bindings. Optimize by using let bindings closer to usage.">
+                <span class="metric-label">Env Lookups</span>
+                <span class="metric-value" id="interp-env-lookups">--</span>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ==================== AIO SYSTEMS ==================== -->
+    <section class="section-group" aria-labelledby="aio-section-title">
+      <div class="section-header">
+        <div class="section-icon aio" aria-hidden="true">AIO</div>
+        <h2 class="section-title" id="aio-section-title">Async I/O Systems</h2>
+        <span class="section-subtitle">Event Loops, Connections, and Buffers</span>
+        <div class="section-badges">
+          <span class="section-badge" id="aio-systems-badge" title="Number of independent AIO event loop systems. Each system has its own connection pool and buffers.">-- systems</span>
+          <span class="section-badge" id="aio-conns-badge" title="Total active connections across all AIO systems. High connection count may indicate connection leaks or slow clients.">-- conns</span>
+        </div>
+      </div>
+
+      <div class="grid-2" id="aio-systems-container">
+        <!-- AIO system panels will be dynamically populated here -->
+        <div class="panel" id="aio-no-systems">
+          <div class="panel-body" style="text-align: center; color: var(--text-muted); padding: var(--space-xl);">
+            No AIO systems registered
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== HTTP SERVERS ==================== -->
+    <section class="section-group" aria-labelledby="http-section-title">
+      <div class="section-header">
+        <div class="section-icon http" aria-hidden="true">HTTP</div>
+        <h2 class="section-title" id="http-section-title">HTTP Servers</h2>
+        <span class="section-subtitle">Inbound Request Handling</span>
+        <div class="section-badges">
+          <span class="section-badge" id="http-servers-count" title="Number of HTTP server endpoints listening for requests. Each server binds to a specific host:port.">-- servers</span>
+          <span class="section-badge" id="http-total-rate" title="Combined request rate across all HTTP servers. Use to gauge overall system load and capacity planning.">-- req/s</span>
+        </div>
+      </div>
+
+      <div class="grid-3" id="http-servers-container">
+        <!-- HTTP server entity cards will be dynamically populated here -->
+        <div class="entity-card" id="http-no-servers">
+          <div class="entity-body" style="text-align: center; color: var(--text-muted); padding: var(--space-xl);">
+            No HTTP servers registered
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
   <script>
-

@@ -438,12 +438,18 @@ size_t valk_metrics_json(char* buf, size_t cap) {
       pos += snprintf(buf + pos, cap - pos, "\"%s\": \"%s\"",
                       h->labels.labels[j].key, h->labels.labels[j].value);
     }
+    // Output buckets with bounds and counts
     pos += snprintf(buf + pos, cap - pos, "}, \"buckets\": [");
-    for (uint8_t j = 0; j <= h->bucket_count; j++) {
+    for (uint8_t j = 0; j < h->bucket_count; j++) {
       if (j > 0) pos += snprintf(buf + pos, cap - pos, ", ");
-      pos += snprintf(buf + pos, cap - pos, "%lu",
+      pos += snprintf(buf + pos, cap - pos, "{\"le\": %.6f, \"count\": %lu}",
+                      h->bucket_bounds[j],
                       atomic_load_explicit(&h->buckets[j], memory_order_relaxed));
     }
+    // Add +Inf bucket
+    if (h->bucket_count > 0) pos += snprintf(buf + pos, cap - pos, ", ");
+    pos += snprintf(buf + pos, cap - pos, "{\"le\": \"+Inf\", \"count\": %lu}",
+                    atomic_load_explicit(&h->buckets[h->bucket_count], memory_order_relaxed));
     pos += snprintf(buf + pos, cap - pos, "]}%s\n",
                     (i < hist_count - 1) ? "," : "");
   }

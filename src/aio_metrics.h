@@ -30,6 +30,9 @@ typedef struct {
   _Atomic uint64_t connections_failed;
   _Atomic uint64_t connections_rejected;       // Rejected at connection limit
   _Atomic uint64_t connections_rejected_load;  // Rejected due to buffer pressure
+  _Atomic uint64_t connections_connecting;     // Connections being established
+  _Atomic uint64_t connections_idle;           // Idle, awaiting reuse
+  _Atomic uint64_t connections_closing;        // Graceful shutdown in progress
   _Atomic uint64_t streams_total;
   _Atomic uint64_t streams_active;
 
@@ -137,6 +140,14 @@ void valk_aio_metrics_on_stream_end(valk_aio_metrics_t* m, bool error,
                                      uint64_t duration_us,
                                      uint64_t bytes_sent, uint64_t bytes_recv);
 
+// Connection state tracking
+void valk_aio_metrics_on_connecting(valk_aio_metrics_t* m);
+void valk_aio_metrics_on_connected(valk_aio_metrics_t* m);  // connecting -> active
+void valk_aio_metrics_on_idle(valk_aio_metrics_t* m);       // active -> idle
+void valk_aio_metrics_on_reactivate(valk_aio_metrics_t* m); // idle -> active
+void valk_aio_metrics_on_closing(valk_aio_metrics_t* m);    // any -> closing
+void valk_aio_metrics_on_closed(valk_aio_metrics_t* m);     // closing -> removed
+
 // Instrumentation functions for AIO system stats
 void valk_aio_system_stats_on_server_start(valk_aio_system_stats_t* s);
 void valk_aio_system_stats_on_server_stop(valk_aio_system_stats_t* s);
@@ -158,6 +169,67 @@ char* valk_aio_metrics_to_prometheus(const valk_aio_metrics_t* m, struct valk_me
 char* valk_aio_combined_to_json(const valk_aio_metrics_t* m,
                                  const valk_aio_system_stats_t* s,
                                  struct valk_mem_allocator_t* alloc);
+
+// Combined JSON rendering with system name (for multi-system support)
+char* valk_aio_combined_to_json_named(const char* name,
+                                       const valk_aio_metrics_t* m,
+                                       const valk_aio_system_stats_t* s,
+                                       struct valk_mem_allocator_t* alloc);
+
+// Export AIO system stats in Prometheus format
+char* valk_aio_system_stats_to_prometheus(const valk_aio_system_stats_t* s,
+                                           struct valk_mem_allocator_t* alloc);
+
+// ============================================================================
+// HTTP Client Metrics (Phase 3)
+// ============================================================================
+
+// Maximum number of registered HTTP clients
+#define VALK_MAX_HTTP_CLIENTS 32
+
+// HTTP Client metrics (for outbound connections)
+typedef struct {
+  char name[64];           // e.g., "postgres-primary"
+  char type[32];           // e.g., "Database", "Cache", "API"
+  _Atomic uint64_t connections_active;
+  _Atomic uint64_t pool_size;
+  _Atomic uint64_t operations_total;
+  _Atomic uint64_t errors_total;
+  _Atomic uint64_t retries_total;
+  // For cache clients
+  _Atomic uint64_t cache_hits_total;
+  _Atomic uint64_t cache_misses_total;
+  // Latency tracking (simple sum + count for avg)
+  _Atomic uint64_t latency_us_sum;
+  _Atomic uint64_t latency_count;
+} valk_http_client_metrics_t;
+
+// HTTP Clients registry
+typedef struct {
+  valk_http_client_metrics_t clients[VALK_MAX_HTTP_CLIENTS];
+  _Atomic uint32_t count;
+} valk_http_clients_registry_t;
+
+// Initialize a single client metrics entry
+void valk_http_client_metrics_init(valk_http_client_metrics_t* c,
+                                    const char* name, const char* type,
+                                    uint64_t pool_size);
+
+// Register a new HTTP client, returns index or -1 on failure
+int valk_http_client_register(valk_http_clients_registry_t* reg,
+                               const char* name, const char* type,
+                               uint64_t pool_size);
+
+// Record an operation on a client
+void valk_http_client_on_operation(valk_http_client_metrics_t* c,
+                                    uint64_t duration_us, bool error, bool retry);
+
+// Record cache hit/miss (for cache clients)
+void valk_http_client_on_cache(valk_http_client_metrics_t* c, bool hit);
+
+// Export client metrics as Prometheus
+char* valk_http_clients_to_prometheus(const valk_http_clients_registry_t* reg,
+                                       struct valk_mem_allocator_t* alloc);
 
 #endif // VALK_METRICS_ENABLED
 #endif // VALK_AIO_METRICS_H

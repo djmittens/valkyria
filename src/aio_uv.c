@@ -476,6 +476,8 @@ struct valk_http2_server_request {
   uint64_t bytes_sent;       // Bytes sent in response
   uint64_t bytes_recv;       // Bytes received in request
   int status_code;           // HTTP status code for response (for new metrics)
+  uint64_t response_sent_time_us;  // Time when response was fully sent
+  bool response_complete;           // True when response DATA frame sent
 #endif
 };
 
@@ -513,6 +515,7 @@ typedef struct {
 
 typedef struct valk_aio_system {
   valk_aio_system_config_t config;  // Resolved configuration
+  char name[64];                    // System name for metrics/dashboard
 
   // everything  past this point only accessed inside of event loop
   uv_loop_t *eventloop;
@@ -536,6 +539,8 @@ typedef struct valk_aio_system {
 #ifdef VALK_METRICS_ENABLED
   valk_aio_metrics_t metrics;
   valk_aio_system_stats_t system_stats;
+  valk_http_clients_registry_t http_clients;
+  valk_gc_malloc_heap_t* gc_heap;  // For metrics access
 #endif
 } valk_aio_system_t;
 
@@ -558,39 +563,45 @@ typedef struct valk_aio_http_server {
 #ifdef VALK_METRICS_ENABLED
 // Initialize server metrics with proper labels
 static void server_metrics_init(valk_server_metrics_t* m,
-                                 const char* name, int port) {
+                                 const char* name, int port, const char* protocol) {
   char port_str[8];
   snprintf(port_str, sizeof(port_str), "%d", port);
 
   m->requests_total = valk_metric_counter("http_requests_total",
-    "server", name, "port", port_str, NULL);
+    "server", name, "port", port_str, "protocol", protocol, NULL);
 
   m->requests_success = valk_metric_counter("http_requests_total",
-    "server", name, "port", port_str, "status", "2xx", NULL);
+    "server", name, "port", port_str, "protocol", protocol, "status", "2xx", NULL);
 
   m->requests_client_error = valk_metric_counter("http_requests_total",
-    "server", name, "port", port_str, "status", "4xx", NULL);
+    "server", name, "port", port_str, "protocol", protocol, "status", "4xx", NULL);
 
   m->requests_server_error = valk_metric_counter("http_requests_total",
-    "server", name, "port", port_str, "status", "5xx", NULL);
+    "server", name, "port", port_str, "protocol", protocol, "status", "5xx", NULL);
 
   m->connections_active = valk_metric_gauge("http_connections_active",
-    "server", name, "port", port_str, NULL);
+    "server", name, "port", port_str, "protocol", protocol, NULL);
 
+  // Buckets tuned for low-latency services: 50µs to 10s
+  // Sub-ms buckets: 50µs, 100µs, 250µs, 500µs
+  // Ms buckets: 1ms, 2.5ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s
   static const double latency_buckets[] = {
-    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0
+    0.00005, 0.0001, 0.00025, 0.0005,  // 50µs, 100µs, 250µs, 500µs
+    0.001, 0.0025, 0.005, 0.01,        // 1ms, 2.5ms, 5ms, 10ms
+    0.025, 0.05, 0.1, 0.25, 0.5,       // 25ms, 50ms, 100ms, 250ms, 500ms
+    1.0, 2.5, 5.0, 10.0                // 1s, 2.5s, 5s, 10s
   };
   m->request_duration = valk_metric_histogram("http_request_duration_seconds",
-    latency_buckets, 12, "server", name, "port", port_str, NULL);
+    latency_buckets, 17, "server", name, "port", port_str, "protocol", protocol, NULL);
 
   m->bytes_sent = valk_metric_counter("http_bytes_sent_total",
-    "server", name, "port", port_str, NULL);
+    "server", name, "port", port_str, "protocol", protocol, NULL);
 
   m->bytes_recv = valk_metric_counter("http_bytes_recv_total",
-    "server", name, "port", port_str, NULL);
+    "server", name, "port", port_str, "protocol", protocol, NULL);
 
   m->overload_responses = valk_metric_counter("http_overload_responses_total",
-    "server", name, "port", port_str, NULL);
+    "server", name, "port", port_str, "protocol", protocol, NULL);
 }
 #endif
 
@@ -813,6 +824,8 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
       // Track overflow in system stats
       atomic_fetch_add(&conn->http.server->sys->system_stats.arena_pool_overflow, 1);
       valk_counter_inc(conn->http.server->metrics.overload_responses);
+      // Also count 503 in the 5xx error bucket for dashboard visibility
+      valk_counter_inc(conn->http.server->metrics.requests_server_error);
 #endif
 
       __http_send_overload_response(session, frame->hd.stream_id, conn);
@@ -1203,6 +1216,30 @@ static valk_lval_t* __http_build_request_qexpr(valk_http2_server_request_t *req)
   return qexpr;
 }
 
+/* Called when a frame is sent (server-side).
+ * Record completion time when final DATA frame is sent.
+ */
+static int __http_server_on_frame_send_callback(nghttp2_session *session,
+                                                 const nghttp2_frame *frame,
+                                                 void *user_data) {
+  UNUSED(user_data);
+
+#ifdef VALK_METRICS_ENABLED
+  // Check if this is a DATA frame with END_STREAM flag
+  if (frame->hd.type == NGHTTP2_DATA && (frame->hd.flags & NGHTTP2_FLAG_END_STREAM)) {
+    valk_http2_server_request_t *req =
+        nghttp2_session_get_stream_user_data(session, frame->hd.stream_id);
+    if (req) {
+      // Record the time when the final DATA frame was sent
+      req->response_sent_time_us = uv_hrtime() / 1000;
+      req->response_complete = true;
+    }
+  }
+#endif
+
+  return 0;
+}
+
 /* Called when a stream is closed (server-side).
  * Release per-stream arena immediately for instant memory reclamation.
  */
@@ -1220,7 +1257,13 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
   if (req && req->arena_slab_item) {
 #ifdef VALK_METRICS_ENABLED
     // Record stream end metrics (old system)
-    uint64_t end_time_us = uv_hrtime() / 1000;
+    // Use response completion time if available, otherwise use stream close time
+    uint64_t end_time_us;
+    if (req->response_complete && req->response_sent_time_us > 0) {
+      end_time_us = req->response_sent_time_us;  // Use actual response time
+    } else {
+      end_time_us = uv_hrtime() / 1000;  // Fallback to stream close time
+    }
     uint64_t duration_us = end_time_us - req->start_time_us;
     bool is_error = (error_code != NGHTTP2_NO_ERROR);
     // Add body length to bytes_recv (headers already tracked in on_header callback)
@@ -1974,6 +2017,8 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
           callbacks, __http_on_header_callback);
       nghttp2_session_callbacks_set_on_frame_recv_callback(
           callbacks, __http_on_frame_recv_callback);
+      nghttp2_session_callbacks_set_on_frame_send_callback(
+          callbacks, __http_server_on_frame_send_callback);
       nghttp2_session_callbacks_set_on_stream_close_callback(
           callbacks, __http_server_on_stream_close_callback);
     }
@@ -2099,8 +2144,9 @@ static void __http_listen_cb(valk_aio_system_t *sys,
   VALK_INFO("Listening on %s:%d", srv->interface, srv->port);
 
 #ifdef VALK_METRICS_ENABLED
-  // Initialize server metrics
-  server_metrics_init(&srv->metrics, srv->interface, srv->port);
+  // Initialize server metrics with protocol label
+  const char* protocol = srv->ssl_ctx ? "https" : "http";
+  server_metrics_init(&srv->metrics, srv->interface, srv->port, protocol);
   // Track server start in system stats
   valk_aio_system_stats_on_server_start(&sys->system_stats);
 #endif
@@ -3021,6 +3067,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
 
   valk_aio_system_t *sys = valk_mem_alloc(sizeof(valk_aio_system_t));
   sys->config = resolved;  // Store resolved configuration
+  snprintf(sys->name, sizeof(sys->name), "main");  // Default system name
   global_aio_system = sys;  // Store singleton reference
   valk_aio_active_system = sys;  // Export for metrics access
 
@@ -3076,6 +3123,11 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   valk_aio_system_stats_init(&sys->system_stats,
                               sys->config.arena_pool_size,  // arenas_total
                               sys->config.tcp_buffer_pool_size);  // tcp_buffers_total
+  // Initialize HTTP clients registry
+  memset(&sys->http_clients, 0, sizeof(sys->http_clients));
+  atomic_store(&sys->http_clients.count, 0);
+  // Store GC heap pointer for metrics access
+  sys->gc_heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
 #endif
 
   // printf("Aquiring stopper\n");
@@ -3139,6 +3191,12 @@ valk_aio_system_stats_t* valk_aio_get_system_stats(valk_aio_system_t* sys) {
   return &sys->system_stats;
 }
 
+// Get HTTP clients registry from AIO system
+valk_http_clients_registry_t* valk_aio_get_http_clients_registry(valk_aio_system_t* sys) {
+  if (!sys) return nullptr;
+  return &sys->http_clients;
+}
+
 // Update queue stats from HTTP queue (call before rendering metrics)
 void valk_aio_update_queue_stats(valk_aio_system_t* sys) {
   if (!sys) return;
@@ -3179,6 +3237,26 @@ uv_loop_t* valk_aio_get_event_loop(valk_aio_system_t* sys) {
   if (!sys) return nullptr;
   return sys->eventloop;
 }
+
+// Get system name
+const char* valk_aio_get_name(valk_aio_system_t* sys) {
+  if (!sys) return "unknown";
+  return sys->name;
+}
+
+// Set system name
+void valk_aio_set_name(valk_aio_system_t* sys, const char* name) {
+  if (!sys || !name) return;
+  snprintf(sys->name, sizeof(sys->name), "%s", name);
+}
+
+#ifdef VALK_METRICS_ENABLED
+// Get GC heap from AIO system
+valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys) {
+  if (!sys) return nullptr;
+  return sys->gc_heap;
+}
+#endif
 
 // Timer callback for aio/delay - called when timer fires
 static void __delay_timer_cb(uv_timer_t *handle) {

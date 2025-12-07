@@ -4,6 +4,8 @@
 
 #include "../src/aio_metrics.h"
 #include "../src/memory.h"
+#include "../src/gc.h"
+#include "../src/parser.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -185,6 +187,457 @@ void test_metrics_prometheus_output(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_system_stats_prometheus_output(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_stats_t stats;
+  valk_aio_system_stats_init(&stats, 64, 128);
+
+  // Add some test data
+  valk_aio_system_stats_on_server_start(&stats);
+  valk_aio_system_stats_on_client_start(&stats);
+  valk_aio_system_stats_on_handle_create(&stats);
+  valk_aio_system_stats_on_arena_acquire(&stats);
+
+  // Generate Prometheus format
+  char* prom = valk_aio_system_stats_to_prometheus(&stats, NULL);
+  VALK_TEST_ASSERT(prom != NULL, "Prometheus output should not be NULL");
+
+  // Basic validation - check for expected metric names
+  VALK_TEST_ASSERT(strstr(prom, "# HELP") != NULL,
+                   "Prometheus should contain HELP annotations");
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE") != NULL,
+                   "Prometheus should contain TYPE annotations");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_servers_count") != NULL,
+                   "Prometheus should contain servers_count metric");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_clients_count") != NULL,
+                   "Prometheus should contain clients_count metric");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_handles_count") != NULL,
+                   "Prometheus should contain handles_count metric");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arenas_used") != NULL,
+                   "Prometheus should contain arenas_used metric");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arenas_total") != NULL,
+                   "Prometheus should contain arenas_total metric");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_tcp_buffers_used") != NULL,
+                   "Prometheus should contain tcp_buffers_used metric");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_tcp_buffers_total") != NULL,
+                   "Prometheus should contain tcp_buffers_total metric");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_queue_depth") != NULL,
+                   "Prometheus should contain queue_depth metric");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_pending_requests") != NULL,
+                   "Prometheus should contain pending_requests metric");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_pending_responses") != NULL,
+                   "Prometheus should contain pending_responses metric");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arena_pool_overflow_total") != NULL,
+                   "Prometheus should contain arena_pool_overflow_total metric");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_tcp_buffer_overflow_total") != NULL,
+                   "Prometheus should contain tcp_buffer_overflow_total metric");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_connections_rejected_load_total") != NULL,
+                   "Prometheus should contain connections_rejected_load_total metric");
+
+  // Check metric types
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_servers_count gauge") != NULL,
+                   "servers_count should be a gauge");
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_arena_pool_overflow_total counter") != NULL,
+                   "arena_pool_overflow_total should be a counter");
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_tcp_buffer_overflow_total counter") != NULL,
+                   "tcp_buffer_overflow_total should be a counter");
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_connections_rejected_load_total counter") != NULL,
+                   "connections_rejected_load_total should be a counter");
+
+  // Check actual values
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_servers_count 1") != NULL,
+                   "servers_count should be 1");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_clients_count 1") != NULL,
+                   "clients_count should be 1");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_handles_count 1") != NULL,
+                   "handles_count should be 1");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arenas_used 1") != NULL,
+                   "arenas_used should be 1");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arenas_total 64") != NULL,
+                   "arenas_total should be 64");
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_tcp_buffers_total 128") != NULL,
+                   "tcp_buffers_total should be 128");
+
+  free(prom);
+  VALK_PASS();
+}
+
+void test_stream_metrics_with_duration(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_metrics_t metrics;
+  valk_aio_metrics_init(&metrics);
+
+  // Start a stream
+  valk_aio_metrics_on_stream_start(&metrics);
+  VALK_TEST_ASSERT(atomic_load(&metrics.streams_active) == 1,
+                   "streams_active should be 1");
+  VALK_TEST_ASSERT(atomic_load(&metrics.requests_active) == 1,
+                   "requests_active should be 1");
+
+  // End stream with a 5ms (5000us) duration
+  valk_aio_metrics_on_stream_end(&metrics, false, 5000, 256, 128);
+
+  // Verify duration was recorded
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_duration_us_sum) == 5000,
+                   "request_duration_us_sum should be 5000");
+  VALK_TEST_ASSERT(atomic_load(&metrics.streams_active) == 0,
+                   "streams_active should be 0");
+  VALK_TEST_ASSERT(atomic_load(&metrics.requests_total) == 1,
+                   "requests_total should be 1");
+
+  // Add another stream with 10ms duration
+  valk_aio_metrics_on_stream_start(&metrics);
+  valk_aio_metrics_on_stream_end(&metrics, false, 10000, 512, 256);
+
+  // Verify cumulative duration
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_duration_us_sum) == 15000,
+                   "request_duration_us_sum should be 15000 (5000 + 10000)");
+  VALK_TEST_ASSERT(atomic_load(&metrics.requests_total) == 2,
+                   "requests_total should be 2");
+
+  // Add a third stream with 2ms duration
+  valk_aio_metrics_on_stream_start(&metrics);
+  valk_aio_metrics_on_stream_end(&metrics, false, 2000, 1024, 512);
+
+  // Verify final cumulative duration
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_duration_us_sum) == 17000,
+                   "request_duration_us_sum should be 17000 (5000 + 10000 + 2000)");
+  VALK_TEST_ASSERT(atomic_load(&metrics.requests_total) == 3,
+                   "requests_total should be 3");
+
+  VALK_PASS();
+}
+
+void test_request_duration_histogram(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_metrics_t metrics;
+  valk_aio_metrics_init(&metrics);
+
+  // Test various duration ranges to verify bucketing logic
+  // Durations: 100us, 1ms, 10ms, 100ms, 1s
+  uint64_t durations[] = {100, 1000, 10000, 100000, 1000000};
+  size_t num_durations = sizeof(durations) / sizeof(durations[0]);
+
+  for (size_t i = 0; i < num_durations; i++) {
+    valk_aio_metrics_on_stream_start(&metrics);
+    valk_aio_metrics_on_stream_end(&metrics, false, durations[i], 128, 64);
+  }
+
+  // Verify all requests were counted
+  VALK_TEST_ASSERT(atomic_load(&metrics.requests_total) == num_durations,
+                   "requests_total should match number of durations");
+
+  // Verify total duration sum
+  uint64_t expected_sum = 0;
+  for (size_t i = 0; i < num_durations; i++) {
+    expected_sum += durations[i];
+  }
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_duration_us_sum) == expected_sum,
+                   "request_duration_us_sum should equal sum of all durations");
+
+  // Verify average duration calculation
+  uint64_t total_requests = atomic_load(&metrics.requests_total);
+  uint64_t total_duration = atomic_load(&metrics.request_duration_us_sum);
+  uint64_t avg_duration = total_duration / total_requests;
+
+  // Average of the test durations: (100 + 1000 + 10000 + 100000 + 1000000) / 5 = 222220
+  VALK_TEST_ASSERT(avg_duration == 222220,
+                   "average duration should be 222220 microseconds");
+
+  VALK_PASS();
+}
+
+void test_metrics_duration_microsecond_sum(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_metrics_t metrics;
+  valk_aio_metrics_init(&metrics);
+
+  // Verify initial state
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_duration_us_sum) == 0,
+                   "request_duration_us_sum should start at 0");
+
+  // Record first request: 1ms = 1000us
+  valk_aio_metrics_on_stream_start(&metrics);
+  valk_aio_metrics_on_stream_end(&metrics, false, 1000, 100, 50);
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_duration_us_sum) == 1000,
+                   "duration sum should be 1000");
+
+  // Record second request: 2ms = 2000us
+  valk_aio_metrics_on_stream_start(&metrics);
+  valk_aio_metrics_on_stream_end(&metrics, false, 2000, 200, 100);
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_duration_us_sum) == 3000,
+                   "duration sum should be 3000 (1000 + 2000)");
+
+  // Record third request: 3.5ms = 3500us
+  valk_aio_metrics_on_stream_start(&metrics);
+  valk_aio_metrics_on_stream_end(&metrics, false, 3500, 300, 150);
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_duration_us_sum) == 6500,
+                   "duration sum should be 6500 (1000 + 2000 + 3500)");
+
+  // Record fourth request: 500us
+  valk_aio_metrics_on_stream_start(&metrics);
+  valk_aio_metrics_on_stream_end(&metrics, false, 500, 400, 200);
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_duration_us_sum) == 7000,
+                   "duration sum should be 7000 (1000 + 2000 + 3500 + 500)");
+
+  // Record fifth request: 10ms = 10000us
+  valk_aio_metrics_on_stream_start(&metrics);
+  valk_aio_metrics_on_stream_end(&metrics, false, 10000, 500, 250);
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_duration_us_sum) == 17000,
+                   "duration sum should be 17000 (1000 + 2000 + 3500 + 500 + 10000)");
+
+  // Verify total request count matches
+  VALK_TEST_ASSERT(atomic_load(&metrics.requests_total) == 5,
+                   "requests_total should be 5");
+
+  // Verify that error requests also record duration
+  valk_aio_metrics_on_stream_start(&metrics);
+  valk_aio_metrics_on_stream_end(&metrics, true, 5000, 600, 300);
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_duration_us_sum) == 22000,
+                   "duration sum should be 22000 (includes error request duration)");
+  VALK_TEST_ASSERT(atomic_load(&metrics.requests_errors) == 1,
+                   "requests_errors should be 1");
+  VALK_TEST_ASSERT(atomic_load(&metrics.requests_total) == 6,
+                   "requests_total should be 6 (includes error request)");
+
+  VALK_PASS();
+}
+
+void test_stream_metrics_bytes_tracking(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_metrics_t metrics;
+  valk_aio_metrics_init(&metrics);
+
+  // Verify initial state
+  VALK_TEST_ASSERT(atomic_load(&metrics.bytes_sent_total) == 0,
+                   "bytes_sent_total should start at 0");
+  VALK_TEST_ASSERT(atomic_load(&metrics.bytes_recv_total) == 0,
+                   "bytes_recv_total should start at 0");
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_bytes_sent) == 0,
+                   "request_bytes_sent should start at 0");
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_bytes_recv) == 0,
+                   "request_bytes_recv should start at 0");
+
+  // First stream: 1024 bytes sent, 512 bytes received
+  valk_aio_metrics_on_stream_start(&metrics);
+  valk_aio_metrics_on_stream_end(&metrics, false, 1000, 1024, 512);
+
+  VALK_TEST_ASSERT(atomic_load(&metrics.bytes_sent_total) == 1024,
+                   "bytes_sent_total should be 1024");
+  VALK_TEST_ASSERT(atomic_load(&metrics.bytes_recv_total) == 512,
+                   "bytes_recv_total should be 512");
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_bytes_sent) == 1024,
+                   "request_bytes_sent should be 1024");
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_bytes_recv) == 512,
+                   "request_bytes_recv should be 512");
+
+  // Second stream: 2048 bytes sent, 1024 bytes received
+  valk_aio_metrics_on_stream_start(&metrics);
+  valk_aio_metrics_on_stream_end(&metrics, false, 2000, 2048, 1024);
+
+  VALK_TEST_ASSERT(atomic_load(&metrics.bytes_sent_total) == 3072,
+                   "bytes_sent_total should be 3072 (1024 + 2048)");
+  VALK_TEST_ASSERT(atomic_load(&metrics.bytes_recv_total) == 1536,
+                   "bytes_recv_total should be 1536 (512 + 1024)");
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_bytes_sent) == 3072,
+                   "request_bytes_sent should be 3072");
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_bytes_recv) == 1536,
+                   "request_bytes_recv should be 1536");
+
+  // Third stream: 512 bytes sent, 256 bytes received
+  valk_aio_metrics_on_stream_start(&metrics);
+  valk_aio_metrics_on_stream_end(&metrics, false, 3000, 512, 256);
+
+  VALK_TEST_ASSERT(atomic_load(&metrics.bytes_sent_total) == 3584,
+                   "bytes_sent_total should be 3584 (1024 + 2048 + 512)");
+  VALK_TEST_ASSERT(atomic_load(&metrics.bytes_recv_total) == 1792,
+                   "bytes_recv_total should be 1792 (512 + 1024 + 256)");
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_bytes_sent) == 3584,
+                   "request_bytes_sent should be 3584");
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_bytes_recv) == 1792,
+                   "request_bytes_recv should be 1792");
+
+  // Fourth stream with error: 4096 bytes sent, 2048 bytes received
+  valk_aio_metrics_on_stream_start(&metrics);
+  valk_aio_metrics_on_stream_end(&metrics, true, 4000, 4096, 2048);
+
+  VALK_TEST_ASSERT(atomic_load(&metrics.bytes_sent_total) == 7680,
+                   "bytes_sent_total should be 7680 (includes error stream)");
+  VALK_TEST_ASSERT(atomic_load(&metrics.bytes_recv_total) == 3840,
+                   "bytes_recv_total should be 3840 (includes error stream)");
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_bytes_sent) == 7680,
+                   "request_bytes_sent should be 7680");
+  VALK_TEST_ASSERT(atomic_load(&metrics.request_bytes_recv) == 3840,
+                   "request_bytes_recv should be 3840");
+  VALK_TEST_ASSERT(atomic_load(&metrics.requests_errors) == 1,
+                   "requests_errors should be 1");
+
+  // Verify total request count
+  VALK_TEST_ASSERT(atomic_load(&metrics.requests_total) == 4,
+                   "requests_total should be 4");
+
+  VALK_PASS();
+}
+
+void test_vm_metrics_collect_with_gc_heap(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Initialize a GC heap
+  size_t threshold = 1024 * 1024;  // 1 MB
+  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(threshold, 0);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+
+  // Set up thread context with heap pointer
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.heap = heap;
+
+  // Do some allocations to generate non-zero metrics
+  void* ptr1 = valk_gc_malloc_heap_alloc(heap, 512);
+  void* ptr2 = valk_gc_malloc_heap_alloc(heap, 1024);
+  VALK_TEST_ASSERT(ptr1 != NULL, "Allocation 1 should succeed");
+  VALK_TEST_ASSERT(ptr2 != NULL, "Allocation 2 should succeed");
+
+  // Collect VM metrics
+  valk_vm_metrics_t vm;
+  valk_vm_metrics_collect(&vm, heap, NULL);
+
+  // Verify that heap metrics are populated
+  VALK_TEST_ASSERT(vm.gc_heap_total > 0,
+                   "gc_heap_total should be > 0, got %zu", vm.gc_heap_total);
+  VALK_TEST_ASSERT(vm.gc_heap_used > 0,
+                   "gc_heap_used should be > 0 after allocations, got %zu", vm.gc_heap_used);
+  VALK_TEST_ASSERT(vm.gc_heap_used <= vm.gc_heap_total,
+                   "gc_heap_used should be <= gc_heap_total");
+
+  // Restore thread context and cleanup
+  valk_thread_ctx = old_ctx;
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
+void test_vm_metrics_collect_null_heap(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Collect VM metrics with NULL heap
+  valk_vm_metrics_t vm;
+  valk_vm_metrics_collect(&vm, NULL, NULL);
+
+  // Verify that GC metrics are zero when heap is NULL
+  VALK_TEST_ASSERT(vm.gc_cycles == 0,
+                   "gc_cycles should be 0 with NULL heap");
+  VALK_TEST_ASSERT(vm.gc_pause_us_total == 0,
+                   "gc_pause_us_total should be 0 with NULL heap");
+  VALK_TEST_ASSERT(vm.gc_pause_us_max == 0,
+                   "gc_pause_us_max should be 0 with NULL heap");
+  VALK_TEST_ASSERT(vm.gc_reclaimed_bytes == 0,
+                   "gc_reclaimed_bytes should be 0 with NULL heap");
+  VALK_TEST_ASSERT(vm.gc_heap_used == 0,
+                   "gc_heap_used should be 0 with NULL heap");
+  VALK_TEST_ASSERT(vm.gc_heap_total == 0,
+                   "gc_heap_total should be 0 with NULL heap");
+
+  VALK_PASS();
+}
+
+void test_vm_metrics_json_contains_heap_values(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Initialize a GC heap with some allocations
+  size_t threshold = 1024 * 1024;  // 1 MB
+  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(threshold, 0);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+
+  // Set up thread context
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.heap = heap;
+
+  // Do some allocations
+  void* ptr1 = valk_gc_malloc_heap_alloc(heap, 512);
+  void* ptr2 = valk_gc_malloc_heap_alloc(heap, 1024);
+  VALK_TEST_ASSERT(ptr1 != NULL, "Allocation 1 should succeed");
+  VALK_TEST_ASSERT(ptr2 != NULL, "Allocation 2 should succeed");
+
+  // Collect and generate JSON
+  valk_vm_metrics_t vm;
+  valk_vm_metrics_collect(&vm, heap, NULL);
+  char* json = valk_vm_metrics_to_json(&vm, NULL);
+  VALK_TEST_ASSERT(json != NULL, "JSON output should not be NULL");
+
+  // Verify JSON contains heap fields
+  VALK_TEST_ASSERT(strstr(json, "\"heap_used_bytes\"") != NULL,
+                   "JSON should contain heap_used_bytes field");
+  VALK_TEST_ASSERT(strstr(json, "\"heap_total_bytes\"") != NULL,
+                   "JSON should contain heap_total_bytes field");
+
+  // Verify the values are not zero (should have been populated)
+  // We can't check exact values, but we can check they're present
+  // The JSON format should be like: "heap_used_bytes": 1234,
+  char* heap_used_line = strstr(json, "\"heap_used_bytes\"");
+  VALK_TEST_ASSERT(heap_used_line != NULL, "Should find heap_used_bytes in JSON");
+
+  // Basic sanity check - the line should contain a colon and a number
+  char* colon = strchr(heap_used_line, ':');
+  VALK_TEST_ASSERT(colon != NULL, "Should find colon after heap_used_bytes");
+
+  // Cleanup
+  free(json);
+  valk_thread_ctx = old_ctx;
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
+void test_vm_metrics_prometheus_contains_heap_values(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Initialize a GC heap with some allocations
+  size_t threshold = 1024 * 1024;  // 1 MB
+  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(threshold, 0);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+
+  // Set up thread context
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.heap = heap;
+
+  // Do some allocations
+  void* ptr1 = valk_gc_malloc_heap_alloc(heap, 512);
+  void* ptr2 = valk_gc_malloc_heap_alloc(heap, 1024);
+  VALK_TEST_ASSERT(ptr1 != NULL, "Allocation 1 should succeed");
+  VALK_TEST_ASSERT(ptr2 != NULL, "Allocation 2 should succeed");
+
+  // Collect and generate Prometheus format
+  valk_vm_metrics_t vm;
+  valk_vm_metrics_collect(&vm, heap, NULL);
+  char* prom = valk_vm_metrics_to_prometheus(&vm, NULL);
+  VALK_TEST_ASSERT(prom != NULL, "Prometheus output should not be NULL");
+
+  // Verify Prometheus contains heap metrics
+  VALK_TEST_ASSERT(strstr(prom, "valk_gc_heap_used_bytes") != NULL,
+                   "Prometheus should contain valk_gc_heap_used_bytes metric");
+  VALK_TEST_ASSERT(strstr(prom, "valk_gc_heap_total_bytes") != NULL,
+                   "Prometheus should contain valk_gc_heap_total_bytes metric");
+
+  // Check for HELP and TYPE annotations
+  VALK_TEST_ASSERT(strstr(prom, "# HELP valk_gc_heap_used_bytes") != NULL,
+                   "Prometheus should contain HELP for heap_used");
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_gc_heap_used_bytes gauge") != NULL,
+                   "heap_used should be a gauge");
+  VALK_TEST_ASSERT(strstr(prom, "# HELP valk_gc_heap_total_bytes") != NULL,
+                   "Prometheus should contain HELP for heap_total");
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_gc_heap_total_bytes gauge") != NULL,
+                   "heap_total should be a gauge");
+
+  // Cleanup
+  free(prom);
+  valk_thread_ctx = old_ctx;
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
 #else // !VALK_METRICS_ENABLED
 
 void test_metrics_disabled(VALK_TEST_ARGS()) {
@@ -210,6 +663,24 @@ int main(void) {
                           test_metrics_json_output);
   valk_testsuite_add_test(suite, "test_metrics_prometheus_output",
                           test_metrics_prometheus_output);
+  valk_testsuite_add_test(suite, "test_system_stats_prometheus_output",
+                          test_system_stats_prometheus_output);
+  valk_testsuite_add_test(suite, "test_stream_metrics_with_duration",
+                          test_stream_metrics_with_duration);
+  valk_testsuite_add_test(suite, "test_request_duration_histogram",
+                          test_request_duration_histogram);
+  valk_testsuite_add_test(suite, "test_metrics_duration_microsecond_sum",
+                          test_metrics_duration_microsecond_sum);
+  valk_testsuite_add_test(suite, "test_stream_metrics_bytes_tracking",
+                          test_stream_metrics_bytes_tracking);
+  valk_testsuite_add_test(suite, "test_vm_metrics_collect_with_gc_heap",
+                          test_vm_metrics_collect_with_gc_heap);
+  valk_testsuite_add_test(suite, "test_vm_metrics_collect_null_heap",
+                          test_vm_metrics_collect_null_heap);
+  valk_testsuite_add_test(suite, "test_vm_metrics_json_contains_heap_values",
+                          test_vm_metrics_json_contains_heap_values);
+  valk_testsuite_add_test(suite, "test_vm_metrics_prometheus_contains_heap_values",
+                          test_vm_metrics_prometheus_contains_heap_values);
 #else
   valk_testsuite_add_test(suite, "test_metrics_disabled", test_metrics_disabled);
 #endif
