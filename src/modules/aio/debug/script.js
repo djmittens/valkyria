@@ -1436,75 +1436,128 @@
 
       // Owner map for server/client names (indexed by owner_idx)
       this.ownerMap = [];
+
+      // Fresh state endpoint for initial HTTP fetch
+      this.freshStateUrl = '/debug/metrics/state';
     }
 
-    connect() {
-      var url = '/debug/diagnostics/memory';
-      this.eventSource = new EventSource(url);
-
+    fetchFreshState() {
       var self = this;
+      return fetch(this.freshStateUrl)
+        .then(function(response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.json();
+        })
+        .then(function(data) {
+          console.log('[MemDiag] Fresh state fetched:', data);
 
-      // Listen for full diagnostics event (sent on initial connect)
-      this.eventSource.addEventListener('diagnostics', function(e) {
-        self.lastEventId = e.lastEventId;
-        var data = JSON.parse(e.data);
+          // Store as full state
+          self.fullState = {
+            memory: data.memory,
+            metrics: data.metrics
+          };
 
-        // Store full state
-        if (data.memory) {
-          self.fullState.memory = data.memory;
-          // Expand and store slab states for delta tracking
-          if (data.memory.slabs) {
+          // Expand and store slab states
+          if (data.memory && data.memory.slabs) {
             data.memory.slabs.forEach(function(slab) {
               if (slab.states) {
                 self.slabStates[slab.name] = decodeRLE(slab.states);
               }
             });
           }
+
+          // Render initial state - metrics first, then memory
+          if (data.metrics) {
+            self.handleMetricsUpdate(data.metrics);
+          }
+          if (data.memory) {
+            self.handleMemoryUpdate(data.memory);
+          }
+
+          return true;
+        })
+        .catch(function(error) {
+          console.error('[MemDiag] Failed to fetch fresh state:', error);
+          return false;
+        });
+    }
+
+    connect() {
+      var self = this;
+
+      // Fetch fresh state FIRST, then connect SSE
+      this.fetchFreshState().then(function(success) {
+        if (success) {
+          console.log('[MemDiag] Fresh state loaded, connecting SSE for deltas');
         }
 
-        // Handle metrics FIRST to create AIO panels before memory update
-        // tries to find slab grid elements
-        if (data.metrics) {
-          self.fullState.metrics = data.metrics;
-          self.handleMetricsUpdate(data.metrics);
-        }
+        // Connect SSE for updates (whether fresh state succeeded or not)
+        var url = '/debug/diagnostics/memory';
+        self.eventSource = new EventSource(url);
 
-        // Now update memory/slabs - panels should exist from metrics update
-        if (data.memory) {
-          self.handleMemoryUpdate(data.memory);
-        }
+        // Listen for full diagnostics event (sent on initial connect)
+        // Still needed for backwards compatibility or if fresh state fetch failed
+        self.eventSource.addEventListener('diagnostics', function(e) {
+          self.lastEventId = e.lastEventId;
+          var data = JSON.parse(e.data);
 
-        console.log('[MemDiag] Full state received');
+          // Store full state
+          if (data.memory) {
+            self.fullState.memory = data.memory;
+            // Expand and store slab states for delta tracking
+            if (data.memory.slabs) {
+              data.memory.slabs.forEach(function(slab) {
+                if (slab.states) {
+                  self.slabStates[slab.name] = decodeRLE(slab.states);
+                }
+              });
+            }
+          }
+
+          // Handle metrics FIRST to create AIO panels before memory update
+          // tries to find slab grid elements
+          if (data.metrics) {
+            self.fullState.metrics = data.metrics;
+            self.handleMetricsUpdate(data.metrics);
+          }
+
+          // Now update memory/slabs - panels should exist from metrics update
+          if (data.memory) {
+            self.handleMemoryUpdate(data.memory);
+          }
+
+          console.log('[MemDiag] Full state received');
+        });
+
+        // Listen for delta diagnostics events (sent after first full event)
+        self.eventSource.addEventListener('diagnostics-delta', function(e) {
+          self.lastEventId = e.lastEventId;
+          var delta = JSON.parse(e.data);
+          self.applyDelta(delta);
+        });
+
+        // Also listen for legacy 'memory' event for backwards compatibility
+        self.eventSource.addEventListener('memory', function(e) {
+          self.lastEventId = e.lastEventId;
+          self.handleMemoryUpdate(JSON.parse(e.data));
+        });
+
+        self.eventSource.onopen = function() {
+          self.reconnectAttempts = 0;
+          self.updateConnectionStatus(true);
+          // Don't clear stored state on reconnect - we already have fresh state
+          // self.fullState = { memory: null, metrics: null };
+          // self.slabStates = {};
+          console.log('[MemDiag] SSE connected (delta mode enabled)');
+        };
+
+        self.eventSource.onerror = function(e) {
+          if (self.eventSource.readyState === EventSource.CLOSED) {
+            self.updateConnectionStatus(false);
+            self.scheduleReconnect();
+          }
+        };
       });
-
-      // Listen for delta diagnostics events (sent after first full event)
-      this.eventSource.addEventListener('diagnostics-delta', function(e) {
-        self.lastEventId = e.lastEventId;
-        var delta = JSON.parse(e.data);
-        self.applyDelta(delta);
-      });
-
-      // Also listen for legacy 'memory' event for backwards compatibility
-      this.eventSource.addEventListener('memory', function(e) {
-        self.lastEventId = e.lastEventId;
-        self.handleMemoryUpdate(JSON.parse(e.data));
-      });
-
-      this.eventSource.onopen = function() {
-        self.reconnectAttempts = 0;
-        self.updateConnectionStatus(true);
-        // Clear stored state on reconnect to get fresh full state
-        self.fullState = { memory: null, metrics: null };
-        self.slabStates = {};
-        console.log('[MemDiag] SSE connected (delta mode enabled)');
-      };
-
-      this.eventSource.onerror = function(e) {
-        if (self.eventSource.readyState === EventSource.CLOSED) {
-          self.updateConnectionStatus(false);
-          self.scheduleReconnect();
-        }
-      };
     }
 
     // Apply delta update to stored full state
@@ -1626,6 +1679,79 @@
             if (!metrics.aio.connections) metrics.aio.connections = {};
             Object.assign(metrics.aio.connections, delta.metrics.aio.connections);
           }
+        }
+
+        // Apply modular metrics deltas (counters, gauges, histograms)
+        if (delta.metrics.modular && delta.metrics.modular.deltas) {
+          if (!metrics.modular) metrics.modular = { counters: [], gauges: [], histograms: [] };
+          var mod = metrics.modular;
+
+          // Helper: check if labels match (delta labels in d.l, metric labels in m.labels)
+          function labelsMatch(deltaLabels, metricLabels) {
+            if (!deltaLabels && !metricLabels) return true;
+            if (!deltaLabels || !metricLabels) return false;
+            var dKeys = Object.keys(deltaLabels);
+            var mKeys = Object.keys(metricLabels);
+            if (dKeys.length !== mKeys.length) return false;
+            for (var i = 0; i < dKeys.length; i++) {
+              var k = dKeys[i];
+              if (deltaLabels[k] !== metricLabels[k]) return false;
+            }
+            return true;
+          }
+
+          delta.metrics.modular.deltas.forEach(function(d) {
+            if (d.t === 'c') {
+              // Counter increment - find by name AND labels, then add delta
+              var counter = null;
+              for (var i = 0; i < (mod.counters || []).length; i++) {
+                if (mod.counters[i].name === d.n && labelsMatch(d.l, mod.counters[i].labels)) {
+                  counter = mod.counters[i];
+                  break;
+                }
+              }
+              if (counter) {
+                counter.value = (counter.value || 0) + (d.d || 0);
+              } else {
+                // New counter, add it with labels
+                if (!mod.counters) mod.counters = [];
+                mod.counters.push({ name: d.n, value: d.d || 0, labels: d.l || {} });
+              }
+            } else if (d.t === 'g') {
+              // Gauge set - find by name AND labels, then replace value
+              var gauge = null;
+              for (var i = 0; i < (mod.gauges || []).length; i++) {
+                if (mod.gauges[i].name === d.n && labelsMatch(d.l, mod.gauges[i].labels)) {
+                  gauge = mod.gauges[i];
+                  break;
+                }
+              }
+              if (gauge) {
+                gauge.value = d.v;
+              } else {
+                // New gauge, add it with labels
+                if (!mod.gauges) mod.gauges = [];
+                mod.gauges.push({ name: d.n, value: d.v, labels: d.l || {} });
+              }
+            } else if (d.t === 'h') {
+              // Histogram observe - find by name AND labels, then add deltas
+              var hist = null;
+              for (var i = 0; i < (mod.histograms || []).length; i++) {
+                if (mod.histograms[i].name === d.n && labelsMatch(d.l, mod.histograms[i].labels)) {
+                  hist = mod.histograms[i];
+                  break;
+                }
+              }
+              if (hist) {
+                hist.count = (hist.count || 0) + (d.c || 0);
+                hist.sum_us = (hist.sum_us || 0) + (d.s || 0);
+              } else {
+                // New histogram, add it with labels
+                if (!mod.histograms) mod.histograms = [];
+                mod.histograms.push({ name: d.n, count: d.c || 0, sum_us: d.s || 0, labels: d.l || {} });
+              }
+            }
+          });
         }
 
         metricsUpdated = true;

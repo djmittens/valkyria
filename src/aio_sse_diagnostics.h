@@ -4,6 +4,7 @@
 #include "aio.h"
 #include "memory.h"
 #include "gc.h"
+#include "metrics_delta.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -129,6 +130,14 @@ struct valk_sse_diag_state {
   valk_sse_diag_conn_t *streams;    // Linked list of active SSE streams
   valk_aio_system_t *aio_system;    // AIO system reference
   valk_aio_handle_t *http_handle;   // HTTP connection handle (for cleanup)
+
+  // Modular metrics delta (collected once per tick, shared by all streams)
+  valk_delta_snapshot_t modular_delta;
+  bool modular_delta_initialized;
+
+  // Per-connection baseline for stateless delta collection
+  // This allows multiple HTTP connections to independently track metric changes
+  valk_metrics_baseline_t *modular_baseline;
 };
 
 // Initialize SSE diagnostics for an HTTP connection (deprecated, use _http2)
@@ -170,9 +179,15 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot, valk_aio_system_t *
 
 // Encode delta diagnostics to SSE event (only changed fields)
 // Returns 0 if no changes detected (skip sending), >0 for bytes written, <0 for error
+// modular_delta: collected once per tick by timer, NULL if no modular metrics
 int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *prev,
                             valk_sse_diag_conn_t *conn, valk_aio_system_t *aio,
+                            valk_delta_snapshot_t *modular_delta,
                             char *buf, size_t buf_size, uint64_t event_id);
+
+// Get fresh diagnostics state as JSON (for /debug/metrics/state endpoint)
+// Returns bytes written, or -1 on error
+int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_size);
 
 // Free snapshot allocations (bitmaps, slots)
 void valk_mem_snapshot_free(valk_mem_snapshot_t *snapshot);

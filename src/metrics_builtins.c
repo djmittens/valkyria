@@ -7,11 +7,15 @@
 
 #include "metrics_v2.h"
 #include "metrics_delta.h"
+#include "aio_sse_diagnostics.h"
 #include "parser.h"
 #include "common.h"
 
 #include <string.h>
 #include <stdlib.h>
+
+// Extern declaration for active AIO system
+extern valk_aio_system_t *valk_aio_active_system;
 
 // ============================================================================
 // FORWARD DECLARATIONS
@@ -420,6 +424,74 @@ static valk_lval_t *valk_builtin_metrics_prometheus(valk_lenv_t *e, valk_lval_t 
   return result;
 }
 
+// (metrics/json) -> json-string
+// Exports all metrics in JSON format (full state, not deltas)
+static valk_lval_t *valk_builtin_metrics_json(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  if (valk_lval_list_count(a) != 0) {
+    return valk_lval_err("metrics/json: expected 0 arguments, got %zu",
+                         valk_lval_list_count(a));
+  }
+
+  // Allocate buffer for JSON format (128KB)
+  char *buf = malloc(131072);
+  if (!buf) {
+    return valk_lval_err("metrics/json: allocation failed");
+  }
+
+  size_t len = valk_metrics_v2_to_json(&g_metrics, buf, 131072);
+
+  // Check if buffer was too small
+  if (len >= 131072) {
+    free(buf);
+    return valk_lval_err("metrics/json: output too large");
+  }
+
+  valk_lval_t *result = valk_lval_str_n(buf, len);
+  free(buf);
+
+  return result;
+}
+
+// (aio/diagnostics-state-json) -> json-string
+// (aio/diagnostics-state-json sys) -> json-string
+// Returns fresh diagnostics state as JSON (for /debug/metrics/state endpoint)
+static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  // Get AIO system from argument or global
+  valk_aio_system_t *sys = valk_aio_active_system;
+  if (valk_lval_list_count(a) >= 1) {
+    valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
+    if (LVAL_TYPE(sys_arg) == LVAL_REF &&
+        strcmp(sys_arg->ref.type, "aio_system") == 0) {
+      sys = (valk_aio_system_t *)sys_arg->ref.ptr;
+    }
+  }
+
+  if (!sys) {
+    return valk_lval_err("aio/diagnostics-state-json: no AIO system available");
+  }
+
+  // Allocate buffer (256KB for full state)
+  char *buf = malloc(262144);
+  if (!buf) {
+    return valk_lval_err("aio/diagnostics-state-json: allocation failed");
+  }
+
+  int len = valk_diag_fresh_state_json(sys, buf, 262144);
+  if (len < 0) {
+    free(buf);
+    return valk_lval_err("aio/diagnostics-state-json: encoding failed");
+  }
+
+  valk_lval_t *result = valk_lval_str_n(buf, len);
+  free(buf);
+
+  return result;
+}
+
 // ============================================================================
 // REGISTRATION FUNCTION
 // ============================================================================
@@ -443,4 +515,9 @@ void valk_register_metrics_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "metrics/collect-delta", valk_builtin_metrics_collect_delta);
   valk_lenv_put_builtin(env, "metrics/delta-json", valk_builtin_metrics_delta_json);
   valk_lenv_put_builtin(env, "metrics/prometheus", valk_builtin_metrics_prometheus);
+  valk_lenv_put_builtin(env, "metrics/json", valk_builtin_metrics_json);
+
+  // Diagnostics builtin
+  valk_lenv_put_builtin(env, "aio/diagnostics-state-json",
+                        valk_builtin_aio_diagnostics_state_json);
 }

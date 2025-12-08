@@ -28,7 +28,8 @@
 #include "aio_metrics.h"
 #include "aio_sse.h"
 #include "aio_sse_diagnostics.h"
-#include "metrics.h"
+#include "aio_sse_stream_registry.h"
+#include "metrics_v2.h"
 #include "common.h"
 #include "concurrency.h"
 #include "parser.h"  // For valk_lval_t in HTTP queue
@@ -50,15 +51,15 @@
 #ifdef VALK_METRICS_ENABLED
 // Per-server metric handles (cached at server creation)
 typedef struct {
-  valk_counter_t* requests_total;
-  valk_counter_t* requests_success;        // status="2xx"
-  valk_counter_t* requests_client_error;   // status="4xx"
-  valk_counter_t* requests_server_error;   // status="5xx"
-  valk_gauge_t* connections_active;
-  valk_histogram_t* request_duration;
-  valk_counter_t* bytes_sent;
-  valk_counter_t* bytes_recv;
-  valk_counter_t* overload_responses;
+  valk_counter_v2_t* requests_total;
+  valk_counter_v2_t* requests_success;        // status="2xx"
+  valk_counter_v2_t* requests_client_error;   // status="4xx"
+  valk_counter_v2_t* requests_server_error;   // status="5xx"
+  valk_gauge_v2_t* connections_active;
+  valk_histogram_v2_t* request_duration;
+  valk_counter_v2_t* bytes_sent;
+  valk_counter_v2_t* bytes_recv;
+  valk_counter_v2_t* overload_responses;
 } valk_server_metrics_t;
 #endif
 
@@ -93,7 +94,7 @@ valk_aio_system_t *valk_aio_active_system = NULL;
 
 #ifdef VALK_METRICS_ENABLED
 // Global client connections gauge (initialized lazily)
-static valk_gauge_t* client_connections_active = NULL;
+static valk_gauge_v2_t* client_connections_active = NULL;
 #endif
 
 static __thread valk_slab_t *tcp_buffer_slab;
@@ -584,6 +585,7 @@ typedef struct valk_aio_system {
   valk_http_clients_registry_t http_clients;
   valk_gc_malloc_heap_t* gc_heap;  // For metrics access
   valk_owner_registry_t owner_registry;  // Server/client attribution for diagnostics
+  valk_sse_stream_registry_t sse_registry;  // Global SSE stream registry
 #endif
 } valk_aio_system_t;
 
@@ -605,26 +607,43 @@ typedef struct valk_aio_http_server {
 } valk_aio_http_server;
 
 #ifdef VALK_METRICS_ENABLED
-// Initialize server metrics with proper labels
+// Initialize server metrics with proper labels (using metrics v2 API)
 static void server_metrics_init(valk_server_metrics_t* m,
                                  const char* name, int port, const char* protocol) {
-  char port_str[8];
-  snprintf(port_str, sizeof(port_str), "%d", port);
+  // Note: port_str needs static storage since V2 labels store pointers
+  static char port_strs[HTTP_MAX_SERVERS][8];
+  static int port_idx = 0;
+  char* port_str = port_strs[port_idx++ % HTTP_MAX_SERVERS];
+  snprintf(port_str, 8, "%d", port);
 
-  m->requests_total = valk_metric_counter("http_requests_total",
-    "server", name, "port", port_str, "protocol", protocol, NULL);
+  // Base labels for this server
+  valk_label_set_v2_t base_labels = {
+    .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}},
+    .count = 3
+  };
 
-  m->requests_success = valk_metric_counter("http_requests_total",
-    "server", name, "port", port_str, "protocol", protocol, "status", "2xx", NULL);
+  m->requests_total = valk_counter_get_or_create("http_requests_total", NULL, &base_labels);
 
-  m->requests_client_error = valk_metric_counter("http_requests_total",
-    "server", name, "port", port_str, "protocol", protocol, "status", "4xx", NULL);
+  // Status-specific labels (add status to base labels)
+  valk_label_set_v2_t success_labels = {
+    .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}, {"status", "2xx"}},
+    .count = 4
+  };
+  m->requests_success = valk_counter_get_or_create("http_requests_total", NULL, &success_labels);
 
-  m->requests_server_error = valk_metric_counter("http_requests_total",
-    "server", name, "port", port_str, "protocol", protocol, "status", "5xx", NULL);
+  valk_label_set_v2_t client_err_labels = {
+    .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}, {"status", "4xx"}},
+    .count = 4
+  };
+  m->requests_client_error = valk_counter_get_or_create("http_requests_total", NULL, &client_err_labels);
 
-  m->connections_active = valk_metric_gauge("http_connections_active",
-    "server", name, "port", port_str, "protocol", protocol, NULL);
+  valk_label_set_v2_t server_err_labels = {
+    .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}, {"status", "5xx"}},
+    .count = 4
+  };
+  m->requests_server_error = valk_counter_get_or_create("http_requests_total", NULL, &server_err_labels);
+
+  m->connections_active = valk_gauge_get_or_create("http_connections_active", NULL, &base_labels);
 
   // Buckets tuned for low-latency services: 50µs to 10s
   // Sub-ms buckets: 50µs, 100µs, 250µs, 500µs
@@ -635,17 +654,12 @@ static void server_metrics_init(valk_server_metrics_t* m,
     0.025, 0.05, 0.1, 0.25, 0.5,       // 25ms, 50ms, 100ms, 250ms, 500ms
     1.0, 2.5, 5.0, 10.0                // 1s, 2.5s, 5s, 10s
   };
-  m->request_duration = valk_metric_histogram("http_request_duration_seconds",
-    latency_buckets, 17, "server", name, "port", port_str, "protocol", protocol, NULL);
+  m->request_duration = valk_histogram_get_or_create("http_request_duration_seconds",
+    NULL, latency_buckets, 17, &base_labels);
 
-  m->bytes_sent = valk_metric_counter("http_bytes_sent_total",
-    "server", name, "port", port_str, "protocol", protocol, NULL);
-
-  m->bytes_recv = valk_metric_counter("http_bytes_recv_total",
-    "server", name, "port", port_str, "protocol", protocol, NULL);
-
-  m->overload_responses = valk_metric_counter("http_overload_responses_total",
-    "server", name, "port", port_str, "protocol", protocol, NULL);
+  m->bytes_sent = valk_counter_get_or_create("http_bytes_sent_total", NULL, &base_labels);
+  m->bytes_recv = valk_counter_get_or_create("http_bytes_recv_total", NULL, &base_labels);
+  m->overload_responses = valk_counter_get_or_create("http_overload_responses_total", NULL, &base_labels);
 }
 
 // ============================================================================
@@ -741,15 +755,15 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
   }
 
 #ifdef VALK_METRICS_ENABLED
-  // Record connection close (old metrics system)
+  // Record connection close
   valk_aio_metrics_on_close(&handle->sys->metrics);
-  // Decrement active connections gauge (new metrics system)
+  // Decrement active connections gauge
   if (handle->http.server) {
     // Server-side connection (incoming from client)
-    valk_gauge_dec(handle->http.server->metrics.connections_active);
+    valk_gauge_v2_dec(handle->http.server->metrics.connections_active);
   } else {
     // Client-side connection (outgoing to server)
-    valk_gauge_dec(client_connections_active);
+    valk_gauge_v2_dec(client_connections_active);
   }
 #endif
 
@@ -1015,9 +1029,9 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
 #ifdef VALK_METRICS_ENABLED
       // Track overflow in system stats
       atomic_fetch_add(&conn->http.server->sys->system_stats.arena_pool_overflow, 1);
-      valk_counter_inc(conn->http.server->metrics.overload_responses);
+      valk_counter_v2_inc(conn->http.server->metrics.overload_responses);
       // Also count 503 in the 5xx error bucket for dashboard visibility
-      valk_counter_inc(conn->http.server->metrics.requests_server_error);
+      valk_counter_v2_inc(conn->http.server->metrics.requests_server_error);
 #endif
 
       __http_send_overload_response(session, frame->hd.stream_id, conn);
@@ -1325,6 +1339,9 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
       // which is set automatically by valk_sse_diag_init_http2
       req->sse_conn = sse_conn;
 
+      // Set status code for metrics tracking when stream eventually closes
+      req->status_code = 200;
+
       // Send HTTP/2 response headers with streaming data provider
       const char* content_type = "text/event-stream; charset=utf-8";
       nghttp2_nv headers[] = {
@@ -1529,29 +1546,28 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
     valk_aio_metrics_on_stream_end(&conn->http.server->sys->metrics, is_error,
                                      duration_us, req->bytes_sent, bytes_recv);
 
-    // Record metrics with new system
+    // Record metrics
     valk_server_metrics_t* m = &conn->http.server->metrics;
 
     // Increment total requests counter
-    valk_counter_inc(m->requests_total);
+    valk_counter_v2_inc(m->requests_total);
 
     // Increment status-specific counter
     int status = req->status_code;
     if (status >= 200 && status < 300) {
-      valk_counter_inc(m->requests_success);
+      valk_counter_v2_inc(m->requests_success);
     } else if (status >= 400 && status < 500) {
-      valk_counter_inc(m->requests_client_error);
+      valk_counter_v2_inc(m->requests_client_error);
     } else if (status >= 500) {
-      valk_counter_inc(m->requests_server_error);
+      valk_counter_v2_inc(m->requests_server_error);
     }
 
-    // Record request duration
-    double duration_sec = (double)duration_us / 1e6;
-    valk_histogram_observe(m->request_duration, duration_sec);
+    // Record request duration (V2 observe takes microseconds)
+    valk_histogram_v2_observe_us(m->request_duration, duration_us);
 
     // Record bytes sent and received
-    valk_counter_add(m->bytes_sent, req->bytes_sent);
-    valk_counter_add(m->bytes_recv, bytes_recv);
+    valk_counter_v2_add(m->bytes_sent, req->bytes_sent);
+    valk_counter_v2_add(m->bytes_recv, bytes_recv);
 #endif
 
     // Release stream arena back to slab (instant cleanup)
@@ -2355,10 +2371,10 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
     }
 
 #ifdef VALK_METRICS_ENABLED
-    // Record successful connection (old metrics system)
+    // Record successful connection
     valk_aio_metrics_on_connection(&srv->sys->metrics, true);
-    // Increment active connections gauge (new metrics system)
-    valk_gauge_inc(srv->metrics.connections_active);
+    // Increment active connections gauge
+    valk_gauge_v2_inc(srv->metrics.connections_active);
 
     // New connection starts active (consistent with aggregate metrics)
     // Will transition to idle when all streams close
@@ -2742,10 +2758,14 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
 #ifdef VALK_METRICS_ENABLED
   // Initialize client connections gauge lazily
   if (!client_connections_active) {
-    client_connections_active = valk_metric_gauge("http_connections_active",
-      "role", "client", NULL);
+    valk_label_set_v2_t client_labels = {
+      .labels = {{"role", "client"}},
+      .count = 1
+    };
+    client_connections_active = valk_gauge_get_or_create("http_connections_active",
+      NULL, &client_labels);
   }
-  valk_gauge_inc(client_connections_active);
+  valk_gauge_v2_inc(client_connections_active);
 #endif
 
   valk_slab_item_t *slabItemRaw = valk_slab_aquire(tcp_buffer_slab);
@@ -3454,7 +3474,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   // Initialize global modular metrics system (once)
   static bool metrics_initialized = false;
   if (!metrics_initialized) {
-    valk_metrics_init();
+    valk_metrics_registry_init();
     metrics_initialized = true;
   }
   // Initialize AIO-specific metrics
@@ -3470,6 +3490,8 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   sys->gc_heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
   // Initialize owner registry for connection attribution
   memset(&sys->owner_registry, 0, sizeof(sys->owner_registry));
+  // Initialize global SSE stream registry
+  valk_sse_registry_init(&sys->sse_registry, sys);
 #endif
 
   // printf("Aquiring stopper\n");
@@ -3497,6 +3519,12 @@ void valk_aio_stop(valk_aio_system_t *sys) {
   // fflush(stdout);
   // while (UV_EBUSY == uv_loop_close(sys->eventloop)) {
   // };
+
+#ifdef VALK_METRICS_ENABLED
+  // Shutdown global SSE registry
+  valk_sse_registry_shutdown(&sys->sse_registry);
+#endif
+
   // TODO(networking): need to properly free the system too
   // Slabs were allocated with malloc allocator, so free with malloc allocator
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
@@ -3597,6 +3625,12 @@ void valk_aio_set_name(valk_aio_system_t* sys, const char* name) {
 valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys) {
   if (!sys) return nullptr;
   return sys->gc_heap;
+}
+
+// Get SSE stream registry from AIO system
+valk_sse_stream_registry_t* valk_aio_get_sse_registry(valk_aio_system_t* sys) {
+  if (!sys) return nullptr;
+  return &sys->sse_registry;
 }
 
 // Get slab allocators for memory diagnostics
@@ -4339,6 +4373,18 @@ valk_http_request_ctx_t* valk_http_get_request_ctx(void) {
 
 void valk_http_set_request_ctx(valk_http_request_ctx_t* ctx) {
   current_request_ctx = ctx;
+}
+
+// Set HTTP status code on current request (for SSE streams that send headers directly)
+// This ensures metrics are counted correctly when the stream closes
+void valk_http_set_status_code(int status_code) {
+#ifdef VALK_METRICS_ENABLED
+  if (current_request_ctx && current_request_ctx->req) {
+    current_request_ctx->req->status_code = status_code;
+  }
+#else
+  (void)status_code;
+#endif
 }
 
 // reference code for openssl setup

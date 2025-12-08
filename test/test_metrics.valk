@@ -81,8 +81,9 @@
 
 (test/define "metrics-prometheus-with-metric"
   {do
-    ; Create a metric first
-    (metrics/counter-inc "test_prom_basic")
+    ; Create a metric first (V2 API: create counter handle, then increment)
+    (= {counter} (metrics/counter "test_prom_basic"))
+    (metrics/counter-inc counter)
     (= {result} (metrics/prometheus))
     (test/assert (> (len result) 0) "metrics/prometheus should return non-empty string after creating metric")
     true
@@ -94,10 +95,11 @@
 
 (test/define "counter-inc-no-labels"
   {do
-    ; Increment a test counter
-    (metrics/counter-inc "test_counter_basic")
-    (metrics/counter-inc "test_counter_basic")
-    (metrics/counter-inc "test_counter_basic")
+    ; Create and increment a test counter (V2 API)
+    (= {counter} (metrics/counter "test_counter_basic"))
+    (metrics/counter-inc counter)
+    (metrics/counter-inc counter)
+    (metrics/counter-inc counter)
 
     ; Get metrics output
     (= {result} (metrics/json))
@@ -115,10 +117,12 @@
 
 (test/define "counter-inc-single-label"
   {do
-    ; Increment counter with label
-    (metrics/counter-inc "test_counter_labeled" "method" "GET")
-    (metrics/counter-inc "test_counter_labeled" "method" "GET")
-    (metrics/counter-inc "test_counter_labeled" "method" "POST")
+    ; Create counters with labels (V2 API)
+    (= {counter-get} (metrics/counter "test_counter_labeled" "method" "GET"))
+    (= {counter-post} (metrics/counter "test_counter_labeled" "method" "POST"))
+    (metrics/counter-inc counter-get)
+    (metrics/counter-inc counter-get)
+    (metrics/counter-inc counter-post)
 
     ; Get metrics output
     (= {result} (metrics/json))
@@ -136,10 +140,13 @@
 
 (test/define "counter-inc-multiple-labels"
   {do
-    ; Increment counter with multiple labels
-    (metrics/counter-inc "test_counter_multi" "method" "GET" "status" "200")
-    (metrics/counter-inc "test_counter_multi" "method" "GET" "status" "404")
-    (metrics/counter-inc "test_counter_multi" "method" "POST" "status" "201")
+    ; Create counters with multiple labels (V2 API)
+    (= {c1} (metrics/counter "test_counter_multi" "method" "GET" "status" "200"))
+    (= {c2} (metrics/counter "test_counter_multi" "method" "GET" "status" "404"))
+    (= {c3} (metrics/counter "test_counter_multi" "method" "POST" "status" "201"))
+    (metrics/counter-inc c1)
+    (metrics/counter-inc c2)
+    (metrics/counter-inc c3)
 
     ; Get metrics output
     (= {result} (metrics/json))
@@ -157,12 +164,14 @@
 
 (test/define "counter-different-label-values"
   {do
-    ; Create counters with same name but different label values
-    (metrics/counter-inc "test_requests" "endpoint" "/api/users")
-    (metrics/counter-inc "test_requests" "endpoint" "/api/users")
-    (metrics/counter-inc "test_requests" "endpoint" "/api/posts")
-    (metrics/counter-inc "test_requests" "endpoint" "/api/posts")
-    (metrics/counter-inc "test_requests" "endpoint" "/api/posts")
+    ; Create counters with same name but different label values (V2 API)
+    (= {users-counter} (metrics/counter "test_requests" "endpoint" "/api/users"))
+    (= {posts-counter} (metrics/counter "test_requests" "endpoint" "/api/posts"))
+    (metrics/counter-inc users-counter)
+    (metrics/counter-inc users-counter)
+    (metrics/counter-inc posts-counter)
+    (metrics/counter-inc posts-counter)
+    (metrics/counter-inc posts-counter)
 
     ; Both should appear in output
     (= {result} (metrics/json))
@@ -178,8 +187,8 @@
 
 (test/define "counter-accumulation"
   {do
-    ; Increment the same counter multiple times
-    (= {i} 1)
+    ; Create a counter and increment it multiple times (V2 API)
+    (= {counter} (metrics/counter "test_accumulator"))
     (= {iterations} 10)
 
     ; Loop to increment counter
@@ -187,7 +196,7 @@
       if (<= n 0)
         {true}
         {do
-          (metrics/counter-inc "test_accumulator")
+          (metrics/counter-inc counter)
           (increment-loop (- n 1))
         }
     })
@@ -207,8 +216,9 @@
 
 (test/define "prometheus-format-structure"
   {do
-    ; Create some metrics
-    (metrics/counter-inc "test_prom_counter" "label" "value")
+    ; Create some metrics (V2 API)
+    (= {counter} (metrics/counter "test_prom_counter" "label" "value"))
+    (metrics/counter-inc counter)
 
     ; Get Prometheus output
     (= {prom} (metrics/prometheus))
@@ -226,8 +236,9 @@
 
 (test/define "both-formats-work"
   {do
-    ; Create a counter
-    (metrics/counter-inc "test_dual_format")
+    ; Create a counter (V2 API)
+    (= {counter} (metrics/counter "test_dual_format"))
+    (metrics/counter-inc counter)
 
     ; Get both formats
     (= {json-out} (metrics/json))
@@ -250,9 +261,10 @@
 
 (test/define "empty-metric-name"
   {do
-    ; Try to create counter with empty name
+    ; Try to create counter with empty name (V2 API)
     ; This should either work or fail gracefully
-    (metrics/counter-inc "")
+    (= {counter} (metrics/counter ""))
+    (metrics/counter-inc counter)
 
     ; Should still be able to get metrics
     (= {result} (metrics/json))
@@ -267,14 +279,15 @@
 
 (test/define "metrics-persistence"
   {do
-    ; Increment a counter
-    (metrics/counter-inc "test_persist")
+    ; Create and increment a counter (V2 API)
+    (= {counter} (metrics/counter "test_persist"))
+    (metrics/counter-inc counter)
 
     ; Get metrics
     (= {result1} (metrics/json))
 
     ; Increment again
-    (metrics/counter-inc "test_persist")
+    (metrics/counter-inc counter)
 
     ; Get metrics again
     (= {result2} (metrics/json))

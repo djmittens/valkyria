@@ -77,19 +77,17 @@ set(VALKYRIA_SOURCES
   src/log.c
 )
 
-# Conditionally add metrics sources
+# Conditionally add metrics sources (V2 only)
 if(VALK_METRICS)
   list(APPEND VALKYRIA_SOURCES src/aio_metrics.c)
-  # Add src/metrics.c when it exists (future implementation)
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/metrics.c")
-    list(APPEND VALKYRIA_SOURCES src/metrics.c)
-  endif()
   # Metrics V2 - unified registry with delta streaming
   list(APPEND VALKYRIA_SOURCES src/metrics_v2.c)
   list(APPEND VALKYRIA_SOURCES src/metrics_delta.c)
   list(APPEND VALKYRIA_SOURCES src/metrics_builtins.c)
   # SSE diagnostics for memory visualization
   list(APPEND VALKYRIA_SOURCES src/aio_sse_diagnostics.c)
+  # SSE stream registry for global timer management
+  list(APPEND VALKYRIA_SOURCES src/aio_sse_stream_registry.c)
   # SSE builtins for Lisp API
   list(APPEND VALKYRIA_SOURCES src/aio_sse_builtins.c)
 endif()
@@ -180,11 +178,6 @@ if(VALK_METRICS)
   target_link_libraries(test_aio_metrics PRIVATE "-lc" valkyria)
   target_compile_definitions(test_aio_metrics PRIVATE VALK_METRICS_ENABLED=1)
   include_directories(test_aio_metrics src/)
-
-  add_executable(test_metrics test/test_metrics.c test/testing.c)
-  target_link_libraries(test_metrics PRIVATE "-lc" valkyria)
-  target_compile_definitions(test_metrics PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_metrics src/)
 
   add_executable(test_loop_metrics test/test_loop_metrics.c test/testing.c)
   target_link_libraries(test_loop_metrics PRIVATE "-lc" valkyria uv)

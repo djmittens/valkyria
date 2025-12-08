@@ -22,6 +22,7 @@ typedef struct {
 } valk_http_request_ctx_t;
 
 extern valk_http_request_ctx_t *valk_http_get_request_ctx(void);
+extern void valk_http_set_status_code(int status_code);
 
 // Forward declaration from aio_sse.c
 extern void valk_http2_flush_pending(valk_aio_handle_t *conn);
@@ -114,6 +115,11 @@ static valk_lval_t *valk_builtin_sse_open(valk_lenv_t *e, valk_lval_t *a) {
     valk_sse_stream_close(stream);
     return valk_lval_err("sse/open: failed to submit response: %s", nghttp2_strerror(rv));
   }
+
+  // Set status code for metrics tracking when stream eventually closes
+  // SSE streams stay open indefinitely, so this ensures the 200 response
+  // is counted when the connection finally closes
+  valk_http_set_status_code(200);
 
   // Flush pending data to client
   valk_http2_flush_pending(conn);

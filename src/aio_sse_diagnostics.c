@@ -13,7 +13,8 @@
 #include "gc.h"
 #include "log.h"
 #include "memory.h"
-#include "metrics.h"
+#include "metrics_v2.h"
+#include "metrics_delta.h"
 
 // ============================================================================
 // Slab Bitmap Generation
@@ -966,7 +967,7 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
   size_t modular_buf_size = 131072;  // 128KB for modular metrics
   char *modular_buf = malloc(modular_buf_size);
   if (modular_buf) {
-    size_t modular_len = valk_metrics_json(modular_buf, modular_buf_size);
+    size_t modular_len = valk_metrics_v2_to_json(&g_metrics, modular_buf, modular_buf_size);
     // valk_metrics_json returns cap on overflow, or actual length on success
     if (modular_len > 0 && modular_len < modular_buf_size) {
       n = snprintf(p, end - p, "\"modular\":%s", modular_buf);
@@ -1138,13 +1139,15 @@ static size_t slots_to_delta_string(const valk_slot_diag_t *curr, const valk_slo
 // Returns 0 if no meaningful changes, >0 for bytes written, <0 for error
 int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *prev,
                             valk_sse_diag_conn_t *conn, valk_aio_system_t *aio,
+                            valk_delta_snapshot_t *modular_delta,
                             char *buf, size_t buf_size, uint64_t event_id) {
   char *p = buf;
   char *end = buf + buf_size;
 
   // Track if we have any changes worth sending
   bool has_memory_changes = false;
-  bool has_metric_changes = false;
+  bool has_aio_metric_changes = false;
+  bool has_modular_metric_changes = modular_delta && modular_delta->delta_count > 0;
 
   // Check for slab changes
   bool slab_changes[8] = {false};
@@ -1173,7 +1176,7 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
                      current->gc_heap.emergency_collections != prev->gc_heap.emergency_collections);
   if (gc_changed) has_memory_changes = true;
 
-  // Check metrics changes
+  // Check AIO metrics changes
 #ifdef VALK_METRICS_ENABLED
   const valk_aio_metrics_t *aio_metrics = valk_aio_get_metrics(aio);
   if (aio_metrics && conn) {
@@ -1186,7 +1189,7 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
         bytes_recv != conn->prev_metrics.bytes_recv ||
         requests != conn->prev_metrics.requests_total ||
         connections != conn->prev_metrics.connections_total) {
-      has_metric_changes = true;
+      has_aio_metric_changes = true;
     }
   }
 #else
@@ -1195,7 +1198,7 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
 #endif
 
   // If nothing changed, return 0 to signal skip
-  if (!has_memory_changes && !has_metric_changes) {
+  if (!has_memory_changes && !has_aio_metric_changes && !has_modular_metric_changes) {
     return 0;
   }
 
@@ -1358,37 +1361,65 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
 
   // ===== Metrics section (delta values) =====
 #ifdef VALK_METRICS_ENABLED
-  if (has_metric_changes && conn) {
-    const valk_aio_metrics_t *aio_metrics = valk_aio_get_metrics(aio);
-    if (aio_metrics) {
-      uint64_t bytes_sent = atomic_load(&aio_metrics->bytes_sent_total);
-      uint64_t bytes_recv = atomic_load(&aio_metrics->bytes_recv_total);
-      uint64_t requests = atomic_load(&aio_metrics->requests_total);
+  if (has_aio_metric_changes || has_modular_metric_changes) {
+    n = snprintf(p, end - p, "%s\"metrics\":{", need_comma ? "," : "");
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
 
-      // Send deltas for monotonic counters
-      uint64_t d_sent = bytes_sent - conn->prev_metrics.bytes_sent;
-      uint64_t d_recv = bytes_recv - conn->prev_metrics.bytes_recv;
-      uint64_t d_req = requests - conn->prev_metrics.requests_total;
+    bool metrics_need_comma = false;
 
-      n = snprintf(p, end - p,
-                   "%s\"metrics\":{\"aio\":{\"bytes\":{\"d_sent\":%lu,\"d_recv\":%lu},"
-                   "\"requests\":{\"d_total\":%lu},"
-                   "\"connections\":{\"active\":%lu,\"idle\":%lu,\"closing\":%lu}}}",
-                   need_comma ? "," : "",
-                   d_sent, d_recv, d_req,
-                   atomic_load(&aio_metrics->connections_active),
-                   atomic_load(&aio_metrics->connections_idle),
-                   atomic_load(&aio_metrics->connections_closing));
-      if (n < 0 || n >= end - p) return -1;
-      p += n;
+    // AIO metrics delta
+    if (has_aio_metric_changes && conn) {
+      const valk_aio_metrics_t *aio_metrics = valk_aio_get_metrics(aio);
+      if (aio_metrics) {
+        uint64_t bytes_sent = atomic_load(&aio_metrics->bytes_sent_total);
+        uint64_t bytes_recv = atomic_load(&aio_metrics->bytes_recv_total);
+        uint64_t requests = atomic_load(&aio_metrics->requests_total);
 
-      // Update previous metrics for next delta
-      conn->prev_metrics.bytes_sent = bytes_sent;
-      conn->prev_metrics.bytes_recv = bytes_recv;
-      conn->prev_metrics.requests_total = requests;
-      conn->prev_metrics.connections_total = atomic_load(&aio_metrics->connections_total);
+        // Send deltas for monotonic counters
+        uint64_t d_sent = bytes_sent - conn->prev_metrics.bytes_sent;
+        uint64_t d_recv = bytes_recv - conn->prev_metrics.bytes_recv;
+        uint64_t d_req = requests - conn->prev_metrics.requests_total;
+
+        n = snprintf(p, end - p,
+                     "\"aio\":{\"bytes\":{\"d_sent\":%lu,\"d_recv\":%lu},"
+                     "\"requests\":{\"d_total\":%lu},"
+                     "\"connections\":{\"active\":%lu,\"idle\":%lu,\"closing\":%lu}}",
+                     d_sent, d_recv, d_req,
+                     atomic_load(&aio_metrics->connections_active),
+                     atomic_load(&aio_metrics->connections_idle),
+                     atomic_load(&aio_metrics->connections_closing));
+        if (n < 0 || n >= end - p) return -1;
+        p += n;
+        metrics_need_comma = true;
+
+        // Update previous metrics for next delta
+        conn->prev_metrics.bytes_sent = bytes_sent;
+        conn->prev_metrics.bytes_recv = bytes_recv;
+        conn->prev_metrics.requests_total = requests;
+        conn->prev_metrics.connections_total = atomic_load(&aio_metrics->connections_total);
+      }
     }
+
+    // Modular metrics delta (counters, gauges, histograms)
+    if (has_modular_metric_changes && modular_delta) {
+      // Use valk_delta_to_json to encode the modular metrics delta
+      char modular_buf[32768];
+      size_t modular_len = valk_delta_to_json(modular_delta, modular_buf, sizeof(modular_buf));
+      if (modular_len > 0 && modular_len < sizeof(modular_buf)) {
+        n = snprintf(p, end - p, "%s\"modular\":%s",
+                     metrics_need_comma ? "," : "", modular_buf);
+        if (n < 0 || n >= end - p) return -1;
+        p += n;
+      }
+    }
+
+    n = snprintf(p, end - p, "}");  // Close metrics
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
   }
+#else
+  (void)modular_delta;
 #endif
 
   // Close JSON and add SSE empty line
@@ -1397,6 +1428,305 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
   p += n;
 
   return p - buf;
+}
+
+// ============================================================================
+// Fresh State JSON (for /debug/metrics/state endpoint)
+// ============================================================================
+
+// Get fresh diagnostics state as JSON (for /debug/metrics/state endpoint)
+// Returns bytes written, or -1 on error
+// This is similar to valk_diag_snapshot_to_sse but WITHOUT SSE framing
+int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_size) {
+  char *p = buf;
+  char *end = buf + buf_size;
+  int n;
+
+  // Collect snapshot
+  valk_mem_snapshot_t snapshot = {0};
+  valk_mem_snapshot_collect(&snapshot, aio);
+
+  // Start JSON object (NO SSE framing)
+  n = snprintf(p, end - p, "{");
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  // ===== Memory section =====
+  n = snprintf(p, end - p, "\"memory\":{");
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  // Slabs array
+  n = snprintf(p, end - p, "\"slabs\":[");
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  for (size_t i = 0; i < snapshot.slab_count; i++) {
+    if (i > 0) {
+      n = snprintf(p, end - p, ",");
+      if (n < 0 || n >= end - p) goto cleanup;
+      p += n;
+    }
+
+    valk_slab_snapshot_t *slab = &snapshot.slabs[i];
+
+    if (slab->has_slot_diag && slab->slots) {
+      // RLE-encoded state string
+      size_t rle_buf_size = slab->total_slots * 8 + 1;
+      char *states = malloc(rle_buf_size);
+      if (!states) goto cleanup;
+      slots_to_rle_string(slab->slots, slab->total_slots, states, rle_buf_size);
+
+      char by_owner_buf[512] = {0};
+      char *bp = by_owner_buf;
+      char *bp_end = by_owner_buf + sizeof(by_owner_buf);
+      int bn = snprintf(bp, bp_end - bp, "{");
+      if (bn > 0) bp += bn;
+      for (size_t j = 0; j < slab->owner_count && bp < bp_end - 64; j++) {
+        if (j > 0) {
+          bn = snprintf(bp, bp_end - bp, ",");
+          if (bn > 0) bp += bn;
+        }
+        bn = snprintf(bp, bp_end - bp, "\"%u\":{\"A\":%zu,\"I\":%zu,\"C\":%zu}",
+                      slab->by_owner[j].owner_idx,
+                      slab->by_owner[j].active,
+                      slab->by_owner[j].idle,
+                      slab->by_owner[j].closing);
+        if (bn > 0) bp += bn;
+      }
+      snprintf(bp, bp_end - bp, "}");
+
+      n = snprintf(p, end - p,
+                   "{\"name\":\"%s\",\"total\":%zu,\"used\":%zu,"
+                   "\"states\":\"%s\","
+                   "\"summary\":{\"A\":%zu,\"I\":%zu,\"C\":%zu,\"by_owner\":%s},"
+                   "\"by_type\":{\"tcp\":%zu,\"task\":%zu,\"timer\":%zu,\"http\":%zu},"
+                   "\"overflow\":%zu}",
+                   slab->name, slab->total_slots, slab->used_slots,
+                   states,
+                   slab->by_state.active, slab->by_state.idle, slab->by_state.closing,
+                   by_owner_buf,
+                   slab->by_type.tcp_listeners, slab->by_type.tasks,
+                   slab->by_type.timers, slab->by_type.http_conns,
+                   slab->overflow_count);
+
+      free(states);
+    } else {
+      // Simple bitmap slab with RLE encoding
+      size_t rle_buf_size = slab->bitmap_bytes * 4 + 1;
+      char *hex = malloc(rle_buf_size);
+      if (!hex) goto cleanup;
+
+      if (slab->bitmap) {
+        bitmap_to_rle_hex(slab->bitmap, slab->bitmap_bytes, hex, rle_buf_size);
+      } else {
+        hex[0] = '\0';
+      }
+
+      n = snprintf(p, end - p,
+                   "{\"name\":\"%s\",\"bitmap\":\"%s\",\"total\":%zu,\"used\":%zu,"
+                   "\"overflow\":%zu}",
+                   slab->name, hex, slab->total_slots, slab->used_slots,
+                   slab->overflow_count);
+
+      free(hex);
+    }
+
+    if (n < 0 || n >= end - p) goto cleanup;
+    p += n;
+  }
+
+  n = snprintf(p, end - p, "],");
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  // Arenas array
+  n = snprintf(p, end - p, "\"arenas\":[");
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  for (size_t i = 0; i < snapshot.arena_count; i++) {
+    if (i > 0) {
+      n = snprintf(p, end - p, ",");
+      if (n < 0 || n >= end - p) goto cleanup;
+      p += n;
+    }
+
+    n = snprintf(
+        p, end - p,
+        "{\"name\":\"%s\",\"used\":%zu,\"capacity\":%zu,\"hwm\":%zu,"
+        "\"overflow\":%zu}",
+        snapshot.arenas[i].name, snapshot.arenas[i].used_bytes,
+        snapshot.arenas[i].capacity_bytes,
+        snapshot.arenas[i].high_water_mark,
+        snapshot.arenas[i].overflow_fallbacks);
+
+    if (n < 0 || n >= end - p) goto cleanup;
+    p += n;
+  }
+
+  n = snprintf(p, end - p, "],");
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  // GC heap stats
+  n = snprintf(p, end - p,
+               "\"gc\":{\"allocated\":%zu,\"peak\":%zu,\"threshold\":%zu,"
+               "\"cycles\":%lu,\"emergency\":%zu},",
+               snapshot.gc_heap.allocated_bytes,
+               snapshot.gc_heap.peak_usage, snapshot.gc_heap.gc_threshold,
+               snapshot.gc_heap.gc_cycles,
+               snapshot.gc_heap.emergency_collections);
+
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  // Owner map
+  n = snprintf(p, end - p, "\"owner_map\":[");
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  for (size_t i = 0; i < snapshot.owner_count; i++) {
+    if (i > 0) {
+      n = snprintf(p, end - p, ",");
+      if (n < 0 || n >= end - p) goto cleanup;
+      p += n;
+    }
+    n = snprintf(p, end - p, "\"%s\"",
+                 snapshot.owner_map[i] ? snapshot.owner_map[i] : "");
+    if (n < 0 || n >= end - p) goto cleanup;
+    p += n;
+  }
+
+  n = snprintf(p, end - p, "]},");  // Close memory section
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  // ===== Metrics section =====
+#ifdef VALK_METRICS_ENABLED
+  // Collect VM metrics
+  valk_vm_metrics_t vm_metrics = {0};
+  valk_gc_malloc_heap_t *gc_heap = valk_aio_get_gc_heap(aio);
+  uv_loop_t *loop = valk_aio_get_event_loop(aio);
+  valk_vm_metrics_collect(&vm_metrics, gc_heap, loop);
+
+  // Get AIO metrics
+  const valk_aio_metrics_t *aio_metrics = valk_aio_get_metrics(aio);
+
+  // Format metrics section
+  n = snprintf(p, end - p, "\"metrics\":{");
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  // VM metrics subsection
+  n = snprintf(p, end - p,
+               "\"vm\":{\"gc\":{\"cycles_total\":%lu,\"pause_us_total\":%lu,"
+               "\"pause_us_max\":%lu,\"reclaimed_bytes\":%lu,"
+               "\"heap_used_bytes\":%zu,\"heap_total_bytes\":%zu},"
+               "\"interpreter\":{\"evals_total\":%lu,\"function_calls\":%lu,"
+               "\"builtin_calls\":%lu,\"stack_depth_max\":%u,"
+               "\"closures_created\":%lu,\"env_lookups\":%lu},"
+               "\"event_loop\":{\"iterations\":%lu,\"events_processed\":%lu,"
+               "\"idle_time_us\":%lu}},",
+               vm_metrics.gc_cycles, vm_metrics.gc_pause_us_total,
+               vm_metrics.gc_pause_us_max, vm_metrics.gc_reclaimed_bytes,
+               vm_metrics.gc_heap_used, vm_metrics.gc_heap_total,
+               vm_metrics.eval_total, vm_metrics.function_calls,
+               vm_metrics.builtin_calls, vm_metrics.stack_depth_max,
+               vm_metrics.closures_created, vm_metrics.env_lookups,
+               vm_metrics.loop_count, vm_metrics.events_processed,
+               vm_metrics.idle_time_us);
+
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  // AIO metrics subsection
+  if (aio_metrics) {
+    // Calculate uptime
+    uint64_t now_us = (uint64_t)(uv_hrtime() / 1000);
+    double uptime_seconds = (double)(now_us - aio_metrics->start_time_us) / 1000000.0;
+
+    n = snprintf(p, end - p,
+                 "\"aio\":{\"uptime_seconds\":%.2f,"
+                 "\"connections\":{\"total\":%lu,\"active\":%lu,\"failed\":%lu,"
+                 "\"idle\":%lu,\"closing\":%lu,\"connecting\":%lu},"
+                 "\"streams\":{\"total\":%lu,\"active\":%lu},"
+                 "\"requests\":{\"total\":%lu,\"active\":%lu,\"errors\":%lu},"
+                 "\"bytes\":{\"sent\":%lu,\"recv\":%lu}},",
+                 uptime_seconds,
+                 atomic_load(&aio_metrics->connections_total),
+                 atomic_load(&aio_metrics->connections_active),
+                 atomic_load(&aio_metrics->connections_failed),
+                 atomic_load(&aio_metrics->connections_idle),
+                 atomic_load(&aio_metrics->connections_closing),
+                 atomic_load(&aio_metrics->connections_connecting),
+                 atomic_load(&aio_metrics->streams_total),
+                 atomic_load(&aio_metrics->streams_active),
+                 atomic_load(&aio_metrics->requests_total),
+                 atomic_load(&aio_metrics->requests_active),
+                 atomic_load(&aio_metrics->requests_errors),
+                 atomic_load(&aio_metrics->bytes_sent_total),
+                 atomic_load(&aio_metrics->bytes_recv_total));
+
+    if (n < 0 || n >= end - p) goto cleanup;
+    p += n;
+  }
+
+  // Modular metrics (HTTP server counters, gauges, histograms)
+  // Use a heap-allocated buffer since metrics can be large during stress tests
+  size_t modular_buf_size = 131072;  // 128KB for modular metrics
+  char *modular_buf = malloc(modular_buf_size);
+  if (modular_buf) {
+    size_t modular_len = valk_metrics_v2_to_json(&g_metrics, modular_buf, modular_buf_size);
+    // valk_metrics_json returns cap on overflow, or actual length on success
+    if (modular_len > 0 && modular_len < modular_buf_size) {
+      n = snprintf(p, end - p, "\"modular\":%s", modular_buf);
+      if (n < 0 || n >= end - p) {
+        free(modular_buf);
+        goto cleanup;
+      }
+      p += n;
+    } else {
+      // Buffer overflow or empty - use empty object
+      // Log warning on overflow so we know to increase buffer
+      if (modular_len >= modular_buf_size) {
+        VALK_WARN("Modular metrics exceeded %zu byte buffer", modular_buf_size);
+      }
+      n = snprintf(p, end - p, "\"modular\":{}");
+      if (n < 0 || n >= end - p) {
+        free(modular_buf);
+        goto cleanup;
+      }
+      p += n;
+    }
+    free(modular_buf);
+  } else {
+    // Allocation failed - use empty object
+    n = snprintf(p, end - p, "\"modular\":{}");
+    if (n < 0 || n >= end - p) goto cleanup;
+    p += n;
+  }
+
+  n = snprintf(p, end - p, "}");  // Close metrics section
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+#else
+  // Metrics disabled - empty section
+  n = snprintf(p, end - p, "\"metrics\":{}");
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+#endif
+
+  // ===== Timestamp =====
+  uint64_t now_us = (uint64_t)(uv_hrtime() / 1000);
+  n = snprintf(p, end - p, ",\"timestamp_us\":%lu}", now_us);
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+cleanup:
+  valk_mem_snapshot_free(&snapshot);
+  if (n < 0 || n >= end - p) return -1;
+  return (p - buf);
 }
 
 // ============================================================================
@@ -1413,8 +1743,10 @@ static nghttp2_ssize sse_data_read_callback(
 
 // Push diagnostics to a single stream
 // Returns true if data was successfully queued for sending
+// modular_delta: collected once per tick, shared by all streams (NULL if none)
 static bool sse_push_to_stream(valk_sse_diag_conn_t *stream,
-                                valk_mem_snapshot_t *snapshot) {
+                                valk_mem_snapshot_t *snapshot,
+                                valk_delta_snapshot_t *modular_delta) {
   if (!stream || !stream->active || !stream->session) {
     return false;
   }
@@ -1467,8 +1799,9 @@ static bool sse_push_to_stream(valk_sse_diag_conn_t *stream,
   } else {
     // Subsequent events: send delta only (event type: "diagnostics-delta")
     len = valk_diag_delta_to_sse(snapshot, &stream->prev_snapshot, stream,
-                                  stream->aio_system, stream->pending_data,
-                                  SSE_BUFFER_SIZE, ++stream->last_event_id);
+                                  stream->aio_system, modular_delta,
+                                  stream->pending_data, SSE_BUFFER_SIZE,
+                                  ++stream->last_event_id);
 
     if (len > 0) {
       // Update stored snapshot for next comparison
@@ -1540,13 +1873,37 @@ static void sse_push_diagnostics(uv_timer_t *timer) {
   valk_mem_snapshot_t snapshot = {0};
   valk_mem_snapshot_collect(&snapshot, state->aio_system);
 
-  VALK_DEBUG("SSE timer: collected snapshot with %zu slabs, %zu arenas",
-             snapshot.slab_count, snapshot.arena_count);
+  // Collect modular metrics delta once for all streams on this connection
+  // Uses per-connection baseline to avoid race conditions with other connections
+#ifdef VALK_METRICS_ENABLED
+  if (!state->modular_delta_initialized) {
+    valk_delta_snapshot_init(&state->modular_delta);
+    state->modular_delta_initialized = true;
+  }
+  if (!state->modular_baseline) {
+    state->modular_baseline = malloc(sizeof(valk_metrics_baseline_t));
+    if (state->modular_baseline) {
+      valk_metrics_baseline_init(state->modular_baseline);
+    }
+  }
+  size_t modular_changes = 0;
+  if (state->modular_baseline) {
+    modular_changes = valk_delta_snapshot_collect_stateless(
+        &state->modular_delta, &g_metrics, state->modular_baseline);
+  }
+  valk_delta_snapshot_t *modular_delta_ptr = modular_changes > 0 ? &state->modular_delta : NULL;
+#else
+  valk_delta_snapshot_t *modular_delta_ptr = NULL;
+#endif
+
+  VALK_DEBUG("SSE timer: collected snapshot with %zu slabs, %zu arenas, %zu modular changes",
+             snapshot.slab_count, snapshot.arena_count,
+             modular_delta_ptr ? modular_delta_ptr->delta_count : 0);
 
   // Push to each active stream
   bool any_data_sent = false;
   for (valk_sse_diag_conn_t *stream = state->streams; stream; stream = stream->next) {
-    if (sse_push_to_stream(stream, &snapshot)) {
+    if (sse_push_to_stream(stream, &snapshot, modular_delta_ptr)) {
       any_data_sent = true;
     }
   }
@@ -1621,6 +1978,11 @@ static void on_timer_close(uv_handle_t *handle) {
 
   if (!state->timer_handle) {
     VALK_WARN("SSE timer close callback: timer_handle is NULL (double close?)");
+    // Still free modular delta if initialized
+    if (state->modular_delta_initialized) {
+      valk_delta_snapshot_free(&state->modular_delta);
+    }
+    free(state->modular_baseline);
     free(state);
     return;
   }
@@ -1629,10 +1991,16 @@ static void on_timer_close(uv_handle_t *handle) {
   valk_aio_timer_free(state->timer_handle);
   state->timer_handle = NULL;
 
-  // Clear the handle's sse_state pointer
-  if (state->http_handle) {
-    valk_aio_set_sse_state(state->http_handle, NULL);
+  // Note: sse_state was already cleared synchronously in valk_sse_diag_stop()
+  // to prevent race conditions with new connections
+
+  // Free modular delta snapshot if initialized
+  if (state->modular_delta_initialized) {
+    valk_delta_snapshot_free(&state->modular_delta);
   }
+
+  // Free per-connection baseline
+  free(state->modular_baseline);
 
   // Now safe to free the state struct itself
   free(state);
@@ -1782,15 +2150,18 @@ void valk_sse_diag_stop(valk_sse_diag_conn_t *sse_conn) {
   if (!state->streams) {
     VALK_INFO("SSE: last stream closed, stopping timer");
 
+    // Clear sse_state SYNCHRONOUSLY to prevent race with new connections
+    // (new stream might connect before async on_timer_close fires)
+    if (state->http_handle) {
+      valk_aio_set_sse_state(state->http_handle, NULL);
+    }
+
     if (state->timer_handle) {
       valk_aio_timer_stop(state->timer_handle);
-      // The close callback will free state and clear handle's sse_state
+      // The close callback will free state
       valk_aio_timer_close(state->timer_handle, on_timer_close);
     } else {
       // Timer already closed, just free state
-      if (state->http_handle) {
-        valk_aio_set_sse_state(state->http_handle, NULL);
-      }
       free(state);
     }
   }
@@ -1823,6 +2194,12 @@ void valk_sse_diag_stop_all(valk_sse_diag_state_t *state) {
     if (state->http_handle) {
       valk_aio_set_sse_state(state->http_handle, NULL);
     }
+    // Free modular delta if initialized
+    if (state->modular_delta_initialized) {
+      valk_delta_snapshot_free(&state->modular_delta);
+    }
+    // Free per-connection baseline
+    free(state->modular_baseline);
     free(state);
   }
 }

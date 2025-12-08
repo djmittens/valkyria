@@ -282,6 +282,9 @@ valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
 #include "aio_metrics.h"
 #include "gc.h"
 
+// Forward declaration for SSE stream registry (defined in aio_sse_stream_registry.h)
+typedef struct valk_sse_stream_registry valk_sse_stream_registry_t;
+
 // Get metrics from AIO system (returns NULL if metrics not enabled)
 valk_aio_metrics_t* valk_aio_get_metrics(valk_aio_system_t* sys);
 
@@ -296,6 +299,9 @@ void valk_aio_update_queue_stats(valk_aio_system_t* sys);
 
 // Get GC heap from AIO system (returns NULL if metrics not enabled)
 valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
+
+// Get SSE stream registry from AIO system (returns NULL if metrics not enabled)
+valk_sse_stream_registry_t* valk_aio_get_sse_registry(valk_aio_system_t* sys);
 
 // ============================================================================
 // Connection Diagnostics Types (for SSE memory diagnostics)

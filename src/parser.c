@@ -18,10 +18,9 @@
 #ifdef VALK_METRICS_ENABLED
 #include "aio_metrics.h"
 #include "aio_sse.h"
-#include "metrics.h"
 #include "metrics_v2.h"
 #include "metrics_delta.h"
-// Forward declare metrics builtins registration
+// Forward declare metrics builtins registration (from metrics_builtins.c)
 void valk_register_metrics_builtins(valk_lenv_t *env);
 #endif
 
@@ -4115,75 +4114,6 @@ static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
 // module: (module value) -> value; captures as VALK_LAST_MODULE
 // (no module/program builtins; use VALK_LAST_VALUE set by `load`)
 
-#ifdef VALK_METRICS_ENABLED
-
-// (metrics/json) -> string
-// Returns JSON representation of all metrics
-static valk_lval_t* builtin_metrics_json(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 0);
-
-  char buf[65536];
-  size_t len = valk_metrics_json(buf, sizeof(buf));
-  return valk_lval_str_n(buf, len);
-}
-
-// (metrics/prometheus) -> string
-// Returns Prometheus format representation of all metrics
-static valk_lval_t* builtin_metrics_prometheus(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 0);
-
-  char buf[65536];
-  size_t len = valk_metrics_prometheus(buf, sizeof(buf));
-  return valk_lval_str_n(buf, len);
-}
-
-// (metrics/counter-inc "name" "key1" "val1" "key2" "val2" ...) -> nil
-// Increments a counter with optional labels
-static valk_lval_t* builtin_metrics_counter_inc(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_GE(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
-
-  const char* name = valk_lval_list_nth(a, 0)->str;
-
-  // Build label arrays from remaining args (must be pairs)
-  size_t remaining_args = valk_lval_list_count(a) - 1;
-  if (remaining_args % 2 != 0) {
-    LVAL_RAISE(a, "metrics/counter-inc: labels must be key-value pairs");
-  }
-
-  size_t label_count = remaining_args / 2;
-  if (label_count > VALK_METRICS_MAX_LABELS) {
-    LVAL_RAISE(a, "metrics/counter-inc: too many labels (max %d)",
-               VALK_METRICS_MAX_LABELS);
-  }
-
-  const char* keys[VALK_METRICS_MAX_LABELS];
-  const char* vals[VALK_METRICS_MAX_LABELS];
-
-  for (size_t i = 0; i < label_count; i++) {
-    valk_lval_t* key = valk_lval_list_nth(a, 1 + i * 2);
-    valk_lval_t* val = valk_lval_list_nth(a, 2 + i * 2);
-
-    LVAL_ASSERT_TYPE(a, key, LVAL_STR);
-    LVAL_ASSERT_TYPE(a, val, LVAL_STR);
-
-    keys[i] = key->str;
-    vals[i] = val->str;
-  }
-
-  valk_counter_t* c = valk_metric_counter_labels(name, keys, vals, label_count);
-  if (c) {
-    valk_counter_inc(c);
-  }
-
-  return valk_lval_nil();
-}
-
-#endif // VALK_METRICS_ENABLED
-
 void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
   valk_lenv_put_builtin(env, "error?", valk_builtin_error_p);
@@ -4320,13 +4250,6 @@ void valk_lenv_builtins(valk_lenv_t* env) {
 
   // Logging configuration
   valk_lenv_put_builtin(env, "sys/log/set-level", valk_builtin_set_log_level);
-
-#ifdef VALK_METRICS_ENABLED
-  // Metrics system builtins
-  valk_lenv_put_builtin(env, "metrics/json", builtin_metrics_json);
-  valk_lenv_put_builtin(env, "metrics/prometheus", builtin_metrics_prometheus);
-  valk_lenv_put_builtin(env, "metrics/counter-inc", builtin_metrics_counter_inc);
-#endif
 
   // NOTE: checkpoint is NOT exposed to user code. It can only be called at safe
   // points (between top-level expressions) by the runtime. Calling checkpoint

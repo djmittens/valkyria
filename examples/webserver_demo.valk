@@ -274,18 +274,8 @@
 (println "  • Monitors: main application server metrics")
 
 ; Debug handler that monitors the main app server
-(def {debug-handler}
-  (\ {req} {
-    ; Extract request path
-    (= {path} (plist/get req (head {:path})))
-    ; Route to appropriate debug endpoint (monitoring the main 'sys')
-    (select
-      {(or (== path "/debug") (== path "/debug/")) `{:status "200" :content-type "text/html; charset=utf-8" :body ,aio/debug-html-content}}
-      {(== path "/debug/metrics") `{:status "200" :content-type "application/json" :body ,(aio/debug-merge-metrics-json sys)}}
-      {(== path "/metrics") `{:status "200" :content-type "text/plain; version=0.0.4" :body ,(aio/debug-merge-metrics-prometheus sys)}}
-      {(== path "/debug/diagnostics/memory") `{:status "200" :content-type "text/event-stream; charset=utf-8" :cache-control "no-cache" :connection "keep-alive" :body-type :sse-stream :sse-handler :memory-diagnostics}}
-      {otherwise `{:status "200" :content-type "text/html; charset=utf-8" :body ,(str "<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"0;url=/debug/\"></head></html>")}})
-  }))
+; Use the shared handler from debug.valk (includes all routes like /debug/metrics/state)
+(def {debug-handler} (aio/debug-handler sys))
 
 (println "  ✓ Debug handler ready")
 (println "")
