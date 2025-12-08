@@ -964,10 +964,16 @@ main[role="main"] {
   padding: 0 4px;
 }
 
-.conn-legend {
+/* ===== UNIFIED LEGEND STYLES ===== */
+/* Base legend - used by conn-legend, slab-state-legend, breakdown-by-state, etc. */
+.legend,
+.conn-legend,
+.slab-state-legend,
+.breakdown-by-state,
+.memory-legend-inline,
+.owner-bar-legend {
   display: flex;
   gap: var(--space-md);
-  margin-top: var(--space-sm);
   font-size: 11px;
   color: var(--text-muted);
 }
@@ -979,64 +985,30 @@ main[role="main"] {
 }
 
 .legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-}
-
-.legend-dot.active { background: var(--color-ok); }
-.legend-dot.idle { background: var(--color-info-muted); }
-.legend-dot.closing { background: var(--color-warning); }
-.legend-dot.free { background: rgba(255, 255, 255, 0.15); }
-.legend-dot.used { background: var(--color-ok); }
-.legend-dot.flash { background: var(--color-warning); }
-
-/* ===== CONNECTION POOL MINI-GRID ===== */
-.conn-pool-mini {
-  display: grid;
-  grid-template-columns: repeat(50, 1fr);
-  gap: 1px;
-  height: 16px;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-sm);
-  margin-top: var(--space-sm);
-  padding: 2px;
-}
-
-.conn-pool-slot {
-  border-radius: 1px;
-  background: var(--bg-elevated);
-  transition: background-color 0.2s ease;
-}
-
-.conn-pool-slot.active { background: var(--color-ok); }
-.conn-pool-slot.idle { background: var(--color-info-muted); }
-.conn-pool-slot.closing { background: var(--color-warning); }
-
-.conn-pool-mini-legend {
-  display: flex;
-  justify-content: center;
-  gap: var(--space-lg);
-  margin-top: var(--space-xs);
-  font-size: 10px;
-  color: var(--text-muted);
-}
-
-.conn-pool-mini-legend .legend-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.conn-pool-mini-legend .legend-dot {
   width: 8px;
   height: 8px;
   border-radius: 2px;
 }
 
-.conn-pool-mini-legend .legend-dot.active { background: var(--color-ok); }
-.conn-pool-mini-legend .legend-dot.idle { background: var(--color-info-muted); }
-.conn-pool-mini-legend .legend-dot.closing { background: var(--color-warning); }
+/* State colors - unified across all grids */
+.legend-dot.active { background: var(--color-ok); }
+.legend-dot.idle { background: var(--color-info-muted); }
+.legend-dot.closing { background: var(--color-warning); }
+.legend-dot.free {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+}
+.legend-dot.used { background: var(--color-ok); }
+.legend-dot.flash { background: var(--color-warning); }
+
+/* Legend context-specific spacing */
+.conn-legend { margin-top: var(--space-sm); }
+.slab-state-legend { margin-top: var(--space-sm); }
+.memory-legend-inline {
+  padding-top: var(--space-sm);
+  border-top: 1px dashed var(--border-muted);
+  font-size: 10px;
+}
 
 /* ===== SPARKLINE ===== */
 .sparkline-container {
@@ -1157,17 +1129,7 @@ main[role="main"] {
 
 .pool-item:last-child { margin-bottom: 0; }
 
-.pool-header {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: var(--space-xs);
-}
-
-.pool-name {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
+/* pool-header and pool-name use unified slab/pool styles */
 
 .pool-usage {
   font-size: 12px;
@@ -1505,7 +1467,9 @@ main[role="main"] {
   margin-bottom: var(--space-lg);
 }
 
-.memory-slab-panel {
+/* ===== UNIFIED SLAB/POOL PANEL STYLES ===== */
+.memory-slab-panel,
+.resource-pool-panel {
   background: var(--bg-secondary);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -1518,14 +1482,18 @@ main[role="main"] {
   border-color: var(--color-warning);
 }
 
-.slab-header {
+/* Unified slab/pool header */
+.slab-header,
+.pool-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: var(--space-sm);
 }
 
-.slab-name {
+/* Unified slab/pool name */
+.slab-name,
+.pool-name {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-muted);
@@ -1546,7 +1514,9 @@ main[role="main"] {
   color: var(--color-warning);
 }
 
-.slab-canvas {
+/* ===== UNIFIED SLAB/POOL GRID STYLES ===== */
+.slab-canvas,
+.pool-grid-container {
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   position: relative;
@@ -1556,9 +1526,17 @@ main[role="main"] {
 
 .slab-grid {
   display: flex;
+  background: var(--bg-primary);
   flex-wrap: wrap;
   gap: 1px;
   padding: 2px;
+}
+
+/* pool-grid: container already has padding/bg, grid just needs flex layout */
+.pool-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
 }
 
 .slab-cell {
@@ -1569,7 +1547,8 @@ main[role="main"] {
 }
 
 .slab-cell.free {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .slab-cell.used {
@@ -1616,30 +1595,7 @@ main[role="main"] {
   background: var(--color-warning-muted);
 }
 
-/* State summary legend in slab panels */
-.slab-state-legend {
-  display: flex;
-  gap: var(--space-md);
-  margin-top: var(--space-sm);
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.slab-state-legend .legend-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.slab-state-legend .legend-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-}
-
-.slab-state-legend .legend-dot.active { background: var(--color-ok); }
-.slab-state-legend .legend-dot.idle { background: var(--color-info-muted); }
-.slab-state-legend .legend-dot.closing { background: var(--color-warning); }
+/* State summary legend in slab panels - uses unified legend styles */
 
 /* ===== HANDLE TYPE BREAKDOWN (inline) ===== */
 .handle-type-breakdown {
@@ -1880,29 +1836,15 @@ main[role="main"] {
   font-weight: 600;
 }
 
-/* Legend */
-.legend {
-  display: flex;
-  gap: var(--space-lg);
+/* Legend - base styles in UNIFIED LEGEND STYLES section */
+/* Context-specific legend spacing */
+.legend.arena-legend {
   margin-top: var(--space-lg);
   padding-top: var(--space-md);
   border-top: 1px solid var(--border-default);
 }
 
-.legend-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.legend-dot.free {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-default);
-}
-.legend-dot.used { background: var(--color-ok); }
-.legend-dot.flash { background: var(--color-warning); }
+/* Additional legend dot variants */
 .legend-dot.hwm {
   background: var(--color-warning);
   width: 2px;
@@ -2020,27 +1962,7 @@ main[role="main"] {
   padding: 0;
 }
 
-/* Inline Memory Legend */
-.memory-legend-inline {
-  display: flex;
-  gap: var(--space-md);
-  padding-top: var(--space-sm);
-  border-top: 1px dashed var(--border-muted);
-  font-size: 10px;
-}
-
-.memory-legend-inline .legend-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-  color: var(--text-muted);
-}
-
-.memory-legend-inline .legend-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-}
+/* Inline Memory Legend - uses unified legend styles */
 
 /* Slab type badge */
 .slab-type-badge {
@@ -2324,51 +2246,22 @@ main[role="main"] {
   grid-column: 1 / -1;
 }
 
-/* ===== RESOURCE POOL PANEL (Connection Grid) ===== */
+/* ===== RESOURCE POOL PANEL (extends memory-slab-panel) ===== */
 .resource-pool-panel {
   background: var(--bg-tertiary);
-  border: 1px solid var(--border-muted);
-  border-radius: var(--radius-md);
-  padding: var(--space-md);
+  border-color: var(--border-muted);
   margin-bottom: var(--space-md);
 }
 
-.resource-pool-panel .pool-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--space-sm);
-}
-
-.resource-pool-panel .pool-name {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
+/* pool-header uses slab-header, pool-name uses slab-name */
 .resource-pool-panel .pool-usage {
-  font-size: 11px;
-  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
+/* pool-grid-container extends slab-canvas with different background */
 .pool-grid-container {
   background: var(--bg-primary);
-  border-radius: var(--radius-sm);
-  padding: 2px;
   margin-bottom: var(--space-sm);
-}
-
-.pool-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1px;
-}
-
-.pool-grid .slab-cell {
-  width: 5px;
-  height: 5px;
-  border-radius: 1px;
 }
 
 /* ===== POOL BREAKDOWN (State + Owner) ===== */
@@ -2381,24 +2274,7 @@ main[role="main"] {
   border-top: 1px dashed var(--border-muted);
 }
 
-.breakdown-by-state {
-  display: flex;
-  gap: var(--space-md);
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.breakdown-by-state .legend-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.breakdown-by-state .legend-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-}
+/* breakdown-by-state uses unified legend styles */
 
 .breakdown-by-owner,
 .pool-breakdown .owner-breakdown {
@@ -2430,24 +2306,16 @@ main[role="main"] {
   transition: width 0.3s ease;
 }
 
+/* owner-bar-legend extends unified legend styles */
 .owner-bar-legend {
-  display: flex;
   flex-wrap: wrap;
   gap: 4px 8px;
   font-size: 10px;
 }
 
-.owner-bar-legend .legend-item {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  color: var(--text-muted);
-}
-
 .owner-bar-legend .legend-dot {
   width: 6px;
   height: 6px;
-  border-radius: 2px;
 }
 
 .owner-bar-legend .owner-label {

@@ -194,8 +194,9 @@
     (= {path} (plist/get req (head {:path})))
     (= {start} (time-us))
 
-    ; Log request
-    (metrics/counter-inc "http_demo_requests_total" "method" method "path" path)
+    ; Log request - create counter with labels, then increment
+    (= {counter} (metrics/counter "http_demo_requests_total" "method" method "path" path))
+    (metrics/counter-inc counter)
     (printf "┌─ %s %s (%dµs)\n└─\n" method path (- (time-us) start))
 
     ; Route based on path

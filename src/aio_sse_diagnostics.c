@@ -388,6 +388,14 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
   } while(0)
 
   // TCP Buffers (simple bitmap)
+  {
+    valk_slab_t *tcp_slab = valk_aio_get_tcp_buffer_slab(aio);
+    if (tcp_slab) {
+      size_t numFree = __atomic_load_n(&tcp_slab->numFree, __ATOMIC_ACQUIRE);
+      VALK_DEBUG("TCP buffer slab: numItems=%zu, numFree=%zu, expected_used=%zu",
+                 tcp_slab->numItems, numFree, tcp_slab->numItems - numFree);
+    }
+  }
   ADD_SLAB(valk_aio_get_tcp_buffer_slab, "tcp_buffers");
 
   // Handle Slab - use per-slot diagnostics for connection state tracking
@@ -408,6 +416,14 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
   }
 
   // Stream Arenas (simple bitmap)
+  {
+    valk_slab_t *arena_slab = valk_aio_get_stream_arenas_slab(aio);
+    if (arena_slab) {
+      size_t numFree = __atomic_load_n(&arena_slab->numFree, __ATOMIC_ACQUIRE);
+      VALK_DEBUG("Stream arena slab: numItems=%zu, numFree=%zu, expected_used=%zu",
+                 arena_slab->numItems, numFree, arena_slab->numItems - numFree);
+    }
+  }
   ADD_SLAB(valk_aio_get_stream_arenas_slab, "stream_arenas");
 
   // HTTP Servers

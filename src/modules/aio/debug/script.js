@@ -1416,6 +1416,7 @@
       this.reconnectAttempts = 0;
       this.maxReconnectAttempts = 10;
       this.lastEventId = null;
+      this.isClosing = false;  // Flag to suppress errors during page unload
 
       // DOM references
       this.grids = {};
@@ -1552,6 +1553,9 @@
         };
 
         self.eventSource.onerror = function(e) {
+          // Suppress errors during intentional close (page reload/unload)
+          if (self.isClosing) return;
+
           if (self.eventSource.readyState === EventSource.CLOSED) {
             self.updateConnectionStatus(false);
             self.scheduleReconnect();
@@ -1579,6 +1583,14 @@
         // Apply slab deltas
         if (delta.memory.slabs) {
           delta.memory.slabs.forEach(function(deltaSlab) {
+            // Debug: log delta for bitmap slabs
+            if (deltaSlab.name === 'tcp_buffers' || deltaSlab.name === 'stream_arenas') {
+              console.log('[MemDiag] Delta received for:', deltaSlab.name,
+                'has_bitmap:', deltaSlab.bitmap !== undefined,
+                'used:', deltaSlab.used,
+                'bitmap_sample:', deltaSlab.bitmap ? deltaSlab.bitmap.substring(0, 30) : 'none');
+            }
+
             // Find matching slab in full state
             var fullSlab = null;
             for (var i = 0; i < mem.slabs.length; i++) {
@@ -2014,7 +2026,10 @@
         grids.push(legacyGrid);
       }
 
-      if (grids.length === 0) return;
+      if (grids.length === 0) {
+        console.warn('[MemDiag] No grid found for slab:', slab.name, 'selector:', selector);
+        return;
+      }
 
       // Update each grid (typically just one per slab type)
       var self = this;
@@ -2050,6 +2065,14 @@
       } else {
         // Binary bitmap for simple slabs
         var bitmap = this.hexToBitArray(slab.bitmap, slab.total);
+        // Debug: log bitmap updates for tcp_buffers and stream_arenas
+        if (slab.name === 'tcp_buffers' || slab.name === 'stream_arenas') {
+          var usedCount = bitmap.filter(function(b) { return b === 1; }).length;
+          console.log('[MemDiag] Bitmap update:', slab.name,
+            'used:', slab.used, 'total:', slab.total,
+            'bitmap_len:', bitmap.length, 'bitmap_used:', usedCount,
+            'bitmap_sample:', slab.bitmap ? slab.bitmap.substring(0, 30) : 'null');
+        }
         requestAnimationFrame(function() {
           if (slab.total > 5000) {
             self.renderAggregatedGrid(grid, bitmap, slab.total, prevStates);
@@ -2524,6 +2547,7 @@
 
     disconnect() {
       if (this.eventSource) {
+        this.isClosing = true;
         this.eventSource.close();
         this.eventSource = null;
       }
@@ -2535,6 +2559,14 @@
   document.addEventListener('DOMContentLoaded', function() {
     memoryDiagnostics = new MemoryDiagnostics();
     memoryDiagnostics.connect();
+  });
+
+  // Clean up EventSource on page unload to prevent connection errors
+  window.addEventListener('beforeunload', function() {
+    if (memoryDiagnostics && memoryDiagnostics.eventSource) {
+      memoryDiagnostics.isClosing = true;
+      memoryDiagnostics.eventSource.close();
+    }
   });
 
   // ==================== Keyboard Shortcuts ====================
