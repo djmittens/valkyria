@@ -1041,6 +1041,11 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
     valk_mem_arena_t *stream_arena = (valk_mem_arena_t *)arena_item->data;
     valk_mem_arena_init(stream_arena, conn->http.server->sys->config.arena_size);
 
+    // Track arena allocation for debugging
+    size_t arena_num_free = __atomic_load_n(&conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
+    VALK_INFO("Arena ACQUIRED for stream %d (slot=%zu, now %zu free)",
+              frame->hd.stream_id, arena_item->handle & 0xFFFFFFFF, arena_num_free);
+
 #ifdef VALK_METRICS_ENABLED
     // Track arena acquisition
     valk_aio_system_stats_on_arena_acquire(&conn->http.server->sys->system_stats);
@@ -1316,7 +1321,10 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
       // We no longer rely on req->sse_entry for cleanup; instead on_stream_close
       // looks up the entry by (handle, stream_id) in the registry.
       if (req->arena_slab_item) {
+        size_t slot = req->arena_slab_item->handle & 0xFFFFFFFF;
         valk_slab_release(req->conn->http.server->sys->httpStreamArenas, req->arena_slab_item);
+        size_t arena_num_free = __atomic_load_n(&req->conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
+        VALK_INFO("Arena RELEASED (SSE) for stream %d (slot=%zu, now %zu free)", stream_id, slot, arena_num_free);
         req->arena_slab_item = NULL;
         req->stream_arena = NULL;
       }
@@ -1584,8 +1592,10 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
 #ifdef VALK_METRICS_ENABLED
     valk_aio_system_stats_on_arena_release(&conn->http.server->sys->system_stats);
 #endif
+    size_t slot = req->arena_slab_item->handle & 0xFFFFFFFF;
     valk_slab_release(conn->http.server->sys->httpStreamArenas, req->arena_slab_item);
-    VALK_DEBUG("Stream %d closed, arena released", stream_id);
+    size_t arena_num_free = __atomic_load_n(&conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
+    VALK_INFO("Arena RELEASED (stream close) for stream %d (slot=%zu, now %zu free)", stream_id, slot, arena_num_free);
   }
 
   conn->http.active_streams--;
