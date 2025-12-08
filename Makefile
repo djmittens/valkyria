@@ -106,6 +106,12 @@ test: build
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f build/test_eval_metrics ]; then \
 		build/test_eval_metrics || exit 1; \
 	fi &&\
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f build/test_sse_diagnostics ]; then \
+		build/test_sse_diagnostics || exit 1; \
+	fi &&\
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f build/test_sse ]; then \
+		build/test_sse || exit 1; \
+	fi &&\
 	if [ "$(VALK_METRICS)" = "1" ]; then \
 		build/valk test/test_metrics.valk || exit 1; \
 	fi &&\

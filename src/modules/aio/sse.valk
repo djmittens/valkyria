@@ -1,0 +1,95 @@
+; src/modules/aio/sse.valk
+; Server-Sent Events (SSE) high-level utilities
+; Load with: (load "src/modules/aio/sse.valk")
+;
+; This module provides high-level wrappers around the low-level SSE builtins
+; for creating and managing Server-Sent Events streams in HTTP/2 handlers.
+;
+; Core builtins provided by C layer:
+;   sse/open      - Create SSE stream (must be called in HTTP handler context)
+;   sse/send      - Send event data (with optional event type)
+;   sse/close     - Close SSE stream
+;   sse/writable? - Check if stream can accept more events (backpressure)
+;   sse/on-drain  - Register callback for when queue drains
+;   sse/on-close  - Register callback for when stream closes
+;
+; High-level utilities provided by this module:
+;   sse/create       - Alias for sse/open
+;   sse/message      - Send simple message event
+;   sse/event        - Send named event
+;   sse/json         - Send JSON-encoded message
+;   sse/json-event   - Send JSON-encoded named event
+;   sse/handler      - Create SSE endpoint handler wrapper
+
+; Alias for sse/open - more semantic name for creating streams
+(def {sse/create} sse/open)
+
+; Send a simple message event (default "message" event type)
+; Usage: (sse/message stream "hello world")
+; Arguments:
+;   stream - SSE stream handle from sse/open
+;   data   - String data to send
+; Returns: Number of bytes sent or error
+(fun {sse/message stream data}
+  {sse/send stream data})
+
+; Send a named event with specific event type
+; Usage: (sse/event stream "update" "{\"count\": 42}")
+; Arguments:
+;   stream     - SSE stream handle from sse/open
+;   event-type - Event type name (string)
+;   data       - String data to send
+; Returns: Number of bytes sent or error
+(fun {sse/event stream event-type data}
+  {sse/send stream event-type data})
+
+; Send JSON-encoded data as a message event
+; Usage: (sse/json stream {:count 42 :status "ok"})
+; Arguments:
+;   stream - SSE stream handle from sse/open
+;   data   - Value to JSON-encode and send
+; Returns: Number of bytes sent or error
+(fun {sse/json stream data}
+  {sse/send stream (json/encode data)})
+
+; Send JSON-encoded data with specific event type
+; Usage: (sse/json-event stream "update" {:count 42})
+; Arguments:
+;   stream     - SSE stream handle from sse/open
+;   event-type - Event type name (string)
+;   data       - Value to JSON-encode and send
+; Returns: Number of bytes sent or error
+(fun {sse/json-event stream event-type data}
+  {sse/send stream event-type (json/encode data)})
+
+; Create an SSE endpoint handler wrapper
+; Usage: (def {my-handler} (sse/handler (fn {stream req} ...)))
+; The body-fn receives the SSE stream and the request object.
+; The handler automatically:
+;   1. Opens the SSE stream
+;   2. Calls the body function with stream and request
+;   3. Returns :deferred to keep the connection open
+; Arguments:
+;   body-fn - Function taking (stream req) to handle SSE logic
+; Returns: HTTP handler function suitable for routing
+;
+; Example:
+;   (def {events-handler}
+;     (sse/handler (fn {stream req}
+;       {
+;         (sse/message stream "Connected!")
+;         ; Set up periodic updates, event handlers, etc.
+;       })))
+;
+;   ; Use in router:
+;   (match path
+;     "/events" (events-handler req)
+;     ...)
+(fun {sse/handler body-fn}
+  {\ {req}
+    {
+      (= {stream} (sse/open))
+      (body-fn stream req)
+      ; Return deferred - stream stays open until client disconnects
+      :deferred
+    }})

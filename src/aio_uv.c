@@ -26,6 +26,7 @@
 #include "aio.h"
 #include "aio_ssl.h"
 #include "aio_metrics.h"
+#include "aio_sse.h"
 #include "aio_sse_diagnostics.h"
 #include "metrics.h"
 #include "common.h"
@@ -211,6 +212,10 @@ typedef struct valk_aio_handle_t {
     // SSE diagnostics state (shared timer + list of streams)
     // Stored here for cleanup on abrupt disconnect (browser refresh)
     struct valk_sse_diag_state *sse_state;
+
+    // Generic SSE streams (linked list for cleanup on connection close)
+    // These are streams created via sse/open builtin
+    valk_sse_stream_t *sse_streams;
   } http;
 } valk_aio_handle_t;
 
@@ -748,6 +753,13 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
   }
 #endif
 
+  // Clean up generic SSE streams (created via sse/open)
+  // This handles abrupt disconnects (e.g., browser refresh) where
+  // the Lisp GC may not have cleaned up the LVAL_REF yet
+  if (handle->http.sse_streams) {
+    valk_sse_close_all_streams(handle);
+  }
+
   // Clean up SSE diagnostics state if present
   // This handles abrupt disconnects (e.g., browser refresh) where
   // on_stream_close is not called by nghttp2
@@ -774,6 +786,95 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
   }
 
   // Note: handle is freed by slab release in __uv_handle_closed_cb
+}
+
+// ============================================================================
+// SSE Connection Tracking (for generic SSE streams)
+// ============================================================================
+
+// Register stream with connection for cleanup on connection close
+void valk_sse_stream_register(valk_sse_stream_t *stream) {
+  if (!stream || !stream->conn) {
+    return;
+  }
+
+  // Add to head of connection's stream list
+  stream->next = stream->conn->http.sse_streams;
+  stream->conn->http.sse_streams = stream;
+
+  VALK_DEBUG("SSE: registered stream id=%lu with connection", stream->id);
+}
+
+// Unregister stream from connection's stream list
+void valk_sse_stream_unregister(valk_sse_stream_t *stream) {
+  if (!stream || !stream->conn) {
+    return;
+  }
+
+  // Remove from connection's linked list
+  valk_sse_stream_t **pp = &stream->conn->http.sse_streams;
+  while (*pp) {
+    if (*pp == stream) {
+      *pp = stream->next;
+      stream->next = NULL;
+      VALK_DEBUG("SSE: unregistered stream id=%lu from connection", stream->id);
+      return;
+    }
+    pp = &(*pp)->next;
+  }
+
+  VALK_WARN("SSE: stream id=%lu not found in connection's stream list", stream->id);
+}
+
+// Close all SSE streams on a connection (called on connection close)
+void valk_sse_close_all_streams(valk_aio_handle_t *conn) {
+  if (!conn) {
+    return;
+  }
+
+  valk_sse_stream_t *stream = conn->http.sse_streams;
+  size_t count = 0;
+
+  while (stream) {
+    valk_sse_stream_t *next = stream->next;
+
+    // Mark as closed and free resources, but don't call unregister
+    // (we're clearing the list, so no need to unlink)
+    stream->state = VALK_SSE_CLOSED;
+
+    // Free queued events
+    valk_sse_event_t *event = stream->queue_head;
+    while (event) {
+      valk_sse_event_t *next_event = event->next;
+      // Free event - the event struct includes the data buffer inline
+      free(event);
+      event = next_event;
+    }
+
+    // Free pending buffer
+    if (stream->pending_data) {
+      free(stream->pending_data);
+      stream->pending_data = NULL;
+    }
+
+    // Call on_close callback if set
+    if (stream->on_close) {
+      stream->on_close(stream, stream->user_data);
+    }
+
+    // Free the stream struct
+    free(stream);
+
+    stream = next;
+    count++;
+  }
+
+  // Clear the list
+  conn->http.sse_streams = NULL;
+
+  if (count > 0) {
+    VALK_INFO("SSE: closed %zu streams on connection cleanup", count);
+  }
 }
 
 static void __uv_handle_closed_cb(uv_handle_t *handle) {
@@ -1185,11 +1286,13 @@ static valk_lval_t* __http_qexpr_get(valk_lval_t* qexpr, const char* key) {
 static int __http_send_response(nghttp2_session *session, int stream_id,
                                  valk_lval_t* response_qexpr, valk_mem_arena_t* arena) {
 #ifdef VALK_METRICS_ENABLED
-  // Check for SSE stream body type
+  // Check for SSE diagnostics stream (legacy pattern)
+  // Note: Generic SSE streams use sse/open builtin which submits headers directly
+  // and returns :deferred to avoid this code path entirely
   valk_lval_t* body_type_val = __http_qexpr_get(response_qexpr, ":body-type");
   if (body_type_val && LVAL_TYPE(body_type_val) == LVAL_SYM &&
       strcmp(body_type_val->str, ":sse-stream") == 0) {
-    // This is an SSE stream request - set up the SSE connection
+    // This is an SSE diagnostics stream - set up the SSE connection
     valk_http2_server_request_t *req =
         nghttp2_session_get_stream_user_data(session, stream_id);
     if (req && req->conn && req->conn->http.server && req->conn->http.server->sys) {
@@ -1528,10 +1631,15 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
       // Clear request context
       current_request_ctx = NULL;
 
-      // Check for deferred response (aio/delay was called - legacy pattern)
+      // Check for deferred response
+      // This is used by:
+      // 1. SSE streams (sse/open submits headers, handler returns :deferred)
+      // 2. Legacy aio/delay pattern (timer callback sends response later)
       if (LVAL_TYPE(response) == LVAL_SYM && strcmp(response->str, ":deferred") == 0) {
-        // Response will be sent later by timer callback
-        // Don't release stream arena yet - it's owned by the timer
+        // Response already sent or will be sent later
+        // For SSE: sse/open already submitted headers, stream stays open
+        // For aio/delay: timer callback will send response later
+        // Don't release stream arena yet - it may be owned by the async handler
         return 0;
       }
 

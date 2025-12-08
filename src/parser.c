@@ -17,7 +17,12 @@
 
 #ifdef VALK_METRICS_ENABLED
 #include "aio_metrics.h"
+#include "aio_sse.h"
 #include "metrics.h"
+#include "metrics_v2.h"
+#include "metrics_delta.h"
+// Forward declare metrics builtins registration
+void valk_register_metrics_builtins(valk_lenv_t *env);
 #endif
 
 // TODO(networking): temp forward declare for debugging
@@ -4283,6 +4288,14 @@ void valk_lenv_builtins(valk_lenv_t* env) {
                         valk_builtin_http2_server_listen);
   valk_lenv_put_builtin(env, "http2/server-handle",
                         valk_builtin_http2_server_handle);
+
+#ifdef VALK_METRICS_ENABLED
+  // SSE (Server-Sent Events) builtins (from aio_sse_builtins.c)
+  valk_register_sse_builtins(env);
+
+  // Metrics V2 builtins (from metrics_builtins.c)
+  valk_register_metrics_builtins(env);
+#endif
 
   // Script classification helpers are implicit via CLI flags; no new builtins
 

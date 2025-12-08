@@ -73,6 +73,7 @@ set(VALKYRIA_SOURCES
   src/aio_uv.c
   src/debug.c
   src/aio_ssl.c
+  src/aio_sse.c
   src/log.c
 )
 
@@ -83,8 +84,14 @@ if(VALK_METRICS)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/metrics.c")
     list(APPEND VALKYRIA_SOURCES src/metrics.c)
   endif()
+  # Metrics V2 - unified registry with delta streaming
+  list(APPEND VALKYRIA_SOURCES src/metrics_v2.c)
+  list(APPEND VALKYRIA_SOURCES src/metrics_delta.c)
+  list(APPEND VALKYRIA_SOURCES src/metrics_builtins.c)
   # SSE diagnostics for memory visualization
   list(APPEND VALKYRIA_SOURCES src/aio_sse_diagnostics.c)
+  # SSE builtins for Lisp API
+  list(APPEND VALKYRIA_SOURCES src/aio_sse_builtins.c)
 endif()
 
 add_library(valkyria ${VALKYRIA_SOURCES})
@@ -192,4 +199,14 @@ if(VALK_METRICS)
   target_link_libraries(test_sse_diagnostics PRIVATE "-lc" valkyria)
   target_compile_definitions(test_sse_diagnostics PRIVATE VALK_METRICS_ENABLED=1)
   include_directories(test_sse_diagnostics src/)
+
+  add_executable(test_sse test/test_sse.c test/testing.c)
+  target_link_libraries(test_sse PRIVATE "-lc" valkyria)
+  target_compile_definitions(test_sse PRIVATE VALK_METRICS_ENABLED=1)
+  include_directories(test_sse src/)
+
+  add_executable(test_metrics_v2 test/test_metrics_v2.c test/testing.c)
+  target_link_libraries(test_metrics_v2 PRIVATE "-lc" valkyria)
+  target_compile_definitions(test_metrics_v2 PRIVATE VALK_METRICS_ENABLED=1)
+  include_directories(test_metrics_v2 src/)
 endif()

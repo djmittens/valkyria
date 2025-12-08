@@ -1,0 +1,123 @@
+; src/modules/aio/metrics-stream.valk
+; Metrics SSE stream handlers for real-time monitoring
+; Load with: (load "src/modules/aio/metrics-stream.valk")
+;
+; This module provides SSE streaming handlers for metrics collection:
+;   - metrics/stream-handler - Periodic metrics delta streaming
+;   - diagnostics/stream-handler - Combined memory + metrics diagnostics
+;
+; These handlers integrate with the metrics collection system to provide
+; efficient delta-based streaming for monitoring dashboards.
+
+; Create a metrics SSE endpoint with configurable interval
+; Usage: (metrics/stream-handler :interval 1000 :include-full true)
+; Arguments:
+;   :interval      - Update interval in milliseconds (default: 1000)
+;   :include-full  - Send full metrics state on first connection (default: true)
+; Returns: HTTP handler function suitable for routing
+;
+; The handler sends metrics deltas at the specified interval. If :include-full
+; is true, it sends a full snapshot on initial connection, then deltas.
+; Each event contains only metrics that changed since the last snapshot.
+;
+; Example:
+;   (def {metrics-handler} (metrics/stream-handler :interval 1000))
+;   ; Use in router:
+;   (match path
+;     "/metrics/stream" (metrics-handler req)
+;     ...)
+(fun {metrics/stream-handler & opts}
+  {
+    ; Parse options with defaults
+    (= {interval} (or (plist/get opts :interval) 1000))
+    (= {include-full} (or (plist/get opts :include-full) true))
+
+    ; Return handler function
+    (\ {req}
+      {
+        ; Open SSE stream
+        (= {stream} (sse/open))
+
+        ; Define callback to send metrics delta
+        (= {send-metrics} (\ {}
+          {
+            ; Collect delta snapshot
+            (= {delta} (metrics/collect-delta))
+            (= {json} (metrics/delta-json delta))
+            ; Only send if there were changes
+            (if (> (delta/changed delta) 0)
+              {sse/send stream "metrics" json}
+              nil)
+          }))
+
+        ; Send initial full state if requested
+        (if include-full
+          {sse/send stream "metrics-full" (metrics/json)}
+          nil)
+
+        ; Start periodic sending
+        (aio/interval interval send-metrics)
+
+        ; Return deferred - stream stays open until client disconnects
+        :deferred
+      })
+  })
+
+; Combined diagnostics stream (memory + metrics)
+; Replaces /debug/diagnostics/memory endpoint with unified diagnostics
+; Usage: (diagnostics/stream-handler req)
+; Arguments:
+;   req - HTTP request object
+; Returns: :deferred to keep connection alive
+;
+; This handler streams combined memory and metrics diagnostics at 10Hz (100ms)
+; for real-time dashboard updates. The first event includes full snapshots,
+; subsequent events include deltas to reduce bandwidth.
+;
+; Event format:
+;   {
+;     :memory {...}      - Memory snapshot or delta
+;     :metrics {...}     - Metrics delta
+;     :timestamp <us>    - Microsecond timestamp
+;   }
+;
+; Example:
+;   (match path
+;     "/debug/diagnostics" (diagnostics/stream-handler req)
+;     ...)
+(fun {diagnostics/stream-handler req}
+  {
+    ; Open SSE stream
+    (= {stream} (sse/open))
+    (= {prev-mem-snapshot} nil)
+
+    ; Define callback to send combined diagnostics
+    (= {send-diagnostics} (\ {}
+      {
+        ; Collect current state
+        (= {mem-snapshot} (memory/snapshot))
+        (= {metrics-delta} (metrics/collect-delta))
+
+        ; Build combined event
+        ; Use delta for memory if we have a previous snapshot, else full
+        (= {event} `{
+          :memory ,(if prev-mem-snapshot
+                      (memory/delta mem-snapshot prev-mem-snapshot)
+                      mem-snapshot)
+          :metrics ,(metrics/delta-json metrics-delta)
+          :timestamp ,(time/now-us)
+        })
+
+        ; Send JSON-encoded event
+        (sse/json-event stream "diagnostics" event)
+
+        ; Update previous snapshot for next delta
+        (= {prev-mem-snapshot} mem-snapshot)
+      }))
+
+    ; 100ms interval (10 Hz) for real-time dashboard
+    (aio/interval 100 send-diagnostics)
+
+    ; Return deferred - stream stays open until client disconnects
+    :deferred
+  })
