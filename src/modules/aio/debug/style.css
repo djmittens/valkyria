@@ -1219,6 +1219,50 @@ main[role="main"] {
   gap: var(--space-sm);
 }
 
+/* Capacity Warning Banner */
+.capacity-warning-banner {
+  display: none;
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-muted);
+  color: var(--color-warning);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-md);
+  font-size: 12px;
+  font-weight: 500;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.capacity-warning-banner.visible {
+  display: flex;
+}
+
+.capacity-warning-banner.critical {
+  background: var(--color-error-bg);
+  border-color: var(--color-error-muted);
+  color: var(--color-error);
+  animation: pulse-critical 2s infinite;
+}
+
+.capacity-warning-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: currentColor;
+  color: var(--bg-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.capacity-warning-text {
+  flex: 1;
+}
+
 /* Stale panel indicator */
 .panel.stale {
   opacity: 0.7;
@@ -1532,6 +1576,112 @@ main[role="main"] {
 @keyframes slab-flash {
   0% { background: var(--color-warning); }
   100% { background: var(--color-ok); }
+}
+
+/* Connection state colors for handle slab */
+.slab-cell.active {
+  background: var(--color-ok);
+}
+
+.slab-cell.connecting {
+  background: var(--color-info);
+}
+
+.slab-cell.idle {
+  background: var(--color-info-muted);
+}
+
+.slab-cell.closing {
+  background: var(--color-warning);
+}
+
+/* State summary legend in slab panels */
+.slab-state-legend {
+  display: flex;
+  gap: var(--space-md);
+  margin-top: var(--space-sm);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.slab-state-legend .legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.slab-state-legend .legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.slab-state-legend .legend-dot.active { background: var(--color-ok); }
+.slab-state-legend .legend-dot.idle { background: var(--color-info-muted); }
+.slab-state-legend .legend-dot.closing { background: var(--color-warning); }
+
+/* ===== OWNER BREAKDOWN ===== */
+.owner-breakdown {
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px dashed var(--border-muted);
+}
+
+.owner-breakdown-bar {
+  display: flex;
+  height: 16px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-bottom: var(--space-xs);
+}
+
+.owner-segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  color: white;
+  transition: width 0.3s ease;
+}
+
+.owner-segment span {
+  padding: 0 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.owner-breakdown-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  font-size: 10px;
+}
+
+.owner-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+}
+
+.owner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.owner-name {
+  font-family: 'SF Mono', Monaco, monospace;
+  color: var(--text-secondary);
+}
+
+.owner-count {
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .slab-stats {

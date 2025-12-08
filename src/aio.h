@@ -328,6 +328,11 @@ valk_slab_t* valk_aio_get_handle_slab(valk_aio_system_t* sys);
 valk_slab_t* valk_aio_get_stream_arenas_slab(valk_aio_system_t* sys);
 valk_slab_t* valk_aio_get_http_servers_slab(valk_aio_system_t* sys);
 valk_slab_t* valk_aio_get_http_clients_slab(valk_aio_system_t* sys);
+
+// Get diagnostics for a handle at a given slab slot index
+// Returns false if slot is invalid or not an HTTP connection handle
+bool valk_aio_get_handle_diag(valk_aio_system_t* sys, size_t slot_idx,
+                               valk_handle_diag_t* out_diag);
 #endif
 
 // Get the event loop from AIO system (returns NULL if no loop available)

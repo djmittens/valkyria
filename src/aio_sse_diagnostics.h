@@ -48,6 +48,13 @@ typedef struct {
     size_t idle;
     size_t closing;
   } by_state;
+
+  // Per-owner connection counts (for owner breakdown visualization)
+  struct {
+    uint16_t owner_idx;
+    size_t count;
+  } by_owner[16];
+  size_t owner_count;
 } valk_slab_snapshot_t;
 
 // Memory snapshot for SSE transmission

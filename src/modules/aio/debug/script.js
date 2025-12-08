@@ -341,31 +341,13 @@
               '</div>' +
             '</div>' +
           '</div>' +
-          // Connection Pool Section
-          '<div class="aio-resource-section">' +
-            '<div class="aio-subsection-header">' +
-              '<span class="aio-subsection-title">Connection Pool</span>' +
-              '<span class="pool-usage aio-sys-conn-usage">-- / --</span>' +
-            '</div>' +
-            '<div class="conn-pool-bar" role="img" aria-label="Connection pool breakdown">' +
-              '<div class="conn-pool-segment active aio-sys-conn-active" style="width: 0%"></div>' +
-              '<div class="conn-pool-segment idle aio-sys-conn-idle" style="width: 0%"></div>' +
-              '<div class="conn-pool-segment closing aio-sys-conn-closing" style="width: 0%"></div>' +
-            '</div>' +
-            '<div class="conn-pool-mini aio-sys-conn-grid" role="img" aria-label="Connection pool state"></div>' +
-            '<div class="conn-pool-mini-legend">' +
-              '<div class="legend-item"><div class="legend-dot active"></div><span>Active</span></div>' +
-              '<div class="legend-item"><div class="legend-dot idle"></div><span>Idle</span></div>' +
-              '<div class="legend-item"><div class="legend-dot closing"></div><span>Closing</span></div>' +
-            '</div>' +
-          '</div>' +
-          // Memory Slabs Section
+          // Memory Slabs Section (Connection Pool removed - Handles slab shows same data)
           '<div class="aio-resource-section">' +
             '<div class="aio-subsection-header">' +
               '<span class="aio-subsection-title">Memory Pools</span>' +
             '</div>' +
             '<div class="aio-slab-grid">' +
-              // Handles Slab
+              // Handles Slab (connection-aware with state tracking)
               '<div class="memory-slab-panel compact" id="' + id + '-handles-panel">' +
                 '<div class="slab-header">' +
                   '<span class="slab-name">Handles</span>' +
@@ -376,6 +358,15 @@
                 '</div>' +
                 '<div class="slab-stats">' +
                   '<span><span class="aio-sys-handles-used">0</span> / <span class="aio-sys-handles-total">2056</span></span>' +
+                '</div>' +
+                '<div class="slab-state-legend">' +
+                  '<span class="legend-item"><span class="legend-dot active"></span> Active <span class="state-count-active">0</span></span>' +
+                  '<span class="legend-item"><span class="legend-dot idle"></span> Idle <span class="state-count-idle">0</span></span>' +
+                  '<span class="legend-item"><span class="legend-dot closing"></span> Closing <span class="state-count-closing">0</span></span>' +
+                '</div>' +
+                '<div class="owner-breakdown" title="Connection distribution by server">' +
+                  '<div class="owner-breakdown-bar"></div>' +
+                  '<div class="owner-breakdown-legend"></div>' +
                 '</div>' +
               '</div>' +
               // TCP Buffers Slab
@@ -451,30 +442,8 @@
     panel.querySelector('.aio-sys-handles').textContent = sysStats.handles || 0;
     panel.querySelector('.aio-sys-servers').textContent = (sysStats.servers || 0) + ' servers';
 
-    // Connection pool bar
-    var active = conns.active || 0;
-    var idle = conns.idle || 0;
-    var closing = conns.closing || 0;
-    var total = sysStats.conn_slab_total || (active + idle + closing) || 1;
-    var used = active + idle + closing;
-
-    panel.querySelector('.aio-sys-conn-usage').textContent = used + ' / ' + total + ' (' + Math.round(used / total * 100) + '%)';
-
-    var activePct = (active / total) * 100;
-    var idlePct = (idle / total) * 100;
-    var closingPct = (closing / total) * 100;
-
-    panel.querySelector('.aio-sys-conn-active').style.width = activePct + '%';
-    panel.querySelector('.aio-sys-conn-active').innerHTML = activePct > 10 ? '<span>' + active + '</span>' : '';
-    panel.querySelector('.aio-sys-conn-idle').style.width = idlePct + '%';
-    panel.querySelector('.aio-sys-conn-idle').innerHTML = idlePct > 10 ? '<span>' + idle + '</span>' : '';
-    panel.querySelector('.aio-sys-conn-closing').style.width = closingPct + '%';
-
-    // Connection pool mini-grid
-    renderConnPoolMiniInContainer(panel.querySelector('.aio-sys-conn-grid'), active, idle, closing, total);
-
-    // Note: Slab grids (handles, tcp buffers, stream arenas, http servers/clients)
-    // are updated via SSE memory diagnostics stream, not from polling metrics
+    // Connection pool is now updated via SSE memory diagnostics (handles slab)
+    // See MemoryDiagnostics.updateConnectionPoolFromHandles()
   }
 
   function updateProgressBarInPanel(panel, barSel, usageSel, used, total) {
@@ -1398,10 +1367,35 @@
 
     handleMemoryUpdate(data) {
       var self = this;
+
+      // Store owner_map for use in rendering
+      if (data.owner_map) {
+        this.ownerMap = data.owner_map;
+      }
+
+      // Track capacity warnings
+      var warnings = [];
+      var critical = [];
+
       // Update slab grids
       if (data.slabs) {
         data.slabs.forEach(function(slab) {
-          self.updateSlabGrid(slab);
+          self.updateSlabGrid(slab, self.ownerMap);
+
+          // Check capacity thresholds
+          if (slab.total > 0) {
+            var pct = (slab.used / slab.total) * 100;
+            if (pct >= 95) {
+              critical.push({ name: slab.name, pct: Math.round(pct), used: slab.used, total: slab.total });
+            } else if (pct >= 80) {
+              warnings.push({ name: slab.name, pct: Math.round(pct), used: slab.used, total: slab.total });
+            }
+          }
+
+          // Check for overflow
+          if (slab.overflow > 0) {
+            critical.push({ name: slab.name + ' overflow', pct: null, overflow: slab.overflow });
+          }
         });
       }
 
@@ -1409,6 +1403,21 @@
       if (data.arenas) {
         data.arenas.forEach(function(arena) {
           self.updateArenaGauge(arena);
+
+          // Check capacity thresholds
+          if (arena.capacity > 0) {
+            var pct = (arena.used / arena.capacity) * 100;
+            if (pct >= 95) {
+              critical.push({ name: arena.name, pct: Math.round(pct) });
+            } else if (pct >= 80) {
+              warnings.push({ name: arena.name, pct: Math.round(pct) });
+            }
+          }
+
+          // Check for overflow fallbacks
+          if (arena.overflow > 0) {
+            critical.push({ name: arena.name + ' fallback', pct: null, overflow: arena.overflow });
+          }
         });
       }
 
@@ -1416,9 +1425,48 @@
       if (data.gc) {
         self.updateGCStats(data.gc);
       }
+
+      // Update capacity warning banner
+      this.updateCapacityWarnings(warnings, critical);
     }
 
-    updateSlabGrid(slab) {
+    updateCapacityWarnings(warnings, critical) {
+      var banner = document.getElementById('capacity-warning-banner');
+      if (!banner) return;
+
+      // Combine warnings and criticals
+      var allWarnings = critical.concat(warnings);
+
+      if (allWarnings.length === 0) {
+        banner.classList.remove('visible', 'critical');
+        return;
+      }
+
+      // Build message
+      var messages = allWarnings.map(function(w) {
+        if (w.overflow) {
+          return w.name + ': ' + w.overflow + ' overflow(s)';
+        }
+        return w.name + ': ' + w.pct + '%';
+      });
+
+      var text = banner.querySelector('.capacity-warning-text');
+      if (text) {
+        text.textContent = messages.slice(0, 3).join(', ');
+        if (allWarnings.length > 3) {
+          text.textContent += ' (+' + (allWarnings.length - 3) + ' more)';
+        }
+      }
+
+      banner.classList.add('visible');
+      if (critical.length > 0) {
+        banner.classList.add('critical');
+      } else {
+        banner.classList.remove('critical');
+      }
+    }
+
+    updateSlabGrid(slab, ownerMap) {
       // Map slab names to CSS class selectors used in AIO panels
       var slabClassMap = {
         'tcp_buffers': '.aio-sys-tcp-grid',
@@ -1446,37 +1494,53 @@
       // Update each grid (typically just one per slab type)
       var self = this;
       grids.forEach(function(grid) {
-        self.updateSingleSlabGrid(grid, slab);
+        self.updateSingleSlabGrid(grid, slab, ownerMap);
       });
     }
 
-    updateSingleSlabGrid(grid, slab) {
+    updateSingleSlabGrid(grid, slab, ownerMap) {
       if (!grid) return;
-
-      // Convert hex bitmap to bit array
-      var bitmap = this.hexToBitArray(slab.bitmap);
-      var cells = grid.children;
 
       // Track previous state for flash animation using grid's unique ID/selector
       var gridKey = grid.id || grid.className;
       var prevKey = 'slab_' + slab.name + '_' + gridKey;
-      var prevBitmap = this.previousState[prevKey] || [];
+      var prevStates = this.previousState[prevKey] || [];
 
       var self = this;
-      requestAnimationFrame(function() {
-        // For large slabs, use aggregation
-        if (slab.total > 500) {
-          self.renderAggregatedGrid(grid, bitmap, slab.total, prevBitmap);
-        } else {
-          self.renderDirectGrid(grid, bitmap, prevBitmap);
-        }
-      });
 
-      this.previousState[prevKey] = bitmap;
+      // Check if this slab has per-slot state tracking (connection-aware slabs)
+      if (slab.states) {
+        var states = slab.states;  // String like "AAIFCFFF..."
+        requestAnimationFrame(function() {
+          if (states.length > 500) {
+            // For large slabs, use aggregated view
+            self.renderAggregatedStateGrid(grid, states, prevStates, slab.summary);
+          } else {
+            self.renderStateGrid(grid, states, prevStates, slab.summary);
+          }
+        });
+        this.previousState[prevKey] = states;
+      } else {
+        // Binary bitmap for simple slabs
+        var bitmap = this.hexToBitArray(slab.bitmap, slab.total);
+        requestAnimationFrame(function() {
+          if (slab.total > 500) {
+            self.renderAggregatedGrid(grid, bitmap, slab.total, prevStates);
+          } else {
+            self.renderDirectGrid(grid, bitmap, prevStates);
+          }
+        });
+        this.previousState[prevKey] = bitmap;
+      }
 
       // Find the parent panel
       var panel = grid.closest('.memory-slab-panel');
       if (!panel) return;
+
+      // Update owner breakdown for handles slab (only if we have by_owner data)
+      if (slab.name === 'handles' && slab.summary && slab.summary.by_owner && ownerMap) {
+        this.renderOwnerBreakdown(panel, slab.summary.by_owner, slab.used, ownerMap);
+      }
 
       var pct = slab.total > 0 ? Math.round((slab.used / slab.total) * 100) : 0;
 
@@ -1616,6 +1680,170 @@
       this.renderDirectGrid(grid, aggregated, prevAggregated);
     }
 
+    // Render grid with per-slot connection states (A=active, I=idle, C=closing, N=connecting, F=free)
+    renderStateGrid(grid, states, prevStates, summary) {
+      // Map state chars to CSS classes
+      var stateClasses = {
+        'A': 'active',
+        'N': 'connecting',
+        'I': 'idle',
+        'C': 'closing',
+        'F': 'free'
+      };
+
+      // Ensure grid has correct number of cells
+      while (grid.children.length < states.length) {
+        var cell = document.createElement('div');
+        cell.className = 'slab-cell free';
+        grid.appendChild(cell);
+      }
+      while (grid.children.length > states.length) {
+        grid.removeChild(grid.lastChild);
+      }
+
+      // Update cells with flash on change
+      for (var i = 0; i < states.length; i++) {
+        var cell = grid.children[i];
+        var newState = stateClasses[states[i]] || 'free';
+        var oldState = prevStates[i] ? (stateClasses[prevStates[i]] || 'free') : 'free';
+
+        if (newState !== oldState) {
+          // State changed - flash animation
+          cell.className = 'slab-cell flash';
+          setTimeout(function(c, s) {
+            return function() {
+              c.className = 'slab-cell ' + s;
+            };
+          }(cell, newState), 300);
+        } else if (!cell.classList.contains(newState)) {
+          cell.className = 'slab-cell ' + newState;
+        }
+      }
+
+      // Update state summary legend if present
+      var panel = grid.closest('.memory-slab-panel');
+      if (panel && summary) {
+        var legendActive = panel.querySelector('.state-count-active');
+        var legendIdle = panel.querySelector('.state-count-idle');
+        var legendClosing = panel.querySelector('.state-count-closing');
+        if (legendActive) legendActive.textContent = summary.A || 0;
+        if (legendIdle) legendIdle.textContent = summary.I || 0;
+        if (legendClosing) legendClosing.textContent = summary.C || 0;
+      }
+    }
+
+    // Render aggregated state grid for large slabs (>500 slots)
+    // Aggregates states into displayable grid cells
+    renderAggregatedStateGrid(grid, states, prevStates, summary) {
+      var gridCols = 32;
+      var gridRows = Math.min(32, Math.ceil(states.length / gridCols));
+      var targetCells = gridCols * gridRows;
+      var slotsPerCell = Math.ceil(states.length / targetCells);
+
+      // Aggregate states: for each cell, find dominant non-free state
+      var aggregated = [];
+      var prevAggregated = [];
+
+      for (var i = 0; i < targetCells; i++) {
+        var startIdx = i * slotsPerCell;
+        var endIdx = Math.min(startIdx + slotsPerCell, states.length);
+
+        // Count states in this chunk
+        var counts = { 'A': 0, 'I': 0, 'C': 0, 'N': 0, 'F': 0 };
+        var prevCounts = { 'A': 0, 'I': 0, 'C': 0, 'N': 0, 'F': 0 };
+
+        for (var j = startIdx; j < endIdx; j++) {
+          var s = states[j] || 'F';
+          counts[s] = (counts[s] || 0) + 1;
+          var ps = (prevStates && prevStates[j]) || 'F';
+          prevCounts[ps] = (prevCounts[ps] || 0) + 1;
+        }
+
+        // Determine dominant state (priority: A > C > I > N > F)
+        var dominant = 'F';
+        if (counts['A'] > 0) dominant = 'A';
+        else if (counts['C'] > 0) dominant = 'C';
+        else if (counts['I'] > 0) dominant = 'I';
+        else if (counts['N'] > 0) dominant = 'N';
+
+        var prevDominant = 'F';
+        if (prevCounts['A'] > 0) prevDominant = 'A';
+        else if (prevCounts['C'] > 0) prevDominant = 'C';
+        else if (prevCounts['I'] > 0) prevDominant = 'I';
+        else if (prevCounts['N'] > 0) prevDominant = 'N';
+
+        aggregated.push(dominant);
+        prevAggregated.push(prevDominant);
+      }
+
+      // Now render as a state grid with aggregated states
+      this.renderStateGrid(grid, aggregated.join(''), prevAggregated.join(''), summary);
+    }
+
+    // Render owner breakdown bar and legend for connection attribution
+    renderOwnerBreakdown(panel, byOwner, totalUsed, ownerMap) {
+      var breakdownEl = panel.querySelector('.owner-breakdown');
+      if (!breakdownEl) return;
+
+      var barEl = breakdownEl.querySelector('.owner-breakdown-bar');
+      var legendEl = breakdownEl.querySelector('.owner-breakdown-legend');
+      if (!barEl || !legendEl) return;
+
+      // Convert byOwner object to array and sort by count descending
+      var owners = [];
+      for (var key in byOwner) {
+        var idx = parseInt(key);
+        var name = ownerMap[idx] || 'unknown';
+        owners.push({ idx: idx, name: name, count: byOwner[key] });
+      }
+      owners.sort(function(a, b) { return b.count - a.count; });
+
+      // Don't show if no owners
+      if (owners.length === 0) {
+        breakdownEl.style.display = 'none';
+        return;
+      }
+      breakdownEl.style.display = '';
+
+      // Color palette for different owners (up to 8 distinct colors)
+      var colors = [
+        'var(--color-info)',      // Blue
+        'var(--color-ok)',        // Green
+        'var(--color-purple)',    // Purple
+        'var(--color-warning)',   // Yellow
+        'var(--color-pink)',      // Pink
+        'var(--color-cyan)',      // Cyan
+        'var(--color-error)',     // Red
+        'var(--text-muted)'       // Gray
+      ];
+
+      // Render bar segments
+      var barHtml = '';
+      owners.forEach(function(owner, i) {
+        var pct = totalUsed > 0 ? (owner.count / totalUsed) * 100 : 0;
+        var color = colors[i % colors.length];
+        barHtml += '<div class="owner-segment" style="width: ' + pct + '%; background: ' + color + ';" title="' + owner.name + ': ' + owner.count + ' connections">';
+        if (pct > 15) {
+          barHtml += '<span>' + owner.count + '</span>';
+        }
+        barHtml += '</div>';
+      });
+      barEl.innerHTML = barHtml;
+
+      // Render legend
+      var legendHtml = '';
+      owners.forEach(function(owner, i) {
+        var color = colors[i % colors.length];
+        var pct = totalUsed > 0 ? Math.round((owner.count / totalUsed) * 100) : 0;
+        legendHtml += '<span class="owner-legend-item" title="' + owner.count + ' connections (' + pct + '%)">';
+        legendHtml += '<span class="owner-dot" style="background: ' + color + ';"></span>';
+        legendHtml += '<span class="owner-name">' + owner.name + '</span>';
+        legendHtml += '<span class="owner-count">' + owner.count + '</span>';
+        legendHtml += '</span>';
+      });
+      legendEl.innerHTML = legendHtml;
+    }
+
     updateArenaGauge(arena) {
       var gauge = document.querySelector('[data-arena="' + arena.name + '"]');
       if (!gauge) return;
@@ -1680,13 +1908,19 @@
     }
 
     // Utility functions
-    hexToBitArray(hex) {
+    // Convert hex string to bit array (LSB-first order to match C bitmap)
+    hexToBitArray(hex, totalSlots) {
       var bits = [];
       for (var i = 0; i < hex.length; i += 2) {
         var byte = parseInt(hex.substr(i, 2), 16);
-        for (var b = 7; b >= 0; b--) {
+        // LSB-first: bit 0 is first slot in each byte
+        for (var b = 0; b < 8; b++) {
           bits.push((byte >> b) & 1);
         }
+      }
+      // Truncate to actual slot count (bitmap may have padding bits)
+      if (totalSlots !== undefined && bits.length > totalSlots) {
+        bits = bits.slice(0, totalSlots);
       }
       return bits;
     }

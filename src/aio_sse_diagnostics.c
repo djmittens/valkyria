@@ -43,7 +43,8 @@ static uint8_t *slab_to_bitmap(valk_slab_t *slab, size_t *out_bytes,
 
   size_t free_count = 0;
 
-  while (head_offset != SIZE_MAX) {
+  // Sentinel value is stored as UINT32_MAX in the lower 32 bits
+  while (head_offset != (size_t)UINT32_MAX) {
     if (head_offset >= total_slots) {
       VALK_ERROR("Invalid slab offset %zu (total=%zu)", head_offset,
                  total_slots);
@@ -90,10 +91,21 @@ static void bitmap_to_hex(const uint8_t *bitmap, size_t bytes, char *hex_out) {
 // Per-Slot Diagnostics for Connection-Aware Slabs
 // ============================================================================
 
+// Convert valk_diag_conn_state_e to single character for wire format
+static char state_to_char(valk_diag_conn_state_e state) {
+  switch (state) {
+    case VALK_DIAG_CONN_FREE:       return 'F';
+    case VALK_DIAG_CONN_CONNECTING: return 'N';  // coNnecting
+    case VALK_DIAG_CONN_ACTIVE:     return 'A';
+    case VALK_DIAG_CONN_IDLE:       return 'I';
+    case VALK_DIAG_CONN_CLOSING:    return 'C';
+    default:                        return 'F';
+  }
+}
+
 // Walk handle slab and extract per-slot diagnostics with state and owner
 static void slab_to_slot_diag(valk_slab_t *slab, valk_slab_snapshot_t *out,
-                               uint64_t now_ms) {
-  (void)now_ms;  // Reserved for future use when struct access is available
+                               valk_aio_system_t *aio, uint64_t now_ms) {
   size_t total = slab->numItems;
   out->slots = calloc(total, sizeof(valk_slot_diag_t));
   if (!out->slots) {
@@ -125,7 +137,8 @@ static void slab_to_slot_diag(valk_slab_t *slab, valk_slab_snapshot_t *out,
     return;
   }
 
-  while (head_offset != SIZE_MAX && head_offset < total && free_count < total) {
+  // Sentinel value is stored as UINT32_MAX in the lower 32 bits
+  while (head_offset != (size_t)UINT32_MAX && head_offset < total && free_count < total) {
     is_free[head_offset] = true;
     free_count++;
 
@@ -143,32 +156,56 @@ static void slab_to_slot_diag(valk_slab_t *slab, valk_slab_snapshot_t *out,
       continue;
     }
 
-    // Get handle at this slot (skip the slab_item_t header)
-    // Note: item unused for now - actual diag extraction requires struct visibility
-    (void)stride;  // Suppress unused warning
+    // Use accessor to get handle diagnostics
+    valk_handle_diag_t diag = {0};
+    if (valk_aio_get_handle_diag(aio, i, &diag)) {
+      char state_char = state_to_char(diag.state);
+      out->slots[i].state = state_char;
+      out->slots[i].owner = diag.owner_idx;
 
-    // The handle struct layout is:
-    // - kind (handle_kind_t enum, internal to aio_uv.c)
-    // - prev, next, sys, arg pointers
-    // - onOpen, onClose callbacks
-    // - uv union
-    // - http sub-struct with diag field
-    // We access the diag field through byte offset since the struct is opaque
-    // For now, treat all used slots as active unless we can read the diag
+      // Calculate age since last state change
+      if (diag.state_change_time > 0 && now_ms > diag.state_change_time) {
+        out->slots[i].age_ms = (uint32_t)(now_ms - diag.state_change_time);
+      }
 
-    // Access diag field - it's at the end of the http sub-struct
-    // The http sub-struct contains: state, ssl, session, handler, connectReq, server,
-    // active_streams, pending_write, spillover_data, spillover_len,
-    // backpressure, backpressure_next, backpressure_start_time, then diag
-    //
-    // Rather than calculate exact offset, we'll use a simpler approach:
-    // All allocated handles are treated as "active" for basic visualization
-    // The actual state tracking via diag field requires knowing the struct layout
+      // Update state counters
+      switch (diag.state) {
+        case VALK_DIAG_CONN_ACTIVE:
+        case VALK_DIAG_CONN_CONNECTING:
+          out->by_state.active++;
+          break;
+        case VALK_DIAG_CONN_IDLE:
+          out->by_state.idle++;
+          break;
+        case VALK_DIAG_CONN_CLOSING:
+          out->by_state.closing++;
+          break;
+        default:
+          break;
+      }
 
-    out->slots[i].state = 'A';
-    out->slots[i].owner = 0xFFFF;
-    out->slots[i].age_ms = 0;
-    out->by_state.active++;
+      // Update per-owner counts (for owner breakdown visualization)
+      if (diag.owner_idx != 0xFFFF && diag.owner_idx < 16) {
+        // Find or add owner entry
+        bool found = false;
+        for (size_t j = 0; j < out->owner_count; j++) {
+          if (out->by_owner[j].owner_idx == diag.owner_idx) {
+            out->by_owner[j].count++;
+            found = true;
+            break;
+          }
+        }
+        if (!found && out->owner_count < 16) {
+          out->by_owner[out->owner_count].owner_idx = diag.owner_idx;
+          out->by_owner[out->owner_count].count = 1;
+          out->owner_count++;
+        }
+      }
+    } else {
+      // Not an HTTP connection handle - mark as active (other handle type)
+      out->slots[i].state = 'A';
+      out->by_state.active++;
+    }
     used_count++;
   }
 
@@ -228,7 +265,7 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
       snapshot->slabs[slab_idx].name = "handles";
       // Get current time for age calculation
       uint64_t now_ms = (uint64_t)(uv_hrtime() / 1000000ULL);
-      slab_to_slot_diag(handle_slab, &snapshot->slabs[slab_idx], now_ms);
+      slab_to_slot_diag(handle_slab, &snapshot->slabs[slab_idx], aio, now_ms);
       slab_idx++;
     }
   }
@@ -338,14 +375,32 @@ int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf,
       if (!states) return -1;
       slots_to_state_string(slab->slots, slab->total_slots, states);
 
+      // Build by_owner JSON object: {"0": count, "1": count, ...}
+      char by_owner_buf[256] = {0};
+      char *bp = by_owner_buf;
+      char *bp_end = by_owner_buf + sizeof(by_owner_buf);
+      int bn = snprintf(bp, bp_end - bp, "{");
+      if (bn > 0) bp += bn;
+      for (size_t j = 0; j < slab->owner_count && bp < bp_end - 20; j++) {
+        if (j > 0) {
+          bn = snprintf(bp, bp_end - bp, ",");
+          if (bn > 0) bp += bn;
+        }
+        bn = snprintf(bp, bp_end - bp, "\"%u\":%zu",
+                      slab->by_owner[j].owner_idx, slab->by_owner[j].count);
+        if (bn > 0) bp += bn;
+      }
+      snprintf(bp, bp_end - bp, "}");
+
       n = snprintf(p, end - p,
                    "{\"name\":\"%s\",\"total\":%zu,\"used\":%zu,"
                    "\"states\":\"%s\","
-                   "\"summary\":{\"A\":%zu,\"I\":%zu,\"C\":%zu},"
+                   "\"summary\":{\"A\":%zu,\"I\":%zu,\"C\":%zu,\"by_owner\":%s},"
                    "\"overflow\":%zu}",
                    slab->name, slab->total_slots, slab->used_slots,
                    states,
                    slab->by_state.active, slab->by_state.idle, slab->by_state.closing,
+                   by_owner_buf,
                    slab->overflow_count);
 
       free(states);

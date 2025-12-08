@@ -188,8 +188,11 @@ void test_sse_slot_diag_format(VALK_TEST_ARGS()) {
   // Check for slot diagnostics format
   VALK_TEST_ASSERT(strstr(buf, "\"states\":\"AAIFACFF\"") != NULL,
                    "Missing or wrong states string, got: %s", buf);
-  VALK_TEST_ASSERT(strstr(buf, "\"summary\":{\"A\":3,\"I\":1,\"C\":1}") != NULL,
-                   "Missing or wrong summary");
+  // Summary now includes by_owner object
+  VALK_TEST_ASSERT(strstr(buf, "\"A\":3") != NULL, "Missing active count in summary");
+  VALK_TEST_ASSERT(strstr(buf, "\"I\":1") != NULL, "Missing idle count in summary");
+  VALK_TEST_ASSERT(strstr(buf, "\"C\":1") != NULL, "Missing closing count in summary");
+  VALK_TEST_ASSERT(strstr(buf, "\"by_owner\":{") != NULL, "Missing by_owner in summary");
   VALK_TEST_ASSERT(strstr(buf, "\"owner_map\":[\":8080\",\":9090\"]") != NULL,
                    "Missing or wrong owner_map");
 

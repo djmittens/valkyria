@@ -1180,17 +1180,27 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
       valk_mem_snapshot_collect(&snapshot, req->conn->http.server->sys);
 
       // Format as SSE event
-      char sse_buf[16384];
-      int len = valk_mem_snapshot_to_sse(&snapshot, sse_buf, sizeof(sse_buf), 1);
+      // Buffer needs to be large enough for:
+      // - Handle slab states string (~2056 chars)
+      // - LVAL slab hex bitmap (~65536 chars for 262144 slots)
+      // - Other slabs and metadata (~4KB)
+      // Total: ~72KB needed
+      char *sse_buf = malloc(131072);  // 128KB buffer
+      if (!sse_buf) {
+        VALK_ERROR("Failed to allocate SSE buffer");
+        return -1;
+      }
+      int len = valk_mem_snapshot_to_sse(&snapshot, sse_buf, 131072, 1);
 
-      // Free snapshot bitmaps
+      // Free snapshot allocations (bitmaps and slot diagnostics)
       for (size_t i = 0; i < snapshot.slab_count; i++) {
         free(snapshot.slabs[i].bitmap);
+        free(snapshot.slabs[i].slots);
       }
 
       if (len <= 0) {
         VALK_ERROR("Failed to format SSE snapshot");
-        len = snprintf(sse_buf, sizeof(sse_buf), "event: error\ndata: {\"error\":\"snapshot failed\"}\n\n");
+        len = snprintf(sse_buf, 131072, "event: error\ndata: {\"error\":\"snapshot failed\"}\n\n");
       }
 
       // Send as regular response with SSE content
@@ -1207,6 +1217,9 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
         body_copy = valk_mem_alloc(len + 1);
         memcpy(body_copy, sse_buf, len + 1);
       }
+
+      // Free the temporary SSE buffer
+      free(sse_buf);
 
       http_body_source_t *body_src;
       VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
@@ -3443,6 +3456,27 @@ valk_slab_t* valk_aio_get_http_servers_slab(valk_aio_system_t* sys) {
 valk_slab_t* valk_aio_get_http_clients_slab(valk_aio_system_t* sys) {
   if (!sys) return nullptr;
   return sys->httpClients;
+}
+
+bool valk_aio_get_handle_diag(valk_aio_system_t* sys, size_t slot_idx,
+                               valk_handle_diag_t* out_diag) {
+  if (!sys || !out_diag) return false;
+
+  valk_slab_t *slab = sys->handleSlab;
+  if (!slab || slot_idx >= slab->numItems) return false;
+
+  // Get handle at this slot index
+  size_t stride = valk_slab_item_stride(slab->itemSize);
+  valk_slab_item_t *item = (valk_slab_item_t *)&slab->heap[stride * slot_idx];
+  valk_aio_handle_t *handle = (valk_aio_handle_t *)item->data;
+
+  // Only HTTP connection handles have diagnostics
+  if (handle->kind != VALK_HNDL_HTTP_CONN) {
+    return false;
+  }
+
+  *out_diag = handle->http.diag;
+  return true;
 }
 #endif
 

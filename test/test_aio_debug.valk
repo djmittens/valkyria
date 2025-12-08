@@ -121,6 +121,22 @@
     true
   })
 
+; Test: /debug/diagnostics/memory returns SSE stream response
+(test/define "route-diagnostics-memory-returns-sse"
+  {do
+    (= {req} {:path "/debug/diagnostics/memory"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (test/assert (!= resp nil) "response should not be nil for /debug/diagnostics/memory")
+    (test/assert-eq "200" (plist/get resp (head {:status}))
+      "status should be 200")
+    (test/assert-eq "text/event-stream; charset=utf-8" (plist/get resp (head {:content-type}))
+      "content-type should be text/event-stream")
+    ; body-type should be the keyword :sse-stream
+    (= {body-type} (plist/get resp (head {:body-type})))
+    (test/assert (!= body-type nil) "body-type should be present")
+    true
+  })
+
 ; ============================================================================
 ; Handler Factory Tests
 ; ============================================================================
