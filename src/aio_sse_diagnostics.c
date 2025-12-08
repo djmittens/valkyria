@@ -184,21 +184,40 @@ static void slab_to_slot_diag(valk_slab_t *slab, valk_slab_snapshot_t *out,
           break;
       }
 
-      // Update per-owner counts (for owner breakdown visualization)
+      // Update per-owner counts with state breakdown
       if (diag.owner_idx != 0xFFFF && diag.owner_idx < 16) {
         // Find or add owner entry
-        bool found = false;
+        size_t owner_slot = out->owner_count;
         for (size_t j = 0; j < out->owner_count; j++) {
           if (out->by_owner[j].owner_idx == diag.owner_idx) {
-            out->by_owner[j].count++;
-            found = true;
+            owner_slot = j;
             break;
           }
         }
-        if (!found && out->owner_count < 16) {
-          out->by_owner[out->owner_count].owner_idx = diag.owner_idx;
-          out->by_owner[out->owner_count].count = 1;
+        // Add new owner if not found
+        if (owner_slot == out->owner_count && out->owner_count < 16) {
+          out->by_owner[owner_slot].owner_idx = diag.owner_idx;
+          out->by_owner[owner_slot].active = 0;
+          out->by_owner[owner_slot].idle = 0;
+          out->by_owner[owner_slot].closing = 0;
           out->owner_count++;
+        }
+        // Increment the appropriate state counter for this owner
+        if (owner_slot < 16) {
+          switch (diag.state) {
+            case VALK_DIAG_CONN_ACTIVE:
+            case VALK_DIAG_CONN_CONNECTING:
+              out->by_owner[owner_slot].active++;
+              break;
+            case VALK_DIAG_CONN_IDLE:
+              out->by_owner[owner_slot].idle++;
+              break;
+            case VALK_DIAG_CONN_CLOSING:
+              out->by_owner[owner_slot].closing++;
+              break;
+            default:
+              break;
+          }
         }
       }
     } else {
@@ -375,19 +394,23 @@ int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf,
       if (!states) return -1;
       slots_to_state_string(slab->slots, slab->total_slots, states);
 
-      // Build by_owner JSON object: {"0": count, "1": count, ...}
-      char by_owner_buf[256] = {0};
+      // Build by_owner JSON object with per-owner state breakdown:
+      // {"0": {"A": x, "I": y, "C": z}, "1": {...}, ...}
+      char by_owner_buf[512] = {0};
       char *bp = by_owner_buf;
       char *bp_end = by_owner_buf + sizeof(by_owner_buf);
       int bn = snprintf(bp, bp_end - bp, "{");
       if (bn > 0) bp += bn;
-      for (size_t j = 0; j < slab->owner_count && bp < bp_end - 20; j++) {
+      for (size_t j = 0; j < slab->owner_count && bp < bp_end - 64; j++) {
         if (j > 0) {
           bn = snprintf(bp, bp_end - bp, ",");
           if (bn > 0) bp += bn;
         }
-        bn = snprintf(bp, bp_end - bp, "\"%u\":%zu",
-                      slab->by_owner[j].owner_idx, slab->by_owner[j].count);
+        bn = snprintf(bp, bp_end - bp, "\"%u\":{\"A\":%zu,\"I\":%zu,\"C\":%zu}",
+                      slab->by_owner[j].owner_idx,
+                      slab->by_owner[j].active,
+                      slab->by_owner[j].idle,
+                      slab->by_owner[j].closing);
         if (bn > 0) bp += bn;
       }
       snprintf(bp, bp_end - bp, "}");

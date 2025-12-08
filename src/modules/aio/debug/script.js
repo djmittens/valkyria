@@ -1511,12 +1511,13 @@
       // Check if this slab has per-slot state tracking (connection-aware slabs)
       if (slab.states) {
         var states = slab.states;  // String like "AAIFCFFF..."
+        var summary = slab.summary;  // Capture before async callback
         requestAnimationFrame(function() {
           if (states.length > 500) {
             // For large slabs, use aggregated view
-            self.renderAggregatedStateGrid(grid, states, prevStates, slab.summary);
+            self.renderAggregatedStateGrid(grid, states, prevStates, summary);
           } else {
-            self.renderStateGrid(grid, states, prevStates, slab.summary);
+            self.renderStateGrid(grid, states, prevStates, summary);
           }
         });
         this.previousState[prevKey] = states;
@@ -1655,9 +1656,13 @@
 
     renderAggregatedGrid(grid, bitmap, totalSlots, prevBitmap) {
       // For large slabs, aggregate to displayable size
-      var gridCols = 32;
-      var gridRows = 32;
+      // Use a compact 10x5 grid (50 cells) for clean visualization
+      var gridCols = 10;
+      var gridRows = 5;
       var cellsPerSlot = Math.ceil(totalSlots / (gridCols * gridRows));
+
+      // Update grid template to match
+      grid.style.gridTemplateColumns = 'repeat(' + gridCols + ', 1fr)';
 
       var aggregated = new Array(gridCols * gridRows).fill(0);
       var prevAggregated = new Array(gridCols * gridRows).fill(0);
@@ -1735,9 +1740,13 @@
     // Render aggregated state grid for large slabs (>500 slots)
     // Aggregates states into displayable grid cells
     renderAggregatedStateGrid(grid, states, prevStates, summary) {
-      var gridCols = 32;
-      var gridRows = Math.min(32, Math.ceil(states.length / gridCols));
+      // Use a compact 10x5 grid (50 cells) for clean visualization
+      var gridCols = 10;
+      var gridRows = 5;
       var targetCells = gridCols * gridRows;
+
+      // Update grid template to match
+      grid.style.gridTemplateColumns = 'repeat(' + gridCols + ', 1fr)';
       var slotsPerCell = Math.ceil(states.length / targetCells);
 
       // Aggregate states: for each cell, find dominant non-free state
@@ -1781,6 +1790,7 @@
     }
 
     // Render owner breakdown bar and legend for connection attribution
+    // byOwner format: {"0": {"A": x, "I": y, "C": z}, "1": {...}, ...}
     renderOwnerBreakdown(panel, byOwner, totalUsed, ownerMap) {
       var breakdownEl = panel.querySelector('.owner-breakdown');
       if (!breakdownEl) return;
@@ -1789,14 +1799,19 @@
       var legendEl = breakdownEl.querySelector('.owner-breakdown-legend');
       if (!barEl || !legendEl) return;
 
-      // Convert byOwner object to array and sort by count descending
+      // Convert byOwner object to array with per-state counts
       var owners = [];
       for (var key in byOwner) {
         var idx = parseInt(key);
         var name = ownerMap[idx] || 'unknown';
-        owners.push({ idx: idx, name: name, count: byOwner[key] });
+        var states = byOwner[key];
+        var active = states.A || 0;
+        var idle = states.I || 0;
+        var closing = states.C || 0;
+        var total = active + idle + closing;
+        owners.push({ idx: idx, name: name, active: active, idle: idle, closing: closing, total: total });
       }
-      owners.sort(function(a, b) { return b.count - a.count; });
+      owners.sort(function(a, b) { return b.total - a.total; });
 
       // Don't show if no owners
       if (owners.length === 0) {
@@ -1820,25 +1835,31 @@
       // Render bar segments
       var barHtml = '';
       owners.forEach(function(owner, i) {
-        var pct = totalUsed > 0 ? (owner.count / totalUsed) * 100 : 0;
+        var pct = totalUsed > 0 ? (owner.total / totalUsed) * 100 : 0;
         var color = colors[i % colors.length];
-        barHtml += '<div class="owner-segment" style="width: ' + pct + '%; background: ' + color + ';" title="' + owner.name + ': ' + owner.count + ' connections">';
+        var title = owner.name + ': ' + owner.total + ' total (' + owner.active + ' active, ' + owner.idle + ' idle, ' + owner.closing + ' closing)';
+        barHtml += '<div class="owner-segment" style="width: ' + pct + '%; background: ' + color + ';" title="' + title + '">';
         if (pct > 15) {
-          barHtml += '<span>' + owner.count + '</span>';
+          barHtml += '<span>' + owner.total + '</span>';
         }
         barHtml += '</div>';
       });
       barEl.innerHTML = barHtml;
 
-      // Render legend
+      // Render legend with per-owner state breakdown
       var legendHtml = '';
       owners.forEach(function(owner, i) {
         var color = colors[i % colors.length];
-        var pct = totalUsed > 0 ? Math.round((owner.count / totalUsed) * 100) : 0;
-        legendHtml += '<span class="owner-legend-item" title="' + owner.count + ' connections (' + pct + '%)">';
+        var pct = totalUsed > 0 ? Math.round((owner.total / totalUsed) * 100) : 0;
+        var title = owner.total + ' connections (' + pct + '%)';
+        legendHtml += '<span class="owner-legend-item" title="' + title + '">';
         legendHtml += '<span class="owner-dot" style="background: ' + color + ';"></span>';
         legendHtml += '<span class="owner-name">' + owner.name + '</span>';
-        legendHtml += '<span class="owner-count">' + owner.count + '</span>';
+        legendHtml += '<span class="owner-states">';
+        legendHtml += '<span class="state-active">' + owner.active + '</span>';
+        legendHtml += '<span class="state-idle">' + owner.idle + '</span>';
+        legendHtml += '<span class="state-closing">' + owner.closing + '</span>';
+        legendHtml += '</span>';
         legendHtml += '</span>';
       });
       legendEl.innerHTML = legendHtml;

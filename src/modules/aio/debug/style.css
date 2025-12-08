@@ -1556,6 +1556,7 @@ main[role="main"] {
 }
 
 .slab-cell {
+  aspect-ratio: 1;
   border-radius: 2px;
   transition: background-color 100ms ease-out;
 }
@@ -1677,6 +1678,36 @@ main[role="main"] {
 .owner-name {
   font-family: 'SF Mono', Monaco, monospace;
   color: var(--text-secondary);
+}
+
+.owner-states {
+  display: flex;
+  gap: 2px;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 9px;
+}
+
+.owner-states .state-active,
+.owner-states .state-idle,
+.owner-states .state-closing {
+  padding: 1px 3px;
+  border-radius: 2px;
+  font-weight: 600;
+}
+
+.owner-states .state-active {
+  background: var(--color-ok-bg);
+  color: var(--color-ok);
+}
+
+.owner-states .state-idle {
+  background: var(--color-info-bg);
+  color: var(--color-info);
+}
+
+.owner-states .state-closing {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
 }
 
 .owner-count {

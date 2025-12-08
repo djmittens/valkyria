@@ -876,6 +876,12 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
 #ifdef VALK_METRICS_ENABLED
     // Record stream start
     valk_aio_metrics_on_stream_start(&conn->http.server->sys->metrics);
+
+    // Update connection diagnostic state - now active (processing request)
+    if (conn->http.active_streams == 1) {
+      conn->http.diag.state = VALK_DIAG_CONN_ACTIVE;
+      conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+    }
 #endif
 
     // Acquire per-stream arena from slab
@@ -1451,6 +1457,15 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
 
   conn->http.active_streams--;
   VALK_DEBUG("%d active streams remaining", conn->http.active_streams);
+
+#ifdef VALK_METRICS_ENABLED
+  // Update connection diagnostic state based on active stream count
+  if (conn->http.active_streams == 0) {
+    // No active streams - connection is idle (waiting for new requests)
+    conn->http.diag.state = VALK_DIAG_CONN_IDLE;
+    conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+  }
+#endif
 
   return 0;
 }
@@ -2204,6 +2219,12 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
     valk_aio_metrics_on_connection(&srv->sys->metrics, true);
     // Increment active connections gauge (new metrics system)
     valk_gauge_inc(srv->metrics.connections_active);
+
+    // New connection starts active (consistent with aggregate metrics)
+    // Will transition to idle when all streams close
+    conn->http.diag.state = VALK_DIAG_CONN_ACTIVE;
+    conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+    conn->http.diag.owner_idx = srv->owner_idx;
 #endif
 
     // start the connection off by listening, (SSL expects client to send first)

@@ -49,10 +49,12 @@ typedef struct {
     size_t closing;
   } by_state;
 
-  // Per-owner connection counts (for owner breakdown visualization)
+  // Per-owner connection counts with state breakdown
   struct {
     uint16_t owner_idx;
-    size_t count;
+    size_t active;
+    size_t idle;
+    size_t closing;
   } by_owner[16];
   size_t owner_count;
 } valk_slab_snapshot_t;
