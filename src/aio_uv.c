@@ -217,6 +217,12 @@ typedef struct valk_aio_handle_t {
     // Generic SSE streams (linked list for cleanup on connection close)
     // These are streams created via sse/open builtin
     valk_sse_stream_t *sse_streams;
+
+    // Active arena slots (linked list via indices for cleanup on disconnect)
+    // nghttp2 doesn't call on_stream_close when session is deleted, so we
+    // track arenas ourselves to release on browser refresh
+    // UINT32_MAX = empty/end of list
+    uint32_t active_arena_head;
   } http;
 } valk_aio_handle_t;
 
@@ -492,6 +498,8 @@ struct valk_http2_server_request {
   int32_t stream_id;         // HTTP/2 stream ID
   valk_mem_arena_t *stream_arena;       // Per-stream arena
   valk_slab_item_t *arena_slab_item;    // For releasing back to slab
+  uint32_t arena_slot;                  // This arena's slot index in slab
+  uint32_t next_arena_slot;             // Next active arena slot (UINT32_MAX = end)
 #ifdef VALK_METRICS_ENABLED
   uint64_t start_time_us;    // Request start time for metrics
   uint64_t bytes_sent;       // Bytes sent in response
@@ -740,6 +748,47 @@ static void __event_loop(void *arg) {
   valk_slab_free(sys->httpStreamArenas);
 }
 
+// Get request pointer from arena slot index
+// The request is always the first allocation in the arena at heap[0]
+static inline valk_http2_server_request_t *__http_request_from_slot(
+    valk_slab_t *slab, uint32_t slot) {
+  if (slot == UINT32_MAX || !slab || slot >= slab->numItems) return NULL;
+  size_t stride = valk_slab_item_stride(slab->itemSize);
+  valk_slab_item_t *item = (valk_slab_item_t *)&slab->heap[stride * slot];
+  valk_mem_arena_t *arena = (valk_mem_arena_t *)item->data;
+  return (valk_http2_server_request_t *)&arena->heap[0];
+}
+
+// Remove a request from connection's active arena list (slot-based linked list)
+static void __http_remove_from_active_arenas(valk_aio_handle_t *conn,
+                                             uint32_t target_slot) {
+  if (!conn->http.server || !conn->http.server->sys) return;
+  valk_slab_t *slab = conn->http.server->sys->httpStreamArenas;
+
+  // Check head
+  if (conn->http.active_arena_head == target_slot) {
+    valk_http2_server_request_t *req = __http_request_from_slot(slab, target_slot);
+    conn->http.active_arena_head = req ? req->next_arena_slot : UINT32_MAX;
+    if (req) req->next_arena_slot = UINT32_MAX;
+    return;
+  }
+
+  // Traverse list to find target
+  uint32_t prev_slot = conn->http.active_arena_head;
+  while (prev_slot != UINT32_MAX) {
+    valk_http2_server_request_t *prev_req = __http_request_from_slot(slab, prev_slot);
+    if (!prev_req) break;
+
+    if (prev_req->next_arena_slot == target_slot) {
+      valk_http2_server_request_t *target_req = __http_request_from_slot(slab, target_slot);
+      prev_req->next_arena_slot = target_req ? target_req->next_arena_slot : UINT32_MAX;
+      if (target_req) target_req->next_arena_slot = UINT32_MAX;
+      return;
+    }
+    prev_slot = prev_req->next_arena_slot;
+  }
+}
+
 static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
   VALK_DEBUG("HTTP/2 disconnect called");
 
@@ -780,6 +829,58 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
   if (handle->http.server && handle->http.server->sys) {
     valk_sse_stream_registry_t *registry = &handle->http.server->sys->sse_registry;
     valk_sse_registry_unsubscribe_connection(registry, handle);
+  }
+
+  // Release all stream arenas that weren't cleaned up
+  // This handles abrupt disconnects where on_stream_close is not called
+  if (handle->http.server && handle->http.server->sys) {
+    valk_slab_t *slab = handle->http.server->sys->httpStreamArenas;
+    size_t leaked_arenas = 0;
+    uint32_t slot = handle->http.active_arena_head;
+    while (slot != UINT32_MAX && slot < slab->numItems) {
+      // Get slab item directly from slot index (don't trust stale req pointers)
+      size_t stride = valk_slab_item_stride(slab->itemSize);
+      valk_slab_item_t *item = (valk_slab_item_t *)&slab->heap[stride * slot];
+      valk_mem_arena_t *arena = (valk_mem_arena_t *)item->data;
+      valk_http2_server_request_t *req = (valk_http2_server_request_t *)&arena->heap[0];
+
+      // Check if slot was already released (marked with UINT32_MAX sentinel)
+      if (req->arena_slot == UINT32_MAX) {
+        VALK_DEBUG("Arena slot %u already released (sentinel found), skipping", slot);
+        // Can't trust next_arena_slot from released slot, stop traversal
+        break;
+      }
+
+      // Validate this slot belongs to this connection before releasing
+      if (req->conn != handle) {
+        VALK_WARN("Arena slot %u belongs to different connection, stopping traversal", slot);
+        break;
+      }
+
+      uint32_t next_slot = req->next_arena_slot;
+
+      // Only release if arena_slab_item matches (guards against double-free)
+      if (req->arena_slab_item == item) {
+        VALK_INFO("Releasing leaked arena slot %u on disconnect", slot);
+        // Mark as released before freeing
+        req->arena_slot = UINT32_MAX;
+        req->arena_slab_item = NULL;
+        valk_slab_release(slab, item);
+#ifdef VALK_METRICS_ENABLED
+        valk_aio_system_stats_on_arena_release(&handle->http.server->sys->system_stats);
+#endif
+        leaked_arenas++;
+      } else {
+        VALK_WARN("Arena slot %u already released or corrupted (item=%p, expected=%p)",
+                  slot, (void*)req->arena_slab_item, (void*)item);
+        break;  // Don't continue traversal with corrupted data
+      }
+      slot = next_slot;
+    }
+    handle->http.active_arena_head = UINT32_MAX;
+    if (leaked_arenas > 0) {
+      VALK_WARN("Released %zu leaked stream arenas on disconnect", leaked_arenas);
+    }
   }
 
   // TODO Tear down http and ssl context's only through the slab... make sure
@@ -1060,6 +1161,8 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
       req->stream_id = frame->hd.stream_id;
       req->stream_arena = stream_arena;
       req->arena_slab_item = arena_item;
+      req->arena_slot = (uint32_t)(arena_item->handle & 0xFFFFFFFF);
+      req->next_arena_slot = UINT32_MAX;
 #ifdef VALK_METRICS_ENABLED
       req->start_time_us = uv_hrtime() / 1000;  // Record start time
       req->bytes_sent = 0;
@@ -1069,6 +1172,10 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
 
     // Attach request to stream
     nghttp2_session_set_stream_user_data(session, frame->hd.stream_id, req);
+
+    // Add to connection's active arena list for cleanup on disconnect
+    req->next_arena_slot = conn->http.active_arena_head;
+    conn->http.active_arena_head = req->arena_slot;
   }
   return 0;
 }
@@ -1321,12 +1428,16 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
       // We no longer rely on req->sse_entry for cleanup; instead on_stream_close
       // looks up the entry by (handle, stream_id) in the registry.
       if (req->arena_slab_item) {
-        size_t slot = req->arena_slab_item->handle & 0xFFFFFFFF;
-        valk_slab_release(req->conn->http.server->sys->httpStreamArenas, req->arena_slab_item);
-        size_t arena_num_free = __atomic_load_n(&req->conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
-        VALK_INFO("Arena RELEASED (SSE) for stream %d (slot=%zu, now %zu free)", stream_id, slot, arena_num_free);
+        uint32_t slot = req->arena_slot;
+        __http_remove_from_active_arenas(req->conn, slot);
+        // Mark slot as released before freeing (for disconnect cleanup validation)
+        req->arena_slot = UINT32_MAX;
+        valk_slab_item_t *item = req->arena_slab_item;
         req->arena_slab_item = NULL;
         req->stream_arena = NULL;
+        valk_slab_release(req->conn->http.server->sys->httpStreamArenas, item);
+        size_t arena_num_free = __atomic_load_n(&req->conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
+        VALK_INFO("Arena RELEASED (SSE) for stream %d (slot=%u, now %zu free)", stream_id, slot, arena_num_free);
       }
 
       // Subscribe to global SSE registry (timer is always running)
@@ -1592,10 +1703,15 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
 #ifdef VALK_METRICS_ENABLED
     valk_aio_system_stats_on_arena_release(&conn->http.server->sys->system_stats);
 #endif
-    size_t slot = req->arena_slab_item->handle & 0xFFFFFFFF;
-    valk_slab_release(conn->http.server->sys->httpStreamArenas, req->arena_slab_item);
+    uint32_t slot = req->arena_slot;
+    __http_remove_from_active_arenas(conn, slot);
+    // Mark slot as released before freeing (for disconnect cleanup validation)
+    req->arena_slot = UINT32_MAX;
+    valk_slab_item_t *item = req->arena_slab_item;
+    req->arena_slab_item = NULL;
+    valk_slab_release(conn->http.server->sys->httpStreamArenas, item);
     size_t arena_num_free = __atomic_load_n(&conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
-    VALK_INFO("Arena RELEASED (stream close) for stream %d (slot=%zu, now %zu free)", stream_id, slot, arena_num_free);
+    VALK_INFO("Arena RELEASED (stream close) for stream %d (slot=%u, now %zu free)", stream_id, slot, arena_num_free);
   }
 
   conn->http.active_streams--;
@@ -2329,6 +2445,7 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
   conn->http.state = VALK_CONN_INIT;
   conn->http.server = srv;
   conn->http.httpHandler = &srv->handler;
+  conn->http.active_arena_head = UINT32_MAX;  // Empty arena list
 
 #ifdef VALK_METRICS_ENABLED
   // Initialize connection diagnostics
