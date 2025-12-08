@@ -208,9 +208,9 @@ typedef struct valk_aio_handle_t {
     valk_handle_diag_t diag;
 #endif
 
-    // SSE diagnostics connection (if this handle is serving SSE stream)
+    // SSE diagnostics state (shared timer + list of streams)
     // Stored here for cleanup on abrupt disconnect (browser refresh)
-    struct valk_sse_diag_conn *sse_conn;
+    struct valk_sse_diag_state *sse_state;
   } http;
 } valk_aio_handle_t;
 
@@ -748,19 +748,24 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
   }
 #endif
 
-  // Clean up SSE diagnostics connection if present
+  // Clean up SSE diagnostics state if present
   // This handles abrupt disconnects (e.g., browser refresh) where
   // on_stream_close is not called by nghttp2
-  if (handle->http.sse_conn) {
-    valk_sse_diag_stop(handle->http.sse_conn);
-    handle->http.sse_conn = NULL;
+  if (handle->http.sse_state) {
+    valk_sse_diag_stop_all(handle->http.sse_state);
+    // Note: sse_state is set to NULL by valk_sse_diag_stop_all via callback
   }
 
   // TODO Tear down http and ssl context's only through the slab... make sure
   // they dont escape into malloc
 
   valk_aio_ssl_free(&handle->http.ssl);
-  nghttp2_session_del(handle->http.session);
+
+  // NULL out session pointer BEFORE deleting to prevent use-after-free
+  // This allows SSE timer callback to detect the session is gone
+  nghttp2_session *session = handle->http.session;
+  handle->http.session = NULL;
+  nghttp2_session_del(session);
 
   // Free spillover buffer if allocated
   if (handle->http.spillover_data) {
@@ -1212,11 +1217,10 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
         return -1;
       }
 
-      // Store SSE connection in both request and handle
-      // - req->sse_conn: for cleanup on clean stream close (on_stream_close callback)
-      // - req->conn->http.sse_conn: for cleanup on abrupt disconnect (browser refresh)
+      // Store SSE stream reference in request for cleanup on stream close
+      // Connection-level cleanup (abrupt disconnect) uses handle->http.sse_state
+      // which is set automatically by valk_sse_diag_init_http2
       req->sse_conn = sse_conn;
-      req->conn->http.sse_conn = sse_conn;
 
       // Send HTTP/2 response headers with streaming data provider
       const char* content_type = "text/event-stream; charset=utf-8";
@@ -1397,10 +1401,11 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
   // NOTE: This must be outside the arena_slab_item check because SSE streams
   // release their arena early (in __http_send_response) and set arena_slab_item=NULL
   if (req && req->sse_conn) {
-    VALK_DEBUG("Stream %d closing, stopping SSE timer", stream_id);
+    VALK_DEBUG("Stream %d closing, stopping SSE stream", stream_id);
     valk_sse_diag_stop(req->sse_conn);
     req->sse_conn = NULL;
-    conn->http.sse_conn = NULL;  // Clear handle reference too
+    // Note: sse_state is managed by valk_sse_diag_stop - it handles
+    // timer cleanup when the last stream is removed
   }
 #endif
 
@@ -1812,6 +1817,29 @@ static void __http_continue_pending_send(valk_aio_handle_t *conn) {
 // Public API to flush pending HTTP/2 data (used by SSE streaming)
 void valk_http2_flush_pending(valk_aio_handle_t *conn) {
   __http_continue_pending_send(conn);
+}
+
+// Check if a session pointer is still valid for a given handle
+// Returns true if handle exists and its session matches the provided pointer
+bool valk_aio_http_session_valid(valk_aio_handle_t *handle, void *session) {
+  if (!handle || !session) {
+    return false;
+  }
+  // Check if the handle's current session matches what was stored
+  // If connection was closed, handle->http.session will be NULL or freed
+  return handle->http.session == session;
+}
+
+// Get SSE diagnostics state for a handle
+valk_sse_diag_state_t* valk_aio_get_sse_state(valk_aio_handle_t *handle) {
+  if (!handle) return NULL;
+  return handle->http.sse_state;
+}
+
+// Set SSE diagnostics state for a handle
+void valk_aio_set_sse_state(valk_aio_handle_t *handle, valk_sse_diag_state_t *state) {
+  if (!handle) return;
+  handle->http.sse_state = state;
 }
 
 static void __http_tcp_unencrypted_read_cb(void *arg,
@@ -3571,8 +3599,8 @@ void valk_aio_timer_close(valk_aio_handle_t* handle, void (*close_cb)(uv_handle_
     VALK_DEBUG("Timer already closing, skipping");
     return;
   }
-  // Store handle pointer in uv data for the close callback to release
-  handle->uv.timer.data = handle;
+  // Note: Do NOT overwrite timer.data here - the caller may have set it to
+  // their own context (e.g., valk_sse_diag_conn_t*) and expects it in the callback
   uv_close((uv_handle_t*)&handle->uv.timer, close_cb);
 }
 

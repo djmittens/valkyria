@@ -13,21 +13,6 @@ typedef struct uv_timer_s uv_timer_t;
 // Include nghttp2 for HTTP/2 types
 #include <nghttp2/nghttp2.h>
 
-// SSE connection context for memory diagnostics (HTTP/2 streaming)
-typedef struct valk_sse_diag_conn {
-  valk_aio_handle_t *handle;        // HTTP connection handle
-  valk_aio_handle_t *timer_handle;  // Push timer handle (from slab)
-  nghttp2_session *session;         // HTTP/2 session for data frames
-  int32_t stream_id;                // HTTP/2 stream ID
-  uint64_t last_event_id;           // For resumption
-  valk_aio_system_t *aio_system;    // AIO system reference
-  char *pending_data;               // Pending SSE data to send
-  size_t pending_len;               // Length of pending data
-  size_t pending_offset;            // Offset into pending data
-  bool active;                      // Connection alive
-  bool data_deferred;               // True if waiting for data
-} valk_sse_diag_conn_t;
-
 // Per-slot state for connection-aware slabs
 typedef struct {
   char state;        // 'A'=active, 'I'=idle, 'C'=closing, 'F'=free
@@ -105,6 +90,47 @@ typedef struct valk_mem_snapshot {
   } gc_heap;
 } valk_mem_snapshot_t;
 
+// Forward declare state struct
+typedef struct valk_sse_diag_state valk_sse_diag_state_t;
+
+// SSE stream context for memory diagnostics (HTTP/2 streaming)
+// Multiple streams can share one HTTP/2 connection and timer
+typedef struct valk_sse_diag_conn {
+  struct valk_sse_diag_conn *next;  // Linked list of streams on same connection
+  valk_sse_diag_state_t *state;     // Back-pointer to shared state
+  valk_aio_handle_t *handle;        // HTTP connection handle
+  nghttp2_session *session;         // HTTP/2 session for data frames
+  int32_t stream_id;                // HTTP/2 stream ID
+  uint64_t last_event_id;           // For resumption
+  valk_aio_system_t *aio_system;    // AIO system reference
+  char *pending_data;               // Pending SSE data to send
+  size_t pending_len;               // Length of pending data
+  size_t pending_offset;            // Offset into pending data
+  bool active;                      // Connection alive
+  bool data_deferred;               // True if waiting for data
+
+  // Delta tracking - send full state on first event, deltas thereafter
+  bool first_event_sent;            // True after first full snapshot sent
+  valk_mem_snapshot_t prev_snapshot; // Previous snapshot for delta calculation
+
+  // Previous metrics for delta calculation
+  struct {
+    uint64_t bytes_sent;
+    uint64_t bytes_recv;
+    uint64_t requests_total;
+    uint64_t connections_total;
+    uint64_t gc_cycles;
+  } prev_metrics;
+} valk_sse_diag_conn_t;
+
+// SSE diagnostics state for an HTTP connection (shared timer, multiple streams)
+struct valk_sse_diag_state {
+  valk_aio_handle_t *timer_handle;  // Shared timer handle
+  valk_sse_diag_conn_t *streams;    // Linked list of active SSE streams
+  valk_aio_system_t *aio_system;    // AIO system reference
+  valk_aio_handle_t *http_handle;   // HTTP connection handle (for cleanup)
+};
+
 // Initialize SSE diagnostics for an HTTP connection (deprecated, use _http2)
 void valk_sse_diag_init(valk_aio_handle_t *conn, valk_aio_system_t *aio);
 
@@ -117,14 +143,22 @@ valk_sse_diag_conn_t* valk_sse_diag_init_http2(
     int32_t stream_id,
     nghttp2_data_provider2 *data_prd_out);
 
-// Stop SSE stream
+// Stop SSE stream (removes from shared state, stops timer if last stream)
 void valk_sse_diag_stop(valk_sse_diag_conn_t *sse_conn);
+
+// Stop all SSE streams on a connection (for abrupt disconnect cleanup)
+void valk_sse_diag_stop_all(valk_sse_diag_state_t *state);
 
 // Collect memory snapshot (called by timer)
 void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot, valk_aio_system_t *aio);
 
 // Flush pending HTTP/2 data on a connection (implemented in aio_uv.c)
 void valk_http2_flush_pending(valk_aio_handle_t *conn);
+
+// Check if a session pointer is still valid for a given handle
+// Returns true if handle's session matches the provided session pointer
+// Used by SSE timer callback to detect if session was freed during processing
+bool valk_aio_http_session_valid(valk_aio_handle_t *handle, void *session);
 
 // Encode snapshot to SSE event (memory only - legacy)
 int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf, size_t buf_size, uint64_t event_id);
@@ -133,5 +167,17 @@ int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf, size_t bu
 // This unified event eliminates the need for separate polling from the dashboard
 int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot, valk_aio_system_t *aio,
                                char *buf, size_t buf_size, uint64_t event_id);
+
+// Encode delta diagnostics to SSE event (only changed fields)
+// Returns 0 if no changes detected (skip sending), >0 for bytes written, <0 for error
+int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *prev,
+                            valk_sse_diag_conn_t *conn, valk_aio_system_t *aio,
+                            char *buf, size_t buf_size, uint64_t event_id);
+
+// Free snapshot allocations (bitmaps, slots)
+void valk_mem_snapshot_free(valk_mem_snapshot_t *snapshot);
+
+// Copy snapshot for delta tracking (deep copy of bitmaps/slots)
+void valk_mem_snapshot_copy(valk_mem_snapshot_t *dst, const valk_mem_snapshot_t *src);
 
 #endif // VALK_AIO_SSE_DIAGNOSTICS_H

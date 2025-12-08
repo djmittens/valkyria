@@ -65,6 +65,43 @@
     return result.join('');
   }
 
+  // ==================== Delta State Decoder ====================
+  // Decodes sparse delta format: "3:A2I1,10:F3" -> applies changes at offsets
+  // Takes existing state string and applies delta patches
+  function applyDeltaStates(existingStates, deltaStr) {
+    if (!deltaStr || deltaStr.length === 0) return existingStates;
+    if (!existingStates) existingStates = '';
+
+    // Convert to array for easier manipulation
+    var states = existingStates.split('');
+
+    // Parse delta: "offset:RLE,offset:RLE,..."
+    var regions = deltaStr.split(',');
+    for (var r = 0; r < regions.length; r++) {
+      var region = regions[r];
+      var colonIdx = region.indexOf(':');
+      if (colonIdx === -1) continue;
+
+      var offset = parseInt(region.substring(0, colonIdx), 10);
+      var rle = region.substring(colonIdx + 1);
+
+      if (isNaN(offset) || offset < 0) continue;
+
+      // Decode RLE and apply at offset
+      var expanded = decodeRLE(rle);
+      for (var i = 0; i < expanded.length; i++) {
+        var idx = offset + i;
+        // Extend array if needed
+        while (states.length <= idx) {
+          states.push('F');
+        }
+        states[idx] = expanded[i];
+      }
+    }
+
+    return states.join('');
+  }
+
   // ==================== State ====================
   var currentBackoff = POLL_INTERVAL;
   var history = {
@@ -1384,8 +1421,21 @@
       this.grids = {};
       this.arenaGauges = {};
 
-      // State for delta detection
+      // State for delta detection (UI animation)
       this.previousState = {};
+
+      // Full state storage for delta merging
+      // Server sends full state on connect, then deltas only
+      this.fullState = {
+        memory: null,
+        metrics: null
+      };
+
+      // Expanded slab states (decoded RLE) for delta application
+      this.slabStates = {};  // keyed by slab name
+
+      // Owner map for server/client names (indexed by owner_idx)
+      this.ownerMap = [];
     }
 
     connect() {
@@ -1394,20 +1444,44 @@
 
       var self = this;
 
-      // Listen for unified diagnostics event (memory + metrics)
+      // Listen for full diagnostics event (sent on initial connect)
       this.eventSource.addEventListener('diagnostics', function(e) {
         self.lastEventId = e.lastEventId;
         var data = JSON.parse(e.data);
 
-        // Handle memory section
+        // Store full state
+        if (data.memory) {
+          self.fullState.memory = data.memory;
+          // Expand and store slab states for delta tracking
+          if (data.memory.slabs) {
+            data.memory.slabs.forEach(function(slab) {
+              if (slab.states) {
+                self.slabStates[slab.name] = decodeRLE(slab.states);
+              }
+            });
+          }
+        }
+
+        // Handle metrics FIRST to create AIO panels before memory update
+        // tries to find slab grid elements
+        if (data.metrics) {
+          self.fullState.metrics = data.metrics;
+          self.handleMetricsUpdate(data.metrics);
+        }
+
+        // Now update memory/slabs - panels should exist from metrics update
         if (data.memory) {
           self.handleMemoryUpdate(data.memory);
         }
 
-        // Handle metrics section - update the main dashboard
-        if (data.metrics) {
-          self.handleMetricsUpdate(data.metrics);
-        }
+        console.log('[MemDiag] Full state received');
+      });
+
+      // Listen for delta diagnostics events (sent after first full event)
+      this.eventSource.addEventListener('diagnostics-delta', function(e) {
+        self.lastEventId = e.lastEventId;
+        var delta = JSON.parse(e.data);
+        self.applyDelta(delta);
       });
 
       // Also listen for legacy 'memory' event for backwards compatibility
@@ -1419,7 +1493,10 @@
       this.eventSource.onopen = function() {
         self.reconnectAttempts = 0;
         self.updateConnectionStatus(true);
-        console.log('[MemDiag] SSE connected (unified diagnostics mode)');
+        // Clear stored state on reconnect to get fresh full state
+        self.fullState = { memory: null, metrics: null };
+        self.slabStates = {};
+        console.log('[MemDiag] SSE connected (delta mode enabled)');
       };
 
       this.eventSource.onerror = function(e) {
@@ -1430,6 +1507,140 @@
       };
     }
 
+    // Apply delta update to stored full state
+    applyDelta(delta) {
+      if (!this.fullState.memory && delta.memory) {
+        // No full state yet, can't apply delta - request reconnect
+        console.warn('[MemDiag] Delta received before full state, reconnecting...');
+        this.scheduleReconnect();
+        return;
+      }
+
+      var memoryUpdated = false;
+      var metricsUpdated = false;
+
+      // Apply memory deltas
+      if (delta.memory && this.fullState.memory) {
+        var mem = this.fullState.memory;
+
+        // Apply slab deltas
+        if (delta.memory.slabs) {
+          delta.memory.slabs.forEach(function(deltaSlab) {
+            // Find matching slab in full state
+            var fullSlab = null;
+            for (var i = 0; i < mem.slabs.length; i++) {
+              if (mem.slabs[i].name === deltaSlab.name) {
+                fullSlab = mem.slabs[i];
+                break;
+              }
+            }
+            if (!fullSlab) return;
+
+            // Update used count
+            if (deltaSlab.used !== undefined) {
+              fullSlab.used = deltaSlab.used;
+            }
+
+            // Apply delta_states to stored expanded state
+            if (deltaSlab.delta_states && this.slabStates[deltaSlab.name]) {
+              this.slabStates[deltaSlab.name] = applyDeltaStates(
+                this.slabStates[deltaSlab.name],
+                deltaSlab.delta_states
+              );
+              // Re-encode to RLE for the UI (or pass expanded directly)
+              // For simplicity, store as expanded and let render use it
+              fullSlab.states = this.slabStates[deltaSlab.name];
+              fullSlab._statesExpanded = true;  // Flag to skip decoding
+            }
+
+            // Update bitmap if provided (full bitmap, already RLE)
+            if (deltaSlab.bitmap !== undefined) {
+              fullSlab.bitmap = deltaSlab.bitmap;
+            }
+
+            // Update summary stats
+            if (deltaSlab.summary) {
+              fullSlab.summary = deltaSlab.summary;
+            }
+
+            // Update by_type (handle type breakdown)
+            if (deltaSlab.by_type) {
+              fullSlab.by_type = deltaSlab.by_type;
+            }
+          }, this);
+        }
+
+        // Apply arena deltas
+        if (delta.memory.arenas) {
+          delta.memory.arenas.forEach(function(deltaArena) {
+            var fullArena = null;
+            for (var i = 0; i < mem.arenas.length; i++) {
+              if (mem.arenas[i].name === deltaArena.name) {
+                fullArena = mem.arenas[i];
+                break;
+              }
+            }
+            if (fullArena && deltaArena.used !== undefined) {
+              fullArena.used = deltaArena.used;
+            }
+          });
+        }
+
+        // Apply GC deltas
+        if (delta.memory.gc) {
+          if (!mem.gc) mem.gc = {};
+          Object.assign(mem.gc, delta.memory.gc);
+        }
+
+        memoryUpdated = true;
+      }
+
+      // Apply metrics deltas
+      if (delta.metrics && this.fullState.metrics) {
+        var metrics = this.fullState.metrics;
+
+        if (delta.metrics.aio) {
+          if (!metrics.aio) metrics.aio = {};
+
+          // Apply byte deltas (accumulate)
+          if (delta.metrics.aio.bytes) {
+            if (!metrics.aio.bytes) metrics.aio.bytes = { sent: 0, recv: 0 };
+            if (delta.metrics.aio.bytes.d_sent) {
+              metrics.aio.bytes.sent = (metrics.aio.bytes.sent || 0) + delta.metrics.aio.bytes.d_sent;
+            }
+            if (delta.metrics.aio.bytes.d_recv) {
+              metrics.aio.bytes.recv = (metrics.aio.bytes.recv || 0) + delta.metrics.aio.bytes.d_recv;
+            }
+          }
+
+          // Apply request deltas
+          if (delta.metrics.aio.requests) {
+            if (!metrics.aio.requests) metrics.aio.requests = { total: 0 };
+            if (delta.metrics.aio.requests.d_total) {
+              metrics.aio.requests.total = (metrics.aio.requests.total || 0) + delta.metrics.aio.requests.d_total;
+            }
+          }
+
+          // Connection counts are absolute (gauges)
+          if (delta.metrics.aio.connections) {
+            if (!metrics.aio.connections) metrics.aio.connections = {};
+            Object.assign(metrics.aio.connections, delta.metrics.aio.connections);
+          }
+        }
+
+        metricsUpdated = true;
+      }
+
+      // Trigger UI updates with merged state
+      // Handle metrics first to ensure panels exist before memory update
+      if (metricsUpdated) {
+        this.handleMetricsUpdate(this.fullState.metrics);
+      }
+      if (memoryUpdated) {
+        this.handleMemoryUpdate(this.fullState.memory);
+      }
+    }
+
     scheduleReconnect() {
       if (this.reconnectAttempts >= this.maxReconnectAttempts) {
         console.error('[MemDiag] Max reconnection attempts reached');
@@ -1437,8 +1648,13 @@
       }
 
       this.reconnectAttempts++;
-      var delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-      console.log('[MemDiag] Reconnecting in ' + delay + 'ms...');
+      // Immediate first reconnect, then exponential backoff
+      var delay = this.reconnectAttempts === 1 ? 0 : Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000);
+      if (delay > 0) {
+        console.log('[MemDiag] Reconnecting in ' + delay + 'ms...');
+      } else {
+        console.log('[MemDiag] Reconnecting immediately...');
+      }
 
       var self = this;
       setTimeout(function() {
@@ -1693,7 +1909,8 @@
 
       // Check if this slab has per-slot state tracking (connection-aware slabs)
       if (slab.states) {
-        var states = decodeRLE(slab.states);  // Decode RLE: "F16A3" -> "FFFFFFFFFFFFFFFFAAA"
+        // States may be pre-expanded (from delta merge) or RLE-encoded
+        var states = slab._statesExpanded ? slab.states : decodeRLE(slab.states);
         var summary = slab.summary;  // Capture before async callback
         requestAnimationFrame(function() {
           if (states.length > 5000) {
@@ -1722,8 +1939,18 @@
       if (!panel) return;
 
       // Update owner breakdown for handles slab (only if we have by_owner data)
-      if (slab.name === 'handles' && slab.summary && slab.summary.by_owner && ownerMap) {
-        this.renderOwnerBreakdown(panel, slab.summary.by_owner, slab.used, ownerMap);
+      if (slab.name === 'handles') {
+        if (slab.summary && slab.summary.by_owner && ownerMap && ownerMap.length > 0) {
+          this.renderOwnerBreakdown(panel, slab.summary.by_owner, slab.used, ownerMap);
+        } else {
+          // Debug: log why owner breakdown isn't rendering
+          console.log('[MemDiag] Owner breakdown skipped:', {
+            hasSummary: !!slab.summary,
+            hasByOwner: !!(slab.summary && slab.summary.by_owner),
+            byOwnerKeys: slab.summary && slab.summary.by_owner ? Object.keys(slab.summary.by_owner) : [],
+            ownerMapLength: ownerMap ? ownerMap.length : 0
+          });
+        }
       }
 
       // Update handle type breakdown table (only for handles slab)

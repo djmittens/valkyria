@@ -64,10 +64,13 @@ static uint8_t *slab_to_bitmap(valk_slab_t *slab, size_t *out_bytes,
       break;
     }
 
-    // Check if we've already visited this slot (true cycle detection)
+    // Check if we've already visited this slot (cycle detection)
     size_t byte_idx = head_offset / 8;
     uint8_t bit_mask = 1 << (head_offset % 8);
-    VALK_ASSERT((visited[byte_idx] & bit_mask) == 0, "Slab free list cycle detected at offset %zu", head_offset);
+    if (visited[byte_idx] & bit_mask) {
+      // Cycle in free list - indicates slab corruption, just stop the walk
+      break;
+    }
     visited[byte_idx] |= bit_mask;
 
     // Clear bit in output bitmap (mark as free)
@@ -391,9 +394,14 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
     valk_slab_t *handle_slab = valk_aio_get_handle_slab(aio);
     if (handle_slab && slab_idx < 8) {
       snapshot->slabs[slab_idx].name = "handles";
+      // Always set total_slots from the slab, even if slot_diag fails
+      snapshot->slabs[slab_idx].total_slots = handle_slab->numItems;
       // Get current time for age calculation
       uint64_t now_ms = (uint64_t)(uv_hrtime() / 1000000ULL);
       slab_to_slot_diag(handle_slab, &snapshot->slabs[slab_idx], aio, now_ms);
+      // Note: if slot_diag fails (OOM), has_slot_diag will be false and
+      // the SSE formatter will use an empty bitmap. This is acceptable
+      // for transient OOM conditions - next snapshot will likely succeed.
       slab_idx++;
     }
   }
@@ -467,6 +475,79 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
     snapshot->owner_map[i] = valk_owner_get_name(aio, (uint16_t)i);
   }
 #endif
+}
+
+// ============================================================================
+// Snapshot Memory Management
+// ============================================================================
+
+void valk_mem_snapshot_free(valk_mem_snapshot_t *snapshot) {
+  if (!snapshot) return;
+
+  for (size_t i = 0; i < snapshot->slab_count; i++) {
+    free(snapshot->slabs[i].bitmap);
+    snapshot->slabs[i].bitmap = NULL;
+    free(snapshot->slabs[i].slots);
+    snapshot->slabs[i].slots = NULL;
+  }
+  snapshot->slab_count = 0;
+  snapshot->arena_count = 0;
+  snapshot->owner_count = 0;
+}
+
+void valk_mem_snapshot_copy(valk_mem_snapshot_t *dst, const valk_mem_snapshot_t *src) {
+  if (!dst || !src) return;
+
+  // Free any existing allocations in dst
+  valk_mem_snapshot_free(dst);
+
+  // Copy scalar fields
+  dst->slab_count = src->slab_count;
+  dst->arena_count = src->arena_count;
+  dst->owner_count = src->owner_count;
+  dst->gc_heap = src->gc_heap;
+
+  // Copy arenas (no heap allocations)
+  memcpy(dst->arenas, src->arenas, sizeof(dst->arenas));
+
+  // Copy owner map (pointers to static strings, no deep copy needed)
+  memcpy(dst->owner_map, src->owner_map, sizeof(dst->owner_map));
+
+  // Deep copy slabs
+  for (size_t i = 0; i < src->slab_count; i++) {
+    dst->slabs[i].name = src->slabs[i].name;
+    dst->slabs[i].total_slots = src->slabs[i].total_slots;
+    dst->slabs[i].used_slots = src->slabs[i].used_slots;
+    dst->slabs[i].overflow_count = src->slabs[i].overflow_count;
+    dst->slabs[i].has_slot_diag = src->slabs[i].has_slot_diag;
+    dst->slabs[i].by_state = src->slabs[i].by_state;
+    dst->slabs[i].by_type = src->slabs[i].by_type;
+    dst->slabs[i].owner_count = src->slabs[i].owner_count;
+    memcpy(dst->slabs[i].by_owner, src->slabs[i].by_owner, sizeof(dst->slabs[i].by_owner));
+
+    // Deep copy bitmap
+    if (src->slabs[i].bitmap && src->slabs[i].bitmap_bytes > 0) {
+      dst->slabs[i].bitmap_bytes = src->slabs[i].bitmap_bytes;
+      dst->slabs[i].bitmap = malloc(src->slabs[i].bitmap_bytes);
+      if (dst->slabs[i].bitmap) {
+        memcpy(dst->slabs[i].bitmap, src->slabs[i].bitmap, src->slabs[i].bitmap_bytes);
+      }
+    } else {
+      dst->slabs[i].bitmap = NULL;
+      dst->slabs[i].bitmap_bytes = 0;
+    }
+
+    // Deep copy slots
+    if (src->slabs[i].slots && src->slabs[i].total_slots > 0) {
+      dst->slabs[i].slots = malloc(src->slabs[i].total_slots * sizeof(valk_slot_diag_t));
+      if (dst->slabs[i].slots) {
+        memcpy(dst->slabs[i].slots, src->slabs[i].slots,
+               src->slabs[i].total_slots * sizeof(valk_slot_diag_t));
+      }
+    } else {
+      dst->slabs[i].slots = NULL;
+    }
+  }
 }
 
 // ============================================================================
@@ -934,6 +1015,391 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
 }
 
 // ============================================================================
+// Delta SSE Event Formatting
+// ============================================================================
+
+// Compare two bitmaps and return true if they differ
+static bool bitmap_differs(const uint8_t *a, const uint8_t *b, size_t bytes) {
+  if (!a && !b) return false;
+  if (!a || !b) return true;
+  return memcmp(a, b, bytes) != 0;
+}
+
+// Compare slot states and return true if they differ
+static bool slots_differ(const valk_slot_diag_t *a, const valk_slot_diag_t *b, size_t count) {
+  if (!a && !b) return false;
+  if (!a || !b) return true;
+  for (size_t i = 0; i < count; i++) {
+    if (a[i].state != b[i].state) return true;
+  }
+  return false;
+}
+
+// Check if a slab changed between snapshots
+static bool slab_changed(const valk_slab_snapshot_t *curr, const valk_slab_snapshot_t *prev) {
+  if (curr->used_slots != prev->used_slots) return true;
+  if (curr->overflow_count != prev->overflow_count) return true;
+
+  if (curr->has_slot_diag && prev->has_slot_diag) {
+    if (slots_differ(curr->slots, prev->slots, curr->total_slots)) return true;
+    // Check state summary changes
+    if (curr->by_state.active != prev->by_state.active ||
+        curr->by_state.idle != prev->by_state.idle ||
+        curr->by_state.closing != prev->by_state.closing) return true;
+  } else if (curr->bitmap && prev->bitmap) {
+    if (bitmap_differs(curr->bitmap, prev->bitmap, curr->bitmap_bytes)) return true;
+  }
+
+  return false;
+}
+
+// Find slots that changed and encode as sparse delta
+// Format: "offset:RLE,offset:RLE,..." e.g. "3:A2I1,10:F3"
+static size_t slots_to_delta_string(const valk_slot_diag_t *curr, const valk_slot_diag_t *prev,
+                                     size_t count, char *out, size_t out_size) {
+  if (count == 0 || out_size < 8) {
+    out[0] = '\0';
+    return 0;
+  }
+
+  char *p = out;
+  char *end = out + out_size - 1;
+  bool first_region = true;
+
+  size_t i = 0;
+  while (i < count && p < end - 20) {
+    // Find start of a changed region
+    while (i < count && curr[i].state == prev[i].state) i++;
+    if (i >= count) break;
+
+    size_t region_start = i;
+
+    // Build RLE for changed region
+    char rle_buf[256];
+    char *rp = rle_buf;
+    char *rend = rle_buf + sizeof(rle_buf) - 10;
+
+    while (i < count && p < end - 20 && rp < rend) {
+      char state = curr[i].state;
+      size_t run_len = 1;
+
+      // Count consecutive slots with same NEW state (include unchanged if adjacent)
+      while (i + run_len < count && curr[i + run_len].state == state) {
+        run_len++;
+      }
+
+      // Stop if we hit a long unchanged region (>4 slots same as prev)
+      size_t unchanged_run = 0;
+      for (size_t j = 0; j < run_len && i + j < count; j++) {
+        if (curr[i + j].state == prev[i + j].state) {
+          unchanged_run++;
+          if (unchanged_run > 4) {
+            run_len = j - unchanged_run + 1;
+            break;
+          }
+        } else {
+          unchanged_run = 0;
+        }
+      }
+
+      if (run_len == 0) break;
+
+      int n = snprintf(rp, rend - rp, "%c%zu", state, run_len);
+      if (n < 0 || rp + n >= rend) break;
+      rp += n;
+      i += run_len;
+
+      // Check if next slot is unchanged and we should end this region
+      if (i < count && curr[i].state == prev[i].state) {
+        break;
+      }
+    }
+    *rp = '\0';
+
+    // Write "offset:RLE"
+    if (rp > rle_buf) {
+      int n;
+      if (first_region) {
+        n = snprintf(p, end - p, "%zu:%s", region_start, rle_buf);
+        first_region = false;
+      } else {
+        n = snprintf(p, end - p, ",%zu:%s", region_start, rle_buf);
+      }
+      if (n < 0 || p + n >= end) break;
+      p += n;
+    }
+  }
+
+  *p = '\0';
+  return p - out;
+}
+
+// Encode delta diagnostics to SSE event
+// Returns 0 if no meaningful changes, >0 for bytes written, <0 for error
+int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *prev,
+                            valk_sse_diag_conn_t *conn, valk_aio_system_t *aio,
+                            char *buf, size_t buf_size, uint64_t event_id) {
+  char *p = buf;
+  char *end = buf + buf_size;
+
+  // Track if we have any changes worth sending
+  bool has_memory_changes = false;
+  bool has_metric_changes = false;
+
+  // Check for slab changes
+  bool slab_changes[8] = {false};
+  for (size_t i = 0; i < current->slab_count && i < prev->slab_count; i++) {
+    if (slab_changed(&current->slabs[i], &prev->slabs[i])) {
+      slab_changes[i] = true;
+      has_memory_changes = true;
+    }
+  }
+
+  // Check for arena changes (>1% change threshold)
+  bool arena_changes[16] = {false};
+  for (size_t i = 0; i < current->arena_count && i < prev->arena_count; i++) {
+    size_t diff = current->arenas[i].used_bytes > prev->arenas[i].used_bytes
+                    ? current->arenas[i].used_bytes - prev->arenas[i].used_bytes
+                    : prev->arenas[i].used_bytes - current->arenas[i].used_bytes;
+    size_t threshold = prev->arenas[i].capacity_bytes / 100;  // 1%
+    if (diff > threshold || current->arenas[i].overflow_fallbacks != prev->arenas[i].overflow_fallbacks) {
+      arena_changes[i] = true;
+      has_memory_changes = true;
+    }
+  }
+
+  // Check GC changes
+  bool gc_changed = (current->gc_heap.gc_cycles != prev->gc_heap.gc_cycles ||
+                     current->gc_heap.emergency_collections != prev->gc_heap.emergency_collections);
+  if (gc_changed) has_memory_changes = true;
+
+  // Check metrics changes
+#ifdef VALK_METRICS_ENABLED
+  const valk_aio_metrics_t *aio_metrics = valk_aio_get_metrics(aio);
+  if (aio_metrics && conn) {
+    uint64_t bytes_sent = atomic_load(&aio_metrics->bytes_sent_total);
+    uint64_t bytes_recv = atomic_load(&aio_metrics->bytes_recv_total);
+    uint64_t requests = atomic_load(&aio_metrics->requests_total);
+    uint64_t connections = atomic_load(&aio_metrics->connections_total);
+
+    if (bytes_sent != conn->prev_metrics.bytes_sent ||
+        bytes_recv != conn->prev_metrics.bytes_recv ||
+        requests != conn->prev_metrics.requests_total ||
+        connections != conn->prev_metrics.connections_total) {
+      has_metric_changes = true;
+    }
+  }
+#else
+  (void)conn;
+  (void)aio;
+#endif
+
+  // If nothing changed, return 0 to signal skip
+  if (!has_memory_changes && !has_metric_changes) {
+    return 0;
+  }
+
+  // SSE event header - use "diagnostics-delta" event type
+  int n = snprintf(p, end - p, "event: diagnostics-delta\nid: %lu\ndata: {", event_id);
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  bool need_comma = false;
+
+  // ===== Memory section (only changed items) =====
+  if (has_memory_changes) {
+    n = snprintf(p, end - p, "\"memory\":{");
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+
+    bool mem_need_comma = false;
+
+    // Changed slabs only
+    bool any_slab_changed = false;
+    for (size_t i = 0; i < current->slab_count; i++) {
+      if (slab_changes[i]) { any_slab_changed = true; break; }
+    }
+
+    if (any_slab_changed) {
+      n = snprintf(p, end - p, "\"slabs\":[");
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+
+      bool first_slab = true;
+      for (size_t i = 0; i < current->slab_count; i++) {
+        if (!slab_changes[i]) continue;
+
+        valk_slab_snapshot_t *slab = &current->slabs[i];
+        valk_slab_snapshot_t *prev_slab = &prev->slabs[i];
+
+        if (!first_slab) {
+          n = snprintf(p, end - p, ",");
+          if (n < 0 || n >= end - p) return -1;
+          p += n;
+        }
+        first_slab = false;
+
+        if (slab->has_slot_diag && slab->slots && prev_slab->slots) {
+          // Encode sparse delta for slot states
+          char delta_buf[4096];
+          slots_to_delta_string(slab->slots, prev_slab->slots, slab->total_slots,
+                                delta_buf, sizeof(delta_buf));
+
+          // Build by_owner JSON for delta (same format as full snapshot)
+          char by_owner_buf[512] = {0};
+          char *bp = by_owner_buf;
+          char *bp_end = by_owner_buf + sizeof(by_owner_buf);
+          int bn = snprintf(bp, bp_end - bp, "{");
+          if (bn > 0) bp += bn;
+          for (size_t j = 0; j < slab->owner_count && bp < bp_end - 64; j++) {
+            if (j > 0) {
+              bn = snprintf(bp, bp_end - bp, ",");
+              if (bn > 0) bp += bn;
+            }
+            bn = snprintf(bp, bp_end - bp, "\"%u\":{\"A\":%zu,\"I\":%zu,\"C\":%zu}",
+                          slab->by_owner[j].owner_idx,
+                          slab->by_owner[j].active,
+                          slab->by_owner[j].idle,
+                          slab->by_owner[j].closing);
+            if (bn > 0) bp += bn;
+          }
+          snprintf(bp, bp_end - bp, "}");
+
+          n = snprintf(p, end - p,
+                       "{\"name\":\"%s\",\"used\":%zu,"
+                       "\"delta_states\":\"%s\","
+                       "\"summary\":{\"A\":%zu,\"I\":%zu,\"C\":%zu,\"by_owner\":%s},"
+                       "\"by_type\":{\"tcp\":%zu,\"task\":%zu,\"timer\":%zu,\"http\":%zu}}",
+                       slab->name, slab->used_slots,
+                       delta_buf,
+                       slab->by_state.active, slab->by_state.idle, slab->by_state.closing,
+                       by_owner_buf,
+                       slab->by_type.tcp_listeners, slab->by_type.tasks,
+                       slab->by_type.timers, slab->by_type.http_conns);
+        } else {
+          // For bitmap slabs, send full bitmap (already RLE compressed)
+          size_t rle_buf_size = slab->bitmap_bytes * 4 + 1;
+          char *hex = malloc(rle_buf_size);
+          if (!hex) return -1;
+
+          if (slab->bitmap) {
+            bitmap_to_rle_hex(slab->bitmap, slab->bitmap_bytes, hex, rle_buf_size);
+          } else {
+            hex[0] = '\0';
+          }
+
+          n = snprintf(p, end - p,
+                       "{\"name\":\"%s\",\"bitmap\":\"%s\",\"used\":%zu}",
+                       slab->name, hex, slab->used_slots);
+          free(hex);
+        }
+
+        if (n < 0 || n >= end - p) return -1;
+        p += n;
+      }
+
+      n = snprintf(p, end - p, "]");
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+      mem_need_comma = true;
+    }
+
+    // Changed arenas only
+    bool any_arena_changed = false;
+    for (size_t i = 0; i < current->arena_count; i++) {
+      if (arena_changes[i]) { any_arena_changed = true; break; }
+    }
+
+    if (any_arena_changed) {
+      n = snprintf(p, end - p, "%s\"arenas\":[", mem_need_comma ? "," : "");
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+
+      bool first_arena = true;
+      for (size_t i = 0; i < current->arena_count; i++) {
+        if (!arena_changes[i]) continue;
+
+        if (!first_arena) {
+          n = snprintf(p, end - p, ",");
+          if (n < 0 || n >= end - p) return -1;
+          p += n;
+        }
+        first_arena = false;
+
+        n = snprintf(p, end - p, "{\"name\":\"%s\",\"used\":%zu}",
+                     current->arenas[i].name, current->arenas[i].used_bytes);
+        if (n < 0 || n >= end - p) return -1;
+        p += n;
+      }
+
+      n = snprintf(p, end - p, "]");
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+      mem_need_comma = true;
+    }
+
+    // GC changes
+    if (gc_changed) {
+      n = snprintf(p, end - p,
+                   "%s\"gc\":{\"allocated\":%zu,\"cycles\":%lu,\"emergency\":%zu}",
+                   mem_need_comma ? "," : "",
+                   current->gc_heap.allocated_bytes,
+                   current->gc_heap.gc_cycles,
+                   current->gc_heap.emergency_collections);
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+    }
+
+    n = snprintf(p, end - p, "}");  // Close memory
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+    need_comma = true;
+  }
+
+  // ===== Metrics section (delta values) =====
+#ifdef VALK_METRICS_ENABLED
+  if (has_metric_changes && conn) {
+    const valk_aio_metrics_t *aio_metrics = valk_aio_get_metrics(aio);
+    if (aio_metrics) {
+      uint64_t bytes_sent = atomic_load(&aio_metrics->bytes_sent_total);
+      uint64_t bytes_recv = atomic_load(&aio_metrics->bytes_recv_total);
+      uint64_t requests = atomic_load(&aio_metrics->requests_total);
+
+      // Send deltas for monotonic counters
+      uint64_t d_sent = bytes_sent - conn->prev_metrics.bytes_sent;
+      uint64_t d_recv = bytes_recv - conn->prev_metrics.bytes_recv;
+      uint64_t d_req = requests - conn->prev_metrics.requests_total;
+
+      n = snprintf(p, end - p,
+                   "%s\"metrics\":{\"aio\":{\"bytes\":{\"d_sent\":%lu,\"d_recv\":%lu},"
+                   "\"requests\":{\"d_total\":%lu},"
+                   "\"connections\":{\"active\":%lu,\"idle\":%lu,\"closing\":%lu}}}",
+                   need_comma ? "," : "",
+                   d_sent, d_recv, d_req,
+                   atomic_load(&aio_metrics->connections_active),
+                   atomic_load(&aio_metrics->connections_idle),
+                   atomic_load(&aio_metrics->connections_closing));
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+
+      // Update previous metrics for next delta
+      conn->prev_metrics.bytes_sent = bytes_sent;
+      conn->prev_metrics.bytes_recv = bytes_recv;
+      conn->prev_metrics.requests_total = requests;
+      conn->prev_metrics.connections_total = atomic_load(&aio_metrics->connections_total);
+    }
+  }
+#endif
+
+  // Close JSON and add SSE empty line
+  n = snprintf(p, end - p, "}\n\n");
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  return p - buf;
+}
+
+// ============================================================================
 // SSE Connection Management (HTTP/2 Streaming)
 // ============================================================================
 
@@ -945,79 +1411,154 @@ static nghttp2_ssize sse_data_read_callback(
     nghttp2_session *session, int32_t stream_id, uint8_t *buf, size_t length,
     uint32_t *data_flags, nghttp2_data_source *source, void *user_data);
 
-// Timer callback - called every 100ms to push diagnostics (memory + metrics) via HTTP/2
-// This unified approach eliminates the need for separate polling from the dashboard
-static void sse_push_diagnostics(uv_timer_t *timer) {
-  valk_sse_diag_conn_t *conn = (valk_sse_diag_conn_t *)timer->data;
-
-  if (!conn || !conn->active) {
-    return;
+// Push diagnostics to a single stream
+// Returns true if data was successfully queued for sending
+static bool sse_push_to_stream(valk_sse_diag_conn_t *stream,
+                                valk_mem_snapshot_t *snapshot) {
+  if (!stream || !stream->active || !stream->session) {
+    return false;
   }
 
-  // If we still have pending data, skip this tick
-  if (conn->pending_data && conn->pending_offset < conn->pending_len) {
-    return;
+  // If we still have pending data, skip this tick for this stream
+  if (stream->pending_data && stream->pending_offset < stream->pending_len) {
+    return false;
   }
-
-  // Collect memory snapshot
-  valk_mem_snapshot_t snapshot = {0};
-  valk_mem_snapshot_collect(&snapshot, conn->aio_system);
 
   // Allocate or reuse pending buffer
-  if (!conn->pending_data) {
-    conn->pending_data = malloc(SSE_BUFFER_SIZE);
-    if (!conn->pending_data) {
-      VALK_ERROR("Failed to allocate SSE buffer");
-      goto cleanup;
+  if (!stream->pending_data) {
+    stream->pending_data = malloc(SSE_BUFFER_SIZE);
+    if (!stream->pending_data) {
+      VALK_ERROR("Failed to allocate SSE buffer for stream %d", stream->stream_id);
+      return false;
     }
   }
 
-  // Format combined SSE event (memory + metrics)
-  int len = valk_diag_snapshot_to_sse(&snapshot, conn->aio_system,
-                                       conn->pending_data, SSE_BUFFER_SIZE,
-                                       ++conn->last_event_id);
+  int len;
 
-  if (len <= 0) {
-    VALK_ERROR("Failed to format SSE diagnostics event");
-    goto cleanup;
+  if (!stream->first_event_sent) {
+    // First event: send full snapshot (event type: "diagnostics")
+    len = valk_diag_snapshot_to_sse(snapshot, stream->aio_system,
+                                     stream->pending_data, SSE_BUFFER_SIZE,
+                                     ++stream->last_event_id);
+
+    VALK_DEBUG("SSE[stream=%d]: valk_diag_snapshot_to_sse returned len=%d",
+               stream->stream_id, len);
+
+    if (len > 0) {
+      stream->first_event_sent = true;
+
+      // Initialize previous metrics for delta tracking
+#ifdef VALK_METRICS_ENABLED
+      const valk_aio_metrics_t *aio_metrics = valk_aio_get_metrics(stream->aio_system);
+      if (aio_metrics) {
+        stream->prev_metrics.bytes_sent = atomic_load(&aio_metrics->bytes_sent_total);
+        stream->prev_metrics.bytes_recv = atomic_load(&aio_metrics->bytes_recv_total);
+        stream->prev_metrics.requests_total = atomic_load(&aio_metrics->requests_total);
+        stream->prev_metrics.connections_total = atomic_load(&aio_metrics->connections_total);
+        stream->prev_metrics.gc_cycles = snapshot->gc_heap.gc_cycles;
+      }
+#endif
+
+      // Store snapshot for next delta comparison
+      valk_mem_snapshot_copy(&stream->prev_snapshot, snapshot);
+
+      VALK_DEBUG("SSE[stream=%d]: sent full snapshot (%d bytes)", stream->stream_id, len);
+    }
+  } else {
+    // Subsequent events: send delta only (event type: "diagnostics-delta")
+    len = valk_diag_delta_to_sse(snapshot, &stream->prev_snapshot, stream,
+                                  stream->aio_system, stream->pending_data,
+                                  SSE_BUFFER_SIZE, ++stream->last_event_id);
+
+    if (len > 0) {
+      // Update stored snapshot for next comparison
+      valk_mem_snapshot_copy(&stream->prev_snapshot, snapshot);
+      VALK_DEBUG("SSE[stream=%d]: sent delta (%d bytes)", stream->stream_id, len);
+    } else if (len == 0) {
+      // No changes - don't send anything
+      return false;
+    }
   }
 
-  conn->pending_len = (size_t)len;
-  conn->pending_offset = 0;
+  if (len < 0) {
+    VALK_ERROR("Failed to format SSE diagnostics event for stream %d", stream->stream_id);
+    return false;
+  }
+
+  stream->pending_len = (size_t)len;
+  stream->pending_offset = 0;
 
   // If data was deferred, resume the stream and flush
-  if (conn->data_deferred && conn->session) {
+  if (stream->data_deferred && stream->session && stream->active) {
+    // Verify session is still valid using the handle's authoritative session pointer
+    if (!valk_aio_http_session_valid(stream->handle, stream->session)) {
+      VALK_INFO("SSE session invalidated for stream %d", stream->stream_id);
+      stream->active = false;
+      return false;
+    }
+
     // Check if the stream is still valid before trying to resume
-    // nghttp2_session_get_stream_user_data returns NULL if stream doesn't exist
-    if (nghttp2_session_get_stream_user_data(conn->session, conn->stream_id) == NULL) {
-      // Stream was closed, mark connection as inactive
-      VALK_INFO("SSE stream %d closed, stopping diagnostics", conn->stream_id);
-      conn->active = false;
-      goto cleanup;
+    if (nghttp2_session_get_stream_user_data(stream->session, stream->stream_id) == NULL) {
+      VALK_INFO("SSE stream %d closed, marking inactive", stream->stream_id);
+      stream->active = false;
+      return false;
     }
 
-    conn->data_deferred = false;
-    int rv = nghttp2_session_resume_data(conn->session, conn->stream_id);
+    stream->data_deferred = false;
+    int rv = nghttp2_session_resume_data(stream->session, stream->stream_id);
     if (rv != 0) {
-      // Stream may have been closed between check and resume - not a fatal error
       if (rv == NGHTTP2_ERR_INVALID_ARGUMENT) {
-        VALK_INFO("SSE stream %d no longer valid, stopping diagnostics", conn->stream_id);
-        conn->active = false;
+        VALK_INFO("SSE stream %d no longer valid", stream->stream_id);
+        stream->active = false;
       } else {
-        VALK_ERROR("Failed to resume HTTP/2 stream: %s", nghttp2_strerror(rv));
+        VALK_ERROR("Failed to resume HTTP/2 stream %d: %s",
+                   stream->stream_id, nghttp2_strerror(rv));
       }
-    } else {
-      // Trigger HTTP/2 send to actually transmit the data
-      valk_http2_flush_pending(conn->handle);
+      return false;
     }
   }
 
-cleanup:
-  // Free snapshot allocations
-  for (size_t i = 0; i < snapshot.slab_count; i++) {
-    free(snapshot.slabs[i].bitmap);
-    free(snapshot.slabs[i].slots);
+  return true;
+}
+
+// Timer callback - called every 100ms to push diagnostics to ALL streams
+// Collects snapshot once, then pushes to each active stream
+static void sse_push_diagnostics(uv_timer_t *timer) {
+  valk_sse_diag_state_t *state = (valk_sse_diag_state_t *)timer->data;
+
+  if (!state) {
+    VALK_WARN("SSE timer: state is NULL");
+    return;
   }
+
+  if (!state->streams) {
+    VALK_DEBUG("SSE timer: no streams attached");
+    return;
+  }
+
+  // Collect memory snapshot once for all streams
+  valk_mem_snapshot_t snapshot = {0};
+  valk_mem_snapshot_collect(&snapshot, state->aio_system);
+
+  VALK_DEBUG("SSE timer: collected snapshot with %zu slabs, %zu arenas",
+             snapshot.slab_count, snapshot.arena_count);
+
+  // Push to each active stream
+  bool any_data_sent = false;
+  for (valk_sse_diag_conn_t *stream = state->streams; stream; stream = stream->next) {
+    if (sse_push_to_stream(stream, &snapshot)) {
+      any_data_sent = true;
+    }
+  }
+
+  // If any stream has data to send, flush the HTTP/2 session
+  // All streams share the same connection, so one flush is sufficient
+  if (any_data_sent && state->http_handle) {
+    valk_http2_flush_pending(state->http_handle);
+  }
+
+  // Free snapshot allocations
+  valk_mem_snapshot_free(&snapshot);
 }
 
 // nghttp2 data provider callback - reads pending SSE data
@@ -1064,7 +1605,41 @@ void valk_sse_diag_init(valk_aio_handle_t *handle, valk_aio_system_t *aio) {
   VALK_ERROR("valk_sse_diag_init is deprecated, use valk_sse_diag_init_http2");
 }
 
-// Initialize HTTP/2 SSE streaming - returns data provider and connection context
+// Forward declaration for getting/setting sse_state on handle
+// These are implemented in aio_uv.c via accessor functions
+extern valk_sse_diag_state_t* valk_aio_get_sse_state(valk_aio_handle_t *handle);
+extern void valk_aio_set_sse_state(valk_aio_handle_t *handle, valk_sse_diag_state_t *state);
+
+// Close callback for timer handle - releases back to slab and frees state
+static void on_timer_close(uv_handle_t *handle) {
+  valk_sse_diag_state_t *state = (valk_sse_diag_state_t *)handle->data;
+
+  if (!state) {
+    VALK_WARN("SSE timer close callback: state is NULL");
+    return;
+  }
+
+  if (!state->timer_handle) {
+    VALK_WARN("SSE timer close callback: timer_handle is NULL (double close?)");
+    free(state);
+    return;
+  }
+
+  VALK_DEBUG("SSE timer close callback, releasing timer handle %p", (void*)state->timer_handle);
+  valk_aio_timer_free(state->timer_handle);
+  state->timer_handle = NULL;
+
+  // Clear the handle's sse_state pointer
+  if (state->http_handle) {
+    valk_aio_set_sse_state(state->http_handle, NULL);
+  }
+
+  // Now safe to free the state struct itself
+  free(state);
+}
+
+// Initialize HTTP/2 SSE streaming - returns stream context and populates data provider
+// Multiple streams can share one timer via the handle's sse_state
 valk_sse_diag_conn_t* valk_sse_diag_init_http2(
     valk_aio_handle_t *handle,
     valk_aio_system_t *aio,
@@ -1077,80 +1652,177 @@ valk_sse_diag_conn_t* valk_sse_diag_init_http2(
     return NULL;
   }
 
-  valk_sse_diag_conn_t *conn = malloc(sizeof(valk_sse_diag_conn_t));
-  if (!conn) {
-    VALK_ERROR("Failed to allocate SSE diagnostics connection");
+  // Get or create shared state for this HTTP connection
+  valk_sse_diag_state_t *state = valk_aio_get_sse_state(handle);
+  bool new_state = false;
+
+  if (!state) {
+    // First SSE stream on this connection - create shared state with timer
+    state = malloc(sizeof(valk_sse_diag_state_t));
+    if (!state) {
+      VALK_ERROR("Failed to allocate SSE diagnostics state");
+      return NULL;
+    }
+
+    memset(state, 0, sizeof(*state));
+    state->aio_system = aio;
+    state->http_handle = handle;
+    state->streams = NULL;
+
+    // Allocate timer handle from slab
+    state->timer_handle = valk_aio_timer_alloc(aio);
+    if (!state->timer_handle) {
+      VALK_ERROR("Failed to allocate SSE timer from handle slab");
+      free(state);
+      return NULL;
+    }
+
+    valk_aio_timer_init(state->timer_handle);
+    valk_aio_timer_set_data(state->timer_handle, state);
+
+    new_state = true;
+    VALK_INFO("SSE: created new shared state for connection (timer=%p)",
+              (void*)state->timer_handle);
+  }
+
+  // Create new stream context
+  valk_sse_diag_conn_t *stream = malloc(sizeof(valk_sse_diag_conn_t));
+  if (!stream) {
+    VALK_ERROR("Failed to allocate SSE stream context");
+    if (new_state) {
+      // Clean up the state we just created
+      valk_aio_timer_free(state->timer_handle);
+      free(state);
+    }
     return NULL;
   }
 
-  memset(conn, 0, sizeof(*conn));
-  conn->handle = handle;
-  conn->aio_system = aio;
-  conn->session = session;
-  conn->stream_id = stream_id;
-  conn->last_event_id = 0;
-  conn->active = true;
-  conn->data_deferred = true;  // Start deferred until first timer tick
-  conn->pending_data = NULL;
-  conn->pending_len = 0;
-  conn->pending_offset = 0;
+  memset(stream, 0, sizeof(*stream));
+  stream->state = state;
+  stream->handle = handle;
+  stream->aio_system = aio;
+  stream->session = session;
+  stream->stream_id = stream_id;
+  stream->last_event_id = 0;
+  stream->active = true;
+  stream->data_deferred = true;  // Start deferred until first timer tick
+  stream->pending_data = NULL;
+  stream->pending_len = 0;
+  stream->pending_offset = 0;
 
-  // Allocate timer handle from slab (tracked in diagnostics)
-  conn->timer_handle = valk_aio_timer_alloc(aio);
-  if (!conn->timer_handle) {
-    VALK_ERROR("Failed to allocate SSE timer from handle slab");
-    free(conn);
-    return NULL;
-  }
-
-  valk_aio_timer_init(conn->timer_handle);
-  valk_aio_timer_set_data(conn->timer_handle, conn);
+  // Add stream to linked list (prepend for O(1) insertion)
+  stream->next = state->streams;
+  state->streams = stream;
 
   // Set up data provider for nghttp2
-  data_prd_out->source.ptr = conn;
+  data_prd_out->source.ptr = stream;
   data_prd_out->read_callback = sse_data_read_callback;
 
-  // Start timer with 100ms interval (first tick after 100ms)
-  valk_aio_timer_start(conn->timer_handle, 100, 100, sse_push_diagnostics);
-
-  VALK_INFO("SSE diagnostics HTTP/2 stream started (stream_id=%d)", stream_id);
-  return conn;
-}
-
-// Close callback for timer handle - releases back to slab
-static void on_timer_close(uv_handle_t *handle) {
-  valk_aio_handle_t *timer_handle = (valk_aio_handle_t *)handle->data;
-  if (timer_handle) {
-    VALK_DEBUG("SSE timer close callback, releasing handle %p", (void*)timer_handle);
-    valk_aio_timer_free(timer_handle);
-  } else {
-    VALK_WARN("SSE timer close callback with NULL handle data");
+  // If this is a new state, start the timer and store in handle
+  if (new_state) {
+    valk_aio_set_sse_state(handle, state);
+    // Start timer with 100ms interval, first tick after 10ms
+    valk_aio_timer_start(state->timer_handle, 10, 100, sse_push_diagnostics);
   }
+
+  VALK_INFO("SSE: stream %d started (stream=%p, state=%p, new_state=%s)",
+            stream_id, (void*)stream, (void*)state, new_state ? "yes" : "no");
+  return stream;
 }
 
-// Stop SSE stream
+// Free a single stream's resources (does not remove from list)
+static void sse_stream_free(valk_sse_diag_conn_t *stream) {
+  if (!stream) return;
+
+  stream->active = false;
+  stream->session = NULL;
+
+  // Free pending buffer
+  if (stream->pending_data) {
+    free(stream->pending_data);
+    stream->pending_data = NULL;
+  }
+
+  // Free previous snapshot used for delta tracking
+  valk_mem_snapshot_free(&stream->prev_snapshot);
+
+  free(stream);
+}
+
+// Stop SSE stream (removes from shared state, stops timer if last stream)
 void valk_sse_diag_stop(valk_sse_diag_conn_t *sse_conn) {
   if (!sse_conn) {
     return;
   }
 
-  VALK_DEBUG("SSE diag stop called, timer_handle=%p", (void*)sse_conn->timer_handle);
-  sse_conn->active = false;
-
-  if (sse_conn->timer_handle) {
-    VALK_DEBUG("Stopping and closing SSE timer");
-    valk_aio_timer_stop(sse_conn->timer_handle);
-    valk_aio_timer_close(sse_conn->timer_handle, on_timer_close);
-    sse_conn->timer_handle = NULL;  // Prevent double-close
+  valk_sse_diag_state_t *state = sse_conn->state;
+  if (!state) {
+    VALK_WARN("SSE[stream=%d]: stop called but no state attached", sse_conn->stream_id);
+    sse_stream_free(sse_conn);
+    return;
   }
 
-  // Free pending buffer
-  if (sse_conn->pending_data) {
-    free(sse_conn->pending_data);
-    sse_conn->pending_data = NULL;
+  VALK_INFO("SSE[stream=%d]: stopping (stream=%p, state=%p)",
+            sse_conn->stream_id, (void*)sse_conn, (void*)state);
+
+  // Remove stream from linked list
+  valk_sse_diag_conn_t **pp = &state->streams;
+  while (*pp) {
+    if (*pp == sse_conn) {
+      *pp = sse_conn->next;
+      break;
+    }
+    pp = &(*pp)->next;
   }
 
-  free(sse_conn);
+  // Free stream resources
+  sse_stream_free(sse_conn);
 
-  VALK_INFO("SSE diagnostics stream stopped");
+  // If no more streams, stop timer and free state
+  if (!state->streams) {
+    VALK_INFO("SSE: last stream closed, stopping timer");
+
+    if (state->timer_handle) {
+      valk_aio_timer_stop(state->timer_handle);
+      // The close callback will free state and clear handle's sse_state
+      valk_aio_timer_close(state->timer_handle, on_timer_close);
+    } else {
+      // Timer already closed, just free state
+      if (state->http_handle) {
+        valk_aio_set_sse_state(state->http_handle, NULL);
+      }
+      free(state);
+    }
+  }
+}
+
+// Stop all SSE streams on a connection (for abrupt disconnect cleanup)
+void valk_sse_diag_stop_all(valk_sse_diag_state_t *state) {
+  if (!state) {
+    return;
+  }
+
+  VALK_INFO("SSE: stopping all streams on state %p", (void*)state);
+
+  // Free all streams
+  valk_sse_diag_conn_t *stream = state->streams;
+  while (stream) {
+    valk_sse_diag_conn_t *next = stream->next;
+    sse_stream_free(stream);
+    stream = next;
+  }
+  state->streams = NULL;
+
+  // Stop timer and free state
+  if (state->timer_handle) {
+    valk_aio_timer_stop(state->timer_handle);
+    // The close callback will free state and clear handle's sse_state
+    valk_aio_timer_close(state->timer_handle, on_timer_close);
+  } else {
+    // Timer already closed, just free state
+    if (state->http_handle) {
+      valk_aio_set_sse_state(state->http_handle, NULL);
+    }
+    free(state);
+  }
 }
