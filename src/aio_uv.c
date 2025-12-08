@@ -499,7 +499,7 @@ struct valk_http2_server_request {
   int status_code;           // HTTP status code for response (for new metrics)
   uint64_t response_sent_time_us;  // Time when response was fully sent
   bool response_complete;           // True when response DATA frame sent
-  struct valk_sse_diag_conn *sse_conn;  // SSE diagnostics stream (NULL if not SSE)
+  struct valk_sse_stream_entry *sse_entry;  // SSE registry stream entry (NULL if not SSE)
 #endif
 };
 
@@ -774,12 +774,12 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
     valk_sse_close_all_streams(handle);
   }
 
-  // Clean up SSE diagnostics state if present
+  // Unsubscribe all SSE streams for this connection from global registry
   // This handles abrupt disconnects (e.g., browser refresh) where
   // on_stream_close is not called by nghttp2
-  if (handle->http.sse_state) {
-    valk_sse_diag_stop_all(handle->http.sse_state);
-    // Note: sse_state is set to NULL by valk_sse_diag_stop_all via callback
+  if (handle->http.server && handle->http.server->sys) {
+    valk_sse_stream_registry_t *registry = &handle->http.server->sys->sse_registry;
+    valk_sse_registry_unsubscribe_connection(registry, handle);
   }
 
   // TODO Tear down http and ssl context's only through the slab... make sure
@@ -1306,38 +1306,39 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
   valk_lval_t* body_type_val = __http_qexpr_get(response_qexpr, ":body-type");
   if (body_type_val && LVAL_TYPE(body_type_val) == LVAL_SYM &&
       strcmp(body_type_val->str, ":sse-stream") == 0) {
-    // This is an SSE diagnostics stream - set up the SSE connection
+    // This is an SSE diagnostics stream - subscribe to global registry
     valk_http2_server_request_t *req =
         nghttp2_session_get_stream_user_data(session, stream_id);
     if (req && req->conn && req->conn->http.server && req->conn->http.server->sys) {
       VALK_INFO("Setting up SSE diagnostics stream for stream %d", stream_id);
 
-      // Initialize HTTP/2 SSE streaming with timer-based push
-      nghttp2_data_provider2 data_prd;
-      valk_sse_diag_conn_t *sse_conn = valk_sse_diag_init_http2(
-          req->conn,
-          req->conn->http.server->sys,
-          session,
-          stream_id,
-          &data_prd);
-
-      // SSE streams don't need the stream arena - release it immediately
-      // This must happen before any early returns to avoid leaking arenas
+      // SSE streams don't need the stream arena - release it immediately.
+      // We no longer rely on req->sse_entry for cleanup; instead on_stream_close
+      // looks up the entry by (handle, stream_id) in the registry.
       if (req->arena_slab_item) {
         valk_slab_release(req->conn->http.server->sys->httpStreamArenas, req->arena_slab_item);
         req->arena_slab_item = NULL;
         req->stream_arena = NULL;
       }
 
-      if (!sse_conn) {
-        VALK_ERROR("Failed to initialize SSE streaming");
+      // Subscribe to global SSE registry (timer is always running)
+      nghttp2_data_provider2 data_prd;
+      valk_sse_stream_registry_t *registry = &req->conn->http.server->sys->sse_registry;
+      valk_sse_stream_entry_t *entry = valk_sse_registry_subscribe(
+          registry,
+          req->conn,
+          session,
+          stream_id,
+          VALK_SSE_SUB_DIAGNOSTICS,
+          &data_prd);
+
+      if (!entry) {
+        VALK_ERROR("Failed to subscribe to SSE registry");
         return -1;
       }
 
-      // Store SSE stream reference in request for cleanup on stream close
-      // Connection-level cleanup (abrupt disconnect) uses handle->http.sse_state
-      // which is set automatically by valk_sse_diag_init_http2
-      req->sse_conn = sse_conn;
+      // Store entry reference for cleanup on stream close
+      req->sse_entry = entry;
 
       // Set status code for metrics tracking when stream eventually closes
       req->status_code = 200;
@@ -1350,7 +1351,14 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
         MAKE_NV2("cache-control", "no-cache"),
       };
 
-      return nghttp2_submit_response2(session, stream_id, headers, 3, &data_prd);
+      int rv = nghttp2_submit_response2(session, stream_id, headers, 3, &data_prd);
+      if (rv != 0) {
+        VALK_ERROR("nghttp2_submit_response2 failed for SSE stream %d: %s",
+                   stream_id, nghttp2_strerror(rv));
+      } else {
+        VALK_INFO("SSE response submitted for stream %d", stream_id);
+      }
+      return rv;
     }
   }
 #endif
@@ -1517,15 +1525,17 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
       nghttp2_session_get_stream_user_data(session, stream_id);
 
 #ifdef VALK_METRICS_ENABLED
-  // Stop SSE stream if this was an SSE connection
-  // NOTE: This must be outside the arena_slab_item check because SSE streams
-  // release their arena early (in __http_send_response) and set arena_slab_item=NULL
-  if (req && req->sse_conn) {
-    VALK_DEBUG("Stream %d closing, stopping SSE stream", stream_id);
-    valk_sse_diag_stop(req->sse_conn);
-    req->sse_conn = NULL;
-    // Note: sse_state is managed by valk_sse_diag_stop - it handles
-    // timer cleanup when the last stream is removed
+  // Unsubscribe SSE stream from global registry if this was an SSE connection
+  // NOTE: We look up by (handle, stream_id) instead of req->sse_entry because
+  // SSE streams release their arena early, so req may be invalid/reused
+  if (conn->http.server && conn->http.server->sys) {
+    valk_sse_stream_registry_t *registry = &conn->http.server->sys->sse_registry;
+    valk_sse_stream_entry_t *entry = valk_sse_registry_find_by_stream(
+        registry, conn, stream_id);
+    if (entry) {
+      VALK_INFO("Stream %d closing, unsubscribing from SSE registry", stream_id);
+      valk_sse_registry_unsubscribe(registry, entry);
+    }
   }
 #endif
 
@@ -1952,6 +1962,16 @@ bool valk_aio_http_session_valid(valk_aio_handle_t *handle, void *session) {
   // Check if the handle's current session matches what was stored
   // If connection was closed, handle->http.session will be NULL or freed
   return handle->http.session == session;
+}
+
+// Check if a connection is closing or closed
+// Used by SSE registry to avoid pushing data to dying connections
+bool valk_aio_http_connection_closing(valk_aio_handle_t *handle) {
+  if (!handle) {
+    return true;  // Treat NULL handle as closing
+  }
+  return handle->http.state == VALK_CONN_CLOSING ||
+         handle->http.state == VALK_CONN_CLOSED;
 }
 
 // Get SSE diagnostics state for a handle

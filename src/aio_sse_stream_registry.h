@@ -106,6 +106,12 @@ void valk_sse_registry_unsubscribe_connection(
     valk_sse_stream_registry_t *registry,
     valk_aio_handle_t *handle);
 
+// Find entry by handle and HTTP/2 stream ID (for cleanup when req is unavailable)
+valk_sse_stream_entry_t* valk_sse_registry_find_by_stream(
+    valk_sse_stream_registry_t *registry,
+    valk_aio_handle_t *handle,
+    int32_t http2_stream_id);
+
 // Timer Control
 void valk_sse_registry_timer_start(valk_sse_stream_registry_t *registry);
 void valk_sse_registry_timer_stop(valk_sse_stream_registry_t *registry);

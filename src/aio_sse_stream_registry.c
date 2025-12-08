@@ -29,6 +29,9 @@ extern void valk_http2_flush_pending(valk_aio_handle_t *conn);
 // Forward declare session validation (implemented in aio_uv.c)
 extern bool valk_aio_http_session_valid(valk_aio_handle_t *handle, void *session);
 
+// Forward declare connection state check (implemented in aio_uv.c)
+extern bool valk_aio_http_connection_closing(valk_aio_handle_t *handle);
+
 // Global metrics registry
 extern valk_metrics_registry_t g_metrics;
 
@@ -55,7 +58,9 @@ void valk_sse_registry_init(valk_sse_stream_registry_t *registry, valk_aio_syste
   registry->modular_delta_initialized = false;
 #endif
 
-  VALK_INFO("SSE registry: initialized");
+  // Timer will start on first stream subscription
+  // Once started, it runs forever until shutdown
+  VALK_INFO("SSE registry: initialized (timer starts on first subscription)");
 }
 
 void valk_sse_registry_shutdown(valk_sse_stream_registry_t *registry) {
@@ -119,6 +124,20 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
     return false;
   }
 
+  // Check if connection is closing - don't push to dying connections
+  // This prevents race conditions during page refresh where the old connection
+  // is closing but the timer fires before cleanup is complete
+  if (valk_aio_http_connection_closing(entry->handle)) {
+    VALK_INFO("SSE stream %d: INACTIVE - connection closing", entry->http2_stream_id);
+    atomic_store(&entry->active, false);
+    return false;
+  }
+
+  // Debug: log entry state before processing
+  VALK_DEBUG("SSE push: stream_id=%lu http2_stream=%d first_sent=%d last_id=%lu pending=%zu/%zu",
+             entry->stream_id, entry->http2_stream_id, entry->first_event_sent,
+             entry->last_event_id, entry->pending_offset, entry->pending_len);
+
   // If we still have pending data, skip this tick
   if (entry->pending_data && entry->pending_offset < entry->pending_len) {
     return false;
@@ -138,20 +157,22 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
 
   if (!entry->first_event_sent) {
     // First event: send full snapshot
+    // Use next_id so we only update last_event_id if formatting succeeds
+    uint64_t next_id = entry->last_event_id + 1;
+
     if (entry->type == VALK_SSE_SUB_DIAGNOSTICS) {
       len = valk_diag_snapshot_to_sse(snapshot, entry->aio_system,
                                       entry->pending_data, entry->pending_capacity,
-                                      ++entry->last_event_id);
+                                      next_id);
     } else if (entry->type == VALK_SSE_SUB_MEMORY_ONLY) {
       len = valk_mem_snapshot_to_sse(snapshot, entry->pending_data,
-                                     entry->pending_capacity, ++entry->last_event_id);
+                                     entry->pending_capacity, next_id);
     } else if (entry->type == VALK_SSE_SUB_METRICS_ONLY) {
 #ifdef VALK_METRICS_ENABLED
       // Format metrics-only snapshot
       char *p = entry->pending_data;
       char *end = entry->pending_data + entry->pending_capacity;
-      int n = snprintf(p, end - p, "event: metrics\nid: %lu\ndata: ",
-                       ++entry->last_event_id);
+      int n = snprintf(p, end - p, "event: metrics\nid: %lu\ndata: ", next_id);
       if (n > 0 && n < end - p) {
         p += n;
         size_t json_len = valk_metrics_v2_to_json(&g_metrics, p, end - p - 3);
@@ -168,6 +189,7 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
     }
 
     if (len > 0) {
+      entry->last_event_id = next_id;
       entry->first_event_sent = true;
 
 #ifdef VALK_METRICS_ENABLED
@@ -193,7 +215,8 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
       // Store snapshot for next delta comparison
       valk_mem_snapshot_copy(&entry->prev_snapshot, snapshot);
 
-      VALK_DEBUG("SSE[stream=%d]: sent full snapshot (%d bytes)", entry->http2_stream_id, len);
+      VALK_INFO("SSE[stream=%d]: FULL snapshot id=%lu (%d bytes)",
+                entry->http2_stream_id, entry->last_event_id, len);
     }
   } else {
     // Subsequent events: send delta only
@@ -213,10 +236,16 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
         }
       };
 
+      // Use next_id to avoid incrementing last_event_id if no changes
+      uint64_t next_id = entry->last_event_id + 1;
       len = valk_diag_delta_to_sse(snapshot, &entry->prev_snapshot, &temp_conn,
                                     entry->aio_system, modular_delta,
                                     entry->pending_data, entry->pending_capacity,
-                                    ++entry->last_event_id);
+                                    next_id);
+      // Only update last_event_id if we actually produced output
+      if (len > 0) {
+        entry->last_event_id = next_id;
+      }
 
       // Update stored metrics (copy field-by-field due to different anonymous struct types)
       entry->prev_aio_metrics.bytes_sent = temp_conn.prev_metrics.bytes_sent;
@@ -226,8 +255,13 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
       entry->prev_aio_metrics.gc_cycles = temp_conn.prev_metrics.gc_cycles;
     } else if (entry->type == VALK_SSE_SUB_MEMORY_ONLY) {
       // Memory-only delta (not implemented in existing code - just resend full)
+      // Use next_id to avoid incrementing if we don't send
+      uint64_t next_id = entry->last_event_id + 1;
       len = valk_mem_snapshot_to_sse(snapshot, entry->pending_data,
-                                     entry->pending_capacity, ++entry->last_event_id);
+                                     entry->pending_capacity, next_id);
+      if (len > 0) {
+        entry->last_event_id = next_id;
+      }
     } else if (entry->type == VALK_SSE_SUB_METRICS_ONLY) {
 #ifdef VALK_METRICS_ENABLED
       // Metrics-only delta using per-stream baseline
@@ -257,16 +291,25 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
 
   // Always resume stream when we have data - resume_data is idempotent
   if (entry->session && atomic_load(&entry->active)) {
+    // Re-check connection closing (state may have changed during data formatting)
+    if (valk_aio_http_connection_closing(entry->handle)) {
+      VALK_INFO("SSE stream %d: INACTIVE - connection closing (re-check)", entry->http2_stream_id);
+      atomic_store(&entry->active, false);
+      return false;
+    }
+
     // Verify session is still valid
     if (!valk_aio_http_session_valid(entry->handle, entry->session)) {
-      VALK_INFO("SSE session invalidated for stream %d", entry->http2_stream_id);
+      VALK_INFO("SSE stream %d: INACTIVE - session invalidated (entry->session=%p, handle->session=%p)",
+                entry->http2_stream_id, (void*)entry->session, (void*)entry->handle);
       atomic_store(&entry->active, false);
       return false;
     }
 
     // Check if the stream is still valid
-    if (nghttp2_session_get_stream_user_data(entry->session, entry->http2_stream_id) == NULL) {
-      VALK_INFO("SSE stream %d closed, marking inactive", entry->http2_stream_id);
+    void *stream_data = nghttp2_session_get_stream_user_data(entry->session, entry->http2_stream_id);
+    if (stream_data == NULL) {
+      VALK_INFO("SSE stream %d: INACTIVE - nghttp2 stream closed (user_data=NULL)", entry->http2_stream_id);
       atomic_store(&entry->active, false);
       return false;
     }
@@ -359,13 +402,14 @@ static nghttp2_ssize sse_registry_data_read_callback(
     nghttp2_session *session, int32_t stream_id, uint8_t *buf, size_t length,
     uint32_t *data_flags, nghttp2_data_source *source, void *user_data) {
   (void)session;
-  (void)stream_id;
   (void)user_data;
 
   valk_sse_stream_entry_t *entry = (valk_sse_stream_entry_t *)source->ptr;
 
   if (!entry || !atomic_load(&entry->active)) {
     // Stream is closed, signal EOF
+    VALK_INFO("SSE data_read: stream %d EOF (entry=%p, active=%d)",
+              stream_id, (void*)entry, entry ? atomic_load(&entry->active) : -1);
     *data_flags |= NGHTTP2_DATA_FLAG_EOF;
     return 0;
   }
@@ -373,6 +417,7 @@ static nghttp2_ssize sse_registry_data_read_callback(
   // Check if we have data to send
   if (!entry->pending_data || entry->pending_offset >= entry->pending_len) {
     // No data available, defer until timer fires
+    VALK_DEBUG("SSE data_read: stream %d DEFERRED (no data)", stream_id);
     return NGHTTP2_ERR_DEFERRED;
   }
 
@@ -447,8 +492,8 @@ valk_sse_stream_entry_t* valk_sse_registry_subscribe(
   data_prd_out->source.ptr = entry;
   data_prd_out->read_callback = sse_registry_data_read_callback;
 
-  // Start timer if this is the first stream
-  if (registry->stream_count == 1) {
+  // Start timer on first subscription - once started, it runs forever
+  if (!registry->timer_running) {
     valk_sse_registry_timer_start(registry);
   }
 
@@ -500,10 +545,7 @@ void valk_sse_registry_unsubscribe(valk_sse_stream_registry_t *registry,
 
   free(entry);
 
-  // Stop timer if no streams remain
-  if (registry->stream_count == 0) {
-    valk_sse_registry_timer_stop(registry);
-  }
+  // Timer keeps running - no stop needed
 
   VALK_INFO("SSE registry: stream unsubscribed (remaining=%zu)", registry->stream_count);
 }
@@ -527,6 +569,22 @@ void valk_sse_registry_unsubscribe_connection(
     }
     entry = next;
   }
+}
+
+valk_sse_stream_entry_t* valk_sse_registry_find_by_stream(
+    valk_sse_stream_registry_t *registry,
+    valk_aio_handle_t *handle,
+    int32_t http2_stream_id) {
+  if (!registry) {
+    return NULL;
+  }
+
+  for (valk_sse_stream_entry_t *entry = registry->streams; entry; entry = entry->next) {
+    if (entry->handle == handle && entry->http2_stream_id == http2_stream_id) {
+      return entry;
+    }
+  }
+  return NULL;
 }
 
 // ============================================================================
