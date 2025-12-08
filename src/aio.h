@@ -28,6 +28,10 @@ typedef struct valk_aio_http2_client valk_aio_http2_client;
 typedef struct valk_aio_handle_t valk_aio_handle_t;
 typedef struct valk_async_handle_t valk_async_handle_t;
 
+// Forward declarations for libuv types
+typedef struct uv_timer_s uv_timer_t;
+typedef struct uv_handle_s uv_handle_t;
+
 // Forward declarations for parser.h types
 struct valk_lval_t;
 struct valk_lenv_t;
@@ -297,7 +301,16 @@ valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
 // Connection Diagnostics Types (for SSE memory diagnostics)
 // ============================================================================
 
-// Connection states for dashboard visualization
+// Handle types for dashboard visualization (mirrors internal handle_kind_t)
+typedef enum {
+  VALK_DIAG_HNDL_EMPTY = 0,     // Slot not allocated
+  VALK_DIAG_HNDL_TCP,           // TCP server listener
+  VALK_DIAG_HNDL_TASK,          // Async task handle
+  VALK_DIAG_HNDL_TIMER,         // Timer handle (aio/delay)
+  VALK_DIAG_HNDL_HTTP_CONN,     // HTTP/2 connection (server or client)
+} valk_diag_handle_kind_e;
+
+// Connection states for dashboard visualization (only for HTTP_CONN handles)
 typedef enum {
   VALK_DIAG_CONN_FREE = 0,      // Slot not allocated
   VALK_DIAG_CONN_CONNECTING,    // TCP handshake in progress
@@ -333,6 +346,20 @@ valk_slab_t* valk_aio_get_http_clients_slab(valk_aio_system_t* sys);
 // Returns false if slot is invalid or not an HTTP connection handle
 bool valk_aio_get_handle_diag(valk_aio_system_t* sys, size_t slot_idx,
                                valk_handle_diag_t* out_diag);
+
+// Get the kind of handle at a given slab slot index
+// Returns VALK_DIAG_HNDL_EMPTY if slot is invalid or free
+valk_diag_handle_kind_e valk_aio_get_handle_kind(valk_aio_system_t* sys, size_t slot_idx);
+
+// Timer handle management (allocates from handle slab)
+valk_aio_handle_t* valk_aio_timer_alloc(valk_aio_system_t* sys);
+void valk_aio_timer_init(valk_aio_handle_t* handle);
+void valk_aio_timer_start(valk_aio_handle_t* handle, uint64_t timeout_ms, uint64_t repeat_ms,
+                           void (*callback)(uv_timer_t*));
+void valk_aio_timer_stop(valk_aio_handle_t* handle);
+void valk_aio_timer_close(valk_aio_handle_t* handle, void (*close_cb)(uv_handle_t*));
+void valk_aio_timer_set_data(valk_aio_handle_t* handle, void* data);
+void valk_aio_timer_free(valk_aio_handle_t* handle);
 #endif
 
 // Get the event loop from AIO system (returns NULL if no loop available)

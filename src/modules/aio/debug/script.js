@@ -40,6 +40,31 @@
     return adaptiveInterval.slow;
   }
 
+  // ==================== RLE Decoder ====================
+  // Decodes RLE-encoded state string: "F16A3I2" -> "FFFFFFFFFFFFFFFFAAAII"
+  function decodeRLE(rleStr) {
+    if (!rleStr || rleStr.length === 0) return '';
+
+    var result = [];
+    var i = 0;
+    while (i < rleStr.length) {
+      var char = rleStr[i];
+      i++;
+      // Read the count (one or more digits following the char)
+      var countStr = '';
+      while (i < rleStr.length && rleStr[i] >= '0' && rleStr[i] <= '9') {
+        countStr += rleStr[i];
+        i++;
+      }
+      var count = parseInt(countStr, 10) || 1;
+      // Expand: add 'count' copies of 'char'
+      for (var j = 0; j < count; j++) {
+        result.push(char);
+      }
+    }
+    return result.join('');
+  }
+
   // ==================== State ====================
   var currentBackoff = POLL_INTERVAL;
   var history = {
@@ -324,8 +349,12 @@
           '</div>' +
         '</div>' +
         '<div class="panel-body">' +
+
           // Event Loop Stats Row
-          '<div class="aio-stats-row">' +
+          '<div class="aio-section-block">' +
+            '<div class="block-header">' +
+              '<span class="block-title">Event Loop</span>' +
+            '</div>' +
             '<div class="mini-stats" role="list">' +
               '<div class="mini-stat" role="listitem" title="Event loop iterations. Each iteration polls for I/O events.">' +
                 '<div class="mini-stat-value aio-sys-iterations">--</div>' +
@@ -339,36 +368,56 @@
                 '<div class="mini-stat-value aio-sys-handles">--</div>' +
                 '<div class="mini-stat-label">Handles</div>' +
               '</div>' +
+              '<div class="mini-stat" role="listitem" title="Pending items in request/response queue.">' +
+                '<div class="mini-stat-value aio-sys-queue">0</div>' +
+                '<div class="mini-stat-label">Queue</div>' +
+              '</div>' +
             '</div>' +
           '</div>' +
-          // Memory Slabs Section (Connection Pool removed - Handles slab shows same data)
-          '<div class="aio-resource-section">' +
-            '<div class="aio-subsection-header">' +
-              '<span class="aio-subsection-title">Memory Pools</span>' +
+
+          // Shared Resource Pools Section
+          '<div class="aio-section-block">' +
+            '<div class="block-header">' +
+              '<span class="block-title">Shared Resource Pools</span>' +
+              '<span class="section-badge"><span class="sse-dot"></span> Live</span>' +
             '</div>' +
-            '<div class="aio-slab-grid">' +
-              // Handles Slab (connection-aware with state tracking)
-              '<div class="memory-slab-panel compact" id="' + id + '-handles-panel">' +
-                '<div class="slab-header">' +
-                  '<span class="slab-name">Handles</span>' +
-                  '<span class="slab-badge aio-sys-handles-pct">0%</span>' +
+
+            // Handle Slab (AIO Handles - mixed types)
+            '<div class="resource-pool-panel" id="' + id + '-handles-pool">' +
+              '<div class="pool-header">' +
+                '<span class="pool-name">AIO Handles</span>' +
+                '<span class="pool-usage"><span class="aio-sys-handles-used">0</span> / <span class="aio-sys-handles-total">--</span> (<span class="aio-sys-handles-pct">0</span>%)</span>' +
+              '</div>' +
+              '<div class="pool-grid-container">' +
+                '<div class="pool-grid connection-grid aio-sys-handles-grid"></div>' +
+              '</div>' +
+              // Handle type breakdown (inline)
+              '<div class="handle-type-breakdown">' +
+                '<span class="type-item type-http"><span class="type-label">HTTP</span> <span class="type-count-http">--</span></span>' +
+                '<span class="type-item type-tcp"><span class="type-label">TCP</span> <span class="type-count-tcp">--</span></span>' +
+                '<span class="type-item type-task"><span class="type-label">Task</span> <span class="type-count-task">--</span></span>' +
+                '<span class="type-item type-timer"><span class="type-label">Timer</span> <span class="type-count-timer">--</span></span>' +
+              '</div>' +
+              // HTTP connection state breakdown (only for HTTP connections)
+              '<div class="pool-breakdown">' +
+                '<div class="breakdown-header">HTTP Connection States</div>' +
+                '<div class="breakdown-by-state">' +
+                  '<div class="legend-item"><span class="legend-dot active"></span> Active: <span class="state-count-active">--</span></div>' +
+                  '<div class="legend-item"><span class="legend-dot idle"></span> Idle: <span class="state-count-idle">--</span></div>' +
+                  '<div class="legend-item"><span class="legend-dot closing"></span> Closing: <span class="state-count-closing">--</span></div>' +
                 '</div>' +
-                '<div class="slab-canvas">' +
-                  '<div class="slab-grid aio-sys-handles-grid" style="grid-template-columns: repeat(25, 1fr);"></div>' +
-                '</div>' +
-                '<div class="slab-stats">' +
-                  '<span><span class="aio-sys-handles-used">0</span> / <span class="aio-sys-handles-total">2056</span></span>' +
-                '</div>' +
-                '<div class="slab-state-legend">' +
-                  '<span class="legend-item"><span class="legend-dot active"></span> Active <span class="state-count-active">0</span></span>' +
-                  '<span class="legend-item"><span class="legend-dot idle"></span> Idle <span class="state-count-idle">0</span></span>' +
-                  '<span class="legend-item"><span class="legend-dot closing"></span> Closing <span class="state-count-closing">0</span></span>' +
-                '</div>' +
-                '<div class="owner-breakdown" title="Connection distribution by server">' +
-                  '<div class="owner-breakdown-bar"></div>' +
-                  '<div class="owner-breakdown-legend"></div>' +
+                '<div class="owner-breakdown" id="' + id + '-handles-by-owner">' +
+                  '<!-- Owner table rendered dynamically by renderOwnerBreakdown() -->' +
                 '</div>' +
               '</div>' +
+              '<div class="pool-warnings">' +
+                '<span class="capacity-warning" style="display:none">⚠ Approaching capacity</span>' +
+                '<span class="overflow-warning" style="display:none">⚠ -- overflows</span>' +
+              '</div>' +
+            '</div>' +
+
+            // Compact resource grids row
+            '<div class="aio-slab-grid">' +
               // TCP Buffers Slab
               '<div class="memory-slab-panel compact" id="' + id + '-tcp-buffers-panel">' +
                 '<div class="slab-header">' +
@@ -376,7 +425,7 @@
                   '<span class="slab-badge aio-sys-tcp-pct">0%</span>' +
                 '</div>' +
                 '<div class="slab-canvas">' +
-                  '<div class="slab-grid aio-sys-tcp-grid" style="grid-template-columns: repeat(20, 1fr);"></div>' +
+                  '<div class="slab-grid aio-sys-tcp-grid"></div>' +
                 '</div>' +
                 '<div class="slab-stats">' +
                   '<span><span class="aio-sys-tcp-used">0</span> / <span class="aio-sys-tcp-total">200</span></span>' +
@@ -389,40 +438,59 @@
                   '<span class="slab-badge aio-sys-arenas-pct">0%</span>' +
                 '</div>' +
                 '<div class="slab-canvas">' +
-                  '<div class="slab-grid aio-sys-arenas-grid" style="grid-template-columns: repeat(8, 1fr);"></div>' +
+                  '<div class="slab-grid aio-sys-arenas-grid"></div>' +
                 '</div>' +
                 '<div class="slab-stats">' +
                   '<span><span class="aio-sys-arenas-used">0</span> / <span class="aio-sys-arenas-total">64</span></span>' +
                 '</div>' +
               '</div>' +
-            '</div>' +
-            // HTTP Resources (smaller, inline)
-            '<div class="aio-http-resources">' +
-              '<div class="memory-slab-panel mini" id="' + id + '-http-servers-panel">' +
+              // Queue Slab (placeholder for pending requests)
+              '<div class="memory-slab-panel compact" id="' + id + '-queue-panel">' +
                 '<div class="slab-header">' +
-                  '<span class="slab-name">HTTP Servers</span>' +
-                  '<span class="slab-badge aio-sys-servers-pct">0/3</span>' +
+                  '<span class="slab-name">Request Queue</span>' +
+                  '<span class="slab-badge aio-sys-queue-pct">0</span>' +
                 '</div>' +
                 '<div class="slab-canvas">' +
-                  '<div class="slab-grid aio-sys-servers-grid" style="grid-template-columns: repeat(3, 1fr);"></div>' +
+                  '<div class="slab-grid aio-sys-queue-grid"></div>' +
                 '</div>' +
-              '</div>' +
-              '<div class="memory-slab-panel mini" id="' + id + '-http-clients-panel">' +
-                '<div class="slab-header">' +
-                  '<span class="slab-name">HTTP Clients</span>' +
-                  '<span class="slab-badge aio-sys-clients-pct">0/3</span>' +
-                '</div>' +
-                '<div class="slab-canvas">' +
-                  '<div class="slab-grid aio-sys-clients-grid" style="grid-template-columns: repeat(3, 1fr);"></div>' +
+                '<div class="slab-stats">' +
+                  '<span>pending/completed</span>' +
                 '</div>' +
               '</div>' +
             '</div>' +
+
             '<div class="memory-legend-inline">' +
               '<div class="legend-item"><div class="legend-dot free"></div><span>Free</span></div>' +
               '<div class="legend-item"><div class="legend-dot used"></div><span>Used</span></div>' +
               '<div class="legend-item"><div class="legend-dot flash"></div><span>Changed</span></div>' +
             '</div>' +
           '</div>' +
+
+          // HTTP Servers Section (nested under AIO)
+          '<div class="aio-section-block">' +
+            '<div class="block-header">' +
+              '<span class="block-title">HTTP Servers</span>' +
+              '<span class="block-badge aio-sys-servers-count">-- servers</span>' +
+              '<span class="block-badge aio-sys-servers-rate">-- req/s</span>' +
+            '</div>' +
+            '<div class="nested-cards-grid aio-sys-servers-container" id="' + id + '-servers-container">' +
+              '<!-- Server cards will be injected here -->' +
+              '<div class="aio-no-entities" style="color: var(--text-muted); font-size: 12px; padding: var(--space-md);">No HTTP servers</div>' +
+            '</div>' +
+          '</div>' +
+
+          // HTTP Clients Section (nested under AIO)
+          '<div class="aio-section-block">' +
+            '<div class="block-header">' +
+              '<span class="block-title">HTTP Clients</span>' +
+              '<span class="block-badge aio-sys-clients-count">-- clients</span>' +
+            '</div>' +
+            '<div class="nested-cards-grid aio-sys-clients-container" id="' + id + '-clients-container">' +
+              '<!-- Client cards will be injected here -->' +
+              '<div class="aio-no-entities" style="color: var(--text-muted); font-size: 12px; padding: var(--space-md);">No HTTP clients</div>' +
+            '</div>' +
+          '</div>' +
+
         '</div>' +
       '</article>';
 
@@ -968,14 +1036,24 @@
   }
 
   function renderHttpServers(servers, deltaSeconds) {
-    var container = $('http-servers-container');
-    var noServers = $('http-no-servers');
-    if (!container) return;
-
+    // Phase 2: Render server cards into AIO panel's nested container
+    // Find all AIO panels and their server containers
+    var aioServerContainers = document.querySelectorAll('.aio-sys-servers-container');
     var serverKeys = Object.keys(servers);
 
+    // For now, render all servers into the first AIO panel (single-system case)
+    // Future: match servers to their owning AIO system
+    var container = aioServerContainers.length > 0 ? aioServerContainers[0] : null;
+
+    if (!container) {
+      // No AIO panels yet, skip rendering
+      return;
+    }
+
+    // Hide "no servers" placeholder if we have servers
+    var noServersEl = container.querySelector('.aio-no-entities');
     if (serverKeys.length === 0) {
-      if (noServers) noServers.style.display = 'block';
+      if (noServersEl) noServersEl.style.display = 'block';
       // Remove old server cards
       for (var key in serverCards) {
         if (serverCards[key].parentNode) {
@@ -986,7 +1064,7 @@
       return;
     }
 
-    if (noServers) noServers.style.display = 'none';
+    if (noServersEl) noServersEl.style.display = 'none';
 
     // Update or create server cards
     serverKeys.forEach(function(key) {
@@ -1011,17 +1089,45 @@
       }
     }
 
-    // Update section badges
-    $('http-servers-count').textContent = serverKeys.length + ' server' + (serverKeys.length !== 1 ? 's' : '');
+    // Update AIO panel badges for server count and rate
+    var aioPanel = container.closest('.aio-system-panel');
+    if (aioPanel) {
+      var serverCountBadge = aioPanel.querySelector('.aio-sys-servers-count');
+      var serverRateBadge = aioPanel.querySelector('.aio-sys-servers-rate');
+      var panelServersBadge = aioPanel.querySelector('.aio-sys-servers');
 
-    // Calculate total request rate
-    var totalRate = 0;
-    serverKeys.forEach(function(key) {
-      var card = serverCards[key];
-      if (card && card.dataset.prevReqTotal) {
-        // Rate is already calculated per card
+      if (serverCountBadge) {
+        serverCountBadge.textContent = serverKeys.length + ' server' + (serverKeys.length !== 1 ? 's' : '');
       }
-    });
+      if (panelServersBadge) {
+        panelServersBadge.textContent = serverKeys.length + ' servers';
+      }
+
+      // Calculate total request rate from all server cards
+      var totalRate = 0;
+      serverKeys.forEach(function(key) {
+        var card = serverCards[key];
+        if (card) {
+          var rateEl = card.querySelector('.req-rate');
+          if (rateEl) {
+            var rateText = rateEl.textContent;
+            var rateVal = parseFloat(rateText) || 0;
+            totalRate += rateVal;
+          }
+        }
+      });
+
+      if (serverRateBadge) {
+        serverRateBadge.textContent = fmt(totalRate, 1) + ' req/s';
+      }
+    }
+
+    // Update global section badges
+    var globalCountBadge = $('http-servers-count');
+    var globalRateBadge = $('http-total-rate');
+    if (globalCountBadge) {
+      globalCountBadge.textContent = serverKeys.length + ' server' + (serverKeys.length !== 1 ? 's' : '');
+    }
   }
 
   // ==================== Main Update Function ====================
@@ -1250,31 +1356,13 @@
     });
   }
 
-  // ==================== Polling ====================
-  function poll() {
-    fetch('/debug/metrics')
-      .then(function(response) {
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        return response.json();
-      })
-      .then(function(data) {
-        updateDashboard(data);
-        dismissError();
-        currentBackoff = POLL_INTERVAL;
-        setTimeout(poll, adaptiveInterval.current);
-      })
-      .catch(function(error) {
-        showError('Connection error: ' + error.message);
-        // Exponential backoff
-        currentBackoff = Math.min(currentBackoff * 2, MAX_BACKOFF);
-        setTimeout(poll, currentBackoff);
-      });
-  }
-
   // ==================== Initialization ====================
+  // Note: Polling has been removed - all data now comes through the unified SSE diagnostics stream
+  // This eliminates dashboard requests competing with the server during stress tests
+
   function init() {
-    // Initial poll
-    poll();
+    // No polling needed - MemoryDiagnostics SSE handles everything
+    showLoadingState();
   }
 
   // Start when DOM is ready
@@ -1305,6 +1393,24 @@
       this.eventSource = new EventSource(url);
 
       var self = this;
+
+      // Listen for unified diagnostics event (memory + metrics)
+      this.eventSource.addEventListener('diagnostics', function(e) {
+        self.lastEventId = e.lastEventId;
+        var data = JSON.parse(e.data);
+
+        // Handle memory section
+        if (data.memory) {
+          self.handleMemoryUpdate(data.memory);
+        }
+
+        // Handle metrics section - update the main dashboard
+        if (data.metrics) {
+          self.handleMetricsUpdate(data.metrics);
+        }
+      });
+
+      // Also listen for legacy 'memory' event for backwards compatibility
       this.eventSource.addEventListener('memory', function(e) {
         self.lastEventId = e.lastEventId;
         self.handleMemoryUpdate(JSON.parse(e.data));
@@ -1313,7 +1419,7 @@
       this.eventSource.onopen = function() {
         self.reconnectAttempts = 0;
         self.updateConnectionStatus(true);
-        console.log('[MemDiag] SSE connected');
+        console.log('[MemDiag] SSE connected (unified diagnostics mode)');
       };
 
       this.eventSource.onerror = function(e) {
@@ -1466,6 +1572,83 @@
       }
     }
 
+    // Handle metrics data from the unified SSE event
+    // This transforms the SSE format to match what updateDashboard expects
+    handleMetricsUpdate(metrics) {
+      if (!metrics) return;
+
+      // Transform SSE metrics format to updateDashboard format
+      var dashboardData = {
+        aio_metrics: {},
+        aio_systems: [],
+        modular_metrics: metrics.modular || {},
+        vm_metrics: {}
+      };
+
+      // Transform VM metrics
+      if (metrics.vm) {
+        var vm = metrics.vm;
+        dashboardData.vm_metrics = {
+          gc: {
+            cycles_total: vm.gc ? vm.gc.cycles_total : 0,
+            pause_us_total: vm.gc ? vm.gc.pause_us_total : 0,
+            pause_us_max: vm.gc ? vm.gc.pause_us_max : 0,
+            reclaimed_bytes_total: vm.gc ? vm.gc.reclaimed_bytes : 0,
+            heap_used_bytes: vm.gc ? vm.gc.heap_used_bytes : 0,
+            heap_total_bytes: vm.gc ? vm.gc.heap_total_bytes : 0,
+            pause_ms_avg: vm.gc && vm.gc.cycles_total > 0
+              ? (vm.gc.pause_us_total / vm.gc.cycles_total) / 1000
+              : 0
+          },
+          interpreter: {
+            evals_total: vm.interpreter ? vm.interpreter.evals_total : 0,
+            function_calls: vm.interpreter ? vm.interpreter.function_calls : 0,
+            builtin_calls: vm.interpreter ? vm.interpreter.builtin_calls : 0,
+            stack_depth_max: vm.interpreter ? vm.interpreter.stack_depth_max : 0,
+            closures_created: vm.interpreter ? vm.interpreter.closures_created : 0,
+            env_lookups: vm.interpreter ? vm.interpreter.env_lookups : 0
+          },
+          event_loop: {
+            iterations: vm.event_loop ? vm.event_loop.iterations : 0,
+            events_processed: vm.event_loop ? vm.event_loop.events_processed : 0,
+            idle_time_us: vm.event_loop ? vm.event_loop.idle_time_us : 0
+          }
+        };
+      }
+
+      // Transform AIO metrics
+      if (metrics.aio) {
+        var aio = metrics.aio;
+        dashboardData.aio_metrics = {
+          uptime_seconds: aio.uptime_seconds || 0,
+          system: {
+            servers: 0,  // Will be populated from modular metrics
+            handles: 0
+          },
+          connections: {
+            total: aio.connections ? aio.connections.total : 0,
+            active: aio.connections ? aio.connections.active : 0,
+            failed: aio.connections ? aio.connections.failed : 0,
+            idle: aio.connections ? aio.connections.idle : 0,
+            closing: aio.connections ? aio.connections.closing : 0,
+            connecting: aio.connections ? aio.connections.connecting : 0
+          }
+        };
+
+        // Create an AIO system entry for the systems array
+        dashboardData.aio_systems = [{
+          name: 'main',
+          uptime_seconds: aio.uptime_seconds || 0,
+          loop: dashboardData.vm_metrics.event_loop || {},
+          system: dashboardData.aio_metrics.system,
+          connections: dashboardData.aio_metrics.connections
+        }];
+      }
+
+      // Call the main dashboard update function
+      updateDashboard(dashboardData);
+    }
+
     updateSlabGrid(slab, ownerMap) {
       // Map slab names to CSS class selectors used in AIO panels
       var slabClassMap = {
@@ -1510,10 +1693,10 @@
 
       // Check if this slab has per-slot state tracking (connection-aware slabs)
       if (slab.states) {
-        var states = slab.states;  // String like "AAIFCFFF..."
+        var states = decodeRLE(slab.states);  // Decode RLE: "F16A3" -> "FFFFFFFFFFFFFFFFAAA"
         var summary = slab.summary;  // Capture before async callback
         requestAnimationFrame(function() {
-          if (states.length > 500) {
+          if (states.length > 5000) {
             // For large slabs, use aggregated view
             self.renderAggregatedStateGrid(grid, states, prevStates, summary);
           } else {
@@ -1525,7 +1708,7 @@
         // Binary bitmap for simple slabs
         var bitmap = this.hexToBitArray(slab.bitmap, slab.total);
         requestAnimationFrame(function() {
-          if (slab.total > 500) {
+          if (slab.total > 5000) {
             self.renderAggregatedGrid(grid, bitmap, slab.total, prevStates);
           } else {
             self.renderDirectGrid(grid, bitmap, prevStates);
@@ -1535,12 +1718,24 @@
       }
 
       // Find the parent panel
-      var panel = grid.closest('.memory-slab-panel');
+      var panel = grid.closest('.memory-slab-panel') || grid.closest('.resource-pool-panel');
       if (!panel) return;
 
       // Update owner breakdown for handles slab (only if we have by_owner data)
       if (slab.name === 'handles' && slab.summary && slab.summary.by_owner && ownerMap) {
         this.renderOwnerBreakdown(panel, slab.summary.by_owner, slab.used, ownerMap);
+      }
+
+      // Update handle type breakdown table (only for handles slab)
+      if (slab.name === 'handles' && slab.by_type) {
+        var httpCount = panel.querySelector('.type-count-http');
+        var tcpCount = panel.querySelector('.type-count-tcp');
+        var taskCount = panel.querySelector('.type-count-task');
+        var timerCount = panel.querySelector('.type-count-timer');
+        if (httpCount) httpCount.textContent = slab.by_type.http || 0;
+        if (tcpCount) tcpCount.textContent = slab.by_type.tcp || 0;
+        if (taskCount) taskCount.textContent = slab.by_type.task || 0;
+        if (timerCount) timerCount.textContent = slab.by_type.timer || 0;
       }
 
       var pct = slab.total > 0 ? Math.round((slab.used / slab.total) * 100) : 0;
@@ -1656,16 +1851,12 @@
 
     renderAggregatedGrid(grid, bitmap, totalSlots, prevBitmap) {
       // For large slabs, aggregate to displayable size
-      // Use a compact 10x5 grid (50 cells) for clean visualization
-      var gridCols = 10;
-      var gridRows = 5;
-      var cellsPerSlot = Math.ceil(totalSlots / (gridCols * gridRows));
+      // CSS auto-fill handles columns, we just control total cell count
+      var targetCells = 3000;
+      var cellsPerSlot = Math.ceil(totalSlots / targetCells);
 
-      // Update grid template to match
-      grid.style.gridTemplateColumns = 'repeat(' + gridCols + ', 1fr)';
-
-      var aggregated = new Array(gridCols * gridRows).fill(0);
-      var prevAggregated = new Array(gridCols * gridRows).fill(0);
+      var aggregated = new Array(targetCells).fill(0);
+      var prevAggregated = new Array(targetCells).fill(0);
 
       for (var i = 0; i < bitmap.length; i++) {
         var aggIdx = Math.floor(i / cellsPerSlot);
@@ -1685,7 +1876,10 @@
       this.renderDirectGrid(grid, aggregated, prevAggregated);
     }
 
-    // Render grid with per-slot connection states (A=active, I=idle, C=closing, N=connecting, F=free)
+    // Render grid with per-slot handle states
+    // HTTP connections: A=active, I=idle, C=closing, N=connecting
+    // Other handles: T=tcp listener, K=task, M=timer
+    // F=free
     renderStateGrid(grid, states, prevStates, summary) {
       // Map state chars to CSS classes
       var stateClasses = {
@@ -1693,6 +1887,9 @@
         'N': 'connecting',
         'I': 'idle',
         'C': 'closing',
+        'T': 'tcp-listener',
+        'K': 'task',
+        'M': 'timer',
         'F': 'free'
       };
 
@@ -1726,7 +1923,7 @@
       }
 
       // Update state summary legend if present
-      var panel = grid.closest('.memory-slab-panel');
+      var panel = grid.closest('.memory-slab-panel') || grid.closest('.resource-pool-panel');
       if (panel && summary) {
         var legendActive = panel.querySelector('.state-count-active');
         var legendIdle = panel.querySelector('.state-count-idle');
@@ -1737,16 +1934,11 @@
       }
     }
 
-    // Render aggregated state grid for large slabs (>500 slots)
+    // Render aggregated state grid for large slabs (>5000 slots)
     // Aggregates states into displayable grid cells
     renderAggregatedStateGrid(grid, states, prevStates, summary) {
-      // Use a compact 10x5 grid (50 cells) for clean visualization
-      var gridCols = 10;
-      var gridRows = 5;
-      var targetCells = gridCols * gridRows;
-
-      // Update grid template to match
-      grid.style.gridTemplateColumns = 'repeat(' + gridCols + ', 1fr)';
+      // CSS auto-fill handles columns, we just control total cell count
+      var targetCells = 3000;
       var slotsPerCell = Math.ceil(states.length / targetCells);
 
       // Aggregate states: for each cell, find dominant non-free state
@@ -1757,9 +1949,9 @@
         var startIdx = i * slotsPerCell;
         var endIdx = Math.min(startIdx + slotsPerCell, states.length);
 
-        // Count states in this chunk
-        var counts = { 'A': 0, 'I': 0, 'C': 0, 'N': 0, 'F': 0 };
-        var prevCounts = { 'A': 0, 'I': 0, 'C': 0, 'N': 0, 'F': 0 };
+        // Count states in this chunk (including new handle types)
+        var counts = { 'A': 0, 'I': 0, 'C': 0, 'N': 0, 'T': 0, 'K': 0, 'M': 0, 'F': 0 };
+        var prevCounts = { 'A': 0, 'I': 0, 'C': 0, 'N': 0, 'T': 0, 'K': 0, 'M': 0, 'F': 0 };
 
         for (var j = startIdx; j < endIdx; j++) {
           var s = states[j] || 'F';
@@ -1768,18 +1960,24 @@
           prevCounts[ps] = (prevCounts[ps] || 0) + 1;
         }
 
-        // Determine dominant state (priority: A > C > I > N > F)
+        // Determine dominant state (priority: A > C > I > N > T > K > M > F)
         var dominant = 'F';
         if (counts['A'] > 0) dominant = 'A';
         else if (counts['C'] > 0) dominant = 'C';
         else if (counts['I'] > 0) dominant = 'I';
         else if (counts['N'] > 0) dominant = 'N';
+        else if (counts['T'] > 0) dominant = 'T';
+        else if (counts['K'] > 0) dominant = 'K';
+        else if (counts['M'] > 0) dominant = 'M';
 
         var prevDominant = 'F';
         if (prevCounts['A'] > 0) prevDominant = 'A';
         else if (prevCounts['C'] > 0) prevDominant = 'C';
         else if (prevCounts['I'] > 0) prevDominant = 'I';
         else if (prevCounts['N'] > 0) prevDominant = 'N';
+        else if (prevCounts['T'] > 0) prevDominant = 'T';
+        else if (prevCounts['K'] > 0) prevDominant = 'K';
+        else if (prevCounts['M'] > 0) prevDominant = 'M';
 
         aggregated.push(dominant);
         prevAggregated.push(prevDominant);
@@ -1789,15 +1987,11 @@
       this.renderStateGrid(grid, aggregated.join(''), prevAggregated.join(''), summary);
     }
 
-    // Render owner breakdown bar and legend for connection attribution
+    // Render owner breakdown as a table with rows=servers/clients, cols=active/idle/closing
     // byOwner format: {"0": {"A": x, "I": y, "C": z}, "1": {...}, ...}
     renderOwnerBreakdown(panel, byOwner, totalUsed, ownerMap) {
       var breakdownEl = panel.querySelector('.owner-breakdown');
       if (!breakdownEl) return;
-
-      var barEl = breakdownEl.querySelector('.owner-breakdown-bar');
-      var legendEl = breakdownEl.querySelector('.owner-breakdown-legend');
-      if (!barEl || !legendEl) return;
 
       // Convert byOwner object to array with per-state counts
       var owners = [];
@@ -1820,49 +2014,31 @@
       }
       breakdownEl.style.display = '';
 
-      // Color palette for different owners (up to 8 distinct colors)
-      var colors = [
-        'var(--color-info)',      // Blue
-        'var(--color-ok)',        // Green
-        'var(--color-purple)',    // Purple
-        'var(--color-warning)',   // Yellow
-        'var(--color-pink)',      // Pink
-        'var(--color-cyan)',      // Cyan
-        'var(--color-error)',     // Red
-        'var(--text-muted)'       // Gray
-      ];
+      // Render table with rows=servers/clients, cols=active/idle/closing
+      // This table shows HTTP connections only (not TCP listeners, tasks, timers)
+      var tableHtml = '<table class="owner-table">';
+      tableHtml += '<thead><tr>';
+      tableHtml += '<th class="owner-name-col">Owner</th>';
+      tableHtml += '<th class="state-col active-col">Active</th>';
+      tableHtml += '<th class="state-col idle-col">Idle</th>';
+      tableHtml += '<th class="state-col closing-col">Closing</th>';
+      tableHtml += '<th class="state-col total-col">Conns</th>';
+      tableHtml += '</tr></thead>';
+      tableHtml += '<tbody>';
 
-      // Render bar segments
-      var barHtml = '';
-      owners.forEach(function(owner, i) {
-        var pct = totalUsed > 0 ? (owner.total / totalUsed) * 100 : 0;
-        var color = colors[i % colors.length];
-        var title = owner.name + ': ' + owner.total + ' total (' + owner.active + ' active, ' + owner.idle + ' idle, ' + owner.closing + ' closing)';
-        barHtml += '<div class="owner-segment" style="width: ' + pct + '%; background: ' + color + ';" title="' + title + '">';
-        if (pct > 15) {
-          barHtml += '<span>' + owner.total + '</span>';
-        }
-        barHtml += '</div>';
-      });
-      barEl.innerHTML = barHtml;
-
-      // Render legend with per-owner state breakdown
-      var legendHtml = '';
-      owners.forEach(function(owner, i) {
-        var color = colors[i % colors.length];
+      owners.forEach(function(owner) {
         var pct = totalUsed > 0 ? Math.round((owner.total / totalUsed) * 100) : 0;
-        var title = owner.total + ' connections (' + pct + '%)';
-        legendHtml += '<span class="owner-legend-item" title="' + title + '">';
-        legendHtml += '<span class="owner-dot" style="background: ' + color + ';"></span>';
-        legendHtml += '<span class="owner-name">' + owner.name + '</span>';
-        legendHtml += '<span class="owner-states">';
-        legendHtml += '<span class="state-active">' + owner.active + '</span>';
-        legendHtml += '<span class="state-idle">' + owner.idle + '</span>';
-        legendHtml += '<span class="state-closing">' + owner.closing + '</span>';
-        legendHtml += '</span>';
-        legendHtml += '</span>';
+        tableHtml += '<tr>';
+        tableHtml += '<td class="owner-name-cell">' + owner.name + '</td>';
+        tableHtml += '<td class="state-cell active-cell">' + owner.active + '</td>';
+        tableHtml += '<td class="state-cell idle-cell">' + owner.idle + '</td>';
+        tableHtml += '<td class="state-cell closing-cell">' + owner.closing + '</td>';
+        tableHtml += '<td class="state-cell total-cell">' + owner.total + ' <span class="owner-pct">(' + pct + '%)</span></td>';
+        tableHtml += '</tr>';
       });
-      legendEl.innerHTML = legendHtml;
+
+      tableHtml += '</tbody></table>';
+      breakdownEl.innerHTML = tableHtml;
     }
 
     updateArenaGauge(arena) {
@@ -1929,11 +2105,51 @@
     }
 
     // Utility functions
-    // Convert hex string to bit array (LSB-first order to match C bitmap)
+    // Decode RLE hex string: "ff*32,00*8" -> array of bytes [0xff, 0xff, ..., 0x00, ...]
+    decodeRleHex(rleHex) {
+      if (!rleHex || rleHex.length === 0) return [];
+
+      var bytes = [];
+      // Check if it's RLE format (contains comma or asterisk)
+      if (rleHex.indexOf(',') === -1 && rleHex.indexOf('*') === -1) {
+        // Plain hex format (legacy) - decode directly
+        for (var i = 0; i < rleHex.length; i += 2) {
+          bytes.push(parseInt(rleHex.substr(i, 2), 16));
+        }
+        return bytes;
+      }
+
+      // RLE format: "XX*N,YY*M,..."
+      var runs = rleHex.split(',');
+      for (var i = 0; i < runs.length; i++) {
+        var run = runs[i];
+        if (!run) continue;
+
+        var asteriskIdx = run.indexOf('*');
+        var hexPart, count;
+        if (asteriskIdx === -1) {
+          // No asterisk means count of 1
+          hexPart = run;
+          count = 1;
+        } else {
+          hexPart = run.substring(0, asteriskIdx);
+          count = parseInt(run.substring(asteriskIdx + 1), 10) || 1;
+        }
+
+        var byte = parseInt(hexPart, 16);
+        for (var j = 0; j < count; j++) {
+          bytes.push(byte);
+        }
+      }
+      return bytes;
+    }
+
+    // Convert hex string (plain or RLE) to bit array (LSB-first order to match C bitmap)
     hexToBitArray(hex, totalSlots) {
+      var bytes = this.decodeRleHex(hex);
       var bits = [];
-      for (var i = 0; i < hex.length; i += 2) {
-        var byte = parseInt(hex.substr(i, 2), 16);
+      for (var i = 0; i < bytes.length; i++) {
+        var byte = bytes[i];
         // LSB-first: bit 0 is first slot in each byte
         for (var b = 0; b < 8; b++) {
           bits.push((byte >> b) & 1);

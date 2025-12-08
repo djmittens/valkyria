@@ -374,90 +374,139 @@ size_t valk_metrics_prometheus(char* buf, size_t cap) {
 //-----------------------------------------------------------------------------
 
 size_t valk_metrics_json(char* buf, size_t cap) {
-  size_t pos = 0;
+  if (cap == 0) return 0;
+
+  char *p = buf;
+  char *end = buf + cap;
+  int n;
 
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   uint64_t now_us = ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
   double uptime = (double)(now_us - g_valk_metrics.start_time_us) / 1e6;
 
-  pos += snprintf(buf + pos, cap - pos, "{\n");
-  pos += snprintf(buf + pos, cap - pos, "  \"uptime_seconds\": %.3f,\n", uptime);
+  n = snprintf(p, end - p, "{\"uptime_seconds\":%.3f,", uptime);
+  if (n < 0 || p + n >= end) goto overflow;
+  p += n;
 
   // Counters
-  pos += snprintf(buf + pos, cap - pos, "  \"counters\": [\n");
+  n = snprintf(p, end - p, "\"counters\":[");
+  if (n < 0 || p + n >= end) goto overflow;
+  p += n;
+
   size_t counter_count = atomic_load(&g_valk_metrics.counter_count);
   for (size_t i = 0; i < counter_count; i++) {
     valk_counter_t* c = &g_valk_metrics.counters[i];
     uint64_t val = atomic_load_explicit(&c->value, memory_order_relaxed);
 
-    pos += snprintf(buf + pos, cap - pos, "    {\"name\": \"%s\", \"value\": %lu, \"labels\": {",
-                    c->name, val);
+    n = snprintf(p, end - p, "%s{\"name\":\"%s\",\"value\":%lu,\"labels\":{",
+                 i > 0 ? "," : "", c->name, val);
+    if (n < 0 || p + n >= end) goto overflow;
+    p += n;
+
     for (uint8_t j = 0; j < c->labels.count; j++) {
-      if (j > 0) pos += snprintf(buf + pos, cap - pos, ", ");
-      pos += snprintf(buf + pos, cap - pos, "\"%s\": \"%s\"",
-                      c->labels.labels[j].key, c->labels.labels[j].value);
+      n = snprintf(p, end - p, "%s\"%s\":\"%s\"",
+                   j > 0 ? "," : "",
+                   c->labels.labels[j].key, c->labels.labels[j].value);
+      if (n < 0 || p + n >= end) goto overflow;
+      p += n;
     }
-    pos += snprintf(buf + pos, cap - pos, "}}%s\n",
-                    (i < counter_count - 1) ? "," : "");
+
+    n = snprintf(p, end - p, "}}");
+    if (n < 0 || p + n >= end) goto overflow;
+    p += n;
   }
-  pos += snprintf(buf + pos, cap - pos, "  ],\n");
+
+  n = snprintf(p, end - p, "],");
+  if (n < 0 || p + n >= end) goto overflow;
+  p += n;
 
   // Gauges
-  pos += snprintf(buf + pos, cap - pos, "  \"gauges\": [\n");
+  n = snprintf(p, end - p, "\"gauges\":[");
+  if (n < 0 || p + n >= end) goto overflow;
+  p += n;
+
   size_t gauge_count = atomic_load(&g_valk_metrics.gauge_count);
   for (size_t i = 0; i < gauge_count; i++) {
     valk_gauge_t* g = &g_valk_metrics.gauges[i];
     int64_t val = atomic_load_explicit(&g->value, memory_order_relaxed);
 
-    pos += snprintf(buf + pos, cap - pos, "    {\"name\": \"%s\", \"value\": %ld, \"labels\": {",
-                    g->name, val);
+    n = snprintf(p, end - p, "%s{\"name\":\"%s\",\"value\":%ld,\"labels\":{",
+                 i > 0 ? "," : "", g->name, val);
+    if (n < 0 || p + n >= end) goto overflow;
+    p += n;
+
     for (uint8_t j = 0; j < g->labels.count; j++) {
-      if (j > 0) pos += snprintf(buf + pos, cap - pos, ", ");
-      pos += snprintf(buf + pos, cap - pos, "\"%s\": \"%s\"",
-                      g->labels.labels[j].key, g->labels.labels[j].value);
+      n = snprintf(p, end - p, "%s\"%s\":\"%s\"",
+                   j > 0 ? "," : "",
+                   g->labels.labels[j].key, g->labels.labels[j].value);
+      if (n < 0 || p + n >= end) goto overflow;
+      p += n;
     }
-    pos += snprintf(buf + pos, cap - pos, "}}%s\n",
-                    (i < gauge_count - 1) ? "," : "");
+
+    n = snprintf(p, end - p, "}}");
+    if (n < 0 || p + n >= end) goto overflow;
+    p += n;
   }
-  pos += snprintf(buf + pos, cap - pos, "  ],\n");
+
+  n = snprintf(p, end - p, "],");
+  if (n < 0 || p + n >= end) goto overflow;
+  p += n;
 
   // Histograms
-  pos += snprintf(buf + pos, cap - pos, "  \"histograms\": [\n");
+  n = snprintf(p, end - p, "\"histograms\":[");
+  if (n < 0 || p + n >= end) goto overflow;
+  p += n;
+
   size_t hist_count = atomic_load(&g_valk_metrics.histogram_count);
   for (size_t i = 0; i < hist_count; i++) {
     valk_histogram_t* h = &g_valk_metrics.histograms[i];
     uint64_t count = atomic_load_explicit(&h->count, memory_order_relaxed);
     uint64_t sum_us = atomic_load_explicit(&h->sum_us, memory_order_relaxed);
 
-    pos += snprintf(buf + pos, cap - pos,
-                    "    {\"name\": \"%s\", \"count\": %lu, \"sum\": %.6f, \"labels\": {",
-                    h->name, count, (double)sum_us / 1e6);
+    n = snprintf(p, end - p, "%s{\"name\":\"%s\",\"count\":%lu,\"sum\":%.6f,\"labels\":{",
+                 i > 0 ? "," : "", h->name, count, (double)sum_us / 1e6);
+    if (n < 0 || p + n >= end) goto overflow;
+    p += n;
+
     for (uint8_t j = 0; j < h->labels.count; j++) {
-      if (j > 0) pos += snprintf(buf + pos, cap - pos, ", ");
-      pos += snprintf(buf + pos, cap - pos, "\"%s\": \"%s\"",
-                      h->labels.labels[j].key, h->labels.labels[j].value);
+      n = snprintf(p, end - p, "%s\"%s\":\"%s\"",
+                   j > 0 ? "," : "",
+                   h->labels.labels[j].key, h->labels.labels[j].value);
+      if (n < 0 || p + n >= end) goto overflow;
+      p += n;
     }
-    // Output buckets with bounds and counts
-    pos += snprintf(buf + pos, cap - pos, "}, \"buckets\": [");
+
+    n = snprintf(p, end - p, "},\"buckets\":[");
+    if (n < 0 || p + n >= end) goto overflow;
+    p += n;
+
     for (uint8_t j = 0; j < h->bucket_count; j++) {
-      if (j > 0) pos += snprintf(buf + pos, cap - pos, ", ");
-      pos += snprintf(buf + pos, cap - pos, "{\"le\": %.6f, \"count\": %lu}",
-                      h->bucket_bounds[j],
-                      atomic_load_explicit(&h->buckets[j], memory_order_relaxed));
+      n = snprintf(p, end - p, "%s{\"le\":%.6f,\"count\":%lu}",
+                   j > 0 ? "," : "",
+                   h->bucket_bounds[j],
+                   atomic_load_explicit(&h->buckets[j], memory_order_relaxed));
+      if (n < 0 || p + n >= end) goto overflow;
+      p += n;
     }
-    // Add +Inf bucket
-    if (h->bucket_count > 0) pos += snprintf(buf + pos, cap - pos, ", ");
-    pos += snprintf(buf + pos, cap - pos, "{\"le\": \"+Inf\", \"count\": %lu}",
-                    atomic_load_explicit(&h->buckets[h->bucket_count], memory_order_relaxed));
-    pos += snprintf(buf + pos, cap - pos, "]}%s\n",
-                    (i < hist_count - 1) ? "," : "");
+
+    // +Inf bucket
+    n = snprintf(p, end - p, "%s{\"le\":\"+Inf\",\"count\":%lu}]}",
+                 h->bucket_count > 0 ? "," : "",
+                 atomic_load_explicit(&h->buckets[h->bucket_count], memory_order_relaxed));
+    if (n < 0 || p + n >= end) goto overflow;
+    p += n;
   }
-  pos += snprintf(buf + pos, cap - pos, "  ]\n");
 
-  pos += snprintf(buf + pos, cap - pos, "}\n");
+  n = snprintf(p, end - p, "]}");
+  if (n < 0 || p + n >= end) goto overflow;
+  p += n;
 
-  return pos;
+  return p - buf;
+
+overflow:
+  if (cap > 0) buf[cap - 1] = '\0';
+  return cap;
 }
 
 #endif // VALK_METRICS_ENABLED

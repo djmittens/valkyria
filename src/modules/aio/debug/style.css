@@ -984,6 +984,13 @@ main[role="main"] {
   border-radius: 2px;
 }
 
+.legend-dot.active { background: var(--color-ok); }
+.legend-dot.idle { background: var(--color-info-muted); }
+.legend-dot.closing { background: var(--color-warning); }
+.legend-dot.free { background: rgba(255, 255, 255, 0.15); }
+.legend-dot.used { background: var(--color-ok); }
+.legend-dot.flash { background: var(--color-warning); }
+
 /* ===== CONNECTION POOL MINI-GRID ===== */
 .conn-pool-mini {
   display: grid;
@@ -1540,29 +1547,29 @@ main[role="main"] {
 }
 
 .slab-canvas {
-  flex: 1;
-  min-height: 100px;
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   position: relative;
   overflow: hidden;
+  padding: 2px;
 }
 
 .slab-grid {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 1px;
-  padding: 4px;
-  height: 100%;
+  padding: 2px;
 }
 
 .slab-cell {
-  aspect-ratio: 1;
-  border-radius: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
   transition: background-color 100ms ease-out;
 }
 
 .slab-cell.free {
-  background: var(--bg-elevated);
+  background: rgba(255, 255, 255, 0.15);
 }
 
 .slab-cell.used {
@@ -1596,6 +1603,19 @@ main[role="main"] {
   background: var(--color-warning);
 }
 
+/* Non-connection handle types */
+.slab-cell.tcp-listener {
+  background: var(--color-purple);
+}
+
+.slab-cell.task {
+  background: var(--color-cyan);
+}
+
+.slab-cell.timer {
+  background: var(--color-warning-muted);
+}
+
 /* State summary legend in slab panels */
 .slab-state-legend {
   display: flex;
@@ -1621,93 +1641,117 @@ main[role="main"] {
 .slab-state-legend .legend-dot.idle { background: var(--color-info-muted); }
 .slab-state-legend .legend-dot.closing { background: var(--color-warning); }
 
-/* ===== OWNER BREAKDOWN ===== */
+/* ===== HANDLE TYPE BREAKDOWN (inline) ===== */
+.handle-type-breakdown {
+  display: flex;
+  gap: var(--space-md);
+  margin: var(--space-sm) 0;
+  font-size: 11px;
+}
+
+.type-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.type-label {
+  color: var(--text-muted);
+}
+
+.type-item.type-http .type-label { color: var(--color-ok); }
+.type-item.type-tcp .type-label { color: var(--color-purple); }
+.type-item.type-task .type-label { color: var(--color-cyan); }
+.type-item.type-timer .type-label { color: var(--color-warning); }
+
+.type-item span:last-child {
+  font-weight: 600;
+  font-family: 'SF Mono', Monaco, monospace;
+  color: var(--text-secondary);
+}
+
+/* Breakdown section header */
+.breakdown-header {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: var(--space-xs);
+}
+
+/* ===== OWNER BREAKDOWN TABLE ===== */
 .owner-breakdown {
   margin-top: var(--space-sm);
   padding-top: var(--space-sm);
   border-top: 1px dashed var(--border-muted);
 }
 
-.owner-breakdown-bar {
-  display: flex;
-  height: 16px;
-  background: var(--bg-elevated);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  margin-bottom: var(--space-xs);
+/* Owner table: rows=servers/clients, cols=active/idle/closing */
+.owner-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-family: 'SF Mono', Monaco, monospace;
 }
 
-.owner-segment {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 2px;
+.owner-table th,
+.owner-table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.owner-table th {
   font-size: 10px;
   font-weight: 600;
-  color: white;
-  transition: width 0.3s ease;
-}
-
-.owner-segment span {
-  padding: 0 4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.owner-breakdown-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-  font-size: 10px;
-}
-
-.owner-legend-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
   color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: var(--bg-elevated);
 }
 
-.owner-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
+.owner-table .owner-name-col {
+  width: auto;
 }
 
-.owner-name {
-  font-family: 'SF Mono', Monaco, monospace;
+.owner-table .state-col {
+  text-align: center;
+  width: 70px;
+}
+
+.owner-table .active-col { color: var(--color-ok); }
+.owner-table .idle-col { color: var(--color-info); }
+.owner-table .closing-col { color: var(--color-warning); }
+.owner-table .total-col { color: var(--text-primary); width: 90px; }
+
+.owner-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.owner-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.owner-name-cell {
   color: var(--text-secondary);
+  font-weight: 500;
 }
 
-.owner-states {
-  display: flex;
-  gap: 2px;
-  font-family: 'SF Mono', Monaco, monospace;
-  font-size: 9px;
-}
-
-.owner-states .state-active,
-.owner-states .state-idle,
-.owner-states .state-closing {
-  padding: 1px 3px;
-  border-radius: 2px;
+.state-cell {
+  text-align: center;
   font-weight: 600;
 }
 
-.owner-states .state-active {
-  background: var(--color-ok-bg);
-  color: var(--color-ok);
-}
+.active-cell { color: var(--color-ok); }
+.idle-cell { color: var(--color-info); }
+.closing-cell { color: var(--color-warning); }
+.total-cell { color: var(--text-primary); }
 
-.owner-states .state-idle {
-  background: var(--color-info-bg);
-  color: var(--color-info);
-}
-
-.owner-states .state-closing {
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
+.owner-pct {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 10px;
 }
 
 .owner-count {
@@ -2207,10 +2251,236 @@ main[role="main"] {
 .aio-system-panel .panel-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-lg);
+  gap: 0;  /* Section blocks handle their own spacing */
 }
 
-/* Event loop stats row */
+/* ===== AIO SECTION BLOCKS (Phase 2) ===== */
+.aio-section-block {
+  padding: var(--space-lg);
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.aio-section-block:last-child {
+  border-bottom: none;
+}
+
+.block-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px dashed var(--border-muted);
+}
+
+.block-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.block-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.block-badge + .block-badge {
+  margin-left: var(--space-sm);
+}
+
+/* ===== NESTED CARDS GRID ===== */
+.nested-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-md);
+}
+
+.nested-cards-grid .entity-card {
+  margin: 0;
+  background: var(--bg-tertiary);
+  border-color: var(--border-muted);
+}
+
+.nested-cards-grid .entity-header {
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-elevated);
+}
+
+.nested-cards-grid .entity-body {
+  padding: var(--space-md);
+}
+
+.nested-cards-grid .entity-name {
+  font-size: 13px;
+}
+
+.aio-no-entities {
+  grid-column: 1 / -1;
+}
+
+/* ===== RESOURCE POOL PANEL (Connection Grid) ===== */
+.resource-pool-panel {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.resource-pool-panel .pool-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-sm);
+}
+
+.resource-pool-panel .pool-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.resource-pool-panel .pool-usage {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pool-grid-container {
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  margin-bottom: var(--space-sm);
+}
+
+.pool-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+}
+
+.pool-grid .slab-cell {
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+}
+
+/* ===== POOL BREAKDOWN (State + Owner) ===== */
+.pool-breakdown {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-lg);
+  padding-top: var(--space-sm);
+  border-top: 1px dashed var(--border-muted);
+}
+
+.breakdown-by-state {
+  display: flex;
+  gap: var(--space-md);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.breakdown-by-state .legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.breakdown-by-state .legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.breakdown-by-owner,
+.pool-breakdown .owner-breakdown {
+  flex: 1;
+  max-width: 50%;
+  padding: 0;
+  border-top: none;
+  margin-top: 0;
+}
+
+/* Owner breakdown bar chart */
+.owner-bar-chart {
+  display: flex;
+  height: 14px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.owner-bar-segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4px;
+  font-size: 9px;
+  font-weight: 600;
+  color: white;
+  transition: width 0.3s ease;
+}
+
+.owner-bar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 10px;
+}
+
+.owner-bar-legend .legend-item {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-muted);
+}
+
+.owner-bar-legend .legend-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+}
+
+.owner-bar-legend .owner-label {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 9px;
+}
+
+.owner-bar-legend .owner-count {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* Pool warnings */
+.pool-warnings {
+  margin-top: var(--space-xs);
+  font-size: 11px;
+}
+
+.pool-warnings .capacity-warning,
+.pool-warnings .overflow-warning {
+  color: var(--color-warning);
+  padding: 2px 6px;
+  background: var(--color-warning-bg);
+  border-radius: var(--radius-sm);
+  margin-right: var(--space-sm);
+}
+
+.pool-warnings .overflow-warning {
+  color: var(--color-error);
+  background: var(--color-error-bg);
+}
+
+/* Event loop stats row (legacy, keeping for backwards compatibility) */
 .aio-stats-row {
   padding-bottom: var(--space-md);
   border-bottom: 1px solid var(--border-muted);
@@ -2258,7 +2528,7 @@ main[role="main"] {
 }
 
 .memory-slab-panel.compact .slab-canvas {
-  min-height: 60px;
+  /* Let content determine height */
 }
 
 .memory-slab-panel.compact .slab-stats {
@@ -2280,7 +2550,6 @@ main[role="main"] {
 }
 
 .memory-slab-panel.mini .slab-canvas {
-  min-height: 30px;
   flex: 1;
 }
 
@@ -2289,8 +2558,8 @@ main[role="main"] {
 }
 
 .memory-slab-panel.mini .slab-cell {
-  border-radius: 3px;
-  min-height: 20px;
+  aspect-ratio: 1;
+  border-radius: 1px;
 }
 
 /* HTTP resources row */
@@ -2314,6 +2583,19 @@ main[role="main"] {
   .aio-slab-grid {
     grid-template-columns: repeat(2, 1fr);
   }
+
+  .nested-cards-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .pool-breakdown {
+    flex-direction: column;
+    gap: var(--space-sm);
+  }
+
+  .breakdown-by-owner {
+    max-width: 100%;
+  }
 }
 
 @media (max-width: 900px) {
@@ -2325,7 +2607,34 @@ main[role="main"] {
     grid-template-columns: 1fr;
   }
 
+  .nested-cards-grid {
+    grid-template-columns: 1fr;
+  }
+
   .aio-http-resources {
     flex-direction: column;
+  }
+
+  .block-header {
+    flex-wrap: wrap;
+  }
+
+  .block-badge {
+    margin-left: 0;
+  }
+
+  .breakdown-by-state {
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+  }
+}
+
+@media (max-width: 600px) {
+  .aio-section-block {
+    padding: var(--space-md);
+  }
+
+  .resource-pool-panel {
+    padding: var(--space-sm);
   }
 }

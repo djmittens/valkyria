@@ -138,7 +138,7 @@ void test_sse_event_format(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(strstr(buf, "event: memory") != NULL, "Missing event header");
   VALK_TEST_ASSERT(strstr(buf, "id: 12345") != NULL, "Missing event ID");
   VALK_TEST_ASSERT(strstr(buf, "\"name\":\"test\"") != NULL, "Missing slab name");
-  VALK_TEST_ASSERT(strstr(buf, "\"bitmap\":\"aa\"") != NULL, "Missing or wrong bitmap");
+  VALK_TEST_ASSERT(strstr(buf, "\"bitmap\":\"aa\"") != NULL, "Missing or wrong bitmap, got: %s", buf);
   VALK_TEST_ASSERT(strstr(buf, "\"total\":8") != NULL, "Missing total slots");
   VALK_TEST_ASSERT(strstr(buf, "\"used\":4") != NULL, "Missing used slots");
   VALK_TEST_ASSERT(strstr(buf, "\"arenas\":[") != NULL, "Missing arenas array");
@@ -185,8 +185,8 @@ void test_sse_slot_diag_format(VALK_TEST_ARGS()) {
 
   VALK_TEST_ASSERT(len > 0, "SSE format failed, returned %d", len);
 
-  // Check for slot diagnostics format
-  VALK_TEST_ASSERT(strstr(buf, "\"states\":\"AAIFACFF\"") != NULL,
+  // Check for slot diagnostics format (RLE encoded: "AAIFACFF" -> "A2I1F1A1C1F2")
+  VALK_TEST_ASSERT(strstr(buf, "\"states\":\"A2I1F1A1C1F2\"") != NULL,
                    "Missing or wrong states string, got: %s", buf);
   // Summary now includes by_owner object
   VALK_TEST_ASSERT(strstr(buf, "\"A\":3") != NULL, "Missing active count in summary");

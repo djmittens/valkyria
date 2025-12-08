@@ -10,14 +10,22 @@
 // Forward declarations
 typedef struct uv_timer_s uv_timer_t;
 
-// SSE connection context for memory diagnostics
+// Include nghttp2 for HTTP/2 types
+#include <nghttp2/nghttp2.h>
+
+// SSE connection context for memory diagnostics (HTTP/2 streaming)
 typedef struct valk_sse_diag_conn {
-  valk_aio_handle_t *handle;      // TCP connection handle
-  uv_timer_t *timer;               // Push timer (100ms)
-  uint64_t last_event_id;         // For resumption
-  valk_aio_system_t *aio_system;  // AIO system reference
-  char write_buffer[16384];       // Event buffer
-  bool active;                    // Connection alive
+  valk_aio_handle_t *handle;        // HTTP connection handle
+  valk_aio_handle_t *timer_handle;  // Push timer handle (from slab)
+  nghttp2_session *session;         // HTTP/2 session for data frames
+  int32_t stream_id;                // HTTP/2 stream ID
+  uint64_t last_event_id;           // For resumption
+  valk_aio_system_t *aio_system;    // AIO system reference
+  char *pending_data;               // Pending SSE data to send
+  size_t pending_len;               // Length of pending data
+  size_t pending_offset;            // Offset into pending data
+  bool active;                      // Connection alive
+  bool data_deferred;               // True if waiting for data
 } valk_sse_diag_conn_t;
 
 // Per-slot state for connection-aware slabs
@@ -42,14 +50,22 @@ typedef struct {
   valk_slot_diag_t *slots;  // NULL for simple bitmap slabs
   bool has_slot_diag;
 
-  // Summary stats (for connection slabs)
+  // Summary stats for HTTP connections (only for handle slabs)
   struct {
     size_t active;
     size_t idle;
     size_t closing;
   } by_state;
 
-  // Per-owner connection counts with state breakdown
+  // Handle type breakdown (only for handle slabs)
+  struct {
+    size_t tcp_listeners;   // VALK_DIAG_HNDL_TCP
+    size_t tasks;           // VALK_DIAG_HNDL_TASK
+    size_t timers;          // VALK_DIAG_HNDL_TIMER
+    size_t http_conns;      // VALK_DIAG_HNDL_HTTP_CONN
+  } by_type;
+
+  // Per-owner connection counts with state breakdown (HTTP connections only)
   struct {
     uint16_t owner_idx;
     size_t active;
@@ -89,8 +105,17 @@ typedef struct valk_mem_snapshot {
   } gc_heap;
 } valk_mem_snapshot_t;
 
-// Initialize SSE diagnostics for an HTTP connection
+// Initialize SSE diagnostics for an HTTP connection (deprecated, use _http2)
 void valk_sse_diag_init(valk_aio_handle_t *conn, valk_aio_system_t *aio);
+
+// Initialize HTTP/2 SSE streaming - returns connection context and populates data provider
+// The data provider should be passed to nghttp2_submit_response2
+valk_sse_diag_conn_t* valk_sse_diag_init_http2(
+    valk_aio_handle_t *handle,
+    valk_aio_system_t *aio,
+    nghttp2_session *session,
+    int32_t stream_id,
+    nghttp2_data_provider2 *data_prd_out);
 
 // Stop SSE stream
 void valk_sse_diag_stop(valk_sse_diag_conn_t *sse_conn);
@@ -98,7 +123,15 @@ void valk_sse_diag_stop(valk_sse_diag_conn_t *sse_conn);
 // Collect memory snapshot (called by timer)
 void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot, valk_aio_system_t *aio);
 
-// Encode snapshot to SSE event
+// Flush pending HTTP/2 data on a connection (implemented in aio_uv.c)
+void valk_http2_flush_pending(valk_aio_handle_t *conn);
+
+// Encode snapshot to SSE event (memory only - legacy)
 int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf, size_t buf_size, uint64_t event_id);
+
+// Encode combined diagnostics to SSE event (memory + metrics)
+// This unified event eliminates the need for separate polling from the dashboard
+int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot, valk_aio_system_t *aio,
+                               char *buf, size_t buf_size, uint64_t event_id);
 
 #endif // VALK_AIO_SSE_DIAGNOSTICS_H

@@ -180,6 +180,7 @@ typedef struct valk_aio_handle_t {
   union {
     uv_tcp_t tcp;
     uv_async_t task;
+    uv_timer_t timer;
   } uv;
 
   // HTTP connection fields (used when kind == VALK_HNDL_HTTP_CONN)
@@ -206,6 +207,10 @@ typedef struct valk_aio_handle_t {
 #ifdef VALK_METRICS_ENABLED
     valk_handle_diag_t diag;
 #endif
+
+    // SSE diagnostics connection (if this handle is serving SSE stream)
+    // Stored here for cleanup on abrupt disconnect (browser refresh)
+    struct valk_sse_diag_conn *sse_conn;
   } http;
 } valk_aio_handle_t;
 
@@ -488,6 +493,7 @@ struct valk_http2_server_request {
   int status_code;           // HTTP status code for response (for new metrics)
   uint64_t response_sent_time_us;  // Time when response was fully sent
   bool response_complete;           // True when response DATA frame sent
+  struct valk_sse_diag_conn *sse_conn;  // SSE diagnostics stream (NULL if not SSE)
 #endif
 };
 
@@ -741,6 +747,14 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
     valk_gauge_dec(client_connections_active);
   }
 #endif
+
+  // Clean up SSE diagnostics connection if present
+  // This handles abrupt disconnects (e.g., browser refresh) where
+  // on_stream_close is not called by nghttp2
+  if (handle->http.sse_conn) {
+    valk_sse_diag_stop(handle->http.sse_conn);
+    handle->http.sse_conn = NULL;
+  }
 
   // TODO Tear down http and ssl context's only through the slab... make sure
   // they dont escape into malloc
@@ -1175,69 +1189,42 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
         nghttp2_session_get_stream_user_data(session, stream_id);
     if (req && req->conn && req->conn->http.server && req->conn->http.server->sys) {
       VALK_INFO("Setting up SSE diagnostics stream for stream %d", stream_id);
-      // Note: SSE over HTTP/2 is complex - for now we return a placeholder
-      // The proper implementation would require keeping the stream open and
-      // pushing DATA frames via nghttp2_submit_data periodically.
-      // For a simpler approach, we'll return a stub that tells the client to retry.
-      // TODO(networking): Implement proper HTTP/2 SSE streaming
 
-      // For now, send an immediate response with current snapshot data
-      valk_mem_snapshot_t snapshot = {0};
-      valk_mem_snapshot_collect(&snapshot, req->conn->http.server->sys);
+      // Initialize HTTP/2 SSE streaming with timer-based push
+      nghttp2_data_provider2 data_prd;
+      valk_sse_diag_conn_t *sse_conn = valk_sse_diag_init_http2(
+          req->conn,
+          req->conn->http.server->sys,
+          session,
+          stream_id,
+          &data_prd);
 
-      // Format as SSE event
-      // Buffer needs to be large enough for:
-      // - Handle slab states string (~2056 chars)
-      // - LVAL slab hex bitmap (~65536 chars for 262144 slots)
-      // - Other slabs and metadata (~4KB)
-      // Total: ~72KB needed
-      char *sse_buf = malloc(131072);  // 128KB buffer
-      if (!sse_buf) {
-        VALK_ERROR("Failed to allocate SSE buffer");
+      // SSE streams don't need the stream arena - release it immediately
+      // This must happen before any early returns to avoid leaking arenas
+      if (req->arena_slab_item) {
+        valk_slab_release(req->conn->http.server->sys->httpStreamArenas, req->arena_slab_item);
+        req->arena_slab_item = NULL;
+        req->stream_arena = NULL;
+      }
+
+      if (!sse_conn) {
+        VALK_ERROR("Failed to initialize SSE streaming");
         return -1;
       }
-      int len = valk_mem_snapshot_to_sse(&snapshot, sse_buf, 131072, 1);
 
-      // Free snapshot allocations (bitmaps and slot diagnostics)
-      for (size_t i = 0; i < snapshot.slab_count; i++) {
-        free(snapshot.slabs[i].bitmap);
-        free(snapshot.slabs[i].slots);
-      }
+      // Store SSE connection in both request and handle
+      // - req->sse_conn: for cleanup on clean stream close (on_stream_close callback)
+      // - req->conn->http.sse_conn: for cleanup on abrupt disconnect (browser refresh)
+      req->sse_conn = sse_conn;
+      req->conn->http.sse_conn = sse_conn;
 
-      if (len <= 0) {
-        VALK_ERROR("Failed to format SSE snapshot");
-        len = snprintf(sse_buf, 131072, "event: error\ndata: {\"error\":\"snapshot failed\"}\n\n");
-      }
-
-      // Send as regular response with SSE content
+      // Send HTTP/2 response headers with streaming data provider
       const char* content_type = "text/event-stream; charset=utf-8";
       nghttp2_nv headers[] = {
         MAKE_NV2(":status", "200"),
         MAKE_NV("content-type", content_type, strlen(content_type)),
         MAKE_NV2("cache-control", "no-cache"),
       };
-
-      // Copy body to arena
-      char* body_copy;
-      VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
-        body_copy = valk_mem_alloc(len + 1);
-        memcpy(body_copy, sse_buf, len + 1);
-      }
-
-      // Free the temporary SSE buffer
-      free(sse_buf);
-
-      http_body_source_t *body_src;
-      VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
-        body_src = valk_mem_alloc(sizeof(http_body_source_t));
-        body_src->body = body_copy;
-        body_src->body_len = len;
-        body_src->offset = 0;
-      }
-
-      nghttp2_data_provider2 data_prd;
-      data_prd.source.ptr = (void*)body_src;
-      data_prd.read_callback = __http_byte_body_cb;
 
       return nghttp2_submit_response2(session, stream_id, headers, 3, &data_prd);
     }
@@ -1404,6 +1391,18 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
   // Get request data to access stream arena
   valk_http2_server_request_t *req =
       nghttp2_session_get_stream_user_data(session, stream_id);
+
+#ifdef VALK_METRICS_ENABLED
+  // Stop SSE stream if this was an SSE connection
+  // NOTE: This must be outside the arena_slab_item check because SSE streams
+  // release their arena early (in __http_send_response) and set arena_slab_item=NULL
+  if (req && req->sse_conn) {
+    VALK_DEBUG("Stream %d closing, stopping SSE timer", stream_id);
+    valk_sse_diag_stop(req->sse_conn);
+    req->sse_conn = NULL;
+    conn->http.sse_conn = NULL;  // Clear handle reference too
+  }
+#endif
 
   if (req && req->arena_slab_item) {
 #ifdef VALK_METRICS_ENABLED
@@ -1808,6 +1807,11 @@ static void __http_continue_pending_send(valk_aio_handle_t *conn) {
   if (slabItem != NULL) {
     valk_slab_release_ptr(tcp_buffer_slab, slabItem);
   }
+}
+
+// Public API to flush pending HTTP/2 data (used by SSE streaming)
+void valk_http2_flush_pending(valk_aio_handle_t *conn) {
+  __http_continue_pending_send(conn);
 }
 
 static void __http_tcp_unencrypted_read_cb(void *arg,
@@ -3189,8 +3193,14 @@ int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
     cfg->tcp_buffer_pool_size = cfg->max_connections * (2 + stream_overhead);
   }
 
-  if (cfg->arena_pool_size == 0)
-    cfg->arena_pool_size = cfg->max_connections * 2;
+  if (cfg->arena_pool_size == 0) {
+    // Account for HTTP/2 multiplexing: each connection can have many concurrent streams
+    // Use a reasonable multiplier: enough for moderate concurrency, capped for memory
+    // Formula: max_connections * 4, capped at 1024 to limit total arena memory
+    cfg->arena_pool_size = cfg->max_connections * 4;
+    if (cfg->arena_pool_size > 1024) cfg->arena_pool_size = 1024;
+    if (cfg->arena_pool_size < 64) cfg->arena_pool_size = 64;
+  }
 
   if (cfg->arena_size == 0)
     cfg->arena_size = 64 * 1024 * 1024;
@@ -3498,6 +3508,91 @@ bool valk_aio_get_handle_diag(valk_aio_system_t* sys, size_t slot_idx,
 
   *out_diag = handle->http.diag;
   return true;
+}
+
+valk_diag_handle_kind_e valk_aio_get_handle_kind(valk_aio_system_t* sys, size_t slot_idx) {
+  if (!sys) return VALK_DIAG_HNDL_EMPTY;
+
+  valk_slab_t *slab = sys->handleSlab;
+  if (!slab || slot_idx >= slab->numItems) return VALK_DIAG_HNDL_EMPTY;
+
+  // Get handle at this slot index
+  size_t stride = valk_slab_item_stride(slab->itemSize);
+  valk_slab_item_t *item = (valk_slab_item_t *)&slab->heap[stride * slot_idx];
+  valk_aio_handle_t *handle = (valk_aio_handle_t *)item->data;
+
+  // Map internal handle_kind_t to public valk_diag_handle_kind_e
+  switch (handle->kind) {
+    case VALK_HNDL_EMPTY:     return VALK_DIAG_HNDL_EMPTY;
+    case VALK_HNDL_TCP:       return VALK_DIAG_HNDL_TCP;
+    case VALK_HNDL_TASK:      return VALK_DIAG_HNDL_TASK;
+    case VALK_HNDL_TIMER:     return VALK_DIAG_HNDL_TIMER;
+    case VALK_HNDL_HTTP_CONN: return VALK_DIAG_HNDL_HTTP_CONN;
+    default:                  return VALK_DIAG_HNDL_EMPTY;
+  }
+}
+
+// Timer handle management functions
+valk_aio_handle_t* valk_aio_timer_alloc(valk_aio_system_t* sys) {
+  if (!sys || !sys->handleSlab) return NULL;
+
+  valk_slab_item_t *item = valk_slab_aquire(sys->handleSlab);
+  if (!item) return NULL;
+
+  valk_aio_handle_t *handle = (valk_aio_handle_t *)item->data;
+  VALK_INFO("Timer ALLOC: handle=%p slot=%zu", (void*)handle, item->handle);
+  memset(handle, 0, sizeof(valk_aio_handle_t));
+  handle->kind = VALK_HNDL_TIMER;
+  handle->sys = sys;
+
+  return handle;
+}
+
+void valk_aio_timer_init(valk_aio_handle_t* handle) {
+  if (!handle || !handle->sys) return;
+  uv_timer_init(handle->sys->eventloop, &handle->uv.timer);
+}
+
+void valk_aio_timer_start(valk_aio_handle_t* handle, uint64_t timeout_ms, uint64_t repeat_ms,
+                           void (*callback)(uv_timer_t*)) {
+  if (!handle) return;
+  uv_timer_start(&handle->uv.timer, callback, timeout_ms, repeat_ms);
+}
+
+void valk_aio_timer_stop(valk_aio_handle_t* handle) {
+  if (!handle) return;
+  uv_timer_stop(&handle->uv.timer);
+}
+
+void valk_aio_timer_close(valk_aio_handle_t* handle, void (*close_cb)(uv_handle_t*)) {
+  if (!handle) return;
+  // Guard against double-close
+  if (uv_is_closing((uv_handle_t*)&handle->uv.timer)) {
+    VALK_DEBUG("Timer already closing, skipping");
+    return;
+  }
+  // Store handle pointer in uv data for the close callback to release
+  handle->uv.timer.data = handle;
+  uv_close((uv_handle_t*)&handle->uv.timer, close_cb);
+}
+
+void valk_aio_timer_set_data(valk_aio_handle_t* handle, void* data) {
+  if (!handle) return;
+  handle->uv.timer.data = data;
+}
+
+void valk_aio_timer_free(valk_aio_handle_t* handle) {
+  if (!handle || !handle->sys) return;
+  // Get slot number for debugging
+  valk_slab_item_t *item = valk_container_of(handle, valk_slab_item_t, data);
+  VALK_INFO("Timer FREE: handle=%p slot=%zu kind=%d", (void*)handle, item->handle, handle->kind);
+  // Check for double-free
+  if (handle->kind != VALK_HNDL_TIMER) {
+    VALK_ERROR("Timer FREE: DOUBLE FREE DETECTED! kind=%d expected=%d", handle->kind, VALK_HNDL_TIMER);
+    return;  // Don't actually free - it's already freed or corrupted
+  }
+  handle->kind = 0;  // Mark as freed to detect future double-frees
+  valk_slab_release_ptr(handle->sys->handleSlab, handle);
 }
 #endif
 

@@ -201,8 +201,7 @@
                   <div class="slab-grid" id="lval-grid"
                        role="img"
                        aria-label="LVAL Object Slab: loading..."
-                       aria-live="polite"
-                       style="grid-template-columns: repeat(32, 1fr);"></div>
+                       aria-live="polite"></div>
                 </div>
                 <div class="slab-stats">
                   <span><span class="used-count">0</span> / 262,144 slots</span>
@@ -272,44 +271,26 @@
     </section>
 
     <!-- ==================== AIO SYSTEMS ==================== -->
+    <!-- Phase 2: HTTP Servers and Clients are now nested under their parent AIO system -->
     <section class="section-group aio-section" aria-labelledby="aio-section-title">
       <div class="section-header">
         <div class="section-icon aio" aria-hidden="true">AIO</div>
-        <h2 class="section-title" id="aio-section-title">Async I/O Systems</h2>
-        <span class="section-subtitle">Event Loops, Connections, and Buffers</span>
+        <h2 class="section-title" id="aio-section-title">Async I/O System</h2>
+        <span class="section-subtitle">Event Loop, Resources, Servers & Clients</span>
         <div class="section-badges">
           <span class="section-badge" id="aio-systems-badge" title="Number of independent AIO event loop systems. Each system has its own connection pool and buffers.">-- systems</span>
           <span class="section-badge" id="aio-conns-badge" title="Total active connections across all AIO systems. High connection count may indicate connection leaks or slow clients.">-- conns</span>
+          <span class="section-badge" id="http-servers-count" title="Number of HTTP server endpoints listening for requests.">-- servers</span>
+          <span class="section-badge" id="http-total-rate" title="Combined request rate across all HTTP servers.">-- req/s</span>
         </div>
       </div>
 
-      <div class="grid-2" id="aio-systems-container">
+      <div id="aio-systems-container">
         <!-- AIO system panels will be dynamically populated here -->
+        <!-- Each panel now contains: Event Loop, Shared Pools, HTTP Servers, HTTP Clients -->
         <div class="panel" id="aio-no-systems">
           <div class="panel-body" style="text-align: center; color: var(--text-muted); padding: var(--space-xl);">
             No AIO systems registered
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ==================== HTTP SERVERS ==================== -->
-    <section class="section-group http-section" aria-labelledby="http-section-title">
-      <div class="section-header">
-        <div class="section-icon http" aria-hidden="true">HTTP</div>
-        <h2 class="section-title" id="http-section-title">HTTP Servers</h2>
-        <span class="section-subtitle">Inbound Request Handling</span>
-        <div class="section-badges">
-          <span class="section-badge" id="http-servers-count" title="Number of HTTP server endpoints listening for requests. Each server binds to a specific host:port.">-- servers</span>
-          <span class="section-badge" id="http-total-rate" title="Combined request rate across all HTTP servers. Use to gauge overall system load and capacity planning.">-- req/s</span>
-        </div>
-      </div>
-
-      <div class="grid-3" id="http-servers-container">
-        <!-- HTTP server entity cards will be dynamically populated here -->
-        <div class="entity-card" id="http-no-servers">
-          <div class="entity-body" style="text-align: center; color: var(--text-muted); padding: var(--space-xl);">
-            No HTTP servers registered
           </div>
         </div>
       </div>
