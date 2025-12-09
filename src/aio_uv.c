@@ -748,15 +748,23 @@ static void __event_loop(void *arg) {
   valk_slab_free(sys->httpStreamArenas);
 }
 
-// Get request pointer from arena slot index
-// The request is always the first allocation in the arena at heap[0]
+static inline size_t __align_up(uintptr_t addr, size_t alignment) {
+  size_t mask = alignment - 1;
+  size_t misalign = addr & mask;
+  return misalign ? (alignment - misalign) : 0;
+}
+
 static inline valk_http2_server_request_t *__http_request_from_slot(
     valk_slab_t *slab, uint32_t slot) {
   if (slot == UINT32_MAX || !slab || slot >= slab->numItems) return NULL;
   size_t stride = valk_slab_item_stride(slab->itemSize);
   valk_slab_item_t *item = (valk_slab_item_t *)&slab->heap[stride * slot];
   valk_mem_arena_t *arena = (valk_mem_arena_t *)item->data;
-  return (valk_http2_server_request_t *)&arena->heap[0];
+  size_t init_off = __align_up((uintptr_t)arena->heap, alignof(max_align_t));
+  size_t hdr = init_off + sizeof(size_t);
+  size_t adj = __align_up((uintptr_t)&arena->heap[hdr], alignof(max_align_t));
+  size_t payload = hdr + adj;
+  return (valk_http2_server_request_t *)&arena->heap[payload];
 }
 
 // Remove a request from connection's active arena list (slot-based linked list)
@@ -773,9 +781,12 @@ static void __http_remove_from_active_arenas(valk_aio_handle_t *conn,
     return;
   }
 
-  // Traverse list to find target
+  // Traverse list to find target with loop detection
   uint32_t prev_slot = conn->http.active_arena_head;
-  while (prev_slot != UINT32_MAX) {
+  uint32_t iterations = 0;
+  uint32_t max_iterations = slab->numItems + 1;  // Can't have more items than slab size
+
+  while (prev_slot != UINT32_MAX && iterations < max_iterations) {
     valk_http2_server_request_t *prev_req = __http_request_from_slot(slab, prev_slot);
     if (!prev_req) break;
 
@@ -785,7 +796,21 @@ static void __http_remove_from_active_arenas(valk_aio_handle_t *conn,
       if (target_req) target_req->next_arena_slot = UINT32_MAX;
       return;
     }
-    prev_slot = prev_req->next_arena_slot;
+
+    uint32_t next_slot = prev_req->next_arena_slot;
+    // Detect self-loop
+    if (next_slot == prev_slot) {
+      VALK_ERROR("Arena linked list corruption detected: slot %u points to itself", prev_slot);
+      // Break the cycle by setting to UINT32_MAX
+      prev_req->next_arena_slot = UINT32_MAX;
+      break;
+    }
+    prev_slot = next_slot;
+    iterations++;
+  }
+
+  if (iterations >= max_iterations) {
+    VALK_ERROR("Arena linked list infinite loop detected after %u iterations", iterations);
   }
 }
 
@@ -1174,6 +1199,8 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
     nghttp2_session_set_stream_user_data(session, frame->hd.stream_id, req);
 
     // Add to connection's active arena list for cleanup on disconnect
+    VALK_ASSERT(conn->http.active_arena_head != req->arena_slot,
+                "Arena slot %u already at head - would create self-loop", req->arena_slot);
     req->next_arena_slot = conn->http.active_arena_head;
     conn->http.active_arena_head = req->arena_slot;
   }
@@ -4626,10 +4653,44 @@ static void valk_async_send_http_response(valk_async_handle_t *handle) {
     return;  // No HTTP context - nothing to send
   }
 
+  valk_aio_handle_t *conn = handle->conn;
+
+  // CRITICAL: Check if connection is still valid before using it.
+  // When a connection closes:
+  // 1. conn->http.state is set to VALK_CONN_CLOSED
+  // 2. conn->http.session is set to NULL before the session is deleted
+  // This prevents use-after-free when async timers fire after client disconnect.
+  if (conn->http.state == VALK_CONN_CLOSING ||
+      conn->http.state == VALK_CONN_CLOSED ||
+      !conn->http.session) {
+    VALK_INFO("Async handle %lu: connection closed, skipping HTTP response for stream %d",
+              handle->id, handle->stream_id);
+    return;
+  }
+
   nghttp2_session *session = (nghttp2_session*)handle->session;
   int32_t stream_id = handle->stream_id;
-  valk_aio_handle_t *conn = handle->conn;
   valk_mem_arena_t *arena = (valk_mem_arena_t*)handle->stream_arena;
+
+  // CRITICAL: Check if the stream still exists AND belongs to this async handle.
+  // When a stream closes, its arena is released and can be reused by a new stream.
+  // The new stream might have the same stream_id (HTTP/2 stream IDs are reused).
+  // We verify by checking that the stream's arena matches what this handle expects.
+  valk_http2_server_request_t *stream_req =
+      nghttp2_session_get_stream_user_data(session, stream_id);
+  if (!stream_req) {
+    VALK_INFO("Async handle %lu: stream %d no longer exists, skipping HTTP response",
+              handle->id, stream_id);
+    return;
+  }
+
+  // Verify the stream's arena matches this handle's arena.
+  // If they don't match, this stream_id was reused for a different request.
+  if (stream_req->stream_arena != arena) {
+    VALK_INFO("Async handle %lu: stream %d arena mismatch (expected %p, got %p), skipping",
+              handle->id, stream_id, (void*)arena, (void*)stream_req->stream_arena);
+    return;
+  }
 
   if (handle->status == VALK_ASYNC_COMPLETED) {
     valk_lval_t *result = handle->result;
@@ -4701,6 +4762,20 @@ static void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t 
     return;  // Already in terminal state
   }
 
+  // CRITICAL: Check if associated connection is still valid BEFORE any arena usage.
+  // When a connection closes, arenas are released but async handles still have
+  // stale pointers. We must detect this and abort early to prevent use-after-free.
+  if (handle->conn) {
+    valk_aio_handle_t *conn = handle->conn;
+    if (conn->http.state == VALK_CONN_CLOSING ||
+        conn->http.state == VALK_CONN_CLOSED ||
+        !conn->http.session) {
+      VALK_INFO("Async handle %lu: connection closed during completion, aborting", handle->id);
+      handle->status = VALK_ASYNC_CANCELLED;
+      return;
+    }
+  }
+
   handle->status = VALK_ASYNC_COMPLETED;
   handle->result = result;
 
@@ -4729,6 +4804,16 @@ static void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *err
   if (!handle) return;
   if (handle->status != VALK_ASYNC_PENDING && handle->status != VALK_ASYNC_RUNNING) {
     return;  // Already in terminal state
+  }
+
+  // CRITICAL: Check if associated connection is still valid (same as complete)
+  if (handle->conn) {
+    valk_aio_handle_t *conn = handle->conn;
+    if (conn->http.state == VALK_CONN_CLOSED || !conn->http.session) {
+      VALK_INFO("Async handle %lu: connection closed during failure, aborting", handle->id);
+      handle->status = VALK_ASYNC_CANCELLED;
+      return;
+    }
   }
 
   handle->status = VALK_ASYNC_FAILED;
@@ -5016,15 +5101,72 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_handle(result);
 }
 
+// Helper: Check if any handle in the chain has a closed connection
+static bool valk_async_is_connection_closed(valk_async_handle_t *handle) {
+  if (!handle) return false;
+  // Check this handle's connection - consider both CLOSING and CLOSED states
+  // CLOSING = TCP close initiated, CLOSED = fully disconnected
+  if (handle->conn) {
+    valk_aio_handle_t *conn = handle->conn;
+    if (conn->http.state == VALK_CONN_CLOSING ||
+        conn->http.state == VALK_CONN_CLOSED ||
+        !conn->http.session) {
+      return true;
+    }
+  }
+  // Walk up parent chain looking for connection info
+  valk_async_handle_t *p = handle->parent;
+  int depth = 0;
+  while (p && depth < 100) {
+    if (p->conn) {
+      valk_aio_handle_t *conn = p->conn;
+      if (conn->http.state == VALK_CONN_CLOSING ||
+          conn->http.state == VALK_CONN_CLOSED ||
+          !conn->http.session) {
+        return true;
+      }
+    }
+    p = p->parent;
+    depth++;
+  }
+  // Also check children (HTTP context might have been transferred down)
+  for (size_t i = 0; i < handle->children.count && i < 100; i++) {
+    valk_async_handle_t *child = handle->children.items[i];
+    if (child && child->conn) {
+      valk_aio_handle_t *conn = child->conn;
+      if (conn->http.state == VALK_CONN_CLOSING ||
+          conn->http.state == VALK_CONN_CLOSED ||
+          !conn->http.session) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Modified completion propagation - called after source completes
 // Propagates to chained children (aio/then handles)
 static void valk_async_propagate_completion(valk_async_handle_t *source) {
   if (!source) return;
 
+  // CRITICAL: Check if connection is closed anywhere in the handle chain.
+  if (valk_async_is_connection_closed(source)) {
+    VALK_INFO("Async propagation: connection closed, aborting propagation");
+    return;
+  }
+
   for (size_t i = 0; i < source->children.count; i++) {
     valk_async_handle_t *child = source->children.items[i];
     // Check if child is a "then" handle (waiting on us)
     if (child->status == VALK_ASYNC_RUNNING && child->parent == source) {
+
+      // Also check child's connection explicitly
+      if (valk_async_is_connection_closed(child)) {
+        VALK_INFO("Async propagation: child connection closed, cancelling child handle %lu", child->id);
+        child->status = VALK_ASYNC_CANCELLED;
+        continue;
+      }
+
       // Child is waiting for our result
       if (source->status == VALK_ASYNC_COMPLETED) {
         // Call child's transform function with our result

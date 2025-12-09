@@ -81,7 +81,8 @@ make test
 ```bash
 make configure    # First-time setup (builds editline)
 make build        # Build everything
-make test         # Run all tests
+make test         # Run C + Valk tests
+make test-all     # Comprehensive: all tests with and without ASAN
 make repl         # Start REPL
 make debug        # REPL under debugger
 make lint         # Run linters

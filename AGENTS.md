@@ -1,38 +1,59 @@
-# Repository Guidelines
+# AGENTS.md - Valkyria Lisp Interpreter (C23)
 
-## Project Structure & Module Organization
-- `src/` — C23 runtime, GC, parser, REPL, plus `.valk` standard library modules (e.g., `prelude.valk`, async libs).
-- `test/` — C test suites (`test_*.c`) and Valkyria tests (`test_*.valk`); `stress/` for long‑running cases.
-- `docs/`, `examples/` — reference material and runnable examples.
-- `vendor/` — third‑party deps (e.g., `editline`).
-- `build/` — CMake/Ninja outputs (generated); do not commit.
-- Top‑level: `CMakeLists.txt`, `Makefile`, `.clang-tidy`.
+## Build & Test Commands
+- `make build` - Build into `build/` (CMake+Ninja)
+- `make test` - Run all C and Valk tests
+- `make lint` - Run clang-tidy (must pass before committing)
+- Single C test: `build/test_memory` (binary name matches `test/*.c`)
+- Single Valk test: `build/valk test/test_prelude.valk`
+- ASAN tests: `make test-c-asan`, `make test-valk-asan`
 
-## Build, Test, and Development Commands
-- `make build` — configure (CMake+Ninja) and compile into `build/`.
-- `make test` — run C suites (binaries in `build/`) and Valkyria tests via `build/valk`.
-- `make lint` — run clang‑tidy over `src/` and `test/`.
-- `make cppcheck` — static analysis pass.
-- `make clean` — remove `build/`.
-- `make repl` — launch `build/valk` with `src/prelude.valk`.
-- `make asan` — run selected tests with ASAN/LSAN enabled.
-Notes: On macOS, Makefile enables extra flags; first build auto‑generates a self‑signed TLS cert in `build/`.
+## Code Style
+- C23 with GNU extensions, 2-space indent, no comments unless essential
+- `snake_case` for functions/variables, `UPPER_SNAKE` for macros
+- `*_t` suffix for types, `*_e` for enums, `valk_` prefix for public symbols
+- Headers mirror sources: `memory.c` -> `memory.h`
+- DO NOT ADD COMMENTS to code unless explicitly asked
 
-## Coding Style & Naming Conventions
-- Language: C23 in `src/*.c`/`*.h`; Valkyria modules in `*.valk`.
-- Naming: snake_case for files and identifiers; headers mirror C sources (e.g., `memory.c`/`memory.h`).
-- Formatting: follow existing style; ensure `make lint` passes. Prefer small, focused functions and clear ownership in memory APIs.
+## Project Layout
+- `src/` - C runtime + `.valk` stdlib; core: `parser.c`, `memory.c`, `gc.c`
+- `test/` - `test_*.c` (C) and `test_*.valk` (Lisp); `stress/` for long tests
+- `build/` - Generated; never commit
 
-## Testing Guidelines
-- Add C tests under `test/` named `test_<area>.c`; add Valkyria tests as `test_<area>.valk`.
-- Run all: `make test`. Run a single Valk test: `build/valk test/test_prelude.valk`.
-- Keep tests fast; place long scenarios in `test/stress/`.
+## Error Handling
+- Return `valk_lval_err()` for recoverable errors in builtins
+- Use `VALK_ASSERT()` for invariant violations
 
-## Commit & Pull Request Guidelines
-- Commits: concise, imperative subject (“Fix GC sweep order”); include brief rationale when non‑obvious.
-- Link issues where relevant. Group unrelated changes into separate commits.
-- PRs: include summary, motivation, testing notes, and any perf or memory impacts. Ensure `make build`, `make lint`, and `make test` pass locally; exclude `build/` outputs.
+## Required Workflow (CRITICAL - MUST FOLLOW)
 
-## Security & Configuration Tips
-- Linux/macOS supported via CMake+Ninja. If vendor deps are missing, run `make configure` inside `vendor/editline` (autotools required). Avoid committing secrets; certificates generated in `build/` are for local testing only.
+### Before ANY Code Change
+1. READ the file(s) you intend to modify - NEVER edit without reading first
+2. Understand the existing code conventions and patterns
+3. Verify any libraries/utilities exist before using them
 
+### After ANY Code Change
+1. Run `make build` to verify compilation succeeds
+2. Run `make test` to verify all tests pass
+3. If ANYTHING fails, fix it immediately and re-run
+4. ONLY report completion after build AND tests pass
+
+### Task Completion Rules
+- NEVER mark a task complete if tests are failing
+- NEVER mark a task complete if build is broken
+- NEVER mark a task complete if implementation is partial
+- NEVER stop mid-task - continue until fully done or user stops you
+- NEVER claim a task is "too large" - break it down and complete it
+
+## Communication Style
+- Be concise and direct - no fluff
+- Don't add preamble like "I'll help you with that" - just do it
+- Don't use sycophantic phrases like "Great question!"
+- Prioritize accuracy over validation
+
+## What NOT To Do
+- Don't make changes without reading code first
+- Don't skip running tests after changes
+- Don't add comments unless explicitly asked
+- Don't commit unless explicitly asked
+- Don't add unnecessary abstractions
+- Don't create documentation files unless asked

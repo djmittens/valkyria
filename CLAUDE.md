@@ -13,9 +13,10 @@ Valkyria is a Lisp interpreter in C23. See [docs/](docs/) for full documentation
 
 ```bash
 make build          # Build everything
-make test           # Run all tests (ALWAYS use this, not direct binary)
+make test           # Run C + Valk tests (no ASAN)
+make test-all       # Comprehensive: all tests with and without ASAN
 make repl           # Start REPL with prelude
-make debug          # REPL under lldb
+make debug          # REPL under debugger (lldb on macOS, gdb on Linux)
 make todo           # Find TODOs for current branch
 ```
 

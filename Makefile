@@ -9,16 +9,26 @@ ifeq ($(UNAME), Darwin)
 	CMAKE_BASE += -DHOMEBREW_CLANG=on
 endif
 
-JOBS := $(shell nproc 2>/dev/null || echo 12)
+JOBS := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
-# Generate SSL certs for a build directory
+# SSL Certificate Generation
+# Uses mkcert if available (browser-trusted), falls back to openssl (untrusted)
+# Install mkcert: https://github.com/FiloSottile/mkcert
+#   brew install mkcert    (macOS)
+#   apt install mkcert     (Debian/Ubuntu)
+# Then run once: mkcert -install
 define gen_ssl_certs
-	openssl req -x509 -newkey rsa:2048 -nodes \
-		-keyout $(1)/server.key \
-		-out $(1)/server.crt \
-		-sha256 \
-		-days 365 \
-		-subj "/C=US/ST=SomeState/L=SomeCity/O=MyOrg/CN=localhost" 2>/dev/null
+	@if command -v mkcert >/dev/null 2>&1; then \
+		mkcert -cert-file $(1)/server.crt -key-file $(1)/server.key localhost 127.0.0.1 ::1 2>/dev/null; \
+	else \
+		echo "Warning: mkcert not found, generating untrusted self-signed cert"; \
+		openssl req -x509 -newkey rsa:2048 -nodes \
+			-keyout $(1)/server.key \
+			-out $(1)/server.crt \
+			-sha256 \
+			-days 365 \
+			-subj "/C=US/ST=SomeState/L=SomeCity/O=MyOrg/CN=localhost" 2>/dev/null; \
+	fi
 endef
 
 # Configure a build directory: $(call cmake_configure,build-dir,asan-flag)
@@ -64,24 +74,14 @@ build-asan: build-asan/.cmake
 lint : build/.cmake 
 	run-clang-tidy -p build -j $(JOBS) -extra-arg=-std=c23
 
-# This will install editline and maybe other depenedencies on linux / macos
-# editline particularly uses autotools, meaning its a pain to get it to work with cmakejo
-# This way if this shit is installed globally, lame
-# To install auto tools in homebrew do :
-# `brew install autoconf automake libtool`
-#
+# Install editline (uses autotools)
+# On macOS: brew install autoconf automake libtool
 .PHONY: configure
 configure:
 	cd vendor/editline && \
 	./autogen.sh && \
 	./configure && \
-	make install && \
-	
-.PHONY: venv
-venv:
-	python -m venv .venv && \
-	source .venv/bin/activate && \
-	pip install r Piplock
+	make install
 
 .PHONY: clean
 clean:
@@ -101,16 +101,19 @@ repl: build
 
 
 .PHONY: debug
-debug: debug
-	#lldb -o "run" build/repl src/prelude.valk
-	lldb build/repl src/prelude.valk
+debug: build
+ifeq ($(UNAME), Darwin)
+	lldb build/valk src/prelude.valk
+else
+	gdb --args build/valk src/prelude.valk
+endif
 
 .ONESHELL:
 .PHONY: asan
-asan: build
+asan: build-asan
 	export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
 	export LSAN_OPTIONS=verbosity=1:log_threads=1
-	build/valk src/prelude.valk test/google_http2.valk && echo "exit code = $?"
+	build-asan/valk src/prelude.valk test/test_prelude.valk && echo "exit code = $$?"
 
 # Run C test suite with a given build directory
 # Usage: $(call run_tests_c,build-dir)
@@ -166,6 +169,10 @@ define run_examples
 	$(1)/valk examples/test_example.valk
 	@echo "=== All example demos passed ($(1)) ==="
 endef
+
+# Default test target (C + Valk tests, no ASAN)
+.PHONY: test
+test: test-c test-valk
 
 # C tests (no ASAN, fast)
 .ONESHELL:

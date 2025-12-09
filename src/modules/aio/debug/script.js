@@ -3,12 +3,10 @@
   'use strict';
 
   // ==================== Configuration ====================
-  var POLL_INTERVAL = 1000;
-  var HISTORY_SIZE = 60;  // 60 seconds of history
-  var MAX_BACKOFF = 30000;
+  var HISTORY_SIZE = 60;
   var GAUGE_CIRCUMFERENCE = 251.2;  // 2 * PI * 40
 
-  // Adaptive interval system
+  // Adaptive interval system (for rate-based UI updates)
   var adaptiveInterval = {
     min: 500,
     normal: 1000,
@@ -103,7 +101,6 @@
   }
 
   // ==================== State ====================
-  var currentBackoff = POLL_INTERVAL;
   var history = {
     requestRate: [],
     errorRate: [],
@@ -115,6 +112,8 @@
   var prevMetrics = null;
   var prevTimestamp = null;
   var serverCards = {};  // Track dynamically created server cards
+  var uptimeBase = null;  // Server uptime at last SSE update
+  var uptimeReceivedAt = null;  // Client time when uptime was received
 
   // ==================== DOM Helpers ====================
   var $ = function(id) { return document.getElementById(id); };
@@ -1186,7 +1185,12 @@
     var conns = aio.connections || {};
 
     // ========== Header ==========
-    $('uptime-value').textContent = fmtUptime(aio.uptime_seconds || mod.uptime_seconds || 0);
+    var serverUptime = aio.uptime_seconds || mod.uptime_seconds || 0;
+    if (serverUptime > 0) {
+      uptimeBase = serverUptime;
+      uptimeReceivedAt = Date.now();
+    }
+    $('uptime-value').textContent = fmtUptime(serverUptime);
     $('timestamp').textContent = new Date().toLocaleTimeString();
 
     // ========== Health Overview ==========
@@ -1355,7 +1359,6 @@
       statusText.textContent = 'Connected';
       statusIcon.textContent = '✓';
       pulse.style.display = 'block';
-      currentBackoff = POLL_INTERVAL;
     } else {
       statusBadge.classList.remove('connected');
       statusBadge.classList.add('error');
@@ -1397,9 +1400,17 @@
   // Note: Polling has been removed - all data now comes through the unified SSE diagnostics stream
   // This eliminates dashboard requests competing with the server during stress tests
 
+  function updateUptimeAndTimestamp() {
+    if (uptimeBase !== null && uptimeReceivedAt !== null) {
+      var elapsed = (Date.now() - uptimeReceivedAt) / 1000;
+      $('uptime-value').textContent = fmtUptime(uptimeBase + elapsed);
+    }
+    $('timestamp').textContent = new Date().toLocaleTimeString();
+  }
+
   function init() {
-    // No polling needed - MemoryDiagnostics SSE handles everything
     showLoadingState();
+    setInterval(updateUptimeAndTimestamp, 1000);
   }
 
   // Start when DOM is ready
@@ -1553,11 +1564,10 @@
         };
 
         self.eventSource.onerror = function(e) {
-          // Suppress errors during intentional close (page reload/unload)
           if (self.isClosing) return;
 
+          self.updateConnectionStatus(false);
           if (self.eventSource.readyState === EventSource.CLOSED) {
-            self.updateConnectionStatus(false);
             self.scheduleReconnect();
           }
         };
@@ -1804,6 +1814,8 @@
     }
 
     updateConnectionStatus(connected) {
+      updateConnectionStatus(connected);
+
       var dot = document.querySelector('.sse-dot');
       if (dot) {
         dot.style.background = connected ? 'var(--color-ok)' : 'var(--color-error)';
@@ -2421,15 +2433,19 @@
       var gauge = document.querySelector('[data-arena="' + arena.name + '"]');
       if (!gauge) return;
 
-      var percentage = (arena.used / arena.capacity) * 100;
-      var hwmPercentage = (arena.hwm / arena.capacity) * 100;
+      var used = arena.used_bytes || arena.used || 0;
+      var capacity = arena.capacity_bytes || arena.capacity || 1;
+      var hwm = arena.high_water_mark || arena.hwm || 0;
+      var percentage = (used / capacity) * 100;
+      var hwmPercentage = (hwm / capacity) * 100;
+      var usedStr = this.formatBytes(used);
+      var capacityStr = this.formatBytes(capacity);
 
       // Update bar
       var bar = gauge.querySelector('.arena-bar');
       if (bar) {
         bar.style.width = percentage + '%';
 
-        // Color based on usage
         bar.className = 'arena-bar';
         if (percentage >= 90) {
           bar.classList.add('critical');
@@ -2441,28 +2457,34 @@
       }
 
       // Update high water mark
-      var hwm = gauge.querySelector('.arena-hwm');
-      if (hwm) {
-        hwm.style.left = hwmPercentage + '%';
+      var hwmEl = gauge.querySelector('.arena-hwm');
+      if (hwmEl) {
+        hwmEl.style.left = hwmPercentage + '%';
       }
 
       // Update label
       var label = gauge.querySelector('.arena-label');
       if (label) {
-        var usedStr = this.formatBytes(arena.used);
-        var capacityStr = this.formatBytes(arena.capacity);
         label.innerHTML = '<span class="pct">' + percentage.toFixed(0) + '%</span> &mdash; ' + usedStr + ' / ' + capacityStr;
       }
 
-      // After updating the label, add ARIA updates
       gauge.setAttribute('aria-valuenow', Math.round(percentage));
       gauge.setAttribute('aria-label', arena.name + ': ' + percentage.toFixed(0) + '% used, ' + usedStr + ' of ' + capacityStr);
 
       // Update overflow indicator
-      if (arena.overflow > 0) {
+      var overflow = arena.overflow_fallbacks || arena.overflow || 0;
+      if (overflow > 0) {
         gauge.classList.add('has-overflow');
       } else {
         gauge.classList.remove('has-overflow');
+      }
+
+      // Update scratch-specific elements
+      if (arena.name === 'scratch') {
+        var pctEl = document.getElementById('scratch-pct');
+        var usageEl = document.getElementById('scratch-usage');
+        if (pctEl) pctEl.textContent = percentage.toFixed(0) + '%';
+        if (usageEl) usageEl.textContent = usedStr + ' / ' + capacityStr;
       }
     }
 
