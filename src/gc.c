@@ -242,6 +242,50 @@ typedef struct {
   size_t capacity;
 } valk_env_worklist_t;
 
+// Lval worklist for iterative marking (avoids stack overflow on deep lists)
+#define LVAL_WORKLIST_INITIAL_CAPACITY 256
+
+typedef struct {
+  valk_lval_t** items;
+  size_t count;
+  size_t capacity;
+} valk_lval_worklist_t;
+
+static void lval_worklist_init(valk_lval_worklist_t* wl) {
+  wl->items = malloc(LVAL_WORKLIST_INITIAL_CAPACITY * sizeof(valk_lval_t*));
+  wl->count = 0;
+  wl->capacity = LVAL_WORKLIST_INITIAL_CAPACITY;
+}
+
+static void lval_worklist_free(valk_lval_worklist_t* wl) {
+  if (wl->items) {
+    free(wl->items);
+    wl->items = NULL;
+  }
+  wl->count = 0;
+  wl->capacity = 0;
+}
+
+static void lval_worklist_push(valk_lval_worklist_t* wl, valk_lval_t* v) {
+  if (v == NULL) return;
+  if (wl->count >= wl->capacity) {
+    size_t new_cap = wl->capacity * 2;
+    valk_lval_t** new_items = realloc(wl->items, new_cap * sizeof(valk_lval_t*));
+    if (new_items == NULL) {
+      VALK_ERROR("Failed to grow lval worklist");
+      return;
+    }
+    wl->items = new_items;
+    wl->capacity = new_cap;
+  }
+  wl->items[wl->count++] = v;
+}
+
+static valk_lval_t* lval_worklist_pop(valk_lval_worklist_t* wl) {
+  if (wl->count == 0) return NULL;
+  return wl->items[--wl->count];
+}
+
 static void env_worklist_init(valk_env_worklist_t* wl) {
   wl->items = malloc(ENV_WORKLIST_INITIAL_CAPACITY * sizeof(valk_lenv_t*));
   wl->count = 0;
@@ -277,7 +321,8 @@ static valk_lenv_t* env_worklist_pop(valk_env_worklist_t* wl) {
   return wl->items[--wl->count];
 }
 
-static void valk_gc_mark_lval(valk_lval_t* v) {
+// Process a single lval for marking, pushing children to worklist (non-recursive)
+static void valk_gc_mark_lval_single(valk_lval_t* v, valk_lval_worklist_t* wl) {
   if (v == NULL) return;
 
   // Only mark objects allocated by the GC heap - don't mark scratch/arena objects
@@ -323,15 +368,16 @@ static void valk_gc_mark_lval(valk_lval_t* v) {
       if (v->fun.env) {
         valk_gc_mark_env(v->fun.env);
       }
-      valk_gc_mark_lval(v->fun.formals);
-      valk_gc_mark_lval(v->fun.body);
+      // Push children to worklist instead of recursing
+      lval_worklist_push(wl, v->fun.formals);
+      lval_worklist_push(wl, v->fun.body);
       break;
 
     case LVAL_CONS:
     case LVAL_QEXPR:
-      // Mark cons/qexpr list (both have same structure)
-      valk_gc_mark_lval(v->cons.head);
-      valk_gc_mark_lval(v->cons.tail);
+      // Push head and tail to worklist instead of recursing
+      lval_worklist_push(wl, v->cons.head);
+      lval_worklist_push(wl, v->cons.tail);
       break;
     case LVAL_NIL:
       // Nil has no children
@@ -353,17 +399,37 @@ static void valk_gc_mark_lval(valk_lval_t* v) {
       // Note: The handle struct itself is malloc'd, not GC-allocated,
       // but the lvals it references (callbacks, result, error) may be GC-allocated
       if (v->async.handle != NULL) {
-        valk_gc_mark_lval(v->async.handle->on_complete);
-        valk_gc_mark_lval(v->async.handle->on_error);
-        valk_gc_mark_lval(v->async.handle->on_cancel);
-        valk_gc_mark_lval(v->async.handle->result);
-        valk_gc_mark_lval(v->async.handle->error);
+        // Push children to worklist instead of recursing
+        lval_worklist_push(wl, v->async.handle->on_complete);
+        lval_worklist_push(wl, v->async.handle->on_error);
+        lval_worklist_push(wl, v->async.handle->on_cancel);
+        lval_worklist_push(wl, v->async.handle->result);
+        lval_worklist_push(wl, v->async.handle->error);
         if (v->async.handle->env) {
           valk_gc_mark_env(v->async.handle->env);
         }
       }
       break;
   }
+}
+
+// Iterative lval marking to avoid stack overflow on deep structures
+static void valk_gc_mark_lval(valk_lval_t* v) {
+  if (v == NULL) return;
+
+  valk_lval_worklist_t worklist;
+  lval_worklist_init(&worklist);
+
+  // Push initial value
+  lval_worklist_push(&worklist, v);
+
+  // Process worklist iteratively
+  while (worklist.count > 0) {
+    valk_lval_t* current = lval_worklist_pop(&worklist);
+    valk_gc_mark_lval_single(current, &worklist);
+  }
+
+  lval_worklist_free(&worklist);
 }
 
 // Helper to check if env is already marked (uses same marking scheme as valk_gc_mark_allocation)
@@ -593,7 +659,8 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap, size_t* out_free
 // Clear marks for next collection
 // ============================================================================
 
-static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
+// Clear marks on a single lval, pushing children to worklist (non-recursive)
+static void valk_gc_clear_marks_single(valk_lval_t* v, valk_lval_worklist_t* wl) {
   if (v == NULL) return;
 
   // Only clear marks on GC heap objects - don't touch scratch/arena objects
@@ -605,23 +672,23 @@ static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
   // Clear mark
   v->flags &= ~LVAL_FLAG_GC_MARK;
 
-  // Clear children - note that children might have been freed if unmarked,
+  // Push children to worklist - note that children might have been freed if unmarked,
   // so the recursive calls will check marks before accessing
   switch (LVAL_TYPE(v)) {
     case LVAL_FUN:
       if (v->fun.env) {
         for (size_t i = 0; i < v->fun.env->vals.count; i++) {
-          valk_gc_clear_marks_recursive(v->fun.env->vals.items[i]);
+          lval_worklist_push(wl, v->fun.env->vals.items[i]);
         }
       }
-      valk_gc_clear_marks_recursive(v->fun.formals);
-      valk_gc_clear_marks_recursive(v->fun.body);
+      lval_worklist_push(wl, v->fun.formals);
+      lval_worklist_push(wl, v->fun.body);
       break;
 
     case LVAL_CONS:
     case LVAL_QEXPR:
-      valk_gc_clear_marks_recursive(v->cons.head);
-      valk_gc_clear_marks_recursive(v->cons.tail);
+      lval_worklist_push(wl, v->cons.head);
+      lval_worklist_push(wl, v->cons.tail);
       break;
     case LVAL_NIL:
       // Nil has no children
@@ -629,13 +696,32 @@ static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
 
     case LVAL_ENV:
       for (size_t i = 0; i < v->env.vals.count; i++) {
-        valk_gc_clear_marks_recursive(v->env.vals.items[i]);
+        lval_worklist_push(wl, v->env.vals.items[i]);
       }
       break;
 
     default:
       break;
   }
+}
+
+// Iterative mark clearing to avoid stack overflow on deep structures
+static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
+  if (v == NULL) return;
+
+  valk_lval_worklist_t worklist;
+  lval_worklist_init(&worklist);
+
+  // Push initial value
+  lval_worklist_push(&worklist, v);
+
+  // Process worklist iteratively
+  while (worklist.count > 0) {
+    valk_lval_t* current = lval_worklist_pop(&worklist);
+    valk_gc_clear_marks_single(current, &worklist);
+  }
+
+  lval_worklist_free(&worklist);
 }
 
 // ============================================================================

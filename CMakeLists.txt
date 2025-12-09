@@ -145,6 +145,13 @@ add_executable(test_networking test/test_networking.c test/testing.c)
 target_link_libraries(test_networking PRIVATE "-lc" valkyria)
 include_directories(test_networking src/)
 
+add_executable(test_demo_server test/test_demo_server.c test/testing.c)
+target_link_libraries(test_demo_server PRIVATE "-lc" valkyria)
+if(VALK_METRICS)
+  target_compile_definitions(test_demo_server PRIVATE VALK_METRICS_ENABLED=1)
+endif()
+include_directories(test_demo_server src/)
+
 add_executable(test_large_response test/test_large_response.c test/testing.c)
 target_link_libraries(test_large_response PRIVATE "-lc" valkyria)
 include_directories(test_large_response src/)

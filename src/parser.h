@@ -181,7 +181,7 @@ static inline void valk_lval_println(valk_lval_t *val) {
 valk_lenv_t *valk_lenv_empty(void);
 valk_lenv_t* valk_lenv_sandboxed(valk_lenv_t* parent);
 void valk_lenv_init(valk_lenv_t *env);
-// REMOVED: valk_lenv_cleanup - no longer needed with GC heap for all allocations
+void valk_lenv_free(valk_lenv_t *env);  // Free malloc-allocated environments
 //// END LEnv Constructors ////
 valk_lenv_t *valk_lenv_copy(valk_lenv_t *env);
 

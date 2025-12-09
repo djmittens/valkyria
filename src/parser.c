@@ -1659,9 +1659,36 @@ void valk_lenv_init(valk_lenv_t* env) {
   env->allocator = valk_thread_ctx.allocator;
 }
 
-// REMOVED: Type-specific cleanup is no longer needed
-// All auxiliary data (symbol arrays, strings, etc.) is allocated from GC heap
-// The sweep algorithm handles freeing based on slab vs malloc detection
+// Free an environment allocated with malloc allocator.
+// For GC-allocated environments, use the GC collection instead.
+// Note: This does NOT recursively free parent environments.
+void valk_lenv_free(valk_lenv_t* env) {
+  if (!env) return;
+  // Only free if using malloc allocator
+  valk_mem_allocator_t* alloc = (valk_mem_allocator_t*)env->allocator;
+  if (alloc && alloc->type != VALK_ALLOC_MALLOC) return;
+
+  // Free symbol strings and values
+  for (size_t i = 0; i < env->symbols.count; i++) {
+    if (env->symbols.items && env->symbols.items[i]) {
+      free(env->symbols.items[i]);
+    }
+    if (env->vals.items && env->vals.items[i]) {
+      valk_lval_t* lval = env->vals.items[i];
+      // Free internal string for SYM/STR/ERR types
+      if (LVAL_TYPE(lval) == LVAL_SYM || LVAL_TYPE(lval) == LVAL_STR ||
+          LVAL_TYPE(lval) == LVAL_ERR) {
+        if (lval->str) free(lval->str);
+      }
+      free(lval);
+    }
+  }
+  // Free arrays
+  if (env->symbols.items) free(env->symbols.items);
+  if (env->vals.items) free(env->vals.items);
+  // Free env itself
+  free(env);
+}
 
 valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
   if (env == nullptr) {
@@ -1805,6 +1832,8 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     if (env->symbols.count > 0) {
       memcpy(new_items, env->symbols.items, sizeof(char*) * env->symbols.count);
     }
+    // Free old array if it existed
+    if (env->symbols.items) valk_mem_free(env->symbols.items);
     env->symbols.items = new_items;
     env->symbols.capacity = new_capacity;
   }
@@ -1816,6 +1845,8 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
       memcpy(new_items, env->vals.items,
              sizeof(valk_lval_t*) * env->vals.count);
     }
+    // Free old array if it existed
+    if (env->vals.items) valk_mem_free(env->vals.items);
     env->vals.items = new_items;
     env->vals.capacity = new_capacity;
   }
@@ -1842,7 +1873,12 @@ void valk_lenv_put_builtin(valk_lenv_t* env, char* key,
         LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
     lfun->fun.builtin = _fun;
     lfun->fun.env = nullptr;
-    valk_lenv_put(env, valk_lval_sym(key), lfun);
+    // Create symbol lval, use it for put, then free it (put only copies the string)
+    valk_lval_t* sym = valk_lval_sym(key);
+    valk_lenv_put(env, sym, lfun);
+    // Free the temporary symbol lval and its string
+    valk_mem_free(sym->str);
+    valk_mem_free(sym);
   }
 }
 

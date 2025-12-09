@@ -2708,12 +2708,41 @@ static void __uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task) {
   uv_async_send(&hndl->uv.task);
 }
 
+// Helper to free a sandboxed environment and its contents
+static void __valk_sandbox_env_free(valk_lenv_t *env) {
+  if (!env) return;
+
+  // The sandbox env was allocated with malloc allocator
+  // Free symbol strings and lval values
+  for (size_t i = 0; i < env->symbols.count; i++) {
+    if (env->symbols.items && env->symbols.items[i]) {
+      free(env->symbols.items[i]);
+    }
+    if (env->vals.items && env->vals.items[i]) {
+      valk_lval_t *lval = env->vals.items[i];
+      // Free internal string for SYM/STR/ERR types
+      if (LVAL_TYPE(lval) == LVAL_SYM || LVAL_TYPE(lval) == LVAL_STR ||
+          LVAL_TYPE(lval) == LVAL_ERR) {
+        if (lval->str) free(lval->str);
+      }
+      free(lval);
+    }
+  }
+  // Free the arrays
+  if (env->symbols.items) free(env->symbols.items);
+  if (env->vals.items) free(env->vals.items);
+  // Free the env itself
+  free(env);
+}
+
 static void __valk_aio_http2_server_free(valk_arc_box *box) {
   valk_aio_http_server *srv = box->item;
 #ifdef VALK_METRICS_ENABLED
   // Track server stop in system stats
   valk_aio_system_stats_on_server_stop(&srv->sys->system_stats);
 #endif
+  // Free the sandbox environment if present
+  __valk_sandbox_env_free(srv->sandbox_env);
   SSL_CTX_free(srv->ssl_ctx);
   valk_mem_allocator_free(box->allocator, box);
 }
@@ -2756,7 +2785,13 @@ valk_future *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
     }
     srv->lisp_handler_fn = (valk_lval_t*)lisp_handler;
     if (lisp_handler) {
-      srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)lisp_handler)->fun.env);
+      // Create sandbox env with malloc allocator (not GC heap) for independent lifecycle
+      void* saved_heap = valk_thread_ctx.heap;
+      valk_thread_ctx.heap = NULL;
+      VALK_WITH_ALLOC(&valk_malloc_allocator) {
+        srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)lisp_handler)->fun.env);
+      }
+      valk_thread_ctx.heap = saved_heap;
     }
 
     // Apply config if provided, otherwise use defaults
@@ -2788,9 +2823,18 @@ valk_future *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
 
 void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_fn) {
   srv->lisp_handler_fn = (valk_lval_t*)handler_fn;
+  // Free existing sandbox env if any
+  __valk_sandbox_env_free(srv->sandbox_env);
+  srv->sandbox_env = NULL;
   // Create sandbox env once - wraps handler's captured env to shadow 'def'
   if (handler_fn) {
-    srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)handler_fn)->fun.env);
+    // Create sandbox env with malloc allocator (not GC heap) for independent lifecycle
+    void* saved_heap = valk_thread_ctx.heap;
+    valk_thread_ctx.heap = NULL;
+    VALK_WITH_ALLOC(&valk_malloc_allocator) {
+      srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)handler_fn)->fun.env);
+    }
+    valk_thread_ctx.heap = saved_heap;
   }
 }
 
@@ -3676,7 +3720,13 @@ void valk_aio_stop(valk_aio_system_t *sys) {
   valk_sse_registry_shutdown(&sys->sse_registry);
 #endif
 
-  // TODO(networking): need to properly free the system too
+  // Free HTTP request/response queues
+  free(sys->http_queue.request_items);
+  free(sys->http_queue.response_items);
+  pthread_mutex_destroy(&sys->http_queue.request_mutex);
+  pthread_cond_destroy(&sys->http_queue.request_ready);
+  pthread_mutex_destroy(&sys->http_queue.response_mutex);
+  pthread_cond_destroy(&sys->http_queue.response_ready);
   // Slabs were allocated with malloc allocator, so free with malloc allocator
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     valk_slab_free(sys->httpServers);
