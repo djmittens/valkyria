@@ -522,6 +522,28 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap, size_t* out_free
       size_t total_size = sizeof(valk_gc_header_t) + header->size;
       freed_count++;
 
+      // Free internal resources before freeing the lval structure itself
+      // NOTE: Most internal allocations (lval->str, fun.name) use valk_mem_alloc
+      // and are tracked as separate GC objects - they will be swept independently.
+      // Only manually free resources allocated via raw malloc/strdup.
+      if (is_lval) {
+        valk_lval_t* obj = (valk_lval_t*)user_data;
+        switch (LVAL_TYPE(obj)) {
+          case LVAL_REF:
+            // References have custom free functions (raw malloc)
+            if (obj->ref.free != NULL && obj->ref.ptr != NULL) {
+              obj->ref.free(obj->ref.ptr);
+            }
+            // ref.type is strdup'd (raw malloc)
+            if (obj->ref.type != NULL) {
+              free(obj->ref.type);
+            }
+            break;
+          default:
+            break;
+        }
+      }
+
       // Check if object is from slab via address range check
       bool from_slab = false;
       if (heap->lval_slab != NULL) {
@@ -978,11 +1000,6 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* h
 }
 
 size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root) {
-  if (heap->root_env == NULL) {
-    VALK_WARN("GC collect called with no root environment");
-    return 0;
-  }
-
   // Record start time for pause measurement
   uint64_t start_time_us = uv_hrtime() / 1000;
 
@@ -1135,6 +1152,27 @@ void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
 
   while (current != NULL) {
     valk_gc_header_t* next = current->gc_next;
+
+    // Free internal resources for lval objects before freeing the structure
+    // NOTE: Most internal allocations (fun.name, lval->str) use valk_mem_alloc
+    // and are tracked separately. Only free raw malloc/strdup allocations.
+    bool is_lval = (current->size == heap->lval_size);
+    if (is_lval) {
+      void* user_data = (void*)(current + 1);
+      valk_lval_t* obj = (valk_lval_t*)user_data;
+      switch (LVAL_TYPE(obj)) {
+        case LVAL_REF:
+          if (obj->ref.free != NULL && obj->ref.ptr != NULL) {
+            obj->ref.free(obj->ref.ptr);
+          }
+          if (obj->ref.type != NULL) {
+            free(obj->ref.type);
+          }
+          break;
+        default:
+          break;
+      }
+    }
 
     // Check if object is from slab via address range check
     bool from_slab = false;
@@ -1466,12 +1504,18 @@ static void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
       break;
 
     case LVAL_FUN:
-      // Evacuate function name string (for both builtin and user functions)
-      if (v->fun.name != NULL) {
+      // Evacuate function name string (for lambdas only, not builtins)
+      // Original fun.name is strdup'd (raw malloc), new one will be GC-allocated
+      // NOTE: We don't free the old name here because partial applications can
+      // share the same name pointer. The strdup'd memory becomes unreachable
+      // and leaks (small leak, typically just "<lambda>" strings).
+      // TODO(networking): Consider using GC-allocated names from the start to avoid this leak.
+      if (v->fun.name != NULL && v->fun.builtin == NULL &&
+          !valk_ptr_in_arena(ctx->scratch, v->fun.name)) {
         size_t len = strlen(v->fun.name) + 1;
         char* new_name = NULL;
         VALK_WITH_ALLOC((void*)ctx->heap) { new_name = valk_mem_alloc(len); }
-        if (new_name && new_name != v->fun.name) {
+        if (new_name) {
           memcpy(new_name, v->fun.name, len);
           v->fun.name = new_name;
           ctx->bytes_copied += len;

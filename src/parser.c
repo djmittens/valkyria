@@ -381,7 +381,14 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
   }
 
   res->fun.arity = arity;
-  res->fun.name = strdup("<lambda>");
+  // Allocate name using current allocator (same as lambda itself)
+  // This ensures the name follows the same lifecycle as the lambda
+  static const char* lambda_name = "<lambda>";
+  size_t name_len = strlen(lambda_name) + 1;
+  res->fun.name = valk_mem_alloc(name_len);
+  if (res->fun.name) {
+    memcpy(res->fun.name, lambda_name, name_len);
+  }
   res->fun.env = env;          // Capture closure environment
   res->fun.formals = formals;  // Store formals for evaluation
   res->fun.body = body;        // Store body for evaluation

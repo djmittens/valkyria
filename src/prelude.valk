@@ -12,6 +12,9 @@
 (def {nil} {})
 (def {true} 1)
 (def {false} 0)
+
+; Check if value is nil (empty list)
+(fun {nil? x} {== x nil})
  
 ; unpack list for a function
 
