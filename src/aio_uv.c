@@ -2976,6 +2976,7 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
   if (wantToSend) {
     slabItem->buf.base = Out.items;
     slabItem->buf.len = Out.count;
+    slabItem->conn = client->connection;
 
     uv_write(&slabItem->req, (uv_stream_t *)&client->connection->uv.tcp,
              &slabItem->buf, 1, __http_tcp_on_write_cb);
@@ -3008,6 +3009,7 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     if (Out2.count > 0) {
       slab2->buf.base = Out2.items;
       slab2->buf.len = Out2.count;
+      slab2->conn = client->connection;
       uv_write(&slab2->req, (uv_stream_t *)&client->connection->uv.tcp,
                &slab2->buf, 1, __http_tcp_on_write_cb);
     } else {
@@ -3218,6 +3220,7 @@ static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
     if (wantToSend) {
       slabItem->buf.base = Out.items;
       slabItem->buf.len = Out.count;
+      slabItem->conn = conn;
 
       uv_write(&slabItem->req, (uv_stream_t *)&conn->uv.tcp,
                &slabItem->buf, 1, __http_tcp_on_write_cb);
@@ -3416,6 +3419,7 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
     if (wantToSend) {
       slabItem->buf.base = Out.items;
       slabItem->buf.len = Out.count;
+      slabItem->conn = conn;
 
       uv_write(&slabItem->req, (uv_stream_t *)&conn->uv.tcp,
                &slabItem->buf, 1, __http_tcp_on_write_cb);

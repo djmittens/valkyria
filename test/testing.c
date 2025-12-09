@@ -28,7 +28,13 @@
 #define VALK_REPORT_WIDTH 100
 #endif
 
+// Disable fork-based testing when running under AddressSanitizer
+// ASAN doesn't properly support fork() - shadow memory state becomes inconsistent
+#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+#define VALK_TEST_FORK 0
+#else
 #define VALK_TEST_FORK 1
+#endif
 
 const char *DOT_FILL =
     ".........................................................................."

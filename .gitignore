@@ -3,6 +3,7 @@
 
 .cache
 build/
+build-asan/
 .venv/
 .mcp.json
 cclsp.json

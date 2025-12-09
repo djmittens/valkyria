@@ -3,38 +3,62 @@ UNAME := $(shell uname -s)
 # Feature flags
 VALK_METRICS ?= 1
 
-ifeq ($(UNAME), Linux)
-	CMAKE= cmake -G Ninja -DASAN=0 -DVALK_METRICS=1 -DCMAKE_BUILD_TYPE=Debug -DVALK_METRICS=$(VALK_METRICS) -S . -B build ;
-endif
+# Shared CMake flags
+CMAKE_BASE = cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug -DVALK_METRICS=$(VALK_METRICS)
 ifeq ($(UNAME), Darwin)
-	CMAKE= cmake -G Ninja -DHOMEBREW_CLANG=on -DASAN=1 -DCMAKE_BUILD_TYPE=Debug -DVALK_METRICS=$(VALK_METRICS) -S . -B build;
+	CMAKE_BASE += -DHOMEBREW_CLANG=on
 endif
 
 JOBS := $(shell nproc 2>/dev/null || echo 12)
 
+# Generate SSL certs for a build directory
+define gen_ssl_certs
+	openssl req -x509 -newkey rsa:2048 -nodes \
+		-keyout $(1)/server.key \
+		-out $(1)/server.crt \
+		-sha256 \
+		-days 365 \
+		-subj "/C=US/ST=SomeState/L=SomeCity/O=MyOrg/CN=localhost" 2>/dev/null
+endef
+
+# Configure a build directory: $(call cmake_configure,build-dir,asan-flag)
+define cmake_configure
+	$(CMAKE_BASE) -DASAN=$(2) -S . -B $(1)
+	$(call gen_ssl_certs,$(1))
+	touch $(1)/.cmake
+endef
+
+# Build a directory with optional dsymutil on macOS: $(call do_build,build-dir)
+define do_build
+	touch $(1)/.cmake
+	cmake --build $(1)
+	if [ "$(UNAME)" = "Darwin" ]; then \
+		find $(1)/ -maxdepth 1 -type f -perm -111 -newer $(1)/.cmake -exec \
+			dsymutil {} \; -print; \
+	fi
+endef
+
+# Default build (no ASAN)
 .ONESHELL:
 .PHONY: cmake
 cmake build/.cmake: CMakeLists.txt homebrew.cmake Makefile
-	$(CMAKE)
-	openssl req -x509 -newkey rsa:2048 -nodes \
-		-keyout build/server.key \
-		-out build/server.crt \
-		-sha256 \
-		-days 365 \
-		-subj "/C=US/ST=SomeState/L=SomeCity/O=MyOrg/CN=localhost"
-	touch build/.cmake
+	$(call cmake_configure,build,0)
 
 .ONESHELL:
 .PHONY: build
-build : build/.cmake
-	touch build/.cmake
-	cmake --build build
-	# Only link the symbols in like this if we are on macos
-	# Also take into account which ones were actually built this run
-	if [ "$(UNAME)" == "Darwin" ]; then \
-		find build/ -maxdepth 1 -type f -perm -111 -newer build/.cmake -exec \
-				dsymutil {} \; -print; \
-	fi
+build: build/.cmake
+	$(call do_build,build)
+
+# ASAN build
+.ONESHELL:
+.PHONY: cmake-asan
+cmake-asan build-asan/.cmake: CMakeLists.txt homebrew.cmake Makefile
+	$(call cmake_configure,build-asan,1)
+
+.ONESHELL:
+.PHONY: build-asan
+build-asan: build-asan/.cmake
+	$(call do_build,build-asan)
 
 .PHONY: lint
 lint : build/.cmake 
@@ -61,7 +85,7 @@ venv:
 
 .PHONY: clean
 clean:
-	rm -rf build
+	rm -rf build build-asan
 
 .PHONY: cppcheck
 cppcheck:
@@ -88,59 +112,153 @@ asan: build
 	export LSAN_OPTIONS=verbosity=1:log_threads=1
 	build/valk src/prelude.valk test/google_http2.valk && echo "exit code = $?"
 
-.PHONY: test
-test: build
-	# C Test Suites
-	build/test_std &&\
-	build/test_memory &&\
-	build/test_networking &&\
-	build/test_large_response &&\
-	build/test_per_stream_arena &&\
-	# Metrics Tests (only when VALK_METRICS=1)
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f build/test_aio_metrics ]; then \
-		build/test_aio_metrics || exit 1; \
-	fi &&\
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f build/test_loop_metrics ]; then \
-		build/test_loop_metrics || exit 1; \
-	fi &&\
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f build/test_eval_metrics ]; then \
-		build/test_eval_metrics || exit 1; \
-	fi &&\
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f build/test_sse_diagnostics ]; then \
-		build/test_sse_diagnostics || exit 1; \
-	fi &&\
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f build/test_sse ]; then \
-		build/test_sse || exit 1; \
-	fi &&\
-	if [ "$(VALK_METRICS)" = "1" ]; then \
-		build/valk test/test_metrics.valk || exit 1; \
-	fi &&\
-	# Lisp Standard Library Tests
-	build/valk test/test_prelude.valk &&\
-	build/valk test/test_namespace.valk &&\
-	build/valk test/test_varargs.valk &&\
-	# Core Language Feature Tests
-	build/valk test/test_continuations_suite.valk &&\
-	build/valk test/test_tco_suite.valk &&\
-	build/valk test/test_do_suite.valk &&\
-	# GC Tests
-	build/valk test/test_gc_suite.valk &&\
-	# Crash Regressions
-	build/valk test/test_crash_regressions.valk &&\
-	# HTTP API Tests
-	build/valk test/test_http_minimal.valk &&\
-	# Checkpoint & Integration Tests
-	build/valk test/test_checkpoint.valk &&\
-	build/valk test/test_integration.valk &&\
-	# Quasiquote Tests
-	build/valk test/test_quasiquote.valk &&\
-	# File I/O Tests
-	build/valk test/test_read_file.valk &&\
-	# Stress Tests
-	build/valk test/stress/test_gc_stress.valk &&\
-	build/valk test/stress/test_networking_stress.valk
-	# Note: test_networking_lisp disabled - requires specific server setup
-	# Note: test_recursion_stress.valk disabled - hangs on deep recursion tests
+# Run C test suite with a given build directory
+# Usage: $(call run_tests_c,build-dir)
+# Note: Requires set -e in calling recipe for proper error handling with ASAN
+define run_tests_c
+	@echo "=== Running C tests from $(1) ==="
+	@if [ -n "$$ASAN_OPTIONS" ]; then echo "ASAN_OPTIONS=$$ASAN_OPTIONS"; fi
+	$(1)/test_std
+	$(1)/test_memory
+	$(1)/test_networking
+	$(1)/test_large_response
+	$(1)/test_per_stream_arena
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_metrics ]; then $(1)/test_aio_metrics; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_loop_metrics ]; then $(1)/test_loop_metrics; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_eval_metrics ]; then $(1)/test_eval_metrics; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_diagnostics ]; then $(1)/test_sse_diagnostics; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse ]; then $(1)/test_sse; fi
+	@echo "=== All C tests passed ($(1)) ==="
+endef
+
+# Run Valk/Lisp test suite with a given build directory
+# Usage: $(call run_tests_valk,build-dir)
+# Note: Requires set -e in calling recipe for proper error handling with ASAN
+define run_tests_valk
+	@echo "=== Running Valk tests from $(1) ==="
+	@if [ -n "$$ASAN_OPTIONS" ]; then echo "ASAN_OPTIONS=$$ASAN_OPTIONS"; fi
+	if [ "$(VALK_METRICS)" = "1" ]; then $(1)/valk test/test_metrics.valk; fi
+	$(1)/valk test/test_prelude.valk
+	$(1)/valk test/test_namespace.valk
+	$(1)/valk test/test_varargs.valk
+	$(1)/valk test/test_continuations_suite.valk
+	$(1)/valk test/test_tco_suite.valk
+	$(1)/valk test/test_do_suite.valk
+	$(1)/valk test/test_gc_suite.valk
+	$(1)/valk test/test_crash_regressions.valk
+	$(1)/valk test/test_http_minimal.valk
+	$(1)/valk test/test_checkpoint.valk
+	$(1)/valk test/test_integration.valk
+	$(1)/valk test/test_quasiquote.valk
+	$(1)/valk test/test_read_file.valk
+	$(1)/valk test/stress/test_gc_stress.valk
+	$(1)/valk test/stress/test_networking_stress.valk
+	@echo "=== All Valk tests passed ($(1)) ==="
+endef
+
+# Run example demos with a given build directory
+# Usage: $(call run_examples,build-dir)
+# Note: Requires set -e in calling recipe for proper error handling
+define run_examples
+	@echo "=== Running example demos from $(1) ==="
+	$(1)/valk examples/gc_demo.valk
+	$(1)/valk examples/checkpoint_demo.valk
+	$(1)/valk examples/test_example.valk
+	@echo "=== All example demos passed ($(1)) ==="
+endef
+
+# C tests (no ASAN, fast)
+.ONESHELL:
+.PHONY: test-c
+test-c: build
+	set -e
+	$(call run_tests_c,build)
+
+# Valk/Lisp tests (no ASAN)
+.ONESHELL:
+.PHONY: test-valk
+test-valk: build
+	set -e
+	$(call run_tests_valk,build)
+
+# C tests with ASAN enabled (catches memory errors)
+.ONESHELL:
+.PHONY: test-c-asan
+test-c-asan: build-asan
+	set -e
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running C tests with AddressSanitizer (ASAN) enabled       ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
+	export LSAN_OPTIONS=verbosity=0:log_threads=1
+	$(call run_tests_c,build-asan)
+
+# Valk/Lisp tests with ASAN enabled
+.ONESHELL:
+.PHONY: test-valk-asan
+test-valk-asan: build-asan
+	set -e
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running Valk tests with AddressSanitizer (ASAN) enabled    ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
+	export LSAN_OPTIONS=verbosity=0:log_threads=1
+	$(call run_tests_valk,build-asan)
+
+# Test example demos (gc_demo, checkpoint_demo, test_example)
+.ONESHELL:
+.PHONY: test-examples
+test-examples: build
+	set -e
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running example demos as tests                             ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	$(call run_examples,build)
+
+# Test examples with ASAN
+.ONESHELL:
+.PHONY: test-examples-asan
+test-examples-asan: build-asan
+	set -e
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running example demos with ASAN                            ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
+	export LSAN_OPTIONS=verbosity=0:log_threads=1
+	$(call run_examples,build-asan)
+
+# Comprehensive test suite: tests + examples, both with and without ASAN
+.ONESHELL:
+.PHONY: test-all
+test-all:
+	set -e
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  COMPREHENSIVE TEST SUITE                                   ║"
+	@echo "║  Running all tests with and without ASAN + examples         ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	$(MAKE) test-c
+	@echo ""
+	$(MAKE) test-valk
+	@echo ""
+	$(MAKE) test-c-asan
+	@echo ""
+	$(MAKE) test-valk-asan
+	@echo ""
+	$(MAKE) test-examples-asan
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  ALL TESTS PASSED                                           ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
 
 .PHONY: todo
 todo:
