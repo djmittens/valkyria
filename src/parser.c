@@ -3568,7 +3568,7 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
   // application, this would wait for a signal or condition. For now, just sleep
   // forever (Ctrl+C will stop it).
   while (1) {
-    sleep(1);
+    uv_sleep(1000);
   }
 
   return valk_lval_nil();

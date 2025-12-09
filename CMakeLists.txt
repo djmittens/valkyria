@@ -111,15 +111,21 @@ endif()
 target_include_directories(valkyria SYSTEM PRIVATE
   ${LIBUV_INCLUDE_DIRS}
   ${PROJECT_SOURCE_DIR}/vendor
-  ${BACKTRACE_INCLUDE_DIR}
 )
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_include_directories(valkyria SYSTEM PRIVATE ${BACKTRACE_INCLUDE_DIR})
+endif()
 
 target_link_libraries(valkyria PRIVATE
   nghttp2::nghttp2
   ${LIBUV_LIBRARIES}
-  ${BACKTRACE_LIBRARIES}
   OpenSSL::SSL
   OpenSSL::Crypto)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND BACKTRACE_LIBRARIES)
+  target_link_libraries(valkyria PRIVATE ${BACKTRACE_LIBRARIES})
+endif()
 
 
 ### REPL
@@ -172,7 +178,7 @@ target_link_libraries(test_per_stream_arena PRIVATE "-lc" valkyria)
 include_directories(test_per_stream_arena src/)
 
 add_executable(test_gc_metrics test/test_gc_metrics.c test/testing.c)
-target_link_libraries(test_gc_metrics PRIVATE "-lc" "-lm" valkyria uv)
+target_link_libraries(test_gc_metrics PRIVATE "-lc" "-lm" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_gc_metrics src/)
 
 add_executable(test_aio_config test/test_aio_config.c test/testing.c)
@@ -187,7 +193,7 @@ if(VALK_METRICS)
   include_directories(test_aio_metrics src/)
 
   add_executable(test_loop_metrics test/test_loop_metrics.c test/testing.c)
-  target_link_libraries(test_loop_metrics PRIVATE "-lc" valkyria uv)
+  target_link_libraries(test_loop_metrics PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
   target_compile_definitions(test_loop_metrics PRIVATE VALK_METRICS_ENABLED=1)
   include_directories(test_loop_metrics src/)
 

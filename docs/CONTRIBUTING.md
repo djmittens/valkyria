@@ -6,10 +6,26 @@ This document covers development setup, code style, and contribution guidelines.
 
 ### Prerequisites
 
+#### macOS (Homebrew)
+
+```bash
+brew install cmake ninja llvm libuv openssl@3
+```
+
+Note: libbacktrace is not required on macOS (uses native backtrace support).
+
+#### Linux
+
 - **Compiler**: Clang with C23 support
 - **Build tools**: CMake, Ninja, pkg-config
-- **Libraries**: OpenSSL, libuv, libbacktrace
+- **Libraries**: OpenSSL, libuv, libbacktrace, libedit
 - **Optional**: Docker (for infer analysis)
+
+```bash
+# Debian/Ubuntu
+sudo apt install clang cmake ninja-build pkg-config \
+  libssl-dev libuv1-dev libbacktrace-dev libedit-dev
+```
 
 ### Build from Source
 
@@ -17,9 +33,6 @@ This document covers development setup, code style, and contribution guidelines.
 # Clone repository
 git clone <repo-url>
 cd valkyria
-
-# Install editline dependency (first time only)
-make configure
 
 # Build
 make build
@@ -265,8 +278,15 @@ valk_lenv_put_builtin(env, "my-func", valk_builtin_my_func);
 
 ### Platform Considerations
 
-- **macOS**: Uses Homebrew clang, ASAN enabled by default
-- **Linux**: Uses system clang, requires `_XOPEN_SOURCE=700`
+- **macOS**: 
+  - Uses Homebrew LLVM/Clang automatically
+  - libbacktrace not required (uses system backtrace support)
+  - editline header location: `<editline/readline.h>`
+  - Debug symbols generated with dsymutil
+- **Linux**: 
+  - Uses system clang
+  - Requires `_XOPEN_SOURCE=700` and `_GNU_SOURCE` for pthread support
+  - Requires libbacktrace for enhanced stack traces
 - Test on both platforms before merging
 
 ## Resources

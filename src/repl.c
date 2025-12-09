@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
-#include <editline.h>
+#include <editline/readline.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdbool.h>
