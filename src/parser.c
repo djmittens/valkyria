@@ -919,8 +919,9 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
   }
 
   // Symbols are looked up in the environment
-  // Don't record coverage for symbols - only for actual expressions (cons cells)
+  // Record coverage for symbols since evaluating a symbol IS executing code on that line
   if (LVAL_TYPE(lval) == LVAL_SYM) {
+    VALK_COVERAGE_RECORD_LVAL(lval);
     return valk_lenv_get(env, lval);
   }
 

@@ -966,6 +966,14 @@ td {{
 :target {{
   background: rgba(255, 235, 59, 0.3) !important;
 }}
+tr.selected {{
+  outline: 2px solid #64b5f6;
+  outline-offset: -2px;
+}}
+tr.selected .line-no {{
+  background: #64b5f6 !important;
+  color: #000 !important;
+}}
 .syn-keyword {{
   color: #c792ea;
   font-weight: bold;
@@ -1028,6 +1036,74 @@ td {{
 {"".join(lines_html)}
 </tbody>
 </table>
+<script>
+(function() {{
+  let lastClickedLine = null;
+  const rows = document.querySelectorAll('tr[id^="L"]');
+  
+  function getLineNum(row) {{
+    return parseInt(row.id.substring(1), 10);
+  }}
+  
+  function clearSelection() {{
+    rows.forEach(r => r.classList.remove('selected'));
+  }}
+  
+  function selectRange(start, end) {{
+    const min = Math.min(start, end);
+    const max = Math.max(start, end);
+    rows.forEach(r => {{
+      const n = getLineNum(r);
+      if (n >= min && n <= max) r.classList.add('selected');
+    }});
+    history.replaceState(null, '', '#L' + min + (min !== max ? '-L' + max : ''));
+  }}
+  
+  function applyHashSelection() {{
+    const hash = window.location.hash;
+    const match = hash.match(/^#L(\d+)(?:-L(\d+))?$/);
+    if (match) {{
+      const start = parseInt(match[1], 10);
+      const end = match[2] ? parseInt(match[2], 10) : start;
+      clearSelection();
+      selectRange(start, end);
+      lastClickedLine = start;
+      const row = document.getElementById('L' + start);
+      if (row) row.scrollIntoView({{block: 'center'}});
+    }}
+  }}
+  
+  document.querySelectorAll('.line-no').forEach(cell => {{
+    cell.style.cursor = 'pointer';
+    cell.addEventListener('click', function(e) {{
+      e.preventDefault();
+      const row = cell.parentElement;
+      const lineNum = getLineNum(row);
+      
+      if (e.shiftKey && lastClickedLine !== null) {{
+        clearSelection();
+        selectRange(lastClickedLine, lineNum);
+      }} else {{
+        clearSelection();
+        row.classList.add('selected');
+        lastClickedLine = lineNum;
+        history.replaceState(null, '', '#L' + lineNum);
+      }}
+    }});
+  }});
+  
+  document.addEventListener('keydown', function(e) {{
+    if (e.key === 'Escape') {{
+      clearSelection();
+      lastClickedLine = null;
+      history.replaceState(null, '', window.location.pathname);
+    }}
+  }});
+  
+  applyHashSelection();
+  window.addEventListener('hashchange', applyHashSelection);
+}})();
+</script>
 </body>
 </html>'''
     
