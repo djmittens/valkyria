@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "aio.h"
+#include "coverage.h"
 #include "gc.h"
 #include "log.h"
 #include "memory.h"
@@ -56,6 +57,11 @@ int main(int argc, char* argv[]) {
   valk_thread_ctx.checkpoint_threshold = VALK_CHECKPOINT_THRESHOLD_DEFAULT;
   valk_thread_ctx.checkpoint_enabled = true;
 
+  valk_coverage_init();
+  if (valk_coverage_enabled()) {
+    atexit(valk_coverage_save_on_exit);
+  }
+  
   valk_lenv_t* env = valk_lenv_empty();
   valk_lenv_builtins(env);
 
@@ -133,6 +139,11 @@ int main(int argc, char* argv[]) {
     if (LVAL_TYPE(val) != LVAL_ERR && LVAL_TYPE(val) == LVAL_REF &&
         strcmp(val->ref.type, "aio_system") == 0) {
       valk_aio_stop((valk_aio_system_t*)val->ref.ptr);
+    }
+
+    if (valk_coverage_enabled()) {
+      valk_coverage_report("build-coverage/coverage-valk.txt");
+      valk_coverage_reset();
     }
 
     // Clean up GC heap for LeakSanitizer

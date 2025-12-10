@@ -4,6 +4,8 @@
 .cache
 build/
 build-asan/
+build-coverage/
+coverage-report/
 .venv/
 .mcp.json
 cclsp.json

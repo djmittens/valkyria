@@ -16,21 +16,29 @@ option(VALK_METRICS "Enable metrics collection" OFF)
 
 set (CMAKE_EXECUTABLE_ENABLE_EXPORTS on )
 
+set(SANITIZE_ADDRESS_FLAGS "")
+set(COVERAGE_FLAGS "")
+
 if(ASAN)
   # Enable AddressSanitizer flags
   set(SANITIZE_ADDRESS_FLAGS "-fsanitize=address -fno-omit-frame-pointer -fsanitize=undefined ")
+endif()
+
+if(COVERAGE)
+  # Enable coverage flags (compatible with gcov/lcov)
+  set(COVERAGE_FLAGS "-fprofile-arcs -ftest-coverage -O0 -g")
 endif()
 
 set(EXTRA_FLAGS "-fcolor-diagnostics -Wall -Wextra -Wpedantic -Wno-gnu-zero-variadic-macro-arguments -Wno-gnu-statement-expression-from-macro-expansion")
 
 
 # Apply to C and C++ compile flags
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${EXTRA_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${EXTRA_FLAGS}")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${COVERAGE_FLAGS} ${EXTRA_FLAGS}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${COVERAGE_FLAGS} ${EXTRA_FLAGS}")
 
 # Apply to link flags
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${EXTRA_FLAGS}")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${EXTRA_FLAGS}")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${COVERAGE_FLAGS} ${EXTRA_FLAGS}")
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${COVERAGE_FLAGS} ${EXTRA_FLAGS}")
 
 
 find_package(PkgConfig REQUIRED)
@@ -75,6 +83,7 @@ set(VALKYRIA_SOURCES
   src/aio_ssl.c
   src/aio_sse.c
   src/log.c
+  src/coverage.c
 )
 
 # Conditionally add metrics sources (V2 only)

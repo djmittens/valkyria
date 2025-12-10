@@ -70,6 +70,19 @@ cmake-asan build-asan/.cmake: CMakeLists.txt homebrew.cmake Makefile
 build-asan: build-asan/.cmake
 	$(call do_build,build-asan)
 
+# Coverage build
+.ONESHELL:
+.PHONY: cmake-coverage
+cmake-coverage build-coverage/.cmake: CMakeLists.txt homebrew.cmake Makefile
+	$(CMAKE_BASE) -DCOVERAGE=1 -DASAN=0 -S . -B build-coverage
+	$(call gen_ssl_certs,build-coverage)
+	touch build-coverage/.cmake
+
+.ONESHELL:
+.PHONY: build-coverage
+build-coverage: build-coverage/.cmake
+	$(call do_build,build-coverage)
+
 .PHONY: lint
 lint : build/.cmake 
 	run-clang-tidy -p build -j $(JOBS) -extra-arg=-std=c23
@@ -85,7 +98,7 @@ configure:
 
 .PHONY: clean
 clean:
-	rm -rf build build-asan
+	rm -rf build build-asan build-coverage
 
 .PHONY: cppcheck
 cppcheck:
@@ -278,3 +291,114 @@ build-metrics:
 .PHONY: test-metrics
 test-metrics:
 	$(MAKE) test VALK_METRICS=1
+
+# Coverage targets
+.ONESHELL:
+.PHONY: coverage-reset
+coverage-reset:
+	@echo "=== Resetting coverage data ==="
+	find build-coverage -name "*.gcda" -delete 2>/dev/null || true
+	rm -rf build-coverage/coverage-report
+	rm -f build-coverage/coverage-c.info build-coverage/coverage-c-filtered.info build-coverage/coverage-c.txt build-coverage/coverage-valk.txt build-coverage/coverage-valk-summary.txt
+
+.ONESHELL:
+.PHONY: coverage-c
+coverage-c: build-coverage coverage-reset
+	set -e
+	@echo "=== Running tests with C coverage ==="
+	$(call run_tests_c,build-coverage)
+	@echo "=== Generating C coverage report ==="
+	@cd build-coverage && \
+		for f in CMakeFiles/valkyria.dir/src/*.gcda; do \
+			if [ -f "$$f" ]; then \
+				gcov -o CMakeFiles/valkyria.dir/src/ ../src/$$(basename $$f .gcda).c 2>&1 | grep -E "^File|^Lines" || true; \
+			fi; \
+		done > coverage-c.txt
+	@if command -v lcov >/dev/null 2>&1; then \
+		lcov --capture --directory build-coverage --output-file build-coverage/coverage-c.info --rc branch_coverage=1 --ignore-errors mismatch,source,inconsistent || true; \
+		if [ -f build-coverage/coverage-c.info ]; then \
+			lcov --remove build-coverage/coverage-c.info '/usr/*' '*/vendor/*' '*/test/*' --output-file build-coverage/coverage-c-filtered.info --rc branch_coverage=1 --ignore-errors inconsistent || true; \
+		fi; \
+	fi
+
+.ONESHELL:
+.PHONY: coverage-valk
+coverage-valk: build-coverage
+	set -e
+	@echo "=== Running tests with Valk coverage ==="
+	$(call run_tests_valk,build-coverage)
+	@if [ -f build-coverage/coverage-valk.txt ]; then \
+		echo "=== Valk coverage data saved to build-coverage/coverage-valk.txt ==="; \
+	else \
+		echo "=== Warning: build-coverage/coverage-valk.txt not generated ==="; \
+	fi
+
+.ONESHELL:
+.PHONY: coverage-report
+coverage-report:
+	@echo "=== Generating coverage reports ==="
+	mkdir -p build-coverage/coverage-report
+	@if [ -f build-coverage/coverage-c.txt ]; then \
+		echo "C coverage (text): build-coverage/coverage-c.txt"; \
+	fi
+	@if command -v genhtml >/dev/null 2>&1 && [ -f build-coverage/coverage-c-filtered.info ]; then \
+		genhtml build-coverage/coverage-c-filtered.info \
+			--output-directory build-coverage/coverage-report/c \
+			--branch-coverage \
+			--title "Valkyria C Coverage" \
+			--legend \
+			--show-details \
+			--demangle-cpp \
+			--num-spaces 2 \
+			--ignore-errors inconsistent,corrupt,source 2>/dev/null || true; \
+		if [ -d build-coverage/coverage-report/c ]; then \
+			echo "C coverage (HTML): build-coverage/coverage-report/c/index.html"; \
+		fi; \
+	fi
+	@if [ -f build-coverage/coverage-valk.txt ]; then \
+		awk -F: '{files[$$1] += $$2; total += $$2} END {print "Valkyria/Valk Coverage Report"; print "==============================\n"; print "Files executed and expression evaluation counts:\n"; for (f in files) print "  " f ": " files[f] " evaluations"; print "\n=============================="; print "TOTAL: " length(files) " files executed, " total " evaluations"}' build-coverage/coverage-valk.txt > build-coverage/coverage-valk-summary.txt; \
+		echo "Valk coverage: build-coverage/coverage-valk-summary.txt"; \
+	fi
+	@bash -c 'set -e; \
+		echo "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title>Valkyria Coverage Report</title><style>body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Oxygen,Ubuntu,Cantarell,sans-serif;max-width:1200px;margin:40px auto;padding:0 20px;background:#f5f5f5}h1{color:#333;border-bottom:3px solid #4CAF50;padding-bottom:10px}h2{color:#555;margin-top:30px;padding:10px;background:#fff;border-left:4px solid #2196F3}.section{background:#fff;padding:20px;margin:20px 0;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1)}.metric{display:inline-block;margin:10px 20px 10px 0;padding:15px 25px;background:#f8f9fa;border-radius:6px;border-left:4px solid #4CAF50}.metric-label{font-size:12px;color:#666;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}.metric-value{font-size:28px;font-weight:bold;color:#333}.metric-secondary{font-size:14px;color:#888;margin-top:5px}.coverage-bar{height:30px;background:#e0e0e0;border-radius:4px;overflow:hidden;margin:10px 0}.coverage-fill{height:100%;background:linear-gradient(90deg,#4CAF50,#8BC34A);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:bold;font-size:14px}.coverage-low{background:linear-gradient(90deg,#f44336,#e91e63)}.coverage-med{background:linear-gradient(90deg,#ff9800,#ffc107)}.link-button{display:inline-block;padding:12px 24px;margin:10px 10px 10px 0;background:#2196F3;color:#fff;text-decoration:none;border-radius:6px;font-weight:500;transition:background 0.3s}.link-button:hover{background:#1976D2}.link-button.secondary{background:#607D8B}.link-button.secondary:hover{background:#455A64}table{width:100%;border-collapse:collapse;margin-top:15px}th,td{padding:12px;text-align:left;border-bottom:1px solid #e0e0e0}th{background:#f8f9fa;font-weight:600;color:#555}tr:hover{background:#f8f9fa}.timestamp{color:#888;font-size:14px;margin-top:20px}</style></head><body><h1>🎯 Valkyria Coverage Report</h1>" > build-coverage/coverage-report/index.html; \
+		if [ -f build-coverage/coverage-c-filtered.info ]; then \
+			c_lines=$$(grep -E "^LF:" build-coverage/coverage-c-filtered.info | awk -F: "{sum+=\$$2} END {print sum}"); \
+			c_lines_hit=$$(grep -E "^LH:" build-coverage/coverage-c-filtered.info | awk -F: "{sum+=\$$2} END {print sum}"); \
+			c_funcs=$$(grep -E "^FNF:" build-coverage/coverage-c-filtered.info | awk -F: "{sum+=\$$2} END {print sum}"); \
+			c_funcs_hit=$$(grep -E "^FNH:" build-coverage/coverage-c-filtered.info | awk -F: "{sum+=\$$2} END {print sum}"); \
+			c_branches=$$(grep -E "^BRF:" build-coverage/coverage-c-filtered.info | awk -F: "{sum+=\$$2} END {print sum}"); \
+			c_branches_hit=$$(grep -E "^BRH:" build-coverage/coverage-c-filtered.info | awk -F: "{sum+=\$$2} END {print sum}"); \
+			c_line_pct=$$(awk "BEGIN {printf \"%.1f\", ($$c_lines_hit/$$c_lines)*100}"); \
+			c_func_pct=$$(awk "BEGIN {printf \"%.1f\", ($$c_funcs_hit/$$c_funcs)*100}"); \
+			c_branch_pct=$$(awk "BEGIN {printf \"%.1f\", ($$c_branches_hit/$$c_branches)*100}"); \
+			c_class=$$(awk "BEGIN {if($$c_line_pct<50)print \"coverage-low\";else if($$c_line_pct<80)print \"coverage-med\";else print \"\"}"); \
+			echo "<div class=\"section\"><h2>📊 Overall C Coverage</h2><div class=\"metric\"><div class=\"metric-label\">Line Coverage</div><div class=\"metric-value\">$$c_line_pct%</div><div class=\"metric-secondary\">$$c_lines_hit / $$c_lines lines</div></div><div class=\"metric\"><div class=\"metric-label\">Function Coverage</div><div class=\"metric-value\">$$c_func_pct%</div><div class=\"metric-secondary\">$$c_funcs_hit / $$c_funcs functions</div></div><div class=\"metric\"><div class=\"metric-label\">Branch Coverage</div><div class=\"metric-value\">$$c_branch_pct%</div><div class=\"metric-secondary\">$$c_branches_hit / $$c_branches branches</div></div><div style=\"clear:both;margin-top:20px\"><div class=\"coverage-bar\"><div class=\"coverage-fill $$c_class\" style=\"width:$$c_line_pct%\">$$c_line_pct% lines covered</div></div></div><a href=\"c/index.html\" class=\"link-button\">View Detailed C Coverage Report</a></div>" >> build-coverage/coverage-report/index.html; \
+		fi; \
+		if [ -f build-coverage/coverage-valk.txt ]; then \
+			valk_files=$$(wc -l < build-coverage/coverage-valk.txt | tr -d " "); \
+			valk_evals=$$(awk -F: "{sum+=\$$2} END {print sum}" build-coverage/coverage-valk.txt); \
+			echo "<div class=\"section\"><h2>🚀 Valk/Lisp Coverage</h2><div class=\"metric\"><div class=\"metric-label\">Files Executed</div><div class=\"metric-value\">$$valk_files</div><div class=\"metric-secondary\">.valk source files</div></div><div class=\"metric\"><div class=\"metric-label\">Total Evaluations</div><div class=\"metric-value\">$$valk_evals</div><div class=\"metric-secondary\">expression evaluations</div></div><h3 style=\"margin-top:30px;color:#666\">Files Executed:</h3><table><thead><tr><th>File</th><th>Evaluations</th></tr></thead><tbody>" >> build-coverage/coverage-report/index.html; \
+			awk -F: "{printf \"<tr><td>%s</td><td>%s</td></tr>\n\", \$$1, \$$2}" build-coverage/coverage-valk.txt | sort >> build-coverage/coverage-report/index.html; \
+			echo "</tbody></table></div>" >> build-coverage/coverage-report/index.html; \
+		fi; \
+		echo "<div class=\"timestamp\">Generated: $$(date)</div></body></html>" >> build-coverage/coverage-report/index.html'
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Coverage reports generated                                 ║"
+	@echo "╠══════════════════════════════════════════════════════════════╣"
+	@echo "║  📊 Combined: open build-coverage/coverage-report/index.html║"
+	@if [ -d build-coverage/coverage-report/c ]; then \
+		echo "║  C (HTML):    open build-coverage/coverage-report/c/index.html║"; \
+	fi
+	@if [ -f build-coverage/coverage-c.txt ]; then \
+		echo "║  C (text):    cat build-coverage/coverage-c.txt             ║"; \
+	fi
+	@if [ -f build-coverage/coverage-valk-summary.txt ]; then \
+		echo "║  Valk:        cat build-coverage/coverage-valk-summary.txt  ║"; \
+	fi
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+
+.PHONY: coverage
+coverage: export VALK_COVERAGE=1
+coverage: build-coverage coverage-reset coverage-c coverage-valk coverage-report
+	@echo "=== Coverage collection complete ==="

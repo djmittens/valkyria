@@ -12,6 +12,7 @@
 #include "aio.h"
 #include "collections.h"
 #include "common.h"
+#include "coverage.h"
 #include "gc.h"
 #include "memory.h"
 
@@ -2421,6 +2422,8 @@ static valk_lval_t* valk_builtin_read_file(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 valk_lval_t* valk_parse_file(const char* filename) {
+  valk_coverage_record_file(filename);
+  
   FILE* f = fopen(filename, "rb");
   if (f == nullptr) {
     LVAL_RAISE(valk_lval_nil(), "Could not open file (%s)", filename);
