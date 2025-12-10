@@ -358,6 +358,19 @@ valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
 //   return res;
 // }
 
+#ifdef VALK_COVERAGE
+static void valk_coverage_mark_tree(valk_lval_t* lval) {
+  if (lval == NULL) return;
+
+  uint8_t type = LVAL_TYPE(lval);
+  if (type == LVAL_CONS || type == LVAL_QEXPR) {
+    VALK_COVERAGE_MARK_LVAL(lval);
+    valk_coverage_mark_tree(lval->cons.head);
+    valk_coverage_mark_tree(lval->cons.tail);
+  }
+}
+#endif
+
 valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
                               valk_lval_t* body) {
   atomic_fetch_add(&g_eval_metrics.closures_created, 1);
@@ -402,6 +415,10 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
   res->fun.env = env;          // Capture closure environment
   res->fun.formals = formals;  // Store formals for evaluation
   res->fun.body = body;        // Store body for evaluation
+
+#ifdef VALK_COVERAGE
+  valk_coverage_mark_tree(body);
+#endif
 
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
@@ -460,6 +477,25 @@ valk_lval_t* valk_lval_qlist(valk_lval_t* arr[], size_t count) {
   for (size_t i = count; i > 0; i--) {
     res = valk_lval_qcons(arr[i - 1], res);
   }
+  return res;
+}
+
+#ifdef VALK_COVERAGE
+static inline void valk_copy_source_loc(valk_lval_t* dst, valk_lval_t* src) {
+  dst->cov_file_id = src->cov_file_id;
+  dst->cov_line = src->cov_line;
+  dst->cov_column = src->cov_column;
+}
+#else
+#define valk_copy_source_loc(dst, src) ((void)0)
+#endif
+
+static valk_lval_t* valk_qexpr_to_cons(valk_lval_t* qexpr) {
+  if (qexpr == NULL || LVAL_TYPE(qexpr) == LVAL_NIL) {
+    return valk_lval_nil();
+  }
+  valk_lval_t* res = valk_lval_cons(qexpr->cons.head, valk_qexpr_to_cons(qexpr->cons.tail));
+  valk_copy_source_loc(res, qexpr);
   return res;
 }
 
@@ -876,12 +912,14 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
     return lval;
   }
 
-  VALK_COVERAGE_RECORD_LVAL(lval);
-
   // Symbols are looked up in the environment
+  // Don't record coverage for symbols - only for actual expressions (cons cells)
   if (LVAL_TYPE(lval) == LVAL_SYM) {
     return valk_lenv_get(env, lval);
   }
+
+  // Record coverage for cons cells (actual expressions being evaluated)
+  VALK_COVERAGE_RECORD_LVAL(lval);
 
   // Cons cells are evaluated as function calls
   if (LVAL_TYPE(lval) == LVAL_CONS) {
@@ -1100,21 +1138,9 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
     }
   }
 
-  // All formals bound - evaluate body
-  // If body is a QEXPR, convert it to CONS for evaluation
-  // The body was stored as QEXPR (quoted) to prevent evaluation during
-  // definition, but now we need to execute it
   valk_lval_t* body = func->fun.body;
   if (LVAL_TYPE(body) == LVAL_QEXPR) {
-    // Convert QEXPR to CONS for execution
-    size_t count = valk_lval_list_count(body);
-    valk_lval_t* items[count];
-    valk_lval_t* curr = body;
-    for (size_t i = 0; i < count; i++) {
-      items[i] = curr->cons.head;
-      curr = curr->cons.tail;
-    }
-    body = valk_lval_list(items, count);
+    body = valk_qexpr_to_cons(body);
   }
 
   // If body is a list of expressions (first element is also a list),
@@ -2154,20 +2180,9 @@ static inline valk_lval_t* valk_resolve_symbol(valk_lenv_t* e, valk_lval_t* v) {
 static valk_lval_t* valk_builtin_eval(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
-  // Eval can accept any type - numbers, strings, etc evaluate to themselves
-  // QEXPR is converted to CONS (code) and then evaluated
-  // This is how quoted data becomes executable code
 
   if (LVAL_TYPE(arg0) == LVAL_QEXPR) {
-    // Convert QEXPR to CONS (S-expression) for evaluation
-    size_t count = valk_lval_list_count(arg0);
-    valk_lval_t* items[count];
-    valk_lval_t* curr = arg0;
-    for (size_t i = 0; i < count; i++) {
-      items[i] = curr->cons.head;
-      curr = curr->cons.tail;
-    }
-    arg0 = valk_lval_list(items, count);
+    arg0 = valk_qexpr_to_cons(arg0);
   }
 
   return valk_lval_eval(e, arg0);
@@ -2492,6 +2507,7 @@ valk_lval_t* valk_parse_file(const char* filename) {
       da_add(&tmp, expr);
       break;
     }
+    valk_coverage_mark_tree(expr);
     da_add(&tmp, expr);
   }
 #else
@@ -2696,16 +2712,9 @@ static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
     branch = false_branch;
   }
 
-  // If branch is QEXPR, convert to CONS for evaluation
   if (LVAL_TYPE(branch) == LVAL_QEXPR) {
-    size_t count = valk_lval_list_count(branch);
-    valk_lval_t* items[count];
-    valk_lval_t* curr = branch;
-    for (size_t i = 0; i < count; i++) {
-      items[i] = curr->cons.head;
-      curr = curr->cons.tail;
-    }
-    branch = valk_lval_list(items, count);
+    VALK_COVERAGE_RECORD_LVAL(branch);
+    branch = valk_qexpr_to_cons(branch);
   }
 
   // Evaluate the selected branch
@@ -3399,15 +3408,7 @@ static valk_lval_t* valk_builtin_async_shift(valk_lenv_t* e, valk_lval_t* a) {
       }
       return result;
     }
-    // Single expression - convert QEXPR to CONS for evaluation
-    size_t count = valk_lval_list_count(async_expr);
-    valk_lval_t* items[count];
-    valk_lval_t* curr = async_expr;
-    for (size_t i = 0; i < count; i++) {
-      items[i] = curr->cons.head;
-      curr = curr->cons.tail;
-    }
-    async_expr = valk_lval_list(items, count);
+    async_expr = valk_qexpr_to_cons(async_expr);
   }
 
   return valk_lval_eval(e, async_expr);
@@ -3440,15 +3441,7 @@ static valk_lval_t* valk_builtin_async_reset(valk_lenv_t* e, valk_lval_t* a) {
       }
       return result;
     }
-    // Single expression in QEXPR - convert to CONS for evaluation
-    size_t count = valk_lval_list_count(body);
-    valk_lval_t* items[count];
-    valk_lval_t* curr = body;
-    for (size_t i = 0; i < count; i++) {
-      items[i] = curr->cons.head;
-      curr = curr->cons.tail;
-    }
-    body = valk_lval_list(items, count);
+    body = valk_qexpr_to_cons(body);
   }
 
   return valk_lval_eval(e, body);
