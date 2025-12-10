@@ -255,6 +255,7 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
   res->flags =
       LVAL_REF | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  LVAL_INIT_SOURCE_LOC(res);
   size_t tlen = strlen(type);
   if (tlen > 100) tlen = 100;
   res->ref.type = valk_mem_alloc(tlen + 1);
@@ -380,6 +381,8 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
   res->flags =
       LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  LVAL_INIT_SOURCE_LOC(res);
+  INHERIT_SOURCE_LOC(res, body);
 
   res->fun.builtin = nullptr;  // Not a builtin
 
@@ -444,6 +447,7 @@ valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
       LVAL_CONS | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
+  INHERIT_SOURCE_LOC(res, head);
   res->cons.head = head;
   res->cons.tail = tail;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -457,6 +461,7 @@ valk_lval_t* valk_lval_qcons(valk_lval_t* head, valk_lval_t* tail) {
       LVAL_QEXPR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
+  INHERIT_SOURCE_LOC(res, head);
   res->cons.head = head;
   res->cons.tail = tail;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -494,6 +499,7 @@ static valk_lval_t* valk_qexpr_to_cons(valk_lval_t* qexpr) {
   if (qexpr == NULL || LVAL_TYPE(qexpr) == LVAL_NIL) {
     return valk_lval_nil();
   }
+  VALK_COVERAGE_RECORD_LVAL(qexpr);
   valk_lval_t* res = valk_lval_cons(qexpr->cons.head, valk_qexpr_to_cons(qexpr->cons.tail));
   valk_copy_source_loc(res, qexpr);
   return res;
@@ -1222,6 +1228,9 @@ valk_lval_t* valk_lval_join(valk_lval_t* a, valk_lval_t* b) {
   // Create new list instead of mutating a
   // Preserve the type of the first argument (QEXPR or CONS)
 
+  // Save original a for source location inheritance
+  valk_lval_t* orig_a = a;
+
   // Determine if result should be QEXPR (if first arg is QEXPR)
   bool is_qexpr = (LVAL_TYPE(a) == LVAL_QEXPR);
 
@@ -1290,6 +1299,7 @@ valk_lval_t* valk_lval_join(valk_lval_t* a, valk_lval_t* b) {
 
   da_free(&tmp);
 
+  INHERIT_SOURCE_LOC(res, orig_a);
   return res;
 }
 
@@ -2721,8 +2731,58 @@ static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_eval(e, branch);
 }
 
+static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
+  size_t count = valk_lval_list_count(a);
+  if (count == 0) {
+    return valk_lval_err("No selection found");
+  }
+
+  for (size_t i = 0; i < count; i++) {
+    valk_lval_t* clause = valk_lval_list_nth(a, i);
+    LVAL_ASSERT_TYPE(a, clause, LVAL_CONS, LVAL_QEXPR);
+
+#ifdef VALK_COVERAGE
+    uint16_t file_id = clause->cov_file_id;
+    uint16_t line = clause->cov_line;
+#endif
+
+    if (LVAL_TYPE(clause) == LVAL_QEXPR) {
+      clause = valk_qexpr_to_cons(clause);
+    }
+
+    size_t clause_len = valk_lval_list_count(clause);
+    LVAL_ASSERT(a, clause_len == 2, "Select clause must have condition and result");
+
+    valk_lval_t* cond_expr = valk_lval_list_nth(clause, 0);
+    valk_lval_t* result_expr = valk_lval_list_nth(clause, 1);
+
+    valk_lval_t* cond_val = valk_lval_eval(e, cond_expr);
+    if (LVAL_TYPE(cond_val) == LVAL_ERR) {
+      return cond_val;
+    }
+    LVAL_ASSERT_TYPE(a, cond_val, LVAL_NUM);
+
+    bool condition = cond_val->num != 0;
+
+#ifdef VALK_COVERAGE
+    if (file_id != 0 && line != 0) {
+      VALK_COVERAGE_RECORD_BRANCH(file_id, line, condition);
+    }
+#endif
+
+    if (condition) {
+      if (LVAL_TYPE(result_expr) == LVAL_QEXPR) {
+        VALK_COVERAGE_RECORD_LVAL(result_expr);
+        result_expr = valk_qexpr_to_cons(result_expr);
+      }
+      return valk_lval_eval(e, result_expr);
+    }
+  }
+
+  return valk_lval_err("No selection found");
+}
+
 static valk_lval_t* valk_builtin_do(valk_lenv_t* e, valk_lval_t* a) {
-  // Evaluate all expressions except the last one for side effects
   size_t count = valk_lval_list_count(a);
 
   if (count == 0) {
@@ -4347,6 +4407,66 @@ static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
 // module: (module value) -> value; captures as VALK_LAST_MODULE
 // (no module/program builtins; use VALK_LAST_VALUE set by `load`)
 
+#ifdef VALK_COVERAGE
+#include "source_loc.h"
+
+static valk_lval_t* valk_builtin_coverage_mark(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* expr = valk_lval_list_nth(a, 0);
+  VALK_COVERAGE_MARK_LVAL(expr);
+  return expr;
+}
+
+static valk_lval_t* valk_builtin_coverage_record(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* expr = valk_lval_list_nth(a, 0);
+  VALK_COVERAGE_RECORD_LVAL(expr);
+  return expr;
+}
+
+static valk_lval_t* valk_builtin_coverage_branch(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  valk_lval_t* line_val = valk_lval_list_nth(a, 0);
+  valk_lval_t* taken_val = valk_lval_list_nth(a, 1);
+  LVAL_ASSERT_TYPE(a, line_val, LVAL_NUM);
+  LVAL_ASSERT_TYPE(a, taken_val, LVAL_NUM);
+  uint16_t file_id = line_val->cov_file_id;
+  uint16_t line = (uint16_t)line_val->num;
+  bool taken = taken_val->num != 0;
+  valk_coverage_record_branch(file_id, line, taken);
+  return valk_lval_num(taken ? 1 : 0);
+}
+
+static valk_lval_t* valk_builtin_source_line(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* expr = valk_lval_list_nth(a, 0);
+  return valk_lval_num(expr->cov_line);
+}
+
+static valk_lval_t* valk_builtin_source_column(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* expr = valk_lval_list_nth(a, 0);
+  return valk_lval_num(expr->cov_column);
+}
+
+static valk_lval_t* valk_builtin_source_file(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* expr = valk_lval_list_nth(a, 0);
+  uint16_t file_id = expr->cov_file_id;
+  const char* filename = valk_source_get_filename(file_id);
+  if (filename == NULL) {
+    return valk_lval_str("<unknown>");
+  }
+  return valk_lval_str(filename);
+}
+#endif
+
 void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
   valk_lenv_put_builtin(env, "error?", valk_builtin_error_p);
@@ -4386,6 +4506,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "ord", valk_builtin_ord);
 
   valk_lenv_put_builtin(env, "if", valk_builtin_if);
+  valk_lenv_put_builtin(env, "select", valk_builtin_select);
   valk_lenv_put_builtin(env, "do", valk_builtin_do);
   valk_lenv_put_builtin(env, ">", valk_builtin_gt);
   valk_lenv_put_builtin(env, "<", valk_builtin_lt);
@@ -4483,6 +4604,15 @@ void valk_lenv_builtins(valk_lenv_t* env) {
 
   // Logging configuration
   valk_lenv_put_builtin(env, "sys/log/set-level", valk_builtin_set_log_level);
+
+#ifdef VALK_COVERAGE
+  valk_lenv_put_builtin(env, "coverage-mark", valk_builtin_coverage_mark);
+  valk_lenv_put_builtin(env, "coverage-record", valk_builtin_coverage_record);
+  valk_lenv_put_builtin(env, "coverage-branch", valk_builtin_coverage_branch);
+  valk_lenv_put_builtin(env, "source-line", valk_builtin_source_line);
+  valk_lenv_put_builtin(env, "source-column", valk_builtin_source_column);
+  valk_lenv_put_builtin(env, "source-file", valk_builtin_source_file);
+#endif
 
   // NOTE: checkpoint is NOT exposed to user code. It can only be called at safe
   // points (between top-level expressions) by the runtime. Calling checkpoint

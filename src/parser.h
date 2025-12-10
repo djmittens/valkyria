@@ -203,9 +203,17 @@ valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx);
   (lval)->cov_column = 0; \
   (lval)->cov_reserved = 0; \
 } while(0)
+#define INHERIT_SOURCE_LOC(dst, src) do { \
+  if ((src) != NULL && (dst) != NULL && (src)->cov_line > 0) { \
+    (dst)->cov_file_id = (src)->cov_file_id; \
+    (dst)->cov_line = (src)->cov_line; \
+    (dst)->cov_column = (src)->cov_column; \
+  } \
+} while(0)
 #else
 #define LVAL_SET_SOURCE_LOC(lval, fid, ln, col) ((void)0)
 #define LVAL_INIT_SOURCE_LOC(lval) ((void)0)
+#define INHERIT_SOURCE_LOC(dst, src) ((void)0)
 #endif
 
 static inline void valk_lval_println(valk_lval_t *val) {
