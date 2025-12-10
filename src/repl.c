@@ -142,7 +142,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (valk_coverage_enabled()) {
-      valk_coverage_report("build-coverage/coverage-valk.txt");
+      valk_coverage_report(valk_coverage_output_path());
       valk_coverage_reset();
     }
 

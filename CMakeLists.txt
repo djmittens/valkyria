@@ -13,6 +13,7 @@ project(valkyria LANGUAGES C)
 
 # Feature flags
 option(VALK_METRICS "Enable metrics collection" OFF)
+option(VALK_COVERAGE "Enable Valk line coverage instrumentation" OFF)
 
 set (CMAKE_EXECUTABLE_ENABLE_EXPORTS on )
 
@@ -26,6 +27,8 @@ endif()
 
 if(COVERAGE)
   # Enable coverage flags (compatible with gcov/lcov)
+  # -fprofile-arcs -ftest-coverage: basic line coverage
+  # -fprofile-conditions: branch/MC-DC coverage (Clang 18+)
   set(COVERAGE_FLAGS "-fprofile-arcs -ftest-coverage -O0 -g")
 endif()
 
@@ -84,6 +87,7 @@ set(VALKYRIA_SOURCES
   src/aio_sse.c
   src/log.c
   src/coverage.c
+  src/source_loc.c
 )
 
 # Conditionally add metrics sources (V2 only)
@@ -106,6 +110,11 @@ add_library(valkyria ${VALKYRIA_SOURCES})
 # Conditionally enable metrics
 if(VALK_METRICS)
   target_compile_definitions(valkyria PRIVATE VALK_METRICS_ENABLED=1)
+endif()
+
+if(VALK_COVERAGE)
+  add_compile_definitions(VALK_COVERAGE)
+  message(STATUS "Valk line coverage: ENABLED")
 endif()
 
 # On glibc-based Linux, expose required pthread and POSIX interfaces

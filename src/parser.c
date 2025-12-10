@@ -16,6 +16,10 @@
 #include "gc.h"
 #include "memory.h"
 
+#ifdef VALK_COVERAGE
+#include "source_loc.h"
+#endif
+
 #ifdef VALK_METRICS_ENABLED
 #include "aio_metrics.h"
 #include "aio_sse.h"
@@ -269,6 +273,7 @@ valk_lval_t* valk_lval_num(long x) {
   res->flags =
       LVAL_NUM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  LVAL_INIT_SOURCE_LOC(res);
   res->num = x;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
@@ -280,6 +285,7 @@ valk_lval_t* valk_lval_err(const char* fmt, ...) {
   res->flags =
       LVAL_ERR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  LVAL_INIT_SOURCE_LOC(res);
   va_list va;
   va_start(va, fmt);
 
@@ -303,6 +309,7 @@ valk_lval_t* valk_lval_sym(const char* sym) {
   res->flags =
       LVAL_SYM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  LVAL_INIT_SOURCE_LOC(res);
   size_t slen = strlen(sym);
   if (slen > 200) slen = 200;
   res->str = valk_mem_alloc(slen + 1);
@@ -318,6 +325,7 @@ valk_lval_t* valk_lval_str(const char* str) {
   res->flags =
       LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  LVAL_INIT_SOURCE_LOC(res);
   // TODO(main): whats a reasonable max for a string length?
   size_t slen = strlen(str);
   res->str = valk_mem_alloc(slen + 1);
@@ -333,6 +341,7 @@ valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
   res->flags =
       LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  LVAL_INIT_SOURCE_LOC(res);
   res->str = valk_mem_alloc(n + 1);
   if (n) memcpy(res->str, bytes, n);
   res->str[n] = '\0';
@@ -405,6 +414,7 @@ valk_lval_t* valk_lval_nil(void) {
   res->flags =
       LVAL_NIL | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  LVAL_INIT_SOURCE_LOC(res);
   res->cons.head = nullptr;
   res->cons.tail = nullptr;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -416,6 +426,7 @@ valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
   res->flags =
       LVAL_CONS | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  LVAL_INIT_SOURCE_LOC(res);
   res->cons.head = head;
   res->cons.tail = tail;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -428,6 +439,7 @@ valk_lval_t* valk_lval_qcons(valk_lval_t* head, valk_lval_t* tail) {
   res->flags =
       LVAL_QEXPR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  LVAL_INIT_SOURCE_LOC(res);
   res->cons.head = head;
   res->cons.tail = tail;
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -555,6 +567,12 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
   if (res->origin_allocator == NULL) {
     VALK_SET_ORIGIN_ALLOCATOR(res);
   }
+
+#ifdef VALK_COVERAGE
+  res->cov_file_id = lval->cov_file_id;
+  res->cov_line = lval->cov_line;
+  res->cov_column = lval->cov_column;
+#endif
 
   switch (LVAL_TYPE(lval)) {
     case LVAL_NUM:
@@ -848,12 +866,17 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
   // Return literals as-is (self-evaluating forms)
   // QEXPR is quoted data - it evaluates to itself, not executed as code
   // LVAL_HANDLE is an async handle - it evaluates to itself
+  // Note: We skip coverage recording for self-evaluating types because they
+  // are not actually "executed" - they just pass through. This prevents
+  // false coverage hits when if/cond receive unevaluated branches as QEXPRs.
   if (LVAL_TYPE(lval) == LVAL_NUM || LVAL_TYPE(lval) == LVAL_STR ||
       LVAL_TYPE(lval) == LVAL_FUN || LVAL_TYPE(lval) == LVAL_ERR ||
       LVAL_TYPE(lval) == LVAL_NIL || LVAL_TYPE(lval) == LVAL_REF ||
       LVAL_TYPE(lval) == LVAL_QEXPR || LVAL_TYPE(lval) == LVAL_HANDLE) {
     return lval;
   }
+
+  VALK_COVERAGE_RECORD_LVAL(lval);
 
   // Symbols are looked up in the environment
   if (LVAL_TYPE(lval) == LVAL_SYM) {
@@ -2423,6 +2446,9 @@ static valk_lval_t* valk_builtin_read_file(valk_lenv_t* e, valk_lval_t* a) {
 
 valk_lval_t* valk_parse_file(const char* filename) {
   valk_coverage_record_file(filename);
+#ifdef VALK_COVERAGE
+  uint16_t file_id = valk_source_register_file(filename);
+#endif
   
   FILE* f = fopen(filename, "rb");
   if (f == nullptr) {
@@ -2442,8 +2468,6 @@ valk_lval_t* valk_parse_file(const char* filename) {
   fread(input, 1, length, f);
   fclose(f);
 
-  int pos = 0;
-
   struct tmp_arr {
     valk_lval_t** items;
     size_t count;
@@ -2452,7 +2476,27 @@ valk_lval_t* valk_parse_file(const char* filename) {
 
   da_init(&tmp);
 
-  // Helper macro to skip whitespace AND comments (same as valk_lval_read)
+#ifdef VALK_COVERAGE
+  valk_parse_ctx_t ctx = {
+    .source = input,
+    .pos = 0,
+    .line = 1,
+    .line_start = 0,
+    .file_id = file_id
+  };
+  
+  while (ctx.source[ctx.pos] != '\0') {
+    valk_lval_t* expr = valk_lval_read_ctx(&ctx);
+    if (LVAL_TYPE(expr) == LVAL_ERR) {
+      if (strstr(expr->str, "Unexpected end of input")) break;
+      da_add(&tmp, expr);
+      break;
+    }
+    da_add(&tmp, expr);
+  }
+#else
+  int pos = 0;
+
   #define SKIP_WS_AND_COMMENTS() do { \
     while (strchr(" ;\t\v\r\n", input[pos]) && input[pos] != '\0') { \
       if (input[pos] == ';') { \
@@ -2463,22 +2507,19 @@ valk_lval_t* valk_parse_file(const char* filename) {
     } \
   } while(0)
 
-  // Skip leading whitespace and comments before entering the loop
   SKIP_WS_AND_COMMENTS();
 
   while (input[pos] != '\0') {
     da_add(&tmp, valk_lval_read(&pos, input));
-    // Check if we got an error - errors are not cons cells
     valk_lval_t* last = tmp.items[tmp.count - 1];
     if (LVAL_TYPE(last) == LVAL_ERR) break;
-    // Also check if the parsed expression itself contains an error
     if (LVAL_TYPE(last) == LVAL_CONS && LVAL_TYPE(last->cons.head) == LVAL_ERR)
       break;
-    // Skip whitespace and comments before next expression
     SKIP_WS_AND_COMMENTS();
   }
 
   #undef SKIP_WS_AND_COMMENTS
+#endif
 
   free(input);
   valk_lval_t* res = valk_lval_list(tmp.items, tmp.count);
@@ -2486,20 +2527,173 @@ valk_lval_t* valk_parse_file(const char* filename) {
   return res;
 }
 
+#ifdef VALK_COVERAGE
+
+static void parse_ctx_skip_whitespace(valk_parse_ctx_t *ctx) {
+  while (strchr(" ;\t\v\r\n", ctx->source[ctx->pos]) && ctx->source[ctx->pos] != '\0') {
+    if (ctx->source[ctx->pos] == '\n') {
+      ctx->line++;
+      ctx->line_start = ctx->pos + 1;
+    }
+    if (ctx->source[ctx->pos] == ';') {
+      while (ctx->source[ctx->pos] != '\n' && ctx->source[ctx->pos] != '\0') {
+        ctx->pos++;
+      }
+    } else {
+      ctx->pos++;
+    }
+  }
+}
+
+static valk_lval_t *valk_lval_read_sym_ctx(valk_parse_ctx_t *ctx) {
+  int saved_line = ctx->line;
+  int saved_col = ctx->pos - ctx->line_start + 1;
+  
+  valk_lval_t *res = valk_lval_read_sym(&ctx->pos, ctx->source);
+  LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
+  return res;
+}
+
+static valk_lval_t *valk_lval_read_str_ctx(valk_parse_ctx_t *ctx) {
+  int saved_line = ctx->line;
+  int saved_col = ctx->pos - ctx->line_start + 1;
+  
+  valk_lval_t *res = valk_lval_read_str(&ctx->pos, ctx->source);
+  LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
+  return res;
+}
+
+valk_lval_t *valk_lval_read_ctx(valk_parse_ctx_t *ctx) {
+  valk_lval_t *res;
+  int saved_line = ctx->line;
+  int saved_col = ctx->pos - ctx->line_start + 1;
+  
+  parse_ctx_skip_whitespace(ctx);
+  saved_line = ctx->line;
+  saved_col = ctx->pos - ctx->line_start + 1;
+  
+  if (ctx->source[ctx->pos] == '\0') {
+    return valk_lval_err("Unexpected end of input");
+  }
+  
+  if (ctx->source[ctx->pos] == '\'') {
+    ctx->pos++;
+    valk_lval_t *quoted = valk_lval_read_ctx(ctx);
+    if (LVAL_TYPE(quoted) == LVAL_ERR) return quoted;
+    res = valk_lval_qcons(quoted, valk_lval_nil());
+    LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
+  } else if (ctx->source[ctx->pos] == '`') {
+    ctx->pos++;
+    valk_lval_t *quoted = valk_lval_read_ctx(ctx);
+    if (LVAL_TYPE(quoted) == LVAL_ERR) return quoted;
+    valk_lval_t *sym = valk_lval_sym("quasiquote");
+    LVAL_SET_SOURCE_LOC(sym, ctx->file_id, saved_line, saved_col);
+    res = valk_lval_cons(sym, valk_lval_cons(quoted, valk_lval_nil()));
+    LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
+  } else if (ctx->source[ctx->pos] == ',') {
+    ctx->pos++;
+    bool splicing = false;
+    if (ctx->source[ctx->pos] == '@') {
+      ctx->pos++;
+      splicing = true;
+    }
+    valk_lval_t *unquoted = valk_lval_read_ctx(ctx);
+    if (LVAL_TYPE(unquoted) == LVAL_ERR) return unquoted;
+    valk_lval_t *sym = valk_lval_sym(splicing ? "unquote-splicing" : "unquote");
+    LVAL_SET_SOURCE_LOC(sym, ctx->file_id, saved_line, saved_col);
+    res = valk_lval_cons(sym, valk_lval_cons(unquoted, valk_lval_nil()));
+    LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
+  } else if (strchr("({", ctx->source[ctx->pos])) {
+    res = valk_lval_read_expr_ctx(ctx);
+    LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
+  } else if (strchr("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_+-*\\/=<>!&?:", ctx->source[ctx->pos])) {
+    res = valk_lval_read_sym_ctx(ctx);
+  } else if (ctx->source[ctx->pos] == '"') {
+    res = valk_lval_read_str_ctx(ctx);
+  } else {
+    res = valk_lval_err("[offset: %d] Unexpected character %c", ctx->pos, ctx->source[ctx->pos]);
+    ctx->pos++;
+  }
+  
+  parse_ctx_skip_whitespace(ctx);
+  return res;
+}
+
+valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx) {
+  char end;
+  bool is_quoted = false;
+  int saved_line = ctx->line;
+  int saved_col = ctx->pos - ctx->line_start + 1;
+  
+  if (ctx->source[ctx->pos++] == '{') {
+    is_quoted = true;
+    end = '}';
+  } else {
+    end = ')';
+  }
+  
+  size_t capacity = 16;
+  size_t count = 0;
+  valk_lval_t **elements = valk_mem_alloc(sizeof(valk_lval_t *) * capacity);
+  
+  while (ctx->source[ctx->pos] != end) {
+    if (ctx->source[ctx->pos] == '\0') {
+      return valk_lval_err("[offset: %d] Unexpected end of input reading expr", ctx->pos);
+    }
+    valk_lval_t *x = valk_lval_read_ctx(ctx);
+    if (LVAL_TYPE(x) == LVAL_ERR) return x;
+    
+    if (count >= capacity) {
+      capacity *= 2;
+      valk_lval_t **new_elements = valk_mem_alloc(sizeof(valk_lval_t *) * capacity);
+      memcpy(new_elements, elements, sizeof(valk_lval_t *) * count);
+      elements = new_elements;
+    }
+    elements[count++] = x;
+  }
+  ctx->pos++;
+  
+  valk_lval_t *result = valk_lval_nil();
+  LVAL_SET_SOURCE_LOC(result, ctx->file_id, saved_line, saved_col);
+  for (size_t j = count; j > 0; j--) {
+    if (is_quoted) {
+      result = valk_lval_qcons(elements[j - 1], result);
+    } else {
+      result = valk_lval_cons(elements[j - 1], result);
+    }
+    LVAL_SET_SOURCE_LOC(result, ctx->file_id, saved_line, saved_col);
+  }
+  
+  return result;
+}
+
+#endif // VALK_COVERAGE
+
 static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 3);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_CONS, LVAL_QEXPR,
-                   LVAL_NIL);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_CONS, LVAL_QEXPR,
-                   LVAL_NIL);
+  valk_lval_t* cond_val = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, cond_val, LVAL_NUM);
+  valk_lval_t* true_branch = valk_lval_list_nth(a, 1);
+  valk_lval_t* false_branch = valk_lval_list_nth(a, 2);
+  LVAL_ASSERT_TYPE(a, true_branch, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
+  LVAL_ASSERT_TYPE(a, false_branch, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
 
   // Select true or false branch based on condition
   valk_lval_t* branch;
-  if (valk_lval_list_nth(a, 0)->num) {
-    branch = valk_lval_list_nth(a, 1);
+  bool condition = cond_val->num != 0;
+#ifdef VALK_COVERAGE
+  uint16_t file_id = true_branch->cov_file_id;
+  uint16_t line = true_branch->cov_line;
+  if (file_id == 0 || line == 0) {
+    file_id = false_branch->cov_file_id;
+    line = false_branch->cov_line;
+  }
+  VALK_COVERAGE_RECORD_BRANCH(file_id, line, condition);
+#endif
+  if (condition) {
+    branch = true_branch;
   } else {
-    branch = valk_lval_list_nth(a, 2);
+    branch = false_branch;
   }
 
   // If branch is QEXPR, convert to CONS for evaluation

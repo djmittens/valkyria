@@ -2,6 +2,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
+#include "coverage.h"
 
 #define LVAL_TYPE_BITS 8ULL
 #define LVAL_TYPE_MASK 0x00000000000000FFULL
@@ -83,6 +84,12 @@ struct valk_lval_t {
   uint64_t flags;
   void *origin_allocator;  // Always track where this value was allocated
   struct valk_lval_t *gc_next;  // Linked list for GC heap tracking
+#ifdef VALK_COVERAGE
+  uint16_t cov_file_id;
+  uint16_t cov_line;
+  uint16_t cov_column;
+  uint16_t cov_reserved;
+#endif
   union {
     struct {
       // Builtin function pointer (NULL for lambdas)
@@ -170,6 +177,36 @@ void valk_lval_print(valk_lval_t *val);
 
 valk_lval_t *valk_lval_read(int *i, const char *s);
 valk_lval_t *valk_lval_read_expr(int *i, const char *s);
+
+#ifdef VALK_COVERAGE
+typedef struct {
+  const char *source;
+  int pos;
+  int line;
+  int line_start;
+  uint16_t file_id;
+} valk_parse_ctx_t;
+
+valk_lval_t *valk_lval_read_ctx(valk_parse_ctx_t *ctx);
+valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx);
+
+#define LVAL_SET_SOURCE_LOC(lval, fid, ln, col) do { \
+  (lval)->cov_file_id = (fid); \
+  (lval)->cov_line = (ln); \
+  (lval)->cov_column = (col); \
+  VALK_COVERAGE_MARK_LINE((fid), (ln)); \
+  VALK_COVERAGE_MARK_LVAL(lval); \
+} while(0)
+#define LVAL_INIT_SOURCE_LOC(lval) do { \
+  (lval)->cov_file_id = 0; \
+  (lval)->cov_line = 0; \
+  (lval)->cov_column = 0; \
+  (lval)->cov_reserved = 0; \
+} while(0)
+#else
+#define LVAL_SET_SOURCE_LOC(lval, fid, ln, col) ((void)0)
+#define LVAL_INIT_SOURCE_LOC(lval) ((void)0)
+#endif
 
 static inline void valk_lval_println(valk_lval_t *val) {
   valk_lval_print(val);

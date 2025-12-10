@@ -9,3 +9,4 @@ coverage-report/
 .venv/
 .mcp.json
 cclsp.json
+__pycache__/
