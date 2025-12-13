@@ -9,6 +9,8 @@ tools:
   glob: true
   grep: true
   fetch: true
+  ask-expert: true
+  search-kb: true
 ---
 
 You are an interactive CLI tool that helps users with software engineering tasks. Use the tools available to assist the user.

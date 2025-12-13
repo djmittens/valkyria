@@ -46,30 +46,33 @@
       <span class="capacity-warning-text">Memory pool(s) approaching capacity</span>
     </div>
 
-    <!-- ==================== HEALTH OVERVIEW ==================== -->
-    <section class="health-overview" aria-labelledby="health-title">
-      <h2 id="health-title">System Health Overview</h2>
-      <div class="health-grid" role="list">
-        <div class="health-card" role="listitem" title="Requests per second across all HTTP servers. A sudden drop may indicate upstream issues, network problems, or server overload. A spike may signal a traffic surge or potential DDoS.">
-          <div class="health-card-label">Request Rate</div>
-          <div class="health-card-value" id="health-request-rate">--<span style="font-size: 14px; font-weight: 400;">/s</span></div>
-          <div class="health-card-subtitle">Total across all servers</div>
-        </div>
-        <div class="health-card" role="listitem" title="Percentage of requests returning 4xx (client errors) or 5xx (server errors). High error rates indicate application bugs, invalid requests, or infrastructure issues. Investigate server logs when this exceeds your SLO threshold.">
-          <div class="health-card-label">Error Rate</div>
-          <div class="health-card-value" id="health-error-rate">--<span style="font-size: 14px; font-weight: 400;">%</span></div>
-          <div class="health-card-subtitle">4xx + 5xx responses</div>
-        </div>
-        <div class="health-card" role="listitem" title="Mean response time across all requests. Rising latency often precedes failures - check GC pauses, connection pool saturation, or downstream service health. Compare with P95/P99 in server cards for outlier detection.">
-          <div class="health-card-label">Avg Latency</div>
-          <div class="health-card-value" id="health-avg-latency">--<span style="font-size: 14px; font-weight: 400;">ms</span></div>
-          <div class="health-card-subtitle">Average response time</div>
-        </div>
-        <div class="health-card" role="listitem" title="GC heap memory utilization. Above 70% triggers more frequent GC cycles affecting latency. Above 90% risks OOM crashes. If consistently high, consider increasing heap size or investigating memory leaks via allocation patterns.">
-          <div class="health-card-label">Heap Usage</div>
-          <div class="health-card-value" id="health-heap-pct">--<span style="font-size: 14px; font-weight: 400;">%</span></div>
-          <div class="health-card-subtitle" id="health-heap-usage">-- / --</div>
-        </div>
+    <!-- ==================== HEALTH OVERVIEW (Compact Bar) ==================== -->
+    <section class="health-bar-compact" aria-label="System health metrics">
+      <div class="health-metric" title="Requests per second across all HTTP servers">
+        <div class="health-metric-spark" id="spark-request-rate"></div>
+        <span class="health-metric-label">Req/s</span>
+        <span class="health-metric-value" id="health-request-rate">--</span>
+      </div>
+      <div class="health-divider"></div>
+      <div class="health-metric" title="Error rate (4xx + 5xx responses)">
+        <div class="health-metric-spark" id="spark-error-rate"></div>
+        <span class="health-metric-label">Err</span>
+        <span class="health-metric-value" id="health-error-rate">--</span>
+        <span class="health-metric-unit">%</span>
+      </div>
+      <div class="health-divider"></div>
+      <div class="health-metric" title="Average response latency">
+        <div class="health-metric-spark" id="spark-latency"></div>
+        <span class="health-metric-label">Lat</span>
+        <span class="health-metric-value" id="health-avg-latency">--</span>
+        <span class="health-metric-unit">ms</span>
+      </div>
+      <div class="health-divider"></div>
+      <div class="health-metric" title="GC heap memory utilization">
+        <div class="health-metric-spark" id="spark-heap"></div>
+        <span class="health-metric-label">Heap</span>
+        <span class="health-metric-value" id="health-heap-pct">--</span>
+        <span class="health-metric-unit">%</span>
       </div>
     </section>
 
@@ -86,12 +89,14 @@
       </div>
 
       <div class="grid-2">
-        <!-- GC Panel -->
-        <article class="panel" aria-labelledby="gc-panel-title">
-          <div class="panel-header">
+        <!-- GC Panel with collapse support -->
+        <article class="panel" aria-labelledby="gc-panel-title" id="gc-panel">
+          <div class="panel-header" onclick="togglePanel('gc-panel')" role="button" tabindex="0" aria-expanded="true">
             <div class="panel-icon gc" aria-hidden="true">G</div>
             <h3 class="panel-title" id="gc-panel-title">Garbage Collector</h3>
+            <span class="panel-summary" id="gc-summary">-- cycles, --ms max</span>
             <div class="panel-badge" id="gc-cycles-badge" title="Total number of GC cycles since process start">-- cycles</div>
+            <span class="expand-icon" aria-hidden="true">▼</span>
           </div>
           <div class="panel-body">
             <div class="gc-timeline" id="gc-timeline" role="img" aria-label="GC pause timeline" title="Timeline showing GC pause durations over the last 60 seconds. Tall bars indicate long stop-the-world pauses that may cause request latency spikes. Yellow bars exceed 10ms, red bars exceed 50ms.">
@@ -127,40 +132,45 @@
           </div>
         </article>
 
-        <!-- Interpreter -->
-        <article class="panel" aria-labelledby="interp-panel-title">
-          <div class="panel-header">
+        <!-- Interpreter with collapse support -->
+        <article class="panel" aria-labelledby="interp-panel-title" id="interp-panel">
+          <div class="panel-header" onclick="togglePanel('interp-panel')" role="button" tabindex="0" aria-expanded="true">
             <div class="panel-icon interp" aria-hidden="true">I</div>
             <h3 class="panel-title" id="interp-panel-title">Interpreter</h3>
+            <span class="panel-summary" id="interp-summary">-- evals, -- fn calls</span>
+            <span class="expand-icon" aria-hidden="true">▼</span>
           </div>
           <div class="panel-body">
-            <div class="mini-stats" role="list" aria-label="Interpreter statistics">
-              <div class="mini-stat" role="listitem" title="Total expression evaluations. High eval count per request indicates complex logic. Compare with request rate to find average evals/request for performance baseline.">
-                <div class="mini-stat-value" id="interp-evals">--</div>
-                <div class="mini-stat-label">Evals</div>
-              </div>
-              <div class="mini-stat" role="listitem" title="User-defined function invocations. Deep call chains increase stack usage and latency. High ratio of fn calls to evals suggests well-factored code.">
-                <div class="mini-stat-value" id="interp-fn-calls">--</div>
-                <div class="mini-stat-label">Fn Calls</div>
-              </div>
-              <div class="mini-stat" role="listitem" title="Built-in function calls (str, +, cons, etc). These are optimized C functions. High builtin usage is generally efficient; profile if specific builtins dominate.">
-                <div class="mini-stat-value" id="interp-builtins">--</div>
-                <div class="mini-stat-label">Builtins</div>
-              </div>
-            </div>
-            <div style="margin-top: var(--space-md);">
-              <div class="metric-row" title="Deepest call stack observed. The interpreter uses the C stack, so deep recursion risks stack overflow. Consider tail-call optimization or trampolining for recursive algorithms.">
-                <span class="metric-label">Max Stack Depth</span>
-                <span class="metric-value" id="interp-stack-depth">--</span>
-              </div>
-              <div class="metric-row" title="Lambda/closure allocations. Each closure captures its environment, consuming heap memory. High closure creation rate increases GC pressure.">
-                <span class="metric-label">Closures Created</span>
-                <span class="metric-value" id="interp-closures">--</span>
-              </div>
-              <div class="metric-row" title="Variable resolution operations. High lookup count may indicate deeply nested scopes or missing local bindings. Optimize by using let bindings closer to usage.">
-                <span class="metric-label">Env Lookups</span>
-                <span class="metric-value" id="interp-env-lookups">--</span>
-              </div>
+            <div class="metrics-inline">
+              <span class="metric-inline" title="Total expression evaluations">
+                <span class="metric-inline-label">Evals:</span>
+                <span class="metric-inline-value" id="interp-evals">--</span>
+              </span>
+              <span class="metric-inline-sep">│</span>
+              <span class="metric-inline" title="User-defined function calls">
+                <span class="metric-inline-label">Fn:</span>
+                <span class="metric-inline-value" id="interp-fn-calls">--</span>
+              </span>
+              <span class="metric-inline-sep">│</span>
+              <span class="metric-inline" title="Built-in function calls">
+                <span class="metric-inline-label">Builtin:</span>
+                <span class="metric-inline-value" id="interp-builtins">--</span>
+              </span>
+              <span class="metric-inline-sep">│</span>
+              <span class="metric-inline" title="Max call stack depth">
+                <span class="metric-inline-label">Stack:</span>
+                <span class="metric-inline-value" id="interp-stack-depth">--</span>
+              </span>
+              <span class="metric-inline-sep">│</span>
+              <span class="metric-inline" title="Closures created">
+                <span class="metric-inline-label">Closures:</span>
+                <span class="metric-inline-value" id="interp-closures">--</span>
+              </span>
+              <span class="metric-inline-sep">│</span>
+              <span class="metric-inline" title="Environment lookups">
+                <span class="metric-inline-label">Lookups:</span>
+                <span class="metric-inline-value" id="interp-env-lookups">--</span>
+              </span>
             </div>
           </div>
         </article>

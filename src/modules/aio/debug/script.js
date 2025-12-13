@@ -323,6 +323,33 @@
       '</svg>';
   }
 
+  // ==================== Rendering: Mini Sparklines (Health Bar) ====================
+  function renderMiniSparkline(containerId, data, color) {
+    var container = $(containerId);
+    if (!container || !data || data.length < 2) return;
+
+    var width = 48;
+    var height = 20;
+    var max = Math.max.apply(null, data);
+    var min = Math.min.apply(null, data);
+    var range = max - min || 1;
+
+    var points = data.map(function(v, i) {
+      var x = (i / (data.length - 1)) * width;
+      var y = height - 2 - ((v - min) / range) * (height - 4);
+      return x + ',' + y;
+    }).join(' ');
+
+    // Area fill points (close the polygon at bottom)
+    var areaPoints = points + ' ' + width + ',' + height + ' 0,' + height;
+
+    container.innerHTML =
+      '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
+      '<polygon points="' + areaPoints + '" fill="' + color + '" opacity="0.2"/>' +
+      '<polyline points="' + points + '" fill="none" stroke="' + color + '" stroke-width="1.5"/>' +
+      '</svg>';
+  }
+
   // ==================== Rendering: Histograms ====================
   function renderHistogram(containerId, histogram) {
     var container = $(containerId);
@@ -1239,32 +1266,30 @@
     var heapPct = (heapUsed / heapTotal) * 100;
     pushHistory(history.heapUsage, heapPct);
 
-    // Update health cards
-    $('health-request-rate').innerHTML = fmt(requestRate, 1) + '<span style="font-size: 14px; font-weight: 400;">/s</span>';
-    $('health-error-rate').innerHTML = fmt(errorRate, 1) + '<span style="font-size: 14px; font-weight: 400;">%</span>';
-    $('health-avg-latency').innerHTML = fmt(avgLatency, 1) + '<span style="font-size: 14px; font-weight: 400;">ms</span>';
-    $('health-heap-pct').innerHTML = fmt(heapPct, 0) + '<span style="font-size: 14px; font-weight: 400;">%</span>';
-    $('health-heap-usage').textContent = fmtBytes(heapUsed) + ' / ' + fmtBytes(heapTotal);
+    // Update compact health bar
+    $('health-request-rate').textContent = fmt(requestRate, 1);
+    $('health-error-rate').textContent = fmt(errorRate, 1);
+    $('health-avg-latency').textContent = fmt(avgLatency, 1);
+    $('health-heap-pct').textContent = fmt(heapPct, 0);
 
-    // Update health card statuses
-    function updateHealthCardStatus(cardEl, value, warningThreshold, criticalThreshold, inverse) {
-      if (!cardEl) return;
-      var card = cardEl.closest('.health-card');
-      if (!card) return;
+    // Render mini sparklines
+    renderMiniSparkline('spark-request-rate', history.requestRate.slice(-20), 'var(--color-info)');
+    renderMiniSparkline('spark-error-rate', history.errorRate.slice(-20), 'var(--color-warning)');
+    renderMiniSparkline('spark-latency', history.latency.slice(-20), 'var(--color-cyan)');
+    renderMiniSparkline('spark-heap', history.heapUsage.slice(-20), 'var(--color-ok)');
 
-      card.classList.remove('status-ok', 'status-warning', 'status-critical');
-
-      var isWarning = inverse ? value < warningThreshold : value > warningThreshold;
-      var isCritical = inverse ? value < criticalThreshold : value > criticalThreshold;
-
-      if (isCritical) card.classList.add('status-critical');
-      else if (isWarning) card.classList.add('status-warning');
-      else card.classList.add('status-ok');
+    // Update health metric value colors based on thresholds
+    function updateHealthMetricColor(el, value, warningThreshold, criticalThreshold) {
+      if (!el) return;
+      el.classList.remove('ok', 'warning', 'critical');
+      if (value > criticalThreshold) el.classList.add('critical');
+      else if (value > warningThreshold) el.classList.add('warning');
+      else el.classList.add('ok');
     }
 
-    updateHealthCardStatus($('health-error-rate'), errorRate, 1, 5, false);
-    updateHealthCardStatus($('health-heap-pct'), heapPct, 70, 90, false);
-    updateHealthCardStatus($('health-avg-latency'), avgLatency, 100, 500, false);
+    updateHealthMetricColor($('health-error-rate'), errorRate, 1, 5);
+    updateHealthMetricColor($('health-heap-pct'), heapPct, 70, 90);
+    updateHealthMetricColor($('health-avg-latency'), avgLatency, 100, 500);
 
     // ========== VM Section Badges ==========
     $('vm-gc-badge').textContent = fmtCompact(gc.cycles_total || 0) + ' cycles';
@@ -1276,6 +1301,14 @@
     $('gc-max-pause').innerHTML = fmt((gc.pause_us_max || 0) / 1000, 1) + '<span class="unit">ms</span>';
     $('gc-avg-pause').innerHTML = fmt(gc.pause_ms_avg || 0, 2) + '<span class="unit">ms</span>';
     $('gc-reclaimed').innerHTML = fmtBytes(gc.reclaimed_bytes_total || 0).replace(' ', '<span class="unit">') + '</span>';
+
+    // Update GC panel summary (for collapsed state)
+    var gcSummary = $('gc-summary');
+    if (gcSummary) {
+      gcSummary.textContent = fmtCompact(gc.cycles_total || 0) + ' cycles, ' +
+        fmt((gc.pause_us_max || 0) / 1000, 1) + 'ms max, ' +
+        fmtBytes(gc.reclaimed_bytes_total || 0) + ' reclaimed';
+    }
 
     // Track GC pauses for timeline
     if (prevMetrics && gc.cycles_total > prevMetrics.gcCycles) {
@@ -1298,6 +1331,13 @@
     $('interp-stack-depth').textContent = interp.stack_depth_max || 0;
     $('interp-closures').textContent = fmtCompact(interp.closures_created || 0);
     $('interp-env-lookups').textContent = fmtCompact(interp.env_lookups || 0);
+
+    // Update Interpreter panel summary (for collapsed state)
+    var interpSummary = $('interp-summary');
+    if (interpSummary) {
+      interpSummary.textContent = fmtCompact(interp.evals_total || 0) + ' evals, ' +
+        fmtCompact(interp.function_calls || 0) + ' fn calls';
+    }
 
     // ========== AIO Systems Section ==========
     // Use the new aio_systems array for multi-system support
@@ -2637,4 +2677,60 @@
   }
 
   document.addEventListener('DOMContentLoaded', initializeTooltips);
+
+  // ==================== Panel Collapse/Expand ====================
+  window.togglePanel = function(panelId) {
+    var panel = document.getElementById(panelId);
+    if (!panel) return;
+
+    var isCollapsed = panel.classList.contains('collapsed');
+    var header = panel.querySelector('.panel-header');
+
+    if (isCollapsed) {
+      panel.classList.remove('collapsed');
+      if (header) header.setAttribute('aria-expanded', 'true');
+    } else {
+      panel.classList.add('collapsed');
+      if (header) header.setAttribute('aria-expanded', 'false');
+    }
+
+    // Save preference to localStorage
+    try {
+      var prefs = JSON.parse(localStorage.getItem('dashboard-panels') || '{}');
+      prefs[panelId] = !isCollapsed;
+      localStorage.setItem('dashboard-panels', JSON.stringify(prefs));
+    } catch(e) {}
+  };
+
+  // Restore panel states on load
+  function restorePanelStates() {
+    try {
+      var prefs = JSON.parse(localStorage.getItem('dashboard-panels') || '{}');
+      for (var panelId in prefs) {
+        if (prefs[panelId]) {
+          var panel = document.getElementById(panelId);
+          if (panel) {
+            panel.classList.add('collapsed');
+            var header = panel.querySelector('.panel-header');
+            if (header) header.setAttribute('aria-expanded', 'false');
+          }
+        }
+      }
+    } catch(e) {}
+  }
+
+  // Keyboard support for panel toggle
+  document.addEventListener('keydown', function(e) {
+    if (e.target.classList.contains('panel-header') || e.target.closest('.panel-header')) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        var header = e.target.classList.contains('panel-header') ? e.target : e.target.closest('.panel-header');
+        if (header && header.onclick) {
+          header.onclick();
+        }
+      }
+    }
+  });
+
+  document.addEventListener('DOMContentLoaded', restorePanelStates);
 })();
