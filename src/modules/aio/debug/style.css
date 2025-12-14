@@ -106,13 +106,20 @@ body {
 header[role="banner"] {
   display: flex;
   align-items: center;
-  gap: var(--space-lg);
-  padding: var(--space-lg) var(--space-xl);
+  justify-content: space-between;
+  padding: var(--space-sm) var(--space-xl);
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-default);
   position: sticky;
   top: 0;
   z-index: 100;
+  height: 36px;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
 }
 
 .logo {
@@ -122,20 +129,20 @@ header[role="banner"] {
 }
 
 .logo-icon {
-  width: 32px;
-  height: 32px;
+  width: 22px;
+  height: 22px;
   background: linear-gradient(135deg, var(--color-info) 0%, var(--color-purple) 100%);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  font-size: 16px;
+  font-size: 11px;
   color: white;
 }
 
 .logo-text {
-  font-size: 18px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -145,6 +152,76 @@ header[role="banner"] {
   font-weight: 400;
 }
 
+/* Connection status - compact dot indicator */
+.status-indicator {
+  display: flex;
+  align-items: center;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--color-ok);
+  border-radius: 50%;
+  box-shadow: 0 0 4px var(--color-ok);
+  animation: status-glow 2s ease-in-out infinite;
+}
+
+.status-indicator.error .status-dot {
+  background: var(--color-error);
+  box-shadow: 0 0 4px var(--color-error);
+}
+
+@keyframes status-glow {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px currentColor; }
+  50% { opacity: 0.7; box-shadow: 0 0 8px currentColor; }
+}
+
+/* Header metrics row */
+.header-metrics {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+}
+
+.header-metric {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.header-metric-spark {
+  width: 36px;
+  height: 14px;
+  background: var(--bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.header-metric-spark svg {
+  width: 100%;
+  height: 100%;
+}
+
+.header-metric-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  min-width: 24px;
+}
+
+.header-metric-value.ok { color: var(--color-ok); }
+.header-metric-value.warning { color: var(--color-warning); }
+.header-metric-value.critical { color: var(--color-error); }
+
+.header-metric-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Legacy support for old status-badge if needed elsewhere */
 .status-badge {
   display: flex;
   align-items: center;
@@ -387,15 +464,17 @@ main[role="main"] {
 }
 
 /* Section Background Tints */
-.section-group.vm-section {
-  background: linear-gradient(135deg, rgba(163, 113, 247, 0.02) 0%, transparent 50%);
+.section-group.runtime-section {
+  background: linear-gradient(135deg, rgba(163, 113, 247, 0.08) 0%, rgba(163, 113, 247, 0.02) 100%);
+  border-left: 2px solid rgba(163, 113, 247, 0.4);
   border-radius: var(--radius-lg);
   padding: var(--space-lg);
   margin: 0 calc(-1 * var(--space-lg)) var(--space-2xl);
 }
 
 .section-group.aio-section {
-  background: linear-gradient(135deg, rgba(57, 212, 212, 0.02) 0%, transparent 50%);
+  background: linear-gradient(135deg, rgba(57, 212, 212, 0.08) 0%, rgba(57, 212, 212, 0.02) 100%);
+  border-left: 2px solid rgba(57, 212, 212, 0.4);
   border-radius: var(--radius-lg);
   padding: var(--space-lg);
   margin: 0 calc(-1 * var(--space-lg)) var(--space-2xl);
@@ -430,7 +509,7 @@ main[role="main"] {
   font-weight: 700;
 }
 
-.section-icon.vm { background: var(--color-purple-bg); color: var(--color-purple); }
+.section-icon.runtime { background: var(--color-purple-bg); color: var(--color-purple); }
 .section-icon.aio { background: var(--color-cyan-bg); color: var(--color-cyan); }
 .section-icon.http { background: var(--color-info-bg); color: var(--color-info); }
 .section-icon.client { background: var(--color-pink-bg); color: var(--color-pink); }
@@ -1459,7 +1538,7 @@ main[role="main"] {
     padding: var(--space-md);
   }
 
-  .section-group.vm-section,
+  .section-group.runtime-section,
   .section-group.aio-section,
   .section-group.http-section {
     padding: var(--space-md);
@@ -2035,321 +2114,6 @@ main[role="main"] {
   color: var(--border-muted);
 }
 
-/* ==================== PoolGauge Widget ==================== */
-/* Generalized gauge component for pool/slab visualizations
- *
- * CSS custom properties for customization:
- *   --pool-color: Primary fill color (default: --color-ok)
- *   --pool-color-muted: Gradient end color (default: --color-ok-muted)
- *   --pool-hwm-color: High water mark color (default: --color-info)
- *   --pool-threshold-color: Threshold marker color (default: --color-error)
- */
-
-.pool-gauge {
-  --pool-color: var(--color-ok);
-  --pool-color-muted: var(--color-ok-muted);
-  --pool-hwm-color: var(--color-info);
-  --pool-threshold-color: var(--color-error);
-
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
-  padding: var(--space-sm);
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-md);
-}
-
-.pool-gauge.compact {
-  padding: var(--space-xs) var(--space-sm);
-}
-
-/* Header with name, icon, and badge */
-.pool-gauge-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
-.pool-gauge-icon {
-  width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 600;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--pool-color) 20%, transparent);
-  color: var(--pool-color);
-}
-
-.pool-gauge-name {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-primary);
-  flex: 1;
-}
-
-.pool-gauge-desc {
-  font-size: 10px;
-  color: var(--text-muted);
-  margin-left: var(--space-xs);
-}
-
-.pool-gauge-usage {
-  font-size: 10px;
-  font-family: var(--font-mono);
-  color: var(--text-secondary);
-}
-
-.pool-gauge-badge {
-  font-size: 10px;
-  font-family: var(--font-mono);
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--pool-color) 20%, transparent);
-  color: var(--pool-color);
-}
-
-.pool-gauge-badge.warning {
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
-}
-
-.pool-gauge-badge.critical {
-  background: var(--color-error-bg);
-  color: var(--color-error);
-}
-
-/* Track and fill bar */
-.pool-gauge-track {
-  position: relative;
-  height: 10px;
-  background: var(--bg-primary);
-  border-radius: 5px;
-  overflow: visible;
-}
-
-.pool-gauge-track.thin {
-  height: 6px;
-  border-radius: 3px;
-}
-
-.pool-gauge-fill {
-  height: 100%;
-  border-radius: inherit;
-  transition: width 0.3s ease, background 0.3s ease;
-  background: linear-gradient(90deg, var(--pool-color) 0%, var(--pool-color-muted) 100%);
-}
-
-.pool-gauge-fill.warning {
-  background: linear-gradient(90deg, var(--color-warning) 0%, var(--color-warning-muted) 100%);
-}
-
-.pool-gauge-fill.critical {
-  background: linear-gradient(90deg, var(--color-error) 0%, color-mix(in srgb, var(--color-error) 80%, #ff4444) 100%);
-}
-
-/* Markers container */
-.pool-gauge-markers {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-
-/* Generic marker base */
-.pool-gauge-marker {
-  position: absolute;
-  top: -3px;
-  bottom: -3px;
-  width: 2px;
-  border-radius: 1px;
-  transition: left 0.3s ease;
-  z-index: 1;
-}
-
-/* High water mark marker */
-.pool-gauge-marker.hwm {
-  background: var(--pool-hwm-color);
-  opacity: 0.9;
-}
-
-.pool-gauge-marker.hwm::after {
-  content: 'HWM';
-  position: absolute;
-  top: -14px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 7px;
-  font-weight: 600;
-  color: var(--pool-hwm-color);
-  white-space: nowrap;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.pool-gauge:hover .pool-gauge-marker.hwm::after {
-  opacity: 1;
-}
-
-/* Threshold marker (e.g., GC threshold) */
-.pool-gauge-marker.threshold {
-  background: var(--pool-threshold-color);
-  opacity: 0.7;
-}
-
-.pool-gauge-marker.threshold::after {
-  content: attr(data-label);
-  position: absolute;
-  top: -14px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 7px;
-  font-weight: 600;
-  color: var(--pool-threshold-color);
-  white-space: nowrap;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.pool-gauge:hover .pool-gauge-marker.threshold::after {
-  opacity: 1;
-}
-
-/* Custom marker (can be styled individually) */
-.pool-gauge-marker.custom {
-  opacity: 0.8;
-}
-
-.pool-gauge-marker.custom::after {
-  content: attr(data-label);
-  position: absolute;
-  top: -14px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 7px;
-  font-weight: 600;
-  white-space: nowrap;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.pool-gauge:hover .pool-gauge-marker.custom::after {
-  opacity: 1;
-}
-
-/* Stats row */
-.pool-gauge-stats {
-  display: flex;
-  gap: var(--space-md);
-  font-size: 10px;
-  color: var(--text-muted);
-}
-
-.pool-gauge-stat {
-  display: flex;
-  gap: var(--space-xs);
-  align-items: baseline;
-}
-
-.pool-gauge-stat .label {
-  color: var(--text-faint);
-}
-
-.pool-gauge-stat .value {
-  font-family: var(--font-mono);
-  color: var(--text-secondary);
-}
-
-/* Legend component */
-.pool-gauge-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-  margin-top: var(--space-xs);
-  padding-top: var(--space-xs);
-  border-top: 1px dashed var(--border-muted);
-  font-size: 9px;
-  color: var(--text-muted);
-}
-
-.pool-gauge-legend-item {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.pool-gauge-legend-bar {
-  width: 12px;
-  height: 4px;
-  border-radius: 2px;
-}
-
-.pool-gauge-legend-marker {
-  width: 2px;
-  height: 8px;
-  border-radius: 1px;
-}
-
-.pool-gauge-legend-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-
-/* Color presets for common pool types */
-.pool-gauge.slab {
-  --pool-color: var(--color-cyan);
-  --pool-color-muted: var(--color-cyan-muted);
-}
-
-.pool-gauge.malloc {
-  --pool-color: var(--color-warning);
-  --pool-color-muted: var(--color-warning-muted);
-}
-
-.pool-gauge.arena {
-  --pool-color: var(--color-ok);
-  --pool-color-muted: var(--color-ok-muted);
-}
-
-.pool-gauge.buffer {
-  --pool-color: var(--color-purple);
-  --pool-color-muted: var(--color-purple-muted);
-}
-
-.pool-gauge.queue {
-  --pool-color: var(--color-info);
-  --pool-color-muted: var(--color-info-muted);
-}
-
-/* Inline variant - horizontal layout */
-.pool-gauge.inline {
-  flex-direction: row;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-xs) var(--space-sm);
-}
-
-.pool-gauge.inline .pool-gauge-header {
-  min-width: 100px;
-  flex: 0 0 auto;
-}
-
-.pool-gauge.inline .pool-gauge-track {
-  flex: 1;
-  min-width: 100px;
-}
-
-.pool-gauge.inline .pool-gauge-stats {
-  flex: 0 0 auto;
-  margin-top: 0;
-}
-
-.pool-gauge.inline .pool-gauge-legend {
-  display: none;
-}
-
 /* ==================== PoolWidget ====================
  * Unified pool/slab visualization combining gauge bar, canvas grid, and legend.
  * Variants: full, compact, mini, gauge-only
@@ -2588,15 +2352,20 @@ main[role="main"] {
 .pool-widget-marker.hwm::after {
   content: attr(data-label);
   position: absolute;
-  top: -16px;
+  bottom: -20px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 8px;
+  font-size: 9px;
   font-family: var(--font-mono);
   color: var(--pool-hwm-color);
   white-space: nowrap;
+  background: var(--bg-primary);
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--pool-hwm-color);
   opacity: 0;
   transition: opacity 0.2s;
+  z-index: 10;
 }
 
 .pool-widget:hover .pool-widget-marker.hwm::after {
@@ -2610,15 +2379,20 @@ main[role="main"] {
 .pool-widget-marker.threshold::after {
   content: attr(data-label);
   position: absolute;
-  top: -16px;
+  bottom: -20px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 8px;
+  font-size: 9px;
   font-family: var(--font-mono);
   color: var(--pool-threshold-color);
   white-space: nowrap;
+  background: var(--bg-primary);
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--pool-threshold-color);
   opacity: 0;
   transition: opacity 0.2s;
+  z-index: 10;
 }
 
 .pool-widget:hover .pool-widget-marker.threshold::after {

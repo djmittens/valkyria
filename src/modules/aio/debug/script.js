@@ -157,8 +157,15 @@
     this.color = config.color || null;
     this.colorMuted = config.colorMuted || null;
 
-    // Gauge markers
+    // Gauge markers (store configs for label formatting)
     this.markers = config.markers || [];
+    this.markerConfigs = {};
+    for (var i = 0; i < this.markers.length; i++) {
+      var m = this.markers[i];
+      if (m.id) {
+        this.markerConfigs[m.id] = m;
+      }
+    }
 
     // Legend configuration
     this.legend = config.legend || [];
@@ -234,6 +241,27 @@
     'tcp-listener': '#a371f7',
     task: '#39d4d4',
     timer: '#9e6a03'
+  };
+
+  // Format a value based on format type
+  // Supported formats: 'bytes', 'count', 'percent', or a custom function
+  PoolWidget.formatValue = function(value, format) {
+    if (typeof format === 'function') {
+      return format(value);
+    }
+    switch (format) {
+      case 'bytes':
+        if (value >= 1024 * 1024 * 1024) return (value / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+        if (value >= 1024 * 1024) return (value / (1024 * 1024)).toFixed(1) + ' MB';
+        if (value >= 1024) return (value / 1024).toFixed(1) + ' KB';
+        return value + ' B';
+      case 'count':
+        return value.toLocaleString();
+      case 'percent':
+        return Math.round(value) + '%';
+      default:
+        return String(value);
+    }
   };
 
   // Render the widget HTML
@@ -548,11 +576,20 @@
         var mEl = this.markerEls[mId];
         if (mEl) {
           var mv = data.markers[mId];
+          var mConfig = this.markerConfigs[mId];
           if (typeof mv === 'object') {
             if (mv.position !== undefined) mEl.style.left = mv.position + '%';
             if (mv.color) mEl.style.background = mv.color;
-            if (mv.label !== undefined) mEl.setAttribute('data-label', mv.label);
+            // Auto-format label from value if config has valueFormat
+            if (mv.label !== undefined) {
+              mEl.setAttribute('data-label', mv.label);
+            } else if (mv.value !== undefined && mConfig && mConfig.valueFormat) {
+              var prefix = mConfig.labelPrefix !== undefined ? mConfig.labelPrefix : (mConfig.label + ': ');
+              var suffix = mConfig.labelSuffix || '';
+              mEl.setAttribute('data-label', prefix + PoolWidget.formatValue(mv.value, mConfig.valueFormat) + suffix);
+            }
           } else {
+            // Simple number = position only
             mEl.style.left = mv + '%';
           }
         }
@@ -1024,15 +1061,28 @@
   PoolWidget.Markers = {
     heapMarkers: function(opts) {
       opts = opts || {};
+      var hwmMarker = {
+        type: 'hwm', id: 'hwm', label: opts.hwmLabel || 'hwm',
+        color: opts.hwmColor || 'var(--color-info)',
+        valueFormat: opts.hwmFormat || 'bytes'
+      };
+      if (opts.hwmLabelSuffix) hwmMarker.labelSuffix = opts.hwmLabelSuffix;
       return [
-        { type: 'hwm', id: 'hwm', label: opts.hwmLabel || 'HWM', color: opts.hwmColor || 'var(--color-info)' },
-        { type: 'threshold', id: 'threshold', label: opts.thresholdLabel || 'GC',
-          color: opts.thresholdColor || 'var(--color-error)', position: opts.thresholdPosition || 75 }
+        hwmMarker,
+        { type: 'threshold', id: 'threshold', label: opts.thresholdLabel || 'gc',
+          color: opts.thresholdColor || 'var(--color-error)',
+          valueFormat: 'percent', position: opts.thresholdPosition || 75 }
       ];
     },
     hwmOnly: function(opts) {
       opts = opts || {};
-      return [{ type: 'hwm', id: 'hwm', label: opts.hwmLabel || 'HWM', color: opts.hwmColor || 'var(--color-info)' }];
+      var marker = {
+        type: 'hwm', id: 'hwm', label: opts.hwmLabel || 'hwm',
+        color: opts.hwmColor || 'var(--color-info)',
+        valueFormat: opts.hwmFormat || 'bytes'
+      };
+      if (opts.hwmLabelSuffix) marker.labelSuffix = opts.hwmLabelSuffix;
+      return [marker];
     }
   };
 
@@ -1287,7 +1337,7 @@
         showLegend: true,
         showOwnerBreakdown: true,
         collapsibleGrid: true,
-        markers: PoolWidget.Markers.hwmOnly(),
+        markers: PoolWidget.Markers.hwmOnly({ hwmFormat: 'count' }),
         states: [
           { char: 'A', class: 'active', label: 'Active', color: PoolWidget.COLORS.active },
           { char: 'I', class: 'idle', label: 'Idle', color: PoolWidget.COLORS.idle },
@@ -1316,7 +1366,7 @@
         showGauge: true,
         showGrid: true,
         collapsibleGrid: true,
-        markers: PoolWidget.Markers.hwmOnly()
+        markers: PoolWidget.Markers.hwmOnly({ hwmFormat: 'count' })
       });
     },
     stream_arenas: function(id) {
@@ -1330,7 +1380,7 @@
         showGauge: true,
         showGrid: true,
         collapsibleGrid: true,
-        markers: PoolWidget.Markers.hwmOnly()
+        markers: PoolWidget.Markers.hwmOnly({ hwmFormat: 'count' })
       });
     },
     queue: function(id) {
@@ -2319,23 +2369,15 @@
 
   // ==================== Connection Status ====================
   function updateConnectionStatus(connected) {
-    var statusBadge = $('global-status');
-    var statusText = $('global-status-text');
-    var statusIcon = statusBadge.querySelector('.status-icon');
-    var pulse = statusBadge.querySelector('.pulse');
+    var statusIndicator = $('global-status');
+    if (!statusIndicator) return;
 
     if (connected) {
-      statusBadge.classList.remove('error');
-      statusBadge.classList.add('connected');
-      statusText.textContent = 'Connected';
-      statusIcon.textContent = '✓';
-      pulse.style.display = 'block';
+      statusIndicator.classList.remove('error');
+      statusIndicator.title = 'Connected';
     } else {
-      statusBadge.classList.remove('connected');
-      statusBadge.classList.add('error');
-      statusText.textContent = 'Disconnected';
-      statusIcon.textContent = '!';
-      pulse.style.display = 'none';
+      statusIndicator.classList.add('error');
+      statusIndicator.title = 'Disconnected';
     }
   }
 
@@ -2398,7 +2440,8 @@
         markers: PoolWidget.Markers.hwmOnly({ hwmColor: 'var(--color-warning)' }),
         stats: [
           { id: 'hwm', label: 'hwm:' },
-          { id: 'overflow', label: 'overflow:' }
+          { id: 'overflow', label: 'overflow:' },
+          { id: 'overflow_bytes', label: 'overflow bytes:' }
         ]
       });
       scratchContainer.innerHTML = scratchArenaGauge.render();
@@ -2419,7 +2462,10 @@
         showGauge: true,
         showGrid: true,
         collapsibleGrid: true,
-        markers: PoolWidget.Markers.heapMarkers({ thresholdLabel: 'GC', thresholdPosition: 75 }),
+        markers: PoolWidget.Markers.heapMarkers({
+          hwmFormat: 'count', hwmLabelSuffix: ' obj',
+          thresholdLabel: 'gc', thresholdPosition: 75
+        }),
         stats: [
           { id: 'objects', label: 'objects:' },
           { id: 'hwm', label: 'hwm:', suffix: '%' }
@@ -2435,7 +2481,10 @@
         variant: 'compact',
         showGauge: true,
         showGrid: false,
-        markers: PoolWidget.Markers.heapMarkers({ thresholdLabel: 'GC', thresholdPosition: 75 }),
+        markers: PoolWidget.Markers.heapMarkers({
+          hwmFormat: 'bytes',
+          thresholdLabel: 'gc', thresholdPosition: 75
+        }),
         stats: [
           { id: 'peak', label: 'peak:' },
           { id: 'hwm', label: 'hwm:', suffix: '%' }
@@ -2922,11 +2971,6 @@
               warnings.push({ name: arena.name, pct: Math.round(pct) });
             }
           }
-
-          // Check for overflow fallbacks
-          if (arena.overflow > 0) {
-            critical.push({ name: arena.name + ' fallback', pct: null, overflow: arena.overflow });
-          }
         });
       }
 
@@ -3065,7 +3109,7 @@
       var slabData = Object.assign({}, slab);
       if (slab.hwm !== undefined && slab.total > 0) {
         var hwmPct = (slab.hwm / slab.total) * 100;
-        slabData.markers = { hwm: hwmPct };
+        slabData.markers = { hwm: { position: hwmPct, value: slab.hwm } };
       }
 
       var widgets = PoolWidget.getAll(slab.slabKey || slab.name);
@@ -3144,6 +3188,7 @@
       var usedStr = this.formatBytes(used);
       var capacityStr = this.formatBytes(capacity);
       var overflow = arena.overflow_fallbacks || arena.overflow || 0;
+      var overflowBytes = arena.overflow_bytes || 0;
 
       // Update scratch arena using PoolWidget
       if (arena.name === 'scratch' && scratchArenaGauge) {
@@ -3153,11 +3198,12 @@
           usedFormatted: usedStr,
           totalFormatted: capacityStr,
           markers: {
-            hwm: hwmPercentage
+            hwm: { position: hwmPercentage, value: hwm }
           },
           stats: {
             hwm: this.formatBytes(hwm),
-            overflow: overflow > 0 ? overflow : '0'
+            overflow: overflow > 0 ? overflow : '0',
+            overflow_bytes: overflowBytes > 0 ? this.formatBytes(overflowBytes) : '0'
           }
         });
 
@@ -3226,8 +3272,8 @@
           usedFormatted: fmtBytes(slabUsed),
           totalFormatted: fmtBytes(slabTotal),
           markers: {
-            hwm: slabHwmPct,
-            threshold: { position: thresholdPct }
+            hwm: { position: slabHwmPct, value: slabPeakObjects },
+            threshold: { position: thresholdPct, value: thresholdPct }
           },
           stats: {
             objects: (slab.objects_used || 0).toLocaleString() + '/' + (slab.objects_total || 0).toLocaleString(),
@@ -3245,8 +3291,8 @@
           usedFormatted: fmtBytes(mallocUsed),
           totalFormatted: fmtBytes(mallocLimit),
           markers: {
-            hwm: mallocHwmPct,
-            threshold: { position: thresholdPct }
+            hwm: { position: mallocHwmPct, value: mallocPeakBytes },
+            threshold: { position: thresholdPct, value: thresholdPct }
           },
           stats: {
             peak: fmtBytes(mallocPeakBytes),

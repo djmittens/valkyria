@@ -79,6 +79,7 @@ typedef struct valk_mem_snapshot {
     size_t capacity_bytes;
     size_t high_water_mark;
     size_t overflow_fallbacks;
+    size_t overflow_bytes;
   } arenas[16];
   size_t arena_count;
 

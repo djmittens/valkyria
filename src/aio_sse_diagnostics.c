@@ -471,6 +471,8 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
         scratch->stats.high_water_mark;
     snapshot->arenas[arena_idx].overflow_fallbacks =
         scratch->stats.overflow_fallbacks;
+    snapshot->arenas[arena_idx].overflow_bytes =
+        scratch->stats.overflow_bytes;
     arena_idx++;
   }
 
@@ -717,11 +719,12 @@ int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf,
     n = snprintf(
         p, end - p,
         "{\"name\":\"%s\",\"used\":%zu,\"capacity\":%zu,\"hwm\":%zu,"
-        "\"overflow\":%zu}",
+        "\"overflow\":%zu,\"overflow_bytes\":%zu}",
         snapshot->arenas[i].name, snapshot->arenas[i].used_bytes,
         snapshot->arenas[i].capacity_bytes,
         snapshot->arenas[i].high_water_mark,
-        snapshot->arenas[i].overflow_fallbacks);
+        snapshot->arenas[i].overflow_fallbacks,
+        snapshot->arenas[i].overflow_bytes);
 
     if (n < 0 || n >= end - p) return -1;
     p += n;
@@ -905,11 +908,12 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
     n = snprintf(
         p, end - p,
         "{\"name\":\"%s\",\"used\":%zu,\"capacity\":%zu,\"hwm\":%zu,"
-        "\"overflow\":%zu}",
+        "\"overflow\":%zu,\"overflow_bytes\":%zu}",
         snapshot->arenas[i].name, snapshot->arenas[i].used_bytes,
         snapshot->arenas[i].capacity_bytes,
         snapshot->arenas[i].high_water_mark,
-        snapshot->arenas[i].overflow_fallbacks);
+        snapshot->arenas[i].overflow_fallbacks,
+        snapshot->arenas[i].overflow_bytes);
 
     if (n < 0 || n >= end - p) return -1;
     p += n;
@@ -1667,11 +1671,12 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
     n = snprintf(
         p, end - p,
         "{\"name\":\"%s\",\"used\":%zu,\"capacity\":%zu,\"hwm\":%zu,"
-        "\"overflow\":%zu}",
+        "\"overflow\":%zu,\"overflow_bytes\":%zu}",
         snapshot.arenas[i].name, snapshot.arenas[i].used_bytes,
         snapshot.arenas[i].capacity_bytes,
         snapshot.arenas[i].high_water_mark,
-        snapshot.arenas[i].overflow_fallbacks);
+        snapshot.arenas[i].overflow_fallbacks,
+        snapshot.arenas[i].overflow_bytes);
 
     if (n < 0 || n >= end - p) goto cleanup;
     p += n;

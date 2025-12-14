@@ -5,14 +5,36 @@
   <a href="#main-content" class="skip-link">Skip to main content</a>
 
   <header role="banner" aria-label="Dashboard header">
-    <div class="logo">
-      <div class="logo-icon" aria-hidden="true">V</div>
-      <div class="logo-text">Valkyria <span>Dashboard</span></div>
+    <div class="header-left">
+      <div class="logo">
+        <div class="logo-icon" aria-hidden="true">V</div>
+        <div class="logo-text">Valkyria <span>Dashboard</span></div>
+      </div>
+      <div class="status-indicator" role="status" aria-live="polite" id="global-status" title="Connection status">
+        <span class="status-dot" aria-hidden="true"></span>
+      </div>
     </div>
-    <div class="status-badge" role="status" aria-live="polite" id="global-status" title="Dashboard connection status. Green indicates live metrics streaming. Red indicates connection failure - metrics may be stale.">
-      <span class="pulse" aria-hidden="true"></span>
-      <span class="status-icon" aria-hidden="true">✓</span>
-      <span id="global-status-text">Connecting...</span>
+    <div class="header-metrics" aria-label="System health metrics">
+      <div class="header-metric" title="Requests per second">
+        <div class="header-metric-spark" id="spark-request-rate"></div>
+        <span class="header-metric-value" id="health-request-rate">--</span>
+        <span class="header-metric-label">req/s</span>
+      </div>
+      <div class="header-metric" title="Error rate">
+        <div class="header-metric-spark" id="spark-error-rate"></div>
+        <span class="header-metric-value" id="health-error-rate">--</span>
+        <span class="header-metric-label">% err</span>
+      </div>
+      <div class="header-metric" title="Average latency">
+        <div class="header-metric-spark" id="spark-latency"></div>
+        <span class="header-metric-value" id="health-avg-latency">--</span>
+        <span class="header-metric-label">ms</span>
+      </div>
+      <div class="header-metric" title="Heap usage">
+        <div class="header-metric-spark" id="spark-heap"></div>
+        <span class="header-metric-value" id="health-heap-pct">--</span>
+        <span class="header-metric-label">% heap</span>
+      </div>
     </div>
   </header>
 
@@ -36,41 +58,11 @@
       <span class="capacity-warning-text">Memory pool(s) approaching capacity</span>
     </div>
 
-    <!-- ==================== HEALTH OVERVIEW (Compact Bar) ==================== -->
-    <section class="health-bar-compact" aria-label="System health metrics">
-      <div class="health-metric" title="Requests per second across all HTTP servers">
-        <div class="health-metric-spark" id="spark-request-rate"></div>
-        <span class="health-metric-label">Req/s</span>
-        <span class="health-metric-value" id="health-request-rate">--</span>
-      </div>
-      <div class="health-divider"></div>
-      <div class="health-metric" title="Error rate (4xx + 5xx responses)">
-        <div class="health-metric-spark" id="spark-error-rate"></div>
-        <span class="health-metric-label">Err</span>
-        <span class="health-metric-value" id="health-error-rate">--</span>
-        <span class="health-metric-unit">%</span>
-      </div>
-      <div class="health-divider"></div>
-      <div class="health-metric" title="Average response latency">
-        <div class="health-metric-spark" id="spark-latency"></div>
-        <span class="health-metric-label">Lat</span>
-        <span class="health-metric-value" id="health-avg-latency">--</span>
-        <span class="health-metric-unit">ms</span>
-      </div>
-      <div class="health-divider"></div>
-      <div class="health-metric" title="GC heap memory utilization">
-        <div class="health-metric-spark" id="spark-heap"></div>
-        <span class="health-metric-label">Heap</span>
-        <span class="health-metric-value" id="health-heap-pct">--</span>
-        <span class="health-metric-unit">%</span>
-      </div>
-    </section>
-
-    <!-- ==================== VM METRICS ==================== -->
-    <section class="section-group vm-section" aria-labelledby="vm-section-title">
+    <!-- ==================== RUNTIME METRICS ==================== -->
+    <section class="section-group runtime-section" aria-labelledby="runtime-section-title">
       <div class="section-header">
-        <div class="section-icon vm" aria-hidden="true">VM</div>
-        <h2 class="section-title" id="vm-section-title">Virtual Machine</h2>
+        <div class="section-icon runtime" aria-hidden="true">RT</div>
+        <h2 class="section-title" id="runtime-section-title">Runtime</h2>
         <span class="section-subtitle">Interpreter, GC, and Memory</span>
         <div class="section-badges" aria-label="Section status">
           <span class="section-badge" id="vm-gc-badge">-- cycles</span>
@@ -166,9 +158,9 @@
         </article>
       </div>
 
-      <!-- VM Memory (Consolidated) -->
+      <!-- Runtime Memory (Consolidated) -->
       <div class="subsection-header">
-        <h3 class="subsection-title">VM Memory</h3>
+        <h3 class="subsection-title">Memory</h3>
         <div class="section-badges">
           <span class="section-badge">
             <span class="sse-dot"></span> Live
@@ -213,11 +205,11 @@
               <!-- Slab and Malloc PoolWidgets initialized by JS -->
             </div>
             <!-- Shared legend for both tiers -->
-            <div class="pool-gauge-legend" id="heap-legend">
-              <span class="pool-gauge-legend-item"><span class="pool-gauge-legend-bar" style="background: linear-gradient(90deg, var(--color-cyan), var(--color-warning))"></span>current</span>
-              <span class="pool-gauge-legend-item"><span class="pool-gauge-legend-marker" style="background: var(--color-info)"></span>high water mark</span>
-              <span class="pool-gauge-legend-item"><span class="pool-gauge-legend-marker" style="background: var(--color-error)"></span>gc threshold</span>
-              <span class="pool-gauge-legend-item" style="margin-left: auto; font-family: var(--font-mono);">reclaimed: <span id="heap-reclaimed">--</span></span>
+            <div class="pool-widget-legend" id="heap-legend">
+              <span class="pool-widget-legend-item"><span class="pool-widget-legend-bar" style="background: linear-gradient(90deg, var(--color-cyan), var(--color-warning))"></span>current</span>
+              <span class="pool-widget-legend-item"><span class="pool-widget-legend-marker" style="background: var(--color-info)"></span>high water mark</span>
+              <span class="pool-widget-legend-item"><span class="pool-widget-legend-marker" style="background: var(--color-error)"></span>gc threshold</span>
+              <span class="pool-widget-legend-item" style="margin-left: auto; font-family: var(--font-mono);">reclaimed: <span id="heap-reclaimed">--</span></span>
             </div>
           </div>
         </div>
