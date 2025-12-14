@@ -97,6 +97,12 @@ valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold, size_t hard
     valk_slab_init(heap->lval_slab, slab_item_size, num_lvals);
   }
 
+  // Initialize percentage-based GC tuning with sensible defaults
+  heap->gc_threshold_pct = 75;    // Trigger GC at 75% heap usage
+  heap->gc_target_pct = 50;       // Informational: aim to be below 50% after GC
+  heap->min_gc_interval_ms = 1000; // At most one GC per second
+  heap->last_gc_time_us = 0;
+
   return heap;
 }
 
@@ -115,9 +121,62 @@ void valk_gc_malloc_set_root(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env)
   heap->root_env = root_env;
 }
 
+// Get heap usage percentages for both tiers
+// Returns the MAX of slab% and malloc% - triggers on whichever is fuller
+uint8_t valk_gc_heap_usage_pct(valk_gc_malloc_heap_t* heap) {
+  if (!heap) return 0;
+
+  // Calculate slab usage percentage
+  uint8_t slab_pct = 0;
+  if (heap->lval_slab != NULL && heap->lval_slab->numItems > 0) {
+    size_t slab_used = heap->lval_slab->numItems - heap->lval_slab->numFree;
+    slab_pct = (uint8_t)((slab_used * 100) / heap->lval_slab->numItems);
+  }
+
+  // Calculate malloc usage percentage
+  uint8_t malloc_pct = 0;
+  if (heap->hard_limit > 0) {
+    malloc_pct = (uint8_t)((heap->allocated_bytes * 100) / heap->hard_limit);
+    if (malloc_pct > 100) malloc_pct = 100;
+  }
+
+  // Return the higher of the two - GC triggers if EITHER tier is full
+  return slab_pct > malloc_pct ? slab_pct : malloc_pct;
+}
+
+// Configure GC thresholds
+void valk_gc_set_thresholds(valk_gc_malloc_heap_t* heap,
+                            uint8_t threshold_pct,
+                            uint8_t target_pct,
+                            uint32_t min_interval_ms) {
+  if (!heap) return;
+  heap->gc_threshold_pct = threshold_pct > 0 ? threshold_pct : 75;
+  heap->gc_target_pct = target_pct > 0 ? target_pct : 50;
+  heap->min_gc_interval_ms = min_interval_ms;
+}
+
 // Check if GC should run
+// Uses percentage-based threshold considering both slab and malloc usage
+// Also rate-limits to avoid GC thrashing
 bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap) {
-  return heap->allocated_bytes > heap->gc_threshold;
+  if (!heap) return false;
+
+  // Check percentage threshold
+  uint8_t usage_pct = valk_gc_heap_usage_pct(heap);
+  if (usage_pct < heap->gc_threshold_pct) {
+    return false;  // Below threshold, no GC needed
+  }
+
+  // Above threshold - check rate limiting
+  if (heap->min_gc_interval_ms > 0 && heap->last_gc_time_us > 0) {
+    uint64_t now_us = uv_hrtime() / 1000;
+    uint64_t elapsed_ms = (now_us - heap->last_gc_time_us) / 1000;
+    if (elapsed_ms < heap->min_gc_interval_ms) {
+      return false;  // Too soon since last GC
+    }
+  }
+
+  return true;
 }
 
 // Allocate from GC heap with header-based tracking
@@ -1167,9 +1226,17 @@ size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* addition
     }
   }
 
-  VALK_INFO("GC: Complete - reclaimed %zu bytes (before: %zu, after: %zu, %.1f%% freed), pause: %llu us",
+  // Record GC timestamp for rate limiting
+  heap->last_gc_time_us = end_time_us;
+
+  // Calculate new usage percentage for logging
+  uint8_t usage_pct = valk_gc_heap_usage_pct(heap);
+
+  VALK_INFO("GC: Complete - reclaimed %zu bytes (before: %zu, after: %zu, %.1f%% freed), "
+            "heap now at %u%%, pause: %llu us",
             reclaimed, before, after,
-            100.0 * reclaimed / before, (unsigned long long)pause_us);
+            before > 0 ? 100.0 * reclaimed / before : 0.0,
+            usage_pct, (unsigned long long)pause_us);
 
   return reclaimed;
 }

@@ -3803,8 +3803,8 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
   return ref;
 }
 
-// aio/run: (aio/run aio-system) -> never returns
-// Runs the event loop (blocks until event loop stops)
+// aio/run: (aio/run aio-system) -> nil (returns when system shuts down)
+// Runs until the AIO system shuts down, periodically running GC
 static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
@@ -3814,12 +3814,18 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
               "Argument must be aio_system");
 
-  // The event loop is already running in a background thread (created in
-  // valk_aio_start). We just need to keep the main thread alive. In a real
-  // application, this would wait for a signal or condition. For now, just sleep
-  // forever (Ctrl+C will stop it).
-  while (1) {
-    uv_sleep(1000);
+  valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
+  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+
+  // Main loop: sleep, check shutdown, run GC if needed
+  // The event loop runs in a background thread (created in valk_aio_start)
+  while (!valk_aio_is_shutting_down(sys)) {
+    uv_sleep(100);  // Check more frequently (100ms instead of 1s)
+
+    // Run GC if heap is above threshold
+    if (heap && valk_gc_malloc_should_collect(heap)) {
+      valk_gc_malloc_collect(heap, NULL);
+    }
   }
 
   return valk_lval_nil();

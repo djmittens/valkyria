@@ -592,6 +592,7 @@ typedef struct valk_aio_system {
   valk_aio_system_stats_t system_stats;
   valk_http_clients_registry_t http_clients;
   valk_gc_malloc_heap_t* gc_heap;  // For metrics access
+  valk_mem_arena_t* scratch_arena;  // Main thread scratch arena for diagnostics
   valk_owner_registry_t owner_registry;  // Server/client attribution for diagnostics
   valk_sse_stream_registry_t sse_registry;  // Global SSE stream registry
 #endif
@@ -3710,6 +3711,8 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   atomic_store(&sys->http_clients.count, 0);
   // Store GC heap pointer for metrics access
   sys->gc_heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  // Store scratch arena pointer for diagnostics (thread-local in main thread)
+  sys->scratch_arena = valk_thread_ctx.scratch;
   // Initialize owner registry for connection attribution
   memset(&sys->owner_registry, 0, sizeof(sys->owner_registry));
   // Initialize global SSE stream registry
@@ -3732,7 +3735,13 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   return sys;
 }
 
+bool valk_aio_is_shutting_down(valk_aio_system_t *sys) {
+  if (!sys) return true;
+  return sys->shuttingDown;
+}
+
 void valk_aio_stop(valk_aio_system_t *sys) {
+  sys->shuttingDown = true;
   uv_async_send(&sys->stopperHandle->uv.task);
   // printf("Processing the stopper\n");
   // fflush(stdout);
@@ -3853,6 +3862,12 @@ void valk_aio_set_name(valk_aio_system_t* sys, const char* name) {
 valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys) {
   if (!sys) return nullptr;
   return sys->gc_heap;
+}
+
+// Get scratch arena from AIO system (for diagnostics)
+valk_mem_arena_t* valk_aio_get_scratch_arena(valk_aio_system_t* sys) {
+  if (!sys) return nullptr;
+  return sys->scratch_arena;
 }
 
 // Get SSE stream registry from AIO system

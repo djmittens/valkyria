@@ -454,16 +454,17 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
   // Collect arena allocators
   size_t arena_idx = 0;
 
-  // Scratch Arena (from thread context)
-  if (valk_thread_ctx.scratch && arena_idx < 16) {
+  // Scratch Arena (from AIO system, which stores main thread's scratch arena)
+  valk_mem_arena_t *scratch = valk_aio_get_scratch_arena(aio);
+  if (scratch && arena_idx < 16) {
     snapshot->arenas[arena_idx].name = (const char *)"scratch";
     snapshot->arenas[arena_idx].used_bytes =
-        __atomic_load_n(&valk_thread_ctx.scratch->offset, __ATOMIC_ACQUIRE);
-    snapshot->arenas[arena_idx].capacity_bytes = valk_thread_ctx.scratch->capacity;
+        __atomic_load_n(&scratch->offset, __ATOMIC_ACQUIRE);
+    snapshot->arenas[arena_idx].capacity_bytes = scratch->capacity;
     snapshot->arenas[arena_idx].high_water_mark =
-        valk_thread_ctx.scratch->stats.high_water_mark;
+        scratch->stats.high_water_mark;
     snapshot->arenas[arena_idx].overflow_fallbacks =
-        valk_thread_ctx.scratch->stats.overflow_fallbacks;
+        scratch->stats.overflow_fallbacks;
     arena_idx++;
   }
 
@@ -1377,12 +1378,32 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
 
   // ===== Metrics section (delta values) =====
 #ifdef VALK_METRICS_ENABLED
-  if (has_aio_metric_changes || has_modular_metric_changes) {
+  // Include metrics section if GC changed (need VM metrics for UI) or other metrics changed
+  if (has_aio_metric_changes || has_modular_metric_changes || gc_changed) {
     n = snprintf(p, end - p, "%s\"metrics\":{", need_comma ? "," : "");
     if (n < 0 || n >= end - p) return -1;
     p += n;
 
     bool metrics_need_comma = false;
+
+    // VM metrics (include when GC changed so dashboard can update GC counters)
+    if (gc_changed) {
+      valk_vm_metrics_t vm_metrics = {0};
+      valk_gc_malloc_heap_t *gc_heap = valk_aio_get_gc_heap(aio);
+      uv_loop_t *loop = valk_aio_get_event_loop(aio);
+      valk_vm_metrics_collect(&vm_metrics, gc_heap, loop);
+
+      n = snprintf(p, end - p,
+                   "\"vm\":{\"gc\":{\"cycles_total\":%lu,\"pause_us_total\":%lu,"
+                   "\"pause_us_max\":%lu,\"reclaimed_bytes\":%lu,"
+                   "\"heap_used_bytes\":%zu,\"heap_total_bytes\":%zu}}",
+                   vm_metrics.gc_cycles, vm_metrics.gc_pause_us_total,
+                   vm_metrics.gc_pause_us_max, vm_metrics.gc_reclaimed_bytes,
+                   vm_metrics.gc_heap_used, vm_metrics.gc_heap_total);
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+      metrics_need_comma = true;
+    }
 
     // AIO metrics delta
     if (has_aio_metric_changes && conn) {

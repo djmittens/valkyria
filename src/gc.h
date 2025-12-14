@@ -46,8 +46,8 @@ typedef struct {
 // GC malloc heap - malloc-based allocator with mark & sweep collection
 typedef struct {
   valk_mem_allocator_e type;  // VALK_ALLOC_GC_HEAP
-  size_t allocated_bytes;     // Current memory usage
-  size_t gc_threshold;        // Trigger GC when allocated exceeds this
+  size_t allocated_bytes;     // Current malloc memory usage (excludes slab)
+  size_t gc_threshold;        // Legacy: absolute threshold (deprecated, use gc_threshold_pct)
   size_t hard_limit;          // Absolute maximum heap size (abort if exceeded)
   size_t num_collections;     // Number of GC runs performed
   bool in_emergency_gc;       // Prevent recursive emergency GC
@@ -55,10 +55,16 @@ typedef struct {
   valk_lenv_t* root_env;      // Root environment for marking
   valk_gc_header_t* free_list;  // Free-list for fast reuse of swept objects
   size_t free_list_size;      // Number of objects in free list
-  valk_slab_t* lval_slab;  // Fast slab allocator for valk_lval_t objects
+  valk_slab_t* lval_slab;     // Fast slab allocator for valk_lval_t objects
   size_t lval_size;           // Size of valk_lval_t for slab allocation
   valk_gc_heap_stats_t stats; // Telemetry statistics
   valk_gc_runtime_metrics_t runtime_metrics; // Runtime metrics for observability
+
+  // Percentage-based GC tuning (simple model)
+  uint8_t gc_threshold_pct;   // Trigger GC when heap usage exceeds this % (default: 75)
+  uint8_t gc_target_pct;      // After GC, aim to be below this % (default: 50)
+  uint64_t last_gc_time_us;   // Timestamp of last GC (for rate limiting)
+  uint32_t min_gc_interval_ms; // Minimum ms between GC cycles (default: 1000)
 } valk_gc_malloc_heap_t;
 
 // Initialize GC malloc heap with threshold and hard limit
@@ -78,8 +84,21 @@ void valk_gc_malloc_set_root(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env)
 // If additional_root is non-NULL, it will be marked in addition to root_env
 size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root);
 
-// Check if GC should run
+// Check if GC should run (considers both slab and malloc usage as percentage)
 bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap);
+
+// Get current heap usage as percentage (0-100)
+// Combined: (slab_used + malloc_used) / (slab_capacity + hard_limit) * 100
+uint8_t valk_gc_heap_usage_pct(valk_gc_malloc_heap_t* heap);
+
+// Configure GC thresholds (call after init, or use defaults)
+// threshold_pct: trigger GC when usage exceeds this (default 75)
+// target_pct: aim to be below this after GC (default 50, informational)
+// min_interval_ms: minimum time between GC cycles (default 1000)
+void valk_gc_set_thresholds(valk_gc_malloc_heap_t* heap,
+                            uint8_t threshold_pct,
+                            uint8_t target_pct,
+                            uint32_t min_interval_ms);
 
 // Print GC statistics
 void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap);

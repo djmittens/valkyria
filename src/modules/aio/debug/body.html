@@ -187,6 +187,37 @@
       </div>
 
       <div class="vm-memory-consolidated">
+        <!-- Scratch Arena -->
+        <div class="memory-block scratch-block">
+          <div class="memory-block-header">
+            <div class="memory-block-title">
+              <span class="memory-icon scratch">S</span>
+              Scratch Arena
+            </div>
+            <div class="memory-block-summary">
+              <span class="pct" id="scratch-pct">0%</span>
+              <span class="usage-detail" id="scratch-usage">0B / 0B</span>
+            </div>
+          </div>
+          <div class="memory-block-body">
+            <div class="arena-gauge" data-arena="scratch"
+                 role="progressbar"
+                 aria-valuenow="0"
+                 aria-valuemin="0"
+                 aria-valuemax="100"
+                 aria-label="Scratch Arena: 0% used">
+              <div class="arena-track">
+                <div class="arena-bar healthy" style="width: 0%;"></div>
+                <div class="arena-hwm" style="left: 0%;"></div>
+              </div>
+            </div>
+            <div class="memory-legend-inline">
+              <div class="legend-item"><div class="legend-dot hwm"></div><span>HWM: <span id="scratch-hwm">--</span></span></div>
+              <div class="legend-item" id="scratch-overflow-item" style="display:none"><span class="overflow-label">Overflow: <span id="scratch-overflow">0</span></span></div>
+            </div>
+          </div>
+        </div>
+
         <!-- GC Heap (LVAL Slab) -->
         <div class="memory-block gc-heap-block">
           <div class="memory-block-header">
@@ -244,36 +275,6 @@
                   <span class="metric-value" id="heap-reclaimed">--</span>
                 </div>
               </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Scratch Arena -->
-        <div class="memory-block scratch-block">
-          <div class="memory-block-header">
-            <div class="memory-block-title">
-              <span class="memory-icon scratch">S</span>
-              Scratch Arena
-            </div>
-            <div class="memory-block-summary">
-              <span class="pct" id="scratch-pct">0%</span>
-              <span class="usage-detail" id="scratch-usage">0B / 0B</span>
-            </div>
-          </div>
-          <div class="memory-block-body">
-            <div class="arena-gauge" data-arena="scratch"
-                 role="progressbar"
-                 aria-valuenow="0"
-                 aria-valuemin="0"
-                 aria-valuemax="100"
-                 aria-label="Scratch Arena: 0% used">
-              <div class="arena-track">
-                <div class="arena-bar healthy" style="width: 0%;"></div>
-                <div class="arena-hwm" style="left: 0%;"></div>
-              </div>
-            </div>
-            <div class="memory-legend-inline">
-              <div class="legend-item"><div class="legend-dot hwm"></div><span>High Water Mark</span></div>
             </div>
           </div>
         </div>

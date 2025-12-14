@@ -1350,9 +1350,16 @@ main[role="main"] {
   .grid-3 { grid-template-columns: repeat(2, 1fr); }
   .memory-slab-grid { grid-template-columns: repeat(2, 1fr); }
 
-  .vm-memory-layout,
-  .vm-memory-consolidated {
+  .vm-memory-layout {
     grid-template-columns: 1fr;
+  }
+
+  .vm-memory-consolidated {
+    flex-direction: column;
+  }
+
+  .vm-memory-consolidated .scratch-block {
+    max-width: none;
   }
 
   .vm-memory-layout .memory-slab-panel.wide,
@@ -1440,7 +1447,11 @@ main[role="main"] {
 
   /* VM memory consolidated stacks */
   .vm-memory-consolidated {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+
+  .vm-memory-consolidated .scratch-block {
+    max-width: none;
   }
 
   /* Reduce padding on mobile */
@@ -1967,9 +1978,9 @@ main[role="main"] {
 
 /* ===== VM MEMORY CONSOLIDATED ===== */
 .vm-memory-consolidated {
-  display: grid;
-  grid-template-columns: 1fr 180px;
+  display: flex;
   gap: var(--space-md);
+  align-items: stretch;
 }
 
 .memory-block {
@@ -2088,7 +2099,35 @@ main[role="main"] {
   flex: 1;
 }
 
-/* Scratch block arena gauge adjustments */
+/* Scratch block - compact inline style */
+.scratch-block {
+  flex: 0 0 auto;
+  min-width: 160px;
+  max-width: 200px;
+}
+
+.scratch-block .memory-block-header {
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.scratch-block .memory-block-title {
+  font-size: 11px;
+}
+
+.scratch-block .memory-icon {
+  width: 18px;
+  height: 18px;
+  font-size: 9px;
+}
+
+.scratch-block .memory-block-summary {
+  font-size: 10px;
+}
+
+.scratch-block .memory-block-body {
+  padding: var(--space-xs) var(--space-sm);
+}
+
 .scratch-block .arena-gauge {
   margin: 0;
   padding: 0;
@@ -2096,7 +2135,20 @@ main[role="main"] {
 }
 
 .scratch-block .arena-track {
-  height: 16px;
+  height: 12px;
+}
+
+.scratch-block .memory-legend-inline {
+  padding: 0;
+  margin-top: var(--space-xs);
+  border-top: none;
+  font-size: 9px;
+}
+
+/* GC heap block takes remaining space */
+.gc-heap-block {
+  flex: 1;
+  min-width: 0;
 }
 
 /* ===== COLLAPSIBLE SERVER CARDS ===== */

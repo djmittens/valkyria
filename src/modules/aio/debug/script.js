@@ -1501,8 +1501,6 @@
           return response.json();
         })
         .then(function(data) {
-          console.log('[MemDiag] Fresh state fetched:', data);
-
           // Store as full state
           self.fullState = {
             memory: data.memory,
@@ -1528,8 +1526,7 @@
 
           return true;
         })
-        .catch(function(error) {
-          console.error('[MemDiag] Failed to fetch fresh state:', error);
+        .catch(function() {
           return false;
         });
     }
@@ -1538,11 +1535,7 @@
       var self = this;
 
       // Fetch fresh state FIRST, then connect SSE
-      this.fetchFreshState().then(function(success) {
-        if (success) {
-          console.log('[MemDiag] Fresh state loaded, connecting SSE for deltas');
-        }
-
+      this.fetchFreshState().then(function() {
         // Connect SSE for updates (whether fresh state succeeded or not)
         var url = '/debug/diagnostics/memory';
         self.eventSource = new EventSource(url);
@@ -1577,8 +1570,6 @@
           if (data.memory) {
             self.handleMemoryUpdate(data.memory);
           }
-
-          console.log('[MemDiag] Full state received');
         });
 
         // Listen for delta diagnostics events (sent after first full event)
@@ -1597,10 +1588,6 @@
         self.eventSource.onopen = function() {
           self.reconnectAttempts = 0;
           self.updateConnectionStatus(true);
-          // Don't clear stored state on reconnect - we already have fresh state
-          // self.fullState = { memory: null, metrics: null };
-          // self.slabStates = {};
-          console.log('[MemDiag] SSE connected (delta mode enabled)');
         };
 
         self.eventSource.onerror = function(e) {
@@ -1618,7 +1605,6 @@
     applyDelta(delta) {
       if (!this.fullState.memory && delta.memory) {
         // No full state yet, can't apply delta - request reconnect
-        console.warn('[MemDiag] Delta received before full state, reconnecting...');
         this.scheduleReconnect();
         return;
       }
@@ -1633,14 +1619,6 @@
         // Apply slab deltas
         if (delta.memory.slabs) {
           delta.memory.slabs.forEach(function(deltaSlab) {
-            // Debug: log delta for bitmap slabs
-            if (deltaSlab.name === 'tcp_buffers' || deltaSlab.name === 'stream_arenas') {
-              console.log('[MemDiag] Delta received for:', deltaSlab.name,
-                'has_bitmap:', deltaSlab.bitmap !== undefined,
-                'used:', deltaSlab.used,
-                'bitmap_sample:', deltaSlab.bitmap ? deltaSlab.bitmap.substring(0, 30) : 'none');
-            }
-
             // Find matching slab in full state
             var fullSlab = null;
             for (var i = 0; i < mem.slabs.length; i++) {
@@ -1713,6 +1691,15 @@
       // Apply metrics deltas
       if (delta.metrics && this.fullState.metrics) {
         var metrics = this.fullState.metrics;
+
+        // Apply VM metrics (GC stats) - these are absolute values
+        if (delta.metrics.vm) {
+          if (!metrics.vm) metrics.vm = {};
+          if (delta.metrics.vm.gc) {
+            if (!metrics.vm.gc) metrics.vm.gc = {};
+            Object.assign(metrics.vm.gc, delta.metrics.vm.gc);
+          }
+        }
 
         if (delta.metrics.aio) {
           if (!metrics.aio) metrics.aio = {};
@@ -1831,18 +1818,12 @@
 
     scheduleReconnect() {
       if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-        console.error('[MemDiag] Max reconnection attempts reached');
         return;
       }
 
       this.reconnectAttempts++;
       // Immediate first reconnect, then exponential backoff
       var delay = this.reconnectAttempts === 1 ? 0 : Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000);
-      if (delay > 0) {
-        console.log('[MemDiag] Reconnecting in ' + delay + 'ms...');
-      } else {
-        console.log('[MemDiag] Reconnecting immediately...');
-      }
 
       var self = this;
       setTimeout(function() {
@@ -2079,7 +2060,6 @@
       }
 
       if (grids.length === 0) {
-        console.warn('[MemDiag] No grid found for slab:', slab.name, 'selector:', selector);
         return;
       }
 
@@ -2117,14 +2097,6 @@
       } else {
         // Binary bitmap for simple slabs
         var bitmap = this.hexToBitArray(slab.bitmap, slab.total);
-        // Debug: log bitmap updates for tcp_buffers and stream_arenas
-        if (slab.name === 'tcp_buffers' || slab.name === 'stream_arenas') {
-          var usedCount = bitmap.filter(function(b) { return b === 1; }).length;
-          console.log('[MemDiag] Bitmap update:', slab.name,
-            'used:', slab.used, 'total:', slab.total,
-            'bitmap_len:', bitmap.length, 'bitmap_used:', usedCount,
-            'bitmap_sample:', slab.bitmap ? slab.bitmap.substring(0, 30) : 'null');
-        }
         requestAnimationFrame(function() {
           if (slab.total > 5000) {
             self.renderAggregatedGrid(grid, bitmap, slab.total, prevStates);
@@ -2143,14 +2115,6 @@
       if (slab.name === 'handles') {
         if (slab.summary && slab.summary.by_owner && ownerMap && ownerMap.length > 0) {
           this.renderOwnerBreakdown(panel, slab.summary.by_owner, slab.used, ownerMap);
-        } else {
-          // Debug: log why owner breakdown isn't rendering
-          console.log('[MemDiag] Owner breakdown skipped:', {
-            hasSummary: !!slab.summary,
-            hasByOwner: !!(slab.summary && slab.summary.by_owner),
-            byOwnerKeys: slab.summary && slab.summary.by_owner ? Object.keys(slab.summary.by_owner) : [],
-            ownerMapLength: ownerMap ? ownerMap.length : 0
-          });
         }
       }
 
@@ -2523,8 +2487,15 @@
       if (arena.name === 'scratch') {
         var pctEl = document.getElementById('scratch-pct');
         var usageEl = document.getElementById('scratch-usage');
+        var hwmValueEl = document.getElementById('scratch-hwm');
+        var overflowEl = document.getElementById('scratch-overflow');
+        var overflowItem = document.getElementById('scratch-overflow-item');
         if (pctEl) pctEl.textContent = percentage.toFixed(0) + '%';
         if (usageEl) usageEl.textContent = usedStr + ' / ' + capacityStr;
+        if (hwmValueEl) hwmValueEl.textContent = this.formatBytes(hwm);
+        var overflow = arena.overflow_fallbacks || arena.overflow || 0;
+        if (overflowEl) overflowEl.textContent = overflow;
+        if (overflowItem) overflowItem.style.display = overflow > 0 ? '' : 'none';
       }
     }
 

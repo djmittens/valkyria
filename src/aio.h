@@ -165,6 +165,9 @@ const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg)
 
 void valk_aio_stop(valk_aio_system_t *sys);
 
+/// @brief Check if the AIO system is shutting down
+bool valk_aio_is_shutting_down(valk_aio_system_t *sys);
+
 valk_future *valk_aio_read_file(valk_aio_system_t *sys, const char *filename);
 
 typedef struct {
@@ -299,6 +302,9 @@ void valk_aio_update_queue_stats(valk_aio_system_t* sys);
 
 // Get GC heap from AIO system (returns NULL if metrics not enabled)
 valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
+
+// Get scratch arena from AIO system (for diagnostics, returns NULL if not available)
+valk_mem_arena_t* valk_aio_get_scratch_arena(valk_aio_system_t* sys);
 
 // Get SSE stream registry from AIO system (returns NULL if metrics not enabled)
 valk_sse_stream_registry_t* valk_aio_get_sse_registry(valk_aio_system_t* sys);
