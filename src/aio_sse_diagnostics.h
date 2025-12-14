@@ -114,6 +114,29 @@ typedef struct valk_mem_snapshot {
     uint64_t gc_cycles;
     uint64_t emergency_collections;
   } gc_heap;
+
+  // Process-level memory (from OS)
+  valk_process_memory_t process;
+
+  // Aggregated breakdown by subsystem (for overview widget)
+  // Each subsystem has capacity (mapped) and used (resident) bytes
+  struct {
+    size_t scratch_arena_used;
+    size_t scratch_arena_capacity;
+    size_t gc_heap_used;
+    size_t gc_heap_capacity;
+    size_t gc_lval_slab_used;
+    size_t gc_lval_slab_capacity;
+    size_t gc_lenv_slab_used;
+    size_t gc_lenv_slab_capacity;
+    size_t gc_malloc_used;         // Malloc has no fixed capacity
+    size_t aio_slabs_used;
+    size_t aio_slabs_capacity;
+    size_t metrics_used;           // Metrics registry active slots
+    size_t metrics_capacity;       // Metrics registry total size
+    size_t untracked_bytes;        // process.rss - tracked used (resident but untracked)
+    size_t untracked_reserved;     // process.vms - tracked capacities (mapped but untracked)
+  } breakdown;
 } valk_mem_snapshot_t;
 
 // Forward declare state struct

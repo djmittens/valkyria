@@ -3145,8 +3145,122 @@
         self.updateGCStats(data.gc);
       }
 
+      // Update process memory overview
+      if (data.process && data.breakdown) {
+        self.updateProcessMemory(data.process, data.breakdown);
+      }
+
       // Update capacity warning banner
       this.updateCapacityWarnings(warnings, critical);
+    }
+
+    // Update process memory overview widget
+    updateProcessMemory(process, breakdown) {
+      var rss = process.rss || 0;
+      var vms = process.vms || 0;
+      var systemTotal = process.system_total || 0;
+
+      // Update inline gauge (memory pressure: RSS as % of system RAM)
+      var pct = systemTotal > 0 ? (rss / systemTotal) * 100 : 0;
+      var fillEl = document.getElementById('process-gauge-fill');
+      if (fillEl) fillEl.style.width = Math.min(pct, 100) + '%';
+
+      // Update RSS and VMS text displays
+      var rssEl = document.getElementById('process-rss-text');
+      if (rssEl) rssEl.textContent = fmtBytes(rss);
+
+      var vmsTextEl = document.getElementById('process-vms-text');
+      if (vmsTextEl) vmsTextEl.textContent = fmtBytes(vms);
+
+      // Get capacity and used for each subsystem
+      var gcUsed = breakdown.gc_used || 0;
+      var gcCap = breakdown.gc_cap || 0;
+      var scratchUsed = breakdown.scratch_used || 0;
+      var scratchCap = breakdown.scratch_cap || 0;
+      var aioUsed = breakdown.aio_used || 0;
+      var aioCap = breakdown.aio_cap || 0;
+      var metricsUsed = breakdown.metrics_used || 0;
+      var metricsCap = breakdown.metrics_cap || 0;
+      var untracked = breakdown.untracked || 0;           // RSS - tracked used
+      var untrackedReserved = breakdown.untracked_reserved || 0;  // VMS - tracked caps
+
+      // VMS determines total bar width - segment widths are capacity as % of VMS
+      // This makes the stacked bar represent the full virtual address space
+      var gcWidthPct = vms > 0 ? (gcCap / vms) * 100 : 0;
+      var scratchWidthPct = vms > 0 ? (scratchCap / vms) * 100 : 0;
+      var aioWidthPct = vms > 0 ? (aioCap / vms) * 100 : 0;
+      var metricsWidthPct = vms > 0 ? (metricsCap / vms) * 100 : 0;
+      var untrackedWidthPct = vms > 0 ? (untrackedReserved / vms) * 100 : 0;
+
+      // Calculate fill percentages (used as % of capacity = resident as % of reserved)
+      var gcFillPct = gcCap > 0 ? (gcUsed / gcCap) * 100 : 0;
+      var scratchFillPct = scratchCap > 0 ? (scratchUsed / scratchCap) * 100 : 0;
+      var aioFillPct = aioCap > 0 ? (aioUsed / aioCap) * 100 : 0;
+      var metricsFillPct = metricsCap > 0 ? (metricsUsed / metricsCap) * 100 : 0;
+      var untrackedFillPct = untrackedReserved > 0 ? (untracked / untrackedReserved) * 100 : 0;
+
+      // Update stacked bar segment widths (based on capacity as % of VMS)
+      this.setSegmentWidth('segment-gc-heap', gcWidthPct);
+      this.setSegmentWidth('segment-scratch', scratchWidthPct);
+      this.setSegmentWidth('segment-aio', aioWidthPct);
+      this.setSegmentWidth('segment-metrics', metricsWidthPct);
+      this.setSegmentWidth('segment-untracked', untrackedWidthPct);
+
+      // Update segment fills (based on utilization = resident/reserved)
+      this.setSegmentFill('fill-gc-heap', gcFillPct);
+      this.setSegmentFill('fill-scratch', scratchFillPct);
+      this.setSegmentFill('fill-aio', aioFillPct);
+      this.setSegmentFill('fill-metrics', metricsFillPct);
+      this.setSegmentFill('fill-untracked', untrackedFillPct);
+
+      // Update legend values (used / capacity and utilization %)
+      this.updateLegendItemWithCap('gc-heap', gcUsed, gcCap, gcFillPct);
+      this.updateLegendItemWithCap('scratch', scratchUsed, scratchCap, scratchFillPct);
+      this.updateLegendItemWithCap('aio', aioUsed, aioCap, aioFillPct);
+      this.updateLegendItemWithCap('metrics', metricsUsed, metricsCap, metricsFillPct);
+      // Untracked: show resident / reserved
+      this.updateLegendItemWithCap('untracked', untracked, untrackedReserved, untrackedFillPct);
+
+      // Update GC sub-breakdown values
+      var lvalEl = document.getElementById('breakdown-gc-lval-value');
+      if (lvalEl) lvalEl.textContent = fmtBytes(breakdown.gc_lval_used || 0);
+
+      var lenvEl = document.getElementById('breakdown-gc-lenv-value');
+      if (lenvEl) lenvEl.textContent = fmtBytes(breakdown.gc_lenv_used || 0);
+
+      var mallocEl = document.getElementById('breakdown-gc-malloc-value');
+      if (mallocEl) mallocEl.textContent = fmtBytes(breakdown.gc_malloc || 0);
+
+      // Update footer stats
+      var vmsEl = document.getElementById('process-vms');
+      if (vmsEl) vmsEl.textContent = fmtBytes(vms);
+
+      var pfMinorEl = document.getElementById('process-pf-minor');
+      if (pfMinorEl) pfMinorEl.textContent = fmtCompact(process.page_faults_minor || 0);
+
+      var pfMajorEl = document.getElementById('process-pf-major');
+      if (pfMajorEl) pfMajorEl.textContent = fmtCompact(process.page_faults_major || 0);
+    }
+
+    setSegmentWidth(id, pct) {
+      var el = document.getElementById(id);
+      if (el) el.style.width = pct + '%';
+    }
+
+    setSegmentFill(id, pct) {
+      var el = document.getElementById(id);
+      if (el) el.style.width = Math.min(pct, 100) + '%';
+    }
+
+    updateLegendItemWithCap(name, used, cap, utilPct) {
+      var valueEl = document.getElementById('breakdown-' + name + '-value');
+      if (valueEl) valueEl.textContent = fmtBytes(used);
+
+      var capEl = document.getElementById('breakdown-' + name + '-cap');
+      if (capEl) capEl.textContent = fmtBytes(cap);
+
+      var pctEl = document.getElementById('breakdown-' + name + '-pct');
+      if (pctEl) pctEl.textContent = '(' + Math.round(utilPct) + '%)';
     }
 
     updateCapacityWarnings(warnings, critical) {
@@ -3743,6 +3857,41 @@
     } catch(e) {}
   };
 
+  // Toggle process memory breakdown
+  window.toggleBreakdown = function() {
+    var breakdown = document.getElementById('process-breakdown');
+    var toggle = document.querySelector('.breakdown-toggle');
+    if (!breakdown) return;
+
+    var isCollapsed = breakdown.classList.contains('collapsed');
+
+    if (isCollapsed) {
+      breakdown.classList.remove('collapsed');
+      if (toggle) toggle.setAttribute('aria-expanded', 'true');
+    } else {
+      breakdown.classList.add('collapsed');
+      if (toggle) toggle.setAttribute('aria-expanded', 'false');
+    }
+
+    // Save preference
+    try {
+      localStorage.setItem('dashboard-breakdown-expanded', isCollapsed ? 'true' : 'false');
+    } catch(e) {}
+  };
+
+  // Restore breakdown state on load
+  function restoreBreakdownState() {
+    try {
+      var expanded = localStorage.getItem('dashboard-breakdown-expanded') === 'true';
+      if (expanded) {
+        var breakdown = document.getElementById('process-breakdown');
+        var toggle = document.querySelector('.breakdown-toggle');
+        if (breakdown) breakdown.classList.remove('collapsed');
+        if (toggle) toggle.setAttribute('aria-expanded', 'true');
+      }
+    } catch(e) {}
+  }
+
   // Restore panel states on load
   function restorePanelStates() {
     try {
@@ -3774,4 +3923,5 @@
   });
 
   document.addEventListener('DOMContentLoaded', restorePanelStates);
+  document.addEventListener('DOMContentLoaded', restoreBreakdownState);
 })();

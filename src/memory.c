@@ -521,6 +521,87 @@ bool valk_ptr_in_arena(valk_mem_arena_t *arena, void *ptr) {
   return p >= start && p < end;
 }
 
+// Collect process-level memory stats from the OS
+#if defined(__linux__)
+#include <sys/resource.h>
+#include <unistd.h>
+
+void valk_process_memory_collect(valk_process_memory_t *pm) {
+  if (pm == NULL) return;
+  memset(pm, 0, sizeof(*pm));
+
+  long page_size = sysconf(_SC_PAGESIZE);
+
+  // System total RAM
+  long phys_pages = sysconf(_SC_PHYS_PAGES);
+  if (phys_pages > 0 && page_size > 0) {
+    pm->system_total_bytes = (size_t)phys_pages * page_size;
+  }
+
+  // Read from /proc/self/statm (fast, minimal parsing)
+  // Format: size resident shared text lib data dirty (all in pages)
+  FILE *f = fopen("/proc/self/statm", "r");
+  if (f) {
+    unsigned long size, resident, shared, text, lib, data, dirty;
+    if (fscanf(f, "%lu %lu %lu %lu %lu %lu %lu",
+               &size, &resident, &shared, &text, &lib, &data, &dirty) >= 4) {
+      pm->vms_bytes = size * page_size;
+      pm->rss_bytes = resident * page_size;
+      pm->shared_bytes = shared * page_size;
+      pm->data_bytes = data * page_size;
+    }
+    fclose(f);
+  }
+
+  // Page faults from getrusage
+  struct rusage ru;
+  if (getrusage(RUSAGE_SELF, &ru) == 0) {
+    pm->page_faults_minor = ru.ru_minflt;
+    pm->page_faults_major = ru.ru_majflt;
+  }
+}
+
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#include <sys/resource.h>
+#include <sys/sysctl.h>
+
+void valk_process_memory_collect(valk_process_memory_t *pm) {
+  if (pm == NULL) return;
+  memset(pm, 0, sizeof(*pm));
+
+  // System total RAM via sysctl
+  int mib[2] = {CTL_HW, HW_MEMSIZE};
+  uint64_t memsize = 0;
+  size_t len = sizeof(memsize);
+  if (sysctl(mib, 2, &memsize, &len, NULL, 0) == 0) {
+    pm->system_total_bytes = (size_t)memsize;
+  }
+
+  mach_task_basic_info_data_t info;
+  mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+
+  if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
+                (task_info_t)&info, &count) == KERN_SUCCESS) {
+    pm->rss_bytes = info.resident_size;
+    pm->vms_bytes = info.virtual_size;
+  }
+
+  struct rusage ru;
+  if (getrusage(RUSAGE_SELF, &ru) == 0) {
+    pm->page_faults_minor = ru.ru_minflt;
+    pm->page_faults_major = ru.ru_majflt;
+  }
+}
+
+#else
+// Fallback for other platforms
+void valk_process_memory_collect(valk_process_memory_t *pm) {
+  if (pm == NULL) return;
+  memset(pm, 0, sizeof(*pm));
+}
+#endif
+
 void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes) {
   VALK_ASSERT(self,
               "Thread Local ALLOCATOR has not been initialized, please "

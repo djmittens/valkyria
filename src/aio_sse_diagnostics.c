@@ -600,6 +600,84 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
     snapshot->owner_map[i] = valk_owner_get_name(aio, (uint16_t)i);
   }
 #endif
+
+  // Collect process-level memory from OS
+  valk_process_memory_collect(&snapshot->process);
+
+  // Compute breakdown aggregates (used and capacity for each subsystem)
+  memset(&snapshot->breakdown, 0, sizeof(snapshot->breakdown));
+
+  // Sum scratch arena usage and capacity
+  for (size_t i = 0; i < snapshot->arena_count; i++) {
+    snapshot->breakdown.scratch_arena_used += snapshot->arenas[i].used_bytes;
+    snapshot->breakdown.scratch_arena_capacity += snapshot->arenas[i].capacity_bytes;
+  }
+
+  // Sum GC heap tiers (used and capacity)
+  for (size_t i = 0; i < snapshot->gc_heap.tier_count; i++) {
+    const char *name = snapshot->gc_heap.tiers[i].name;
+    size_t used = snapshot->gc_heap.tiers[i].bytes_used;
+    size_t capacity = snapshot->gc_heap.tiers[i].bytes_total;
+
+    snapshot->breakdown.gc_heap_used += used;
+    snapshot->breakdown.gc_heap_capacity += capacity;
+
+    if (name && strcmp(name, "lval") == 0) {
+      snapshot->breakdown.gc_lval_slab_used = used;
+      snapshot->breakdown.gc_lval_slab_capacity = capacity;
+    } else if (name && strcmp(name, "lenv") == 0) {
+      snapshot->breakdown.gc_lenv_slab_used = used;
+      snapshot->breakdown.gc_lenv_slab_capacity = capacity;
+    } else if (name && strcmp(name, "malloc") == 0) {
+      snapshot->breakdown.gc_malloc_used = used;
+      // malloc has no fixed capacity
+    }
+  }
+
+  // Sum AIO slabs (tcp_buffers, handles, stream_arenas, http_servers, http_clients)
+  for (size_t i = 0; i < snapshot->slab_count; i++) {
+    const char *name = snapshot->slabs[i].name;
+    // Skip lval and lenv slabs - they're already counted in gc_heap
+    if (name && (strcmp(name, "lval") == 0 || strcmp(name, "lenv") == 0)) {
+      continue;
+    }
+    // Estimate bytes from slot count (rough estimate using 256 bytes per slot)
+    snapshot->breakdown.aio_slabs_used += snapshot->slabs[i].used_slots * 256;
+    snapshot->breakdown.aio_slabs_capacity += snapshot->slabs[i].total_slots * 256;
+  }
+
+  // Metrics registry (statically allocated in BSS)
+  valk_registry_stats_t metrics_stats = {0};
+  valk_registry_stats_collect(&metrics_stats);
+
+  // Calculate used bytes based on active slots and approximate slot sizes
+  snapshot->breakdown.metrics_used =
+      metrics_stats.counters_active * sizeof(valk_counter_v2_t) +
+      metrics_stats.gauges_active * sizeof(valk_gauge_v2_t) +
+      metrics_stats.histograms_active * sizeof(valk_histogram_v2_t) +
+      metrics_stats.summaries_active * sizeof(valk_summary_v2_t) +
+      metrics_stats.string_pool_used * sizeof(char*);
+
+  // Capacity is the full registry struct size
+  snapshot->breakdown.metrics_capacity = sizeof(valk_metrics_registry_t);
+
+  // Untracked = RSS - all tracked allocators (based on actual usage, not capacity)
+  size_t tracked_used = snapshot->breakdown.scratch_arena_used
+                      + snapshot->breakdown.gc_heap_used
+                      + snapshot->breakdown.aio_slabs_used
+                      + snapshot->breakdown.metrics_used;
+  snapshot->breakdown.untracked_bytes = (snapshot->process.rss_bytes > tracked_used)
+                                       ? (snapshot->process.rss_bytes - tracked_used)
+                                       : 0;
+
+  // Untracked reserved = VMS - all tracked capacities (mapped but not instrumented)
+  size_t tracked_cap = snapshot->breakdown.scratch_arena_capacity
+                     + snapshot->breakdown.gc_heap_capacity
+                     + snapshot->breakdown.aio_slabs_capacity
+                     + snapshot->breakdown.metrics_capacity;
+  snapshot->breakdown.untracked_reserved = (snapshot->process.vms_bytes > tracked_cap)
+                                          ? (snapshot->process.vms_bytes - tracked_cap)
+                                          : 0;
 }
 
 // ============================================================================
@@ -1025,7 +1103,49 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
     p += n;
   }
 
-  n = snprintf(p, end - p, "]},");  // Close memory section
+  n = snprintf(p, end - p, "],");  // Close owner_map array
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  // Process-level memory stats
+  n = snprintf(p, end - p,
+               "\"process\":{\"rss\":%zu,\"vms\":%zu,\"system_total\":%zu,"
+               "\"shared\":%zu,\"data\":%zu,\"page_faults_minor\":%lu,"
+               "\"page_faults_major\":%lu},",
+               snapshot->process.rss_bytes, snapshot->process.vms_bytes,
+               snapshot->process.system_total_bytes,
+               snapshot->process.shared_bytes, snapshot->process.data_bytes,
+               (unsigned long)snapshot->process.page_faults_minor,
+               (unsigned long)snapshot->process.page_faults_major);
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  // Breakdown by subsystem (used and capacity)
+  n = snprintf(p, end - p,
+               "\"breakdown\":{"
+               "\"scratch_used\":%zu,\"scratch_cap\":%zu,"
+               "\"gc_used\":%zu,\"gc_cap\":%zu,"
+               "\"gc_lval_used\":%zu,\"gc_lval_cap\":%zu,"
+               "\"gc_lenv_used\":%zu,\"gc_lenv_cap\":%zu,"
+               "\"gc_malloc\":%zu,"
+               "\"aio_used\":%zu,\"aio_cap\":%zu,"
+               "\"metrics_used\":%zu,\"metrics_cap\":%zu,"
+               "\"untracked\":%zu,\"untracked_reserved\":%zu}},",
+               snapshot->breakdown.scratch_arena_used,
+               snapshot->breakdown.scratch_arena_capacity,
+               snapshot->breakdown.gc_heap_used,
+               snapshot->breakdown.gc_heap_capacity,
+               snapshot->breakdown.gc_lval_slab_used,
+               snapshot->breakdown.gc_lval_slab_capacity,
+               snapshot->breakdown.gc_lenv_slab_used,
+               snapshot->breakdown.gc_lenv_slab_capacity,
+               snapshot->breakdown.gc_malloc_used,
+               snapshot->breakdown.aio_slabs_used,
+               snapshot->breakdown.aio_slabs_capacity,
+               snapshot->breakdown.metrics_used,
+               snapshot->breakdown.metrics_capacity,
+               snapshot->breakdown.untracked_bytes,
+               snapshot->breakdown.untracked_reserved);
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
@@ -1808,7 +1928,49 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
     p += n;
   }
 
-  n = snprintf(p, end - p, "]},");  // Close memory section
+  n = snprintf(p, end - p, "],");  // Close owner_map array
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  // Process-level memory stats
+  n = snprintf(p, end - p,
+               "\"process\":{\"rss\":%zu,\"vms\":%zu,\"system_total\":%zu,"
+               "\"shared\":%zu,\"data\":%zu,\"page_faults_minor\":%lu,"
+               "\"page_faults_major\":%lu},",
+               snapshot.process.rss_bytes, snapshot.process.vms_bytes,
+               snapshot.process.system_total_bytes,
+               snapshot.process.shared_bytes, snapshot.process.data_bytes,
+               (unsigned long)snapshot.process.page_faults_minor,
+               (unsigned long)snapshot.process.page_faults_major);
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  // Breakdown by subsystem (used and capacity)
+  n = snprintf(p, end - p,
+               "\"breakdown\":{"
+               "\"scratch_used\":%zu,\"scratch_cap\":%zu,"
+               "\"gc_used\":%zu,\"gc_cap\":%zu,"
+               "\"gc_lval_used\":%zu,\"gc_lval_cap\":%zu,"
+               "\"gc_lenv_used\":%zu,\"gc_lenv_cap\":%zu,"
+               "\"gc_malloc\":%zu,"
+               "\"aio_used\":%zu,\"aio_cap\":%zu,"
+               "\"metrics_used\":%zu,\"metrics_cap\":%zu,"
+               "\"untracked\":%zu,\"untracked_reserved\":%zu}},",
+               snapshot.breakdown.scratch_arena_used,
+               snapshot.breakdown.scratch_arena_capacity,
+               snapshot.breakdown.gc_heap_used,
+               snapshot.breakdown.gc_heap_capacity,
+               snapshot.breakdown.gc_lval_slab_used,
+               snapshot.breakdown.gc_lval_slab_capacity,
+               snapshot.breakdown.gc_lenv_slab_used,
+               snapshot.breakdown.gc_lenv_slab_capacity,
+               snapshot.breakdown.gc_malloc_used,
+               snapshot.breakdown.aio_slabs_used,
+               snapshot.breakdown.aio_slabs_capacity,
+               snapshot.breakdown.metrics_used,
+               snapshot.breakdown.metrics_capacity,
+               snapshot.breakdown.untracked_bytes,
+               snapshot.breakdown.untracked_reserved);
   if (n < 0 || n >= end - p) goto cleanup;
   p += n;
 

@@ -159,8 +159,100 @@
       </div>
 
       <!-- Runtime Memory (Consolidated) -->
-      <div class="subsection-header">
+      <div class="subsection-header memory-subsection-header" id="memory-subsection">
         <h3 class="subsection-title">Memory</h3>
+        <div class="process-memory-overview">
+          <div class="process-gauge-inline" title="Memory pressure: RSS as % of system RAM">
+            <div class="process-gauge-bar">
+              <div class="process-gauge-fill" id="process-gauge-fill"></div>
+            </div>
+          </div>
+          <span class="process-memory-stats">
+            <span class="process-stat">RSS: <span id="process-rss-text">--</span></span>
+            <span class="process-stat-sep">/</span>
+            <span class="process-stat">VMS: <span id="process-vms-text">--</span></span>
+          </span>
+          <button class="breakdown-toggle" onclick="toggleBreakdown()" aria-expanded="false" aria-controls="process-breakdown" title="Show memory breakdown">
+            <span class="breakdown-toggle-icon">▼</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Collapsible Process Breakdown -->
+      <div class="process-breakdown collapsed" id="process-breakdown">
+        <!-- Stacked bar: segment width = capacity, inner fill = used -->
+        <div class="stacked-bar">
+          <div class="stacked-segment gc-heap" id="segment-gc-heap" title="GC Heap">
+            <div class="segment-fill" id="fill-gc-heap"></div>
+          </div>
+          <div class="stacked-segment scratch" id="segment-scratch" title="Scratch Arena">
+            <div class="segment-fill" id="fill-scratch"></div>
+          </div>
+          <div class="stacked-segment aio" id="segment-aio" title="AIO Slabs">
+            <div class="segment-fill" id="fill-aio"></div>
+          </div>
+          <div class="stacked-segment metrics" id="segment-metrics" title="Metrics Registry">
+            <div class="segment-fill" id="fill-metrics"></div>
+          </div>
+          <div class="stacked-segment untracked" id="segment-untracked" title="Untracked">
+            <div class="segment-fill" id="fill-untracked"></div>
+          </div>
+        </div>
+
+        <!-- Legend: shows used / capacity per subsystem -->
+        <!-- Box diagonal: solid (bottom-right) = resident, muted (top-left) = reserved -->
+        <div class="breakdown-legend">
+          <div class="legend-item">
+            <span class="legend-dot gc-heap"><span class="legend-dot-fill"></span></span>
+            <span class="legend-label">GC Heap</span>
+            <span class="legend-value" id="breakdown-gc-heap-value">--</span>
+            <span class="legend-cap">/ <span id="breakdown-gc-heap-cap">--</span></span>
+            <span class="legend-pct" id="breakdown-gc-heap-pct">(--%)</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot scratch"><span class="legend-dot-fill"></span></span>
+            <span class="legend-label">Scratch</span>
+            <span class="legend-value" id="breakdown-scratch-value">--</span>
+            <span class="legend-cap">/ <span id="breakdown-scratch-cap">--</span></span>
+            <span class="legend-pct" id="breakdown-scratch-pct">(--%)</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot aio"><span class="legend-dot-fill"></span></span>
+            <span class="legend-label">AIO</span>
+            <span class="legend-value" id="breakdown-aio-value">--</span>
+            <span class="legend-cap">/ <span id="breakdown-aio-cap">--</span></span>
+            <span class="legend-pct" id="breakdown-aio-pct">(--%)</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot metrics"><span class="legend-dot-fill"></span></span>
+            <span class="legend-label">Metrics</span>
+            <span class="legend-value" id="breakdown-metrics-value">--</span>
+            <span class="legend-cap">/ <span id="breakdown-metrics-cap">--</span></span>
+            <span class="legend-pct" id="breakdown-metrics-pct">(--%)</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot untracked"><span class="legend-dot-fill"></span></span>
+            <span class="legend-label">Untracked</span>
+            <span class="legend-value" id="breakdown-untracked-value">--</span>
+            <span class="legend-cap">/ <span id="breakdown-untracked-cap">--</span></span>
+            <span class="legend-pct" id="breakdown-untracked-pct">(--%)</span>
+          </div>
+        </div>
+
+        <!-- GC Heap sub-breakdown -->
+        <div class="gc-sub-breakdown">
+          <span class="gc-sub-label">GC breakdown:</span>
+          <span class="gc-sub-item"><span class="legend-dot lval"></span>LVAL <span id="breakdown-gc-lval-value">--</span></span>
+          <span class="gc-sub-item"><span class="legend-dot lenv"></span>LENV <span id="breakdown-gc-lenv-value">--</span></span>
+          <span class="gc-sub-item"><span class="legend-dot malloc"></span>Malloc <span id="breakdown-gc-malloc-value">--</span></span>
+        </div>
+
+        <!-- Footer stats -->
+        <div class="breakdown-footer">
+          <span>VMS: <span id="process-vms">--</span></span>
+          <span class="sep">•</span>
+          <span>Page Faults: <span id="process-pf-minor">--</span> minor / <span id="process-pf-major">--</span> major</span>
+        </div>
       </div>
 
       <div class="vm-memory-consolidated">

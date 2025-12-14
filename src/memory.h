@@ -260,6 +260,20 @@ typedef struct {
   size_t overflow_bytes;         // Bytes allocated via heap fallback
 } valk_arena_stats_t;
 
+// Process-level memory stats (from OS)
+typedef struct {
+  size_t rss_bytes;            // Resident Set Size (physical RAM)
+  size_t vms_bytes;            // Virtual Memory Size
+  size_t system_total_bytes;   // Total system RAM (for memory pressure calc)
+  size_t shared_bytes;         // Shared memory (Linux only)
+  size_t data_bytes;           // Data + stack segment (Linux only)
+  uint64_t page_faults_minor;  // Soft page faults
+  uint64_t page_faults_major;  // Hard page faults (disk I/O)
+} valk_process_memory_t;
+
+// Collect process-level memory stats from OS
+void valk_process_memory_collect(valk_process_memory_t *pm);
+
 typedef struct {  // extends valk_mem_allocator_t;
   valk_mem_allocator_e type;
   size_t capacity;
