@@ -1857,97 +1857,7 @@ main[role="main"] {
   margin-bottom: var(--space-md);
 }
 
-.arena-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-}
-
-.arena-gauge {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  padding: var(--space-sm);
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-sm);
-}
-
-.arena-gauge.has-overflow {
-  border: 1px solid var(--color-warning);
-}
-
-.arena-name {
-  min-width: 120px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.arena-track {
-  flex: 1;
-  height: 12px;
-  background: var(--bg-primary);
-  border-radius: 6px;
-  position: relative;
-  overflow: hidden;
-}
-
-.arena-bar {
-  height: 100%;
-  border-radius: 6px;
-  transition: width 100ms ease-out, background-color 100ms ease-out;
-}
-
-.arena-bar.healthy {
-  background: linear-gradient(90deg, var(--color-ok), var(--color-ok-muted));
-}
-
-.arena-bar.warning {
-  background: linear-gradient(90deg, var(--color-warning), var(--color-warning-muted));
-}
-
-.arena-bar.critical {
-  background: linear-gradient(90deg, var(--color-error), var(--color-error-muted));
-}
-
-.arena-hwm {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--color-warning);
-  opacity: 0.8;
-}
-
-.arena-hwm::after {
-  content: 'HWM';
-  position: absolute;
-  top: -16px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 8px;
-  color: var(--color-warning);
-  white-space: nowrap;
-}
-
-.arena-label {
-  min-width: 140px;
-  font-size: 11px;
-  color: var(--text-muted);
-  text-align: right;
-}
-
-.arena-label .pct {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-/* Legend - base styles in UNIFIED LEGEND STYLES section */
-/* Context-specific legend spacing */
-.legend.arena-legend {
-  margin-top: var(--space-lg);
-  padding-top: var(--space-md);
-  border-top: 1px solid var(--border-default);
-}
+/* (Arena gauge styles removed - now using PoolGauge widget) */
 
 /* Additional legend dot variants */
 .legend-dot.hwm {
@@ -2081,195 +1991,14 @@ main[role="main"] {
   margin-left: var(--space-xs);
 }
 
-/* Tiered heap visualization */
+/* Tiered heap container (PoolGauge widgets are injected here) */
 .heap-tiers {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
 }
 
-.heap-tier {
-  background: var(--bg-secondary);
-  border-radius: var(--radius-sm);
-  padding: var(--space-sm);
-}
-
-.tier-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  margin-bottom: var(--space-xs);
-  flex-wrap: wrap;
-}
-
-.tier-icon {
-  width: 20px;
-  height: 20px;
-  border-radius: var(--radius-xs);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-#slab-tier .tier-icon {
-  background: var(--color-cyan);
-  color: var(--bg-primary);
-}
-
-#malloc-tier .tier-icon {
-  background: var(--color-warning);
-  color: var(--bg-primary);
-}
-
-.tier-name {
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--text-primary);
-}
-
-.tier-desc {
-  font-size: 10px;
-  color: var(--text-muted);
-  flex: 1;
-}
-
-.tier-usage {
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-}
-
-.tier-bar-container {
-  margin: var(--space-xs) 0;
-}
-
-.tier-bar {
-  height: 8px;
-  background: var(--bg-tertiary);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.tier-bar-fill {
-  height: 100%;
-  transition: width 0.3s ease;
-  border-radius: 4px;
-}
-
-.slab-bar .tier-bar-fill {
-  background: linear-gradient(90deg, var(--color-cyan) 0%, color-mix(in srgb, var(--color-cyan) 70%, var(--color-info)) 100%);
-}
-
-.malloc-bar .tier-bar-fill {
-  background: linear-gradient(90deg, var(--color-warning) 0%, color-mix(in srgb, var(--color-warning) 70%, var(--color-ok)) 100%);
-}
-
-/* Tier bar markers */
-.tier-bar {
-  position: relative;
-}
-
-.tier-bar-hwm {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--color-info);
-  opacity: 0.9;
-  transition: left 0.3s ease;
-  z-index: 2;
-}
-
-.tier-bar-threshold {
-  position: absolute;
-  top: -2px;
-  bottom: -2px;
-  width: 2px;
-  background: var(--color-error);
-  opacity: 0.7;
-  transition: left 0.3s ease;
-  z-index: 1;
-}
-
-/* Tier bar warning/critical states */
-.tier-bar-fill.warning {
-  background: linear-gradient(90deg, var(--color-warning) 0%, color-mix(in srgb, var(--color-warning) 80%, var(--color-error)) 100%) !important;
-}
-
-.tier-bar-fill.critical {
-  background: linear-gradient(90deg, var(--color-error) 0%, color-mix(in srgb, var(--color-error) 80%, #ff4444) 100%) !important;
-}
-
-/* Heap legend */
-.heap-legend {
-  display: flex;
-  gap: var(--space-lg);
-  margin-top: var(--space-sm);
-  padding-top: var(--space-sm);
-  border-top: 1px dashed var(--border-muted);
-  font-size: 10px;
-  color: var(--text-muted);
-  align-items: center;
-}
-
-.heap-legend-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.heap-legend-item.reclaimed {
-  margin-left: auto;
-  font-family: var(--font-mono);
-}
-
-.legend-bar {
-  width: 16px;
-  height: 6px;
-  border-radius: 2px;
-}
-
-.legend-bar.fill {
-  background: linear-gradient(90deg, var(--color-cyan) 0%, var(--color-warning) 100%);
-}
-
-.legend-marker {
-  width: 2px;
-  height: 10px;
-  border-radius: 1px;
-}
-
-.legend-marker.hwm {
-  background: var(--color-info);
-}
-
-.legend-marker.threshold {
-  background: var(--color-error);
-}
-
-.tier-stats {
-  display: flex;
-  gap: var(--space-md);
-  font-size: 10px;
-  color: var(--text-muted);
-}
-
-.tier-stat {
-  display: flex;
-  gap: var(--space-xs);
-}
-
-.tier-stat .stat-label {
-  color: var(--text-muted);
-}
-
-.tier-stat .stat-value {
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-}
+/* (Tier bar, heap legend, and tier stats styles removed - now using PoolGauge widget) */
 
 /* Heap aggregate stats */
 .heap-aggregate {
@@ -2304,6 +2033,643 @@ main[role="main"] {
 .agg-sep {
   margin: 0 var(--space-sm);
   color: var(--border-muted);
+}
+
+/* ==================== PoolGauge Widget ==================== */
+/* Generalized gauge component for pool/slab visualizations
+ *
+ * CSS custom properties for customization:
+ *   --pool-color: Primary fill color (default: --color-ok)
+ *   --pool-color-muted: Gradient end color (default: --color-ok-muted)
+ *   --pool-hwm-color: High water mark color (default: --color-info)
+ *   --pool-threshold-color: Threshold marker color (default: --color-error)
+ */
+
+.pool-gauge {
+  --pool-color: var(--color-ok);
+  --pool-color-muted: var(--color-ok-muted);
+  --pool-hwm-color: var(--color-info);
+  --pool-threshold-color: var(--color-error);
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+.pool-gauge.compact {
+  padding: var(--space-xs) var(--space-sm);
+}
+
+/* Header with name, icon, and badge */
+.pool-gauge-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.pool-gauge-icon {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--pool-color) 20%, transparent);
+  color: var(--pool-color);
+}
+
+.pool-gauge-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.pool-gauge-desc {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: var(--space-xs);
+}
+
+.pool-gauge-usage {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.pool-gauge-badge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--pool-color) 20%, transparent);
+  color: var(--pool-color);
+}
+
+.pool-gauge-badge.warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.pool-gauge-badge.critical {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+/* Track and fill bar */
+.pool-gauge-track {
+  position: relative;
+  height: 10px;
+  background: var(--bg-primary);
+  border-radius: 5px;
+  overflow: visible;
+}
+
+.pool-gauge-track.thin {
+  height: 6px;
+  border-radius: 3px;
+}
+
+.pool-gauge-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.3s ease, background 0.3s ease;
+  background: linear-gradient(90deg, var(--pool-color) 0%, var(--pool-color-muted) 100%);
+}
+
+.pool-gauge-fill.warning {
+  background: linear-gradient(90deg, var(--color-warning) 0%, var(--color-warning-muted) 100%);
+}
+
+.pool-gauge-fill.critical {
+  background: linear-gradient(90deg, var(--color-error) 0%, color-mix(in srgb, var(--color-error) 80%, #ff4444) 100%);
+}
+
+/* Markers container */
+.pool-gauge-markers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Generic marker base */
+.pool-gauge-marker {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  border-radius: 1px;
+  transition: left 0.3s ease;
+  z-index: 1;
+}
+
+/* High water mark marker */
+.pool-gauge-marker.hwm {
+  background: var(--pool-hwm-color);
+  opacity: 0.9;
+}
+
+.pool-gauge-marker.hwm::after {
+  content: 'HWM';
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 7px;
+  font-weight: 600;
+  color: var(--pool-hwm-color);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.pool-gauge:hover .pool-gauge-marker.hwm::after {
+  opacity: 1;
+}
+
+/* Threshold marker (e.g., GC threshold) */
+.pool-gauge-marker.threshold {
+  background: var(--pool-threshold-color);
+  opacity: 0.7;
+}
+
+.pool-gauge-marker.threshold::after {
+  content: attr(data-label);
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 7px;
+  font-weight: 600;
+  color: var(--pool-threshold-color);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.pool-gauge:hover .pool-gauge-marker.threshold::after {
+  opacity: 1;
+}
+
+/* Custom marker (can be styled individually) */
+.pool-gauge-marker.custom {
+  opacity: 0.8;
+}
+
+.pool-gauge-marker.custom::after {
+  content: attr(data-label);
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 7px;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.pool-gauge:hover .pool-gauge-marker.custom::after {
+  opacity: 1;
+}
+
+/* Stats row */
+.pool-gauge-stats {
+  display: flex;
+  gap: var(--space-md);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.pool-gauge-stat {
+  display: flex;
+  gap: var(--space-xs);
+  align-items: baseline;
+}
+
+.pool-gauge-stat .label {
+  color: var(--text-faint);
+}
+
+.pool-gauge-stat .value {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+/* Legend component */
+.pool-gauge-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-top: var(--space-xs);
+  padding-top: var(--space-xs);
+  border-top: 1px dashed var(--border-muted);
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.pool-gauge-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.pool-gauge-legend-bar {
+  width: 12px;
+  height: 4px;
+  border-radius: 2px;
+}
+
+.pool-gauge-legend-marker {
+  width: 2px;
+  height: 8px;
+  border-radius: 1px;
+}
+
+.pool-gauge-legend-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+/* Color presets for common pool types */
+.pool-gauge.slab {
+  --pool-color: var(--color-cyan);
+  --pool-color-muted: var(--color-cyan-muted);
+}
+
+.pool-gauge.malloc {
+  --pool-color: var(--color-warning);
+  --pool-color-muted: var(--color-warning-muted);
+}
+
+.pool-gauge.arena {
+  --pool-color: var(--color-ok);
+  --pool-color-muted: var(--color-ok-muted);
+}
+
+.pool-gauge.buffer {
+  --pool-color: var(--color-purple);
+  --pool-color-muted: var(--color-purple-muted);
+}
+
+.pool-gauge.queue {
+  --pool-color: var(--color-info);
+  --pool-color-muted: var(--color-info-muted);
+}
+
+/* Inline variant - horizontal layout */
+.pool-gauge.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.pool-gauge.inline .pool-gauge-header {
+  min-width: 100px;
+  flex: 0 0 auto;
+}
+
+.pool-gauge.inline .pool-gauge-track {
+  flex: 1;
+  min-width: 100px;
+}
+
+.pool-gauge.inline .pool-gauge-stats {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+.pool-gauge.inline .pool-gauge-legend {
+  display: none;
+}
+
+/* ==================== PoolWidget ====================
+ * Unified pool/slab visualization combining gauge bar, canvas grid, and legend.
+ * Variants: full, compact, mini, gauge-only
+ * Presets: slab (cyan), malloc (orange), arena (green), buffer (purple), queue (blue)
+ */
+.pool-widget {
+  --pool-color: var(--color-ok);
+  --pool-color-muted: var(--color-ok-muted);
+  --pool-hwm-color: var(--color-info);
+  --pool-threshold-color: var(--color-error);
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+/* Preset colors */
+.pool-widget.slab {
+  --pool-color: var(--color-cyan);
+  --pool-color-muted: var(--color-cyan-muted);
+}
+
+.pool-widget.malloc {
+  --pool-color: var(--color-warning);
+  --pool-color-muted: var(--color-warning-muted);
+}
+
+.pool-widget.arena {
+  --pool-color: var(--color-ok);
+  --pool-color-muted: var(--color-ok-muted);
+}
+
+.pool-widget.buffer {
+  --pool-color: var(--color-purple);
+  --pool-color-muted: var(--color-purple-muted);
+}
+
+.pool-widget.queue {
+  --pool-color: var(--color-info);
+  --pool-color-muted: var(--color-info-muted);
+}
+
+/* Variant: compact */
+.pool-widget.compact {
+  padding: var(--space-xs) var(--space-sm);
+  gap: var(--space-xs);
+}
+
+/* Variant: mini */
+.pool-widget.mini {
+  padding: var(--space-xs);
+  gap: 2px;
+}
+
+/* Variant: gauge-only */
+.pool-widget.gauge-only {
+  padding: var(--space-xs) var(--space-sm);
+}
+
+/* Header */
+.pool-widget-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.pool-widget-icon {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--pool-color) 20%, transparent);
+  color: var(--pool-color);
+  flex-shrink: 0;
+}
+
+.pool-widget-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pool-widget-usage {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.pool-widget-badge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--pool-color) 20%, transparent);
+  color: var(--pool-color);
+  flex-shrink: 0;
+}
+
+.pool-widget-badge.warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.pool-widget-badge.critical {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+/* Gauge track and fill */
+.pool-widget-gauge {
+  position: relative;
+  height: 10px;
+  background: var(--bg-primary);
+  border-radius: 5px;
+  overflow: visible;
+}
+
+.pool-widget.compact .pool-widget-gauge,
+.pool-widget.mini .pool-widget-gauge {
+  height: 8px;
+  border-radius: 4px;
+}
+
+.pool-widget-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.3s ease, background 0.3s ease;
+  background: linear-gradient(90deg, var(--pool-color) 0%, var(--pool-color-muted) 100%);
+}
+
+.pool-widget-fill.warning {
+  background: linear-gradient(90deg, var(--color-warning) 0%, var(--color-warning-muted) 100%);
+}
+
+.pool-widget-fill.critical {
+  background: linear-gradient(90deg, var(--color-error) 0%, color-mix(in srgb, var(--color-error) 80%, #ff4444) 100%);
+}
+
+/* Markers */
+.pool-widget-markers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.pool-widget-marker {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  transform: translateX(-50%);
+  z-index: 2;
+}
+
+.pool-widget-marker.hwm {
+  background: var(--pool-hwm-color);
+}
+
+.pool-widget-marker.hwm::after {
+  content: attr(data-label);
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 8px;
+  font-family: var(--font-mono);
+  color: var(--pool-hwm-color);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.pool-widget:hover .pool-widget-marker.hwm::after {
+  opacity: 1;
+}
+
+.pool-widget-marker.threshold {
+  background: var(--pool-threshold-color);
+}
+
+.pool-widget-marker.threshold::after {
+  content: attr(data-label);
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 8px;
+  font-family: var(--font-mono);
+  color: var(--pool-threshold-color);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.pool-widget:hover .pool-widget-marker.threshold::after {
+  opacity: 1;
+}
+
+.pool-widget-marker.custom {
+  background: var(--text-muted);
+}
+
+/* Canvas grid */
+.pool-widget-grid {
+  min-height: 20px;
+}
+
+.pool-widget-canvas {
+  display: block;
+  width: 100%;
+  border-radius: var(--radius-sm);
+}
+
+.pool-widget.compact .pool-widget-grid {
+  min-height: 16px;
+}
+
+.pool-widget.mini .pool-widget-grid {
+  min-height: 12px;
+}
+
+/* Stats row */
+.pool-widget-stats {
+  display: flex;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+}
+
+.pool-widget-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  font-size: 10px;
+}
+
+.pool-widget-stat .label {
+  color: var(--text-muted);
+}
+
+.pool-widget-stat .value {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+/* Legend */
+.pool-widget-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-md);
+  font-size: 10px;
+  color: var(--text-secondary);
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--border-primary);
+}
+
+.pool-widget.compact .pool-widget-legend,
+.pool-widget.mini .pool-widget-legend {
+  font-size: 9px;
+  gap: var(--space-xs) var(--space-sm);
+}
+
+.pool-widget-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pool-widget-legend-bar {
+  width: 12px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--pool-color);
+}
+
+.pool-widget-legend-marker {
+  width: 2px;
+  height: 10px;
+  border-radius: 1px;
+}
+
+.pool-widget-legend-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+/* Full variant with all sections */
+.pool-widget.full {
+  padding: var(--space-md);
+  gap: var(--space-sm);
+}
+
+.pool-widget.full .pool-widget-header {
+  margin-bottom: var(--space-xs);
+}
+
+.pool-widget.full .pool-widget-icon {
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+}
+
+.pool-widget.full .pool-widget-name {
+  font-size: 12px;
 }
 
 /* Scratch block - compact inline style */
@@ -2795,6 +3161,15 @@ main[role="main"] {
   gap: var(--space-md);
 }
 
+/* Pool widgets inside AIO slab grid */
+.aio-slab-grid .pool-widget {
+  min-width: 0; /* Allow shrinking in grid */
+}
+
+.aio-slab-grid .pool-widget.compact {
+  padding: var(--space-xs) var(--space-sm);
+}
+
 /* Compact slab panels inside AIO */
 .memory-slab-panel.compact {
   padding: var(--space-sm);
@@ -2817,29 +3192,7 @@ main[role="main"] {
   margin-top: var(--space-xs);
 }
 
-/* Queue gauge (bar-style progress) */
-.queue-gauge {
-  height: 8px;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  margin: var(--space-xs) 0;
-}
-
-.queue-bar {
-  height: 100%;
-  background: var(--color-ok);
-  transition: width 0.3s ease, background 0.3s ease;
-  border-radius: var(--radius-sm);
-}
-
-.queue-bar.warning {
-  background: var(--color-warning);
-}
-
-.queue-bar.critical {
-  background: var(--color-error);
-}
+/* (Queue gauge styles removed - now using PoolGauge widget) */
 
 /* Mini slab panels for HTTP servers/clients */
 .memory-slab-panel.mini {

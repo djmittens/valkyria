@@ -14,16 +14,6 @@
       <span class="status-icon" aria-hidden="true">✓</span>
       <span id="global-status-text">Connecting...</span>
     </div>
-    <div class="header-right">
-      <div class="header-stat" title="Time since the Valkyria process started. Use to correlate with deployment times or restarts.">
-        <div class="header-stat-label">Uptime</div>
-        <div class="header-stat-value" id="uptime-value">--</div>
-      </div>
-      <div class="header-stat" title="Time of last successful metrics fetch. If stale, check network connectivity to the server.">
-        <div class="header-stat-label">Last Update</div>
-        <div class="header-stat-value" id="timestamp" aria-live="polite">--:--:--</div>
-      </div>
-    </div>
   </header>
 
   <main role="main" id="main-content">
@@ -200,21 +190,8 @@
             </div>
           </div>
           <div class="memory-block-body">
-            <div class="arena-gauge" data-arena="scratch"
-                 role="progressbar"
-                 aria-valuenow="0"
-                 aria-valuemin="0"
-                 aria-valuemax="100"
-                 aria-label="Scratch Arena: 0% used">
-              <div class="arena-track">
-                <div class="arena-bar healthy" style="width: 0%;"></div>
-                <div class="arena-hwm" style="left: 0%;"></div>
-              </div>
-            </div>
-            <div class="memory-legend-inline">
-              <div class="legend-item"><div class="legend-dot hwm"></div><span>HWM: <span id="scratch-hwm">--</span></span></div>
-              <div class="legend-item" id="scratch-overflow-item" style="display:none"><span class="overflow-label">Overflow: <span id="scratch-overflow">0</span></span></div>
-            </div>
+            <!-- Scratch Arena PoolGauge (initialized by JS) -->
+            <div id="scratch-arena-gauge-container"></div>
           </div>
         </div>
 
@@ -231,79 +208,16 @@
             </div>
           </div>
           <div class="memory-block-body">
-            <!-- Tiered heap visualization -->
-            <div class="heap-tiers">
-              <!-- Tier 1: LVAL Slab -->
-              <div class="heap-tier" id="slab-tier">
-                <div class="tier-header">
-                  <span class="tier-icon">S</span>
-                  <span class="tier-name">Slab Tier</span>
-                  <span class="tier-desc">Fixed-size LVAL objects</span>
-                  <span class="tier-usage">
-                    <span id="slab-used">--</span> / <span id="slab-total">--</span>
-                    (<span id="slab-pct">--</span>%)
-                  </span>
-                </div>
-                <div class="tier-bar-container">
-                  <div class="tier-bar slab-bar">
-                    <div class="tier-bar-fill" id="slab-bar-fill" style="width: 0%"></div>
-                    <div class="tier-bar-hwm" id="slab-bar-hwm" style="left: 0%"></div>
-                    <div class="tier-bar-threshold" id="slab-bar-threshold" style="left: 75%"></div>
-                  </div>
-                </div>
-                <!-- LVAL Slab Grid Visualization -->
-                <div class="slab-canvas">
-                  <canvas class="slab-grid-canvas" id="lval-grid" role="img" aria-label="LVAL slab allocation grid"></canvas>
-                </div>
-                <div class="tier-stats">
-                  <span class="tier-stat">
-                    <span class="stat-label">objects:</span>
-                    <span class="stat-value" id="slab-objects-used">--</span>/<span id="slab-objects-total">--</span>
-                  </span>
-                  <span class="tier-stat">
-                    <span class="stat-label">hwm:</span>
-                    <span class="stat-value" id="slab-hwm-pct">--</span>%
-                  </span>
-                </div>
-              </div>
-
-              <!-- Tier 2: Malloc Heap -->
-              <div class="heap-tier" id="malloc-tier">
-                <div class="tier-header">
-                  <span class="tier-icon">M</span>
-                  <span class="tier-name">Malloc Tier</span>
-                  <span class="tier-desc">Variable-size allocations</span>
-                  <span class="tier-usage">
-                    <span id="malloc-used">--</span> / <span id="malloc-limit">--</span>
-                    (<span id="malloc-pct">--</span>%)
-                  </span>
-                </div>
-                <div class="tier-bar-container">
-                  <div class="tier-bar malloc-bar">
-                    <div class="tier-bar-fill" id="malloc-bar-fill" style="width: 0%"></div>
-                    <div class="tier-bar-hwm" id="malloc-bar-hwm" style="left: 0%"></div>
-                    <div class="tier-bar-threshold" id="malloc-bar-threshold" style="left: 75%"></div>
-                  </div>
-                </div>
-                <div class="tier-stats">
-                  <span class="tier-stat">
-                    <span class="stat-label">peak:</span>
-                    <span class="stat-value" id="malloc-peak">--</span>
-                  </span>
-                  <span class="tier-stat">
-                    <span class="stat-label">hwm:</span>
-                    <span class="stat-value" id="malloc-hwm-pct">--</span>%
-                  </span>
-                </div>
-              </div>
+            <!-- Tiered heap visualization (Slab includes LVAL grid, Malloc is gauge-only) -->
+            <div class="heap-tiers" id="heap-tiers-container">
+              <!-- Slab and Malloc PoolWidgets initialized by JS -->
             </div>
-
-            <!-- Legend -->
-            <div class="heap-legend">
-              <span class="heap-legend-item"><span class="legend-bar fill"></span>current</span>
-              <span class="heap-legend-item"><span class="legend-marker hwm"></span>high water mark</span>
-              <span class="heap-legend-item"><span class="legend-marker threshold"></span>gc threshold</span>
-              <span class="heap-legend-item reclaimed">reclaimed: <span id="heap-reclaimed">--</span></span>
+            <!-- Shared legend for both tiers -->
+            <div class="pool-gauge-legend" id="heap-legend">
+              <span class="pool-gauge-legend-item"><span class="pool-gauge-legend-bar" style="background: linear-gradient(90deg, var(--color-cyan), var(--color-warning))"></span>current</span>
+              <span class="pool-gauge-legend-item"><span class="pool-gauge-legend-marker" style="background: var(--color-info)"></span>high water mark</span>
+              <span class="pool-gauge-legend-item"><span class="pool-gauge-legend-marker" style="background: var(--color-error)"></span>gc threshold</span>
+              <span class="pool-gauge-legend-item" style="margin-left: auto; font-family: var(--font-mono);">reclaimed: <span id="heap-reclaimed">--</span></span>
             </div>
           </div>
         </div>

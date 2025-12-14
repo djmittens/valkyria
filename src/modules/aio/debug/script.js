@@ -100,347 +100,395 @@
     return states.join('');
   }
 
-  // ==================== SlabWidget ====================
-  // Reusable slab visualization component
+  // ==================== PoolWidget ====================
+  // Unified pool/slab visualization component combining gauge bar, canvas grid, and legend.
   //
   // Usage:
-  //   var widget = new SlabWidget({
-  //     id: 'aio-0-tcp-buffers',
-  //     name: 'TCP Buffers',
-  //     slabKey: 'tcp_buffers',
-  //     gridClass: 'aio-sys-tcp-grid',
-  //     variant: 'compact'  // 'compact' | 'mini' | 'resource-pool'
+  //   var widget = new PoolWidget({
+  //     id: 'slab-tier',
+  //     name: 'Slab Tier',
+  //     slabKey: 'lval',               // For registry lookup
+  //     icon: 'S',                     // Optional icon letter
+  //     preset: 'slab',                // 'slab' | 'malloc' | 'arena' | 'buffer' | 'queue'
+  //     variant: 'full',               // 'full' | 'compact' | 'mini' | 'gauge-only'
+  //     showGauge: true,               // Show gauge bar (default: true)
+  //     showGrid: true,                // Show canvas grid (default: true)
+  //     showLegend: true,              // Show legend (default: false for compact/mini)
+  //     markers: [                     // Gauge markers
+  //       { type: 'hwm', id: 'hwm' },
+  //       { type: 'threshold', id: 'threshold', label: 'GC', position: 75 }
+  //     ],
+  //     legend: [                      // Legend items
+  //       { type: 'bar', label: 'current' },
+  //       { type: 'marker', label: 'hwm', color: 'var(--color-info)' }
+  //     ],
+  //     states: [                      // State legend for grid (optional)
+  //       { char: 'A', class: 'active', label: 'Active', color: '#3fb950' },
+  //       { char: 'I', class: 'idle', label: 'Idle', color: '#1f6feb' }
+  //     ],
+  //     stats: [                       // Stats to show
+  //       { id: 'objects', label: 'objects:' },
+  //       { id: 'hwm', label: 'hwm:', suffix: '%' }
+  //     ]
   //   });
   //   container.innerHTML = widget.render();
-  //   widget.bind();  // Bind to DOM after insertion
-  //   widget.update(slabData);  // Update with new data
+  //   widget.bind();
+  //   widget.update({ used: 100, total: 1000, states: 'F900A100', ... });
   //
-  function SlabWidget(config) {
+  function PoolWidget(config) {
     this.id = config.id;
     this.name = config.name;
-    this.slabKey = config.slabKey;
-    this.gridClass = config.gridClass || '';
+    this.slabKey = config.slabKey || null;
+    this.icon = config.icon || null;
+    this.preset = config.preset || null;
     this.variant = config.variant || 'compact';
 
-    // State classes for stateful slabs (optional)
-    this.stateClasses = config.stateClasses || SlabWidget.DEFAULT_STATE_CLASSES;
+    // Feature flags
+    this.showGauge = config.showGauge !== false;
+    this.showGrid = config.showGrid !== false;
+    this.showLegend = config.showLegend === true || this.variant === 'full';
+    this.showOwnerBreakdown = config.showOwnerBreakdown === true;
 
-    // Type breakdown configuration (for resource-pool variant)
-    this.typeBreakdown = config.typeBreakdown || null;
+    // Custom colors (override preset)
+    this.color = config.color || null;
+    this.colorMuted = config.colorMuted || null;
 
-    // State breakdown configuration (for resource-pool variant)
-    this.stateBreakdown = config.stateBreakdown || null;
+    // Gauge markers
+    this.markers = config.markers || [];
 
-    // Custom stats template (optional)
-    this.statsTemplate = config.statsTemplate || null;
+    // Legend configuration
+    this.legend = config.legend || [];
+
+    // State configuration for grid
+    this.states = config.states || null;
+    this.stateClasses = {};
+    this.stateColors = {};
+    if (this.states) {
+      for (var i = 0; i < this.states.length; i++) {
+        var s = this.states[i];
+        this.stateClasses[s.char] = s.class;
+        this.stateColors[s.class] = s.color;
+      }
+    }
+
+    // Stats configuration
+    this.stats = config.stats || [];
+
+    // Thresholds for warning/critical
+    this.warningThreshold = config.warningThreshold !== undefined ? config.warningThreshold : 75;
+    this.criticalThreshold = config.criticalThreshold !== undefined ? config.criticalThreshold : 90;
 
     // DOM references (set by bind())
     this.el = null;
-    this.gridEl = null;
+    this.canvasEl = null;
+    this.ctx = null;
+    this.fillEl = null;
     this.badgeEl = null;
-    this.statsEl = null;
+    this.usageEl = null;
+    this.markerEls = {};
+    this.statEls = {};
+
+    // Canvas state
+    this.canvasConfigured = false;
+    this.cellSize = 5;
+    this.cellGap = 1;
+    this.cols = 0;
+    this.rows = 0;
+    this.lastSlabData = null;
   }
 
-  // Default state character to CSS class mapping
-  SlabWidget.DEFAULT_STATE_CLASSES = {
-    'A': 'active',
-    'N': 'connecting',
-    'I': 'idle',
-    'C': 'closing',
-    'T': 'tcp-listener',
-    'K': 'task',
-    'M': 'timer',
-    'F': 'free'
+  // Default state mappings
+  PoolWidget.DEFAULT_STATES = [
+    { char: 'F', class: 'free', label: 'Free', color: 'rgba(255, 255, 255, 0.25)' },
+    { char: 'U', class: 'used', label: 'Used', color: '#3fb950' },
+    { char: 'A', class: 'active', label: 'Active', color: '#3fb950' },
+    { char: 'N', class: 'connecting', label: 'Connecting', color: '#58a6ff' },
+    { char: 'I', class: 'idle', label: 'Idle', color: '#1f6feb' },
+    { char: 'C', class: 'closing', label: 'Closing', color: '#d29922' },
+    { char: 'T', class: 'tcp-listener', label: 'TCP Listener', color: '#a371f7' },
+    { char: 'K', class: 'task', label: 'Task', color: '#39d4d4' },
+    { char: 'M', class: 'timer', label: 'Timer', color: '#9e6a03' }
+  ];
+
+  // Color presets
+  PoolWidget.PRESETS = {
+    slab: { color: 'var(--color-cyan)', colorMuted: 'var(--color-cyan-muted)' },
+    malloc: { color: 'var(--color-warning)', colorMuted: 'var(--color-warning-muted)' },
+    arena: { color: 'var(--color-ok)', colorMuted: 'var(--color-ok-muted)' },
+    buffer: { color: 'var(--color-purple)', colorMuted: 'var(--color-purple-muted)' },
+    queue: { color: 'var(--color-info)', colorMuted: 'var(--color-info-muted)' }
+  };
+
+  // Canvas colors (matching CSS variables)
+  PoolWidget.COLORS = {
+    free: 'rgba(255, 255, 255, 0.25)',
+    used: '#3fb950',
+    active: '#3fb950',
+    connecting: '#58a6ff',
+    idle: '#1f6feb',
+    closing: '#d29922',
+    'tcp-listener': '#a371f7',
+    task: '#39d4d4',
+    timer: '#9e6a03'
   };
 
   // Render the widget HTML
-  SlabWidget.prototype.render = function() {
-    if (this.variant === 'resource-pool') {
-      return this._renderResourcePool();
-    } else if (this.variant === 'mini') {
-      return this._renderMini();
-    } else {
-      return this._renderCompact();
+  PoolWidget.prototype.render = function() {
+    var classes = ['pool-widget'];
+    if (this.preset) classes.push(this.preset);
+    if (this.variant) classes.push(this.variant);
+
+    // Build inline style for custom colors
+    var style = '';
+    if (this.color) style += '--pool-color: ' + this.color + ';';
+    if (this.colorMuted) style += '--pool-color-muted: ' + this.colorMuted + ';';
+    var styleAttr = style ? ' style="' + style + '"' : '';
+
+    var html = '<div class="' + classes.join(' ') + '" id="' + this.id + '"' + styleAttr + '>';
+
+    // Header
+    html += '<div class="pool-widget-header">';
+    if (this.icon) {
+      html += '<span class="pool-widget-icon">' + this.icon + '</span>';
     }
-  };
+    html += '<span class="pool-widget-name">' + this.name + '</span>';
+    html += '<span class="pool-widget-usage" id="' + this.id + '-usage">-- / --</span>';
+    html += '<span class="pool-widget-badge" id="' + this.id + '-badge">--%</span>';
+    html += '</div>';
 
-  // Render compact variant (simple header, grid, stats)
-  SlabWidget.prototype._renderCompact = function() {
-    var prefixClass = this.gridClass.replace('-grid', '');
+    // Gauge bar (if enabled)
+    if (this.showGauge) {
+      html += '<div class="pool-widget-gauge">';
+      html += '<div class="pool-widget-fill" id="' + this.id + '-fill"></div>';
+      html += '<div class="pool-widget-markers">';
+      for (var i = 0; i < this.markers.length; i++) {
+        var m = this.markers[i];
+        var mClass = 'pool-widget-marker ' + (m.type || 'custom');
+        var mStyle = m.position !== undefined ? 'left:' + m.position + '%;' : '';
+        if (m.color) mStyle += 'background:' + m.color + ';';
+        var mLabel = m.label ? ' data-label="' + m.label + '"' : '';
+        html += '<div class="' + mClass + '" id="' + this.id + '-marker-' + (m.id || m.type || i) + '" style="' + mStyle + '"' + mLabel + '></div>';
+      }
+      html += '</div></div>';
+    }
 
-    var html =
-      '<div class="memory-slab-panel compact" id="' + this.id + '-panel">' +
-        '<div class="slab-header">' +
-          '<span class="slab-name">' + this.name + '</span>' +
-          '<span class="slab-badge ' + prefixClass + '-pct">0%</span>' +
-        '</div>' +
-        '<div class="slab-canvas">' +
-          '<canvas class="slab-grid-canvas ' + this.gridClass + '"></canvas>' +
-        '</div>' +
-        '<div class="slab-stats">' +
-          (this.statsTemplate || '<span><span class="' + prefixClass + '-used">0</span> / <span class="' + prefixClass + '-total">--</span></span>') +
-        '</div>' +
-      '</div>';
+    // Canvas grid (if enabled)
+    if (this.showGrid) {
+      html += '<div class="pool-widget-grid">';
+      html += '<canvas class="pool-widget-canvas" id="' + this.id + '-canvas"></canvas>';
+      html += '</div>';
+    }
 
-    return html;
-  };
-
-  // Render mini variant (smallest form factor)
-  SlabWidget.prototype._renderMini = function() {
-    var prefixClass = this.gridClass.replace('-grid', '');
-
-    var html =
-      '<div class="memory-slab-panel mini" id="' + this.id + '-panel">' +
-        '<div class="slab-header">' +
-          '<span class="slab-name">' + this.name + '</span>' +
-          '<span class="slab-badge ' + prefixClass + '-pct">0%</span>' +
-        '</div>' +
-        '<div class="slab-canvas">' +
-          '<canvas class="slab-grid-canvas ' + this.gridClass + '"></canvas>' +
-        '</div>' +
-      '</div>';
-
-    return html;
-  };
-
-  // Render resource-pool variant (full featured with type and state breakdowns)
-  SlabWidget.prototype._renderResourcePool = function() {
-    var prefixClass = this.gridClass.replace('-grid', '');
-
-    var html =
-      '<div class="resource-pool-panel" id="' + this.id + '-panel">' +
-        '<div class="pool-header">' +
-          '<span class="pool-name">' + this.name + '</span>' +
-          '<span class="pool-usage">' +
-            '<span class="' + prefixClass + '-used">0</span> / ' +
-            '<span class="' + prefixClass + '-total">--</span> ' +
-            '(<span class="' + prefixClass + '-pct">0</span>%)' +
-          '</span>' +
-        '</div>' +
-        '<div class="pool-grid-container">' +
-          '<canvas class="slab-grid-canvas ' + this.gridClass + '"></canvas>' +
-        '</div>';
-
-    // Type breakdown (optional)
-    if (this.typeBreakdown) {
-      html += '<div class="handle-type-breakdown">';
-      for (var i = 0; i < this.typeBreakdown.length; i++) {
-        var type = this.typeBreakdown[i];
-        html += '<span class="type-item type-' + type.key + '">' +
-                  '<span class="type-label">' + type.label + '</span> ' +
-                  '<span class="type-count-' + type.key + '">--</span>' +
-                '</span>';
+    // Stats row
+    if (this.stats.length > 0 && this.variant !== 'mini') {
+      html += '<div class="pool-widget-stats">';
+      for (var i = 0; i < this.stats.length; i++) {
+        var st = this.stats[i];
+        html += '<span class="pool-widget-stat">';
+        html += '<span class="label">' + st.label + '</span>';
+        html += '<span class="value" id="' + this.id + '-stat-' + st.id + '">--</span>';
+        if (st.suffix) html += '<span class="label">' + st.suffix + '</span>';
+        html += '</span>';
       }
       html += '</div>';
     }
 
-    // State breakdown (optional)
-    if (this.stateBreakdown) {
-      html += '<div class="pool-breakdown">';
-      if (this.stateBreakdown.header) {
-        html += '<div class="breakdown-header">' + this.stateBreakdown.header + '</div>';
+    // Legend (if enabled)
+    if (this.showLegend && this.legend.length > 0) {
+      html += '<div class="pool-widget-legend">';
+      for (var i = 0; i < this.legend.length; i++) {
+        var lg = this.legend[i];
+        html += '<span class="pool-widget-legend-item">';
+        if (lg.type === 'bar') {
+          html += '<span class="pool-widget-legend-bar" style="background:' + (lg.color || 'var(--pool-color)') + '"></span>';
+        } else if (lg.type === 'marker') {
+          html += '<span class="pool-widget-legend-marker" style="background:' + (lg.color || 'var(--color-info)') + '"></span>';
+        } else if (lg.type === 'dot') {
+          html += '<span class="pool-widget-legend-dot" style="background:' + (lg.color || 'var(--color-ok)') + '"></span>';
+        }
+        html += lg.label + '</span>';
       }
-      html += '<div class="breakdown-by-state">';
-      for (var i = 0; i < this.stateBreakdown.states.length; i++) {
-        var state = this.stateBreakdown.states[i];
-        html += '<div class="legend-item">' +
-                  '<span class="legend-dot ' + state.cssClass + '"></span> ' +
-                  state.label + ': <span class="state-count-' + state.cssClass + '">--</span>' +
-                '</div>';
-      }
-      html += '</div>';
-
-      // Owner breakdown container (optional)
-      if (this.stateBreakdown.showOwnerBreakdown) {
-        html += '<div class="owner-breakdown" id="' + this.id + '-by-owner"></div>';
-      }
-
       html += '</div>';
     }
 
-    // Warnings
-    html += '<div class="pool-warnings">' +
-              '<span class="capacity-warning" style="display:none">⚠ Approaching capacity</span>' +
-              '<span class="overflow-warning" style="display:none">⚠ -- overflows</span>' +
-            '</div>' +
-          '</div>';
+    // Owner breakdown (for handles slab)
+    if (this.showOwnerBreakdown) {
+      html += '<div class="owner-breakdown"></div>';
+    }
 
+    html += '</div>';
     return html;
   };
 
   // Bind to DOM elements after insertion
-  SlabWidget.prototype.bind = function() {
-    this.el = document.getElementById(this.id + '-panel');
+  PoolWidget.prototype.bind = function() {
+    this.el = document.getElementById(this.id);
     if (!this.el) return false;
 
-    // Get canvas element and context
-    this.canvasEl = this.el.querySelector('.slab-grid-canvas');
+    this.badgeEl = document.getElementById(this.id + '-badge');
+    this.usageEl = document.getElementById(this.id + '-usage');
+    this.fillEl = document.getElementById(this.id + '-fill');
+
+    // Bind marker elements
+    this.markerEls = {};
+    for (var i = 0; i < this.markers.length; i++) {
+      var m = this.markers[i];
+      var mId = m.id || m.type || i;
+      this.markerEls[mId] = document.getElementById(this.id + '-marker-' + mId);
+    }
+
+    // Bind stat elements
+    this.statEls = {};
+    for (var i = 0; i < this.stats.length; i++) {
+      var st = this.stats[i];
+      this.statEls[st.id] = document.getElementById(this.id + '-stat-' + st.id);
+    }
+
+    // Bind canvas
+    this.canvasEl = document.getElementById(this.id + '-canvas');
     if (this.canvasEl) {
       this.ctx = this.canvasEl.getContext('2d');
-    }
-    // Keep gridEl as alias for backwards compatibility
-    this.gridEl = this.canvasEl;
 
-    this.badgeEl = this.el.querySelector('.slab-badge') || this.el.querySelector('.pool-usage');
-
-    // Get stat elements based on variant
-    if (this.variant === 'resource-pool') {
-      var prefixClass = this.gridClass.replace('-grid', '');
-      this.usedEl = this.el.querySelector('.' + prefixClass + '-used');
-      this.totalEl = this.el.querySelector('.' + prefixClass + '-total');
-      this.pctEl = this.el.querySelector('.' + prefixClass + '-pct');
-    } else {
-      this.statsEl = this.el.querySelector('.slab-stats');
-    }
-
-    // Canvas rendering state
-    this.canvasConfigured = false;
-    this.cellSize = 5;
-    this.cellGap = 1;
-
-    // Watch for container resize (zoom, window resize)
-    if (this.canvasEl && window.ResizeObserver) {
+      // Watch for resize
       var self = this;
-      this.resizeObserver = new ResizeObserver(function() {
-        // Immediately reconfigure and redraw if we have data
-        if (self.lastSlabData) {
-          self.canvasConfigured = false;
-          self.update(self.lastSlabData);
-        }
-      });
-      var container = this.canvasEl.parentElement;
-      if (container) {
-        this.resizeObserver.observe(container);
+      if (window.ResizeObserver) {
+        this.resizeObserver = new ResizeObserver(function() {
+          if (self.lastSlabData) {
+            self.canvasConfigured = false;
+            self._renderGrid(self.lastSlabData);
+          }
+        });
+        var container = this.canvasEl.parentElement;
+        if (container) this.resizeObserver.observe(container);
       }
     }
 
     return true;
   };
 
-  // Canvas color constants matching CSS variables
-  SlabWidget.COLORS = {
-    free: 'rgba(255, 255, 255, 0.25)',
-    used: '#3fb950',      // --color-ok
-    active: '#3fb950',    // --color-ok
-    connecting: '#58a6ff', // --color-info
-    idle: '#1f6feb',      // --color-info-muted
-    closing: '#d29922',   // --color-warning
-    'tcp-listener': '#a371f7', // --color-purple
-    task: '#39d4d4',      // --color-cyan
-    timer: '#9e6a03',     // --color-warning-muted
-    flash: '#d29922'      // --color-warning (for flash animation)
-  };
+  // Update widget with new data
+  // data: { used, total, usedFormatted?, totalFormatted?, states?, bitmap?, markers:{}, stats:{} }
+  PoolWidget.prototype.update = function(data) {
+    if (!this.el) return;
 
-  // Update widget with new slab data
-  SlabWidget.prototype.update = function(slab, options) {
-    if (!this.el || !this.canvasEl || !this.ctx) return;
+    var used = data.used || 0;
+    var total = data.total || 1;
+    var pct = data.pct !== undefined ? data.pct : (used / total) * 100;
 
-    options = options || {};
-    var self = this;
-
-    // Store for resize redraw
-    this.lastSlabData = slab;
-
-    // Calculate percentage
-    var pct = slab.total > 0 ? Math.round((slab.used / slab.total) * 100) : 0;
-
-    // Configure canvas size if needed (on first render, slot count change, or container resize)
-    var container = this.canvasEl.parentElement;
-    var containerWidth = container ? container.clientWidth : 0;
-    if (!this.canvasConfigured || this.lastTotal !== slab.total || this.lastContainerWidth !== containerWidth) {
-      this._configureCanvas(slab.total);
-      this.lastTotal = slab.total;
-      this.lastContainerWidth = containerWidth;
+    // Merge with previous data to preserve states/bitmap across updates
+    // (gauge updates may not include grid data and vice versa)
+    // Note: slab data has slot counts, gauge data has byte counts - keep both
+    if (this.lastSlabData) {
+      if (data.states === undefined && this.lastSlabData.states !== undefined) {
+        data.states = this.lastSlabData.states;
+        // Also preserve slot-based total for grid sizing (different from byte total)
+        if (data.slotTotal === undefined && this.lastSlabData.slotTotal !== undefined) {
+          data.slotTotal = this.lastSlabData.slotTotal;
+        } else if (this.lastSlabData.total !== undefined && !this.lastSlabData.usedFormatted) {
+          // Previous data was slot-based (no formatted strings), preserve as slotTotal
+          data.slotTotal = this.lastSlabData.total;
+        }
+      }
+      if (data.bitmap === undefined && this.lastSlabData.bitmap !== undefined) {
+        data.bitmap = this.lastSlabData.bitmap;
+        if (data.slotTotal === undefined && this.lastSlabData.slotTotal !== undefined) {
+          data.slotTotal = this.lastSlabData.slotTotal;
+        }
+      }
+    }
+    // If this is slab data (has states or bitmap but no formatted strings), store total as slotTotal
+    if ((data.states !== undefined || data.bitmap !== undefined) && !data.usedFormatted && data.slotTotal === undefined) {
+      data.slotTotal = data.total;
     }
 
-    // Update grid based on data type
-    if (slab.states) {
-      // Stateful slab (connection-aware)
-      var statesRLE = slab._statesExpanded ? null : slab.states;
-      var statesExpanded = slab._statesExpanded ? slab.states : null;
-      requestAnimationFrame(function() {
-        self._renderCanvasStateGrid(statesRLE, statesExpanded, slab.total);
-      });
-    } else if (slab.bitmap !== undefined) {
-      // Binary bitmap slab - render directly from RLE
-      var bitmapRLE = slab.bitmap;
-      var total = slab.total;
-      requestAnimationFrame(function() {
-        self._renderCanvasBitmapGrid(bitmapRLE, total);
-      });
-    } else if (slab.total > 0) {
-      // No bitmap/states provided - render empty grid (all free)
-      requestAnimationFrame(function() {
-        self._renderCanvasEmpty(slab.total);
-      });
-    }
+    // Store for resize
+    this.lastSlabData = data;
 
-    // Update badge
-    this._updateBadge(slab, pct);
-
-    // Update stats
-    this._updateStats(slab, pct);
-
-    // Update type breakdown (if configured)
-    if (this.typeBreakdown && slab.by_type) {
-      this._updateTypeBreakdown(slab.by_type);
-    }
-
-    // Update state breakdown (if configured)
-    if (this.stateBreakdown && slab.summary) {
-      this._updateStateBreakdown(slab.summary);
-    }
-
-    // Update overflow warning
-    var overflowEl = this.el.querySelector('.overflow-warning');
-    if (overflowEl) {
-      if (slab.overflow > 0) {
-        overflowEl.textContent = '⚠ ' + slab.overflow + ' overflows';
-        overflowEl.style.display = '';
-      } else {
-        overflowEl.style.display = 'none';
+    // Update gauge fill
+    if (this.fillEl) {
+      this.fillEl.style.width = Math.min(pct, 100) + '%';
+      this.fillEl.classList.remove('warning', 'critical');
+      if (pct >= this.criticalThreshold) {
+        this.fillEl.classList.add('critical');
+      } else if (pct >= this.warningThreshold) {
+        this.fillEl.classList.add('warning');
       }
     }
 
-    // Update ARIA label
-    var ariaLabel = this.name + ': ' + slab.used + ' of ' + slab.total + ' slots used (' + pct + '%)';
-    if (slab.overflow > 0) {
-      ariaLabel += ', ' + slab.overflow + ' overflows detected';
+    // Update badge
+    if (this.badgeEl) {
+      this.badgeEl.textContent = Math.round(pct) + '%';
+      this.badgeEl.classList.remove('warning', 'critical');
+      if (pct >= this.criticalThreshold) {
+        this.badgeEl.classList.add('critical');
+      } else if (pct >= this.warningThreshold) {
+        this.badgeEl.classList.add('warning');
+      }
     }
-    this.canvasEl.setAttribute('aria-label', ariaLabel);
+
+    // Update usage
+    if (this.usageEl) {
+      if (data.usedFormatted && data.totalFormatted) {
+        this.usageEl.textContent = data.usedFormatted + ' / ' + data.totalFormatted;
+      } else {
+        this.usageEl.textContent = used + ' / ' + total;
+      }
+    }
+
+    // Update markers
+    if (data.markers) {
+      for (var mId in data.markers) {
+        var mEl = this.markerEls[mId];
+        if (mEl) {
+          var mv = data.markers[mId];
+          if (typeof mv === 'object') {
+            if (mv.position !== undefined) mEl.style.left = mv.position + '%';
+            if (mv.color) mEl.style.background = mv.color;
+            if (mv.label !== undefined) mEl.setAttribute('data-label', mv.label);
+          } else {
+            mEl.style.left = mv + '%';
+          }
+        }
+      }
+    }
+
+    // Update stats
+    if (data.stats) {
+      for (var sId in data.stats) {
+        var sEl = this.statEls[sId];
+        if (sEl) sEl.textContent = data.stats[sId];
+      }
+    }
+
+    // Render grid
+    if (this.showGrid && this.canvasEl && this.ctx) {
+      this._renderGrid(data);
+    }
   };
 
-  // Configure canvas dimensions based on total slots
-  SlabWidget.prototype._configureCanvas = function(total) {
+  // Configure canvas dimensions
+  PoolWidget.prototype._configureCanvas = function(total) {
     if (!this.canvasEl) return;
 
     var cellSize = this.cellSize;
     var gap = this.cellGap;
     var step = cellSize + gap;
 
-    // Get container width to determine how many columns fit
     var container = this.canvasEl.parentElement;
     var containerWidth = container ? container.clientWidth : 200;
 
-    // Calculate cols to fill container width, rows based on that
     var cols = Math.max(1, Math.floor(containerWidth / step));
     var rows = Math.ceil(total / cols);
 
-    // Canvas fills full container width, grid drawn from left
     var width = containerWidth;
     var height = rows * step;
 
-    // No offset - cells drawn from left edge
-    this.offsetX = 0;
-
-    // Handle high-DPI displays
     var dpr = window.devicePixelRatio || 1;
     this.canvasEl.width = width * dpr;
     this.canvasEl.height = height * dpr;
     this.canvasEl.style.width = width + 'px';
     this.canvasEl.style.height = height + 'px';
 
-    // Reset and scale context for high-DPI
     this.ctx.setTransform(1, 0, 0, 1, 0, 0);
     this.ctx.scale(dpr, dpr);
 
@@ -449,258 +497,191 @@
     this.canvasConfigured = true;
   };
 
-  // Render bitmap grid directly from RLE hex string
-  SlabWidget.prototype._renderCanvasBitmapGrid = function(rleHex, total) {
+  // Render grid from data
+  PoolWidget.prototype._renderGrid = function(data) {
+    // Only render grid if we have slot-based data (states or bitmap)
+    // Don't use byte totals for grid sizing - they're way too large
+    if (!data.states && data.bitmap === undefined) return;
+
+    // Use slotTotal for grid sizing (slot count), fall back to total only if reasonable
+    var total = data.slotTotal || data.total || 0;
+    if (total <= 0 || total > 500000) return;  // Sanity check (256K slab = 262144 slots)
+
+    var container = this.canvasEl.parentElement;
+    var containerWidth = container ? container.clientWidth : 0;
+    if (!this.canvasConfigured || this.lastTotal !== total || this.lastContainerWidth !== containerWidth) {
+      this._configureCanvas(total);
+      this.lastTotal = total;
+      this.lastContainerWidth = containerWidth;
+    }
+
+    var self = this;
+    if (data.states) {
+      requestAnimationFrame(function() { self._renderStateGrid(data.states, total); });
+    } else if (data.bitmap !== undefined) {
+      requestAnimationFrame(function() { self._renderBitmapGrid(data.bitmap, total); });
+    } else {
+      requestAnimationFrame(function() { self._renderEmptyGrid(total, data.used || 0); });
+    }
+  };
+
+  // Render state grid from RLE string
+  PoolWidget.prototype._renderStateGrid = function(rleStr, total) {
     var ctx = this.ctx;
     var cellSize = this.cellSize;
     var step = cellSize + this.cellGap;
     var cols = this.cols;
-    var offsetX = this.offsetX || 0;
-    var colors = SlabWidget.COLORS;
+    var colors = PoolWidget.COLORS;
 
-    // Clear canvas
     ctx.clearRect(0, 0, this.canvasEl.width, this.canvasEl.height);
 
-    if (!rleHex) {
-      // Empty bitmap - all free
+    if (!rleStr || rleStr.length === 0) {
       ctx.fillStyle = colors.free;
       for (var i = 0; i < total; i++) {
-        var x = offsetX + (i % cols) * step;
-        var y = Math.floor(i / cols) * step;
-        ctx.fillRect(x, y, cellSize, cellSize);
+        ctx.fillRect((i % cols) * step, Math.floor(i / cols) * step, cellSize, cellSize);
       }
       return;
     }
 
-    // Process RLE directly without full expansion
+    var slotIdx = 0, i = 0;
+    while (i < rleStr.length && slotIdx < total) {
+      var stateChar = rleStr[i++];
+      var countStr = '';
+      while (i < rleStr.length && rleStr[i] >= '0' && rleStr[i] <= '9') countStr += rleStr[i++];
+      var count = parseInt(countStr, 10) || 1;
+
+      var cssClass = this.stateClasses[stateChar] || (PoolWidget.DEFAULT_STATES.find(function(s) { return s.char === stateChar; }) || {}).class || 'free';
+      ctx.fillStyle = this.stateColors[cssClass] || colors[cssClass] || colors.free;
+
+      for (var c = 0; c < count && slotIdx < total; c++, slotIdx++) {
+        ctx.fillRect((slotIdx % cols) * step, Math.floor(slotIdx / cols) * step, cellSize, cellSize);
+      }
+    }
+
+    ctx.fillStyle = colors.free;
+    while (slotIdx < total) {
+      ctx.fillRect((slotIdx % cols) * step, Math.floor(slotIdx / cols) * step, cellSize, cellSize);
+      slotIdx++;
+    }
+  };
+
+  // Render bitmap grid from RLE hex
+  PoolWidget.prototype._renderBitmapGrid = function(rleHex, total) {
+    var ctx = this.ctx;
+    var cellSize = this.cellSize;
+    var step = cellSize + this.cellGap;
+    var cols = this.cols;
+    var colors = PoolWidget.COLORS;
+
+    ctx.clearRect(0, 0, this.canvasEl.width, this.canvasEl.height);
+
+    if (!rleHex) {
+      ctx.fillStyle = colors.free;
+      for (var i = 0; i < total; i++) {
+        ctx.fillRect((i % cols) * step, Math.floor(i / cols) * step, cellSize, cellSize);
+      }
+      return;
+    }
+
     var segments = rleHex.split(',');
     var slotIdx = 0;
 
     for (var s = 0; s < segments.length && slotIdx < total; s++) {
       var segment = segments[s];
       var starIdx = segment.indexOf('*');
-
       var hexByte = starIdx !== -1 ? segment.substring(0, starIdx) : segment;
       var byteCount = starIdx !== -1 ? parseInt(segment.substring(starIdx + 1), 10) || 1 : 1;
       var byteVal = parseInt(hexByte, 16);
       if (isNaN(byteVal)) continue;
 
-      // Draw 8 bits per byte, byteCount times
-      // Bit order: C uses LSB-first (slot 0 = bit 0), so read bit 0 to bit 7
       for (var c = 0; c < byteCount && slotIdx < total; c++) {
-        for (var bit = 0; bit < 8 && slotIdx < total; bit++) {
-          var used = (byteVal >> bit) & 1;
-          var x = offsetX + (slotIdx % cols) * step;
-          var y = Math.floor(slotIdx / cols) * step;
-          ctx.fillStyle = used ? colors.used : colors.free;
-          ctx.fillRect(x, y, cellSize, cellSize);
-          slotIdx++;
+        for (var bit = 0; bit < 8 && slotIdx < total; bit++, slotIdx++) {
+          ctx.fillStyle = ((byteVal >> bit) & 1) ? colors.used : colors.free;
+          ctx.fillRect((slotIdx % cols) * step, Math.floor(slotIdx / cols) * step, cellSize, cellSize);
         }
       }
     }
 
-    // Fill remaining slots as free
     ctx.fillStyle = colors.free;
     while (slotIdx < total) {
-      var x = offsetX + (slotIdx % cols) * step;
-      var y = Math.floor(slotIdx / cols) * step;
-      ctx.fillRect(x, y, cellSize, cellSize);
+      ctx.fillRect((slotIdx % cols) * step, Math.floor(slotIdx / cols) * step, cellSize, cellSize);
       slotIdx++;
     }
   };
 
-  // Render state grid from RLE or expanded states
-  SlabWidget.prototype._renderCanvasStateGrid = function(rleStr, expandedStates, total) {
+  // Render empty/simple used grid
+  PoolWidget.prototype._renderEmptyGrid = function(total, used) {
     var ctx = this.ctx;
     var cellSize = this.cellSize;
     var step = cellSize + this.cellGap;
     var cols = this.cols;
-    var offsetX = this.offsetX || 0;
-    var colors = SlabWidget.COLORS;
-    var stateClasses = this.stateClasses;
-
-    // Clear canvas
-    ctx.clearRect(0, 0, this.canvasEl.width, this.canvasEl.height);
-
-    // If we have expanded states, use them directly
-    if (expandedStates) {
-      var states = typeof expandedStates === 'string' ? expandedStates : expandedStates;
-      for (var i = 0; i < total && i < states.length; i++) {
-        var stateChar = states[i] || 'F';
-        var cssClass = stateClasses[stateChar] || 'free';
-        var x = offsetX + (i % cols) * step;
-        var y = Math.floor(i / cols) * step;
-        ctx.fillStyle = colors[cssClass] || colors.free;
-        ctx.fillRect(x, y, cellSize, cellSize);
-      }
-      // Fill remaining as free
-      ctx.fillStyle = colors.free;
-      for (var i = states.length; i < total; i++) {
-        var x = offsetX + (i % cols) * step;
-        var y = Math.floor(i / cols) * step;
-        ctx.fillRect(x, y, cellSize, cellSize);
-      }
-      return;
-    }
-
-    // Process RLE state string directly: "F16A3I2" -> 16 F's, 3 A's, 2 I's
-    if (!rleStr || rleStr.length === 0) {
-      ctx.fillStyle = colors.free;
-      for (var i = 0; i < total; i++) {
-        var x = offsetX + (i % cols) * step;
-        var y = Math.floor(i / cols) * step;
-        ctx.fillRect(x, y, cellSize, cellSize);
-      }
-      return;
-    }
-
-    var slotIdx = 0;
-    var i = 0;
-    while (i < rleStr.length && slotIdx < total) {
-      var stateChar = rleStr[i];
-      i++;
-
-      // Read count digits
-      var countStr = '';
-      while (i < rleStr.length && rleStr[i] >= '0' && rleStr[i] <= '9') {
-        countStr += rleStr[i];
-        i++;
-      }
-      var count = parseInt(countStr, 10) || 1;
-
-      // Draw 'count' cells with this state
-      var cssClass = stateClasses[stateChar] || 'free';
-      ctx.fillStyle = colors[cssClass] || colors.free;
-
-      for (var c = 0; c < count && slotIdx < total; c++) {
-        var x = offsetX + (slotIdx % cols) * step;
-        var y = Math.floor(slotIdx / cols) * step;
-        ctx.fillRect(x, y, cellSize, cellSize);
-        slotIdx++;
-      }
-    }
-
-    // Fill remaining as free
-    ctx.fillStyle = colors.free;
-    while (slotIdx < total) {
-      var x = offsetX + (slotIdx % cols) * step;
-      var y = Math.floor(slotIdx / cols) * step;
-      ctx.fillRect(x, y, cellSize, cellSize);
-      slotIdx++;
-    }
-  };
-
-  // Render empty grid (all free)
-  SlabWidget.prototype._renderCanvasEmpty = function(total) {
-    var ctx = this.ctx;
-    var cellSize = this.cellSize;
-    var step = cellSize + this.cellGap;
-    var cols = this.cols;
-    var offsetX = this.offsetX || 0;
+    var colors = PoolWidget.COLORS;
 
     ctx.clearRect(0, 0, this.canvasEl.width, this.canvasEl.height);
-    ctx.fillStyle = SlabWidget.COLORS.free;
 
     for (var i = 0; i < total; i++) {
-      var x = offsetX + (i % cols) * step;
-      var y = Math.floor(i / cols) * step;
-      ctx.fillRect(x, y, cellSize, cellSize);
+      ctx.fillStyle = i < used ? colors.used : colors.free;
+      ctx.fillRect((i % cols) * step, Math.floor(i / cols) * step, cellSize, cellSize);
     }
   };
 
-  // Update badge with percentage or count
-  SlabWidget.prototype._updateBadge = function(slab, pct) {
-    var badge = this.el.querySelector('.slab-badge');
-    if (badge) {
-      if (slab.total <= 10) {
-        badge.textContent = slab.used + '/' + slab.total;
-      } else {
-        badge.textContent = pct + '%';
-      }
-      badge.classList.remove('warning', 'critical');
-      if (pct >= 90) badge.classList.add('critical');
-      else if (pct >= 70) badge.classList.add('warning');
-    }
+  // Registry for PoolWidget instances
+  PoolWidget.registry = {};
 
-    // Also update resource-pool specific elements
-    if (this.usedEl) this.usedEl.textContent = slab.used;
-    if (this.totalEl) this.totalEl.textContent = slab.total;
-    if (this.pctEl) {
-      if (slab.total <= 10) {
-        this.pctEl.textContent = slab.used + '/' + slab.total;
-      } else {
-        this.pctEl.textContent = pct;
-      }
-    }
+  PoolWidget.register = function(key, widget) {
+    if (!PoolWidget.registry[key]) PoolWidget.registry[key] = [];
+    PoolWidget.registry[key].push(widget);
   };
 
-  // Update stats row
-  SlabWidget.prototype._updateStats = function(slab, pct) {
-    if (!this.statsEl) return;
-
-    var usedCount = this.statsEl.querySelector('.used-count') ||
-                    this.statsEl.querySelector('[class*="-used"]');
-    if (usedCount) usedCount.textContent = slab.used.toLocaleString();
-
-    var totalCount = this.statsEl.querySelector('[class*="-total"]');
-    if (totalCount) totalCount.textContent = slab.total.toLocaleString();
+  PoolWidget.getAll = function(key) {
+    return PoolWidget.registry[key] || [];
   };
 
-  // Update type breakdown counts
-  SlabWidget.prototype._updateTypeBreakdown = function(byType) {
-    for (var i = 0; i < this.typeBreakdown.length; i++) {
-      var type = this.typeBreakdown[i];
-      var countEl = this.el.querySelector('.type-count-' + type.key);
-      if (countEl) {
-        countEl.textContent = byType[type.key] || 0;
-      }
+  PoolWidget.unregister = function(key, widget) {
+    var arr = PoolWidget.registry[key];
+    if (!arr) return;
+    var idx = arr.indexOf(widget);
+    if (idx !== -1) arr.splice(idx, 1);
+  };
+
+  PoolWidget.updateAll = function(key, data) {
+    var widgets = PoolWidget.getAll(key);
+    for (var i = 0; i < widgets.length; i++) widgets[i].update(data);
+  };
+
+  // Helper builders
+  PoolWidget.Markers = {
+    heapMarkers: function(opts) {
+      opts = opts || {};
+      return [
+        { type: 'hwm', id: 'hwm', color: opts.hwmColor || 'var(--color-info)' },
+        { type: 'threshold', id: 'threshold', label: opts.thresholdLabel || 'GC',
+          color: opts.thresholdColor || 'var(--color-error)', position: opts.thresholdPosition || 75 }
+      ];
+    },
+    hwmOnly: function(opts) {
+      opts = opts || {};
+      return [{ type: 'hwm', id: 'hwm', color: opts.hwmColor || 'var(--color-info)' }];
     }
   };
 
-  // Update state breakdown counts
-  SlabWidget.prototype._updateStateBreakdown = function(summary) {
-    for (var i = 0; i < this.stateBreakdown.states.length; i++) {
-      var state = this.stateBreakdown.states[i];
-      var countEl = this.el.querySelector('.state-count-' + state.cssClass);
-      if (countEl) {
-        countEl.textContent = summary[state.stateChar] || 0;
-      }
+  PoolWidget.Legend = {
+    heap: function() {
+      return [
+        { type: 'bar', label: 'current' },
+        { type: 'marker', label: 'hwm', color: 'var(--color-info)' },
+        { type: 'marker', label: 'gc threshold', color: 'var(--color-error)' }
+      ];
+    },
+    states: function(states) {
+      return states.map(function(s) {
+        return { type: 'dot', label: s.label, color: s.color };
+      });
     }
   };
 
-  // Registry of all slab widgets for easy lookup
-  SlabWidget.registry = {};
-
-  // Register a widget instance
-  SlabWidget.register = function(slabKey, widget) {
-    if (!SlabWidget.registry[slabKey]) {
-      SlabWidget.registry[slabKey] = [];
-    }
-    SlabWidget.registry[slabKey].push(widget);
-  };
-
-  // Get all widgets for a slab key
-  SlabWidget.getAll = function(slabKey) {
-    return SlabWidget.registry[slabKey] || [];
-  };
-
-  // Unregister a widget instance
-  SlabWidget.unregister = function(slabKey, widget) {
-    var widgets = SlabWidget.registry[slabKey];
-    if (!widgets) return;
-    var idx = widgets.indexOf(widget);
-    if (idx !== -1) {
-      widgets.splice(idx, 1);
-    }
-  };
-
-  // Update all widgets for a slab key
-  SlabWidget.updateAll = function(slabKey, slabData, options) {
-    var widgets = SlabWidget.getAll(slabKey);
-    for (var i = 0; i < widgets.length; i++) {
-      widgets[i].update(slabData, options);
-    }
-  };
+  // Make PoolWidget globally available
+  window.PoolWidget = PoolWidget;
 
   // ==================== State ====================
   var history = {
@@ -714,8 +695,6 @@
   var prevMetrics = null;
   var prevTimestamp = null;
   var serverCards = {};  // Track dynamically created server cards
-  var uptimeBase = null;  // Server uptime at last SSE update
-  var uptimeReceivedAt = null;  // Client time when uptime was received
 
   // ==================== DOM Helpers ====================
   var $ = function(id) { return document.getElementById(id); };
@@ -732,18 +711,6 @@
     if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
     if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
     return Math.round(n).toString();
-  }
-
-  function fmtUptime(seconds) {
-    if (!seconds) return '--';
-    var d = Math.floor(seconds / 86400);
-    var h = Math.floor((seconds % 86400) / 3600);
-    var m = Math.floor((seconds % 3600) / 60);
-    var s = Math.floor(seconds % 60);
-    if (d > 0) return d + 'd ' + h + 'h ' + m + 'm';
-    if (h > 0) return h + 'h ' + m + 'm ' + s + 's';
-    if (m > 0) return m + 'm ' + s + 's';
-    return s + 's';
   }
 
   function fmtBytes(b) {
@@ -904,28 +871,6 @@
   }
 
   // ==================== Rendering: Sparklines ====================
-  function renderSparkline(containerId, data, options) {
-    var container = $(containerId);
-    if (!container || !data || data.length === 0) return;
-
-    options = options || {};
-    var width = container.offsetWidth || 100;
-    var height = container.offsetHeight || 30;
-    var max = Math.max.apply(null, data);
-    if (max === 0) max = 1;
-
-    var points = data.map(function(v, i) {
-      var x = (i / (data.length - 1)) * width;
-      var y = height - (v / max) * height;
-      return x + ',' + y;
-    }).join(' ');
-
-    container.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
-      '<polyline class="sparkline-line" points="' + points + '" fill="none" stroke="' + (options.color || 'var(--color-accent)') + '" stroke-width="1.5"/>' +
-      '</svg>';
-  }
-
-  // ==================== Rendering: Mini Sparklines (Health Bar) ====================
   function renderMiniSparkline(containerId, data, color) {
     var container = $(containerId);
     if (!container || !data || data.length < 2) return;
@@ -952,96 +897,79 @@
       '</svg>';
   }
 
-  // ==================== Rendering: Histograms ====================
-  function renderHistogram(containerId, histogram) {
-    var container = $(containerId);
-    if (!container) return;
-
-    if (!histogram || !histogram.buckets || histogram.buckets.length === 0) {
-      container.innerHTML = '<div style="color: var(--text-muted); text-align: center;">No data</div>';
-      return;
-    }
-
-    var buckets = histogram.buckets;
-    var maxCount = Math.max.apply(null, buckets.map(function(b) { return b.count; }));
-    if (maxCount === 0) maxCount = 1;
-
-    var html = '<div class="histogram-bars">';
-    buckets.forEach(function(bucket) {
-      var pct = (bucket.count / maxCount) * 100;
-      html += '<div class="histogram-bar-wrapper">';
-      html += '<div class="histogram-bar" style="height: ' + pct + '%"></div>';
-      html += '<div class="histogram-label">' + bucket.le + '</div>';
-      html += '</div>';
-    });
-    html += '</div>';
-
-    container.innerHTML = html;
-  }
-
-  // ==================== Rendering: Progress Bars ====================
-  function updateProgressBar(barId, usageId, used, total) {
-    var bar = $(barId);
-    var usage = $(usageId);
-    if (!bar || !usage) return;
-
-    var pct = total > 0 ? (used / total) * 100 : 0;
-    bar.style.width = pct + '%';
-
-    // Color based on usage
-    bar.classList.remove('warning', 'critical');
-    if (pct >= 90) bar.classList.add('critical');
-    else if (pct >= 70) bar.classList.add('warning');
-
-    usage.textContent = used + ' / ' + total;
-  }
-
   // ==================== Rendering: AIO System Panels ====================
   var aioSystemPanels = {};  // Cache of AIO system panels by name
 
   // Pre-configured slab widget definitions for AIO systems
-  // Each definition creates a SlabWidget with appropriate settings
+  // Each definition creates a PoolWidget with appropriate settings
   var AIO_SLAB_CONFIGS = {
     handles: function(id) {
-      return new SlabWidget({
+      return new PoolWidget({
         id: id + '-handles',
         name: 'AIO Handles',
         slabKey: 'handles',
-        gridClass: 'aio-sys-handles-grid',
-        variant: 'resource-pool',
-        typeBreakdown: [
-          { key: 'http', label: 'HTTP' },
-          { key: 'tcp', label: 'TCP' },
-          { key: 'task', label: 'Task' },
-          { key: 'timer', label: 'Timer' }
+        icon: 'H',
+        preset: 'buffer',
+        variant: 'full',
+        showGauge: true,
+        showGrid: true,
+        showLegend: true,
+        showOwnerBreakdown: true,
+        states: [
+          { char: 'A', class: 'active', label: 'Active', color: PoolWidget.COLORS.active },
+          { char: 'I', class: 'idle', label: 'Idle', color: PoolWidget.COLORS.idle },
+          { char: 'C', class: 'closing', label: 'Closing', color: PoolWidget.COLORS.closing },
+          { char: 'T', class: 'tcp-listener', label: 'TCP', color: PoolWidget.COLORS['tcp-listener'] },
+          { char: 'K', class: 'task', label: 'Task', color: PoolWidget.COLORS.task },
+          { char: 'M', class: 'timer', label: 'Timer', color: PoolWidget.COLORS.timer },
+          { char: 'F', class: 'free', label: 'Free', color: PoolWidget.COLORS.free }
         ],
-        stateBreakdown: {
-          header: 'HTTP Connection States',
-          states: [
-            { stateChar: 'A', cssClass: 'active', label: 'Active' },
-            { stateChar: 'I', cssClass: 'idle', label: 'Idle' },
-            { stateChar: 'C', cssClass: 'closing', label: 'Closing' }
-          ],
-          showOwnerBreakdown: true
-        }
+        legend: [
+          { type: 'dot', label: 'active', color: PoolWidget.COLORS.active },
+          { type: 'dot', label: 'idle', color: PoolWidget.COLORS.idle },
+          { type: 'dot', label: 'closing', color: PoolWidget.COLORS.closing },
+          { type: 'dot', label: 'free', color: PoolWidget.COLORS.free }
+        ]
       });
     },
     tcp_buffers: function(id) {
-      return new SlabWidget({
+      return new PoolWidget({
         id: id + '-tcp-buffers',
         name: 'TCP Buffers',
         slabKey: 'tcp_buffers',
-        gridClass: 'aio-sys-tcp-grid',
-        variant: 'compact'
+        icon: 'T',
+        preset: 'slab',
+        variant: 'compact',
+        showGauge: true,
+        showGrid: true
       });
     },
     stream_arenas: function(id) {
-      return new SlabWidget({
+      return new PoolWidget({
         id: id + '-stream-arenas',
         name: 'Stream Arenas',
         slabKey: 'stream_arenas',
-        gridClass: 'aio-sys-arenas-grid',
-        variant: 'compact'
+        icon: 'A',
+        preset: 'arena',
+        variant: 'compact',
+        showGauge: true,
+        showGrid: true
+      });
+    },
+    queue: function(id) {
+      return new PoolWidget({
+        id: id + '-queue',
+        name: 'Request Queue',
+        preset: 'queue',
+        variant: 'compact',
+        showGauge: true,
+        showGrid: false,
+        warningThreshold: 50,
+        criticalThreshold: 80,
+        stats: [
+          { id: 'pending', label: 'pending:' },
+          { id: 'capacity', label: '/', suffix: '' }
+        ]
       });
     }
   };
@@ -1050,11 +978,12 @@
     var name = sys.name || 'System ' + (index + 1);
     var id = 'aio-sys-' + index;
 
-    // Create slab widgets for this AIO system
+    // Create slab widgets and pool gauges for this AIO system
     var widgets = {
       handles: AIO_SLAB_CONFIGS.handles(id),
       tcp_buffers: AIO_SLAB_CONFIGS.tcp_buffers(id),
-      stream_arenas: AIO_SLAB_CONFIGS.stream_arenas(id)
+      stream_arenas: AIO_SLAB_CONFIGS.stream_arenas(id),
+      queue: AIO_SLAB_CONFIGS.queue(id)
     };
 
     var html =
@@ -1108,19 +1037,8 @@
             '<div class="aio-slab-grid">' +
               widgets.tcp_buffers.render() +
               widgets.stream_arenas.render() +
-              // Request queue gauge (simple bar)
-              '<div class="memory-slab-panel compact" id="' + id + '-queue-panel">' +
-                '<div class="slab-header">' +
-                  '<span class="slab-name">Request Queue</span>' +
-                  '<span class="slab-badge aio-queue-pct">0%</span>' +
-                '</div>' +
-                '<div class="queue-gauge">' +
-                  '<div class="queue-bar" style="width: 0%"></div>' +
-                '</div>' +
-                '<div class="slab-stats">' +
-                  '<span><span class="aio-queue-pending">0</span> / <span class="aio-queue-capacity">--</span></span>' +
-                '</div>' +
-              '</div>' +
+              // Request queue gauge (using PoolWidget)
+              widgets.queue.render() +
             '</div>' +
 
             '<div class="memory-legend-inline">' +
@@ -1176,7 +1094,10 @@
     for (var key in panel._slabWidgets) {
       var widget = panel._slabWidgets[key];
       widget.bind();
-      SlabWidget.register(widget.slabKey, widget);
+      // Register SlabWidgets by slabKey, PoolWidgets are accessed directly via panel._slabWidgets
+      if (widget.slabKey) {
+        PoolWidget.register(widget.slabKey, widget);
+      }
     }
     panel._widgetsBound = true;
   }
@@ -1206,36 +1127,18 @@
       queueEl.classList.toggle('critical', queuePct > 80);
     }
 
-    // Update queue gauge in Resource Pools section
-    var queuePctEl = panel.querySelector('.aio-queue-pct');
-    var queueBar = panel.querySelector('.queue-bar');
-    var queuePendingEl = panel.querySelector('.aio-queue-pending');
-    var queueCapEl = panel.querySelector('.aio-queue-capacity');
-
-    if (queuePctEl) queuePctEl.textContent = queuePct.toFixed(0) + '%';
-    if (queuePendingEl) queuePendingEl.textContent = pending;
-    if (queueCapEl) queueCapEl.textContent = capacity;
-    if (queueBar) {
-      queueBar.style.width = Math.min(queuePct, 100) + '%';
-      queueBar.classList.toggle('warning', queuePct > 50);
-      queueBar.classList.toggle('critical', queuePct > 80);
+    // Update queue PoolWidget in Resource Pools section
+    if (panel._slabWidgets && panel._slabWidgets.queue) {
+      panel._slabWidgets.queue.update({
+        used: pending,
+        total: capacity,
+        stats: {
+          pending: pending,
+          capacity: capacity
+        }
+      });
     }
 
-    // Connection pool is now updated via SSE memory diagnostics (handles slab)
-    // See MemoryDiagnostics.updateConnectionPoolFromHandles()
-  }
-
-  function updateProgressBarInPanel(panel, barSel, usageSel, used, total) {
-    var bar = panel.querySelector(barSel);
-    var usage = panel.querySelector(usageSel);
-    if (!bar || !usage) return;
-
-    var pct = total > 0 ? (used / total) * 100 : 0;
-    bar.style.width = pct + '%';
-    bar.classList.remove('warning', 'critical');
-    if (pct >= 90) bar.classList.add('critical');
-    else if (pct >= 70) bar.classList.add('warning');
-    usage.textContent = used + ' / ' + total;
   }
 
   function renderAioSystems(systems) {
@@ -1287,7 +1190,7 @@
         if (panel._slabWidgets) {
           for (var key in panel._slabWidgets) {
             var widget = panel._slabWidgets[key];
-            SlabWidget.unregister(widget.slabKey, widget);
+            PoolWidget.unregister(widget.slabKey, widget);
           }
         }
         panel.remove();
@@ -1869,15 +1772,6 @@
     var sys = aio.system || {};
     var conns = aio.connections || {};
 
-    // ========== Header ==========
-    var serverUptime = aio.uptime_seconds || mod.uptime_seconds || 0;
-    if (serverUptime > 0) {
-      uptimeBase = serverUptime;
-      uptimeReceivedAt = Date.now();
-    }
-    $('uptime-value').textContent = fmtUptime(serverUptime);
-    $('timestamp').textContent = new Date().toLocaleTimeString();
-
     // ========== Health Overview ==========
     // Calculate derived metrics
     var servers = groupByServer(mod);
@@ -2100,64 +1994,83 @@
   // Note: Polling has been removed - all data now comes through the unified SSE diagnostics stream
   // This eliminates dashboard requests competing with the server during stress tests
 
-  function updateUptimeAndTimestamp() {
-    if (uptimeBase !== null && uptimeReceivedAt !== null) {
-      var elapsed = (Date.now() - uptimeReceivedAt) / 1000;
-      $('uptime-value').textContent = fmtUptime(uptimeBase + elapsed);
-    }
-    $('timestamp').textContent = new Date().toLocaleTimeString();
-  }
+  // Global PoolWidget references for memory visualizations
+  var scratchArenaGauge = null;
+  var slabTierGauge = null;
+  var mallocTierGauge = null;
 
   function init() {
     showLoadingState();
-    setInterval(updateUptimeAndTimestamp, 1000);
 
-    // Initialize LVAL slab widget (static element in body.html)
-    initLvalSlabWidget();
+    // Initialize PoolWidgets for memory visualization (includes LVAL grid in slab tier)
+    initPoolWidgets();
   }
 
-  // Create and register SlabWidget for the static LVAL grid
-  function initLvalSlabWidget() {
-    var lvalCanvas = document.getElementById('lval-grid');
-    if (!lvalCanvas) return;
-
-    // Create widget with matching configuration
-    var widget = new SlabWidget({
-      id: 'lval',
-      name: 'LVAL Slab',
-      slabKey: 'lval',
-      gridClass: 'lval-grid-class',  // Not used since we bind directly
-      variant: 'compact'
-    });
-
-    // Manually bind to existing DOM elements
-    widget.el = lvalCanvas.closest('.heap-tier') || lvalCanvas.parentElement;
-    widget.canvasEl = lvalCanvas;
-    widget.ctx = lvalCanvas.getContext('2d');
-    widget.gridEl = lvalCanvas;  // Keep for compatibility
-    widget.statsEl = widget.el ? widget.el.querySelector('.tier-stats') : null;
-
-    // Canvas rendering state
-    widget.canvasConfigured = false;
-    widget.cellSize = 5;
-    widget.cellGap = 1;
-
-    // Watch for container resize (zoom, window resize)
-    if (window.ResizeObserver) {
-      widget.resizeObserver = new ResizeObserver(function() {
-        if (widget.lastSlabData) {
-          widget.canvasConfigured = false;
-          widget.update(widget.lastSlabData);
-        }
+  // Initialize PoolWidgets for scratch arena and GC heap tiers
+  function initPoolWidgets() {
+    // Scratch Arena PoolWidget
+    var scratchContainer = document.getElementById('scratch-arena-gauge-container');
+    if (scratchContainer) {
+      scratchArenaGauge = new PoolWidget({
+        id: 'scratch-arena-gauge',
+        name: 'Scratch Arena',
+        preset: 'arena',
+        variant: 'compact',
+        showGauge: true,
+        showGrid: false,
+        markers: PoolWidget.Markers.hwmOnly({ hwmColor: 'var(--color-warning)' }),
+        stats: [
+          { id: 'hwm', label: 'hwm:' },
+          { id: 'overflow', label: 'overflow:' }
+        ]
       });
-      var container = lvalCanvas.parentElement;
-      if (container) {
-        widget.resizeObserver.observe(container);
-      }
+      scratchContainer.innerHTML = scratchArenaGauge.render();
+      scratchArenaGauge.bind();
     }
 
-    // Register for updates
-    SlabWidget.register('lval', widget);
+    // GC Heap Tiers (Slab + Malloc)
+    var heapContainer = document.getElementById('heap-tiers-container');
+    if (heapContainer) {
+      // Slab Tier PoolWidget (includes LVAL grid)
+      slabTierGauge = new PoolWidget({
+        id: 'slab-tier-gauge',
+        name: 'Slab Tier',
+        slabKey: 'lval',
+        icon: 'S',
+        preset: 'slab',
+        variant: 'compact',
+        showGauge: true,
+        showGrid: true,
+        markers: PoolWidget.Markers.heapMarkers({ thresholdLabel: 'GC', thresholdPosition: 75 }),
+        stats: [
+          { id: 'objects', label: 'objects:' },
+          { id: 'hwm', label: 'hwm:', suffix: '%' }
+        ]
+      });
+
+      // Malloc Tier PoolWidget
+      mallocTierGauge = new PoolWidget({
+        id: 'malloc-tier-gauge',
+        name: 'Malloc Tier',
+        icon: 'M',
+        preset: 'malloc',
+        variant: 'compact',
+        showGauge: true,
+        showGrid: false,
+        markers: PoolWidget.Markers.heapMarkers({ thresholdLabel: 'GC', thresholdPosition: 75 }),
+        stats: [
+          { id: 'peak', label: 'peak:' },
+          { id: 'hwm', label: 'hwm:', suffix: '%' }
+        ]
+      });
+
+      heapContainer.innerHTML = slabTierGauge.render() + mallocTierGauge.render();
+      slabTierGauge.bind();
+      mallocTierGauge.bind();
+
+      // Register slab tier for LVAL grid updates
+      PoolWidget.register('lval', slabTierGauge);
+    }
   }
 
   // Start when DOM is ready
@@ -2752,8 +2665,7 @@
     updateSlabGrid(slab, ownerMap) {
       var self = this;
 
-      // Update all registered SlabWidget instances for this slab
-      var widgets = SlabWidget.getAll(slab.slabKey || slab.name);
+      var widgets = PoolWidget.getAll(slab.slabKey || slab.name);
       widgets.forEach(function(widget) {
         widget.update(slab);
 
@@ -2821,9 +2733,6 @@
     }
 
     updateArenaGauge(arena) {
-      var gauge = document.querySelector('[data-arena="' + arena.name + '"]');
-      if (!gauge) return;
-
       var used = arena.used_bytes || arena.used || 0;
       var capacity = arena.capacity_bytes || arena.capacity || 1;
       var hwm = arena.high_water_mark || arena.hwm || 0;
@@ -2831,58 +2740,29 @@
       var hwmPercentage = (hwm / capacity) * 100;
       var usedStr = this.formatBytes(used);
       var capacityStr = this.formatBytes(capacity);
-
-      // Update bar
-      var bar = gauge.querySelector('.arena-bar');
-      if (bar) {
-        bar.style.width = percentage + '%';
-
-        bar.className = 'arena-bar';
-        if (percentage >= 90) {
-          bar.classList.add('critical');
-        } else if (percentage >= 70) {
-          bar.classList.add('warning');
-        } else {
-          bar.classList.add('healthy');
-        }
-      }
-
-      // Update high water mark
-      var hwmEl = gauge.querySelector('.arena-hwm');
-      if (hwmEl) {
-        hwmEl.style.left = hwmPercentage + '%';
-      }
-
-      // Update label
-      var label = gauge.querySelector('.arena-label');
-      if (label) {
-        label.innerHTML = '<span class="pct">' + percentage.toFixed(0) + '%</span> &mdash; ' + usedStr + ' / ' + capacityStr;
-      }
-
-      gauge.setAttribute('aria-valuenow', Math.round(percentage));
-      gauge.setAttribute('aria-label', arena.name + ': ' + percentage.toFixed(0) + '% used, ' + usedStr + ' of ' + capacityStr);
-
-      // Update overflow indicator
       var overflow = arena.overflow_fallbacks || arena.overflow || 0;
-      if (overflow > 0) {
-        gauge.classList.add('has-overflow');
-      } else {
-        gauge.classList.remove('has-overflow');
-      }
 
-      // Update scratch-specific elements
-      if (arena.name === 'scratch') {
+      // Update scratch arena using PoolWidget
+      if (arena.name === 'scratch' && scratchArenaGauge) {
+        scratchArenaGauge.update({
+          used: used,
+          total: capacity,
+          usedFormatted: usedStr,
+          totalFormatted: capacityStr,
+          markers: {
+            hwm: hwmPercentage
+          },
+          stats: {
+            hwm: this.formatBytes(hwm),
+            overflow: overflow > 0 ? overflow : '0'
+          }
+        });
+
+        // Update header elements
         var pctEl = document.getElementById('scratch-pct');
         var usageEl = document.getElementById('scratch-usage');
-        var hwmValueEl = document.getElementById('scratch-hwm');
-        var overflowEl = document.getElementById('scratch-overflow');
-        var overflowItem = document.getElementById('scratch-overflow-item');
         if (pctEl) pctEl.textContent = percentage.toFixed(0) + '%';
         if (usageEl) usageEl.textContent = usedStr + ' / ' + capacityStr;
-        if (hwmValueEl) hwmValueEl.textContent = this.formatBytes(hwm);
-        var overflow = arena.overflow_fallbacks || arena.overflow || 0;
-        if (overflowEl) overflowEl.textContent = overflow;
-        if (overflowItem) overflowItem.style.display = overflow > 0 ? '' : 'none';
       }
     }
 
@@ -2932,35 +2812,47 @@
       var totalCapacity = slabTotal + mallocLimit;
       var totalPct = totalCapacity > 0 ? (totalUsed / totalCapacity) * 100 : 0;
 
-      // Update slab tier
-      var slabUsedEl = $('slab-used');
-      var slabTotalEl = $('slab-total');
-      var slabPctEl = $('slab-pct');
-      var slabBarFill = $('slab-bar-fill');
-      var slabObjectsUsed = $('slab-objects-used');
-      var slabObjectsTotal = $('slab-objects-total');
+      var thresholdPct = gc.threshold_pct || 75;
 
-      if (slabUsedEl) slabUsedEl.textContent = fmtBytes(slabUsed);
-      if (slabTotalEl) slabTotalEl.textContent = fmtBytes(slabTotal);
-      if (slabPctEl) slabPctEl.textContent = Math.round(slabPct);
-      if (slabBarFill) slabBarFill.style.width = Math.min(slabPct, 100) + '%';
-      if (slabObjectsUsed) slabObjectsUsed.textContent = (slab.objects_used || 0).toLocaleString();
-      if (slabObjectsTotal) slabObjectsTotal.textContent = (slab.objects_total || 0).toLocaleString();
+      // Update Slab Tier PoolWidget
+      if (slabTierGauge) {
+        slabTierGauge.warningThreshold = thresholdPct;
+        slabTierGauge.update({
+          used: slabUsed,
+          total: slabTotal,
+          usedFormatted: fmtBytes(slabUsed),
+          totalFormatted: fmtBytes(slabTotal),
+          markers: {
+            hwm: slabHwmPct,
+            threshold: { position: thresholdPct }
+          },
+          stats: {
+            objects: (slab.objects_used || 0).toLocaleString() + '/' + (slab.objects_total || 0).toLocaleString(),
+            hwm: Math.round(slabHwmPct)
+          }
+        });
+      }
 
-      // Update malloc tier
-      var mallocUsedEl = $('malloc-used');
-      var mallocLimitEl = $('malloc-limit');
-      var mallocPctEl = $('malloc-pct');
-      var mallocBarFill = $('malloc-bar-fill');
-      var mallocPeakEl = $('malloc-peak');
+      // Update Malloc Tier PoolWidget
+      if (mallocTierGauge) {
+        mallocTierGauge.warningThreshold = thresholdPct;
+        mallocTierGauge.update({
+          used: mallocUsed,
+          total: mallocLimit,
+          usedFormatted: fmtBytes(mallocUsed),
+          totalFormatted: fmtBytes(mallocLimit),
+          markers: {
+            hwm: mallocHwmPct,
+            threshold: { position: thresholdPct }
+          },
+          stats: {
+            peak: fmtBytes(mallocPeakBytes),
+            hwm: Math.round(mallocHwmPct)
+          }
+        });
+      }
 
-      if (mallocUsedEl) mallocUsedEl.textContent = fmtBytes(mallocUsed);
-      if (mallocLimitEl) mallocLimitEl.textContent = fmtBytes(mallocLimit);
-      if (mallocPctEl) mallocPctEl.textContent = Math.round(mallocPct);
-      if (mallocBarFill) mallocBarFill.style.width = Math.min(mallocPct, 100) + '%';
-      if (mallocPeakEl) mallocPeakEl.textContent = fmtBytes(gc.peak || 0);
-
-      // Update combined heap stats
+      // Update combined heap stats in header
       var heapUsedEl = $('heap-used');
       var heapTotalEl = $('heap-total');
       var heapGaugeValue = $('heap-gauge-value');
@@ -2970,50 +2862,9 @@
       if (heapGaugeValue) heapGaugeValue.textContent = Math.round(totalPct);
 
       // Update aggregate stats
-      var thresholdPct = gc.threshold_pct || 75;
       var gcThresholdPctEl = $('gc-threshold-pct');
       if (gcThresholdPctEl) gcThresholdPctEl.textContent = thresholdPct;
       // heap-reclaimed is updated elsewhere from vm_metrics.gc_reclaimed_bytes
-
-      // Color tier bars based on threshold
-      if (slabBarFill) {
-        slabBarFill.classList.remove('ok', 'warning', 'critical');
-        if (slabPct >= 90) {
-          slabBarFill.classList.add('critical');
-        } else if (slabPct >= thresholdPct) {
-          slabBarFill.classList.add('warning');
-        } else {
-          slabBarFill.classList.add('ok');
-        }
-      }
-
-      if (mallocBarFill) {
-        mallocBarFill.classList.remove('ok', 'warning', 'critical');
-        if (mallocPct >= 90) {
-          mallocBarFill.classList.add('critical');
-        } else if (mallocPct >= thresholdPct) {
-          mallocBarFill.classList.add('warning');
-        } else {
-          mallocBarFill.classList.add('ok');
-        }
-      }
-
-      // Position threshold markers (same threshold applies to both tiers)
-      var slabThresholdMarker = $('slab-bar-threshold');
-      var mallocThresholdMarker = $('malloc-bar-threshold');
-      if (slabThresholdMarker) slabThresholdMarker.style.left = thresholdPct + '%';
-      if (mallocThresholdMarker) mallocThresholdMarker.style.left = thresholdPct + '%';
-
-      // Position HWM markers using server-provided per-tier peaks
-      var slabHwmMarker = $('slab-bar-hwm');
-      var slabHwmPctEl = $('slab-hwm-pct');
-      if (slabHwmMarker) slabHwmMarker.style.left = slabHwmPct + '%';
-      if (slabHwmPctEl) slabHwmPctEl.textContent = Math.round(slabHwmPct);
-
-      var mallocHwmMarker = $('malloc-bar-hwm');
-      var mallocHwmPctEl = $('malloc-hwm-pct');
-      if (mallocHwmMarker) mallocHwmMarker.style.left = mallocHwmPct + '%';
-      if (mallocHwmPctEl) mallocHwmPctEl.textContent = Math.round(mallocHwmPct);
     }
 
     formatBytes(bytes) {
