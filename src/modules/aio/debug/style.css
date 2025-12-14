@@ -2129,6 +2129,7 @@ main[role="main"] {
   flex-direction: column;
   gap: var(--space-xs);
   padding: var(--space-sm);
+  padding-bottom: var(--space-lg);
   background: var(--bg-tertiary);
   border-radius: var(--radius-md);
 }
@@ -2352,7 +2353,7 @@ main[role="main"] {
 .pool-widget-marker.hwm::after {
   content: attr(data-label);
   position: absolute;
-  bottom: -20px;
+  top: calc(100% + 6px);
   left: 50%;
   transform: translateX(-50%);
   font-size: 9px;
@@ -2366,9 +2367,11 @@ main[role="main"] {
   opacity: 0;
   transition: opacity 0.2s;
   z-index: 10;
+  pointer-events: none;
 }
 
-.pool-widget:hover .pool-widget-marker.hwm::after {
+/* Show marker tooltips only when hovering the gauge area, not the full grid */
+.pool-widget-gauge:hover .pool-widget-marker.hwm::after {
   opacity: 1;
 }
 
@@ -2379,7 +2382,7 @@ main[role="main"] {
 .pool-widget-marker.threshold::after {
   content: attr(data-label);
   position: absolute;
-  bottom: -20px;
+  top: calc(100% + 6px);
   left: 50%;
   transform: translateX(-50%);
   font-size: 9px;
@@ -2393,9 +2396,10 @@ main[role="main"] {
   opacity: 0;
   transition: opacity 0.2s;
   z-index: 10;
+  pointer-events: none;
 }
 
-.pool-widget:hover .pool-widget-marker.threshold::after {
+.pool-widget-gauge:hover .pool-widget-marker.threshold::after {
   opacity: 1;
 }
 
@@ -2551,13 +2555,15 @@ main[role="main"] {
 .pool-widget-grid-wrapper {
   display: grid;
   grid-template-rows: 1fr;
-  transition: grid-template-rows 0.2s ease, opacity 0.15s ease;
+  transition: grid-template-rows 0.2s ease, opacity 0.15s ease, margin 0.2s ease;
   overflow: hidden;
+  margin-top: var(--space-md);
 }
 
 .pool-widget-grid-wrapper.collapsed {
   grid-template-rows: 0fr;
   opacity: 0;
+  margin-top: 0;
 }
 
 .pool-widget-grid-wrapper > .pool-widget-grid {
@@ -2850,12 +2856,14 @@ main[role="main"] {
 
 /* ===== AIO SECTION BLOCKS (Phase 2) ===== */
 .aio-section-block {
-  padding: var(--space-lg);
+  padding: var(--space-lg) var(--space-lg) var(--space-xl);
   border-bottom: 1px solid var(--border-muted);
+  margin-bottom: var(--space-sm);
 }
 
 .aio-section-block:last-child {
   border-bottom: none;
+  margin-bottom: 0;
 }
 
 .block-header {
@@ -3050,7 +3058,8 @@ main[role="main"] {
 .aio-slab-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-md);
+  gap: var(--space-lg);
+  margin-top: var(--space-sm);
 }
 
 /* Pool widgets inside AIO slab grid */
