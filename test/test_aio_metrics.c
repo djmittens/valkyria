@@ -191,7 +191,7 @@ void test_system_stats_prometheus_output(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_aio_system_stats_t stats;
-  valk_aio_system_stats_init(&stats, 64, 128);
+  valk_aio_system_stats_init(&stats, 64, 128, 256);
 
   // Add some test data
   valk_aio_system_stats_on_server_start(&stats);

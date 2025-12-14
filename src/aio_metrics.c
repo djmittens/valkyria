@@ -337,7 +337,8 @@ char* valk_aio_metrics_to_prometheus(const valk_aio_metrics_t* m, struct valk_me
 // Initialize system stats structure
 void valk_aio_system_stats_init(valk_aio_system_stats_t* s,
                                  uint64_t arenas_total,
-                                 uint64_t tcp_buffers_total) {
+                                 uint64_t tcp_buffers_total,
+                                 uint64_t queue_capacity) {
   atomic_store(&s->servers_count, 0);
   atomic_store(&s->clients_count, 0);
   atomic_store(&s->handles_count, 0);
@@ -350,6 +351,7 @@ void valk_aio_system_stats_init(valk_aio_system_stats_t* s,
   atomic_store(&s->queue_depth, 0);
   atomic_store(&s->pending_requests, 0);
   atomic_store(&s->pending_responses, 0);
+  s->queue_capacity = queue_capacity;
 
   atomic_store(&s->arena_pool_overflow, 0);
   atomic_store(&s->tcp_buffer_overflow, 0);

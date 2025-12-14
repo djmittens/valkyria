@@ -60,6 +60,7 @@ typedef struct {
   _Atomic uint64_t queue_depth;         // HTTP queue depth
   _Atomic uint64_t pending_requests;    // Pending HTTP requests
   _Atomic uint64_t pending_responses;   // Pending HTTP responses
+  uint64_t queue_capacity;              // Queue capacity (set at init)
 
   // Overflow tracking (cumulative)
   _Atomic uint64_t arena_pool_overflow;     // Arena acquire failures
@@ -130,7 +131,8 @@ void valk_aio_metrics_init(valk_aio_metrics_t* m);
 // Initialize system stats structure
 void valk_aio_system_stats_init(valk_aio_system_stats_t* s,
                                  uint64_t arenas_total,
-                                 uint64_t tcp_buffers_total);
+                                 uint64_t tcp_buffers_total,
+                                 uint64_t queue_capacity);
 
 // Instrumentation functions for HTTP metrics
 void valk_aio_metrics_on_connection(valk_aio_metrics_t* m, bool success);

@@ -1575,6 +1575,7 @@ main[role="main"] {
   padding: var(--space-md);
   display: flex;
   flex-direction: column;
+  min-width: 0; /* Allow shrinking in grid layouts */
 }
 
 .memory-slab-panel.critical {
@@ -1616,11 +1617,9 @@ main[role="main"] {
 /* ===== UNIFIED SLAB/POOL GRID STYLES ===== */
 .slab-canvas,
 .pool-grid-container {
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
   position: relative;
   overflow: hidden;
-  padding: 2px;
+  min-width: 0; /* Allow shrinking in flex/grid containers */
 }
 
 .slab-grid {
@@ -1634,8 +1633,8 @@ main[role="main"] {
 /* Canvas-based slab grid */
 .slab-grid-canvas {
   display: block;
-  background: var(--bg-primary);
   border-radius: var(--radius-sm);
+  background: var(--bg-tertiary); /* Shows through on incomplete last row */
 }
 
 /* pool-grid: container already has padding/bg, grid just needs flex layout */
@@ -2673,9 +2672,8 @@ main[role="main"] {
   font-variant-numeric: tabular-nums;
 }
 
-/* pool-grid-container extends slab-canvas with different background */
+/* pool-grid-container extends slab-canvas */
 .pool-grid-container {
-  background: var(--bg-primary);
   margin-bottom: var(--space-sm);
 }
 
@@ -2817,6 +2815,30 @@ main[role="main"] {
 .memory-slab-panel.compact .slab-stats {
   font-size: 10px;
   margin-top: var(--space-xs);
+}
+
+/* Queue gauge (bar-style progress) */
+.queue-gauge {
+  height: 8px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin: var(--space-xs) 0;
+}
+
+.queue-bar {
+  height: 100%;
+  background: var(--color-ok);
+  transition: width 0.3s ease, background 0.3s ease;
+  border-radius: var(--radius-sm);
+}
+
+.queue-bar.warning {
+  background: var(--color-warning);
+}
+
+.queue-bar.critical {
+  background: var(--color-error);
 }
 
 /* Mini slab panels for HTTP servers/clients */

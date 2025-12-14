@@ -1001,13 +1001,20 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
     uint64_t now_us = (uint64_t)(uv_hrtime() / 1000);
     double uptime_seconds = (double)(now_us - aio_metrics->start_time_us) / 1000000.0;
 
+    // Get system stats for queue data
+    valk_aio_system_stats_t *sys_stats = valk_aio_get_system_stats(aio);
+    uint64_t pending_req = sys_stats ? atomic_load(&sys_stats->pending_requests) : 0;
+    uint64_t pending_resp = sys_stats ? atomic_load(&sys_stats->pending_responses) : 0;
+    uint64_t queue_cap = sys_stats ? sys_stats->queue_capacity : 0;
+
     n = snprintf(p, end - p,
                  "\"aio\":{\"uptime_seconds\":%.2f,"
                  "\"connections\":{\"total\":%lu,\"active\":%lu,\"failed\":%lu,"
                  "\"idle\":%lu,\"closing\":%lu,\"connecting\":%lu},"
                  "\"streams\":{\"total\":%lu,\"active\":%lu},"
                  "\"requests\":{\"total\":%lu,\"active\":%lu,\"errors\":%lu},"
-                 "\"bytes\":{\"sent\":%lu,\"recv\":%lu}},",
+                 "\"bytes\":{\"sent\":%lu,\"recv\":%lu},"
+                 "\"queue\":{\"pending_requests\":%lu,\"pending_responses\":%lu,\"capacity\":%lu}},",
                  uptime_seconds,
                  atomic_load(&aio_metrics->connections_total),
                  atomic_load(&aio_metrics->connections_active),
@@ -1021,7 +1028,8 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
                  atomic_load(&aio_metrics->requests_active),
                  atomic_load(&aio_metrics->requests_errors),
                  atomic_load(&aio_metrics->bytes_sent_total),
-                 atomic_load(&aio_metrics->bytes_recv_total));
+                 atomic_load(&aio_metrics->bytes_recv_total),
+                 pending_req, pending_resp, queue_cap);
 
     if (n < 0 || n >= end - p) return -1;
     p += n;
@@ -1754,13 +1762,20 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
     uint64_t now_us = (uint64_t)(uv_hrtime() / 1000);
     double uptime_seconds = (double)(now_us - aio_metrics->start_time_us) / 1000000.0;
 
+    // Get system stats for queue data
+    valk_aio_system_stats_t *sys_stats = valk_aio_get_system_stats(aio);
+    uint64_t pending_req = sys_stats ? atomic_load(&sys_stats->pending_requests) : 0;
+    uint64_t pending_resp = sys_stats ? atomic_load(&sys_stats->pending_responses) : 0;
+    uint64_t queue_cap = sys_stats ? sys_stats->queue_capacity : 0;
+
     n = snprintf(p, end - p,
                  "\"aio\":{\"uptime_seconds\":%.2f,"
                  "\"connections\":{\"total\":%lu,\"active\":%lu,\"failed\":%lu,"
                  "\"idle\":%lu,\"closing\":%lu,\"connecting\":%lu},"
                  "\"streams\":{\"total\":%lu,\"active\":%lu},"
                  "\"requests\":{\"total\":%lu,\"active\":%lu,\"errors\":%lu},"
-                 "\"bytes\":{\"sent\":%lu,\"recv\":%lu}},",
+                 "\"bytes\":{\"sent\":%lu,\"recv\":%lu},"
+                 "\"queue\":{\"pending_requests\":%lu,\"pending_responses\":%lu,\"capacity\":%lu}},",
                  uptime_seconds,
                  atomic_load(&aio_metrics->connections_total),
                  atomic_load(&aio_metrics->connections_active),
@@ -1774,7 +1789,8 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
                  atomic_load(&aio_metrics->requests_active),
                  atomic_load(&aio_metrics->requests_errors),
                  atomic_load(&aio_metrics->bytes_sent_total),
-                 atomic_load(&aio_metrics->bytes_recv_total));
+                 atomic_load(&aio_metrics->bytes_recv_total),
+                 pending_req, pending_resp, queue_cap);
 
     if (n < 0 || n >= end - p) goto cleanup;
     p += n;

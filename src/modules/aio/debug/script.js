@@ -418,17 +418,20 @@
     var gap = this.cellGap;
     var step = cellSize + gap;
 
-    // Get container width to match flexbox-like behavior
+    // Get container width to determine how many columns fit
     var container = this.canvasEl.parentElement;
-    var containerWidth = container ? container.clientWidth - 4 : 200; // -4 for padding
+    var containerWidth = container ? container.clientWidth : 200;
 
     // Calculate cols to fill container width, rows based on that
     var cols = Math.max(1, Math.floor(containerWidth / step));
     var rows = Math.ceil(total / cols);
 
-    // Canvas fills available width
+    // Canvas fills full container width, grid drawn from left
     var width = containerWidth;
     var height = rows * step;
+
+    // No offset - cells drawn from left edge
+    this.offsetX = 0;
 
     // Handle high-DPI displays
     var dpr = window.devicePixelRatio || 1;
@@ -452,6 +455,7 @@
     var cellSize = this.cellSize;
     var step = cellSize + this.cellGap;
     var cols = this.cols;
+    var offsetX = this.offsetX || 0;
     var colors = SlabWidget.COLORS;
 
     // Clear canvas
@@ -461,7 +465,7 @@
       // Empty bitmap - all free
       ctx.fillStyle = colors.free;
       for (var i = 0; i < total; i++) {
-        var x = (i % cols) * step;
+        var x = offsetX + (i % cols) * step;
         var y = Math.floor(i / cols) * step;
         ctx.fillRect(x, y, cellSize, cellSize);
       }
@@ -482,10 +486,11 @@
       if (isNaN(byteVal)) continue;
 
       // Draw 8 bits per byte, byteCount times
+      // Bit order: C uses LSB-first (slot 0 = bit 0), so read bit 0 to bit 7
       for (var c = 0; c < byteCount && slotIdx < total; c++) {
-        for (var bit = 7; bit >= 0 && slotIdx < total; bit--) {
+        for (var bit = 0; bit < 8 && slotIdx < total; bit++) {
           var used = (byteVal >> bit) & 1;
-          var x = (slotIdx % cols) * step;
+          var x = offsetX + (slotIdx % cols) * step;
           var y = Math.floor(slotIdx / cols) * step;
           ctx.fillStyle = used ? colors.used : colors.free;
           ctx.fillRect(x, y, cellSize, cellSize);
@@ -497,7 +502,7 @@
     // Fill remaining slots as free
     ctx.fillStyle = colors.free;
     while (slotIdx < total) {
-      var x = (slotIdx % cols) * step;
+      var x = offsetX + (slotIdx % cols) * step;
       var y = Math.floor(slotIdx / cols) * step;
       ctx.fillRect(x, y, cellSize, cellSize);
       slotIdx++;
@@ -510,6 +515,7 @@
     var cellSize = this.cellSize;
     var step = cellSize + this.cellGap;
     var cols = this.cols;
+    var offsetX = this.offsetX || 0;
     var colors = SlabWidget.COLORS;
     var stateClasses = this.stateClasses;
 
@@ -522,7 +528,7 @@
       for (var i = 0; i < total && i < states.length; i++) {
         var stateChar = states[i] || 'F';
         var cssClass = stateClasses[stateChar] || 'free';
-        var x = (i % cols) * step;
+        var x = offsetX + (i % cols) * step;
         var y = Math.floor(i / cols) * step;
         ctx.fillStyle = colors[cssClass] || colors.free;
         ctx.fillRect(x, y, cellSize, cellSize);
@@ -530,7 +536,7 @@
       // Fill remaining as free
       ctx.fillStyle = colors.free;
       for (var i = states.length; i < total; i++) {
-        var x = (i % cols) * step;
+        var x = offsetX + (i % cols) * step;
         var y = Math.floor(i / cols) * step;
         ctx.fillRect(x, y, cellSize, cellSize);
       }
@@ -541,7 +547,7 @@
     if (!rleStr || rleStr.length === 0) {
       ctx.fillStyle = colors.free;
       for (var i = 0; i < total; i++) {
-        var x = (i % cols) * step;
+        var x = offsetX + (i % cols) * step;
         var y = Math.floor(i / cols) * step;
         ctx.fillRect(x, y, cellSize, cellSize);
       }
@@ -567,7 +573,7 @@
       ctx.fillStyle = colors[cssClass] || colors.free;
 
       for (var c = 0; c < count && slotIdx < total; c++) {
-        var x = (slotIdx % cols) * step;
+        var x = offsetX + (slotIdx % cols) * step;
         var y = Math.floor(slotIdx / cols) * step;
         ctx.fillRect(x, y, cellSize, cellSize);
         slotIdx++;
@@ -577,7 +583,7 @@
     // Fill remaining as free
     ctx.fillStyle = colors.free;
     while (slotIdx < total) {
-      var x = (slotIdx % cols) * step;
+      var x = offsetX + (slotIdx % cols) * step;
       var y = Math.floor(slotIdx / cols) * step;
       ctx.fillRect(x, y, cellSize, cellSize);
       slotIdx++;
@@ -590,12 +596,13 @@
     var cellSize = this.cellSize;
     var step = cellSize + this.cellGap;
     var cols = this.cols;
+    var offsetX = this.offsetX || 0;
 
     ctx.clearRect(0, 0, this.canvasEl.width, this.canvasEl.height);
     ctx.fillStyle = SlabWidget.COLORS.free;
 
     for (var i = 0; i < total; i++) {
-      var x = (i % cols) * step;
+      var x = offsetX + (i % cols) * step;
       var y = Math.floor(i / cols) * step;
       ctx.fillRect(x, y, cellSize, cellSize);
     }
@@ -1036,16 +1043,6 @@
         gridClass: 'aio-sys-arenas-grid',
         variant: 'compact'
       });
-    },
-    request_queue: function(id) {
-      return new SlabWidget({
-        id: id + '-queue',
-        name: 'Request Queue',
-        slabKey: 'request_queue',
-        gridClass: 'aio-sys-queue-grid',
-        variant: 'compact',
-        statsTemplate: '<span>pending/completed</span>'
-      });
     }
   };
 
@@ -1057,8 +1054,7 @@
     var widgets = {
       handles: AIO_SLAB_CONFIGS.handles(id),
       tcp_buffers: AIO_SLAB_CONFIGS.tcp_buffers(id),
-      stream_arenas: AIO_SLAB_CONFIGS.stream_arenas(id),
-      request_queue: AIO_SLAB_CONFIGS.request_queue(id)
+      stream_arenas: AIO_SLAB_CONFIGS.stream_arenas(id)
     };
 
     var html =
@@ -1091,7 +1087,7 @@
                 '<div class="mini-stat-value aio-sys-handles">--</div>' +
                 '<div class="mini-stat-label">Handles</div>' +
               '</div>' +
-              '<div class="mini-stat" role="listitem" title="Pending items in request/response queue.">' +
+              '<div class="mini-stat" role="listitem" title="Pending HTTP requests + responses in the processing queue. High values indicate backpressure.">' +
                 '<div class="mini-stat-value aio-sys-queue">0</div>' +
                 '<div class="mini-stat-label">Queue</div>' +
               '</div>' +
@@ -1112,7 +1108,19 @@
             '<div class="aio-slab-grid">' +
               widgets.tcp_buffers.render() +
               widgets.stream_arenas.render() +
-              widgets.request_queue.render() +
+              // Request queue gauge (simple bar)
+              '<div class="memory-slab-panel compact" id="' + id + '-queue-panel">' +
+                '<div class="slab-header">' +
+                  '<span class="slab-name">Request Queue</span>' +
+                  '<span class="slab-badge aio-queue-pct">0%</span>' +
+                '</div>' +
+                '<div class="queue-gauge">' +
+                  '<div class="queue-bar" style="width: 0%"></div>' +
+                '</div>' +
+                '<div class="slab-stats">' +
+                  '<span><span class="aio-queue-pending">0</span> / <span class="aio-queue-capacity">--</span></span>' +
+                '</div>' +
+              '</div>' +
             '</div>' +
 
             '<div class="memory-legend-inline">' +
@@ -1177,12 +1185,41 @@
     var conns = sys.connections || {};
     var sysStats = sys.system || {};
     var loop = sys.loop || {};
+    var queue = sys.queue || {};
 
     // Update mini-stats
     panel.querySelector('.aio-sys-iterations').textContent = fmtCompact(loop.iterations || 0);
     panel.querySelector('.aio-sys-events').textContent = fmtCompact(loop.events_processed || 0);
     panel.querySelector('.aio-sys-handles').textContent = sysStats.handles || 0;
     panel.querySelector('.aio-sys-servers').textContent = (sysStats.servers || 0) + ' servers';
+
+    // Update queue stats (pending requests + pending responses)
+    var pending = (queue.pending_requests || 0) + (queue.pending_responses || 0);
+    var capacity = queue.capacity || 1;
+    var queuePct = capacity > 0 ? (pending / capacity) * 100 : 0;
+
+    // Update mini-stat in Event Loop section
+    var queueEl = panel.querySelector('.aio-sys-queue');
+    if (queueEl) {
+      queueEl.textContent = pending;
+      queueEl.classList.toggle('warning', queuePct > 50);
+      queueEl.classList.toggle('critical', queuePct > 80);
+    }
+
+    // Update queue gauge in Resource Pools section
+    var queuePctEl = panel.querySelector('.aio-queue-pct');
+    var queueBar = panel.querySelector('.queue-bar');
+    var queuePendingEl = panel.querySelector('.aio-queue-pending');
+    var queueCapEl = panel.querySelector('.aio-queue-capacity');
+
+    if (queuePctEl) queuePctEl.textContent = queuePct.toFixed(0) + '%';
+    if (queuePendingEl) queuePendingEl.textContent = pending;
+    if (queueCapEl) queueCapEl.textContent = capacity;
+    if (queueBar) {
+      queueBar.style.width = Math.min(queuePct, 100) + '%';
+      queueBar.classList.toggle('warning', queuePct > 50);
+      queueBar.classList.toggle('critical', queuePct > 80);
+    }
 
     // Connection pool is now updated via SSE memory diagnostics (handles slab)
     // See MemoryDiagnostics.updateConnectionPoolFromHandles()
@@ -1971,7 +2008,8 @@
         uptime_seconds: aio.uptime_seconds || 0,
         loop: loop,
         system: sys,
-        connections: conns
+        connections: conns,
+        queue: aio.queue || {}
       }];
     }
     renderAioSystems(aioSystems);
@@ -2688,6 +2726,11 @@
             idle: aio.connections ? aio.connections.idle : 0,
             closing: aio.connections ? aio.connections.closing : 0,
             connecting: aio.connections ? aio.connections.connecting : 0
+          },
+          queue: {
+            pending_requests: aio.queue ? aio.queue.pending_requests : 0,
+            pending_responses: aio.queue ? aio.queue.pending_responses : 0,
+            capacity: aio.queue ? aio.queue.capacity : 0
           }
         };
 
@@ -2697,7 +2740,8 @@
           uptime_seconds: aio.uptime_seconds || 0,
           loop: dashboardData.vm_metrics.event_loop || {},
           system: dashboardData.aio_metrics.system,
-          connections: dashboardData.aio_metrics.connections
+          connections: dashboardData.aio_metrics.connections,
+          queue: dashboardData.aio_metrics.queue
         }];
       }
 

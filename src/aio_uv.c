@@ -3704,8 +3704,9 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   valk_aio_metrics_init(&sys->metrics);
   // Initialize AIO system stats with pool sizes
   valk_aio_system_stats_init(&sys->system_stats,
-                              sys->config.arena_pool_size,  // arenas_total
-                              sys->config.tcp_buffer_pool_size);  // tcp_buffers_total
+                              sys->config.arena_pool_size,   // arenas_total
+                              sys->config.tcp_buffer_pool_size,  // tcp_buffers_total
+                              sys->config.queue_capacity);   // queue_capacity
   // Initialize HTTP clients registry
   memset(&sys->http_clients, 0, sizeof(sys->http_clients));
   atomic_store(&sys->http_clients.count, 0);
