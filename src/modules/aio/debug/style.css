@@ -2504,6 +2504,67 @@ main[role="main"] {
   background: linear-gradient(90deg, var(--color-error) 0%, color-mix(in srgb, var(--color-error) 80%, #ff4444) 100%);
 }
 
+/* Minimap canvas in gauge - shows compressed memory view */
+.pool-widget-gauge.has-minimap {
+  overflow: visible;
+  height: 14px;
+  padding: 2px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-primary);
+}
+
+.pool-widget-minimap {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 3px;
+  z-index: 0;
+}
+
+/* Fill becomes a glowing border overlay tracking percentage */
+.pool-widget-gauge.has-minimap .pool-widget-fill {
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  bottom: -1px;
+  height: auto;
+  background: transparent;
+  border: 1px solid var(--pool-color);
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--pool-color) 60%, transparent),
+              0 0 16px color-mix(in srgb, var(--pool-color) 30%, transparent),
+              inset -4px 0 8px -4px color-mix(in srgb, var(--pool-color) 80%, transparent);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.pool-widget-gauge.has-minimap .pool-widget-fill.warning {
+  border-color: var(--color-warning);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-warning) 60%, transparent),
+              0 0 16px color-mix(in srgb, var(--color-warning) 30%, transparent),
+              inset -4px 0 8px -4px color-mix(in srgb, var(--color-warning) 80%, transparent);
+}
+
+.pool-widget-gauge.has-minimap .pool-widget-fill.critical {
+  border-color: var(--color-error);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--color-error) 70%, transparent),
+              0 0 20px color-mix(in srgb, var(--color-error) 40%, transparent),
+              inset -4px 0 8px -4px color-mix(in srgb, var(--color-error) 90%, transparent);
+}
+
+/* Adjust markers for minimap gauge */
+.pool-widget-gauge.has-minimap .pool-widget-markers {
+  z-index: 2;
+}
+
+.pool-widget-gauge.has-minimap .pool-widget-marker {
+  top: -4px;
+  bottom: -4px;
+}
+
 /* Markers */
 .pool-widget-markers {
   position: absolute;
@@ -2670,6 +2731,63 @@ main[role="main"] {
 
 .pool-widget.full .pool-widget-name {
   font-size: 12px;
+}
+
+/* Collapsible grid feature */
+.pool-widget-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+  margin-right: var(--space-xs);
+}
+
+.pool-widget-toggle:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.pool-widget-toggle:focus-visible {
+  outline: 2px solid var(--color-info);
+  outline-offset: 1px;
+}
+
+.pool-widget-toggle .toggle-chevron {
+  transition: transform 0.2s ease;
+}
+
+.pool-widget-toggle[aria-expanded="false"] .toggle-chevron {
+  transform: rotate(-90deg);
+}
+
+.pool-widget-toggle[aria-expanded="true"] .toggle-chevron {
+  transform: rotate(0deg);
+}
+
+/* Grid wrapper for collapse animation */
+.pool-widget-grid-wrapper {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.2s ease, opacity 0.15s ease;
+  overflow: hidden;
+}
+
+.pool-widget-grid-wrapper.collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.pool-widget-grid-wrapper > .pool-widget-grid {
+  min-height: 0;
 }
 
 /* Scratch block - compact inline style */

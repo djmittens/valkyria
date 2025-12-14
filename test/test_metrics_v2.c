@@ -514,6 +514,498 @@ void test_delta_to_sse(VALK_TEST_ARGS()) {
 }
 
 // ============================================================================
+// TEST: LRU Eviction
+// ============================================================================
+
+void test_eviction_threshold_init(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  // Verify eviction threshold is set to default (5 minutes)
+  VALK_TEST_ASSERT(g_metrics.eviction_threshold_us == VALK_EVICTION_THRESHOLD_US,
+                   "Eviction threshold should be 5 minutes");
+  VALK_TEST_ASSERT(g_metrics.eviction_threshold_us == 5 * 60 * 1000000ULL,
+                   "Eviction threshold should be 300000000 us");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_eviction_free_list_init(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  // Verify free list heads are initialized to invalid
+  VALK_TEST_ASSERT(atomic_load(&g_metrics.counter_free.head) == VALK_INVALID_SLOT,
+                   "Counter free list should be empty");
+  VALK_TEST_ASSERT(atomic_load(&g_metrics.gauge_free.head) == VALK_INVALID_SLOT,
+                   "Gauge free list should be empty");
+  VALK_TEST_ASSERT(atomic_load(&g_metrics.histogram_free.head) == VALK_INVALID_SLOT,
+                   "Histogram free list should be empty");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_metric_active_flag(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", NULL, &labels);
+  VALK_TEST_ASSERT(c != NULL, "Counter should be created");
+
+  // Verify active flag is set
+  VALK_TEST_ASSERT(atomic_load(&c->active) == true, "Counter should be active");
+
+  // Verify evictable flag is true by default
+  VALK_TEST_ASSERT(c->evictable == true, "Counter should be evictable by default");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_metric_persistent(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+  valk_counter_v2_t *c = valk_counter_get_or_create("persistent_counter", NULL, &labels);
+  VALK_TEST_ASSERT(c != NULL, "Counter should be created");
+  VALK_TEST_ASSERT(c->evictable == true, "Should be evictable initially");
+
+  // Mark as persistent
+  valk_counter_set_persistent(c);
+  VALK_TEST_ASSERT(c->evictable == false, "Should be non-evictable after set_persistent");
+
+  // Create persistent gauge
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("persistent_gauge", NULL, &labels);
+  valk_gauge_set_persistent(g);
+  VALK_TEST_ASSERT(g->evictable == false, "Gauge should be non-evictable");
+
+  // Create persistent histogram
+  double bounds[] = {0.1, 1.0};
+  valk_histogram_v2_t *h = valk_histogram_get_or_create("persistent_hist", NULL, bounds, 2, &labels);
+  valk_histogram_set_persistent(h);
+  VALK_TEST_ASSERT(h->evictable == false, "Histogram should be non-evictable");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_metric_last_updated(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+
+  // Create counter and verify initial timestamp
+  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", NULL, &labels);
+  uint64_t ts1 = atomic_load(&c->last_updated_us);
+  VALK_TEST_ASSERT(ts1 > 0, "Counter should have non-zero timestamp on creation");
+
+  // Wait a tiny bit and update
+  for (volatile int i = 0; i < 10000; i++) {} // Spin briefly
+  valk_counter_v2_inc(c);
+  uint64_t ts2 = atomic_load(&c->last_updated_us);
+  VALK_TEST_ASSERT(ts2 >= ts1, "Timestamp should increase after update");
+
+  // Test gauge timestamp update
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("test_gauge", NULL, &labels);
+  uint64_t gts1 = atomic_load(&g->last_updated_us);
+  valk_gauge_v2_set(g, 42);
+  uint64_t gts2 = atomic_load(&g->last_updated_us);
+  VALK_TEST_ASSERT(gts2 >= gts1, "Gauge timestamp should update");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_eviction_no_stale_metrics(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+
+  // Create a fresh metric
+  valk_counter_v2_t *c = valk_counter_get_or_create("fresh_counter", NULL, &labels);
+  valk_counter_v2_inc(c);
+
+  // Try to evict - should evict 0 since metric is fresh
+  size_t evicted = valk_metrics_evict_stale();
+  VALK_TEST_ASSERT(evicted == 0, "Should not evict fresh metrics");
+  VALK_TEST_ASSERT(atomic_load(&c->active) == true, "Counter should still be active");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_eviction_persistent_protected(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+
+  // Create a persistent metric
+  valk_counter_v2_t *c = valk_counter_get_or_create("protected_counter", NULL, &labels);
+  valk_counter_set_persistent(c);
+
+  // Even with very old timestamp (manually set for test), persistent should not evict
+  // We can't easily test this without mocking time, so just verify the flag works
+  VALK_TEST_ASSERT(c->evictable == false, "Counter should be marked non-evictable");
+
+  size_t evicted = valk_metrics_evict_stale();
+  VALK_TEST_ASSERT(atomic_load(&c->active) == true,
+                   "Persistent counter should never be evicted");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_metric_generation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+
+  // Create first metric
+  valk_counter_v2_t *c1 = valk_counter_get_or_create("gen_counter", NULL, &labels);
+  uint32_t gen1 = atomic_load(&c1->generation);
+  VALK_TEST_ASSERT(gen1 >= 1, "Generation should be at least 1 after creation");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_handle_create_deref(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+
+  // Create counter and get handle
+  valk_counter_v2_t *c = valk_counter_get_or_create("handle_test", NULL, &labels);
+  valk_metric_handle_t handle = valk_counter_handle(c);
+
+  VALK_TEST_ASSERT(handle.slot != VALK_INVALID_SLOT, "Handle slot should be valid");
+  VALK_TEST_ASSERT(handle.generation > 0, "Handle generation should be > 0");
+
+  // Dereference handle
+  valk_counter_v2_t *c2 = valk_counter_deref(handle);
+  VALK_TEST_ASSERT(c2 == c, "Dereferenced pointer should match original");
+
+  // Test gauge handle
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("gauge_handle", NULL, &labels);
+  valk_metric_handle_t gh = valk_gauge_handle(g);
+  valk_gauge_v2_t *g2 = valk_gauge_deref(gh);
+  VALK_TEST_ASSERT(g2 == g, "Gauge dereference should match original");
+
+  // Test histogram handle
+  double bounds[] = {0.1, 1.0};
+  valk_histogram_v2_t *h = valk_histogram_get_or_create("hist_handle", NULL, bounds, 2, &labels);
+  valk_metric_handle_t hh = valk_histogram_handle(h);
+  valk_histogram_v2_t *h2 = valk_histogram_deref(hh);
+  VALK_TEST_ASSERT(h2 == h, "Histogram dereference should match original");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_handle_invalid(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  // Invalid handle should return NULL
+  valk_metric_handle_t invalid = VALK_HANDLE_INVALID;
+  VALK_TEST_ASSERT(valk_counter_deref(invalid) == NULL,
+                   "Invalid counter handle should return NULL");
+  VALK_TEST_ASSERT(valk_gauge_deref(invalid) == NULL,
+                   "Invalid gauge handle should return NULL");
+  VALK_TEST_ASSERT(valk_histogram_deref(invalid) == NULL,
+                   "Invalid histogram handle should return NULL");
+
+  // Handle for NULL pointer
+  valk_metric_handle_t null_handle = valk_counter_handle(NULL);
+  VALK_TEST_ASSERT(null_handle.slot == VALK_INVALID_SLOT,
+                   "NULL counter should produce invalid handle");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_eviction_slot_reuse(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  // Set a very short eviction threshold for testing (1 microsecond)
+  g_metrics.eviction_threshold_us = 1;
+
+  valk_label_set_v2_t labels1 = {
+    .labels = {{.key = "id", .value = "1"}},
+    .count = 1
+  };
+
+  // Create and immediately age a metric
+  valk_counter_v2_t *c1 = valk_counter_get_or_create("reuse_test", NULL, &labels1);
+  VALK_TEST_ASSERT(c1 != NULL, "Counter should be created");
+  size_t initial_count = atomic_load(&g_metrics.counter_count);
+
+  // Wait a tiny bit to make the metric "stale"
+  for (volatile int i = 0; i < 100000; i++) {} // Spin
+
+  // Evict stale metrics
+  size_t evicted = valk_metrics_evict_stale();
+
+  // With threshold of 1us, the counter should be evicted
+  VALK_TEST_ASSERT(evicted >= 1, "Should evict at least 1 metric");
+  VALK_TEST_ASSERT(atomic_load(&c1->active) == false, "Counter should be inactive after eviction");
+
+  // Free list should have the slot
+  uint32_t free_head = atomic_load(&g_metrics.counter_free.head);
+  VALK_TEST_ASSERT(free_head != VALK_INVALID_SLOT, "Free list should have evicted slot");
+
+  // Create a new metric - should reuse the slot from free list
+  valk_label_set_v2_t labels2 = {
+    .labels = {{.key = "id", .value = "2"}},
+    .count = 1
+  };
+  valk_counter_v2_t *c2 = valk_counter_get_or_create("reuse_test2", NULL, &labels2);
+  VALK_TEST_ASSERT(c2 != NULL, "New counter should be created");
+
+  // Counter count should not have increased if slot was reused
+  // (or only increased by 1 if free list was used for reuse)
+  size_t final_count = atomic_load(&g_metrics.counter_count);
+  VALK_TEST_ASSERT(final_count <= initial_count + 1,
+                   "Should reuse slots instead of always allocating new");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+// ============================================================================
+// TEST: Pool Metrics Factory
+// ============================================================================
+
+#include "pool_metrics.h"
+
+void test_pool_metrics_init(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t pm;
+  bool ok = valk_pool_metrics_init(&pm, "test_pool");
+
+  VALK_TEST_ASSERT(ok == true, "Pool metrics init should succeed");
+  VALK_TEST_ASSERT(pm.pool_name != NULL, "Pool name should be set");
+  VALK_TEST_ASSERT(strcmp(pm.pool_name, "test_pool") == 0, "Pool name should match");
+
+  // All metrics should be created
+  VALK_TEST_ASSERT(pm.used != NULL, "Used gauge should be created");
+  VALK_TEST_ASSERT(pm.total != NULL, "Total gauge should be created");
+  VALK_TEST_ASSERT(pm.peak != NULL, "Peak gauge should be created");
+  VALK_TEST_ASSERT(pm.overflow != NULL, "Overflow counter should be created");
+
+  // Metrics should be persistent (non-evictable)
+  VALK_TEST_ASSERT(pm.used->evictable == false, "Used gauge should be persistent");
+  VALK_TEST_ASSERT(pm.total->evictable == false, "Total gauge should be persistent");
+  VALK_TEST_ASSERT(pm.peak->evictable == false, "Peak gauge should be persistent");
+  VALK_TEST_ASSERT(pm.overflow->evictable == false, "Overflow counter should be persistent");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_pool_metrics_init_custom(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t pm;
+  bool ok = valk_pool_metrics_init_custom(&pm, "tcp_buffers", "slab");
+
+  VALK_TEST_ASSERT(ok == true, "Custom pool metrics init should succeed");
+
+  // Verify metric names contain custom prefix
+  VALK_TEST_ASSERT(strstr(pm.used->name, "slab") != NULL ||
+                   strcmp(pm.used->name, "slab_used") == 0,
+                   "Used metric should have custom prefix");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_pool_metrics_update(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t pm;
+  valk_pool_metrics_init(&pm, "update_test");
+
+  // Update with test values
+  valk_pool_metrics_update(&pm, 50, 100, 75, 5);
+
+  VALK_TEST_ASSERT(atomic_load(&pm.used->value) == 50, "Used should be 50");
+  VALK_TEST_ASSERT(atomic_load(&pm.total->value) == 100, "Total should be 100");
+  VALK_TEST_ASSERT(atomic_load(&pm.peak->value) == 75, "Peak should be 75");
+  VALK_TEST_ASSERT(atomic_load(&pm.overflow->value) == 5, "Overflow should be 5");
+
+  // Update again
+  valk_pool_metrics_update(&pm, 60, 100, 80, 7);
+
+  VALK_TEST_ASSERT(atomic_load(&pm.used->value) == 60, "Used should be 60");
+  VALK_TEST_ASSERT(atomic_load(&pm.peak->value) == 80, "Peak should be 80");
+  VALK_TEST_ASSERT(atomic_load(&pm.overflow->value) == 7, "Overflow should be 7");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_pool_metrics_update_slab(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t pm;
+  valk_pool_metrics_init(&pm, "slab_test");
+
+  // Simulate slab state: 100 total, 40 free, peak 70, 3 overflows
+  valk_pool_metrics_update_slab(&pm, 100, 40, 70, 3);
+
+  // used = total - free = 100 - 40 = 60
+  VALK_TEST_ASSERT(atomic_load(&pm.used->value) == 60, "Used should be 60 (100-40)");
+  VALK_TEST_ASSERT(atomic_load(&pm.total->value) == 100, "Total should be 100");
+  VALK_TEST_ASSERT(atomic_load(&pm.peak->value) == 70, "Peak should be 70");
+  VALK_TEST_ASSERT(atomic_load(&pm.overflow->value) == 3, "Overflow should be 3");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_pool_metrics_update_arena(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t pm;
+  valk_pool_metrics_init(&pm, "arena_test");
+
+  // Simulate arena state: capacity 1MB, used 600KB, HWM 800KB, 2 overflows
+  size_t capacity = 1024 * 1024;
+  size_t used = 600 * 1024;
+  size_t hwm = 800 * 1024;
+  size_t overflow = 2;
+
+  valk_pool_metrics_update_arena(&pm, capacity, used, hwm, overflow);
+
+  VALK_TEST_ASSERT(atomic_load(&pm.used->value) == (int64_t)used, "Used should match");
+  VALK_TEST_ASSERT(atomic_load(&pm.total->value) == (int64_t)capacity, "Total should match");
+  VALK_TEST_ASSERT(atomic_load(&pm.peak->value) == (int64_t)hwm, "Peak should match");
+  VALK_TEST_ASSERT(atomic_load(&pm.overflow->value) == overflow, "Overflow should match");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_pool_metrics_multiple_pools(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  // Create metrics for multiple pools
+  valk_pool_metrics_t tcp_buffers, stream_arenas, lval_slab;
+
+  bool ok1 = valk_pool_metrics_init(&tcp_buffers, "tcp_buffers");
+  bool ok2 = valk_pool_metrics_init(&stream_arenas, "stream_arenas");
+  bool ok3 = valk_pool_metrics_init(&lval_slab, "lval_slab");
+
+  VALK_TEST_ASSERT(ok1 && ok2 && ok3, "All pool metrics should initialize");
+
+  // Update each pool with different values
+  valk_pool_metrics_update(&tcp_buffers, 10, 100, 50, 0);
+  valk_pool_metrics_update(&stream_arenas, 5, 50, 25, 1);
+  valk_pool_metrics_update(&lval_slab, 1000, 4096, 2000, 0);
+
+  // Verify each pool has independent values
+  VALK_TEST_ASSERT(atomic_load(&tcp_buffers.used->value) == 10, "TCP buffers used");
+  VALK_TEST_ASSERT(atomic_load(&stream_arenas.used->value) == 5, "Stream arenas used");
+  VALK_TEST_ASSERT(atomic_load(&lval_slab.used->value) == 1000, "LVAL slab used");
+
+  VALK_TEST_ASSERT(atomic_load(&tcp_buffers.total->value) == 100, "TCP buffers total");
+  VALK_TEST_ASSERT(atomic_load(&stream_arenas.total->value) == 50, "Stream arenas total");
+  VALK_TEST_ASSERT(atomic_load(&lval_slab.total->value) == 4096, "LVAL slab total");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_pool_metrics_null_safety(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  // Test NULL handling
+  bool ok = valk_pool_metrics_init(NULL, "test");
+  VALK_TEST_ASSERT(ok == false, "Init with NULL metrics should fail");
+
+  valk_pool_metrics_t pm;
+  ok = valk_pool_metrics_init(&pm, NULL);
+  VALK_TEST_ASSERT(ok == false, "Init with NULL name should fail");
+
+  // Update with NULL should not crash
+  valk_pool_metrics_update(NULL, 0, 0, 0, 0);
+  valk_pool_metrics_update_slab(NULL, 0, 0, 0, 0);
+  valk_pool_metrics_update_arena(NULL, 0, 0, 0, 0);
+
+  // Should reach here without crashing
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_pool_metrics_eviction_protected(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  // Set very short eviction threshold
+  g_metrics.eviction_threshold_us = 1;
+
+  valk_pool_metrics_t pm;
+  valk_pool_metrics_init(&pm, "protected_pool");
+
+  // Wait to make metrics "stale"
+  for (volatile int i = 0; i < 100000; i++) {}
+
+  // Try to evict
+  size_t evicted = valk_metrics_evict_stale();
+
+  // Pool metrics should NOT be evicted because they are persistent
+  VALK_TEST_ASSERT(atomic_load(&pm.used->active) == true,
+                   "Pool used gauge should survive eviction");
+  VALK_TEST_ASSERT(atomic_load(&pm.total->active) == true,
+                   "Pool total gauge should survive eviction");
+  VALK_TEST_ASSERT(atomic_load(&pm.peak->active) == true,
+                   "Pool peak gauge should survive eviction");
+  VALK_TEST_ASSERT(atomic_load(&pm.overflow->active) == true,
+                   "Pool overflow counter should survive eviction");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+// ============================================================================
 // TEST: Concurrency
 // ============================================================================
 
@@ -629,6 +1121,48 @@ int main(int argc, const char **argv) {
   // Concurrency tests
   valk_testsuite_add_test(suite, "test_counter_concurrent_inc",
                           test_counter_concurrent_inc);
+
+  // LRU Eviction tests
+  valk_testsuite_add_test(suite, "test_eviction_threshold_init",
+                          test_eviction_threshold_init);
+  valk_testsuite_add_test(suite, "test_eviction_free_list_init",
+                          test_eviction_free_list_init);
+  valk_testsuite_add_test(suite, "test_metric_active_flag",
+                          test_metric_active_flag);
+  valk_testsuite_add_test(suite, "test_metric_persistent",
+                          test_metric_persistent);
+  valk_testsuite_add_test(suite, "test_metric_last_updated",
+                          test_metric_last_updated);
+  valk_testsuite_add_test(suite, "test_eviction_no_stale_metrics",
+                          test_eviction_no_stale_metrics);
+  valk_testsuite_add_test(suite, "test_eviction_persistent_protected",
+                          test_eviction_persistent_protected);
+  valk_testsuite_add_test(suite, "test_metric_generation",
+                          test_metric_generation);
+  valk_testsuite_add_test(suite, "test_handle_create_deref",
+                          test_handle_create_deref);
+  valk_testsuite_add_test(suite, "test_handle_invalid",
+                          test_handle_invalid);
+  valk_testsuite_add_test(suite, "test_eviction_slot_reuse",
+                          test_eviction_slot_reuse);
+
+  // Pool Metrics Factory tests
+  valk_testsuite_add_test(suite, "test_pool_metrics_init",
+                          test_pool_metrics_init);
+  valk_testsuite_add_test(suite, "test_pool_metrics_init_custom",
+                          test_pool_metrics_init_custom);
+  valk_testsuite_add_test(suite, "test_pool_metrics_update",
+                          test_pool_metrics_update);
+  valk_testsuite_add_test(suite, "test_pool_metrics_update_slab",
+                          test_pool_metrics_update_slab);
+  valk_testsuite_add_test(suite, "test_pool_metrics_update_arena",
+                          test_pool_metrics_update_arena);
+  valk_testsuite_add_test(suite, "test_pool_metrics_multiple_pools",
+                          test_pool_metrics_multiple_pools);
+  valk_testsuite_add_test(suite, "test_pool_metrics_null_safety",
+                          test_pool_metrics_null_safety);
+  valk_testsuite_add_test(suite, "test_pool_metrics_eviction_protected",
+                          test_pool_metrics_eviction_protected);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

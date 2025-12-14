@@ -381,6 +381,8 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
           slab_to_bitmap(slab, &snapshot->slabs[slab_idx].bitmap_bytes, \
                          &snapshot->slabs[slab_idx].used_slots); \
       snapshot->slabs[slab_idx].total_slots = slab->numItems; \
+      snapshot->slabs[slab_idx].peak_used = \
+          __atomic_load_n(&slab->peakUsed, __ATOMIC_ACQUIRE); \
       snapshot->slabs[slab_idx].overflow_count = \
           __atomic_load_n(&slab->overflowCount, __ATOMIC_ACQUIRE); \
       slab_idx++; \
@@ -405,6 +407,8 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
       snapshot->slabs[slab_idx].name = "handles";
       // Always set total_slots from the slab, even if slot_diag fails
       snapshot->slabs[slab_idx].total_slots = handle_slab->numItems;
+      snapshot->slabs[slab_idx].peak_used =
+          __atomic_load_n(&handle_slab->peakUsed, __ATOMIC_ACQUIRE);
       // Get current time for age calculation
       uint64_t now_ms = (uint64_t)(uv_hrtime() / 1000000ULL);
       slab_to_slot_diag(handle_slab, &snapshot->slabs[slab_idx], aio, now_ms);
@@ -441,6 +445,8 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
                        &snapshot->slabs[slab_idx].bitmap_bytes,
                        &snapshot->slabs[slab_idx].used_slots);
     snapshot->slabs[slab_idx].total_slots = gc_heap->lval_slab->numItems;
+    snapshot->slabs[slab_idx].peak_used =
+        __atomic_load_n(&gc_heap->lval_slab->peakUsed, __ATOMIC_ACQUIRE);
     snapshot->slabs[slab_idx].overflow_count =
         __atomic_load_n(&gc_heap->lval_slab->overflowCount, __ATOMIC_ACQUIRE);
     slab_idx++;
@@ -560,6 +566,7 @@ void valk_mem_snapshot_copy(valk_mem_snapshot_t *dst, const valk_mem_snapshot_t 
     dst->slabs[i].name = src->slabs[i].name;
     dst->slabs[i].total_slots = src->slabs[i].total_slots;
     dst->slabs[i].used_slots = src->slabs[i].used_slots;
+    dst->slabs[i].peak_used = src->slabs[i].peak_used;
     dst->slabs[i].overflow_count = src->slabs[i].overflow_count;
     dst->slabs[i].has_slot_diag = src->slabs[i].has_slot_diag;
     dst->slabs[i].by_state = src->slabs[i].by_state;
@@ -650,12 +657,12 @@ int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf,
       snprintf(bp, bp_end - bp, "}");
 
       n = snprintf(p, end - p,
-                   "{\"name\":\"%s\",\"total\":%zu,\"used\":%zu,"
+                   "{\"name\":\"%s\",\"total\":%zu,\"used\":%zu,\"hwm\":%zu,"
                    "\"states\":\"%s\","
                    "\"summary\":{\"A\":%zu,\"I\":%zu,\"C\":%zu,\"by_owner\":%s},"
                    "\"by_type\":{\"tcp\":%zu,\"task\":%zu,\"timer\":%zu,\"http\":%zu},"
                    "\"overflow\":%zu}",
-                   slab->name, slab->total_slots, slab->used_slots,
+                   slab->name, slab->total_slots, slab->used_slots, slab->peak_used,
                    states,
                    slab->by_state.active, slab->by_state.idle, slab->by_state.closing,
                    by_owner_buf,
@@ -680,9 +687,9 @@ int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf,
 
       n = snprintf(p, end - p,
                    "{\"name\":\"%s\",\"bitmap\":\"%s\",\"total\":%zu,\"used\":%zu,"
-                   "\"overflow\":%zu}",
+                   "\"hwm\":%zu,\"overflow\":%zu}",
                    slab->name, hex, slab->total_slots, slab->used_slots,
-                   slab->overflow_count);
+                   slab->peak_used, slab->overflow_count);
 
       free(hex);
     }
@@ -840,12 +847,12 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
       snprintf(bp, bp_end - bp, "}");
 
       n = snprintf(p, end - p,
-                   "{\"name\":\"%s\",\"total\":%zu,\"used\":%zu,"
+                   "{\"name\":\"%s\",\"total\":%zu,\"used\":%zu,\"hwm\":%zu,"
                    "\"states\":\"%s\","
                    "\"summary\":{\"A\":%zu,\"I\":%zu,\"C\":%zu,\"by_owner\":%s},"
                    "\"by_type\":{\"tcp\":%zu,\"task\":%zu,\"timer\":%zu,\"http\":%zu},"
                    "\"overflow\":%zu}",
-                   slab->name, slab->total_slots, slab->used_slots,
+                   slab->name, slab->total_slots, slab->used_slots, slab->peak_used,
                    states,
                    slab->by_state.active, slab->by_state.idle, slab->by_state.closing,
                    by_owner_buf,
@@ -868,9 +875,9 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
 
       n = snprintf(p, end - p,
                    "{\"name\":\"%s\",\"bitmap\":\"%s\",\"total\":%zu,\"used\":%zu,"
-                   "\"overflow\":%zu}",
+                   "\"hwm\":%zu,\"overflow\":%zu}",
                    slab->name, hex, slab->total_slots, slab->used_slots,
-                   slab->overflow_count);
+                   slab->peak_used, slab->overflow_count);
 
       free(hex);
     }
@@ -1113,6 +1120,7 @@ static bool slots_differ(const valk_slot_diag_t *a, const valk_slot_diag_t *b, s
 static bool slab_changed(const valk_slab_snapshot_t *curr, const valk_slab_snapshot_t *prev) {
   if (curr->used_slots != prev->used_slots) return true;
   if (curr->overflow_count != prev->overflow_count) return true;
+  if (curr->peak_used != prev->peak_used) return true;
 
   if (curr->has_slot_diag && prev->has_slot_diag) {
     if (slots_differ(curr->slots, prev->slots, curr->total_slots)) return true;
@@ -1342,11 +1350,11 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
           snprintf(bp, bp_end - bp, "}");
 
           n = snprintf(p, end - p,
-                       "{\"name\":\"%s\",\"used\":%zu,"
+                       "{\"name\":\"%s\",\"used\":%zu,\"hwm\":%zu,"
                        "\"delta_states\":\"%s\","
                        "\"summary\":{\"A\":%zu,\"I\":%zu,\"C\":%zu,\"by_owner\":%s},"
                        "\"by_type\":{\"tcp\":%zu,\"task\":%zu,\"timer\":%zu,\"http\":%zu}}",
-                       slab->name, slab->used_slots,
+                       slab->name, slab->used_slots, slab->peak_used,
                        delta_buf,
                        slab->by_state.active, slab->by_state.idle, slab->by_state.closing,
                        by_owner_buf,
@@ -1365,8 +1373,8 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
           }
 
           n = snprintf(p, end - p,
-                       "{\"name\":\"%s\",\"bitmap\":\"%s\",\"used\":%zu}",
-                       slab->name, hex, slab->used_slots);
+                       "{\"name\":\"%s\",\"bitmap\":\"%s\",\"used\":%zu,\"hwm\":%zu}",
+                       slab->name, hex, slab->used_slots, slab->peak_used);
           free(hex);
         }
 
@@ -1601,12 +1609,12 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
       snprintf(bp, bp_end - bp, "}");
 
       n = snprintf(p, end - p,
-                   "{\"name\":\"%s\",\"total\":%zu,\"used\":%zu,"
+                   "{\"name\":\"%s\",\"total\":%zu,\"used\":%zu,\"hwm\":%zu,"
                    "\"states\":\"%s\","
                    "\"summary\":{\"A\":%zu,\"I\":%zu,\"C\":%zu,\"by_owner\":%s},"
                    "\"by_type\":{\"tcp\":%zu,\"task\":%zu,\"timer\":%zu,\"http\":%zu},"
                    "\"overflow\":%zu}",
-                   slab->name, slab->total_slots, slab->used_slots,
+                   slab->name, slab->total_slots, slab->used_slots, slab->peak_used,
                    states,
                    slab->by_state.active, slab->by_state.idle, slab->by_state.closing,
                    by_owner_buf,
@@ -1629,9 +1637,9 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
 
       n = snprintf(p, end - p,
                    "{\"name\":\"%s\",\"bitmap\":\"%s\",\"total\":%zu,\"used\":%zu,"
-                   "\"overflow\":%zu}",
+                   "\"hwm\":%zu,\"overflow\":%zu}",
                    slab->name, hex, slab->total_slots, slab->used_slots,
-                   slab->overflow_count);
+                   slab->peak_used, slab->overflow_count);
 
       free(hex);
     }

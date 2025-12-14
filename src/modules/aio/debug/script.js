@@ -149,6 +149,10 @@
     this.showLegend = config.showLegend === true || this.variant === 'full';
     this.showOwnerBreakdown = config.showOwnerBreakdown === true;
 
+    // Collapsible grid feature - shows compact view with expandable detail
+    this.collapsibleGrid = config.collapsibleGrid === true;
+    this.gridCollapsed = this._loadGridState();
+
     // Custom colors (override preset)
     this.color = config.color || null;
     this.colorMuted = config.colorMuted || null;
@@ -248,6 +252,13 @@
 
     // Header
     html += '<div class="pool-widget-header">';
+    // Toggle button for collapsible grid (left side for accessibility)
+    if (this.collapsibleGrid && this.showGrid) {
+      var expanded = !this.gridCollapsed;
+      html += '<button class="pool-widget-toggle" aria-expanded="' + expanded + '" title="' + (this.gridCollapsed ? 'Show detailed grid' : 'Hide detailed grid') + '">';
+      html += '<svg class="toggle-chevron" viewBox="0 0 12 12" width="12" height="12"><path d="M3 4.5L6 7.5L9 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      html += '</button>';
+    }
     if (this.icon) {
       html += '<span class="pool-widget-icon">' + this.icon + '</span>';
     }
@@ -258,7 +269,13 @@
 
     // Gauge bar (if enabled)
     if (this.showGauge) {
-      html += '<div class="pool-widget-gauge">';
+      var gaugeClasses = 'pool-widget-gauge';
+      if (this.collapsibleGrid && this.showGrid) gaugeClasses += ' has-minimap';
+      html += '<div class="' + gaugeClasses + '">';
+      // Mini-map canvas for collapsible grids (shows compressed memory view in gauge)
+      if (this.collapsibleGrid && this.showGrid) {
+        html += '<canvas class="pool-widget-minimap" id="' + this.id + '-minimap"></canvas>';
+      }
       html += '<div class="pool-widget-fill" id="' + this.id + '-fill"></div>';
       html += '<div class="pool-widget-markers">';
       for (var i = 0; i < this.markers.length; i++) {
@@ -274,8 +291,12 @@
 
     // Canvas grid (if enabled)
     if (this.showGrid) {
+      var wrapperClasses = 'pool-widget-grid-wrapper';
+      if (this.collapsibleGrid && this.gridCollapsed) wrapperClasses += ' collapsed';
+      html += '<div class="' + wrapperClasses + '">';
       html += '<div class="pool-widget-grid">';
       html += '<canvas class="pool-widget-canvas" id="' + this.id + '-canvas"></canvas>';
+      html += '</div>';
       html += '</div>';
     }
 
@@ -363,7 +384,93 @@
       }
     }
 
+    // Bind minimap canvas for collapsible grids
+    this.minimapEl = document.getElementById(this.id + '-minimap');
+    if (this.minimapEl) {
+      this.minimapCtx = this.minimapEl.getContext('2d');
+      this.minimapConfigured = false;
+
+      // Watch for gauge resize to reconfigure minimap
+      var self = this;
+      if (window.ResizeObserver) {
+        var gaugeEl = this.minimapEl.parentElement;
+        if (gaugeEl) {
+          this.minimapResizeObserver = new ResizeObserver(function() {
+            self.minimapConfigured = false;
+            if (self.lastSlabData) {
+              self._renderMinimap(self.lastSlabData);
+            }
+          });
+          this.minimapResizeObserver.observe(gaugeEl);
+        }
+      }
+    }
+
+    // Bind toggle button for collapsible grid
+    if (this.collapsibleGrid) {
+      var self = this;
+      var toggleBtn = this.el.querySelector('.pool-widget-toggle');
+      if (toggleBtn) {
+        toggleBtn.addEventListener('click', function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          self.toggleGrid();
+        });
+      }
+    }
+
     return true;
+  };
+
+  // Load grid collapsed state from localStorage
+  PoolWidget.prototype._loadGridState = function() {
+    if (!this.collapsibleGrid) return false;
+    try {
+      var prefs = JSON.parse(localStorage.getItem('pool-widget-grids') || '{}');
+      return prefs[this.id] !== false; // Default to collapsed (true)
+    } catch(e) { return true; }
+  };
+
+  // Save grid collapsed state to localStorage
+  PoolWidget.prototype._saveGridState = function() {
+    try {
+      var prefs = JSON.parse(localStorage.getItem('pool-widget-grids') || '{}');
+      prefs[this.id] = this.gridCollapsed;
+      localStorage.setItem('pool-widget-grids', JSON.stringify(prefs));
+    } catch(e) {}
+  };
+
+  // Toggle grid collapsed state
+  PoolWidget.prototype.toggleGrid = function() {
+    if (!this.collapsibleGrid || !this.el) return;
+    this.gridCollapsed = !this.gridCollapsed;
+    this._saveGridState();
+    this._updateGridVisibility();
+  };
+
+  // Update grid visibility based on collapsed state
+  PoolWidget.prototype._updateGridVisibility = function() {
+    if (!this.el) return;
+    var gridWrapper = this.el.querySelector('.pool-widget-grid-wrapper');
+    var toggleBtn = this.el.querySelector('.pool-widget-toggle');
+
+    if (gridWrapper) {
+      if (this.gridCollapsed) {
+        gridWrapper.classList.add('collapsed');
+      } else {
+        gridWrapper.classList.remove('collapsed');
+        // Re-render grid when expanded (may have been skipped while collapsed)
+        if (this.lastSlabData && this.showGrid && this.canvasEl && this.ctx) {
+          this.canvasConfigured = false;
+          this._renderGrid(this.lastSlabData);
+        }
+      }
+    }
+
+    if (toggleBtn) {
+      toggleBtn.setAttribute('aria-expanded', !this.gridCollapsed);
+      toggleBtn.title = this.gridCollapsed ? 'Show detailed grid' : 'Hide detailed grid';
+    }
   };
 
   // Update widget with new data
@@ -460,9 +567,14 @@
       }
     }
 
-    // Render grid
+    // Render grid (full detail view)
     if (this.showGrid && this.canvasEl && this.ctx) {
       this._renderGrid(data);
+    }
+
+    // Render minimap in gauge (compressed preview)
+    if (this.minimapEl && this.minimapCtx) {
+      this._renderMinimap(data);
     }
   };
 
@@ -499,6 +611,9 @@
 
   // Render grid from data
   PoolWidget.prototype._renderGrid = function(data) {
+    // Skip rendering if grid is collapsed (save CPU cycles)
+    if (this.collapsibleGrid && this.gridCollapsed) return;
+
     // Only render grid if we have slot-based data (states or bitmap)
     // Don't use byte totals for grid sizing - they're way too large
     if (!data.states && data.bitmap === undefined) return;
@@ -625,6 +740,262 @@
     }
   };
 
+  // Configure minimap canvas dimensions
+  PoolWidget.prototype._configureMinimap = function(totalSlots) {
+    if (!this.minimapEl) return;
+
+    // Get the actual rendered size of the canvas element
+    var rect = this.minimapEl.getBoundingClientRect();
+    var width = Math.floor(rect.width) || 200;
+    var height = Math.floor(rect.height) || 10;
+
+    var dpr = window.devicePixelRatio || 1;
+    this.minimapEl.width = width * dpr;
+    this.minimapEl.height = height * dpr;
+
+    this.minimapCtx.setTransform(1, 0, 0, 1, 0, 0);
+    this.minimapCtx.scale(dpr, dpr);
+
+    this.minimapWidth = width;
+    this.minimapHeight = height;
+
+    // Calculate cell layout
+    // For small slot counts, show each slot as a cell
+    // For large counts, downsample to ~60-80 cells
+    var maxCells = 80;
+    var gap = 1;
+    var cellCount;
+
+    if (totalSlots <= maxCells) {
+      // Show each slot as its own cell
+      cellCount = totalSlots;
+    } else {
+      // Downsample to maxCells
+      cellCount = maxCells;
+    }
+
+    // Calculate cell width to fill the entire gauge width
+    // Total width = (cellCount * cellWidth) + ((cellCount - 1) * gap)
+    // Solve for cellWidth: cellWidth = (width - (cellCount - 1) * gap) / cellCount
+    var cellWidth = (width - (cellCount - 1) * gap) / cellCount;
+
+    // Ensure minimum cell width
+    if (cellWidth < 2 && cellCount > 1) {
+      // Reduce cell count to fit
+      cellCount = Math.floor((width + gap) / (2 + gap));
+      cellWidth = (width - (cellCount - 1) * gap) / cellCount;
+    }
+
+    this.minimapCellCount = cellCount;
+    this.minimapCellWidth = cellWidth;
+    this.minimapGap = gap;
+    this.minimapTotalSlots = totalSlots;
+
+    this.minimapConfigured = true;
+  };
+
+  // Render minimap - compressed 1D view of memory states in the gauge
+  PoolWidget.prototype._renderMinimap = function(data) {
+    if (!this.minimapEl || !this.minimapCtx) return;
+    if (!data.states && data.bitmap === undefined) return;
+
+    var total = data.slotTotal || data.total || 0;
+    if (total <= 0 || total > 500000) return;
+
+    // Configure canvas if needed (reconfigure if width or slot count changes)
+    var rect = this.minimapEl.getBoundingClientRect();
+    var currentWidth = Math.floor(rect.width);
+    if (!this.minimapConfigured || this.lastMinimapWidth !== currentWidth || this.minimapTotalSlots !== total) {
+      this._configureMinimap(total);
+      this.lastMinimapWidth = currentWidth;
+    }
+
+    var ctx = this.minimapCtx;
+    var width = this.minimapWidth;
+    var height = this.minimapHeight;
+    var colors = PoolWidget.COLORS;
+
+    ctx.clearRect(0, 0, this.minimapEl.width, this.minimapEl.height);
+
+    if (data.states) {
+      this._renderMinimapStates(data.states, total, width, height);
+    } else if (data.bitmap !== undefined) {
+      this._renderMinimapBitmap(data.bitmap, total, width, height);
+    }
+  };
+
+  // Render minimap from RLE state string - downsamples to discrete cells
+  PoolWidget.prototype._renderMinimapStates = function(rleStr, total, width, height) {
+    var ctx = this.minimapCtx;
+    var colors = PoolWidget.COLORS;
+    var cellCount = this.minimapCellCount;
+    var cellWidth = this.minimapCellWidth;
+    var gap = this.minimapGap;
+
+    // Each cell represents (total / cellCount) slots
+    var slotsPerCell = total / cellCount;
+    var buckets = new Array(cellCount);
+
+    // Initialize buckets with state counts
+    for (var i = 0; i < buckets.length; i++) {
+      buckets[i] = { free: 0, used: 0 };
+    }
+
+    // Parse RLE and fill buckets
+    var slotIdx = 0;
+    var i = 0;
+    while (i < rleStr.length && slotIdx < total) {
+      var stateChar = rleStr[i++];
+      var countStr = '';
+      while (i < rleStr.length && rleStr[i] >= '0' && rleStr[i] <= '9') countStr += rleStr[i++];
+      var count = parseInt(countStr, 10) || 1;
+
+      var isFree = (stateChar === 'F');
+
+      for (var c = 0; c < count && slotIdx < total; c++, slotIdx++) {
+        var bucketIdx = Math.min(Math.floor(slotIdx / slotsPerCell), buckets.length - 1);
+        if (isFree) {
+          buckets[bucketIdx].free++;
+        } else {
+          buckets[bucketIdx].used++;
+        }
+      }
+    }
+
+    // Fill remaining slots as free
+    while (slotIdx < total) {
+      var bucketIdx = Math.min(Math.floor(slotIdx / slotsPerCell), buckets.length - 1);
+      buckets[bucketIdx].free++;
+      slotIdx++;
+    }
+
+    // Render discrete cells with gaps
+    var freeColor = colors.free;
+    var usedColor = colors.used;  // Always use standard green for used slots
+
+    for (var c = 0; c < cellCount; c++) {
+      var bucket = buckets[c];
+      var totalInBucket = bucket.free + bucket.used;
+      if (totalInBucket === 0) continue;
+
+      var usedRatio = bucket.used / totalInBucket;
+      var x = c * (cellWidth + gap);
+
+      if (usedRatio === 0) {
+        ctx.fillStyle = freeColor;
+      } else if (usedRatio === 1) {
+        ctx.fillStyle = usedColor;
+      } else {
+        ctx.fillStyle = this._blendColor(freeColor, usedColor, usedRatio);
+      }
+
+      ctx.fillRect(x, 1, cellWidth, height - 2);
+    }
+  };
+
+  // Render minimap from bitmap - downsamples to discrete cells
+  PoolWidget.prototype._renderMinimapBitmap = function(rleHex, total, width, height) {
+    var ctx = this.minimapCtx;
+    var colors = PoolWidget.COLORS;
+    var cellCount = this.minimapCellCount;
+    var cellWidth = this.minimapCellWidth;
+    var gap = this.minimapGap;
+
+    var slotsPerCell = total / cellCount;
+    var buckets = new Array(cellCount);
+
+    for (var i = 0; i < buckets.length; i++) {
+      buckets[i] = { free: 0, used: 0 };
+    }
+
+    // Decode bitmap RLE
+    var segments = rleHex ? rleHex.split(',') : [];
+    var slotIdx = 0;
+
+    for (var s = 0; s < segments.length && slotIdx < total; s++) {
+      var segment = segments[s];
+      var starIdx = segment.indexOf('*');
+      var hexByte = starIdx !== -1 ? segment.substring(0, starIdx) : segment;
+      var byteCount = starIdx !== -1 ? parseInt(segment.substring(starIdx + 1), 10) || 1 : 1;
+      var byteVal = parseInt(hexByte, 16);
+      if (isNaN(byteVal)) continue;
+
+      for (var c = 0; c < byteCount && slotIdx < total; c++) {
+        for (var bit = 0; bit < 8 && slotIdx < total; bit++, slotIdx++) {
+          var bucketIdx = Math.min(Math.floor(slotIdx / slotsPerCell), buckets.length - 1);
+          if ((byteVal >> bit) & 1) {
+            buckets[bucketIdx].used++;
+          } else {
+            buckets[bucketIdx].free++;
+          }
+        }
+      }
+    }
+
+    // Fill remaining as free
+    while (slotIdx < total) {
+      var bucketIdx = Math.min(Math.floor(slotIdx / slotsPerCell), buckets.length - 1);
+      buckets[bucketIdx].free++;
+      slotIdx++;
+    }
+
+    // Render discrete cells with gaps
+    var freeColor = colors.free;
+    var usedColor = colors.used;  // Always use standard green for used slots
+
+    for (var c = 0; c < cellCount; c++) {
+      var bucket = buckets[c];
+      var totalInBucket = bucket.free + bucket.used;
+      if (totalInBucket === 0) continue;
+
+      var usedRatio = bucket.used / totalInBucket;
+      var x = c * (cellWidth + gap);
+
+      if (usedRatio === 0) {
+        ctx.fillStyle = freeColor;
+      } else if (usedRatio === 1) {
+        ctx.fillStyle = usedColor;
+      } else {
+        ctx.fillStyle = this._blendColor(freeColor, usedColor, usedRatio);
+      }
+
+      ctx.fillRect(x, 1, cellWidth, height - 2);
+    }
+  };
+
+  // Get the preset color for this widget
+  PoolWidget.prototype._getPresetColor = function() {
+    var presetColors = {
+      slab: '#39d4d4',      // cyan
+      malloc: '#d29922',    // warning/orange
+      arena: '#3fb950',     // green
+      buffer: '#a371f7',    // purple
+      queue: '#58a6ff'      // info/blue
+    };
+    return this.preset ? presetColors[this.preset] : null;
+  };
+
+  // Blend two colors by ratio - returns rgba string
+  PoolWidget.prototype._blendColor = function(color1, color2, ratio) {
+    // Parse hex color to rgba with varying alpha based on ratio
+    var alpha = 0.25 + (ratio * 0.75); // Range from 0.25 to 1.0
+
+    if (color2.charAt(0) === '#') {
+      var r = parseInt(color2.slice(1, 3), 16);
+      var g = parseInt(color2.slice(3, 5), 16);
+      var b = parseInt(color2.slice(5, 7), 16);
+      return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+    }
+
+    // If already rgba, replace alpha
+    if (color2.indexOf('rgba') === 0) {
+      return color2.replace(/[\d.]+\)$/, alpha + ')');
+    }
+
+    // Fallback
+    return color2;
+  };
+
   // Registry for PoolWidget instances
   PoolWidget.registry = {};
 
@@ -654,14 +1025,14 @@
     heapMarkers: function(opts) {
       opts = opts || {};
       return [
-        { type: 'hwm', id: 'hwm', color: opts.hwmColor || 'var(--color-info)' },
+        { type: 'hwm', id: 'hwm', label: opts.hwmLabel || 'HWM', color: opts.hwmColor || 'var(--color-info)' },
         { type: 'threshold', id: 'threshold', label: opts.thresholdLabel || 'GC',
           color: opts.thresholdColor || 'var(--color-error)', position: opts.thresholdPosition || 75 }
       ];
     },
     hwmOnly: function(opts) {
       opts = opts || {};
-      return [{ type: 'hwm', id: 'hwm', color: opts.hwmColor || 'var(--color-info)' }];
+      return [{ type: 'hwm', id: 'hwm', label: opts.hwmLabel || 'HWM', color: opts.hwmColor || 'var(--color-info)' }];
     }
   };
 
@@ -915,6 +1286,8 @@
         showGrid: true,
         showLegend: true,
         showOwnerBreakdown: true,
+        collapsibleGrid: true,
+        markers: PoolWidget.Markers.hwmOnly(),
         states: [
           { char: 'A', class: 'active', label: 'Active', color: PoolWidget.COLORS.active },
           { char: 'I', class: 'idle', label: 'Idle', color: PoolWidget.COLORS.idle },
@@ -941,7 +1314,9 @@
         preset: 'slab',
         variant: 'compact',
         showGauge: true,
-        showGrid: true
+        showGrid: true,
+        collapsibleGrid: true,
+        markers: PoolWidget.Markers.hwmOnly()
       });
     },
     stream_arenas: function(id) {
@@ -953,7 +1328,9 @@
         preset: 'arena',
         variant: 'compact',
         showGauge: true,
-        showGrid: true
+        showGrid: true,
+        collapsibleGrid: true,
+        markers: PoolWidget.Markers.hwmOnly()
       });
     },
     queue: function(id) {
@@ -2041,6 +2418,7 @@
         variant: 'compact',
         showGauge: true,
         showGrid: true,
+        collapsibleGrid: true,
         markers: PoolWidget.Markers.heapMarkers({ thresholdLabel: 'GC', thresholdPosition: 75 }),
         stats: [
           { id: 'objects', label: 'objects:' },
@@ -2206,8 +2584,21 @@
         });
 
         self.eventSource.onopen = function() {
+          var wasReconnect = self.reconnectAttempts > 0;
           self.reconnectAttempts = 0;
           self.updateConnectionStatus(true);
+
+          // On reconnect, always fetch fresh state from server
+          // Server may have restarted with new state, and our cached state would be stale
+          if (wasReconnect) {
+            // Clear old state before fetching fresh
+            self.fullState = {};
+            self.slabStates = {};
+            self.fetchFreshState();
+          } else if (!self.fullState.memory || !self.fullState.metrics) {
+            // Initial connect but fetchFreshState failed - try again
+            self.fetchFreshState();
+          }
         };
 
         self.eventSource.onerror = function(e) {
@@ -2252,6 +2643,11 @@
             // Update used count
             if (deltaSlab.used !== undefined) {
               fullSlab.used = deltaSlab.used;
+            }
+
+            // Update HWM (high water mark)
+            if (deltaSlab.hwm !== undefined) {
+              fullSlab.hwm = deltaSlab.hwm;
             }
 
             // Apply delta_states to stored expanded state
@@ -2665,9 +3061,16 @@
     updateSlabGrid(slab, ownerMap) {
       var self = this;
 
+      // Compute HWM percentage for markers if hwm is provided
+      var slabData = Object.assign({}, slab);
+      if (slab.hwm !== undefined && slab.total > 0) {
+        var hwmPct = (slab.hwm / slab.total) * 100;
+        slabData.markers = { hwm: hwmPct };
+      }
+
       var widgets = PoolWidget.getAll(slab.slabKey || slab.name);
       widgets.forEach(function(widget) {
-        widget.update(slab);
+        widget.update(slabData);
 
         // Handle owner breakdown rendering (special case for handles slab)
         if (slab.name === 'handles' && widget.el) {

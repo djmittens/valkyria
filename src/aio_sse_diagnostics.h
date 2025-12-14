@@ -26,6 +26,7 @@ typedef struct {
   const char *name;
   size_t total_slots;
   size_t used_slots;
+  size_t peak_used;  // High water mark
   size_t overflow_count;
 
   // Binary bitmap (for simple slabs like LVAL, TCP buffers)
