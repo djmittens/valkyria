@@ -341,6 +341,9 @@ static void sse_registry_timer_cb(uv_timer_t *timer) {
   valk_mem_snapshot_free(&registry->current_snapshot);
   valk_mem_snapshot_collect(&registry->current_snapshot, registry->aio_system);
 
+  // Update event loop metrics from libuv (before collecting delta)
+  valk_aio_update_loop_metrics(registry->aio_system);
+
   // Collect modular metrics delta once for all streams
 #ifdef VALK_METRICS_ENABLED
   if (!registry->modular_delta_initialized) {

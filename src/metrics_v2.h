@@ -167,6 +167,53 @@ typedef struct {
 } valk_free_list_t;
 
 // ============================================================================
+// REGISTRY STATS - Meta-metrics about the metrics system itself
+// ============================================================================
+
+// These are NOT stored as metric objects to avoid recursion.
+// Instead, they're computed on-demand and exported alongside metrics.
+typedef struct {
+  // Registry utilization (active counts)
+  size_t counters_active;
+  size_t gauges_active;
+  size_t histograms_active;
+  size_t summaries_active;
+
+  // High water marks (slots ever used)
+  size_t counters_hwm;
+  size_t gauges_hwm;
+  size_t histograms_hwm;
+  size_t summaries_hwm;
+
+  // Capacity limits
+  size_t counters_capacity;
+  size_t gauges_capacity;
+  size_t histograms_capacity;
+  size_t summaries_capacity;
+
+  // String pool
+  size_t string_pool_used;
+  size_t string_pool_capacity;
+
+  // Eviction stats (lifetime totals)
+  uint64_t evictions_total;
+  uint64_t evictions_counters;
+  uint64_t evictions_gauges;
+  uint64_t evictions_histograms;
+  uint64_t evictions_summaries;
+
+  // Free list depths (available slots for reuse)
+  size_t counters_free;
+  size_t gauges_free;
+  size_t histograms_free;
+  size_t summaries_free;
+
+  // Collection timing
+  uint64_t last_collect_time_us;
+  uint64_t collect_duration_us;
+} valk_registry_stats_t;
+
+// ============================================================================
 // REGISTRY - Central metric storage
 // ============================================================================
 
@@ -220,6 +267,13 @@ typedef struct {
   // Eviction configuration
   uint64_t eviction_threshold_us;  // Default: 5 minutes
 
+  // Eviction tracking (for meta-metrics)
+  _Atomic uint64_t evictions_total;
+  _Atomic uint64_t evictions_counters;
+  _Atomic uint64_t evictions_gauges;
+  _Atomic uint64_t evictions_histograms;
+  _Atomic uint64_t evictions_summaries;
+
   // Timing
   uint64_t start_time_us;
 } valk_metrics_registry_t;
@@ -241,6 +295,19 @@ void valk_metrics_registry_destroy(void);
 // Evict stale metrics when registry is under pressure
 // Returns number of metrics evicted
 size_t valk_metrics_evict_stale(void);
+
+// ============================================================================
+// REGISTRY STATS API (Meta-metrics)
+// ============================================================================
+
+// Collect current registry statistics into stats struct
+// This is computed on-demand, not stored as metrics objects
+void valk_registry_stats_collect(valk_registry_stats_t *stats);
+
+// Export registry stats as JSON
+// Returns bytes written (excluding null terminator)
+size_t valk_registry_stats_to_json(const valk_registry_stats_t *stats,
+                                    char *buf, size_t buf_size);
 
 // Mark a metric as persistent (non-evictable)
 // Use for core system metrics that should never be evicted

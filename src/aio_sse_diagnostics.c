@@ -1142,6 +1142,19 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
     p += n;
   }
 
+  // Registry stats (meta-metrics about the metrics system itself)
+  {
+    valk_registry_stats_t reg_stats;
+    valk_registry_stats_collect(&reg_stats);
+    char reg_buf[1024];
+    size_t reg_len = valk_registry_stats_to_json(&reg_stats, reg_buf, sizeof(reg_buf));
+    if (reg_len > 0) {
+      n = snprintf(p, end - p, ",\"registry\":%s", reg_buf);
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+    }
+  }
+
   n = snprintf(p, end - p, "}");  // Close metrics section
   if (n < 0 || n >= end - p) return -1;
   p += n;
@@ -1514,19 +1527,22 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
   // ===== Metrics section (delta values) =====
 #ifdef VALK_METRICS_ENABLED
   // Include metrics section if GC changed (need VM metrics for UI) or other metrics changed
-  if (has_aio_metric_changes || has_modular_metric_changes || gc_changed) {
+  // Always emit metrics section (at minimum for registry stats)
+  // Registry stats are always included for real-time monitoring
+  {
     n = snprintf(p, end - p, "%s\"metrics\":{", need_comma ? "," : "");
     if (n < 0 || n >= end - p) return -1;
     p += n;
 
     bool metrics_need_comma = false;
 
-    // VM metrics (include when GC changed so dashboard can update GC counters)
+    // VM metrics - only emit GC when changed
+    // Note: event_loop metrics are now part of modular metrics system
+    // and will be included in the modular delta automatically
     if (gc_changed) {
       valk_vm_metrics_t vm_metrics = {0};
       valk_gc_malloc_heap_t *gc_heap = valk_aio_get_gc_heap(aio);
-      uv_loop_t *loop = valk_aio_get_event_loop(aio);
-      valk_vm_metrics_collect(&vm_metrics, gc_heap, loop);
+      valk_vm_metrics_collect(&vm_metrics, gc_heap, NULL);
 
       n = snprintf(p, end - p,
                    "\"vm\":{\"gc\":{\"cycles_total\":%lu,\"pause_us_total\":%lu,"
@@ -1554,9 +1570,10 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
         uint64_t d_req = requests - conn->prev_metrics.requests_total;
 
         n = snprintf(p, end - p,
-                     "\"aio\":{\"bytes\":{\"d_sent\":%lu,\"d_recv\":%lu},"
+                     "%s\"aio\":{\"bytes\":{\"d_sent\":%lu,\"d_recv\":%lu},"
                      "\"requests\":{\"d_total\":%lu},"
                      "\"connections\":{\"active\":%lu,\"idle\":%lu,\"closing\":%lu}}",
+                     metrics_need_comma ? "," : "",
                      d_sent, d_recv, d_req,
                      atomic_load(&aio_metrics->connections_active),
                      atomic_load(&aio_metrics->connections_idle),
@@ -1581,6 +1598,21 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
       if (modular_len > 0 && modular_len < sizeof(modular_buf)) {
         n = snprintf(p, end - p, "%s\"modular\":%s",
                      metrics_need_comma ? "," : "", modular_buf);
+        if (n < 0 || n >= end - p) return -1;
+        p += n;
+        metrics_need_comma = true;
+      }
+    }
+
+    // Registry stats (meta-metrics - always send for real-time tracking)
+    {
+      valk_registry_stats_t reg_stats;
+      valk_registry_stats_collect(&reg_stats);
+      char reg_buf[1024];
+      size_t reg_len = valk_registry_stats_to_json(&reg_stats, reg_buf, sizeof(reg_buf));
+      if (reg_len > 0) {
+        n = snprintf(p, end - p, "%s\"registry\":%s",
+                     metrics_need_comma ? "," : "", reg_buf);
         if (n < 0 || n >= end - p) return -1;
         p += n;
       }
@@ -1891,6 +1923,19 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
     n = snprintf(p, end - p, "\"modular\":{}");
     if (n < 0 || n >= end - p) goto cleanup;
     p += n;
+  }
+
+  // Registry stats (meta-metrics about the metrics system itself)
+  {
+    valk_registry_stats_t reg_stats;
+    valk_registry_stats_collect(&reg_stats);
+    char reg_buf[1024];
+    size_t reg_len = valk_registry_stats_to_json(&reg_stats, reg_buf, sizeof(reg_buf));
+    if (reg_len > 0) {
+      n = snprintf(p, end - p, ",\"registry\":%s", reg_buf);
+      if (n < 0 || n >= end - p) goto cleanup;
+      p += n;
+    }
   }
 
   n = snprintf(p, end - p, "}");  // Close metrics section

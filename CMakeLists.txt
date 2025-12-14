@@ -99,6 +99,8 @@ if(VALK_METRICS)
   list(APPEND VALKYRIA_SOURCES src/metrics_builtins.c)
   # Pool metrics factory for standardized pool metrics
   list(APPEND VALKYRIA_SOURCES src/pool_metrics.c)
+  # Event loop metrics for libuv loops
+  list(APPEND VALKYRIA_SOURCES src/event_loop_metrics.c)
   # SSE diagnostics for memory visualization
   list(APPEND VALKYRIA_SOURCES src/aio_sse_diagnostics.c)
   # SSE stream registry for global timer management

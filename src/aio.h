@@ -377,6 +377,10 @@ void valk_aio_timer_free(valk_aio_handle_t* handle);
 // Get the event loop from AIO system (returns NULL if no loop available)
 struct uv_loop_s* valk_aio_get_event_loop(valk_aio_system_t* sys);
 
+// Update event loop metrics from libuv (reads loop counters and updates modular metrics)
+// Should be called periodically (e.g., from SSE timer) to keep metrics current
+void valk_aio_update_loop_metrics(valk_aio_system_t* sys);
+
 // Get the system name (for metrics/dashboard)
 const char* valk_aio_get_name(valk_aio_system_t* sys);
 

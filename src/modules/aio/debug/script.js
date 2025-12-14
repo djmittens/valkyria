@@ -1173,6 +1173,7 @@
   var prevMetrics = null;
   var prevTimestamp = null;
   var serverCards = {};  // Track dynamically created server cards
+  var currentModular = null;  // Current modular metrics (for event loop etc)
 
   // ==================== DOM Helpers ====================
   var $ = function(id) { return document.getElementById(id); };
@@ -1481,27 +1482,41 @@
         '</div>' +
         '<div class="panel-body">' +
 
-          // Event Loop Stats Row
-          '<div class="aio-section-block">' +
-            '<div class="block-header">' +
-              '<span class="block-title">Event Loop</span>' +
-            '</div>' +
-            '<div class="mini-stats" role="list">' +
-              '<div class="mini-stat" role="listitem" title="Event loop iterations. Each iteration polls for I/O events.">' +
-                '<div class="mini-stat-value aio-sys-iterations">--</div>' +
-                '<div class="mini-stat-label">Loop Iters</div>' +
+          // Event Loop - Compact inline with activity visualization
+          '<div class="aio-section-block event-loop-block">' +
+            '<div class="event-loop-compact">' +
+              '<div class="event-loop-header">' +
+                '<span class="block-title">Event Loop</span>' +
+                '<div class="event-loop-pulse" title="Live activity indicator - pulses with event processing">' +
+                  '<span class="pulse-dot"></span>' +
+                  '<span class="pulse-dot"></span>' +
+                  '<span class="pulse-dot"></span>' +
+                  '<span class="pulse-dot"></span>' +
+                  '<span class="pulse-dot"></span>' +
+                '</div>' +
               '</div>' +
-              '<div class="mini-stat" role="listitem" title="Total I/O events processed (reads, writes, connections, timers).">' +
-                '<div class="mini-stat-value aio-sys-events">--</div>' +
-                '<div class="mini-stat-label">Events</div>' +
-              '</div>' +
-              '<div class="mini-stat" role="listitem" title="Active libuv handles (sockets, timers, signals).">' +
-                '<div class="mini-stat-value aio-sys-handles">--</div>' +
-                '<div class="mini-stat-label">Handles</div>' +
-              '</div>' +
-              '<div class="mini-stat" role="listitem" title="Pending HTTP requests + responses in the processing queue. High values indicate backpressure.">' +
-                '<div class="mini-stat-value aio-sys-queue">0</div>' +
-                '<div class="mini-stat-label">Queue</div>' +
+              '<div class="event-loop-metrics">' +
+                '<div class="event-loop-util" title="Event loop utilization - percentage of time spent processing vs idle">' +
+                  '<div class="util-bar">' +
+                    '<div class="util-fill aio-sys-util-fill" style="width: 0%"></div>' +
+                  '</div>' +
+                  '<span class="util-label"><span class="aio-sys-util-pct">--</span>% busy</span>' +
+                '</div>' +
+                '<span class="metric-sep">│</span>' +
+                '<span class="event-loop-metric" title="Loop iterations per second (poll cycles)">' +
+                  '<span class="metric-value aio-sys-iter-rate">--</span>' +
+                  '<span class="metric-unit">iter/s</span>' +
+                '</span>' +
+                '<span class="metric-sep">│</span>' +
+                '<span class="event-loop-metric" title="Active libuv handles (sockets, timers, signals)">' +
+                  '<span class="metric-value aio-sys-handles">--</span>' +
+                  '<span class="metric-unit">handles</span>' +
+                '</span>' +
+                '<span class="metric-sep">│</span>' +
+                '<span class="event-loop-metric queue-metric" title="Pending requests in queue - high values indicate backpressure">' +
+                  '<span class="metric-value aio-sys-queue">0</span>' +
+                  '<span class="metric-unit">queued</span>' +
+                '</span>' +
               '</div>' +
             '</div>' +
           '</div>' +
@@ -1587,26 +1602,111 @@
   function updateAioSystemPanel(panel, sys) {
     var conns = sys.connections || {};
     var sysStats = sys.system || {};
-    var loop = sys.loop || {};
     var queue = sys.queue || {};
+    var loopName = sys.name || 'main';
 
-    // Update mini-stats
-    panel.querySelector('.aio-sys-iterations').textContent = fmtCompact(loop.iterations || 0);
-    panel.querySelector('.aio-sys-events').textContent = fmtCompact(loop.events_processed || 0);
-    panel.querySelector('.aio-sys-handles').textContent = sysStats.handles || 0;
+    // Get event loop metrics from modular metrics (registered with loop={name} label)
+    var loopLabels = {loop: loopName};
+    var counters = currentModular ? currentModular.counters || [] : [];
+    var gauges = currentModular ? currentModular.gauges || [] : [];
+
+    // Read current values from modular gauges/counters
+    var iterNow = getMetricValue(counters, 'event_loop_iterations', loopLabels);
+    var idleNow = getMetricValue(gauges, 'event_loop_idle_us', loopLabels);
+    var handlesNow = getMetricValue(gauges, 'event_loop_handles', loopLabels);
+
+    // Track previous values for rate calculation
+    var now = Date.now();
+    var prev = panel._prevLoop || {};
+
+    // Store current values
+    panel._prevLoop = {
+      time: now,
+      iter: iterNow,
+      idle: idleNow
+    };
+
+    // Skip calculations on first update or when values are still 0 (not yet populated)
+    if (!prev.time || idleNow === 0) {
+      var utilFill = panel.querySelector('.aio-sys-util-fill');
+      var utilPctEl = panel.querySelector('.aio-sys-util-pct');
+      if (utilFill && utilPctEl) {
+        utilFill.style.width = '0%';
+        utilPctEl.textContent = '--';
+      }
+      var rateEl = panel.querySelector('.aio-sys-iter-rate');
+      if (rateEl) rateEl.textContent = '--';
+      var handlesEl = panel.querySelector('.aio-sys-handles');
+      if (handlesEl) handlesEl.textContent = handlesNow || '--';
+      return;
+    }
+
+    // Calculate rates - gauges now sent every 100ms (Prometheus-style)
+    var dt = (now - prev.time) / 1000;
+    if (dt <= 0) dt = 0.1;
+
+    // Iteration rate
+    var iterDelta = iterNow - (prev.iter || 0);
+    var iterRate = iterDelta >= 0 ? iterDelta / dt : 0;
+
+    // Utilization from idle time delta
+    var idleDelta = idleNow - (prev.idle || 0);
+    var dtUs = dt * 1e6;
+    var utilPct = 0;
+    if (idleDelta >= 0 && idleDelta <= dtUs * 2) {
+      // Normal: idle_delta should be close to dt (if ~100% idle, idle_delta ≈ dt)
+      utilPct = Math.max(0, Math.min(100, 100 - (idleDelta / dtUs) * 100));
+    }
+    // If idle_delta is negative (wrap) or huge (first real data), show 0%
+
+    // Update utilization bar and label
+    var utilFill = panel.querySelector('.aio-sys-util-fill');
+    var utilPctEl = panel.querySelector('.aio-sys-util-pct');
+    if (utilFill && utilPctEl) {
+      utilFill.style.width = utilPct.toFixed(0) + '%';
+      utilPctEl.textContent = utilPct.toFixed(0);
+      utilFill.classList.toggle('high', utilPct > 70);
+      utilFill.classList.toggle('critical', utilPct > 90);
+    }
+
+    // Update iteration rate
+    var rateEl = panel.querySelector('.aio-sys-iter-rate');
+    if (rateEl) {
+      rateEl.textContent = fmtCompact(Math.round(iterRate));
+    }
+
+    // Update handles from modular metrics
+    var handlesEl = panel.querySelector('.aio-sys-handles');
+    if (handlesEl) {
+      handlesEl.textContent = handlesNow || sysStats.handles || 0;
+    }
     panel.querySelector('.aio-sys-servers').textContent = (sysStats.servers || 0) + ' servers';
+
+    // Animate pulse dots based on activity (iter rate)
+    var pulseDots = panel.querySelectorAll('.pulse-dot');
+    var activityLevel = Math.min(5, Math.ceil(iterRate / 5)); // 0-5 dots lit based on rate (idle ~10/s)
+    for (var i = 0; i < pulseDots.length; i++) {
+      pulseDots[i].classList.toggle('active', i < activityLevel);
+      // Add staggered animation for visual interest
+      if (i < activityLevel && iterRate > 0) {
+        pulseDots[i].style.animationDelay = (i * 0.1) + 's';
+      }
+    }
 
     // Update queue stats (pending requests + pending responses)
     var pending = (queue.pending_requests || 0) + (queue.pending_responses || 0);
     var capacity = queue.capacity || 1;
     var queuePct = capacity > 0 ? (pending / capacity) * 100 : 0;
 
-    // Update mini-stat in Event Loop section
+    // Update queue in Event Loop section
     var queueEl = panel.querySelector('.aio-sys-queue');
     if (queueEl) {
       queueEl.textContent = pending;
-      queueEl.classList.toggle('warning', queuePct > 50);
-      queueEl.classList.toggle('critical', queuePct > 80);
+    }
+    var queueMetric = panel.querySelector('.queue-metric');
+    if (queueMetric) {
+      queueMetric.classList.toggle('warning', queuePct > 50);
+      queueMetric.classList.toggle('critical', queuePct > 80);
     }
 
     // Update queue PoolWidget in Resource Pools section
@@ -2248,9 +2348,11 @@
     var mod = data.modular_metrics || {};
     var vm = data.vm_metrics || {};
 
+    // Store modular for access by other update functions
+    currentModular = mod;
+
     var gc = vm.gc || {};
     var interp = vm.interpreter || {};
-    var loop = vm.event_loop || {};
     var sys = aio.system || {};
     var conns = aio.connections || {};
 
@@ -2378,11 +2480,11 @@
     // Use the new aio_systems array for multi-system support
     var aioSystems = data.aio_systems || [];
     // Fallback: if aio_systems is empty but we have aio_metrics, create a system from it
+    // Note: event_loop metrics come from modular metrics (loop={name} label)
     if (aioSystems.length === 0 && aio.system) {
       aioSystems = [{
         name: 'main',
         uptime_seconds: aio.uptime_seconds || 0,
-        loop: loop,
         system: sys,
         connections: conns,
         queue: aio.queue || {}
@@ -2854,6 +2956,11 @@
           }
         }
 
+        // Apply registry stats (meta-metrics) - these are absolute values
+        if (delta.metrics.registry) {
+          metrics.registry = delta.metrics.registry;
+        }
+
         // Apply modular metrics deltas (counters, gauges, histograms)
         if (delta.metrics.modular && delta.metrics.modular.deltas) {
           if (!metrics.modular) metrics.modular = { counters: [], gauges: [], histograms: [] };
@@ -3113,12 +3220,8 @@
             stack_depth_max: vm.interpreter ? vm.interpreter.stack_depth_max : 0,
             closures_created: vm.interpreter ? vm.interpreter.closures_created : 0,
             env_lookups: vm.interpreter ? vm.interpreter.env_lookups : 0
-          },
-          event_loop: {
-            iterations: vm.event_loop ? vm.event_loop.iterations : 0,
-            events_processed: vm.event_loop ? vm.event_loop.events_processed : 0,
-            idle_time_us: vm.event_loop ? vm.event_loop.idle_time_us : 0
           }
+          // Note: event_loop metrics are now in modular metrics with loop={name} label
         };
       }
 
@@ -3147,10 +3250,10 @@
         };
 
         // Create an AIO system entry for the systems array
+        // Note: event_loop metrics come from modular metrics (loop={name} label)
         dashboardData.aio_systems = [{
           name: 'main',
           uptime_seconds: aio.uptime_seconds || 0,
-          loop: dashboardData.vm_metrics.event_loop || {},
           system: dashboardData.aio_metrics.system,
           connections: dashboardData.aio_metrics.connections,
           queue: dashboardData.aio_metrics.queue
@@ -3159,6 +3262,107 @@
 
       // Call the main dashboard update function
       updateDashboard(dashboardData);
+
+      // Update metrics registry panel if registry data is present
+      if (metrics.registry) {
+        this.updateRegistryPanel(metrics.registry);
+      }
+    }
+
+    // Update the metrics registry meta-metrics panel
+    updateRegistryPanel(registry) {
+      if (!registry) return;
+
+      // Helper to update a stat card
+      function updateStatCard(prefix, data) {
+        var active = data.active || 0;
+        var capacity = data.capacity || 1;
+        var free = data.free || 0;
+        var pct = (active / capacity) * 100;
+
+        var barEl = $(prefix + '-bar');
+        var activeEl = $(prefix + '-active');
+        var capacityEl = $(prefix + '-capacity');
+        var freeEl = $(prefix + '-free');
+
+        if (barEl) {
+          barEl.style.width = Math.min(pct, 100) + '%';
+          barEl.classList.remove('warning', 'critical');
+          if (pct > 90) barEl.classList.add('critical');
+          else if (pct > 70) barEl.classList.add('warning');
+        }
+        if (activeEl) activeEl.textContent = active;
+        if (capacityEl) capacityEl.textContent = capacity;
+        if (freeEl) freeEl.textContent = free;
+      }
+
+      // Update counters
+      if (registry.counters) {
+        updateStatCard('registry-counters', registry.counters);
+      }
+
+      // Update gauges
+      if (registry.gauges) {
+        updateStatCard('registry-gauges', registry.gauges);
+      }
+
+      // Update histograms
+      if (registry.histograms) {
+        updateStatCard('registry-histograms', registry.histograms);
+      }
+
+      // Update string pool
+      if (registry.string_pool) {
+        var sp = registry.string_pool;
+        var spPct = (sp.used / (sp.capacity || 1)) * 100;
+        var barEl = $('registry-strings-bar');
+        var usedEl = $('registry-strings-used');
+        var capEl = $('registry-strings-capacity');
+
+        if (barEl) {
+          barEl.style.width = Math.min(spPct, 100) + '%';
+          barEl.classList.remove('warning', 'critical');
+          if (spPct > 90) barEl.classList.add('critical');
+          else if (spPct > 70) barEl.classList.add('warning');
+        }
+        if (usedEl) usedEl.textContent = sp.used;
+        if (capEl) capEl.textContent = sp.capacity;
+      }
+
+      // Update eviction stats
+      if (registry.evictions) {
+        var ev = registry.evictions;
+        var totalEl = $('registry-evictions-total');
+        var cntEl = $('registry-evictions-counters');
+        var gaugeEl = $('registry-evictions-gauges');
+        var histEl = $('registry-evictions-histograms');
+
+        if (totalEl) totalEl.textContent = fmtCompact(ev.total || 0);
+        if (cntEl) cntEl.textContent = ev.counters || 0;
+        if (gaugeEl) gaugeEl.textContent = ev.gauges || 0;
+        if (histEl) histEl.textContent = ev.histograms || 0;
+      }
+
+      // Update collection time
+      var collectEl = $('registry-collect-time');
+      if (collectEl && registry.collect_time_us !== undefined) {
+        collectEl.textContent = registry.collect_time_us;
+      }
+
+      // Update section badges
+      var totalActive = (registry.counters ? registry.counters.active : 0) +
+                        (registry.gauges ? registry.gauges.active : 0) +
+                        (registry.histograms ? registry.histograms.active : 0);
+      var stringsUsed = registry.string_pool ? registry.string_pool.used : 0;
+
+      var totalBadge = $('metrics-total-badge');
+      var stringsBadge = $('metrics-strings-badge');
+      if (totalBadge) {
+        totalBadge.textContent = totalActive + ' metrics';
+      }
+      if (stringsBadge) {
+        stringsBadge.textContent = stringsUsed + ' strings';
+      }
     }
 
     updateSlabGrid(slab, ownerMap) {

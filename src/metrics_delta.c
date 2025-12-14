@@ -141,19 +141,15 @@ size_t valk_delta_snapshot_collect_stateless(valk_delta_snapshot_t *snap,
     }
   }
 
-  // Process gauges (threshold: >0.1% change or absolute >1)
+  // Process gauges - send if value changed (Prometheus-style simplicity)
+  // No percentage threshold - predictable behavior, negligible bandwidth impact
   size_t gauge_count = atomic_load(&registry->gauge_count);
   for (size_t i = 0; i < gauge_count; i++) {
     valk_gauge_v2_t *g = &registry->gauges[i];
     int64_t current = atomic_load_explicit(&g->value, memory_order_relaxed);
     int64_t last = baseline->gauge_baselines[i];
 
-    // Apply change threshold
-    int64_t diff = current > last ? current - last : last - current;
-    int64_t threshold = last / 1000;  // 0.1%
-    if (threshold < 1) threshold = 1;
-
-    if (diff >= threshold) {
+    if (current != last) {
       ensure_delta_capacity(snap);
       valk_metric_delta_t *delta = &snap->deltas[snap->delta_count++];
       delta->name = g->name;
@@ -242,19 +238,14 @@ size_t valk_delta_snapshot_collect(valk_delta_snapshot_t *snap,
     }
   }
 
-  // Process gauges (threshold: >0.1% change or absolute >1)
+  // Process gauges - send if value changed (Prometheus-style simplicity)
   size_t gauge_count = atomic_load(&registry->gauge_count);
   for (size_t i = 0; i < gauge_count; i++) {
     valk_gauge_v2_t *g = &registry->gauges[i];
     int64_t current = atomic_load_explicit(&g->value, memory_order_relaxed);
     int64_t last = atomic_load_explicit(&g->last_value, memory_order_relaxed);
 
-    // Apply change threshold
-    int64_t diff = current > last ? current - last : last - current;
-    int64_t threshold = last / 1000;  // 0.1%
-    if (threshold < 1) threshold = 1;
-
-    if (diff >= threshold) {
+    if (current != last) {
       ensure_delta_capacity(snap);
       valk_metric_delta_t *delta = &snap->deltas[snap->delta_count++];
       delta->name = g->name;

@@ -356,6 +356,10 @@ size_t valk_metrics_evict_stale(void) {
   uint64_t now = get_timestamp_us();
   uint64_t threshold = g_metrics.eviction_threshold_us;
   size_t evicted = 0;
+  size_t counters_evicted = 0;
+  size_t gauges_evicted = 0;
+  size_t histograms_evicted = 0;
+  size_t summaries_evicted = 0;
 
   // Evict stale counters
   size_t counter_count = atomic_load(&g_metrics.counter_count);
@@ -369,7 +373,7 @@ size_t valk_metrics_evict_stale(void) {
       // Mark as inactive and push to free list
       atomic_store(&c->active, false);
       free_list_push(&g_metrics.counter_free, g_metrics.counter_next_free, i);
-      evicted++;
+      counters_evicted++;
     }
   }
 
@@ -384,7 +388,7 @@ size_t valk_metrics_evict_stale(void) {
     if (now - last_updated > threshold) {
       atomic_store(&g->active, false);
       free_list_push(&g_metrics.gauge_free, g_metrics.gauge_next_free, i);
-      evicted++;
+      gauges_evicted++;
     }
   }
 
@@ -399,7 +403,7 @@ size_t valk_metrics_evict_stale(void) {
     if (now - last_updated > threshold) {
       atomic_store(&h->active, false);
       free_list_push(&g_metrics.histogram_free, g_metrics.histogram_next_free, i);
-      evicted++;
+      histograms_evicted++;
     }
   }
 
@@ -414,8 +418,22 @@ size_t valk_metrics_evict_stale(void) {
     if (now - last_updated > threshold) {
       atomic_store(&s->active, false);
       free_list_push(&g_metrics.summary_free, g_metrics.summary_next_free, i);
-      evicted++;
+      summaries_evicted++;
     }
+  }
+
+  // Update eviction tracking counters
+  evicted = counters_evicted + gauges_evicted + histograms_evicted + summaries_evicted;
+  if (evicted > 0) {
+    atomic_fetch_add(&g_metrics.evictions_total, evicted);
+    if (counters_evicted > 0)
+      atomic_fetch_add(&g_metrics.evictions_counters, counters_evicted);
+    if (gauges_evicted > 0)
+      atomic_fetch_add(&g_metrics.evictions_gauges, gauges_evicted);
+    if (histograms_evicted > 0)
+      atomic_fetch_add(&g_metrics.evictions_histograms, histograms_evicted);
+    if (summaries_evicted > 0)
+      atomic_fetch_add(&g_metrics.evictions_summaries, summaries_evicted);
   }
 
   return evicted;
@@ -503,4 +521,120 @@ valk_summary_v2_t *valk_summary_deref(valk_metric_handle_t h) {
   if (!atomic_load(&s->active)) return NULL;
   if (atomic_load(&s->generation) != h.generation) return NULL;
   return s;
+}
+
+// ============================================================================
+// REGISTRY STATS (Meta-metrics)
+// ============================================================================
+
+// Helper: count free list depth
+static size_t count_free_list(valk_free_list_t *fl, uint32_t *next_free, size_t max_slots) {
+  size_t count = 0;
+  uint32_t idx = atomic_load(&fl->head);
+  while (idx != VALK_INVALID_SLOT && count < max_slots) {
+    count++;
+    idx = next_free[idx];
+  }
+  return count;
+}
+
+void valk_registry_stats_collect(valk_registry_stats_t *stats) {
+  if (!stats) return;
+
+  uint64_t start = get_timestamp_us();
+  memset(stats, 0, sizeof(*stats));
+
+  // High water marks (slots ever allocated)
+  stats->counters_hwm = atomic_load(&g_metrics.counter_count);
+  stats->gauges_hwm = atomic_load(&g_metrics.gauge_count);
+  stats->histograms_hwm = atomic_load(&g_metrics.histogram_count);
+  stats->summaries_hwm = atomic_load(&g_metrics.summary_count);
+
+  // Count active metrics (iterate through HWM, check active flag)
+  for (size_t i = 0; i < stats->counters_hwm; i++) {
+    if (atomic_load(&g_metrics.counters[i].active)) {
+      stats->counters_active++;
+    }
+  }
+  for (size_t i = 0; i < stats->gauges_hwm; i++) {
+    if (atomic_load(&g_metrics.gauges[i].active)) {
+      stats->gauges_active++;
+    }
+  }
+  for (size_t i = 0; i < stats->histograms_hwm; i++) {
+    if (atomic_load(&g_metrics.histograms[i].active)) {
+      stats->histograms_active++;
+    }
+  }
+  for (size_t i = 0; i < stats->summaries_hwm; i++) {
+    if (atomic_load(&g_metrics.summaries[i].active)) {
+      stats->summaries_active++;
+    }
+  }
+
+  // Capacities
+  stats->counters_capacity = VALK_REGISTRY_MAX_COUNTERS;
+  stats->gauges_capacity = VALK_REGISTRY_MAX_GAUGES;
+  stats->histograms_capacity = VALK_REGISTRY_MAX_HISTOGRAMS;
+  stats->summaries_capacity = VALK_REGISTRY_MAX_SUMMARIES;
+
+  // String pool usage
+  stats->string_pool_used = g_metrics.string_pool_count;
+  stats->string_pool_capacity = 4096;
+
+  // Eviction stats
+  stats->evictions_total = atomic_load(&g_metrics.evictions_total);
+  stats->evictions_counters = atomic_load(&g_metrics.evictions_counters);
+  stats->evictions_gauges = atomic_load(&g_metrics.evictions_gauges);
+  stats->evictions_histograms = atomic_load(&g_metrics.evictions_histograms);
+  stats->evictions_summaries = atomic_load(&g_metrics.evictions_summaries);
+
+  // Free list depths
+  stats->counters_free = count_free_list(&g_metrics.counter_free,
+                                          g_metrics.counter_next_free,
+                                          VALK_REGISTRY_MAX_COUNTERS);
+  stats->gauges_free = count_free_list(&g_metrics.gauge_free,
+                                        g_metrics.gauge_next_free,
+                                        VALK_REGISTRY_MAX_GAUGES);
+  stats->histograms_free = count_free_list(&g_metrics.histogram_free,
+                                            g_metrics.histogram_next_free,
+                                            VALK_REGISTRY_MAX_HISTOGRAMS);
+  stats->summaries_free = count_free_list(&g_metrics.summary_free,
+                                           g_metrics.summary_next_free,
+                                           VALK_REGISTRY_MAX_SUMMARIES);
+
+  // Timing
+  uint64_t end = get_timestamp_us();
+  stats->last_collect_time_us = end;
+  stats->collect_duration_us = end - start;
+}
+
+size_t valk_registry_stats_to_json(const valk_registry_stats_t *stats,
+                                    char *buf, size_t buf_size) {
+  if (!stats || !buf || buf_size == 0) return 0;
+
+  int n = snprintf(buf, buf_size,
+    "{"
+    "\"counters\":{\"active\":%zu,\"hwm\":%zu,\"capacity\":%zu,\"free\":%zu},"
+    "\"gauges\":{\"active\":%zu,\"hwm\":%zu,\"capacity\":%zu,\"free\":%zu},"
+    "\"histograms\":{\"active\":%zu,\"hwm\":%zu,\"capacity\":%zu,\"free\":%zu},"
+    "\"summaries\":{\"active\":%zu,\"hwm\":%zu,\"capacity\":%zu,\"free\":%zu},"
+    "\"string_pool\":{\"used\":%zu,\"capacity\":%zu},"
+    "\"evictions\":{\"total\":%lu,\"counters\":%lu,\"gauges\":%lu,\"histograms\":%lu,\"summaries\":%lu},"
+    "\"collect_time_us\":%lu"
+    "}",
+    stats->counters_active, stats->counters_hwm, stats->counters_capacity, stats->counters_free,
+    stats->gauges_active, stats->gauges_hwm, stats->gauges_capacity, stats->gauges_free,
+    stats->histograms_active, stats->histograms_hwm, stats->histograms_capacity, stats->histograms_free,
+    stats->summaries_active, stats->summaries_hwm, stats->summaries_capacity, stats->summaries_free,
+    stats->string_pool_used, stats->string_pool_capacity,
+    stats->evictions_total, stats->evictions_counters, stats->evictions_gauges,
+    stats->evictions_histograms, stats->evictions_summaries,
+    stats->collect_duration_us
+  );
+
+  if (n < 0 || (size_t)n >= buf_size) {
+    return 0;
+  }
+  return (size_t)n;
 }

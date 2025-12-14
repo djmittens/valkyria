@@ -234,5 +234,99 @@
       </div>
     </section>
 
+    <!-- ==================== METRICS SYSTEM ==================== -->
+    <section class="section-group metrics-section" aria-labelledby="metrics-section-title">
+      <div class="section-header">
+        <div class="section-icon metrics" aria-hidden="true">M</div>
+        <h2 class="section-title" id="metrics-section-title">Metrics Registry</h2>
+        <span class="section-subtitle">Counters, Gauges, Histograms & String Pool</span>
+        <div class="section-badges">
+          <span class="section-badge" id="metrics-total-badge" title="Total active metrics in registry">-- metrics</span>
+          <span class="section-badge" id="metrics-strings-badge" title="Interned strings for metric names and labels">-- strings</span>
+        </div>
+      </div>
+
+      <div class="registry-content">
+        <div class="registry-stats-grid">
+          <!-- Counters -->
+          <div class="registry-stat-card" title="Counter metrics track monotonically increasing values like total requests or bytes processed">
+            <div class="registry-stat-header">
+              <span class="registry-stat-icon counter">C</span>
+              <span class="registry-stat-label">Counters</span>
+            </div>
+            <div class="registry-stat-bar">
+              <div class="registry-stat-fill" id="registry-counters-bar" style="width: 0%"></div>
+            </div>
+            <div class="registry-stat-values">
+              <span class="registry-stat-active" id="registry-counters-active">--</span>
+              <span class="registry-stat-sep">/</span>
+              <span class="registry-stat-capacity" id="registry-counters-capacity">--</span>
+              <span class="registry-stat-detail">(<span id="registry-counters-free">--</span> free)</span>
+            </div>
+          </div>
+          <!-- Gauges -->
+          <div class="registry-stat-card" title="Gauge metrics track values that can go up or down like active connections or memory usage">
+            <div class="registry-stat-header">
+              <span class="registry-stat-icon gauge">G</span>
+              <span class="registry-stat-label">Gauges</span>
+            </div>
+            <div class="registry-stat-bar">
+              <div class="registry-stat-fill" id="registry-gauges-bar" style="width: 0%"></div>
+            </div>
+            <div class="registry-stat-values">
+              <span class="registry-stat-active" id="registry-gauges-active">--</span>
+              <span class="registry-stat-sep">/</span>
+              <span class="registry-stat-capacity" id="registry-gauges-capacity">--</span>
+              <span class="registry-stat-detail">(<span id="registry-gauges-free">--</span> free)</span>
+            </div>
+          </div>
+          <!-- Histograms -->
+          <div class="registry-stat-card" title="Histogram metrics track distributions like request latency with configurable buckets">
+            <div class="registry-stat-header">
+              <span class="registry-stat-icon histogram">H</span>
+              <span class="registry-stat-label">Histograms</span>
+            </div>
+            <div class="registry-stat-bar">
+              <div class="registry-stat-fill" id="registry-histograms-bar" style="width: 0%"></div>
+            </div>
+            <div class="registry-stat-values">
+              <span class="registry-stat-active" id="registry-histograms-active">--</span>
+              <span class="registry-stat-sep">/</span>
+              <span class="registry-stat-capacity" id="registry-histograms-capacity">--</span>
+              <span class="registry-stat-detail">(<span id="registry-histograms-free">--</span> free)</span>
+            </div>
+          </div>
+          <!-- String Pool -->
+          <div class="registry-stat-card" title="Interned strings for metric names and labels - reused across metrics for memory efficiency">
+            <div class="registry-stat-header">
+              <span class="registry-stat-icon strings">S</span>
+              <span class="registry-stat-label">String Pool</span>
+            </div>
+            <div class="registry-stat-bar">
+              <div class="registry-stat-fill" id="registry-strings-bar" style="width: 0%"></div>
+            </div>
+            <div class="registry-stat-values">
+              <span class="registry-stat-active" id="registry-strings-used">--</span>
+              <span class="registry-stat-sep">/</span>
+              <span class="registry-stat-capacity" id="registry-strings-capacity">--</span>
+            </div>
+          </div>
+        </div>
+        <!-- Eviction Stats -->
+        <div class="registry-eviction-stats" title="Stale metrics are automatically evicted to free registry slots. High eviction counts may indicate metric cardinality explosion.">
+          <span class="registry-eviction-label">Evictions:</span>
+          <span class="registry-eviction-value" id="registry-evictions-total">--</span>
+          <span class="registry-eviction-breakdown">
+            (C: <span id="registry-evictions-counters">--</span>,
+             G: <span id="registry-evictions-gauges">--</span>,
+             H: <span id="registry-evictions-histograms">--</span>)
+          </span>
+          <span class="registry-collect-time">
+            collect: <span id="registry-collect-time">--</span>μs
+          </span>
+        </div>
+      </div>
+    </section>
+
   </main>
   <script>

@@ -30,6 +30,7 @@
 #include "aio_sse_diagnostics.h"
 #include "aio_sse_stream_registry.h"
 #include "metrics_v2.h"
+#include "event_loop_metrics.h"
 #include "common.h"
 #include "concurrency.h"
 #include "parser.h"  // For valk_lval_t in HTTP queue
@@ -595,6 +596,7 @@ typedef struct valk_aio_system {
   valk_mem_arena_t* scratch_arena;  // Main thread scratch arena for diagnostics
   valk_owner_registry_t owner_registry;  // Server/client attribution for diagnostics
   valk_sse_stream_registry_t sse_registry;  // Global SSE stream registry
+  valk_event_loop_metrics_v2_t loop_metrics;  // Event loop metrics (modular v2)
 #endif
 } valk_aio_system_t;
 
@@ -3718,6 +3720,8 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   memset(&sys->owner_registry, 0, sizeof(sys->owner_registry));
   // Initialize global SSE stream registry
   valk_sse_registry_init(&sys->sse_registry, sys);
+  // Initialize event loop metrics (modular v2 - registered with tags)
+  valk_event_loop_metrics_v2_init(&sys->loop_metrics, sys->name);
 #endif
 
   // printf("Aquiring stopper\n");
@@ -3844,6 +3848,25 @@ void valk_aio_update_queue_stats(valk_aio_system_t* sys) {
 uv_loop_t* valk_aio_get_event_loop(valk_aio_system_t* sys) {
   if (!sys) return nullptr;
   return sys->eventloop;
+}
+
+// Update event loop metrics from libuv
+void valk_aio_update_loop_metrics(valk_aio_system_t* sys) {
+#ifdef VALK_METRICS_ENABLED
+  if (!sys || !sys->eventloop) return;
+  valk_event_loop_metrics_v2_update(&sys->loop_metrics, sys->eventloop);
+  // Also update handle count
+  // Count live handles by walking the DLL
+  int64_t handle_count = 0;
+  valk_aio_handle_t *h = sys->liveHandles.next;
+  while (h && h != &sys->liveHandles) {
+    handle_count++;
+    h = h->next;
+  }
+  valk_event_loop_metrics_v2_set_handles(&sys->loop_metrics, handle_count);
+#else
+  (void)sys;
+#endif
 }
 
 // Get system name
