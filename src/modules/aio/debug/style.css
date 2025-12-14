@@ -1631,6 +1631,13 @@ main[role="main"] {
   padding: 2px;
 }
 
+/* Canvas-based slab grid */
+.slab-grid-canvas {
+  display: block;
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+}
+
 /* pool-grid: container already has padding/bg, grid just needs flex layout */
 .pool-grid {
   display: flex;

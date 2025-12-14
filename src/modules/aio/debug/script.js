@@ -100,6 +100,601 @@
     return states.join('');
   }
 
+  // ==================== SlabWidget ====================
+  // Reusable slab visualization component
+  //
+  // Usage:
+  //   var widget = new SlabWidget({
+  //     id: 'aio-0-tcp-buffers',
+  //     name: 'TCP Buffers',
+  //     slabKey: 'tcp_buffers',
+  //     gridClass: 'aio-sys-tcp-grid',
+  //     variant: 'compact'  // 'compact' | 'mini' | 'resource-pool'
+  //   });
+  //   container.innerHTML = widget.render();
+  //   widget.bind();  // Bind to DOM after insertion
+  //   widget.update(slabData);  // Update with new data
+  //
+  function SlabWidget(config) {
+    this.id = config.id;
+    this.name = config.name;
+    this.slabKey = config.slabKey;
+    this.gridClass = config.gridClass || '';
+    this.variant = config.variant || 'compact';
+
+    // State classes for stateful slabs (optional)
+    this.stateClasses = config.stateClasses || SlabWidget.DEFAULT_STATE_CLASSES;
+
+    // Type breakdown configuration (for resource-pool variant)
+    this.typeBreakdown = config.typeBreakdown || null;
+
+    // State breakdown configuration (for resource-pool variant)
+    this.stateBreakdown = config.stateBreakdown || null;
+
+    // Custom stats template (optional)
+    this.statsTemplate = config.statsTemplate || null;
+
+    // DOM references (set by bind())
+    this.el = null;
+    this.gridEl = null;
+    this.badgeEl = null;
+    this.statsEl = null;
+  }
+
+  // Default state character to CSS class mapping
+  SlabWidget.DEFAULT_STATE_CLASSES = {
+    'A': 'active',
+    'N': 'connecting',
+    'I': 'idle',
+    'C': 'closing',
+    'T': 'tcp-listener',
+    'K': 'task',
+    'M': 'timer',
+    'F': 'free'
+  };
+
+  // Render the widget HTML
+  SlabWidget.prototype.render = function() {
+    if (this.variant === 'resource-pool') {
+      return this._renderResourcePool();
+    } else if (this.variant === 'mini') {
+      return this._renderMini();
+    } else {
+      return this._renderCompact();
+    }
+  };
+
+  // Render compact variant (simple header, grid, stats)
+  SlabWidget.prototype._renderCompact = function() {
+    var prefixClass = this.gridClass.replace('-grid', '');
+
+    var html =
+      '<div class="memory-slab-panel compact" id="' + this.id + '-panel">' +
+        '<div class="slab-header">' +
+          '<span class="slab-name">' + this.name + '</span>' +
+          '<span class="slab-badge ' + prefixClass + '-pct">0%</span>' +
+        '</div>' +
+        '<div class="slab-canvas">' +
+          '<canvas class="slab-grid-canvas ' + this.gridClass + '"></canvas>' +
+        '</div>' +
+        '<div class="slab-stats">' +
+          (this.statsTemplate || '<span><span class="' + prefixClass + '-used">0</span> / <span class="' + prefixClass + '-total">--</span></span>') +
+        '</div>' +
+      '</div>';
+
+    return html;
+  };
+
+  // Render mini variant (smallest form factor)
+  SlabWidget.prototype._renderMini = function() {
+    var prefixClass = this.gridClass.replace('-grid', '');
+
+    var html =
+      '<div class="memory-slab-panel mini" id="' + this.id + '-panel">' +
+        '<div class="slab-header">' +
+          '<span class="slab-name">' + this.name + '</span>' +
+          '<span class="slab-badge ' + prefixClass + '-pct">0%</span>' +
+        '</div>' +
+        '<div class="slab-canvas">' +
+          '<canvas class="slab-grid-canvas ' + this.gridClass + '"></canvas>' +
+        '</div>' +
+      '</div>';
+
+    return html;
+  };
+
+  // Render resource-pool variant (full featured with type and state breakdowns)
+  SlabWidget.prototype._renderResourcePool = function() {
+    var prefixClass = this.gridClass.replace('-grid', '');
+
+    var html =
+      '<div class="resource-pool-panel" id="' + this.id + '-panel">' +
+        '<div class="pool-header">' +
+          '<span class="pool-name">' + this.name + '</span>' +
+          '<span class="pool-usage">' +
+            '<span class="' + prefixClass + '-used">0</span> / ' +
+            '<span class="' + prefixClass + '-total">--</span> ' +
+            '(<span class="' + prefixClass + '-pct">0</span>%)' +
+          '</span>' +
+        '</div>' +
+        '<div class="pool-grid-container">' +
+          '<canvas class="slab-grid-canvas ' + this.gridClass + '"></canvas>' +
+        '</div>';
+
+    // Type breakdown (optional)
+    if (this.typeBreakdown) {
+      html += '<div class="handle-type-breakdown">';
+      for (var i = 0; i < this.typeBreakdown.length; i++) {
+        var type = this.typeBreakdown[i];
+        html += '<span class="type-item type-' + type.key + '">' +
+                  '<span class="type-label">' + type.label + '</span> ' +
+                  '<span class="type-count-' + type.key + '">--</span>' +
+                '</span>';
+      }
+      html += '</div>';
+    }
+
+    // State breakdown (optional)
+    if (this.stateBreakdown) {
+      html += '<div class="pool-breakdown">';
+      if (this.stateBreakdown.header) {
+        html += '<div class="breakdown-header">' + this.stateBreakdown.header + '</div>';
+      }
+      html += '<div class="breakdown-by-state">';
+      for (var i = 0; i < this.stateBreakdown.states.length; i++) {
+        var state = this.stateBreakdown.states[i];
+        html += '<div class="legend-item">' +
+                  '<span class="legend-dot ' + state.cssClass + '"></span> ' +
+                  state.label + ': <span class="state-count-' + state.cssClass + '">--</span>' +
+                '</div>';
+      }
+      html += '</div>';
+
+      // Owner breakdown container (optional)
+      if (this.stateBreakdown.showOwnerBreakdown) {
+        html += '<div class="owner-breakdown" id="' + this.id + '-by-owner"></div>';
+      }
+
+      html += '</div>';
+    }
+
+    // Warnings
+    html += '<div class="pool-warnings">' +
+              '<span class="capacity-warning" style="display:none">⚠ Approaching capacity</span>' +
+              '<span class="overflow-warning" style="display:none">⚠ -- overflows</span>' +
+            '</div>' +
+          '</div>';
+
+    return html;
+  };
+
+  // Bind to DOM elements after insertion
+  SlabWidget.prototype.bind = function() {
+    this.el = document.getElementById(this.id + '-panel');
+    if (!this.el) return false;
+
+    // Get canvas element and context
+    this.canvasEl = this.el.querySelector('.slab-grid-canvas');
+    if (this.canvasEl) {
+      this.ctx = this.canvasEl.getContext('2d');
+    }
+    // Keep gridEl as alias for backwards compatibility
+    this.gridEl = this.canvasEl;
+
+    this.badgeEl = this.el.querySelector('.slab-badge') || this.el.querySelector('.pool-usage');
+
+    // Get stat elements based on variant
+    if (this.variant === 'resource-pool') {
+      var prefixClass = this.gridClass.replace('-grid', '');
+      this.usedEl = this.el.querySelector('.' + prefixClass + '-used');
+      this.totalEl = this.el.querySelector('.' + prefixClass + '-total');
+      this.pctEl = this.el.querySelector('.' + prefixClass + '-pct');
+    } else {
+      this.statsEl = this.el.querySelector('.slab-stats');
+    }
+
+    // Canvas rendering state
+    this.canvasConfigured = false;
+    this.cellSize = 5;
+    this.cellGap = 1;
+
+    // Watch for container resize (zoom, window resize)
+    if (this.canvasEl && window.ResizeObserver) {
+      var self = this;
+      this.resizeObserver = new ResizeObserver(function() {
+        // Immediately reconfigure and redraw if we have data
+        if (self.lastSlabData) {
+          self.canvasConfigured = false;
+          self.update(self.lastSlabData);
+        }
+      });
+      var container = this.canvasEl.parentElement;
+      if (container) {
+        this.resizeObserver.observe(container);
+      }
+    }
+
+    return true;
+  };
+
+  // Canvas color constants matching CSS variables
+  SlabWidget.COLORS = {
+    free: 'rgba(255, 255, 255, 0.25)',
+    used: '#3fb950',      // --color-ok
+    active: '#3fb950',    // --color-ok
+    connecting: '#58a6ff', // --color-info
+    idle: '#1f6feb',      // --color-info-muted
+    closing: '#d29922',   // --color-warning
+    'tcp-listener': '#a371f7', // --color-purple
+    task: '#39d4d4',      // --color-cyan
+    timer: '#9e6a03',     // --color-warning-muted
+    flash: '#d29922'      // --color-warning (for flash animation)
+  };
+
+  // Update widget with new slab data
+  SlabWidget.prototype.update = function(slab, options) {
+    if (!this.el || !this.canvasEl || !this.ctx) return;
+
+    options = options || {};
+    var self = this;
+
+    // Store for resize redraw
+    this.lastSlabData = slab;
+
+    // Calculate percentage
+    var pct = slab.total > 0 ? Math.round((slab.used / slab.total) * 100) : 0;
+
+    // Configure canvas size if needed (on first render, slot count change, or container resize)
+    var container = this.canvasEl.parentElement;
+    var containerWidth = container ? container.clientWidth : 0;
+    if (!this.canvasConfigured || this.lastTotal !== slab.total || this.lastContainerWidth !== containerWidth) {
+      this._configureCanvas(slab.total);
+      this.lastTotal = slab.total;
+      this.lastContainerWidth = containerWidth;
+    }
+
+    // Update grid based on data type
+    if (slab.states) {
+      // Stateful slab (connection-aware)
+      var statesRLE = slab._statesExpanded ? null : slab.states;
+      var statesExpanded = slab._statesExpanded ? slab.states : null;
+      requestAnimationFrame(function() {
+        self._renderCanvasStateGrid(statesRLE, statesExpanded, slab.total);
+      });
+    } else if (slab.bitmap !== undefined) {
+      // Binary bitmap slab - render directly from RLE
+      var bitmapRLE = slab.bitmap;
+      var total = slab.total;
+      requestAnimationFrame(function() {
+        self._renderCanvasBitmapGrid(bitmapRLE, total);
+      });
+    } else if (slab.total > 0) {
+      // No bitmap/states provided - render empty grid (all free)
+      requestAnimationFrame(function() {
+        self._renderCanvasEmpty(slab.total);
+      });
+    }
+
+    // Update badge
+    this._updateBadge(slab, pct);
+
+    // Update stats
+    this._updateStats(slab, pct);
+
+    // Update type breakdown (if configured)
+    if (this.typeBreakdown && slab.by_type) {
+      this._updateTypeBreakdown(slab.by_type);
+    }
+
+    // Update state breakdown (if configured)
+    if (this.stateBreakdown && slab.summary) {
+      this._updateStateBreakdown(slab.summary);
+    }
+
+    // Update overflow warning
+    var overflowEl = this.el.querySelector('.overflow-warning');
+    if (overflowEl) {
+      if (slab.overflow > 0) {
+        overflowEl.textContent = '⚠ ' + slab.overflow + ' overflows';
+        overflowEl.style.display = '';
+      } else {
+        overflowEl.style.display = 'none';
+      }
+    }
+
+    // Update ARIA label
+    var ariaLabel = this.name + ': ' + slab.used + ' of ' + slab.total + ' slots used (' + pct + '%)';
+    if (slab.overflow > 0) {
+      ariaLabel += ', ' + slab.overflow + ' overflows detected';
+    }
+    this.canvasEl.setAttribute('aria-label', ariaLabel);
+  };
+
+  // Configure canvas dimensions based on total slots
+  SlabWidget.prototype._configureCanvas = function(total) {
+    if (!this.canvasEl) return;
+
+    var cellSize = this.cellSize;
+    var gap = this.cellGap;
+    var step = cellSize + gap;
+
+    // Get container width to match flexbox-like behavior
+    var container = this.canvasEl.parentElement;
+    var containerWidth = container ? container.clientWidth - 4 : 200; // -4 for padding
+
+    // Calculate cols to fill container width, rows based on that
+    var cols = Math.max(1, Math.floor(containerWidth / step));
+    var rows = Math.ceil(total / cols);
+
+    // Canvas fills available width
+    var width = containerWidth;
+    var height = rows * step;
+
+    // Handle high-DPI displays
+    var dpr = window.devicePixelRatio || 1;
+    this.canvasEl.width = width * dpr;
+    this.canvasEl.height = height * dpr;
+    this.canvasEl.style.width = width + 'px';
+    this.canvasEl.style.height = height + 'px';
+
+    // Reset and scale context for high-DPI
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.scale(dpr, dpr);
+
+    this.cols = cols;
+    this.rows = rows;
+    this.canvasConfigured = true;
+  };
+
+  // Render bitmap grid directly from RLE hex string
+  SlabWidget.prototype._renderCanvasBitmapGrid = function(rleHex, total) {
+    var ctx = this.ctx;
+    var cellSize = this.cellSize;
+    var step = cellSize + this.cellGap;
+    var cols = this.cols;
+    var colors = SlabWidget.COLORS;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, this.canvasEl.width, this.canvasEl.height);
+
+    if (!rleHex) {
+      // Empty bitmap - all free
+      ctx.fillStyle = colors.free;
+      for (var i = 0; i < total; i++) {
+        var x = (i % cols) * step;
+        var y = Math.floor(i / cols) * step;
+        ctx.fillRect(x, y, cellSize, cellSize);
+      }
+      return;
+    }
+
+    // Process RLE directly without full expansion
+    var segments = rleHex.split(',');
+    var slotIdx = 0;
+
+    for (var s = 0; s < segments.length && slotIdx < total; s++) {
+      var segment = segments[s];
+      var starIdx = segment.indexOf('*');
+
+      var hexByte = starIdx !== -1 ? segment.substring(0, starIdx) : segment;
+      var byteCount = starIdx !== -1 ? parseInt(segment.substring(starIdx + 1), 10) || 1 : 1;
+      var byteVal = parseInt(hexByte, 16);
+      if (isNaN(byteVal)) continue;
+
+      // Draw 8 bits per byte, byteCount times
+      for (var c = 0; c < byteCount && slotIdx < total; c++) {
+        for (var bit = 7; bit >= 0 && slotIdx < total; bit--) {
+          var used = (byteVal >> bit) & 1;
+          var x = (slotIdx % cols) * step;
+          var y = Math.floor(slotIdx / cols) * step;
+          ctx.fillStyle = used ? colors.used : colors.free;
+          ctx.fillRect(x, y, cellSize, cellSize);
+          slotIdx++;
+        }
+      }
+    }
+
+    // Fill remaining slots as free
+    ctx.fillStyle = colors.free;
+    while (slotIdx < total) {
+      var x = (slotIdx % cols) * step;
+      var y = Math.floor(slotIdx / cols) * step;
+      ctx.fillRect(x, y, cellSize, cellSize);
+      slotIdx++;
+    }
+  };
+
+  // Render state grid from RLE or expanded states
+  SlabWidget.prototype._renderCanvasStateGrid = function(rleStr, expandedStates, total) {
+    var ctx = this.ctx;
+    var cellSize = this.cellSize;
+    var step = cellSize + this.cellGap;
+    var cols = this.cols;
+    var colors = SlabWidget.COLORS;
+    var stateClasses = this.stateClasses;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, this.canvasEl.width, this.canvasEl.height);
+
+    // If we have expanded states, use them directly
+    if (expandedStates) {
+      var states = typeof expandedStates === 'string' ? expandedStates : expandedStates;
+      for (var i = 0; i < total && i < states.length; i++) {
+        var stateChar = states[i] || 'F';
+        var cssClass = stateClasses[stateChar] || 'free';
+        var x = (i % cols) * step;
+        var y = Math.floor(i / cols) * step;
+        ctx.fillStyle = colors[cssClass] || colors.free;
+        ctx.fillRect(x, y, cellSize, cellSize);
+      }
+      // Fill remaining as free
+      ctx.fillStyle = colors.free;
+      for (var i = states.length; i < total; i++) {
+        var x = (i % cols) * step;
+        var y = Math.floor(i / cols) * step;
+        ctx.fillRect(x, y, cellSize, cellSize);
+      }
+      return;
+    }
+
+    // Process RLE state string directly: "F16A3I2" -> 16 F's, 3 A's, 2 I's
+    if (!rleStr || rleStr.length === 0) {
+      ctx.fillStyle = colors.free;
+      for (var i = 0; i < total; i++) {
+        var x = (i % cols) * step;
+        var y = Math.floor(i / cols) * step;
+        ctx.fillRect(x, y, cellSize, cellSize);
+      }
+      return;
+    }
+
+    var slotIdx = 0;
+    var i = 0;
+    while (i < rleStr.length && slotIdx < total) {
+      var stateChar = rleStr[i];
+      i++;
+
+      // Read count digits
+      var countStr = '';
+      while (i < rleStr.length && rleStr[i] >= '0' && rleStr[i] <= '9') {
+        countStr += rleStr[i];
+        i++;
+      }
+      var count = parseInt(countStr, 10) || 1;
+
+      // Draw 'count' cells with this state
+      var cssClass = stateClasses[stateChar] || 'free';
+      ctx.fillStyle = colors[cssClass] || colors.free;
+
+      for (var c = 0; c < count && slotIdx < total; c++) {
+        var x = (slotIdx % cols) * step;
+        var y = Math.floor(slotIdx / cols) * step;
+        ctx.fillRect(x, y, cellSize, cellSize);
+        slotIdx++;
+      }
+    }
+
+    // Fill remaining as free
+    ctx.fillStyle = colors.free;
+    while (slotIdx < total) {
+      var x = (slotIdx % cols) * step;
+      var y = Math.floor(slotIdx / cols) * step;
+      ctx.fillRect(x, y, cellSize, cellSize);
+      slotIdx++;
+    }
+  };
+
+  // Render empty grid (all free)
+  SlabWidget.prototype._renderCanvasEmpty = function(total) {
+    var ctx = this.ctx;
+    var cellSize = this.cellSize;
+    var step = cellSize + this.cellGap;
+    var cols = this.cols;
+
+    ctx.clearRect(0, 0, this.canvasEl.width, this.canvasEl.height);
+    ctx.fillStyle = SlabWidget.COLORS.free;
+
+    for (var i = 0; i < total; i++) {
+      var x = (i % cols) * step;
+      var y = Math.floor(i / cols) * step;
+      ctx.fillRect(x, y, cellSize, cellSize);
+    }
+  };
+
+  // Update badge with percentage or count
+  SlabWidget.prototype._updateBadge = function(slab, pct) {
+    var badge = this.el.querySelector('.slab-badge');
+    if (badge) {
+      if (slab.total <= 10) {
+        badge.textContent = slab.used + '/' + slab.total;
+      } else {
+        badge.textContent = pct + '%';
+      }
+      badge.classList.remove('warning', 'critical');
+      if (pct >= 90) badge.classList.add('critical');
+      else if (pct >= 70) badge.classList.add('warning');
+    }
+
+    // Also update resource-pool specific elements
+    if (this.usedEl) this.usedEl.textContent = slab.used;
+    if (this.totalEl) this.totalEl.textContent = slab.total;
+    if (this.pctEl) {
+      if (slab.total <= 10) {
+        this.pctEl.textContent = slab.used + '/' + slab.total;
+      } else {
+        this.pctEl.textContent = pct;
+      }
+    }
+  };
+
+  // Update stats row
+  SlabWidget.prototype._updateStats = function(slab, pct) {
+    if (!this.statsEl) return;
+
+    var usedCount = this.statsEl.querySelector('.used-count') ||
+                    this.statsEl.querySelector('[class*="-used"]');
+    if (usedCount) usedCount.textContent = slab.used.toLocaleString();
+
+    var totalCount = this.statsEl.querySelector('[class*="-total"]');
+    if (totalCount) totalCount.textContent = slab.total.toLocaleString();
+  };
+
+  // Update type breakdown counts
+  SlabWidget.prototype._updateTypeBreakdown = function(byType) {
+    for (var i = 0; i < this.typeBreakdown.length; i++) {
+      var type = this.typeBreakdown[i];
+      var countEl = this.el.querySelector('.type-count-' + type.key);
+      if (countEl) {
+        countEl.textContent = byType[type.key] || 0;
+      }
+    }
+  };
+
+  // Update state breakdown counts
+  SlabWidget.prototype._updateStateBreakdown = function(summary) {
+    for (var i = 0; i < this.stateBreakdown.states.length; i++) {
+      var state = this.stateBreakdown.states[i];
+      var countEl = this.el.querySelector('.state-count-' + state.cssClass);
+      if (countEl) {
+        countEl.textContent = summary[state.stateChar] || 0;
+      }
+    }
+  };
+
+  // Registry of all slab widgets for easy lookup
+  SlabWidget.registry = {};
+
+  // Register a widget instance
+  SlabWidget.register = function(slabKey, widget) {
+    if (!SlabWidget.registry[slabKey]) {
+      SlabWidget.registry[slabKey] = [];
+    }
+    SlabWidget.registry[slabKey].push(widget);
+  };
+
+  // Get all widgets for a slab key
+  SlabWidget.getAll = function(slabKey) {
+    return SlabWidget.registry[slabKey] || [];
+  };
+
+  // Unregister a widget instance
+  SlabWidget.unregister = function(slabKey, widget) {
+    var widgets = SlabWidget.registry[slabKey];
+    if (!widgets) return;
+    var idx = widgets.indexOf(widget);
+    if (idx !== -1) {
+      widgets.splice(idx, 1);
+    }
+  };
+
+  // Update all widgets for a slab key
+  SlabWidget.updateAll = function(slabKey, slabData, options) {
+    var widgets = SlabWidget.getAll(slabKey);
+    for (var i = 0; i < widgets.length; i++) {
+      widgets[i].update(slabData, options);
+    }
+  };
+
   // ==================== State ====================
   var history = {
     requestRate: [],
@@ -397,9 +992,74 @@
   // ==================== Rendering: AIO System Panels ====================
   var aioSystemPanels = {};  // Cache of AIO system panels by name
 
+  // Pre-configured slab widget definitions for AIO systems
+  // Each definition creates a SlabWidget with appropriate settings
+  var AIO_SLAB_CONFIGS = {
+    handles: function(id) {
+      return new SlabWidget({
+        id: id + '-handles',
+        name: 'AIO Handles',
+        slabKey: 'handles',
+        gridClass: 'aio-sys-handles-grid',
+        variant: 'resource-pool',
+        typeBreakdown: [
+          { key: 'http', label: 'HTTP' },
+          { key: 'tcp', label: 'TCP' },
+          { key: 'task', label: 'Task' },
+          { key: 'timer', label: 'Timer' }
+        ],
+        stateBreakdown: {
+          header: 'HTTP Connection States',
+          states: [
+            { stateChar: 'A', cssClass: 'active', label: 'Active' },
+            { stateChar: 'I', cssClass: 'idle', label: 'Idle' },
+            { stateChar: 'C', cssClass: 'closing', label: 'Closing' }
+          ],
+          showOwnerBreakdown: true
+        }
+      });
+    },
+    tcp_buffers: function(id) {
+      return new SlabWidget({
+        id: id + '-tcp-buffers',
+        name: 'TCP Buffers',
+        slabKey: 'tcp_buffers',
+        gridClass: 'aio-sys-tcp-grid',
+        variant: 'compact'
+      });
+    },
+    stream_arenas: function(id) {
+      return new SlabWidget({
+        id: id + '-stream-arenas',
+        name: 'Stream Arenas',
+        slabKey: 'stream_arenas',
+        gridClass: 'aio-sys-arenas-grid',
+        variant: 'compact'
+      });
+    },
+    request_queue: function(id) {
+      return new SlabWidget({
+        id: id + '-queue',
+        name: 'Request Queue',
+        slabKey: 'request_queue',
+        gridClass: 'aio-sys-queue-grid',
+        variant: 'compact',
+        statsTemplate: '<span>pending/completed</span>'
+      });
+    }
+  };
+
   function createAioSystemPanel(sys, index) {
     var name = sys.name || 'System ' + (index + 1);
     var id = 'aio-sys-' + index;
+
+    // Create slab widgets for this AIO system
+    var widgets = {
+      handles: AIO_SLAB_CONFIGS.handles(id),
+      tcp_buffers: AIO_SLAB_CONFIGS.tcp_buffers(id),
+      stream_arenas: AIO_SLAB_CONFIGS.stream_arenas(id),
+      request_queue: AIO_SLAB_CONFIGS.request_queue(id)
+    };
 
     var html =
       '<article class="panel aio-system-panel aio-expanded" id="' + id + '" aria-labelledby="' + id + '-title">' +
@@ -445,81 +1105,14 @@
               '<span class="section-badge"><span class="sse-dot"></span> Live</span>' +
             '</div>' +
 
-            // Handle Slab (AIO Handles - mixed types)
-            '<div class="resource-pool-panel" id="' + id + '-handles-pool">' +
-              '<div class="pool-header">' +
-                '<span class="pool-name">AIO Handles</span>' +
-                '<span class="pool-usage"><span class="aio-sys-handles-used">0</span> / <span class="aio-sys-handles-total">--</span> (<span class="aio-sys-handles-pct">0</span>%)</span>' +
-              '</div>' +
-              '<div class="pool-grid-container">' +
-                '<div class="pool-grid connection-grid aio-sys-handles-grid"></div>' +
-              '</div>' +
-              // Handle type breakdown (inline)
-              '<div class="handle-type-breakdown">' +
-                '<span class="type-item type-http"><span class="type-label">HTTP</span> <span class="type-count-http">--</span></span>' +
-                '<span class="type-item type-tcp"><span class="type-label">TCP</span> <span class="type-count-tcp">--</span></span>' +
-                '<span class="type-item type-task"><span class="type-label">Task</span> <span class="type-count-task">--</span></span>' +
-                '<span class="type-item type-timer"><span class="type-label">Timer</span> <span class="type-count-timer">--</span></span>' +
-              '</div>' +
-              // HTTP connection state breakdown (only for HTTP connections)
-              '<div class="pool-breakdown">' +
-                '<div class="breakdown-header">HTTP Connection States</div>' +
-                '<div class="breakdown-by-state">' +
-                  '<div class="legend-item"><span class="legend-dot active"></span> Active: <span class="state-count-active">--</span></div>' +
-                  '<div class="legend-item"><span class="legend-dot idle"></span> Idle: <span class="state-count-idle">--</span></div>' +
-                  '<div class="legend-item"><span class="legend-dot closing"></span> Closing: <span class="state-count-closing">--</span></div>' +
-                '</div>' +
-                '<div class="owner-breakdown" id="' + id + '-handles-by-owner">' +
-                  '<!-- Owner table rendered dynamically by renderOwnerBreakdown() -->' +
-                '</div>' +
-              '</div>' +
-              '<div class="pool-warnings">' +
-                '<span class="capacity-warning" style="display:none">⚠ Approaching capacity</span>' +
-                '<span class="overflow-warning" style="display:none">⚠ -- overflows</span>' +
-              '</div>' +
-            '</div>' +
+            // Handle Slab (generated by SlabWidget)
+            widgets.handles.render() +
 
             // Compact resource grids row
             '<div class="aio-slab-grid">' +
-              // TCP Buffers Slab
-              '<div class="memory-slab-panel compact" id="' + id + '-tcp-buffers-panel">' +
-                '<div class="slab-header">' +
-                  '<span class="slab-name">TCP Buffers</span>' +
-                  '<span class="slab-badge aio-sys-tcp-pct">0%</span>' +
-                '</div>' +
-                '<div class="slab-canvas">' +
-                  '<div class="slab-grid aio-sys-tcp-grid"></div>' +
-                '</div>' +
-                '<div class="slab-stats">' +
-                  '<span><span class="aio-sys-tcp-used">0</span> / <span class="aio-sys-tcp-total">200</span></span>' +
-                '</div>' +
-              '</div>' +
-              // Stream Arenas Slab
-              '<div class="memory-slab-panel compact" id="' + id + '-stream-arenas-panel">' +
-                '<div class="slab-header">' +
-                  '<span class="slab-name">Stream Arenas</span>' +
-                  '<span class="slab-badge aio-sys-arenas-pct">0%</span>' +
-                '</div>' +
-                '<div class="slab-canvas">' +
-                  '<div class="slab-grid aio-sys-arenas-grid"></div>' +
-                '</div>' +
-                '<div class="slab-stats">' +
-                  '<span><span class="aio-sys-arenas-used">0</span> / <span class="aio-sys-arenas-total">64</span></span>' +
-                '</div>' +
-              '</div>' +
-              // Queue Slab (placeholder for pending requests)
-              '<div class="memory-slab-panel compact" id="' + id + '-queue-panel">' +
-                '<div class="slab-header">' +
-                  '<span class="slab-name">Request Queue</span>' +
-                  '<span class="slab-badge aio-sys-queue-pct">0</span>' +
-                '</div>' +
-                '<div class="slab-canvas">' +
-                  '<div class="slab-grid aio-sys-queue-grid"></div>' +
-                '</div>' +
-                '<div class="slab-stats">' +
-                  '<span>pending/completed</span>' +
-                '</div>' +
-              '</div>' +
+              widgets.tcp_buffers.render() +
+              widgets.stream_arenas.render() +
+              widgets.request_queue.render() +
             '</div>' +
 
             '<div class="memory-legend-inline">' +
@@ -559,7 +1152,25 @@
 
     var temp = document.createElement('div');
     temp.innerHTML = html;
-    return temp.firstChild;
+    var panel = temp.firstChild;
+
+    // Store widgets on the panel (will be bound after DOM insertion)
+    panel._slabWidgets = widgets;
+    panel._widgetsBound = false;
+
+    return panel;
+  }
+
+  // Bind widgets after panel is in the document DOM
+  function bindAioSystemPanelWidgets(panel) {
+    if (panel._widgetsBound || !panel._slabWidgets) return;
+
+    for (var key in panel._slabWidgets) {
+      var widget = panel._slabWidgets[key];
+      widget.bind();
+      SlabWidget.register(widget.slabKey, widget);
+    }
+    panel._widgetsBound = true;
   }
 
   function updateAioSystemPanel(panel, sys) {
@@ -623,6 +1234,8 @@
         // Create new panel
         panel = createAioSystemPanel(sys, i);
         container.appendChild(panel);
+        // Bind widgets now that panel is in the DOM
+        bindAioSystemPanelWidgets(panel);
         aioSystemPanels[name] = panel;
       }
 
@@ -632,7 +1245,15 @@
     // Remove panels for systems that no longer exist
     for (var name in aioSystemPanels) {
       if (!seenPanels[name]) {
-        aioSystemPanels[name].remove();
+        var panel = aioSystemPanels[name];
+        // Unregister widgets from the global registry
+        if (panel._slabWidgets) {
+          for (var key in panel._slabWidgets) {
+            var widget = panel._slabWidgets[key];
+            SlabWidget.unregister(widget.slabKey, widget);
+          }
+        }
+        panel.remove();
         delete aioSystemPanels[name];
       }
     }
@@ -1452,6 +2073,53 @@
   function init() {
     showLoadingState();
     setInterval(updateUptimeAndTimestamp, 1000);
+
+    // Initialize LVAL slab widget (static element in body.html)
+    initLvalSlabWidget();
+  }
+
+  // Create and register SlabWidget for the static LVAL grid
+  function initLvalSlabWidget() {
+    var lvalCanvas = document.getElementById('lval-grid');
+    if (!lvalCanvas) return;
+
+    // Create widget with matching configuration
+    var widget = new SlabWidget({
+      id: 'lval',
+      name: 'LVAL Slab',
+      slabKey: 'lval',
+      gridClass: 'lval-grid-class',  // Not used since we bind directly
+      variant: 'compact'
+    });
+
+    // Manually bind to existing DOM elements
+    widget.el = lvalCanvas.closest('.heap-tier') || lvalCanvas.parentElement;
+    widget.canvasEl = lvalCanvas;
+    widget.ctx = lvalCanvas.getContext('2d');
+    widget.gridEl = lvalCanvas;  // Keep for compatibility
+    widget.statsEl = widget.el ? widget.el.querySelector('.tier-stats') : null;
+
+    // Canvas rendering state
+    widget.canvasConfigured = false;
+    widget.cellSize = 5;
+    widget.cellGap = 1;
+
+    // Watch for container resize (zoom, window resize)
+    if (window.ResizeObserver) {
+      widget.resizeObserver = new ResizeObserver(function() {
+        if (widget.lastSlabData) {
+          widget.canvasConfigured = false;
+          widget.update(widget.lastSlabData);
+        }
+      });
+      var container = lvalCanvas.parentElement;
+      if (container) {
+        widget.resizeObserver.observe(container);
+      }
+    }
+
+    // Register for updates
+    SlabWidget.register('lval', widget);
   }
 
   // Start when DOM is ready
@@ -2038,346 +2706,20 @@
     }
 
     updateSlabGrid(slab, ownerMap) {
-      // Map slab names to CSS class selectors used in AIO panels
-      var slabClassMap = {
-        'tcp_buffers': '.aio-sys-tcp-grid',
-        'handles': '.aio-sys-handles-grid',
-        'stream_arenas': '.aio-sys-arenas-grid',
-        'http_servers': '.aio-sys-servers-grid',
-        'http_clients': '.aio-sys-clients-grid',
-        'lval': '#lval-grid'
-      };
-
-      // Find all matching grids (there may be multiple AIO panels)
-      var selector = slabClassMap[slab.name];
-      var grids = selector ? document.querySelectorAll(selector) : [];
-
-      // Also try the legacy global ID for backwards compatibility
-      var gridId = slab.name.replace(/_/g, '-') + '-grid';
-      var legacyGrid = document.getElementById(gridId);
-      if (legacyGrid) {
-        grids = Array.from(grids);
-        grids.push(legacyGrid);
-      }
-
-      if (grids.length === 0) {
-        return;
-      }
-
-      // Update each grid (typically just one per slab type)
       var self = this;
-      grids.forEach(function(grid) {
-        self.updateSingleSlabGrid(grid, slab, ownerMap);
+
+      // Update all registered SlabWidget instances for this slab
+      var widgets = SlabWidget.getAll(slab.slabKey || slab.name);
+      widgets.forEach(function(widget) {
+        widget.update(slab);
+
+        // Handle owner breakdown rendering (special case for handles slab)
+        if (slab.name === 'handles' && widget.el) {
+          if (slab.summary && slab.summary.by_owner && ownerMap && ownerMap.length > 0) {
+            self.renderOwnerBreakdown(widget.el, slab.summary.by_owner, slab.used, ownerMap);
+          }
+        }
       });
-    }
-
-    updateSingleSlabGrid(grid, slab, ownerMap) {
-      if (!grid) return;
-
-      // Track previous state for flash animation using grid's unique ID/selector
-      var gridKey = grid.id || grid.className;
-      var prevKey = 'slab_' + slab.name + '_' + gridKey;
-      var prevStates = this.previousState[prevKey] || [];
-
-      var self = this;
-
-      // Check if this slab has per-slot state tracking (connection-aware slabs)
-      if (slab.states) {
-        // States may be pre-expanded (from delta merge) or RLE-encoded
-        var states = slab._statesExpanded ? slab.states : decodeRLE(slab.states);
-        var summary = slab.summary;  // Capture before async callback
-        requestAnimationFrame(function() {
-          if (states.length > 5000) {
-            // For large slabs, use aggregated view
-            self.renderAggregatedStateGrid(grid, states, prevStates, summary);
-          } else {
-            self.renderStateGrid(grid, states, prevStates, summary);
-          }
-        });
-        this.previousState[prevKey] = states;
-      } else {
-        // Binary bitmap for simple slabs
-        var bitmap = this.hexToBitArray(slab.bitmap, slab.total);
-        requestAnimationFrame(function() {
-          if (slab.total > 5000) {
-            self.renderAggregatedGrid(grid, bitmap, slab.total, prevStates);
-          } else {
-            self.renderDirectGrid(grid, bitmap, prevStates);
-          }
-        });
-        this.previousState[prevKey] = bitmap;
-      }
-
-      // Find the parent panel
-      var panel = grid.closest('.memory-slab-panel') || grid.closest('.resource-pool-panel');
-      if (!panel) return;
-
-      // Update owner breakdown for handles slab (only if we have by_owner data)
-      if (slab.name === 'handles') {
-        if (slab.summary && slab.summary.by_owner && ownerMap && ownerMap.length > 0) {
-          this.renderOwnerBreakdown(panel, slab.summary.by_owner, slab.used, ownerMap);
-        }
-      }
-
-      // Update handle type breakdown table (only for handles slab)
-      if (slab.name === 'handles' && slab.by_type) {
-        var httpCount = panel.querySelector('.type-count-http');
-        var tcpCount = panel.querySelector('.type-count-tcp');
-        var taskCount = panel.querySelector('.type-count-task');
-        var timerCount = panel.querySelector('.type-count-timer');
-        if (httpCount) httpCount.textContent = slab.by_type.http || 0;
-        if (tcpCount) tcpCount.textContent = slab.by_type.tcp || 0;
-        if (taskCount) taskCount.textContent = slab.by_type.task || 0;
-        if (timerCount) timerCount.textContent = slab.by_type.timer || 0;
-      }
-
-      var pct = slab.total > 0 ? Math.round((slab.used / slab.total) * 100) : 0;
-
-      // Update slab badge (percentage or count)
-      var badge = panel.querySelector('.slab-badge');
-      if (badge) {
-        if (slab.total <= 10) {
-          // For small slabs like HTTP servers/clients, show count
-          badge.textContent = slab.used + '/' + slab.total;
-        } else {
-          badge.textContent = pct + '%';
-        }
-        // Add warning/critical class
-        badge.classList.remove('warning', 'critical');
-        if (pct >= 90) badge.classList.add('critical');
-        else if (pct >= 70) badge.classList.add('warning');
-      }
-
-      // Update stats row (used-count, totals)
-      var statsEl = panel.querySelector('.slab-stats');
-      if (statsEl) {
-        var usedCount = statsEl.querySelector('.used-count') ||
-                        statsEl.querySelector('[class*="-used"]');
-        if (usedCount) usedCount.textContent = slab.used.toLocaleString();
-
-        var totalCount = statsEl.querySelector('[class*="-total"]');
-        if (totalCount) totalCount.textContent = slab.total.toLocaleString();
-
-        var overflowEl = statsEl.querySelector('.overflow-warning');
-        if (overflowEl) {
-          if (slab.overflow > 0) {
-            overflowEl.textContent = '⚠ ' + slab.overflow + ' overflows';
-            overflowEl.style.display = '';
-          } else {
-            overflowEl.style.display = 'none';
-          }
-        }
-      }
-
-      // Update AIO panel specific elements (for grids inside AIO panels)
-      var slabClassToAio = {
-        'aio-sys-handles-grid': { pct: '.aio-sys-handles-pct', used: '.aio-sys-handles-used', total: '.aio-sys-handles-total' },
-        'aio-sys-tcp-grid': { pct: '.aio-sys-tcp-pct', used: '.aio-sys-tcp-used', total: '.aio-sys-tcp-total' },
-        'aio-sys-arenas-grid': { pct: '.aio-sys-arenas-pct', used: '.aio-sys-arenas-used', total: '.aio-sys-arenas-total' },
-        'aio-sys-servers-grid': { pct: '.aio-sys-servers-pct' },
-        'aio-sys-clients-grid': { pct: '.aio-sys-clients-pct' }
-      };
-
-      for (var cls in slabClassToAio) {
-        if (grid.classList.contains(cls)) {
-          var selectors = slabClassToAio[cls];
-          if (selectors.pct) {
-            var pctEl = panel.querySelector(selectors.pct);
-            if (pctEl) {
-              if (slab.total <= 10) {
-                pctEl.textContent = slab.used + '/' + slab.total;
-              } else {
-                pctEl.textContent = pct + '%';
-              }
-            }
-          }
-          if (selectors.used) {
-            var usedEl = panel.querySelector(selectors.used);
-            if (usedEl) usedEl.textContent = slab.used;
-          }
-          if (selectors.total) {
-            var totalEl = panel.querySelector(selectors.total);
-            if (totalEl) totalEl.textContent = slab.total;
-          }
-          break;
-        }
-      }
-
-      // Update ARIA label
-      var ariaLabel = slab.name.replace(/_/g, ' ') + ': ' + slab.used + ' of ' + slab.total + ' slots used (' + pct + '%)';
-      if (slab.overflow > 0) {
-        ariaLabel += ', ' + slab.overflow + ' overflows detected';
-      }
-      grid.setAttribute('aria-label', ariaLabel);
-    }
-
-    renderDirectGrid(grid, bitmap, prevBitmap) {
-      // Ensure grid has correct number of cells
-      while (grid.children.length < bitmap.length) {
-        var cell = document.createElement('div');
-        cell.className = 'slab-cell free';
-        grid.appendChild(cell);
-      }
-      while (grid.children.length > bitmap.length) {
-        grid.removeChild(grid.lastChild);
-      }
-
-      // Update cells with flash on change
-      for (var i = 0; i < bitmap.length; i++) {
-        var cell = grid.children[i];
-        var newState = bitmap[i] ? 'used' : 'free';
-        var oldState = prevBitmap[i] ? 'used' : 'free';
-
-        if (newState !== oldState) {
-          // State changed - flash animation
-          cell.className = 'slab-cell flash';
-          setTimeout(function(c, s) {
-            return function() {
-              c.className = 'slab-cell ' + s;
-            };
-          }(cell, newState), 300);
-        } else if (!cell.classList.contains(newState)) {
-          cell.className = 'slab-cell ' + newState;
-        }
-      }
-    }
-
-    renderAggregatedGrid(grid, bitmap, totalSlots, prevBitmap) {
-      // For large slabs, aggregate to displayable size
-      // CSS auto-fill handles columns, we just control total cell count
-      var targetCells = 3000;
-      var cellsPerSlot = Math.ceil(totalSlots / targetCells);
-
-      var aggregated = new Array(targetCells).fill(0);
-      var prevAggregated = new Array(targetCells).fill(0);
-
-      for (var i = 0; i < bitmap.length; i++) {
-        var aggIdx = Math.floor(i / cellsPerSlot);
-        if (aggIdx < aggregated.length) {
-          aggregated[aggIdx] += bitmap[i] ? 1 : 0;
-          prevAggregated[aggIdx] += (prevBitmap[i] || 0) ? 1 : 0;
-        }
-      }
-
-      // Normalize to 0-1
-      var threshold = cellsPerSlot / 2;
-      for (var i = 0; i < aggregated.length; i++) {
-        aggregated[i] = aggregated[i] > threshold ? 1 : 0;
-        prevAggregated[i] = prevAggregated[i] > threshold ? 1 : 0;
-      }
-
-      this.renderDirectGrid(grid, aggregated, prevAggregated);
-    }
-
-    // Render grid with per-slot handle states
-    // HTTP connections: A=active, I=idle, C=closing, N=connecting
-    // Other handles: T=tcp listener, K=task, M=timer
-    // F=free
-    renderStateGrid(grid, states, prevStates, summary) {
-      // Map state chars to CSS classes
-      var stateClasses = {
-        'A': 'active',
-        'N': 'connecting',
-        'I': 'idle',
-        'C': 'closing',
-        'T': 'tcp-listener',
-        'K': 'task',
-        'M': 'timer',
-        'F': 'free'
-      };
-
-      // Ensure grid has correct number of cells
-      while (grid.children.length < states.length) {
-        var cell = document.createElement('div');
-        cell.className = 'slab-cell free';
-        grid.appendChild(cell);
-      }
-      while (grid.children.length > states.length) {
-        grid.removeChild(grid.lastChild);
-      }
-
-      // Update cells with flash on change
-      for (var i = 0; i < states.length; i++) {
-        var cell = grid.children[i];
-        var newState = stateClasses[states[i]] || 'free';
-        var oldState = prevStates[i] ? (stateClasses[prevStates[i]] || 'free') : 'free';
-
-        if (newState !== oldState) {
-          // State changed - flash animation
-          cell.className = 'slab-cell flash';
-          setTimeout(function(c, s) {
-            return function() {
-              c.className = 'slab-cell ' + s;
-            };
-          }(cell, newState), 300);
-        } else if (!cell.classList.contains(newState)) {
-          cell.className = 'slab-cell ' + newState;
-        }
-      }
-
-      // Update state summary legend if present
-      var panel = grid.closest('.memory-slab-panel') || grid.closest('.resource-pool-panel');
-      if (panel && summary) {
-        var legendActive = panel.querySelector('.state-count-active');
-        var legendIdle = panel.querySelector('.state-count-idle');
-        var legendClosing = panel.querySelector('.state-count-closing');
-        if (legendActive) legendActive.textContent = summary.A || 0;
-        if (legendIdle) legendIdle.textContent = summary.I || 0;
-        if (legendClosing) legendClosing.textContent = summary.C || 0;
-      }
-    }
-
-    // Render aggregated state grid for large slabs (>5000 slots)
-    // Aggregates states into displayable grid cells
-    renderAggregatedStateGrid(grid, states, prevStates, summary) {
-      // CSS auto-fill handles columns, we just control total cell count
-      var targetCells = 3000;
-      var slotsPerCell = Math.ceil(states.length / targetCells);
-
-      // Aggregate states: for each cell, find dominant non-free state
-      var aggregated = [];
-      var prevAggregated = [];
-
-      for (var i = 0; i < targetCells; i++) {
-        var startIdx = i * slotsPerCell;
-        var endIdx = Math.min(startIdx + slotsPerCell, states.length);
-
-        // Count states in this chunk (including new handle types)
-        var counts = { 'A': 0, 'I': 0, 'C': 0, 'N': 0, 'T': 0, 'K': 0, 'M': 0, 'F': 0 };
-        var prevCounts = { 'A': 0, 'I': 0, 'C': 0, 'N': 0, 'T': 0, 'K': 0, 'M': 0, 'F': 0 };
-
-        for (var j = startIdx; j < endIdx; j++) {
-          var s = states[j] || 'F';
-          counts[s] = (counts[s] || 0) + 1;
-          var ps = (prevStates && prevStates[j]) || 'F';
-          prevCounts[ps] = (prevCounts[ps] || 0) + 1;
-        }
-
-        // Determine dominant state (priority: A > C > I > N > T > K > M > F)
-        var dominant = 'F';
-        if (counts['A'] > 0) dominant = 'A';
-        else if (counts['C'] > 0) dominant = 'C';
-        else if (counts['I'] > 0) dominant = 'I';
-        else if (counts['N'] > 0) dominant = 'N';
-        else if (counts['T'] > 0) dominant = 'T';
-        else if (counts['K'] > 0) dominant = 'K';
-        else if (counts['M'] > 0) dominant = 'M';
-
-        var prevDominant = 'F';
-        if (prevCounts['A'] > 0) prevDominant = 'A';
-        else if (prevCounts['C'] > 0) prevDominant = 'C';
-        else if (prevCounts['I'] > 0) prevDominant = 'I';
-        else if (prevCounts['N'] > 0) prevDominant = 'N';
-        else if (prevCounts['T'] > 0) prevDominant = 'T';
-        else if (prevCounts['K'] > 0) prevDominant = 'K';
-        else if (prevCounts['M'] > 0) prevDominant = 'M';
-
-        aggregated.push(dominant);
-        prevAggregated.push(prevDominant);
-      }
-
-      // Now render as a state grid with aggregated states
-      this.renderStateGrid(grid, aggregated.join(''), prevAggregated.join(''), summary);
     }
 
     // Render owner breakdown as a table with rows=servers/clients, cols=active/idle/closing
@@ -2628,64 +2970,6 @@
       var mallocHwmPctEl = $('malloc-hwm-pct');
       if (mallocHwmMarker) mallocHwmMarker.style.left = mallocHwmPct + '%';
       if (mallocHwmPctEl) mallocHwmPctEl.textContent = Math.round(mallocHwmPct);
-    }
-
-    // Utility functions
-    // Decode RLE hex string: "ff*32,00*8" -> array of bytes [0xff, 0xff, ..., 0x00, ...]
-    decodeRleHex(rleHex) {
-      if (!rleHex || rleHex.length === 0) return [];
-
-      var bytes = [];
-      // Check if it's RLE format (contains comma or asterisk)
-      if (rleHex.indexOf(',') === -1 && rleHex.indexOf('*') === -1) {
-        // Plain hex format (legacy) - decode directly
-        for (var i = 0; i < rleHex.length; i += 2) {
-          bytes.push(parseInt(rleHex.substr(i, 2), 16));
-        }
-        return bytes;
-      }
-
-      // RLE format: "XX*N,YY*M,..."
-      var runs = rleHex.split(',');
-      for (var i = 0; i < runs.length; i++) {
-        var run = runs[i];
-        if (!run) continue;
-
-        var asteriskIdx = run.indexOf('*');
-        var hexPart, count;
-        if (asteriskIdx === -1) {
-          // No asterisk means count of 1
-          hexPart = run;
-          count = 1;
-        } else {
-          hexPart = run.substring(0, asteriskIdx);
-          count = parseInt(run.substring(asteriskIdx + 1), 10) || 1;
-        }
-
-        var byte = parseInt(hexPart, 16);
-        for (var j = 0; j < count; j++) {
-          bytes.push(byte);
-        }
-      }
-      return bytes;
-    }
-
-    // Convert hex string (plain or RLE) to bit array (LSB-first order to match C bitmap)
-    hexToBitArray(hex, totalSlots) {
-      var bytes = this.decodeRleHex(hex);
-      var bits = [];
-      for (var i = 0; i < bytes.length; i++) {
-        var byte = bytes[i];
-        // LSB-first: bit 0 is first slot in each byte
-        for (var b = 0; b < 8; b++) {
-          bits.push((byte >> b) & 1);
-        }
-      }
-      // Truncate to actual slot count (bitmap may have padding bits)
-      if (totalSlots !== undefined && bits.length > totalSlots) {
-        bits = bits.slice(0, totalSlots);
-      }
-      return bits;
     }
 
     formatBytes(bytes) {
