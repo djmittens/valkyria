@@ -357,6 +357,50 @@ static size_t slots_to_rle_string(valk_slot_diag_t *slots, size_t count, char *o
 #endif // VALK_METRICS_ENABLED
 
 // ============================================================================
+// GC Tier JSON Helpers
+// ============================================================================
+
+// Emit GC tiers array to JSON buffer
+// Returns bytes written, or -1 on error
+static int gc_tiers_to_json(const valk_mem_snapshot_t *snapshot, char *buf, size_t buf_size) {
+  char *p = buf;
+  char *end = buf + buf_size;
+  int n;
+
+  n = snprintf(p, end - p, "\"tiers\":[");
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  for (size_t i = 0; i < snapshot->gc_heap.tier_count; i++) {
+    const valk_heap_tier_snapshot_t *tier = &snapshot->gc_heap.tiers[i];
+
+    if (i > 0) {
+      n = snprintf(p, end - p, ",");
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+    }
+
+    // Emit tier - all fields present, consumer decides what to use based on name
+    // Object fields are 0 for non-slab allocators (e.g., malloc)
+    n = snprintf(p, end - p,
+                 "{\"name\":\"%s\","
+                 "\"bytes_used\":%zu,\"bytes_total\":%zu,\"bytes_peak\":%zu,"
+                 "\"objects_used\":%zu,\"objects_total\":%zu,\"objects_peak\":%zu}",
+                 tier->name,
+                 tier->bytes_used, tier->bytes_total, tier->bytes_peak,
+                 tier->objects_used, tier->objects_total, tier->objects_peak);
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+  }
+
+  n = snprintf(p, end - p, "]");
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  return (int)(p - buf);
+}
+
+// ============================================================================
 // Snapshot Collection
 // ============================================================================
 
@@ -452,6 +496,21 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
     slab_idx++;
   }
 
+  // LENV Slab (from GC heap)
+  if (gc_heap && gc_heap->lenv_slab && slab_idx < 8) {
+    snapshot->slabs[slab_idx].name = (const char *)"lenv";
+    snapshot->slabs[slab_idx].bitmap =
+        slab_to_bitmap(gc_heap->lenv_slab,
+                       &snapshot->slabs[slab_idx].bitmap_bytes,
+                       &snapshot->slabs[slab_idx].used_slots);
+    snapshot->slabs[slab_idx].total_slots = gc_heap->lenv_slab->numItems;
+    snapshot->slabs[slab_idx].peak_used =
+        __atomic_load_n(&gc_heap->lenv_slab->peakUsed, __ATOMIC_ACQUIRE);
+    snapshot->slabs[slab_idx].overflow_count =
+        __atomic_load_n(&gc_heap->lenv_slab->overflowCount, __ATOMIC_ACQUIRE);
+    slab_idx++;
+  }
+
   #undef ADD_SLAB
 #endif
 
@@ -481,36 +540,52 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
 
   snapshot->arena_count = arena_idx;
 
-  // Collect GC heap stats (tiered: slab + malloc)
+  // Collect GC heap stats (generic tier array)
 #ifdef VALK_METRICS_ENABLED
   // gc_heap was already fetched above for LVAL slab collection
   if (gc_heap) {
-    // Slab tier stats (LVAL objects)
-    if (gc_heap->lval_slab) {
-      size_t slab_used = gc_heap->lval_slab->numItems - gc_heap->lval_slab->numFree;
-      size_t slab_total = gc_heap->lval_slab->numItems;
-      size_t item_size = gc_heap->lval_slab->itemSize;
-      snapshot->gc_heap.slab_bytes_used = slab_used * item_size;
-      snapshot->gc_heap.slab_bytes_total = slab_total * item_size;
-      snapshot->gc_heap.slab_objects_used = slab_used;
-      snapshot->gc_heap.slab_objects_total = slab_total;
-      // Per-tier peak (high water mark) from slab
-      snapshot->gc_heap.slab_peak_objects =
-          __atomic_load_n(&gc_heap->lval_slab->peakUsed, __ATOMIC_RELAXED);
-    } else {
-      snapshot->gc_heap.slab_bytes_used = 0;
-      snapshot->gc_heap.slab_bytes_total = 0;
-      snapshot->gc_heap.slab_objects_used = 0;
-      snapshot->gc_heap.slab_objects_total = 0;
-      snapshot->gc_heap.slab_peak_objects = 0;
+    size_t tier_idx = 0;
+
+    // Helper macro to add a slab to the tiers snapshot
+    #define ADD_SLAB_TIER(slab_ptr, tier_name) do { \
+      if ((slab_ptr) && tier_idx < 8) { \
+        valk_heap_tier_snapshot_t *tier = &snapshot->gc_heap.tiers[tier_idx]; \
+        size_t slab_used = (slab_ptr)->numItems - (slab_ptr)->numFree; \
+        size_t slab_total = (slab_ptr)->numItems; \
+        size_t item_size = (slab_ptr)->itemSize; \
+        tier->name = tier_name; \
+        tier->bytes_used = slab_used * item_size; \
+        tier->bytes_total = slab_total * item_size; \
+        tier->bytes_peak = __atomic_load_n(&(slab_ptr)->peakUsed, __ATOMIC_RELAXED) * item_size; \
+        tier->objects_used = slab_used; \
+        tier->objects_total = slab_total; \
+        tier->objects_peak = __atomic_load_n(&(slab_ptr)->peakUsed, __ATOMIC_RELAXED); \
+        tier_idx++; \
+      } \
+    } while(0)
+
+    // Add slab tiers (just slabs with different names)
+    ADD_SLAB_TIER(gc_heap->lval_slab, "lval");
+    ADD_SLAB_TIER(gc_heap->lenv_slab, "lenv");
+
+    #undef ADD_SLAB_TIER
+
+    // Add malloc (no object tracking, just bytes)
+    if (tier_idx < 8) {
+      valk_heap_tier_snapshot_t *tier = &snapshot->gc_heap.tiers[tier_idx];
+      tier->name = "malloc";
+      tier->bytes_used = gc_heap->allocated_bytes;
+      tier->bytes_total = gc_heap->hard_limit;
+      tier->bytes_peak = gc_heap->stats.peak_usage;
+      tier->objects_used = 0;
+      tier->objects_total = 0;
+      tier->objects_peak = 0;
+      tier_idx++;
     }
-    // Malloc tier stats (overflow/large objects)
-    snapshot->gc_heap.malloc_bytes_used = gc_heap->allocated_bytes;
-    snapshot->gc_heap.malloc_bytes_limit = gc_heap->hard_limit;
-    // Per-tier peak for malloc (this is what peak_usage tracks)
-    snapshot->gc_heap.malloc_peak_bytes = gc_heap->stats.peak_usage;
-    // Combined stats (legacy - keep for backwards compat)
-    snapshot->gc_heap.peak_usage = gc_heap->stats.peak_usage;
+
+    snapshot->gc_heap.tier_count = tier_idx;
+
+    // Common GC stats
     snapshot->gc_heap.gc_threshold_pct = gc_heap->gc_threshold_pct;
     snapshot->gc_heap.gc_cycles =
         atomic_load(&gc_heap->runtime_metrics.cycles_total);
@@ -734,27 +809,20 @@ int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf,
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
-  // GC heap stats (tiered: slab + malloc)
+  // GC heap stats (generic tiers array)
+  n = snprintf(p, end - p, "\"gc\":{");
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  n = gc_tiers_to_json(snapshot, p, end - p);
+  if (n < 0) return -1;
+  p += n;
+
   n = snprintf(p, end - p,
-               "\"gc\":{"
-               "\"slab\":{\"bytes_used\":%zu,\"bytes_total\":%zu,"
-               "\"objects_used\":%zu,\"objects_total\":%zu,\"peak_objects\":%zu},"
-               "\"malloc\":{\"bytes_used\":%zu,\"bytes_limit\":%zu,\"peak_bytes\":%zu},"
-               "\"peak\":%zu,\"threshold_pct\":%u,"
-               "\"cycles\":%lu,\"emergency\":%zu},",
-               snapshot->gc_heap.slab_bytes_used,
-               snapshot->gc_heap.slab_bytes_total,
-               snapshot->gc_heap.slab_objects_used,
-               snapshot->gc_heap.slab_objects_total,
-               snapshot->gc_heap.slab_peak_objects,
-               snapshot->gc_heap.malloc_bytes_used,
-               snapshot->gc_heap.malloc_bytes_limit,
-               snapshot->gc_heap.malloc_peak_bytes,
-               snapshot->gc_heap.peak_usage,
+               ",\"threshold_pct\":%u,\"cycles\":%lu,\"emergency\":%zu},",
                (unsigned)snapshot->gc_heap.gc_threshold_pct,
                snapshot->gc_heap.gc_cycles,
                snapshot->gc_heap.emergency_collections);
-
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
@@ -923,27 +991,20 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
-  // GC heap stats (tiered: slab + malloc)
+  // GC heap stats (generic tiers array)
+  n = snprintf(p, end - p, "\"gc\":{");
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  n = gc_tiers_to_json(snapshot, p, end - p);
+  if (n < 0) return -1;
+  p += n;
+
   n = snprintf(p, end - p,
-               "\"gc\":{"
-               "\"slab\":{\"bytes_used\":%zu,\"bytes_total\":%zu,"
-               "\"objects_used\":%zu,\"objects_total\":%zu,\"peak_objects\":%zu},"
-               "\"malloc\":{\"bytes_used\":%zu,\"bytes_limit\":%zu,\"peak_bytes\":%zu},"
-               "\"peak\":%zu,\"threshold_pct\":%u,"
-               "\"cycles\":%lu,\"emergency\":%zu},",
-               snapshot->gc_heap.slab_bytes_used,
-               snapshot->gc_heap.slab_bytes_total,
-               snapshot->gc_heap.slab_objects_used,
-               snapshot->gc_heap.slab_objects_total,
-               snapshot->gc_heap.slab_peak_objects,
-               snapshot->gc_heap.malloc_bytes_used,
-               snapshot->gc_heap.malloc_bytes_limit,
-               snapshot->gc_heap.malloc_peak_bytes,
-               snapshot->gc_heap.peak_usage,
+               ",\"threshold_pct\":%u,\"cycles\":%lu,\"emergency\":%zu},",
                (unsigned)snapshot->gc_heap.gc_threshold_pct,
                snapshot->gc_heap.gc_cycles,
                snapshot->gc_heap.emergency_collections);
-
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
@@ -1426,23 +1487,18 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
       mem_need_comma = true;
     }
 
-    // GC changes (tiered: slab + malloc)
+    // GC changes (generic tiers array)
     if (gc_changed) {
+      n = snprintf(p, end - p, "%s\"gc\":{", mem_need_comma ? "," : "");
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+
+      n = gc_tiers_to_json(current, p, end - p);
+      if (n < 0) return -1;
+      p += n;
+
       n = snprintf(p, end - p,
-                   "%s\"gc\":{"
-                   "\"slab\":{\"bytes_used\":%zu,\"bytes_total\":%zu,"
-                   "\"objects_used\":%zu,\"objects_total\":%zu,\"peak_objects\":%zu},"
-                   "\"malloc\":{\"bytes_used\":%zu,\"bytes_limit\":%zu,\"peak_bytes\":%zu},"
-                   "\"cycles\":%lu,\"emergency\":%zu}",
-                   mem_need_comma ? "," : "",
-                   current->gc_heap.slab_bytes_used,
-                   current->gc_heap.slab_bytes_total,
-                   current->gc_heap.slab_objects_used,
-                   current->gc_heap.slab_objects_total,
-                   current->gc_heap.slab_peak_objects,
-                   current->gc_heap.malloc_bytes_used,
-                   current->gc_heap.malloc_bytes_limit,
-                   current->gc_heap.malloc_peak_bytes,
+                   ",\"cycles\":%lu,\"emergency\":%zu}",
                    current->gc_heap.gc_cycles,
                    current->gc_heap.emergency_collections);
       if (n < 0 || n >= end - p) return -1;
@@ -1686,27 +1742,20 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
   if (n < 0 || n >= end - p) goto cleanup;
   p += n;
 
-  // GC heap stats (tiered: slab + malloc)
+  // GC heap stats (generic tiers array)
+  n = snprintf(p, end - p, "\"gc\":{");
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  n = gc_tiers_to_json(&snapshot, p, end - p);
+  if (n < 0) goto cleanup;
+  p += n;
+
   n = snprintf(p, end - p,
-               "\"gc\":{"
-               "\"slab\":{\"bytes_used\":%zu,\"bytes_total\":%zu,"
-               "\"objects_used\":%zu,\"objects_total\":%zu,\"peak_objects\":%zu},"
-               "\"malloc\":{\"bytes_used\":%zu,\"bytes_limit\":%zu,\"peak_bytes\":%zu},"
-               "\"peak\":%zu,\"threshold_pct\":%u,"
-               "\"cycles\":%lu,\"emergency\":%zu},",
-               snapshot.gc_heap.slab_bytes_used,
-               snapshot.gc_heap.slab_bytes_total,
-               snapshot.gc_heap.slab_objects_used,
-               snapshot.gc_heap.slab_objects_total,
-               snapshot.gc_heap.slab_peak_objects,
-               snapshot.gc_heap.malloc_bytes_used,
-               snapshot.gc_heap.malloc_bytes_limit,
-               snapshot.gc_heap.malloc_peak_bytes,
-               snapshot.gc_heap.peak_usage,
+               ",\"threshold_pct\":%u,\"cycles\":%lu,\"emergency\":%zu},",
                (unsigned)snapshot.gc_heap.gc_threshold_pct,
                snapshot.gc_heap.gc_cycles,
                snapshot.gc_heap.emergency_collections);
-
   if (n < 0 || n >= end - p) goto cleanup;
   p += n;
 

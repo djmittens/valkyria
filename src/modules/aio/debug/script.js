@@ -153,6 +153,11 @@
     this.collapsibleGrid = config.collapsibleGrid === true;
     this.gridCollapsed = this._loadGridState();
 
+    // Trend indicator (for non-slab allocators like malloc)
+    this.showTrend = config.showTrend === true;
+    this.prevUsed = null;
+    this.trend = 0;  // -1 = down, 0 = stable, 1 = up
+
     // Custom colors (override preset)
     this.color = config.color || null;
     this.colorMuted = config.colorMuted || null;
@@ -196,6 +201,7 @@
     this.fillEl = null;
     this.badgeEl = null;
     this.usageEl = null;
+    this.trendEl = null;
     this.markerEls = {};
     this.statEls = {};
 
@@ -286,6 +292,9 @@
       html += '<button class="pool-widget-toggle" aria-expanded="' + expanded + '" title="' + (this.gridCollapsed ? 'Show detailed grid' : 'Hide detailed grid') + '">';
       html += '<svg class="toggle-chevron" viewBox="0 0 12 12" width="12" height="12"><path d="M3 4.5L6 7.5L9 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
       html += '</button>';
+    } else if (this.showTrend) {
+      // Trend indicator for non-slab allocators (occupies chevron space)
+      html += '<span class="pool-widget-trend" id="' + this.id + '-trend" title="Memory trend">→</span>';
     }
     if (this.icon) {
       html += '<span class="pool-widget-icon">' + this.icon + '</span>';
@@ -377,6 +386,7 @@
     this.badgeEl = document.getElementById(this.id + '-badge');
     this.usageEl = document.getElementById(this.id + '-usage');
     this.fillEl = document.getElementById(this.id + '-fill');
+    this.trendEl = document.getElementById(this.id + '-trend');
 
     // Bind marker elements
     this.markerEls = {};
@@ -471,6 +481,8 @@
   // Toggle grid collapsed state
   PoolWidget.prototype.toggleGrid = function() {
     if (!this.collapsibleGrid || !this.el) return;
+    // Don't toggle if minimap shows all slots (expanded would be redundant)
+    if (this.minimapIs1to1) return;
     this.gridCollapsed = !this.gridCollapsed;
     this._saveGridState();
     this._updateGridVisibility();
@@ -568,6 +580,29 @@
       } else {
         this.usageEl.textContent = used + ' / ' + total;
       }
+    }
+
+    // Update trend indicator
+    if (this.trendEl && this.showTrend) {
+      if (this.prevUsed !== null) {
+        var delta = used - this.prevUsed;
+        // Use threshold to avoid jitter (0.1% of total)
+        var threshold = total * 0.001;
+        if (delta > threshold) {
+          this.trend = 1;
+          this.trendEl.textContent = '▲';
+          this.trendEl.className = 'pool-widget-trend up';
+        } else if (delta < -threshold) {
+          this.trend = -1;
+          this.trendEl.textContent = '▼';
+          this.trendEl.className = 'pool-widget-trend down';
+        } else {
+          this.trend = 0;
+          this.trendEl.textContent = '→';
+          this.trendEl.className = 'pool-widget-trend stable';
+        }
+      }
+      this.prevUsed = used;
     }
 
     // Update markers
@@ -828,7 +863,29 @@
     this.minimapGap = gap;
     this.minimapTotalSlots = totalSlots;
 
+    // When minimap shows all slots 1:1, disable the toggle (expanded grid would be redundant)
+    this.minimapIs1to1 = (cellCount === totalSlots);
+    this._updateToggleState();
+
     this.minimapConfigured = true;
+  };
+
+  // Update toggle button based on whether minimap is 1:1
+  PoolWidget.prototype._updateToggleState = function() {
+    if (!this.el) return;
+    var toggleBtn = this.el.querySelector('.pool-widget-toggle');
+    if (!toggleBtn) return;
+
+    if (this.minimapIs1to1) {
+      // Minimap shows all slots - no need for expanded grid
+      toggleBtn.classList.add('disabled');
+      toggleBtn.setAttribute('aria-disabled', 'true');
+      toggleBtn.setAttribute('title', 'All slots visible in minimap');
+    } else {
+      toggleBtn.classList.remove('disabled');
+      toggleBtn.removeAttribute('aria-disabled');
+      toggleBtn.setAttribute('title', this.gridCollapsed ? 'Show detailed grid' : 'Hide detailed grid');
+    }
   };
 
   // Render minimap - compressed 1D view of memory states in the gauge
@@ -2412,8 +2469,9 @@
   // This eliminates dashboard requests competing with the server during stress tests
 
   // Global PoolWidget references for memory visualizations
-  var scratchArenaGauge = null;
-  var slabTierGauge = null;
+  var arenaGauges = {};  // Map of arena name -> PoolWidget
+  var lvalSlabTierGauge = null;
+  var lenvSlabTierGauge = null;
   var mallocTierGauge = null;
 
   function init() {
@@ -2423,38 +2481,17 @@
     initPoolWidgets();
   }
 
-  // Initialize PoolWidgets for scratch arena and GC heap tiers
+  // Initialize PoolWidgets for GC heap tiers (arenas are created dynamically)
   function initPoolWidgets() {
-    // Scratch Arena PoolWidget
-    var scratchContainer = document.getElementById('scratch-arena-gauge-container');
-    if (scratchContainer) {
-      scratchArenaGauge = new PoolWidget({
-        id: 'scratch-arena-gauge',
-        name: 'Scratch Arena',
-        preset: 'arena',
-        variant: 'compact',
-        showGauge: true,
-        showGrid: false,
-        markers: PoolWidget.Markers.hwmOnly({ hwmColor: 'var(--color-warning)' }),
-        stats: [
-          { id: 'hwm', label: 'hwm:' },
-          { id: 'overflow', label: 'overflow:' },
-          { id: 'overflow_bytes', label: 'overflow bytes:' }
-        ]
-      });
-      scratchContainer.innerHTML = scratchArenaGauge.render();
-      scratchArenaGauge.bind();
-    }
-
-    // GC Heap Tiers (Slab + Malloc)
+    // GC Heap Tiers (LVAL Slab + LENV Slab + Malloc)
     var heapContainer = document.getElementById('heap-tiers-container');
     if (heapContainer) {
-      // Slab Tier PoolWidget (includes LVAL grid)
-      slabTierGauge = new PoolWidget({
-        id: 'slab-tier-gauge',
-        name: 'Slab Tier',
+      // LVAL Slab Tier PoolWidget (includes LVAL grid)
+      lvalSlabTierGauge = new PoolWidget({
+        id: 'lval-slab-tier-gauge',
+        name: 'LVAL Slab',
         slabKey: 'lval',
-        icon: 'S',
+        icon: 'V',
         preset: 'slab',
         variant: 'compact',
         showGauge: true,
@@ -2465,20 +2502,42 @@
           thresholdLabel: 'gc', thresholdPosition: 75
         }),
         stats: [
-          { id: 'objects', label: 'objects:' },
+          { id: 'objects', label: 'lvals:' },
           { id: 'hwm', label: 'hwm:', suffix: '%' }
         ]
       });
 
-      // Malloc Tier PoolWidget
+      // LENV Slab Tier PoolWidget (for environments)
+      lenvSlabTierGauge = new PoolWidget({
+        id: 'lenv-slab-tier-gauge',
+        name: 'LENV Slab',
+        slabKey: 'lenv',
+        icon: 'E',
+        preset: 'slab',
+        variant: 'compact',
+        showGauge: true,
+        showGrid: true,
+        collapsibleGrid: true,
+        markers: PoolWidget.Markers.heapMarkers({
+          hwmFormat: 'count', hwmLabelSuffix: ' env',
+          thresholdLabel: 'gc', thresholdPosition: 75
+        }),
+        stats: [
+          { id: 'objects', label: 'envs:' },
+          { id: 'hwm', label: 'hwm:', suffix: '%' }
+        ]
+      });
+
+      // Malloc PoolWidget (no grid - uses trend indicator instead)
       mallocTierGauge = new PoolWidget({
         id: 'malloc-tier-gauge',
-        name: 'Malloc Tier',
+        name: 'Malloc',
         icon: 'M',
         preset: 'malloc',
         variant: 'compact',
         showGauge: true,
         showGrid: false,
+        showTrend: true,
         markers: PoolWidget.Markers.heapMarkers({
           hwmFormat: 'bytes',
           thresholdLabel: 'gc', thresholdPosition: 75
@@ -2489,12 +2548,14 @@
         ]
       });
 
-      heapContainer.innerHTML = slabTierGauge.render() + mallocTierGauge.render();
-      slabTierGauge.bind();
+      heapContainer.innerHTML = lvalSlabTierGauge.render() + lenvSlabTierGauge.render() + mallocTierGauge.render();
+      lvalSlabTierGauge.bind();
+      lenvSlabTierGauge.bind();
       mallocTierGauge.bind();
 
-      // Register slab tier for LVAL grid updates
-      PoolWidget.register('lval', slabTierGauge);
+      // Register slab tiers for grid updates
+      PoolWidget.register('lval', lvalSlabTierGauge);
+      PoolWidget.register('lenv', lenvSlabTierGauge);
     }
   }
 
@@ -3181,41 +3242,62 @@
       var used = arena.used_bytes || arena.used || 0;
       var capacity = arena.capacity_bytes || arena.capacity || 1;
       var hwm = arena.high_water_mark || arena.hwm || 0;
-      var percentage = (used / capacity) * 100;
       var hwmPercentage = (hwm / capacity) * 100;
       var usedStr = this.formatBytes(used);
       var capacityStr = this.formatBytes(capacity);
       var overflow = arena.overflow_fallbacks || arena.overflow || 0;
       var overflowBytes = arena.overflow_bytes || 0;
 
-      // Update scratch arena using PoolWidget
-      if (arena.name === 'scratch' && scratchArenaGauge) {
-        scratchArenaGauge.update({
-          used: used,
-          total: capacity,
-          usedFormatted: usedStr,
-          totalFormatted: capacityStr,
-          markers: {
-            hwm: { position: hwmPercentage, value: hwm }
-          },
-          stats: {
-            hwm: this.formatBytes(hwm),
-            overflow: overflow > 0 ? overflow : '0',
-            overflow_bytes: overflowBytes > 0 ? this.formatBytes(overflowBytes) : '0'
-          }
+      // Get or create widget for this arena
+      var widget = arenaGauges[arena.name];
+      if (!widget) {
+        var container = document.getElementById('arenas-container');
+        if (!container) return;
+
+        // Create widget dynamically
+        var widgetId = 'arena-' + arena.name.replace(/[^a-z0-9]/gi, '-');
+        widget = new PoolWidget({
+          id: widgetId,
+          name: arena.name.charAt(0).toUpperCase() + arena.name.slice(1),
+          preset: 'arena',
+          variant: 'compact',
+          showGauge: true,
+          showGrid: false,
+          showTrend: true,
+          markers: PoolWidget.Markers.hwmOnly({ hwmColor: 'var(--color-warning)' }),
+          stats: [
+            { id: 'hwm', label: 'hwm:' },
+            { id: 'overflow', label: 'overflow:' }
+          ]
         });
 
-        // Update header elements
-        var pctEl = document.getElementById('scratch-pct');
-        var usageEl = document.getElementById('scratch-usage');
-        if (pctEl) pctEl.textContent = percentage.toFixed(0) + '%';
-        if (usageEl) usageEl.textContent = usedStr + ' / ' + capacityStr;
+        // Append to container
+        var wrapper = document.createElement('div');
+        wrapper.innerHTML = widget.render();
+        container.appendChild(wrapper.firstChild);
+        widget.bind();
+        arenaGauges[arena.name] = widget;
       }
+
+      // Update widget
+      widget.update({
+        used: used,
+        total: capacity,
+        usedFormatted: usedStr,
+        totalFormatted: capacityStr,
+        markers: {
+          hwm: { position: hwmPercentage, value: hwm }
+        },
+        stats: {
+          hwm: this.formatBytes(hwm),
+          overflow: overflow > 0 ? overflow : '0'
+        }
+      });
     }
 
     updateGCStats(gc) {
-      // Update tiered heap display (new format with slab + malloc)
-      if (gc.slab && gc.malloc) {
+      // Update tiered heap display (supports generic tiers array format)
+      if (gc.tiers && gc.tiers.length > 0) {
         this.updateTieredHeap(gc);
       }
 
@@ -3226,56 +3308,97 @@
         var peak = gcPanel.querySelector('[data-gc="peak"]');
         var cycles = gcPanel.querySelector('[data-gc="cycles"]');
 
-        // For legacy panel, show combined bytes
-        var totalUsed = (gc.slab ? gc.slab.bytes_used : 0) + (gc.malloc ? gc.malloc.bytes_used : 0);
+        // For legacy panel, show combined bytes from all tiers
+        var totalUsed = 0;
+        if (gc.tiers) {
+          for (var i = 0; i < gc.tiers.length; i++) {
+            totalUsed += gc.tiers[i].bytes_used || 0;
+          }
+        }
         if (allocated) allocated.textContent = this.formatBytes(totalUsed);
-        if (peak) peak.textContent = this.formatBytes(gc.peak);
         if (cycles) cycles.textContent = gc.cycles.toLocaleString();
       }
     }
 
+    // Helper to find a tier by name from the tiers array
+    findTier(tiers, name) {
+      if (!tiers) return null;
+      for (var i = 0; i < tiers.length; i++) {
+        if (tiers[i].name === name) return tiers[i];
+      }
+      return null;
+    }
+
     updateTieredHeap(gc) {
-      var slab = gc.slab || {};
-      var malloc = gc.malloc || {};
+      // Generic tier-based update - find tiers by name
+      var tiers = gc.tiers || [];
+      var lvalTier = this.findTier(tiers, 'lval') || {};
+      var lenvTier = this.findTier(tiers, 'lenv') || {};
+      var mallocTier = this.findTier(tiers, 'malloc') || {};
 
-      // Calculate combined totals
-      var slabUsed = slab.bytes_used || 0;
-      var slabTotal = slab.bytes_total || 1;
-      var slabPct = slabTotal > 0 ? (slabUsed / slabTotal) * 100 : 0;
+      // LVAL slab metrics
+      var lvalSlabUsed = lvalTier.bytes_used || 0;
+      var lvalSlabTotal = lvalTier.bytes_total || 1;
+      var lvalObjUsed = lvalTier.objects_used || 0;
+      var lvalObjTotal = lvalTier.objects_total || 1;
+      var lvalSlabPeakObjects = lvalTier.objects_peak || 0;
+      var lvalSlabHwmPct = lvalObjTotal > 0 ? (lvalSlabPeakObjects / lvalObjTotal) * 100 : 0;
 
-      var mallocUsed = malloc.bytes_used || 0;
-      var mallocLimit = malloc.bytes_limit || 1;
-      var mallocPct = mallocLimit > 0 ? (mallocUsed / mallocLimit) * 100 : 0;
+      // LENV slab metrics
+      var lenvSlabUsed = lenvTier.bytes_used || 0;
+      var lenvSlabTotal = lenvTier.bytes_total || 1;
+      var lenvObjUsed = lenvTier.objects_used || 0;
+      var lenvObjTotal = lenvTier.objects_total || 1;
+      var lenvSlabPeakObjects = lenvTier.objects_peak || 0;
+      var lenvSlabHwmPct = lenvObjTotal > 0 ? (lenvSlabPeakObjects / lenvObjTotal) * 100 : 0;
 
-      // Use server-provided per-tier peaks (tracked from process start)
-      var slabObjectsTotal = slab.objects_total || 1;
-      var slabPeakObjects = slab.peak_objects || 0;
-      var slabHwmPct = slabObjectsTotal > 0 ? (slabPeakObjects / slabObjectsTotal) * 100 : 0;
-
-      var mallocPeakBytes = malloc.peak_bytes || 0;
+      // Malloc metrics
+      var mallocUsed = mallocTier.bytes_used || 0;
+      var mallocLimit = mallocTier.bytes_total || 1;
+      var mallocPeakBytes = mallocTier.bytes_peak || 0;
       var mallocHwmPct = mallocLimit > 0 ? (mallocPeakBytes / mallocLimit) * 100 : 0;
 
-      var totalUsed = slabUsed + mallocUsed;
-      var totalCapacity = slabTotal + mallocLimit;
+      // Combined totals for header
+      var totalUsed = lvalSlabUsed + lenvSlabUsed + mallocUsed;
+      var totalCapacity = lvalSlabTotal + lenvSlabTotal + mallocLimit;
       var totalPct = totalCapacity > 0 ? (totalUsed / totalCapacity) * 100 : 0;
 
       var thresholdPct = gc.threshold_pct || 75;
 
-      // Update Slab Tier PoolWidget
-      if (slabTierGauge) {
-        slabTierGauge.warningThreshold = thresholdPct;
-        slabTierGauge.update({
-          used: slabUsed,
-          total: slabTotal,
-          usedFormatted: fmtBytes(slabUsed),
-          totalFormatted: fmtBytes(slabTotal),
+      // Update LVAL Slab Tier PoolWidget
+      if (lvalSlabTierGauge) {
+        lvalSlabTierGauge.warningThreshold = thresholdPct;
+        lvalSlabTierGauge.update({
+          used: lvalSlabUsed,
+          total: lvalSlabTotal,
+          usedFormatted: fmtBytes(lvalSlabUsed),
+          totalFormatted: fmtBytes(lvalSlabTotal),
           markers: {
-            hwm: { position: slabHwmPct, value: slabPeakObjects },
+            hwm: { position: lvalSlabHwmPct, value: lvalSlabPeakObjects },
             threshold: { position: thresholdPct, value: thresholdPct }
           },
           stats: {
-            objects: (slab.objects_used || 0).toLocaleString() + '/' + (slab.objects_total || 0).toLocaleString(),
-            hwm: Math.round(slabHwmPct)
+            objects: lvalObjUsed.toLocaleString() + '/' + lvalObjTotal.toLocaleString(),
+            hwm: Math.round(lvalSlabHwmPct)
+          }
+        });
+      }
+
+      // Update LENV Slab Tier PoolWidget
+      if (lenvSlabTierGauge) {
+        lenvSlabTierGauge.warningThreshold = thresholdPct;
+        lenvSlabTierGauge.update({
+          used: lenvSlabUsed,
+          total: lenvSlabTotal,
+          usedFormatted: fmtBytes(lenvSlabUsed),
+          totalFormatted: fmtBytes(lenvSlabTotal),
+          markers: {
+            hwm: { position: lenvSlabHwmPct, value: lenvSlabPeakObjects },
+            threshold: { position: thresholdPct, value: thresholdPct }
+          },
+          stats: {
+            objects: lenvObjUsed.toLocaleString() + '/' + lenvObjTotal.toLocaleString(),
+            hwm: Math.round(lenvSlabHwmPct)
           }
         });
       }

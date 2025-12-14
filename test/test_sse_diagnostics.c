@@ -121,14 +121,36 @@ void test_sse_event_format(VALK_TEST_ARGS()) {
   snapshot.arenas[0].high_water_mark = 2048;
   snapshot.arenas[0].overflow_fallbacks = 0;
 
-  // GC data (tiered: slab + malloc)
-  snapshot.gc_heap.slab_bytes_used = 800000;
-  snapshot.gc_heap.slab_bytes_total = 1000000;
-  snapshot.gc_heap.slab_objects_used = 10000;
-  snapshot.gc_heap.slab_objects_total = 12500;
-  snapshot.gc_heap.malloc_bytes_used = 200000;
-  snapshot.gc_heap.malloc_bytes_limit = 5000000;
-  snapshot.gc_heap.peak_usage = 2000000;
+  // GC data (generic tiers array)
+  snapshot.gc_heap.tier_count = 3;
+
+  // LVAL slab
+  snapshot.gc_heap.tiers[0].name = "lval";
+  snapshot.gc_heap.tiers[0].bytes_used = 800000;
+  snapshot.gc_heap.tiers[0].bytes_total = 1000000;
+  snapshot.gc_heap.tiers[0].bytes_peak = 880000;
+  snapshot.gc_heap.tiers[0].objects_used = 10000;
+  snapshot.gc_heap.tiers[0].objects_total = 12500;
+  snapshot.gc_heap.tiers[0].objects_peak = 11000;
+
+  // LENV slab
+  snapshot.gc_heap.tiers[1].name = "lenv";
+  snapshot.gc_heap.tiers[1].bytes_used = 50000;
+  snapshot.gc_heap.tiers[1].bytes_total = 100000;
+  snapshot.gc_heap.tiers[1].bytes_peak = 60000;
+  snapshot.gc_heap.tiers[1].objects_used = 500;
+  snapshot.gc_heap.tiers[1].objects_total = 1000;
+  snapshot.gc_heap.tiers[1].objects_peak = 600;
+
+  // Malloc (no objects)
+  snapshot.gc_heap.tiers[2].name = "malloc";
+  snapshot.gc_heap.tiers[2].bytes_used = 200000;
+  snapshot.gc_heap.tiers[2].bytes_total = 5000000;
+  snapshot.gc_heap.tiers[2].bytes_peak = 300000;
+  snapshot.gc_heap.tiers[2].objects_used = 0;
+  snapshot.gc_heap.tiers[2].objects_total = 0;
+  snapshot.gc_heap.tiers[2].objects_peak = 0;
+
   snapshot.gc_heap.gc_threshold_pct = 75;
   snapshot.gc_heap.gc_cycles = 10;
   snapshot.gc_heap.emergency_collections = 0;

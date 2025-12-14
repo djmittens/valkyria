@@ -36,6 +36,7 @@ static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a);
 
 // GC heap allocator size check - ONLY allocate valk_lval_t structures
 size_t __valk_lval_size = sizeof(valk_lval_t);
+size_t __valk_lenv_size = sizeof(valk_lenv_t);
 
 // Global interpreter metrics instance
 valk_eval_metrics_t g_eval_metrics = {0};

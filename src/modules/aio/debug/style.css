@@ -1437,7 +1437,7 @@ main[role="main"] {
     flex-direction: column;
   }
 
-  .vm-memory-consolidated .scratch-block {
+  .vm-memory-consolidated .arenas-block {
     max-width: none;
   }
 
@@ -1529,7 +1529,7 @@ main[role="main"] {
     flex-direction: column;
   }
 
-  .vm-memory-consolidated .scratch-block {
+  .vm-memory-consolidated .arenas-block {
     max-width: none;
   }
 
@@ -2019,9 +2019,9 @@ main[role="main"] {
   color: var(--color-ok);
 }
 
-.memory-icon.scratch {
-  background: var(--color-purple-bg);
-  color: var(--color-purple);
+.memory-icon.arena {
+  background: var(--color-ok-bg);
+  color: var(--color-ok);
 }
 
 .memory-block-summary {
@@ -2529,9 +2529,14 @@ main[role="main"] {
   margin-right: var(--space-xs);
 }
 
-.pool-widget-toggle:hover {
+.pool-widget-toggle:hover:not(.disabled) {
   background: var(--bg-secondary);
   color: var(--text-primary);
+}
+
+.pool-widget-toggle.disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 .pool-widget-toggle:focus-visible {
@@ -2549,6 +2554,32 @@ main[role="main"] {
 
 .pool-widget-toggle[aria-expanded="true"] .toggle-chevron {
   transform: rotate(0deg);
+}
+
+/* Trend indicator (for non-slab allocators like malloc) */
+.pool-widget-trend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-right: var(--space-xs);
+  transition: color 0.2s ease;
+}
+
+.pool-widget-trend.up {
+  color: var(--color-warning);
+}
+
+.pool-widget-trend.down {
+  color: var(--color-ok);
+}
+
+.pool-widget-trend.stable {
+  color: var(--text-muted);
 }
 
 /* Grid wrapper for collapse animation */
@@ -2570,50 +2601,34 @@ main[role="main"] {
   min-height: 0;
 }
 
-/* Scratch block - compact inline style */
-.scratch-block {
+/* Arenas block - dynamic arena widgets */
+.arenas-block {
   flex: 0 0 auto;
-  min-width: 160px;
-  max-width: 200px;
+  min-width: 200px;
 }
 
-.scratch-block .memory-block-header {
+.arenas-block .memory-block-header {
   padding: var(--space-xs) var(--space-sm);
 }
 
-.scratch-block .memory-block-title {
+.arenas-block .memory-block-title {
   font-size: 11px;
 }
 
-.scratch-block .memory-icon {
+.arenas-block .memory-icon {
   width: 18px;
   height: 18px;
   font-size: 9px;
 }
 
-.scratch-block .memory-block-summary {
-  font-size: 10px;
-}
-
-.scratch-block .memory-block-body {
+.arenas-block .memory-block-body {
   padding: var(--space-xs) var(--space-sm);
 }
 
-.scratch-block .arena-gauge {
-  margin: 0;
-  padding: 0;
-  background: transparent;
-}
-
-.scratch-block .arena-track {
-  height: 12px;
-}
-
-.scratch-block .memory-legend-inline {
-  padding: 0;
-  margin-top: var(--space-xs);
-  border-top: none;
-  font-size: 9px;
+.arena-tiers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
 }
 
 /* GC heap block takes remaining space */

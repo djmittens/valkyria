@@ -21,6 +21,26 @@ typedef struct {
   uint32_t age_ms;   // Time since last state change
 } valk_slot_diag_t;
 
+// ============================================================================
+// Generic Heap Tier System
+// ============================================================================
+
+// Generic heap tier snapshot - one entry per memory pool/slab
+// All fields are present; unused fields are 0 (e.g., malloc has no objects)
+typedef struct {
+  const char *name;              // e.g., "lval", "lenv", "malloc"
+
+  // Byte-level metrics
+  size_t bytes_used;
+  size_t bytes_total;
+  size_t bytes_peak;             // High water mark (bytes)
+
+  // Object-level metrics (0 for malloc-style allocators)
+  size_t objects_used;
+  size_t objects_total;
+  size_t objects_peak;           // High water mark (objects)
+} valk_heap_tier_snapshot_t;
+
 // Enhanced slab snapshot with optional per-slot diagnostics
 typedef struct {
   const char *name;
@@ -83,17 +103,13 @@ typedef struct valk_mem_snapshot {
   } arenas[16];
   size_t arena_count;
 
-  // GC heap stats (tiered: slab for LVAL objects + malloc for overflow/large)
+  // GC heap stats (generic tier array)
   struct {
-    size_t slab_bytes_used;     // LVAL slab tier: bytes in use
-    size_t slab_bytes_total;    // LVAL slab tier: total capacity
-    size_t slab_objects_used;   // LVAL slab tier: object count
-    size_t slab_objects_total;  // LVAL slab tier: slot count
-    size_t slab_peak_objects;   // LVAL slab tier: peak object count (HWM)
-    size_t malloc_bytes_used;   // Malloc tier: bytes in use
-    size_t malloc_bytes_limit;  // Malloc tier: hard limit
-    size_t malloc_peak_bytes;   // Malloc tier: peak bytes (HWM)
-    size_t peak_usage;          // Combined peak usage (legacy)
+    // Dynamic tier array (populated by collection)
+    valk_heap_tier_snapshot_t tiers[8];
+    size_t tier_count;
+
+    // Common GC stats
     uint8_t gc_threshold_pct;   // GC triggers at this % of capacity
     uint64_t gc_cycles;
     uint64_t emergency_collections;

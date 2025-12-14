@@ -57,6 +57,8 @@ typedef struct {
   size_t free_list_size;      // Number of objects in free list
   valk_slab_t* lval_slab;     // Fast slab allocator for valk_lval_t objects
   size_t lval_size;           // Size of valk_lval_t for slab allocation
+  valk_slab_t* lenv_slab;     // Fast slab allocator for valk_lenv_t objects
+  size_t lenv_size;           // Size of valk_lenv_t for slab allocation
   valk_gc_heap_stats_t stats; // Telemetry statistics
   valk_gc_runtime_metrics_t runtime_metrics; // Runtime metrics for observability
 

@@ -164,25 +164,22 @@
       </div>
 
       <div class="vm-memory-consolidated">
-        <!-- Scratch Arena -->
-        <div class="memory-block scratch-block">
+        <!-- Arenas (dynamically populated from server data) -->
+        <div class="memory-block arenas-block">
           <div class="memory-block-header">
             <div class="memory-block-title">
-              <span class="memory-icon scratch">S</span>
-              Scratch Arena
-            </div>
-            <div class="memory-block-summary">
-              <span class="pct" id="scratch-pct">0%</span>
-              <span class="usage-detail" id="scratch-usage">0B / 0B</span>
+              <span class="memory-icon arena">A</span>
+              Arenas
             </div>
           </div>
           <div class="memory-block-body">
-            <!-- Scratch Arena PoolGauge (initialized by JS) -->
-            <div id="scratch-arena-gauge-container"></div>
+            <div class="arena-tiers" id="arenas-container">
+              <!-- Arena PoolWidgets initialized dynamically from SSE data -->
+            </div>
           </div>
         </div>
 
-        <!-- GC Heap (Tiered: Slab + Malloc) -->
+        <!-- GC Heap (Tiered: LVAL Slab + LENV Slab + Malloc) -->
         <div class="memory-block gc-heap-block">
           <div class="memory-block-header">
             <div class="memory-block-title">
@@ -195,11 +192,11 @@
             </div>
           </div>
           <div class="memory-block-body">
-            <!-- Tiered heap visualization (Slab includes LVAL grid, Malloc is gauge-only) -->
+            <!-- Tiered heap: LVAL Slab (values) + LENV Slab (environments) + Malloc (overflow) -->
             <div class="heap-tiers" id="heap-tiers-container">
-              <!-- Slab and Malloc PoolWidgets initialized by JS -->
+              <!-- LVAL Slab, LENV Slab, and Malloc PoolWidgets initialized by JS -->
             </div>
-            <!-- Shared legend for both tiers -->
+            <!-- Shared legend for all tiers -->
             <div class="pool-widget-legend" id="heap-legend">
               <span class="pool-widget-legend-item"><span class="pool-widget-legend-bar" style="background: linear-gradient(90deg, var(--color-cyan), var(--color-warning))"></span>current</span>
               <span class="pool-widget-legend-item"><span class="pool-widget-legend-marker" style="background: var(--color-info)"></span>high water mark</span>

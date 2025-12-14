@@ -97,6 +97,24 @@ valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold, size_t hard
     valk_slab_init(heap->lval_slab, slab_item_size, num_lvals);
   }
 
+  // Create fast slab allocator for valk_lenv_t objects
+  // Environments are smaller and less numerous than lvals
+  extern size_t __valk_lenv_size;  // Defined in parser.c
+  heap->lenv_size = __valk_lenv_size;
+
+  // Smaller capacity than lval slab: 64K environments should be plenty
+  // Each lenv is ~80 bytes + header = ~96 bytes per slot
+  size_t lenv_slab_item_size = sizeof(valk_gc_header_t) + heap->lenv_size;
+  size_t num_lenvs = 64 * 1024;  // 64K environments
+
+  size_t lenv_slab_size = valk_slab_size(lenv_slab_item_size, num_lenvs);
+  heap->lenv_slab = malloc(lenv_slab_size);
+  if (heap->lenv_slab == NULL) {
+    VALK_WARN("Failed to allocate lenv slab, will fall back to malloc");
+  } else {
+    valk_slab_init(heap->lenv_slab, lenv_slab_item_size, num_lenvs);
+  }
+
   // Initialize percentage-based GC tuning with sensible defaults
   heap->gc_threshold_pct = 75;    // Trigger GC at 75% heap usage
   heap->gc_target_pct = 50;       // Informational: aim to be below 50% after GC
@@ -121,16 +139,23 @@ void valk_gc_malloc_set_root(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env)
   heap->root_env = root_env;
 }
 
-// Get heap usage percentages for both tiers
-// Returns the MAX of slab% and malloc% - triggers on whichever is fuller
+// Get heap usage percentages for all tiers
+// Returns the MAX of lval_slab%, lenv_slab% and malloc% - triggers on whichever is fuller
 uint8_t valk_gc_heap_usage_pct(valk_gc_malloc_heap_t* heap) {
   if (!heap) return 0;
 
-  // Calculate slab usage percentage
-  uint8_t slab_pct = 0;
+  // Calculate lval slab usage percentage
+  uint8_t lval_slab_pct = 0;
   if (heap->lval_slab != NULL && heap->lval_slab->numItems > 0) {
     size_t slab_used = heap->lval_slab->numItems - heap->lval_slab->numFree;
-    slab_pct = (uint8_t)((slab_used * 100) / heap->lval_slab->numItems);
+    lval_slab_pct = (uint8_t)((slab_used * 100) / heap->lval_slab->numItems);
+  }
+
+  // Calculate lenv slab usage percentage
+  uint8_t lenv_slab_pct = 0;
+  if (heap->lenv_slab != NULL && heap->lenv_slab->numItems > 0) {
+    size_t slab_used = heap->lenv_slab->numItems - heap->lenv_slab->numFree;
+    lenv_slab_pct = (uint8_t)((slab_used * 100) / heap->lenv_slab->numItems);
   }
 
   // Calculate malloc usage percentage
@@ -140,8 +165,9 @@ uint8_t valk_gc_heap_usage_pct(valk_gc_malloc_heap_t* heap) {
     if (malloc_pct > 100) malloc_pct = 100;
   }
 
-  // Return the higher of the two - GC triggers if EITHER tier is full
-  return slab_pct > malloc_pct ? slab_pct : malloc_pct;
+  // Return the highest - GC triggers if ANY tier is full
+  uint8_t max_pct = lval_slab_pct > lenv_slab_pct ? lval_slab_pct : lenv_slab_pct;
+  return max_pct > malloc_pct ? max_pct : malloc_pct;
 }
 
 // Configure GC thresholds
@@ -227,7 +253,16 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
     header = valk_mem_allocator_alloc((void*)heap->lval_slab, total_size);
     if (header != NULL) {
       from_slab = true;
-      VALK_TRACE("GC alloc: %zu bytes from slab at %p", bytes, (void*)(header + 1));
+      VALK_TRACE("GC alloc: %zu bytes from lval slab at %p", bytes, (void*)(header + 1));
+    }
+  }
+
+  // Second fast path: Slab allocator for valk_lenv_t objects
+  if (header == NULL && bytes == heap->lenv_size && heap->lenv_slab != NULL) {
+    header = valk_mem_allocator_alloc((void*)heap->lenv_slab, total_size);
+    if (header != NULL) {
+      from_slab = true;
+      VALK_TRACE("GC alloc: %zu bytes from lenv slab at %p", bytes, (void*)(header + 1));
     }
   }
 
@@ -669,22 +704,36 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap, size_t* out_free
         }
       }
 
-      // Check if object is from slab via address range check
-      bool from_slab = false;
+      // Check if object is from lval slab via address range check
+      uintptr_t obj_addr = (uintptr_t)header;
+      bool from_lval_slab = false;
       if (heap->lval_slab != NULL) {
         uintptr_t slab_start = (uintptr_t)heap->lval_slab;
         size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
         size_t slab_total_size = valk_slab_size(slab_item_size, 256 * 1024);
         uintptr_t slab_end = slab_start + slab_total_size;
-        uintptr_t obj_addr = (uintptr_t)header;
-        from_slab = (obj_addr >= slab_start && obj_addr < slab_end);
+        from_lval_slab = (obj_addr >= slab_start && obj_addr < slab_end);
       }
 
-      if (from_slab) {
-        // Return to slab allocator - don't count towards reclaimed bytes
+      // Check if object is from lenv slab
+      bool from_lenv_slab = false;
+      if (!from_lval_slab && heap->lenv_slab != NULL) {
+        uintptr_t slab_start = (uintptr_t)heap->lenv_slab;
+        size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lenv_size;
+        size_t slab_total_size = valk_slab_size(slab_item_size, 64 * 1024);
+        uintptr_t slab_end = slab_start + slab_total_size;
+        from_lenv_slab = (obj_addr >= slab_start && obj_addr < slab_end);
+      }
+
+      if (from_lval_slab) {
+        // Return to lval slab allocator - don't count towards reclaimed bytes
         // since slab allocations aren't tracked in allocated_bytes
         valk_mem_allocator_free((void*)heap->lval_slab, header);
-        VALK_TRACE("GC sweep: returned %p to slab", user_data);
+        VALK_TRACE("GC sweep: returned lval %p to slab", user_data);
+      } else if (from_lenv_slab) {
+        // Return to lenv slab allocator
+        valk_mem_allocator_free((void*)heap->lenv_slab, header);
+        VALK_TRACE("GC sweep: returned lenv %p to slab", user_data);
       } else {
         // Free malloc'd objects directly
         // Count towards reclaimed bytes since malloc'd objects are tracked in allocated_bytes
@@ -1265,22 +1314,34 @@ void valk_gc_free_object(void* heap_ptr, void* user_ptr) {
     current_ptr = &(*current_ptr)->gc_next;
   }
 
-  // Determine if from slab or malloc and free accordingly
-  bool from_slab = false;
+  // Determine if from lval slab, lenv slab, or malloc and free accordingly
+  uintptr_t obj_addr = (uintptr_t)header;
+  bool from_lval_slab = false;
   if (heap->lval_slab != NULL) {
     uintptr_t slab_start = (uintptr_t)heap->lval_slab;
     size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
     size_t slab_total_size = valk_slab_size(slab_item_size, 256 * 1024);
     uintptr_t slab_end = slab_start + slab_total_size;
-    uintptr_t obj_addr = (uintptr_t)header;
-    from_slab = (obj_addr >= slab_start && obj_addr < slab_end);
+    from_lval_slab = (obj_addr >= slab_start && obj_addr < slab_end);
+  }
+
+  bool from_lenv_slab = false;
+  if (!from_lval_slab && heap->lenv_slab != NULL) {
+    uintptr_t slab_start = (uintptr_t)heap->lenv_slab;
+    size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lenv_size;
+    size_t slab_total_size = valk_slab_size(slab_item_size, 64 * 1024);
+    uintptr_t slab_end = slab_start + slab_total_size;
+    from_lenv_slab = (obj_addr >= slab_start && obj_addr < slab_end);
   }
 
   size_t total_size = sizeof(valk_gc_header_t) + header->size;
 
-  if (from_slab) {
-    // Return to slab allocator
+  if (from_lval_slab) {
+    // Return to lval slab allocator
     valk_mem_allocator_free((void*)heap->lval_slab, header);
+  } else if (from_lenv_slab) {
+    // Return to lenv slab allocator
+    valk_mem_allocator_free((void*)heap->lenv_slab, header);
   } else {
     // Free malloc'd memory directly
     heap->allocated_bytes -= total_size;
@@ -1327,18 +1388,28 @@ void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
       }
     }
 
-    // Check if object is from slab via address range check
-    bool from_slab = false;
+    // Check if object is from lval slab via address range check
+    uintptr_t obj_addr = (uintptr_t)current;
+    bool from_lval_slab = false;
     if (heap->lval_slab != NULL) {
       uintptr_t slab_start = (uintptr_t)heap->lval_slab;
       size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
       size_t slab_total_size = valk_slab_size(slab_item_size, 256 * 1024);
       uintptr_t slab_end = slab_start + slab_total_size;
-      uintptr_t obj_addr = (uintptr_t)current;
-      from_slab = (obj_addr >= slab_start && obj_addr < slab_end);
+      from_lval_slab = (obj_addr >= slab_start && obj_addr < slab_end);
     }
 
-    if (!from_slab) {
+    // Check if object is from lenv slab
+    bool from_lenv_slab = false;
+    if (!from_lval_slab && heap->lenv_slab != NULL) {
+      uintptr_t slab_start = (uintptr_t)heap->lenv_slab;
+      size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lenv_size;
+      size_t slab_total_size = valk_slab_size(slab_item_size, 64 * 1024);
+      uintptr_t slab_end = slab_start + slab_total_size;
+      from_lenv_slab = (obj_addr >= slab_start && obj_addr < slab_end);
+    }
+
+    if (!from_lval_slab && !from_lenv_slab) {
       // Free malloc'd objects directly (slab objects freed with slab itself)
       size_t total_size = sizeof(valk_gc_header_t) + current->size;
       freed_bytes += total_size;
@@ -1354,24 +1425,38 @@ void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
   current = heap->free_list;
   while (current != NULL) {
     valk_gc_header_t* next = current->gc_next;
-    bool from_slab = false;
+    uintptr_t obj_addr = (uintptr_t)current;
+
+    bool from_lval_slab = false;
     if (heap->lval_slab != NULL) {
       uintptr_t slab_start = (uintptr_t)heap->lval_slab;
       size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
       size_t slab_total_size = valk_slab_size(slab_item_size, 256 * 1024);
       uintptr_t slab_end = slab_start + slab_total_size;
-      uintptr_t obj_addr = (uintptr_t)current;
-      from_slab = (obj_addr >= slab_start && obj_addr < slab_end);
+      from_lval_slab = (obj_addr >= slab_start && obj_addr < slab_end);
     }
-    if (!from_slab) {
+
+    bool from_lenv_slab = false;
+    if (!from_lval_slab && heap->lenv_slab != NULL) {
+      uintptr_t slab_start = (uintptr_t)heap->lenv_slab;
+      size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lenv_size;
+      size_t slab_total_size = valk_slab_size(slab_item_size, 64 * 1024);
+      uintptr_t slab_end = slab_start + slab_total_size;
+      from_lenv_slab = (obj_addr >= slab_start && obj_addr < slab_end);
+    }
+
+    if (!from_lval_slab && !from_lenv_slab) {
       free(current);
     }
     current = next;
   }
 
-  // Free the slab allocator directly (don't use valk_slab_free which goes through valk_mem_free)
+  // Free the slab allocators directly (don't use valk_slab_free which goes through valk_mem_free)
   if (heap->lval_slab != NULL) {
     free(heap->lval_slab);
+  }
+  if (heap->lenv_slab != NULL) {
+    free(heap->lenv_slab);
   }
 
   // Free the heap structure itself
@@ -1393,18 +1478,27 @@ void valk_gc_get_runtime_metrics(valk_gc_malloc_heap_t* heap,
   if (pause_us_max) *pause_us_max = atomic_load(&heap->runtime_metrics.pause_us_max);
   if (reclaimed) *reclaimed = atomic_load(&heap->runtime_metrics.reclaimed_bytes_total);
 
-  // Combined slab + malloc usage for total heap metrics
-  size_t slab_bytes_used = 0;
-  size_t slab_bytes_total = 0;
+  // Combined slabs + malloc usage for total heap metrics
+  size_t lval_slab_bytes_used = 0;
+  size_t lval_slab_bytes_total = 0;
   if (heap->lval_slab) {
     size_t slab_used = heap->lval_slab->numItems - heap->lval_slab->numFree;
     size_t item_size = heap->lval_slab->itemSize;
-    slab_bytes_used = slab_used * item_size;
-    slab_bytes_total = heap->lval_slab->numItems * item_size;
+    lval_slab_bytes_used = slab_used * item_size;
+    lval_slab_bytes_total = heap->lval_slab->numItems * item_size;
   }
 
-  if (heap_used) *heap_used = slab_bytes_used + heap->allocated_bytes;
-  if (heap_total) *heap_total = slab_bytes_total + heap->hard_limit;
+  size_t lenv_slab_bytes_used = 0;
+  size_t lenv_slab_bytes_total = 0;
+  if (heap->lenv_slab) {
+    size_t slab_used = heap->lenv_slab->numItems - heap->lenv_slab->numFree;
+    size_t item_size = heap->lenv_slab->itemSize;
+    lenv_slab_bytes_used = slab_used * item_size;
+    lenv_slab_bytes_total = heap->lenv_slab->numItems * item_size;
+  }
+
+  if (heap_used) *heap_used = lval_slab_bytes_used + lenv_slab_bytes_used + heap->allocated_bytes;
+  if (heap_total) *heap_total = lval_slab_bytes_total + lenv_slab_bytes_total + heap->hard_limit;
 }
 
 // ============================================================================
