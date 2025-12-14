@@ -58,8 +58,36 @@ Use branch-specific tags: `TODO(networking):`, `TODO(llvm):`, `TODO(main):`
 
 Find with: `make todo`
 
-## Known Limitations
+## Required Workflow (CRITICAL - MUST FOLLOW)
 
-- **No TCO**: Tree-walking interpreter uses C stack. TCO requires stack machine or LLVM backend.
-- **No HTTP/2 server**: Only client implemented.
-- **No type system**: Dynamically typed for now.
+### Before ANY Code Change
+1. READ the file(s) you intend to modify - NEVER edit without reading first
+2. Understand the existing code conventions and patterns
+3. Verify any libraries/utilities exist before using them
+
+### After ANY Code Change
+1. Run `make build` to verify compilation succeeds
+2. Run `make test` to verify all tests pass
+3. If ANYTHING fails, fix it immediately and re-run
+4. ONLY report completion after build AND tests pass
+
+### Task Completion Rules
+- NEVER mark a task complete if tests are failing
+- NEVER mark a task complete if build is broken
+- NEVER mark a task complete if implementation is partial
+- NEVER stop mid-task - continue until fully done or user stops you
+- NEVER claim a task is "too large" - break it down and complete it
+
+## Communication Style
+- Be concise and direct - no fluff
+- Don't add preamble like "I'll help you with that" - just do it
+- Don't use sycophantic phrases like "Great question!"
+- Prioritize accuracy over validation
+
+## What NOT To Do
+- Don't make changes without reading code first
+- Don't skip running tests after changes
+- Don't add comments unless explicitly asked
+- Don't commit unless explicitly asked
+- Don't add unnecessary abstractions
+- Don't create documentation files unless asked

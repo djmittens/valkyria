@@ -5,6 +5,8 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <poll.h>
+#include <signal.h>
+#include <stdbool.h>
 #include <stdckdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -174,15 +176,37 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
 }
 
 void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
-  size_t timeoutSeconds = 5;
-  size_t timeoutNanos = timeoutSeconds * 1000000000;
-  struct timespec ts;
-  ts.tv_sec = 0;
-  ts.tv_nsec = 10000;
-  do {
-    int r = poll(fds, 2, -1);
+  // Default 30 second timeout, configurable via VALK_TEST_TIMEOUT_SECONDS
+  int timeoutSeconds = 30;
+  const char *env_timeout = getenv("VALK_TEST_TIMEOUT_SECONDS");
+  if (env_timeout) {
+    int val = atoi(env_timeout);
+    if (val > 0) timeoutSeconds = val;
+  }
 
-    if (r <= 0) continue;
+  const int pollTimeoutMs = 100;  // Poll every 100ms to check timeout
+  int elapsedMs = 0;
+  bool timedOut = false;
+
+  while (!timedOut) {
+    int r = poll(fds, 2, pollTimeoutMs);
+
+    if (r < 0) {
+      if (errno == EINTR) continue;
+      perror("poll");
+      break;
+    }
+
+    if (r == 0) {
+      // Poll timeout - check if we've exceeded total timeout
+      elapsedMs += pollTimeoutMs;
+      if (elapsedMs >= SEC_TO_MS(timeoutSeconds)) {
+        timedOut = true;
+        break;
+      }
+      continue;
+    }
+
     uint8_t buf[256];
 
     if (fds[0].revents & POLLIN) {
@@ -190,8 +214,11 @@ void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
       if (n > 0) {
         valk_ring_write(test->_stdout, buf, (size_t)n);
       } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        // No data available, continue
+      } else if (n == 0) {
+        // EOF on stdout
       } else {
-        perror("read");
+        perror("read stdout");
         break;
       }
     }
@@ -200,30 +227,37 @@ void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
       if (n > 0) {
         valk_ring_write(test->_stderr, buf, (size_t)n);
       } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        // No data available, continue
+      } else if (n == 0) {
+        // EOF on stderr
       } else {
-        perror("read");
+        perror("read stderr");
         break;
       }
     }
-    if (fds[0].revents & POLLHUP && fds[1].revents & POLLHUP) {
+    // Check for hangup on both pipes (child exited)
+    if ((fds[0].revents & (POLLHUP | POLLERR)) &&
+        (fds[1].revents & (POLLHUP | POLLERR))) {
       break;
     }
-    nanosleep(&ts, nullptr);
-    timeoutNanos -= ts.tv_nsec;
-  } while (timeoutNanos);
+  }
 
   close(fds[0].fd);
   close(fds[1].fd);
 
-  if (timeoutNanos == 0) {
-    // Timeout was reached
+  if (timedOut) {
+    // Timeout was reached - kill the child process
+    kill(pid, SIGKILL);
 
-    size_t len = snprintf(nullptr, 0, "Test timed out after %ld seconds\n",
+    test->result.type = VALK_TEST_CRSH;
+    size_t len = snprintf(nullptr, 0, "Test timed out after %d seconds\n",
                           timeoutSeconds);
     char buf[++len];
 
-    snprintf(buf, len, "Test timed out after %ld seconds\n", timeoutSeconds);
+    snprintf(buf, len, "Test timed out after %d seconds\n", timeoutSeconds);
     valk_ring_write(test->_stderr, (void *)buf, len);
+    // Still need to reap the child
+    waitpid(pid, NULL, 0);
     return;
   }
 

@@ -131,10 +131,10 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS(), int port) {
 }
 
 // Cleanup test context
+// Note: valk_future_await does NOT retain the result - the future owns it.
+// So we only release the futures, not the boxes they contain.
 static void cleanup_test_context(test_context_t *ctx) {
-  if (ctx->clientBox) valk_arc_release(ctx->clientBox);
   if (ctx->fclient) valk_arc_release(ctx->fclient);
-  if (ctx->server) valk_arc_release(ctx->server);
   if (ctx->fserv) valk_arc_release(ctx->fserv);
   if (ctx->sys) valk_aio_stop(ctx->sys);
   if (ctx->gc_heap) {
@@ -150,6 +150,7 @@ static bool test_large_response_size(test_context_t *ctx, const char *path,
                                      size_t expected_size, VALK_TEST_ARGS()) {
   // Build request
   uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+  memset(req_buf, 0, sizeof(req_buf));  // Zero to avoid stale pointer warnings
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -173,7 +174,7 @@ static bool test_large_response_size(test_context_t *ctx, const char *path,
 
   if (res->type != VALK_SUC) {
     VALK_FAIL("Request to %s failed: %s", path, (char *)res->item);
-    valk_arc_release(res);
+    // Note: don't release res - future owns it
     valk_arc_release(fres);
     return false;
   }
@@ -187,7 +188,6 @@ static bool test_large_response_size(test_context_t *ctx, const char *path,
     ssize_t diff = (ssize_t)response->bodyLen - (ssize_t)expected_size;
     VALK_FAIL("Size mismatch for %s: expected %zu bytes, got %zu bytes (diff: %zd)",
               path, expected_size, response->bodyLen, diff);
-    valk_arc_release(res);
     valk_arc_release(fres);
     return false;
   }
@@ -196,7 +196,6 @@ static bool test_large_response_size(test_context_t *ctx, const char *path,
   if (response->bodyLen >= 64) {
     if (memcmp(response->body, EXPECTED_PATTERN, 64) != 0) {
       VALK_FAIL("Content mismatch at start of response for %s", path);
-      valk_arc_release(res);
       valk_arc_release(fres);
       return false;
     }
@@ -204,7 +203,6 @@ static bool test_large_response_size(test_context_t *ctx, const char *path,
     size_t end_offset = response->bodyLen - 64;
     if (memcmp((char *)response->body + end_offset, EXPECTED_PATTERN, 64) != 0) {
       VALK_FAIL("Content mismatch at end of response for %s (offset %zu)", path, end_offset);
-      valk_arc_release(res);
       valk_arc_release(fres);
       return false;
     }
@@ -212,7 +210,7 @@ static bool test_large_response_size(test_context_t *ctx, const char *path,
 
   printf("[test] SUCCESS: %s response verified (%zu bytes)\n", path, expected_size);
 
-  valk_arc_release(res);
+  // Note: don't release res - future owns it
   valk_arc_release(fres);
   return true;
 }
@@ -345,7 +343,6 @@ void test_response_small(VALK_TEST_ARGS()) {
 
   if (res->type != VALK_SUC) {
     VALK_FAIL("Request to /health failed: %s", (char *)res->item);
-    valk_arc_release(res);
     valk_arc_release(fres);
     cleanup_test_context(&ctx);
     return;
@@ -362,7 +359,7 @@ void test_response_small(VALK_TEST_ARGS()) {
     printf("[test] SUCCESS: Small response verified\n");
   }
 
-  valk_arc_release(res);
+  // Note: don't release res - future owns it
   valk_arc_release(fres);
   cleanup_test_context(&ctx);
 
