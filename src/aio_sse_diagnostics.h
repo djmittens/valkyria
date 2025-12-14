@@ -81,11 +81,18 @@ typedef struct valk_mem_snapshot {
   } arenas[16];
   size_t arena_count;
 
-  // GC heap stats
+  // GC heap stats (tiered: slab for LVAL objects + malloc for overflow/large)
   struct {
-    size_t allocated_bytes;
-    size_t peak_usage;
-    size_t gc_threshold;
+    size_t slab_bytes_used;     // LVAL slab tier: bytes in use
+    size_t slab_bytes_total;    // LVAL slab tier: total capacity
+    size_t slab_objects_used;   // LVAL slab tier: object count
+    size_t slab_objects_total;  // LVAL slab tier: slot count
+    size_t slab_peak_objects;   // LVAL slab tier: peak object count (HWM)
+    size_t malloc_bytes_used;   // Malloc tier: bytes in use
+    size_t malloc_bytes_limit;  // Malloc tier: hard limit
+    size_t malloc_peak_bytes;   // Malloc tier: peak bytes (HWM)
+    size_t peak_usage;          // Combined peak usage (legacy)
+    uint8_t gc_threshold_pct;   // GC triggers at this % of capacity
     uint64_t gc_cycles;
     uint64_t emergency_collections;
   } gc_heap;

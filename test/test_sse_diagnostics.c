@@ -121,10 +121,15 @@ void test_sse_event_format(VALK_TEST_ARGS()) {
   snapshot.arenas[0].high_water_mark = 2048;
   snapshot.arenas[0].overflow_fallbacks = 0;
 
-  // GC data
-  snapshot.gc_heap.allocated_bytes = 1000000;
+  // GC data (tiered: slab + malloc)
+  snapshot.gc_heap.slab_bytes_used = 800000;
+  snapshot.gc_heap.slab_bytes_total = 1000000;
+  snapshot.gc_heap.slab_objects_used = 10000;
+  snapshot.gc_heap.slab_objects_total = 12500;
+  snapshot.gc_heap.malloc_bytes_used = 200000;
+  snapshot.gc_heap.malloc_bytes_limit = 5000000;
   snapshot.gc_heap.peak_usage = 2000000;
-  snapshot.gc_heap.gc_threshold = 5000000;
+  snapshot.gc_heap.gc_threshold_pct = 75;
   snapshot.gc_heap.gc_cycles = 10;
   snapshot.gc_heap.emergency_collections = 0;
 

@@ -1253,11 +1253,12 @@
       var srv = servers[key];
       var hist = findMetric(srv.histograms, 'http_request_duration_seconds', {});
       if (hist) {
-        totalLatencySum += hist.sum;
-        totalLatencyCount += hist.count;
+        totalLatencySum += hist.sum_us || 0;
+        totalLatencyCount += hist.count || 0;
       }
     });
-    var avgLatency = totalLatencyCount > 0 ? (totalLatencySum / totalLatencyCount) * 1000 : 0;
+    // sum_us is in microseconds, convert to milliseconds
+    var avgLatency = totalLatencyCount > 0 ? (totalLatencySum / totalLatencyCount) / 1000 : 0;
     pushHistory(history.latency, avgLatency);
 
     // Heap usage
@@ -2500,17 +2501,133 @@
     }
 
     updateGCStats(gc) {
-      // Update GC panel if it exists
+      // Update tiered heap display (new format with slab + malloc)
+      if (gc.slab && gc.malloc) {
+        this.updateTieredHeap(gc);
+      }
+
+      // Update GC panel if it exists (legacy)
       var gcPanel = document.querySelector('.gc-stats-panel');
-      if (!gcPanel) return;
+      if (gcPanel) {
+        var allocated = gcPanel.querySelector('[data-gc="allocated"]');
+        var peak = gcPanel.querySelector('[data-gc="peak"]');
+        var cycles = gcPanel.querySelector('[data-gc="cycles"]');
 
-      var allocated = gcPanel.querySelector('[data-gc="allocated"]');
-      var peak = gcPanel.querySelector('[data-gc="peak"]');
-      var cycles = gcPanel.querySelector('[data-gc="cycles"]');
+        // For legacy panel, show combined bytes
+        var totalUsed = (gc.slab ? gc.slab.bytes_used : 0) + (gc.malloc ? gc.malloc.bytes_used : 0);
+        if (allocated) allocated.textContent = this.formatBytes(totalUsed);
+        if (peak) peak.textContent = this.formatBytes(gc.peak);
+        if (cycles) cycles.textContent = gc.cycles.toLocaleString();
+      }
+    }
 
-      if (allocated) allocated.textContent = this.formatBytes(gc.allocated);
-      if (peak) peak.textContent = this.formatBytes(gc.peak);
-      if (cycles) cycles.textContent = gc.cycles.toLocaleString();
+    updateTieredHeap(gc) {
+      var slab = gc.slab || {};
+      var malloc = gc.malloc || {};
+
+      // Calculate combined totals
+      var slabUsed = slab.bytes_used || 0;
+      var slabTotal = slab.bytes_total || 1;
+      var slabPct = slabTotal > 0 ? (slabUsed / slabTotal) * 100 : 0;
+
+      var mallocUsed = malloc.bytes_used || 0;
+      var mallocLimit = malloc.bytes_limit || 1;
+      var mallocPct = mallocLimit > 0 ? (mallocUsed / mallocLimit) * 100 : 0;
+
+      // Use server-provided per-tier peaks (tracked from process start)
+      var slabObjectsTotal = slab.objects_total || 1;
+      var slabPeakObjects = slab.peak_objects || 0;
+      var slabHwmPct = slabObjectsTotal > 0 ? (slabPeakObjects / slabObjectsTotal) * 100 : 0;
+
+      var mallocPeakBytes = malloc.peak_bytes || 0;
+      var mallocHwmPct = mallocLimit > 0 ? (mallocPeakBytes / mallocLimit) * 100 : 0;
+
+      var totalUsed = slabUsed + mallocUsed;
+      var totalCapacity = slabTotal + mallocLimit;
+      var totalPct = totalCapacity > 0 ? (totalUsed / totalCapacity) * 100 : 0;
+
+      // Update slab tier
+      var slabUsedEl = $('slab-used');
+      var slabTotalEl = $('slab-total');
+      var slabPctEl = $('slab-pct');
+      var slabBarFill = $('slab-bar-fill');
+      var slabObjectsUsed = $('slab-objects-used');
+      var slabObjectsTotal = $('slab-objects-total');
+
+      if (slabUsedEl) slabUsedEl.textContent = fmtBytes(slabUsed);
+      if (slabTotalEl) slabTotalEl.textContent = fmtBytes(slabTotal);
+      if (slabPctEl) slabPctEl.textContent = Math.round(slabPct);
+      if (slabBarFill) slabBarFill.style.width = Math.min(slabPct, 100) + '%';
+      if (slabObjectsUsed) slabObjectsUsed.textContent = (slab.objects_used || 0).toLocaleString();
+      if (slabObjectsTotal) slabObjectsTotal.textContent = (slab.objects_total || 0).toLocaleString();
+
+      // Update malloc tier
+      var mallocUsedEl = $('malloc-used');
+      var mallocLimitEl = $('malloc-limit');
+      var mallocPctEl = $('malloc-pct');
+      var mallocBarFill = $('malloc-bar-fill');
+      var mallocPeakEl = $('malloc-peak');
+
+      if (mallocUsedEl) mallocUsedEl.textContent = fmtBytes(mallocUsed);
+      if (mallocLimitEl) mallocLimitEl.textContent = fmtBytes(mallocLimit);
+      if (mallocPctEl) mallocPctEl.textContent = Math.round(mallocPct);
+      if (mallocBarFill) mallocBarFill.style.width = Math.min(mallocPct, 100) + '%';
+      if (mallocPeakEl) mallocPeakEl.textContent = fmtBytes(gc.peak || 0);
+
+      // Update combined heap stats
+      var heapUsedEl = $('heap-used');
+      var heapTotalEl = $('heap-total');
+      var heapGaugeValue = $('heap-gauge-value');
+
+      if (heapUsedEl) heapUsedEl.textContent = fmtBytes(totalUsed);
+      if (heapTotalEl) heapTotalEl.textContent = fmtBytes(totalCapacity);
+      if (heapGaugeValue) heapGaugeValue.textContent = Math.round(totalPct);
+
+      // Update aggregate stats
+      var thresholdPct = gc.threshold_pct || 75;
+      var gcThresholdPctEl = $('gc-threshold-pct');
+      if (gcThresholdPctEl) gcThresholdPctEl.textContent = thresholdPct;
+      // heap-reclaimed is updated elsewhere from vm_metrics.gc_reclaimed_bytes
+
+      // Color tier bars based on threshold
+      if (slabBarFill) {
+        slabBarFill.classList.remove('ok', 'warning', 'critical');
+        if (slabPct >= 90) {
+          slabBarFill.classList.add('critical');
+        } else if (slabPct >= thresholdPct) {
+          slabBarFill.classList.add('warning');
+        } else {
+          slabBarFill.classList.add('ok');
+        }
+      }
+
+      if (mallocBarFill) {
+        mallocBarFill.classList.remove('ok', 'warning', 'critical');
+        if (mallocPct >= 90) {
+          mallocBarFill.classList.add('critical');
+        } else if (mallocPct >= thresholdPct) {
+          mallocBarFill.classList.add('warning');
+        } else {
+          mallocBarFill.classList.add('ok');
+        }
+      }
+
+      // Position threshold markers (same threshold applies to both tiers)
+      var slabThresholdMarker = $('slab-bar-threshold');
+      var mallocThresholdMarker = $('malloc-bar-threshold');
+      if (slabThresholdMarker) slabThresholdMarker.style.left = thresholdPct + '%';
+      if (mallocThresholdMarker) mallocThresholdMarker.style.left = thresholdPct + '%';
+
+      // Position HWM markers using server-provided per-tier peaks
+      var slabHwmMarker = $('slab-bar-hwm');
+      var slabHwmPctEl = $('slab-hwm-pct');
+      if (slabHwmMarker) slabHwmMarker.style.left = slabHwmPct + '%';
+      if (slabHwmPctEl) slabHwmPctEl.textContent = Math.round(slabHwmPct);
+
+      var mallocHwmMarker = $('malloc-bar-hwm');
+      var mallocHwmPctEl = $('malloc-hwm-pct');
+      if (mallocHwmMarker) mallocHwmMarker.style.left = mallocHwmPct + '%';
+      if (mallocHwmPctEl) mallocHwmPctEl.textContent = Math.round(mallocHwmPct);
     }
 
     // Utility functions

@@ -34,8 +34,12 @@ void test_gc_metrics_init(VALK_TEST_ARGS()) {
                    (unsigned long long)pause_us_max);
   VALK_TEST_ASSERT(reclaimed == 0, "Initial reclaimed should be 0, got %llu",
                    (unsigned long long)reclaimed);
-  VALK_TEST_ASSERT(heap_total == threshold * 2,
-                   "heap_total should be 2x threshold (default), got %zu", heap_total);
+  // heap_total now includes slab capacity (256K objects * ~80 bytes each) + malloc hard_limit
+  // The slab adds about 256MB capacity, malloc limit is threshold * 2 (default when hard_limit=0)
+  size_t expected_malloc_limit = threshold * 2;  // Default hard_limit = 2x threshold
+  VALK_TEST_ASSERT(heap_total > expected_malloc_limit,
+                   "heap_total should include slab capacity (got %zu, expected > %zu)",
+                   heap_total, expected_malloc_limit);
 
   valk_gc_malloc_heap_destroy(heap);
   VALK_PASS();

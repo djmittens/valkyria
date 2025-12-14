@@ -218,12 +218,12 @@
           </div>
         </div>
 
-        <!-- GC Heap (LVAL Slab) -->
+        <!-- GC Heap (Tiered: Slab + Malloc) -->
         <div class="memory-block gc-heap-block">
           <div class="memory-block-header">
             <div class="memory-block-title">
               <span class="memory-icon gc">GC</span>
-              GC Heap (LVAL Objects)
+              GC Heap
             </div>
             <div class="memory-block-summary">
               <span class="usage-pct" id="heap-gauge-value">--</span>% used
@@ -231,50 +231,79 @@
             </div>
           </div>
           <div class="memory-block-body">
-            <div class="slab-with-legend">
-              <div class="memory-slab-panel wide" id="lval-panel">
-                <div class="slab-header">
-                  <span class="slab-name">LVAL Slab</span>
-                  <span class="slab-type-badge">Slab</span>
-                  <span class="slab-badge">0% used</span>
+            <!-- Tiered heap visualization -->
+            <div class="heap-tiers">
+              <!-- Tier 1: LVAL Slab -->
+              <div class="heap-tier" id="slab-tier">
+                <div class="tier-header">
+                  <span class="tier-icon">S</span>
+                  <span class="tier-name">Slab Tier</span>
+                  <span class="tier-desc">Fixed-size LVAL objects</span>
+                  <span class="tier-usage">
+                    <span id="slab-used">--</span> / <span id="slab-total">--</span>
+                    (<span id="slab-pct">--</span>%)
+                  </span>
                 </div>
+                <div class="tier-bar-container">
+                  <div class="tier-bar slab-bar">
+                    <div class="tier-bar-fill" id="slab-bar-fill" style="width: 0%"></div>
+                    <div class="tier-bar-hwm" id="slab-bar-hwm" style="left: 0%"></div>
+                    <div class="tier-bar-threshold" id="slab-bar-threshold" style="left: 75%"></div>
+                  </div>
+                </div>
+                <!-- LVAL Slab Grid Visualization -->
                 <div class="slab-canvas">
-                  <div class="slab-grid" id="lval-grid"
-                       role="img"
-                       aria-label="LVAL Object Slab: loading..."
-                       aria-live="polite"></div>
+                  <div class="slab-grid" id="lval-grid" role="img" aria-label="LVAL slab allocation grid"></div>
                 </div>
-                <div class="slab-stats">
-                  <span><span class="used-count">0</span> / 262,144 slots</span>
-                  <span class="overflow-warning" style="display:none"></span>
+                <div class="tier-stats">
+                  <span class="tier-stat">
+                    <span class="stat-label">objects:</span>
+                    <span class="stat-value" id="slab-objects-used">--</span>/<span id="slab-objects-total">--</span>
+                  </span>
+                  <span class="tier-stat">
+                    <span class="stat-label">hwm:</span>
+                    <span class="stat-value" id="slab-hwm-pct">--</span>%
+                  </span>
                 </div>
               </div>
-              <!-- Inline legend for this visualization -->
-              <div class="memory-legend-inline">
-                <div class="legend-item"><div class="legend-dot free"></div><span>Free</span></div>
-                <div class="legend-item"><div class="legend-dot used"></div><span>Used</span></div>
-                <div class="legend-item"><div class="legend-dot flash"></div><span>Changed</span></div>
+
+              <!-- Tier 2: Malloc Heap -->
+              <div class="heap-tier" id="malloc-tier">
+                <div class="tier-header">
+                  <span class="tier-icon">M</span>
+                  <span class="tier-name">Malloc Tier</span>
+                  <span class="tier-desc">Variable-size allocations</span>
+                  <span class="tier-usage">
+                    <span id="malloc-used">--</span> / <span id="malloc-limit">--</span>
+                    (<span id="malloc-pct">--</span>%)
+                  </span>
+                </div>
+                <div class="tier-bar-container">
+                  <div class="tier-bar malloc-bar">
+                    <div class="tier-bar-fill" id="malloc-bar-fill" style="width: 0%"></div>
+                    <div class="tier-bar-hwm" id="malloc-bar-hwm" style="left: 0%"></div>
+                    <div class="tier-bar-threshold" id="malloc-bar-threshold" style="left: 75%"></div>
+                  </div>
+                </div>
+                <div class="tier-stats">
+                  <span class="tier-stat">
+                    <span class="stat-label">peak:</span>
+                    <span class="stat-value" id="malloc-peak">--</span>
+                  </span>
+                  <span class="tier-stat">
+                    <span class="stat-label">hwm:</span>
+                    <span class="stat-value" id="malloc-hwm-pct">--</span>%
+                  </span>
+                </div>
               </div>
             </div>
-            <!-- Heap details -->
-            <div class="heap-details-row">
-              <div class="heap-gauge-mini" role="img" aria-label="Heap memory usage" title="Visual gauge of heap utilization. Yellow zone (70-90%) indicates GC pressure. Red zone (>90%) indicates critical memory pressure with risk of OOM.">
-                <svg viewBox="0 0 100 100" aria-hidden="true">
-                  <circle class="gauge-bg" cx="50" cy="50" r="40"/>
-                  <circle class="gauge-threshold warning" cx="50" cy="50" r="40"
-                          stroke-dasharray="251.2" stroke-dashoffset="75.4"/>
-                  <circle class="gauge-threshold critical" cx="50" cy="50" r="40"
-                          stroke-dasharray="251.2" stroke-dashoffset="25.1"/>
-                  <circle class="gauge-fill" id="heap-gauge-fill" cx="50" cy="50" r="40"
-                          stroke-dasharray="251.2" stroke-dashoffset="251.2"/>
-                </svg>
-              </div>
-              <div class="heap-metrics">
-                <div class="metric-row" title="Cumulative memory freed by GC since process start. Compare rate of reclamation vs allocation to assess memory efficiency.">
-                  <span class="metric-label">Reclaimed</span>
-                  <span class="metric-value" id="heap-reclaimed">--</span>
-                </div>
-              </div>
+
+            <!-- Legend -->
+            <div class="heap-legend">
+              <span class="heap-legend-item"><span class="legend-bar fill"></span>current</span>
+              <span class="heap-legend-item"><span class="legend-marker hwm"></span>high water mark</span>
+              <span class="heap-legend-item"><span class="legend-marker threshold"></span>gc threshold</span>
+              <span class="heap-legend-item reclaimed">reclaimed: <span id="heap-reclaimed">--</span></span>
             </div>
           </div>
         </div>

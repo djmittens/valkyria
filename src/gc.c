@@ -1392,8 +1392,19 @@ void valk_gc_get_runtime_metrics(valk_gc_malloc_heap_t* heap,
   if (pause_us_total) *pause_us_total = atomic_load(&heap->runtime_metrics.pause_us_total);
   if (pause_us_max) *pause_us_max = atomic_load(&heap->runtime_metrics.pause_us_max);
   if (reclaimed) *reclaimed = atomic_load(&heap->runtime_metrics.reclaimed_bytes_total);
-  if (heap_used) *heap_used = heap->allocated_bytes;
-  if (heap_total) *heap_total = heap->hard_limit;
+
+  // Combined slab + malloc usage for total heap metrics
+  size_t slab_bytes_used = 0;
+  size_t slab_bytes_total = 0;
+  if (heap->lval_slab) {
+    size_t slab_used = heap->lval_slab->numItems - heap->lval_slab->numFree;
+    size_t item_size = heap->lval_slab->itemSize;
+    slab_bytes_used = slab_used * item_size;
+    slab_bytes_total = heap->lval_slab->numItems * item_size;
+  }
+
+  if (heap_used) *heap_used = slab_bytes_used + heap->allocated_bytes;
+  if (heap_total) *heap_total = slab_bytes_total + heap->hard_limit;
 }
 
 // ============================================================================

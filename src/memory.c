@@ -227,6 +227,7 @@ void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
   __atomic_store_n(&self->head, 0, __ATOMIC_RELAXED);
   __atomic_store_n(&self->numFree, numItems, __ATOMIC_RELAXED);
   __atomic_store_n(&self->overflowCount, 0, __ATOMIC_RELAXED);
+  __atomic_store_n(&self->peakUsed, 0, __ATOMIC_RELAXED);
 }
 
 // TODO(networking): do we even need this? might be useful for debugging
@@ -301,6 +302,15 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   res = valk_slab_item_at(self, head);
   // printf("Slab Aquired %ld %p\n", head, res->data);
 
+  // Update peak usage (high water mark) tracking
+  size_t used = self->numItems - __atomic_load_n(&self->numFree, __ATOMIC_RELAXED);
+  size_t current_peak;
+  do {
+    current_peak = __atomic_load_n(&self->peakUsed, __ATOMIC_RELAXED);
+    if (used <= current_peak) break;
+  } while (!__atomic_compare_exchange_n(&self->peakUsed, &current_peak, used,
+                                        false, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
+
   return res;
 
 #else  // Not threadsafe
@@ -323,6 +333,12 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   const size_t swapTo = ((size_t *)self->heap)[0];
   VALK_TRACE("Acquiring slab: handle=%ld idx=%ld swap=%ld", res->handle, offset,
          swapTo);
+
+  // Update peak usage (high water mark) tracking
+  size_t used = self->numItems - self->numFree;
+  if (used > self->peakUsed) {
+    self->peakUsed = used;
+  }
 #endif
   return res;
 }

@@ -207,6 +207,7 @@ typedef struct {  // extends valk_mem_allocator_t;
   size_t itemSize;
   size_t numItems;
   size_t numFree;
+  size_t peakUsed;  // High water mark: max (numItems - numFree) ever observed
   uint64_t overflowCount;
   uint64_t head;
   // treiber list top
