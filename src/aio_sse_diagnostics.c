@@ -10,6 +10,7 @@
 #include "aio.h"
 #include "aio_alloc.h"
 #include "aio_metrics.h"
+#include "aio_sse_stream_registry.h"
 #include "common.h"
 #include "gc.h"
 #include "log.h"
@@ -1259,6 +1260,19 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
     p += n;
   }
 
+  // SSE registry stats (long-lived diagnostic streams - separate from HTTP requests)
+  valk_sse_stream_registry_t *sse_registry = valk_aio_get_sse_registry(aio);
+  if (sse_registry) {
+    n = snprintf(p, end - p,
+                 "\"sse\":{\"streams_active\":%zu,"
+                 "\"events_pushed_total\":%lu,\"bytes_pushed_total\":%lu},",
+                 sse_registry->stream_count,
+                 sse_registry->events_pushed_total,
+                 sse_registry->bytes_pushed_total);
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+  }
+
   // Modular metrics (HTTP server counters, gauges, histograms)
   // Use a heap-allocated buffer since metrics can be large during stress tests
   size_t modular_buf_size = 131072;  // 128KB for modular metrics
@@ -1740,6 +1754,21 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
         conn->prev_metrics.requests_total = requests;
         conn->prev_metrics.connections_total = atomic_load(&aio_metrics->connections_total);
       }
+    }
+
+    // SSE registry stats (always include for real-time dashboard stream count)
+    valk_sse_stream_registry_t *sse_registry = valk_aio_get_sse_registry(aio);
+    if (sse_registry) {
+      n = snprintf(p, end - p,
+                   "%s\"sse\":{\"streams_active\":%zu,"
+                   "\"events_pushed_total\":%lu,\"bytes_pushed_total\":%lu}",
+                   metrics_need_comma ? "," : "",
+                   sse_registry->stream_count,
+                   sse_registry->events_pushed_total,
+                   sse_registry->bytes_pushed_total);
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+      metrics_need_comma = true;
     }
 
     // Modular metrics delta (counters, gauges, histograms)

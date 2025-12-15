@@ -553,25 +553,28 @@ void valk_sse_registry_unsubscribe(valk_sse_stream_registry_t *registry,
   VALK_INFO("SSE registry: stream unsubscribed (remaining=%zu)", registry->stream_count);
 }
 
-void valk_sse_registry_unsubscribe_connection(
+size_t valk_sse_registry_unsubscribe_connection(
     valk_sse_stream_registry_t *registry,
     valk_aio_handle_t *handle) {
 
   if (!registry || !handle) {
-    return;
+    return 0;
   }
 
   VALK_INFO("SSE registry: unsubscribing all streams for handle %p", (void*)handle);
 
   // Find all streams for this handle
+  size_t count = 0;
   valk_sse_stream_entry_t *entry = registry->streams;
   while (entry) {
     valk_sse_stream_entry_t *next = entry->next;
     if (entry->handle == handle) {
       valk_sse_registry_unsubscribe(registry, entry);
+      count++;
     }
     entry = next;
   }
+  return count;
 }
 
 valk_sse_stream_entry_t* valk_sse_registry_find_by_stream(

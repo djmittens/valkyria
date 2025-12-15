@@ -38,6 +38,150 @@
     return adaptiveInterval.slow;
   }
 
+  // ==================== Phase 1: Core Infrastructure ====================
+  // Generic circular buffer for sparkline history
+  function createHistoryBuffer(maxSize) {
+    return {
+      data: [],
+      maxSize: maxSize || 60,
+      push: function(value) {
+        this.data.push(value);
+        if (this.data.length > this.maxSize) {
+          this.data.shift();
+        }
+      },
+      toArray: function() {
+        return this.data.slice();
+      },
+      last: function() {
+        return this.data[this.data.length - 1];
+      }
+    };
+  }
+
+  // Per-entity history storage
+  var entityHistory = {
+    // 'http-server:api:8443': { requestRate: buffer, errorRate: buffer, p50: buffer, ... }
+  };
+
+  function getEntityHistory(type, key) {
+    var id = type + ':' + key;
+    if (!entityHistory[id]) {
+      entityHistory[id] = {
+        requestRate: createHistoryBuffer(60),
+        errorRate: createHistoryBuffer(60),
+        p50: createHistoryBuffer(60),
+        p95: createHistoryBuffer(60),
+        p99: createHistoryBuffer(60),
+        bytesIn: createHistoryBuffer(60),
+        bytesOut: createHistoryBuffer(60),
+        statusCodes: createHistoryBuffer(20) // { s2xx, s4xx, s5xx }
+      };
+    }
+    return entityHistory[id];
+  }
+
+  // SVG-based mini sparkline renderer (48x16 px default)
+  function renderMiniSparkline(container, data, options) {
+    if (!container || !data || data.length < 2) {
+      if (container) container.innerHTML = '';
+      return;
+    }
+
+    var opts = options || {};
+    var width = opts.width || 48;
+    var height = opts.height || 16;
+    var color = opts.color || 'var(--color-info)';
+    var fillOpacity = opts.fillOpacity || 0.2;
+    var strokeWidth = opts.strokeWidth || 1.5;
+
+    var max = Math.max.apply(null, data);
+    var min = opts.minValue !== undefined ? opts.minValue : Math.min.apply(null, data);
+    var range = max - min || 1;
+
+    var points = data.map(function(v, i) {
+      var x = (i / (data.length - 1)) * width;
+      var y = height - 2 - ((v - min) / range) * (height - 4);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+
+    var areaPoints = points + ' ' + width + ',' + height + ' 0,' + height;
+
+    container.innerHTML =
+      '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
+      '<polygon points="' + areaPoints + '" fill="' + color + '" opacity="' + fillOpacity + '"/>' +
+      '<polyline points="' + points + '" fill="none" stroke="' + color + '" stroke-width="' + strokeWidth + '" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '</svg>';
+  }
+
+  // Multi-line sparkline for P50/P95/P99 trends (120x32 px default)
+  function renderPercentileSparkline(container, history, options) {
+    if (!container || !history.p50 || history.p50.length < 2) {
+      if (container) container.innerHTML = '';
+      return;
+    }
+
+    var opts = options || {};
+    var width = opts.width || 120;
+    var height = opts.height || 32;
+
+    var allData = history.p50.concat(history.p95).concat(history.p99);
+    var max = Math.max.apply(null, allData) || 1;
+    var min = 0;
+
+    function pathFor(data, color, strokeWidth) {
+      if (data.length < 2) return '';
+      var points = data.map(function(v, i) {
+        var x = (i / (data.length - 1)) * width;
+        var y = height - ((v - min) / (max - min)) * (height - 4) - 2;
+        return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      return '<path d="' + points + '" fill="none" stroke="' + color + '" stroke-width="' + strokeWidth + '" opacity="0.9"/>';
+    }
+
+    container.innerHTML =
+      '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
+      pathFor(history.p99, 'var(--color-error)', 1) +
+      pathFor(history.p95, 'var(--color-warning)', 1.2) +
+      pathFor(history.p50, 'var(--color-ok)', 1.5) +
+      '</svg>';
+  }
+
+  // Stacked bar sparkline for status codes (60x20 px default)
+  function renderStatusCodeSparkline(container, history, options) {
+    if (!container || !history || history.length < 2) {
+      if (container) container.innerHTML = '';
+      return;
+    }
+
+    var opts = options || {};
+    var width = opts.width || 60;
+    var height = opts.height || 20;
+    var barWidth = width / history.length;
+
+    var bars = history.map(function(d, i) {
+      var total = d.s2xx + d.s4xx + d.s5xx;
+      if (total === 0) return '';
+
+      var x = i * barWidth;
+      var h2xx = (d.s2xx / total) * height;
+      var h4xx = (d.s4xx / total) * height;
+      var h5xx = (d.s5xx / total) * height;
+
+      var y2xx = 0;
+      var y4xx = h2xx;
+      var y5xx = h2xx + h4xx;
+
+      return '<g>' +
+        '<rect x="' + x + '" y="' + y2xx + '" width="' + (barWidth - 0.5) + '" height="' + h2xx + '" fill="var(--color-ok)"/>' +
+        '<rect x="' + x + '" y="' + y4xx + '" width="' + (barWidth - 0.5) + '" height="' + h4xx + '" fill="var(--color-warning)"/>' +
+        '<rect x="' + x + '" y="' + y5xx + '" width="' + (barWidth - 0.5) + '" height="' + h5xx + '" fill="var(--color-error)"/>' +
+        '</g>';
+    }).join('');
+
+    container.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '">' + bars + '</svg>';
+  }
+
   // ==================== RLE Decoder ====================
   // Decodes RLE-encoded state string: "F16A3I2" -> "FFFFFFFFFFFFFFFFAAAII"
   function decodeRLE(rleStr) {
@@ -1261,6 +1405,7 @@
           key: key,
           server: labels.server,
           port: labels.port,
+          loop: labels.loop || 'main',  // AIO system ownership
           counters: [],
           gauges: [],
           histograms: []
@@ -1350,30 +1495,87 @@
   }
 
   // ==================== Rendering: Sparklines ====================
-  function renderMiniSparkline(containerId, data, color) {
+  // Legacy wrapper for backward compatibility (old signature: containerId, data, color)
+  // New code should use the Phase 1 renderMiniSparkline(container, data, options) directly
+  function renderMiniSparklineLegacy(containerId, data, color) {
     var container = $(containerId);
-    if (!container || !data || data.length < 2) return;
+    if (!container) return;
+    // Call the new function with converted parameters
+    renderMiniSparkline(container, data, {
+      width: 48,
+      height: 20,
+      color: color || 'var(--color-info)',
+      fillOpacity: 0.2,
+      strokeWidth: 1.5
+    });
+  }
 
-    var width = 48;
-    var height = 20;
-    var max = Math.max.apply(null, data);
-    var min = Math.min.apply(null, data);
-    var range = max - min || 1;
+  // Render multi-line percentile sparkline showing P50/P95/P99 trends
+  function renderPercentileSparkline(container, history, options) {
+    if (!container || !history.p50 || history.p50.data.length < 2) {
+      container.innerHTML = '';
+      return;
+    }
 
-    var points = data.map(function(v, i) {
-      var x = (i / (data.length - 1)) * width;
-      var y = height - 2 - ((v - min) / range) * (height - 4);
-      return x + ',' + y;
-    }).join(' ');
+    var opts = options || {};
+    var width = opts.width || 120;
+    var height = opts.height || 32;
 
-    // Area fill points (close the polygon at bottom)
-    var areaPoints = points + ' ' + width + ',' + height + ' 0,' + height;
+    var allData = history.p50.data.concat(history.p95.data).concat(history.p99.data);
+    var max = Math.max.apply(null, allData) || 1;
+    var min = 0;
+
+    function pathFor(data, color, strokeWidth) {
+      if (data.length < 2) return '';
+      var points = data.map(function(v, i) {
+        var x = (i / (data.length - 1)) * width;
+        var y = height - ((v - min) / (max - min)) * (height - 4) - 2;
+        return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      return '<path d="' + points + '" fill="none" stroke="' + color + '" stroke-width="' + strokeWidth + '" opacity="0.9"/>';
+    }
 
     container.innerHTML =
       '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
-      '<polygon points="' + areaPoints + '" fill="' + color + '" opacity="0.2"/>' +
-      '<polyline points="' + points + '" fill="none" stroke="' + color + '" stroke-width="1.5"/>' +
+      pathFor(history.p99.data, 'var(--color-error)', 1) +
+      pathFor(history.p95.data, 'var(--color-warning)', 1.2) +
+      pathFor(history.p50.data, 'var(--color-ok)', 1.5) +
       '</svg>';
+  }
+
+  // Render stacked bar sparkline showing 2xx/4xx/5xx status codes over time
+  function renderStatusCodeSparkline(container, history, options) {
+    if (!container || !history || history.length < 2) {
+      container.innerHTML = '';
+      return;
+    }
+
+    var opts = options || {};
+    var width = opts.width || 60;
+    var height = opts.height || 20;
+    var barWidth = width / history.length;
+
+    var bars = history.map(function(d, i) {
+      var total = d.s2xx + d.s4xx + d.s5xx;
+      if (total === 0) return '';
+
+      var x = i * barWidth;
+      var h2xx = (d.s2xx / total) * height;
+      var h4xx = (d.s4xx / total) * height;
+      var h5xx = (d.s5xx / total) * height;
+
+      var y2xx = 0;
+      var y4xx = h2xx;
+      var y5xx = h2xx + h4xx;
+
+      return '<g>' +
+        '<rect x="' + x + '" y="' + y2xx + '" width="' + (barWidth - 0.5) + '" height="' + h2xx + '" fill="var(--color-ok)"/>' +
+        '<rect x="' + x + '" y="' + y4xx + '" width="' + (barWidth - 0.5) + '" height="' + h4xx + '" fill="var(--color-warning)"/>' +
+        '<rect x="' + x + '" y="' + y5xx + '" width="' + (barWidth - 0.5) + '" height="' + h5xx + '" fill="var(--color-error)"/>' +
+        '</g>';
+    }).join('');
+
+    container.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '">' + bars + '</svg>';
   }
 
   // ==================== Rendering: AIO System Panels ====================
@@ -1591,6 +1793,50 @@
             '<div class="nested-cards-grid aio-sys-clients-container" id="' + id + '-clients-container">' +
               '<!-- Client cards will be injected here -->' +
               '<div class="aio-no-entities" style="color: var(--text-muted); font-size: 12px; padding: var(--space-md);">No HTTP clients</div>' +
+            '</div>' +
+          '</div>' +
+
+          // TCP Servers Section (nested under AIO)
+          '<div class="aio-section-block">' +
+            '<div class="block-header">' +
+              '<span class="block-title">TCP Servers</span>' +
+              '<span class="block-badge aio-sys-tcp-servers-count">-- servers</span>' +
+            '</div>' +
+            '<div class="nested-cards-grid aio-sys-tcp-servers-container" id="' + id + '-tcp-servers-container">' +
+              '<div class="aio-no-entities" style="color: var(--text-muted); font-size: 12px; padding: var(--space-md);">No TCP servers</div>' +
+            '</div>' +
+          '</div>' +
+
+          // TCP Clients Section (nested under AIO)
+          '<div class="aio-section-block">' +
+            '<div class="block-header">' +
+              '<span class="block-title">TCP Clients</span>' +
+              '<span class="block-badge aio-sys-tcp-clients-count">-- clients</span>' +
+            '</div>' +
+            '<div class="nested-cards-grid aio-sys-tcp-clients-container" id="' + id + '-tcp-clients-container">' +
+              '<div class="aio-no-entities" style="color: var(--text-muted); font-size: 12px; padding: var(--space-md);">No TCP clients</div>' +
+            '</div>' +
+          '</div>' +
+
+          // UDP Sockets Section (nested under AIO)
+          '<div class="aio-section-block">' +
+            '<div class="block-header">' +
+              '<span class="block-title">UDP Sockets</span>' +
+              '<span class="block-badge aio-sys-udp-count">-- sockets</span>' +
+            '</div>' +
+            '<div class="nested-cards-grid aio-sys-udp-container" id="' + id + '-udp-container">' +
+              '<div class="aio-no-entities" style="color: var(--text-muted); font-size: 12px; padding: var(--space-md);">No UDP sockets</div>' +
+            '</div>' +
+          '</div>' +
+
+          // File Operations Section (nested under AIO)
+          '<div class="aio-section-block">' +
+            '<div class="block-header">' +
+              '<span class="block-title">File Operations</span>' +
+              '<span class="block-badge aio-sys-file-ops-count">-- ops</span>' +
+            '</div>' +
+            '<div class="nested-cards-grid aio-sys-file-ops-container" id="' + id + '-file-ops-container">' +
+              '<div class="aio-no-entities" style="color: var(--text-muted); font-size: 12px; padding: var(--space-md);">No file operations</div>' +
             '</div>' +
           '</div>' +
 
@@ -1861,13 +2107,40 @@
   // Per-server history for sparklines
   var serverHistory = {};
 
+  // Helper to create circular buffer with last() method
+  function createHistoryBuffer(maxSize) {
+    return {
+      data: [],
+      maxSize: maxSize || 60,
+      push: function(value) {
+        this.data.push(value);
+        if (this.data.length > this.maxSize) {
+          this.data.shift();
+        }
+      },
+      toArray: function() {
+        return this.data.slice();
+      },
+      last: function() {
+        return this.data[this.data.length - 1];
+      },
+      slice: function(start, end) {
+        return this.data.slice(start, end);
+      }
+    };
+  }
+
   function getServerHistory(key) {
     if (!serverHistory[key]) {
       serverHistory[key] = {
         bytesIn: [],
         bytesOut: [],
         prevBytesIn: 0,
-        prevBytesOut: 0
+        prevBytesOut: 0,
+        statusCodes: createHistoryBuffer(20),
+        p50: createHistoryBuffer(60),
+        p95: createHistoryBuffer(60),
+        p99: createHistoryBuffer(60)
       };
     }
     return serverHistory[key];
@@ -1875,8 +2148,11 @@
 
   function createServerCard(serverInfo) {
     var card = document.createElement('article');
-    card.className = 'entity-card';
+    card.className = 'entity-card collapsed';
     card.id = 'server-' + serverInfo.key.replace(/[:.]/g, '-');
+    card.setAttribute('tabindex', '0');
+    card.setAttribute('role', 'article');
+    card.setAttribute('aria-expanded', 'false');
 
     card.innerHTML = `
       <div class="entity-header">
@@ -1888,12 +2164,22 @@
             <div class="entity-stat-value active-conns">--</div>
             <div class="entity-stat-label">Conns</div>
           </div>
+          <div class="entity-stat sse-stat" title="Active Server-Sent Events (SSE) streams. Long-lived connections for real-time data push (e.g., dashboard metrics). Not counted in regular request metrics.">
+            <div class="entity-stat-value sse-streams">0</div>
+            <div class="entity-stat-label">SSE</div>
+          </div>
           <div class="entity-stat" title="Requests per second on this server. Compare with historical baseline to detect anomalies. Sudden drops may indicate upstream issues.">
             <div class="entity-stat-value req-rate">--/s</div>
             <div class="entity-stat-label">Req</div>
           </div>
         </div>
-        <button class="expand-toggle" onclick="this.closest('.entity-card').classList.toggle('collapsed')" aria-label="Toggle details" title="Expand/collapse card details">▼</button>
+        <div class="entity-summary">
+          <span class="summary-metric req-rate">--/s</span>
+          <span class="summary-metric p99-value">P99:--</span>
+          <span class="summary-metric success-rate">---%</span>
+          <div class="summary-spark" id="${card.id}-summary-spark"></div>
+        </div>
+        <button class="expand-toggle" onclick="toggleEntityCard(this.closest('.entity-card'))" aria-label="Toggle details" title="Expand/collapse card details"><span class="expand-icon">▼</span></button>
       </div>
       <div class="entity-body">
         <!-- Status Codes Section -->
@@ -1918,6 +2204,7 @@
             <div class="status-segment s4xx" style="width: 0%"></div>
             <div class="status-segment s5xx" style="width: 0%"></div>
           </div>
+          <div class="status-code-spark" title="Status code distribution over time"></div>
         </div>
 
         <!-- Latency Section -->
@@ -1945,6 +2232,7 @@
               <span class="percentile-value p99-value">--</span>
             </div>
           </div>
+          <div class="latency-trend-spark" title="Latency trend (P50/P95/P99 over last 60s)"></div>
         </div>
 
         <!-- Throughput Section -->
@@ -2157,6 +2445,7 @@
     var bytesSent = getMetricValue(counters, 'http_bytes_sent_total', {});
     var bytesRecv = getMetricValue(counters, 'http_bytes_recv_total', {});
     var activeConns = getMetricValue(gauges, 'http_connections_active', {});
+    var sseStreams = getMetricValue(gauges, 'http_sse_streams_active', {});
 
     // Calculate request rate
     var prevTotal = card.dataset.prevReqTotal ? parseInt(card.dataset.prevReqTotal) : 0;
@@ -2168,7 +2457,14 @@
 
     // Update header stats
     card.querySelector('.active-conns').textContent = activeConns;
+    card.querySelector('.sse-streams').textContent = sseStreams;
     card.querySelector('.req-rate').textContent = fmt(reqRate, 1) + '/s';
+
+    // Show/hide SSE stat based on whether there are active streams
+    var sseStat = card.querySelector('.sse-stat');
+    if (sseStat) {
+      sseStat.style.display = sseStreams > 0 ? '' : 'none';
+    }
 
     // Update entity status based on error rate
     var errorRate = reqTotal > 0 ? ((req4xx + req5xx) / reqTotal) * 100 : 0;
@@ -2201,11 +2497,12 @@
     renderServerHistogram(histContainer, latencyHist);
 
     // Update percentile values (estimated from histogram if available)
+    var p50 = 0, p95 = 0, p99 = 0;
     if (latencyHist && latencyHist.buckets && latencyHist.count > 0) {
       var buckets = latencyHist.buckets;
-      var p50 = estimatePercentile(buckets, latencyHist.count, 0.50);
-      var p95 = estimatePercentile(buckets, latencyHist.count, 0.95);
-      var p99 = estimatePercentile(buckets, latencyHist.count, 0.99);
+      p50 = estimatePercentile(buckets, latencyHist.count, 0.50);
+      p95 = estimatePercentile(buckets, latencyHist.count, 0.95);
+      p99 = estimatePercentile(buckets, latencyHist.count, 0.99);
 
       var p50El = card.querySelector('.p50-value');
       var p95El = card.querySelector('.p95-value');
@@ -2215,8 +2512,41 @@
       if (p99El) p99El.textContent = fmtLatency(p99);
     }
 
-    // Update throughput sparkline
+    // Track status code history for sparkline
     var hist = getServerHistory(serverInfo.key);
+    var prev = hist.statusCodes.last() || { s2xx: 0, s4xx: 0, s5xx: 0, total2xx: 0, total4xx: 0, total5xx: 0 };
+    var delta2xx = req2xx - (prev.total2xx || 0);
+    var delta4xx = req4xx - (prev.total4xx || 0);
+    var delta5xx = req5xx - (prev.total5xx || 0);
+
+    hist.statusCodes.push({
+      s2xx: Math.max(0, delta2xx),
+      s4xx: Math.max(0, delta4xx),
+      s5xx: Math.max(0, delta5xx),
+      total2xx: req2xx,
+      total4xx: req4xx,
+      total5xx: req5xx
+    });
+
+    // Track latency history for trend sparkline (convert to ms)
+    hist.p50.push((p50 || 0) * 1000);
+    hist.p95.push((p95 || 0) * 1000);
+    hist.p99.push((p99 || 0) * 1000);
+
+    // Render status code sparkline
+    var statusSparkContainer = card.querySelector(".status-code-spark");
+    if (statusSparkContainer && hist.statusCodes.data.length >= 2) {
+      renderStatusCodeSparkline(statusSparkContainer, hist.statusCodes.toArray());
+    }
+
+    // Render latency trend sparkline
+    var latencyTrendContainer = card.querySelector(".latency-trend-spark");
+    if (latencyTrendContainer && hist.p50.data.length >= 2) {
+      renderPercentileSparkline(latencyTrendContainer, hist);
+    }
+
+    // Update throughput sparkline
+    // hist already retrieved above for sparklines
     var bytesInRate = deltaSeconds > 0 ? (bytesRecv - hist.prevBytesIn) / deltaSeconds : 0;
     var bytesOutRate = deltaSeconds > 0 ? (bytesSent - hist.prevBytesOut) / deltaSeconds : 0;
 
@@ -2235,6 +2565,40 @@
     var outRateEl = card.querySelector('.bytes-out-rate');
     if (inRateEl) inRateEl.textContent = fmtRate(Math.max(0, bytesInRate));
     if (outRateEl) outRateEl.textContent = fmtRate(Math.max(0, bytesOutRate));
+
+    // Update summary metrics (for collapsed view)
+    var summaryRate = card.querySelector('.entity-summary .req-rate');
+    var summaryP99 = card.querySelector('.entity-summary .p99-value');
+    var summarySuccess = card.querySelector('.entity-summary .success-rate');
+    var summarySpark = card.querySelector('.summary-spark');
+
+    if (summaryRate) {
+      summaryRate.textContent = fmt(reqRate, 1) + '/s';
+    }
+
+    if (summaryP99 && p99 !== undefined) {
+      summaryP99.textContent = 'P99:' + fmtLatency(p99);
+    }
+
+    if (summarySuccess) {
+      var successRate = reqTotal > 0 ? ((req2xx / reqTotal) * 100) : 100;
+      summarySuccess.textContent = successRate.toFixed(1) + '%';
+      summarySuccess.className = 'summary-metric success-rate';
+      if (successRate < 95) summarySuccess.classList.add('error');
+      else if (successRate < 99) summarySuccess.classList.add('warning');
+    }
+
+    // Update summary sparkline
+    if (summarySpark) {
+      hist.p50.push(p50 * 1000);
+      hist.p95.push(p95 * 1000);
+      hist.p99.push(p99 * 1000);
+      renderMiniSparkline(summarySpark, hist.p99.toArray(), {
+        color: 'var(--color-info)',
+        width: 60,
+        height: 16
+      });
+    }
   }
 
   // Estimate percentile from histogram buckets (cumulative format)
@@ -2265,77 +2629,122 @@
     return 0;
   }
 
-  function renderHttpServers(servers, deltaSeconds) {
-    // Phase 2: Render server cards into AIO panel's nested container
-    // Find all AIO panels and their server containers
-    var aioServerContainers = document.querySelectorAll('.aio-sys-servers-container');
+  function updateAggregateHealth(servers) {
+    var okCount = 0;
+    var warnCount = 0;
+    var errorCount = 0;
+    var totalOps = 0;
+    var totalReq2xx = 0;
+    var totalReq4xx = 0;
+    var totalReq5xx = 0;
+    var maxP99 = 0;
+
     var serverKeys = Object.keys(servers);
 
-    // For now, render all servers into the first AIO panel (single-system case)
-    // Future: match servers to their owning AIO system
-    var container = aioServerContainers.length > 0 ? aioServerContainers[0] : null;
-
-    if (!container) {
-      // No AIO panels yet, skip rendering
-      return;
-    }
-
-    // Hide "no servers" placeholder if we have servers
-    var noServersEl = container.querySelector('.aio-no-entities');
-    if (serverKeys.length === 0) {
-      if (noServersEl) noServersEl.style.display = 'block';
-      // Remove old server cards
-      for (var key in serverCards) {
-        if (serverCards[key].parentNode) {
-          serverCards[key].parentNode.removeChild(serverCards[key]);
-        }
-      }
-      serverCards = {};
-      return;
-    }
-
-    if (noServersEl) noServersEl.style.display = 'none';
-
-    // Update or create server cards
     serverKeys.forEach(function(key) {
-      var serverInfo = servers[key];
-      var cardId = 'server-' + key.replace(/[:.]/g, '-');
+      var srv = servers[key];
 
-      if (!serverCards[key]) {
-        serverCards[key] = createServerCard(serverInfo);
-        container.appendChild(serverCards[key]);
+      var req2xx = getMetricValue(srv.counters, 'http_requests_total', {status: '2xx'});
+      var req4xx = getMetricValue(srv.counters, 'http_requests_total', {status: '4xx'});
+      var req5xx = getMetricValue(srv.counters, 'http_requests_total', {status: '5xx'});
+      var reqTotal = req2xx + req4xx + req5xx;
+
+      var errorRate = reqTotal > 0 ? ((req4xx + req5xx) / reqTotal) * 100 : 0;
+
+      if (errorRate > 5) {
+        errorCount++;
+      } else if (errorRate > 1) {
+        warnCount++;
+      } else {
+        okCount++;
       }
 
-      updateServerCard(serverCards[key], serverInfo, deltaSeconds);
+      totalReq2xx += req2xx;
+      totalReq4xx += req4xx;
+      totalReq5xx += req5xx;
+
+      var hist = findMetric(srv.histograms, 'http_request_duration_seconds', {});
+      if (hist && hist.p99_us) {
+        var p99Ms = hist.p99_us / 1000;
+        maxP99 = Math.max(maxP99, p99Ms);
+      }
     });
 
-    // Remove cards for servers that no longer exist
-    for (var key in serverCards) {
-      if (!servers[key]) {
-        if (serverCards[key].parentNode) {
-          serverCards[key].parentNode.removeChild(serverCards[key]);
-        }
-        delete serverCards[key];
-      }
-    }
+    totalOps = totalReq2xx + totalReq4xx + totalReq5xx;
+    var aggregateErrorRate = totalOps > 0 ? ((totalReq4xx + totalReq5xx) / totalOps) * 100 : 0;
 
-    // Update AIO panel badges for server count and rate
-    var aioPanel = container.closest('.aio-system-panel');
-    if (aioPanel) {
-      var serverCountBadge = aioPanel.querySelector('.aio-sys-servers-count');
-      var serverRateBadge = aioPanel.querySelector('.aio-sys-servers-rate');
-      var panelServersBadge = aioPanel.querySelector('.aio-sys-servers');
+    $('aio-ok-count').textContent = okCount;
+    $('aio-warn-count').textContent = warnCount;
+    $('aio-error-count').textContent = errorCount;
+    $('aio-total-ops').textContent = fmtCompact(totalOps);
+    $('aio-error-rate').textContent = aggregateErrorRate.toFixed(2);
+    $('aio-p99').textContent = maxP99 > 0 ? fmt(maxP99, 1) : '0';
+  }
+
+  function renderHttpServers(servers, deltaSeconds) {
+    var serverKeys = Object.keys(servers);
+
+    // Group servers by their owning AIO system (loop label)
+    var serversByLoop = {};
+    serverKeys.forEach(function(key) {
+      var srv = servers[key];
+      var loop = srv.loop || 'main';
+      if (!serversByLoop[loop]) {
+        serversByLoop[loop] = {};
+      }
+      serversByLoop[loop][key] = srv;
+    });
+
+    // Track which loops have servers for "no servers" placeholder visibility
+    var loopsWithServers = Object.keys(serversByLoop);
+
+    // Iterate through each AIO system panel and render its servers
+    for (var loopName in aioSystemPanels) {
+      var panel = aioSystemPanels[loopName];
+      var container = panel.querySelector('.aio-sys-servers-container');
+      if (!container) continue;
+
+      var loopServers = serversByLoop[loopName] || {};
+      var loopServerKeys = Object.keys(loopServers);
+
+      // Handle "no servers" placeholder
+      var noServersEl = container.querySelector('.aio-no-entities');
+      if (loopServerKeys.length === 0) {
+        if (noServersEl) noServersEl.style.display = 'block';
+      } else {
+        if (noServersEl) noServersEl.style.display = 'none';
+      }
+
+      // Update or create server cards for this loop
+      loopServerKeys.forEach(function(key) {
+        var serverInfo = loopServers[key];
+
+        if (!serverCards[key]) {
+          serverCards[key] = createServerCard(serverInfo);
+          container.appendChild(serverCards[key]);
+        } else if (serverCards[key].parentNode !== container) {
+          // Card exists but in wrong container, move it
+          container.appendChild(serverCards[key]);
+        }
+
+        updateServerCard(serverCards[key], serverInfo, deltaSeconds);
+      });
+
+      // Update AIO panel badges for server count and rate
+      var serverCountBadge = panel.querySelector('.aio-sys-servers-count');
+      var serverRateBadge = panel.querySelector('.aio-sys-servers-rate');
+      var panelServersBadge = panel.querySelector('.aio-sys-servers');
 
       if (serverCountBadge) {
-        serverCountBadge.textContent = serverKeys.length + ' server' + (serverKeys.length !== 1 ? 's' : '');
+        serverCountBadge.textContent = loopServerKeys.length + ' server' + (loopServerKeys.length !== 1 ? 's' : '');
       }
       if (panelServersBadge) {
-        panelServersBadge.textContent = serverKeys.length + ' servers';
+        panelServersBadge.textContent = loopServerKeys.length + ' servers';
       }
 
-      // Calculate total request rate from all server cards
+      // Calculate total request rate for this loop's servers
       var totalRate = 0;
-      serverKeys.forEach(function(key) {
+      loopServerKeys.forEach(function(key) {
         var card = serverCards[key];
         if (card) {
           var rateEl = card.querySelector('.req-rate');
@@ -2352,9 +2761,18 @@
       }
     }
 
+    // Remove cards for servers that no longer exist
+    for (var key in serverCards) {
+      if (!servers[key]) {
+        if (serverCards[key].parentNode) {
+          serverCards[key].parentNode.removeChild(serverCards[key]);
+        }
+        delete serverCards[key];
+      }
+    }
+
     // Update global section badges
     var globalCountBadge = $('http-servers-count');
-    var globalRateBadge = $('http-total-rate');
     if (globalCountBadge) {
       globalCountBadge.textContent = serverKeys.length + ' server' + (serverKeys.length !== 1 ? 's' : '');
     }
@@ -2434,10 +2852,10 @@
     $('health-heap-pct').textContent = fmt(heapPct, 0);
 
     // Render mini sparklines
-    renderMiniSparkline('spark-request-rate', history.requestRate.slice(-20), 'var(--color-info)');
-    renderMiniSparkline('spark-error-rate', history.errorRate.slice(-20), 'var(--color-warning)');
-    renderMiniSparkline('spark-latency', history.latency.slice(-20), 'var(--color-cyan)');
-    renderMiniSparkline('spark-heap', history.heapUsage.slice(-20), 'var(--color-ok)');
+    renderMiniSparklineLegacy('spark-request-rate', history.requestRate.slice(-20), 'var(--color-info)');
+    renderMiniSparklineLegacy('spark-error-rate', history.errorRate.slice(-20), 'var(--color-warning)');
+    renderMiniSparklineLegacy('spark-latency', history.latency.slice(-20), 'var(--color-cyan)');
+    renderMiniSparklineLegacy('spark-heap', history.heapUsage.slice(-20), 'var(--color-ok)');
 
     // Update health metric value colors based on thresholds
     function updateHealthMetricColor(el, value, warningThreshold, criticalThreshold) {
@@ -2515,6 +2933,9 @@
       }];
     }
     renderAioSystems(aioSystems);
+
+    // ========== Aggregate Health Bar ==========
+    updateAggregateHealth(servers);
 
     // ========== HTTP Servers Section ==========
     renderHttpServers(servers, deltaSeconds);
@@ -2980,6 +3401,12 @@
           }
         }
 
+        // Apply SSE registry stats (long-lived diagnostic streams)
+        if (delta.metrics.sse) {
+          if (!metrics.sse) metrics.sse = {};
+          Object.assign(metrics.sse, delta.metrics.sse);
+        }
+
         // Apply registry stats (meta-metrics) - these are absolute values
         if (delta.metrics.registry) {
           metrics.registry = delta.metrics.registry;
@@ -3439,6 +3866,15 @@
           connections: dashboardData.aio_metrics.connections,
           queue: dashboardData.aio_metrics.queue
         }];
+      }
+
+      // Add SSE registry metrics (long-lived diagnostic streams)
+      if (metrics.sse) {
+        dashboardData.sse_metrics = {
+          streams_active: metrics.sse.streams_active || 0,
+          events_pushed_total: metrics.sse.events_pushed_total || 0,
+          bytes_pushed_total: metrics.sse.bytes_pushed_total || 0
+        };
       }
 
       // Call the main dashboard update function
@@ -3991,4 +4427,381 @@
 
   document.addEventListener('DOMContentLoaded', restorePanelStates);
   document.addEventListener('DOMContentLoaded', restoreBreakdownState);
+})();
+
+// ==================== PHASE 7: I/O Entity Cards ====================
+// Note: I/O sections (TCP, UDP, Files) are now nested inside each AIO system panel
+// These card creation functions are used when real data becomes available
+(function() {
+  'use strict';
+
+  // TCP Server Card
+  function createTcpServerCard(info) {
+    var card = document.createElement('article');
+    card.className = 'entity-card tcp-server collapsed';
+    card.id = 'tcp-server-' + info.port;
+
+    card.innerHTML =
+      '<div class="entity-header" onclick="toggleEntityCard(this.parentElement)">' +
+      '<div class="entity-status ok"><span class="status-shape">●</span></div>' +
+      '<h3 class="entity-name">:' + info.port + '</h3>' +
+      '<div class="entity-label">TCP</div>' +
+      '<div class="entity-summary">' +
+      '<span class="summary-metric conn-count">-- conn</span>' +
+      '<span class="summary-metric accept-rate">--/s</span>' +
+      '<div class="summary-spark"></div>' +
+      '</div>' +
+      '<button class="expand-toggle"><span class="expand-icon">▼</span></button>' +
+      '</div>' +
+      '<div class="entity-body">' +
+      '<div class="entity-section">' +
+      '<div class="entity-section-title">Connections</div>' +
+      '<div class="tcp-conn-stats">' +
+      '<span class="tcp-stat">●<span class="active-count">--</span> active</span>' +
+      '<span class="tcp-stat">○<span class="idle-count">--</span> idle</span>' +
+      '<span class="tcp-stat">◐<span class="closing-count">--</span> closing</span>' +
+      '</div>' +
+      '</div>' +
+      '<div class="entity-section">' +
+      '<div class="entity-section-title">Throughput</div>' +
+      '<div class="sparkline-container">' +
+      '<div class="sparkline tcp-throughput-spark"></div>' +
+      '</div>' +
+      '<div class="tcp-throughput-stats">' +
+      '<span>In: <span class="bytes-in">--</span>/s</span>' +
+      '<span>Out: <span class="bytes-out">--</span>/s</span>' +
+      '</div>' +
+      '</div>' +
+      '</div>';
+
+    return card;
+  }
+
+  // TCP Client Card
+  function createTcpClientCard(info) {
+    var card = document.createElement('article');
+    card.className = 'entity-card tcp-client collapsed';
+    card.id = 'tcp-client-' + info.name.replace(/[^a-z0-9]/gi, '-');
+
+    card.innerHTML =
+      '<div class="entity-header" onclick="toggleEntityCard(this.parentElement)">' +
+      '<div class="entity-status ok"><span class="status-shape">●</span></div>' +
+      '<h3 class="entity-name">' + info.name + '</h3>' +
+      '<div class="entity-label">TCP Client</div>' +
+      '<div class="entity-summary">' +
+      '<span class="summary-metric conn-count">-- conn</span>' +
+      '<span class="summary-metric latency">P99:--</span>' +
+      '<div class="summary-spark"></div>' +
+      '</div>' +
+      '<button class="expand-toggle"><span class="expand-icon">▼</span></button>' +
+      '</div>' +
+      '<div class="entity-body">' +
+      '<div class="entity-section">' +
+      '<div class="entity-section-title">Connection Pool</div>' +
+      '<div class="tcp-pool-bar">' +
+      '<div class="tcp-pool-fill" style="width: 0%"></div>' +
+      '</div>' +
+      '<div class="tcp-pool-stats">' +
+      '<span><span class="pool-active">--</span>/<span class="pool-max">--</span> connections</span>' +
+      '</div>' +
+      '</div>' +
+      '<div class="entity-section">' +
+      '<div class="entity-section-title">Latency</div>' +
+      '<div class="tcp-latency-stats">' +
+      '<span>P50: <span class="p50">--</span></span>' +
+      '<span>P99: <span class="p99">--</span></span>' +
+      '</div>' +
+      '<div class="latency-trend-spark"></div>' +
+      '</div>' +
+      '</div>';
+
+    return card;
+  }
+
+  // UDP Socket Card
+  function createUdpSocketCard(info) {
+    var card = document.createElement('article');
+    card.className = 'entity-card udp-socket collapsed';
+    card.id = 'udp-' + info.name.replace(/[^a-z0-9]/gi, '-');
+
+    card.innerHTML =
+      '<div class="entity-header" onclick="toggleEntityCard(this.parentElement)">' +
+      '<div class="entity-status ok"><span class="status-shape">●</span></div>' +
+      '<h3 class="entity-name">' + info.name + '</h3>' +
+      '<div class="entity-label">UDP</div>' +
+      '<div class="entity-summary">' +
+      '<span class="summary-metric recv-rate">--/s ↓</span>' +
+      '<span class="summary-metric send-rate">--/s ↑</span>' +
+      '<span class="summary-metric loss-rate">--% loss</span>' +
+      '<div class="summary-spark"></div>' +
+      '</div>' +
+      '<button class="expand-toggle"><span class="expand-icon">▼</span></button>' +
+      '</div>' +
+      '<div class="entity-body">' +
+      '<div class="entity-section">' +
+      '<div class="entity-section-title">Packet Statistics</div>' +
+      '<div class="udp-stats-grid">' +
+      '<div class="udp-stat">' +
+      '<div class="udp-stat-value recv-total">--</div>' +
+      '<div class="udp-stat-label">Recv Total</div>' +
+      '</div>' +
+      '<div class="udp-stat">' +
+      '<div class="udp-stat-value send-total">--</div>' +
+      '<div class="udp-stat-label">Send Total</div>' +
+      '</div>' +
+      '<div class="udp-stat">' +
+      '<div class="udp-stat-value dropped">--</div>' +
+      '<div class="udp-stat-label">Dropped</div>' +
+      '</div>' +
+      '<div class="udp-stat">' +
+      '<div class="udp-stat-value loss-pct">--%</div>' +
+      '<div class="udp-stat-label">Loss Rate</div>' +
+      '</div>' +
+      '</div>' +
+      '</div>' +
+      '<div class="entity-section">' +
+      '<div class="entity-section-title">Throughput</div>' +
+      '<div class="sparkline-container">' +
+      '<div class="sparkline udp-throughput-spark"></div>' +
+      '</div>' +
+      '</div>' +
+      '</div>';
+
+    return card;
+  }
+
+  // File I/O Card
+  function createFileIOCard(info) {
+    var card = document.createElement('article');
+    card.className = 'entity-card file-io';
+    card.id = 'file-io-ops';
+
+    card.innerHTML =
+      '<div class="entity-header">' +
+      '<div class="entity-status ok"><span class="status-shape">●</span></div>' +
+      '<h3 class="entity-name">Async File Operations</h3>' +
+      '</div>' +
+      '<div class="entity-body">' +
+      '<div class="file-io-grid">' +
+      '<div class="file-io-row">' +
+      '<span class="file-io-label">Reads</span>' +
+      '<span class="file-io-rate" id="file-read-rate">--/s</span>' +
+      '<div class="file-io-spark" id="file-read-spark"></div>' +
+      '<span class="file-io-throughput" id="file-read-throughput">-- MB/s</span>' +
+      '<span class="file-io-latency">P99: <span id="file-read-p99">--</span></span>' +
+      '</div>' +
+      '<div class="file-io-row">' +
+      '<span class="file-io-label">Writes</span>' +
+      '<span class="file-io-rate" id="file-write-rate">--/s</span>' +
+      '<div class="file-io-spark" id="file-write-spark"></div>' +
+      '<span class="file-io-throughput" id="file-write-throughput">-- MB/s</span>' +
+      '<span class="file-io-latency">P99: <span id="file-write-p99">--</span></span>' +
+      '</div>' +
+      '<div class="file-io-row">' +
+      '<span class="file-io-label">Fsync</span>' +
+      '<span class="file-io-rate" id="file-fsync-rate">--/s</span>' +
+      '<div class="file-io-spark" id="file-fsync-spark"></div>' +
+      '<span class="file-io-throughput">--</span>' +
+      '<span class="file-io-latency">P99: <span id="file-fsync-p99">--</span></span>' +
+      '</div>' +
+      '</div>' +
+      '<div class="file-io-pending">' +
+      'Open FDs: <span id="file-open-fds">--</span>' +
+      '&nbsp;│&nbsp;' +
+      'Pending: <span id="file-pending-reads">--</span> read, ' +
+      '<span id="file-pending-writes">--</span> write' +
+      '</div>' +
+      '</div>';
+
+    return card;
+  }
+
+  // Unix Socket Card
+  function createUnixSocketCard(info) {
+    var card = document.createElement('article');
+    card.className = 'entity-card unix-socket collapsed';
+    card.id = 'unix-' + info.path.replace(/[^a-z0-9]/gi, '-');
+
+    var typeLabel = info.isStream ? 'stream' : 'dgram';
+
+    card.innerHTML =
+      '<div class="entity-header" onclick="toggleEntityCard(this.parentElement)">' +
+      '<div class="entity-status ok"><span class="status-shape">●</span></div>' +
+      '<h3 class="entity-name">' + info.path + '</h3>' +
+      '<div class="entity-label">' + typeLabel + '</div>' +
+      '<div class="entity-summary">' +
+      '<span class="summary-metric conn-count">-- conn</span>' +
+      '<span class="summary-metric ops-rate">--/s</span>' +
+      '<span class="summary-metric latency">P99:--</span>' +
+      '<div class="summary-spark"></div>' +
+      '</div>' +
+      '<button class="expand-toggle"><span class="expand-icon">▼</span></button>' +
+      '</div>' +
+      '<div class="entity-body">' +
+      '<div class="entity-section">' +
+      '<div class="entity-section-title">Statistics</div>' +
+      '<div class="unix-socket-stats">' +
+      '<span>Ops: <span class="ops-total">--</span></span>' +
+      '<span>Bytes: <span class="bytes-total">--</span></span>' +
+      (info.isStream ? '<span>Connections: <span class="conn-count">--</span></span>' : '') +
+      '</div>' +
+      '</div>' +
+      '<div class="entity-section">' +
+      '<div class="entity-section-title">Throughput</div>' +
+      '<div class="sparkline-container">' +
+      '<div class="sparkline unix-throughput-spark"></div>' +
+      '</div>' +
+      '</div>' +
+      '</div>';
+
+    return card;
+  }
+
+  // Named Pipe Card
+  function createNamedPipeCard(info) {
+    var card = document.createElement('article');
+    card.className = 'entity-card named-pipe collapsed';
+    card.id = 'pipe-' + info.path.replace(/[^a-z0-9]/gi, '-');
+
+    var dirIcon = info.isWriter ? '→' : '←';
+    var dirLabel = info.isWriter ? 'writer' : 'reader';
+
+    card.innerHTML =
+      '<div class="entity-header" onclick="toggleEntityCard(this.parentElement)">' +
+      '<div class="entity-status ok"><span class="status-shape">●</span></div>' +
+      '<h3 class="entity-name">' + info.path + '</h3>' +
+      '<div class="entity-label">' + dirIcon + ' ' + dirLabel + '</div>' +
+      '<div class="entity-summary">' +
+      '<span class="summary-metric throughput">-- KB/s</span>' +
+      '<div class="summary-spark"></div>' +
+      '</div>' +
+      '<button class="expand-toggle"><span class="expand-icon">▼</span></button>' +
+      '</div>' +
+      '<div class="entity-body">' +
+      '<div class="entity-section">' +
+      '<div class="entity-section-title">Throughput</div>' +
+      '<div class="pipe-throughput">' +
+      '<span class="pipe-rate">-- KB/s</span>' +
+      '<div class="sparkline-container">' +
+      '<div class="sparkline pipe-spark"></div>' +
+      '</div>' +
+      '</div>' +
+      '</div>' +
+      '<div class="entity-section">' +
+      '<div class="entity-section-title">Buffer</div>' +
+      '<div class="pipe-buffer-bar">' +
+      '<div class="pipe-buffer-fill" style="width: 0%"></div>' +
+      '</div>' +
+      '<div class="pipe-buffer-label"><span class="buffer-pct">0</span>% full</div>' +
+      '</div>' +
+      '</div>';
+
+    return card;
+  }
+
+  // Helper function to toggle entity card collapse state
+  window.toggleEntityCard = function(card) {
+    var isCollapsed = card.classList.contains('collapsed');
+    card.classList.toggle('collapsed');
+    card.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
+
+    var icon = card.querySelector('.expand-icon');
+    if (icon) {
+      icon.textContent = isCollapsed ? '▲' : '▼';
+    }
+  };
+
+  // Export card creation functions for use by update code
+  window.createTcpServerCard = createTcpServerCard;
+  window.createTcpClientCard = createTcpClientCard;
+  window.createUdpSocketCard = createUdpSocketCard;
+  window.createFileIOCard = createFileIOCard;
+  window.createUnixSocketCard = createUnixSocketCard;
+  window.createNamedPipeCard = createNamedPipeCard;
+
+  // ==================== Keyboard Navigation ====================
+  (function() {
+    var focusedIndex = -1;
+    
+    function getEntityCards() {
+      return Array.from(document.querySelectorAll('.entity-card'));
+    }
+    
+    function setFocus(index) {
+      var cards = getEntityCards();
+      if (index < 0 || index >= cards.length) return;
+      cards.forEach(function(c) { c.classList.remove('keyboard-focus'); });
+      focusedIndex = index;
+      cards[index].classList.add('keyboard-focus');
+      cards[index].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+    
+    function handleKeyDown(e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      var cards = getEntityCards();
+      if (cards.length === 0) return;
+      
+      switch (e.key) {
+        case 'j':
+          e.preventDefault();
+          setFocus(Math.min(focusedIndex + 1, cards.length - 1));
+          break;
+        case 'k':
+          e.preventDefault();
+          setFocus(Math.max(focusedIndex - 1, 0));
+          break;
+        case ' ':
+          e.preventDefault();
+          if (focusedIndex >= 0 && cards[focusedIndex]) {
+            toggleEntityCard(cards[focusedIndex]);
+          }
+          break;
+        case 'l':
+          e.preventDefault();
+          if (focusedIndex >= 0 && cards[focusedIndex]) {
+            cards[focusedIndex].classList.remove('collapsed');
+            cards[focusedIndex].setAttribute('aria-expanded', 'true');
+          }
+          break;
+        case 'h':
+          e.preventDefault();
+          if (focusedIndex >= 0 && cards[focusedIndex]) {
+            cards[focusedIndex].classList.add('collapsed');
+            cards[focusedIndex].setAttribute('aria-expanded', 'false');
+          }
+          break;
+        case 'G':
+          e.preventDefault();
+          setFocus(cards.length - 1);
+          break;
+        case '?':
+          e.preventDefault();
+          toggleKeyboardHelp();
+          break;
+        case 'Escape':
+          cards.forEach(function(c) { c.classList.remove('keyboard-focus'); });
+          focusedIndex = -1;
+          hideKeyboardHelp();
+          break;
+      }
+    }
+    
+    document.addEventListener('keydown', handleKeyDown);
+  })();
+
+  // Keyboard help overlay functions
+  window.toggleKeyboardHelp = function() {
+    var overlay = document.getElementById('keyboard-help');
+    if (!overlay) return;
+    var isHidden = overlay.getAttribute('aria-hidden') === 'true';
+    overlay.setAttribute('aria-hidden', isHidden ? 'false' : 'true');
+    overlay.style.display = isHidden ? 'flex' : 'none';
+  };
+
+  window.hideKeyboardHelp = function() {
+    var overlay = document.getElementById('keyboard-help');
+    if (!overlay) return;
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.style.display = 'none';
+  };
 })();

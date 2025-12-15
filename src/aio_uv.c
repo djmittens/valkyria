@@ -58,6 +58,7 @@ typedef struct {
   valk_counter_v2_t* requests_client_error;   // status="4xx"
   valk_counter_v2_t* requests_server_error;   // status="5xx"
   valk_gauge_v2_t* connections_active;
+  valk_gauge_v2_t* sse_streams_active;        // SSE diagnostic streams (long-lived)
   valk_histogram_v2_t* request_duration;
   valk_counter_v2_t* bytes_sent;
   valk_counter_v2_t* bytes_recv;
@@ -621,41 +622,43 @@ typedef struct valk_aio_http_server {
 #ifdef VALK_METRICS_ENABLED
 // Initialize server metrics with proper labels (using metrics v2 API)
 static void server_metrics_init(valk_server_metrics_t* m,
-                                 const char* name, int port, const char* protocol) {
+                                 const char* name, int port, const char* protocol,
+                                 const char* loop_name) {
   // Note: port_str needs static storage since V2 labels store pointers
   static char port_strs[HTTP_MAX_SERVERS][8];
   static int port_idx = 0;
   char* port_str = port_strs[port_idx++ % HTTP_MAX_SERVERS];
   snprintf(port_str, 8, "%d", port);
 
-  // Base labels for this server
+  // Base labels for this server (includes loop for AIO system ownership)
   valk_label_set_v2_t base_labels = {
-    .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}},
-    .count = 3
+    .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}, {"loop", loop_name}},
+    .count = 4
   };
 
   m->requests_total = valk_counter_get_or_create("http_requests_total", NULL, &base_labels);
 
   // Status-specific labels (add status to base labels)
   valk_label_set_v2_t success_labels = {
-    .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}, {"status", "2xx"}},
-    .count = 4
+    .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}, {"loop", loop_name}, {"status", "2xx"}},
+    .count = 5
   };
   m->requests_success = valk_counter_get_or_create("http_requests_total", NULL, &success_labels);
 
   valk_label_set_v2_t client_err_labels = {
-    .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}, {"status", "4xx"}},
-    .count = 4
+    .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}, {"loop", loop_name}, {"status", "4xx"}},
+    .count = 5
   };
   m->requests_client_error = valk_counter_get_or_create("http_requests_total", NULL, &client_err_labels);
 
   valk_label_set_v2_t server_err_labels = {
-    .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}, {"status", "5xx"}},
-    .count = 4
+    .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}, {"loop", loop_name}, {"status", "5xx"}},
+    .count = 5
   };
   m->requests_server_error = valk_counter_get_or_create("http_requests_total", NULL, &server_err_labels);
 
   m->connections_active = valk_gauge_get_or_create("http_connections_active", NULL, &base_labels);
+  m->sse_streams_active = valk_gauge_get_or_create("http_sse_streams_active", NULL, &base_labels);
 
   // Buckets tuned for low-latency services: 50µs to 10s
   // Sub-ms buckets: 50µs, 100µs, 250µs, 500µs
@@ -857,7 +860,13 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
   // on_stream_close is not called by nghttp2
   if (handle->http.server && handle->http.server->sys) {
     valk_sse_stream_registry_t *registry = &handle->http.server->sys->sse_registry;
-    valk_sse_registry_unsubscribe_connection(registry, handle);
+    size_t sse_count = valk_sse_registry_unsubscribe_connection(registry, handle);
+#ifdef VALK_METRICS_ENABLED
+    // Decrement per-server SSE streams gauge for all streams on this connection
+    for (size_t i = 0; i < sse_count; i++) {
+      valk_gauge_v2_dec(handle->http.server->metrics.sse_streams_active);
+    }
+#endif
   }
 
   // Release all stream arenas that weren't cleaned up
@@ -1487,6 +1496,9 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
         return -1;
       }
 
+      // Increment per-server SSE streams gauge
+      valk_gauge_v2_inc(req->conn->http.server->metrics.sse_streams_active);
+
       // Store entry reference for cleanup on stream close
       req->sse_entry = entry;
 
@@ -1685,6 +1697,8 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
     if (entry) {
       VALK_INFO("Stream %d closing, unsubscribing from SSE registry", stream_id);
       valk_sse_registry_unsubscribe(registry, entry);
+      // Decrement per-server SSE streams gauge
+      valk_gauge_v2_dec(conn->http.server->metrics.sse_streams_active);
     }
   }
 #endif
@@ -2654,7 +2668,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
 #ifdef VALK_METRICS_ENABLED
   // Initialize server metrics BEFORE uv_listen to avoid race with accept callback
   const char* protocol = srv->ssl_ctx ? "https" : "http";
-  server_metrics_init(&srv->metrics, srv->interface, srv->port, protocol);
+  server_metrics_init(&srv->metrics, srv->interface, srv->port, protocol, sys->name);
   // Track server start in system stats
   valk_aio_system_stats_on_server_start(&sys->system_stats);
 

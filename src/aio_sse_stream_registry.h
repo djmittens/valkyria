@@ -102,7 +102,8 @@ valk_sse_stream_entry_t* valk_sse_registry_subscribe(
 void valk_sse_registry_unsubscribe(valk_sse_stream_registry_t *registry,
                                     valk_sse_stream_entry_t *entry);
 
-void valk_sse_registry_unsubscribe_connection(
+// Returns the number of streams that were unsubscribed
+size_t valk_sse_registry_unsubscribe_connection(
     valk_sse_stream_registry_t *registry,
     valk_aio_handle_t *handle);
 

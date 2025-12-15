@@ -346,6 +346,39 @@
         </div>
       </div>
 
+      <!-- Aggregate Health Bar -->
+      <div class="aio-aggregate-health" id="aio-health-bar">
+        <div class="aio-health-status">
+          <span class="health-group ok" title="Healthy endpoints">
+            <span class="health-icon">●</span>
+            <span class="health-count" id="aio-ok-count">0</span> OK
+          </span>
+          <span class="health-group warning" title="Endpoints with warnings">
+            <span class="health-icon">▲</span>
+            <span class="health-count" id="aio-warn-count">0</span> Warn
+          </span>
+          <span class="health-group error" title="Endpoints with errors or offline">
+            <span class="health-icon">■</span>
+            <span class="health-count" id="aio-error-count">0</span> Down
+          </span>
+        </div>
+        <div class="aio-health-divider"></div>
+        <div class="aio-health-metrics">
+          <span class="aio-health-metric" title="Total operations per second across all I/O">
+            <span class="aio-health-value" id="aio-total-ops">--</span>
+            <span class="aio-health-label">ops/s</span>
+          </span>
+          <span class="aio-health-metric" title="Aggregate error rate">
+            <span class="aio-health-value" id="aio-error-rate">--</span>
+            <span class="aio-health-label">% err</span>
+          </span>
+          <span class="aio-health-metric" title="Aggregate P99 latency">
+            <span class="aio-health-value" id="aio-p99">--</span>
+            <span class="aio-health-label">ms P99</span>
+          </span>
+        </div>
+      </div>
+
       <div id="aio-systems-container">
         <!-- AIO system panels will be dynamically populated here -->
         <!-- Each panel now contains: Event Loop, Shared Pools, HTTP Servers, HTTP Clients -->
@@ -452,4 +485,27 @@
     </section>
 
   </main>
+
+    <!-- Keyboard Help Overlay -->
+    <div class="keyboard-help-overlay" id="keyboard-help" role="dialog" aria-labelledby="keyboard-help-title" aria-hidden="true" style="display: none;">
+      <div class="keyboard-help-content">
+        <h3 id="keyboard-help-title">Keyboard Shortcuts</h3>
+        <button class="keyboard-help-close" onclick="hideKeyboardHelp()" aria-label="Close">&times;</button>
+        <div class="keyboard-help-grid">
+          <div class="shortcut-group">
+            <h4>Navigation</h4>
+            <div class="shortcut"><kbd>j</kbd> <span>Next card</span></div>
+            <div class="shortcut"><kbd>k</kbd> <span>Previous card</span></div>
+            <div class="shortcut"><kbd>G</kbd> <span>Last card</span></div>
+          </div>
+          <div class="shortcut-group">
+            <h4>Actions</h4>
+            <div class="shortcut"><kbd>Space</kbd> <span>Toggle expand</span></div>
+            <div class="shortcut"><kbd>l</kbd> <span>Expand card</span></div>
+            <div class="shortcut"><kbd>h</kbd> <span>Collapse card</span></div>
+            <div class="shortcut"><kbd>Esc</kbd> <span>Clear focus</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
   <script>

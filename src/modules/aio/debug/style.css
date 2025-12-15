@@ -706,6 +706,14 @@ main[role="main"] {
   font-variant-numeric: tabular-nums;
 }
 
+.entity-stat.sse-stat {
+  display: none;  /* Hidden by default, shown when SSE streams > 0 */
+}
+
+.entity-stat.sse-stat .entity-stat-value {
+  color: var(--color-cyan);
+}
+
 .entity-stat-label {
   font-size: 11px;
   color: var(--text-faint);
@@ -3939,5 +3947,687 @@ main[role="main"] {
 
   .legend-item {
     font-size: 10px;
+  }
+}
+
+/* ===== AGGREGATE HEALTH BAR ===== */
+.aio-aggregate-health {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-lg);
+}
+
+.aio-health-status {
+  display: flex;
+  gap: var(--space-lg);
+}
+
+.health-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.health-group.ok .health-icon { color: var(--color-ok); }
+.health-group.warning .health-icon { color: var(--color-warning); }
+.health-group.error .health-icon { color: var(--color-error); }
+
+.health-count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.aio-health-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--border-default);
+}
+
+.aio-health-metrics {
+  display: flex;
+  gap: var(--space-lg);
+}
+
+.aio-health-metric {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+}
+
+.aio-health-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.aio-health-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Responsive: stack on narrow screens */
+@media (max-width: 768px) {
+  .aio-aggregate-health {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-sm);
+  }
+  .aio-health-divider {
+    width: 100%;
+    height: 1px;
+  }
+}
+
+/* ==================== PHASE 6: I/O TYPE SECTIONS ==================== */
+.io-section {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-md);
+  overflow: hidden;
+}
+
+.io-section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-default);
+  cursor: pointer;
+  user-select: none;
+}
+
+.io-section-header:hover {
+  background: var(--bg-elevated);
+}
+
+.io-section-icon {
+  font-size: 14px;
+}
+
+.io-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.io-section-stats {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.io-section-ops {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.io-section-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 var(--space-xs);
+}
+
+.io-section.collapsed .io-section-body {
+  display: none;
+}
+
+.io-section.collapsed .toggle-icon {
+  transform: rotate(0deg);
+}
+
+.io-section:not(.collapsed) .toggle-icon::before {
+  content: '−';
+}
+
+.io-section.collapsed .toggle-icon::before {
+  content: '+';
+}
+
+.io-section-body {
+  padding: var(--space-md);
+}
+
+/* Subsections */
+.io-subsection {
+  margin-bottom: var(--space-md);
+}
+
+.io-subsection:last-child {
+  margin-bottom: 0;
+}
+
+.io-subsection-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.io-subsection-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.io-subsection-count {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.io-subsection-content {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--space-md);
+}
+
+/* ==================== PHASE 7: NEW I/O TYPE CARDS ==================== */
+
+/* TCP Server/Client Cards */
+.tcp-conn-stats {
+  display: flex;
+  gap: var(--space-lg);
+  padding: var(--space-sm) 0;
+}
+
+.tcp-stat {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.tcp-stat .active-count,
+.tcp-stat .idle-count,
+.tcp-stat .closing-count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  margin-left: var(--space-xs);
+}
+
+.tcp-throughput-stats {
+  display: flex;
+  gap: var(--space-lg);
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: var(--space-sm);
+}
+
+.tcp-throughput-stats .bytes-in,
+.tcp-throughput-stats .bytes-out {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tcp-pool-bar {
+  height: 8px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-bottom: var(--space-sm);
+}
+
+.tcp-pool-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-info), var(--color-cyan));
+  transition: width 0.3s ease;
+}
+
+.tcp-pool-stats {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tcp-pool-stats .pool-active,
+.tcp-pool-stats .pool-max {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.tcp-latency-stats {
+  display: flex;
+  gap: var(--space-lg);
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: var(--space-sm);
+}
+
+.tcp-latency-stats .p50,
+.tcp-latency-stats .p99 {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* UDP Socket Cards */
+.udp-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-md);
+}
+
+.udp-stat {
+  text-align: center;
+  padding: var(--space-sm);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+}
+
+.udp-stat-value {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  margin-bottom: var(--space-xs);
+}
+
+.udp-stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.udp-stat .dropped {
+  color: var(--color-warning);
+}
+
+/* File I/O Cards */
+.file-io-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.file-io-row {
+  display: grid;
+  grid-template-columns: 60px 80px 1fr 100px 120px;
+  gap: var(--space-md);
+  align-items: center;
+  padding: var(--space-sm);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+}
+
+.file-io-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.file-io-rate {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.file-io-spark {
+  height: 24px;
+  min-width: 60px;
+}
+
+.file-io-throughput {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.file-io-latency {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.file-io-latency span {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.file-io-pending {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border-default);
+}
+
+.file-io-pending span {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* Unix Socket Cards */
+.unix-socket-stats {
+  display: flex;
+  gap: var(--space-lg);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.unix-socket-stats span span {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Named Pipe Cards */
+.pipe-throughput {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.pipe-rate {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.pipe-buffer-bar {
+  height: 12px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-bottom: var(--space-xs);
+}
+
+.pipe-buffer-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-ok), var(--color-warning));
+  transition: width 0.3s ease;
+}
+
+.pipe-buffer-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.pipe-buffer-label .buffer-pct {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* Entity Label (TCP, UDP, stream, dgram, etc.) */
+.entity-label {
+  display: inline-block;
+  padding: 2px var(--space-xs);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .file-io-row {
+    grid-template-columns: 1fr;
+    gap: var(--space-xs);
+  }
+
+  .file-io-spark {
+    min-width: 100%;
+  }
+
+  .tcp-conn-stats,
+  .tcp-throughput-stats,
+  .tcp-latency-stats,
+  .unix-socket-stats {
+    flex-direction: column;
+    gap: var(--space-sm);
+  }
+
+  .udp-stats-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===== COLLAPSIBLE ENTITY CARDS ===== */
+.entity-card {
+  transition: all 0.2s ease;
+}
+
+.entity-card.collapsed {
+  border-radius: var(--radius-sm);
+}
+
+.entity-card.collapsed .entity-header {
+  padding: var(--space-xs) var(--space-md);
+  border-bottom: none;
+}
+
+.entity-card.collapsed .entity-body {
+  display: none;
+}
+
+.entity-summary {
+  display: none;
+  align-items: center;
+  gap: var(--space-md);
+  margin-left: auto;
+  margin-right: var(--space-md);
+}
+
+.entity-card.collapsed .entity-summary {
+  display: flex;
+}
+
+.entity-card.collapsed .entity-stats {
+  display: none;
+}
+
+.summary-metric {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.summary-metric.req-rate {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.summary-metric.p99-value {
+  color: var(--text-muted);
+}
+
+.summary-metric.success-rate {
+  color: var(--color-ok);
+}
+
+.summary-metric.success-rate.warning {
+  color: var(--color-warning);
+}
+
+.summary-metric.success-rate.error {
+  color: var(--color-error);
+}
+
+.summary-spark {
+  width: 60px;
+  height: 16px;
+}
+
+.expand-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: var(--space-xs);
+  border-radius: var(--radius-sm);
+  transition: background 0.15s;
+}
+
+.expand-toggle:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.expand-icon {
+  font-size: 10px;
+  transition: transform 0.2s ease;
+}
+
+.entity-card:not(.collapsed) .expand-icon {
+  transform: rotate(180deg);
+}
+
+.entity-card:focus {
+  outline: 2px solid var(--color-info);
+  outline-offset: 2px;
+}
+
+.entity-card.keyboard-focus {
+  box-shadow: 0 0 0 2px var(--color-info);
+}
+
+/* ===== PHASE 4: TREND SPARKLINES ===== */
+.status-code-spark {
+  width: 60px;
+  height: 20px;
+  margin-top: var(--space-sm);
+}
+
+.latency-trend-spark {
+  width: 120px;
+  height: 32px;
+  margin-top: var(--space-sm);
+}
+
+.status-code-spark svg,
+.latency-trend-spark svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ===== PHASE 5: KEYBOARD HELP OVERLAY ===== */
+.keyboard-help-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.keyboard-help-overlay[aria-hidden="true"] {
+  display: none;
+}
+
+.keyboard-help-content {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-xl);
+  max-width: 600px;
+  width: 90%;
+  position: relative;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+}
+
+.keyboard-help-content h3 {
+  margin: 0 0 var(--space-lg) 0;
+  color: var(--text-primary);
+  font-size: 20px;
+}
+
+.keyboard-help-close {
+  position: absolute;
+  top: var(--space-md);
+  right: var(--space-md);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  transition: background 0.2s, color 0.2s;
+}
+
+.keyboard-help-close:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.keyboard-help-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-lg);
+}
+
+.shortcut-group h4 {
+  margin: 0 0 var(--space-md) 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.shortcut {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-sm);
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.shortcut kbd {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 32px;
+  text-align: center;
+  color: var(--text-primary);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.2);
+}
+
+.shortcut span {
+  flex: 1;
+}
+
+@media (max-width: 600px) {
+  .keyboard-help-grid {
+    grid-template-columns: 1fr;
   }
 }
