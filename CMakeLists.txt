@@ -84,6 +84,7 @@ set(VALKYRIA_SOURCES
   src/aio_uv.c
   src/debug.c
   src/aio_ssl.c
+  src/aio_alloc.c
   src/aio_sse.c
   src/log.c
   src/coverage.c

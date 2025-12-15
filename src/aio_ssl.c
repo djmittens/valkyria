@@ -1,4 +1,5 @@
 #include "aio_ssl.h"
+#include "aio_alloc.h"
 #include "common.h"
 #include "log.h"
 #include "memory.h"
@@ -8,32 +9,12 @@
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
 
-// Use libc allocator for all OpenSSL allocations to avoid cross-thread
-// allocator mismatches and reallocation of arena/slab pointers.
-void *__CRYPTO_malloc_fn(size_t num, const char *file, int line) {
-  UNUSED(file);
-  UNUSED(line);
-  return malloc(num);
-}
-
-void *__CRYPTO_realloc_fn(void *addr, size_t num, const char *file, int line) {
-  UNUSED(file);
-  UNUSED(line);
-  return realloc(addr, num);
-}
-
-void __CRYPTO_free_fn(void *addr, const char *file, int line) {
-  UNUSED(file);
-  UNUSED(line);
-  free(addr);
-}
-
 void valk_aio_ssl_start() {
   static int uninitialized = true;
   if (uninitialized) {
-    // !!!! must be called first before any other ssl call !!!!
-    CRYPTO_set_mem_functions(__CRYPTO_malloc_fn, __CRYPTO_realloc_fn,
-                             __CRYPTO_free_fn);
+    uninitialized = false;
+    // Initialize tracking allocators - must be called FIRST before any SSL call
+    valk_aio_alloc_init();
     SSL_library_init();
     OpenSSL_add_all_algorithms();
     ERR_load_crypto_strings();

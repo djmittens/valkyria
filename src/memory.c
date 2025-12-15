@@ -602,6 +602,204 @@ void valk_process_memory_collect(valk_process_memory_t *pm) {
 }
 #endif
 
+// =============================================================================
+// Detailed smaps breakdown (Linux only)
+// Parses /proc/self/smaps to categorize RSS by region type
+// =============================================================================
+
+#if defined(__linux__)
+
+void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
+  if (smaps == NULL) return;
+  memset(smaps, 0, sizeof(*smaps));
+
+  FILE *f = fopen("/proc/self/smaps", "r");
+  if (!f) return;
+
+  char line[512];
+  char current_name[256] = {0};
+  bool is_heap = false;
+  bool is_stack = false;
+  bool is_anon = false;
+  bool is_file = false;
+  bool is_uring = false;
+  bool is_special = false;
+
+  while (fgets(line, sizeof(line), f)) {
+    // Region header line: "addr-addr perms offset dev inode pathname"
+    // Example: "7f560a600000-7f560a624000 r--p 00000000 00:1b 844871  /usr/lib/libc.so.6"
+    if (line[0] != ' ' && strchr(line, '-')) {
+      // Reset flags for new region
+      is_heap = false;
+      is_stack = false;
+      is_anon = false;
+      is_file = false;
+      is_uring = false;
+      is_special = false;
+      current_name[0] = '\0';
+
+      // Find the pathname (after the inode)
+      // Format: addr-addr perms offset dev inode [pathname]
+      char *name_start = NULL;
+      int spaces = 0;
+      for (char *p = line; *p; p++) {
+        if (*p == ' ') {
+          spaces++;
+          // After 5 spaces, we're at the pathname
+          if (spaces == 5) {
+            // Skip leading spaces
+            while (*p == ' ') p++;
+            name_start = p;
+            break;
+          }
+        }
+      }
+
+      if (name_start) {
+        // Remove trailing newline
+        char *nl = strchr(name_start, '\n');
+        if (nl) *nl = '\0';
+        strncpy(current_name, name_start, sizeof(current_name) - 1);
+      }
+
+      // Categorize the region
+      if (strstr(current_name, "[heap]")) {
+        is_heap = true;
+      } else if (strstr(current_name, "[stack]") || strstr(current_name, "stack:")) {
+        is_stack = true;
+      } else if (strstr(current_name, "[vdso]") || strstr(current_name, "[vvar]") ||
+                 strstr(current_name, "[vsyscall]")) {
+        is_special = true;
+      } else if (strstr(current_name, "io_uring")) {
+        is_uring = true;
+      } else if (current_name[0] == '\0') {
+        // Anonymous mapping (no pathname)
+        is_anon = true;
+        smaps->anon_regions++;
+      } else if (current_name[0] == '/') {
+        // File-backed mapping
+        is_file = true;
+        smaps->file_regions++;
+      } else {
+        is_special = true;
+      }
+    }
+
+    // Look for Rss line within a region
+    // Format: "Rss:               1234 kB"
+    if (strncmp(line, "Rss:", 4) == 0) {
+      size_t rss_kb = 0;
+      if (sscanf(line, "Rss: %zu kB", &rss_kb) == 1) {
+        size_t rss_bytes = rss_kb * 1024;
+
+        if (is_heap) {
+          smaps->heap_rss += rss_bytes;
+        } else if (is_stack) {
+          smaps->stack_rss += rss_bytes;
+        } else if (is_uring) {
+          smaps->uring_rss += rss_bytes;
+        } else if (is_anon) {
+          smaps->anon_rss += rss_bytes;
+        } else if (is_file) {
+          smaps->file_rss += rss_bytes;
+        } else if (is_special) {
+          smaps->other_rss += rss_bytes;
+        }
+
+        smaps->total_rss += rss_bytes;
+      }
+    }
+
+    // Also check for Shmem (shared memory)
+    if (strncmp(line, "Shmem:", 6) == 0) {
+      size_t shmem_kb = 0;
+      if (sscanf(line, "Shmem: %zu kB", &shmem_kb) == 1) {
+        smaps->shmem_rss += shmem_kb * 1024;
+      }
+    }
+  }
+
+  fclose(f);
+}
+
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+
+void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
+  if (smaps == NULL) return;
+  memset(smaps, 0, sizeof(*smaps));
+
+  task_t task = mach_task_self();
+  mach_vm_address_t address = 0;
+  mach_vm_size_t size = 0;
+  vm_region_basic_info_data_64_t info;
+  mach_msg_type_number_t info_count;
+  mach_port_t object_name;
+
+  while (1) {
+    info_count = VM_REGION_BASIC_INFO_COUNT_64;
+    kern_return_t kr = mach_vm_region(task, &address, &size,
+                                       VM_REGION_BASIC_INFO_64,
+                                       (vm_region_info_t)&info,
+                                       &info_count, &object_name);
+    if (kr != KERN_SUCCESS) break;
+
+    // Only count resident memory (similar to RSS)
+    // We can't get exact RSS per region easily, so use full size for mapped regions
+    // that have read/write permissions (likely resident)
+    size_t region_size = (size_t)size;
+
+    // Categorize by share mode and protection
+    if (info.shared) {
+      // Shared memory (could be file-backed or shared anon)
+      if (info.external_pager) {
+        smaps->file_rss += region_size;
+        smaps->file_regions++;
+      } else {
+        smaps->shmem_rss += region_size;
+      }
+    } else {
+      // Private memory
+      if (info.external_pager) {
+        // File-backed private mapping (e.g., mapped file, dylib)
+        smaps->file_rss += region_size;
+        smaps->file_regions++;
+      } else {
+        // Anonymous private memory
+        // Try to categorize by address range heuristics
+        // Stack is typically near the top of address space
+        // Heap is typically after the executable
+        smaps->anon_rss += region_size;
+        smaps->anon_regions++;
+      }
+    }
+
+    smaps->total_rss += region_size;
+    address += size;
+  }
+
+  // On macOS, we can't easily distinguish heap vs stack vs other anon
+  // Put a portion in heap as estimate (malloc typically uses ~10% overhead)
+  // This is approximate - macOS doesn't expose this granularity
+  if (smaps->anon_rss > 0) {
+    // Heuristic: attribute small portion to heap metadata
+    smaps->heap_rss = smaps->anon_rss / 20;  // ~5% as heap overhead estimate
+    smaps->anon_rss -= smaps->heap_rss;
+  }
+
+  // Stack estimate: typical 8MB per thread, but we don't know thread count
+  // Leave as 0 since we can't reliably detect it
+}
+
+#else
+// Other platforms: no-op
+void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
+  if (smaps == NULL) return;
+  memset(smaps, 0, sizeof(*smaps));
+}
+#endif
+
 void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes) {
   VALK_ASSERT(self,
               "Thread Local ALLOCATOR has not been initialized, please "

@@ -118,6 +118,9 @@ typedef struct valk_mem_snapshot {
   // Process-level memory (from OS)
   valk_process_memory_t process;
 
+  // Detailed smaps breakdown (Linux only)
+  valk_smaps_breakdown_t smaps;
+
   // Aggregated breakdown by subsystem (for overview widget)
   // Each subsystem has capacity (mapped) and used (resident) bytes
   struct {

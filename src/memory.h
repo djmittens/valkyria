@@ -271,8 +271,26 @@ typedef struct {
   uint64_t page_faults_major;  // Hard page faults (disk I/O)
 } valk_process_memory_t;
 
+// Detailed memory breakdown from /proc/self/smaps (Linux only)
+// Categorizes RSS by region type to identify where untracked memory lives
+typedef struct {
+  size_t heap_rss;       // [heap] - glibc malloc arena
+  size_t stack_rss;      // [stack] and thread stacks
+  size_t anon_rss;       // Anonymous mappings (mmap, buffers)
+  size_t file_rss;       // File-backed mappings (shared libs, etc.)
+  size_t shmem_rss;      // Shared memory regions
+  size_t uring_rss;      // io_uring ring buffers
+  size_t other_rss;      // vdso, vvar, vsyscall, etc.
+  size_t total_rss;      // Sum of all (should match process RSS)
+  uint32_t anon_regions; // Count of anonymous regions
+  uint32_t file_regions; // Count of file-backed regions
+} valk_smaps_breakdown_t;
+
 // Collect process-level memory stats from OS
 void valk_process_memory_collect(valk_process_memory_t *pm);
+
+// Collect detailed smaps breakdown (Linux only, no-op on other platforms)
+void valk_smaps_collect(valk_smaps_breakdown_t *smaps);
 
 typedef struct {  // extends valk_mem_allocator_t;
   valk_mem_allocator_e type;

@@ -24,6 +24,7 @@
 #include <execinfo.h>
 
 #include "aio.h"
+#include "aio_alloc.h"
 #include "aio_ssl.h"
 #include "aio_metrics.h"
 #include "aio_sse.h"
@@ -2536,7 +2537,7 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
     }
 
     nghttp2_session_server_new3(&conn->http.session, callbacks, conn, nullptr,
-                                nullptr);
+                                valk_aio_nghttp2_mem());
     valk_aio_ssl_accept(&conn->http.ssl, srv->ssl_ctx);
 
     // Send settings to the client
@@ -3033,7 +3034,8 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
         callbacks, __http_client_on_stream_close_callback);
   }
 
-  nghttp2_session_client_new(&client->connection->http.session, callbacks, client);
+  nghttp2_session_client_new3(&client->connection->http.session, callbacks, client,
+                              nullptr, valk_aio_nghttp2_mem());
 
   __http_send_client_connection_header(client->connection->http.session, client->sys);
 

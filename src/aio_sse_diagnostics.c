@@ -8,6 +8,7 @@
 #include <nghttp2/nghttp2.h>
 
 #include "aio.h"
+#include "aio_alloc.h"
 #include "aio_metrics.h"
 #include "common.h"
 #include "gc.h"
@@ -604,6 +605,9 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
   // Collect process-level memory from OS
   valk_process_memory_collect(&snapshot->process);
 
+  // Collect detailed smaps breakdown (Linux only)
+  valk_smaps_collect(&snapshot->smaps);
+
   // Compute breakdown aggregates (used and capacity for each subsystem)
   memset(&snapshot->breakdown, 0, sizeof(snapshot->breakdown));
 
@@ -645,6 +649,10 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
     snapshot->breakdown.aio_slabs_used += snapshot->slabs[i].used_slots * 256;
     snapshot->breakdown.aio_slabs_capacity += snapshot->slabs[i].total_slots * 256;
   }
+
+  // Add SSL (OpenSSL), nghttp2, and libuv tracked allocations to AIO total
+  // These libraries use malloc-based tracking allocators
+  snapshot->breakdown.aio_slabs_used += valk_aio_lib_bytes_used();
 
   // Metrics registry (statically allocated in BSS)
   valk_registry_stats_t metrics_stats = {0};
@@ -1120,6 +1128,26 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
+  // Smaps breakdown (detailed RSS by region type - Linux only)
+  n = snprintf(p, end - p,
+               "\"smaps\":{"
+               "\"heap\":%zu,\"stack\":%zu,\"anon\":%zu,"
+               "\"file\":%zu,\"shmem\":%zu,\"uring\":%zu,"
+               "\"other\":%zu,\"total\":%zu,"
+               "\"anon_regions\":%u,\"file_regions\":%u},",
+               snapshot->smaps.heap_rss,
+               snapshot->smaps.stack_rss,
+               snapshot->smaps.anon_rss,
+               snapshot->smaps.file_rss,
+               snapshot->smaps.shmem_rss,
+               snapshot->smaps.uring_rss,
+               snapshot->smaps.other_rss,
+               snapshot->smaps.total_rss,
+               snapshot->smaps.anon_regions,
+               snapshot->smaps.file_regions);
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
   // Breakdown by subsystem (used and capacity)
   n = snprintf(p, end - p,
                "\"breakdown\":{"
@@ -1129,6 +1157,7 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
                "\"gc_lenv_used\":%zu,\"gc_lenv_cap\":%zu,"
                "\"gc_malloc\":%zu,"
                "\"aio_used\":%zu,\"aio_cap\":%zu,"
+               "\"ssl_used\":%zu,\"nghttp2_used\":%zu,\"libuv_used\":%zu,"
                "\"metrics_used\":%zu,\"metrics_cap\":%zu,"
                "\"untracked\":%zu,\"untracked_reserved\":%zu}},",
                snapshot->breakdown.scratch_arena_used,
@@ -1142,6 +1171,9 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
                snapshot->breakdown.gc_malloc_used,
                snapshot->breakdown.aio_slabs_used,
                snapshot->breakdown.aio_slabs_capacity,
+               valk_aio_ssl_bytes_used(),
+               valk_aio_nghttp2_bytes_used(),
+               valk_aio_libuv_bytes_used(),
                snapshot->breakdown.metrics_used,
                snapshot->breakdown.metrics_capacity,
                snapshot->breakdown.untracked_bytes,
@@ -1945,6 +1977,26 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
   if (n < 0 || n >= end - p) goto cleanup;
   p += n;
 
+  // Smaps breakdown (detailed RSS by region type - Linux only)
+  n = snprintf(p, end - p,
+               "\"smaps\":{"
+               "\"heap\":%zu,\"stack\":%zu,\"anon\":%zu,"
+               "\"file\":%zu,\"shmem\":%zu,\"uring\":%zu,"
+               "\"other\":%zu,\"total\":%zu,"
+               "\"anon_regions\":%u,\"file_regions\":%u},",
+               snapshot.smaps.heap_rss,
+               snapshot.smaps.stack_rss,
+               snapshot.smaps.anon_rss,
+               snapshot.smaps.file_rss,
+               snapshot.smaps.shmem_rss,
+               snapshot.smaps.uring_rss,
+               snapshot.smaps.other_rss,
+               snapshot.smaps.total_rss,
+               snapshot.smaps.anon_regions,
+               snapshot.smaps.file_regions);
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
   // Breakdown by subsystem (used and capacity)
   n = snprintf(p, end - p,
                "\"breakdown\":{"
@@ -1954,6 +2006,7 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
                "\"gc_lenv_used\":%zu,\"gc_lenv_cap\":%zu,"
                "\"gc_malloc\":%zu,"
                "\"aio_used\":%zu,\"aio_cap\":%zu,"
+               "\"ssl_used\":%zu,\"nghttp2_used\":%zu,\"libuv_used\":%zu,"
                "\"metrics_used\":%zu,\"metrics_cap\":%zu,"
                "\"untracked\":%zu,\"untracked_reserved\":%zu}},",
                snapshot.breakdown.scratch_arena_used,
@@ -1967,6 +2020,9 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
                snapshot.breakdown.gc_malloc_used,
                snapshot.breakdown.aio_slabs_used,
                snapshot.breakdown.aio_slabs_capacity,
+               valk_aio_ssl_bytes_used(),
+               valk_aio_nghttp2_bytes_used(),
+               valk_aio_libuv_bytes_used(),
                snapshot.breakdown.metrics_used,
                snapshot.breakdown.metrics_capacity,
                snapshot.breakdown.untracked_bytes,

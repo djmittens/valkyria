@@ -182,11 +182,8 @@
       <div class="process-breakdown collapsed" id="process-breakdown">
         <!-- Stacked bar: segment width = capacity, inner fill = used -->
         <div class="stacked-bar">
-          <div class="stacked-segment gc-heap" id="segment-gc-heap" title="GC Heap">
-            <div class="segment-fill" id="fill-gc-heap"></div>
-          </div>
-          <div class="stacked-segment scratch" id="segment-scratch" title="Scratch Arena">
-            <div class="segment-fill" id="fill-scratch"></div>
+          <div class="stacked-segment runtime" id="segment-runtime" title="Runtime (GC + Scratch)">
+            <div class="segment-fill" id="fill-runtime"></div>
           </div>
           <div class="stacked-segment aio" id="segment-aio" title="AIO Slabs">
             <div class="segment-fill" id="fill-aio"></div>
@@ -194,27 +191,19 @@
           <div class="stacked-segment metrics" id="segment-metrics" title="Metrics Registry">
             <div class="segment-fill" id="fill-metrics"></div>
           </div>
-          <div class="stacked-segment untracked" id="segment-untracked" title="Untracked">
-            <div class="segment-fill" id="fill-untracked"></div>
+          <div class="stacked-segment other" id="segment-other" title="Other (untracked)">
+            <div class="segment-fill" id="fill-other"></div>
           </div>
         </div>
 
         <!-- Legend: shows used / capacity per subsystem -->
-        <!-- Box diagonal: solid (bottom-right) = resident, muted (top-left) = reserved -->
         <div class="breakdown-legend">
           <div class="legend-item">
-            <span class="legend-dot gc-heap"><span class="legend-dot-fill"></span></span>
-            <span class="legend-label">GC Heap</span>
-            <span class="legend-value" id="breakdown-gc-heap-value">--</span>
-            <span class="legend-cap">/ <span id="breakdown-gc-heap-cap">--</span></span>
-            <span class="legend-pct" id="breakdown-gc-heap-pct">(--%)</span>
-          </div>
-          <div class="legend-item">
-            <span class="legend-dot scratch"><span class="legend-dot-fill"></span></span>
-            <span class="legend-label">Scratch</span>
-            <span class="legend-value" id="breakdown-scratch-value">--</span>
-            <span class="legend-cap">/ <span id="breakdown-scratch-cap">--</span></span>
-            <span class="legend-pct" id="breakdown-scratch-pct">(--%)</span>
+            <span class="legend-dot runtime"><span class="legend-dot-fill"></span></span>
+            <span class="legend-label">Runtime</span>
+            <span class="legend-value" id="breakdown-runtime-value">--</span>
+            <span class="legend-cap">/ <span id="breakdown-runtime-cap">--</span></span>
+            <span class="legend-pct" id="breakdown-runtime-pct">(--%)</span>
           </div>
           <div class="legend-item">
             <span class="legend-dot aio"><span class="legend-dot-fill"></span></span>
@@ -231,20 +220,62 @@
             <span class="legend-pct" id="breakdown-metrics-pct">(--%)</span>
           </div>
           <div class="legend-item">
-            <span class="legend-dot untracked"><span class="legend-dot-fill"></span></span>
-            <span class="legend-label">Untracked</span>
-            <span class="legend-value" id="breakdown-untracked-value">--</span>
-            <span class="legend-cap">/ <span id="breakdown-untracked-cap">--</span></span>
-            <span class="legend-pct" id="breakdown-untracked-pct">(--%)</span>
+            <span class="legend-dot other"><span class="legend-dot-fill"></span></span>
+            <span class="legend-label">Other</span>
+            <span class="legend-value" id="breakdown-other-value">--</span>
+            <span class="legend-cap">/ <span id="breakdown-other-cap">--</span></span>
+            <span class="legend-pct" id="breakdown-other-pct">(--%)</span>
           </div>
         </div>
 
-        <!-- GC Heap sub-breakdown -->
-        <div class="gc-sub-breakdown">
-          <span class="gc-sub-label">GC breakdown:</span>
-          <span class="gc-sub-item"><span class="legend-dot lval"></span>LVAL <span id="breakdown-gc-lval-value">--</span></span>
-          <span class="gc-sub-item"><span class="legend-dot lenv"></span>LENV <span id="breakdown-gc-lenv-value">--</span></span>
-          <span class="gc-sub-item"><span class="legend-dot malloc"></span>Malloc <span id="breakdown-gc-malloc-value">--</span></span>
+        <!-- OS Memory Regions (from /proc/self/smaps) -->
+        <div class="smaps-breakdown">
+          <div class="smaps-header">
+            <span class="smaps-title">OS Memory Regions</span>
+            <span class="smaps-subtitle">(from /proc/self/smaps)</span>
+          </div>
+          <div class="smaps-bar">
+            <div class="smaps-segment smaps-heap" id="smaps-seg-heap" title="Heap (glibc malloc arena)"></div>
+            <div class="smaps-segment smaps-anon" id="smaps-seg-anon" title="Anonymous (mmap buffers)"></div>
+            <div class="smaps-segment smaps-file" id="smaps-seg-file" title="File-backed (shared libs)"></div>
+            <div class="smaps-segment smaps-stack" id="smaps-seg-stack" title="Stack (thread stacks)"></div>
+            <div class="smaps-segment smaps-uring" id="smaps-seg-uring" title="io_uring ring buffers"></div>
+            <div class="smaps-segment smaps-other" id="smaps-seg-other" title="Other (vdso, vvar)"></div>
+          </div>
+          <div class="smaps-legend">
+            <div class="smaps-legend-item">
+              <span class="smaps-dot smaps-heap"></span>
+              <span class="smaps-label">Heap</span>
+              <span class="smaps-value" id="smaps-heap-value">--</span>
+            </div>
+            <div class="smaps-legend-item">
+              <span class="smaps-dot smaps-anon"></span>
+              <span class="smaps-label">Anon</span>
+              <span class="smaps-value" id="smaps-anon-value">--</span>
+              <span class="smaps-regions">(<span id="smaps-anon-regions">--</span> regions)</span>
+            </div>
+            <div class="smaps-legend-item">
+              <span class="smaps-dot smaps-file"></span>
+              <span class="smaps-label">File</span>
+              <span class="smaps-value" id="smaps-file-value">--</span>
+              <span class="smaps-regions">(<span id="smaps-file-regions">--</span> regions)</span>
+            </div>
+            <div class="smaps-legend-item">
+              <span class="smaps-dot smaps-stack"></span>
+              <span class="smaps-label">Stack</span>
+              <span class="smaps-value" id="smaps-stack-value">--</span>
+            </div>
+            <div class="smaps-legend-item">
+              <span class="smaps-dot smaps-uring"></span>
+              <span class="smaps-label">io_uring</span>
+              <span class="smaps-value" id="smaps-uring-value">--</span>
+            </div>
+            <div class="smaps-legend-item">
+              <span class="smaps-dot smaps-other"></span>
+              <span class="smaps-label">Other</span>
+              <span class="smaps-value" id="smaps-other-value">--</span>
+            </div>
+          </div>
         </div>
 
         <!-- Footer stats -->

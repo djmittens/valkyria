@@ -3222,6 +3222,67 @@ main[role="main"] {
   letter-spacing: 0.5px;
 }
 
+/* Library memory stats row (SSL + nghttp2) */
+.aio-lib-memory-stats {
+  display: flex;
+  gap: var(--space-lg);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-md);
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+}
+
+.lib-mem-stat {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.lib-mem-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.lib-mem-icon.ssl {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+}
+
+.lib-mem-icon.http2 {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+}
+
+.lib-mem-icon.libuv {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+}
+
+.lib-mem-label {
+  color: var(--text-muted);
+}
+
+.lib-mem-value {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.lib-mem-stat.lib-mem-total {
+  margin-left: auto;
+  padding-left: var(--space-md);
+  border-left: 1px solid var(--border-color);
+}
+
+.lib-mem-stat.lib-mem-total .lib-mem-label {
+  color: var(--text-secondary);
+}
+
 /* Slab grid layout within AIO panel */
 .aio-slab-grid {
   display: grid;
@@ -3636,7 +3697,7 @@ main[role="main"] {
 }
 
 /* Segment colors: striped = capacity (unfilled), solid = used (fill) */
-.stacked-segment.gc-heap {
+.stacked-segment.runtime {
   background: repeating-linear-gradient(
     -45deg,
     rgba(59, 130, 246, 0.25),
@@ -3645,18 +3706,7 @@ main[role="main"] {
     transparent 6px
   );
 }
-.stacked-segment.gc-heap .segment-fill { background: #3b82f6; }
-
-.stacked-segment.scratch {
-  background: repeating-linear-gradient(
-    -45deg,
-    rgba(16, 185, 129, 0.25),
-    rgba(16, 185, 129, 0.25) 3px,
-    transparent 3px,
-    transparent 6px
-  );
-}
-.stacked-segment.scratch .segment-fill { background: #10b981; }
+.stacked-segment.runtime .segment-fill { background: #3b82f6; }
 
 .stacked-segment.aio {
   background: repeating-linear-gradient(
@@ -3680,10 +3730,10 @@ main[role="main"] {
 }
 .stacked-segment.metrics .segment-fill { background: #a855f7; }
 
-.stacked-segment.untracked {
+.stacked-segment.other {
   background: rgba(107, 114, 128, 0.25);
 }
-.stacked-segment.untracked .segment-fill { background: #6b7280; }
+.stacked-segment.other .segment-fill { background: #6b7280; }
 
 /* Legend */
 .breakdown-legend {
@@ -3711,11 +3761,8 @@ main[role="main"] {
 }
 
 /* Striped backgrounds for legend dots (represents reserved/capacity - matches bar segments) */
-.legend-dot.gc-heap {
+.legend-dot.runtime {
   background: repeating-linear-gradient(-45deg, rgba(59, 130, 246, 0.35), rgba(59, 130, 246, 0.35) 1.5px, transparent 1.5px, transparent 3px);
-}
-.legend-dot.scratch {
-  background: repeating-linear-gradient(-45deg, rgba(16, 185, 129, 0.35), rgba(16, 185, 129, 0.35) 1.5px, transparent 1.5px, transparent 3px);
 }
 .legend-dot.aio {
   background: repeating-linear-gradient(-45deg, rgba(245, 158, 11, 0.35), rgba(245, 158, 11, 0.35) 1.5px, transparent 1.5px, transparent 3px);
@@ -3723,12 +3770,9 @@ main[role="main"] {
 .legend-dot.metrics {
   background: repeating-linear-gradient(-45deg, rgba(168, 85, 247, 0.35), rgba(168, 85, 247, 0.35) 1.5px, transparent 1.5px, transparent 3px);
 }
-.legend-dot.untracked {
+.legend-dot.other {
   background: repeating-linear-gradient(-45deg, rgba(107, 114, 128, 0.35), rgba(107, 114, 128, 0.35) 1.5px, transparent 1.5px, transparent 3px);
 }
-.legend-dot.lval { background: #60a5fa; }
-.legend-dot.lenv { background: #93c5fd; }
-.legend-dot.malloc { background: #bfdbfe; }
 
 /* Fill element for diagonal split (represents used/resident) */
 /* Fixed 50/50 diagonal from bottom-left to top-right: solid=upper-left, muted=lower-right */
@@ -3739,11 +3783,10 @@ main[role="main"] {
   clip-path: polygon(0 0, 0 100%, 100% 0);
 }
 
-.legend-dot.gc-heap .legend-dot-fill { background: #3b82f6; }
-.legend-dot.scratch .legend-dot-fill { background: #10b981; }
+.legend-dot.runtime .legend-dot-fill { background: #3b82f6; }
 .legend-dot.aio .legend-dot-fill { background: #f59e0b; }
 .legend-dot.metrics .legend-dot-fill { background: #a855f7; }
-.legend-dot.untracked .legend-dot-fill { background: #6b7280; }
+.legend-dot.other .legend-dot-fill { background: #6b7280; }
 
 .legend-label {
   color: var(--text-primary);
@@ -3766,36 +3809,6 @@ main[role="main"] {
   color: var(--text-muted);
 }
 
-/* GC sub-breakdown */
-.gc-sub-breakdown {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  padding: var(--space-sm) 0;
-  border-top: 1px solid var(--border-color);
-  border-bottom: 1px solid var(--border-color);
-  margin: var(--space-sm) 0;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-  flex-wrap: wrap;
-}
-
-.gc-sub-label {
-  color: var(--text-muted);
-}
-
-.gc-sub-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.gc-sub-item .legend-dot {
-  width: 8px;
-  height: 8px;
-}
-
 /* Footer */
 .breakdown-footer {
   display: flex;
@@ -3809,6 +3822,104 @@ main[role="main"] {
 
 .breakdown-footer .sep {
   color: var(--border-color);
+}
+
+/* =====================================================================
+   SMAPS BREAKDOWN - OS Memory Regions
+   ===================================================================== */
+
+.smaps-breakdown {
+  margin-top: var(--space-lg);
+  padding-top: var(--space-lg);
+  border-top: 1px dashed var(--border-muted);
+}
+
+.smaps-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.smaps-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.smaps-subtitle {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.smaps-bar {
+  display: flex;
+  height: 16px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-bottom: var(--space-md);
+}
+
+.smaps-segment {
+  height: 100%;
+  min-width: 2px;
+  transition: width 0.3s ease;
+}
+
+/* Smaps color scheme - distinct from app breakdown */
+.smaps-segment.smaps-heap { background: #60a5fa; }   /* blue - malloc */
+.smaps-segment.smaps-anon { background: #f59e0b; }   /* amber - mmap buffers */
+.smaps-segment.smaps-file { background: #10b981; }   /* green - shared libs */
+.smaps-segment.smaps-stack { background: #8b5cf6; }  /* purple - stacks */
+.smaps-segment.smaps-uring { background: #ec4899; }  /* pink - io_uring */
+.smaps-segment.smaps-other { background: #6b7280; }  /* gray - vdso etc */
+
+.smaps-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-lg);
+}
+
+.smaps-legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 11px;
+}
+
+.smaps-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.smaps-dot.smaps-heap { background: #60a5fa; }
+.smaps-dot.smaps-anon { background: #f59e0b; }
+.smaps-dot.smaps-file { background: #10b981; }
+.smaps-dot.smaps-stack { background: #8b5cf6; }
+.smaps-dot.smaps-uring { background: #ec4899; }
+.smaps-dot.smaps-other { background: #6b7280; }
+
+.smaps-label {
+  color: var(--text-muted);
+  min-width: 45px;
+}
+
+.smaps-value {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.smaps-regions {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  font-size: 10px;
 }
 
 /* Responsive */
@@ -3828,10 +3939,5 @@ main[role="main"] {
 
   .legend-item {
     font-size: 10px;
-  }
-
-  .gc-sub-breakdown {
-    font-size: 10px;
-    gap: var(--space-sm);
   }
 }
