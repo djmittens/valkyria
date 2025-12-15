@@ -3,7 +3,9 @@
   'use strict';
 
   // ==================== Configuration ====================
-  var HISTORY_SIZE = 60;
+  // Sparkline window size in samples (server sends updates every 100ms)
+  // 1800 samples = 3 minutes, 600 = 1 minute, 3000 = 5 minutes
+  var HISTORY_SAMPLES = 1800;
   var GAUGE_CIRCUMFERENCE = 251.2;  // 2 * PI * 40
 
   // Adaptive interval system (for rate-based UI updates)
@@ -43,7 +45,7 @@
   function createHistoryBuffer(maxSize) {
     return {
       data: [],
-      maxSize: maxSize || 60,
+      maxSize: maxSize || HISTORY_SAMPLES,
       push: function(value) {
         this.data.push(value);
         if (this.data.length > this.maxSize) {
@@ -68,14 +70,14 @@
     var id = type + ':' + key;
     if (!entityHistory[id]) {
       entityHistory[id] = {
-        requestRate: createHistoryBuffer(60),
-        errorRate: createHistoryBuffer(60),
-        p50: createHistoryBuffer(60),
-        p95: createHistoryBuffer(60),
-        p99: createHistoryBuffer(60),
-        bytesIn: createHistoryBuffer(60),
-        bytesOut: createHistoryBuffer(60),
-        statusCodes: createHistoryBuffer(20) // { s2xx, s4xx, s5xx }
+        requestRate: createHistoryBuffer(HISTORY_SAMPLES),
+        errorRate: createHistoryBuffer(HISTORY_SAMPLES),
+        p50: createHistoryBuffer(HISTORY_SAMPLES),
+        p95: createHistoryBuffer(HISTORY_SAMPLES),
+        p99: createHistoryBuffer(HISTORY_SAMPLES),
+        bytesIn: createHistoryBuffer(HISTORY_SAMPLES),
+        bytesOut: createHistoryBuffer(HISTORY_SAMPLES),
+        statusCodes: createHistoryBuffer(HISTORY_SAMPLES)
       };
     }
     return entityHistory[id];
@@ -92,11 +94,12 @@
     var width = opts.width || 48;
     var height = opts.height || 16;
     var color = opts.color || 'var(--color-info)';
-    var fillOpacity = opts.fillOpacity || 0.2;
+    var fillOpacity = opts.fillOpacity !== undefined ? opts.fillOpacity : 0.2;
     var strokeWidth = opts.strokeWidth || 1.5;
 
     var max = Math.max.apply(null, data);
-    var min = opts.minValue !== undefined ? opts.minValue : Math.min.apply(null, data);
+    // Default min to 0 for rate-style sparklines (shows absolute scale)
+    var min = opts.minValue !== undefined ? opts.minValue : 0;
     var range = max - min || 1;
 
     var points = data.map(function(v, i) {
@@ -108,79 +111,15 @@
     var areaPoints = points + ' ' + width + ',' + height + ' 0,' + height;
 
     container.innerHTML =
-      '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
+      '<svg width="100%" height="100%" viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" style="display:block;">' +
       '<polygon points="' + areaPoints + '" fill="' + color + '" opacity="' + fillOpacity + '"/>' +
       '<polyline points="' + points + '" fill="none" stroke="' + color + '" stroke-width="' + strokeWidth + '" stroke-linecap="round" stroke-linejoin="round"/>' +
       '</svg>';
   }
 
-  // Multi-line sparkline for P50/P95/P99 trends (120x32 px default)
-  function renderPercentileSparkline(container, history, options) {
-    if (!container || !history.p50 || history.p50.length < 2) {
-      if (container) container.innerHTML = '';
-      return;
-    }
-
-    var opts = options || {};
-    var width = opts.width || 120;
-    var height = opts.height || 32;
-
-    var allData = history.p50.concat(history.p95).concat(history.p99);
-    var max = Math.max.apply(null, allData) || 1;
-    var min = 0;
-
-    function pathFor(data, color, strokeWidth) {
-      if (data.length < 2) return '';
-      var points = data.map(function(v, i) {
-        var x = (i / (data.length - 1)) * width;
-        var y = height - ((v - min) / (max - min)) * (height - 4) - 2;
-        return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
-      }).join(' ');
-      return '<path d="' + points + '" fill="none" stroke="' + color + '" stroke-width="' + strokeWidth + '" opacity="0.9"/>';
-    }
-
-    container.innerHTML =
-      '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
-      pathFor(history.p99, 'var(--color-error)', 1) +
-      pathFor(history.p95, 'var(--color-warning)', 1.2) +
-      pathFor(history.p50, 'var(--color-ok)', 1.5) +
-      '</svg>';
-  }
-
-  // Stacked bar sparkline for status codes (60x20 px default)
-  function renderStatusCodeSparkline(container, history, options) {
-    if (!container || !history || history.length < 2) {
-      if (container) container.innerHTML = '';
-      return;
-    }
-
-    var opts = options || {};
-    var width = opts.width || 60;
-    var height = opts.height || 20;
-    var barWidth = width / history.length;
-
-    var bars = history.map(function(d, i) {
-      var total = d.s2xx + d.s4xx + d.s5xx;
-      if (total === 0) return '';
-
-      var x = i * barWidth;
-      var h2xx = (d.s2xx / total) * height;
-      var h4xx = (d.s4xx / total) * height;
-      var h5xx = (d.s5xx / total) * height;
-
-      var y2xx = 0;
-      var y4xx = h2xx;
-      var y5xx = h2xx + h4xx;
-
-      return '<g>' +
-        '<rect x="' + x + '" y="' + y2xx + '" width="' + (barWidth - 0.5) + '" height="' + h2xx + '" fill="var(--color-ok)"/>' +
-        '<rect x="' + x + '" y="' + y4xx + '" width="' + (barWidth - 0.5) + '" height="' + h4xx + '" fill="var(--color-warning)"/>' +
-        '<rect x="' + x + '" y="' + y5xx + '" width="' + (barWidth - 0.5) + '" height="' + h5xx + '" fill="var(--color-error)"/>' +
-        '</g>';
-    }).join('');
-
-    container.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '">' + bars + '</svg>';
-  }
+  // NOTE: renderPercentileSparkline and renderStatusCodeSparkline are defined
+  // later in this file (around line ~1500) with the full implementation.
+  // The definitions there support history buffer objects with .data property.
 
   // ==================== RLE Decoder ====================
   // Decodes RLE-encoded state string: "F16A3I2" -> "FFFFFFFFFFFFFFFFAAAII"
@@ -1433,7 +1372,7 @@
   // ==================== History Management ====================
   function pushHistory(arr, value) {
     arr.push(value);
-    while (arr.length > HISTORY_SIZE) arr.shift();
+    while (arr.length > HISTORY_SAMPLES) arr.shift();
   }
 
   function calculateRate(current, previous, deltaSeconds) {
@@ -1477,7 +1416,7 @@
 
     var maxPause = Math.max.apply(null, gcPauses.map(function(p) { return p.pause; }));
     var scaleMax = Math.max(maxPause, 10); // At least 10ms scale
-    var barWidth = 100 / HISTORY_SIZE;
+    var barWidth = 100 / HISTORY_SAMPLES;
 
     gcPauses.forEach(function(p, i) {
       var bar = document.createElement('div');
@@ -1512,8 +1451,8 @@
 
   // Render multi-line percentile sparkline showing P50/P95/P99 trends
   function renderPercentileSparkline(container, history, options) {
-    if (!container || !history.p50 || history.p50.data.length < 2) {
-      container.innerHTML = '';
+    if (!container || !history.p50 || !history.p50.data || history.p50.data.length < 2) {
+      if (container) container.innerHTML = '';
       return;
     }
 
@@ -1526,17 +1465,17 @@
     var min = 0;
 
     function pathFor(data, color, strokeWidth) {
-      if (data.length < 2) return '';
+      if (!data || data.length < 2) return '';
       var points = data.map(function(v, i) {
         var x = (i / (data.length - 1)) * width;
         var y = height - ((v - min) / (max - min)) * (height - 4) - 2;
         return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
       }).join(' ');
-      return '<path d="' + points + '" fill="none" stroke="' + color + '" stroke-width="' + strokeWidth + '" opacity="0.9"/>';
+      return '<path d="' + points + '" fill="none" stroke="' + color + '" stroke-width="' + strokeWidth + '" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>';
     }
 
     container.innerHTML =
-      '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
+      '<svg width="100%" height="100%" viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" style="display:block;">' +
       pathFor(history.p99.data, 'var(--color-error)', 1) +
       pathFor(history.p95.data, 'var(--color-warning)', 1.2) +
       pathFor(history.p50.data, 'var(--color-ok)', 1.5) +
@@ -1546,14 +1485,14 @@
   // Render stacked bar sparkline showing 2xx/4xx/5xx status codes over time
   function renderStatusCodeSparkline(container, history, options) {
     if (!container || !history || history.length < 2) {
-      container.innerHTML = '';
+      if (container) container.innerHTML = '';
       return;
     }
 
     var opts = options || {};
     var width = opts.width || 60;
     var height = opts.height || 20;
-    var barWidth = width / history.length;
+    var barWidth = Math.max(2, width / history.length);
 
     var bars = history.map(function(d, i) {
       var total = d.s2xx + d.s4xx + d.s5xx;
@@ -1569,13 +1508,13 @@
       var y5xx = h2xx + h4xx;
 
       return '<g>' +
-        '<rect x="' + x + '" y="' + y2xx + '" width="' + (barWidth - 0.5) + '" height="' + h2xx + '" fill="var(--color-ok)"/>' +
-        '<rect x="' + x + '" y="' + y4xx + '" width="' + (barWidth - 0.5) + '" height="' + h4xx + '" fill="var(--color-warning)"/>' +
-        '<rect x="' + x + '" y="' + y5xx + '" width="' + (barWidth - 0.5) + '" height="' + h5xx + '" fill="var(--color-error)"/>' +
+        '<rect x="' + x + '" y="' + y2xx + '" width="' + Math.max(1, barWidth - 0.5) + '" height="' + h2xx + '" fill="var(--color-ok)"/>' +
+        '<rect x="' + x + '" y="' + y4xx + '" width="' + Math.max(1, barWidth - 0.5) + '" height="' + h4xx + '" fill="var(--color-warning)"/>' +
+        '<rect x="' + x + '" y="' + y5xx + '" width="' + Math.max(1, barWidth - 0.5) + '" height="' + h5xx + '" fill="var(--color-error)"/>' +
         '</g>';
     }).join('');
 
-    container.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '">' + bars + '</svg>';
+    container.innerHTML = '<svg width="100%" height="100%" viewBox="0 0 ' + width + ' ' + height + '" style="display:block;">' + bars + '</svg>';
   }
 
   // ==================== Rendering: AIO System Panels ====================
@@ -1724,7 +1663,7 @@
           '</div>' +
 
           // Memory Section (Slabs + Libraries)
-          '<div class="aio-section-block">' +
+          '<div class="aio-section-block memory-section-block">' +
             '<div class="block-header">' +
               '<span class="block-title">Memory</span>' +
               '<span class="block-badge aio-sys-mem-total">--</span>' +
@@ -1772,71 +1711,63 @@
           '</div>' +
 
           // HTTP Servers Section (nested under AIO)
-          '<div class="aio-section-block">' +
+          '<div class="aio-section-block http-servers-section" style="display:none">' +
             '<div class="block-header">' +
               '<span class="block-title">HTTP Servers</span>' +
-              '<span class="block-badge aio-sys-servers-count">-- servers</span>' +
-              '<span class="block-badge aio-sys-servers-rate">-- req/s</span>' +
+              '<span class="block-badge aio-sys-servers-count">0 servers</span>' +
+              '<span class="block-badge aio-sys-servers-rate">0 req/s</span>' +
             '</div>' +
             '<div class="nested-cards-grid aio-sys-servers-container" id="' + id + '-servers-container">' +
-              '<!-- Server cards will be injected here -->' +
-              '<div class="aio-no-entities" style="color: var(--text-muted); font-size: 12px; padding: var(--space-md);">No HTTP servers</div>' +
             '</div>' +
           '</div>' +
 
           // HTTP Clients Section (nested under AIO)
-          '<div class="aio-section-block">' +
+          '<div class="aio-section-block http-clients-section" style="display:none">' +
             '<div class="block-header">' +
               '<span class="block-title">HTTP Clients</span>' +
-              '<span class="block-badge aio-sys-clients-count">-- clients</span>' +
+              '<span class="block-badge aio-sys-clients-count">0 clients</span>' +
             '</div>' +
             '<div class="nested-cards-grid aio-sys-clients-container" id="' + id + '-clients-container">' +
-              '<!-- Client cards will be injected here -->' +
-              '<div class="aio-no-entities" style="color: var(--text-muted); font-size: 12px; padding: var(--space-md);">No HTTP clients</div>' +
             '</div>' +
           '</div>' +
 
           // TCP Servers Section (nested under AIO)
-          '<div class="aio-section-block">' +
+          '<div class="aio-section-block tcp-servers-section" style="display:none">' +
             '<div class="block-header">' +
               '<span class="block-title">TCP Servers</span>' +
-              '<span class="block-badge aio-sys-tcp-servers-count">-- servers</span>' +
+              '<span class="block-badge aio-sys-tcp-servers-count">0 servers</span>' +
             '</div>' +
             '<div class="nested-cards-grid aio-sys-tcp-servers-container" id="' + id + '-tcp-servers-container">' +
-              '<div class="aio-no-entities" style="color: var(--text-muted); font-size: 12px; padding: var(--space-md);">No TCP servers</div>' +
             '</div>' +
           '</div>' +
 
           // TCP Clients Section (nested under AIO)
-          '<div class="aio-section-block">' +
+          '<div class="aio-section-block tcp-clients-section" style="display:none">' +
             '<div class="block-header">' +
               '<span class="block-title">TCP Clients</span>' +
-              '<span class="block-badge aio-sys-tcp-clients-count">-- clients</span>' +
+              '<span class="block-badge aio-sys-tcp-clients-count">0 clients</span>' +
             '</div>' +
             '<div class="nested-cards-grid aio-sys-tcp-clients-container" id="' + id + '-tcp-clients-container">' +
-              '<div class="aio-no-entities" style="color: var(--text-muted); font-size: 12px; padding: var(--space-md);">No TCP clients</div>' +
             '</div>' +
           '</div>' +
 
           // UDP Sockets Section (nested under AIO)
-          '<div class="aio-section-block">' +
+          '<div class="aio-section-block udp-section" style="display:none">' +
             '<div class="block-header">' +
               '<span class="block-title">UDP Sockets</span>' +
-              '<span class="block-badge aio-sys-udp-count">-- sockets</span>' +
+              '<span class="block-badge aio-sys-udp-count">0 sockets</span>' +
             '</div>' +
             '<div class="nested-cards-grid aio-sys-udp-container" id="' + id + '-udp-container">' +
-              '<div class="aio-no-entities" style="color: var(--text-muted); font-size: 12px; padding: var(--space-md);">No UDP sockets</div>' +
             '</div>' +
           '</div>' +
 
           // File Operations Section (nested under AIO)
-          '<div class="aio-section-block">' +
+          '<div class="aio-section-block file-ops-section" style="display:none">' +
             '<div class="block-header">' +
               '<span class="block-title">File Operations</span>' +
-              '<span class="block-badge aio-sys-file-ops-count">-- ops</span>' +
+              '<span class="block-badge aio-sys-file-ops-count">0 ops</span>' +
             '</div>' +
             '<div class="nested-cards-grid aio-sys-file-ops-container" id="' + id + '-file-ops-container">' +
-              '<div class="aio-no-entities" style="color: var(--text-muted); font-size: 12px; padding: var(--space-md);">No file operations</div>' +
             '</div>' +
           '</div>' +
 
@@ -2111,7 +2042,7 @@
   function createHistoryBuffer(maxSize) {
     return {
       data: [],
-      maxSize: maxSize || 60,
+      maxSize: maxSize || HISTORY_SAMPLES,
       push: function(value) {
         this.data.push(value);
         if (this.data.length > this.maxSize) {
@@ -2133,14 +2064,17 @@
   function getServerHistory(key) {
     if (!serverHistory[key]) {
       serverHistory[key] = {
-        bytesIn: [],
-        bytesOut: [],
+        bytesIn: createHistoryBuffer(HISTORY_SAMPLES),
+        bytesOut: createHistoryBuffer(HISTORY_SAMPLES),
         prevBytesIn: 0,
         prevBytesOut: 0,
-        statusCodes: createHistoryBuffer(20),
-        p50: createHistoryBuffer(60),
-        p95: createHistoryBuffer(60),
-        p99: createHistoryBuffer(60)
+        statusCodes: createHistoryBuffer(HISTORY_SAMPLES),
+        p50: createHistoryBuffer(HISTORY_SAMPLES),
+        p95: createHistoryBuffer(HISTORY_SAMPLES),
+        p99: createHistoryBuffer(HISTORY_SAMPLES),
+        reqRate: createHistoryBuffer(HISTORY_SAMPLES),
+        conns: createHistoryBuffer(HISTORY_SAMPLES),
+        sse: createHistoryBuffer(HISTORY_SAMPLES)
       };
     }
     return serverHistory[key];
@@ -2156,103 +2090,87 @@
 
     card.innerHTML = `
       <div class="entity-header">
-        <div class="entity-status ok" role="img" aria-label="Status: Healthy" title="Server health based on error rate. Green (<1% errors), Yellow (1-5% errors), Red (>5% errors)."></div>
+        <div class="entity-status ok"></div>
         <h3 class="entity-name">${serverInfo.server}:${serverInfo.port}</h3>
         <div class="entity-label">HTTP</div>
-        <div class="entity-stats">
-          <div class="entity-stat" title="Current number of active TCP connections to this server. High connection count may indicate slow responses or connection pool exhaustion on clients.">
-            <div class="entity-stat-value active-conns">--</div>
-            <div class="entity-stat-label">Conns</div>
+        <div class="entity-header-metrics">
+          <div class="header-metric-item" title="Request rate">
+            <div class="header-metric-spark req-rate-spark"></div>
+            <span class="header-metric-value req-rate">--</span>
+            <span class="header-metric-unit">/s</span>
           </div>
-          <div class="entity-stat sse-stat" title="Active Server-Sent Events (SSE) streams. Long-lived connections for real-time data push (e.g., dashboard metrics). Not counted in regular request metrics.">
-            <div class="entity-stat-value sse-streams">0</div>
-            <div class="entity-stat-label">SSE</div>
+          <div class="header-metric-item" title="P99 latency">
+            <div class="header-metric-spark latency-spark"></div>
+            <span class="header-metric-value p99-header">--</span>
+            <span class="header-metric-unit">ms</span>
           </div>
-          <div class="entity-stat" title="Requests per second on this server. Compare with historical baseline to detect anomalies. Sudden drops may indicate upstream issues.">
-            <div class="entity-stat-value req-rate">--/s</div>
-            <div class="entity-stat-label">Req</div>
+          <div class="header-metric-item success-metric" title="Success rate">
+            <span class="header-metric-value success-rate">100</span>
+            <span class="header-metric-unit">%</span>
           </div>
         </div>
-        <div class="entity-summary">
-          <span class="summary-metric req-rate">--/s</span>
-          <span class="summary-metric p99-value">P99:--</span>
-          <span class="summary-metric success-rate">---%</span>
-          <div class="summary-spark" id="${card.id}-summary-spark"></div>
-        </div>
-        <button class="expand-toggle" onclick="toggleEntityCard(this.closest('.entity-card'))" aria-label="Toggle details" title="Expand/collapse card details"><span class="expand-icon">▼</span></button>
+        <button class="expand-toggle" onclick="toggleEntityCard(this.closest('.entity-card'))" aria-label="Toggle details"><span class="expand-icon">▼</span></button>
       </div>
       <div class="entity-body">
-        <!-- Status Codes Section -->
-        <div class="entity-section">
-          <div class="entity-section-title" title="HTTP response status codes grouped by class. Monitor 4xx for client issues (bad requests, auth failures) and 5xx for server errors (bugs, timeouts, dependencies).">Response Codes</div>
-          <div class="status-row" role="list">
-            <div class="status-chip s2xx" role="listitem" title="Successful responses (200-299). Includes OK, Created, Accepted, No Content. This should be the vast majority of responses.">
-              <div class="status-chip-value count-2xx">0</div>
-              <div class="status-chip-label"><span class="icon" aria-hidden="true">✓</span> 2xx</div>
+        <!-- Metrics Grid -->
+        <div class="server-metrics-grid">
+          <!-- Response Codes Section -->
+          <div class="metric-panel response-codes-panel">
+            <div class="metric-panel-header">
+              <span class="metric-panel-title">Response Codes</span>
+              <div class="code-chips">
+                <span class="code-chip s2xx"><span class="count-2xx">0</span></span>
+                <span class="code-chip s4xx"><span class="count-4xx">0</span></span>
+                <span class="code-chip s5xx"><span class="count-5xx">0</span></span>
+              </div>
             </div>
-            <div class="status-chip s4xx" role="listitem" title="Client errors (400-499). Bad Request, Unauthorized, Forbidden, Not Found. High 4xx may indicate API misuse, auth issues, or invalid client requests.">
-              <div class="status-chip-value count-4xx">0</div>
-              <div class="status-chip-label"><span class="icon" aria-hidden="true">!</span> 4xx</div>
-            </div>
-            <div class="status-chip s5xx" role="listitem" title="Server errors (500-599). Internal errors, Bad Gateway, Service Unavailable. Any 5xx requires investigation - check logs, dependencies, and resource exhaustion.">
-              <div class="status-chip-value count-5xx">0</div>
-              <div class="status-chip-label"><span class="icon" aria-hidden="true">✕</span> 5xx</div>
-            </div>
-          </div>
-          <div class="status-bar" role="img" aria-label="Response code breakdown" title="Visual proportion of response codes. A healthy service shows mostly green (2xx).">
-            <div class="status-segment s2xx" style="width: 100%"></div>
-            <div class="status-segment s4xx" style="width: 0%"></div>
-            <div class="status-segment s5xx" style="width: 0%"></div>
-          </div>
-          <div class="status-code-spark" title="Status code distribution over time"></div>
-        </div>
-
-        <!-- Latency Section -->
-        <div class="entity-section">
-          <div class="entity-section-title" title="Request latency distribution showing how long requests take to complete. Bars show count of requests in each latency bucket. Color indicates severity: green (fast), yellow (moderate), red (slow).">Latency Distribution</div>
-          <div class="histogram" role="img" aria-label="Latency histogram" title="Histogram of request durations. Hover over bars to see exact counts. Bimodal distributions may indicate cache hits vs misses or different code paths."></div>
-          <div class="histogram-meta">
-            <span>0ms</span>
-            <span>500ms+</span>
-          </div>
-          <div class="percentiles" role="list" aria-label="Latency percentiles">
-            <div class="percentile" role="listitem" title="Median latency - 50% of requests complete faster than this. Represents typical user experience. Should match your latency SLO target.">
-              <div class="percentile-dot p50" aria-hidden="true"></div>
-              <span class="percentile-label">P50</span>
-              <span class="percentile-value p50-value">--</span>
-            </div>
-            <div class="percentile" role="listitem" title="95th percentile - only 5% of requests are slower. Key SLO metric. If P95 >> P50, investigate outliers: GC pauses, cold caches, or slow queries.">
-              <div class="percentile-dot p95" aria-hidden="true"></div>
-              <span class="percentile-label">P95</span>
-              <span class="percentile-value p95-value">--</span>
-            </div>
-            <div class="percentile" role="listitem" title="99th percentile - worst 1% of requests. High P99 affects user experience and may indicate resource contention, timeouts, or retry storms.">
-              <div class="percentile-dot p99" aria-hidden="true"></div>
-              <span class="percentile-label">P99</span>
-              <span class="percentile-value p99-value">--</span>
+            <div class="metric-panel-body">
+              <div class="status-code-spark-large"></div>
+              <div class="status-bar-large">
+                <div class="status-segment s2xx" style="width: 100%"></div>
+                <div class="status-segment s4xx" style="width: 0%"></div>
+                <div class="status-segment s5xx" style="width: 0%"></div>
+              </div>
             </div>
           </div>
-          <div class="latency-trend-spark" title="Latency trend (P50/P95/P99 over last 60s)"></div>
-        </div>
-
-        <!-- Throughput Section -->
-        <div class="entity-section">
-          <div class="entity-section-title" title="Network I/O throughput over the last 60 seconds. Useful for detecting traffic patterns, large response bodies, or potential bandwidth saturation.">Throughput</div>
-          <div class="sparkline-container" title="Sparkline showing bytes in (requests received) and bytes out (responses sent) over time.">
-            <div class="sparkline" role="img" aria-label="Throughput chart"></div>
-            <span class="sparkline-time-label start">-60s</span>
-            <span class="sparkline-time-label end">now</span>
-          </div>
-          <div class="sparkline-meta">
-            <div class="sparkline-stat" title="Incoming bytes per second (request bodies, headers). High inbound traffic may indicate file uploads or large POST payloads.">
-              <div class="sparkline-dot in" aria-hidden="true"></div>
-              <span class="sparkline-label">In</span>
-              <span class="sparkline-value bytes-in-rate">0 B/s</span>
+          <!-- Latency Section -->
+          <div class="metric-panel latency-panel">
+            <div class="metric-panel-header">
+              <span class="metric-panel-title">Latency</span>
+              <div class="latency-chips">
+                <span class="latency-chip p50"><span class="label">p50</span><span class="value p50-value">--</span></span>
+                <span class="latency-chip p95"><span class="label">p95</span><span class="value p95-value">--</span></span>
+                <span class="latency-chip p99"><span class="label">p99</span><span class="value p99-value">--</span></span>
+              </div>
             </div>
-            <div class="sparkline-stat" title="Outgoing bytes per second (response bodies, headers). High outbound traffic indicates large responses. Monitor for bandwidth limits.">
-              <div class="sparkline-dot out" aria-hidden="true"></div>
-              <span class="sparkline-label">Out</span>
-              <span class="sparkline-value bytes-out-rate">0 B/s</span>
+            <div class="metric-panel-body">
+              <div class="latency-trend-spark-large"></div>
+            </div>
+          </div>
+          <!-- Throughput Section -->
+          <div class="metric-panel throughput-panel">
+            <div class="metric-panel-header">
+              <span class="metric-panel-title">Throughput</span>
+              <div class="throughput-stats">
+                <span class="throughput-stat in"><span class="arrow">↓</span><span class="value bytes-in-rate">0 B/s</span></span>
+                <span class="throughput-stat out"><span class="arrow">↑</span><span class="value bytes-out-rate">0 B/s</span></span>
+              </div>
+            </div>
+            <div class="metric-panel-body">
+              <div class="throughput-spark-large"></div>
+            </div>
+          </div>
+          <!-- Concurrency Section -->
+          <div class="metric-panel concurrency-panel">
+            <div class="metric-panel-header">
+              <span class="metric-panel-title">Concurrency</span>
+              <div class="concurrency-stats">
+                <span class="concurrency-stat conns"><span class="value active-conns">0</span><span class="label">conns</span></span>
+                <span class="concurrency-stat sse"><span class="value sse-streams">0</span><span class="label">sse</span></span>
+              </div>
+            </div>
+            <div class="metric-panel-body">
+              <div class="concurrency-spark-large"></div>
             </div>
           </div>
         </div>
@@ -2269,6 +2187,40 @@
     if (le < 0.01) return (le * 1000).toFixed(1) + 'm';
     if (le < 1) return Math.round(le * 1000) + 'm';
     return le.toFixed(0) + 's';
+  }
+
+  function renderServerHistogramMini(container, histogram) {
+    if (!container) return;
+    if (!histogram || histogram.length === 0) {
+      container.innerHTML = '';
+      return;
+    }
+
+    var max = Math.max.apply(null, histogram.map(function(b) { return b.count; }));
+    if (max === 0) max = 1;
+
+    // Render 8 condensed bars
+    var numBars = 8;
+    var step = Math.ceil(histogram.length / numBars);
+    var bars = [];
+
+    for (var i = 0; i < numBars; i++) {
+      var startIdx = i * step;
+      var endIdx = Math.min(startIdx + step, histogram.length);
+      var sum = 0;
+      for (var j = startIdx; j < endIdx; j++) {
+        sum += histogram[j].count;
+      }
+      var pct = (sum / max) * 100;
+      var pClass = '';
+      // Mark bars based on position (approximating p50/p95/p99)
+      if (i === 2) pClass = 'p50';
+      else if (i === 5) pClass = 'p95';
+      else if (i === 7) pClass = 'p99';
+      bars.push('<div class="bar ' + pClass + '" style="height: ' + Math.max(pct, 10) + '%"></div>');
+    }
+
+    container.innerHTML = bars.join('');
   }
 
   function renderServerHistogram(container, histogram) {
@@ -2452,22 +2404,79 @@
     var reqRate = deltaSeconds > 0 ? (reqTotal - prevTotal) / deltaSeconds : 0;
     card.dataset.prevReqTotal = reqTotal;
 
+    // Get history buffers
+    var hist = getServerHistory(serverInfo.key);
+
+    // Track request rate history
+    hist.reqRate.push(reqRate);
+
+    // Track concurrency history
+    hist.conns.push(activeConns);
+    hist.sse.push(sseStreams);
+
     // Find latency histogram
     var latencyHist = findMetric(histograms, 'http_request_duration_seconds', {});
 
-    // Update header stats
-    card.querySelector('.active-conns').textContent = activeConns;
-    card.querySelector('.sse-streams').textContent = sseStreams;
-    card.querySelector('.req-rate').textContent = fmt(reqRate, 1) + '/s';
+    // Update percentile values (estimated from histogram if available)
+    var p50 = 0, p95 = 0, p99 = 0;
+    if (latencyHist && latencyHist.buckets && latencyHist.count > 0) {
+      var buckets = latencyHist.buckets;
+      p50 = estimatePercentile(buckets, latencyHist.count, 0.50);
+      p95 = estimatePercentile(buckets, latencyHist.count, 0.95);
+      p99 = estimatePercentile(buckets, latencyHist.count, 0.99);
+    }
 
-    // Show/hide SSE stat based on whether there are active streams
-    var sseStat = card.querySelector('.sse-stat');
-    if (sseStat) {
-      sseStat.style.display = sseStreams > 0 ? '' : 'none';
+    // Track latency history for trend sparkline (convert to ms)
+    hist.p50.push((p50 || 0) * 1000);
+    hist.p95.push((p95 || 0) * 1000);
+    hist.p99.push((p99 || 0) * 1000);
+
+    // Calculate rates
+    var successRate = reqTotal > 0 ? ((req2xx / reqTotal) * 100) : 100;
+    var errorRate = reqTotal > 0 ? ((req4xx + req5xx) / reqTotal) * 100 : 0;
+
+    // ========== Header Updates ==========
+    // Update request rate in header
+    var reqRateEl = card.querySelector('.entity-header-metrics .req-rate');
+    if (reqRateEl) reqRateEl.textContent = fmt(reqRate, 1);
+
+    // Update P99 in header (convert to ms)
+    var p99HeaderEl = card.querySelector('.p99-header');
+    if (p99HeaderEl) p99HeaderEl.textContent = fmt(p99 * 1000, 1);
+
+    // Update success rate in header
+    var successEl = card.querySelector('.entity-header-metrics .success-rate');
+    if (successEl) {
+      successEl.textContent = successRate.toFixed(0);
+      var successMetric = successEl.closest('.success-metric');
+      if (successMetric) {
+        successMetric.classList.remove('ok', 'warning', 'error');
+        if (successRate >= 99) successMetric.classList.add('ok');
+        else if (successRate >= 95) successMetric.classList.add('warning');
+        else successMetric.classList.add('error');
+      }
+    }
+
+    // Render header sparklines
+    var reqRateSpark = card.querySelector('.req-rate-spark');
+    if (reqRateSpark && hist.reqRate.data.length >= 2) {
+      renderMiniSparkline(reqRateSpark, hist.reqRate.toArray().slice(-20), {
+        color: 'var(--color-info)',
+        width: 40,
+        height: 14
+      });
+    }
+
+    var latencySpark = card.querySelector('.latency-spark');
+    if (latencySpark && hist.p99.data.length >= 2) {
+      renderMiniSparkline(latencySpark, hist.p99.toArray().slice(-20), {
+        color: 'var(--color-warning)',
+        width: 40,
+        height: 14
+      });
     }
 
     // Update entity status based on error rate
-    var errorRate = reqTotal > 0 ? ((req4xx + req5xx) / reqTotal) * 100 : 0;
     var statusEl = card.querySelector('.entity-status');
     statusEl.className = 'entity-status';
     if (errorRate > 5) {
@@ -2478,42 +2487,25 @@
       statusEl.classList.add('ok');
     }
 
+    // ========== Body Updates ==========
     // Update status code chips
-    card.querySelector('.count-2xx').textContent = fmtCompact(req2xx);
-    card.querySelector('.count-4xx').textContent = fmtCompact(req4xx);
-    card.querySelector('.count-5xx').textContent = fmtCompact(req5xx);
+    var count2xxEl = card.querySelector('.count-2xx');
+    var count4xxEl = card.querySelector('.count-4xx');
+    var count5xxEl = card.querySelector('.count-5xx');
+    if (count2xxEl) count2xxEl.textContent = fmtCompact(req2xx);
+    if (count4xxEl) count4xxEl.textContent = fmtCompact(req4xx);
+    if (count5xxEl) count5xxEl.textContent = fmtCompact(req5xx);
 
     // Update status bar segments
     var total = Math.max(reqTotal, 1);
-    var seg2xx = card.querySelector('.status-segment.s2xx');
-    var seg4xx = card.querySelector('.status-segment.s4xx');
-    var seg5xx = card.querySelector('.status-segment.s5xx');
+    var seg2xx = card.querySelector('.status-bar-large .status-segment.s2xx');
+    var seg4xx = card.querySelector('.status-bar-large .status-segment.s4xx');
+    var seg5xx = card.querySelector('.status-bar-large .status-segment.s5xx');
     if (seg2xx) seg2xx.style.width = ((req2xx / total) * 100) + '%';
     if (seg4xx) seg4xx.style.width = ((req4xx / total) * 100) + '%';
     if (seg5xx) seg5xx.style.width = ((req5xx / total) * 100) + '%';
 
-    // Render latency histogram
-    var histContainer = card.querySelector('.histogram');
-    renderServerHistogram(histContainer, latencyHist);
-
-    // Update percentile values (estimated from histogram if available)
-    var p50 = 0, p95 = 0, p99 = 0;
-    if (latencyHist && latencyHist.buckets && latencyHist.count > 0) {
-      var buckets = latencyHist.buckets;
-      p50 = estimatePercentile(buckets, latencyHist.count, 0.50);
-      p95 = estimatePercentile(buckets, latencyHist.count, 0.95);
-      p99 = estimatePercentile(buckets, latencyHist.count, 0.99);
-
-      var p50El = card.querySelector('.p50-value');
-      var p95El = card.querySelector('.p95-value');
-      var p99El = card.querySelector('.p99-value');
-      if (p50El) p50El.textContent = fmtLatency(p50);
-      if (p95El) p95El.textContent = fmtLatency(p95);
-      if (p99El) p99El.textContent = fmtLatency(p99);
-    }
-
     // Track status code history for sparkline
-    var hist = getServerHistory(serverInfo.key);
     var prev = hist.statusCodes.last() || { s2xx: 0, s4xx: 0, s5xx: 0, total2xx: 0, total4xx: 0, total5xx: 0 };
     var delta2xx = req2xx - (prev.total2xx || 0);
     var delta4xx = req4xx - (prev.total4xx || 0);
@@ -2528,37 +2520,39 @@
       total5xx: req5xx
     });
 
-    // Track latency history for trend sparkline (convert to ms)
-    hist.p50.push((p50 || 0) * 1000);
-    hist.p95.push((p95 || 0) * 1000);
-    hist.p99.push((p99 || 0) * 1000);
-
-    // Render status code sparkline
-    var statusSparkContainer = card.querySelector(".status-code-spark");
-    if (statusSparkContainer && hist.statusCodes.data.length >= 2) {
-      renderStatusCodeSparkline(statusSparkContainer, hist.statusCodes.toArray());
+    // Render large status code sparkline
+    var statusSparkLarge = card.querySelector('.status-code-spark-large');
+    if (statusSparkLarge && hist.statusCodes.data.length >= 2) {
+      renderStatusCodeSparkline(statusSparkLarge, hist.statusCodes.toArray(), {
+        width: 160,
+        height: 32
+      });
     }
 
-    // Render latency trend sparkline
-    var latencyTrendContainer = card.querySelector(".latency-trend-spark");
-    if (latencyTrendContainer && hist.p50.data.length >= 2) {
-      renderPercentileSparkline(latencyTrendContainer, hist);
+    // Update latency percentile chips
+    var p50El = card.querySelector('.p50-value');
+    var p95El = card.querySelector('.p95-value');
+    var p99El = card.querySelector('.p99-value');
+    if (p50El) p50El.textContent = fmtLatency(p50);
+    if (p95El) p95El.textContent = fmtLatency(p95);
+    if (p99El) p99El.textContent = fmtLatency(p99);
+
+    // Render large latency trend sparkline
+    var latencyTrendLarge = card.querySelector('.latency-trend-spark-large');
+    if (latencyTrendLarge && hist.p50.data.length >= 2) {
+      renderPercentileSparkline(latencyTrendLarge, hist, { width: 160, height: 40 });
     }
 
-    // Update throughput sparkline
-    // hist already retrieved above for sparklines
+    // Update throughput
     var bytesInRate = deltaSeconds > 0 ? (bytesRecv - hist.prevBytesIn) / deltaSeconds : 0;
     var bytesOutRate = deltaSeconds > 0 ? (bytesSent - hist.prevBytesOut) / deltaSeconds : 0;
 
     // Only record positive rates
-    if (bytesInRate >= 0) pushHistory(hist.bytesIn, bytesInRate);
-    if (bytesOutRate >= 0) pushHistory(hist.bytesOut, bytesOutRate);
+    if (bytesInRate >= 0) hist.bytesIn.push(bytesInRate);
+    if (bytesOutRate >= 0) hist.bytesOut.push(bytesOutRate);
 
     hist.prevBytesIn = bytesRecv;
     hist.prevBytesOut = bytesSent;
-
-    var sparkContainer = card.querySelector('.sparkline');
-    renderServerSparkline(sparkContainer, hist.bytesIn, hist.bytesOut);
 
     // Update throughput labels
     var inRateEl = card.querySelector('.bytes-in-rate');
@@ -2566,39 +2560,121 @@
     if (inRateEl) inRateEl.textContent = fmtRate(Math.max(0, bytesInRate));
     if (outRateEl) outRateEl.textContent = fmtRate(Math.max(0, bytesOutRate));
 
-    // Update summary metrics (for collapsed view)
-    var summaryRate = card.querySelector('.entity-summary .req-rate');
-    var summaryP99 = card.querySelector('.entity-summary .p99-value');
-    var summarySuccess = card.querySelector('.entity-summary .success-rate');
-    var summarySpark = card.querySelector('.summary-spark');
-
-    if (summaryRate) {
-      summaryRate.textContent = fmt(reqRate, 1) + '/s';
-    }
-
-    if (summaryP99 && p99 !== undefined) {
-      summaryP99.textContent = 'P99:' + fmtLatency(p99);
-    }
-
-    if (summarySuccess) {
-      var successRate = reqTotal > 0 ? ((req2xx / reqTotal) * 100) : 100;
-      summarySuccess.textContent = successRate.toFixed(1) + '%';
-      summarySuccess.className = 'summary-metric success-rate';
-      if (successRate < 95) summarySuccess.classList.add('error');
-      else if (successRate < 99) summarySuccess.classList.add('warning');
-    }
-
-    // Update summary sparkline
-    if (summarySpark) {
-      hist.p50.push(p50 * 1000);
-      hist.p95.push(p95 * 1000);
-      hist.p99.push(p99 * 1000);
-      renderMiniSparkline(summarySpark, hist.p99.toArray(), {
-        color: 'var(--color-info)',
-        width: 60,
-        height: 16
+    // Render throughput sparkline
+    var throughputSparkLarge = card.querySelector('.throughput-spark-large');
+    if (throughputSparkLarge && hist.bytesIn.data.length >= 2) {
+      renderThroughputSparkline(throughputSparkLarge, hist.bytesIn.toArray(), hist.bytesOut.toArray(), {
+        width: 160,
+        height: 32
       });
     }
+
+    // Update concurrency stats
+    var connsEl = card.querySelector('.concurrency-stats .active-conns');
+    var sseEl = card.querySelector('.concurrency-stats .sse-streams');
+    if (connsEl) connsEl.textContent = activeConns;
+    if (sseEl) sseEl.textContent = sseStreams;
+
+    // Show/hide SSE stat based on whether there are active streams
+    var sseStat = card.querySelector('.concurrency-stat.sse');
+    if (sseStat) {
+      sseStat.style.display = sseStreams > 0 ? '' : 'none';
+    }
+
+    // Render concurrency sparkline
+    var concurrencySparkLarge = card.querySelector('.concurrency-spark-large');
+    if (concurrencySparkLarge && hist.conns.data.length >= 2) {
+      renderConcurrencySparkline(concurrencySparkLarge, hist.conns.toArray(), hist.sse.toArray(), {
+        width: 160,
+        height: 32
+      });
+    }
+  }
+
+  // Render throughput sparkline (dual line: in/out)
+  function renderThroughputSparkline(container, bytesIn, bytesOut, options) {
+    if (!container || !bytesIn || bytesIn.length < 2) {
+      if (container) container.innerHTML = '';
+      return;
+    }
+
+    var opts = options || {};
+    var width = opts.width || 160;
+    var height = opts.height || 32;
+
+    var allData = bytesIn.concat(bytesOut || []);
+    var max = Math.max.apply(null, allData) || 1;
+
+    function pathFor(data, color, dashArray) {
+      if (!data || data.length < 2) return '';
+      var points = data.map(function(v, i) {
+        var x = (i / (data.length - 1)) * width;
+        var y = height - 2 - ((v / max) * (height - 4));
+        return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      var dash = dashArray ? ' stroke-dasharray="' + dashArray + '"' : '';
+      return '<path d="' + points + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"' + dash + '/>';
+    }
+
+    // Area fill for in
+    var areaPoints = bytesIn.map(function(v, i) {
+      var x = (i / (bytesIn.length - 1)) * width;
+      var y = height - 2 - ((v / max) * (height - 4));
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    areaPoints += ' ' + width + ',' + (height - 2) + ' 0,' + (height - 2);
+
+    container.innerHTML =
+      '<svg width="100%" height="100%" viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" style="display:block;">' +
+      '<polygon points="' + areaPoints + '" fill="var(--color-ok)" opacity="0.15"/>' +
+      pathFor(bytesIn, 'var(--color-ok)', null) +
+      pathFor(bytesOut, 'var(--color-info)', '3,2') +
+      '</svg>';
+  }
+
+  // Render concurrency sparkline (connections + SSE)
+  function renderConcurrencySparkline(container, conns, sse, options) {
+    if (!container || !conns || conns.length < 2) {
+      if (container) container.innerHTML = '';
+      return;
+    }
+
+    var opts = options || {};
+    var width = opts.width || 160;
+    var height = opts.height || 32;
+
+    var allData = conns.concat(sse || []);
+    var max = Math.max.apply(null, allData) || 1;
+
+    function areaFor(data, color) {
+      if (!data || data.length < 2) return '';
+      var points = data.map(function(v, i) {
+        var x = (i / (data.length - 1)) * width;
+        var y = height - 2 - ((v / max) * (height - 4));
+        return x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      points += ' ' + width + ',' + (height - 2) + ' 0,' + (height - 2);
+      return '<polygon points="' + points + '" fill="' + color + '" opacity="0.3"/>';
+    }
+
+    function lineFor(data, color) {
+      if (!data || data.length < 2) return '';
+      var points = data.map(function(v, i) {
+        var x = (i / (data.length - 1)) * width;
+        var y = height - 2 - ((v / max) * (height - 4));
+        return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      return '<path d="' + points + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
+    }
+
+    var hasSSE = sse && sse.some(function(v) { return v > 0; });
+
+    container.innerHTML =
+      '<svg width="100%" height="100%" viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" style="display:block;">' +
+      areaFor(conns, 'var(--color-purple)') +
+      lineFor(conns, 'var(--color-purple)') +
+      (hasSSE ? areaFor(sse, 'var(--color-cyan)') + lineFor(sse, 'var(--color-cyan)') : '') +
+      '</svg>';
   }
 
   // Estimate percentile from histogram buckets (cumulative format)
@@ -2707,12 +2783,10 @@
       var loopServers = serversByLoop[loopName] || {};
       var loopServerKeys = Object.keys(loopServers);
 
-      // Handle "no servers" placeholder
-      var noServersEl = container.querySelector('.aio-no-entities');
-      if (loopServerKeys.length === 0) {
-        if (noServersEl) noServersEl.style.display = 'block';
-      } else {
-        if (noServersEl) noServersEl.style.display = 'none';
+      // Show/hide entire section based on server count
+      var serversSection = panel.querySelector('.http-servers-section');
+      if (serversSection) {
+        serversSection.style.display = loopServerKeys.length > 0 ? '' : 'none';
       }
 
       // Update or create server cards for this loop
@@ -2893,7 +2967,7 @@
     if (prevMetrics && gc.cycles_total > prevMetrics.gcCycles) {
       var pauseMs = (gc.pause_us_max || 0) / 1000;
       history.gcPauses.push({ pause: pauseMs, timestamp: now });
-      while (history.gcPauses.length > HISTORY_SIZE) history.gcPauses.shift();
+      while (history.gcPauses.length > HISTORY_SAMPLES) history.gcPauses.shift();
     }
     renderGcTimeline(history.gcPauses);
 
@@ -4443,19 +4517,21 @@
 
     card.innerHTML =
       '<div class="entity-header" onclick="toggleEntityCard(this.parentElement)">' +
-      '<div class="entity-status ok"><span class="status-shape">●</span></div>' +
+      '<div class="entity-status ok"></div>' +
       '<h3 class="entity-name">:' + info.port + '</h3>' +
       '<div class="entity-label">TCP</div>' +
+      '<div class="entity-stats">' +
+      '<div class="entity-stat"><div class="entity-stat-value active-count">--</div><div class="entity-stat-label">Conns</div></div>' +
+      '<div class="entity-stat"><div class="entity-stat-value accept-rate">--/s</div><div class="entity-stat-label">Accept</div></div>' +
+      '</div>' +
       '<div class="entity-summary">' +
       '<span class="summary-metric conn-count">-- conn</span>' +
       '<span class="summary-metric accept-rate">--/s</span>' +
-      '<div class="summary-spark"></div>' +
       '</div>' +
       '<button class="expand-toggle"><span class="expand-icon">▼</span></button>' +
       '</div>' +
       '<div class="entity-body">' +
       '<div class="entity-section">' +
-      '<div class="entity-section-title">Connections</div>' +
       '<div class="tcp-conn-stats">' +
       '<span class="tcp-stat">●<span class="active-count">--</span> active</span>' +
       '<span class="tcp-stat">○<span class="idle-count">--</span> idle</span>' +
@@ -4463,13 +4539,9 @@
       '</div>' +
       '</div>' +
       '<div class="entity-section">' +
-      '<div class="entity-section-title">Throughput</div>' +
-      '<div class="sparkline-container">' +
-      '<div class="sparkline tcp-throughput-spark"></div>' +
-      '</div>' +
-      '<div class="tcp-throughput-stats">' +
-      '<span>In: <span class="bytes-in">--</span>/s</span>' +
-      '<span>Out: <span class="bytes-out">--</span>/s</span>' +
+      '<div class="throughput-row">' +
+      '<div class="throughput-item"><span class="arrow in">↓</span><span class="value bytes-in">--</span>/s</div>' +
+      '<div class="throughput-item"><span class="arrow out">↑</span><span class="value bytes-out">--</span>/s</div>' +
       '</div>' +
       '</div>' +
       '</div>';
@@ -4485,33 +4557,35 @@
 
     card.innerHTML =
       '<div class="entity-header" onclick="toggleEntityCard(this.parentElement)">' +
-      '<div class="entity-status ok"><span class="status-shape">●</span></div>' +
+      '<div class="entity-status ok"></div>' +
       '<h3 class="entity-name">' + info.name + '</h3>' +
-      '<div class="entity-label">TCP Client</div>' +
+      '<div class="entity-label">Client</div>' +
+      '<div class="entity-stats">' +
+      '<div class="entity-stat"><div class="entity-stat-value pool-active">--</div><div class="entity-stat-label">Conns</div></div>' +
+      '<div class="entity-stat"><div class="entity-stat-value p99">--</div><div class="entity-stat-label">P99</div></div>' +
+      '</div>' +
       '<div class="entity-summary">' +
       '<span class="summary-metric conn-count">-- conn</span>' +
       '<span class="summary-metric latency">P99:--</span>' +
-      '<div class="summary-spark"></div>' +
       '</div>' +
       '<button class="expand-toggle"><span class="expand-icon">▼</span></button>' +
       '</div>' +
       '<div class="entity-body">' +
       '<div class="entity-section">' +
-      '<div class="entity-section-title">Connection Pool</div>' +
       '<div class="tcp-pool-bar">' +
       '<div class="tcp-pool-fill" style="width: 0%"></div>' +
       '</div>' +
       '<div class="tcp-pool-stats">' +
-      '<span><span class="pool-active">--</span>/<span class="pool-max">--</span> connections</span>' +
+      '<span><span class="pool-active">--</span>/<span class="pool-max">--</span> conns</span>' +
       '</div>' +
       '</div>' +
       '<div class="entity-section">' +
-      '<div class="entity-section-title">Latency</div>' +
-      '<div class="tcp-latency-stats">' +
-      '<span>P50: <span class="p50">--</span></span>' +
-      '<span>P99: <span class="p99">--</span></span>' +
+      '<div class="latency-row">' +
+      '<div class="latency-values">' +
+      '<div class="latency-item p50"><span class="label">p50</span><span class="value p50">--</span></div>' +
+      '<div class="latency-item p99"><span class="label">p99</span><span class="value p99">--</span></div>' +
       '</div>' +
-      '<div class="latency-trend-spark"></div>' +
+      '</div>' +
       '</div>' +
       '</div>';
 
@@ -4526,43 +4600,26 @@
 
     card.innerHTML =
       '<div class="entity-header" onclick="toggleEntityCard(this.parentElement)">' +
-      '<div class="entity-status ok"><span class="status-shape">●</span></div>' +
+      '<div class="entity-status ok"></div>' +
       '<h3 class="entity-name">' + info.name + '</h3>' +
       '<div class="entity-label">UDP</div>' +
+      '<div class="entity-stats">' +
+      '<div class="entity-stat"><div class="entity-stat-value recv-rate">--/s</div><div class="entity-stat-label">Recv</div></div>' +
+      '<div class="entity-stat"><div class="entity-stat-value send-rate">--/s</div><div class="entity-stat-label">Send</div></div>' +
+      '</div>' +
       '<div class="entity-summary">' +
       '<span class="summary-metric recv-rate">--/s ↓</span>' +
-      '<span class="summary-metric send-rate">--/s ↑</span>' +
       '<span class="summary-metric loss-rate">--% loss</span>' +
-      '<div class="summary-spark"></div>' +
       '</div>' +
       '<button class="expand-toggle"><span class="expand-icon">▼</span></button>' +
       '</div>' +
       '<div class="entity-body">' +
       '<div class="entity-section">' +
-      '<div class="entity-section-title">Packet Statistics</div>' +
-      '<div class="udp-stats-grid">' +
-      '<div class="udp-stat">' +
-      '<div class="udp-stat-value recv-total">--</div>' +
-      '<div class="udp-stat-label">Recv Total</div>' +
-      '</div>' +
-      '<div class="udp-stat">' +
-      '<div class="udp-stat-value send-total">--</div>' +
-      '<div class="udp-stat-label">Send Total</div>' +
-      '</div>' +
-      '<div class="udp-stat">' +
-      '<div class="udp-stat-value dropped">--</div>' +
-      '<div class="udp-stat-label">Dropped</div>' +
-      '</div>' +
-      '<div class="udp-stat">' +
-      '<div class="udp-stat-value loss-pct">--%</div>' +
-      '<div class="udp-stat-label">Loss Rate</div>' +
-      '</div>' +
-      '</div>' +
-      '</div>' +
-      '<div class="entity-section">' +
-      '<div class="entity-section-title">Throughput</div>' +
-      '<div class="sparkline-container">' +
-      '<div class="sparkline udp-throughput-spark"></div>' +
+      '<div class="entity-metrics-row">' +
+      '<div class="entity-metric"><span class="entity-metric-label">Recv</span><span class="entity-metric-value recv-total">--</span></div>' +
+      '<div class="entity-metric"><span class="entity-metric-label">Send</span><span class="entity-metric-value send-total">--</span></div>' +
+      '<div class="entity-metric"><span class="entity-metric-label">Drop</span><span class="entity-metric-value dropped warning">--</span></div>' +
+      '<div class="entity-metric"><span class="entity-metric-label">Loss</span><span class="entity-metric-value loss-pct">--%</span></div>' +
       '</div>' +
       '</div>' +
       '</div>';

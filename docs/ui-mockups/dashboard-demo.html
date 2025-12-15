@@ -386,11 +386,11 @@
       padding: var(--space-lg);
     }
 
-    /* ===== SERVER/CLIENT CARDS ===== */
+    /* ===== COMPACT SERVER/CLIENT CARDS ===== */
     .entity-card {
       background: var(--bg-secondary);
       border: 1px solid var(--border-default);
-      border-radius: var(--radius-lg);
+      border-radius: var(--radius-md);
       overflow: hidden;
     }
 
@@ -401,52 +401,34 @@
     .entity-header {
       display: flex;
       align-items: center;
-      gap: var(--space-sm);
-      padding: var(--space-md) var(--space-lg);
+      gap: 6px;
+      padding: 8px 12px;
       background: var(--bg-tertiary);
-      border-bottom: 1px solid var(--border-default);
+      border-bottom: 1px solid var(--border-muted);
     }
 
     .entity-status {
-      width: 10px;
-      height: 10px;
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
       background: var(--color-ok);
       flex-shrink: 0;
-      position: relative;
     }
 
-    /* Color blindness: add icon overlay */
-    .entity-status::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      top: 0; right: 0; bottom: 0; left: 0; /* Fallback for inset */
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 7px;
-      color: white;
-      font-weight: bold;
-    }
-
-    .entity-status.ok::after { content: '✓'; }
     .entity-status.warning { background: var(--color-warning); }
-    .entity-status.warning::after { content: '!'; }
     .entity-status.error { background: var(--color-error); }
-    .entity-status.error::after { content: '✕'; }
 
     .entity-name {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
       color: var(--text-primary);
       font-family: 'SF Mono', Monaco, monospace;
     }
 
     .entity-label {
-      font-size: 11px;
+      font-size: 10px;
       color: var(--text-muted);
-      padding: 2px 8px;
+      padding: 1px 6px;
       background: var(--bg-elevated);
       border-radius: 999px;
     }
@@ -454,7 +436,7 @@
     .entity-stats {
       margin-left: auto;
       display: flex;
-      gap: var(--space-lg);
+      gap: 12px;
     }
 
     .entity-stat {
@@ -462,24 +444,24 @@
     }
 
     .entity-stat-value {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
       color: var(--text-primary);
       font-variant-numeric: tabular-nums;
     }
 
     .entity-stat-label {
-      font-size: 11px;
+      font-size: 9px;
       color: var(--text-faint);
       text-transform: uppercase;
     }
 
     .entity-body {
-      padding: var(--space-lg);
+      padding: 10px 12px;
     }
 
     .entity-section {
-      margin-bottom: var(--space-lg);
+      margin-bottom: 10px;
     }
 
     .entity-section:last-child {
@@ -487,12 +469,149 @@
     }
 
     .entity-section-title {
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 600;
       color: var(--text-faint);
       text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: var(--space-sm);
+      letter-spacing: 0.3px;
+      margin-bottom: 4px;
+    }
+
+    /* Compact inline metrics row */
+    .entity-metrics-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .entity-metric {
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+      font-size: 11px;
+    }
+
+    .entity-metric-label {
+      color: var(--text-muted);
+    }
+
+    .entity-metric-value {
+      font-weight: 600;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .entity-metric-value.ok { color: var(--color-ok); }
+    .entity-metric-value.warning { color: var(--color-warning); }
+    .entity-metric-value.error { color: var(--color-error); }
+
+    /* Compact response codes - inline chips */
+    .response-codes-compact {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .code-chip {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .code-chip.s2xx { background: var(--color-ok-bg); color: var(--color-ok); }
+    .code-chip.s4xx { background: var(--color-warning-bg); color: var(--color-warning); }
+    .code-chip.s5xx { background: var(--color-error-bg); color: var(--color-error); }
+    .code-chip .code-label { font-size: 9px; opacity: 0.8; }
+
+    /* Compact status bar */
+    .status-bar-compact {
+      flex: 1;
+      height: 4px;
+      background: var(--bg-elevated);
+      border-radius: 2px;
+      overflow: hidden;
+      display: flex;
+      min-width: 60px;
+    }
+
+    /* Compact latency display */
+    .latency-compact {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .latency-item {
+      display: flex;
+      align-items: baseline;
+      gap: 3px;
+      font-size: 11px;
+    }
+
+    .latency-item .label {
+      color: var(--text-faint);
+      font-size: 9px;
+    }
+
+    .latency-item .value {
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .latency-item.p50 .value { color: var(--color-ok); }
+    .latency-item.p95 .value { color: var(--color-warning); }
+    .latency-item.p99 .value { color: var(--color-error); }
+
+    /* Mini histogram */
+    .histogram-mini {
+      display: flex;
+      align-items: flex-end;
+      gap: 1px;
+      height: 20px;
+      flex: 1;
+      max-width: 80px;
+    }
+
+    .histogram-mini .bar {
+      flex: 1;
+      border-radius: 1px 1px 0 0;
+      background: var(--color-info-muted);
+      min-height: 2px;
+    }
+
+    .histogram-mini .bar.p50 { background: var(--color-ok); }
+    .histogram-mini .bar.p95 { background: var(--color-warning); }
+    .histogram-mini .bar.p99 { background: var(--color-error); }
+
+    /* Compact throughput */
+    .throughput-compact {
+      display: flex;
+      gap: 12px;
+      font-size: 11px;
+    }
+
+    .throughput-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .throughput-item .arrow {
+      font-size: 10px;
+    }
+
+    .throughput-item .arrow.in { color: var(--color-ok); }
+    .throughput-item .arrow.out { color: var(--color-info); }
+
+    .throughput-item .value {
+      font-weight: 600;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
     }
 
     /* ===== MINI STATS ===== */
@@ -673,70 +792,6 @@
 
     .gauge-details { flex: 1; }
 
-    /* ===== HISTOGRAM ===== */
-    .histogram {
-      display: flex;
-      align-items: flex-end;
-      gap: 2px;
-      height: 50px;
-    }
-
-    .histogram-bar {
-      flex: 1;
-      border-radius: 2px 2px 0 0;
-      background: var(--color-info);
-      transition: height 0.3s ease, background-color 0.3s ease;
-      min-height: 2px;
-      cursor: pointer;
-    }
-
-    .histogram-bar:hover { filter: brightness(1.2); }
-    .histogram-bar:focus-visible {
-      outline: 2px solid var(--text-primary);
-      outline-offset: 1px;
-    }
-    .histogram-bar.p50 { background: var(--color-ok); }
-    .histogram-bar.p95 { background: var(--color-warning); }
-    .histogram-bar.p99 { background: var(--color-error); }
-
-    .histogram-meta {
-      display: flex;
-      justify-content: space-between;
-      margin-top: var(--space-xs);
-      font-size: 11px;
-      color: var(--text-faint);
-    }
-
-    .percentiles {
-      display: flex;
-      gap: var(--space-md);
-      margin-top: var(--space-sm);
-    }
-
-    .percentile {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 11px;
-    }
-
-    .percentile-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 2px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 6px;
-      color: white;
-    }
-
-    .percentile-dot.p50 { background: var(--color-ok); }
-    .percentile-dot.p95 { background: var(--color-warning); }
-    .percentile-dot.p99 { background: var(--color-error); }
-
-    .percentile-label { color: var(--text-muted); }
-    .percentile-value { color: var(--text-primary); font-weight: 600; }
 
     /* ===== GC TIMELINE ===== */
     .gc-timeline {
@@ -899,122 +954,11 @@
     .conn-slot-mini.idle { background: var(--color-info-muted); }
     .conn-slot-mini.closing { background: var(--color-warning); }
 
-    /* ===== SPARKLINE ===== */
-    .sparkline-container {
-      position: relative;
-    }
 
-    .sparkline {
-      height: 40px;
-      background: var(--bg-tertiary);
-      border-radius: var(--radius-sm);
-      overflow: hidden;
-    }
-
-    .sparkline svg {
-      width: 100%;
-      height: 100%;
-    }
-
-    .sparkline-path {
-      fill: none;
-      stroke-width: 1.5;
-    }
-
-    .sparkline-area {
-      opacity: 0.2;
-    }
-
-    .sparkline-time-label {
-      position: absolute;
-      bottom: 2px;
-      font-size: 9px;
-      color: var(--text-faint);
-      pointer-events: none;
-    }
-
-    .sparkline-time-label.start { left: 4px; }
-    .sparkline-time-label.end { right: 4px; }
-
-    .sparkline-meta {
-      display: flex;
-      justify-content: space-between;
-      margin-top: var(--space-xs);
-      font-size: 11px;
-    }
-
-    .sparkline-stat {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
-
-    .sparkline-dot {
-      width: 8px;
-      height: 3px;
-      border-radius: 1px;
-    }
-
-    .sparkline-dot.in { background: var(--color-ok); }
-    .sparkline-dot.out { background: var(--color-info); }
-
-    .sparkline-label { color: var(--text-muted); }
-    .sparkline-value { color: var(--text-primary); font-weight: 600; }
-
-    /* ===== STATUS BREAKDOWN ===== */
-    .status-row {
-      display: flex;
-      gap: var(--space-sm);
-    }
-
-    .status-chip {
-      flex: 1;
-      padding: var(--space-xs) var(--space-sm);
-      border-radius: var(--radius-sm);
-      text-align: center;
-      border: 1px solid transparent;
-    }
-
-    .status-chip.s2xx { background: var(--color-ok-bg); border-color: var(--color-ok-muted); }
-    .status-chip.s4xx { background: var(--color-warning-bg); border-color: var(--color-warning-muted); }
-    .status-chip.s5xx { background: var(--color-error-bg); border-color: var(--color-error-muted); }
-
-    .status-chip-value {
-      font-size: 14px;
-      font-weight: 700;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .status-chip.s2xx .status-chip-value { color: var(--color-ok); }
-    .status-chip.s4xx .status-chip-value { color: var(--color-warning); }
-    .status-chip.s5xx .status-chip-value { color: var(--color-error); }
-
-    .status-chip-label {
-      font-size: 11px;
-      color: var(--text-muted);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 4px;
-    }
-
-    /* Icons for color blindness */
-    .status-chip-label .icon {
-      font-size: 10px;
-    }
-
-    .status-bar {
-      height: 8px;
-      background: var(--bg-tertiary);
-      border-radius: 999px;
-      overflow: hidden;
-      display: flex;
-      margin-top: var(--space-sm);
-    }
-
+    /* ===== STATUS SEGMENTS (for compact status bar) ===== */
     .status-segment {
       height: 100%;
-      min-width: 2px; /* Ensure visibility of small segments */
+      min-width: 2px;
     }
     .status-segment.s2xx { background: var(--color-ok); }
     .status-segment.s4xx { background: var(--color-warning); }
@@ -1490,7 +1434,7 @@
         <!-- Server 1: Main HTTPS -->
         <article class="entity-card" aria-labelledby="server1-name">
           <div class="entity-header">
-            <div class="entity-status ok" role="img" aria-label="Status: Healthy"></div>
+            <div class="entity-status ok"></div>
             <h3 class="entity-name" id="server1-name">0.0.0.0:8443</h3>
             <div class="entity-label">HTTPS</div>
             <div class="entity-stats">
@@ -1505,76 +1449,30 @@
             </div>
           </div>
           <div class="entity-body">
-            <!-- Status Codes -->
             <div class="entity-section">
-              <div class="entity-section-title">Response Codes (last 5 min)</div>
-              <div class="status-row" role="list">
-                <div class="status-chip s2xx" role="listitem">
-                  <div class="status-chip-value">45,231</div>
-                  <div class="status-chip-label"><span class="icon" aria-hidden="true">✓</span> 2xx</div>
-                </div>
-                <div class="status-chip s4xx" role="listitem">
-                  <div class="status-chip-value">127</div>
-                  <div class="status-chip-label"><span class="icon" aria-hidden="true">!</span> 4xx</div>
-                </div>
-                <div class="status-chip s5xx" role="listitem">
-                  <div class="status-chip-value">3</div>
-                  <div class="status-chip-label"><span class="icon" aria-hidden="true">✕</span> 5xx</div>
-                </div>
-              </div>
-              <div class="status-bar" role="img" aria-label="Response code breakdown: 99.7% success, 0.28% client errors, 0.01% server errors">
-                <div class="status-segment s2xx" style="width: 99.7%"></div>
-                <div class="status-segment s4xx" style="width: 0.28%"></div>
-                <div class="status-segment s5xx" style="width: 0.02%"></div>
-              </div>
-            </div>
-
-            <!-- Latency -->
-            <div class="entity-section">
-              <div class="entity-section-title">Latency Distribution</div>
-              <div class="histogram" id="hist-server-1" role="img" aria-label="Latency histogram: P50 at 4ms, P95 at 18ms, P99 at 42ms"></div>
-              <div class="histogram-meta">
-                <span>0ms</span>
-                <span>500ms+</span>
-              </div>
-              <div class="percentiles" role="list" aria-label="Latency percentiles">
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p50" aria-hidden="true"></div>
-                  <span class="percentile-label">P50</span>
-                  <span class="percentile-value">4ms</span>
-                </div>
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p95" aria-hidden="true"></div>
-                  <span class="percentile-label">P95</span>
-                  <span class="percentile-value">18ms</span>
-                </div>
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p99" aria-hidden="true"></div>
-                  <span class="percentile-label">P99</span>
-                  <span class="percentile-value">42ms</span>
+              <div class="response-codes-compact">
+                <span class="code-chip s2xx">45.2K <span class="code-label">2xx</span></span>
+                <span class="code-chip s4xx">127 <span class="code-label">4xx</span></span>
+                <span class="code-chip s5xx">3 <span class="code-label">5xx</span></span>
+                <div class="status-bar-compact">
+                  <div class="status-segment s2xx" style="width: 99.7%"></div>
+                  <div class="status-segment s4xx" style="width: 0.28%"></div>
+                  <div class="status-segment s5xx" style="width: 0.02%"></div>
                 </div>
               </div>
             </div>
-
-            <!-- Throughput -->
             <div class="entity-section">
-              <div class="entity-section-title">Throughput</div>
-              <div class="sparkline-container">
-                <div class="sparkline" id="spark-server-1" role="img" aria-label="Throughput chart: 2.1 MB/s in, 16.4 MB/s out over last 5 minutes"></div>
-                <span class="sparkline-time-label start">-5m</span>
-                <span class="sparkline-time-label end">now</span>
+              <div class="latency-compact">
+                <div class="histogram-mini" id="hist-server-1"></div>
+                <div class="latency-item p50"><span class="label">p50</span><span class="value">4ms</span></div>
+                <div class="latency-item p95"><span class="label">p95</span><span class="value">18ms</span></div>
+                <div class="latency-item p99"><span class="label">p99</span><span class="value">42ms</span></div>
               </div>
-              <div class="sparkline-meta">
-                <div class="sparkline-stat">
-                  <div class="sparkline-dot in" aria-hidden="true"></div>
-                  <span class="sparkline-label">In</span>
-                  <span class="sparkline-value">2.1 MB/s</span>
-                </div>
-                <div class="sparkline-stat">
-                  <div class="sparkline-dot out" aria-hidden="true"></div>
-                  <span class="sparkline-label">Out</span>
-                  <span class="sparkline-value">16.4 MB/s</span>
-                </div>
+            </div>
+            <div class="entity-section">
+              <div class="throughput-compact">
+                <div class="throughput-item"><span class="arrow in">↓</span><span class="value">2.1 MB/s</span></div>
+                <div class="throughput-item"><span class="arrow out">↑</span><span class="value">16.4 MB/s</span></div>
               </div>
             </div>
           </div>
@@ -1583,7 +1481,7 @@
         <!-- Server 2: HTTP -->
         <article class="entity-card" aria-labelledby="server2-name">
           <div class="entity-header">
-            <div class="entity-status ok" role="img" aria-label="Status: Healthy"></div>
+            <div class="entity-status ok"></div>
             <h3 class="entity-name" id="server2-name">0.0.0.0:8080</h3>
             <div class="entity-label">HTTP</div>
             <div class="entity-stats">
@@ -1599,71 +1497,28 @@
           </div>
           <div class="entity-body">
             <div class="entity-section">
-              <div class="entity-section-title">Response Codes (last 5 min)</div>
-              <div class="status-row" role="list">
-                <div class="status-chip s2xx" role="listitem">
-                  <div class="status-chip-value">12,847</div>
-                  <div class="status-chip-label"><span class="icon" aria-hidden="true">✓</span> 2xx</div>
-                </div>
-                <div class="status-chip s4xx" role="listitem">
-                  <div class="status-chip-value">42</div>
-                  <div class="status-chip-label"><span class="icon" aria-hidden="true">!</span> 4xx</div>
-                </div>
-                <div class="status-chip s5xx" role="listitem">
-                  <div class="status-chip-value">0</div>
-                  <div class="status-chip-label"><span class="icon" aria-hidden="true">✕</span> 5xx</div>
-                </div>
-              </div>
-              <div class="status-bar" role="img" aria-label="Response code breakdown: 99.67% success, 0.33% client errors">
-                <div class="status-segment s2xx" style="width: 99.67%"></div>
-                <div class="status-segment s4xx" style="width: 0.33%"></div>
-              </div>
-            </div>
-
-            <div class="entity-section">
-              <div class="entity-section-title">Latency Distribution</div>
-              <div class="histogram" id="hist-server-2" role="img" aria-label="Latency histogram: P50 at 2ms, P95 at 8ms, P99 at 15ms"></div>
-              <div class="histogram-meta">
-                <span>0ms</span>
-                <span>500ms+</span>
-              </div>
-              <div class="percentiles" role="list">
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p50" aria-hidden="true"></div>
-                  <span class="percentile-label">P50</span>
-                  <span class="percentile-value">2ms</span>
-                </div>
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p95" aria-hidden="true"></div>
-                  <span class="percentile-label">P95</span>
-                  <span class="percentile-value">8ms</span>
-                </div>
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p99" aria-hidden="true"></div>
-                  <span class="percentile-label">P99</span>
-                  <span class="percentile-value">15ms</span>
+              <div class="response-codes-compact">
+                <span class="code-chip s2xx">12.8K <span class="code-label">2xx</span></span>
+                <span class="code-chip s4xx">42 <span class="code-label">4xx</span></span>
+                <span class="code-chip s5xx">0 <span class="code-label">5xx</span></span>
+                <div class="status-bar-compact">
+                  <div class="status-segment s2xx" style="width: 99.67%"></div>
+                  <div class="status-segment s4xx" style="width: 0.33%"></div>
                 </div>
               </div>
             </div>
-
             <div class="entity-section">
-              <div class="entity-section-title">Throughput</div>
-              <div class="sparkline-container">
-                <div class="sparkline" id="spark-server-2" role="img" aria-label="Throughput chart over last 5 minutes"></div>
-                <span class="sparkline-time-label start">-5m</span>
-                <span class="sparkline-time-label end">now</span>
+              <div class="latency-compact">
+                <div class="histogram-mini" id="hist-server-2"></div>
+                <div class="latency-item p50"><span class="label">p50</span><span class="value">2ms</span></div>
+                <div class="latency-item p95"><span class="label">p95</span><span class="value">8ms</span></div>
+                <div class="latency-item p99"><span class="label">p99</span><span class="value">15ms</span></div>
               </div>
-              <div class="sparkline-meta">
-                <div class="sparkline-stat">
-                  <div class="sparkline-dot in" aria-hidden="true"></div>
-                  <span class="sparkline-label">In</span>
-                  <span class="sparkline-value">0.3 MB/s</span>
-                </div>
-                <div class="sparkline-stat">
-                  <div class="sparkline-dot out" aria-hidden="true"></div>
-                  <span class="sparkline-label">Out</span>
-                  <span class="sparkline-value">2.1 MB/s</span>
-                </div>
+            </div>
+            <div class="entity-section">
+              <div class="throughput-compact">
+                <div class="throughput-item"><span class="arrow in">↓</span><span class="value">0.3 MB/s</span></div>
+                <div class="throughput-item"><span class="arrow out">↑</span><span class="value">2.1 MB/s</span></div>
               </div>
             </div>
           </div>
@@ -1672,7 +1527,7 @@
         <!-- Server 3: Admin -->
         <article class="entity-card" aria-labelledby="server3-name">
           <div class="entity-header">
-            <div class="entity-status warning" role="img" aria-label="Status: Warning - elevated latency"></div>
+            <div class="entity-status warning"></div>
             <h3 class="entity-name" id="server3-name">127.0.0.1:9090</h3>
             <div class="entity-label">Admin</div>
             <div class="entity-stats">
@@ -1688,72 +1543,29 @@
           </div>
           <div class="entity-body">
             <div class="entity-section">
-              <div class="entity-section-title">Response Codes (last 5 min)</div>
-              <div class="status-row" role="list">
-                <div class="status-chip s2xx" role="listitem">
-                  <div class="status-chip-value">1,024</div>
-                  <div class="status-chip-label"><span class="icon" aria-hidden="true">✓</span> 2xx</div>
-                </div>
-                <div class="status-chip s4xx" role="listitem">
-                  <div class="status-chip-value">12</div>
-                  <div class="status-chip-label"><span class="icon" aria-hidden="true">!</span> 4xx</div>
-                </div>
-                <div class="status-chip s5xx" role="listitem">
-                  <div class="status-chip-value">1</div>
-                  <div class="status-chip-label"><span class="icon" aria-hidden="true">✕</span> 5xx</div>
-                </div>
-              </div>
-              <div class="status-bar" role="img" aria-label="Response code breakdown: 98.7% success, 1.16% client errors, 0.1% server errors">
-                <div class="status-segment s2xx" style="width: 98.7%"></div>
-                <div class="status-segment s4xx" style="width: 1.16%"></div>
-                <div class="status-segment s5xx" style="width: 0.1%"></div>
-              </div>
-            </div>
-
-            <div class="entity-section">
-              <div class="entity-section-title">Latency Distribution</div>
-              <div class="histogram" id="hist-server-3" role="img" aria-label="Latency histogram: P50 at 12ms, P95 at 85ms, P99 at 142ms. Warning: elevated latency."></div>
-              <div class="histogram-meta">
-                <span>0ms</span>
-                <span>500ms+</span>
-              </div>
-              <div class="percentiles" role="list">
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p50" aria-hidden="true"></div>
-                  <span class="percentile-label">P50</span>
-                  <span class="percentile-value">12ms</span>
-                </div>
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p95" aria-hidden="true"></div>
-                  <span class="percentile-label">P95</span>
-                  <span class="percentile-value">85ms</span>
-                </div>
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p99" aria-hidden="true"></div>
-                  <span class="percentile-label">P99</span>
-                  <span class="percentile-value">142ms</span>
+              <div class="response-codes-compact">
+                <span class="code-chip s2xx">1.0K <span class="code-label">2xx</span></span>
+                <span class="code-chip s4xx">12 <span class="code-label">4xx</span></span>
+                <span class="code-chip s5xx">1 <span class="code-label">5xx</span></span>
+                <div class="status-bar-compact">
+                  <div class="status-segment s2xx" style="width: 98.7%"></div>
+                  <div class="status-segment s4xx" style="width: 1.16%"></div>
+                  <div class="status-segment s5xx" style="width: 0.1%"></div>
                 </div>
               </div>
             </div>
-
             <div class="entity-section">
-              <div class="entity-section-title">Throughput</div>
-              <div class="sparkline-container">
-                <div class="sparkline" id="spark-server-3" role="img" aria-label="Throughput chart over last 5 minutes"></div>
-                <span class="sparkline-time-label start">-5m</span>
-                <span class="sparkline-time-label end">now</span>
+              <div class="latency-compact">
+                <div class="histogram-mini" id="hist-server-3"></div>
+                <div class="latency-item p50"><span class="label">p50</span><span class="value">12ms</span></div>
+                <div class="latency-item p95"><span class="label">p95</span><span class="value">85ms</span></div>
+                <div class="latency-item p99"><span class="label">p99</span><span class="value">142ms</span></div>
               </div>
-              <div class="sparkline-meta">
-                <div class="sparkline-stat">
-                  <div class="sparkline-dot in" aria-hidden="true"></div>
-                  <span class="sparkline-label">In</span>
-                  <span class="sparkline-value">12 KB/s</span>
-                </div>
-                <div class="sparkline-stat">
-                  <div class="sparkline-dot out" aria-hidden="true"></div>
-                  <span class="sparkline-label">Out</span>
-                  <span class="sparkline-value">89 KB/s</span>
-                </div>
+            </div>
+            <div class="entity-section">
+              <div class="throughput-compact">
+                <div class="throughput-item"><span class="arrow in">↓</span><span class="value">12 KB/s</span></div>
+                <div class="throughput-item"><span class="arrow out">↑</span><span class="value">89 KB/s</span></div>
               </div>
             </div>
           </div>
@@ -1776,70 +1588,34 @@
         <!-- Client 1: Database -->
         <article class="entity-card" aria-labelledby="client1-name">
           <div class="entity-header">
-            <div class="entity-status ok" role="img" aria-label="Status: Healthy"></div>
+            <div class="entity-status ok"></div>
             <h3 class="entity-name" id="client1-name">postgres-primary</h3>
             <div class="entity-label">Database</div>
+            <div class="entity-stats">
+              <div class="entity-stat">
+                <div class="entity-stat-value">12</div>
+                <div class="entity-stat-label">Conns</div>
+              </div>
+              <div class="entity-stat">
+                <div class="entity-stat-value">142/s</div>
+                <div class="entity-stat-label">Qry</div>
+              </div>
+            </div>
           </div>
           <div class="entity-body">
             <div class="entity-section">
-              <div class="mini-stats" role="list">
-                <div class="mini-stat" role="listitem">
-                  <div class="mini-stat-value ok">12</div>
-                  <div class="mini-stat-label">Conns</div>
-                </div>
-                <div class="mini-stat" role="listitem">
-                  <div class="mini-stat-value">4.2K</div>
-                  <div class="mini-stat-label">Queries (total)</div>
-                </div>
-                <div class="mini-stat" role="listitem">
-                  <div class="mini-stat-value ok">0</div>
-                  <div class="mini-stat-label">Errors</div>
-                </div>
+              <div class="entity-metrics-row">
+                <div class="entity-metric"><span class="entity-metric-label">Total</span><span class="entity-metric-value">4.2K</span></div>
+                <div class="entity-metric"><span class="entity-metric-label">Errors</span><span class="entity-metric-value ok">0</span></div>
+                <div class="entity-metric"><span class="entity-metric-label">Peak</span><span class="entity-metric-value">287/s</span></div>
               </div>
             </div>
-
             <div class="entity-section">
-              <div class="entity-section-title">Latency Distribution</div>
-              <div class="histogram" id="hist-client-1" role="img" aria-label="Query latency: P50 at 1.2ms, P95 at 4.8ms, P99 at 12ms"></div>
-              <div class="histogram-meta">
-                <span>0ms</span>
-                <span>500ms+</span>
-              </div>
-              <div class="percentiles" role="list">
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p50" aria-hidden="true"></div>
-                  <span class="percentile-label">P50</span>
-                  <span class="percentile-value">1.2ms</span>
-                </div>
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p95" aria-hidden="true"></div>
-                  <span class="percentile-label">P95</span>
-                  <span class="percentile-value">4.8ms</span>
-                </div>
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p99" aria-hidden="true"></div>
-                  <span class="percentile-label">P99</span>
-                  <span class="percentile-value">12ms</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="entity-section">
-              <div class="entity-section-title">Query Rate</div>
-              <div class="sparkline-container">
-                <div class="sparkline" id="spark-client-1" role="img" aria-label="Query rate: 142/s current, 287/s peak over last 5 minutes"></div>
-                <span class="sparkline-time-label start">-5m</span>
-                <span class="sparkline-time-label end">now</span>
-              </div>
-              <div class="sparkline-meta">
-                <div class="sparkline-stat">
-                  <span class="sparkline-label">Current</span>
-                  <span class="sparkline-value">142/s</span>
-                </div>
-                <div class="sparkline-stat">
-                  <span class="sparkline-label">Peak</span>
-                  <span class="sparkline-value">287/s</span>
-                </div>
+              <div class="latency-compact">
+                <div class="histogram-mini" id="hist-client-1"></div>
+                <div class="latency-item p50"><span class="label">p50</span><span class="value">1.2ms</span></div>
+                <div class="latency-item p95"><span class="label">p95</span><span class="value">4.8ms</span></div>
+                <div class="latency-item p99"><span class="label">p99</span><span class="value">12ms</span></div>
               </div>
             </div>
           </div>
@@ -1848,70 +1624,34 @@
         <!-- Client 2: Redis -->
         <article class="entity-card" aria-labelledby="client2-name">
           <div class="entity-header">
-            <div class="entity-status ok" role="img" aria-label="Status: Healthy"></div>
+            <div class="entity-status ok"></div>
             <h3 class="entity-name" id="client2-name">redis-cache</h3>
             <div class="entity-label">Cache</div>
+            <div class="entity-stats">
+              <div class="entity-stat">
+                <div class="entity-stat-value">8</div>
+                <div class="entity-stat-label">Conns</div>
+              </div>
+              <div class="entity-stat">
+                <div class="entity-stat-value">2.4K/s</div>
+                <div class="entity-stat-label">Ops</div>
+              </div>
+            </div>
           </div>
           <div class="entity-body">
             <div class="entity-section">
-              <div class="mini-stats" role="list">
-                <div class="mini-stat" role="listitem">
-                  <div class="mini-stat-value ok">8</div>
-                  <div class="mini-stat-label">Conns</div>
-                </div>
-                <div class="mini-stat" role="listitem">
-                  <div class="mini-stat-value">124K</div>
-                  <div class="mini-stat-label">Ops (total)</div>
-                </div>
-                <div class="mini-stat" role="listitem">
-                  <div class="mini-stat-value ok">94.2%</div>
-                  <div class="mini-stat-label">Hit Rate</div>
-                </div>
+              <div class="entity-metrics-row">
+                <div class="entity-metric"><span class="entity-metric-label">Total</span><span class="entity-metric-value">124K</span></div>
+                <div class="entity-metric"><span class="entity-metric-label">Hit Rate</span><span class="entity-metric-value ok">94.2%</span></div>
+                <div class="entity-metric"><span class="entity-metric-label">Peak</span><span class="entity-metric-value">4.1K/s</span></div>
               </div>
             </div>
-
             <div class="entity-section">
-              <div class="entity-section-title">Latency Distribution</div>
-              <div class="histogram" id="hist-client-2" role="img" aria-label="Operation latency: P50 at 0.2ms, P95 at 0.8ms, P99 at 2.1ms"></div>
-              <div class="histogram-meta">
-                <span>0ms</span>
-                <span>500ms+</span>
-              </div>
-              <div class="percentiles" role="list">
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p50" aria-hidden="true"></div>
-                  <span class="percentile-label">P50</span>
-                  <span class="percentile-value">0.2ms</span>
-                </div>
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p95" aria-hidden="true"></div>
-                  <span class="percentile-label">P95</span>
-                  <span class="percentile-value">0.8ms</span>
-                </div>
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p99" aria-hidden="true"></div>
-                  <span class="percentile-label">P99</span>
-                  <span class="percentile-value">2.1ms</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="entity-section">
-              <div class="entity-section-title">Op Rate</div>
-              <div class="sparkline-container">
-                <div class="sparkline" id="spark-client-2" role="img" aria-label="Operation rate: 2.4K/s current, 4.1K/s peak"></div>
-                <span class="sparkline-time-label start">-5m</span>
-                <span class="sparkline-time-label end">now</span>
-              </div>
-              <div class="sparkline-meta">
-                <div class="sparkline-stat">
-                  <span class="sparkline-label">Current</span>
-                  <span class="sparkline-value">2.4K/s</span>
-                </div>
-                <div class="sparkline-stat">
-                  <span class="sparkline-label">Peak</span>
-                  <span class="sparkline-value">4.1K/s</span>
-                </div>
+              <div class="latency-compact">
+                <div class="histogram-mini" id="hist-client-2"></div>
+                <div class="latency-item p50"><span class="label">p50</span><span class="value">0.2ms</span></div>
+                <div class="latency-item p95"><span class="label">p95</span><span class="value">0.8ms</span></div>
+                <div class="latency-item p99"><span class="label">p99</span><span class="value">2.1ms</span></div>
               </div>
             </div>
           </div>
@@ -1920,70 +1660,34 @@
         <!-- Client 3: External API -->
         <article class="entity-card" aria-labelledby="client3-name">
           <div class="entity-header">
-            <div class="entity-status warning" role="img" aria-label="Status: Warning - elevated errors"></div>
+            <div class="entity-status warning"></div>
             <h3 class="entity-name" id="client3-name">payment-gateway</h3>
-            <div class="entity-label">External API</div>
+            <div class="entity-label">External</div>
+            <div class="entity-stats">
+              <div class="entity-stat">
+                <div class="entity-stat-value">4</div>
+                <div class="entity-stat-label">Conns</div>
+              </div>
+              <div class="entity-stat">
+                <div class="entity-stat-value">12/s</div>
+                <div class="entity-stat-label">Req</div>
+              </div>
+            </div>
           </div>
           <div class="entity-body">
             <div class="entity-section">
-              <div class="mini-stats" role="list">
-                <div class="mini-stat" role="listitem">
-                  <div class="mini-stat-value">4</div>
-                  <div class="mini-stat-label">Conns</div>
-                </div>
-                <div class="mini-stat" role="listitem">
-                  <div class="mini-stat-value">847</div>
-                  <div class="mini-stat-label">Requests (total)</div>
-                </div>
-                <div class="mini-stat" role="listitem">
-                  <div class="mini-stat-value warning">7</div>
-                  <div class="mini-stat-label">Errors</div>
-                </div>
+              <div class="entity-metrics-row">
+                <div class="entity-metric"><span class="entity-metric-label">Total</span><span class="entity-metric-value">847</span></div>
+                <div class="entity-metric"><span class="entity-metric-label">Errors</span><span class="entity-metric-value warning">7</span></div>
+                <div class="entity-metric"><span class="entity-metric-label">Retries</span><span class="entity-metric-value warning">3%</span></div>
               </div>
             </div>
-
             <div class="entity-section">
-              <div class="entity-section-title">Latency Distribution</div>
-              <div class="histogram" id="hist-client-3" role="img" aria-label="Request latency: P50 at 89ms, P95 at 245ms, P99 at 512ms. Warning: elevated latency."></div>
-              <div class="histogram-meta">
-                <span>0ms</span>
-                <span>500ms+</span>
-              </div>
-              <div class="percentiles" role="list">
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p50" aria-hidden="true"></div>
-                  <span class="percentile-label">P50</span>
-                  <span class="percentile-value">89ms</span>
-                </div>
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p95" aria-hidden="true"></div>
-                  <span class="percentile-label">P95</span>
-                  <span class="percentile-value">245ms</span>
-                </div>
-                <div class="percentile" role="listitem">
-                  <div class="percentile-dot p99" aria-hidden="true"></div>
-                  <span class="percentile-label">P99</span>
-                  <span class="percentile-value">512ms</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="entity-section">
-              <div class="entity-section-title">Request Rate</div>
-              <div class="sparkline-container">
-                <div class="sparkline" id="spark-client-3" role="img" aria-label="Request rate: 12/s current, 3% retries"></div>
-                <span class="sparkline-time-label start">-5m</span>
-                <span class="sparkline-time-label end">now</span>
-              </div>
-              <div class="sparkline-meta">
-                <div class="sparkline-stat">
-                  <span class="sparkline-label">Current</span>
-                  <span class="sparkline-value">12/s</span>
-                </div>
-                <div class="sparkline-stat">
-                  <span class="sparkline-label">Retries</span>
-                  <span class="sparkline-value warning">3%</span>
-                </div>
+              <div class="latency-compact">
+                <div class="histogram-mini" id="hist-client-3"></div>
+                <div class="latency-item p50"><span class="label">p50</span><span class="value">89ms</span></div>
+                <div class="latency-item p95"><span class="label">p95</span><span class="value">245ms</span></div>
+                <div class="latency-item p99"><span class="label">p99</span><span class="value">512ms</span></div>
               </div>
             </div>
           </div>
@@ -2075,102 +1779,44 @@
         }
       });
 
-      // Generate histogram with given distribution
-      function renderHistogram(id, buckets) {
+      // Generate mini histogram with given distribution
+      function renderHistogramMini(id, buckets) {
         const container = document.getElementById(id);
         if (!container) return;
         const max = Math.max(...buckets.map(b => b.count));
 
         container.innerHTML = buckets.map((b, i) => {
-          const height = Math.max((b.count / max) * 100, 4); // Min 4% for visibility
+          const height = Math.max((b.count / max) * 100, 10);
           const pClass = b.p || '';
-          return `<div class="histogram-bar ${pClass}"
-                       style="height: ${height}%"
-                       tabindex="0"
-                       role="button"
-                       aria-label="Bucket ${i+1}: ${b.count} requests${b.p ? ', ' + b.p.toUpperCase() : ''}"></div>`;
+          return `<div class="bar ${pClass}" style="height: ${height}%"></div>`;
         }).join('');
       }
 
       // Different distributions for different servers/clients
-      renderHistogram('hist-server-1', [
+      renderHistogramMini('hist-server-1', [
         { count: 80 }, { count: 220 }, { count: 480, p: 'p50' }, { count: 320 },
-        { count: 180 }, { count: 90, p: 'p95' }, { count: 25, p: 'p99' }, { count: 8 }, { count: 2 }, { count: 1 }
+        { count: 180 }, { count: 90, p: 'p95' }, { count: 25, p: 'p99' }, { count: 8 }
       ]);
-      renderHistogram('hist-server-2', [
+      renderHistogramMini('hist-server-2', [
         { count: 320 }, { count: 580, p: 'p50' }, { count: 280 }, { count: 120, p: 'p95' },
-        { count: 45, p: 'p99' }, { count: 12 }, { count: 4 }, { count: 1 }, { count: 0 }, { count: 0 }
+        { count: 45, p: 'p99' }, { count: 12 }, { count: 4 }, { count: 1 }
       ]);
-      renderHistogram('hist-server-3', [
+      renderHistogramMini('hist-server-3', [
         { count: 45 }, { count: 120 }, { count: 280, p: 'p50' }, { count: 320 },
-        { count: 180 }, { count: 120, p: 'p95' }, { count: 85, p: 'p99' }, { count: 42 }, { count: 18 }, { count: 8 }
+        { count: 180 }, { count: 120, p: 'p95' }, { count: 85, p: 'p99' }, { count: 42 }
       ]);
-      renderHistogram('hist-client-1', [
+      renderHistogramMini('hist-client-1', [
         { count: 180 }, { count: 420, p: 'p50' }, { count: 280 }, { count: 120, p: 'p95' },
-        { count: 45, p: 'p99' }, { count: 12 }, { count: 4 }, { count: 1 }, { count: 0 }, { count: 0 }
+        { count: 45, p: 'p99' }, { count: 12 }, { count: 4 }, { count: 1 }
       ]);
-      renderHistogram('hist-client-2', [
+      renderHistogramMini('hist-client-2', [
         { count: 520, p: 'p50' }, { count: 280 }, { count: 120, p: 'p95' }, { count: 45, p: 'p99' },
-        { count: 12 }, { count: 4 }, { count: 1 }, { count: 0 }, { count: 0 }, { count: 0 }
+        { count: 12 }, { count: 4 }, { count: 1 }, { count: 0 }
       ]);
-      renderHistogram('hist-client-3', [
+      renderHistogramMini('hist-client-3', [
         { count: 25 }, { count: 45 }, { count: 120, p: 'p50' }, { count: 180 },
-        { count: 220 }, { count: 180, p: 'p95' }, { count: 120, p: 'p99' }, { count: 65 }, { count: 32 }, { count: 15 }
+        { count: 220 }, { count: 180, p: 'p95' }, { count: 120, p: 'p99' }, { count: 65 }
       ]);
-
-      // Generate sparklines with smoother paths
-      function renderSparkline(id, color1, color2) {
-        const container = document.getElementById(id);
-        if (!container) return;
-
-        // Generate smoother random path with moving average
-        function generatePoints(baseLevel, variance) {
-          const raw = [];
-          for (let i = 0; i <= 30; i++) {
-            raw.push(baseLevel + (Math.random() - 0.5) * variance);
-          }
-          // Simple moving average for smoothing
-          const smoothed = [];
-          for (let i = 0; i < raw.length; i++) {
-            const start = Math.max(0, i - 2);
-            const end = Math.min(raw.length, i + 3);
-            const avg = raw.slice(start, end).reduce((a, b) => a + b, 0) / (end - start);
-            smoothed.push({ x: (i / 30) * 200, y: avg });
-          }
-          return smoothed;
-        }
-
-        const points1 = generatePoints(20, 15);
-        const points2 = color2 ? generatePoints(25, 12) : null;
-
-        const path1 = points1.map((p, i) => (i === 0 ? 'M' : 'L') + p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
-        const area1 = path1 + ' L200,40 L0,40 Z';
-
-        let svg = `
-          <svg viewBox="0 0 200 40" preserveAspectRatio="none" aria-hidden="true">
-            <path class="sparkline-area" fill="${color1}" d="${area1}"/>
-            <path class="sparkline-path" stroke="${color1}" d="${path1}"/>
-        `;
-
-        if (points2) {
-          const path2 = points2.map((p, i) => (i === 0 ? 'M' : 'L') + p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
-          const area2 = path2 + ' L200,40 L0,40 Z';
-          svg += `
-            <path class="sparkline-area" fill="${color2}" d="${area2}"/>
-            <path class="sparkline-path" stroke="${color2}" d="${path2}"/>
-          `;
-        }
-
-        svg += '</svg>';
-        container.innerHTML = svg;
-      }
-
-      renderSparkline('spark-server-1', 'var(--color-ok)', 'var(--color-info)');
-      renderSparkline('spark-server-2', 'var(--color-ok)', 'var(--color-info)');
-      renderSparkline('spark-server-3', 'var(--color-ok)', 'var(--color-info)');
-      renderSparkline('spark-client-1', 'var(--color-pink)', null);
-      renderSparkline('spark-client-2', 'var(--color-pink)', null);
-      renderSparkline('spark-client-3', 'var(--color-pink)', null);
 
       // Generate GC timeline with proper positioning
       function renderGCTimeline() {
