@@ -1597,6 +1597,26 @@
           { id: 'capacity', label: '/', suffix: '' }
         ]
       });
+    },
+    backpressure: function(id) {
+      return new PoolWidget({
+        id: id + '-backpressure',
+        name: 'Backpressure',
+        preset: 'queue',
+        variant: 'compact',
+        showGauge: true,
+        showGrid: false,
+        warningThreshold: 30,
+        criticalThreshold: 70,
+        color: '#f0883e',  // Orange for backpressure
+        colorMuted: 'rgba(240, 136, 62, 0.3)',
+        stats: [
+          { id: 'pending', label: 'queued:' },
+          { id: 'processed', label: '✓', suffix: '' },
+          { id: 'dropped', label: '✗', suffix: '' },
+          { id: 'avgwait', label: 'avg:', suffix: 'ms' }
+        ]
+      });
     }
   };
 
@@ -1609,7 +1629,8 @@
       handles: AIO_SLAB_CONFIGS.handles(id),
       tcp_buffers: AIO_SLAB_CONFIGS.tcp_buffers(id),
       stream_arenas: AIO_SLAB_CONFIGS.stream_arenas(id),
-      queue: AIO_SLAB_CONFIGS.queue(id)
+      queue: AIO_SLAB_CONFIGS.queue(id),
+      backpressure: AIO_SLAB_CONFIGS.backpressure(id)
     };
 
     var html =
@@ -1701,6 +1722,8 @@
               widgets.stream_arenas.render() +
               // Request queue gauge (using PoolWidget)
               widgets.queue.render() +
+              // Backpressure queue gauge (pending streams waiting for arenas)
+              widgets.backpressure.render() +
             '</div>' +
 
             '<div class="memory-legend-inline">' +
@@ -1918,6 +1941,27 @@
         stats: {
           pending: pending,
           capacity: capacity
+        }
+      });
+    }
+
+    // Update backpressure PoolWidget (pending streams waiting for arenas)
+    var bp = sys.backpressure || {};
+    if (panel._slabWidgets && panel._slabWidgets.backpressure) {
+      var bpCurrent = bp.pending_current || 0;
+      var bpPoolSize = bp.pool_size || 64;
+      var bpProcessed = bp.processed || 0;
+      var bpDropped = bp.dropped || 0;
+      var bpAvgWait = bp.avg_wait_ms || 0;
+
+      panel._slabWidgets.backpressure.update({
+        used: bpCurrent,
+        total: bpPoolSize,
+        stats: {
+          pending: bpCurrent,
+          processed: fmtCompact(bpProcessed),
+          dropped: bpDropped,
+          avgwait: bpAvgWait.toFixed(1)
         }
       });
     }

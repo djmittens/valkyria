@@ -356,6 +356,14 @@ void valk_aio_system_stats_init(valk_aio_system_stats_t* s,
   atomic_store(&s->arena_pool_overflow, 0);
   atomic_store(&s->tcp_buffer_overflow, 0);
   atomic_store(&s->connections_rejected_load, 0);
+
+  // Pending stream backpressure metrics
+  atomic_store(&s->pending_streams_current, 0);
+  atomic_store(&s->pending_streams_total, 0);
+  atomic_store(&s->pending_streams_processed, 0);
+  atomic_store(&s->pending_streams_dropped, 0);
+  atomic_store(&s->pending_streams_wait_us, 0);
+  s->pending_streams_pool_size = 64;  // PENDING_STREAM_POOL_SIZE from aio_uv.c
 }
 
 // Server tracking
@@ -401,6 +409,27 @@ void valk_aio_system_stats_update_queue(valk_aio_system_stats_t* s,
   atomic_store(&s->pending_requests, pending_requests);
   atomic_store(&s->pending_responses, pending_responses);
   atomic_store(&s->queue_depth, pending_requests + pending_responses);
+}
+
+// Pending stream backpressure instrumentation
+void valk_aio_system_stats_on_pending_enqueue(valk_aio_system_stats_t* s) {
+  atomic_fetch_add(&s->pending_streams_current, 1);
+  atomic_fetch_add(&s->pending_streams_total, 1);
+}
+
+void valk_aio_system_stats_on_pending_dequeue(valk_aio_system_stats_t* s, uint64_t wait_us) {
+  atomic_fetch_sub(&s->pending_streams_current, 1);
+  atomic_fetch_add(&s->pending_streams_processed, 1);
+  atomic_fetch_add(&s->pending_streams_wait_us, wait_us);
+}
+
+void valk_aio_system_stats_on_pending_drop(valk_aio_system_stats_t* s) {
+  atomic_fetch_sub(&s->pending_streams_current, 1);
+  atomic_fetch_add(&s->pending_streams_dropped, 1);
+}
+
+void valk_aio_system_stats_update_pending_current(valk_aio_system_stats_t* s, uint64_t count) {
+  atomic_store(&s->pending_streams_current, count);
 }
 
 // Combined JSON rendering (HTTP metrics + AIO system stats)

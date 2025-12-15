@@ -277,6 +277,74 @@ static __thread uv_timer_t *backpressure_timer = NULL;
 #define BACKPRESSURE_CHECK_INTERVAL_MS 100  // Check every 100ms
 #define BACKPRESSURE_TIMEOUT_MS 30000  // Close connections after 30s under backpressure
 
+// ============================================================================
+// Pending Stream Queue (arena backpressure)
+// When arena pool is exhausted, streams wait here instead of getting 503
+// ============================================================================
+#define PENDING_STREAM_MAX_HEADERS 32   // Max headers to buffer per pending stream
+#define PENDING_STREAM_POOL_SIZE 64     // Max pending streams waiting for arenas
+
+typedef struct {
+  char *name;
+  char *value;
+  size_t name_len;
+  size_t value_len;
+} pending_header_t;
+
+typedef struct pending_stream {
+  struct pending_stream *next;
+  valk_aio_handle_t *conn;
+  nghttp2_session *session;
+  int32_t stream_id;
+
+  // Pseudo-headers (malloc'd, freed when processed or timed out)
+  char *method;
+  char *scheme;
+  char *authority;
+  char *path;
+
+  // Regular headers (small fixed buffer)
+  pending_header_t headers[PENDING_STREAM_MAX_HEADERS];
+  size_t header_count;
+
+  // Request body (if any arrived while pending)
+  uint8_t *body;
+  size_t body_len;
+  size_t body_capacity;
+
+  // Timing
+  uint64_t queued_time_ms;
+  bool headers_complete;   // True when END_HEADERS received
+} pending_stream_t;
+
+// Thread-local pending stream queue (event loop is single-threaded)
+static __thread pending_stream_t *pending_stream_head = NULL;
+static __thread pending_stream_t *pending_stream_tail = NULL;
+static __thread size_t pending_stream_count = 0;
+
+// Pool of pending_stream_t structs to avoid malloc during backpressure
+static __thread pending_stream_t pending_stream_pool[PENDING_STREAM_POOL_SIZE];
+static __thread bool pending_stream_pool_used[PENDING_STREAM_POOL_SIZE];
+static __thread bool pending_stream_pool_initialized = false;
+
+// Forward declarations for pending stream functions
+static pending_stream_t *__pending_stream_alloc(void);
+static void __pending_stream_free(pending_stream_t *ps);
+static void __pending_stream_enqueue(pending_stream_t *ps);
+static pending_stream_t *__pending_stream_dequeue(void);
+static void __pending_stream_process_one(valk_aio_system_t *sys);
+static pending_stream_t *__pending_stream_find(nghttp2_session *session, int32_t stream_id);
+
+// Helper to check if stream user data is a pending stream (high bit set)
+static inline bool __is_pending_stream(void *user_data) {
+  return user_data && ((uintptr_t)user_data & (1ULL << 63));
+}
+
+static inline pending_stream_t *__get_pending_stream(void *user_data) {
+  if (!__is_pending_stream(user_data)) return NULL;
+  return (pending_stream_t *)((uintptr_t)user_data & ~(1ULL << 63));
+}
+
 // Forward declaration for server request type (defined below)
 typedef struct valk_http2_server_request valk_http2_server_request_t;
 
@@ -472,6 +540,128 @@ static void __backpressure_timer_start(uv_loop_t *loop) {
                    BACKPRESSURE_CHECK_INTERVAL_MS, BACKPRESSURE_CHECK_INTERVAL_MS);
   }
 }
+
+// ============================================================================
+// Pending Stream Queue Implementation
+// ============================================================================
+
+static void __pending_stream_pool_init(void) {
+  if (pending_stream_pool_initialized) return;
+  memset(pending_stream_pool, 0, sizeof(pending_stream_pool));
+  memset(pending_stream_pool_used, 0, sizeof(pending_stream_pool_used));
+  pending_stream_pool_initialized = true;
+}
+
+static pending_stream_t *__pending_stream_alloc(void) {
+  __pending_stream_pool_init();
+
+  // Find a free slot in the pool
+  for (size_t i = 0; i < PENDING_STREAM_POOL_SIZE; i++) {
+    if (!pending_stream_pool_used[i]) {
+      pending_stream_pool_used[i] = true;
+      pending_stream_t *ps = &pending_stream_pool[i];
+      memset(ps, 0, sizeof(pending_stream_t));
+      return ps;
+    }
+  }
+  return NULL;  // Pool exhausted
+}
+
+static void __pending_stream_free(pending_stream_t *ps) {
+  if (!ps) return;
+
+  // Free malloc'd pseudo-headers
+  if (ps->method) { free(ps->method); ps->method = NULL; }
+  if (ps->scheme) { free(ps->scheme); ps->scheme = NULL; }
+  if (ps->authority) { free(ps->authority); ps->authority = NULL; }
+  if (ps->path) { free(ps->path); ps->path = NULL; }
+
+  // Free malloc'd regular headers
+  for (size_t i = 0; i < ps->header_count; i++) {
+    if (ps->headers[i].name) free(ps->headers[i].name);
+    if (ps->headers[i].value) free(ps->headers[i].value);
+  }
+  ps->header_count = 0;
+
+  // Free body if any
+  if (ps->body) { free(ps->body); ps->body = NULL; }
+
+  // Mark slot as free in pool
+  size_t idx = (size_t)(ps - pending_stream_pool);
+  if (idx < PENDING_STREAM_POOL_SIZE) {
+    pending_stream_pool_used[idx] = false;
+  }
+}
+
+static void __pending_stream_enqueue(pending_stream_t *ps) {
+  ps->next = NULL;
+  if (pending_stream_tail) {
+    pending_stream_tail->next = ps;
+  } else {
+    pending_stream_head = ps;
+  }
+  pending_stream_tail = ps;
+  pending_stream_count++;
+  VALK_INFO("Pending stream ENQUEUED: stream_id=%d, queue_size=%zu",
+            ps->stream_id, pending_stream_count);
+}
+
+static pending_stream_t *__pending_stream_dequeue(void) {
+  if (!pending_stream_head) return NULL;
+
+  pending_stream_t *ps = pending_stream_head;
+  pending_stream_head = ps->next;
+  if (!pending_stream_head) {
+    pending_stream_tail = NULL;
+  }
+  ps->next = NULL;
+  pending_stream_count--;
+  VALK_INFO("Pending stream DEQUEUED: stream_id=%d, queue_size=%zu",
+            ps->stream_id, pending_stream_count);
+  return ps;
+}
+
+static pending_stream_t *__pending_stream_find(nghttp2_session *session, int32_t stream_id) {
+  for (pending_stream_t *ps = pending_stream_head; ps; ps = ps->next) {
+    if (ps->session == session && ps->stream_id == stream_id) {
+      return ps;
+    }
+  }
+  return NULL;
+}
+
+// Remove a specific pending stream from the queue (for stream resets)
+static void __pending_stream_remove(pending_stream_t *target) {
+  if (!target) return;
+
+  pending_stream_t **pp = &pending_stream_head;
+  while (*pp) {
+    if (*pp == target) {
+      *pp = target->next;
+      if (pending_stream_tail == target) {
+        pending_stream_tail = (*pp) ? NULL : pending_stream_head;
+        // Fix: find new tail if list not empty
+        if (pending_stream_head && !pending_stream_tail) {
+          for (pending_stream_t *p = pending_stream_head; p; p = p->next) {
+            if (!p->next) pending_stream_tail = p;
+          }
+        }
+      }
+      pending_stream_count--;
+      __pending_stream_free(target);
+      return;
+    }
+    pp = &(*pp)->next;
+  }
+}
+
+// Forward declaration - defined after valk_http2_server_request_t
+static void __pending_stream_process_one(valk_aio_system_t *sys);
+
+// Forward declarations for request processing (defined later in file)
+static valk_lval_t* __http_build_request_qexpr(valk_http2_server_request_t *req);
+static int __http_send_response(nghttp2_session *session, int stream_id,
+                                 valk_lval_t* response_qexpr, valk_mem_arena_t* arena);
 
 // Escape analysis: intern value to GC heap for cross-thread sharing
 // Takes arena-allocated value, returns GC heap-allocated deep copy
@@ -710,6 +900,195 @@ size_t valk_owner_get_count(valk_aio_system_t *sys) {
 }
 
 #endif
+
+// ============================================================================
+// Pending Stream Processing Implementation
+// Convert a pending stream (buffered headers) to a full request with arena
+// ============================================================================
+static void __pending_stream_process_one(valk_aio_system_t *sys) {
+  if (!sys || pending_stream_count == 0) return;
+
+  // Try to acquire an arena
+  valk_slab_item_t *arena_item = valk_slab_aquire(sys->httpStreamArenas);
+  if (!arena_item) {
+    // Still no arenas available, stay in queue
+    VALK_DEBUG("No arenas available yet, %zu streams still pending", pending_stream_count);
+    return;
+  }
+
+  // Dequeue the oldest pending stream
+  pending_stream_t *ps = __pending_stream_dequeue();
+  if (!ps) {
+    // Queue became empty (race condition or cleanup), release arena
+    valk_slab_release(sys->httpStreamArenas, arena_item);
+    return;
+  }
+
+  // Verify the connection and session are still valid
+  if (!ps->conn || !ps->session) {
+    VALK_WARN("Pending stream %d has invalid conn/session, discarding", ps->stream_id);
+    valk_slab_release(sys->httpStreamArenas, arena_item);
+    __pending_stream_free(ps);
+    return;
+  }
+
+  // Check if stream was already closed
+  void *current_data = nghttp2_session_get_stream_user_data(ps->session, ps->stream_id);
+  if (!current_data || !__is_pending_stream(current_data)) {
+    VALK_WARN("Pending stream %d no longer exists or was replaced, discarding", ps->stream_id);
+    valk_slab_release(sys->httpStreamArenas, arena_item);
+    __pending_stream_free(ps);
+    return;
+  }
+
+  uint64_t wait_ms = uv_now(ps->conn->uv.tcp.loop) - ps->queued_time_ms;
+  VALK_INFO("Processing pending stream %d (waited %lums)",
+            ps->stream_id, (unsigned long)wait_ms);
+
+  // Initialize the arena
+  valk_mem_arena_t *stream_arena = (valk_mem_arena_t *)arena_item->data;
+  valk_mem_arena_init(stream_arena, sys->config.arena_size);
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_stats_on_arena_acquire(&sys->system_stats);
+  // Track pending stream dequeue with wait time
+  valk_aio_system_stats_on_pending_dequeue(&sys->system_stats, wait_ms * 1000);  // Convert to microseconds
+#endif
+
+  // Create the full request object on the arena
+  valk_http2_server_request_t *req;
+  VALK_WITH_ALLOC((valk_mem_allocator_t*)stream_arena) {
+    req = valk_mem_alloc(sizeof(valk_http2_server_request_t));
+    memset(req, 0, sizeof(valk_http2_server_request_t));
+    req->conn = ps->conn;
+    req->stream_id = ps->stream_id;
+    req->stream_arena = stream_arena;
+    req->arena_slab_item = arena_item;
+    req->arena_slot = (uint32_t)(arena_item->handle & 0xFFFFFFFF);
+    req->next_arena_slot = UINT32_MAX;
+
+#ifdef VALK_METRICS_ENABLED
+    req->start_time_us = ps->queued_time_ms * 1000;  // Convert to microseconds
+    req->bytes_sent = 0;
+    req->bytes_recv = 0;
+#endif
+
+    // Copy pseudo-headers from pending to arena
+    if (ps->method) {
+      size_t len = strlen(ps->method);
+      req->method = valk_mem_alloc(len + 1);
+      memcpy(req->method, ps->method, len + 1);
+    }
+    if (ps->scheme) {
+      size_t len = strlen(ps->scheme);
+      req->scheme = valk_mem_alloc(len + 1);
+      memcpy(req->scheme, ps->scheme, len + 1);
+    }
+    if (ps->authority) {
+      size_t len = strlen(ps->authority);
+      req->authority = valk_mem_alloc(len + 1);
+      memcpy(req->authority, ps->authority, len + 1);
+    }
+    if (ps->path) {
+      size_t len = strlen(ps->path);
+      req->path = valk_mem_alloc(len + 1);
+      memcpy(req->path, ps->path, len + 1);
+    }
+
+    // Copy regular headers
+    if (ps->header_count > 0) {
+      req->headers.capacity = ps->header_count;
+      req->headers.items = valk_mem_alloc(ps->header_count * sizeof(struct valk_http2_header_t));
+      req->headers.count = ps->header_count;
+
+      for (size_t i = 0; i < ps->header_count; i++) {
+        pending_header_t *ph = &ps->headers[i];
+        struct valk_http2_header_t *h = &req->headers.items[i];
+
+        h->name = valk_mem_alloc(ph->name_len + 1);
+        h->value = valk_mem_alloc(ph->value_len + 1);
+        memcpy(h->name, ph->name, ph->name_len + 1);
+        memcpy(h->value, ph->value, ph->value_len + 1);
+        h->nameLen = ph->name_len;
+        h->valueLen = ph->value_len;
+      }
+    }
+
+    // Copy body if any
+    if (ps->body && ps->body_len > 0) {
+      req->body = valk_mem_alloc(ps->body_len);
+      memcpy(req->body, ps->body, ps->body_len);
+      req->bodyLen = ps->body_len;
+      req->bodyCapacity = ps->body_len;
+    }
+  }
+
+  // Update stream user data from pending marker to actual request
+  nghttp2_session_set_stream_user_data(ps->session, ps->stream_id, req);
+
+  // Add to connection's active arena list
+  req->next_arena_slot = ps->conn->http.active_arena_head;
+  ps->conn->http.active_arena_head = req->arena_slot;
+
+  // Increment active streams (was decremented when we queued, or not - check logic)
+  // Actually, active_streams was incremented in on_begin_headers and stays
+  // We just never decremented it for pending streams
+
+  VALK_INFO("Pending stream %d converted to full request (arena slot %u)",
+            ps->stream_id, req->arena_slot);
+
+  // If headers were complete, we may need to trigger request processing
+  // This depends on whether on_frame_recv was already called
+  if (ps->headers_complete) {
+    // Headers were already complete - need to process request now
+    // The normal flow would have called the handler in on_frame_recv
+    // We need to simulate that by calling the handler here
+    if (ps->conn->http.server && ps->conn->http.server->lisp_handler_fn) {
+      VALK_DEBUG("Pending stream %d had complete headers, triggering handler", ps->stream_id);
+
+      // Build request qexpr and call handler (same as in on_frame_recv)
+      valk_lval_t *arena_qexpr = __http_build_request_qexpr(req);
+      valk_lval_t *handler = ps->conn->http.server->lisp_handler_fn;
+      valk_lenv_t *sandbox_env = ps->conn->http.server->sandbox_env;
+      valk_lval_t *response;
+
+      // Set up request context for aio/delay
+      valk_http_request_ctx_t req_ctx = {
+        .session = ps->session,
+        .stream_id = ps->stream_id,
+        .conn = ps->conn,
+        .req = req,
+        .env = sandbox_env
+      };
+      current_request_ctx = &req_ctx;
+
+      VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
+        valk_lval_t *args = valk_lval_cons(arena_qexpr, valk_lval_nil());
+        response = valk_lval_eval_call(sandbox_env, handler, args);
+      }
+
+      // Clear request context
+      current_request_ctx = NULL;
+
+      // Handle response (deferred, handle, or normal)
+      if (LVAL_TYPE(response) == LVAL_SYM && strcmp(response->str, ":deferred") == 0) {
+        // Response already sent or will be sent later (SSE, etc.)
+      } else if (LVAL_TYPE(response) != LVAL_HANDLE) {
+        // Normal response - send it
+        __http_send_response(ps->session, ps->stream_id, response, req->stream_arena);
+      }
+      // Note: LVAL_HANDLE responses need async completion handling (not implemented here yet)
+    }
+  }
+
+  // Free the pending stream structure
+  __pending_stream_free(ps);
+
+  // If there are more pending streams, try to process them too
+  if (pending_stream_count > 0) {
+    __pending_stream_process_one(sys);  // Recursive, but bounded by arena availability
+  }
+}
 
 static void __event_loop(void *arg) {
   valk_aio_system_t *sys = arg;
@@ -1071,9 +1450,63 @@ static int __http_on_header_callback(nghttp2_session *session,
   VALK_TRACE("HDR: %.*s: %.*s", (int)namelen, name, (int)valuelen, value);
 
   // Get request attached to this stream
-  valk_http2_server_request_t *req =
-      nghttp2_session_get_stream_user_data(session, frame->hd.stream_id);
+  void *stream_data = nghttp2_session_get_stream_user_data(session, frame->hd.stream_id);
 
+  // Check if this is a pending stream (waiting for arena)
+  if (__is_pending_stream(stream_data)) {
+    pending_stream_t *ps = __get_pending_stream(stream_data);
+    if (!ps) return 0;
+
+    // Buffer headers in pending stream using malloc (will be copied to arena later)
+    if (namelen > 0 && name[0] == ':') {
+      // Pseudo-header
+      char *str = malloc(valuelen + 1);
+      if (!str) return 0;  // OOM, drop header
+      memcpy(str, value, valuelen);
+      str[valuelen] = '\0';
+
+      if (namelen == 7 && memcmp(name, ":method", 7) == 0) {
+        if (ps->method) free(ps->method);
+        ps->method = str;
+      } else if (namelen == 7 && memcmp(name, ":scheme", 7) == 0) {
+        if (ps->scheme) free(ps->scheme);
+        ps->scheme = str;
+      } else if (namelen == 10 && memcmp(name, ":authority", 10) == 0) {
+        if (ps->authority) free(ps->authority);
+        ps->authority = str;
+      } else if (namelen == 5 && memcmp(name, ":path", 5) == 0) {
+        if (ps->path) free(ps->path);
+        ps->path = str;
+      } else {
+        free(str);  // Unknown pseudo-header
+      }
+    } else {
+      // Regular header - buffer in fixed array
+      if (ps->header_count < PENDING_STREAM_MAX_HEADERS) {
+        pending_header_t *h = &ps->headers[ps->header_count];
+        h->name = malloc(namelen + 1);
+        h->value = malloc(valuelen + 1);
+        if (h->name && h->value) {
+          memcpy(h->name, name, namelen);
+          memcpy(h->value, value, valuelen);
+          h->name[namelen] = '\0';
+          h->value[valuelen] = '\0';
+          h->name_len = namelen;
+          h->value_len = valuelen;
+          ps->header_count++;
+        } else {
+          if (h->name) free(h->name);
+          if (h->value) free(h->value);
+          h->name = h->value = NULL;
+        }
+      }
+      // If header array full, drop the header (graceful degradation)
+    }
+    return 0;
+  }
+
+  // Normal path: regular request with arena
+  valk_http2_server_request_t *req = (valk_http2_server_request_t *)stream_data;
   if (!req) return 0;
 
 #ifdef VALK_METRICS_ENABLED
@@ -1160,8 +1593,36 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
     // Acquire per-stream arena from slab
     valk_slab_item_t *arena_item = valk_slab_aquire(conn->http.server->sys->httpStreamArenas);
     if (!arena_item) {
-      // Pool exhausted - send 503 response instead of RST_STREAM
-      VALK_WARN("Stream arena pool exhausted for stream %d, sending 503",
+      // Arena pool exhausted - try to queue for backpressure instead of 503
+      pending_stream_t *ps = __pending_stream_alloc();
+      if (ps) {
+        // Successfully allocated pending slot - queue this stream
+        ps->conn = conn;
+        ps->session = session;
+        ps->stream_id = frame->hd.stream_id;
+        ps->queued_time_ms = uv_now(conn->uv.tcp.loop);
+        ps->headers_complete = false;
+
+        // Use negative pointer value as marker for pending stream
+        // nghttp2 stream user data will point to pending_stream_t with high bit set
+        nghttp2_session_set_stream_user_data(session, frame->hd.stream_id,
+            (void*)((uintptr_t)ps | (1ULL << 63)));
+
+        __pending_stream_enqueue(ps);
+        VALK_INFO("Stream %d queued for backpressure (arena pool exhausted, %zu pending)",
+                  frame->hd.stream_id, pending_stream_count);
+
+#ifdef VALK_METRICS_ENABLED
+        // Track backpressure event (not an overflow since we're handling it)
+        atomic_fetch_add(&conn->http.server->sys->system_stats.arena_pool_overflow, 1);
+        // Track pending stream enqueue
+        valk_aio_system_stats_on_pending_enqueue(&conn->http.server->sys->system_stats);
+#endif
+        return 0;  // Success - stream is pending
+      }
+
+      // Pending pool also exhausted - fall back to 503
+      VALK_WARN("Stream arena AND pending pool exhausted for stream %d, sending 503",
                 frame->hd.stream_id);
       conn->http.active_streams--;
 
@@ -1682,9 +2143,28 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
   UNUSED(error_code);
   valk_aio_handle_t *conn = (valk_aio_handle_t *)user_data;
 
-  // Get request data to access stream arena
-  valk_http2_server_request_t *req =
-      nghttp2_session_get_stream_user_data(session, stream_id);
+  // Get stream data - could be regular request or pending stream
+  void *stream_data = nghttp2_session_get_stream_user_data(session, stream_id);
+
+  // Check if this is a pending stream being closed (e.g., client reset)
+  if (__is_pending_stream(stream_data)) {
+    pending_stream_t *ps = __get_pending_stream(stream_data);
+    if (ps) {
+      VALK_INFO("Pending stream %d closed (client reset or timeout), removing from queue",
+                stream_id);
+      __pending_stream_remove(ps);
+#ifdef VALK_METRICS_ENABLED
+      // Track pending stream drop
+      if (conn->http.server && conn->http.server->sys) {
+        valk_aio_system_stats_on_pending_drop(&conn->http.server->sys->system_stats);
+      }
+#endif
+    }
+    conn->http.active_streams--;
+    return 0;
+  }
+
+  valk_http2_server_request_t *req = (valk_http2_server_request_t *)stream_data;
 
 #ifdef VALK_METRICS_ENABLED
   // Unsubscribe SSE stream from global registry if this was an SSE connection
@@ -1757,6 +2237,11 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
     valk_slab_release(conn->http.server->sys->httpStreamArenas, item);
     size_t arena_num_free = __atomic_load_n(&conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
     VALK_INFO("Arena RELEASED (stream close) for stream %d (slot=%u, now %zu free)", stream_id, slot, arena_num_free);
+
+    // Process any pending streams that were waiting for an arena
+    if (pending_stream_count > 0) {
+      __pending_stream_process_one(conn->http.server->sys);
+    }
   }
 
   conn->http.active_streams--;
@@ -1790,9 +2275,21 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
       frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
     VALK_DEBUG(">>> Received complete HTTP/2 request (stream_id=%d)", frame->hd.stream_id);
 
-    // Get request data attached to this stream
-    valk_http2_server_request_t *req =
-        nghttp2_session_get_stream_user_data(session, frame->hd.stream_id);
+    // Get stream data - could be regular request or pending stream
+    void *stream_data = nghttp2_session_get_stream_user_data(session, frame->hd.stream_id);
+
+    // Check if this is a pending stream (waiting for arena)
+    if (__is_pending_stream(stream_data)) {
+      pending_stream_t *ps = __get_pending_stream(stream_data);
+      if (ps) {
+        // Mark headers as complete - will be processed when arena becomes available
+        ps->headers_complete = true;
+        VALK_INFO("Pending stream %d headers complete, waiting for arena", frame->hd.stream_id);
+      }
+      return 0;  // Skip normal processing for now
+    }
+
+    valk_http2_server_request_t *req = (valk_http2_server_request_t *)stream_data;
 
     if (!req) {
       VALK_WARN("No request data for stream %d", frame->hd.stream_id);

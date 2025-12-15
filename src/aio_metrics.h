@@ -68,6 +68,14 @@ typedef struct {
 
   // Load shedding
   _Atomic uint64_t connections_rejected_load;  // Rejected due to buffer pressure
+
+  // Pending stream backpressure metrics
+  _Atomic uint64_t pending_streams_current;    // Currently queued streams waiting for arenas
+  _Atomic uint64_t pending_streams_total;      // Total streams queued (cumulative)
+  _Atomic uint64_t pending_streams_processed;  // Successfully processed from queue (cumulative)
+  _Atomic uint64_t pending_streams_dropped;    // Dropped due to client disconnect (cumulative)
+  _Atomic uint64_t pending_streams_wait_us;    // Total wait time in microseconds (for avg calc)
+  uint64_t pending_streams_pool_size;          // Pool capacity (set at init)
 } valk_aio_system_stats_t;
 
 // Forward declaration for libuv loop
@@ -162,6 +170,12 @@ void valk_aio_system_stats_on_arena_release(valk_aio_system_stats_t* s);
 void valk_aio_system_stats_update_queue(valk_aio_system_stats_t* s,
                                          uint64_t pending_requests,
                                          uint64_t pending_responses);
+
+// Pending stream backpressure instrumentation
+void valk_aio_system_stats_on_pending_enqueue(valk_aio_system_stats_t* s);
+void valk_aio_system_stats_on_pending_dequeue(valk_aio_system_stats_t* s, uint64_t wait_us);
+void valk_aio_system_stats_on_pending_drop(valk_aio_system_stats_t* s);
+void valk_aio_system_stats_update_pending_current(valk_aio_system_stats_t* s, uint64_t count);
 
 // Rendering
 char* valk_aio_metrics_to_json(const valk_aio_metrics_t* m, struct valk_mem_allocator_t* alloc);

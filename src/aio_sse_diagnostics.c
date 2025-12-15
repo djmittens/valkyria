@@ -1232,6 +1232,16 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
     uint64_t pending_resp = sys_stats ? atomic_load(&sys_stats->pending_responses) : 0;
     uint64_t queue_cap = sys_stats ? sys_stats->queue_capacity : 0;
 
+    // Pending stream backpressure stats
+    uint64_t bp_current = sys_stats ? atomic_load(&sys_stats->pending_streams_current) : 0;
+    uint64_t bp_total = sys_stats ? atomic_load(&sys_stats->pending_streams_total) : 0;
+    uint64_t bp_processed = sys_stats ? atomic_load(&sys_stats->pending_streams_processed) : 0;
+    uint64_t bp_dropped = sys_stats ? atomic_load(&sys_stats->pending_streams_dropped) : 0;
+    uint64_t bp_wait_us = sys_stats ? atomic_load(&sys_stats->pending_streams_wait_us) : 0;
+    uint64_t bp_pool_size = sys_stats ? sys_stats->pending_streams_pool_size : 0;
+    // Calculate average wait time (avoid division by zero)
+    double bp_avg_wait_ms = (bp_processed > 0) ? (double)bp_wait_us / (double)bp_processed / 1000.0 : 0.0;
+
     n = snprintf(p, end - p,
                  "\"aio\":{\"uptime_seconds\":%.2f,"
                  "\"connections\":{\"total\":%lu,\"active\":%lu,\"failed\":%lu,"
@@ -1239,7 +1249,9 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
                  "\"streams\":{\"total\":%lu,\"active\":%lu},"
                  "\"requests\":{\"total\":%lu,\"active\":%lu,\"errors\":%lu},"
                  "\"bytes\":{\"sent\":%lu,\"recv\":%lu},"
-                 "\"queue\":{\"pending_requests\":%lu,\"pending_responses\":%lu,\"capacity\":%lu}},",
+                 "\"queue\":{\"pending_requests\":%lu,\"pending_responses\":%lu,\"capacity\":%lu},"
+                 "\"backpressure\":{\"pending_current\":%lu,\"pending_total\":%lu,"
+                 "\"processed\":%lu,\"dropped\":%lu,\"avg_wait_ms\":%.2f,\"pool_size\":%lu}},",
                  uptime_seconds,
                  atomic_load(&aio_metrics->connections_total),
                  atomic_load(&aio_metrics->connections_active),
@@ -1254,7 +1266,8 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
                  atomic_load(&aio_metrics->requests_errors),
                  atomic_load(&aio_metrics->bytes_sent_total),
                  atomic_load(&aio_metrics->bytes_recv_total),
-                 pending_req, pending_resp, queue_cap);
+                 pending_req, pending_resp, queue_cap,
+                 bp_current, bp_total, bp_processed, bp_dropped, bp_avg_wait_ms, bp_pool_size);
 
     if (n < 0 || n >= end - p) return -1;
     p += n;
@@ -2109,6 +2122,16 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
     uint64_t pending_resp = sys_stats ? atomic_load(&sys_stats->pending_responses) : 0;
     uint64_t queue_cap = sys_stats ? sys_stats->queue_capacity : 0;
 
+    // Pending stream backpressure stats
+    uint64_t bp_current = sys_stats ? atomic_load(&sys_stats->pending_streams_current) : 0;
+    uint64_t bp_total = sys_stats ? atomic_load(&sys_stats->pending_streams_total) : 0;
+    uint64_t bp_processed = sys_stats ? atomic_load(&sys_stats->pending_streams_processed) : 0;
+    uint64_t bp_dropped = sys_stats ? atomic_load(&sys_stats->pending_streams_dropped) : 0;
+    uint64_t bp_wait_us = sys_stats ? atomic_load(&sys_stats->pending_streams_wait_us) : 0;
+    uint64_t bp_pool_size = sys_stats ? sys_stats->pending_streams_pool_size : 0;
+    // Calculate average wait time (avoid division by zero)
+    double bp_avg_wait_ms = (bp_processed > 0) ? (double)bp_wait_us / (double)bp_processed / 1000.0 : 0.0;
+
     n = snprintf(p, end - p,
                  "\"aio\":{\"uptime_seconds\":%.2f,"
                  "\"connections\":{\"total\":%lu,\"active\":%lu,\"failed\":%lu,"
@@ -2116,7 +2139,9 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
                  "\"streams\":{\"total\":%lu,\"active\":%lu},"
                  "\"requests\":{\"total\":%lu,\"active\":%lu,\"errors\":%lu},"
                  "\"bytes\":{\"sent\":%lu,\"recv\":%lu},"
-                 "\"queue\":{\"pending_requests\":%lu,\"pending_responses\":%lu,\"capacity\":%lu}},",
+                 "\"queue\":{\"pending_requests\":%lu,\"pending_responses\":%lu,\"capacity\":%lu},"
+                 "\"backpressure\":{\"pending_current\":%lu,\"pending_total\":%lu,"
+                 "\"processed\":%lu,\"dropped\":%lu,\"avg_wait_ms\":%.2f,\"pool_size\":%lu}},",
                  uptime_seconds,
                  atomic_load(&aio_metrics->connections_total),
                  atomic_load(&aio_metrics->connections_active),
@@ -2131,7 +2156,8 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
                  atomic_load(&aio_metrics->requests_errors),
                  atomic_load(&aio_metrics->bytes_sent_total),
                  atomic_load(&aio_metrics->bytes_recv_total),
-                 pending_req, pending_resp, queue_cap);
+                 pending_req, pending_resp, queue_cap,
+                 bp_current, bp_total, bp_processed, bp_dropped, bp_avg_wait_ms, bp_pool_size);
 
     if (n < 0 || n >= end - p) goto cleanup;
     p += n;
