@@ -221,6 +221,7 @@
   function PoolWidget(config) {
     this.id = config.id;
     this.name = config.name;
+    this.tooltip = config.tooltip || null;
     this.slabKey = config.slabKey || null;
     this.icon = config.icon || null;
     this.preset = config.preset || null;
@@ -382,7 +383,7 @@
     if (this.icon) {
       html += '<span class="pool-widget-icon">' + this.icon + '</span>';
     }
-    html += '<span class="pool-widget-name">' + this.name + '</span>';
+    html += '<span class="pool-widget-name"' + (this.tooltip ? ' title="' + this.tooltip + '"' : '') + '>' + this.name + '</span>';
     html += '<span class="pool-widget-usage" id="' + this.id + '-usage">-- / --</span>';
     html += '<span class="pool-widget-badge" id="' + this.id + '-badge">--%</span>';
     html += '</div>';
@@ -1586,6 +1587,7 @@
       return new PoolWidget({
         id: id + '-queue',
         name: 'Request Queue',
+        tooltip: 'HTTP requests/responses queued in the event loop. High values indicate CPU/processing bottleneck.',
         preset: 'queue',
         variant: 'compact',
         showGauge: true,
@@ -1598,17 +1600,18 @@
         ]
       });
     },
-    backpressure: function(id) {
+    pendingStreams: function(id) {
       return new PoolWidget({
-        id: id + '-backpressure',
-        name: 'Backpressure',
+        id: id + '-pending-streams',
+        name: 'Pending Streams',
+        tooltip: 'HTTP/2 streams waiting for arena memory allocation. High values indicate memory pool exhaustion.',
         preset: 'queue',
         variant: 'compact',
         showGauge: true,
         showGrid: false,
         warningThreshold: 30,
         criticalThreshold: 70,
-        color: '#f0883e',  // Orange for backpressure
+        color: '#f0883e',  // Orange for pending streams
         colorMuted: 'rgba(240, 136, 62, 0.3)',
         stats: [
           { id: 'pending', label: 'queued:' },
@@ -1630,7 +1633,7 @@
       tcp_buffers: AIO_SLAB_CONFIGS.tcp_buffers(id),
       stream_arenas: AIO_SLAB_CONFIGS.stream_arenas(id),
       queue: AIO_SLAB_CONFIGS.queue(id),
-      backpressure: AIO_SLAB_CONFIGS.backpressure(id)
+      pendingStreams: AIO_SLAB_CONFIGS.pendingStreams(id)
     };
 
     var html =
@@ -1722,8 +1725,8 @@
               widgets.stream_arenas.render() +
               // Request queue gauge (using PoolWidget)
               widgets.queue.render() +
-              // Backpressure queue gauge (pending streams waiting for arenas)
-              widgets.backpressure.render() +
+              // Pending streams waiting for arenas
+              widgets.pendingStreams.render() +
             '</div>' +
 
             '<div class="memory-legend-inline">' +
@@ -1945,23 +1948,23 @@
       });
     }
 
-    // Update backpressure PoolWidget (pending streams waiting for arenas)
-    var bp = sys.backpressure || {};
-    if (panel._slabWidgets && panel._slabWidgets.backpressure) {
-      var bpCurrent = bp.pending_current || 0;
-      var bpPoolSize = bp.pool_size || 64;
-      var bpProcessed = bp.processed || 0;
-      var bpDropped = bp.dropped || 0;
-      var bpAvgWait = bp.avg_wait_ms || 0;
+    // Update pending streams PoolWidget (streams waiting for arenas)
+    var ps = sys.pending_streams || {};
+    if (panel._slabWidgets && panel._slabWidgets.pendingStreams) {
+      var psCurrent = ps.current || 0;
+      var psPoolSize = ps.pool_size || 64;
+      var psProcessed = ps.processed || 0;
+      var psDropped = ps.dropped || 0;
+      var psAvgWait = ps.avg_wait_ms || 0;
 
-      panel._slabWidgets.backpressure.update({
-        used: bpCurrent,
-        total: bpPoolSize,
+      panel._slabWidgets.pendingStreams.update({
+        used: psCurrent,
+        total: psPoolSize,
         stats: {
-          pending: bpCurrent,
-          processed: fmtCompact(bpProcessed),
-          dropped: bpDropped,
-          avgwait: bpAvgWait.toFixed(1)
+          pending: psCurrent,
+          processed: fmtCompact(psProcessed),
+          dropped: psDropped,
+          avgwait: psAvgWait.toFixed(1)
         }
       });
     }
@@ -3972,6 +3975,14 @@
             pending_requests: aio.queue ? aio.queue.pending_requests : 0,
             pending_responses: aio.queue ? aio.queue.pending_responses : 0,
             capacity: aio.queue ? aio.queue.capacity : 0
+          },
+          pending_streams: {
+            current: aio.pending_streams ? aio.pending_streams.current : 0,
+            total: aio.pending_streams ? aio.pending_streams.total : 0,
+            processed: aio.pending_streams ? aio.pending_streams.processed : 0,
+            dropped: aio.pending_streams ? aio.pending_streams.dropped : 0,
+            avg_wait_ms: aio.pending_streams ? aio.pending_streams.avg_wait_ms : 0,
+            pool_size: aio.pending_streams ? aio.pending_streams.pool_size : 64
           }
         };
 
@@ -3982,7 +3993,8 @@
           uptime_seconds: aio.uptime_seconds || 0,
           system: dashboardData.aio_metrics.system,
           connections: dashboardData.aio_metrics.connections,
-          queue: dashboardData.aio_metrics.queue
+          queue: dashboardData.aio_metrics.queue,
+          pending_streams: dashboardData.aio_metrics.pending_streams
         }];
       }
 

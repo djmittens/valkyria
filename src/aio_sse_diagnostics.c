@@ -1250,7 +1250,7 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
                  "\"requests\":{\"total\":%lu,\"active\":%lu,\"errors\":%lu},"
                  "\"bytes\":{\"sent\":%lu,\"recv\":%lu},"
                  "\"queue\":{\"pending_requests\":%lu,\"pending_responses\":%lu,\"capacity\":%lu},"
-                 "\"backpressure\":{\"pending_current\":%lu,\"pending_total\":%lu,"
+                 "\"pending_streams\":{\"current\":%lu,\"total\":%lu,"
                  "\"processed\":%lu,\"dropped\":%lu,\"avg_wait_ms\":%.2f,\"pool_size\":%lu}},",
                  uptime_seconds,
                  atomic_load(&aio_metrics->connections_total),
@@ -2140,7 +2140,7 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
                  "\"requests\":{\"total\":%lu,\"active\":%lu,\"errors\":%lu},"
                  "\"bytes\":{\"sent\":%lu,\"recv\":%lu},"
                  "\"queue\":{\"pending_requests\":%lu,\"pending_responses\":%lu,\"capacity\":%lu},"
-                 "\"backpressure\":{\"pending_current\":%lu,\"pending_total\":%lu,"
+                 "\"pending_streams\":{\"current\":%lu,\"total\":%lu,"
                  "\"processed\":%lu,\"dropped\":%lu,\"avg_wait_ms\":%.2f,\"pool_size\":%lu}},",
                  uptime_seconds,
                  atomic_load(&aio_metrics->connections_total),
