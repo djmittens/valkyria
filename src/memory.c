@@ -382,7 +382,7 @@ void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
 void valk_slab_release_ptr(valk_slab_t *self, void *data) {
   // This function will look back item size bytes in the array, to figure out
   // the handle and then free it
-  uint64_t v;
+  size_t v;
   __valk_slab_offset_unpack(
       valk_container_of(data, valk_slab_item_t, data)->handle, &v);
   // printf("Slab Releasing %ld %p\n", offset, data);
@@ -750,29 +750,11 @@ void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
     // that have read/write permissions (likely resident)
     size_t region_size = (size_t)size;
 
-    // Categorize by share mode and protection
     if (info.shared) {
-      // Shared memory (could be file-backed or shared anon)
-      if (info.external_pager) {
-        smaps->file_rss += region_size;
-        smaps->file_regions++;
-      } else {
-        smaps->shmem_rss += region_size;
-      }
+      smaps->shmem_rss += region_size;
     } else {
-      // Private memory
-      if (info.external_pager) {
-        // File-backed private mapping (e.g., mapped file, dylib)
-        smaps->file_rss += region_size;
-        smaps->file_regions++;
-      } else {
-        // Anonymous private memory
-        // Try to categorize by address range heuristics
-        // Stack is typically near the top of address space
-        // Heap is typically after the executable
-        smaps->anon_rss += region_size;
-        smaps->anon_regions++;
-      }
+      smaps->anon_rss += region_size;
+      smaps->anon_regions++;
     }
 
     smaps->total_rss += region_size;

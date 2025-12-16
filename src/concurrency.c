@@ -73,11 +73,13 @@ void valk_future_free(valk_future *self) {
     valk_arc_release(self->item);
     pthread_mutex_unlock(&self->mutex);
 
-    da_free(&self->andThen);  // args leaked for now
+    VALK_WITH_ALLOC(self->allocator) {
+      da_free(&self->andThen);  // args leaked for now
+    }
     pthread_cond_destroy(&self->resolved);
     pthread_mutex_destroy(&self->mutex);
 
-    valk_mem_free(self);
+    valk_mem_allocator_free(self->allocator, self);
   }
 }
 
@@ -86,19 +88,18 @@ valk_future *valk_future_new() {
   valk_future *self;
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     self = valk_mem_alloc(sizeof(valk_future));
+    memset(self, 0, sizeof(valk_future));
+
+    pthread_mutex_init(&self->mutex, nullptr);
+    pthread_cond_init(&self->resolved, nullptr);
+
+    self->refcount = 1;
+    self->done = 0;
+    self->item = nullptr;
+    self->free = valk_future_free;
+    self->allocator = &valk_malloc_allocator;
+    da_init(&self->andThen);
   }
-  memset(self, 0, sizeof(valk_future));
-
-  pthread_mutex_init(&self->mutex, nullptr);
-  pthread_cond_init(&self->resolved, nullptr);
-
-  self->refcount = 1;
-  self->done = 0;
-  self->item = nullptr;
-  self->free = valk_future_free;
-  // Use malloc allocator for future (not thread context which could be arena)
-  self->allocator = &valk_malloc_allocator;
-  da_init(&self->andThen);
 
   return self;
 }

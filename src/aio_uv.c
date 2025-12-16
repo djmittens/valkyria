@@ -3502,7 +3502,6 @@ static int __http_client_on_stream_close_callback(nghttp2_session *session,
       valk_arc_box *box = reqres->res_box;
       valk_promise_respond(&reqres->promise, box);
     }
-    valk_arc_release(reqres->promise.item);
     // Free the reqres struct itself
     valk_mem_free(reqres);
   }
