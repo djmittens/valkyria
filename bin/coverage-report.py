@@ -226,16 +226,60 @@ def parse_lcov_file(lcov_path: Path, report: CoverageReport, source_root: Path):
                 current_file = None
 
 
+def find_llvm_cov() -> Optional[str]:
+    """Find llvm-cov executable on the system."""
+    candidates = [
+        "llvm-cov",
+        "/opt/homebrew/opt/llvm/bin/llvm-cov",
+        "/usr/local/opt/llvm/bin/llvm-cov",
+        "/Library/Developer/CommandLineTools/usr/bin/llvm-cov",
+    ]
+    
+    for candidate in candidates:
+        try:
+            result = subprocess.run(
+                [candidate, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            if result.returncode == 0:
+                return candidate
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+    
+    try:
+        result = subprocess.run(
+            ["xcrun", "--find", "llvm-cov"],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0:
+            path = result.stdout.strip()
+            if path:
+                return path
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    
+    return None
+
+
 def parse_gcov_files(build_dir: Path, source_root: Path, report: CoverageReport):
     """Parse gcov output files using llvm-cov gcov."""
     gcda_dir = build_dir / "CMakeFiles" / "valkyria.dir" / "src"
     if not gcda_dir.exists():
         return
     
+    llvm_cov = find_llvm_cov()
+    if not llvm_cov:
+        print("Warning: llvm-cov not found, skipping C coverage", file=sys.stderr)
+        return
+    
     for gcda_file in gcda_dir.glob("*.gcda"):
         try:
             result = subprocess.run(
-                ["llvm-cov", "gcov", "-l", "-p", "-b", str(gcda_file)],
+                [llvm_cov, "gcov", "-l", "-p", "-b", str(gcda_file)],
                 cwd=str(build_dir),
                 capture_output=True,
                 text=True
