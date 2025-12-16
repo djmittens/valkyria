@@ -3026,6 +3026,16 @@ main[role="main"] {
   overflow: hidden;
 }
 
+/* Network/IO sections span full width below event-loop and memory */
+.http-servers-section,
+.http-clients-section,
+.tcp-servers-section,
+.tcp-clients-section,
+.udp-section,
+.file-ops-section {
+  grid-column: 1 / -1;
+}
+
 .block-header {
   display: flex;
   align-items: center;
@@ -3204,21 +3214,22 @@ main[role="main"] {
 }
 
 /* ===== NESTED CARDS GRID ===== */
-/* Cards within each section stack vertically */
+/* Responsive grid - fills space with multiple columns when available */
 .nested-cards-grid {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
+  gap: var(--space-md);
   min-width: 0;
   overflow: hidden;
 }
 
 .nested-cards-grid .entity-card {
-  width: 100%;
   margin: 0;
-  background: var(--bg-elevated);
-  border-color: var(--border-muted);
-  min-width: 0;  /* Allow shrinking in flex container */
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  min-width: 0;  /* Allow shrinking in grid cell */
 }
 
 .nested-cards-grid .entity-header {

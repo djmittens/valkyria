@@ -172,6 +172,11 @@ typedef struct valk_sse_diag_conn {
     uint64_t requests_total;
     uint64_t connections_total;
     uint64_t gc_cycles;
+    // Pending streams backpressure metrics
+    uint64_t pending_streams_current;
+    uint64_t pending_streams_total;
+    uint64_t pending_streams_processed;
+    uint64_t pending_streams_dropped;
   } prev_metrics;
 } valk_sse_diag_conn_t;
 

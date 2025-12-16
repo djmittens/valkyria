@@ -78,6 +78,8 @@ struct valk_async_handle_t {
   int32_t stream_id;
   valk_aio_handle_t *conn;
   struct valk_mem_arena *stream_arena;
+  void *arena_slab_item;   // Stored for restoring to req after async response
+  uint32_t arena_slot;     // Stored for restoring to req after async response
 
   // Structured cancellation (parent/child hierarchy)
   struct valk_async_handle_t *parent;
@@ -186,6 +188,11 @@ typedef struct valk_aio_system_config {
   uint32_t max_connections;          // Default: 100
   uint32_t max_concurrent_streams;   // Default: 100 (per connection, sent via SETTINGS)
 
+  // CAPACITY LIMITS
+  uint32_t max_handles;              // Default: 2056
+  uint32_t max_servers;              // Default: 8
+  uint32_t max_clients;              // Default: 8
+
   // DERIVED SETTINGS (set to 0 for auto-calculation)
   uint32_t tcp_buffer_pool_size;     // Auto: max_connections × (2 + streams/8)
   uint32_t arena_pool_size;          // Auto: max_connections × 2
@@ -199,6 +206,11 @@ typedef struct valk_aio_system_config {
   float    buffer_high_watermark;     // Default: 0.85 (85%) - start load shedding
   float    buffer_critical_watermark; // Default: 0.95 (95%) - reject all new conns
   uint32_t min_buffers_per_conn;      // Default: 4 (BUFFERS_PER_CONNECTION)
+
+  // BACKPRESSURE TIMING
+  uint32_t backpressure_list_max;     // Default: 1000
+  uint32_t backpressure_timeout_ms;   // Default: 30000 (30s)
+  uint32_t pending_stream_pool_size;  // Default: 64
 } valk_aio_system_config_t;
 
 // Default system configuration
@@ -211,6 +223,10 @@ typedef struct valk_http_server_config {
   size_t      max_response_body_size;  // Default: 64MB (Lisp API limit, not C runtime)
   const char* error_503_body;          // Pre-rendered overload response
   size_t      error_503_body_len;
+
+  // SSE CONFIGURATION
+  size_t      sse_buffer_size;         // Default: 64KB (pending write buffer per stream)
+  uint32_t    sse_queue_max;           // Default: 1000 (event queue depth)
 } valk_http_server_config_t;
 
 // Default server configuration
@@ -219,6 +235,98 @@ static inline valk_http_server_config_t valk_http_server_config_default(void) {
     .max_response_body_size = 64 * 1024 * 1024,  // 64MB
     .error_503_body = NULL,
     .error_503_body_len = 0,
+    .sse_buffer_size = 64 * 1024,   // 64KB
+    .sse_queue_max = 1000,
+  };
+}
+
+// Client configuration for HTTP/2 client behavior
+typedef struct valk_http_client_config {
+  uint32_t max_concurrent_streams;     // Default: 100
+  size_t   max_response_body_size;     // Default: 64MB
+  uint32_t connect_timeout_ms;         // Default: 30000 (30s)
+  uint32_t request_timeout_ms;         // Default: 60000 (60s)
+
+  // Connection pooling (future use)
+  uint32_t max_idle_connections;       // Default: 0 (no pooling)
+  uint32_t keepalive_ms;               // Default: 0 (close after use)
+} valk_http_client_config_t;
+
+// Default client configuration
+static inline valk_http_client_config_t valk_http_client_config_default(void) {
+  return (valk_http_client_config_t){
+    .max_concurrent_streams = 100,
+    .max_response_body_size = 64 * 1024 * 1024,  // 64MB
+    .connect_timeout_ms = 30000,
+    .request_timeout_ms = 60000,
+    .max_idle_connections = 0,
+    .keepalive_ms = 0,
+  };
+}
+
+// ============================================================================
+// Configuration Presets
+// ============================================================================
+
+// Demo profile: low resource usage, good for demos and development
+static inline valk_aio_system_config_t valk_aio_config_demo(void) {
+  return (valk_aio_system_config_t){
+    .max_connections = 10,
+    .max_concurrent_streams = 32,
+    .max_handles = 256,
+    .max_servers = 3,
+    .max_clients = 3,
+    .arena_size = 4 * 1024 * 1024,      // 4MB
+    .arena_pool_size = 16,
+    .max_request_body_size = 1 * 1024 * 1024,  // 1MB
+    .backpressure_list_max = 100,
+    .backpressure_timeout_ms = 30000,
+    .pending_stream_pool_size = 16,
+  };
+}
+
+// Production profile: high capacity for production deployments
+static inline valk_aio_system_config_t valk_aio_config_production(void) {
+  return (valk_aio_system_config_t){
+    .max_connections = 1000,
+    .max_concurrent_streams = 128,
+    .max_handles = 4096,
+    .max_servers = 8,
+    .max_clients = 8,
+    .arena_size = 64 * 1024 * 1024,     // 64MB
+    .arena_pool_size = 0,               // auto-derive
+    .max_request_body_size = 8 * 1024 * 1024,  // 8MB
+    .backpressure_list_max = 10000,
+    .backpressure_timeout_ms = 30000,
+    .pending_stream_pool_size = 256,
+  };
+}
+
+// Minimal profile: embedded systems and testing
+static inline valk_aio_system_config_t valk_aio_config_minimal(void) {
+  return (valk_aio_system_config_t){
+    .max_connections = 4,
+    .max_concurrent_streams = 8,
+    .max_handles = 64,
+    .max_servers = 1,
+    .max_clients = 1,
+    .arena_size = 1 * 1024 * 1024,      // 1MB
+    .arena_pool_size = 4,
+    .max_request_body_size = 256 * 1024,  // 256KB
+    .backpressure_list_max = 16,
+    .backpressure_timeout_ms = 10000,
+    .pending_stream_pool_size = 4,
+  };
+}
+
+// Demo server config: smaller buffers for demos
+static inline valk_http_server_config_t valk_http_server_config_demo(void) {
+  return (valk_http_server_config_t){
+    .max_response_body_size = 8 * 1024 * 1024,  // 8MB
+    .error_503_body = NULL,
+    .error_503_body_len = 0,
+    .sse_buffer_size = 32 * 1024,   // 32KB
+    .sse_queue_max = 100,
   };
 }
 

@@ -1258,6 +1258,7 @@
   var prevTimestamp = null;
   var serverCards = {};  // Track dynamically created server cards
   var currentModular = null;  // Current modular metrics (for event loop etc)
+  var currentSseMetrics = null;  // Current SSE registry metrics (bytes pushed, etc)
 
   // ==================== DOM Helpers ====================
   var $ = function(id) { return document.getElementById(id); };
@@ -1484,6 +1485,7 @@
   }
 
   // Render stacked bar sparkline showing 2xx/4xx/5xx status codes over time
+  // Errors are drawn on top with minimum visible height to ensure visibility
   function renderStatusCodeSparkline(container, history, options) {
     if (!container || !history || history.length < 2) {
       if (container) container.innerHTML = '';
@@ -1494,25 +1496,34 @@
     var width = opts.width || 60;
     var height = opts.height || 20;
     var barWidth = Math.max(2, width / history.length);
+    var minErrorHeight = 4;  // Minimum height for visible error bars
 
     var bars = history.map(function(d, i) {
       var total = d.s2xx + d.s4xx + d.s5xx;
-      if (total === 0) return '';
-
       var x = i * barWidth;
-      var h2xx = (d.s2xx / total) * height;
-      var h4xx = (d.s4xx / total) * height;
-      var h5xx = (d.s5xx / total) * height;
+      var w = Math.max(1, barWidth - 0.5);
 
-      var y2xx = 0;
-      var y4xx = h2xx;
-      var y5xx = h2xx + h4xx;
+      // Show thin baseline for inactive periods so sparkline visually advances
+      if (total === 0) {
+        return '<rect x="' + x + '" y="' + (height - 1) + '" width="' + w + '" height="1" fill="var(--border-muted)" opacity="0.3"/>';
+      }
 
-      return '<g>' +
-        '<rect x="' + x + '" y="' + y2xx + '" width="' + Math.max(1, barWidth - 0.5) + '" height="' + h2xx + '" fill="var(--color-ok)"/>' +
-        '<rect x="' + x + '" y="' + y4xx + '" width="' + Math.max(1, barWidth - 0.5) + '" height="' + h4xx + '" fill="var(--color-warning)"/>' +
-        '<rect x="' + x + '" y="' + y5xx + '" width="' + Math.max(1, barWidth - 0.5) + '" height="' + h5xx + '" fill="var(--color-error)"/>' +
-        '</g>';
+      // Calculate heights - errors get minimum visible height if non-zero
+      var h5xx = d.s5xx > 0 ? Math.max(minErrorHeight, (d.s5xx / total) * height) : 0;
+      var h4xx = d.s4xx > 0 ? Math.max(minErrorHeight, (d.s4xx / total) * height) : 0;
+      var h2xx = Math.max(0, height - h5xx - h4xx);  // 2xx fills remaining space
+
+      // Stack from bottom: 2xx, then 4xx, then 5xx on top
+      var y2xx = height - h2xx;
+      var y4xx = height - h2xx - h4xx;
+      var y5xx = height - h2xx - h4xx - h5xx;
+
+      var result = '<g>';
+      if (h2xx > 0) result += '<rect x="' + x + '" y="' + y2xx + '" width="' + w + '" height="' + h2xx + '" fill="var(--color-ok)"/>';
+      if (h4xx > 0) result += '<rect x="' + x + '" y="' + y4xx + '" width="' + w + '" height="' + h4xx + '" fill="var(--color-warning)"/>';
+      if (h5xx > 0) result += '<rect x="' + x + '" y="' + y5xx + '" width="' + w + '" height="' + h5xx + '" fill="var(--color-error)"/>';
+      result += '</g>';
+      return result;
     }).join('');
 
     container.innerHTML = '<svg width="100%" height="100%" viewBox="0 0 ' + width + ' ' + height + '" style="display:block;">' + bars + '</svg>';
@@ -1614,10 +1625,10 @@
         color: '#f0883e',  // Orange for pending streams
         colorMuted: 'rgba(240, 136, 62, 0.3)',
         stats: [
-          { id: 'pending', label: 'queued:' },
+          { id: 'total', label: 'total:' },
+          { id: 'now', label: 'now:' },
           { id: 'processed', label: '✓', suffix: '' },
-          { id: 'dropped', label: '✗', suffix: '' },
-          { id: 'avgwait', label: 'avg:', suffix: 'ms' }
+          { id: 'dropped', label: '✗', suffix: '' }
         ]
       });
     }
@@ -1626,6 +1637,13 @@
   function createAioSystemPanel(sys, index) {
     var name = sys.name || 'System ' + (index + 1);
     var id = 'aio-sys-' + index;
+
+    // Check localStorage for saved collapse state
+    var isCollapsed = false;
+    try {
+      var prefs = JSON.parse(localStorage.getItem('dashboard-panels') || '{}');
+      isCollapsed = prefs[id] === true;
+    } catch(e) {}
 
     // Create slab widgets and pool gauges for this AIO system
     var widgets = {
@@ -1636,9 +1654,12 @@
       pendingStreams: AIO_SLAB_CONFIGS.pendingStreams(id)
     };
 
+    var panelClass = 'panel aio-system-panel' + (isCollapsed ? ' collapsed' : ' aio-expanded');
+    var ariaExpanded = isCollapsed ? 'false' : 'true';
+
     var html =
-      '<article class="panel aio-system-panel aio-expanded" id="' + id + '" aria-labelledby="' + id + '-title">' +
-        '<div class="panel-header">' +
+      '<article class="' + panelClass + '" id="' + id + '" aria-labelledby="' + id + '-title">' +
+        '<div class="panel-header" aria-expanded="' + ariaExpanded + '">' +
           '<div class="panel-icon aio" aria-hidden="true">' + (index + 1) + '</div>' +
           '<h3 class="panel-title" id="' + id + '-title">' + name.charAt(0).toUpperCase() + name.slice(1) + ' AIO</h3>' +
           '<div class="panel-badges">' +
@@ -1953,18 +1974,18 @@
     if (panel._slabWidgets && panel._slabWidgets.pendingStreams) {
       var psCurrent = ps.current || 0;
       var psPoolSize = ps.pool_size || 64;
+      var psTotal = ps.total || 0;
       var psProcessed = ps.processed || 0;
       var psDropped = ps.dropped || 0;
-      var psAvgWait = ps.avg_wait_ms || 0;
 
       panel._slabWidgets.pendingStreams.update({
         used: psCurrent,
         total: psPoolSize,
         stats: {
-          pending: psCurrent,
+          total: fmtCompact(psTotal),
+          now: psCurrent,
           processed: fmtCompact(psProcessed),
-          dropped: psDropped,
-          avgwait: psAvgWait.toFixed(1)
+          dropped: fmtCompact(psDropped)
         }
       });
     }
@@ -2115,6 +2136,7 @@
         bytesOut: createHistoryBuffer(HISTORY_SAMPLES),
         prevBytesIn: 0,
         prevBytesOut: 0,
+        prevSseBytes: 0,  // Track SSE bytes separately for throughput
         statusCodes: createHistoryBuffer(HISTORY_SAMPLES),
         p50: createHistoryBuffer(HISTORY_SAMPLES),
         p95: createHistoryBuffer(HISTORY_SAMPLES),
@@ -2129,11 +2151,16 @@
 
   function createServerCard(serverInfo) {
     var card = document.createElement('article');
-    card.className = 'entity-card collapsed';
-    card.id = 'server-' + serverInfo.key.replace(/[:.]/g, '-');
+    var cardId = 'server-' + serverInfo.key.replace(/[:.]/g, '-');
+
+    // Check localStorage for saved collapse state (default to collapsed)
+    var isCollapsed = window.getEntityCardCollapsed ? window.getEntityCardCollapsed(cardId) : true;
+
+    card.className = 'entity-card' + (isCollapsed ? ' collapsed' : '');
+    card.id = cardId;
     card.setAttribute('tabindex', '0');
     card.setAttribute('role', 'article');
-    card.setAttribute('aria-expanded', 'false');
+    card.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
 
     card.innerHTML = `
       <div class="entity-header">
@@ -2156,7 +2183,7 @@
             <span class="header-metric-unit">%</span>
           </div>
         </div>
-        <button class="expand-toggle" onclick="toggleEntityCard(this.closest('.entity-card'))" aria-label="Toggle details"><span class="expand-icon">▼</span></button>
+        <button class="expand-toggle" onclick="toggleEntityCard(this.closest('.entity-card'))" aria-label="Toggle details"><span class="expand-icon">${isCollapsed ? '▼' : '▲'}</span></button>
       </div>
       <div class="entity-body">
         <!-- Metrics Grid -->
@@ -2590,9 +2617,19 @@
       renderPercentileSparkline(latencyTrendLarge, hist, { width: 160, height: 40 });
     }
 
-    // Update throughput
+    // Update throughput (including SSE bytes in outbound for servers with active SSE)
     var bytesInRate = deltaSeconds > 0 ? (bytesRecv - hist.prevBytesIn) / deltaSeconds : 0;
     var bytesOutRate = deltaSeconds > 0 ? (bytesSent - hist.prevBytesOut) / deltaSeconds : 0;
+
+    // Add SSE bytes only to servers with active SSE streams (avoids double-counting)
+    if (sseStreams > 0 && currentSseMetrics) {
+      var sseBytes = currentSseMetrics.bytes_pushed_total || 0;
+      var sseBytesRate = deltaSeconds > 0 ? (sseBytes - hist.prevSseBytes) / deltaSeconds : 0;
+      if (sseBytesRate > 0) {
+        bytesOutRate += sseBytesRate;
+      }
+      hist.prevSseBytes = sseBytes;
+    }
 
     // Only record positive rates
     if (bytesInRate >= 0) hist.bytesIn.push(bytesInRate);
@@ -2913,6 +2950,7 @@
 
     // Store modular for access by other update functions
     currentModular = mod;
+    currentSseMetrics = data.sse_metrics || null;
 
     var gc = vm.gc || {};
     var interp = vm.interpreter || {};
@@ -3390,6 +3428,18 @@
 
     // Apply delta update to stored full state
     applyDelta(delta) {
+      // Handle heartbeat events - these have no changes but should still advance graphs
+      if (delta.heartbeat) {
+        // Trigger UI updates with existing state to advance time series
+        if (this.fullState.metrics) {
+          this.handleMetricsUpdate(this.fullState.metrics);
+        }
+        if (this.fullState.memory) {
+          this.handleMemoryUpdate(this.fullState.memory);
+        }
+        return;
+      }
+
       if (!this.fullState.memory && delta.memory) {
         // No full state yet, can't apply delta - request reconnect
         this.scheduleReconnect();
@@ -3519,6 +3569,28 @@
           if (delta.metrics.aio.connections) {
             if (!metrics.aio.connections) metrics.aio.connections = {};
             Object.assign(metrics.aio.connections, delta.metrics.aio.connections);
+          }
+
+          // Pending streams metrics (current is absolute, others are deltas)
+          if (delta.metrics.aio.pending_streams) {
+            if (!metrics.aio.pending_streams) {
+              metrics.aio.pending_streams = { current: 0, total: 0, processed: 0, dropped: 0, pool_size: 64 };
+            }
+            var ps = delta.metrics.aio.pending_streams;
+            // Current is absolute (gauge)
+            if (typeof ps.current !== 'undefined') {
+              metrics.aio.pending_streams.current = ps.current;
+            }
+            // Deltas for counters
+            if (ps.d_total) {
+              metrics.aio.pending_streams.total = (metrics.aio.pending_streams.total || 0) + ps.d_total;
+            }
+            if (ps.d_processed) {
+              metrics.aio.pending_streams.processed = (metrics.aio.pending_streams.processed || 0) + ps.d_processed;
+            }
+            if (ps.d_dropped) {
+              metrics.aio.pending_streams.dropped = (metrics.aio.pending_streams.dropped || 0) + ps.d_dropped;
+            }
           }
         }
 
@@ -4822,6 +4894,23 @@
     if (icon) {
       icon.textContent = isCollapsed ? '▲' : '▼';
     }
+
+    // Save entity card collapse state to localStorage
+    if (card.id) {
+      try {
+        var prefs = JSON.parse(localStorage.getItem('dashboard-entity-cards') || '{}');
+        prefs[card.id] = !isCollapsed; // Store new collapsed state
+        localStorage.setItem('dashboard-entity-cards', JSON.stringify(prefs));
+      } catch(e) {}
+    }
+  };
+
+  // Helper to get saved entity card collapse state
+  window.getEntityCardCollapsed = function(cardId) {
+    try {
+      var prefs = JSON.parse(localStorage.getItem('dashboard-entity-cards') || '{}');
+      return prefs[cardId] === true;
+    } catch(e) { return true; } // Default collapsed
   };
 
   // Export card creation functions for use by update code

@@ -1517,6 +1517,7 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
   // Check AIO metrics changes
 #ifdef VALK_METRICS_ENABLED
   const valk_aio_metrics_t *aio_metrics = valk_aio_get_metrics(aio);
+  const valk_aio_system_stats_t *sys_stats = valk_aio_get_system_stats(aio);
   if (aio_metrics && conn) {
     uint64_t bytes_sent = atomic_load(&aio_metrics->bytes_sent_total);
     uint64_t bytes_recv = atomic_load(&aio_metrics->bytes_recv_total);
@@ -1529,15 +1530,32 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
         connections != conn->prev_metrics.connections_total) {
       has_aio_metric_changes = true;
     }
+
+    // Check pending streams changes
+    if (sys_stats) {
+      uint64_t pending_current = atomic_load(&sys_stats->pending_streams_current);
+      uint64_t pending_total = atomic_load(&sys_stats->pending_streams_total);
+      uint64_t pending_processed = atomic_load(&sys_stats->pending_streams_processed);
+      uint64_t pending_dropped = atomic_load(&sys_stats->pending_streams_dropped);
+
+      if (pending_current != conn->prev_metrics.pending_streams_current ||
+          pending_total != conn->prev_metrics.pending_streams_total ||
+          pending_processed != conn->prev_metrics.pending_streams_processed ||
+          pending_dropped != conn->prev_metrics.pending_streams_dropped) {
+        has_aio_metric_changes = true;
+      }
+    }
   }
 #else
   (void)conn;
   (void)aio;
 #endif
 
-  // If nothing changed, return 0 to signal skip
+  // If nothing changed, send a heartbeat event so dashboard maintains even time intervals
   if (!has_memory_changes && !has_aio_metric_changes && !has_modular_metric_changes) {
-    return 0;
+    int n = snprintf(p, end - p, "event: diagnostics-delta\nid: %lu\ndata: {\"heartbeat\":true}\n\n", event_id);
+    if (n < 0 || n >= end - p) return -1;
+    return n;
   }
 
   // SSE event header - use "diagnostics-delta" event type
@@ -1748,15 +1766,31 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
         uint64_t d_recv = bytes_recv - conn->prev_metrics.bytes_recv;
         uint64_t d_req = requests - conn->prev_metrics.requests_total;
 
+        // Get pending streams metrics for delta
+        const valk_aio_system_stats_t *sys_stats_delta = valk_aio_get_system_stats(aio);
+        uint64_t pending_current = 0, pending_total = 0, pending_processed = 0, pending_dropped = 0;
+        uint64_t d_pending_total = 0, d_pending_processed = 0, d_pending_dropped = 0;
+        if (sys_stats_delta) {
+          pending_current = atomic_load(&sys_stats_delta->pending_streams_current);
+          pending_total = atomic_load(&sys_stats_delta->pending_streams_total);
+          pending_processed = atomic_load(&sys_stats_delta->pending_streams_processed);
+          pending_dropped = atomic_load(&sys_stats_delta->pending_streams_dropped);
+          d_pending_total = pending_total - conn->prev_metrics.pending_streams_total;
+          d_pending_processed = pending_processed - conn->prev_metrics.pending_streams_processed;
+          d_pending_dropped = pending_dropped - conn->prev_metrics.pending_streams_dropped;
+        }
+
         n = snprintf(p, end - p,
                      "%s\"aio\":{\"bytes\":{\"d_sent\":%lu,\"d_recv\":%lu},"
                      "\"requests\":{\"d_total\":%lu},"
-                     "\"connections\":{\"active\":%lu,\"idle\":%lu,\"closing\":%lu}}",
+                     "\"connections\":{\"active\":%lu,\"idle\":%lu,\"closing\":%lu},"
+                     "\"pending_streams\":{\"current\":%lu,\"d_total\":%lu,\"d_processed\":%lu,\"d_dropped\":%lu}}",
                      metrics_need_comma ? "," : "",
                      d_sent, d_recv, d_req,
                      atomic_load(&aio_metrics->connections_active),
                      atomic_load(&aio_metrics->connections_idle),
-                     atomic_load(&aio_metrics->connections_closing));
+                     atomic_load(&aio_metrics->connections_closing),
+                     pending_current, d_pending_total, d_pending_processed, d_pending_dropped);
         if (n < 0 || n >= end - p) return -1;
         p += n;
         metrics_need_comma = true;
@@ -1766,6 +1800,11 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
         conn->prev_metrics.bytes_recv = bytes_recv;
         conn->prev_metrics.requests_total = requests;
         conn->prev_metrics.connections_total = atomic_load(&aio_metrics->connections_total);
+        // Update pending streams previous values
+        conn->prev_metrics.pending_streams_current = pending_current;
+        conn->prev_metrics.pending_streams_total = pending_total;
+        conn->prev_metrics.pending_streams_processed = pending_processed;
+        conn->prev_metrics.pending_streams_dropped = pending_dropped;
       }
     }
 
@@ -2238,7 +2277,7 @@ cleanup:
 // ============================================================================
 
 // SSE buffer size - large enough for full snapshot + metrics
-#define SSE_BUFFER_SIZE 262144
+#define SSE_BUFFER_SIZE 262144  // 256KB
 
 // Forward declare the data provider callback
 static nghttp2_ssize sse_data_read_callback(

@@ -27,8 +27,8 @@ A dependency-based roadmap for the Valkyria language. Features are organized as 
   [###] Parser ──────┬──────> [###] S-Expressions ────> [###] Q-Expressions (quoting)
         (2.9k LOC)   │              (lists as code)           (lists as data)
                      │
-                     ├──────> [###] Numbers ───────────> [   ] Rationals ──────> [   ] BigNums
-                     │              (long/double)              (S)                    (M)
+                     ├──────> [###] Numbers ───────────> [   ] Fixed-Point ────> [   ] Rationals ──> [   ] BigNums
+                     │              (long/double)              (M) DEFAULT           (S)                  (M)
                      │
                      ├──────> [###] Strings ───────────> [   ] Unicode ────────> [   ] Regex
                      │              (C strings)                (M)                    (M)
@@ -107,11 +107,35 @@ A dependency-based roadmap for the Valkyria language. Features are organized as 
                      ├──────> [###] HTTP/2 Server ────> [###] Load Shedding ────> [   ] Routing
                      │              (C API works)             (backpressure)            (M)
                      │
-                     └──────> [   ] WebSocket ────────> [   ] Streaming
-                                    (M)                       (M)
+                     ├──────> [   ] WebSocket ────────> [   ] Streaming
+                     │              (M)                       (M)
+                     │
+                     └──────> [   ] UDP Sockets ─────> [   ] NetChannel ──────> [   ] Reliable Layer
+                                    (S) raw                  (M) Quake-style          (M) selective
 
 ═══════════════════════════════════════════════════════════════════════════════════════════════
- LAYER 6: COMPILATION (FUTURE)
+ LAYER 6: REAL-TIME & SIMULATION
+═══════════════════════════════════════════════════════════════════════════════════════════════
+
+                     ┌────────────────────────────────────────────────────────────────────────┐
+                     │  PHILOSOPHY: Simple primitives, not frameworks. Data-oriented.        │
+                     │  INSPIRATION: Quake netcode, Casey Muratori, Mike Acton, Blow's Jai   │
+                     └────────────────────────────────────────────────────────────────────────┘
+
+  [   ] Fixed Timestep ──────> [   ] Tick Loop ──────────> [   ] Deterministic Sim
+        (S) accumulator              (S) while+sleep              (M) reproducible
+
+  [   ] SOA Keyword ─────────> [   ] Flat Arrays ────────> [   ] SIMD Hints
+        (M) struct layout            (S) cache-friendly           (L) vectorization
+
+  [   ] Delta Compress ──────> [   ] Introspection ──────> [   ] Auto-Serialize
+        (M) snapshot diff            (M) field reflect            (M) binary protocol
+
+  [   ] Spatial Index ───────> [   ] Interest Mgmt ──────> [   ] Relevance Sets
+        (M) grid/octree              (M) per-client               (M) bandwidth ctrl
+
+═══════════════════════════════════════════════════════════════════════════════════════════════
+ LAYER 7: COMPILATION (FUTURE)
 ═══════════════════════════════════════════════════════════════════════════════════════════════
 
                      ┌────────────────────────────────────────────────────────────────────────┐
@@ -125,7 +149,7 @@ A dependency-based roadmap for the Valkyria language. Features are organized as 
   See: implementation_board/layer_6_compilation.md for detailed breakdown
 
 ═══════════════════════════════════════════════════════════════════════════════════════════════
- LAYER 7: TYPE SYSTEM (FUTURE)
+ LAYER 8: TYPE SYSTEM (FUTURE)
 ═══════════════════════════════════════════════════════════════════════════════════════════════
 
   [   ] Type Annotations ───> [   ] Type Checker ─────> [   ] Type Inference ──> [   ] Gradual Types
@@ -172,6 +196,7 @@ A dependency-based roadmap for the Valkyria language. Features are organized as 
 | 3: Control Flow | Continuations (shift/reset), async patterns, error handling |
 | 4: Concurrency | Thread pool, futures, promises, ARC boxes |
 | 5: I/O | libuv backend, HTTP/2 client+server, TLS, load shedding |
+| 6: Real-Time | (planned) UDP, fixed timestep, SOA, delta compression |
 | Tooling | REPL, test frameworks, logging, metrics |
 
 ### In Progress
@@ -181,6 +206,8 @@ A dependency-based roadmap for the Valkyria language. Features are organized as 
 | Namespaces | Basic parsing works | Module system |
 | Macros | Works, no hygiene | Hygiene system |
 | HTTP Server Lisp API | C API complete | Lisp bindings |
+| Fixed-Point Numerics | Not started | Default numeric type (determinism) |
+| UDP Sockets | Not started | Raw libuv UDP (game server foundation) |
 
 ### Blocked
 
@@ -210,6 +237,19 @@ A dependency-based roadmap for the Valkyria language. Features are organized as 
 ```
 [###] REPL → [   ] Hot Reload → [   ] Debugger → [   ] LSP
 ```
+
+### Path D: Real-Time / Game Server
+
+```
+[###] Numbers → [   ] Fixed-Point → [   ] SOA Keyword → Deterministic Simulation
+                      (default)          (cache-friendly)
+
+[###] libuv → [   ] UDP Sockets → [   ] NetChannel → [   ] Delta Compression
+                    (raw)               (Quake-style)       (snapshots)
+```
+
+Philosophy: Simple primitives over frameworks. Flat arrays over ECS ceremony.
+Inspiration: Quake netcode, Casey Muratori, Mike Acton, Jonathan Blow's Jai.
 
 ---
 

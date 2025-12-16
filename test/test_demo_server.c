@@ -31,6 +31,12 @@
 
 #define TEST_RESPONSE_SIZE_1MB (1024 * 1024)
 
+// Helper: Start AIO with mellow demo config (low resource usage)
+static valk_aio_system_t *start_demo_server(void) {
+  valk_aio_system_config_t config = valk_aio_config_demo();
+  return valk_aio_start_with_config(&config);
+}
+
 // ============================================================================
 // Callback implementations (same as test_networking.c)
 // ============================================================================
@@ -155,7 +161,7 @@ static void free_response(test_response_t *resp) {
 void test_basic_server_c_handler(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_aio_system_t *sys = valk_aio_start();
+  valk_aio_system_t *sys = start_demo_server();
   int port = get_available_port();
   VALK_ASSERT(port > 0, "Failed to get available port");
 
@@ -190,7 +196,7 @@ void test_basic_server_c_handler(VALK_TEST_ARGS()) {
 void test_multiple_requests(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_aio_system_t *sys = valk_aio_start();
+  valk_aio_system_t *sys = start_demo_server();
   int port = get_available_port();
   VALK_ASSERT(port > 0, "Failed to get available port");
 
@@ -268,7 +274,7 @@ void test_custom_config(VALK_TEST_ARGS()) {
 void test_aio_metrics(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_aio_system_t *sys = valk_aio_start();
+  valk_aio_system_t *sys = start_demo_server();
   int port = get_available_port();
   VALK_ASSERT(port > 0, "Failed to get available port");
 
@@ -314,7 +320,7 @@ void test_aio_metrics(VALK_TEST_ARGS()) {
 void test_system_stats(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_aio_system_t *sys = valk_aio_start();
+  valk_aio_system_t *sys = start_demo_server();
   int port = get_available_port();
   VALK_ASSERT(port > 0, "Failed to get available port");
 
@@ -347,7 +353,7 @@ void test_system_stats(VALK_TEST_ARGS()) {
 void test_metrics_json_rendering(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_aio_system_t *sys = valk_aio_start();
+  valk_aio_system_t *sys = start_demo_server();
   int port = get_available_port();
   VALK_ASSERT(port > 0, "Failed to get available port");
 
@@ -392,7 +398,7 @@ void test_metrics_json_rendering(VALK_TEST_ARGS()) {
 void test_metrics_prometheus_rendering(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_aio_system_t *sys = valk_aio_start();
+  valk_aio_system_t *sys = start_demo_server();
   int port = get_available_port();
   VALK_ASSERT(port > 0, "Failed to get available port");
 
@@ -564,7 +570,7 @@ void test_connection_states(VALK_TEST_ARGS()) {
     .onBody = demo_cb_onBody,
   };
 
-  valk_aio_system_t *sys = valk_aio_start();
+  valk_aio_system_t *sys = start_demo_server();
   int port = get_available_port();
   VALK_ASSERT(port > 0, "Failed to get available port");
 
@@ -601,7 +607,7 @@ void test_connection_states(VALK_TEST_ARGS()) {
 void test_multiple_servers(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_aio_system_t *sys = valk_aio_start();
+  valk_aio_system_t *sys = start_demo_server();
 
   int port1 = get_available_port();
   int port2 = get_available_port();

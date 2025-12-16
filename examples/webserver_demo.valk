@@ -71,27 +71,31 @@
 (println "  • Using libuv for event loop management")
 (println "  • Background thread handles all I/O operations")
 
-; Configure the AIO system for high concurrency
+; Mellow demo config - low resource footprint, good for demos
 ; NOTE: If running via REPL, the REPL pre-creates an AIO system with defaults.
 ;       To use custom config, run with: VALK_DISABLE_AIO=1 build/valk examples/webserver_demo.valk
 ;
-; With 500 connections and 100 streams per connection, the system auto-derives:
-;   tcp-buffer-pool-size = 500 × (2 + 100/8) = 7,250 buffers
-;   arena-pool-size = 500 × 2 = 1,000 arenas
-;   queue-capacity = 500 × 2 = 1,000
+; This config is tuned for:
+;   • Low memory footprint (~64MB for arenas vs 4GB default)
+;   • Responsive feel for small demos
+;   • Can still handle moderate load testing
 ;
-; For extreme load testing (e.g., hey -n 5000000 -c 500), override tcp-buffer-pool-size
-; to handle the burst of concurrent TLS handshakes and HTTP/2 streams.
-(def {sys} (aio/start {:max-connections 50
-                       :max-concurrent-streams 10
-                       :tcp-buffer-pool-size 500
-                       :arena-pool-size 5}))  ; Tiny pool (5) to force 503 overload responses
+; For production or extreme load testing, increase max-connections and arena-pool-size.
+(def {sys} (aio/start {:max-connections 10        ; Low connection limit
+                       :max-concurrent-streams 32 ; Reasonable streams per connection
+                       :max-handles 256           ; Small handle pool
+                       :max-servers 3             ; Just enough for demo
+                       :arena-size 4194304        ; 4MB per arena (vs 64MB default)
+                       :arena-pool-size 16        ; 16 × 4MB = 64MB total
+                       :max-request-body-size 1048576  ; 1MB max request
+                       :backpressure-list-max 100
+                       :pending-stream-pool-size 16}))
 
-(println "  ✓ AIO system ready")
-(println "    • max-connections: 50")
-(println "    • max-concurrent-streams: 10 per connection")
-(println "    • tcp-buffer-pool-size: 500")
-(println "    • arena-pool-size: 5 (for load shedding testing)")
+(println "  ✓ AIO system ready (mellow demo config)")
+(println "    • max-connections: 10")
+(println "    • max-concurrent-streams: 32 per connection")
+(println "    • arena-pool-size: 16 × 4MB = 64MB total")
+(println "    • pending-stream-pool-size: 16")
 (println "")
 
 ; ──────────────────────────────────────────────────────────────────────────────
@@ -361,18 +365,18 @@
 (println "  • JSON metrics:       curl -k https://localhost:6969/debug/metrics")
 (println "  • Prometheus metrics: curl -k https://localhost:6969/metrics")
 (println "")
-(println "Load Shedding Demo:")
-(println "  The server is configured with arena-pool-size: 5 to demonstrate")
-(println "  load shedding. When all arenas are in use, new requests get 503.")
+(println "Load Testing:")
+(println "  This mellow config (16 arenas × 4MB) handles light demos well.")
+(println "  For load shedding demos, reduce arena-pool-size to 5.")
 (println "")
 (println "  Test with concurrent requests to /slow (holds arena for 2s):")
-(println "    for i in $(seq 1 20); do \\")
+(println "    for i in $(seq 1 10); do \\")
 (println "      curl -sk -w \"req$i: %{http_code}\\n\" -o /dev/null \\")
 (println "        https://localhost:8443/slow & \\")
 (println "    done; wait")
 (println "")
-(println "  Then check overload metrics (on debug server!):")
-(println "    curl -k https://localhost:6969/metrics | grep overload")
+(println "  Check metrics (on debug server):")
+(println "    curl -k https://localhost:6969/metrics | grep -E 'arena|pending'")
 (println "")
 (println "The -k flag tells curl to accept the self-signed certificate.")
 (println "In production, you would use a certificate from a trusted CA.")

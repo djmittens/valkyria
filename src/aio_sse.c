@@ -21,7 +21,7 @@ static uint64_t g_sse_stream_id = 0;
 // ============================================================================
 
 #define SSE_DEFAULT_QUEUE_MAX 1000
-#define SSE_DEFAULT_BUFFER_SIZE 65536
+#define SSE_DEFAULT_BUFFER_SIZE 65536  // 64KB
 
 // ============================================================================
 // Static Function Declarations

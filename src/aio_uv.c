@@ -66,27 +66,29 @@ typedef struct {
 } valk_server_metrics_t;
 #endif
 
-// It houses requests to the event loop
+// Compile-time limits (will be made configurable via valk_aio_system_config_t)
 enum {
   AIO_QUEUE_SIZE = 10,
   AIO_MAX_HANDLES = 2056,
-  HTTP_MAX_SERVERS = 3,
-  HTTP_MAX_CLIENTS = 3,
+  HTTP_MAX_SERVERS = 8,
+  HTTP_MAX_CLIENTS = 8,
   HTTP_SLAB_ITEM_SIZE = (SSL3_RT_MAX_PACKET_SIZE * 2),
   HTTP_MAX_IO_REQUESTS = (1024),
-  HTTP_MAX_CONNECTIONS = (10),
-  // TODO(networking): Figure out a good initial value for this.
+  HTTP_MAX_CONNECTIONS = (100),
   HTTP_MAX_CONNECTION_HEAP = (1024000),
   HTTP_MAX_CONCURRENT_REQUESTS = (1024),
   HTTP_MAX_REQUEST_SIZE_BYTES = ((int)8e6),
-  HTTP_MAX_RESPONSE_SIZE_BYTES = ((int)64e6),  // 64MB for large response tests
-  // Per-stream arena configuration
-  HTTP_STREAM_ARENA_SIZE = (67108864),        // 64MB per stream arena (generous for handler eval)
-  HTTP_MAX_STREAMS_PER_CONNECTION = (128),    // Max concurrent streams per conn
-  HTTP_STREAM_ARENA_POOL_SIZE = (64),         // Total stream arenas in pool (64 * 64MB = 4GB max)
+  HTTP_MAX_RESPONSE_SIZE_BYTES = ((int)64e6),
+  HTTP_STREAM_ARENA_SIZE = (67108864),        // 64MB per stream arena
+  HTTP_MAX_STREAMS_PER_CONNECTION = (128),
+  HTTP_STREAM_ARENA_POOL_SIZE = (64),         // 64 * 64MB = 4GB max
 };
 
-// times 2 just for fun
+// Hard safety limits (not for array sizing - just sanity checks)
+// These allow generous runtime configuration while preventing absurd values
+#define BACKPRESSURE_LIST_MAX_LIMIT 100000   // 100k connections max
+#define PENDING_STREAM_POOL_MAX_LIMIT 10000  // 10k pending streams max
+#define BACKPRESSURE_TIMEOUT_MS_DEFAULT 30000  // 30 second default timeout
 
 // Singleton: only one AIO system can exist per process
 // This prevents accidentally starting multiple event loops which causes race conditions
@@ -273,16 +275,14 @@ typedef enum __aio_http_srv_e {
 static __thread valk_aio_handle_t *backpressure_list_head = NULL;
 static __thread size_t backpressure_list_size = 0;
 static __thread uv_timer_t *backpressure_timer = NULL;
-#define BACKPRESSURE_LIST_MAX_SIZE 1000
-#define BACKPRESSURE_CHECK_INTERVAL_MS 100  // Check every 100ms
-#define BACKPRESSURE_TIMEOUT_MS 30000  // Close connections after 30s under backpressure
+#define BACKPRESSURE_CHECK_INTERVAL_MS 100  // Check every 100ms (not configurable)
 
 // ============================================================================
 // Pending Stream Queue (arena backpressure)
 // When arena pool is exhausted, streams wait here instead of getting 503
+// Pool is now dynamically allocated in valk_aio_system_t
 // ============================================================================
 #define PENDING_STREAM_MAX_HEADERS 32   // Max headers to buffer per pending stream
-#define PENDING_STREAM_POOL_SIZE 64     // Max pending streams waiting for arenas
 
 typedef struct {
   char *name;
@@ -318,18 +318,14 @@ typedef struct pending_stream {
 } pending_stream_t;
 
 // Thread-local pending stream queue (event loop is single-threaded)
+// Note: The pool itself is now in valk_aio_system_t, only the queue head/tail are thread-local
 static __thread pending_stream_t *pending_stream_head = NULL;
 static __thread pending_stream_t *pending_stream_tail = NULL;
 static __thread size_t pending_stream_count = 0;
 
-// Pool of pending_stream_t structs to avoid malloc during backpressure
-static __thread pending_stream_t pending_stream_pool[PENDING_STREAM_POOL_SIZE];
-static __thread bool pending_stream_pool_used[PENDING_STREAM_POOL_SIZE];
-static __thread bool pending_stream_pool_initialized = false;
-
-// Forward declarations for pending stream functions
-static pending_stream_t *__pending_stream_alloc(void);
-static void __pending_stream_free(pending_stream_t *ps);
+// Forward declarations for pending stream functions (sys pointer for pool access)
+static pending_stream_t *__pending_stream_alloc(valk_aio_system_t *sys);
+static void __pending_stream_free(valk_aio_system_t *sys, pending_stream_t *ps);
 static void __pending_stream_enqueue(pending_stream_t *ps);
 static pending_stream_t *__pending_stream_dequeue(void);
 static void __pending_stream_process_one(valk_aio_system_t *sys);
@@ -371,14 +367,14 @@ typedef struct {
 } valk_delay_timer_t;
 
 // Add connection to backpressure list
+// Note: Uses compile-time max since this function is defined before valk_aio_system_t
 static void __backpressure_list_add(valk_aio_handle_t *conn) {
   if (conn->http.backpressure) return;  // Already in list
 
-  // Check if list is at capacity - log warning
-  // TODO(networking): Implement eviction policy when list reaches max size
-  if (backpressure_list_size >= BACKPRESSURE_LIST_MAX_SIZE) {
-    VALK_WARN("Backpressure list at maximum size (%zu), cannot add more connections",
-              BACKPRESSURE_LIST_MAX_SIZE);
+  // Check if list is at hard safety limit - log warning
+  if (backpressure_list_size >= BACKPRESSURE_LIST_MAX_LIMIT) {
+    VALK_WARN("Backpressure list at maximum size (%d), cannot add more connections",
+              BACKPRESSURE_LIST_MAX_LIMIT);
     return;  // Don't add to list if at capacity
   }
 
@@ -492,14 +488,15 @@ static void __backpressure_timer_cb(uv_timer_t *handle) {
              (1.0f - (float)available / total) * 100);
 
   // First, close any timed-out connections to free resources
+  // Note: Uses compile-time default since this function is defined before valk_aio_system_t
   valk_aio_handle_t **pp = &backpressure_list_head;
   while (*pp) {
     valk_aio_handle_t *conn = *pp;
     uint64_t elapsed = now - conn->http.backpressure_start_time;
 
-    if (elapsed >= BACKPRESSURE_TIMEOUT_MS) {
-      VALK_WARN("Backpressure timeout: closing connection after %llu ms",
-                (unsigned long long)elapsed);
+    if (elapsed >= BACKPRESSURE_TIMEOUT_MS_DEFAULT) {
+      VALK_WARN("Backpressure timeout: closing connection after %llu ms (limit: %d ms)",
+                (unsigned long long)elapsed, BACKPRESSURE_TIMEOUT_MS_DEFAULT);
 
       // Remove from list
       *pp = conn->http.backpressure_next;
@@ -545,53 +542,8 @@ static void __backpressure_timer_start(uv_loop_t *loop) {
 // Pending Stream Queue Implementation
 // ============================================================================
 
-static void __pending_stream_pool_init(void) {
-  if (pending_stream_pool_initialized) return;
-  memset(pending_stream_pool, 0, sizeof(pending_stream_pool));
-  memset(pending_stream_pool_used, 0, sizeof(pending_stream_pool_used));
-  pending_stream_pool_initialized = true;
-}
-
-static pending_stream_t *__pending_stream_alloc(void) {
-  __pending_stream_pool_init();
-
-  // Find a free slot in the pool
-  for (size_t i = 0; i < PENDING_STREAM_POOL_SIZE; i++) {
-    if (!pending_stream_pool_used[i]) {
-      pending_stream_pool_used[i] = true;
-      pending_stream_t *ps = &pending_stream_pool[i];
-      memset(ps, 0, sizeof(pending_stream_t));
-      return ps;
-    }
-  }
-  return NULL;  // Pool exhausted
-}
-
-static void __pending_stream_free(pending_stream_t *ps) {
-  if (!ps) return;
-
-  // Free malloc'd pseudo-headers
-  if (ps->method) { free(ps->method); ps->method = NULL; }
-  if (ps->scheme) { free(ps->scheme); ps->scheme = NULL; }
-  if (ps->authority) { free(ps->authority); ps->authority = NULL; }
-  if (ps->path) { free(ps->path); ps->path = NULL; }
-
-  // Free malloc'd regular headers
-  for (size_t i = 0; i < ps->header_count; i++) {
-    if (ps->headers[i].name) free(ps->headers[i].name);
-    if (ps->headers[i].value) free(ps->headers[i].value);
-  }
-  ps->header_count = 0;
-
-  // Free body if any
-  if (ps->body) { free(ps->body); ps->body = NULL; }
-
-  // Mark slot as free in pool
-  size_t idx = (size_t)(ps - pending_stream_pool);
-  if (idx < PENDING_STREAM_POOL_SIZE) {
-    pending_stream_pool_used[idx] = false;
-  }
-}
+// Note: __pending_stream_alloc and __pending_stream_free are defined after
+// valk_aio_system_t struct since they need to access sys->pending_stream_pool
 
 static void __pending_stream_enqueue(pending_stream_t *ps) {
   ps->next = NULL;
@@ -631,7 +583,7 @@ static pending_stream_t *__pending_stream_find(nghttp2_session *session, int32_t
 }
 
 // Remove a specific pending stream from the queue (for stream resets)
-static void __pending_stream_remove(pending_stream_t *target) {
+static void __pending_stream_remove(valk_aio_system_t *sys, pending_stream_t *target) {
   if (!target) return;
 
   pending_stream_t **pp = &pending_stream_head;
@@ -648,7 +600,7 @@ static void __pending_stream_remove(pending_stream_t *target) {
         }
       }
       pending_stream_count--;
-      __pending_stream_free(target);
+      __pending_stream_free(sys, target);
       return;
     }
     pp = &(*pp)->next;
@@ -757,6 +709,9 @@ struct valk_owner_registry {
 
 #endif
 
+// Forward declaration for pending_stream_t (defined below)
+typedef struct pending_stream pending_stream_t;
+
 typedef struct valk_aio_system {
   valk_aio_system_config_t config;  // Resolved configuration
   char name[64];                    // System name for metrics/dashboard
@@ -780,6 +735,16 @@ typedef struct valk_aio_system {
   // HTTP request/response queues for Lisp handlers
   valk_http_queue_t http_queue;
 
+  // Dynamically allocated pools (sized from config)
+  struct {
+    pending_stream_t *items;
+    bool *used;
+    size_t capacity;
+  } pending_stream_pool;
+
+  char (*port_strs)[8];  // Dynamically allocated port string buffer
+  size_t port_str_idx;   // Next index to use in port_strs
+
 #ifdef VALK_METRICS_ENABLED
   valk_aio_metrics_t metrics;
   valk_aio_system_stats_t system_stats;
@@ -791,6 +756,53 @@ typedef struct valk_aio_system {
   valk_event_loop_metrics_v2_t loop_metrics;  // Event loop metrics (modular v2)
 #endif
 } valk_aio_system_t;
+
+// ============================================================================
+// Pending Stream Pool Functions (need full valk_aio_system_t definition)
+// ============================================================================
+
+static pending_stream_t *__pending_stream_alloc(valk_aio_system_t *sys) {
+  if (!sys || !sys->pending_stream_pool.items) return NULL;
+
+  // Find a free slot in the pool
+  for (size_t i = 0; i < sys->pending_stream_pool.capacity; i++) {
+    if (!sys->pending_stream_pool.used[i]) {
+      sys->pending_stream_pool.used[i] = true;
+      pending_stream_t *ps = &sys->pending_stream_pool.items[i];
+      memset(ps, 0, sizeof(pending_stream_t));
+      return ps;
+    }
+  }
+  return NULL;  // Pool exhausted
+}
+
+static void __pending_stream_free(valk_aio_system_t *sys, pending_stream_t *ps) {
+  if (!ps) return;
+
+  // Free malloc'd pseudo-headers
+  if (ps->method) { free(ps->method); ps->method = NULL; }
+  if (ps->scheme) { free(ps->scheme); ps->scheme = NULL; }
+  if (ps->authority) { free(ps->authority); ps->authority = NULL; }
+  if (ps->path) { free(ps->path); ps->path = NULL; }
+
+  // Free malloc'd regular headers
+  for (size_t i = 0; i < ps->header_count; i++) {
+    if (ps->headers[i].name) free(ps->headers[i].name);
+    if (ps->headers[i].value) free(ps->headers[i].value);
+  }
+  ps->header_count = 0;
+
+  // Free body if any
+  if (ps->body) { free(ps->body); ps->body = NULL; }
+
+  // Mark slot as free in pool
+  if (sys && sys->pending_stream_pool.items) {
+    size_t idx = (size_t)(ps - sys->pending_stream_pool.items);
+    if (idx < sys->pending_stream_pool.capacity) {
+      sys->pending_stream_pool.used[idx] = false;
+    }
+  }
+}
 
 typedef struct valk_aio_http_server {
   __aio_http_srv_e state;
@@ -811,13 +823,11 @@ typedef struct valk_aio_http_server {
 
 #ifdef VALK_METRICS_ENABLED
 // Initialize server metrics with proper labels (using metrics v2 API)
-static void server_metrics_init(valk_server_metrics_t* m,
+static void server_metrics_init(valk_aio_system_t* sys, valk_server_metrics_t* m,
                                  const char* name, int port, const char* protocol,
                                  const char* loop_name) {
-  // Note: port_str needs static storage since V2 labels store pointers
-  static char port_strs[HTTP_MAX_SERVERS][8];
-  static int port_idx = 0;
-  char* port_str = port_strs[port_idx++ % HTTP_MAX_SERVERS];
+  // Note: port_str needs persistent storage since V2 labels store pointers
+  char* port_str = sys->port_strs[sys->port_str_idx++ % sys->config.max_servers];
   snprintf(port_str, 8, "%d", port);
 
   // Base labels for this server (includes loop for AIO system ownership)
@@ -928,7 +938,7 @@ static void __pending_stream_process_one(valk_aio_system_t *sys) {
   if (!ps->conn || !ps->session) {
     VALK_WARN("Pending stream %d has invalid conn/session, discarding", ps->stream_id);
     valk_slab_release(sys->httpStreamArenas, arena_item);
-    __pending_stream_free(ps);
+    __pending_stream_free(sys, ps);
     return;
   }
 
@@ -937,7 +947,7 @@ static void __pending_stream_process_one(valk_aio_system_t *sys) {
   if (!current_data || !__is_pending_stream(current_data)) {
     VALK_WARN("Pending stream %d no longer exists or was replaced, discarding", ps->stream_id);
     valk_slab_release(sys->httpStreamArenas, arena_item);
-    __pending_stream_free(ps);
+    __pending_stream_free(sys, ps);
     return;
   }
 
@@ -1082,7 +1092,7 @@ static void __pending_stream_process_one(valk_aio_system_t *sys) {
   }
 
   // Free the pending stream structure
-  __pending_stream_free(ps);
+  __pending_stream_free(sys, ps);
 
   // If there are more pending streams, try to process them too
   if (pending_stream_count > 0) {
@@ -1594,7 +1604,7 @@ static int __http_on_begin_headers_callback(nghttp2_session *session,
     valk_slab_item_t *arena_item = valk_slab_aquire(conn->http.server->sys->httpStreamArenas);
     if (!arena_item) {
       // Arena pool exhausted - try to queue for backpressure instead of 503
-      pending_stream_t *ps = __pending_stream_alloc();
+      pending_stream_t *ps = __pending_stream_alloc(conn->http.server->sys);
       if (ps) {
         // Successfully allocated pending slot - queue this stream
         ps->conn = conn;
@@ -2152,11 +2162,19 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
     if (ps) {
       VALK_INFO("Pending stream %d closed (client reset or timeout), removing from queue",
                 stream_id);
-      __pending_stream_remove(ps);
+      __pending_stream_remove(conn->http.server->sys, ps);
 #ifdef VALK_METRICS_ENABLED
       // Track pending stream drop
       if (conn->http.server && conn->http.server->sys) {
         valk_aio_system_stats_on_pending_drop(&conn->http.server->sys->system_stats);
+
+        // Also record response code metrics - count as 5xx since request never completed
+        // These are requests that were queued waiting for arenas but client timed out
+        valk_server_metrics_t* m = &conn->http.server->metrics;
+        valk_counter_v2_inc(m->requests_total);
+        valk_counter_v2_inc(m->requests_server_error);  // 5xx - request never started
+
+        VALK_INFO("Pending stream %d timeout: recorded as 5xx", stream_id);
       }
 #endif
     }
@@ -2183,6 +2201,7 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
   }
 #endif
 
+  // Case 1: Normal request with arena - record metrics and release arena
   if (req && req->arena_slab_item) {
 #ifdef VALK_METRICS_ENABLED
     // Record stream end metrics (old system)
@@ -2242,6 +2261,30 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
     if (pending_stream_count > 0) {
       __pending_stream_process_one(conn->http.server->sys);
     }
+  }
+  // Case 2: Async request where arena was transferred to async handle
+  // Client disconnected/timed out before async completed - record as timeout
+  else if (req && !req->arena_slab_item) {
+#ifdef VALK_METRICS_ENABLED
+    // Arena is owned by async handle - it will release it when async completes
+    // But we should still record metrics for the timeout
+    if (conn->http.server) {
+      valk_server_metrics_t* m = &conn->http.server->metrics;
+
+      // Count this as a server error (client timeout during processing)
+      valk_counter_v2_inc(m->requests_total);
+      valk_counter_v2_inc(m->requests_server_error);  // 5xx - request didn't complete
+
+      // Record duration up to client disconnect
+      uint64_t end_time_us = uv_hrtime() / 1000;
+      uint64_t duration_us = end_time_us - req->start_time_us;
+      valk_histogram_v2_observe_us(m->request_duration, duration_us);
+
+      VALK_INFO("Async request timeout: stream %d closed by client after %llu us",
+                stream_id, (unsigned long long)duration_us);
+    }
+#endif
+    // NOTE: Don't release arena - async handle owns it and will release when complete
   }
 
   conn->http.active_streams--;
@@ -2385,7 +2428,26 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
           // Handle is still running - response will be sent when it completes
           // The completion callback will use the stored context to send response
           VALK_DEBUG("Handle pending/running, will send response when complete");
-          return 0;  // Don't release arena yet
+
+          // CRITICAL: Transfer arena ownership from request to async handle.
+          // Without this, on_stream_close_callback will release the arena while
+          // the async operation is still running, causing use-after-free when
+          // the timer fires and tries to use the lambda stored in on_complete.
+
+          // 1. Remove arena from connection's active list (otherwise new requests
+          //    that get the same slot will fail the self-loop assertion)
+          uint32_t slot = req->arena_slot;
+          __http_remove_from_active_arenas(conn, slot);
+
+          // 2. Store arena ownership in async handle for restoration after response
+          handle->arena_slab_item = req->arena_slab_item;
+          handle->arena_slot = slot;
+
+          // 3. Clear the request's arena ownership so on_stream_close won't release it early
+          req->arena_slab_item = NULL;
+          req->arena_slot = UINT32_MAX;  // Mark as invalid
+
+          return 0;
         }
         return 0;
       }
@@ -3165,7 +3227,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
 #ifdef VALK_METRICS_ENABLED
   // Initialize server metrics BEFORE uv_listen to avoid race with accept callback
   const char* protocol = srv->ssl_ctx ? "https" : "http";
-  server_metrics_init(&srv->metrics, srv->interface, srv->port, protocol, sys->name);
+  server_metrics_init(sys, &srv->metrics, srv->interface, srv->port, protocol, sys->name);
   // Track server start in system stats
   valk_aio_system_stats_on_server_start(&sys->system_stats);
 
@@ -4044,13 +4106,24 @@ valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
 
 //
 const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg) {
-  // Hard limits
+  // Hard limits - primary parameters
   if (cfg->max_connections < 1 || cfg->max_connections > 100000)
     return "max_connections must be between 1 and 100,000";
 
   if (cfg->max_concurrent_streams < 1 || cfg->max_concurrent_streams > 1000)
     return "max_concurrent_streams must be between 1 and 1,000";
 
+  // Capacity limits
+  if (cfg->max_handles < 16 || cfg->max_handles > 100000)
+    return "max_handles must be between 16 and 100,000";
+
+  if (cfg->max_servers < 1 || cfg->max_servers > 64)
+    return "max_servers must be between 1 and 64";
+
+  if (cfg->max_clients < 1 || cfg->max_clients > 64)
+    return "max_clients must be between 1 and 64";
+
+  // Derived settings
   if (cfg->tcp_buffer_pool_size < 16 || cfg->tcp_buffer_pool_size > 1000000)
     return "tcp_buffer_pool_size must be between 16 and 1,000,000";
 
@@ -4066,6 +4139,16 @@ const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg)
   if (cfg->queue_capacity < 16 || cfg->queue_capacity > 100000)
     return "queue_capacity must be between 16 and 100,000";
 
+  // Backpressure timing (with hard safety limits)
+  if (cfg->backpressure_list_max < 1 || cfg->backpressure_list_max > BACKPRESSURE_LIST_MAX_LIMIT)
+    return "backpressure_list_max must be between 1 and 100,000";
+
+  if (cfg->backpressure_timeout_ms < 1000 || cfg->backpressure_timeout_ms > 600000)
+    return "backpressure_timeout_ms must be between 1,000 and 600,000 (1s-10min)";
+
+  if (cfg->pending_stream_pool_size < 1 || cfg->pending_stream_pool_size > PENDING_STREAM_POOL_MAX_LIMIT)
+    return "pending_stream_pool_size must be between 1 and 10,000";
+
   // Relationship validations
   if (cfg->tcp_buffer_pool_size < cfg->max_connections)
     return "tcp_buffer_pool_size must be >= max_connections";
@@ -4080,6 +4163,11 @@ int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
   // Set defaults for primary parameters
   if (cfg->max_connections == 0) cfg->max_connections = 100;
   if (cfg->max_concurrent_streams == 0) cfg->max_concurrent_streams = 100;
+
+  // Capacity limits defaults
+  if (cfg->max_handles == 0) cfg->max_handles = 2056;
+  if (cfg->max_servers == 0) cfg->max_servers = 8;
+  if (cfg->max_clients == 0) cfg->max_clients = 8;
 
   // Derive dependent values (new formulas based on research)
   if (cfg->tcp_buffer_pool_size == 0) {
@@ -4114,6 +4202,11 @@ int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
 
   if (cfg->min_buffers_per_conn == 0)
     cfg->min_buffers_per_conn = BUFFERS_PER_CONNECTION;
+
+  // Backpressure timing defaults
+  if (cfg->backpressure_list_max == 0) cfg->backpressure_list_max = 1000;
+  if (cfg->backpressure_timeout_ms == 0) cfg->backpressure_timeout_ms = 30000;
+  if (cfg->pending_stream_pool_size == 0) cfg->pending_stream_pool_size = 64;
 
   // Validate watermarks
   if (cfg->buffer_high_watermark >= cfg->buffer_critical_watermark) {
@@ -4187,10 +4280,32 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   // Allocate AIO slabs with malloc allocator (not GC heap)
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     sys->httpServers = valk_slab_new(
-        sizeof(valk_arc_box) + sizeof(valk_aio_http_server), HTTP_MAX_SERVERS);
+        sizeof(valk_arc_box) + sizeof(valk_aio_http_server), sys->config.max_servers);
     sys->httpClients = valk_slab_new(
-        sizeof(valk_arc_box) + sizeof(valk_aio_http2_client), HTTP_MAX_CLIENTS);
-    sys->handleSlab = valk_slab_new(sizeof(valk_aio_handle_t), AIO_MAX_HANDLES);
+        sizeof(valk_arc_box) + sizeof(valk_aio_http2_client), sys->config.max_clients);
+    sys->handleSlab = valk_slab_new(sizeof(valk_aio_handle_t), sys->config.max_handles);
+  }
+
+  // Allocate pending stream pool based on config
+  sys->pending_stream_pool.capacity = sys->config.pending_stream_pool_size;
+  sys->pending_stream_pool.items = calloc(sys->pending_stream_pool.capacity,
+                                          sizeof(pending_stream_t));
+  sys->pending_stream_pool.used = calloc(sys->pending_stream_pool.capacity,
+                                         sizeof(bool));
+  if (!sys->pending_stream_pool.items || !sys->pending_stream_pool.used) {
+    VALK_ERROR("Failed to allocate pending stream pool");
+    free(sys->pending_stream_pool.items);
+    free(sys->pending_stream_pool.used);
+    return NULL;
+  }
+
+  // Allocate port strings buffer
+  sys->port_strs = calloc(sys->config.max_servers, 8);
+  if (!sys->port_strs) {
+    VALK_ERROR("Failed to allocate port strings buffer");
+    free(sys->pending_stream_pool.items);
+    free(sys->pending_stream_pool.used);
+    return NULL;
   }
 
   // Initialize HTTP request/response queues for Lisp handlers
@@ -4287,6 +4402,11 @@ void valk_aio_stop(valk_aio_system_t *sys) {
     valk_slab_free(sys->httpClients);
     valk_slab_free(sys->handleSlab);
   }
+
+  // Free dynamically allocated pools
+  free(sys->pending_stream_pool.items);
+  free(sys->pending_stream_pool.used);
+  free(sys->port_strs);
 
   // Reset singleton so AIO can be restarted if needed
   if (global_aio_system == sys) {
@@ -4549,7 +4669,17 @@ void valk_aio_timer_free(valk_aio_handle_t* handle) {
 // Timer callback for aio/delay - called when timer fires
 static void __delay_timer_cb(uv_timer_t *handle) {
   valk_delay_timer_t *timer_data = (valk_delay_timer_t *)handle->data;
-  VALK_INFO("aio/delay timer fired for stream %d", timer_data->stream_id);
+
+  // Check if connection is still valid
+  valk_aio_handle_t *conn = timer_data->conn;
+  if (!conn || conn->http.state == VALK_CONN_CLOSING ||
+      conn->http.state == VALK_CONN_CLOSED || !conn->http.session) {
+    uv_timer_stop(handle);
+    uv_close((uv_handle_t *)handle, NULL);
+    // Note: continuation may leak if connection closed - GC handles GC-allocated ones
+    free(timer_data);
+    return;
+  }
 
   // Call the continuation lambda
   if (timer_data->continuation && timer_data->env) {
@@ -4575,7 +4705,6 @@ static void __delay_timer_cb(uv_timer_t *handle) {
                              error_resp, timer_data->stream_arena);
       }
     } else {
-      VALK_INFO("aio/delay sending response for stream %d", timer_data->stream_id);
       __http_send_response(timer_data->session, timer_data->stream_id,
                            response, timer_data->stream_arena);
     }
@@ -4585,7 +4714,7 @@ static void __delay_timer_cb(uv_timer_t *handle) {
     // we need to explicitly flush it since we're outside the normal read callback flow
     __http_continue_pending_send(timer_data->conn);
   } else {
-    VALK_WARN("aio/delay timer fired but no continuation or env");
+    VALK_WARN("No continuation or env for stream %d", timer_data->stream_id);
   }
 
   // Stop and close the timer
@@ -5198,6 +5327,30 @@ static void valk_async_propagate_completion(valk_async_handle_t *source);
 #define VALK_ALL_CTX_MAGIC_EARLY 0xA11C7821
 static void valk_async_notify_all_parent(valk_async_handle_t *child);
 
+// Helper: Release stream arena back to slab after async completion
+static void valk_async_release_arena(valk_async_handle_t *handle) {
+  if (!handle->stream_arena || !handle->conn) return;
+
+  valk_aio_handle_t *conn = handle->conn;
+  if (!conn->http.server || !conn->http.server->sys) return;
+
+  valk_slab_t *arena_slab = conn->http.server->sys->httpStreamArenas;
+  valk_mem_arena_t *arena = (valk_mem_arena_t*)handle->stream_arena;
+
+  // Release arena back to slab using the data pointer
+  valk_slab_release_ptr(arena_slab, arena);
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_stats_on_arena_release(&conn->http.server->sys->system_stats);
+#endif
+
+  VALK_INFO("Arena RELEASED (async complete) for stream %d, handle %lu",
+            handle->stream_id, handle->id);
+
+  // Clear handle's arena reference to prevent double-free
+  handle->stream_arena = NULL;
+}
+
 // Send HTTP response from a completed handle (if it has HTTP context)
 static void valk_async_send_http_response(valk_async_handle_t *handle) {
   // Check if this handle has HTTP context attached
@@ -5206,6 +5359,8 @@ static void valk_async_send_http_response(valk_async_handle_t *handle) {
   }
 
   valk_aio_handle_t *conn = handle->conn;
+  valk_mem_arena_t *arena = (valk_mem_arena_t*)handle->stream_arena;
+  bool should_release_arena = (arena != NULL);
 
   // CRITICAL: Check if connection is still valid before using it.
   // When a connection closes:
@@ -5217,12 +5372,15 @@ static void valk_async_send_http_response(valk_async_handle_t *handle) {
       !conn->http.session) {
     VALK_INFO("Async handle %lu: connection closed, skipping HTTP response for stream %d",
               handle->id, handle->stream_id);
+    // Still release arena if we own it
+    if (should_release_arena) {
+      valk_async_release_arena(handle);
+    }
     return;
   }
 
   nghttp2_session *session = (nghttp2_session*)handle->session;
   int32_t stream_id = handle->stream_id;
-  valk_mem_arena_t *arena = (valk_mem_arena_t*)handle->stream_arena;
 
   // CRITICAL: Check if the stream still exists AND belongs to this async handle.
   // When a stream closes, its arena is released and can be reused by a new stream.
@@ -5233,15 +5391,34 @@ static void valk_async_send_http_response(valk_async_handle_t *handle) {
   if (!stream_req) {
     VALK_INFO("Async handle %lu: stream %d no longer exists, skipping HTTP response",
               handle->id, stream_id);
+    // Still release arena if we own it
+    if (should_release_arena) {
+      valk_async_release_arena(handle);
+    }
     return;
   }
 
   // Verify the stream's arena matches this handle's arena.
   // If they don't match, this stream_id was reused for a different request.
+  // In this case, DON'T release the arena - it belongs to the new request.
   if (stream_req->stream_arena != arena) {
     VALK_INFO("Async handle %lu: stream %d arena mismatch (expected %p, got %p), skipping",
               handle->id, stream_id, (void*)arena, (void*)stream_req->stream_arena);
+    // Arena was already released and reused - don't release again
+    handle->stream_arena = NULL;  // Clear stale reference
     return;
+  }
+
+  // CRITICAL: Restore arena ownership to request BEFORE sending response.
+  // The stream close callback may fire during flush (when END_STREAM is sent),
+  // and it needs arena_slab_item to be set to record metrics correctly.
+  // If we restore ownership after flush, we hit a race condition where
+  // on_stream_close_callback sees NULL arena_slab_item and records as 5xx.
+  if (should_release_arena && handle->arena_slab_item) {
+    stream_req->arena_slab_item = handle->arena_slab_item;
+    stream_req->arena_slot = handle->arena_slot;
+    handle->arena_slab_item = NULL;  // Ownership transferred back
+    handle->stream_arena = NULL;     // Clear stale reference
   }
 
   if (handle->status == VALK_ASYNC_COMPLETED) {
@@ -5276,7 +5453,7 @@ static void valk_async_send_http_response(valk_async_handle_t *handle) {
     }
     __http_continue_pending_send(conn);
   }
-  // For CANCELLED, don't send anything (client disconnected)
+  // For CANCELLED, we still own the arena but don't send response
 }
 
 // Create a new async handle
@@ -5722,9 +5899,13 @@ static void valk_async_propagate_completion(valk_async_handle_t *source) {
       // Child is waiting for our result
       if (source->status == VALK_ASYNC_COMPLETED) {
         // Call child's transform function with our result
-        if (child->on_complete && child->env) {
-          valk_lval_t *args = valk_lval_cons(source->result, valk_lval_nil());
-          valk_lval_t *transformed = valk_lval_eval_call(child->env, child->on_complete, args);
+        if (child->on_complete && child->env && child->stream_arena) {
+          valk_lval_t *args;
+          valk_lval_t *transformed;
+          VALK_WITH_ALLOC((valk_mem_allocator_t*)child->stream_arena) {
+            args = valk_lval_cons(source->result, valk_lval_nil());
+            transformed = valk_lval_eval_call(child->env, child->on_complete, args);
+          }
           if (LVAL_TYPE(transformed) == LVAL_ERR) {
             child->status = VALK_ASYNC_FAILED;
             child->error = transformed;
@@ -5779,9 +5960,13 @@ static void valk_async_propagate_completion(valk_async_handle_t *source) {
         valk_async_propagate_completion(child);
       } else if (source->status == VALK_ASYNC_FAILED) {
         // Check if child has error handler (for aio/catch)
-        if (child->on_error && child->env) {
-          valk_lval_t *args = valk_lval_cons(source->error, valk_lval_nil());
-          valk_lval_t *recovered = valk_lval_eval_call(child->env, child->on_error, args);
+        if (child->on_error && child->env && child->stream_arena) {
+          valk_lval_t *args;
+          valk_lval_t *recovered;
+          VALK_WITH_ALLOC((valk_mem_allocator_t*)child->stream_arena) {
+            args = valk_lval_cons(source->error, valk_lval_nil());
+            recovered = valk_lval_eval_call(child->env, child->on_error, args);
+          }
           if (LVAL_TYPE(recovered) == LVAL_ERR) {
             child->status = VALK_ASYNC_FAILED;
             child->error = recovered;

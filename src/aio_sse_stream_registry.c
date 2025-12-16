@@ -15,7 +15,7 @@
 #include "metrics_delta.h"
 
 // SSE buffer size - large enough for full snapshot + metrics
-#define SSE_BUFFER_SIZE 262144
+#define SSE_BUFFER_SIZE 262144  // 256KB
 
 // Forward declarations
 static void sse_registry_timer_cb(uv_timer_t *timer);
@@ -138,8 +138,22 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
              entry->stream_id, entry->http2_stream_id, entry->first_event_sent,
              entry->last_event_id, entry->pending_offset, entry->pending_len);
 
-  // If we still have pending data, skip this tick
+  // If we still have pending data that wasn't fully flushed (e.g., due to
+  // TCP buffer exhaustion during backpressure), retry flushing instead of
+  // skipping. We still return true so the handle gets added to flush list.
   if (entry->pending_data && entry->pending_offset < entry->pending_len) {
+    // Resume the stream to tell nghttp2 we have data
+    if (entry->session && atomic_load(&entry->active)) {
+      int rv = nghttp2_session_resume_data(entry->session, entry->http2_stream_id);
+      if (rv != 0 && rv != NGHTTP2_ERR_INVALID_ARGUMENT) {
+        VALK_ERROR("Failed to resume HTTP/2 stream %d for retry: %s",
+                   entry->http2_stream_id, nghttp2_strerror(rv));
+        return false;
+      }
+      VALK_DEBUG("SSE stream %d: retrying flush of %zu pending bytes",
+                 entry->http2_stream_id, entry->pending_len - entry->pending_offset);
+      return true;  // Add to flush list so we retry sending
+    }
     return false;
   }
 
