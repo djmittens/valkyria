@@ -269,53 +269,96 @@ static inline valk_http_client_config_t valk_http_client_config_default(void) {
 // ============================================================================
 
 // Demo profile: low resource usage, good for demos and development
+// Ratios: arena_pool_size >= max_concurrent_streams * 3 (handles 3 full connections)
 static inline valk_aio_system_config_t valk_aio_config_demo(void) {
   return (valk_aio_system_config_t){
-    .max_connections = 10,
-    .max_concurrent_streams = 32,
-    .max_handles = 256,
+    .max_connections = 8,
+    .max_concurrent_streams = 8,        // 8 streams/conn × 8 conns = 64 max
+    .max_handles = 128,
     .max_servers = 3,
     .max_clients = 3,
-    .arena_size = 4 * 1024 * 1024,      // 4MB
-    .arena_pool_size = 16,
+    .arena_size = 4 * 1024 * 1024,      // 4MB per arena
+    .arena_pool_size = 24,              // 24 × 4MB = 96MB (3x a full connection)
     .max_request_body_size = 1 * 1024 * 1024,  // 1MB
-    .backpressure_list_max = 100,
+    .backpressure_list_max = 50,
     .backpressure_timeout_ms = 30000,
-    .pending_stream_pool_size = 16,
+    .pending_stream_pool_size = 24,
   };
 }
 
 // Production profile: high capacity for production deployments
+// Memory: 1000 arenas × 4MB = 4GB (reasonable for production server)
+// Capacity: 100 conns × 100 streams = 10,000 max concurrent, 1000 arenas = 10 saturated conns
 static inline valk_aio_system_config_t valk_aio_config_production(void) {
   return (valk_aio_system_config_t){
-    .max_connections = 1000,
-    .max_concurrent_streams = 128,
+    .max_connections = 100,
+    .max_concurrent_streams = 100,      // RFC 7540 minimum, good balance
     .max_handles = 4096,
     .max_servers = 8,
     .max_clients = 8,
-    .arena_size = 64 * 1024 * 1024,     // 64MB
-    .arena_pool_size = 0,               // auto-derive
+    .arena_size = 4 * 1024 * 1024,      // 4MB (sufficient for most requests)
+    .arena_pool_size = 1000,            // 4GB total, handles 10 saturated connections
     .max_request_body_size = 8 * 1024 * 1024,  // 8MB
-    .backpressure_list_max = 10000,
+    .backpressure_list_max = 5000,
     .backpressure_timeout_ms = 30000,
-    .pending_stream_pool_size = 256,
+    .pending_stream_pool_size = 200,    // 20% overflow capacity
   };
 }
 
 // Minimal profile: embedded systems and testing
+// Memory: 12 arenas × 1MB = 12MB total
+// Capacity: 4 conns × 4 streams = 16 max concurrent, 12 arenas = 3 saturated conns
 static inline valk_aio_system_config_t valk_aio_config_minimal(void) {
   return (valk_aio_system_config_t){
     .max_connections = 4,
-    .max_concurrent_streams = 8,
+    .max_concurrent_streams = 4,        // Low streams to match small arena pool
     .max_handles = 64,
     .max_servers = 1,
     .max_clients = 1,
     .arena_size = 1 * 1024 * 1024,      // 1MB
-    .arena_pool_size = 4,
+    .arena_pool_size = 12,              // 12MB total, handles 3 saturated connections
     .max_request_body_size = 256 * 1024,  // 256KB
     .backpressure_list_max = 16,
     .backpressure_timeout_ms = 10000,
     .pending_stream_pool_size = 4,
+  };
+}
+
+// High-throughput API profile: maximum requests per second, small payloads
+// Memory: 2000 arenas × 1MB = 2GB total
+// Capacity: 50 conns × 256 streams = 12,800 max concurrent
+static inline valk_aio_system_config_t valk_aio_config_api(void) {
+  return (valk_aio_system_config_t){
+    .max_connections = 50,
+    .max_concurrent_streams = 256,      // High multiplexing for APIs
+    .max_handles = 2048,
+    .max_servers = 4,
+    .max_clients = 4,
+    .arena_size = 1 * 1024 * 1024,      // 1MB (small API payloads)
+    .arena_pool_size = 2000,            // 2GB total
+    .max_request_body_size = 1 * 1024 * 1024,  // 1MB
+    .backpressure_list_max = 2000,
+    .backpressure_timeout_ms = 15000,   // Faster timeout for APIs
+    .pending_stream_pool_size = 500,    // 25% overflow
+  };
+}
+
+// Large payload profile: file uploads and downloads
+// Memory: 64 arenas × 64MB = 4GB total
+// Capacity: 20 conns × 16 streams = 320 max concurrent (but large payloads)
+static inline valk_aio_system_config_t valk_aio_config_large_payload(void) {
+  return (valk_aio_system_config_t){
+    .max_connections = 20,
+    .max_concurrent_streams = 16,       // Fewer streams for large payloads
+    .max_handles = 512,
+    .max_servers = 4,
+    .max_clients = 4,
+    .arena_size = 64 * 1024 * 1024,     // 64MB for large files
+    .arena_pool_size = 64,              // 4GB total
+    .max_request_body_size = 128 * 1024 * 1024,  // 128MB uploads
+    .backpressure_list_max = 100,
+    .backpressure_timeout_ms = 60000,   // Longer timeout for large transfers
+    .pending_stream_pool_size = 32,
   };
 }
 

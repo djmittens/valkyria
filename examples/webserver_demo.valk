@@ -76,26 +76,26 @@
 ;       To use custom config, run with: VALK_DISABLE_AIO=1 build/valk examples/webserver_demo.valk
 ;
 ; This config is tuned for:
-;   • Low memory footprint (~64MB for arenas vs 4GB default)
+;   • Low memory footprint (~96MB for arenas vs 4GB default)
 ;   • Responsive feel for small demos
-;   • Can still handle moderate load testing
+;   • Consistent ratios: arena-pool >= connections × streams-per-conn / 4
 ;
 ; For production or extreme load testing, increase max-connections and arena-pool-size.
-(def {sys} (aio/start {:max-connections 10        ; Low connection limit
-                       :max-concurrent-streams 32 ; Reasonable streams per connection
-                       :max-handles 256           ; Small handle pool
+(def {sys} (aio/start {:max-connections 8         ; Low connection limit
+                       :max-concurrent-streams 8  ; Low streams per connection
+                       :max-handles 128           ; Small handle pool
                        :max-servers 3             ; Just enough for demo
                        :arena-size 4194304        ; 4MB per arena (vs 64MB default)
-                       :arena-pool-size 16        ; 16 × 4MB = 64MB total
+                       :arena-pool-size 24        ; 24 × 4MB = 96MB (3x a full connection)
                        :max-request-body-size 1048576  ; 1MB max request
-                       :backpressure-list-max 100
-                       :pending-stream-pool-size 16}))
+                       :backpressure-list-max 50
+                       :pending-stream-pool-size 24}))
 
 (println "  ✓ AIO system ready (mellow demo config)")
-(println "    • max-connections: 10")
-(println "    • max-concurrent-streams: 32 per connection")
-(println "    • arena-pool-size: 16 × 4MB = 64MB total")
-(println "    • pending-stream-pool-size: 16")
+(println "    • max-connections: 8")
+(println "    • max-concurrent-streams: 8 per connection")
+(println "    • arena-pool-size: 24 × 4MB = 96MB (handles 3 full connections)")
+(println "    • pending-stream-pool-size: 24")
 (println "")
 
 ; ──────────────────────────────────────────────────────────────────────────────
@@ -366,11 +366,11 @@
 (println "  • Prometheus metrics: curl -k https://localhost:6969/metrics")
 (println "")
 (println "Load Testing:")
-(println "  This mellow config (16 arenas × 4MB) handles light demos well.")
-(println "  For load shedding demos, reduce arena-pool-size to 5.")
+(println "  This mellow config (24 arenas × 4MB = 96MB) handles light demos well.")
+(println "  With 8 streams/conn and 24 arenas, can saturate 3 connections.")
 (println "")
 (println "  Test with concurrent requests to /slow (holds arena for 2s):")
-(println "    for i in $(seq 1 10); do \\")
+(println "    for i in $(seq 1 8); do \\")
 (println "      curl -sk -w \"req$i: %{http_code}\\n\" -o /dev/null \\")
 (println "        https://localhost:8443/slow & \\")
 (println "    done; wait")
