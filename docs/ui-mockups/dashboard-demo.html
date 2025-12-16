@@ -1701,6 +1701,10 @@
     (function() {
       'use strict';
 
+      // Timeline configuration - all charts use this range
+      const TIMELINE_RANGE_SECONDS = 60;
+      const HISTOGRAM_BUCKETS = 8;
+
       // Polling state
       let pollTimer = null;
       let retryDelay = 1000;
@@ -1779,18 +1783,95 @@
         }
       });
 
+      // Initialize all chart data structures
+      const timelineData = [];
+      const histogramData = new Map();
+
+      function initCharts() {
+        const now = Date.now();
+        
+        // Initialize timeline with empty slots for full range
+        for (let i = 0; i < TIMELINE_RANGE_SECONDS; i++) {
+          timelineData.push({
+            timestamp: now - (TIMELINE_RANGE_SECONDS - i) * 1000,
+            events: []
+          });
+        }
+
+        // Initialize histogram buckets for all charts
+        const histIds = [
+          'hist-server-1', 'hist-server-2', 'hist-server-3',
+          'hist-client-1', 'hist-client-2', 'hist-client-3'
+        ];
+        histIds.forEach(id => {
+          const buckets = [];
+          for (let i = 0; i < HISTOGRAM_BUCKETS; i++) {
+            buckets.push({ count: 0 });
+          }
+          histogramData.set(id, buckets);
+        });
+      }
+
       // Generate mini histogram with given distribution
       function renderHistogramMini(id, buckets) {
         const container = document.getElementById(id);
         if (!container) return;
-        const max = Math.max(...buckets.map(b => b.count));
 
-        container.innerHTML = buckets.map((b, i) => {
+        // Ensure we always have exactly HISTOGRAM_BUCKETS bars
+        const paddedBuckets = [...buckets];
+        while (paddedBuckets.length < HISTOGRAM_BUCKETS) {
+          paddedBuckets.push({ count: 0 });
+        }
+
+        const max = Math.max(...paddedBuckets.map(b => b.count), 1);
+
+        container.innerHTML = paddedBuckets.map((b, i) => {
           const height = Math.max((b.count / max) * 100, 10);
           const pClass = b.p || '';
           return `<div class="bar ${pClass}" style="height: ${height}%"></div>`;
         }).join('');
       }
+
+      // Generate GC timeline with proper positioning
+      function renderGCTimeline(events = []) {
+        const container = document.getElementById('gc-timeline');
+        if (!container) return;
+
+        // Use DocumentFragment for efficient DOM updates
+        const fragment = document.createDocumentFragment();
+
+        events.forEach(event => {
+          const div = document.createElement('div');
+          const isMajor = event.major;
+          const isLong = event.pause > 3;
+
+          div.className = 'gc-event' + (isMajor ? ' major' : '') + (isLong ? ' long' : '');
+          div.style.left = ((TIMELINE_RANGE_SECONDS - event.time) / TIMELINE_RANGE_SECONDS * 98 + 1) + '%';
+          div.style.height = Math.min(Math.log(event.pause + 1) * 20, 44) + 'px';
+          div.title = `Pause: ${event.pause.toFixed(1)}ms${isMajor ? ' (major)' : ''}`;
+          fragment.appendChild(div);
+        });
+
+        // Clear old events and append new ones
+        const oldEvents = container.querySelectorAll('.gc-event');
+        oldEvents.forEach(e => e.remove());
+        container.appendChild(fragment);
+      }
+
+      // Initialize charts with empty state
+      initCharts();
+
+      // Populate with demo data
+      const demoGCEvents = [];
+      for (let i = 0; i < 40; i++) {
+        demoGCEvents.push({
+          time: Math.random() * TIMELINE_RANGE_SECONDS,
+          pause: Math.random() * 4 + 0.1,
+          major: Math.random() > 0.92
+        });
+      }
+      demoGCEvents.sort((a, b) => b.time - a.time);
+      renderGCTimeline(demoGCEvents);
 
       // Different distributions for different servers/clients
       renderHistogramMini('hist-server-1', [
@@ -1818,49 +1899,31 @@
         { count: 220 }, { count: 180, p: 'p95' }, { count: 120, p: 'p99' }, { count: 65 }
       ]);
 
-      // Generate GC timeline with proper positioning
-      function renderGCTimeline() {
-        const container = document.getElementById('gc-timeline');
-        if (!container) return;
-
-        // Keep the axis and threshold elements
-        const axis = container.querySelector('.gc-timeline-axis');
-        const threshold = container.querySelector('.gc-timeline-threshold');
-
-        // Use DocumentFragment for efficient DOM updates
-        const fragment = document.createDocumentFragment();
-
-        // Generate events with actual time-based positions
-        const events = [];
-        for (let i = 0; i < 40; i++) {
-          events.push({
-            time: Math.random() * 60, // seconds ago
-            pause: Math.random() * 4 + 0.1, // 0.1ms to 4.1ms
-            major: Math.random() > 0.92
-          });
-        }
-
-        // Sort by time
-        events.sort((a, b) => b.time - a.time);
-
-        events.forEach(event => {
-          const div = document.createElement('div');
-          const isMajor = event.major;
-          const isLong = event.pause > 3;
-
-          div.className = 'gc-event' + (isMajor ? ' major' : '') + (isLong ? ' long' : '');
-          div.style.left = ((60 - event.time) / 60 * 98 + 1) + '%';
-          div.style.height = Math.min(Math.log(event.pause + 1) * 20, 44) + 'px'; // Log scale, max 44px
-          div.title = `Pause: ${event.pause.toFixed(1)}ms${isMajor ? ' (major)' : ''}`;
-          fragment.appendChild(div);
-        });
-
-        // Clear old events and append new ones
-        const oldEvents = container.querySelectorAll('.gc-event');
-        oldEvents.forEach(e => e.remove());
-        container.appendChild(fragment);
-      }
-      renderGCTimeline();
+      // Different distributions for different servers/clients
+      renderHistogramMini('hist-server-1', [
+        { count: 80 }, { count: 220 }, { count: 480, p: 'p50' }, { count: 320 },
+        { count: 180 }, { count: 90, p: 'p95' }, { count: 25, p: 'p99' }, { count: 8 }
+      ]);
+      renderHistogramMini('hist-server-2', [
+        { count: 320 }, { count: 580, p: 'p50' }, { count: 280 }, { count: 120, p: 'p95' },
+        { count: 45, p: 'p99' }, { count: 12 }, { count: 4 }, { count: 1 }
+      ]);
+      renderHistogramMini('hist-server-3', [
+        { count: 45 }, { count: 120 }, { count: 280, p: 'p50' }, { count: 320 },
+        { count: 180 }, { count: 120, p: 'p95' }, { count: 85, p: 'p99' }, { count: 42 }
+      ]);
+      renderHistogramMini('hist-client-1', [
+        { count: 180 }, { count: 420, p: 'p50' }, { count: 280 }, { count: 120, p: 'p95' },
+        { count: 45, p: 'p99' }, { count: 12 }, { count: 4 }, { count: 1 }
+      ]);
+      renderHistogramMini('hist-client-2', [
+        { count: 520, p: 'p50' }, { count: 280 }, { count: 120, p: 'p95' }, { count: 45, p: 'p99' },
+        { count: 12 }, { count: 4 }, { count: 1 }, { count: 0 }
+      ]);
+      renderHistogramMini('hist-client-3', [
+        { count: 25 }, { count: 45 }, { count: 120, p: 'p50' }, { count: 180 },
+        { count: 220 }, { count: 180, p: 'p95' }, { count: 120, p: 'p99' }, { count: 65 }
+      ]);
 
       // Generate mini connection pool grids
       function renderConnPoolMini(id, total, active, idle, closing) {
