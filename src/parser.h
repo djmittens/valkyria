@@ -80,6 +80,10 @@ struct valk_lenv_t {
   struct valk_lenv_t *fallback;
   // Allocator where persistent env data lives (globals/closures)
   void *allocator;
+
+  // Algebraic effects support (Phase 1)
+  valk_lval_t *cont;          // Continuation closure (what to do with result)
+  valk_lval_t *handler_stack; // Stack of effect handlers (list of handler envs)
 };
 
 struct valk_lval_t {

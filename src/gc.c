@@ -575,6 +575,14 @@ static void valk_gc_mark_env_contents(valk_lenv_t* env, valk_env_worklist_t* wl)
     }
   }
 
+  // Mark algebraic effects fields (Phase 1)
+  if (env->cont != NULL) {
+    valk_gc_mark_lval(env->cont);
+  }
+  if (env->handler_stack != NULL) {
+    valk_gc_mark_lval(env->handler_stack);
+  }
+
   // Push parent and fallback to worklist for iterative processing
   if (env->parent != NULL && !valk_gc_env_is_marked(env->parent)) {
     env_worklist_push(wl, env->parent);

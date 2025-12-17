@@ -1795,6 +1795,7 @@ valk_lenv_t* valk_lenv_empty(void) {
 }
 void valk_lenv_init(valk_lenv_t* env) {
   env->parent = nullptr;
+  env->fallback = nullptr;
   env->symbols.count = 0;
   env->symbols.capacity = 0;
   env->symbols.items = nullptr;
@@ -1803,6 +1804,9 @@ void valk_lenv_init(valk_lenv_t* env) {
   env->vals.items = nullptr;
   // capture the current allocator for persistent allocations
   env->allocator = valk_thread_ctx.allocator;
+  // Algebraic effects support (Phase 1)
+  env->cont = nullptr;
+  env->handler_stack = nullptr;
 }
 
 // Free an environment allocated with malloc allocator.
@@ -1847,7 +1851,11 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
 
   valk_lenv_t* res = valk_mem_alloc(sizeof(valk_lenv_t));
   res->parent = nullptr;  // Flattened environment has no parent
+  res->fallback = env->fallback;
   res->allocator = env->allocator;
+  // Algebraic effects support (Phase 1)
+  res->cont = env->cont;
+  res->handler_stack = env->handler_stack;
 
   // Count total bindings by walking parent chain (with value masking)
   // Use a simple linear scan - O(n*m) but environments are typically small
