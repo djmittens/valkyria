@@ -10,3 +10,8 @@ coverage-report/
 .mcp.json
 cclsp.json
 __pycache__/
+
+# Coverage temporary files (should only exist in build dirs)
+*.gcov
+*.gcda
+*.gcno

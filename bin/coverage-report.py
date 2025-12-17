@@ -279,7 +279,7 @@ def parse_gcov_files(build_dir: Path, source_root: Path, report: CoverageReport)
     for gcda_file in gcda_dir.glob("*.gcda"):
         try:
             result = subprocess.run(
-                [llvm_cov, "gcov", "-l", "-p", "-b", str(gcda_file)],
+                [llvm_cov, "gcov", "-b", "-o", str(gcda_dir), str(gcda_file)],
                 cwd=str(build_dir),
                 capture_output=True,
                 text=True
@@ -291,8 +291,10 @@ def parse_gcov_files(build_dir: Path, source_root: Path, report: CoverageReport)
         for gcov_file in build_dir.glob("*.gcov"):
             parse_gcov_output(gcov_file, report, source_root)
             gcov_file.unlink()
-
-
+    
+    for gcov_file in source_root.glob("*.gcov"):
+        gcov_file.unlink()
+    
 def parse_gcov_output(gcov_path: Path, report: CoverageReport, source_root: Path):
     """Parse a .gcov file and add to report."""
     source_file = None
@@ -1371,6 +1373,18 @@ a:hover {{
   font-style: italic;
   padding: 40px;
   text-align: center;
+}}
+.tier-section {{
+  border-left: 4px solid var(--accent);
+}}
+.tier-section h2 {{
+  font-size: 1em;
+}}
+tr.tier-pass {{
+  background: rgba(76, 175, 80, 0.1);
+}}
+tr.tier-fail {{
+  background: rgba(244, 67, 54, 0.1);
 }}
 </style>
 </head>

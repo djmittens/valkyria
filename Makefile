@@ -335,5 +335,10 @@ coverage-report:
 
 .PHONY: coverage
 coverage: export VALK_COVERAGE=1
-coverage: build-coverage coverage-tests coverage-report
+coverage: build-coverage coverage-tests coverage-report coverage-check
 	@echo "=== Coverage collection complete ==="
+
+.PHONY: coverage-check
+coverage-check:
+	@echo "=== Checking runtime coverage requirements ==="
+	@python3 bin/check-coverage.py --build-dir build-coverage
