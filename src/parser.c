@@ -3664,6 +3664,188 @@ static valk_lval_t* valk_builtin_async_resume(valk_lenv_t* e, valk_lval_t* a) {
   return value;
 }
 
+// ============================================================================
+// Algebraic Effects - Phase 2: Effect Handler Infrastructure
+// ============================================================================
+
+// Handler representation:
+// handler_stack is a list of handler sets (one per with-handler scope)
+// Each handler set is a list of (effect-op . handler-fn) pairs
+// where handler-fn is a lambda (\ (value k) body)
+
+// Find a handler for the given effect operation name
+// Searches from innermost to outermost handler set, walking up env parent chain
+// Returns the handler function or NULL if not found
+static valk_lval_t* valk_effect_find_handler(valk_lenv_t* env,
+                                             const char* effect_op) {
+  // Walk up the environment parent chain
+  valk_lenv_t* curr_env = env;
+  while (curr_env) {
+    valk_lval_t* stack = curr_env->handler_stack;
+
+    // Walk this env's handler stack (list of handler sets)
+    while (stack && !valk_lval_list_is_empty(stack)) {
+      valk_lval_t* handler_set = stack->cons.head;
+
+      // Search this handler set for the effect operation
+      valk_lval_t* curr = handler_set;
+      while (curr && !valk_lval_list_is_empty(curr)) {
+        valk_lval_t* entry = curr->cons.head;
+
+        // Each entry is (effect-op-symbol handler-fn) as a list
+        if (entry && !valk_lval_list_is_empty(entry)) {
+          valk_lval_t* op_sym = entry->cons.head;
+          if (LVAL_TYPE(op_sym) == LVAL_SYM &&
+              strcmp(op_sym->str, effect_op) == 0) {
+            // Found it - return the handler function
+            valk_lval_t* handler_fn = valk_lval_list_nth(entry, 1);
+            return handler_fn;
+          }
+        }
+
+        curr = curr->cons.tail;
+      }
+
+      stack = stack->cons.tail;
+    }
+
+    // Move to parent environment
+    curr_env = curr_env->parent;
+  }
+
+  return NULL;  // No handler found
+}
+
+// Parse handler definitions from syntax to internal representation
+// Input: {(Effect/op (formals...) body) ...}
+// Output: list of (effect-op-symbol lambda) pairs
+static valk_lval_t* valk_effect_parse_handlers(valk_lenv_t* env,
+                                               valk_lval_t* handlers) {
+  if (valk_lval_list_is_empty(handlers)) {
+    return valk_lval_nil();
+  }
+
+  // Convert QEXPR to CONS if needed
+  if (LVAL_TYPE(handlers) == LVAL_QEXPR) {
+    handlers = valk_qexpr_to_cons(handlers);
+  }
+
+  // Build the handler set
+  valk_lval_t* result = valk_lval_nil();
+  valk_lval_t* curr = handlers;
+
+  while (!valk_lval_list_is_empty(curr)) {
+    valk_lval_t* handler_def = curr->cons.head;
+
+    // Convert QEXPR to CONS if needed
+    if (LVAL_TYPE(handler_def) == LVAL_QEXPR) {
+      handler_def = valk_qexpr_to_cons(handler_def);
+    }
+
+    // Validate: should be (Effect/op (formals...) body)
+    size_t def_len = valk_lval_list_count(handler_def);
+    if (def_len < 3) {
+      return valk_lval_err(
+          "Handler definition must be (Effect/op (formals...) body), got %zu elements",
+          def_len);
+    }
+
+    valk_lval_t* effect_op = valk_lval_list_nth(handler_def, 0);
+    valk_lval_t* formals = valk_lval_list_nth(handler_def, 1);
+    valk_lval_t* body = valk_lval_list_nth(handler_def, 2);
+
+    if (LVAL_TYPE(effect_op) != LVAL_SYM) {
+      return valk_lval_err("Handler effect operation must be a symbol");
+    }
+
+    // Create a lambda from the formals and body
+    // (\ (formals...) body)
+    valk_lval_t* handler_fn = valk_lval_lambda(env, formals, body);
+
+    // Create the entry: (effect-op handler-fn)
+    valk_lval_t* entry = valk_lval_cons(
+        effect_op,
+        valk_lval_cons(handler_fn, valk_lval_nil()));
+
+    // Prepend to result (will be reversed order, but that's fine for lookup)
+    result = valk_lval_cons(entry, result);
+
+    curr = curr->cons.tail;
+  }
+
+  return result;
+}
+
+// (with-handler handlers body) - Install effect handlers for body evaluation
+// handlers: {(Effect/op (value k) handler-body) ...}
+// body: expression to evaluate with handlers active
+static valk_lval_t* valk_builtin_with_handler(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+
+  valk_lval_t* handlers = valk_lval_list_nth(a, 0);
+  valk_lval_t* body = valk_lval_list_nth(a, 1);
+
+  // Parse handler definitions into handler set
+  valk_lval_t* handler_set = valk_effect_parse_handlers(e, handlers);
+  if (LVAL_TYPE(handler_set) == LVAL_ERR) {
+    return handler_set;
+  }
+
+  // Create new environment with updated handler stack
+  valk_lenv_t* handler_env = valk_lenv_empty();
+  handler_env->parent = e;
+  handler_env->fallback = e->fallback;
+
+  // Push handler set onto stack (innermost first)
+  handler_env->handler_stack = valk_lval_cons(handler_set, e->handler_stack);
+
+  // Evaluate body with handlers installed
+  // Convert QEXPR to CONS if needed
+  if (LVAL_TYPE(body) == LVAL_QEXPR) {
+    body = valk_qexpr_to_cons(body);
+  }
+
+  valk_lval_t* result = valk_lval_eval(handler_env, body);
+
+  // Handler stack is automatically popped when we return
+  // (handler_env goes out of scope, handler_stack is not propagated back)
+
+  return result;
+}
+
+// (find-handler effect-op) - Look up a handler for debugging/testing
+// Returns the handler function or nil if not found
+// Accepts either a symbol or a quoted symbol (QEXPR containing a symbol)
+static valk_lval_t* valk_builtin_find_handler(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+
+  valk_lval_t* effect_op = valk_lval_list_nth(a, 0);
+
+  // Handle quoted symbols (QEXPR containing a single symbol)
+  if (LVAL_TYPE(effect_op) == LVAL_QEXPR) {
+    if (valk_lval_list_count(effect_op) == 1) {
+      effect_op = effect_op->cons.head;
+    }
+  }
+
+  LVAL_ASSERT_TYPE(a, effect_op, LVAL_SYM);
+
+  valk_lval_t* handler = valk_effect_find_handler(e, effect_op->str);
+  if (handler == NULL) {
+    return valk_lval_nil();
+  }
+  return handler;
+}
+
+// (handler-stack) - Return the current handler stack for debugging
+static valk_lval_t* valk_builtin_handler_stack(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(a);
+  if (e->handler_stack == NULL) {
+    return valk_lval_nil();
+  }
+  return e->handler_stack;
+}
+
 // http2/connect-async: Async HTTP/2 connect using continuations
 // (http2/connect-async aio host port cont) - calls cont when connected
 static valk_lval_t* valk_builtin_http2_connect_async(valk_lenv_t* e,
@@ -4834,6 +5016,11 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "http2/connect-async",
                         valk_builtin_http2_connect_async);
   valk_lenv_put_builtin(env, "http2/send-async", valk_builtin_http2_send_async);
+
+  // Algebraic Effects - Phase 2
+  valk_lenv_put_builtin(env, "with-handler", valk_builtin_with_handler);
+  valk_lenv_put_builtin(env, "find-handler", valk_builtin_find_handler);
+  valk_lenv_put_builtin(env, "handler-stack", valk_builtin_handler_stack);
 
   // HTTP/2 utility functions (kept for request/response handling)
   valk_lenv_put_builtin(env, "http2/request", valk_builtin_http2_request);

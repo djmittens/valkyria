@@ -211,6 +211,10 @@ add_executable(test_continuations test/test_continuations.c test/testing.c)
 target_link_libraries(test_continuations PRIVATE "-lc" valkyria)
 include_directories(test_continuations src/)
 
+add_executable(test_effects test/test_effects.c test/testing.c)
+target_link_libraries(test_effects PRIVATE "-lc" valkyria)
+include_directories(test_effects src/)
+
 add_executable(test_per_stream_arena test/test_per_stream_arena.c test/testing.c)
 target_link_libraries(test_per_stream_arena PRIVATE "-lc" valkyria)
 include_directories(test_per_stream_arena src/)
