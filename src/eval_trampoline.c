@@ -14,6 +14,24 @@
 
 static bool g_trampoline_eval_enabled = false;
 
+// ============================================================================
+// Thread-Local Current Stack (for perform/resume)
+// ============================================================================
+
+// Thread-local pointer to the current eval stack.
+// This allows `perform` (called as a builtin) to capture the stack.
+static __thread valk_eval_stack_t *g_current_eval_stack = NULL;
+
+// Get the current eval stack (for perform to capture)
+valk_eval_stack_t *valk_eval_get_current_stack(void) {
+  return g_current_eval_stack;
+}
+
+// Set the current eval stack (called by trampoline)
+static void set_current_eval_stack(valk_eval_stack_t *stack) {
+  g_current_eval_stack = stack;
+}
+
 bool valk_trampoline_eval_enabled(void) {
   return g_trampoline_eval_enabled;
 }
@@ -676,6 +694,10 @@ valk_lval_t *valk_eval_trampoline(valk_lenv_t *env, valk_lval_t *expr) {
   valk_eval_stack_t stack;
   valk_eval_stack_init(&stack);
 
+  // Save and set current stack for perform/resume access
+  valk_eval_stack_t *prev_stack = g_current_eval_stack;
+  set_current_eval_stack(&stack);
+
   // Initial frame: evaluate the expression
   valk_eval_stack_push(&stack, (valk_eval_frame_t){
     .type = FRAME_EVAL,
@@ -725,17 +747,23 @@ valk_lval_t *valk_eval_trampoline(valk_lenv_t *env, valk_lval_t *expr) {
 
     // Check for errors - propagate immediately
     if (value && LVAL_TYPE(value) == LVAL_ERR) {
+      set_current_eval_stack(prev_stack);
       valk_eval_stack_free(&stack);
       return value;
     }
   }
 
+  set_current_eval_stack(prev_stack);
   valk_eval_stack_free(&stack);
   return value ? value : valk_lval_nil();
 }
 
 valk_lval_t *valk_eval_trampoline_with_stack(valk_eval_stack_t *stack,
                                               valk_lval_t *initial_value) {
+  // Save and set current stack for nested perform/resume access
+  valk_eval_stack_t *prev_stack = g_current_eval_stack;
+  set_current_eval_stack(stack);
+
   valk_lval_t *value = initial_value;
 
   while (!valk_eval_stack_empty(stack)) {
@@ -776,10 +804,12 @@ valk_lval_t *valk_eval_trampoline_with_stack(valk_eval_stack_t *stack,
     }
 
     if (value && LVAL_TYPE(value) == LVAL_ERR) {
+      set_current_eval_stack(prev_stack);
       return value;
     }
   }
 
+  set_current_eval_stack(prev_stack);
   return value ? value : valk_lval_nil();
 }
 

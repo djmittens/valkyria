@@ -174,3 +174,11 @@ bool valk_trampoline_eval_enabled(void);
 
 // Enable/disable trampoline eval at runtime (for testing)
 void valk_trampoline_eval_set_enabled(bool enabled);
+
+// ============================================================================
+// Current Stack Access (for perform/resume)
+// ============================================================================
+
+// Get the current eval stack (for perform to capture continuation)
+// Returns NULL if not currently in trampoline eval
+valk_eval_stack_t *valk_eval_get_current_stack(void);

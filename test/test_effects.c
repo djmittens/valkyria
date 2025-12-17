@@ -323,6 +323,183 @@ void test_gc_preserves_handler_stack(VALK_TEST_ARGS()) {
 }
 
 // ============================================================================
+// Phase 3 Tests: Perform and Resume
+// ============================================================================
+
+void test_perform_calls_handler(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  // Handler that returns the value it receives
+  // Note: Effect name must be quoted since perform evaluates its arguments
+  const char *code =
+    "(with-handler "
+    "  {(MyEffect/op {value k} value)} "
+    "  {(perform 'MyEffect/op 42)})";
+
+  valk_lval_t *result = eval_str(code);
+
+  VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR,
+                   "perform should not error: %s",
+                   LVAL_TYPE(result) == LVAL_ERR ? result->str : "");
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM && result->num == 42,
+                   "Handler should receive the value passed to perform");
+
+  teardown_test_env();
+  VALK_PASS();
+}
+
+void test_perform_passes_value_to_handler(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  // Handler that transforms the value
+  const char *code =
+    "(with-handler "
+    "  {(MyEffect/op {value k} (+ value 10))} "
+    "  {(perform 'MyEffect/op 5)})";
+
+  valk_lval_t *result = eval_str(code);
+
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM && result->num == 15,
+                   "Handler should be able to transform the value");
+
+  teardown_test_env();
+  VALK_PASS();
+}
+
+void test_perform_passes_continuation_to_handler(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  // Handler that verifies the continuation can be called with resume
+  // If k isn't a continuation, resume will error
+  const char *code =
+    "(with-handler "
+    "  {(MyEffect/op {value k} (resume k 999))} "
+    "  {(perform 'MyEffect/op 42)})";
+
+  valk_lval_t *result = eval_str(code);
+
+  // If we get here without error and result is 999, k was a valid continuation
+  VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR,
+                   "resume should work with continuation: %s",
+                   LVAL_TYPE(result) == LVAL_ERR ? result->str : "");
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM && result->num == 999,
+                   "continuation should receive the resumed value");
+
+  teardown_test_env();
+  VALK_PASS();
+}
+
+void test_resume_continues_execution(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  // Handler that resumes with the same value
+  const char *code =
+    "(with-handler "
+    "  {(MyEffect/op {value k} (resume k value))} "
+    "  {(+ 1 (perform 'MyEffect/op 10))})";
+
+  valk_lval_t *result = eval_str(code);
+
+  // The continuation captures "(+ 1 <hole>)" so resuming with 10 gives 11
+  VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR,
+                   "resume should not error: %s",
+                   LVAL_TYPE(result) == LVAL_ERR ? result->str : "");
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM && result->num == 11,
+                   "resume should continue with (+ 1 10) = 11, got %ld",
+                   LVAL_TYPE(result) == LVAL_NUM ? result->num : -1);
+
+  teardown_test_env();
+  VALK_PASS();
+}
+
+void test_resume_with_value(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  // Handler that resumes with a different value
+  const char *code =
+    "(with-handler "
+    "  {(MyEffect/op {value k} (resume k (* value 2)))} "
+    "  {(+ 1 (perform 'MyEffect/op 10))})";
+
+  valk_lval_t *result = eval_str(code);
+
+  // Resume with 20 (10*2), so result is 1 + 20 = 21
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM && result->num == 21,
+                   "resume should continue with modified value, got %ld",
+                   LVAL_TYPE(result) == LVAL_NUM ? result->num : -1);
+
+  teardown_test_env();
+  VALK_PASS();
+}
+
+void test_unhandled_effect_errors(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  // Perform without a handler should error
+  const char *code = "(perform 'NonExistent/op 42)";
+
+  valk_lval_t *result = eval_str(code);
+
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR,
+                   "Unhandled effect should return an error");
+
+  teardown_test_env();
+  VALK_PASS();
+}
+
+void test_nested_performs(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  // Handler that resumes, and the body performs twice
+  const char *code =
+    "(with-handler "
+    "  {(MyEffect/op {value k} (resume k (+ value 1)))} "
+    "  {(+ (perform 'MyEffect/op 10) (perform 'MyEffect/op 20))})";
+
+  valk_lval_t *result = eval_str(code);
+
+  // First perform: 10+1=11, second perform: 20+1=21, total: 11+21=32
+  VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR,
+                   "nested performs should not error: %s",
+                   LVAL_TYPE(result) == LVAL_ERR ? result->str : "");
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM && result->num == 32,
+                   "nested performs should work correctly, got %ld",
+                   LVAL_TYPE(result) == LVAL_NUM ? result->num : -1);
+
+  teardown_test_env();
+  VALK_PASS();
+}
+
+void test_one_shot_continuation_enforcement(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  // Try to resume the same continuation twice - should error on second resume
+  const char *code =
+    "(with-handler "
+    "  {(MyEffect/op {value k} "
+    "    (do "
+    "      (def {result1} (resume k 1)) "  // First resume - should work
+    "      (resume k 2)))} "                // Second resume - should error
+    "  {(perform 'MyEffect/op 0)})";
+
+  valk_lval_t *result = eval_str(code);
+
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR,
+                   "Second resume should error (one-shot enforcement)");
+
+  teardown_test_env();
+  VALK_PASS();
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -371,6 +548,24 @@ int main(int argc, const char **argv) {
   // GC integration
   valk_testsuite_add_test(suite, "test_gc_preserves_handler_stack",
                           test_gc_preserves_handler_stack);
+
+  // Phase 3: Perform and Resume
+  valk_testsuite_add_test(suite, "test_perform_calls_handler",
+                          test_perform_calls_handler);
+  valk_testsuite_add_test(suite, "test_perform_passes_value_to_handler",
+                          test_perform_passes_value_to_handler);
+  valk_testsuite_add_test(suite, "test_perform_passes_continuation_to_handler",
+                          test_perform_passes_continuation_to_handler);
+  valk_testsuite_add_test(suite, "test_resume_continues_execution",
+                          test_resume_continues_execution);
+  valk_testsuite_add_test(suite, "test_resume_with_value",
+                          test_resume_with_value);
+  valk_testsuite_add_test(suite, "test_unhandled_effect_errors",
+                          test_unhandled_effect_errors);
+  valk_testsuite_add_test(suite, "test_nested_performs",
+                          test_nested_performs);
+  valk_testsuite_add_test(suite, "test_one_shot_continuation_enforcement",
+                          test_one_shot_continuation_enforcement);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

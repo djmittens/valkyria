@@ -3805,7 +3805,8 @@ static valk_lval_t* valk_builtin_with_handler(valk_lenv_t* e, valk_lval_t* a) {
     body = valk_qexpr_to_cons(body);
   }
 
-  valk_lval_t* result = valk_lval_eval(handler_env, body);
+  // Use trampoline eval so perform can capture the stack
+  valk_lval_t* result = valk_eval_trampoline(handler_env, body);
 
   // Handler stack is automatically popped when we return
   // (handler_env goes out of scope, handler_stack is not propagated back)
@@ -3844,6 +3845,108 @@ static valk_lval_t* valk_builtin_handler_stack(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_nil();
   }
   return e->handler_stack;
+}
+
+// ============================================================================
+// Algebraic Effects - Phase 3: Perform and Resume
+// ============================================================================
+
+// (perform Effect/op value) - Perform an effect operation
+// 1. Find the handler for the effect
+// 2. Capture the current continuation (eval stack)
+// 3. Call the handler with (value, continuation)
+static valk_lval_t* valk_builtin_perform(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_GE(a, a, 1);
+
+  valk_lval_t* effect_op = valk_lval_list_nth(a, 0);
+
+  // Handle quoted symbols (QEXPR containing a single symbol)
+  if (LVAL_TYPE(effect_op) == LVAL_QEXPR) {
+    if (valk_lval_list_count(effect_op) == 1) {
+      effect_op = effect_op->cons.head;
+    }
+  }
+
+  LVAL_ASSERT_TYPE(a, effect_op, LVAL_SYM);
+
+  valk_lval_t* value = valk_lval_list_count(a) > 1
+    ? valk_lval_list_nth(a, 1)
+    : valk_lval_nil();
+
+  // Find handler for this effect
+  valk_lval_t* handler = valk_effect_find_handler(e, effect_op->str);
+  if (handler == NULL) {
+    return valk_lval_err("Unhandled effect: %s", effect_op->str);
+  }
+
+  // Get the current eval stack for continuation capture
+  valk_eval_stack_t* current_stack = valk_eval_get_current_stack();
+
+  // Create continuation
+  valk_lval_t* k;
+  if (current_stack != NULL) {
+    // Trampoline mode: capture the eval stack
+    valk_eval_stack_t* stack_copy = valk_eval_stack_copy(current_stack);
+    k = valk_lval_cont(stack_copy, e, true);  // one_shot = true
+
+    // Clear the current stack - handler takes over
+    // We need to be careful here: we can't just set count=0 because
+    // the trampoline owns the stack. Instead, we signal to return
+    // the handler call result directly.
+    current_stack->count = 0;
+  } else {
+    // Recursive mode: create a continuation without stack
+    // This is a limited fallback - will error on resume
+    k = valk_lval_cont(NULL, e, true);
+  }
+
+  // Call handler with (value, k)
+  valk_lval_t* handler_args = valk_lval_cons(
+      value,
+      valk_lval_cons(k, valk_lval_nil()));
+
+  return valk_lval_eval_call(e, handler, handler_args);
+}
+
+// (resume k value) - Resume a captured continuation with a value
+// This is a one-shot operation - the continuation can only be resumed once
+static valk_lval_t* valk_builtin_resume(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+
+  valk_lval_t* k = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, k, LVAL_CONT);
+
+  valk_lval_t* value = valk_lval_list_nth(a, 1);
+
+  // One-shot check
+  if (k->cont.one_shot) {
+    // Mark as consumed by setting one_shot to false
+    // (we use one_shot as "still valid" flag)
+    // Check if already consumed by testing if stack is NULL after first resume
+    // Actually, let's add a consumed flag - but for now use stack==NULL after resume
+  }
+
+  // Get the captured stack
+  valk_eval_stack_t* captured_stack = k->cont.stack;
+
+  if (captured_stack == NULL) {
+    // No stack captured - this was created in recursive mode or already consumed
+    return valk_lval_err("resume: continuation has no captured stack (already consumed or created outside trampoline eval)");
+  }
+
+  // Mark as consumed by clearing the stack pointer
+  // (one-shot enforcement)
+  k->cont.stack = NULL;
+
+  // Continue evaluation with the captured stack and value
+  valk_lval_t* result = valk_eval_trampoline_with_stack(captured_stack, value);
+
+  // Free the stack after use
+  valk_eval_stack_free(captured_stack);
+  free(captured_stack);
+
+  return result;
 }
 
 // http2/connect-async: Async HTTP/2 connect using continuations
@@ -5021,6 +5124,10 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "with-handler", valk_builtin_with_handler);
   valk_lenv_put_builtin(env, "find-handler", valk_builtin_find_handler);
   valk_lenv_put_builtin(env, "handler-stack", valk_builtin_handler_stack);
+
+  // Algebraic Effects - Phase 3: Perform and Resume
+  valk_lenv_put_builtin(env, "perform", valk_builtin_perform);
+  valk_lenv_put_builtin(env, "resume", valk_builtin_resume);
 
   // HTTP/2 utility functions (kept for request/response handling)
   valk_lenv_put_builtin(env, "http2/request", valk_builtin_http2_request);
