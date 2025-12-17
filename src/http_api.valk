@@ -57,7 +57,7 @@
 
 ; Check if response is success (2xx)
 (fun {http2/response-ok? resp} {
-  (= {status} (http2/response-status resp))
+  (= {status} (str->num (http2/response-status resp)))
   (if (>= status 200)
     {(< status 300)}
     {0})
@@ -197,10 +197,10 @@
 ; Validate response status
 (fun {http2/validate-status expected-status} {
   (\ {resp} {
-    (= {status} (http2/response-status resp))
+    (= {status} (str->num (http2/response-status resp)))
     (if (== status expected-status)
       {resp}
-      {(error "Unexpected status:" status)})
+      {(error (str "Unexpected status: " status))})
   })
 })
 

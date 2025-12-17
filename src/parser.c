@@ -2445,6 +2445,27 @@ static valk_lval_t* valk_builtin_le(valk_lenv_t* e, valk_lval_t* a) {
   return valk_builtin_ord(e, valk_lval_cons(valk_lval_sym("<="), a));
 }
 
+// str->num: (str->num str) -> number
+// Converts a string to a number. Returns error if string is not a valid number.
+static valk_lval_t* valk_builtin_str_to_num(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  const char* str = valk_lval_list_nth(a, 0)->str;
+  char* endptr;
+  errno = 0;
+  long num = strtol(str, &endptr, 10);
+
+  if (errno == ERANGE) {
+    return valk_lval_err("Number out of range: %s", str);
+  }
+  if (*endptr != '\0') {
+    return valk_lval_err("Invalid number: %s", str);
+  }
+  return valk_lval_num(num);
+}
+
 static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
@@ -3805,6 +3826,99 @@ static valk_lval_t* valk_builtin_http2_response_headers(valk_lenv_t* e,
   return lst;
 }
 
+// Helper to free mock response
+static void __valk_mock_response_free(void* ptr) {
+  valk_http2_response_t* resp = (valk_http2_response_t*)ptr;
+  if (resp) {
+    free((void*)resp->status);
+    free((void*)resp->body);
+    for (size_t i = 0; i < resp->headers.count; i++) {
+      free((void*)resp->headers.items[i].name);
+      free((void*)resp->headers.items[i].value);
+    }
+    free(resp->headers.items);
+    free(resp);
+  }
+}
+
+// http2/mock-response: (http2/mock-response status body) -> response
+// http2/mock-response: (http2/mock-response status body headers) -> response
+// Creates a mock HTTP response for testing purposes.
+// Status should be a string like "200", body is the response body string.
+// Headers is an optional list of (name value) pairs.
+static valk_lval_t* valk_builtin_http2_mock_response(valk_lenv_t* e,
+                                                      valk_lval_t* a) {
+  UNUSED(e);
+  size_t argc = valk_lval_list_count(a);
+  LVAL_ASSERT(a, argc >= 2 && argc <= 3,
+              "http2/mock-response expects 2 or 3 arguments (status body [headers])");
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);  // status
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);  // body
+
+  const char* status_str = valk_lval_list_nth(a, 0)->str;
+  const char* body_str = valk_lval_list_nth(a, 1)->str;
+  size_t body_len = strlen(body_str);
+
+  // Allocate response struct with malloc so it can be freed independently
+  valk_http2_response_t* resp = malloc(sizeof(valk_http2_response_t));
+  memset(resp, 0, sizeof(*resp));
+
+  // Copy status
+  size_t status_len = strlen(status_str);
+  resp->status = malloc(status_len + 1);
+  memcpy((void*)resp->status, status_str, status_len + 1);
+
+  // Copy body
+  resp->body = malloc(body_len + 1);
+  memcpy(resp->body, body_str, body_len);
+  resp->body[body_len] = '\0';
+  resp->bodyLen = body_len;
+
+  // Set flags
+  resp->headersReceived = true;
+  resp->bodyReceived = true;
+
+  // Parse optional headers - works with both CONS and QEXPR lists
+  if (argc == 3) {
+    valk_lval_t* headers = valk_lval_list_nth(a, 2);
+    // Headers can be a list or nil
+    if (LVAL_TYPE(headers) != LVAL_NIL) {
+      size_t header_count = valk_lval_list_count(headers);
+
+      if (header_count > 0) {
+        resp->headers.items = malloc(header_count * sizeof(struct valk_http2_header_t));
+        resp->headers.capacity = header_count;
+        resp->headers.count = 0;
+
+        for (size_t i = 0; i < header_count; i++) {
+          valk_lval_t* pair = valk_lval_list_nth(headers, i);
+          size_t pair_len = valk_lval_list_count(pair);
+          if (pair_len >= 2) {
+            valk_lval_t* name_val = valk_lval_list_nth(pair, 0);
+            valk_lval_t* value_val = valk_lval_list_nth(pair, 1);
+            if (LVAL_TYPE(name_val) == LVAL_STR && LVAL_TYPE(value_val) == LVAL_STR) {
+              size_t nlen = strlen(name_val->str);
+              size_t vlen = strlen(value_val->str);
+              uint8_t* n = malloc(nlen + 1);
+              uint8_t* v = malloc(vlen + 1);
+              memcpy(n, name_val->str, nlen + 1);
+              memcpy(v, value_val->str, vlen + 1);
+              resp->headers.items[resp->headers.count].name = n;
+              resp->headers.items[resp->headers.count].value = v;
+              resp->headers.items[resp->headers.count].nameLen = nlen;
+              resp->headers.items[resp->headers.count].valueLen = vlen;
+              resp->headers.count++;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Create ref with type "success" which is what response handlers expect
+  return valk_lval_ref("success", resp, __valk_mock_response_free);
+}
+
 // ============================================================================
 // ASYNC I/O SYSTEM BUILTINS
 // ============================================================================
@@ -4595,6 +4709,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "<=", valk_builtin_le);
   valk_lenv_put_builtin(env, "==", valk_builtin_eq);
   valk_lenv_put_builtin(env, "!=", valk_builtin_ne);
+  valk_lenv_put_builtin(env, "str->num", valk_builtin_str_to_num);
 
   // Async - Continuation-based only (futures removed)
   valk_lenv_put_builtin(env, "async-shift", valk_builtin_async_shift);
@@ -4617,6 +4732,8 @@ void valk_lenv_builtins(valk_lenv_t* env) {
                         valk_builtin_http2_response_status);
   valk_lenv_put_builtin(env, "http2/response-headers",
                         valk_builtin_http2_response_headers);
+  valk_lenv_put_builtin(env, "http2/mock-response",
+                        valk_builtin_http2_mock_response);
 
   // Async I/O System
   valk_lenv_put_builtin(env, "aio/start", valk_builtin_aio_start);

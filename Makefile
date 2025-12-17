@@ -164,6 +164,7 @@ define run_tests_valk
 	$(1)/valk test/test_gc_suite.valk
 	$(1)/valk test/test_crash_regressions.valk
 	$(1)/valk test/test_http_minimal.valk
+	$(1)/valk test/test_http_integration.valk
 	$(1)/valk test/test_checkpoint.valk
 	$(1)/valk test/test_integration.valk
 	$(1)/valk test/test_quasiquote.valk

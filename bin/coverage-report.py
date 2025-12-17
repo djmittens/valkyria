@@ -1004,12 +1004,23 @@ td {{
   background: rgba(255, 235, 59, 0.3) !important;
 }}
 tr.selected {{
-  outline: 2px solid #64b5f6;
-  outline-offset: -2px;
+  background: rgba(100, 181, 246, 0.15) !important;
 }}
 tr.selected .line-no {{
-  background: #64b5f6 !important;
-  color: #000 !important;
+  background: #3a6a9e !important;
+  color: #fff !important;
+}}
+tr.selected .line-no a {{
+  color: #fff !important;
+}}
+tr.selection-start {{
+  box-shadow: inset 0 2px 0 0 #64b5f6;
+}}
+tr.selection-end {{
+  box-shadow: inset 0 -2px 0 0 #64b5f6;
+}}
+tr.selection-start.selection-end {{
+  box-shadow: inset 0 2px 0 0 #64b5f6, inset 0 -2px 0 0 #64b5f6;
 }}
 .syn-keyword {{
   color: #c792ea;
@@ -1083,15 +1094,19 @@ tr.selected .line-no {{
   }}
   
   function clearSelection() {{
-    rows.forEach(r => r.classList.remove('selected'));
+    rows.forEach(r => r.classList.remove('selected', 'selection-start', 'selection-end'));
   }}
-  
+
   function selectRange(start, end) {{
     const min = Math.min(start, end);
     const max = Math.max(start, end);
     rows.forEach(r => {{
       const n = getLineNum(r);
-      if (n >= min && n <= max) r.classList.add('selected');
+      if (n >= min && n <= max) {{
+        r.classList.add('selected');
+        if (n === min) r.classList.add('selection-start');
+        if (n === max) r.classList.add('selection-end');
+      }}
     }});
     history.replaceState(null, '', '#L' + min + (min !== max ? '-L' + max : ''));
   }}
@@ -1122,7 +1137,7 @@ tr.selected .line-no {{
         selectRange(lastClickedLine, lineNum);
       }} else {{
         clearSelection();
-        row.classList.add('selected');
+        row.classList.add('selected', 'selection-start', 'selection-end');
         lastClickedLine = lineNum;
         history.replaceState(null, '', '#L' + lineNum);
       }}
