@@ -3,7 +3,6 @@
 #include "memory.h"
 #include "log.h"
 #include "aio.h"  // For valk_async_handle_t
-#include "eval_trampoline.h"  // For valk_gc_mark_eval_stack
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -482,16 +481,6 @@ static void valk_gc_mark_lval_single(valk_lval_t* v, valk_lval_worklist_t* wl) {
       valk_gc_mark_env(&v->env);
       break;
 
-    case LVAL_CONT:
-      // Mark continuation's captured eval stack and environment
-      if (v->cont.stack != NULL) {
-        valk_gc_mark_eval_stack(v->cont.stack);
-      }
-      if (v->cont.env != NULL) {
-        valk_gc_mark_env(v->cont.env);
-      }
-      break;
-
     case LVAL_UNDEFINED:
     case LVAL_FORWARD:
       // Forwarding pointers should not exist during GC marking
@@ -573,14 +562,6 @@ static void valk_gc_mark_env_contents(valk_lenv_t* env, valk_env_worklist_t* wl)
     if (env->symbols.items[i] != NULL) {
       valk_gc_mark_allocation(env->symbols.items[i]);
     }
-  }
-
-  // Mark algebraic effects fields (Phase 1)
-  if (env->cont != NULL) {
-    valk_gc_mark_lval(env->cont);
-  }
-  if (env->handler_stack != NULL) {
-    valk_gc_mark_lval(env->handler_stack);
   }
 
   // Push parent and fallback to worklist for iterative processing
@@ -715,13 +696,6 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap, size_t* out_free
             // ref.type is strdup'd (raw malloc)
             if (obj->ref.type != NULL) {
               free(obj->ref.type);
-            }
-            break;
-          case LVAL_CONT:
-            // Continuations own their captured eval stack (malloc'd)
-            if (obj->cont.stack != NULL) {
-              valk_eval_stack_free(obj->cont.stack);
-              free(obj->cont.stack);
             }
             break;
           default:
@@ -1655,7 +1629,7 @@ void valk_gc_add_to_objects(valk_gc_malloc_heap_t* heap, valk_lval_t* v) {
 }
 
 // ============================================================================
-// External GC marking functions (for eval_trampoline.c)
+// External GC marking functions
 // ============================================================================
 
 // Mark an lval and all its children (wrapper around internal function)

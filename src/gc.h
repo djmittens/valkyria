@@ -174,7 +174,7 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
 void valk_gc_add_to_objects(valk_gc_malloc_heap_t* heap, valk_lval_t* v);
 
 // ============================================================================
-// External GC marking functions (for eval_trampoline.c)
+// External GC marking functions
 // ============================================================================
 
 // Mark an lval and all its children

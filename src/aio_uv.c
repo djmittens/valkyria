@@ -4439,6 +4439,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   signal(SIGPIPE, SIG_IGN);
 
   valk_aio_system_t *sys = valk_mem_alloc(sizeof(valk_aio_system_t));
+  memset(sys, 0, sizeof(valk_aio_system_t));  // Zero-initialize all fields
   sys->config = resolved;  // Store resolved configuration
   snprintf(sys->name, sizeof(sys->name), "main");  // Default system name
   global_aio_system = sys;  // Store singleton reference
@@ -4599,16 +4600,13 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
     valk_aio_active_system = NULL;
   }
 
-  // Mark as cleaned up (but don't free sys - that happens via normal cleanup)
+  // Mark as cleaned up and free the system struct
   sys->cleanedUp = true;
+  free(sys);
 }
 
 void valk_aio_stop(valk_aio_system_t *sys) {
-  // If cleanup was already done (by valk_aio_wait_for_shutdown), just free sys
-  if (sys->cleanedUp) {
-    free(sys);
-    return;
-  }
+  if (!sys) return;
 
   // Check if already shutting down (avoid double shutdown)
   if (sys->shuttingDown) {

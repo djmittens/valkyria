@@ -35,7 +35,6 @@ struct valk_lenv_t;
 typedef struct valk_lenv_t valk_lenv_t;
 typedef struct valk_lval_t valk_lval_t;
 typedef struct valk_async_handle_t valk_async_handle_t;  // Async handle (defined in aio_uv.c)
-typedef struct valk_eval_stack_t valk_eval_stack_t;      // Eval stack (defined in eval_trampoline.h)
 valk_lval_t *valk_parse_file(const char *filename);
 
 typedef enum {
@@ -50,7 +49,6 @@ typedef enum {
   LVAL_QEXPR,  // Cons cell - Q-expression (quoted data, not code)
   LVAL_ERR,
   LVAL_ENV,
-  LVAL_CONT,     // Continuation (for async/await)
   LVAL_HANDLE,   // Async operation handle (cancellable promise)
   LVAL_FORWARD,  // Forwarding pointer - only valid during scratch evacuation
 } valk_ltype_e;
@@ -80,10 +78,6 @@ struct valk_lenv_t {
   struct valk_lenv_t *fallback;
   // Allocator where persistent env data lives (globals/closures)
   void *allocator;
-
-  // Algebraic effects support (Phase 1)
-  valk_lval_t *cont;          // Continuation closure (what to do with result)
-  valk_lval_t *handler_stack; // Stack of effect handlers (list of handler envs)
 };
 
 struct valk_lval_t {
@@ -117,11 +111,6 @@ struct valk_lval_t {
       void *ptr;
       void (*free)(void *);
     } ref;
-    struct {
-      struct valk_eval_stack_t *stack;  // Captured eval stack (for delimited continuations)
-      valk_lenv_t *env;                 // Captured environment
-      bool one_shot;                    // True if continuation can only be resumed once
-    } cont;  // Continuation for algebraic effects
     struct {
       valk_async_handle_t *handle;  // Pointer to the async handle struct
     } async;  // LVAL_HANDLE - async operation handle
@@ -158,9 +147,6 @@ valk_lval_t *valk_lval_tail(valk_lval_t *cons);                     // Get tail 
 
 // Async handle constructor (implemented in aio_uv.c)
 valk_lval_t *valk_lval_handle(valk_async_handle_t *handle);
-
-// Continuation constructor (for algebraic effects)
-valk_lval_t *valk_lval_cont(valk_eval_stack_t *stack, valk_lenv_t *env, bool one_shot);
 
 //// END Constructors ////
 

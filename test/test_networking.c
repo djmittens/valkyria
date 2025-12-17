@@ -153,8 +153,9 @@ void test_tcp_client_disconnect(VALK_TEST_ARGS()) {
   valk_arc_box *res = valk_future_await(valk_aio_http2_listen(
       sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL));
   valk_arc_release(res);
-  VALK_PASS();
   valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+  VALK_PASS();
 }
 
 // Test: Lisp handler returning a 50MB response
@@ -241,6 +242,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
     valk_arc_release(server);
     valk_arc_release(fserv);
     valk_aio_stop(sys);
+    valk_aio_wait_for_shutdown(sys);
     return;
   }
   printf("[test] Server started\n");
@@ -257,6 +259,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
     valk_arc_release(server);
     valk_arc_release(fserv);
     valk_aio_stop(sys);
+    valk_aio_wait_for_shutdown(sys);
     return;
   }
 
@@ -295,6 +298,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
     valk_arc_release(server);
     valk_arc_release(fserv);
     valk_aio_stop(sys);
+    valk_aio_wait_for_shutdown(sys);
     return;
   }
 
@@ -324,6 +328,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   valk_arc_release(fserv);
 
   valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
 
   // Cleanup GC heap
   valk_gc_malloc_set_root(gc_heap, NULL);

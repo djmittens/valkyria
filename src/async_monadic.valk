@@ -268,18 +268,19 @@
   })
 })
 
-; === Utility for Integration with async-reset/async-shift ===
+; === Synchronous Execution ===
 
-; async/run: Execute an async operation synchronously
+; async/run: Execute a PURE async operation synchronously
 ; Type: Async a -> a
-; NOTE: This only works for PURE async operations (async/pure, async/bind chains
-; that don't involve I/O). For I/O operations, the continuation primitives are
-; mocked and cannot actually block until the I/O completes.
-; TODO(networking): Implement proper delimited continuations to support I/O
+; NOTE: This only works for pure async operations (async/pure, async/bind chains
+; that don't involve actual I/O). For I/O operations, use aio/run which runs
+; the event loop.
+; Implementation: Pass a continuation that sets a captured result variable.
 (fun {async/run async-op} {
-  (async-reset {
-    (async-shift {k} {(async-op k)})
-  })
+  do
+  (def {*async-run-result*} nil)
+  (async-op (\ {x} {(def {*async-run-result*} x)}))
+  *async-run-result*
 })
 
 ; === Higher-Level Patterns ===

@@ -13,7 +13,6 @@
 #include "collections.h"
 #include "common.h"
 #include "coverage.h"
-#include "eval_trampoline.h"
 #include "gc.h"
 #include "memory.h"
 
@@ -240,8 +239,6 @@ const char* valk_ltype_name(valk_ltype_e type) {
       return "Reference";
     case LVAL_ENV:
       return "Environment";
-    case LVAL_CONT:
-      return "Continuation";
     case LVAL_HANDLE:
       return "Handle";
     case LVAL_FORWARD:
@@ -348,21 +345,6 @@ valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
   res->str = valk_mem_alloc(n + 1);
   if (n) memcpy(res->str, bytes, n);
   res->str[n] = '\0';
-
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
-  return res;
-}
-
-// Continuation constructor for delimited continuations (algebraic effects)
-valk_lval_t* valk_lval_cont(valk_eval_stack_t* stack, valk_lenv_t* env, bool one_shot) {
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
-  res->flags =
-      LVAL_CONT | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(res);
-  LVAL_INIT_SOURCE_LOC(res);
-  res->cont.stack = stack;
-  res->cont.env = env;
-  res->cont.one_shot = one_shot;
 
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
@@ -744,7 +726,6 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
       break;
     }
     case LVAL_ENV:
-    case LVAL_CONT:
     case LVAL_FORWARD:
     case LVAL_UNDEFINED:
       break;
@@ -841,7 +822,6 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
     case LVAL_UNDEFINED:
       VALK_RAISE("LVAL is undefined, something went wrong");
       break;
-    case LVAL_CONT:
     case LVAL_FORWARD:
       break;
   }
@@ -1078,18 +1058,9 @@ static valk_lval_t* valk_lval_eval_recursive(valk_lenv_t* env, valk_lval_t* lval
                        valk_ltype_name(LVAL_TYPE(lval)));
 }
 
-// Public eval function - dispatches to trampoline or recursive based on flags
+// Public eval function
 valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
-#ifdef VALK_TRAMPOLINE_EVAL
-  // Compile-time flag: always use trampoline
-  return valk_eval_trampoline(env, lval);
-#else
-  // Runtime flag: allows testing trampoline without recompiling
-  if (valk_trampoline_eval_enabled()) {
-    return valk_eval_trampoline(env, lval);
-  }
   return valk_lval_eval_recursive(env, lval);
-#endif
 }
 
 valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
@@ -1471,10 +1442,6 @@ void valk_lval_print(valk_lval_t* val) {
     case LVAL_REF:
       printf("Reference[%s:%p]", val->ref.type, val->ref.ptr);
       break;
-    case LVAL_CONT:
-      printf("Continuation[stack:%p, env:%p, one_shot:%d]", (void*)val->cont.stack,
-             (void*)val->cont.env, val->cont.one_shot);
-      break;
     case LVAL_ENV:
       printf("[LEnv]");
       break;
@@ -1804,9 +1771,6 @@ void valk_lenv_init(valk_lenv_t* env) {
   env->vals.items = nullptr;
   // capture the current allocator for persistent allocations
   env->allocator = valk_thread_ctx.allocator;
-  // Algebraic effects support (Phase 1)
-  env->cont = nullptr;
-  env->handler_stack = nullptr;
 }
 
 // Free an environment allocated with malloc allocator.
@@ -1853,9 +1817,6 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
   res->parent = nullptr;  // Flattened environment has no parent
   res->fallback = env->fallback;
   res->allocator = env->allocator;
-  // Algebraic effects support (Phase 1)
-  res->cont = env->cont;
-  res->handler_stack = env->handler_stack;
 
   // Count total bindings by walking parent chain (with value masking)
   // Use a simple linear scan - O(n*m) but environments are typically small
@@ -3101,9 +3062,6 @@ static void valk_lval_print_user(valk_lval_t* val) {
     case LVAL_REF:
       printf("<ref:%s>", val->ref.type);
       break;
-    case LVAL_CONT:
-      printf("<continuation>");
-      break;
     case LVAL_ENV:
       printf("<environment>");
       break;
@@ -3534,481 +3492,6 @@ static valk_lval_t* valk_builtin_list_p(valk_lenv_t* e, valk_lval_t* a) {
   valk_ltype_e t = LVAL_TYPE(v);
   return valk_lval_num(t == LVAL_CONS || t == LVAL_NIL || t == LVAL_QEXPR ? 1 : 0);
 }
-
-// REMOVED: ARC-related functions - no longer using atomic reference counting
-
-// REMOVED: Old futures-based await - replaced with continuation-based
-// async/await The old await used pthread_cond_wait and ARCs which we've
-// eliminated
-
-// Identity function for mock continuations - just returns first argument
-static valk_lval_t* valk_builtin_identity(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  return valk_lval_list_nth(a, 0);
-}
-
-// async-shift: Capture continuation and pass to async operation
-// (async-shift {k} expr) - k gets bound to the current continuation
-static valk_lval_t* valk_builtin_async_shift(valk_lenv_t* e, valk_lval_t* a) {
-  LVAL_ASSERT_COUNT_EQ(a, a, 2);
-
-  // First arg should be a QEXPR containing the symbol for continuation variable
-  // e.g., {k} from (async-shift {k} {...})
-  valk_lval_t* k_arg = valk_lval_list_nth(a, 0);
-  valk_lval_t* k_sym;
-  if (LVAL_TYPE(k_arg) == LVAL_QEXPR || LVAL_TYPE(k_arg) == LVAL_CONS) {
-    // Extract symbol from list
-    k_sym = k_arg->cons.head;
-  } else {
-    k_sym = k_arg;
-  }
-  LVAL_ASSERT_TYPE(a, k_sym, LVAL_SYM);
-
-  // Create a simple mock continuation that just returns its argument
-  // In real implementation, this would capture current stack
-  valk_lval_t* cont = valk_mem_alloc(sizeof(valk_lval_t));
-  cont->flags =
-      LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(cont);
-  cont->fun.builtin =
-      valk_builtin_identity;  // Mock continuation just returns its argument
-  cont->fun.env = NULL;
-  cont->fun.formals = NULL;
-  cont->fun.body = NULL;
-
-  // Bind continuation to the symbol in environment
-  valk_lenv_put(e, k_sym, cont);
-
-  // Evaluate the async expression with continuation available
-  valk_lval_t* async_expr = valk_lval_list_nth(a, 1);
-
-  // Handle QEXPR body - may contain multiple expressions
-  if (LVAL_TYPE(async_expr) == LVAL_QEXPR &&
-      valk_lval_list_count(async_expr) > 0) {
-    valk_lval_t* first_elem = async_expr->cons.head;
-    // Check if this looks like a sequence (first element is a list, not a
-    // symbol)
-    if (valk_is_list_type(LVAL_TYPE(first_elem))) {
-      // Implicit do: evaluate each expression, return last
-      valk_lval_t* result = valk_lval_nil();
-      valk_lval_t* curr = async_expr;
-      while (!valk_lval_list_is_empty(curr)) {
-        result = valk_lval_eval(e, curr->cons.head);
-        if (LVAL_TYPE(result) == LVAL_ERR) {
-          return result;
-        }
-        curr = curr->cons.tail;
-      }
-      return result;
-    }
-    async_expr = valk_qexpr_to_cons(async_expr);
-  }
-
-  return valk_lval_eval(e, async_expr);
-}
-
-// async-reset: Establish async context (delimited continuation boundary)
-// (async-reset expr) - evaluates expr in async context
-static valk_lval_t* valk_builtin_async_reset(valk_lenv_t* e, valk_lval_t* a) {
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-
-  // Evaluate the expression in an async context
-  // In full implementation, this would set up delimiter/prompt
-  valk_lval_t* body = valk_lval_list_nth(a, 0);
-
-  // Handle QEXPR body - may contain multiple expressions
-  if (LVAL_TYPE(body) == LVAL_QEXPR && valk_lval_list_count(body) > 0) {
-    valk_lval_t* first_elem = body->cons.head;
-    // Check if this looks like a sequence (first element is a list, not a
-    // symbol)
-    if (valk_is_list_type(LVAL_TYPE(first_elem))) {
-      // Implicit do: evaluate each expression, return last
-      valk_lval_t* result = valk_lval_nil();
-      valk_lval_t* curr = body;
-      while (!valk_lval_list_is_empty(curr)) {
-        result = valk_lval_eval(e, curr->cons.head);
-        if (LVAL_TYPE(result) == LVAL_ERR) {
-          return result;
-        }
-        curr = curr->cons.tail;
-      }
-      return result;
-    }
-    body = valk_qexpr_to_cons(body);
-  }
-
-  return valk_lval_eval(e, body);
-}
-
-// async-resume: Resume a continuation with a value
-// (async-resume cont value) - calls continuation with value
-// TODO(networking): Implement proper resume using trampoline-based continuations
-static valk_lval_t* valk_builtin_async_resume(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 2);
-
-  valk_lval_t* cont = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, cont, LVAL_CONT);
-
-  valk_lval_t* value = valk_lval_list_nth(a, 1);
-
-  // New stack-based continuation system
-  if (cont->cont.stack != NULL) {
-    // TODO(networking): Implement proper resume by restoring the eval stack
-    // and pushing the value. For now, return an error.
-    return valk_lval_err("async-resume: stack-based continuation resume not yet implemented");
-  }
-
-  // Continuation has no stack - just return the value
-  return value;
-}
-
-// ============================================================================
-// Algebraic Effects - Phase 2: Effect Handler Infrastructure
-// ============================================================================
-
-// Handler representation:
-// handler_stack is a list of handler sets (one per with-handler scope)
-// Each handler set is a list of (effect-op . handler-fn) pairs
-// where handler-fn is a lambda (\ (value k) body)
-
-// Find a handler for the given effect operation name
-// Searches from innermost to outermost handler set, walking up env parent chain
-// Returns the handler function or NULL if not found
-static valk_lval_t* valk_effect_find_handler(valk_lenv_t* env,
-                                             const char* effect_op) {
-  // Walk up the environment parent chain
-  valk_lenv_t* curr_env = env;
-  while (curr_env) {
-    valk_lval_t* stack = curr_env->handler_stack;
-
-    // Walk this env's handler stack (list of handler sets)
-    while (stack && !valk_lval_list_is_empty(stack)) {
-      valk_lval_t* handler_set = stack->cons.head;
-
-      // Search this handler set for the effect operation
-      valk_lval_t* curr = handler_set;
-      while (curr && !valk_lval_list_is_empty(curr)) {
-        valk_lval_t* entry = curr->cons.head;
-
-        // Each entry is (effect-op-symbol handler-fn) as a list
-        if (entry && !valk_lval_list_is_empty(entry)) {
-          valk_lval_t* op_sym = entry->cons.head;
-          if (LVAL_TYPE(op_sym) == LVAL_SYM &&
-              strcmp(op_sym->str, effect_op) == 0) {
-            // Found it - return the handler function
-            valk_lval_t* handler_fn = valk_lval_list_nth(entry, 1);
-            return handler_fn;
-          }
-        }
-
-        curr = curr->cons.tail;
-      }
-
-      stack = stack->cons.tail;
-    }
-
-    // Move to parent environment
-    curr_env = curr_env->parent;
-  }
-
-  return NULL;  // No handler found
-}
-
-// Parse handler definitions from syntax to internal representation
-// Input: {(Effect/op (formals...) body) ...}
-// Output: list of (effect-op-symbol lambda) pairs
-static valk_lval_t* valk_effect_parse_handlers(valk_lenv_t* env,
-                                               valk_lval_t* handlers) {
-  if (valk_lval_list_is_empty(handlers)) {
-    return valk_lval_nil();
-  }
-
-  // Convert QEXPR to CONS if needed
-  if (LVAL_TYPE(handlers) == LVAL_QEXPR) {
-    handlers = valk_qexpr_to_cons(handlers);
-  }
-
-  // Build the handler set
-  valk_lval_t* result = valk_lval_nil();
-  valk_lval_t* curr = handlers;
-
-  while (!valk_lval_list_is_empty(curr)) {
-    valk_lval_t* handler_def = curr->cons.head;
-
-    // Convert QEXPR to CONS if needed
-    if (LVAL_TYPE(handler_def) == LVAL_QEXPR) {
-      handler_def = valk_qexpr_to_cons(handler_def);
-    }
-
-    // Validate: should be (Effect/op (formals...) body)
-    size_t def_len = valk_lval_list_count(handler_def);
-    if (def_len < 3) {
-      return valk_lval_err(
-          "Handler definition must be (Effect/op (formals...) body), got %zu elements",
-          def_len);
-    }
-
-    valk_lval_t* effect_op = valk_lval_list_nth(handler_def, 0);
-    valk_lval_t* formals = valk_lval_list_nth(handler_def, 1);
-    valk_lval_t* body = valk_lval_list_nth(handler_def, 2);
-
-    if (LVAL_TYPE(effect_op) != LVAL_SYM) {
-      return valk_lval_err("Handler effect operation must be a symbol");
-    }
-
-    // Create a lambda from the formals and body
-    // (\ (formals...) body)
-    valk_lval_t* handler_fn = valk_lval_lambda(env, formals, body);
-
-    // Create the entry: (effect-op handler-fn)
-    valk_lval_t* entry = valk_lval_cons(
-        effect_op,
-        valk_lval_cons(handler_fn, valk_lval_nil()));
-
-    // Prepend to result (will be reversed order, but that's fine for lookup)
-    result = valk_lval_cons(entry, result);
-
-    curr = curr->cons.tail;
-  }
-
-  return result;
-}
-
-// (with-handler handlers body) - Install effect handlers for body evaluation
-// handlers: {(Effect/op (value k) handler-body) ...}
-// body: expression to evaluate with handlers active
-static valk_lval_t* valk_builtin_with_handler(valk_lenv_t* e, valk_lval_t* a) {
-  LVAL_ASSERT_COUNT_EQ(a, a, 2);
-
-  valk_lval_t* handlers = valk_lval_list_nth(a, 0);
-  valk_lval_t* body = valk_lval_list_nth(a, 1);
-
-  // Parse handler definitions into handler set
-  valk_lval_t* handler_set = valk_effect_parse_handlers(e, handlers);
-  if (LVAL_TYPE(handler_set) == LVAL_ERR) {
-    return handler_set;
-  }
-
-  // Create new environment with updated handler stack
-  valk_lenv_t* handler_env = valk_lenv_empty();
-  handler_env->parent = e;
-  handler_env->fallback = e->fallback;
-
-  // Push handler set onto stack (innermost first)
-  handler_env->handler_stack = valk_lval_cons(handler_set, e->handler_stack);
-
-  // Evaluate body with handlers installed
-  // Convert QEXPR to CONS if needed
-  if (LVAL_TYPE(body) == LVAL_QEXPR) {
-    body = valk_qexpr_to_cons(body);
-  }
-
-  // Use trampoline eval so perform can capture the stack
-  valk_lval_t* result = valk_eval_trampoline(handler_env, body);
-
-  // Handler stack is automatically popped when we return
-  // (handler_env goes out of scope, handler_stack is not propagated back)
-
-  return result;
-}
-
-// (find-handler effect-op) - Look up a handler for debugging/testing
-// Returns the handler function or nil if not found
-// Accepts either a symbol or a quoted symbol (QEXPR containing a symbol)
-static valk_lval_t* valk_builtin_find_handler(valk_lenv_t* e, valk_lval_t* a) {
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-
-  valk_lval_t* effect_op = valk_lval_list_nth(a, 0);
-
-  // Handle quoted symbols (QEXPR containing a single symbol)
-  if (LVAL_TYPE(effect_op) == LVAL_QEXPR) {
-    if (valk_lval_list_count(effect_op) == 1) {
-      effect_op = effect_op->cons.head;
-    }
-  }
-
-  LVAL_ASSERT_TYPE(a, effect_op, LVAL_SYM);
-
-  valk_lval_t* handler = valk_effect_find_handler(e, effect_op->str);
-  if (handler == NULL) {
-    return valk_lval_nil();
-  }
-  return handler;
-}
-
-// (handler-stack) - Return the current handler stack for debugging
-static valk_lval_t* valk_builtin_handler_stack(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(a);
-  if (e->handler_stack == NULL) {
-    return valk_lval_nil();
-  }
-  return e->handler_stack;
-}
-
-// ============================================================================
-// Algebraic Effects - Phase 3: Perform and Resume
-// ============================================================================
-
-// (perform Effect/op value) - Perform an effect operation
-// 1. Find the handler for the effect
-// 2. Capture the current continuation (eval stack)
-// 3. Call the handler with (value, continuation)
-static valk_lval_t* valk_builtin_perform(valk_lenv_t* e, valk_lval_t* a) {
-  LVAL_ASSERT_COUNT_GE(a, a, 1);
-
-  valk_lval_t* effect_op = valk_lval_list_nth(a, 0);
-
-  // Handle quoted symbols (QEXPR containing a single symbol)
-  if (LVAL_TYPE(effect_op) == LVAL_QEXPR) {
-    if (valk_lval_list_count(effect_op) == 1) {
-      effect_op = effect_op->cons.head;
-    }
-  }
-
-  LVAL_ASSERT_TYPE(a, effect_op, LVAL_SYM);
-
-  valk_lval_t* value = valk_lval_list_count(a) > 1
-    ? valk_lval_list_nth(a, 1)
-    : valk_lval_nil();
-
-  // Find handler for this effect
-  valk_lval_t* handler = valk_effect_find_handler(e, effect_op->str);
-  if (handler == NULL) {
-    return valk_lval_err("Unhandled effect: %s", effect_op->str);
-  }
-
-  // Get the current eval stack for continuation capture
-  valk_eval_stack_t* current_stack = valk_eval_get_current_stack();
-
-  // Create continuation
-  valk_lval_t* k;
-  if (current_stack != NULL) {
-    // Trampoline mode: capture the eval stack
-    valk_eval_stack_t* stack_copy = valk_eval_stack_copy(current_stack);
-    k = valk_lval_cont(stack_copy, e, true);  // one_shot = true
-
-    // Clear the current stack - handler takes over
-    // We need to be careful here: we can't just set count=0 because
-    // the trampoline owns the stack. Instead, we signal to return
-    // the handler call result directly.
-    current_stack->count = 0;
-  } else {
-    // Recursive mode: create a continuation without stack
-    // This is a limited fallback - will error on resume
-    k = valk_lval_cont(NULL, e, true);
-  }
-
-  // Call handler with (value, k)
-  valk_lval_t* handler_args = valk_lval_cons(
-      value,
-      valk_lval_cons(k, valk_lval_nil()));
-
-  return valk_lval_eval_call(e, handler, handler_args);
-}
-
-// (resume k value) - Resume a captured continuation with a value
-// This is a one-shot operation - the continuation can only be resumed once
-static valk_lval_t* valk_builtin_resume(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 2);
-
-  valk_lval_t* k = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, k, LVAL_CONT);
-
-  valk_lval_t* value = valk_lval_list_nth(a, 1);
-
-  // One-shot check
-  if (k->cont.one_shot) {
-    // Mark as consumed by setting one_shot to false
-    // (we use one_shot as "still valid" flag)
-    // Check if already consumed by testing if stack is NULL after first resume
-    // Actually, let's add a consumed flag - but for now use stack==NULL after resume
-  }
-
-  // Get the captured stack
-  valk_eval_stack_t* captured_stack = k->cont.stack;
-
-  if (captured_stack == NULL) {
-    // No stack captured - this was created in recursive mode or already consumed
-    return valk_lval_err("resume: continuation has no captured stack (already consumed or created outside trampoline eval)");
-  }
-
-  // Mark as consumed by clearing the stack pointer
-  // (one-shot enforcement)
-  k->cont.stack = NULL;
-
-  // Continue evaluation with the captured stack and value
-  valk_lval_t* result = valk_eval_trampoline_with_stack(captured_stack, value);
-
-  // Free the stack after use
-  valk_eval_stack_free(captured_stack);
-  free(captured_stack);
-
-  return result;
-}
-
-// http2/connect-async: Async HTTP/2 connect using continuations
-// (http2/connect-async aio host port cont) - calls cont when connected
-static valk_lval_t* valk_builtin_http2_connect_async(valk_lenv_t* e,
-                                                     valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 4);
-
-  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "First arg must be aio_system");
-
-  valk_lval_t* host = valk_lval_list_nth(a, 1);
-  LVAL_ASSERT_TYPE(a, host, LVAL_STR);
-
-  valk_lval_t* port = valk_lval_list_nth(a, 2);
-  LVAL_ASSERT_TYPE(a, port, LVAL_NUM);
-
-  valk_lval_t* cont = valk_lval_list_nth(a, 3);
-  LVAL_ASSERT_TYPE(a, cont, LVAL_CONT);
-
-  // For now, simulate async by immediately calling continuation
-  // In real implementation, would store cont in libuv handle
-  valk_lval_t* mock_client = valk_lval_ref("http2_client", NULL, NULL);
-
-  // Call continuation with result
-  valk_lval_t* args = valk_lval_nil();
-  args = valk_lval_cons(mock_client, args);
-  args = valk_lval_cons(cont, args);
-  return valk_builtin_async_resume(e, args);
-}
-
-// http2/send-async: Async HTTP/2 send using continuations
-// (http2/send-async request client cont) - calls cont when response received
-static valk_lval_t* valk_builtin_http2_send_async(valk_lenv_t* e,
-                                                  valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 3);
-
-  valk_lval_t* req = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, req, LVAL_REF);
-
-  valk_lval_t* client = valk_lval_list_nth(a, 1);
-  LVAL_ASSERT_TYPE(a, client, LVAL_REF);
-
-  valk_lval_t* cont = valk_lval_list_nth(a, 2);
-  LVAL_ASSERT_TYPE(a, cont, LVAL_CONT);
-
-  // Mock response
-  valk_lval_t* mock_response = valk_lval_ref("http2_response", NULL, NULL);
-
-  // Call continuation with response
-  valk_lval_t* args = valk_lval_nil();
-  args = valk_lval_cons(mock_response, args);
-  args = valk_lval_cons(cont, args);
-  return valk_builtin_async_resume(e, args);
-}
-
-// REMOVED: Old futures-based HTTP/2 functions (listen, connect)
-// Replaced with continuation-based async versions (http2/connect-async, etc.)
 
 static void __valk_http2_request_release(void* arg) {
   valk_http2_request_t* req = (valk_http2_request_t*)arg;
@@ -5112,24 +4595,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "!=", valk_builtin_ne);
   valk_lenv_put_builtin(env, "str->num", valk_builtin_str_to_num);
 
-  // Async - Continuation-based only (futures removed)
-  valk_lenv_put_builtin(env, "async-shift", valk_builtin_async_shift);
-  valk_lenv_put_builtin(env, "async-reset", valk_builtin_async_reset);
-  valk_lenv_put_builtin(env, "async-resume", valk_builtin_async_resume);
-  valk_lenv_put_builtin(env, "http2/connect-async",
-                        valk_builtin_http2_connect_async);
-  valk_lenv_put_builtin(env, "http2/send-async", valk_builtin_http2_send_async);
-
-  // Algebraic Effects - Phase 2
-  valk_lenv_put_builtin(env, "with-handler", valk_builtin_with_handler);
-  valk_lenv_put_builtin(env, "find-handler", valk_builtin_find_handler);
-  valk_lenv_put_builtin(env, "handler-stack", valk_builtin_handler_stack);
-
-  // Algebraic Effects - Phase 3: Perform and Resume
-  valk_lenv_put_builtin(env, "perform", valk_builtin_perform);
-  valk_lenv_put_builtin(env, "resume", valk_builtin_resume);
-
-  // HTTP/2 utility functions (kept for request/response handling)
+  // HTTP/2 utility functions
   valk_lenv_put_builtin(env, "http2/request", valk_builtin_http2_request);
   valk_lenv_put_builtin(env, "http2/request-add-header",
                         valk_builtin_http2_request_add_header);
