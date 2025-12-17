@@ -1173,7 +1173,7 @@ def generate_html_report(report: CoverageReport, output_dir: Path, source_root: 
         if filepath.startswith(str(source_root)):
             rel_path = filepath[len(str(source_root))+1:]
         
-        if rel_path.startswith("test/"):
+        if rel_path.startswith("test/") or rel_path.startswith("vendor/") or rel_path.endswith(".h"):
             continue
         
         file_html_name = generate_file_html(fc, output_dir, source_root)
@@ -1198,7 +1198,11 @@ def generate_html_report(report: CoverageReport, output_dir: Path, source_root: 
     valk_branches_found = sum(fc.branches_found for _, fc, _ in valk_files)
     valk_branches_hit = sum(fc.branches_hit for _, fc, _ in valk_files)
     valk_branch_pct = (valk_branches_hit / valk_branches_found * 100) if valk_branches_found > 0 else 0
-    
+
+    combined_branches_found = c_branches_found + valk_branches_found
+    combined_branches_hit = c_branches_hit + valk_branches_hit
+    combined_branch_pct = (combined_branches_hit / combined_branches_found * 100) if combined_branches_found > 0 else 0
+
     def file_table_rows(files, is_valk=False):
         rows = []
         for rel_path, fc, link in files:
@@ -1394,50 +1398,41 @@ tr.tier-fail {{
 
 <div class="summary">
 <div class="card">
-<h2>Line Coverage</h2>
-<div class="big-stat {coverage_class(report.line_coverage_pct)}">{report.line_coverage_pct:.1f}%</div>
-<div class="stat-detail">{report.total_lines_hit:,} / {report.total_lines_found:,} lines covered</div>
-<div class="coverage-bar">
-<div class="coverage-fill {coverage_class(report.line_coverage_pct)}-bg" style="width:{report.line_coverage_pct}%"></div>
-</div>
-</div>
-
-<div class="card">
-<h2>Branch Coverage</h2>
-<div class="big-stat {coverage_class(report.branch_coverage_pct)}">{report.branch_coverage_pct:.1f}%</div>
-<div class="stat-detail">{report.total_branches_hit:,} / {report.total_branches_found:,} branches covered</div>
-<div class="coverage-bar">
-<div class="coverage-fill {coverage_class(report.branch_coverage_pct)}-bg" style="width:{report.branch_coverage_pct}%"></div>
-</div>
-</div>
-
-<div class="card">
-<h2>C Runtime</h2>
+<h2>Runtime</h2>
 <div class="big-stat {coverage_class(c_pct)}">{c_pct:.1f}%</div>
-<div class="stat-detail">{c_lines_hit:,}/{c_lines_found:,} lines &middot; {c_branches_hit:,}/{c_branches_found:,} branches</div>
+<div class="stat-detail">{c_lines_hit:,} / {c_lines_found:,} lines</div>
 <div class="coverage-bar">
 <div class="coverage-fill {coverage_class(c_pct)}-bg" style="width:{c_pct}%"></div>
 </div>
 </div>
 
 <div class="card">
-<h2>Valk/Lisp (Expr)</h2>
+<h2>Stdlib</h2>
 <div class="big-stat {coverage_class(valk_pct)}">{valk_pct:.1f}%</div>
-<div class="stat-detail">{valk_exprs_hit:,}/{valk_exprs_found:,} exprs &middot; {valk_branches_hit:,}/{valk_branches_found:,} branches</div>
+<div class="stat-detail">{valk_exprs_hit:,} / {valk_exprs_found:,} exprs</div>
 <div class="coverage-bar">
 <div class="coverage-fill {coverage_class(valk_pct)}-bg" style="width:{valk_pct}%"></div>
 </div>
 </div>
+
+<div class="card">
+<h2>Branches</h2>
+<div class="big-stat {coverage_class(combined_branch_pct)}">{combined_branch_pct:.1f}%</div>
+<div class="stat-detail">{c_branches_hit + valk_branches_hit:,} / {c_branches_found + valk_branches_found:,} branches</div>
+<div class="coverage-bar">
+<div class="coverage-fill {coverage_class(combined_branch_pct)}-bg" style="width:{combined_branch_pct}%"></div>
+</div>
+</div>
 </div>
 
 <div class="section">
-<h2>📁 C Source Files ({len(c_files)})</h2>
-{'<table><thead><tr><th>File</th><th>Lines</th><th>Branches</th><th>L Hit/Total</th><th>B Hit/Total</th><th></th></tr></thead><tbody>' + file_table_rows(c_files) + '</tbody></table>' if c_files else '<div class="empty">No C coverage data available</div>'}
+<h2>📁 Runtime Files ({len(c_files)})</h2>
+{'<table><thead><tr><th>File</th><th>Lines</th><th>Branches</th><th>L Hit/Total</th><th>B Hit/Total</th><th></th></tr></thead><tbody>' + file_table_rows(c_files) + '</tbody></table>' if c_files else '<div class="empty">No Runtime coverage data available</div>'}
 </div>
 
 <div class="section">
-<h2>🚀 Valk Source Files ({len(valk_files)})</h2>
-{'<table><thead><tr><th>File</th><th>Exprs</th><th>Branches</th><th>E Hit/Total</th><th>B Hit/Total</th><th></th></tr></thead><tbody>' + file_table_rows(valk_files, is_valk=True) + '</tbody></table>' if valk_files else '<div class="empty">No Valk coverage data available</div>'}
+<h2>🚀 Stdlib Files ({len(valk_files)})</h2>
+{'<table><thead><tr><th>File</th><th>Exprs</th><th>Branches</th><th>E Hit/Total</th><th>B Hit/Total</th><th></th></tr></thead><tbody>' + file_table_rows(valk_files, is_valk=True) + '</tbody></table>' if valk_files else '<div class="empty">No Stdlib coverage data available</div>'}
 </div>
 
 <div class="timestamp">Generated: {report.timestamp}</div>
@@ -1494,11 +1489,29 @@ def main():
         generate_cobertura_xml(report, xml_path, source_root)
         print(f"  XML: {xml_path}")
     
+    # Compute Runtime (C) and Stdlib (Valk) stats separately
+    runtime_files = {k: v for k, v in report.files.items()
+                     if not k.endswith(".valk") and not "/test/" in k and not "/vendor/" in k and not k.endswith(".h")}
+    stdlib_files = {k: v for k, v in report.files.items()
+                    if k.endswith(".valk") and not "/test/" in k}
+
+    runtime_lines_found = sum(f.lines_found for f in runtime_files.values())
+    runtime_lines_hit = sum(f.lines_hit for f in runtime_files.values())
+    runtime_pct = (runtime_lines_hit / runtime_lines_found * 100) if runtime_lines_found > 0 else 0
+
+    stdlib_exprs_found = sum(f.exprs_found for f in stdlib_files.values())
+    stdlib_exprs_hit = sum(f.exprs_hit for f in stdlib_files.values())
+    stdlib_pct = (stdlib_exprs_hit / stdlib_exprs_found * 100) if stdlib_exprs_found > 0 else 0
+
+    total_branches_found = sum(f.branches_found for f in runtime_files.values()) + sum(f.branches_found for f in stdlib_files.values())
+    total_branches_hit = sum(f.branches_hit for f in runtime_files.values()) + sum(f.branches_hit for f in stdlib_files.values())
+    branches_pct = (total_branches_hit / total_branches_found * 100) if total_branches_found > 0 else 0
+
     print(f"\n{'='*60}")
     print(f"Coverage Summary:")
-    print(f"  Lines:    {report.line_coverage_pct:.1f}% ({report.total_lines_hit}/{report.total_lines_found})")
-    print(f"  Branches: {report.branch_coverage_pct:.1f}% ({report.total_branches_hit}/{report.total_branches_found})")
-    print(f"  Files:    {len(report.files)}")
+    print(f"  Runtime:  {runtime_pct:.1f}% lines ({runtime_lines_hit}/{runtime_lines_found})")
+    print(f"  Stdlib:   {stdlib_pct:.1f}% exprs ({stdlib_exprs_hit}/{stdlib_exprs_found})")
+    print(f"  Branches: {branches_pct:.1f}% ({total_branches_hit}/{total_branches_found})")
     print(f"{'='*60}")
     print(f"\nOpen {output_dir}/index.html in a browser to view the report.")
 

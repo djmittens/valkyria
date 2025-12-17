@@ -236,8 +236,8 @@ def check_coverage_requirements(coverage: Dict[str, FileCoverage], show_passing:
     print("VALKYRIA RUNTIME COVERAGE GATE CHECK")
     print("=" * 80)
     print()
-    print(f"C files (src/*.c):    {RUNTIME_REQUIREMENT_LINE}% line, {RUNTIME_REQUIREMENT_BRANCH}% branch")
-    print(f"Valk files (src/*.valk): {RUNTIME_REQUIREMENT_EXPR}% expr, {RUNTIME_REQUIREMENT_BRANCH}% branch")
+    print(f"Runtime (src/*.c):    {RUNTIME_REQUIREMENT_LINE}% line, {RUNTIME_REQUIREMENT_BRANCH}% branch")
+    print(f"Stdlib (src/*.valk):  {RUNTIME_REQUIREMENT_EXPR}% expr, {RUNTIME_REQUIREMENT_BRANCH}% branch")
     print()
     
     for filename, cov in sorted(c_files.items()):

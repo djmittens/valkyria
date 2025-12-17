@@ -83,14 +83,14 @@ Example: A bug in `metrics_v2.c` that corrupts memory means:
 
 ## Coverage Measurement
 
-### C Runtime: Line + Branch Coverage
+### Runtime: Line + Branch Coverage
 
 Use gcov/llvm-cov with standard instrumentation:
 ```bash
 make coverage
 ```
 
-### Valk/Lisp: Expression + Branch Coverage
+### Stdlib: Expression + Branch Coverage
 
 Expression-level tracking provides finer granularity than line coverage for Lisp code.
 
