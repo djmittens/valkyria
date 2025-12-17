@@ -170,31 +170,16 @@ void valk_coverage_report_lcov(const char *output_file) {
       size_t lines_hit = 0;
       for (size_t line = 1; line < fc->line_capacity; line++) {
         if (fc->line_counts[line] != UINT32_MAX) {
-          size_t expr_hit = 0, expr_total = 0;
+          fprintf(f, "DA:%zu,%u\n", line, fc->line_counts[line]);
+          // Write per-expression coverage data (EXPRDATA) - summary is computed by the report generator
           if (fc->expr_buckets != NULL) {
             for (uint32_t b = 0; b < EXPR_HASH_SIZE; b++) {
-              valk_expr_t *expr = fc->expr_buckets[b];
-              while (expr != NULL) {
-                if (expr->line == line) {
-                  expr_total++;
-                  if (expr->hit_count > 0) expr_hit++;
+              valk_expr_t *e = fc->expr_buckets[b];
+              while (e != NULL) {
+                if (e->line == line) {
+                  fprintf(f, "EXPRDATA:%zu,%u,%u,%u\n", line, e->column, e->end_column, e->hit_count);
                 }
-                expr = expr->next;
-              }
-            }
-          }
-          fprintf(f, "DA:%zu,%u\n", line, fc->line_counts[line]);
-          if (expr_total > 0) {
-            fprintf(f, "EXPR:%zu,%zu,%zu\n", line, expr_hit, expr_total);
-            if (fc->expr_buckets != NULL) {
-              for (uint32_t b = 0; b < EXPR_HASH_SIZE; b++) {
-                valk_expr_t *e = fc->expr_buckets[b];
-                while (e != NULL) {
-                  if (e->line == line) {
-                    fprintf(f, "EXPRDATA:%zu,%u,%u,%u\n", line, e->column, e->end_column, e->hit_count);
-                  }
-                  e = e->next;
-                }
+                e = e->next;
               }
             }
           }

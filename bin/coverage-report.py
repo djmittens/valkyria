@@ -41,8 +41,6 @@ class LineCoverage:
     hit_count: int
     source: str = ""
     branches: list = field(default_factory=list)
-    expr_hit: int = 0
-    expr_total: int = 0
     exprs: list = field(default_factory=list)
 
 @dataclass
@@ -183,17 +181,6 @@ def parse_lcov_file(lcov_path: Path, report: CoverageReport, source_root: Path):
                                 current_file.lines[line_no].exprs.append(
                                     ExprCoverage(line_no=line_no, column=column, end_column=end_column, hit_count=hit_count)
                                 )
-            
-            elif line.startswith("EXPR:"):
-                if current_file:
-                    parts = line[5:].split(",")
-                    if len(parts) >= 3:
-                        line_no = int(parts[0])
-                        expr_hit = int(parts[1])
-                        expr_total = int(parts[2])
-                        if line_no in current_file.lines:
-                            current_file.lines[line_no].expr_hit = expr_hit
-                            current_file.lines[line_no].expr_total = expr_total
             
             elif line.startswith("BRDA:"):
                 if current_file:
@@ -820,11 +807,15 @@ def generate_file_html(fc: FileCoverage, output_dir: Path, source_root: Path) ->
                 branch_display = f'<span class="branch-full" title="All branches taken">[{taken_branches}/{total_branches}]</span>'
         
         expr_display = ""
-        if lc and lc.expr_total > 0:
-            if lc.expr_hit == 0:
-                expr_display = f'<span class="expr-miss" title="0/{lc.expr_total} eval points hit">miss</span>'
-            elif lc.expr_hit < lc.expr_total:
-                expr_display = f'<span class="expr-partial" title="{lc.expr_hit}/{lc.expr_total} eval points hit">{lc.expr_hit}/{lc.expr_total}</span>'
+        # Compute expr_hit/expr_total from the actual exprs list (aggregated correctly)
+        # rather than from EXPR records (which get overwritten by later test runs)
+        if lc and lc.exprs:
+            expr_total = len(lc.exprs)
+            expr_hit = sum(1 for e in lc.exprs if e.hit_count > 0)
+            if expr_hit == 0:
+                expr_display = f'<span class="expr-miss" title="0/{expr_total} eval points hit">miss</span>'
+            elif expr_hit < expr_total:
+                expr_display = f'<span class="expr-partial" title="{expr_hit}/{expr_total} eval points hit">{expr_hit}/{expr_total}</span>'
             else:
                 expr_display = ""
         

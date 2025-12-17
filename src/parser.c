@@ -3414,6 +3414,14 @@ static valk_lval_t* valk_builtin_error_p(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_num(LVAL_TYPE(v) == LVAL_ERR ? 1 : 0);
 }
 
+static valk_lval_t* valk_builtin_list_p(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  valk_ltype_e t = LVAL_TYPE(v);
+  return valk_lval_num(t == LVAL_CONS || t == LVAL_NIL || t == LVAL_QEXPR ? 1 : 0);
+}
+
 // REMOVED: ARC-related functions - no longer using atomic reference counting
 
 // REMOVED: Old futures-based await - replaced with continuation-based
@@ -4489,6 +4497,7 @@ static valk_lval_t* valk_builtin_source_file(valk_lenv_t* e, valk_lval_t* a) {
 void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
   valk_lenv_put_builtin(env, "error?", valk_builtin_error_p);
+  valk_lenv_put_builtin(env, "list?", valk_builtin_list_p);
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
   valk_lenv_put_builtin(env, "read-file", valk_builtin_read_file);
   valk_lenv_put_builtin(env, "print", valk_builtin_print);

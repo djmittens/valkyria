@@ -10,28 +10,28 @@
 ; Request Creation Tests
 ; ============================================================================
 
-(test/define "http-get-creates-request"
+(test/define "http/get creates request"
   {do
-    (def {req} (http-get "example.com"))
+    (def {req} (http/get "example.com"))
     (!= req ())
   })
 
-(test/define "http-post-creates-request"
+(test/define "http/post creates request"
   {do
-    (def {req} (http-post "api.example.com" "body"))
+    (def {req} (http/post "api.example.com" "body"))
     (!= req ())
   })
 
-(test/define "http-request-custom-method"
+(test/define "http/request custom method"
   {do
-    (def {req} (http-request "PUT" "api.example.com"))
+    (def {req} (http/request "PUT" "api.example.com"))
     (!= req ())
   })
 
-(test/define "with-header-returns-request"
+(test/define "http/with-header returns request"
   {do
-    (def {req} (http-get "example.com"))
-    (def {req2} (with-header req "x-test" "value"))
+    (def {req} (http/get "example.com"))
+    (def {req2} (http/with-header req "x-test" "value"))
     (!= req2 ())
   })
 
@@ -39,15 +39,15 @@
 ; Async Operations Tests
 ; ============================================================================
 
-(test/define "fetch-creates-async-op"
+(test/define "http/fetch creates async op"
   {do
-    (def {op} (fetch "example.com"))
+    (def {op} (http/fetch "example.com"))
     (!= op ())
   })
 
-(test/define "async-pure-creates-op"
+(test/define "async/pure creates op"
   {do
-    (def {op} (async-pure 42))
+    (def {op} (async/pure 42))
     (!= op ())
   })
 
@@ -55,17 +55,17 @@
 ; Middleware Tests
 ; ============================================================================
 
-(test/define "with-auth-creates-middleware"
+(test/define "http/with-auth creates middleware"
   {do
-    (def {mw} (with-auth "Bearer token"))
+    (def {mw} (http/with-auth "Bearer token"))
     (!= mw ())
   })
 
-(test/define "compose-middleware-combines"
+(test/define "http/compose-middleware combines"
   {do
-    (def {mw} (compose-middleware (list
-      (with-auth "token")
-      (with-user-agent "Agent"))))
+    (def {mw} (http/compose-middleware (list
+      (http/with-auth "token")
+      (http/with-user-agent "Agent"))))
     (!= mw ())
   })
 
@@ -73,10 +73,10 @@
 ; Pattern Tests
 ; ============================================================================
 
-(test/define "parallel-creates-operation"
+(test/define "http/parallel creates operation"
   {do
-    (def {ops} (list (async-pure 10) (async-pure 20)))
-    (def {par} (parallel ops))
+    (def {ops} (list (async/pure 10) (async/pure 20)))
+    (def {par} (http/parallel ops))
     (!= par ())
   })
 
@@ -84,11 +84,11 @@
 ; Route Matching Tests
 ; ============================================================================
 
-(test/define "route-matches-exact"
-  {(== 1 (route-matches "/api/users" "/api/users"))})
+(test/define "http/route-matches? exact"
+  {(== 1 (http/route-matches? "/api/users" "/api/users"))})
 
-(test/define "route-matches-no-match"
-  {(== 0 (route-matches "/api/users" "/api/posts"))})
+(test/define "http/route-matches? no match"
+  {(== 0 (http/route-matches? "/api/users" "/api/posts"))})
 
 ; Run all tests
 (test/run {})

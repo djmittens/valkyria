@@ -181,7 +181,7 @@
 ; Epilogue — A tiny functional check with closures (still work post-evacuation)
 ; ---------------------------------------------------------------------------
 (println "\n--- Epilogue: Closures survive evacuation ---")
-(def {make-mult} (\ {n} {\ {x} {* x n}}))
+(fun {make-mult n} {\ {x} {* x n}})
 (def {multipliers} (map make-mult (range 1 101)))
 (println "x1*7=%ld  x50*3=%ld  x100*5=%ld"
          ((head multipliers) 7)

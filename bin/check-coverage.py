@@ -71,79 +71,109 @@ def find_llvm_cov() -> Optional[str]:
 
 
 def parse_valk_coverage(lcov_path: Path, source_root: Path) -> Dict[str, FileCoverage]:
-    """Parse Valk coverage from LCOV file."""
+    """Parse Valk coverage from LCOV file.
+
+    Handles multiple records for the same file by merging expression data.
+    An expression is identified by (line, col) and is considered hit if
+    any record shows it was executed.
+    """
     if not lcov_path.exists():
         return {}
-    
-    coverage = {}
+
+    # Accumulate per-file data across multiple records
+    # file_exprs[filepath][(line, col)] = max_hit_count
+    file_exprs: Dict[str, Dict[tuple, int]] = {}
+    file_branches: Dict[str, Dict[tuple, int]] = {}
+    file_lines: Dict[str, Dict[int, int]] = {}
+
     current_file = None
-    lines_found = 0
-    lines_hit = 0
-    exprs_found = 0
-    exprs_hit = 0
-    branches_found = 0
-    branches_hit = 0
-    
+
     with open(lcov_path) as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            
+
             if line.startswith("SF:"):
                 filepath = line[3:]
                 if not filepath.startswith("/"):
                     filepath = str(source_root / filepath)
                 current_file = filepath
-                lines_found = 0
-                lines_hit = 0
-                exprs_found = 0
-                exprs_hit = 0
-                branches_found = 0
-                branches_hit = 0
-                
+                # Initialize dicts if first time seeing this file
+                if filepath not in file_exprs:
+                    file_exprs[filepath] = {}
+                    file_branches[filepath] = {}
+                    file_lines[filepath] = {}
+
             elif line.startswith("DA:") and current_file:
                 parts = line[3:].split(",")
                 if len(parts) >= 2:
+                    line_num = int(parts[0])
                     hit_count = int(parts[1])
-                    lines_found += 1
-                    if hit_count > 0:
-                        lines_hit += 1
-            
+                    # Take max hit count for this line
+                    file_lines[current_file][line_num] = max(
+                        file_lines[current_file].get(line_num, 0), hit_count
+                    )
+
             elif line.startswith("EXPRDATA:") and current_file:
                 parts = line[9:].split(",")
                 if len(parts) >= 4:
+                    expr_line = int(parts[0])
+                    expr_col = int(parts[1])
                     hit_count = int(parts[3])
-                    exprs_found += 1
-                    if hit_count > 0:
-                        exprs_hit += 1
-            
+                    key = (expr_line, expr_col)
+                    # Take max hit count for this expression
+                    file_exprs[current_file][key] = max(
+                        file_exprs[current_file].get(key, 0), hit_count
+                    )
+
             elif line.startswith("BRDA:") and current_file:
                 parts = line[5:].split(",")
                 if len(parts) >= 4:
+                    br_line = int(parts[0])
+                    br_block = int(parts[1])
+                    br_branch = int(parts[2])
                     taken_str = parts[3]
-                    branches_found += 1
-                    if taken_str != "-" and int(taken_str) > 0:
-                        branches_hit += 1
-            
-            elif line == "end_of_record" and current_file:
-                if current_file.startswith(str(source_root / "src")) and current_file.endswith(".valk"):
-                    rel_path = current_file[len(str(source_root))+1:]
-                    if not rel_path.startswith("src/modules/test"):
-                        expr_pct = (exprs_hit / exprs_found * 100) if exprs_found > 0 else 0
-                        branch_pct = (branches_hit / branches_found * 100) if branches_found > 0 else 0
-                        line_pct = (lines_hit / lines_found * 100) if lines_found > 0 else 0
-                        
-                        filename = rel_path.replace("src/", "")
-                        coverage[filename] = FileCoverage(
-                            filename=filename,
-                            line_pct=line_pct,
-                            branch_pct=branch_pct,
-                            expr_pct=expr_pct,
-                            is_valk=True
-                        )
+                    key = (br_line, br_block, br_branch)
+                    taken = 0 if taken_str == "-" else int(taken_str)
+                    # Take max taken count for this branch
+                    file_branches[current_file][key] = max(
+                        file_branches[current_file].get(key, 0), taken
+                    )
+
+            elif line == "end_of_record":
                 current_file = None
-    
+
+    # Convert accumulated data to FileCoverage objects
+    coverage = {}
+    for filepath, exprs in file_exprs.items():
+        if filepath.startswith(str(source_root / "src")) and filepath.endswith(".valk"):
+            rel_path = filepath[len(str(source_root))+1:]
+            if not rel_path.startswith("src/modules/test"):
+                exprs_found = len(exprs)
+                exprs_hit = sum(1 for count in exprs.values() if count > 0)
+
+                branches = file_branches.get(filepath, {})
+                branches_found = len(branches)
+                branches_hit = sum(1 for count in branches.values() if count > 0)
+
+                lines = file_lines.get(filepath, {})
+                lines_found = len(lines)
+                lines_hit = sum(1 for count in lines.values() if count > 0)
+
+                expr_pct = (exprs_hit / exprs_found * 100) if exprs_found > 0 else 0
+                branch_pct = (branches_hit / branches_found * 100) if branches_found > 0 else 0
+                line_pct = (lines_hit / lines_found * 100) if lines_found > 0 else 0
+
+                filename = rel_path.replace("src/", "")
+                coverage[filename] = FileCoverage(
+                    filename=filename,
+                    line_pct=line_pct,
+                    branch_pct=branch_pct,
+                    expr_pct=expr_pct,
+                    is_valk=True
+                )
+
     return coverage
 
 

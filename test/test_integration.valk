@@ -18,15 +18,15 @@
          integration-var-4 integration-var-5) 15})
 
 ; Test function definitions survive
-(def {integration-add} (\ {x y} {+ x y}))
-(def {integration-mul} (\ {x y} {* x y}))
+(fun {integration-add x y} {+ x y})
+(fun {integration-mul x y} {* x y})
 
 (test/define "function-defs-survive"
   {and (== (integration-add 3 4) 7)
        (== (integration-mul 3 4) 12)})
 
 ; Test closures survive
-(def {make-counter} (\ {start} {\ {n} {+ start n}}))
+(fun {make-counter start} {\ {n} {+ start n}})
 (def {counter-from-10} (make-counter 10))
 (def {counter-from-100} (make-counter 100))
 
@@ -55,9 +55,9 @@
     (== (foldl + 0 nums) 15)})
 
 ; Test recursive function with many calls
-(def {countdown} (\ {n} {
+(fun {countdown n} {
   if (<= n 0) {0} {countdown (- n 1)}
-}))
+})
 
 (test/define "recursive-function-many-calls"
   {== (countdown 100) 0})

@@ -228,7 +228,7 @@
 (println "After all that copying and collecting, do closures still work?")
 (println "Let's make 100 multiplier functions and see...")
 
-(def {make-mult} (\ {n} {\ {x} {* x n}}))
+(fun {make-mult n} {\ {x} {* x n}})
 (def {multipliers} (map make-mult (range 1 101)))
 (println "")
 (println "Testing: multiplier #1 times 7 = %ld" ((head multipliers) 7))

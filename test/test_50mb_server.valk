@@ -8,11 +8,11 @@
 (println "")
 
 ; Define a string repeat helper using recursion
-(def {repeat-str} (\ {s n acc} {
+(fun {repeat-str s n acc} {
   (if (<= n 0)
     {acc}
     {(repeat-str s (- n 1) (str acc s))})
-}))
+})
 
 ; Create a 50MB string (50 * 1024 * 1024 = 52428800 bytes)
 ; We'll create a base pattern and repeat it
@@ -26,21 +26,21 @@
 (println "Created 1KB block")
 
 ; Create 1MB iteratively (1024 x 1KB)
-(def {build-mb} (\ {n acc} {
+(fun {build-mb n acc} {
   (if (<= n 0)
     {acc}
     {(build-mb (- n 1) (str acc kb-block))})
-}))
+})
 
 (= {mb-block} (build-mb 1024 ""))
 (printf "Created 1MB block: %d bytes\n" (len mb-block))
 
 ; Create 50MB iteratively (50 x 1MB)
-(def {build-50mb} (\ {n acc} {
+(fun {build-50mb n acc} {
   (if (<= n 0)
     {acc}
     {(build-50mb (- n 1) (str acc mb-block))})
-}))
+})
 
 (println "Building 50MB string (this may take a while)...")
 (= {big-string} (build-50mb 50 ""))

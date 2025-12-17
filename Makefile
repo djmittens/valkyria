@@ -158,6 +158,7 @@ define run_tests_valk
 	$(1)/valk test/test_namespace.valk
 	$(1)/valk test/test_varargs.valk
 	$(1)/valk test/test_continuations_suite.valk
+	$(1)/valk test/test_async_monadic_suite.valk
 	$(1)/valk test/test_tco_suite.valk
 	$(1)/valk test/test_do_suite.valk
 	$(1)/valk test/test_gc_suite.valk
