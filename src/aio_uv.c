@@ -174,7 +174,11 @@ typedef enum __aio_http_conn_e {
   VALK_CONN_CLOSED
 } __aio_http_conn_e;
 
+// Magic marker to identify our handles vs other uv handles
+#define VALK_AIO_HANDLE_MAGIC 0xBA1CADA1
+
 typedef struct valk_aio_handle_t {
+  uint32_t magic;  // VALK_AIO_HANDLE_MAGIC to identify our handles
   handle_kind_t kind;
   valk_aio_handle_t *prev;
   valk_aio_handle_t *next;
@@ -731,6 +735,7 @@ typedef struct valk_aio_system {
   valk_aio_handle_t liveHandles;
 
   bool shuttingDown;
+  bool cleanedUp;  // True after valk_aio_wait_for_shutdown completed
 
   // HTTP request/response queues for Lisp handlers
   valk_http_queue_t http_queue;
@@ -1435,8 +1440,17 @@ static void __uv_handle_closed_cb(uv_handle_t *handle) {
 static void __aio_uv_walk_close(uv_handle_t *h, void *arg) {
   UNUSED(arg);
   if (!uv_is_closing(h)) {
-    VALK_DEBUG("Closing open UV handle");
-    uv_close(h, __uv_handle_closed_cb);
+    VALK_DEBUG("Closing open UV handle type=%d", h->type);
+    // Only use __uv_handle_closed_cb for handles that have valk_aio_handle_t data.
+    // Use magic marker to safely identify our handles vs other uv handles
+    // (like timers from aio/schedule which have different data structures).
+    valk_aio_handle_t *hndl = h->data;
+    if (hndl && hndl->magic == VALK_AIO_HANDLE_MAGIC) {
+      uv_close(h, __uv_handle_closed_cb);
+    } else {
+      // Not one of our managed handles, close without callback
+      uv_close(h, NULL);
+    }
   }
 }
 
@@ -3040,7 +3054,7 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
   }
   valk_aio_handle_t *conn = (valk_aio_handle_t *)slab_item->data;
   memset(conn, 0, sizeof(valk_aio_handle_t));
-
+  conn->magic = VALK_AIO_HANDLE_MAGIC;
   conn->kind = VALK_HNDL_HTTP_CONN;
   conn->sys = srv->sys;
   conn->onClose = __valk_aio_http2_on_disconnect;
@@ -3176,6 +3190,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
   srv->listener = (void *)valk_slab_aquire(sys->handleSlab)->data;
 
   memset(srv->listener, 0, sizeof(valk_aio_handle_t));
+  srv->listener->magic = VALK_AIO_HANDLE_MAGIC;
   srv->listener->kind = VALK_HNDL_TCP;
   srv->listener->sys = sys;
   srv->listener->arg = srv;
@@ -3301,6 +3316,7 @@ static void __uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task) {
   valk_aio_handle_t *hndl =
       (valk_aio_handle_t *)valk_slab_aquire(sys->handleSlab)->data;
   memset(hndl, 0, sizeof(valk_aio_handle_t));
+  hndl->magic = VALK_AIO_HANDLE_MAGIC;
   hndl->kind = VALK_HNDL_TASK;
   hndl->sys = sys;
   hndl->arg = task;
@@ -3687,7 +3703,7 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
   VALK_ASSERT(slab_item != NULL, "Client connection handle must be allocated");
   client->connection = (valk_aio_handle_t *)slab_item->data;
   memset(client->connection, 0, sizeof(valk_aio_handle_t));
-
+  client->connection->magic = VALK_AIO_HANDLE_MAGIC;
   client->connection->kind = VALK_HNDL_HTTP_CONN;
   client->connection->sys = sys;
   client->connection->onClose = __valk_aio_http2_on_disconnect;
@@ -4103,6 +4119,173 @@ valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
   return res;
 }
 
+// ============================================================================
+// http2/client-request - High-level client request with callback
+// ============================================================================
+// (http2/client-request aio host port path callback)
+// Makes an HTTP/2 GET request and calls callback with the response
+
+typedef struct {
+  valk_aio_system_t *sys;
+  valk_lval_t *callback;
+  valk_lenv_t *env;
+  char *host;
+  int port;
+  char *path;
+  valk_future *connect_future;
+  valk_arc_box *client_box;
+} valk_http2_client_request_ctx_t;
+
+// Helper: duplicate string using current allocator
+static char *__client_arena_strdup(const char *s) {
+  size_t len = strlen(s);
+  char *dup = valk_mem_alloc(len + 1);
+  memcpy(dup, s, len + 1);
+  return dup;
+}
+
+// Forward declaration
+static void __http2_client_request_response_cb(void *arg, valk_arc_box *result);
+
+// Called when connection is established
+static void __http2_client_request_connect_cb(void *arg, valk_arc_box *result) {
+  valk_http2_client_request_ctx_t *ctx = arg;
+
+  if (result->type != VALK_SUC) {
+    // Connection failed - call callback with error
+    const char *errmsg = result->item ? (const char *)result->item : "unknown error";
+    VALK_ERROR("http2/client-request: connection failed: %s", errmsg);
+    if (ctx->callback && ctx->env) {
+      valk_lval_t *err = valk_lval_err("Connection failed: %s", errmsg);
+      valk_lval_t *args = valk_lval_cons(err, valk_lval_nil());
+      valk_lval_eval_call(ctx->env, ctx->callback, args);
+    }
+    // Cleanup
+    free(ctx->host);
+    free(ctx->path);
+    valk_arc_release(ctx->connect_future);
+    free(ctx);
+    return;
+  }
+
+  // Store client box and retain it
+  ctx->client_box = result;
+  valk_arc_retain(result);
+  valk_aio_http2_client *client = result->item;
+
+  VALK_INFO("http2/client-request: connected to %s:%d", ctx->host, ctx->port);
+
+  // Create the HTTP/2 request
+  // Allocate a dedicated arena for the request
+  size_t arena_bytes = sizeof(valk_mem_arena_t) + (8 * 1024 * 1024) + (64 * 1024);
+  valk_mem_arena_t *arena = malloc(arena_bytes);
+  valk_mem_arena_init(arena, arena_bytes - sizeof(*arena));
+
+  valk_http2_request_t *req;
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)arena) {
+    req = valk_mem_alloc(sizeof(valk_http2_request_t));
+    memset(req, 0, sizeof(*req));
+    req->allocator = (valk_mem_allocator_t *)arena;
+    req->method = __client_arena_strdup("GET");
+    req->scheme = __client_arena_strdup("https");
+    req->authority = __client_arena_strdup(ctx->host);
+    req->path = __client_arena_strdup(ctx->path);
+    da_init(&req->headers);
+  }
+
+  // Send the request
+  valk_future *response_future = valk_aio_http2_request_send(req, client);
+
+  // Register callback for when response arrives
+  struct valk_future_and_then *response_cb = malloc(sizeof(struct valk_future_and_then));
+  response_cb->arg = ctx;
+  response_cb->cb = __http2_client_request_response_cb;
+  valk_future_and_then(response_future, response_cb);
+}
+
+// Called when response is received
+static void __http2_client_request_response_cb(void *arg, valk_arc_box *result) {
+  valk_http2_client_request_ctx_t *ctx = arg;
+
+  VALK_INFO("http2/client-request: response received");
+
+  if (result->type != VALK_SUC) {
+    // Request failed - call callback with error
+    const char *errmsg = result->item ? (const char *)result->item : "unknown error";
+    VALK_ERROR("http2/client-request: request failed: %s", errmsg);
+    if (ctx->callback && ctx->env) {
+      valk_lval_t *err = valk_lval_err("Request failed: %s", errmsg);
+      valk_lval_t *args = valk_lval_cons(err, valk_lval_nil());
+      valk_lval_eval_call(ctx->env, ctx->callback, args);
+    }
+  } else {
+    // Success - create response lval and call callback
+    valk_http2_response_t *response = result->item;
+
+    // Create a response ref that wraps the response
+    // The response data is already allocated, we just need to wrap it
+    // Type must be "success" to match what http2/response-status etc. expect
+    valk_lval_t *resp_ref = valk_lval_ref("success", response, NULL);
+    valk_arc_retain(result);  // Keep the response alive
+
+    if (ctx->callback && ctx->env) {
+      valk_lval_t *args = valk_lval_cons(resp_ref, valk_lval_nil());
+      VALK_INFO("http2/client-request: calling callback with status %s",
+                response->status ? response->status : "null");
+      valk_lval_eval_call(ctx->env, ctx->callback, args);
+    }
+  }
+
+  // Cleanup
+  free(ctx->host);
+  free(ctx->path);
+  if (ctx->connect_future) {
+    valk_arc_release(ctx->connect_future);
+  }
+  if (ctx->client_box) {
+    valk_arc_release(ctx->client_box);
+  }
+  // Free the callback function (was allocated with malloc)
+  // Note: The callback lval is owned by the Lisp environment, don't free it
+  free(ctx);
+}
+
+// Implementation function (called from parser.c builtin)
+valk_lval_t *valk_http2_client_request_impl(valk_lenv_t *e,
+                                             valk_aio_system_t *sys,
+                                             const char *host, int port,
+                                             const char *path,
+                                             valk_lval_t *callback) {
+  VALK_INFO("http2/client-request: %s:%d%s", host, port, path);
+
+  // Allocate context (will be freed in response callback)
+  valk_http2_client_request_ctx_t *ctx = malloc(sizeof(valk_http2_client_request_ctx_t));
+  ctx->sys = sys;
+  ctx->host = strdup(host);
+  ctx->port = port;
+  ctx->path = strdup(path);
+  ctx->client_box = NULL;
+
+  // Copy callback to malloc so it survives arena reset
+  VALK_WITH_ALLOC(&valk_malloc_allocator) {
+    ctx->callback = valk_lval_copy(callback);
+  }
+  ctx->env = e;
+
+  // Initiate connection
+  valk_future *connect_future = valk_aio_http2_connect_host(sys, host, port, host);
+  ctx->connect_future = connect_future;
+  valk_arc_retain(connect_future);
+
+  // Register callback for when connection is ready
+  struct valk_future_and_then *connect_cb = malloc(sizeof(struct valk_future_and_then));
+  connect_cb->arg = ctx;
+  connect_cb->cb = __http2_client_request_connect_cb;
+  valk_future_and_then(connect_future, connect_cb);
+
+  return valk_lval_nil();
+}
+
 //
 const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg) {
   // Hard limits - primary parameters
@@ -4273,8 +4456,9 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   }
   #endif
 
-  sys->liveHandles.kind = VALK_HNDL_EMPTY;
   memset(&sys->liveHandles, 0, sizeof(valk_aio_handle_t));
+  sys->liveHandles.magic = VALK_AIO_HANDLE_MAGIC;
+  sys->liveHandles.kind = VALK_HNDL_EMPTY;
 
   // Allocate AIO slabs with malloc allocator (not GC heap)
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
@@ -4354,6 +4538,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   // printf("Aquiring stopper\n");
   sys->stopperHandle = (valk_aio_handle_t *)valk_slab_aquire(sys->handleSlab)->data;
   memset(sys->stopperHandle, 0, sizeof(valk_aio_handle_t));
+  sys->stopperHandle->magic = VALK_AIO_HANDLE_MAGIC;
   sys->stopperHandle->kind = VALK_HNDL_TASK;
   sys->stopperHandle->sys = sys;
   sys->stopperHandle->uv.task.data = sys->stopperHandle;
@@ -4372,16 +4557,15 @@ bool valk_aio_is_shutting_down(valk_aio_system_t *sys) {
   return sys->shuttingDown;
 }
 
-void valk_aio_stop(valk_aio_system_t *sys) {
-  sys->shuttingDown = true;
-  uv_async_send(&sys->stopperHandle->uv.task);
-  // printf("Processing the stopper\n");
-  // fflush(stdout);
-  uv_thread_join(&sys->loopThread);
-  // printf("AFTER the Processing the stopper\n");
-  // fflush(stdout);
-  // while (UV_EBUSY == uv_loop_close(sys->eventloop)) {
-  // };
+// Wait for the event loop thread to finish and perform cleanup.
+// Called from aio/run after shutdown is signaled.
+void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
+  if (!sys) return;
+
+  // Join the event loop thread if we're not already in it
+  if (!pthread_equal(pthread_self(), sys->loopThread)) {
+    uv_thread_join(&sys->loopThread);
+  }
 
 #ifdef VALK_METRICS_ENABLED
   // Shutdown global SSE registry
@@ -4415,11 +4599,26 @@ void valk_aio_stop(valk_aio_system_t *sys) {
     valk_aio_active_system = NULL;
   }
 
-  // printf("Freeing sys\n");
-  // fflush(stdout);
-  valk_mem_free(sys);
-  // printf("Done freeing\n");
-  // fflush(stdout);
+  // Mark as cleaned up (but don't free sys - that happens via normal cleanup)
+  sys->cleanedUp = true;
+}
+
+void valk_aio_stop(valk_aio_system_t *sys) {
+  // If cleanup was already done (by valk_aio_wait_for_shutdown), just free sys
+  if (sys->cleanedUp) {
+    free(sys);
+    return;
+  }
+
+  // Check if already shutting down (avoid double shutdown)
+  if (sys->shuttingDown) {
+    return;
+  }
+
+  // Signal shutdown - the actual cleanup happens in valk_aio_wait_for_shutdown
+  // which is called from aio/run after the main loop exits.
+  sys->shuttingDown = true;
+  uv_async_send(&sys->stopperHandle->uv.task);
 }
 
 #ifdef VALK_METRICS_ENABLED
@@ -4611,6 +4810,7 @@ valk_aio_handle_t* valk_aio_timer_alloc(valk_aio_system_t* sys) {
   valk_aio_handle_t *handle = (valk_aio_handle_t *)item->data;
   VALK_INFO("Timer ALLOC: handle=%p slot=%zu", (void*)handle, item->handle);
   memset(handle, 0, sizeof(valk_aio_handle_t));
+  handle->magic = VALK_AIO_HANDLE_MAGIC;
   handle->kind = VALK_HNDL_TIMER;
   handle->sys = sys;
 
@@ -4766,6 +4966,81 @@ valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, uint64_t delay_ms,
 
   // Return special "deferred" symbol to indicate async response
   return valk_lval_sym(":deferred");
+}
+
+// ============================================================================
+// aio/schedule - Top-level timer scheduling (no HTTP context required)
+// ============================================================================
+// Usage: (aio/schedule aio-system delay-ms callback) -> nil
+//
+// Schedules a callback to be called after delay-ms milliseconds.
+// Unlike aio/delay, this works at the top level (outside request handlers).
+// The callback is called with no arguments.
+
+typedef struct {
+  uv_timer_t timer;
+  valk_lval_t *callback;
+  valk_lenv_t *env;
+} valk_schedule_timer_t;
+
+static void __schedule_timer_cb(uv_timer_t *handle) {
+  valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)handle->data;
+
+  // Call the callback with no arguments
+  if (timer_data->callback && timer_data->env) {
+    valk_lval_t *args = valk_lval_nil();
+    valk_lval_t *result = valk_lval_eval_call(timer_data->env, timer_data->callback, args);
+    if (LVAL_TYPE(result) == LVAL_ERR) {
+      VALK_WARN("aio/schedule callback returned error: %s", result->str);
+    }
+  }
+
+  // Cleanup
+  uv_timer_stop(handle);
+  uv_close((uv_handle_t *)handle, NULL);
+  free(timer_data);
+}
+
+valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, uint64_t delay_ms,
+                                valk_lval_t* callback, valk_lenv_t* env) {
+  if (!sys || !sys->eventloop) {
+    return valk_lval_err("aio/schedule: invalid AIO system");
+  }
+
+  // Allocate timer data
+  valk_schedule_timer_t *timer_data = malloc(sizeof(valk_schedule_timer_t));
+  if (!timer_data) {
+    return valk_lval_err("Failed to allocate timer");
+  }
+
+  // Copy callback using malloc allocator so it survives
+  valk_lval_t *heap_callback;
+  valk_lenv_t *heap_env;
+  VALK_WITH_ALLOC(&valk_malloc_allocator) {
+    heap_callback = valk_lval_copy(callback);
+    heap_env = valk_lenv_copy(env);
+  }
+
+  timer_data->callback = heap_callback;
+  timer_data->env = heap_env;
+  timer_data->timer.data = timer_data;
+
+  // Initialize and start timer
+  uv_loop_t *loop = sys->eventloop;
+  int r = uv_timer_init(loop, &timer_data->timer);
+  if (r != 0) {
+    free(timer_data);
+    return valk_lval_err("Failed to initialize timer");
+  }
+
+  r = uv_timer_start(&timer_data->timer, __schedule_timer_cb, delay_ms, 0);
+  if (r != 0) {
+    free(timer_data);
+    return valk_lval_err("Failed to start timer");
+  }
+
+  VALK_INFO("aio/schedule: timer started for %lu ms", (unsigned long)delay_ms);
+  return valk_lval_nil();
 }
 
 // ============================================================================

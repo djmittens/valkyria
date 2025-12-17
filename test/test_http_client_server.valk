@@ -1,0 +1,78 @@
+; HTTP Client-Server Integration Tests
+; Tests real HTTP/2 communication between client and server using http2/client-request
+
+(load "src/prelude.valk")
+
+; Define http2/response-ok? locally (it's in http_api.valk which we don't load)
+(fun {http2/response-ok? resp} {
+  (= {status} (str->num (http2/response-status resp)))
+  (if (>= status 200)
+    {(< status 300)}
+    {0})
+})
+
+; Test server port
+(def {TEST_PORT} 8455)
+
+; Create the AIO system
+(def {aio} (aio/start))
+
+; Server handler - simple response
+(def {server-handler}
+  (\ {req} {
+    {:status "200" :body "Hello, World!"}
+  }))
+
+(println "")
+(println "=== HTTP Client-Server Integration Tests ===")
+(println "")
+(printf "Starting test server on port %d...\n" TEST_PORT)
+(http2/server-listen aio TEST_PORT server-handler)
+
+; Test with simple chained requests
+(aio/schedule aio 200 (\ {} {
+  (println "Running tests...")
+
+  ; Test 1: Basic request works
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/"
+    (\ {resp} {
+      (if (error? resp)
+        {(println "❌ request: FAIL (error)")}
+        {(do
+           (= {status} (http2/response-status resp))
+           (printf "✅ status=%s: %s\n" status (if (== status "200") {"PASS"} {"FAIL"})))})
+
+      ; Test 2: Response body
+      (http2/client-request aio "127.0.0.1" TEST_PORT "/"
+        (\ {resp} {
+          (if (error? resp)
+            {(println "❌ body: FAIL (error)")}
+            {(do
+               (= {body} (http2/response-body resp))
+               (printf "✅ body=%s: %s\n" body (if (== body "Hello, World!") {"PASS"} {"FAIL"})))})
+
+          ; Test 3: response-ok
+          (http2/client-request aio "127.0.0.1" TEST_PORT "/"
+            (\ {resp} {
+              (if (error? resp)
+                {(println "❌ ok: FAIL (error)")}
+                {(printf "✅ ok=%d: %s\n" (http2/response-ok? resp) (if (== 1 (http2/response-ok? resp)) {"PASS"} {"FAIL"}))})
+
+              ; Done
+              (println "")
+              (println "=== All tests completed! ===")
+              (aio/stop aio)
+            }))
+        }))
+    }))
+}))
+
+; Timeout
+(aio/schedule aio 10000 (\ {} {
+  (println "TIMEOUT!")
+  (aio/stop aio)
+}))
+
+(aio/run aio)
+(println "🏁 Integration tests finished!")
+(exit 0)

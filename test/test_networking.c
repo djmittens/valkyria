@@ -108,6 +108,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   // TODO(networking): This will close all connections passing the test
   // obviously now need to implement tthe proper shutdown procedures
   valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
 
   // raise(SIGABRT);
 
@@ -119,8 +120,8 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
       __atomic_load_n(&arg.disconnectedCount, __ATOMIC_ACQUIRE);
 
   // TODO(networking): refactor the codebase to allow this test
-  VALK_TEST_ASSERT(connected == disconnected == 1,
-                   "Expected a single client connection %d, %d", connected,
+  VALK_TEST_ASSERT(connected == 1 && disconnected == 1,
+                   "Expected a single client connection %zu, %zu", connected,
                    disconnected);
 
   VALK_PASS();

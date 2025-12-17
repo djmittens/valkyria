@@ -4015,6 +4015,28 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
     }
   }
 
+  // Wait for event loop thread to finish before returning.
+  // This is important when aio/stop is called from within the event loop
+  // (e.g., from an aio/schedule callback), as aio/stop can't join itself.
+  valk_aio_wait_for_shutdown(sys);
+
+  return valk_lval_nil();
+}
+
+// aio/stop: (aio/stop aio-system) -> nil
+// Signals the AIO system to shut down gracefully
+static valk_lval_t* valk_builtin_aio_stop(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  if (strcmp(aio_ref->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/stop: argument must be an aio_system");
+  }
+
+  valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
+  valk_aio_stop(sys);
   return valk_lval_nil();
 }
 
@@ -4554,6 +4576,60 @@ static valk_lval_t* valk_builtin_http2_server_handle(valk_lenv_t* e,
   return valk_lval_nil();
 }
 
+// http2/client-request: (http2/client-request aio host port path callback) -> nil
+// Makes an HTTP/2 GET request and calls callback with the response
+static valk_lval_t* valk_builtin_http2_client_request(valk_lenv_t* e,
+                                                       valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 5);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "First argument must be aio_system");
+
+  valk_lval_t* host_arg = valk_lval_list_nth(a, 1);
+  LVAL_ASSERT_TYPE(a, host_arg, LVAL_STR);
+
+  valk_lval_t* port_arg = valk_lval_list_nth(a, 2);
+  LVAL_ASSERT_TYPE(a, port_arg, LVAL_NUM);
+
+  valk_lval_t* path_arg = valk_lval_list_nth(a, 3);
+  LVAL_ASSERT_TYPE(a, path_arg, LVAL_STR);
+
+  valk_lval_t* callback = valk_lval_list_nth(a, 4);
+  LVAL_ASSERT_TYPE(a, callback, LVAL_FUN);
+
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  const char* host = host_arg->str;
+  int port = (int)port_arg->num;
+  const char* path = path_arg->str;
+
+  return valk_http2_client_request_impl(e, sys, host, port, path, callback);
+}
+
+// aio/schedule: (aio/schedule aio delay-ms callback) -> nil
+// Schedules a callback to run after delay-ms milliseconds.
+// Works at the top level (outside request handlers).
+static valk_lval_t* valk_builtin_aio_schedule(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  valk_lval_t* delay_arg = valk_lval_list_nth(a, 1);
+  valk_lval_t* callback = valk_lval_list_nth(a, 2);
+
+  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
+  LVAL_ASSERT_TYPE(a, delay_arg, LVAL_NUM);
+  LVAL_ASSERT_TYPE(a, callback, LVAL_FUN);
+
+  if (strcmp(aio_ref->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/schedule: first argument must be an AIO system");
+  }
+
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  uint64_t delay_ms = (uint64_t)delay_arg->num;
+
+  return valk_aio_schedule(sys, delay_ms, callback, e);
+}
+
 // exit: (exit code) -> never returns; terminates process with status code
 static valk_lval_t* valk_builtin_exit(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -4738,6 +4814,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   // Async I/O System
   valk_lenv_put_builtin(env, "aio/start", valk_builtin_aio_start);
   valk_lenv_put_builtin(env, "aio/run", valk_builtin_aio_run);
+  valk_lenv_put_builtin(env, "aio/stop", valk_builtin_aio_stop);
   valk_lenv_put_builtin(env, "aio/metrics", valk_builtin_aio_metrics);
   valk_lenv_put_builtin(env, "aio/metrics-json", valk_builtin_aio_metrics_json);
   valk_lenv_put_builtin(env, "aio/systems-json", valk_builtin_aio_systems_json);
@@ -4746,6 +4823,8 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "aio/system-stats-prometheus",
                         valk_builtin_aio_system_stats_prometheus);
   valk_lenv_put_builtin(env, "aio/delay", valk_builtin_aio_delay);
+  valk_lenv_put_builtin(env, "aio/defer", valk_builtin_aio_delay);  // Alias
+  valk_lenv_put_builtin(env, "aio/schedule", valk_builtin_aio_schedule);
 
   // HTTP Client Metrics Builtins
   valk_lenv_put_builtin(env, "http-client/register",
@@ -4770,6 +4849,10 @@ void valk_lenv_builtins(valk_lenv_t* env) {
                         valk_builtin_http2_server_listen);
   valk_lenv_put_builtin(env, "http2/server-handle",
                         valk_builtin_http2_server_handle);
+
+  // HTTP/2 Client (real implementation)
+  valk_lenv_put_builtin(env, "http2/client-request",
+                        valk_builtin_http2_client_request);
 
 #ifdef VALK_METRICS_ENABLED
   // SSE (Server-Sent Events) builtins (from aio_sse_builtins.c)

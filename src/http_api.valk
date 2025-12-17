@@ -121,10 +121,12 @@
 })
 
 ; Fetch with retry logic (simple version)
+; Type: String -> Int -> Async Response
 (fun {http2/fetch-retry url max-retries} {
   (\ {k} {
     (= {try-fetch} (\ {retries} {
-      (http2/fetch url (\ {resp} {
+      (= {fetch-op} (http2/fetch url))
+      (fetch-op (\ {resp} {
         (if (http2/response-ok? resp)
           {(k resp)}
           {(if (> retries 0)

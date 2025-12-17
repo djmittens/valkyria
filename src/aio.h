@@ -100,6 +100,18 @@ struct valk_async_handle_t {
 // Register async handle builtins
 void valk_register_async_handle_builtins(struct valk_lenv_t *env);
 
+// HTTP/2 client request implementation (called from parser.c builtin)
+struct valk_lval_t *valk_http2_client_request_impl(struct valk_lenv_t *e,
+                                                    valk_aio_system_t *sys,
+                                                    const char *host, int port,
+                                                    const char *path,
+                                                    struct valk_lval_t *callback);
+
+// Top-level timer scheduling (no HTTP context required)
+struct valk_lval_t *valk_aio_schedule(valk_aio_system_t *sys, uint64_t delay_ms,
+                                       struct valk_lval_t *callback,
+                                       struct valk_lenv_t *env);
+
 struct valk_http2_header_t {
   uint8_t *name;
   uint8_t *value;
@@ -169,6 +181,9 @@ void valk_aio_stop(valk_aio_system_t *sys);
 
 /// @brief Check if the AIO system is shutting down
 bool valk_aio_is_shutting_down(valk_aio_system_t *sys);
+
+/// @brief Wait for shutdown to complete and cleanup resources
+void valk_aio_wait_for_shutdown(valk_aio_system_t *sys);
 
 valk_future *valk_aio_read_file(valk_aio_system_t *sys, const char *filename);
 
