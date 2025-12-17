@@ -1043,10 +1043,9 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
 
     for (size_t i = 0; i < (count - 1); i++) {
       // Evaluate each argument
+      // NOTE: Don't propagate errors - allow functions like error? to receive
+      // error values as arguments
       tmp[i] = valk_lval_eval(env, h->cons.head);
-      if (LVAL_TYPE(tmp[i]) == LVAL_ERR) {
-        return tmp[i];
-      }
       h = h->cons.tail;
     }
 
@@ -2340,7 +2339,8 @@ static valk_lval_t* valk_builtin_put(valk_lenv_t* e, valk_lval_t* a) {
 
   for (size_t i = 0; i < valk_lval_list_count(syms); i++) {
     valk_lval_t* val = valk_resolve_symbol(e, valk_lval_list_nth(a, i + 1));
-    if (LVAL_TYPE(val) == LVAL_ERR) return val;
+    // NOTE: Don't propagate errors - allow storing error values in variables
+    // so users can check them with error? predicate
 
     valk_lval_t* sym = valk_lval_list_nth(syms, i);
     valk_lenv_put(e, sym, val);

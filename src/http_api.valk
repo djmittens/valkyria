@@ -279,11 +279,16 @@
 ; ============================================================================
 
 ; Simple synchronous-style fetch (using async/run)
+; WARNING: This does NOT work for I/O operations because async/run relies on
+; mocked continuation primitives. Use the async callback pattern instead:
+;   ((http2/fetch aio host port path) (\ {resp} { ... handle response ... }))
+; TODO(networking): Implement proper delimited continuations to fix this
 (fun {http2/fetch-sync aio host port path} {
   (async/run (http2/fetch aio host port path))
 })
 
 ; Fetch and print response
+; WARNING: Broken - see http2/fetch-sync note above
 (fun {http2/fetch-and-print aio host port path} {
   (= {resp} (http2/fetch-sync aio host port path))
   (print "Status:" (http2/response-status resp))

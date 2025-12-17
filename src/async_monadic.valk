@@ -272,6 +272,10 @@
 
 ; async/run: Execute an async operation synchronously
 ; Type: Async a -> a
+; NOTE: This only works for PURE async operations (async/pure, async/bind chains
+; that don't involve I/O). For I/O operations, the continuation primitives are
+; mocked and cannot actually block until the I/O completes.
+; TODO(networking): Implement proper delimited continuations to support I/O
 (fun {async/run async-op} {
   (async-reset {
     (async-shift {k} {(async-op k)})

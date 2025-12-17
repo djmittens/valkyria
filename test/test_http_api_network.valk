@@ -36,10 +36,14 @@
     {(printf "  FAIL: %s\n" name)})
 })
 
-; Server handler - simple fixed response (routing not needed for coverage)
+; Server handler - returns different responses based on path for testing
+; Uses quasiquote (`) to build plist without evaluating :status/:body as symbols
 (def {server-handler}
   (\ {req} {
-    {:status "200" :body "Hello from test server"}
+    (= {path} (plist/get req (head {:path})))
+    (if (== path "/error")
+      {`{:status "500" :body "Internal Server Error"}}
+      {`{:status "200" :body "Hello from test server"}})
   }))
 
 (println "")
@@ -131,13 +135,59 @@
                 (fetch-batch-op (\ {fetch-results} {
                   (assert-test "http2/fetch-all returns results" (not (error? fetch-results)))
 
-                  ; Print final results
+                  ; Test 10: http2/fetch-all-text (batch text fetch)
                   (println "")
-                  (printf "=== Results: %d/%d tests passed ===\n" tests-passed tests-run)
-                  (println "")
+                  (println "Test group: http2/fetch-all-text")
+                  (= {text-batch-op} (http2/fetch-all-text aio endpoints))
+                  (assert-test "http2/fetch-all-text returns lambda" (not (== text-batch-op nil)))
 
-                  ; Stop the server
-                  (aio/stop aio)
+                  (text-batch-op (\ {text-results} {
+                    (assert-test "http2/fetch-all-text returns results" (not (error? text-results)))
+
+                    ; Test 11: http2/fan-out
+                    (println "")
+                    (println "Test group: http2/fan-out")
+                    (= {extractors} (list
+                      (\ {r} {(list "127.0.0.1" TEST_PORT "/")})
+                      (\ {r} {(list "127.0.0.1" TEST_PORT "/")})))
+                    (= {fanout-op} (http2/fan-out aio "127.0.0.1" TEST_PORT "/" extractors))
+                    (assert-test "http2/fan-out returns lambda" (not (== fanout-op nil)))
+
+                    (fanout-op (\ {fanout-results} {
+                      (assert-test "http2/fan-out returns results" (not (error? fanout-results)))
+
+                      ; Test 12: http2/aggregate
+                      (println "")
+                      (println "Test group: http2/aggregate")
+                      (= {combiner} (\ {responses} {(len responses)}))
+                      (= {agg-op} (http2/aggregate aio endpoints combiner))
+                      (assert-test "http2/aggregate returns lambda" (not (== agg-op nil)))
+
+                      (agg-op (\ {agg-result} {
+                        (assert-test "http2/aggregate returns combined result" (== agg-result 2))
+
+                        ; Test 13: http2/fetch-retry with retry path (error endpoint)
+                        (println "")
+                        (println "Test group: http2/fetch-retry (failure path)")
+                        (= {retry-fail-op} (http2/fetch-retry aio "127.0.0.1" TEST_PORT "/error" 2))
+                        (assert-test "http2/fetch-retry on error path returns lambda" (not (== retry-fail-op nil)))
+
+                        (retry-fail-op (\ {retry-fail-resp} {
+                          ; After 2 retries, should still return the error response
+                          (assert-test "http2/fetch-retry exhausts retries" (not (error? retry-fail-resp)))
+                          (assert-test "http2/fetch-retry returns 500 after retries" (== (http2/response-status retry-fail-resp) "500"))
+
+                          ; Print final results
+                          (println "")
+                          (printf "=== Results: %d/%d tests passed ===\n" tests-passed tests-run)
+                          (println "")
+
+                          ; Stop the server
+                          (aio/stop aio)
+                        }))
+                      }))
+                    }))
+                  }))
                 }))
               }))
             }))
@@ -156,6 +206,7 @@
 
 (aio/run aio)
 (println "HTTP API network tests finished!")
+(println "")
 
 ; Exit with appropriate code
 (if (== tests-passed tests-run)
