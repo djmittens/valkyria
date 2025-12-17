@@ -361,6 +361,42 @@ valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
 // }
 
 #ifdef VALK_COVERAGE
+// Check if lval is an 'if' expression: (if cond true-branch false-branch)
+static bool is_if_expr(valk_lval_t* lval) {
+  if (lval == NULL || LVAL_TYPE(lval) != LVAL_CONS) return false;
+  valk_lval_t* head = lval->cons.head;
+  if (head == NULL || LVAL_TYPE(head) != LVAL_SYM) return false;
+  return strcmp(head->str, "if") == 0;
+}
+
+// Mark both branches of an 'if' expression as coverable
+static void mark_if_branches(valk_lval_t* lval) {
+  // Structure: (if cond true-branch false-branch)
+  // CONS(if, CONS(cond, CONS(true-branch, CONS(false-branch, NIL))))
+  valk_lval_t* args = lval->cons.tail;
+  if (args == NULL || LVAL_TYPE(args) != LVAL_CONS) return;
+
+  // Skip condition
+  valk_lval_t* rest = args->cons.tail;
+  if (rest == NULL || LVAL_TYPE(rest) != LVAL_CONS) return;
+
+  // true-branch
+  valk_lval_t* true_branch = rest->cons.head;
+  if (true_branch != NULL && true_branch->cov_file_id != 0 && true_branch->cov_line != 0) {
+    valk_coverage_mark_expr(true_branch->cov_file_id, true_branch->cov_line,
+                            true_branch->cov_column, 0);
+  }
+
+  // false-branch
+  valk_lval_t* rest2 = rest->cons.tail;
+  if (rest2 == NULL || LVAL_TYPE(rest2) != LVAL_CONS) return;
+  valk_lval_t* false_branch = rest2->cons.head;
+  if (false_branch != NULL && false_branch->cov_file_id != 0 && false_branch->cov_line != 0) {
+    valk_coverage_mark_expr(false_branch->cov_file_id, false_branch->cov_line,
+                            false_branch->cov_column, 0);
+  }
+}
+
 static void valk_coverage_mark_tree(valk_lval_t* lval) {
   if (lval == NULL) return;
 
@@ -372,8 +408,15 @@ static void valk_coverage_mark_tree(valk_lval_t* lval) {
   //   - def bindings: (def {x} 1) - {x} is the binding name
   // If a QEXPR is actually evaluated (via list/eval/etc), it gets recorded
   // dynamically through valk_qexpr_to_cons.
+  //
+  // Exception: for 'if' expressions, we mark both branch qexprs as coverable
+  // since they represent conditional code paths that should be tested.
   if (type == LVAL_CONS) {
     VALK_COVERAGE_MARK_LVAL(lval);
+    // Special handling for 'if': mark both branches as coverable
+    if (is_if_expr(lval)) {
+      mark_if_branches(lval);
+    }
     valk_coverage_mark_tree(lval->cons.head);
     valk_coverage_mark_tree(lval->cons.tail);
   } else if (type == LVAL_QEXPR) {
@@ -2721,6 +2764,16 @@ static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* branch;
   bool condition = cond_val->num != 0;
 #ifdef VALK_COVERAGE
+  // Mark both branches as coverable so untaken branches show as missed
+  if (true_branch->cov_file_id != 0 && true_branch->cov_line != 0) {
+    valk_coverage_mark_expr(true_branch->cov_file_id, true_branch->cov_line,
+                            true_branch->cov_column, 0);
+  }
+  if (false_branch->cov_file_id != 0 && false_branch->cov_line != 0) {
+    valk_coverage_mark_expr(false_branch->cov_file_id, false_branch->cov_line,
+                            false_branch->cov_column, 0);
+  }
+  // Record branch coverage at the if statement's line (use true branch line as anchor)
   uint16_t file_id = true_branch->cov_file_id;
   uint16_t line = true_branch->cov_line;
   if (file_id == 0 || line == 0) {

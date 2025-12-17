@@ -1,5 +1,6 @@
-; High-Level HTTP API for Valkyria
+; High-Level HTTP/2 API for Valkyria
 ; Built on top of async monadic combinators and http2 primitives
+; NOTE: Only HTTP/2 is supported - all functions use http2/ prefix
 ;
 ; Architecture:
 ;   1. Request/Response abstraction layer
@@ -15,7 +16,7 @@
 ; ============================================================================
 
 ; Create a GET request
-(fun {http/get url} {
+(fun {http2/get url} {
   (= {req} (http2/request "GET" "https" url "/"))
   (http2/request-add-header req ":method" "GET")
   (http2/request-add-header req "user-agent" "Valkyria/1.0")
@@ -23,7 +24,7 @@
 })
 
 ; Create a POST request with body
-(fun {http/post url body} {
+(fun {http2/post url body} {
   (= {req} (http2/request "POST" "https" url "/"))
   (http2/request-add-header req ":method" "POST")
   (http2/request-add-header req "content-type" "application/json")
@@ -33,7 +34,7 @@
 })
 
 ; Create a request with custom method
-(fun {http/request method url} {
+(fun {http2/make-request method url} {
   (= {req} (http2/request method "https" url "/"))
   (http2/request-add-header req ":method" method)
   (http2/request-add-header req "user-agent" "Valkyria/1.0")
@@ -41,37 +42,22 @@
 })
 
 ; Add header to request (chainable)
-(fun {http/with-header req name value} {
+(fun {http2/with-header req name value} {
   (http2/request-add-header req name value)
   req
 })
 
 ; Add multiple headers
-(fun {http/with-headers req headers} {
+(fun {http2/with-headers req headers} {
   (= {add-header} (\ {r h} {
-    (http/with-header r (head h) (head (tail h)))
+    (http2/with-header r (head h) (head (tail h)))
   }))
   (foldl add-header req headers)
 })
 
-; Extract response status
-(fun {http/response-status resp} {
-  (http2/response-status resp)
-})
-
-; Extract response body as string
-(fun {http/response-body resp} {
-  (http2/response-body resp)
-})
-
-; Extract response headers
-(fun {http/response-headers resp} {
-  (http2/response-headers resp)
-})
-
 ; Check if response is success (2xx)
-(fun {http/response-ok? resp} {
-  (= {status} (http/response-status resp))
+(fun {http2/response-ok? resp} {
+  (= {status} (http2/response-status resp))
   (if (>= status 200)
     {(< status 300)}
     {0})
@@ -82,7 +68,7 @@
 ; ============================================================================
 
 ; Low-level: Connect and send request (returns async operation)
-(fun {http/fetch-async url request} {
+(fun {http2/fetch-async url request} {
   (\ {k} {
     ; First connect to server
     (http2/connect-async url (\ {client} {
@@ -96,27 +82,27 @@
 })
 
 ; High-level: Fetch URL with GET request
-(fun {http/fetch url} {
-  (= {req} (http/get url))
-  (http/fetch-async url req)
+(fun {http2/fetch url} {
+  (= {req} (http2/get url))
+  (http2/fetch-async url req)
 })
 
 ; Fetch with custom request
-(fun {http/fetch-with-request url request} {
-  (http/fetch-async url request)
+(fun {http2/fetch-with-request url request} {
+  (http2/fetch-async url request)
 })
 
 ; Fetch and extract body
-(fun {http/fetch-text url} {
-  (async/bind (http/fetch url) (\ {resp} {
-    (async/pure (http/response-body resp))
+(fun {http2/fetch-text url} {
+  (async/bind (http2/fetch url) (\ {resp} {
+    (async/pure (http2/response-body resp))
   }))
 })
 
 ; Fetch and check if successful
-(fun {http/fetch-ok? url} {
-  (async/bind (http/fetch url) (\ {resp} {
-    (async/pure (http/response-ok? resp))
+(fun {http2/fetch-ok? url} {
+  (async/bind (http2/fetch url) (\ {resp} {
+    (async/pure (http2/response-ok? resp))
   }))
 })
 
@@ -125,21 +111,21 @@
 ; ============================================================================
 
 ; Fetch multiple URLs in sequence
-(fun {http/fetch-all urls} {
-  (async/map-list http/fetch urls)
+(fun {http2/fetch-all urls} {
+  (async/map-list http2/fetch urls)
 })
 
 ; Fetch multiple URLs and extract bodies
-(fun {http/fetch-all-text urls} {
-  (async/map-list http/fetch-text urls)
+(fun {http2/fetch-all-text urls} {
+  (async/map-list http2/fetch-text urls)
 })
 
 ; Fetch with retry logic (simple version)
-(fun {http/fetch-retry url max-retries} {
+(fun {http2/fetch-retry url max-retries} {
   (\ {k} {
     (= {try-fetch} (\ {retries} {
-      (http/fetch url (\ {resp} {
-        (if (http/response-ok? resp)
+      (http2/fetch url (\ {resp} {
+        (if (http2/response-ok? resp)
           {(k resp)}
           {(if (> retries 0)
             {(try-fetch (- retries 1))}
@@ -158,32 +144,32 @@
 ; Type: Request → (Request → k) → k
 
 ; Add authentication header
-(fun {http/with-auth token} {
+(fun {http2/with-auth token} {
   (\ {req} {
-    (http/with-header req "authorization" token)
+    (http2/with-header req "authorization" token)
   })
 })
 
 ; Add custom user agent
-(fun {http/with-user-agent agent} {
+(fun {http2/with-user-agent agent} {
   (\ {req} {
-    (http/with-header req "user-agent" agent)
+    (http2/with-header req "user-agent" agent)
   })
 })
 
 ; Log request before sending
-(fun {http/with-logging req} {
+(fun {http2/with-logging req} {
   (print "HTTP Request:" req)
   req
 })
 
 ; Apply middleware to request
-(fun {http/apply-middleware req middleware} {
+(fun {http2/apply-middleware req middleware} {
   (middleware req)
 })
 
 ; Compose multiple middleware functions
-(fun {http/compose-middleware middleware-list} {
+(fun {http2/compose-middleware middleware-list} {
   (\ {req} {
     (foldl (\ {r mw} {(mw r)}) req middleware-list)
   })
@@ -197,21 +183,21 @@
 ; Type: Response → (Response → k) → k
 
 ; Log response
-(fun {http/log-response resp} {
-  (print "HTTP Response:" (http/response-status resp))
+(fun {http2/log-response resp} {
+  (print "HTTP Response:" (http2/response-status resp))
   resp
 })
 
 ; Extract JSON body (placeholder - needs JSON parser)
-(fun {http/parse-json-response resp} {
+(fun {http2/parse-json-response resp} {
   ; TODO: Implement JSON parsing
-  (http/response-body resp)
+  (http2/response-body resp)
 })
 
 ; Validate response status
-(fun {http/validate-status expected-status} {
+(fun {http2/validate-status expected-status} {
   (\ {resp} {
-    (= {status} (http/response-status resp))
+    (= {status} (http2/response-status resp))
     (if (== status expected-status)
       {resp}
       {(error "Unexpected status:" status)})
@@ -226,18 +212,19 @@
 ; Handler: Request → (Response → k) → k
 
 ; Simple path matching (exact match for now)
-(fun {http/route-matches? pattern path} {
+(fun {http2/route-matches? pattern path} {
   (== pattern path)
 })
 
 ; Find matching route
-(fun {http/find-route routes method path} {
+(fun {http2/find-route routes method path} {
   (= {matches} (\ {route} {
     (if (== (head route) method)
-      {(http/route-matches? (head (tail route)) path)}
+      {(http2/route-matches? (head (tail route)) path)}
       {0})
   }))
-  (head (filter matches routes))
+  (= {matched} (filter matches routes))
+  (if (== matched nil) {nil} {(head matched)})
 })
 
 ; ============================================================================
@@ -253,26 +240,26 @@
 ; ============================================================================
 
 ; Parallel requests (currently sequential due to implementation)
-(fun {http/parallel async-ops} {
+(fun {http2/parallel async-ops} {
   (async/collect async-ops)
 })
 
 ; Sequential requests with dependencies
-(fun {http/sequential async-ops} {
+(fun {http2/sequential async-ops} {
   (async/sequence async-ops)
 })
 
 ; Fan-out pattern: fetch related resources
-(fun {http/fan-out url extractors} {
-  (async/bind (http/fetch url) (\ {resp} {
+(fun {http2/fan-out url extractors} {
+  (async/bind (http2/fetch url) (\ {resp} {
     (= {urls} (map (\ {ext} {(ext resp)}) extractors))
-    (http/fetch-all urls)
+    (http2/fetch-all urls)
   }))
 })
 
 ; Aggregate pattern: fetch and combine
-(fun {http/aggregate urls combiner} {
-  (async/bind (http/fetch-all urls) (\ {responses} {
+(fun {http2/aggregate urls combiner} {
+  (async/bind (http2/fetch-all urls) (\ {responses} {
     (async/pure (combiner responses))
   }))
 })
@@ -282,28 +269,28 @@
 ; ============================================================================
 
 ; Simple synchronous-style fetch (using async/run)
-(fun {http/fetch-sync url} {
-  (async/run (http/fetch url))
+(fun {http2/fetch-sync url} {
+  (async/run (http2/fetch url))
 })
 
 ; Fetch and print response
-(fun {http/fetch-and-print url} {
-  (= {resp} (http/fetch-sync url))
-  (print "Status:" (http/response-status resp))
-  (print "Body:" (http/response-body resp))
+(fun {http2/fetch-and-print url} {
+  (= {resp} (http2/fetch-sync url))
+  (print "Status:" (http2/response-status resp))
+  (print "Body:" (http2/response-body resp))
   resp
 })
 
 ; Health check endpoint
-(fun {http/health-check url} {
-  (async/bind (http/fetch url) (\ {resp} {
-    (async/pure (http/response-ok? resp))
+(fun {http2/health-check url} {
+  (async/bind (http2/fetch url) (\ {resp} {
+    (async/pure (http2/response-ok? resp))
   }))
 })
 
 ; Batch health checks
-(fun {http/health-check-all urls} {
-  (async/map-list http/health-check urls)
+(fun {http2/health-check-all urls} {
+  (async/map-list http2/health-check urls)
 })
 
 ; ============================================================================
@@ -311,7 +298,7 @@
 ; ============================================================================
 
 ; Request builder for fluent API
-(fun {http/request-builder method url} {
+(fun {http2/request-builder method url} {
   (list
     (list "method" method)
     (list "url" url)
@@ -320,15 +307,15 @@
 })
 
 ; Add header to builder
-(fun {http/builder-add-header builder name value} {
+(fun {http2/builder-add-header builder name value} {
   ; TODO: Implement proper builder pattern
   builder
 })
 
 ; Build final request from builder
-(fun {http/builder-build builder} {
+(fun {http2/builder-build builder} {
   ; TODO: Convert builder to actual request
-  (http/request
+  (http2/make-request
     (head (tail (head builder)))
     (head (tail (head (tail builder)))))
 })
@@ -338,26 +325,26 @@
 ; ============================================================================
 
 ; Core request creation
-; - http/get, http/post, http/request
-; - http/with-header, http/with-headers
+; - http2/get, http2/post, http2/make-request
+; - http2/with-header, http2/with-headers
 
 ; Fetching
-; - http/fetch, http/fetch-text, http/fetch-ok?
-; - http/fetch-all, http/fetch-all-text
-; - http/fetch-sync, http/fetch-and-print
+; - http2/fetch, http2/fetch-text, http2/fetch-ok?
+; - http2/fetch-all, http2/fetch-all-text
+; - http2/fetch-sync, http2/fetch-and-print
 
-; Response handling
-; - http/response-status, http/response-body, http/response-headers, http/response-ok?
+; Response handling (use http2/response-* builtins directly)
+; - http2/response-ok?
 
 ; Middleware
-; - http/with-auth, http/with-user-agent, http/with-logging
-; - http/compose-middleware, http/apply-middleware
+; - http2/with-auth, http2/with-user-agent, http2/with-logging
+; - http2/compose-middleware, http2/apply-middleware
 
 ; Patterns
-; - http/parallel, http/sequential, http/fan-out, http/aggregate
-; - http/health-check, http/health-check-all
+; - http2/parallel, http2/sequential, http2/fan-out, http2/aggregate
+; - http2/health-check, http2/health-check-all
 
 ; Error handling (use async_monadic.valk)
 ; - async/try, async/recover
 
-; HTTP API loaded
+; HTTP/2 API loaded
