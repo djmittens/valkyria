@@ -72,7 +72,7 @@ class FileCoverage:
     @property
     def branch_coverage_pct(self) -> float:
         if self.branches_found == 0:
-            return 0.0
+            return 100.0
         return (self.branches_hit / self.branches_found) * 100
     
     @property
@@ -1061,7 +1061,7 @@ tr.selected .line-no {{
 <div class="stats">
 {'<div class="stat"><div class="stat-value ' + coverage_class(fc.expr_coverage_pct) + '">' + f'{fc.expr_coverage_pct:.1f}%' + '</div><div class="stat-label">Expression Coverage</div></div>' if is_valk and fc.exprs_found > 0 else '<div class="stat"><div class="stat-value ' + coverage_class(fc.line_coverage_pct) + '">' + f'{fc.line_coverage_pct:.1f}%' + '</div><div class="stat-label">Line Coverage</div></div>'}
 <div class="stat">
-<div class="stat-value {coverage_class(fc.branch_coverage_pct) if fc.branches_found > 0 else ''}">{f'{fc.branch_coverage_pct:.1f}%' if fc.branches_found > 0 else '-'}</div>
+<div class="stat-value {coverage_class(fc.branch_coverage_pct)}">{fc.branch_coverage_pct:.1f}%</div>
 <div class="stat-label">Branch Coverage</div>
 </div>
 <div class="stat">

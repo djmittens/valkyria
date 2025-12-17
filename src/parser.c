@@ -365,8 +365,19 @@ static void valk_coverage_mark_tree(valk_lval_t* lval) {
   if (lval == NULL) return;
 
   uint8_t type = LVAL_TYPE(lval);
-  if (type == LVAL_CONS || type == LVAL_QEXPR) {
+  // Only mark CONS (s-expressions) as trackable expressions, not QEXPR.
+  // QEXPRs are quoted data that is NOT evaluated by the interpreter.
+  // Examples of QEXPRs that shouldn't be counted:
+  //   - Function parameters: (fun {name args} body) - {name args} is data
+  //   - def bindings: (def {x} 1) - {x} is the binding name
+  // If a QEXPR is actually evaluated (via list/eval/etc), it gets recorded
+  // dynamically through valk_qexpr_to_cons.
+  if (type == LVAL_CONS) {
     VALK_COVERAGE_MARK_LVAL(lval);
+    valk_coverage_mark_tree(lval->cons.head);
+    valk_coverage_mark_tree(lval->cons.tail);
+  } else if (type == LVAL_QEXPR) {
+    // Still recurse into QEXPR children to find nested CONS expressions
     valk_coverage_mark_tree(lval->cons.head);
     valk_coverage_mark_tree(lval->cons.tail);
   }

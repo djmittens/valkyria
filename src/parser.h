@@ -194,8 +194,13 @@ valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx);
   (lval)->cov_file_id = (fid); \
   (lval)->cov_line = (ln); \
   (lval)->cov_column = (col); \
-  VALK_COVERAGE_MARK_LINE((fid), (ln)); \
-  VALK_COVERAGE_MARK_LVAL(lval); \
+  uint8_t __type = LVAL_TYPE(lval); \
+  /* Only mark CONS (s-expressions) for coverage, not QEXPR. */ \
+  /* QEXPRs are quoted data not evaluated (e.g., function params, def bindings). */ \
+  if (__type == LVAL_CONS) { \
+    VALK_COVERAGE_MARK_LINE((fid), (ln)); \
+    VALK_COVERAGE_MARK_LVAL(lval); \
+  } \
 } while(0)
 #define LVAL_INIT_SOURCE_LOC(lval) do { \
   (lval)->cov_file_id = 0; \

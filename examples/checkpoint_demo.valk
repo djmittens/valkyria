@@ -26,9 +26,6 @@
 (def {thr_old} (mem/gc/set-threshold hl0))
 (println "Configured GC: routine threshold set to hard-limit (%ld → %ld). GC runs only near exhaustion." thr0 (mem/gc/threshold))
 
-; Toggle heavy slab saturation phase (set to 1 to run it)
-(def {run_heavy} 0)
-
 ; Capture baseline numbers
 (def {arena_cap} (mem/arena/capacity))
 (def {h0} (mem/heap/usage))
@@ -151,31 +148,33 @@
 ; ---------------------------------------------------------------------------
 ; Phase 5 — Slab saturation: malloc fallback kicks in for new values
 ; ---------------------------------------------------------------------------
-(println "\n--- Phase 5: Slab vs Malloc region (short demo) ---")
-(if run_heavy
-  { do
-      (println "Heavy mode ON: saturating slab may take time…")
-      ; Enough persistent cons cells to exceed the fixed slab (256k objects)
-      (def {h5_before} (mem/heap/usage))
-      (def {slab_filler}
-           (map (\ {n} {range 0 5000}) (range 1 62)))
-      (def {h5_after} (mem/heap/usage))
-      (println "Malloc-region heap grew by: %ld bytes" (- h5_after h5_before))
-      (println "Inspect bars: '├─Slab' should be near full; '└─Malloc' > 0")
-      (mem/stats)
-    }
-  { do
-      (println "Heavy mode OFF: quick peek instead (no slab saturation)")
-      (def {h5_before} (mem/heap/usage))
-      ; Create a moderate number of persistent lists to show slab growth
-      (def {moderate}
-           (map (\ {n} {range 0 2000}) (range 1 8)))
-      (def {h5_after} (mem/heap/usage))
-      (println "Persisted 7 lists × 2000 = 14,000 cons cells")
-      (show-bytes "Heap delta (mostly slab-backed lvals; malloc handles non-lval bytes)" (- h5_after h5_before))
-      (println "Note: malloc region handles non-lval data; slab handles lvals.")
-      (mem/stats)
-    }
+(println "\n--- Phase 5: Slab vs Malloc region ---")
+
+; Part A: Light mode - moderate allocation
+(do
+  (println "Phase 5a: Quick peek (moderate allocation)")
+  (def {h5a_before} (mem/heap/usage))
+  ; Create a moderate number of persistent lists to show slab growth
+  (def {moderate}
+       (map (\ {n} {range 0 2000}) (range 1 8)))
+  (def {h5a_after} (mem/heap/usage))
+  (println "Persisted 7 lists × 2000 = 14,000 cons cells")
+  (show-bytes "Heap delta (mostly slab-backed lvals; malloc handles non-lval bytes)" (- h5a_after h5a_before))
+  (println "Note: malloc region handles non-lval data; slab handles lvals.")
+  (mem/stats)
+)
+
+; Part B: Heavy mode - saturate slab
+(do
+  (println "Phase 5b: Heavy mode - saturating slab (may take time)…")
+  ; Enough persistent cons cells to exceed the fixed slab (256k objects)
+  (def {h5b_before} (mem/heap/usage))
+  (def {slab_filler}
+       (map (\ {n} {range 0 5000}) (range 1 62)))
+  (def {h5b_after} (mem/heap/usage))
+  (println "Malloc-region heap grew by: %ld bytes" (- h5b_after h5b_before))
+  (println "Inspect bars: '├─Slab' should be near full; '└─Malloc' > 0")
+  (mem/stats)
 )
 
 ; ---------------------------------------------------------------------------
