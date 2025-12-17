@@ -1078,11 +1078,16 @@ static valk_lval_t* valk_lval_eval_recursive(valk_lenv_t* env, valk_lval_t* lval
                        valk_ltype_name(LVAL_TYPE(lval)));
 }
 
-// Public eval function - dispatches to trampoline or recursive based on compile flag
+// Public eval function - dispatches to trampoline or recursive based on flags
 valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
 #ifdef VALK_TRAMPOLINE_EVAL
+  // Compile-time flag: always use trampoline
   return valk_eval_trampoline(env, lval);
 #else
+  // Runtime flag: allows testing trampoline without recompiling
+  if (valk_trampoline_eval_enabled()) {
+    return valk_eval_trampoline(env, lval);
+  }
   return valk_lval_eval_recursive(env, lval);
 #endif
 }

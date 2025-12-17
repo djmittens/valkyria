@@ -464,6 +464,327 @@ void test_trampoline_matches_recursive(VALK_TEST_ARGS()) {
 }
 
 // ============================================================================
+// Deep Recursion Tests
+// ============================================================================
+
+void test_trampoline_deep_recursion(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  // Define a recursive countdown function
+  eval_expr("(def {countdown} (\\ {n} {if (> n 0) {countdown (- n 1)} {n}}))");
+
+  // Test with moderate depth - would overflow C stack with recursive eval
+  // but trampoline should handle it fine
+  valk_lval_t *result = eval_expr("(countdown 1000)");
+  VALK_TEST_ASSERT(result_is_num(result, 0),
+                   "countdown 1000 should return 0");
+
+  // Test with larger depth
+  result = eval_expr("(countdown 5000)");
+  VALK_TEST_ASSERT(result_is_num(result, 0),
+                   "countdown 5000 should return 0");
+
+  teardown_test_env();
+  VALK_PASS();
+}
+
+void test_trampoline_mutual_recursion(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  // Define mutually recursive even/odd predicates
+  // Note: == is the equality operator, = is local assignment
+  eval_expr("(def {my-even?} (\\ {n} {if (== n 0) {1} {my-odd? (- n 1)}}))");
+  eval_expr("(def {my-odd?} (\\ {n} {if (== n 0) {0} {my-even? (- n 1)}}))");
+
+  // Test basic cases
+  valk_lval_t *result = eval_expr("(my-even? 0)");
+  VALK_TEST_ASSERT(result_is_num(result, 1), "0 should be even");
+
+  result = eval_expr("(my-odd? 1)");
+  VALK_TEST_ASSERT(result_is_num(result, 1), "1 should be odd");
+
+  result = eval_expr("(my-even? 100)");
+  VALK_TEST_ASSERT(result_is_num(result, 1), "100 should be even");
+
+  result = eval_expr("(my-odd? 101)");
+  VALK_TEST_ASSERT(result_is_num(result, 1), "101 should be odd");
+
+  teardown_test_env();
+  VALK_PASS();
+}
+
+// ============================================================================
+// GC Integration Tests
+// ============================================================================
+
+void test_gc_marks_stack(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  // Create a stack with various frame types containing lvals
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  // Create some test values
+  valk_lval_t *num = valk_lval_num(42);
+  valk_lval_t *str = valk_lval_str("test");
+  valk_lval_t *list = valk_lval_cons(valk_lval_num(1),
+                        valk_lval_cons(valk_lval_num(2), valk_lval_nil()));
+
+  // Push an eval frame
+  valk_eval_stack_push(&stack, (valk_eval_frame_t){
+    .type = FRAME_EVAL,
+    .env = g_env,
+    .eval = { .expr = num }
+  });
+
+  // Push an if frame
+  valk_eval_stack_push(&stack, (valk_eval_frame_t){
+    .type = FRAME_IF_COND,
+    .env = g_env,
+    .if_cond = {
+      .then_branch = str,
+      .else_branch = list
+    }
+  });
+
+  // Push a sequence frame
+  valk_eval_stack_push(&stack, (valk_eval_frame_t){
+    .type = FRAME_DO_SEQUENCE,
+    .env = g_env,
+    .seq = { .remaining = list }
+  });
+
+  VALK_TEST_ASSERT(stack.count == 3, "Stack should have 3 frames");
+
+  // Mark should not crash and should mark all referenced objects
+  // (This is a basic smoke test - full verification would require
+  // checking GC marks, which is internal to GC)
+  valk_gc_mark_eval_stack(&stack);
+
+  valk_eval_stack_free(&stack);
+  teardown_test_env();
+  VALK_PASS();
+}
+
+void test_gc_marks_call_frame_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  // Create args array
+  valk_lval_t **args = malloc(3 * sizeof(valk_lval_t *));
+  args[0] = valk_lval_num(1);
+  args[1] = valk_lval_num(2);
+  args[2] = valk_lval_str("three");
+
+  // Push a call frame with args
+  valk_eval_stack_push(&stack, (valk_eval_frame_t){
+    .type = FRAME_CALL_EVAL_ARGS,
+    .env = g_env,
+    .call = {
+      .fn = valk_lval_num(0),  // Placeholder
+      .args = args,
+      .args_capacity = 3,
+      .args_count = 3,
+      .remaining = valk_lval_nil(),
+      .original_expr = valk_lval_nil()
+    }
+  });
+
+  // Mark should traverse all args
+  valk_gc_mark_eval_stack(&stack);
+
+  valk_eval_stack_free(&stack);
+  teardown_test_env();
+  VALK_PASS();
+}
+
+void test_stack_copy_preserves_call_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  // Create args array
+  valk_lval_t **args = malloc(2 * sizeof(valk_lval_t *));
+  args[0] = valk_lval_num(100);
+  args[1] = valk_lval_num(200);
+
+  // Push a call frame with args
+  valk_eval_stack_push(&stack, (valk_eval_frame_t){
+    .type = FRAME_CALL_EVAL_ARGS,
+    .env = g_env,
+    .call = {
+      .fn = NULL,
+      .args = args,
+      .args_capacity = 2,
+      .args_count = 2,
+      .remaining = valk_lval_nil(),
+      .original_expr = valk_lval_nil()
+    }
+  });
+
+  // Copy the stack
+  valk_eval_stack_t *copy = valk_eval_stack_copy(&stack);
+  VALK_TEST_ASSERT(copy != NULL, "Copy should succeed");
+  VALK_TEST_ASSERT(copy->count == 1, "Copy should have 1 frame");
+
+  // Verify args were deep copied (different pointer)
+  valk_eval_frame_t *orig_frame = &stack.frames[0];
+  valk_eval_frame_t *copy_frame = &copy->frames[0];
+  VALK_TEST_ASSERT(copy_frame->call.args != orig_frame->call.args,
+                   "Args array should be deep copied");
+  VALK_TEST_ASSERT(copy_frame->call.args_count == 2,
+                   "Args count should be preserved");
+  VALK_TEST_ASSERT(copy_frame->call.args[0] == args[0],
+                   "Args values should be same pointers (lvals not copied)");
+  VALK_TEST_ASSERT(copy_frame->call.args[1] == args[1],
+                   "Args values should be same pointers (lvals not copied)");
+
+  valk_eval_stack_free(&stack);
+  valk_eval_stack_free(copy);
+  free(copy);
+
+  teardown_test_env();
+  VALK_PASS();
+}
+
+// ============================================================================
+// Runtime Flag Tests
+// ============================================================================
+
+// Helper that uses valk_lval_eval (not directly calling trampoline)
+static valk_lval_t *eval_via_dispatch(const char *code) {
+  int pos = 0;
+  valk_lval_t *ast = valk_lval_read(&pos, code);
+  if (LVAL_TYPE(ast) == LVAL_ERR) {
+    return ast;
+  }
+  return valk_lval_eval(g_env, ast);
+}
+
+void test_runtime_flag_dispatch(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  // Verify we start with trampoline disabled
+  VALK_TEST_ASSERT(!valk_trampoline_eval_enabled(),
+                   "Trampoline should be disabled by default");
+
+  // Test with recursive eval (default)
+  valk_lval_t *result = eval_via_dispatch("(+ 1 2 3)");
+  VALK_TEST_ASSERT(result_is_num(result, 6),
+                   "Recursive eval: (+ 1 2 3) should be 6");
+
+  // Enable trampoline
+  valk_trampoline_eval_set_enabled(true);
+  VALK_TEST_ASSERT(valk_trampoline_eval_enabled(),
+                   "Trampoline should be enabled after set");
+
+  // Test with trampoline eval
+  result = eval_via_dispatch("(+ 10 20 30)");
+  VALK_TEST_ASSERT(result_is_num(result, 60),
+                   "Trampoline eval: (+ 10 20 30) should be 60");
+
+  // Test more complex expression
+  result = eval_via_dispatch("(if (> 5 3) {(* 2 3)} {0})");
+  VALK_TEST_ASSERT(result_is_num(result, 6),
+                   "Trampoline eval: if expression should be 6");
+
+  // Test nested calls
+  result = eval_via_dispatch("((\\ {x y} {+ (* x x) y}) 3 4)");
+  VALK_TEST_ASSERT(result_is_num(result, 13),
+                   "Trampoline eval: nested lambda should be 13");
+
+  // Disable trampoline and verify dispatch works
+  valk_trampoline_eval_set_enabled(false);
+  VALK_TEST_ASSERT(!valk_trampoline_eval_enabled(),
+                   "Trampoline should be disabled after reset");
+
+  result = eval_via_dispatch("(- 100 50)");
+  VALK_TEST_ASSERT(result_is_num(result, 50),
+                   "Back to recursive eval: (- 100 50) should be 50");
+
+  teardown_test_env();
+  VALK_PASS();
+}
+
+void test_trampoline_comprehensive(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_test_env();
+
+  // Enable trampoline for this test
+  valk_trampoline_eval_set_enabled(true);
+
+  // Test various features using only builtins (no prelude)
+  // 1. List operations via builtins
+  valk_lval_t *result = eval_via_dispatch("(head {1 2 3})");
+  VALK_TEST_ASSERT(result_is_num(result, 1), "head {1 2 3} should be 1");
+
+  result = eval_via_dispatch("(len {1 2 3 4 5})");
+  VALK_TEST_ASSERT(result_is_num(result, 5), "len should be 5");
+
+  result = eval_via_dispatch("(tail {1 2 3})");
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_QEXPR, "tail should return qexpr");
+
+  // 2. Comparison operators (builtins)
+  result = eval_via_dispatch("(< 1 2)");
+  VALK_TEST_ASSERT(result_is_num(result, 1), "1 < 2 should be 1");
+
+  result = eval_via_dispatch("(> 5 3)");
+  VALK_TEST_ASSERT(result_is_num(result, 1), "5 > 3 should be 1");
+
+  result = eval_via_dispatch("(== 5 5)");
+  VALK_TEST_ASSERT(result_is_num(result, 1), "5 == 5 should be 1");
+
+  result = eval_via_dispatch("(!= 5 3)");
+  VALK_TEST_ASSERT(result_is_num(result, 1), "5 != 3 should be 1");
+
+  // 3. def and usage
+  eval_via_dispatch("(def {test-val} 42)");
+  result = eval_via_dispatch("test-val");
+  VALK_TEST_ASSERT(result_is_num(result, 42), "test-val should be 42");
+
+  // 4. Function definition and call
+  eval_via_dispatch("(def {double} (\\ {n} {* n 2}))");
+  result = eval_via_dispatch("(double 21)");
+  VALK_TEST_ASSERT(result_is_num(result, 42), "double 21 should be 42");
+
+  // 5. Partial application
+  eval_via_dispatch("(def {add} (\\ {a b} {+ a b}))");
+  eval_via_dispatch("(def {add5} (add 5))");
+  result = eval_via_dispatch("(add5 10)");
+  VALK_TEST_ASSERT(result_is_num(result, 15), "add5 10 should be 15");
+
+  // 6. Nested function calls
+  eval_via_dispatch("(def {square} (\\ {n} {* n n}))");
+  result = eval_via_dispatch("(+ (square 3) (square 4))");
+  VALK_TEST_ASSERT(result_is_num(result, 25), "3^2 + 4^2 should be 25");
+
+  // 7. Higher-order: function returning function
+  eval_via_dispatch("(def {make-adder} (\\ {n} {\\ {x} {+ n x}}))");
+  eval_via_dispatch("(def {add10} (make-adder 10))");
+  result = eval_via_dispatch("(add10 5)");
+  VALK_TEST_ASSERT(result_is_num(result, 15), "add10 5 should be 15");
+
+  // 8. Varargs
+  eval_via_dispatch("(def {my-list} (\\ {& xs} {xs}))");
+  result = eval_via_dispatch("(len (my-list 1 2 3 4 5))");
+  VALK_TEST_ASSERT(result_is_num(result, 5), "varargs list length should be 5");
+
+  // Clean up
+  valk_trampoline_eval_set_enabled(false);
+  teardown_test_env();
+  VALK_PASS();
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -527,8 +848,30 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_trampoline_matches_recursive",
                           test_trampoline_matches_recursive);
 
+  // Deep recursion tests
+  valk_testsuite_add_test(suite, "test_trampoline_deep_recursion",
+                          test_trampoline_deep_recursion);
+  valk_testsuite_add_test(suite, "test_trampoline_mutual_recursion",
+                          test_trampoline_mutual_recursion);
+
+  // GC integration tests
+  valk_testsuite_add_test(suite, "test_gc_marks_stack", test_gc_marks_stack);
+  valk_testsuite_add_test(suite, "test_gc_marks_call_frame_args",
+                          test_gc_marks_call_frame_args);
+  valk_testsuite_add_test(suite, "test_stack_copy_preserves_call_args",
+                          test_stack_copy_preserves_call_args);
+
+  // Runtime flag tests
+  valk_testsuite_add_test(suite, "test_runtime_flag_dispatch",
+                          test_runtime_flag_dispatch);
+  valk_testsuite_add_test(suite, "test_trampoline_comprehensive",
+                          test_trampoline_comprehensive);
+
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
+
+  // Re-init allocator for testsuite cleanup (tests may have destroyed it)
+  valk_mem_init_malloc();
   valk_testsuite_free(suite);
 
   return res;
