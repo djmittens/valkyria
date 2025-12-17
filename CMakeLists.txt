@@ -14,6 +14,7 @@ project(valkyria LANGUAGES C)
 # Feature flags
 option(VALK_METRICS "Enable metrics collection" OFF)
 option(VALK_COVERAGE "Enable Valk line coverage instrumentation" OFF)
+option(VALK_TRAMPOLINE "Use trampoline-based eval (for algebraic effects)" OFF)
 
 set (CMAKE_EXECUTABLE_ENABLE_EXPORTS on )
 
@@ -80,6 +81,7 @@ set(VALKYRIA_SOURCES
   src/memory.c
   src/concurrency.c  # TODO: Remove once AIO is updated to use continuations
   src/gc.c
+  src/eval_trampoline.c
 # TODO(networking): if should detect uring and if we have it we can get it here instead of libuv.
   src/aio_uv.c
   src/debug.c
@@ -120,6 +122,11 @@ endif()
 if(VALK_COVERAGE)
   add_compile_definitions(VALK_COVERAGE)
   message(STATUS "Valk line coverage: ENABLED")
+endif()
+
+if(VALK_TRAMPOLINE)
+  target_compile_definitions(valkyria PRIVATE VALK_TRAMPOLINE_EVAL=1)
+  message(STATUS "Trampoline eval: ENABLED")
 endif()
 
 # On glibc-based Linux, expose required pthread and POSIX interfaces
@@ -195,6 +202,10 @@ include_directories(test_large_response src/)
 add_executable(test_memory test/test_memory.c test/testing.c)
 target_link_libraries(test_memory PRIVATE "-lc" "-lm" valkyria)
 include_directories(test_memory src/)
+
+add_executable(test_eval_trampoline test/test_eval_trampoline.c test/testing.c)
+target_link_libraries(test_eval_trampoline PRIVATE "-lc" valkyria)
+include_directories(test_eval_trampoline src/)
 
 add_executable(test_per_stream_arena test/test_per_stream_arena.c test/testing.c)
 target_link_libraries(test_per_stream_arena PRIVATE "-lc" valkyria)

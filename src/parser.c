@@ -13,6 +13,7 @@
 #include "collections.h"
 #include "common.h"
 #include "coverage.h"
+#include "eval_trampoline.h"
 #include "gc.h"
 #include "memory.h"
 
@@ -347,6 +348,21 @@ valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
   res->str = valk_mem_alloc(n + 1);
   if (n) memcpy(res->str, bytes, n);
   res->str[n] = '\0';
+
+  valk_capture_trace(VALK_TRACE_NEW, 1, res);
+  return res;
+}
+
+// Continuation constructor for delimited continuations (algebraic effects)
+valk_lval_t* valk_lval_cont(valk_eval_stack_t* stack, valk_lenv_t* env, bool one_shot) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  res->flags =
+      LVAL_CONT | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+  VALK_SET_ORIGIN_ALLOCATOR(res);
+  LVAL_INIT_SOURCE_LOC(res);
+  res->cont.stack = stack;
+  res->cont.env = env;
+  res->cont.one_shot = one_shot;
 
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
@@ -851,7 +867,7 @@ static bool valk_is_tagged_list(valk_lval_t* lval, const char* tag) {
 //   `,x         -> (eval x)
 //   `(a ,b c)   -> (list 'a (eval b) 'c)
 //   `(a ,@b c)  -> (concat (list 'a) b (list 'c))
-static valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) {
+valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) {
   // Atoms (non-lists) are returned as-is (quoted)
   if (LVAL_TYPE(form) != LVAL_CONS && LVAL_TYPE(form) != LVAL_QEXPR) {
     return form;
@@ -951,7 +967,8 @@ static valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) 
   return result;
 }
 
-valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
+// Recursive tree-walker eval (original implementation)
+static valk_lval_t* valk_lval_eval_recursive(valk_lenv_t* env, valk_lval_t* lval) {
   // Tree-walker evaluation
   atomic_fetch_add(&g_eval_metrics.evals_total, 1);
 
@@ -1059,6 +1076,15 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
   // Unknown type
   return valk_lval_err("Unknown value type in evaluation: %s",
                        valk_ltype_name(LVAL_TYPE(lval)));
+}
+
+// Public eval function - dispatches to trampoline or recursive based on compile flag
+valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
+#ifdef VALK_TRAMPOLINE_EVAL
+  return valk_eval_trampoline(env, lval);
+#else
+  return valk_lval_eval_recursive(env, lval);
+#endif
 }
 
 valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
@@ -1441,8 +1467,8 @@ void valk_lval_print(valk_lval_t* val) {
       printf("Reference[%s:%p]", val->ref.type, val->ref.ptr);
       break;
     case LVAL_CONT:
-      printf("Continuation[fn:%p, data:%p]", val->cont.resume_fn,
-             val->cont.user_data);
+      printf("Continuation[stack:%p, env:%p, one_shot:%d]", (void*)val->cont.stack,
+             (void*)val->cont.env, val->cont.one_shot);
       break;
     case LVAL_ENV:
       printf("[LEnv]");
@@ -3604,6 +3630,7 @@ static valk_lval_t* valk_builtin_async_reset(valk_lenv_t* e, valk_lval_t* a) {
 
 // async-resume: Resume a continuation with a value
 // (async-resume cont value) - calls continuation with value
+// TODO(networking): Implement proper resume using trampoline-based continuations
 static valk_lval_t* valk_builtin_async_resume(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
@@ -3613,14 +3640,14 @@ static valk_lval_t* valk_builtin_async_resume(valk_lenv_t* e, valk_lval_t* a) {
 
   valk_lval_t* value = valk_lval_list_nth(a, 1);
 
-  // If there's a resume function, call it
-  if (cont->cont.resume_fn) {
-    typedef valk_lval_t* (*resume_fn_t)(valk_lenv_t*, valk_lval_t*);
-    resume_fn_t fn = (resume_fn_t)cont->cont.resume_fn;
-    return fn(cont->cont.env, value);
+  // New stack-based continuation system
+  if (cont->cont.stack != NULL) {
+    // TODO(networking): Implement proper resume by restoring the eval stack
+    // and pushing the value. For now, return an error.
+    return valk_lval_err("async-resume: stack-based continuation resume not yet implemented");
   }
 
-  // Otherwise just return the value (simplified for now)
+  // Continuation has no stack - just return the value
   return value;
 }
 

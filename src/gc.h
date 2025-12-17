@@ -172,3 +172,13 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
 
 // Add a value to the GC heap's object list (for evacuated values)
 void valk_gc_add_to_objects(valk_gc_malloc_heap_t* heap, valk_lval_t* v);
+
+// ============================================================================
+// External GC marking functions (for eval_trampoline.c)
+// ============================================================================
+
+// Mark an lval and all its children
+void valk_gc_mark_lval_external(valk_lval_t* v);
+
+// Mark an environment and all its contents
+void valk_gc_mark_env_external(valk_lenv_t* env);
