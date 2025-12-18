@@ -4876,6 +4876,19 @@ void valk_aio_timer_free(valk_aio_handle_t* handle) {
 }
 #endif
 
+static void __delay_timer_close_cb(uv_handle_t *handle) {
+  valk_delay_timer_t *timer_data = (valk_delay_timer_t *)handle->data;
+  free(timer_data);
+}
+
+static void __schedule_timer_close_cb(uv_handle_t *handle) {
+  free(handle->data);
+}
+
+static void __sleep_timer_close_cb(uv_handle_t *handle) {
+  UNUSED(handle);
+}
+
 // Timer callback for aio/delay - called when timer fires
 static void __delay_timer_cb(uv_timer_t *handle) {
   valk_delay_timer_t *timer_data = (valk_delay_timer_t *)handle->data;
@@ -4885,9 +4898,7 @@ static void __delay_timer_cb(uv_timer_t *handle) {
   if (!conn || conn->http.state == VALK_CONN_CLOSING ||
       conn->http.state == VALK_CONN_CLOSED || !conn->http.session) {
     uv_timer_stop(handle);
-    uv_close((uv_handle_t *)handle, NULL);
-    // Note: continuation may leak if connection closed - GC handles GC-allocated ones
-    free(timer_data);
+    uv_close((uv_handle_t *)handle, __delay_timer_close_cb);
     return;
   }
 
@@ -4929,8 +4940,7 @@ static void __delay_timer_cb(uv_timer_t *handle) {
 
   // Stop and close the timer
   uv_timer_stop(handle);
-  uv_close((uv_handle_t *)handle, NULL);
-  free(timer_data);
+  uv_close((uv_handle_t *)handle, __delay_timer_close_cb);
 }
 
 // aio/delay implementation - schedules a timer and calls continuation after delay
@@ -5008,8 +5018,7 @@ static void __schedule_timer_cb(uv_timer_t *handle) {
 
   // Cleanup
   uv_timer_stop(handle);
-  uv_close((uv_handle_t *)handle, NULL);
-  free(timer_data);
+  uv_close((uv_handle_t *)handle, __schedule_timer_close_cb);
 }
 
 valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, uint64_t delay_ms,
@@ -5075,7 +5084,7 @@ static void __sleep_timer_cb(uv_timer_t *timer_handle) {
 
   // Cleanup timer
   uv_timer_stop(timer_handle);
-  uv_close((uv_handle_t *)timer_handle, NULL);
+  uv_close((uv_handle_t *)timer_handle, __sleep_timer_close_cb);
 }
 
 static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {

@@ -11,291 +11,21 @@ Output: coverage-report/index.html with file-by-file browsing
 
 import os
 import sys
-import json
-import gzip
-import re
 import html
-import subprocess
 from pathlib import Path
-from dataclasses import dataclass, field
-from typing import Optional
 from datetime import datetime
 from xml.etree import ElementTree as ET
 
-@dataclass
-class BranchCoverage:
-    line_no: int
-    branch_id: int
-    taken: int
-
-@dataclass
-class ExprCoverage:
-    line_no: int
-    column: int
-    end_column: int
-    hit_count: int
-
-@dataclass
-class LineCoverage:
-    line_no: int
-    hit_count: int
-    source: str = ""
-    branches: list = field(default_factory=list)
-    exprs: list = field(default_factory=list)
-
-@dataclass
-class FileCoverage:
-    filename: str
-    lines: dict = field(default_factory=dict)
-    functions_found: int = 0
-    functions_hit: int = 0
-    branch_data: dict = field(default_factory=dict)
-    
-    @property
-    def branches_found(self) -> int:
-        return len(self.branch_data)
-    
-    @property
-    def branches_hit(self) -> int:
-        return sum(1 for taken in self.branch_data.values() if taken > 0)
-
-    
-    @property
-    def lines_found(self) -> int:
-        return len(self.lines)
-    
-    @property
-    def lines_hit(self) -> int:
-        return sum(1 for l in self.lines.values() if l.hit_count > 0)
-    
-    @property
-    def line_coverage_pct(self) -> float:
-        if self.lines_found == 0:
-            return 0.0
-        return (self.lines_hit / self.lines_found) * 100
-    
-    @property
-    def branch_coverage_pct(self) -> float:
-        if self.branches_found == 0:
-            return 100.0
-        return (self.branches_hit / self.branches_found) * 100
-    
-    @property
-    def exprs_found(self) -> int:
-        return sum(len(l.exprs) for l in self.lines.values())
-    
-    @property
-    def exprs_hit(self) -> int:
-        return sum(1 for l in self.lines.values() for e in l.exprs if e.hit_count > 0)
-    
-    @property
-    def expr_coverage_pct(self) -> float:
-        if self.exprs_found == 0:
-            return 0.0
-        return (self.exprs_hit / self.exprs_found) * 100
-
-@dataclass
-class CoverageReport:
-    files: dict = field(default_factory=dict)
-    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
-    
-    @property
-    def total_lines_found(self) -> int:
-        return sum(f.lines_found for f in self.files.values())
-    
-    @property
-    def total_lines_hit(self) -> int:
-        return sum(f.lines_hit for f in self.files.values())
-    
-    @property
-    def total_functions_found(self) -> int:
-        return sum(f.functions_found for f in self.files.values())
-    
-    @property
-    def total_functions_hit(self) -> int:
-        return sum(f.functions_hit for f in self.files.values())
-    
-    @property
-    def total_branches_found(self) -> int:
-        return sum(f.branches_found for f in self.files.values())
-    
-    @property
-    def total_branches_hit(self) -> int:
-        return sum(f.branches_hit for f in self.files.values())
-    
-    @property
-    def line_coverage_pct(self) -> float:
-        if self.total_lines_found == 0:
-            return 0.0
-        return (self.total_lines_hit / self.total_lines_found) * 100
-    
-    @property
-    def branch_coverage_pct(self) -> float:
-        if self.total_branches_found == 0:
-            return 0.0
-        return (self.total_branches_hit / self.total_branches_found) * 100
+# Import shared coverage data structures and parsing
+from coverage_common import (
+    BranchCoverage, ExprCoverage, LineCoverage, FileCoverage, CoverageReport,
+    collect_coverage, filter_runtime_files, filter_stdlib_files
+)
 
 
-def parse_lcov_file(lcov_path: Path, report: CoverageReport, source_root: Path):
-    """Parse LCOV format coverage file."""
-    if not lcov_path.exists():
-        return
-    
-    current_file = None
-    
-    with open(lcov_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            
-            if line.startswith("SF:"):
-                filepath = line[3:]
-                if not filepath.startswith("/"):
-                    filepath = str(source_root / filepath)
-                if filepath not in report.files:
-                    report.files[filepath] = FileCoverage(filename=filepath)
-                current_file = report.files[filepath]
-                
-            elif line.startswith("DA:"):
-                if current_file:
-                    parts = line[3:].split(",")
-                    if len(parts) >= 2:
-                        line_no = int(parts[0])
-                        hit_count = int(parts[1])
-                        if line_no in current_file.lines:
-                            current_file.lines[line_no].hit_count += hit_count
-                        else:
-                            current_file.lines[line_no] = LineCoverage(line_no=line_no, hit_count=hit_count)
-            
-            elif line.startswith("EXPRDATA:"):
-                if current_file:
-                    parts = line[9:].split(",")
-                    if len(parts) >= 4:
-                        line_no = int(parts[0])
-                        column = int(parts[1])
-                        end_column = int(parts[2])
-                        hit_count = int(parts[3])
-                        if line_no in current_file.lines:
-                            existing = None
-                            for e in current_file.lines[line_no].exprs:
-                                if e.column == column:
-                                    existing = e
-                                    break
-                            if existing:
-                                existing.hit_count += hit_count
-                            else:
-                                current_file.lines[line_no].exprs.append(
-                                    ExprCoverage(line_no=line_no, column=column, end_column=end_column, hit_count=hit_count)
-                                )
-            
-            elif line.startswith("BRDA:"):
-                if current_file:
-                    parts = line[5:].split(",")
-                    if len(parts) >= 4:
-                        line_no = int(parts[0])
-                        block_id = int(parts[1])
-                        branch_id = int(parts[2])
-                        taken_str = parts[3]
-                        taken = 0 if taken_str == "-" else int(taken_str)
-                        key = (line_no, branch_id)
-                        current_file.branch_data[key] = current_file.branch_data.get(key, 0) + taken
-                        if line_no in current_file.lines:
-                            existing = None
-                            for b in current_file.lines[line_no].branches:
-                                if b.branch_id == branch_id:
-                                    existing = b
-                                    break
-                            if existing:
-                                existing.taken += taken
-                            else:
-                                current_file.lines[line_no].branches.append(
-                                    BranchCoverage(line_no=line_no, branch_id=branch_id, taken=taken)
-                                )
-                            
-            elif line.startswith("FNF:"):
-                if current_file:
-                    current_file.functions_found = int(line[4:])
-            elif line.startswith("FNH:"):
-                if current_file:
-                    current_file.functions_hit = int(line[4:])
-            elif line.startswith("BRF:"):
-                pass
-            elif line.startswith("BRH:"):
-                pass
-            elif line == "end_of_record":
-                current_file = None
 
+# Removed: now in coverage_common
 
-def find_llvm_cov() -> Optional[str]:
-    """Find llvm-cov executable on the system."""
-    candidates = [
-        "llvm-cov",
-        "/opt/homebrew/opt/llvm/bin/llvm-cov",
-        "/usr/local/opt/llvm/bin/llvm-cov",
-        "/Library/Developer/CommandLineTools/usr/bin/llvm-cov",
-    ]
-    
-    for candidate in candidates:
-        try:
-            result = subprocess.run(
-                [candidate, "--version"],
-                capture_output=True,
-                text=True,
-                timeout=2
-            )
-            if result.returncode == 0:
-                return candidate
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            continue
-    
-    try:
-        result = subprocess.run(
-            ["xcrun", "--find", "llvm-cov"],
-            capture_output=True,
-            text=True,
-            timeout=2
-        )
-        if result.returncode == 0:
-            path = result.stdout.strip()
-            if path:
-                return path
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    
-    return None
-
-
-def parse_gcov_files(build_dir: Path, source_root: Path, report: CoverageReport):
-    """Parse gcov output files using llvm-cov gcov."""
-    gcda_dir = build_dir / "CMakeFiles" / "valkyria.dir" / "src"
-    if not gcda_dir.exists():
-        return
-    
-    llvm_cov = find_llvm_cov()
-    if not llvm_cov:
-        print("Warning: llvm-cov not found, skipping C coverage", file=sys.stderr)
-        return
-    
-    for gcda_file in gcda_dir.glob("*.gcda"):
-        try:
-            result = subprocess.run(
-                [llvm_cov, "gcov", "-b", "-o", str(gcda_dir), str(gcda_file)],
-                cwd=str(build_dir),
-                capture_output=True,
-                text=True
-            )
-        except FileNotFoundError:
-            print("Warning: llvm-cov not found, skipping C coverage", file=sys.stderr)
-            return
-        
-        for gcov_file in build_dir.glob("*.gcov"):
-            parse_gcov_output(gcov_file, report, source_root)
-            gcov_file.unlink()
-    
-    for gcov_file in source_root.glob("*.gcov"):
-        gcov_file.unlink()
-    
 def parse_gcov_output(gcov_path: Path, report: CoverageReport, source_root: Path):
     """Parse a .gcov file and add to report."""
     source_file = None
@@ -1199,7 +929,7 @@ def generate_html_report(report: CoverageReport, output_dir: Path, source_root: 
         if filepath.startswith(str(source_root)):
             rel_path = filepath[len(str(source_root))+1:]
         
-        if rel_path.startswith("test/") or rel_path.startswith("vendor/") or rel_path.endswith(".h"):
+        if rel_path.startswith("test/") or rel_path.startswith("vendor/") or rel_path.startswith("examples/") or rel_path.endswith(".h"):
             continue
         
         file_html_name = generate_file_html(fc, output_dir, source_root)
@@ -1493,17 +1223,11 @@ def main():
     print(f"  Valk LCOV:    {valk_lcov}")
     print(f"  Output:       {output_dir}")
     
-    report = CoverageReport()
-    
-    print("\nParsing C coverage (gcov)...")
-    parse_gcov_files(build_dir, source_root, report)
-    c_count = len([f for f in report.files.keys() if not f.endswith(".valk")])
-    print(f"  Found {c_count} C files")
-    
-    print("\nParsing Valk coverage (LCOV)...")
-    parse_lcov_file(valk_lcov, report, source_root)
+    print("\nCollecting coverage data...")
+    report = collect_coverage(build_dir, source_root, valk_lcov)
+    c_count = len([f for f in report.files.keys() if f.endswith(".c")])
     valk_count = len([f for f in report.files.keys() if f.endswith(".valk")])
-    print(f"  Found {valk_count} Valk files")
+    print(f"  Found {c_count} C files, {valk_count} Valk files")
     
     print("\nGenerating HTML report...")
     generate_html_report(report, output_dir, source_root)
