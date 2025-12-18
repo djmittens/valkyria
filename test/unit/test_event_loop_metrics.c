@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <uv.h>
 
 void test_event_loop_metrics_init_null(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -215,6 +216,141 @@ void test_event_loop_metrics_zero_handles(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_event_loop_metrics_negative_handles(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_event_loop_metrics_v2_t m;
+  bool result = valk_event_loop_metrics_v2_init(&m, "negative_handles_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_event_loop_metrics_v2_set_handles(&m, -1);
+
+  int64_t handles_val = atomic_load(&m.handles->value);
+  VALK_TEST_ASSERT(handles_val == -1, "handles should accept negative value");
+
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_with_libuv_loop(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  uv_loop_t loop;
+  int rc = uv_loop_init(&loop);
+  VALK_TEST_ASSERT(rc == 0, "uv_loop_init should succeed");
+
+  valk_event_loop_metrics_v2_t m;
+  bool result = valk_event_loop_metrics_v2_init(&m, "libuv_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_event_loop_metrics_v2_update(&m, &loop);
+
+  uv_loop_close(&loop);
+
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_update_twice(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  uv_loop_t loop;
+  int rc = uv_loop_init(&loop);
+  VALK_TEST_ASSERT(rc == 0, "uv_loop_init should succeed");
+
+  valk_event_loop_metrics_v2_t m;
+  bool result = valk_event_loop_metrics_v2_init(&m, "update_twice_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_event_loop_metrics_v2_update(&m, &loop);
+  valk_event_loop_metrics_v2_update(&m, &loop);
+
+  uv_loop_close(&loop);
+
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_empty_loop_name(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_event_loop_metrics_v2_t m;
+  bool result = valk_event_loop_metrics_v2_init(&m, "");
+  VALK_TEST_ASSERT(result == true, "Init with empty name should succeed");
+
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_counters_monotonic(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_event_loop_metrics_v2_t m;
+  bool result = valk_event_loop_metrics_v2_init(&m, "monotonic_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  VALK_TEST_ASSERT(m.iterations != NULL, "iterations counter should exist");
+  VALK_TEST_ASSERT(m.events != NULL, "events counter should exist");
+
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_gauges_exist(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_event_loop_metrics_v2_t m;
+  bool result = valk_event_loop_metrics_v2_init(&m, "gauges_exist_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  VALK_TEST_ASSERT(m.events_waiting != NULL, "events_waiting gauge should exist");
+  VALK_TEST_ASSERT(m.idle_time_us != NULL, "idle_time_us gauge should exist");
+  VALK_TEST_ASSERT(m.handles != NULL, "handles gauge should exist");
+
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_prev_tracking_init(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_event_loop_metrics_v2_t m;
+  bool result = valk_event_loop_metrics_v2_init(&m, "prev_init_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  VALK_TEST_ASSERT(m.prev_iterations == 0, "prev_iterations should be 0");
+  VALK_TEST_ASSERT(m.prev_events == 0, "prev_events should be 0");
+
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_handle_updates_persist(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_event_loop_metrics_v2_t m;
+  bool result = valk_event_loop_metrics_v2_init(&m, "persist_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_event_loop_metrics_v2_set_handles(&m, 100);
+  valk_event_loop_metrics_v2_set_handles(&m, 50);
+  valk_event_loop_metrics_v2_set_handles(&m, 75);
+
+  int64_t final = atomic_load(&m.handles->value);
+  VALK_TEST_ASSERT(final == 75, "final handle value should be 75");
+
+  VALK_PASS();
+}
+
 #else
 
 void test_event_loop_metrics_disabled(VALK_TEST_ARGS()) {
@@ -241,6 +377,14 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_event_loop_metrics_different_loop_names", test_event_loop_metrics_different_loop_names);
   valk_testsuite_add_test(suite, "test_event_loop_metrics_all_gauges_created", test_event_loop_metrics_all_gauges_created);
   valk_testsuite_add_test(suite, "test_event_loop_metrics_zero_handles", test_event_loop_metrics_zero_handles);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_negative_handles", test_event_loop_metrics_negative_handles);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_with_libuv_loop", test_event_loop_metrics_with_libuv_loop);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_update_twice", test_event_loop_metrics_update_twice);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_empty_loop_name", test_event_loop_metrics_empty_loop_name);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_counters_monotonic", test_event_loop_metrics_counters_monotonic);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_gauges_exist", test_event_loop_metrics_gauges_exist);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_prev_tracking_init", test_event_loop_metrics_prev_tracking_init);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_handle_updates_persist", test_event_loop_metrics_handle_updates_persist);
 #else
   valk_testsuite_add_test(suite, "test_event_loop_metrics_disabled", test_event_loop_metrics_disabled);
 #endif

@@ -437,6 +437,147 @@ void test_arc_box_zero_capacity(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_arc_box_large_capacity(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_arc_box *box = valk_arc_box_new(VALK_SUC, 1024 * 1024);
+
+  VALK_TEST_ASSERT(box != NULL, "Should create box with large capacity");
+  VALK_TEST_ASSERT(box->capacity == 1024 * 1024, "Capacity should be 1MB");
+  VALK_TEST_ASSERT(box->refcount == 1, "Refcount should be 1");
+
+  valk_arc_release(box);
+
+  VALK_PASS();
+}
+
+void test_arc_box_type_values(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_arc_box *suc_box = valk_arc_box_new(VALK_SUC, 16);
+  valk_arc_box *err_box = valk_arc_box_new(VALK_ERR, 16);
+
+  VALK_TEST_ASSERT(suc_box->type == VALK_SUC, "Type should be VALK_SUC");
+  VALK_TEST_ASSERT(err_box->type == VALK_ERR, "Type should be VALK_ERR");
+
+  valk_arc_release(suc_box);
+  valk_arc_release(err_box);
+
+  VALK_PASS();
+}
+
+void test_future_multiple_retains(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_arc_box *box = valk_arc_box_new(VALK_SUC, 16);
+  valk_future *fut = valk_future_done(box);
+
+  for (int i = 0; i < 10; i++) {
+    valk_arc_retain(fut);
+  }
+  VALK_TEST_ASSERT(fut->refcount == 11, "Refcount should be 11");
+
+  for (int i = 0; i < 10; i++) {
+    valk_arc_release(fut);
+  }
+  VALK_TEST_ASSERT(fut->refcount == 1, "Refcount should be 1");
+
+  valk_arc_release(box);
+  valk_arc_release(fut);
+
+  VALK_PASS();
+}
+
+void test_arc_box_item_pointer(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_arc_box *box = valk_arc_box_new(VALK_SUC, 128);
+
+  VALK_TEST_ASSERT(box->item != NULL, "Item pointer should be set");
+  VALK_TEST_ASSERT((char *)box->item > (char *)box, "Item should be after box header");
+
+  valk_arc_release(box);
+
+  VALK_PASS();
+}
+
+void test_future_done_refcount(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_arc_box *box = valk_arc_box_new(VALK_SUC, 16);
+  VALK_TEST_ASSERT(box->refcount == 1, "Box initial refcount should be 1");
+
+  valk_future *fut = valk_future_done(box);
+  VALK_TEST_ASSERT(fut->refcount == 1, "Future initial refcount should be 1");
+  VALK_TEST_ASSERT(box->refcount == 2, "Box refcount should be 2 after future_done");
+
+  valk_arc_release(fut);
+  valk_arc_release(box);
+
+  VALK_PASS();
+}
+
+void test_promise_respond_null_result(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_future *fut = valk_future_new();
+  valk_promise p = {.item = fut};
+
+  valk_arc_box *result = valk_arc_box_new(VALK_SUC, 0);
+  valk_promise_respond(&p, result);
+
+  VALK_TEST_ASSERT(fut->done == 1, "Future should be done");
+  VALK_TEST_ASSERT(fut->item == result, "Future item should be result");
+
+  valk_arc_release(result);
+  valk_arc_release(fut);
+
+  VALK_PASS();
+}
+
+void test_arc_retain_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_arc_box *box = valk_arc_box_new(VALK_SUC, 16);
+  VALK_TEST_ASSERT(box != NULL, "Box should be created");
+
+  valk_arc_retain(box);
+  VALK_TEST_ASSERT(box->refcount == 2, "Refcount after retain should be 2");
+
+  valk_arc_release(box);
+  valk_arc_release(box);
+
+  VALK_PASS();
+}
+
+void test_and_then_array_grows(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_future *fut = valk_future_new();
+  valk_promise p = {.item = fut};
+
+  VALK_TEST_ASSERT(fut->andThen.count == 0, "andThen should start empty");
+
+  valk_arc_box *result = valk_arc_box_new(VALK_SUC, 8);
+  valk_promise_respond(&p, result);
+
+  VALK_TEST_ASSERT(fut->done == 1, "Future should be done");
+
+  valk_arc_release(result);
+  valk_arc_release(fut);
+
+  VALK_PASS();
+}
+
+void test_task_types(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_TEST_ASSERT((int)VALK_TASK == 0, "VALK_TASK should be 0");
+  VALK_TEST_ASSERT((int)VALK_POISON == 1, "VALK_POISON should be 1");
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -463,6 +604,15 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_arc_box_err_long_message", test_arc_box_err_long_message);
   valk_testsuite_add_test(suite, "test_future_retain_release", test_future_retain_release);
   valk_testsuite_add_test(suite, "test_arc_box_zero_capacity", test_arc_box_zero_capacity);
+  valk_testsuite_add_test(suite, "test_arc_box_large_capacity", test_arc_box_large_capacity);
+  valk_testsuite_add_test(suite, "test_arc_box_type_values", test_arc_box_type_values);
+  valk_testsuite_add_test(suite, "test_future_multiple_retains", test_future_multiple_retains);
+  valk_testsuite_add_test(suite, "test_arc_box_item_pointer", test_arc_box_item_pointer);
+  valk_testsuite_add_test(suite, "test_future_done_refcount", test_future_done_refcount);
+  valk_testsuite_add_test(suite, "test_promise_respond_null_result", test_promise_respond_null_result);
+  valk_testsuite_add_test(suite, "test_arc_retain_null", test_arc_retain_null);
+  valk_testsuite_add_test(suite, "test_and_then_array_grows", test_and_then_array_grows);
+  valk_testsuite_add_test(suite, "test_task_types", test_task_types);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

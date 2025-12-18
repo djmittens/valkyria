@@ -243,6 +243,121 @@ void test_registry_stats_json_exact_buffer_size(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_registry_stats_json_timer_false(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_registry_t reg = {0};
+  reg.stream_count = 0;
+  reg.timer_running = false;
+  reg.events_pushed_total = 0;
+  reg.bytes_pushed_total = 0;
+
+  char buf[256];
+  size_t len = valk_sse_registry_stats_json(&reg, buf, sizeof(buf));
+
+  VALK_TEST_ASSERT(len > 0, "Should produce JSON output");
+  VALK_TEST_ASSERT(strstr(buf, "\"timer_running\":false") != NULL, "timer_running should be false");
+
+  VALK_PASS();
+}
+
+void test_registry_unsubscribe_nonexistent_handle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_registry_t reg = {0};
+  size_t count = valk_sse_registry_unsubscribe_connection(&reg, (valk_aio_handle_t *)0xDEADBEEF);
+  VALK_TEST_ASSERT(count == 0, "Unsubscribing nonexistent handle should return 0");
+
+  VALK_PASS();
+}
+
+void test_registry_find_by_stream_not_found(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_registry_t reg = {0};
+  valk_sse_stream_entry_t *entry = valk_sse_registry_find_by_stream(&reg, (valk_aio_handle_t *)0x1234, 999);
+  VALK_TEST_ASSERT(entry == NULL, "Should return NULL when stream not found");
+
+  VALK_PASS();
+}
+
+void test_registry_stream_count_after_init(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_registry_t reg = {0};
+  VALK_TEST_ASSERT(valk_sse_registry_stream_count(&reg) == 0, "Initial stream count should be 0");
+
+  reg.stream_count = 5;
+  VALK_TEST_ASSERT(valk_sse_registry_stream_count(&reg) == 5, "Stream count should be 5");
+
+  VALK_PASS();
+}
+
+void test_registry_stats_json_boundary(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_registry_t reg = {0};
+  reg.stream_count = 999999;
+  reg.timer_running = true;
+  reg.events_pushed_total = 0xFFFFFFFFULL;
+  reg.bytes_pushed_total = 0xFFFFFFFFFFFFFFFFULL;
+
+  char buf[512];
+  size_t len = valk_sse_registry_stats_json(&reg, buf, sizeof(buf));
+
+  VALK_TEST_ASSERT(len > 0, "Should produce JSON output with boundary values");
+  VALK_TEST_ASSERT(strstr(buf, "\"stream_count\":999999") != NULL, "Should contain stream_count");
+
+  VALK_PASS();
+}
+
+void test_registry_subscribe_null_data_prd(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_registry_t reg = {0};
+  valk_sse_stream_entry_t *entry = valk_sse_registry_subscribe(&reg, (valk_aio_handle_t *)0x1234, NULL, 1, VALK_SSE_SUB_DIAGNOSTICS, NULL);
+  VALK_TEST_ASSERT(entry == NULL, "NULL data_prd should return NULL entry");
+
+  VALK_PASS();
+}
+
+void test_registry_timer_operations_uninitialized(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_registry_t reg = {0};
+  reg.timer_running = false;
+  reg.timer_handle = NULL;
+
+  valk_sse_registry_timer_stop(&reg);
+
+  VALK_PASS();
+}
+
+void test_subscription_types_all(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_TEST_ASSERT((int)VALK_SSE_SUB_DIAGNOSTICS == 0, "DIAGNOSTICS should be 0");
+  VALK_TEST_ASSERT((int)VALK_SSE_SUB_METRICS_ONLY == 1, "METRICS_ONLY should be 1");
+  VALK_TEST_ASSERT((int)VALK_SSE_SUB_MEMORY_ONLY == 2, "MEMORY_ONLY should be 2");
+
+  VALK_PASS();
+}
+
+void test_registry_stats_json_minimum_valid(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_registry_t reg = {0};
+
+  char buf[200];
+  size_t len = valk_sse_registry_stats_json(&reg, buf, sizeof(buf));
+
+  VALK_TEST_ASSERT(len > 0, "Should produce output for zeroed registry");
+  VALK_TEST_ASSERT(buf[0] == '{', "Should start with {");
+  VALK_TEST_ASSERT(buf[len-1] == '}', "Should end with }");
+
+  VALK_PASS();
+}
+
 #else
 
 void test_sse_registry_disabled(VALK_TEST_ARGS()) {
@@ -276,6 +391,15 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_registry_unsubscribe_empty", test_registry_unsubscribe_empty);
   valk_testsuite_add_test(suite, "test_registry_stats_json_large_values", test_registry_stats_json_large_values);
   valk_testsuite_add_test(suite, "test_registry_stats_json_exact_buffer_size", test_registry_stats_json_exact_buffer_size);
+  valk_testsuite_add_test(suite, "test_registry_stats_json_timer_false", test_registry_stats_json_timer_false);
+  valk_testsuite_add_test(suite, "test_registry_unsubscribe_nonexistent_handle", test_registry_unsubscribe_nonexistent_handle);
+  valk_testsuite_add_test(suite, "test_registry_find_by_stream_not_found", test_registry_find_by_stream_not_found);
+  valk_testsuite_add_test(suite, "test_registry_stream_count_after_init", test_registry_stream_count_after_init);
+  valk_testsuite_add_test(suite, "test_registry_stats_json_boundary", test_registry_stats_json_boundary);
+  valk_testsuite_add_test(suite, "test_registry_subscribe_null_data_prd", test_registry_subscribe_null_data_prd);
+  valk_testsuite_add_test(suite, "test_registry_timer_operations_uninitialized", test_registry_timer_operations_uninitialized);
+  valk_testsuite_add_test(suite, "test_subscription_types_all", test_subscription_types_all);
+  valk_testsuite_add_test(suite, "test_registry_stats_json_minimum_valid", test_registry_stats_json_minimum_valid);
 #else
   valk_testsuite_add_test(suite, "test_sse_registry_disabled", test_sse_registry_disabled);
 #endif

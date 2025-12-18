@@ -316,6 +316,167 @@ void test_pool_metrics_rapid_updates(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_pool_metrics_negative_values(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t m;
+  bool result = valk_pool_metrics_init(&m, "negative_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_pool_metrics_update(&m, -100, 1000, 500, 0);
+
+  int64_t used_val = atomic_load(&m.used->value);
+  VALK_TEST_ASSERT(used_val == -100, "used should accept negative value");
+
+  VALK_PASS();
+}
+
+void test_pool_metrics_update_decreasing(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t m;
+  bool result = valk_pool_metrics_init(&m, "decreasing_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_pool_metrics_update(&m, 1000, 2000, 1000, 5);
+  valk_pool_metrics_update(&m, 500, 2000, 1000, 5);
+  valk_pool_metrics_update(&m, 100, 2000, 1000, 5);
+
+  int64_t used_val = atomic_load(&m.used->value);
+  VALK_TEST_ASSERT(used_val == 100, "used should update to 100");
+
+  VALK_PASS();
+}
+
+void test_pool_metrics_slab_full_capacity(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t m;
+  bool result = valk_pool_metrics_init(&m, "slab_full_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_pool_metrics_update_slab(&m, 100, 0, 100, 0);
+
+  int64_t used_val = atomic_load(&m.used->value);
+  VALK_TEST_ASSERT(used_val == 100, "used should be 100 (all slots used)");
+
+  int64_t total_val = atomic_load(&m.total->value);
+  VALK_TEST_ASSERT(total_val == 100, "total should be 100");
+
+  VALK_PASS();
+}
+
+void test_pool_metrics_arena_empty(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t m;
+  bool result = valk_pool_metrics_init(&m, "arena_empty_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_pool_metrics_update_arena(&m, 4096, 0, 0, 0);
+
+  int64_t used_val = atomic_load(&m.used->value);
+  VALK_TEST_ASSERT(used_val == 0, "used should be 0");
+
+  int64_t total_val = atomic_load(&m.total->value);
+  VALK_TEST_ASSERT(total_val == 4096, "total should be 4096");
+
+  VALK_PASS();
+}
+
+void test_pool_metrics_arena_full(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t m;
+  bool result = valk_pool_metrics_init(&m, "arena_full_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_pool_metrics_update_arena(&m, 4096, 4096, 4096, 10);
+
+  int64_t used_val = atomic_load(&m.used->value);
+  VALK_TEST_ASSERT(used_val == 4096, "used should be 4096");
+
+  int64_t peak_val = atomic_load(&m.peak->value);
+  VALK_TEST_ASSERT(peak_val == 4096, "peak should be 4096");
+
+  VALK_PASS();
+}
+
+void test_pool_metrics_custom_prefix_long(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t m;
+  bool result = valk_pool_metrics_init_custom(&m, "test_pool", "memory_subsystem");
+  VALK_TEST_ASSERT(result == true, "Init with long prefix should succeed");
+
+  VALK_TEST_ASSERT(m.used != NULL, "used gauge should be created");
+  VALK_TEST_ASSERT(m.total != NULL, "total gauge should be created");
+
+  VALK_PASS();
+}
+
+void test_pool_metrics_reinit_same_name(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t m1, m2;
+  bool r1 = valk_pool_metrics_init(&m1, "reuse_pool");
+  bool r2 = valk_pool_metrics_init(&m2, "reuse_pool");
+
+  VALK_TEST_ASSERT(r1 == true, "First init should succeed");
+  VALK_TEST_ASSERT(r2 == true, "Second init with same name should succeed (reuses metrics)");
+
+  VALK_PASS();
+}
+
+void test_pool_metrics_all_fields_null_metrics(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_pool_metrics_t m = {0};
+  m.used = NULL;
+  m.total = NULL;
+  m.peak = NULL;
+  m.overflow = NULL;
+
+  valk_pool_metrics_update(&m, 100, 200, 150, 5);
+
+  VALK_PASS();
+}
+
+void test_pool_metrics_overflow_never_decreases(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t m;
+  bool result = valk_pool_metrics_init(&m, "overflow_monotonic_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_pool_metrics_update(&m, 100, 100, 100, 10);
+  valk_pool_metrics_update(&m, 100, 100, 100, 5);
+  valk_pool_metrics_update(&m, 100, 100, 100, 15);
+  valk_pool_metrics_update(&m, 100, 100, 100, 12);
+
+  uint64_t overflow_val = atomic_load(&m.overflow->value);
+  VALK_TEST_ASSERT(overflow_val == 15, "overflow should be max seen (15), got %llu",
+                   (unsigned long long)overflow_val);
+
+  VALK_PASS();
+}
+
 #else
 
 void test_pool_metrics_disabled(VALK_TEST_ARGS()) {
@@ -344,6 +505,15 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_pool_metrics_zero_values", test_pool_metrics_zero_values);
   valk_testsuite_add_test(suite, "test_pool_metrics_large_values", test_pool_metrics_large_values);
   valk_testsuite_add_test(suite, "test_pool_metrics_rapid_updates", test_pool_metrics_rapid_updates);
+  valk_testsuite_add_test(suite, "test_pool_metrics_negative_values", test_pool_metrics_negative_values);
+  valk_testsuite_add_test(suite, "test_pool_metrics_update_decreasing", test_pool_metrics_update_decreasing);
+  valk_testsuite_add_test(suite, "test_pool_metrics_slab_full_capacity", test_pool_metrics_slab_full_capacity);
+  valk_testsuite_add_test(suite, "test_pool_metrics_arena_empty", test_pool_metrics_arena_empty);
+  valk_testsuite_add_test(suite, "test_pool_metrics_arena_full", test_pool_metrics_arena_full);
+  valk_testsuite_add_test(suite, "test_pool_metrics_custom_prefix_long", test_pool_metrics_custom_prefix_long);
+  valk_testsuite_add_test(suite, "test_pool_metrics_reinit_same_name", test_pool_metrics_reinit_same_name);
+  valk_testsuite_add_test(suite, "test_pool_metrics_all_fields_null_metrics", test_pool_metrics_all_fields_null_metrics);
+  valk_testsuite_add_test(suite, "test_pool_metrics_overflow_never_decreases", test_pool_metrics_overflow_never_decreases);
 #else
   valk_testsuite_add_test(suite, "test_pool_metrics_disabled", test_pool_metrics_disabled);
 #endif

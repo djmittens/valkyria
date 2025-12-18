@@ -1,0 +1,104 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "SSE Builtins Error Cases")
+
+(test/define "sse-open-outside-handler-fails"
+  {do
+    (= {result} (sse/open))
+    (test/assert (error? result) "sse/open outside HTTP handler should fail")
+    true
+  })
+
+(test/define "sse-open-with-args-fails"
+  {do
+    (= {result} (sse/open "extra-arg"))
+    (test/assert (error? result) "sse/open with arguments should fail")
+    true
+  })
+
+(test/define "sse-send-no-args-fails"
+  {do
+    (= {result} (sse/send))
+    (test/assert (error? result) "sse/send with no args should fail")
+    true
+  })
+
+(test/define "sse-send-one-arg-fails"
+  {do
+    (= {result} (sse/send "not-a-stream"))
+    (test/assert (error? result) "sse/send with one arg should fail")
+    true
+  })
+
+(test/define "sse-send-wrong-type-fails"
+  {do
+    (= {result} (sse/send "not-a-stream" "data"))
+    (test/assert (error? result) "sse/send with string as stream should fail")
+    true
+  })
+
+(test/define "sse-send-too-many-args-fails"
+  {do
+    (= {result} (sse/send "a" "b" "c" "d"))
+    (test/assert (error? result) "sse/send with 4 args should fail")
+    true
+  })
+
+(test/define "sse-close-no-args-fails"
+  {do
+    (= {result} (sse/close))
+    (test/assert (error? result) "sse/close with no args should fail")
+    true
+  })
+
+(test/define "sse-close-wrong-type-fails"
+  {do
+    (= {result} (sse/close "not-a-stream"))
+    (test/assert (error? result) "sse/close with string should fail")
+    true
+  })
+
+(test/define "sse-writable-no-args-fails"
+  {do
+    (= {result} (sse/writable?))
+    (test/assert (error? result) "sse/writable? with no args should fail")
+    true
+  })
+
+(test/define "sse-writable-wrong-type-fails"
+  {do
+    (= {result} (sse/writable? "not-a-stream"))
+    (test/assert (error? result) "sse/writable? with string should fail")
+    true
+  })
+
+(test/define "sse-on-drain-no-args-fails"
+  {do
+    (= {result} (sse/on-drain))
+    (test/assert (error? result) "sse/on-drain with no args should fail")
+    true
+  })
+
+(test/define "sse-on-drain-one-arg-fails"
+  {do
+    (= {result} (sse/on-drain "stream"))
+    (test/assert (error? result) "sse/on-drain with one arg should fail")
+    true
+  })
+
+(test/define "sse-on-drain-wrong-stream-type-fails"
+  {do
+    (= {result} (sse/on-drain "not-a-stream" (\ {} {})))
+    (test/assert (error? result) "sse/on-drain with string stream should fail")
+    true
+  })
+
+(test/define "sse-on-drain-wrong-callback-type-fails"
+  {do
+    (= {result} (sse/on-drain "stream" "not-a-function"))
+    (test/assert (error? result) "sse/on-drain with string callback should fail")
+    true
+  })
+
+(test/run {})

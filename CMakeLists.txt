@@ -275,6 +275,11 @@ if(VALK_METRICS)
   target_link_libraries(test_event_loop_metrics_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
   target_compile_definitions(test_event_loop_metrics_unit PRIVATE VALK_METRICS_ENABLED=1)
   include_directories(test_event_loop_metrics_unit src/)
+
+  add_executable(test_sse_core test/unit/test_sse_core.c test/testing.c)
+  target_link_libraries(test_sse_core PRIVATE "-lc" valkyria)
+  target_compile_definitions(test_sse_core PRIVATE VALK_METRICS_ENABLED=1)
+  include_directories(test_sse_core src/)
 endif()
 
 add_executable(test_concurrency test/unit/test_concurrency.c test/testing.c)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <signal.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -317,5 +318,153 @@ long valk_get_nanos(void);
     if ((val) < (min) || (val) > (max)) {                                      \
       VALK_FAIL("ASSERT_IN_RANGE: %lld not in [%lld, %lld]",                   \
                 (long long)(val), (long long)(min), (long long)(max));         \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_LVAL_ERROR_MSG(lval, expected_substr)                           \
+  do {                                                                         \
+    if ((lval) == NULL) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_ERROR_MSG: lval is NULL");                        \
+    } else if (LVAL_TYPE(lval) != LVAL_ERR) {                                  \
+      VALK_FAIL("ASSERT_LVAL_ERROR_MSG: expected LVAL_ERR, got %d",            \
+                (int)LVAL_TYPE(lval));                                         \
+    } else if ((lval)->err == NULL) {                                          \
+      VALK_FAIL("ASSERT_LVAL_ERROR_MSG: error message is NULL");               \
+    } else if (strstr((lval)->err, (expected_substr)) == NULL) {               \
+      VALK_FAIL("ASSERT_LVAL_ERROR_MSG: \"%s\" not found in \"%s\"",           \
+                (expected_substr), (lval)->err);                               \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_LVAL_STR(lval, expected_str)                                    \
+  do {                                                                         \
+    if ((lval) == NULL) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_STR: lval is NULL");                              \
+    } else if (LVAL_TYPE(lval) != LVAL_STR) {                                  \
+      VALK_FAIL("ASSERT_LVAL_STR: expected LVAL_STR, got %d",                  \
+                (int)LVAL_TYPE(lval));                                         \
+    } else if ((lval)->str == NULL) {                                          \
+      VALK_FAIL("ASSERT_LVAL_STR: str is NULL");                               \
+    } else if (strcmp((lval)->str, (expected_str)) != 0) {                     \
+      VALK_FAIL("ASSERT_LVAL_STR: expected \"%s\", got \"%s\"",                \
+                (expected_str), (lval)->str);                                  \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_LVAL_SYM(lval, expected_sym)                                    \
+  do {                                                                         \
+    if ((lval) == NULL) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_SYM: lval is NULL");                              \
+    } else if (LVAL_TYPE(lval) != LVAL_SYM) {                                  \
+      VALK_FAIL("ASSERT_LVAL_SYM: expected LVAL_SYM, got %d",                  \
+                (int)LVAL_TYPE(lval));                                         \
+    } else if ((lval)->sym == NULL) {                                          \
+      VALK_FAIL("ASSERT_LVAL_SYM: sym is NULL");                               \
+    } else if (strcmp((lval)->sym, (expected_sym)) != 0) {                     \
+      VALK_FAIL("ASSERT_LVAL_SYM: expected \"%s\", got \"%s\"",                \
+                (expected_sym), (lval)->sym);                                  \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_LVAL_BOOL(lval, expected_bool)                                  \
+  do {                                                                         \
+    if ((lval) == NULL) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_BOOL: lval is NULL");                             \
+    } else if (LVAL_TYPE(lval) != LVAL_BOOL) {                                 \
+      VALK_FAIL("ASSERT_LVAL_BOOL: expected LVAL_BOOL, got %d",                \
+                (int)LVAL_TYPE(lval));                                         \
+    } else if ((lval)->boolean != (expected_bool)) {                           \
+      VALK_FAIL("ASSERT_LVAL_BOOL: expected %d, got %d",                       \
+                (int)(expected_bool), (int)(lval)->boolean);                   \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_LVAL_COUNT(lval, expected_count)                                \
+  do {                                                                         \
+    if ((lval) == NULL) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_COUNT: lval is NULL");                            \
+    } else if ((lval)->count != (expected_count)) {                            \
+      VALK_FAIL("ASSERT_LVAL_COUNT: expected %d children, got %d",             \
+                (int)(expected_count), (int)(lval)->count);                    \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_NEAR(a, b, epsilon)                                             \
+  do {                                                                         \
+    double _a = (double)(a);                                                   \
+    double _b = (double)(b);                                                   \
+    double _diff = _a - _b;                                                    \
+    if (_diff < 0) _diff = -_diff;                                             \
+    if (_diff > (epsilon)) {                                                   \
+      VALK_FAIL("ASSERT_NEAR: %f not within %f of %f",                         \
+                _a, (double)(epsilon), _b);                                    \
+    }                                                                          \
+  } while (0)
+
+typedef struct valk_mock_aio_context {
+  int status_code;
+  char *response_body;
+  size_t response_body_len;
+  bool headers_sent;
+  bool body_sent;
+  bool closed;
+} valk_mock_aio_context_t;
+
+#define MOCK_AIO_CONTEXT()                                                     \
+  ({                                                                           \
+    valk_mock_aio_context_t *ctx = calloc(1, sizeof(valk_mock_aio_context_t)); \
+    ctx->status_code = 0;                                                      \
+    ctx->response_body = NULL;                                                 \
+    ctx->response_body_len = 0;                                                \
+    ctx->headers_sent = false;                                                 \
+    ctx->body_sent = false;                                                    \
+    ctx->closed = false;                                                       \
+    ctx;                                                                       \
+  })
+
+#define MOCK_AIO_CONTEXT_FREE(ctx)                                             \
+  do {                                                                         \
+    if ((ctx)->response_body) free((ctx)->response_body);                      \
+    free(ctx);                                                                 \
+  } while (0)
+
+typedef struct valk_mock_http_response {
+  int status_code;
+  char *body;
+  size_t body_len;
+  char *content_type;
+} valk_mock_http_response_t;
+
+#define MOCK_HTTP_RESPONSE(status, body_str)                                   \
+  ({                                                                           \
+    valk_mock_http_response_t *resp =                                          \
+        calloc(1, sizeof(valk_mock_http_response_t));                          \
+    resp->status_code = (status);                                              \
+    resp->body = strdup(body_str);                                             \
+    resp->body_len = strlen(body_str);                                         \
+    resp->content_type = strdup("text/plain");                                 \
+    resp;                                                                      \
+  })
+
+#define MOCK_HTTP_RESPONSE_FREE(resp)                                          \
+  do {                                                                         \
+    if ((resp)->body) free((resp)->body);                                      \
+    if ((resp)->content_type) free((resp)->content_type);                      \
+    free(resp);                                                                \
+  } while (0)
+
+#define ASSERT_HTTP_STATUS(resp, expected_status)                              \
+  do {                                                                         \
+    if ((resp)->status_code != (expected_status)) {                            \
+      VALK_FAIL("ASSERT_HTTP_STATUS: expected %d, got %d",                     \
+                (expected_status), (resp)->status_code);                       \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_HTTP_BODY_CONTAINS(resp, expected_substr)                       \
+  do {                                                                         \
+    if ((resp)->body == NULL || strstr((resp)->body, expected_substr) == NULL) { \
+      VALK_FAIL("ASSERT_HTTP_BODY_CONTAINS: \"%s\" not found in body",         \
+                (expected_substr));                                            \
     }                                                                          \
   } while (0)

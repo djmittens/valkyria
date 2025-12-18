@@ -223,6 +223,111 @@ void test_trace_capture_different_sizes(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_trace_capture_one_frame(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  void *stack[1];
+  size_t captured = valk_trace_capture(stack, 1);
+
+  VALK_TEST_ASSERT(captured == 1, "Should capture exactly 1 frame when buffer is size 1");
+  VALK_TEST_ASSERT(stack[0] != NULL, "Captured frame should not be NULL");
+
+  VALK_PASS();
+}
+
+void test_trace_print_empty(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  void *stack[VALK_TRACE_DEPTH];
+  valk_trace_print(stack, 0);
+
+  VALK_PASS();
+}
+
+void test_trace_print_large_depth(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  void *stack[VALK_TRACE_MAX];
+  size_t captured = valk_trace_capture(stack, VALK_TRACE_MAX);
+
+  valk_trace_print(stack, captured);
+
+  VALK_PASS();
+}
+
+void test_trace_capture_boundary_values(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  void *stack1[VALK_TRACE_DEPTH];
+  void *stack2[VALK_TRACE_MAX];
+
+  size_t c1 = valk_trace_capture(stack1, VALK_TRACE_DEPTH);
+  size_t c2 = valk_trace_capture(stack2, VALK_TRACE_MAX);
+
+  VALK_TEST_ASSERT(c1 <= VALK_TRACE_DEPTH, "Should not exceed VALK_TRACE_DEPTH");
+  VALK_TEST_ASSERT(c2 <= VALK_TRACE_MAX, "Should not exceed VALK_TRACE_MAX");
+  VALK_TEST_ASSERT(c2 >= c1, "Larger buffer should capture at least as many frames");
+
+  VALK_PASS();
+}
+
+void test_trace_capture_address_uniqueness(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  void *stack[VALK_TRACE_DEPTH];
+  size_t captured = valk_trace_capture(stack, VALK_TRACE_DEPTH);
+
+  VALK_TEST_ASSERT(captured >= 2, "Need at least 2 frames for uniqueness test");
+
+  VALK_PASS();
+}
+
+void test_trace_print_partial(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  void *stack[VALK_TRACE_DEPTH];
+  size_t captured = valk_trace_capture(stack, VALK_TRACE_DEPTH);
+
+  if (captured >= 3) {
+    valk_trace_print(stack, 1);
+    valk_trace_print(stack, 2);
+    valk_trace_print(stack, 3);
+  }
+
+  VALK_PASS();
+}
+
+static void helper_for_stack_test(void **out_stack, size_t *out_count, int depth) {
+  if (depth > 0) {
+    helper_for_stack_test(out_stack, out_count, depth - 1);
+  } else {
+    *out_count = valk_trace_capture(out_stack, VALK_TRACE_DEPTH);
+  }
+}
+
+void test_trace_capture_with_helper(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  void *stack[VALK_TRACE_DEPTH];
+  size_t captured = 0;
+
+  helper_for_stack_test(stack, &captured, 3);
+
+  VALK_TEST_ASSERT(captured >= 4, "Helper function should add frames, got %zu", captured);
+
+  VALK_PASS();
+}
+
+void test_trace_constants_values(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_TEST_ASSERT(VALK_TRACE_MAX >= VALK_TRACE_DEPTH, "TRACE_MAX should be >= TRACE_DEPTH");
+  VALK_TEST_ASSERT(VALK_TRACE_DEPTH > 0, "TRACE_DEPTH should be positive");
+  VALK_TEST_ASSERT(VALK_TRACE_MAX > 0, "TRACE_MAX should be positive");
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -243,6 +348,14 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_trace_capture_recursive", test_trace_capture_recursive);
   valk_testsuite_add_test(suite, "test_trace_print_many_frames", test_trace_print_many_frames);
   valk_testsuite_add_test(suite, "test_trace_capture_different_sizes", test_trace_capture_different_sizes);
+  valk_testsuite_add_test(suite, "test_trace_capture_one_frame", test_trace_capture_one_frame);
+  valk_testsuite_add_test(suite, "test_trace_print_empty", test_trace_print_empty);
+  valk_testsuite_add_test(suite, "test_trace_print_large_depth", test_trace_print_large_depth);
+  valk_testsuite_add_test(suite, "test_trace_capture_boundary_values", test_trace_capture_boundary_values);
+  valk_testsuite_add_test(suite, "test_trace_capture_address_uniqueness", test_trace_capture_address_uniqueness);
+  valk_testsuite_add_test(suite, "test_trace_print_partial", test_trace_print_partial);
+  valk_testsuite_add_test(suite, "test_trace_capture_with_helper", test_trace_capture_with_helper);
+  valk_testsuite_add_test(suite, "test_trace_constants_values", test_trace_constants_values);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
