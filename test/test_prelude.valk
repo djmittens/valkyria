@@ -274,9 +274,6 @@
     true
   })
 
-; NOTE: type builtin test removed - type returns empty/nil in current implementation
-; TODO: Fix type builtin to return proper type strings
-
 ; ============================================================================
 ; String operation tests
 ; ============================================================================

@@ -136,7 +136,10 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS(), int port) {
 static void cleanup_test_context(test_context_t *ctx) {
   if (ctx->fclient) valk_arc_release(ctx->fclient);
   if (ctx->fserv) valk_arc_release(ctx->fserv);
-  if (ctx->sys) valk_aio_stop(ctx->sys);
+  if (ctx->sys) {
+    valk_aio_stop(ctx->sys);
+    valk_aio_wait_for_shutdown(ctx->sys);
+  }
   if (ctx->gc_heap) {
     valk_gc_malloc_set_root(ctx->gc_heap, NULL);
     valk_gc_malloc_collect(ctx->gc_heap, NULL);

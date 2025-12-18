@@ -7,9 +7,7 @@
 ; Load test framework
 (load "src/modules/test.valk")
 
-; WORKAROUND: SSE module uses 'fn' but prelude only defines 'fun'
-; Create alias so SSE module loads correctly
-(def {fn} fun)
+
 
 ; Load SSE module
 (load "src/modules/aio/sse.valk")
@@ -76,22 +74,12 @@
 ; Handler Wrapper Tests
 ; ============================================================================
 
-; NOTE: sse/handler has a bug - it uses {fn {req} ...} syntax but 'fn' is not
-; defined in the prelude (only 'fun' exists). The proper syntax should be
-; to use \ (lambda) directly: {\ {req} ...}
-;
-; For now, we skip testing sse/handler functionality until the module is fixed.
-; The basic existence test above confirms the function is defined.
-
-; Test: Skipping sse/handler invocation tests
-; Uncomment these tests after fixing the SSE module to use \ instead of fn:
-;
-; (test/define "sse/handler-returns-function"
-;   {do
-;     (= {handler} (sse/handler (\ {stream req} {true})))
-;     (test/assert (!= handler {}) "sse/handler should return a function")
-;     true
-;   })
+(test/define "sse/handler-returns-function"
+  {do
+    (= {handler} (sse/handler (\ {stream req} {true})))
+    (test/assert (!= handler {}) "sse/handler should return a function")
+    true
+  })
 
 ; ============================================================================
 ; Integration Notes

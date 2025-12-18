@@ -1378,9 +1378,6 @@ void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
           if (obj->ref.free != NULL && obj->ref.ptr != NULL) {
             obj->ref.free(obj->ref.ptr);
           }
-          if (obj->ref.type != NULL) {
-            free(obj->ref.type);
-          }
           break;
         default:
           break;

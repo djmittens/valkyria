@@ -1186,60 +1186,6 @@ int main(int argc, const char **argv) {
   // probably should think of how to add this by default everywhere
   valk_mem_init_malloc();
 
-  // TODO(networking): Turns this into a real test
-  // valk_ring_t *ring = valk_mem_alloc(sizeof(valk_ring_t) + 75);
-  // valk_ring_init(ring, 64);
-  //
-  // const char *txt = "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "1234567890"
-  //                   "TTXXTT";
-  // int chunks = 4;
-  // int chunklen = strlen(txt) / chunks;
-  // char *offset = (void *)txt;
-  //
-  // while (chunks) {
-  //   printf("\n TXt len %ld Capacity  %ld :: Offset  %ld :: len :: %d, %c\n",
-  //          strlen(txt), ring->capacity, ring->offset, chunklen,
-  //          *(offset + (chunklen - 1)));
-  //   valk_ring_write(ring, (void *)(offset), chunklen);
-  //   offset += chunklen;
-  //   chunks--;
-  // }
-  //
-  // // valk_ring_rewind(ring, 8);
-  // printf("\nCapacity %ld :: Offset  %ld :: \n", ring->capacity,
-  // ring->offset); valk_ring_fread(ring, 256, stdout);
-  //
-  // printf("\nCapacity %ld :: Offset  %ld :: \n", ring->capacity,
-  // ring->offset);
-  // ((char *)ring->items)[ring->capacity - 1] = '\0';
-  // printf("\nFUUUCK: %s\n", (char *)ring->items);
-  //
-
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
   valk_testsuite_add_test(suite, "test_implicit_alloc", test_implicit_alloc);

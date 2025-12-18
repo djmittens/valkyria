@@ -63,7 +63,7 @@
   {sse/send stream event-type (json/encode data)})
 
 ; Create an SSE endpoint handler wrapper
-; Usage: (def {my-handler} (sse/handler (fn {stream req} ...)))
+; Usage: (def {my-handler} (sse/handler (\ {stream req} {...})))
 ; The body-fn receives the SSE stream and the request object.
 ; The handler automatically:
 ;   1. Opens the SSE stream
@@ -75,10 +75,9 @@
 ;
 ; Example:
 ;   (def {events-handler}
-;     (sse/handler (fn {stream req}
+;     (sse/handler (\ {stream req}
 ;       {
 ;         (sse/message stream "Connected!")
-;         ; Set up periodic updates, event handlers, etc.
 ;       })))
 ;
 ;   ; Use in router:

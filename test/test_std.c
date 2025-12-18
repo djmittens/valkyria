@@ -232,12 +232,6 @@ int main(int argc, const char **argv) {
   }
   fprintf(stderr, "Prelude loaded %zu expressions successfully\n", expr_count);
 
-  // TODO: Re-enable freezing after debugging mutation issues
-  // Freezing causes bugs with map/let where frozen structures are mutated
-  // for (size_t i = 0; i < env->count; i++) {
-  //   valk_lval_freeze(env->vals[i]);
-  // }
-
   valk_testsuite_fixture_add(suite, "prelude", ast, __lval_retain,
                              __lval_release);
   valk_testsuite_fixture_add(suite, "env", env, __lenv_retain, __lenv_release);

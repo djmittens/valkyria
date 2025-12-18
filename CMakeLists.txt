@@ -237,7 +237,6 @@ if(VALK_METRICS)
 
   add_executable(test_sse test/test_sse.c test/testing.c)
   target_link_libraries(test_sse PRIVATE "-lc" valkyria)
-  target_compile_definitions(test_sse PRIVATE VALK_METRICS_ENABLED=1)
   include_directories(test_sse src/)
 
   add_executable(test_metrics_v2 test/test_metrics_v2.c test/testing.c)

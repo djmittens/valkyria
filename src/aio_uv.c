@@ -90,9 +90,10 @@ enum {
 #define PENDING_STREAM_POOL_MAX_LIMIT 10000  // 10k pending streams max
 #define BACKPRESSURE_TIMEOUT_MS_DEFAULT 30000  // 30 second default timeout
 
-// Singleton: only one AIO system can exist per process
-// This prevents accidentally starting multiple event loops which causes race conditions
-static valk_aio_system_t *global_aio_system = NULL;
+// Most recently started AIO system - used for fallback in async callbacks
+// Multiple AIO systems can be created, but only one can be the "active" one for
+// callbacks that don't have explicit system context
+static valk_aio_system_t *g_last_started_aio_system = NULL;
 
 // Global active AIO system (exported to aio.h for metrics access)
 valk_aio_system_t *valk_aio_active_system = NULL;
@@ -4411,13 +4412,6 @@ valk_aio_system_t *valk_aio_start() {
 }
 
 valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) {
-  // Singleton guard: check if AIO system is already running
-  if (global_aio_system != NULL) {
-    VALK_WARN("AIO system already started - returning existing instance. "
-              "Multiple AIO systems are not supported and can cause race conditions.");
-    return global_aio_system;
-  }
-
   // Resolve configuration
   valk_aio_system_config_t resolved;
   if (config) {
@@ -4442,12 +4436,24 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   memset(sys, 0, sizeof(valk_aio_system_t));  // Zero-initialize all fields
   sys->config = resolved;  // Store resolved configuration
   snprintf(sys->name, sizeof(sys->name), "main");  // Default system name
-  global_aio_system = sys;  // Store singleton reference
+  g_last_started_aio_system = sys;  // Track most recently started system
   valk_aio_active_system = sys;  // Export for metrics access
 
   valk_aio_ssl_start();
 
-  sys->eventloop = uv_default_loop();
+  sys->eventloop = malloc(sizeof(uv_loop_t));
+  if (!sys->eventloop) {
+    VALK_ERROR("Failed to allocate event loop");
+    free(sys);
+    return NULL;
+  }
+  int init_rc = uv_loop_init(sys->eventloop);
+  if (init_rc != 0) {
+    VALK_ERROR("Failed to initialize event loop: %s", uv_strerror(init_rc));
+    free(sys->eventloop);
+    free(sys);
+    return NULL;
+  }
 
   // Enable metrics collection on event loop
   #ifdef VALK_METRICS_ENABLED
@@ -4592,9 +4598,16 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
   free(sys->pending_stream_pool.used);
   free(sys->port_strs);
 
-  // Reset singleton so AIO can be restarted if needed
-  if (global_aio_system == sys) {
-    global_aio_system = NULL;
+  // Close and free the event loop (we own it, not using uv_default_loop)
+  if (sys->eventloop) {
+    uv_loop_close(sys->eventloop);
+    free(sys->eventloop);
+    sys->eventloop = NULL;
+  }
+
+  // Clear last-started reference if this was the most recent
+  if (g_last_started_aio_system == sys) {
+    g_last_started_aio_system = NULL;
   }
   if (valk_aio_active_system == sys) {
     valk_aio_active_system = NULL;
@@ -5084,8 +5097,8 @@ static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
   if (current_request_ctx) {
     valk_aio_system_t *sys = current_request_ctx->conn->http.server->sys;
     loop = sys->eventloop;
-  } else if (global_aio_system) {
-    loop = global_aio_system->eventloop;
+  } else if (g_last_started_aio_system) {
+    loop = g_last_started_aio_system->eventloop;
   } else {
     return valk_lval_err("aio/sleep requires an active AIO system");
   }
