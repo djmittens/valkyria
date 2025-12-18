@@ -169,6 +169,11 @@ define run_tests_valk
 	$(1)/valk test/test_integration.valk
 	$(1)/valk test/test_quasiquote.valk
 	$(1)/valk test/test_read_file.valk
+	$(1)/valk test/test_aio_debug.valk
+	$(1)/valk test/test_test_framework.valk
+	$(1)/valk test/test_test_framework_skip.valk
+	$(1)/valk test/test_test_framework_fail.valk
+	$(1)/valk test/test_test_framework_empty.valk
 	$(1)/valk test/stress/test_gc_stress.valk
 	$(1)/valk test/stress/test_networking_stress.valk
 	@echo "=== All Valk tests passed ($(1)) ==="

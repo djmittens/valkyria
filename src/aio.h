@@ -1,24 +1,10 @@
 #pragma once
 
-// #include <unistd.h>
-
 #include <stddef.h>
 #include "concurrency.h"
 #include "memory.h"
 
 #define VALK_HTTP_MOTD "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Valkyria HTTP/2 Server</title><style>body{font-family:system-ui,sans-serif;max-width:800px;margin:80px auto;padding:0 20px;background:#0a0e27;color:#e0e0e0}h1{color:#00d9ff;font-size:3em;margin-bottom:0.2em}p{font-size:1.2em;line-height:1.6;color:#b0b0b0}code{background:#1a1e3a;padding:2px 8px;border-radius:4px;color:#00d9ff}</style></head><body><h1>\u269C Valkyria</h1><p>Valhalla's Treasure - HTTP/2 Server</p><p>This is a <code>Valkyria Lisp</code> web server running on nghttp2 with TLS.</p><p style=\"margin-top:40px;font-size:0.9em;opacity:0.7\">Server is operational and ready to handle requests.</p></body></html>"
-
-// Host TO Network Short
-/* void htons(void); */
-/**/
-/* // Host TO Network Long */
-/* void htonl(void); */
-/**/
-/* // Network TO Host Short */
-/* void ntohs(void); */
-/**/
-/* // Network TO Host Long */
-/* void ntohl(void); */
 
 typedef struct valk_aio_system valk_aio_system_t;
 typedef struct valk_aio_system_config valk_aio_system_config_t;

@@ -49,8 +49,15 @@ class FileCoverage:
     lines: dict = field(default_factory=dict)
     functions_found: int = 0
     functions_hit: int = 0
-    branches_found: int = 0
-    branches_hit: int = 0
+    branch_data: dict = field(default_factory=dict)
+    
+    @property
+    def branches_found(self) -> int:
+        return len(self.branch_data)
+    
+    @property
+    def branches_hit(self) -> int:
+        return sum(1 for taken in self.branch_data.values() if taken > 0)
 
     
     @property
@@ -191,13 +198,20 @@ def parse_lcov_file(lcov_path: Path, report: CoverageReport, source_root: Path):
                         branch_id = int(parts[2])
                         taken_str = parts[3]
                         taken = 0 if taken_str == "-" else int(taken_str)
-                        current_file.branches_found += 1
-                        if taken > 0:
-                            current_file.branches_hit += 1
+                        key = (line_no, branch_id)
+                        current_file.branch_data[key] = current_file.branch_data.get(key, 0) + taken
                         if line_no in current_file.lines:
-                            current_file.lines[line_no].branches.append(
-                                BranchCoverage(line_no=line_no, branch_id=branch_id, taken=taken)
-                            )
+                            existing = None
+                            for b in current_file.lines[line_no].branches:
+                                if b.branch_id == branch_id:
+                                    existing = b
+                                    break
+                            if existing:
+                                existing.taken += taken
+                            else:
+                                current_file.lines[line_no].branches.append(
+                                    BranchCoverage(line_no=line_no, branch_id=branch_id, taken=taken)
+                                )
                             
             elif line.startswith("FNF:"):
                 if current_file:
@@ -305,12 +319,18 @@ def parse_gcov_output(gcov_path: Path, report: CoverageReport, source_root: Path
             branch_match = re.match(r'branch\s+(\d+)\s+(taken\s+(\d+)|never executed)', line)
             if branch_match:
                 branch_id = int(branch_match.group(1))
-                fc.branches_found += 1
-                if branch_match.group(3):
-                    taken = int(branch_match.group(3))
-                    if taken > 0:
-                        fc.branches_hit += 1
-                    if current_line_no in fc.lines:
+                taken = int(branch_match.group(3)) if branch_match.group(3) else 0
+                key = (current_line_no, branch_id)
+                fc.branch_data[key] = fc.branch_data.get(key, 0) + taken
+                if current_line_no in fc.lines:
+                    existing = None
+                    for b in fc.lines[current_line_no].branches:
+                        if b.branch_id == branch_id:
+                            existing = b
+                            break
+                    if existing:
+                        existing.taken += taken
+                    else:
                         fc.lines[current_line_no].branches.append(
                             BranchCoverage(line_no=current_line_no, branch_id=branch_id, taken=taken)
                         )

@@ -204,6 +204,41 @@
   })
 
 ; ============================================================================
+; Direct Function Tests (for coverage)
+; ============================================================================
+
+; Test: aio/debug-merge-metrics-json function directly
+(test/define "merge-metrics-json-function"
+  {do
+    (= {result} (aio/debug-merge-metrics-json mock-sys))
+    (test/assert (> (len result) 0) "merged JSON should not be empty")
+    (test/assert (> (len result) 100) "merged JSON should have substantial content")
+    true
+  })
+
+; Test: aio/debug-merge-metrics-prometheus function directly
+(test/define "merge-metrics-prometheus-function"
+  {do
+    (= {result} (aio/debug-merge-metrics-prometheus mock-sys))
+    (test/assert (> (len result) 0) "merged Prometheus should not be empty")
+    (test/assert (> (len result) 100) "merged Prometheus should have substantial content")
+    true
+  })
+
+; Test: /debug/metrics/state route returns diagnostics state JSON
+(test/define "route-debug-metrics-state-returns-json"
+  {do
+    (= {req} {:path "/debug/metrics/state"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (plist/get resp (head {:status}))
+      "status should be 200")
+    (test/assert-eq "application/json" (plist/get resp (head {:content-type}))
+      "content-type should be application/json")
+    true
+  })
+
+; ============================================================================
 ; JSON Metrics Tests
 ; ============================================================================
 
@@ -271,10 +306,15 @@
 ; Edge Cases
 ; ============================================================================
 
-; Test: empty path returns nil
+; Test: empty path returns redirect (falls through to otherwise)
 (test/define "edge-case-empty-path"
-  {test/assert-eq nil (aio/debug-handle-request mock-sys {:path ""})
-    "empty path should return nil"})
+  {do
+    (= {resp} (aio/debug-handle-request mock-sys {:path ""}))
+    (test/assert (!= resp nil) "empty path should return redirect response")
+    (test/assert-eq "200" (plist/get resp (head {:status}))
+      "empty path should have status 200")
+    true
+  })
 
 ; Test: path with query string (should still work based on path)
 ; Note: This test documents current behavior - may need adjustment

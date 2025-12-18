@@ -8,6 +8,7 @@
 (def {*test-skip-suite*} 0)      ; Set to 1 to skip all tests in suite
 (def {*test-skip-reason*} "")    ; Reason for skipping
 (def {*test-debug*} 0)           ; Set to 1 to enable debug output
+(def {*test-expected-exit*} 0)   ; Expected exit code (0 = pass, 1 = fail expected)
 
 (fun {test/debug enabled} {
   (def {*test-debug*} enabled)
@@ -21,6 +22,12 @@
 (fun {test/skip reason} {
   (def {*test-skip-suite*} 1)
   (def {*test-skip-reason*} reason)
+})
+
+; Expect the test suite to exit with a specific code
+; Use this when testing error paths that should cause test failures
+(fun {test/expect-exit code} {
+  (def {*test-expected-exit*} code)
 })
 
 (fun {test/define name body} {
@@ -122,7 +129,9 @@
     (if (== total 0)
       {do
         (printf "❌ No tests registered!\n")
-        (shutdown 1)}
+        (if (== *test-expected-exit* 1)
+          {(shutdown 0)}
+          {(shutdown 1)})}
       {true}
     )
 
@@ -150,10 +159,14 @@
         {printf "✨ All %ld tests passed! ✨\n" *test-passed*}
         {printf "⚠️  %ld passed, %ld failed\n" *test-passed* *test-failed*})})
 
-    ; Exit with appropriate code (skipped tests don't cause failure)
-    (if (== *test-failed* 0)
+    ; Determine actual exit code
+    (= {actual-exit} (if (== *test-failed* 0) {0} {1}))
+
+    ; If expected exit matches actual, exit 0 (test suite passed)
+    ; This allows testing error paths without breaking the test run
+    (if (== actual-exit *test-expected-exit*)
       {(shutdown 0)}
-      {(shutdown 1)})
+      {(shutdown actual-exit)})
 })
 
 ; Test module loaded - no debug output
