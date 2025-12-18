@@ -139,11 +139,18 @@ define run_tests_c
 	$(1)/test_networking
 	$(1)/test_large_response
 	$(1)/test_per_stream_arena
+	$(1)/test_debug
+	$(1)/test_concurrency
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_metrics ]; then $(1)/test_aio_metrics; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_loop_metrics ]; then $(1)/test_loop_metrics; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_eval_metrics ]; then $(1)/test_eval_metrics; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_diagnostics ]; then $(1)/test_sse_diagnostics; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse ]; then $(1)/test_sse; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_pool_metrics ]; then $(1)/test_pool_metrics; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_registry ]; then $(1)/test_sse_registry; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_metrics_delta ]; then $(1)/test_metrics_delta; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_event_loop_metrics_unit ]; then $(1)/test_event_loop_metrics_unit; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_metrics_v2 ]; then $(1)/test_metrics_v2; fi
 	@echo "=== All C tests passed ($(1)) ==="
 endef
 

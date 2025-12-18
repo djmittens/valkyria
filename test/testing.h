@@ -162,3 +162,160 @@ long valk_get_time(valk_time_precision_e p);
 long valk_get_millis(void);
 long valk_get_micros(void);
 long valk_get_nanos(void);
+
+#define ASSERT_LVAL_TYPE(lval, expected_type)                                  \
+  do {                                                                         \
+    if ((lval) == NULL) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_TYPE: lval is NULL");                             \
+    } else if (LVAL_TYPE(lval) != (expected_type)) {                           \
+      VALK_FAIL("ASSERT_LVAL_TYPE: expected type %d, got %d",                  \
+                (int)(expected_type), (int)LVAL_TYPE(lval));                   \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_LVAL_NUM(lval, expected_num)                                    \
+  do {                                                                         \
+    if ((lval) == NULL) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_NUM: lval is NULL");                              \
+    } else if (LVAL_TYPE(lval) != LVAL_NUM) {                                  \
+      VALK_FAIL("ASSERT_LVAL_NUM: expected LVAL_NUM, got %d",                  \
+                (int)LVAL_TYPE(lval));                                         \
+    } else if ((lval)->num != (expected_num)) {                                \
+      VALK_FAIL("ASSERT_LVAL_NUM: expected %ld, got %ld",                      \
+                (long)(expected_num), (long)(lval)->num);                      \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_LVAL_ERROR(lval)                                                \
+  do {                                                                         \
+    if ((lval) == NULL) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_ERROR: lval is NULL");                            \
+    } else if (LVAL_TYPE(lval) != LVAL_ERR) {                                  \
+      VALK_FAIL("ASSERT_LVAL_ERROR: expected LVAL_ERR, got %d",                \
+                (int)LVAL_TYPE(lval));                                         \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_NOT_NULL(ptr)                                                   \
+  do {                                                                         \
+    if ((ptr) == NULL) {                                                       \
+      VALK_FAIL("ASSERT_NOT_NULL: pointer is NULL");                           \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_NULL(ptr)                                                       \
+  do {                                                                         \
+    if ((ptr) != NULL) {                                                       \
+      VALK_FAIL("ASSERT_NULL: pointer is not NULL: %p", (void *)(ptr));        \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_EQ(a, b)                                                        \
+  do {                                                                         \
+    if ((a) != (b)) {                                                          \
+      VALK_FAIL("ASSERT_EQ: expected %lld == %lld",                            \
+                (long long)(a), (long long)(b));                               \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_NE(a, b)                                                        \
+  do {                                                                         \
+    if ((a) == (b)) {                                                          \
+      VALK_FAIL("ASSERT_NE: expected %lld != %lld",                            \
+                (long long)(a), (long long)(b));                               \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_GT(a, b)                                                        \
+  do {                                                                         \
+    if (!((a) > (b))) {                                                        \
+      VALK_FAIL("ASSERT_GT: expected %lld > %lld",                             \
+                (long long)(a), (long long)(b));                               \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_GE(a, b)                                                        \
+  do {                                                                         \
+    if (!((a) >= (b))) {                                                       \
+      VALK_FAIL("ASSERT_GE: expected %lld >= %lld",                            \
+                (long long)(a), (long long)(b));                               \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_LT(a, b)                                                        \
+  do {                                                                         \
+    if (!((a) < (b))) {                                                        \
+      VALK_FAIL("ASSERT_LT: expected %lld < %lld",                             \
+                (long long)(a), (long long)(b));                               \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_LE(a, b)                                                        \
+  do {                                                                         \
+    if (!((a) <= (b))) {                                                       \
+      VALK_FAIL("ASSERT_LE: expected %lld <= %lld",                            \
+                (long long)(a), (long long)(b));                               \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_TRUE(cond)                                                      \
+  do {                                                                         \
+    if (!(cond)) {                                                             \
+      VALK_FAIL("ASSERT_TRUE: condition is false");                            \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_FALSE(cond)                                                     \
+  do {                                                                         \
+    if ((cond)) {                                                              \
+      VALK_FAIL("ASSERT_FALSE: condition is true");                            \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_STR_EQ(a, b)                                                    \
+  do {                                                                         \
+    if ((a) == NULL || (b) == NULL) {                                          \
+      if ((a) != (b)) {                                                        \
+        VALK_FAIL("ASSERT_STR_EQ: one string is NULL");                        \
+      }                                                                        \
+    } else if (strcmp((a), (b)) != 0) {                                        \
+      VALK_FAIL("ASSERT_STR_EQ: expected \"%s\", got \"%s\"", (b), (a));        \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_STR_CONTAINS(haystack, needle)                                  \
+  do {                                                                         \
+    if ((haystack) == NULL || (needle) == NULL) {                              \
+      VALK_FAIL("ASSERT_STR_CONTAINS: NULL argument");                         \
+    } else if (strstr((haystack), (needle)) == NULL) {                         \
+      VALK_FAIL("ASSERT_STR_CONTAINS: \"%s\" not found in \"%s\"",             \
+                (needle), (haystack));                                         \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_MEM_EQ(a, b, len)                                               \
+  do {                                                                         \
+    if ((a) == NULL || (b) == NULL) {                                          \
+      VALK_FAIL("ASSERT_MEM_EQ: NULL argument");                               \
+    } else if (memcmp((a), (b), (len)) != 0) {                                 \
+      VALK_FAIL("ASSERT_MEM_EQ: memory regions differ");                       \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_DOUBLE_EQ(a, b, epsilon)                                        \
+  do {                                                                         \
+    double _diff = (a) - (b);                                                  \
+    if (_diff < 0) _diff = -_diff;                                             \
+    if (_diff > (epsilon)) {                                                   \
+      VALK_FAIL("ASSERT_DOUBLE_EQ: expected %f == %f (epsilon=%f)",            \
+                (double)(a), (double)(b), (double)(epsilon));                  \
+    }                                                                          \
+  } while (0)
+
+#define ASSERT_IN_RANGE(val, min, max)                                         \
+  do {                                                                         \
+    if ((val) < (min) || (val) > (max)) {                                      \
+      VALK_FAIL("ASSERT_IN_RANGE: %lld not in [%lld, %lld]",                   \
+                (long long)(val), (long long)(min), (long long)(max));         \
+    }                                                                          \
+  } while (0)

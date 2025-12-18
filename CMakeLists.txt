@@ -250,3 +250,33 @@ if(VALK_COVERAGE)
   target_link_libraries(test_source_loc PRIVATE "-lc" valkyria)
   include_directories(test_source_loc src/)
 endif()
+
+add_executable(test_debug test/unit/test_debug.c test/testing.c)
+target_link_libraries(test_debug PRIVATE "-lc" valkyria)
+include_directories(test_debug src/)
+
+if(VALK_METRICS)
+  add_executable(test_pool_metrics test/unit/test_pool_metrics.c test/testing.c)
+  target_link_libraries(test_pool_metrics PRIVATE "-lc" valkyria)
+  target_compile_definitions(test_pool_metrics PRIVATE VALK_METRICS_ENABLED=1)
+  include_directories(test_pool_metrics src/)
+
+  add_executable(test_sse_registry test/unit/test_sse_registry.c test/testing.c)
+  target_link_libraries(test_sse_registry PRIVATE "-lc" valkyria)
+  target_compile_definitions(test_sse_registry PRIVATE VALK_METRICS_ENABLED=1)
+  include_directories(test_sse_registry src/)
+
+  add_executable(test_metrics_delta test/unit/test_metrics_delta.c test/testing.c)
+  target_link_libraries(test_metrics_delta PRIVATE "-lc" valkyria)
+  target_compile_definitions(test_metrics_delta PRIVATE VALK_METRICS_ENABLED=1)
+  include_directories(test_metrics_delta src/)
+
+  add_executable(test_event_loop_metrics_unit test/unit/test_event_loop_metrics.c test/testing.c)
+  target_link_libraries(test_event_loop_metrics_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+  target_compile_definitions(test_event_loop_metrics_unit PRIVATE VALK_METRICS_ENABLED=1)
+  include_directories(test_event_loop_metrics_unit src/)
+endif()
+
+add_executable(test_concurrency test/unit/test_concurrency.c test/testing.c)
+target_link_libraries(test_concurrency PRIVATE "-lc" valkyria)
+include_directories(test_concurrency src/)
