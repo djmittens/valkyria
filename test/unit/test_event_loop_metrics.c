@@ -351,6 +351,83 @@ void test_event_loop_metrics_handle_updates_persist(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_event_loop_metrics_update_with_activity(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  uv_loop_t loop;
+  int rc = uv_loop_init(&loop);
+  VALK_TEST_ASSERT(rc == 0, "uv_loop_init should succeed");
+
+  valk_event_loop_metrics_v2_t m;
+  bool result = valk_event_loop_metrics_v2_init(&m, "activity_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_event_loop_metrics_v2_update(&m, &loop);
+
+  uv_run(&loop, UV_RUN_NOWAIT);
+
+  valk_event_loop_metrics_v2_update(&m, &loop);
+
+  uv_loop_close(&loop);
+
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_set_handles_null_gauge(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_event_loop_metrics_v2_t m;
+  memset(&m, 0, sizeof(m));
+  m.handles = NULL;
+
+  valk_event_loop_metrics_v2_set_handles(&m, 42);
+
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_multiple_updates(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  uv_loop_t loop;
+  int rc = uv_loop_init(&loop);
+  VALK_TEST_ASSERT(rc == 0, "uv_loop_init should succeed");
+
+  valk_event_loop_metrics_v2_t m;
+  bool result = valk_event_loop_metrics_v2_init(&m, "multi_update_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  for (int i = 0; i < 10; i++) {
+    uv_run(&loop, UV_RUN_NOWAIT);
+    valk_event_loop_metrics_v2_update(&m, &loop);
+  }
+
+  uv_loop_close(&loop);
+
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_update_null_gauges(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  uv_loop_t loop;
+  int rc = uv_loop_init(&loop);
+  VALK_TEST_ASSERT(rc == 0, "uv_loop_init should succeed");
+
+  valk_event_loop_metrics_v2_t m;
+  memset(&m, 0, sizeof(m));
+  m.loop_name = "null_gauges_test";
+
+  valk_event_loop_metrics_v2_update(&m, &loop);
+
+  uv_loop_close(&loop);
+
+  VALK_PASS();
+}
+
 #else
 
 void test_event_loop_metrics_disabled(VALK_TEST_ARGS()) {
@@ -385,6 +462,10 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_event_loop_metrics_gauges_exist", test_event_loop_metrics_gauges_exist);
   valk_testsuite_add_test(suite, "test_event_loop_metrics_prev_tracking_init", test_event_loop_metrics_prev_tracking_init);
   valk_testsuite_add_test(suite, "test_event_loop_metrics_handle_updates_persist", test_event_loop_metrics_handle_updates_persist);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_update_with_activity", test_event_loop_metrics_update_with_activity);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_set_handles_null_gauge", test_event_loop_metrics_set_handles_null_gauge);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_multiple_updates", test_event_loop_metrics_multiple_updates);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_update_null_gauges", test_event_loop_metrics_update_null_gauges);
 #else
   valk_testsuite_add_test(suite, "test_event_loop_metrics_disabled", test_event_loop_metrics_disabled);
 #endif

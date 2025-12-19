@@ -1163,6 +1163,368 @@ void test_slab_overflow_counter(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_ring_buffer_basic(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t cap = 64;
+  valk_ring_t *ring = malloc(sizeof(valk_ring_t) + cap);
+  valk_ring_init(ring, cap);
+
+  VALK_TEST_ASSERT(ring->capacity == cap, "Ring capacity should be 64");
+  VALK_TEST_ASSERT(ring->offset == 0, "Ring offset should start at 0");
+
+  uint8_t data[] = "Hello, World!";
+  valk_ring_write(ring, data, sizeof(data));
+  VALK_TEST_ASSERT(ring->offset == sizeof(data), "Ring offset should advance");
+
+  free(ring);
+  VALK_PASS();
+}
+
+void test_ring_buffer_wrap(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t cap = 16;
+  valk_ring_t *ring = malloc(sizeof(valk_ring_t) + cap);
+  valk_ring_init(ring, cap);
+
+  uint8_t data1[] = "ABCDEFGH";
+  uint8_t data2[] = "12345678";
+
+  valk_ring_write(ring, data1, 8);
+  VALK_TEST_ASSERT(ring->offset == 8, "After first write, offset should be 8");
+
+  valk_ring_write(ring, data2, 8);
+  VALK_TEST_ASSERT(ring->offset == 0, "After wrap, offset should be 0");
+
+  valk_ring_write(ring, data1, 8);
+  VALK_TEST_ASSERT(ring->offset == 8, "After third write, offset should be 8");
+
+  free(ring);
+  VALK_PASS();
+}
+
+void test_ring_buffer_rewind(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t cap = 32;
+  valk_ring_t *ring = malloc(sizeof(valk_ring_t) + cap);
+  valk_ring_init(ring, cap);
+
+  uint8_t data[] = "1234567890ABCDEF";
+  valk_ring_write(ring, data, 16);
+  VALK_TEST_ASSERT(ring->offset == 16, "After write, offset should be 16");
+
+  valk_ring_rewind(ring, 4);
+  VALK_TEST_ASSERT(ring->offset == 12, "After rewind 4, offset should be 12");
+
+  valk_ring_rewind(ring, 16);
+  VALK_TEST_ASSERT(ring->offset == 28, "After rewind 16 (wrap), offset should be 28");
+
+  free(ring);
+  VALK_PASS();
+}
+
+void test_ring_buffer_read(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t cap = 32;
+  valk_ring_t *ring = malloc(sizeof(valk_ring_t) + cap);
+  valk_ring_init(ring, cap);
+
+  uint8_t data[] = "HELLO";
+  valk_ring_write(ring, data, 5);
+
+  ring->offset = 0;
+
+  uint8_t out[8] = {0};
+  valk_ring_read(ring, 5, out);
+
+  VALK_TEST_ASSERT(memcmp(out, "HELLO", 5) == 0, "Read should match written data");
+  VALK_TEST_ASSERT(ring->offset == 5, "Offset should advance after read");
+
+  free(ring);
+  VALK_PASS();
+}
+
+void test_buffer_alloc_and_append(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_buffer_t buf;
+  valk_buffer_alloc(&buf, 128);
+
+  VALK_TEST_ASSERT(buf.capacity == 128, "Buffer capacity should be 128");
+  VALK_TEST_ASSERT(buf.count == 0, "Buffer count should start at 0");
+  VALK_TEST_ASSERT(buf.items != NULL, "Buffer items should be allocated");
+
+  uint8_t data[] = "Test data";
+  valk_buffer_append(&buf, data, sizeof(data) - 1);
+
+  VALK_TEST_ASSERT(buf.count == sizeof(data) - 1, "Buffer count should match appended data");
+  VALK_TEST_ASSERT(!valk_buffer_is_full(&buf), "Buffer should not be full");
+
+  valk_mem_free(buf.items);
+  VALK_PASS();
+}
+
+void test_allocator_type_strings(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  const char* s_null = valk_mem_allocator_e_to_string(VALK_ALLOC_NULL);
+  VALK_TEST_ASSERT(s_null != NULL, "NULL alloc string should not be NULL");
+  VALK_TEST_ASSERT(strstr(s_null, "NULL") != NULL, "NULL alloc string should contain 'NULL'");
+
+  const char* s_malloc = valk_mem_allocator_e_to_string(VALK_ALLOC_MALLOC);
+  VALK_TEST_ASSERT(strstr(s_malloc, "Malloc") != NULL, "Malloc alloc string should contain 'Malloc'");
+
+  const char* s_arena = valk_mem_allocator_e_to_string(VALK_ALLOC_ARENA);
+  VALK_TEST_ASSERT(strstr(s_arena, "Arena") != NULL, "Arena alloc string should contain 'Arena'");
+
+  const char* s_slab = valk_mem_allocator_e_to_string(VALK_ALLOC_SLAB);
+  VALK_TEST_ASSERT(strstr(s_slab, "Slab") != NULL, "Slab alloc string should contain 'Slab'");
+
+  const char* s_gc = valk_mem_allocator_e_to_string(VALK_ALLOC_GC_HEAP);
+  VALK_TEST_ASSERT(strstr(s_gc, "GC") != NULL, "GC Heap alloc string should contain 'GC'");
+
+  VALK_PASS();
+}
+
+void test_process_memory_collect(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_process_memory_t pm;
+  valk_process_memory_collect(&pm);
+
+  VALK_TEST_ASSERT(pm.rss_bytes >= 0, "RSS should be non-negative");
+  VALK_TEST_ASSERT(pm.vms_bytes >= pm.rss_bytes, "VMS should be >= RSS");
+
+  valk_process_memory_collect(NULL);
+
+  VALK_PASS();
+}
+
+void test_smaps_collect(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_smaps_breakdown_t smaps;
+  valk_smaps_collect(&smaps);
+
+  VALK_TEST_ASSERT(smaps.total_rss >= 0, "Total RSS should be non-negative");
+
+  valk_smaps_collect(NULL);
+
+  VALK_PASS();
+}
+
+void test_arena_print_stats(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 16 * 1024;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  valk_mem_arena_alloc(arena, 100);
+  valk_mem_arena_alloc(arena, 200);
+  valk_mem_arena_reset(arena);
+
+  FILE* devnull = fopen("/dev/null", "w");
+  if (devnull) {
+    valk_mem_arena_print_stats(arena, devnull);
+    fclose(devnull);
+  }
+
+  valk_mem_arena_print_stats(NULL, NULL);
+  valk_mem_arena_print_stats(arena, NULL);
+
+  free(arena);
+  VALK_PASS();
+}
+
+void test_slab_allocator_api(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_slab_t* slab = valk_slab_new(128, 8);
+
+  void* ptr1 = valk_mem_allocator_alloc((valk_mem_allocator_t*)slab, 64);
+  VALK_TEST_ASSERT(ptr1 != NULL, "Slab alloc should succeed");
+
+  void* ptr2 = valk_mem_allocator_calloc((valk_mem_allocator_t*)slab, 1, 64);
+  VALK_TEST_ASSERT(ptr2 != NULL, "Slab calloc should succeed");
+
+  void* ptr3 = valk_mem_allocator_realloc((valk_mem_allocator_t*)slab, ptr1, 64);
+  VALK_TEST_ASSERT(ptr3 == ptr1, "Slab realloc within size should return same ptr");
+
+  valk_mem_allocator_free((valk_mem_allocator_t*)slab, ptr1);
+  valk_mem_allocator_free((valk_mem_allocator_t*)slab, ptr2);
+
+  valk_slab_free(slab);
+  VALK_PASS();
+}
+
+void test_arena_allocator_realloc(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 64 * 1024;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  void* ptr1 = valk_mem_allocator_alloc((valk_mem_allocator_t*)arena, 100);
+  VALK_TEST_ASSERT(ptr1 != NULL, "Arena alloc should succeed");
+
+  memset(ptr1, 'A', 100);
+
+  void* ptr2 = valk_mem_allocator_realloc((valk_mem_allocator_t*)arena, ptr1, 200);
+  VALK_TEST_ASSERT(ptr2 != NULL, "Arena realloc should succeed");
+
+  uint8_t* bytes = (uint8_t*)ptr2;
+  int match = 1;
+  for (int i = 0; i < 100 && match; i++) {
+    if (bytes[i] != 'A') match = 0;
+  }
+  VALK_TEST_ASSERT(match, "Realloc should preserve original data");
+
+  void* ptr3 = valk_mem_allocator_calloc((valk_mem_allocator_t*)arena, 10, 10);
+  VALK_TEST_ASSERT(ptr3 != NULL, "Arena calloc should succeed");
+
+  bytes = (uint8_t*)ptr3;
+  match = 1;
+  for (int i = 0; i < 100 && match; i++) {
+    if (bytes[i] != 0) match = 0;
+  }
+  VALK_TEST_ASSERT(match, "Calloc should zero memory");
+
+  valk_mem_allocator_free((valk_mem_allocator_t*)arena, ptr1);
+
+  free(arena);
+  VALK_PASS();
+}
+
+void test_ring_buffer_fread(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t cap = 64;
+  valk_ring_t *ring = malloc(sizeof(valk_ring_t) + cap);
+  valk_ring_init(ring, cap);
+
+  uint8_t data[] = "HELLO_WORLD_TEST";
+  valk_ring_write(ring, data, 16);
+  ring->offset = 0;
+
+  FILE *devnull = fopen("/dev/null", "w");
+  if (devnull) {
+    valk_ring_fread(ring, 16, devnull);
+    VALK_TEST_ASSERT(ring->offset == 16, "fread should advance offset");
+    fclose(devnull);
+  }
+
+  free(ring);
+  VALK_PASS();
+}
+
+void test_ring_buffer_fread_wrap(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t cap = 16;
+  valk_ring_t *ring = malloc(sizeof(valk_ring_t) + cap);
+  valk_ring_init(ring, cap);
+
+  uint8_t data[] = "ABCDEFGHIJKLMNOP";
+  valk_ring_write(ring, data, 16);
+  ring->offset = 8;
+
+  FILE *devnull = fopen("/dev/null", "w");
+  if (devnull) {
+    valk_ring_fread(ring, 16, devnull);
+    VALK_TEST_ASSERT(ring->offset == 8, "fread should wrap and end at offset 8");
+    fclose(devnull);
+  }
+
+  free(ring);
+  VALK_PASS();
+}
+
+void test_ring_buffer_print(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t cap = 32;
+  valk_ring_t *ring = malloc(sizeof(valk_ring_t) + cap);
+  valk_ring_init(ring, cap);
+
+  uint8_t data[] = "PRINT_TEST_DATA!";
+  valk_ring_write(ring, data, 16);
+
+  FILE *devnull = fopen("/dev/null", "w");
+  if (devnull) {
+    valk_ring_print(ring, devnull);
+    fclose(devnull);
+  }
+
+  free(ring);
+  VALK_PASS();
+}
+
+void test_arena_reset_stats(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 16 * 1024;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  valk_mem_arena_alloc(arena, 100);
+  valk_mem_arena_alloc(arena, 200);
+  valk_mem_arena_reset(arena);
+
+  VALK_TEST_ASSERT(arena->stats.total_allocations > 0, "Should have allocations");
+  VALK_TEST_ASSERT(arena->stats.num_resets > 0, "Should have resets");
+
+  size_t old_hwm = arena->stats.high_water_mark;
+  valk_mem_arena_reset_stats(arena);
+
+  VALK_TEST_ASSERT(arena->stats.total_allocations == 0, "Allocations should be 0");
+  VALK_TEST_ASSERT(arena->stats.num_resets == 0, "Resets should be 0");
+  VALK_TEST_ASSERT(arena->stats.high_water_mark == old_hwm, "HWM should be preserved");
+
+  valk_mem_arena_reset_stats(NULL);
+
+  free(arena);
+  VALK_PASS();
+}
+
+void test_malloc_allocator_api(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_mem_allocator_t alloc = {.type = VALK_ALLOC_MALLOC};
+
+  void *ptr = valk_mem_allocator_alloc(&alloc, 128);
+  VALK_TEST_ASSERT(ptr != NULL, "Malloc alloc should succeed");
+
+  void *ptr2 = valk_mem_allocator_calloc(&alloc, 4, 32);
+  VALK_TEST_ASSERT(ptr2 != NULL, "Malloc calloc should succeed");
+
+  void *ptr3 = valk_mem_allocator_realloc(&alloc, ptr, 256);
+  VALK_TEST_ASSERT(ptr3 != NULL, "Malloc realloc should succeed");
+
+  valk_mem_allocator_free(&alloc, ptr3);
+  valk_mem_allocator_free(&alloc, ptr2);
+
+  VALK_PASS();
+}
+
+void test_gc_heap_allocator_api(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+
+  void *ptr = valk_mem_allocator_alloc((valk_mem_allocator_t*)heap, 128);
+  VALK_TEST_ASSERT(ptr != NULL, "GC heap alloc should succeed");
+
+  void *ptr2 = valk_mem_allocator_calloc((valk_mem_allocator_t*)heap, 4, 32);
+  VALK_TEST_ASSERT(ptr2 != NULL, "GC heap calloc should succeed");
+
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
+}
+
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
@@ -1195,6 +1557,25 @@ int main(int argc, const char **argv) {
                           test_slab_concurrency);
   valk_testsuite_add_test(suite, "test_slab_overflow_counter",
                           test_slab_overflow_counter);
+
+  // Ring buffer and allocator tests
+  valk_testsuite_add_test(suite, "test_ring_buffer_basic", test_ring_buffer_basic);
+  valk_testsuite_add_test(suite, "test_ring_buffer_wrap", test_ring_buffer_wrap);
+  valk_testsuite_add_test(suite, "test_ring_buffer_rewind", test_ring_buffer_rewind);
+  valk_testsuite_add_test(suite, "test_ring_buffer_read", test_ring_buffer_read);
+  valk_testsuite_add_test(suite, "test_buffer_alloc_and_append", test_buffer_alloc_and_append);
+  valk_testsuite_add_test(suite, "test_allocator_type_strings", test_allocator_type_strings);
+  valk_testsuite_add_test(suite, "test_process_memory_collect", test_process_memory_collect);
+  valk_testsuite_add_test(suite, "test_smaps_collect", test_smaps_collect);
+  valk_testsuite_add_test(suite, "test_arena_print_stats", test_arena_print_stats);
+  valk_testsuite_add_test(suite, "test_slab_allocator_api", test_slab_allocator_api);
+  valk_testsuite_add_test(suite, "test_arena_allocator_realloc", test_arena_allocator_realloc);
+  valk_testsuite_add_test(suite, "test_ring_buffer_fread", test_ring_buffer_fread);
+  valk_testsuite_add_test(suite, "test_ring_buffer_fread_wrap", test_ring_buffer_fread_wrap);
+  valk_testsuite_add_test(suite, "test_ring_buffer_print", test_ring_buffer_print);
+  valk_testsuite_add_test(suite, "test_arena_reset_stats", test_arena_reset_stats);
+  valk_testsuite_add_test(suite, "test_malloc_allocator_api", test_malloc_allocator_api);
+  valk_testsuite_add_test(suite, "test_gc_heap_allocator_api", test_gc_heap_allocator_api);
 
   // Phase 1 telemetry tests
   valk_testsuite_add_test(suite, "test_arena_stats", test_arena_stats);

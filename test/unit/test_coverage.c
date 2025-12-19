@@ -253,6 +253,146 @@ void test_line_coverage_reset(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_coverage_mark_and_record_expr_sequence(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_line_coverage_reset();
+
+  valk_coverage_mark_expr(1, 10, 5, 15);
+  valk_coverage_record_expr(1, 10, 5);
+  valk_coverage_record_expr(1, 10, 5);
+  valk_coverage_record_expr(1, 10, 5);
+
+  VALK_PASS();
+}
+
+void test_coverage_record_branch_true_and_false(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_line_coverage_reset();
+
+  valk_coverage_record_branch(1, 20, true);
+  valk_coverage_record_branch(1, 20, false);
+  valk_coverage_record_branch(1, 20, true);
+  valk_coverage_record_branch(1, 20, false);
+
+  VALK_PASS();
+}
+
+void test_coverage_multiple_files(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_line_coverage_reset();
+
+  valk_coverage_mark_line(1, 1);
+  valk_coverage_mark_line(2, 1);
+  valk_coverage_mark_line(3, 1);
+
+  valk_coverage_record_line(1, 1);
+  valk_coverage_record_line(2, 1);
+  valk_coverage_record_line(3, 1);
+
+  VALK_PASS();
+}
+
+void test_coverage_line_counts_increment(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_line_coverage_reset();
+
+  valk_coverage_mark_line(1, 100);
+  valk_coverage_record_line(1, 100);
+  valk_coverage_record_line(1, 100);
+  valk_coverage_record_line(1, 100);
+
+  VALK_PASS();
+}
+
+void test_coverage_expr_hash_collision(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_line_coverage_reset();
+
+  for (int col = 1; col <= 20; col++) {
+    valk_coverage_mark_expr(1, 50, col, col + 5);
+    valk_coverage_record_expr(1, 50, col);
+  }
+
+  VALK_PASS();
+}
+
+void test_coverage_get_line_expr_count_valid(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_line_coverage_reset();
+
+  valk_coverage_mark_expr(1, 30, 1, 10);
+  valk_coverage_mark_expr(1, 30, 15, 25);
+  valk_coverage_mark_expr(1, 30, 30, 40);
+
+  valk_coverage_record_expr(1, 30, 1);
+  valk_coverage_record_expr(1, 30, 15);
+
+  size_t hit, total;
+  valk_coverage_get_line_expr_count(1, 30, &hit, &total);
+
+  VALK_PASS();
+}
+
+void test_coverage_get_line_expr_count_null_params(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_line_coverage_reset();
+
+  valk_coverage_mark_expr(1, 40, 1, 10);
+  valk_coverage_record_expr(1, 40, 1);
+
+  size_t result = valk_coverage_get_line_expr_count(1, 40, NULL, NULL);
+  (void)result;
+
+  VALK_PASS();
+}
+
+void test_coverage_large_line_numbers(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_line_coverage_reset();
+
+  valk_coverage_mark_line(1, 1000);
+  valk_coverage_mark_line(1, 5000);
+  valk_coverage_mark_line(1, 10000);
+
+  valk_coverage_record_line(1, 1000);
+  valk_coverage_record_line(1, 5000);
+  valk_coverage_record_line(1, 10000);
+
+  VALK_PASS();
+}
+
+void test_coverage_branch_new_vs_existing(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_line_coverage_reset();
+
+  valk_coverage_record_branch(1, 100, true);
+  valk_coverage_record_branch(1, 100, true);
+  valk_coverage_record_branch(1, 200, false);
+  valk_coverage_record_branch(1, 200, false);
+
+  VALK_PASS();
+}
+
+void test_coverage_expr_without_mark(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_line_coverage_reset();
+
+  valk_coverage_record_expr(1, 60, 5);
+  valk_coverage_record_expr(1, 60, 5);
+
+  VALK_PASS();
+}
+
 #endif
 
 int main(void) {
@@ -286,6 +426,16 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_coverage_get_line_expr_count", test_coverage_get_line_expr_count);
   valk_testsuite_add_test(suite, "test_coverage_get_file_null", test_coverage_get_file_null);
   valk_testsuite_add_test(suite, "test_line_coverage_reset", test_line_coverage_reset);
+  valk_testsuite_add_test(suite, "test_coverage_mark_and_record_expr_sequence", test_coverage_mark_and_record_expr_sequence);
+  valk_testsuite_add_test(suite, "test_coverage_record_branch_true_and_false", test_coverage_record_branch_true_and_false);
+  valk_testsuite_add_test(suite, "test_coverage_multiple_files", test_coverage_multiple_files);
+  valk_testsuite_add_test(suite, "test_coverage_line_counts_increment", test_coverage_line_counts_increment);
+  valk_testsuite_add_test(suite, "test_coverage_expr_hash_collision", test_coverage_expr_hash_collision);
+  valk_testsuite_add_test(suite, "test_coverage_get_line_expr_count_valid", test_coverage_get_line_expr_count_valid);
+  valk_testsuite_add_test(suite, "test_coverage_get_line_expr_count_null_params", test_coverage_get_line_expr_count_null_params);
+  valk_testsuite_add_test(suite, "test_coverage_large_line_numbers", test_coverage_large_line_numbers);
+  valk_testsuite_add_test(suite, "test_coverage_branch_new_vs_existing", test_coverage_branch_new_vs_existing);
+  valk_testsuite_add_test(suite, "test_coverage_expr_without_mark", test_coverage_expr_without_mark);
 #endif
 
   int result = valk_testsuite_run(suite);

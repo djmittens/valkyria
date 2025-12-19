@@ -290,6 +290,11 @@ if(VALK_METRICS)
   target_link_libraries(test_sse_registry_unit PRIVATE "-lc" valkyria)
   target_compile_definitions(test_sse_registry_unit PRIVATE VALK_METRICS_ENABLED=1)
   include_directories(test_sse_registry_unit src/)
+
+  add_executable(test_sse_builtins_unit test/unit/test_sse_builtins.c test/testing.c)
+  target_link_libraries(test_sse_builtins_unit PRIVATE "-lc" valkyria)
+  target_compile_definitions(test_sse_builtins_unit PRIVATE VALK_METRICS_ENABLED=1)
+  include_directories(test_sse_builtins_unit src/)
 endif()
 
 add_executable(test_concurrency test/unit/test_concurrency.c test/testing.c)
@@ -301,8 +306,12 @@ target_link_libraries(test_log PRIVATE "-lc" valkyria)
 include_directories(test_log src/)
 
 add_executable(test_aio_alloc_unit test/unit/test_aio_alloc.c test/testing.c)
-target_link_libraries(test_aio_alloc_unit PRIVATE "-lc" valkyria)
+target_link_libraries(test_aio_alloc_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_aio_alloc_unit src/)
+
+add_executable(test_aio_uv_unit test/unit/test_aio_uv.c test/testing.c)
+target_link_libraries(test_aio_uv_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_aio_uv_unit src/)
 
 add_executable(test_coverage_unit test/unit/test_coverage.c test/testing.c)
 target_link_libraries(test_coverage_unit PRIVATE "-lc" valkyria)

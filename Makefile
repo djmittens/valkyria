@@ -153,6 +153,16 @@ define run_tests_c
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_metrics_v2 ]; then $(1)/test_metrics_v2; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_metrics_builtins ]; then $(1)/test_metrics_builtins; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_registry_unit ]; then $(1)/test_sse_registry_unit; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_builtins_unit ]; then $(1)/test_sse_builtins_unit; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_core ]; then $(1)/test_sse_core; fi
+	if [ -f $(1)/test_aio_alloc_unit ]; then $(1)/test_aio_alloc_unit; fi
+	if [ -f $(1)/test_aio_ssl_unit ]; then $(1)/test_aio_ssl_unit; fi
+	if [ -f $(1)/test_coverage_unit ]; then $(1)/test_coverage_unit; fi
+	if [ -f $(1)/test_gc_unit ]; then $(1)/test_gc_unit; fi
+	if [ -f $(1)/test_memory_unit ]; then $(1)/test_memory_unit; fi
+	if [ -f $(1)/test_log ]; then $(1)/test_log; fi
+	if [ -f $(1)/test_parser_unit ]; then $(1)/test_parser_unit; fi
+	if [ -f $(1)/test_source_loc_unit ]; then $(1)/test_source_loc_unit; fi
 	@echo "=== All C tests passed ($(1)) ==="
 endef
 

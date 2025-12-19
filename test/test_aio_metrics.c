@@ -638,6 +638,350 @@ void test_vm_metrics_prometheus_contains_heap_values(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_connection_state_tracking(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_metrics_t metrics;
+  valk_aio_metrics_init(&metrics);
+
+  VALK_TEST_ASSERT(atomic_load(&metrics.connections_connecting) == 0,
+                   "connections_connecting should start at 0");
+  VALK_TEST_ASSERT(atomic_load(&metrics.connections_idle) == 0,
+                   "connections_idle should start at 0");
+  VALK_TEST_ASSERT(atomic_load(&metrics.connections_closing) == 0,
+                   "connections_closing should start at 0");
+
+  valk_aio_metrics_on_connecting(&metrics);
+  VALK_TEST_ASSERT(atomic_load(&metrics.connections_connecting) == 1,
+                   "connections_connecting should be 1");
+
+  valk_aio_metrics_on_connected(&metrics);
+  VALK_TEST_ASSERT(atomic_load(&metrics.connections_connecting) == 0,
+                   "connections_connecting should be 0 after connected");
+  VALK_TEST_ASSERT(atomic_load(&metrics.connections_active) == 1,
+                   "connections_active should be 1 after connected");
+
+  valk_aio_metrics_on_idle(&metrics);
+  VALK_TEST_ASSERT(atomic_load(&metrics.connections_active) == 0,
+                   "connections_active should be 0 after idle");
+  VALK_TEST_ASSERT(atomic_load(&metrics.connections_idle) == 1,
+                   "connections_idle should be 1");
+
+  valk_aio_metrics_on_reactivate(&metrics);
+  VALK_TEST_ASSERT(atomic_load(&metrics.connections_idle) == 0,
+                   "connections_idle should be 0 after reactivate");
+  VALK_TEST_ASSERT(atomic_load(&metrics.connections_active) == 1,
+                   "connections_active should be 1 after reactivate");
+
+  valk_aio_metrics_on_closing(&metrics);
+  VALK_TEST_ASSERT(atomic_load(&metrics.connections_closing) == 1,
+                   "connections_closing should be 1");
+
+  valk_aio_metrics_on_closed(&metrics);
+  VALK_TEST_ASSERT(atomic_load(&metrics.connections_closing) == 0,
+                   "connections_closing should be 0 after closed");
+
+  VALK_PASS();
+}
+
+void test_system_stats_full_lifecycle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_stats_t stats;
+  valk_aio_system_stats_init(&stats, 64, 128, 256);
+
+  VALK_TEST_ASSERT(stats.arenas_total == 64, "arenas_total should be 64");
+  VALK_TEST_ASSERT(stats.tcp_buffers_total == 128, "tcp_buffers_total should be 128");
+  VALK_TEST_ASSERT(stats.queue_capacity == 256, "queue_capacity should be 256");
+
+  valk_aio_system_stats_on_server_start(&stats);
+  valk_aio_system_stats_on_server_start(&stats);
+  VALK_TEST_ASSERT(atomic_load(&stats.servers_count) == 2, "servers_count should be 2");
+
+  valk_aio_system_stats_on_server_stop(&stats);
+  VALK_TEST_ASSERT(atomic_load(&stats.servers_count) == 1, "servers_count should be 1");
+
+  valk_aio_system_stats_on_client_start(&stats);
+  VALK_TEST_ASSERT(atomic_load(&stats.clients_count) == 1, "clients_count should be 1");
+
+  valk_aio_system_stats_on_client_stop(&stats);
+  VALK_TEST_ASSERT(atomic_load(&stats.clients_count) == 0, "clients_count should be 0");
+
+  valk_aio_system_stats_on_handle_create(&stats);
+  valk_aio_system_stats_on_handle_create(&stats);
+  valk_aio_system_stats_on_handle_create(&stats);
+  VALK_TEST_ASSERT(atomic_load(&stats.handles_count) == 3, "handles_count should be 3");
+
+  valk_aio_system_stats_on_handle_close(&stats);
+  VALK_TEST_ASSERT(atomic_load(&stats.handles_count) == 2, "handles_count should be 2");
+
+  valk_aio_system_stats_on_arena_acquire(&stats);
+  valk_aio_system_stats_on_arena_acquire(&stats);
+  VALK_TEST_ASSERT(atomic_load(&stats.arenas_used) == 2, "arenas_used should be 2");
+
+  valk_aio_system_stats_on_arena_release(&stats);
+  VALK_TEST_ASSERT(atomic_load(&stats.arenas_used) == 1, "arenas_used should be 1");
+
+  valk_aio_system_stats_update_queue(&stats, 10, 5);
+  VALK_TEST_ASSERT(atomic_load(&stats.pending_requests) == 10, "pending_requests should be 10");
+  VALK_TEST_ASSERT(atomic_load(&stats.pending_responses) == 5, "pending_responses should be 5");
+  VALK_TEST_ASSERT(atomic_load(&stats.queue_depth) == 15, "queue_depth should be 15");
+
+  VALK_PASS();
+}
+
+void test_pending_stream_backpressure_metrics(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_stats_t stats;
+  valk_aio_system_stats_init(&stats, 64, 128, 256);
+
+  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_current) == 0,
+                   "pending_streams_current should start at 0");
+  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_total) == 0,
+                   "pending_streams_total should start at 0");
+
+  valk_aio_system_stats_on_pending_enqueue(&stats);
+  valk_aio_system_stats_on_pending_enqueue(&stats);
+  valk_aio_system_stats_on_pending_enqueue(&stats);
+  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_current) == 3,
+                   "pending_streams_current should be 3");
+  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_total) == 3,
+                   "pending_streams_total should be 3");
+
+  valk_aio_system_stats_on_pending_dequeue(&stats, 1000);
+  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_current) == 2,
+                   "pending_streams_current should be 2");
+  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_processed) == 1,
+                   "pending_streams_processed should be 1");
+  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_wait_us) == 1000,
+                   "pending_streams_wait_us should be 1000");
+
+  valk_aio_system_stats_on_pending_dequeue(&stats, 2000);
+  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_wait_us) == 3000,
+                   "pending_streams_wait_us should be 3000");
+
+  valk_aio_system_stats_on_pending_drop(&stats);
+  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_current) == 0,
+                   "pending_streams_current should be 0");
+  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_dropped) == 1,
+                   "pending_streams_dropped should be 1");
+
+  valk_aio_system_stats_update_pending_current(&stats, 42);
+  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_current) == 42,
+                   "pending_streams_current should be 42");
+
+  VALK_PASS();
+}
+
+void test_combined_json_output(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_metrics_t metrics;
+  valk_aio_metrics_init(&metrics);
+
+  valk_aio_system_stats_t stats;
+  valk_aio_system_stats_init(&stats, 64, 128, 256);
+
+  valk_aio_metrics_on_connection(&metrics, true);
+  valk_aio_metrics_on_stream_start(&metrics);
+  valk_aio_metrics_on_stream_end(&metrics, false, 5000, 1024, 512);
+
+  valk_aio_system_stats_on_server_start(&stats);
+  valk_aio_system_stats_on_handle_create(&stats);
+  valk_aio_system_stats_on_arena_acquire(&stats);
+
+  char* json = valk_aio_combined_to_json(&metrics, &stats, NULL);
+  VALK_TEST_ASSERT(json != NULL, "Combined JSON should not be NULL");
+
+  VALK_TEST_ASSERT(strstr(json, "\"uptime_seconds\"") != NULL,
+                   "JSON should contain uptime_seconds");
+  VALK_TEST_ASSERT(strstr(json, "\"system\"") != NULL,
+                   "JSON should contain system section");
+  VALK_TEST_ASSERT(strstr(json, "\"connections\"") != NULL,
+                   "JSON should contain connections section");
+  VALK_TEST_ASSERT(strstr(json, "\"streams\"") != NULL,
+                   "JSON should contain streams section");
+  VALK_TEST_ASSERT(strstr(json, "\"bytes\"") != NULL,
+                   "JSON should contain bytes section");
+  VALK_TEST_ASSERT(strstr(json, "\"servers\": 1") != NULL,
+                   "JSON should show 1 server");
+  VALK_TEST_ASSERT(strstr(json, "\"arenas_used\": 1") != NULL,
+                   "JSON should show 1 arena used");
+
+  free(json);
+  VALK_PASS();
+}
+
+void test_combined_json_named_output(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_metrics_t metrics;
+  valk_aio_metrics_init(&metrics);
+
+  valk_aio_system_stats_t stats;
+  valk_aio_system_stats_init(&stats, 64, 128, 256);
+
+  valk_aio_metrics_on_connection(&metrics, true);
+  valk_aio_system_stats_on_server_start(&stats);
+
+  char* json = valk_aio_combined_to_json_named("test-system", &metrics, &stats, NULL);
+  VALK_TEST_ASSERT(json != NULL, "Named JSON should not be NULL");
+
+  VALK_TEST_ASSERT(strstr(json, "\"name\":\"test-system\"") != NULL,
+                   "JSON should contain the system name");
+  VALK_TEST_ASSERT(strstr(json, "\"uptime_seconds\"") != NULL,
+                   "JSON should contain uptime_seconds");
+  VALK_TEST_ASSERT(strstr(json, "\"loop\"") != NULL,
+                   "JSON should contain loop section");
+  VALK_TEST_ASSERT(strstr(json, "\"system\"") != NULL,
+                   "JSON should contain system section");
+  VALK_TEST_ASSERT(strstr(json, "\"connections\"") != NULL,
+                   "JSON should contain connections section");
+
+  free(json);
+
+  char* json_null_name = valk_aio_combined_to_json_named(NULL, &metrics, &stats, NULL);
+  VALK_TEST_ASSERT(json_null_name != NULL, "JSON with NULL name should not be NULL");
+  VALK_TEST_ASSERT(strstr(json_null_name, "\"name\":\"main\"") != NULL,
+                   "JSON should default to 'main' when name is NULL");
+  free(json_null_name);
+
+  VALK_PASS();
+}
+
+void test_http_client_metrics(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_http_clients_registry_t reg = {0};
+  atomic_store(&reg.count, 0);
+
+  int idx = valk_http_client_register(&reg, "redis", "cache", 10);
+  VALK_TEST_ASSERT(idx == 0, "First client should get index 0");
+  VALK_TEST_ASSERT(atomic_load(&reg.count) == 1, "Registry count should be 1");
+
+  valk_http_client_metrics_t* client = &reg.clients[idx];
+  VALK_TEST_ASSERT(strcmp(client->name, "redis") == 0, "Client name should be 'redis'");
+  VALK_TEST_ASSERT(strcmp(client->type, "cache") == 0, "Client type should be 'cache'");
+  VALK_TEST_ASSERT(atomic_load(&client->pool_size) == 10, "Pool size should be 10");
+
+  valk_http_client_on_operation(client, 5000, false, false);
+  VALK_TEST_ASSERT(atomic_load(&client->operations_total) == 1, "operations_total should be 1");
+  VALK_TEST_ASSERT(atomic_load(&client->latency_us_sum) == 5000, "latency_us_sum should be 5000");
+  VALK_TEST_ASSERT(atomic_load(&client->latency_count) == 1, "latency_count should be 1");
+  VALK_TEST_ASSERT(atomic_load(&client->errors_total) == 0, "errors_total should be 0");
+  VALK_TEST_ASSERT(atomic_load(&client->retries_total) == 0, "retries_total should be 0");
+
+  valk_http_client_on_operation(client, 3000, true, false);
+  VALK_TEST_ASSERT(atomic_load(&client->operations_total) == 2, "operations_total should be 2");
+  VALK_TEST_ASSERT(atomic_load(&client->errors_total) == 1, "errors_total should be 1");
+
+  valk_http_client_on_operation(client, 2000, false, true);
+  VALK_TEST_ASSERT(atomic_load(&client->operations_total) == 3, "operations_total should be 3");
+  VALK_TEST_ASSERT(atomic_load(&client->retries_total) == 1, "retries_total should be 1");
+
+  valk_http_client_on_cache(client, true);
+  VALK_TEST_ASSERT(atomic_load(&client->cache_hits_total) == 1, "cache_hits_total should be 1");
+
+  valk_http_client_on_cache(client, false);
+  VALK_TEST_ASSERT(atomic_load(&client->cache_misses_total) == 1, "cache_misses_total should be 1");
+
+  VALK_PASS();
+}
+
+void test_http_client_registry_overflow(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_http_clients_registry_t reg = {0};
+  atomic_store(&reg.count, VALK_MAX_HTTP_CLIENTS);
+
+  int idx = valk_http_client_register(&reg, "overflow", "test", 1);
+  VALK_TEST_ASSERT(idx == -1, "Should return -1 when registry is full");
+  VALK_TEST_ASSERT(atomic_load(&reg.count) == VALK_MAX_HTTP_CLIENTS,
+                   "Count should remain at max");
+
+  VALK_PASS();
+}
+
+void test_http_clients_prometheus_output(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_http_clients_registry_t reg = {0};
+  atomic_store(&reg.count, 0);
+
+  char* prom_empty = valk_http_clients_to_prometheus(&reg, NULL);
+  VALK_TEST_ASSERT(prom_empty == NULL, "Empty registry should return NULL");
+
+  int idx1 = valk_http_client_register(&reg, "redis", "cache", 10);
+  int idx2 = valk_http_client_register(&reg, "postgres", "db", 5);
+  VALK_TEST_ASSERT(idx1 >= 0, "Redis registration should succeed");
+  VALK_TEST_ASSERT(idx2 >= 0, "Postgres registration should succeed");
+
+  valk_http_client_on_operation(&reg.clients[idx1], 1000, false, false);
+  valk_http_client_on_cache(&reg.clients[idx1], true);
+  valk_http_client_on_cache(&reg.clients[idx1], false);
+
+  char* prom = valk_http_clients_to_prometheus(&reg, NULL);
+  VALK_TEST_ASSERT(prom != NULL, "Prometheus output should not be NULL");
+
+  VALK_TEST_ASSERT(strstr(prom, "http_client_connections_active") != NULL,
+                   "Should contain connections_active metric");
+  VALK_TEST_ASSERT(strstr(prom, "http_client_pool_size") != NULL,
+                   "Should contain pool_size metric");
+  VALK_TEST_ASSERT(strstr(prom, "http_client_operations_total") != NULL,
+                   "Should contain operations_total metric");
+  VALK_TEST_ASSERT(strstr(prom, "http_client_errors_total") != NULL,
+                   "Should contain errors_total metric");
+  VALK_TEST_ASSERT(strstr(prom, "http_client_retries_total") != NULL,
+                   "Should contain retries_total metric");
+  VALK_TEST_ASSERT(strstr(prom, "http_client_cache_hits_total") != NULL,
+                   "Should contain cache_hits_total metric");
+  VALK_TEST_ASSERT(strstr(prom, "http_client_cache_misses_total") != NULL,
+                   "Should contain cache_misses_total metric");
+  VALK_TEST_ASSERT(strstr(prom, "http_client_latency_seconds_avg") != NULL,
+                   "Should contain latency_seconds_avg metric");
+
+  VALK_TEST_ASSERT(strstr(prom, "client=\"redis\"") != NULL,
+                   "Should contain redis client label");
+  VALK_TEST_ASSERT(strstr(prom, "client=\"postgres\"") != NULL,
+                   "Should contain postgres client label");
+
+  free(prom);
+  VALK_PASS();
+}
+
+void test_vm_metrics_null_input(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_vm_metrics_collect(NULL, NULL, NULL);
+
+  char* json = valk_vm_metrics_to_json(NULL, NULL);
+  VALK_TEST_ASSERT(json == NULL, "JSON should be NULL for NULL input");
+
+  char* prom = valk_vm_metrics_to_prometheus(NULL, NULL);
+  VALK_TEST_ASSERT(prom == NULL, "Prometheus should be NULL for NULL input");
+
+  VALK_PASS();
+}
+
+void test_system_stats_prometheus_null_input(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  char* prom = valk_aio_system_stats_to_prometheus(NULL, NULL);
+  VALK_TEST_ASSERT(prom == NULL, "Should return NULL for NULL stats");
+
+  VALK_PASS();
+}
+
+void test_http_clients_prometheus_null_input(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  char* prom = valk_http_clients_to_prometheus(NULL, NULL);
+  VALK_TEST_ASSERT(prom == NULL, "Should return NULL for NULL registry");
+
+  VALK_PASS();
+}
+
 #else // !VALK_METRICS_ENABLED
 
 void test_metrics_disabled(VALK_TEST_ARGS()) {
@@ -681,6 +1025,28 @@ int main(void) {
                           test_vm_metrics_json_contains_heap_values);
   valk_testsuite_add_test(suite, "test_vm_metrics_prometheus_contains_heap_values",
                           test_vm_metrics_prometheus_contains_heap_values);
+  valk_testsuite_add_test(suite, "test_connection_state_tracking",
+                          test_connection_state_tracking);
+  valk_testsuite_add_test(suite, "test_system_stats_full_lifecycle",
+                          test_system_stats_full_lifecycle);
+  valk_testsuite_add_test(suite, "test_pending_stream_backpressure_metrics",
+                          test_pending_stream_backpressure_metrics);
+  valk_testsuite_add_test(suite, "test_combined_json_output",
+                          test_combined_json_output);
+  valk_testsuite_add_test(suite, "test_combined_json_named_output",
+                          test_combined_json_named_output);
+  valk_testsuite_add_test(suite, "test_http_client_metrics",
+                          test_http_client_metrics);
+  valk_testsuite_add_test(suite, "test_http_client_registry_overflow",
+                          test_http_client_registry_overflow);
+  valk_testsuite_add_test(suite, "test_http_clients_prometheus_output",
+                          test_http_clients_prometheus_output);
+  valk_testsuite_add_test(suite, "test_vm_metrics_null_input",
+                          test_vm_metrics_null_input);
+  valk_testsuite_add_test(suite, "test_system_stats_prometheus_null_input",
+                          test_system_stats_prometheus_null_input);
+  valk_testsuite_add_test(suite, "test_http_clients_prometheus_null_input",
+                          test_http_clients_prometheus_null_input);
 #else
   valk_testsuite_add_test(suite, "test_metrics_disabled", test_metrics_disabled);
 #endif

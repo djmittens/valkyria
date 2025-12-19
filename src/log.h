@@ -18,6 +18,9 @@ void valk_log_init(void);
 void valk_log_set_level(valk_log_level_e lvl);
 valk_log_level_e valk_log_get_level(void);
 
+// Parse log level from string (returns VALK_LOG_WARN for NULL or invalid)
+valk_log_level_e valk_log_level_from_string(const char *s);
+
 // True if a message at `lvl` would be emitted
 int valk_log_would_log(valk_log_level_e lvl);
 

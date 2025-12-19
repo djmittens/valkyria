@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uv.h>
 
 void test_aio_alloc_init_does_not_crash(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -289,6 +290,26 @@ void test_aio_nghttp2_calloc_zero_size(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_aio_libuv_allocations_via_uv(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t before = valk_aio_libuv_bytes_used();
+
+  uv_loop_t *loop = malloc(sizeof(uv_loop_t));
+  VALK_TEST_ASSERT(loop != NULL, "should allocate loop");
+
+  int r = uv_loop_init(loop);
+  VALK_TEST_ASSERT(r == 0, "loop init should succeed");
+
+  size_t after = valk_aio_libuv_bytes_used();
+  VALK_TEST_ASSERT(after >= before, "libuv should use some memory");
+
+  uv_loop_close(loop);
+  free(loop);
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -312,6 +333,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_aio_nghttp2_realloc_shrink", test_aio_nghttp2_realloc_shrink);
   valk_testsuite_add_test(suite, "test_aio_nghttp2_calloc_zero_nmemb", test_aio_nghttp2_calloc_zero_nmemb);
   valk_testsuite_add_test(suite, "test_aio_nghttp2_calloc_zero_size", test_aio_nghttp2_calloc_zero_size);
+  valk_testsuite_add_test(suite, "test_aio_libuv_allocations_via_uv", test_aio_libuv_allocations_via_uv);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

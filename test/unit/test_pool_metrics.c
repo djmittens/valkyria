@@ -477,6 +477,82 @@ void test_pool_metrics_overflow_never_decreases(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_pool_metrics_partial_null_fields(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t m;
+  bool result = valk_pool_metrics_init(&m, "partial_null_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_gauge_v2_t *saved_used = m.used;
+  valk_gauge_v2_t *saved_total = m.total;
+  valk_gauge_v2_t *saved_peak = m.peak;
+  valk_counter_v2_t *saved_overflow = m.overflow;
+
+  m.used = NULL;
+  valk_pool_metrics_update(&m, 100, 200, 150, 5);
+
+  m.used = saved_used;
+  m.total = NULL;
+  valk_pool_metrics_update(&m, 100, 200, 150, 6);
+
+  m.total = saved_total;
+  m.peak = NULL;
+  valk_pool_metrics_update(&m, 100, 200, 150, 7);
+
+  m.peak = saved_peak;
+  m.overflow = NULL;
+  valk_pool_metrics_update(&m, 100, 200, 150, 8);
+
+  m.overflow = saved_overflow;
+
+  VALK_PASS();
+}
+
+void test_pool_metrics_overflow_same_value(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t m;
+  bool result = valk_pool_metrics_init(&m, "overflow_same_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_pool_metrics_update(&m, 100, 100, 100, 10);
+  valk_pool_metrics_update(&m, 100, 100, 100, 10);
+
+  uint64_t overflow_val = atomic_load(&m.overflow->value);
+  VALK_TEST_ASSERT(overflow_val == 10, "overflow should stay at 10");
+
+  VALK_PASS();
+}
+
+void test_pool_metrics_overflow_decrease_ignored(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_pool_metrics_t m;
+  bool result = valk_pool_metrics_init(&m, "overflow_decrease_test");
+  VALK_TEST_ASSERT(result == true, "Init should succeed");
+
+  valk_pool_metrics_update(&m, 100, 100, 100, 20);
+  uint64_t first_val = atomic_load(&m.overflow->value);
+  VALK_TEST_ASSERT(first_val == 20, "overflow should be 20");
+
+  valk_pool_metrics_update(&m, 100, 100, 100, 5);
+  uint64_t second_val = atomic_load(&m.overflow->value);
+  VALK_TEST_ASSERT(second_val == 20, "overflow should NOT decrease to 5");
+
+  valk_pool_metrics_update(&m, 100, 100, 100, 0);
+  uint64_t third_val = atomic_load(&m.overflow->value);
+  VALK_TEST_ASSERT(third_val == 20, "overflow should NOT decrease to 0");
+
+  VALK_PASS();
+}
+
 #else
 
 void test_pool_metrics_disabled(VALK_TEST_ARGS()) {
@@ -514,6 +590,9 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_pool_metrics_reinit_same_name", test_pool_metrics_reinit_same_name);
   valk_testsuite_add_test(suite, "test_pool_metrics_all_fields_null_metrics", test_pool_metrics_all_fields_null_metrics);
   valk_testsuite_add_test(suite, "test_pool_metrics_overflow_never_decreases", test_pool_metrics_overflow_never_decreases);
+  valk_testsuite_add_test(suite, "test_pool_metrics_partial_null_fields", test_pool_metrics_partial_null_fields);
+  valk_testsuite_add_test(suite, "test_pool_metrics_overflow_same_value", test_pool_metrics_overflow_same_value);
+  valk_testsuite_add_test(suite, "test_pool_metrics_overflow_decrease_ignored", test_pool_metrics_overflow_decrease_ignored);
 #else
   valk_testsuite_add_test(suite, "test_pool_metrics_disabled", test_pool_metrics_disabled);
 #endif

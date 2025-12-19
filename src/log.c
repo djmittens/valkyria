@@ -10,7 +10,7 @@
 static valk_log_level_e __valk_log_level = VALK_LOG_WARN;
 static int __valk_log_inited = 0;
 
-static valk_log_level_e __from_env(const char *s) {
+valk_log_level_e valk_log_level_from_string(const char *s) {
   if (!s) return VALK_LOG_WARN;
   if (strcasecmp(s, "error") == 0) return VALK_LOG_ERROR;
   if (strcasecmp(s, "warn") == 0 || strcasecmp(s, "warning") == 0) return VALK_LOG_WARN;
@@ -23,7 +23,7 @@ static valk_log_level_e __from_env(const char *s) {
 void valk_log_init(void) {
   if (__valk_log_inited) return;
   const char *env = getenv("VALK_LOG");
-  __valk_log_level = __from_env(env);
+  __valk_log_level = valk_log_level_from_string(env);
   __valk_log_inited = 1;
 }
 

@@ -51,9 +51,10 @@ void valk_trace_print(void** stack, size_t num) {
     void *addr = stack[j];
     Dl_info info;
 
+    // COVERAGE_EXEMPT: Platform-dependent dladdr behavior - can't control symbol resolution
     if (dladdr(addr, &info) && info.dli_sname) {
       uintptr_t offset_in_sym =
-          info.dli_saddr ? (uintptr_t)addr - (uintptr_t)info.dli_saddr : 0;
+          info.dli_saddr ? (uintptr_t)addr - (uintptr_t)info.dli_saddr : 0;  // COVERAGE_EXEMPT: dli_saddr NULL depends on linker
       fprintf(stderr, "  → %s+0x%lx\n", info.dli_sname, offset_in_sym);
     }
 #endif

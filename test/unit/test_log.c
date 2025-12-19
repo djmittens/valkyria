@@ -239,6 +239,248 @@ void test_log_all_levels_sequential(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_log_error_goes_to_stderr(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_log_set_level(VALK_LOG_ERROR);
+  valk_log(VALK_LOG_ERROR, "test.c", 1, "func", "error message");
+
+  VALK_PASS();
+}
+
+void test_log_warn_goes_to_stderr(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_log_set_level(VALK_LOG_WARN);
+  valk_log(VALK_LOG_WARN, "test.c", 1, "func", "warn message");
+
+  VALK_PASS();
+}
+
+void test_log_info_goes_to_stdout(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_log_set_level(VALK_LOG_INFO);
+  valk_log(VALK_LOG_INFO, "test.c", 1, "func", "info message");
+
+  VALK_PASS();
+}
+
+void test_log_debug_goes_to_stdout(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_log_set_level(VALK_LOG_DEBUG);
+  valk_log(VALK_LOG_DEBUG, "test.c", 1, "func", "debug message");
+
+  VALK_PASS();
+}
+
+void test_log_trace_goes_to_stdout(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_log_set_level(VALK_LOG_TRACE);
+  valk_log(VALK_LOG_TRACE, "test.c", 1, "func", "trace message");
+
+  VALK_PASS();
+}
+
+void test_log_various_format_specifiers(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_log_set_level(VALK_LOG_TRACE);
+  valk_log(VALK_LOG_INFO, "test.c", 1, "func", "%%d: %d", 42);
+  valk_log(VALK_LOG_INFO, "test.c", 1, "func", "%%s: %s", "string");
+  valk_log(VALK_LOG_INFO, "test.c", 1, "func", "%%p: %p", (void*)0x1234);
+  valk_log(VALK_LOG_INFO, "test.c", 1, "func", "%%x: %x", 0xABCD);
+  valk_log(VALK_LOG_INFO, "test.c", 1, "func", "%%f: %f", 3.14159);
+  valk_log(VALK_LOG_INFO, "test.c", 1, "func", "%%ld: %ld", (long)123456789);
+  valk_log(VALK_LOG_INFO, "test.c", 1, "func", "%%zu: %zu", (size_t)1024);
+
+  VALK_PASS();
+}
+
+void test_log_would_log_boundary_cases(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_log_set_level(VALK_LOG_ERROR);
+  VALK_TEST_ASSERT(valk_log_would_log(VALK_LOG_ERROR) == 1, "Should log at boundary");
+
+  valk_log_set_level(VALK_LOG_WARN);
+  VALK_TEST_ASSERT(valk_log_would_log(VALK_LOG_WARN) == 1, "Should log at boundary");
+
+  valk_log_set_level(VALK_LOG_INFO);
+  VALK_TEST_ASSERT(valk_log_would_log(VALK_LOG_INFO) == 1, "Should log at boundary");
+
+  valk_log_set_level(VALK_LOG_DEBUG);
+  VALK_TEST_ASSERT(valk_log_would_log(VALK_LOG_DEBUG) == 1, "Should log at boundary");
+
+  valk_log_set_level(VALK_LOG_TRACE);
+  VALK_TEST_ASSERT(valk_log_would_log(VALK_LOG_TRACE) == 1, "Should log at boundary");
+
+  VALK_PASS();
+}
+
+void test_log_skips_when_level_too_low(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_log_set_level(VALK_LOG_ERROR);
+
+  valk_log(VALK_LOG_WARN, "test.c", 1, "func", "should not print");
+  valk_log(VALK_LOG_INFO, "test.c", 1, "func", "should not print");
+  valk_log(VALK_LOG_DEBUG, "test.c", 1, "func", "should not print");
+  valk_log(VALK_LOG_TRACE, "test.c", 1, "func", "should not print");
+
+  VALK_PASS();
+}
+
+void test_log_file_and_line_info(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_log_set_level(VALK_LOG_TRACE);
+  valk_log(VALK_LOG_INFO, "myfile.c", 12345, "my_function", "test message");
+
+  VALK_PASS();
+}
+
+void test_log_null_in_format_string(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_log_set_level(VALK_LOG_TRACE);
+  valk_log(VALK_LOG_INFO, "test.c", 1, "func", "before\\0after");
+
+  VALK_PASS();
+}
+
+void test_log_lvl_name_coverage(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_log_set_level(VALK_LOG_TRACE);
+
+  valk_log(VALK_LOG_ERROR, "test.c", 1, "func", "error");
+  valk_log(VALK_LOG_WARN, "test.c", 1, "func", "warn");
+  valk_log(VALK_LOG_INFO, "test.c", 1, "func", "info");
+  valk_log(VALK_LOG_DEBUG, "test.c", 1, "func", "debug");
+  valk_log(VALK_LOG_TRACE, "test.c", 1, "func", "trace");
+
+  VALK_PASS();
+}
+
+void test_log_invalid_level_handling(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_log_set_level(VALK_LOG_TRACE);
+  valk_log((valk_log_level_e)99, "test.c", 1, "func", "invalid level message");
+
+  VALK_PASS();
+}
+
+void test_log_set_all_levels(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  for (int i = VALK_LOG_ERROR; i <= VALK_LOG_TRACE; i++) {
+    valk_log_set_level((valk_log_level_e)i);
+    VALK_TEST_ASSERT(valk_log_get_level() == (valk_log_level_e)i,
+                     "Level should match after set");
+  }
+
+  VALK_PASS();
+}
+
+void test_log_level_from_string_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_TEST_ASSERT(valk_log_level_from_string(NULL) == VALK_LOG_WARN,
+                   "NULL should return WARN");
+
+  VALK_PASS();
+}
+
+void test_log_level_from_string_error(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_TEST_ASSERT(valk_log_level_from_string("error") == VALK_LOG_ERROR,
+                   "error should return ERROR");
+  VALK_TEST_ASSERT(valk_log_level_from_string("ERROR") == VALK_LOG_ERROR,
+                   "ERROR should return ERROR (case insensitive)");
+  VALK_TEST_ASSERT(valk_log_level_from_string("Error") == VALK_LOG_ERROR,
+                   "Error should return ERROR (case insensitive)");
+
+  VALK_PASS();
+}
+
+void test_log_level_from_string_warn(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_TEST_ASSERT(valk_log_level_from_string("warn") == VALK_LOG_WARN,
+                   "warn should return WARN");
+  VALK_TEST_ASSERT(valk_log_level_from_string("WARN") == VALK_LOG_WARN,
+                   "WARN should return WARN (case insensitive)");
+  VALK_TEST_ASSERT(valk_log_level_from_string("warning") == VALK_LOG_WARN,
+                   "warning should return WARN");
+  VALK_TEST_ASSERT(valk_log_level_from_string("WARNING") == VALK_LOG_WARN,
+                   "WARNING should return WARN (case insensitive)");
+  VALK_TEST_ASSERT(valk_log_level_from_string("Warning") == VALK_LOG_WARN,
+                   "Warning should return WARN (case insensitive)");
+
+  VALK_PASS();
+}
+
+void test_log_level_from_string_info(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_TEST_ASSERT(valk_log_level_from_string("info") == VALK_LOG_INFO,
+                   "info should return INFO");
+  VALK_TEST_ASSERT(valk_log_level_from_string("INFO") == VALK_LOG_INFO,
+                   "INFO should return INFO (case insensitive)");
+  VALK_TEST_ASSERT(valk_log_level_from_string("Info") == VALK_LOG_INFO,
+                   "Info should return INFO (case insensitive)");
+
+  VALK_PASS();
+}
+
+void test_log_level_from_string_debug(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_TEST_ASSERT(valk_log_level_from_string("debug") == VALK_LOG_DEBUG,
+                   "debug should return DEBUG");
+  VALK_TEST_ASSERT(valk_log_level_from_string("DEBUG") == VALK_LOG_DEBUG,
+                   "DEBUG should return DEBUG (case insensitive)");
+  VALK_TEST_ASSERT(valk_log_level_from_string("Debug") == VALK_LOG_DEBUG,
+                   "Debug should return DEBUG (case insensitive)");
+
+  VALK_PASS();
+}
+
+void test_log_level_from_string_trace(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_TEST_ASSERT(valk_log_level_from_string("trace") == VALK_LOG_TRACE,
+                   "trace should return TRACE");
+  VALK_TEST_ASSERT(valk_log_level_from_string("TRACE") == VALK_LOG_TRACE,
+                   "TRACE should return TRACE (case insensitive)");
+  VALK_TEST_ASSERT(valk_log_level_from_string("Trace") == VALK_LOG_TRACE,
+                   "Trace should return TRACE (case insensitive)");
+
+  VALK_PASS();
+}
+
+void test_log_level_from_string_invalid(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_TEST_ASSERT(valk_log_level_from_string("invalid") == VALK_LOG_WARN,
+                   "invalid should return WARN (default)");
+  VALK_TEST_ASSERT(valk_log_level_from_string("") == VALK_LOG_WARN,
+                   "empty string should return WARN (default)");
+  VALK_TEST_ASSERT(valk_log_level_from_string("err") == VALK_LOG_WARN,
+                   "partial match should return WARN (default)");
+  VALK_TEST_ASSERT(valk_log_level_from_string("errors") == VALK_LOG_WARN,
+                   "extra chars should return WARN (default)");
+  VALK_TEST_ASSERT(valk_log_level_from_string("123") == VALK_LOG_WARN,
+                   "numbers should return WARN (default)");
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -261,6 +503,26 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_log_long_format_string", test_log_long_format_string);
   valk_testsuite_add_test(suite, "test_log_multiple_format_args", test_log_multiple_format_args);
   valk_testsuite_add_test(suite, "test_log_all_levels_sequential", test_log_all_levels_sequential);
+  valk_testsuite_add_test(suite, "test_log_error_goes_to_stderr", test_log_error_goes_to_stderr);
+  valk_testsuite_add_test(suite, "test_log_warn_goes_to_stderr", test_log_warn_goes_to_stderr);
+  valk_testsuite_add_test(suite, "test_log_info_goes_to_stdout", test_log_info_goes_to_stdout);
+  valk_testsuite_add_test(suite, "test_log_debug_goes_to_stdout", test_log_debug_goes_to_stdout);
+  valk_testsuite_add_test(suite, "test_log_trace_goes_to_stdout", test_log_trace_goes_to_stdout);
+  valk_testsuite_add_test(suite, "test_log_various_format_specifiers", test_log_various_format_specifiers);
+  valk_testsuite_add_test(suite, "test_log_would_log_boundary_cases", test_log_would_log_boundary_cases);
+  valk_testsuite_add_test(suite, "test_log_skips_when_level_too_low", test_log_skips_when_level_too_low);
+  valk_testsuite_add_test(suite, "test_log_file_and_line_info", test_log_file_and_line_info);
+  valk_testsuite_add_test(suite, "test_log_null_in_format_string", test_log_null_in_format_string);
+  valk_testsuite_add_test(suite, "test_log_lvl_name_coverage", test_log_lvl_name_coverage);
+  valk_testsuite_add_test(suite, "test_log_invalid_level_handling", test_log_invalid_level_handling);
+  valk_testsuite_add_test(suite, "test_log_set_all_levels", test_log_set_all_levels);
+  valk_testsuite_add_test(suite, "test_log_level_from_string_null", test_log_level_from_string_null);
+  valk_testsuite_add_test(suite, "test_log_level_from_string_error", test_log_level_from_string_error);
+  valk_testsuite_add_test(suite, "test_log_level_from_string_warn", test_log_level_from_string_warn);
+  valk_testsuite_add_test(suite, "test_log_level_from_string_info", test_log_level_from_string_info);
+  valk_testsuite_add_test(suite, "test_log_level_from_string_debug", test_log_level_from_string_debug);
+  valk_testsuite_add_test(suite, "test_log_level_from_string_trace", test_log_level_from_string_trace);
+  valk_testsuite_add_test(suite, "test_log_level_from_string_invalid", test_log_level_from_string_invalid);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
