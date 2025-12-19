@@ -280,6 +280,16 @@ if(VALK_METRICS)
   target_link_libraries(test_sse_core PRIVATE "-lc" valkyria)
   target_compile_definitions(test_sse_core PRIVATE VALK_METRICS_ENABLED=1)
   include_directories(test_sse_core src/)
+
+  add_executable(test_metrics_builtins test/unit/test_metrics_builtins.c test/testing.c)
+  target_link_libraries(test_metrics_builtins PRIVATE "-lc" valkyria)
+  target_compile_definitions(test_metrics_builtins PRIVATE VALK_METRICS_ENABLED=1)
+  include_directories(test_metrics_builtins src/)
+
+  add_executable(test_sse_registry_unit test/unit/test_sse_registry.c test/testing.c)
+  target_link_libraries(test_sse_registry_unit PRIVATE "-lc" valkyria)
+  target_compile_definitions(test_sse_registry_unit PRIVATE VALK_METRICS_ENABLED=1)
+  include_directories(test_sse_registry_unit src/)
 endif()
 
 add_executable(test_concurrency test/unit/test_concurrency.c test/testing.c)

@@ -151,6 +151,8 @@ define run_tests_c
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_metrics_delta ]; then $(1)/test_metrics_delta; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_event_loop_metrics_unit ]; then $(1)/test_event_loop_metrics_unit; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_metrics_v2 ]; then $(1)/test_metrics_v2; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_metrics_builtins ]; then $(1)/test_metrics_builtins; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_registry_unit ]; then $(1)/test_sse_registry_unit; fi
 	@echo "=== All C tests passed ($(1)) ==="
 endef
 
@@ -161,6 +163,7 @@ define run_tests_valk
 	@echo "=== Running Valk tests from $(1) ==="
 	@if [ -n "$$ASAN_OPTIONS" ]; then echo "ASAN_OPTIONS=$$ASAN_OPTIONS"; fi
 	if [ "$(VALK_METRICS)" = "1" ]; then $(1)/valk test/test_metrics.valk; fi
+	if [ "$(VALK_METRICS)" = "1" ]; then $(1)/valk test/test_metrics_builtins_comprehensive.valk; fi
 	$(1)/valk test/test_prelude.valk
 	$(1)/valk test/test_namespace.valk
 	$(1)/valk test/test_varargs.valk
