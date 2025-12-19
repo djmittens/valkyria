@@ -89,6 +89,5 @@
     {
       (= {stream} (sse/open))
       (body-fn stream req)
-      ; Return deferred - stream stays open until client disconnects
-      :deferred
+      (head {:deferred})
     }})

@@ -578,6 +578,145 @@ void test_task_types(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static valk_arc_box *simple_work_func(valk_arc_box *arg) {
+  int *val = (int *)arg->item;
+  *val = *val * 2;
+  return arg;
+}
+
+void test_worker_pool_lifecycle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_worker_pool pool = {0};
+  int err = valk_start_pool(&pool);
+  VALK_TEST_ASSERT(err == 0, "Pool should start successfully");
+  VALK_TEST_ASSERT(pool.count == 4, "Pool should have 4 workers");
+
+  valk_free_pool(&pool);
+
+  VALK_PASS();
+}
+
+void test_schedule_work(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_worker_pool pool = {0};
+  valk_start_pool(&pool);
+
+  valk_arc_box *arg = valk_arc_box_new(VALK_SUC, sizeof(int));
+  *(int *)arg->item = 21;
+
+  valk_future *fut = valk_schedule(&pool, arg, simple_work_func);
+  VALK_TEST_ASSERT(fut != NULL, "Schedule should return a future");
+
+  valk_arc_retain(fut);
+  valk_arc_box *result = valk_future_await(fut);
+  VALK_TEST_ASSERT(result != NULL, "Result should not be NULL");
+  VALK_TEST_ASSERT(result->type == VALK_SUC, "Result should be success");
+  VALK_TEST_ASSERT(*(int *)result->item == 42, "Value should be doubled to 42");
+
+  valk_arc_release(arg);
+  valk_arc_release(fut);
+  valk_free_pool(&pool);
+
+  VALK_PASS();
+}
+
+void test_schedule_multiple_tasks(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_worker_pool pool = {0};
+  valk_start_pool(&pool);
+
+  valk_future *futures[10];
+  valk_arc_box *args[10];
+
+  for (int i = 0; i < 10; i++) {
+    args[i] = valk_arc_box_new(VALK_SUC, sizeof(int));
+    *(int *)args[i]->item = i + 1;
+    futures[i] = valk_schedule(&pool, args[i], simple_work_func);
+    valk_arc_retain(futures[i]);
+  }
+
+  for (int i = 0; i < 10; i++) {
+    valk_arc_box *result = valk_future_await(futures[i]);
+    VALK_TEST_ASSERT(result->type == VALK_SUC, "Task %d should succeed", i);
+    VALK_TEST_ASSERT(*(int *)result->item == (i + 1) * 2, "Task %d result should be %d", i, (i + 1) * 2);
+    valk_arc_release(args[i]);
+    valk_arc_release(futures[i]);
+  }
+
+  valk_free_pool(&pool);
+
+  VALK_PASS();
+}
+
+void test_drain_pool(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_worker_pool pool = {0};
+  valk_start_pool(&pool);
+
+  valk_arc_box *arg = valk_arc_box_new(VALK_SUC, sizeof(int));
+  *(int *)arg->item = 5;
+  valk_future *fut = valk_schedule(&pool, arg, simple_work_func);
+  valk_arc_retain(fut);
+
+  valk_drain_pool(&pool);
+
+  valk_arc_box *result = valk_future_await(fut);
+  VALK_TEST_ASSERT(result != NULL, "Should get result after drain");
+
+  valk_arc_release(arg);
+  valk_arc_release(fut);
+  valk_free_pool(&pool);
+
+  VALK_PASS();
+}
+
+void test_schedule_after_shutdown(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_worker_pool pool = {0};
+  valk_start_pool(&pool);
+  valk_drain_pool(&pool);
+
+  valk_arc_box *arg = valk_arc_box_new(VALK_SUC, sizeof(int));
+  *(int *)arg->item = 10;
+  valk_future *fut = valk_schedule(&pool, arg, simple_work_func);
+
+  VALK_TEST_ASSERT(fut != NULL, "Should return future even during shutdown");
+  valk_arc_retain(fut);
+  valk_arc_box *result = valk_future_await(fut);
+  VALK_TEST_ASSERT(result->type == VALK_ERR, "Should return error during shutdown");
+
+  valk_arc_release(arg);
+  valk_arc_release(fut);
+  valk_free_pool(&pool);
+
+  VALK_PASS();
+}
+
+
+
+void test_future_await_timeout_expires(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_future *fut = valk_future_new();
+
+  valk_arc_retain(fut);
+  valk_arc_box *result = valk_future_await_timeout(fut, 10);
+
+  VALK_TEST_ASSERT(result != NULL, "Should return result on timeout");
+  VALK_TEST_ASSERT(result->type == VALK_ERR, "Should return error on timeout");
+  VALK_TEST_ASSERT(strstr(result->item, "Timeout") != NULL, "Error should mention timeout");
+
+  valk_arc_release(result);
+  valk_arc_release(fut);
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -613,6 +752,12 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_arc_retain_null", test_arc_retain_null);
   valk_testsuite_add_test(suite, "test_and_then_array_grows", test_and_then_array_grows);
   valk_testsuite_add_test(suite, "test_task_types", test_task_types);
+  valk_testsuite_add_test(suite, "test_worker_pool_lifecycle", test_worker_pool_lifecycle);
+  valk_testsuite_add_test(suite, "test_schedule_work", test_schedule_work);
+  valk_testsuite_add_test(suite, "test_schedule_multiple_tasks", test_schedule_multiple_tasks);
+  valk_testsuite_add_test(suite, "test_drain_pool", test_drain_pool);
+  valk_testsuite_add_test(suite, "test_schedule_after_shutdown", test_schedule_after_shutdown);
+  valk_testsuite_add_test(suite, "test_future_await_timeout_expires", test_future_await_timeout_expires);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

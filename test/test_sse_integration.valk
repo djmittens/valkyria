@@ -1,0 +1,149 @@
+; SSE Integration Tests
+; Tests SSE functionality with real HTTP/2 server
+; Exercises: sse/open, sse/send (2-arg and 3-arg), sse/close, sse/writable?
+;            sse/message, sse/event wrappers, multiple sends, send with event-id
+
+(load "src/prelude.valk")
+(load "src/modules/aio/sse.valk")
+
+(def {TEST_PORT} 8479)
+(def {aio} (aio/start))
+
+(def {tests-passed} 0)
+(def {tests-failed} 0)
+
+(fun {pass name} {
+  (def {tests-passed} (+ tests-passed 1))
+  (printf "  PASS: %s\n" name)
+})
+
+(fun {fail name msg} {
+  (def {tests-failed} (+ tests-failed 1))
+  (printf "  FAIL: %s - %s\n" name msg)
+})
+
+(def {test-stream} nil)
+(def {test-send-result} nil)
+(def {test-send-typed-result} nil)
+(def {test-writable-result} nil)
+(def {test-close-result} nil)
+(def {test-send-after-close} nil)
+(def {test-multi-send} 0)
+(def {test-event-result} nil)
+(def {test-message-result} nil)
+
+(def {test-handler}
+  (\ {req} {
+    (= {path} (plist/get req (head {:path})))
+    
+    (if (== path "/test-open")
+      {(do
+        (= {stream} (sse/open))
+        (def {test-stream} stream)
+        (def {test-writable-result} (sse/writable? stream))
+        (def {test-send-result} (sse/send stream "hello"))
+        (def {test-send-typed-result} (sse/send stream "custom-event" "typed data"))
+        (sse/close stream)
+        (def {test-close-result} true)
+        (def {test-send-after-close} (sse/send stream "after close"))
+        `{:status "200" :body "done"}
+      )}
+      
+      {(if (== path "/test-multi-send")
+        {(do
+          (= {stream} (sse/open))
+          (sse/send stream "event 1")
+          (def {test-multi-send} (+ test-multi-send 1))
+          (sse/send stream "event 2")
+          (def {test-multi-send} (+ test-multi-send 1))
+          (sse/send stream "event 3")
+          (def {test-multi-send} (+ test-multi-send 1))
+          (sse/send stream "typed" "event 4")
+          (def {test-multi-send} (+ test-multi-send 1))
+          (def {test-message-result} (sse/message stream "message 5"))
+          (def {test-multi-send} (+ test-multi-send 1))
+          (def {test-event-result} (sse/event stream "custom" "event 6"))
+          (def {test-multi-send} (+ test-multi-send 1))
+          (sse/close stream)
+          `{:status "200" :body "multi done"}
+        )}
+        
+        {`{:status "200" :body "OK"}}
+      )}
+    )
+  }))
+
+(println "")
+(println "=== SSE Integration Tests ===")
+(println "")
+(printf "Starting server on port %d\n" TEST_PORT)
+(http2/server-listen aio TEST_PORT test-handler)
+
+(aio/schedule aio 100 (\ {} {
+  (println "")
+  (println "Test group: sse/open and basic operations")
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/test-open" (\ {resp} {
+    
+    (aio/schedule aio 50 (\ {} {
+      (if (!= test-stream nil)
+        {(pass "sse/open creates stream")}
+        {(fail "sse/open creates stream" "stream is nil")})
+      
+      (if test-writable-result
+        {(pass "sse/writable? returns truthy for new stream")}
+        {(fail "sse/writable?" (str test-writable-result))})
+      
+      (if (and (not (error? test-send-result)) (> test-send-result 0))
+        {(pass "sse/send (2-arg) returns positive length")}
+        {(fail "sse/send (2-arg)" (str test-send-result))})
+      
+      (if (and (not (error? test-send-typed-result)) (> test-send-typed-result 0))
+        {(pass "sse/send (3-arg with event-type) returns positive length")}
+        {(fail "sse/send (3-arg)" (str test-send-typed-result))})
+      
+      (if test-close-result
+        {(pass "sse/close completes")}
+        {(fail "sse/close" "did not complete")})
+      
+      (= {send-failed} (or (error? test-send-after-close) (== test-send-after-close nil)))
+      (if send-failed
+        {(pass "sse/send after close fails")}
+        {(fail "sse/send after close" (str test-send-after-close))})
+      
+      (println "")
+      (println "Test group: Multiple sends and wrappers")
+      (http2/client-request aio "127.0.0.1" TEST_PORT "/test-multi-send" (\ {resp2} {
+        
+        (aio/schedule aio 50 (\ {} {
+          (if (== test-multi-send 6)
+            {(pass "Multiple sse/send calls work (6 events)")}
+            {(fail "Multiple sends" (str test-multi-send " of 6"))})
+          
+          (if (and (not (error? test-message-result)) (> test-message-result 0))
+            {(pass "sse/message wrapper returns positive length")}
+            {(fail "sse/message" (str test-message-result))})
+          
+          (if (and (not (error? test-event-result)) (> test-event-result 0))
+            {(pass "sse/event wrapper returns positive length")}
+            {(fail "sse/event" (str test-event-result))})
+          
+          (println "")
+          (printf "=== Results: %d passed, %d failed ===\n" tests-passed tests-failed)
+          (println "")
+          
+          (if (== tests-failed 0)
+            {(exit 0)}
+            {(exit 1)})
+        }))
+      }))
+    }))
+  }))
+}))
+
+(aio/schedule aio 5000 (\ {} {
+  (println "")
+  (println "Test timeout - stopping")
+  (aio/stop aio)
+}))
+
+(aio/run aio)
