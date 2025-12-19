@@ -1386,6 +1386,8 @@ static bool slab_changed(const valk_slab_snapshot_t *curr, const valk_slab_snaps
         curr->by_state.idle != prev->by_state.idle ||
         curr->by_state.closing != prev->by_state.closing) return true;
   } else if (curr->bitmap && prev->bitmap) {
+    // Bitmap sizes must match for comparison
+    if (curr->bitmap_bytes != prev->bitmap_bytes) return true;
     if (bitmap_differs(curr->bitmap, prev->bitmap, curr->bitmap_bytes)) return true;
   }
 

@@ -9,6 +9,7 @@
 #ifdef VALK_METRICS_ENABLED
 #include "aio.h"
 #include "aio_sse_diagnostics.h"
+#include "aio_sse_stream_registry.h"
 
 // ============================================================================
 // Bitmap Tests
@@ -17,15 +18,9 @@
 void test_slab_bitmap_empty(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  // Create a small slab with all slots free
   valk_slab_t *slab = valk_slab_new(64, 16);
   VALK_TEST_ASSERT(slab != NULL, "Failed to create slab");
-
-  // All slots should be free - snapshot should show 0 used
-  valk_mem_snapshot_t snapshot = {0};
-
-  // For this test, we just verify the slab was created successfully
-  // The actual bitmap generation is tested indirectly through the snapshot
+  VALK_TEST_ASSERT(slab->numFree == 16, "All slots should be free, got %zu", slab->numFree);
 
   valk_slab_free(slab);
   VALK_PASS();
@@ -737,6 +732,568 @@ void test_diag_fresh_state_json_small_buffer(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_diag_delta_slot_changes(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_mem_snapshot_t current = {0};
+  valk_mem_snapshot_t prev = {0};
+
+  current.slab_count = 1;
+  current.slabs[0].name = "handles";
+  current.slabs[0].total_slots = 8;
+  current.slabs[0].used_slots = 4;
+  current.slabs[0].has_slot_diag = true;
+  current.slabs[0].by_state.active = 2;
+  current.slabs[0].by_state.idle = 2;
+  current.slabs[0].by_state.closing = 0;
+  current.slabs[0].slots = calloc(8, sizeof(valk_slot_diag_t));
+  current.slabs[0].slots[0].state = 'A';
+  current.slabs[0].slots[1].state = 'A';
+  current.slabs[0].slots[2].state = 'I';
+  current.slabs[0].slots[3].state = 'I';
+  current.slabs[0].slots[4].state = 'F';
+  current.slabs[0].slots[5].state = 'F';
+  current.slabs[0].slots[6].state = 'F';
+  current.slabs[0].slots[7].state = 'F';
+
+  prev.slab_count = 1;
+  prev.slabs[0].name = "handles";
+  prev.slabs[0].total_slots = 8;
+  prev.slabs[0].used_slots = 2;
+  prev.slabs[0].has_slot_diag = true;
+  prev.slabs[0].by_state.active = 2;
+  prev.slabs[0].by_state.idle = 0;
+  prev.slabs[0].by_state.closing = 0;
+  prev.slabs[0].slots = calloc(8, sizeof(valk_slot_diag_t));
+  prev.slabs[0].slots[0].state = 'A';
+  prev.slabs[0].slots[1].state = 'A';
+  prev.slabs[0].slots[2].state = 'F';
+  prev.slabs[0].slots[3].state = 'F';
+  prev.slabs[0].slots[4].state = 'F';
+  prev.slabs[0].slots[5].state = 'F';
+  prev.slabs[0].slots[6].state = 'F';
+  prev.slabs[0].slots[7].state = 'F';
+
+  valk_sse_diag_conn_t conn = {0};
+  char buf[16384];
+  int len = valk_diag_delta_to_sse(&current, &prev, &conn, NULL, NULL, buf, sizeof(buf), 200);
+
+  VALK_TEST_ASSERT(len > 0, "Should produce delta output, got %d", len);
+  VALK_TEST_ASSERT(strstr(buf, "diagnostics-delta") != NULL, "Should have delta event type");
+  VALK_TEST_ASSERT(strstr(buf, "\"memory\":{") != NULL, "Should have memory section for changed data");
+
+  free(current.slabs[0].slots);
+  free(prev.slabs[0].slots);
+  VALK_PASS();
+}
+
+void test_diag_delta_arena_changes(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_mem_snapshot_t current = {0};
+  valk_mem_snapshot_t prev = {0};
+
+  current.arena_count = 1;
+  current.arenas[0].name = "scratch";
+  current.arenas[0].used_bytes = 2048;
+  current.arenas[0].capacity_bytes = 4096;
+
+  prev.arena_count = 1;
+  prev.arenas[0].name = "scratch";
+  prev.arenas[0].used_bytes = 1024;
+  prev.arenas[0].capacity_bytes = 4096;
+
+  valk_sse_diag_conn_t conn = {0};
+  char buf[8192];
+  int len = valk_diag_delta_to_sse(&current, &prev, &conn, NULL, NULL, buf, sizeof(buf), 300);
+
+  VALK_TEST_ASSERT(len > 0, "Should produce delta output for arena changes, got %d", len);
+
+  free(current.slabs[0].bitmap);
+  free(prev.slabs[0].bitmap);
+  VALK_PASS();
+}
+
+void test_diag_delta_gc_changes(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_mem_snapshot_t current = {0};
+  valk_mem_snapshot_t prev = {0};
+
+  current.gc_heap.gc_cycles = 10;
+  current.gc_heap.emergency_collections = 1;
+
+  prev.gc_heap.gc_cycles = 9;
+  prev.gc_heap.emergency_collections = 0;
+
+  valk_sse_diag_conn_t conn = {0};
+  char buf[16384];
+  int len = valk_diag_delta_to_sse(&current, &prev, &conn, NULL, NULL, buf, sizeof(buf), 400);
+
+  VALK_TEST_ASSERT(len > 0, "Should produce delta output for GC changes, got %d", len);
+  VALK_TEST_ASSERT(strstr(buf, "\"gc\":{") != NULL, "Should have GC section");
+
+  VALK_PASS();
+}
+
+void test_sse_format_multiple_slabs(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_mem_snapshot_t snapshot = {0};
+  snapshot.slab_count = 3;
+
+  snapshot.slabs[0].name = "tcp_buffers";
+  snapshot.slabs[0].total_slots = 16;
+  snapshot.slabs[0].used_slots = 8;
+  snapshot.slabs[0].has_slot_diag = false;
+  snapshot.slabs[0].bitmap = malloc(2);
+  snapshot.slabs[0].bitmap[0] = 0xFF;
+  snapshot.slabs[0].bitmap[1] = 0x00;
+  snapshot.slabs[0].bitmap_bytes = 2;
+
+  snapshot.slabs[1].name = "handles";
+  snapshot.slabs[1].total_slots = 8;
+  snapshot.slabs[1].used_slots = 4;
+  snapshot.slabs[1].has_slot_diag = true;
+  snapshot.slabs[1].by_state.active = 2;
+  snapshot.slabs[1].by_state.idle = 2;
+  snapshot.slabs[1].slots = calloc(8, sizeof(valk_slot_diag_t));
+  for (int i = 0; i < 8; i++) {
+    snapshot.slabs[1].slots[i].state = (i < 2) ? 'A' : (i < 4) ? 'I' : 'F';
+  }
+
+  snapshot.slabs[2].name = "stream_arenas";
+  snapshot.slabs[2].total_slots = 4;
+  snapshot.slabs[2].used_slots = 1;
+  snapshot.slabs[2].has_slot_diag = false;
+  snapshot.slabs[2].bitmap = malloc(1);
+  snapshot.slabs[2].bitmap[0] = 0x01;
+  snapshot.slabs[2].bitmap_bytes = 1;
+
+  char buf[8192];
+  int len = valk_mem_snapshot_to_sse(&snapshot, buf, sizeof(buf), 1);
+
+  VALK_TEST_ASSERT(len > 0, "Should succeed with multiple slabs");
+  VALK_TEST_ASSERT(strstr(buf, "\"name\":\"tcp_buffers\"") != NULL, "Should have tcp_buffers");
+  VALK_TEST_ASSERT(strstr(buf, "\"name\":\"handles\"") != NULL, "Should have handles");
+  VALK_TEST_ASSERT(strstr(buf, "\"name\":\"stream_arenas\"") != NULL, "Should have stream_arenas");
+
+  free(snapshot.slabs[0].bitmap);
+  free(snapshot.slabs[1].slots);
+  free(snapshot.slabs[2].bitmap);
+  VALK_PASS();
+}
+
+void test_sse_format_multiple_arenas(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_mem_snapshot_t snapshot = {0};
+  snapshot.arena_count = 2;
+
+  snapshot.arenas[0].name = "scratch";
+  snapshot.arenas[0].used_bytes = 1024;
+  snapshot.arenas[0].capacity_bytes = 4096;
+  snapshot.arenas[0].high_water_mark = 2048;
+  snapshot.arenas[0].overflow_fallbacks = 0;
+  snapshot.arenas[0].overflow_bytes = 0;
+
+  snapshot.arenas[1].name = "request";
+  snapshot.arenas[1].used_bytes = 512;
+  snapshot.arenas[1].capacity_bytes = 2048;
+  snapshot.arenas[1].high_water_mark = 1024;
+  snapshot.arenas[1].overflow_fallbacks = 1;
+  snapshot.arenas[1].overflow_bytes = 256;
+
+  char buf[4096];
+  int len = valk_mem_snapshot_to_sse(&snapshot, buf, sizeof(buf), 1);
+
+  VALK_TEST_ASSERT(len > 0, "Should succeed with multiple arenas");
+  VALK_TEST_ASSERT(strstr(buf, "\"name\":\"scratch\"") != NULL, "Should have scratch arena");
+  VALK_TEST_ASSERT(strstr(buf, "\"name\":\"request\"") != NULL, "Should have request arena");
+  VALK_TEST_ASSERT(strstr(buf, "\"overflow_bytes\":256") != NULL, "Should have overflow_bytes");
+
+  VALK_PASS();
+}
+
+void test_sse_format_breakdown(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_mem_snapshot_t snapshot = {0};
+  snapshot.breakdown.scratch_arena_used = 1024;
+  snapshot.breakdown.scratch_arena_capacity = 4096;
+  snapshot.breakdown.gc_heap_used = 50000;
+  snapshot.breakdown.gc_heap_capacity = 100000;
+  snapshot.breakdown.gc_lval_slab_used = 30000;
+  snapshot.breakdown.gc_lval_slab_capacity = 50000;
+  snapshot.breakdown.gc_lenv_slab_used = 5000;
+  snapshot.breakdown.gc_lenv_slab_capacity = 10000;
+  snapshot.breakdown.gc_malloc_used = 15000;
+  snapshot.breakdown.aio_slabs_used = 8000;
+  snapshot.breakdown.aio_slabs_capacity = 16000;
+  snapshot.breakdown.metrics_used = 2000;
+  snapshot.breakdown.metrics_capacity = 4000;
+  snapshot.breakdown.untracked_bytes = 10000;
+  snapshot.breakdown.untracked_reserved = 50000;
+
+  char buf[16384];
+  int len = valk_diag_snapshot_to_sse(&snapshot, NULL, buf, sizeof(buf), 1);
+
+  VALK_TEST_ASSERT(len > 0, "Should succeed with breakdown data");
+  VALK_TEST_ASSERT(strstr(buf, "\"breakdown\":{") != NULL, "Should have breakdown section");
+  VALK_TEST_ASSERT(strstr(buf, "\"scratch_used\":1024") != NULL, "Should have scratch_used");
+  VALK_TEST_ASSERT(strstr(buf, "\"gc_used\":50000") != NULL, "Should have gc_used");
+  VALK_TEST_ASSERT(strstr(buf, "\"untracked\":10000") != NULL, "Should have untracked");
+
+  VALK_PASS();
+}
+
+void test_sse_format_smaps(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_mem_snapshot_t snapshot = {0};
+  snapshot.smaps.heap_rss = 1024 * 1024;
+  snapshot.smaps.stack_rss = 64 * 1024;
+  snapshot.smaps.anon_rss = 2 * 1024 * 1024;
+  snapshot.smaps.file_rss = 512 * 1024;
+  snapshot.smaps.shmem_rss = 128 * 1024;
+  snapshot.smaps.uring_rss = 0;
+  snapshot.smaps.other_rss = 256 * 1024;
+  snapshot.smaps.total_rss = 4 * 1024 * 1024;
+  snapshot.smaps.anon_regions = 10;
+  snapshot.smaps.file_regions = 20;
+
+  char buf[16384];
+  int len = valk_diag_snapshot_to_sse(&snapshot, NULL, buf, sizeof(buf), 1);
+
+  VALK_TEST_ASSERT(len > 0, "Should succeed with smaps data");
+  VALK_TEST_ASSERT(strstr(buf, "\"smaps\":{") != NULL, "Should have smaps section");
+  VALK_TEST_ASSERT(strstr(buf, "\"heap\":") != NULL, "Should have heap RSS");
+  VALK_TEST_ASSERT(strstr(buf, "\"anon_regions\":10") != NULL, "Should have anon_regions");
+
+  VALK_PASS();
+}
+
+void test_sse_format_rle_long_runs(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_mem_snapshot_t snapshot = {0};
+  snapshot.slab_count = 1;
+  snapshot.slabs[0].name = "test";
+  snapshot.slabs[0].total_slots = 256;
+  snapshot.slabs[0].used_slots = 256;
+  snapshot.slabs[0].has_slot_diag = false;
+
+  snapshot.slabs[0].bitmap = malloc(32);
+  memset(snapshot.slabs[0].bitmap, 0xFF, 32);
+  snapshot.slabs[0].bitmap_bytes = 32;
+
+  char buf[4096];
+  int len = valk_mem_snapshot_to_sse(&snapshot, buf, sizeof(buf), 1);
+
+  VALK_TEST_ASSERT(len > 0, "Should succeed with long RLE runs");
+  VALK_TEST_ASSERT(strstr(buf, "ff*32") != NULL, "Should have RLE compressed bitmap ff*32");
+
+  free(snapshot.slabs[0].bitmap);
+  VALK_PASS();
+}
+
+void test_sse_format_rle_alternating(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_mem_snapshot_t snapshot = {0};
+  snapshot.slab_count = 1;
+  snapshot.slabs[0].name = "test";
+  snapshot.slabs[0].total_slots = 32;
+  snapshot.slabs[0].used_slots = 16;
+  snapshot.slabs[0].has_slot_diag = false;
+
+  snapshot.slabs[0].bitmap = malloc(4);
+  snapshot.slabs[0].bitmap[0] = 0xAA;
+  snapshot.slabs[0].bitmap[1] = 0x55;
+  snapshot.slabs[0].bitmap[2] = 0xAA;
+  snapshot.slabs[0].bitmap[3] = 0x55;
+  snapshot.slabs[0].bitmap_bytes = 4;
+
+  char buf[4096];
+  int len = valk_mem_snapshot_to_sse(&snapshot, buf, sizeof(buf), 1);
+
+  VALK_TEST_ASSERT(len > 0, "Should succeed with alternating pattern");
+  VALK_TEST_ASSERT(strstr(buf, "aa") != NULL, "Should have 0xAA bytes");
+  VALK_TEST_ASSERT(strstr(buf, "55") != NULL, "Should have 0x55 bytes");
+
+  free(snapshot.slabs[0].bitmap);
+  VALK_PASS();
+}
+
+void test_snapshot_collect_null_aio(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_mem_snapshot_t snapshot = {0};
+  valk_mem_snapshot_collect(&snapshot, NULL);
+
+  VALK_TEST_ASSERT(snapshot.slab_count == 0, "Should have 0 slabs for NULL AIO");
+  VALK_TEST_ASSERT(snapshot.arena_count == 0, "Should have 0 arenas for NULL AIO");
+
+  valk_mem_snapshot_free(&snapshot);
+  VALK_PASS();
+}
+
+void test_sse_format_empty_owner_map(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_mem_snapshot_t snapshot = {0};
+  snapshot.owner_count = 0;
+
+  char buf[2048];
+  int len = valk_mem_snapshot_to_sse(&snapshot, buf, sizeof(buf), 1);
+
+  VALK_TEST_ASSERT(len > 0, "Should succeed with empty owner map");
+  VALK_TEST_ASSERT(strstr(buf, "\"owner_map\":[]") != NULL, "Should have empty owner_map array");
+
+  VALK_PASS();
+}
+
+void test_sse_format_null_owner_names(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_mem_snapshot_t snapshot = {0};
+  snapshot.owner_count = 2;
+  snapshot.owner_map[0] = NULL;
+  snapshot.owner_map[1] = ":8080";
+
+  char buf[2048];
+  int len = valk_mem_snapshot_to_sse(&snapshot, buf, sizeof(buf), 1);
+
+  VALK_TEST_ASSERT(len > 0, "Should succeed with NULL owner name");
+  VALK_TEST_ASSERT(strstr(buf, "\"owner_map\":[\"\"") != NULL, "Should have empty string for NULL owner");
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Integration Tests with Real AIO System
+// ============================================================================
+
+static valk_aio_system_t *create_test_aio_system(void) {
+  valk_aio_system_config_t cfg = valk_aio_config_demo();
+  return valk_aio_start_with_config(&cfg);
+}
+
+// ============================================================================
+// HTTP/2 SSE Streaming Tests
+// ============================================================================
+
+void test_sse_registry_null_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  nghttp2_data_provider2 data_prd;
+  
+  valk_sse_stream_entry_t *entry = valk_sse_registry_subscribe(
+      NULL, NULL, NULL, 0, VALK_SSE_SUB_DIAGNOSTICS, &data_prd);
+  VALK_TEST_ASSERT(entry == NULL, "subscribe: Should return NULL for NULL registry");
+
+  entry = valk_sse_registry_find_by_stream(NULL, NULL, 0);
+  VALK_TEST_ASSERT(entry == NULL, "find: Should return NULL for NULL registry");
+
+  valk_sse_registry_unsubscribe(NULL, NULL);
+
+  size_t count = valk_sse_registry_unsubscribe_connection(NULL, NULL);
+  VALK_TEST_ASSERT(count == 0, "unsubscribe_connection: Should return 0 for NULL registry");
+
+  valk_sse_registry_timer_start(NULL);
+  valk_sse_registry_timer_stop(NULL);
+
+  size_t len = valk_sse_registry_stats_json(NULL, NULL, 0);
+  VALK_TEST_ASSERT(len == 0, "stats_json: Should return 0 for NULL args");
+
+  VALK_PASS();
+}
+
+void test_sse_registry_with_aio(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = create_test_aio_system();
+  VALK_TEST_ASSERT(sys != NULL, "Failed to start AIO system");
+
+  valk_sse_stream_registry_t *registry = valk_aio_get_sse_registry(sys);
+  VALK_TEST_ASSERT(registry != NULL, "SSE registry should exist");
+  VALK_TEST_ASSERT(valk_sse_registry_stream_count(registry) == 0,
+                   "Initial stream count should be 0");
+
+  char stats_buf[256];
+  size_t stats_len = valk_sse_registry_stats_json(registry, stats_buf, sizeof(stats_buf));
+  VALK_TEST_ASSERT(stats_len > 0, "Stats JSON should succeed");
+  VALK_TEST_ASSERT(strstr(stats_buf, "\"stream_count\":0") != NULL,
+                   "Stats should show 0 streams");
+
+  valk_sse_registry_unsubscribe(registry, NULL);
+
+  valk_sse_stream_entry_t *entry = valk_sse_registry_find_by_stream(registry, NULL, 999);
+  VALK_TEST_ASSERT(entry == NULL, "find: Should return NULL for non-existent stream");
+
+  size_t count = valk_sse_registry_unsubscribe_connection(registry, NULL);
+  VALK_TEST_ASSERT(count == 0, "unsubscribe_connection: Should return 0 for NULL handle");
+
+  char tiny_buf[5];
+  size_t len = valk_sse_registry_stats_json(registry, tiny_buf, sizeof(tiny_buf));
+  VALK_TEST_ASSERT(len == 0, "stats_json: Should return 0 for tiny buffer");
+
+  valk_aio_stop(sys);
+  VALK_PASS();
+}
+
+void test_sse_diag_null_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_diag_init(NULL, NULL);
+
+  nghttp2_data_provider2 data_prd;
+  valk_sse_diag_conn_t *conn = valk_sse_diag_init_http2(NULL, NULL, NULL, 0, &data_prd);
+  VALK_TEST_ASSERT(conn == NULL, "init_http2: Should return NULL for NULL args");
+
+  conn = valk_sse_diag_init_http2(NULL, NULL, NULL, 0, NULL);
+  VALK_TEST_ASSERT(conn == NULL, "init_http2: Should return NULL when data_prd is NULL");
+
+  valk_sse_diag_stop(NULL);
+  valk_sse_diag_stop_all(NULL);
+
+  VALK_PASS();
+}
+
+void test_real_aio_snapshot_collect(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = create_test_aio_system();
+  VALK_TEST_ASSERT(sys != NULL, "Failed to start AIO system");
+
+  valk_mem_snapshot_t snapshot = {0};
+  valk_mem_snapshot_collect(&snapshot, sys);
+
+  VALK_TEST_ASSERT(snapshot.slab_count > 0, "Should have slabs");
+  VALK_TEST_ASSERT(snapshot.process.rss_bytes > 0, "RSS should be > 0");
+
+  bool found_handles = false;
+  for (size_t i = 0; i < snapshot.slab_count; i++) {
+    if (snapshot.slabs[i].name) {
+      if (strcmp(snapshot.slabs[i].name, "handles") == 0) found_handles = true;
+    }
+  }
+
+  VALK_TEST_ASSERT(found_handles, "Should have handles slab");
+
+  valk_mem_snapshot_free(&snapshot);
+  valk_aio_stop(sys);
+  VALK_PASS();
+}
+
+void test_real_aio_sse_format(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = create_test_aio_system();
+  VALK_TEST_ASSERT(sys != NULL, "Failed to start AIO system");
+
+  valk_mem_snapshot_t snapshot = {0};
+  valk_mem_snapshot_collect(&snapshot, sys);
+
+  char buf[65536];
+  int len = valk_mem_snapshot_to_sse(&snapshot, buf, sizeof(buf), 12345);
+  VALK_TEST_ASSERT(len > 0, "SSE format should succeed");
+  VALK_TEST_ASSERT(strstr(buf, "event: memory") != NULL, "Missing event header");
+  VALK_TEST_ASSERT(strstr(buf, "\"slabs\":[") != NULL, "Missing slabs array");
+
+  int dlen = valk_diag_snapshot_to_sse(&snapshot, sys, buf, sizeof(buf), 99);
+  VALK_TEST_ASSERT(dlen > 0, "Diag SSE format should succeed");
+  VALK_TEST_ASSERT(strstr(buf, "event: diagnostics") != NULL, "Missing diagnostics event");
+  VALK_TEST_ASSERT(strstr(buf, "\"memory\":{") != NULL, "Missing memory section");
+  VALK_TEST_ASSERT(strstr(buf, "\"metrics\":{") != NULL, "Missing metrics section");
+
+  valk_mem_snapshot_free(&snapshot);
+  valk_aio_stop(sys);
+  VALK_PASS();
+}
+
+void test_real_aio_fresh_state_json(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = create_test_aio_system();
+  VALK_TEST_ASSERT(sys != NULL, "Failed to start AIO system");
+
+  char buf[65536];
+  int len = valk_diag_fresh_state_json(sys, buf, sizeof(buf));
+  VALK_TEST_ASSERT(len > 0, "Fresh state JSON should succeed");
+  VALK_TEST_ASSERT(buf[0] == '{', "Should start with opening brace");
+  VALK_TEST_ASSERT(strstr(buf, "\"memory\":{") != NULL, "Missing memory section");
+  VALK_TEST_ASSERT(strstr(buf, "\"slabs\":[") != NULL, "Missing slabs array");
+
+  valk_aio_stop(sys);
+  VALK_PASS();
+}
+
+void test_real_aio_delta(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = create_test_aio_system();
+  VALK_TEST_ASSERT(sys != NULL, "Failed to start AIO system");
+
+  valk_mem_snapshot_t s1 = {0}, s2 = {0};
+  valk_mem_snapshot_collect(&s1, sys);
+  valk_mem_snapshot_collect(&s2, sys);
+
+  valk_sse_diag_conn_t conn = {0};
+  char buf[32768];
+  int len = valk_diag_delta_to_sse(&s2, &s1, &conn, sys, NULL, buf, sizeof(buf), 1);
+  VALK_TEST_ASSERT(len > 0, "Delta SSE should succeed");
+  VALK_TEST_ASSERT(strstr(buf, "diagnostics-delta") != NULL, "Should have delta event type");
+
+  valk_mem_snapshot_t dst = {0};
+  valk_mem_snapshot_copy(&dst, &s1);
+  VALK_TEST_ASSERT(dst.slab_count == s1.slab_count, "Copy slab count should match");
+
+  valk_mem_snapshot_free(&s1);
+  valk_mem_snapshot_free(&s2);
+  valk_mem_snapshot_free(&dst);
+  valk_aio_stop(sys);
+  VALK_PASS();
+}
+
+void test_real_aio_accessors(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = create_test_aio_system();
+  VALK_TEST_ASSERT(sys != NULL, "Failed to start AIO system");
+
+  VALK_TEST_ASSERT(valk_aio_get_handle_slab(sys) != NULL, "Should have handle slab");
+  VALK_TEST_ASSERT(valk_aio_get_metrics(sys) != NULL, "Should have AIO metrics");
+  VALK_TEST_ASSERT(valk_aio_get_system_stats(sys) != NULL, "Should have system stats");
+  VALK_TEST_ASSERT(valk_aio_get_sse_registry(sys) != NULL, "Should have SSE registry");
+  VALK_TEST_ASSERT(valk_aio_get_event_loop(sys) != NULL, "Should have event loop");
+
+  valk_diag_handle_kind_e kind = valk_aio_get_handle_kind(sys, 0);
+  VALK_TEST_ASSERT(kind >= VALK_DIAG_HNDL_EMPTY && kind <= VALK_DIAG_HNDL_HTTP_CONN,
+                   "Handle kind should be valid enum value");
+
+  valk_aio_stop(sys);
+  VALK_PASS();
+}
+
+void test_real_aio_owner_registry(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = create_test_aio_system();
+  VALK_TEST_ASSERT(sys != NULL, "Failed to start AIO system");
+
+  size_t count_before = valk_owner_get_count(sys);
+  uint16_t idx = valk_owner_register(sys, ":8080", 1, NULL);
+  VALK_TEST_ASSERT(idx != UINT16_MAX, "Should register owner successfully");
+  VALK_TEST_ASSERT(valk_owner_get_count(sys) == count_before + 1, "Owner count should increase");
+
+  const char *name = valk_owner_get_name(sys, idx);
+  VALK_TEST_ASSERT(name != NULL && strcmp(name, ":8080") == 0, "Owner name should match");
+
+  valk_aio_stop(sys);
+  VALK_PASS();
+}
+
 #else // !VALK_METRICS_ENABLED
 
 void test_sse_disabled(VALK_TEST_ARGS()) {
@@ -794,6 +1351,33 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_diag_delta_no_changes", test_diag_delta_no_changes);
   valk_testsuite_add_test(suite, "test_diag_fresh_state_json_null_aio", test_diag_fresh_state_json_null_aio);
   valk_testsuite_add_test(suite, "test_diag_fresh_state_json_small_buffer", test_diag_fresh_state_json_small_buffer);
+
+  // Additional delta and format tests
+  valk_testsuite_add_test(suite, "test_diag_delta_slot_changes", test_diag_delta_slot_changes);
+  valk_testsuite_add_test(suite, "test_diag_delta_arena_changes", test_diag_delta_arena_changes);
+  valk_testsuite_add_test(suite, "test_diag_delta_gc_changes", test_diag_delta_gc_changes);
+  valk_testsuite_add_test(suite, "test_sse_format_multiple_slabs", test_sse_format_multiple_slabs);
+  valk_testsuite_add_test(suite, "test_sse_format_multiple_arenas", test_sse_format_multiple_arenas);
+  valk_testsuite_add_test(suite, "test_sse_format_breakdown", test_sse_format_breakdown);
+  valk_testsuite_add_test(suite, "test_sse_format_smaps", test_sse_format_smaps);
+  valk_testsuite_add_test(suite, "test_sse_format_rle_long_runs", test_sse_format_rle_long_runs);
+  valk_testsuite_add_test(suite, "test_sse_format_rle_alternating", test_sse_format_rle_alternating);
+  valk_testsuite_add_test(suite, "test_snapshot_collect_null_aio", test_snapshot_collect_null_aio);
+  valk_testsuite_add_test(suite, "test_sse_format_empty_owner_map", test_sse_format_empty_owner_map);
+  valk_testsuite_add_test(suite, "test_sse_format_null_owner_names", test_sse_format_null_owner_names);
+
+  // Integration tests with real AIO system
+  valk_testsuite_add_test(suite, "test_real_aio_snapshot_collect", test_real_aio_snapshot_collect);
+  valk_testsuite_add_test(suite, "test_real_aio_sse_format", test_real_aio_sse_format);
+  valk_testsuite_add_test(suite, "test_real_aio_fresh_state_json", test_real_aio_fresh_state_json);
+  valk_testsuite_add_test(suite, "test_real_aio_delta", test_real_aio_delta);
+  valk_testsuite_add_test(suite, "test_real_aio_accessors", test_real_aio_accessors);
+  valk_testsuite_add_test(suite, "test_real_aio_owner_registry", test_real_aio_owner_registry);
+
+  // SSE Registry and Diag tests (consolidated to reduce AIO system allocations)
+  valk_testsuite_add_test(suite, "test_sse_registry_null_args", test_sse_registry_null_args);
+  valk_testsuite_add_test(suite, "test_sse_registry_with_aio", test_sse_registry_with_aio);
+  valk_testsuite_add_test(suite, "test_sse_diag_null_args", test_sse_diag_null_args);
 #else
   valk_testsuite_add_test(suite, "test_sse_disabled", test_sse_disabled);
 #endif
