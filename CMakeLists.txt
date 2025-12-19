@@ -285,3 +285,38 @@ endif()
 add_executable(test_concurrency test/unit/test_concurrency.c test/testing.c)
 target_link_libraries(test_concurrency PRIVATE "-lc" valkyria)
 include_directories(test_concurrency src/)
+
+add_executable(test_log test/unit/test_log.c test/testing.c)
+target_link_libraries(test_log PRIVATE "-lc" valkyria)
+include_directories(test_log src/)
+
+add_executable(test_aio_alloc_unit test/unit/test_aio_alloc.c test/testing.c)
+target_link_libraries(test_aio_alloc_unit PRIVATE "-lc" valkyria)
+include_directories(test_aio_alloc_unit src/)
+
+add_executable(test_coverage_unit test/unit/test_coverage.c test/testing.c)
+target_link_libraries(test_coverage_unit PRIVATE "-lc" valkyria)
+include_directories(test_coverage_unit src/)
+
+add_executable(test_gc_unit test/unit/test_gc.c test/testing.c)
+target_link_libraries(test_gc_unit PRIVATE "-lc" valkyria)
+include_directories(test_gc_unit src/)
+
+add_executable(test_parser_unit test/unit/test_parser.c test/testing.c)
+target_link_libraries(test_parser_unit PRIVATE "-lc" valkyria)
+include_directories(test_parser_unit src/)
+
+add_executable(test_memory_unit test/unit/test_memory.c test/testing.c)
+target_link_libraries(test_memory_unit PRIVATE "-lc" valkyria)
+include_directories(test_memory_unit src/)
+
+if(VALK_COVERAGE)
+  add_executable(test_source_loc_unit test/unit/test_source_loc.c test/testing.c)
+  target_link_libraries(test_source_loc_unit PRIVATE "-lc" valkyria)
+  target_compile_definitions(test_source_loc_unit PRIVATE VALK_COVERAGE=1)
+  include_directories(test_source_loc_unit src/)
+endif()
+
+add_executable(test_aio_ssl_unit test/unit/test_aio_ssl.c test/testing.c)
+target_link_libraries(test_aio_ssl_unit PRIVATE "-lc" valkyria OpenSSL::SSL OpenSSL::Crypto)
+include_directories(test_aio_ssl_unit src/)
