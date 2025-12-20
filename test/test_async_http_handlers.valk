@@ -1,0 +1,368 @@
+; Async HTTP Handler Integration Tests
+; Tests aio/sleep, aio/delay, and aio/then chains in real HTTP handlers
+; to exercise async completion paths in aio_uv.c
+
+(load "src/prelude.valk")
+
+; Test state tracking
+(def {tests-passed} 0)
+(def {tests-failed} 0)
+(def {tests-run} 0)
+
+; Helper to check response and print result
+(fun {check-response name resp expected-status expected-body} {
+  (def {tests-run} (+ tests-run 1))
+  (if (error? resp)
+    {(do
+       (def {tests-failed} (+ tests-failed 1))
+       (printf "  ❌ %s: FAIL (error: %s)\n" name (str resp)))}
+    {(do
+       (= {status} (http2/response-status resp))
+       (= {body} (http2/response-body resp))
+       (if (and (== status expected-status) (== body expected-body))
+         {(do
+            (def {tests-passed} (+ tests-passed 1))
+            (printf "  ✅ %s: PASS\n" name))}
+         {(do
+            (def {tests-failed} (+ tests-failed 1))
+            (printf "  ❌ %s: FAIL (got status=%s body=%s)\n" name status body))}))})
+})
+
+; Test port
+(def {TEST_PORT} 8471)
+
+; Create AIO system
+(def {aio} (aio/start))
+
+; ============================================================================
+; Handler 1: Uses aio/delay - schedules callback after delay
+; ============================================================================
+(def {delay-handler}
+  (\ {req} {
+    (aio/delay aio 10 (\ {} {{:status "200" :body "delayed-response"}}))
+  }))
+
+; ============================================================================
+; Handler 2: Uses aio/sleep with aio/then chain
+; ============================================================================
+(def {sleep-handler}
+  (\ {req} {
+    (aio/then (aio/sleep 5) (\ {_} {{:status "200" :body "slept"}}))
+  }))
+
+; ============================================================================
+; Handler 3: Uses aio/sleep with double aio/then chain
+; ============================================================================
+(def {sleep-chain-handler}
+  (\ {req} {
+    (aio/then 
+      (aio/sleep 5)
+      (\ {_} {
+        (aio/then (aio/sleep 5) (\ {_} {{:status "200" :body "slept-twice"}}))
+      }))
+  }))
+
+; ============================================================================
+; Handler 4: Uses aio/catch for error recovery
+; ============================================================================
+(def {catch-handler}
+  (\ {req} {
+    (aio/catch (aio/fail "error") (\ {err} {{:status "200" :body "recovered"}}))
+  }))
+
+; ============================================================================
+; Handler 5: Uses aio/finally - cleanup runs on success
+; Note: aio/finally with synchronous completion has a known issue.
+; We use aio/then after aio/finally to ensure async path is taken.
+; ============================================================================
+(def {finally-success-handler}
+  (\ {req} {
+    (aio/then
+      (aio/finally
+        (aio/sleep 5)
+        (\ {} {nil}))
+      (\ {_} {{:status "200" :body "with-finally"}}))
+  }))
+
+; ============================================================================
+; Handler 6: Uses aio/finally - cleanup runs on failure (recovered by catch)
+; ============================================================================
+(def {finally-fail-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/finally
+        (aio/fail "inner-error")
+        (\ {} {nil}))
+      (\ {err} {{:status "200" :body "finally-recovered"}}))
+  }))
+
+; ============================================================================
+; Handler 7: Uses aio/all - wait for multiple sleeps in parallel
+; ============================================================================
+(def {all-handler}
+  (\ {req} {
+    (aio/then
+      (aio/all (list (aio/sleep 5) (aio/sleep 10) (aio/sleep 15)))
+      (\ {results} {{:status "200" :body "all-completed"}}))
+  }))
+
+; ============================================================================
+; Handler 8: Uses aio/all with failure - fails fast
+; ============================================================================
+(def {all-fail-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/all (list (aio/sleep 100) (aio/fail "one-failed") (aio/sleep 100)))
+      (\ {err} {{:status "200" :body "all-failed"}}))
+  }))
+
+; ============================================================================
+; Handler 9: Uses aio/race - first to complete wins
+; ============================================================================
+(def {race-handler}
+  (\ {req} {
+    (aio/then
+      (aio/race (list (aio/sleep 5) (aio/sleep 100) (aio/sleep 200)))
+      (\ {result} {{:status "200" :body "race-won"}}))
+  }))
+
+; ============================================================================
+; Handler 10: Uses aio/any - first success wins
+; ============================================================================
+(def {any-handler}
+  (\ {req} {
+    (aio/then
+      (aio/any (list (aio/fail "e1") (aio/sleep 5) (aio/fail "e2")))
+      (\ {result} {{:status "200" :body "any-success"}}))
+  }))
+
+; ============================================================================
+; Handler 11: Uses aio/any with all failures
+; ============================================================================
+(def {any-all-fail-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/any (list (aio/fail "a") (aio/fail "b") (aio/fail "c")))
+      (\ {err} {{:status "200" :body "any-all-failed"}}))
+  }))
+
+; ============================================================================
+; Handler 12: Uses aio/let with single binding
+; ============================================================================
+(def {let-single-handler}
+  (\ {req} {
+    (aio/let ((x (aio/sleep 5)))
+      {:status "200" :body "let-single"})
+  }))
+
+; ============================================================================
+; Handler 13: Uses aio/let with parallel bindings
+; ============================================================================
+(def {let-parallel-handler}
+  (\ {req} {
+    (aio/let ((a (aio/sleep 5)) (b (aio/sleep 10)))
+      {:status "200" :body "let-parallel"})
+  }))
+
+; ============================================================================
+; Handler 14: Uses aio/let with :then barrier for sequential execution
+; ============================================================================
+(def {let-then-handler}
+  (\ {req} {
+    (aio/let ((x (aio/sleep 5)) (quote :then) (y (aio/sleep 5)))
+      {:status "200" :body "let-then"})
+  }))
+
+; ============================================================================
+; Handler 15: Uses aio/do for sequential async operations
+; ============================================================================
+(def {do-handler}
+  (\ {req} {
+    (aio/do {
+      (x <- (aio/sleep 5))
+      (y <- (aio/sleep 5))
+      {:status "200" :body "do-sequential"}})
+  }))
+
+; ============================================================================
+; Handler 16: Uses aio/bracket for resource safety
+; ============================================================================
+(def {bracket-handler}
+  (\ {req} {
+    (aio/bracket
+      (aio/then (aio/sleep 5) (\ {_} {"resource"}))
+      (\ {r} {(aio/then (aio/sleep 5) (\ {_} {nil}))})
+      (\ {r} {(aio/then (aio/sleep 5) (\ {_} {{:status "200" :body "bracket-used"}}))}))
+  }))
+
+; ============================================================================
+; Handler 17: Uses aio/on-cancel (cancellation handler registered)
+; ============================================================================
+(def {on-cancel-handler}
+  (\ {req} {
+    (aio/then
+      (aio/on-cancel
+        (aio/sleep 5)
+        (\ {} {nil}))
+      (\ {_} {{:status "200" :body "on-cancel-done"}}))
+  }))
+
+; ============================================================================
+; Handler 18: Triple nested aio/then chain
+; ============================================================================
+(def {triple-then-handler}
+  (\ {req} {
+    (aio/then (aio/sleep 5)
+      (\ {_} {(aio/then (aio/sleep 5)
+        (\ {_} {(aio/then (aio/sleep 5)
+          (\ {_} {{:status "200" :body "triple-then"}}))}))}))
+  }))
+
+; ============================================================================
+; Handler 19: aio/catch that re-throws (tests error propagation)
+; Note: Use sleep to ensure async path is taken
+; ============================================================================
+(def {catch-rethrow-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/then
+        (aio/sleep 5)
+        (\ {_} {(aio/fail "original")}))
+      (\ {err} {{:status "200" :body "catch-rethrow"}}))
+  }))
+
+; ============================================================================
+; Handler 20: Complex combinator chain (all -> race)
+; ============================================================================
+(def {complex-chain-handler}
+  (\ {req} {
+    (aio/then
+      (aio/all (list (aio/sleep 5) (aio/sleep 10)))
+      (\ {results} {
+        (aio/then
+          (aio/race (list (aio/sleep 5) (aio/sleep 100)))
+          (\ {r} {{:status "200" :body "complex-chain"}}))}))
+  }))
+
+; ============================================================================
+; Router helper
+; ============================================================================
+(fun {route path handlers} {
+  (if (nil? handlers)
+    {{:status "404" :body "not-found"}}
+    {(if (== path (fst (fst handlers)))
+      {(eval (snd (fst handlers)))}
+      {(route path (tail handlers))})})
+})
+
+; ============================================================================
+; Router
+; ============================================================================
+(def {router}
+  (\ {req} {
+    (= {path} (plist/get req (head {:path})))
+    (route path (list
+      {"/delay" {(delay-handler req)}}
+      {"/sleep" {(sleep-handler req)}}
+      {"/sleep-chain" {(sleep-chain-handler req)}}
+      {"/catch" {(catch-handler req)}}
+      {"/finally-success" {(finally-success-handler req)}}
+      {"/finally-fail" {(finally-fail-handler req)}}
+      {"/all" {(all-handler req)}}
+      {"/all-fail" {(all-fail-handler req)}}
+      {"/race" {(race-handler req)}}
+      {"/any" {(any-handler req)}}
+      {"/any-all-fail" {(any-all-fail-handler req)}}
+      {"/let-single" {(let-single-handler req)}}
+      {"/let-parallel" {(let-parallel-handler req)}}
+      {"/let-then" {(let-then-handler req)}}
+      {"/do" {(do-handler req)}}
+      {"/bracket" {(bracket-handler req)}}
+      {"/on-cancel" {(on-cancel-handler req)}}
+      {"/triple-then" {(triple-then-handler req)}}
+      {"/catch-rethrow" {(catch-rethrow-handler req)}}
+      {"/complex-chain" {(complex-chain-handler req)}}))
+  }))
+
+; Final cleanup function
+(fun {finish-tests} {
+  (println "")
+  (printf "=== Results: %d/%d tests passed ===\n" tests-passed tests-run)
+  (if (== tests-failed 0)
+    {(println "PASS: All async handler tests passed!")}
+    {(printf "FAIL: %d tests failed\n" tests-failed)})
+  (aio/stop aio)
+})
+
+; Test runner - chains requests via continuation
+(fun {test-request path name expected-body next-fn} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT path
+    (\ {resp} {
+      (check-response name resp "200" expected-body)
+      (next-fn)
+    }))
+})
+
+; Start server
+(println "")
+(println "=== Async HTTP Handler Integration Tests ===")
+(println "")
+(printf "Starting test server on port %d...\n" TEST_PORT)
+(http2/server-listen aio TEST_PORT router)
+
+; Run tests after server starts
+(aio/schedule aio 200 (\ {} {
+  (println "Running tests...")
+  (println "")
+
+  (test-request "/delay" "aio/delay" "delayed-response" (\ {} {
+  (test-request "/sleep" "aio/sleep" "slept" (\ {} {
+  (test-request "/sleep-chain" "aio/sleep chain" "slept-twice" (\ {} {
+  (test-request "/catch" "aio/catch" "recovered" (\ {} {
+  (test-request "/finally-success" "aio/finally success" "with-finally" (\ {} {
+  (test-request "/finally-fail" "aio/finally fail" "finally-recovered" (\ {} {
+  (test-request "/all" "aio/all parallel" "all-completed" (\ {} {
+  (test-request "/all-fail" "aio/all fail-fast" "all-failed" (\ {} {
+  (test-request "/race" "aio/race" "race-won" (\ {} {
+  (test-request "/any" "aio/any success" "any-success" (\ {} {
+  (test-request "/any-all-fail" "aio/any all-fail" "any-all-failed" (\ {} {
+  (test-request "/let-single" "aio/let single" "let-single" (\ {} {
+  (test-request "/let-parallel" "aio/let parallel" "let-parallel" (\ {} {
+  (test-request "/let-then" "aio/let :then barrier" "let-then" (\ {} {
+  (test-request "/do" "aio/do sequential" "do-sequential" (\ {} {
+  (test-request "/bracket" "aio/bracket" "bracket-used" (\ {} {
+  (test-request "/on-cancel" "aio/on-cancel" "on-cancel-done" (\ {} {
+  (test-request "/triple-then" "triple aio/then" "triple-then" (\ {} {
+  (test-request "/catch-rethrow" "aio/catch rethrow" "catch-rethrow" (\ {} {
+  (test-request "/complex-chain" "complex combinator" "complex-chain" (\ {} {
+    (finish-tests)
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+  }))
+}))
+
+; Timeout
+(aio/schedule aio 30000 (\ {} {
+  (println "TIMEOUT!")
+  (aio/stop aio)
+}))
+
+(aio/run aio)
+(if (== tests-failed 0) {(exit 0)} {(exit 1)})

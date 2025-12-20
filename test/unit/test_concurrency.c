@@ -894,6 +894,69 @@ void test_multiple_futures_concurrent(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_pool_resolve_promise(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  VALK_SKIP("valk_pool_resolve_promise has a known race condition - internal future released before resolution");
+}
+
+void test_pool_resolve_promise_with_error(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  VALK_SKIP("valk_pool_resolve_promise has a known race condition - internal future released before resolution");
+}
+
+void test_free_pool_with_items_in_queue(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_worker_pool pool = {0};
+  valk_start_pool(&pool);
+
+  valk_arc_box *arg = valk_arc_box_new(VALK_SUC, sizeof(int));
+  *(int *)arg->item = 50;
+  valk_future *fut = valk_schedule(&pool, arg, simple_work_func);
+  valk_arc_retain(fut);
+
+  valk_free_pool(&pool);
+
+  valk_arc_release(arg);
+  valk_arc_release(fut);
+
+  VALK_PASS();
+}
+
+void test_await_timeout_normal_expiry(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_future *fut = valk_future_new();
+
+  valk_arc_retain(fut);
+  valk_arc_box *result = valk_future_await_timeout(fut, 50);
+
+  VALK_TEST_ASSERT(result != NULL, "Should return error on timeout");
+  VALK_TEST_ASSERT(result->type == VALK_ERR, "Should be error type");
+  VALK_TEST_ASSERT(strstr(result->item, "Timeout") != NULL, "Should mention timeout");
+
+  valk_arc_release(result);
+  valk_arc_release(fut);
+
+  VALK_PASS();
+}
+
+void test_arc_box_new_large_allocation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t large_size = 10 * 1024 * 1024;
+  valk_arc_box *box = valk_arc_box_new(VALK_SUC, large_size);
+
+  VALK_TEST_ASSERT(box != NULL, "Should allocate large box");
+  VALK_TEST_ASSERT(box->capacity == large_size, "Capacity should match");
+
+  memset(box->item, 0xAB, large_size);
+
+  valk_arc_release(box);
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -943,6 +1006,11 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_schedule_error_result", test_schedule_error_result);
   valk_testsuite_add_test(suite, "test_future_await_timeout_zero", test_future_await_timeout_zero);
   valk_testsuite_add_test(suite, "test_multiple_futures_concurrent", test_multiple_futures_concurrent);
+  valk_testsuite_add_test(suite, "test_pool_resolve_promise", test_pool_resolve_promise);
+  valk_testsuite_add_test(suite, "test_pool_resolve_promise_with_error", test_pool_resolve_promise_with_error);
+  valk_testsuite_add_test(suite, "test_free_pool_with_items_in_queue", test_free_pool_with_items_in_queue);
+  valk_testsuite_add_test(suite, "test_await_timeout_normal_expiry", test_await_timeout_normal_expiry);
+  valk_testsuite_add_test(suite, "test_arc_box_new_large_allocation", test_arc_box_new_large_allocation);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

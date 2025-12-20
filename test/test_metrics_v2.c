@@ -1033,7 +1033,6 @@ void test_counter_concurrent_inc(VALK_TEST_ARGS()) {
   valk_counter_v2_t *c = valk_counter_get_or_create("concurrent_counter", NULL, &labels);
   VALK_TEST_ASSERT(c != NULL, "Counter should be created");
 
-  // Spawn multiple threads
   const int NUM_THREADS = 4;
   const int ITERATIONS = 10000;
   pthread_t threads[NUM_THREADS];
@@ -1047,11 +1046,140 @@ void test_counter_concurrent_inc(VALK_TEST_ARGS()) {
     pthread_join(threads[i], NULL);
   }
 
-  // Verify total
   uint64_t expected = NUM_THREADS * ITERATIONS;
   uint64_t actual = atomic_load(&c->value);
   VALK_TEST_ASSERT(actual == expected,
                    "Counter should be %lu, got %lu", expected, actual);
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_registry_stats_json_small_buffer(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_registry_stats_t stats;
+  valk_registry_stats_collect(&stats);
+
+  char tiny_buf[10];
+  size_t len = valk_registry_stats_to_json(&stats, tiny_buf, sizeof(tiny_buf));
+  VALK_TEST_ASSERT(len == 0, "Should return 0 when buffer too small");
+
+  len = valk_registry_stats_to_json(&stats, NULL, 100);
+  VALK_TEST_ASSERT(len == 0, "Should return 0 when buffer is NULL");
+
+  len = valk_registry_stats_to_json(NULL, tiny_buf, sizeof(tiny_buf));
+  VALK_TEST_ASSERT(len == 0, "Should return 0 when stats is NULL");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_summary_persistent(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_summary_set_persistent(NULL);
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_summary_handle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_metric_handle_t null_handle = valk_summary_handle(NULL);
+  VALK_TEST_ASSERT(null_handle.slot == VALK_INVALID_SLOT,
+                   "NULL summary should produce invalid handle");
+
+  valk_metric_handle_t invalid = VALK_HANDLE_INVALID;
+  valk_summary_v2_t *s = valk_summary_deref(invalid);
+  VALK_TEST_ASSERT(s == NULL, "Invalid handle should return NULL");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_eviction_with_actual_evictions(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  g_metrics.eviction_threshold_us = 1;
+
+  valk_label_set_v2_t labels1 = {
+    .labels = {{.key = "type", .value = "counter"}},
+    .count = 1
+  };
+  valk_label_set_v2_t labels2 = {
+    .labels = {{.key = "type", .value = "gauge"}},
+    .count = 1
+  };
+  valk_label_set_v2_t labels3 = {
+    .labels = {{.key = "type", .value = "histogram"}},
+    .count = 1
+  };
+
+  valk_counter_v2_t *c = valk_counter_get_or_create("evict_me_counter", NULL, &labels1);
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("evict_me_gauge", NULL, &labels2);
+  double bounds[] = {0.1, 1.0};
+  valk_histogram_v2_t *h = valk_histogram_get_or_create("evict_me_hist", NULL, bounds, 2, &labels3);
+
+  VALK_TEST_ASSERT(c != NULL && g != NULL && h != NULL, "All metrics should be created");
+
+  for (volatile int i = 0; i < 100000; i++) {}
+
+  size_t evicted = valk_metrics_evict_stale();
+  VALK_TEST_ASSERT(evicted >= 3, "Should evict at least 3 metrics");
+
+  VALK_TEST_ASSERT(atomic_load(&g_metrics.evictions_total) >= 3,
+                   "evictions_total should be at least 3");
+  VALK_TEST_ASSERT(atomic_load(&g_metrics.evictions_counters) >= 1,
+                   "evictions_counters should be at least 1");
+  VALK_TEST_ASSERT(atomic_load(&g_metrics.evictions_gauges) >= 1,
+                   "evictions_gauges should be at least 1");
+  VALK_TEST_ASSERT(atomic_load(&g_metrics.evictions_histograms) >= 1,
+                   "evictions_histograms should be at least 1");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_registry_stats_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_registry_stats_collect(NULL);
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_labels_equality_hash_mismatch(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels1 = {
+    .labels = {{.key = "a", .value = "1"}, {.key = "b", .value = "2"}},
+    .count = 2
+  };
+
+  valk_label_set_v2_t labels2 = {
+    .labels = {{.key = "a", .value = "1"}, {.key = "b", .value = "3"}},
+    .count = 2
+  };
+
+  valk_counter_v2_t *c1 = valk_counter_get_or_create("test", NULL, &labels1);
+  valk_counter_v2_t *c2 = valk_counter_get_or_create("test", NULL, &labels2);
+
+  VALK_TEST_ASSERT(c1 != c2, "Different label values should create different counters");
 
   valk_metrics_registry_destroy();
   VALK_PASS();
@@ -1163,6 +1291,19 @@ int main(int argc, const char **argv) {
                           test_pool_metrics_null_safety);
   valk_testsuite_add_test(suite, "test_pool_metrics_eviction_protected",
                           test_pool_metrics_eviction_protected);
+
+  valk_testsuite_add_test(suite, "test_registry_stats_json_small_buffer",
+                          test_registry_stats_json_small_buffer);
+  valk_testsuite_add_test(suite, "test_summary_persistent",
+                          test_summary_persistent);
+  valk_testsuite_add_test(suite, "test_summary_handle",
+                          test_summary_handle);
+  valk_testsuite_add_test(suite, "test_eviction_with_actual_evictions",
+                          test_eviction_with_actual_evictions);
+  valk_testsuite_add_test(suite, "test_registry_stats_null",
+                          test_registry_stats_null);
+  valk_testsuite_add_test(suite, "test_labels_equality_hash_mismatch",
+                          test_labels_equality_hash_mismatch);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

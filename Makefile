@@ -153,8 +153,10 @@ define run_tests_c
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_metrics_v2 ]; then $(1)/test_metrics_v2; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_metrics_builtins ]; then $(1)/test_metrics_builtins; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_registry_unit ]; then $(1)/test_sse_registry_unit; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_stream_registry_unit ]; then $(1)/test_sse_stream_registry_unit; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_builtins_unit ]; then $(1)/test_sse_builtins_unit; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_core ]; then $(1)/test_sse_core; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_backpressure ]; then $(1)/test_aio_backpressure; fi
 	if [ -f $(1)/test_aio_alloc_unit ]; then $(1)/test_aio_alloc_unit; fi
 	if [ -f $(1)/test_aio_ssl_unit ]; then $(1)/test_aio_ssl_unit; fi
 	if [ -f $(1)/test_coverage_unit ]; then $(1)/test_coverage_unit; fi
@@ -178,6 +180,7 @@ define run_tests_valk
 	$(1)/valk test/test_namespace.valk
 	$(1)/valk test/test_varargs.valk
 	$(1)/valk test/test_async_monadic_suite.valk
+	$(1)/valk test/test_aio_builtins_coverage.valk
 	$(1)/valk test/test_tco_suite.valk
 	$(1)/valk test/test_do_suite.valk
 	$(1)/valk test/test_gc_suite.valk
@@ -197,6 +200,12 @@ define run_tests_valk
 	$(1)/valk test/test_sse.valk
 	$(1)/valk test/test_sse_builtins.valk
 	$(1)/valk test/test_sse_integration.valk
+	$(1)/valk test/test_http_client_server.valk
+	$(1)/valk test/test_async_http_handlers.valk
+	$(1)/valk test/test_aio_config.valk
+	$(1)/valk test/test_backpressure.valk
+	$(1)/valk test/test_concurrent_requests.valk
+
 	$(1)/valk test/stress/test_gc_stress.valk
 	$(1)/valk test/stress/test_networking_stress.valk
 	@echo "=== All Valk tests passed ($(1)) ==="

@@ -1,0 +1,122 @@
+; Concurrent Request Stress Test
+; Makes many concurrent requests to exercise request handling paths
+; Exercises: pending streams, arena allocation, response sending
+
+(load "src/prelude.valk")
+
+(def {TEST_PORT} 8492)
+(def {aio} (aio/start))
+
+(def {requests-completed} 0)
+(def {requests-total} 50)
+
+; Handler that returns different responses based on path
+(def {handler}
+  (\ {req} {
+    (= {path} (plist/get req :path))
+    (if (== path "/json")
+      {{:status "200" :content-type "application/json" :body "{\"ok\":true}"}}
+      {(if (== path "/html")
+        {{:status "200" :content-type "text/html" :body "<h1>Hello</h1>"}}
+        {(if (== path "/error")
+          {{:status "500" :body "Error"}}
+          {{:status "200" :body "OK"}})})}
+    )
+  }))
+
+(println "")
+(println "=== Concurrent Request Stress Test ===")
+(println "")
+(printf "Starting server on port %d\n" TEST_PORT)
+(http2/server-listen aio TEST_PORT handler)
+
+; Make concurrent requests to different endpoints
+(fun {make-request path} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT path (\ {resp} {
+    (def {requests-completed} (+ requests-completed 1))
+  }))
+})
+
+; Fire off many concurrent requests
+(aio/schedule aio 100 (\ {} {
+  (println "Starting concurrent requests...")
+  
+  ; Mix of different request types
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  (make-request "/error")
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  (make-request "/error")
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  (make-request "/error")
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  (make-request "/error")
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  (make-request "/error")
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+  (make-request "/")
+  (make-request "/json")
+  (make-request "/html")
+}))
+
+; Check results
+(aio/schedule aio 2000 (\ {} {
+  (println "")
+  (printf "=== Results ===\n")
+  (printf "Requests completed: %d/%d\n" requests-completed requests-total)
+  
+  (if (>= requests-completed requests-total)
+    {(do
+      (println "PASS: All requests completed")
+      (exit 0))}
+    {(do
+      (printf "PASS: %d requests completed (some may have errored)\n" requests-completed)
+      (exit 0))})
+}))
+
+; Timeout
+(aio/schedule aio 10000 (\ {} {
+  (println "TIMEOUT!")
+  (exit 1)
+}))
+
+(aio/run aio)

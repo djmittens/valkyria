@@ -158,5 +158,49 @@
     true
   })
 
+; Test: Unquote with no arguments should error
+(test/define "unquote-no-args-error"
+  {do
+    (= {result} (error? (eval (read "`{a , b}"))))
+    (test/assert result "unquote with nothing should error")
+    true
+  })
+
+; Test: Unquote-splicing with non-list should error
+(test/define "unquote-splicing-non-list-error"
+  {do
+    (= {x} 42)
+    (= {result} (error? (eval (read "`{a ,@x b}"))))
+    (test/assert result "unquote-splicing non-list should error")
+    true
+  })
+
+; Test: plist access with :key syntax
+(test/define "plist-get-basic"
+  {do
+    (= {data} {:name "Alice" :age 30})
+    (test/assert-eq "Alice" (plist/get data :name) "should get name")
+    (test/assert-eq 30 (plist/get data :age) "should get age")
+    true
+  })
+
+; Test: plist access with missing key
+(test/define "plist-get-missing-key"
+  {do
+    (= {data} {:a 1 :b 2})
+    (= {result} (plist/get data :missing))
+    (test/assert (== result nil) "missing key should return nil")
+    true
+  })
+
+; Test: plist access with empty plist
+(test/define "plist-get-empty"
+  {do
+    (= {data} {})
+    (= {result} (plist/get data :key))
+    (test/assert (== result nil) "empty plist should return nil")
+    true
+  })
+
 ; Run all tests
 (test/run)

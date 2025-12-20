@@ -52,4 +52,40 @@
     true
   })
 
+(test/define "aio-config-tcp-buffer-pool"
+  {do
+    (= {test-sys} (aio/start {:tcp-buffer-pool-size 256}))
+    (test/assert (not (== test-sys nil)) "aio/start with tcp-buffer-pool-size should succeed")
+    true
+  })
+
+(test/define "aio-config-arena-size"
+  {do
+    ; arena-size must be between 1MB and 256MB
+    (= {test-sys} (aio/start {:arena-size 1048576}))
+    (test/assert (not (== test-sys nil)) "aio/start with arena-size should succeed")
+    true
+  })
+
+(test/define "aio-config-max-request-body"
+  {do
+    (= {test-sys} (aio/start {:max-request-body-size 1048576}))
+    (test/assert (not (== test-sys nil)) "aio/start with max-request-body-size should succeed")
+    true
+  })
+
+(test/define "aio-config-all-options"
+  {do
+    (= {test-sys} (aio/start {
+      :max-connections 100
+      :max-concurrent-streams 25
+      :tcp-buffer-pool-size 128
+      :arena-pool-size 50
+      :arena-size 1048576
+      :max-request-body-size 524288
+    }))
+    (test/assert (not (== test-sys nil)) "aio/start with all config options should succeed")
+    true
+  })
+
 (test/run {})

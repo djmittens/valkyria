@@ -170,8 +170,8 @@ void test_sse_event_format_manual(VALK_TEST_ARGS()) {
   uint64_t id = 42;
 
   char buf[512];
-  int len = snprintf(buf, sizeof(buf), "id: %lu\nevent: %s\ndata: %s\n\n",
-                     id, event_type, data);
+  int len = snprintf(buf, sizeof(buf), "id: %llu\nevent: %s\ndata: %s\n\n",
+                     (unsigned long long)id, event_type, data);
 
   VALK_TEST_ASSERT(len > 0, "Failed to format SSE event");
   VALK_TEST_ASSERT(strstr(buf, "id: 42\n") != NULL, "Missing id field");
@@ -229,11 +229,102 @@ void test_sse_send_retry(VALK_TEST_ARGS()) {
 void test_sse_state_enum(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  // Verify enum values are in expected order
   VALK_TEST_ASSERT(VALK_SSE_INIT == 0, "INIT should be 0");
   VALK_TEST_ASSERT(VALK_SSE_OPEN == 1, "OPEN should be 1");
   VALK_TEST_ASSERT(VALK_SSE_CLOSING == 2, "CLOSING should be 2");
   VALK_TEST_ASSERT(VALK_SSE_CLOSED == 3, "CLOSED should be 3");
+
+  VALK_PASS();
+}
+
+static bool g_on_close_called = false;
+static void *g_on_close_user_data = NULL;
+
+static void test_on_close_callback(valk_sse_stream_t *stream, void *user_data) {
+  UNUSED(stream);
+  g_on_close_called = true;
+  g_on_close_user_data = user_data;
+}
+
+void test_sse_stream_close_with_queued_events(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  VALK_TEST_ASSERT(stream != NULL, "Failed to create stream");
+
+  valk_sse_event_t *event1 = calloc(1, sizeof(valk_sse_event_t) + 16);
+  valk_sse_event_t *event2 = calloc(1, sizeof(valk_sse_event_t) + 16);
+  VALK_TEST_ASSERT(event1 != NULL && event2 != NULL, "Failed to allocate events");
+
+  event1->data = (char *)(event1 + 1);
+  event1->data_len = 10;
+  event1->next = event2;
+
+  event2->data = (char *)(event2 + 1);
+  event2->data_len = 10;
+  event2->next = NULL;
+
+  stream->queue_head = event1;
+  stream->queue_tail = event2;
+  stream->queue_len = 2;
+
+  stream->state = VALK_SSE_CLOSED;
+  valk_sse_stream_test_free(stream);
+
+  VALK_PASS();
+}
+
+void test_sse_stream_close_with_on_close_callback(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  VALK_TEST_ASSERT(stream != NULL, "Failed to create stream");
+
+  g_on_close_called = false;
+  g_on_close_user_data = NULL;
+
+  int sentinel = 0xDEADBEEF;
+  stream->on_close = test_on_close_callback;
+  stream->user_data = &sentinel;
+
+  stream->state = VALK_SSE_OPEN;
+
+  valk_sse_stream_test_free(stream);
+
+  VALK_PASS();
+}
+
+void test_sse_send_wrapper(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int result = valk_sse_send(NULL, "data", 4);
+  VALK_TEST_ASSERT(result == -1, "Should reject NULL stream");
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  VALK_TEST_ASSERT(stream != NULL, "Failed to create stream");
+
+  stream->state = VALK_SSE_CLOSED;
+  result = valk_sse_send(stream, "data", 4);
+  VALK_TEST_ASSERT(result == -1, "Should reject closed stream");
+
+  stream->state = VALK_SSE_OPEN;
+  stream->queue_len = 10;
+  result = valk_sse_send(stream, "data", 4);
+  VALK_TEST_ASSERT(result == -2, "Should return backpressure when full");
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_sse_stream_close_already_closed(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  VALK_TEST_ASSERT(stream != NULL, "Failed to create stream");
+
+  stream->state = VALK_SSE_CLOSED;
+
+  valk_sse_stream_test_free(stream);
 
   VALK_PASS();
 }
@@ -254,6 +345,10 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_sse_event_format_manual", test_sse_event_format_manual);
   valk_testsuite_add_test(suite, "test_sse_send_retry", test_sse_send_retry);
   valk_testsuite_add_test(suite, "test_sse_state_enum", test_sse_state_enum);
+  valk_testsuite_add_test(suite, "test_sse_stream_close_with_queued_events", test_sse_stream_close_with_queued_events);
+  valk_testsuite_add_test(suite, "test_sse_stream_close_with_on_close_callback", test_sse_stream_close_with_on_close_callback);
+  valk_testsuite_add_test(suite, "test_sse_send_wrapper", test_sse_send_wrapper);
+  valk_testsuite_add_test(suite, "test_sse_stream_close_already_closed", test_sse_stream_close_already_closed);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

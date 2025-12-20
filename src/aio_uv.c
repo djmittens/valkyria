@@ -2407,6 +2407,15 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
         handle->stream_arena = (struct valk_mem_arena*)req->stream_arena;
         handle->env = sandbox_env;
 
+        // CRITICAL: Propagate stream_arena to all parent handles in the chain.
+        // This allows inner handles (like aio/then inside aio/catch) to call
+        // their transform functions when their sources complete.
+        for (valk_async_handle_t *p = handle->parent; p != NULL; p = p->parent) {
+          if (!p->stream_arena) {
+            p->stream_arena = handle->stream_arena;
+          }
+        }
+
         // If handle is already completed, send response immediately
         if (handle->status == VALK_ASYNC_COMPLETED) {
           valk_lval_t *result = handle->result;
@@ -5621,6 +5630,14 @@ static void valk_async_propagate_completion(valk_async_handle_t *source);
 #define VALK_ALL_CTX_MAGIC_EARLY 0xA11C7821
 static void valk_async_notify_all_parent(valk_async_handle_t *child);
 
+// Forward declarations for aio/race parent notification
+#define VALK_RACE_CTX_MAGIC_EARLY 0x9ACE7821
+static void valk_async_notify_race_parent(valk_async_handle_t *child);
+
+// Forward declarations for aio/any parent notification
+#define VALK_ANY_CTX_MAGIC_EARLY 0xA4177821
+static void valk_async_notify_any_parent(valk_async_handle_t *child);
+
 // Helper: Release stream arena back to slab after async completion
 static void valk_async_release_arena(valk_async_handle_t *handle) {
   if (!handle->stream_arena || !handle->conn) return;
@@ -5815,6 +5832,12 @@ static void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t 
   // Notify aio/all parent if this handle is a child of one
   valk_async_notify_all_parent(handle);
 
+  // Notify aio/race parent if this handle is a child of one
+  valk_async_notify_race_parent(handle);
+
+  // Notify aio/any parent if this handle is a child of one
+  valk_async_notify_any_parent(handle);
+
   // Send HTTP response if this handle has HTTP context attached
   valk_async_send_http_response(handle);
 
@@ -5852,6 +5875,12 @@ static void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *err
 
   // Notify aio/all parent if this handle is a child of one
   valk_async_notify_all_parent(handle);
+
+  // Notify aio/race parent if this handle is a child of one
+  valk_async_notify_race_parent(handle);
+
+  // Notify aio/any parent if this handle is a child of one
+  valk_async_notify_any_parent(handle);
 
   // Send HTTP error response if this handle has HTTP context attached
   valk_async_send_http_response(handle);
@@ -6671,6 +6700,65 @@ static void valk_async_notify_all_parent(valk_async_handle_t *child) {
   // Note: CANCELLED is not handled - the parent will fail eventually if needed
 }
 
+// Magic marker to identify aio/race contexts
+#define VALK_RACE_CTX_MAGIC 0x9ACE7821
+
+// Context for aio/race
+typedef struct {
+  uint32_t magic;
+  valk_async_handle_t *race_handle;
+  valk_async_handle_t **handles;
+  size_t total;
+  bool resolved;
+} valk_race_ctx_t;
+
+// Called when a child of aio/race completes (success or failure)
+static void valk_async_race_child_resolved(valk_async_handle_t *child) {
+  if (!child || !child->parent) return;
+
+  valk_async_handle_t *parent = child->parent;
+  if (!parent->uv_handle_ptr) return;
+
+  valk_race_ctx_t *ctx = (valk_race_ctx_t*)parent->uv_handle_ptr;
+  if (ctx->magic != VALK_RACE_CTX_MAGIC) return;
+  if (ctx->resolved) return;
+
+  ctx->resolved = true;
+
+  if (child->status == VALK_ASYNC_COMPLETED) {
+    ctx->race_handle->status = VALK_ASYNC_COMPLETED;
+    ctx->race_handle->result = child->result;
+  } else if (child->status == VALK_ASYNC_FAILED) {
+    ctx->race_handle->status = VALK_ASYNC_FAILED;
+    ctx->race_handle->error = child->error;
+  } else {
+    return;
+  }
+
+  for (size_t i = 0; i < ctx->total; i++) {
+    valk_async_handle_t *h = ctx->handles[i];
+    if (h != child && (h->status == VALK_ASYNC_PENDING || h->status == VALK_ASYNC_RUNNING)) {
+      valk_async_handle_cancel(h);
+    }
+  }
+
+  valk_async_send_http_response(ctx->race_handle);
+  valk_async_propagate_completion(ctx->race_handle);
+}
+
+// Notification function called from valk_async_handle_complete/fail
+static void valk_async_notify_race_parent(valk_async_handle_t *child) {
+  if (!child || !child->parent) return;
+
+  valk_async_handle_t *parent = child->parent;
+  if (!parent->uv_handle_ptr) return;
+
+  uint32_t *magic_ptr = (uint32_t*)parent->uv_handle_ptr;
+  if (*magic_ptr != VALK_RACE_CTX_MAGIC_EARLY) return;
+
+  valk_async_race_child_resolved(child);
+}
+
 // aio/race: (aio/race handles-list) -> handle
 // Return first handle to complete (success or failure)
 static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
@@ -6749,16 +6837,118 @@ static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
     race_handle->loop = handle->loop;
   }
 
-  // Link all source handles as children
+  // Allocate handles array
+  valk_async_handle_t **handles = calloc(count, sizeof(valk_async_handle_t*));
+  if (!handles) {
+    valk_async_handle_free(race_handle);
+    return valk_lval_err("Failed to allocate handles array");
+  }
+
+  // Create race context
+  valk_race_ctx_t *ctx = malloc(sizeof(valk_race_ctx_t));
+  if (!ctx) {
+    free(handles);
+    valk_async_handle_free(race_handle);
+    return valk_lval_err("Failed to allocate race context");
+  }
+  ctx->magic = VALK_RACE_CTX_MAGIC;
+  ctx->race_handle = race_handle;
+  ctx->handles = handles;
+  ctx->total = count;
+  ctx->resolved = false;
+  race_handle->uv_handle_ptr = ctx;
+
+  // Link all source handles as children and populate handles array
   iter = handles_list;
-  while (LVAL_TYPE(iter) != LVAL_NIL) {
+  for (size_t i = 0; i < count; i++) {
     valk_lval_t *h = valk_lval_head(iter);
     valk_async_handle_t *handle = h->async.handle;
+    handles[i] = handle;
     valk_async_handle_add_child(race_handle, handle);
     iter = valk_lval_tail(iter);
   }
 
   return valk_lval_handle(race_handle);
+}
+
+// Magic marker to identify aio/any contexts
+#define VALK_ANY_CTX_MAGIC 0xA4177821
+
+// Context for aio/any
+typedef struct {
+  uint32_t magic;
+  valk_async_handle_t *any_handle;
+  valk_async_handle_t **handles;
+  size_t total;
+  size_t failed_count;
+  valk_lval_t *last_error;
+  bool resolved;
+} valk_any_ctx_t;
+
+// Called when a child of aio/any completes successfully
+static void valk_async_any_child_success(valk_async_handle_t *child) {
+  if (!child || !child->parent) return;
+
+  valk_async_handle_t *parent = child->parent;
+  if (!parent->uv_handle_ptr) return;
+
+  valk_any_ctx_t *ctx = (valk_any_ctx_t*)parent->uv_handle_ptr;
+  if (ctx->magic != VALK_ANY_CTX_MAGIC) return;
+  if (ctx->resolved) return;
+
+  ctx->resolved = true;
+  ctx->any_handle->status = VALK_ASYNC_COMPLETED;
+  ctx->any_handle->result = child->result;
+
+  for (size_t i = 0; i < ctx->total; i++) {
+    valk_async_handle_t *h = ctx->handles[i];
+    if (h != child && (h->status == VALK_ASYNC_PENDING || h->status == VALK_ASYNC_RUNNING)) {
+      valk_async_handle_cancel(h);
+    }
+  }
+
+  valk_async_send_http_response(ctx->any_handle);
+  valk_async_propagate_completion(ctx->any_handle);
+}
+
+// Called when a child of aio/any fails
+static void valk_async_any_child_failed(valk_async_handle_t *child, valk_lval_t *error) {
+  if (!child || !child->parent) return;
+
+  valk_async_handle_t *parent = child->parent;
+  if (!parent->uv_handle_ptr) return;
+
+  valk_any_ctx_t *ctx = (valk_any_ctx_t*)parent->uv_handle_ptr;
+  if (ctx->magic != VALK_ANY_CTX_MAGIC) return;
+  if (ctx->resolved) return;
+
+  ctx->failed_count++;
+  ctx->last_error = error;
+
+  if (ctx->failed_count == ctx->total) {
+    ctx->resolved = true;
+    ctx->any_handle->status = VALK_ASYNC_FAILED;
+    ctx->any_handle->error = ctx->last_error;
+    valk_async_send_http_response(ctx->any_handle);
+    valk_async_propagate_completion(ctx->any_handle);
+  }
+}
+
+// Notification function called from valk_async_handle_complete/fail
+static void valk_async_notify_any_parent(valk_async_handle_t *child) {
+  if (!child || !child->parent) return;
+
+  valk_async_handle_t *parent = child->parent;
+  if (!parent->uv_handle_ptr) return;
+
+  uint32_t *magic_ptr = (uint32_t*)parent->uv_handle_ptr;
+  if (*magic_ptr != VALK_ANY_CTX_MAGIC_EARLY) return;
+
+  if (child->status == VALK_ASYNC_COMPLETED) {
+    valk_async_any_child_success(child);
+  } else if (child->status == VALK_ASYNC_FAILED) {
+    valk_async_any_child_failed(child, child->error);
+  }
 }
 
 // aio/any: (aio/any handles-list) -> handle
@@ -6849,11 +7039,35 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
     iter = valk_lval_tail(iter);
   }
 
-  // Link all source handles as children
+  // Allocate handles array
+  valk_async_handle_t **handles = calloc(count, sizeof(valk_async_handle_t*));
+  if (!handles) {
+    valk_async_handle_free(any_handle);
+    return valk_lval_err("Failed to allocate handles array");
+  }
+
+  // Create any context
+  valk_any_ctx_t *ctx = malloc(sizeof(valk_any_ctx_t));
+  if (!ctx) {
+    free(handles);
+    valk_async_handle_free(any_handle);
+    return valk_lval_err("Failed to allocate any context");
+  }
+  ctx->magic = VALK_ANY_CTX_MAGIC;
+  ctx->any_handle = any_handle;
+  ctx->handles = handles;
+  ctx->total = count;
+  ctx->failed_count = failed_count;
+  ctx->last_error = last_error;
+  ctx->resolved = false;
+  any_handle->uv_handle_ptr = ctx;
+
+  // Link all source handles as children and populate handles array
   iter = handles_list;
-  while (LVAL_TYPE(iter) != LVAL_NIL) {
+  for (size_t i = 0; i < count; i++) {
     valk_lval_t *h = valk_lval_head(iter);
     valk_async_handle_t *handle = h->async.handle;
+    handles[i] = handle;
     valk_async_handle_add_child(any_handle, handle);
     iter = valk_lval_tail(iter);
   }
