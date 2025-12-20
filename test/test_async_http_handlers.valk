@@ -518,6 +518,15 @@
   }))
 
 ; ============================================================================
+; Handler 46b: Raw error - handler returns LVAL_ERR directly
+; This tests the handler error path where response type is LVAL_ERR
+; ============================================================================
+(def {raw-error-handler}
+  (\ {req} {
+    (error "raw-handler-error")
+  }))
+
+; ============================================================================
 ; Handler 47: Immediate completion - handler returns already-completed handle
 ; This tests the VALK_ASYNC_COMPLETED path with immediate result
 ; ============================================================================
@@ -624,6 +633,7 @@
       {"/scope-async-fail" {(scope-async-fail-handler req)}}
       {"/immediate-fail" {(immediate-fail-handler req)}}
       {"/immediate-complete" {(immediate-complete-handler req)}}
+      {"/raw-error" {(raw-error-handler req)}}
       {"/race-cancel" {(race-cancel-handler req)}}
       {"/nested-cancel" {(nested-cancel-handler req)}}))
   }))
@@ -713,9 +723,11 @@
   (test-request "/scope-async-fail" "aio/scope async fail" "scope-async-fail-ok" (\ {} {
   (test-request "/immediate-complete" "immediate aio/pure" "immediate-complete-ok" (\ {} {
   (test-error-request "/immediate-fail" "immediate aio/fail" "Async operation failed" (\ {} {
+  (test-error-request "/raw-error" "raw handler error" "raw-handler-error" (\ {} {
   (test-request "/race-cancel" "on-cancel via race" "race-cancel-ok" (\ {} {
   (test-request "/nested-cancel" "nested on-cancel" "nested-cancel-ok" (\ {} {
     (finish-tests)
+  }))
   }))
   }))
   }))

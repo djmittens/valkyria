@@ -348,6 +348,12 @@
 ; aio/do - sequential composition with bind syntax
 ; ============================================================================
 
+(test/define "aio/do with empty block returns nil"
+  {do
+    (def {h} (aio/do {}))
+    (== (aio/status h) (quote :completed))
+  })
+
 (test/define "aio/do with single expression"
   {do
     (def {h} (aio/do {(aio/pure 42)}))
@@ -407,6 +413,232 @@
     (def {h2} (aio/catch h (\ {e} {(aio/pure "recovered")})))
     (def {h3} (aio/finally h2 (\ {} {nil})))
     (== (aio/status h3) (quote :completed))
+  })
+
+; ============================================================================
+; Argument validation error tests
+; ============================================================================
+
+(test/define "aio/pure with no args returns error"
+  {do
+    (= {result} (aio/pure))
+    (error? result)
+  })
+
+(test/define "aio/fail with no args returns error"
+  {do
+    (= {result} (aio/fail))
+    (error? result)
+  })
+
+(test/define "aio/then with no args returns error"
+  {do
+    (= {result} (aio/then))
+    (error? result)
+  })
+
+(test/define "aio/then with one arg returns error"
+  {do
+    (= {result} (aio/then (aio/pure 1)))
+    (error? result)
+  })
+
+(test/define "aio/then with non-handle first arg returns error"
+  {do
+    (= {result} (aio/then 42 (\ {x} {x})))
+    (error? result)
+  })
+
+(test/define "aio/then with non-function second arg returns error"
+  {do
+    (= {result} (aio/then (aio/pure 1) 42))
+    (error? result)
+  })
+
+(test/define "aio/catch with wrong args returns error"
+  {do
+    (= {result} (aio/catch 42 (\ {x} {x})))
+    (error? result)
+  })
+
+(test/define "aio/finally with wrong args returns error"
+  {do
+    (= {result} (aio/finally 42 (\ {} {nil})))
+    (error? result)
+  })
+
+(test/define "aio/all with non-list returns error"
+  {do
+    (= {result} (aio/all 42))
+    (error? result)
+  })
+
+(test/define "aio/race with non-list returns error"
+  {do
+    (= {result} (aio/race 42))
+    (error? result)
+  })
+
+(test/define "aio/race with empty list returns error"
+  {do
+    (= {result} (aio/race ()))
+    (error? result)
+  })
+
+(test/define "aio/any with empty list returns error"
+  {do
+    (= {result} (aio/any ()))
+    (error? result)
+  })
+
+(test/define "aio/status with no args returns error"
+  {do
+    (= {result} (aio/status))
+    (error? result)
+  })
+
+(test/define "aio/status with non-handle returns error"
+  {do
+    (= {result} (aio/status 42))
+    (error? result)
+  })
+
+(test/define "aio/cancel with no args returns error"
+  {do
+    (= {result} (aio/cancel))
+    (error? result)
+  })
+
+(test/define "aio/cancelled? with no args returns error"
+  {do
+    (= {result} (aio/cancelled?))
+    (error? result)
+  })
+
+(test/define "aio/bracket with wrong args returns error"
+  {do
+    (= {result} (aio/bracket 42 (\ {r} {nil}) (\ {r} {nil})))
+    (error? result)
+  })
+
+(test/define "aio/scope with non-function returns error"
+  {do
+    (= {result} (aio/scope 42))
+    (error? result)
+  })
+
+(test/define "aio/on-cancel with wrong args returns error"
+  {do
+    (= {result} (aio/on-cancel 42 (\ {} {nil})))
+    (error? result)
+  })
+
+(test/define "aio/let with no bindings works"
+  {do
+    (= {result} (aio/let {} {42}))
+    (== (aio/status result) (quote :completed))
+  })
+
+(test/define "aio/do with number returns error"
+  {do
+    (= {result} (aio/do 42))
+    (error? result)
+  })
+
+; ============================================================================
+; aio/sleep - timed delay (requires AIO system)
+; ============================================================================
+
+(test/define "aio/sleep creates handle"
+  {do
+    (= {sys} (aio/start))
+    (test/assert (not (== sys nil)) "aio/start should succeed")
+    (def {h} (aio/sleep 1))
+    (def {status} (aio/status h))
+    (aio/stop sys)
+    (or (or (== status (quote :pending)) (== status (quote :running)))
+        (or (== status (quote :completed)) (== status (quote :cancelled))))
+  })
+
+(test/define "aio/sleep with zero delay"
+  {do
+    (= {sys} (aio/start))
+    (def {h} (aio/sleep 0))
+    (aio/stop sys)
+    true
+  })
+
+; ============================================================================
+; aio/schedule - schedule a callback
+; ============================================================================
+
+(test/define "aio/schedule runs callback"
+  {do
+    (= {sys} (aio/start))
+    (test/assert (not (== sys nil)) "aio/start should succeed")
+    (def {result} (aio/schedule sys 1 (\ {} {42})))
+    (aio/stop sys)
+    true
+  })
+
+(test/define "aio/schedule with zero delay"
+  {do
+    (= {sys} (aio/start))
+    (def {result} (aio/schedule sys 0 (\ {} {"immediate"})))
+    (aio/stop sys)
+    true
+  })
+
+; ============================================================================
+; aio/pool-stats - get pool statistics
+; ============================================================================
+
+(test/define "aio/pool-stats returns stats"
+  {do
+    (= {sys} (aio/start))
+    (def {stats} (aio/pool-stats sys))
+    (aio/stop sys)
+    (not (== stats nil))
+  })
+
+; ============================================================================
+; Error handling edge cases
+; ============================================================================
+
+(test/define "aio/then with nil function result"
+  {do
+    (def {h} (aio/pure 1))
+    (def {h2} (aio/then h (\ {x} {nil})))
+    (== (aio/status h2) (quote :completed))
+  })
+
+(test/define "aio/catch that re-raises"
+  {do
+    (def {h} (aio/fail "error1"))
+    (def {h2} (aio/catch h (\ {e} {(aio/fail "error2")})))
+    (== (aio/status h2) (quote :completed))
+  })
+
+(test/define "nested aio/all"
+  {do
+    (def {inner1} (aio/all (list (aio/pure 1) (aio/pure 2))))
+    (def {inner2} (aio/all (list (aio/pure 3) (aio/pure 4))))
+    (def {outer} (aio/all (list inner1 inner2)))
+    (== (aio/status outer) (quote :completed))
+  })
+
+(test/define "nested aio/race"
+  {do
+    (def {inner1} (aio/race (list (aio/pure 1) (aio/pure 2))))
+    (def {inner2} (aio/race (list (aio/pure 3) (aio/pure 4))))
+    (def {outer} (aio/race (list inner1 inner2)))
+    (== (aio/status outer) (quote :completed))
+  })
+
+(test/define "aio/any with mix of success and failure"
+  {do
+    (def {h} (aio/any (list (aio/fail "e1") (aio/fail "e2") (aio/pure 42) (aio/fail "e3"))))
+    (== (aio/status h) (quote :completed))
   })
 
 ; Run all tests

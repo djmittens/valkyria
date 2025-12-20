@@ -1,0 +1,84 @@
+; Arena Out-of-Order Completion Test
+; Tests that arena linked-list removal works when requests complete out of order
+; Exercises: __http_remove_from_active_arenas traversal path
+
+(load "src/prelude.valk")
+
+(def {TEST_PORT} 8493)
+(def {aio} (aio/start))
+
+(def {completed} 0)
+(def {expected} 3)
+
+; Handler that delays based on path to force out-of-order completion
+; /slow - delays 100ms (completes last)
+; /medium - delays 50ms (completes second)
+; /fast - delays 10ms (completes first)
+(def {handler}
+  (\ {req} {
+    (= {path} (plist/get req :path))
+    (if (== path "/slow")
+      {(aio/then (aio/sleep 100) (\ {_} {{:status "200" :body "slow"}}))}
+      {(if (== path "/medium")
+        {(aio/then (aio/sleep 50) (\ {_} {{:status "200" :body "medium"}}))}
+        {(if (== path "/fast")
+          {(aio/then (aio/sleep 10) (\ {_} {{:status "200" :body "fast"}}))}
+          {{:status "200" :body "ok"}})})})
+  }))
+
+(println "")
+(println "=== Arena Out-of-Order Completion Test ===")
+(println "Testing arena linked-list traversal when requests complete out of order")
+(println "")
+(printf "Starting server on port %d\n" TEST_PORT)
+(http2/server-listen aio TEST_PORT handler)
+
+; Make 3 concurrent requests with different delays
+; They start in order: slow, medium, fast
+; But complete in reverse order: fast, medium, slow
+; This forces the arena linked-list to be traversed to find and remove middle elements
+(aio/schedule aio 100 (\ {} {
+  (println "Starting out-of-order requests...")
+  
+  ; Request 1: /slow (100ms delay) - will be head of arena list
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/slow" (\ {resp} {
+    (printf "  Slow completed: %s\n" (http2/response-body resp))
+    (def {completed} (+ completed 1))
+  }))
+  
+  ; Request 2: /medium (50ms delay) - will be second in arena list
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/medium" (\ {resp} {
+    (printf "  Medium completed: %s\n" (http2/response-body resp))
+    (def {completed} (+ completed 1))
+  }))
+  
+  ; Request 3: /fast (10ms delay) - will be third in arena list
+  ; When it completes, it must be removed from the middle/end of list
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/fast" (\ {resp} {
+    (printf "  Fast completed: %s\n" (http2/response-body resp))
+    (def {completed} (+ completed 1))
+  }))
+}))
+
+; Check results after all should complete
+(aio/schedule aio 500 (\ {} {
+  (println "")
+  (printf "=== Results ===\n")
+  (printf "Completed: %d/%d\n" completed expected)
+  
+  (if (== completed expected)
+    {(do
+      (println "PASS: All requests completed (out-of-order arena removal tested)")
+      (exit 0))}
+    {(do
+      (println "FAIL: Not all requests completed")
+      (exit 1))})
+}))
+
+; Timeout
+(aio/schedule aio 5000 (\ {} {
+  (println "TIMEOUT!")
+  (exit 1)
+}))
+
+(aio/run aio)

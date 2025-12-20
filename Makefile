@@ -207,6 +207,7 @@ define run_tests_valk
 	$(1)/valk test/test_backpressure_recovery.valk
 	$(1)/valk test/test_pending_streams.valk
 	$(1)/valk test/test_concurrent_requests.valk
+	$(1)/valk test/test_arena_out_of_order.valk
 
 	$(1)/valk test/stress/test_gc_stress.valk
 	$(1)/valk test/stress/test_networking_stress.valk

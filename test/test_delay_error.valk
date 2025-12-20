@@ -1,0 +1,67 @@
+(load "src/prelude.valk")
+
+(def {TEST_PORT} 8499)
+(def {aio} (aio/start))
+(def {test-passed} 0)
+
+(def {handler}
+  (\ {req} {
+    (= {path} (plist/get req :path))
+    (if (== path "/delay-error")
+      {(aio/then (aio/sleep 50) (\ {_} {
+        (error "Intentional error from delay continuation")
+      }))}
+      {`{:status "200" :body "OK"}}
+    )
+  }))
+
+(println "")
+(println "=== Delay Error Path Test ===")
+(println "")
+(printf "Starting server on port %d\n" TEST_PORT)
+(http2/server-listen aio TEST_PORT handler)
+
+(aio/schedule aio 100 (\ {} {
+  (println "Requesting /delay-error endpoint...")
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/delay-error" (\ {resp} {
+    (if (error? resp)
+      {(do
+        (printf "Got error response: %s\n" (str resp))
+        (def {test-passed} 1)
+      )}
+      {(do
+        (= {status} (http2/response-status resp))
+        (printf "Got response with status: %s\n" status)
+        (if (== status "500")
+          {(do
+            (println "PASS: Received 500 error response")
+            (def {test-passed} 1)
+          )}
+          {(println "FAIL: Expected 500 status")}
+        )
+      )}
+    )
+  }))
+}))
+
+(aio/schedule aio 1000 (\ {} {
+  (if (== test-passed 1)
+    {(do
+      (println "")
+      (println "=== Test Passed ===")
+      (exit 0)
+    )}
+    {(do
+      (println "")
+      (println "=== Test Failed ===")
+      (exit 1)
+    )}
+  )
+}))
+
+(aio/schedule aio 5000 (\ {} {
+  (println "TIMEOUT!")
+  (exit 1)
+}))
+
+(aio/run aio)

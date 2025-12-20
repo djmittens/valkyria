@@ -374,29 +374,6 @@ void test_aio_is_shutting_down_null(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_demo_handler_not_null(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_http2_handler_t *handler = valk_aio_http2_demo_handler();
-  ASSERT_NOT_NULL(handler);
-  ASSERT_NOT_NULL(handler->onConnect);
-  ASSERT_NOT_NULL(handler->onDisconnect);
-  ASSERT_NOT_NULL(handler->onHeader);
-  ASSERT_NOT_NULL(handler->onBody);
-
-  VALK_PASS();
-}
-
-void test_demo_handler_is_singleton(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_http2_handler_t *h1 = valk_aio_http2_demo_handler();
-  valk_http2_handler_t *h2 = valk_aio_http2_demo_handler();
-  ASSERT_EQ((void*)h1, (void*)h2);
-
-  VALK_PASS();
-}
-
 int main(void) {
   valk_mem_init_malloc();
   valk_aio_alloc_init();
@@ -436,8 +413,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_aio_get_name_null", test_aio_get_name_null);
   valk_testsuite_add_test(suite, "test_aio_set_name_null", test_aio_set_name_null);
   valk_testsuite_add_test(suite, "test_aio_is_shutting_down_null", test_aio_is_shutting_down_null);
-  valk_testsuite_add_test(suite, "test_demo_handler_not_null", test_demo_handler_not_null);
-  valk_testsuite_add_test(suite, "test_demo_handler_is_singleton", test_demo_handler_is_singleton);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

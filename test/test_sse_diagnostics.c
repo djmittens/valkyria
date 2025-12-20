@@ -1160,6 +1160,20 @@ void test_sse_diag_null_args(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_sse_state_accessors_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  bool closing = valk_aio_http_connection_closing(NULL);
+  VALK_TEST_ASSERT(closing == true, "NULL handle should return true (closing)");
+
+  struct valk_sse_diag_state *state = valk_aio_get_sse_state(NULL);
+  VALK_TEST_ASSERT(state == NULL, "NULL handle should return NULL state");
+
+  valk_aio_set_sse_state(NULL, NULL);
+
+  VALK_PASS();
+}
+
 void test_real_aio_snapshot_collect(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -1378,6 +1392,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_sse_registry_null_args", test_sse_registry_null_args);
   valk_testsuite_add_test(suite, "test_sse_registry_with_aio", test_sse_registry_with_aio);
   valk_testsuite_add_test(suite, "test_sse_diag_null_args", test_sse_diag_null_args);
+  valk_testsuite_add_test(suite, "test_sse_state_accessors_null", test_sse_state_accessors_null);
 #else
   valk_testsuite_add_test(suite, "test_sse_disabled", test_sse_disabled);
 #endif

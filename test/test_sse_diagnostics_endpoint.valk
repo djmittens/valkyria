@@ -1,0 +1,64 @@
+(load "src/prelude.valk")
+(load "src/modules/aio/debug.valk")
+
+(def {TEST_PORT} 8497)
+(def {aio} (aio/start))
+(def {test-passed} 0)
+(def {handler-called} 0)
+
+(def {wrapped-handler}
+  (\ {req} {
+    (= {path} (plist/get req :path))
+    (if (== path "/debug/diagnostics/memory")
+      {(do
+        (def {handler-called} 1)
+        (println "Handler called for /debug/diagnostics/memory")
+      )}
+      {nil}
+    )
+    ((aio/debug-handler aio) req)
+  }))
+
+(println "")
+(println "=== SSE Diagnostics Endpoint Test ===")
+(println "")
+(printf "Starting server on port %d\n" TEST_PORT)
+(http2/server-listen aio TEST_PORT wrapped-handler)
+
+(aio/schedule aio 100 (\ {} {
+  (println "Requesting /debug/diagnostics/memory endpoint...")
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/diagnostics/memory" (\ {resp} {
+    (println "Client callback received (SSE stream)")
+  }))
+}))
+
+(aio/schedule aio 500 (\ {} {
+  (if (== handler-called 1)
+    {(do
+      (println "")
+      (println "PASS: SSE diagnostics handler was called")
+      (def {test-passed} 1)
+      (exit 0)
+    )}
+    {nil}
+  )
+}))
+
+(aio/schedule aio 2000 (\ {} {
+  (if (== test-passed 1)
+    {(exit 0)}
+    {(do
+      (println "")
+      (printf "Handler called: %d\n" handler-called)
+      (println "=== Test Failed (handler not called) ===")
+      (exit 1)
+    )}
+  )
+}))
+
+(aio/schedule aio 5000 (\ {} {
+  (println "TIMEOUT!")
+  (exit 1)
+}))
+
+(aio/run aio)

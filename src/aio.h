@@ -105,6 +105,14 @@ struct valk_lval_t *valk_http2_client_request_impl(struct valk_lenv_t *e,
                                                     const char *path,
                                                     struct valk_lval_t *callback);
 
+// HTTP/2 client request with custom headers
+struct valk_lval_t *valk_http2_client_request_with_headers_impl(struct valk_lenv_t *e,
+                                                    valk_aio_system_t *sys,
+                                                    const char *host, int port,
+                                                    const char *path,
+                                                    struct valk_lval_t *headers,
+                                                    struct valk_lval_t *callback);
+
 // Top-level timer scheduling (no HTTP context required)
 struct valk_lval_t *valk_aio_schedule(valk_aio_system_t *sys, uint64_t delay_ms,
                                        struct valk_lval_t *callback,
@@ -413,10 +421,6 @@ valk_future *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
                                    void *lisp_handler,
                                    valk_http_server_config_t *config);
 
-/// @brief Get a demo HTTP/2 handler that returns "Hello from Valk!"
-/// @return Pointer to a static demo handler
-valk_http2_handler_t *valk_aio_http2_demo_handler(void);
-
 /// @brief Set a Lisp handler function for HTTP/2 requests
 /// @param srv The HTTP/2 server
 /// @param handler_fn Lisp lambda (GC heap allocated) with signature (lambda {req k} ...)
@@ -560,3 +564,58 @@ struct valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, uint64_t delay_ms,
 
 // Global active AIO system (set by valk_aio_start, cleared by valk_aio_stop)
 extern valk_aio_system_t* valk_aio_active_system;
+
+// ============================================================================
+// Test Helpers - Functions exposed for unit testing internal state
+// ============================================================================
+
+// Get current backpressure list size
+size_t valk_aio_test_get_backpressure_list_size(void);
+
+// Get pending stream queue count
+size_t valk_aio_test_get_pending_stream_count(void);
+
+// Force trigger backpressure timer callback (for testing timeout logic)
+void valk_aio_test_trigger_backpressure_timer(valk_aio_system_t* sys);
+
+// Check if a connection is in the backpressure list
+bool valk_aio_test_is_connection_backpressured(valk_aio_handle_t* conn);
+
+// Close all SSE streams on a connection (exposed for testing cleanup paths)
+void valk_sse_close_all_streams(valk_aio_handle_t* conn);
+
+// SSE state accessors (used by SSE diagnostics module)
+bool valk_aio_http_connection_closing(valk_aio_handle_t* handle);
+struct valk_sse_diag_state;
+struct valk_sse_diag_state* valk_aio_get_sse_state(valk_aio_handle_t* handle);
+void valk_aio_set_sse_state(valk_aio_handle_t* handle, struct valk_sse_diag_state* state);
+
+// Set backpressure list size directly (for testing limit behavior)
+void valk_aio_test_set_backpressure_list_size(size_t size);
+
+// Trigger backpressure resume logic
+void valk_aio_test_backpressure_try_resume(void);
+
+// Add/remove connection from backpressure list (for testing)
+void valk_aio_test_add_to_backpressure_list(valk_aio_handle_t* conn);
+void valk_aio_test_remove_from_backpressure_list(valk_aio_handle_t* conn);
+
+// Pending stream test helpers
+// Create a mock pending stream and add to queue (returns opaque pointer for removal)
+void* valk_aio_test_create_pending_stream(valk_aio_system_t* sys);
+// Simulate client RST_STREAM by removing pending stream from queue
+void valk_aio_test_remove_pending_stream(valk_aio_system_t* sys, void* pending_stream);
+// Get pending stream queue head (for verification)
+void* valk_aio_test_get_pending_stream_head(void);
+// Add a header to a pending stream (for testing header copy path)
+bool valk_aio_test_pending_stream_add_header(void* pending_stream, const char* name, const char* value);
+
+// TCP buffer slab test helpers
+// Exhaust TCP buffer slab by acquiring all items (returns count acquired)
+size_t valk_aio_test_exhaust_tcp_buffers(valk_aio_system_t* sys);
+// Release all held TCP buffer test items
+void valk_aio_test_release_tcp_buffers(valk_aio_system_t* sys);
+// Simulate EOF on a connection (triggers EOF handling path)
+void valk_aio_test_simulate_eof(valk_aio_handle_t* conn);
+// Get connection handle from HTTP2 client
+valk_aio_handle_t* valk_aio_test_get_client_connection(valk_aio_http2_client* client);

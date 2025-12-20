@@ -654,24 +654,6 @@ static void test_connect_with_hostname(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-static void test_demo_handler(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_http2_handler_t *demo = valk_aio_http2_demo_handler();
-  ASSERT_NOT_NULL(demo);
-  ASSERT_NOT_NULL(demo->onConnect);
-  ASSERT_NOT_NULL(demo->onDisconnect);
-  ASSERT_NOT_NULL(demo->onHeader);
-  ASSERT_NOT_NULL(demo->onBody);
-
-  demo->onConnect(NULL, NULL);
-  demo->onDisconnect(NULL, NULL);
-  demo->onHeader(NULL, NULL, 0, NULL, NULL);
-  demo->onBody(NULL, NULL, 0, 0, NULL);
-
-  VALK_PASS();
-}
-
 static void test_null_aio_system_accessors(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -1052,6 +1034,8 @@ static void test_many_headers(VALK_TEST_ARGS()) {
       da_add(&req->headers, h);
     }
   }
+
+  ASSERT_EQ(req->headers.count, 20);
 
   valk_future *fres = valk_aio_http2_request_send(req, client);
   valk_arc_box *res = valk_future_await(fres);
@@ -2464,7 +2448,6 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_concurrent_streams_same_connection", test_concurrent_streams_same_connection);
   valk_testsuite_add_test(suite, "test_production_config", test_production_config);
   valk_testsuite_add_test(suite, "test_connect_with_hostname", test_connect_with_hostname);
-  valk_testsuite_add_test(suite, "test_demo_handler", test_demo_handler);
   valk_testsuite_add_test(suite, "test_null_aio_system_accessors", test_null_aio_system_accessors);
 #ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_null_metrics_accessors", test_null_metrics_accessors);

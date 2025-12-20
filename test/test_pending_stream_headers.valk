@@ -1,0 +1,95 @@
+; Test pending stream header buffering and copy paths
+
+(load "src/prelude.valk")
+
+(def {TEST_PORT} 8502)
+
+; Use minimal arena pool to force pending streams
+(def {aio} (aio/start {
+  :max-connections 8
+  :arena-pool-size 2
+  :arena-size 1048576
+  :pending-stream-pool-size 16
+}))
+
+(def {custom-headers-received} 0)
+
+; Helper to check if header list contains x-test-header
+(fun {has-test-header headers}
+  {if (nil? headers)
+    {0}
+    {if (== (head (head headers)) "x-test-header")
+      {1}
+      {has-test-header (tail headers)}}})
+
+; Handler that sleeps LONG to hold arena
+(def {handler}
+  (\ {req} {
+    (= {path} (plist/get req :path))
+    (= {headers} (plist/get req :headers))
+    
+    (if (== (has-test-header headers) 1)
+      {(do
+        (def {custom-headers-received} (+ custom-headers-received 1))
+        (printf "  Custom header found for %s (total: %d)\n" path custom-headers-received)
+      )}
+      {nil}
+    )
+    
+    ; Sleep 500ms to hold the arena - forces pending streams
+    (aio/then (aio/sleep 500) (\ {_} {
+      {:status "200" :body (str "OK: " path)}
+    }))
+  }))
+
+(println "")
+(println "=== Pending Stream Headers Test ===")
+(println "")
+(http2/server-listen aio TEST_PORT handler)
+
+; Phase 1: Start initial requests to consume arenas
+(aio/schedule aio 50 (\ {} {
+  (println "Phase 1: Consuming arenas...")
+  
+  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/r1" 
+    {{"x-test-header" "v1"}} (\ {r} {}))
+  
+  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/r2"
+    {{"x-test-header" "v2"}} (\ {r} {}))
+}))
+
+; Phase 2: Send more requests while arenas are DEFINITELY busy
+; With 500ms sleep, arenas from phase 1 are still held
+(aio/schedule aio 200 (\ {} {
+  (println "Phase 2: Sending while arenas busy (should queue as pending)...")
+  
+  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/p1"
+    {{"x-test-header" "p1"}} (\ {r} {}))
+  
+  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/p2"
+    {{"x-test-header" "p2"}} (\ {r} {}))
+    
+  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/p3"
+    {{"x-test-header" "p3"}} (\ {r} {}))
+}))
+
+; Check results
+(aio/schedule aio 4000 (\ {} {
+  (println "")
+  (printf "Custom headers received: %d\n" custom-headers-received)
+  
+  (if (>= custom-headers-received 4)
+    {(do
+      (println "PASS: Pending stream header paths exercised")
+      (exit 0))}
+    {(do
+      (println "FAIL: Not enough headers received")
+      (exit 1))})
+}))
+
+(aio/schedule aio 10000 (\ {} {
+  (println "TIMEOUT!")
+  (exit 1)
+}))
+
+(aio/run aio)

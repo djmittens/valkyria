@@ -4428,6 +4428,41 @@ static valk_lval_t* valk_builtin_http2_client_request(valk_lenv_t* e,
   return valk_http2_client_request_impl(e, sys, host, port, path, callback);
 }
 
+// http2/client-request-with-headers: (http2/client-request-with-headers aio host port path headers callback) -> nil
+// Makes an HTTP/2 GET request with custom headers and calls callback with the response
+// headers: qexpr of header pairs, e.g., {{"user-agent" "MyClient/1.0"} {"accept" "application/json"}}
+static valk_lval_t* valk_builtin_http2_client_request_with_headers(valk_lenv_t* e,
+                                                                    valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 6);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "First argument must be aio_system");
+
+  valk_lval_t* host_arg = valk_lval_list_nth(a, 1);
+  LVAL_ASSERT_TYPE(a, host_arg, LVAL_STR);
+
+  valk_lval_t* port_arg = valk_lval_list_nth(a, 2);
+  LVAL_ASSERT_TYPE(a, port_arg, LVAL_NUM);
+
+  valk_lval_t* path_arg = valk_lval_list_nth(a, 3);
+  LVAL_ASSERT_TYPE(a, path_arg, LVAL_STR);
+
+  valk_lval_t* headers_arg = valk_lval_list_nth(a, 4);
+  LVAL_ASSERT_TYPE(a, headers_arg, LVAL_QEXPR);
+
+  valk_lval_t* callback = valk_lval_list_nth(a, 5);
+  LVAL_ASSERT_TYPE(a, callback, LVAL_FUN);
+
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  const char* host = host_arg->str;
+  int port = (int)port_arg->num;
+  const char* path = path_arg->str;
+
+  return valk_http2_client_request_with_headers_impl(e, sys, host, port, path, headers_arg, callback);
+}
+
 // aio/schedule: (aio/schedule aio delay-ms callback) -> nil
 // Schedules a callback to run after delay-ms milliseconds.
 // Works at the top level (outside request handlers).
@@ -4666,6 +4701,8 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   // HTTP/2 Client (real implementation)
   valk_lenv_put_builtin(env, "http2/client-request",
                         valk_builtin_http2_client_request);
+  valk_lenv_put_builtin(env, "http2/client-request-with-headers",
+                        valk_builtin_http2_client_request_with_headers);
 
 #ifdef VALK_METRICS_ENABLED
   // SSE (Server-Sent Events) builtins (from aio_sse_builtins.c)

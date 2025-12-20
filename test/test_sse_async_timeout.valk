@@ -1,0 +1,70 @@
+(load "src/prelude.valk")
+(load "src/modules/aio/sse.valk")
+
+(def {TEST_PORT} 8498)
+(def {aio} (aio/start))
+(def {test-passed} 0)
+(def {sse-stream-created} 0)
+(def {sse-stream-closed} 0)
+
+(def {handler}
+  (\ {req} {
+    (= {path} (plist/get req :path))
+    (if (== path "/sse-test")
+      {(do
+        (= {stream} (sse/open))
+        (def {sse-stream-created} 1)
+        (sse/send stream "test message")
+        (aio/schedule aio 100 (\ {} {
+          (sse/close stream)
+          (def {sse-stream-closed} 1)
+        }))
+        :deferred
+      )}
+      {`{:status "200" :body "OK"}}
+    )
+  }))
+
+(println "")
+(println "=== SSE Async Timeout Test ===")
+(println "")
+(printf "Starting server on port %d\n" TEST_PORT)
+(http2/server-listen aio TEST_PORT handler)
+
+(aio/schedule aio 100 (\ {} {
+  (println "Requesting /sse-test endpoint...")
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-test" (\ {resp} {
+    (println "Client callback received")
+  }))
+}))
+
+(aio/schedule aio 500 (\ {} {
+  (if (and (== sse-stream-created 1) (== sse-stream-closed 1))
+    {(do
+      (println "")
+      (println "PASS: SSE stream was created and closed")
+      (def {test-passed} 1)
+      (exit 0)
+    )}
+    {nil}
+  )
+}))
+
+(aio/schedule aio 2000 (\ {} {
+  (if (== test-passed 1)
+    {(exit 0)}
+    {(do
+      (println "")
+      (printf "Stream created: %d, closed: %d\n" sse-stream-created sse-stream-closed)
+      (println "=== Test Failed ===")
+      (exit 1)
+    )}
+  )
+}))
+
+(aio/schedule aio 5000 (\ {} {
+  (println "TIMEOUT!")
+  (exit 1)
+}))
+
+(aio/run aio)
