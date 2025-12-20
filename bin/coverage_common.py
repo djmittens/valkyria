@@ -296,9 +296,18 @@ def parse_gcov_files(build_dir: Path, source_root: Path, report: CoverageReport)
 
 
 def parse_gcov_output(gcov_path: Path, report: CoverageReport, source_root: Path):
-    """Parse a .gcov file and add to report."""
+    """Parse a .gcov file and add to report.
+    
+    Respects LCOV exclusion markers:
+    - LCOV_EXCL_LINE: Exclude single line
+    - LCOV_EXCL_START/STOP: Exclude region
+    - LCOV_EXCL_BR_LINE: Exclude branches on single line
+    - LCOV_EXCL_BR_START/STOP: Exclude branches in region
+    """
     source_file = None
     current_line_no = 0
+    in_excl_region = False
+    in_br_excl_region = False
     
     with open(gcov_path) as f:
         for line in f:
@@ -315,8 +324,41 @@ def parse_gcov_output(gcov_path: Path, report: CoverageReport, source_root: Path
             
             fc = report.files[source_file]
             
+            # Check for LCOV exclusion markers in the source portion
+            source_content = ""
+            match_check = re.match(r'\s*(\d+|-|#####):\s*(\d+):(.*)$', line)
+            if match_check:
+                source_content = match_check.group(3)
+                
+                # Check for region markers
+                if "LCOV_EXCL_START" in source_content:
+                    in_excl_region = True
+                if "LCOV_EXCL_STOP" in source_content:
+                    in_excl_region = False
+                if "LCOV_EXCL_BR_START" in source_content:
+                    in_br_excl_region = True
+                if "LCOV_EXCL_BR_STOP" in source_content:
+                    in_br_excl_region = False
+            
+            # Check for single-line exclusion
+            excl_line = "LCOV_EXCL_LINE" in source_content
+            excl_br_line = "LCOV_EXCL_BR_LINE" in source_content
+            
+            # Skip this line entirely if in exclusion region or has line marker
+            if in_excl_region or excl_line:
+                # Still need to track line number for branch association
+                if match_check:
+                    line_no_str = match_check.group(2)
+                    if line_no_str != "0":
+                        current_line_no = int(line_no_str)
+                continue
+            
             branch_match = re.match(r'branch\s+(\d+)\s+(taken\s+(\d+)|never executed)', line)
             if branch_match:
+                # Skip branches if in branch exclusion region or line has branch exclusion
+                if in_br_excl_region or excl_br_line:
+                    continue
+                    
                 branch_id = int(branch_match.group(1))
                 taken = int(branch_match.group(3)) if branch_match.group(3) else 0
                 key = (current_line_no, branch_id)

@@ -974,6 +974,10 @@ static valk_lval_t* valk_lval_eval_recursive(valk_lenv_t* env, valk_lval_t* lval
   // Record coverage for symbols since evaluating a symbol IS executing code on that line
   if (LVAL_TYPE(lval) == LVAL_SYM) {
     VALK_COVERAGE_RECORD_LVAL(lval);
+    // Keyword symbols (starting with :) are self-evaluating - return as-is
+    if (lval->str[0] == ':') {
+      return lval;
+    }
     return valk_lenv_get(env, lval);
   }
 
@@ -3774,6 +3778,15 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
 
     if ((val = valk_plist_get(config_map, ":max-request-body-size")) && LVAL_TYPE(val) == LVAL_NUM)
       config.max_request_body_size = (size_t)val->num;
+
+    if ((val = valk_plist_get(config_map, ":backpressure-timeout-ms")) && LVAL_TYPE(val) == LVAL_NUM)
+      config.backpressure_timeout_ms = (uint32_t)val->num;
+
+    if ((val = valk_plist_get(config_map, ":backpressure-list-max")) && LVAL_TYPE(val) == LVAL_NUM)
+      config.backpressure_list_max = (uint32_t)val->num;
+
+    if ((val = valk_plist_get(config_map, ":pending-stream-pool-size")) && LVAL_TYPE(val) == LVAL_NUM)
+      config.pending_stream_pool_size = (uint32_t)val->num;
 
     VALK_WITH_ALLOC(&valk_malloc_allocator) {
       sys = valk_aio_start_with_config(&config);

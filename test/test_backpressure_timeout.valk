@@ -1,0 +1,135 @@
+; Backpressure Timeout Test
+; Tests the backpressure timer timeout path by:
+; 1. Exhausting buffer pool
+; 2. Creating connections that get backpressured
+; 3. NOT releasing buffers, so connections timeout and get closed
+;
+; This exercises:
+;   - __backpressure_timer_cb timeout path (lines 502-524)
+
+(load "src/prelude.valk")
+
+(def {TEST_PORT} 8493)
+
+; Short timeout (minimum allowed is 1000ms) and small buffer pool
+(def {aio} (aio/start {
+  :max-connections 10
+  :tcp-buffer-pool-size 16
+  :backpressure-timeout-ms 1000
+}))
+
+(def {test-passed} 0)
+(def {saw-backpressure} 0)
+(def {saw-timeout} 0)
+
+; Helper to print pool stats
+(fun {print-pool-stats label} {
+  (= {stats} (aio/pool-stats aio))
+  (= {tcp} (plist/get stats (head {:tcp-buffers})))
+  (= {bp} (plist/get stats (head {:backpressure})))
+  (= {avail} (plist/get tcp (head {:available})))
+  (= {total} (plist/get tcp (head {:total})))
+  (= {waiting} (plist/get bp (head {:connections-waiting})))
+  (printf "[%s] TCP: %d/%d available, Backpressure: %d waiting\n"
+    label avail total waiting)
+  waiting
+})
+
+; Handler that sleeps long enough for timeout to occur
+(def {handler}
+  (\ {req} {
+    (aio/then (aio/sleep 5000) (\ {_} {{:status "200" :body "OK"}}))
+  }))
+
+(println "")
+(println "=== Backpressure Timeout Test ===")
+(println "")
+(printf "Config: tcp-buffer-pool-size=16, backpressure-timeout=1000ms\n")
+(printf "Starting server on port %d\n" TEST_PORT)
+(http2/server-listen aio TEST_PORT handler)
+
+; Print initial state
+(aio/schedule aio 50 (\ {} {
+  (print-pool-stats "Initial")
+}))
+
+; Phase 1: Exhaust most buffers to trigger backpressure
+(aio/schedule aio 100 (\ {} {
+  (println "")
+  (println "Phase 1: Exhausting buffer pool...")
+  (= {exhausted} (aio/exhaust-buffers aio 10))
+  (printf "  Acquired %d buffers from pool\n" exhausted)
+  (print-pool-stats "After exhaust")
+}))
+
+; Phase 2: Start requests that will get backpressured
+(aio/schedule aio 200 (\ {} {
+  (println "")
+  (println "Phase 2: Starting requests (should trigger backpressure)...")
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/" (\ {r} {nil}))
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/" (\ {r} {nil}))
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/" (\ {r} {nil}))
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/" (\ {r} {nil}))
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/" (\ {r} {nil}))
+}))
+
+; Check if backpressure is applied
+(aio/schedule aio 400 (\ {} {
+  (= {waiting} (print-pool-stats "During pressure"))
+  (if (> waiting 0)
+    {(do
+      (printf "  -> %d connections are backpressured, keeping buffers held for timeout...\n" waiting)
+      (def {saw-backpressure} 1))}
+    {(println "  -> No connections backpressured")})
+}))
+
+; Phase 3: Wait for timeout to occur (1000ms + margin from when backpressure started)
+; Backpressure timer runs every 100ms
+; Backpressure starts at ~200ms + connection time, so need ~200+1000+margin = 1500ms
+; We DON'T release buffers, so connections should timeout and close
+(aio/schedule aio 2000 (\ {} {
+  (println "")
+  (println "Phase 3: After timeout period (1000ms)...")
+  (= {waiting} (print-pool-stats "After timeout period"))
+  (if (< waiting saw-backpressure)
+    {(do
+      (println "  -> Some connections timed out and were closed!")
+      (def {saw-timeout} 1))}
+    {(printf "  -> Connections still waiting: %d\n" waiting)})
+}))
+
+; Final check and cleanup
+(aio/schedule aio 3000 (\ {} {
+  (println "")
+  (println "=== Results ===")
+  (= {waiting} (print-pool-stats "Final"))
+  
+  ; Release all held buffers
+  (= {released} (aio/release-all-buffers aio))
+  (printf "Released %d held buffers\n" released)
+  
+  ; Test passes if:
+  ; 1. We saw backpressure, AND
+  ; 2. Either saw timeout OR waiting is now 0
+  (if (and (== saw-backpressure 1) (or (== saw-timeout 1) (== waiting 0)))
+    {(do
+      (println "")
+      (println "PASS: Backpressure timeout test completed")
+      (def {test-passed} 1))}
+    {(do
+      (println "")
+      (if (== saw-backpressure 0)
+        {(println "FAIL: No backpressure detected")}
+        {(printf "FAIL: Timeout not triggered (still %d waiting)\n" waiting)}))})
+  
+  (if (== test-passed 1) {(exit 0)} {(exit 1)})
+}))
+
+; Timeout
+(aio/schedule aio 10000 (\ {} {
+  (println "TIMEOUT!")
+  (aio/release-all-buffers aio)
+  (exit 1)
+}))
+
+(aio/run aio)

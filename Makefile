@@ -204,6 +204,8 @@ define run_tests_valk
 	$(1)/valk test/test_async_http_handlers.valk
 	$(1)/valk test/test_aio_config.valk
 	$(1)/valk test/test_backpressure.valk
+	$(1)/valk test/test_backpressure_recovery.valk
+	$(1)/valk test/test_pending_streams.valk
 	$(1)/valk test/test_concurrent_requests.valk
 
 	$(1)/valk test/stress/test_gc_stress.valk

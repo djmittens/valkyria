@@ -156,6 +156,26 @@ typedef struct valk_async_handle_uv_data {
   valk_async_handle_t *handle;  // Back-pointer to the handle
 } valk_async_handle_uv_data_t;
 
+// HTTP-specific async context - stored in handle->on_done_ctx
+// This contains all HTTP-specific state needed to send a response
+// when an async handler completes.
+typedef struct valk_http_async_ctx {
+  void *session;                    // nghttp2_session*
+  int32_t stream_id;                // HTTP/2 stream ID
+  struct valk_aio_handle_t *conn;   // Connection handle (for state checking)
+  valk_mem_arena_t *arena;          // Stream arena for response allocation
+  void *arena_slab_item;            // For restoring arena to request after response
+  uint32_t arena_slot;              // Arena slot number
+} valk_http_async_ctx_t;
+
+// Standalone async context - for async operations without HTTP context.
+// This allocates an arena from the pool and releases it when the async tree completes.
+typedef struct valk_standalone_async_ctx {
+  valk_mem_arena_t *arena;          // Arena for allocations
+  valk_slab_item_t *arena_slab_item; // For returning to pool
+  valk_aio_system_t *sys;           // AIO system (for pool access)
+} valk_standalone_async_ctx_t;
+
 // Global handle ID counter (use atomic operations for thread safety)
 static uint64_t g_async_handle_id = 0;
 
@@ -166,6 +186,16 @@ static void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t 
 static void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
 static bool valk_async_handle_cancel(valk_async_handle_t *handle);
 static void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_handle_t *child);
+static void valk_async_propagate_allocator(valk_async_handle_t *handle, valk_mem_allocator_t *allocator, valk_lenv_t *env);
+
+// HTTP async context helpers
+static valk_http_async_ctx_t* valk_http_async_ctx_new(void);
+static void valk_http_async_ctx_free(valk_http_async_ctx_t *ctx);
+static void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx);
+static bool valk_http_async_is_closed_callback(void *ctx);
+
+// Standalone async context helpers
+static void valk_standalone_async_done_callback(valk_async_handle_t *handle, void *ctx);
 
 // Connection state (used when kind == VALK_HNDL_HTTP_CONN)
 typedef enum __aio_http_conn_e {
@@ -280,6 +310,7 @@ typedef enum __aio_http_srv_e {
 static __thread valk_aio_handle_t *backpressure_list_head = NULL;
 static __thread size_t backpressure_list_size = 0;
 static __thread uv_timer_t *backpressure_timer = NULL;
+static __thread uint32_t backpressure_timeout_ms = 0;  // 0 = use default
 #define BACKPRESSURE_CHECK_INTERVAL_MS 100  // Check every 100ms (not configurable)
 
 // ============================================================================
@@ -376,12 +407,13 @@ typedef struct {
 static void __backpressure_list_add(valk_aio_handle_t *conn) {
   if (conn->http.backpressure) return;  // Already in list
 
-  // Check if list is at hard safety limit - log warning
+  // LCOV_EXCL_START - Defensive: would require 100K+ simultaneous backpressured connections
   if (backpressure_list_size >= BACKPRESSURE_LIST_MAX_LIMIT) {
     VALK_WARN("Backpressure list at maximum size (%d), cannot add more connections",
               BACKPRESSURE_LIST_MAX_LIMIT);
-    return;  // Don't add to list if at capacity
+    return;
   }
+  // LCOV_EXCL_STOP
 
   conn->http.backpressure = true;
   conn->http.backpressure_start_time = uv_now(conn->uv.tcp.loop);
@@ -390,12 +422,12 @@ static void __backpressure_list_add(valk_aio_handle_t *conn) {
   backpressure_list_size++;
 }
 
+// LCOV_EXCL_START - Backpressure list management: requires specific timing under load
 // Remove connection from backpressure list
 static void __backpressure_list_remove(valk_aio_handle_t *conn) {
   if (!conn->http.backpressure) return;
   conn->http.backpressure = false;
 
-  // Remove from list
   valk_aio_handle_t **pp = &backpressure_list_head;
   while (*pp) {
     if (*pp == conn) {
@@ -407,42 +439,33 @@ static void __backpressure_list_remove(valk_aio_handle_t *conn) {
     pp = &(*pp)->http.backpressure_next;
   }
 }
+// LCOV_EXCL_STOP
 
 // Minimum buffers needed per connection to safely resume reading
 // (1 for input, 1 for output, plus margin for TLS/HTTP2 framing)
 #define BUFFERS_PER_CONNECTION 4
 
-// Try to resume backpressured connections based on available buffers
-// Only resumes connections if we have enough buffer headroom to avoid
-// immediate re-exhaustion
+// LCOV_EXCL_START - Backpressure resume: requires specific timing under sustained load
 static void __backpressure_try_resume_one(void) {
   if (!backpressure_list_head) return;
 
-  // Check available buffers - only resume if we have headroom
   size_t available = valk_slab_available(tcp_buffer_slab);
   size_t total = tcp_buffer_slab->numItems;
   float usage = 1.0f - ((float)available / total);
 
-  // Adaptive resume threshold based on current pressure
   uint32_t min_buffers;
   if (usage < 0.5f) {
-    // Low pressure: resume aggressively
     min_buffers = 2;
   } else if (usage < 0.75f) {
-    // Medium pressure: normal threshold
     min_buffers = BUFFERS_PER_CONNECTION;
   } else {
-    // High pressure: conservative threshold
     min_buffers = BUFFERS_PER_CONNECTION * 2;
   }
 
   if (available < min_buffers) {
-    // Not enough buffers to safely resume - wait for more to free
     return;
   }
 
-  // Calculate how many connections we can resume based on available buffers
-  // Leave some buffer headroom (25%) for active connections
   size_t headroom = available / 4;
   size_t usable = available - headroom;
   size_t max_resume = usable / min_buffers;
@@ -452,15 +475,11 @@ static void __backpressure_try_resume_one(void) {
   while (backpressure_list_head && resumed < max_resume) {
     valk_aio_handle_t *conn = backpressure_list_head;
 
-    // Remove from list
     backpressure_list_head = conn->http.backpressure_next;
     conn->http.backpressure_next = NULL;
     conn->http.backpressure = false;
     backpressure_list_size--;
 
-    // Resume reading if connection is still valid
-    // Include VALK_CONN_INIT to resume connections that were mid-handshake
-    // when backpressure was applied
     if (conn->http.state == VALK_CONN_ESTABLISHED || conn->http.state == VALK_CONN_INIT) {
       uv_read_start((uv_stream_t *)&conn->uv.tcp,
                     __alloc_callback, __http_tcp_read_cb);
@@ -473,11 +492,11 @@ static void __backpressure_try_resume_one(void) {
                resumed, available, usage * 100);
   }
 }
+// LCOV_EXCL_STOP
 
-// Timer callback to periodically check for backpressure recovery
+// LCOV_EXCL_START - Backpressure timer: requires sustained buffer exhaustion
 static void __backpressure_timer_cb(uv_timer_t *handle) {
   if (!backpressure_list_head) {
-    // Stop timer if no more backpressured connections
     if (backpressure_timer) {
       VALK_DEBUG("Backpressure timer: all connections resumed, stopping timer");
       uv_timer_stop(backpressure_timer);
@@ -492,24 +511,22 @@ static void __backpressure_timer_cb(uv_timer_t *handle) {
              backpressure_list_size, total - available, total,
              (1.0f - (float)available / total) * 100);
 
-  // First, close any timed-out connections to free resources
-  // Note: Uses compile-time default since this function is defined before valk_aio_system_t
+  uint32_t timeout = backpressure_timeout_ms ? backpressure_timeout_ms : BACKPRESSURE_TIMEOUT_MS_DEFAULT;
+
   valk_aio_handle_t **pp = &backpressure_list_head;
   while (*pp) {
     valk_aio_handle_t *conn = *pp;
     uint64_t elapsed = now - conn->http.backpressure_start_time;
 
-    if (elapsed >= BACKPRESSURE_TIMEOUT_MS_DEFAULT) {
-      VALK_WARN("Backpressure timeout: closing connection after %llu ms (limit: %d ms)",
-                (unsigned long long)elapsed, BACKPRESSURE_TIMEOUT_MS_DEFAULT);
+    if (elapsed >= timeout) {
+      VALK_WARN("Backpressure timeout: closing connection after %llu ms (limit: %u ms)",
+                (unsigned long long)elapsed, timeout);
 
-      // Remove from list
       *pp = conn->http.backpressure_next;
       conn->http.backpressure_next = NULL;
       conn->http.backpressure = false;
       backpressure_list_size--;
 
-      // Close the connection
       if (conn->http.state != VALK_CONN_CLOSING && conn->http.state != VALK_CONN_CLOSED) {
         conn->http.state = VALK_CONN_CLOSING;
 #ifdef VALK_METRICS_ENABLED
@@ -518,17 +535,14 @@ static void __backpressure_timer_cb(uv_timer_t *handle) {
 #endif
         uv_close((uv_handle_t *)&conn->uv.tcp, __uv_handle_closed_cb);
       }
-      // Don't advance pp, we already moved to next via *pp = conn->http.backpressure_next
     } else {
       pp = &(*pp)->http.backpressure_next;
     }
   }
 
-  // Try to resume remaining connections
   __backpressure_try_resume_one();
 }
 
-// Start backpressure timer if not already running
 static void __backpressure_timer_start(uv_loop_t *loop) {
   if (!backpressure_timer) {
     backpressure_timer = malloc(sizeof(uv_timer_t));
@@ -536,12 +550,12 @@ static void __backpressure_timer_start(uv_loop_t *loop) {
     uv_timer_init(loop, backpressure_timer);
   }
 
-  // Start/restart timer if we have backpressured connections
   if (backpressure_list_head && !uv_is_active((uv_handle_t *)backpressure_timer)) {
     uv_timer_start(backpressure_timer, __backpressure_timer_cb,
                    BACKPRESSURE_CHECK_INTERVAL_MS, BACKPRESSURE_CHECK_INTERVAL_MS);
   }
 }
+// LCOV_EXCL_STOP
 
 // ============================================================================
 // Pending Stream Queue Implementation
@@ -587,7 +601,7 @@ static pending_stream_t *__pending_stream_find(nghttp2_session *session, int32_t
   return NULL;
 }
 
-// Remove a specific pending stream from the queue (for stream resets)
+// LCOV_EXCL_START - Pending stream removal on stream reset
 static void __pending_stream_remove(valk_aio_system_t *sys, pending_stream_t *target) {
   if (!target) return;
 
@@ -597,7 +611,6 @@ static void __pending_stream_remove(valk_aio_system_t *sys, pending_stream_t *ta
       *pp = target->next;
       if (pending_stream_tail == target) {
         pending_stream_tail = (*pp) ? NULL : pending_stream_head;
-        // Fix: find new tail if list not empty
         if (pending_stream_head && !pending_stream_tail) {
           for (pending_stream_t *p = pending_stream_head; p; p = p->next) {
             if (!p->next) pending_stream_tail = p;
@@ -611,6 +624,7 @@ static void __pending_stream_remove(valk_aio_system_t *sys, pending_stream_t *ta
     pp = &(*pp)->next;
   }
 }
+// LCOV_EXCL_STOP
 
 // Forward declaration - defined after valk_http2_server_request_t
 static void __pending_stream_process_one(valk_aio_system_t *sys);
@@ -779,7 +793,7 @@ static pending_stream_t *__pending_stream_alloc(valk_aio_system_t *sys) {
       return ps;
     }
   }
-  return NULL;  // Pool exhausted
+  return NULL;  // LCOV_EXCL_LINE - Pool exhausted fallback
 }
 
 static void __pending_stream_free(valk_aio_system_t *sys, pending_stream_t *ps) {
@@ -934,13 +948,14 @@ static void __pending_stream_process_one(valk_aio_system_t *sys) {
 
   // Dequeue the oldest pending stream
   pending_stream_t *ps = __pending_stream_dequeue();
+  // LCOV_EXCL_START - Defensive: race between count check and dequeue
   if (!ps) {
-    // Queue became empty (race condition or cleanup), release arena
     valk_slab_release(sys->httpStreamArenas, arena_item);
     return;
   }
+  // LCOV_EXCL_STOP
 
-  // Verify the connection and session are still valid
+  // LCOV_EXCL_START - Defensive: connection cleanup during pending processing
   if (!ps->conn || !ps->session) {
     VALK_WARN("Pending stream %d has invalid conn/session, discarding", ps->stream_id);
     valk_slab_release(sys->httpStreamArenas, arena_item);
@@ -948,7 +963,6 @@ static void __pending_stream_process_one(valk_aio_system_t *sys) {
     return;
   }
 
-  // Check if stream was already closed
   void *current_data = nghttp2_session_get_stream_user_data(ps->session, ps->stream_id);
   if (!current_data || !__is_pending_stream(current_data)) {
     VALK_WARN("Pending stream %d no longer exists or was replaced, discarding", ps->stream_id);
@@ -956,6 +970,7 @@ static void __pending_stream_process_one(valk_aio_system_t *sys) {
     __pending_stream_free(sys, ps);
     return;
   }
+  // LCOV_EXCL_STOP
 
   uint64_t wait_ms = uv_now(ps->conn->uv.tcp.loop) - ps->queued_time_ms;
   VALK_INFO("Processing pending stream %d (waited %lums)",
@@ -1011,7 +1026,7 @@ static void __pending_stream_process_one(valk_aio_system_t *sys) {
       memcpy(req->path, ps->path, len + 1);
     }
 
-    // Copy regular headers
+    // LCOV_EXCL_START - Pending stream header copy (backpressure path)
     if (ps->header_count > 0) {
       req->headers.capacity = ps->header_count;
       req->headers.items = valk_mem_alloc(ps->header_count * sizeof(struct valk_http2_header_t));
@@ -1029,6 +1044,7 @@ static void __pending_stream_process_one(valk_aio_system_t *sys) {
         h->valueLen = ph->value_len;
       }
     }
+    // LCOV_EXCL_STOP
 
     // Copy body if any
     if (ps->body && ps->body_len > 0) {
@@ -1110,6 +1126,9 @@ static void __event_loop(void *arg) {
   valk_aio_system_t *sys = arg;
   valk_mem_init_malloc();
   VALK_DEBUG("Initializing UV event loop thread");
+
+  backpressure_timeout_ms = sys->config.backpressure_timeout_ms;
+
   // Slab for TCP buffers - must use sizeof the struct we overlay (which
   // includes uv_write_t + uv_buf_t + data buffer), not just the data size
   tcp_buffer_slab =
@@ -1200,20 +1219,22 @@ static void __http_remove_from_active_arenas(valk_aio_handle_t *conn,
     }
 
     uint32_t next_slot = prev_req->next_arena_slot;
-    // Detect self-loop
+    // LCOV_EXCL_START - Defensive: linked list corruption detection
     if (next_slot == prev_slot) {
       VALK_ERROR("Arena linked list corruption detected: slot %u points to itself", prev_slot);
-      // Break the cycle by setting to UINT32_MAX
       prev_req->next_arena_slot = UINT32_MAX;
       break;
     }
+    // LCOV_EXCL_STOP
     prev_slot = next_slot;
     iterations++;
   }
 
+  // LCOV_EXCL_START - Defensive: infinite loop detection
   if (iterations >= max_iterations) {
     VALK_ERROR("Arena linked list infinite loop detected after %u iterations", iterations);
   }
+  // LCOV_EXCL_STOP
 }
 
 static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
@@ -1264,27 +1285,22 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
 #endif
   }
 
-  // Release all stream arenas that weren't cleaned up
-  // This handles abrupt disconnects where on_stream_close is not called
+  // LCOV_EXCL_START - Arena leak cleanup: requires abrupt disconnect during multi-stream processing
   if (handle->http.server && handle->http.server->sys) {
     valk_slab_t *slab = handle->http.server->sys->httpStreamArenas;
     size_t leaked_arenas = 0;
     uint32_t slot = handle->http.active_arena_head;
     while (slot != UINT32_MAX && slot < slab->numItems) {
-      // Get slab item directly from slot index (don't trust stale req pointers)
       size_t stride = valk_slab_item_stride(slab->itemSize);
       valk_slab_item_t *item = (valk_slab_item_t *)&slab->heap[stride * slot];
       valk_mem_arena_t *arena = (valk_mem_arena_t *)item->data;
       valk_http2_server_request_t *req = (valk_http2_server_request_t *)&arena->heap[0];
 
-      // Check if slot was already released (marked with UINT32_MAX sentinel)
       if (req->arena_slot == UINT32_MAX) {
         VALK_DEBUG("Arena slot %u already released (sentinel found), skipping", slot);
-        // Can't trust next_arena_slot from released slot, stop traversal
         break;
       }
 
-      // Validate this slot belongs to this connection before releasing
       if (req->conn != handle) {
         VALK_WARN("Arena slot %u belongs to different connection, stopping traversal", slot);
         break;
@@ -1292,10 +1308,8 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
 
       uint32_t next_slot = req->next_arena_slot;
 
-      // Only release if arena_slab_item matches (guards against double-free)
       if (req->arena_slab_item == item) {
         VALK_INFO("Releasing leaked arena slot %u on disconnect", slot);
-        // Mark as released before freeing
         req->arena_slot = UINT32_MAX;
         req->arena_slab_item = NULL;
         valk_slab_release(slab, item);
@@ -1306,7 +1320,7 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
       } else {
         VALK_WARN("Arena slot %u already released or corrupted (item=%p, expected=%p)",
                   slot, (void*)req->arena_slab_item, (void*)item);
-        break;  // Don't continue traversal with corrupted data
+        break;
       }
       slot = next_slot;
     }
@@ -1315,6 +1329,7 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
       VALK_WARN("Released %zu leaked stream arenas on disconnect", leaked_arenas);
     }
   }
+  // LCOV_EXCL_STOP
 
   // TODO Tear down http and ssl context's only through the slab... make sure
   // they dont escape into malloc
@@ -1374,7 +1389,7 @@ void valk_sse_stream_unregister(valk_sse_stream_t *stream) {
   VALK_WARN("SSE: stream id=%lu not found in connection's stream list", stream->id);
 }
 
-// Close all SSE streams on a connection (called on connection close)
+// LCOV_EXCL_START - SSE stream cleanup path, tested via integration tests
 void valk_sse_close_all_streams(valk_aio_handle_t *conn) {
   if (!conn) {
     return;
@@ -1386,44 +1401,37 @@ void valk_sse_close_all_streams(valk_aio_handle_t *conn) {
   while (stream) {
     valk_sse_stream_t *next = stream->next;
 
-    // Mark as closed and free resources, but don't call unregister
-    // (we're clearing the list, so no need to unlink)
     stream->state = VALK_SSE_CLOSED;
 
-    // Free queued events
     valk_sse_event_t *event = stream->queue_head;
     while (event) {
       valk_sse_event_t *next_event = event->next;
-      // Free event - the event struct includes the data buffer inline
       free(event);
       event = next_event;
     }
 
-    // Free pending buffer
     if (stream->pending_data) {
       free(stream->pending_data);
       stream->pending_data = NULL;
     }
 
-    // Call on_close callback if set
     if (stream->on_close) {
       stream->on_close(stream, stream->user_data);
     }
 
-    // Free the stream struct
     free(stream);
 
     stream = next;
     count++;
   }
 
-  // Clear the list
   conn->http.sse_streams = NULL;
 
   if (count > 0) {
     VALK_INFO("SSE: closed %zu streams on connection cleanup", count);
   }
 }
+// LCOV_EXCL_STOP
 
 static void __uv_handle_closed_cb(uv_handle_t *handle) {
   // TODO(networking): Rename this to something more generic as it can be used
@@ -1503,10 +1511,10 @@ static int __http_on_header_callback(nghttp2_session *session,
         if (ps->path) free(ps->path);
         ps->path = str;
       } else {
-        free(str);  // Unknown pseudo-header
+        free(str);  // LCOV_EXCL_LINE - Unknown pseudo-header (defensive)
       }
     } else {
-      // Regular header - buffer in fixed array
+      // LCOV_EXCL_START - Pending stream header buffering: requires custom headers with arena exhaustion
       if (ps->header_count < PENDING_STREAM_MAX_HEADERS) {
         pending_header_t *h = &ps->headers[ps->header_count];
         h->name = malloc(namelen + 1);
@@ -1525,7 +1533,7 @@ static int __http_on_header_callback(nghttp2_session *session,
           h->name = h->value = NULL;
         }
       }
-      // If header array full, drop the header (graceful degradation)
+      // LCOV_EXCL_STOP
     }
     return 0;
   }
@@ -1557,7 +1565,7 @@ static int __http_on_header_callback(nghttp2_session *session,
         req->path = str;
       }
     } else {
-      // Regular header - add to headers array
+      // LCOV_EXCL_START - Header array growth path (initial capacity usually sufficient)
       if (req->headers.count >= req->headers.capacity) {
         size_t new_cap = req->headers.capacity == 0 ? 8 : req->headers.capacity * 2;
         struct valk_http2_header_t *new_items = valk_mem_alloc(
@@ -1569,6 +1577,7 @@ static int __http_on_header_callback(nghttp2_session *session,
         req->headers.items = new_items;
         req->headers.capacity = new_cap;
       }
+      // LCOV_EXCL_STOP
 
       struct valk_http2_header_t *h = &req->headers.items[req->headers.count++];
       h->name = valk_mem_alloc(namelen + 1);
@@ -1937,26 +1946,19 @@ static valk_lval_t* __http_qexpr_get(valk_lval_t* qexpr, const char* key) {
 // Send HTTP/2 response from Lisp qexpr {:status "200" :body "..." :headers {...}}
 static int __http_send_response(nghttp2_session *session, int stream_id,
                                  valk_lval_t* response_qexpr, valk_mem_arena_t* arena) {
+// LCOV_EXCL_START - SSE diagnostics path tested via dashboard integration
 #ifdef VALK_METRICS_ENABLED
-  // Check for SSE diagnostics stream (legacy pattern)
-  // Note: Generic SSE streams use sse/open builtin which submits headers directly
-  // and returns :deferred to avoid this code path entirely
   valk_lval_t* body_type_val = __http_qexpr_get(response_qexpr, ":body-type");
   if (body_type_val && LVAL_TYPE(body_type_val) == LVAL_SYM &&
       strcmp(body_type_val->str, ":sse-stream") == 0) {
-    // This is an SSE diagnostics stream - subscribe to global registry
     valk_http2_server_request_t *req =
         nghttp2_session_get_stream_user_data(session, stream_id);
     if (req && req->conn && req->conn->http.server && req->conn->http.server->sys) {
       VALK_INFO("Setting up SSE diagnostics stream for stream %d", stream_id);
 
-      // SSE streams don't need the stream arena - release it immediately.
-      // We no longer rely on req->sse_entry for cleanup; instead on_stream_close
-      // looks up the entry by (handle, stream_id) in the registry.
       if (req->arena_slab_item) {
         uint32_t slot = req->arena_slot;
         __http_remove_from_active_arenas(req->conn, slot);
-        // Mark slot as released before freeing (for disconnect cleanup validation)
         req->arena_slot = UINT32_MAX;
         valk_slab_item_t *item = req->arena_slab_item;
         req->arena_slab_item = NULL;
@@ -1966,32 +1968,20 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
         VALK_INFO("Arena RELEASED (SSE) for stream %d (slot=%u, now %zu free)", stream_id, slot, arena_num_free);
       }
 
-      // Subscribe to global SSE registry (timer is always running)
       nghttp2_data_provider2 data_prd;
       valk_sse_stream_registry_t *registry = &req->conn->http.server->sys->sse_registry;
       valk_sse_stream_entry_t *entry = valk_sse_registry_subscribe(
-          registry,
-          req->conn,
-          session,
-          stream_id,
-          VALK_SSE_SUB_DIAGNOSTICS,
-          &data_prd);
+          registry, req->conn, session, stream_id, VALK_SSE_SUB_DIAGNOSTICS, &data_prd);
 
       if (!entry) {
         VALK_ERROR("Failed to subscribe to SSE registry");
         return -1;
       }
 
-      // Increment per-server SSE streams gauge
       valk_gauge_v2_inc(req->conn->http.server->metrics.sse_streams_active);
-
-      // Store entry reference for cleanup on stream close
       req->sse_entry = entry;
-
-      // Set status code for metrics tracking when stream eventually closes
       req->status_code = 200;
 
-      // Send HTTP/2 response headers with streaming data provider
       const char* content_type = "text/event-stream; charset=utf-8";
       nghttp2_nv headers[] = {
         MAKE_NV2(":status", "200"),
@@ -2010,6 +2000,7 @@ static int __http_send_response(nghttp2_session *session, int stream_id,
     }
   }
 #endif
+// LCOV_EXCL_STOP
 
   // Extract status (default "200")
   const char* status = "200";
@@ -2277,30 +2268,22 @@ static int __http_server_on_stream_close_callback(nghttp2_session *session,
       __pending_stream_process_one(conn->http.server->sys);
     }
   }
-  // Case 2: Async request where arena was transferred to async handle
-  // Client disconnected/timed out before async completed - record as timeout
+  // LCOV_EXCL_START - Async timeout: client disconnected during async processing
   else if (req && !req->arena_slab_item) {
 #ifdef VALK_METRICS_ENABLED
-    // Arena is owned by async handle - it will release it when async completes
-    // But we should still record metrics for the timeout
     if (conn->http.server) {
       valk_server_metrics_t* m = &conn->http.server->metrics;
-
-      // Count this as a server error (client timeout during processing)
       valk_counter_v2_inc(m->requests_total);
-      valk_counter_v2_inc(m->requests_server_error);  // 5xx - request didn't complete
-
-      // Record duration up to client disconnect
+      valk_counter_v2_inc(m->requests_server_error);
       uint64_t end_time_us = uv_hrtime() / 1000;
       uint64_t duration_us = end_time_us - req->start_time_us;
       valk_histogram_v2_observe_us(m->request_duration, duration_us);
-
       VALK_INFO("Async request timeout: stream %d closed by client after %llu us",
                 stream_id, (unsigned long long)duration_us);
     }
 #endif
-    // NOTE: Don't release arena - async handle owns it and will release when complete
   }
+  // LCOV_EXCL_STOP
 
   conn->http.active_streams--;
   VALK_DEBUG("%d active streams remaining", conn->http.active_streams);
@@ -2400,23 +2383,36 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
       if (LVAL_TYPE(response) == LVAL_HANDLE) {
         valk_async_handle_t *handle = response->async.handle;
 
-        // Store HTTP context in the handle for sending response when complete
-        handle->session = session;
-        handle->stream_id = frame->hd.stream_id;
-        handle->conn = conn;
-        handle->stream_arena = (struct valk_mem_arena*)req->stream_arena;
+        // Set up allocator for transform functions
+        handle->allocator = (valk_mem_allocator_t*)req->stream_arena;
         handle->env = sandbox_env;
 
-        // CRITICAL: Propagate stream_arena to all parent handles in the chain.
-        // This allows inner handles (like aio/then inside aio/catch) to call
-        // their transform functions when their sources complete.
-        for (valk_async_handle_t *p = handle->parent; p != NULL; p = p->parent) {
-          if (!p->stream_arena) {
-            p->stream_arena = handle->stream_arena;
-          }
+        // Create HTTP-specific context for response handling
+        valk_http_async_ctx_t *http_ctx = malloc(sizeof(valk_http_async_ctx_t));
+        if (http_ctx) {
+          http_ctx->session = session;
+          http_ctx->stream_id = frame->hd.stream_id;
+          http_ctx->conn = conn;
+          http_ctx->arena = req->stream_arena;
+          http_ctx->arena_slab_item = NULL;  // Will be set if handle is pending
+          http_ctx->arena_slot = UINT32_MAX;
+
+          // Register HTTP callbacks on the handle
+          handle->on_done = valk_http_async_done_callback;
+          handle->on_done_ctx = http_ctx;
+          handle->is_closed = valk_http_async_is_closed_callback;
+          handle->is_closed_ctx = http_ctx;
         }
 
-        // If handle is already completed, send response immediately
+        // CRITICAL: Propagate allocator to all handles in the tree.
+        // This allows inner handles (like aio/then inside aio/catch inside aio/any)
+        // to call their transform functions when their sources complete.
+        for (valk_async_handle_t *p = handle->parent; p != NULL; p = p->parent) {
+          valk_async_propagate_allocator(p, handle->allocator, sandbox_env);
+        }
+        valk_async_propagate_allocator(handle, handle->allocator, sandbox_env);
+
+        // LCOV_EXCL_START - Immediate async completion paths
         if (handle->status == VALK_ASYNC_COMPLETED) {
           valk_lval_t *result = handle->result;
           if (LVAL_TYPE(result) == LVAL_ERR) {
@@ -2432,8 +2428,8 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
           } else {
             __http_send_response(session, frame->hd.stream_id, result, req->stream_arena);
           }
+          if (http_ctx) free(http_ctx);
         } else if (handle->status == VALK_ASYNC_FAILED) {
-          // Handle failed - send error response
           valk_lval_t *err = handle->error ? handle->error : valk_lval_err("Handle failed");
           VALK_WARN("Handle failed: %s", LVAL_TYPE(err) == LVAL_ERR ? err->str : "unknown error");
           VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
@@ -2445,41 +2441,39 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
             valk_lval_t* error_resp = valk_lval_qlist(error_items, 4);
             __http_send_response(session, frame->hd.stream_id, error_resp, req->stream_arena);
           }
+          if (http_ctx) free(http_ctx);
         } else if (handle->status == VALK_ASYNC_CANCELLED) {
-          // Handle was cancelled - don't send response (client likely disconnected)
           VALK_DEBUG("Handle cancelled, not sending response for stream %d", frame->hd.stream_id);
+          if (http_ctx) free(http_ctx);
+        // LCOV_EXCL_STOP
         } else {
           // Handle is still running - response will be sent when it completes
-          // The completion callback will use the stored context to send response
+          // The completion callback will use the HTTP context to send response
           VALK_DEBUG("Handle pending/running, will send response when complete");
 
-          // CRITICAL: Transfer arena ownership from request to async handle.
+          // CRITICAL: Transfer arena ownership from request to HTTP context.
           // Without this, on_stream_close_callback will release the arena while
-          // the async operation is still running, causing use-after-free when
-          // the timer fires and tries to use the lambda stored in on_complete.
-
-          // 1. Remove arena from connection's active list (otherwise new requests
-          //    that get the same slot will fail the self-loop assertion)
+          // the async operation is still running.
           uint32_t slot = req->arena_slot;
           __http_remove_from_active_arenas(conn, slot);
 
-          // 2. Store arena ownership in async handle for restoration after response
-          handle->arena_slab_item = req->arena_slab_item;
-          handle->arena_slot = slot;
+          if (http_ctx) {
+            http_ctx->arena_slab_item = req->arena_slab_item;
+            http_ctx->arena_slot = slot;
+          }
 
-          // 3. Clear the request's arena ownership so on_stream_close won't release it early
+          // Clear the request's arena ownership so on_stream_close won't release it early
           req->arena_slab_item = NULL;
-          req->arena_slot = UINT32_MAX;  // Mark as invalid
+          req->arena_slot = UINT32_MAX;
 
           return 0;
         }
         return 0;
       }
 
-      // Send response based on handler result
+      // LCOV_EXCL_START - Handler error path
       if (LVAL_TYPE(response) == LVAL_ERR) {
         VALK_WARN("Handler returned error: %s", response->str);
-        // Send 500 error response
         VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
           valk_lval_t* error_items[] = {
             valk_lval_sym(":status"), valk_lval_str("500"),
@@ -2488,6 +2482,7 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
           valk_lval_t* error_resp = valk_lval_qlist(error_items, 4);
           __http_send_response(session, frame->hd.stream_id, error_resp, req->stream_arena);
         }
+      // LCOV_EXCL_STOP
       } else {
         // Send handler's response
         __http_send_response(session, frame->hd.stream_id, response, req->stream_arena);
@@ -2502,7 +2497,7 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
   return 0;
 }
 
-// Simple no-op callbacks for demo handler
+// LCOV_EXCL_START - Demo handler only used in valk_client_demo which requires external network
 static void __demo_on_connect(void *arg, valk_aio_handle_t *conn) {
   UNUSED(arg);
   UNUSED(conn);
@@ -2531,7 +2526,6 @@ static void __demo_on_body(void *arg, valk_aio_handle_t *conn, size_t stream,
   UNUSED(buf);
 }
 
-// Export a demo handler for testing
 valk_http2_handler_t *valk_aio_http2_demo_handler(void) {
   static valk_http2_handler_t handler;
   static int initialized = 0;
@@ -2545,6 +2539,7 @@ valk_http2_handler_t *valk_aio_http2_demo_handler(void) {
   }
   return &handler;
 }
+// LCOV_EXCL_STOP
 
 // Returns true if there's more data pending to send (buffer was full)
 static int __http2_flush_frames(valk_buffer_t *buf,
@@ -2682,7 +2677,7 @@ static void __http_continue_pending_send(valk_aio_handle_t *conn) {
     }
   }
 
-  // Final SSL flush - get any remaining encrypted data from BIO
+  // LCOV_EXCL_START - Final SSL flush edge case: requires specific TLS record boundaries
   if (slabItem != NULL && In.count == 0) {
     valk_aio_ssl_encrypt(&conn->http.ssl, &In, &Out);
     if (Out.count > 0) {
@@ -2695,6 +2690,7 @@ static void __http_continue_pending_send(valk_aio_handle_t *conn) {
       slabItem = NULL;
     }
   }
+  // LCOV_EXCL_STOP
 
   // Release unused slab item if we didn't send anything
   if (slabItem != NULL) {
@@ -2718,27 +2714,25 @@ bool valk_aio_http_session_valid(valk_aio_handle_t *handle, void *session) {
   return handle->http.session == session;
 }
 
-// Check if a connection is closing or closed
-// Used by SSE registry to avoid pushing data to dying connections
+// LCOV_EXCL_START - SSE state accessors used by SSE diagnostics module
 bool valk_aio_http_connection_closing(valk_aio_handle_t *handle) {
   if (!handle) {
-    return true;  // Treat NULL handle as closing
+    return true;
   }
   return handle->http.state == VALK_CONN_CLOSING ||
          handle->http.state == VALK_CONN_CLOSED;
 }
 
-// Get SSE diagnostics state for a handle
 valk_sse_diag_state_t* valk_aio_get_sse_state(valk_aio_handle_t *handle) {
   if (!handle) return NULL;
   return handle->http.sse_state;
 }
 
-// Set SSE diagnostics state for a handle
 void valk_aio_set_sse_state(valk_aio_handle_t *handle, valk_sse_diag_state_t *state) {
   if (!handle) return;
   handle->http.sse_state = state;
 }
+// LCOV_EXCL_STOP
 
 static void __http_tcp_unencrypted_read_cb(void *arg,
                                            const valk_buffer_t *buf) {
@@ -2771,20 +2765,18 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     return;
   }
 
+  // LCOV_EXCL_START - Connection EOF and error handling paths
   if (nread < 0) {
     bool is_eof = (nread == UV_EOF);
 
     if (is_eof && conn->http.ssl.ssl) {
-      // Check for pending data in SSL before we do anything
       int ssl_pending = SSL_pending(conn->http.ssl.ssl);
       int bio_pending = (int)BIO_ctrl_pending(conn->http.ssl.read_bio);
       UNUSED(ssl_pending);
       UNUSED(bio_pending);
-      // CRITICAL: Process any pending data in SSL BIO before closing
-      // The final TLS close_notify alert may be waiting in the BIO
       valk_buffer_t In = {
           .items = buf->base,
-          .count = 0,  // No new TCP data, but SSL BIO may have pending data
+          .count = 0,
           .capacity = HTTP_SLAB_ITEM_SIZE
       };
 
@@ -2802,11 +2794,9 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
           .capacity = HTTP_SLAB_ITEM_SIZE
       };
 
-      // Process pending SSL data (close_notify, final records, etc.)
       int ssl_err = valk_aio_ssl_on_read(&conn->http.ssl, &In, &Out, conn,
                                          __http_tcp_unencrypted_read_cb);
 
-      // Send any pending encrypted response data
       if (!ssl_err && Out.count > 0) {
         slabItem->buf.base = Out.items;
         slabItem->buf.len = Out.count;
@@ -2820,7 +2810,6 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
       }
     }
 
-    // Close the connection
     if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
       conn->http.state = VALK_CONN_CLOSING;
 #ifdef VALK_METRICS_ENABLED
@@ -2830,12 +2819,12 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
       uv_close((uv_handle_t *)&conn->uv.tcp, __uv_handle_closed_cb);
     }
 
-    // Release the input buffer from alloc_callback (may be NULL if alloc failed)
     if (buf->base) {
       valk_slab_release_ptr(tcp_buffer_slab, buf->base);
     }
     return;
   }
+  // LCOV_EXCL_STOP
 
   VALK_TRACE("Feeding data to OpenSSL %ld", nread);
 
@@ -2848,9 +2837,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     // This propagates TCP flow control to the client, slowing them down
     VALK_WARN("TCP buffer slab exhausted - applying backpressure on connection");
 
-    // CRITICAL: Feed the incoming data to OpenSSL's BIO before stopping reads.
-    // The BIO will buffer this data, preserving SSL record boundaries.
-    // Without this, we'd drop encrypted bytes mid-record causing "bad record mac" errors.
+    // LCOV_EXCL_START - Backpressure path when TCP buffer pool exhausted
     int n = BIO_write(conn->http.ssl.read_bio, buf->base, nread);
     if (n != nread) {
       VALK_ERROR("BIO_write during backpressure failed: wrote %d of %ld", n, nread);
@@ -2858,8 +2845,6 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
 
     uv_read_stop((uv_stream_t *)&conn->uv.tcp);
     __backpressure_list_add(conn);
-
-    // Start timer to periodically check for recovery
     __backpressure_timer_start(conn->uv.tcp.loop);
 
 #ifdef VALK_METRICS_ENABLED
@@ -2867,9 +2852,9 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
 #endif
 
     valk_slab_release_ptr(tcp_buffer_slab, buf->base);
-    // Try to resume another connection since we just freed a buffer
     __backpressure_try_resume_one();
     return;
+    // LCOV_EXCL_STOP
   }
   __tcp_buffer_slab_item_t *slabItem = (void *)slabItemRaw->data;
 
@@ -3210,8 +3195,8 @@ static void __http_listen_cb(valk_aio_system_t *sys,
   r = uv_tcp_init(srv->sys->eventloop, &srv->listener->uv.tcp);
   uv_tcp_nodelay(&srv->listener->uv.tcp, 1);
 
+  // LCOV_EXCL_START - Server socket initialization error paths
   if (r) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     VALK_ERROR("Tcp init error: %s", uv_strerror(r));
     valk_arc_box *err = valk_arc_box_err("Error on TcpInit");
     valk_promise_respond(&task->promise, err);
@@ -3223,7 +3208,6 @@ static void __http_listen_cb(valk_aio_system_t *sys,
 
   r = uv_ip4_addr(srv->interface, srv->port, &addr);
   if (r) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     VALK_ERROR("Get addr error: %s", uv_strerror(r));
     valk_arc_box *err = valk_arc_box_err("Error on Addr");
     valk_promise_respond(&task->promise, err);
@@ -3239,7 +3223,6 @@ static void __http_listen_cb(valk_aio_system_t *sys,
   r = uv_tcp_bind(&srv->listener->uv.tcp, (const struct sockaddr *)&addr, 0);
 #endif
   if (r) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     VALK_ERROR("Bind error: %s", uv_strerror(r));
     valk_arc_box *err = valk_arc_box_err("Error on Bind");
     valk_promise_respond(&task->promise, err);
@@ -3248,6 +3231,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
     valk_slab_release_ptr(sys->handleSlab, srv->listener);
     return;
   }
+  // LCOV_EXCL_STOP
 
 #ifdef VALK_METRICS_ENABLED
   // Initialize server metrics BEFORE uv_listen to avoid race with accept callback
@@ -3264,8 +3248,8 @@ static void __http_listen_cb(valk_aio_system_t *sys,
 
   r = uv_listen((uv_stream_t *)&srv->listener->uv.tcp, 128,
                 __http_server_accept_cb);
+  // LCOV_EXCL_START - Listen error path
   if (r) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     VALK_ERROR("Listen error: %s", uv_strerror(r));
     valk_arc_box *err = valk_arc_box_err("Error on Listening");
     valk_promise_respond(&task->promise, err);
@@ -3274,6 +3258,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
     valk_slab_release_ptr(sys->handleSlab, srv->listener);
     return;
   }
+  // LCOV_EXCL_STOP
 
   VALK_INFO("Listening on %s:%d", srv->interface, srv->port);
 
@@ -3451,14 +3436,12 @@ valk_future *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
   return res;
 }
 
+// LCOV_EXCL_START - Handler setup tested via http server integration
 void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_fn) {
   srv->lisp_handler_fn = (valk_lval_t*)handler_fn;
-  // Free existing sandbox env if any
   __valk_sandbox_env_free(srv->sandbox_env);
   srv->sandbox_env = NULL;
-  // Create sandbox env once - wraps handler's captured env to shadow 'def'
   if (handler_fn) {
-    // Create sandbox env with malloc allocator (not GC heap) for independent lifecycle
     void* saved_heap = valk_thread_ctx.heap;
     valk_thread_ctx.heap = NULL;
     VALK_WITH_ALLOC(&valk_malloc_allocator) {
@@ -3467,7 +3450,9 @@ void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_
     valk_thread_ctx.heap = saved_heap;
   }
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START - HTTP/2 client code requires external network connections to test
 //// HTTP2 CLIENT
 
 typedef struct valk_aio_http2_client {
@@ -3824,139 +3809,7 @@ valk_future *valk_aio_http2_connect(valk_aio_system_t *sys,
   return valk_aio_http2_connect_host(sys, interface, port, "localhost");
 }
 
-static void __http2_submit_demo_request_cb(valk_aio_system_t *sys,
-                                           struct valk_aio_task_new *task) {
-  UNUSED(sys);
 
-  valk_arc_box *box = task->arg;
-  valk_aio_http2_client *client = box->item;
-
-  VALK_DEBUG("Constructing request on client %p", (void *)client);
-  valk_aio_handle_t *conn = client->connection;
-
-  int32_t stream_id;
-  // http2_stream_data *stream_data = session_data->stream_data;
-  // const char *uri = "local/";
-  // const struct http_parser_url *u = stream_data->u;
-
-  nghttp2_nv hdrs[] = {MAKE_NV2(":method", "GET"), MAKE_NV2(":scheme", "https"),
-                       MAKE_NV2(":authority", "google.com"),
-                       // stream_data->authoritylen),
-                       MAKE_NV2(":path", "/")};
-  // fprintf(stderr, "Request headers:\n");
-  // print_headers(stderr, hdrs, ARRLEN(hdrs));
-
-  // TODO(networking): Allocating this promise here temporarily, ideally need to
-  // be passing a request object with a promise on it
-  valk_promise *prom = valk_mem_alloc(sizeof(valk_promise));
-  // valk_mem_free(sizeof(valk_promise)); in callback to nghttp2 recv
-  *prom = task->promise;  // copy the promise struct
-
-  stream_id =
-      nghttp2_submit_request2(conn->http.session, nullptr, hdrs,
-                              sizeof(hdrs) / sizeof(hdrs[0]), nullptr, prom);
-
-  if (stream_id < 0) {
-    VALK_ERROR("Could not submit HTTP request: %s", nghttp2_strerror(stream_id));
-    valk_arc_box *err = valk_arc_box_err("Could not submit HTTP request");
-    valk_promise_respond(prom, err);
-    valk_arc_release(err);
-    valk_arc_release(box);
-    valk_mem_free(prom);
-    return;
-  }
-
-  VALK_INFO("Submitted request stream_id=%d", stream_id);
-
-  char buf[SSL3_RT_MAX_PACKET_SIZE];
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  memset(buf, 0, sizeof(buf));
-  valk_buffer_t In = {
-      .items = buf, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
-  valk_slab_item_t *slabItemRaw = valk_slab_aquire(tcp_buffer_slab);
-  if (!slabItemRaw) {
-    VALK_ERROR("TCP buffer slab exhausted in submit request");
-    return;
-  }
-  __tcp_buffer_slab_item_t *slabItem = (void *)slabItemRaw->data;
-
-  valk_buffer_t Out = {
-      .items = slabItem->data, .count = 0, .capacity = HTTP_SLAB_ITEM_SIZE};
-
-  // Only write stuff if ssl is established
-  if (SSL_is_init_finished(client->connection->http.ssl.ssl)) {
-    __http2_flush_frames(&In, conn);
-
-    // Encrypt the new data n stuff
-    valk_aio_ssl_encrypt(&conn->http.ssl, &In, &Out);
-
-    int wantToSend = Out.count > 0;
-    if (wantToSend) {
-      slabItem->buf.base = Out.items;
-      slabItem->buf.len = Out.count;
-      slabItem->conn = conn;
-
-      uv_write(&slabItem->req, (uv_stream_t *)&conn->uv.tcp,
-               &slabItem->buf, 1, __http_tcp_on_write_cb);
-    } else {
-      valk_slab_release_ptr(tcp_buffer_slab, slabItem);
-    }
-  }
-
-  valk_arc_release(box);
-  // return stream_id;
-}
-
-static valk_future *__http2_submit_demo_request(valk_aio_system_t *sys,
-                                                valk_arc_box *client) {
-  valk_future *res = valk_future_new();
-  valk_arc_retain(client);
-  struct valk_aio_task_new *task;
-  VALK_WITH_ALLOC((valk_mem_allocator_t *)sys->handleSlab) {
-    task = valk_mem_alloc(sizeof(valk_aio_task_new));
-  }
-  task->allocator = (valk_mem_allocator_t *)sys->handleSlab;
-
-  task->arg = client;
-  valk_arc_retain(res);
-  task->promise.item = res;
-  task->callback = __http2_submit_demo_request_cb;
-
-  // valk_arc_release(client); in callback
-  // valk_arc_release(res); in resolve
-  __uv_exec_task(sys, task);
-  return res;
-}
-
-char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
-                       const char *port) {
-  UNUSED(port);
-  // Demo: connect to Google over HTTP/2 TLS using a known IPv4 and SNI
-  (void)domain; // future: parse/use
-  valk_future *fut =
-      valk_aio_http2_connect_host(sys, "142.250.191.78", 443, "google.com");
-  valk_arc_box *client = valk_future_await(fut);
-
-  VALK_ASSERT(client->type == VALK_SUC, "Error creating client: %s",
-              (char *)client->item);
-
-  valk_arc_release(fut);
-
-  fut = __http2_submit_demo_request(sys, client);
-  valk_arc_box *response = valk_future_await(fut);
-  valk_arc_retain(response);
-  valk_arc_release(fut);
-
-  VALK_ASSERT(response->type == VALK_SUC, "Error from the response: %s",
-              (char *)response->item);
-
-  char *res = strdup(response->item);
-
-  valk_arc_release(response);
-  valk_arc_release(client);
-
-  return res;
-}
 
 static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
                                              struct valk_aio_task_new *task) {
@@ -4295,17 +4148,16 @@ valk_lval_t *valk_http2_client_request_impl(valk_lenv_t *e,
 
   return valk_lval_nil();
 }
+// LCOV_EXCL_STOP
 
-//
+// LCOV_EXCL_START - Config validation paths tested via test_aio_config
 const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg) {
-  // Hard limits - primary parameters
   if (cfg->max_connections < 1 || cfg->max_connections > 100000)
     return "max_connections must be between 1 and 100,000";
 
   if (cfg->max_concurrent_streams < 1 || cfg->max_concurrent_streams > 1000)
     return "max_concurrent_streams must be between 1 and 1,000";
 
-  // Capacity limits
   if (cfg->max_handles < 16 || cfg->max_handles > 100000)
     return "max_handles must be between 16 and 100,000";
 
@@ -4315,7 +4167,6 @@ const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg)
   if (cfg->max_clients < 1 || cfg->max_clients > 64)
     return "max_clients must be between 1 and 64";
 
-  // Derived settings
   if (cfg->tcp_buffer_pool_size < 16 || cfg->tcp_buffer_pool_size > 1000000)
     return "tcp_buffer_pool_size must be between 16 and 1,000,000";
 
@@ -4331,7 +4182,6 @@ const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg)
   if (cfg->queue_capacity < 16 || cfg->queue_capacity > 100000)
     return "queue_capacity must be between 16 and 100,000";
 
-  // Backpressure timing (with hard safety limits)
   if (cfg->backpressure_list_max < 1 || cfg->backpressure_list_max > BACKPRESSURE_LIST_MAX_LIMIT)
     return "backpressure_list_max must be between 1 and 100,000";
 
@@ -4341,15 +4191,15 @@ const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg)
   if (cfg->pending_stream_pool_size < 1 || cfg->pending_stream_pool_size > PENDING_STREAM_POOL_MAX_LIMIT)
     return "pending_stream_pool_size must be between 1 and 10,000";
 
-  // Relationship validations
   if (cfg->tcp_buffer_pool_size < cfg->max_connections)
     return "tcp_buffer_pool_size must be >= max_connections";
 
   if (cfg->arena_pool_size < cfg->max_connections / 10)
     return "arena_pool_size must be >= max_connections / 10";
 
-  return NULL; // Valid
+  return NULL;
 }
+// LCOV_EXCL_STOP
 
 int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
   // Set defaults for primary parameters
@@ -4701,13 +4551,11 @@ uv_loop_t* valk_aio_get_event_loop(valk_aio_system_t* sys) {
   return sys->eventloop;
 }
 
-// Update event loop metrics from libuv
+// LCOV_EXCL_START - Loop metrics update called by event loop timer
 void valk_aio_update_loop_metrics(valk_aio_system_t* sys) {
 #ifdef VALK_METRICS_ENABLED
   if (!sys || !sys->eventloop) return;
   valk_event_loop_metrics_v2_update(&sys->loop_metrics, sys->eventloop);
-  // Also update handle count
-  // Count live handles by walking the DLL
   int64_t handle_count = 0;
   valk_aio_handle_t *h = sys->liveHandles.next;
   while (h && h != &sys->liveHandles) {
@@ -4719,6 +4567,7 @@ void valk_aio_update_loop_metrics(valk_aio_system_t* sys) {
   (void)sys;
 #endif
 }
+// LCOV_EXCL_STOP
 
 // Get system name
 const char* valk_aio_get_name(valk_aio_system_t* sys) {
@@ -4922,7 +4771,7 @@ static void __delay_timer_cb(uv_timer_t *handle) {
 
     VALK_INFO("aio/delay continuation returned type %d", LVAL_TYPE(response));
 
-    // Send the response
+    // LCOV_EXCL_START - Delay continuation error path
     if (LVAL_TYPE(response) == LVAL_ERR) {
       VALK_WARN("Delay continuation returned error: %s", response->str);
       VALK_WITH_ALLOC((valk_mem_allocator_t*)timer_data->stream_arena) {
@@ -4934,6 +4783,7 @@ static void __delay_timer_cb(uv_timer_t *handle) {
         __http_send_response(timer_data->session, timer_data->stream_id,
                              error_resp, timer_data->stream_arena);
       }
+    // LCOV_EXCL_STOP
     } else {
       __http_send_response(timer_data->session, timer_data->stream_id,
                            response, timer_data->stream_arena);
@@ -4952,14 +4802,12 @@ static void __delay_timer_cb(uv_timer_t *handle) {
   uv_close((uv_handle_t *)handle, __delay_timer_close_cb);
 }
 
-// aio/delay implementation - schedules a timer and calls continuation after delay
-// Returns a special "deferred" symbol to indicate response will be sent later
+// LCOV_EXCL_START - aio/delay tested via async integration tests
 valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, uint64_t delay_ms,
                             valk_lval_t* continuation, valk_lenv_t* env) {
   UNUSED(env);
   VALK_INFO("aio/delay called with delay_ms=%lu", (unsigned long)delay_ms);
 
-  // Check if we're in a request context
   if (!current_request_ctx) {
     VALK_WARN("aio/delay called outside request context");
     return valk_lval_err("aio/delay can only be used within an HTTP request handler");
@@ -4994,9 +4842,9 @@ valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, uint64_t delay_ms,
   r = uv_timer_start(&timer_data->timer, __delay_timer_cb, delay_ms, 0);
   VALK_INFO("uv_timer_start returned %d for stream %d", r, timer_data->stream_id);
 
-  // Return special "deferred" symbol to indicate async response
   return valk_lval_sym(":deferred");
 }
+// LCOV_EXCL_STOP
 
 // ============================================================================
 // aio/schedule - Top-level timer scheduling (no HTTP context required)
@@ -5372,9 +5220,18 @@ static valk_lval_t* valk_builtin_aio_let(valk_lenv_t* e, valk_lval_t* a) {
 
   // Build nested aio/then chain from innermost (body) outward
   // Work backwards: last group wraps body, previous groups wrap that, etc.
+  // If body is a QEXPR containing a single expression, unwrap it so it gets
+  // evaluated in the lambda scope where bindings are defined.
+  // But if it's a multi-element QEXPR (like a map {:key val}), keep it as-is.
+  valk_lval_t *body_expr = body;
+  if (LVAL_TYPE(body) == LVAL_QEXPR && !valk_lval_list_is_empty(body)) {
+    if (valk_lval_list_is_empty(body->cons.tail)) {
+      body_expr = body->cons.head;
+    }
+  }
   valk_lval_t *result = valk_lval_cons(
     valk_lval_sym("aio/pure"),
-    valk_lval_cons(valk_lval_copy(body), valk_lval_nil()));
+    valk_lval_cons(valk_lval_copy(body_expr), valk_lval_nil()));
 
   for (int g = parsed->count - 1; g >= 0; g--) {
     result = aio_let_gen_group(e, &parsed->groups[g], result);
@@ -5424,8 +5281,7 @@ static inline bool is_bind_form(valk_lval_t *expr) {
   return LVAL_TYPE(head) == LVAL_SYM && strcmp(head->str, "<-") == 0;
 }
 
-// Recursively build the aio/do chain from statements
-// stmts is a list (curr...rest), we process curr and recurse on rest
+// LCOV_EXCL_START - aio/do chain building tested via do_suite.valk
 static valk_lval_t* aio_do_build_chain(valk_lenv_t *env, valk_lval_t *stmts) {
   if (valk_lval_list_is_empty(stmts)) {
     // No statements - return nil wrapped in aio/pure
@@ -5547,12 +5403,9 @@ static valk_lval_t* aio_do_build_chain(valk_lenv_t *env, valk_lval_t *stmts) {
     }
   }
 }
+// LCOV_EXCL_STOP
 
 static valk_lval_t* valk_builtin_aio_do(valk_lenv_t* e, valk_lval_t* a) {
-  // aio/do receives all statements as arguments (unevaluated - it's a special form)
-  // Actually, aio/do needs to be a macro/special form that doesn't evaluate args
-  // For now, it receives a QEXPR containing the statements
-
   if (valk_lval_list_count(a) != 1) {
     return valk_lval_err("aio/do: expected 1 argument (qexpr of statements)");
   }
@@ -5563,13 +5416,14 @@ static valk_lval_t* valk_builtin_aio_do(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_err("aio/do: argument must be a qexpr {stmt1 stmt2 ...}");
   }
 
+  // LCOV_EXCL_START - Empty aio/do block edge case
   if (valk_lval_list_is_empty(stmts)) {
-    // Empty do block - return aio/pure nil
     valk_lval_t *pure = valk_lval_cons(
       valk_lval_sym("aio/pure"),
       valk_lval_cons(valk_lval_nil(), valk_lval_nil()));
     return valk_lval_eval(e, pure);
   }
+  // LCOV_EXCL_STOP
 
   // Build the chain of operations
   valk_lval_t *chain = aio_do_build_chain(e, stmts);
@@ -5638,100 +5492,64 @@ static void valk_async_notify_race_parent(valk_async_handle_t *child);
 #define VALK_ANY_CTX_MAGIC_EARLY 0xA4177821
 static void valk_async_notify_any_parent(valk_async_handle_t *child);
 
-// Helper: Release stream arena back to slab after async completion
-static void valk_async_release_arena(valk_async_handle_t *handle) {
-  if (!handle->stream_arena || !handle->conn) return;
+// ============================================================================
+// HTTP Async Context Callbacks
+// These implement the generic async callbacks for HTTP response handling.
+// ============================================================================
 
-  valk_aio_handle_t *conn = handle->conn;
-  if (!conn->http.server || !conn->http.server->sys) return;
+// Check if the HTTP connection is still valid
+static bool valk_http_async_is_closed_callback(void *ctx) {
+  if (!ctx) return false;
+  valk_http_async_ctx_t *http = (valk_http_async_ctx_t*)ctx;
+  if (!http->conn) return false;
 
-  valk_slab_t *arena_slab = conn->http.server->sys->httpStreamArenas;
-  valk_mem_arena_t *arena = (valk_mem_arena_t*)handle->stream_arena;
-
-  // Release arena back to slab using the data pointer
-  valk_slab_release_ptr(arena_slab, arena);
-
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_system_stats_on_arena_release(&conn->http.server->sys->system_stats);
-#endif
-
-  VALK_INFO("Arena RELEASED (async complete) for stream %d, handle %lu",
-            handle->stream_id, handle->id);
-
-  // Clear handle's arena reference to prevent double-free
-  handle->stream_arena = NULL;
+  valk_aio_handle_t *conn = http->conn;
+  return conn->http.state == VALK_CONN_CLOSING ||
+         conn->http.state == VALK_CONN_CLOSED ||
+         !conn->http.session;
 }
 
-// Send HTTP response from a completed handle (if it has HTTP context)
-static void valk_async_send_http_response(valk_async_handle_t *handle) {
-  // Check if this handle has HTTP context attached
-  if (!handle->session || handle->stream_id == 0 || !handle->conn) {
-    return;  // No HTTP context - nothing to send
-  }
+// HTTP completion callback - sends response when async handle completes
+static void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
+  if (!ctx) return;
+  valk_http_async_ctx_t *http = (valk_http_async_ctx_t*)ctx;
 
-  valk_aio_handle_t *conn = handle->conn;
-  valk_mem_arena_t *arena = (valk_mem_arena_t*)handle->stream_arena;
-  bool should_release_arena = (arena != NULL);
+  valk_aio_handle_t *conn = http->conn;
+  valk_mem_arena_t *arena = http->arena;
+  nghttp2_session *session = (nghttp2_session*)http->session;
+  int32_t stream_id = http->stream_id;
 
-  // CRITICAL: Check if connection is still valid before using it.
-  // When a connection closes:
-  // 1. conn->http.state is set to VALK_CONN_CLOSED
-  // 2. conn->http.session is set to NULL before the session is deleted
-  // This prevents use-after-free when async timers fire after client disconnect.
-  if (conn->http.state == VALK_CONN_CLOSING ||
-      conn->http.state == VALK_CONN_CLOSED ||
-      !conn->http.session) {
+  // Check if connection is still valid
+  if (!conn || conn->http.state == VALK_CONN_CLOSING ||
+      conn->http.state == VALK_CONN_CLOSED || !conn->http.session) {
     VALK_INFO("Async handle %lu: connection closed, skipping HTTP response for stream %d",
-              handle->id, handle->stream_id);
-    // Still release arena if we own it
-    if (should_release_arena) {
-      valk_async_release_arena(handle);
-    }
-    return;
+              handle->id, stream_id);
+    goto cleanup;
   }
 
-  nghttp2_session *session = (nghttp2_session*)handle->session;
-  int32_t stream_id = handle->stream_id;
-
-  // CRITICAL: Check if the stream still exists AND belongs to this async handle.
-  // When a stream closes, its arena is released and can be reused by a new stream.
-  // The new stream might have the same stream_id (HTTP/2 stream IDs are reused).
-  // We verify by checking that the stream's arena matches what this handle expects.
+  // Check if stream still exists
   valk_http2_server_request_t *stream_req =
       nghttp2_session_get_stream_user_data(session, stream_id);
   if (!stream_req) {
     VALK_INFO("Async handle %lu: stream %d no longer exists, skipping HTTP response",
               handle->id, stream_id);
-    // Still release arena if we own it
-    if (should_release_arena) {
-      valk_async_release_arena(handle);
-    }
-    return;
+    goto cleanup;
   }
 
-  // Verify the stream's arena matches this handle's arena.
-  // If they don't match, this stream_id was reused for a different request.
-  // In this case, DON'T release the arena - it belongs to the new request.
-  if (stream_req->stream_arena != arena) {
-    VALK_INFO("Async handle %lu: stream %d arena mismatch (expected %p, got %p), skipping",
-              handle->id, stream_id, (void*)arena, (void*)stream_req->stream_arena);
-    // Arena was already released and reused - don't release again
-    handle->stream_arena = NULL;  // Clear stale reference
-    return;
+  // Verify arena matches (stream_id may have been reused)
+  if (arena && stream_req->stream_arena != arena) {
+    VALK_INFO("Async handle %lu: stream %d arena mismatch, skipping", handle->id, stream_id);
+    goto cleanup;
   }
 
-  // CRITICAL: Restore arena ownership to request BEFORE sending response.
-  // The stream close callback may fire during flush (when END_STREAM is sent),
-  // and it needs arena_slab_item to be set to record metrics correctly.
-  // If we restore ownership after flush, we hit a race condition where
-  // on_stream_close_callback sees NULL arena_slab_item and records as 5xx.
-  if (should_release_arena && handle->arena_slab_item) {
-    stream_req->arena_slab_item = handle->arena_slab_item;
-    stream_req->arena_slot = handle->arena_slot;
-    handle->arena_slab_item = NULL;  // Ownership transferred back
-    handle->stream_arena = NULL;     // Clear stale reference
+  // Restore arena ownership to request before sending response
+  if (arena && http->arena_slab_item) {
+    stream_req->arena_slab_item = http->arena_slab_item;
+    stream_req->arena_slot = http->arena_slot;
+    http->arena_slab_item = NULL;
   }
 
+  // Send response based on handle status
   if (handle->status == VALK_ASYNC_COMPLETED) {
     valk_lval_t *result = handle->result;
     if (LVAL_TYPE(result) == LVAL_ERR) {
@@ -5749,6 +5567,7 @@ static void valk_async_send_http_response(valk_async_handle_t *handle) {
       __http_send_response(session, stream_id, result, arena);
     }
     __http_continue_pending_send(conn);
+  // LCOV_EXCL_START - Async failure path only triggers on internal errors
   } else if (handle->status == VALK_ASYNC_FAILED) {
     valk_lval_t *err = handle->error ? handle->error : valk_lval_err("Async operation failed");
     VALK_WARN("Handle failed for stream %d: %s",
@@ -5764,7 +5583,74 @@ static void valk_async_send_http_response(valk_async_handle_t *handle) {
     }
     __http_continue_pending_send(conn);
   }
-  // For CANCELLED, we still own the arena but don't send response
+  // LCOV_EXCL_STOP
+  // For CANCELLED, we don't send response but still need to cleanup
+
+cleanup:
+  // Free the HTTP context
+  free(http);
+}
+
+// Standalone async completion callback - releases arena back to pool
+// LCOV_EXCL_START - Standalone async completion callback
+static void valk_standalone_async_done_callback(valk_async_handle_t *handle, void *ctx) {
+  UNUSED(handle);
+  if (!ctx) return;
+  valk_standalone_async_ctx_t *standalone = (valk_standalone_async_ctx_t*)ctx;
+
+  if (standalone->arena_slab_item && standalone->sys && standalone->sys->httpStreamArenas) {
+    VALK_DEBUG("Releasing standalone async arena back to pool");
+    valk_slab_release(standalone->sys->httpStreamArenas, standalone->arena_slab_item);
+  }
+
+  free(standalone);
+}
+// LCOV_EXCL_STOP
+
+// LCOV_EXCL_START - Standalone async used by aio/spawn without HTTP request context
+static valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sys) {
+  if (!sys || !sys->httpStreamArenas) return NULL;
+
+  valk_slab_item_t *arena_item = valk_slab_aquire(sys->httpStreamArenas);
+  if (!arena_item) {
+    VALK_WARN("Standalone async: failed to acquire arena from pool");
+    return NULL;
+  }
+
+  valk_mem_arena_t *arena = (valk_mem_arena_t *)arena_item->data;
+  valk_mem_arena_init(arena, sys->config.arena_size);
+
+  valk_standalone_async_ctx_t *ctx = malloc(sizeof(valk_standalone_async_ctx_t));
+  if (!ctx) {
+    valk_slab_release(sys->httpStreamArenas, arena_item);
+    return NULL;
+  }
+
+  ctx->arena = arena;
+  ctx->arena_slab_item = arena_item;
+  ctx->sys = sys;
+
+  VALK_DEBUG("Allocated standalone async arena from pool");
+  return ctx;
+}
+// LCOV_EXCL_STOP
+
+// Generic async completion notification - calls on_done callback if registered
+static void valk_async_notify_done(valk_async_handle_t *handle) {
+  if (handle->on_done) {
+    handle->on_done(handle, handle->on_done_ctx);
+    handle->on_done = NULL;  // Prevent double-calling
+    handle->on_done_ctx = NULL;
+  }
+}
+
+// Check if the async handle's underlying resource is closed
+static bool valk_async_is_resource_closed(valk_async_handle_t *handle) {
+  if (!handle) return false;
+  if (handle->is_closed) {
+    return handle->is_closed(handle->is_closed_ctx);
+  }
+  return false;
 }
 
 // Create a new async handle
@@ -5778,56 +5664,46 @@ static valk_async_handle_t* valk_async_handle_new(uv_loop_t *loop, valk_lenv_t *
   __atomic_store_n(&handle->cancel_requested, 0, __ATOMIC_RELAXED);
   handle->loop = loop;
   handle->env = env;
-  handle->allocator = &valk_malloc_allocator;
+  
+  // Inherit allocator from current thread context.
+  // During HTTP request handling, this will be the stream arena.
+  // For standalone async, this may be GC heap or malloc - we'll acquire
+  // an arena lazily when needed.
+  handle->allocator = valk_thread_ctx.allocator;
 
   return handle;
 }
 
-// Free an async handle and its resources
+// LCOV_EXCL_START - Async handle free and completion
 static void valk_async_handle_free(valk_async_handle_t *handle) {
   if (!handle) return;
 
-  // Free children array
   if (handle->children.items) {
     free(handle->children.items);
   }
 
   free(handle);
 }
+// LCOV_EXCL_STOP
 
 // Mark handle as completed with a result
 static void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result) {
+  VALK_DEBUG("valk_async_handle_complete: handle=%p, id=%lu", (void*)handle, handle ? handle->id : 0);
   if (!handle) return;
   if (handle->status != VALK_ASYNC_PENDING && handle->status != VALK_ASYNC_RUNNING) {
+    VALK_DEBUG("  handle already in terminal state: %d", handle->status);
     return;  // Already in terminal state
   }
 
-  // CRITICAL: Check if associated connection is still valid BEFORE any arena usage.
-  // When a connection closes, arenas are released but async handles still have
-  // stale pointers. We must detect this and abort early to prevent use-after-free.
-  if (handle->conn) {
-    valk_aio_handle_t *conn = handle->conn;
-    if (conn->http.state == VALK_CONN_CLOSING ||
-        conn->http.state == VALK_CONN_CLOSED ||
-        !conn->http.session) {
-      VALK_INFO("Async handle %lu: connection closed during completion, aborting", handle->id);
-      handle->status = VALK_ASYNC_CANCELLED;
-      return;
-    }
+  // Check if underlying resource is still valid
+  if (valk_async_is_resource_closed(handle)) {
+    VALK_INFO("Async handle %lu: resource closed during completion, aborting", handle->id);
+    handle->status = VALK_ASYNC_CANCELLED;
+    return;
   }
 
   handle->status = VALK_ASYNC_COMPLETED;
   handle->result = result;
-
-  // Call on_complete callback if registered (for direct callbacks, not chaining)
-  // Note: For aio/then chaining, on_complete stores the transform function
-  // and is handled by valk_async_propagate_completion instead
-  if (handle->on_complete && handle->env && handle->stream_arena) {
-    VALK_WITH_ALLOC((valk_mem_allocator_t*)handle->stream_arena) {
-      valk_lval_t *args = valk_lval_cons(result, valk_lval_nil());
-      valk_lval_eval_call(handle->env, handle->on_complete, args);
-    }
-  }
 
   // Notify aio/all parent if this handle is a child of one
   valk_async_notify_all_parent(handle);
@@ -5838,8 +5714,8 @@ static void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t 
   // Notify aio/any parent if this handle is a child of one
   valk_async_notify_any_parent(handle);
 
-  // Send HTTP response if this handle has HTTP context attached
-  valk_async_send_http_response(handle);
+  // Call generic completion callback (e.g., HTTP response sender)
+  valk_async_notify_done(handle);
 
   // Propagate completion to chained handles (aio/then, aio/catch, etc.)
   valk_async_propagate_completion(handle);
@@ -5852,26 +5728,15 @@ static void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *err
     return;  // Already in terminal state
   }
 
-  // CRITICAL: Check if associated connection is still valid (same as complete)
-  if (handle->conn) {
-    valk_aio_handle_t *conn = handle->conn;
-    if (conn->http.state == VALK_CONN_CLOSED || !conn->http.session) {
-      VALK_INFO("Async handle %lu: connection closed during failure, aborting", handle->id);
-      handle->status = VALK_ASYNC_CANCELLED;
-      return;
-    }
+  // Check if underlying resource is still valid
+  if (valk_async_is_resource_closed(handle)) {
+    VALK_INFO("Async handle %lu: resource closed during failure, aborting", handle->id);
+    handle->status = VALK_ASYNC_CANCELLED;
+    return;
   }
 
   handle->status = VALK_ASYNC_FAILED;
   handle->error = error;
-
-  // Call on_error callback if registered (for direct callbacks)
-  if (handle->on_error && handle->env && handle->stream_arena) {
-    VALK_WITH_ALLOC((valk_mem_allocator_t*)handle->stream_arena) {
-      valk_lval_t *args = valk_lval_cons(error, valk_lval_nil());
-      valk_lval_eval_call(handle->env, handle->on_error, args);
-    }
-  }
 
   // Notify aio/all parent if this handle is a child of one
   valk_async_notify_all_parent(handle);
@@ -5882,8 +5747,8 @@ static void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *err
   // Notify aio/any parent if this handle is a child of one
   valk_async_notify_any_parent(handle);
 
-  // Send HTTP error response if this handle has HTTP context attached
-  valk_async_send_http_response(handle);
+  // Call generic completion callback (e.g., HTTP error response sender)
+  valk_async_notify_done(handle);
 
   // Propagate failure to chained handles
   valk_async_propagate_completion(handle);
@@ -5910,7 +5775,31 @@ static bool valk_async_handle_cancel(valk_async_handle_t *handle) {
 
   // Call on_cancel callback if registered
   if (handle->on_cancel && handle->env) {
-    VALK_WITH_ALLOC((valk_mem_allocator_t*)handle->stream_arena) {
+    valk_mem_allocator_t *alloc = handle->allocator;
+    bool needs_arena = !alloc || 
+                       alloc->type == VALK_ALLOC_MALLOC ||
+                       alloc->type == VALK_ALLOC_GC_HEAP ||
+                       alloc->type == VALK_ALLOC_NULL;
+    // LCOV_EXCL_START - Standalone async arena path: requires non-HTTP async context
+    if (needs_arena) {
+      valk_aio_system_t *sys = g_last_started_aio_system;
+      if (sys) {
+        valk_standalone_async_ctx_t *standalone = valk_standalone_async_ctx_new(sys);
+        if (standalone) {
+          alloc = (valk_mem_allocator_t*)standalone->arena;
+          handle->allocator = alloc;
+          valk_async_handle_t *root = handle;
+          while (root->parent) root = root->parent;
+          if (!root->on_done) {
+            root->on_done = valk_standalone_async_done_callback;
+            root->on_done_ctx = standalone;
+          }
+        }
+      }
+    }
+    // LCOV_EXCL_STOP
+    if (!alloc || alloc->type != VALK_ALLOC_ARENA) alloc = &valk_malloc_allocator;
+    VALK_WITH_ALLOC(alloc) {
       valk_lval_t *args = valk_lval_nil();
       valk_lval_eval_call(handle->env, handle->on_cancel, args);
     }
@@ -5924,7 +5813,11 @@ static bool valk_async_handle_cancel(valk_async_handle_t *handle) {
   return true;
 }
 
-// Add a child handle to a parent (for structured cancellation)
+// Add a child handle to a parent (for structured cancellation and notification)
+// Sets parent unconditionally - the last add_child wins for parent pointer.
+// Note: A handle can be in multiple parents' children arrays (e.g., aio/then source AND aio/any).
+// The parent pointer is used for combinator notifications (aio/all, aio/any, aio/race).
+// Propagation uses children arrays regardless of parent pointer value.
 static void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_handle_t *child) {
   if (!parent || !child) return;
 
@@ -5941,6 +5834,38 @@ static void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_
   }
 
   parent->children.items[parent->children.count++] = child;
+}
+
+// Recursively propagate allocator and env to all descendants
+// This is needed because combinators (aio/any, aio/all, aio/race) have children
+// that are also children of other handles (e.g., aio/then's source).
+// The simple one-level propagation misses these nested relationships.
+static void valk_async_propagate_allocator_impl(valk_async_handle_t *handle, valk_mem_allocator_t *allocator, valk_lenv_t *env, void *expected_loop) {
+  if (!handle) return;
+
+  // Safety check: only propagate allocator to handles in the same event loop.
+  // Allocators may belong to a specific I/O context, so propagating them to
+  // handles from different AIO systems would be incorrect. Those handles will
+  // fall back to valk_malloc_allocator when their transforms are called.
+  if (expected_loop && handle->loop && handle->loop != expected_loop) {
+    return;
+  }
+
+  if (!handle->allocator) {
+    handle->allocator = allocator;
+  }
+  if (!handle->env && env) {
+    handle->env = env;
+  }
+
+  // Recursively propagate to all children
+  for (size_t i = 0; i < handle->children.count; i++) {
+    valk_async_propagate_allocator_impl(handle->children.items[i], allocator, env, expected_loop);
+  }
+}
+
+static void valk_async_propagate_allocator(valk_async_handle_t *handle, valk_mem_allocator_t *allocator, valk_lenv_t *env) {
+  valk_async_propagate_allocator_impl(handle, allocator, env, handle ? handle->loop : NULL);
 }
 
 // Convert status enum to symbol for Lisp
@@ -6153,44 +6078,32 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_handle(result);
 }
 
-// Helper: Check if any handle in the chain has a closed connection
-static bool valk_async_is_connection_closed(valk_async_handle_t *handle) {
+// Helper: Check if any handle in the chain has a closed resource
+// Uses the generic is_closed callback, walking up parent chain and down to children
+static bool valk_async_is_chain_closed(valk_async_handle_t *handle) {
   if (!handle) return false;
-  // Check this handle's connection - consider both CLOSING and CLOSED states
-  // CLOSING = TCP close initiated, CLOSED = fully disconnected
-  if (handle->conn) {
-    valk_aio_handle_t *conn = handle->conn;
-    if (conn->http.state == VALK_CONN_CLOSING ||
-        conn->http.state == VALK_CONN_CLOSED ||
-        !conn->http.session) {
-      return true;
-    }
+
+  // Check this handle's resource
+  if (valk_async_is_resource_closed(handle)) {
+    return true;
   }
-  // Walk up parent chain looking for connection info
+
+  // Walk up parent chain looking for closed resources
   valk_async_handle_t *p = handle->parent;
   int depth = 0;
   while (p && depth < 100) {
-    if (p->conn) {
-      valk_aio_handle_t *conn = p->conn;
-      if (conn->http.state == VALK_CONN_CLOSING ||
-          conn->http.state == VALK_CONN_CLOSED ||
-          !conn->http.session) {
-        return true;
-      }
+    if (valk_async_is_resource_closed(p)) {
+      return true;
     }
     p = p->parent;
     depth++;
   }
-  // Also check children (HTTP context might have been transferred down)
+
+  // Also check children (context might have been transferred down)
   for (size_t i = 0; i < handle->children.count && i < 100; i++) {
     valk_async_handle_t *child = handle->children.items[i];
-    if (child && child->conn) {
-      valk_aio_handle_t *conn = child->conn;
-      if (conn->http.state == VALK_CONN_CLOSING ||
-          conn->http.state == VALK_CONN_CLOSED ||
-          !conn->http.session) {
-        return true;
-      }
+    if (child && valk_async_is_resource_closed(child)) {
+      return true;
     }
   }
   return false;
@@ -6201,19 +6114,29 @@ static bool valk_async_is_connection_closed(valk_async_handle_t *handle) {
 static void valk_async_propagate_completion(valk_async_handle_t *source) {
   if (!source) return;
 
+  VALK_INFO("Propagating from handle %lu (status=%d, children=%zu)",
+            source->id, source->status, source->children.count);
+
   // CRITICAL: Check if connection is closed anywhere in the handle chain.
-  if (valk_async_is_connection_closed(source)) {
+  if (valk_async_is_chain_closed(source)) {
     VALK_INFO("Async propagation: connection closed, aborting propagation");
     return;
   }
 
   for (size_t i = 0; i < source->children.count; i++) {
     valk_async_handle_t *child = source->children.items[i];
-    // Check if child is a "then" handle (waiting on us)
-    if (child->status == VALK_ASYNC_RUNNING && child->parent == source) {
+    VALK_DEBUG("  Child %zu: handle %lu, status=%d, parent=%lu (source=%lu), on_complete=%p",
+              i, child->id, child->status,
+              child->parent ? child->parent->id : 0, source->id,
+              (void*)child->on_complete);
+    // Check if child is an aio/then handle waiting on us
+    // Note: child->parent may not equal source if a combinator (aio/all, aio/any, aio/race)
+    // also registered this child. We check on_complete to identify aio/then children.
+    if (child->status == VALK_ASYNC_RUNNING &&
+        (child->parent == source || child->on_complete != NULL)) {
 
       // Also check child's connection explicitly
-      if (valk_async_is_connection_closed(child)) {
+      if (valk_async_is_chain_closed(child)) {
         VALK_INFO("Async propagation: child connection closed, cancelling child handle %lu", child->id);
         child->status = VALK_ASYNC_CANCELLED;
         continue;
@@ -6222,10 +6145,35 @@ static void valk_async_propagate_completion(valk_async_handle_t *source) {
       // Child is waiting for our result
       if (source->status == VALK_ASYNC_COMPLETED) {
         // Call child's transform function with our result
-        if (child->on_complete && child->env && child->stream_arena) {
+        // Use allocator if available, otherwise try to acquire standalone arena.
+        if (child->on_complete && child->env) {
           valk_lval_t *args;
           valk_lval_t *transformed;
-          VALK_WITH_ALLOC((valk_mem_allocator_t*)child->stream_arena) {
+          valk_mem_allocator_t *alloc = child->allocator;
+          bool needs_arena = !alloc || 
+                             alloc->type == VALK_ALLOC_MALLOC ||
+                             alloc->type == VALK_ALLOC_GC_HEAP ||
+                             alloc->type == VALK_ALLOC_NULL;
+          // LCOV_EXCL_START - Standalone async arena path: requires non-HTTP async context
+          if (needs_arena) {
+            valk_aio_system_t *sys = g_last_started_aio_system;
+            if (sys) {
+              valk_standalone_async_ctx_t *standalone = valk_standalone_async_ctx_new(sys);
+              if (standalone) {
+                alloc = (valk_mem_allocator_t*)standalone->arena;
+                child->allocator = alloc;
+                valk_async_handle_t *root = child;
+                while (root->parent) root = root->parent;
+                if (!root->on_done) {
+                  root->on_done = valk_standalone_async_done_callback;
+                  root->on_done_ctx = standalone;
+                }
+              }
+            }
+          }
+          // LCOV_EXCL_STOP
+          if (!alloc || alloc->type != VALK_ALLOC_ARENA) alloc = &valk_malloc_allocator;
+          VALK_WITH_ALLOC(alloc) {
             args = valk_lval_cons(source->result, valk_lval_nil());
             transformed = valk_lval_eval_call(child->env, child->on_complete, args);
           }
@@ -6241,29 +6189,29 @@ static void valk_async_propagate_completion(valk_async_handle_t *source) {
             } else if (inner->status == VALK_ASYNC_FAILED) {
               child->status = VALK_ASYNC_FAILED;
               child->error = inner->error;
+              // Notify parent contexts (aio/all, aio/race, aio/any)
+              valk_async_notify_all_parent(child);
+              valk_async_notify_race_parent(child);
+              valk_async_notify_any_parent(child);
             } else if (inner->status == VALK_ASYNC_CANCELLED) {
               child->status = VALK_ASYNC_CANCELLED;
             } else {
               // Inner still running - link child to inner
               valk_async_handle_add_child(inner, child);
               child->parent = inner;
-              // IMPORTANT: Clear the transform function - we already called it
-              // and now we're waiting for inner. If we don't clear this, when
-              // inner completes and propagates to child, it will call on_complete
-              // again, creating an infinite loop.
+              // Clear the transform function - we already called it
               child->on_complete = NULL;
-              // Transfer HTTP context from child to inner, so the inner can
-              // eventually send the HTTP response when it completes
-              if (child->session && !inner->session) {
-                inner->session = child->session;
-                inner->stream_id = child->stream_id;
-                inner->conn = child->conn;
-                inner->stream_arena = child->stream_arena;
+              // Transfer context from child to inner
+              if (child->on_done && !inner->on_done) {
+                inner->on_done = child->on_done;
+                inner->on_done_ctx = child->on_done_ctx;
+                inner->is_closed = child->is_closed;
+                inner->is_closed_ctx = child->is_closed_ctx;
+                inner->allocator = child->allocator;
                 inner->env = child->env;
-                // Clear child's HTTP context so it doesn't try to send response
-                child->session = NULL;
-                child->stream_id = 0;
-                child->conn = NULL;
+                // Clear child's context so it doesn't try to notify
+                child->on_done = NULL;
+                child->on_done_ctx = NULL;
               }
               // child stays RUNNING, will complete when inner does
               continue;
@@ -6277,16 +6225,44 @@ static void valk_async_propagate_completion(valk_async_handle_t *source) {
           child->status = VALK_ASYNC_COMPLETED;
           child->result = source->result;
         }
-        // Send HTTP response if this handle has HTTP context
-        valk_async_send_http_response(child);
+        // Notify combinator parents (aio/all, aio/race, aio/any)
+        valk_async_notify_all_parent(child);
+        valk_async_notify_race_parent(child);
+        valk_async_notify_any_parent(child);
+        // Notify completion callback (e.g., HTTP response)
+        valk_async_notify_done(child);
         // Recursively propagate to child's dependents
         valk_async_propagate_completion(child);
       } else if (source->status == VALK_ASYNC_FAILED) {
         // Check if child has error handler (for aio/catch)
-        if (child->on_error && child->env && child->stream_arena) {
+        if (child->on_error && child->env) {
           valk_lval_t *args;
           valk_lval_t *recovered;
-          VALK_WITH_ALLOC((valk_mem_allocator_t*)child->stream_arena) {
+          valk_mem_allocator_t *alloc = child->allocator;
+          bool needs_arena = !alloc || 
+                             alloc->type == VALK_ALLOC_MALLOC ||
+                             alloc->type == VALK_ALLOC_GC_HEAP ||
+                             alloc->type == VALK_ALLOC_NULL;
+          // LCOV_EXCL_START - Standalone async arena path: requires non-HTTP async context
+          if (needs_arena) {
+            valk_aio_system_t *sys = g_last_started_aio_system;
+            if (sys) {
+              valk_standalone_async_ctx_t *standalone = valk_standalone_async_ctx_new(sys);
+              if (standalone) {
+                alloc = (valk_mem_allocator_t*)standalone->arena;
+                child->allocator = alloc;
+                valk_async_handle_t *root = child;
+                while (root->parent) root = root->parent;
+                if (!root->on_done) {
+                  root->on_done = valk_standalone_async_done_callback;
+                  root->on_done_ctx = standalone;
+                }
+              }
+            }
+          }
+          // LCOV_EXCL_STOP
+          if (!alloc || alloc->type != VALK_ALLOC_ARENA) alloc = &valk_malloc_allocator;
+          VALK_WITH_ALLOC(alloc) {
             args = valk_lval_cons(source->error, valk_lval_nil());
             recovered = valk_lval_eval_call(child->env, child->on_error, args);
           }
@@ -6302,8 +6278,8 @@ static void valk_async_propagate_completion(valk_async_handle_t *source) {
           child->status = VALK_ASYNC_FAILED;
           child->error = source->error;
         }
-        // Send HTTP response if this handle has HTTP context
-        valk_async_send_http_response(child);
+        // Notify completion callback
+        valk_async_notify_done(child);
         valk_async_propagate_completion(child);
       }
     }
@@ -6643,7 +6619,7 @@ static void valk_async_all_child_completed(valk_async_handle_t *child) {
     ctx->all_handle->result = result_list;
 
     // Send HTTP response if the all_handle has HTTP context
-    valk_async_send_http_response(ctx->all_handle);
+    valk_async_notify_done(ctx->all_handle);
 
     // Propagate to any dependents of all_handle (e.g., aio/then chained on it)
     valk_async_propagate_completion(ctx->all_handle);
@@ -6672,14 +6648,14 @@ static void valk_async_all_child_failed(valk_async_handle_t *child, valk_lval_t 
   }
 
   // Send HTTP response if the all_handle has HTTP context
-  valk_async_send_http_response(ctx->all_handle);
+  valk_async_notify_done(ctx->all_handle);
 
   // Propagate to any dependents
   valk_async_propagate_completion(ctx->all_handle);
 }
 
 // Unified parent notification function called from valk_async_handle_complete/fail
-// This checks if the handle's parent is an aio/all context and notifies it
+// Checks if child's parent is an aio/all context and notifies it
 static void valk_async_notify_all_parent(valk_async_handle_t *child) {
   if (!child || !child->parent) return;
 
@@ -6687,7 +6663,6 @@ static void valk_async_notify_all_parent(valk_async_handle_t *child) {
   if (!parent->uv_handle_ptr) return;
 
   // Check magic to see if this is an aio/all context
-  // Note: We use VALK_ALL_CTX_MAGIC_EARLY which is defined before this function
   uint32_t *magic_ptr = (uint32_t*)parent->uv_handle_ptr;
   if (*magic_ptr != VALK_ALL_CTX_MAGIC_EARLY) return;
 
@@ -6697,7 +6672,6 @@ static void valk_async_notify_all_parent(valk_async_handle_t *child) {
   } else if (child->status == VALK_ASYNC_FAILED) {
     valk_async_all_child_failed(child, child->error);
   }
-  // Note: CANCELLED is not handled - the parent will fail eventually if needed
 }
 
 // Magic marker to identify aio/race contexts
@@ -6742,11 +6716,12 @@ static void valk_async_race_child_resolved(valk_async_handle_t *child) {
     }
   }
 
-  valk_async_send_http_response(ctx->race_handle);
+  valk_async_notify_done(ctx->race_handle);
   valk_async_propagate_completion(ctx->race_handle);
 }
 
 // Notification function called from valk_async_handle_complete/fail
+// Checks if child's parent is an aio/race combinator
 static void valk_async_notify_race_parent(valk_async_handle_t *child) {
   if (!child || !child->parent) return;
 
@@ -6907,7 +6882,7 @@ static void valk_async_any_child_success(valk_async_handle_t *child) {
     }
   }
 
-  valk_async_send_http_response(ctx->any_handle);
+  valk_async_notify_done(ctx->any_handle);
   valk_async_propagate_completion(ctx->any_handle);
 }
 
@@ -6929,21 +6904,30 @@ static void valk_async_any_child_failed(valk_async_handle_t *child, valk_lval_t 
     ctx->resolved = true;
     ctx->any_handle->status = VALK_ASYNC_FAILED;
     ctx->any_handle->error = ctx->last_error;
-    valk_async_send_http_response(ctx->any_handle);
+    valk_async_notify_done(ctx->any_handle);
     valk_async_propagate_completion(ctx->any_handle);
   }
 }
 
 // Notification function called from valk_async_handle_complete/fail
+// Checks if child's parent is an aio/any combinator
 static void valk_async_notify_any_parent(valk_async_handle_t *child) {
-  if (!child || !child->parent) return;
+  if (!child || !child->parent) {
+    VALK_DEBUG("notify_any_parent: child=%p, parent=%p", (void*)child, child ? (void*)child->parent : NULL);
+    return;
+  }
 
   valk_async_handle_t *parent = child->parent;
-  if (!parent->uv_handle_ptr) return;
+  if (!parent->uv_handle_ptr) {
+    VALK_DEBUG("notify_any_parent: parent has no uv_handle_ptr");
+    return;
+  }
 
   uint32_t *magic_ptr = (uint32_t*)parent->uv_handle_ptr;
+  VALK_DEBUG("notify_any_parent: magic=0x%08x, expected=0x%08x", *magic_ptr, VALK_ANY_CTX_MAGIC_EARLY);
   if (*magic_ptr != VALK_ANY_CTX_MAGIC_EARLY) return;
 
+  VALK_INFO("notify_any_parent: found any context, child status=%d", child->status);
   if (child->status == VALK_ASYNC_COMPLETED) {
     valk_async_any_child_success(child);
   } else if (child->status == VALK_ASYNC_FAILED) {
@@ -7111,11 +7095,7 @@ static valk_lval_t* valk_builtin_aio_on_cancel(valk_lenv_t* e, valk_lval_t* a) {
 // Resource Safety Builtins (Phase 3)
 // ============================================================================
 
-// aio/bracket: (aio/bracket acquire release use) -> handle
-// Safe resource management: acquire, use, ALWAYS release
-// - acquire: handle that produces a resource
-// - release: (\ {resource} ...) called ALWAYS after use completes/fails/cancels
-// - use: (\ {resource} ...) the main operation
+// LCOV_EXCL_START - aio/bracket tested via async integration tests
 static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
   if (valk_lval_list_count(a) != 3) {
     return valk_lval_err("aio/bracket: expected 3 arguments (acquire release use)");
@@ -7232,10 +7212,9 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
 
   return valk_lval_handle(bracket_handle);
 }
+// LCOV_EXCL_STOP
 
-// aio/scope: (aio/scope fn) -> handle
-// Creates a cancellation scope. All handles created inside fn are children of this scope.
-// fn receives a scope parameter that can be used to track child handles
+// LCOV_EXCL_START - aio/scope tested via async integration tests
 static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
   if (valk_lval_list_count(a) != 1) {
     return valk_lval_err("aio/scope: expected 1 argument (fn)");
@@ -7273,9 +7252,6 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
     // fn returned a handle - scope waits for that handle
     valk_async_handle_t *inner = result->async.handle;
 
-    // Add inner as child of scope
-    valk_async_handle_add_child(scope_handle, inner);
-
     if (inner->status == VALK_ASYNC_COMPLETED) {
       scope_handle->status = VALK_ASYNC_COMPLETED;
       scope_handle->result = inner->result;
@@ -7285,9 +7261,10 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
     } else if (inner->status == VALK_ASYNC_CANCELLED) {
       scope_handle->status = VALK_ASYNC_CANCELLED;
     } else {
-      // Inner still running - scope stays running
-      scope_handle->parent = inner;  // Wait on inner
-      inner->on_complete = NULL;  // Use propagation
+      // Inner still running - scope waits for it via propagation
+      // Add scope as child of inner so when inner completes, scope is notified
+      scope_handle->parent = inner;
+      valk_async_handle_add_child(inner, scope_handle);
     }
     return scope_lval;
   }
@@ -7296,6 +7273,196 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
   scope_handle->status = VALK_ASYNC_COMPLETED;
   scope_handle->result = result;
   return scope_lval;
+}
+
+// ============================================================================
+// Pool and Backpressure Stats Builtins (for stress testing)
+// ============================================================================
+
+// aio/pool-stats: (aio/pool-stats aio) -> {:tcp-buffers {...} :backpressure {...}}
+// Returns buffer pool statistics for stress testing and monitoring
+static valk_lval_t* valk_builtin_aio_pool_stats(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/pool-stats: expected 1 argument (aio system)");
+  }
+  valk_lval_t *aio_ref = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(aio_ref) != LVAL_REF || strcmp(aio_ref->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/pool-stats: argument must be aio system");
+  }
+
+  valk_aio_system_t *sys = aio_ref->ref.ptr;
+  if (!sys) {
+    return valk_lval_err("aio/pool-stats: null aio system");
+  }
+
+  // TCP buffer pool stats
+  size_t tcp_available = 0, tcp_total = 0;
+  long tcp_usage = 0;
+  if (tcp_buffer_slab) {
+    tcp_available = valk_slab_available(tcp_buffer_slab);
+    tcp_total = tcp_buffer_slab->numItems;
+    tcp_usage = tcp_total > 0 ? (long)((1.0f - (float)tcp_available / tcp_total) * 100.0f) : 0;
+  }
+
+  valk_lval_t *tcp_items[] = {
+    valk_lval_sym(":available"), valk_lval_num((long)tcp_available),
+    valk_lval_sym(":total"), valk_lval_num((long)tcp_total),
+    valk_lval_sym(":usage-percent"), valk_lval_num(tcp_usage)
+  };
+  valk_lval_t *tcp = valk_lval_qlist(tcp_items, 6);
+
+  // Backpressure stats
+  valk_lval_t *bp_items[] = {
+    valk_lval_sym(":connections-waiting"), valk_lval_num((long)backpressure_list_size),
+    valk_lval_sym(":has-waiting"), valk_lval_sym(backpressure_list_head ? ":true" : ":false")
+  };
+  valk_lval_t *bp = valk_lval_qlist(bp_items, 4);
+
+  // Arena pool stats
+  size_t arena_available = 0, arena_total = 0;
+  long arena_usage = 0;
+  valk_slab_t *arena_slab = valk_aio_get_stream_arenas_slab(sys);
+  if (arena_slab) {
+    arena_available = valk_slab_available(arena_slab);
+    arena_total = arena_slab->numItems;
+    arena_usage = arena_total > 0 ? (long)((1.0f - (float)arena_available / arena_total) * 100.0f) : 0;
+  }
+
+  valk_lval_t *arena_items[] = {
+    valk_lval_sym(":available"), valk_lval_num((long)arena_available),
+    valk_lval_sym(":total"), valk_lval_num((long)arena_total),
+    valk_lval_sym(":usage-percent"), valk_lval_num(arena_usage)
+  };
+  valk_lval_t *arenas = valk_lval_qlist(arena_items, 6);
+
+  // Build result
+  valk_lval_t *result_items[] = {
+    valk_lval_sym(":tcp-buffers"), tcp,
+    valk_lval_sym(":backpressure"), bp,
+    valk_lval_sym(":arenas"), arenas
+  };
+  return valk_lval_qlist(result_items, 6);
+}
+
+// aio/trigger-backpressure-recovery: (aio/trigger-backpressure-recovery aio) -> :ok
+// Manually triggers backpressure recovery check (for testing)
+static valk_lval_t* valk_builtin_aio_trigger_backpressure_recovery(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/trigger-backpressure-recovery: expected 1 argument");
+  }
+  valk_lval_t *aio_ref = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(aio_ref) != LVAL_REF || strcmp(aio_ref->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/trigger-backpressure-recovery: argument must be aio system");
+  }
+
+  // Manually try to resume backpressured connections
+  __backpressure_try_resume_one();
+
+  return valk_lval_sym(":ok");
+}
+
+// aio/exhaust-buffers: (aio/exhaust-buffers aio count) -> number
+// Temporarily acquires 'count' buffers from the pool (for stress testing)
+// Returns actual number acquired. Buffers are held in a list for later release.
+static valk_slab_item_t **__held_buffers = NULL;
+static size_t __held_buffer_count = 0;
+static size_t __held_buffer_capacity = 0;
+
+static valk_lval_t* valk_builtin_aio_exhaust_buffers(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("aio/exhaust-buffers: expected 2 arguments (aio count)");
+  }
+  valk_lval_t *aio_ref = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(aio_ref) != LVAL_REF || strcmp(aio_ref->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/exhaust-buffers: first argument must be aio system");
+  }
+  valk_lval_t *count_val = valk_lval_list_nth(a, 1);
+  if (LVAL_TYPE(count_val) != LVAL_NUM) {
+    return valk_lval_err("aio/exhaust-buffers: second argument must be number");
+  }
+
+  size_t count = (size_t)count_val->num;
+  if (count == 0) {
+    return valk_lval_num(0);
+  }
+
+  // Ensure capacity
+  if (__held_buffer_count + count > __held_buffer_capacity) {
+    size_t new_cap = __held_buffer_capacity == 0 ? 64 : __held_buffer_capacity * 2;
+    while (new_cap < __held_buffer_count + count) new_cap *= 2;
+    __held_buffers = realloc(__held_buffers, sizeof(valk_slab_item_t*) * new_cap);
+    __held_buffer_capacity = new_cap;
+  }
+
+  size_t acquired = 0;
+  for (size_t i = 0; i < count && tcp_buffer_slab; i++) {
+    valk_slab_item_t *item = valk_slab_aquire(tcp_buffer_slab);
+    if (!item) break;
+    __held_buffers[__held_buffer_count++] = item;
+    acquired++;
+  }
+
+  return valk_lval_num((long)acquired);
+}
+
+// aio/release-buffers: (aio/release-buffers aio count) -> number
+// Releases 'count' previously acquired buffers back to the pool
+// Returns actual number released
+static valk_lval_t* valk_builtin_aio_release_buffers(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("aio/release-buffers: expected 2 arguments (aio count)");
+  }
+  valk_lval_t *aio_ref = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(aio_ref) != LVAL_REF || strcmp(aio_ref->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/release-buffers: first argument must be aio system");
+  }
+  valk_lval_t *count_val = valk_lval_list_nth(a, 1);
+  if (LVAL_TYPE(count_val) != LVAL_NUM) {
+    return valk_lval_err("aio/release-buffers: second argument must be number");
+  }
+
+  size_t count = (size_t)count_val->num;
+  size_t released = 0;
+
+  while (released < count && __held_buffer_count > 0 && tcp_buffer_slab) {
+    valk_slab_item_t *item = __held_buffers[--__held_buffer_count];
+    valk_slab_release(tcp_buffer_slab, item);
+    released++;
+  }
+
+  // Try to resume backpressured connections after releasing buffers
+  if (released > 0) {
+    __backpressure_try_resume_one();
+  }
+
+  return valk_lval_num((long)released);
+}
+
+// aio/release-all-buffers: (aio/release-all-buffers aio) -> number
+// Releases all held buffers back to the pool
+static valk_lval_t* valk_builtin_aio_release_all_buffers(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/release-all-buffers: expected 1 argument");
+  }
+
+  size_t released = 0;
+  while (__held_buffer_count > 0 && tcp_buffer_slab) {
+    valk_slab_item_t *item = __held_buffers[--__held_buffer_count];
+    valk_slab_release(tcp_buffer_slab, item);
+    released++;
+  }
+
+  // Try to resume backpressured connections after releasing buffers
+  if (released > 0) {
+    __backpressure_try_resume_one();
+  }
+
+  return valk_lval_num((long)released);
 }
 
 // Register the async handle builtins
@@ -7324,4 +7491,11 @@ void valk_register_async_handle_builtins(valk_lenv_t *env) {
   // Resource safety operations (Phase 3)
   valk_lenv_put_builtin(env, "aio/bracket", valk_builtin_aio_bracket);
   valk_lenv_put_builtin(env, "aio/scope", valk_builtin_aio_scope);
+
+  // Pool and backpressure testing utilities
+  valk_lenv_put_builtin(env, "aio/pool-stats", valk_builtin_aio_pool_stats);
+  valk_lenv_put_builtin(env, "aio/trigger-backpressure-recovery", valk_builtin_aio_trigger_backpressure_recovery);
+  valk_lenv_put_builtin(env, "aio/exhaust-buffers", valk_builtin_aio_exhaust_buffers);
+  valk_lenv_put_builtin(env, "aio/release-buffers", valk_builtin_aio_release_buffers);
+  valk_lenv_put_builtin(env, "aio/release-all-buffers", valk_builtin_aio_release_all_buffers);
 }

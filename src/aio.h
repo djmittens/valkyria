@@ -35,8 +35,15 @@ typedef enum valk_async_status_t {
   VALK_ASYNC_CANCELLED,   // Cancelled before completion
 } valk_async_status_t;
 
+// Callback types for async handle completion notification
+typedef void (*valk_async_done_fn)(struct valk_async_handle_t *handle, void *ctx);
+typedef bool (*valk_async_is_closed_fn)(void *ctx);
+
 // Async handle - represents an in-flight async operation
-// This is the main structure for composable async operations
+// This is the main structure for composable async operations.
+//
+// The async system is decoupled from specific I/O layers (HTTP, files, etc).
+// Each layer registers callbacks to handle completion and detect cancellation.
 struct valk_async_handle_t {
   // Identity
   uint64_t id;
@@ -49,23 +56,31 @@ struct valk_async_handle_t {
   void *uv_handle_ptr;
   void *loop;
 
-  // Callbacks (all are valk_lval_t* - lambdas to call)
-  struct valk_lval_t *on_complete;       // (\ {result} ...)
-  struct valk_lval_t *on_error;          // (\ {error} ...)
-  struct valk_lval_t *on_cancel;         // (\ {} ...)
+  // Transform callbacks (Lisp lambdas for aio/then, aio/catch, etc.)
+  struct valk_lval_t *on_complete;       // (\ {result} ...) - transform on success
+  struct valk_lval_t *on_error;          // (\ {error} ...) - transform on error
+  struct valk_lval_t *on_cancel;         // (\ {} ...) - cleanup on cancel
   struct valk_lenv_t *env;               // Environment for callback evaluation
 
   // Result storage
   struct valk_lval_t *result;            // Success value (or nil)
   struct valk_lval_t *error;             // Error value (or nil)
 
-  // HTTP context (for sending response after async completion)
-  void *session;
-  int32_t stream_id;
-  valk_aio_handle_t *conn;
-  struct valk_mem_arena *stream_arena;
-  void *arena_slab_item;   // Stored for restoring to req after async response
-  uint32_t arena_slot;     // Stored for restoring to req after async response
+  // Memory management - allocator for transform function execution
+  // Set by the I/O layer: HTTP uses stream arena, others use malloc
+  valk_mem_allocator_t *allocator;
+
+  // Generic completion callback - called when handle reaches terminal state
+  // This replaces HTTP-specific response sending. Each I/O layer registers
+  // its own callback (e.g., HTTP sends response, file I/O closes fd, etc.)
+  valk_async_done_fn on_done;
+  void *on_done_ctx;
+
+  // Connection/resource closed detection - called to check if the underlying
+  // resource is still valid (e.g., HTTP connection closed, file closed, etc.)
+  // If NULL, resource is assumed to be always valid.
+  valk_async_is_closed_fn is_closed;
+  void *is_closed_ctx;
 
   // Structured cancellation (parent/child hierarchy)
   struct valk_async_handle_t *parent;
@@ -74,9 +89,6 @@ struct valk_async_handle_t {
     size_t count;
     size_t capacity;
   } children;
-
-  // Memory management
-  valk_mem_allocator_t *allocator;
 
   // Linked list for handle tracking
   struct valk_async_handle_t *prev;
@@ -143,9 +155,6 @@ typedef struct valk_http2_response_t {
 
   valk_promise _promise;
 } valk_http2_response_t;
-
-char *valk_client_demo(valk_aio_system_t *sys, const char *domain,
-                       const char *port);
 
 valk_aio_system_t *valk_aio_start();
 
