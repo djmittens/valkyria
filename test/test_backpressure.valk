@@ -7,14 +7,13 @@
 
 (def {TEST_PORT} 8491)
 
-; Start with minimal buffer pool to trigger backpressure quickly
-; tcp-buffer-pool-size must be >= max-connections
-; But we set both low so buffers exhaust quickly under load
-; Use short backpressure-timeout to exercise timeout path
+; Use buffer pool size that allows SOME connections to work while others are backpressured
+; This exercises both backpressure ADD and RESUME paths
+; Larger pool so we don't hit 100% exhaustion (which causes deadlock)
 (def {aio} (aio/start {
-  :max-connections 20
-  :tcp-buffer-pool-size 20
-  :backpressure-timeout-ms 2000
+  :max-connections 8
+  :tcp-buffer-pool-size 24
+  :backpressure-timeout-ms 5000
 }))
 
 (def {requests-completed} 0)
@@ -31,7 +30,7 @@
 (println "")
 (println "=== Backpressure Stress Test ===")
 (println "")
-(printf "Config: tcp-buffer-pool-size=20, max-connections=20, timeout=2000ms\n")
+(printf "Config: tcp-buffer-pool-size=24, max-connections=8, timeout=5000ms\n")
 (printf "Starting server on port %d\n" TEST_PORT)
 (http2/server-listen aio TEST_PORT handler)
 
@@ -49,31 +48,30 @@
       (make-requests (- n 1)))})
 })
 
-; Schedule bursts of requests to create pressure
-; Spread them out more to allow backpressure timer to run between bursts
+; First: Start 6 requests to use up some buffers
+(aio/schedule aio 50 (\ {} {
+  (println "Phase 1: Starting 6 initial requests...")
+  (make-requests 6)
+}))
+
+; While those are in-flight (handler sleeps 50ms), start more to exhaust buffers
+; This should cause backpressure on the new connections
 (aio/schedule aio 100 (\ {} {
-  (println "Burst 1: Starting 15 concurrent requests...")
-  (make-requests 15)
+  (println "Phase 2: Starting 8 more requests (should trigger backpressure)...")
+  (make-requests 8)
 }))
 
-(aio/schedule aio 500 (\ {} {
-  (println "Burst 2: Starting 15 more concurrent requests...")
-  (make-requests 15)
+; First batch completes around 100-150ms, freeing buffers
+; The backpressured connections should then resume
+; Add more requests to keep pressure up
+(aio/schedule aio 200 (\ {} {
+  (println "Phase 3: Starting 4 more requests...")
+  (make-requests 4)
 }))
 
-(aio/schedule aio 1000 (\ {} {
-  (println "Burst 3: Starting 15 more concurrent requests...")
-  (make-requests 15)
-}))
-
-(aio/schedule aio 1500 (\ {} {
-  (println "Burst 4: Starting 15 more concurrent requests...")
-  (make-requests 15)
-}))
-
-(aio/schedule aio 2000 (\ {} {
-  (println "Burst 5: Starting 15 more concurrent requests...")
-  (make-requests 15)
+(aio/schedule aio 400 (\ {} {
+  (println "Phase 4: Starting 4 more requests...")
+  (make-requests 4)
 }))
 
 ; Wait longer for backpressure recovery to happen

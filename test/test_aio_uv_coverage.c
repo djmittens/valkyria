@@ -2416,6 +2416,147 @@ static void test_stream_metrics(VALK_TEST_ARGS()) {
 
   VALK_PASS();
 }
+
+void test_backpressure_under_load(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_config_t cfg = {0};
+  cfg.max_connections = 8;
+  cfg.tcp_buffer_pool_size = 32;
+  cfg.arena_pool_size = 16;
+  cfg.pending_stream_pool_size = 32;
+  cfg.backpressure_timeout_ms = 2000;
+
+  int res = valk_aio_system_config_resolve(&cfg);
+  ASSERT_EQ(res, 0);
+
+  valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
+  ASSERT_NOT_NULL(sys);
+
+  int port = get_available_port();
+  ASSERT_GT(port, 0);
+
+  valk_srv_state_t state = {0};
+  valk_http2_handler_t handler = {
+      .arg = &state,
+      .onConnect = cb_onConnect,
+      .onDisconnect = cb_onDisconnect,
+      .onHeader = cb_onHeader,
+      .onBody = cb_onBody,
+  };
+
+  valk_future *fserv = valk_aio_http2_listen(
+      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+  valk_arc_box *server = valk_future_await(fserv);
+  ASSERT_EQ(server->type, VALK_SUC);
+
+  #define NUM_CLIENTS 4
+  valk_future *client_futures[NUM_CLIENTS];
+  valk_arc_box *client_boxes[NUM_CLIENTS];
+  valk_aio_http2_client *clients[NUM_CLIENTS];
+
+  for (int i = 0; i < NUM_CLIENTS; i++) {
+    client_futures[i] = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
+  }
+
+  int connected = 0;
+  for (int i = 0; i < NUM_CLIENTS; i++) {
+    client_boxes[i] = valk_future_await(client_futures[i]);
+    if (client_boxes[i]->type == VALK_SUC) {
+      clients[connected++] = client_boxes[i]->item;
+    }
+  }
+
+  ASSERT_GT(connected, 0);
+
+  for (int c = 0; c < connected; c++) {
+    uint8_t req_buf[sizeof(valk_mem_arena_t) + 8192];
+    valk_mem_arena_t *req_arena = (void *)req_buf;
+    valk_mem_arena_init(req_arena, 8192);
+
+    valk_http2_request_t *req = create_request(req_arena, "GET", "/test");
+    valk_future *freq = valk_aio_http2_request_send(req, clients[c]);
+    valk_arc_box *res = valk_future_await(freq);
+    valk_arc_release(res);
+    valk_arc_release(freq);
+  }
+
+  for (int i = 0; i < NUM_CLIENTS; i++) {
+    valk_arc_release(client_boxes[i]);
+    valk_arc_release(client_futures[i]);
+  }
+  #undef NUM_CLIENTS
+
+  valk_arc_release(server);
+  valk_arc_release(fserv);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+void test_backpressure_timeout_closes_connection(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_config_t cfg = {0};
+  cfg.max_connections = 8;
+  cfg.tcp_buffer_pool_size = 16;
+  cfg.arena_pool_size = 2;
+  cfg.pending_stream_pool_size = 4;
+  cfg.backpressure_timeout_ms = 1000;
+
+  int res = valk_aio_system_config_resolve(&cfg);
+  ASSERT_EQ(res, 0);
+
+  valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
+  ASSERT_NOT_NULL(sys);
+
+  int port = get_available_port();
+  ASSERT_GT(port, 0);
+
+  valk_srv_state_t state = {0};
+  valk_http2_handler_t handler = {
+      .arg = &state,
+      .onConnect = cb_onConnect,
+      .onDisconnect = cb_onDisconnect,
+      .onHeader = cb_onHeader,
+      .onBody = cb_onBody,
+  };
+
+  valk_future *fserv = valk_aio_http2_listen(
+      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+  valk_arc_box *server = valk_future_await(fserv);
+  ASSERT_EQ(server->type, VALK_SUC);
+
+  #define NUM_CLIENTS 6
+  valk_future *client_futures[NUM_CLIENTS];
+  valk_arc_box *client_boxes[NUM_CLIENTS];
+
+  for (int i = 0; i < NUM_CLIENTS; i++) {
+    client_futures[i] = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
+  }
+
+  for (int i = 0; i < NUM_CLIENTS; i++) {
+    client_boxes[i] = valk_future_await(client_futures[i]);
+  }
+
+  usleep(200000);
+
+  for (int i = 0; i < NUM_CLIENTS; i++) {
+    valk_arc_release(client_boxes[i]);
+    valk_arc_release(client_futures[i]);
+  }
+  #undef NUM_CLIENTS
+
+  valk_arc_release(server);
+  valk_arc_release(fserv);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
 #endif
 
 int main(int argc, const char **argv) {
@@ -2485,6 +2626,8 @@ int main(int argc, const char **argv) {
 #ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_connection_metrics", test_connection_metrics);
   valk_testsuite_add_test(suite, "test_stream_metrics", test_stream_metrics);
+  valk_testsuite_add_test(suite, "test_backpressure_under_load", test_backpressure_under_load);
+  valk_testsuite_add_test(suite, "test_backpressure_timeout_closes_connection", test_backpressure_timeout_closes_connection);
 #endif
 
   int res = valk_testsuite_run(suite);

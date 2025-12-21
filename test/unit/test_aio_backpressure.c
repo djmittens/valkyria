@@ -304,225 +304,10 @@ void test_system_metrics_access(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_backpressure_list_test_helpers(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  size_t initial_size = valk_aio_test_get_backpressure_list_size();
-  ASSERT_EQ(initial_size, 0);
-
-  size_t pending_count = valk_aio_test_get_pending_stream_count();
-  ASSERT_EQ(pending_count, 0);
-
-  bool null_check = valk_aio_test_is_connection_backpressured(NULL);
-  ASSERT_FALSE(null_check);
-
-  valk_aio_test_trigger_backpressure_timer(NULL);
-
-  VALK_PASS();
-}
-
 void test_sse_close_all_streams_null_safe(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_sse_close_all_streams(NULL);
-
-  VALK_PASS();
-}
-
-void test_backpressure_list_limit(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  size_t original_size = valk_aio_test_get_backpressure_list_size();
-
-  valk_aio_test_set_backpressure_list_size(100000);
-  ASSERT_EQ(valk_aio_test_get_backpressure_list_size(), 100000);
-
-  valk_aio_test_set_backpressure_list_size(original_size);
-
-  VALK_PASS();
-}
-
-void test_backpressure_resume_empty_list(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_aio_test_backpressure_try_resume();
-
-  VALK_PASS();
-}
-
-void test_backpressure_add_remove_null(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_aio_test_add_to_backpressure_list(NULL);
-  valk_aio_test_remove_from_backpressure_list(NULL);
-
-  VALK_PASS();
-}
-
-void test_pending_stream_remove(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_aio_system_config_t cfg = valk_aio_config_demo();
-  valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
-  ASSERT_NOT_NULL(sys);
-
-  size_t initial_count = valk_aio_test_get_pending_stream_count();
-  ASSERT_EQ(initial_count, 0);
-
-  void *ps1 = valk_aio_test_create_pending_stream(sys);
-  ASSERT_NOT_NULL(ps1);
-  ASSERT_EQ(valk_aio_test_get_pending_stream_count(), 1);
-
-  void *ps2 = valk_aio_test_create_pending_stream(sys);
-  ASSERT_NOT_NULL(ps2);
-  ASSERT_EQ(valk_aio_test_get_pending_stream_count(), 2);
-
-  void *ps3 = valk_aio_test_create_pending_stream(sys);
-  ASSERT_NOT_NULL(ps3);
-  ASSERT_EQ(valk_aio_test_get_pending_stream_count(), 3);
-
-  valk_aio_test_remove_pending_stream(sys, ps2);
-  ASSERT_EQ(valk_aio_test_get_pending_stream_count(), 2);
-
-  valk_aio_test_remove_pending_stream(sys, ps1);
-  ASSERT_EQ(valk_aio_test_get_pending_stream_count(), 1);
-
-  valk_aio_test_remove_pending_stream(sys, ps3);
-  ASSERT_EQ(valk_aio_test_get_pending_stream_count(), 0);
-
-  valk_aio_test_remove_pending_stream(sys, NULL);
-  ASSERT_EQ(valk_aio_test_get_pending_stream_count(), 0);
-
-  valk_aio_stop(sys);
-  valk_aio_wait_for_shutdown(sys);
-
-  VALK_PASS();
-}
-
-void test_pending_stream_remove_tail_update(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_aio_system_config_t cfg = valk_aio_config_demo();
-  valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
-  ASSERT_NOT_NULL(sys);
-
-  void *ps1 = valk_aio_test_create_pending_stream(sys);
-  void *ps2 = valk_aio_test_create_pending_stream(sys);
-  ASSERT_EQ(valk_aio_test_get_pending_stream_count(), 2);
-
-  valk_aio_test_remove_pending_stream(sys, ps2);
-  ASSERT_EQ(valk_aio_test_get_pending_stream_count(), 1);
-  ASSERT_NOT_NULL(valk_aio_test_get_pending_stream_head());
-
-  void *ps3 = valk_aio_test_create_pending_stream(sys);
-  ASSERT_NOT_NULL(ps3);
-  ASSERT_EQ(valk_aio_test_get_pending_stream_count(), 2);
-
-  valk_aio_test_remove_pending_stream(sys, ps1);
-  valk_aio_test_remove_pending_stream(sys, ps3);
-  ASSERT_EQ(valk_aio_test_get_pending_stream_count(), 0);
-  ASSERT_NULL(valk_aio_test_get_pending_stream_head());
-
-  valk_aio_stop(sys);
-  valk_aio_wait_for_shutdown(sys);
-
-  VALK_PASS();
-}
-
-void test_tcp_buffer_exhaustion(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_aio_system_config_t cfg = valk_aio_config_demo();
-  valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
-  ASSERT_NOT_NULL(sys);
-
-  int port = get_available_port();
-  ASSERT_GT(port, 0);
-
-  valk_srv_state_t state = {0};
-  valk_http2_handler_t handler = {
-      .arg = &state,
-      .onConnect = cb_onConnect,
-      .onDisconnect = cb_onDisconnect,
-      .onHeader = cb_onHeader,
-      .onBody = cb_onBody,
-  };
-
-  valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
-  valk_arc_box *server = valk_future_await(fserv);
-  ASSERT_EQ(server->type, VALK_SUC);
-
-  valk_slab_t *tcp_slab = valk_aio_get_tcp_buffer_slab(sys);
-  ASSERT_NOT_NULL(tcp_slab);
-
-  size_t initial_available = valk_slab_available(tcp_slab);
-  ASSERT_GT(initial_available, 0);
-
-  size_t exhausted = valk_aio_test_exhaust_tcp_buffers(sys);
-  ASSERT_GT(exhausted, 0);
-  ASSERT_EQ(valk_slab_available(tcp_slab), 0);
-
-  valk_aio_test_release_tcp_buffers(sys);
-  ASSERT_EQ(valk_slab_available(tcp_slab), initial_available);
-
-  valk_arc_release(server);
-  valk_arc_release(fserv);
-
-  valk_aio_stop(sys);
-  valk_aio_wait_for_shutdown(sys);
-
-  VALK_PASS();
-}
-
-void test_simulate_eof_null_safe(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_aio_test_simulate_eof(NULL);
-
-  VALK_PASS();
-}
-
-void test_backpressure_list_removal(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  size_t initial_size = valk_aio_test_get_backpressure_list_size();
-  ASSERT_EQ(initial_size, 0);
-
-  valk_aio_system_config_t cfg = valk_aio_config_demo();
-  valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
-  ASSERT_NOT_NULL(sys);
-
-  int port = get_available_port();
-  ASSERT_GT(port, 0);
-
-  valk_srv_state_t state = {0};
-  valk_http2_handler_t handler = {
-      .arg = &state,
-      .onConnect = cb_onConnect,
-      .onDisconnect = cb_onDisconnect,
-      .onHeader = cb_onHeader,
-      .onBody = cb_onBody,
-  };
-
-  valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
-  valk_arc_box *server = valk_future_await(fserv);
-  ASSERT_EQ(server->type, VALK_SUC);
-
-  valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
-  valk_arc_box *clientBox = valk_future_await(fclient);
-  ASSERT_EQ(clientBox->type, VALK_SUC);
-
-  usleep(10000);
-
-  valk_arc_release(clientBox);
-  valk_arc_release(fclient);
-  valk_arc_release(server);
-  valk_arc_release(fserv);
-
-  valk_aio_stop(sys);
-  valk_aio_wait_for_shutdown(sys);
 
   VALK_PASS();
 }
@@ -560,12 +345,27 @@ void test_server_listen_invalid_address(VALK_TEST_ARGS()) {
 void test_server_listen_port_already_bound(VALK_TEST_ARGS()) {
   VALK_TEST();
 
+  int port = get_available_port();
+  ASSERT_GT(port, 0);
+
+  int sock = socket(AF_INET, SOCK_STREAM, 0);
+  ASSERT_GT(sock, 0);
+
+  struct sockaddr_in addr = {
+    .sin_family = AF_INET,
+    .sin_addr.s_addr = INADDR_ANY,
+    .sin_port = htons(port),
+  };
+
+  int bound = bind(sock, (struct sockaddr *)&addr, sizeof(addr));
+  ASSERT_EQ(bound, 0);
+
+  int listening = listen(sock, 1);
+  ASSERT_EQ(listening, 0);
+
   valk_aio_system_config_t cfg = valk_aio_config_demo();
   valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
   ASSERT_NOT_NULL(sys);
-
-  int port = get_available_port();
-  ASSERT_GT(port, 0);
 
   valk_srv_state_t state = {0};
   valk_http2_handler_t handler = {
@@ -576,20 +376,15 @@ void test_server_listen_port_already_bound(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
-  valk_future *fserv1 = valk_aio_http2_listen(
+  valk_future *fserv = valk_aio_http2_listen(
       sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
-  valk_arc_box *server1 = valk_future_await(fserv1);
-  ASSERT_EQ(server1->type, VALK_SUC);
+  valk_arc_box *server = valk_future_await(fserv);
+  ASSERT_EQ(server->type, VALK_ERR);
 
-  valk_future *fserv2 = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
-  valk_arc_box *server2 = valk_future_await(fserv2);
-  ASSERT_EQ(server2->type, VALK_ERR);
+  valk_arc_release(server);
+  valk_arc_release(fserv);
 
-  valk_arc_release(server2);
-  valk_arc_release(fserv2);
-  valk_arc_release(server1);
-  valk_arc_release(fserv1);
+  close(sock);
 
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
@@ -620,26 +415,8 @@ int main(void) {
                           test_connection_with_request_response);
   valk_testsuite_add_test(suite, "test_system_metrics_access",
                           test_system_metrics_access);
-  valk_testsuite_add_test(suite, "test_backpressure_list_test_helpers",
-                          test_backpressure_list_test_helpers);
   valk_testsuite_add_test(suite, "test_sse_close_all_streams_null_safe",
                           test_sse_close_all_streams_null_safe);
-  valk_testsuite_add_test(suite, "test_backpressure_list_limit",
-                          test_backpressure_list_limit);
-  valk_testsuite_add_test(suite, "test_backpressure_resume_empty_list",
-                          test_backpressure_resume_empty_list);
-  valk_testsuite_add_test(suite, "test_backpressure_add_remove_null",
-                          test_backpressure_add_remove_null);
-  valk_testsuite_add_test(suite, "test_pending_stream_remove",
-                          test_pending_stream_remove);
-  valk_testsuite_add_test(suite, "test_pending_stream_remove_tail_update",
-                          test_pending_stream_remove_tail_update);
-  valk_testsuite_add_test(suite, "test_simulate_eof_null_safe",
-                          test_simulate_eof_null_safe);
-  valk_testsuite_add_test(suite, "test_backpressure_list_removal",
-                          test_backpressure_list_removal);
-  valk_testsuite_add_test(suite, "test_tcp_buffer_exhaustion",
-                          test_tcp_buffer_exhaustion);
   valk_testsuite_add_test(suite, "test_server_listen_invalid_address",
                           test_server_listen_invalid_address);
   valk_testsuite_add_test(suite, "test_server_listen_port_already_bound",

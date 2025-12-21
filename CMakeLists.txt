@@ -341,6 +341,13 @@ if(VALK_METRICS)
 endif()
 include_directories(test_aio_uv_coverage src/)
 
+add_executable(test_aio_combinators test/test_aio_combinators.c test/testing.c)
+target_link_libraries(test_aio_combinators PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+if(VALK_METRICS)
+  target_compile_definitions(test_aio_combinators PRIVATE VALK_METRICS_ENABLED=1)
+endif()
+include_directories(test_aio_combinators src/)
+
 if(VALK_METRICS)
   add_executable(test_aio_backpressure test/unit/test_aio_backpressure.c test/testing.c)
   target_link_libraries(test_aio_backpressure PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})

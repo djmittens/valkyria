@@ -358,11 +358,11 @@ long valk_get_nanos(void);
     } else if (LVAL_TYPE(lval) != LVAL_SYM) {                                  \
       VALK_FAIL("ASSERT_LVAL_SYM: expected LVAL_SYM, got %d",                  \
                 (int)LVAL_TYPE(lval));                                         \
-    } else if ((lval)->sym == NULL) {                                          \
-      VALK_FAIL("ASSERT_LVAL_SYM: sym is NULL");                               \
-    } else if (strcmp((lval)->sym, (expected_sym)) != 0) {                     \
+    } else if ((lval)->str == NULL) {                                          \
+      VALK_FAIL("ASSERT_LVAL_SYM: str is NULL");                               \
+    } else if (strcmp((lval)->str, (expected_sym)) != 0) {                     \
       VALK_FAIL("ASSERT_LVAL_SYM: expected \"%s\", got \"%s\"",                \
-                (expected_sym), (lval)->sym);                                  \
+                (expected_sym), (lval)->str);                                  \
     }                                                                          \
   } while (0)
 

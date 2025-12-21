@@ -311,6 +311,7 @@ static __thread valk_aio_handle_t *backpressure_list_head = NULL;
 static __thread size_t backpressure_list_size = 0;
 static __thread uv_timer_t *backpressure_timer = NULL;
 static __thread uint32_t backpressure_timeout_ms = 0;  // 0 = use default
+static __thread uint32_t min_buffers_to_resume = 0;    // 0 = use default
 #define BACKPRESSURE_CHECK_INTERVAL_MS 100  // Check every 100ms (not configurable)
 
 // ============================================================================
@@ -407,13 +408,8 @@ typedef struct {
 static void __backpressure_list_add(valk_aio_handle_t *conn) {
   if (conn->http.backpressure) return;  // Already in list
 
-  // LCOV_EXCL_START - Defensive: would require 100K+ simultaneous backpressured connections
-  if (backpressure_list_size >= BACKPRESSURE_LIST_MAX_LIMIT) {
-    VALK_WARN("Backpressure list at maximum size (%d), cannot add more connections",
-              BACKPRESSURE_LIST_MAX_LIMIT);
-    return;
-  }
-  // LCOV_EXCL_STOP
+  VALK_ASSERT(backpressure_list_size < BACKPRESSURE_LIST_MAX_LIMIT,
+              "Backpressure list overflow: %zu connections", backpressure_list_size)
 
   conn->http.backpressure = true;
   conn->http.backpressure_start_time = uv_now(conn->uv.tcp.loop);
@@ -438,54 +434,35 @@ static void __backpressure_list_remove(valk_aio_handle_t *conn) {
   }
 }
 
-// Minimum buffers needed per connection to safely resume reading
-// (1 for input, 1 for output, plus margin for TLS/HTTP2 framing)
+// Minimum buffers needed per connection for safe operation (used in config defaults)
 #define BUFFERS_PER_CONNECTION 4
+
+// Minimum buffers to resume a backpressured connection
+// Lower than BUFFERS_PER_CONNECTION to allow earlier resume and reduce latency
+// The connection may briefly need to borrow from the pool but will release quickly
+#define BUFFERS_TO_RESUME 2
 
 static void __backpressure_try_resume_one(void) {
   if (!backpressure_list_head) return;
 
   size_t available = valk_slab_available(tcp_buffer_slab);
-  size_t total = tcp_buffer_slab->numItems;
-  float usage = 1.0f - ((float)available / total);
 
-  uint32_t min_buffers;
-  if (usage < 0.5f) {
-    min_buffers = 2;
-  } else if (usage < 0.75f) {
-    min_buffers = BUFFERS_PER_CONNECTION;
-  } else {
-    min_buffers = BUFFERS_PER_CONNECTION * 2;
-  }
-
-  if (available < min_buffers) {
+  uint32_t threshold = min_buffers_to_resume > 0 ? min_buffers_to_resume : BUFFERS_TO_RESUME;
+  if (available < threshold) {
     return;
   }
 
-  size_t headroom = available / 4;
-  size_t usable = available - headroom;
-  size_t max_resume = usable / min_buffers;
-  if (max_resume == 0) max_resume = 1;
+  valk_aio_handle_t *conn = backpressure_list_head;
 
-  size_t resumed = 0;
-  while (backpressure_list_head && resumed < max_resume) {
-    valk_aio_handle_t *conn = backpressure_list_head;
+  backpressure_list_head = conn->http.backpressure_next;
+  conn->http.backpressure_next = NULL;
+  conn->http.backpressure = false;
+  backpressure_list_size--;
 
-    backpressure_list_head = conn->http.backpressure_next;
-    conn->http.backpressure_next = NULL;
-    conn->http.backpressure = false;
-    backpressure_list_size--;
-
-    if (conn->http.state == VALK_CONN_ESTABLISHED || conn->http.state == VALK_CONN_INIT) {
-      uv_read_start((uv_stream_t *)&conn->uv.tcp,
-                    __alloc_callback, __http_tcp_read_cb);
-      resumed++;
-    }
-  }
-
-  if (resumed > 0) {
-    VALK_DEBUG("Resumed %zu backpressured connections (available buffers: %zu, usage: %.1f%%)",
-               resumed, available, usage * 100);
+  if (conn->http.state == VALK_CONN_ESTABLISHED || conn->http.state == VALK_CONN_INIT) {
+    uv_read_start((uv_stream_t *)&conn->uv.tcp,
+                  __alloc_callback, __http_tcp_read_cb);
+    VALK_DEBUG("Resumed backpressured connection (available buffers: %zu)", available);
   }
 }
 
@@ -784,7 +761,7 @@ static pending_stream_t *__pending_stream_alloc(valk_aio_system_t *sys) {
       return ps;
     }
   }
-  return NULL;  // LCOV_EXCL_LINE - Pool exhausted fallback
+  return NULL;
 }
 
 static void __pending_stream_free(valk_aio_system_t *sys, pending_stream_t *ps) {
@@ -939,29 +916,14 @@ static void __pending_stream_process_one(valk_aio_system_t *sys) {
 
   // Dequeue the oldest pending stream
   pending_stream_t *ps = __pending_stream_dequeue();
-  // LCOV_EXCL_START - Defensive: race between count check and dequeue
-  if (!ps) {
-    valk_slab_release(sys->httpStreamArenas, arena_item);
-    return;
-  }
-  // LCOV_EXCL_STOP
-
-  // LCOV_EXCL_START - Defensive: connection cleanup during pending processing
-  if (!ps->conn || !ps->session) {
-    VALK_WARN("Pending stream %d has invalid conn/session, discarding", ps->stream_id);
-    valk_slab_release(sys->httpStreamArenas, arena_item);
-    __pending_stream_free(sys, ps);
-    return;
-  }
+  VALK_ASSERT(ps != NULL, "pending_stream_count > 0 but dequeue returned NULL")
+  VALK_ASSERT(ps->conn != NULL, "pending stream %d has NULL conn", ps->stream_id)
+  VALK_ASSERT(ps->session != NULL, "pending stream %d has NULL session", ps->stream_id)
 
   void *current_data = nghttp2_session_get_stream_user_data(ps->session, ps->stream_id);
-  if (!current_data || !__is_pending_stream(current_data)) {
-    VALK_WARN("Pending stream %d no longer exists or was replaced, discarding", ps->stream_id);
-    valk_slab_release(sys->httpStreamArenas, arena_item);
-    __pending_stream_free(sys, ps);
-    return;
-  }
-  // LCOV_EXCL_STOP
+  VALK_ASSERT(current_data != NULL, "pending stream %d has NULL user_data", ps->stream_id)
+  VALK_ASSERT(__is_pending_stream(current_data),
+              "pending stream %d user_data is not a pending stream marker", ps->stream_id)
 
   uint64_t wait_ms = uv_now(ps->conn->uv.tcp.loop) - ps->queued_time_ms;
   VALK_INFO("Processing pending stream %d (waited %lums)",
@@ -1117,6 +1079,9 @@ static void __event_loop(void *arg) {
   VALK_DEBUG("Initializing UV event loop thread");
 
   backpressure_timeout_ms = sys->config.backpressure_timeout_ms;
+  min_buffers_to_resume = sys->config.min_buffers_per_conn > 0
+      ? sys->config.min_buffers_per_conn / 2  // Resume at half the safe minimum
+      : BUFFERS_TO_RESUME;
 
   // Slab for TCP buffers - must use sizeof the struct we overlay (which
   // includes uv_write_t + uv_buf_t + data buffer), not just the data size
@@ -1208,22 +1173,14 @@ static void __http_remove_from_active_arenas(valk_aio_handle_t *conn,
     }
 
     uint32_t next_slot = prev_req->next_arena_slot;
-    // LCOV_EXCL_START - Defensive: linked list corruption detection
-    if (next_slot == prev_slot) {
-      VALK_ERROR("Arena linked list corruption detected: slot %u points to itself", prev_slot);
-      prev_req->next_arena_slot = UINT32_MAX;
-      break;
-    }
-    // LCOV_EXCL_STOP
+    VALK_ASSERT(next_slot != prev_slot,
+                "Arena linked list corruption: slot %u points to itself", prev_slot)
     prev_slot = next_slot;
     iterations++;
   }
 
-  // LCOV_EXCL_START - Defensive: infinite loop detection
-  if (iterations >= max_iterations) {
-    VALK_ERROR("Arena linked list infinite loop detected after %u iterations", iterations);
-  }
-  // LCOV_EXCL_STOP
+  VALK_ASSERT(iterations < max_iterations,
+              "Arena linked list infinite loop after %u iterations", iterations)
 }
 
 static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
@@ -1274,7 +1231,6 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
 #endif
   }
 
-  // LCOV_EXCL_START - Arena leak cleanup: requires abrupt disconnect during multi-stream processing
   if (handle->http.server && handle->http.server->sys) {
     valk_slab_t *slab = handle->http.server->sys->httpStreamArenas;
     size_t leaked_arenas = 0;
@@ -1318,7 +1274,6 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
       VALK_WARN("Released %zu leaked stream arenas on disconnect", leaked_arenas);
     }
   }
-  // LCOV_EXCL_STOP
 
   // TODO Tear down http and ssl context's only through the slab... make sure
   // they dont escape into malloc
@@ -2421,11 +2376,17 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
             __http_send_response(session, frame->hd.stream_id, error_resp, req->stream_arena);
           }
           if (http_ctx) free(http_ctx);
-        // LCOV_EXCL_START - Cancelled handle path requires returning pre-cancelled handle
         } else if (handle->status == VALK_ASYNC_CANCELLED) {
-          VALK_DEBUG("Handle cancelled, not sending response for stream %d", frame->hd.stream_id);
+          VALK_DEBUG("Handle cancelled, sending 503 for stream %d", frame->hd.stream_id);
+          VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
+            valk_lval_t* error_items[] = {
+              valk_lval_sym(":status"), valk_lval_str("503"),
+              valk_lval_sym(":body"), valk_lval_str("Request cancelled")
+            };
+            valk_lval_t* error_resp = valk_lval_qlist(error_items, 4);
+            __http_send_response(session, frame->hd.stream_id, error_resp, req->stream_arena);
+          }
           if (http_ctx) free(http_ctx);
-        // LCOV_EXCL_STOP
         } else {
           // Handle is still running - response will be sent when it completes
           // The completion callback will use the HTTP context to send response
@@ -2693,11 +2654,19 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
 
   // Early exit if connection is closing or closed - prevent use-after-free
   if (conn->http.state == VALK_CONN_CLOSING || conn->http.state == VALK_CONN_CLOSED) {
-    valk_slab_release_ptr(tcp_buffer_slab, buf->base);
+    if (buf->base) valk_slab_release_ptr(tcp_buffer_slab, buf->base);
     return;
   }
 
-  // LCOV_EXCL_START - Connection EOF and error handling paths
+  // Handle alloc_callback failure - buf->base is NULL when slab exhausted
+  if (!buf->base) {
+    VALK_WARN("TCP buffer alloc failed - applying backpressure on connection");
+    uv_read_stop((uv_stream_t *)&conn->uv.tcp);
+    __backpressure_list_add(conn);
+    __backpressure_timer_start(conn->uv.tcp.loop);
+    return;
+  }
+
   if (nread < 0) {
     bool is_eof = (nread == UV_EOF);
 
@@ -2756,7 +2725,6 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     }
     return;
   }
-  // LCOV_EXCL_STOP
 
   VALK_TRACE("Feeding data to OpenSSL %ld", nread);
 
@@ -2769,7 +2737,6 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     // This propagates TCP flow control to the client, slowing them down
     VALK_WARN("TCP buffer slab exhausted - applying backpressure on connection");
 
-    // LCOV_EXCL_START - Backpressure path when TCP buffer pool exhausted
     int n = BIO_write(conn->http.ssl.read_bio, buf->base, nread);
     if (n != nread) {
       VALK_ERROR("BIO_write during backpressure failed: wrote %d of %ld", n, nread);
@@ -2786,7 +2753,6 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     valk_slab_release_ptr(tcp_buffer_slab, buf->base);
     __backpressure_try_resume_one();
     return;
-    // LCOV_EXCL_STOP
   }
   __tcp_buffer_slab_item_t *slabItem = (void *)slabItemRaw->data;
 
@@ -3125,19 +3091,8 @@ static void __http_listen_cb(valk_aio_system_t *sys,
   srv->listener->uv.tcp.data = srv->listener;
 
   r = uv_tcp_init(srv->sys->eventloop, &srv->listener->uv.tcp);
+  VALK_ASSERT(r == 0, "uv_tcp_init failed: %s", uv_strerror(r));
   uv_tcp_nodelay(&srv->listener->uv.tcp, 1);
-
-  // LCOV_EXCL_START - Defensive: uv_tcp_init rarely fails
-  if (r) {
-    VALK_ERROR("Tcp init error: %s", uv_strerror(r));
-    valk_arc_box *err = valk_arc_box_err("Error on TcpInit");
-    valk_promise_respond(&task->promise, err);
-    valk_arc_release(err);
-    valk_arc_release(box);
-    valk_slab_release_ptr(sys->handleSlab, srv->listener);
-    return;
-  }
-  // LCOV_EXCL_STOP
 
   r = uv_ip4_addr(srv->interface, srv->port, &addr);
   if (r) {
@@ -5541,7 +5496,6 @@ cleanup:
 }
 
 // Standalone async completion callback - releases arena back to pool
-// LCOV_EXCL_START - Standalone async completion callback
 static void valk_standalone_async_done_callback(valk_async_handle_t *handle, void *ctx) {
   UNUSED(handle);
   if (!ctx) return;
@@ -5554,9 +5508,7 @@ static void valk_standalone_async_done_callback(valk_async_handle_t *handle, voi
 
   free(standalone);
 }
-// LCOV_EXCL_STOP
 
-// LCOV_EXCL_START - Standalone async used by aio/spawn without HTTP request context
 static valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sys) {
   if (!sys || !sys->httpStreamArenas) return NULL;
 
@@ -5582,7 +5534,6 @@ static valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_syste
   VALK_DEBUG("Allocated standalone async arena from pool");
   return ctx;
 }
-// LCOV_EXCL_STOP
 
 // Generic async completion notification - calls on_done callback if registered
 static void valk_async_notify_done(valk_async_handle_t *handle) {
@@ -5727,7 +5678,6 @@ static bool valk_async_handle_cancel(valk_async_handle_t *handle) {
                        alloc->type == VALK_ALLOC_MALLOC ||
                        alloc->type == VALK_ALLOC_GC_HEAP ||
                        alloc->type == VALK_ALLOC_NULL;
-    // LCOV_EXCL_START - Standalone async arena path: requires non-HTTP async context
     if (needs_arena) {
       valk_aio_system_t *sys = g_last_started_aio_system;
       if (sys) {
@@ -5744,7 +5694,6 @@ static bool valk_async_handle_cancel(valk_async_handle_t *handle) {
         }
       }
     }
-    // LCOV_EXCL_STOP
     if (!alloc || alloc->type != VALK_ALLOC_ARENA) alloc = &valk_malloc_allocator;
     VALK_WITH_ALLOC(alloc) {
       valk_lval_t *args = valk_lval_nil();
@@ -6101,7 +6050,6 @@ static void valk_async_propagate_completion(valk_async_handle_t *source) {
                              alloc->type == VALK_ALLOC_MALLOC ||
                              alloc->type == VALK_ALLOC_GC_HEAP ||
                              alloc->type == VALK_ALLOC_NULL;
-          // LCOV_EXCL_START - Standalone async arena path: requires non-HTTP async context
           if (needs_arena) {
             valk_aio_system_t *sys = g_last_started_aio_system;
             if (sys) {
@@ -6118,7 +6066,6 @@ static void valk_async_propagate_completion(valk_async_handle_t *source) {
               }
             }
           }
-          // LCOV_EXCL_STOP
           if (!alloc || alloc->type != VALK_ALLOC_ARENA) alloc = &valk_malloc_allocator;
           VALK_WITH_ALLOC(alloc) {
             args = valk_lval_cons(source->result, valk_lval_nil());
@@ -6190,7 +6137,6 @@ static void valk_async_propagate_completion(valk_async_handle_t *source) {
                              alloc->type == VALK_ALLOC_MALLOC ||
                              alloc->type == VALK_ALLOC_GC_HEAP ||
                              alloc->type == VALK_ALLOC_NULL;
-          // LCOV_EXCL_START - Standalone async arena path: requires non-HTTP async context
           if (needs_arena) {
             valk_aio_system_t *sys = g_last_started_aio_system;
             if (sys) {
@@ -6207,7 +6153,6 @@ static void valk_async_propagate_completion(valk_async_handle_t *source) {
               }
             }
           }
-          // LCOV_EXCL_STOP
           if (!alloc || alloc->type != VALK_ALLOC_ARENA) alloc = &valk_malloc_allocator;
           VALK_WITH_ALLOC(alloc) {
             args = valk_lval_cons(source->error, valk_lval_nil());
@@ -7289,126 +7234,6 @@ static valk_lval_t* valk_builtin_aio_pool_stats(valk_lenv_t* e, valk_lval_t* a) 
   return valk_lval_qlist(result_items, 6);
 }
 
-// aio/trigger-backpressure-recovery: (aio/trigger-backpressure-recovery aio) -> :ok
-// Manually triggers backpressure recovery check (for testing)
-static valk_lval_t* valk_builtin_aio_trigger_backpressure_recovery(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  if (valk_lval_list_count(a) != 1) {
-    return valk_lval_err("aio/trigger-backpressure-recovery: expected 1 argument");
-  }
-  valk_lval_t *aio_ref = valk_lval_list_nth(a, 0);
-  if (LVAL_TYPE(aio_ref) != LVAL_REF || strcmp(aio_ref->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/trigger-backpressure-recovery: argument must be aio system");
-  }
-
-  // Manually try to resume backpressured connections
-  __backpressure_try_resume_one();
-
-  return valk_lval_sym(":ok");
-}
-
-// aio/exhaust-buffers: (aio/exhaust-buffers aio count) -> number
-// Temporarily acquires 'count' buffers from the pool (for stress testing)
-// Returns actual number acquired. Buffers are held in a list for later release.
-static valk_slab_item_t **__held_buffers = NULL;
-static size_t __held_buffer_count = 0;
-static size_t __held_buffer_capacity = 0;
-
-static valk_lval_t* valk_builtin_aio_exhaust_buffers(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  if (valk_lval_list_count(a) != 2) {
-    return valk_lval_err("aio/exhaust-buffers: expected 2 arguments (aio count)");
-  }
-  valk_lval_t *aio_ref = valk_lval_list_nth(a, 0);
-  if (LVAL_TYPE(aio_ref) != LVAL_REF || strcmp(aio_ref->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/exhaust-buffers: first argument must be aio system");
-  }
-  valk_lval_t *count_val = valk_lval_list_nth(a, 1);
-  if (LVAL_TYPE(count_val) != LVAL_NUM) {
-    return valk_lval_err("aio/exhaust-buffers: second argument must be number");
-  }
-
-  size_t count = (size_t)count_val->num;
-  if (count == 0) {
-    return valk_lval_num(0);
-  }
-
-  // Ensure capacity
-  if (__held_buffer_count + count > __held_buffer_capacity) {
-    size_t new_cap = __held_buffer_capacity == 0 ? 64 : __held_buffer_capacity * 2;
-    while (new_cap < __held_buffer_count + count) new_cap *= 2;
-    __held_buffers = realloc(__held_buffers, sizeof(valk_slab_item_t*) * new_cap);
-    __held_buffer_capacity = new_cap;
-  }
-
-  size_t acquired = 0;
-  for (size_t i = 0; i < count && tcp_buffer_slab; i++) {
-    valk_slab_item_t *item = valk_slab_aquire(tcp_buffer_slab);
-    if (!item) break;
-    __held_buffers[__held_buffer_count++] = item;
-    acquired++;
-  }
-
-  return valk_lval_num((long)acquired);
-}
-
-// aio/release-buffers: (aio/release-buffers aio count) -> number
-// Releases 'count' previously acquired buffers back to the pool
-// Returns actual number released
-static valk_lval_t* valk_builtin_aio_release_buffers(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  if (valk_lval_list_count(a) != 2) {
-    return valk_lval_err("aio/release-buffers: expected 2 arguments (aio count)");
-  }
-  valk_lval_t *aio_ref = valk_lval_list_nth(a, 0);
-  if (LVAL_TYPE(aio_ref) != LVAL_REF || strcmp(aio_ref->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/release-buffers: first argument must be aio system");
-  }
-  valk_lval_t *count_val = valk_lval_list_nth(a, 1);
-  if (LVAL_TYPE(count_val) != LVAL_NUM) {
-    return valk_lval_err("aio/release-buffers: second argument must be number");
-  }
-
-  size_t count = (size_t)count_val->num;
-  size_t released = 0;
-
-  while (released < count && __held_buffer_count > 0 && tcp_buffer_slab) {
-    valk_slab_item_t *item = __held_buffers[--__held_buffer_count];
-    valk_slab_release(tcp_buffer_slab, item);
-    released++;
-  }
-
-  // Try to resume backpressured connections after releasing buffers
-  if (released > 0) {
-    __backpressure_try_resume_one();
-  }
-
-  return valk_lval_num((long)released);
-}
-
-// aio/release-all-buffers: (aio/release-all-buffers aio) -> number
-// Releases all held buffers back to the pool
-static valk_lval_t* valk_builtin_aio_release_all_buffers(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  if (valk_lval_list_count(a) != 1) {
-    return valk_lval_err("aio/release-all-buffers: expected 1 argument");
-  }
-
-  size_t released = 0;
-  while (__held_buffer_count > 0 && tcp_buffer_slab) {
-    valk_slab_item_t *item = __held_buffers[--__held_buffer_count];
-    valk_slab_release(tcp_buffer_slab, item);
-    released++;
-  }
-
-  // Try to resume backpressured connections after releasing buffers
-  if (released > 0) {
-    __backpressure_try_resume_one();
-  }
-
-  return valk_lval_num((long)released);
-}
-
 // Register the async handle builtins
 void valk_register_async_handle_builtins(valk_lenv_t *env) {
   // Core operations (Phase 1)
@@ -7436,146 +7261,6 @@ void valk_register_async_handle_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "aio/bracket", valk_builtin_aio_bracket);
   valk_lenv_put_builtin(env, "aio/scope", valk_builtin_aio_scope);
 
-  // Pool and backpressure testing utilities
+  // Pool stats utility
   valk_lenv_put_builtin(env, "aio/pool-stats", valk_builtin_aio_pool_stats);
-  valk_lenv_put_builtin(env, "aio/trigger-backpressure-recovery", valk_builtin_aio_trigger_backpressure_recovery);
-  valk_lenv_put_builtin(env, "aio/exhaust-buffers", valk_builtin_aio_exhaust_buffers);
-  valk_lenv_put_builtin(env, "aio/release-buffers", valk_builtin_aio_release_buffers);
-  valk_lenv_put_builtin(env, "aio/release-all-buffers", valk_builtin_aio_release_all_buffers);
-}
-
-size_t valk_aio_test_get_backpressure_list_size(void) {
-  return backpressure_list_size;
-}
-
-size_t valk_aio_test_get_pending_stream_count(void) {
-  return pending_stream_count;
-}
-
-void valk_aio_test_trigger_backpressure_timer(valk_aio_system_t* sys) {
-  if (!sys || !sys->eventloop) return;
-  if (backpressure_timer && backpressure_list_head) {
-    __backpressure_timer_cb(backpressure_timer);
-  }
-}
-
-bool valk_aio_test_is_connection_backpressured(valk_aio_handle_t* conn) {
-  if (!conn) return false;
-  return conn->http.backpressure;
-}
-
-void valk_aio_test_set_backpressure_list_size(size_t size) {
-  backpressure_list_size = size;
-}
-
-void valk_aio_test_backpressure_try_resume(void) {
-  __backpressure_try_resume_one();
-}
-
-void valk_aio_test_add_to_backpressure_list(valk_aio_handle_t* conn) {
-  if (conn) {
-    __backpressure_list_add(conn);
-  }
-}
-
-void valk_aio_test_remove_from_backpressure_list(valk_aio_handle_t* conn) {
-  if (conn) {
-    __backpressure_list_remove(conn);
-  }
-}
-
-void* valk_aio_test_create_pending_stream(valk_aio_system_t* sys) {
-  if (!sys) return NULL;
-  pending_stream_t* ps = __pending_stream_alloc(sys);
-  if (!ps) return NULL;
-  ps->session = NULL;
-  ps->conn = NULL;
-  ps->stream_id = -1;
-  ps->header_count = 0;
-  ps->body = NULL;
-  ps->body_len = 0;
-  ps->body_capacity = 0;
-  ps->headers_complete = true;
-  ps->queued_time_ms = 0;
-  __pending_stream_enqueue(ps);
-  return ps;
-}
-
-void valk_aio_test_remove_pending_stream(valk_aio_system_t* sys, void* pending_stream) {
-  if (!sys || !pending_stream) return;
-  __pending_stream_remove(sys, (pending_stream_t*)pending_stream);
-}
-
-void* valk_aio_test_get_pending_stream_head(void) {
-  return pending_stream_head;
-}
-
-bool valk_aio_test_pending_stream_add_header(void* pending_stream, const char* name, const char* value) {
-  if (!pending_stream || !name || !value) return false;
-  pending_stream_t* ps = (pending_stream_t*)pending_stream;
-  if (ps->header_count >= PENDING_STREAM_MAX_HEADERS) return false;
-  pending_header_t* h = &ps->headers[ps->header_count];
-  h->name_len = strlen(name);
-  h->value_len = strlen(value);
-  h->name = malloc(h->name_len + 1);
-  h->value = malloc(h->value_len + 1);
-  if (!h->name || !h->value) {
-    if (h->name) free(h->name);
-    if (h->value) free(h->value);
-    return false;
-  }
-  memcpy(h->name, name, h->name_len + 1);
-  memcpy(h->value, value, h->value_len + 1);
-  ps->header_count++;
-  return true;
-}
-
-static valk_slab_item_t** test_tcp_buffer_items = NULL;
-static size_t test_tcp_buffer_count = 0;
-static valk_slab_t* test_tcp_buffer_slab = NULL;
-
-size_t valk_aio_test_exhaust_tcp_buffers(valk_aio_system_t* sys) {
-  if (!sys || !sys->tcpBufferSlab) return 0;
-  test_tcp_buffer_slab = sys->tcpBufferSlab;
-  size_t available = valk_slab_available(test_tcp_buffer_slab);
-  if (available == 0) return 0;
-  
-  if (test_tcp_buffer_items) {
-    free(test_tcp_buffer_items);
-  }
-  test_tcp_buffer_items = malloc(available * sizeof(valk_slab_item_t*));
-  if (!test_tcp_buffer_items) return 0;
-  
-  test_tcp_buffer_count = 0;
-  for (size_t i = 0; i < available; i++) {
-    valk_slab_item_t* item = valk_slab_aquire(test_tcp_buffer_slab);
-    if (!item) break;
-    test_tcp_buffer_items[test_tcp_buffer_count++] = item;
-  }
-  return test_tcp_buffer_count;
-}
-
-void valk_aio_test_release_tcp_buffers(valk_aio_system_t* sys) {
-  UNUSED(sys);
-  if (!test_tcp_buffer_slab || !test_tcp_buffer_items) return;
-  for (size_t i = 0; i < test_tcp_buffer_count; i++) {
-    if (test_tcp_buffer_items[i]) {
-      valk_slab_release(test_tcp_buffer_slab, test_tcp_buffer_items[i]);
-    }
-  }
-  free(test_tcp_buffer_items);
-  test_tcp_buffer_items = NULL;
-  test_tcp_buffer_count = 0;
-  test_tcp_buffer_slab = NULL;
-}
-
-void valk_aio_test_simulate_eof(valk_aio_handle_t* conn) {
-  if (!conn) return;
-  uv_buf_t buf = {.base = NULL, .len = 0};
-  __http_tcp_read_cb((uv_stream_t*)&conn->uv.tcp, UV_EOF, &buf);
-}
-
-valk_aio_handle_t* valk_aio_test_get_client_connection(valk_aio_http2_client* client) {
-  if (!client) return NULL;
-  return client->connection;
 }
