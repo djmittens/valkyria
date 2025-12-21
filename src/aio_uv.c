@@ -88,7 +88,6 @@ enum {
 // These allow generous runtime configuration while preventing absurd values
 #define BACKPRESSURE_LIST_MAX_LIMIT 100000   // 100k connections max
 #define PENDING_STREAM_POOL_MAX_LIMIT 10000  // 10k pending streams max
-#define BACKPRESSURE_TIMEOUT_MS_DEFAULT 30000  // 30 second default timeout
 
 // Most recently started AIO system - used for fallback in async callbacks
 // Multiple AIO systems can be created, but only one can be the "active" one for
@@ -236,10 +235,6 @@ typedef struct valk_aio_handle_t {
     int active_streams;
     int pending_write;
 
-    // Spillover buffer for nghttp2 frame data
-    uint8_t *spillover_data;
-    size_t spillover_len;
-
     // Backpressure tracking
     bool backpressure;
     valk_aio_handle_t *backpressure_next;
@@ -307,12 +302,12 @@ typedef enum __aio_http_srv_e {
 
 // Linked list of connections under backpressure (waiting for TCP buffers)
 // Thread-local since event loop is single-threaded
+// When buffers are exhausted, we stop reading from connections and add them here.
+// When buffers free up (on write completion), we resume connections from this list.
+// No polling timer needed - TCP flow control handles backpressure to clients.
 static __thread valk_aio_handle_t *backpressure_list_head = NULL;
 static __thread size_t backpressure_list_size = 0;
-static __thread uv_timer_t *backpressure_timer = NULL;
-static __thread uint32_t backpressure_timeout_ms = 0;  // 0 = use default
 static __thread uint32_t min_buffers_to_resume = 0;    // 0 = use default
-#define BACKPRESSURE_CHECK_INTERVAL_MS 100  // Check every 100ms (not configurable)
 
 // ============================================================================
 // Pending Stream Queue (arena backpressure)
@@ -466,66 +461,7 @@ static void __backpressure_try_resume_one(void) {
   }
 }
 
-static void __backpressure_timer_cb(uv_timer_t *handle) {
-  if (!backpressure_list_head) {
-    if (backpressure_timer) {
-      VALK_DEBUG("Backpressure timer: all connections resumed, stopping timer");
-      uv_timer_stop(backpressure_timer);
-    }
-    return;
-  }
 
-  uint64_t now = uv_now(handle->loop);
-  size_t available = valk_slab_available(tcp_buffer_slab);
-  size_t total = tcp_buffer_slab->numItems;
-  VALK_DEBUG("Backpressure timer: %zu connections waiting, buffers %zu/%zu (%.1f%% used)",
-             backpressure_list_size, total - available, total,
-             (1.0f - (float)available / total) * 100);
-
-  uint32_t timeout = backpressure_timeout_ms ? backpressure_timeout_ms : BACKPRESSURE_TIMEOUT_MS_DEFAULT;
-
-  valk_aio_handle_t **pp = &backpressure_list_head;
-  while (*pp) {
-    valk_aio_handle_t *conn = *pp;
-    uint64_t elapsed = now - conn->http.backpressure_start_time;
-
-    if (elapsed >= timeout) {
-      VALK_WARN("Backpressure timeout: closing connection after %llu ms (limit: %u ms)",
-                (unsigned long long)elapsed, timeout);
-
-      *pp = conn->http.backpressure_next;
-      conn->http.backpressure_next = NULL;
-      conn->http.backpressure = false;
-      backpressure_list_size--;
-
-      if (conn->http.state != VALK_CONN_CLOSING && conn->http.state != VALK_CONN_CLOSED) {
-        conn->http.state = VALK_CONN_CLOSING;
-#ifdef VALK_METRICS_ENABLED
-        conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
-        conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
-#endif
-        uv_close((uv_handle_t *)&conn->uv.tcp, __uv_handle_closed_cb);
-      }
-    } else {
-      pp = &(*pp)->http.backpressure_next;
-    }
-  }
-
-  __backpressure_try_resume_one();
-}
-
-static void __backpressure_timer_start(uv_loop_t *loop) {
-  if (!backpressure_timer) {
-    backpressure_timer = malloc(sizeof(uv_timer_t));
-    if (!backpressure_timer) return;
-    uv_timer_init(loop, backpressure_timer);
-  }
-
-  if (backpressure_list_head && !uv_is_active((uv_handle_t *)backpressure_timer)) {
-    uv_timer_start(backpressure_timer, __backpressure_timer_cb,
-                   BACKPRESSURE_CHECK_INTERVAL_MS, BACKPRESSURE_CHECK_INTERVAL_MS);
-  }
-}
 
 // ============================================================================
 // Pending Stream Queue Implementation
@@ -1078,7 +1014,6 @@ static void __event_loop(void *arg) {
   valk_mem_init_malloc();
   VALK_DEBUG("Initializing UV event loop thread");
 
-  backpressure_timeout_ms = sys->config.backpressure_timeout_ms;
   min_buffers_to_resume = sys->config.min_buffers_per_conn > 0
       ? sys->config.min_buffers_per_conn / 2  // Resume at half the safe minimum
       : BUFFERS_TO_RESUME;
@@ -1111,12 +1046,6 @@ static void __event_loop(void *arg) {
   // run to completion.
   while (uv_loop_alive(sys->eventloop)) {
     uv_run(sys->eventloop, UV_RUN_NOWAIT);
-  }
-
-  // Clean up backpressure timer
-  if (backpressure_timer) {
-    uv_close((uv_handle_t *)backpressure_timer, (uv_close_cb)free);
-    backpressure_timer = NULL;
   }
 
   valk_slab_free(tcp_buffer_slab);
@@ -1285,12 +1214,6 @@ static void __valk_aio_http2_on_disconnect(valk_aio_handle_t *handle) {
   nghttp2_session *session = handle->http.session;
   handle->http.session = NULL;
   nghttp2_session_del(session);
-
-  // Free spillover buffer if allocated
-  if (handle->http.spillover_data) {
-    free(handle->http.spillover_data);
-    handle->http.spillover_data = NULL;
-  }
 
   // Note: handle is freed by slab release in __uv_handle_closed_cb
 }
@@ -2436,76 +2359,37 @@ static int __http_on_frame_recv_callback(nghttp2_session *session,
   return 0;
 }
 
-// Returns true if there's more data pending to send (buffer was full)
-static int __http2_flush_frames(valk_buffer_t *buf,
-                                valk_aio_handle_t *conn) {
-  const uint8_t *data;
-  int has_pending = 0;
+// HTTP/2 max frame size (default 16KB, plus 9 byte header, plus some padding)
+#define HTTP2_MAX_SERIALIZED_FRAME (16384 + 9 + 256)
 
-  // First, drain any spillover data from previous call
-  if (conn->http.spillover_data && conn->http.spillover_len > 0) {
-    size_t to_copy = conn->http.spillover_len;
-    if (buf->count + to_copy > buf->capacity) {
-      to_copy = buf->capacity - buf->count;
-    }
-    if (to_copy > 0) {
-      valk_buffer_append(buf, conn->http.spillover_data, to_copy);
-      if (to_copy < conn->http.spillover_len) {
-        // Still have spillover remaining, shift it
-        memmove(conn->http.spillover_data, conn->http.spillover_data + to_copy,
-                conn->http.spillover_len - to_copy);
-        conn->http.spillover_len -= to_copy;
-        has_pending = 1;
-        conn->http.pending_write = has_pending;
-        return has_pending;
-      } else {
-        // Spillover fully consumed
-        free(conn->http.spillover_data);
-        conn->http.spillover_data = NULL;
-        conn->http.spillover_len = 0;
-      }
-    } else {
-      // Buffer already full
-      has_pending = 1;
-      conn->http.pending_write = has_pending;
-      return has_pending;
-    }
+// Flush pending HTTP/2 frames into buffer using mem_send2 (pull model)
+// Only pulls frames while buffer has room for a max-size frame.
+// Returns: number of bytes in buffer, sets pending_write if more frames waiting
+static size_t __http2_flush_frames(valk_buffer_t *buf, valk_aio_handle_t *conn) {
+  if (!conn || !conn->http.session) {
+    return 0;
   }
 
-  int len = 0;
-  do {
+  const uint8_t *data;
+  nghttp2_ssize len;
+
+  // Only pull frames while we have room for at least one max-size frame
+  while ((buf->capacity - buf->count) > HTTP2_MAX_SERIALIZED_FRAME) {
     len = nghttp2_session_mem_send2(conn->http.session, &data);
-    if (len < 0) {
-      VALK_ERROR("nghttp2_session_mem_send2 error: %s", nghttp2_strerror((int)len));
-    } else if (len) {
-      // Check if we would overflow before appending
-      if ((buf->count + (size_t)len) >= buf->capacity) {
-        // Buffer full - store unconsumed data in spillover buffer
-        // nghttp2 data pointer is only valid until next call, so we MUST copy it
-        has_pending = 1;
-        conn->http.spillover_data = malloc(len);
-        if (conn->http.spillover_data) {
-          memcpy(conn->http.spillover_data, data, len);
-          conn->http.spillover_len = len;
-          VALK_TRACE("Buffer full, saved %d bytes to spillover", len);
-        } else {
-          VALK_ERROR("Failed to allocate spillover buffer for %d bytes", len);
-        }
-        break;
+    if (len <= 0) {
+      if (len < 0) {
+        // LCOV_EXCL_LINE - nghttp2 only returns NGHTTP2_ERR_NOMEM (requires malloc failure)
+        VALK_ERROR("nghttp2_session_mem_send2 error: %s", nghttp2_strerror((int)len));
       }
-
-      valk_buffer_append(buf, (void *)data, len);
-
-      VALK_TRACE("Buffered frame len=%ld count=%ld capacity=%ld", (long)len,
-                 (long)buf->count, (long)buf->capacity);
-    } else {
-      VALK_TRACE("No data to send");
+      break;
     }
-  } while (len > 0);
+    memcpy((char *)buf->items + buf->count, data, (size_t)len);
+    buf->count += (size_t)len;
+    VALK_TRACE("Buffered frame: %zd bytes, total %zu/%zu", len, buf->count, buf->capacity);
+  }
 
-  // Update connection's pending_write flag
-  conn->http.pending_write = has_pending;
-  return has_pending;
+  conn->http.pending_write = nghttp2_session_want_write(conn->http.session);
+  return buf->count;
 }
 
 // Continue sending pending HTTP/2 frames after a write completes
@@ -2515,16 +2399,9 @@ static void __http_continue_pending_send(valk_aio_handle_t *conn) {
     return;
   }
 
-  // Check if connection is closing
   if (uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
     return;
   }
-
-  // Create buffers for frame data - use same size as main path
-  char buf[HTTP_SLAB_ITEM_SIZE];
-  memset(buf, 0, sizeof(buf));
-  valk_buffer_t In = {
-      .items = buf, .count = 0, .capacity = HTTP_SLAB_ITEM_SIZE};
 
   valk_slab_item_t *slabItemRaw = valk_slab_aquire(tcp_buffer_slab);
   if (!slabItemRaw) {
@@ -2533,69 +2410,75 @@ static void __http_continue_pending_send(valk_aio_handle_t *conn) {
   }
   __tcp_buffer_slab_item_t *slabItem = (void *)slabItemRaw->data;
 
-  valk_buffer_t Out = {
+  valk_buffer_t In = {
       .items = slabItem->data, .count = 0, .capacity = HTTP_SLAB_ITEM_SIZE};
 
-  // Flush pending frames
   __http2_flush_frames(&In, conn);
 
-  // Loop to handle all pending data (matches main path pattern)
-  while (In.count > 0) {
+  if (In.count > 0) {
+    valk_slab_item_t *outSlabRaw = valk_slab_aquire(tcp_buffer_slab);
+    if (!outSlabRaw) {
+      VALK_ERROR("TCP buffer slab exhausted for output in continue_pending_send");
+      valk_slab_release_ptr(tcp_buffer_slab, slabItem);
+      __backpressure_try_resume_one();
+      return;
+    }
+    __tcp_buffer_slab_item_t *outSlabItem = (void *)outSlabRaw->data;
+
+    valk_buffer_t Out = {
+        .items = outSlabItem->data, .count = 0, .capacity = HTTP_SLAB_ITEM_SIZE};
+
     valk_aio_ssl_encrypt(&conn->http.ssl, &In, &Out);
 
     if (Out.count > 0) {
-      slabItem->buf.base = Out.items;
-      slabItem->buf.len = Out.count;
-      slabItem->conn = conn;
+      outSlabItem->buf.base = Out.items;
+      outSlabItem->buf.len = Out.count;
+      outSlabItem->conn = conn;
 
-      VALK_TRACE("Continuation send: %ld bytes (remaining: %zu, pending: %d)",
-                 Out.count, In.count, conn->http.pending_write);
-      uv_write(&slabItem->req, (uv_stream_t *)&conn->uv.tcp,
-               &slabItem->buf, 1, __http_tcp_on_write_cb);
-
-      // If there's more data to encrypt, get a new buffer
-      if (In.count > 0) {
-        valk_slab_item_t *newSlabRaw = valk_slab_aquire(tcp_buffer_slab);
-        if (!newSlabRaw) {
-          VALK_ERROR("TCP buffer slab exhausted in continue_pending_send loop");
-          break;
-        }
-        slabItem = (void *)newSlabRaw->data;
-        Out = (valk_buffer_t){
-            .items = slabItem->data, .count = 0, .capacity = HTTP_SLAB_ITEM_SIZE};
-      } else {
-        slabItem = NULL;  // Mark as used
-      }
+      VALK_TRACE("Continuation send: %zu bytes", Out.count);
+      uv_write(&outSlabItem->req, (uv_stream_t *)&conn->uv.tcp,
+               &outSlabItem->buf, 1, __http_tcp_on_write_cb);
     } else {
-      VALK_WARN("SSL encrypt produced no output with %zu bytes remaining", In.count);
-      break;
+      valk_slab_release_ptr(tcp_buffer_slab, outSlabItem);
+      __backpressure_try_resume_one();
     }
   }
 
-  // LCOV_EXCL_START - Final SSL flush edge case: requires specific TLS record boundaries
-  if (slabItem != NULL && In.count == 0) {
-    valk_aio_ssl_encrypt(&conn->http.ssl, &In, &Out);
-    if (Out.count > 0) {
-      slabItem->buf.base = Out.items;
-      slabItem->buf.len = Out.count;
-      slabItem->conn = conn;
-      VALK_TRACE("Final continuation flush: %ld bytes", Out.count);
-      uv_write(&slabItem->req, (uv_stream_t *)&conn->uv.tcp,
-               &slabItem->buf, 1, __http_tcp_on_write_cb);
-      slabItem = NULL;
-    }
-  }
-  // LCOV_EXCL_STOP
-
-  // Release unused slab item if we didn't send anything
-  if (slabItem != NULL) {
-    valk_slab_release_ptr(tcp_buffer_slab, slabItem);
-  }
+  valk_slab_release_ptr(tcp_buffer_slab, slabItem);
+  __backpressure_try_resume_one();
 }
 
 // Public API to flush pending HTTP/2 data (used by SSE streaming)
 void valk_http2_flush_pending(valk_aio_handle_t *conn) {
   __http_continue_pending_send(conn);
+}
+
+// Reset an HTTP/2 stream with the given error code (for testing client stream error handling)
+int valk_http2_stream_reset(valk_aio_handle_t *conn, int32_t stream_id, uint32_t error_code) {
+  if (!conn || !conn->http.session) {
+    return -1;
+  }
+  int rv = nghttp2_submit_rst_stream(conn->http.session, NGHTTP2_FLAG_NONE,
+                                      stream_id, error_code);
+  if (rv != 0) {
+    VALK_ERROR("nghttp2_submit_rst_stream failed: %s", nghttp2_strerror(rv));
+    return -1;
+  }
+  return 0;
+}
+
+// Submit GOAWAY frame (for testing client GOAWAY handling)
+int valk_http2_submit_goaway(valk_aio_handle_t *conn, uint32_t error_code) {
+  if (!conn || !conn->http.session) {
+    return -1;
+  }
+  int rv = nghttp2_submit_goaway(conn->http.session, NGHTTP2_FLAG_NONE,
+                                  0, error_code, NULL, 0);
+  if (rv != 0) {
+    VALK_ERROR("nghttp2_submit_goaway failed: %s", nghttp2_strerror(rv));
+    return -1;
+  }
+  return 0;
 }
 
 // Check if a session pointer is still valid for a given handle
@@ -2654,63 +2537,24 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
 
   // Early exit if connection is closing or closed - prevent use-after-free
   if (conn->http.state == VALK_CONN_CLOSING || conn->http.state == VALK_CONN_CLOSED) {
-    if (buf->base) valk_slab_release_ptr(tcp_buffer_slab, buf->base);
+    if (buf->base) {
+      valk_slab_release_ptr(tcp_buffer_slab, buf->base);
+      __backpressure_try_resume_one();
+    }
     return;
   }
 
   // Handle alloc_callback failure - buf->base is NULL when slab exhausted
+  // Stop reading to apply TCP flow control (client will slow down).
+  // Connection will be resumed when buffers free up in __http_tcp_on_write_cb.
   if (!buf->base) {
     VALK_WARN("TCP buffer alloc failed - applying backpressure on connection");
     uv_read_stop((uv_stream_t *)&conn->uv.tcp);
     __backpressure_list_add(conn);
-    __backpressure_timer_start(conn->uv.tcp.loop);
     return;
   }
 
   if (nread < 0) {
-    bool is_eof = (nread == UV_EOF);
-
-    if (is_eof && conn->http.ssl.ssl) {
-      int ssl_pending = SSL_pending(conn->http.ssl.ssl);
-      int bio_pending = (int)BIO_ctrl_pending(conn->http.ssl.read_bio);
-      UNUSED(ssl_pending);
-      UNUSED(bio_pending);
-      valk_buffer_t In = {
-          .items = buf->base,
-          .count = 0,
-          .capacity = HTTP_SLAB_ITEM_SIZE
-      };
-
-      valk_slab_item_t *slabItemRaw = valk_slab_aquire(tcp_buffer_slab);
-      if (!slabItemRaw) {
-        VALK_ERROR("TCP buffer slab exhausted in EOF handling");
-        valk_slab_release_ptr(tcp_buffer_slab, buf->base);
-        return;
-      }
-      __tcp_buffer_slab_item_t *slabItem = (void *)slabItemRaw->data;
-
-      valk_buffer_t Out = {
-          .items = slabItem->data,
-          .count = 0,
-          .capacity = HTTP_SLAB_ITEM_SIZE
-      };
-
-      int ssl_err = valk_aio_ssl_on_read(&conn->http.ssl, &In, &Out, conn,
-                                         __http_tcp_unencrypted_read_cb);
-
-      if (!ssl_err && Out.count > 0) {
-        slabItem->buf.base = Out.items;
-        slabItem->buf.len = Out.count;
-        slabItem->conn = conn;
-
-        VALK_TRACE("Sending %ld bytes on EOF", Out.count);
-        uv_write(&slabItem->req, (uv_stream_t *)&conn->uv.tcp,
-                 &slabItem->buf, 1, __http_tcp_on_write_cb);
-      } else {
-        valk_slab_release_ptr(tcp_buffer_slab, slabItem);
-      }
-    }
-
     if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
       conn->http.state = VALK_CONN_CLOSING;
 #ifdef VALK_METRICS_ENABLED
@@ -2722,6 +2566,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
 
     if (buf->base) {
       valk_slab_release_ptr(tcp_buffer_slab, buf->base);
+      __backpressure_try_resume_one();
     }
     return;
   }
@@ -2742,9 +2587,10 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
       VALK_ERROR("BIO_write during backpressure failed: wrote %d of %ld", n, nread);
     }
 
+    // Stop reading to apply TCP flow control (client will slow down).
+    // Connection will be resumed when buffers free up in __http_tcp_on_write_cb.
     uv_read_stop((uv_stream_t *)&conn->uv.tcp);
     __backpressure_list_add(conn);
-    __backpressure_timer_start(conn->uv.tcp.loop);
 
 #ifdef VALK_METRICS_ENABLED
     atomic_fetch_add(&conn->http.server->sys->system_stats.tcp_buffer_overflow, 1);
@@ -2772,68 +2618,34 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
       conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
 #endif
     }
-    // Flushies
-    In.count = 0;
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    memset(In.items, 0, In.capacity);
-    __http2_flush_frames(&In, conn);
+    // Flush any pending HTTP/2 frames and send them
+    // Only after SSL handshake is complete
+    if (SSL_is_init_finished(conn->http.ssl.ssl)) {
+      In.count = 0;
+      __http2_flush_frames(&In, conn);
 
-    // Encrypt the new data n stuff - loop to handle large responses
-    // that may need multiple buffers
-    while (In.count > 0) {
-      valk_aio_ssl_encrypt(&conn->http.ssl, &In, &Out);
-
-      if (Out.count > 0) {
-        slabItem->buf.base = Out.items;
-        slabItem->buf.len = Out.count;
-        slabItem->conn = conn;  // Store connection for continuation
-
-        VALK_TRACE("Sending %ld bytes (remaining: %zu)", Out.count, In.count);
-        uv_write(&slabItem->req, (uv_stream_t *)&conn->uv.tcp,
-                 &slabItem->buf, 1, __http_tcp_on_write_cb);
-
-        // If there's more data to encrypt, get a new buffer
-        if (In.count > 0) {
-          valk_slab_item_t *newSlabRaw = valk_slab_aquire(tcp_buffer_slab);
-          if (!newSlabRaw) {
-            VALK_ERROR("TCP buffer slab exhausted in encrypt loop");
-            break;
-          }
-          slabItem = (void *)newSlabRaw->data;
-          Out = (valk_buffer_t){
-              .items = slabItem->data, .count = 0, .capacity = HTTP_SLAB_ITEM_SIZE};
-        } else {
-          // All data sent, mark slabItem as used
-          slabItem = NULL;
-        }
-      } else {
-        // No output but still have input - shouldn't happen, break to avoid infinite loop
-        VALK_WARN("SSL encrypt produced no output with %zu bytes remaining", In.count);
-        break;
+      if (In.count > 0) {
+        valk_aio_ssl_encrypt(&conn->http.ssl, &In, &Out);
       }
-    }
-
-    // Handle final encryption if we haven't sent anything yet
-    if (slabItem != NULL && In.count == 0) {
-      valk_aio_ssl_encrypt(&conn->http.ssl, &In, &Out);
     }
   }
 
-  int wantToSend = slabItem != NULL && Out.count > 0;
-  if (wantToSend) {
+  // Send any SSL handshake data or encrypted HTTP/2 frames
+  if (Out.count > 0) {
     slabItem->buf.base = Out.items;
     slabItem->buf.len = Out.count;
-    slabItem->conn = conn;  // Store connection for continuation
+    slabItem->conn = conn;
 
-    VALK_TRACE("Sending final %ld bytes", Out.count);
+    VALK_TRACE("Sending %zu bytes", Out.count);
     uv_write(&slabItem->req, (uv_stream_t *)&conn->uv.tcp,
              &slabItem->buf, 1, __http_tcp_on_write_cb);
-  } else if (slabItem != NULL) {
-    VALK_TRACE("Nothing to send: %d", wantToSend);
+  } else {
     valk_slab_release_ptr(tcp_buffer_slab, slabItem);
+    __backpressure_try_resume_one();
   }
 
   valk_slab_release_ptr(tcp_buffer_slab, In.items);
+  __backpressure_try_resume_one();
 }
 
 static int __http_send_server_connection_header(nghttp2_session *session, valk_aio_system_t *sys) {
@@ -3350,6 +3162,7 @@ typedef struct valk_aio_http2_client {
   valk_promise _promise;
 } valk_aio_http2_client;
 
+// nghttp2 send callback for client - user_data is valk_aio_http2_client*
 static int __http_client_on_frame_recv_callback(nghttp2_session *session,
                                                 const nghttp2_frame *frame,
                                                 void *user_data) {
@@ -3468,31 +3281,10 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
   static nghttp2_session_callbacks *callbacks = nullptr;
   if (!callbacks) {
     nghttp2_session_callbacks_new(&callbacks);
-    /*
-
-      nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks,
-                                                           on_frame_recv_callback);
-
-      nghttp2_session_callbacks_set_on_data_chunk_recv_callback(
-        callbacks, on_data_chunk_recv_callback);
-
-      nghttp2_session_callbacks_set_on_stream_close_callback(
-        callbacks, on_stream_close_callback);
-
-      nghttp2_session_callbacks_set_on_header_callback(callbacks,
-                                                       on_header_callback);
-
-      nghttp2_session_callbacks_set_on_begin_headers_callback(
-        callbacks, on_begin_headers_callback);
-          */
-
-    // nghttp2_session_callbacks_set_on_begin_headers_callback(
-    //     callbacks, __http_on_begin_headers_callback);
     nghttp2_session_callbacks_set_on_header_callback(
         callbacks, __http2_client_on_header_cb);
     nghttp2_session_callbacks_set_on_frame_recv_callback(
         callbacks, __http_client_on_frame_recv_callback);
-
     nghttp2_session_callbacks_set_on_data_chunk_recv_callback(
         callbacks, __http_on_data_chunk_recv_callback);
     nghttp2_session_callbacks_set_on_stream_close_callback(
@@ -3523,39 +3315,13 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
              &slabItem->buf, 1, __http_tcp_on_write_cb);
   } else {
     valk_slab_release_ptr(tcp_buffer_slab, slabItem);
+    __backpressure_try_resume_one();
   }
 
   // After handshake, flush any pending HTTP/2 frames (client preface, SETTINGS,
   // or requests submitted before handshake completion).
   if (SSL_is_init_finished(client->connection->http.ssl.ssl)) {
-    char inbuf[SSL3_RT_MAX_PACKET_SIZE];
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    memset(inbuf, 0, sizeof(inbuf));
-    valk_buffer_t In = {
-        .items = inbuf, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
-
-    valk_slab_item_t *slab2Raw = valk_slab_aquire(tcp_buffer_slab);
-    if (!slab2Raw) {
-      VALK_ERROR("TCP buffer slab exhausted in client read flush");
-      return;
-    }
-    __tcp_buffer_slab_item_t *slab2 = (void *)slab2Raw->data;
-    valk_buffer_t Out2 = {.items = slab2->data,
-                          .count = 0,
-                          .capacity = SSL3_RT_MAX_PACKET_SIZE};
-
-    __http2_flush_frames(&In, client->connection);
-    valk_aio_ssl_encrypt(&client->connection->http.ssl, &In, &Out2);
-
-    if (Out2.count > 0) {
-      slab2->buf.base = Out2.items;
-      slab2->buf.len = Out2.count;
-      slab2->conn = client->connection;
-      uv_write(&slab2->req, (uv_stream_t *)&client->connection->uv.tcp,
-               &slab2->buf, 1, __http_tcp_on_write_cb);
-    } else {
-      valk_slab_release_ptr(tcp_buffer_slab, slab2);
-    }
+    __http_continue_pending_send(client->connection);
   }
 
   uv_read_start((uv_stream_t *)&client->connection->uv.tcp,
@@ -3800,41 +3566,9 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
     VALK_INFO("Submitted request stream_id=%ld", reqres->streamid);
   }
 
-  // Not request allocated... its connection allocated. Event though technically
-  // the buffer could be part of the request maybe
-  char buf[SSL3_RT_MAX_PACKET_SIZE];
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  memset(buf, 0, sizeof(buf));
-  valk_buffer_t In = {
-      .items = buf, .count = 0, .capacity = SSL3_RT_MAX_PACKET_SIZE};
-  valk_slab_item_t *slabItemRaw = valk_slab_aquire(tcp_buffer_slab);
-  if (!slabItemRaw) {
-    VALK_ERROR("TCP buffer slab exhausted in submit data");
-    return;
-  }
-  __tcp_buffer_slab_item_t *slabItem = (void *)slabItemRaw->data;
-
-  valk_buffer_t Out = {
-      .items = slabItem->data, .count = 0, .capacity = HTTP_SLAB_ITEM_SIZE};
-
-  // Only write stuff if ssl is established
+  // Send any pending HTTP/2 frames if SSL is established
   if (SSL_is_init_finished(client->connection->http.ssl.ssl)) {
-    __http2_flush_frames(&In, conn);
-
-    // Encrypt the new data n stuff
-    valk_aio_ssl_encrypt(&conn->http.ssl, &In, &Out);
-
-    int wantToSend = Out.count > 0;
-    if (wantToSend) {
-      slabItem->buf.base = Out.items;
-      slabItem->buf.len = Out.count;
-      slabItem->conn = conn;
-
-      uv_write(&slabItem->req, (uv_stream_t *)&conn->uv.tcp,
-               &slabItem->buf, 1, __http_tcp_on_write_cb);
-    } else {
-      valk_slab_release_ptr(tcp_buffer_slab, slabItem);
-    }
+    __http_continue_pending_send(conn);
   }
 }
 
@@ -4084,8 +3818,8 @@ const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg)
   if (cfg->max_clients < 1 || cfg->max_clients > 64)
     return "max_clients must be between 1 and 64";
 
-  if (cfg->tcp_buffer_pool_size < 16 || cfg->tcp_buffer_pool_size > 1000000)
-    return "tcp_buffer_pool_size must be between 16 and 1,000,000";
+  if (cfg->tcp_buffer_pool_size < 2 || cfg->tcp_buffer_pool_size > 1000000)
+    return "tcp_buffer_pool_size must be between 2 and 1,000,000";
 
   if (cfg->arena_pool_size < 1 || cfg->arena_pool_size > 10000)
     return "arena_pool_size must be between 1 and 10,000";
@@ -4096,8 +3830,8 @@ const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg)
   if (cfg->max_request_body_size < (1 << 10) || cfg->max_request_body_size > (1ULL << 30))
     return "max_request_body_size must be between 1KB and 1GB";
 
-  if (cfg->queue_capacity < 16 || cfg->queue_capacity > 100000)
-    return "queue_capacity must be between 16 and 100,000";
+  if (cfg->queue_capacity < 2 || cfg->queue_capacity > 100000)
+    return "queue_capacity must be between 2 and 100,000";
 
   if (cfg->backpressure_list_max < 1 || cfg->backpressure_list_max > BACKPRESSURE_LIST_MAX_LIMIT)
     return "backpressure_list_max must be between 1 and 100,000";
@@ -4108,8 +3842,8 @@ const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg)
   if (cfg->pending_stream_pool_size < 1 || cfg->pending_stream_pool_size > PENDING_STREAM_POOL_MAX_LIMIT)
     return "pending_stream_pool_size must be between 1 and 10,000";
 
-  if (cfg->tcp_buffer_pool_size < cfg->max_connections)
-    return "tcp_buffer_pool_size must be >= max_connections";
+  if (cfg->tcp_buffer_pool_size > 16 && cfg->tcp_buffer_pool_size < cfg->max_connections)
+    return "tcp_buffer_pool_size must be >= max_connections (or <= 16 for testing)";
 
   if (cfg->arena_pool_size < cfg->max_connections / 10)
     return "arena_pool_size must be >= max_connections / 10";

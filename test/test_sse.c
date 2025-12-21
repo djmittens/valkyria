@@ -330,6 +330,554 @@ void test_sse_stream_close_already_closed(VALK_TEST_ARGS()) {
 }
 
 // ============================================================================
+// Pending Stream Queue Tests
+// ============================================================================
+
+static valk_sse_event_t *create_test_event(const char *data, size_t data_len) {
+  valk_sse_event_t *event = calloc(1, sizeof(valk_sse_event_t) + data_len + 1);
+  if (!event) return NULL;
+
+  char *buf = (char *)(event + 1);
+  memcpy(buf, data, data_len);
+  buf[data_len] = '\0';
+
+  event->data = buf;
+  event->data_len = data_len;
+  event->next = NULL;
+
+  return event;
+}
+
+void test_pending_queue_enqueue_single(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+  ASSERT_EQ(stream->queue_len, 0);
+  ASSERT_NULL(stream->queue_head);
+  ASSERT_NULL(stream->queue_tail);
+
+  valk_sse_event_t *event = create_test_event("hello", 5);
+  ASSERT_NOT_NULL(event);
+
+  stream->queue_head = event;
+  stream->queue_tail = event;
+  stream->queue_len = 1;
+
+  ASSERT_EQ(stream->queue_len, 1);
+  ASSERT_EQ(stream->queue_head, event);
+  ASSERT_EQ(stream->queue_tail, event);
+  ASSERT_NULL(event->next);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_pending_queue_enqueue_multiple(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  valk_sse_event_t *event1 = create_test_event("first", 5);
+  valk_sse_event_t *event2 = create_test_event("second", 6);
+  valk_sse_event_t *event3 = create_test_event("third", 5);
+  ASSERT_NOT_NULL(event1);
+  ASSERT_NOT_NULL(event2);
+  ASSERT_NOT_NULL(event3);
+
+  stream->queue_head = event1;
+  stream->queue_tail = event1;
+  stream->queue_len = 1;
+
+  event1->next = event2;
+  stream->queue_tail = event2;
+  stream->queue_len++;
+
+  event2->next = event3;
+  stream->queue_tail = event3;
+  stream->queue_len++;
+
+  ASSERT_EQ(stream->queue_len, 3);
+  ASSERT_EQ(stream->queue_head, event1);
+  ASSERT_EQ(stream->queue_tail, event3);
+  ASSERT_EQ(event1->next, event2);
+  ASSERT_EQ(event2->next, event3);
+  ASSERT_NULL(event3->next);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_pending_queue_dequeue_single(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  valk_sse_event_t *event = create_test_event("hello", 5);
+  ASSERT_NOT_NULL(event);
+
+  stream->queue_head = event;
+  stream->queue_tail = event;
+  stream->queue_len = 1;
+
+  valk_sse_event_t *dequeued = stream->queue_head;
+  stream->queue_head = event->next;
+  if (!stream->queue_head) {
+    stream->queue_tail = NULL;
+  }
+  stream->queue_len--;
+
+  ASSERT_EQ(dequeued, event);
+  ASSERT_EQ(stream->queue_len, 0);
+  ASSERT_NULL(stream->queue_head);
+  ASSERT_NULL(stream->queue_tail);
+
+  free(dequeued);
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_pending_queue_dequeue_fifo_order(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  valk_sse_event_t *event1 = create_test_event("first", 5);
+  valk_sse_event_t *event2 = create_test_event("second", 6);
+  valk_sse_event_t *event3 = create_test_event("third", 5);
+  ASSERT_NOT_NULL(event1);
+  ASSERT_NOT_NULL(event2);
+  ASSERT_NOT_NULL(event3);
+
+  stream->queue_head = event1;
+  event1->next = event2;
+  event2->next = event3;
+  stream->queue_tail = event3;
+  stream->queue_len = 3;
+
+  valk_sse_event_t *d1 = stream->queue_head;
+  stream->queue_head = d1->next;
+  stream->queue_len--;
+  ASSERT_STR_EQ(d1->data, "first");
+  ASSERT_EQ(stream->queue_len, 2);
+  free(d1);
+
+  valk_sse_event_t *d2 = stream->queue_head;
+  stream->queue_head = d2->next;
+  stream->queue_len--;
+  ASSERT_STR_EQ(d2->data, "second");
+  ASSERT_EQ(stream->queue_len, 1);
+  free(d2);
+
+  valk_sse_event_t *d3 = stream->queue_head;
+  stream->queue_head = d3->next;
+  if (!stream->queue_head) {
+    stream->queue_tail = NULL;
+  }
+  stream->queue_len--;
+  ASSERT_STR_EQ(d3->data, "third");
+  ASSERT_EQ(stream->queue_len, 0);
+  ASSERT_NULL(stream->queue_head);
+  ASSERT_NULL(stream->queue_tail);
+  free(d3);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_pending_buffer_initial_state(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  ASSERT_NOT_NULL(stream->pending_data);
+  ASSERT_EQ(stream->pending_capacity, 1024);
+  ASSERT_EQ(stream->pending_len, 0);
+  ASSERT_EQ(stream->pending_offset, 0);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_pending_buffer_copy_event_data(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  const char *test_data = "event: test\ndata: hello world\n\n";
+  size_t test_len = strlen(test_data);
+
+  memcpy(stream->pending_data, test_data, test_len);
+  stream->pending_len = test_len;
+  stream->pending_offset = 0;
+
+  ASSERT_EQ(stream->pending_len, test_len);
+  ASSERT_MEM_EQ(stream->pending_data, test_data, test_len);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_pending_buffer_partial_read(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  const char *test_data = "0123456789ABCDEF";
+  size_t test_len = 16;
+
+  memcpy(stream->pending_data, test_data, test_len);
+  stream->pending_len = test_len;
+  stream->pending_offset = 0;
+
+  char buf[8];
+  size_t to_read = 8;
+  size_t remaining = stream->pending_len - stream->pending_offset;
+  size_t actual = remaining < to_read ? remaining : to_read;
+
+  memcpy(buf, stream->pending_data + stream->pending_offset, actual);
+  stream->pending_offset += actual;
+
+  ASSERT_EQ(actual, 8);
+  ASSERT_MEM_EQ(buf, "01234567", 8);
+  ASSERT_EQ(stream->pending_offset, 8);
+
+  remaining = stream->pending_len - stream->pending_offset;
+  actual = remaining < to_read ? remaining : to_read;
+  memcpy(buf, stream->pending_data + stream->pending_offset, actual);
+  stream->pending_offset += actual;
+
+  ASSERT_EQ(actual, 8);
+  ASSERT_MEM_EQ(buf, "89ABCDEF", 8);
+  ASSERT_EQ(stream->pending_offset, 16);
+
+  ASSERT_EQ(stream->pending_offset, stream->pending_len);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_pending_buffer_remaining_calculation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  stream->pending_len = 100;
+  stream->pending_offset = 0;
+
+  size_t remaining = stream->pending_len - stream->pending_offset;
+  ASSERT_EQ(remaining, 100);
+
+  stream->pending_offset = 30;
+  remaining = stream->pending_len - stream->pending_offset;
+  ASSERT_EQ(remaining, 70);
+
+  stream->pending_offset = 100;
+  remaining = stream->pending_len - stream->pending_offset;
+  ASSERT_EQ(remaining, 0);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_pending_buffer_reset_after_event(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  stream->pending_len = 50;
+  stream->pending_offset = 50;
+
+  ASSERT_EQ(stream->pending_offset, stream->pending_len);
+
+  const char *new_data = "new event data";
+  size_t new_len = strlen(new_data);
+
+  memcpy(stream->pending_data, new_data, new_len);
+  stream->pending_len = new_len;
+  stream->pending_offset = 0;
+
+  ASSERT_EQ(stream->pending_len, new_len);
+  ASSERT_EQ(stream->pending_offset, 0);
+  ASSERT_MEM_EQ(stream->pending_data, new_data, new_len);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+static bool g_on_drain_called = false;
+static valk_sse_stream_t *g_on_drain_stream = NULL;
+static void *g_on_drain_user_data = NULL;
+
+static void test_on_drain_callback(valk_sse_stream_t *stream, void *user_data) {
+  g_on_drain_called = true;
+  g_on_drain_stream = stream;
+  g_on_drain_user_data = user_data;
+}
+
+void test_on_drain_callback_setup(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  int sentinel = 42;
+  stream->on_drain = test_on_drain_callback;
+  stream->user_data = &sentinel;
+
+  ASSERT_NOT_NULL(stream->on_drain);
+  ASSERT_EQ(stream->user_data, &sentinel);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_on_drain_callback_trigger(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  g_on_drain_called = false;
+  g_on_drain_stream = NULL;
+  g_on_drain_user_data = NULL;
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  int sentinel = 42;
+  stream->on_drain = test_on_drain_callback;
+  stream->user_data = &sentinel;
+
+  stream->queue_len = 6;
+
+  stream->queue_len--;
+  if (stream->queue_len < stream->queue_max / 2 && stream->on_drain) {
+    stream->on_drain(stream, stream->user_data);
+  }
+
+  ASSERT_FALSE(g_on_drain_called);
+
+  stream->queue_len = 5;
+
+  stream->queue_len--;
+  if (stream->queue_len < stream->queue_max / 2 && stream->on_drain) {
+    stream->on_drain(stream, stream->user_data);
+  }
+
+  ASSERT_TRUE(g_on_drain_called);
+  ASSERT_EQ(g_on_drain_stream, stream);
+  ASSERT_EQ(g_on_drain_user_data, &sentinel);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_on_drain_not_called_when_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  g_on_drain_called = false;
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  stream->on_drain = NULL;
+  stream->queue_len = 5;
+
+  stream->queue_len--;
+  if (stream->queue_len < stream->queue_max / 2 && stream->on_drain) {
+    stream->on_drain(stream, stream->user_data);
+  }
+
+  ASSERT_FALSE(g_on_drain_called);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_pending_buffer_growth_needed(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  size_t original_capacity = stream->pending_capacity;
+  ASSERT_EQ(original_capacity, 1024);
+
+  size_t large_event_size = 2048;
+
+  if (large_event_size > stream->pending_capacity) {
+    char *new_buf = realloc(stream->pending_data, large_event_size);
+    ASSERT_NOT_NULL(new_buf);
+    stream->pending_data = new_buf;
+    stream->pending_capacity = large_event_size;
+  }
+
+  ASSERT_EQ(stream->pending_capacity, 2048);
+  ASSERT_GT(stream->pending_capacity, original_capacity);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_pending_buffer_growth_with_data(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  size_t large_size = 2048;
+  char *large_data = malloc(large_size);
+  ASSERT_NOT_NULL(large_data);
+  memset(large_data, 'A', large_size);
+
+  if (large_size > stream->pending_capacity) {
+    char *new_buf = realloc(stream->pending_data, large_size);
+    ASSERT_NOT_NULL(new_buf);
+    stream->pending_data = new_buf;
+    stream->pending_capacity = large_size;
+  }
+
+  memcpy(stream->pending_data, large_data, large_size);
+  stream->pending_len = large_size;
+  stream->pending_offset = 0;
+
+  ASSERT_EQ(stream->pending_len, 2048);
+  ASSERT_EQ(stream->pending_capacity, 2048);
+  ASSERT_MEM_EQ(stream->pending_data, large_data, large_size);
+
+  free(large_data);
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_data_deferred_flag(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  stream->data_deferred = false;
+
+  ASSERT_NULL(stream->queue_head);
+  stream->data_deferred = true;
+
+  ASSERT_TRUE(stream->data_deferred);
+
+  valk_sse_event_t *event = create_test_event("data", 4);
+  ASSERT_NOT_NULL(event);
+  stream->queue_head = event;
+  stream->queue_tail = event;
+  stream->queue_len = 1;
+
+  stream->data_deferred = false;
+
+  ASSERT_FALSE(stream->data_deferred);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_stats_update_on_send(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  ASSERT_EQ(stream->events_sent, 0);
+  ASSERT_EQ(stream->bytes_sent, 0);
+
+  size_t event_size = 42;
+  stream->events_sent++;
+  stream->bytes_sent += event_size;
+
+  ASSERT_EQ(stream->events_sent, 1);
+  ASSERT_EQ(stream->bytes_sent, 42);
+
+  stream->events_sent++;
+  stream->bytes_sent += 58;
+
+  ASSERT_EQ(stream->events_sent, 2);
+  ASSERT_EQ(stream->bytes_sent, 100);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_queue_at_exact_capacity(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(3);
+  ASSERT_NOT_NULL(stream);
+
+  valk_sse_event_t *e1 = create_test_event("1", 1);
+  valk_sse_event_t *e2 = create_test_event("2", 1);
+  valk_sse_event_t *e3 = create_test_event("3", 1);
+
+  stream->queue_head = e1;
+  e1->next = e2;
+  e2->next = e3;
+  stream->queue_tail = e3;
+  stream->queue_len = 3;
+
+  ASSERT_EQ(stream->queue_len, stream->queue_max);
+  ASSERT_FALSE(valk_sse_is_writable(stream));
+
+  valk_sse_event_t *dequeued = stream->queue_head;
+  stream->queue_head = dequeued->next;
+  stream->queue_len--;
+  free(dequeued);
+
+  ASSERT_TRUE(valk_sse_is_writable(stream));
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_empty_queue_state(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  ASSERT_NULL(stream->queue_head);
+  ASSERT_NULL(stream->queue_tail);
+  ASSERT_EQ(stream->queue_len, 0);
+  ASSERT_TRUE(valk_sse_is_writable(stream));
+  ASSERT_EQ(valk_sse_queue_len(stream), 0);
+
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+void test_pending_buffer_exactly_fits(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = valk_sse_stream_new_for_test(10);
+  ASSERT_NOT_NULL(stream);
+
+  size_t exact_size = stream->pending_capacity;
+  char *data = malloc(exact_size);
+  ASSERT_NOT_NULL(data);
+  memset(data, 'X', exact_size);
+
+  memcpy(stream->pending_data, data, exact_size);
+  stream->pending_len = exact_size;
+  stream->pending_offset = 0;
+
+  ASSERT_EQ(stream->pending_len, stream->pending_capacity);
+
+  free(data);
+  valk_sse_stream_test_free(stream);
+  VALK_PASS();
+}
+
+// ============================================================================
 // Test Main
 // ============================================================================
 
@@ -349,6 +897,26 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_sse_stream_close_with_on_close_callback", test_sse_stream_close_with_on_close_callback);
   valk_testsuite_add_test(suite, "test_sse_send_wrapper", test_sse_send_wrapper);
   valk_testsuite_add_test(suite, "test_sse_stream_close_already_closed", test_sse_stream_close_already_closed);
+
+  valk_testsuite_add_test(suite, "test_pending_queue_enqueue_single", test_pending_queue_enqueue_single);
+  valk_testsuite_add_test(suite, "test_pending_queue_enqueue_multiple", test_pending_queue_enqueue_multiple);
+  valk_testsuite_add_test(suite, "test_pending_queue_dequeue_single", test_pending_queue_dequeue_single);
+  valk_testsuite_add_test(suite, "test_pending_queue_dequeue_fifo_order", test_pending_queue_dequeue_fifo_order);
+  valk_testsuite_add_test(suite, "test_pending_buffer_initial_state", test_pending_buffer_initial_state);
+  valk_testsuite_add_test(suite, "test_pending_buffer_copy_event_data", test_pending_buffer_copy_event_data);
+  valk_testsuite_add_test(suite, "test_pending_buffer_partial_read", test_pending_buffer_partial_read);
+  valk_testsuite_add_test(suite, "test_pending_buffer_remaining_calculation", test_pending_buffer_remaining_calculation);
+  valk_testsuite_add_test(suite, "test_pending_buffer_reset_after_event", test_pending_buffer_reset_after_event);
+  valk_testsuite_add_test(suite, "test_on_drain_callback_setup", test_on_drain_callback_setup);
+  valk_testsuite_add_test(suite, "test_on_drain_callback_trigger", test_on_drain_callback_trigger);
+  valk_testsuite_add_test(suite, "test_on_drain_not_called_when_null", test_on_drain_not_called_when_null);
+  valk_testsuite_add_test(suite, "test_pending_buffer_growth_needed", test_pending_buffer_growth_needed);
+  valk_testsuite_add_test(suite, "test_pending_buffer_growth_with_data", test_pending_buffer_growth_with_data);
+  valk_testsuite_add_test(suite, "test_data_deferred_flag", test_data_deferred_flag);
+  valk_testsuite_add_test(suite, "test_stats_update_on_send", test_stats_update_on_send);
+  valk_testsuite_add_test(suite, "test_queue_at_exact_capacity", test_queue_at_exact_capacity);
+  valk_testsuite_add_test(suite, "test_empty_queue_state", test_empty_queue_state);
+  valk_testsuite_add_test(suite, "test_pending_buffer_exactly_fits", test_pending_buffer_exactly_fits);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

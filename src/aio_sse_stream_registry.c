@@ -2,6 +2,7 @@
 #include "aio.h"
 #include "aio_sse_stream_registry.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -351,6 +352,19 @@ static void sse_registry_timer_cb(uv_timer_t *timer) {
     return;
   }
 
+  // Check if we're past the shutdown deadline
+  if (registry->shutting_down) {
+    uint64_t now = uv_hrtime() / 1000000;
+    if (now >= registry->shutdown_deadline_ms) {
+      VALK_INFO("SSE registry: shutdown deadline reached, force closing streams");
+      valk_sse_registry_force_close_all(registry);
+      return;
+    }
+  }
+
+  // Check for idle timeouts
+  valk_sse_registry_check_timeouts(registry);
+
   // Collect memory snapshot once for all streams
   valk_mem_snapshot_free(&registry->current_snapshot);
   valk_mem_snapshot_collect(&registry->current_snapshot, registry->aio_system);
@@ -390,6 +404,9 @@ static void sse_registry_timer_cb(uv_timer_t *timer) {
     if (sse_push_to_entry(entry, &registry->current_snapshot, modular_delta_ptr)) {
       registry->events_pushed_total++;
       registry->bytes_pushed_total += entry->pending_len;
+
+      // Touch activity timestamp on successful push
+      entry->last_activity_ms = uv_hrtime() / 1000000;
 
       // Add handle to flush list if not already present
       bool found = false;
@@ -488,6 +505,13 @@ valk_sse_stream_entry_t* valk_sse_registry_subscribe(
   entry->http2_stream_id = stream_id;
   atomic_store(&entry->active, true);
   atomic_store(&entry->being_removed, false);
+
+  // Initialize activity tracking
+  uint64_t now = uv_hrtime() / 1000000;
+  entry->created_at_ms = now;
+  entry->last_activity_ms = now;
+  entry->idle_timeout_ms = 0;  // No timeout by default
+
   entry->first_event_sent = false;
   entry->last_event_id = 0;
   entry->pending_data = NULL;
@@ -693,15 +717,191 @@ size_t valk_sse_registry_stats_json(valk_sse_stream_registry_t *registry, char *
 
   int n = snprintf(buf, buf_size,
                    "{\"stream_count\":%zu,\"timer_running\":%s,"
-                   "\"events_pushed_total\":%lu,\"bytes_pushed_total\":%lu}",
+                   "\"events_pushed_total\":%" PRIu64 ",\"bytes_pushed_total\":%" PRIu64 ","
+                   "\"streams_timed_out\":%" PRIu64 ",\"streams_cancelled\":%" PRIu64 ","
+                   "\"shutting_down\":%s}",
                    registry->stream_count,
                    registry->timer_running ? "true" : "false",
                    registry->events_pushed_total,
-                   registry->bytes_pushed_total);
+                   registry->bytes_pushed_total,
+                   registry->streams_timed_out,
+                   registry->streams_cancelled,
+                   registry->shutting_down ? "true" : "false");
 
   if (n < 0 || (size_t)n >= buf_size) {
     return 0;
   }
 
   return (size_t)n;
+}
+
+// ============================================================================
+// Timeout Management
+// ============================================================================
+
+static uint64_t registry_get_current_time_ms(void) {
+  return uv_hrtime() / 1000000;
+}
+
+void valk_sse_registry_set_idle_timeout(valk_sse_stream_entry_t *entry, uint64_t timeout_ms) {
+  if (!entry) {
+    return;
+  }
+  entry->idle_timeout_ms = timeout_ms;
+  VALK_DEBUG("SSE registry: stream %lu idle timeout set to %" PRIu64 " ms",
+             entry->stream_id, timeout_ms);
+}
+
+size_t valk_sse_registry_check_timeouts(valk_sse_stream_registry_t *registry) {
+  if (!registry) {
+    return 0;
+  }
+
+  uint64_t now = registry_get_current_time_ms();
+  size_t timed_out = 0;
+
+  valk_sse_stream_entry_t *entry = registry->streams;
+  while (entry) {
+    valk_sse_stream_entry_t *next = entry->next;
+
+    if (atomic_load(&entry->active) && entry->idle_timeout_ms > 0) {
+      uint64_t idle_time = now - entry->last_activity_ms;
+      if (idle_time >= entry->idle_timeout_ms) {
+        VALK_INFO("SSE registry: stream %" PRIu64 " timed out (idle for %" PRIu64 " ms)",
+                  entry->stream_id, idle_time);
+
+        registry->streams_timed_out++;
+        valk_sse_registry_unsubscribe(registry, entry);
+        timed_out++;
+      }
+    }
+
+    entry = next;
+  }
+
+  return timed_out;
+}
+
+// ============================================================================
+// Stream Cancellation
+// ============================================================================
+
+valk_sse_stream_entry_t *valk_sse_registry_find_by_id(valk_sse_stream_registry_t *registry, uint64_t stream_id) {
+  if (!registry) {
+    return NULL;
+  }
+
+  for (valk_sse_stream_entry_t *entry = registry->streams; entry; entry = entry->next) {
+    if (entry->stream_id == stream_id) {
+      return entry;
+    }
+  }
+  return NULL;
+}
+
+int valk_sse_registry_cancel_stream(valk_sse_stream_registry_t *registry, uint64_t stream_id) {
+  if (!registry) {
+    return -1;
+  }
+
+  valk_sse_stream_entry_t *entry = valk_sse_registry_find_by_id(registry, stream_id);
+  if (!entry) {
+    VALK_WARN("SSE registry: cancel failed - stream %" PRIu64 " not found", stream_id);
+    return -1;
+  }
+
+  if (!atomic_load(&entry->active)) {
+    return 0;  // Already inactive
+  }
+
+  VALK_INFO("SSE registry: cancelling stream %" PRIu64 " (http2_stream=%d)",
+            entry->stream_id, entry->http2_stream_id);
+
+  // Submit RST_STREAM to HTTP/2 layer
+  if (entry->session && entry->http2_stream_id > 0) {
+    int rv = nghttp2_submit_rst_stream(entry->session, NGHTTP2_FLAG_NONE,
+                                        entry->http2_stream_id, NGHTTP2_CANCEL);
+    if (rv != 0) {
+      VALK_WARN("SSE registry: failed to submit RST_STREAM for stream %" PRIu64 ": %s",
+                entry->stream_id, nghttp2_strerror(rv));
+    } else if (entry->handle) {
+      valk_http2_flush_pending(entry->handle);
+    }
+  }
+
+  registry->streams_cancelled++;
+  valk_sse_registry_unsubscribe(registry, entry);
+
+  return 0;
+}
+
+// ============================================================================
+// Graceful Shutdown
+// ============================================================================
+
+bool valk_sse_registry_is_shutting_down(valk_sse_stream_registry_t *registry) {
+  if (!registry) {
+    return false;
+  }
+  return registry->shutting_down;
+}
+
+int valk_sse_registry_graceful_shutdown(valk_sse_stream_registry_t *registry, uint64_t drain_timeout_ms) {
+  if (!registry) {
+    return -1;
+  }
+
+  if (registry->shutting_down) {
+    return 0;  // Already shutting down
+  }
+
+  VALK_INFO("SSE registry: initiating graceful shutdown (drain_timeout=%" PRIu64 " ms, streams=%zu)",
+            drain_timeout_ms, registry->stream_count);
+
+  registry->shutting_down = true;
+  registry->shutdown_deadline_ms = registry_get_current_time_ms() + drain_timeout_ms;
+
+  // For diagnostics streams, we just close them immediately since they don't have
+  // pending events to drain (timer pushes are periodic, not queued)
+  if (drain_timeout_ms == 0) {
+    return (int)valk_sse_registry_force_close_all(registry);
+  }
+
+  return 0;
+}
+
+size_t valk_sse_registry_force_close_all(valk_sse_stream_registry_t *registry) {
+  if (!registry) {
+    return 0;
+  }
+
+  VALK_INFO("SSE registry: force closing all streams (%zu active)", registry->stream_count);
+
+  size_t closed = 0;
+  valk_sse_stream_entry_t *entry = registry->streams;
+
+  while (entry) {
+    valk_sse_stream_entry_t *next = entry->next;
+
+    if (atomic_load(&entry->active)) {
+      // Submit RST_STREAM
+      if (entry->session && entry->http2_stream_id > 0) {
+        nghttp2_submit_rst_stream(entry->session, NGHTTP2_FLAG_NONE,
+                                   entry->http2_stream_id, NGHTTP2_NO_ERROR);
+        if (entry->handle) {
+          valk_http2_flush_pending(entry->handle);
+        }
+      }
+
+      valk_sse_registry_unsubscribe(registry, entry);
+      closed++;
+    }
+
+    entry = next;
+  }
+
+  registry->shutting_down = false;
+  VALK_INFO("SSE registry: force closed %zu streams", closed);
+
+  return closed;
 }

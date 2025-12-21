@@ -41,6 +41,11 @@ struct valk_sse_stream_entry {
   _Atomic bool active;
   _Atomic bool being_removed;
 
+  // Activity tracking for idle timeout
+  uint64_t created_at_ms;
+  uint64_t last_activity_ms;
+  uint64_t idle_timeout_ms;       // 0 = no timeout
+
   // Per-stream state
   bool first_event_sent;
   uint64_t last_event_id;
@@ -78,6 +83,10 @@ struct valk_sse_stream_registry {
   bool timer_running;
   uint64_t timer_interval_ms;
 
+  // Shutdown state
+  bool shutting_down;
+  uint64_t shutdown_deadline_ms;
+
   // Shared state
   valk_mem_snapshot_t current_snapshot;
   valk_delta_snapshot_t modular_delta;
@@ -89,6 +98,8 @@ struct valk_sse_stream_registry {
   // Statistics
   uint64_t events_pushed_total;
   uint64_t bytes_pushed_total;
+  uint64_t streams_timed_out;
+  uint64_t streams_cancelled;
 };
 
 // Registry Lifecycle
@@ -125,5 +136,18 @@ void valk_sse_registry_timer_stop(valk_sse_stream_registry_t *registry);
 // Query API
 size_t valk_sse_registry_stream_count(valk_sse_stream_registry_t *registry);
 size_t valk_sse_registry_stats_json(valk_sse_stream_registry_t *registry, char *buf, size_t buf_size);
+
+// Timeout Management
+void valk_sse_registry_set_idle_timeout(valk_sse_stream_entry_t *entry, uint64_t timeout_ms);
+size_t valk_sse_registry_check_timeouts(valk_sse_stream_registry_t *registry);
+
+// Stream Cancellation
+int valk_sse_registry_cancel_stream(valk_sse_stream_registry_t *registry, uint64_t stream_id);
+valk_sse_stream_entry_t *valk_sse_registry_find_by_id(valk_sse_stream_registry_t *registry, uint64_t stream_id);
+
+// Graceful Shutdown
+int valk_sse_registry_graceful_shutdown(valk_sse_stream_registry_t *registry, uint64_t drain_timeout_ms);
+size_t valk_sse_registry_force_close_all(valk_sse_stream_registry_t *registry);
+bool valk_sse_registry_is_shutting_down(valk_sse_stream_registry_t *registry);
 
 #endif // VALK_AIO_SSE_STREAM_REGISTRY_H

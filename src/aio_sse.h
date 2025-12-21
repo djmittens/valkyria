@@ -64,14 +64,21 @@ struct valk_sse_stream {
   uint64_t events_sent;
   uint64_t bytes_sent;
 
+  // Activity tracking for idle timeout
+  uint64_t created_at_ms;
+  uint64_t last_activity_ms;
+  uint64_t idle_timeout_ms;       // 0 = no timeout
+
   // Callbacks (optional, for C-level hooks)
   void (*on_drain)(valk_sse_stream_t *stream, void *user_data);
   void (*on_close)(valk_sse_stream_t *stream, void *user_data);
+  void (*on_timeout)(valk_sse_stream_t *stream, void *user_data);
   void *user_data;
 
   // Lisp callbacks (stored as heap-allocated lvals)
   struct valk_lval_t *lisp_on_drain;
   struct valk_lval_t *lisp_on_close;
+  struct valk_lval_t *lisp_on_timeout;
   struct valk_lenv_t *callback_env;
 };
 
@@ -99,6 +106,37 @@ int valk_sse_send_retry(valk_sse_stream_t *stream, uint32_t retry_ms);
 // Backpressure
 bool valk_sse_is_writable(valk_sse_stream_t *stream);
 size_t valk_sse_queue_len(valk_sse_stream_t *stream);
+
+// Timeout Management
+void valk_sse_set_idle_timeout(valk_sse_stream_t *stream, uint64_t timeout_ms);
+void valk_sse_touch_activity(valk_sse_stream_t *stream);
+bool valk_sse_is_idle_expired(valk_sse_stream_t *stream);
+
+// Stream cancellation (RST_STREAM)
+int valk_sse_stream_cancel(valk_sse_stream_t *stream, uint32_t error_code);
+
+// Global stream management
+typedef struct valk_sse_manager valk_sse_manager_t;
+
+struct valk_sse_manager {
+  valk_sse_stream_t *streams;       // Global list of all streams
+  size_t stream_count;
+  bool shutting_down;
+  uint64_t shutdown_deadline_ms;
+  void *aio_system;                 // valk_aio_system_t*
+};
+
+void valk_sse_manager_init(valk_sse_manager_t *mgr, void *aio_system);
+void valk_sse_manager_shutdown(valk_sse_manager_t *mgr);
+void valk_sse_manager_add(valk_sse_manager_t *mgr, valk_sse_stream_t *stream);
+void valk_sse_manager_remove(valk_sse_manager_t *mgr, valk_sse_stream_t *stream);
+valk_sse_stream_t *valk_sse_manager_find_by_id(valk_sse_manager_t *mgr, uint64_t id);
+size_t valk_sse_manager_check_timeouts(valk_sse_manager_t *mgr);
+int valk_sse_manager_graceful_shutdown(valk_sse_manager_t *mgr, uint64_t drain_timeout_ms);
+size_t valk_sse_manager_force_close_all(valk_sse_manager_t *mgr);
+
+// Get global manager (initialized by AIO system)
+valk_sse_manager_t *valk_sse_get_manager(void);
 
 // Lisp builtins registration
 void valk_register_sse_builtins(struct valk_lenv_t *env);

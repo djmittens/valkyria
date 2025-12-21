@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uv.h>
 
 #include "common.h"
 #include "log.h"
@@ -86,6 +87,12 @@ valk_sse_stream_t *valk_sse_stream_new(
 
   // Start with data deferred (no events yet)
   stream->data_deferred = true;
+
+  // Initialize activity tracking
+  uint64_t now = uv_hrtime() / 1000000;
+  stream->created_at_ms = now;
+  stream->last_activity_ms = now;
+  stream->idle_timeout_ms = 0;  // No timeout by default
 
   // Set up nghttp2 data provider
   data_prd_out->source.ptr = stream;
@@ -222,6 +229,9 @@ int valk_sse_send_event(valk_sse_stream_t *stream, const char *event_type,
   }
   stream->queue_tail = event;
   stream->queue_len++;
+
+  // Touch activity timestamp
+  valk_sse_touch_activity(stream);
 
   VALK_DEBUG("SSE: enqueued event to stream %lu (queue_len=%zu, event_size=%zu)",
              stream->id, stream->queue_len, event->data_len);
@@ -436,4 +446,218 @@ static nghttp2_ssize __sse_data_read_callback(
   return (nghttp2_ssize)to_send;
 }
 
+// ============================================================================
+// Timeout Management
+// ============================================================================
 
+static uint64_t __get_current_time_ms(void) {
+  return uv_hrtime() / 1000000;
+}
+
+void valk_sse_set_idle_timeout(valk_sse_stream_t *stream, uint64_t timeout_ms) {
+  if (!stream) {
+    return;
+  }
+  stream->idle_timeout_ms = timeout_ms;
+  VALK_DEBUG("SSE: stream %lu idle timeout set to %lu ms", stream->id, timeout_ms);
+}
+
+void valk_sse_touch_activity(valk_sse_stream_t *stream) {
+  if (!stream) {
+    return;
+  }
+  stream->last_activity_ms = __get_current_time_ms();
+}
+
+bool valk_sse_is_idle_expired(valk_sse_stream_t *stream) {
+  if (!stream || stream->idle_timeout_ms == 0) {
+    return false;
+  }
+  uint64_t now = __get_current_time_ms();
+  uint64_t idle_time = now - stream->last_activity_ms;
+  return idle_time >= stream->idle_timeout_ms;
+}
+
+// ============================================================================
+// Stream Cancellation
+// ============================================================================
+
+int valk_sse_stream_cancel(valk_sse_stream_t *stream, uint32_t error_code) {
+  if (!stream) {
+    return -1;
+  }
+
+  if (stream->state == VALK_SSE_CLOSED) {
+    return 0;  // Already closed
+  }
+
+  VALK_INFO("SSE: cancelling stream id=%lu with error_code=%u", stream->id, error_code);
+
+  // Submit RST_STREAM to HTTP/2 layer
+  if (stream->session && stream->stream_id > 0) {
+    int rv = nghttp2_submit_rst_stream(stream->session, NGHTTP2_FLAG_NONE,
+                                        stream->stream_id, error_code);
+    if (rv != 0) {
+      VALK_WARN("SSE: failed to submit RST_STREAM for stream %lu: %s",
+                stream->id, nghttp2_strerror(rv));
+    } else {
+      valk_http2_flush_pending(stream->conn);
+    }
+  }
+
+  // Close the stream
+  valk_sse_stream_close(stream);
+
+  return 0;
+}
+
+// ============================================================================
+// Global Stream Manager
+// ============================================================================
+
+static valk_sse_manager_t g_sse_manager = {0};
+
+valk_sse_manager_t *valk_sse_get_manager(void) {
+  return &g_sse_manager;
+}
+
+void valk_sse_manager_init(valk_sse_manager_t *mgr, void *aio_system) {
+  if (!mgr) {
+    return;
+  }
+  memset(mgr, 0, sizeof(*mgr));
+  mgr->aio_system = aio_system;
+  VALK_DEBUG("SSE manager: initialized");
+}
+
+void valk_sse_manager_shutdown(valk_sse_manager_t *mgr) {
+  if (!mgr) {
+    return;
+  }
+  valk_sse_manager_force_close_all(mgr);
+  mgr->shutting_down = false;
+  mgr->shutdown_deadline_ms = 0;
+  VALK_DEBUG("SSE manager: shutdown complete");
+}
+
+void valk_sse_manager_add(valk_sse_manager_t *mgr, valk_sse_stream_t *stream) {
+  if (!mgr || !stream) {
+    return;
+  }
+
+  // Prepend to list
+  stream->next = mgr->streams;
+  mgr->streams = stream;
+  mgr->stream_count++;
+
+  // Set creation time
+  stream->created_at_ms = __get_current_time_ms();
+  stream->last_activity_ms = stream->created_at_ms;
+
+  VALK_DEBUG("SSE manager: added stream %lu (count=%zu)", stream->id, mgr->stream_count);
+}
+
+void valk_sse_manager_remove(valk_sse_manager_t *mgr, valk_sse_stream_t *stream) {
+  if (!mgr || !stream) {
+    return;
+  }
+
+  valk_sse_stream_t **pp = &mgr->streams;
+  while (*pp) {
+    if (*pp == stream) {
+      *pp = stream->next;
+      mgr->stream_count--;
+      VALK_DEBUG("SSE manager: removed stream %lu (count=%zu)", stream->id, mgr->stream_count);
+      return;
+    }
+    pp = &(*pp)->next;
+  }
+}
+
+valk_sse_stream_t *valk_sse_manager_find_by_id(valk_sse_manager_t *mgr, uint64_t id) {
+  if (!mgr) {
+    return NULL;
+  }
+
+  for (valk_sse_stream_t *s = mgr->streams; s; s = s->next) {
+    if (s->id == id) {
+      return s;
+    }
+  }
+  return NULL;
+}
+
+size_t valk_sse_manager_check_timeouts(valk_sse_manager_t *mgr) {
+  if (!mgr) {
+    return 0;
+  }
+
+  size_t timed_out = 0;
+  valk_sse_stream_t *stream = mgr->streams;
+
+  while (stream) {
+    valk_sse_stream_t *next = stream->next;
+
+    if (stream->state == VALK_SSE_OPEN && valk_sse_is_idle_expired(stream)) {
+      VALK_INFO("SSE: stream %lu timed out (idle for %lu ms)",
+                stream->id, stream->idle_timeout_ms);
+
+      if (stream->on_timeout) {
+        stream->on_timeout(stream, stream->user_data);
+      }
+
+      valk_sse_stream_cancel(stream, NGHTTP2_CANCEL);
+      timed_out++;
+    }
+
+    stream = next;
+  }
+
+  return timed_out;
+}
+
+int valk_sse_manager_graceful_shutdown(valk_sse_manager_t *mgr, uint64_t drain_timeout_ms) {
+  if (!mgr) {
+    return -1;
+  }
+
+  if (mgr->shutting_down) {
+    return 0;  // Already shutting down
+  }
+
+  VALK_INFO("SSE manager: initiating graceful shutdown (drain_timeout=%lu ms, streams=%zu)",
+            drain_timeout_ms, mgr->stream_count);
+
+  mgr->shutting_down = true;
+  mgr->shutdown_deadline_ms = __get_current_time_ms() + drain_timeout_ms;
+
+  // Mark all streams as CLOSING to stop accepting new events
+  for (valk_sse_stream_t *s = mgr->streams; s; s = s->next) {
+    if (s->state == VALK_SSE_OPEN) {
+      s->state = VALK_SSE_CLOSING;
+    }
+  }
+
+  return 0;
+}
+
+size_t valk_sse_manager_force_close_all(valk_sse_manager_t *mgr) {
+  if (!mgr) {
+    return 0;
+  }
+
+  size_t closed = 0;
+  valk_sse_stream_t *stream = mgr->streams;
+
+  while (stream) {
+    valk_sse_stream_t *next = stream->next;
+    if (stream->state != VALK_SSE_CLOSED) {
+      valk_sse_stream_cancel(stream, NGHTTP2_NO_ERROR);
+      closed++;
+    }
+    stream = next;
+  }
+
+  VALK_INFO("SSE manager: force closed %zu streams", closed);
+  return closed;
+}

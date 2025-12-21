@@ -573,6 +573,335 @@ void test_sse_writable_at_threshold(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// ============================================================================
+// Timeout Management Tests
+// ============================================================================
+
+void test_sse_set_idle_timeout_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_set_idle_timeout(nullptr, 1000);
+
+  VALK_PASS();
+}
+
+void test_sse_set_idle_timeout_valid(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = create_test_stream();
+  valk_sse_set_idle_timeout(stream, 5000);
+
+  VALK_TEST_ASSERT(stream->idle_timeout_ms == 5000, "Timeout should be 5000ms");
+
+  free_test_stream(stream);
+  VALK_PASS();
+}
+
+void test_sse_touch_activity_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_touch_activity(nullptr);
+
+  VALK_PASS();
+}
+
+void test_sse_touch_activity_updates_timestamp(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = create_test_stream();
+  stream->last_activity_ms = 0;
+
+  valk_sse_touch_activity(stream);
+
+  VALK_TEST_ASSERT(stream->last_activity_ms > 0, "Activity timestamp should be updated");
+
+  free_test_stream(stream);
+  VALK_PASS();
+}
+
+void test_sse_is_idle_expired_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  bool result = valk_sse_is_idle_expired(nullptr);
+  VALK_TEST_ASSERT(result == false, "NULL stream should not be expired");
+
+  VALK_PASS();
+}
+
+void test_sse_is_idle_expired_no_timeout(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = create_test_stream();
+  stream->idle_timeout_ms = 0;
+  stream->last_activity_ms = 1;
+
+  bool result = valk_sse_is_idle_expired(stream);
+  VALK_TEST_ASSERT(result == false, "Stream with no timeout should not expire");
+
+  free_test_stream(stream);
+  VALK_PASS();
+}
+
+void test_sse_is_idle_expired_not_expired(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = create_test_stream();
+  stream->idle_timeout_ms = 10000;  // 10 seconds
+  valk_sse_touch_activity(stream);  // Set to now
+
+  bool result = valk_sse_is_idle_expired(stream);
+  VALK_TEST_ASSERT(result == false, "Recently active stream should not be expired");
+
+  free_test_stream(stream);
+  VALK_PASS();
+}
+
+void test_sse_is_idle_expired_expired(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = create_test_stream();
+  stream->idle_timeout_ms = 1;  // 1ms timeout
+  stream->last_activity_ms = 1;  // Very old timestamp
+
+  bool result = valk_sse_is_idle_expired(stream);
+  VALK_TEST_ASSERT(result == true, "Old stream should be expired");
+
+  free_test_stream(stream);
+  VALK_PASS();
+}
+
+// ============================================================================
+// Stream Cancellation Tests
+// ============================================================================
+
+void test_sse_stream_cancel_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int result = valk_sse_stream_cancel(nullptr, 0);
+  VALK_TEST_ASSERT(result == -1, "NULL stream should return -1");
+
+  VALK_PASS();
+}
+
+void test_sse_stream_cancel_already_closed(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *stream = create_test_stream();
+  stream->state = VALK_SSE_CLOSED;
+
+  int result = valk_sse_stream_cancel(stream, 0);
+  VALK_TEST_ASSERT(result == 0, "Already closed stream should return 0");
+
+  free_test_stream(stream);
+  VALK_PASS();
+}
+
+// ============================================================================
+// Manager Tests
+// ============================================================================
+
+void test_sse_manager_init_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_manager_init(nullptr, nullptr);
+
+  VALK_PASS();
+}
+
+void test_sse_manager_init_valid(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_manager_t mgr;
+  valk_sse_manager_init(&mgr, (void*)0x1);
+
+  VALK_TEST_ASSERT(mgr.streams == nullptr, "Streams should be NULL");
+  VALK_TEST_ASSERT(mgr.stream_count == 0, "Count should be 0");
+  VALK_TEST_ASSERT(mgr.shutting_down == false, "Should not be shutting down");
+  VALK_TEST_ASSERT(mgr.aio_system == (void*)0x1, "AIO system should be set");
+
+  VALK_PASS();
+}
+
+void test_sse_manager_add_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_manager_add(nullptr, nullptr);
+
+  valk_sse_manager_t mgr = {0};
+  valk_sse_manager_add(&mgr, nullptr);
+
+  VALK_PASS();
+}
+
+void test_sse_manager_add_stream(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_manager_t mgr;
+  valk_sse_manager_init(&mgr, (void*)0x1);
+
+  valk_sse_stream_t *stream = create_test_stream();
+  stream->id = 42;
+
+  valk_sse_manager_add(&mgr, stream);
+
+  VALK_TEST_ASSERT(mgr.stream_count == 1, "Count should be 1");
+  VALK_TEST_ASSERT(mgr.streams == stream, "Stream should be in list");
+  VALK_TEST_ASSERT(stream->created_at_ms > 0, "Created timestamp should be set");
+  VALK_TEST_ASSERT(stream->last_activity_ms > 0, "Activity timestamp should be set");
+
+  free_test_stream(stream);
+  VALK_PASS();
+}
+
+void test_sse_manager_remove_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_manager_remove(nullptr, nullptr);
+
+  valk_sse_manager_t mgr = {0};
+  valk_sse_manager_remove(&mgr, nullptr);
+
+  VALK_PASS();
+}
+
+void test_sse_manager_remove_stream(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_manager_t mgr;
+  valk_sse_manager_init(&mgr, (void*)0x1);
+
+  valk_sse_stream_t *stream = create_test_stream();
+  stream->id = 42;
+
+  valk_sse_manager_add(&mgr, stream);
+  VALK_TEST_ASSERT(mgr.stream_count == 1, "Count should be 1");
+
+  valk_sse_manager_remove(&mgr, stream);
+  VALK_TEST_ASSERT(mgr.stream_count == 0, "Count should be 0");
+  VALK_TEST_ASSERT(mgr.streams == nullptr, "Streams should be NULL");
+
+  free_test_stream(stream);
+  VALK_PASS();
+}
+
+void test_sse_manager_find_by_id_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_t *result = valk_sse_manager_find_by_id(nullptr, 42);
+  VALK_TEST_ASSERT(result == nullptr, "NULL manager should return NULL");
+
+  VALK_PASS();
+}
+
+void test_sse_manager_find_by_id_found(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_manager_t mgr;
+  valk_sse_manager_init(&mgr, (void*)0x1);
+
+  valk_sse_stream_t *stream1 = create_test_stream();
+  stream1->id = 10;
+  valk_sse_stream_t *stream2 = create_test_stream();
+  stream2->id = 20;
+  valk_sse_stream_t *stream3 = create_test_stream();
+  stream3->id = 30;
+
+  valk_sse_manager_add(&mgr, stream1);
+  valk_sse_manager_add(&mgr, stream2);
+  valk_sse_manager_add(&mgr, stream3);
+
+  valk_sse_stream_t *result = valk_sse_manager_find_by_id(&mgr, 20);
+  VALK_TEST_ASSERT(result == stream2, "Should find stream with ID 20");
+
+  free_test_stream(stream1);
+  free_test_stream(stream2);
+  free_test_stream(stream3);
+  VALK_PASS();
+}
+
+void test_sse_manager_find_by_id_not_found(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_manager_t mgr;
+  valk_sse_manager_init(&mgr, (void*)0x1);
+
+  valk_sse_stream_t *stream = create_test_stream();
+  stream->id = 10;
+  valk_sse_manager_add(&mgr, stream);
+
+  valk_sse_stream_t *result = valk_sse_manager_find_by_id(&mgr, 999);
+  VALK_TEST_ASSERT(result == nullptr, "Should not find non-existent ID");
+
+  free_test_stream(stream);
+  VALK_PASS();
+}
+
+void test_sse_manager_check_timeouts_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t result = valk_sse_manager_check_timeouts(nullptr);
+  VALK_TEST_ASSERT(result == 0, "NULL manager should return 0");
+
+  VALK_PASS();
+}
+
+void test_sse_manager_graceful_shutdown_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int result = valk_sse_manager_graceful_shutdown(nullptr, 1000);
+  VALK_TEST_ASSERT(result == -1, "NULL manager should return -1");
+
+  VALK_PASS();
+}
+
+void test_sse_manager_graceful_shutdown_sets_state(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_manager_t mgr;
+  valk_sse_manager_init(&mgr, (void*)0x1);
+
+  int result = valk_sse_manager_graceful_shutdown(&mgr, 5000);
+  VALK_TEST_ASSERT(result == 0, "Should succeed");
+  VALK_TEST_ASSERT(mgr.shutting_down == true, "Should be shutting down");
+  VALK_TEST_ASSERT(mgr.shutdown_deadline_ms > 0, "Deadline should be set");
+
+  VALK_PASS();
+}
+
+void test_sse_manager_graceful_shutdown_idempotent(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_manager_t mgr;
+  valk_sse_manager_init(&mgr, (void*)0x1);
+
+  valk_sse_manager_graceful_shutdown(&mgr, 5000);
+  uint64_t first_deadline = mgr.shutdown_deadline_ms;
+
+  int result = valk_sse_manager_graceful_shutdown(&mgr, 10000);
+  VALK_TEST_ASSERT(result == 0, "Should succeed");
+  VALK_TEST_ASSERT(mgr.shutdown_deadline_ms == first_deadline, "Deadline should not change");
+
+  VALK_PASS();
+}
+
+void test_sse_manager_force_close_all_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t result = valk_sse_manager_force_close_all(nullptr);
+  VALK_TEST_ASSERT(result == 0, "NULL manager should return 0");
+
+  VALK_PASS();
+}
+
+void test_sse_get_manager(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_manager_t *mgr = valk_sse_get_manager();
+  VALK_TEST_ASSERT(mgr != nullptr, "Global manager should not be NULL");
+
+  VALK_PASS();
+}
+
 #else
 
 void test_sse_core_disabled(VALK_TEST_ARGS()) {
@@ -627,6 +956,37 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_sse_send_retry_format", test_sse_send_retry_format);
   valk_testsuite_add_test(suite, "test_sse_multiple_event_types", test_sse_multiple_event_types);
   valk_testsuite_add_test(suite, "test_sse_writable_at_threshold", test_sse_writable_at_threshold);
+
+  // Timeout management tests
+  valk_testsuite_add_test(suite, "test_sse_set_idle_timeout_null", test_sse_set_idle_timeout_null);
+  valk_testsuite_add_test(suite, "test_sse_set_idle_timeout_valid", test_sse_set_idle_timeout_valid);
+  valk_testsuite_add_test(suite, "test_sse_touch_activity_null", test_sse_touch_activity_null);
+  valk_testsuite_add_test(suite, "test_sse_touch_activity_updates_timestamp", test_sse_touch_activity_updates_timestamp);
+  valk_testsuite_add_test(suite, "test_sse_is_idle_expired_null", test_sse_is_idle_expired_null);
+  valk_testsuite_add_test(suite, "test_sse_is_idle_expired_no_timeout", test_sse_is_idle_expired_no_timeout);
+  valk_testsuite_add_test(suite, "test_sse_is_idle_expired_not_expired", test_sse_is_idle_expired_not_expired);
+  valk_testsuite_add_test(suite, "test_sse_is_idle_expired_expired", test_sse_is_idle_expired_expired);
+
+  // Stream cancellation tests
+  valk_testsuite_add_test(suite, "test_sse_stream_cancel_null", test_sse_stream_cancel_null);
+  valk_testsuite_add_test(suite, "test_sse_stream_cancel_already_closed", test_sse_stream_cancel_already_closed);
+
+  // Manager tests
+  valk_testsuite_add_test(suite, "test_sse_manager_init_null", test_sse_manager_init_null);
+  valk_testsuite_add_test(suite, "test_sse_manager_init_valid", test_sse_manager_init_valid);
+  valk_testsuite_add_test(suite, "test_sse_manager_add_null", test_sse_manager_add_null);
+  valk_testsuite_add_test(suite, "test_sse_manager_add_stream", test_sse_manager_add_stream);
+  valk_testsuite_add_test(suite, "test_sse_manager_remove_null", test_sse_manager_remove_null);
+  valk_testsuite_add_test(suite, "test_sse_manager_remove_stream", test_sse_manager_remove_stream);
+  valk_testsuite_add_test(suite, "test_sse_manager_find_by_id_null", test_sse_manager_find_by_id_null);
+  valk_testsuite_add_test(suite, "test_sse_manager_find_by_id_found", test_sse_manager_find_by_id_found);
+  valk_testsuite_add_test(suite, "test_sse_manager_find_by_id_not_found", test_sse_manager_find_by_id_not_found);
+  valk_testsuite_add_test(suite, "test_sse_manager_check_timeouts_null", test_sse_manager_check_timeouts_null);
+  valk_testsuite_add_test(suite, "test_sse_manager_graceful_shutdown_null", test_sse_manager_graceful_shutdown_null);
+  valk_testsuite_add_test(suite, "test_sse_manager_graceful_shutdown_sets_state", test_sse_manager_graceful_shutdown_sets_state);
+  valk_testsuite_add_test(suite, "test_sse_manager_graceful_shutdown_idempotent", test_sse_manager_graceful_shutdown_idempotent);
+  valk_testsuite_add_test(suite, "test_sse_manager_force_close_all_null", test_sse_manager_force_close_all_null);
+  valk_testsuite_add_test(suite, "test_sse_get_manager", test_sse_get_manager);
 #else
   valk_testsuite_add_test(suite, "test_sse_core_disabled", test_sse_core_disabled);
 #endif

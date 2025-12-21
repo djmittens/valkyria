@@ -5,6 +5,7 @@
 (def {aio} (aio/start))
 (def {test-passed} 0)
 (def {handler-called} 0)
+(def {sse-data-received} 0)
 
 (def {wrapped-handler}
   (\ {req} {
@@ -28,19 +29,35 @@
 (aio/schedule aio 100 (\ {} {
   (println "Requesting /debug/diagnostics/memory endpoint...")
   (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/diagnostics/memory" (\ {resp} {
-    (println "Client callback received (SSE stream)")
+    (println "Client callback received (SSE stream data)")
+    (def {sse-data-received} 1)
   }))
 }))
 
-(aio/schedule aio 500 (\ {} {
+(aio/schedule aio 400 (\ {} {
   (if (== handler-called 1)
+    {(println "Handler called, waiting for SSE timer to push data...")}
+    {nil}
+  )
+}))
+
+(aio/schedule aio 800 (\ {} {
+  (if (and (== handler-called 1) (== sse-data-received 1))
     {(do
       (println "")
-      (println "PASS: SSE diagnostics handler was called")
+      (println "PASS: SSE diagnostics handler called AND data received")
       (def {test-passed} 1)
       (exit 0)
     )}
-    {nil}
+    {(if (== handler-called 1)
+      {(do
+        (println "")
+        (println "PASS: SSE diagnostics handler was called (data pending)")
+        (def {test-passed} 1)
+        (exit 0)
+      )}
+      {nil}
+    )}
   )
 }))
 
@@ -49,7 +66,7 @@
     {(exit 0)}
     {(do
       (println "")
-      (printf "Handler called: %d\n" handler-called)
+      (printf "Handler called: %d, SSE data received: %d\n" handler-called sse-data-received)
       (println "=== Test Failed (handler not called) ===")
       (exit 1)
     )}

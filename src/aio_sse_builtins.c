@@ -299,6 +299,185 @@ static valk_lval_t *valk_builtin_sse_on_drain(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 // ============================================================================
+// Builtin: sse/set-timeout
+// ============================================================================
+
+// Usage: (sse/set-timeout stream timeout-ms) -> stream
+static valk_lval_t *valk_builtin_sse_set_timeout(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("sse/set-timeout: expected 2 arguments, got %zu",
+                         valk_lval_list_count(a));
+  }
+
+  valk_lval_t *stream_ref = valk_lval_list_nth(a, 0);
+  valk_lval_t *timeout_arg = valk_lval_list_nth(a, 1);
+
+  if (LVAL_TYPE(stream_ref) != LVAL_REF) {
+    return valk_lval_err("sse/set-timeout: first argument must be SSE stream handle");
+  }
+
+  if (LVAL_TYPE(timeout_arg) != LVAL_NUM) {
+    return valk_lval_err("sse/set-timeout: second argument must be a number (milliseconds)");
+  }
+
+  valk_sse_stream_t *stream = get_sse_stream(stream_ref);
+  if (!stream) {
+    return valk_lval_err("sse/set-timeout: first argument must be SSE stream handle");
+  }
+
+  uint64_t timeout_ms = (uint64_t)timeout_arg->num;
+  valk_sse_set_idle_timeout(stream, timeout_ms);
+
+  return stream_ref;
+}
+
+// ============================================================================
+// Builtin: sse/cancel
+// ============================================================================
+
+// Usage: (sse/cancel stream) -> nil
+static valk_lval_t *valk_builtin_sse_cancel(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("sse/cancel: expected 1 argument, got %zu",
+                         valk_lval_list_count(a));
+  }
+
+  valk_lval_t *stream_ref = valk_lval_list_nth(a, 0);
+
+  if (LVAL_TYPE(stream_ref) != LVAL_REF) {
+    return valk_lval_err("sse/cancel: argument must be SSE stream handle");
+  }
+
+  valk_sse_stream_t *stream = get_sse_stream(stream_ref);
+  if (!stream) {
+    return valk_lval_err("sse/cancel: argument must be SSE stream handle");
+  }
+
+  // Cancel with NGHTTP2_CANCEL error code
+  int rv = valk_sse_stream_cancel(stream, 0x8);  // NGHTTP2_CANCEL = 0x8
+  if (rv < 0) {
+    return valk_lval_err("sse/cancel: failed to cancel stream");
+  }
+
+  return valk_lval_nil();
+}
+
+// ============================================================================
+// Builtin: sse/stream-id
+// ============================================================================
+
+// Usage: (sse/stream-id stream) -> id
+static valk_lval_t *valk_builtin_sse_stream_id(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("sse/stream-id: expected 1 argument, got %zu",
+                         valk_lval_list_count(a));
+  }
+
+  valk_lval_t *stream_ref = valk_lval_list_nth(a, 0);
+
+  if (LVAL_TYPE(stream_ref) != LVAL_REF) {
+    return valk_lval_err("sse/stream-id: argument must be SSE stream handle");
+  }
+
+  valk_sse_stream_t *stream = get_sse_stream(stream_ref);
+  if (!stream) {
+    return valk_lval_err("sse/stream-id: argument must be SSE stream handle");
+  }
+
+  return valk_lval_num((long)stream->id);
+}
+
+// ============================================================================
+// Builtin: sse/cancel-by-id
+// ============================================================================
+
+// Usage: (sse/cancel-by-id id) -> true/false
+static valk_lval_t *valk_builtin_sse_cancel_by_id(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("sse/cancel-by-id: expected 1 argument, got %zu",
+                         valk_lval_list_count(a));
+  }
+
+  valk_lval_t *id_arg = valk_lval_list_nth(a, 0);
+
+  if (LVAL_TYPE(id_arg) != LVAL_NUM) {
+    return valk_lval_err("sse/cancel-by-id: argument must be a stream ID (number)");
+  }
+
+  uint64_t id = (uint64_t)id_arg->num;
+  valk_sse_manager_t *mgr = valk_sse_get_manager();
+
+  valk_sse_stream_t *stream = valk_sse_manager_find_by_id(mgr, id);
+  if (!stream) {
+    return valk_lval_sym("false");
+  }
+
+  valk_sse_stream_cancel(stream, 0x8);  // NGHTTP2_CANCEL
+  return valk_lval_sym("true");
+}
+
+// ============================================================================
+// Builtin: sse/shutdown-all
+// ============================================================================
+
+// Usage: (sse/shutdown-all) -> count
+// Usage: (sse/shutdown-all drain-timeout-ms) -> count
+static valk_lval_t *valk_builtin_sse_shutdown_all(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  size_t argc = valk_lval_list_count(a);
+  if (argc > 1) {
+    return valk_lval_err("sse/shutdown-all: expected 0-1 arguments, got %zu", argc);
+  }
+
+  uint64_t drain_timeout_ms = 0;
+  if (argc == 1) {
+    valk_lval_t *timeout_arg = valk_lval_list_nth(a, 0);
+    if (LVAL_TYPE(timeout_arg) != LVAL_NUM) {
+      return valk_lval_err("sse/shutdown-all: argument must be a number (milliseconds)");
+    }
+    drain_timeout_ms = (uint64_t)timeout_arg->num;
+  }
+
+  valk_sse_manager_t *mgr = valk_sse_get_manager();
+
+  if (drain_timeout_ms == 0) {
+    // Immediate close
+    size_t closed = valk_sse_manager_force_close_all(mgr);
+    return valk_lval_num((long)closed);
+  } else {
+    // Graceful shutdown
+    valk_sse_manager_graceful_shutdown(mgr, drain_timeout_ms);
+    return valk_lval_num((long)mgr->stream_count);
+  }
+}
+
+// ============================================================================
+// Builtin: sse/stream-count
+// ============================================================================
+
+// Usage: (sse/stream-count) -> count
+static valk_lval_t *valk_builtin_sse_stream_count(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  if (valk_lval_list_count(a) != 0) {
+    return valk_lval_err("sse/stream-count: expected 0 arguments, got %zu",
+                         valk_lval_list_count(a));
+  }
+
+  valk_sse_manager_t *mgr = valk_sse_get_manager();
+  return valk_lval_num((long)mgr->stream_count);
+}
+
+// ============================================================================
 // Registration Function
 // ============================================================================
 
@@ -308,6 +487,18 @@ void valk_register_sse_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "sse/close", valk_builtin_sse_close);
   valk_lenv_put_builtin(env, "sse/writable?", valk_builtin_sse_writable);
   valk_lenv_put_builtin(env, "sse/on-drain", valk_builtin_sse_on_drain);
+
+  // Timeout management
+  valk_lenv_put_builtin(env, "sse/set-timeout", valk_builtin_sse_set_timeout);
+
+  // Stream cancellation
+  valk_lenv_put_builtin(env, "sse/cancel", valk_builtin_sse_cancel);
+  valk_lenv_put_builtin(env, "sse/stream-id", valk_builtin_sse_stream_id);
+  valk_lenv_put_builtin(env, "sse/cancel-by-id", valk_builtin_sse_cancel_by_id);
+
+  // Global stream management
+  valk_lenv_put_builtin(env, "sse/shutdown-all", valk_builtin_sse_shutdown_all);
+  valk_lenv_put_builtin(env, "sse/stream-count", valk_builtin_sse_stream_count);
 
   VALK_DEBUG("SSE: registered builtins");
 }

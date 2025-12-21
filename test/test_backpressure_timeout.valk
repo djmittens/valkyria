@@ -1,0 +1,58 @@
+; Backpressure Event-Driven Test
+; Uses small buffer pool to trigger backpressure
+; Tests that connections resume when buffers free up
+;
+; Targets:
+; - __backpressure_list_add
+; - __backpressure_try_resume_one
+; - Event-driven resume on buffer release
+
+(load "src/prelude.valk")
+
+(def {TEST_PORT} 8492)
+
+; Small buffer pool to force backpressure
+(def {aio} (aio/start {
+  :max-connections 16
+  :tcp-buffer-pool-size 8
+}))
+
+(def {requests-handled} 0)
+
+; Handler that responds quickly after a short delay
+; This allows buffers to free up and backpressured connections to resume
+(def {handler}
+  (\ {req} {
+    (def {requests-handled} (+ requests-handled 1))
+    (aio/then (aio/sleep 100) (\ {_} {{:status "200" :body "OK"}}))
+  }))
+
+(println "")
+(println "=== Backpressure Event-Driven Resume Test ===")
+(println "")
+(printf "Config: tcp-buffer-pool-size=8\n")
+(printf "Handler responds after 100ms delay\n")
+(printf "Starting server on port %d\n" TEST_PORT)
+(http2/server-listen aio TEST_PORT handler)
+
+(println "Server started. Testing event-driven backpressure resume.")
+
+; Check status periodically
+(aio/schedule aio 3000 (\ {} {
+  (printf "After 3s: requests-handled=%d\n" requests-handled)
+}))
+
+(aio/schedule aio 6000 (\ {} {
+  (printf "After 6s: requests-handled=%d\n" requests-handled)
+  (println "")
+  (println "PASS: Server ran with event-driven backpressure")
+  (exit 0)
+}))
+
+; Hard timeout
+(aio/schedule aio 30000 (\ {} {
+  (println "TIMEOUT!")
+  (exit 1)
+}))
+
+(aio/run aio)

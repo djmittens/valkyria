@@ -573,3 +573,14 @@ bool valk_aio_http_connection_closing(valk_aio_handle_t* handle);
 struct valk_sse_diag_state;
 struct valk_sse_diag_state* valk_aio_get_sse_state(valk_aio_handle_t* handle);
 void valk_aio_set_sse_state(valk_aio_handle_t* handle, struct valk_sse_diag_state* state);
+
+// Reset an HTTP/2 stream with the given error code (for testing client stream error handling)
+// Returns 0 on success, -1 on failure
+int valk_http2_stream_reset(valk_aio_handle_t* conn, int32_t stream_id, uint32_t error_code);
+
+// Submit GOAWAY frame (for testing client GOAWAY handling)
+// Returns 0 on success, -1 on failure
+int valk_http2_submit_goaway(valk_aio_handle_t* conn, uint32_t error_code);
+
+// Flush pending HTTP/2 frames (for testing - ensures RST_STREAM is sent immediately)
+void valk_http2_flush_pending(valk_aio_handle_t* conn);

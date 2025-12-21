@@ -1,7 +1,7 @@
 ; Backpressure Stress Test
 ; Creates many concurrent connections to exhaust buffer pool and trigger backpressure
 ; This exercises: __backpressure_list_add, __backpressure_list_remove, 
-;                 __backpressure_try_resume_one, __backpressure_timer_cb
+;                 __backpressure_try_resume_one (event-driven resume)
 
 (load "src/prelude.valk")
 
@@ -13,7 +13,6 @@
 (def {aio} (aio/start {
   :max-connections 8
   :tcp-buffer-pool-size 24
-  :backpressure-timeout-ms 5000
 }))
 
 (def {requests-completed} 0)
@@ -30,7 +29,7 @@
 (println "")
 (println "=== Backpressure Stress Test ===")
 (println "")
-(printf "Config: tcp-buffer-pool-size=24, max-connections=8, timeout=5000ms\n")
+(printf "Config: tcp-buffer-pool-size=24, max-connections=8\n")
 (printf "Starting server on port %d\n" TEST_PORT)
 (http2/server-listen aio TEST_PORT handler)
 

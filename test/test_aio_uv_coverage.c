@@ -3,8 +3,10 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <nghttp2/nghttp2.h>
 
 #include "aio.h"
+#include "aio_sse_diagnostics.h"
 #include "collections.h"
 #include "common.h"
 #include "concurrency.h"
@@ -203,7 +205,7 @@ static void test_config_validation_tcp_buffer_pool(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_aio_system_config_t cfg = valk_aio_config_demo();
-  cfg.tcp_buffer_pool_size = 15;
+  cfg.tcp_buffer_pool_size = 1;
   const char *err = valk_aio_system_config_validate(&cfg);
   ASSERT_NOT_NULL(err);
   ASSERT_STR_CONTAINS(err, "tcp_buffer_pool_size");
@@ -277,7 +279,7 @@ static void test_config_validation_queue_capacity(VALK_TEST_ARGS()) {
 
   valk_aio_system_config_t cfg = valk_aio_config_demo();
   valk_aio_system_config_resolve(&cfg);
-  cfg.queue_capacity = 15;
+  cfg.queue_capacity = 1;
   const char *err = valk_aio_system_config_validate(&cfg);
   ASSERT_NOT_NULL(err);
   ASSERT_STR_CONTAINS(err, "queue_capacity");
@@ -1332,8 +1334,11 @@ static void test_parallel_requests_same_stream(VALK_TEST_ARGS()) {
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
 
-    char path[64];
-    snprintf(path, sizeof(path), "/parallel/%d", i);
+    char *path;
+    VALK_WITH_ALLOC((valk_mem_allocator_t *)req_arena) {
+      path = valk_mem_alloc(64);
+    }
+    snprintf(path, 64, "/parallel/%d", i);
     valk_http2_request_t *req = create_request(req_arena, "GET", path);
     futures[i] = valk_aio_http2_request_send(req, client);
   }
@@ -2496,7 +2501,7 @@ void test_backpressure_under_load(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_backpressure_timeout_closes_connection(VALK_TEST_ARGS()) {
+void test_backpressure_event_driven_resume(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_aio_system_config_t cfg = {0};
@@ -2504,7 +2509,6 @@ void test_backpressure_timeout_closes_connection(VALK_TEST_ARGS()) {
   cfg.tcp_buffer_pool_size = 16;
   cfg.arena_pool_size = 2;
   cfg.pending_stream_pool_size = 4;
-  cfg.backpressure_timeout_ms = 1000;
 
   int res = valk_aio_system_config_resolve(&cfg);
   ASSERT_EQ(res, 0);
@@ -2557,6 +2561,402 @@ void test_backpressure_timeout_closes_connection(VALK_TEST_ARGS()) {
 
   VALK_PASS();
 }
+
+
+
+
+void test_abrupt_client_disconnect(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  int port = get_available_port();
+  ASSERT_GT(port, 0);
+
+  valk_srv_state_t state = {0};
+  valk_http2_handler_t handler = {
+      .arg = &state,
+      .onConnect = cb_onConnect,
+      .onDisconnect = cb_onDisconnect,
+      .onHeader = cb_onHeader,
+      .onBody = cb_onBody,
+  };
+
+  valk_future *fserv = valk_aio_http2_listen(
+      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+  valk_arc_box *server = valk_future_await(fserv);
+  ASSERT_EQ(server->type, VALK_SUC);
+
+  valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
+  valk_arc_box *clientBox = valk_future_await(fclient);
+  ASSERT_EQ(clientBox->type, VALK_SUC);
+
+  valk_aio_http2_client *client = clientBox->item;
+
+  uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+  valk_mem_arena_t *req_arena = (void *)req_buf;
+  valk_mem_arena_init(req_arena, 4096);
+
+  valk_http2_request_t *req = create_request(req_arena, "GET", "/");
+  valk_future *fres = valk_aio_http2_request_send(req, client);
+  valk_arc_box *res = valk_future_await(fres);
+  ASSERT_EQ(res->type, VALK_SUC);
+  valk_arc_release(res);
+  valk_arc_release(fres);
+
+  valk_arc_release(clientBox);
+  valk_arc_release(fclient);
+
+  usleep(50000);
+
+  valk_arc_release(server);
+  valk_arc_release(fserv);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+void test_rapid_client_disconnect_mid_request(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  int port = get_available_port();
+  ASSERT_GT(port, 0);
+
+  valk_srv_state_t state = {0};
+  valk_http2_handler_t handler = {
+      .arg = &state,
+      .onConnect = cb_onConnect,
+      .onDisconnect = cb_onDisconnect,
+      .onHeader = cb_onHeader,
+      .onBody = cb_onBody,
+  };
+
+  valk_future *fserv = valk_aio_http2_listen(
+      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+  valk_arc_box *server = valk_future_await(fserv);
+  ASSERT_EQ(server->type, VALK_SUC);
+
+  for (int i = 0; i < 3; i++) {
+    valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
+    valk_arc_box *clientBox = valk_future_await(fclient);
+    if (clientBox->type == VALK_SUC) {
+      valk_aio_http2_client *client = clientBox->item;
+
+      #define RAPID_REQS 5
+      valk_future *freq[RAPID_REQS];
+      for (int r = 0; r < RAPID_REQS; r++) {
+        uint8_t *req_buf = malloc(sizeof(valk_mem_arena_t) + 4096);
+        valk_mem_arena_t *req_arena = (void *)req_buf;
+        valk_mem_arena_init(req_arena, 4096);
+        valk_http2_request_t *req = create_request(req_arena, "GET", "/rapid");
+        freq[r] = valk_aio_http2_request_send(req, client);
+      }
+
+      for (int r = 0; r < RAPID_REQS; r++) {
+        valk_arc_box *res = valk_future_await(freq[r]);
+        valk_arc_release(res);
+        valk_arc_release(freq[r]);
+      }
+      #undef RAPID_REQS
+
+      valk_arc_release(clientBox);
+      valk_arc_release(fclient);
+    } else {
+      valk_arc_release(clientBox);
+      valk_arc_release(fclient);
+    }
+  }
+
+  usleep(100000);
+
+  valk_arc_release(server);
+  valk_arc_release(fserv);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+void test_multiple_parallel_streams_then_disconnect(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  int port = get_available_port();
+  ASSERT_GT(port, 0);
+
+  valk_srv_state_t state = {0};
+  valk_http2_handler_t handler = {
+      .arg = &state,
+      .onConnect = cb_onConnect,
+      .onDisconnect = cb_onDisconnect,
+      .onHeader = cb_onHeader,
+      .onBody = cb_onBody,
+  };
+
+  valk_future *fserv = valk_aio_http2_listen(
+      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+  valk_arc_box *server = valk_future_await(fserv);
+  ASSERT_EQ(server->type, VALK_SUC);
+
+  valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
+  valk_arc_box *clientBox = valk_future_await(fclient);
+  ASSERT_EQ(clientBox->type, VALK_SUC);
+  valk_aio_http2_client *client = clientBox->item;
+
+  #define PARALLEL_STREAMS 10
+  valk_future *fres[PARALLEL_STREAMS];
+  for (int i = 0; i < PARALLEL_STREAMS; i++) {
+    uint8_t *req_buf = malloc(sizeof(valk_mem_arena_t) + 4096);
+    valk_mem_arena_t *req_arena = (void *)req_buf;
+    valk_mem_arena_init(req_arena, 4096);
+    char path[32];
+    snprintf(path, sizeof(path), "/stream/%d", i);
+    valk_http2_request_t *req = create_request(req_arena, "GET", path);
+    fres[i] = valk_aio_http2_request_send(req, client);
+  }
+
+  for (int i = 0; i < PARALLEL_STREAMS; i++) {
+    valk_arc_box *res = valk_future_await(fres[i]);
+    ASSERT_EQ(res->type, VALK_SUC);
+    valk_arc_release(res);
+    valk_arc_release(fres[i]);
+  }
+  #undef PARALLEL_STREAMS
+
+  valk_arc_release(clientBox);
+  valk_arc_release(fclient);
+
+  usleep(50000);
+
+  valk_arc_release(server);
+  valk_arc_release(fserv);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+void test_large_concurrent_body_then_disconnect(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  int port = get_available_port();
+  ASSERT_GT(port, 0);
+
+  valk_srv_state_t state = {0};
+  valk_http2_handler_t handler = {
+      .arg = &state,
+      .onConnect = cb_onConnect,
+      .onDisconnect = cb_onDisconnect,
+      .onHeader = cb_onHeader,
+      .onBody = cb_onBody,
+  };
+
+  valk_future *fserv = valk_aio_http2_listen(
+      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+  valk_arc_box *server = valk_future_await(fserv);
+  ASSERT_EQ(server->type, VALK_SUC);
+
+  valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
+  valk_arc_box *clientBox = valk_future_await(fclient);
+  ASSERT_EQ(clientBox->type, VALK_SUC);
+  valk_aio_http2_client *client = clientBox->item;
+
+  size_t body_size = 128 * 1024;
+  char *large_body = malloc(body_size + 1);
+  memset(large_body, 'Y', body_size);
+  large_body[body_size] = '\0';
+
+  size_t arena_size = body_size + 4096;
+  uint8_t *req_buf = malloc(sizeof(valk_mem_arena_t) + arena_size);
+  valk_mem_arena_t *req_arena = (void *)req_buf;
+  valk_mem_arena_init(req_arena, arena_size);
+
+  valk_http2_request_t *req = create_request_with_body(
+      req_arena, "POST", "/large-upload", large_body);
+
+  valk_future *fres = valk_aio_http2_request_send(req, client);
+  valk_arc_box *res = valk_future_await(fres);
+  valk_arc_release(res);
+  valk_arc_release(fres);
+
+  valk_arc_release(clientBox);
+  valk_arc_release(fclient);
+
+  free(large_body);
+  free(req_buf);
+
+  usleep(50000);
+
+  valk_arc_release(server);
+  valk_arc_release(fserv);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+void test_ssl_connection_state_transitions(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  int port = get_available_port();
+  ASSERT_GT(port, 0);
+
+  valk_srv_state_t state = {0};
+  valk_http2_handler_t handler = {
+      .arg = &state,
+      .onConnect = cb_onConnect,
+      .onDisconnect = cb_onDisconnect,
+      .onHeader = cb_onHeader,
+      .onBody = cb_onBody,
+  };
+
+  valk_future *fserv = valk_aio_http2_listen(
+      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+  valk_arc_box *server = valk_future_await(fserv);
+  ASSERT_EQ(server->type, VALK_SUC);
+
+  #define TRANSITIONS 10
+  for (int i = 0; i < TRANSITIONS; i++) {
+    valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
+    valk_arc_box *clientBox = valk_future_await(fclient);
+    ASSERT_EQ(clientBox->type, VALK_SUC);
+    valk_aio_http2_client *client = clientBox->item;
+
+    uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+    valk_mem_arena_t *req_arena = (void *)req_buf;
+    valk_mem_arena_init(req_arena, 4096);
+    valk_http2_request_t *req = create_request(req_arena, "GET", "/");
+    valk_future *fres = valk_aio_http2_request_send(req, client);
+    valk_arc_box *res = valk_future_await(fres);
+    ASSERT_EQ(res->type, VALK_SUC);
+
+    valk_arc_release(res);
+    valk_arc_release(fres);
+    valk_arc_release(clientBox);
+    valk_arc_release(fclient);
+  }
+  #undef TRANSITIONS
+
+  valk_arc_release(server);
+  valk_arc_release(fserv);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  size_t connected = __atomic_load_n(&state.connectedCount, __ATOMIC_ACQUIRE);
+  ASSERT_EQ(connected, 10);
+
+  VALK_PASS();
+}
+
+void test_connection_closing_state_handling(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  ASSERT_TRUE(valk_aio_http_connection_closing(NULL));
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  int port = get_available_port();
+  ASSERT_GT(port, 0);
+
+  valk_srv_state_t state = {0};
+  valk_http2_handler_t handler = {
+      .arg = &state,
+      .onConnect = cb_onConnect,
+      .onDisconnect = cb_onDisconnect,
+      .onHeader = cb_onHeader,
+      .onBody = cb_onBody,
+  };
+
+  valk_future *fserv = valk_aio_http2_listen(
+      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+  valk_arc_box *server = valk_future_await(fserv);
+  ASSERT_EQ(server->type, VALK_SUC);
+
+  valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
+  valk_arc_box *clientBox = valk_future_await(fclient);
+  ASSERT_EQ(clientBox->type, VALK_SUC);
+  valk_aio_http2_client *client = clientBox->item;
+
+  uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+  valk_mem_arena_t *req_arena = (void *)req_buf;
+  valk_mem_arena_init(req_arena, 4096);
+  valk_http2_request_t *req = create_request(req_arena, "GET", "/");
+  valk_future *fres = valk_aio_http2_request_send(req, client);
+  valk_arc_box *res = valk_future_await(fres);
+  ASSERT_EQ(res->type, VALK_SUC);
+  valk_arc_release(res);
+  valk_arc_release(fres);
+
+  valk_arc_release(clientBox);
+  valk_arc_release(fclient);
+
+  valk_arc_release(server);
+  valk_arc_release(fserv);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+void test_session_validity_checks(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  ASSERT_FALSE(valk_aio_http_session_valid(nullptr, nullptr));
+  ASSERT_FALSE(valk_aio_http_session_valid(nullptr, (void*)0x1234));
+
+  VALK_PASS();
+}
+
+void test_sse_state_null_handling(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  ASSERT_NULL(valk_aio_get_sse_state(nullptr));
+
+  valk_aio_set_sse_state(nullptr, nullptr);
+
+  VALK_PASS();
+}
+
+void test_http2_flush_pending_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_http2_flush_pending(nullptr);
+
+  VALK_PASS();
+}
+
+void test_http2_stream_reset_null_conn(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int rv = valk_http2_stream_reset(NULL, 1, NGHTTP2_INTERNAL_ERROR);
+  ASSERT_EQ(rv, -1);
+
+  rv = valk_http2_submit_goaway(NULL, NGHTTP2_INTERNAL_ERROR);
+  ASSERT_EQ(rv, -1);
+
+  VALK_PASS();
+}
+
 #endif
 
 int main(int argc, const char **argv) {
@@ -2627,7 +3027,17 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_connection_metrics", test_connection_metrics);
   valk_testsuite_add_test(suite, "test_stream_metrics", test_stream_metrics);
   valk_testsuite_add_test(suite, "test_backpressure_under_load", test_backpressure_under_load);
-  valk_testsuite_add_test(suite, "test_backpressure_timeout_closes_connection", test_backpressure_timeout_closes_connection);
+  valk_testsuite_add_test(suite, "test_backpressure_event_driven_resume", test_backpressure_event_driven_resume);
+  valk_testsuite_add_test(suite, "test_abrupt_client_disconnect", test_abrupt_client_disconnect);
+  valk_testsuite_add_test(suite, "test_rapid_client_disconnect_mid_request", test_rapid_client_disconnect_mid_request);
+  valk_testsuite_add_test(suite, "test_multiple_parallel_streams_then_disconnect", test_multiple_parallel_streams_then_disconnect);
+  valk_testsuite_add_test(suite, "test_large_concurrent_body_then_disconnect", test_large_concurrent_body_then_disconnect);
+  valk_testsuite_add_test(suite, "test_ssl_connection_state_transitions", test_ssl_connection_state_transitions);
+  valk_testsuite_add_test(suite, "test_connection_closing_state_handling", test_connection_closing_state_handling);
+  valk_testsuite_add_test(suite, "test_session_validity_checks", test_session_validity_checks);
+  valk_testsuite_add_test(suite, "test_sse_state_null_handling", test_sse_state_null_handling);
+  valk_testsuite_add_test(suite, "test_http2_flush_pending_null", test_http2_flush_pending_null);
+  valk_testsuite_add_test(suite, "test_http2_stream_reset_null_conn", test_http2_stream_reset_null_conn);
 #endif
 
   int res = valk_testsuite_run(suite);

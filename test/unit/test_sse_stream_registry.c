@@ -252,6 +252,121 @@ void test_subscription_types(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// ============================================================================
+// Timeout Management Tests
+// ============================================================================
+
+void test_registry_set_idle_timeout_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_registry_set_idle_timeout(NULL, 1000);
+
+  VALK_PASS();
+}
+
+void test_registry_check_timeouts_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t result = valk_sse_registry_check_timeouts(NULL);
+  VALK_TEST_ASSERT(result == 0, "NULL registry should return 0");
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Stream Cancellation Tests
+// ============================================================================
+
+void test_registry_find_by_id_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_sse_stream_entry_t *result = valk_sse_registry_find_by_id(NULL, 42);
+  VALK_TEST_ASSERT(result == NULL, "NULL registry should return NULL");
+
+  VALK_PASS();
+}
+
+void test_registry_cancel_stream_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int result = valk_sse_registry_cancel_stream(NULL, 42);
+  VALK_TEST_ASSERT(result == -1, "NULL registry should return -1");
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Graceful Shutdown Tests
+// ============================================================================
+
+void test_registry_is_shutting_down_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  bool result = valk_sse_registry_is_shutting_down(NULL);
+  VALK_TEST_ASSERT(result == false, "NULL registry should return false");
+
+  VALK_PASS();
+}
+
+void test_registry_graceful_shutdown_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int result = valk_sse_registry_graceful_shutdown(NULL, 1000);
+  VALK_TEST_ASSERT(result == -1, "NULL registry should return -1");
+
+  VALK_PASS();
+}
+
+void test_registry_force_close_all_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t result = valk_sse_registry_force_close_all(NULL);
+  VALK_TEST_ASSERT(result == 0, "NULL registry should return 0");
+
+  VALK_PASS();
+}
+
+void test_registry_graceful_shutdown_sets_state(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = create_test_aio_system();
+  VALK_TEST_ASSERT(sys != NULL, "Failed to start AIO system");
+
+  valk_sse_stream_registry_t *registry = valk_aio_get_sse_registry(sys);
+
+  int result = valk_sse_registry_graceful_shutdown(registry, 5000);
+  VALK_TEST_ASSERT(result == 0, "Should succeed");
+  VALK_TEST_ASSERT(valk_sse_registry_is_shutting_down(registry) == true, "Should be shutting down");
+
+  // Reset shutdown state for cleanup
+  registry->shutting_down = false;
+
+  valk_aio_stop(sys);
+  VALK_PASS();
+}
+
+void test_registry_graceful_shutdown_idempotent(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = create_test_aio_system();
+  VALK_TEST_ASSERT(sys != NULL, "Failed to start AIO system");
+
+  valk_sse_stream_registry_t *registry = valk_aio_get_sse_registry(sys);
+
+  valk_sse_registry_graceful_shutdown(registry, 5000);
+  uint64_t first_deadline = registry->shutdown_deadline_ms;
+
+  int result = valk_sse_registry_graceful_shutdown(registry, 10000);
+  VALK_TEST_ASSERT(result == 0, "Should succeed");
+  VALK_TEST_ASSERT(registry->shutdown_deadline_ms == first_deadline, "Deadline should not change");
+
+  // Reset shutdown state for cleanup
+  registry->shutting_down = false;
+
+  valk_aio_stop(sys);
+  VALK_PASS();
+}
+
 #else
 
 void test_sse_registry_disabled(VALK_TEST_ARGS()) {
@@ -282,6 +397,21 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_registry_timer_stop_not_running", test_registry_timer_stop_not_running);
   valk_testsuite_add_test(suite, "test_registry_lifecycle", test_registry_lifecycle);
   valk_testsuite_add_test(suite, "test_subscription_types", test_subscription_types);
+
+  // Timeout management tests
+  valk_testsuite_add_test(suite, "test_registry_set_idle_timeout_null", test_registry_set_idle_timeout_null);
+  valk_testsuite_add_test(suite, "test_registry_check_timeouts_null", test_registry_check_timeouts_null);
+
+  // Stream cancellation tests
+  valk_testsuite_add_test(suite, "test_registry_find_by_id_null", test_registry_find_by_id_null);
+  valk_testsuite_add_test(suite, "test_registry_cancel_stream_null", test_registry_cancel_stream_null);
+
+  // Graceful shutdown tests
+  valk_testsuite_add_test(suite, "test_registry_is_shutting_down_null", test_registry_is_shutting_down_null);
+  valk_testsuite_add_test(suite, "test_registry_graceful_shutdown_null", test_registry_graceful_shutdown_null);
+  valk_testsuite_add_test(suite, "test_registry_force_close_all_null", test_registry_force_close_all_null);
+  valk_testsuite_add_test(suite, "test_registry_graceful_shutdown_sets_state", test_registry_graceful_shutdown_sets_state);
+  valk_testsuite_add_test(suite, "test_registry_graceful_shutdown_idempotent", test_registry_graceful_shutdown_idempotent);
 #else
   valk_testsuite_add_test(suite, "test_sse_registry_disabled", test_sse_registry_disabled);
 #endif

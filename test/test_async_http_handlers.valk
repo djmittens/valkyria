@@ -581,6 +581,35 @@
   }))
 
 ; ============================================================================
+; Handler 51: aio/pure with error result - handle is COMPLETED but result is LVAL_ERR
+; This tests lines 2275-2284 in on_frame_recv_callback (immediate completed with error result)
+; ============================================================================
+(def {pure-error-handler}
+  (\ {req} {
+    (aio/pure (error "pure-wrapped-error"))
+  }))
+
+; ============================================================================
+; Handler 52: aio/then returning error result after async delay
+; This tests lines 5167-5176 in valk_http_async_done_callback (async completion with error result)
+; When the callback fires with a completed handle whose result is LVAL_ERR
+; ============================================================================
+(def {async-pure-error-handler}
+  (\ {req} {
+    (aio/then (aio/sleep 10) (\ {_} {(aio/pure (error "async-pure-error"))}))
+  }))
+
+; ============================================================================
+; Handler 53: Direct aio/fail after async delay
+; This tests lines 5182-5195 in valk_http_async_done_callback (VALK_ASYNC_FAILED)
+; When the callback fires with a FAILED status handle
+; ============================================================================
+(def {async-direct-fail-handler}
+  (\ {req} {
+    (aio/then (aio/sleep 10) (\ {_} {(aio/fail (error "async-direct-fail"))}))
+  }))
+
+; ============================================================================
 ; Router helper
 ; ============================================================================
 (fun {route path handlers} {
@@ -647,7 +676,10 @@
       {"/raw-error" {(raw-error-handler req)}}
       {"/race-cancel" {(race-cancel-handler req)}}
       {"/nested-cancel" {(nested-cancel-handler req)}}
-      {"/pre-cancelled" {(pre-cancelled-handler req)}}))
+      {"/pre-cancelled" {(pre-cancelled-handler req)}}
+      {"/pure-error" {(pure-error-handler req)}}
+      {"/async-pure-error" {(async-pure-error-handler req)}}
+      {"/async-direct-fail" {(async-direct-fail-handler req)}}))
   }))
 
 ; Final cleanup function
@@ -748,7 +780,13 @@
   (test-request "/race-cancel" "on-cancel via race" "race-cancel-ok" (\ {} {
   (test-request "/nested-cancel" "nested on-cancel" "nested-cancel-ok" (\ {} {
   (test-cancelled-request "/pre-cancelled" "pre-cancelled handle" (\ {} {
+  (test-error-request "/pure-error" "aio/pure with error result" "pure-wrapped-error" (\ {} {
+  (test-error-request "/async-pure-error" "async completion with error result" "async-pure-error" (\ {} {
+  (test-error-request "/async-direct-fail" "async VALK_ASYNC_FAILED" "async-direct-fail" (\ {} {
     (finish-tests)
+  }))
+  }))
+  }))
   }))
   }))
   }))

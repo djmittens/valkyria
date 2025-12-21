@@ -157,6 +157,7 @@ define run_tests_c
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_builtins_unit ]; then $(1)/test_sse_builtins_unit; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_core ]; then $(1)/test_sse_core; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_backpressure ]; then $(1)/test_aio_backpressure; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_backpressure_timer ]; then $(1)/test_backpressure_timer; fi
 	if [ -f $(1)/test_aio_alloc_unit ]; then $(1)/test_aio_alloc_unit; fi
 	if [ -f $(1)/test_aio_ssl_unit ]; then $(1)/test_aio_ssl_unit; fi
 	if [ -f $(1)/test_coverage_unit ]; then $(1)/test_coverage_unit; fi
@@ -200,13 +201,16 @@ define run_tests_valk
 	$(1)/valk test/test_sse.valk
 	$(1)/valk test/test_sse_builtins.valk
 	$(1)/valk test/test_sse_integration.valk
+	if [ "$(VALK_METRICS)" = "1" ]; then $(1)/valk test/test_sse_diagnostics_endpoint.valk; fi
 	$(1)/valk test/test_http_client_server.valk
 	$(1)/valk test/test_async_http_handlers.valk
 	$(1)/valk test/test_aio_config.valk
 	$(1)/valk test/test_backpressure.valk
 	$(1)/valk test/test_pending_streams.valk
+	$(1)/valk test/test_pending_stream_headers.valk
 	$(1)/valk test/test_concurrent_requests.valk
 	$(1)/valk test/test_arena_out_of_order.valk
+	$(1)/valk test/test_client_headers.valk
 
 	$(1)/valk test/stress/test_gc_stress.valk
 	$(1)/valk test/stress/test_networking_stress.valk
