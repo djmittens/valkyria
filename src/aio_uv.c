@@ -106,7 +106,7 @@ static __thread valk_slab_t *tcp_buffer_slab;
 static void __valk_http2_response_free(valk_arc_box *box);
 
 // Forward declarations for backpressure functions
-static void __backpressure_list_add(valk_aio_handle_t *conn);
+static bool __backpressure_list_add(valk_aio_handle_t *conn);
 static void __backpressure_list_remove(valk_aio_handle_t *conn);
 static void __backpressure_try_resume_one(void);
 static void __uv_handle_closed_cb(uv_handle_t *handle);
@@ -308,6 +308,7 @@ typedef enum __aio_http_srv_e {
 static __thread valk_aio_handle_t *backpressure_list_head = NULL;
 static __thread size_t backpressure_list_size = 0;
 static __thread uint32_t min_buffers_to_resume = 0;    // 0 = use default
+static __thread uint32_t backpressure_list_max = 1000; // Max connections in queue before dropping
 
 // ============================================================================
 // Pending Stream Queue (arena backpressure)
@@ -399,18 +400,22 @@ typedef struct {
 } valk_delay_timer_t;
 
 // Add connection to backpressure list
-// Note: Uses compile-time max since this function is defined before valk_aio_system_t
-static void __backpressure_list_add(valk_aio_handle_t *conn) {
-  if (conn->http.backpressure) return;  // Already in list
+// Returns true if added, false if queue is full (caller should drop connection)
+static bool __backpressure_list_add(valk_aio_handle_t *conn) {
+  if (conn->http.backpressure) return true;  // Already in list
 
-  VALK_ASSERT(backpressure_list_size < BACKPRESSURE_LIST_MAX_LIMIT,
-              "Backpressure list overflow: %zu connections", backpressure_list_size)
+  if (backpressure_list_size >= backpressure_list_max) {
+    VALK_WARN("Backpressure queue full (%zu >= %u), dropping connection",
+              backpressure_list_size, backpressure_list_max);
+    return false;
+  }
 
   conn->http.backpressure = true;
   conn->http.backpressure_start_time = uv_now(conn->uv.tcp.loop);
   conn->http.backpressure_next = backpressure_list_head;
   backpressure_list_head = conn;
   backpressure_list_size++;
+  return true;
 }
 
 static void __backpressure_list_remove(valk_aio_handle_t *conn) {
@@ -1017,6 +1022,7 @@ static void __event_loop(void *arg) {
   min_buffers_to_resume = sys->config.min_buffers_per_conn > 0
       ? sys->config.min_buffers_per_conn / 2  // Resume at half the safe minimum
       : BUFFERS_TO_RESUME;
+  backpressure_list_max = sys->config.backpressure_list_max;
 
   // Slab for TCP buffers - must use sizeof the struct we overlay (which
   // includes uv_write_t + uv_buf_t + data buffer), not just the data size
@@ -2550,7 +2556,13 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   if (!buf->base) {
     VALK_WARN("TCP buffer alloc failed - applying backpressure on connection");
     uv_read_stop((uv_stream_t *)&conn->uv.tcp);
-    __backpressure_list_add(conn);
+    if (!__backpressure_list_add(conn)) {
+      // Backpressure queue full - drop this connection
+      if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
+        conn->http.state = VALK_CONN_CLOSING;
+        uv_close((uv_handle_t *)&conn->uv.tcp, __uv_handle_closed_cb);
+      }
+    }
     return;
   }
 
@@ -2590,14 +2602,24 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     // Stop reading to apply TCP flow control (client will slow down).
     // Connection will be resumed when buffers free up in __http_tcp_on_write_cb.
     uv_read_stop((uv_stream_t *)&conn->uv.tcp);
-    __backpressure_list_add(conn);
+    
+    if (!__backpressure_list_add(conn)) {
+      // Backpressure queue full - drop this connection
+      valk_slab_release_ptr(tcp_buffer_slab, buf->base);
+      if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
+        conn->http.state = VALK_CONN_CLOSING;
+        uv_close((uv_handle_t *)&conn->uv.tcp, __uv_handle_closed_cb);
+      }
+      return;
+    }
 
 #ifdef VALK_METRICS_ENABLED
     atomic_fetch_add(&conn->http.server->sys->system_stats.tcp_buffer_overflow, 1);
 #endif
 
     valk_slab_release_ptr(tcp_buffer_slab, buf->base);
-    __backpressure_try_resume_one();
+    // Don't call __backpressure_try_resume_one() here - we just added ourselves
+    // to the list. Let OTHER buffer releases trigger resume.
     return;
   }
   __tcp_buffer_slab_item_t *slabItem = (void *)slabItemRaw->data;

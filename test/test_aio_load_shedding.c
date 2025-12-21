@@ -886,10 +886,11 @@ static void test_tcp_buffer_exhaustion_backpressure(VALK_TEST_ARGS()) {
 
   valk_aio_system_config_t cfg = valk_aio_config_demo();
   cfg.tcp_buffer_pool_size = 16;
+  cfg.max_connections = 8;
   cfg.max_concurrent_streams = 16;
 
-  valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
-  ASSERT_NOT_NULL(sys);
+  valk_aio_system_t *server_sys = valk_aio_start_with_config(&cfg);
+  ASSERT_NOT_NULL(server_sys);
 
   int port = get_available_port();
   VALK_ASSERT(port > 0, "Failed to get available port");
@@ -904,46 +905,59 @@ static void test_tcp_buffer_exhaustion_backpressure(VALK_TEST_ARGS()) {
   };
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+      server_sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
   valk_arc_box *server = valk_future_await(fserv);
   ASSERT_EQ(server->type, VALK_SUC);
 
-#define NUM_CLIENTS 4
-  valk_future *fclients[NUM_CLIENTS];
-  valk_arc_box *clientBoxes[NUM_CLIENTS];
+#define NUM_CLIENT_SYSTEMS 4
+#define REQUESTS_PER_CLIENT 10
+  valk_aio_system_t *client_systems[NUM_CLIENT_SYSTEMS];
+  valk_future *fclients[NUM_CLIENT_SYSTEMS];
+  valk_arc_box *clientBoxes[NUM_CLIENT_SYSTEMS];
+  valk_future *freqs[NUM_CLIENT_SYSTEMS * REQUESTS_PER_CLIENT];
+  int req_count = 0;
 
-  for (int i = 0; i < NUM_CLIENTS; i++) {
-    fclients[i] = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
-    clientBoxes[i] = valk_future_await(fclients[i]);
-    ASSERT_EQ(clientBoxes[i]->type, VALK_SUC);
+  for (int i = 0; i < NUM_CLIENT_SYSTEMS; i++) {
+    valk_aio_system_config_t client_cfg = valk_aio_config_demo();
+    client_systems[i] = valk_aio_start_with_config(&client_cfg);
+    ASSERT_NOT_NULL(client_systems[i]);
+    fclients[i] = valk_aio_http2_connect(client_systems[i], "127.0.0.1", port, "");
   }
 
-  for (int round = 0; round < 3; round++) {
-    for (int i = 0; i < NUM_CLIENTS; i++) {
-      valk_aio_http2_client *client = clientBoxes[i]->item;
+  for (int i = 0; i < NUM_CLIENT_SYSTEMS; i++) {
+    clientBoxes[i] = valk_future_await(fclients[i]);
+    if (clientBoxes[i]->type != VALK_SUC) continue;
 
+    valk_aio_http2_client *client = clientBoxes[i]->item;
+    for (int r = 0; r < REQUESTS_PER_CLIENT; r++) {
       uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
       valk_mem_arena_t *req_arena = (void *)req_buf;
       valk_mem_arena_init(req_arena, 4096);
-      valk_http2_request_t *req = create_request(req_arena, "GET", "/");
-      valk_future *fres = valk_aio_http2_request_send(req, client);
-      valk_arc_box *res = valk_future_await(fres);
-      valk_arc_release(res);
-      valk_arc_release(fres);
+      valk_http2_request_t *req = create_request(req_arena, "GET", "/test");
+      freqs[req_count++] = valk_aio_http2_request_send(req, client);
     }
   }
 
-  for (int i = 0; i < NUM_CLIENTS; i++) {
+  for (int i = 0; i < req_count; i++) {
+    valk_arc_box *res = valk_future_await(freqs[i]);
+    valk_arc_release(res);
+    valk_arc_release(freqs[i]);
+  }
+
+  for (int i = 0; i < NUM_CLIENT_SYSTEMS; i++) {
     valk_arc_release(clientBoxes[i]);
     valk_arc_release(fclients[i]);
+    valk_aio_stop(client_systems[i]);
+    valk_aio_wait_for_shutdown(client_systems[i]);
   }
-#undef NUM_CLIENTS
+#undef NUM_CLIENT_SYSTEMS
+#undef REQUESTS_PER_CLIENT
 
   valk_arc_release(server);
   valk_arc_release(fserv);
 
-  valk_aio_stop(sys);
-  valk_aio_wait_for_shutdown(sys);
+  valk_aio_stop(server_sys);
+  valk_aio_wait_for_shutdown(server_sys);
 
   VALK_PASS();
 }

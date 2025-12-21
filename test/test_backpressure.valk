@@ -7,12 +7,11 @@
 
 (def {TEST_PORT} 8491)
 
-; Use buffer pool size that allows SOME connections to work while others are backpressured
-; This exercises both backpressure ADD and RESUME paths
-; Larger pool so we don't hit 100% exhaustion (which causes deadlock)
+; STRESS: Use small buffer pool (4) to stress-test failure handling  
+; The server MUST survive this - shed load, apply backpressure, recover when pressure eases
 (def {aio} (aio/start {
   :max-connections 8
-  :tcp-buffer-pool-size 24
+  :tcp-buffer-pool-size 4
 }))
 
 (def {requests-completed} 0)
@@ -29,7 +28,7 @@
 (println "")
 (println "=== Backpressure Stress Test ===")
 (println "")
-(printf "Config: tcp-buffer-pool-size=24, max-connections=8\n")
+(printf "Config: tcp-buffer-pool-size=4, max-connections=8\n")
 (printf "Starting server on port %d\n" TEST_PORT)
 (http2/server-listen aio TEST_PORT handler)
 
