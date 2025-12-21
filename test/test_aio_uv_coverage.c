@@ -4,6 +4,7 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <nghttp2/nghttp2.h>
+#include <uv.h>
 
 #include "aio.h"
 #include "aio_sse_diagnostics.h"
@@ -1681,6 +1682,329 @@ static void test_timer_null_safety(VALK_TEST_ARGS()) {
 
   VALK_PASS();
 }
+
+static int g_timer_callback_count = 0;
+
+static void test_timer_callback(uv_timer_t *handle) {
+  UNUSED(handle);
+  __atomic_fetch_add(&g_timer_callback_count, 1, __ATOMIC_RELAXED);
+}
+
+static void test_timer_full_lifecycle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_aio_handle_t *timer = valk_aio_timer_alloc(sys);
+  ASSERT_NOT_NULL(timer);
+
+  valk_aio_timer_init(timer);
+
+  g_timer_callback_count = 0;
+  valk_aio_timer_start(timer, 10, 0, test_timer_callback);
+
+  usleep(50000);
+
+  valk_aio_timer_stop(timer);
+
+  int count = __atomic_load_n(&g_timer_callback_count, __ATOMIC_ACQUIRE);
+  ASSERT_GE(count, 1);
+
+  valk_aio_timer_close(timer, timer_close_cb);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_timer_repeating(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_aio_handle_t *timer = valk_aio_timer_alloc(sys);
+  ASSERT_NOT_NULL(timer);
+
+  valk_aio_timer_init(timer);
+
+  g_timer_callback_count = 0;
+  valk_aio_timer_start(timer, 5, 10, test_timer_callback);
+
+  usleep(80000);
+
+  valk_aio_timer_stop(timer);
+
+  int count = __atomic_load_n(&g_timer_callback_count, __ATOMIC_ACQUIRE);
+  ASSERT_GE(count, 3);
+
+  valk_aio_timer_close(timer, timer_close_cb);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_timer_double_close(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_aio_handle_t *timer = valk_aio_timer_alloc(sys);
+  ASSERT_NOT_NULL(timer);
+
+  valk_aio_timer_init(timer);
+  valk_aio_timer_close(timer, timer_close_cb);
+  valk_aio_timer_close(timer, timer_close_cb);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_handle_kind_for_timer(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_aio_handle_t *timer = valk_aio_timer_alloc(sys);
+  ASSERT_NOT_NULL(timer);
+
+  valk_slab_t *handle_slab = valk_aio_get_handle_slab(sys);
+  ASSERT_NOT_NULL(handle_slab);
+
+  bool found_timer = false;
+  for (size_t i = 0; i < handle_slab->numItems; i++) {
+    valk_diag_handle_kind_e kind = valk_aio_get_handle_kind(sys, i);
+    if (kind == VALK_DIAG_HNDL_TIMER) {
+      found_timer = true;
+      valk_handle_diag_t diag;
+      bool has_diag = valk_aio_get_handle_diag(sys, i, &diag);
+      ASSERT_FALSE(has_diag);
+      break;
+    }
+  }
+  ASSERT_TRUE(found_timer);
+
+  valk_aio_timer_init(timer);
+  valk_aio_timer_close(timer, timer_close_cb);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_handle_diagnostics_all_kinds(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  int port = get_available_port();
+  VALK_ASSERT(port > 0, "Failed to get available port");
+
+  valk_srv_state_t arg = {0};
+  valk_http2_handler_t handler = {
+      .arg = &arg,
+      .onConnect = cb_onConnect,
+      .onDisconnect = cb_onDisconnect,
+      .onHeader = cb_onHeader,
+      .onBody = cb_onBody,
+  };
+
+  valk_future *fserv = valk_aio_http2_listen(
+      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+  valk_arc_box *server = valk_future_await(fserv);
+  ASSERT_EQ(server->type, VALK_SUC);
+
+  valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
+  valk_arc_box *clientBox = valk_future_await(fclient);
+  ASSERT_EQ(clientBox->type, VALK_SUC);
+
+  valk_aio_http2_client *client = clientBox->item;
+
+  uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+  valk_mem_arena_t *req_arena = (void *)req_buf;
+  valk_mem_arena_init(req_arena, 4096);
+
+  valk_http2_request_t *req = create_request(req_arena, "GET", "/");
+
+  valk_future *fres = valk_aio_http2_request_send(req, client);
+  valk_arc_box *res = valk_future_await(fres);
+  ASSERT_EQ(res->type, VALK_SUC);
+
+  valk_aio_handle_t *timer = valk_aio_timer_alloc(sys);
+  ASSERT_NOT_NULL(timer);
+  valk_aio_timer_init(timer);
+
+  valk_slab_t *handle_slab = valk_aio_get_handle_slab(sys);
+  ASSERT_NOT_NULL(handle_slab);
+
+  bool found_http_conn = false;
+  bool found_timer = false;
+
+  for (size_t i = 0; i < handle_slab->numItems; i++) {
+    valk_diag_handle_kind_e kind = valk_aio_get_handle_kind(sys, i);
+    switch (kind) {
+      case VALK_DIAG_HNDL_HTTP_CONN:
+        found_http_conn = true;
+        {
+          valk_handle_diag_t diag;
+          bool ok = valk_aio_get_handle_diag(sys, i, &diag);
+          ASSERT_TRUE(ok);
+        }
+        break;
+      case VALK_DIAG_HNDL_TIMER:
+        found_timer = true;
+        {
+          valk_handle_diag_t diag;
+          bool ok = valk_aio_get_handle_diag(sys, i, &diag);
+          ASSERT_FALSE(ok);
+        }
+        break;
+      case VALK_DIAG_HNDL_EMPTY:
+      case VALK_DIAG_HNDL_TCP:
+      case VALK_DIAG_HNDL_TASK:
+        break;
+    }
+  }
+
+  ASSERT_TRUE(found_http_conn);
+  ASSERT_TRUE(found_timer);
+
+  valk_aio_timer_close(timer, timer_close_cb);
+
+  valk_arc_release(res);
+  valk_arc_release(fres);
+  valk_arc_release(clientBox);
+  valk_arc_release(fclient);
+  valk_arc_release(server);
+  valk_arc_release(fserv);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_handle_diag_edge_cases(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_handle_diag_t diag;
+  ASSERT_FALSE(valk_aio_get_handle_diag(sys, 0, NULL));
+
+  valk_slab_t *handle_slab = valk_aio_get_handle_slab(sys);
+  ASSERT_NOT_NULL(handle_slab);
+  size_t out_of_bounds = handle_slab->numItems + 100;
+  ASSERT_FALSE(valk_aio_get_handle_diag(sys, out_of_bounds, &diag));
+
+  ASSERT_EQ(valk_aio_get_handle_kind(sys, out_of_bounds), VALK_DIAG_HNDL_EMPTY);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_multiple_timers(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  #define NUM_TIMERS 5
+  valk_aio_handle_t *timers[NUM_TIMERS];
+
+  for (int i = 0; i < NUM_TIMERS; i++) {
+    timers[i] = valk_aio_timer_alloc(sys);
+    ASSERT_NOT_NULL(timers[i]);
+    valk_aio_timer_init(timers[i]);
+    valk_aio_timer_set_data(timers[i], (void*)(uintptr_t)i);
+  }
+
+  valk_slab_t *handle_slab = valk_aio_get_handle_slab(sys);
+  int timer_count = 0;
+  for (size_t i = 0; i < handle_slab->numItems; i++) {
+    if (valk_aio_get_handle_kind(sys, i) == VALK_DIAG_HNDL_TIMER) {
+      timer_count++;
+    }
+  }
+  ASSERT_GE(timer_count, NUM_TIMERS);
+
+  for (int i = 0; i < NUM_TIMERS; i++) {
+    valk_aio_timer_close(timers[i], timer_close_cb);
+  }
+  #undef NUM_TIMERS
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void timer_free_cb(uv_handle_t *handle) {
+  valk_aio_handle_t *timer = (valk_aio_handle_t *)handle->data;
+  valk_aio_timer_free(timer);
+}
+
+static void test_timer_free_lifecycle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_aio_handle_t *timer = valk_aio_timer_alloc(sys);
+  ASSERT_NOT_NULL(timer);
+
+  valk_aio_timer_init(timer);
+  valk_aio_timer_set_data(timer, timer);
+
+  valk_aio_timer_close(timer, timer_free_cb);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_timer_stop_before_fire(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_aio_handle_t *timer = valk_aio_timer_alloc(sys);
+  ASSERT_NOT_NULL(timer);
+
+  valk_aio_timer_init(timer);
+
+  g_timer_callback_count = 0;
+  valk_aio_timer_start(timer, 10000, 0, test_timer_callback);
+
+  valk_aio_timer_stop(timer);
+
+  usleep(20000);
+
+  int count = __atomic_load_n(&g_timer_callback_count, __ATOMIC_ACQUIRE);
+  ASSERT_EQ(count, 0);
+
+  valk_aio_timer_close(timer, timer_close_cb);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
 #endif
 
 static void test_response_with_status(VALK_TEST_ARGS()) {
@@ -3014,6 +3338,15 @@ int main(int argc, const char **argv) {
 #ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_timer_alloc_free", test_timer_alloc_free);
   valk_testsuite_add_test(suite, "test_timer_null_safety", test_timer_null_safety);
+  valk_testsuite_add_test(suite, "test_timer_full_lifecycle", test_timer_full_lifecycle);
+  valk_testsuite_add_test(suite, "test_timer_repeating", test_timer_repeating);
+  valk_testsuite_add_test(suite, "test_timer_double_close", test_timer_double_close);
+  valk_testsuite_add_test(suite, "test_handle_kind_for_timer", test_handle_kind_for_timer);
+  valk_testsuite_add_test(suite, "test_handle_diagnostics_all_kinds", test_handle_diagnostics_all_kinds);
+  valk_testsuite_add_test(suite, "test_handle_diag_edge_cases", test_handle_diag_edge_cases);
+  valk_testsuite_add_test(suite, "test_multiple_timers", test_multiple_timers);
+  valk_testsuite_add_test(suite, "test_timer_free_lifecycle", test_timer_free_lifecycle);
+  valk_testsuite_add_test(suite, "test_timer_stop_before_fire", test_timer_stop_before_fire);
 #endif
   valk_testsuite_add_test(suite, "test_response_with_status", test_response_with_status);
   valk_testsuite_add_test(suite, "test_localhost_hostname", test_localhost_hostname);

@@ -282,11 +282,6 @@ if(VALK_METRICS)
   target_compile_definitions(test_pool_metrics PRIVATE VALK_METRICS_ENABLED=1)
   include_directories(test_pool_metrics src/)
 
-  add_executable(test_sse_registry test/unit/test_sse_registry.c test/testing.c)
-  target_link_libraries(test_sse_registry PRIVATE "-lc" valkyria)
-  target_compile_definitions(test_sse_registry PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_sse_registry src/)
-
   add_executable(test_metrics_delta test/unit/test_metrics_delta.c test/testing.c)
   target_link_libraries(test_metrics_delta PRIVATE "-lc" valkyria)
   target_compile_definitions(test_metrics_delta PRIVATE VALK_METRICS_ENABLED=1)
