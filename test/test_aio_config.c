@@ -128,7 +128,7 @@ void test_system_start_invalid_config(VALK_TEST_ARGS()) {
 
   valk_aio_system_config_t cfg = {0};
   cfg.max_connections = 100;
-  cfg.tcp_buffer_pool_size = 10;
+  cfg.tcp_buffer_pool_size = 50;
 
   valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
   VALK_TEST_ASSERT(sys == NULL,

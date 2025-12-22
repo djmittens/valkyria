@@ -145,6 +145,10 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
     close(pout[0]);
     close(perr[0]);
 
+    // Reinitialize thread-local allocator after fork - thread-locals are
+    // undefined after fork() and may be NULL even if set in parent
+    valk_mem_init_malloc();
+
     printf("🏃 Running: %s\n", self->name);
     self->func(suite, &self->result);
 

@@ -27,6 +27,7 @@ void test_coverage_enabled_default_false(VALK_TEST_ARGS()) {
 void test_coverage_output_path(VALK_TEST_ARGS()) {
   VALK_TEST();
 
+  valk_coverage_init();
   const char *path = valk_coverage_output_path();
   if (valk_coverage_enabled()) {
     VALK_TEST_ASSERT(path != NULL, "path should not be NULL when coverage enabled");

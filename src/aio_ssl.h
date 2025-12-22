@@ -25,8 +25,8 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
 valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx);
 
 
-void valk_aio_ssl_connect(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx);
-void valk_aio_ssl_accept(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx);
+int valk_aio_ssl_connect(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx);
+int valk_aio_ssl_accept(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx);
 
 void valk_aio_ssl_free(valk_aio_ssl_t *ssl);
 

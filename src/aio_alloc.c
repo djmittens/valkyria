@@ -217,13 +217,17 @@ static void __libuv_free(void *ptr) {
 // Public API
 // =============================================================================
 
-// Use constructor attribute to initialize BEFORE main() runs
-// This ensures we install hooks before any library can initialize
-// Priority 101 is early (lower = earlier, 0-100 reserved for system)
-__attribute__((constructor(101)))
-static void __valk_aio_alloc_early_init(void) {
-  // Install libuv allocator hooks FIRST - libuv often initializes early
-  // NOTE: This must be called BEFORE any libuv functions!
+static _Atomic bool __alloc_initialized = false;
+
+void valk_aio_alloc_init(void) {
+  // Use atomic to ensure single initialization even with concurrent calls
+  bool expected = false;
+  if (!atomic_compare_exchange_strong(&__alloc_initialized, &expected, true)) {
+    return;  // Already initialized
+  }
+
+  // Install libuv allocator hooks
+  // NOTE: This should be called BEFORE any libuv functions for accurate tracking
   int uv_result = uv_replace_allocator(__libuv_malloc, __libuv_realloc,
                                        __libuv_calloc, __libuv_free);
   if (uv_result != 0) {
@@ -232,7 +236,7 @@ static void __valk_aio_alloc_early_init(void) {
   }
 
   // Install OpenSSL allocator hooks
-  // NOTE: This must be called BEFORE any OpenSSL functions!
+  // NOTE: This should be called BEFORE any OpenSSL functions for accurate tracking
   int ssl_result = CRYPTO_set_mem_functions(__ssl_malloc, __ssl_realloc, __ssl_free);
 
   // Verify installation succeeded (returns 1 on success, 0 if already set)
@@ -247,11 +251,6 @@ static void __valk_aio_alloc_early_init(void) {
   fprintf(stderr, "[aio_alloc] Memory tracking: libuv=%s, ssl=%s\n",
           uv_result == 0 ? "ok" : "FAILED",
           ssl_result == 1 ? "ok" : "FAILED");
-}
-
-void valk_aio_alloc_init(void) {
-  // Now a no-op - initialization happens in constructor
-  // Kept for API compatibility
 }
 
 size_t valk_aio_ssl_bytes_used(void) {

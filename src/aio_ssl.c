@@ -130,8 +130,19 @@ valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx) {
   return VALK_ERR_SUCCESS;
 }
 
-void valk_aio_ssl_accept(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
+int valk_aio_ssl_accept(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
+  if (!ssl_ctx) {
+    VALK_ERROR("valk_aio_ssl_accept: ssl_ctx is NULL");
+    ssl->ssl = NULL;
+    return -1;
+  }
+
   ssl->ssl = SSL_new(ssl_ctx);
+  if (!ssl->ssl) {
+    VALK_ERROR("valk_aio_ssl_accept: SSL_new failed: %s",
+               ERR_error_string(ERR_get_error(), NULL));
+    return -1;
+  }
 
   ssl->read_bio = BIO_new(BIO_s_mem());
   ssl->write_bio = BIO_new(BIO_s_mem());
@@ -140,10 +151,22 @@ void valk_aio_ssl_accept(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
   SSL_alloc_buffers(ssl->ssl);
 
   SSL_set_accept_state(ssl->ssl);
+  return 0;
 }
 
-void valk_aio_ssl_connect(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
+int valk_aio_ssl_connect(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
+  if (!ssl_ctx) {
+    VALK_ERROR("valk_aio_ssl_connect: ssl_ctx is NULL");
+    ssl->ssl = NULL;
+    return -1;
+  }
+
   ssl->ssl = SSL_new(ssl_ctx);
+  if (!ssl->ssl) {
+    VALK_ERROR("valk_aio_ssl_connect: SSL_new failed: %s",
+               ERR_error_string(ERR_get_error(), NULL));
+    return -1;
+  }
 
   ssl->read_bio = BIO_new(BIO_s_mem());
   ssl->write_bio = BIO_new(BIO_s_mem());
@@ -152,6 +175,7 @@ void valk_aio_ssl_connect(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
   SSL_alloc_buffers(ssl->ssl);
 
   SSL_set_connect_state(ssl->ssl);
+  return 0;
 }
 
 void valk_aio_ssl_free(valk_aio_ssl_t *ssl) {

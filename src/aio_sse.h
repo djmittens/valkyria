@@ -90,6 +90,7 @@ valk_sse_stream_t *valk_sse_stream_new(
     nghttp2_data_provider2 *data_prd_out);
 
 void valk_sse_stream_close(valk_sse_stream_t *stream);
+void valk_sse_stream_free(valk_sse_stream_t *stream);
 
 // Connection tracking (for cleanup on connection close)
 // Note: These are implemented in aio_uv.c since they need access to the full handle struct

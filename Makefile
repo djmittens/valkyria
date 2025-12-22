@@ -157,6 +157,13 @@ define run_tests_c
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_builtins_unit ]; then $(1)/test_sse_builtins_unit; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_core ]; then $(1)/test_sse_core; fi
 	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_backpressure ]; then $(1)/test_aio_backpressure; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_uv_coverage ]; then $(1)/test_aio_uv_coverage; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_integration ]; then $(1)/test_aio_integration; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_combinators ]; then $(1)/test_aio_combinators; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_load_shedding ]; then $(1)/test_aio_load_shedding; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_sse_integration ]; then $(1)/test_aio_sse_integration; fi
+	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_config ]; then $(1)/test_aio_config; fi
+	if [ -f $(1)/test_aio_uv_unit ]; then $(1)/test_aio_uv_unit; fi
 	if [ -f $(1)/test_aio_alloc_unit ]; then $(1)/test_aio_alloc_unit; fi
 	if [ -f $(1)/test_aio_ssl_unit ]; then $(1)/test_aio_ssl_unit; fi
 	if [ -f $(1)/test_coverage_unit ]; then $(1)/test_coverage_unit; fi
@@ -165,6 +172,9 @@ define run_tests_c
 	if [ -f $(1)/test_log ]; then $(1)/test_log; fi
 	if [ -f $(1)/test_parser_unit ]; then $(1)/test_parser_unit; fi
 	if [ -f $(1)/test_source_loc_unit ]; then $(1)/test_source_loc_unit; fi
+	if [ -f $(1)/test_body_buffer ]; then $(1)/test_body_buffer; fi
+	if [ -f $(1)/test_pressure ]; then $(1)/test_pressure; fi
+	if [ -f $(1)/test_conn_read_buf ]; then $(1)/test_conn_read_buf; fi
 	@echo "=== All C tests passed ($(1)) ==="
 endef
 

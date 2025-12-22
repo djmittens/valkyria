@@ -452,17 +452,34 @@ static void __backpressure_try_resume_one(void) {
     return;
   }
 
-  valk_aio_handle_t *conn = backpressure_list_head;
+  // Skip connections that are closing/closed until we find a valid one.
+  // This handles the race where a connection is closed after being added to
+  // the backpressure list but before __uv_handle_closed_cb runs.
+  while (backpressure_list_head) {
+    valk_aio_handle_t *conn = backpressure_list_head;
 
-  backpressure_list_head = conn->http.backpressure_next;
-  conn->http.backpressure_next = NULL;
-  conn->http.backpressure = false;
-  backpressure_list_size--;
+    // Check if connection is still valid BEFORE removing from list.
+    // A closing/closed connection should be skipped and removed.
+    if (conn->http.state == VALK_CONN_CLOSING || conn->http.state == VALK_CONN_CLOSED ||
+        uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
+      // Connection is closing - remove it and try the next one
+      backpressure_list_head = conn->http.backpressure_next;
+      conn->http.backpressure_next = NULL;
+      conn->http.backpressure = false;
+      backpressure_list_size--;
+      continue;
+    }
 
-  if (conn->http.state == VALK_CONN_ESTABLISHED || conn->http.state == VALK_CONN_INIT) {
+    // Valid connection found - remove from list and resume
+    backpressure_list_head = conn->http.backpressure_next;
+    conn->http.backpressure_next = NULL;
+    conn->http.backpressure = false;
+    backpressure_list_size--;
+
     uv_read_start((uv_stream_t *)&conn->uv.tcp,
                   __alloc_callback, __http_tcp_read_cb);
     VALK_DEBUG("Resumed backpressured connection (available buffers: %zu)", available);
+    return;
   }
 }
 
@@ -643,6 +660,9 @@ typedef struct pending_stream pending_stream_t;
 typedef struct valk_aio_system {
   valk_aio_system_config_t config;  // Resolved configuration
   char name[64];                    // System name for metrics/dashboard
+
+  // Startup synchronization
+  uv_sem_t startup_sem;             // Signaled when event loop is ready
 
   // everything  past this point only accessed inside of event loop
   uv_loop_t *eventloop;
@@ -1044,6 +1064,9 @@ static void __event_loop(void *arg) {
   VALK_INFO("Initialized %u stream arenas (%zuKB each)",
             sys->config.arena_pool_size, sys->config.arena_size / 1024);
 
+  // Signal that event loop is ready (all slabs initialized)
+  uv_sem_post(&sys->startup_sem);
+
   // Run the loop until stop is requested
   uv_run(sys->eventloop, UV_RUN_DEFAULT);
 
@@ -1273,25 +1296,10 @@ void valk_sse_close_all_streams(valk_aio_handle_t *conn) {
   while (stream) {
     valk_sse_stream_t *next = stream->next;
 
-    stream->state = VALK_SSE_CLOSED;
-
-    valk_sse_event_t *event = stream->queue_head;
-    while (event) {
-      valk_sse_event_t *next_event = event->next;
-      free(event);
-      event = next_event;
-    }
-
-    if (stream->pending_data) {
-      free(stream->pending_data);
-      stream->pending_data = NULL;
-    }
-
-    if (stream->on_close) {
-      stream->on_close(stream, stream->user_data);
-    }
-
-    free(stream);
+    // Close the stream (marks as closed, cleans up resources, but doesn't free)
+    // The LVAL_REF cleanup callback owns the memory and will free it when
+    // the Lisp reference is garbage collected
+    valk_sse_stream_close(stream);
 
     stream = next;
     count++;
@@ -1309,6 +1317,11 @@ static void __uv_handle_closed_cb(uv_handle_t *handle) {
   // with any handle
   valk_aio_handle_t *hndl = handle->data;
   VALK_TRACE("UV handle closed %p", handle->data);
+  
+  if (hndl->kind == VALK_HNDL_HTTP_CONN) {
+    __backpressure_list_remove(hndl);
+  }
+  
   if (hndl->onClose != nullptr) {
     VALK_TRACE("Calling onClose callback");
     hndl->onClose(hndl);
@@ -1321,14 +1334,17 @@ static void __aio_uv_walk_close(uv_handle_t *h, void *arg) {
   UNUSED(arg);
   if (!uv_is_closing(h)) {
     VALK_DEBUG("Closing open UV handle type=%d", h->type);
-    // Only use __uv_handle_closed_cb for handles that have valk_aio_handle_t data.
-    // Use magic marker to safely identify our handles vs other uv handles
-    // (like timers from aio/schedule which have different data structures).
     valk_aio_handle_t *hndl = h->data;
     if (hndl && hndl->magic == VALK_AIO_HANDLE_MAGIC) {
+      if (hndl->kind == VALK_HNDL_TCP && hndl->arg) {
+        valk_aio_http_server *srv = hndl->arg;
+        srv->state = VALK_SRV_CLOSING;
+      } else if (hndl->kind == VALK_HNDL_HTTP_CONN) {
+        hndl->http.state = VALK_CONN_CLOSING;
+        __backpressure_list_remove(hndl);
+      }
       uv_close(h, __uv_handle_closed_cb);
     } else {
-      // Not one of our managed handles, close without callback
       uv_close(h, NULL);
     }
   }
@@ -2528,6 +2544,7 @@ static void __http_tcp_unencrypted_read_cb(void *arg,
     VALK_ERROR("nghttp2_session_mem_recv error: %zd", rv);
     if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
       conn->http.state = VALK_CONN_CLOSING;
+      __backpressure_list_remove(conn);
 #ifdef VALK_METRICS_ENABLED
       conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
       conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
@@ -2569,6 +2586,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   if (nread < 0) {
     if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
       conn->http.state = VALK_CONN_CLOSING;
+      __backpressure_list_remove(conn);
 #ifdef VALK_METRICS_ENABLED
       conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
       conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
@@ -2614,7 +2632,10 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     }
 
 #ifdef VALK_METRICS_ENABLED
-    atomic_fetch_add(&conn->http.server->sys->system_stats.tcp_buffer_overflow, 1);
+    // Only track server-side metrics (client connections have server=NULL)
+    if (conn->http.server) {
+      atomic_fetch_add(&conn->http.server->sys->system_stats.tcp_buffer_overflow, 1);
+    }
 #endif
 
     valk_slab_release_ptr(tcp_buffer_slab, buf->base);
@@ -2716,6 +2737,10 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
 
   valk_aio_handle_t *hndl = stream->data;
   valk_aio_http_server *srv = hndl->arg;
+
+  if (srv->state == VALK_SRV_CLOSING || srv->state == VALK_SRV_CLOSED) {
+    return;
+  }
 
   // Load shedding: check buffer pool usage before accepting
   size_t available = valk_slab_available(tcp_buffer_slab);
@@ -2852,7 +2877,11 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
 
     nghttp2_session_server_new3(&conn->http.session, callbacks, conn, nullptr,
                                 valk_aio_nghttp2_mem());
-    valk_aio_ssl_accept(&conn->http.ssl, srv->ssl_ctx);
+    if (valk_aio_ssl_accept(&conn->http.ssl, srv->ssl_ctx) != 0) {
+      VALK_ERROR("Failed to initialize SSL for connection");
+      uv_close((uv_handle_t *)&conn->uv.tcp, __uv_handle_closed_cb);
+      return;
+    }
 
     // Send settings to the client
     __http_send_server_connection_header(conn->http.session, srv->sys);
@@ -3321,7 +3350,11 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
   valk_aio_ssl_client_init(&client->ssl_ctx);
   SSL_CTX_set_alpn_protos(client->ssl_ctx, (const unsigned char *)"\x02h2", 3);
 
-  valk_aio_ssl_connect(&client->connection->http.ssl, client->ssl_ctx);
+  if (valk_aio_ssl_connect(&client->connection->http.ssl, client->ssl_ctx) != 0) {
+    VALK_ERROR("Failed to initialize SSL for client connection");
+    valk_slab_release_ptr(tcp_buffer_slab, slabItem);
+    return;
+  }
   const char *sni = (client->hostname[0] != '\0') ? client->hostname : "localhost";
   SSL_set_tlsext_host_name(client->connection->http.ssl.ssl, sni);
 
@@ -3486,16 +3519,20 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
   UNUSED(sys);
   __valk_request_client_pair_t *pair = task->arg;
 
-  // TODO(networking): Allocating this promise here temporarily, ideally need
-  // to be passing a request object with a promise on it
-  // the reason its not done on the arena, is because it will be freed by a
-  // callback
   valk_aio_http2_client *client = pair->client;
+  valk_aio_handle_t *conn = client->connection;
+
+  if (conn->http.state == VALK_CONN_CLOSING || conn->http.state == VALK_CONN_CLOSED) {
+    valk_arc_box *err = valk_arc_box_err("Client connection closing");
+    valk_promise_respond(&task->promise, err);
+    valk_arc_release(err);
+    return;
+  }
+
   VALK_INFO("Client ready: %s:%d", client->interface, client->port);
   VALK_DEBUG("req: %s%s", pair->req->authority, pair->req->path);
 
   VALK_DEBUG("Constructing request on client %p", (void *)client);
-  valk_aio_handle_t *conn = client->connection;
 
   // Allocate request/response context using malloc (event loop thread allocator)
   __http2_req_res_t *reqres = valk_mem_alloc(sizeof(__http2_req_res_t));
@@ -4083,10 +4120,22 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   uv_async_init(sys->eventloop, &sys->stopperHandle->uv.task, __aio_uv_stop);
   valk_dll_insert_after(&sys->liveHandles, sys->stopperHandle);
 
+  // Initialize startup semaphore (signaled when event loop is ready)
+  if (uv_sem_init(&sys->startup_sem, 0) != 0) {
+    VALK_ERROR("Failed to initialize startup semaphore");
+    return NULL;
+  }
+
   int status = uv_thread_create(&sys->loopThread, __event_loop, sys);
   if (status) {
     perror("pthread_create");
+    uv_sem_destroy(&sys->startup_sem);
+    return NULL;
   }
+
+  // Wait for event loop thread to complete initialization
+  uv_sem_wait(&sys->startup_sem);
+
   return sys;
 }
 
@@ -4143,6 +4192,9 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
   if (valk_aio_active_system == sys) {
     valk_aio_active_system = NULL;
   }
+
+  // Destroy startup semaphore
+  uv_sem_destroy(&sys->startup_sem);
 
   // Mark as cleaned up and free the system struct
   sys->cleanedUp = true;

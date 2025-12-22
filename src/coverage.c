@@ -7,10 +7,8 @@
 
 #ifdef VALK_COVERAGE
 #include "source_loc.h"
-#endif
 
 static valk_coverage_data_t g_coverage;
-static bool g_coverage_enabled = false;
 static const char *g_coverage_output = nullptr;
 static pthread_mutex_t g_coverage_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -24,21 +22,17 @@ static uint32_t coverage_hash(const char *str) {
 }
 
 void valk_coverage_init(void) {
-  const char *env = getenv("VALK_COVERAGE");
-  g_coverage_enabled = (env != nullptr && strcmp(env, "1") == 0);
-  if (g_coverage_enabled) {
-    const char *output_env = getenv("VALK_COVERAGE_OUTPUT");
-    g_coverage_output = output_env ? output_env : "build-coverage/coverage-valk.txt";
-    for (int i = 0; i < COVERAGE_HASH_SIZE; i++) {
-      g_coverage.buckets[i] = nullptr;
-    }
-    g_coverage.total_files = 0;
-    g_coverage.total_evals = 0;
+  const char *output_env = getenv("VALK_COVERAGE_OUTPUT");
+  g_coverage_output = output_env ? output_env : "build-coverage/coverage-valk.txt";
+  for (int i = 0; i < COVERAGE_HASH_SIZE; i++) {
+    g_coverage.buckets[i] = nullptr;
   }
+  g_coverage.total_files = 0;
+  g_coverage.total_evals = 0;
 }
 
 bool valk_coverage_enabled(void) {
-  return g_coverage_enabled;
+  return true;
 }
 
 const char *valk_coverage_output_path(void) {
@@ -46,8 +40,6 @@ const char *valk_coverage_output_path(void) {
 }
 
 void valk_coverage_record_file(const char *filename) {
-  if (!g_coverage_enabled) return;
-  
   pthread_mutex_lock(&g_coverage_lock);
   
   uint32_t bucket = coverage_hash(filename);
@@ -112,7 +104,7 @@ static valk_coverage_file_t **collect_sorted_files(size_t *count) {
 }
 
 void valk_coverage_report(const char *output_file) {
-  if (!g_coverage_enabled || g_coverage.total_files == 0) return;
+  if (g_coverage.total_files == 0) return;
   
   pthread_mutex_lock(&g_coverage_lock);
   
@@ -143,9 +135,6 @@ void valk_coverage_report(const char *output_file) {
 }
 
 void valk_coverage_report_lcov(const char *output_file) {
-  if (!g_coverage_enabled) return;
-  
-#ifdef VALK_COVERAGE
   if (g_line_coverage.total_files == 0) return;
   pthread_mutex_lock(&g_line_coverage.lock);
   
@@ -171,7 +160,6 @@ void valk_coverage_report_lcov(const char *output_file) {
       for (size_t line = 1; line < fc->line_capacity; line++) {
         if (fc->line_counts[line] != UINT32_MAX) {
           fprintf(f, "DA:%zu,%u\n", line, fc->line_counts[line]);
-          // Write per-expression coverage data (EXPRDATA) - summary is computed by the report generator
           if (fc->expr_buckets != NULL) {
             for (uint32_t b = 0; b < EXPR_HASH_SIZE; b++) {
               valk_expr_t *e = fc->expr_buckets[b];
@@ -213,50 +201,9 @@ void valk_coverage_report_lcov(const char *output_file) {
   
   fclose(f);
   pthread_mutex_unlock(&g_line_coverage.lock);
-#else
-  if (g_coverage.total_files == 0) return;
-  pthread_mutex_lock(&g_coverage_lock);
-  
-  size_t count;
-  valk_coverage_file_t **files = collect_sorted_files(&count);
-  if (files == nullptr) {
-    pthread_mutex_unlock(&g_coverage_lock);
-    return;
-  }
-  
-  FILE *f = fopen(output_file, "w");
-  if (!f) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, "Failed to open LCOV file: %s\n", output_file);
-    free(files);
-    pthread_mutex_unlock(&g_coverage_lock);
-    return;
-  }
-  
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  fprintf(f, "TN:\n");
-  
-  for (size_t i = 0; i < count; i++) {
-    // NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(f, "SF:%s\n", files[i]->filename);
-    fprintf(f, "FNF:1\n");
-    fprintf(f, "FNH:1\n");
-    fprintf(f, "LF:1\n");
-    fprintf(f, "LH:1\n");
-    fprintf(f, "DA:1,%zu\n", files[i]->eval_count);
-    fprintf(f, "end_of_record\n");
-    // NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  }
-  
-  fclose(f);
-  free(files);
-  pthread_mutex_unlock(&g_coverage_lock);
-#endif
 }
 
 void valk_coverage_reset(void) {
-  if (!g_coverage_enabled) return;
-  
   pthread_mutex_lock(&g_coverage_lock);
   
   for (int i = 0; i < COVERAGE_HASH_SIZE; i++) {
@@ -277,11 +224,7 @@ void valk_coverage_reset(void) {
 }
 
 void valk_coverage_save_on_exit(void) {
-#ifdef VALK_COVERAGE
-  bool has_data = g_coverage_enabled && (g_coverage.total_files > 0 || g_line_coverage.total_files > 0);
-#else
-  bool has_data = g_coverage_enabled && g_coverage.total_files > 0;
-#endif
+  bool has_data = g_coverage.total_files > 0 || g_line_coverage.total_files > 0;
   if (has_data) {
     valk_coverage_report(g_coverage_output);
     
@@ -307,8 +250,6 @@ void valk_coverage_save_on_exit(void) {
     }
   }
 }
-
-#ifdef VALK_COVERAGE
 
 valk_line_coverage_t g_line_coverage = {
   .buckets = {NULL},
@@ -378,7 +319,7 @@ static void ensure_line_capacity(valk_line_coverage_file_t *fc, uint16_t line) {
 }
 
 void valk_coverage_mark_line(uint16_t file_id, uint16_t line) {
-  if (!g_coverage_enabled || file_id == 0 || line == 0) return;
+  if (file_id == 0 || line == 0) return;
   
   pthread_mutex_lock(&g_line_coverage.lock);
   
@@ -397,7 +338,7 @@ void valk_coverage_mark_line(uint16_t file_id, uint16_t line) {
 }
 
 void valk_coverage_record_line(uint16_t file_id, uint16_t line) {
-  if (!g_coverage_enabled || file_id == 0 || line == 0) return;
+  if (file_id == 0 || line == 0) return;
   
   pthread_mutex_lock(&g_line_coverage.lock);
   
@@ -426,7 +367,7 @@ static uint32_t expr_hash(uint16_t line, uint16_t column) {
 }
 
 void valk_coverage_mark_expr(uint16_t file_id, uint16_t line, uint16_t column, uint16_t end_column) {
-  if (!g_coverage_enabled || file_id == 0 || line == 0) return;
+  if (file_id == 0 || line == 0) return;
   
   pthread_mutex_lock(&g_line_coverage.lock);
   
@@ -469,7 +410,7 @@ void valk_coverage_mark_expr(uint16_t file_id, uint16_t line, uint16_t column, u
 }
 
 void valk_coverage_record_expr(uint16_t file_id, uint16_t line, uint16_t column) {
-  if (!g_coverage_enabled || file_id == 0 || line == 0) return;
+  if (file_id == 0 || line == 0) return;
   
   pthread_mutex_lock(&g_line_coverage.lock);
   
@@ -523,7 +464,7 @@ void valk_coverage_record_expr(uint16_t file_id, uint16_t line, uint16_t column)
 }
 
 size_t valk_coverage_get_line_expr_count(uint16_t file_id, uint16_t line, size_t *hit, size_t *total) {
-  if (!g_coverage_enabled || file_id == 0 || line == 0) {
+  if (file_id == 0 || line == 0) {
     if (hit) *hit = 0;
     if (total) *total = 0;
     return 0;
@@ -560,7 +501,7 @@ size_t valk_coverage_get_line_expr_count(uint16_t file_id, uint16_t line, size_t
 }
 
 void valk_coverage_record_branch(uint16_t file_id, uint16_t line, bool taken) {
-  if (!g_coverage_enabled || file_id == 0 || line == 0) return;
+  if (file_id == 0 || line == 0) return;
   
   pthread_mutex_lock(&g_line_coverage.lock);
   
@@ -637,5 +578,16 @@ void valk_line_coverage_reset(void) {
   
   pthread_mutex_unlock(&g_line_coverage.lock);
 }
+
+#else // !VALK_COVERAGE
+
+void valk_coverage_init(void) {}
+bool valk_coverage_enabled(void) { return false; }
+const char *valk_coverage_output_path(void) { return nullptr; }
+void valk_coverage_record_file(const char *filename) { (void)filename; }
+void valk_coverage_report(const char *output_file) { (void)output_file; }
+void valk_coverage_report_lcov(const char *output_file) { (void)output_file; }
+void valk_coverage_reset(void) {}
+void valk_coverage_save_on_exit(void) {}
 
 #endif // VALK_COVERAGE

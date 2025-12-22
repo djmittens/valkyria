@@ -28,6 +28,21 @@ void test_ssl_server_init_invalid_files(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_ssl_server_init_valid_key_invalid_cert(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_aio_ssl_start();
+  
+  SSL_CTX *ctx = NULL;
+  valk_err_e err = valk_aio_ssl_server_init(&ctx, 
+    "vendor/nghttp2/tests/testdata/privkey.pem",
+    "/nonexistent/cert.pem");
+  ASSERT_EQ(err, VALK_ERR_SSL_INIT);
+  ASSERT_NULL(ctx);
+  
+  VALK_PASS();
+}
+
 void test_ssl_handshake_null_ssl(VALK_TEST_ARGS()) {
   VALK_TEST();
   
@@ -480,12 +495,90 @@ void test_ssl_encrypt_not_finished(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_ssl_handshake_tiny_buffer(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_aio_ssl_start();
+  
+  SSL_CTX *ctx = NULL;
+  valk_err_e err = valk_aio_ssl_client_init(&ctx);
+  ASSERT_EQ(err, VALK_ERR_SUCCESS);
+  
+  valk_aio_ssl_t ssl = {0};
+  valk_aio_ssl_connect(&ssl, ctx);
+  
+  char buf[1];
+  valk_buffer_t out = {.items = buf, .count = 0, .capacity = sizeof(buf)};
+  
+  err = valk_aio_ssl_handshake(&ssl, &out);
+  VALK_TEST_ASSERT(err == VALK_ERR_SUCCESS || err == VALK_ERR_SSL_BUFFER_FULL,
+                   "Expected SUCCESS or BUFFER_FULL, got %d", err);
+  
+  valk_aio_ssl_free(&ssl);
+  SSL_CTX_free(ctx);
+  
+  VALK_PASS();
+}
+
+void test_ssl_handshake_full_buffer(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_aio_ssl_start();
+  
+  SSL_CTX *ctx = NULL;
+  valk_err_e err = valk_aio_ssl_client_init(&ctx);
+  ASSERT_EQ(err, VALK_ERR_SUCCESS);
+  
+  valk_aio_ssl_t ssl = {0};
+  valk_aio_ssl_connect(&ssl, ctx);
+  
+  char buf[1024];
+  valk_buffer_t out = {.items = buf, .count = 1024, .capacity = 1024};
+  
+  err = valk_aio_ssl_handshake(&ssl, &out);
+  VALK_TEST_ASSERT(err == VALK_ERR_SUCCESS || err == VALK_ERR_SSL_BUFFER_FULL,
+                   "Expected SUCCESS or BUFFER_FULL, got %d", err);
+  
+  valk_aio_ssl_free(&ssl);
+  SSL_CTX_free(ctx);
+  
+  VALK_PASS();
+}
+
+void test_ssl_on_read_with_garbage_data(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_aio_ssl_start();
+  
+  SSL_CTX *ctx = NULL;
+  valk_err_e err = valk_aio_ssl_client_init(&ctx);
+  ASSERT_EQ(err, VALK_ERR_SUCCESS);
+  
+  valk_aio_ssl_t ssl = {0};
+  valk_aio_ssl_connect(&ssl, ctx);
+  
+  char ibuf[256], obuf[16384];
+  memset(ibuf, 0, sizeof(ibuf));
+  valk_buffer_t in = {.items = ibuf, .count = 100, .capacity = sizeof(ibuf)};
+  valk_buffer_t out = {.items = obuf, .count = 0, .capacity = sizeof(obuf)};
+  
+  err = valk_aio_ssl_on_read(&ssl, &in, &out, NULL, NULL);
+  VALK_TEST_ASSERT(err == VALK_ERR_SSL_PROTOCOL || err == VALK_ERR_SSL_RE_NEGOTIATE,
+                   "Expected PROTOCOL error or RE_NEGOTIATE with garbage data, got %d", err);
+  
+  valk_aio_ssl_free(&ssl);
+  SSL_CTX_free(ctx);
+  
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
   
   valk_testsuite_add_test(suite, "test_ssl_start", test_ssl_start);
   valk_testsuite_add_test(suite, "test_ssl_server_init_invalid_files", test_ssl_server_init_invalid_files);
+  valk_testsuite_add_test(suite, "test_ssl_server_init_valid_key_invalid_cert", test_ssl_server_init_valid_key_invalid_cert);
   valk_testsuite_add_test(suite, "test_ssl_handshake_null_ssl", test_ssl_handshake_null_ssl);
   valk_testsuite_add_test(suite, "test_ssl_handshake_invalid_ssl_fields", test_ssl_handshake_invalid_ssl_fields);
   valk_testsuite_add_test(suite, "test_ssl_handshake_null_output_buffer", test_ssl_handshake_null_output_buffer);
@@ -509,6 +602,9 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_ssl_handshake_empty_output", test_ssl_handshake_empty_output);
   valk_testsuite_add_test(suite, "test_ssl_on_read_empty_input", test_ssl_on_read_empty_input);
   valk_testsuite_add_test(suite, "test_ssl_encrypt_not_finished", test_ssl_encrypt_not_finished);
+  valk_testsuite_add_test(suite, "test_ssl_handshake_tiny_buffer", test_ssl_handshake_tiny_buffer);
+  valk_testsuite_add_test(suite, "test_ssl_handshake_full_buffer", test_ssl_handshake_full_buffer);
+  valk_testsuite_add_test(suite, "test_ssl_on_read_with_garbage_data", test_ssl_on_read_with_garbage_data);
   
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

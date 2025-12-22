@@ -146,7 +146,23 @@ void valk_sse_stream_close(valk_sse_stream_t *stream) {
   // Note: valk_sse_stream_unregister is implemented in aio_uv.c
   valk_sse_stream_unregister(stream);
 
-  // Free the stream struct
+  // Note: Stream struct is NOT freed here. When called from Lisp via sse/close,
+  // the LVAL_REF cleanup callback (sse_stream_cleanup) owns the memory and will
+  // call valk_sse_stream_free when the reference is garbage collected.
+  // When called internally (e.g., from valk_sse_close_all_streams), the caller
+  // should call valk_sse_stream_free after this.
+}
+
+void valk_sse_stream_free(valk_sse_stream_t *stream) {
+  if (!stream) {
+    return;
+  }
+
+  // Ensure stream is closed before freeing
+  if (stream->state != VALK_SSE_CLOSED) {
+    valk_sse_stream_close(stream);
+  }
+
   free(stream);
 }
 

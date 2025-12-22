@@ -42,11 +42,11 @@ static valk_sse_stream_t *get_sse_stream(valk_lval_t *ref) {
   return (valk_sse_stream_t *)ref->ref.ptr;
 }
 
-// Cleanup function for LVAL_REF
+// Cleanup function for LVAL_REF - frees the stream when reference is garbage collected
 static void sse_stream_cleanup(void *ptr) {
   valk_sse_stream_t *stream = (valk_sse_stream_t *)ptr;
   if (stream) {
-    valk_sse_stream_close(stream);
+    valk_sse_stream_free(stream);
   }
 }
 

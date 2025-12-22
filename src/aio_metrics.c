@@ -1018,8 +1018,10 @@ char* valk_http_clients_to_prometheus(const valk_http_clients_registry_t* reg,
   uint32_t count = atomic_load(&reg->count);
   if (count == 0) return nullptr;
 
-  // Estimate 512 bytes per client for all metrics
-  size_t buf_size = 512 + count * 512;
+  // Each metric has ~100 byte HELP/TYPE header plus ~80 bytes per client value
+  // 8 metrics: 8 * 100 = 800 bytes headers, 8 * 80 = 640 bytes per client
+  // Add 256 bytes safety margin
+  size_t buf_size = 1024 + count * 768;
   char* buf = alloc ? valk_mem_allocator_alloc(alloc, buf_size) : malloc(buf_size);
   if (!buf) return nullptr;
 

@@ -87,6 +87,9 @@ set(VALKYRIA_SOURCES
   src/aio_ssl.c
   src/aio_alloc.c
   src/aio_sse.c
+  src/aio_conn_buffer.c
+  src/aio_pressure.c
+  src/aio_body_buffer.c
   src/log.c
   src/coverage.c
   src/source_loc.c
@@ -376,6 +379,18 @@ endif()
 add_executable(test_aio_ssl_unit test/unit/test_aio_ssl.c test/testing.c)
 target_link_libraries(test_aio_ssl_unit PRIVATE "-lc" valkyria OpenSSL::SSL OpenSSL::Crypto)
 include_directories(test_aio_ssl_unit src/)
+
+add_executable(test_conn_read_buf test/unit/test_conn_read_buf.c test/testing.c)
+target_link_libraries(test_conn_read_buf PRIVATE "-lc" valkyria)
+include_directories(test_conn_read_buf src/)
+
+add_executable(test_pressure test/unit/test_pressure.c test/testing.c)
+target_link_libraries(test_pressure PRIVATE "-lc" valkyria)
+include_directories(test_pressure src/)
+
+add_executable(test_body_buffer test/unit/test_body_buffer.c test/testing.c)
+target_link_libraries(test_body_buffer PRIVATE "-lc" valkyria)
+include_directories(test_body_buffer src/)
 
 add_executable(test_sse_stream_registry_unit test/unit/test_sse_stream_registry.c test/testing.c)
 target_link_libraries(test_sse_stream_registry_unit PRIVATE "-lc" valkyria)
