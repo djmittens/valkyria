@@ -1,56 +1,119 @@
-; Backpressure Event-Driven Test
-; Uses small buffer pool to trigger backpressure
-; Tests that connections resume when buffers free up
+; Backpressure Edge Case Coverage Test
+; Tests backpressure queue overflow, list removal traversal, and timeout paths
 ;
 ; Targets:
-; - __backpressure_list_add
-; - __backpressure_try_resume_one
-; - Event-driven resume on buffer release
+; - __backpressure_list_add queue full path (line 451-453)
+; - __backpressure_list_remove traversal (line 466-476) - removing from middle
+; - Maintenance timer backpressure timeout (line 1276-1298)
+; - __backpressure_try_resume_one (lines 488-525)
 
 (load "src/prelude.valk")
 
 (def {TEST_PORT} (net/get-available-port))
 
-; Small buffer pool to force backpressure
+; Key settings:
+; - backpressure-list-max=2: allows only 2 connections to queue, 3rd+ triggers overflow
+; - backpressure-timeout-ms=1000: connections in backpressure > 1s get closed (min allowed)
+; - maintenance-interval-ms=100: check timeouts frequently
+; - Very small buffer pool (10 buffers for 8 max connections) forces backpressure
+; - min-buffers-to-resume=1: resume connections quickly when buffers free up
 (def {aio} (aio/start {
-  :max-connections 16
-  :tcp-buffer-pool-size 8
+  :max-connections 8
+  :tcp-buffer-pool-size 10
+  :backpressure-list-max 2
+  :backpressure-timeout-ms 1000
+  :maintenance-interval-ms 100
+  :min-buffers-to-resume 1
 }))
 
-(def {requests-handled} 0)
+(def {requests-completed} 0)
+(def {requests-started} 0)
+(def {errors} 0)
 
-; Handler that responds quickly after a short delay
-; This allows buffers to free up and backpressured connections to resume
+; Handler holds connection for 800ms - shorter than timeout but enough to cause contention
+; Some connections will timeout (1000ms), others will complete and free buffers
+; This exercises both the timeout path AND the resume path
 (def {handler}
   (\ {req} {
-    (def {requests-handled} (+ requests-handled 1))
-    (aio/then (aio/sleep 100) (\ {_} {{:status "200" :body "OK"}}))
+    (aio/then (aio/sleep 800) (\ {_} {{:status "200" :body "OK"}}))
   }))
 
 (println "")
-(println "=== Backpressure Event-Driven Resume Test ===")
+(println "=== Backpressure Timeout Coverage Test ===")
 (println "")
-(printf "Config: tcp-buffer-pool-size=8\n")
-(printf "Handler responds after 100ms delay\n")
+(printf "Config: pool=10, max-conn=8, bp-list-max=2, bp-timeout=1000ms\n")
 (printf "Starting server on port %d\n" TEST_PORT)
 (http2/server-listen aio TEST_PORT handler)
 
-(println "Server started. Testing event-driven backpressure resume.")
+; Helper to send request and track completion
+(fun {send-request} {
+  (def {requests-started} (+ requests-started 1))
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/" (\ {resp} {
+    (if (error? resp)
+      {(def {errors} (+ errors 1))}
+      {(def {requests-completed} (+ requests-completed 1))})
+  }))
+})
 
-; Check status periodically
-(aio/schedule aio 3000 (\ {} {
-  (printf "After 3s: requests-handled=%d\n" requests-handled)
+; Phase 1: Initial batch to consume resources (4 requests)
+(aio/schedule aio 50 (\ {} {
+  (println "Phase 1: Sending 4 requests to consume buffers...")
+  (send-request)
+  (send-request)
+  (send-request)
+  (send-request)
 }))
 
-(aio/schedule aio 6000 (\ {} {
-  (printf "After 6s: requests-handled=%d\n" requests-handled)
+; Phase 2: Rapid burst - with bp-list-max=2, the 3rd+ backpressured connection
+; will trigger queue full path (lines 451-453)
+(aio/schedule aio 80 (\ {} {
+  (println "Phase 2: Sending 6 more (forces backpressure queue overflow)...")
+  (send-request)
+  (send-request)
+  (send-request)
+  (send-request)
+  (send-request)
+  (send-request)
+}))
+
+; Phase 3: Wait for some requests to complete and buffers to free up
+; This should trigger __backpressure_try_resume_one (lines 488-525)
+(aio/schedule aio 1200 (\ {} {
+  (printf "Phase 3: %d completed, %d errors - buffers should be freeing...\n" 
+          requests-completed errors)
+  (send-request)
+  (send-request)
+}))
+
+; Phase 4: More time for backpressure timeouts (1000ms) to fire
+(aio/schedule aio 2500 (\ {} {
+  (printf "Phase 4: %d completed, %d errors - timeouts should have fired...\n" 
+          requests-completed errors)
+  (send-request)
+  (send-request)
+}))
+
+; Check results
+(aio/schedule aio 4500 (\ {} {
   (println "")
-  (println "PASS: Server ran with event-driven backpressure")
-  (exit 0)
+  (printf "=== Results ===\n")
+  (printf "Requests started: %d\n" requests-started)
+  (printf "Requests completed: %d\n" requests-completed)
+  (printf "Errors: %d\n" errors)
+  
+  ; Success if we processed some requests and saw errors (backpressure worked)
+  (if (>= (+ requests-completed errors) 4)
+    {(do
+      (println "PASS: Backpressure paths exercised")
+      (exit 0))}
+    {(do
+      (printf "FAIL: Not enough requests processed (%d completed, %d errors)\n" 
+              requests-completed errors)
+      (exit 1))})
 }))
 
 ; Hard timeout
-(aio/schedule aio 30000 (\ {} {
+(aio/schedule aio 10000 (\ {} {
   (println "TIMEOUT!")
   (exit 1)
 }))

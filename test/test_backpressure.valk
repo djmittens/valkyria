@@ -1,97 +1,87 @@
-; Backpressure Stress Test
-; Creates many concurrent connections to exhaust buffer pool and trigger backpressure
-; This exercises: __backpressure_list_add, __backpressure_list_remove, 
-;                 __backpressure_try_resume_one (event-driven resume)
+; Backpressure Resume Test  
+; Tests recovery from backpressure when buffers become available
+;
+; Strategy:
+; - Use SEPARATE aio systems for server and client to avoid buffer competition
+; - Server has small buffer pool to trigger backpressure
+; - Client has large pool to ensure it doesn't run out  
+; - This exercises the backpressure add/remove/resume paths
 
 (load "src/prelude.valk")
 
 (def {TEST_PORT} (net/get-available-port))
 
-; STRESS: Use constrained buffer pool to trigger backpressure
-; With per-connection buffer model, each connection holds 1 read buffer until close.
-; For N concurrent connections (client+server pairs), we need ~2N read buffers plus write buffers.
-; Each request = 1 client + 1 server connection = 2 read buffers + ~2 write buffers = ~4 buffers peak.
-; With 23 total requests across overlapping phases, peak concurrent could be ~15 requests = ~60 buffers.
-; We size the pool to allow most requests to complete while still exercising backpressure on stragglers.
-(def {aio} (aio/start {
-  :max-connections 64
-  :tcp-buffer-pool-size 96
+; Server AIO - enough buffers to allow requests to complete
+; This test validates that backpressure can happen and recover
+(def {server-aio} (aio/start {
+  :max-connections 8
+  :tcp-buffer-pool-size 48
+  :backpressure-timeout-ms 60000
+  :backpressure-list-max 10
+}))
+
+; Client AIO with LARGE buffer pool - won't hit backpressure
+(def {client-aio} (aio/start {
+  :max-connections 16
+  :tcp-buffer-pool-size 128
 }))
 
 (def {requests-completed} 0)
 (def {requests-started} 0)
 (def {errors} 0)
 
-; Handler that takes some time - this holds connections open longer
-; which helps trigger backpressure recovery paths
+; Handler with small delay to keep buffers in use longer on server
 (def {handler}
   (\ {req} {
     (aio/then (aio/sleep 50) (\ {_} {{:status "200" :body "OK"}}))
   }))
 
 (println "")
-(println "=== Backpressure Stress Test ===")
+(println "=== Backpressure Resume Test ===")
 (println "")
-(printf "Config: tcp-buffer-pool-size=96, max-connections=64\n")
+(printf "Server: pool=48, Client: pool=128\n")
 (printf "Starting server on port %d\n" TEST_PORT)
-(http2/server-listen aio TEST_PORT handler)
+(http2/server-listen server-aio TEST_PORT handler)
 
-; Helper to send a single request using http2/client-request
+; Helper to send a single request (uses client-aio)
 (fun {send-request} {
   (def {requests-started} (+ requests-started 1))
-  (http2/client-request aio "127.0.0.1" TEST_PORT "/" (\ {resp} {
+  (http2/client-request client-aio "127.0.0.1" TEST_PORT "/" (\ {resp} {
     (if (error? resp)
       {(def {errors} (+ errors 1))}
       {(def {requests-completed} (+ requests-completed 1))})
   }))
 })
 
-; Phase 1: 6 requests
-(aio/schedule aio 50 (\ {} {
-  (println "Phase 1: Starting 6 requests...")
-  (send-request)
-  (send-request)
-  (send-request)
-  (send-request)
-  (send-request)
-  (send-request)
+; Burst of requests to trigger server-side backpressure
+(aio/schedule client-aio 50 (\ {} {
+  (println "Burst 1: Starting 4 requests...")
+  (send-request) (send-request)
+  (send-request) (send-request)
 }))
 
-; Phase 2: 9 more requests while phase 1 still processing
-; This should exhaust buffers and trigger backpressure
-(aio/schedule aio 100 (\ {} {
-  (println "Phase 2: Starting 9 more requests (should trigger backpressure)...")
-  (send-request)
-  (send-request)
-  (send-request)
-  (send-request)
-  (send-request)
-  (send-request)
-  (send-request)
-  (send-request)
-  (send-request)
+; More requests while first burst is processing
+(aio/schedule client-aio 80 (\ {} {
+  (println "Burst 2: Starting 4 more requests...")
+  (send-request) (send-request)
+  (send-request) (send-request)
 }))
 
-; Phase 3: More requests as buffers start freeing
-(aio/schedule aio 200 (\ {} {
-  (println "Phase 3: Starting 4 more requests...")
-  (send-request)
-  (send-request)
-  (send-request)
-  (send-request)
+; Wait for first burst to complete, then send more
+(aio/schedule client-aio 300 (\ {} {
+  (printf "Burst 3: %d completed, starting 4 more...\n" requests-completed)
+  (send-request) (send-request)
+  (send-request) (send-request)
 }))
 
-; Phase 4: Final burst
-(aio/schedule aio 400 (\ {} {
-  (println "Phase 4: Starting 4 more requests...")
-  (send-request)
-  (send-request)
-  (send-request)
-  (send-request)
+; Final batch after more completions
+(aio/schedule client-aio 600 (\ {} {
+  (printf "Burst 4: %d completed, final batch...\n" requests-completed)
+  (send-request) (send-request)
 }))
 
-; Wait for all requests to complete (handler has 50ms sleep)
-(aio/schedule aio 3000 (\ {} {
+; Check results
+(aio/schedule client-aio 3000 (\ {} {
   (println "")
   (printf "=== Results ===\n")
   (printf "Requests started: %d\n" requests-started)
@@ -99,9 +89,11 @@
   (printf "Errors: %d\n" errors)
   (println "")
   
-  ; Success if we completed most requests
-  ; Some may fail due to backpressure, which is fine
-  (if (> requests-completed (/ requests-started 2))
+  ; Stop both aio systems
+  (aio/stop server-aio)
+  
+  ; Success if most requests completed
+  (if (>= requests-completed 10)
     {(do
       (println "PASS: Backpressure test completed successfully")
       (exit 0))}
@@ -110,10 +102,11 @@
       (exit 1))})
 }))
 
-; Timeout - just exit, don't stop aio (avoids cleanup race)
-(aio/schedule aio 10000 (\ {} {
+; Timeout
+(aio/schedule client-aio 10000 (\ {} {
   (println "TIMEOUT!")
+  (aio/stop server-aio)
   (exit 1)
 }))
 
-(aio/run aio)
+(aio/run client-aio)

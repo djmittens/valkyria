@@ -308,6 +308,7 @@ def parse_gcov_output(gcov_path: Path, report: CoverageReport, source_root: Path
     current_line_no = 0
     in_excl_region = False
     in_br_excl_region = False
+    current_line_br_excl = False
     
     with open(gcov_path) as f:
         for line in f:
@@ -339,10 +340,12 @@ def parse_gcov_output(gcov_path: Path, report: CoverageReport, source_root: Path
                     in_br_excl_region = True
                 if "LCOV_EXCL_BR_STOP" in source_content:
                     in_br_excl_region = False
+                
+                # Track single-line branch exclusion for subsequent branch lines
+                current_line_br_excl = "LCOV_EXCL_BR_LINE" in source_content
             
             # Check for single-line exclusion
             excl_line = "LCOV_EXCL_LINE" in source_content
-            excl_br_line = "LCOV_EXCL_BR_LINE" in source_content
             
             # Skip this line entirely if in exclusion region or has line marker
             if in_excl_region or excl_line:
@@ -355,8 +358,8 @@ def parse_gcov_output(gcov_path: Path, report: CoverageReport, source_root: Path
             
             branch_match = re.match(r'branch\s+(\d+)\s+(taken\s+(\d+)|never executed)', line)
             if branch_match:
-                # Skip branches if in branch exclusion region or line has branch exclusion
-                if in_br_excl_region or excl_br_line:
+                # Skip branches if in branch exclusion region or current source line has branch exclusion
+                if in_br_excl_region or current_line_br_excl:
                     continue
                     
                 branch_id = int(branch_match.group(1))
