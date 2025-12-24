@@ -1,12 +1,15 @@
 #include "parser.h"
 
 #include <errno.h>
+#include <netinet/in.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <time.h>
+#include <unistd.h>
 #include <uv.h>
 
 #include "aio.h"
@@ -4286,6 +4289,43 @@ static valk_lval_t* valk_builtin_vm_metrics_prometheus(valk_lenv_t* e,
 }
 
 // ============================================================================
+// NETWORKING UTILITIES
+// ============================================================================
+
+static valk_lval_t* valk_builtin_net_get_available_port(valk_lenv_t* e,
+                                                         valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT(a, valk_lval_list_count(a) == 0,
+              "net/get-available-port takes no arguments");
+
+  int sock = socket(AF_INET, SOCK_STREAM, 0);
+  if (sock < 0) {
+    return valk_lval_err("net/get-available-port: socket() failed");
+  }
+
+  struct sockaddr_in addr = {
+    .sin_family = AF_INET,
+    .sin_addr.s_addr = INADDR_ANY,
+    .sin_port = 0,
+  };
+
+  if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    close(sock);
+    return valk_lval_err("net/get-available-port: bind() failed");
+  }
+
+  socklen_t len = sizeof(addr);
+  if (getsockname(sock, (struct sockaddr*)&addr, &len) < 0) {
+    close(sock);
+    return valk_lval_err("net/get-available-port: getsockname() failed");
+  }
+
+  int port = ntohs(addr.sin_port);
+  close(sock);
+  return valk_lval_num(port);
+}
+
+// ============================================================================
 // HTTP/2 SERVER BUILTINS
 // ============================================================================
 
@@ -4691,6 +4731,10 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "vm/metrics-json", valk_builtin_vm_metrics_json);
   valk_lenv_put_builtin(env, "vm/metrics-prometheus",
                         valk_builtin_vm_metrics_prometheus);
+
+  // Networking utilities
+  valk_lenv_put_builtin(env, "net/get-available-port",
+                        valk_builtin_net_get_available_port);
 
   // HTTP/2 Server
   valk_lenv_put_builtin(env, "http2/server-listen",

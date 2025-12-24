@@ -11,8 +11,8 @@
     {0})
 })
 
-; Test server port
-(def {TEST_PORT} 8455)
+; Test server port - dynamically allocated to avoid conflicts
+(def {TEST_PORT} (net/get-available-port))
 
 ; Create the AIO system
 (def {aio} (aio/start))

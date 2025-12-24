@@ -2,7 +2,7 @@
 
 (load "src/prelude.valk")
 
-(def {TEST_PORT} 8502)
+(def {TEST_PORT} (net/get-available-port))
 
 ; Use minimal arena pool to force pending streams
 (def {aio} (aio/start {

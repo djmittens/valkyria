@@ -210,9 +210,10 @@ typedef struct valk_aio_system_config {
   uint32_t max_handles;              // Default: 2056
   uint32_t max_servers;              // Default: 8
   uint32_t max_clients;              // Default: 8
+  uint32_t max_connections_per_client; // Default: 2 (connections per HTTP/2 client)
 
   // DERIVED SETTINGS (set to 0 for auto-calculation)
-  uint32_t tcp_buffer_pool_size;     // Auto: max_connections × (2 + streams/8)
+  uint32_t tcp_buffer_pool_size;     // Auto: 2 × total_connections
   uint32_t arena_pool_size;          // Auto: max_connections × 2
   uint32_t queue_capacity;           // Auto: max_connections × 2
 
@@ -229,6 +230,11 @@ typedef struct valk_aio_system_config {
   uint32_t backpressure_list_max;     // Default: 1000
   uint32_t backpressure_timeout_ms;   // Default: 30000 (30s)
   uint32_t pending_stream_pool_size;  // Default: 64
+  uint32_t pending_stream_timeout_ms; // Default: 10000 (10s)
+
+  // CONNECTION TIMEOUT SETTINGS
+  uint32_t connection_idle_timeout_ms;  // Default: 60000 (60s) - close idle connections
+  uint32_t maintenance_interval_ms;     // Default: 1000 (1s) - timer for timeout checks
 } valk_aio_system_config_t;
 
 // Default system configuration
@@ -425,6 +431,11 @@ valk_future *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
 /// @param srv The HTTP/2 server
 /// @param handler_fn Lisp lambda (GC heap allocated) with signature (lambda {req k} ...)
 void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_fn);
+
+/// @brief Get the actual bound port (useful when listening on port 0)
+/// @param srv The HTTP/2 server
+/// @return The actual port number the server is listening on
+int valk_aio_http2_server_get_port(valk_aio_http_server *srv);
 
 /// @return returns a future with a boxed `unit`
 ///

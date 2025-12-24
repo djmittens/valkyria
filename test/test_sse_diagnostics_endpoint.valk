@@ -1,7 +1,7 @@
 (load "src/prelude.valk")
 (load "src/modules/aio/debug.valk")
 
-(def {TEST_PORT} 8497)
+(def {TEST_PORT} (net/get-available-port))
 (def {aio} (aio/start))
 (def {test-passed} 0)
 (def {handler-called} 0)

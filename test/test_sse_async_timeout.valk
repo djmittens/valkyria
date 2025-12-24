@@ -1,7 +1,7 @@
 (load "src/prelude.valk")
 (load "src/modules/aio/sse.valk")
 
-(def {TEST_PORT} 8498)
+(def {TEST_PORT} (net/get-available-port))
 (def {aio} (aio/start))
 (def {test-passed} 0)
 (def {sse-stream-created} 0)

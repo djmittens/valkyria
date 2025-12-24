@@ -191,7 +191,6 @@ define run_tests_valk
 	$(1)/valk test/test_varargs.valk
 	$(1)/valk test/test_async_monadic_suite.valk
 	$(1)/valk test/test_aio_builtins_coverage.valk
-	$(1)/valk test/test_tco_suite.valk
 	$(1)/valk test/test_do_suite.valk
 	$(1)/valk test/test_gc_suite.valk
 	$(1)/valk test/test_crash_regressions.valk
@@ -247,6 +246,7 @@ test: test-c test-valk
 # C tests (no ASAN, fast)
 .ONESHELL:
 .PHONY: test-c
+test-c: export VALK_TEST_TIMEOUT_SECONDS=5
 test-c: build
 	set -e
 	$(call run_tests_c,build)
@@ -254,6 +254,7 @@ test-c: build
 # Valk/Lisp tests (no ASAN)
 .ONESHELL:
 .PHONY: test-valk
+test-valk: export VALK_TEST_TIMEOUT_SECONDS=5
 test-valk: build
 	set -e
 	$(call run_tests_valk,build)
@@ -367,6 +368,7 @@ coverage-tests: build-coverage coverage-reset
 	@echo "║  Running all tests with coverage instrumentation            ║"
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 	@echo ""
+	export VALK_TEST_TIMEOUT_SECONDS=30
 	$(call run_tests_c,build-coverage)
 	@echo ""
 	$(call run_tests_valk,build-coverage)

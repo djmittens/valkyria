@@ -111,9 +111,6 @@ void test_server_start_initializes_slabs(VALK_TEST_ARGS()) {
   valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
   ASSERT_NOT_NULL(sys);
 
-  int port = get_available_port();
-  ASSERT_GT(port, 0);
-
   valk_srv_state_t state = {0};
   valk_http2_handler_t handler = {
       .arg = &state,
@@ -124,7 +121,7 @@ void test_server_start_initializes_slabs(VALK_TEST_ARGS()) {
   };
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
   valk_arc_box *server = valk_future_await(fserv);
   ASSERT_EQ(server->type, VALK_SUC);
 
@@ -150,9 +147,6 @@ void test_multiple_connections(VALK_TEST_ARGS()) {
   valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
   ASSERT_NOT_NULL(sys);
 
-  int port = get_available_port();
-  ASSERT_GT(port, 0);
-
   valk_srv_state_t state = {0};
   valk_http2_handler_t handler = {
       .arg = &state,
@@ -163,9 +157,11 @@ void test_multiple_connections(VALK_TEST_ARGS()) {
   };
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
   valk_arc_box *server = valk_future_await(fserv);
   ASSERT_EQ(server->type, VALK_SUC);
+
+  int port = valk_aio_http2_server_get_port(server->item);
 
   valk_arc_box *clients[4];
   valk_future *futures[4];
@@ -224,9 +220,6 @@ void test_connection_with_request_response(VALK_TEST_ARGS()) {
   valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
   ASSERT_NOT_NULL(sys);
 
-  int port = get_available_port();
-  ASSERT_GT(port, 0);
-
   valk_srv_state_t state = {0};
   valk_http2_handler_t handler = {
       .arg = &state,
@@ -237,9 +230,11 @@ void test_connection_with_request_response(VALK_TEST_ARGS()) {
   };
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
   valk_arc_box *server = valk_future_await(fserv);
   ASSERT_EQ(server->type, VALK_SUC);
+
+  int port = valk_aio_http2_server_get_port(server->item);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);

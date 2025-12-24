@@ -176,17 +176,16 @@ void test_basic_server_c_handler(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_aio_system_t *sys = start_demo_server();
-  int port = get_available_port();
-  VALK_ASSERT(port > 0, "Failed to get available port");
 
   // Use demo handler
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
   valk_arc_box *server = valk_future_await(fserv);
   VALK_TEST_ASSERT(server->type == VALK_SUC, "Server should start successfully");
+  int port = valk_aio_http2_server_get_port(server->item);
 
   // Send request
   test_response_t resp = send_request(sys, port, "GET", "/");
@@ -211,16 +210,15 @@ void test_multiple_requests(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_aio_system_t *sys = start_demo_server();
-  int port = get_available_port();
-  VALK_ASSERT(port > 0, "Failed to get available port");
 
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
   valk_arc_box *server = valk_future_await(fserv);
   VALK_TEST_ASSERT(server->type == VALK_SUC, "Server should start successfully");
+  int port = valk_aio_http2_server_get_port(server->item);
 
   // Send 5 requests
   for (int i = 0; i < 5; i++) {
@@ -258,16 +256,14 @@ void test_custom_config(VALK_TEST_ARGS()) {
   valk_aio_system_t *sys = valk_aio_start_with_config(&config);
   VALK_TEST_ASSERT(sys != NULL, "AIO system should start with custom config");
 
-  int port = get_available_port();
-  VALK_ASSERT(port > 0, "Failed to get available port");
-
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
   valk_arc_box *server = valk_future_await(fserv);
   VALK_TEST_ASSERT(server->type == VALK_SUC, "Server should start with custom config");
+  int port = valk_aio_http2_server_get_port(server->item);
 
   test_response_t resp = send_request(sys, port, "GET", "/");
   VALK_TEST_ASSERT(resp.success, "Request should succeed with custom config");
@@ -289,15 +285,14 @@ void test_aio_metrics(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_aio_system_t *sys = start_demo_server();
-  int port = get_available_port();
-  VALK_ASSERT(port > 0, "Failed to get available port");
 
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
   valk_arc_box *server = valk_future_await(fserv);
+  int port = valk_aio_http2_server_get_port(server->item);
 
   // Get metrics before any requests
   valk_aio_metrics_t *metrics = valk_aio_get_metrics(sys);
@@ -335,13 +330,11 @@ void test_system_stats(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_aio_system_t *sys = start_demo_server();
-  int port = get_available_port();
-  VALK_ASSERT(port > 0, "Failed to get available port");
 
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
   valk_arc_box *server = valk_future_await(fserv);
 
@@ -368,15 +361,14 @@ void test_metrics_json_rendering(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_aio_system_t *sys = start_demo_server();
-  int port = get_available_port();
-  VALK_ASSERT(port > 0, "Failed to get available port");
 
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
   valk_arc_box *server = valk_future_await(fserv);
+  int port = valk_aio_http2_server_get_port(server->item);
 
   // Send a request to generate metrics
   test_response_t resp = send_request(sys, port, "GET", "/");
@@ -413,15 +405,14 @@ void test_metrics_prometheus_rendering(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_aio_system_t *sys = start_demo_server();
-  int port = get_available_port();
-  VALK_ASSERT(port > 0, "Failed to get available port");
 
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
   valk_arc_box *server = valk_future_await(fserv);
+  int port = valk_aio_http2_server_get_port(server->item);
 
   // Send a request
   test_response_t resp = send_request(sys, port, "GET", "/");
@@ -585,14 +576,13 @@ void test_connection_states(VALK_TEST_ARGS()) {
   };
 
   valk_aio_system_t *sys = start_demo_server();
-  int port = get_available_port();
-  VALK_ASSERT(port > 0, "Failed to get available port");
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
 
   valk_arc_box *server = valk_future_await(fserv);
   VALK_TEST_ASSERT(server->type == VALK_SUC, "Server should start");
+  int port = valk_aio_http2_server_get_port(server->item);
 
   // Initial state
   VALK_TEST_ASSERT(__atomic_load_n(&state.connectedCount, __ATOMIC_ACQUIRE) == 0,
@@ -623,24 +613,23 @@ void test_multiple_servers(VALK_TEST_ARGS()) {
 
   valk_aio_system_t *sys = start_demo_server();
 
-  int port1 = get_available_port();
-  int port2 = get_available_port();
-  VALK_ASSERT(port1 > 0 && port2 > 0, "Failed to get available ports");
-  VALK_ASSERT(port1 != port2, "Ports should be different");
-
   valk_http2_handler_t *handler = get_noop_handler();
 
-  // Start two servers
+  // Start two servers with OS-assigned ports
   valk_future *fserv1 = valk_aio_http2_listen(
-      sys, "0.0.0.0", port1, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
   valk_future *fserv2 = valk_aio_http2_listen(
-      sys, "0.0.0.0", port2, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
   valk_arc_box *server1 = valk_future_await(fserv1);
   valk_arc_box *server2 = valk_future_await(fserv2);
 
   VALK_TEST_ASSERT(server1->type == VALK_SUC, "Server 1 should start");
   VALK_TEST_ASSERT(server2->type == VALK_SUC, "Server 2 should start");
+  
+  int port1 = valk_aio_http2_server_get_port(server1->item);
+  int port2 = valk_aio_http2_server_get_port(server2->item);
+  VALK_TEST_ASSERT(port1 != port2, "Ports should be different");
 
   // Request to both servers
   test_response_t resp1 = send_request(sys, port1, "GET", "/");

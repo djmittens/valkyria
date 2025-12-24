@@ -152,17 +152,20 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
     printf("🏃 Running: %s\n", self->name);
     self->func(suite, &self->result);
 
+    fflush(stdout);
+    fflush(stderr);
+
     uint8_t *p = (void *)&self->result;
     size_t size = sizeof(self->result);
 
-    // write  out the result
     while (size) {
-      size_t n = fwrite(p, 1, size, stderr);
+      ssize_t n = write(STDERR_FILENO, p, size);
+      if (n <= 0) break;
       p += n;
-      size -= n;
+      size -= (size_t)n;
     }
 
-    exit(0);
+    _exit(0);
   }
 
   // parent
@@ -180,8 +183,7 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
 }
 
 void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
-  // Default 30 second timeout, configurable via VALK_TEST_TIMEOUT_SECONDS
-  int timeoutSeconds = 30;
+  int timeoutSeconds = 10;
   const char *env_timeout = getenv("VALK_TEST_TIMEOUT_SECONDS");
   if (env_timeout) {
     int val = atoi(env_timeout);
@@ -221,6 +223,7 @@ void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
         // No data available, continue
       } else if (n == 0) {
         // EOF on stdout
+        fds[0].fd = -1;
       } else {
         perror("read stdout");
         break;
@@ -234,20 +237,27 @@ void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
         // No data available, continue
       } else if (n == 0) {
         // EOF on stderr
+        fds[1].fd = -1;
       } else {
         perror("read stderr");
         break;
       }
     }
-    // Check for hangup on both pipes (child exited)
-    if ((fds[0].revents & (POLLHUP | POLLERR)) &&
-        (fds[1].revents & (POLLHUP | POLLERR))) {
+    // On POLLHUP without POLLIN, mark FD as done (no more data coming)
+    if ((fds[0].revents & POLLHUP) && !(fds[0].revents & POLLIN)) {
+      fds[0].fd = -1;
+    }
+    if ((fds[1].revents & POLLHUP) && !(fds[1].revents & POLLIN)) {
+      fds[1].fd = -1;
+    }
+    // Exit when both FDs are closed/invalid
+    if (fds[0].fd < 0 && fds[1].fd < 0) {
       break;
     }
   }
 
-  close(fds[0].fd);
-  close(fds[1].fd);
+  if (fds[0].fd >= 0) close(fds[0].fd);
+  if (fds[1].fd >= 0) close(fds[1].fd);
 
   if (timedOut) {
     // Timeout was reached - kill the child process
@@ -401,7 +411,7 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
         printf("🐞 %s%.*s  FAIL : in %" PRIu64 "(%s)\n", test->name, len - 3,
                DOT_FILL, (result->stopTime - result->startTime), precision);
 
-#ifdef VALK_TEST_FORK
+#if VALK_TEST_FORK
         valk_print_io(test);
 #endif
 
@@ -411,7 +421,7 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
         printf("🌀 %s%.*s  CRSH : in %" PRIu64 "(%s)\n", test->name, len - 3,
                DOT_FILL, (result->stopTime - result->startTime), precision);
 
-#ifdef VALK_TEST_FORK
+#if VALK_TEST_FORK
         valk_print_io(test);
 #endif
         break;

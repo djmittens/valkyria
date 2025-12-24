@@ -376,7 +376,6 @@ void test_aio_is_shutting_down_null(VALK_TEST_ARGS()) {
 
 int main(void) {
   valk_mem_init_malloc();
-  valk_aio_alloc_init();
 
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 

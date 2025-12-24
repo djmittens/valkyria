@@ -47,9 +47,7 @@ typedef struct {
 } test_context_t;
 
 // Initialize test context with Lisp handler
-static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS(), int port) {
-  ctx->port = port;
-
+static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   // Initialize GC heap for Lisp evaluation
   size_t const GC_THRESHOLD_BYTES = 256 * 1024 * 1024;  // 256 MiB for large responses
   ctx->gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES, 0);
@@ -101,14 +99,11 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS(), int port) {
   // Switch back to malloc allocator before AIO calls
   valk_thread_ctx.allocator = ctx->saved_alloc;
 
-  // Start AIO system and server
+  // Start AIO system and server with port 0 for OS-assigned port
   ctx->sys = valk_aio_start();
 
-  char port_str[16];
-  snprintf(port_str, sizeof(port_str), "%d", port);
-
   ctx->fserv = valk_aio_http2_listen(
-      ctx->sys, "0.0.0.0", port, "build/server.key", "build/server.crt",
+      ctx->sys, "0.0.0.0", 0, "build/server.key", "build/server.crt",
       NULL, ctx->handler_fn);
 
   ctx->server = valk_future_await(ctx->fserv);
@@ -117,8 +112,11 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS(), int port) {
     return false;
   }
 
+  // Get the actual port assigned by the OS
+  ctx->port = valk_aio_http2_server_get_port(ctx->server->item);
+
   // Connect client
-  ctx->fclient = valk_aio_http2_connect(ctx->sys, "127.0.0.1", port, "");
+  ctx->fclient = valk_aio_http2_connect(ctx->sys, "127.0.0.1", ctx->port, "");
   ctx->clientBox = valk_future_await(ctx->fclient);
 
   if (ctx->clientBox->type != VALK_SUC) {
@@ -223,7 +221,7 @@ void test_response_2mb(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   test_context_t ctx = {0};
-  if (!init_test_context(&ctx, _suite, _result, 6971)) {
+  if (!init_test_context(&ctx, _suite, _result)) {
     cleanup_test_context(&ctx);
     return;
   }
@@ -241,7 +239,7 @@ void test_response_10mb(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   test_context_t ctx = {0};
-  if (!init_test_context(&ctx, _suite, _result, 6972)) {
+  if (!init_test_context(&ctx, _suite, _result)) {
     cleanup_test_context(&ctx);
     return;
   }
@@ -259,7 +257,7 @@ void test_response_50mb(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   test_context_t ctx = {0};
-  if (!init_test_context(&ctx, _suite, _result, 6973)) {
+  if (!init_test_context(&ctx, _suite, _result)) {
     cleanup_test_context(&ctx);
     return;
   }
@@ -277,7 +275,7 @@ void test_multiple_large_responses(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   test_context_t ctx = {0};
-  if (!init_test_context(&ctx, _suite, _result, 6974)) {
+  if (!init_test_context(&ctx, _suite, _result)) {
     cleanup_test_context(&ctx);
     return;
   }
@@ -316,7 +314,7 @@ void test_response_small(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   test_context_t ctx = {0};
-  if (!init_test_context(&ctx, _suite, _result, 6975)) {
+  if (!init_test_context(&ctx, _suite, _result)) {
     cleanup_test_context(&ctx);
     return;
   }

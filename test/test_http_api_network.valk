@@ -16,8 +16,8 @@
 
 (load "src/http_api.valk")
 
-; Test server port - use unique port to avoid conflicts
-(def {TEST_PORT} 8477)
+; Test server port - dynamically allocated to avoid conflicts
+(def {TEST_PORT} (net/get-available-port))
 
 ; Create the AIO system
 (def {aio} (aio/start))

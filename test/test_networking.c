@@ -22,9 +22,6 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
 
   VALK_TEST();
 
-  int port = get_available_port();
-  VALK_ASSERT(port > 0, "Failed to get available port");
-
   valk_srv_state_t arg = {0};
   valk_http2_handler_t handler = {
       .arg = &arg,
@@ -53,9 +50,11 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   }
 
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
 
   valk_arc_box *server = valk_future_await(fserv);
+  VALK_ASSERT(server->type == VALK_SUC, "Failed to start server: %s", (char*)server->item);
+  int port = valk_aio_http2_server_get_port(server->item);
 
   valk_future *fut = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   printf("Arc count of fut : %ld\n", fut->refcount);
@@ -138,9 +137,6 @@ void test_tcp_client_disconnect(VALK_TEST_ARGS()) {
   valk_aio_system_t *sys = valk_aio_start();
   VALK_TEST();
 
-  int port = get_available_port();
-  VALK_ASSERT(port > 0, "Failed to get available port");
-
   valk_srv_state_t arg = {0};
   valk_http2_handler_t handler = {
       .arg = &arg,
@@ -151,7 +147,7 @@ void test_tcp_client_disconnect(VALK_TEST_ARGS()) {
   };
 
   valk_arc_box *res = valk_future_await(valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL));
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL));
   valk_arc_release(res);
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
@@ -226,14 +222,9 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   // Start AIO system
   valk_aio_system_t *sys = valk_aio_start();
 
-  // Get an available port for this test
-  int port = get_available_port();
-  VALK_ASSERT(port > 0, "Failed to get available port");
-
-  // Start server with Lisp handler
-  printf("[test] Starting server on port %d...\n", port);
+  // Start server with Lisp handler on port 0 (OS assigns port)
   valk_future *fserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt",
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt",
       NULL, handler_fn);  // Pass Lisp handler
 
   valk_arc_box *server = valk_future_await(fserv);
@@ -245,7 +236,8 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
     valk_aio_wait_for_shutdown(sys);
     return;
   }
-  printf("[test] Server started\n");
+  int port = valk_aio_http2_server_get_port(server->item);
+  printf("[test] Server started on port %d\n", port);
 
   // Connect client
   printf("[test] Connecting client...\n");

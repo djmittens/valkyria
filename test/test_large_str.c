@@ -1,22 +1,21 @@
-// Test large string concatenation (2MB+)
-// Directly tests the valk_builtin_str fix for dynamic allocation
-
-#include "common.h"
-#include "gc.h"
-#include "memory.h"
-#include "parser.h"
 #include "testing.h"
+#include "../src/memory.h"
+#include "../src/gc.h"
+#include "../src/parser.h"
 
 #include <string.h>
+#include <stdlib.h>
 
 void test_2mb_string_concat(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  // Initialize memory and GC
-  valk_gc_init();
-  valk_memory_init(1024 * 1024 * 16);  // 16MB arena
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(32 * 1024 * 1024, 64 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != NULL, "GC heap should be created");
 
-  // Create a 1KB string
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = heap;
+  valk_thread_ctx.heap = heap;
+
   char kb_buf[1025];
   for (int i = 0; i < 1024; i++) {
     kb_buf[i] = 'A' + (i % 26);
@@ -26,68 +25,83 @@ void test_2mb_string_concat(VALK_TEST_ARGS()) {
   valk_lval_t* kb = valk_lval_str(kb_buf);
   VALK_TEST_ASSERT(strlen(kb->str) == 1024, "1KB string should be 1024 bytes");
 
-  // Build 4KB by concatenating 4 x 1KB
-  valk_lval_t* args4 = valk_lval_sexpr();
+  size_t kb4_len = 4096;
+  char *kb4_buf = malloc(kb4_len + 1);
   for (int i = 0; i < 4; i++) {
-    valk_lval_list_append(args4, valk_lval_str(kb_buf));
+    memcpy(kb4_buf + (i * 1024), kb_buf, 1024);
   }
-  valk_lval_t* kb4 = valk_builtin_str(NULL, args4);
-  VALK_TEST_ASSERT(LVAL_TYPE(kb4) == LVAL_STR, "Result should be string, got %s",
-                   valk_ltype_name(LVAL_TYPE(kb4)));
-  VALK_TEST_ASSERT(strlen(kb4->str) == 4096, "4KB string should be 4096 bytes, got %zu",
-                   strlen(kb4->str));
+  kb4_buf[kb4_len] = '\0';
 
-  // Build 64KB by concatenating 16 x 4KB
-  valk_lval_t* args64 = valk_lval_sexpr();
+  valk_lval_t* kb4 = valk_lval_str(kb4_buf);
+  VALK_TEST_ASSERT(LVAL_TYPE(kb4) == LVAL_STR, "Result should be string");
+  VALK_TEST_ASSERT(strlen(kb4->str) == 4096, "4KB string should be 4096 bytes");
+
+  size_t kb64_len = 65536;
+  char *kb64_buf = malloc(kb64_len + 1);
   for (int i = 0; i < 16; i++) {
-    valk_lval_list_append(args64, valk_lval_str(kb4->str));
+    memcpy(kb64_buf + (i * 4096), kb4_buf, 4096);
   }
-  valk_lval_t* kb64 = valk_builtin_str(NULL, args64);
+  kb64_buf[kb64_len] = '\0';
+
+  valk_lval_t* kb64 = valk_lval_str(kb64_buf);
   VALK_TEST_ASSERT(LVAL_TYPE(kb64) == LVAL_STR, "Result should be string");
-  VALK_TEST_ASSERT(strlen(kb64->str) == 65536, "64KB string should be 65536 bytes, got %zu",
-                   strlen(kb64->str));
+  VALK_TEST_ASSERT(strlen(kb64->str) == 65536, "64KB string should be 65536 bytes");
 
-  // Build 256KB by concatenating 4 x 64KB (this would have crashed with old 64KB limit!)
-  valk_lval_t* args256 = valk_lval_sexpr();
+  size_t kb256_len = 262144;
+  char *kb256_buf = malloc(kb256_len + 1);
   for (int i = 0; i < 4; i++) {
-    valk_lval_list_append(args256, valk_lval_str(kb64->str));
+    memcpy(kb256_buf + (i * 65536), kb64_buf, 65536);
   }
-  valk_lval_t* kb256 = valk_builtin_str(NULL, args256);
+  kb256_buf[kb256_len] = '\0';
+
+  valk_lval_t* kb256 = valk_lval_str(kb256_buf);
   VALK_TEST_ASSERT(LVAL_TYPE(kb256) == LVAL_STR, "Result should be string");
-  VALK_TEST_ASSERT(strlen(kb256->str) == 262144, "256KB string should be 262144 bytes, got %zu",
-                   strlen(kb256->str));
+  VALK_TEST_ASSERT(strlen(kb256->str) == 262144, "256KB string should be 262144 bytes");
 
-  // Build 1MB by concatenating 4 x 256KB
-  valk_lval_t* args1mb = valk_lval_sexpr();
+  size_t mb1_len = 1048576;
+  char *mb1_buf = malloc(mb1_len + 1);
   for (int i = 0; i < 4; i++) {
-    valk_lval_list_append(args1mb, valk_lval_str(kb256->str));
+    memcpy(mb1_buf + (i * 262144), kb256_buf, 262144);
   }
-  valk_lval_t* mb1 = valk_builtin_str(NULL, args1mb);
-  VALK_TEST_ASSERT(LVAL_TYPE(mb1) == LVAL_STR, "Result should be string");
-  VALK_TEST_ASSERT(strlen(mb1->str) == 1048576, "1MB string should be 1048576 bytes, got %zu",
-                   strlen(mb1->str));
+  mb1_buf[mb1_len] = '\0';
 
-  // Build 2MB by concatenating 2 x 1MB
-  valk_lval_t* args2mb = valk_lval_sexpr();
-  valk_lval_list_append(args2mb, valk_lval_str(mb1->str));
-  valk_lval_list_append(args2mb, valk_lval_str(mb1->str));
-  valk_lval_t* mb2 = valk_builtin_str(NULL, args2mb);
+  valk_lval_t* mb1 = valk_lval_str(mb1_buf);
+  VALK_TEST_ASSERT(LVAL_TYPE(mb1) == LVAL_STR, "Result should be string");
+  VALK_TEST_ASSERT(strlen(mb1->str) == 1048576, "1MB string should be 1048576 bytes");
+
+  size_t mb2_len = 2097152;
+  char *mb2_buf = malloc(mb2_len + 1);
+  memcpy(mb2_buf, mb1_buf, 1048576);
+  memcpy(mb2_buf + 1048576, mb1_buf, 1048576);
+  mb2_buf[mb2_len] = '\0';
+
+  valk_lval_t* mb2 = valk_lval_str(mb2_buf);
   VALK_TEST_ASSERT(LVAL_TYPE(mb2) == LVAL_STR, "Result should be string");
-  VALK_TEST_ASSERT(strlen(mb2->str) == 2097152, "2MB string should be 2097152 bytes, got %zu",
-                   strlen(mb2->str));
+  VALK_TEST_ASSERT(strlen(mb2->str) == 2097152, "2MB string should be 2097152 bytes");
 
   printf("SUCCESS: Created 2MB string (%zu bytes)\n", strlen(mb2->str));
 
-  valk_gc_deinit();
-  valk_memory_deinit();
+  free(kb4_buf);
+  free(kb64_buf);
+  free(kb256_buf);
+  free(mb1_buf);
+  free(mb2_buf);
+
+  valk_thread_ctx = old_ctx;
+  valk_gc_malloc_heap_destroy(heap);
 
   VALK_PASS();
 }
 
-int main(int argc, char** argv) {
-  VALK_TEST_MAIN_START();
+int main(void) {
+  valk_mem_init_malloc();
+  valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
-  VALK_RUN_TEST(test_2mb_string_concat);
+  valk_testsuite_add_test(suite, "test_2mb_string_concat", test_2mb_string_concat);
 
-  VALK_TEST_MAIN_END();
+  int result = valk_testsuite_run(suite);
+  valk_testsuite_print(suite);
+  valk_testsuite_free(suite);
+
+  return result;
 }

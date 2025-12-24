@@ -28,8 +28,8 @@
             (printf "  ❌ %s: FAIL (got status=%s body=%s)\n" name status body))}))})
 })
 
-; Test port
-(def {TEST_PORT} 8471)
+; Test port - dynamically allocated to avoid conflicts
+(def {TEST_PORT} (net/get-available-port))
 
 ; Create AIO system
 (def {aio} (aio/start))

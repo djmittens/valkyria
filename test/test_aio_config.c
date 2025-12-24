@@ -15,8 +15,12 @@ void test_config_defaults(VALK_TEST_ARGS()) {
                    "Default max_connections should be 100, got %u", cfg.max_connections);
   VALK_TEST_ASSERT(cfg.max_concurrent_streams == 100,
                    "Default max_concurrent_streams should be 100, got %u", cfg.max_concurrent_streams);
+  VALK_TEST_ASSERT(cfg.max_connections_per_client == 2,
+                   "Default max_connections_per_client should be 2, got %u", cfg.max_connections_per_client);
 
-  uint32_t expected_tcp = 100 * (2 + 100/8);
+  size_t server_conns = cfg.max_servers * cfg.max_connections;
+  size_t client_conns = cfg.max_clients * cfg.max_connections_per_client;
+  uint32_t expected_tcp = (uint32_t)((server_conns + client_conns) * 4);
   VALK_TEST_ASSERT(cfg.tcp_buffer_pool_size == expected_tcp,
                    "Default tcp_buffer_pool_size should be %u, got %u", expected_tcp, cfg.tcp_buffer_pool_size);
 
@@ -24,6 +28,13 @@ void test_config_defaults(VALK_TEST_ARGS()) {
                    "Default arena_size should be 64MB, got %zu", cfg.arena_size);
   VALK_TEST_ASSERT(cfg.max_request_body_size == 8 * 1024 * 1024,
                    "Default max_request_body_size should be 8MB, got %zu", cfg.max_request_body_size);
+
+  VALK_TEST_ASSERT(cfg.connection_idle_timeout_ms == 60000,
+                   "Default connection_idle_timeout_ms should be 60000, got %u", cfg.connection_idle_timeout_ms);
+  VALK_TEST_ASSERT(cfg.pending_stream_timeout_ms == 10000,
+                   "Default pending_stream_timeout_ms should be 10000, got %u", cfg.pending_stream_timeout_ms);
+  VALK_TEST_ASSERT(cfg.maintenance_interval_ms == 1000,
+                   "Default maintenance_interval_ms should be 1000, got %u", cfg.maintenance_interval_ms);
 
   VALK_PASS();
 }
@@ -37,7 +48,9 @@ void test_config_derivation_streams(VALK_TEST_ARGS()) {
 
   valk_aio_system_config_resolve(&cfg);
 
-  uint32_t expected_tcp = 500 * (2 + 50/8);
+  size_t server_conns = cfg.max_servers * cfg.max_connections;
+  size_t client_conns = cfg.max_clients * cfg.max_connections_per_client;
+  uint32_t expected_tcp = (uint32_t)((server_conns + client_conns) * 4);
   VALK_TEST_ASSERT(cfg.tcp_buffer_pool_size == expected_tcp,
                    "tcp_buffer_pool_size should be %u, got %u", expected_tcp, cfg.tcp_buffer_pool_size);
 

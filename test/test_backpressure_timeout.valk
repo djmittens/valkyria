@@ -9,7 +9,7 @@
 
 (load "src/prelude.valk")
 
-(def {TEST_PORT} 8492)
+(def {TEST_PORT} (net/get-available-port))
 
 ; Small buffer pool to force backpressure
 (def {aio} (aio/start {

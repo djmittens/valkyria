@@ -4,14 +4,16 @@
 
 (load "src/prelude.valk")
 
-(def {TEST_PORT} 8494)
+(def {TEST_PORT} (net/get-available-port))
 
-; Use a more reasonable arena pool 
+; Use adequate buffer pools for per-connection buffer model
+; Each connection holds 1 read buffer until close, so we need 2 * max-connections
 (def {aio} (aio/start {
-  :max-connections 8
-  :arena-pool-size 4
+  :max-connections 16
+  :tcp-buffer-pool-size 48
+  :arena-pool-size 8
   :arena-size 1048576
-  :pending-stream-pool-size 16
+  :pending-stream-pool-size 32
 }))
 
 (def {requests-started} 0)
@@ -30,7 +32,7 @@
 (println "")
 (println "=== Pending Streams Coverage Test ===")
 (println "")
-(printf "Config: arena-pool-size=4, pending-stream-pool-size=16\n")
+(printf "Config: tcp-buffer-pool-size=48, arena-pool-size=8, pending-stream-pool-size=32\n")
 (printf "Starting server on port %d\n" TEST_PORT)
 (http2/server-listen aio TEST_PORT handler)
 

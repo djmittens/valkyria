@@ -896,12 +896,50 @@ void test_multiple_futures_concurrent(VALK_TEST_ARGS()) {
 
 void test_pool_resolve_promise(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP("valk_pool_resolve_promise has a known race condition - internal future released before resolution");
+
+  valk_worker_pool pool = {0};
+  valk_start_pool(&pool);
+
+  valk_future *fut = valk_future_new();
+  valk_promise p = {.item = fut};
+
+  valk_arc_box *result = valk_arc_box_new(VALK_SUC, sizeof(int));
+  *(int *)result->item = 42;
+
+  valk_pool_resolve_promise(&pool, &p, result);
+
+  VALK_TEST_ASSERT(fut->done == 1, "Future should be resolved");
+  VALK_TEST_ASSERT(fut->item == result, "Future item should be the result");
+  VALK_TEST_ASSERT(*(int *)fut->item->item == 42, "Value should be 42");
+
+  valk_arc_release(result);
+  valk_arc_release(fut);
+  valk_free_pool(&pool);
+
+  VALK_PASS();
 }
 
 void test_pool_resolve_promise_with_error(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP("valk_pool_resolve_promise has a known race condition - internal future released before resolution");
+
+  valk_worker_pool pool = {0};
+  valk_start_pool(&pool);
+
+  valk_future *fut = valk_future_new();
+  valk_promise p = {.item = fut};
+
+  valk_arc_box *err_result = valk_arc_box_err("Test error");
+
+  valk_pool_resolve_promise(&pool, &p, err_result);
+
+  VALK_TEST_ASSERT(fut->done == 1, "Future should be resolved");
+  VALK_TEST_ASSERT(fut->item->type == VALK_ERR, "Result should be error type");
+
+  valk_arc_release(err_result);
+  valk_arc_release(fut);
+  valk_free_pool(&pool);
+
+  VALK_PASS();
 }
 
 void test_free_pool_with_items_in_queue(VALK_TEST_ARGS()) {

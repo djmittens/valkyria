@@ -165,12 +165,17 @@ valk_arc_box *valk_future_await_timeout(valk_future *self, uint32_t msec) {
   int ret = pthread_cond_timedwait(&self->resolved, &self->mutex, &ts);
 
   if (ret == ETIMEDOUT) {
+    int old = __atomic_fetch_add(&self->done, 1, __ATOMIC_ACQ_REL);
+    if (old) {
+      pthread_mutex_unlock(&self->mutex);
+      res = self->item;
+      valk_arc_retain(res);
+      valk_arc_release(self);
+      return res;
+    }
     char buf[1000];
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     sprintf(buf, "Timeout [%u ms] reached waiting for future", msec);
-    // TODO(networking): figure out error codes across the system for the
-    // language
-    self->done = 1;
     self->item = valk_arc_box_err(buf);
     pthread_cond_signal(&self->resolved);
   } else if (ret != 0) {
@@ -451,7 +456,11 @@ void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
   __valk_resolve_promise *pair = arg->item;
   pair->promise = promise;
   pair->result = result;
+  valk_arc_retain(result);
 
   valk_future *res = valk_schedule(pool, arg, __valk_pool_resolve_promise_cb);
-  valk_arc_release(res);  // dont need the result
+  valk_arc_retain(res);
+  valk_arc_box *completion = valk_future_await(res);
+  valk_arc_release(completion);
+  valk_arc_release(res);
 }
