@@ -3,7 +3,7 @@
 #include "../../src/parser.h"
 
 #ifdef VALK_METRICS_ENABLED
-#include "../../src/aio_sse.h"
+#include "../../src/aio/aio_sse.h"
 
 #include <stdio.h>
 #include <stdlib.h>

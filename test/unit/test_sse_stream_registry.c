@@ -7,8 +7,8 @@
 #include <string.h>
 
 #ifdef VALK_METRICS_ENABLED
-#include "../../src/aio.h"
-#include "../../src/aio_sse_stream_registry.h"
+#include "../../src/aio/aio.h"
+#include "../../src/aio/aio_sse_stream_registry.h"
 
 static valk_aio_system_t *create_test_aio_system(void) {
   valk_aio_system_config_t cfg = valk_aio_config_demo();

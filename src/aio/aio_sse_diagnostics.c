@@ -11,11 +11,11 @@
 #include "aio_alloc.h"
 #include "aio_metrics.h"
 #include "aio_sse_stream_registry.h"
-#include "common.h"
-#include "gc.h"
-#include "log.h"
-#include "memory.h"
-#include "metrics_v2.h"
+#include "../common.h"
+#include "../gc.h"
+#include "../log.h"
+#include "../memory.h"
+#include "../metrics_v2.h"
 #include "metrics_delta.h"
 
 // ============================================================================

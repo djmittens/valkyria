@@ -1,18 +1,11 @@
 #pragma once
 
 #include <stddef.h>
-#include "concurrency.h"
-#include "memory.h"
+#include "../concurrency.h"
+#include "../memory.h"
+#include "aio_types.h"
 
 #define VALK_HTTP_MOTD "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Valkyria HTTP/2 Server</title><style>body{font-family:system-ui,sans-serif;max-width:800px;margin:80px auto;padding:0 20px;background:#0a0e27;color:#e0e0e0}h1{color:#00d9ff;font-size:3em;margin-bottom:0.2em}p{font-size:1.2em;line-height:1.6;color:#b0b0b0}code{background:#1a1e3a;padding:2px 8px;border-radius:4px;color:#00d9ff}</style></head><body><h1>\u269C Valkyria</h1><p>Valhalla's Treasure - HTTP/2 Server</p><p>This is a <code>Valkyria Lisp</code> web server running on nghttp2 with TLS.</p><p style=\"margin-top:40px;font-size:0.9em;opacity:0.7\">Server is operational and ready to handle requests.</p></body></html>"
-
-typedef struct valk_aio_system valk_aio_system_t;
-typedef struct valk_aio_system_config valk_aio_system_config_t;
-
-typedef struct valk_aio_http_server valk_aio_http_server;
-typedef struct valk_aio_http2_client valk_aio_http2_client;
-typedef struct valk_aio_handle_t valk_aio_handle_t;
-typedef struct valk_async_handle_t valk_async_handle_t;
 
 // Forward declarations for libuv types
 typedef struct uv_timer_s uv_timer_t;
@@ -23,66 +16,36 @@ struct valk_lval_t;
 struct valk_lenv_t;
 struct valk_mem_arena;
 
-// ============================================================================
-// Async Handle Status
-// ============================================================================
-
-typedef enum valk_async_status_t {
-  VALK_ASYNC_PENDING,     // Created but not started
-  VALK_ASYNC_RUNNING,     // Operation in progress
-  VALK_ASYNC_COMPLETED,   // Finished successfully
-  VALK_ASYNC_FAILED,      // Finished with error
-  VALK_ASYNC_CANCELLED,   // Cancelled before completion
-} valk_async_status_t;
-
-// Callback types for async handle completion notification
-typedef void (*valk_async_done_fn)(struct valk_async_handle_t *handle, void *ctx);
-typedef bool (*valk_async_is_closed_fn)(void *ctx);
-
 // Async handle - represents an in-flight async operation
 // This is the main structure for composable async operations.
 //
 // The async system is decoupled from specific I/O layers (HTTP, files, etc).
 // Each layer registers callbacks to handle completion and detect cancellation.
 struct valk_async_handle_t {
-  // Identity
   uint64_t id;
   valk_async_status_t status;
 
-  // Cancellation (use atomic operations on this field)
   int cancel_requested;
 
-  // libuv integration (opaque - actual uv handles are in aio_uv.c)
   void *uv_handle_ptr;
   void *loop;
 
-  // Transform callbacks (Lisp lambdas for aio/then, aio/catch, etc.)
-  struct valk_lval_t *on_complete;       // (\ {result} ...) - transform on success
-  struct valk_lval_t *on_error;          // (\ {error} ...) - transform on error
-  struct valk_lval_t *on_cancel;         // (\ {} ...) - cleanup on cancel
-  struct valk_lenv_t *env;               // Environment for callback evaluation
+  struct valk_lval_t *on_complete;
+  struct valk_lval_t *on_error;
+  struct valk_lval_t *on_cancel;
+  struct valk_lenv_t *env;
 
-  // Result storage
-  struct valk_lval_t *result;            // Success value (or nil)
-  struct valk_lval_t *error;             // Error value (or nil)
+  struct valk_lval_t *result;
+  struct valk_lval_t *error;
 
-  // Memory management - allocator for transform function execution
-  // Set by the I/O layer: HTTP uses stream arena, others use malloc
   valk_mem_allocator_t *allocator;
 
-  // Generic completion callback - called when handle reaches terminal state
-  // This replaces HTTP-specific response sending. Each I/O layer registers
-  // its own callback (e.g., HTTP sends response, file I/O closes fd, etc.)
   valk_async_done_fn on_done;
   void *on_done_ctx;
 
-  // Connection/resource closed detection - called to check if the underlying
-  // resource is still valid (e.g., HTTP connection closed, file closed, etc.)
-  // If NULL, resource is assumed to be always valid.
   valk_async_is_closed_fn is_closed;
   void *is_closed_ctx;
 
-  // Structured cancellation (parent/child hierarchy)
   struct valk_async_handle_t *parent;
   struct {
     struct valk_async_handle_t **items;
@@ -90,12 +53,10 @@ struct valk_async_handle_t {
     size_t capacity;
   } children;
 
-  // Linked list for handle tracking
   struct valk_async_handle_t *prev;
   struct valk_async_handle_t *next;
 };
 
-// Register async handle builtins
 void valk_register_async_handle_builtins(struct valk_lenv_t *env);
 
 // HTTP/2 client request implementation (called from parser.c builtin)
@@ -117,13 +78,6 @@ struct valk_lval_t *valk_http2_client_request_with_headers_impl(struct valk_lenv
 struct valk_lval_t *valk_aio_schedule(valk_aio_system_t *sys, uint64_t delay_ms,
                                        struct valk_lval_t *callback,
                                        struct valk_lenv_t *env);
-
-struct valk_http2_header_t {
-  uint8_t *name;
-  uint8_t *value;
-  size_t nameLen;
-  size_t valueLen;
-};
 
 typedef struct valk_http2_request_t {
   valk_mem_allocator_t *allocator;
@@ -459,7 +413,7 @@ valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
 
 #ifdef VALK_METRICS_ENABLED
 #include "aio_metrics.h"
-#include "gc.h"
+#include "../gc.h"
 
 // Forward declaration for SSE stream registry (defined in aio_sse_stream_registry.h)
 typedef struct valk_sse_stream_registry valk_sse_stream_registry_t;

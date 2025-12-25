@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common.h"
-#include "memory.h"
+#include "../common.h"
+#include "../memory.h"
 
 #include <stddef.h>
 

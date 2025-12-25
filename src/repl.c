@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "aio.h"
+#include "aio/aio.h"
 #include "coverage.h"
 #include "gc.h"
 #include "log.h"

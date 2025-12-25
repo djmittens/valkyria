@@ -11,7 +11,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "aio.h"
+#include "aio/aio.h"
 #include "collections.h"
 #include "common.h"
 #include "concurrency.h"
@@ -21,7 +21,7 @@
 #include "testing.h"
 
 #ifdef VALK_METRICS_ENABLED
-#include "aio_metrics.h"
+#include "aio/aio_metrics.h"
 #include "metrics_v2.h"
 #endif
 

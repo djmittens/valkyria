@@ -12,7 +12,7 @@
 #include <unistd.h>
 #include <uv.h>
 
-#include "aio.h"
+#include "aio/aio.h"
 #include "collections.h"
 #include "common.h"
 #include "coverage.h"
@@ -24,8 +24,8 @@
 #endif
 
 #ifdef VALK_METRICS_ENABLED
-#include "aio_metrics.h"
-#include "aio_sse.h"
+#include "aio/aio_metrics.h"
+#include "aio/aio_sse.h"
 #include "metrics_v2.h"
 #include "metrics_delta.h"
 // Forward declare metrics builtins registration (from metrics_builtins.c)

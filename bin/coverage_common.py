@@ -275,10 +275,11 @@ def parse_gcov_files(build_dir: Path, source_root: Path, report: CoverageReport)
         print("Warning: llvm-cov not found, skipping C coverage", file=sys.stderr)
         return
     
-    for gcda_file in gcda_dir.glob("*.gcda"):
+    for gcda_file in gcda_dir.glob("**/*.gcda"):
         try:
+            gcda_parent = gcda_file.parent
             result = subprocess.run(
-                [llvm_cov, "gcov", "-b", "-o", str(gcda_dir), str(gcda_file)],
+                [llvm_cov, "gcov", "-b", "-o", str(gcda_parent), str(gcda_file)],
                 cwd=str(build_dir),
                 capture_output=True,
                 text=True

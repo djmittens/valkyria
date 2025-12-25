@@ -2,8 +2,8 @@
 #define VALK_AIO_SSE_DIAGNOSTICS_H
 
 #include "aio.h"
-#include "memory.h"
-#include "gc.h"
+#include "../memory.h"
+#include "../gc.h"
 #include "metrics_delta.h"
 #include <stdint.h>
 #include <stdbool.h>

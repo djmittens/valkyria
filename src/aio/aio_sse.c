@@ -5,10 +5,10 @@
 #include <string.h>
 #include <uv.h>
 
-#include "common.h"
-#include "log.h"
-#include "memory.h"
-#include "parser.h"
+#include "../common.h"
+#include "../log.h"
+#include "../memory.h"
+#include "../parser.h"
 
 // ============================================================================
 // Global State

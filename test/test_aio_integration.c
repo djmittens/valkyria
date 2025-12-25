@@ -5,7 +5,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-#include "aio.h"
+#include "aio/aio.h"
 #include "collections.h"
 #include "common.h"
 #include "concurrency.h"

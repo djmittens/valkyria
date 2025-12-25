@@ -7,7 +7,7 @@
 
 #include "metrics_v2.h"
 #include "metrics_delta.h"
-#include "aio_sse_diagnostics.h"
+#include "aio/aio_sse_diagnostics.h"
 #include "parser.h"
 #include "common.h"
 

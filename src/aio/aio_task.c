@@ -1,0 +1,46 @@
+#include "aio_internal.h"
+
+static void __uv_task_close_cb(uv_handle_t *handle) {
+  valk_aio_handle_t *hndl = handle->data;
+  valk_aio_task_new *task = hndl->arg;
+
+  valk_arc_release(task->promise.item);
+  valk_mem_allocator_free(task->allocator, task);
+
+  valk_dll_pop(hndl);
+  valk_slab_release_ptr(hndl->sys->handleSlab, hndl);
+}
+
+static void __uv_task_cb_new(uv_async_t *handle) {
+  valk_aio_handle_t *hndl = handle->data;
+  valk_aio_task_new *task = hndl->arg;
+
+  task->callback(hndl->sys, task);
+
+  uv_close((uv_handle_t *)&hndl->uv.task, __uv_task_close_cb);
+}
+
+void valk_uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task) {
+  valk_slab_item_t *slab_item = valk_slab_aquire(sys->handleSlab);
+  if (!slab_item) {
+    VALK_ERROR("Handle slab exhausted in valk_uv_exec_task");
+    valk_arc_box *err = valk_arc_box_err("Handle slab exhausted");
+    valk_promise_respond(&task->promise, err);
+    valk_arc_release(err);
+    valk_arc_release(task->promise.item);
+    valk_mem_allocator_free(task->allocator, task);
+    return;
+  }
+  valk_aio_handle_t *hndl = (valk_aio_handle_t *)slab_item->data;
+  memset(hndl, 0, sizeof(valk_aio_handle_t));
+  hndl->magic = VALK_AIO_HANDLE_MAGIC;
+  hndl->kind = VALK_HNDL_TASK;
+  hndl->sys = sys;
+  hndl->arg = task;
+  hndl->uv.task.data = hndl;
+
+  uv_async_init(sys->eventloop, &hndl->uv.task, __uv_task_cb_new);
+  valk_dll_insert_after(&sys->liveHandles, hndl);
+
+  uv_async_send(&hndl->uv.task);
+}

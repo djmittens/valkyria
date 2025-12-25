@@ -2,7 +2,7 @@
 
 #ifdef VALK_METRICS_ENABLED
 
-#include "../src/aio_metrics.h"
+#include "../src/aio/aio_metrics.h"
 #include "../src/memory.h"
 #include "../src/gc.h"
 #include "../src/parser.h"

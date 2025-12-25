@@ -10,7 +10,7 @@
 
 #ifdef VALK_METRICS_ENABLED
 
-#include "aio_metrics.h"
+#include "aio/aio_metrics.h"
 #include <uv.h>
 #include <string.h>
 

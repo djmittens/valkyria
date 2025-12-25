@@ -1,7 +1,7 @@
 #include "../testing.h"
 #include "../../src/memory.h"
-#include "../../src/aio_sse_stream_registry.h"
-#include "../../src/aio.h"
+#include "../../src/aio/aio_sse_stream_registry.h"
+#include "../../src/aio/aio.h"
 
 #include <string.h>
 #include <stdlib.h>

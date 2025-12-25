@@ -5,8 +5,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-#include "aio.h"
-#include "aio_sse.h"
+#include "aio/aio.h"
+#include "aio/aio_sse.h"
 #include "common.h"
 #include "memory.h"
 #include "testing.h"

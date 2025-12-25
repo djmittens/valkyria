@@ -6,8 +6,8 @@
 #include <nghttp2/nghttp2.h>
 #include <uv.h>
 
-#include "aio.h"
-#include "aio_sse_diagnostics.h"
+#include "aio/aio.h"
+#include "aio/aio_sse_diagnostics.h"
 #include "collections.h"
 #include "common.h"
 #include "concurrency.h"
@@ -2924,6 +2924,7 @@ void test_rapid_client_disconnect_mid_request(VALK_TEST_ARGS()) {
 void test_multiple_parallel_streams_then_disconnect(VALK_TEST_ARGS()) {
   VALK_TEST();
   VALK_SKIP("Parallel streams test times out due to race condition");
+  return;
 
   valk_aio_system_t *sys = valk_aio_start();
   ASSERT_NOT_NULL(sys);

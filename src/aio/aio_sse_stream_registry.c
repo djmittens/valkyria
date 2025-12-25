@@ -11,8 +11,8 @@
 
 #include "aio_metrics.h"
 #include "aio_sse_diagnostics.h"
-#include "log.h"
-#include "metrics_v2.h"
+#include "../log.h"
+#include "../metrics_v2.h"
 #include "metrics_delta.h"
 
 // SSE buffer size - large enough for full snapshot + metrics

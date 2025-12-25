@@ -247,5 +247,48 @@ void valk_http_client_on_cache(valk_http_client_metrics_t* c, bool hit);
 char* valk_http_clients_to_prometheus(const valk_http_clients_registry_t* reg,
                                        struct valk_mem_allocator_t* alloc);
 
+// ============================================================================
+// Metrics State Container (Phase 4 - Externalized Metrics)
+// ============================================================================
+
+// Forward declarations for types defined elsewhere
+struct valk_gc_malloc_heap_t;
+struct valk_mem_arena_t;
+struct valk_owner_registry;
+struct valk_sse_stream_registry;
+struct valk_event_loop_metrics_v2;
+
+// Container for all AIO system metrics
+// This allows metrics to be optional at runtime via pointer indirection
+// Note: Some fields are embedded, others are pointers depending on their definition
+typedef struct valk_aio_metrics_state {
+  valk_aio_metrics_t metrics;
+  valk_aio_system_stats_t system_stats;
+  valk_http_clients_registry_t http_clients;
+  struct valk_gc_malloc_heap_t *gc_heap;
+  struct valk_mem_arena_t *scratch_arena;
+} valk_aio_metrics_state_t;
+
+// Allocate and initialize metrics state
+// Returns NULL if allocation fails
+valk_aio_metrics_state_t* valk_aio_metrics_state_new(
+    uint64_t arenas_total,
+    uint64_t tcp_buffers_total,
+    uint64_t queue_capacity,
+    const char* loop_name);
+
+// Free metrics state
+void valk_aio_metrics_state_free(valk_aio_metrics_state_t* state);
+
+// Helper macros for null-safe metrics access
+#define VALK_METRICS_IF(sys) if ((sys) && (sys)->metrics_state)
+#define VALK_METRICS_GET(sys) ((sys)->metrics_state)
+#define VALK_METRICS(sys) ((sys)->metrics_state->metrics)
+#define VALK_SYSTEM_STATS(sys) ((sys)->metrics_state->system_stats)
+#define VALK_HTTP_CLIENTS(sys) ((sys)->metrics_state->http_clients)
+#define VALK_OWNER_REGISTRY(sys) ((sys)->metrics_state->owner_registry)
+#define VALK_SSE_REGISTRY(sys) ((sys)->metrics_state->sse_registry)
+#define VALK_LOOP_METRICS(sys) ((sys)->metrics_state->loop_metrics)
+
 #endif // VALK_METRICS_ENABLED
 #endif // VALK_AIO_METRICS_H

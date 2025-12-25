@@ -3,10 +3,10 @@
 #include <string.h>
 
 #include "aio.h"
-#include "common.h"
-#include "log.h"
-#include "memory.h"
-#include "parser.h"
+#include "../common.h"
+#include "../log.h"
+#include "../memory.h"
+#include "../parser.h"
 
 // ============================================================================
 // External Declarations

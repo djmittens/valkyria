@@ -2,9 +2,10 @@
 #ifdef VALK_METRICS_ENABLED
 
 #include "aio_metrics.h"
-#include "memory.h"
-#include "gc.h"
-#include "parser.h"
+#include "../memory.h"
+#include "../gc.h"
+#include "../parser.h"
+#include "../common.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1127,6 +1128,38 @@ char* valk_http_clients_to_prometheus(const valk_http_clients_registry_t* reg,
   }
 
   return buf;
+}
+
+// ============================================================================
+// Metrics State Container (Phase 4 - Externalized Metrics)
+// ============================================================================
+
+valk_aio_metrics_state_t* valk_aio_metrics_state_new(
+    uint64_t arenas_total,
+    uint64_t tcp_buffers_total,
+    uint64_t queue_capacity,
+    const char* loop_name) {
+  UNUSED(loop_name);
+  valk_aio_metrics_state_t* state = calloc(1, sizeof(valk_aio_metrics_state_t));
+  if (!state) return NULL;
+
+  valk_aio_metrics_init(&state->metrics);
+  valk_aio_system_stats_init(&state->system_stats,
+                              arenas_total,
+                              tcp_buffers_total,
+                              queue_capacity);
+  memset(&state->http_clients, 0, sizeof(state->http_clients));
+  atomic_store(&state->http_clients.count, 0);
+  state->gc_heap = NULL;
+  state->scratch_arena = NULL;
+
+  return state;
+}
+
+void valk_aio_metrics_state_free(valk_aio_metrics_state_t* state) {
+  if (state) {
+    free(state);
+  }
 }
 
 #endif // VALK_METRICS_ENABLED

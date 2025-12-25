@@ -1,6 +1,6 @@
 #include "../testing.h"
 #include "../../src/memory.h"
-#include "../../src/aio_alloc.h"
+#include "../../src/aio/aio_alloc.h"
 
 #include <stdio.h>
 #include <stdlib.h>

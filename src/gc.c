@@ -2,7 +2,7 @@
 #include "parser.h"
 #include "memory.h"
 #include "log.h"
-#include "aio.h"  // For valk_async_handle_t
+#include "aio/aio.h"  // For valk_async_handle_t
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>

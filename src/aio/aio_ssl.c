@@ -1,8 +1,8 @@
 #include "aio_ssl.h"
 #include "aio_alloc.h"
-#include "common.h"
-#include "log.h"
-#include "memory.h"
+#include "../common.h"
+#include "../log.h"
+#include "../memory.h"
 #include <errno.h>
 #include <openssl/bio.h>
 #include <openssl/err.h>

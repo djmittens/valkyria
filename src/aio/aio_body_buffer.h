@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include "memory.h"
+#include "../memory.h"
 #include "aio_body_view.h"
 
 typedef struct valk_body_buffer {

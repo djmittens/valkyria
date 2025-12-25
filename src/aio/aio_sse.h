@@ -93,7 +93,7 @@ void valk_sse_stream_close(valk_sse_stream_t *stream);
 void valk_sse_stream_free(valk_sse_stream_t *stream);
 
 // Connection tracking (for cleanup on connection close)
-// Note: These are implemented in aio_uv.c since they need access to the full handle struct
+// Implemented in aio_sse_conn_tracking.c
 void valk_sse_stream_register(valk_sse_stream_t *stream);
 void valk_sse_stream_unregister(valk_sse_stream_t *stream);
 void valk_sse_close_all_streams(valk_aio_handle_t *conn);

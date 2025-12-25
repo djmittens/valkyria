@@ -1,5 +1,5 @@
 #include "../testing.h"
-#include "../../src/aio_ssl.h"
+#include "../../src/aio/aio_ssl.h"
 #include "../../src/memory.h"
 #include "../../src/common.h"
 

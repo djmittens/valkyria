@@ -7,9 +7,9 @@
 #include <string.h>
 
 #ifdef VALK_METRICS_ENABLED
-#include "aio.h"
-#include "aio_sse_diagnostics.h"
-#include "aio_sse_stream_registry.h"
+#include "aio/aio.h"
+#include "aio/aio_sse_diagnostics.h"
+#include "aio/aio_sse_stream_registry.h"
 
 // ============================================================================
 // Bitmap Tests

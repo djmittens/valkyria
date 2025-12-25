@@ -1,8 +1,8 @@
 #include "../testing.h"
 #include "../../src/common.h"
 #include "../../src/memory.h"
-#include "../../src/aio.h"
-#include "../../src/aio_alloc.h"
+#include "../../src/aio/aio.h"
+#include "../../src/aio/aio_alloc.h"
 #include "../../src/collections.h"
 
 #include <stdio.h>

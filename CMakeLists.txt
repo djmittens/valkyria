@@ -81,23 +81,40 @@ set(VALKYRIA_SOURCES
   src/memory.c
   src/concurrency.c  # TODO: Remove once AIO is updated to use continuations
   src/gc.c
-# TODO(networking): if should detect uring and if we have it we can get it here instead of libuv.
-  src/aio_uv.c
   src/debug.c
-  src/aio_ssl.c
-  src/aio_alloc.c
-  src/aio_sse.c
-  src/aio_conn_buffer.c
-  src/aio_pressure.c
-  src/aio_body_buffer.c
   src/log.c
   src/coverage.c
   src/source_loc.c
+  # AIO subsystem (src/aio/)
+  src/aio/aio_uv.c
+  src/aio/aio_ssl.c
+  src/aio/aio_alloc.c
+  src/aio/aio_sse.c
+  src/aio/aio_conn_buffer.c
+  src/aio/aio_pressure.c
+  src/aio/aio_body_buffer.c
+  src/aio/aio_async.c
+  src/aio/aio_combinators.c
+  src/aio/aio_pending_stream.c
+  src/aio/aio_backpressure.c
+  # HTTP/2 modular components
+  src/aio/aio_http2_conn.c
+  src/aio/aio_http2_server.c
+  src/aio/aio_http2_client.c
+  src/aio/aio_http2_session.c
+  # AIO modular components
+  src/aio/aio_system.c
+  src/aio/aio_task.c
+  src/aio/aio_maintenance.c
+  src/aio/aio_sse_conn_tracking.c
 )
 
 # Conditionally add metrics sources (V2 only)
 if(VALK_METRICS)
-  list(APPEND VALKYRIA_SOURCES src/aio_metrics.c)
+  list(APPEND VALKYRIA_SOURCES src/aio/aio_metrics.c)
+  list(APPEND VALKYRIA_SOURCES src/aio/aio_timer.c)
+  list(APPEND VALKYRIA_SOURCES src/aio/aio_owner.c)
+  list(APPEND VALKYRIA_SOURCES src/aio/aio_handle_diag.c)
   # Metrics V2 - unified registry with delta streaming
   list(APPEND VALKYRIA_SOURCES src/metrics_v2.c)
   list(APPEND VALKYRIA_SOURCES src/metrics_delta.c)
@@ -107,11 +124,11 @@ if(VALK_METRICS)
   # Event loop metrics for libuv loops
   list(APPEND VALKYRIA_SOURCES src/event_loop_metrics.c)
   # SSE diagnostics for memory visualization
-  list(APPEND VALKYRIA_SOURCES src/aio_sse_diagnostics.c)
+  list(APPEND VALKYRIA_SOURCES src/aio/aio_sse_diagnostics.c)
   # SSE stream registry for global timer management
-  list(APPEND VALKYRIA_SOURCES src/aio_sse_stream_registry.c)
+  list(APPEND VALKYRIA_SOURCES src/aio/aio_sse_stream_registry.c)
   # SSE builtins for Lisp API
-  list(APPEND VALKYRIA_SOURCES src/aio_sse_builtins.c)
+  list(APPEND VALKYRIA_SOURCES src/aio/aio_sse_builtins.c)
 endif()
 
 add_library(valkyria ${VALKYRIA_SOURCES})
