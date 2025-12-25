@@ -110,18 +110,6 @@ valk_pending_stream_t *valk_pending_stream_dequeue(valk_pending_stream_queue_t *
   return ps;
 }
 
-valk_pending_stream_t *valk_pending_stream_find(valk_pending_stream_queue_t *queue,
-                                                 nghttp2_session *session, int32_t stream_id) {
-  if (!queue) return nullptr;
-
-  for (valk_pending_stream_t *ps = queue->head; ps; ps = ps->next) {
-    if (ps->session == session && ps->stream_id == stream_id) {
-      return ps;
-    }
-  }
-  return nullptr;
-}
-
 void valk_pending_stream_remove(valk_pending_stream_queue_t *queue, valk_pending_stream_t *target) {
   if (!queue || !target) return;
 

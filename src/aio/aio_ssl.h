@@ -41,4 +41,3 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
                                 valk_buffer_t *Out);
 
 void valk_aio_ssl_print_state(valk_aio_ssl_t *ssl);
-void valk_aio_ssl_print_error(valk_aio_ssl_t *ssl);

@@ -21,16 +21,13 @@ valk_pressure_decision_t valk_pressure_evaluate(
 ) {
   valk_pressure_decision_t decision = {0};
 
-  float max_usage = fmaxf_safe(
-    fmaxf_safe(state->tcp_write_slab_usage, state->arena_slab_usage),
-    fmaxf_safe(state->pending_stream_usage, state->handle_slab_usage)
-  );
+  float tcp_usage = state->tcp_write_slab_usage;
 
-  if (max_usage >= config->critical_watermark) {
+  if (tcp_usage >= config->critical_watermark) {
     decision.level = VALK_PRESSURE_CRITICAL;
-  } else if (max_usage >= config->high_watermark) {
+  } else if (tcp_usage >= config->high_watermark) {
     decision.level = VALK_PRESSURE_HIGH;
-  } else if (max_usage >= config->high_watermark * 0.7f) {
+  } else if (tcp_usage >= config->high_watermark * 0.7f) {
     decision.level = VALK_PRESSURE_ELEVATED;
   } else {
     decision.level = VALK_PRESSURE_NORMAL;
@@ -48,7 +45,7 @@ valk_pressure_decision_t valk_pressure_evaluate(
       float range = config->high_watermark - elevated_threshold;
       if (range > 0.0f) {
         decision.connection_shed_probability =
-          (max_usage - elevated_threshold) / range * 0.3f;
+          (tcp_usage - elevated_threshold) / range * 0.3f;
       } else {
         decision.connection_shed_probability = 0.0f;
       }

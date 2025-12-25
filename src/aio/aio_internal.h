@@ -27,13 +27,14 @@
 
 #include "aio.h"
 #include "aio_alloc.h"
-#include "aio_ssl.h"
+#include "aio_conn_io.h"
 #include "aio_metrics.h"
 #include "aio_sse.h"
 #include "aio_sse_diagnostics.h"
 #include "aio_sse_stream_registry.h"
 #include "aio_pending_stream.h"
 #include "aio_backpressure.h"
+#include "aio_conn_admission.h"
 #include "aio_maintenance.h"
 #include "aio_sse_conn_tracking.h"
 #include "../metrics_v2.h"
@@ -66,11 +67,9 @@ enum {
   HTTP_MAX_IO_REQUESTS = (1024),
   HTTP_MAX_CONNECTIONS = (100),
   HTTP_MAX_CONNECTION_HEAP = (1024000),
-  HTTP_MAX_CONCURRENT_REQUESTS = (1024),
   HTTP_MAX_REQUEST_SIZE_BYTES = ((int)8e6),
   HTTP_MAX_RESPONSE_SIZE_BYTES = ((int)64e6),
   HTTP_STREAM_ARENA_SIZE = (67108864),
-  HTTP_MAX_STREAMS_PER_CONNECTION = (128),
   HTTP_STREAM_ARENA_POOL_SIZE = (64),
 };
 
@@ -262,19 +261,12 @@ struct valk_aio_handle_t {
 
   struct {
     __aio_http_conn_e state;
-    valk_aio_ssl_t ssl;
+    valk_conn_io_t io;
     nghttp2_session *session;
     valk_http2_handler_t *httpHandler;
     uv_connect_t connectReq;
     valk_aio_http_server *server;
     int active_streams;
-
-    valk_slab_item_t *read_buf;
-    valk_slab_item_t *write_buf;
-    size_t write_pos;
-    bool write_flush_pending;
-    uv_write_t write_req;
-    uv_buf_t write_uv_buf;
 
     uint64_t last_activity_ms;
 
@@ -325,6 +317,7 @@ struct valk_aio_system {
 
   valk_pending_stream_queue_t pending_streams;
   valk_backpressure_list_t backpressure;
+  valk_conn_admission_ctx_t admission;
 
   valk_http_request_ctx_t *current_request_ctx;
 

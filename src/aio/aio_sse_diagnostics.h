@@ -196,9 +196,6 @@ struct valk_sse_diag_state {
   valk_metrics_baseline_t *modular_baseline;
 };
 
-// Initialize SSE diagnostics for an HTTP connection (deprecated, use _http2)
-void valk_sse_diag_init(valk_aio_handle_t *conn, valk_aio_system_t *aio);
-
 // Initialize HTTP/2 SSE streaming - returns connection context and populates data provider
 // The data provider should be passed to nghttp2_submit_response2
 valk_sse_diag_conn_t* valk_sse_diag_init_http2(

@@ -174,7 +174,7 @@ define run_tests_c
 	if [ -f $(1)/test_source_loc_unit ]; then $(1)/test_source_loc_unit; fi
 	if [ -f $(1)/test_body_buffer ]; then $(1)/test_body_buffer; fi
 	if [ -f $(1)/test_pressure ]; then $(1)/test_pressure; fi
-	if [ -f $(1)/test_conn_read_buf ]; then $(1)/test_conn_read_buf; fi
+	if [ -f $(1)/test_conn_io ]; then $(1)/test_conn_io; fi
 	@echo "=== All C tests passed ($(1)) ==="
 endef
 

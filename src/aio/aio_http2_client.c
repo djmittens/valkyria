@@ -164,7 +164,7 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
   valk_aio_ssl_client_init(&client->ssl_ctx);
   SSL_CTX_set_alpn_protos(client->ssl_ctx, (const unsigned char *)"\x02h2", 3);
 
-  if (valk_aio_ssl_connect(&client->connection->http.ssl, client->ssl_ctx) != 0) {
+  if (valk_aio_ssl_connect(&client->connection->http.io.ssl, client->ssl_ctx) != 0) {
     VALK_ERROR("Failed to initialize SSL for client connection");
     valk_arc_box *err = valk_arc_box_err("SSL initialization failed for client connection");
     valk_promise_respond(&client->_promise, err);
@@ -177,23 +177,23 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     return;
   }
   const char *sni = (client->hostname[0] != '\0') ? client->hostname : "localhost";
-  SSL_set_tlsext_host_name(client->connection->http.ssl.ssl, sni);
+  SSL_set_tlsext_host_name(client->connection->http.io.ssl.ssl, sni);
 
   uint8_t *write_buf = valk_http2_conn_write_buf_data(client->connection);
   size_t write_available = valk_http2_conn_write_buf_available(client->connection);
   valk_buffer_t Out = {
-      .items = write_buf + client->connection->http.write_pos, 
+      .items = write_buf + client->connection->http.io.write_pos, 
       .count = 0, 
       .capacity = write_available};
 
-  valk_aio_ssl_handshake(&client->connection->http.ssl, &Out);
+  valk_aio_ssl_handshake(&client->connection->http.io.ssl, &Out);
 
   if (Out.count > 0) {
-    client->connection->http.write_pos += Out.count;
+    client->connection->http.io.write_pos += Out.count;
     valk_http2_conn_write_buf_flush(client->connection);
   }
 
-  if (SSL_is_init_finished(client->connection->http.ssl.ssl)) {
+  if (SSL_is_init_finished(client->connection->http.io.ssl.ssl)) {
     valk_http2_continue_pending_send(client->connection);
   }
 
@@ -441,7 +441,7 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
     VALK_INFO("Submitted request stream_id=%ld", reqres->streamid);
   }
 
-  if (SSL_is_init_finished(client->connection->http.ssl.ssl)) {
+  if (SSL_is_init_finished(client->connection->http.io.ssl.ssl)) {
     valk_http2_continue_pending_send(conn);
   }
 }

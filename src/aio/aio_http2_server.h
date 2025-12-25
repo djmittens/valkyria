@@ -19,8 +19,6 @@ void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_
 
 int valk_aio_http2_server_get_port(valk_aio_http_server *srv);
 
-valk_future *valk_aio_http2_shutdown(valk_aio_http_server *srv);
-
 #ifdef VALK_METRICS_ENABLED
 void valk_http2_server_metrics_init(valk_aio_system_t* sys, 
                                      valk_server_metrics_t* m,

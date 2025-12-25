@@ -74,18 +74,15 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
   }
 
   if (!srv->sys || !srv->sys->tcpBufferSlab) return;
-  size_t available = valk_slab_available(srv->sys->tcpBufferSlab);
-  size_t total = srv->sys->tcpBufferSlab->numItems;
-  float usage = 1.0f - ((float)available / total);
 
-  float high_watermark = srv->sys->config.buffer_high_watermark;
-  float critical_watermark = srv->sys->config.buffer_critical_watermark;
-  if (high_watermark <= 0.0f) high_watermark = 0.85f;
-  if (critical_watermark <= 0.0f) critical_watermark = 0.95f;
+  uint64_t now_ms = uv_now(stream->loop);
+  valk_pressure_state_t state = valk_conn_admission_snapshot(srv->sys, now_ms);
+  valk_conn_admission_result_t result = valk_conn_admission_check(&srv->sys->admission, &state);
 
-  if (usage >= critical_watermark) {
-    VALK_WARN("Load shedding: rejecting connection (buffer usage %.1f%% >= critical %.1f%%)",
-              usage * 100, critical_watermark * 100);
+  if (!result.accept) {
+    VALK_WARN("Load shedding: rejecting connection (%s, level=%s)",
+              result.reason ? result.reason : "unknown",
+              valk_pressure_level_str(result.level));
 #ifdef VALK_METRICS_ENABLED
     atomic_fetch_add(&srv->sys->metrics_state->system_stats.connections_rejected_load, 1);
 #endif
@@ -99,28 +96,6 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
       }
     }
     return;
-  }
-
-  if (usage >= high_watermark) {
-    float shed_probability = (usage - high_watermark) / (critical_watermark - high_watermark);
-    float random_val = (float)rand() / (float)RAND_MAX;
-    if (random_val < shed_probability) {
-      VALK_WARN("Load shedding: probabilistically rejecting connection (buffer usage %.1f%%, p=%.2f)",
-                usage * 100, shed_probability);
-#ifdef VALK_METRICS_ENABLED
-      atomic_fetch_add(&srv->sys->metrics_state->system_stats.connections_rejected_load, 1);
-#endif
-      uv_tcp_t *reject_tcp = malloc(sizeof(uv_tcp_t));
-      if (reject_tcp) {
-        uv_tcp_init(stream->loop, reject_tcp);
-        if (uv_accept(stream, (uv_stream_t *)reject_tcp) == 0) {
-          uv_close((uv_handle_t *)reject_tcp, __load_shed_close_cb);
-        } else {
-          free(reject_tcp);
-        }
-      }
-      return;
-    }
   }
 
   valk_slab_item_t *slab_item = valk_slab_aquire(srv->sys->handleSlab);
@@ -194,7 +169,7 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
 
     nghttp2_session_server_new3(&conn->http.session, callbacks, conn, nullptr,
                                 valk_aio_nghttp2_mem());
-    if (valk_aio_ssl_accept(&conn->http.ssl, srv->ssl_ctx) != 0) {
+    if (valk_aio_ssl_accept(&conn->http.io.ssl, srv->ssl_ctx) != 0) {
       VALK_ERROR("Failed to initialize SSL for connection");
       uv_close((uv_handle_t *)&conn->uv.tcp, valk_http2_conn_handle_closed_cb);
       return;

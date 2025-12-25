@@ -2499,14 +2499,6 @@ static nghttp2_ssize sse_data_read_callback(
   return (nghttp2_ssize)to_send;
 }
 
-// Initialize SSE diagnostics for an HTTP/2 connection (streaming)
-void valk_sse_diag_init(valk_aio_handle_t *handle, valk_aio_system_t *aio) {
-  (void)handle;
-  (void)aio;
-  // Legacy function - use valk_sse_diag_init_http2 for HTTP/2 streaming
-  VALK_ERROR("valk_sse_diag_init is deprecated, use valk_sse_diag_init_http2");
-}
-
 // Forward declaration for getting/setting sse_state on handle
 // These are implemented in aio_uv.c via accessor functions
 extern valk_sse_diag_state_t* valk_aio_get_sse_state(valk_aio_handle_t *handle);

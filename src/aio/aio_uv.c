@@ -45,7 +45,7 @@ static void __backpressure_try_resume_one(valk_aio_system_t *sys) {
 
 // Acquire write buffer for connection if not already held
 static bool __conn_write_buf_acquire(valk_aio_handle_t *conn) {
-  if (conn->http.write_buf) return true;
+  if (conn->http.io.write_buf) return true;
   if (!conn->sys || !conn->sys->tcpBufferSlab) return false;
   
   valk_slab_item_t *item = valk_slab_aquire(conn->sys->tcpBufferSlab);
@@ -54,9 +54,9 @@ static bool __conn_write_buf_acquire(valk_aio_handle_t *conn) {
     return false;
   }
   
-  conn->http.write_buf = item;
-  conn->http.write_pos = 0;
-  conn->http.write_flush_pending = false;
+  conn->http.io.write_buf = item;
+  conn->http.io.write_pos = 0;
+  conn->http.io.write_flush_pending = false;
   return true;
 }
 
@@ -68,8 +68,8 @@ static void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
   // LCOV_EXCL_BR_START - else branch: non-HTTP handles use different alloc path
   if (conn && conn->magic == VALK_AIO_HANDLE_MAGIC && conn->kind == VALK_HNDL_HTTP_CONN) {
   // LCOV_EXCL_BR_STOP
-    if (conn->http.read_buf) {
-      __tcp_buffer_slab_item_t *item = (void *)conn->http.read_buf->data;
+    if (conn->http.io.read_buf) {
+      __tcp_buffer_slab_item_t *item = (void *)conn->http.io.read_buf->data;
       buf->base = item->data;
       buf->len = HTTP_SLAB_ITEM_SIZE;
       return;
@@ -83,7 +83,7 @@ static void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
       return;
     }
     
-    conn->http.read_buf = item;
+    conn->http.io.read_buf = item;
     __tcp_buffer_slab_item_t *slab_item = (void *)item->data;
     buf->base = slab_item->data;
     buf->len = HTTP_SLAB_ITEM_SIZE;
@@ -111,14 +111,14 @@ static void __alloc_callback(uv_handle_t *handle, size_t suggested_size,
 }
 
 static inline uint8_t *__conn_write_buf_data(valk_aio_handle_t *conn) {
-  if (!conn->http.write_buf) return NULL;
-  __tcp_buffer_slab_item_t *item = (void *)conn->http.write_buf->data;
+  if (!conn->http.io.write_buf) return NULL;
+  __tcp_buffer_slab_item_t *item = (void *)conn->http.io.write_buf->data;
   return (uint8_t *)item->data;
 }
 
 static inline size_t __conn_write_buf_available(valk_aio_handle_t *conn) {
-  if (!conn->http.write_buf) return 0;
-  return HTTP_SLAB_ITEM_SIZE - conn->http.write_pos;
+  if (!conn->http.io.write_buf) return 0;
+  return HTTP_SLAB_ITEM_SIZE - conn->http.io.write_pos;
 }
 
 // Forward declaration for write callback
@@ -128,11 +128,11 @@ static void __conn_write_buf_on_flush_complete(uv_write_t *req, int status);
 // Returns: 0 on success, -1 on error, 1 if already flushing (backpressure)
 static int __conn_write_buf_flush(valk_aio_handle_t *conn) {
   // LCOV_EXCL_BR_LINE - write buffer state check
-  if (!conn->http.write_buf || conn->http.write_pos == 0) {
+  if (!conn->http.io.write_buf || conn->http.io.write_pos == 0) {
     return 0;  // LCOV_EXCL_LINE - Normal case: nothing to flush
   }
   
-  if (conn->http.write_flush_pending) {
+  if (conn->http.io.write_flush_pending) {
     return 1;  // LCOV_EXCL_LINE - Backpressure path, timing dependent
   }
   
@@ -142,19 +142,19 @@ static int __conn_write_buf_flush(valk_aio_handle_t *conn) {
   }
   // LCOV_EXCL_STOP
   
-  conn->http.write_flush_pending = true;
-  conn->http.write_uv_buf.base = (char *)__conn_write_buf_data(conn);
-  conn->http.write_uv_buf.len = conn->http.write_pos;
-  conn->http.write_req.data = conn;
+  conn->http.io.write_flush_pending = true;
+  conn->http.io.write_uv_buf.base = (char *)__conn_write_buf_data(conn);
+  conn->http.io.write_uv_buf.len = conn->http.io.write_pos;
+  conn->http.io.write_req.data = conn;
   
-  VALK_TRACE("Flushing write buffer: %zu bytes", conn->http.write_pos);
+  VALK_TRACE("Flushing write buffer: %zu bytes", conn->http.io.write_pos);
   
-  int rv = uv_write(&conn->http.write_req, (uv_stream_t *)&conn->uv.tcp,
-                    &conn->http.write_uv_buf, 1, __conn_write_buf_on_flush_complete);
+  int rv = uv_write(&conn->http.io.write_req, (uv_stream_t *)&conn->uv.tcp,
+                    &conn->http.io.write_uv_buf, 1, __conn_write_buf_on_flush_complete);
   // LCOV_EXCL_START - uv_write failure requires OS-level failure
   if (rv != 0) {
     VALK_ERROR("uv_write failed: %s", uv_strerror(rv));
-    conn->http.write_flush_pending = false;
+    conn->http.io.write_flush_pending = false;
     return -1;
   }
   // LCOV_EXCL_STOP
@@ -182,8 +182,8 @@ static void __conn_write_buf_on_flush_complete(uv_write_t *req, int status) {
   }
   // LCOV_EXCL_STOP
   
-  conn->http.write_flush_pending = false;
-  conn->http.write_pos = 0;
+  conn->http.io.write_flush_pending = false;
+  conn->http.io.write_pos = 0;
   
   VALK_TRACE("Write flush complete, buffer reset");
   
@@ -330,13 +330,13 @@ static void __uv_handle_closed_cb(uv_handle_t *handle) {
   if (hndl->kind == VALK_HNDL_HTTP_CONN) {
     __backpressure_list_remove(hndl);
     
-    if (hndl->http.read_buf && hndl->sys && hndl->sys->tcpBufferSlab) {
-      valk_slab_release(hndl->sys->tcpBufferSlab, hndl->http.read_buf);
-      hndl->http.read_buf = NULL;
+    if (hndl->http.io.read_buf && hndl->sys && hndl->sys->tcpBufferSlab) {
+      valk_slab_release(hndl->sys->tcpBufferSlab, hndl->http.io.read_buf);
+      hndl->http.io.read_buf = NULL;
     }
-    if (hndl->http.write_buf && hndl->sys && hndl->sys->tcpBufferSlab) {
-      valk_slab_release(hndl->sys->tcpBufferSlab, hndl->http.write_buf);
-      hndl->http.write_buf = NULL;
+    if (hndl->http.io.write_buf && hndl->sys && hndl->sys->tcpBufferSlab) {
+      valk_slab_release(hndl->sys->tcpBufferSlab, hndl->http.io.write_buf);
+      hndl->http.io.write_buf = NULL;
     }
   }
   
@@ -548,9 +548,9 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   // LCOV_EXCL_START - write_flush_pending backpressure requires precise timing
   // where a write is in-flight while new data arrives. Difficult to trigger
   // reliably in integration tests without mocking network timing.
-  if (conn->http.write_flush_pending) {
+  if (conn->http.io.write_flush_pending) {
     VALK_WARN("Write buffer flush pending - applying backpressure on connection");
-    int n = BIO_write(conn->http.ssl.read_bio, buf->base, nread);
+    int n = BIO_write(conn->http.io.ssl.read_bio, buf->base, nread);
     if (n != nread) {
       VALK_ERROR("BIO_write during backpressure failed: wrote %d of %ld", n, nread);
     }
@@ -569,7 +569,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   // is a narrow timing window. The read got a buffer but write can't - rare.
   if (!__conn_write_buf_acquire(conn)) {
     VALK_WARN("Failed to acquire write buffer - applying backpressure on connection");
-    int n = BIO_write(conn->http.ssl.read_bio, buf->base, nread);
+    int n = BIO_write(conn->http.io.ssl.read_bio, buf->base, nread);
     if (n != nread) {
       VALK_ERROR("BIO_write during backpressure failed: wrote %d of %ld", n, nread);
     }
@@ -601,27 +601,27 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
   size_t write_available = __conn_write_buf_available(conn);
   
   valk_buffer_t Out = {
-      .items = write_buf + conn->http.write_pos, 
+      .items = write_buf + conn->http.io.write_pos, 
       .count = 0, 
       .capacity = write_available};
 
-  int err = valk_aio_ssl_on_read(&conn->http.ssl, &In, &Out, conn,
+  int err = valk_aio_ssl_on_read(&conn->http.io.ssl, &In, &Out, conn,
                                  __http_tcp_unencrypted_read_cb);
 
   if (Out.count > 0) {
-    conn->http.write_pos += Out.count;
-    VALK_TRACE("SSL output: %zu bytes (total: %zu)", Out.count, conn->http.write_pos);
+    conn->http.io.write_pos += Out.count;
+    VALK_TRACE("SSL output: %zu bytes (total: %zu)", Out.count, conn->http.io.write_pos);
   }
 
   if (!err) {
-    if (conn->http.state == VALK_CONN_INIT && SSL_is_init_finished(conn->http.ssl.ssl)) {
+    if (conn->http.state == VALK_CONN_INIT && SSL_is_init_finished(conn->http.io.ssl.ssl)) {
       conn->http.state = VALK_CONN_ESTABLISHED;
 #ifdef VALK_METRICS_ENABLED
       conn->http.diag.state = VALK_DIAG_CONN_ACTIVE;
       conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
 #endif
     }
-    if (SSL_is_init_finished(conn->http.ssl.ssl) && conn->sys && conn->sys->tcpBufferSlab) {
+    if (SSL_is_init_finished(conn->http.io.ssl.ssl) && conn->sys && conn->sys->tcpBufferSlab) {
       valk_slab_item_t *frameSlabRaw = valk_slab_aquire(conn->sys->tcpBufferSlab);
       if (frameSlabRaw) {
         __tcp_buffer_slab_item_t *frameSlabItem = (void *)frameSlabRaw->data;
@@ -632,14 +632,14 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
 
         if (FrameIn.count > 0) {
           write_available = __conn_write_buf_available(conn);
-          Out.items = write_buf + conn->http.write_pos;
+          Out.items = write_buf + conn->http.io.write_pos;
           Out.count = 0;
           Out.capacity = write_available;
-          valk_aio_ssl_encrypt(&conn->http.ssl, &FrameIn, &Out);
+          valk_aio_ssl_encrypt(&conn->http.io.ssl, &FrameIn, &Out);
           
           if (Out.count > 0) {
-            conn->http.write_pos += Out.count;
-            VALK_TRACE("HTTP/2 frames encrypted: %zu bytes (total: %zu)", Out.count, conn->http.write_pos);
+            conn->http.io.write_pos += Out.count;
+            VALK_TRACE("HTTP/2 frames encrypted: %zu bytes (total: %zu)", Out.count, conn->http.io.write_pos);
           }
         }
         
@@ -648,7 +648,7 @@ static void __http_tcp_read_cb(uv_stream_t *stream, ssize_t nread,
     }
   }
 
-  if (conn->http.write_pos > 0) {
+  if (conn->http.io.write_pos > 0) {
     __conn_write_buf_flush(conn);
   }
 }

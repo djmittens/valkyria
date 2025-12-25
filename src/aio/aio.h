@@ -142,8 +142,6 @@ bool valk_aio_is_shutting_down(valk_aio_system_t *sys);
 /// @brief Wait for shutdown to complete and cleanup resources
 void valk_aio_wait_for_shutdown(valk_aio_system_t *sys);
 
-valk_future *valk_aio_read_file(valk_aio_system_t *sys, const char *filename);
-
 typedef struct {
   void *arg;
   void (*onConnect)(void *arg, valk_aio_handle_t *);
@@ -390,10 +388,6 @@ void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_
 /// @param srv The HTTP/2 server
 /// @return The actual port number the server is listening on
 int valk_aio_http2_server_get_port(valk_aio_http_server *srv);
-
-/// @return returns a future with a boxed `unit`
-///
-valk_future *valk_aio_http2_shutdown(valk_aio_http_server *srv);
 
 ///
 /// @return returns a future with a boxed `valk_aio_http2_client`

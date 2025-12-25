@@ -22,8 +22,6 @@ void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_
 
 int valk_aio_http2_server_get_port(valk_aio_http_server *srv);
 
-valk_future *valk_aio_http2_shutdown(valk_aio_http_server *srv);
-
 valk_future *valk_aio_http2_connect(valk_aio_system_t *sys,
                                     const char *interface, const int port,
                                     const char *certfile);

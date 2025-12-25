@@ -226,10 +226,10 @@ void test_timeout_triggers_drop(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_multiple_resources_max_wins(VALK_TEST_ARGS()) {
+void test_tcp_buffer_determines_connection_level(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_pressure_state_t state1 = {
+  valk_pressure_state_t state_high_tcp = {
     .tcp_write_slab_usage = 0.96f,
     .arena_slab_usage = 0.3f,
     .pending_stream_usage = 0.2f,
@@ -241,10 +241,10 @@ void test_multiple_resources_max_wins(VALK_TEST_ARGS()) {
     .oldest_pending_stream_age_ms = 0,
   };
 
-  valk_pressure_state_t state2 = {
+  valk_pressure_state_t state_low_tcp_high_others = {
     .tcp_write_slab_usage = 0.3f,
-    .arena_slab_usage = 0.3f,
-    .pending_stream_usage = 0.2f,
+    .arena_slab_usage = 0.96f,
+    .pending_stream_usage = 0.96f,
     .handle_slab_usage = 0.96f,
     .active_connections = 10,
     .backpressure_queue_len = 0,
@@ -255,11 +255,12 @@ void test_multiple_resources_max_wins(VALK_TEST_ARGS()) {
 
   valk_pressure_config_t cfg = valk_pressure_config_default();
 
-  valk_pressure_decision_t d1 = valk_pressure_evaluate(&state1, &cfg);
-  valk_pressure_decision_t d2 = valk_pressure_evaluate(&state2, &cfg);
+  valk_pressure_decision_t d1 = valk_pressure_evaluate(&state_high_tcp, &cfg);
+  valk_pressure_decision_t d2 = valk_pressure_evaluate(&state_low_tcp_high_others, &cfg);
 
   ASSERT_EQ(d1.level, VALK_PRESSURE_CRITICAL);
-  ASSERT_EQ(d2.level, VALK_PRESSURE_CRITICAL);
+  ASSERT_EQ(d2.level, VALK_PRESSURE_NORMAL);
+  ASSERT_TRUE(d2.accept_connection);
 
   VALK_PASS();
 }
@@ -343,7 +344,7 @@ int main(int argc, const char *argv[]) {
   valk_testsuite_add_test(suite, "test_pending_queue_used_when_available", test_pending_queue_used_when_available);
   valk_testsuite_add_test(suite, "test_pending_queue_not_used_when_full", test_pending_queue_not_used_when_full);
   valk_testsuite_add_test(suite, "test_timeout_triggers_drop", test_timeout_triggers_drop);
-  valk_testsuite_add_test(suite, "test_multiple_resources_max_wins", test_multiple_resources_max_wins);
+  valk_testsuite_add_test(suite, "test_tcp_buffer_determines_connection_level", test_tcp_buffer_determines_connection_level);
   valk_testsuite_add_test(suite, "test_shed_probability_in_range", test_shed_probability_in_range);
   valk_testsuite_add_test(suite, "test_level_str", test_level_str);
   valk_testsuite_add_test(suite, "test_arena_critical_blocks_pending_queue", test_arena_critical_blocks_pending_queue);

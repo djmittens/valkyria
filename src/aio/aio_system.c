@@ -188,6 +188,11 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   valk_backpressure_list_init(&sys->backpressure, sys->config.backpressure_list_max,
                                sys->config.backpressure_timeout_ms);
 
+  valk_conn_admission_init_from_config(&sys->admission,
+                                        sys->config.buffer_high_watermark,
+                                        sys->config.buffer_critical_watermark,
+                                        sys->config.backpressure_timeout_ms);
+
   sys->port_strs = calloc(sys->config.max_servers, 8);
   if (!sys->port_strs) {
     VALK_ERROR("Failed to allocate port strings buffer");

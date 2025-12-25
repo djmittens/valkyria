@@ -55,8 +55,6 @@ void valk_pending_stream_free(valk_pending_stream_queue_t *queue, valk_pending_s
 void valk_pending_stream_enqueue(valk_pending_stream_queue_t *queue, valk_pending_stream_t *ps);
 valk_pending_stream_t *valk_pending_stream_dequeue(valk_pending_stream_queue_t *queue);
 
-valk_pending_stream_t *valk_pending_stream_find(valk_pending_stream_queue_t *queue,
-                                                 nghttp2_session *session, int32_t stream_id);
 void valk_pending_stream_remove(valk_pending_stream_queue_t *queue, valk_pending_stream_t *target);
 
 static inline bool valk_is_pending_stream_marker(void *user_data) {

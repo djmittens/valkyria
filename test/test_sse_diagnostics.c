@@ -1145,8 +1145,6 @@ void test_sse_registry_with_aio(VALK_TEST_ARGS()) {
 void test_sse_diag_null_args(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_sse_diag_init(NULL, NULL);
-
   nghttp2_data_provider2 data_prd;
   valk_sse_diag_conn_t *conn = valk_sse_diag_init_http2(NULL, NULL, NULL, 0, &data_prd);
   VALK_TEST_ASSERT(conn == NULL, "init_http2: Should return NULL for NULL args");
