@@ -9,7 +9,6 @@
 #define _GNU_SOURCE
 #endif
 #include <errno.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,33 +64,32 @@ valk_arc_box *valk_arc_box_err(const char *msg) {
 
 void valk_future_free(valk_future *self) {
   VALK_WITH_ALLOC(self->allocator) {
-    pthread_mutex_lock(&self->mutex);
+    valk_mutex_lock(&self->mutex);
     VALK_ASSERT(self->done,
                 "Attempting to free an unresolved future, means "
                 "there is a hanging promise(pointer) out there %p",
                 (void *)self);
     valk_arc_release(self->item);
-    pthread_mutex_unlock(&self->mutex);
+    valk_mutex_unlock(&self->mutex);
 
     VALK_WITH_ALLOC(self->allocator) {
       da_free(&self->andThen);  // args leaked for now
     }
-    pthread_cond_destroy(&self->resolved);
-    pthread_mutex_destroy(&self->mutex);
+    valk_cond_destroy(&self->resolved);
+    valk_mutex_destroy(&self->mutex);
 
     valk_mem_allocator_free(self->allocator, self);
   }
 }
 
 valk_future *valk_future_new() {
-  // Always allocate futures with malloc - they must persist beyond arena lifetime
   valk_future *self;
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     self = valk_mem_alloc(sizeof(valk_future));
     memset(self, 0, sizeof(valk_future));
 
-    pthread_mutex_init(&self->mutex, nullptr);
-    pthread_cond_init(&self->resolved, nullptr);
+    valk_mutex_init(&self->mutex);
+    valk_cond_init(&self->resolved);
 
     self->refcount = 1;
     self->done = 0;
@@ -115,27 +113,26 @@ valk_future *valk_future_done(valk_arc_box *item) {
 void valk_future_and_then(valk_future *self,
                           struct valk_future_and_then *callback) {
   valk_arc_retain(self);
-  pthread_mutex_lock(&self->mutex);
+  valk_mutex_lock(&self->mutex);
   if (self->done) {
     callback->cb(callback->arg, self->item);
   } else {
     da_add(&self->andThen, *callback);
   }
-  pthread_mutex_unlock(&self->mutex);
+  valk_mutex_unlock(&self->mutex);
   valk_arc_release(self);
 }
 
 valk_arc_box *valk_future_await(valk_future *future) {
   valk_arc_retain(future);
-  pthread_mutex_lock(&future->mutex);
+  valk_mutex_lock(&future->mutex);
   if (!future->done) {
-    pthread_cond_wait(&future->resolved, &future->mutex);
+    valk_cond_wait(&future->resolved, &future->mutex);
   }
 
   valk_arc_box *res = future->item;
-  // Future still maintains ownership of the box
 
-  pthread_mutex_unlock(&future->mutex);
+  valk_mutex_unlock(&future->mutex);
   valk_arc_release(future);
   return res;
 }
@@ -150,45 +147,32 @@ valk_arc_box *valk_future_await_timeout(valk_future *self, uint32_t msec) {
     return res;
   }
 
-  pthread_mutex_lock(&self->mutex);
-  struct timespec ts;
-  clock_gettime(CLOCK_REALTIME, &ts);
-
-  // Add timeout using 64-bit-safe arithmetic to avoid overflow
-  ts.tv_sec += (time_t)(msec / 1000);
-  unsigned long add_ns = (unsigned long)(msec % 1000) * 1000000ul;
-  ts.tv_nsec += (long)add_ns;
-  if (ts.tv_nsec >= 1000000000L) {
-    ts.tv_sec += ts.tv_nsec / 1000000000L;
-    ts.tv_nsec = ts.tv_nsec % 1000000000L;
-  }
-  int ret = pthread_cond_timedwait(&self->resolved, &self->mutex, &ts);
+  valk_mutex_lock(&self->mutex);
+  int ret = valk_cond_timedwait(&self->resolved, &self->mutex, msec);
 
   if (ret == ETIMEDOUT) {
     int old = __atomic_fetch_add(&self->done, 1, __ATOMIC_ACQ_REL);
     if (old) {
-      pthread_mutex_unlock(&self->mutex);
+      valk_mutex_unlock(&self->mutex);
       res = self->item;
       valk_arc_retain(res);
       valk_arc_release(self);
       return res;
     }
     char buf[1000];
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    sprintf(buf, "Timeout [%u ms] reached waiting for future", msec);
+    snprintf(buf, sizeof(buf), "Timeout [%u ms] reached waiting for future", msec);
     self->item = valk_arc_box_err(buf);
-    pthread_cond_signal(&self->resolved);
+    valk_cond_signal(&self->resolved);
   } else if (ret != 0) {
     char buf[1000];
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    sprintf(buf, "Unexpected error during [pthread_cond_timedwait]: %s",
+    snprintf(buf, sizeof(buf), "Unexpected error during [valk_cond_timedwait]: %s",
             strerror(errno));
     self->done = 1;
     self->item = valk_arc_box_err(buf);
-    pthread_cond_signal(&self->resolved);
+    valk_cond_signal(&self->resolved);
   }
   res = self->item;
-  pthread_mutex_unlock(&self->mutex);
+  valk_mutex_unlock(&self->mutex);
 
   valk_arc_retain(res);
 
@@ -196,19 +180,18 @@ valk_arc_box *valk_future_await_timeout(valk_future *self, uint32_t msec) {
   return res;
 }
 
-// TODO(networking): do i want a ptr to ptr here, or just a copy?
 void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
   size_t count = 0;
   valk_future *fut = promise->item;
   valk_arc_retain(fut);
   valk_arc_retain(result);
 
-  pthread_mutex_lock(&fut->mutex);
+  valk_mutex_lock(&fut->mutex);
 
   int old = __atomic_fetch_add(&fut->done, 1, __ATOMIC_RELEASE);
   if (old) {
     fprintf(stderr, "ERROR: Promise already resolved, cannot resolve twice.\n");
-    pthread_mutex_unlock(&fut->mutex);
+    valk_mutex_unlock(&fut->mutex);
     valk_arc_release(result);
     valk_arc_release(fut);
     return;
@@ -216,14 +199,10 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
 
   fut->item = result;
 
-  // We transfer the reference to the future
-  // valk_arc_release(result);
-
   count = __atomic_exchange_n(&fut->andThen.count, 0, __ATOMIC_ACQ_REL);
-  pthread_cond_signal(&fut->resolved);
-  pthread_mutex_unlock(&fut->mutex);
+  valk_cond_signal(&fut->resolved);
+  valk_mutex_unlock(&fut->mutex);
 
-  // Process the callbacks
   while (count > 0) {
     struct valk_future_and_then *item = &fut->andThen.items[count - 1];
     item->cb(item->arg, fut->item);
@@ -233,63 +212,46 @@ void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
 }
 
 static void *valk_worker_routine(void *arg) {
-  // Use malloc for now, by default
-  // probably should think of how to add this by default everywhere
   valk_mem_init_malloc();
 
   valk_worker *self = arg;
   VALK_INFO("Starting thread: %s", self->name);
   valk_task_queue *queue = self->queue;
 
-  // pthread_setname_np(pthread_self(), self->name);
-
-  pthread_mutex_lock(&queue->mutex);
+  valk_mutex_lock(&queue->mutex);
   queue->numWorkers++;
-  // if queue became empty after the pop, signal that its now empty
-  pthread_cond_signal(&queue->workerReady);
-  pthread_mutex_unlock(&queue->mutex);
+  valk_cond_signal(&queue->workerReady);
+  valk_mutex_unlock(&queue->mutex);
   do {
     int res = 0;
     valk_task task;
 
-    pthread_mutex_lock(&queue->mutex);
+    valk_mutex_lock(&queue->mutex);
 
     if (queue->count == 0) {
-      // if queue is empty until it has stuff
-      // this will temporarily release the lock, and will wait on full signal
-      pthread_cond_wait(&queue->notEmpty, &queue->mutex);
+      valk_cond_wait(&queue->notEmpty, &queue->mutex);
     }
 
     res = valk_work_pop(queue, &task);
 
     if (!res) {
-      // Only do stuff if  pop succeeded, so nothing to do
       if (queue->count == 0) {
-        // if queue became empty after the pop, signal that its now empty
-        pthread_cond_signal(&queue->isEmpty);
+        valk_cond_signal(&queue->isEmpty);
       }
 
       if (task.type == VALK_TASK) {
-        // only signal if we successfully popped, otherwise there was a
-        // problem
-        pthread_cond_signal(&queue->notFull);
+        valk_cond_signal(&queue->notFull);
         VALK_TRACE("Worker executing task");
-
-        // Ok now lets execute the task
-
         valk_promise_respond(&task.promise, task.func(task.arg));
-
-        // TODO(networking): How do we clean up the arg? maybe the callback
-        // has to do it.
       } else if (task.type == VALK_POISON) {
         VALK_INFO("%s: received poison pill (shutdown)", self->name);
         queue->numWorkers--;
-        pthread_cond_signal(&queue->workerDead);
-        pthread_mutex_unlock(&queue->mutex);
+        valk_cond_signal(&queue->workerDead);
+        valk_mutex_unlock(&queue->mutex);
         break;
       }
     }
-    pthread_mutex_unlock(&queue->mutex);
+    valk_mutex_unlock(&queue->mutex);
   } while (1);
 
   return NULL;
@@ -301,99 +263,81 @@ int valk_start_pool(valk_worker_pool *pool) {
 
   for (size_t i = 0; i < VALK_NUM_WORKERS; i++) {
     pool->items[i].queue = &pool->queue;
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    int len = snprintf(nullptr, 0, "Worker [%ld]", i);
+    int len = snprintf(nullptr, 0, "Worker [%zu]", i);
     pool->items[i].name = malloc(len + 1);
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    snprintf(pool->items[i].name, len + 1, "Worker [%ld]", i);
+    snprintf(pool->items[i].name, len + 1, "Worker [%zu]", i);
 
-    // Setting this attribute, makes it so you dont have to join the thread
-    // when you shut it down. Since we dont care about the result its simpler to
-    // do this and saves a bit of time at the end.
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    valk_thread_attr_t attr;
+    valk_thread_attr_init(&attr);
+    valk_thread_attr_setdetached(&attr, true);
 
-    int res = pthread_create(&pool->items[i].thread, &attr, valk_worker_routine,
-                             (void *)&pool->items[i]);
+    int res = valk_thread_create(&pool->items[i].thread, &attr, valk_worker_routine,
+                                 (void *)&pool->items[i]);
     if (res) {
-      perror("pthread_create");
+      perror("valk_thread_create");
       free(pool->items[i].name);
       return 1;
     }
     ++pool->count;
   }
 
-  // Wait for all workers to become ready
-  pthread_mutex_lock(&pool->queue.mutex);
+  valk_mutex_lock(&pool->queue.mutex);
   while (pool->queue.numWorkers < VALK_NUM_WORKERS) {
-    pthread_cond_wait(&pool->queue.workerReady, &pool->queue.mutex);
+    valk_cond_wait(&pool->queue.workerReady, &pool->queue.mutex);
   }
-  pthread_mutex_unlock(&pool->queue.mutex);
+  valk_mutex_unlock(&pool->queue.mutex);
   return 0;
 }
 
 void valk_drain_pool(valk_worker_pool *pool) {
-  pthread_mutex_lock(&pool->queue.mutex);
+  valk_mutex_lock(&pool->queue.mutex);
   if (!pool->queue.isShuttingDown) {
-    // put the queue in draining mode, to prevent incoming schedule requets
     pool->queue.isShuttingDown = 1;
     if (pool->queue.count > 0) {
-      // if there are remaining items, drop em
-      pthread_cond_wait(&pool->queue.isEmpty, &pool->queue.mutex);
+      valk_cond_wait(&pool->queue.isEmpty, &pool->queue.mutex);
     }
   } else {
     VALK_WARN("Pool is already draining; not doing anything");
   }
-  pthread_mutex_unlock(&pool->queue.mutex);
+  valk_mutex_unlock(&pool->queue.mutex);
 }
 
 void valk_free_pool(valk_worker_pool *pool) {
-  pthread_mutex_lock(&pool->queue.mutex);
+  valk_mutex_lock(&pool->queue.mutex);
   if (pool->queue.count > 0) {
-    // if there are remaining items, resolve them
-    // TODO(networking):  this can be avoided with recursive mutexes, through
-    // attributes
-    pthread_mutex_unlock(&pool->queue.mutex);
+    valk_mutex_unlock(&pool->queue.mutex);
     valk_drain_pool(pool);
   } else {
-    pthread_mutex_unlock(&pool->queue.mutex);
+    valk_mutex_unlock(&pool->queue.mutex);
   }
 
-  // wait for all workers to become dead
-  pthread_mutex_lock(&pool->queue.mutex);
+  valk_mutex_lock(&pool->queue.mutex);
   valk_task poison = {.type = VALK_POISON};
   size_t numWorkers = pool->queue.numWorkers;
   for (size_t i = 0; i < numWorkers; i++) {
     valk_work_add(&pool->queue, poison);
-    pthread_cond_signal(&pool->queue.notEmpty);
+    valk_cond_signal(&pool->queue.notEmpty);
   }
-  pthread_mutex_unlock(&pool->queue.mutex);
+  valk_mutex_unlock(&pool->queue.mutex);
 
-  pthread_mutex_lock(&pool->queue.mutex);
+  valk_mutex_lock(&pool->queue.mutex);
   while (pool->queue.numWorkers > 0) {
-    pthread_cond_wait(&pool->queue.workerDead, &pool->queue.mutex);
+    valk_cond_wait(&pool->queue.workerDead, &pool->queue.mutex);
   }
-  pthread_mutex_unlock(&pool->queue.mutex);
+  valk_mutex_unlock(&pool->queue.mutex);
 
   for (size_t i = 0; i < numWorkers; i++) {
-    // TODO(networking): More elegant  solution is poison message in queue, but
-    // im too lazy now
-    // void *res;
-    // pthread_join(pool->items[i].thread, &res);
     free(pool->items[i].name);
   }
   free(pool->items);
 
   valk_work_free(&pool->queue);
-
-  // free(pool->name);
 }
 
 valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box *arg,
                            valk_arc_box *(*func)(valk_arc_box *)) {
   valk_task_queue *queue = &pool->queue;
-  pthread_mutex_lock(&queue->mutex);
+  valk_mutex_lock(&queue->mutex);
   valk_future *res;
 
   if (queue->isShuttingDown) {
@@ -402,9 +346,7 @@ valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box *arg,
                          "while its shutting down"));
   } else {
     if (queue->capacity == queue->count) {
-      // if queue is full block until it has space
-      // this will temporarily release the lock, and will wait on full signal
-      pthread_cond_wait(&queue->notFull, &queue->mutex);
+      valk_cond_wait(&queue->notFull, &queue->mutex);
     }
 
     res = valk_future_new();
@@ -421,10 +363,10 @@ valk_future *valk_schedule(valk_worker_pool *pool, valk_arc_box *arg,
       valk_arc_release(task.promise.item);
       valk_arc_release(task.arg);
     }
-    pthread_cond_signal(&queue->notEmpty);
+    valk_cond_signal(&queue->notEmpty);
   }
 
-  pthread_mutex_unlock(&pool->queue.mutex);
+  valk_mutex_unlock(&pool->queue.mutex);
   return res;
 }
 

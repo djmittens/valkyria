@@ -2,34 +2,40 @@
 
 #ifdef VALK_COVERAGE
 
-#include <pthread.h>
+#include "valk_thread.h"
 #include <stdlib.h>
 #include <string.h>
 
 static struct {
   char *filenames[MAX_SOURCE_FILES];
   uint16_t count;
-  pthread_mutex_t lock;
-} source_registry = {
-  .filenames = {NULL},
-  .count = 0,
-  .lock = PTHREAD_MUTEX_INITIALIZER
-};
+  valk_mutex_t lock;
+} source_registry = {0};
+
+static bool source_registry_initialized = false;
+
+static void ensure_source_registry_init(void) {
+  if (!source_registry_initialized) {
+    valk_mutex_init(&source_registry.lock);
+    source_registry_initialized = true;
+  }
+}
 
 uint16_t valk_source_register_file(const char *filename) {
   if (!filename) return 0;
+  ensure_source_registry_init();
 
-  pthread_mutex_lock(&source_registry.lock);
+  valk_mutex_lock(&source_registry.lock);
 
   for (uint16_t i = 1; i <= source_registry.count; i++) {
     if (strcmp(source_registry.filenames[i], filename) == 0) {
-      pthread_mutex_unlock(&source_registry.lock);
+      valk_mutex_unlock(&source_registry.lock);
       return i;
     }
   }
 
   if (source_registry.count >= MAX_SOURCE_FILES - 1) {
-    pthread_mutex_unlock(&source_registry.lock);
+    valk_mutex_unlock(&source_registry.lock);
     return 0;
   }
 
@@ -37,22 +43,24 @@ uint16_t valk_source_register_file(const char *filename) {
   uint16_t file_id = source_registry.count;
   source_registry.filenames[file_id] = strdup(filename);
 
-  pthread_mutex_unlock(&source_registry.lock);
+  valk_mutex_unlock(&source_registry.lock);
   return file_id;
 }
 
 const char *valk_source_get_filename(uint16_t file_id) {
   if (file_id == 0 || file_id > source_registry.count) return NULL;
+  ensure_source_registry_init();
 
-  pthread_mutex_lock(&source_registry.lock);
+  valk_mutex_lock(&source_registry.lock);
   const char *filename = source_registry.filenames[file_id];
-  pthread_mutex_unlock(&source_registry.lock);
+  valk_mutex_unlock(&source_registry.lock);
 
   return filename;
 }
 
 void valk_source_registry_reset(void) {
-  pthread_mutex_lock(&source_registry.lock);
+  ensure_source_registry_init();
+  valk_mutex_lock(&source_registry.lock);
 
   for (uint16_t i = 1; i <= source_registry.count; i++) {
     free(source_registry.filenames[i]);
@@ -60,7 +68,7 @@ void valk_source_registry_reset(void) {
   }
   source_registry.count = 0;
 
-  pthread_mutex_unlock(&source_registry.lock);
+  valk_mutex_unlock(&source_registry.lock);
 }
 
 #endif // VALK_COVERAGE

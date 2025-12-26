@@ -27,7 +27,7 @@ bool valk_coverage_enabled(void);
 const char *valk_coverage_output_path(void);
 
 #ifdef VALK_COVERAGE
-#include <pthread.h>
+#include "valk_thread.h"
 #include <stdint.h>
 
 typedef struct valk_branch_t {
@@ -64,7 +64,7 @@ typedef struct valk_line_coverage_file_t {
 typedef struct {
   valk_line_coverage_file_t *buckets[COVERAGE_HASH_SIZE];
   size_t total_files;
-  pthread_mutex_t lock;
+  valk_mutex_t lock;
 } valk_line_coverage_t;
 
 extern valk_line_coverage_t g_line_coverage;

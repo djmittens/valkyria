@@ -16,7 +16,7 @@
 #include <openssl/ssl3.h>
 #include <openssl/tls1.h>
 #include <signal.h>
-#include <pthread.h>
+#include "valk_thread.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -230,14 +230,14 @@ typedef struct {
 } valk_http_response_item_t;
 
 typedef struct {
-  pthread_mutex_t request_mutex;
-  pthread_cond_t request_ready;
+  valk_mutex_t request_mutex;
+  valk_cond_t request_ready;
   valk_http_request_item_t* request_items;
   size_t request_idx;
   size_t request_count;
   size_t request_capacity;
-  pthread_mutex_t response_mutex;
-  pthread_cond_t response_ready;
+  valk_mutex_t response_mutex;
+  valk_cond_t response_ready;
   valk_http_response_item_t* response_items;
   size_t response_idx;
   size_t response_count;

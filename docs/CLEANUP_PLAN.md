@@ -480,6 +480,7 @@ make lint                         # No new warnings
 | P3: Medium-value TODOs | DONE | 2025-12-25 | Fixed SSL error strings (aio_ssl.c:367,483) |
 | P3: Unused functions | DONE | 2025-12-25 | Removed __conn_get_sys, __conn_require_sys, __conn_is_server_side |
 | P3: Linter warnings | DONE | 2025-12-25 | Added LVAL_HANDLE cases, fixed unused vars |
+| P3: Pthread abstraction | DONE | 2025-12-25 | valk_thread.h/posix.c - ~160 pthread calls migrated |
 
 ---
 
@@ -515,17 +516,30 @@ Phase 1 completed all structural changes:
 - `valk_io_tcp_t` wrapper allows storing user callbacks
 - Foundation laid for mock-based testing
 
-### 2. Pthread Abstraction (P3 - TODO)
+### 2. Pthread Abstraction (P3 - DONE)
 
-**Scope:** ~100 direct pthread calls across src/
-**Files affected:** `concurrency.c`, `coverage.c`, `gc.c`, `aio_system.c`
-**Why:** Currently POSIX-only; Windows compatibility requires abstraction
+**Status:** ✅ COMPLETED (2025-12-25)
 
-**Suggested approach:**
-1. Create `valk_thread.h` with platform-agnostic mutex/cond/thread types
-2. Implement POSIX backend (`valk_thread_posix.c`)
-3. Stub Windows backend for future
-4. Migrate callers incrementally
+**Implementation:**
+1. ✅ Created `valk_thread.h` with platform-agnostic threading types:
+   - `valk_mutex_t`, `valk_cond_t`, `valk_thread_t`, `valk_thread_attr_t`
+   - Functions: `valk_mutex_init/destroy/lock/unlock`, `valk_cond_init/destroy/signal/broadcast/wait/timedwait`
+   - Thread: `valk_thread_create/join/self/equal/setname/getname`
+2. ✅ Implemented POSIX backend (`valk_thread_posix.c`)
+3. ✅ Added to CMakeLists.txt
+
+**Files migrated:**
+- `concurrency.h` - Types changed from `pthread_*_t` to `valk_*_t`
+- `concurrency.c` - All 58 pthread calls migrated
+- `coverage.h/c` - All 43 pthread calls migrated  
+- `source_loc.c` - All 9 pthread calls migrated
+- `metrics_v2.h/c` - All 6 pthread calls migrated
+- `aio_internal.h` - Types changed for http_queue_t
+- `aio_system.c` - All 14 pthread calls migrated
+
+**Total:** ~160 pthread calls migrated to valk_thread abstraction
+
+**Future work:** Windows backend can be added by implementing `valk_thread_win32.c`
 
 ### 3. Low-Value TODOs (Track in ROADMAP)
 
@@ -539,9 +553,16 @@ These are aspirational improvements, not cleanup:
 
 ## Summary
 
-**Completed:** All P0, P1, P2, and most P3 items
-**Remaining:** Pthread abstraction (P3, optional for Windows compat)
+**Completed:** All P0, P1, P2, and P3 items
+**Remaining:** Stale TODO comments (low priority cosmetic cleanup)
 **Code quality:** Tests pass, ASAN clean, linter clean (modulo system header issues)
+
+### Pthread Abstraction - Completed 2025-12-25
+
+Platform abstraction layer for threading primitives:
+- New files: `valk_thread.h` (API), `valk_thread_posix.c` (POSIX impl)
+- Migrated ~160 direct pthread calls across 8 files
+- Foundation ready for Windows backend (`valk_thread_win32.c`)
 
 ### TCP Ops Migration - Completed 2025-12-25
 

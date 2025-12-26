@@ -206,15 +206,15 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   sys->http_queue.request_idx = 0;
   sys->http_queue.request_count = 0;
   sys->http_queue.request_capacity = sys->config.queue_capacity;
-  pthread_mutex_init(&sys->http_queue.request_mutex, NULL);
-  pthread_cond_init(&sys->http_queue.request_ready, NULL);
+  valk_mutex_init(&sys->http_queue.request_mutex);
+  valk_cond_init(&sys->http_queue.request_ready);
 
   sys->http_queue.response_items = malloc(sizeof(valk_http_response_item_t) * sys->config.queue_capacity);
   sys->http_queue.response_idx = 0;
   sys->http_queue.response_count = 0;
   sys->http_queue.response_capacity = sys->config.queue_capacity;
-  pthread_mutex_init(&sys->http_queue.response_mutex, NULL);
-  pthread_cond_init(&sys->http_queue.response_ready, NULL);
+  valk_mutex_init(&sys->http_queue.response_mutex);
+  valk_cond_init(&sys->http_queue.response_ready);
 
 #ifdef VALK_METRICS_ENABLED
   static bool metrics_initialized = false;
@@ -252,7 +252,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
 
   int status = uv_thread_create(&sys->loopThread, __event_loop, sys);
   if (status) {
-    perror("pthread_create");
+    perror("uv_thread_create");
     uv_sem_destroy(&sys->startup_sem);
     return NULL;
   }
@@ -270,7 +270,7 @@ bool valk_aio_is_shutting_down(valk_aio_system_t *sys) {
 void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
   if (!sys) return;
 
-  if (!pthread_equal(pthread_self(), sys->loopThread)) {
+  if (!valk_thread_equal(valk_thread_self(), (valk_thread_t)sys->loopThread)) {
     uv_thread_join(&sys->loopThread);
   }
 
@@ -280,10 +280,10 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
 
   free(sys->http_queue.request_items);
   free(sys->http_queue.response_items);
-  pthread_mutex_destroy(&sys->http_queue.request_mutex);
-  pthread_cond_destroy(&sys->http_queue.request_ready);
-  pthread_mutex_destroy(&sys->http_queue.response_mutex);
-  pthread_cond_destroy(&sys->http_queue.response_ready);
+  valk_mutex_destroy(&sys->http_queue.request_mutex);
+  valk_cond_destroy(&sys->http_queue.request_ready);
+  valk_mutex_destroy(&sys->http_queue.response_mutex);
+  valk_cond_destroy(&sys->http_queue.response_ready);
 
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     valk_slab_free(sys->httpServers);

@@ -79,6 +79,7 @@ find_package(OpenSSL REQUIRED)
 set(VALKYRIA_SOURCES
   src/parser.c
   src/memory.c
+  src/valk_thread_posix.c
   src/concurrency.c  # TODO: Remove once AIO is updated to use continuations
   src/gc.c
   src/debug.c

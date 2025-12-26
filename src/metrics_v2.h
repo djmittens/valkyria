@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <stdbool.h>
-#include <pthread.h>
+#include "valk_thread.h"
 
 // ============================================================================
 // METRIC TYPES
@@ -131,7 +131,7 @@ typedef struct {
   uint8_t quantile_count;
 
   // Lock for centroid updates (rare path)
-  pthread_mutex_t lock;
+  valk_mutex_t lock;
 
   // Delta tracking
   uint64_t last_total_weight;
@@ -258,7 +258,7 @@ typedef struct {
   // String interning pool
   const char *string_pool[4096];
   size_t string_pool_count;
-  pthread_mutex_t pool_lock;
+  valk_mutex_t pool_lock;
 
   // Snapshot interval tracking
   uint64_t last_snapshot_time;

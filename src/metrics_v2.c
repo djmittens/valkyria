@@ -33,26 +33,24 @@ uint64_t valk_metrics_now_us(void) {
 static const char *intern_string(const char *str) {
   if (!str) return NULL;
 
-  pthread_mutex_lock(&g_metrics.pool_lock);
+  valk_mutex_lock(&g_metrics.pool_lock);
 
-  // Check if already interned
   for (size_t i = 0; i < g_metrics.string_pool_count; i++) {
     if (strcmp(g_metrics.string_pool[i], str) == 0) {
-      pthread_mutex_unlock(&g_metrics.pool_lock);
+      valk_mutex_unlock(&g_metrics.pool_lock);
       return g_metrics.string_pool[i];
     }
   }
 
-  // Add new string
   if (g_metrics.string_pool_count >= 4096) {
-    pthread_mutex_unlock(&g_metrics.pool_lock);
-    return strdup(str);  // Fallback: non-interned
+    valk_mutex_unlock(&g_metrics.pool_lock);
+    return strdup(str);
   }
 
   char *copy = strdup(str);
   g_metrics.string_pool[g_metrics.string_pool_count++] = copy;
 
-  pthread_mutex_unlock(&g_metrics.pool_lock);
+  valk_mutex_unlock(&g_metrics.pool_lock);
   return copy;
 }
 
@@ -90,14 +88,13 @@ static bool labels_equal(const valk_label_set_v2_t *a, const valk_label_set_v2_t
 
 void valk_metrics_registry_init(void) {
   memset(&g_metrics, 0, sizeof(g_metrics));
-  pthread_mutex_init(&g_metrics.pool_lock, NULL);
+  valk_mutex_init(&g_metrics.pool_lock);
 
-  g_metrics.snapshot_interval_us = 1000000;  // 1 second default
+  g_metrics.snapshot_interval_us = 1000000;
   g_metrics.start_time_us = get_timestamp_us();
   g_metrics.last_snapshot_time = g_metrics.start_time_us;
   g_metrics.eviction_threshold_us = VALK_EVICTION_THRESHOLD_US;
 
-  // Initialize free list heads to empty
   atomic_store(&g_metrics.counter_free.head, VALK_INVALID_SLOT);
   atomic_store(&g_metrics.gauge_free.head, VALK_INVALID_SLOT);
   atomic_store(&g_metrics.histogram_free.head, VALK_INVALID_SLOT);
@@ -105,7 +102,7 @@ void valk_metrics_registry_init(void) {
 }
 
 void valk_metrics_registry_destroy(void) {
-  pthread_mutex_destroy(&g_metrics.pool_lock);
+  valk_mutex_destroy(&g_metrics.pool_lock);
 
   // Free interned strings
   for (size_t i = 0; i < g_metrics.string_pool_count; i++) {

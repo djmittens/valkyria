@@ -2,9 +2,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-// TODO(networking): Abstract pthread away in here, only available on posix
-// system very inconsistent api across different systems too
-#include <pthread.h>
+#include "valk_thread.h"
 #include "log.h"
 #include <stdint.h>
 
@@ -19,23 +17,23 @@
     (queue)->isShuttingDown = 0;                                     \
     (queue)->futureSlab = valk_slab_new(sizeof(valk_future), 1000);  \
     (queue)->promiseSlab = valk_slab_new(sizeof(valk_promise), 100); \
-    pthread_mutex_init(&(queue)->mutex, 0);                          \
-    pthread_cond_init(&(queue)->isEmpty, 0);                         \
-    pthread_cond_init(&(queue)->notEmpty, 0);                        \
-    pthread_cond_init(&(queue)->notFull, 0);                         \
-    pthread_cond_init(&(queue)->workerReady, 0);                     \
-    pthread_cond_init(&(queue)->workerDead, 0);                      \
+    valk_mutex_init(&(queue)->mutex);                                \
+    valk_cond_init(&(queue)->isEmpty);                               \
+    valk_cond_init(&(queue)->notEmpty);                              \
+    valk_cond_init(&(queue)->notFull);                               \
+    valk_cond_init(&(queue)->workerReady);                           \
+    valk_cond_init(&(queue)->workerDead);                            \
   } while (0)
 
 #define valk_work_free(queue)                    \
   do {                                           \
     free((queue)->items);                        \
-    pthread_mutex_destroy(&(queue)->mutex);      \
-    pthread_cond_destroy(&(queue)->isEmpty);     \
-    pthread_cond_destroy(&(queue)->notEmpty);    \
-    pthread_cond_destroy(&(queue)->notFull);     \
-    pthread_cond_destroy(&(queue)->workerReady); \
-    pthread_cond_destroy(&(queue)->workerDead);  \
+    valk_mutex_destroy(&(queue)->mutex);         \
+    valk_cond_destroy(&(queue)->isEmpty);        \
+    valk_cond_destroy(&(queue)->notEmpty);       \
+    valk_cond_destroy(&(queue)->notFull);        \
+    valk_cond_destroy(&(queue)->workerReady);    \
+    valk_cond_destroy(&(queue)->workerDead);     \
   } while (0)
 
 #define valk_work_add(queue, _task)                                          \
@@ -126,8 +124,8 @@ typedef void(valk_future_free_cb)(void *userData, void *future);
 typedef struct valk_future {
   int done;
   size_t refcount;
-  pthread_mutex_t mutex;
-  pthread_cond_t resolved;
+  valk_mutex_t mutex;
+  valk_cond_t resolved;
   valk_arc_box *item;
 
 #ifdef VALK_ARC_DEBUG
@@ -171,12 +169,12 @@ typedef struct {
 } valk_task;
 
 typedef struct {
-  pthread_mutex_t mutex;
-  pthread_cond_t isEmpty;
-  pthread_cond_t notEmpty;
-  pthread_cond_t notFull;
-  pthread_cond_t workerReady;
-  pthread_cond_t workerDead;
+  valk_mutex_t mutex;
+  valk_cond_t isEmpty;
+  valk_cond_t notEmpty;
+  valk_cond_t notFull;
+  valk_cond_t workerReady;
+  valk_cond_t workerDead;
   valk_slab_t *futureSlab;
   valk_slab_t *promiseSlab;
   valk_task *items;
@@ -190,7 +188,7 @@ typedef struct {
 typedef struct valk_worker {
   char *name;
   valk_task_queue *queue;
-  pthread_t thread;
+  valk_thread_t thread;
 } valk_worker;
 
 typedef struct {

@@ -4704,7 +4704,6 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "\\", valk_builtin_lambda);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
 
-  // TODO(main):  Doesnt actually work lols, no idea why
   valk_lenv_put_builtin(env, "ord", valk_builtin_ord);
 
   valk_lenv_put_builtin(env, "if", valk_builtin_if);
