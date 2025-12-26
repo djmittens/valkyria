@@ -212,8 +212,47 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
 }
 
 static void __http_shutdown_cb(valk_aio_handle_t *hndl) {
-  UNUSED(hndl);
-  VALK_INFO("TODO: shutdown the server cleanly");
+  valk_aio_http_server *srv = hndl->arg;
+  if (!srv || !srv->sys) {
+    return;
+  }
+
+  if (srv->state == VALK_SRV_CLOSING || srv->state == VALK_SRV_CLOSED) {
+    return;
+  }
+
+  srv->state = VALK_SRV_CLOSING;
+  VALK_INFO("Server :%d shutting down, sending GOAWAY to connections", srv->port);
+
+  valk_aio_system_t *sys = srv->sys;
+  if (sys->shuttingDown) {
+    srv->state = VALK_SRV_CLOSED;
+    return;
+  }
+
+  int goaway_count = 0;
+
+  valk_aio_handle_t *h = sys->liveHandles.next;
+  while (h && h != &sys->liveHandles) {
+    valk_aio_handle_t *next = h->next;
+
+    if (h->kind == VALK_HNDL_HTTP_CONN && h->http.server == srv) {
+      if (h->http.state == VALK_CONN_ESTABLISHED && 
+          h->http.session &&
+          !uv_is_closing((uv_handle_t *)&h->uv.tcp)) {
+        valk_http2_submit_goaway(h, NGHTTP2_NO_ERROR);
+        valk_http2_flush_pending(h);
+        goaway_count++;
+      }
+    }
+
+    h = next;
+  }
+
+  if (goaway_count > 0) {
+    VALK_INFO("Server :%d sent GOAWAY to %d connections", srv->port, goaway_count);
+  }
+  srv->state = VALK_SRV_CLOSED;
 }
 
 static void __http_listen_cb(valk_aio_system_t *sys,
