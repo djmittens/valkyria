@@ -17,8 +17,6 @@ void valk_http2_conn_handle_closed_cb(uv_handle_t *handle);
 
 size_t valk_http2_flush_frames(valk_buffer_t *buf, valk_aio_handle_t *conn);
 
-bool valk_http2_backpressure_list_add(valk_aio_handle_t *conn);
-void valk_http2_backpressure_list_remove(valk_aio_handle_t *conn);
 void valk_http2_backpressure_try_resume_one(valk_aio_system_t *sys);
 
 int valk_http2_send_server_connection_header(nghttp2_session *session, valk_aio_system_t *sys);

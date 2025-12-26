@@ -1,8 +1,9 @@
 #include "aio_conn_io.h"
 #include "aio_internal.h"
 
-void valk_conn_io_init(valk_conn_io_t *io) {
+void valk_conn_io_init(valk_conn_io_t *io, size_t buf_size) {
   memset(io, 0, sizeof(*io));
+  io->buf_size = buf_size;
 }
 
 void valk_conn_io_free(valk_conn_io_t *io, valk_slab_t *slab) {
@@ -32,21 +33,14 @@ bool valk_conn_io_read_buf_acquire(valk_conn_io_t *io, valk_slab_t *slab) {
   return true;
 }
 
-void valk_conn_io_read_buf_release(valk_conn_io_t *io, valk_slab_t *slab) {
-  if (io->read_buf && slab) {
-    valk_slab_release(slab, io->read_buf);
-    io->read_buf = NULL;
-  }
-}
-
 uint8_t *valk_conn_io_read_buf_data(valk_conn_io_t *io) {
   if (!io->read_buf) return NULL;
   __tcp_buffer_slab_item_t *item = (void *)io->read_buf->data;
   return (uint8_t *)item->data;
 }
 
-size_t valk_conn_io_read_buf_size(void) {
-  return HTTP_SLAB_ITEM_SIZE;
+size_t valk_conn_io_read_buf_size(valk_conn_io_t *io) {
+  return io->buf_size;
 }
 
 bool valk_conn_io_write_buf_acquire(valk_conn_io_t *io, valk_slab_t *slab) {
@@ -65,14 +59,6 @@ bool valk_conn_io_write_buf_acquire(valk_conn_io_t *io, valk_slab_t *slab) {
   return true;
 }
 
-void valk_conn_io_write_buf_release(valk_conn_io_t *io, valk_slab_t *slab) {
-  if (io->write_buf && slab) {
-    valk_slab_release(slab, io->write_buf);
-    io->write_buf = NULL;
-    io->write_pos = 0;
-  }
-}
-
 uint8_t *valk_conn_io_write_buf_data(valk_conn_io_t *io) {
   if (!io->write_buf) return NULL;
   __tcp_buffer_slab_item_t *item = (void *)io->write_buf->data;
@@ -81,7 +67,7 @@ uint8_t *valk_conn_io_write_buf_data(valk_conn_io_t *io) {
 
 size_t valk_conn_io_write_buf_available(valk_conn_io_t *io) {
   if (!io->write_buf) return 0;
-  return HTTP_SLAB_ITEM_SIZE - io->write_pos;
+  return io->buf_size - io->write_pos;
 }
 
 bool valk_conn_io_write_buf_writable(valk_conn_io_t *io, valk_slab_t *slab, size_t min_space) {
@@ -108,27 +94,24 @@ size_t valk_conn_io_write_buf_append(valk_conn_io_t *io, valk_slab_t *slab,
 }
 
 static void __conn_io_flush_cb(uv_write_t *req, int status) {
-  valk_aio_handle_t *conn = req->data;
-  
-  if (!conn || conn->magic != VALK_AIO_HANDLE_MAGIC) {
-    VALK_ERROR("Invalid connection in write flush callback");
-    return;
-  }
+  valk_conn_io_t *io = req->data;
   
   if (status != 0) {
     VALK_ERROR("Write flush failed: %s", uv_strerror(status));
   }
   
-  conn->http.io.write_flush_pending = false;
-  conn->http.io.write_pos = 0;
+  io->write_flush_pending = false;
+  io->write_pos = 0;
   
   VALK_TRACE("Write flush complete, buffer reset");
+  
+  if (io->flush_cb) {
+    io->flush_cb(io->flush_ctx, status);
+  }
 }
 
 int valk_conn_io_flush(valk_conn_io_t *io, uv_stream_t *stream,
-                       valk_conn_io_flush_cb on_complete) {
-  (void)on_complete;
-  
+                       valk_conn_io_flush_cb cb, void *ctx) {
   if (!io->write_buf || io->write_pos == 0) {
     return 0;
   }
@@ -144,7 +127,9 @@ int valk_conn_io_flush(valk_conn_io_t *io, uv_stream_t *stream,
   io->write_flush_pending = true;
   io->write_uv_buf.base = (char *)valk_conn_io_write_buf_data(io);
   io->write_uv_buf.len = io->write_pos;
-  io->write_req.data = stream->data;
+  io->write_req.data = io;
+  io->flush_cb = cb;
+  io->flush_ctx = ctx;
   
   VALK_TRACE("Flushing write buffer: %zu bytes", io->write_pos);
   
@@ -156,9 +141,4 @@ int valk_conn_io_flush(valk_conn_io_t *io, uv_stream_t *stream,
   }
   
   return 0;
-}
-
-void valk_conn_io_on_flush_complete(valk_conn_io_t *io) {
-  io->write_flush_pending = false;
-  io->write_pos = 0;
 }

@@ -115,6 +115,7 @@ static void __http_server_accept_cb(uv_stream_t *stream, int status) {
   conn->http.server = srv;
   conn->http.httpHandler = &srv->handler;
   conn->http.active_arena_head = UINT32_MAX;
+  conn->http.io.buf_size = HTTP_SLAB_ITEM_SIZE;
 
 #ifdef VALK_METRICS_ENABLED
   conn->http.diag.state = VALK_DIAG_CONN_CONNECTING;

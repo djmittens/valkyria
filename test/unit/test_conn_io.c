@@ -11,11 +11,12 @@ static void test_conn_io_init(VALK_TEST_ARGS()) {
   VALK_TEST();
   
   valk_conn_io_t io;
-  valk_conn_io_init(&io);
+  valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
   
   ASSERT_NULL(io.read_buf);
   ASSERT_NULL(io.write_buf);
   ASSERT_EQ(io.write_pos, 0);
+  ASSERT_EQ(io.buf_size, HTTP_SLAB_ITEM_SIZE);
   ASSERT_FALSE(io.write_flush_pending);
   
   VALK_PASS();
@@ -24,7 +25,9 @@ static void test_conn_io_init(VALK_TEST_ARGS()) {
 static void test_conn_io_read_buf_size(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  size_t size = valk_conn_io_read_buf_size();
+  valk_conn_io_t io;
+  valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
+  size_t size = valk_conn_io_read_buf_size(&io);
   ASSERT_EQ(size, HTTP_SLAB_ITEM_SIZE);
   
   VALK_PASS();
@@ -34,7 +37,7 @@ static void test_conn_io_write_buf_acquire_null_slab(VALK_TEST_ARGS()) {
   VALK_TEST();
   
   valk_conn_io_t io;
-  valk_conn_io_init(&io);
+  valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
   
   bool result = valk_conn_io_write_buf_acquire(&io, NULL);
   ASSERT_FALSE(result);
@@ -47,7 +50,7 @@ static void test_conn_io_write_buf_available_no_buf(VALK_TEST_ARGS()) {
   VALK_TEST();
   
   valk_conn_io_t io;
-  valk_conn_io_init(&io);
+  valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
   
   size_t available = valk_conn_io_write_buf_available(&io);
   ASSERT_EQ(available, 0);
@@ -59,7 +62,7 @@ static void test_conn_io_write_buf_data_no_buf(VALK_TEST_ARGS()) {
   VALK_TEST();
   
   valk_conn_io_t io;
-  valk_conn_io_init(&io);
+  valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
   
   uint8_t *data = valk_conn_io_write_buf_data(&io);
   ASSERT_NULL(data);
@@ -71,7 +74,7 @@ static void test_conn_io_write_buf_append_no_buf(VALK_TEST_ARGS()) {
   VALK_TEST();
   
   valk_conn_io_t io;
-  valk_conn_io_init(&io);
+  valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
   
   uint8_t data[] = {1, 2, 3};
   size_t written = valk_conn_io_write_buf_append(&io, NULL, data, sizeof(data));
@@ -84,7 +87,7 @@ static void test_conn_io_read_buf_acquire_null_slab(VALK_TEST_ARGS()) {
   VALK_TEST();
   
   valk_conn_io_t io;
-  valk_conn_io_init(&io);
+  valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
   
   bool result = valk_conn_io_read_buf_acquire(&io, NULL);
   ASSERT_FALSE(result);
@@ -97,7 +100,7 @@ static void test_conn_io_read_buf_data_no_buf(VALK_TEST_ARGS()) {
   VALK_TEST();
   
   valk_conn_io_t io;
-  valk_conn_io_init(&io);
+  valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
   
   uint8_t *data = valk_conn_io_read_buf_data(&io);
   ASSERT_NULL(data);
@@ -113,22 +116,6 @@ static void test_conn_io_free_null(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-static void test_conn_io_on_flush_complete(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  
-  valk_conn_io_t io;
-  valk_conn_io_init(&io);
-  io.write_flush_pending = true;
-  io.write_pos = 100;
-  
-  valk_conn_io_on_flush_complete(&io);
-  
-  ASSERT_FALSE(io.write_flush_pending);
-  ASSERT_EQ(io.write_pos, 0);
-  
-  VALK_PASS();
-}
-
 static void test_conn_io_with_slab(VALK_TEST_ARGS()) {
   VALK_TEST();
   
@@ -136,7 +123,7 @@ static void test_conn_io_with_slab(VALK_TEST_ARGS()) {
     valk_slab_t *slab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 4);
     
     valk_conn_io_t io;
-    valk_conn_io_init(&io);
+    valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
     
     ASSERT_TRUE(valk_conn_io_write_buf_acquire(&io, slab));
     ASSERT_NOT_NULL(io.write_buf);
@@ -179,7 +166,7 @@ static void test_conn_io_writable(VALK_TEST_ARGS()) {
     valk_slab_t *slab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 4);
     
     valk_conn_io_t io;
-    valk_conn_io_init(&io);
+    valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
     
     ASSERT_TRUE(valk_conn_io_write_buf_writable(&io, slab, 100));
     ASSERT_NOT_NULL(io.write_buf);
@@ -210,7 +197,6 @@ int main(int argc, const char *argv[]) {
   valk_testsuite_add_test(suite, "test_conn_io_read_buf_acquire_null_slab", test_conn_io_read_buf_acquire_null_slab);
   valk_testsuite_add_test(suite, "test_conn_io_read_buf_data_no_buf", test_conn_io_read_buf_data_no_buf);
   valk_testsuite_add_test(suite, "test_conn_io_free_null", test_conn_io_free_null);
-  valk_testsuite_add_test(suite, "test_conn_io_on_flush_complete", test_conn_io_on_flush_complete);
   valk_testsuite_add_test(suite, "test_conn_io_with_slab", test_conn_io_with_slab);
   valk_testsuite_add_test(suite, "test_conn_io_writable", test_conn_io_writable);
   

@@ -230,6 +230,7 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
   client->connection->uv.tcp.data = client->connection;
 
   client->connection->http.state = VALK_CONN_INIT;
+  client->connection->http.io.buf_size = HTTP_SLAB_ITEM_SIZE;
 
   valk_dll_insert_after(&sys->liveHandles, client->connection);
 

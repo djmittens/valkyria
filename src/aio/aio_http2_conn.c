@@ -15,14 +15,6 @@ static void __backpressure_list_remove(valk_aio_handle_t *conn) {
   valk_backpressure_list_remove(&sys->backpressure, conn);
 }
 
-bool valk_http2_backpressure_list_add(valk_aio_handle_t *conn) {
-  return __backpressure_list_add(conn);
-}
-
-void valk_http2_backpressure_list_remove(valk_aio_handle_t *conn) {
-  __backpressure_list_remove(conn);
-}
-
 void valk_http2_backpressure_try_resume_one(valk_aio_system_t *sys) {
   if (!sys) return;
   valk_aio_handle_t *conn = valk_backpressure_list_try_resume(
@@ -46,7 +38,7 @@ void valk_http2_conn_alloc_callback(uv_handle_t *handle, size_t suggested_size,
   if (conn && conn->magic == VALK_AIO_HANDLE_MAGIC && conn->kind == VALK_HNDL_HTTP_CONN) {
     if (conn->http.io.read_buf) {
       buf->base = (char *)valk_conn_io_read_buf_data(&conn->http.io);
-      buf->len = valk_conn_io_read_buf_size();
+      buf->len = valk_conn_io_read_buf_size(&conn->http.io);
       return;
     }
     
@@ -58,7 +50,7 @@ void valk_http2_conn_alloc_callback(uv_handle_t *handle, size_t suggested_size,
     }
     
     buf->base = (char *)valk_conn_io_read_buf_data(&conn->http.io);
-    buf->len = valk_conn_io_read_buf_size();
+    buf->len = valk_conn_io_read_buf_size(&conn->http.io);
     return;
   }
   
@@ -99,55 +91,13 @@ size_t valk_http2_conn_write_buf_append(valk_aio_handle_t *conn, const uint8_t *
   return valk_conn_io_write_buf_append(&conn->http.io, conn->sys->tcpBufferSlab, data, len);
 }
 
-static void __conn_write_buf_on_flush_complete(uv_write_t *req, int status);
-
-int valk_http2_conn_write_buf_flush(valk_aio_handle_t *conn) {
-  if (!conn->http.io.write_buf || conn->http.io.write_pos == 0) {
-    return 0;
-  }
-  
-  if (conn->http.io.write_flush_pending) {
-    return 1;
-  }
-  
-  if (uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
-    return -1;
-  }
-  
-  conn->http.io.write_flush_pending = true;
-  conn->http.io.write_uv_buf.base = (char *)valk_http2_conn_write_buf_data(conn);
-  conn->http.io.write_uv_buf.len = conn->http.io.write_pos;
-  conn->http.io.write_req.data = conn;
-  
-  VALK_TRACE("Flushing write buffer: %zu bytes", conn->http.io.write_pos);
-  
-  int rv = uv_write(&conn->http.io.write_req, (uv_stream_t *)&conn->uv.tcp,
-                    &conn->http.io.write_uv_buf, 1, __conn_write_buf_on_flush_complete);
-  if (rv != 0) {
-    VALK_ERROR("uv_write failed: %s", uv_strerror(rv));
-    conn->http.io.write_flush_pending = false;
-    return -1;
-  }
-  
-  return 0;
-}
-
-static void __conn_write_buf_on_flush_complete(uv_write_t *req, int status) {
-  valk_aio_handle_t *conn = req->data;
+static void __http2_flush_complete(void *ctx, int status) {
+  valk_aio_handle_t *conn = ctx;
   
   if (!conn || conn->magic != VALK_AIO_HANDLE_MAGIC) {
-    VALK_ERROR("Invalid connection in write flush callback");
+    VALK_ERROR("Invalid connection in HTTP flush callback");
     return;
   }
-  
-  if (status != 0) {
-    VALK_ERROR("Write flush failed: %s", uv_strerror(status));
-  }
-  
-  conn->http.io.write_flush_pending = false;
-  conn->http.io.write_pos = 0;
-  
-  VALK_TRACE("Write flush complete, buffer reset");
   
   valk_http2_backpressure_try_resume_one(conn->sys);
   
@@ -166,6 +116,11 @@ static void __conn_write_buf_on_flush_complete(uv_write_t *req, int status) {
       valk_http2_continue_pending_send(conn);
     }
   }
+}
+
+int valk_http2_conn_write_buf_flush(valk_aio_handle_t *conn) {
+  return valk_conn_io_flush(&conn->http.io, (uv_stream_t *)&conn->uv.tcp,
+                            __http2_flush_complete, conn);
 }
 
 size_t valk_http2_flush_frames(valk_buffer_t *buf, valk_aio_handle_t *conn) {
