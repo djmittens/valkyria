@@ -208,7 +208,7 @@ int valk_http2_on_begin_headers_callback(nghttp2_session *session,
         ps->conn = conn;
         ps->session = session;
         ps->stream_id = frame->hd.stream_id;
-        ps->queued_time_ms = uv_now(conn->uv.tcp.loop);
+        ps->queued_time_ms = uv_now(CONN_UV_LOOP(conn));
         ps->headers_complete = false;
 
         nghttp2_session_set_stream_user_data(session, frame->hd.stream_id,
@@ -926,7 +926,7 @@ static void __pending_stream_process_batch(valk_aio_system_t *sys) {
     VALK_ASSERT(__is_pending_stream(current_data),
                 "pending stream %d user_data is not a pending stream marker", ps->stream_id);
 
-    uint64_t wait_ms = uv_now(ps->conn->uv.tcp.loop) - ps->queued_time_ms;
+    uint64_t wait_ms = uv_now(CONN_UV_LOOP(ps->conn)) - ps->queued_time_ms;
     VALK_INFO("Processing pending stream %d (waited %lums)",
               ps->stream_id, (unsigned long)wait_ms);
 

@@ -183,7 +183,7 @@ void test_branch_coverage_records_line(VALK_TEST_ARGS()) {
 
 int main(void) {
   size_t heap_size = 16 * 1024 * 1024;
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(heap_size, 0);
+  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
   valk_thread_ctx.allocator = (valk_mem_allocator_t*)heap;
 
   valk_test_suite_t* suite = valk_testsuite_empty(__FILE__);

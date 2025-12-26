@@ -22,7 +22,7 @@ typedef struct {
 static test_gc_ctx_t test_setup_gc(void) {
   test_gc_ctx_t ctx;
   size_t threshold = 16 * 1024 * 1024;  // 16 MB
-  ctx.heap = valk_gc_malloc_heap_init(threshold, 0);
+  ctx.heap = valk_gc_malloc_heap_init(0);
   ctx.old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)ctx.heap;
   valk_thread_ctx.heap = ctx.heap;

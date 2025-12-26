@@ -10,7 +10,7 @@
 void test_gc_heap_init(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
   VALK_TEST_ASSERT(heap != NULL, "GC heap should be created");
   VALK_TEST_ASSERT(heap->type == VALK_ALLOC_GC_HEAP, "Type should be GC_HEAP");
   VALK_TEST_ASSERT(heap->allocated_bytes == 0, "Initial allocated_bytes should be 0");
@@ -26,7 +26,7 @@ void test_gc_heap_init(VALK_TEST_ARGS()) {
 void test_gc_heap_init_default_limit(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
   VALK_TEST_ASSERT(heap != NULL, "GC heap should be created");
   VALK_TEST_ASSERT(heap->hard_limit > 0, "Default hard_limit should be set");
 
@@ -38,7 +38,7 @@ void test_gc_heap_init_default_limit(VALK_TEST_ARGS()) {
 void test_gc_heap_alloc(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
   size_t before = heap->allocated_bytes;
 
   void *ptr = valk_gc_malloc_heap_alloc(heap, 1024);
@@ -53,7 +53,7 @@ void test_gc_heap_alloc(VALK_TEST_ARGS()) {
 void test_gc_heap_alloc_multiple(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   void *ptrs[100];
   for (int i = 0; i < 100; i++) {
@@ -71,7 +71,7 @@ void test_gc_heap_alloc_multiple(VALK_TEST_ARGS()) {
 void test_gc_set_root(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
   VALK_TEST_ASSERT(heap->root_env == NULL, "root_env should be NULL initially");
 
   valk_gc_malloc_heap_destroy(heap);
@@ -82,7 +82,7 @@ void test_gc_set_root(VALK_TEST_ARGS()) {
 void test_gc_set_hard_limit(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
   size_t original = heap->hard_limit;
 
   valk_gc_set_hard_limit(heap, 20 * 1024 * 1024);
@@ -99,7 +99,7 @@ void test_gc_set_hard_limit(VALK_TEST_ARGS()) {
 void test_gc_set_thresholds(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_gc_set_thresholds(heap, 80, 60, 500);
   VALK_TEST_ASSERT(heap->gc_threshold_pct == 80, "threshold_pct should be 80");
@@ -114,7 +114,7 @@ void test_gc_set_thresholds(VALK_TEST_ARGS()) {
 void test_gc_should_collect(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024, 10 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024);
 
   bool should = valk_gc_malloc_should_collect(heap);
   VALK_TEST_ASSERT(should == false || should == true, "Result should be boolean");
@@ -127,7 +127,7 @@ void test_gc_should_collect(VALK_TEST_ARGS()) {
 void test_gc_heap_usage_pct(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   uint8_t pct = valk_gc_heap_usage_pct(heap);
   VALK_TEST_ASSERT(pct <= 100, "Usage percentage should be 0-100");
@@ -140,7 +140,7 @@ void test_gc_heap_usage_pct(VALK_TEST_ARGS()) {
 void test_gc_collect_empty_heap(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   size_t reclaimed = valk_gc_malloc_collect(heap, NULL);
   VALK_TEST_ASSERT(heap->num_collections == 1, "Should count collection");
@@ -154,7 +154,7 @@ void test_gc_collect_empty_heap(VALK_TEST_ARGS()) {
 void test_gc_collect_with_allocations(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   for (int i = 0; i < 10; i++) {
     valk_gc_malloc_heap_alloc(heap, 1024);
@@ -175,7 +175,7 @@ void test_gc_collect_with_allocations(VALK_TEST_ARGS()) {
 void test_gc_get_runtime_metrics(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   uint64_t cycles, pause_total, pause_max, reclaimed;
   size_t heap_used, heap_total;
@@ -195,7 +195,7 @@ void test_gc_get_runtime_metrics(VALK_TEST_ARGS()) {
 void test_gc_runtime_metrics_after_collect(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_gc_malloc_collect(heap, NULL);
 
@@ -215,7 +215,7 @@ void test_gc_runtime_metrics_after_collect(VALK_TEST_ARGS()) {
 void test_gc_print_stats_does_not_crash(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_gc_malloc_print_stats(heap);
 
@@ -286,7 +286,7 @@ void test_gc_heap_destroy_null_safe(VALK_TEST_ARGS()) {
 void test_gc_multiple_collections(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   for (int i = 0; i < 5; i++) {
     valk_gc_malloc_heap_alloc(heap, 1024);
@@ -303,7 +303,7 @@ void test_gc_multiple_collections(VALK_TEST_ARGS()) {
 void test_gc_stats_tracking(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   VALK_TEST_ASSERT(heap->stats.overflow_allocations == 0, "Initial overflow should be 0");
   VALK_TEST_ASSERT(heap->stats.evacuations_from_scratch == 0, "Initial evacuations should be 0");
@@ -317,7 +317,7 @@ void test_gc_stats_tracking(VALK_TEST_ARGS()) {
 void test_gc_free_list_initially_empty(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   VALK_TEST_ASSERT(heap->free_list == NULL, "Initial free_list should be NULL");
   VALK_TEST_ASSERT(heap->free_list_size == 0, "Initial free_list_size should be 0");
@@ -330,7 +330,7 @@ void test_gc_free_list_initially_empty(VALK_TEST_ARGS()) {
 void test_gc_slab_allocated(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   VALK_TEST_ASSERT(heap->lval_size > 0, "lval_size should be > 0");
   VALK_TEST_ASSERT(heap->lenv_size > 0, "lenv_size should be > 0");
@@ -343,7 +343,7 @@ void test_gc_slab_allocated(VALK_TEST_ARGS()) {
 void test_gc_thresholds_boundary(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_gc_set_thresholds(heap, 1, 1, 0);
   VALK_TEST_ASSERT(heap->gc_threshold_pct == 1, "threshold can be 1");
@@ -367,7 +367,7 @@ void test_gc_set_thresholds_null(VALK_TEST_ARGS()) {
 void test_gc_set_thresholds_zero_defaults(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_gc_set_thresholds(heap, 0, 0, 0);
   VALK_TEST_ASSERT(heap->gc_threshold_pct == 75, "zero threshold should use default 75");
@@ -400,7 +400,7 @@ void test_gc_heap_usage_pct_null(VALK_TEST_ARGS()) {
 void test_gc_set_hard_limit_below_usage(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   for (int i = 0; i < 100; i++) {
     valk_gc_malloc_heap_alloc(heap, 1024);
@@ -420,7 +420,7 @@ void test_gc_set_hard_limit_below_usage(VALK_TEST_ARGS()) {
 void test_gc_lval_forwarding(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_lval_t *src = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
   valk_lval_t *dst = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
@@ -445,7 +445,7 @@ void test_gc_lval_forwarding(VALK_TEST_ARGS()) {
 void test_gc_follow_forward_chain(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_lval_t *a = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
   valk_lval_t *b = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
@@ -483,7 +483,7 @@ void test_gc_get_runtime_metrics_null_heap(VALK_TEST_ARGS()) {
 void test_gc_get_runtime_metrics_null_params(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_gc_get_runtime_metrics(heap, NULL, NULL, NULL, NULL, NULL, NULL);
 
@@ -495,7 +495,7 @@ void test_gc_get_runtime_metrics_null_params(VALK_TEST_ARGS()) {
 void test_gc_peak_usage_tracking(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
   VALK_TEST_ASSERT(heap->stats.peak_usage == 0, "Initial peak should be 0");
 
   for (int i = 0; i < 10; i++) {
@@ -512,7 +512,7 @@ void test_gc_peak_usage_tracking(VALK_TEST_ARGS()) {
 void test_gc_add_to_objects(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_lval_t *val = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
   val->flags = LVAL_NUM;
@@ -530,7 +530,7 @@ void test_gc_memory_print_stats(VALK_TEST_ARGS()) {
   valk_mem_arena_t *scratch = malloc(arena_size);
   valk_mem_arena_init(scratch, 4096);
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   FILE *devnull = fopen("/dev/null", "w");
   if (devnull) {
@@ -547,7 +547,7 @@ void test_gc_memory_print_stats(VALK_TEST_ARGS()) {
 void test_gc_memory_print_stats_null_output(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_memory_print_stats(NULL, heap, NULL);
 
@@ -577,7 +577,7 @@ void test_gc_memory_print_stats_null_heap(VALK_TEST_ARGS()) {
 void test_gc_collect_with_additional_root(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_lval_t *root = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
   root->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
@@ -603,7 +603,7 @@ void test_gc_print_stats_null(VALK_TEST_ARGS()) {
 void test_gc_mark_lval_external(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_lval_t *val = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
   val->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
@@ -629,7 +629,7 @@ void test_gc_mark_lval_external_null(VALK_TEST_ARGS()) {
 void test_gc_free_object(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   void *ptr = valk_gc_malloc_heap_alloc(heap, 1024);
   VALK_TEST_ASSERT(ptr != NULL, "Should allocate");
@@ -647,7 +647,7 @@ void test_gc_free_object(VALK_TEST_ARGS()) {
 void test_gc_free_object_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_gc_free_object(heap, NULL);
 
@@ -685,7 +685,7 @@ void test_gc_should_checkpoint_high_threshold(VALK_TEST_ARGS()) {
 void test_gc_lval_sizes_set(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   extern size_t __valk_lval_size;
   extern size_t __valk_lenv_size;
@@ -717,7 +717,7 @@ void test_gc_checkpoint_null_args(VALK_TEST_ARGS()) {
 
   valk_checkpoint(scratch, NULL, NULL);
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_checkpoint(NULL, heap, NULL);
 
@@ -730,7 +730,7 @@ void test_gc_checkpoint_null_args(VALK_TEST_ARGS()) {
 void test_gc_should_collect_rate_limiting(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_gc_set_thresholds(heap, 1, 1, 10000);
 
@@ -751,7 +751,7 @@ void test_gc_should_collect_rate_limiting(VALK_TEST_ARGS()) {
 void test_gc_should_collect_above_threshold(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_gc_set_thresholds(heap, 1, 1, 0);
 
@@ -769,7 +769,7 @@ void test_gc_should_collect_above_threshold(VALK_TEST_ARGS()) {
 void test_gc_heap_usage_pct_with_allocations(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   uint8_t pct_before = valk_gc_heap_usage_pct(heap);
 
@@ -792,7 +792,7 @@ void test_gc_collect_arena_with_env(VALK_TEST_ARGS()) {
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, 65536);
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_lenv_t *env = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lenv_t));
   memset(env, 0, sizeof(valk_lenv_t));
@@ -826,7 +826,7 @@ void test_gc_should_collect_arena_high_usage(VALK_TEST_ARGS()) {
 void test_gc_forwarding_preserves_alloc_bits(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   valk_lval_t *src = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
   valk_lval_t *dst = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
@@ -847,7 +847,7 @@ void test_gc_forwarding_preserves_alloc_bits(VALK_TEST_ARGS()) {
 void test_gc_runtime_metrics_pause_max_updates(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   for (int i = 0; i < 5; i++) {
     for (int j = 0; j < 100; j++) {
@@ -873,7 +873,7 @@ void test_gc_runtime_metrics_pause_max_updates(VALK_TEST_ARGS()) {
 void test_gc_alloc_tracks_to_objects_list(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   VALK_TEST_ASSERT(heap->objects == NULL, "Objects list should be NULL initially");
 

@@ -109,9 +109,9 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     valk_promise_respond(&client->_promise, err);
     valk_arc_release(err);
     
-    if (client->connection && !uv_is_closing((uv_handle_t *)&client->connection->uv.tcp)) {
+    if (client->connection && !uv_is_closing(CONN_UV_HANDLE(client->connection))) {
       client->connection->http.state = VALK_CONN_CLOSING;
-      uv_close((uv_handle_t *)&client->connection->uv.tcp, valk_http2_conn_handle_closed_cb);
+      uv_close(CONN_UV_HANDLE(client->connection), valk_http2_conn_handle_closed_cb);
     }
     
     valk_arc_release(box);
@@ -135,9 +135,9 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     valk_arc_box *err = valk_arc_box_err("TCP buffer exhausted during client connect");
     valk_promise_respond(&client->_promise, err);
     valk_arc_release(err);
-    if (client->connection && !uv_is_closing((uv_handle_t *)&client->connection->uv.tcp)) {
+    if (client->connection && !uv_is_closing(CONN_UV_HANDLE(client->connection))) {
       client->connection->http.state = VALK_CONN_CLOSING;
-      uv_close((uv_handle_t *)&client->connection->uv.tcp, valk_http2_conn_handle_closed_cb);
+      uv_close(CONN_UV_HANDLE(client->connection), valk_http2_conn_handle_closed_cb);
     }
     valk_arc_release(box);
     return;
@@ -169,9 +169,9 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     valk_arc_box *err = valk_arc_box_err("SSL initialization failed for client connection");
     valk_promise_respond(&client->_promise, err);
     valk_arc_release(err);
-    if (client->connection && !uv_is_closing((uv_handle_t *)&client->connection->uv.tcp)) {
+    if (client->connection && !uv_is_closing(CONN_UV_HANDLE(client->connection))) {
       client->connection->http.state = VALK_CONN_CLOSING;
-      uv_close((uv_handle_t *)&client->connection->uv.tcp, valk_http2_conn_handle_closed_cb);
+      uv_close(CONN_UV_HANDLE(client->connection), valk_http2_conn_handle_closed_cb);
     }
     valk_arc_release(box);
     return;
@@ -197,7 +197,7 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     valk_http2_continue_pending_send(client->connection);
   }
 
-  uv_read_start((uv_stream_t *)&client->connection->uv.tcp,
+  uv_read_start(CONN_UV_STREAM(client->connection),
                 valk_http2_conn_alloc_callback, valk_http2_conn_tcp_read_cb);
 
   valk_promise_respond(&client->_promise, box);
@@ -227,14 +227,14 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
   client->connection->kind = VALK_HNDL_HTTP_CONN;
   client->connection->sys = sys;
   client->connection->onClose = valk_http2_conn_on_disconnect;
-  client->connection->uv.tcp.data = client->connection;
+  client->connection->uv.tcp.uv.data = client->connection;
 
   client->connection->http.state = VALK_CONN_INIT;
   client->connection->http.io.buf_size = HTTP_SLAB_ITEM_SIZE;
 
   valk_dll_insert_after(&sys->liveHandles, client->connection);
 
-  r = uv_tcp_init(sys->eventloop, &client->connection->uv.tcp);
+  r = uv_tcp_init(sys->eventloop, CONN_UV_TCP(client->connection));
 
   if (r) {
     fprintf(stderr, "TcpInit err: %s \n", uv_strerror(r));
@@ -247,7 +247,7 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
     return;
   }
 
-  uv_tcp_nodelay(&client->connection->uv.tcp, 1);
+  uv_tcp_nodelay(CONN_UV_TCP(client->connection), 1);
 
   r = uv_ip4_addr(client->interface, client->port, &addr);
   if (r) {
@@ -269,14 +269,14 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
       valk_arc_release(err);
       valk_arc_release(box);
       client->connection->http.state = VALK_CONN_CLOSING;
-      uv_close((uv_handle_t *)&client->connection->uv.tcp, valk_http2_conn_handle_closed_cb);
+      uv_close(CONN_UV_HANDLE(client->connection), valk_http2_conn_handle_closed_cb);
       return;
     }
   }
 
   client->connection->http.connectReq.data = box;
   client->_promise = task->promise;
-  uv_tcp_connect(&client->connection->http.connectReq, &client->connection->uv.tcp,
+  uv_tcp_connect(&client->connection->http.connectReq, CONN_UV_TCP(client->connection),
                  (const struct sockaddr *)&addr, __uv_http2_connect_cb);
 }
 

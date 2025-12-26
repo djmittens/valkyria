@@ -1548,9 +1548,6 @@ static valk_lval_t* valk_lval_read_sym(int* i, const char* s) {
     if (isNum) {
       errno = 0;
       long x = strtol(sym, nullptr, 10);
-      // TODO(main): i dont like that we return this error as a success....
-      // this should yield a return 1;
-      // but im too lazy to unfuck this function
       res = errno != ERANGE ? valk_lval_num(x)
                             : valk_lval_err("Invalid number format %s", sym);
     } else {
@@ -3354,35 +3351,73 @@ static valk_lval_t* valk_builtin_set_heap_hard_limit(valk_lenv_t* e,
   return valk_lval_num((long)old_limit);
 }
 
-// (gc-threshold) - Return current GC routine threshold
-static valk_lval_t* valk_builtin_gc_threshold(valk_lenv_t* e, valk_lval_t* a) {
+static valk_lval_t* valk_builtin_gc_threshold_pct(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
   valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
   if (heap == NULL) {
     return valk_lval_num(0);
   }
-  return valk_lval_num((long)heap->gc_threshold);
+  return valk_lval_num((long)heap->gc_threshold_pct);
 }
 
-// (set-gc-threshold n) - Set routine GC threshold, return previous value
-static valk_lval_t* valk_builtin_set_gc_threshold(valk_lenv_t* e,
-                                                  valk_lval_t* a) {
+static valk_lval_t* valk_builtin_set_gc_threshold_pct(valk_lenv_t* e,
+                                                       valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
 
-  long new_thr = valk_lval_list_nth(a, 0)->num;
-  if (new_thr < 0) new_thr = 0;
+  long new_pct = valk_lval_list_nth(a, 0)->num;
+  if (new_pct < 1) new_pct = 1;
+  if (new_pct > 100) new_pct = 100;
 
   valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
   if (heap == NULL) {
     return valk_lval_num(0);
   }
 
-  size_t old_thr = heap->gc_threshold;
-  heap->gc_threshold = (size_t)new_thr;
-  return valk_lval_num((long)old_thr);
+  uint8_t old_pct = heap->gc_threshold_pct;
+  heap->gc_threshold_pct = (uint8_t)new_pct;
+  return valk_lval_num((long)old_pct);
+}
+
+static valk_lval_t* valk_builtin_gc_usage_pct(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  if (heap == NULL) {
+    return valk_lval_num(0);
+  }
+  return valk_lval_num((long)valk_gc_heap_usage_pct(heap));
+}
+
+static valk_lval_t* valk_builtin_gc_min_interval(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  if (heap == NULL) {
+    return valk_lval_num(0);
+  }
+  return valk_lval_num((long)heap->min_gc_interval_ms);
+}
+
+static valk_lval_t* valk_builtin_set_gc_min_interval(valk_lenv_t* e,
+                                                      valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+
+  long new_ms = valk_lval_list_nth(a, 0)->num;
+  if (new_ms < 0) new_ms = 0;
+
+  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  if (heap == NULL) {
+    return valk_lval_num(0);
+  }
+
+  uint32_t old_ms = heap->min_gc_interval_ms;
+  heap->min_gc_interval_ms = (uint32_t)new_ms;
+  return valk_lval_num((long)old_ms);
 }
 
 // (set-log-level "error|warn|info|debug|trace") - set log level
@@ -4767,9 +4802,13 @@ void valk_lenv_builtins(valk_lenv_t* env) {
                         valk_builtin_set_heap_hard_limit);
   valk_lenv_put_builtin(env, "mem/gc/stats", valk_builtin_gc_stats);
   valk_lenv_put_builtin(env, "mem/gc/collect", valk_builtin_gc_collect);
-  valk_lenv_put_builtin(env, "mem/gc/threshold", valk_builtin_gc_threshold);
+  valk_lenv_put_builtin(env, "mem/gc/threshold", valk_builtin_gc_threshold_pct);
   valk_lenv_put_builtin(env, "mem/gc/set-threshold",
-                        valk_builtin_set_gc_threshold);
+                        valk_builtin_set_gc_threshold_pct);
+  valk_lenv_put_builtin(env, "mem/gc/usage", valk_builtin_gc_usage_pct);
+  valk_lenv_put_builtin(env, "mem/gc/min-interval", valk_builtin_gc_min_interval);
+  valk_lenv_put_builtin(env, "mem/gc/set-min-interval",
+                        valk_builtin_set_gc_min_interval);
   valk_lenv_put_builtin(env, "mem/arena/usage", valk_builtin_arena_usage);
   valk_lenv_put_builtin(env, "mem/arena/capacity", valk_builtin_arena_capacity);
   valk_lenv_put_builtin(env, "mem/arena/high-water",

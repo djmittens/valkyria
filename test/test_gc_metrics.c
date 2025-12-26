@@ -10,7 +10,7 @@ void test_gc_metrics_init(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   size_t threshold = 1024 * 1024;  // 1 MB
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
 
   VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
 
@@ -50,7 +50,7 @@ void test_gc_metrics_after_collection(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   size_t threshold = 16 * 1024 * 1024;  // 16 MB
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
 
   // Set up thread context
   valk_thread_context_t old_ctx = valk_thread_ctx;
@@ -92,7 +92,7 @@ void test_gc_pause_time_recorded(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   size_t threshold = 16 * 1024 * 1024;  // 16 MB
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)heap;
@@ -137,7 +137,7 @@ void test_gc_reclaimed_bytes(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   size_t threshold = 16 * 1024 * 1024;  // 16 MB
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)heap;
@@ -181,7 +181,7 @@ void test_gc_max_pause_tracking(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   size_t threshold = 16 * 1024 * 1024;  // 16 MB
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)heap;
@@ -253,7 +253,7 @@ void test_gc_metrics_null_outputs(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   size_t threshold = 1024 * 1024;
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
 
   // Should not crash with NULL output parameters
   valk_gc_get_runtime_metrics(heap, NULL, NULL, NULL, NULL, NULL, NULL);

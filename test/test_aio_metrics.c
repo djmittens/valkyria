@@ -489,7 +489,7 @@ void test_vm_metrics_collect_with_gc_heap(VALK_TEST_ARGS()) {
 
   // Initialize a GC heap
   size_t threshold = 1024 * 1024;  // 1 MB
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
   VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
 
   // Set up thread context with heap pointer
@@ -549,7 +549,7 @@ void test_vm_metrics_json_contains_heap_values(VALK_TEST_ARGS()) {
 
   // Initialize a GC heap with some allocations
   size_t threshold = 1024 * 1024;  // 1 MB
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
   VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
 
   // Set up thread context
@@ -596,7 +596,7 @@ void test_vm_metrics_prometheus_contains_heap_values(VALK_TEST_ARGS()) {
 
   // Initialize a GC heap with some allocations
   size_t threshold = 1024 * 1024;  // 1 MB
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
   VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
 
   // Set up thread context

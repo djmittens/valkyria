@@ -363,12 +363,19 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
       }
     } while (n > 0);
     break;
-  case SSL_ERROR_SYSCALL:
-    // TODO(networking): get proper string for this error
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    fprintf(stderr, "OpenSSL error during read SSL_ERROR_SYSCALL\n");
+  case SSL_ERROR_SYSCALL: {
+    unsigned long err_code = ERR_get_error();
+    if (err_code != 0) {
+      char err_buf[256];
+      ERR_error_string_n(err_code, err_buf, sizeof(err_buf));
+      VALK_ERROR("SSL read error: %s", err_buf);
+    } else if (n == 0) {
+      VALK_WARN("SSL connection closed unexpectedly (EOF)");
+    } else if (n == -1) {
+      VALK_ERROR("SSL read I/O error: %s", strerror(errno));
+    }
     return VALK_ERR_SSL_READ;
-    break;
+  }
   case SSL_ERROR_ZERO_RETURN:
   case SSL_ERROR_NONE:
   }
@@ -480,9 +487,9 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
         }
       } while (n > 0);
     }
-    // TODO(networking): Why do i need this here ? i guess ill find out
-    if (n == 0)
+    if (n == 0) {
       break;
+    }
   }
 
   // Update In to reflect how much we consumed

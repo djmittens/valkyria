@@ -63,7 +63,7 @@ struct valk_aio_handle_t *valk_backpressure_list_try_resume(valk_backpressure_li
     valk_aio_handle_t *conn = list->head;
 
     if (conn->http.state == VALK_CONN_CLOSING || conn->http.state == VALK_CONN_CLOSED ||
-        uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
+        uv_is_closing(CONN_UV_HANDLE(conn))) {
       list->head = conn->http.backpressure_next;
       conn->http.backpressure_next = nullptr;
       conn->http.backpressure = false;

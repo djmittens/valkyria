@@ -318,21 +318,16 @@ void test_arena_stats(VALK_TEST_ARGS()) {
 void test_gc_heap_hard_limit(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  // Create a GC heap with small threshold and hard limit
-  size_t threshold = 1024 * 1024;  // 1 MB
   size_t hard_limit = 2 * 1024 * 1024;  // 2 MB
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, hard_limit);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(hard_limit);
 
   VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
-  VALK_TEST_ASSERT(heap->gc_threshold == threshold,
-                   "Threshold should match");
-  VALK_TEST_ASSERT(heap->hard_limit == hard_limit,
-                   "Hard limit should match");
+  VALK_TEST_ASSERT(heap->hard_limit == hard_limit, "Hard limit should match");
+  VALK_TEST_ASSERT(heap->gc_threshold_pct == 75, "Default threshold pct should be 75");
 
-  // Test default hard limit must be greater than threshold
-  valk_gc_malloc_heap_t *heap2 = valk_gc_malloc_heap_init(threshold, 0);
-  VALK_TEST_ASSERT(heap2->hard_limit > heap2->gc_threshold,
-                   "Default hard limit should be greater than threshold");
+  valk_gc_malloc_heap_t *heap2 = valk_gc_malloc_heap_init(0);
+  VALK_TEST_ASSERT(heap2->hard_limit == 250 * 1024 * 1024,
+                   "Default hard limit should be 250 MiB");
 
   // Test setting hard limit
   valk_gc_set_hard_limit(heap, hard_limit * 2);
@@ -355,7 +350,7 @@ void test_gc_heap_stats(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   size_t threshold = 16 * 1024 * 1024;  // 16 MB
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
   // Allocate something that won't use the slab (not lval_t size)
   void *ptr = valk_gc_malloc_heap_alloc(heap, 123);
@@ -387,7 +382,7 @@ void test_arena_overflow_fallback(VALK_TEST_ARGS()) {
 
   // Create a GC heap as the fallback
   size_t threshold = 1024 * 1024;  // 1 MB
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
   // Set up thread context with fallback heap
   valk_thread_context_t old_ctx = valk_thread_ctx;
@@ -448,7 +443,7 @@ void test_forward_set_and_check(VALK_TEST_ARGS()) {
 
   // Create a GC heap for test allocations
   size_t threshold = 16 * 1024 * 1024;  // 16 MB
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
   // Save and set up thread context
   valk_thread_context_t old_ctx = valk_thread_ctx;
@@ -498,7 +493,7 @@ void test_forward_follow_chain(VALK_TEST_ARGS()) {
 
   // Create a GC heap for test allocations
   size_t threshold = 16 * 1024 * 1024;  // 16 MB
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
   // Save and set up thread context
   valk_thread_context_t old_ctx = valk_thread_ctx;
@@ -551,7 +546,7 @@ void test_forward_preserves_alloc_flags(VALK_TEST_ARGS()) {
 
   // Create a GC heap for test allocations
   size_t threshold = 16 * 1024 * 1024;  // 16 MB
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
   // Save and set up thread context
   valk_thread_context_t old_ctx = valk_thread_ctx;
@@ -676,7 +671,7 @@ void test_checkpoint_empty(VALK_TEST_ARGS()) {
 
   // Create heap
   size_t threshold = 16 * 1024 * 1024;
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
   // Create a simple root environment (empty)
   valk_thread_context_t old_ctx = valk_thread_ctx;
@@ -713,7 +708,7 @@ void test_checkpoint_evacuate_number(VALK_TEST_ARGS()) {
 
   // Create heap
   size_t threshold = 16 * 1024 * 1024;
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
   // Set up thread context
   valk_thread_context_t old_ctx = valk_thread_ctx;
@@ -787,7 +782,7 @@ void test_checkpoint_evacuate_list(VALK_TEST_ARGS()) {
 
   // Create heap
   size_t threshold = 16 * 1024 * 1024;
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
   // Set up thread context
   valk_thread_context_t old_ctx = valk_thread_ctx;
@@ -859,7 +854,7 @@ void test_checkpoint_stats(VALK_TEST_ARGS()) {
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
   size_t threshold = 16 * 1024 * 1024;
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
@@ -923,7 +918,7 @@ void test_checkpoint_nil_cons(VALK_TEST_ARGS()) {
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
   size_t threshold = 16 * 1024 * 1024;
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
@@ -967,7 +962,7 @@ void test_checkpoint_deep_env_chain(VALK_TEST_ARGS()) {
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
   size_t threshold = 16 * 1024 * 1024;
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
@@ -1021,7 +1016,7 @@ void test_checkpoint_many_bindings(VALK_TEST_ARGS()) {
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
   size_t threshold = 16 * 1024 * 1024;
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
@@ -1074,7 +1069,7 @@ void test_checkpoint_closure(VALK_TEST_ARGS()) {
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
   size_t threshold = 16 * 1024 * 1024;
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(threshold, 0);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
@@ -1513,7 +1508,7 @@ void test_malloc_allocator_api(VALK_TEST_ARGS()) {
 void test_gc_heap_allocator_api(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(1024 * 1024, 10 * 1024 * 1024);
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   void *ptr = valk_mem_allocator_alloc((valk_mem_allocator_t*)heap, 128);
   VALK_TEST_ASSERT(ptr != NULL, "GC heap alloc should succeed");

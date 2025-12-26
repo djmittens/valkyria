@@ -45,7 +45,7 @@ int main(int argc, char* argv[]) {
     hard_limit = strtoull(hard_limit_env, NULL, 10);
   }
 
-  valk_gc_malloc_heap_t* gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES, hard_limit);
+  valk_gc_malloc_heap_t* gc_heap = valk_gc_malloc_heap_init(hard_limit);
 
   valk_mem_arena_t* scratch = malloc(SCRATCH_ARENA_BYTES);
   valk_mem_arena_init(scratch, SCRATCH_ARENA_BYTES - sizeof(*scratch));

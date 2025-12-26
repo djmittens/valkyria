@@ -44,7 +44,7 @@ valk_lval_t* valk_lval_follow_forward(valk_lval_t* v) {
 // ============================================================================
 
 // Initialize GC heap
-valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold, size_t hard_limit) {
+valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t hard_limit) {
   valk_gc_malloc_heap_t* heap = malloc(sizeof(valk_gc_malloc_heap_t));
   if (!heap) {
     VALK_ERROR("Failed to allocate GC heap structure");
@@ -53,7 +53,6 @@ valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold, size_t hard
 
   heap->type = VALK_ALLOC_GC_HEAP;
   heap->allocated_bytes = 0;
-  heap->gc_threshold = gc_threshold;
   heap->hard_limit = hard_limit > 0 ? hard_limit : 250 * 1024 * 1024;  // 250 MiB default
   heap->num_collections = 0;
   heap->in_emergency_gc = false;
@@ -848,13 +847,10 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
   }
 
   fprintf(stderr, "\n=== GC Heap Statistics ===\n");
-  fprintf(stderr, "Allocated bytes:  %zu / %zu (%.1f%% of threshold)\n",
-          heap->allocated_bytes,
-          heap->gc_threshold,
-          100.0 * heap->allocated_bytes / heap->gc_threshold);
-  fprintf(stderr, "Hard limit:       %zu bytes (%.1f%% used)\n",
-          heap->hard_limit,
-          100.0 * heap->allocated_bytes / heap->hard_limit);
+  uint8_t usage_pct = valk_gc_heap_usage_pct(heap);
+  fprintf(stderr, "Heap usage:       %u%% (threshold: %u%%, hard limit: %zu bytes)\n",
+          usage_pct, heap->gc_threshold_pct, heap->hard_limit);
+  fprintf(stderr, "Allocated bytes:  %zu bytes\n", heap->allocated_bytes);
   fprintf(stderr, "Peak usage:       %zu bytes\n", heap->stats.peak_usage);
   fprintf(stderr, "Live objects:     %zu\n", object_count);
   fprintf(stderr, "Collections:      %zu\n", heap->num_collections);
@@ -1126,7 +1122,7 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* h
     double slab_region_end = (double)slab_bytes_total / total_heap_capacity;
     double malloc_region_start = slab_region_end;
     double slab_fill = slab_bytes_total > 0 ? (double)slab_bytes_used / slab_bytes_total : 0;
-    double malloc_fill = heap->gc_threshold > 0 ? (double)heap->allocated_bytes / heap->gc_threshold : 0;
+    double malloc_fill = heap->hard_limit > 0 ? (double)heap->allocated_bytes / heap->hard_limit : 0;
 
     // Build combined heap bar
     {
@@ -1198,11 +1194,10 @@ size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* addition
 
   size_t before = heap->allocated_bytes;
 
-  VALK_INFO("GC: Starting collection #%zu (allocated: %zu/%zu bytes, %.1f%% full)",
+  VALK_INFO("GC: Starting collection #%zu (usage: %u%%, threshold: %u%%)",
             heap->num_collections + 1,
-            before,
-            heap->gc_threshold,
-            100.0 * before / heap->gc_threshold);
+            valk_gc_heap_usage_pct(heap),
+            heap->gc_threshold_pct);
 
   // Set thread-local heap pointer for safe marking checks
   gc_current_heap = heap;

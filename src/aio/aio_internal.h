@@ -37,6 +37,8 @@
 #include "aio_conn_admission.h"
 #include "aio_maintenance.h"
 #include "aio_sse_conn_tracking.h"
+#include "aio_ops.h"
+#include "io/io_tcp_uv_types.h"
 #include "../metrics_v2.h"
 #include "../event_loop_metrics.h"
 #include "../common.h"
@@ -254,7 +256,7 @@ struct valk_aio_handle_t {
   void (*onClose)(valk_aio_handle_t *);
 
   union {
-    uv_tcp_t tcp;
+    valk_io_tcp_t tcp;
     uv_async_t task;
     uv_timer_t timer;
   } uv;
@@ -292,6 +294,7 @@ _Static_assert(offsetof(valk_aio_handle_t, uv) == offsetof(valk_aio_handle_t, uv
 struct valk_aio_system {
   valk_aio_system_config_t config;
   char name[64];
+  const valk_aio_ops_t *ops;
 
   uv_sem_t startup_sem;
 
@@ -417,8 +420,13 @@ static inline bool __conn_is_closing(valk_aio_handle_t *conn) {
 
 static inline bool __conn_is_closing_or_uv(valk_aio_handle_t *conn) {
   return __conn_is_closing(conn) ||
-         uv_is_closing((uv_handle_t *)&conn->uv.tcp);
+         uv_is_closing((uv_handle_t *)&conn->uv.tcp.uv);
 }
+
+#define CONN_UV_TCP(conn) (&(conn)->uv.tcp.uv)
+#define CONN_UV_STREAM(conn) ((uv_stream_t *)&(conn)->uv.tcp.uv)
+#define CONN_UV_HANDLE(conn) ((uv_handle_t *)&(conn)->uv.tcp.uv)
+#define CONN_UV_LOOP(conn) ((conn)->uv.tcp.uv.loop)
 
 static inline bool __is_pending_stream(void *user_data) {
   return user_data && ((uintptr_t)user_data & (1ULL << 63));
@@ -427,21 +435,6 @@ static inline bool __is_pending_stream(void *user_data) {
 static inline pending_stream_t *__get_pending_stream(void *user_data) {
   if (!__is_pending_stream(user_data)) return NULL;
   return (pending_stream_t *)((uintptr_t)user_data & ~(1ULL << 63));
-}
-
-static inline valk_aio_system_t *__conn_get_sys(valk_aio_handle_t *conn) {
-  if (!conn || !conn->http.server) return NULL;
-  return conn->http.server->sys;
-}
-
-static inline valk_aio_system_t *__conn_require_sys(valk_aio_handle_t *conn) {
-  VALK_ASSERT(conn->http.server != NULL, "Server-side callback has NULL server");
-  VALK_ASSERT(conn->http.server->sys != NULL, "Server has NULL sys");
-  return conn->http.server->sys;
-}
-
-static inline bool __conn_is_server_side(valk_aio_handle_t *conn) {
-  return conn->http.server != NULL;
 }
 
 #define VALK_HANDLE_VALID(h) \

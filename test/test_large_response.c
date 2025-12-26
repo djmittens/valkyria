@@ -50,7 +50,7 @@ typedef struct {
 static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   // Initialize GC heap for Lisp evaluation
   size_t const GC_THRESHOLD_BYTES = 256 * 1024 * 1024;  // 256 MiB for large responses
-  ctx->gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES, 0);
+  ctx->gc_heap = valk_gc_malloc_heap_init(0);
   ctx->saved_alloc = valk_thread_ctx.allocator;
   valk_thread_ctx.allocator = (void *)ctx->gc_heap;
   valk_thread_ctx.heap = ctx->gc_heap;

@@ -160,10 +160,7 @@ void test_tcp_client_disconnect(VALK_TEST_ARGS()) {
 void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  // Initialize GC heap for Lisp evaluation
-  // Note: We need to save the malloc allocator and switch back before AIO calls
-  size_t const GC_THRESHOLD_BYTES = 128 * 1024 * 1024;  // 128 MiB for 50MB response
-  valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(GC_THRESHOLD_BYTES, 0);
+  valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(128 * 1024 * 1024);
   valk_mem_allocator_t *saved_alloc = valk_thread_ctx.allocator;  // Save malloc allocator
   valk_thread_ctx.allocator = (void *)gc_heap;
   valk_thread_ctx.heap = gc_heap;

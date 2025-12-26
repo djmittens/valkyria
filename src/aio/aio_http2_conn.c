@@ -6,7 +6,7 @@
 static bool __backpressure_list_add(valk_aio_handle_t *conn) {
   valk_aio_system_t *sys = conn->sys;
   if (!sys) return false;
-  return valk_backpressure_list_add(&sys->backpressure, conn, uv_now(conn->uv.tcp.loop));
+  return valk_backpressure_list_add(&sys->backpressure, conn, uv_now(CONN_UV_LOOP(conn)));
 }
 
 static void __backpressure_list_remove(valk_aio_handle_t *conn) {
@@ -20,7 +20,7 @@ void valk_http2_backpressure_try_resume_one(valk_aio_system_t *sys) {
   valk_aio_handle_t *conn = valk_backpressure_list_try_resume(
       &sys->backpressure, sys->tcpBufferSlab, sys->config.min_buffers_per_conn);
   if (conn) {
-    uv_read_start((uv_stream_t *)&conn->uv.tcp, valk_http2_conn_alloc_callback, 
+    uv_read_start(CONN_UV_STREAM(conn), valk_http2_conn_alloc_callback, 
                   valk_http2_conn_tcp_read_cb);
   }
 }
@@ -103,11 +103,11 @@ static void __http2_flush_complete(void *ctx, int status) {
   
   if (status == 0 && conn->http.state != VALK_CONN_CLOSING && 
       conn->http.state != VALK_CONN_CLOSED &&
-      !uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
+      !uv_is_closing(CONN_UV_HANDLE(conn))) {
     
     if (conn->http.backpressure) {
       __backpressure_list_remove(conn);
-      uv_read_start((uv_stream_t *)&conn->uv.tcp,
+      uv_read_start(CONN_UV_STREAM(conn),
                     valk_http2_conn_alloc_callback, valk_http2_conn_tcp_read_cb);
       VALK_DEBUG("Resumed reading after write buffer flush");
     }
@@ -119,7 +119,7 @@ static void __http2_flush_complete(void *ctx, int status) {
 }
 
 int valk_http2_conn_write_buf_flush(valk_aio_handle_t *conn) {
-  return valk_conn_io_flush(&conn->http.io, (uv_stream_t *)&conn->uv.tcp,
+  return valk_conn_io_flush(&conn->http.io, CONN_UV_STREAM(conn),
                             __http2_flush_complete, conn);
 }
 
@@ -152,7 +152,7 @@ void valk_http2_continue_pending_send(valk_aio_handle_t *conn) {
     return;
   }
 
-  if (uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
+  if (uv_is_closing(CONN_UV_HANDLE(conn))) {
     return;
   }
 
@@ -216,14 +216,14 @@ static void __http_tcp_unencrypted_read_cb(void *arg, const valk_buffer_t *buf) 
       conn->http.session, (const uint8_t *)buf->items, buf->count);
   if (rv < 0) {
     VALK_ERROR("nghttp2_session_mem_recv error: %zd", rv);
-    if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
+    if (!uv_is_closing(CONN_UV_HANDLE(conn))) {
       conn->http.state = VALK_CONN_CLOSING;
       __backpressure_list_remove(conn);
 #ifdef VALK_METRICS_ENABLED
       conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
       conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
 #endif
-      uv_close((uv_handle_t *)&conn->uv.tcp, valk_http2_conn_handle_closed_cb);
+      uv_close(CONN_UV_HANDLE(conn), valk_http2_conn_handle_closed_cb);
     }
   }
 }
@@ -237,25 +237,25 @@ void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_bu
 
   if (!buf->base) {
     VALK_WARN("TCP buffer alloc failed - applying backpressure on connection");
-    uv_read_stop((uv_stream_t *)&conn->uv.tcp);
+    uv_read_stop(CONN_UV_STREAM(conn));
     if (!__backpressure_list_add(conn)) {
-      if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
+      if (!uv_is_closing(CONN_UV_HANDLE(conn))) {
         conn->http.state = VALK_CONN_CLOSING;
-        uv_close((uv_handle_t *)&conn->uv.tcp, valk_http2_conn_handle_closed_cb);
+        uv_close(CONN_UV_HANDLE(conn), valk_http2_conn_handle_closed_cb);
       }
     }
     return;
   }
 
   if (nread < 0) {
-    if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
+    if (!uv_is_closing(CONN_UV_HANDLE(conn))) {
       conn->http.state = VALK_CONN_CLOSING;
       __backpressure_list_remove(conn);
 #ifdef VALK_METRICS_ENABLED
       conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
       conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
 #endif
-      uv_close((uv_handle_t *)&conn->uv.tcp, valk_http2_conn_handle_closed_cb);
+      uv_close(CONN_UV_HANDLE(conn), valk_http2_conn_handle_closed_cb);
     }
     return;
   }
@@ -268,12 +268,12 @@ void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_bu
     if (n != nread) {
       VALK_ERROR("BIO_write during backpressure failed: wrote %d of %ld", n, nread);
     }
-    uv_read_stop((uv_stream_t *)&conn->uv.tcp);
+    uv_read_stop(CONN_UV_STREAM(conn));
     valk_conn_io_read_buf_release(&conn->http.io, conn->sys->tcpBufferSlab);
     if (!__backpressure_list_add(conn)) {
-      if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
+      if (!uv_is_closing(CONN_UV_HANDLE(conn))) {
         conn->http.state = VALK_CONN_CLOSING;
-        uv_close((uv_handle_t *)&conn->uv.tcp, valk_http2_conn_handle_closed_cb);
+        uv_close(CONN_UV_HANDLE(conn), valk_http2_conn_handle_closed_cb);
       }
     }
     return;
@@ -285,12 +285,12 @@ void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_bu
     if (n != nread) {
       VALK_ERROR("BIO_write during backpressure failed: wrote %d of %ld", n, nread);
     }
-    uv_read_stop((uv_stream_t *)&conn->uv.tcp);
+    uv_read_stop(CONN_UV_STREAM(conn));
     valk_conn_io_read_buf_release(&conn->http.io, conn->sys->tcpBufferSlab);
     if (!__backpressure_list_add(conn)) {
-      if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
+      if (!uv_is_closing(CONN_UV_HANDLE(conn))) {
         conn->http.state = VALK_CONN_CLOSING;
-        uv_close((uv_handle_t *)&conn->uv.tcp, valk_http2_conn_handle_closed_cb);
+        uv_close(CONN_UV_HANDLE(conn), valk_http2_conn_handle_closed_cb);
       }
     }
 #ifdef VALK_METRICS_ENABLED

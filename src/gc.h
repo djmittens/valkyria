@@ -47,7 +47,6 @@ typedef struct {
 typedef struct {
   valk_mem_allocator_e type;  // VALK_ALLOC_GC_HEAP
   size_t allocated_bytes;     // Current malloc memory usage (excludes slab)
-  size_t gc_threshold;        // Legacy: absolute threshold (deprecated, use gc_threshold_pct)
   size_t hard_limit;          // Absolute maximum heap size (abort if exceeded)
   size_t num_collections;     // Number of GC runs performed
   bool in_emergency_gc;       // Prevent recursive emergency GC
@@ -62,16 +61,14 @@ typedef struct {
   valk_gc_heap_stats_t stats; // Telemetry statistics
   valk_gc_runtime_metrics_t runtime_metrics; // Runtime metrics for observability
 
-  // Percentage-based GC tuning (simple model)
   uint8_t gc_threshold_pct;   // Trigger GC when heap usage exceeds this % (default: 75)
   uint8_t gc_target_pct;      // After GC, aim to be below this % (default: 50)
   uint64_t last_gc_time_us;   // Timestamp of last GC (for rate limiting)
   uint32_t min_gc_interval_ms; // Minimum ms between GC cycles (default: 1000)
 } valk_gc_malloc_heap_t;
 
-// Initialize GC malloc heap with threshold and hard limit
-// If hard_limit is 0, defaults to gc_threshold * 2
-valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t gc_threshold, size_t hard_limit);
+// Initialize GC malloc heap with hard limit (default 250MB if 0)
+valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t hard_limit);
 
 // Set hard limit for GC heap (must be >= current allocated_bytes)
 void valk_gc_set_hard_limit(valk_gc_malloc_heap_t* heap, size_t limit);

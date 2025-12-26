@@ -173,6 +173,8 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   sys->liveHandles.magic = VALK_AIO_HANDLE_MAGIC;
   sys->liveHandles.kind = VALK_HNDL_EMPTY;
 
+  sys->ops = &valk_aio_ops_production;
+
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     sys->httpServers = valk_slab_new(
         sizeof(valk_arc_box) + sizeof(valk_aio_http_server), sys->config.max_servers);

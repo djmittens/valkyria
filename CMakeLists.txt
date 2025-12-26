@@ -108,6 +108,16 @@ set(VALKYRIA_SOURCES
   src/aio/aio_task.c
   src/aio/aio_maintenance.c
   src/aio/aio_sse_conn_tracking.c
+  # IO ops abstraction layer
+  src/aio/aio_ops.c
+  src/aio/io/io_loop_ops_uv.c
+  src/aio/io/io_loop_ops_test.c
+  src/aio/io/io_tcp_ops_uv.c
+  src/aio/io/io_tcp_ops_test.c
+  src/aio/io/io_timer_ops_uv.c
+  src/aio/io/io_timer_ops_test.c
+  src/aio/http2/http2_ops_nghttp2.c
+  src/aio/http2/http2_ops_test.c
 )
 
 # Conditionally add metrics sources (V2 only)
