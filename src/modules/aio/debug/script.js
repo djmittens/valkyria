@@ -111,8 +111,15 @@
 
   // ==================== Canvas Sparkline Infrastructure ====================
   var sparklineColors = null;
-  var sparklineRenderQueue = new Map();
+  var sparklineRegistry = new Map();  // container -> { data, opts, type, lastUpdate }
   var sparklineRafId = null;
+  var sparklineStaleThreshold = 500;  // Stop scrolling if no update for this long
+
+  // Sample interval tracking for smooth animation
+  var sampleIntervalHistory = [];  // Recent sample intervals in ms
+  var sampleIntervalMax = 10;      // Number of samples to average
+  var lastSampleTime = 0;          // Time of last data update
+  var avgSampleInterval = 100;     // Running average (starts at expected 100ms)
 
   function getSparklineColors() {
     if (sparklineColors) return sparklineColors;
@@ -128,16 +135,75 @@
     return sparklineColors;
   }
 
-  function flushSparklineRenders() {
-    sparklineRafId = null;
-    sparklineRenderQueue.forEach(function(renderFn) { renderFn(); });
-    sparklineRenderQueue.clear();
+  function updateSampleInterval(now) {
+    if (lastSampleTime > 0) {
+      var interval = now - lastSampleTime;
+      if (interval > 0 && interval < 2000) {
+        sampleIntervalHistory.push(interval);
+        if (sampleIntervalHistory.length > sampleIntervalMax) {
+          sampleIntervalHistory.shift();
+        }
+        var sum = 0;
+        for (var i = 0; i < sampleIntervalHistory.length; i++) {
+          sum += sampleIntervalHistory[i];
+        }
+        avgSampleInterval = sum / sampleIntervalHistory.length;
+      }
+    }
+    lastSampleTime = now;
   }
 
-  function queueSparklineRender(container, renderFn) {
-    sparklineRenderQueue.set(container, renderFn);
+  function sparklineAnimationLoop(now) {
+    sparklineRafId = null;
+    var hasActive = false;
+
+    sparklineRegistry.forEach(function(state, container) {
+      if (!container.isConnected) {
+        sparklineRegistry.delete(container);
+        return;
+      }
+
+      var elapsed = now - state.lastUpdate;
+      var isStale = elapsed > sparklineStaleThreshold;
+
+      // Calculate scroll offset as fraction of one sample step
+      // scrollT goes from 0 (just received data) to 1 (one sample interval elapsed)
+      // Beyond 1.0 we clamp (data stays at final position until next update)
+      var scrollT = isStale ? 0 : Math.min(1, elapsed / avgSampleInterval);
+
+      if (state.type === 'line') {
+        drawLineSparklineWithOffset(container, state.series, state.opts, scrollT);
+      } else if (state.type === 'bar') {
+        drawBarSparklineWithOffset(container, state.data, state.opts, scrollT);
+      }
+
+      // Keep animating if scroll not complete and not stale
+      if (scrollT < 1 && !isStale) hasActive = true;
+    });
+
+    // Always keep the animation loop running if we have any registered sparklines
+    // This ensures smooth 60fps even between data updates
+    if (sparklineRegistry.size > 0 && !sparklineRafId) {
+      sparklineRafId = requestAnimationFrame(sparklineAnimationLoop);
+    }
+  }
+
+  function registerSparkline(container, type, dataOrSeries, opts) {
+    var now = performance.now();
+
+    // Update sample interval tracking
+    updateSampleInterval(now);
+
+    sparklineRegistry.set(container, {
+      type: type,
+      series: type === 'line' ? dataOrSeries : null,
+      data: type === 'bar' ? dataOrSeries : null,
+      opts: opts,
+      lastUpdate: now
+    });
+
     if (!sparklineRafId) {
-      sparklineRafId = requestAnimationFrame(flushSparklineRenders);
+      sparklineRafId = requestAnimationFrame(sparklineAnimationLoop);
     }
   }
 
@@ -165,18 +231,10 @@
     return { ctx: ctx, width: width, height: height };
   }
 
-  // Unified line sparkline renderer
-  // series: [{
-  //   data: number[],           // required: data points
-  //   color: string,            // color key or CSS color (default: 'info')
-  //   stroke: number|false,     // stroke opacity 0-1, or false to disable (default: 0.9)
-  //   width: number,            // stroke width (default: 1.5)
-  //   dash: number[],           // dash pattern e.g. [3, 2]
-  //   fill: number|false,       // fill opacity 0-1, or false to disable
-  //   fillColor: string,        // separate fill color (defaults to stroke color)
-  //   fillGradient: boolean,    // use vertical gradient for fill
-  // }]
-  function drawLineSparkline(container, series, options) {
+  // Unified line sparkline renderer with scroll offset
+  // scrollT: 0-1 representing progress through current sample interval (for smooth scrolling)
+  // Right edge is pinned, left side scrolls off
+  function drawLineSparklineWithOffset(container, series, options, scrollT) {
     var opts = options || {};
     var h = opts.height || 32;
     var pad = opts.padding || 2;
@@ -194,16 +252,23 @@
 
     var plotH = h - pad * 2;
     var baseline = h - pad;
+    var len = series[0].data.length;
+
+    // Smooth scrolling: data extends beyond both edges
+    // First point (i=0) is off-screen left, last point (i=len-1) is off-screen right
+    // Visible area shows len-2 points worth of data
+    // As scrollT goes 0->1, everything shifts left by one step
+    var step = w / (len - 2);
+    var shiftX = scrollT * step;
 
     function toY(v) { return baseline - (v / max) * plotH; }
-    function toX(i, len) { return (i / (len - 1)) * w; }
+    function toX(i) { return i * step - shiftX; }
 
-    function tracePath(data) {
-      var len = data.length;
-      ctx.beginPath();
-      ctx.moveTo(0, toY(data[0]));
-      for (var i = 1; i < len; i++) ctx.lineTo(toX(i, len), toY(data[i]));
-    }
+    // Clip to canvas bounds for smooth edge scrolling
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, w, h);
+    ctx.clip();
 
     // Draw each series (back to front)
     for (var si = 0; si < series.length; si++) {
@@ -214,9 +279,13 @@
 
       // Area fill
       if (sr.fill) {
-        tracePath(data);
-        ctx.lineTo(w, baseline);
-        ctx.lineTo(0, baseline);
+        ctx.beginPath();
+        ctx.moveTo(toX(0), toY(data[0]));
+        for (var i = 1; i < data.length; i++) {
+          ctx.lineTo(toX(i), toY(data[i]));
+        }
+        ctx.lineTo(toX(data.length - 1), baseline);
+        ctx.lineTo(toX(0), baseline);
         ctx.closePath();
 
         if (sr.fillGradient) {
@@ -235,7 +304,11 @@
 
       // Line stroke
       if (sr.stroke !== false) {
-        tracePath(data);
+        ctx.beginPath();
+        ctx.moveTo(toX(0), toY(data[0]));
+        for (var i = 1; i < data.length; i++) {
+          ctx.lineTo(toX(i), toY(data[i]));
+        }
         ctx.strokeStyle = strokeColor;
         ctx.lineWidth = sr.width || 1.5;
         ctx.lineCap = 'round';
@@ -248,6 +321,7 @@
       }
     }
     ctx.setLineDash([]);
+    ctx.restore();
   }
 
   function renderLineSparkline(container, series, options) {
@@ -257,9 +331,7 @@
       if (container._sparkCanvas) container._sparkCanvas.getContext('2d').clearRect(0, 0, 9999, 9999);
       return;
     }
-    queueSparklineRender(container, function() {
-      drawLineSparkline(container, series, options);
-    });
+    registerSparkline(container, 'line', series, options);
   }
 
   // Stacked bar sparkline for status codes
@@ -280,7 +352,7 @@
     { key: 's5xx', color: 'error' }
   ];
 
-  function drawBarSparkline(container, data, options) {
+  function drawBarSparklineWithOffset(container, data, options, scrollT) {
     var opts = options || {};
     var h = opts.height || 32;
     var minH = opts.minBarHeight || 4;
@@ -291,11 +363,23 @@
     var ctx = c.ctx, w = c.width;
     var colors = getSparklineColors();
 
-    var barW = w / data.length;
+    var len = data.length;
+    // Smooth scrolling: data extends beyond both edges
+    // First bar (i=0) is off-screen left, last bar (i=len-1) is off-screen right
+    // Visible area shows len-2 bars worth of data
+    // As scrollT goes 0->1, everything shifts left by one bar width
+    var barW = w / (len - 2);
     var gap = Math.max(0.5, barW * gapRatio);
     var bw = barW - gap;
+    var shiftX = scrollT * barW;
 
-    for (var i = 0; i < data.length; i++) {
+    // Clip to canvas bounds for smooth edge scrolling
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, w, h);
+    ctx.clip();
+
+    for (var i = 0; i < len; i++) {
       var d = data[i];
       if (!d) continue;
 
@@ -306,7 +390,8 @@
       }
       if (total === 0) continue;
 
-      var x = i * barW;
+      // Position: bar i at x = i * barW - shiftX (first bar starts off-screen left)
+      var x = i * barW - shiftX + gap / 2;
 
       // Calculate heights with minimum visibility for non-zero values
       var heights = [];
@@ -338,13 +423,12 @@
         }
       }
     }
+    ctx.restore();
   }
 
   function renderBarSparkline(container, data, options) {
     if (!container || !data || data.length < 2) return;
-    queueSparklineRender(container, function() {
-      drawBarSparkline(container, data, options);
-    });
+    registerSparkline(container, 'bar', data, options);
   }
 
   // SVG-based mini sparkline renderer (48x16 px default)
@@ -2930,7 +3014,7 @@
       }
     }
 
-    // Return last non-Inf bucket if not found
+    // Return last non-Inf bucket if not found (this means all data is in +Inf)
     for (var i = buckets.length - 1; i >= 0; i--) {
       if (buckets[i].le !== '+Inf') {
         return parseFloat(buckets[i].le);
@@ -3819,10 +3903,20 @@
               if (hist) {
                 hist.count = (hist.count || 0) + (d.c || 0);
                 hist.sum_us = (hist.sum_us || 0) + (d.s || 0);
+                // Apply bucket deltas (d.b contains cumulative delta per bucket)
+                if (d.b && hist.buckets) {
+                  for (var bi = 0; bi < d.b.length && bi < hist.buckets.length; bi++) {
+                    hist.buckets[bi].count = (hist.buckets[bi].count || 0) + (d.b[bi].d || 0);
+                  }
+                }
               } else {
-                // New histogram, add it with labels
+                // New histogram, add it with labels and buckets
                 if (!mod.histograms) mod.histograms = [];
-                mod.histograms.push({ name: d.n, count: d.c || 0, sum_us: d.s || 0, labels: d.l || {} });
+                var newHist = { name: d.n, count: d.c || 0, sum_us: d.s || 0, labels: d.l || {} };
+                if (d.b) {
+                  newHist.buckets = d.b.map(function(b) { return { le: b.le, count: b.d || 0 }; });
+                }
+                mod.histograms.push(newHist);
               }
             }
           });
@@ -3977,19 +4071,27 @@
       var unregistered = breakdown.untracked || 0;           // RSS - tracked used
       var unregisteredReserved = breakdown.untracked_reserved || 0;  // VMS - tracked caps
 
-      // VMS determines total bar width - segment widths are capacity as % of VMS
-      var runtimeWidthPct = vms > 0 ? (runtimeCap / vms) * 100 : 0;
-      var aioWidthPct = vms > 0 ? (aioCap / vms) * 100 : 0;
-      var metricsWidthPct = vms > 0 ? (metricsCap / vms) * 100 : 0;
-      var unregisteredWidthPct = vms > 0 ? (unregisteredReserved / vms) * 100 : 0;
+      // Use RSS as the baseline for the stacked bar (not VMS).
+      // VMS on macOS is inflated to hundreds of GB due to pre-reserved address space
+      // (MALLOC_NANO, GPU regions, etc.) which makes the bar useless.
+      // RSS represents actual physical memory and is meaningful cross-platform.
+      var totalTrackedCap = runtimeCap + aioCap + metricsCap;
+      var barBase = Math.max(rss, totalTrackedCap);
+      var runtimeWidthPct = barBase > 0 ? (runtimeCap / barBase) * 100 : 0;
+      var aioWidthPct = barBase > 0 ? (aioCap / barBase) * 100 : 0;
+      var metricsWidthPct = barBase > 0 ? (metricsCap / barBase) * 100 : 0;
+      // "Other" is untracked RSS (difference between RSS and what we track)
+      var untrackedRss = rss > totalTrackedCap ? rss - totalTrackedCap : 0;
+      var unregisteredWidthPct = barBase > 0 ? (untrackedRss / barBase) * 100 : 0;
 
       // Calculate fill percentages (used as % of capacity = resident as % of reserved)
       var runtimeFillPct = runtimeCap > 0 ? (runtimeUsed / runtimeCap) * 100 : 0;
       var aioFillPct = aioCap > 0 ? (aioUsed / aioCap) * 100 : 0;
       var metricsFillPct = metricsCap > 0 ? (metricsUsed / metricsCap) * 100 : 0;
-      var unregisteredFillPct = unregisteredReserved > 0 ? (unregistered / unregisteredReserved) * 100 : 0;
+      // "Other" segment is always 100% filled (it represents actual untracked RSS)
+      var unregisteredFillPct = 100;
 
-      // Update stacked bar segment widths (based on capacity as % of VMS)
+      // Update stacked bar segment widths (based on capacity as % of RSS)
       this.setSegmentWidth('segment-runtime', runtimeWidthPct);
       this.setSegmentWidth('segment-aio', aioWidthPct);
       this.setSegmentWidth('segment-metrics', metricsWidthPct);
@@ -4005,7 +4107,8 @@
       this.updateLegendItemWithCap('runtime', runtimeUsed, runtimeCap, runtimeFillPct);
       this.updateLegendItemWithCap('aio', aioUsed, aioCap, aioFillPct);
       this.updateLegendItemWithCap('metrics', metricsUsed, metricsCap, metricsFillPct);
-      this.updateLegendItemWithCap('other', unregistered, unregisteredReserved, unregisteredFillPct);
+      // "Other" shows untracked RSS (no separate capacity - it's just what's left)
+      this.updateLegendItemWithCap('other', untrackedRss, untrackedRss, 100);
 
       // Update SSL/nghttp2/libuv library memory stats (global - updates all matching elements)
       var sslUsed = breakdown.ssl_used || 0;
@@ -4040,7 +4143,16 @@
       if (pfMajorEl) pfMajorEl.textContent = fmtCompact(process.page_faults_major || 0);
 
       // Update smaps breakdown (OS memory regions)
-      if (smaps && smaps.total > 0) {
+      // Hide on macOS - the data is unreliable (only has anon/shmem, no real breakdown)
+      // Detect macOS by checking if file and stack are both 0 (Linux always has these)
+      var smapsEl = document.querySelector('.smaps-breakdown');
+      var isRealSmaps = smaps && smaps.total > 0 && (smaps.file > 0 || smaps.stack > 0);
+      
+      if (smapsEl) {
+        smapsEl.style.display = isRealSmaps ? '' : 'none';
+      }
+      
+      if (isRealSmaps) {
         var total = smaps.total;
 
         // Update bar segment widths as percentage of total

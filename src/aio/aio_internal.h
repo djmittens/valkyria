@@ -92,6 +92,7 @@ typedef struct {
   valk_gauge_v2_t* connections_active;
   valk_gauge_v2_t* sse_streams_active;
   valk_histogram_v2_t* request_duration;
+  valk_histogram_v2_t* sse_stream_duration;
   valk_counter_v2_t* bytes_sent;
   valk_counter_v2_t* bytes_recv;
   valk_counter_v2_t* overload_responses;

@@ -188,6 +188,8 @@ size_t valk_delta_snapshot_collect_stateless(valk_delta_snapshot_t *snap,
       uint64_t current_sum = atomic_load_explicit(&h->sum_micros, memory_order_relaxed);
       delta->data.histogram.sum_delta_micros =
           current_sum - baseline->histogram_baselines[i].sum_micros;
+      delta->data.histogram.bucket_bounds = h->bucket_bounds;
+      delta->data.histogram.bucket_count = h->bucket_count;
 
       baseline->histogram_baselines[i].count = current_count;
       baseline->histogram_baselines[i].sum_micros = current_sum;
@@ -282,6 +284,8 @@ size_t valk_delta_snapshot_collect(valk_delta_snapshot_t *snap,
       delta->data.histogram.count_delta = current_count - h->last_count;
       uint64_t current_sum = atomic_load_explicit(&h->sum_micros, memory_order_relaxed);
       delta->data.histogram.sum_delta_micros = current_sum - h->last_sum_micros;
+      delta->data.histogram.bucket_bounds = h->bucket_bounds;
+      delta->data.histogram.bucket_count = h->bucket_count;
 
       h->last_count = current_count;
       h->last_sum_micros = current_sum;
@@ -360,12 +364,28 @@ size_t valk_delta_to_json(const valk_delta_snapshot_t *snap,
         n = snprintf(p, end - p, "{\"n\":\"%s\",\"t\":\"g\",\"v\":%ld%s}",
                      d->name, d->data.value, labels_buf);
         break;
-      case VALK_DELTA_OBSERVE:
-        // Compact histogram delta
-        n = snprintf(p, end - p, "{\"n\":\"%s\",\"t\":\"h\",\"c\":%lu,\"s\":%lu%s}",
+      case VALK_DELTA_OBSERVE: {
+        n = snprintf(p, end - p, "{\"n\":\"%s\",\"t\":\"h\",\"c\":%lu,\"s\":%lu,\"b\":[",
                      d->name, d->data.histogram.count_delta,
-                     d->data.histogram.sum_delta_micros, labels_buf);
+                     d->data.histogram.sum_delta_micros);
+        if (n < 0 || p + n >= end) return buf_size;
+        p += n;
+        uint64_t cumulative = 0;
+        for (uint8_t b = 0; b <= d->data.histogram.bucket_count; b++) {
+          cumulative += d->data.histogram.bucket_deltas[b];
+          if (b < d->data.histogram.bucket_count) {
+            n = snprintf(p, end - p, "%s{\"le\":%.6f,\"d\":%lu}",
+                         b > 0 ? "," : "", d->data.histogram.bucket_bounds[b], cumulative);
+          } else {
+            n = snprintf(p, end - p, "%s{\"le\":\"+Inf\",\"d\":%lu}",
+                         b > 0 ? "," : "", cumulative);
+          }
+          if (n < 0 || p + n >= end) return buf_size;
+          p += n;
+        }
+        n = snprintf(p, end - p, "]%s}", labels_buf);
         break;
+      }
       default:
         continue;
     }

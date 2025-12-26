@@ -50,6 +50,13 @@ void valk_http2_server_metrics_init(valk_aio_system_t* sys, valk_server_metrics_
   m->request_duration = valk_histogram_get_or_create("http_request_duration_seconds",
     NULL, latency_buckets, 17, &base_labels);
 
+  static const double sse_duration_buckets[] = {
+    1.0, 5.0, 10.0, 30.0, 60.0,
+    120.0, 300.0, 600.0, 1800.0, 3600.0
+  };
+  m->sse_stream_duration = valk_histogram_get_or_create("http_sse_stream_duration_seconds",
+    NULL, sse_duration_buckets, 10, &base_labels);
+
   m->bytes_sent = valk_counter_get_or_create("http_bytes_sent_total", NULL, &base_labels);
   m->bytes_recv = valk_counter_get_or_create("http_bytes_recv_total", NULL, &base_labels);
   m->overload_responses = valk_counter_get_or_create("http_overload_responses_total", NULL, &base_labels);

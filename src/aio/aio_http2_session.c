@@ -230,6 +230,7 @@ int valk_http2_on_begin_headers_callback(nghttp2_session *session,
       conn->http.active_streams--;
 
 #ifdef VALK_METRICS_ENABLED
+      valk_aio_metrics_on_stream_end(&conn->http.server->sys->metrics_state->metrics, true, 0, 0, 0);
       atomic_fetch_add(&conn->http.server->sys->metrics_state->system_stats.arena_pool_overflow, 1);
       valk_counter_v2_inc(conn->http.server->metrics.overload_responses);
       valk_counter_v2_inc(conn->http.server->metrics.requests_server_error);
@@ -629,6 +630,7 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
       valk_pending_stream_remove(&conn->http.server->sys->pending_streams, ps);
 #ifdef VALK_METRICS_ENABLED
       if (conn->http.server && conn->http.server->sys) {
+        valk_aio_metrics_on_stream_end(&conn->http.server->sys->metrics_state->metrics, true, 0, 0, 0);
         valk_aio_system_stats_on_pending_drop(&conn->http.server->sys->metrics_state->system_stats);
 
         valk_server_metrics_t* m = &conn->http.server->metrics;
@@ -646,6 +648,7 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
   valk_http2_server_request_t *req = (valk_http2_server_request_t *)stream_data;
 
 #ifdef VALK_METRICS_ENABLED
+  bool was_sse_stream = false;
   if (conn->http.server && conn->http.server->sys) {
     valk_sse_stream_registry_t *registry = &conn->http.server->sys->sse_registry;
     valk_sse_stream_entry_t *entry = valk_sse_registry_find_by_stream(
@@ -654,6 +657,7 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
       VALK_INFO("Stream %d closing, unsubscribing from SSE registry", stream_id);
       valk_sse_registry_unsubscribe(registry, entry);
       valk_gauge_v2_dec(conn->http.server->metrics.sse_streams_active);
+      was_sse_stream = true;
     }
   }
 #endif
@@ -685,7 +689,11 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
       valk_counter_v2_inc(m->requests_server_error);
     }
 
-    valk_histogram_v2_observe_us(m->request_duration, duration_us);
+    if (!was_sse_stream) {
+      valk_histogram_v2_observe_us(m->request_duration, duration_us);
+    } else {
+      valk_histogram_v2_observe_us(m->sse_stream_duration, duration_us);
+    }
 
     valk_counter_v2_add(m->bytes_sent, req->bytes_sent);
     valk_counter_v2_add(m->bytes_recv, bytes_recv);
@@ -709,15 +717,21 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
   }
   else if (req && !req->arena_slab_item) {
 #ifdef VALK_METRICS_ENABLED
-    if (conn->http.server) {
-      if (req->sse_entry) {
+    if (conn->http.server && conn->http.server->sys) {
+      uint64_t end_time_us = uv_hrtime() / 1000;
+      uint64_t duration_us = end_time_us - req->start_time_us;
+      bool is_error = !was_sse_stream && (error_code != NGHTTP2_NO_ERROR);
+      valk_aio_metrics_on_stream_end(&conn->http.server->sys->metrics_state->metrics, is_error,
+                                       duration_us, req->bytes_sent, req->bytes_recv);
+
+      if (was_sse_stream) {
+        valk_server_metrics_t* m = &conn->http.server->metrics;
+        valk_histogram_v2_observe_us(m->sse_stream_duration, duration_us);
         VALK_INFO("SSE stream %d closed by client (already counted as 2xx)", stream_id);
       } else {
         valk_server_metrics_t* m = &conn->http.server->metrics;
         valk_counter_v2_inc(m->requests_total);
         valk_counter_v2_inc(m->requests_server_error);
-        uint64_t end_time_us = uv_hrtime() / 1000;
-        uint64_t duration_us = end_time_us - req->start_time_us;
         valk_histogram_v2_observe_us(m->request_duration, duration_us);
         VALK_INFO("Async request timeout: stream %d closed by client after %llu us",
                   stream_id, (unsigned long long)duration_us);

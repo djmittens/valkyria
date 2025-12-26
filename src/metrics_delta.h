@@ -28,6 +28,8 @@ typedef struct {
       uint64_t bucket_deltas[VALK_MAX_BUCKETS + 1];
       uint64_t count_delta;
       uint64_t sum_delta_micros;
+      const double *bucket_bounds;
+      uint8_t bucket_count;
     } histogram;
   } data;
 } valk_metric_delta_t;
