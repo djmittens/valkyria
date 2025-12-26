@@ -43,3 +43,5 @@ size_t valk_conn_io_write_buf_append(valk_conn_io_t *io, valk_slab_t *slab,
 
 int valk_conn_io_flush(valk_conn_io_t *io, uv_stream_t *stream,
                        valk_conn_io_flush_cb cb, void *ctx);
+
+void valk_conn_io_read_buf_release(valk_conn_io_t *io, valk_slab_t *slab);

@@ -10,7 +10,7 @@ extern void valk_async_handle_free(valk_async_handle_t *handle);
 extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
 extern bool valk_async_handle_cancel(valk_async_handle_t *handle);
 
-static void __pending_stream_process_one(valk_aio_system_t *sys);
+static void __pending_stream_process_batch(valk_aio_system_t *sys);
 
 static inline size_t __align_up(uintptr_t addr, size_t alignment) {
   size_t mask = alignment - 1;
@@ -704,7 +704,7 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
     VALK_INFO("Arena RELEASED (stream close) for stream %d (slot=%u, now %zu free)", stream_id, slot, arena_num_free);
 
     if (conn->http.server->sys->pending_streams.count > 0) {
-      __pending_stream_process_one(conn->http.server->sys);
+      __pending_stream_process_batch(conn->http.server->sys);
     }
   }
   else if (req && !req->arena_slab_item) {
@@ -908,147 +908,143 @@ int valk_http2_on_frame_recv_callback(nghttp2_session *session,
   return 0;
 }
 
-static void __pending_stream_process_one(valk_aio_system_t *sys) {
-  if (!sys || sys->pending_streams.count == 0) return;
+static void __pending_stream_process_batch(valk_aio_system_t *sys) {
+  while (sys && sys->pending_streams.count > 0) {
+    valk_slab_item_t *arena_item = valk_slab_aquire(sys->httpStreamArenas);
+    if (!arena_item) {
+      VALK_DEBUG("No arenas available yet, %zu streams still pending", sys->pending_streams.count);
+      return;
+    }
 
-  valk_slab_item_t *arena_item = valk_slab_aquire(sys->httpStreamArenas);
-  if (!arena_item) {
-    VALK_DEBUG("No arenas available yet, %zu streams still pending", sys->pending_streams.count);
-    return;
-  }
+    pending_stream_t *ps = valk_pending_stream_dequeue(&sys->pending_streams);
+    VALK_ASSERT(ps != NULL, "pending_stream_count > 0 but dequeue returned NULL");
+    VALK_ASSERT(ps->conn != NULL, "pending stream %d has NULL conn", ps->stream_id);
+    VALK_ASSERT(ps->session != NULL, "pending stream %d has NULL session", ps->stream_id);
 
-  pending_stream_t *ps = valk_pending_stream_dequeue(&sys->pending_streams);
-  VALK_ASSERT(ps != NULL, "pending_stream_count > 0 but dequeue returned NULL");
-  VALK_ASSERT(ps->conn != NULL, "pending stream %d has NULL conn", ps->stream_id);
-  VALK_ASSERT(ps->session != NULL, "pending stream %d has NULL session", ps->stream_id);
+    void *current_data = nghttp2_session_get_stream_user_data(ps->session, ps->stream_id);
+    VALK_ASSERT(current_data != NULL, "pending stream %d has NULL user_data", ps->stream_id);
+    VALK_ASSERT(__is_pending_stream(current_data),
+                "pending stream %d user_data is not a pending stream marker", ps->stream_id);
 
-  void *current_data = nghttp2_session_get_stream_user_data(ps->session, ps->stream_id);
-  VALK_ASSERT(current_data != NULL, "pending stream %d has NULL user_data", ps->stream_id);
-  VALK_ASSERT(__is_pending_stream(current_data),
-              "pending stream %d user_data is not a pending stream marker", ps->stream_id);
+    uint64_t wait_ms = uv_now(ps->conn->uv.tcp.loop) - ps->queued_time_ms;
+    VALK_INFO("Processing pending stream %d (waited %lums)",
+              ps->stream_id, (unsigned long)wait_ms);
 
-  uint64_t wait_ms = uv_now(ps->conn->uv.tcp.loop) - ps->queued_time_ms;
-  VALK_INFO("Processing pending stream %d (waited %lums)",
-            ps->stream_id, (unsigned long)wait_ms);
-
-  valk_mem_arena_t *stream_arena = (valk_mem_arena_t *)arena_item->data;
-  valk_mem_arena_init(stream_arena, sys->config.arena_size);
+    valk_mem_arena_t *stream_arena = (valk_mem_arena_t *)arena_item->data;
+    valk_mem_arena_init(stream_arena, sys->config.arena_size);
 
 #ifdef VALK_METRICS_ENABLED
-  VALK_METRICS_IF(sys) {
-    valk_aio_system_stats_on_arena_acquire(&VALK_SYSTEM_STATS(sys));
-    valk_aio_system_stats_on_pending_dequeue(&VALK_SYSTEM_STATS(sys), wait_ms * 1000);
-  }
+    VALK_METRICS_IF(sys) {
+      valk_aio_system_stats_on_arena_acquire(&VALK_SYSTEM_STATS(sys));
+      valk_aio_system_stats_on_pending_dequeue(&VALK_SYSTEM_STATS(sys), wait_ms * 1000);
+    }
 #endif
 
-  valk_http2_server_request_t *req;
-  VALK_WITH_ALLOC((valk_mem_allocator_t*)stream_arena) {
-    req = valk_mem_alloc(sizeof(valk_http2_server_request_t));
-    memset(req, 0, sizeof(valk_http2_server_request_t));
-    req->conn = ps->conn;
-    req->stream_id = ps->stream_id;
-    req->stream_arena = stream_arena;
-    req->arena_slab_item = arena_item;
-    req->arena_slot = (uint32_t)(arena_item->handle & 0xFFFFFFFF);
-    req->next_arena_slot = UINT32_MAX;
+    valk_http2_server_request_t *req;
+    VALK_WITH_ALLOC((valk_mem_allocator_t*)stream_arena) {
+      req = valk_mem_alloc(sizeof(valk_http2_server_request_t));
+      memset(req, 0, sizeof(valk_http2_server_request_t));
+      req->conn = ps->conn;
+      req->stream_id = ps->stream_id;
+      req->stream_arena = stream_arena;
+      req->arena_slab_item = arena_item;
+      req->arena_slot = (uint32_t)(arena_item->handle & 0xFFFFFFFF);
+      req->next_arena_slot = UINT32_MAX;
 
 #ifdef VALK_METRICS_ENABLED
-    req->start_time_us = ps->queued_time_ms * 1000;
-    req->bytes_sent = 0;
-    req->bytes_recv = 0;
+      req->start_time_us = ps->queued_time_ms * 1000;
+      req->bytes_sent = 0;
+      req->bytes_recv = 0;
 #endif
 
-    if (ps->method) {
-      size_t len = strlen(ps->method);
-      req->method = valk_mem_alloc(len + 1);
-      memcpy(req->method, ps->method, len + 1);
-    }
-    if (ps->scheme) {
-      size_t len = strlen(ps->scheme);
-      req->scheme = valk_mem_alloc(len + 1);
-      memcpy(req->scheme, ps->scheme, len + 1);
-    }
-    if (ps->authority) {
-      size_t len = strlen(ps->authority);
-      req->authority = valk_mem_alloc(len + 1);
-      memcpy(req->authority, ps->authority, len + 1);
-    }
-    if (ps->path) {
-      size_t len = strlen(ps->path);
-      req->path = valk_mem_alloc(len + 1);
-      memcpy(req->path, ps->path, len + 1);
-    }
+      if (ps->method) {
+        size_t len = strlen(ps->method);
+        req->method = valk_mem_alloc(len + 1);
+        memcpy(req->method, ps->method, len + 1);
+      }
+      if (ps->scheme) {
+        size_t len = strlen(ps->scheme);
+        req->scheme = valk_mem_alloc(len + 1);
+        memcpy(req->scheme, ps->scheme, len + 1);
+      }
+      if (ps->authority) {
+        size_t len = strlen(ps->authority);
+        req->authority = valk_mem_alloc(len + 1);
+        memcpy(req->authority, ps->authority, len + 1);
+      }
+      if (ps->path) {
+        size_t len = strlen(ps->path);
+        req->path = valk_mem_alloc(len + 1);
+        memcpy(req->path, ps->path, len + 1);
+      }
 
-    if (ps->header_count > 0) {
-      req->headers.capacity = ps->header_count;
-      req->headers.items = valk_mem_alloc(ps->header_count * sizeof(struct valk_http2_header_t));
-      req->headers.count = ps->header_count;
+      if (ps->header_count > 0) {
+        req->headers.capacity = ps->header_count;
+        req->headers.items = valk_mem_alloc(ps->header_count * sizeof(struct valk_http2_header_t));
+        req->headers.count = ps->header_count;
 
-      for (size_t i = 0; i < ps->header_count; i++) {
-        pending_header_t *ph = &ps->headers[i];
-        struct valk_http2_header_t *h = &req->headers.items[i];
+        for (size_t i = 0; i < ps->header_count; i++) {
+          pending_header_t *ph = &ps->headers[i];
+          struct valk_http2_header_t *h = &req->headers.items[i];
 
-        h->name = valk_mem_alloc(ph->name_len + 1);
-        h->value = valk_mem_alloc(ph->value_len + 1);
-        memcpy(h->name, ph->name, ph->name_len + 1);
-        memcpy(h->value, ph->value, ph->value_len + 1);
-        h->nameLen = ph->name_len;
-        h->valueLen = ph->value_len;
+          h->name = valk_mem_alloc(ph->name_len + 1);
+          h->value = valk_mem_alloc(ph->value_len + 1);
+          memcpy(h->name, ph->name, ph->name_len + 1);
+          memcpy(h->value, ph->value, ph->value_len + 1);
+          h->nameLen = ph->name_len;
+          h->valueLen = ph->value_len;
+        }
+      }
+
+      if (ps->body && ps->body_len > 0) {
+        req->body = valk_mem_alloc(ps->body_len);
+        memcpy(req->body, ps->body, ps->body_len);
+        req->bodyLen = ps->body_len;
+        req->bodyCapacity = ps->body_len;
       }
     }
 
-    if (ps->body && ps->body_len > 0) {
-      req->body = valk_mem_alloc(ps->body_len);
-      memcpy(req->body, ps->body, ps->body_len);
-      req->bodyLen = ps->body_len;
-      req->bodyCapacity = ps->body_len;
-    }
-  }
+    nghttp2_session_set_stream_user_data(ps->session, ps->stream_id, req);
 
-  nghttp2_session_set_stream_user_data(ps->session, ps->stream_id, req);
+    req->next_arena_slot = ps->conn->http.active_arena_head;
+    ps->conn->http.active_arena_head = req->arena_slot;
 
-  req->next_arena_slot = ps->conn->http.active_arena_head;
-  ps->conn->http.active_arena_head = req->arena_slot;
+    VALK_INFO("Pending stream %d converted to full request (arena slot %u)",
+              ps->stream_id, req->arena_slot);
 
-  VALK_INFO("Pending stream %d converted to full request (arena slot %u)",
-            ps->stream_id, req->arena_slot);
+    if (ps->headers_complete) {
+      if (ps->conn->http.server && ps->conn->http.server->lisp_handler_fn) {
+        VALK_DEBUG("Pending stream %d had complete headers, triggering handler", ps->stream_id);
 
-  if (ps->headers_complete) {
-    if (ps->conn->http.server && ps->conn->http.server->lisp_handler_fn) {
-      VALK_DEBUG("Pending stream %d had complete headers, triggering handler", ps->stream_id);
+        valk_lval_t *arena_qexpr = valk_http2_build_request_qexpr(req);
+        valk_lval_t *handler = ps->conn->http.server->lisp_handler_fn;
+        valk_lenv_t *sandbox_env = ps->conn->http.server->sandbox_env;
+        valk_lval_t *response;
 
-      valk_lval_t *arena_qexpr = valk_http2_build_request_qexpr(req);
-      valk_lval_t *handler = ps->conn->http.server->lisp_handler_fn;
-      valk_lenv_t *sandbox_env = ps->conn->http.server->sandbox_env;
-      valk_lval_t *response;
+        valk_http_request_ctx_t req_ctx = {
+          .session = ps->session,
+          .stream_id = ps->stream_id,
+          .conn = ps->conn,
+          .req = req,
+          .env = sandbox_env
+        };
+        sys->current_request_ctx = &req_ctx;
 
-      valk_http_request_ctx_t req_ctx = {
-        .session = ps->session,
-        .stream_id = ps->stream_id,
-        .conn = ps->conn,
-        .req = req,
-        .env = sandbox_env
-      };
-      sys->current_request_ctx = &req_ctx;
+        VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
+          valk_lval_t *args = valk_lval_cons(arena_qexpr, valk_lval_nil());
+          response = valk_lval_eval_call(sandbox_env, handler, args);
+        }
 
-      VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
-        valk_lval_t *args = valk_lval_cons(arena_qexpr, valk_lval_nil());
-        response = valk_lval_eval_call(sandbox_env, handler, args);
-      }
+        sys->current_request_ctx = NULL;
 
-      sys->current_request_ctx = NULL;
-
-      if (LVAL_TYPE(response) == LVAL_SYM && strcmp(response->str, ":deferred") == 0) {
-      } else if (LVAL_TYPE(response) != LVAL_HANDLE) {
-        valk_http2_send_response(ps->session, ps->stream_id, response, req->stream_arena);
+        if (LVAL_TYPE(response) == LVAL_SYM && strcmp(response->str, ":deferred") == 0) {
+        } else if (LVAL_TYPE(response) != LVAL_HANDLE) {
+          valk_http2_send_response(ps->session, ps->stream_id, response, req->stream_arena);
+        }
       }
     }
-  }
 
-  valk_pending_stream_free(&sys->pending_streams, ps);
-
-  if (sys->pending_streams.count > 0) {
-    __pending_stream_process_one(sys);
+    valk_pending_stream_free(&sys->pending_streams, ps);
   }
 }
 

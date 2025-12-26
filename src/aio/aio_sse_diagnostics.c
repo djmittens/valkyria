@@ -1870,6 +1870,161 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
 }
 
 // ============================================================================
+// Memory-only Delta (for MEMORY_ONLY subscription type)
+// ============================================================================
+
+int valk_mem_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *prev,
+                           char *buf, size_t buf_size, uint64_t event_id) {
+  char *p = buf;
+  char *end = buf + buf_size;
+
+  bool slab_changes[8] = {false};
+  for (size_t i = 0; i < current->slab_count && i < prev->slab_count; i++) {
+    if (slab_changed(&current->slabs[i], &prev->slabs[i])) {
+      slab_changes[i] = true;
+    }
+  }
+
+  bool arena_changes[16] = {false};
+  for (size_t i = 0; i < current->arena_count && i < prev->arena_count; i++) {
+    size_t diff = current->arenas[i].used_bytes > prev->arenas[i].used_bytes
+                    ? current->arenas[i].used_bytes - prev->arenas[i].used_bytes
+                    : prev->arenas[i].used_bytes - current->arenas[i].used_bytes;
+    size_t threshold = prev->arenas[i].capacity_bytes / 100;
+    if (diff > threshold || current->arenas[i].overflow_fallbacks != prev->arenas[i].overflow_fallbacks) {
+      arena_changes[i] = true;
+    }
+  }
+
+  bool gc_changed = (current->gc_heap.gc_cycles != prev->gc_heap.gc_cycles ||
+                     current->gc_heap.emergency_collections != prev->gc_heap.emergency_collections);
+
+  bool has_slab_changes = false;
+  for (size_t i = 0; i < current->slab_count; i++) {
+    if (slab_changes[i]) { has_slab_changes = true; break; }
+  }
+  bool has_arena_changes = false;
+  for (size_t i = 0; i < current->arena_count; i++) {
+    if (arena_changes[i]) { has_arena_changes = true; break; }
+  }
+
+  if (!has_slab_changes && !has_arena_changes && !gc_changed) {
+    return 0;
+  }
+
+  int n = snprintf(p, end - p, "event: memory-delta\nid: %lu\ndata: {", event_id);
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  bool need_comma = false;
+
+  if (has_slab_changes) {
+    n = snprintf(p, end - p, "\"slabs\":[");
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+
+    bool first_slab = true;
+    for (size_t i = 0; i < current->slab_count; i++) {
+      if (!slab_changes[i]) continue;
+
+      valk_slab_snapshot_t *slab = &current->slabs[i];
+      valk_slab_snapshot_t *prev_slab = &prev->slabs[i];
+
+      if (!first_slab) {
+        n = snprintf(p, end - p, ",");
+        if (n < 0 || n >= end - p) return -1;
+        p += n;
+      }
+      first_slab = false;
+
+      if (slab->has_slot_diag && slab->slots && prev_slab->slots) {
+        char delta_buf[4096];
+        slots_to_delta_string(slab->slots, prev_slab->slots, slab->total_slots,
+                              delta_buf, sizeof(delta_buf));
+
+        n = snprintf(p, end - p,
+                     "{\"name\":\"%s\",\"used\":%zu,\"hwm\":%zu,\"delta_states\":\"%s\"}",
+                     slab->name, slab->used_slots, slab->peak_used, delta_buf);
+      } else {
+        size_t rle_buf_size = slab->bitmap_bytes * 4 + 1;
+        char *hex = malloc(rle_buf_size);
+        if (!hex) return -1;
+
+        if (slab->bitmap) {
+          bitmap_to_rle_hex(slab->bitmap, slab->bitmap_bytes, hex, rle_buf_size);
+        } else {
+          hex[0] = '\0';
+        }
+
+        n = snprintf(p, end - p,
+                     "{\"name\":\"%s\",\"bitmap\":\"%s\",\"used\":%zu,\"hwm\":%zu}",
+                     slab->name, hex, slab->used_slots, slab->peak_used);
+        free(hex);
+      }
+
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+    }
+
+    n = snprintf(p, end - p, "]");
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+    need_comma = true;
+  }
+
+  if (has_arena_changes) {
+    n = snprintf(p, end - p, "%s\"arenas\":[", need_comma ? "," : "");
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+
+    bool first_arena = true;
+    for (size_t i = 0; i < current->arena_count; i++) {
+      if (!arena_changes[i]) continue;
+
+      if (!first_arena) {
+        n = snprintf(p, end - p, ",");
+        if (n < 0 || n >= end - p) return -1;
+        p += n;
+      }
+      first_arena = false;
+
+      n = snprintf(p, end - p, "{\"name\":\"%s\",\"used\":%zu}",
+                   current->arenas[i].name, current->arenas[i].used_bytes);
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+    }
+
+    n = snprintf(p, end - p, "]");
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+    need_comma = true;
+  }
+
+  if (gc_changed) {
+    n = snprintf(p, end - p, "%s\"gc\":{", need_comma ? "," : "");
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+
+    n = gc_tiers_to_json(current, p, end - p);
+    if (n < 0) return -1;
+    p += n;
+
+    n = snprintf(p, end - p,
+                 ",\"cycles\":%lu,\"emergency\":%zu}",
+                 current->gc_heap.gc_cycles,
+                 current->gc_heap.emergency_collections);
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+  }
+
+  n = snprintf(p, end - p, "}\n\n");
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  return p - buf;
+}
+
+// ============================================================================
 // Fresh State JSON (for /debug/metrics/state endpoint)
 // ============================================================================
 

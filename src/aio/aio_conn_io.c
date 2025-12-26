@@ -33,6 +33,12 @@ bool valk_conn_io_read_buf_acquire(valk_conn_io_t *io, valk_slab_t *slab) {
   return true;
 }
 
+void valk_conn_io_read_buf_release(valk_conn_io_t *io, valk_slab_t *slab) {
+  if (!io || !io->read_buf || !slab) return;
+  valk_slab_release(slab, io->read_buf);
+  io->read_buf = NULL;
+}
+
 uint8_t *valk_conn_io_read_buf_data(valk_conn_io_t *io) {
   if (!io->read_buf) return NULL;
   __tcp_buffer_slab_item_t *item = (void *)io->read_buf->data;

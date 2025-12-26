@@ -269,11 +269,10 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
       entry->prev_aio_metrics.connections_total = temp_conn.prev_metrics.connections_total;
       entry->prev_aio_metrics.gc_cycles = temp_conn.prev_metrics.gc_cycles;
     } else if (entry->type == VALK_SSE_SUB_MEMORY_ONLY) {
-      // Memory-only delta (not implemented in existing code - just resend full)
-      // Use next_id to avoid incrementing if we don't send
       uint64_t next_id = entry->last_event_id + 1;
-      len = valk_mem_snapshot_to_sse(snapshot, entry->pending_data,
-                                     entry->pending_capacity, next_id);
+      len = valk_mem_delta_to_sse(snapshot, &entry->prev_snapshot,
+                                   entry->pending_data, entry->pending_capacity,
+                                   next_id);
       if (len > 0) {
         entry->last_event_id = next_id;
       }

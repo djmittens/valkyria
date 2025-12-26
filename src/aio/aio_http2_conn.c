@@ -269,6 +269,7 @@ void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_bu
       VALK_ERROR("BIO_write during backpressure failed: wrote %d of %ld", n, nread);
     }
     uv_read_stop((uv_stream_t *)&conn->uv.tcp);
+    valk_conn_io_read_buf_release(&conn->http.io, conn->sys->tcpBufferSlab);
     if (!__backpressure_list_add(conn)) {
       if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
         conn->http.state = VALK_CONN_CLOSING;
@@ -285,6 +286,7 @@ void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_bu
       VALK_ERROR("BIO_write during backpressure failed: wrote %d of %ld", n, nread);
     }
     uv_read_stop((uv_stream_t *)&conn->uv.tcp);
+    valk_conn_io_read_buf_release(&conn->http.io, conn->sys->tcpBufferSlab);
     if (!__backpressure_list_add(conn)) {
       if (!uv_is_closing((uv_handle_t *)&conn->uv.tcp)) {
         conn->http.state = VALK_CONN_CLOSING;

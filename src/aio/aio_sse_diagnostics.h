@@ -225,6 +225,11 @@ bool valk_aio_http_session_valid(valk_aio_handle_t *handle, void *session);
 // Encode snapshot to SSE event (memory only - legacy)
 int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf, size_t buf_size, uint64_t event_id);
 
+// Encode memory delta to SSE event (memory only, no AIO/modular metrics)
+// Returns 0 if no changes detected (skip sending), >0 for bytes written, <0 for error
+int valk_mem_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *prev,
+                           char *buf, size_t buf_size, uint64_t event_id);
+
 // Encode combined diagnostics to SSE event (memory + metrics)
 // This unified event eliminates the need for separate polling from the dashboard
 int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot, valk_aio_system_t *aio,
