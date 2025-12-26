@@ -710,14 +710,18 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
   else if (req && !req->arena_slab_item) {
 #ifdef VALK_METRICS_ENABLED
     if (conn->http.server) {
-      valk_server_metrics_t* m = &conn->http.server->metrics;
-      valk_counter_v2_inc(m->requests_total);
-      valk_counter_v2_inc(m->requests_server_error);
-      uint64_t end_time_us = uv_hrtime() / 1000;
-      uint64_t duration_us = end_time_us - req->start_time_us;
-      valk_histogram_v2_observe_us(m->request_duration, duration_us);
-      VALK_INFO("Async request timeout: stream %d closed by client after %llu us",
-                stream_id, (unsigned long long)duration_us);
+      if (req->sse_entry) {
+        VALK_INFO("SSE stream %d closed by client (already counted as 2xx)", stream_id);
+      } else {
+        valk_server_metrics_t* m = &conn->http.server->metrics;
+        valk_counter_v2_inc(m->requests_total);
+        valk_counter_v2_inc(m->requests_server_error);
+        uint64_t end_time_us = uv_hrtime() / 1000;
+        uint64_t duration_us = end_time_us - req->start_time_us;
+        valk_histogram_v2_observe_us(m->request_duration, duration_us);
+        VALK_INFO("Async request timeout: stream %d closed by client after %llu us",
+                  stream_id, (unsigned long long)duration_us);
+      }
     }
 #endif
   }
@@ -952,7 +956,7 @@ static void __pending_stream_process_batch(valk_aio_system_t *sys) {
       req->next_arena_slot = UINT32_MAX;
 
 #ifdef VALK_METRICS_ENABLED
-      req->start_time_us = ps->queued_time_ms * 1000;
+      req->start_time_us = (uv_hrtime() / 1000) - (wait_ms * 1000);
       req->bytes_sent = 0;
       req->bytes_recv = 0;
 #endif

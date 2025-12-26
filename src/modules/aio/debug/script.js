@@ -6,6 +6,9 @@
   // Sparkline window size in samples (server sends updates every 100ms)
   // 1800 samples = 3 minutes, 600 = 1 minute, 3000 = 5 minutes
   var HISTORY_SAMPLES = 1800;
+  // Display window for sparklines (60 samples = 6 seconds at 100ms intervals)
+  // This is how many samples are rendered - keeps sparklines from "zooming out"
+  var SPARKLINE_DISPLAY_SAMPLES = 60;
   var GAUGE_CIRCUMFERENCE = 251.2;  // 2 * PI * 40
 
   // Adaptive interval system (for rate-based UI updates)
@@ -41,6 +44,29 @@
   }
 
   // ==================== Phase 1: Core Infrastructure ====================
+
+  // Pad array to fixed size with zeros at the beginning (for stable sparkline width)
+  function padSparklineData(data, targetSize, defaultValue) {
+    var size = targetSize || SPARKLINE_DISPLAY_SAMPLES;
+    var padValue = defaultValue !== undefined ? defaultValue : 0;
+    var arr = data.slice(-size);
+    while (arr.length < size) {
+      arr.unshift(padValue);
+    }
+    return arr;
+  }
+
+  // Pad status code array (objects with s2xx, s4xx, s5xx) to fixed size
+  function padStatusCodeData(data, targetSize) {
+    var size = targetSize || SPARKLINE_DISPLAY_SAMPLES;
+    var emptyEntry = { s2xx: 0, s4xx: 0, s5xx: 0 };
+    var arr = data.slice(-size);
+    while (arr.length < size) {
+      arr.unshift(emptyEntry);
+    }
+    return arr;
+  }
+
   // Generic circular buffer for sparkline history
   function createHistoryBuffer(maxSize) {
     return {
@@ -81,6 +107,244 @@
       };
     }
     return entityHistory[id];
+  }
+
+  // ==================== Canvas Sparkline Infrastructure ====================
+  var sparklineColors = null;
+  var sparklineRenderQueue = new Map();
+  var sparklineRafId = null;
+
+  function getSparklineColors() {
+    if (sparklineColors) return sparklineColors;
+    var style = getComputedStyle(document.documentElement);
+    sparklineColors = {
+      ok: style.getPropertyValue('--color-ok').trim() || '#3fb950',
+      warning: style.getPropertyValue('--color-warning').trim() || '#d29922',
+      error: style.getPropertyValue('--color-error').trim() || '#f85149',
+      info: style.getPropertyValue('--color-info').trim() || '#58a6ff',
+      purple: style.getPropertyValue('--color-purple').trim() || '#a371f7',
+      cyan: style.getPropertyValue('--color-cyan').trim() || '#39d4d4'
+    };
+    return sparklineColors;
+  }
+
+  function flushSparklineRenders() {
+    sparklineRafId = null;
+    sparklineRenderQueue.forEach(function(renderFn) { renderFn(); });
+    sparklineRenderQueue.clear();
+  }
+
+  function queueSparklineRender(container, renderFn) {
+    sparklineRenderQueue.set(container, renderFn);
+    if (!sparklineRafId) {
+      sparklineRafId = requestAnimationFrame(flushSparklineRenders);
+    }
+  }
+
+  function ensureCanvas(container, height) {
+    var canvas = container._sparkCanvas;
+    var dpr = window.devicePixelRatio || 1;
+    var width = container.clientWidth || 160;
+    var sw = Math.round(width * dpr), sh = Math.round(height * dpr);
+
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      canvas.style.cssText = 'width:100%;height:' + height + 'px;display:block';
+      canvas.width = sw;
+      canvas.height = sh;
+      container.innerHTML = '';
+      container.appendChild(canvas);
+      container._sparkCanvas = canvas;
+    } else if (canvas.width !== sw || canvas.height !== sh) {
+      canvas.width = sw;
+      canvas.height = sh;
+    }
+    var ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    return { ctx: ctx, width: width, height: height };
+  }
+
+  // Unified line sparkline renderer
+  // series: [{
+  //   data: number[],           // required: data points
+  //   color: string,            // color key or CSS color (default: 'info')
+  //   stroke: number|false,     // stroke opacity 0-1, or false to disable (default: 0.9)
+  //   width: number,            // stroke width (default: 1.5)
+  //   dash: number[],           // dash pattern e.g. [3, 2]
+  //   fill: number|false,       // fill opacity 0-1, or false to disable
+  //   fillColor: string,        // separate fill color (defaults to stroke color)
+  //   fillGradient: boolean,    // use vertical gradient for fill
+  // }]
+  function drawLineSparkline(container, series, options) {
+    var opts = options || {};
+    var h = opts.height || 32;
+    var pad = opts.padding || 2;
+    var c = ensureCanvas(container, h);
+    var ctx = c.ctx, w = c.width;
+    var colors = getSparklineColors();
+
+    // Find global max across all series
+    var max = 0;
+    for (var s = 0; s < series.length; s++) {
+      var d = series[s].data;
+      for (var i = 0; i < d.length; i++) if (d[i] > max) max = d[i];
+    }
+    if (max === 0) max = 1;
+
+    var plotH = h - pad * 2;
+    var baseline = h - pad;
+
+    function toY(v) { return baseline - (v / max) * plotH; }
+    function toX(i, len) { return (i / (len - 1)) * w; }
+
+    function tracePath(data) {
+      var len = data.length;
+      ctx.beginPath();
+      ctx.moveTo(0, toY(data[0]));
+      for (var i = 1; i < len; i++) ctx.lineTo(toX(i, len), toY(data[i]));
+    }
+
+    // Draw each series (back to front)
+    for (var si = 0; si < series.length; si++) {
+      var sr = series[si];
+      var data = sr.data;
+      var strokeColor = colors[sr.color] || sr.color || colors.info;
+      var fillColor = sr.fillColor ? (colors[sr.fillColor] || sr.fillColor) : strokeColor;
+
+      // Area fill
+      if (sr.fill) {
+        tracePath(data);
+        ctx.lineTo(w, baseline);
+        ctx.lineTo(0, baseline);
+        ctx.closePath();
+
+        if (sr.fillGradient) {
+          var grad = ctx.createLinearGradient(0, pad, 0, baseline);
+          grad.addColorStop(0, fillColor);
+          grad.addColorStop(1, 'transparent');
+          ctx.fillStyle = grad;
+          ctx.globalAlpha = sr.fill;
+        } else {
+          ctx.fillStyle = fillColor;
+          ctx.globalAlpha = sr.fill;
+        }
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      // Line stroke
+      if (sr.stroke !== false) {
+        tracePath(data);
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = sr.width || 1.5;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.globalAlpha = typeof sr.stroke === 'number' ? sr.stroke : 0.9;
+        if (sr.dash) ctx.setLineDash(sr.dash);
+        else ctx.setLineDash([]);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+    ctx.setLineDash([]);
+  }
+
+  function renderLineSparkline(container, series, options) {
+    if (!container || !series || !series.length) return;
+    var first = series[0];
+    if (!first.data || first.data.length < 2) {
+      if (container._sparkCanvas) container._sparkCanvas.getContext('2d').clearRect(0, 0, 9999, 9999);
+      return;
+    }
+    queueSparklineRender(container, function() {
+      drawLineSparkline(container, series, options);
+    });
+  }
+
+  // Stacked bar sparkline for status codes
+  // data: [{ s2xx, s4xx, s5xx }, ...]
+  // options: {
+  //   height,
+  //   minBarHeight: number,     // minimum height for non-zero segments (default: 4)
+  //   gap: number,              // gap ratio between bars 0-1 (default: 0.1)
+  //   radius: number,           // corner radius (default: 0)
+  //   segments: [{              // segment definitions (default: status code segments)
+  //     key: string,            // property name in data
+  //     color: string,          // color key or CSS color
+  //   }]
+  // }
+  var defaultBarSegments = [
+    { key: 's2xx', color: 'ok' },
+    { key: 's4xx', color: 'warning' },
+    { key: 's5xx', color: 'error' }
+  ];
+
+  function drawBarSparkline(container, data, options) {
+    var opts = options || {};
+    var h = opts.height || 32;
+    var minH = opts.minBarHeight || 4;
+    var gapRatio = opts.gap !== undefined ? opts.gap : 0.1;
+    var radius = opts.radius || 0;
+    var segments = opts.segments || defaultBarSegments;
+    var c = ensureCanvas(container, h);
+    var ctx = c.ctx, w = c.width;
+    var colors = getSparklineColors();
+
+    var barW = w / data.length;
+    var gap = Math.max(0.5, barW * gapRatio);
+    var bw = barW - gap;
+
+    for (var i = 0; i < data.length; i++) {
+      var d = data[i];
+      if (!d) continue;
+
+      // Calculate total from all segments
+      var total = 0;
+      for (var si = 0; si < segments.length; si++) {
+        total += d[segments[si].key] || 0;
+      }
+      if (total === 0) continue;
+
+      var x = i * barW;
+
+      // Calculate heights with minimum visibility for non-zero values
+      var heights = [];
+      var usedH = 0;
+      for (var si = segments.length - 1; si >= 0; si--) {
+        var val = d[segments[si].key] || 0;
+        var segH = val > 0 ? Math.max(minH, (val / total) * h) : 0;
+        heights[si] = segH;
+        usedH += segH;
+      }
+      // Adjust first segment to fill remaining space
+      if (heights[0] > 0) heights[0] = Math.max(0, h - (usedH - heights[0]));
+
+      // Draw segments from bottom to top
+      var y = h;
+      for (var si = 0; si < segments.length; si++) {
+        var segH = heights[si];
+        if (segH > 0) {
+          var segColor = colors[segments[si].color] || segments[si].color;
+          ctx.fillStyle = segColor;
+          if (radius > 0) {
+            ctx.beginPath();
+            ctx.roundRect(x, y - segH, bw, segH, radius);
+            ctx.fill();
+          } else {
+            ctx.fillRect(x, y - segH, bw, segH);
+          }
+          y -= segH;
+        }
+      }
+    }
+  }
+
+  function renderBarSparkline(container, data, options) {
+    if (!container || !data || data.length < 2) return;
+    queueSparklineRender(container, function() {
+      drawBarSparkline(container, data, options);
+    });
   }
 
   // SVG-based mini sparkline renderer (48x16 px default)
@@ -1453,80 +1717,21 @@
 
   // Render multi-line percentile sparkline showing P50/P95/P99 trends
   function renderPercentileSparkline(container, history, options) {
-    if (!container || !history.p50 || !history.p50.data || history.p50.data.length < 2) {
-      if (container) container.innerHTML = '';
-      return;
-    }
-
+    if (!container || !history.p50 || !history.p50.data || history.p50.data.length < 1) return;
     var opts = options || {};
-    var width = opts.width || 120;
-    var height = opts.height || 32;
-
-    var allData = history.p50.data.concat(history.p95.data).concat(history.p99.data);
-    var max = Math.max.apply(null, allData) || 1;
-    var min = 0;
-
-    function pathFor(data, color, strokeWidth) {
-      if (!data || data.length < 2) return '';
-      var points = data.map(function(v, i) {
-        var x = (i / (data.length - 1)) * width;
-        var y = height - ((v - min) / (max - min)) * (height - 4) - 2;
-        return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
-      }).join(' ');
-      return '<path d="' + points + '" fill="none" stroke="' + color + '" stroke-width="' + strokeWidth + '" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>';
-    }
-
-    container.innerHTML =
-      '<svg width="100%" height="100%" viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" style="display:block;">' +
-      pathFor(history.p99.data, 'var(--color-error)', 1) +
-      pathFor(history.p95.data, 'var(--color-warning)', 1.2) +
-      pathFor(history.p50.data, 'var(--color-ok)', 1.5) +
-      '</svg>';
+    var ds = opts.displaySamples || SPARKLINE_DISPLAY_SAMPLES;
+    renderLineSparkline(container, [
+      { data: padSparklineData(history.p99.data, ds), color: 'error', width: 1 },
+      { data: padSparklineData(history.p95.data, ds), color: 'warning', width: 1.2 },
+      { data: padSparklineData(history.p50.data, ds), color: 'ok', width: 1.5 }
+    ], { height: opts.height || 32 });
   }
 
   // Render stacked bar sparkline showing 2xx/4xx/5xx status codes over time
-  // Errors are drawn on top with minimum visible height to ensure visibility
   function renderStatusCodeSparkline(container, history, options) {
-    if (!container || !history || history.length < 2) {
-      if (container) container.innerHTML = '';
-      return;
-    }
-
+    if (!container || !history || history.length < 2) return;
     var opts = options || {};
-    var width = opts.width || 60;
-    var height = opts.height || 20;
-    var barWidth = Math.max(2, width / history.length);
-    var minErrorHeight = 4;  // Minimum height for visible error bars
-
-    var bars = history.map(function(d, i) {
-      var total = d.s2xx + d.s4xx + d.s5xx;
-      var x = i * barWidth;
-      var w = Math.max(1, barWidth - 0.5);
-
-      // Show thin baseline for inactive periods so sparkline visually advances
-      if (total === 0) {
-        return '<rect x="' + x + '" y="' + (height - 1) + '" width="' + w + '" height="1" fill="var(--border-muted)" opacity="0.3"/>';
-      }
-
-      // Calculate heights - errors get minimum visible height if non-zero
-      var h5xx = d.s5xx > 0 ? Math.max(minErrorHeight, (d.s5xx / total) * height) : 0;
-      var h4xx = d.s4xx > 0 ? Math.max(minErrorHeight, (d.s4xx / total) * height) : 0;
-      var h2xx = Math.max(0, height - h5xx - h4xx);  // 2xx fills remaining space
-
-      // Stack from bottom: 2xx, then 4xx, then 5xx on top
-      var y2xx = height - h2xx;
-      var y4xx = height - h2xx - h4xx;
-      var y5xx = height - h2xx - h4xx - h5xx;
-
-      var result = '<g>';
-      if (h2xx > 0) result += '<rect x="' + x + '" y="' + y2xx + '" width="' + w + '" height="' + h2xx + '" fill="var(--color-ok)"/>';
-      if (h4xx > 0) result += '<rect x="' + x + '" y="' + y4xx + '" width="' + w + '" height="' + h4xx + '" fill="var(--color-warning)"/>';
-      if (h5xx > 0) result += '<rect x="' + x + '" y="' + y5xx + '" width="' + w + '" height="' + h5xx + '" fill="var(--color-error)"/>';
-      result += '</g>';
-      return result;
-    }).join('');
-
-    container.innerHTML = '<svg width="100%" height="100%" viewBox="0 0 ' + width + ' ' + height + '" style="display:block;">' + bars + '</svg>';
+    renderBarSparkline(container, history, { height: opts.height || 20 });
   }
 
   // ==================== Rendering: AIO System Panels ====================
@@ -2531,10 +2736,10 @@
       }
     }
 
-    // Render header sparklines
+    // Render header sparklines (padded to fixed size for stable display)
     var reqRateSpark = card.querySelector('.req-rate-spark');
-    if (reqRateSpark && hist.reqRate.data.length >= 2) {
-      renderMiniSparkline(reqRateSpark, hist.reqRate.toArray().slice(-20), {
+    if (reqRateSpark && hist.reqRate.data.length >= 1) {
+      renderMiniSparkline(reqRateSpark, padSparklineData(hist.reqRate.toArray(), 20), {
         color: 'var(--color-info)',
         width: 40,
         height: 14
@@ -2542,8 +2747,8 @@
     }
 
     var latencySpark = card.querySelector('.latency-spark');
-    if (latencySpark && hist.p99.data.length >= 2) {
-      renderMiniSparkline(latencySpark, hist.p99.toArray().slice(-20), {
+    if (latencySpark && hist.p99.data.length >= 1) {
+      renderMiniSparkline(latencySpark, padSparklineData(hist.p99.toArray(), 20), {
         color: 'var(--color-warning)',
         width: 40,
         height: 14
@@ -2594,10 +2799,10 @@
       total5xx: req5xx
     });
 
-    // Render large status code sparkline
+    // Render large status code sparkline (pad to fixed size to match throughput alignment)
     var statusSparkLarge = card.querySelector('.status-code-spark-large');
-    if (statusSparkLarge && hist.statusCodes.data.length >= 2) {
-      renderStatusCodeSparkline(statusSparkLarge, hist.statusCodes.toArray(), {
+    if (statusSparkLarge && hist.statusCodes.data.length >= 1) {
+      renderStatusCodeSparkline(statusSparkLarge, padStatusCodeData(hist.statusCodes.toArray()), {
         width: 160,
         height: 32
       });
@@ -2611,9 +2816,9 @@
     if (p95El) p95El.textContent = fmtLatency(p95);
     if (p99El) p99El.textContent = fmtLatency(p99);
 
-    // Render large latency trend sparkline
+    // Render large latency trend sparkline (padded to fixed size to avoid zoom-out effect)
     var latencyTrendLarge = card.querySelector('.latency-trend-spark-large');
-    if (latencyTrendLarge && hist.p50.data.length >= 2) {
+    if (latencyTrendLarge && hist.p50.data.length >= 1) {
       renderPercentileSparkline(latencyTrendLarge, hist, { width: 160, height: 40 });
     }
 
@@ -2644,10 +2849,12 @@
     if (inRateEl) inRateEl.textContent = fmtRate(Math.max(0, bytesInRate));
     if (outRateEl) outRateEl.textContent = fmtRate(Math.max(0, bytesOutRate));
 
-    // Render throughput sparkline
+    // Render throughput sparkline (pad to fixed size to avoid zoom-out effect)
     var throughputSparkLarge = card.querySelector('.throughput-spark-large');
-    if (throughputSparkLarge && hist.bytesIn.data.length >= 2) {
-      renderThroughputSparkline(throughputSparkLarge, hist.bytesIn.toArray(), hist.bytesOut.toArray(), {
+    if (throughputSparkLarge && hist.bytesIn.data.length >= 1) {
+      renderThroughputSparkline(throughputSparkLarge,
+        padSparklineData(hist.bytesIn.toArray()),
+        padSparklineData(hist.bytesOut.toArray()), {
         width: 160,
         height: 32
       });
@@ -2665,10 +2872,12 @@
       sseStat.style.display = sseStreams > 0 ? '' : 'none';
     }
 
-    // Render concurrency sparkline
+    // Render concurrency sparkline (pad to fixed size to avoid zoom-out effect)
     var concurrencySparkLarge = card.querySelector('.concurrency-spark-large');
-    if (concurrencySparkLarge && hist.conns.data.length >= 2) {
-      renderConcurrencySparkline(concurrencySparkLarge, hist.conns.toArray(), hist.sse.toArray(), {
+    if (concurrencySparkLarge && hist.conns.data.length >= 1) {
+      renderConcurrencySparkline(concurrencySparkLarge,
+        padSparklineData(hist.conns.toArray()),
+        padSparklineData(hist.sse.toArray()), {
         width: 160,
         height: 32
       });
@@ -2677,88 +2886,29 @@
 
   // Render throughput sparkline (dual line: in/out)
   function renderThroughputSparkline(container, bytesIn, bytesOut, options) {
-    if (!container || !bytesIn || bytesIn.length < 2) {
-      if (container) container.innerHTML = '';
-      return;
-    }
-
+    if (!container || !bytesIn || bytesIn.length < 2) return;
     var opts = options || {};
-    var width = opts.width || 160;
-    var height = opts.height || 32;
-
-    var allData = bytesIn.concat(bytesOut || []);
-    var max = Math.max.apply(null, allData) || 1;
-
-    function pathFor(data, color, dashArray) {
-      if (!data || data.length < 2) return '';
-      var points = data.map(function(v, i) {
-        var x = (i / (data.length - 1)) * width;
-        var y = height - 2 - ((v / max) * (height - 4));
-        return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
-      }).join(' ');
-      var dash = dashArray ? ' stroke-dasharray="' + dashArray + '"' : '';
-      return '<path d="' + points + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"' + dash + '/>';
+    var series = [
+      { data: bytesIn, color: 'ok', fill: 0.15 }
+    ];
+    if (bytesOut && bytesOut.length >= 2) {
+      series.push({ data: bytesOut, color: 'info', dash: [3, 2] });
     }
-
-    // Area fill for in
-    var areaPoints = bytesIn.map(function(v, i) {
-      var x = (i / (bytesIn.length - 1)) * width;
-      var y = height - 2 - ((v / max) * (height - 4));
-      return x.toFixed(1) + ',' + y.toFixed(1);
-    }).join(' ');
-    areaPoints += ' ' + width + ',' + (height - 2) + ' 0,' + (height - 2);
-
-    container.innerHTML =
-      '<svg width="100%" height="100%" viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" style="display:block;">' +
-      '<polygon points="' + areaPoints + '" fill="var(--color-ok)" opacity="0.15"/>' +
-      pathFor(bytesIn, 'var(--color-ok)', null) +
-      pathFor(bytesOut, 'var(--color-info)', '3,2') +
-      '</svg>';
+    renderLineSparkline(container, series, { height: opts.height || 32 });
   }
 
   // Render concurrency sparkline (connections + SSE)
   function renderConcurrencySparkline(container, conns, sse, options) {
-    if (!container || !conns || conns.length < 2) {
-      if (container) container.innerHTML = '';
-      return;
-    }
-
+    if (!container || !conns || conns.length < 2) return;
     var opts = options || {};
-    var width = opts.width || 160;
-    var height = opts.height || 32;
-
-    var allData = conns.concat(sse || []);
-    var max = Math.max.apply(null, allData) || 1;
-
-    function areaFor(data, color) {
-      if (!data || data.length < 2) return '';
-      var points = data.map(function(v, i) {
-        var x = (i / (data.length - 1)) * width;
-        var y = height - 2 - ((v / max) * (height - 4));
-        return x.toFixed(1) + ',' + y.toFixed(1);
-      }).join(' ');
-      points += ' ' + width + ',' + (height - 2) + ' 0,' + (height - 2);
-      return '<polygon points="' + points + '" fill="' + color + '" opacity="0.3"/>';
-    }
-
-    function lineFor(data, color) {
-      if (!data || data.length < 2) return '';
-      var points = data.map(function(v, i) {
-        var x = (i / (data.length - 1)) * width;
-        var y = height - 2 - ((v / max) * (height - 4));
-        return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
-      }).join(' ');
-      return '<path d="' + points + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
-    }
-
+    var series = [
+      { data: conns, color: 'purple', fill: 0.3 }
+    ];
     var hasSSE = sse && sse.some(function(v) { return v > 0; });
-
-    container.innerHTML =
-      '<svg width="100%" height="100%" viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" style="display:block;">' +
-      areaFor(conns, 'var(--color-purple)') +
-      lineFor(conns, 'var(--color-purple)') +
-      (hasSSE ? areaFor(sse, 'var(--color-cyan)') + lineFor(sse, 'var(--color-cyan)') : '') +
-      '</svg>';
+    if (hasSSE) {
+      series.push({ data: sse, color: 'cyan', fill: 0.3 });
+    }
+    renderLineSparkline(container, series, { height: opts.height || 32 });
   }
 
   // Estimate percentile from histogram buckets (cumulative format)
@@ -3010,11 +3160,11 @@
     $('health-avg-latency').textContent = fmt(avgLatency, 1);
     $('health-heap-pct').textContent = fmt(heapPct, 0);
 
-    // Render mini sparklines
-    renderMiniSparklineLegacy('spark-request-rate', history.requestRate.slice(-20), 'var(--color-info)');
-    renderMiniSparklineLegacy('spark-error-rate', history.errorRate.slice(-20), 'var(--color-warning)');
-    renderMiniSparklineLegacy('spark-latency', history.latency.slice(-20), 'var(--color-cyan)');
-    renderMiniSparklineLegacy('spark-heap', history.heapUsage.slice(-20), 'var(--color-ok)');
+    // Render mini sparklines (padded to fixed size for stable display)
+    renderMiniSparklineLegacy('spark-request-rate', padSparklineData(history.requestRate, 20), 'var(--color-info)');
+    renderMiniSparklineLegacy('spark-error-rate', padSparklineData(history.errorRate, 20), 'var(--color-warning)');
+    renderMiniSparklineLegacy('spark-latency', padSparklineData(history.latency, 20), 'var(--color-cyan)');
+    renderMiniSparklineLegacy('spark-heap', padSparklineData(history.heapUsage, 20), 'var(--color-ok)');
 
     // Update health metric value colors based on thresholds
     function updateHealthMetricColor(el, value, warningThreshold, criticalThreshold) {
