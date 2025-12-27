@@ -354,8 +354,9 @@ typedef struct valk_thread_gc_ctx {
 #define VALK_GC_CHUNK_ALIGN  64            // Cache line alignment
 #define VALK_GC_TLAB_SIZE    (4 * 1024)    // 4 KB per TLAB
 
-// Object slot size - fixed for simplicity (accommodates valk_lval_t + header)
-#define VALK_GC_SLOT_SIZE    128           // Adjust based on sizeof(valk_lval_t)
+// Object slot size - exactly sizeof(valk_lval_t) = 104 bytes
+// lenv (80 bytes) also fits with 24 bytes unused
+#define VALK_GC_SLOT_SIZE    104
 
 // Number of slots per chunk
 #define VALK_GC_SLOTS_PER_CHUNK \
@@ -415,36 +416,189 @@ static inline void *valk_gc_tlab_alloc(valk_gc_tlab_t *tlab) {
 void *valk_gc_alloc_slow(size_t size);
 ```
 
-#### 1.3 Migration Strategy
+#### 1.3 Two-Tier Memory Model
 
-To migrate from current slab + linked-list to chunk-based:
+The parallel GC uses a two-tier allocation strategy:
 
-1. Keep existing `lval_slab` and `lenv_slab` initially
-2. Add chunk pool alongside (for new allocations)
-3. Migrate incrementally:
-   - New objects go to chunks
-   - Sweep handles both old slabs and new chunks
-4. Remove old slabs once all objects migrated
+**Tier 1: TLAB (for lval/lenv - 104 bytes or less)**
+- Lock-free bump-pointer allocation
+- Page-based with mark bitmaps for parallel sweep
+- ~629 slots per 64KB page
+
+**Tier 2: Per-Thread Malloc Lists (for strings, arrays, large objects)**
+- Objects >104 bytes go through malloc()
+- Each thread maintains its own linked list (no contention)
+- Lists merged during STW before sweep
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    TWO-TIER ALLOCATION MODEL                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  Allocation Request                                                      │
+│         │                                                                │
+│         ▼                                                                │
+│  ┌─────────────────┐                                                    │
+│  │ bytes <= 104?   │                                                    │
+│  └────────┬────────┘                                                    │
+│           │                                                              │
+│     YES   │   NO                                                         │
+│     ▼     │   ▼                                                          │
+│  ┌────────┴────────┐  ┌────────────────────────────────────────┐       │
+│  │  TLAB Alloc     │  │  malloc() + append to thread's list    │       │
+│  │  (lock-free)    │  │  (thread-local, no contention)         │       │
+│  │                 │  │                                         │       │
+│  │  • valk_lval_t  │  │  • strings (char*)                     │       │
+│  │  • valk_lenv_t  │  │  • large arrays                        │       │
+│  └─────────────────┘  │  • any allocation > 104 bytes          │       │
+│                       └────────────────────────────────────────┘       │
+│                                                                          │
+│  During STW (Stop-The-World):                                           │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │  1. Merge all per-thread malloc lists into global_malloc_list    │  │
+│  │  2. Parallel mark: traverse from roots, mark reachable objects   │  │
+│  │  3. Parallel sweep:                                               │  │
+│  │     - Pages: scan alloc_bits, clear unmarked slots               │  │
+│  │     - Malloc list: traverse, free() unmarked, keep marked        │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 1.4 Per-Thread Malloc List
+
+```c
+// src/gc.h
+
+// Header for malloc'd objects (strings, arrays, large allocations)
+typedef struct valk_gc_malloc_obj {
+  struct valk_gc_malloc_obj *next;  // Thread-local list link
+  size_t size;                       // Allocation size
+  _Atomic uint8_t marked;            // Mark bit for GC
+  // User data follows
+} valk_gc_malloc_obj_t;
+
+// Per-thread malloc tracking (added to valk_thread_context_t)
+typedef struct {
+  valk_gc_malloc_obj_t *malloc_list;  // Head of thread-local list
+  size_t malloc_bytes;                 // Total bytes in thread's list
+} valk_gc_thread_malloc_t;
+```
+
+#### 1.5 Malloc List Operations
 
 ```c
 // src/gc.c
 
-void *valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t *heap, size_t bytes) {
-  // Fast path: TLAB allocation for standard-sized objects
-  if (bytes <= VALK_GC_SLOT_SIZE - sizeof(valk_gc_header_t)) {
-    void *ptr = valk_gc_tlab_alloc(&valk_thread_ctx.tlab);
-    if (ptr) return ptr;
+// Thread-local allocation for large objects (no lock needed)
+void *valk_gc_malloc_alloc(size_t bytes) {
+  size_t total = sizeof(valk_gc_malloc_obj_t) + bytes;
+  valk_gc_malloc_obj_t *obj = malloc(total);
+  if (!obj) return NULL;
+  
+  obj->size = bytes;
+  atomic_store(&obj->marked, 0);
+  
+  // Prepend to thread's list (thread-local, no lock)
+  obj->next = valk_thread_ctx.malloc_list;
+  valk_thread_ctx.malloc_list = obj;
+  valk_thread_ctx.malloc_bytes += bytes;
+  
+  return (void*)(obj + 1);  // Return pointer past header
+}
+
+// Called during STW to merge all thread lists into global list
+void valk_gc_merge_malloc_lists(valk_gc_malloc_obj_t **global_list) {
+  for (size_t i = 0; i < valk_gc_coord.threads_registered; i++) {
+    valk_thread_context_t *ctx = valk_gc_coord.threads[i].ctx;
+    if (!ctx || !ctx->malloc_list) continue;
     
-    // TLAB exhausted, refill
-    if (valk_gc_tlab_refill(&valk_thread_ctx.tlab, heap->chunk_pool)) {
-      return valk_gc_tlab_alloc(&valk_thread_ctx.tlab);
+    // Find tail of thread's list
+    valk_gc_malloc_obj_t *tail = ctx->malloc_list;
+    while (tail->next) tail = tail->next;
+    
+    // Append global list to thread's tail, then swap
+    tail->next = *global_list;
+    *global_list = ctx->malloc_list;
+    ctx->malloc_list = NULL;
+    ctx->malloc_bytes = 0;
+  }
+}
+
+// Sweep malloc list (during parallel sweep)
+void valk_gc_sweep_malloc_list(valk_gc_malloc_obj_t **list) {
+  valk_gc_malloc_obj_t **curr = list;
+  while (*curr) {
+    valk_gc_malloc_obj_t *obj = *curr;
+    if (atomic_load(&obj->marked)) {
+      // Keep: clear mark for next cycle
+      atomic_store(&obj->marked, 0);
+      curr = &obj->next;
+    } else {
+      // Reclaim: unlink and free
+      *curr = obj->next;
+      free(obj);
     }
   }
-  
-  // Slow path: large object or chunk pool exhausted
-  return valk_gc_alloc_large(heap, bytes);
 }
 ```
+
+#### 1.6 Distinguishing TLAB vs Malloc Objects
+
+During marking, we need to know whether a pointer points to a TLAB slot or a malloc'd object:
+
+```c
+// src/gc.c
+
+// Check if pointer is within any page's slot range
+static inline bool valk_gc_is_page_ptr(void *ptr) {
+  // Pages are 64KB aligned, so we can check alignment
+  // and verify it's in our page pool
+  uintptr_t addr = (uintptr_t)ptr;
+  
+  // Fast path: check if aligned to slot boundary within a page
+  // Page header is ~128 bytes, slots start after
+  // Each slot is 104 bytes
+  
+  // Walk page list (could optimize with hash set for O(1))
+  valk_gc_page_t *page = valk_gc_global_pool.all_pages;
+  while (page) {
+    uintptr_t page_start = (uintptr_t)page->slots;
+    uintptr_t page_end = page_start + (VALK_GC_SLOTS_PER_PAGE * VALK_GC_SLOT_SIZE);
+    if (addr >= page_start && addr < page_end) {
+      return true;
+    }
+    page = page->next;
+  }
+  return false;
+}
+
+// Mark an object (handles both TLAB and malloc'd)
+void valk_gc_mark_object(void *ptr) {
+  if (valk_gc_is_page_ptr(ptr)) {
+    // TLAB object: set mark bit in page bitmap
+    valk_gc_page_t *page = /* find containing page */;
+    uint32_t slot_idx = /* compute slot index */;
+    valk_gc_bitmap_set(page->mark_bits, slot_idx);
+  } else {
+    // Malloc'd object: set mark flag in header
+    valk_gc_malloc_obj_t *obj = ((valk_gc_malloc_obj_t*)ptr) - 1;
+    atomic_store(&obj->marked, 1);
+  }
+}
+```
+
+#### 1.7 Migration Strategy
+
+To migrate from current slab + linked-list to the two-tier model:
+
+1. Keep existing `lval_slab` and `lenv_slab` initially
+2. Add TLAB + per-thread malloc lists alongside
+3. Migrate incrementally:
+   - New lval/lenv allocations go to TLAB
+   - New large allocations go to per-thread malloc list
+   - Sweep handles both old slabs and new structures
+4. Remove old slabs once all objects migrated
 
 #### Test Artifacts - Phase 1
 
@@ -1434,6 +1588,46 @@ void test_gc_full_cycle(VALK_TEST_ARGS());
 - [ ] Tune TLAB/chunk sizes
 - [ ] Optimize termination detection
 - [ ] Final benchmarks
+
+---
+
+## Implementation Progress
+
+### Session Log
+
+#### 2024-12-27: Initial Implementation Start
+
+**Decision Points:**
+1. Starting with Phase 0 (Prerequisites) - atomic mark operations and thread context extensions
+2. Will keep existing single-threaded GC working alongside new parallel infrastructure
+3. Using `_Atomic` qualifier from C11/C23 for portability (already used in codebase)
+
+**Implementation Status:**
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Phase 0.1 Atomic Mark Bit | DONE | `valk_gc_try_mark()`, `valk_gc_is_marked()`, `valk_gc_clear_mark()` |
+| Phase 0.2 Thread Context Extension | DONE | `gc_thread_id`, `gc_registered`, `root_stack` in `valk_thread_context_t` |
+| Phase 0.3 Atomic Flags | DONE | Changed `flags` to `_Atomic uint64_t` in `valk_lval_t` and `valk_lenv_t` |
+| Phase 0.4 Portable Barrier | DONE | `valk_barrier_t` (pthread_barrier_t unavailable on macOS) |
+| Phase 0.5 Chase-Lev Deque | DONE | `valk_gc_mark_queue_t` with push/pop/steal |
+| Phase 0.6 GC Coordinator | DONE | `valk_gc_coordinator_t` for multi-threaded coordination |
+| Phase 0.7 Thread Registration | DONE | `valk_gc_thread_register()`, `valk_gc_thread_unregister()` |
+| Phase 0.8 Safe Point Slow Path | DONE | `valk_gc_safe_point_slow()` |
+| Phase 0.9 Global Roots | DONE | `valk_gc_add_global_root()`, `valk_gc_remove_global_root()` |
+| Phase 0 Tests | DONE | 16 tests in `test/unit/test_gc_parallel.c` - all passing |
+| Existing Tests | DONE | All existing tests pass |
+| Phase 1.1 Page Structure | DONE | `valk_gc_page_t` with mark/alloc bitmaps, 64KB pages |
+| Phase 1.2 Page Pool | DONE | `valk_gc_page_pool_t` with mutex-protected management |
+| Phase 1.3 TLAB | DONE | `valk_gc_tlab_t` with bump-pointer allocation |
+| Phase 1.4 TLAB Refill | DONE | Pre-sets alloc bits for thread-safe concurrent access |
+| Phase 1 Tests | DONE | 10 new tests (total 26) - all passing |
+
+#### Next Steps
+
+1. **Phase 2**: Safe points in eval loop and AIO loops  
+2. **Phase 3**: Root enumeration with VALK_GC_ROOT macros
+3. **Phase 4**: Parallel mark with work-stealing
 
 ---
 

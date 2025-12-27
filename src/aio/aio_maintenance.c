@@ -31,6 +31,8 @@ static void __maintenance_timer_close_cb(uv_handle_t *handle) {
 static void __maintenance_timer_cb(uv_timer_t *timer) {
   valk_aio_system_t *sys = timer->data;
   if (!sys || sys->shuttingDown) return;
+  
+  VALK_GC_SAFE_POINT();
 
   uint64_t now = sys->ops->loop->now(sys);
 

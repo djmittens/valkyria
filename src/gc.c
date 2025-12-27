@@ -7,7 +7,881 @@
 #include <string.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <sched.h>
 #include <uv.h>
+
+// ============================================================================
+// Parallel GC Infrastructure (Phase 0)
+// ============================================================================
+
+// Global coordinator instance
+valk_gc_coordinator_t valk_gc_coord = {0};
+
+// Global roots registry
+valk_gc_global_roots_t valk_gc_global_roots = {0};
+
+// Global page pool for TLAB allocation
+valk_gc_page_pool_t valk_gc_global_pool = {0};
+static bool __global_pool_initialized = false;
+
+// Portable barrier implementation
+void valk_barrier_init(valk_barrier_t* b, size_t count) {
+  pthread_mutex_init(&b->mutex, NULL);
+  pthread_cond_init(&b->cond, NULL);
+  b->count = count;
+  b->waiting = 0;
+  b->phase = 0;
+}
+
+void valk_barrier_destroy(valk_barrier_t* b) {
+  pthread_mutex_destroy(&b->mutex);
+  pthread_cond_destroy(&b->cond);
+}
+
+void valk_barrier_wait(valk_barrier_t* b) {
+  pthread_mutex_lock(&b->mutex);
+  size_t my_phase = b->phase;
+  b->waiting++;
+  if (b->waiting == b->count) {
+    b->waiting = 0;
+    b->phase++;
+    pthread_cond_broadcast(&b->cond);
+  } else {
+    while (b->phase == my_phase) {
+      pthread_cond_wait(&b->cond, &b->mutex);
+    }
+  }
+  pthread_mutex_unlock(&b->mutex);
+}
+
+// Atomic mark bit operations
+bool valk_gc_try_mark(valk_lval_t* obj) {
+  if (obj == NULL) return false;
+  uint64_t expected = atomic_load_explicit(&obj->flags, memory_order_relaxed);
+  do {
+    if (expected & LVAL_FLAG_GC_MARK) {
+      return false;
+    }
+  } while (!atomic_compare_exchange_weak_explicit(
+      &obj->flags, &expected, expected | LVAL_FLAG_GC_MARK,
+      memory_order_acq_rel, memory_order_relaxed));
+  return true;
+}
+
+bool valk_gc_is_marked(valk_lval_t* obj) {
+  if (obj == NULL) return true;
+  return (atomic_load_explicit(&obj->flags, memory_order_acquire) & LVAL_FLAG_GC_MARK) != 0;
+}
+
+void valk_gc_clear_mark(valk_lval_t* obj) {
+  if (obj == NULL) return;
+  atomic_fetch_and_explicit(&obj->flags, ~LVAL_FLAG_GC_MARK, memory_order_release);
+}
+
+// Chase-Lev work-stealing deque implementation
+void valk_gc_mark_queue_init(valk_gc_mark_queue_t* q) {
+  atomic_store(&q->top, 0);
+  atomic_store(&q->bottom, 0);
+  for (size_t i = 0; i < VALK_GC_MARK_QUEUE_SIZE; i++) {
+    atomic_store(&q->items[i], NULL);
+  }
+}
+
+bool valk_gc_mark_queue_push(valk_gc_mark_queue_t* q, valk_lval_t* val) {
+  size_t b = atomic_load_explicit(&q->bottom, memory_order_relaxed);
+  size_t t = atomic_load_explicit(&q->top, memory_order_acquire);
+  
+  if (b - t >= VALK_GC_MARK_QUEUE_SIZE) {
+    return false;  // Queue full
+  }
+  
+  atomic_store_explicit(&q->items[b % VALK_GC_MARK_QUEUE_SIZE], val,
+                        memory_order_relaxed);
+  atomic_thread_fence(memory_order_release);
+  atomic_store_explicit(&q->bottom, b + 1, memory_order_relaxed);
+  return true;
+}
+
+valk_lval_t* valk_gc_mark_queue_pop(valk_gc_mark_queue_t* q) {
+  size_t b = atomic_load_explicit(&q->bottom, memory_order_relaxed);
+  size_t t = atomic_load_explicit(&q->top, memory_order_relaxed);
+  
+  if (t >= b) {
+    return NULL;
+  }
+  
+  b = b - 1;
+  atomic_store_explicit(&q->bottom, b, memory_order_relaxed);
+  atomic_thread_fence(memory_order_seq_cst);
+  
+  t = atomic_load_explicit(&q->top, memory_order_relaxed);
+  
+  if (t <= b) {
+    valk_lval_t* val = atomic_load_explicit(
+        &q->items[b % VALK_GC_MARK_QUEUE_SIZE], memory_order_relaxed);
+    
+    if (t == b) {
+      if (!atomic_compare_exchange_strong(&q->top, &t, t + 1)) {
+        val = NULL;
+      }
+      atomic_store_explicit(&q->bottom, b + 1, memory_order_relaxed);
+    }
+    return val;
+  }
+  
+  atomic_store_explicit(&q->bottom, b + 1, memory_order_relaxed);
+  return NULL;
+}
+
+valk_lval_t* valk_gc_mark_queue_steal(valk_gc_mark_queue_t* q) {
+  size_t t = atomic_load_explicit(&q->top, memory_order_acquire);
+  atomic_thread_fence(memory_order_seq_cst);
+  size_t b = atomic_load_explicit(&q->bottom, memory_order_acquire);
+  
+  if (t >= b) {
+    return NULL;
+  }
+  
+  valk_lval_t* val = atomic_load_explicit(
+      &q->items[t % VALK_GC_MARK_QUEUE_SIZE], memory_order_relaxed);
+  
+  if (!atomic_compare_exchange_strong(&q->top, &t, t + 1)) {
+    return NULL;
+  }
+  
+  return val;
+}
+
+bool valk_gc_mark_queue_empty(valk_gc_mark_queue_t* q) {
+  size_t t = atomic_load_explicit(&q->top, memory_order_acquire);
+  size_t b = atomic_load_explicit(&q->bottom, memory_order_acquire);
+  return t >= b;
+}
+
+// Coordinator initialization
+void valk_gc_coordinator_init(void) {
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+  atomic_store(&valk_gc_coord.threads_registered, 0);
+  atomic_store(&valk_gc_coord.threads_paused, 0);
+  
+  pthread_mutex_init(&valk_gc_coord.lock, NULL);
+  pthread_cond_init(&valk_gc_coord.all_paused, NULL);
+  pthread_cond_init(&valk_gc_coord.gc_done, NULL);
+  valk_gc_coord.barrier_initialized = false;
+  
+  for (size_t i = 0; i < VALK_GC_MAX_THREADS; i++) {
+    valk_gc_coord.threads[i].ctx = NULL;
+    valk_gc_coord.threads[i].active = false;
+    valk_gc_mark_queue_init(&valk_gc_coord.threads[i].mark_queue);
+  }
+  
+  atomic_store(&valk_gc_coord.parallel_cycles, 0);
+  atomic_store(&valk_gc_coord.parallel_pause_us_total, 0);
+  
+  pthread_mutex_init(&valk_gc_global_roots.lock, NULL);
+  valk_gc_global_roots.count = 0;
+}
+
+// Thread registration
+void valk_gc_thread_register(void) {
+  size_t idx = atomic_fetch_add(&valk_gc_coord.threads_registered, 1);
+  
+  if (idx >= VALK_GC_MAX_THREADS) {
+    VALK_ERROR("Too many threads registered with GC (max %d)", VALK_GC_MAX_THREADS);
+    atomic_fetch_sub(&valk_gc_coord.threads_registered, 1);
+    return;
+  }
+  
+  valk_thread_ctx.gc_thread_id = idx;
+  valk_thread_ctx.gc_registered = true;
+  
+  valk_thread_ctx.root_stack = malloc(sizeof(valk_lval_t*) * 256);
+  valk_thread_ctx.root_stack_capacity = 256;
+  valk_thread_ctx.root_stack_count = 0;
+  
+  valk_gc_coord.threads[idx].ctx = &valk_thread_ctx;
+  valk_gc_coord.threads[idx].thread_id = pthread_self();
+  valk_gc_coord.threads[idx].active = true;
+  valk_gc_mark_queue_init(&valk_gc_coord.threads[idx].mark_queue);
+  
+  VALK_DEBUG("Thread registered with GC: idx=%zu", idx);
+}
+
+void valk_gc_thread_unregister(void) {
+  if (!valk_thread_ctx.gc_registered) return;
+  
+  VALK_GC_SAFE_POINT();
+  
+  size_t idx = valk_thread_ctx.gc_thread_id;
+  valk_gc_coord.threads[idx].active = false;
+  valk_gc_coord.threads[idx].ctx = NULL;
+  
+  atomic_fetch_sub(&valk_gc_coord.threads_registered, 1);
+  
+  if (valk_thread_ctx.root_stack) {
+    free(valk_thread_ctx.root_stack);
+    valk_thread_ctx.root_stack = NULL;
+  }
+  valk_thread_ctx.gc_registered = false;
+  
+  VALK_DEBUG("Thread unregistered from GC: idx=%zu", idx);
+}
+
+// Safe point slow path
+void valk_gc_safe_point_slow(void) {
+  valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
+  
+  if (phase == VALK_GC_PHASE_STW_REQUESTED) {
+    if (valk_thread_ctx.scratch && valk_thread_ctx.scratch->offset > 0 &&
+        valk_thread_ctx.heap && valk_thread_ctx.root_env) {
+      valk_checkpoint(valk_thread_ctx.scratch, 
+                      valk_thread_ctx.heap,
+                      valk_thread_ctx.root_env);
+    }
+    
+    size_t paused = atomic_fetch_add(&valk_gc_coord.threads_paused, 1) + 1;
+    size_t registered = atomic_load(&valk_gc_coord.threads_registered);
+    
+    if (paused == registered) {
+      pthread_mutex_lock(&valk_gc_coord.lock);
+      pthread_cond_signal(&valk_gc_coord.all_paused);
+      pthread_mutex_unlock(&valk_gc_coord.lock);
+    }
+    
+    pthread_mutex_lock(&valk_gc_coord.lock);
+    while (atomic_load(&valk_gc_coord.phase) != VALK_GC_PHASE_IDLE) {
+      pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
+    }
+    pthread_mutex_unlock(&valk_gc_coord.lock);
+    
+    atomic_fetch_sub(&valk_gc_coord.threads_paused, 1);
+  }
+}
+
+// Global roots
+void valk_gc_add_global_root(valk_lval_t** root) {
+  pthread_mutex_lock(&valk_gc_global_roots.lock);
+  if (valk_gc_global_roots.count < VALK_GC_MAX_GLOBAL_ROOTS) {
+    valk_gc_global_roots.roots[valk_gc_global_roots.count++] = root;
+  } else {
+    VALK_WARN("Global roots registry full");
+  }
+  pthread_mutex_unlock(&valk_gc_global_roots.lock);
+}
+
+void valk_gc_remove_global_root(valk_lval_t** root) {
+  pthread_mutex_lock(&valk_gc_global_roots.lock);
+  for (size_t i = 0; i < valk_gc_global_roots.count; i++) {
+    if (valk_gc_global_roots.roots[i] == root) {
+      valk_gc_global_roots.roots[i] = valk_gc_global_roots.roots[--valk_gc_global_roots.count];
+      break;
+    }
+  }
+  pthread_mutex_unlock(&valk_gc_global_roots.lock);
+}
+
+// ============================================================================
+// Phase 1: Page-based Allocator (Parallel GC)
+// ============================================================================
+
+static _Atomic uint32_t __page_id_counter = 0;
+
+void valk_gc_page_pool_init(valk_gc_page_pool_t *pool) {
+  pthread_mutex_init(&pool->lock, NULL);
+  pool->all_pages = NULL;
+  pool->partial_pages = NULL;
+  pool->num_pages = 0;
+  atomic_store(&pool->total_slots, 0);
+  atomic_store(&pool->used_slots, 0);
+  atomic_store(&pool->gc_threshold, VALK_GC_SLOTS_PER_PAGE * 10);
+}
+
+void valk_gc_page_pool_destroy(valk_gc_page_pool_t *pool) {
+  pthread_mutex_lock(&pool->lock);
+  valk_gc_page_t *page = pool->all_pages;
+  while (page) {
+    valk_gc_page_t *next = page->next;
+    free(page);
+    page = next;
+  }
+  pool->all_pages = NULL;
+  pool->partial_pages = NULL;
+  pool->num_pages = 0;
+  atomic_store(&pool->total_slots, 0);
+  atomic_store(&pool->used_slots, 0);
+  pthread_mutex_unlock(&pool->lock);
+  pthread_mutex_destroy(&pool->lock);
+}
+
+valk_gc_page_t *valk_gc_page_alloc(valk_gc_page_pool_t *pool) {
+  valk_gc_page_t *page = aligned_alloc(VALK_GC_PAGE_ALIGN, sizeof(valk_gc_page_t));
+  if (!page) {
+    VALK_ERROR("Failed to allocate GC page");
+    return NULL;
+  }
+  
+  memset(page, 0, sizeof(valk_gc_page_t));
+  page->page_id = atomic_fetch_add(&__page_id_counter, 1);
+  atomic_store(&page->num_allocated, 0);
+  
+  pthread_mutex_lock(&pool->lock);
+  page->next = pool->all_pages;
+  pool->all_pages = page;
+  pool->num_pages++;
+  atomic_fetch_add(&pool->total_slots, VALK_GC_SLOTS_PER_PAGE);
+  pthread_mutex_unlock(&pool->lock);
+  
+  return page;
+}
+
+void valk_gc_tlab_init(valk_gc_tlab_t *tlab) {
+  tlab->page = NULL;
+  tlab->next_slot = 0;
+  tlab->limit_slot = 0;
+}
+
+bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_page_pool_t *pool) {
+  pthread_mutex_lock(&pool->lock);
+  
+  valk_gc_page_t *page = pool->partial_pages;
+  uint32_t start_slot = 0;
+  uint32_t num_slots = VALK_GC_TLAB_SLOTS;
+  
+  if (page) {
+    uint32_t allocated = atomic_load(&page->num_allocated);
+    if (allocated + VALK_GC_TLAB_SLOTS <= VALK_GC_SLOTS_PER_PAGE) {
+      for (uint32_t i = 0; i < VALK_GC_SLOTS_PER_PAGE; i++) {
+        if (!valk_gc_bitmap_test(page->alloc_bits, i)) {
+          uint32_t free_run = 0;
+          for (uint32_t j = i; j < VALK_GC_SLOTS_PER_PAGE && free_run < VALK_GC_TLAB_SLOTS; j++) {
+            if (!valk_gc_bitmap_test(page->alloc_bits, j)) {
+              free_run++;
+            } else {
+              break;
+            }
+          }
+          if (free_run >= VALK_GC_TLAB_SLOTS) {
+            start_slot = i;
+            goto found;
+          }
+          i += free_run;
+        }
+      }
+    }
+    pool->partial_pages = page->next;
+    page = NULL;
+  }
+  
+  if (!page) {
+    pthread_mutex_unlock(&pool->lock);
+    page = valk_gc_page_alloc(pool);
+    if (!page) return false;
+    pthread_mutex_lock(&pool->lock);
+    start_slot = 0;
+  }
+
+found:;
+  uint32_t limit = start_slot + num_slots;
+  if (limit > VALK_GC_SLOTS_PER_PAGE) {
+    limit = VALK_GC_SLOTS_PER_PAGE;
+    num_slots = limit - start_slot;
+  }
+  
+  for (uint32_t i = start_slot; i < limit; i++) {
+    valk_gc_bitmap_set(page->alloc_bits, i);
+  }
+  atomic_fetch_add(&page->num_allocated, num_slots);
+  atomic_fetch_add(&pool->used_slots, num_slots);
+  
+  if (page != pool->partial_pages) {
+    page->next = pool->partial_pages;
+    pool->partial_pages = page;
+  }
+  pthread_mutex_unlock(&pool->lock);
+  
+  tlab->page = page;
+  tlab->next_slot = start_slot;
+  tlab->limit_slot = limit;
+  
+  return true;
+}
+
+void valk_gc_page_pool_stats(valk_gc_page_pool_t *pool, 
+                              size_t *out_pages, size_t *out_total, 
+                              size_t *out_used) {
+  if (out_pages) *out_pages = pool->num_pages;
+  if (out_total) *out_total = atomic_load(&pool->total_slots);
+  if (out_used) *out_used = atomic_load(&pool->used_slots);
+}
+
+// ============================================================================
+// Phase 2: GC Triggering and Participation
+// ============================================================================
+
+void valk_gc_request_collection(void) {
+  valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
+  if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected, 
+                                       VALK_GC_PHASE_STW_REQUESTED)) {
+    return;
+  }
+  
+  size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
+  if (num_threads == 0) {
+    atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+    return;
+  }
+  
+  if (valk_gc_coord.barrier_initialized) {
+    valk_barrier_destroy(&valk_gc_coord.barrier);
+  }
+  valk_barrier_init(&valk_gc_coord.barrier, num_threads);
+  valk_gc_coord.barrier_initialized = true;
+  
+  pthread_mutex_lock(&valk_gc_coord.lock);
+  while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_nsec += 100000000;
+    if (ts.tv_nsec >= 1000000000) {
+      ts.tv_sec++;
+      ts.tv_nsec -= 1000000000;
+    }
+    pthread_cond_timedwait(&valk_gc_coord.all_paused, &valk_gc_coord.lock, &ts);
+  }
+  pthread_mutex_unlock(&valk_gc_coord.lock);
+}
+
+void valk_gc_participate(void) {
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_MARKING);
+  valk_gc_parallel_mark();
+  
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_SWEEPING);
+  
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  pthread_mutex_lock(&valk_gc_coord.lock);
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+  pthread_cond_broadcast(&valk_gc_coord.gc_done);
+  pthread_mutex_unlock(&valk_gc_coord.lock);
+  
+  atomic_fetch_add(&valk_gc_coord.parallel_cycles, 1);
+}
+
+// ============================================================================
+// Phase 3: Root Enumeration
+// ============================================================================
+
+void valk_gc_visit_thread_roots(valk_gc_root_visitor_t visitor, void *ctx) {
+  valk_thread_context_t *tc = &valk_thread_ctx;
+  
+  if (tc->root_stack == NULL) return;
+  
+  for (size_t i = 0; i < tc->root_stack_count; i++) {
+    if (tc->root_stack[i] != NULL) {
+      visitor(tc->root_stack[i], ctx);
+    }
+  }
+}
+
+void valk_gc_visit_env_roots(valk_lenv_t *env, valk_gc_root_visitor_t visitor, void *ctx) {
+  if (env == NULL) return;
+  
+  for (size_t i = 0; i < env->vals.count; i++) {
+    if (env->vals.items[i] != NULL) {
+      visitor(env->vals.items[i], ctx);
+    }
+  }
+  
+  valk_gc_visit_env_roots(env->parent, visitor, ctx);
+  valk_gc_visit_env_roots(env->fallback, visitor, ctx);
+}
+
+void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
+  pthread_mutex_lock(&valk_gc_global_roots.lock);
+  for (size_t i = 0; i < valk_gc_global_roots.count; i++) {
+    valk_lval_t *val = *valk_gc_global_roots.roots[i];
+    if (val != NULL) {
+      visitor(val, ctx);
+    }
+  }
+  pthread_mutex_unlock(&valk_gc_global_roots.lock);
+  
+  for (size_t i = 0; i < VALK_GC_MAX_THREADS; i++) {
+    if (valk_gc_coord.threads[i].active && valk_gc_coord.threads[i].ctx != NULL) {
+      valk_thread_context_t *tc = valk_gc_coord.threads[i].ctx;
+      if (tc->root_env != NULL) {
+        valk_gc_visit_env_roots(tc->root_env, visitor, ctx);
+      }
+    }
+  }
+}
+
+// ============================================================================
+// Phase 4: Parallel Mark
+// ============================================================================
+
+static void mark_and_push(valk_lval_t *obj, void *ctx);
+static void mark_children(valk_lval_t *obj, valk_gc_mark_queue_t *queue);
+static void mark_env_parallel(valk_lenv_t *env, valk_gc_mark_queue_t *queue);
+
+static void mark_and_push(valk_lval_t *obj, void *ctx) {
+  valk_gc_mark_queue_t *queue = ctx;
+  
+  if (obj == NULL) return;
+  if (!valk_gc_try_mark(obj)) return;
+  
+  if (!valk_gc_mark_queue_push(queue, obj)) {
+    mark_children(obj, queue);
+  }
+}
+
+static void mark_env_parallel(valk_lenv_t *env, valk_gc_mark_queue_t *queue) {
+  if (env == NULL) return;
+  
+  for (size_t i = 0; i < env->vals.count; i++) {
+    mark_and_push(env->vals.items[i], queue);
+  }
+  
+  mark_env_parallel(env->parent, queue);
+  mark_env_parallel(env->fallback, queue);
+}
+
+static void mark_children(valk_lval_t *obj, valk_gc_mark_queue_t *queue) {
+  switch (LVAL_TYPE(obj)) {
+    case LVAL_CONS:
+    case LVAL_QEXPR:
+      mark_and_push(obj->cons.head, queue);
+      mark_and_push(obj->cons.tail, queue);
+      break;
+      
+    case LVAL_FUN:
+      if (obj->fun.builtin == NULL) {
+        mark_and_push(obj->fun.formals, queue);
+        mark_and_push(obj->fun.body, queue);
+        if (obj->fun.env) {
+          mark_env_parallel(obj->fun.env, queue);
+        }
+      }
+      break;
+      
+    case LVAL_HANDLE:
+      if (obj->async.handle) {
+        mark_and_push(obj->async.handle->on_complete, queue);
+        mark_and_push(obj->async.handle->on_error, queue);
+        mark_and_push(obj->async.handle->on_cancel, queue);
+        mark_and_push(obj->async.handle->result, queue);
+        mark_and_push(obj->async.handle->error, queue);
+        if (obj->async.handle->env) {
+          mark_env_parallel(obj->async.handle->env, queue);
+        }
+      }
+      break;
+      
+    default:
+      break;
+  }
+}
+
+static _Atomic size_t __gc_idle_count = 0;
+static _Atomic bool __gc_terminated = false;
+
+bool valk_gc_check_termination(void) {
+  size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
+  size_t idle = atomic_fetch_add(&__gc_idle_count, 1) + 1;
+  
+  if (idle == num_threads) {
+    bool all_empty = true;
+    for (size_t i = 0; i < num_threads; i++) {
+      if (!valk_gc_coord.threads[i].active) continue;
+      valk_gc_mark_queue_t *q = &valk_gc_coord.threads[i].mark_queue;
+      if (!valk_gc_mark_queue_empty(q)) {
+        all_empty = false;
+        break;
+      }
+    }
+    
+    if (all_empty) {
+      atomic_store(&__gc_terminated, true);
+    }
+  }
+  
+  for (int i = 0; i < 100; i++) {
+    if (atomic_load(&__gc_terminated)) {
+      return true;
+    }
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#else
+    sched_yield();
+#endif
+  }
+  
+  atomic_fetch_sub(&__gc_idle_count, 1);
+  return false;
+}
+
+void valk_gc_parallel_mark(void) {
+  if (!valk_thread_ctx.gc_registered) return;
+  
+  size_t my_id = valk_thread_ctx.gc_thread_id;
+  valk_gc_mark_queue_t *my_queue = &valk_gc_coord.threads[my_id].mark_queue;
+  
+  atomic_store(&__gc_idle_count, 0);
+  atomic_store(&__gc_terminated, false);
+  
+  valk_gc_mark_queue_init(my_queue);
+  
+  valk_gc_visit_thread_roots(mark_and_push, my_queue);
+  
+  if (my_id == 0) {
+    valk_gc_visit_global_roots(mark_and_push, my_queue);
+  }
+  
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  size_t idle_spins = 0;
+  const size_t MAX_IDLE_SPINS = 1000;
+  
+  while (true) {
+    valk_lval_t *obj;
+    while ((obj = valk_gc_mark_queue_pop(my_queue)) != NULL) {
+      mark_children(obj, my_queue);
+      idle_spins = 0;
+    }
+    
+    bool found_work = false;
+    size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
+    
+    for (size_t i = 1; i <= num_threads; i++) {
+      size_t victim = (my_id + i) % num_threads;
+      if (!valk_gc_coord.threads[victim].active) continue;
+      
+      obj = valk_gc_mark_queue_steal(&valk_gc_coord.threads[victim].mark_queue);
+      if (obj != NULL) {
+        mark_children(obj, my_queue);
+        found_work = true;
+        idle_spins = 0;
+        break;
+      }
+    }
+    
+    if (!found_work) {
+      idle_spins++;
+      if (idle_spins >= MAX_IDLE_SPINS) {
+        if (valk_gc_check_termination()) {
+          break;
+        }
+        idle_spins = 0;
+      }
+      sched_yield();
+    }
+  }
+}
+
+// ============================================================================
+// Phase 5: Parallel Sweep
+// ============================================================================
+
+static size_t sweep_page(valk_gc_page_t *page) {
+  size_t freed = 0;
+  
+  for (uint32_t slot = 0; slot < VALK_GC_SLOTS_PER_PAGE; slot++) {
+    if (valk_gc_bitmap_test(page->alloc_bits, slot)) {
+      if (!valk_gc_bitmap_test(page->mark_bits, slot)) {
+        valk_gc_bitmap_clear(page->alloc_bits, slot);
+        freed++;
+      } else {
+        valk_gc_bitmap_clear(page->mark_bits, slot);
+      }
+    }
+  }
+  
+  if (freed > 0) {
+    atomic_fetch_sub(&page->num_allocated, freed);
+  }
+  
+  return freed;
+}
+
+void valk_gc_parallel_sweep(valk_gc_page_pool_t *pool) {
+  if (!valk_thread_ctx.gc_registered || pool == NULL) return;
+  
+  size_t my_id = valk_thread_ctx.gc_thread_id;
+  size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
+  
+  pthread_mutex_lock(&pool->lock);
+  size_t num_pages = pool->num_pages;
+  valk_gc_page_t *pages_start = pool->all_pages;
+  pthread_mutex_unlock(&pool->lock);
+  
+  if (num_pages == 0) return;
+  
+  size_t pages_per_thread = (num_pages + num_threads - 1) / num_threads;
+  size_t my_start = my_id * pages_per_thread;
+  size_t my_end = (my_id + 1) * pages_per_thread;
+  if (my_end > num_pages) my_end = num_pages;
+  
+  size_t freed_slots = 0;
+  valk_gc_page_t *page = pages_start;
+  
+  for (size_t i = 0; i < my_end && page != NULL; i++) {
+    if (i >= my_start) {
+      freed_slots += sweep_page(page);
+    }
+    page = page->next;
+  }
+  
+  if (freed_slots > 0) {
+    atomic_fetch_sub(&pool->used_slots, freed_slots);
+  }
+}
+
+// ============================================================================
+// Phase 6: Integration - GC Trigger and Full Cycle
+// ============================================================================
+
+void valk_gc_full_cycle(valk_gc_page_pool_t *pool) {
+  if (!valk_thread_ctx.gc_registered) return;
+  
+  size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
+  if (num_threads == 0) return;
+  
+  uint64_t start_ns = 0;
+  #ifdef VALK_METRICS_ENABLED
+  start_ns = uv_hrtime();
+  #endif
+  
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_MARKING);
+  valk_gc_parallel_mark();
+  
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_SWEEPING);
+  valk_gc_parallel_sweep(pool);
+  
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  #ifdef VALK_METRICS_ENABLED
+  uint64_t end_ns = uv_hrtime();
+  uint64_t pause_us = (end_ns - start_ns) / 1000;
+  atomic_fetch_add(&valk_gc_coord.parallel_pause_us_total, pause_us);
+  #endif
+  
+  atomic_store(&valk_gc_coord.threads_paused, 0);
+  
+  pthread_mutex_lock(&valk_gc_coord.lock);
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+  pthread_cond_broadcast(&valk_gc_coord.gc_done);
+  pthread_mutex_unlock(&valk_gc_coord.lock);
+  
+  atomic_fetch_add(&valk_gc_coord.parallel_cycles, 1);
+}
+
+void valk_gc_maybe_collect(valk_gc_page_pool_t *pool) {
+  if (!valk_thread_ctx.gc_registered || pool == NULL) return;
+  
+  size_t used = atomic_load(&pool->used_slots);
+  size_t threshold = atomic_load(&pool->gc_threshold);
+  
+  if (used < threshold) return;
+  
+  valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
+  if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected,
+                                       VALK_GC_PHASE_STW_REQUESTED)) {
+    return;
+  }
+  
+  size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
+  if (num_threads == 0) {
+    atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+    return;
+  }
+  
+  if (valk_gc_coord.barrier_initialized) {
+    valk_barrier_destroy(&valk_gc_coord.barrier);
+  }
+  valk_barrier_init(&valk_gc_coord.barrier, num_threads);
+  valk_gc_coord.barrier_initialized = true;
+  
+  pthread_mutex_lock(&valk_gc_coord.lock);
+  while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_nsec += 100000000;
+    if (ts.tv_nsec >= 1000000000) {
+      ts.tv_sec++;
+      ts.tv_nsec -= 1000000000;
+    }
+    pthread_cond_timedwait(&valk_gc_coord.all_paused, &valk_gc_coord.lock, &ts);
+  }
+  pthread_mutex_unlock(&valk_gc_coord.lock);
+  
+  valk_gc_full_cycle(pool);
+  
+  VALK_DEBUG("Parallel GC cycle complete: used=%zu freed=%zu", 
+             atomic_load(&pool->used_slots), used - atomic_load(&pool->used_slots));
+}
+
+// ============================================================================
+// Global Page Pool for TLAB Allocation
+// ============================================================================
+
+void valk_gc_global_pool_init(void) {
+  if (__global_pool_initialized) return;
+  valk_gc_page_pool_init(&valk_gc_global_pool);
+  __global_pool_initialized = true;
+}
+
+void valk_gc_global_pool_destroy(void) {
+  if (!__global_pool_initialized) return;
+  valk_gc_page_pool_destroy(&valk_gc_global_pool);
+  __global_pool_initialized = false;
+}
+
+void *valk_gc_tlab_alloc_slow(size_t bytes) {
+  if (bytes > VALK_GC_SLOT_SIZE) {
+    VALK_ERROR("TLAB allocation too large: %zu > %d", bytes, VALK_GC_SLOT_SIZE);
+    return NULL;
+  }
+  
+  valk_thread_context_t *ctx = &valk_thread_ctx;
+  
+  if (!ctx->tlab) {
+    ctx->tlab = malloc(sizeof(valk_gc_tlab_t));
+    if (!ctx->tlab) return NULL;
+    valk_gc_tlab_init(ctx->tlab);
+  }
+  
+  if (!ctx->tlab_enabled) {
+    if (!__global_pool_initialized) {
+      valk_gc_global_pool_init();
+    }
+    ctx->tlab_enabled = true;
+  }
+  
+  void *ptr = valk_gc_tlab_alloc(ctx->tlab);
+  if (ptr) {
+    memset(ptr, 0, bytes);
+    return ptr;
+  }
+  
+  if (!valk_gc_tlab_refill(ctx->tlab, &valk_gc_global_pool)) {
+    VALK_ERROR("Failed to refill TLAB from global pool");
+    return NULL;
+  }
+  
+  ptr = valk_gc_tlab_alloc(ctx->tlab);
+  if (ptr) {
+    memset(ptr, 0, bytes);
+  }
+  return ptr;
+}
 
 // Forward declarations
 static void valk_gc_mark_lval(valk_lval_t* v);
@@ -493,10 +1367,6 @@ static void valk_gc_mark_lval_single(valk_lval_t* v, valk_lval_worklist_t* wl) {
       // Nil has no children
       break;
 
-    case LVAL_ENV:
-      valk_gc_mark_env(&v->env);
-      break;
-
     case LVAL_UNDEFINED:
     case LVAL_FORWARD:
       // Forwarding pointers should not exist during GC marking
@@ -832,12 +1702,6 @@ static void valk_gc_clear_marks_single(valk_lval_t* v, valk_lval_worklist_t* wl)
       break;
     case LVAL_NIL:
       // Nil has no children
-      break;
-
-    case LVAL_ENV:
-      for (size_t i = 0; i < v->env.vals.count; i++) {
-        lval_worklist_push(wl, v->env.vals.items[i]);
-      }
       break;
 
     default:
@@ -1802,7 +2666,7 @@ size_t valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena) {
 
   while (ptr < end) {
     valk_lval_t* v = (valk_lval_t*)ptr;
-    if ((v->flags & LVAL_TYPE_MASK) <= LVAL_ENV) {
+    if ((v->flags & LVAL_TYPE_MASK) <= LVAL_FORWARD) {
       if (!(v->flags & LVAL_FLAG_GC_MARK)) {
         dead_count++;
       }
@@ -2102,10 +2966,6 @@ static void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
       }
       break;
 
-    case LVAL_ENV:
-      valk_evacuate_env(ctx, &v->env);
-      break;
-
     case LVAL_STR:
     case LVAL_SYM:
     case LVAL_ERR:
@@ -2295,10 +3155,6 @@ static void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
           valk_fix_env_pointers(ctx, v->fun.env);
         }
       }
-      break;
-
-    case LVAL_ENV:
-      valk_fix_env_pointers(ctx, &v->env);
       break;
 
     default:

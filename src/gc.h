@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <pthread.h>
 #include "memory.h"
 
 // Forward declarations
@@ -289,3 +291,302 @@ void valk_gc_mark_lval_external(valk_lval_t* v);
 
 // Mark an environment and all its contents
 void valk_gc_mark_env_external(valk_lenv_t* env);
+
+// ============================================================================
+// Parallel GC Infrastructure (Phase 0)
+// ============================================================================
+
+#define VALK_GC_MAX_THREADS 64
+
+// GC phase states
+typedef enum {
+  VALK_GC_PHASE_IDLE = 0,
+  VALK_GC_PHASE_STW_REQUESTED,
+  VALK_GC_PHASE_MARKING,
+  VALK_GC_PHASE_SWEEPING,
+} valk_gc_phase_e;
+
+// Atomic mark bit operations (thread-safe for parallel marking)
+// Uses compare-and-swap to ensure exactly one thread marks each object
+// Implemented in gc.c (need full type definition)
+bool valk_gc_try_mark(valk_lval_t* obj);
+bool valk_gc_is_marked(valk_lval_t* obj);
+void valk_gc_clear_mark(valk_lval_t* obj);
+
+// Work-stealing mark queue (Chase-Lev deque)
+#define VALK_GC_MARK_QUEUE_SIZE 8192
+
+typedef struct valk_gc_mark_queue {
+  _Atomic(valk_lval_t*) items[VALK_GC_MARK_QUEUE_SIZE];
+  _Atomic size_t top;     // Thieves steal from here (FIFO end)
+  _Atomic size_t bottom;  // Owner pushes/pops here (LIFO end)
+} valk_gc_mark_queue_t;
+
+// Initialize mark queue
+void valk_gc_mark_queue_init(valk_gc_mark_queue_t* q);
+
+// Owner operations (local thread only, lock-free)
+bool valk_gc_mark_queue_push(valk_gc_mark_queue_t* q, valk_lval_t* val);
+valk_lval_t* valk_gc_mark_queue_pop(valk_gc_mark_queue_t* q);
+
+// Thief operation (other threads, lock-free)
+valk_lval_t* valk_gc_mark_queue_steal(valk_gc_mark_queue_t* q);
+
+// Check if queue is empty (approximate, for termination detection)
+bool valk_gc_mark_queue_empty(valk_gc_mark_queue_t* q);
+
+// Per-thread GC info stored in coordinator
+typedef struct valk_gc_thread_info {
+  void* ctx;              // valk_thread_context_t* (forward ref)
+  pthread_t thread_id;
+  bool active;
+  valk_gc_mark_queue_t mark_queue;
+} valk_gc_thread_info_t;
+
+// Portable barrier implementation (pthread_barrier_t not available on macOS)
+typedef struct valk_barrier {
+  pthread_mutex_t mutex;
+  pthread_cond_t cond;
+  size_t count;
+  size_t waiting;
+  size_t phase;
+} valk_barrier_t;
+
+void valk_barrier_init(valk_barrier_t* b, size_t count);
+void valk_barrier_destroy(valk_barrier_t* b);
+void valk_barrier_wait(valk_barrier_t* b);
+
+// Global GC coordinator for multi-threaded GC
+typedef struct valk_gc_coordinator {
+  _Atomic valk_gc_phase_e phase;
+  _Atomic size_t threads_registered;
+  _Atomic size_t threads_paused;
+  
+  pthread_mutex_t lock;
+  pthread_cond_t all_paused;   // Signaled when all threads at safe point
+  pthread_cond_t gc_done;      // Signaled when GC complete
+  valk_barrier_t barrier;      // Portable barrier for sync between GC phases
+  bool barrier_initialized;
+  
+  valk_gc_thread_info_t threads[VALK_GC_MAX_THREADS];
+  
+  // Statistics
+  _Atomic uint64_t parallel_cycles;
+  _Atomic uint64_t parallel_pause_us_total;
+} valk_gc_coordinator_t;
+
+// Global coordinator instance
+extern valk_gc_coordinator_t valk_gc_coord;
+
+// Initialize parallel GC coordinator (call once at startup)
+void valk_gc_coordinator_init(void);
+
+// Thread registration for parallel GC
+void valk_gc_thread_register(void);
+void valk_gc_thread_unregister(void);
+
+// Safe point - threads check for pending GC
+#define VALK_GC_SAFE_POINT() \
+  do { \
+    if (__builtin_expect(atomic_load_explicit(&valk_gc_coord.phase, \
+                         memory_order_acquire) != VALK_GC_PHASE_IDLE, 0)) { \
+      valk_gc_safe_point_slow(); \
+    } \
+  } while (0)
+
+// Safe point slow path (called when GC is pending)
+void valk_gc_safe_point_slow(void);
+
+// Global roots registry (for C-side persistent references)
+#define VALK_GC_MAX_GLOBAL_ROOTS 1024
+
+typedef struct valk_gc_global_roots {
+  pthread_mutex_t lock;
+  valk_lval_t** roots[VALK_GC_MAX_GLOBAL_ROOTS];
+  size_t count;
+} valk_gc_global_roots_t;
+
+extern valk_gc_global_roots_t valk_gc_global_roots;
+
+// Register/unregister global roots
+void valk_gc_add_global_root(valk_lval_t** root);
+void valk_gc_remove_global_root(valk_lval_t** root);
+
+// ============================================================================
+// Phase 1: Page-based Allocator with Mark Bitmaps (Parallel GC)
+// ============================================================================
+
+#define VALK_GC_PAGE_SIZE   (64 * 1024)   // 64 KB per page
+#define VALK_GC_PAGE_ALIGN  64            // Cache line alignment
+#define VALK_GC_TLAB_SLOTS  32            // Slots per TLAB refill
+
+// Object slot size - must fit both valk_lval_t (72 bytes) and valk_lenv_t (80 bytes)
+#define VALK_GC_SLOT_SIZE   80
+
+// Number of slots per page: (64KB - header) / 80 = ~819
+#define VALK_GC_SLOTS_PER_PAGE  819
+
+// Bitmap size in bytes (1 bit per slot, rounded up)
+#define VALK_GC_BITMAP_SIZE  ((VALK_GC_SLOTS_PER_PAGE + 7) / 8)
+
+typedef struct valk_gc_page {
+  struct valk_gc_page *next;      // Next page in pool list
+  _Atomic uint32_t num_allocated; // Slots currently in use
+  uint32_t page_id;               // For debugging
+  uint8_t mark_bits[VALK_GC_BITMAP_SIZE];  // Mark bitmap (1 = marked)
+  uint8_t alloc_bits[VALK_GC_BITMAP_SIZE]; // Allocation bitmap (1 = in use)
+  _Alignas(VALK_GC_PAGE_ALIGN) uint8_t slots[VALK_GC_SLOTS_PER_PAGE * VALK_GC_SLOT_SIZE];
+} valk_gc_page_t;
+
+typedef struct valk_gc_page_pool {
+  pthread_mutex_t lock;
+  valk_gc_page_t *all_pages;      // All allocated pages (for sweep)
+  valk_gc_page_t *partial_pages;  // Pages with free space
+  size_t num_pages;
+  _Atomic size_t total_slots;
+  _Atomic size_t used_slots;
+  _Atomic size_t gc_threshold;    // Trigger GC when used_slots exceeds
+} valk_gc_page_pool_t;
+
+// TLAB (Thread-Local Allocation Buffer)
+typedef struct valk_gc_tlab {
+  valk_gc_page_t *page;        // Current page
+  uint32_t next_slot;          // Next slot index to allocate from
+  uint32_t limit_slot;         // Last slot in TLAB range (exclusive)
+} valk_gc_tlab_t;
+
+// Initialize page pool
+void valk_gc_page_pool_init(valk_gc_page_pool_t *pool);
+
+// Destroy page pool (frees all pages)
+void valk_gc_page_pool_destroy(valk_gc_page_pool_t *pool);
+
+// Allocate a new page and add to pool
+valk_gc_page_t *valk_gc_page_alloc(valk_gc_page_pool_t *pool);
+
+// Initialize TLAB (must be called per-thread)
+void valk_gc_tlab_init(valk_gc_tlab_t *tlab);
+
+// Refill TLAB from page pool (slow path)
+bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_page_pool_t *pool);
+
+// Fast path allocation from TLAB (inline for performance)
+// Note: alloc_bits are pre-set during tlab_refill, so we just bump the pointer
+static inline void *valk_gc_tlab_alloc(valk_gc_tlab_t *tlab) {
+  if (__builtin_expect(tlab->page != NULL && tlab->next_slot < tlab->limit_slot, 1)) {
+    uint32_t slot = tlab->next_slot++;
+    return &tlab->page->slots[slot * VALK_GC_SLOT_SIZE];
+  }
+  return NULL;  // TLAB exhausted, need slow path
+}
+
+// Bitmap operations
+static inline bool valk_gc_bitmap_test(const uint8_t *bitmap, uint32_t idx) {
+  return (bitmap[idx / 8] & (1 << (idx % 8))) != 0;
+}
+
+static inline void valk_gc_bitmap_set(uint8_t *bitmap, uint32_t idx) {
+  bitmap[idx / 8] |= (uint8_t)(1 << (idx % 8));
+}
+
+static inline void valk_gc_bitmap_clear(uint8_t *bitmap, uint32_t idx) {
+  bitmap[idx / 8] &= (uint8_t)~(1 << (idx % 8));
+}
+
+// Get page pool statistics
+void valk_gc_page_pool_stats(valk_gc_page_pool_t *pool, 
+                              size_t *out_pages, size_t *out_total, 
+                              size_t *out_used);
+
+// ============================================================================
+// Phase 2: GC Triggering and Participation
+// ============================================================================
+
+void valk_gc_request_collection(void);
+
+void valk_gc_participate(void);
+
+// ============================================================================
+// Phase 3: Root Enumeration
+// ============================================================================
+
+typedef struct valk_gc_root {
+  size_t saved_count;
+} valk_gc_root_t;
+
+static inline valk_gc_root_t valk_gc_root_push(valk_lval_t *val);
+static inline void valk_gc_root_pop(void);
+static inline void valk_gc_root_cleanup(valk_gc_root_t *r);
+
+#define VALK_GC_ROOT(var) \
+  __attribute__((cleanup(valk_gc_root_cleanup))) \
+  valk_gc_root_t __gc_root_##var = valk_gc_root_push(var)
+
+typedef void (*valk_gc_root_visitor_t)(valk_lval_t *root, void *ctx);
+
+void valk_gc_visit_thread_roots(valk_gc_root_visitor_t visitor, void *ctx);
+void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx);
+void valk_gc_visit_env_roots(valk_lenv_t *env, valk_gc_root_visitor_t visitor, void *ctx);
+
+// ============================================================================
+// Phase 4: Parallel Mark
+// ============================================================================
+
+void valk_gc_parallel_mark(void);
+bool valk_gc_check_termination(void);
+
+// ============================================================================
+// Phase 5: Parallel Sweep
+// ============================================================================
+
+void valk_gc_parallel_sweep(valk_gc_page_pool_t *pool);
+
+// ============================================================================
+// Phase 6: Integration - GC Trigger and Full Cycle
+// ============================================================================
+
+void valk_gc_maybe_collect(valk_gc_page_pool_t *pool);
+void valk_gc_full_cycle(valk_gc_page_pool_t *pool);
+
+// ============================================================================
+// Global Page Pool for TLAB Allocation
+// ============================================================================
+
+extern valk_gc_page_pool_t valk_gc_global_pool;
+
+void valk_gc_global_pool_init(void);
+void valk_gc_global_pool_destroy(void);
+
+void *valk_gc_tlab_alloc_slow(size_t bytes);
+
+// ============================================================================
+// Root Stack Inline Implementations
+// ============================================================================
+
+static inline valk_gc_root_t valk_gc_root_push(valk_lval_t *val) {
+  valk_thread_context_t *ctx = &valk_thread_ctx;
+  
+  if (ctx->root_stack == NULL) {
+    return (valk_gc_root_t){ 0 };
+  }
+  
+  if (ctx->root_stack_count >= ctx->root_stack_capacity) {
+    ctx->root_stack_capacity *= 2;
+    ctx->root_stack = realloc(ctx->root_stack,
+                               sizeof(valk_lval_t*) * ctx->root_stack_capacity);
+  }
+  
+  size_t saved = ctx->root_stack_count;
+  ctx->root_stack[ctx->root_stack_count++] = val;
+  return (valk_gc_root_t){ saved };
+}
+
+static inline void valk_gc_root_pop(void) {
+  if (valk_thread_ctx.root_stack_count > 0) {
+    valk_thread_ctx.root_stack_count--;
+  }
+}
+
+static inline void valk_gc_root_cleanup(valk_gc_root_t *r) {
+  valk_thread_ctx.root_stack_count = r->saved_count;
+}

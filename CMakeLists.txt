@@ -390,6 +390,10 @@ add_executable(test_gc_unit test/unit/test_gc.c test/testing.c)
 target_link_libraries(test_gc_unit PRIVATE "-lc" valkyria)
 include_directories(test_gc_unit src/)
 
+add_executable(test_gc_parallel_unit test/unit/test_gc_parallel.c test/testing.c)
+target_link_libraries(test_gc_parallel_unit PRIVATE "-lc" valkyria)
+include_directories(test_gc_parallel_unit src/)
+
 add_executable(test_large_str test/test_large_str.c test/testing.c)
 target_link_libraries(test_large_str PRIVATE "-lc" valkyria)
 include_directories(test_large_str src/)

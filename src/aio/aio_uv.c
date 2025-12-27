@@ -30,6 +30,7 @@ static void __backpressure_list_remove(valk_aio_handle_t *conn) {
 void __event_loop(void *arg) {
   valk_aio_system_t *sys = arg;
   valk_mem_init_malloc();
+  valk_gc_thread_register();
   VALK_DEBUG("Initializing UV event loop thread");
 
   sys->current_request_ctx = NULL;
@@ -130,6 +131,8 @@ void __event_loop(void *arg) {
 
   valk_slab_free(sys->tcpBufferSlab);
   valk_slab_free(sys->httpStreamArenas);
+  
+  valk_gc_thread_unregister();
 }
 
 static void __uv_handle_closed_cb(uv_handle_t *handle) {

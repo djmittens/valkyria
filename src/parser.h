@@ -66,7 +66,6 @@ typedef enum {
   LVAL_CONS,   // Cons cell - S-expression (code to execute)
   LVAL_QEXPR,  // Cons cell - Q-expression (quoted data, not code)
   LVAL_ERR,
-  LVAL_ENV,
   LVAL_HANDLE,   // Async operation handle (cancellable promise)
   LVAL_FORWARD,  // Forwarding pointer - only valid during scratch evacuation
 } valk_ltype_e;
@@ -76,7 +75,7 @@ const char *valk_ltype_name(valk_ltype_e type);
 typedef valk_lval_t *(valk_lval_builtin_t)(valk_lenv_t *, valk_lval_t *);
 
 struct valk_lenv_t {
-  uint64_t flags;
+  _Atomic uint64_t flags;
   // Dynamic array of symbol names (char*)
   struct {
     char **items;
@@ -99,7 +98,7 @@ struct valk_lenv_t {
 };
 
 struct valk_lval_t {
-  uint64_t flags;
+  _Atomic uint64_t flags;
   void *origin_allocator;  // Always track where this value was allocated
   struct valk_lval_t *gc_next;  // Linked list for GC heap tracking
 #ifdef VALK_COVERAGE
@@ -132,7 +131,6 @@ struct valk_lval_t {
     struct {
       valk_async_handle_t *handle;  // Pointer to the async handle struct
     } async;  // LVAL_HANDLE - async operation handle
-    struct valk_lenv_t env;
     long num;
     char *str;
     valk_lval_t *forward;  // Forwarding pointer to new location (for LVAL_FORWARD)

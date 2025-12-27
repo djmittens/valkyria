@@ -149,6 +149,7 @@ typedef enum {
   VALK_ALLOC_ARENA,
   VALK_ALLOC_SLAB,
   VALK_ALLOC_GC_HEAP,
+  VALK_ALLOC_TLAB,
 } valk_mem_allocator_e;
 
 char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self);
@@ -362,7 +363,12 @@ bool valk_ptr_in_arena(valk_mem_arena_t *arena, void *ptr);
 // Forward declaration for root environment
 struct valk_lenv_t;
 
-// TODO(networking): Maybe these types should be in thread local context or something
+// Forward declarations for parallel GC
+struct valk_gc_mark_queue;
+struct valk_lval_t;
+
+struct valk_gc_tlab;
+
 typedef struct {
   valk_mem_allocator_t *allocator;
   void *heap;                     // Fallback GC heap for arena overflow (valk_gc_malloc_heap_t*)
@@ -371,6 +377,17 @@ typedef struct {
   float checkpoint_threshold;     // Threshold for automatic checkpointing (0.0-1.0)
   bool checkpoint_enabled;        // Whether automatic checkpointing is enabled
   size_t call_depth;              // Current function call depth (for TCO testing/debugging)
+  
+  // Parallel GC fields (Phase 0)
+  size_t gc_thread_id;            // Index in GC coordinator's thread registry
+  bool gc_registered;             // Whether registered with parallel GC
+  struct valk_lval_t **root_stack;       // Explicit root stack for protecting temps during GC
+  size_t root_stack_count;
+  size_t root_stack_capacity;
+  
+  // TLAB for parallel GC allocations (Phase 7)
+  struct valk_gc_tlab *tlab;      // Thread-Local Allocation Buffer
+  bool tlab_enabled;              // Whether TLAB allocation is active
 } valk_thread_context_t;
 
 extern __thread valk_thread_context_t valk_thread_ctx;

@@ -57,6 +57,8 @@ char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self) {
       return "Slab Alloc";
     case VALK_ALLOC_GC_HEAP:
       return "GC Heap Alloc";
+    case VALK_ALLOC_TLAB:
+      return "TLAB Alloc";
   }
 }
 
@@ -841,6 +843,10 @@ void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes) {
       // Everything goes through unified GC interface for proper tracking
       return valk_gc_malloc_heap_alloc((valk_gc_malloc_heap_t *)self, bytes);
     }
+    case VALK_ALLOC_TLAB: {
+      // TLAB uses the parallel GC page pool for lval-sized allocations
+      return valk_gc_tlab_alloc_slow(bytes);
+    }
   }
   return NULL;
 }
@@ -875,6 +881,9 @@ void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, size_t num,
     case VALK_ALLOC_GC_HEAP:
       res = valk_gc_malloc_heap_alloc((valk_gc_malloc_heap_t *)self, num * size);
       memset(res, 0, num * size);
+      break;
+    case VALK_ALLOC_TLAB:
+      res = valk_gc_tlab_alloc_slow(num * size);
       break;
   }
   return res;
@@ -943,6 +952,9 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
     }
     case VALK_ALLOC_MALLOC:
       return realloc(ptr, new_size);
+    case VALK_ALLOC_TLAB:
+      VALK_RAISE("Realloc on TLAB allocator not supported: %p -> %zu", ptr, new_size);
+      return NULL;
   }
 }
 
@@ -975,6 +987,8 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
       valk_gc_free_object((void*)self, ptr);
       return;
     }
+    case VALK_ALLOC_TLAB:
+      return;
   }
 }
 

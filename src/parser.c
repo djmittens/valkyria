@@ -240,8 +240,6 @@ const char* valk_ltype_name(valk_ltype_e type) {
       return "String";
     case LVAL_REF:
       return "Reference";
-    case LVAL_ENV:
-      return "Environment";
     case LVAL_HANDLE:
       return "Handle";
     case LVAL_FORWARD:
@@ -728,7 +726,6 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
       res->ref.free = lval->ref.free;
       break;
     }
-    case LVAL_ENV:
     case LVAL_FORWARD:
     case LVAL_UNDEFINED:
       break;
@@ -818,10 +815,6 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
              valk_lval_eq(x->cons.tail, y->cons.tail);
     case LVAL_REF:
       return (x->ref.ptr == y->ref.ptr) && (x->ref.free == y->ref.free);
-    case LVAL_ENV:
-      VALK_RAISE(
-          "LVAL is LENV, comparison unimplemented, something went wrong");
-      break;
     case LVAL_UNDEFINED:
       VALK_RAISE("LVAL is undefined, something went wrong");
       break;
@@ -952,7 +945,8 @@ valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) {
 
 // Recursive tree-walker eval (original implementation)
 static valk_lval_t* valk_lval_eval_recursive(valk_lenv_t* env, valk_lval_t* lval) {
-  // Tree-walker evaluation
+  VALK_GC_SAFE_POINT();
+  
   atomic_fetch_add(&g_eval_metrics.evals_total, 1);
 
   // Handle NULL gracefully
@@ -1448,9 +1442,6 @@ void valk_lval_print(valk_lval_t* val) {
     }
     case LVAL_REF:
       printf("Reference[%s:%p]", val->ref.type, val->ref.ptr);
-      break;
-    case LVAL_ENV:
-      printf("[LEnv]");
       break;
     case LVAL_FORWARD:
       printf("<forward:%p>", (void*)val->forward);
@@ -3065,9 +3056,6 @@ static void valk_lval_print_user(valk_lval_t* val) {
       break;
     case LVAL_REF:
       printf("<ref:%s>", val->ref.type);
-      break;
-    case LVAL_ENV:
-      printf("<environment>");
       break;
     case LVAL_FORWARD:
       printf("<forward>");
