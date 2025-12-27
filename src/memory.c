@@ -228,10 +228,24 @@ void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems) {
   __atomic_store_n(&self->numFree, numItems, __ATOMIC_RELAXED);
   __atomic_store_n(&self->overflowCount, 0, __ATOMIC_RELAXED);
   __atomic_store_n(&self->peakUsed, 0, __ATOMIC_RELAXED);
+
+#ifdef VALK_METRICS_ENABLED
+  size_t bitmap_bytes = (numItems + 7) / 8;
+  self->usage_bitmap = calloc(bitmap_bytes, 1);
+  __atomic_store_n(&self->bitmap_version, 0, __ATOMIC_RELAXED);
+#endif
 }
 
 // TODO(networking): do we even need this? might be useful for debugging
-void valk_slab_free(valk_slab_t *self) { valk_mem_free(self); }
+void valk_slab_free(valk_slab_t *self) {
+#ifdef VALK_METRICS_ENABLED
+  if (self->usage_bitmap) {
+    free(self->usage_bitmap);
+    self->usage_bitmap = NULL;
+  }
+#endif
+  valk_mem_free(self);
+}
 
 size_t valk_slab_item_stride(size_t itemSize) {
   // TODO(networking): when implementing AVX or other instruciton sets might
@@ -302,6 +316,15 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   res = valk_slab_item_at(self, head);
   // printf("Slab Aquired %ld %p\n", head, res->data);
 
+#ifdef VALK_METRICS_ENABLED
+  if (self->usage_bitmap) {
+    size_t byte_idx = head / 8;
+    uint8_t bit_mask = 1 << (head % 8);
+    __atomic_fetch_or(&self->usage_bitmap[byte_idx], bit_mask, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&self->bitmap_version, 1, __ATOMIC_RELAXED);
+  }
+#endif
+
   // Update peak usage (high water mark) tracking
   size_t used = self->numItems - __atomic_load_n(&self->numFree, __ATOMIC_RELAXED);
   size_t current_peak;
@@ -345,6 +368,17 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
 
 void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
 #ifdef VALK_SLAB_TREIBER_STACK
+  size_t slot_idx = item->handle;
+
+#ifdef VALK_METRICS_ENABLED
+  if (self->usage_bitmap && slot_idx < self->numItems) {
+    size_t byte_idx = slot_idx / 8;
+    uint8_t bit_mask = 1 << (slot_idx % 8);
+    __atomic_fetch_and(&self->usage_bitmap[byte_idx], ~bit_mask, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&self->bitmap_version, 1, __ATOMIC_RELAXED);
+  }
+#endif
+
   uint64_t oldTag, newTag;
   size_t head, version;
   do {
@@ -1008,3 +1042,172 @@ void valk_gc_sweep(valk_gc_heap_t *self) {
     }
   }
 }
+
+#ifdef VALK_METRICS_ENABLED
+void valk_slab_bitmap_snapshot(valk_slab_t *slab, valk_slab_bitmap_t *out) {
+  if (!slab || !out) return;
+  out->data = NULL;
+  out->bytes = 0;
+  out->version = 0;
+
+  if (!slab->usage_bitmap) return;
+
+  size_t bitmap_bytes = (slab->numItems + 7) / 8;
+  out->data = malloc(bitmap_bytes);
+  if (!out->data) return;
+
+  out->version = __atomic_load_n(&slab->bitmap_version, __ATOMIC_ACQUIRE);
+  memcpy(out->data, slab->usage_bitmap, bitmap_bytes);
+  out->bytes = bitmap_bytes;
+}
+
+void valk_slab_bitmap_free(valk_slab_bitmap_t *bmp) {
+  if (bmp && bmp->data) {
+    free(bmp->data);
+    bmp->data = NULL;
+    bmp->bytes = 0;
+  }
+}
+
+void valk_bitmap_delta_init(valk_bitmap_delta_t *delta) {
+  if (!delta) return;
+  delta->runs = NULL;
+  delta->run_count = 0;
+  delta->run_capacity = 0;
+  delta->from_version = 0;
+  delta->to_version = 0;
+}
+
+void valk_bitmap_delta_free(valk_bitmap_delta_t *delta) {
+  if (delta && delta->runs) {
+    free(delta->runs);
+    delta->runs = NULL;
+    delta->run_count = 0;
+    delta->run_capacity = 0;
+  }
+}
+
+static bool delta_add_run(valk_bitmap_delta_t *delta, size_t offset, size_t count, uint8_t byte) {
+  if (delta->run_count >= delta->run_capacity) {
+    size_t new_cap = delta->run_capacity ? delta->run_capacity * 2 : 64;
+    valk_bitmap_delta_run_t *new_runs = realloc(delta->runs, new_cap * sizeof(valk_bitmap_delta_run_t));
+    if (!new_runs) return false;
+    delta->runs = new_runs;
+    delta->run_capacity = new_cap;
+  }
+  delta->runs[delta->run_count].offset = offset;
+  delta->runs[delta->run_count].count = count;
+  delta->runs[delta->run_count].byte = byte;
+  delta->run_count++;
+  return true;
+}
+
+bool valk_bitmap_delta_compute(const valk_slab_bitmap_t *curr,
+                                const valk_slab_bitmap_t *prev,
+                                valk_bitmap_delta_t *out) {
+  if (!curr || !prev || !out) return false;
+  if (!curr->data || !prev->data) return false;
+  if (curr->bytes != prev->bytes) return false;
+
+  valk_bitmap_delta_init(out);
+  out->from_version = prev->version;
+  out->to_version = curr->version;
+
+  size_t i = 0;
+  while (i < curr->bytes) {
+    if (curr->data[i] == prev->data[i]) {
+      i++;
+      continue;
+    }
+
+    uint8_t xor_byte = curr->data[i] ^ prev->data[i];
+    size_t run_start = i;
+    size_t run_len = 1;
+
+    while (i + run_len < curr->bytes &&
+           (curr->data[i + run_len] ^ prev->data[i + run_len]) == xor_byte) {
+      run_len++;
+    }
+
+    if (!delta_add_run(out, run_start, run_len, xor_byte)) {
+      valk_bitmap_delta_free(out);
+      return false;
+    }
+    i += run_len;
+  }
+
+  return true;
+}
+
+size_t valk_bitmap_delta_to_rle(const valk_bitmap_delta_t *delta,
+                                 char *buf, size_t buf_size) {
+  if (!delta || !buf || buf_size < 4) {
+    if (buf && buf_size > 0) buf[0] = '\0';
+    return 0;
+  }
+
+  static const char hex_chars[] = "0123456789abcdef";
+  char *p = buf;
+  char *end = buf + buf_size - 1;
+
+  for (size_t i = 0; i < delta->run_count && p < end - 16; i++) {
+    valk_bitmap_delta_run_t *run = &delta->runs[i];
+
+    if (i > 0 && p < end) *p++ = ',';
+
+    int n = snprintf(p, end - p, "%zu:", run->offset);
+    if (n < 0 || p + n >= end) break;
+    p += n;
+
+    if (p + 2 >= end) break;
+    *p++ = hex_chars[(run->byte >> 4) & 0x0F];
+    *p++ = hex_chars[run->byte & 0x0F];
+
+    if (run->count > 1) {
+      n = snprintf(p, end - p, "*%zu", run->count);
+      if (n < 0 || p + n >= end) break;
+      p += n;
+    }
+  }
+
+  *p = '\0';
+  return p - buf;
+}
+
+size_t valk_slab_bitmap_buckets(valk_slab_t *slab,
+                                 size_t start_slot, size_t end_slot,
+                                 size_t num_buckets,
+                                 valk_bitmap_bucket_t *out_buckets) {
+  if (!slab || !out_buckets || num_buckets == 0) return 0;
+  if (!slab->usage_bitmap) return 0;
+
+  if (end_slot > slab->numItems) end_slot = slab->numItems;
+  if (start_slot >= end_slot) return 0;
+
+  size_t total_slots = end_slot - start_slot;
+  size_t slots_per_bucket = (total_slots + num_buckets - 1) / num_buckets;
+  if (slots_per_bucket == 0) slots_per_bucket = 1;
+
+  for (size_t b = 0; b < num_buckets; b++) {
+    out_buckets[b].used = 0;
+    out_buckets[b].free = 0;
+  }
+
+  for (size_t slot = start_slot; slot < end_slot; slot++) {
+    size_t byte_idx = slot / 8;
+    uint8_t bit_mask = 1 << (slot % 8);
+    bool is_used = (slab->usage_bitmap[byte_idx] & bit_mask) != 0;
+
+    size_t bucket_idx = (slot - start_slot) / slots_per_bucket;
+    if (bucket_idx >= num_buckets) bucket_idx = num_buckets - 1;
+
+    if (is_used) {
+      out_buckets[bucket_idx].used++;
+    } else {
+      out_buckets[bucket_idx].free++;
+    }
+  }
+
+  return num_buckets;
+}
+#endif

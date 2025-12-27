@@ -38,7 +38,7 @@ void test_slab_bitmap_full(VALK_TEST_ARGS()) {
   for (size_t i = 0; i < num_items; i++) {
     valk_slab_item_t *item = valk_slab_aquire(slab);
     VALK_TEST_ASSERT(item != NULL, "Failed to acquire slab item %zu", i);
-    items[i] = item;
+    items[i] = item->data;
   }
 
   // Verify slab shows 0 free
@@ -70,7 +70,7 @@ void test_slab_bitmap_partial(VALK_TEST_ARGS()) {
   for (size_t i = 0; i < 4; i++) {
     valk_slab_item_t *item = valk_slab_aquire(slab);
     VALK_TEST_ASSERT(item != NULL, "Failed to acquire slab item %zu", i);
-    items[i] = item;
+    items[i] = item->data;
   }
 
   // Release items 1 and 3 (keep 0 and 2)

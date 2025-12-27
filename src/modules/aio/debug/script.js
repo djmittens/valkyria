@@ -644,6 +644,13 @@
     this.cols = 0;
     this.rows = 0;
     this.lastSlabData = null;
+
+    // Zoom state for large slabs
+    this.zoomEnabled = config.zoomEnabled !== false;
+    this.zoomStart = 0;
+    this.zoomEnd = 0;  // 0 = full range
+    this.zoomBuckets = null;
+    this.zoomPending = false;
   }
 
   // Default state mappings
@@ -851,6 +858,14 @@
         });
         var container = this.canvasEl.parentElement;
         if (container) this.resizeObserver.observe(container);
+      }
+
+      // Zoom click handler for heatmap cells
+      if (this.zoomEnabled && this.slabKey) {
+        this.canvasEl.style.cursor = 'pointer';
+        this.canvasEl.addEventListener('click', function(e) {
+          self._handleZoomClick(e);
+        });
       }
     }
 
@@ -1501,6 +1516,140 @@
       ctx.fillStyle = i < used ? colors.used : colors.free;
       ctx.fillRect((i % cols) * step, Math.floor(i / cols) * step, cellSize, cellSize);
     }
+  };
+
+  // Handle zoom click on heatmap - zoom into clicked region
+  PoolWidget.prototype._handleZoomClick = function(e) {
+    if (!this.heatmapConfigured || !this.slabKey) return;
+
+    var rect = this.canvasEl.getBoundingClientRect();
+    var dpr = window.devicePixelRatio || 1;
+    var x = (e.clientX - rect.left) * dpr;
+    var y = (e.clientY - rect.top) * dpr;
+
+    // Convert to cell coordinates
+    var step = (this.heatmapCellSize + this.heatmapGap) * dpr;
+    var col = Math.floor(x / step);
+    var row = Math.floor(y / step);
+    var cellIdx = row * this.heatmapCols + col;
+
+    var slotsPerCell = this.heatmapSlotsPerCell;
+    var total = this.lastTotal || 0;
+
+    // Calculate region to zoom into (expand by 10x the current cell size)
+    var zoomFactor = 10;
+    var zoomSlots = slotsPerCell * zoomFactor;
+    var centerSlot = cellIdx * slotsPerCell + slotsPerCell / 2;
+
+    var start = Math.max(0, Math.floor(centerSlot - zoomSlots / 2));
+    var end = Math.min(total, Math.ceil(centerSlot + zoomSlots / 2));
+
+    // If already zoomed in far enough, zoom out
+    if (this.zoomEnd > 0 && (end - start) <= PoolWidget.MAX_GRID_SLOTS) {
+      this.zoomStart = 0;
+      this.zoomEnd = 0;
+      this.zoomBuckets = null;
+      if (this.lastSlabData) {
+        this._renderGrid(this.lastSlabData);
+      }
+      return;
+    }
+
+    // Fetch buckets for the zoomed region
+    this._fetchZoomBuckets(this.slabKey, start, end, 256);
+  };
+
+  // Fetch bucket data from server for zoom region
+  PoolWidget.prototype._fetchZoomBuckets = function(slabName, start, end, numBuckets) {
+    if (this.zoomPending) return;
+
+    var self = this;
+    this.zoomPending = true;
+
+    var url = '/debug/slab/buckets?slab=' + encodeURIComponent(slabName) +
+              '&start=' + start + '&end=' + end + '&buckets=' + numBuckets;
+
+    fetch(url)
+      .then(function(resp) { return resp.json(); })
+      .then(function(data) {
+        self.zoomPending = false;
+        if (data && data.buckets) {
+          self.zoomStart = start;
+          self.zoomEnd = end;
+          self.zoomBuckets = data.buckets;
+          self._renderZoomHeatmap(data.buckets, start, end);
+        }
+      })
+      .catch(function(err) {
+        self.zoomPending = false;
+        console.error('Zoom fetch error:', err);
+      });
+  };
+
+  // Render zoomed heatmap from server bucket data
+  PoolWidget.prototype._renderZoomHeatmap = function(buckets, start, end) {
+    if (!this.ctx || !buckets || buckets.length === 0) return;
+
+    var ctx = this.ctx;
+    var container = this.canvasEl.parentElement;
+    var containerWidth = container ? container.clientWidth : 0;
+
+    var cellSize = 4;
+    var gap = 1;
+    var step = cellSize + gap;
+
+    var cols = Math.max(1, Math.floor(containerWidth / step));
+    var rows = Math.ceil(buckets.length / cols);
+
+    // Reconfigure canvas for zoomed view
+    var width = containerWidth;
+    var height = rows * step;
+
+    var dpr = window.devicePixelRatio || 1;
+    this.canvasEl.width = width * dpr;
+    this.canvasEl.height = height * dpr;
+    this.canvasEl.style.width = width + 'px';
+    this.canvasEl.style.height = height + 'px';
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+
+    ctx.clearRect(0, 0, width, height);
+
+    var colors = PoolWidget.COLORS;
+    var freeColor = colors.free;
+    var usedColor = colors.used;
+
+    for (var c = 0; c < buckets.length; c++) {
+      var bucket = buckets[c];
+      var totalInBucket = (bucket.u || 0) + (bucket.f || 0);
+      if (totalInBucket === 0) continue;
+
+      var usedRatio = (bucket.u || 0) / totalInBucket;
+      var x = (c % cols) * step;
+      var y = Math.floor(c / cols) * step;
+
+      if (usedRatio === 0) {
+        ctx.fillStyle = freeColor;
+      } else if (usedRatio === 1) {
+        ctx.fillStyle = usedColor;
+      } else {
+        ctx.fillStyle = this._blendColor(freeColor, usedColor, usedRatio);
+      }
+
+      ctx.fillRect(x, y, cellSize, cellSize);
+    }
+
+    // Draw zoom indicator border
+    ctx.strokeStyle = '#58a6ff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, width - 2, height - 2);
+
+    // Show zoom range info
+    var infoText = 'Zoomed: ' + start + '-' + end + ' (click to zoom out)';
+    ctx.fillStyle = '#58a6ff';
+    ctx.font = '10px monospace';
+    ctx.fillText(infoText, 4, height - 4);
   };
 
   // Configure minimap canvas dimensions

@@ -8,6 +8,9 @@
 #include "metrics_v2.h"
 #include "metrics_delta.h"
 #include "aio/aio_sse_diagnostics.h"
+#include "aio/aio.h"
+#include "gc.h"
+#include "memory.h"
 #include "parser.h"
 #include "common.h"
 
@@ -454,6 +457,119 @@ static valk_lval_t *valk_builtin_metrics_json(valk_lenv_t *e, valk_lval_t *a) {
   return result;
 }
 
+#ifdef VALK_METRICS_ENABLED
+// (aio/slab-buckets slab-name start end num-buckets) -> json-string
+// (aio/slab-buckets sys slab-name start end num-buckets) -> json-string
+// Returns bucket counts for a slab region, for zoom visualization
+static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  size_t argc = valk_lval_list_count(a);
+
+  valk_aio_system_t *sys = valk_aio_active_system;
+  size_t arg_offset = 0;
+
+  if (argc >= 5) {
+    valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
+    if (LVAL_TYPE(sys_arg) == LVAL_REF &&
+        strcmp(sys_arg->ref.type, "aio_system") == 0) {
+      sys = (valk_aio_system_t *)sys_arg->ref.ptr;
+      arg_offset = 1;
+    }
+  }
+
+  if (argc - arg_offset < 4) {
+    return valk_lval_err("aio/slab-buckets: expected (slab-name start end num-buckets)");
+  }
+
+  valk_lval_t *name_arg = valk_lval_list_nth(a, arg_offset);
+  valk_lval_t *start_arg = valk_lval_list_nth(a, arg_offset + 1);
+  valk_lval_t *end_arg = valk_lval_list_nth(a, arg_offset + 2);
+  valk_lval_t *buckets_arg = valk_lval_list_nth(a, arg_offset + 3);
+
+  if (LVAL_TYPE(name_arg) != LVAL_STR ||
+      LVAL_TYPE(start_arg) != LVAL_NUM ||
+      LVAL_TYPE(end_arg) != LVAL_NUM ||
+      LVAL_TYPE(buckets_arg) != LVAL_NUM) {
+    return valk_lval_err("aio/slab-buckets: invalid argument types");
+  }
+
+  if (!sys) {
+    return valk_lval_err("aio/slab-buckets: no AIO system available");
+  }
+
+  const char *slab_name = name_arg->str;
+  size_t start = (size_t)start_arg->num;
+  size_t end = (size_t)end_arg->num;
+  size_t num_buckets = (size_t)buckets_arg->num;
+
+  if (num_buckets == 0 || num_buckets > 4096) {
+    return valk_lval_err("aio/slab-buckets: num-buckets must be 1-4096");
+  }
+
+  valk_slab_t *slab = NULL;
+  if (strcmp(slab_name, "tcp_buffers") == 0) {
+    slab = valk_aio_get_tcp_buffer_slab(sys);
+  } else if (strcmp(slab_name, "handles") == 0) {
+    slab = valk_aio_get_handle_slab(sys);
+  } else if (strcmp(slab_name, "stream_arenas") == 0) {
+    slab = valk_aio_get_stream_arenas_slab(sys);
+  } else if (strcmp(slab_name, "http_servers") == 0) {
+    slab = valk_aio_get_http_servers_slab(sys);
+  } else if (strcmp(slab_name, "http_clients") == 0) {
+    slab = valk_aio_get_http_clients_slab(sys);
+  } else if (strcmp(slab_name, "lval") == 0) {
+    valk_gc_malloc_heap_t *gc_heap = valk_aio_get_gc_heap(sys);
+    if (gc_heap) slab = gc_heap->lval_slab;
+  } else if (strcmp(slab_name, "lenv") == 0) {
+    valk_gc_malloc_heap_t *gc_heap = valk_aio_get_gc_heap(sys);
+    if (gc_heap) slab = gc_heap->lenv_slab;
+  }
+
+  if (!slab) {
+    return valk_lval_err("aio/slab-buckets: unknown slab name");
+  }
+
+  if (!slab->usage_bitmap) {
+    return valk_lval_err("aio/slab-buckets: slab has no maintained bitmap");
+  }
+
+  valk_bitmap_bucket_t *buckets = malloc(num_buckets * sizeof(valk_bitmap_bucket_t));
+  if (!buckets) {
+    return valk_lval_err("aio/slab-buckets: allocation failed");
+  }
+
+  size_t actual_buckets = valk_slab_bitmap_buckets(slab, start, end, num_buckets, buckets);
+
+  size_t buf_size = 32 + actual_buckets * 32;
+  char *buf = malloc(buf_size);
+  if (!buf) {
+    free(buckets);
+    return valk_lval_err("aio/slab-buckets: allocation failed");
+  }
+
+  char *p = buf;
+  char *buf_end = buf + buf_size;
+  int n = snprintf(p, buf_end - p, "{\"buckets\":[");
+  p += n;
+
+  for (size_t i = 0; i < actual_buckets && p < buf_end - 30; i++) {
+    if (i > 0) *p++ = ',';
+    n = snprintf(p, buf_end - p, "{\"u\":%zu,\"f\":%zu}",
+                 buckets[i].used, buckets[i].free);
+    if (n > 0) p += n;
+  }
+
+  snprintf(p, buf_end - p, "],\"total\":%zu}", slab->numItems);
+
+  valk_lval_t *result = valk_lval_str(buf);
+  free(buf);
+  free(buckets);
+
+  return result;
+}
+#endif
+
 // (aio/diagnostics-state-json) -> json-string
 // (aio/diagnostics-state-json sys) -> json-string
 // Returns fresh diagnostics state as JSON (for /debug/metrics/state endpoint)
@@ -520,4 +636,9 @@ void valk_register_metrics_builtins(valk_lenv_t *env) {
   // Diagnostics builtin
   valk_lenv_put_builtin(env, "aio/diagnostics-state-json",
                         valk_builtin_aio_diagnostics_state_json);
+
+#ifdef VALK_METRICS_ENABLED
+  valk_lenv_put_builtin(env, "aio/slab-buckets",
+                        valk_builtin_aio_slab_buckets);
+#endif
 }

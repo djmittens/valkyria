@@ -22,128 +22,31 @@
 // Slab Bitmap Generation
 // ============================================================================
 
-// Threshold for bitmap generation (slots). Slabs larger than this skip bitmap
-// and report count only. This matches the UI's PoolWidget.MAX_GRID_SLOTS=10000
-// where it switches from 1:1 grid to downsampled heatmap.
-//
-// Note: The heatmap still needs spatial distribution data to show hot regions.
-// For slabs > 10000, we currently just show uniform color based on percentage.
-// Future improvement: generate downsampled bucket counts instead of full bitmap.
-//
-// The free list walk is O(n) with poor cache locality (Treiber stack chases
-// pointers through 64-byte aligned slots). The caching via cached_num_free
-// helps when slab is unchanged between ticks.
-#define SLAB_BITMAP_THRESHOLD 10000
-
-// Walk Treiber stack to generate actual bitmap
-// Returns heap-allocated bitmap, caller must free
-// Note: This is a best-effort snapshot - the slab may be modified concurrently
-// during browser refresh or connection churn. Races are expected and handled.
-// For slabs larger than SLAB_BITMAP_THRESHOLD, returns NULL bitmap and count only.
-// Cached version: reuses bitmap if numFree unchanged
+// Copy bitmap from slab's maintained usage_bitmap (O(1)).
+// Returns heap-allocated bitmap, caller must free.
 static uint8_t *slab_to_bitmap_cached(valk_slab_t *slab, size_t *out_bytes,
                                        size_t *out_used, size_t *out_num_free,
-                                       const valk_slab_snapshot_t *prev) {
+                                       [[maybe_unused]] const valk_slab_snapshot_t *prev) {
   size_t total_slots = slab->numItems;
   size_t current_num_free = __atomic_load_n(&slab->numFree, __ATOMIC_ACQUIRE);
 
   *out_num_free = current_num_free;
+  *out_used = total_slots > current_num_free ? total_slots - current_num_free : 0;
 
-  // Skip bitmap generation for large slabs - just return count
-  if (total_slots > SLAB_BITMAP_THRESHOLD) {
+  if (!slab->usage_bitmap) {
     *out_bytes = 0;
-    *out_used = total_slots > current_num_free ? total_slots - current_num_free : 0;
     return NULL;
   }
 
   size_t bitmap_bytes = (total_slots + 7) / 8;
-
-  // Fast path: if numFree unchanged and we have valid cached bitmap, reuse it
-  if (prev && prev->bitmap && prev->bitmap_bytes == bitmap_bytes &&
-      prev->total_slots == total_slots && prev->cached_num_free == current_num_free) {
-    uint8_t *bitmap = malloc(bitmap_bytes);
-    if (bitmap) {
-      memcpy(bitmap, prev->bitmap, bitmap_bytes);
-      *out_bytes = bitmap_bytes;
-      *out_used = total_slots - current_num_free;
-      return bitmap;
-    }
-  }
-
-  // Slow path: walk free list to generate bitmap
-  uint8_t *bitmap = calloc(bitmap_bytes, 1);
-
+  uint8_t *bitmap = malloc(bitmap_bytes);
   if (!bitmap) {
     *out_bytes = 0;
-    *out_used = 0;
     return NULL;
   }
 
-  // Start with all slots marked as USED (1)
-  memset(bitmap, 0xFF, bitmap_bytes);
-
-  // Walk free list and mark slots as FREE (0)
-  // The slab uses a Treiber stack with versioned pointers
-  uint64_t head_tag = __atomic_load_n(&slab->head, __ATOMIC_ACQUIRE);
-
-  // Unpack version and offset from versioned pointer
-  // Version is in upper 32 bits, offset in lower 32 bits
-  size_t head_offset = head_tag & (size_t)UINT32_MAX;
-
-  size_t free_count = 0;
-
-  // Use a visited bitmap to detect actual cycles (not just count overflow)
-  uint8_t *visited = calloc(bitmap_bytes, 1);
-  if (!visited) {
-    free(bitmap);
-    *out_bytes = 0;
-    *out_used = 0;
-    return NULL;
-  }
-
-  // Sentinel value is stored as UINT32_MAX in the lower 32 bits
-  while (head_offset != (size_t)UINT32_MAX) {
-    if (head_offset >= total_slots) {
-      VALK_WARN("Slab free list: invalid offset %zu >= total %zu", head_offset, total_slots);
-      break;
-    }
-
-    // Check if we've already visited this slot (cycle detection)
-    size_t byte_idx = head_offset / 8;
-    uint8_t bit_mask = 1 << (head_offset % 8);
-    if (visited[byte_idx] & bit_mask) {
-      // Cycle in free list - indicates slab corruption, just stop the walk
-      break;
-    }
-    visited[byte_idx] |= bit_mask;
-
-    // Clear bit in output bitmap (mark as free)
-    bitmap[head_offset / 8] &= ~(1 << (head_offset % 8));
-    free_count++;
-
-    // Get item at this offset
-    size_t stride = valk_slab_item_stride(slab->itemSize);
-    valk_slab_item_t *item =
-        (valk_slab_item_t *)&slab->heap[stride * head_offset];
-
-    // Get next in free list (also versioned)
-    uint64_t next_tag = __atomic_load_n(&item->next, __ATOMIC_ACQUIRE);
-    size_t prev_offset = head_offset;
-    head_offset = next_tag & (size_t)UINT32_MAX;
-
-    // Safety: hard limit to prevent infinite loops
-    if (free_count > total_slots) {
-      VALK_WARN("Slab free list: exceeded total slots (free=%zu, total=%zu, last=%zu->%zu)",
-                free_count, total_slots, prev_offset, head_offset);
-      free_count = total_slots;
-      break;
-    }
-  }
-
-  free(visited);
-
+  memcpy(bitmap, slab->usage_bitmap, bitmap_bytes);
   *out_bytes = bitmap_bytes;
-  *out_used = free_count <= total_slots ? total_slots - free_count : 0;
   return bitmap;
 }
 

@@ -211,6 +211,12 @@ typedef struct {  // extends valk_mem_allocator_t;
   uint64_t overflowCount;
   uint64_t head;
   // treiber list top
+
+#ifdef VALK_METRICS_ENABLED
+  uint64_t bitmap_version;
+  uint8_t *usage_bitmap;
+#endif
+
   // Memory layout
   // [sizeof(size_t) * numSlabs | freeList]
   // [sizeof(valk_slab_t + (size_t * numSlabs)) * capacity | slabs]
@@ -246,6 +252,49 @@ void valk_slab_release_ptr(valk_slab_t *self, void *data);
 static inline size_t valk_slab_available(valk_slab_t *self) {
   return __atomic_load_n(&self->numFree, __ATOMIC_ACQUIRE);
 }
+
+#ifdef VALK_METRICS_ENABLED
+typedef struct {
+  uint8_t *data;
+  size_t bytes;
+  uint64_t version;
+} valk_slab_bitmap_t;
+
+typedef struct {
+  size_t offset;
+  size_t count;
+  uint8_t byte;
+} valk_bitmap_delta_run_t;
+
+typedef struct {
+  valk_bitmap_delta_run_t *runs;
+  size_t run_count;
+  size_t run_capacity;
+  uint64_t from_version;
+  uint64_t to_version;
+} valk_bitmap_delta_t;
+
+void valk_slab_bitmap_snapshot(valk_slab_t *slab, valk_slab_bitmap_t *out);
+void valk_slab_bitmap_free(valk_slab_bitmap_t *bmp);
+
+void valk_bitmap_delta_init(valk_bitmap_delta_t *delta);
+void valk_bitmap_delta_free(valk_bitmap_delta_t *delta);
+bool valk_bitmap_delta_compute(const valk_slab_bitmap_t *curr,
+                                const valk_slab_bitmap_t *prev,
+                                valk_bitmap_delta_t *out);
+size_t valk_bitmap_delta_to_rle(const valk_bitmap_delta_t *delta,
+                                 char *buf, size_t buf_size);
+
+typedef struct {
+  size_t used;
+  size_t free;
+} valk_bitmap_bucket_t;
+
+size_t valk_slab_bitmap_buckets(valk_slab_t *slab,
+                                 size_t start_slot, size_t end_slot,
+                                 size_t num_buckets,
+                                 valk_bitmap_bucket_t *out_buckets);
+#endif
 
 // Arena statistics for telemetry
 typedef struct {
