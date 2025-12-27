@@ -945,6 +945,23 @@
     }
   };
 
+  // Update UI when grid is too large to render 1:1 (>MAX_GRID_SLOTS)
+  PoolWidget.prototype._setGridTooLarge = function(tooLarge, slotCount) {
+    if (!this.el) return;
+
+    var gridWrapper = this.el.querySelector('.pool-widget-grid-wrapper');
+
+    this.gridTooLarge = tooLarge;
+
+    if (gridWrapper) {
+      if (tooLarge) {
+        gridWrapper.classList.add('downsampled');
+      } else {
+        gridWrapper.classList.remove('downsampled');
+      }
+    }
+  };
+
   // Update widget with new data
   // data: { used, total, usedFormatted?, totalFormatted?, states?, bitmap?, markers:{}, stats:{} }
   PoolWidget.prototype.update = function(data) {
@@ -1113,21 +1130,48 @@
     this.canvasConfigured = true;
   };
 
+  // Maximum slots to render in the detailed grid view
+  // Above this limit, the grid shows a placeholder message instead
+  // 10K slots = ~60KB of canvas memory, renders in <10ms
+  PoolWidget.MAX_GRID_SLOTS = 10000;
+
   // Render grid from data
   PoolWidget.prototype._renderGrid = function(data) {
-    // Skip rendering if grid is collapsed (save CPU cycles)
-    if (this.collapsibleGrid && this.gridCollapsed) return;
-
     // Only render grid if we have slot-based data (states or bitmap)
     // Don't use byte totals for grid sizing - they're way too large
     if (!data.states && data.bitmap === undefined) return;
 
     // Use slotTotal for grid sizing (slot count), fall back to total only if reasonable
     var total = data.slotTotal || data.total || 0;
-    if (total <= 0 || total > 500000) return;  // Sanity check (256K slab = 262144 slots)
+    if (total <= 0 || total > 500000) return;  // Sanity check
+
+    // Check if grid is too large BEFORE checking collapsed state
+    // This ensures the UI state is always correct
+    var tooLarge = total > PoolWidget.MAX_GRID_SLOTS;
+    this._setGridTooLarge(tooLarge, total);
+
+    // Skip rendering if grid is collapsed (save CPU cycles)
+    if (this.collapsibleGrid && this.gridCollapsed) return;
 
     var container = this.canvasEl.parentElement;
     var containerWidth = container ? container.clientWidth : 0;
+
+    // For large slabs, render a downsampled heatmap instead of 1:1 grid
+    if (tooLarge) {
+      if (!this.heatmapConfigured || this.lastTotal !== total || this.lastContainerWidth !== containerWidth) {
+        this._configureHeatmap(total, containerWidth);
+        this.lastTotal = total;
+        this.lastContainerWidth = containerWidth;
+      }
+      var self = this;
+      if (data.states) {
+        requestAnimationFrame(function() { self._renderHeatmapStates(data.states, total); });
+      } else if (data.bitmap !== undefined) {
+        requestAnimationFrame(function() { self._renderHeatmapBitmap(data.bitmap, total); });
+      }
+      return;
+    }
+
     if (!this.canvasConfigured || this.lastTotal !== total || this.lastContainerWidth !== containerWidth) {
       this._configureCanvas(total);
       this.lastTotal = total;
@@ -1141,6 +1185,221 @@
       requestAnimationFrame(function() { self._renderBitmapGrid(data.bitmap, total); });
     } else {
       requestAnimationFrame(function() { self._renderEmptyGrid(total, data.used || 0); });
+    }
+  };
+
+  // Configure canvas for downsampled heatmap (for large slabs)
+  // Max 8K cells (e.g., 128x64) regardless of actual slot count
+  PoolWidget.prototype._configureHeatmap = function(total, containerWidth) {
+    if (!this.canvasEl) return;
+
+    var cellSize = 4;  // Smaller cells for heatmap
+    var gap = 1;
+    var step = cellSize + gap;
+
+    var cols = Math.max(1, Math.floor(containerWidth / step));
+    // Limit rows to keep total cells under 8K
+    var maxCells = 8192;
+    var maxRows = Math.ceil(maxCells / cols);
+    var idealRows = Math.ceil(total / cols);
+    var rows = Math.min(idealRows, maxRows);
+
+    // Calculate how many slots each cell represents
+    this.heatmapSlotsPerCell = Math.ceil(total / (cols * rows));
+    this.heatmapCols = cols;
+    this.heatmapRows = rows;
+    this.heatmapCellSize = cellSize;
+    this.heatmapGap = gap;
+
+    var width = containerWidth;
+    var height = rows * step;
+
+    var dpr = window.devicePixelRatio || 1;
+    this.canvasEl.width = width * dpr;
+    this.canvasEl.height = height * dpr;
+    this.canvasEl.style.width = width + 'px';
+    this.canvasEl.style.height = height + 'px';
+
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.scale(dpr, dpr);
+
+    this.heatmapConfigured = true;
+    this.canvasConfigured = false;  // Mark 1:1 config as stale
+  };
+
+  // Render downsampled heatmap from RLE state string
+  // Each cell shows utilization ratio of the slots it represents
+  PoolWidget.prototype._renderHeatmapStates = function(rleStr, total) {
+    var ctx = this.ctx;
+    var cols = this.heatmapCols;
+    var rows = this.heatmapRows;
+    var cellSize = this.heatmapCellSize;
+    var step = cellSize + this.heatmapGap;
+    var slotsPerCell = this.heatmapSlotsPerCell;
+    var totalCells = cols * rows;
+    var colors = PoolWidget.COLORS;
+
+    ctx.clearRect(0, 0, this.canvasEl.width, this.canvasEl.height);
+
+    // Build bucket counts - one per cell
+    var buckets = new Array(totalCells);
+    for (var i = 0; i < totalCells; i++) {
+      buckets[i] = { free: 0, used: 0 };
+    }
+
+    // Parse RLE and fill buckets efficiently (O(runs) not O(slots))
+    var slotIdx = 0;
+    var i = 0;
+    while (i < rleStr.length && slotIdx < total) {
+      var stateChar = rleStr[i++];
+      var countStr = '';
+      while (i < rleStr.length && rleStr[i] >= '0' && rleStr[i] <= '9') countStr += rleStr[i++];
+      var count = parseInt(countStr, 10) || 1;
+      count = Math.min(count, total - slotIdx);
+
+      var isFree = (stateChar === 'F');
+      var runEnd = slotIdx + count;
+
+      while (slotIdx < runEnd) {
+        var cellIdx = Math.min(Math.floor(slotIdx / slotsPerCell), totalCells - 1);
+        var cellEnd = Math.min((cellIdx + 1) * slotsPerCell, runEnd);
+        var slotsInCell = cellEnd - slotIdx;
+
+        if (isFree) {
+          buckets[cellIdx].free += slotsInCell;
+        } else {
+          buckets[cellIdx].used += slotsInCell;
+        }
+        slotIdx = cellEnd;
+      }
+    }
+
+    // Fill remaining slots as free
+    while (slotIdx < total) {
+      var cellIdx = Math.min(Math.floor(slotIdx / slotsPerCell), totalCells - 1);
+      var cellEnd = Math.min((cellIdx + 1) * slotsPerCell, total);
+      buckets[cellIdx].free += cellEnd - slotIdx;
+      slotIdx = cellEnd;
+    }
+
+    // Render cells with color based on utilization
+    var freeColor = colors.free;
+    var usedColor = colors.used;
+
+    for (var c = 0; c < totalCells; c++) {
+      var bucket = buckets[c];
+      var totalInBucket = bucket.free + bucket.used;
+      if (totalInBucket === 0) continue;
+
+      var usedRatio = bucket.used / totalInBucket;
+      var x = (c % cols) * step;
+      var y = Math.floor(c / cols) * step;
+
+      if (usedRatio === 0) {
+        ctx.fillStyle = freeColor;
+      } else if (usedRatio === 1) {
+        ctx.fillStyle = usedColor;
+      } else {
+        ctx.fillStyle = this._blendColor(freeColor, usedColor, usedRatio);
+      }
+
+      ctx.fillRect(x, y, cellSize, cellSize);
+    }
+  };
+
+  // Render downsampled heatmap from bitmap
+  PoolWidget.prototype._renderHeatmapBitmap = function(rleHex, total) {
+    var ctx = this.ctx;
+    var cols = this.heatmapCols;
+    var rows = this.heatmapRows;
+    var cellSize = this.heatmapCellSize;
+    var step = cellSize + this.heatmapGap;
+    var slotsPerCell = this.heatmapSlotsPerCell;
+    var totalCells = cols * rows;
+    var colors = PoolWidget.COLORS;
+
+    ctx.clearRect(0, 0, this.canvasEl.width, this.canvasEl.height);
+
+    var buckets = new Array(totalCells);
+    for (var i = 0; i < totalCells; i++) {
+      buckets[i] = { free: 0, used: 0 };
+    }
+
+    // Popcount table
+    var popcount8 = new Uint8Array(256);
+    for (var i = 0; i < 256; i++) {
+      var c = i;
+      c = c - ((c >> 1) & 0x55);
+      c = (c & 0x33) + ((c >> 2) & 0x33);
+      popcount8[i] = (c + (c >> 4)) & 0x0F;
+    }
+
+    var segments = rleHex ? rleHex.split(',') : [];
+    var slotIdx = 0;
+
+    for (var s = 0; s < segments.length && slotIdx < total; s++) {
+      var segment = segments[s];
+      var starIdx = segment.indexOf('*');
+      var hexByte = starIdx !== -1 ? segment.substring(0, starIdx) : segment;
+      var byteCount = starIdx !== -1 ? parseInt(segment.substring(starIdx + 1), 10) || 1 : 1;
+      var byteVal = parseInt(hexByte, 16);
+      if (isNaN(byteVal)) continue;
+
+      for (var b = 0; b < byteCount && slotIdx < total; b++) {
+        var bitsToProcess = Math.min(8, total - slotIdx);
+        var cellIdx = Math.min(Math.floor(slotIdx / slotsPerCell), totalCells - 1);
+        var cellEnd = (cellIdx + 1) * slotsPerCell;
+
+        // Fast path: all bits in same cell
+        if (slotIdx + bitsToProcess <= cellEnd) {
+          var usedBits = popcount8[byteVal & ((1 << bitsToProcess) - 1)];
+          buckets[cellIdx].used += usedBits;
+          buckets[cellIdx].free += bitsToProcess - usedBits;
+        } else {
+          // Slow path: bits span cells
+          for (var bit = 0; bit < bitsToProcess; bit++) {
+            var ci = Math.min(Math.floor((slotIdx + bit) / slotsPerCell), totalCells - 1);
+            if ((byteVal >> bit) & 1) {
+              buckets[ci].used++;
+            } else {
+              buckets[ci].free++;
+            }
+          }
+        }
+        slotIdx += bitsToProcess;
+      }
+    }
+
+    // Fill remaining as free
+    while (slotIdx < total) {
+      var cellIdx = Math.min(Math.floor(slotIdx / slotsPerCell), totalCells - 1);
+      var cellEnd = Math.min((cellIdx + 1) * slotsPerCell, total);
+      buckets[cellIdx].free += cellEnd - slotIdx;
+      slotIdx = cellEnd;
+    }
+
+    // Render
+    var freeColor = colors.free;
+    var usedColor = colors.used;
+
+    for (var c = 0; c < totalCells; c++) {
+      var bucket = buckets[c];
+      var totalInBucket = bucket.free + bucket.used;
+      if (totalInBucket === 0) continue;
+
+      var usedRatio = bucket.used / totalInBucket;
+      var x = (c % cols) * step;
+      var y = Math.floor(c / cols) * step;
+
+      if (usedRatio === 0) {
+        ctx.fillStyle = freeColor;
+      } else if (usedRatio === 1) {
+        ctx.fillStyle = usedColor;
+      } else {
+        ctx.fillStyle = this._blendColor(freeColor, usedColor, usedRatio);
+      }
+
+      ctx.fillRect(x, y, cellSize, cellSize);
     }
   };
 
@@ -1351,6 +1610,7 @@
   };
 
   // Render minimap from RLE state string - downsamples to discrete cells
+  // Optimized: processes RLE runs directly without iterating each slot
   PoolWidget.prototype._renderMinimapStates = function(rleStr, total, width, height) {
     var ctx = this.minimapCtx;
     var colors = PoolWidget.COLORS;
@@ -1367,7 +1627,7 @@
       buckets[i] = { free: 0, used: 0 };
     }
 
-    // Parse RLE and fill buckets
+    // Parse RLE and fill buckets - optimized to process runs, not individual slots
     var slotIdx = 0;
     var i = 0;
     while (i < rleStr.length && slotIdx < total) {
@@ -1375,24 +1635,38 @@
       var countStr = '';
       while (i < rleStr.length && rleStr[i] >= '0' && rleStr[i] <= '9') countStr += rleStr[i++];
       var count = parseInt(countStr, 10) || 1;
+      count = Math.min(count, total - slotIdx);  // Clamp to remaining slots
 
       var isFree = (stateChar === 'F');
 
-      for (var c = 0; c < count && slotIdx < total; c++, slotIdx++) {
-        var bucketIdx = Math.min(Math.floor(slotIdx / slotsPerCell), buckets.length - 1);
+      // Distribute this run across buckets without per-slot iteration
+      var runEnd = slotIdx + count;
+      while (slotIdx < runEnd) {
+        var bucketIdx = Math.min(Math.floor(slotIdx / slotsPerCell), cellCount - 1);
+        var bucketEnd = Math.min((bucketIdx + 1) * slotsPerCell, runEnd);
+        var slotsInBucket = Math.floor(bucketEnd) - slotIdx;
+        if (slotsInBucket <= 0) slotsInBucket = 1;
+
         if (isFree) {
-          buckets[bucketIdx].free++;
+          buckets[bucketIdx].free += slotsInBucket;
         } else {
-          buckets[bucketIdx].used++;
+          buckets[bucketIdx].used += slotsInBucket;
         }
+        slotIdx += slotsInBucket;
       }
     }
 
-    // Fill remaining slots as free
-    while (slotIdx < total) {
-      var bucketIdx = Math.min(Math.floor(slotIdx / slotsPerCell), buckets.length - 1);
-      buckets[bucketIdx].free++;
-      slotIdx++;
+    // Fill remaining slots as free (distribute across buckets)
+    if (slotIdx < total) {
+      var remaining = total - slotIdx;
+      while (slotIdx < total) {
+        var bucketIdx = Math.min(Math.floor(slotIdx / slotsPerCell), cellCount - 1);
+        var bucketEnd = Math.min((bucketIdx + 1) * slotsPerCell, total);
+        var slotsInBucket = Math.floor(bucketEnd) - slotIdx;
+        if (slotsInBucket <= 0) slotsInBucket = 1;
+        buckets[bucketIdx].free += slotsInBucket;
+        slotIdx += slotsInBucket;
+      }
     }
 
     // Render discrete cells with gaps
@@ -1420,6 +1694,7 @@
   };
 
   // Render minimap from bitmap - downsamples to discrete cells
+  // Optimized: processes bytes directly and counts bits efficiently
   PoolWidget.prototype._renderMinimapBitmap = function(rleHex, total, width, height) {
     var ctx = this.minimapCtx;
     var colors = PoolWidget.COLORS;
@@ -1434,7 +1709,16 @@
       buckets[i] = { free: 0, used: 0 };
     }
 
-    // Decode bitmap RLE
+    // Precompute popcount table for fast bit counting
+    var popcount8 = new Uint8Array(256);
+    for (var i = 0; i < 256; i++) {
+      var c = i;
+      c = c - ((c >> 1) & 0x55);
+      c = (c & 0x33) + ((c >> 2) & 0x33);
+      popcount8[i] = (c + (c >> 4)) & 0x0F;
+    }
+
+    // Decode bitmap RLE - process whole bytes at a time
     var segments = rleHex ? rleHex.split(',') : [];
     var slotIdx = 0;
 
@@ -1446,23 +1730,44 @@
       var byteVal = parseInt(hexByte, 16);
       if (isNaN(byteVal)) continue;
 
+      // For each repeated byte, distribute 8 slots across buckets
       for (var c = 0; c < byteCount && slotIdx < total; c++) {
-        for (var bit = 0; bit < 8 && slotIdx < total; bit++, slotIdx++) {
-          var bucketIdx = Math.min(Math.floor(slotIdx / slotsPerCell), buckets.length - 1);
-          if ((byteVal >> bit) & 1) {
-            buckets[bucketIdx].used++;
-          } else {
-            buckets[bucketIdx].free++;
+        var bitsToProcess = Math.min(8, total - slotIdx);
+        var usedBits = popcount8[byteVal & ((1 << bitsToProcess) - 1)];
+        var freeBits = bitsToProcess - usedBits;
+
+        // Fast path: if all 8 bits fall into same bucket
+        var startBucket = Math.floor(slotIdx / slotsPerCell);
+        var endBucket = Math.floor((slotIdx + bitsToProcess - 1) / slotsPerCell);
+
+        if (startBucket === endBucket && startBucket < cellCount) {
+          buckets[startBucket].used += usedBits;
+          buckets[startBucket].free += freeBits;
+        } else {
+          // Slow path: bits span multiple buckets - process per-bit
+          for (var bit = 0; bit < bitsToProcess; bit++) {
+            var bucketIdx = Math.min(Math.floor((slotIdx + bit) / slotsPerCell), cellCount - 1);
+            if ((byteVal >> bit) & 1) {
+              buckets[bucketIdx].used++;
+            } else {
+              buckets[bucketIdx].free++;
+            }
           }
         }
+        slotIdx += bitsToProcess;
       }
     }
 
-    // Fill remaining as free
-    while (slotIdx < total) {
-      var bucketIdx = Math.min(Math.floor(slotIdx / slotsPerCell), buckets.length - 1);
-      buckets[bucketIdx].free++;
-      slotIdx++;
+    // Fill remaining as free - distribute across buckets efficiently
+    if (slotIdx < total) {
+      while (slotIdx < total) {
+        var bucketIdx = Math.min(Math.floor(slotIdx / slotsPerCell), cellCount - 1);
+        var bucketEnd = Math.min(Math.ceil((bucketIdx + 1) * slotsPerCell), total);
+        var slotsInBucket = bucketEnd - slotIdx;
+        if (slotsInBucket <= 0) slotsInBucket = 1;
+        buckets[bucketIdx].free += slotsInBucket;
+        slotIdx += slotsInBucket;
+      }
     }
 
     // Render discrete cells with gaps
@@ -1600,7 +1905,10 @@
     latency: [],
     heapUsage: [],
     gcPauses: [],
-    loopIterations: []
+    loopIterations: [],
+    allocRate: [],       // Bytes allocated per second
+    reclaimRate: [],     // Bytes reclaimed per second
+    evalRate: []         // Evaluations per second
   };
   var prevMetrics = null;
   var prevTimestamp = null;
@@ -3274,12 +3582,11 @@
     $('gc-avg-pause').innerHTML = fmt(gc.pause_ms_avg || 0, 2) + '<span class="unit">ms</span>';
     $('gc-reclaimed').innerHTML = fmtBytes(gc.reclaimed_bytes_total || 0).replace(' ', '<span class="unit">') + '</span>';
 
-    // Update GC panel summary (for collapsed state)
+    // Update GC+Interpreter panel summary (for collapsed state)
     var gcSummary = $('gc-summary');
     if (gcSummary) {
       gcSummary.textContent = fmtCompact(gc.cycles_total || 0) + ' cycles, ' +
-        fmt((gc.pause_us_max || 0) / 1000, 1) + 'ms max, ' +
-        fmtBytes(gc.reclaimed_bytes_total || 0) + ' reclaimed';
+        fmtCompact(interp.evals_total || 0) + ' evals';
     }
 
     // Track GC pauses for timeline
@@ -3290,25 +3597,56 @@
     }
     renderGcTimeline(history.gcPauses);
 
+    // Track allocation and reclaim rates
+    var allocBytesTotal = gc.allocated_bytes_total || 0;
+    var reclaimBytesTotal = gc.reclaimed_bytes_total || 0;
+    if (prevMetrics) {
+      var prevAlloc = prevMetrics.allocBytesTotal || 0;
+      var prevReclaim = prevMetrics.reclaimBytesTotal || 0;
+      var allocRate = calculateRate(allocBytesTotal, prevAlloc, deltaSeconds);
+      var reclaimRate = calculateRate(reclaimBytesTotal, prevReclaim, deltaSeconds);
+      pushHistory(history.allocRate, allocRate);
+      pushHistory(history.reclaimRate, reclaimRate);
+    }
+
     // ========== Heap Memory Panel ==========
     updateGauge('heap-gauge-fill', 'heap-gauge-value', heapPct, { warning: 70, critical: 90 });
     $('heap-used').textContent = fmtBytes(heapUsed);
     $('heap-total').textContent = fmtBytes(heapTotal);
     $('heap-reclaimed').textContent = fmtBytes(gc.reclaimed_bytes_total || 0);
 
-    // ========== Interpreter Panel ==========
-    $('interp-evals').textContent = fmtCompact(interp.evals_total || 0);
-    $('interp-fn-calls').textContent = fmtCompact(interp.function_calls || 0);
-    $('interp-builtins').textContent = fmtCompact(interp.builtin_calls || 0);
-    $('interp-stack-depth').textContent = interp.stack_depth_max || 0;
-    $('interp-closures').textContent = fmtCompact(interp.closures_created || 0);
-    $('interp-env-lookups').textContent = fmtCompact(interp.env_lookups || 0);
+    // ========== Interpreter Stats (integrated into GC panel) ==========
+    var evalsTotal = interp.evals_total || 0;
+    var fnCalls = interp.function_calls || 0;
+    var builtinCalls = interp.builtin_calls || 0;
 
-    // Update Interpreter panel summary (for collapsed state)
-    var interpSummary = $('interp-summary');
-    if (interpSummary) {
-      interpSummary.textContent = fmtCompact(interp.evals_total || 0) + ' evals, ' +
-        fmtCompact(interp.function_calls || 0) + ' fn calls';
+    $('interp-evals').textContent = fmtCompact(evalsTotal);
+    $('interp-fn-calls').textContent = fmtCompact(fnCalls);
+    $('interp-builtins').textContent = fmtCompact(builtinCalls);
+    $('interp-stack-depth').textContent = interp.stack_depth_max || 0;
+
+    // Calculate interpreter rates
+    var evalRate = 0;
+    if (prevMetrics && deltaSeconds > 0) {
+      var prevEvals = prevMetrics.evalsTotal || 0;
+      evalRate = calculateRate(evalsTotal, prevEvals, deltaSeconds);
+      pushHistory(history.evalRate, evalRate);
+    }
+
+    // Update eval rate display
+    var evalRateEl = $('interp-eval-rate');
+    if (evalRateEl) {
+      evalRateEl.textContent = fmtCompact(Math.round(evalRate));
+    }
+
+    // Render eval rate sparkline
+    var evalSparkContainer = $('interp-eval-spark');
+    if (evalSparkContainer && history.evalRate.length >= 2) {
+      renderMiniSparkline(evalSparkContainer, padSparklineData(history.evalRate, 20), {
+        color: 'var(--color-warning)',
+        height: 24,
+        width: 48
+      });
     }
 
     // ========== AIO Systems Section ==========
@@ -3347,6 +3685,9 @@
     prevMetrics = {
       totalReq: totalReqNow,
       gcCycles: gc.cycles_total || 0,
+      allocBytesTotal: gc.allocated_bytes_total || 0,
+      reclaimBytesTotal: gc.reclaimed_bytes_total || 0,
+      evalsTotal: evalsTotal,
       timestamp: now
     };
 
@@ -3526,8 +3867,12 @@
       // Server sends full state on connect, then deltas only
       this.fullState = {
         memory: null,
-        metrics: null
+        metrics: null,
+        platform: null  // 'darwin', 'linux', 'windows', or 'unknown'
       };
+
+      // RSS history for trend sparkline (cross-platform memory signal)
+      this.rssHistory = createHistoryBuffer(HISTORY_SAMPLES);
 
       // Expanded slab states (decoded RLE) for delta application
       this.slabStates = {};  // keyed by slab name
@@ -3550,7 +3895,8 @@
           // Store as full state
           self.fullState = {
             memory: data.memory,
-            metrics: data.metrics
+            metrics: data.metrics,
+            platform: data.platform || null
           };
 
           // Expand and store slab states
@@ -3591,6 +3937,11 @@
         self.eventSource.addEventListener('diagnostics', function(e) {
           self.lastEventId = e.lastEventId;
           var data = JSON.parse(e.data);
+
+          // Store platform for cross-platform UI adaptation
+          if (data.platform) {
+            self.fullState.platform = data.platform;
+          }
 
           // Store full state
           if (data.memory) {
@@ -4036,10 +4387,137 @@
       // Update process memory overview
       if (data.process && data.breakdown) {
         self.updateProcessMemory(data.process, data.breakdown, data.smaps);
+        if (window.updateCapacityObservedUsage) {
+          window.updateCapacityObservedUsage(data.breakdown);
+        }
       }
 
       // Update capacity warning banner
       this.updateCapacityWarnings(warnings, critical);
+
+      // Update REPL eval delta (if running as REPL)
+      if (data.repl_eval && data.repl_eval.valid) {
+        this.updateReplEvalDelta(data.repl_eval, data.arenas);
+      }
+
+      // Update retained sets display
+      if (data.retained_sets) {
+        this.updateRetainedSets(data.retained_sets);
+      }
+    }
+
+    // Update REPL eval memory display with SSE data
+    updateReplEvalDelta(replEval, arenas) {
+      // Show the REPL eval section if we have data
+      var evalSection = document.querySelector('.eval-memory-section');
+      if (evalSection) {
+        evalSection.style.display = '';
+      }
+
+      // Update the display elements
+      var exprEl = document.getElementById('eval-last-expr');
+      var allocatedEl = document.getElementById('eval-allocated');
+      var afterGcEl = document.getElementById('eval-after-gc');
+      var deltaEl = document.getElementById('eval-delta');
+      var durationEl = document.getElementById('eval-duration');
+      var gcTimeEl = document.getElementById('eval-gc-time');
+      var arenaHwmEl = document.getElementById('eval-arena-hwm');
+
+      if (exprEl) exprEl.textContent = 'Eval #' + replEval.eval_count;
+      if (allocatedEl) allocatedEl.textContent = this.formatBytesDelta(replEval.heap_delta + replEval.scratch_delta);
+      if (afterGcEl) afterGcEl.textContent = this.formatBytesDelta(replEval.heap_delta);
+      if (deltaEl) {
+        deltaEl.textContent = this.formatBytesDelta(replEval.heap_delta);
+        deltaEl.classList.remove('positive', 'negative', 'zero');
+        if (replEval.heap_delta > 0) deltaEl.classList.add('positive');
+        else if (replEval.heap_delta < 0) deltaEl.classList.add('negative');
+        else deltaEl.classList.add('zero');
+      }
+
+      // Object count changes
+      var lvalDelta = replEval.lval_delta || 0;
+      var lenvDelta = replEval.lenv_delta || 0;
+      if (durationEl) durationEl.textContent = '+' + lvalDelta + ' LVALs';
+      if (gcTimeEl) gcTimeEl.textContent = '+' + lenvDelta + ' LENVs';
+
+      // Calculate and display max Arena HWM (useful for large evals)
+      if (arenaHwmEl && arenas && arenas.length > 0) {
+        var maxHwm = 0;
+        arenas.forEach(function(arena) {
+          var hwm = arena.high_water_mark || arena.hwm || 0;
+          if (hwm > maxHwm) maxHwm = hwm;
+        });
+        arenaHwmEl.textContent = this.formatBytes(maxHwm);
+      }
+
+      // Check for potential leak (positive heap delta)
+      var warningEl = document.getElementById('eval-leak-warning');
+      if (warningEl) {
+        warningEl.style.display = replEval.heap_delta > 0 ? '' : 'none';
+      }
+
+      // Record in history using existing function
+      if (window.recordEvaluation) {
+        window.recordEvaluation(
+          'Eval #' + replEval.eval_count,
+          replEval.heap_delta + replEval.scratch_delta,
+          replEval.heap_delta,
+          0,
+          0
+        );
+      }
+    }
+
+    // Format byte delta with sign
+    formatBytesDelta(bytes) {
+      var sign = bytes >= 0 ? '+' : '';
+      return sign + this.formatBytes(Math.abs(bytes));
+    }
+
+    // Update retained sets display (top bindings by memory size)
+    updateRetainedSets(retainedSets) {
+      var listEl = document.getElementById('gc-retained-list');
+      var totalEl = document.getElementById('gc-retained-total');
+      if (!listEl) return;
+
+      if (!retainedSets || retainedSets.length === 0) {
+        listEl.innerHTML = '<div class="gc-retained-empty">No retained set data</div>';
+        if (totalEl) totalEl.textContent = '--';
+        return;
+      }
+
+      // Calculate totals and max for scaling
+      var totalBytes = 0;
+      var totalObjects = 0;
+      var maxBytes = 0;
+      retainedSets.forEach(function(rs) {
+        totalBytes += rs.retained_bytes || 0;
+        totalObjects += rs.object_count || 0;
+        if ((rs.retained_bytes || 0) > maxBytes) maxBytes = rs.retained_bytes;
+      });
+
+      // Update total display
+      if (totalEl) {
+        totalEl.textContent = fmtBytes(totalBytes) + ' in ' + totalObjects + ' objects';
+      }
+
+      // Build list HTML
+      var html = '';
+      var self = this;
+      retainedSets.forEach(function(rs) {
+        var name = rs.name || '(unnamed)';
+        var bytes = rs.retained_bytes || 0;
+        var objects = rs.object_count || 0;
+        var pct = maxBytes > 0 ? (bytes / maxBytes) * 100 : 0;
+
+        html += '<div class="gc-retained-item" title="Binding \'' + name + '\' retains ' + fmtBytes(bytes) + ' in ' + objects + ' objects">';
+        html += '<span class="gc-retained-name">' + name + '</span>';
+        html += '<span class="gc-retained-bytes">' + fmtBytes(bytes) + '</span>';
+        html += '<span class="gc-retained-objects">' + objects + ' obj</span>';
+        html += '</div>';
+      });
+
+      listEl.innerHTML = html;
     }
 
     // Update process memory overview widget
@@ -4047,6 +4525,9 @@
       var rss = process.rss || 0;
       var vms = process.vms || 0;
       var systemTotal = process.system_total || 0;
+
+      // Track RSS history for trend sparkline
+      this.rssHistory.push(rss);
 
       // Update inline gauge (memory pressure: RSS as % of system RAM)
       var pct = systemTotal > 0 ? (rss / systemTotal) * 100 : 0;
@@ -4056,6 +4537,19 @@
       // Update RSS and VMS text displays
       var rssEl = document.getElementById('process-rss-text');
       if (rssEl) rssEl.textContent = fmtBytes(rss);
+
+      // Render RSS trend sparkline
+      var rssSparkContainer = document.getElementById('spark-rss');
+      if (rssSparkContainer) {
+        var rssData = padSparklineData(this.rssHistory.toArray(), 60);
+        renderMiniSparkline(rssSparkContainer, rssData, {
+          width: 48,
+          height: 16,
+          color: 'var(--color-info)',
+          fillOpacity: 0.2,
+          strokeWidth: 1.5
+        });
+      }
 
       var vmsTextEl = document.getElementById('process-vms-text');
       if (vmsTextEl) vmsTextEl.textContent = fmtBytes(vms);
@@ -4270,6 +4764,8 @@
             pause_us_total: vm.gc ? vm.gc.pause_us_total : 0,
             pause_us_max: vm.gc ? vm.gc.pause_us_max : 0,
             reclaimed_bytes_total: vm.gc ? vm.gc.reclaimed_bytes : 0,
+            allocated_bytes_total: vm.gc ? vm.gc.allocated_bytes : 0,
+            efficiency_pct: vm.gc ? vm.gc.efficiency_pct : 0,
             heap_used_bytes: vm.gc ? vm.gc.heap_used_bytes : 0,
             heap_total_bytes: vm.gc ? vm.gc.heap_total_bytes : 0,
             pause_ms_avg: vm.gc && vm.gc.cycles_total > 0
@@ -4602,6 +5098,174 @@
         }
         if (allocated) allocated.textContent = this.formatBytes(totalUsed);
         if (cycles) cycles.textContent = gc.cycles.toLocaleString();
+      }
+
+      // Update survival histogram (object lifetimes)
+      if (gc.survival) {
+        this.updateSurvivalHistogram(gc.survival, gc.efficiency_pct);
+      }
+
+      // Update frame-time pause histogram for game profile
+      if (gc.pause_histogram && document.body.classList.contains('profile-game')) {
+        this.updatePauseHistogram(gc.pause_histogram);
+      }
+
+      // Update capacity planner peak for embedded profile
+      if (gc.tiers && document.body.classList.contains('profile-embedded')) {
+        var totalPeak = 0;
+        for (var i = 0; i < gc.tiers.length; i++) {
+          totalPeak += gc.tiers[i].bytes_peak || 0;
+        }
+        if (window.updateCapacityCurrentPeak) {
+          window.updateCapacityCurrentPeak(totalPeak);
+        }
+      }
+
+      // Update fragmentation metrics
+      if (gc.fragmentation) {
+        this.updateFragmentationStats(gc.fragmentation);
+      }
+    }
+
+    updateFragmentationStats(frag) {
+      var lvalPctEl = document.getElementById('lval-frag-pct');
+      var lenvPctEl = document.getElementById('lenv-frag-pct');
+      var lvalBarEl = document.getElementById('lval-frag-bar');
+      var lenvBarEl = document.getElementById('lenv-frag-bar');
+      var freeListCountEl = document.getElementById('free-list-count');
+      var freeListBytesEl = document.getElementById('free-list-bytes');
+
+      var lvalPct = frag.lval_pct || 0;
+      var lenvPct = frag.lenv_pct || 0;
+
+      if (lvalPctEl) lvalPctEl.textContent = lvalPct.toFixed(1);
+      if (lenvPctEl) lenvPctEl.textContent = lenvPct.toFixed(1);
+
+      if (lvalBarEl) lvalBarEl.style.width = Math.min(100, lvalPct) + '%';
+      if (lenvBarEl) lenvBarEl.style.width = Math.min(100, lenvPct) + '%';
+
+      // Add warning class for high fragmentation (>25%)
+      var lvalStat = lvalPctEl ? lvalPctEl.closest('.frag-stat') : null;
+      var lenvStat = lenvPctEl ? lenvPctEl.closest('.frag-stat') : null;
+      if (lvalStat) lvalStat.classList.toggle('high-frag', lvalPct > 25);
+      if (lenvStat) lenvStat.classList.toggle('high-frag', lenvPct > 25);
+
+      if (freeListCountEl) freeListCountEl.textContent = (frag.free_list_count || 0).toLocaleString();
+      if (freeListBytesEl) freeListBytesEl.textContent = this.formatBytes(frag.free_list_bytes || 0);
+    }
+
+    updatePauseHistogram(pauseHist) {
+      var buckets = {
+        '0-1': pauseHist['0_1ms'] || 0,
+        '1-5': pauseHist['1_5ms'] || 0,
+        '5-10': pauseHist['5_10ms'] || 0,
+        '10-16': pauseHist['10_16ms'] || 0,
+        '16+': pauseHist['16ms_plus'] || 0
+      };
+
+      var maxCount = Math.max(1, Math.max.apply(null, Object.values(buckets)));
+      var bucketHeight = 48;
+
+      var bucketIds = [
+        { key: '0-1', id: 'frame-pause-0-1' },
+        { key: '1-5', id: 'frame-pause-1-5' },
+        { key: '5-10', id: 'frame-pause-5-10' },
+        { key: '10-16', id: 'frame-pause-10-16' },
+        { key: '16+', id: 'frame-pause-16-plus' }
+      ];
+
+      bucketIds.forEach(function(b) {
+        var el = document.getElementById(b.id);
+        var countEl = document.getElementById(b.id + '-count');
+        if (el && countEl) {
+          var count = buckets[b.key] || 0;
+          var fill = el.querySelector('.frame-pause-bar-fill');
+          if (fill) {
+            fill.style.height = Math.max(2, (count / maxCount) * bucketHeight) + 'px';
+          }
+          countEl.textContent = count > 0 ? count : '--';
+        }
+      });
+
+      var warningEl = document.getElementById('frame-pause-warning');
+      if (warningEl) {
+        var total = buckets['0-1'] + buckets['1-5'] + buckets['5-10'] + buckets['10-16'] + buckets['16+'];
+        var exceeds10ms = buckets['10-16'] + buckets['16+'];
+        var pctExceeds = total > 0 ? (exceeds10ms / total) * 100 : 0;
+        warningEl.style.display = pctExceeds > 10 ? '' : 'none';
+      }
+    }
+
+    updateSurvivalHistogram(survival, efficiencyPct) {
+      // Get counts from survival object
+      var gen0 = survival.gen_0 || 0;
+      var gen1_5 = survival.gen_1_5 || 0;
+      var gen6_20 = survival.gen_6_20 || 0;
+      var gen21_plus = survival.gen_21_plus || 0;
+
+      // Calculate total and percentages
+      var total = gen0 + gen1_5 + gen6_20 + gen21_plus;
+
+      // Update bar heights (as percentage of max)
+      var maxCount = Math.max(gen0, gen1_5, gen6_20, gen21_plus, 1);
+      var maxBarHeight = 28; // Max height in pixels
+
+      this.updateSurvivalBar('gc-survival-gen0', gen0, maxCount, maxBarHeight);
+      this.updateSurvivalBar('gc-survival-gen1-5', gen1_5, maxCount, maxBarHeight);
+      this.updateSurvivalBar('gc-survival-gen6-20', gen6_20, maxCount, maxBarHeight);
+      this.updateSurvivalBar('gc-survival-gen21-plus', gen21_plus, maxCount, maxBarHeight);
+
+      // Update count labels
+      var gen0CountEl = document.getElementById('gc-survival-gen0-count');
+      var gen1_5CountEl = document.getElementById('gc-survival-gen1-5-count');
+      var gen6_20CountEl = document.getElementById('gc-survival-gen6-20-count');
+      var gen21_plusCountEl = document.getElementById('gc-survival-gen21-plus-count');
+
+      if (gen0CountEl) gen0CountEl.textContent = fmtCompact(gen0);
+      if (gen1_5CountEl) gen1_5CountEl.textContent = fmtCompact(gen1_5);
+      if (gen6_20CountEl) gen6_20CountEl.textContent = fmtCompact(gen6_20);
+      if (gen21_plusCountEl) gen21_plusCountEl.textContent = fmtCompact(gen21_plus);
+
+      // Update efficiency display
+      var efficiencyEl = document.getElementById('gc-efficiency-value');
+      if (efficiencyEl) {
+        var eff = efficiencyPct || 0;
+        efficiencyEl.textContent = eff;
+        efficiencyEl.classList.remove('warning', 'critical');
+        if (eff < 50) {
+          efficiencyEl.classList.add('critical');
+        } else if (eff < 80) {
+          efficiencyEl.classList.add('warning');
+        }
+      }
+
+      // Show leak warning if long-lived objects are growing
+      // Heuristic: warn if >2% of total objects are in gen21+ bucket
+      var leakWarningEl = document.getElementById('gc-leak-warning');
+      if (leakWarningEl) {
+        var longLivedPct = total > 0 ? (gen21_plus / total) * 100 : 0;
+        // Also track if gen21+ count is growing (store previous value)
+        var prevGen21Plus = this._prevGen21Plus || 0;
+        var isGrowing = gen21_plus > prevGen21Plus && prevGen21Plus > 0;
+        this._prevGen21Plus = gen21_plus;
+
+        // Show warning if: significant long-lived objects AND they're growing
+        if (longLivedPct > 5 || (longLivedPct > 2 && isGrowing && gen21_plus > 100)) {
+          leakWarningEl.style.display = '';
+        } else {
+          leakWarningEl.style.display = 'none';
+        }
+      }
+    }
+
+    updateSurvivalBar(id, count, maxCount, maxHeight) {
+      var barEl = document.getElementById(id);
+      if (!barEl) return;
+
+      var fillEl = barEl.querySelector('.gc-survival-bar-fill');
+      if (fillEl) {
+        var height = maxCount > 0 ? (count / maxCount) * maxHeight : 2;
+        fillEl.style.height = Math.max(height, 2) + 'px';
       }
     }
 
@@ -5268,4 +5932,5 @@
     overlay.setAttribute('aria-hidden', 'true');
     overlay.style.display = 'none';
   };
+
 })();

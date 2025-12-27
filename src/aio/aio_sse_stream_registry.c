@@ -351,6 +351,9 @@ static void sse_registry_timer_cb(uv_timer_t *timer) {
     return;
   }
 
+  uint64_t t_start = uv_hrtime();
+  uint64_t t_snapshot, t_metrics, t_delta, t_push, t_flush;
+
   // Check if we're past the shutdown deadline
   if (registry->shutting_down) {
     uint64_t now = uv_hrtime() / 1000000;
@@ -367,9 +370,11 @@ static void sse_registry_timer_cb(uv_timer_t *timer) {
   // Collect memory snapshot once for all streams
   valk_mem_snapshot_free(&registry->current_snapshot);
   valk_mem_snapshot_collect(&registry->current_snapshot, registry->aio_system);
+  t_snapshot = uv_hrtime();
 
   // Update event loop metrics from libuv (before collecting delta)
   valk_aio_update_loop_metrics(registry->aio_system);
+  t_metrics = uv_hrtime();
 
   // Collect modular metrics delta once for all streams
 #ifdef VALK_METRICS_ENABLED
@@ -385,6 +390,7 @@ static void sse_registry_timer_cb(uv_timer_t *timer) {
 #else
   valk_delta_snapshot_t *modular_delta_ptr = NULL;
 #endif
+  t_delta = uv_hrtime();
 
   VALK_DEBUG("SSE registry: collected snapshot (%zu slabs, %zu modular changes)",
              registry->current_snapshot.slab_count,
@@ -420,11 +426,24 @@ static void sse_registry_timer_cb(uv_timer_t *timer) {
       }
     }
   }
+  t_push = uv_hrtime();
 
   // Flush ALL connections that have streams with pending data
   for (size_t i = 0; i < handle_count; i++) {
     valk_http2_flush_pending(handles_to_flush[i]);
   }
+  t_flush = uv_hrtime();
+
+  // Log timing breakdown (in microseconds)
+  uint64_t us_snapshot = (t_snapshot - t_start) / 1000;
+  uint64_t us_metrics = (t_metrics - t_snapshot) / 1000;
+  uint64_t us_delta = (t_delta - t_metrics) / 1000;
+  uint64_t us_push = (t_push - t_delta) / 1000;
+  uint64_t us_flush = (t_flush - t_push) / 1000;
+  uint64_t us_total = (t_flush - t_start) / 1000;
+
+  VALK_INFO("SSE timer: total=%luus snapshot=%luus metrics=%luus delta=%luus push=%luus flush=%luus",
+            us_total, us_snapshot, us_metrics, us_delta, us_push, us_flush);
 }
 
 // ============================================================================

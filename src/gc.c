@@ -74,9 +74,23 @@ valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t hard_limit) {
   atomic_store(&heap->runtime_metrics.pause_us_total, 0);
   atomic_store(&heap->runtime_metrics.pause_us_max, 0);
   atomic_store(&heap->runtime_metrics.reclaimed_bytes_total, 0);
+  atomic_store(&heap->runtime_metrics.allocated_bytes_total, 0);
   atomic_store(&heap->runtime_metrics.objects_marked, 0);
   atomic_store(&heap->runtime_metrics.objects_swept, 0);
   heap->runtime_metrics.last_cycle_start_us = 0;
+
+  // Initialize survival histogram counters
+  atomic_store(&heap->runtime_metrics.survival_gen_0, 0);
+  atomic_store(&heap->runtime_metrics.survival_gen_1_5, 0);
+  atomic_store(&heap->runtime_metrics.survival_gen_6_20, 0);
+  atomic_store(&heap->runtime_metrics.survival_gen_21_plus, 0);
+
+  // Initialize frame-time pause histogram counters
+  atomic_store(&heap->runtime_metrics.pause_0_1ms, 0);
+  atomic_store(&heap->runtime_metrics.pause_1_5ms, 0);
+  atomic_store(&heap->runtime_metrics.pause_5_10ms, 0);
+  atomic_store(&heap->runtime_metrics.pause_10_16ms, 0);
+  atomic_store(&heap->runtime_metrics.pause_16ms_plus, 0);
 
   // Create fast slab allocator for valk_lval_t objects
   // Fixed large size - simple and fast, no threshold complexity
@@ -294,6 +308,9 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
   if (heap->allocated_bytes > heap->stats.peak_usage) {
     heap->stats.peak_usage = heap->allocated_bytes;
   }
+
+  // Track cumulative allocation (for rate calculations)
+  atomic_fetch_add(&heap->runtime_metrics.allocated_bytes_total, bytes);
 
   // Return pointer to user data (NOT header!)
   return (void*)(header + 1);
@@ -630,6 +647,18 @@ static void valk_gc_mark_allocation(void* ptr) {
 // Sweep Phase - Free unmarked objects
 // ============================================================================
 
+static void record_survival_histogram(valk_gc_malloc_heap_t* heap, uint64_t gen) {
+  if (gen == 0) {
+    atomic_fetch_add(&heap->runtime_metrics.survival_gen_0, 1);
+  } else if (gen <= 5) {
+    atomic_fetch_add(&heap->runtime_metrics.survival_gen_1_5, 1);
+  } else if (gen <= 20) {
+    atomic_fetch_add(&heap->runtime_metrics.survival_gen_6_20, 1);
+  } else {
+    atomic_fetch_add(&heap->runtime_metrics.survival_gen_21_plus, 1);
+  }
+}
+
 static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap, size_t* out_freed_count) {
   size_t reclaimed = 0;
   size_t freed_count = 0;
@@ -686,6 +715,11 @@ static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap, size_t* out_free
       // Only manually free resources allocated via raw malloc/strdup.
       if (is_lval) {
         valk_lval_t* obj = (valk_lval_t*)user_data;
+
+        // Record generation in survival histogram before freeing
+        uint64_t gen = LVAL_GC_GEN(obj);
+        record_survival_histogram(heap, gen);
+
         switch (LVAL_TYPE(obj)) {
           case LVAL_REF:
             // References have custom free functions (raw malloc)
@@ -1233,17 +1267,18 @@ size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* addition
   // Clear thread-local heap pointer
   gc_current_heap = NULL;
 
-  // Phase 3: Clear marks for next collection
+  // Phase 3: Clear marks and increment generation for surviving objects
   // Walk the object list (which now only contains live objects after sweep)
   for (valk_gc_header_t* header = heap->objects; header != NULL; header = header->gc_next) {
     // Clear header mark bit (used for non-lval allocations like strings/arrays)
     header->origin_allocator = (void*)((uintptr_t)header->origin_allocator & ~(uintptr_t)1);
 
-    // Clear lval mark bit only for lval-sized allocations
+    // Clear lval mark bit and increment generation for surviving lval objects
     if (header->size == heap->lval_size) {
       void* user_data = (void*)(header + 1);
       valk_lval_t* obj = (valk_lval_t*)user_data;
       obj->flags &= ~LVAL_FLAG_GC_MARK;
+      LVAL_GC_GEN_INC(obj);
     }
   }
 
@@ -1260,6 +1295,8 @@ size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* addition
   atomic_fetch_add(&heap->runtime_metrics.reclaimed_bytes_total, reclaimed);
   atomic_store(&heap->runtime_metrics.objects_marked, objects_marked);
   atomic_store(&heap->runtime_metrics.objects_swept, objects_swept);
+  atomic_store(&heap->runtime_metrics.last_heap_before_gc, before);
+  atomic_store(&heap->runtime_metrics.last_reclaimed, reclaimed);
 
   // Update max pause time using compare-exchange
   uint64_t current_max = atomic_load(&heap->runtime_metrics.pause_us_max);
@@ -1267,6 +1304,21 @@ size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* addition
     if (atomic_compare_exchange_weak(&heap->runtime_metrics.pause_us_max, &current_max, pause_us)) {
       break;
     }
+  }
+
+  // Record pause time in frame-budget histogram (for game profile)
+  // Buckets: 0-1ms, 1-5ms, 5-10ms, 10-16ms, 16ms+
+  uint64_t pause_ms = pause_us / 1000;
+  if (pause_ms < 1) {
+    atomic_fetch_add(&heap->runtime_metrics.pause_0_1ms, 1);
+  } else if (pause_ms < 5) {
+    atomic_fetch_add(&heap->runtime_metrics.pause_1_5ms, 1);
+  } else if (pause_ms < 10) {
+    atomic_fetch_add(&heap->runtime_metrics.pause_5_10ms, 1);
+  } else if (pause_ms < 16) {
+    atomic_fetch_add(&heap->runtime_metrics.pause_10_16ms, 1);
+  } else {
+    atomic_fetch_add(&heap->runtime_metrics.pause_16ms_plus, 1);
   }
 
   // Record GC timestamp for rate limiting
@@ -1490,6 +1542,241 @@ void valk_gc_get_runtime_metrics(valk_gc_malloc_heap_t* heap,
 
   if (heap_used) *heap_used = lval_slab_bytes_used + lenv_slab_bytes_used + heap->allocated_bytes;
   if (heap_total) *heap_total = lval_slab_bytes_total + lenv_slab_bytes_total + heap->hard_limit;
+}
+
+uint64_t valk_gc_get_allocated_bytes_total(valk_gc_malloc_heap_t* heap) {
+  if (!heap) return 0;
+  return atomic_load(&heap->runtime_metrics.allocated_bytes_total);
+}
+
+uint8_t valk_gc_get_last_efficiency(valk_gc_malloc_heap_t* heap) {
+  if (!heap) return 0;
+  uint64_t before = atomic_load(&heap->runtime_metrics.last_heap_before_gc);
+  uint64_t reclaimed = atomic_load(&heap->runtime_metrics.last_reclaimed);
+  if (before == 0) return 0;
+  uint64_t pct = (reclaimed * 100) / before;
+  return (uint8_t)(pct > 100 ? 100 : pct);
+}
+
+void valk_gc_get_survival_histogram(valk_gc_malloc_heap_t* heap,
+                                     uint64_t* gen_0, uint64_t* gen_1_5,
+                                     uint64_t* gen_6_20, uint64_t* gen_21_plus) {
+  if (!heap) return;
+  if (gen_0) *gen_0 = atomic_load(&heap->runtime_metrics.survival_gen_0);
+  if (gen_1_5) *gen_1_5 = atomic_load(&heap->runtime_metrics.survival_gen_1_5);
+  if (gen_6_20) *gen_6_20 = atomic_load(&heap->runtime_metrics.survival_gen_6_20);
+  if (gen_21_plus) *gen_21_plus = atomic_load(&heap->runtime_metrics.survival_gen_21_plus);
+}
+
+void valk_gc_get_pause_histogram(valk_gc_malloc_heap_t* heap,
+                                  uint64_t* pause_0_1ms, uint64_t* pause_1_5ms,
+                                  uint64_t* pause_5_10ms, uint64_t* pause_10_16ms,
+                                  uint64_t* pause_16ms_plus) {
+  if (!heap) return;
+  if (pause_0_1ms) *pause_0_1ms = atomic_load(&heap->runtime_metrics.pause_0_1ms);
+  if (pause_1_5ms) *pause_1_5ms = atomic_load(&heap->runtime_metrics.pause_1_5ms);
+  if (pause_5_10ms) *pause_5_10ms = atomic_load(&heap->runtime_metrics.pause_5_10ms);
+  if (pause_10_16ms) *pause_10_16ms = atomic_load(&heap->runtime_metrics.pause_10_16ms);
+  if (pause_16ms_plus) *pause_16ms_plus = atomic_load(&heap->runtime_metrics.pause_16ms_plus);
+}
+
+void valk_gc_get_fragmentation(valk_gc_malloc_heap_t* heap, valk_fragmentation_t* out) {
+  if (!heap || !out) return;
+  memset(out, 0, sizeof(*out));
+
+  if (heap->lval_slab) {
+    out->lval_slab_total = heap->lval_slab->numItems;
+    out->lval_slab_used = heap->lval_slab->numItems - heap->lval_slab->numFree;
+    out->lval_slab_peak = heap->lval_slab->peakUsed;
+    if (out->lval_slab_peak > 0) {
+      out->lval_fragmentation = 1.0 - ((double)out->lval_slab_used / out->lval_slab_peak);
+      if (out->lval_fragmentation < 0) out->lval_fragmentation = 0;
+    }
+  }
+
+  if (heap->lenv_slab) {
+    out->lenv_slab_total = heap->lenv_slab->numItems;
+    out->lenv_slab_used = heap->lenv_slab->numItems - heap->lenv_slab->numFree;
+    out->lenv_slab_peak = heap->lenv_slab->peakUsed;
+    if (out->lenv_slab_peak > 0) {
+      out->lenv_fragmentation = 1.0 - ((double)out->lenv_slab_used / out->lenv_slab_peak);
+      if (out->lenv_fragmentation < 0) out->lenv_fragmentation = 0;
+    }
+  }
+
+  out->malloc_allocated = heap->allocated_bytes;
+  out->malloc_limit = heap->hard_limit;
+  out->malloc_peak = heap->stats.peak_usage;
+
+  out->free_list_count = heap->free_list_size;
+  if (heap->free_list_size > 0) {
+    size_t avg_size = heap->lval_size + sizeof(valk_gc_header_t);
+    out->free_list_bytes = heap->free_list_size * avg_size;
+  }
+}
+
+// ============================================================================
+// Retained Size Sampling - Sample top bindings by retained memory
+// ============================================================================
+
+static size_t estimate_lval_size(valk_lval_t* v, valk_gc_malloc_heap_t* heap) {
+  if (v == NULL) return 0;
+  if (LVAL_ALLOC(v) != LVAL_ALLOC_HEAP) return 0;
+
+  size_t size = heap->lval_size;
+
+  switch (LVAL_TYPE(v)) {
+    case LVAL_STR:
+    case LVAL_SYM:
+    case LVAL_ERR:
+      if (v->str != NULL) {
+        size += strlen(v->str) + 1;
+      }
+      break;
+    case LVAL_FUN:
+      if (v->fun.name != NULL) {
+        size += strlen(v->fun.name) + 1;
+      }
+      size += estimate_lval_size(v->fun.formals, heap);
+      size += estimate_lval_size(v->fun.body, heap);
+      break;
+    case LVAL_CONS:
+    case LVAL_QEXPR:
+      size += estimate_lval_size(v->cons.head, heap);
+      size += estimate_lval_size(v->cons.tail, heap);
+      break;
+    default:
+      break;
+  }
+  return size;
+}
+
+static size_t count_lval_objects(valk_lval_t* v) {
+  if (v == NULL) return 0;
+  if (LVAL_ALLOC(v) != LVAL_ALLOC_HEAP) return 0;
+
+  size_t count = 1;
+  switch (LVAL_TYPE(v)) {
+    case LVAL_FUN:
+      count += count_lval_objects(v->fun.formals);
+      count += count_lval_objects(v->fun.body);
+      break;
+    case LVAL_CONS:
+    case LVAL_QEXPR:
+      count += count_lval_objects(v->cons.head);
+      count += count_lval_objects(v->cons.tail);
+      break;
+    default:
+      break;
+  }
+  return count;
+}
+
+void valk_gc_sample_retained_sets(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env,
+                                   valk_retained_sets_t* out) {
+  if (!out) return;
+  memset(out, 0, sizeof(*out));
+  if (!heap || !root_env) return;
+
+  for (size_t i = 0; i < root_env->vals.count && out->count < VALK_RETAINED_SET_MAX; i++) {
+    const char* sym = root_env->symbols.items[i];
+    valk_lval_t* val = root_env->vals.items[i];
+
+    if (sym == NULL || val == NULL) continue;
+    if (LVAL_TYPE(val) == LVAL_FUN && val->fun.builtin != NULL) continue;
+
+    size_t retained_bytes = estimate_lval_size(val, heap);
+    size_t object_count = count_lval_objects(val);
+
+    if (retained_bytes == 0) continue;
+
+    size_t insert_pos = out->count;
+    for (size_t j = 0; j < out->count; j++) {
+      if (retained_bytes > out->sets[j].retained_bytes) {
+        insert_pos = j;
+        break;
+      }
+    }
+
+    if (insert_pos < VALK_RETAINED_SET_MAX) {
+      if (out->count < VALK_RETAINED_SET_MAX) {
+        for (size_t j = out->count; j > insert_pos; j--) {
+          out->sets[j] = out->sets[j - 1];
+        }
+        out->count++;
+      } else {
+        for (size_t j = VALK_RETAINED_SET_MAX - 1; j > insert_pos; j--) {
+          out->sets[j] = out->sets[j - 1];
+        }
+      }
+
+      valk_retained_set_t* set = &out->sets[insert_pos];
+      strncpy(set->name, sym, VALK_RETAINED_SET_NAME_MAX - 1);
+      set->name[VALK_RETAINED_SET_NAME_MAX - 1] = '\0';
+      set->retained_bytes = retained_bytes;
+      set->object_count = object_count;
+    }
+  }
+}
+
+// ============================================================================
+// Memory Snapshot for REPL Eval Tracking
+// ============================================================================
+
+void valk_repl_mem_take_snapshot(valk_gc_malloc_heap_t* heap, valk_mem_arena_t* scratch,
+                                 valk_repl_mem_snapshot_t* out) {
+  if (!out) return;
+  memset(out, 0, sizeof(*out));
+
+  if (heap) {
+    if (heap->lval_slab) {
+      size_t slab_used = heap->lval_slab->numItems - heap->lval_slab->numFree;
+      out->heap_used_bytes += slab_used * heap->lval_slab->itemSize;
+      out->lval_count = slab_used;
+    }
+    if (heap->lenv_slab) {
+      size_t slab_used = heap->lenv_slab->numItems - heap->lenv_slab->numFree;
+      out->heap_used_bytes += slab_used * heap->lenv_slab->itemSize;
+      out->lenv_count = slab_used;
+    }
+    out->heap_used_bytes += heap->allocated_bytes;
+  }
+
+  if (scratch) {
+    out->scratch_used_bytes = scratch->offset;
+  }
+}
+
+void valk_repl_mem_snapshot_delta(valk_repl_mem_snapshot_t* before, valk_repl_mem_snapshot_t* after,
+                                  int64_t* heap_delta, int64_t* scratch_delta,
+                                  int64_t* lval_delta, int64_t* lenv_delta) {
+  if (!before || !after) return;
+  if (heap_delta) *heap_delta = (int64_t)after->heap_used_bytes - (int64_t)before->heap_used_bytes;
+  if (scratch_delta) *scratch_delta = (int64_t)after->scratch_used_bytes - (int64_t)before->scratch_used_bytes;
+  if (lval_delta) *lval_delta = (int64_t)after->lval_count - (int64_t)before->lval_count;
+  if (lenv_delta) *lenv_delta = (int64_t)after->lenv_count - (int64_t)before->lenv_count;
+}
+
+// ============================================================================
+// REPL Eval Delta Tracking (for dashboard REPL profile)
+// ============================================================================
+
+static valk_repl_eval_delta_t g_repl_eval_delta = {0};
+static bool g_repl_eval_delta_valid = false;
+
+bool valk_repl_get_last_eval_delta(valk_repl_eval_delta_t* out) {
+  if (!out || !g_repl_eval_delta_valid) return false;
+  *out = g_repl_eval_delta;
+  return true;
+}
+
+void valk_repl_set_eval_delta(int64_t heap, int64_t scratch, int64_t lval, int64_t lenv) {
+  g_repl_eval_delta.heap_delta = heap;
+  g_repl_eval_delta.scratch_delta = scratch;
+  g_repl_eval_delta.lval_delta = lval;
+  g_repl_eval_delta.lenv_delta = lenv;
+  g_repl_eval_delta.eval_count++;
+  g_repl_eval_delta_valid = true;
 }
 
 // ============================================================================

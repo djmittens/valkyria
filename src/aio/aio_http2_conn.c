@@ -206,6 +206,12 @@ void valk_http2_continue_pending_send(valk_aio_handle_t *conn) {
 }
 
 void valk_http2_flush_pending(valk_aio_handle_t *conn) {
+  // Update activity timestamp when sending data - for SSE streams,
+  // the server is mostly sending and the client may not respond,
+  // so we need to count outgoing activity to prevent idle timeout
+  if (conn && conn->sys && conn->sys->eventloop) {
+    conn->http.last_activity_ms = uv_now(conn->sys->eventloop);
+  }
   valk_http2_continue_pending_send(conn);
 }
 
@@ -262,22 +268,13 @@ void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_bu
 
   VALK_TRACE("Feeding data to OpenSSL %ld", nread);
 
-  if (conn->http.io.write_flush_pending) {
-    VALK_WARN("Write buffer flush pending - applying backpressure on connection");
-    int n = BIO_write(conn->http.io.ssl.read_bio, buf->base, nread);
-    if (n != nread) {
-      VALK_ERROR("BIO_write during backpressure failed: wrote %d of %ld", n, nread);
-    }
-    uv_read_stop(CONN_UV_STREAM(conn));
-    valk_conn_io_read_buf_release(&conn->http.io, conn->sys->tcpBufferSlab);
-    if (!__backpressure_list_add(conn)) {
-      if (!uv_is_closing(CONN_UV_HANDLE(conn))) {
-        conn->http.state = VALK_CONN_CLOSING;
-        uv_close(CONN_UV_HANDLE(conn), valk_http2_conn_handle_closed_cb);
-      }
-    }
-    return;
-  }
+  // Don't stop reading just because a write is pending. HTTP/2 is full-duplex
+  // and we must keep receiving control frames (WINDOW_UPDATE, PING, etc.)
+  // even while sending. Stopping reads here caused a deadlock where:
+  // 1. Server sends data, write_flush_pending becomes true
+  // 2. Client sends WINDOW_UPDATE, but we stop reading
+  // 3. Server can't send more (flow control blocked), can't read WINDOW_UPDATE
+  // 4. Connection times out after 60s
 
   if (!valk_http2_conn_write_buf_acquire(conn)) {
     VALK_WARN("Failed to acquire write buffer - applying backpressure on connection");
@@ -308,18 +305,26 @@ void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_bu
   valk_buffer_t In = {
       .items = buf->base, .count = nread, .capacity = HTTP_SLAB_ITEM_SIZE};
 
-  uint8_t *write_buf = valk_http2_conn_write_buf_data(conn);
-  size_t write_available = valk_http2_conn_write_buf_available(conn);
-  
+  // If a write is pending, we still need to process incoming data (to receive
+  // WINDOW_UPDATE, PING, etc.) but we can't safely append to the write buffer.
+  // Buffer the incoming SSL data and process it - any output will be generated
+  // on the next read after the flush completes.
+  bool can_write_output = !conn->http.io.write_flush_pending;
+
+  uint8_t *write_buf = can_write_output ? valk_http2_conn_write_buf_data(conn) : NULL;
+  size_t write_available = can_write_output ? valk_http2_conn_write_buf_available(conn) : 0;
+
+  // Use a temporary stack buffer for SSL output if we can't write to the main buffer
+  uint8_t temp_ssl_out[256];  // Small buffer for handshake/alert data
   valk_buffer_t Out = {
-      .items = write_buf + conn->http.io.write_pos, 
-      .count = 0, 
-      .capacity = write_available};
+      .items = can_write_output ? (write_buf + conn->http.io.write_pos) : temp_ssl_out,
+      .count = 0,
+      .capacity = can_write_output ? write_available : sizeof(temp_ssl_out)};
 
   int err = valk_aio_ssl_on_read(&conn->http.io.ssl, &In, &Out, conn,
                                  __http_tcp_unencrypted_read_cb);
 
-  if (Out.count > 0) {
+  if (Out.count > 0 && can_write_output) {
     conn->http.io.write_pos += Out.count;
     VALK_TRACE("SSL output: %zu bytes (total: %zu)", Out.count, conn->http.io.write_pos);
   }
@@ -332,13 +337,14 @@ void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_bu
       conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
 #endif
     }
-    if (SSL_is_init_finished(conn->http.io.ssl.ssl) && conn->sys && conn->sys->tcpBufferSlab) {
+    // Only flush HTTP/2 frames if we can write output
+    if (can_write_output && SSL_is_init_finished(conn->http.io.ssl.ssl) && conn->sys && conn->sys->tcpBufferSlab) {
       valk_slab_item_t *frameSlabRaw = valk_slab_aquire(conn->sys->tcpBufferSlab);
       if (frameSlabRaw) {
         __tcp_buffer_slab_item_t *frameSlabItem = (void *)frameSlabRaw->data;
         valk_buffer_t FrameIn = {
             .items = frameSlabItem->data, .count = 0, .capacity = HTTP_SLAB_ITEM_SIZE};
-        
+
         valk_http2_flush_frames(&FrameIn, conn);
 
         if (FrameIn.count > 0) {
@@ -347,19 +353,19 @@ void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_bu
           Out.count = 0;
           Out.capacity = write_available;
           valk_aio_ssl_encrypt(&conn->http.io.ssl, &FrameIn, &Out);
-          
+
           if (Out.count > 0) {
             conn->http.io.write_pos += Out.count;
             VALK_TRACE("HTTP/2 frames encrypted: %zu bytes (total: %zu)", Out.count, conn->http.io.write_pos);
           }
         }
-        
+
         valk_slab_release_ptr(conn->sys->tcpBufferSlab, frameSlabItem);
       }
     }
   }
 
-  if (conn->http.io.write_pos > 0) {
+  if (conn->http.io.write_pos > 0 && !conn->http.io.write_flush_pending) {
     valk_http2_conn_write_buf_flush(conn);
   }
 }

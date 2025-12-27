@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#define VALK_DIAG_RETAINED_SET_MAX 10
+
 // Forward declarations
 typedef struct uv_timer_s uv_timer_t;
 
@@ -48,6 +50,10 @@ typedef struct {
   size_t used_slots;
   size_t peak_used;  // High water mark
   size_t overflow_count;
+
+  // Slab change detection - numFree from slab at snapshot time
+  // Used to skip expensive bitmap regeneration when slab unchanged
+  size_t cached_num_free;
 
   // Binary bitmap (for simple slabs like LVAL, TCP buffers)
   uint8_t *bitmap;
@@ -113,6 +119,28 @@ typedef struct valk_mem_snapshot {
     uint8_t gc_threshold_pct;   // GC triggers at this % of capacity
     uint64_t gc_cycles;
     uint64_t emergency_collections;
+    uint8_t efficiency_pct;     // Last GC efficiency (reclaimed/before * 100)
+
+    // Object survival histogram - tracks how long objects live before dying
+    // Used to detect potential memory leaks (objects surviving many GC cycles)
+    uint64_t survival_gen_0;      // Died in first GC (short-lived, expected)
+    uint64_t survival_gen_1_5;    // Survived 1-5 cycles (normal)
+    uint64_t survival_gen_6_20;   // Survived 6-20 cycles (medium-lived)
+    uint64_t survival_gen_21_plus; // Survived 21+ cycles (potential leak)
+
+    // Frame-time pause histogram - tracks GC pause impact on frame budgets
+    // Used by game profile to show distribution of pauses relative to frame time
+    uint64_t pause_0_1ms;         // No impact (0-1ms)
+    uint64_t pause_1_5ms;         // Minor impact (1-5ms)
+    uint64_t pause_5_10ms;        // Noticeable (5-10ms)
+    uint64_t pause_10_16ms;       // Frame drop risk at 60fps (10-16ms)
+    uint64_t pause_16ms_plus;     // Frame drop certain at 60fps (16ms+)
+
+    // Fragmentation metrics - tracks slab utilization vs peak
+    double lval_fragmentation;    // 1.0 - (used/peak), 0 = no fragmentation
+    double lenv_fragmentation;    // Same for lenv slab
+    size_t free_list_count;       // Objects on malloc free list
+    size_t free_list_bytes;       // Estimated bytes on free list
   } gc_heap;
 
   // Process-level memory (from OS)
@@ -140,6 +168,19 @@ typedef struct valk_mem_snapshot {
     size_t untracked_bytes;        // process.rss - tracked used (resident but untracked)
     size_t untracked_reserved;     // process.vms - tracked capacities (mapped but untracked)
   } breakdown;
+
+  // REPL eval memory delta (only populated when running as REPL)
+  struct {
+    bool valid;                    // True if running as REPL with eval data
+    int64_t heap_delta;            // Heap change from last eval
+    int64_t scratch_delta;         // Scratch change from last eval
+    int64_t lval_delta;            // LVAL count change
+    int64_t lenv_delta;            // LENV count change
+    uint64_t eval_count;           // Total evals since REPL start
+  } repl_eval;
+
+  // Retained size sampling (top N bindings by memory size)
+  valk_retained_sets_t retained_sets;
 } valk_mem_snapshot_t;
 
 // Forward declare state struct
@@ -194,6 +235,11 @@ struct valk_sse_diag_state {
   // Per-connection baseline for stateless delta collection
   // This allows multiple HTTP connections to independently track metric changes
   valk_metrics_baseline_t *modular_baseline;
+
+  // Cached snapshot for bitmap/slot caching optimization
+  // Avoids O(n) free list walks when slabs haven't changed
+  valk_mem_snapshot_t cached_snapshot;
+  bool cached_snapshot_valid;
 };
 
 // Initialize HTTP/2 SSE streaming - returns connection context and populates data provider
@@ -212,7 +258,11 @@ void valk_sse_diag_stop(valk_sse_diag_conn_t *sse_conn);
 void valk_sse_diag_stop_all(valk_sse_diag_state_t *state);
 
 // Collect memory snapshot (called by timer)
+// If prev is non-NULL, slabs with unchanged numFree will reuse cached bitmaps
 void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot, valk_aio_system_t *aio);
+void valk_mem_snapshot_collect_with_cache(valk_mem_snapshot_t *snapshot,
+                                          valk_aio_system_t *aio,
+                                          const valk_mem_snapshot_t *prev);
 
 // Flush pending HTTP/2 data on a connection (implemented in aio_uv.c)
 void valk_http2_flush_pending(valk_aio_handle_t *conn);

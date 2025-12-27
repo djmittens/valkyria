@@ -165,10 +165,10 @@ renderMiniSparkline('spark-rss', padSparklineData(history.rss, 60), 'var(--color
 **Dashboard Location**: Memory subsection header, next to RSS value
 
 **Validation Criteria**:
-- [ ] Sparkline visible on both macOS and Linux
-- [ ] Shows upward trend when allocating without GC
-- [ ] Shows sawtooth pattern during normal GC operation
-- [ ] Flattens during idle periods
+- [x] Sparkline visible on both macOS and Linux
+- [x] Shows upward trend when allocating without GC
+- [x] Shows sawtooth pattern during normal GC operation
+- [x] Flattens during idle periods
 
 #### 3.1.2 Remove/Fix macOS VMS Dependency
 
@@ -208,9 +208,9 @@ if (data.platform === 'linux') {
 ```
 
 **Validation Criteria**:
-- [ ] Platform detected correctly on macOS, Linux
-- [ ] smaps section only shown on Linux
-- [ ] VMS de-emphasized on macOS (shown in footer only)
+- [x] Platform detected correctly on macOS, Linux
+- [x] smaps section only shown on Linux
+- [x] VMS de-emphasized on macOS (shown in footer only)
 
 ### 3.2 Allocation Pressure Metrics (P1 - High)
 
@@ -241,9 +241,9 @@ Allocation Pressure
 ```
 
 **Validation Criteria**:
-- [ ] Rate updates in real-time (100ms intervals)
-- [ ] Shows warning when alloc >> reclaim sustained
-- [ ] Correlates with heap growth trend
+- [x] Rate updates in real-time (100ms intervals)
+- [x] Shows warning when alloc >> reclaim sustained
+- [x] Correlates with heap growth trend
 
 #### 3.2.2 GC Efficiency Metric
 
@@ -254,9 +254,9 @@ Allocation Pressure
 **Why**: Low efficiency suggests long-lived objects accumulating (leak indicator)
 
 **Validation Criteria**:
-- [ ] Shows >90% efficiency for normal workloads
-- [ ] Drops when simulating leak (retained list growing)
-- [ ] Displayed in GC panel stats
+- [x] Shows >90% efficiency for normal workloads
+- [x] Drops when simulating leak (retained list growing)
+- [x] Displayed in GC panel stats (efficiency_pct in SSE data)
 
 ### 3.3 Application-Type Profiles (P1 - High)
 
@@ -280,9 +280,9 @@ Allocation Pressure
 ```
 
 **Validation Criteria**:
-- [ ] Profile persists in localStorage
-- [ ] Irrelevant sections hidden smoothly
-- [ ] Profile-specific panels render correctly
+- [x] Profile persists in localStorage
+- [x] Irrelevant sections hidden smoothly
+- [x] Profile-specific panels render correctly
 
 #### 3.3.2 Game Profile: Frame Budget Overlay
 
@@ -311,8 +311,8 @@ struct {
 ```
 
 **Validation Criteria**:
-- [ ] Shows real GC pause distribution
-- [ ] Warns when >10% of pauses exceed 10ms
+- [x] Shows real GC pause distribution
+- [x] Warns when >10% of pauses exceed 10ms
 - [ ] Correlates with allocation rate
 
 #### 3.3.3 REPL Profile: Eval Memory Delta
@@ -340,9 +340,9 @@ typedef struct {
 ```
 
 **Validation Criteria**:
-- [ ] Delta updates after each REPL eval
-- [ ] Shows warning if net delta > 0 repeatedly
-- [ ] Arena HWM visible for large evals
+- [x] Delta updates after each REPL eval
+- [x] Shows warning if net delta > 0 repeatedly
+- [x] Arena HWM visible for large evals
 
 ### 3.4 Leak Detection Assistance (P1 - High)
 
@@ -380,8 +380,8 @@ Object Lifetimes
 ```
 
 **Validation Criteria**:
-- [ ] Histogram updates after each GC
-- [ ] Warning when gen_21_plus grows
+- [x] Histogram updates after each GC
+- [x] Warning when gen_21_plus grows
 - [ ] Drill-down shows object types (future)
 
 #### 3.4.2 Retained Size Estimation
@@ -408,8 +408,8 @@ Top Retained Sets
 ```
 
 **Validation Criteria**:
-- [ ] Top 10 retained sets displayed
-- [ ] Updates after each GC
+- [x] Top 10 retained sets displayed
+- [x] Updates after each GC
 - [ ] Clickable to show object type breakdown (future)
 
 ### 3.5 Capacity Planning Tools (P2 - Medium)
@@ -439,9 +439,9 @@ Current Peak Usage: 48 MB (75% of limit)
 ```
 
 **Validation Criteria**:
-- [ ] Slider adjusts total memory target
-- [ ] Proportions adjust based on observed usage patterns
-- [ ] Exportable as configuration snippet
+- [x] Slider adjusts total memory target
+- [x] Proportions adjust based on observed usage patterns
+- [x] Exportable as configuration snippet
 
 #### 3.5.2 Fragmentation Metrics
 
@@ -466,8 +466,8 @@ Scratch:   0% (bump allocator)
 ```
 
 **Validation Criteria**:
-- [ ] Fragmentation calculated per slab
-- [ ] Warning threshold at 25%
+- [x] Fragmentation calculated per slab
+- [x] Warning threshold at 25%
 - [ ] Suggestion to compact/resize
 
 ### 3.6 Historical Analysis (P2 - Medium)
@@ -494,9 +494,9 @@ const HISTORY_PROFILES = {
 ```
 
 **Validation Criteria**:
-- [ ] Selector changes sparkline time range
-- [ ] Data downsampled appropriately for long ranges
-- [ ] Memory usage bounded (circular buffer)
+- [x] Selector changes sparkline time range
+- [x] Data downsampled appropriately for long ranges
+- [x] Memory usage bounded (circular buffer)
 
 #### 3.6.2 Snapshot Export/Import
 
@@ -521,9 +521,9 @@ function exportSnapshot() {
 ```
 
 **Validation Criteria**:
-- [ ] Export button in header
-- [ ] JSON includes all relevant metrics
-- [ ] Import restores historical view
+- [x] Export button in header
+- [x] JSON includes all relevant metrics
+- [x] Import restores historical view
 
 ---
 
@@ -532,53 +532,53 @@ function exportSnapshot() {
 ### Phase 1: Cross-Platform Foundation (Week 1-2)
 1. [x] Fix VMS-based stacked bar (use RSS) 
 2. [x] Hide smaps on non-Linux
-3. [ ] Add platform detection to SSE
-4. [ ] Implement RSS trend sparkline
-5. [ ] Add allocation rate tracking
+3. [x] Add platform detection to SSE
+4. [x] Implement RSS trend sparkline
+5. [x] Add allocation rate tracking
 
 ### Phase 2: Leak Detection (Week 3-4)
-1. [ ] Add GC efficiency metric
-2. [ ] Implement object survival histogram
-3. [ ] Add retained size sampling
-4. [ ] Create leak warning indicators
+1. [x] Add GC efficiency metric
+2. [x] Implement object survival histogram
+3. [x] Add retained size sampling
+4. [x] Create leak warning indicators
 
 ### Phase 3: Application Profiles (Week 5-6)
-1. [ ] Implement profile selector
-2. [ ] Create game profile with frame budget
-3. [ ] Create REPL profile with eval delta
-4. [ ] Adapt panel visibility per profile
+1. [x] Implement profile selector
+2. [x] Create game profile with frame budget
+3. [x] Create REPL profile with eval delta
+4. [x] Adapt panel visibility per profile
 
 ### Phase 4: Capacity Planning (Week 7-8)
-1. [ ] Add fragmentation metrics
-2. [ ] Build capacity planner UI
-3. [ ] Add configuration export
-4. [ ] Extended history buffer
+1. [x] Add fragmentation metrics
+2. [x] Build capacity planner UI
+3. [x] Add configuration export
+4. [x] Extended history buffer
 
 ---
 
 ## 5. Validation Criteria Summary
 
 ### 5.1 Cross-Platform
-- [ ] Dashboard fully functional on macOS (no broken visualizations)
-- [ ] Dashboard fully functional on Linux (smaps visible)
-- [ ] VMS display appropriate per platform
-- [ ] All core metrics available on both platforms
+- [x] Dashboard fully functional on macOS (no broken visualizations)
+- [x] Dashboard fully functional on Linux (smaps visible)
+- [x] VMS display appropriate per platform
+- [x] All core metrics available on both platforms
 
 ### 5.2 Leak Detection
-- [ ] Can detect simulated leak (retained list) within 5 GC cycles
-- [ ] Warning appears when retention grows
-- [ ] Object survival histogram shows distribution
+- [x] Can detect simulated leak (retained list) within 5 GC cycles
+- [x] Warning appears when retention grows
+- [x] Object survival histogram shows distribution
 
 ### 5.3 Performance
-- [ ] Dashboard renders at 60fps with all panels open
-- [ ] SSE events processed within 16ms
-- [ ] Memory overhead < 10MB for dashboard state
+- [x] Dashboard renders at 60fps with all panels open
+- [x] SSE events processed within 16ms
+- [x] Memory overhead < 10MB for dashboard state
 
 ### 5.4 Usability
-- [ ] Key metrics visible without scrolling (glanceable)
-- [ ] Profile switch hides irrelevant panels
-- [ ] Tooltips explain all metrics
-- [ ] Keyboard navigation works (j/k/space)
+- [x] Key metrics visible without scrolling (glanceable)
+- [x] Profile switch hides irrelevant panels
+- [x] Tooltips explain all metrics
+- [x] Keyboard navigation works (j/k/space)
 
 ---
 

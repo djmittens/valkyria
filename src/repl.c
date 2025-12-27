@@ -18,6 +18,10 @@
 static valk_mem_arena_t* g_scratch_for_signal = NULL;
 static valk_gc_malloc_heap_t* g_heap_for_signal = NULL;
 
+// Per-evaluation memory tracking for REPL profile dashboard
+static valk_repl_mem_snapshot_t g_last_eval_before;
+static valk_repl_mem_snapshot_t g_last_eval_after;
+
 // SIGUSR1 handler: Print memory statistics to stderr
 // Usage: kill -USR1 <pid>
 static void sigusr1_handler(int sig) {
@@ -162,6 +166,8 @@ int main(int argc, char* argv[]) {
     int pos = 0;
     add_history(input);
 
+    valk_repl_mem_take_snapshot(gc_heap, scratch, &g_last_eval_before);
+
     valk_lval_t* result = valk_lval_nil();
     VALK_WITH_ALLOC((void*)scratch) {
       // Parse and evaluate each expression in the input
@@ -192,6 +198,13 @@ int main(int argc, char* argv[]) {
     // Checkpoint: evacuate any values stored in env (via def) to GC heap,
     // then reset scratch arena. This replaces the simple arena reset.
     valk_checkpoint(scratch, gc_heap, env);
+
+    valk_repl_mem_take_snapshot(gc_heap, scratch, &g_last_eval_after);
+    int64_t heap_delta, scratch_delta, lval_delta, lenv_delta;
+    valk_repl_mem_snapshot_delta(&g_last_eval_before, &g_last_eval_after,
+                                 &heap_delta, &scratch_delta,
+                                 &lval_delta, &lenv_delta);
+    valk_repl_set_eval_delta(heap_delta, scratch_delta, lval_delta, lenv_delta);
 
     // GC safe point: all evaluation done, scratch reset, only environment is
     // live Classic Lisp approach - collect between expressions, never during

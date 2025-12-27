@@ -38,9 +38,29 @@ typedef struct {
   _Atomic uint64_t pause_us_total;         // Cumulative pause time (microseconds)
   _Atomic uint64_t pause_us_max;           // Worst-case pause time
   _Atomic uint64_t reclaimed_bytes_total;  // Total bytes reclaimed across all cycles
+  _Atomic uint64_t allocated_bytes_total;  // Total bytes ever allocated (for rate calc)
   _Atomic uint64_t objects_marked;         // Objects marked in last cycle
   _Atomic uint64_t objects_swept;          // Objects swept in last cycle
+  _Atomic uint64_t last_heap_before_gc;    // Heap size before last GC (for efficiency)
+  _Atomic uint64_t last_reclaimed;         // Bytes reclaimed in last GC cycle
   uint64_t last_cycle_start_us;            // Timing for current cycle (internal)
+
+  // Object survival histogram - tracks how long objects live
+  // Used to detect potential memory leaks (objects surviving many cycles)
+  // Buckets: gen_0 (died in 1st GC), gen_1_5, gen_6_20, gen_21_plus (long-lived)
+  _Atomic uint64_t survival_gen_0;         // Died in first GC (short-lived, expected)
+  _Atomic uint64_t survival_gen_1_5;       // Survived 1-5 cycles (normal)
+  _Atomic uint64_t survival_gen_6_20;      // Survived 6-20 cycles (medium-lived)
+  _Atomic uint64_t survival_gen_21_plus;   // Survived 21+ cycles (potential leak)
+
+  // Frame-time pause histogram - tracks GC pause impact on frame budgets
+  // Used by game profile to show distribution of pauses relative to frame time
+  // Buckets based on typical frame budgets: 60fps=16.6ms, 30fps=33.3ms
+  _Atomic uint64_t pause_0_1ms;            // No impact (0-1ms)
+  _Atomic uint64_t pause_1_5ms;            // Minor impact (1-5ms)
+  _Atomic uint64_t pause_5_10ms;           // Noticeable (5-10ms)
+  _Atomic uint64_t pause_10_16ms;          // Frame drop risk at 60fps (10-16ms)
+  _Atomic uint64_t pause_16ms_plus;        // Frame drop certain at 60fps (16ms+)
 } valk_gc_runtime_metrics_t;
 
 // GC malloc heap - malloc-based allocator with mark & sweep collection
@@ -113,6 +133,96 @@ void valk_gc_get_runtime_metrics(valk_gc_malloc_heap_t* heap,
                                   uint64_t* cycles, uint64_t* pause_us_total,
                                   uint64_t* pause_us_max, uint64_t* reclaimed,
                                   size_t* heap_used, size_t* heap_total);
+
+// Get cumulative bytes allocated (for allocation rate calculation)
+uint64_t valk_gc_get_allocated_bytes_total(valk_gc_malloc_heap_t* heap);
+
+// Get GC efficiency from last cycle (reclaimed / heap_before * 100, 0-100)
+// Low efficiency suggests long-lived objects accumulating (potential leak)
+uint8_t valk_gc_get_last_efficiency(valk_gc_malloc_heap_t* heap);
+
+// Get object survival histogram (thread-safe reads)
+// Buckets: gen_0 (died in 1st GC), gen_1_5, gen_6_20, gen_21_plus
+void valk_gc_get_survival_histogram(valk_gc_malloc_heap_t* heap,
+                                     uint64_t* gen_0, uint64_t* gen_1_5,
+                                     uint64_t* gen_6_20, uint64_t* gen_21_plus);
+
+// Get frame-time pause histogram (thread-safe reads)
+// Buckets: 0-1ms, 1-5ms, 5-10ms, 10-16ms, 16ms+
+// Used by game profile to show GC pause distribution relative to frame budgets
+void valk_gc_get_pause_histogram(valk_gc_malloc_heap_t* heap,
+                                  uint64_t* pause_0_1ms, uint64_t* pause_1_5ms,
+                                  uint64_t* pause_5_10ms, uint64_t* pause_10_16ms,
+                                  uint64_t* pause_16ms_plus);
+
+typedef struct {
+  size_t lval_slab_used;
+  size_t lval_slab_total;
+  size_t lval_slab_peak;
+  size_t lenv_slab_used;
+  size_t lenv_slab_total;
+  size_t lenv_slab_peak;
+  size_t malloc_allocated;
+  size_t malloc_limit;
+  size_t malloc_peak;
+  size_t free_list_count;
+  size_t free_list_bytes;
+  double lval_fragmentation;
+  double lenv_fragmentation;
+} valk_fragmentation_t;
+
+#define VALK_RETAINED_SET_MAX 10
+#define VALK_RETAINED_SET_NAME_MAX 64
+
+typedef struct {
+  char name[VALK_RETAINED_SET_NAME_MAX];
+  size_t retained_bytes;
+  size_t object_count;
+} valk_retained_set_t;
+
+typedef struct {
+  valk_retained_set_t sets[VALK_RETAINED_SET_MAX];
+  size_t count;
+} valk_retained_sets_t;
+
+void valk_gc_get_fragmentation(valk_gc_malloc_heap_t* heap, valk_fragmentation_t* out);
+
+void valk_gc_sample_retained_sets(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env,
+                                   valk_retained_sets_t* out);
+
+// ============================================================================
+// Memory Snapshot for REPL Eval Tracking
+// ============================================================================
+
+typedef struct {
+  size_t heap_used_bytes;
+  size_t scratch_used_bytes;
+  size_t lval_count;
+  size_t lenv_count;
+} valk_repl_mem_snapshot_t;
+
+void valk_repl_mem_take_snapshot(valk_gc_malloc_heap_t* heap, valk_mem_arena_t* scratch,
+                                 valk_repl_mem_snapshot_t* out);
+
+void valk_repl_mem_snapshot_delta(valk_repl_mem_snapshot_t* before, valk_repl_mem_snapshot_t* after,
+                                  int64_t* heap_delta, int64_t* scratch_delta,
+                                  int64_t* lval_delta, int64_t* lenv_delta);
+
+// REPL eval memory delta - exposes last eval's memory changes for dashboard
+typedef struct {
+  int64_t heap_delta;
+  int64_t scratch_delta;
+  int64_t lval_delta;
+  int64_t lenv_delta;
+  uint64_t eval_count;
+} valk_repl_eval_delta_t;
+
+// Get the last REPL eval memory delta (for SSE diagnostics)
+// Returns false if no eval has occurred yet (running as server, not REPL)
+bool valk_repl_get_last_eval_delta(valk_repl_eval_delta_t* out);
+
+// Update REPL eval deltas (called from repl.c after each eval)
+void valk_repl_set_eval_delta(int64_t heap, int64_t scratch, int64_t lval, int64_t lenv);
 
 // Explicitly free a single GC heap object (for cleanup when switching allocators)
 void valk_gc_free_object(void* heap, void* ptr);

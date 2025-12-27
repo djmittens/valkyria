@@ -23,6 +23,24 @@
 // GC mark bit
 #define LVAL_FLAG_GC_MARK   (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS))
 
+// GC generation counter (7 bits, 0-127 generations survived)
+// Used for object survival histogram to detect potential memory leaks
+// Objects surviving many GC cycles may indicate retained references
+#define LVAL_GC_GEN_BITS    7
+#define LVAL_GC_GEN_SHIFT   (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 1)  // After GC mark bit
+#define LVAL_GC_GEN_MASK    (0x7FULL << LVAL_GC_GEN_SHIFT)
+#define LVAL_GC_GEN_MAX     127
+
+#define LVAL_GC_GEN(lval) (((lval)->flags & LVAL_GC_GEN_MASK) >> LVAL_GC_GEN_SHIFT)
+#define LVAL_GC_GEN_SET(lval, gen) do { \
+  (lval)->flags = ((lval)->flags & ~LVAL_GC_GEN_MASK) | \
+                  (((uint64_t)(gen) & 0x7FULL) << LVAL_GC_GEN_SHIFT); \
+} while(0)
+#define LVAL_GC_GEN_INC(lval) do { \
+  uint64_t _gen = LVAL_GC_GEN(lval); \
+  if (_gen < LVAL_GC_GEN_MAX) LVAL_GC_GEN_SET(lval, _gen + 1); \
+} while(0)
+
 // Helper to get allocation type
 #define LVAL_ALLOC(_lval) ((_lval)->flags & LVAL_ALLOC_MASK)
 

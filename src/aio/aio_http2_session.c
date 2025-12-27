@@ -758,6 +758,13 @@ int valk_http2_on_frame_recv_callback(nghttp2_session *session,
                                       void *user_data) {
   valk_aio_handle_t *conn = (valk_aio_handle_t *)user_data;
 
+  // Any frame from the peer proves the connection is alive
+  // This is especially important for SSE where WINDOW_UPDATE frames
+  // are the only incoming traffic
+  if (conn->sys && conn->sys->eventloop) {
+    conn->http.last_activity_ms = uv_now(conn->sys->eventloop);
+  }
+
   if (frame->hd.type == NGHTTP2_GOAWAY) {
     VALK_DEBUG("Received GO AWAY frame");
     return 0;

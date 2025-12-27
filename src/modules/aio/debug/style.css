@@ -114,12 +114,16 @@ header[role="banner"] {
   top: 0;
   z-index: 100;
   height: 36px;
+  overflow: hidden;
 }
 
 .header-left {
   display: flex;
   align-items: center;
   gap: var(--space-md);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .logo {
@@ -182,6 +186,7 @@ header[role="banner"] {
   display: flex;
   align-items: center;
   gap: var(--space-lg);
+  flex-shrink: 0;
 }
 
 .header-metric {
@@ -569,6 +574,7 @@ main[role="main"] {
 .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-lg); }
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-lg); }
 .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-lg); }
+.grid-1 { display: grid; grid-template-columns: 1fr; gap: var(--space-lg); }
 .span-2 { grid-column: span 2; }
 
 /* ===== PANEL ===== */
@@ -1241,6 +1247,312 @@ main[role="main"] {
   font-size: 10px;
   color: var(--text-muted);
   margin-top: 0;
+}
+
+/* ===== GC + INTERPRETER UNIFIED STATS ROW ===== */
+.gc-interp-stats {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-top: var(--space-sm);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.gc-interp-stats .gc-stats {
+  margin-top: 0;
+  border-radius: 0;
+  flex: 1;
+}
+
+.gc-interp-sep {
+  width: 1px;
+  background: var(--border-default);
+  margin: var(--space-sm) 0;
+}
+
+.interp-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-lg);
+  padding: var(--space-sm);
+  flex: 1;
+  align-items: center;
+}
+
+.interp-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+}
+
+.interp-stat-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-warning);
+}
+
+.interp-stat-value .unit {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.interp-stat-label {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.interp-stat.with-spark {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.interp-stat-spark {
+  width: 48px;
+  height: 24px;
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+/* Responsive: stack on narrow screens */
+@media (max-width: 900px) {
+  .gc-interp-stats {
+    flex-direction: column;
+  }
+
+  .gc-interp-sep {
+    width: auto;
+    height: 1px;
+    margin: 0 var(--space-sm);
+  }
+}
+
+/* ===== GC SURVIVAL HISTOGRAM (Leak Detection) ===== */
+.gc-survival-section {
+  margin-top: var(--space-md);
+  padding: var(--space-sm);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+}
+
+.gc-survival-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-sm);
+}
+
+.gc-survival-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.gc-survival-efficiency {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.gc-survival-efficiency #gc-efficiency-value {
+  font-weight: 600;
+  color: var(--color-ok);
+}
+
+.gc-survival-efficiency #gc-efficiency-value.warning {
+  color: var(--color-warning);
+}
+
+.gc-survival-efficiency #gc-efficiency-value.critical {
+  color: var(--color-error);
+}
+
+.gc-leak-warning {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  font-weight: 600;
+  animation: leak-pulse 2s ease-in-out infinite;
+}
+
+@keyframes leak-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.gc-survival-histogram {
+  display: flex;
+  gap: var(--space-sm);
+  height: 48px;
+  align-items: flex-end;
+}
+
+.gc-survival-bar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  height: 100%;
+}
+
+.gc-survival-bar-fill {
+  width: 100%;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  min-height: 2px;
+  transition: height 0.3s ease;
+  position: absolute;
+  bottom: 16px;
+}
+
+.gc-survival-bar.gen-0 .gc-survival-bar-fill {
+  background: var(--color-ok);
+}
+
+.gc-survival-bar.gen-1-5 .gc-survival-bar-fill {
+  background: var(--color-info);
+}
+
+.gc-survival-bar.gen-6-20 .gc-survival-bar-fill {
+  background: var(--color-warning);
+}
+
+.gc-survival-bar.gen-21-plus .gc-survival-bar-fill {
+  background: var(--color-error);
+}
+
+.gc-survival-bar-label {
+  position: absolute;
+  bottom: 0;
+  font-size: 9px;
+  color: var(--text-faint);
+}
+
+.gc-survival-bar-count {
+  position: absolute;
+  bottom: 18px;
+  font-size: 9px;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transform: translateY(-100%);
+}
+
+.gc-survival-legend {
+  display: flex;
+  gap: var(--space-md);
+  margin-top: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.gc-survival-legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.gc-survival-legend-item .legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.gc-survival-legend-item .legend-dot.gen-0 { background: var(--color-ok); }
+.gc-survival-legend-item .legend-dot.gen-1-5 { background: var(--color-info); }
+.gc-survival-legend-item .legend-dot.gen-6-20 { background: var(--color-warning); }
+.gc-survival-legend-item .legend-dot.gen-21-plus { background: var(--color-error); }
+
+/* ===== RETAINED SETS ===== */
+.gc-retained-section {
+  margin-top: var(--space-md);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.gc-retained-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-sm);
+}
+
+.gc-retained-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.gc-retained-total {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.gc-retained-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gc-retained-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: var(--space-xs) 0;
+}
+
+.gc-retained-item {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--space-sm);
+  padding: 4px 6px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  align-items: center;
+}
+
+.gc-retained-name {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gc-retained-bytes {
+  font-family: var(--font-mono);
+  color: var(--color-warning);
+  font-weight: 500;
+}
+
+.gc-retained-objects {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.gc-retained-bar {
+  height: 3px;
+  background: var(--bg-subtle);
+  border-radius: 1px;
+  margin-top: 2px;
+  overflow: hidden;
+}
+
+.gc-retained-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-warning), var(--color-error));
+  transition: width 0.3s ease;
 }
 
 /* ===== CONNECTION POOL ===== */
@@ -2636,6 +2948,66 @@ main[role="main"] {
   border-radius: 50%;
 }
 
+/* ==================== Fragmentation Stats ==================== */
+.heap-fragmentation-stats {
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.frag-stat {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.frag-label {
+  min-width: 120px;
+}
+
+.frag-value {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 30px;
+}
+
+.frag-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+  max-width: 100px;
+}
+
+.frag-bar-fill {
+  height: 100%;
+  background: var(--color-warning);
+  border-radius: 2px;
+  transition: width 0.2s ease;
+}
+
+.frag-stat.frag-free-list .frag-detail {
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+/* Warning state for high fragmentation */
+.frag-stat.high-frag .frag-value {
+  color: var(--color-warning);
+}
+
+.frag-stat.high-frag .frag-bar-fill {
+  background: var(--color-error);
+}
+
 /* Full variant with all sections */
 .pool-widget.full {
   padding: var(--space-md);
@@ -3773,6 +4145,25 @@ main[role="main"] {
 .process-stat span {
   color: var(--text-primary);
   font-weight: 500;
+}
+
+.process-stat.rss-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rss-spark {
+  width: 48px;
+  height: 16px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.rss-spark svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .process-stat-sep {
@@ -5092,14 +5483,49 @@ main[role="main"] {
   transition: opacity 0.15s ease;
 }
 
-/* Responsive adjustments for server cards */
-@media (max-width: 768px) {
-  .entity-header-metrics {
+/* Responsive adjustments for header */
+@media (max-width: 800px) {
+  header[role="banner"] {
+    padding: var(--space-sm) var(--space-md);
+  }
+
+  .header-metrics {
     gap: var(--space-md);
   }
 
   .header-metric-spark {
-    width: 32px;
+    width: 28px;
+  }
+}
+
+@media (max-width: 650px) {
+  .header-metric-spark {
+    display: none;
+  }
+
+  .header-metrics {
+    gap: var(--space-sm);
+  }
+
+  .header-metric-value {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 500px) {
+  .logo-text span {
+    display: none;
+  }
+
+  .header-metric-label {
+    display: none;
+  }
+}
+
+/* Responsive adjustments for entity cards */
+@media (max-width: 768px) {
+  .entity-header-metrics {
+    gap: var(--space-md);
   }
 
   .header-metric-value {
@@ -5124,10 +5550,6 @@ main[role="main"] {
     gap: var(--space-sm);
   }
 
-  .header-metric-spark {
-    width: 28px;
-  }
-
   .header-metric-item {
     gap: 2px;
   }
@@ -5148,10 +5570,6 @@ main[role="main"] {
     gap: var(--space-sm);
   }
 
-  .header-metric-spark {
-    display: none;
-  }
-
   .server-metrics-grid {
     gap: var(--space-sm);
   }
@@ -5160,3 +5578,5 @@ main[role="main"] {
     padding: var(--space-sm);
   }
 }
+
+

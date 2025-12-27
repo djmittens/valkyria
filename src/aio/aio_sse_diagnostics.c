@@ -22,14 +22,55 @@
 // Slab Bitmap Generation
 // ============================================================================
 
+// Threshold for bitmap generation (slots). Slabs larger than this skip bitmap
+// and report count only. This matches the UI's PoolWidget.MAX_GRID_SLOTS=10000
+// where it switches from 1:1 grid to downsampled heatmap.
+//
+// Note: The heatmap still needs spatial distribution data to show hot regions.
+// For slabs > 10000, we currently just show uniform color based on percentage.
+// Future improvement: generate downsampled bucket counts instead of full bitmap.
+//
+// The free list walk is O(n) with poor cache locality (Treiber stack chases
+// pointers through 64-byte aligned slots). The caching via cached_num_free
+// helps when slab is unchanged between ticks.
+#define SLAB_BITMAP_THRESHOLD 10000
+
 // Walk Treiber stack to generate actual bitmap
 // Returns heap-allocated bitmap, caller must free
 // Note: This is a best-effort snapshot - the slab may be modified concurrently
 // during browser refresh or connection churn. Races are expected and handled.
-static uint8_t *slab_to_bitmap(valk_slab_t *slab, size_t *out_bytes,
-                                size_t *out_used) {
+// For slabs larger than SLAB_BITMAP_THRESHOLD, returns NULL bitmap and count only.
+// Cached version: reuses bitmap if numFree unchanged
+static uint8_t *slab_to_bitmap_cached(valk_slab_t *slab, size_t *out_bytes,
+                                       size_t *out_used, size_t *out_num_free,
+                                       const valk_slab_snapshot_t *prev) {
   size_t total_slots = slab->numItems;
+  size_t current_num_free = __atomic_load_n(&slab->numFree, __ATOMIC_ACQUIRE);
+
+  *out_num_free = current_num_free;
+
+  // Skip bitmap generation for large slabs - just return count
+  if (total_slots > SLAB_BITMAP_THRESHOLD) {
+    *out_bytes = 0;
+    *out_used = total_slots > current_num_free ? total_slots - current_num_free : 0;
+    return NULL;
+  }
+
   size_t bitmap_bytes = (total_slots + 7) / 8;
+
+  // Fast path: if numFree unchanged and we have valid cached bitmap, reuse it
+  if (prev && prev->bitmap && prev->bitmap_bytes == bitmap_bytes &&
+      prev->total_slots == total_slots && prev->cached_num_free == current_num_free) {
+    uint8_t *bitmap = malloc(bitmap_bytes);
+    if (bitmap) {
+      memcpy(bitmap, prev->bitmap, bitmap_bytes);
+      *out_bytes = bitmap_bytes;
+      *out_used = total_slots - current_num_free;
+      return bitmap;
+    }
+  }
+
+  // Slow path: walk free list to generate bitmap
   uint8_t *bitmap = calloc(bitmap_bytes, 1);
 
   if (!bitmap) {
@@ -106,6 +147,13 @@ static uint8_t *slab_to_bitmap(valk_slab_t *slab, size_t *out_bytes,
   return bitmap;
 }
 
+// Legacy wrapper without caching
+static uint8_t *slab_to_bitmap(valk_slab_t *slab, size_t *out_bytes,
+                                size_t *out_used) {
+  size_t num_free_ignored;
+  return slab_to_bitmap_cached(slab, out_bytes, out_used, &num_free_ignored, NULL);
+}
+
 // Convert bitmap bytes to RLE hex string
 // Format: "XX*N" where XX is hex byte, N is count (omitted if 1)
 // Example: "ff*32" = 32 bytes of 0xff, "00*16,ff*8" = 16 zeros then 8 ones
@@ -176,9 +224,35 @@ static char state_to_char(valk_diag_conn_state_e state) {
 }
 
 // Walk handle slab and extract per-slot diagnostics with state and owner
-static void slab_to_slot_diag(valk_slab_t *slab, valk_slab_snapshot_t *out,
-                               valk_aio_system_t *aio, uint64_t now_ms) {
+// Optimization: if prev is provided and numFree unchanged, reuses cached data
+static void slab_to_slot_diag_cached(valk_slab_t *slab, valk_slab_snapshot_t *out,
+                                      valk_aio_system_t *aio, uint64_t now_ms,
+                                      const valk_slab_snapshot_t *prev) {
   size_t total = slab->numItems;
+  size_t current_num_free = __atomic_load_n(&slab->numFree, __ATOMIC_ACQUIRE);
+
+  // Store numFree for future cache checks
+  out->cached_num_free = current_num_free;
+
+  // Fast path: if numFree unchanged and we have valid cached data, reuse it
+  // Note: We still need to update age_ms, but can skip the expensive free list walk
+  if (prev && prev->has_slot_diag && prev->slots && prev->total_slots == total &&
+      prev->cached_num_free == current_num_free) {
+    out->slots = malloc(total * sizeof(valk_slot_diag_t));
+    if (out->slots) {
+      memcpy(out->slots, prev->slots, total * sizeof(valk_slot_diag_t));
+      out->has_slot_diag = true;
+      out->total_slots = total;
+      out->used_slots = prev->used_slots;
+      out->by_state = prev->by_state;
+      out->by_type = prev->by_type;
+      out->owner_count = prev->owner_count;
+      memcpy(out->by_owner, prev->by_owner, sizeof(out->by_owner));
+      return;
+    }
+  }
+
+  // Slow path: walk free list and collect diagnostics
   out->slots = calloc(total, sizeof(valk_slot_diag_t));
   if (!out->slots) {
     out->has_slot_diag = false;
@@ -325,6 +399,12 @@ static void slab_to_slot_diag(valk_slab_t *slab, valk_slab_snapshot_t *out,
   free(is_free);
 }
 
+// Legacy wrapper without caching
+static void slab_to_slot_diag(valk_slab_t *slab, valk_slab_snapshot_t *out,
+                               valk_aio_system_t *aio, uint64_t now_ms) {
+  slab_to_slot_diag_cached(slab, out, aio, now_ms, NULL);
+}
+
 // Encode slot states as RLE string: "F16A3I2" means 16 Free, 3 Active, 2 Idle
 // Returns the length written (not including null terminator)
 static size_t slots_to_rle_string(valk_slot_diag_t *slots, size_t count, char *out, size_t out_size) {
@@ -406,8 +486,22 @@ static int gc_tiers_to_json(const valk_mem_snapshot_t *snapshot, char *buf, size
 // Snapshot Collection
 // ============================================================================
 
-void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
-                                valk_aio_system_t *aio) {
+// Find previous slab snapshot by name (for caching)
+static const valk_slab_snapshot_t *find_prev_slab(const valk_mem_snapshot_t *prev,
+                                                   const char *name) {
+  if (!prev) return NULL;
+  for (size_t i = 0; i < prev->slab_count; i++) {
+    if (prev->slabs[i].name && strcmp(prev->slabs[i].name, name) == 0) {
+      return &prev->slabs[i];
+    }
+  }
+  return NULL;
+}
+
+// Core collection with optional caching from previous snapshot
+static void mem_snapshot_collect_internal(valk_mem_snapshot_t *snapshot,
+                                           valk_aio_system_t *aio,
+                                           const valk_mem_snapshot_t *prev) {
   memset(snapshot, 0, sizeof(*snapshot));
 
   if (!aio) {
@@ -418,14 +512,17 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
   size_t slab_idx = 0;
 
 #ifdef VALK_METRICS_ENABLED
-  // Helper macro to add a slab to the snapshot
-  #define ADD_SLAB(accessor, label) do { \
+  // Helper macro to add a slab to the snapshot with caching
+  #define ADD_SLAB_CACHED(accessor, label) do { \
     valk_slab_t *slab = accessor(aio); \
     if (slab && slab_idx < 8) { \
+      const valk_slab_snapshot_t *prev_slab = find_prev_slab(prev, label); \
       snapshot->slabs[slab_idx].name = (const char *)label; \
       snapshot->slabs[slab_idx].bitmap = \
-          slab_to_bitmap(slab, &snapshot->slabs[slab_idx].bitmap_bytes, \
-                         &snapshot->slabs[slab_idx].used_slots); \
+          slab_to_bitmap_cached(slab, &snapshot->slabs[slab_idx].bitmap_bytes, \
+                                &snapshot->slabs[slab_idx].used_slots, \
+                                &snapshot->slabs[slab_idx].cached_num_free, \
+                                prev_slab); \
       snapshot->slabs[slab_idx].total_slots = slab->numItems; \
       snapshot->slabs[slab_idx].peak_used = \
           __atomic_load_n(&slab->peakUsed, __ATOMIC_ACQUIRE); \
@@ -444,12 +541,13 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
                  tcp_slab->numItems, numFree, tcp_slab->numItems - numFree);
     }
   }
-  ADD_SLAB(valk_aio_get_tcp_buffer_slab, "tcp_buffers");
+  ADD_SLAB_CACHED(valk_aio_get_tcp_buffer_slab, "tcp_buffers");
 
   // Handle Slab - use per-slot diagnostics for connection state tracking
   {
     valk_slab_t *handle_slab = valk_aio_get_handle_slab(aio);
     if (handle_slab && slab_idx < 8) {
+      const valk_slab_snapshot_t *prev_handles = find_prev_slab(prev, "handles");
       snapshot->slabs[slab_idx].name = "handles";
       // Always set total_slots from the slab, even if slot_diag fails
       snapshot->slabs[slab_idx].total_slots = handle_slab->numItems;
@@ -457,7 +555,7 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
           __atomic_load_n(&handle_slab->peakUsed, __ATOMIC_ACQUIRE);
       // Get current time for age calculation
       uint64_t now_ms = (uint64_t)(uv_hrtime() / 1000000ULL);
-      slab_to_slot_diag(handle_slab, &snapshot->slabs[slab_idx], aio, now_ms);
+      slab_to_slot_diag_cached(handle_slab, &snapshot->slabs[slab_idx], aio, now_ms, prev_handles);
       // Note: if slot_diag fails (OOM), has_slot_diag will be false and
       // the SSE formatter will use an empty bitmap. This is acceptable
       // for transient OOM conditions - next snapshot will likely succeed.
@@ -474,22 +572,25 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
                  arena_slab->numItems, numFree, arena_slab->numItems - numFree);
     }
   }
-  ADD_SLAB(valk_aio_get_stream_arenas_slab, "stream_arenas");
+  ADD_SLAB_CACHED(valk_aio_get_stream_arenas_slab, "stream_arenas");
 
   // HTTP Servers
-  ADD_SLAB(valk_aio_get_http_servers_slab, "http_servers");
+  ADD_SLAB_CACHED(valk_aio_get_http_servers_slab, "http_servers");
 
   // HTTP Clients
-  ADD_SLAB(valk_aio_get_http_clients_slab, "http_clients");
+  ADD_SLAB_CACHED(valk_aio_get_http_clients_slab, "http_clients");
 
   // LVAL Slab (from GC heap)
   valk_gc_malloc_heap_t *gc_heap = valk_aio_get_gc_heap(aio);
   if (gc_heap && gc_heap->lval_slab && slab_idx < 8) {
+    const valk_slab_snapshot_t *prev_lval = find_prev_slab(prev, "lval");
     snapshot->slabs[slab_idx].name = (const char *)"lval";
     snapshot->slabs[slab_idx].bitmap =
-        slab_to_bitmap(gc_heap->lval_slab,
-                       &snapshot->slabs[slab_idx].bitmap_bytes,
-                       &snapshot->slabs[slab_idx].used_slots);
+        slab_to_bitmap_cached(gc_heap->lval_slab,
+                              &snapshot->slabs[slab_idx].bitmap_bytes,
+                              &snapshot->slabs[slab_idx].used_slots,
+                              &snapshot->slabs[slab_idx].cached_num_free,
+                              prev_lval);
     snapshot->slabs[slab_idx].total_slots = gc_heap->lval_slab->numItems;
     snapshot->slabs[slab_idx].peak_used =
         __atomic_load_n(&gc_heap->lval_slab->peakUsed, __ATOMIC_ACQUIRE);
@@ -500,11 +601,14 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
 
   // LENV Slab (from GC heap)
   if (gc_heap && gc_heap->lenv_slab && slab_idx < 8) {
+    const valk_slab_snapshot_t *prev_lenv = find_prev_slab(prev, "lenv");
     snapshot->slabs[slab_idx].name = (const char *)"lenv";
     snapshot->slabs[slab_idx].bitmap =
-        slab_to_bitmap(gc_heap->lenv_slab,
-                       &snapshot->slabs[slab_idx].bitmap_bytes,
-                       &snapshot->slabs[slab_idx].used_slots);
+        slab_to_bitmap_cached(gc_heap->lenv_slab,
+                              &snapshot->slabs[slab_idx].bitmap_bytes,
+                              &snapshot->slabs[slab_idx].used_slots,
+                              &snapshot->slabs[slab_idx].cached_num_free,
+                              prev_lenv);
     snapshot->slabs[slab_idx].total_slots = gc_heap->lenv_slab->numItems;
     snapshot->slabs[slab_idx].peak_used =
         __atomic_load_n(&gc_heap->lenv_slab->peakUsed, __ATOMIC_ACQUIRE);
@@ -513,7 +617,7 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
     slab_idx++;
   }
 
-  #undef ADD_SLAB
+  #undef ADD_SLAB_CACHED
 #endif
 
   snapshot->slab_count = slab_idx;
@@ -593,6 +697,30 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
         atomic_load(&gc_heap->runtime_metrics.cycles_total);
     snapshot->gc_heap.emergency_collections =
         gc_heap->stats.emergency_collections;
+    snapshot->gc_heap.efficiency_pct = valk_gc_get_last_efficiency(gc_heap);
+
+    // Object survival histogram
+    valk_gc_get_survival_histogram(gc_heap,
+        &snapshot->gc_heap.survival_gen_0,
+        &snapshot->gc_heap.survival_gen_1_5,
+        &snapshot->gc_heap.survival_gen_6_20,
+        &snapshot->gc_heap.survival_gen_21_plus);
+
+    // Frame-time pause histogram
+    valk_gc_get_pause_histogram(gc_heap,
+        &snapshot->gc_heap.pause_0_1ms,
+        &snapshot->gc_heap.pause_1_5ms,
+        &snapshot->gc_heap.pause_5_10ms,
+        &snapshot->gc_heap.pause_10_16ms,
+        &snapshot->gc_heap.pause_16ms_plus);
+
+    // Fragmentation metrics
+    valk_fragmentation_t frag = {0};
+    valk_gc_get_fragmentation(gc_heap, &frag);
+    snapshot->gc_heap.lval_fragmentation = frag.lval_fragmentation;
+    snapshot->gc_heap.lenv_fragmentation = frag.lenv_fragmentation;
+    snapshot->gc_heap.free_list_count = frag.free_list_count;
+    snapshot->gc_heap.free_list_bytes = frag.free_list_bytes;
   }
 
   // Collect owner map for server/client names
@@ -687,6 +815,41 @@ void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
   snapshot->breakdown.untracked_reserved = (snapshot->process.vms_bytes > tracked_cap)
                                           ? (snapshot->process.vms_bytes - tracked_cap)
                                           : 0;
+
+  // Collect REPL eval memory delta (if running as REPL)
+  valk_repl_eval_delta_t repl_delta;
+  if (valk_repl_get_last_eval_delta(&repl_delta)) {
+    snapshot->repl_eval.valid = true;
+    snapshot->repl_eval.heap_delta = repl_delta.heap_delta;
+    snapshot->repl_eval.scratch_delta = repl_delta.scratch_delta;
+    snapshot->repl_eval.lval_delta = repl_delta.lval_delta;
+    snapshot->repl_eval.lenv_delta = repl_delta.lenv_delta;
+    snapshot->repl_eval.eval_count = repl_delta.eval_count;
+  } else {
+    snapshot->repl_eval.valid = false;
+  }
+
+  // Sample retained size of top bindings (for leak detection assistance)
+#ifdef VALK_METRICS_ENABLED
+  if (gc_heap && gc_heap->root_env) {
+    valk_gc_sample_retained_sets(gc_heap, gc_heap->root_env, &snapshot->retained_sets);
+  } else {
+    memset(&snapshot->retained_sets, 0, sizeof(snapshot->retained_sets));
+  }
+#endif
+}
+
+// Public wrapper - no caching
+void valk_mem_snapshot_collect(valk_mem_snapshot_t *snapshot,
+                                valk_aio_system_t *aio) {
+  mem_snapshot_collect_internal(snapshot, aio, NULL);
+}
+
+// Public wrapper - with caching from previous snapshot
+void valk_mem_snapshot_collect_with_cache(valk_mem_snapshot_t *snapshot,
+                                           valk_aio_system_t *aio,
+                                           const valk_mem_snapshot_t *prev) {
+  mem_snapshot_collect_internal(snapshot, aio, prev);
 }
 
 // ============================================================================
@@ -906,10 +1069,28 @@ int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf,
   p += n;
 
   n = snprintf(p, end - p,
-               ",\"threshold_pct\":%u,\"cycles\":%lu,\"emergency\":%zu},",
+               ",\"threshold_pct\":%u,\"cycles\":%lu,\"emergency\":%zu,"
+               "\"efficiency_pct\":%u,"
+               "\"survival\":{\"gen_0\":%lu,\"gen_1_5\":%lu,\"gen_6_20\":%lu,\"gen_21_plus\":%lu},"
+               "\"pause_histogram\":{\"0_1ms\":%lu,\"1_5ms\":%lu,\"5_10ms\":%lu,\"10_16ms\":%lu,\"16ms_plus\":%lu},"
+               "\"fragmentation\":{\"lval_pct\":%.1f,\"lenv_pct\":%.1f,\"free_list_count\":%zu,\"free_list_bytes\":%zu}},",
                (unsigned)snapshot->gc_heap.gc_threshold_pct,
                snapshot->gc_heap.gc_cycles,
-               snapshot->gc_heap.emergency_collections);
+               snapshot->gc_heap.emergency_collections,
+               (unsigned)snapshot->gc_heap.efficiency_pct,
+               (unsigned long)snapshot->gc_heap.survival_gen_0,
+               (unsigned long)snapshot->gc_heap.survival_gen_1_5,
+               (unsigned long)snapshot->gc_heap.survival_gen_6_20,
+               (unsigned long)snapshot->gc_heap.survival_gen_21_plus,
+               (unsigned long)snapshot->gc_heap.pause_0_1ms,
+               (unsigned long)snapshot->gc_heap.pause_1_5ms,
+               (unsigned long)snapshot->gc_heap.pause_5_10ms,
+               (unsigned long)snapshot->gc_heap.pause_10_16ms,
+               (unsigned long)snapshot->gc_heap.pause_16ms_plus,
+               snapshot->gc_heap.lval_fragmentation * 100.0,
+               snapshot->gc_heap.lenv_fragmentation * 100.0,
+               snapshot->gc_heap.free_list_count,
+               snapshot->gc_heap.free_list_bytes);
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
@@ -956,6 +1137,19 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
 
   // SSE event header - use "diagnostics" event type for combined data
   int n = snprintf(p, end - p, "event: diagnostics\nid: %lu\ndata: {", event_id);
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  // Platform detection for cross-platform UI adaptation
+#ifdef __APPLE__
+  n = snprintf(p, end - p, "\"platform\":\"darwin\",");
+#elif defined(__linux__)
+  n = snprintf(p, end - p, "\"platform\":\"linux\",");
+#elif defined(_WIN32)
+  n = snprintf(p, end - p, "\"platform\":\"windows\",");
+#else
+  n = snprintf(p, end - p, "\"platform\":\"unknown\",");
+#endif
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
@@ -1088,10 +1282,28 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
   p += n;
 
   n = snprintf(p, end - p,
-               ",\"threshold_pct\":%u,\"cycles\":%lu,\"emergency\":%zu},",
+               ",\"threshold_pct\":%u,\"cycles\":%lu,\"emergency\":%zu,"
+               "\"efficiency_pct\":%u,"
+               "\"survival\":{\"gen_0\":%lu,\"gen_1_5\":%lu,\"gen_6_20\":%lu,\"gen_21_plus\":%lu},"
+               "\"pause_histogram\":{\"0_1ms\":%lu,\"1_5ms\":%lu,\"5_10ms\":%lu,\"10_16ms\":%lu,\"16ms_plus\":%lu},"
+               "\"fragmentation\":{\"lval_pct\":%.1f,\"lenv_pct\":%.1f,\"free_list_count\":%zu,\"free_list_bytes\":%zu}},",
                (unsigned)snapshot->gc_heap.gc_threshold_pct,
                snapshot->gc_heap.gc_cycles,
-               snapshot->gc_heap.emergency_collections);
+               snapshot->gc_heap.emergency_collections,
+               (unsigned)snapshot->gc_heap.efficiency_pct,
+               (unsigned long)snapshot->gc_heap.survival_gen_0,
+               (unsigned long)snapshot->gc_heap.survival_gen_1_5,
+               (unsigned long)snapshot->gc_heap.survival_gen_6_20,
+               (unsigned long)snapshot->gc_heap.survival_gen_21_plus,
+               (unsigned long)snapshot->gc_heap.pause_0_1ms,
+               (unsigned long)snapshot->gc_heap.pause_1_5ms,
+               (unsigned long)snapshot->gc_heap.pause_5_10ms,
+               (unsigned long)snapshot->gc_heap.pause_10_16ms,
+               (unsigned long)snapshot->gc_heap.pause_16ms_plus,
+               snapshot->gc_heap.lval_fragmentation * 100.0,
+               snapshot->gc_heap.lenv_fragmentation * 100.0,
+               snapshot->gc_heap.free_list_count,
+               snapshot->gc_heap.free_list_bytes);
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
@@ -1160,7 +1372,7 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
                "\"aio_used\":%zu,\"aio_cap\":%zu,"
                "\"ssl_used\":%zu,\"nghttp2_used\":%zu,\"libuv_used\":%zu,"
                "\"metrics_used\":%zu,\"metrics_cap\":%zu,"
-               "\"untracked\":%zu,\"untracked_reserved\":%zu}},",
+               "\"untracked\":%zu,\"untracked_reserved\":%zu}",
                snapshot->breakdown.scratch_arena_used,
                snapshot->breakdown.scratch_arena_capacity,
                snapshot->breakdown.gc_heap_used,
@@ -1179,6 +1391,50 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
                snapshot->breakdown.metrics_capacity,
                snapshot->breakdown.untracked_bytes,
                snapshot->breakdown.untracked_reserved);
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  // REPL eval memory delta (only if running as REPL)
+  if (snapshot->repl_eval.valid) {
+    n = snprintf(p, end - p,
+                 ",\"repl_eval\":{\"heap_delta\":%ld,\"scratch_delta\":%ld,"
+                 "\"lval_delta\":%ld,\"lenv_delta\":%ld,\"eval_count\":%lu}",
+                 (long)snapshot->repl_eval.heap_delta,
+                 (long)snapshot->repl_eval.scratch_delta,
+                 (long)snapshot->repl_eval.lval_delta,
+                 (long)snapshot->repl_eval.lenv_delta,
+                 (unsigned long)snapshot->repl_eval.eval_count);
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+  }
+
+  // Retained sets (top N bindings by memory size)
+  if (snapshot->retained_sets.count > 0) {
+    n = snprintf(p, end - p, ",\"retained_sets\":[");
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+
+    for (size_t i = 0; i < snapshot->retained_sets.count; i++) {
+      if (i > 0) {
+        n = snprintf(p, end - p, ",");
+        if (n < 0 || n >= end - p) return -1;
+        p += n;
+      }
+      const valk_retained_set_t *rs = &snapshot->retained_sets.sets[i];
+      n = snprintf(p, end - p,
+                   "{\"name\":\"%s\",\"retained_bytes\":%zu,\"object_count\":%zu}",
+                   rs->name, rs->retained_bytes, rs->object_count);
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+    }
+
+    n = snprintf(p, end - p, "]");
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+  }
+
+  // Close memory section
+  n = snprintf(p, end - p, "},");
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
@@ -1516,34 +1772,50 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
                      current->gc_heap.emergency_collections != prev->gc_heap.emergency_collections);
   if (gc_changed) has_memory_changes = true;
 
-  // Check AIO metrics changes
+  // Calculate AIO metric deltas upfront - use deltas to detect meaningful changes.
+  // NOTE: bytes_sent/bytes_recv deltas are NOT used for change detection because
+  // the SSE stream itself sends data, causing a feedback loop. We still include
+  // them in the payload when we do send, but they don't trigger sends on their own.
 #ifdef VALK_METRICS_ENABLED
   const valk_aio_metrics_t *aio_metrics = valk_aio_get_metrics(aio);
   const valk_aio_system_stats_t *sys_stats = valk_aio_get_system_stats(aio);
-  if (aio_metrics && conn) {
-    uint64_t bytes_sent = atomic_load(&aio_metrics->bytes_sent_total);
-    uint64_t bytes_recv = atomic_load(&aio_metrics->bytes_recv_total);
-    uint64_t requests = atomic_load(&aio_metrics->requests_total);
-    uint64_t connections = atomic_load(&aio_metrics->connections_total);
 
-    if (bytes_sent != conn->prev_metrics.bytes_sent ||
-        bytes_recv != conn->prev_metrics.bytes_recv ||
-        requests != conn->prev_metrics.requests_total ||
-        connections != conn->prev_metrics.connections_total) {
+  // Pre-computed deltas (reused in output section)
+  uint64_t aio_bytes_sent = 0, aio_bytes_recv = 0, aio_requests = 0, aio_connections = 0;
+  uint64_t aio_d_sent = 0, aio_d_recv = 0, aio_d_req = 0, aio_d_conn = 0;
+  uint64_t pending_current = 0, pending_total = 0, pending_processed = 0, pending_dropped = 0;
+  uint64_t d_pending_total = 0, d_pending_processed = 0, d_pending_dropped = 0;
+  int64_t d_pending_current = 0;
+
+  if (aio_metrics && conn) {
+    aio_bytes_sent = atomic_load(&aio_metrics->bytes_sent_total);
+    aio_bytes_recv = atomic_load(&aio_metrics->bytes_recv_total);
+    aio_requests = atomic_load(&aio_metrics->requests_total);
+    aio_connections = atomic_load(&aio_metrics->connections_total);
+
+    aio_d_sent = aio_bytes_sent - conn->prev_metrics.bytes_sent;
+    aio_d_recv = aio_bytes_recv - conn->prev_metrics.bytes_recv;
+    aio_d_req = aio_requests - conn->prev_metrics.requests_total;
+    aio_d_conn = aio_connections - conn->prev_metrics.connections_total;
+
+    // Check if meaningful changes occurred (exclude byte counters)
+    if (aio_d_req > 0 || aio_d_conn != 0) {
       has_aio_metric_changes = true;
     }
 
-    // Check pending streams changes
     if (sys_stats) {
-      uint64_t pending_current = atomic_load(&sys_stats->pending_streams_current);
-      uint64_t pending_total = atomic_load(&sys_stats->pending_streams_total);
-      uint64_t pending_processed = atomic_load(&sys_stats->pending_streams_processed);
-      uint64_t pending_dropped = atomic_load(&sys_stats->pending_streams_dropped);
+      pending_current = atomic_load(&sys_stats->pending_streams_current);
+      pending_total = atomic_load(&sys_stats->pending_streams_total);
+      pending_processed = atomic_load(&sys_stats->pending_streams_processed);
+      pending_dropped = atomic_load(&sys_stats->pending_streams_dropped);
 
-      if (pending_current != conn->prev_metrics.pending_streams_current ||
-          pending_total != conn->prev_metrics.pending_streams_total ||
-          pending_processed != conn->prev_metrics.pending_streams_processed ||
-          pending_dropped != conn->prev_metrics.pending_streams_dropped) {
+      d_pending_current = (int64_t)pending_current - (int64_t)conn->prev_metrics.pending_streams_current;
+      d_pending_total = pending_total - conn->prev_metrics.pending_streams_total;
+      d_pending_processed = pending_processed - conn->prev_metrics.pending_streams_processed;
+      d_pending_dropped = pending_dropped - conn->prev_metrics.pending_streams_dropped;
+
+      if (d_pending_current != 0 || d_pending_total > 0 ||
+          d_pending_processed > 0 || d_pending_dropped > 0) {
         has_aio_metric_changes = true;
       }
     }
@@ -1553,7 +1825,9 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
   (void)aio;
 #endif
 
-  // If nothing changed, send a heartbeat event so dashboard maintains even time intervals
+  // If no changes at all, send a heartbeat.
+  // Include modular_metric_changes so that event loop metrics (idle_time, iterations)
+  // are sent to the dashboard for utilization calculation.
   if (!has_memory_changes && !has_aio_metric_changes && !has_modular_metric_changes) {
     int n = snprintf(p, end - p, "event: diagnostics-delta\nid: %lu\ndata: {\"heartbeat\":true}\n\n", event_id);
     if (n < 0 || n >= end - p) return -1;
@@ -1699,7 +1973,7 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
       mem_need_comma = true;
     }
 
-    // GC changes (generic tiers array)
+    // GC changes (generic tiers array + survival histogram)
     if (gc_changed) {
       n = snprintf(p, end - p, "%s\"gc\":{", mem_need_comma ? "," : "");
       if (n < 0 || n >= end - p) return -1;
@@ -1710,9 +1984,22 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
       p += n;
 
       n = snprintf(p, end - p,
-                   ",\"cycles\":%lu,\"emergency\":%zu}",
+                   ",\"cycles\":%lu,\"emergency\":%zu,"
+                   "\"efficiency_pct\":%u,"
+                   "\"survival\":{\"gen_0\":%lu,\"gen_1_5\":%lu,\"gen_6_20\":%lu,\"gen_21_plus\":%lu},"
+                   "\"pause_histogram\":{\"0_1ms\":%lu,\"1_5ms\":%lu,\"5_10ms\":%lu,\"10_16ms\":%lu,\"16ms_plus\":%lu}}",
                    current->gc_heap.gc_cycles,
-                   current->gc_heap.emergency_collections);
+                   current->gc_heap.emergency_collections,
+                   (unsigned)current->gc_heap.efficiency_pct,
+                   (unsigned long)current->gc_heap.survival_gen_0,
+                   (unsigned long)current->gc_heap.survival_gen_1_5,
+                   (unsigned long)current->gc_heap.survival_gen_6_20,
+                   (unsigned long)current->gc_heap.survival_gen_21_plus,
+                   (unsigned long)current->gc_heap.pause_0_1ms,
+                   (unsigned long)current->gc_heap.pause_1_5ms,
+                   (unsigned long)current->gc_heap.pause_5_10ms,
+                   (unsigned long)current->gc_heap.pause_10_16ms,
+                   (unsigned long)current->gc_heap.pause_16ms_plus);
       if (n < 0 || n >= end - p) return -1;
       p += n;
     }
@@ -1755,59 +2042,32 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
       metrics_need_comma = true;
     }
 
-    // AIO metrics delta
-    if (has_aio_metric_changes && conn) {
-      const valk_aio_metrics_t *aio_metrics = valk_aio_get_metrics(aio);
-      if (aio_metrics) {
-        uint64_t bytes_sent = atomic_load(&aio_metrics->bytes_sent_total);
-        uint64_t bytes_recv = atomic_load(&aio_metrics->bytes_recv_total);
-        uint64_t requests = atomic_load(&aio_metrics->requests_total);
+    // AIO metrics delta - uses pre-computed deltas from change detection above
+    if (has_aio_metric_changes && conn && aio_metrics) {
+      n = snprintf(p, end - p,
+                   "%s\"aio\":{\"bytes\":{\"d_sent\":%lu,\"d_recv\":%lu},"
+                   "\"requests\":{\"d_total\":%lu},"
+                   "\"connections\":{\"active\":%lu,\"idle\":%lu,\"closing\":%lu},"
+                   "\"pending_streams\":{\"current\":%lu,\"d_total\":%lu,\"d_processed\":%lu,\"d_dropped\":%lu}}",
+                   metrics_need_comma ? "," : "",
+                   aio_d_sent, aio_d_recv, aio_d_req,
+                   atomic_load(&aio_metrics->connections_active),
+                   atomic_load(&aio_metrics->connections_idle),
+                   atomic_load(&aio_metrics->connections_closing),
+                   pending_current, d_pending_total, d_pending_processed, d_pending_dropped);
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+      metrics_need_comma = true;
 
-        // Send deltas for monotonic counters
-        uint64_t d_sent = bytes_sent - conn->prev_metrics.bytes_sent;
-        uint64_t d_recv = bytes_recv - conn->prev_metrics.bytes_recv;
-        uint64_t d_req = requests - conn->prev_metrics.requests_total;
-
-        // Get pending streams metrics for delta
-        const valk_aio_system_stats_t *sys_stats_delta = valk_aio_get_system_stats(aio);
-        uint64_t pending_current = 0, pending_total = 0, pending_processed = 0, pending_dropped = 0;
-        uint64_t d_pending_total = 0, d_pending_processed = 0, d_pending_dropped = 0;
-        if (sys_stats_delta) {
-          pending_current = atomic_load(&sys_stats_delta->pending_streams_current);
-          pending_total = atomic_load(&sys_stats_delta->pending_streams_total);
-          pending_processed = atomic_load(&sys_stats_delta->pending_streams_processed);
-          pending_dropped = atomic_load(&sys_stats_delta->pending_streams_dropped);
-          d_pending_total = pending_total - conn->prev_metrics.pending_streams_total;
-          d_pending_processed = pending_processed - conn->prev_metrics.pending_streams_processed;
-          d_pending_dropped = pending_dropped - conn->prev_metrics.pending_streams_dropped;
-        }
-
-        n = snprintf(p, end - p,
-                     "%s\"aio\":{\"bytes\":{\"d_sent\":%lu,\"d_recv\":%lu},"
-                     "\"requests\":{\"d_total\":%lu},"
-                     "\"connections\":{\"active\":%lu,\"idle\":%lu,\"closing\":%lu},"
-                     "\"pending_streams\":{\"current\":%lu,\"d_total\":%lu,\"d_processed\":%lu,\"d_dropped\":%lu}}",
-                     metrics_need_comma ? "," : "",
-                     d_sent, d_recv, d_req,
-                     atomic_load(&aio_metrics->connections_active),
-                     atomic_load(&aio_metrics->connections_idle),
-                     atomic_load(&aio_metrics->connections_closing),
-                     pending_current, d_pending_total, d_pending_processed, d_pending_dropped);
-        if (n < 0 || n >= end - p) return -1;
-        p += n;
-        metrics_need_comma = true;
-
-        // Update previous metrics for next delta
-        conn->prev_metrics.bytes_sent = bytes_sent;
-        conn->prev_metrics.bytes_recv = bytes_recv;
-        conn->prev_metrics.requests_total = requests;
-        conn->prev_metrics.connections_total = atomic_load(&aio_metrics->connections_total);
-        // Update pending streams previous values
-        conn->prev_metrics.pending_streams_current = pending_current;
-        conn->prev_metrics.pending_streams_total = pending_total;
-        conn->prev_metrics.pending_streams_processed = pending_processed;
-        conn->prev_metrics.pending_streams_dropped = pending_dropped;
-      }
+      // Update previous metrics for next delta
+      conn->prev_metrics.bytes_sent = aio_bytes_sent;
+      conn->prev_metrics.bytes_recv = aio_bytes_recv;
+      conn->prev_metrics.requests_total = aio_requests;
+      conn->prev_metrics.connections_total = aio_connections;
+      conn->prev_metrics.pending_streams_current = pending_current;
+      conn->prev_metrics.pending_streams_total = pending_total;
+      conn->prev_metrics.pending_streams_processed = pending_processed;
+      conn->prev_metrics.pending_streams_dropped = pending_dropped;
     }
 
     // SSE registry stats (always include for real-time dashboard stream count)
@@ -2045,6 +2305,19 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
   if (n < 0 || n >= end - p) goto cleanup;
   p += n;
 
+  // Platform detection for cross-platform UI adaptation
+#ifdef __APPLE__
+  n = snprintf(p, end - p, "\"platform\":\"darwin\",");
+#elif defined(__linux__)
+  n = snprintf(p, end - p, "\"platform\":\"linux\",");
+#elif defined(_WIN32)
+  n = snprintf(p, end - p, "\"platform\":\"windows\",");
+#else
+  n = snprintf(p, end - p, "\"platform\":\"unknown\",");
+#endif
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
   // ===== Memory section =====
   n = snprintf(p, end - p, "\"memory\":{");
   if (n < 0 || n >= end - p) goto cleanup;
@@ -2174,10 +2447,15 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_siz
   p += n;
 
   n = snprintf(p, end - p,
-               ",\"threshold_pct\":%u,\"cycles\":%lu,\"emergency\":%zu},",
+               ",\"threshold_pct\":%u,\"cycles\":%lu,\"emergency\":%zu,"
+               "\"fragmentation\":{\"lval_pct\":%.1f,\"lenv_pct\":%.1f,\"free_list_count\":%zu,\"free_list_bytes\":%zu}},",
                (unsigned)snapshot.gc_heap.gc_threshold_pct,
                snapshot.gc_heap.gc_cycles,
-               snapshot.gc_heap.emergency_collections);
+               snapshot.gc_heap.emergency_collections,
+               snapshot.gc_heap.lval_fragmentation * 100.0,
+               snapshot.gc_heap.lenv_fragmentation * 100.0,
+               snapshot.gc_heap.free_list_count,
+               snapshot.gc_heap.free_list_bytes);
   if (n < 0 || n >= end - p) goto cleanup;
   p += n;
 
@@ -2570,8 +2848,10 @@ static void sse_push_diagnostics(uv_timer_t *timer) {
   }
 
   // Collect memory snapshot once for all streams
+  // Use cached snapshot to avoid O(n) free list walks when slabs haven't changed
   valk_mem_snapshot_t snapshot = {0};
-  valk_mem_snapshot_collect(&snapshot, state->aio_system);
+  const valk_mem_snapshot_t *prev = state->cached_snapshot_valid ? &state->cached_snapshot : NULL;
+  valk_mem_snapshot_collect_with_cache(&snapshot, state->aio_system, prev);
 
   // Collect modular metrics delta once for all streams on this connection
   // Uses per-connection baseline to avoid race conditions with other connections
@@ -2608,14 +2888,19 @@ static void sse_push_diagnostics(uv_timer_t *timer) {
     }
   }
 
-  // If any stream has data to send, flush the HTTP/2 session
-  // All streams share the same connection, so one flush is sufficient
-  if (any_data_sent && state->http_handle) {
+  // Always flush HTTP/2 session, even if no data was sent this tick.
+  // valk_http2_flush_pending updates last_activity_ms, which prevents idle timeout.
+  // Without this, dashboards with no metric changes for 60s would timeout.
+  if (state->http_handle) {
     valk_http2_flush_pending(state->http_handle);
   }
 
-  // Free snapshot allocations
-  valk_mem_snapshot_free(&snapshot);
+  // Update cached snapshot for next tick's caching optimization
+  // Swap rather than copy to avoid double-allocation
+  valk_mem_snapshot_free(&state->cached_snapshot);
+  state->cached_snapshot = snapshot;
+  state->cached_snapshot_valid = true;
+  // Don't free snapshot - we transferred ownership to cached_snapshot
 }
 
 // nghttp2 data provider callback - reads pending SSE data
@@ -2675,6 +2960,10 @@ static void on_timer_close(uv_handle_t *handle) {
       valk_delta_snapshot_free(&state->modular_delta);
     }
     free(state->modular_baseline);
+    // Free cached snapshot
+    if (state->cached_snapshot_valid) {
+      valk_mem_snapshot_free(&state->cached_snapshot);
+    }
     free(state);
     return;
   }
@@ -2693,6 +2982,11 @@ static void on_timer_close(uv_handle_t *handle) {
 
   // Free per-connection baseline
   free(state->modular_baseline);
+
+  // Free cached snapshot
+  if (state->cached_snapshot_valid) {
+    valk_mem_snapshot_free(&state->cached_snapshot);
+  }
 
   // Now safe to free the state struct itself
   free(state);
@@ -2892,6 +3186,10 @@ void valk_sse_diag_stop_all(valk_sse_diag_state_t *state) {
     }
     // Free per-connection baseline
     free(state->modular_baseline);
+    // Free cached snapshot
+    if (state->cached_snapshot_valid) {
+      valk_mem_snapshot_free(&state->cached_snapshot);
+    }
     free(state);
   }
 }

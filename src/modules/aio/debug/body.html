@@ -70,13 +70,13 @@
         </div>
       </div>
 
-      <div class="grid-2">
-        <!-- GC Panel with collapse support -->
+      <div class="grid-1">
+        <!-- GC + Interpreter Panel - spans full width -->
         <article class="panel" aria-labelledby="gc-panel-title" id="gc-panel">
           <div class="panel-header" onclick="togglePanel('gc-panel')" role="button" tabindex="0" aria-expanded="true">
-            <div class="panel-icon gc" aria-hidden="true">G</div>
-            <h3 class="panel-title" id="gc-panel-title">Garbage Collector</h3>
-            <span class="panel-summary" id="gc-summary">-- cycles, --ms max</span>
+            <div class="panel-icon gc" aria-hidden="true">GC</div>
+            <h3 class="panel-title" id="gc-panel-title">GC & Interpreter</h3>
+            <span class="panel-summary" id="gc-summary">-- cycles, -- evals</span>
             <div class="panel-badge" id="gc-cycles-badge" title="Total number of GC cycles since process start">-- cycles</div>
             <span class="expand-icon" aria-hidden="true">▼</span>
           </div>
@@ -93,69 +93,102 @@
                 <span>now</span>
               </div>
             </div>
-            <div class="gc-stats" role="list" aria-label="GC statistics">
-              <div class="gc-stat" role="listitem" title="Total GC cycles since process start. Rapidly increasing cycle count indicates high allocation rate or memory pressure. Compare with heap usage to assess GC efficiency.">
-                <div class="gc-stat-value" id="gc-cycles">--</div>
-                <div class="gc-stat-label">Cycles</div>
+            <!-- GC + Interpreter stats in a unified row -->
+            <div class="gc-interp-stats">
+              <div class="gc-stats" role="list" aria-label="GC statistics">
+                <div class="gc-stat" role="listitem" title="Total GC cycles since process start. Rapidly increasing cycle count indicates high allocation rate or memory pressure.">
+                  <div class="gc-stat-value" id="gc-cycles">--</div>
+                  <div class="gc-stat-label">Cycles</div>
+                </div>
+                <div class="gc-stat" role="listitem" title="Longest single GC pause observed. Pauses >10ms impact P99 latency.">
+                  <div class="gc-stat-value" id="gc-max-pause">--<span class="unit">ms</span></div>
+                  <div class="gc-stat-label">Max Pause</div>
+                </div>
+                <div class="gc-stat" role="listitem" title="Average GC pause duration. Should stay under 5ms for low-latency services.">
+                  <div class="gc-stat-value" id="gc-avg-pause">--<span class="unit">ms</span></div>
+                  <div class="gc-stat-label">Avg Pause</div>
+                </div>
+                <div class="gc-stat" role="listitem" title="Total memory freed by GC.">
+                  <div class="gc-stat-value" id="gc-reclaimed">--<span class="unit">MB</span></div>
+                  <div class="gc-stat-label">Reclaimed</div>
+                </div>
               </div>
-              <div class="gc-stat" role="listitem" title="Longest single GC pause observed. Pauses >10ms impact P99 latency. Pauses >100ms may cause connection timeouts. Reduce by lowering heap size or optimizing allocation patterns.">
-                <div class="gc-stat-value" id="gc-max-pause">--<span class="unit">ms</span></div>
-                <div class="gc-stat-label">Max Pause</div>
+              <div class="gc-interp-sep"></div>
+              <div class="interp-stats" role="list" aria-label="Interpreter statistics">
+                <div class="interp-stat" role="listitem" title="Total expression evaluations">
+                  <div class="interp-stat-value" id="interp-evals">--</div>
+                  <div class="interp-stat-label">Evals</div>
+                </div>
+                <div class="interp-stat" role="listitem" title="User-defined function calls">
+                  <div class="interp-stat-value" id="interp-fn-calls">--</div>
+                  <div class="interp-stat-label">Fn Calls</div>
+                </div>
+                <div class="interp-stat" role="listitem" title="Built-in function calls">
+                  <div class="interp-stat-value" id="interp-builtins">--</div>
+                  <div class="interp-stat-label">Builtins</div>
+                </div>
+                <div class="interp-stat" role="listitem" title="Max call stack depth">
+                  <div class="interp-stat-value" id="interp-stack-depth">--</div>
+                  <div class="interp-stat-label">Stack</div>
+                </div>
+                <div class="interp-stat with-spark" role="listitem" title="Evaluations per second">
+                  <div class="interp-stat-spark" id="interp-eval-spark"></div>
+                  <div class="interp-stat-value" id="interp-eval-rate">--<span class="unit">/s</span></div>
+                  <div class="interp-stat-label">Eval Rate</div>
+                </div>
               </div>
-              <div class="gc-stat" role="listitem" title="Average GC pause duration. Should stay under 5ms for low-latency services. If avg is high but max is similar, GC is consistently slow - consider heap tuning.">
-                <div class="gc-stat-value" id="gc-avg-pause">--<span class="unit">ms</span></div>
-                <div class="gc-stat-label">Avg Pause</div>
+            </div>
+
+            <!-- Object Survival Histogram - Leak Detection -->
+            <div class="gc-survival-section" title="Object lifetimes: shows how many GC cycles objects survive before being collected. High numbers in 'Old' bucket (21+ cycles) suggest potential memory leaks.">
+              <div class="gc-survival-header">
+                <span class="gc-survival-title">Object Lifetimes</span>
+                <span class="gc-survival-efficiency" id="gc-efficiency">Efficiency: <span id="gc-efficiency-value">--</span>%</span>
+                <span class="gc-leak-warning" id="gc-leak-warning" style="display: none;">Potential leak detected</span>
               </div>
-              <div class="gc-stat" role="listitem" title="Total memory freed by GC. High reclaim rate with stable heap indicates healthy turnover. Low reclaim with growing heap suggests memory leak - investigate long-lived allocations.">
-                <div class="gc-stat-value" id="gc-reclaimed">--<span class="unit">MB</span></div>
-                <div class="gc-stat-label">Reclaimed</div>
+              <div class="gc-survival-histogram" role="img" aria-label="Object survival histogram">
+                <div class="gc-survival-bar gen-0" id="gc-survival-gen0" title="Objects that died in first GC (short-lived - expected)">
+                  <div class="gc-survival-bar-fill"></div>
+                  <span class="gc-survival-bar-label">Gen 0</span>
+                  <span class="gc-survival-bar-count" id="gc-survival-gen0-count">--</span>
+                </div>
+                <div class="gc-survival-bar gen-1-5" id="gc-survival-gen1-5" title="Objects that survived 1-5 GC cycles (normal)">
+                  <div class="gc-survival-bar-fill"></div>
+                  <span class="gc-survival-bar-label">1-5</span>
+                  <span class="gc-survival-bar-count" id="gc-survival-gen1-5-count">--</span>
+                </div>
+                <div class="gc-survival-bar gen-6-20" id="gc-survival-gen6-20" title="Objects that survived 6-20 GC cycles (medium-lived)">
+                  <div class="gc-survival-bar-fill"></div>
+                  <span class="gc-survival-bar-label">6-20</span>
+                  <span class="gc-survival-bar-count" id="gc-survival-gen6-20-count">--</span>
+                </div>
+                <div class="gc-survival-bar gen-21-plus" id="gc-survival-gen21-plus" title="Objects that survived 21+ GC cycles (long-lived - potential leak)">
+                  <div class="gc-survival-bar-fill"></div>
+                  <span class="gc-survival-bar-label">21+</span>
+                  <span class="gc-survival-bar-count" id="gc-survival-gen21-plus-count">--</span>
+                </div>
+              </div>
+              <div class="gc-survival-legend">
+                <span class="gc-survival-legend-item"><span class="legend-dot gen-0"></span>Short-lived (expected)</span>
+                <span class="gc-survival-legend-item"><span class="legend-dot gen-1-5"></span>Normal</span>
+                <span class="gc-survival-legend-item"><span class="legend-dot gen-6-20"></span>Medium</span>
+                <span class="gc-survival-legend-item"><span class="legend-dot gen-21-plus"></span>Long-lived</span>
+              </div>
+            </div>
+
+            <!-- Retained Sets - Top bindings by memory size -->
+            <div class="gc-retained-section" id="gc-retained-section" title="Top bindings by retained memory. Large bindings may indicate memory-heavy data structures or potential leaks.">
+              <div class="gc-retained-header">
+                <span class="gc-retained-title">Top Retained Sets</span>
+                <span class="gc-retained-total" id="gc-retained-total">--</span>
+              </div>
+              <div class="gc-retained-list" id="gc-retained-list" role="list" aria-label="Top retained memory bindings">
+                <div class="gc-retained-empty">No retained set data</div>
               </div>
             </div>
           </div>
         </article>
 
-        <!-- Interpreter with collapse support -->
-        <article class="panel" aria-labelledby="interp-panel-title" id="interp-panel">
-          <div class="panel-header" onclick="togglePanel('interp-panel')" role="button" tabindex="0" aria-expanded="true">
-            <div class="panel-icon interp" aria-hidden="true">I</div>
-            <h3 class="panel-title" id="interp-panel-title">Interpreter</h3>
-            <span class="panel-summary" id="interp-summary">-- evals, -- fn calls</span>
-            <span class="expand-icon" aria-hidden="true">▼</span>
-          </div>
-          <div class="panel-body">
-            <div class="metrics-inline">
-              <span class="metric-inline" title="Total expression evaluations">
-                <span class="metric-inline-label">Evals:</span>
-                <span class="metric-inline-value" id="interp-evals">--</span>
-              </span>
-              <span class="metric-inline-sep">│</span>
-              <span class="metric-inline" title="User-defined function calls">
-                <span class="metric-inline-label">Fn:</span>
-                <span class="metric-inline-value" id="interp-fn-calls">--</span>
-              </span>
-              <span class="metric-inline-sep">│</span>
-              <span class="metric-inline" title="Built-in function calls">
-                <span class="metric-inline-label">Builtin:</span>
-                <span class="metric-inline-value" id="interp-builtins">--</span>
-              </span>
-              <span class="metric-inline-sep">│</span>
-              <span class="metric-inline" title="Max call stack depth">
-                <span class="metric-inline-label">Stack:</span>
-                <span class="metric-inline-value" id="interp-stack-depth">--</span>
-              </span>
-              <span class="metric-inline-sep">│</span>
-              <span class="metric-inline" title="Closures created">
-                <span class="metric-inline-label">Closures:</span>
-                <span class="metric-inline-value" id="interp-closures">--</span>
-              </span>
-              <span class="metric-inline-sep">│</span>
-              <span class="metric-inline" title="Environment lookups">
-                <span class="metric-inline-label">Lookups:</span>
-                <span class="metric-inline-value" id="interp-env-lookups">--</span>
-              </span>
-            </div>
-          </div>
-        </article>
       </div>
 
       <!-- Runtime Memory (Consolidated) -->
@@ -168,7 +201,10 @@
             </div>
           </div>
           <span class="process-memory-stats">
-            <span class="process-stat">RSS: <span id="process-rss-text">--</span></span>
+            <span class="process-stat rss-stat" title="RSS trend over time - shows memory growth pattern">
+              <span class="rss-spark" id="spark-rss"></span>
+              <span>RSS: <span id="process-rss-text">--</span></span>
+            </span>
             <span class="process-stat-sep">/</span>
             <span class="process-stat">VMS: <span id="process-vms-text">--</span></span>
           </span>
@@ -326,6 +362,24 @@
               <span class="pool-widget-legend-item"><span class="pool-widget-legend-marker" style="background: var(--color-error)"></span>gc threshold</span>
               <span class="pool-widget-legend-item" style="margin-left: auto; font-family: var(--font-mono);">reclaimed: <span id="heap-reclaimed">--</span></span>
             </div>
+            <!-- Fragmentation metrics -->
+            <div class="heap-fragmentation-stats" id="fragmentation-stats">
+              <div class="frag-stat">
+                <span class="frag-label">LVAL fragmentation:</span>
+                <span class="frag-value" id="lval-frag-pct">--</span>%
+                <span class="frag-bar"><span class="frag-bar-fill" id="lval-frag-bar"></span></span>
+              </div>
+              <div class="frag-stat">
+                <span class="frag-label">LENV fragmentation:</span>
+                <span class="frag-value" id="lenv-frag-pct">--</span>%
+                <span class="frag-bar"><span class="frag-bar-fill" id="lenv-frag-bar"></span></span>
+              </div>
+              <div class="frag-stat frag-free-list">
+                <span class="frag-label">Free list:</span>
+                <span class="frag-value" id="free-list-count">--</span> objects
+                <span class="frag-detail">(<span id="free-list-bytes">--</span>)</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -333,7 +387,7 @@
 
     <!-- ==================== AIO SYSTEMS ==================== -->
     <!-- Phase 2: HTTP Servers and Clients are now nested under their parent AIO system -->
-    <section class="section-group aio-section" aria-labelledby="aio-section-title">
+    <section class="section-group aio-section" aria-labelledby="aio-section-title" data-profile-hideable>
       <div class="section-header">
         <div class="section-icon aio" aria-hidden="true">AIO</div>
         <h2 class="section-title" id="aio-section-title">Async I/O System</h2>
@@ -391,7 +445,7 @@
     </section>
 
     <!-- ==================== METRICS SYSTEM ==================== -->
-    <section class="section-group metrics-section" aria-labelledby="metrics-section-title">
+    <section class="section-group metrics-section" aria-labelledby="metrics-section-title" data-profile-hideable>
       <div class="section-header">
         <div class="section-icon metrics" aria-hidden="true">M</div>
         <h2 class="section-title" id="metrics-section-title">Metrics Registry</h2>

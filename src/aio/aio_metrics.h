@@ -103,6 +103,8 @@ typedef struct {
   uint64_t gc_pause_us_total;
   uint64_t gc_pause_us_max;
   uint64_t gc_reclaimed_bytes;
+  uint64_t gc_allocated_bytes;  // Cumulative bytes allocated (for rate calculation)
+  uint8_t gc_efficiency_pct;    // Last GC efficiency (reclaimed/before*100, 0-100)
   size_t gc_heap_used;
   size_t gc_heap_total;
 

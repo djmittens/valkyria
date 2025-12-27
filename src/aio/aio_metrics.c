@@ -775,6 +775,8 @@ void valk_vm_metrics_collect(valk_vm_metrics_t* out,
     valk_gc_get_runtime_metrics(heap,
       &out->gc_cycles, &out->gc_pause_us_total, &out->gc_pause_us_max,
       &out->gc_reclaimed_bytes, &out->gc_heap_used, &out->gc_heap_total);
+    out->gc_allocated_bytes = valk_gc_get_allocated_bytes_total(heap);
+    out->gc_efficiency_pct = valk_gc_get_last_efficiency(heap);
   }
 
   // Interpreter metrics
