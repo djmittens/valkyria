@@ -1,0 +1,20 @@
+{
+  "servers": [
+    {
+      "extensions": ["c", "h"],
+      "command": [
+        "clangd",
+        "--clang-tidy",
+        "--fallback-style=Google",
+        "--background-index",
+        "--completion-style=detailed",
+        "--header-insertion=iwyu",
+        "--compile-commands-dir=build"
+      ],
+      "rootDir": ".",
+      "initializationOptions": {
+        "clangdFileStatus": true
+      }
+    }
+  ]
+}

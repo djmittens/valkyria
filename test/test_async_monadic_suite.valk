@@ -1,0 +1,555 @@
+; Async Monadic API Test Suite
+; Tests for all functions in src/async_monadic.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Define reverse - required by async_monadic but not in prelude
+(fun {reverse l} {
+  (fun {reverse-helper acc remaining} {
+    (if (== remaining nil)
+      {acc}
+      {(reverse-helper (join (list (head remaining)) acc) (tail remaining))})
+  })
+  (reverse-helper nil l)
+})
+
+(load "src/async_monadic.valk")
+(test/suite "Async Monadic Tests")
+
+; ============================================================================
+; Core Monadic Operations
+; ============================================================================
+
+(test/define "async/pure wraps value in async context"
+  {do
+    (def {async-op} (async/pure 42))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 42)
+  })
+
+(test/define "async/bind chains async operations"
+  {do
+    (def {double-async} (\ {x} {(async/pure (* x 2))}))
+    (def {async-op} (async/bind (async/pure 21) double-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 42)
+  })
+
+(test/define "async/bind chains multiple operations"
+  {do
+    (def {add-one-async} (\ {x} {(async/pure (+ x 1))}))
+    (def {double-async} (\ {x} {(async/pure (* x 2))}))
+    (def {async-op1} (async/bind (async/pure 10) add-one-async))
+    (def {async-op2} (async/bind async-op1 double-async))
+    (def {result} nil)
+    (async-op2 (\ {x} {(def {result} x)}))
+    (== result 22)
+  })
+
+; ============================================================================
+; Collection Operations
+; ============================================================================
+
+(test/define "async/map-list maps over empty list"
+  {do
+    (def {double-async} (\ {x k} {(k (* x 2))}))
+    (def {async-op} (async/map-list double-async ()))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result ())
+  })
+
+(test/define "async/map-list maps over list"
+  {do
+    (def {double-async} (\ {x k} {(k (* x 2))}))
+    (def {async-op} (async/map-list double-async (list 1 2 3)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result (list 2 4 6))
+  })
+
+(test/define "async/filter-list filters empty list"
+  {do
+    (def {is-positive-async} (\ {x k} {(k (> x 0))}))
+    (def {async-op} (async/filter-list is-positive-async ()))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result ())
+  })
+
+(test/define "async/filter-list filters list"
+  {do
+    (def {is-gt-two-async} (\ {x k} {(k (> x 2))}))
+    (def {async-op} (async/filter-list is-gt-two-async (list 1 2 3 4 5 6)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result (list 3 4 5 6))
+  })
+
+(test/define "async/filter-list keeps matching items"
+  {do
+    (def {is-greater-than-3} (\ {x k} {(k (> x 3))}))
+    (def {async-op} (async/filter-list is-greater-than-3 (list 1 2 3 4 5)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result (list 4 5))
+  })
+
+(test/define "async/fold-list folds empty list"
+  {do
+    (def {add-async} (\ {acc x k} {(k (+ acc x))}))
+    (def {async-op} (async/fold-list add-async 0 ()))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 0)
+  })
+
+(test/define "async/fold-list folds list"
+  {do
+    (def {add-async} (\ {acc x k} {(k (+ acc x))}))
+    (def {async-op} (async/fold-list add-async 0 (list 1 2 3 4 5)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 15)
+  })
+
+(test/define "async/fold-list with initial value"
+  {do
+    (def {mul-async} (\ {acc x k} {(k (* acc x))}))
+    (def {async-op} (async/fold-list mul-async 1 (list 2 3 4)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 24)
+  })
+
+(test/define "async/collect collects empty list"
+  {do
+    (def {async-op} (async/collect ()))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result ())
+  })
+
+(test/define "async/collect collects async results"
+  {do
+    (def {op1} (async/pure 1))
+    (def {op2} (async/pure 2))
+    (def {op3} (async/pure 3))
+    (def {async-op} (async/collect (list op1 op2 op3)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result (list 1 2 3))
+  })
+
+(test/define "async/sequence with empty list"
+  {do
+    (def {async-op} (async/sequence ()))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result nil)
+  })
+
+(test/define "async/sequence returns last result"
+  {do
+    (def {op1} (async/pure 1))
+    (def {op2} (async/pure 2))
+    (def {op3} (async/pure 42))
+    (def {async-op} (async/sequence (list op1 op2 op3)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 42)
+  })
+
+; ============================================================================
+; Parallel-Style Operations
+; ============================================================================
+
+(test/define "async/all is same as async/collect"
+  {do
+    (def {op1} (async/pure 10))
+    (def {op2} (async/pure 20))
+    (def {async-op} (async/all (list op1 op2)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result (list 10 20))
+  })
+
+(test/define "async/race with empty list returns nil"
+  {do
+    (def {async-op} (async/race ()))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result nil)
+  })
+
+(test/define "async/race returns first result"
+  {do
+    (def {op1} (async/pure 42))
+    (def {op2} (async/pure 100))
+    (def {async-op} (async/race (list op1 op2)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 42)
+  })
+
+; ============================================================================
+; Conditional Operations
+; ============================================================================
+
+(test/define "async/when executes when true"
+  {do
+    (def {async-op} (async/when true (async/pure 42)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 42)
+  })
+
+(test/define "async/when skips when false"
+  {do
+    (def {async-op} (async/when false (async/pure 42)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result nil)
+  })
+
+(test/define "async/unless executes when false"
+  {do
+    (def {async-op} (async/unless false (async/pure 99)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 99)
+  })
+
+(test/define "async/unless skips when true"
+  {do
+    (def {async-op} (async/unless true (async/pure 99)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result nil)
+  })
+
+; ============================================================================
+; Utility Operations
+; ============================================================================
+
+(test/define "async/tap returns original value"
+  {do
+    (def {side-effect-value} 0)
+    (def {set-side-effect} (\ {v k} {
+      (def {side-effect-value} v)
+      (k "ignored")
+    }))
+    (def {async-op} (async/tap 42 set-side-effect))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (and (== result 42) (== side-effect-value 42))
+  })
+
+(test/define "async/const returns constant ignoring op result"
+  {do
+    (def {async-op} (async/const 100 (async/pure 999)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 100)
+  })
+
+; ============================================================================
+; Combinators
+; ============================================================================
+
+(test/define "async/pipe with empty fns"
+  {do
+    (def {async-op} (async/pipe 42 ()))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 42)
+  })
+
+(test/define "async/pipe chains functions"
+  {do
+    (def {add-ten} (\ {x k} {(k (+ x 10))}))
+    (def {double} (\ {x k} {(k (* x 2))}))
+    (def {async-op} (async/pipe 5 (list add-ten double)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 30)
+  })
+
+(test/define "async/compose creates composed function"
+  {do
+    ; async/compose expects CPS-style functions: (\ {x k} { ... (k result) })
+    (def {add-one-cps} (\ {x k} {(k (+ x 1))}))
+    (def {double-cps} (\ {x k} {(k (* x 2))}))
+    (def {composed} (async/compose add-one-cps double-cps))
+    (def {async-result-fn} (composed 5))
+    (def {result} nil)
+    (async-result-fn (\ {x} {(def {result} x)}))
+    (== result 12)
+  })
+
+; ============================================================================
+; Error Handling
+; ============================================================================
+
+(test/define "async/try wraps success in ok tag"
+  {do
+    (def {async-op} (async/try (async/pure 42)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (and (== (head result) "ok") (== (nth 2 result) 42))
+  })
+
+(test/define "async/try-result passes through tagged error"
+  {do
+    ; Async op that returns a convention-based error (tagged tuple)
+    (def {error-async} (\ {k} { (k (list "error" "test error")) }))
+    (def {async-op} (async/try-result error-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (and (== (head result) "error") (== (nth 2 result) "test error"))
+  })
+
+(test/define "async/try-result passes through tagged ok"
+  {do
+    ; Async op that returns already tagged result
+    (def {ok-async} (\ {k} { (k (list "ok" 100)) }))
+    (def {async-op} (async/try-result ok-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (and (== (head result) "ok") (== (nth 2 result) 100))
+  })
+
+(test/define "async/try-result wraps untagged result"
+  {do
+    ; Async op that returns untagged result
+    (def {untagged-async} (\ {k} { (k 42) }))
+    (def {async-op} (async/try-result untagged-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (and (== (head result) "ok") (== (nth 2 result) 42))
+  })
+
+(test/define "async/recover uses primary on success"
+  {do
+    ; Using tagged ok result
+    (def {risky-op} (\ {k} { (k (list "ok" 42)) }))
+    (def {fallback-op} (async/pure 999))
+    (def {async-op} (async/recover risky-op fallback-op))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 42)
+  })
+
+(test/define "async/recover uses fallback on error"
+  {do
+    ; Async op that returns a convention-based error (tagged tuple)
+    (def {error-async} (\ {k} { (k (list "error" "operation failed")) }))
+    (def {fallback-op} (async/pure 999))
+    (def {async-op} (async/recover error-async fallback-op))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 999)
+  })
+
+(test/define "async/recover with untagged success"
+  {do
+    ; Using untagged result (should be treated as success)
+    (def {risky-op} (\ {k} { (k 42) }))
+    (def {fallback-op} (async/pure 999))
+    (def {async-op} (async/recover risky-op fallback-op))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result 42)
+  })
+
+(test/define "async/run executes async operation"
+  {do
+    (def {async-op} (async/pure 42))
+    (def {result} (async/run async-op))
+    (== result 42)
+  })
+
+(test/define "async/run with complex operation"
+  {do
+    (def {double} (\ {x} {(async/pure (* x 2))}))
+    (def {async-op} (async/bind (async/pure 21) double))
+    (def {result} (async/run async-op))
+    (== result 42)
+  })
+
+; ============================================================================
+; Higher-Level Patterns
+; ============================================================================
+
+(test/define "async/traverse is same as async/map-list"
+  {do
+    (def {double-async} (\ {x k} {(k (* x 2))}))
+    (def {async-op} (async/traverse double-async (list 1 2 3)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result (list 2 4 6))
+  })
+
+(test/define "async/zip-with empty lists"
+  {do
+    (def {add-async} (\ {a b k} {(k (+ a b))}))
+    (def {async-op} (async/zip-with add-async () ()))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result ())
+  })
+
+(test/define "async/zip-with zips lists"
+  {do
+    (def {add-async} (\ {a b k} {(k (+ a b))}))
+    (def {async-op} (async/zip-with add-async (list 1 2 3) (list 10 20 30)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result (list 11 22 33))
+  })
+
+(test/define "async/zip-with stops at shorter list (first shorter)"
+  {do
+    (def {add-async} (\ {a b k} {(k (+ a b))}))
+    (def {async-op} (async/zip-with add-async (list 1 2) (list 10 20 30)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result (list 11 22))
+  })
+
+(test/define "async/zip-with stops at shorter list (second shorter)"
+  {do
+    (def {add-async} (\ {a b k} {(k (+ a b))}))
+    (def {async-op} (async/zip-with add-async (list 1 2 3) (list 10 20)))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result (list 11 22))
+  })
+
+(test/define "async/replicate with 0"
+  {do
+    (def {counter} 0)
+    (def {inc-async} (\ {k} {
+      (def {counter} (+ counter 1))
+      (k counter)
+    }))
+    (def {async-op} (async/replicate 0 inc-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result ())
+  })
+
+(test/define "async/replicate n times"
+  {do
+    (def {counter} 0)
+    (def {inc-async} (\ {k} {
+      (def {counter} (+ counter 1))
+      (k counter)
+    }))
+    (def {async-op} (async/replicate 3 inc-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result (list 1 2 3))
+  })
+
+(test/define "async/take returns n results"
+  {do
+    (def {counter} 0)
+    (def {next-async} (\ {k} {
+      (def {counter} (+ counter 1))
+      (k counter)
+    }))
+    (def {async-op} (async/take 5 next-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result (list 1 2 3 4 5))
+  })
+
+(test/define "async/partition with empty list"
+  {do
+    (def {sum-async} (\ {lst k} {(k (sum lst))}))
+    (def {async-op} (async/partition 2 () sum-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result ())
+  })
+
+(test/define "async/partition processes batches"
+  {do
+    (def {sum-async} (\ {lst k} {(k (sum lst))}))
+    (def {async-op} (async/partition 2 (list 1 2 3 4 5 6) sum-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result (list 3 7 11))
+  })
+
+(test/define "async/partition with single batch"
+  {do
+    (def {sum-async} (\ {lst k} {(k (sum lst))}))
+    (def {async-op} (async/partition 3 (list 1 2 3) sum-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (== result (list 6))
+  })
+
+; ============================================================================
+; Async While (tests the loop logic that async-forever uses)
+; ============================================================================
+
+(test/define "async/while with zero iterations"
+  {do
+    (def {counter} 0)
+    (def {inc-async} (\ {k} {
+      (def {counter} (+ counter 1))
+      (k counter)
+    }))
+    ; Condition immediately false (0 iterations)
+    (def {async-op} (async/while (\ {_} {false}) inc-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (and (== result ()) (== counter 0))
+  })
+
+(test/define "async/while with limited iterations"
+  {do
+    (def {counter} 0)
+    (def {inc-async} (\ {k} {
+      (def {counter} (+ counter 1))
+      (k counter)
+    }))
+    ; Run while iteration < 3
+    (def {async-op} (async/while (\ {i} {(< i 3)}) inc-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    ; Compare element-by-element since join produces CONS, not QEXPR
+    (and (== (len result) 3)
+         (and (== (nth 1 result) 1)
+              (and (== (nth 2 result) 2)
+                   (and (== (nth 3 result) 3)
+                        (== counter 3)))))
+  })
+
+(test/define "async/while accumulates results"
+  {do
+    (def {value} 10)
+    (def {double-async} (\ {k} {
+      (def {value} (* value 2))
+      (k value)
+    }))
+    ; Run 4 times
+    (def {async-op} (async/while (\ {i} {(< i 4)}) double-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    ; Compare element-by-element since join produces CONS, not QEXPR
+    (and (== (len result) 4)
+         (and (== (nth 1 result) 20)
+              (and (== (nth 2 result) 40)
+                   (and (== (nth 3 result) 80)
+                        (== (nth 4 result) 160)))))
+  })
+
+; Run all tests
+(test/run {})

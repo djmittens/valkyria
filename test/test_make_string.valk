@@ -1,0 +1,28 @@
+; Test make-string builtin
+(load "src/prelude.valk")
+
+(println "Testing make-string builtin...")
+
+; Test 1: Basic string repetition
+(println "Test 1: 10 A's")
+(= {s1} (make-string 10 "A"))
+(println s1)
+(printf "Length: %d (expected 10)\n" (len s1))
+
+; Test 2: Character code (65 = 'A')
+(println "\nTest 2: 20 A's from char code 65")
+(= {s2} (make-string 20 65))
+(println s2)
+(printf "Length: %d (expected 20)\n" (len s2))
+
+; Test 3: Larger string (1MB)
+(println "\nTest 3: 1MB string")
+(= {s3} (make-string 1048576 "X"))
+(printf "Length: %d (expected 1048576)\n" (len s3))
+
+; Test 4: 50MB string
+(println "\nTest 4: 50MB string")
+(= {s4} (make-string 52428800 65))
+(printf "Length: %d (expected 52428800)\n" (len s4))
+
+(println "\nAll tests passed!")

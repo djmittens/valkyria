@@ -1,0 +1,13 @@
+; Test Prometheus metrics output
+(load "src/prelude.valk")
+
+; Create some test metrics
+(println "Creating test metrics...")
+(metrics/counter-inc "http_requests_total" "server" "api" "port" "8443")
+(metrics/counter-inc "http_requests_total" "server" "api" "port" "8443")
+(metrics/counter-inc "http_requests_total" "server" "api" "port" "8443")
+(metrics/counter-inc "http_requests_total" "server" "web" "port" "8080")
+(metrics/counter-inc "http_requests_total" "server" "web" "port" "8080")
+
+(println "Prometheus format output:")
+(println (metrics/prometheus))

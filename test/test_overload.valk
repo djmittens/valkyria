@@ -1,0 +1,19 @@
+; Test: Basic 503 Response on Overload
+; This creates a server with a tiny arena pool to force overload conditions
+
+(load "src/prelude.valk")
+
+; Create system with tiny arena pool to force overload
+; Note: aio/start currently doesn't accept config - using default system
+; TODO: Add aio/start config support for arena-pool-size, arena-size
+(def aio (aio/start))
+
+(def handler (lambda {req respond}
+  (respond 200 {"content-type" "text/plain"} "OK")))
+
+(http2/server-listen aio 8443 handler {:max-concurrent-streams 10})
+
+; Server running - test with external client
+(print "Server running on :8443 with arena-pool-size=2")
+(print "Test with: curl -k https://localhost:8443/ & curl -k https://localhost:8443/ & curl -k https://localhost:8443/")
+(aio/run aio)

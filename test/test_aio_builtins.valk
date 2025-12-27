@@ -1,0 +1,11 @@
+(load "src/prelude.valk")
+
+(print "Testing AIO metrics builtins...")
+
+(def {sys} (aio/start))
+
+(print "Metrics qexpr:" (aio/metrics sys))
+(print "Metrics JSON:" (aio/metrics-json sys))
+(print "Metrics Prometheus:" (aio/metrics-prometheus sys))
+
+(print "AIO metrics builtins test complete")

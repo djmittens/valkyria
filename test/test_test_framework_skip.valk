@@ -1,0 +1,24 @@
+; Test the test/skip functionality
+; This must be a separate file since it skips tests
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "Skip Suite Test")
+
+; Enable skipping with a reason
+(test/skip "Testing skip functionality")
+
+; Define a test that will be skipped
+(test/define "this-test-is-skipped"
+  {do
+    (test/assert false "This should never run")
+    true
+  })
+
+; Define another skipped test
+(test/define "another-skipped-test"
+  {true})
+
+; Run - all tests should be skipped
+(test/run {})

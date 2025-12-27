@@ -1,0 +1,17 @@
+; Regression test: namespaced symbols (/ in symbol names)
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "Namespace Tests")
+
+; Test that / works in symbol names (module namespacing)
+(test/define "namespaced-symbols"
+  {(do
+    (fun {foo/bar x} {(* 2 x)})
+    (fun {baz/qux a b} {(+ a b)})
+
+    (test/assert-eq 10 (foo/bar 5) "namespaced function should work")
+    (test/assert-eq 7 (baz/qux 3 4) "another namespaced function should work"))})
+
+(test/run {})

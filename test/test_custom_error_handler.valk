@@ -1,0 +1,23 @@
+; Test: Custom Error Handler
+; This tests that the :error-handler config option works correctly
+
+(load "src/prelude.valk")
+
+; Error handler is called once at startup with status-code=503
+; The returned string is cached and used for all future 503 responses
+(def my-error-handler (lambda {status-code}
+  (str "<html><body>"
+       "<h1>Custom " status-code "</h1>"
+       "<p>Server: MyApp v1.0</p>"
+       "<p>Please try again in a few seconds.</p>"
+       "</body></html>")))
+
+(def aio (aio/start))
+
+(def handler (lambda {req respond}
+  (respond 200 {"content-type" "text/plain"} "OK")))
+
+(http2/server-listen aio 8443 handler {:error-handler my-error-handler})
+(print "Custom 503 page pre-rendered at startup")
+(print "Server running on :8443 with custom error handler")
+(aio/run aio)

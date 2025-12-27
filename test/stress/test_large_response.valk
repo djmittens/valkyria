@@ -1,0 +1,50 @@
+; Large Response Test Server (Self-Contained)
+; Serves a 50MB response through the Lisp machinery.
+; This exercises the full path: Lisp handler -> response building -> HTTP/2 framing -> SSL
+;
+; This test uses make-string to generate the test data at runtime, making it
+; self-contained with no external file dependencies.
+;
+; Run with: VALK_HEAP_HARD_LIMIT=256000000 ./build/valk test/stress/test_large_response.valk
+; Test with: curl -k -o /dev/null -w "%{size_download}\n" https://localhost:8445/big
+
+(load "src/prelude.valk")
+
+; Fixed port for testing (can't easily pass command line args)
+(def {port} 8445)
+
+(println "=== Large Response Test Server ===")
+(println "")
+
+; 50MB = 52428800 bytes
+(def {RESPONSE_SIZE} 52428800)
+
+; Generate the 50MB test data using make-string
+(println "Generating 50MB test data...")
+(def {big-string} (make-string RESPONSE_SIZE 65))  ; 65 = 'A'
+(printf "Generated: %d bytes\n" (len big-string))
+(println "")
+
+(def {sys} aio)
+
+; Server handler - returns the 50MB string via Lisp (uses quasiquote)
+(def {server-handler}
+  (\ {req} {
+    (= {path} (plist/get req (head {:path})))
+    (select
+      {(== path "/big")
+       ; Use quasiquote - this ensures the response goes through Lisp machinery
+       {`{:status "200" :content-type "text/plain" :body ,big-string}}}
+      {(== path "/shutdown")
+       {(do
+          (aio/stop sys)
+          {:status "200" :content-type "text/plain" :body "shutting down"})}}
+      {otherwise
+       {{:status "200" :content-type "text/plain" :body "Request /big for 50MB"}}})
+  }))
+
+; Start the server
+(printf "Starting server on port %d...\n" port)
+(http2/server-listen sys port server-handler)
+(println "Server ready. Request /big for 50MB response, /shutdown to stop.")
+(aio/run sys)

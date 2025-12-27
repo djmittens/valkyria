@@ -1,0 +1,76 @@
+; Test the test framework itself
+; Run with: ./build/valk test/test_test_framework.valk
+;
+; This file exercises the test.valk module's internal functions
+; to improve code coverage.
+
+; Load prelude first (has all the standard functions)
+(load "src/prelude.valk")
+
+; Load test framework
+(load "src/modules/test.valk")
+
+; Set the test suite name
+(test/suite "Test Framework Tests")
+
+; Test: test/suite sets suite name (before enabling debug)
+(test/define "test-suite-function"
+  {do
+    (test/suite "New Suite Name")
+    (test/assert-eq "New Suite Name" *test-suite-name* "suite name should be updated")
+    (test/suite "Test Framework Tests")
+    true
+  })
+
+; Test: test/define adds tests to registry
+(test/define "test-define-function"
+  {do
+    (= {count-before} (len *test-registry*))
+    (test/assert (> count-before 0) "registry should have tests")
+    true
+  })
+
+; Test: test/assert returns true on success
+(test/define "test-assert-passes"
+  {test/assert true "this should pass"})
+
+; Test: test/assert-eq returns true on match
+(test/define "test-assert-eq-passes"
+  {test/assert-eq 42 42 "42 should equal 42"})
+
+; Enable debug mode for last few tests to exercise debug code paths
+(test/debug 1)
+
+; Test: test/debug function enables debug output - this one runs WITH debug on
+(test/define "test-debug-enabled"
+  {do
+    (test/assert-eq 1 *test-debug* "debug mode should be enabled")
+    true
+  })
+
+; Test: verify debug output is shown (debug mode is on for this test)
+(test/define "test-with-debug-output"
+  {do
+    (= {x} 42)
+    (test/assert-eq 42 x "variable should be 42")
+    true
+  })
+
+; Test: test/assert returns error on failure
+(test/define "test-assert-fails-returns-error"
+  {do
+    (= {result} (test/assert false "expected failure"))
+    (test/assert (error? result) "assert should return error on false")
+    true
+  })
+
+; Test: test/assert-eq returns error on mismatch
+(test/define "test-assert-eq-fails-returns-error"
+  {do
+    (= {result} (test/assert-eq 1 2 "expected mismatch"))
+    (test/assert (error? result) "assert-eq should return error on mismatch")
+    true
+  })
+
+; Run all tests
+(test/run {})

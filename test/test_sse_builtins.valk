@@ -1,0 +1,227 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "SSE Builtins Error Cases")
+
+(test/define "sse-open-outside-handler-fails"
+  {do
+    (= {result} (sse/open))
+    (test/assert (error? result) "sse/open outside HTTP handler should fail")
+    true
+  })
+
+(test/define "sse-open-with-args-fails"
+  {do
+    (= {result} (sse/open "extra-arg"))
+    (test/assert (error? result) "sse/open with arguments should fail")
+    true
+  })
+
+(test/define "sse-send-no-args-fails"
+  {do
+    (= {result} (sse/send))
+    (test/assert (error? result) "sse/send with no args should fail")
+    true
+  })
+
+(test/define "sse-send-one-arg-fails"
+  {do
+    (= {result} (sse/send "not-a-stream"))
+    (test/assert (error? result) "sse/send with one arg should fail")
+    true
+  })
+
+(test/define "sse-send-wrong-type-fails"
+  {do
+    (= {result} (sse/send "not-a-stream" "data"))
+    (test/assert (error? result) "sse/send with string as stream should fail")
+    true
+  })
+
+(test/define "sse-send-too-many-args-fails"
+  {do
+    (= {result} (sse/send "a" "b" "c" "d"))
+    (test/assert (error? result) "sse/send with 4 args should fail")
+    true
+  })
+
+(test/define "sse-close-no-args-fails"
+  {do
+    (= {result} (sse/close))
+    (test/assert (error? result) "sse/close with no args should fail")
+    true
+  })
+
+(test/define "sse-close-wrong-type-fails"
+  {do
+    (= {result} (sse/close "not-a-stream"))
+    (test/assert (error? result) "sse/close with string should fail")
+    true
+  })
+
+(test/define "sse-writable-no-args-fails"
+  {do
+    (= {result} (sse/writable?))
+    (test/assert (error? result) "sse/writable? with no args should fail")
+    true
+  })
+
+(test/define "sse-writable-wrong-type-fails"
+  {do
+    (= {result} (sse/writable? "not-a-stream"))
+    (test/assert (error? result) "sse/writable? with string should fail")
+    true
+  })
+
+(test/define "sse-on-drain-no-args-fails"
+  {do
+    (= {result} (sse/on-drain))
+    (test/assert (error? result) "sse/on-drain with no args should fail")
+    true
+  })
+
+(test/define "sse-on-drain-one-arg-fails"
+  {do
+    (= {result} (sse/on-drain "stream"))
+    (test/assert (error? result) "sse/on-drain with one arg should fail")
+    true
+  })
+
+(test/define "sse-on-drain-wrong-stream-type-fails"
+  {do
+    (= {result} (sse/on-drain "not-a-stream" (\ {} {})))
+    (test/assert (error? result) "sse/on-drain with string stream should fail")
+    true
+  })
+
+(test/define "sse-on-drain-wrong-callback-type-fails"
+  {do
+    (= {result} (sse/on-drain "stream" "not-a-function"))
+    (test/assert (error? result) "sse/on-drain with string callback should fail")
+    true
+  })
+
+; New timeout/cancellation/shutdown tests
+(test/suite "SSE Timeout and Cancellation")
+
+(test/define "sse-set-timeout-no-args-fails"
+  {do
+    (= {result} (sse/set-timeout))
+    (test/assert (error? result) "sse/set-timeout with no args should fail")
+    true
+  })
+
+(test/define "sse-set-timeout-one-arg-fails"
+  {do
+    (= {result} (sse/set-timeout "stream"))
+    (test/assert (error? result) "sse/set-timeout with one arg should fail")
+    true
+  })
+
+(test/define "sse-set-timeout-wrong-stream-type-fails"
+  {do
+    (= {result} (sse/set-timeout "not-a-stream" 1000))
+    (test/assert (error? result) "sse/set-timeout with string stream should fail")
+    true
+  })
+
+(test/define "sse-set-timeout-wrong-timeout-type-fails"
+  {do
+    (= {result} (sse/set-timeout "stream" "not-a-number"))
+    (test/assert (error? result) "sse/set-timeout with string timeout should fail")
+    true
+  })
+
+(test/define "sse-cancel-no-args-fails"
+  {do
+    (= {result} (sse/cancel))
+    (test/assert (error? result) "sse/cancel with no args should fail")
+    true
+  })
+
+(test/define "sse-cancel-wrong-type-fails"
+  {do
+    (= {result} (sse/cancel "not-a-stream"))
+    (test/assert (error? result) "sse/cancel with string should fail")
+    true
+  })
+
+(test/define "sse-stream-id-no-args-fails"
+  {do
+    (= {result} (sse/stream-id))
+    (test/assert (error? result) "sse/stream-id with no args should fail")
+    true
+  })
+
+(test/define "sse-stream-id-wrong-type-fails"
+  {do
+    (= {result} (sse/stream-id "not-a-stream"))
+    (test/assert (error? result) "sse/stream-id with string should fail")
+    true
+  })
+
+(test/define "sse-cancel-by-id-no-args-fails"
+  {do
+    (= {result} (sse/cancel-by-id))
+    (test/assert (error? result) "sse/cancel-by-id with no args should fail")
+    true
+  })
+
+(test/define "sse-cancel-by-id-wrong-type-fails"
+  {do
+    (= {result} (sse/cancel-by-id "not-a-number"))
+    (test/assert (error? result) "sse/cancel-by-id with string should fail")
+    true
+  })
+
+(test/define "sse-cancel-by-id-nonexistent"
+  {do
+    (= {result} (sse/cancel-by-id 999999))
+    (test/assert (= result false) "sse/cancel-by-id with nonexistent ID should return false")
+    true
+  })
+
+(test/define "sse-shutdown-all-no-args"
+  {do
+    (= {result} (sse/shutdown-all))
+    (test/assert (number? result) "sse/shutdown-all should return a number")
+    true
+  })
+
+(test/define "sse-shutdown-all-with-timeout"
+  {do
+    (= {result} (sse/shutdown-all 0))
+    (test/assert (number? result) "sse/shutdown-all with timeout should return a number")
+    true
+  })
+
+(test/define "sse-shutdown-all-too-many-args-fails"
+  {do
+    (= {result} (sse/shutdown-all 1000 2000))
+    (test/assert (error? result) "sse/shutdown-all with 2 args should fail")
+    true
+  })
+
+(test/define "sse-shutdown-all-wrong-type-fails"
+  {do
+    (= {result} (sse/shutdown-all "not-a-number"))
+    (test/assert (error? result) "sse/shutdown-all with string should fail")
+    true
+  })
+
+(test/define "sse-stream-count-no-args"
+  {do
+    (= {result} (sse/stream-count))
+    (test/assert (number? result) "sse/stream-count should return a number")
+    (test/assert (>= result 0) "sse/stream-count should return >= 0")
+    true
+  })
+
+(test/define "sse-stream-count-with-args-fails"
+  {do
+    (= {result} (sse/stream-count "extra"))
+    (test/assert (error? result) "sse/stream-count with args should fail")
+    true
+  })
+
+(test/run {})

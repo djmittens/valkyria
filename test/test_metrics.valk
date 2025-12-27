@@ -1,0 +1,303 @@
+; Metrics System Tests
+; Run with: ./build/valk test/test_metrics.valk
+
+; Load prelude first
+(load "src/prelude.valk")
+
+; Load test framework
+(load "src/modules/test.valk")
+
+; Set the test suite name
+(test/suite "Metrics Tests")
+
+; ============================================================================
+; Helper functions for testing
+; ============================================================================
+
+; Simple string contains check - returns 1 if needle is in haystack, 0 otherwise
+; This is a naive implementation but sufficient for testing
+(fun {str-contains haystack needle} {
+  do
+    (= {h-len} (len haystack))
+    (= {n-len} (len needle))
+    (if (> n-len h-len)
+      {0}
+      {do
+        ; For simplicity, we'll just check if both strings are non-empty
+        ; and return true if needle length > 0 and haystack length > 0
+        ; This is a placeholder - in a real implementation we'd need
+        ; proper string searching which isn't available yet
+        (if (and (> h-len 0) (> n-len 0))
+          {1}
+          {0})
+      })
+  })
+
+; Check if a value is a string type
+; Since 'type' builtin is not implemented, we'll use a simple check
+; A string will have a length (using len) and not error
+(fun {is-string? v} {
+  ; For now, just check that we can call len on it without error
+  ; This is a workaround since type() doesn't work
+  (> (len v) -1)
+})
+
+; ============================================================================
+; Test: metrics/json returns a string
+; ============================================================================
+
+(test/define "metrics-json-returns-string"
+  {do
+    (= {result} (metrics/json))
+    (test/assert (is-string? result) "metrics/json should return a string")
+    true
+  })
+
+; ============================================================================
+; Test: metrics/json returns non-empty output
+; ============================================================================
+
+(test/define "metrics-json-non-empty"
+  {do
+    (= {result} (metrics/json))
+    (test/assert (> (len result) 0) "metrics/json should return non-empty string")
+    true
+  })
+
+; ============================================================================
+; Test: metrics/prometheus returns a string
+; ============================================================================
+
+(test/define "metrics-prometheus-returns-string"
+  {do
+    (= {result} (metrics/prometheus))
+    (test/assert (is-string? result) "metrics/prometheus should return a string")
+    true
+  })
+
+; ============================================================================
+; Test: metrics/prometheus returns output after creating metrics
+; ============================================================================
+
+(test/define "metrics-prometheus-with-metric"
+  {do
+    ; Create a metric first (V2 API: create counter handle, then increment)
+    (= {counter} (metrics/counter "test_prom_basic"))
+    (metrics/counter-inc counter)
+    (= {result} (metrics/prometheus))
+    (test/assert (> (len result) 0) "metrics/prometheus should return non-empty string after creating metric")
+    true
+  })
+
+; ============================================================================
+; Test: Counter increment without labels
+; ============================================================================
+
+(test/define "counter-inc-no-labels"
+  {do
+    ; Create and increment a test counter (V2 API)
+    (= {counter} (metrics/counter "test_counter_basic"))
+    (metrics/counter-inc counter)
+    (metrics/counter-inc counter)
+    (metrics/counter-inc counter)
+
+    ; Get metrics output
+    (= {result} (metrics/json))
+
+    ; Verify we got a string back
+    (test/assert (is-string? result) "metrics/json should return string after counter-inc")
+    (test/assert (> (len result) 10) "metrics/json should have content after counter-inc")
+
+    true
+  })
+
+; ============================================================================
+; Test: Counter increment with single label
+; ============================================================================
+
+(test/define "counter-inc-single-label"
+  {do
+    ; Create counters with labels (V2 API)
+    (= {counter-get} (metrics/counter "test_counter_labeled" "method" "GET"))
+    (= {counter-post} (metrics/counter "test_counter_labeled" "method" "POST"))
+    (metrics/counter-inc counter-get)
+    (metrics/counter-inc counter-get)
+    (metrics/counter-inc counter-post)
+
+    ; Get metrics output
+    (= {result} (metrics/json))
+
+    ; Verify we got a string back
+    (test/assert (is-string? result) "metrics/json should return string after labeled counter")
+    (test/assert (> (len result) 10) "metrics/json should have content after labeled counter")
+
+    true
+  })
+
+; ============================================================================
+; Test: Counter increment with multiple labels
+; ============================================================================
+
+(test/define "counter-inc-multiple-labels"
+  {do
+    ; Create counters with multiple labels (V2 API)
+    (= {c1} (metrics/counter "test_counter_multi" "method" "GET" "status" "200"))
+    (= {c2} (metrics/counter "test_counter_multi" "method" "GET" "status" "404"))
+    (= {c3} (metrics/counter "test_counter_multi" "method" "POST" "status" "201"))
+    (metrics/counter-inc c1)
+    (metrics/counter-inc c2)
+    (metrics/counter-inc c3)
+
+    ; Get metrics output
+    (= {result} (metrics/json))
+
+    ; Verify we got a string back
+    (test/assert (is-string? result) "metrics/json should return string after multi-labeled counter")
+    (test/assert (> (len result) 10) "metrics/json should have content after multi-labeled counter")
+
+    true
+  })
+
+; ============================================================================
+; Test: Counter with different label values creates separate metrics
+; ============================================================================
+
+(test/define "counter-different-label-values"
+  {do
+    ; Create counters with same name but different label values (V2 API)
+    (= {users-counter} (metrics/counter "test_requests" "endpoint" "/api/users"))
+    (= {posts-counter} (metrics/counter "test_requests" "endpoint" "/api/posts"))
+    (metrics/counter-inc users-counter)
+    (metrics/counter-inc users-counter)
+    (metrics/counter-inc posts-counter)
+    (metrics/counter-inc posts-counter)
+    (metrics/counter-inc posts-counter)
+
+    ; Both should appear in output
+    (= {result} (metrics/json))
+    (test/assert (is-string? result) "metrics/json should handle multiple label values")
+    (test/assert (> (len result) 10) "metrics/json should have content for different labels")
+
+    true
+  })
+
+; ============================================================================
+; Test: Multiple counter increments accumulate
+; ============================================================================
+
+(test/define "counter-accumulation"
+  {do
+    ; Create a counter and increment it multiple times (V2 API)
+    (= {counter} (metrics/counter "test_accumulator"))
+    (= {iterations} 10)
+
+    ; Loop to increment counter
+    (fun {increment-loop n} {
+      if (<= n 0)
+        {true}
+        {do
+          (metrics/counter-inc counter)
+          (increment-loop (- n 1))
+        }
+    })
+
+    (increment-loop iterations)
+
+    ; Verify metrics still accessible
+    (= {result} (metrics/json))
+    (test/assert (is-string? result) "metrics/json should work after multiple increments")
+
+    true
+  })
+
+; ============================================================================
+; Test: Prometheus format structure
+; ============================================================================
+
+(test/define "prometheus-format-structure"
+  {do
+    ; Create some metrics (V2 API)
+    (= {counter} (metrics/counter "test_prom_counter" "label" "value"))
+    (metrics/counter-inc counter)
+
+    ; Get Prometheus output
+    (= {prom} (metrics/prometheus))
+
+    ; Basic validation - should be a non-empty string
+    (test/assert (is-string? prom) "prometheus output should be string")
+    (test/assert (> (len prom) 0) "prometheus output should not be empty")
+
+    true
+  })
+
+; ============================================================================
+; Test: Both JSON and Prometheus formats work together
+; ============================================================================
+
+(test/define "both-formats-work"
+  {do
+    ; Create a counter (V2 API)
+    (= {counter} (metrics/counter "test_dual_format"))
+    (metrics/counter-inc counter)
+
+    ; Get both formats
+    (= {json-out} (metrics/json))
+    (= {prom-out} (metrics/prometheus))
+
+    ; Both should return strings
+    (test/assert (is-string? json-out) "JSON format should return string")
+    (test/assert (is-string? prom-out) "Prometheus format should return string")
+
+    ; Both should be non-empty
+    (test/assert (> (len json-out) 0) "JSON output should not be empty")
+    (test/assert (> (len prom-out) 0) "Prometheus output should not be empty")
+
+    true
+  })
+
+; ============================================================================
+; Test: Empty metric name handling
+; ============================================================================
+
+(test/define "empty-metric-name"
+  {do
+    ; Try to create counter with empty name (V2 API)
+    ; This should either work or fail gracefully
+    (= {counter} (metrics/counter ""))
+    (metrics/counter-inc counter)
+
+    ; Should still be able to get metrics
+    (= {result} (metrics/json))
+    (test/assert (is-string? result) "metrics/json should work even with empty name")
+
+    true
+  })
+
+; ============================================================================
+; Test: Metrics persist across multiple calls
+; ============================================================================
+
+(test/define "metrics-persistence"
+  {do
+    ; Create and increment a counter (V2 API)
+    (= {counter} (metrics/counter "test_persist"))
+    (metrics/counter-inc counter)
+
+    ; Get metrics
+    (= {result1} (metrics/json))
+
+    ; Increment again
+    (metrics/counter-inc counter)
+
+    ; Get metrics again
+    (= {result2} (metrics/json))
+
+    ; Both should return strings
+    (test/assert (is-string? result1) "First call should return string")
+    (test/assert (is-string? result2) "Second call should return string")
+
+    true
+  })
+
+; Run all tests
+(test/run {})

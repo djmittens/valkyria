@@ -1,0 +1,113 @@
+; Recursion Stress Test Suite
+; Deep recursion and tail-call optimization tests
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; ============================================================================
+; Deep Recursion Tests
+; ============================================================================
+
+(test/define "recursion-stress-depth-1000"
+  {do
+    (def {countdown} (\ {n} {
+      (if (<= n 0)
+        {0}
+        {(countdown (- n 1))})
+    }))
+    (def {result} (countdown 1000))
+    (== result 0)
+  })
+
+(test/define "recursion-stress-depth-5000"
+  {do
+    (def {countdown} (\ {n} {
+      (if (<= n 0)
+        {0}
+        {(countdown (- n 1))})
+    }))
+    (def {result} (countdown 5000))
+    (== result 0)
+  })
+
+(test/define "recursion-stress-depth-10000"
+  {do
+    (def {countdown} (\ {n} {
+      (if (<= n 0)
+        {0}
+        {(countdown (- n 1))})
+    }))
+    (def {result} (countdown 10000))
+    (== result 0)
+  })
+
+; ============================================================================
+; Accumulator Recursion Tests
+; ============================================================================
+
+(test/define "recursion-stress-sum-1000"
+  {do
+    (def {sum} (\ {n acc} {
+      (if (<= n 0)
+        {acc}
+        {(sum (- n 1) (+ acc n))})
+    }))
+    (def {result} (sum 1000 0))
+    (== result 500500)
+  })
+
+(test/define "recursion-stress-factorial-50"
+  {do
+    (def {factorial} (\ {n acc} {
+      (if (<= n 1)
+        {acc}
+        {(factorial (- n 1) (* n acc))})
+    }))
+    (def {result} (factorial 50 1))
+    ; Just verify it completes without stack overflow
+    (!= result 0)
+  })
+
+; ============================================================================
+; List Recursion Tests
+; ============================================================================
+
+(test/define "recursion-stress-list-length-50"
+  {do
+    (def {build} (\ {n acc} {
+      (if (<= n 0)
+        {acc}
+        {(build (- n 1) (join (list n) acc))})
+    }))
+    (def {result} (build 50 ()))
+    (== (len result) 50)
+  })
+
+; ============================================================================
+; Tree Recursion Tests
+; ============================================================================
+
+(test/define "recursion-stress-fibonacci-15"
+  {do
+    (def {fib} (\ {n} {
+      (if (<= n 1)
+        {n}
+        {(+ (fib (- n 1)) (fib (- n 2)))})
+    }))
+    (def {result} (fib 15))
+    (== result 610)
+  })
+
+(test/define "recursion-stress-tree-depth-8"
+  {do
+    (def {make-tree} (\ {depth} {
+      (if (<= depth 0)
+        {1}
+        {(+ (make-tree (- depth 1)) (make-tree (- depth 1)))})
+    }))
+    (def {result} (make-tree 8))
+    (== result 256)
+  })
+
+; Run all recursion stress tests
+(test/run {})
