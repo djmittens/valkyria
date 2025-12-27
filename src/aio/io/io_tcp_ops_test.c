@@ -2,6 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+struct valk_io_write_req {
+  valk_io_write_bufs_cb user_cb;
+  void *user_data;
+};
+
 struct valk_io_tcp {
   valk_io_alloc_cb alloc_cb;
   valk_io_read_cb read_cb;
@@ -16,8 +21,8 @@ struct valk_io_tcp {
   struct valk_io_tcp *pending_accept;
 };
 
-static int test_tcp_init(valk_io_loop_t *loop, valk_io_tcp_t *tcp) {
-  (void)loop;
+static int test_tcp_init(valk_aio_system_t *sys, valk_io_tcp_t *tcp) {
+  (void)sys;
   memset(tcp, 0, sizeof(*tcp));
   return 0;
 }
@@ -115,6 +120,56 @@ static void *test_tcp_get_loop(valk_io_tcp_t *tcp) {
   return nullptr;
 }
 
+static int test_tcp_getsockname(valk_io_tcp_t *tcp, void *addr, int *len) {
+  (void)tcp;
+  (void)addr;
+  (void)len;
+  return 0;
+}
+
+static int test_tcp_ip4_name(const void *addr, char *dst, size_t size) {
+  (void)addr;
+  if (size > 0) dst[0] = '\0';
+  return 0;
+}
+
+static int test_tcp_ip6_name(const void *addr, char *dst, size_t size) {
+  (void)addr;
+  if (size > 0) dst[0] = '\0';
+  return 0;
+}
+
+static const char *test_tcp_strerror(int err) {
+  (void)err;
+  return "test error";
+}
+
+static int test_tcp_write_bufs(valk_io_tcp_t *tcp, valk_io_write_req_t *req,
+                               const valk_io_buf_t *bufs, unsigned int nbufs,
+                               valk_io_write_bufs_cb cb) {
+  size_t total_len = 0;
+  for (unsigned int i = 0; i < nbufs; i++) {
+    total_len += bufs[i].len;
+  }
+
+  if (tcp->test_state.sent_len + total_len > tcp->test_state.sent_cap) {
+    size_t new_cap = tcp->test_state.sent_cap == 0 ? 4096 : tcp->test_state.sent_cap * 2;
+    while (new_cap < tcp->test_state.sent_len + total_len) new_cap *= 2;
+    uint8_t *new_buf = realloc(tcp->test_state.sent_buf, new_cap);
+    if (!new_buf) return -1;
+    tcp->test_state.sent_buf = new_buf;
+    tcp->test_state.sent_cap = new_cap;
+  }
+
+  for (unsigned int i = 0; i < nbufs; i++) {
+    memcpy(tcp->test_state.sent_buf + tcp->test_state.sent_len, bufs[i].base, bufs[i].len);
+    tcp->test_state.sent_len += bufs[i].len;
+  }
+
+  if (cb) cb(req, 0);
+  return 0;
+}
+
 const valk_io_tcp_ops_t valk_io_tcp_ops_test = {
   .init = test_tcp_init,
   .close = test_tcp_close,
@@ -127,11 +182,17 @@ const valk_io_tcp_ops_t valk_io_tcp_ops_test = {
   .read_start = test_tcp_read_start,
   .read_stop = test_tcp_read_stop,
   .write = test_tcp_write,
+  .write_bufs = test_tcp_write_bufs,
   .nodelay = test_tcp_nodelay,
   .set_data = test_tcp_set_data,
   .get_data = test_tcp_get_data,
   .get_loop = test_tcp_get_loop,
+  .getsockname = test_tcp_getsockname,
+  .ip4_name = test_tcp_ip4_name,
+  .ip6_name = test_tcp_ip6_name,
+  .strerror = test_tcp_strerror,
   .tcp_size = sizeof(valk_io_tcp_t),
+  .write_req_size = sizeof(valk_io_write_req_t),
 };
 
 void valk_test_tcp_inject_data(valk_io_tcp_t *tcp, const void *data, size_t len) {

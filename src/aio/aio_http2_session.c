@@ -208,7 +208,7 @@ int valk_http2_on_begin_headers_callback(nghttp2_session *session,
         ps->conn = conn;
         ps->session = session;
         ps->stream_id = frame->hd.stream_id;
-        ps->queued_time_ms = uv_now(CONN_UV_LOOP(conn));
+        ps->queued_time_ms = conn->sys->ops->loop->now(conn->sys);
         ps->headers_complete = false;
 
         nghttp2_session_set_stream_user_data(session, frame->hd.stream_id,
@@ -761,8 +761,8 @@ int valk_http2_on_frame_recv_callback(nghttp2_session *session,
   // Any frame from the peer proves the connection is alive
   // This is especially important for SSE where WINDOW_UPDATE frames
   // are the only incoming traffic
-  if (conn->sys && conn->sys->eventloop) {
-    conn->http.last_activity_ms = uv_now(conn->sys->eventloop);
+  if (conn->sys) {
+    conn->http.last_activity_ms = conn->sys->ops->loop->now(conn->sys);
   }
 
   if (frame->hd.type == NGHTTP2_GOAWAY) {
@@ -951,7 +951,7 @@ static void __pending_stream_process_batch(valk_aio_system_t *sys) {
     VALK_ASSERT(__is_pending_stream(current_data),
                 "pending stream %d user_data is not a pending stream marker", ps->stream_id);
 
-    uint64_t wait_ms = uv_now(CONN_UV_LOOP(ps->conn)) - ps->queued_time_ms;
+    uint64_t wait_ms = ps->conn->sys->ops->loop->now(ps->conn->sys) - ps->queued_time_ms;
     VALK_INFO("Processing pending stream %d (waited %lums)",
               ps->stream_id, (unsigned long)wait_ms);
 

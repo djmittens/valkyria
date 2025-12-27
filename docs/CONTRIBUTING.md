@@ -134,6 +134,32 @@ valk_lval_t* valk_lval_num(long x) {
 
 ## Testing
 
+### Testing Philosophy
+
+**Use test doubles (fakes), NOT mocking frameworks.**
+
+This project uses **fakes** - real implementations with simplified/deterministic behavior that can be swapped in via vtables. Fakes allow:
+- Injecting test data: `valk_test_tcp_inject_data()`
+- Inspecting outputs: `valk_test_tcp_get_sent()`
+- Controlling time: `valk_test_timer_fire()`
+
+Do NOT use:
+- Mocking frameworks (gmock, cmock, etc.)
+- Expectation-based testing ("expect X calls with Y args")
+- Interaction verification ("verify method was called N times")
+
+```c
+// GOOD: Fake records data, test inspects it
+valk_test_tcp_inject_data(&tcp, request, len);
+handle_request(&conn);
+size_t sent = valk_test_tcp_get_sent(&tcp, response, sizeof(response));
+ASSERT(sent > 0);
+ASSERT(memcmp(response, expected, sent) == 0);
+
+// BAD: Mock expectations (DO NOT USE)
+// mock_expect_call(tcp_write, times(1), with(expected_data));
+```
+
 ### C Tests
 
 Located in `test/test_*.c`. Use the `testing.{c,h}` framework:

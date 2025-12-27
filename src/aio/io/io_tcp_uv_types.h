@@ -11,3 +11,9 @@ struct valk_io_tcp {
   valk_io_connect_cb user_connect_cb;
   void *user_data;
 };
+
+struct valk_io_write_req {
+  uv_write_t uv;
+  valk_io_write_bufs_cb user_cb;
+  void *user_data;
+};

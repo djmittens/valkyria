@@ -45,6 +45,27 @@ Use `valk_intern(env, val)` to copy values to GC heap.
 - Lisp tests: `test/test_*.valk` using `src/modules/test.valk`
 - Always run `make test`, not individual binaries
 
+### Testing Philosophy (IMPORTANT)
+**Use test doubles (fakes), NEVER mocking frameworks.**
+
+- **Fakes**: Real implementations with simplified behavior (e.g., `io_tcp_ops_test.c`)
+- Fakes record data for inspection: `valk_test_tcp_get_sent()`
+- Fakes allow injecting data: `valk_test_tcp_inject_data()`
+- NO mock frameworks, NO expectation setup, NO "expect X calls" patterns
+- Tests verify state/output, not interaction counts
+
+Example pattern:
+```c
+// GOOD: Use fake that records sent data
+valk_test_tcp_inject_data(&tcp, request_bytes, len);
+process_request(&conn);
+size_t sent = valk_test_tcp_get_sent(&tcp, buf, sizeof(buf));
+ASSERT(memcmp(buf, expected_response, sent) == 0);
+
+// BAD: Mock with expectations (DO NOT USE)
+// EXPECT_CALL(tcp, write).Times(1).With(expected_data);
+```
+
 ## Code Style
 
 - C23 with GNU extensions, 2-space indent
@@ -91,3 +112,5 @@ Find with: `make todo`
 - Don't commit unless explicitly asked
 - Don't add unnecessary abstractions
 - Don't create documentation files unless asked
+- Don't suggest mocking frameworks - use fakes/test doubles only
+- Don't use "mock" terminology - say "fake" or "test double"

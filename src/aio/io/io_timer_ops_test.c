@@ -8,10 +8,6 @@ struct valk_io_timer {
   bool closing;
 };
 
-struct valk_io_loop {
-  valk_test_timer_state_t *timer_state;
-};
-
 static __thread valk_test_timer_state_t *g_test_state = nullptr;
 
 void valk_test_timer_init_state(valk_test_timer_state_t *state) {
@@ -71,8 +67,8 @@ uint64_t valk_test_timer_current_time(void) {
   return g_test_state ? g_test_state->current_time_ms : 0;
 }
 
-static int test_timer_init(valk_io_loop_t *loop, valk_io_timer_t *timer) {
-  (void)loop;
+static int test_timer_init(valk_aio_system_t *sys, valk_io_timer_t *timer) {
+  (void)sys;
   memset(timer, 0, sizeof(*timer));
   timer->user_data = nullptr;
   timer->user_cb = nullptr;
@@ -142,15 +138,6 @@ static void *test_timer_get_data(valk_io_timer_t *timer) {
   return timer->user_data;
 }
 
-static uint64_t test_loop_now(valk_io_loop_t *loop) {
-  (void)loop;
-  return g_test_state ? g_test_state->current_time_ms : 0;
-}
-
-static uint64_t test_hrtime(void) {
-  return g_test_state ? g_test_state->current_hrtime : 0;
-}
-
 const valk_io_timer_ops_t valk_io_timer_ops_test = {
   .init = test_timer_init,
   .start = test_timer_start,
@@ -159,7 +146,5 @@ const valk_io_timer_ops_t valk_io_timer_ops_test = {
   .is_closing = test_timer_is_closing,
   .set_data = test_timer_set_data,
   .get_data = test_timer_get_data,
-  .now = test_loop_now,
-  .hrtime = test_hrtime,
   .timer_size = sizeof(valk_io_timer_t),
 };

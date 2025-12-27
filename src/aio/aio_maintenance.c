@@ -4,6 +4,26 @@
 #include "aio_pending_stream.h"
 #include "aio_http2_conn.h"
 
+static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
+  return conn->sys ? conn->sys->ops->tcp : NULL;
+}
+
+static inline valk_io_tcp_t *__conn_tcp(valk_aio_handle_t *conn) {
+  return &conn->uv.tcp;
+}
+
+static inline bool __vtable_is_closing(valk_aio_handle_t *conn) {
+  const valk_io_tcp_ops_t *tcp = __tcp_ops(conn);
+  if (!tcp) return true;
+  return tcp->is_closing(__conn_tcp(conn));
+}
+
+static inline void __vtable_close(valk_aio_handle_t *conn, valk_io_close_cb cb) {
+  const valk_io_tcp_ops_t *tcp = __tcp_ops(conn);
+  if (!tcp) return;
+  tcp->close(__conn_tcp(conn), cb);
+}
+
 static void __maintenance_timer_close_cb(uv_handle_t *handle) {
   UNUSED(handle);
 }
@@ -12,7 +32,7 @@ static void __maintenance_timer_cb(uv_timer_t *timer) {
   valk_aio_system_t *sys = timer->data;
   if (!sys || sys->shuttingDown) return;
 
-  uint64_t now = uv_now(sys->eventloop);
+  uint64_t now = sys->ops->loop->now(sys);
 
   valk_maintenance_check_connection_timeouts(sys, now);
   valk_maintenance_check_pending_stream_timeouts(sys, now);
@@ -55,14 +75,14 @@ void valk_maintenance_check_connection_timeouts(valk_aio_system_t *sys, uint64_t
       if (idle_time > sys->config.connection_idle_timeout_ms) {
         VALK_INFO("Connection idle timeout after %llu ms (limit: %u ms)",
                   (unsigned long long)idle_time, sys->config.connection_idle_timeout_ms);
-        if (!uv_is_closing(CONN_UV_HANDLE(h))) {
+        if (!__vtable_is_closing(h)) {
           h->http.state = VALK_CONN_CLOSING;
           valk_backpressure_list_remove(&sys->backpressure, h);
 #ifdef VALK_METRICS_ENABLED
           h->http.diag.state = VALK_DIAG_CONN_CLOSING;
           h->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
 #endif
-          uv_close(CONN_UV_HANDLE(h), valk_http2_conn_handle_closed_cb);
+          __vtable_close(h, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
         }
       }
     }
@@ -100,13 +120,13 @@ void valk_maintenance_check_backpressure_timeouts(valk_aio_system_t *sys, uint64
   for (size_t i = 0; i < count; i++) {
     valk_aio_handle_t *bp = expired[i];
     VALK_WARN("Connection backpressure timeout");
-    if (!uv_is_closing(CONN_UV_HANDLE(bp))) {
+    if (!__vtable_is_closing(bp)) {
       bp->http.state = VALK_CONN_CLOSING;
 #ifdef VALK_METRICS_ENABLED
       bp->http.diag.state = VALK_DIAG_CONN_CLOSING;
       bp->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
 #endif
-      uv_close(CONN_UV_HANDLE(bp), valk_http2_conn_handle_closed_cb);
+      __vtable_close(bp, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
     }
   }
 }

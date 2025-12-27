@@ -1,82 +1,64 @@
 #include "io_loop_ops.h"
-#include <uv.h>
-#include <stdlib.h>
+#include "../aio_internal.h"
 
-struct valk_io_loop {
-  uv_loop_t *uv;
-  bool owns_loop;
-};
-
-static valk_io_loop_t *loop_create(void) {
-  valk_io_loop_t *loop = malloc(sizeof(valk_io_loop_t));
-  if (!loop) return nullptr;
+static int loop_init(valk_aio_system_t *sys) {
+  sys->eventloop = malloc(sizeof(uv_loop_t));
+  if (!sys->eventloop) return -1;
   
-  loop->uv = malloc(sizeof(uv_loop_t));
-  if (!loop->uv) {
-    free(loop);
-    return nullptr;
+  int rc = uv_loop_init(sys->eventloop);
+  if (rc != 0) {
+    free(sys->eventloop);
+    sys->eventloop = nullptr;
+    return rc;
   }
-  
-  if (uv_loop_init(loop->uv) != 0) {
-    free(loop->uv);
-    free(loop);
-    return nullptr;
-  }
-  
-  loop->owns_loop = true;
-  return loop;
+  return 0;
 }
 
-static void loop_destroy(valk_io_loop_t *loop) {
-  if (!loop) return;
-  if (loop->owns_loop && loop->uv) {
-    uv_loop_close(loop->uv);
-    free(loop->uv);
+static void loop_destroy(valk_aio_system_t *sys) {
+  if (sys->eventloop) {
+    uv_loop_close(sys->eventloop);
+    free(sys->eventloop);
+    sys->eventloop = nullptr;
   }
-  free(loop);
 }
 
-static int loop_run(valk_io_loop_t *loop, valk_io_run_mode_e mode) {
+static int loop_run(valk_aio_system_t *sys, valk_io_run_mode_e mode) {
   uv_run_mode uv_mode;
   switch (mode) {
     case VALK_IO_RUN_ONCE: uv_mode = UV_RUN_ONCE; break;
     case VALK_IO_RUN_NOWAIT: uv_mode = UV_RUN_NOWAIT; break;
     default: uv_mode = UV_RUN_DEFAULT; break;
   }
-  return uv_run(loop->uv, uv_mode);
+  return uv_run(sys->eventloop, uv_mode);
 }
 
-static void loop_stop(valk_io_loop_t *loop) {
-  uv_stop(loop->uv);
+static void loop_stop(valk_aio_system_t *sys) {
+  uv_stop(sys->eventloop);
 }
 
-static bool loop_alive(valk_io_loop_t *loop) {
-  return uv_loop_alive(loop->uv) != 0;
+static bool loop_alive(valk_aio_system_t *sys) {
+  return uv_loop_alive(sys->eventloop) != 0;
 }
 
-static void loop_walk(valk_io_loop_t *loop, valk_io_walk_cb cb, void *arg) {
-  uv_walk(loop->uv, (uv_walk_cb)cb, arg);
+static void loop_walk(valk_aio_system_t *sys, valk_io_walk_cb cb, void *arg) {
+  uv_walk(sys->eventloop, (uv_walk_cb)cb, arg);
+}
+
+static uint64_t loop_now(valk_aio_system_t *sys) {
+  return uv_now(sys->eventloop);
+}
+
+static uint64_t sys_hrtime(void) {
+  return uv_hrtime();
 }
 
 const valk_io_loop_ops_t valk_io_loop_ops_uv = {
-  .create = loop_create,
+  .init = loop_init,
   .destroy = loop_destroy,
   .run = loop_run,
   .stop = loop_stop,
   .alive = loop_alive,
   .walk = loop_walk,
-  .timer = &valk_io_timer_ops_uv,
-  .loop_size = sizeof(valk_io_loop_t),
+  .now = loop_now,
+  .hrtime = sys_hrtime,
 };
-
-valk_io_loop_t *valk_io_loop_wrap_uv(void *uv_loop) {
-  valk_io_loop_t *loop = malloc(sizeof(valk_io_loop_t));
-  if (!loop) return nullptr;
-  loop->uv = (uv_loop_t *)uv_loop;
-  loop->owns_loop = false;
-  return loop;
-}
-
-void *valk_io_loop_unwrap_uv(valk_io_loop_t *loop) {
-  return loop ? loop->uv : nullptr;
-}

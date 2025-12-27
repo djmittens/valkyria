@@ -3,7 +3,7 @@
 #include "io_types.h"
 
 typedef struct valk_io_timer_ops {
-  int (*init)(valk_io_loop_t *loop, valk_io_timer_t *timer);
+  int (*init)(valk_aio_system_t *sys, valk_io_timer_t *timer);
   int (*start)(valk_io_timer_t *timer, valk_io_timer_cb cb,
                uint64_t timeout_ms, uint64_t repeat_ms);
   int (*stop)(valk_io_timer_t *timer);
@@ -12,9 +12,6 @@ typedef struct valk_io_timer_ops {
   bool (*is_closing)(valk_io_timer_t *timer);
   void (*set_data)(valk_io_timer_t *timer, void *data);
   void *(*get_data)(valk_io_timer_t *timer);
-
-  uint64_t (*now)(valk_io_loop_t *loop);
-  uint64_t (*hrtime)(void);
 
   size_t timer_size;
 } valk_io_timer_ops_t;

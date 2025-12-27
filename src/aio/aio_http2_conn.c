@@ -3,10 +3,99 @@
 #include "aio_conn_io.h"
 #include "aio_ssl.h"
 
+static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
+  return conn->sys ? conn->sys->ops->tcp : NULL;
+}
+
+static inline valk_io_tcp_t *__conn_tcp(valk_aio_handle_t *conn) {
+  return &conn->uv.tcp;
+}
+
+static int __vtable_read_stop(valk_aio_handle_t *conn) {
+  const valk_io_tcp_ops_t *tcp = __tcp_ops(conn);
+  if (!tcp) return -1;
+  return tcp->read_stop(__conn_tcp(conn));
+}
+
+static bool __vtable_is_closing(valk_aio_handle_t *conn) {
+  const valk_io_tcp_ops_t *tcp = __tcp_ops(conn);
+  if (!tcp) return true;
+  return tcp->is_closing(__conn_tcp(conn));
+}
+
+static void __vtable_close(valk_aio_handle_t *conn, valk_io_close_cb cb) {
+  const valk_io_tcp_ops_t *tcp = __tcp_ops(conn);
+  if (!tcp) return;
+  tcp->close(__conn_tcp(conn), cb);
+}
+
+static void __vtable_alloc_cb(valk_io_tcp_t *tcp, size_t suggested, void **buf, size_t *buflen) {
+  UNUSED(suggested);
+  valk_aio_handle_t *conn = tcp->user_data;
+  *buf = NULL;
+  *buflen = 0;
+  
+  if (conn && conn->magic == VALK_AIO_HANDLE_MAGIC && conn->kind == VALK_HNDL_HTTP_CONN) {
+    if (conn->http.io.read_buf) {
+      *buf = (char *)valk_conn_io_read_buf_data(&conn->http.io);
+      *buflen = valk_conn_io_read_buf_size(&conn->http.io);
+      return;
+    }
+    
+    if (!valk_conn_io_read_buf_acquire(&conn->http.io, conn->sys->tcpBufferSlab)) {
+      VALK_WARN("TCP buffer slab exhausted for read buffer");
+      return;
+    }
+    
+    *buf = (char *)valk_conn_io_read_buf_data(&conn->http.io);
+    *buflen = valk_conn_io_read_buf_size(&conn->http.io);
+    return;
+  }
+  
+  valk_aio_system_t *sys = valk_aio_active_system;
+  if (!sys || !sys->tcpBufferSlab) {
+    VALK_ERROR("No active AIO system in alloc callback");
+    return;
+  }
+  valk_slab_item_t *item = valk_slab_aquire(sys->tcpBufferSlab);
+  if (!item) {
+    VALK_ERROR("TCP buffer slab exhausted in alloc callback");
+    return;
+  }
+  *buf = (char *)item->data;
+  *buflen = HTTP_SLAB_ITEM_SIZE;
+}
+
+static void __vtable_read_cb(valk_io_tcp_t *tcp, ssize_t nread, const void *buf);
+
+static int __vtable_read_start(valk_aio_handle_t *conn) {
+  const valk_io_tcp_ops_t *ops = __tcp_ops(conn);
+  if (!ops) return -1;
+  return ops->read_start(__conn_tcp(conn), __vtable_alloc_cb, __vtable_read_cb);
+}
+
+static int __vtable_init(valk_aio_handle_t *conn) {
+  const valk_io_tcp_ops_t *ops = __tcp_ops(conn);
+  if (!ops) return -1;
+  return ops->init(conn->sys, __conn_tcp(conn));
+}
+
+static int __vtable_accept(valk_aio_handle_t *server, valk_aio_handle_t *client) {
+  const valk_io_tcp_ops_t *ops = __tcp_ops(server);
+  if (!ops) return -1;
+  return ops->accept(__conn_tcp(server), __conn_tcp(client));
+}
+
+static int __vtable_nodelay(valk_aio_handle_t *conn, int enable) {
+  const valk_io_tcp_ops_t *ops = __tcp_ops(conn);
+  if (!ops) return -1;
+  return ops->nodelay(__conn_tcp(conn), enable);
+}
+
 static bool __backpressure_list_add(valk_aio_handle_t *conn) {
   valk_aio_system_t *sys = conn->sys;
   if (!sys) return false;
-  return valk_backpressure_list_add(&sys->backpressure, conn, uv_now(CONN_UV_LOOP(conn)));
+  return valk_backpressure_list_add(&sys->backpressure, conn, sys->ops->loop->now(sys));
 }
 
 static void __backpressure_list_remove(valk_aio_handle_t *conn) {
@@ -20,8 +109,7 @@ void valk_http2_backpressure_try_resume_one(valk_aio_system_t *sys) {
   valk_aio_handle_t *conn = valk_backpressure_list_try_resume(
       &sys->backpressure, sys->tcpBufferSlab, sys->config.min_buffers_per_conn);
   if (conn) {
-    uv_read_start(CONN_UV_STREAM(conn), valk_http2_conn_alloc_callback, 
-                  valk_http2_conn_tcp_read_cb);
+    __vtable_read_start(conn);
   }
 }
 
@@ -103,12 +191,11 @@ static void __http2_flush_complete(void *ctx, int status) {
   
   if (status == 0 && conn->http.state != VALK_CONN_CLOSING && 
       conn->http.state != VALK_CONN_CLOSED &&
-      !uv_is_closing(CONN_UV_HANDLE(conn))) {
+      !__vtable_is_closing(conn)) {
     
     if (conn->http.backpressure) {
       __backpressure_list_remove(conn);
-      uv_read_start(CONN_UV_STREAM(conn),
-                    valk_http2_conn_alloc_callback, valk_http2_conn_tcp_read_cb);
+      __vtable_read_start(conn);
       VALK_DEBUG("Resumed reading after write buffer flush");
     }
     
@@ -119,7 +206,7 @@ static void __http2_flush_complete(void *ctx, int status) {
 }
 
 int valk_http2_conn_write_buf_flush(valk_aio_handle_t *conn) {
-  return valk_conn_io_flush(&conn->http.io, CONN_UV_STREAM(conn),
+  return valk_conn_io_flush(&conn->http.io, conn,
                             __http2_flush_complete, conn);
 }
 
@@ -152,7 +239,7 @@ void valk_http2_continue_pending_send(valk_aio_handle_t *conn) {
     return;
   }
 
-  if (uv_is_closing(CONN_UV_HANDLE(conn))) {
+  if (__vtable_is_closing(conn)) {
     return;
   }
 
@@ -209,8 +296,8 @@ void valk_http2_flush_pending(valk_aio_handle_t *conn) {
   // Update activity timestamp when sending data - for SSE streams,
   // the server is mostly sending and the client may not respond,
   // so we need to count outgoing activity to prevent idle timeout
-  if (conn && conn->sys && conn->sys->eventloop) {
-    conn->http.last_activity_ms = uv_now(conn->sys->eventloop);
+  if (conn && conn->sys) {
+    conn->http.last_activity_ms = conn->sys->ops->loop->now(conn->sys);
   }
   valk_http2_continue_pending_send(conn);
 }
@@ -222,72 +309,62 @@ static void __http_tcp_unencrypted_read_cb(void *arg, const valk_buffer_t *buf) 
       conn->http.session, (const uint8_t *)buf->items, buf->count);
   if (rv < 0) {
     VALK_ERROR("nghttp2_session_mem_recv error: %zd", rv);
-    if (!uv_is_closing(CONN_UV_HANDLE(conn))) {
+    if (!__vtable_is_closing(conn)) {
       conn->http.state = VALK_CONN_CLOSING;
       __backpressure_list_remove(conn);
 #ifdef VALK_METRICS_ENABLED
       conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
       conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
 #endif
-      uv_close(CONN_UV_HANDLE(conn), valk_http2_conn_handle_closed_cb);
+      __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
     }
   }
 }
 
-void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
-  valk_aio_handle_t *conn = stream->data;
-
+void valk_http2_conn_tcp_read_impl(valk_aio_handle_t *conn, ssize_t nread, const void *buf_base) {
   if (conn->http.state == VALK_CONN_CLOSING || conn->http.state == VALK_CONN_CLOSED) {
     return;
   }
 
-  if (!buf->base) {
+  if (!buf_base) {
     VALK_WARN("TCP buffer alloc failed - applying backpressure on connection");
-    uv_read_stop(CONN_UV_STREAM(conn));
+    __vtable_read_stop(conn);
     if (!__backpressure_list_add(conn)) {
-      if (!uv_is_closing(CONN_UV_HANDLE(conn))) {
+      if (!__vtable_is_closing(conn)) {
         conn->http.state = VALK_CONN_CLOSING;
-        uv_close(CONN_UV_HANDLE(conn), valk_http2_conn_handle_closed_cb);
+        __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
       }
     }
     return;
   }
 
   if (nread < 0) {
-    if (!uv_is_closing(CONN_UV_HANDLE(conn))) {
+    if (!__vtable_is_closing(conn)) {
       conn->http.state = VALK_CONN_CLOSING;
       __backpressure_list_remove(conn);
 #ifdef VALK_METRICS_ENABLED
       conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
       conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
 #endif
-      uv_close(CONN_UV_HANDLE(conn), valk_http2_conn_handle_closed_cb);
+      __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
     }
     return;
   }
 
   VALK_TRACE("Feeding data to OpenSSL %ld", nread);
 
-  // Don't stop reading just because a write is pending. HTTP/2 is full-duplex
-  // and we must keep receiving control frames (WINDOW_UPDATE, PING, etc.)
-  // even while sending. Stopping reads here caused a deadlock where:
-  // 1. Server sends data, write_flush_pending becomes true
-  // 2. Client sends WINDOW_UPDATE, but we stop reading
-  // 3. Server can't send more (flow control blocked), can't read WINDOW_UPDATE
-  // 4. Connection times out after 60s
-
   if (!valk_http2_conn_write_buf_acquire(conn)) {
     VALK_WARN("Failed to acquire write buffer - applying backpressure on connection");
-    int n = BIO_write(conn->http.io.ssl.read_bio, buf->base, nread);
-    if (n != nread) {
-      VALK_ERROR("BIO_write during backpressure failed: wrote %d of %ld", n, nread);
+    int n = BIO_write(conn->http.io.ssl.read_bio, buf_base, (int)nread);
+    if (n != (int)nread) {
+      VALK_ERROR("BIO_write during backpressure failed: wrote %d of %zd", n, nread);
     }
-    uv_read_stop(CONN_UV_STREAM(conn));
+    __vtable_read_stop(conn);
     valk_conn_io_read_buf_release(&conn->http.io, conn->sys->tcpBufferSlab);
     if (!__backpressure_list_add(conn)) {
-      if (!uv_is_closing(CONN_UV_HANDLE(conn))) {
+      if (!__vtable_is_closing(conn)) {
         conn->http.state = VALK_CONN_CLOSING;
-        uv_close(CONN_UV_HANDLE(conn), valk_http2_conn_handle_closed_cb);
+        __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
       }
     }
 #ifdef VALK_METRICS_ENABLED
@@ -298,12 +375,12 @@ void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_bu
     return;
   }
 
-  if (conn->sys && conn->sys->eventloop) {
-    conn->http.last_activity_ms = uv_now(conn->sys->eventloop);
+  if (conn->sys) {
+    conn->http.last_activity_ms = conn->sys->ops->loop->now(conn->sys);
   }
 
   valk_buffer_t In = {
-      .items = buf->base, .count = nread, .capacity = HTTP_SLAB_ITEM_SIZE};
+      .items = (void *)buf_base, .count = nread, .capacity = HTTP_SLAB_ITEM_SIZE};
 
   // If a write is pending, we still need to process incoming data (to receive
   // WINDOW_UPDATE, PING, etc.) but we can't safely append to the write buffer.
@@ -368,6 +445,16 @@ void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_bu
   if (conn->http.io.write_pos > 0 && !conn->http.io.write_flush_pending) {
     valk_http2_conn_write_buf_flush(conn);
   }
+}
+
+static void __vtable_read_cb(valk_io_tcp_t *tcp, ssize_t nread, const void *buf) {
+  valk_aio_handle_t *conn = tcp->user_data;
+  valk_http2_conn_tcp_read_impl(conn, nread, buf);
+}
+
+void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
+  valk_aio_handle_t *conn = stream->data;
+  valk_http2_conn_tcp_read_impl(conn, nread, buf->base);
 }
 
 void valk_http2_conn_handle_closed_cb(uv_handle_t *handle) {

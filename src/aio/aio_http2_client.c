@@ -9,6 +9,99 @@ extern void valk_uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task);
 extern valk_gauge_v2_t* client_connections_active;
 #endif
 
+static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
+  return conn->sys ? conn->sys->ops->tcp : NULL;
+}
+
+static inline valk_io_tcp_t *__conn_tcp(valk_aio_handle_t *conn) {
+  return &conn->uv.tcp;
+}
+
+static inline bool __vtable_is_closing(valk_aio_handle_t *conn) {
+  const valk_io_tcp_ops_t *tcp = __tcp_ops(conn);
+  if (!tcp) return true;
+  return tcp->is_closing(__conn_tcp(conn));
+}
+
+static inline void __vtable_close(valk_aio_handle_t *conn, valk_io_close_cb cb) {
+  const valk_io_tcp_ops_t *tcp = __tcp_ops(conn);
+  if (!tcp) return;
+  tcp->close(__conn_tcp(conn), cb);
+}
+
+static inline int __vtable_init(valk_aio_handle_t *conn) {
+  const valk_io_tcp_ops_t *ops = __tcp_ops(conn);
+  if (!ops) return -1;
+  return ops->init(conn->sys, __conn_tcp(conn));
+}
+
+static inline int __vtable_nodelay(valk_aio_handle_t *conn, int enable) {
+  const valk_io_tcp_ops_t *ops = __tcp_ops(conn);
+  if (!ops) return -1;
+  return ops->nodelay(__conn_tcp(conn), enable);
+}
+
+static void __vtable_alloc_cb(valk_io_tcp_t *tcp, size_t suggested, void **buf, size_t *buflen) {
+  UNUSED(suggested);
+  valk_aio_handle_t *conn = tcp->user_data;
+  *buf = NULL;
+  *buflen = 0;
+  
+  if (conn && conn->magic == VALK_AIO_HANDLE_MAGIC && conn->kind == VALK_HNDL_HTTP_CONN) {
+    if (conn->http.io.read_buf) {
+      *buf = (char *)valk_conn_io_read_buf_data(&conn->http.io);
+      *buflen = valk_conn_io_read_buf_size(&conn->http.io);
+      return;
+    }
+    
+    if (!valk_conn_io_read_buf_acquire(&conn->http.io, conn->sys->tcpBufferSlab)) {
+      VALK_WARN("TCP buffer slab exhausted for read buffer");
+      return;
+    }
+    
+    *buf = (char *)valk_conn_io_read_buf_data(&conn->http.io);
+    *buflen = valk_conn_io_read_buf_size(&conn->http.io);
+    return;
+  }
+  
+  valk_aio_system_t *sys = valk_aio_active_system;
+  if (!sys || !sys->tcpBufferSlab) {
+    VALK_ERROR("No active AIO system in alloc callback");
+    return;
+  }
+  valk_slab_item_t *item = valk_slab_aquire(sys->tcpBufferSlab);
+  if (!item) {
+    VALK_ERROR("TCP buffer slab exhausted in alloc callback");
+    return;
+  }
+  *buf = (char *)item->data;
+  *buflen = HTTP_SLAB_ITEM_SIZE;
+}
+
+static void __vtable_read_cb(valk_io_tcp_t *tcp, ssize_t nread, const void *buf) {
+  valk_aio_handle_t *conn = tcp->user_data;
+  valk_http2_conn_tcp_read_impl(conn, nread, buf);
+}
+
+static inline int __vtable_read_start(valk_aio_handle_t *conn) {
+  const valk_io_tcp_ops_t *ops = __tcp_ops(conn);
+  if (!ops) return -1;
+  return ops->read_start(__conn_tcp(conn), __vtable_alloc_cb, __vtable_read_cb);
+}
+
+static void __http2_connect_impl(valk_aio_handle_t *conn, int status);
+
+static void __vtable_connect_cb(valk_io_tcp_t *tcp, int status) {
+  valk_aio_handle_t *conn = tcp->user_data;
+  __http2_connect_impl(conn, status);
+}
+
+static inline int __vtable_connect(valk_aio_handle_t *conn, const char *ip, int port) {
+  const valk_io_tcp_ops_t *ops = __tcp_ops(conn);
+  if (!ops) return -1;
+  return ops->connect(__conn_tcp(conn), ip, port, __vtable_connect_cb);
+}
+
 static void __valk_http2_response_free(valk_arc_box *box) {
   if (!box || !box->item) return;
   valk_http2_response_t *res = (valk_http2_response_t *)box->item;
@@ -98,20 +191,20 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
   return 0;
 }
 
-static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
-  valk_arc_box *box = req->data;
+static void __http2_connect_impl(valk_aio_handle_t *conn, int status) {
+  valk_arc_box *box = conn->http.connectReq.data;
   valk_aio_http2_client *client = box->item;
   valk_arc_retain(box);
 
   if (status < 0) {
-    fprintf(stderr, "Client Connection err: %s\n", uv_strerror(status));
+    fprintf(stderr, "Client Connection err: %d\n", status);
     valk_arc_box *err = valk_arc_box_err("Client Connection err");
     valk_promise_respond(&client->_promise, err);
     valk_arc_release(err);
     
-    if (client->connection && !uv_is_closing(CONN_UV_HANDLE(client->connection))) {
+    if (client->connection && !__vtable_is_closing(client->connection)) {
       client->connection->http.state = VALK_CONN_CLOSING;
-      uv_close(CONN_UV_HANDLE(client->connection), valk_http2_conn_handle_closed_cb);
+      __vtable_close(client->connection, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
     }
     
     valk_arc_release(box);
@@ -135,9 +228,9 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     valk_arc_box *err = valk_arc_box_err("TCP buffer exhausted during client connect");
     valk_promise_respond(&client->_promise, err);
     valk_arc_release(err);
-    if (client->connection && !uv_is_closing(CONN_UV_HANDLE(client->connection))) {
+    if (client->connection && !__vtable_is_closing(client->connection)) {
       client->connection->http.state = VALK_CONN_CLOSING;
-      uv_close(CONN_UV_HANDLE(client->connection), valk_http2_conn_handle_closed_cb);
+      __vtable_close(client->connection, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
     }
     valk_arc_release(box);
     return;
@@ -169,9 +262,9 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     valk_arc_box *err = valk_arc_box_err("SSL initialization failed for client connection");
     valk_promise_respond(&client->_promise, err);
     valk_arc_release(err);
-    if (client->connection && !uv_is_closing(CONN_UV_HANDLE(client->connection))) {
+    if (client->connection && !__vtable_is_closing(client->connection)) {
       client->connection->http.state = VALK_CONN_CLOSING;
-      uv_close(CONN_UV_HANDLE(client->connection), valk_http2_conn_handle_closed_cb);
+      __vtable_close(client->connection, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
     }
     valk_arc_release(box);
     return;
@@ -197,8 +290,7 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
     valk_http2_continue_pending_send(client->connection);
   }
 
-  uv_read_start(CONN_UV_STREAM(client->connection),
-                valk_http2_conn_alloc_callback, valk_http2_conn_tcp_read_cb);
+  __vtable_read_start(client->connection);
 
   valk_promise_respond(&client->_promise, box);
   valk_arc_release(box);
@@ -207,7 +299,6 @@ static void __uv_http2_connect_cb(uv_connect_t *req, int status) {
 static void __aio_client_connect_cb(valk_aio_system_t *sys,
                                     valk_aio_task_new *task) {
   int r;
-  struct sockaddr_in addr;
 
   valk_arc_box *box = task->arg;
   valk_aio_http2_client *client = box->item;
@@ -227,17 +318,18 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
   client->connection->kind = VALK_HNDL_HTTP_CONN;
   client->connection->sys = sys;
   client->connection->onClose = valk_http2_conn_on_disconnect;
-  client->connection->uv.tcp.uv.data = client->connection;
 
   client->connection->http.state = VALK_CONN_INIT;
   client->connection->http.io.buf_size = HTTP_SLAB_ITEM_SIZE;
 
   valk_dll_insert_after(&sys->liveHandles, client->connection);
 
-  r = uv_tcp_init(sys->eventloop, CONN_UV_TCP(client->connection));
+  r = __vtable_init(client->connection);
+  client->connection->uv.tcp.uv.data = client->connection;
+  client->connection->uv.tcp.user_data = client->connection;
 
   if (r) {
-    fprintf(stderr, "TcpInit err: %s \n", uv_strerror(r));
+    fprintf(stderr, "TcpInit err: %d \n", r);
     valk_arc_box *err = valk_arc_box_err("TcpInit err");
     valk_promise_respond(&task->promise, err);
     valk_arc_release(err);
@@ -247,37 +339,20 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
     return;
   }
 
-  uv_tcp_nodelay(CONN_UV_TCP(client->connection), 1);
-
-  r = uv_ip4_addr(client->interface, client->port, &addr);
-  if (r) {
-    struct addrinfo hints, *res = NULL;
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    char portstr[16];
-    snprintf(portstr, sizeof portstr, "%d", client->port);
-    int gai = getaddrinfo(client->interface, portstr, &hints, &res);
-    if (gai == 0 && res) {
-      memcpy(&addr, res->ai_addr, sizeof(struct sockaddr_in));
-      freeaddrinfo(res);
-    } else {
-      if (res) freeaddrinfo(res);
-      fprintf(stderr, "Addr resolve err: %s\n", gai_strerror(gai));
-      valk_arc_box *err = valk_arc_box_err("Addr err");
-      valk_promise_respond(&task->promise, err);
-      valk_arc_release(err);
-      valk_arc_release(box);
-      client->connection->http.state = VALK_CONN_CLOSING;
-      uv_close(CONN_UV_HANDLE(client->connection), valk_http2_conn_handle_closed_cb);
-      return;
-    }
-  }
+  __vtable_nodelay(client->connection, 1);
 
   client->connection->http.connectReq.data = box;
   client->_promise = task->promise;
-  uv_tcp_connect(&client->connection->http.connectReq, CONN_UV_TCP(client->connection),
-                 (const struct sockaddr *)&addr, __uv_http2_connect_cb);
+  r = __vtable_connect(client->connection, client->interface, client->port);
+  if (r) {
+    fprintf(stderr, "Connect err: %d\n", r);
+    valk_arc_box *err = valk_arc_box_err("Connect err");
+    valk_promise_respond(&task->promise, err);
+    valk_arc_release(err);
+    valk_arc_release(box);
+    client->connection->http.state = VALK_CONN_CLOSING;
+    __vtable_close(client->connection, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
+  }
 }
 
 static void __valk_aio_http2_client_free(valk_arc_box *box) {

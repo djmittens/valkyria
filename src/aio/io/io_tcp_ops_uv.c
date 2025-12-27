@@ -1,6 +1,6 @@
 #include "io_tcp_uv_types.h"
-#include <stdlib.h>
-#include <string.h>
+#include "../aio_internal.h"
+#include <netdb.h>
 
 typedef struct {
   uv_write_t req;
@@ -56,10 +56,9 @@ static void __write_cb_adapter(uv_write_t *req, int status) {
   free(wreq);
 }
 
-static int tcp_init(valk_io_loop_t *loop, valk_io_tcp_t *tcp) {
+static int tcp_init(valk_aio_system_t *sys, valk_io_tcp_t *tcp) {
   memset(tcp, 0, sizeof(*tcp));
-  uv_loop_t *uv_loop = valk_io_loop_unwrap_uv(loop);
-  return uv_tcp_init(uv_loop, &tcp->uv);
+  return uv_tcp_init(sys->eventloop, &tcp->uv);
 }
 
 static void tcp_close(valk_io_tcp_t *tcp, valk_io_close_cb cb) {
@@ -72,7 +71,8 @@ static bool tcp_is_closing(valk_io_tcp_t *tcp) {
 
 static int tcp_bind(valk_io_tcp_t *tcp, const char *ip, int port) {
   struct sockaddr_in addr;
-  uv_ip4_addr(ip, port, &addr);
+  int r = uv_ip4_addr(ip, port, &addr);
+  if (r) return r;
   return uv_tcp_bind(&tcp->uv, (const struct sockaddr *)&addr, 0);
 }
 
@@ -91,7 +91,23 @@ static int tcp_getpeername(valk_io_tcp_t *tcp, void *addr, int *len) {
 
 static int tcp_connect(valk_io_tcp_t *tcp, const char *ip, int port, valk_io_connect_cb cb) {
   struct sockaddr_in addr;
-  uv_ip4_addr(ip, port, &addr);
+  int r = uv_ip4_addr(ip, port, &addr);
+  if (r) {
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    char portstr[16];
+    snprintf(portstr, sizeof portstr, "%d", port);
+    int gai = getaddrinfo(ip, portstr, &hints, &res);
+    if (gai == 0 && res) {
+      memcpy(&addr, res->ai_addr, sizeof(struct sockaddr_in));
+      freeaddrinfo(res);
+    } else {
+      if (res) freeaddrinfo(res);
+      return -1;
+    }
+  }
   
   connect_req_t *creq = malloc(sizeof(connect_req_t));
   if (!creq) return -1;
@@ -169,6 +185,23 @@ static const char *tcp_strerror(int err) {
   return uv_strerror(err);
 }
 
+static void __write_bufs_cb_adapter(uv_write_t *req, int status) {
+  valk_io_write_req_t *wreq = (valk_io_write_req_t *)req;
+  if (wreq->user_cb) {
+    wreq->user_cb(wreq, status);
+  }
+}
+
+static int tcp_write_bufs(valk_io_tcp_t *tcp, valk_io_write_req_t *req,
+                          const valk_io_buf_t *bufs, unsigned int nbufs,
+                          valk_io_write_bufs_cb cb) {
+  req->user_cb = cb;
+  _Static_assert(sizeof(valk_io_buf_t) == sizeof(uv_buf_t), "valk_io_buf_t must match uv_buf_t");
+  _Static_assert(offsetof(valk_io_buf_t, base) == offsetof(uv_buf_t, base), "buf base offset mismatch");
+  _Static_assert(offsetof(valk_io_buf_t, len) == offsetof(uv_buf_t, len), "buf len offset mismatch");
+  return uv_write(&req->uv, (uv_stream_t *)&tcp->uv, (const uv_buf_t *)bufs, nbufs, __write_bufs_cb_adapter);
+}
+
 const valk_io_tcp_ops_t valk_io_tcp_ops_uv = {
   .init = tcp_init,
   .close = tcp_close,
@@ -181,6 +214,7 @@ const valk_io_tcp_ops_t valk_io_tcp_ops_uv = {
   .read_start = tcp_read_start,
   .read_stop = tcp_read_stop,
   .write = tcp_write,
+  .write_bufs = tcp_write_bufs,
   .nodelay = tcp_nodelay,
   .set_data = tcp_set_data,
   .get_data = tcp_get_data,
@@ -190,4 +224,5 @@ const valk_io_tcp_ops_t valk_io_tcp_ops_uv = {
   .ip6_name = tcp_ip6_name,
   .strerror = tcp_strerror,
   .tcp_size = sizeof(valk_io_tcp_t),
+  .write_req_size = sizeof(valk_io_write_req_t),
 };

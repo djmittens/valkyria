@@ -3,6 +3,20 @@
 
 #include "../log.h"
 
+static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
+  return conn->sys ? conn->sys->ops->tcp : NULL;
+}
+
+static inline valk_io_tcp_t *__conn_tcp(valk_aio_handle_t *conn) {
+  return &conn->uv.tcp;
+}
+
+static inline bool __vtable_is_closing(valk_aio_handle_t *conn) {
+  const valk_io_tcp_ops_t *tcp = __tcp_ops(conn);
+  if (!tcp) return true;
+  return tcp->is_closing(__conn_tcp(conn));
+}
+
 void valk_backpressure_list_init(valk_backpressure_list_t *list, size_t max_size, uint32_t timeout_ms) {
   if (!list) return;
   list->head = nullptr;
@@ -63,7 +77,7 @@ struct valk_aio_handle_t *valk_backpressure_list_try_resume(valk_backpressure_li
     valk_aio_handle_t *conn = list->head;
 
     if (conn->http.state == VALK_CONN_CLOSING || conn->http.state == VALK_CONN_CLOSED ||
-        uv_is_closing(CONN_UV_HANDLE(conn))) {
+        __vtable_is_closing(conn)) {
       list->head = conn->http.backpressure_next;
       conn->http.backpressure_next = nullptr;
       conn->http.backpressure = false;

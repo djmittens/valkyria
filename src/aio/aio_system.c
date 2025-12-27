@@ -148,16 +148,11 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
 
   valk_aio_ssl_start();
 
-  sys->eventloop = malloc(sizeof(uv_loop_t));
-  if (!sys->eventloop) {
-    VALK_ERROR("Failed to allocate event loop");
-    free(sys);
-    return NULL;
-  }
-  int init_rc = uv_loop_init(sys->eventloop);
+  sys->ops = &valk_aio_ops_production;
+
+  int init_rc = sys->ops->loop->init(sys);
   if (init_rc != 0) {
-    VALK_ERROR("Failed to initialize event loop: %s", uv_strerror(init_rc));
-    free(sys->eventloop);
+    VALK_ERROR("Failed to initialize event loop");
     free(sys);
     return NULL;
   }
@@ -172,8 +167,6 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   memset(&sys->liveHandles, 0, sizeof(valk_aio_handle_t));
   sys->liveHandles.magic = VALK_AIO_HANDLE_MAGIC;
   sys->liveHandles.kind = VALK_HNDL_EMPTY;
-
-  sys->ops = &valk_aio_ops_production;
 
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     sys->httpServers = valk_slab_new(
@@ -294,10 +287,8 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
   valk_pending_stream_queue_destroy(&sys->pending_streams);
   free(sys->port_strs);
 
-  if (sys->eventloop) {
-    uv_loop_close(sys->eventloop);
-    free(sys->eventloop);
-    sys->eventloop = NULL;
+  if (sys->ops && sys->ops->loop) {
+    sys->ops->loop->destroy(sys);
   }
 
   if (g_last_started_aio_system == sys) {

@@ -1,17 +1,17 @@
 #pragma once
 
 #include "io_types.h"
-#include "io_loop_ops.h"
 #include <sys/types.h>
 
 typedef void (*valk_io_alloc_cb)(valk_io_tcp_t *tcp, size_t suggested, void **buf, size_t *buflen);
 typedef void (*valk_io_read_cb)(valk_io_tcp_t *tcp, ssize_t nread, const void *buf);
 typedef void (*valk_io_write_cb)(void *req, int status);
+typedef void (*valk_io_write_bufs_cb)(valk_io_write_req_t *req, int status);
 typedef void (*valk_io_connect_cb)(valk_io_tcp_t *tcp, int status);
 typedef void (*valk_io_connection_cb)(valk_io_tcp_t *server, int status);
 
 typedef struct valk_io_tcp_ops {
-  int (*init)(valk_io_loop_t *loop, valk_io_tcp_t *tcp);
+  int (*init)(valk_aio_system_t *sys, valk_io_tcp_t *tcp);
   void (*close)(valk_io_tcp_t *tcp, valk_io_close_cb cb);
   bool (*is_closing)(valk_io_tcp_t *tcp);
 
@@ -26,6 +26,10 @@ typedef struct valk_io_tcp_ops {
   int (*read_stop)(valk_io_tcp_t *tcp);
   int (*write)(valk_io_tcp_t *tcp, const void *data, size_t len, valk_io_write_cb cb);
 
+  int (*write_bufs)(valk_io_tcp_t *tcp, valk_io_write_req_t *req,
+                    const valk_io_buf_t *bufs, unsigned int nbufs,
+                    valk_io_write_bufs_cb cb);
+
   int (*nodelay)(valk_io_tcp_t *tcp, int enable);
 
   void (*set_data)(valk_io_tcp_t *tcp, void *data);
@@ -39,6 +43,7 @@ typedef struct valk_io_tcp_ops {
   const char *(*strerror)(int err);
 
   size_t tcp_size;
+  size_t write_req_size;
 } valk_io_tcp_ops_t;
 
 extern const valk_io_tcp_ops_t valk_io_tcp_ops_uv;

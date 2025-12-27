@@ -33,10 +33,14 @@
 // Disable fork-based testing when running under AddressSanitizer
 // ASAN doesn't properly support fork() - shadow memory state becomes inconsistent
 #if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
-#define VALK_TEST_FORK 0
+#define VALK_TEST_FORK_COMPILED 0
 #else
-#define VALK_TEST_FORK 1
+#define VALK_TEST_FORK_COMPILED 1
 #endif
+
+static bool valk_test_fork_disabled(void) {
+  return getenv("VALK_TEST_NO_FORK") != NULL;
+}
 
 const char *DOT_FILL =
     ".........................................................................."
@@ -319,14 +323,18 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
     test->_stderr = (void *)valk_slab_aquire(slab)->data;
     valk_ring_init(test->_stderr, ring_size);
 
-#if VALK_TEST_FORK
-    struct pollfd fds[2];
-    int pid = valk_test_fork(test, suite, fds);
-    valk_test_fork_await(test, pid, fds);
+#if VALK_TEST_FORK_COMPILED
+    if (!valk_test_fork_disabled()) {
+      struct pollfd fds[2];
+      int pid = valk_test_fork(test, suite, fds);
+      valk_test_fork_await(test, pid, fds);
+    } else {
+      fprintf(stderr, "Running: %s (no fork)\n", test->name);
+      test->func(suite, &test->result);
+    }
 #else
-    fprintf(stderr, "🏃 Running: %s\n", test->name);
+    fprintf(stderr, "Running: %s\n", test->name);
     test->func(suite, &test->result);
-    fprintf(stderr, "Test %s completed with type=%d\n", test->name, test->result.type);
 #endif
     result |= !(test->result.type == VALK_TEST_PASS ||
                 test->result.type == VALK_TEST_SKIP);

@@ -59,8 +59,7 @@ void __event_loop(void *arg) {
   // Signal that event loop is ready (all slabs initialized)
   uv_sem_post(&sys->startup_sem);
 
-  // Run the loop until stop is requested
-  uv_run(sys->eventloop, UV_RUN_DEFAULT);
+  sys->ops->loop->run(sys, VALK_IO_RUN_DEFAULT);
 
   // =========================================================================
   // Graceful Shutdown (modeled after Finagle/Netty)
@@ -71,7 +70,7 @@ void __event_loop(void *arg) {
   //
   // Total shutdown budget: 500ms (generous for tests, fast enough for prod)
   
-  uint64_t drain_start = uv_hrtime();
+  uint64_t drain_start = sys->ops->loop->hrtime();
   uint64_t graceful_drain_ns = 100ULL * 1000000ULL;  // 100ms graceful
   uint64_t force_close_ns = 300ULL * 1000000ULL;     // 300ms for force close
   uint64_t hard_deadline_ns = 500ULL * 1000000ULL;   // 500ms hard deadline
@@ -81,13 +80,13 @@ void __event_loop(void *arg) {
   int iterations = 0;
   
   // LCOV_EXCL_START - shutdown drain loop timing-dependent, rarely entered in tests
-  while (uv_loop_alive(sys->eventloop)) {
-    uint64_t elapsed = uv_hrtime() - drain_start;
+  while (sys->ops->loop->alive(sys)) {
+    uint64_t elapsed = sys->ops->loop->hrtime() - drain_start;
     iterations++;
     
     // Phase 1: Graceful drain with UV_RUN_ONCE (allows I/O to complete)
     if (elapsed < graceful_drain_ns) {
-      uv_run(sys->eventloop, UV_RUN_NOWAIT);
+      sys->ops->loop->run(sys, VALK_IO_RUN_NOWAIT);
       continue;
     }
     // Phase 2: Force close all remaining handles
@@ -99,7 +98,7 @@ void __event_loop(void *arg) {
     
     // Continue draining after force close
     if (elapsed < force_close_ns) {
-      uv_run(sys->eventloop, UV_RUN_NOWAIT);
+      sys->ops->loop->run(sys, VALK_IO_RUN_NOWAIT);
       continue;
     }
     
@@ -119,11 +118,11 @@ void __event_loop(void *arg) {
       break;
     }
     
-    uv_run(sys->eventloop, UV_RUN_NOWAIT);
+    sys->ops->loop->run(sys, VALK_IO_RUN_NOWAIT);
   }
   // LCOV_EXCL_STOP
   
-  uint64_t total_drain_ms = (uv_hrtime() - drain_start) / 1000000ULL;
+  uint64_t total_drain_ms = (sys->ops->loop->hrtime() - drain_start) / 1000000ULL;
   if (total_drain_ms > 50) {  // LCOV_EXCL_LINE
     VALK_INFO("Shutdown: drain completed in %llu ms (%d iterations)",  // LCOV_EXCL_LINE
               (unsigned long long)total_drain_ms, iterations);  // LCOV_EXCL_LINE
