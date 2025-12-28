@@ -210,7 +210,7 @@ define run_tests_valk
 	$(1)/valk test/test_sse_builtins.valk
 	$(1)/valk test/test_sse_integration.valk
 	$(1)/valk test/test_sse_async_timeout.valk
-	if [ "$(VALK_METRICS)" = "1" ]; then $(1)/valk test/test_sse_diagnostics_endpoint.valk; fi
+	$(1)/valk test/test_sse_diagnostics_endpoint.valk
 	$(1)/valk test/test_http_client_server.valk
 	$(1)/valk test/test_async_http_handlers.valk
 	$(1)/valk test/test_aio_config.valk
@@ -368,6 +368,7 @@ coverage-tests: build-coverage coverage-reset
 	@echo "║  Running all tests with coverage instrumentation            ║"
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 	@echo ""
+	export VALK_COVERAGE=1
 	export VALK_TEST_TIMEOUT_SECONDS=30
 	$(call run_tests_c,build-coverage)
 	@echo ""

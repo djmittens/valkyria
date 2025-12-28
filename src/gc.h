@@ -471,9 +471,8 @@ static inline size_t valk_gc_page_total_size(uint8_t size_class) {
   uint16_t bitmap_bytes = valk_gc_bitmap_bytes(size_class);
   uint16_t slot_size = valk_gc_size_classes[size_class];
   
-  // header + 2 bitmaps + slots, aligned to cache line
   size_t total = VALK_GC_PAGE_HEADER_SIZE + 2 * bitmap_bytes + slots * slot_size;
-  total = (total + 63) & ~63ULL;
+  total = (total + (VALK_GC_PAGE_SIZE - 1)) & ~(VALK_GC_PAGE_SIZE - 1);
   return total;
 }
 
@@ -562,6 +561,9 @@ typedef struct valk_gc_page_list {
   _Atomic uint32_t next_page_offset;    // For allocation within virtual region
   uint16_t slot_size;                   // Cached
   uint16_t slots_per_page;              // Cached
+  size_t region_start;                  // Offset from heap base to this class's region
+  size_t region_size;                   // Maximum size of this class's region
+  size_t page_size;                     // Cached page size for this class
 } valk_gc_page_list_t;
 
 // Large object tracking (>4KB allocations)
@@ -739,6 +741,9 @@ void valk_gc_heap2_get_stats(valk_gc_heap2_t *heap, valk_gc_stats2_t *out);
 // Run a full GC collection cycle (mark + sweep)
 // Returns bytes reclaimed
 size_t valk_gc_heap2_collect(valk_gc_heap2_t *heap);
+
+// Auto-select single-threaded or parallel collection based on registered threads
+size_t valk_gc_heap2_collect_auto(valk_gc_heap2_t *heap);
 
 // Reset all TLABs after GC
 void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab);

@@ -1,638 +1,473 @@
 # Disabled, Skipped, and Unused Tests Report
 
 **Generated:** December 2024  
-**Status:** Analysis of hidden problems in the test suite
+**Updated:** December 27, 2025  
+**Status:** Comprehensive analysis with definitive fixes
 
 ## Executive Summary
 
-This analysis identified **significant hidden problems** masked by disabled, skipped, or unused tests:
-
-| Category | Count | Severity | Impact |
+| Category | Count | Severity | Status |
 |----------|-------|----------|--------|
-| Crashing tests | 1 | 🔴 Critical | CI is broken |
-| Phantom test references | 1 | 🔴 Critical | Build may fail |
-| Orphan test files | 1 | 🔴 Critical | Regression risk |
-| Race condition bugs | 4 | 🟠 High | Production bugs |
-| Use-after-free bugs | 2 | 🟠 High | Memory safety |
-| Missing test coverage | 6+ | 🟡 Medium | Coverage gaps |
-| Conditional skips | 300+ | 🟢 Low | By design |
+| Skipped tests (real bugs) | 5 | 🔴 Critical | Needs code fixes |
+| Missing from test suite | 4 | 🟠 High | Needs Makefile updates |
+| Flaky timing tests | 25+ | 🟡 Medium | Needs timeout adjustments |
+| CI configuration gaps | 3 | 🟡 Medium | Needs workflow updates |
+| Print-only tests | 3 | 🟢 Low | Convert or remove |
+| Conditional skips | 300+ | ✅ OK | By design |
 
 ---
 
-## Table of Contents
+## Part 1: Definitive Fixes
 
-1. [Critical Issues (P0)](#p0-critical-issues)
-2. [High Priority Issues (P1)](#p1-high-priority-race-conditions--use-after-free)
-3. [Medium Priority Issues (P2)](#p2-medium-priority-missing-test-coverage)
-4. [Low Priority Issues (P3)](#p3-low-priority-conditional-skips)
-5. [Code Quality Issues (P4)](#p4-code-quality-issues)
+### Fix 1: Add Missing Tests to Makefile
 
----
+**Problem:** 4 valid test files exist but are never run.
 
-## P0: Critical Issues
+**Files affected:** `Makefile`
 
-### Issue 1: Crashing Test - `test_backpressure_connections_survive`
-
-**File:** `test/test_aio_load_shedding.c:962`  
-**Status:** 🌀 CRSH - Times out after 30 seconds  
-**Impact:** `make test` fails with exit code 1
-
-#### Problem Description
-
-The test creates 12 HTTP/2 clients with constrained resources and sends batched requests. It hangs indefinitely and is killed after 30 seconds. The warning message suggests a memory management issue:
-
-```
-[WARN] test_aio_load_shedding.c:821:create_request | Reinitializing array (items not cleaned up?)
-```
-
-#### Root Cause Analysis
-
-The test uses these constrained settings:
-```c
-cfg.tcp_buffer_pool_size = 20;
-cfg.max_connections = 16;
-cfg.arena_pool_size = 32;
-cfg.backpressure_timeout_ms = 10000;
-```
-
-With 12 concurrent clients and batched requests, the system likely enters a deadlock state where:
-1. TCP buffer pool is exhausted
-2. Backpressure is applied
-3. Clients wait for buffers that will never be freed
-4. The 10-second backpressure timeout is longer than the 30-second test timeout
-
-#### Solution
-
-**Option A (Immediate - Unblock CI):**
-```c
-static void test_backpressure_connections_survive(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  VALK_SKIP("Backpressure timeout conflict with test timeout - TODO fix resource constraints");
-  return;
-  // ... existing code
-}
-```
-
-**Option B (Proper Fix):**
-1. Reduce `backpressure_timeout_ms` to 2000ms (2 seconds)
-2. Reduce test timeout or increase it to 60 seconds
-3. Add proper cleanup on timeout
-4. Investigate the deadlock in `valk_aio_wait_for_shutdown`
-
-#### Path Forward
-
-```bash
-# Step 1: Skip the test to unblock CI immediately
-# Edit test/test_aio_load_shedding.c:962
-
-# Step 2: Create issue to properly fix the backpressure handling
-# The real bug is likely in src/aio_uv.c backpressure logic
-```
-
----
-
-### Issue 2: Phantom Test Reference - `test_tco_suite.valk`
-
-**File:** `Makefile:194`  
-**Status:** File does not exist  
-**Impact:** `make test-valk` will fail when it reaches this line
-
-#### Problem Description
-
-The Makefile contains:
-```makefile
-$(1)/valk test/test_tco_suite.valk
-```
-
-But the file `test/test_tco_suite.valk` does not exist. It's documented extensively in archived docs, suggesting it was accidentally deleted.
-
-#### Solution
-
-**Option A (Remove reference):**
-```makefile
-# In Makefile, delete line 194:
-# $(1)/valk test/test_tco_suite.valk
-```
-
-**Option B (Restore the file):**
-
-Based on the archived documentation, `test_tco_suite.valk` should test tail-call optimization. Create a new file:
-
-```lisp
-; test/test_tco_suite.valk
-; Tail Call Optimization Tests
-
-(load "src/prelude.valk")
-
-(defun test-simple-tco ()
-  "Test simple tail recursion"
-  (defun count-down (n)
-    (if (<= n 0)
-        0
-        (count-down (- n 1))))
-  (assert (= (count-down 10000) 0) "Should handle deep recursion via TCO"))
-
-(defun test-mutual-tco ()
-  "Test mutual tail recursion"
-  (defun even? (n)
-    (if (= n 0) true (odd? (- n 1))))
-  (defun odd? (n)
-    (if (= n 0) false (even? (- n 1))))
-  (assert (even? 1000) "Should handle mutual recursion via TCO"))
-
-(defun test-accumulator-tco ()
-  "Test tail recursion with accumulator"
-  (defun factorial-acc (n acc)
-    (if (<= n 1)
-        acc
-        (factorial-acc (- n 1) (* n acc))))
-  (defun factorial (n) (factorial-acc n 1))
-  (assert (= (factorial 10) 3628800) "Factorial should use TCO"))
-
-(defun run-tests ()
-  (test-simple-tco)
-  (test-mutual-tco)
-  (test-accumulator-tco)
-  (print "All TCO tests passed!"))
-
-(run-tests)
-```
-
-#### Path Forward
-
-```bash
-# Immediate: Remove the reference
-sed -i '' '/test_tco_suite.valk/d' Makefile
-
-# Or restore the file if TCO tests are needed
-# Create test/test_tco_suite.valk with the content above
-```
-
----
-
-### Issue 3: Orphan Test File - `test_large_str.c`
-
-**File:** `test/test_large_str.c` (94 lines)  
-**Status:** Never compiled or executed  
-**Impact:** 2MB string concatenation regression risk
-
-#### Problem Description
-
-This complete test file validates large string concatenation (up to 2MB). It was written to test a specific fix for a 64KB limit bug. The test is **not in CMakeLists.txt** and therefore never runs.
-
-The test covers:
-- 1KB → 4KB → 64KB → 256KB → 1MB → 2MB string concatenation
-- Line 50 comment: "this would have crashed with old 64KB limit!"
-
-#### Solution
-
-**Add to CMakeLists.txt** (after line 214):
-
-```cmake
-add_executable(test_large_str test/test_large_str.c test/testing.c)
-target_link_libraries(test_large_str PRIVATE "-lc" valkyria)
-include_directories(test_large_str src/)
-```
-
-**Add to Makefile** (in `run_tests_c`, around line 140):
+**Change:** Add these lines to the `run_tests_c` macro (after line 177):
 
 ```makefile
-$(1)/test_large_str
+if [ -f $(1)/test_large_str ]; then $(1)/test_large_str; fi
 ```
 
-#### Path Forward
-
-```bash
-# Add to CMakeLists.txt after line 214
-cat >> CMakeLists.txt << 'EOF'
-add_executable(test_large_str test/test_large_str.c test/testing.c)
-target_link_libraries(test_large_str PRIVATE "-lc" valkyria)
-include_directories(test_large_str src/)
-EOF
-
-# Add to Makefile run_tests_c section
-# Then verify:
-make build && build/test_large_str
-```
-
----
-
-## P1: High Priority - Race Conditions & Use-After-Free
-
-These tests have complete implementations but are skipped due to known concurrency bugs. **These represent real bugs in production code that need fixing.**
-
-### Issue 4: `valk_pool_resolve_promise` Race Condition
-
-**Tests Affected:**
-- `test/unit/test_concurrency.c:897` - `test_pool_resolve_promise`
-- `test/unit/test_concurrency.c:902` - `test_pool_resolve_promise_with_error`
-
-**Skip Message:** "valk_pool_resolve_promise has a known race condition - internal future released before resolution"
-
-#### Root Cause Analysis
-
-Looking at `src/concurrency.c:447-457`:
-
-```c
-void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
-                               valk_arc_box *result) {
-  valk_arc_box *arg = valk_arc_box_new(VALK_SUC, sizeof(__valk_resolve_promise));
-  __valk_resolve_promise *pair = arg->item;
-  pair->promise = promise;
-  pair->result = result;
-
-  valk_future *res = valk_schedule(pool, arg, __valk_pool_resolve_promise_cb);
-  valk_arc_release(res);  // <-- BUG: releasing before callback completes
-}
-```
-
-**The Problem:** The future `res` is released immediately after scheduling. If the scheduled work hasn't started yet and this release drops the refcount to zero, the future will be freed. When the worker thread later tries to complete the future, it accesses freed memory.
-
-#### Solution
-
-**Option A (Retain until callback completes):**
-
-```c
-void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
-                               valk_arc_box *result) {
-  valk_arc_box *arg = valk_arc_box_new(VALK_SUC, sizeof(__valk_resolve_promise));
-  __valk_resolve_promise *pair = arg->item;
-  pair->promise = promise;
-  pair->result = result;
-  valk_arc_retain(result);  // Retain result since callback will release it
-
-  valk_future *res = valk_schedule(pool, arg, __valk_pool_resolve_promise_cb);
-  // Don't release here - the future will be released by the worker when done
-  // Or: await the future to ensure completion
-  valk_arc_box *completion = valk_future_await(res);
-  valk_arc_release(completion);
-  valk_arc_release(res);
-}
-```
-
-**Option B (Fire-and-forget pattern with proper lifecycle):**
-
-If we truly don't care about the result, the callback itself should handle cleanup:
-
-```c
-typedef struct {
-  valk_promise *promise;
-  valk_arc_box *result;
-  valk_future *self_future;  // Reference to own future for cleanup
-} __valk_resolve_promise;
-
-static valk_arc_box *__valk_pool_resolve_promise_cb(valk_arc_box *arg) {
-  __valk_resolve_promise *a = arg->item;
-  valk_promise_respond(a->promise, a->result);
-  valk_arc_release(a->result);
-  valk_arc_release(a->self_future);  // Release the future reference
-  return arg;
-}
-
-void valk_pool_resolve_promise(valk_worker_pool *pool, valk_promise *promise,
-                               valk_arc_box *result) {
-  valk_arc_box *arg = valk_arc_box_new(VALK_SUC, sizeof(__valk_resolve_promise));
-  __valk_resolve_promise *pair = arg->item;
-  pair->promise = promise;
-  pair->result = result;
-  valk_arc_retain(result);
-
-  valk_future *res = valk_schedule(pool, arg, __valk_pool_resolve_promise_cb);
-  pair->self_future = res;  // Store for later cleanup
-  // Don't release here - callback will do it
-}
-```
-
-#### Path Forward
-
-```bash
-# 1. Write a minimal reproducer
-# 2. Fix src/concurrency.c with Option A or B
-# 3. Re-enable the tests
-# 4. Run with ASAN to verify no UAF
-make test-c-asan
-```
-
----
-
-### Issue 5: Connection Refused Use-After-Free
-
-**Test:** `test/test_aio_integration.c:414` - `test_connect_to_nonexistent_server`  
-**Skip Message:** "connection refused error handling has use-after-free - TODO fix"
-
-#### Root Cause Analysis
-
-The test connects to a port with no server:
-
-```c
-valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
-valk_arc_box *clientBox = valk_future_await(fclient);
-ASSERT_EQ(clientBox->type, VALK_ERR);  // Expected to fail
-```
-
-When the connection fails, the error handling path likely frees the connection structure, but something else still holds a reference to it.
-
-#### Solution
-
-The fix is in `src/aio_uv.c` connection error handling. Look for the `on_connect` callback and ensure proper reference counting:
-
-```c
-// In the connection error path, ensure we:
-// 1. Don't free the connection until all references are released
-// 2. Properly resolve the future with an error before cleanup
-// 3. Don't access the connection after calling valk_arc_release
-```
-
-#### Path Forward
-
-```bash
-# 1. Run with ASAN to get the exact UAF location
-ASAN_OPTIONS=detect_leaks=1 build-asan/test_aio_integration 2>&1 | grep -A 20 "use-after-free"
-
-# 2. Fix the identified location in src/aio_uv.c
-# 3. Re-enable the test
-# 4. Verify with ASAN
-```
-
----
-
-### Issue 6: AIO Initialization Race Conditions
-
-**Tests Affected:**
-- `test/test_aio_integration.c:151` - `test_minimal_config`
-- `test/test_aio_load_shedding.c:575` - `test_buffer_pool_usage`
-
-**Skip Messages:**
-- "minimal config has race condition in initialization"
-- "race condition accessing tcp_slab before fully initialized"
-
-#### Root Cause Analysis
-
-Both tests access `tcp_slab` immediately after `valk_aio_start_with_config()`. The slab is initialized on a background thread and may not be ready when accessed.
-
-Looking at `src/aio_uv.c:4326`:
-```c
-valk_slab_t* valk_aio_get_tcp_buffer_slab(valk_aio_system_t* sys) {
-  if (!sys) return nullptr;
-  return sys->tcpBufferSlab;  // May be NULL if init not complete
-}
-```
-
-The initialization at line 1051:
-```c
-sys->tcpBufferSlab = tcp_buffer_slab;  // Store for metrics access
-```
-
-This store happens during async initialization, but tests access it synchronously.
-
-#### Solution
-
-**Option A (Add initialization barrier):**
-
-```c
-// In src/aio_uv.c, add a ready flag
-typedef struct valk_aio_system_s {
-  // ...existing fields...
-  atomic_bool initialized;  // Add this
-} valk_aio_system_t;
-
-// Set at end of initialization
-__atomic_store_n(&sys->initialized, true, __ATOMIC_RELEASE);
-
-// Getter waits for init
-valk_slab_t* valk_aio_get_tcp_buffer_slab(valk_aio_system_t* sys) {
-  if (!sys) return nullptr;
-  while (!__atomic_load_n(&sys->initialized, __ATOMIC_ACQUIRE)) {
-    usleep(1000);  // Wait for init
-  }
-  return sys->tcpBufferSlab;
-}
-```
-
-**Option B (Synchronous initialization for critical slabs):**
-
-Initialize the slab allocators synchronously before returning from `valk_aio_start_with_config()`.
-
-#### Path Forward
-
-```bash
-# 1. Add atomic initialized flag to valk_aio_system_t
-# 2. Set flag at end of initialization
-# 3. Check flag in all getters
-# 4. Re-enable tests
-```
-
----
-
-### Issue 7: Shutdown Race Condition
-
-**Test:** `test/test_aio_integration.c:376` - `test_server_shutdown_with_active_clients`  
-**Skip Message:** "shutdown race condition when client not disconnected - TODO fix"
-
-#### Root Cause Analysis
-
-The test:
-1. Creates a server
-2. Connects a client
-3. Releases client/server references
-4. Calls `valk_aio_stop()` and `valk_aio_wait_for_shutdown()`
-
-The race: The client connection may not be fully closed when shutdown is initiated, causing cleanup to access freed resources.
-
-#### Solution
-
-Ensure `valk_aio_wait_for_shutdown()` properly waits for all connections to close:
-
-```c
-void valk_aio_wait_for_shutdown(valk_aio_system_t* sys) {
-  // Wait for all active connections to close
-  while (__atomic_load_n(&sys->active_connections, __ATOMIC_ACQUIRE) > 0) {
-    usleep(1000);
-  }
-  
-  // Then proceed with shutdown
-  // ...existing shutdown code...
-}
-```
-
----
-
-## P2: Medium Priority - Missing Test Coverage
-
-### Issue 8: .valk Tests Not in Test Suite
-
-These files exist but are not executed by `make test-valk`:
-
-| File | Purpose | Recommendation |
-|------|---------|----------------|
-| `test_delay_continuation_error.valk` | Async error handling | **Add to Makefile** |
-| `test_delay_error.valk` | Delay error path | **Add to Makefile** |
-| `test_make_string.valk` | make-string builtin | **Add to Makefile** |
-| `test_metrics_prometheus.valk` | Prometheus format | Add (conditional on VALK_METRICS) |
-| `test_coverage_integration.valk` | Coverage tests | Add (conditional on VALK_COVERAGE) |
-| `test_large_response.valk` | Large responses | Add to stress tests |
-
-#### Solution
-
-Add to `Makefile` in `run_tests_valk` section:
+**Change:** Add these lines to the `run_tests_valk` macro (after line 224):
 
 ```makefile
 $(1)/valk test/test_delay_error.valk
 $(1)/valk test/test_delay_continuation_error.valk
 $(1)/valk test/test_make_string.valk
-if [ "$(VALK_METRICS)" = "1" ]; then $(1)/valk test/test_metrics_prometheus.valk; fi
+```
+
+**Verification:**
+```bash
+make build && build/test_large_str
+make build && build/valk test/test_delay_error.valk
+make build && build/valk test/test_delay_continuation_error.valk
+make build && build/valk test/test_make_string.valk
 ```
 
 ---
 
-### Issue 9: C Tests Built But Not Run
+### Fix 2: AIO Initialization Race Condition
 
-| Test | Status |
-|------|--------|
-| `test_demo_server` | Built, never run |
-| `test_gc_metrics` | Built, never run |
-| `test_source_loc` | Built with VALK_COVERAGE, never run |
+**Problem:** `tcp_slab` accessed before async initialization completes.
 
-#### Solution
+**Tests affected:**
+- `test/test_aio_integration.c:151` - `test_minimal_config`
+- `test/test_aio_load_shedding.c:575` - `test_buffer_pool_usage`
 
-Either add to `run_tests_c` or remove from CMakeLists.txt if they're not meant to be automated tests.
+**Root cause:** `valk_aio_start_with_config()` returns before slab allocators are initialized on the event loop thread.
+
+**File:** `src/aio/aio_uv.c`
+
+**Fix:** Add initialization barrier to `valk_aio_system_t`:
+
+```c
+// In struct valk_aio_system_s, add:
+_Atomic bool fully_initialized;
+
+// At end of __valk_aio_run_loop initialization (after tcpBufferSlab is set):
+atomic_store(&sys->fully_initialized, true);
+
+// In valk_aio_get_tcp_buffer_slab:
+valk_slab_t* valk_aio_get_tcp_buffer_slab(valk_aio_system_t* sys) {
+  if (!sys) return nullptr;
+  while (!atomic_load(&sys->fully_initialized)) {
+    usleep(100);
+  }
+  return sys->tcpBufferSlab;
+}
+```
+
+**After fix:** Remove `VALK_SKIP` from both tests.
 
 ---
 
-## P3: Low Priority - Conditional Skips
+### Fix 3: Connection Refused Use-After-Free
 
-These tests are intentionally skipped when feature flags are disabled. This is **correct behavior**.
+**Problem:** Connection structure freed before error callback completes.
 
-### When `VALK_METRICS_ENABLED` is not defined (~300 tests)
+**Test:** `test/test_aio_integration.c:414` - `test_connect_to_nonexistent_server`
 
-| Test File | Approx Tests |
-|-----------|--------------|
-| `test_aio_metrics.c` | 25 |
-| `test_metrics_v2.c` | 45 |
-| `test_loop_metrics.c` | 24 |
-| `test_sse_diagnostics.c` | 50 |
-| `test/unit/test_sse_core.c` | 70 |
-| `test/unit/test_pool_metrics.c` | 26 |
-| `test/unit/test_event_loop_metrics.c` | 24 |
-| `test/unit/test_metrics_builtins.c` | 58 |
-| `test/unit/test_metrics_delta.c` | 45 |
-| `test/unit/test_sse_builtins.c` | 35 |
+**File:** `src/aio/aio_http2_client.c`
 
-### When `VALK_COVERAGE` is not defined (~30 tests)
+**Fix:** In `__http2_client_request_connect_cb`, ensure proper reference counting:
 
-| Test File | Approx Tests |
-|-----------|--------------|
-| `test_source_loc.c` | 7 |
-| `test/unit/test_source_loc.c` | 26 |
+```c
+static void __http2_client_request_connect_cb(uv_connect_t* req, int status) {
+  valk_http2_client_request_t* creq = req->data;
+  
+  if (status < 0) {
+    // Retain before creating error result
+    valk_arc_box* error = valk_arc_box_new(VALK_ERR, sizeof(valk_lval));
+    // ... create error ...
+    
+    // Resolve promise BEFORE releasing any references
+    valk_promise_resolve(creq->promise, error);
+    
+    // Now safe to cleanup
+    valk_arc_release(error);
+    // DO NOT access creq after this point
+    return;
+  }
+  // ... success path ...
+}
+```
 
-#### Recommendation
+**Verification:**
+```bash
+make build-asan && ASAN_OPTIONS=detect_leaks=1 build-asan/test_aio_integration
+```
 
-Ensure CI runs with both flags enabled:
+**After fix:** Remove `VALK_SKIP` from `test_connect_to_nonexistent_server`.
+
+---
+
+### Fix 4: Shutdown Race Condition
+
+**Problem:** Shutdown proceeds before all connections are closed.
+
+**Test:** `test/test_aio_integration.c:376` - `test_server_shutdown_with_active_clients`
+
+**File:** `src/aio/aio_uv.c`
+
+**Fix:** Add connection counter and wait in shutdown:
+
+```c
+// In struct valk_aio_system_s:
+_Atomic int32_t active_connection_count;
+
+// When connection opens:
+atomic_fetch_add(&sys->active_connection_count, 1);
+
+// When connection closes:
+atomic_fetch_sub(&sys->active_connection_count, 1);
+
+// In valk_aio_wait_for_shutdown:
+void valk_aio_wait_for_shutdown(valk_aio_system_t* sys) {
+  int max_wait_ms = 5000;
+  int waited = 0;
+  while (atomic_load(&sys->active_connection_count) > 0 && waited < max_wait_ms) {
+    usleep(1000);
+    waited++;
+  }
+  // ... existing shutdown code ...
+}
+```
+
+**After fix:** Remove `VALK_SKIP` from `test_server_shutdown_with_active_clients`.
+
+---
+
+### Fix 5: Backpressure Test Timeout Conflict
+
+**Problem:** Test uses 10s backpressure timeout but coverage has 30s test timeout, causing deadlock.
+
+**Test:** `test/test_aio_load_shedding.c` - `test_backpressure_connections_survive`
+
+**Current status:** Already SKIPPED with message "Flaky timeout under coverage instrumentation"
+
+**Fix:** Reduce backpressure timeout in test:
+
+```c
+static void test_backpressure_connections_survive(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  // Remove VALK_SKIP
+  
+  valk_aio_config cfg = valk_aio_config_defaults();
+  cfg.tcp_buffer_pool_size = 20;
+  cfg.max_connections = 16;
+  cfg.arena_pool_size = 32;
+  cfg.backpressure_timeout_ms = 2000;  // Changed from 10000
+  // ... rest of test ...
+}
+```
+
+---
+
+### Fix 6: Improve CI Configuration
+
+**Problem:** CI only runs coverage build, missing regular tests and ASAN.
+
+**File:** `.github/workflows/coverage.yml`
+
+**Fix:** Add comprehensive test matrix:
 
 ```yaml
-# In .github/workflows/test.yml
+name: Tests
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/*.yml'
+  push:
+    branches:
+      - main
+
 jobs:
+  # Fast tests (no ASAN, no coverage)
   test:
-    strategy:
-      matrix:
-        config:
-          - { metrics: 1, coverage: 1 }  # Full test suite
-          - { metrics: 0, coverage: 0 }  # Minimal build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Dependencies
+        run: |
+          brew install llvm cmake ninja pkg-config openssl@3 libuv nghttp2
+          echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
+      - name: Build
+        run: make build
+      - name: Run Tests
+        run: make test
+
+  # ASAN tests (catches memory errors)
+  test-asan:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Dependencies
+        run: |
+          brew install llvm cmake ninja pkg-config openssl@3 libuv nghttp2
+          echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
+      - name: Build with ASAN
+        run: make build-asan
+      - name: Run ASAN Tests
+        run: make test-c-asan && make test-valk-asan
+
+  # Coverage (existing job, unchanged)
+  coverage:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Dependencies
+        run: |
+          brew install llvm cmake ninja pkg-config openssl@3 libuv nghttp2
+          echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
+      - name: Build with Coverage
+        run: make build-coverage
+      - name: Run Tests
+        run: make coverage-tests
+      - name: Generate Coverage Report
+        run: make coverage-report
+      - name: Check Runtime Coverage Requirements
+        run: python3 bin/check-coverage.py --build-dir build-coverage
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage-report/
+          retention-days: 30
+      - name: Upload Coverage to Codecov
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage-report/coverage.xml
+          fail_ci_if_error: false
+          verbose: true
 ```
 
 ---
 
-## P4: Code Quality Issues
+### Fix 7: Normalize Test Timeouts
 
-### Issue 10: Tests With Only Print Statements
+**Problem:** Standalone uses 5s timeout, coverage uses 30s, creating inconsistent behavior.
 
-| File | Issue |
-|------|-------|
-| `test_aio_builtins.valk` | Only prints, no assertions |
-| `test_metrics_builtins.valk` | Claims "passed" without testing |
+**Recommendation:** Use 10s for both, with explicit override for known slow tests.
 
-**Recommendation:** Add actual assertions or mark as demos.
+**File:** `Makefile`
 
-### Issue 11: Tests Using Exit Codes Instead of Framework
+**Change:**
+```makefile
+# Line 249 and 257: Change from 5 to 10
+test-c: export VALK_TEST_TIMEOUT_SECONDS=10
+test-valk: export VALK_TEST_TIMEOUT_SECONDS=10
 
-| File | Issue |
-|------|-------|
-| `test_backpressure.valk` | Uses `exit 0/1` |
-| `test_pending_streams.valk` | Uses `exit 0/1` |
-| `test_concurrent_requests.valk` | Always passes |
-
-**Recommendation:** Convert to use the test framework macros.
-
-### Issue 12: TODO Comments in Test Code
-
-| Location | Issue |
-|----------|-------|
-| `test_networking.c:108` | Closing connections issue |
-| `test_networking.c:122` | Needs refactoring |
-| `test_memory.c:147` | Untrusted code |
-| `test_http_integration.valk:135` | JSON parsing TODO |
+# Line 372: Change from 30 to 15 (with slower CI, use env override)
+coverage-tests: export VALK_TEST_TIMEOUT_SECONDS=15
+```
 
 ---
 
-## Implementation Checklist
+## Part 2: Flaky Tests Analysis
 
-### Immediate (This Week)
+### High-Risk Timing-Dependent Tests
 
-- [ ] Skip `test_backpressure_connections_survive` to unblock CI
-- [ ] Remove or restore `test_tco_suite.valk` reference
-- [ ] Add `test_large_str.c` to build system
-- [ ] Verify CI passes
+These tests use short sleeps/timeouts that may fail under load:
 
-### Short Term (This Sprint)
+| Test | Timing Pattern | Risk | Recommendation |
+|------|---------------|------|----------------|
+| `test_backpressure.valk` | 50ms sleeps | HIGH | Increase to 200ms |
+| `test_backpressure_timeout.valk` | 800ms vs 1000ms timeout | HIGH | Use 2000ms timeout |
+| `test_pending_streams.valk` | 100ms sleeps | HIGH | Increase to 300ms |
+| `test_pending_stream_headers.valk` | 50/200ms schedules | HIGH | Increase to 200/500ms |
+| `test_arena_out_of_order.valk` | 10/50/100ms for ordering | MEDIUM | Use 100/200/400ms |
+| `test_async_http_handlers.valk` | 5-100ms sleeps throughout | HIGH | Minimum 100ms |
 
-- [ ] Fix `valk_pool_resolve_promise` race condition
-- [ ] Fix connection-refused UAF bug
-- [ ] Add missing .valk tests to Makefile
-- [ ] Run full test suite with ASAN
+**General fix pattern for Valk timing tests:**
 
-### Medium Term (Next Sprint)
+```lisp
+; Before (flaky):
+(aio/sleep 50)
+(aio/schedule 100 callback)
 
-- [ ] Fix AIO initialization race conditions
+; After (stable):
+(aio/sleep 200)
+(aio/schedule 300 callback)
+```
+
+---
+
+## Part 3: Tests That Should NOT Be in Test Suite
+
+These are correctly excluded - do NOT add them:
+
+| File | Reason |
+|------|--------|
+| `test_50mb_server.valk` | Runs indefinitely, manual demo |
+| `test_50mb_file_server.valk` | Runs indefinitely, needs external file |
+| `test_2mb_server.valk` | Runs indefinitely, manual demo |
+| `test_overload.valk` | Runs indefinitely, manual testing |
+| `test_overload_metrics.valk` | Runs indefinitely, manual testing |
+| `test_custom_error_handler.valk` | Runs indefinitely, manual demo |
+| `test_large_response.valk` | Needs external file `test/test_large_response_data.txt` |
+| `test_large_response_handler.valk` | Memory stress, move to stress/ |
+| `test_lisp_50mb_handler.valk` | Memory stress, move to stress/ |
+
+---
+
+## Part 4: Print-Only Tests to Convert
+
+These tests exist but have no assertions:
+
+| File | Current State | Fix |
+|------|--------------|-----|
+| `test_aio_builtins.valk` | Only prints | Add assertions or remove |
+| `test_metrics_builtins.valk` | Claims "passed" without testing | Add assertions or remove |
+| `test_metrics_prometheus.valk` | Prints format, no validation | Add format assertions |
+
+**Example conversion:**
+
+```lisp
+; Before (print-only):
+(print (metrics/format-prometheus))
+(print "PASS")
+
+; After (with assertions):
+(test/define "prometheus-format-valid"
+  (let ((output (metrics/format-prometheus)))
+    (test/assert (string? output) "Should return string")
+    (test/assert (str/contains? output "# HELP") "Should have HELP comments")
+    (test/assert (str/contains? output "# TYPE") "Should have TYPE comments")))
+```
+
+---
+
+## Part 5: Conditional Skips (Correct Behavior)
+
+These tests are intentionally skipped when feature flags are disabled:
+
+### When `VALK_METRICS_ENABLED` not defined (~300 tests)
+- All `test_*_metrics*.c` files
+- All `test_sse*.c` files  
+- `test_aio_backpressure.c`, `test_aio_integration.c`, etc.
+
+### When `VALK_COVERAGE` not defined (~30 tests)
+- `test_source_loc.c`
+- `test/unit/test_source_loc.c`
+
+**This is correct.** CI runs with `VALK_METRICS=1` by default.
+
+---
+
+## Part 6: Implementation Checklist
+
+### Immediate (< 1 hour)
+
+- [ ] Add `test_large_str` to Makefile run_tests_c
+- [ ] Add 3 missing .valk tests to Makefile run_tests_valk
+- [ ] Run `make test` to verify
+
+### Short-term (< 1 day)
+
+- [ ] Fix AIO initialization race (add `fully_initialized` atomic)
+- [ ] Remove VALK_SKIP from `test_minimal_config` and `test_buffer_pool_usage`
+- [ ] Fix backpressure test timeout (reduce to 2000ms)
+- [ ] Remove VALK_SKIP from `test_backpressure_connections_survive`
+- [ ] Run `make test-c-asan` to verify no ASAN errors
+
+### Medium-term (< 1 week)
+
+- [ ] Fix connection refused UAF
 - [ ] Fix shutdown race condition
-- [ ] Convert exit-code tests to framework
-- [ ] Add assertions to print-only tests
+- [ ] Update CI workflow with test + test-asan jobs
+- [ ] Increase timing values in flaky .valk tests
+- [ ] Convert print-only tests to have assertions
 
-### Long Term (Backlog)
-
-- [ ] Ensure CI runs with all feature flags
-- [ ] Audit all TODO comments in tests
-- [ ] Document test conventions
-
----
-
-## Appendix: Quick Reference
-
-### Commands to Run
+### Verification Commands
 
 ```bash
-# Run full test suite
-make test
+# After all fixes, this should pass:
+make test              # Regular tests
+make test-c-asan       # ASAN C tests
+make test-valk-asan    # ASAN Valk tests
+make coverage          # Coverage tests
 
-# Run with ASAN
-make test-c-asan
+# Check for remaining skips:
+grep -r "VALK_SKIP" test/ --include="*.c" | grep -v "VALK_METRICS\|VALK_COVERAGE\|heap2"
 
-# Run specific test
-build/test_aio_integration
-
-# Check for missing files
-for f in $(grep -oP 'test/test_\w+\.valk' Makefile); do
-  [ -f "$f" ] || echo "MISSING: $f"
-done
+# Should show 0 skipped tests (except feature-flag ones):
+make test 2>&1 | grep -c "SKIP"
 ```
 
-### Files to Modify
+---
 
-| Issue | File(s) to Modify |
-|-------|-------------------|
-| Crashing test | `test/test_aio_load_shedding.c` |
-| Phantom reference | `Makefile` |
-| Orphan test | `CMakeLists.txt`, `Makefile` |
-| Promise race | `src/concurrency.c` |
-| Connection UAF | `src/aio_uv.c` |
-| Init race | `src/aio_uv.c` |
-| Shutdown race | `src/aio_uv.c` |
+## Appendix: All Skipped Tests with Reasons
+
+### Real Bugs (Need Code Fixes)
+
+| Location | Skip Reason | Fix Location |
+|----------|-------------|--------------|
+| `test_aio_integration.c:151` | "minimal config has race condition in initialization" | `src/aio/aio_uv.c` |
+| `test_aio_integration.c:376` | "shutdown race condition when client not disconnected" | `src/aio/aio_uv.c` |
+| `test_aio_integration.c:414` | "connection refused error handling has use-after-free" | `src/aio/aio_http2_client.c` |
+| `test_aio_load_shedding.c:575` | "race condition accessing tcp_slab before fully initialized" | `src/aio/aio_uv.c` |
+| `test_aio_load_shedding.c:962` | "Flaky timeout under coverage instrumentation" | Test config |
+
+### Feature-Flag Skips (Correct Behavior)
+
+| Pattern | Reason | When Active |
+|---------|--------|-------------|
+| "VALK_METRICS_ENABLED not defined" | Metrics tests need metrics build | `VALK_METRICS=1` |
+| "VALK_COVERAGE not defined" | Coverage tests need coverage build | `-DVALK_COVERAGE=1` |
+
+### Architecture Skips (Correct Behavior)
+
+| Location | Skip Reason | Notes |
+|----------|-------------|-------|
+| `test/unit/test_gc.c` (4 tests) | "heap2 uses page-based allocation" | Old heap1 tests, heap2 is current |
+| `test_memory.c` | "heap2 TLABs are thread-local static" | Test isolation issue |
+
+---
+
+## Quick Reference: Files to Modify
+
+| Fix | Files |
+|-----|-------|
+| Add missing tests | `Makefile` |
+| Init race | `src/aio/aio_uv.c`, `src/aio/aio_uv.h` |
+| Connection UAF | `src/aio/aio_http2_client.c` |
+| Shutdown race | `src/aio/aio_uv.c` |
+| Backpressure timeout | `test/test_aio_load_shedding.c` |
+| CI config | `.github/workflows/coverage.yml` |
+| Test timeouts | `Makefile` |
+| Flaky valk tests | `test/test_backpressure*.valk`, `test/test_pending*.valk`, etc. |

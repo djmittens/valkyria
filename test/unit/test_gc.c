@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+#include <unistd.h>
 
 void test_gc_heap_init(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -1751,6 +1753,532 @@ void test_gc_heap2_parallel_collect_updates_metrics(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+typedef struct {
+  valk_gc_heap2_t *heap;
+  int thread_id;
+  int alloc_count;
+  _Atomic int *ready_count;
+  _Atomic bool *start_flag;
+} mt_gc_test_args_t;
+
+static void *mt_gc_worker(void *arg) {
+  mt_gc_test_args_t *args = (mt_gc_test_args_t *)arg;
+  
+  valk_mem_init_malloc();
+  valk_gc_thread_register();
+  
+  atomic_fetch_add(args->ready_count, 1);
+  
+  while (!atomic_load(args->start_flag)) {
+    sched_yield();
+  }
+  
+  for (int i = 0; i < args->alloc_count; i++) {
+    void *p = valk_gc_heap2_alloc(args->heap, 64 + (i % 128));
+    if (p) {
+      memset(p, args->thread_id, 64);
+    }
+    
+    if (i % 100 == 0) {
+      VALK_GC_SAFE_POINT();
+    }
+  }
+  
+  valk_gc_thread_unregister();
+  return NULL;
+}
+
+void test_gc_heap2_multithread_alloc(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(128 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  
+  const int num_threads = 4;
+  const int allocs_per_thread = 500;
+  
+  pthread_t threads[4];
+  mt_gc_test_args_t args[4];
+  _Atomic int ready_count = 0;
+  _Atomic bool start_flag = false;
+  
+  for (int i = 0; i < num_threads; i++) {
+    args[i].heap = heap;
+    args[i].thread_id = i;
+    args[i].alloc_count = allocs_per_thread;
+    args[i].ready_count = &ready_count;
+    args[i].start_flag = &start_flag;
+    pthread_create(&threads[i], NULL, mt_gc_worker, &args[i]);
+  }
+  
+  while (atomic_load(&ready_count) < num_threads) {
+    sched_yield();
+  }
+  
+  atomic_store(&start_flag, true);
+  
+  for (int i = 0; i < num_threads; i++) {
+    pthread_join(threads[i], NULL);
+  }
+  
+  size_t used = valk_gc_heap2_used_bytes(heap);
+  VALK_TEST_ASSERT(used > 0, "Should have allocated some bytes");
+  
+  size_t reclaimed = valk_gc_heap2_collect(heap);
+  VALK_TEST_ASSERT(reclaimed == used, "Should reclaim all bytes (no roots)");
+  
+  valk_gc_heap2_destroy(heap);
+  
+  VALK_PASS();
+}
+
+void test_gc_heap2_multithread_collect_auto(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(128 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  
+  valk_gc_thread_register();
+  
+  for (int i = 0; i < 1000; i++) {
+    valk_gc_heap2_alloc(heap, 128);
+  }
+  
+  size_t before = valk_gc_heap2_used_bytes(heap);
+  VALK_TEST_ASSERT(before > 0, "Should have allocated bytes");
+  
+  size_t reclaimed = valk_gc_heap2_collect_auto(heap);
+  
+  VALK_TEST_ASSERT(reclaimed == before, "collect_auto should reclaim all (fallback to single-threaded)");
+  
+  valk_gc_thread_unregister();
+  valk_gc_heap2_destroy(heap);
+  
+  VALK_PASS();
+}
+
+typedef struct {
+  valk_gc_heap2_t *heap;
+  int thread_id;
+  int alloc_count;
+  _Atomic int *ready_count;
+  _Atomic bool *start_flag;
+  _Atomic bool *gc_triggered;
+  _Atomic int *gc_complete_count;
+} parallel_gc_test_args_t;
+
+static void *parallel_gc_worker(void *arg) {
+  parallel_gc_test_args_t *args = (parallel_gc_test_args_t *)arg;
+  
+  valk_mem_init_malloc();
+  valk_gc_thread_register();
+  
+  atomic_fetch_add(args->ready_count, 1);
+  
+  while (!atomic_load(args->start_flag)) {
+    sched_yield();
+  }
+  
+  for (int i = 0; i < args->alloc_count; i++) {
+    void *p = valk_gc_heap2_alloc(args->heap, 64 + (args->thread_id * 16));
+    if (p) {
+      memset(p, args->thread_id, 64);
+    }
+    
+    VALK_GC_SAFE_POINT();
+  }
+  
+  atomic_fetch_add(args->gc_complete_count, 1);
+  
+  while (atomic_load(args->gc_complete_count) < 4) {
+    VALK_GC_SAFE_POINT();
+    usleep(100);
+  }
+  
+  valk_gc_thread_unregister();
+  return NULL;
+}
+
+void test_gc_heap2_parallel_gc_stress(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(256 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  
+  const int num_threads = 4;
+  const int allocs_per_thread = 500;
+  
+  pthread_t threads[4];
+  parallel_gc_test_args_t args[4];
+  _Atomic int ready_count = 0;
+  _Atomic bool start_flag = false;
+  _Atomic bool gc_triggered = false;
+  _Atomic int gc_complete_count = 0;
+  
+  for (int i = 0; i < num_threads; i++) {
+    args[i].heap = heap;
+    args[i].thread_id = i;
+    args[i].alloc_count = allocs_per_thread;
+    args[i].ready_count = &ready_count;
+    args[i].start_flag = &start_flag;
+    args[i].gc_triggered = &gc_triggered;
+    args[i].gc_complete_count = &gc_complete_count;
+    pthread_create(&threads[i], NULL, parallel_gc_worker, &args[i]);
+  }
+  
+  while (atomic_load(&ready_count) < num_threads) {
+    sched_yield();
+  }
+  
+  atomic_store(&start_flag, true);
+  
+  for (int i = 0; i < num_threads; i++) {
+    pthread_join(threads[i], NULL);
+  }
+  
+  VALK_TEST_ASSERT(atomic_load(&gc_complete_count) == num_threads, 
+                   "All threads should have completed");
+  
+  size_t used = valk_gc_heap2_used_bytes(heap);
+  VALK_TEST_ASSERT(used > 0, "Should have allocated some bytes");
+  
+  size_t reclaimed = valk_gc_heap2_collect(heap);
+  VALK_TEST_ASSERT(reclaimed == used, "Should reclaim all bytes (no roots)");
+  
+  valk_gc_heap2_destroy(heap);
+  
+  VALK_PASS();
+}
+
+void test_gc_heap2_parallel_gc_stw(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_gc_coordinator_init();
+  
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(256 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  
+  valk_gc_thread_register();
+  
+  for (int i = 0; i < 1000; i++) {
+    void *p = valk_gc_heap2_alloc(heap, 128);
+    if (p) memset(p, 0, 64);
+  }
+  
+  size_t before = valk_gc_heap2_used_bytes(heap);
+  VALK_TEST_ASSERT(before > 0, "Should have allocated bytes");
+  
+  size_t reclaimed = valk_gc_heap2_collect_auto(heap);
+  
+  VALK_TEST_ASSERT(reclaimed == before, "Should reclaim all bytes (no roots)");
+  
+  valk_gc_stats2_t stats;
+  valk_gc_heap2_get_stats(heap, &stats);
+  VALK_TEST_ASSERT(stats.collections == 1, "Should have 1 collection");
+  
+  valk_gc_thread_unregister();
+  valk_gc_heap2_destroy(heap);
+  
+  VALK_PASS();
+}
+
+typedef struct {
+  valk_gc_heap2_t *heap;
+  int thread_id;
+  _Atomic int *ready_count;
+  _Atomic bool *start_flag;
+  _Atomic bool *gc_done_flag;
+  _Atomic int *participated_count;
+  void **rooted_ptrs;
+  int rooted_count;
+} true_parallel_gc_args_t;
+
+static void *true_parallel_gc_worker(void *arg) {
+  true_parallel_gc_args_t *args = (true_parallel_gc_args_t *)arg;
+  
+  valk_mem_init_malloc();
+  valk_gc_thread_register();
+  
+  for (int i = 0; i < args->rooted_count; i++) {
+    args->rooted_ptrs[i] = valk_gc_heap2_alloc(args->heap, 64);
+    if (args->rooted_ptrs[i]) {
+      memset(args->rooted_ptrs[i], args->thread_id + 1, 64);
+    }
+  }
+  
+  atomic_fetch_add(args->ready_count, 1);
+  
+  while (!atomic_load(args->start_flag)) {
+    sched_yield();
+  }
+  
+  for (int i = 0; i < 100 && !atomic_load(args->gc_done_flag); i++) {
+    VALK_GC_SAFE_POINT();
+    usleep(100);
+  }
+  
+  atomic_fetch_add(args->participated_count, 1);
+  
+  for (int i = 0; i < args->rooted_count; i++) {
+    if (args->rooted_ptrs[i]) {
+      uint8_t *data = (uint8_t *)args->rooted_ptrs[i];
+      if (data[0] != (uint8_t)(args->thread_id + 1)) {
+        fprintf(stderr, "Thread %d: data corrupted!\n", args->thread_id);
+      }
+    }
+  }
+  
+  valk_gc_thread_unregister();
+  return NULL;
+}
+
+void test_gc_heap2_true_parallel_gc(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_gc_coordinator_init();
+  
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(256 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  
+  valk_gc_thread_register();
+  
+  const int num_workers = 3;
+  const int rooted_per_thread = 100;
+  pthread_t workers[3];
+  true_parallel_gc_args_t args[3];
+  void *rooted_ptrs[3][100];
+  _Atomic int ready_count = 0;
+  _Atomic bool start_flag = false;
+  _Atomic bool gc_done_flag = false;
+  _Atomic int participated_count = 0;
+  
+  for (int i = 0; i < num_workers; i++) {
+    args[i].heap = heap;
+    args[i].thread_id = i;
+    args[i].ready_count = &ready_count;
+    args[i].start_flag = &start_flag;
+    args[i].gc_done_flag = &gc_done_flag;
+    args[i].participated_count = &participated_count;
+    args[i].rooted_ptrs = rooted_ptrs[i];
+    args[i].rooted_count = rooted_per_thread;
+    pthread_create(&workers[i], NULL, true_parallel_gc_worker, &args[i]);
+  }
+  
+  while (atomic_load(&ready_count) < num_workers) {
+    sched_yield();
+  }
+  
+  for (int i = 0; i < 500; i++) {
+    void *p = valk_gc_heap2_alloc(heap, 128);
+    if (p) memset(p, 0xFF, 128);
+  }
+  
+  size_t before = valk_gc_heap2_used_bytes(heap);
+  VALK_TEST_ASSERT(before > 0, "Should have allocated bytes");
+  
+  size_t num_registered = atomic_load(&valk_gc_coord.threads_registered);
+  VALK_TEST_ASSERT(num_registered == 4, "Should have 4 registered threads");
+  
+  atomic_store(&start_flag, true);
+  
+  usleep(1000);
+  
+  size_t reclaimed = valk_gc_heap2_collect_auto(heap);
+  
+  atomic_store(&gc_done_flag, true);
+  
+  for (int i = 0; i < num_workers; i++) {
+    pthread_join(workers[i], NULL);
+  }
+  
+  VALK_TEST_ASSERT(reclaimed > 0, "Should reclaim some bytes (main thread garbage)");
+  
+  valk_gc_stats2_t stats;
+  valk_gc_heap2_get_stats(heap, &stats);
+  VALK_TEST_ASSERT(stats.collections >= 1, "Should have at least 1 collection");
+  
+  uint64_t parallel_cycles = atomic_load(&valk_gc_coord.parallel_cycles);
+  VALK_TEST_ASSERT(parallel_cycles >= 1, "Should have parallel GC cycle");
+  
+  valk_gc_thread_unregister();
+  valk_gc_heap2_destroy(heap);
+  
+  VALK_PASS();
+}
+
+typedef struct {
+  valk_gc_heap2_t *heap;
+  int thread_id;
+  _Atomic int *ready_count;
+  _Atomic bool *start_flag;
+  _Atomic bool *gc_done_flag;
+  _Atomic int *roots_verified;
+  valk_lval_t *root_val;
+} root_marking_test_args_t;
+
+static void *root_marking_worker(void *arg) {
+  root_marking_test_args_t *args = (root_marking_test_args_t *)arg;
+  
+  valk_mem_init_malloc();
+  valk_gc_thread_register();
+  
+  args->root_val = valk_gc_heap2_alloc(args->heap, sizeof(valk_lval_t));
+  if (args->root_val) {
+    memset(args->root_val, 0, sizeof(valk_lval_t));
+    args->root_val->flags = LVAL_NUM;
+    args->root_val->num = 42 + args->thread_id;
+  }
+  
+  atomic_fetch_add(args->ready_count, 1);
+  
+  while (!atomic_load(args->start_flag)) {
+    sched_yield();
+  }
+  
+  for (int i = 0; i < 100 && !atomic_load(args->gc_done_flag); i++) {
+    VALK_GC_SAFE_POINT();
+    usleep(100);
+  }
+  
+  if (args->root_val && args->root_val->num == (42 + args->thread_id)) {
+    atomic_fetch_add(args->roots_verified, 1);
+  }
+  
+  valk_gc_thread_unregister();
+  return NULL;
+}
+
+void test_gc_parallel_thread_local_roots(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_gc_coordinator_init();
+  
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(256 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  
+  valk_gc_thread_register();
+  
+  const int num_workers = 3;
+  pthread_t workers[3];
+  root_marking_test_args_t args[3];
+  _Atomic int ready_count = 0;
+  _Atomic bool start_flag = false;
+  _Atomic bool gc_done_flag = false;
+  _Atomic int roots_verified = 0;
+  
+  for (int i = 0; i < num_workers; i++) {
+    args[i].heap = heap;
+    args[i].thread_id = i;
+    args[i].ready_count = &ready_count;
+    args[i].start_flag = &start_flag;
+    args[i].gc_done_flag = &gc_done_flag;
+    args[i].roots_verified = &roots_verified;
+    args[i].root_val = NULL;
+    pthread_create(&workers[i], NULL, root_marking_worker, &args[i]);
+  }
+  
+  while (atomic_load(&ready_count) < num_workers) {
+    sched_yield();
+  }
+  
+  for (int i = 0; i < 1000; i++) {
+    void *p = valk_gc_heap2_alloc(heap, 64);
+    if (p) memset(p, 0xAB, 64);
+  }
+  
+  atomic_store(&start_flag, true);
+  usleep(1000);
+  
+  valk_gc_heap2_collect_auto(heap);
+  
+  atomic_store(&gc_done_flag, true);
+  
+  for (int i = 0; i < num_workers; i++) {
+    pthread_join(workers[i], NULL);
+  }
+  
+  valk_gc_thread_unregister();
+  valk_gc_heap2_destroy(heap);
+  
+  VALK_PASS();
+}
+
+void test_gc_heap2_realloc_basic(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(64 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  
+  void *ptr = valk_gc_heap2_alloc(heap, 32);
+  VALK_TEST_ASSERT(ptr != NULL, "Should allocate 32 bytes");
+  memset(ptr, 0xAB, 32);
+  
+  void *ptr2 = valk_gc_heap2_realloc(heap, ptr, 128);
+  VALK_TEST_ASSERT(ptr2 != NULL, "Should reallocate to 128 bytes");
+  
+  uint8_t *data = (uint8_t *)ptr2;
+  bool data_preserved = true;
+  for (int i = 0; i < 32; i++) {
+    if (data[i] != 0xAB) {
+      data_preserved = false;
+      break;
+    }
+  }
+  VALK_TEST_ASSERT(data_preserved, "Original data should be preserved");
+  
+  void *ptr3 = valk_gc_heap2_realloc(heap, ptr2, 16);
+  VALK_TEST_ASSERT(ptr3 != NULL, "Should reallocate to 16 bytes");
+  
+  valk_gc_heap2_destroy(heap);
+  
+  VALK_PASS();
+}
+
+void test_gc_heap2_realloc_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(64 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  
+  void *ptr = valk_gc_heap2_realloc(heap, NULL, 64);
+  VALK_TEST_ASSERT(ptr != NULL, "realloc(NULL, size) should allocate");
+  
+  void *ptr2 = valk_gc_heap2_realloc(heap, ptr, 0);
+  (void)ptr2;
+  
+  valk_gc_heap2_destroy(heap);
+  
+  VALK_PASS();
+}
+
+void test_gc_heap2_realloc_large(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(64 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  
+  void *ptr = valk_gc_heap2_alloc(heap, 64);
+  VALK_TEST_ASSERT(ptr != NULL, "Should allocate 64 bytes");
+  memset(ptr, 0xCD, 64);
+  
+  void *ptr2 = valk_gc_heap2_realloc(heap, ptr, 8192);
+  VALK_TEST_ASSERT(ptr2 != NULL, "Should reallocate to large object");
+  
+  uint8_t *data = (uint8_t *)ptr2;
+  bool data_preserved = true;
+  for (int i = 0; i < 64; i++) {
+    if (data[i] != 0xCD) {
+      data_preserved = false;
+      break;
+    }
+  }
+  VALK_TEST_ASSERT(data_preserved, "Original data should be preserved");
+  
+  valk_gc_heap2_destroy(heap);
+  
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -1868,6 +2396,23 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_heap2_request_stw_null", test_gc_heap2_request_stw_null);
   valk_testsuite_add_test(suite, "test_gc_heap2_parallel_collect_reclaims_bytes", test_gc_heap2_parallel_collect_reclaims_bytes);
   valk_testsuite_add_test(suite, "test_gc_heap2_parallel_collect_updates_metrics", test_gc_heap2_parallel_collect_updates_metrics);
+
+  // Multi-threaded allocation tests
+  valk_testsuite_add_test(suite, "test_gc_heap2_multithread_alloc", test_gc_heap2_multithread_alloc);
+  valk_testsuite_add_test(suite, "test_gc_heap2_multithread_collect_auto", test_gc_heap2_multithread_collect_auto);
+
+  // Parallel GC stress tests
+  valk_testsuite_add_test(suite, "test_gc_heap2_parallel_gc_stress", test_gc_heap2_parallel_gc_stress);
+  valk_testsuite_add_test(suite, "test_gc_heap2_parallel_gc_stw", test_gc_heap2_parallel_gc_stw);
+
+  // Phase 10: True multi-threaded parallel GC tests
+  valk_testsuite_add_test(suite, "test_gc_heap2_true_parallel_gc", test_gc_heap2_true_parallel_gc);
+  valk_testsuite_add_test(suite, "test_gc_parallel_thread_local_roots", test_gc_parallel_thread_local_roots);
+
+  // Phase 12: Realloc tests
+  valk_testsuite_add_test(suite, "test_gc_heap2_realloc_basic", test_gc_heap2_realloc_basic);
+  valk_testsuite_add_test(suite, "test_gc_heap2_realloc_null", test_gc_heap2_realloc_null);
+  valk_testsuite_add_test(suite, "test_gc_heap2_realloc_large", test_gc_heap2_realloc_large);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

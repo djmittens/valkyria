@@ -227,7 +227,8 @@ void valk_gc_thread_unregister(void) {
   VALK_DEBUG("Thread unregistered from GC: idx=%zu", idx);
 }
 
-// Safe point slow path
+static void valk_gc_participate_in_parallel_gc(void);
+
 void valk_gc_safe_point_slow(void) {
   valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
   
@@ -248,13 +249,7 @@ void valk_gc_safe_point_slow(void) {
       pthread_mutex_unlock(&valk_gc_coord.lock);
     }
     
-    pthread_mutex_lock(&valk_gc_coord.lock);
-    while (atomic_load(&valk_gc_coord.phase) != VALK_GC_PHASE_IDLE) {
-      pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
-    }
-    pthread_mutex_unlock(&valk_gc_coord.lock);
-    
-    atomic_fetch_sub(&valk_gc_coord.threads_paused, 1);
+    valk_gc_participate_in_parallel_gc();
   }
 }
 
@@ -2141,6 +2136,9 @@ static void valk_gc_page_list_init(valk_gc_page_list_t *list, uint8_t size_class
   atomic_store(&list->next_page_offset, 0);
   list->slot_size = valk_gc_size_classes[size_class];
   list->slots_per_page = valk_gc_slots_per_page(size_class);
+  list->region_start = 0;
+  list->region_size = 0;
+  list->page_size = valk_gc_page_total_size(size_class);
 }
 
 // Initialize multi-class TLAB
@@ -2157,11 +2155,11 @@ void valk_gc_tlab2_init(valk_gc_tlab2_t *tlab) {
 static valk_gc_page2_t *valk_gc_page2_alloc(valk_gc_heap2_t *heap, uint8_t size_class) {
   if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return NULL;
   
-  size_t page_size = valk_gc_page_total_size(size_class);
-  uint16_t slots = valk_gc_slots_per_page(size_class);
+  valk_gc_page_list_t *list = &heap->classes[size_class];
+  size_t page_size = list->page_size;
+  uint16_t slots = list->slots_per_page;
   uint16_t bitmap_bytes = valk_gc_bitmap_bytes(size_class);
   
-  // Check hard limit before committing
   size_t current = atomic_load(&heap->committed_bytes);
   if (current + page_size > heap->hard_limit) {
     VALK_WARN("Cannot allocate page: would exceed hard limit (%zu + %zu > %zu)",
@@ -2169,14 +2167,21 @@ static valk_gc_page2_t *valk_gc_page2_alloc(valk_gc_heap2_t *heap, uint8_t size_
     return NULL;
   }
   
-  // Allocate page (for now using malloc, will switch to mmap from reserved region)
-  valk_gc_page2_t *page = aligned_alloc(VALK_GC_PAGE_ALIGN, page_size);
-  if (!page) {
-    VALK_ERROR("Failed to allocate GC page for class %d", size_class);
+  uint32_t offset = atomic_fetch_add(&list->next_page_offset, (uint32_t)page_size);
+  if (offset + page_size > list->region_size) {
+    VALK_ERROR("Region exhausted for class %d", size_class);
     return NULL;
   }
   
-  // Initialize page header
+  void *addr = (uint8_t *)heap->base + list->region_start + offset;
+  
+  if (mprotect(addr, page_size, PROT_READ | PROT_WRITE) != 0) {
+    VALK_ERROR("mprotect failed for page at %p (class %d)", addr, size_class);
+    return NULL;
+  }
+  
+  valk_gc_page2_t *page = (valk_gc_page2_t *)addr;
+  
   memset(page, 0, sizeof(valk_gc_page2_t));
   page->page_id = atomic_fetch_add(&__page_id_counter, 1);
   page->size_class = size_class;
@@ -2184,11 +2189,9 @@ static valk_gc_page2_t *valk_gc_page2_alloc(valk_gc_heap2_t *heap, uint8_t size_
   page->bitmap_bytes = bitmap_bytes;
   atomic_store(&page->num_allocated, 0);
   
-  // Zero out bitmaps (they follow the header)
   memset(valk_gc_page2_alloc_bitmap(page), 0, bitmap_bytes);
   memset(valk_gc_page2_mark_bitmap(page), 0, bitmap_bytes);
   
-  // Update accounting
   atomic_fetch_add(&heap->committed_bytes, page_size);
   
   return page;
@@ -2207,21 +2210,26 @@ valk_gc_heap2_t *valk_gc_heap2_create(size_t hard_limit) {
   heap->soft_limit = heap->hard_limit * 3 / 4;
   heap->gc_threshold_pct = 75;
   
-  // For now, skip virtual address reservation (macOS has issues with large PROT_NONE mmaps)
-  // We'll use malloc for pages and add mmap later
-  heap->base = NULL;
-  heap->reserved = 0;
-  
-  // Initialize per-class page lists
-  for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
-    valk_gc_page_list_init(&heap->classes[c], c);
+  heap->reserved = VALK_GC_VIRTUAL_RESERVE;
+  heap->base = mmap(NULL, heap->reserved, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (heap->base == MAP_FAILED) {
+    VALK_ERROR("Failed to reserve %zu bytes of virtual address space", heap->reserved);
+    free(heap);
+    return NULL;
   }
   
-  // Initialize large object list
+  size_t region_size = heap->reserved / VALK_GC_NUM_SIZE_CLASSES;
+  region_size = region_size & ~(size_t)4095;
+  
+  for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page_list_init(&heap->classes[c], c);
+    heap->classes[c].region_start = (size_t)c * region_size;
+    heap->classes[c].region_size = region_size;
+  }
+  
   heap->large_objects = NULL;
   pthread_mutex_init(&heap->large_lock, NULL);
   
-  // Initialize accounting
   atomic_store(&heap->committed_bytes, 0);
   atomic_store(&heap->used_bytes, 0);
   atomic_store(&heap->large_object_bytes, 0);
@@ -2235,8 +2243,8 @@ valk_gc_heap2_t *valk_gc_heap2_create(size_t hard_limit) {
   memset(&heap->stats, 0, sizeof(heap->stats));
   memset(&heap->runtime_metrics, 0, sizeof(heap->runtime_metrics));
   
-  VALK_INFO("Created multi-class GC heap: hard_limit=%zu soft_limit=%zu",
-            heap->hard_limit, heap->soft_limit);
+  VALK_INFO("Created multi-class GC heap: hard_limit=%zu soft_limit=%zu reserved=%zu",
+            heap->hard_limit, heap->soft_limit, heap->reserved);
   
   return heap;
 }
@@ -2245,23 +2253,10 @@ valk_gc_heap2_t *valk_gc_heap2_create(size_t hard_limit) {
 void valk_gc_heap2_destroy(valk_gc_heap2_t *heap) {
   if (!heap) return;
   
-  // Free all pages in each size class
   for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
-    valk_gc_page_list_t *list = &heap->classes[c];
-    pthread_mutex_lock(&list->lock);
-    
-    valk_gc_page2_t *page = list->all_pages;
-    while (page) {
-      valk_gc_page2_t *next = page->next;
-      free(page);
-      page = next;
-    }
-    
-    pthread_mutex_unlock(&list->lock);
-    pthread_mutex_destroy(&list->lock);
+    pthread_mutex_destroy(&heap->classes[c].lock);
   }
   
-  // Free large objects
   pthread_mutex_lock(&heap->large_lock);
   valk_gc_large_obj_t *large = heap->large_objects;
   while (large) {
@@ -2274,6 +2269,10 @@ void valk_gc_heap2_destroy(valk_gc_heap2_t *heap) {
   }
   pthread_mutex_unlock(&heap->large_lock);
   pthread_mutex_destroy(&heap->large_lock);
+  
+  if (heap->base && heap->reserved > 0) {
+    munmap(heap->base, heap->reserved);
+  }
   
   VALK_INFO("Destroyed multi-class GC heap");
   free(heap);
@@ -2394,7 +2393,7 @@ static void *valk_gc_heap2_alloc_large(valk_gc_heap2_t *heap, size_t bytes) {
     }
   } else if (current + alloc_size > heap->soft_limit) {
     if (!heap->in_emergency_gc && !atomic_load(&heap->gc_in_progress)) {
-      valk_gc_heap2_collect(heap);
+      valk_gc_heap2_collect_auto(heap);
     }
   }
   
@@ -2449,7 +2448,7 @@ void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, size_t bytes) {
     }
   } else if (current + alloc_size > heap->soft_limit) {
     if (!heap->in_emergency_gc && !atomic_load(&heap->gc_in_progress)) {
-      valk_gc_heap2_collect(heap);
+      valk_gc_heap2_collect_auto(heap);
     }
   }
   
@@ -2535,17 +2534,62 @@ bool valk_gc_ptr_to_location(valk_gc_heap2_t *heap, void *ptr, valk_gc_ptr_locat
     if (out) out->is_valid = false;
     return false;
   }
-  
+
   out->is_valid = false;
-  
+
+  if (heap->base && heap->reserved > 0) {
+    uintptr_t addr = (uintptr_t)ptr;
+    uintptr_t base = (uintptr_t)heap->base;
+
+    if (addr < base || addr >= base + heap->reserved) {
+      return false;
+    }
+
+    uintptr_t offset = addr - base;
+
+    for (uint8_t c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+      valk_gc_page_list_t *list = &heap->classes[c];
+      if (offset >= list->region_start && offset < list->region_start + list->region_size) {
+        size_t offset_in_region = offset - list->region_start;
+
+        uint32_t committed = atomic_load(&list->next_page_offset);
+        if (offset_in_region >= committed) {
+          return false;
+        }
+
+        size_t page_idx = offset_in_region / list->page_size;
+        valk_gc_page2_t *page = (valk_gc_page2_t *)(base + list->region_start + page_idx * list->page_size);
+
+        uint8_t *slots_start = valk_gc_page2_slots(page);
+        uintptr_t slots_addr = (uintptr_t)slots_start;
+        if (addr < slots_addr) {
+          return false;
+        }
+
+        uint32_t slot = (uint32_t)((addr - slots_addr) / list->slot_size);
+        if (slot >= page->slots_per_page) {
+          return false;
+        }
+
+        out->page = page;
+        out->slot = slot;
+        out->size_class = c;
+        out->is_valid = true;
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   for (uint8_t c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     valk_gc_page_list_t *list = &heap->classes[c];
     uint16_t slot_size = valk_gc_size_classes[c];
-    
+
     for (valk_gc_page2_t *page = list->all_pages; page != NULL; page = page->next) {
       uint8_t *slots_start = valk_gc_page2_slots(page);
       uint8_t *slots_end = slots_start + page->slots_per_page * slot_size;
-      
+
       if ((uint8_t *)ptr >= slots_start && (uint8_t *)ptr < slots_end) {
         uintptr_t offset = (uintptr_t)ptr - (uintptr_t)slots_start;
         if (offset % slot_size == 0) {
@@ -2558,7 +2602,7 @@ bool valk_gc_ptr_to_location(valk_gc_heap2_t *heap, void *ptr, valk_gc_ptr_locat
       }
     }
   }
-  
+
   return false;
 }
 
@@ -2700,7 +2744,7 @@ size_t valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap) {
       uint32_t allocated = atomic_load(&page->num_allocated);
       
       if (allocated == 0) {
-        size_t page_size = valk_gc_page_total_size(valk_gc_size_classes[c]);
+        size_t page_size = list->page_size;
 #ifdef __APPLE__
         madvise(page, page_size, MADV_FREE);
 #else
@@ -2972,6 +3016,26 @@ size_t valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
   return reclaimed;
 }
 
+size_t valk_gc_heap2_collect_auto(valk_gc_heap2_t *heap) {
+  if (!heap) return 0;
+  
+  size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
+  
+  if (num_threads <= 1) {
+    return valk_gc_heap2_collect(heap);
+  }
+  
+  if (!valk_thread_ctx.gc_registered) {
+    return valk_gc_heap2_collect(heap);
+  }
+  
+  if (!valk_gc_heap2_request_stw(heap)) {
+    return valk_gc_heap2_collect(heap);
+  }
+  
+  return valk_gc_heap2_parallel_collect(heap);
+}
+
 static bool valk_gc_heap2_try_emergency_gc(valk_gc_heap2_t *heap, size_t needed) {
   if (heap->in_emergency_gc) {
     return false;
@@ -2982,7 +3046,7 @@ static bool valk_gc_heap2_try_emergency_gc(valk_gc_heap2_t *heap, size_t needed)
   VALK_WARN("Emergency GC: need %zu bytes, used %zu / %zu",
             needed, valk_gc_heap2_used_bytes(heap), heap->hard_limit);
   
-  size_t reclaimed = valk_gc_heap2_collect(heap);
+  size_t reclaimed = valk_gc_heap2_collect_auto(heap);
   
   heap->in_emergency_gc = false;
   
@@ -3001,7 +3065,7 @@ static bool valk_gc_heap2_try_emergency_gc(valk_gc_heap2_t *heap, size_t needed)
 
 static _Atomic size_t __gc_heap2_idle_count = 0;
 static _Atomic bool __gc_heap2_terminated = false;
-static valk_gc_heap2_t *__gc_heap2_current = NULL;
+static _Atomic(valk_gc_heap2_t *) __gc_heap2_current = NULL;
 
 static bool valk_gc_heap2_check_termination(void) {
   size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
@@ -3254,20 +3318,24 @@ bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
   valk_barrier_init(&valk_gc_coord.barrier, num_threads);
   valk_gc_coord.barrier_initialized = true;
   
-  __gc_heap2_current = heap;
+  atomic_store(&__gc_heap2_current, heap);
   
-  pthread_mutex_lock(&valk_gc_coord.lock);
-  while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_nsec += 100000000;
-    if (ts.tv_nsec >= 1000000000) {
-      ts.tv_sec++;
-      ts.tv_nsec -= 1000000000;
+  atomic_fetch_add(&valk_gc_coord.threads_paused, 1);
+  
+  if (num_threads > 1) {
+    pthread_mutex_lock(&valk_gc_coord.lock);
+    while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
+      struct timespec ts;
+      clock_gettime(CLOCK_REALTIME, &ts);
+      ts.tv_nsec += 100000000;
+      if (ts.tv_nsec >= 1000000000) {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000;
+      }
+      pthread_cond_timedwait(&valk_gc_coord.all_paused, &valk_gc_coord.lock, &ts);
     }
-    pthread_cond_timedwait(&valk_gc_coord.all_paused, &valk_gc_coord.lock, &ts);
+    pthread_mutex_unlock(&valk_gc_coord.lock);
   }
-  pthread_mutex_unlock(&valk_gc_coord.lock);
   
   return true;
 }
@@ -3295,16 +3363,23 @@ size_t valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap) {
   atomic_store(&__gc_heap2_idle_count, 0);
   atomic_store(&__gc_heap2_terminated, false);
   
+  // BARRIER 1: Sync before mark phase
+  // All threads (initiator + workers) must hit this barrier before marking starts
+  // Workers enter via valk_gc_participate_in_parallel_gc()
   valk_barrier_wait(&valk_gc_coord.barrier);
   
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_MARKING);
   valk_gc_heap2_parallel_mark(heap);
   
+  // BARRIER 2: Sync after mark phase
+  // Ensures all marking is complete before sweep begins
   valk_barrier_wait(&valk_gc_coord.barrier);
   
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_SWEEPING);
   valk_gc_heap2_parallel_sweep(heap);
   
+  // BARRIER 3: Sync after sweep phase
+  // Ensures all sweeping is complete before page reclamation
   valk_barrier_wait(&valk_gc_coord.barrier);
   
   if (valk_thread_ctx.gc_thread_id == 0) {
@@ -3312,6 +3387,8 @@ size_t valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap) {
     valk_gc_reclaim_empty_pages(heap);
   }
   
+  // BARRIER 4: Sync after reclamation
+  // Ensures thread 0's cleanup is complete before threads resume
   valk_barrier_wait(&valk_gc_coord.barrier);
   
   atomic_store(&valk_gc_coord.threads_paused, 0);
@@ -3353,4 +3430,39 @@ size_t valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap) {
              reclaimed, (unsigned long long)pause_us, num_threads);
   
   return reclaimed;
+}
+
+static void valk_gc_participate_in_parallel_gc(void) {
+  valk_gc_heap2_t *heap = atomic_load(&__gc_heap2_current);
+  if (!heap) {
+    pthread_mutex_lock(&valk_gc_coord.lock);
+    while (atomic_load(&valk_gc_coord.phase) != VALK_GC_PHASE_IDLE) {
+      pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
+    }
+    pthread_mutex_unlock(&valk_gc_coord.lock);
+    return;
+  }
+  
+  // BARRIER 1: Sync before mark phase (matches parallel_collect)
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  valk_gc_heap2_parallel_mark(heap);
+  
+  // BARRIER 2: Sync after mark phase (matches parallel_collect)
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  valk_gc_heap2_parallel_sweep(heap);
+  
+  // BARRIER 3: Sync after sweep phase (matches parallel_collect)
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  // BARRIER 4: Sync after reclamation (matches parallel_collect)
+  // Workers just wait here while thread 0 does cleanup
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  pthread_mutex_lock(&valk_gc_coord.lock);
+  while (atomic_load(&valk_gc_coord.phase) != VALK_GC_PHASE_IDLE) {
+    pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
+  }
+  pthread_mutex_unlock(&valk_gc_coord.lock);
 }
