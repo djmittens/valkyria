@@ -8,11 +8,11 @@
 (def {sse-stream-closed} 0)
 
 (def {handler}
-  (\ {req} {
+  (\ {req ctx} {
     (= {path} (plist/get req :path))
     (if (== path "/sse-test")
       {(do
-        (= {stream} (sse/open))
+        (= {stream} (sse/open ctx))
         (def {sse-stream-created} 1)
         (sse/send stream "test message")
         (aio/schedule aio 100 (\ {} {

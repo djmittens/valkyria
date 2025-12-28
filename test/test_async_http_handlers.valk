@@ -47,7 +47,7 @@
 ; ============================================================================
 (def {sleep-handler}
   (\ {req} {
-    (aio/then (aio/sleep 5) (\ {_} {{:status "200" :body "slept"}}))
+    (aio/then (aio/sleep aio 5) (\ {_} {{:status "200" :body "slept"}}))
   }))
 
 ; ============================================================================
@@ -56,9 +56,9 @@
 (def {sleep-chain-handler}
   (\ {req} {
     (aio/then 
-      (aio/sleep 5)
+      (aio/sleep aio 5)
       (\ {_} {
-        (aio/then (aio/sleep 5) (\ {_} {{:status "200" :body "slept-twice"}}))
+        (aio/then (aio/sleep aio 5) (\ {_} {{:status "200" :body "slept-twice"}}))
       }))
   }))
 
@@ -79,7 +79,7 @@
   (\ {req} {
     (aio/then
       (aio/finally
-        (aio/sleep 5)
+        (aio/sleep aio 5)
         (\ {} {nil}))
       (\ {_} {{:status "200" :body "with-finally"}}))
   }))
@@ -102,7 +102,7 @@
 (def {all-handler}
   (\ {req} {
     (aio/then
-      (aio/all (list (aio/sleep 5) (aio/sleep 10) (aio/sleep 15)))
+      (aio/all (list (aio/sleep aio 5) (aio/sleep aio 10) (aio/sleep aio 15)))
       (\ {results} {{:status "200" :body "all-completed"}}))
   }))
 
@@ -112,7 +112,7 @@
 (def {all-fail-handler}
   (\ {req} {
     (aio/catch
-      (aio/all (list (aio/sleep 100) (aio/fail "one-failed") (aio/sleep 100)))
+      (aio/all (list (aio/sleep aio 100) (aio/fail "one-failed") (aio/sleep aio 100)))
       (\ {err} {{:status "200" :body "all-failed"}}))
   }))
 
@@ -122,7 +122,7 @@
 (def {race-handler}
   (\ {req} {
     (aio/then
-      (aio/race (list (aio/sleep 5) (aio/sleep 100) (aio/sleep 200)))
+      (aio/race (list (aio/sleep aio 5) (aio/sleep aio 100) (aio/sleep aio 200)))
       (\ {result} {{:status "200" :body "race-won"}}))
   }))
 
@@ -132,7 +132,7 @@
 (def {any-handler}
   (\ {req} {
     (aio/then
-      (aio/any (list (aio/fail "e1") (aio/sleep 5) (aio/fail "e2")))
+      (aio/any (list (aio/fail "e1") (aio/sleep aio 5) (aio/fail "e2")))
       (\ {result} {{:status "200" :body "any-success"}}))
   }))
 
@@ -152,7 +152,7 @@
 ; ============================================================================
 (def {let-single-handler}
   (\ {req} {
-    (aio/let {((x (aio/sleep 5)))} {:status "200" :body "let-single"})
+    (aio/let {((x (aio/sleep aio 5)))} {:status "200" :body "let-single"})
   }))
 
 ; ============================================================================
@@ -160,7 +160,7 @@
 ; ============================================================================
 (def {let-parallel-handler}
   (\ {req} {
-    (aio/let {((a (aio/sleep 5)) (b (aio/sleep 10)))} {:status "200" :body "let-parallel"})
+    (aio/let {((a (aio/sleep aio 5)) (b (aio/sleep aio 10)))} {:status "200" :body "let-parallel"})
   }))
 
 ; ============================================================================
@@ -168,7 +168,7 @@
 ; ============================================================================
 (def {let-then-handler}
   (\ {req} {
-    (aio/let {((x (aio/sleep 5)) :then (y (aio/sleep 5)))} {:status "200" :body "let-then"})
+    (aio/let {((x (aio/sleep aio 5)) :then (y (aio/sleep aio 5)))} {:status "200" :body "let-then"})
   }))
 
 ; ============================================================================
@@ -177,8 +177,8 @@
 (def {do-handler}
   (\ {req} {
     (aio/do {
-      (x <- (aio/sleep 5))
-      (y <- (aio/sleep 5))
+      (x <- (aio/sleep aio 5))
+      (y <- (aio/sleep aio 5))
       {:status "200" :body "do-sequential"}})
   }))
 
@@ -188,9 +188,9 @@
 (def {bracket-handler}
   (\ {req} {
     (aio/bracket
-      (aio/then (aio/sleep 5) (\ {_} {"resource"}))
-      (\ {r} {(aio/then (aio/sleep 5) (\ {_} {nil}))})
-      (\ {r} {(aio/then (aio/sleep 5) (\ {_} {{:status "200" :body "bracket-used"}}))}))
+      (aio/then (aio/sleep aio 5) (\ {_} {"resource"}))
+      (\ {r} {(aio/then (aio/sleep aio 5) (\ {_} {nil}))})
+      (\ {r} {(aio/then (aio/sleep aio 5) (\ {_} {{:status "200" :body "bracket-used"}}))}))
   }))
 
 ; ============================================================================
@@ -200,7 +200,7 @@
   (\ {req} {
     (aio/then
       (aio/on-cancel
-        (aio/sleep 5)
+        (aio/sleep aio 5)
         (\ {} {nil}))
       (\ {_} {{:status "200" :body "on-cancel-done"}}))
   }))
@@ -210,9 +210,9 @@
 ; ============================================================================
 (def {triple-then-handler}
   (\ {req} {
-    (aio/then (aio/sleep 5)
-      (\ {_} {(aio/then (aio/sleep 5)
-        (\ {_} {(aio/then (aio/sleep 5)
+    (aio/then (aio/sleep aio 5)
+      (\ {_} {(aio/then (aio/sleep aio 5)
+        (\ {_} {(aio/then (aio/sleep aio 5)
           (\ {_} {{:status "200" :body "triple-then"}}))}))}))
   }))
 
@@ -224,7 +224,7 @@
   (\ {req} {
     (aio/catch
       (aio/then
-        (aio/sleep 5)
+        (aio/sleep aio 5)
         (\ {_} {(aio/fail "original")}))
       (\ {err} {{:status "200" :body "catch-rethrow"}}))
   }))
@@ -235,10 +235,10 @@
 (def {complex-chain-handler}
   (\ {req} {
     (aio/then
-      (aio/all (list (aio/sleep 5) (aio/sleep 10)))
+      (aio/all (list (aio/sleep aio 5) (aio/sleep aio 10)))
       (\ {results} {
         (aio/then
-          (aio/race (list (aio/sleep 5) (aio/sleep 100)))
+          (aio/race (list (aio/sleep aio 5) (aio/sleep aio 100)))
           (\ {r} {{:status "200" :body "complex-chain"}}))}))
   }))
 
@@ -247,7 +247,7 @@
 ; ============================================================================
 (def {let-multi-then-handler}
   (\ {req} {
-    (aio/let {((a (aio/sleep 5)) :then (b (aio/sleep 5)) :then (c (aio/sleep 5)))}
+    (aio/let {((a (aio/sleep aio 5)) :then (b (aio/sleep aio 5)) :then (c (aio/sleep aio 5)))}
       {:status "200" :body "let-multi-then"})
   }))
 
@@ -264,7 +264,7 @@
 ; ============================================================================
 (def {status-handler}
   (\ {req} {
-    (= {h} (aio/sleep 5))
+    (= {h} (aio/sleep aio 5))
     (= {s} (aio/status h))
     (aio/then h (\ {_} {{:status "200" :body "status-ok"}}))
   }))
@@ -275,7 +275,7 @@
 (def {all-mixed-handler}
   (\ {req} {
     (aio/then
-      (aio/all (list (aio/sleep 5) (aio/pure "v1") (aio/sleep 5)))
+      (aio/all (list (aio/sleep aio 5) (aio/pure "v1") (aio/sleep aio 5)))
       (\ {results} {{:status "200" :body "all-mixed-ok"}}))
   }))
 
@@ -285,7 +285,7 @@
 (def {race-immediate-fail-handler}
   (\ {req} {
     (aio/catch
-      (aio/race (list (aio/fail "fast-fail") (aio/sleep 100)))
+      (aio/race (list (aio/fail "fast-fail") (aio/sleep aio 100)))
       (\ {err} {{:status "200" :body "race-fail-caught"}}))
   }))
 
@@ -295,7 +295,7 @@
 (def {race-pure-handler}
   (\ {req} {
     (aio/then
-      (aio/race (list (aio/pure "fast") (aio/sleep 100)))
+      (aio/race (list (aio/pure "fast") (aio/sleep aio 100)))
       (\ {_} {{:status "200" :body "race-pure-ok"}}))
   }))
 
@@ -315,7 +315,7 @@
 (def {catch-chain-handler}
   (\ {req} {
     (aio/catch
-      (aio/then (aio/sleep 5) (\ {_} {(aio/fail "error1")}))
+      (aio/then (aio/sleep aio 5) (\ {_} {(aio/fail "error1")}))
       (\ {e} {{:status "200" :body "catch-chain-ok"}}))
   }))
 
@@ -335,7 +335,7 @@
 (def {race-single-handler}
   (\ {req} {
     (aio/then
-      (aio/race (list (aio/sleep 5)))
+      (aio/race (list (aio/sleep aio 5)))
       (\ {result} {{:status "200" :body "race-single-ok"}}))
   }))
 
@@ -345,7 +345,7 @@
 (def {any-single-handler}
   (\ {req} {
     (aio/then
-      (aio/any (list (aio/sleep 5)))
+      (aio/any (list (aio/sleep aio 5)))
       (\ {result} {{:status "200" :body "any-single-ok"}}))
   }))
 
@@ -354,8 +354,8 @@
 ; ============================================================================
 (def {let-many-handler}
   (\ {req} {
-    (aio/let {((a (aio/sleep 5)) (b (aio/sleep 5)) (c (aio/sleep 5))
-               (d (aio/sleep 5)) (e (aio/sleep 5)) (f (aio/sleep 5)))}
+    (aio/let {((a (aio/sleep aio 5)) (b (aio/sleep aio 5)) (c (aio/sleep aio 5))
+               (d (aio/sleep aio 5)) (e (aio/sleep aio 5)) (f (aio/sleep aio 5)))}
       {:status "200" :body "let-many-ok"})
   }))
 
@@ -365,8 +365,8 @@
 (def {do-result-handler}
   (\ {req} {
     (aio/do {
-      (x <- (aio/sleep 5))
-      (y <- (aio/sleep 5))
+      (x <- (aio/sleep aio 5))
+      (y <- (aio/sleep aio 5))
       {:status "200" :body "do-result-ok"}})
   }))
 
@@ -377,8 +377,8 @@
   (\ {req} {
     (aio/catch
       (aio/bracket
-        (aio/then (aio/sleep 5) (\ {_} {"resource"}))
-        (\ {r} {(aio/then (aio/sleep 5) (\ {_} {nil}))})
+        (aio/then (aio/sleep aio 5) (\ {_} {"resource"}))
+        (\ {r} {(aio/then (aio/sleep aio 5) (\ {_} {nil}))})
         (\ {r} {(aio/fail "use-phase-error")}))
       (\ {err} {{:status "200" :body "bracket-error-ok"}}))
   }))
@@ -390,7 +390,7 @@
   (\ {req} {
     (aio/then
       (aio/on-cancel
-        (aio/then (aio/sleep 5) (\ {_} {"value"}))
+        (aio/then (aio/sleep aio 5) (\ {_} {"value"}))
         (\ {} {nil}))
       (\ {_} {{:status "200" :body "on-cancel-complete-ok"}}))
   }))
@@ -416,7 +416,7 @@
 (def {scope-async-handler}
   (\ {req} {
     (aio/then
-      (aio/scope (\ {s} {(aio/sleep 5)}))
+      (aio/scope (\ {s} {(aio/sleep aio 5)}))
       (\ {r} {{:status "200" :body "scope-async-ok"}}))
   }))
 
@@ -438,9 +438,9 @@
   (\ {req} {
     (aio/catch
       (aio/any (list
-        (aio/then (aio/sleep 5) (\ {_} {(aio/fail "async-fail-1")}))
-        (aio/then (aio/sleep 10) (\ {_} {(aio/fail "async-fail-2")}))
-        (aio/then (aio/sleep 15) (\ {_} {(aio/fail "async-fail-3")}))))
+        (aio/then (aio/sleep aio 5) (\ {_} {(aio/fail "async-fail-1")}))
+        (aio/then (aio/sleep aio 10) (\ {_} {(aio/fail "async-fail-2")}))
+        (aio/then (aio/sleep aio 15) (\ {_} {(aio/fail "async-fail-3")}))))
       (\ {err} {{:status "200" :body "any-async-fail-ok"}}))
   }))
 
@@ -450,7 +450,7 @@
 ; ============================================================================
 (def {async-fail-handler}
   (\ {req} {
-    (aio/then (aio/sleep 5) (\ {_} {(aio/fail "handler-async-failed")}))
+    (aio/then (aio/sleep aio 5) (\ {_} {(aio/fail "handler-async-failed")}))
   }))
 
 ; ============================================================================
@@ -460,9 +460,9 @@
   (\ {req} {
     (aio/catch
       (aio/all (list
-        (aio/sleep 5)
-        (aio/then (aio/sleep 10) (\ {_} {(aio/fail "all-async-fail")}))
-        (aio/sleep 15)))
+        (aio/sleep aio 5)
+        (aio/then (aio/sleep aio 10) (\ {_} {(aio/fail "all-async-fail")}))
+        (aio/sleep aio 15)))
       (\ {err} {{:status "200" :body "all-async-fail-ok"}}))
   }))
 
@@ -473,8 +473,8 @@
   (\ {req} {
     (aio/catch
       (aio/race (list
-        (aio/then (aio/sleep 5) (\ {_} {(aio/fail "race-async-fail")}))
-        (aio/sleep 100)))
+        (aio/then (aio/sleep aio 5) (\ {_} {(aio/fail "race-async-fail")}))
+        (aio/sleep aio 100)))
       (\ {err} {{:status "200" :body "race-async-fail-ok"}}))
   }))
 
@@ -483,11 +483,11 @@
 ; ============================================================================
 (def {deep-chain-handler}
   (\ {req} {
-    (aio/then (aio/sleep 5) (\ {_} {
-      (aio/then (aio/sleep 5) (\ {_} {
-        (aio/then (aio/sleep 5) (\ {_} {
-          (aio/then (aio/sleep 5) (\ {_} {
-            (aio/then (aio/sleep 5) (\ {_} {
+    (aio/then (aio/sleep aio 5) (\ {_} {
+      (aio/then (aio/sleep aio 5) (\ {_} {
+        (aio/then (aio/sleep aio 5) (\ {_} {
+          (aio/then (aio/sleep aio 5) (\ {_} {
+            (aio/then (aio/sleep aio 5) (\ {_} {
               {:status "200" :body "deep-chain-ok"}
             }))
           }))
@@ -503,7 +503,7 @@
   (\ {req} {
     (aio/catch
       (aio/scope (\ {s} {
-        (aio/then (aio/sleep 5) (\ {_} {(aio/fail "scope-inner-fail")}))
+        (aio/then (aio/sleep aio 5) (\ {_} {(aio/fail "scope-inner-fail")}))
       }))
       (\ {err} {{:status "200" :body "scope-async-fail-ok"}}))
   }))
@@ -544,9 +544,9 @@
   (\ {req} {
     (aio/then
       (aio/race (list
-        (aio/sleep 5)
+        (aio/sleep aio 5)
         (aio/on-cancel
-          (aio/sleep 1000)
+          (aio/sleep aio 1000)
           (\ {} {(println "on-cancel callback invoked!")}))))
       (\ {result} {
         {:status "200" :body "race-cancel-ok"}
@@ -561,9 +561,9 @@
   (\ {req} {
     (aio/then
       (aio/race (list
-        (aio/sleep 5)
-        (aio/on-cancel (aio/sleep 1000) (\ {} {(println "cancel1")}))
-        (aio/on-cancel (aio/sleep 1000) (\ {} {(println "cancel2")}))))
+        (aio/sleep aio 5)
+        (aio/on-cancel (aio/sleep aio 1000) (\ {} {(println "cancel1")}))
+        (aio/on-cancel (aio/sleep aio 1000) (\ {} {(println "cancel2")}))))
       (\ {result} {
         {:status "200" :body "nested-cancel-ok"}
       }))
@@ -575,7 +575,7 @@
 ; ============================================================================
 (def {pre-cancelled-handler}
   (\ {req} {
-    (= {h} (aio/sleep 1000))
+    (= {h} (aio/sleep aio 1000))
     (aio/cancel h)
     h
   }))
@@ -596,7 +596,7 @@
 ; ============================================================================
 (def {async-pure-error-handler}
   (\ {req} {
-    (aio/then (aio/sleep 10) (\ {_} {(aio/pure (error "async-pure-error"))}))
+    (aio/then (aio/sleep aio 10) (\ {_} {(aio/pure (error "async-pure-error"))}))
   }))
 
 ; ============================================================================
@@ -606,7 +606,7 @@
 ; ============================================================================
 (def {async-direct-fail-handler}
   (\ {req} {
-    (aio/then (aio/sleep 10) (\ {_} {(aio/fail (error "async-direct-fail"))}))
+    (aio/then (aio/sleep aio 10) (\ {_} {(aio/fail (error "async-direct-fail"))}))
   }))
 
 ; ============================================================================

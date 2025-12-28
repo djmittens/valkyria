@@ -16,9 +16,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-// Extern declaration for active AIO system
-extern valk_aio_system_t *valk_aio_active_system;
-
 // ============================================================================
 // FORWARD DECLARATIONS
 // ============================================================================
@@ -457,44 +454,31 @@ static valk_lval_t *valk_builtin_metrics_json(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 #ifdef VALK_METRICS_ENABLED
-// (aio/slab-buckets slab-name start end num-buckets) -> json-string
 // (aio/slab-buckets sys slab-name start end num-buckets) -> json-string
-// Returns bucket counts for a slab region, for zoom visualization
 static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
   u64 argc = valk_lval_list_count(a);
-
-  valk_aio_system_t *sys = valk_aio_active_system;
-  u64 arg_offset = 0;
-
-  if (argc >= 5) {
-    valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
-    if (LVAL_TYPE(sys_arg) == LVAL_REF &&
-        strcmp(sys_arg->ref.type, "aio_system") == 0) {
-      sys = (valk_aio_system_t *)sys_arg->ref.ptr;
-      arg_offset = 1;
-    }
+  if (argc < 5) {
+    return valk_lval_err("aio/slab-buckets: expected (sys slab-name start end num-buckets)");
   }
 
-  if (argc - arg_offset < 4) {
-    return valk_lval_err("aio/slab-buckets: expected (slab-name start end num-buckets)");
+  valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/slab-buckets: first argument must be an aio_system");
   }
+  valk_aio_system_t *sys = (valk_aio_system_t *)sys_arg->ref.ptr;
 
-  valk_lval_t *name_arg = valk_lval_list_nth(a, arg_offset);
-  valk_lval_t *start_arg = valk_lval_list_nth(a, arg_offset + 1);
-  valk_lval_t *end_arg = valk_lval_list_nth(a, arg_offset + 2);
-  valk_lval_t *buckets_arg = valk_lval_list_nth(a, arg_offset + 3);
+  valk_lval_t *name_arg = valk_lval_list_nth(a, 1);
+  valk_lval_t *start_arg = valk_lval_list_nth(a, 2);
+  valk_lval_t *end_arg = valk_lval_list_nth(a, 3);
+  valk_lval_t *buckets_arg = valk_lval_list_nth(a, 4);
 
   if (LVAL_TYPE(name_arg) != LVAL_STR ||
       LVAL_TYPE(start_arg) != LVAL_NUM ||
       LVAL_TYPE(end_arg) != LVAL_NUM ||
       LVAL_TYPE(buckets_arg) != LVAL_NUM) {
     return valk_lval_err("aio/slab-buckets: invalid argument types");
-  }
-
-  if (!sys) {
-    return valk_lval_err("aio/slab-buckets: no AIO system available");
   }
 
   const char *slab_name = name_arg->str;
@@ -565,25 +549,19 @@ static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a
 }
 #endif
 
-// (aio/diagnostics-state-json) -> json-string
 // (aio/diagnostics-state-json sys) -> json-string
-// Returns fresh diagnostics state as JSON (for /debug/metrics/state endpoint)
 static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
-  // Get AIO system from argument or global
-  valk_aio_system_t *sys = valk_aio_active_system;
-  if (valk_lval_list_count(a) >= 1) {
-    valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
-    if (LVAL_TYPE(sys_arg) == LVAL_REF &&
-        strcmp(sys_arg->ref.type, "aio_system") == 0) {
-      sys = (valk_aio_system_t *)sys_arg->ref.ptr;
-    }
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/diagnostics-state-json: expected 1 argument (sys)");
   }
 
-  if (!sys) {
-    return valk_lval_err("aio/diagnostics-state-json: no AIO system available");
+  valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/diagnostics-state-json: argument must be an aio_system");
   }
+  valk_aio_system_t *sys = (valk_aio_system_t *)sys_arg->ref.ptr;
 
   // Allocate buffer (256KB for full state)
   char *buf = malloc(262144);

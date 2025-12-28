@@ -24,7 +24,7 @@
 (def {handler}
   (\ {req} {
     (= {path} (plist/get req :path))
-    (aio/then (aio/sleep 100) (\ {_} {
+    (aio/then (aio/sleep aio 100) (\ {_} {
       {:status "200" :body (str "OK: " path)}
     }))
   }))

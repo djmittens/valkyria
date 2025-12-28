@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include "types.h"
 
 // ============================================================================
@@ -53,6 +54,7 @@ typedef enum valk_async_status_t {
 
 typedef void (*valk_async_done_fn)(struct valk_async_handle_t *handle, void *ctx);
 typedef bool (*valk_async_is_closed_fn)(void *ctx);
+typedef void (*valk_async_cleanup_fn)(void *ctx);
 
 // ============================================================================
 // HTTP/2 Header Type (shared between request/response)

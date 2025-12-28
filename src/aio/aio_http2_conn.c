@@ -52,18 +52,7 @@ static void __vtable_alloc_cb(valk_io_tcp_t *tcp, u64 suggested, void **buf, u64
     return;
   }
   
-  valk_aio_system_t *sys = valk_aio_active_system;
-  if (!sys || !sys->tcpBufferSlab) {
-    VALK_ERROR("No active AIO system in alloc callback");
-    return;
-  }
-  valk_slab_item_t *item = valk_slab_aquire(sys->tcpBufferSlab);
-  if (!item) {
-    VALK_ERROR("TCP buffer slab exhausted in alloc callback");
-    return;
-  }
-  *buf = (char *)item->data;
-  *buflen = HTTP_SLAB_ITEM_SIZE;
+  VALK_ERROR("Cannot allocate TCP buffer: no valid connection handle");
 }
 
 static void __vtable_read_cb(valk_io_tcp_t *tcp, ssize_t nread, const void *buf);
@@ -142,22 +131,9 @@ void valk_http2_conn_alloc_callback(uv_handle_t *handle, u64 suggested_size,
     return;
   }
   
-  valk_aio_system_t *sys = valk_aio_active_system;
-  if (!sys || !sys->tcpBufferSlab) {
-    buf->base = NULL;
-    buf->len = 0;
-    VALK_ERROR("No active AIO system in alloc callback");
-    return;
-  }
-  valk_slab_item_t *item = valk_slab_aquire(sys->tcpBufferSlab);
-  if (!item) {
-    buf->base = NULL;
-    buf->len = 0;
-    VALK_ERROR("TCP buffer slab exhausted in alloc callback");
-    return;
-  }
-  buf->base = (char *)item->data;
-  buf->len = HTTP_SLAB_ITEM_SIZE;
+  buf->base = NULL;
+  buf->len = 0;
+  VALK_ERROR("Cannot allocate TCP buffer: no valid connection handle");
 }
 
 u8 *valk_http2_conn_write_buf_data(valk_aio_handle_t *conn) {

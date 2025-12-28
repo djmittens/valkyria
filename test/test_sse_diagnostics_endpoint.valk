@@ -8,7 +8,7 @@
 (def {sse-data-received} 0)
 
 (def {wrapped-handler}
-  (\ {req} {
+  (\ {req ctx} {
     (= {path} (plist/get req :path))
     (if (== path "/debug/diagnostics/memory")
       {(do
@@ -17,7 +17,7 @@
       )}
       {nil}
     )
-    ((aio/debug-handler aio) req)
+    ((aio/debug-handler aio) req ctx)
   }))
 
 (println "")

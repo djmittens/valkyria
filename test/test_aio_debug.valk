@@ -146,7 +146,7 @@
   {do
     (= {handler} (aio/debug-handler mock-sys))
     ; Handler should work like debug-handle-request
-    (= {resp} (handler {:path "/debug/"}))
+    (= {resp} (handler {:path "/debug/"} nil))
     (test/assert (!= resp nil) "handler should return response for /debug/")
     (test/assert-eq "200" (plist/get resp (head {:status}))
       "handler response should have status 200")
@@ -345,10 +345,10 @@
     (= {handler} (aio/debug-handler mock-sys))
 
     ; Make multiple requests
-    (= {r1} (handler {:path "/debug/"}))
-    (= {r2} (handler {:path "/debug/metrics"}))
-    (= {r3} (handler {:path "/metrics"}))
-    (= {r4} (handler {:path "/unknown"}))
+    (= {r1} (handler {:path "/debug/"} nil))
+    (= {r2} (handler {:path "/debug/metrics"} nil))
+    (= {r3} (handler {:path "/metrics"} nil))
+    (= {r4} (handler {:path "/unknown"} nil))
 
     (test/assert (!= r1 nil) "first request should succeed")
     (test/assert (!= r2 nil) "second request should succeed")

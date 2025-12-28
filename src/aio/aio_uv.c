@@ -2,7 +2,6 @@
 #include "aio_http2_conn.h"
 #include <execinfo.h>
 
-valk_aio_system_t *g_last_started_aio_system = NULL;
 valk_aio_system_t *valk_aio_active_system = NULL;
 u64 g_async_handle_id = 0;
 
@@ -56,6 +55,8 @@ void __event_loop(void *arg) {
 
   valk_maintenance_timer_init(sys);
   valk_maintenance_timer_start(sys);
+
+  valk_aio_task_queue_init(sys);
 
   // Signal that event loop is ready (all slabs initialized)
   uv_sem_post(&sys->startup_sem);
@@ -128,6 +129,8 @@ void __event_loop(void *arg) {
     VALK_INFO("Shutdown: drain completed in %llu ms (%d iterations)",  // LCOV_EXCL_LINE
               (unsigned long long)total_drain_ms, iterations);  // LCOV_EXCL_LINE
   }
+
+  valk_aio_task_queue_shutdown(sys);
 
   valk_slab_free(sys->tcpBufferSlab);
   valk_slab_free(sys->httpStreamArenas);

@@ -4258,23 +4258,32 @@ static valk_lval_t* valk_builtin_aio_delay(valk_lenv_t* e, valk_lval_t* a) {
 // VM METRICS BUILTINS (GC, Interpreter, Event Loop)
 // ============================================================================
 
-// vm/metrics-json: (vm/metrics-json) -> JSON string
-// Returns combined VM metrics (GC, interpreter, event loop) as JSON
 static valk_lval_t* valk_builtin_vm_metrics_json(valk_lenv_t* e,
                                                   valk_lval_t* a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 0);
 
 #ifdef VALK_METRICS_ENABLED
-  // Get heap from AIO system if available, otherwise fall back to thread context
-  valk_gc_malloc_heap_t* heap = valk_aio_active_system && valk_aio_get_gc_heap(valk_aio_active_system)
-    ? valk_aio_get_gc_heap(valk_aio_active_system)
+  valk_aio_system_t *sys = NULL;
+  u64 argc = valk_lval_list_count(a);
+
+  if (argc > 1) {
+    return valk_lval_err("vm/metrics-json: expected 0-1 arguments");
+  }
+
+  if (argc == 1) {
+    valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
+    if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
+      return valk_lval_err("vm/metrics-json: argument must be an aio_system");
+    }
+    sys = (valk_aio_system_t *)sys_arg->ref.ptr;
+  }
+
+  valk_gc_malloc_heap_t* heap = sys && valk_aio_get_gc_heap(sys)
+    ? valk_aio_get_gc_heap(sys)
     : (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
 
   valk_vm_metrics_t vm;
-  valk_vm_metrics_collect(&vm,
-    heap,
-    valk_aio_active_system ? valk_aio_get_event_loop(valk_aio_active_system) : NULL);
+  valk_vm_metrics_collect(&vm, heap, sys ? valk_aio_get_event_loop(sys) : NULL);
 
   char* json = valk_vm_metrics_to_json(&vm, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   if (!json) {
@@ -4282,27 +4291,37 @@ static valk_lval_t* valk_builtin_vm_metrics_json(valk_lenv_t* e,
   }
   return valk_lval_str(json);
 #else
+  UNUSED(a);
   return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
 #endif
 }
 
-// vm/metrics-prometheus: (vm/metrics-prometheus) -> Prometheus text
-// Returns VM metrics in Prometheus exposition format
 static valk_lval_t* valk_builtin_vm_metrics_prometheus(valk_lenv_t* e,
                                                         valk_lval_t* a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 0);
 
 #ifdef VALK_METRICS_ENABLED
-  // Get heap from AIO system if available, otherwise fall back to thread context
-  valk_gc_malloc_heap_t* heap = valk_aio_active_system && valk_aio_get_gc_heap(valk_aio_active_system)
-    ? valk_aio_get_gc_heap(valk_aio_active_system)
+  valk_aio_system_t *sys = NULL;
+  u64 argc = valk_lval_list_count(a);
+
+  if (argc > 1) {
+    return valk_lval_err("vm/metrics-prometheus: expected 0-1 arguments");
+  }
+
+  if (argc == 1) {
+    valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
+    if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
+      return valk_lval_err("vm/metrics-prometheus: argument must be an aio_system");
+    }
+    sys = (valk_aio_system_t *)sys_arg->ref.ptr;
+  }
+
+  valk_gc_malloc_heap_t* heap = sys && valk_aio_get_gc_heap(sys)
+    ? valk_aio_get_gc_heap(sys)
     : (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
 
   valk_vm_metrics_t vm;
-  valk_vm_metrics_collect(&vm,
-    heap,
-    valk_aio_active_system ? valk_aio_get_event_loop(valk_aio_active_system) : NULL);
+  valk_vm_metrics_collect(&vm, heap, sys ? valk_aio_get_event_loop(sys) : NULL);
 
   char* prom = valk_vm_metrics_to_prometheus(&vm, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   if (!prom) {
@@ -4310,6 +4329,7 @@ static valk_lval_t* valk_builtin_vm_metrics_prometheus(valk_lenv_t* e,
   }
   return valk_lval_str(prom);
 #else
+  UNUSED(a);
   return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
 #endif
 }

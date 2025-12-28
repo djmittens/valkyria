@@ -37,7 +37,7 @@
     )
     
     ; Sleep 500ms to hold the arena - forces pending streams
-    (aio/then (aio/sleep 500) (\ {_} {
+    (aio/then (aio/sleep aio 500) (\ {_} {
       {:status "200" :body (str "OK: " path)}
     }))
   }))

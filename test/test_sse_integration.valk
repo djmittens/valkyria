@@ -33,12 +33,12 @@
 (def {test-message-result} nil)
 
 (def {test-handler}
-  (\ {req} {
+  (\ {req ctx} {
     (= {path} (plist/get req (head {:path})))
     
     (if (== path "/test-open")
       {(do
-        (= {stream} (sse/open))
+        (= {stream} (sse/open ctx))
         (def {test-stream} stream)
         (def {test-writable-result} (sse/writable? stream))
         (def {test-send-result} (sse/send stream "hello"))
@@ -51,7 +51,7 @@
       
       {(if (== path "/test-multi-send")
         {(do
-          (= {stream} (sse/open))
+          (= {stream} (sse/open ctx))
           (sse/send stream "event 1")
           (def {test-multi-send} (+ test-multi-send 1))
           (sse/send stream "event 2")

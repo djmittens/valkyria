@@ -553,7 +553,7 @@
   {do
     (= {sys} (aio/start))
     (test/assert (not (== sys nil)) "aio/start should succeed")
-    (def {h} (aio/sleep 1))
+    (def {h} (aio/sleep sys 1))
     (def {status} (aio/status h))
     (aio/stop sys)
     (or (or (== status (quote :pending)) (== status (quote :running)))
@@ -563,7 +563,7 @@
 (test/define "aio/sleep with zero delay"
   {do
     (= {sys} (aio/start))
-    (def {h} (aio/sleep 0))
+    (def {h} (aio/sleep sys 0))
     (aio/stop sys)
     true
   })

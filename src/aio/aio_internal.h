@@ -12,6 +12,7 @@
 #include <stdbool.h>
 
 #include "aio.h"
+#include "aio_chase_lev.h"
 #include "aio_conn_io.h"
 #include "aio_metrics.h"
 #include "aio_sse.h"
@@ -275,6 +276,20 @@ _Static_assert(offsetof(valk_aio_handle_t, magic) == 0,
 _Static_assert(offsetof(valk_aio_handle_t, uv) == offsetof(valk_aio_handle_t, uv.tcp),
                "uv.tcp must be at start of union for uv_handle_t casts");
 
+typedef void (*valk_aio_task_fn)(void *ctx);
+
+typedef struct valk_aio_task_item {
+  valk_aio_task_fn fn;
+  void *ctx;
+} valk_aio_task_item_t;
+
+typedef struct valk_aio_task_queue {
+  valk_chase_lev_deque_t deque;
+  uv_async_t notify;
+  uv_check_t drain_check;
+  bool initialized;
+} valk_aio_task_queue_t;
+
 struct valk_aio_system {
   valk_aio_system_config_t config;
   char name[64];
@@ -310,6 +325,8 @@ struct valk_aio_system {
 
   char (*port_strs)[8];
   u64 port_str_idx;
+
+  valk_aio_task_queue_t task_queue;
 
 #ifdef VALK_METRICS_ENABLED
   valk_aio_metrics_state_t *metrics_state;
@@ -387,7 +404,6 @@ typedef struct {
   int closing;
 } __drain_diag_t;
 
-extern valk_aio_system_t *g_last_started_aio_system;
 extern valk_aio_system_t *valk_aio_active_system;
 extern u64 g_async_handle_id;
 
@@ -466,3 +482,10 @@ void valk_http2_continue_pending_send(valk_aio_handle_t *conn);
 
 // Task execution (implemented in aio_uv.c)
 void valk_uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task);
+
+// Task queue API (implemented in aio_task_queue.c)
+void valk_aio_task_queue_init(valk_aio_system_t *sys);
+void valk_aio_task_queue_shutdown(valk_aio_system_t *sys);
+void valk_aio_enqueue_task(valk_aio_system_t *sys, valk_aio_task_fn fn, void *ctx);
+bool valk_aio_task_queue_empty(valk_aio_system_t *sys);
+int64_t valk_aio_task_queue_size(valk_aio_system_t *sys);

@@ -57,7 +57,7 @@ void test_sse_open_no_context(VALK_TEST_ARGS()) {
   valk_lval_t *result = call_builtin(env, "sse/open", args);
 
   ASSERT_LVAL_TYPE(result, LVAL_ERR);
-  ASSERT_STR_CONTAINS(result->str, "HTTP request handler");
+  ASSERT_STR_CONTAINS(result->str, "expected 1 argument");
 
   VALK_PASS();
 }
@@ -68,12 +68,12 @@ void test_sse_open_wrong_args(VALK_TEST_ARGS()) {
   valk_lenv_t *env = create_test_env();
 
   valk_lval_t *args = valk_lval_list((valk_lval_t*[]){
-    valk_lval_str("extra")
+    valk_lval_str("not-a-ctx")
   }, 1);
   valk_lval_t *result = call_builtin(env, "sse/open", args);
 
   ASSERT_LVAL_TYPE(result, LVAL_ERR);
-  ASSERT_STR_CONTAINS(result->str, "expected 0 arguments");
+  ASSERT_STR_CONTAINS(result->str, "http request context");
 
   VALK_PASS();
 }

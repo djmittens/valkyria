@@ -4,7 +4,7 @@
 extern void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx);
 extern bool valk_http_async_is_closed_callback(void *ctx);
 extern void valk_async_propagate_allocator(valk_async_handle_t *handle, valk_mem_allocator_t *allocator, valk_lenv_t *env);
-extern valk_async_handle_t* valk_async_handle_new(uv_loop_t *loop, valk_lenv_t *env);
+extern valk_async_handle_t* valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env);
 extern void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result);
 extern void valk_async_handle_free(valk_async_handle_t *handle);
 extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
@@ -799,17 +799,29 @@ int valk_http2_on_frame_recv_callback(nghttp2_session *session,
       valk_lenv_t *sandbox_env = conn->http.server->sandbox_env;
       valk_lval_t *response;
 
-      valk_http_request_ctx_t req_ctx = {
-        .session = session,
-        .stream_id = frame->hd.stream_id,
-        .conn = conn,
-        .req = req,
-        .env = sandbox_env
-      };
-      conn->http.server->sys->current_request_ctx = &req_ctx;
+      valk_http_request_ctx_t *req_ctx = valk_mem_alloc(sizeof(valk_http_request_ctx_t));
+      req_ctx->session = session;
+      req_ctx->stream_id = frame->hd.stream_id;
+      req_ctx->conn = conn;
+      req_ctx->req = req;
+      req_ctx->env = sandbox_env;
+
+      conn->http.server->sys->current_request_ctx = req_ctx;
+
+      valk_lval_t *ctx_ref = valk_lval_ref("http_req_ctx", req_ctx, NULL);
+
+      u64 handler_arity = 1;
+      if (LVAL_TYPE(handler) == LVAL_FUN && handler->fun.formals) {
+        handler_arity = valk_lval_list_count(handler->fun.formals);
+      }
 
       VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
-        valk_lval_t *args = valk_lval_cons(arena_qexpr, valk_lval_nil());
+        valk_lval_t *args;
+        if (handler_arity >= 2) {
+          args = valk_lval_cons(arena_qexpr, valk_lval_cons(ctx_ref, valk_lval_nil()));
+        } else {
+          args = valk_lval_cons(arena_qexpr, valk_lval_nil());
+        }
         response = valk_lval_eval_call(sandbox_env, handler, args);
       }
 
@@ -1046,17 +1058,29 @@ static void __pending_stream_process_batch(valk_aio_system_t *sys) {
         valk_lenv_t *sandbox_env = ps->conn->http.server->sandbox_env;
         valk_lval_t *response;
 
-        valk_http_request_ctx_t req_ctx = {
-          .session = ps->session,
-          .stream_id = ps->stream_id,
-          .conn = ps->conn,
-          .req = req,
-          .env = sandbox_env
-        };
-        sys->current_request_ctx = &req_ctx;
+        valk_http_request_ctx_t *req_ctx = valk_mem_alloc(sizeof(valk_http_request_ctx_t));
+        req_ctx->session = ps->session;
+        req_ctx->stream_id = ps->stream_id;
+        req_ctx->conn = ps->conn;
+        req_ctx->req = req;
+        req_ctx->env = sandbox_env;
+
+        sys->current_request_ctx = req_ctx;
+
+        valk_lval_t *ctx_ref = valk_lval_ref("http_req_ctx", req_ctx, NULL);
+
+        u64 handler_arity = 1;
+        if (LVAL_TYPE(handler) == LVAL_FUN && handler->fun.formals) {
+          handler_arity = valk_lval_list_count(handler->fun.formals);
+        }
 
         VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
-          valk_lval_t *args = valk_lval_cons(arena_qexpr, valk_lval_nil());
+          valk_lval_t *args;
+          if (handler_arity >= 2) {
+            args = valk_lval_cons(arena_qexpr, valk_lval_cons(ctx_ref, valk_lval_nil()));
+          } else {
+            args = valk_lval_cons(arena_qexpr, valk_lval_nil());
+          }
           response = valk_lval_eval_call(sandbox_env, handler, args);
         }
 

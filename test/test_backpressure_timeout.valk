@@ -35,7 +35,7 @@
 ; This exercises both the timeout path AND the resume path
 (def {handler}
   (\ {req} {
-    (aio/then (aio/sleep 800) (\ {_} {{:status "200" :body "OK"}}))
+    (aio/then (aio/sleep aio 800) (\ {_} {{:status "200" :body "OK"}}))
   }))
 
 (println "")

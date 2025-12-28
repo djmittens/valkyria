@@ -21,8 +21,7 @@ typedef struct {
   valk_lenv_t *env;
 } valk_http_request_ctx_t;
 
-extern valk_http_request_ctx_t *valk_http_get_request_ctx(void);
-extern void valk_http_set_status_code(int status_code);
+
 
 // Forward declaration from aio_sse.c
 extern void valk_http2_flush_pending(valk_aio_handle_t *conn);
@@ -54,22 +53,20 @@ static void sse_stream_cleanup(void *ptr) {
 // Builtin: sse/open
 // ============================================================================
 
-// Usage: (sse/open) -> stream-handle
-// Must be called within HTTP request handler context
 static valk_lval_t *valk_builtin_sse_open(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
-  // Validate no arguments
-  if (valk_lval_list_count(a) != 0) {
-    return valk_lval_err("sse/open: expected 0 arguments, got %llu",
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("sse/open: expected 1 argument (req-ctx), got %llu",
                          (unsigned long long)valk_lval_list_count(a));
   }
 
-  // Must be in HTTP request context
-  valk_http_request_ctx_t *ctx = valk_http_get_request_ctx();
-  if (!ctx) {
-    return valk_lval_err("sse/open must be called within HTTP request handler");
+  valk_lval_t *ctx_ref = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(ctx_ref) != LVAL_REF || strcmp(ctx_ref->ref.type, "http_req_ctx") != 0) {
+    return valk_lval_err("sse/open: argument must be http request context");
   }
+
+  valk_http_request_ctx_t *ctx = (valk_http_request_ctx_t *)ctx_ref->ref.ptr;
 
   // Extract HTTP/2 context
   nghttp2_session *session = ctx->session;
@@ -116,12 +113,6 @@ static valk_lval_t *valk_builtin_sse_open(valk_lenv_t *e, valk_lval_t *a) {
     return valk_lval_err("sse/open: failed to submit response: %s", nghttp2_strerror(rv));
   }
 
-  // Set status code for metrics tracking when stream eventually closes
-  // SSE streams stay open indefinitely, so this ensures the 200 response
-  // is counted when the connection finally closes
-  valk_http_set_status_code(200);
-
-  // Flush pending data to client
   valk_http2_flush_pending(conn);
 
   VALK_DEBUG("SSE: opened stream id=%llu for http2_stream=%d", (unsigned long long)stream->id, stream_id);

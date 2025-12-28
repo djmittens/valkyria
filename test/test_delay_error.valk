@@ -8,7 +8,7 @@
   (\ {req} {
     (= {path} (plist/get req :path))
     (if (== path "/delay-error")
-      {(aio/then (aio/sleep 50) (\ {_} {
+      {(aio/then (aio/sleep aio 50) (\ {_} {
         (error "Intentional error from delay continuation")
       }))}
       {`{:status "200" :body "OK"}}

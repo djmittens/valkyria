@@ -21,15 +21,25 @@ bool valk_http_async_is_closed_callback(void *ctx) {
          !conn->http.session;
 }
 
-void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
-  if (!ctx) return;
-  valk_http_async_ctx_t *http = (valk_http_async_ctx_t*)ctx;
-
-  // Clear is_closed callback since we're about to free the ctx it points to
+static void clear_is_closed_ctx_recursive(valk_async_handle_t *handle, void *ctx) {
+  if (!handle) return;
   if (handle->is_closed_ctx == ctx) {
     handle->is_closed = NULL;
     handle->is_closed_ctx = NULL;
   }
+  for (u64 i = 0; i < handle->children.count; i++) {
+    clear_is_closed_ctx_recursive(handle->children.items[i], ctx);
+  }
+}
+
+void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
+  if (!ctx) return;
+  valk_http_async_ctx_t *http = (valk_http_async_ctx_t*)ctx;
+
+  // Clear is_closed callback from entire handle tree since we're about to free ctx
+  valk_async_handle_t *root = handle;
+  while (root->parent) root = root->parent;
+  clear_is_closed_ctx_recursive(root, ctx);
 
   valk_aio_handle_t *conn = http->conn;
   valk_mem_arena_t *arena = http->arena;
@@ -62,7 +72,8 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
     http->arena_slab_item = NULL;
   }
 
-  if (handle->status == VALK_ASYNC_COMPLETED) {
+  valk_async_status_t done_status = valk_async_handle_get_status(handle);
+  if (done_status == VALK_ASYNC_COMPLETED) {
     valk_lval_t *result = handle->result;
     if (LVAL_TYPE(result) == LVAL_ERR) {
       VALK_WARN("Handle completed with error for stream %d: %s", stream_id, result->str);
@@ -79,7 +90,7 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
       valk_http2_send_response(session, stream_id, result, arena);
     }
     valk_http2_continue_pending_send(conn);
-  } else if (handle->status == VALK_ASYNC_FAILED) {
+  } else if (done_status == VALK_ASYNC_FAILED) {
     valk_lval_t *err = handle->error ? handle->error : valk_lval_err("Async operation failed");
     VALK_WARN("Handle failed for stream %d: %s",
               stream_id, LVAL_TYPE(err) == LVAL_ERR ? err->str : "unknown");
@@ -156,15 +167,16 @@ bool valk_async_is_resource_closed(valk_async_handle_t *handle) {
   return false;
 }
 
-valk_async_handle_t* valk_async_handle_new(uv_loop_t *loop, valk_lenv_t *env) {
+valk_async_handle_t* valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env) {
   valk_async_handle_t *handle = malloc(sizeof(valk_async_handle_t));
   if (!handle) return NULL;
 
   memset(handle, 0, sizeof(valk_async_handle_t));
   handle->id = __atomic_fetch_add(&g_async_handle_id, 1, __ATOMIC_RELAXED);
-  handle->status = VALK_ASYNC_PENDING;
-  __atomic_store_n(&handle->cancel_requested, 0, __ATOMIC_RELAXED);
-  handle->loop = loop;
+  atomic_store_explicit(&handle->status, VALK_ASYNC_PENDING, memory_order_release);
+  atomic_store_explicit(&handle->cancel_requested, 0, memory_order_release);
+  handle->refcount = 1;
+  handle->sys = sys;
   handle->env = env;
   
   handle->allocator = valk_thread_ctx.allocator;
@@ -175,6 +187,10 @@ valk_async_handle_t* valk_async_handle_new(uv_loop_t *loop, valk_lenv_t *env) {
 void valk_async_handle_free(valk_async_handle_t *handle) {
   if (!handle) return;
 
+  if (handle->cleanup_callbacks) {
+    free(handle->cleanup_callbacks);
+  }
+
   if (handle->children.items) {
     free(handle->children.items);
   }
@@ -182,21 +198,74 @@ void valk_async_handle_free(valk_async_handle_t *handle) {
   free(handle);
 }
 
+valk_async_handle_t *valk_async_handle_ref(valk_async_handle_t *handle) {
+  if (!handle) return NULL;
+  atomic_fetch_add_explicit(&handle->refcount, 1, memory_order_relaxed);
+  return handle;
+}
+
+void valk_async_handle_unref(valk_async_handle_t *handle) {
+  if (!handle) return;
+
+  u32 old = atomic_fetch_sub_explicit(&handle->refcount, 1, memory_order_acq_rel);
+  if (old != 1) return;
+
+  for (i32 i = (i32)handle->cleanup_count - 1; i >= 0; i--) {
+    if (handle->cleanup_callbacks[i].fn) {
+      handle->cleanup_callbacks[i].fn(handle->cleanup_callbacks[i].ctx);
+    }
+  }
+
+  for (u64 i = 0; i < handle->children.count; i++) {
+    valk_async_handle_unref(handle->children.items[i]);
+  }
+
+  valk_async_handle_free(handle);
+}
+
+u32 valk_async_handle_refcount(valk_async_handle_t *handle) {
+  if (!handle) return 0;
+  return atomic_load_explicit(&handle->refcount, memory_order_relaxed);
+}
+
+void valk_async_handle_on_cleanup(valk_async_handle_t *handle,
+                                   valk_async_cleanup_fn fn, void *ctx) {
+  if (!handle || !fn) return;
+
+  if (handle->cleanup_count >= handle->cleanup_capacity) {
+    u32 new_cap = handle->cleanup_capacity == 0 ? 4 : handle->cleanup_capacity * 2;
+    void *new_arr = realloc(handle->cleanup_callbacks,
+                            new_cap * sizeof(handle->cleanup_callbacks[0]));
+    if (!new_arr) return;
+    handle->cleanup_callbacks = new_arr;
+    handle->cleanup_capacity = new_cap;
+  }
+
+  handle->cleanup_callbacks[handle->cleanup_count].fn = fn;
+  handle->cleanup_callbacks[handle->cleanup_count].ctx = ctx;
+  handle->cleanup_count++;
+}
+
 void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result) {
   VALK_DEBUG("valk_async_handle_complete: handle=%p, id=%llu", (void*)handle, handle ? handle->id : 0);
   if (!handle) return;
-  if (handle->status != VALK_ASYNC_PENDING && handle->status != VALK_ASYNC_RUNNING) {
-    VALK_DEBUG("  handle already in terminal state: %d", handle->status);
-    return;
-  }
 
   if (valk_async_is_resource_closed(handle)) {
     VALK_INFO("Async handle %llu: resource closed during completion, aborting", (unsigned long long)handle->id);
-    handle->status = VALK_ASYNC_CANCELLED;
+    valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_CANCELLED);
+    valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, VALK_ASYNC_CANCELLED);
     return;
   }
 
-  handle->status = VALK_ASYNC_COMPLETED;
+  bool transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_COMPLETED);
+  if (!transitioned) {
+    transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, VALK_ASYNC_COMPLETED);
+  }
+  if (!transitioned) {
+    VALK_DEBUG("  handle already in terminal state: %d", valk_async_handle_get_status(handle));
+    return;
+  }
+
   handle->result = result;
 
   valk_async_notify_all_parent(handle);
@@ -208,17 +277,22 @@ void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result
 
 void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
   if (!handle) return;
-  if (handle->status != VALK_ASYNC_PENDING && handle->status != VALK_ASYNC_RUNNING) {
-    return;
-  }
 
   if (valk_async_is_resource_closed(handle)) {
     VALK_INFO("Async handle %llu: resource closed during failure, aborting", (unsigned long long)handle->id);
-    handle->status = VALK_ASYNC_CANCELLED;
+    valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_CANCELLED);
+    valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, VALK_ASYNC_CANCELLED);
     return;
   }
 
-  handle->status = VALK_ASYNC_FAILED;
+  bool transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_FAILED);
+  if (!transitioned) {
+    transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, VALK_ASYNC_FAILED);
+  }
+  if (!transitioned) {
+    return;
+  }
+
   handle->error = error;
 
   valk_async_notify_all_parent(handle);
@@ -228,20 +302,24 @@ void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
   valk_async_propagate_completion(handle);
 }
 
-bool valk_async_handle_cancel(valk_async_handle_t *handle) {
-  if (!handle) return false;
-  if (handle->status != VALK_ASYNC_PENDING && handle->status != VALK_ASYNC_RUNNING) {
-    return false;
+static void valk_async_cancel_task(void *ctx) {
+  valk_async_handle_t *handle = (valk_async_handle_t *)ctx;
+  if (!handle) return;
+
+  bool transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_CANCELLED);
+  if (!transitioned) {
+    transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, VALK_ASYNC_CANCELLED);
+  }
+  if (!transitioned) {
+    return;
   }
 
-  __atomic_store_n(&handle->cancel_requested, 1, __ATOMIC_RELEASE);
+  atomic_store_explicit(&handle->cancel_requested, 1, memory_order_release);
 
-  if (handle->status == VALK_ASYNC_RUNNING && handle->uv_handle_ptr) {
+  if (handle->uv_handle_ptr) {
     valk_async_handle_uv_data_t *uv_data = handle->uv_handle_ptr;
     uv_timer_stop(&uv_data->uv.timer);
   }
-
-  handle->status = VALK_ASYNC_CANCELLED;
 
   if (handle->on_cancel && handle->env) {
     valk_mem_allocator_t *alloc = handle->allocator;
@@ -250,19 +328,16 @@ bool valk_async_handle_cancel(valk_async_handle_t *handle) {
                        alloc->type == VALK_ALLOC_GC_HEAP ||
                        alloc->type == VALK_ALLOC_NULL;
     // LCOV_EXCL_START - fallback arena allocation rarely triggered
-    if (needs_arena) {
-      valk_aio_system_t *sys = g_last_started_aio_system;
-      if (sys) {
-        valk_standalone_async_ctx_t *standalone = valk_standalone_async_ctx_new(sys);
-        if (standalone) {
-          alloc = (valk_mem_allocator_t*)standalone->arena;
-          handle->allocator = alloc;
-          valk_async_handle_t *root = handle;
-          while (root->parent) root = root->parent;
-          if (!root->on_done) {
-            root->on_done = valk_standalone_async_done_callback;
-            root->on_done_ctx = standalone;
-          }
+    if (needs_arena && handle->sys) {
+      valk_standalone_async_ctx_t *standalone = valk_standalone_async_ctx_new(handle->sys);
+      if (standalone) {
+        alloc = (valk_mem_allocator_t*)standalone->arena;
+        handle->allocator = alloc;
+        valk_async_handle_t *root = handle;
+        while (root->parent) root = root->parent;
+        if (!root->on_done) {
+          root->on_done = valk_standalone_async_done_callback;
+          root->on_done_ctx = standalone;
         }
       }
     }
@@ -274,8 +349,31 @@ bool valk_async_handle_cancel(valk_async_handle_t *handle) {
     }
   }
 
-  for (u64 i = 0; i < handle->children.count; i++) {
-    valk_async_handle_cancel(handle->children.items[i]);
+  valk_aio_system_t *sys = handle->sys;
+  if (sys) {
+    for (u64 i = 0; i < handle->children.count; i++) {
+      valk_aio_enqueue_task(sys, valk_async_cancel_task, handle->children.items[i]);
+    }
+  }
+}
+
+bool valk_async_handle_cancel(valk_async_handle_t *handle) {
+  if (!handle) return false;
+
+  valk_async_status_t status = valk_async_handle_get_status(handle);
+  if (valk_async_handle_is_terminal(status)) {
+    return false;
+  }
+
+  valk_aio_system_t *sys = handle->sys;
+  if (sys) {
+    if (uv_thread_self() == sys->loopThread) {
+      valk_async_cancel_task(handle);
+    } else {
+      valk_aio_enqueue_task(sys, valk_async_cancel_task, handle);
+    }
+  } else {
+    valk_async_cancel_task(handle);
   }
 
   return true;
@@ -298,10 +396,10 @@ void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_handle_
   parent->children.items[parent->children.count++] = child;
 }
 
-static void valk_async_propagate_allocator_impl(valk_async_handle_t *handle, valk_mem_allocator_t *allocator, valk_lenv_t *env, void *expected_loop) {
+static void valk_async_propagate_allocator_impl(valk_async_handle_t *handle, valk_mem_allocator_t *allocator, valk_lenv_t *env, valk_aio_system_t *expected_sys) {
   if (!handle) return;
 
-  if (expected_loop && handle->loop && handle->loop != expected_loop) {
+  if (expected_sys && handle->sys && handle->sys != expected_sys) {
     return;
   }
 
@@ -313,12 +411,12 @@ static void valk_async_propagate_allocator_impl(valk_async_handle_t *handle, val
   }
 
   for (u64 i = 0; i < handle->children.count; i++) {
-    valk_async_propagate_allocator_impl(handle->children.items[i], allocator, env, expected_loop);
+    valk_async_propagate_allocator_impl(handle->children.items[i], allocator, env, expected_sys);
   }
 }
 
 void valk_async_propagate_allocator(valk_async_handle_t *handle, valk_mem_allocator_t *allocator, valk_lenv_t *env) {
-  valk_async_propagate_allocator_impl(handle, allocator, env, handle ? handle->loop : NULL);
+  valk_async_propagate_allocator_impl(handle, allocator, env, handle ? handle->sys : NULL);
 }
 
 valk_lval_t* valk_async_status_to_sym(valk_async_status_t status) {

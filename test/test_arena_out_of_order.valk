@@ -18,11 +18,11 @@
   (\ {req} {
     (= {path} (plist/get req :path))
     (if (== path "/slow")
-      {(aio/then (aio/sleep 100) (\ {_} {{:status "200" :body "slow"}}))}
+      {(aio/then (aio/sleep aio 100) (\ {_} {{:status "200" :body "slow"}}))}
       {(if (== path "/medium")
-        {(aio/then (aio/sleep 50) (\ {_} {{:status "200" :body "medium"}}))}
+        {(aio/then (aio/sleep aio 50) (\ {_} {{:status "200" :body "medium"}}))}
         {(if (== path "/fast")
-          {(aio/then (aio/sleep 10) (\ {_} {{:status "200" :body "fast"}}))}
+          {(aio/then (aio/sleep aio 10) (\ {_} {{:status "200" :body "fast"}}))}
           {{:status "200" :body "ok"}})})})
   }))
 

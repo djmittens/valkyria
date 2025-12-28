@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdatomic.h>
 #include "concurrency.h"
 #include "memory.h"
 #include "aio_types.h"
@@ -21,14 +22,20 @@ struct valk_mem_arena;
 //
 // The async system is decoupled from specific I/O layers (HTTP, files, etc).
 // Each layer registers callbacks to handle completion and detect cancellation.
+//
+// Lifecycle: Reference counted. Call valk_async_handle_ref() to keep alive,
+// valk_async_handle_unref() when done. Cleanup callbacks run when refcount hits 0.
+//
+// Concurrency: The status field is atomic to handle races between cancel and
+// complete. State transitions use compare-exchange: first to CAS wins.
 struct valk_async_handle_t {
   u64 id;
-  valk_async_status_t status;
+  _Atomic valk_async_status_t status;
 
-  int cancel_requested;
+  _Atomic int cancel_requested;
 
   void *uv_handle_ptr;
-  void *loop;
+  struct valk_aio_system *sys;
 
   struct valk_lval_t *on_complete;
   struct valk_lval_t *on_error;
@@ -55,7 +62,48 @@ struct valk_async_handle_t {
 
   struct valk_async_handle_t *prev;
   struct valk_async_handle_t *next;
+
+  _Atomic u32 refcount;
+
+  struct {
+    valk_async_cleanup_fn fn;
+    void *ctx;
+  } *cleanup_callbacks;
+  u32 cleanup_count;
+  u32 cleanup_capacity;
 };
+
+valk_async_handle_t *valk_async_handle_ref(valk_async_handle_t *handle);
+void valk_async_handle_unref(valk_async_handle_t *handle);
+u32 valk_async_handle_refcount(valk_async_handle_t *handle);
+void valk_async_handle_on_cleanup(valk_async_handle_t *handle,
+                                   valk_async_cleanup_fn fn, void *ctx);
+
+static inline bool valk_async_handle_is_cancelled(valk_async_handle_t *handle) {
+  if (!handle) return false;
+  return atomic_load_explicit(&handle->cancel_requested, memory_order_acquire) != 0;
+}
+
+static inline valk_async_status_t valk_async_handle_get_status(valk_async_handle_t *handle) {
+  if (!handle) return VALK_ASYNC_CANCELLED;
+  return atomic_load_explicit(&handle->status, memory_order_acquire);
+}
+
+static inline bool valk_async_handle_try_transition(
+    valk_async_handle_t *handle,
+    valk_async_status_t expected,
+    valk_async_status_t desired) {
+  if (!handle) return false;
+  return atomic_compare_exchange_strong_explicit(
+      &handle->status, &expected, desired,
+      memory_order_acq_rel, memory_order_acquire);
+}
+
+static inline bool valk_async_handle_is_terminal(valk_async_status_t status) {
+  return status == VALK_ASYNC_COMPLETED ||
+         status == VALK_ASYNC_FAILED ||
+         status == VALK_ASYNC_CANCELLED;
+}
 
 void valk_register_async_handle_builtins(struct valk_lenv_t *env);
 

@@ -102,13 +102,9 @@
       {otherwise `{:status "200" :content-type "text/html; charset=utf-8" :body "<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"0;url=/debug/\"></head></html>"}})
   })
 
-; Factory function that creates a debug handler with sys pre-bound
-; Returns a handler function that only takes req as a parameter
-; Usage: (def {handler} (aio/debug-handler sys))
-;        (handler request) => response map or nil
 (fun {aio/debug-handler sys}
   {
     (= {captured-sys} sys)
-    (\ {req} {aio/debug-handle-request captured-sys req})
+    (\ {req ctx} {aio/debug-handle-request captured-sys req})
   })
 

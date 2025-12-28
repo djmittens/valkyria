@@ -78,9 +78,9 @@
 ;   (match path
 ;     "/metrics/snapshot" (metrics/single-shot-handler req)
 ;     ...)
-(fun {metrics/single-shot-handler req}
+(fun {metrics/single-shot-handler req ctx}
   {
-    (= {stream} (sse/open))
+    (= {stream} (sse/open ctx))
     (sse/send stream "metrics" (metrics/json))
     :deferred
   })

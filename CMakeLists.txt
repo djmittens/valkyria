@@ -107,6 +107,8 @@ set(VALKYRIA_SOURCES
   # AIO modular components
   src/aio/aio_system.c
   src/aio/aio_task.c
+  src/aio/aio_task_queue.c
+  src/aio/aio_chase_lev.c
   src/aio/aio_maintenance.c
   src/aio/aio_sse_conn_tracking.c
   # IO ops abstraction layer
