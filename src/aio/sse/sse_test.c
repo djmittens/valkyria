@@ -9,17 +9,17 @@
 typedef struct test_event {
   char *event_type;
   char *data;
-  size_t data_len;
+  u64 data_len;
   struct test_event *next;
 } test_event_t;
 
 struct valk_test_sse_ctx {
   char *capture_buf;
-  size_t capture_len;
-  size_t capture_cap;
+  u64 capture_len;
+  u64 capture_cap;
 
-  size_t event_count;
-  size_t bytes_written;
+  u64 event_count;
+  u64 bytes_written;
 
   test_event_t *events;
   test_event_t *events_tail;
@@ -39,12 +39,12 @@ static valk_test_sse_ctx_t *__get_ctx(valk_sse_stream_t *stream) {
   return (valk_test_sse_ctx_t *)stream->user_data;
 }
 
-static void __capture_append(valk_test_sse_ctx_t *ctx, const char *data, size_t len) {
+static void __capture_append(valk_test_sse_ctx_t *ctx, const char *data, u64 len) {
   if (!ctx || !data || len == 0) return;
 
-  size_t needed = ctx->capture_len + len + 1;
+  u64 needed = ctx->capture_len + len + 1;
   if (needed > ctx->capture_cap) {
-    size_t new_cap = ctx->capture_cap * 2;
+    u64 new_cap = ctx->capture_cap * 2;
     while (new_cap < needed) new_cap *= 2;
     char *new_buf = realloc(ctx->capture_buf, new_cap);
     if (!new_buf) return;
@@ -57,7 +57,7 @@ static void __capture_append(valk_test_sse_ctx_t *ctx, const char *data, size_t 
   ctx->capture_buf[ctx->capture_len] = '\0';
 }
 
-static void __store_event(valk_test_sse_ctx_t *ctx, const char *event_type, const char *data, size_t data_len) {
+static void __store_event(valk_test_sse_ctx_t *ctx, const char *event_type, const char *data, u64 data_len) {
   if (!ctx) return;
 
   test_event_t *evt = malloc(sizeof(test_event_t));
@@ -155,13 +155,13 @@ void valk_test_sse_free(valk_sse_stream_t *stream) {
   free(stream);
 }
 
-size_t valk_test_sse_bytes_written(valk_sse_stream_t *stream) {
+u64 valk_test_sse_bytes_written(valk_sse_stream_t *stream) {
   valk_test_sse_ctx_t *ctx = __get_ctx(stream);
   if (!ctx) return 0;
   return ctx->bytes_written;
 }
 
-size_t valk_test_sse_events_count(valk_sse_stream_t *stream) {
+u64 valk_test_sse_events_count(valk_sse_stream_t *stream) {
   valk_test_sse_ctx_t *ctx = __get_ctx(stream);
   if (!ctx) return 0;
   return ctx->event_count;
@@ -233,7 +233,7 @@ void valk_test_sse_simulate_close(valk_sse_stream_t *stream) {
 }
 
 int valk_test_sse_send_event(valk_sse_stream_t *stream, const char *event_type,
-                              const char *data, size_t len, uint64_t id) {
+                              const char *data, u64 len, u64 id) {
   if (!stream || !__is_test_stream(stream)) {
     return valk_sse_send_event(stream, event_type, data, len, id);
   }
@@ -253,7 +253,7 @@ int valk_test_sse_send_event(valk_sse_stream_t *stream, const char *event_type,
   valk_test_sse_ctx_t *ctx = __get_ctx(stream);
   if (!ctx) return -3;
 
-  size_t event_size = 0;
+  u64 event_size = 0;
   char id_buf[32] = {0};
   if (id > 0) {
     int id_len = snprintf(id_buf, sizeof(id_buf), "id: %llu\n", (unsigned long long)id);
@@ -275,12 +275,12 @@ int valk_test_sse_send_event(valk_sse_stream_t *stream, const char *event_type,
 
   char *p = formatted;
   if (id > 0) {
-    size_t id_len = strlen(id_buf);
+    u64 id_len = strlen(id_buf);
     memcpy(p, id_buf, id_len);
     p += id_len;
   }
   if (event_type) {
-    size_t type_len = strlen(type_buf);
+    u64 type_len = strlen(type_buf);
     memcpy(p, type_buf, type_len);
     p += type_len;
   }
@@ -292,7 +292,7 @@ int valk_test_sse_send_event(valk_sse_stream_t *stream, const char *event_type,
   *p++ = '\n';
   *p = '\0';
 
-  size_t total_len = p - formatted;
+  u64 total_len = p - formatted;
 
   __capture_append(ctx, formatted, total_len);
   __store_event(ctx, event_type, data, len);

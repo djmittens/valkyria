@@ -4,8 +4,6 @@
 #define VALK_EVENT_LOOP_METRICS_H
 
 #include "metrics_v2.h"
-#include <stddef.h>
-#include <stdint.h>
 
 // Forward declaration
 struct uv_loop_s;
@@ -25,8 +23,8 @@ typedef struct {
   const char *loop_name;              // For debugging
 
   // Previous values for delta tracking (counters are monotonic from libuv)
-  uint64_t prev_iterations;
-  uint64_t prev_events;
+  u64 prev_iterations;
+  u64 prev_events;
 } valk_event_loop_metrics_v2_t;
 
 // ============================================================================
@@ -56,6 +54,6 @@ void valk_event_loop_metrics_v2_update(valk_event_loop_metrics_v2_t *m,
 
 // Update handles count separately (if not reading from libuv directly)
 void valk_event_loop_metrics_v2_set_handles(valk_event_loop_metrics_v2_t *m,
-                                             int64_t handles);
+                                             i64 handles);
 
 #endif // VALK_EVENT_LOOP_METRICS_H

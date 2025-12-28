@@ -1,7 +1,7 @@
 #pragma once
+#include "types.h"
 
 #include <stddef.h>
-#include <stdint.h>
 
 typedef enum {
   VALK_BODY_CONTINUE,
@@ -9,25 +9,25 @@ typedef enum {
 } valk_body_status_e;
 
 typedef struct valk_body_chunk {
-  const uint8_t *data;
-  size_t len;
+  const u8 *data;
+  u64 len;
   valk_body_status_e status;
 } valk_body_chunk_t;
 
 typedef struct valk_header_view {
-  const uint8_t *name;
-  size_t name_len;
-  const uint8_t *value;
-  size_t value_len;
+  const u8 *name;
+  u64 name_len;
+  const u8 *value;
+  u64 value_len;
 } valk_header_view_t;
 
 typedef struct valk_request_meta {
   const char *method;
-  size_t method_len;
+  u64 method_len;
   const char *scheme;
-  size_t scheme_len;
+  u64 scheme_len;
   const char *authority;
-  size_t authority_len;
+  u64 authority_len;
   const char *path;
-  size_t path_len;
+  u64 path_len;
 } valk_request_meta_t;

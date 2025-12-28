@@ -1,4 +1,6 @@
 #pragma once
+
+#include "types.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -7,14 +9,14 @@
 
 typedef struct valk_coverage_file_t {
   const char *filename;
-  size_t eval_count;
+  u64 eval_count;
   struct valk_coverage_file_t *next;
 } valk_coverage_file_t;
 
 typedef struct {
   valk_coverage_file_t *buckets[COVERAGE_HASH_SIZE];
-  size_t total_files;
-  size_t total_evals;
+  u64 total_files;
+  u64 total_evals;
 } valk_coverage_data_t;
 
 void valk_coverage_init(void);
@@ -28,57 +30,56 @@ const char *valk_coverage_output_path(void);
 
 #ifdef VALK_COVERAGE
 #include "valk_thread.h"
-#include <stdint.h>
 
 typedef struct valk_branch_t {
-  uint16_t line;
-  uint32_t true_count;
-  uint32_t false_count;
+  u16 line;
+  u32 true_count;
+  u32 false_count;
   struct valk_branch_t *next;
 } valk_branch_t;
 
 typedef struct valk_expr_t {
-  uint16_t file_id;
-  uint16_t line;
-  uint16_t column;
-  uint16_t end_column;
-  uint32_t hit_count;
+  u16 file_id;
+  u16 line;
+  u16 column;
+  u16 end_column;
+  u32 hit_count;
   struct valk_expr_t *next;
 } valk_expr_t;
 
 typedef struct valk_line_coverage_file_t {
   char *filename;
-  uint16_t file_id;
-  uint32_t *line_counts;
-  size_t line_capacity;
-  size_t lines_hit;
+  u16 file_id;
+  u32 *line_counts;
+  u64 line_capacity;
+  u64 lines_hit;
   valk_branch_t *branches;
-  size_t branches_found;
-  size_t branches_hit;
+  u64 branches_found;
+  u64 branches_hit;
   valk_expr_t **expr_buckets;
-  size_t exprs_found;
-  size_t exprs_hit;
+  u64 exprs_found;
+  u64 exprs_hit;
   struct valk_line_coverage_file_t *next;
 } valk_line_coverage_file_t;
 
 typedef struct {
   valk_line_coverage_file_t *buckets[COVERAGE_HASH_SIZE];
-  size_t total_files;
+  u64 total_files;
   valk_mutex_t lock;
 } valk_line_coverage_t;
 
 extern valk_line_coverage_t g_line_coverage;
 
 void valk_line_coverage_init(void);
-void valk_coverage_record_line(uint16_t file_id, uint16_t line);
-void valk_coverage_mark_line(uint16_t file_id, uint16_t line);
-void valk_coverage_record_branch(uint16_t file_id, uint16_t line, bool taken);
-valk_line_coverage_file_t *valk_coverage_get_file(uint16_t file_id);
+void valk_coverage_record_line(u16 file_id, u16 line);
+void valk_coverage_mark_line(u16 file_id, u16 line);
+void valk_coverage_record_branch(u16 file_id, u16 line, bool taken);
+valk_line_coverage_file_t *valk_coverage_get_file(u16 file_id);
 void valk_line_coverage_reset(void);
 
-void valk_coverage_mark_expr(uint16_t file_id, uint16_t line, uint16_t column, uint16_t end_column);
-void valk_coverage_record_expr(uint16_t file_id, uint16_t line, uint16_t column);
-size_t valk_coverage_get_line_expr_count(uint16_t file_id, uint16_t line, size_t *hit, size_t *total);
+void valk_coverage_mark_expr(u16 file_id, u16 line, u16 column, u16 end_column);
+void valk_coverage_record_expr(u16 file_id, u16 line, u16 column);
+u64 valk_coverage_get_line_expr_count(u16 file_id, u16 line, u64 *hit, u64 *total);
 
 #define VALK_COVERAGE_RECORD_LINE(fid, line) valk_coverage_record_line(fid, line)
 #define VALK_COVERAGE_MARK_LINE(fid, line) valk_coverage_mark_line(fid, line)

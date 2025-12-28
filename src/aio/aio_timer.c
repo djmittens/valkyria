@@ -23,7 +23,7 @@ void valk_aio_timer_init(valk_aio_handle_t* handle) {
   uv_timer_init(handle->sys->eventloop, &handle->uv.timer);
 }
 
-void valk_aio_timer_start(valk_aio_handle_t* handle, uint64_t timeout_ms, uint64_t repeat_ms,
+void valk_aio_timer_start(valk_aio_handle_t* handle, u64 timeout_ms, u64 repeat_ms,
                            void (*callback)(uv_timer_t*)) {
   if (!handle) return;
   uv_timer_start(&handle->uv.timer, callback, timeout_ms, repeat_ms);

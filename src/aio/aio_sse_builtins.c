@@ -3,10 +3,10 @@
 #include <string.h>
 
 #include "aio.h"
-#include "../common.h"
-#include "../log.h"
-#include "../memory.h"
-#include "../parser.h"
+#include "common.h"
+#include "log.h"
+#include "memory.h"
+#include "parser.h"
 
 // ============================================================================
 // External Declarations
@@ -15,7 +15,7 @@
 // Forward declaration from aio_uv.c
 typedef struct {
   nghttp2_session *session;
-  int32_t stream_id;
+  i32 stream_id;
   valk_aio_handle_t *conn;
   void *req;  // valk_http2_server_request_t*
   valk_lenv_t *env;
@@ -61,8 +61,8 @@ static valk_lval_t *valk_builtin_sse_open(valk_lenv_t *e, valk_lval_t *a) {
 
   // Validate no arguments
   if (valk_lval_list_count(a) != 0) {
-    return valk_lval_err("sse/open: expected 0 arguments, got %zu",
-                         valk_lval_list_count(a));
+    return valk_lval_err("sse/open: expected 0 arguments, got %llu",
+                         (unsigned long long)valk_lval_list_count(a));
   }
 
   // Must be in HTTP request context
@@ -73,7 +73,7 @@ static valk_lval_t *valk_builtin_sse_open(valk_lenv_t *e, valk_lval_t *a) {
 
   // Extract HTTP/2 context
   nghttp2_session *session = ctx->session;
-  int32_t stream_id = ctx->stream_id;
+  i32 stream_id = ctx->stream_id;
   valk_aio_handle_t *conn = ctx->conn;
 
   if (!session || !conn) {
@@ -93,19 +93,19 @@ static valk_lval_t *valk_builtin_sse_open(valk_lenv_t *e, valk_lval_t *a) {
   // Submit HTTP/2 response headers
   nghttp2_nv headers[] = {
     {
-      (uint8_t *)":status",   (uint8_t *)"200",     sizeof(":status") - 1,
+      (u8 *)":status",   (u8 *)"200",     sizeof(":status") - 1,
       sizeof("200") - 1, NGHTTP2_NV_FLAG_NONE,
     },
     {
-      (uint8_t *)"content-type",   (uint8_t *)"text/event-stream",     sizeof("content-type") - 1,
+      (u8 *)"content-type",   (u8 *)"text/event-stream",     sizeof("content-type") - 1,
       sizeof("text/event-stream") - 1, NGHTTP2_NV_FLAG_NONE,
     },
     {
-      (uint8_t *)"cache-control",   (uint8_t *)"no-cache",     sizeof("cache-control") - 1,
+      (u8 *)"cache-control",   (u8 *)"no-cache",     sizeof("cache-control") - 1,
       sizeof("no-cache") - 1, NGHTTP2_NV_FLAG_NONE,
     },
     {
-      (uint8_t *)"connection",   (uint8_t *)"keep-alive",     sizeof("connection") - 1,
+      (u8 *)"connection",   (u8 *)"keep-alive",     sizeof("connection") - 1,
       sizeof("keep-alive") - 1, NGHTTP2_NV_FLAG_NONE,
     },
   };
@@ -124,7 +124,7 @@ static valk_lval_t *valk_builtin_sse_open(valk_lenv_t *e, valk_lval_t *a) {
   // Flush pending data to client
   valk_http2_flush_pending(conn);
 
-  VALK_DEBUG("SSE: opened stream id=%lu for http2_stream=%d", stream->id, stream_id);
+  VALK_DEBUG("SSE: opened stream id=%llu for http2_stream=%d", (unsigned long long)stream->id, stream_id);
 
   // Return handle as LVAL_REF
   return valk_lval_ref("sse_stream", stream, sse_stream_cleanup);
@@ -140,9 +140,9 @@ static valk_lval_t *valk_builtin_sse_send(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
   // Validate 2-3 arguments
-  size_t argc = valk_lval_list_count(a);
+  u64 argc = valk_lval_list_count(a);
   if (argc < 2 || argc > 3) {
-    return valk_lval_err("sse/send: expected 2-3 arguments, got %zu", argc);
+    return valk_lval_err("sse/send: expected 2-3 arguments, got %llu", (unsigned long long)argc);
   }
 
   // Extract stream from first argument
@@ -158,7 +158,7 @@ static valk_lval_t *valk_builtin_sse_send(valk_lenv_t *e, valk_lval_t *a) {
 
   const char *event_type = NULL;
   const char *data = NULL;
-  size_t data_len = 0;
+  u64 data_len = 0;
 
   if (argc == 3) {
     // (sse/send stream event-type data)
@@ -210,8 +210,8 @@ static valk_lval_t *valk_builtin_sse_close(valk_lenv_t *e, valk_lval_t *a) {
 
   // Validate 1 argument
   if (valk_lval_list_count(a) != 1) {
-    return valk_lval_err("sse/close: expected 1 argument, got %zu",
-                         valk_lval_list_count(a));
+    return valk_lval_err("sse/close: expected 1 argument, got %llu",
+                         (unsigned long long)valk_lval_list_count(a));
   }
 
   valk_lval_t *stream_ref = valk_lval_list_nth(a, 0);
@@ -224,7 +224,7 @@ static valk_lval_t *valk_builtin_sse_close(valk_lenv_t *e, valk_lval_t *a) {
     return valk_lval_err("sse/close: argument must be SSE stream handle");
   }
 
-  VALK_DEBUG("SSE: closing stream id=%lu", stream->id);
+  VALK_DEBUG("SSE: closing stream id=%llu", (unsigned long long)stream->id);
   valk_sse_stream_close(stream);
 
   return valk_lval_nil();
@@ -240,8 +240,8 @@ static valk_lval_t *valk_builtin_sse_writable(valk_lenv_t *e, valk_lval_t *a) {
 
   // Validate 1 argument
   if (valk_lval_list_count(a) != 1) {
-    return valk_lval_err("sse/writable?: expected 1 argument, got %zu",
-                         valk_lval_list_count(a));
+    return valk_lval_err("sse/writable?: expected 1 argument, got %llu",
+                         (unsigned long long)valk_lval_list_count(a));
   }
 
   valk_lval_t *stream_ref = valk_lval_list_nth(a, 0);
@@ -267,8 +267,8 @@ static valk_lval_t *valk_builtin_sse_writable(valk_lenv_t *e, valk_lval_t *a) {
 static valk_lval_t *valk_builtin_sse_on_drain(valk_lenv_t *e, valk_lval_t *a) {
   // Validate 2 arguments
   if (valk_lval_list_count(a) != 2) {
-    return valk_lval_err("sse/on-drain: expected 2 arguments, got %zu",
-                         valk_lval_list_count(a));
+    return valk_lval_err("sse/on-drain: expected 2 arguments, got %llu",
+                         (unsigned long long)valk_lval_list_count(a));
   }
 
   valk_lval_t *stream_ref = valk_lval_list_nth(a, 0);
@@ -292,7 +292,7 @@ static valk_lval_t *valk_builtin_sse_on_drain(valk_lenv_t *e, valk_lval_t *a) {
     stream->callback_env = e;
   }
 
-  VALK_DEBUG("SSE: registered on-drain callback for stream id=%lu", stream->id);
+  VALK_DEBUG("SSE: registered on-drain callback for stream id=%llu", (unsigned long long)stream->id);
 
   // Return stream ref for chaining
   return stream_ref;
@@ -307,8 +307,8 @@ static valk_lval_t *valk_builtin_sse_set_timeout(valk_lenv_t *e, valk_lval_t *a)
   UNUSED(e);
 
   if (valk_lval_list_count(a) != 2) {
-    return valk_lval_err("sse/set-timeout: expected 2 arguments, got %zu",
-                         valk_lval_list_count(a));
+    return valk_lval_err("sse/set-timeout: expected 2 arguments, got %llu",
+                         (unsigned long long)valk_lval_list_count(a));
   }
 
   valk_lval_t *stream_ref = valk_lval_list_nth(a, 0);
@@ -327,8 +327,8 @@ static valk_lval_t *valk_builtin_sse_set_timeout(valk_lenv_t *e, valk_lval_t *a)
     return valk_lval_err("sse/set-timeout: first argument must be SSE stream handle");
   }
 
-  uint64_t timeout_ms = (uint64_t)timeout_arg->num;
-  valk_sse_set_idle_timeout(stream, timeout_ms);
+  u64 timeout_ms = (u64)timeout_arg->num;
+  valk_sse_set_idle_timeout(stream, (unsigned long long)timeout_ms);
 
   return stream_ref;
 }
@@ -342,8 +342,8 @@ static valk_lval_t *valk_builtin_sse_cancel(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
   if (valk_lval_list_count(a) != 1) {
-    return valk_lval_err("sse/cancel: expected 1 argument, got %zu",
-                         valk_lval_list_count(a));
+    return valk_lval_err("sse/cancel: expected 1 argument, got %llu",
+                         (unsigned long long)valk_lval_list_count(a));
   }
 
   valk_lval_t *stream_ref = valk_lval_list_nth(a, 0);
@@ -375,8 +375,8 @@ static valk_lval_t *valk_builtin_sse_stream_id(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
   if (valk_lval_list_count(a) != 1) {
-    return valk_lval_err("sse/stream-id: expected 1 argument, got %zu",
-                         valk_lval_list_count(a));
+    return valk_lval_err("sse/stream-id: expected 1 argument, got %llu",
+                         (unsigned long long)valk_lval_list_count(a));
   }
 
   valk_lval_t *stream_ref = valk_lval_list_nth(a, 0);
@@ -402,8 +402,8 @@ static valk_lval_t *valk_builtin_sse_cancel_by_id(valk_lenv_t *e, valk_lval_t *a
   UNUSED(e);
 
   if (valk_lval_list_count(a) != 1) {
-    return valk_lval_err("sse/cancel-by-id: expected 1 argument, got %zu",
-                         valk_lval_list_count(a));
+    return valk_lval_err("sse/cancel-by-id: expected 1 argument, got %llu",
+                         (unsigned long long)valk_lval_list_count(a));
   }
 
   valk_lval_t *id_arg = valk_lval_list_nth(a, 0);
@@ -412,7 +412,7 @@ static valk_lval_t *valk_builtin_sse_cancel_by_id(valk_lenv_t *e, valk_lval_t *a
     return valk_lval_err("sse/cancel-by-id: argument must be a stream ID (number)");
   }
 
-  uint64_t id = (uint64_t)id_arg->num;
+  u64 id = (u64)id_arg->num;
   valk_sse_manager_t *mgr = valk_sse_get_manager();
 
   valk_sse_stream_t *stream = valk_sse_manager_find_by_id(mgr, id);
@@ -433,25 +433,25 @@ static valk_lval_t *valk_builtin_sse_cancel_by_id(valk_lenv_t *e, valk_lval_t *a
 static valk_lval_t *valk_builtin_sse_shutdown_all(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
-  size_t argc = valk_lval_list_count(a);
+  u64 argc = valk_lval_list_count(a);
   if (argc > 1) {
-    return valk_lval_err("sse/shutdown-all: expected 0-1 arguments, got %zu", argc);
+    return valk_lval_err("sse/shutdown-all: expected 0-1 arguments, got %llu", (unsigned long long)argc);
   }
 
-  uint64_t drain_timeout_ms = 0;
+  u64 drain_timeout_ms = 0;
   if (argc == 1) {
     valk_lval_t *timeout_arg = valk_lval_list_nth(a, 0);
     if (LVAL_TYPE(timeout_arg) != LVAL_NUM) {
       return valk_lval_err("sse/shutdown-all: argument must be a number (milliseconds)");
     }
-    drain_timeout_ms = (uint64_t)timeout_arg->num;
+    drain_timeout_ms = (u64)timeout_arg->num;
   }
 
   valk_sse_manager_t *mgr = valk_sse_get_manager();
 
   if (drain_timeout_ms == 0) {
     // Immediate close
-    size_t closed = valk_sse_manager_force_close_all(mgr);
+    u64 closed = valk_sse_manager_force_close_all(mgr);
     return valk_lval_num((long)closed);
   } else {
     // Graceful shutdown
@@ -469,8 +469,8 @@ static valk_lval_t *valk_builtin_sse_stream_count(valk_lenv_t *e, valk_lval_t *a
   UNUSED(e);
 
   if (valk_lval_list_count(a) != 0) {
-    return valk_lval_err("sse/stream-count: expected 0 arguments, got %zu",
-                         valk_lval_list_count(a));
+    return valk_lval_err("sse/stream-count: expected 0 arguments, got %llu",
+                         (unsigned long long)valk_lval_list_count(a));
   }
 
   valk_sse_manager_t *mgr = valk_sse_get_manager();

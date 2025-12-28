@@ -1,4 +1,5 @@
 #pragma once
+#include "types.h"
 
 #include "aio.h"
 
@@ -46,8 +47,8 @@ struct valk_lval_t *valk_http2_client_request_with_headers_impl(struct valk_lenv
                                                     struct valk_lval_t *headers,
                                                     struct valk_lval_t *callback);
 
-int valk_http2_stream_reset(valk_aio_handle_t *conn, int32_t stream_id, uint32_t error_code);
+int valk_http2_stream_reset(valk_aio_handle_t *conn, i32 stream_id, u32 error_code);
 
-int valk_http2_submit_goaway(valk_aio_handle_t *conn, uint32_t error_code);
+int valk_http2_submit_goaway(valk_aio_handle_t *conn, u32 error_code);
 
 void valk_http2_flush_pending(valk_aio_handle_t *conn);

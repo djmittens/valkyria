@@ -1,17 +1,16 @@
 #pragma once
 
-#include <stdint.h>
 #include <stddef.h>
-#include <stdbool.h>
 #include <sys/types.h>
+#include "types.h"
 
 typedef struct valk_http2_session valk_http2_session_t;
 
 typedef struct valk_http2_header {
-  const uint8_t *name;
-  size_t name_len;
-  const uint8_t *value;
-  size_t value_len;
+  const u8 *name;
+  u64 name_len;
+  const u8 *value;
+  u64 value_len;
 } valk_http2_header_t;
 
 typedef struct valk_http2_data_provider valk_http2_data_provider_t;
@@ -77,9 +76,9 @@ typedef enum {
 } valk_http2_lib_error_e;
 
 typedef ssize_t (*valk_http2_data_read_cb)(valk_http2_session_t *session,
-                                           int32_t stream_id,
-                                           uint8_t *buf, size_t len,
-                                           uint32_t *flags, void *source);
+                                           i32 stream_id,
+                                           u8 *buf, u64 len,
+                                           u32 *flags, void *source);
 
 struct valk_http2_data_provider {
   void *source;

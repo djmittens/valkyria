@@ -5,17 +5,17 @@
 #include <string.h>
 #include <uv.h>
 
-#include "../common.h"
-#include "../log.h"
-#include "../memory.h"
-#include "../parser.h"
+#include "common.h"
+#include "log.h"
+#include "memory.h"
+#include "parser.h"
 
 // ============================================================================
 // Global State
 // ============================================================================
 
 // Global stream ID counter for debugging/tracking
-static uint64_t g_sse_stream_id = 0;
+static u64 g_sse_stream_id = 0;
 
 // ============================================================================
 // Constants
@@ -29,8 +29,8 @@ static uint64_t g_sse_stream_id = 0;
 // ============================================================================
 
 static nghttp2_ssize __sse_data_read_callback(
-    nghttp2_session *session, int32_t stream_id, uint8_t *buf, size_t length,
-    uint32_t *data_flags, nghttp2_data_source *source, void *user_data);
+    nghttp2_session *session, i32 stream_id, u8 *buf, size_t length,
+    u32 *data_flags, nghttp2_data_source *source, void *user_data);
 
 static void __sse_event_free(valk_sse_event_t *event);
 
@@ -44,7 +44,7 @@ void valk_http2_flush_pending(valk_aio_handle_t *conn);
 valk_sse_stream_t *valk_sse_stream_new(
     valk_aio_handle_t *conn,
     nghttp2_session *session,
-    int32_t stream_id,
+    i32 stream_id,
     nghttp2_data_provider2 *data_prd_out) {
 
   if (!conn || !session || !data_prd_out) {
@@ -89,7 +89,7 @@ valk_sse_stream_t *valk_sse_stream_new(
   stream->data_deferred = true;
 
   // Initialize activity tracking
-  uint64_t now = uv_hrtime() / 1000000;
+  u64 now = uv_hrtime() / 1000000;
   stream->created_at_ms = now;
   stream->last_activity_ms = now;
   stream->idle_timeout_ms = 0;  // No timeout by default
@@ -98,7 +98,7 @@ valk_sse_stream_t *valk_sse_stream_new(
   data_prd_out->source.ptr = stream;
   data_prd_out->read_callback = __sse_data_read_callback;
 
-  VALK_DEBUG("SSE: created stream id=%lu, http2_stream=%d", stream->id, stream_id);
+  VALK_DEBUG("SSE: created stream id=%llu, http2_stream=%d", (unsigned long long)stream->id, stream_id);
 
   return stream;
 }
@@ -113,7 +113,7 @@ void valk_sse_stream_close(valk_sse_stream_t *stream) {
     return;
   }
 
-  VALK_DEBUG("SSE: closing stream id=%lu (http2_stream=%d)", stream->id, stream->stream_id);
+  VALK_DEBUG("SSE: closing stream id=%llu (http2_stream=%d)", (unsigned long long)stream->id, stream->stream_id);
 
   // Set state to closed
   stream->state = VALK_SSE_CLOSED;
@@ -174,29 +174,29 @@ void valk_sse_stream_free(valk_sse_stream_t *stream) {
 // ============================================================================
 
 int valk_sse_send_event(valk_sse_stream_t *stream, const char *event_type,
-                        const char *data, size_t len, uint64_t id) {
+                        const char *data, u64 len, u64 id) {
   if (!stream || !data) {
     return -1;
   }
 
   // Validate stream is open
   if (stream->state != VALK_SSE_OPEN) {
-    VALK_DEBUG("SSE: send_event failed, stream %lu not open (state=%d)",
+    VALK_DEBUG("SSE: send_event failed, stream %llu not open (state=%d)",
                stream->id, stream->state);
     return -1;
   }
 
   // Check backpressure
   if (stream->queue_len >= stream->queue_max) {
-    VALK_DEBUG("SSE: send_event backpressure, stream %lu queue full (%zu/%zu)",
+    VALK_DEBUG("SSE: send_event backpressure, stream %llu queue full (%zu/%zu)",
                stream->id, stream->queue_len, stream->queue_max);
     return -2;  // EAGAIN - queue full
   }
 
   // Calculate event size (SSE format: "id: X\nevent: Y\ndata: Z\n\n")
-  size_t event_size = 0;
+  u64 event_size = 0;
   if (id > 0) {
-    event_size += snprintf(NULL, 0, "id: %lu\n", id);
+    event_size += snprintf(NULL, 0, "id: %llu\n", (unsigned long long)id);
   }
   if (event_type) {
     event_size += snprintf(NULL, 0, "event: %s\n", event_type);
@@ -217,7 +217,7 @@ int valk_sse_send_event(valk_sse_stream_t *stream, const char *event_type,
   char *p = buf;
 
   if (id > 0) {
-    p += sprintf(p, "id: %lu\n", id);
+    p += sprintf(p, "id: %llu\n", (unsigned long long)id);
   }
   if (event_type) {
     p += sprintf(p, "event: %s\n", event_type);
@@ -249,7 +249,7 @@ int valk_sse_send_event(valk_sse_stream_t *stream, const char *event_type,
   // Touch activity timestamp
   valk_sse_touch_activity(stream);
 
-  VALK_DEBUG("SSE: enqueued event to stream %lu (queue_len=%zu, event_size=%zu)",
+  VALK_DEBUG("SSE: enqueued event to stream %llu (queue_len=%zu, event_size=%zu)",
              stream->id, stream->queue_len, event->data_len);
 
   // If data_deferred, resume the stream
@@ -267,12 +267,12 @@ int valk_sse_send_event(valk_sse_stream_t *stream, const char *event_type,
   return 0;
 }
 
-int valk_sse_send(valk_sse_stream_t *stream, const char *data, size_t len) {
+int valk_sse_send(valk_sse_stream_t *stream, const char *data, u64 len) {
   // Wrapper calling valk_sse_send_event with NULL event_type and 0 id
   return valk_sse_send_event(stream, NULL, data, len, 0);
 }
 
-int valk_sse_send_retry(valk_sse_stream_t *stream, uint32_t retry_ms) {
+int valk_sse_send_retry(valk_sse_stream_t *stream, u32 retry_ms) {
   if (!stream) {
     return -1;
   }
@@ -346,7 +346,7 @@ bool valk_sse_is_writable(valk_sse_stream_t *stream) {
   return stream->queue_len < stream->queue_max;
 }
 
-size_t valk_sse_queue_len(valk_sse_stream_t *stream) {
+u64 valk_sse_queue_len(valk_sse_stream_t *stream) {
   if (!stream) {
     return 0;
   }
@@ -367,8 +367,8 @@ static void __sse_event_free(valk_sse_event_t *event) {
 }
 
 static nghttp2_ssize __sse_data_read_callback(
-    nghttp2_session *session, int32_t stream_id, uint8_t *buf, size_t length,
-    uint32_t *data_flags, nghttp2_data_source *source, void *user_data) {
+    nghttp2_session *session, i32 stream_id, u8 *buf, size_t length,
+    u32 *data_flags, nghttp2_data_source *source, void *user_data) {
 
   UNUSED(session);
   UNUSED(stream_id);
@@ -385,19 +385,19 @@ static nghttp2_ssize __sse_data_read_callback(
 
   // If closed, set EOF flag and return 0
   if (stream->state == VALK_SSE_CLOSED) {
-    VALK_DEBUG("SSE: stream %lu closed, returning EOF", stream->id);
+    VALK_DEBUG("SSE: stream %llu closed, returning EOF", (unsigned long long)stream->id);
     *data_flags |= NGHTTP2_DATA_FLAG_EOF;
     return 0;
   }
 
   // If pending_offset < pending_len, copy remaining pending data
   if (stream->pending_offset < stream->pending_len) {
-    size_t remaining = stream->pending_len - stream->pending_offset;
-    size_t to_send = remaining < length ? remaining : length;
+    u64 remaining = stream->pending_len - stream->pending_offset;
+    u64 to_send = remaining < length ? remaining : length;
     memcpy(buf, stream->pending_data + stream->pending_offset, to_send);
     stream->pending_offset += to_send;
 
-    VALK_DEBUG("SSE: stream %lu flushing pending (%zu bytes, %zu remaining)",
+    VALK_DEBUG("SSE: stream %llu flushing pending (%zu bytes, %zu remaining)",
                stream->id, to_send, remaining - to_send);
 
     return (nghttp2_ssize)to_send;
@@ -406,7 +406,7 @@ static nghttp2_ssize __sse_data_read_callback(
   // If queue empty, set data_deferred=true and return NGHTTP2_ERR_DEFERRED
   if (!stream->queue_head) {
     stream->data_deferred = true;
-    VALK_DEBUG("SSE: stream %lu queue empty, deferring", stream->id);
+    VALK_DEBUG("SSE: stream %llu queue empty, deferring", (unsigned long long)stream->id);
     return NGHTTP2_ERR_DEFERRED;
   }
 
@@ -420,10 +420,10 @@ static nghttp2_ssize __sse_data_read_callback(
 
   // Copy event data to pending buffer (grow if needed)
   if (event->data_len > stream->pending_capacity) {
-    size_t new_capacity = event->data_len;
+    u64 new_capacity = event->data_len;
     char *new_buf = realloc(stream->pending_data, new_capacity);
     if (!new_buf) {
-      VALK_ERROR("SSE: failed to grow pending buffer for stream %lu", stream->id);
+      VALK_ERROR("SSE: failed to grow pending buffer for stream %llu", (unsigned long long)stream->id);
       __sse_event_free(event);
       *data_flags |= NGHTTP2_DATA_FLAG_EOF;
       return 0;
@@ -440,20 +440,20 @@ static nghttp2_ssize __sse_data_read_callback(
   stream->events_sent++;
   stream->bytes_sent += event->data_len;
 
-  VALK_DEBUG("SSE: stream %lu dequeued event (size=%zu, queue_len=%zu, total_events=%lu)",
-             stream->id, event->data_len, stream->queue_len, stream->events_sent);
+  VALK_DEBUG("SSE: stream %llu dequeued event (size=%zu, queue_len=%zu, total_events=%llu)",
+             stream->id, event->data_len, stream->queue_len, (unsigned long long)stream->events_sent);
 
   // Free the event
   __sse_event_free(event);
 
   // Copy from pending to output buffer
-  size_t to_send = stream->pending_len < length ? stream->pending_len : length;
+  u64 to_send = stream->pending_len < length ? stream->pending_len : length;
   memcpy(buf, stream->pending_data, to_send);
   stream->pending_offset = to_send;
 
   // If queue dropped below queue_max/2 and on_drain is set, call it
   if (stream->queue_len < stream->queue_max / 2 && stream->on_drain) {
-    VALK_DEBUG("SSE: stream %lu calling on_drain (queue_len=%zu)",
+    VALK_DEBUG("SSE: stream %llu calling on_drain (queue_len=%zu)",
                stream->id, stream->queue_len);
     stream->on_drain(stream, stream->user_data);
   }
@@ -466,16 +466,16 @@ static nghttp2_ssize __sse_data_read_callback(
 // Timeout Management
 // ============================================================================
 
-static uint64_t __get_current_time_ms(void) {
+static u64 __get_current_time_ms(void) {
   return uv_hrtime() / 1000000;
 }
 
-void valk_sse_set_idle_timeout(valk_sse_stream_t *stream, uint64_t timeout_ms) {
+void valk_sse_set_idle_timeout(valk_sse_stream_t *stream, u64 timeout_ms) {
   if (!stream) {
     return;
   }
   stream->idle_timeout_ms = timeout_ms;
-  VALK_DEBUG("SSE: stream %lu idle timeout set to %lu ms", stream->id, timeout_ms);
+  VALK_DEBUG("SSE: stream %llu idle timeout set to %llu ms", (unsigned long long)stream->id, (unsigned long long)timeout_ms);
 }
 
 void valk_sse_touch_activity(valk_sse_stream_t *stream) {
@@ -489,8 +489,8 @@ bool valk_sse_is_idle_expired(valk_sse_stream_t *stream) {
   if (!stream || stream->idle_timeout_ms == 0) {
     return false;
   }
-  uint64_t now = __get_current_time_ms();
-  uint64_t idle_time = now - stream->last_activity_ms;
+  u64 now = __get_current_time_ms();
+  u64 idle_time = now - stream->last_activity_ms;
   return idle_time >= stream->idle_timeout_ms;
 }
 
@@ -498,7 +498,7 @@ bool valk_sse_is_idle_expired(valk_sse_stream_t *stream) {
 // Stream Cancellation
 // ============================================================================
 
-int valk_sse_stream_cancel(valk_sse_stream_t *stream, uint32_t error_code) {
+int valk_sse_stream_cancel(valk_sse_stream_t *stream, u32 error_code) {
   if (!stream) {
     return -1;
   }
@@ -507,15 +507,15 @@ int valk_sse_stream_cancel(valk_sse_stream_t *stream, uint32_t error_code) {
     return 0;  // Already closed
   }
 
-  VALK_INFO("SSE: cancelling stream id=%lu with error_code=%u", stream->id, error_code);
+  VALK_INFO("SSE: cancelling stream id=%llu with error_code=%u", (unsigned long long)stream->id, error_code);
 
   // Submit RST_STREAM to HTTP/2 layer
   if (stream->session && stream->stream_id > 0) {
     int rv = nghttp2_submit_rst_stream(stream->session, NGHTTP2_FLAG_NONE,
                                         stream->stream_id, error_code);
     if (rv != 0) {
-      VALK_WARN("SSE: failed to submit RST_STREAM for stream %lu: %s",
-                stream->id, nghttp2_strerror(rv));
+      VALK_WARN("SSE: failed to submit RST_STREAM for stream %llu: %s",
+                (unsigned long long)stream->id, nghttp2_strerror(rv));
     } else {
       valk_http2_flush_pending(stream->conn);
     }
@@ -570,7 +570,7 @@ void valk_sse_manager_add(valk_sse_manager_t *mgr, valk_sse_stream_t *stream) {
   stream->created_at_ms = __get_current_time_ms();
   stream->last_activity_ms = stream->created_at_ms;
 
-  VALK_DEBUG("SSE manager: added stream %lu (count=%zu)", stream->id, mgr->stream_count);
+  VALK_DEBUG("SSE manager: added stream %llu (count=%zu)", (unsigned long long)stream->id, mgr->stream_count);
 }
 
 void valk_sse_manager_remove(valk_sse_manager_t *mgr, valk_sse_stream_t *stream) {
@@ -583,14 +583,14 @@ void valk_sse_manager_remove(valk_sse_manager_t *mgr, valk_sse_stream_t *stream)
     if (*pp == stream) {
       *pp = stream->next;
       mgr->stream_count--;
-      VALK_DEBUG("SSE manager: removed stream %lu (count=%zu)", stream->id, mgr->stream_count);
+      VALK_DEBUG("SSE manager: removed stream %llu (count=%zu)", (unsigned long long)stream->id, mgr->stream_count);
       return;
     }
     pp = &(*pp)->next;
   }
 }
 
-valk_sse_stream_t *valk_sse_manager_find_by_id(valk_sse_manager_t *mgr, uint64_t id) {
+valk_sse_stream_t *valk_sse_manager_find_by_id(valk_sse_manager_t *mgr, u64 id) {
   if (!mgr) {
     return NULL;
   }
@@ -603,20 +603,20 @@ valk_sse_stream_t *valk_sse_manager_find_by_id(valk_sse_manager_t *mgr, uint64_t
   return NULL;
 }
 
-size_t valk_sse_manager_check_timeouts(valk_sse_manager_t *mgr) {
+u64 valk_sse_manager_check_timeouts(valk_sse_manager_t *mgr) {
   if (!mgr) {
     return 0;
   }
 
-  size_t timed_out = 0;
+  u64 timed_out = 0;
   valk_sse_stream_t *stream = mgr->streams;
 
   while (stream) {
     valk_sse_stream_t *next = stream->next;
 
     if (stream->state == VALK_SSE_OPEN && valk_sse_is_idle_expired(stream)) {
-      VALK_INFO("SSE: stream %lu timed out (idle for %lu ms)",
-                stream->id, stream->idle_timeout_ms);
+      VALK_INFO("SSE: stream %llu timed out (idle for %llu ms)",
+                (unsigned long long)stream->id, (unsigned long long)stream->idle_timeout_ms);
 
       if (stream->on_timeout) {
         stream->on_timeout(stream, stream->user_data);
@@ -632,7 +632,7 @@ size_t valk_sse_manager_check_timeouts(valk_sse_manager_t *mgr) {
   return timed_out;
 }
 
-int valk_sse_manager_graceful_shutdown(valk_sse_manager_t *mgr, uint64_t drain_timeout_ms) {
+int valk_sse_manager_graceful_shutdown(valk_sse_manager_t *mgr, u64 drain_timeout_ms) {
   if (!mgr) {
     return -1;
   }
@@ -641,7 +641,7 @@ int valk_sse_manager_graceful_shutdown(valk_sse_manager_t *mgr, uint64_t drain_t
     return 0;  // Already shutting down
   }
 
-  VALK_INFO("SSE manager: initiating graceful shutdown (drain_timeout=%lu ms, streams=%zu)",
+  VALK_INFO("SSE manager: initiating graceful shutdown (drain_timeout=%llu ms, streams=%zu)",
             drain_timeout_ms, mgr->stream_count);
 
   mgr->shutting_down = true;
@@ -657,12 +657,12 @@ int valk_sse_manager_graceful_shutdown(valk_sse_manager_t *mgr, uint64_t drain_t
   return 0;
 }
 
-size_t valk_sse_manager_force_close_all(valk_sse_manager_t *mgr) {
+u64 valk_sse_manager_force_close_all(valk_sse_manager_t *mgr) {
   if (!mgr) {
     return 0;
   }
 
-  size_t closed = 0;
+  u64 closed = 0;
   valk_sse_stream_t *stream = mgr->streams;
 
   while (stream) {
@@ -674,6 +674,6 @@ size_t valk_sse_manager_force_close_all(valk_sse_manager_t *mgr) {
     stream = next;
   }
 
-  VALK_INFO("SSE manager: force closed %zu streams", closed);
+  VALK_INFO("SSE manager: force closed %llu streams", closed);
   return closed;
 }

@@ -1,8 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdbool.h>
 #include <stddef.h>
+#include "types.h"
 
 typedef struct valk_io_timer valk_io_timer_t;
 typedef struct valk_io_tcp valk_io_tcp_t;
@@ -19,7 +18,7 @@ typedef enum {
 
 typedef struct valk_io_buf {
   char *base;
-  size_t len;
+  u64 len;
 } valk_io_buf_t;
 
 typedef struct valk_io_write_req valk_io_write_req_t;

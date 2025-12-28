@@ -41,7 +41,7 @@ static inline int __vtable_nodelay(valk_aio_handle_t *conn, int enable) {
   return ops->nodelay(__conn_tcp(conn), enable);
 }
 
-static void __vtable_alloc_cb(valk_io_tcp_t *tcp, size_t suggested, void **buf, size_t *buflen) {
+static void __vtable_alloc_cb(valk_io_tcp_t *tcp, u64 suggested, void **buf, u64 *buflen) {
   UNUSED(suggested);
   valk_aio_handle_t *conn = tcp->user_data;
   *buf = NULL;
@@ -110,7 +110,7 @@ static void __valk_http2_response_free(valk_arc_box *box) {
     res->body = NULL;
   }
   if (res->headers.items) {
-    for (size_t i = 0; i < res->headers.count; i++) {
+    for (u64 i = 0; i < res->headers.count; i++) {
       if (res->headers.items[i].name) free((void*)res->headers.items[i].name);
       if (res->headers.items[i].value) free((void*)res->headers.items[i].value);
     }
@@ -144,8 +144,8 @@ static int __http_client_on_frame_recv_callback(nghttp2_session *session,
 }
 
 static int __http_client_on_stream_close_callback(nghttp2_session *session,
-                                                  int32_t stream_id,
-                                                  uint32_t error_code,
+                                                  i32 stream_id,
+                                                  u32 error_code,
                                                   void *user_data) {
   UNUSED(user_data);
   __http2_req_res_t *reqres =
@@ -168,8 +168,8 @@ static int __http_client_on_stream_close_callback(nghttp2_session *session,
 }
 
 static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
-                                              uint8_t flags, int32_t stream_id,
-                                              const uint8_t *data, size_t len,
+                                              u8 flags, i32 stream_id,
+                                              const u8 *data, size_t len,
                                               void *user_data) {
   (void)flags;
   (void)user_data;
@@ -179,10 +179,10 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
 
   if (reqres) {
     VALK_INFO("C <--- S (DATA chunk) len=%lu", (unsigned long)len);
-    size_t offset = reqres->res->bodyLen;
+    u64 offset = reqres->res->bodyLen;
     VALK_ASSERT((offset + len) < reqres->res->bodyCapacity,
-                "Response was too big %ld > %ld", offset + len,
-                reqres->res->bodyCapacity);
+                "Response was too big %llu > %llu", (unsigned long long)(offset + len),
+                (unsigned long long)reqres->res->bodyCapacity);
     memcpy((char *)reqres->res->body + offset, data, len);
     reqres->res->bodyLen = offset + len;
     ((char *)reqres->res->body)[reqres->res->bodyLen] = '\0';
@@ -272,8 +272,8 @@ static void __http2_connect_impl(valk_aio_handle_t *conn, int status) {
   const char *sni = (client->hostname[0] != '\0') ? client->hostname : "localhost";
   SSL_set_tlsext_host_name(client->connection->http.io.ssl.ssl, sni);
 
-  uint8_t *write_buf = valk_http2_conn_write_buf_data(client->connection);
-  size_t write_available = valk_http2_conn_write_buf_available(client->connection);
+  u8 *write_buf = valk_http2_conn_write_buf_data(client->connection);
+  u64 write_available = valk_http2_conn_write_buf_available(client->connection);
   valk_buffer_t Out = {
       .items = write_buf + client->connection->http.io.write_pos, 
       .count = 0, 
@@ -450,7 +450,7 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
   memset(reqres->res, 0, sizeof(valk_http2_response_t));
   da_init(&reqres->res->headers);
 
-  size_t client_response_limit = 64 * 1024 * 1024;
+  u64 client_response_limit = 64 * 1024 * 1024;
   reqres->res->body = valk_mem_alloc(client_response_limit);
   reqres->res->bodyLen = 0;
   reqres->res->bodyCapacity = client_response_limit;
@@ -458,41 +458,41 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
   VALK_TRACE("Box: %p, item: %p", (void*)box, reqres->res);
 
   VALK_WITH_ALLOC(pair->req->allocator) {
-    const size_t NUM_PSEUDO_HEADERS = 4;
-    size_t hdrCount = pair->req->headers.count + NUM_PSEUDO_HEADERS;
+    const u64 NUM_PSEUDO_HEADERS = 4;
+    u64 hdrCount = pair->req->headers.count + NUM_PSEUDO_HEADERS;
     struct valk_http2_header_t *phds = pair->req->headers.items;
 
     nghttp2_nv hdrs[hdrCount];
 
-    hdrs[0].name = (uint8_t *)":method";
-    hdrs[0].value = (uint8_t *)pair->req->method;
+    hdrs[0].name = (u8 *)":method";
+    hdrs[0].value = (u8 *)pair->req->method;
     hdrs[0].namelen = sizeof(":method") - 1;
     hdrs[0].valuelen = strlen(pair->req->method);
     hdrs[0].flags =
         NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
 
-    hdrs[1].name = (uint8_t *)":scheme";
-    hdrs[1].value = (uint8_t *)pair->req->scheme;
+    hdrs[1].name = (u8 *)":scheme";
+    hdrs[1].value = (u8 *)pair->req->scheme;
     hdrs[1].namelen = sizeof(":scheme") - 1;
     hdrs[1].valuelen = strlen(pair->req->scheme);
     hdrs[1].flags =
         NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
 
-    hdrs[2].name = (uint8_t *)":authority";
-    hdrs[2].value = (uint8_t *)pair->req->authority;
+    hdrs[2].name = (u8 *)":authority";
+    hdrs[2].value = (u8 *)pair->req->authority;
     hdrs[2].namelen = sizeof(":authority") - 1;
     hdrs[2].valuelen = strlen(pair->req->authority);
     hdrs[2].flags =
         NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
 
-    hdrs[3].name = (uint8_t *)":path";
-    hdrs[3].value = (uint8_t *)pair->req->path;
+    hdrs[3].name = (u8 *)":path";
+    hdrs[3].value = (u8 *)pair->req->path;
     hdrs[3].namelen = sizeof(":path") - 1;
     hdrs[3].valuelen = strlen(pair->req->path);
     hdrs[3].flags =
         NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
 
-    for (size_t i = 0; i < pair->req->headers.count; ++i) {
+    for (u64 i = 0; i < pair->req->headers.count; ++i) {
       hdrs[NUM_PSEUDO_HEADERS + i].name = phds[i].name;
       hdrs[NUM_PSEUDO_HEADERS + i].value = phds[i].value;
       hdrs[NUM_PSEUDO_HEADERS + i].namelen = phds[i].nameLen;
@@ -572,7 +572,7 @@ typedef struct {
 } valk_http2_client_request_ctx_t;
 
 static char *__client_arena_strdup(const char *s) {
-  size_t len = strlen(s);
+  u64 len = strlen(s);
   char *dup = valk_mem_alloc(len + 1);
   memcpy(dup, s, len + 1);
   return dup;
@@ -604,7 +604,7 @@ static void __http2_client_request_connect_cb(void *arg, valk_arc_box *result) {
 
   VALK_INFO("http2/client-request: connected to %s:%d", ctx->host, ctx->port);
 
-  size_t arena_bytes = sizeof(valk_mem_arena_t) + (8 * 1024 * 1024) + (64 * 1024);
+  u64 arena_bytes = sizeof(valk_mem_arena_t) + (8 * 1024 * 1024) + (64 * 1024);
   valk_mem_arena_t *arena = malloc(arena_bytes);
   valk_mem_arena_init(arena, arena_bytes - sizeof(*arena));
 
@@ -620,15 +620,15 @@ static void __http2_client_request_connect_cb(void *arg, valk_arc_box *result) {
     da_init(&req->headers);
 
     if (ctx->headers && LVAL_TYPE(ctx->headers) == LVAL_QEXPR) {
-      for (size_t i = 0; i < valk_lval_list_count(ctx->headers); i++) {
+      for (u64 i = 0; i < valk_lval_list_count(ctx->headers); i++) {
         valk_lval_t *pair = valk_lval_list_nth(ctx->headers, i);
         if (LVAL_TYPE(pair) == LVAL_QEXPR && valk_lval_list_count(pair) >= 2) {
           valk_lval_t *name_val = valk_lval_list_nth(pair, 0);
           valk_lval_t *value_val = valk_lval_list_nth(pair, 1);
           if (LVAL_TYPE(name_val) == LVAL_STR && LVAL_TYPE(value_val) == LVAL_STR) {
             struct valk_http2_header_t hdr;
-            hdr.name = (uint8_t *)__client_arena_strdup(name_val->str);
-            hdr.value = (uint8_t *)__client_arena_strdup(value_val->str);
+            hdr.name = (u8 *)__client_arena_strdup(name_val->str);
+            hdr.value = (u8 *)__client_arena_strdup(value_val->str);
             hdr.nameLen = strlen(name_val->str);
             hdr.valueLen = strlen(value_val->str);
             da_add(&req->headers, hdr);

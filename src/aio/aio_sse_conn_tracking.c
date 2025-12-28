@@ -9,7 +9,7 @@ void valk_sse_conn_stream_register(valk_sse_stream_t *stream) {
   stream->next = stream->conn->http.sse_streams;
   stream->conn->http.sse_streams = stream;
 
-  VALK_DEBUG("SSE: registered stream id=%lu with connection", stream->id);
+  VALK_DEBUG("SSE: registered stream id=%llu with connection", (unsigned long long)stream->id);
 }
 
 void valk_sse_conn_stream_unregister(valk_sse_stream_t *stream) {
@@ -22,13 +22,13 @@ void valk_sse_conn_stream_unregister(valk_sse_stream_t *stream) {
     if (*pp == stream) {
       *pp = stream->next;
       stream->next = nullptr;
-      VALK_DEBUG("SSE: unregistered stream id=%lu from connection", stream->id);
+      VALK_DEBUG("SSE: unregistered stream id=%llu from connection", (unsigned long long)stream->id);
       return;
     }
     pp = &(*pp)->next;
   }
 
-  VALK_WARN("SSE: stream id=%lu not found in connection's stream list", stream->id);
+  VALK_WARN("SSE: stream id=%llu not found in connection's stream list", (unsigned long long)stream->id);
 }
 
 void valk_sse_conn_close_all_streams(valk_aio_handle_t *conn) {
@@ -37,7 +37,7 @@ void valk_sse_conn_close_all_streams(valk_aio_handle_t *conn) {
   }
 
   valk_sse_stream_t *stream = conn->http.sse_streams;
-  size_t count = 0;
+  u64 count = 0;
 
   while (stream) {
     valk_sse_stream_t *next = stream->next;
@@ -51,7 +51,7 @@ void valk_sse_conn_close_all_streams(valk_aio_handle_t *conn) {
   conn->http.sse_streams = nullptr;
 
   if (count > 0) {
-    VALK_INFO("SSE: closed %zu streams on connection cleanup", count);
+    VALK_INFO("SSE: closed %llu streams on connection cleanup", (unsigned long long)count);
   }
 }
 

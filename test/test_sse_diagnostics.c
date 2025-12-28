@@ -1295,7 +1295,7 @@ void test_real_aio_owner_registry(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(sys != NULL, "Failed to start AIO system");
 
   size_t count_before = valk_owner_get_count(sys);
-  uint16_t idx = valk_owner_register(sys, ":8080", 1, NULL);
+  u16 idx = valk_owner_register(sys, ":8080", 1, NULL);
   VALK_TEST_ASSERT(idx != UINT16_MAX, "Should register owner successfully");
   VALK_TEST_ASSERT(valk_owner_get_count(sys) == count_before + 1, "Owner count should increase");
 

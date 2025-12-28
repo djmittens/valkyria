@@ -14,7 +14,7 @@ void valk_conn_admission_init(valk_conn_admission_ctx_t *ctx, const valk_pressur
 void valk_conn_admission_init_from_config(valk_conn_admission_ctx_t *ctx,
                                            float high_watermark,
                                            float critical_watermark,
-                                           uint32_t backpressure_timeout_ms) {
+                                           u32 backpressure_timeout_ms) {
   if (!ctx) return;
   ctx->config = valk_pressure_config_default();
   if (high_watermark > 0.0f) ctx->config.high_watermark = high_watermark;
@@ -25,37 +25,37 @@ void valk_conn_admission_init_from_config(valk_conn_admission_ctx_t *ctx,
 
 static float slab_usage(valk_slab_t *slab) {
   if (!slab || slab->numItems == 0) return 0.0f;
-  size_t available = valk_slab_available(slab);
+  u64 available = valk_slab_available(slab);
   return 1.0f - ((float)available / (float)slab->numItems);
 }
 
-static uint64_t oldest_backpressure_age(valk_backpressure_list_t *list, uint64_t now_ms) {
+static u64 oldest_backpressure_age(valk_backpressure_list_t *list, u64 now_ms) {
   if (!list || !list->head) return 0;
   
-  uint64_t oldest = 0;
+  u64 oldest = 0;
   for (valk_aio_handle_t *h = list->head; h; h = h->http.backpressure_next) {
     if (h->http.backpressure_start_time > 0 && h->http.backpressure_start_time <= now_ms) {
-      uint64_t age = now_ms - h->http.backpressure_start_time;
+      u64 age = now_ms - h->http.backpressure_start_time;
       if (age > oldest) oldest = age;
     }
   }
   return oldest;
 }
 
-static uint64_t oldest_pending_stream_age(valk_pending_stream_queue_t *queue, uint64_t now_ms) {
+static u64 oldest_pending_stream_age(valk_pending_stream_queue_t *queue, u64 now_ms) {
   if (!queue || !queue->head) return 0;
   
-  uint64_t oldest = 0;
+  u64 oldest = 0;
   for (valk_pending_stream_t *ps = queue->head; ps; ps = ps->next) {
     if (ps->queued_time_ms > 0 && ps->queued_time_ms <= now_ms) {
-      uint64_t age = now_ms - ps->queued_time_ms;
+      u64 age = now_ms - ps->queued_time_ms;
       if (age > oldest) oldest = age;
     }
   }
   return oldest;
 }
 
-valk_pressure_state_t valk_conn_admission_snapshot(valk_aio_system_t *sys, uint64_t now_ms) {
+valk_pressure_state_t valk_conn_admission_snapshot(valk_aio_system_t *sys, u64 now_ms) {
   valk_pressure_state_t state = {0};
   if (!sys) return state;
 
@@ -66,10 +66,10 @@ valk_pressure_state_t valk_conn_admission_snapshot(valk_aio_system_t *sys, uint6
   if (sys->pending_streams.pool.capacity > 0) {
     state.pending_stream_usage = (float)sys->pending_streams.count /
                                   (float)sys->pending_streams.pool.capacity;
-    state.pending_stream_count = (uint32_t)sys->pending_streams.count;
+    state.pending_stream_count = (u32)sys->pending_streams.count;
   }
 
-  state.backpressure_queue_len = (uint32_t)sys->backpressure.size;
+  state.backpressure_queue_len = (u32)sys->backpressure.size;
   state.oldest_backpressure_age_ms = oldest_backpressure_age(&sys->backpressure, now_ms);
   state.oldest_pending_stream_age_ms = oldest_pending_stream_age(&sys->pending_streams, now_ms);
 
@@ -81,7 +81,7 @@ float valk_conn_admission_random(valk_conn_admission_ctx_t *ctx) {
   return (float)(ctx->random_state >> 16) / 32768.0f;
 }
 
-void valk_conn_admission_seed(valk_conn_admission_ctx_t *ctx, uint32_t seed) {
+void valk_conn_admission_seed(valk_conn_admission_ctx_t *ctx, u32 seed) {
   if (ctx) ctx->random_state = seed;
 }
 

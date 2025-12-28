@@ -53,7 +53,7 @@ void test_event_loop_metrics_set_handles(VALK_TEST_ARGS()) {
 
   valk_event_loop_metrics_v2_set_handles(&m, 42);
 
-  int64_t handles_val = atomic_load(&m.handles->value);
+  i64 handles_val = atomic_load(&m.handles->value);
   VALK_TEST_ASSERT(handles_val == 42, "handles should be 42, got %lld", (long long)handles_val);
 
   valk_event_loop_metrics_v2_set_handles(&m, 100);
@@ -99,8 +99,8 @@ void test_event_loop_metrics_multiple_loops(VALK_TEST_ARGS()) {
   valk_event_loop_metrics_v2_set_handles(&m1, 10);
   valk_event_loop_metrics_v2_set_handles(&m2, 20);
 
-  int64_t h1 = atomic_load(&m1.handles->value);
-  int64_t h2 = atomic_load(&m2.handles->value);
+  i64 h1 = atomic_load(&m1.handles->value);
+  i64 h2 = atomic_load(&m2.handles->value);
 
   VALK_TEST_ASSERT(h1 == 10, "loop1 handles should be 10");
   VALK_TEST_ASSERT(h2 == 20, "loop2 handles should be 20");
@@ -132,10 +132,10 @@ void test_event_loop_metrics_handles_large_values(VALK_TEST_ARGS()) {
   bool result = valk_event_loop_metrics_v2_init(&m, "large_handles_test");
   VALK_TEST_ASSERT(result == true, "Init should succeed");
 
-  int64_t large_val = 1LL << 30;
+  i64 large_val = 1LL << 30;
   valk_event_loop_metrics_v2_set_handles(&m, large_val);
 
-  int64_t handles_val = atomic_load(&m.handles->value);
+  i64 handles_val = atomic_load(&m.handles->value);
   VALK_TEST_ASSERT(handles_val == large_val, "handles should be large value");
 
   VALK_PASS();
@@ -154,7 +154,7 @@ void test_event_loop_metrics_rapid_handle_updates(VALK_TEST_ARGS()) {
     valk_event_loop_metrics_v2_set_handles(&m, i);
   }
 
-  int64_t final_val = atomic_load(&m.handles->value);
+  i64 final_val = atomic_load(&m.handles->value);
   VALK_TEST_ASSERT(final_val == 9999, "Final value should be 9999");
 
   VALK_PASS();
@@ -210,7 +210,7 @@ void test_event_loop_metrics_zero_handles(VALK_TEST_ARGS()) {
 
   valk_event_loop_metrics_v2_set_handles(&m, 0);
 
-  int64_t handles_val = atomic_load(&m.handles->value);
+  i64 handles_val = atomic_load(&m.handles->value);
   VALK_TEST_ASSERT(handles_val == 0, "handles should be 0");
 
   VALK_PASS();
@@ -227,7 +227,7 @@ void test_event_loop_metrics_negative_handles(VALK_TEST_ARGS()) {
 
   valk_event_loop_metrics_v2_set_handles(&m, -1);
 
-  int64_t handles_val = atomic_load(&m.handles->value);
+  i64 handles_val = atomic_load(&m.handles->value);
   VALK_TEST_ASSERT(handles_val == -1, "handles should accept negative value");
 
   VALK_PASS();
@@ -345,7 +345,7 @@ void test_event_loop_metrics_handle_updates_persist(VALK_TEST_ARGS()) {
   valk_event_loop_metrics_v2_set_handles(&m, 50);
   valk_event_loop_metrics_v2_set_handles(&m, 75);
 
-  int64_t final = atomic_load(&m.handles->value);
+  i64 final = atomic_load(&m.handles->value);
   VALK_TEST_ASSERT(final == 75, "final handle value should be 75");
 
   VALK_PASS();

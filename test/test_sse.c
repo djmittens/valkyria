@@ -167,7 +167,7 @@ void test_sse_event_format_manual(VALK_TEST_ARGS()) {
   // Verify format with id, event type, and data
   const char *event_type = "update";
   const char *data = "Hello, SSE!";
-  uint64_t id = 42;
+  u64 id = 42;
 
   char buf[512];
   int len = snprintf(buf, sizeof(buf), "id: %llu\nevent: %s\ndata: %s\n\n",
@@ -192,7 +192,7 @@ void test_sse_event_format_manual(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(strstr(buf, "data: Hello, SSE!\n") != NULL, "Missing data field");
 
   // Verify retry format
-  uint32_t retry_ms = 5000;
+  u32 retry_ms = 5000;
   len = snprintf(buf, sizeof(buf), "retry: %u\n\n", retry_ms);
   VALK_TEST_ASSERT(len > 0, "Failed to format retry directive");
   VALK_TEST_ASSERT(strstr(buf, "retry: 5000\n") != NULL, "Missing retry field");

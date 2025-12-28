@@ -13,7 +13,7 @@ void test_2mb_string_concat(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(heap != NULL, "GC heap should be created");
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
-  valk_thread_ctx.allocator = heap;
+  valk_thread_ctx.allocator = (valk_mem_allocator_t *)heap;
   valk_thread_ctx.heap = heap;
 
   char kb_buf[1025];

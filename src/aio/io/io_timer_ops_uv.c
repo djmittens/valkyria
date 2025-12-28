@@ -1,5 +1,5 @@
 #include "io_timer_ops.h"
-#include "../aio_internal.h"
+#include "aio/aio_internal.h"
 
 struct valk_io_timer {
   uv_timer_t uv;
@@ -18,7 +18,7 @@ static int timer_init(valk_aio_system_t *sys, valk_io_timer_t *timer) {
 }
 
 static int timer_start(valk_io_timer_t *timer, valk_io_timer_cb cb,
-                       uint64_t timeout_ms, uint64_t repeat_ms) {
+                       u64 timeout_ms, u64 repeat_ms) {
   timer->user_cb = cb;
   return uv_timer_start(&timer->uv, __timer_cb_adapter, timeout_ms, repeat_ms);
 }

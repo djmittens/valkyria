@@ -354,7 +354,7 @@ void test_registry_graceful_shutdown_idempotent(VALK_TEST_ARGS()) {
   valk_sse_stream_registry_t *registry = valk_aio_get_sse_registry(sys);
 
   valk_sse_registry_graceful_shutdown(registry, 5000);
-  uint64_t first_deadline = registry->shutdown_deadline_ms;
+  u64 first_deadline = registry->shutdown_deadline_ms;
 
   int result = valk_sse_registry_graceful_shutdown(registry, 10000);
   VALK_TEST_ASSERT(result == 0, "Should succeed");

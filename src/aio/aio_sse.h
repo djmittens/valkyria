@@ -4,7 +4,6 @@
 #include "aio.h"
 #include <nghttp2/nghttp2.h>
 #include <stdbool.h>
-#include <stdint.h>
 
 // Forward declarations
 typedef struct valk_sse_stream valk_sse_stream_t;
@@ -27,21 +26,21 @@ struct valk_sse_event {
   valk_sse_event_t *next;
   char *event_type;       // NULL for default "message" event
   char *data;             // Event data (JSON, text, etc.)
-  size_t data_len;
-  uint64_t id;            // Optional event ID for resumption
-  uint32_t retry_ms;      // Optional retry hint (0 = not set)
+  u64 data_len;
+  u64 id;            // Optional event ID for resumption
+  u32 retry_ms;      // Optional retry hint (0 = not set)
 };
 
 // SSE stream context
 struct valk_sse_stream {
   // Identity
-  uint64_t id;
+  u64 id;
   valk_sse_state_e state;
 
   // HTTP/2 context
   valk_aio_handle_t *conn;
   nghttp2_session *session;
-  int32_t stream_id;
+  i32 stream_id;
 
   // Connection tracking (linked list of streams per connection)
   valk_sse_stream_t *next;
@@ -49,25 +48,25 @@ struct valk_sse_stream {
   // Event queue (producer-consumer)
   valk_sse_event_t *queue_head;
   valk_sse_event_t *queue_tail;
-  size_t queue_len;
-  size_t queue_max;           // Backpressure threshold
+  u64 queue_len;
+  u64 queue_max;           // Backpressure threshold
 
   // Pending write buffer
   char *pending_data;
-  size_t pending_len;
-  size_t pending_offset;
-  size_t pending_capacity;
+  u64 pending_len;
+  u64 pending_offset;
+  u64 pending_capacity;
 
   // State tracking
   bool data_deferred;
-  uint64_t last_event_id;
-  uint64_t events_sent;
-  uint64_t bytes_sent;
+  u64 last_event_id;
+  u64 events_sent;
+  u64 bytes_sent;
 
   // Activity tracking for idle timeout
-  uint64_t created_at_ms;
-  uint64_t last_activity_ms;
-  uint64_t idle_timeout_ms;       // 0 = no timeout
+  u64 created_at_ms;
+  u64 last_activity_ms;
+  u64 idle_timeout_ms;       // 0 = no timeout
 
   // Callbacks (optional, for C-level hooks)
   void (*on_drain)(valk_sse_stream_t *stream, void *user_data);
@@ -86,7 +85,7 @@ struct valk_sse_stream {
 valk_sse_stream_t *valk_sse_stream_new(
     valk_aio_handle_t *conn,
     nghttp2_session *session,
-    int32_t stream_id,
+    i32 stream_id,
     nghttp2_data_provider2 *data_prd_out);
 
 void valk_sse_stream_close(valk_sse_stream_t *stream);
@@ -99,31 +98,31 @@ void valk_sse_stream_unregister(valk_sse_stream_t *stream);
 void valk_sse_close_all_streams(valk_aio_handle_t *conn);
 
 // Event sending
-int valk_sse_send(valk_sse_stream_t *stream, const char *data, size_t len);
+int valk_sse_send(valk_sse_stream_t *stream, const char *data, u64 len);
 int valk_sse_send_event(valk_sse_stream_t *stream, const char *event_type,
-                        const char *data, size_t len, uint64_t id);
-int valk_sse_send_retry(valk_sse_stream_t *stream, uint32_t retry_ms);
+                        const char *data, u64 len, u64 id);
+int valk_sse_send_retry(valk_sse_stream_t *stream, u32 retry_ms);
 
 // Backpressure
 bool valk_sse_is_writable(valk_sse_stream_t *stream);
-size_t valk_sse_queue_len(valk_sse_stream_t *stream);
+u64 valk_sse_queue_len(valk_sse_stream_t *stream);
 
 // Timeout Management
-void valk_sse_set_idle_timeout(valk_sse_stream_t *stream, uint64_t timeout_ms);
+void valk_sse_set_idle_timeout(valk_sse_stream_t *stream, u64 timeout_ms);
 void valk_sse_touch_activity(valk_sse_stream_t *stream);
 bool valk_sse_is_idle_expired(valk_sse_stream_t *stream);
 
 // Stream cancellation (RST_STREAM)
-int valk_sse_stream_cancel(valk_sse_stream_t *stream, uint32_t error_code);
+int valk_sse_stream_cancel(valk_sse_stream_t *stream, u32 error_code);
 
 // Global stream management
 typedef struct valk_sse_manager valk_sse_manager_t;
 
 struct valk_sse_manager {
   valk_sse_stream_t *streams;       // Global list of all streams
-  size_t stream_count;
+  u64 stream_count;
   bool shutting_down;
-  uint64_t shutdown_deadline_ms;
+  u64 shutdown_deadline_ms;
   void *aio_system;                 // valk_aio_system_t*
 };
 
@@ -131,10 +130,10 @@ void valk_sse_manager_init(valk_sse_manager_t *mgr, void *aio_system);
 void valk_sse_manager_shutdown(valk_sse_manager_t *mgr);
 void valk_sse_manager_add(valk_sse_manager_t *mgr, valk_sse_stream_t *stream);
 void valk_sse_manager_remove(valk_sse_manager_t *mgr, valk_sse_stream_t *stream);
-valk_sse_stream_t *valk_sse_manager_find_by_id(valk_sse_manager_t *mgr, uint64_t id);
-size_t valk_sse_manager_check_timeouts(valk_sse_manager_t *mgr);
-int valk_sse_manager_graceful_shutdown(valk_sse_manager_t *mgr, uint64_t drain_timeout_ms);
-size_t valk_sse_manager_force_close_all(valk_sse_manager_t *mgr);
+valk_sse_stream_t *valk_sse_manager_find_by_id(valk_sse_manager_t *mgr, u64 id);
+u64 valk_sse_manager_check_timeouts(valk_sse_manager_t *mgr);
+int valk_sse_manager_graceful_shutdown(valk_sse_manager_t *mgr, u64 drain_timeout_ms);
+u64 valk_sse_manager_force_close_all(valk_sse_manager_t *mgr);
 
 // Get global manager (initialized by AIO system)
 valk_sse_manager_t *valk_sse_get_manager(void);

@@ -1,6 +1,5 @@
 #pragma once
 #include "aio/aio.h"
-#include <stdint.h>
 
 typedef struct {
   int connectedCount;
@@ -9,7 +8,7 @@ typedef struct {
 
 void cb_onConnect(void *arg, valk_aio_handle_t *);
 void cb_onDisconnect(void *arg, valk_aio_handle_t *);
-void cb_onHeader(void *arg, valk_aio_handle_t *, size_t stream, char *name,
+void cb_onHeader(void *arg, valk_aio_handle_t *, u64 stream, char *name,
                  char *value);
-void cb_onBody(void *arg, valk_aio_handle_t *, size_t stream, uint8_t flags,
+void cb_onBody(void *arg, valk_aio_handle_t *, u64 stream, u8 flags,
                valk_buffer_t *buf);

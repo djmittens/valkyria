@@ -8,7 +8,7 @@
 
 static struct {
   char *filenames[MAX_SOURCE_FILES];
-  uint16_t count;
+  u16 count;
   valk_mutex_t lock;
 } source_registry = {0};
 
@@ -21,13 +21,13 @@ static void ensure_source_registry_init(void) {
   }
 }
 
-uint16_t valk_source_register_file(const char *filename) {
+u16 valk_source_register_file(const char *filename) {
   if (!filename) return 0;
   ensure_source_registry_init();
 
   valk_mutex_lock(&source_registry.lock);
 
-  for (uint16_t i = 1; i <= source_registry.count; i++) {
+  for (u16 i = 1; i <= source_registry.count; i++) {
     if (strcmp(source_registry.filenames[i], filename) == 0) {
       valk_mutex_unlock(&source_registry.lock);
       return i;
@@ -40,14 +40,14 @@ uint16_t valk_source_register_file(const char *filename) {
   }
 
   source_registry.count++;
-  uint16_t file_id = source_registry.count;
+  u16 file_id = source_registry.count;
   source_registry.filenames[file_id] = strdup(filename);
 
   valk_mutex_unlock(&source_registry.lock);
   return file_id;
 }
 
-const char *valk_source_get_filename(uint16_t file_id) {
+const char *valk_source_get_filename(u16 file_id) {
   if (file_id == 0 || file_id > source_registry.count) return NULL;
   ensure_source_registry_init();
 
@@ -62,7 +62,7 @@ void valk_source_registry_reset(void) {
   ensure_source_registry_init();
   valk_mutex_lock(&source_registry.lock);
 
-  for (uint16_t i = 1; i <= source_registry.count; i++) {
+  for (u16 i = 1; i <= source_registry.count; i++) {
     free(source_registry.filenames[i]);
     source_registry.filenames[i] = NULL;
   }
@@ -72,3 +72,5 @@ void valk_source_registry_reset(void) {
 }
 
 #endif // VALK_COVERAGE
+
+typedef int source_loc_dummy_t;

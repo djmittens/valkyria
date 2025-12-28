@@ -63,10 +63,10 @@ static void __delay_timer_cb(uv_timer_t *handle) {
   uv_close((uv_handle_t *)handle, __delay_timer_close_cb);
 }
 
-valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, uint64_t delay_ms,
+valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, u64 delay_ms,
                             valk_lval_t* continuation, valk_lenv_t* env) {
   UNUSED(env);
-  VALK_INFO("aio/delay called with delay_ms=%lu", (unsigned long)delay_ms);
+  VALK_INFO("aio/delay called with delay_ms=%llu", (unsigned long)delay_ms);
 
   if (!sys->current_request_ctx) {
     VALK_WARN("aio/delay called outside request context");
@@ -94,7 +94,7 @@ valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, uint64_t delay_ms,
   uv_loop_t *loop = sys->eventloop;
   int r = uv_timer_init(loop, &timer_data->timer);
   VALK_INFO("uv_timer_init returned %d", r);
-  r = uv_timer_start(&timer_data->timer, __delay_timer_cb, delay_ms, 0);
+  r = uv_timer_start(&timer_data->timer, __delay_timer_cb, (unsigned long long)delay_ms, 0);
   VALK_INFO("uv_timer_start returned %d for stream %d", r, timer_data->stream_id);
 
   return valk_lval_sym(":deferred");
@@ -115,7 +115,7 @@ static void __schedule_timer_cb(uv_timer_t *handle) {
   uv_close((uv_handle_t *)handle, __schedule_timer_close_cb);
 }
 
-valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, uint64_t delay_ms,
+valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
                                 valk_lval_t* callback, valk_lenv_t* env) {
   if (!sys || !sys->eventloop) {
     return valk_lval_err("aio/schedule: invalid AIO system");
@@ -144,7 +144,7 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, uint64_t delay_ms,
     return valk_lval_err("Failed to initialize timer");
   }
 
-  r = uv_timer_start(&timer_data->timer, __schedule_timer_cb, delay_ms, 0);
+  r = uv_timer_start(&timer_data->timer, __schedule_timer_cb, (unsigned long long)delay_ms, 0);
   if (r != 0) {
     free(timer_data);
     return valk_lval_err("Failed to start timer");
@@ -199,7 +199,7 @@ static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_err("aio/sleep: expected number argument");
   }
 
-  uint64_t delay_ms = (uint64_t)ms_arg->num;
+  u64 delay_ms = (u64)ms_arg->num;
 
   uv_loop_t *loop = NULL;
   if (valk_aio_active_system) {
@@ -220,9 +220,9 @@ static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
   async_handle->status = VALK_ASYNC_RUNNING;
 
   uv_timer_init(loop, &timer_data->uv.timer);
-  uv_timer_start(&timer_data->uv.timer, __sleep_timer_cb, delay_ms, 0);
+  uv_timer_start(&timer_data->uv.timer, __sleep_timer_cb, (unsigned long long)delay_ms, 0);
 
-  VALK_INFO("aio/sleep started: %lu ms, handle id=%lu", delay_ms, async_handle->id);
+  VALK_INFO("aio/sleep started: %llu ms, handle id=%llu", (unsigned long long)delay_ms, (unsigned long long)async_handle->id);
 
   return valk_lval_handle(async_handle);
 }
@@ -233,14 +233,14 @@ static inline bool is_then_barrier(valk_lval_t *item) {
 
 typedef struct {
   valk_lval_t **bindings;
-  size_t count;
-  size_t capacity;
+  u64 count;
+  u64 capacity;
 } aio_let_group_t;
 
 typedef struct {
   aio_let_group_t *groups;
-  size_t count;
-  size_t capacity;
+  u64 count;
+  u64 capacity;
 } aio_let_parsed_t;
 
 static aio_let_parsed_t* aio_let_parse_bindings(valk_lval_t *bindings) {
@@ -300,7 +300,7 @@ static aio_let_parsed_t* aio_let_parse_bindings(valk_lval_t *bindings) {
 }
 
 static void aio_let_free_parsed(aio_let_parsed_t *parsed) {
-  for (size_t i = 0; i < parsed->count; i++) {
+  for (u64 i = 0; i < parsed->count; i++) {
     free(parsed->groups[i].bindings);
   }
   free(parsed->groups);
@@ -347,7 +347,7 @@ static valk_lval_t* aio_let_gen_group(valk_lenv_t *env,
   valk_lval_t *body = valk_lval_cons(valk_lval_sym("do"), valk_lval_nil());
   valk_lval_t *body_tail = body;
 
-  for (size_t i = 0; i < group->count; i++) {
+  for (u64 i = 0; i < group->count; i++) {
     valk_lval_t *binding = group->bindings[i];
     valk_lval_t *var = valk_lval_list_nth(binding, 0);
 
@@ -355,7 +355,7 @@ static valk_lval_t* aio_let_gen_group(valk_lenv_t *env,
 
     valk_lval_t *nth_call = valk_lval_cons(
       valk_lval_sym("nth"),
-      valk_lval_cons(valk_lval_num(i + 1),
+      valk_lval_cons(valk_lval_num((i64)(i + 1)),
         valk_lval_cons(valk_lval_sym("_results"), valk_lval_nil())));
 
     valk_lval_t *assign = valk_lval_cons(
@@ -674,7 +674,7 @@ static bool valk_async_is_chain_closed(valk_async_handle_t *handle) {
     depth++;
   }
 
-  for (size_t i = 0; i < handle->children.count && i < 100; i++) {
+  for (u64 i = 0; i < handle->children.count && i < 100; i++) {
     valk_async_handle_t *child = handle->children.items[i];
     if (child && valk_async_is_resource_closed(child)) {
       return true;
@@ -686,7 +686,7 @@ static bool valk_async_is_chain_closed(valk_async_handle_t *handle) {
 void valk_async_propagate_completion(valk_async_handle_t *source) {
   if (!source) return;
 
-  VALK_INFO("Propagating from handle %lu (status=%d, children=%zu)",
+  VALK_INFO("Propagating from handle %llu (status=%d, children=%zu)",
             source->id, source->status, source->children.count);
 
   if (valk_async_is_chain_closed(source)) {
@@ -694,9 +694,9 @@ void valk_async_propagate_completion(valk_async_handle_t *source) {
     return;
   }
 
-  for (size_t i = 0; i < source->children.count; i++) {
+  for (u64 i = 0; i < source->children.count; i++) {
     valk_async_handle_t *child = source->children.items[i];
-    VALK_DEBUG("  Child %zu: handle %lu, status=%d, parent=%lu (source=%lu), on_complete=%p",
+    VALK_DEBUG("  Child %zu: handle %llu, status=%d, parent=%llu (source=%llu), on_complete=%p",
               i, child->id, child->status,
               child->parent ? child->parent->id : 0, source->id,
               (void*)child->on_complete);
@@ -704,7 +704,7 @@ void valk_async_propagate_completion(valk_async_handle_t *source) {
         (child->parent == source || child->on_complete != NULL)) {
 
       if (valk_async_is_chain_closed(child)) {
-        VALK_INFO("Async propagation: child connection closed, cancelling child handle %lu", child->id);
+        VALK_INFO("Async propagation: child connection closed, cancelling child , handle %llu", (unsigned long long)child->id);
         child->status = VALK_ASYNC_CANCELLED;
         continue;
       }
@@ -1020,12 +1020,12 @@ static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 typedef struct {
-  uint32_t magic;
+  u32 magic;
   valk_async_handle_t *all_handle;
   valk_lval_t **results;
   valk_async_handle_t **handles;
-  size_t total;
-  size_t completed;
+  u64 total;
+  u64 completed;
   bool failed;
   valk_lval_t *first_error;
 } valk_all_ctx_t;
@@ -1039,7 +1039,7 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
   }
   valk_lval_t *handles_list = valk_lval_list_nth(a, 0);
 
-  size_t count = 0;
+  u64 count = 0;
   valk_lval_t *iter = handles_list;
   while (LVAL_TYPE(iter) != LVAL_NIL) {
     if (LVAL_TYPE(iter) != LVAL_CONS && LVAL_TYPE(iter) != LVAL_QEXPR) {
@@ -1071,13 +1071,13 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_err("Failed to allocate results array");
   }
 
-  size_t completed = 0;
+  u64 completed = 0;
   bool any_pending = false;
   bool any_failed = false;
   valk_lval_t *first_error = NULL;
 
   iter = handles_list;
-  for (size_t i = 0; i < count; i++) {
+  for (u64 i = 0; i < count; i++) {
     valk_lval_t *h = valk_lval_head(iter);
     valk_async_handle_t *handle = h->async.handle;
 
@@ -1105,7 +1105,7 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
     all_handle->error = first_error;
 
     iter = handles_list;
-    for (size_t i = 0; i < count; i++) {
+    for (u64 i = 0; i < count; i++) {
       valk_lval_t *h = valk_lval_head(iter);
       valk_async_handle_t *handle = h->async.handle;
       if (handle->status == VALK_ASYNC_PENDING || handle->status == VALK_ASYNC_RUNNING) {
@@ -1118,7 +1118,7 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
 
   if (!any_pending) {
     valk_lval_t *result_list = valk_lval_nil();
-    for (size_t i = count; i > 0; i--) {
+    for (u64 i = count; i > 0; i--) {
       result_list = valk_lval_cons(results[i-1], result_list);
     }
     free(results);
@@ -1157,7 +1157,7 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
   all_handle->uv_handle_ptr = ctx;
 
   iter = handles_list;
-  for (size_t i = 0; i < count; i++) {
+  for (u64 i = 0; i < count; i++) {
     valk_lval_t *h = valk_lval_head(iter);
     valk_async_handle_t *handle = h->async.handle;
     handles[i] = handle;
@@ -1177,9 +1177,9 @@ static inline valk_all_ctx_t* valk_async_get_all_ctx(valk_async_handle_t *handle
   return ctx;
 }
 
-static inline ssize_t valk_async_all_find_index(valk_all_ctx_t *ctx, valk_async_handle_t *child) {
-  for (size_t i = 0; i < ctx->total; i++) {
-    if (ctx->handles[i] == child) return (ssize_t)i;
+static inline i64 valk_async_all_find_index(valk_all_ctx_t *ctx, valk_async_handle_t *child) {
+  for (u64 i = 0; i < ctx->total; i++) {
+    if (ctx->handles[i] == child) return (i64)i;
   }
   return -1;
 }
@@ -1189,7 +1189,7 @@ static void valk_async_all_child_completed(valk_async_handle_t *child) {
   if (!ctx) return;
   if (ctx->failed) return;
 
-  ssize_t idx = valk_async_all_find_index(ctx, child);
+  i64 idx = valk_async_all_find_index(ctx, child);
   if (idx < 0) return;
 
   ctx->results[idx] = child->result;
@@ -1197,7 +1197,7 @@ static void valk_async_all_child_completed(valk_async_handle_t *child) {
 
   if (ctx->completed == ctx->total) {
     valk_lval_t *result_list = valk_lval_nil();
-    for (size_t i = ctx->total; i > 0; i--) {
+    for (u64 i = ctx->total; i > 0; i--) {
       result_list = valk_lval_cons(ctx->results[i-1], result_list);
     }
 
@@ -1221,7 +1221,7 @@ static void valk_async_all_child_failed(valk_async_handle_t *child, valk_lval_t 
   ctx->all_handle->status = VALK_ASYNC_FAILED;
   ctx->all_handle->error = error;
 
-  for (size_t i = 0; i < ctx->total; i++) {
+  for (u64 i = 0; i < ctx->total; i++) {
     valk_async_handle_t *h = ctx->handles[i];
     if (h != child && (h->status == VALK_ASYNC_PENDING || h->status == VALK_ASYNC_RUNNING)) {
       valk_async_handle_cancel(h);
@@ -1239,7 +1239,7 @@ void valk_async_notify_all_parent(valk_async_handle_t *child) {
   valk_async_handle_t *parent = child->parent;
   if (!parent->uv_handle_ptr) return;
 
-  uint32_t *magic_ptr = (uint32_t*)parent->uv_handle_ptr;
+  u32 *magic_ptr = (u32*)parent->uv_handle_ptr;
   if (*magic_ptr != VALK_ALL_CTX_MAGIC_EARLY) return;
 
   if (child->status == VALK_ASYNC_COMPLETED) {
@@ -1250,10 +1250,10 @@ void valk_async_notify_all_parent(valk_async_handle_t *child) {
 }
 
 typedef struct {
-  uint32_t magic;
+  u32 magic;
   valk_async_handle_t *race_handle;
   valk_async_handle_t **handles;
-  size_t total;
+  u64 total;
   bool resolved;
 } valk_race_ctx_t;
 
@@ -1279,7 +1279,7 @@ static void valk_async_race_child_resolved(valk_async_handle_t *child) {
     return;
   }
 
-  for (size_t i = 0; i < ctx->total; i++) {
+  for (u64 i = 0; i < ctx->total; i++) {
     valk_async_handle_t *h = ctx->handles[i];
     if (h != child && (h->status == VALK_ASYNC_PENDING || h->status == VALK_ASYNC_RUNNING)) {
       valk_async_handle_cancel(h);
@@ -1296,7 +1296,7 @@ void valk_async_notify_race_parent(valk_async_handle_t *child) {
   valk_async_handle_t *parent = child->parent;
   if (!parent->uv_handle_ptr) return;
 
-  uint32_t *magic_ptr = (uint32_t*)parent->uv_handle_ptr;
+  u32 *magic_ptr = (u32*)parent->uv_handle_ptr;
   if (*magic_ptr != VALK_RACE_CTX_MAGIC_EARLY) return;
 
   valk_async_race_child_resolved(child);
@@ -1308,7 +1308,7 @@ static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
   }
   valk_lval_t *handles_list = valk_lval_list_nth(a, 0);
 
-  size_t count = 0;
+  u64 count = 0;
   valk_async_handle_t *first_done = NULL;
   valk_lval_t *iter = handles_list;
 
@@ -1391,7 +1391,7 @@ static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
   race_handle->uv_handle_ptr = ctx;
 
   iter = handles_list;
-  for (size_t i = 0; i < count; i++) {
+  for (u64 i = 0; i < count; i++) {
     valk_lval_t *h = valk_lval_head(iter);
     valk_async_handle_t *handle = h->async.handle;
     handles[i] = handle;
@@ -1403,11 +1403,11 @@ static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 typedef struct {
-  uint32_t magic;
+  u32 magic;
   valk_async_handle_t *any_handle;
   valk_async_handle_t **handles;
-  size_t total;
-  size_t failed_count;
+  u64 total;
+  u64 failed_count;
   valk_lval_t *last_error;
   bool resolved;
 } valk_any_ctx_t;
@@ -1426,7 +1426,7 @@ static void valk_async_any_child_success(valk_async_handle_t *child) {
   ctx->any_handle->status = VALK_ASYNC_COMPLETED;
   ctx->any_handle->result = child->result;
 
-  for (size_t i = 0; i < ctx->total; i++) {
+  for (u64 i = 0; i < ctx->total; i++) {
     valk_async_handle_t *h = ctx->handles[i];
     if (h != child && (h->status == VALK_ASYNC_PENDING || h->status == VALK_ASYNC_RUNNING)) {
       valk_async_handle_cancel(h);
@@ -1471,7 +1471,7 @@ void valk_async_notify_any_parent(valk_async_handle_t *child) {
     return;
   }
 
-  uint32_t *magic_ptr = (uint32_t*)parent->uv_handle_ptr;
+  u32 *magic_ptr = (u32*)parent->uv_handle_ptr;
   VALK_DEBUG("notify_any_parent: magic=0x%08x, expected=0x%08x", *magic_ptr, VALK_ANY_CTX_MAGIC_EARLY);
   if (*magic_ptr != VALK_ANY_CTX_MAGIC_EARLY) return;
 
@@ -1489,8 +1489,8 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
   }
   valk_lval_t *handles_list = valk_lval_list_nth(a, 0);
 
-  size_t count = 0;
-  size_t failed_count = 0;
+  u64 count = 0;
+  u64 failed_count = 0;
   valk_async_handle_t *first_success = NULL;
   valk_lval_t *last_error = NULL;
   valk_lval_t *iter = handles_list;
@@ -1584,7 +1584,7 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
   any_handle->uv_handle_ptr = ctx;
 
   iter = handles_list;
-  for (size_t i = 0; i < count; i++) {
+  for (u64 i = 0; i < count; i++) {
     valk_lval_t *h = valk_lval_head(iter);
     valk_async_handle_t *handle = h->async.handle;
     handles[i] = handle;
@@ -1790,7 +1790,7 @@ static valk_lval_t* valk_builtin_aio_pool_stats(valk_lenv_t* e, valk_lval_t* a) 
     return valk_lval_err("aio/pool-stats: null aio system");
   }
 
-  size_t tcp_available = 0, tcp_total = 0;
+  u64 tcp_available = 0, tcp_total = 0;
   long tcp_usage = 0;
   if (sys->tcpBufferSlab) {
     tcp_available = valk_slab_available(sys->tcpBufferSlab);
@@ -1811,7 +1811,7 @@ static valk_lval_t* valk_builtin_aio_pool_stats(valk_lenv_t* e, valk_lval_t* a) 
   };
   valk_lval_t *bp = valk_lval_qlist(bp_items, 4);
 
-  size_t arena_available = 0, arena_total = 0;
+  u64 arena_available = 0, arena_total = 0;
   long arena_usage = 0;
   valk_slab_t *arena_slab = valk_aio_get_stream_arenas_slab(sys);
   if (arena_slab) {

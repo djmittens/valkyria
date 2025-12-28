@@ -2,8 +2,8 @@
 #define VALK_AIO_TYPES_H
 
 #include <stddef.h>
-#include <stdint.h>
 #include <stdbool.h>
+#include "types.h"
 
 // ============================================================================
 // Forward Declarations (opaque types defined elsewhere)
@@ -59,10 +59,10 @@ typedef bool (*valk_async_is_closed_fn)(void *ctx);
 // ============================================================================
 
 struct valk_http2_header_t {
-  uint8_t *name;
-  uint8_t *value;
-  size_t nameLen;
-  size_t valueLen;
+  u8 *name;
+  u8 *value;
+  u64 nameLen;
+  u64 valueLen;
 };
 
 #endif // VALK_AIO_TYPES_H

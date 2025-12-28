@@ -875,7 +875,7 @@ void test_sse_manager_graceful_shutdown_idempotent(VALK_TEST_ARGS()) {
   valk_sse_manager_init(&mgr, (void*)0x1);
 
   valk_sse_manager_graceful_shutdown(&mgr, 5000);
-  uint64_t first_deadline = mgr.shutdown_deadline_ms;
+  u64 first_deadline = mgr.shutdown_deadline_ms;
 
   int result = valk_sse_manager_graceful_shutdown(&mgr, 10000);
   VALK_TEST_ASSERT(result == 0, "Should succeed");

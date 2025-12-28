@@ -22,34 +22,34 @@ typedef struct {
   valk_label_set_v2_t *labels;
   valk_delta_type_e type;
   union {
-    uint64_t increment;     // For counters: delta value
-    int64_t value;          // For gauges: new value
+    u64 increment;     // For counters: delta value
+    i64 value;          // For gauges: new value
     struct {                // For histograms
-      uint64_t bucket_deltas[VALK_MAX_BUCKETS + 1];
-      uint64_t count_delta;
-      uint64_t sum_delta_micros;
+      u64 bucket_deltas[VALK_MAX_BUCKETS + 1];
+      u64 count_delta;
+      u64 sum_delta_micros;
       const double *bucket_bounds;
-      uint8_t bucket_count;
+      u8 bucket_count;
     } histogram;
   } data;
 } valk_metric_delta_t;
 
 // Delta snapshot (collection of changes)
 typedef struct {
-  uint64_t timestamp_us;
-  uint64_t prev_timestamp_us;
-  uint64_t interval_us;
+  u64 timestamp_us;
+  u64 prev_timestamp_us;
+  u64 interval_us;
 
   // Changed metrics
   valk_metric_delta_t *deltas;
-  size_t delta_count;
-  size_t delta_capacity;
+  u64 delta_count;
+  u64 delta_capacity;
 
   // Summary statistics
-  size_t counters_changed;
-  size_t gauges_changed;
-  size_t histograms_changed;
-  size_t summaries_changed;
+  u64 counters_changed;
+  u64 gauges_changed;
+  u64 histograms_changed;
+  u64 summaries_changed;
 } valk_delta_snapshot_t;
 
 // ============================================================================
@@ -60,20 +60,20 @@ typedef struct {
 // This allows multiple connections to independently track deltas
 typedef struct {
   // Counter baselines (indexed same as registry)
-  uint64_t counter_baselines[VALK_REGISTRY_MAX_COUNTERS];
+  u64 counter_baselines[VALK_REGISTRY_MAX_COUNTERS];
 
   // Gauge baselines
-  int64_t gauge_baselines[VALK_REGISTRY_MAX_GAUGES];
+  i64 gauge_baselines[VALK_REGISTRY_MAX_GAUGES];
 
   // Histogram baselines
   struct {
-    uint64_t buckets[VALK_MAX_BUCKETS + 1];
-    uint64_t count;
-    uint64_t sum_micros;
+    u64 buckets[VALK_MAX_BUCKETS + 1];
+    u64 count;
+    u64 sum_micros;
   } histogram_baselines[VALK_REGISTRY_MAX_HISTOGRAMS];
 
   // Timestamp of last collection
-  uint64_t last_collect_time;
+  u64 last_collect_time;
 
   // Whether this baseline has been initialized from registry
   bool initialized;
@@ -96,13 +96,13 @@ void valk_delta_snapshot_init(valk_delta_snapshot_t *snap);
 // Collect deltas from registry (compares with internal last_* fields)
 // Returns number of changed metrics
 // DEPRECATED: Use valk_delta_snapshot_collect_stateless for multi-client
-size_t valk_delta_snapshot_collect(valk_delta_snapshot_t *snap,
+u64 valk_delta_snapshot_collect(valk_delta_snapshot_t *snap,
                                     valk_metrics_registry_t *registry);
 
 // Collect deltas using per-connection baseline (doesn't modify global state)
 // This is safe to call from multiple timers concurrently
 // Returns number of changed metrics
-size_t valk_delta_snapshot_collect_stateless(valk_delta_snapshot_t *snap,
+u64 valk_delta_snapshot_collect_stateless(valk_delta_snapshot_t *snap,
                                               valk_metrics_registry_t *registry,
                                               valk_metrics_baseline_t *baseline);
 
@@ -115,24 +115,24 @@ void valk_delta_snapshot_free(valk_delta_snapshot_t *snap);
 
 // Encode delta to JSON (for SSE streaming)
 // Format: {"ts":123,"interval":1000,"deltas":[...]}
-size_t valk_delta_to_json(const valk_delta_snapshot_t *snap,
-                          char *buf, size_t buf_size);
+u64 valk_delta_to_json(const valk_delta_snapshot_t *snap,
+                          char *buf, u64 buf_size);
 
 // Encode delta to SSE event
 // Format: event: metrics-delta\nid: <ts>\ndata: <json>\n\n
-size_t valk_delta_to_sse(const valk_delta_snapshot_t *snap,
-                         char *buf, size_t buf_size);
+u64 valk_delta_to_sse(const valk_delta_snapshot_t *snap,
+                         char *buf, u64 buf_size);
 
 // Encode delta to Prometheus exposition format (for /metrics endpoint)
 // Only includes metrics that changed (with full current value)
-size_t valk_delta_to_prometheus(const valk_delta_snapshot_t *snap,
+u64 valk_delta_to_prometheus(const valk_delta_snapshot_t *snap,
                                 valk_metrics_registry_t *registry,
-                                char *buf, size_t buf_size);
+                                char *buf, u64 buf_size);
 
 // Export full metrics state as JSON (for diagnostics/dashboard)
 // Returns the number of bytes written
-size_t valk_metrics_v2_to_json(valk_metrics_registry_t *registry,
-                               char *buf, size_t buf_size);
+u64 valk_metrics_v2_to_json(valk_metrics_registry_t *registry,
+                               char *buf, u64 buf_size);
 
 // ============================================================================
 // COMPRESSION STRATEGIES
@@ -140,12 +140,12 @@ size_t valk_metrics_v2_to_json(valk_metrics_registry_t *registry,
 
 // RLE encoding for histogram bucket deltas
 // Format: "bucket_idx:delta,bucket_idx:delta,..." (skip zeros)
-size_t valk_histogram_delta_rle(const uint64_t *deltas, size_t count,
-                                 char *buf, size_t buf_size);
+u64 valk_histogram_delta_rle(const u64 *deltas, u64 count,
+                                 char *buf, u64 buf_size);
 
 // Sparse gauge encoding (only non-zero changes)
 // Format: "name:value,name:value,..."
-size_t valk_gauge_delta_sparse(const valk_metric_delta_t *deltas,
-                                size_t count, char *buf, size_t buf_size);
+u64 valk_gauge_delta_sparse(const valk_metric_delta_t *deltas,
+                                u64 count, char *buf, u64 buf_size);
 
 #endif // VALK_METRICS_DELTA_H

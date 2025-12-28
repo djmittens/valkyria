@@ -106,7 +106,7 @@
 #define valk_dll_at(head, n)                                                   \
   ({                                                                           \
     __typeof__(head) __it = (head);                                            \
-    size_t __i = (n);                                                          \
+    u64 __i = (n);                                                          \
     while (__i-- > 0 && __it != NULL)                                          \
       __it = __it->next;                                                       \
     __it;                                                                      \
@@ -114,7 +114,7 @@
 
 #define valk_dll_count(head)                                                   \
   ({                                                                           \
-    size_t __count = 0;                                                        \
+    u64 __count = 0;                                                        \
     valk_dll_foreach(head) { __count++; }                                      \
     __count;                                                                   \
   })

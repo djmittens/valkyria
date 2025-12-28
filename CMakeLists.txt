@@ -169,6 +169,9 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_compile_definitions(valkyria PRIVATE _GNU_SOURCE)
 endif()
 
+target_include_directories(valkyria PRIVATE
+  ${PROJECT_SOURCE_DIR}/src
+)
 target_include_directories(valkyria SYSTEM PRIVATE
   ${LIBUV_INCLUDE_DIRS}
   ${PROJECT_SOURCE_DIR}/vendor

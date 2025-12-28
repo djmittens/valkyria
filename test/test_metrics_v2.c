@@ -318,8 +318,8 @@ void test_histogram_v2_observe(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(atomic_load(&h->buckets[4]) == 1, "+Inf bucket should be 1");
 
   // Verify sum (50000 + 300000 + 750000 + 10000000 = 11100000 us)
-  uint64_t expected_sum = 11100000;
-  uint64_t actual_sum = atomic_load(&h->sum_micros);
+  u64 expected_sum = 11100000;
+  u64 actual_sum = atomic_load(&h->sum_micros);
   VALK_TEST_ASSERT(actual_sum == expected_sum,
                    "Sum should be %lu, got %lu", expected_sum, actual_sum);
 
@@ -606,20 +606,20 @@ void test_metric_last_updated(VALK_TEST_ARGS()) {
 
   // Create counter and verify initial timestamp
   valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", NULL, &labels);
-  uint64_t ts1 = atomic_load(&c->last_updated_us);
+  u64 ts1 = atomic_load(&c->last_updated_us);
   VALK_TEST_ASSERT(ts1 > 0, "Counter should have non-zero timestamp on creation");
 
   // Wait a tiny bit and update
   for (volatile int i = 0; i < 10000; i++) {} // Spin briefly
   valk_counter_v2_inc(c);
-  uint64_t ts2 = atomic_load(&c->last_updated_us);
+  u64 ts2 = atomic_load(&c->last_updated_us);
   VALK_TEST_ASSERT(ts2 >= ts1, "Timestamp should increase after update");
 
   // Test gauge timestamp update
   valk_gauge_v2_t *g = valk_gauge_get_or_create("test_gauge", NULL, &labels);
-  uint64_t gts1 = atomic_load(&g->last_updated_us);
+  u64 gts1 = atomic_load(&g->last_updated_us);
   valk_gauge_v2_set(g, 42);
-  uint64_t gts2 = atomic_load(&g->last_updated_us);
+  u64 gts2 = atomic_load(&g->last_updated_us);
   VALK_TEST_ASSERT(gts2 >= gts1, "Gauge timestamp should update");
 
   valk_metrics_registry_destroy();
@@ -661,7 +661,7 @@ void test_eviction_persistent_protected(VALK_TEST_ARGS()) {
   // We can't easily test this without mocking time, so just verify the flag works
   VALK_TEST_ASSERT(c->evictable == false, "Counter should be marked non-evictable");
 
-  size_t evicted = valk_metrics_evict_stale();
+  (void)valk_metrics_evict_stale();
   VALK_TEST_ASSERT(atomic_load(&c->active) == true,
                    "Persistent counter should never be evicted");
 
@@ -678,7 +678,7 @@ void test_metric_generation(VALK_TEST_ARGS()) {
 
   // Create first metric
   valk_counter_v2_t *c1 = valk_counter_get_or_create("gen_counter", NULL, &labels);
-  uint32_t gen1 = atomic_load(&c1->generation);
+  u32 gen1 = atomic_load(&c1->generation);
   VALK_TEST_ASSERT(gen1 >= 1, "Generation should be at least 1 after creation");
 
   valk_metrics_registry_destroy();
@@ -772,7 +772,7 @@ void test_eviction_slot_reuse(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(atomic_load(&c1->active) == false, "Counter should be inactive after eviction");
 
   // Free list should have the slot
-  uint32_t free_head = atomic_load(&g_metrics.counter_free.head);
+  u32 free_head = atomic_load(&g_metrics.counter_free.head);
   VALK_TEST_ASSERT(free_head != VALK_INVALID_SLOT, "Free list should have evicted slot");
 
   // Create a new metric - should reuse the slot from free list
@@ -910,9 +910,9 @@ void test_pool_metrics_update_arena(VALK_TEST_ARGS()) {
 
   valk_pool_metrics_update_arena(&pm, capacity, used, hwm, overflow);
 
-  VALK_TEST_ASSERT(atomic_load(&pm.used->value) == (int64_t)used, "Used should match");
-  VALK_TEST_ASSERT(atomic_load(&pm.total->value) == (int64_t)capacity, "Total should match");
-  VALK_TEST_ASSERT(atomic_load(&pm.peak->value) == (int64_t)hwm, "Peak should match");
+  VALK_TEST_ASSERT(atomic_load(&pm.used->value) == (i64)used, "Used should match");
+  VALK_TEST_ASSERT(atomic_load(&pm.total->value) == (i64)capacity, "Total should match");
+  VALK_TEST_ASSERT(atomic_load(&pm.peak->value) == (i64)hwm, "Peak should match");
   VALK_TEST_ASSERT(atomic_load(&pm.overflow->value) == overflow, "Overflow should match");
 
   valk_metrics_registry_destroy();
@@ -988,10 +988,7 @@ void test_pool_metrics_eviction_protected(VALK_TEST_ARGS()) {
   // Wait to make metrics "stale"
   for (volatile int i = 0; i < 100000; i++) {}
 
-  // Try to evict
-  size_t evicted = valk_metrics_evict_stale();
-
-  // Pool metrics should NOT be evicted because they are persistent
+  (void)valk_metrics_evict_stale();
   VALK_TEST_ASSERT(atomic_load(&pm.used->active) == true,
                    "Pool used gauge should survive eviction");
   VALK_TEST_ASSERT(atomic_load(&pm.total->active) == true,
@@ -1046,8 +1043,8 @@ void test_counter_concurrent_inc(VALK_TEST_ARGS()) {
     pthread_join(threads[i], NULL);
   }
 
-  uint64_t expected = NUM_THREADS * ITERATIONS;
-  uint64_t actual = atomic_load(&c->value);
+  u64 expected = NUM_THREADS * ITERATIONS;
+  u64 actual = atomic_load(&c->value);
   VALK_TEST_ASSERT(actual == expected,
                    "Counter should be %lu, got %lu", expected, actual);
 

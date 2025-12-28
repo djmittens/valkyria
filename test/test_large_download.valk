@@ -1,0 +1,71 @@
+; test_large_download.valk
+; Tests for downloading larger responses via HTTP/2
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "Large Download Tests")
+
+(def {pattern} "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz./")
+
+(def {SIZE_10KB} 10240)
+(def {SIZE_50KB} 51200)
+(def {SIZE_100KB} 102400)
+
+(def {str-10kb} (make-string (/ SIZE_10KB 64) pattern))
+(def {str-50kb} (make-string (/ SIZE_50KB 64) pattern))
+(def {str-100kb} (make-string (/ SIZE_100KB 64) pattern))
+
+(def {aio} (aio/start))
+
+(def {server-handler}
+  (\ {req} {
+    (= {path} (plist/get req (head {:path})))
+    (select
+      {(== path "/10kb") `{:status "200" :content-type "text/plain" :body ,str-10kb}}
+      {(== path "/50kb") `{:status "200" :content-type "text/plain" :body ,str-50kb}}
+      {(== path "/100kb") `{:status "200" :content-type "text/plain" :body ,str-100kb}}
+      {otherwise {:status "404" :content-type "text/plain" :body "Not found"}})
+  }))
+
+(def {server} (http2/server-listen aio 0 server-handler))
+(def {test-port} (http2/server-port server))
+
+(test/async "10KB download" (\ {done} {
+  (http2/client-request aio "127.0.0.1" test-port "/10kb"
+    (\ {resp} {
+      (if (error? resp)
+        {(done false)}
+        {do
+          (= {body} (http2/response-body resp))
+          (= {body-len} (len body))
+          (done (== body-len SIZE_10KB))})
+    }))
+}))
+
+(test/async "50KB download" (\ {done} {
+  (http2/client-request aio "127.0.0.1" test-port "/50kb"
+    (\ {resp} {
+      (if (error? resp)
+        {(done false)}
+        {do
+          (= {body} (http2/response-body resp))
+          (= {body-len} (len body))
+          (done (== body-len SIZE_50KB))})
+    }))
+}))
+
+(test/async "100KB download" (\ {done} {
+  (http2/client-request aio "127.0.0.1" test-port "/100kb"
+    (\ {resp} {
+      (if (error? resp)
+        {(done false)}
+        {do
+          (= {body} (http2/response-body resp))
+          (= {body-len} (len body))
+          (done (== body-len SIZE_100KB))})
+    }))
+}))
+
+(test/run-async aio)
+(aio/run aio)

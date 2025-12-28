@@ -1,7 +1,7 @@
 #include "aio_backpressure.h"
 #include "aio_internal.h"
 
-#include "../log.h"
+#include "log.h"
 
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
   return conn->sys ? conn->sys->ops->tcp : NULL;
@@ -17,7 +17,7 @@ static inline bool __vtable_is_closing(valk_aio_handle_t *conn) {
   return tcp->is_closing(__conn_tcp(conn));
 }
 
-void valk_backpressure_list_init(valk_backpressure_list_t *list, size_t max_size, uint32_t timeout_ms) {
+void valk_backpressure_list_init(valk_backpressure_list_t *list, u64 max_size, u32 timeout_ms) {
   if (!list) return;
   list->head = nullptr;
   list->size = 0;
@@ -26,7 +26,7 @@ void valk_backpressure_list_init(valk_backpressure_list_t *list, size_t max_size
 }
 
 bool valk_backpressure_list_add(valk_backpressure_list_t *list, valk_aio_handle_t *conn,
-                                 uint64_t now_ms) {
+                                 u64 now_ms) {
   if (!list || !conn) return false;
   if (conn->http.backpressure) return true;
 
@@ -63,11 +63,11 @@ void valk_backpressure_list_remove(valk_backpressure_list_t *list, valk_aio_hand
 
 struct valk_aio_handle_t *valk_backpressure_list_try_resume(valk_backpressure_list_t *list,
                                                               valk_slab_t *tcp_buffer_slab,
-                                                              uint32_t min_buffers) {
+                                                              u32 min_buffers) {
   if (!list || !list->head || !tcp_buffer_slab) return nullptr;
 
-  size_t available = valk_slab_available(tcp_buffer_slab);
-  uint32_t threshold = min_buffers > 0 ? min_buffers / 2 : 2;
+  u64 available = valk_slab_available(tcp_buffer_slab);
+  u32 threshold = min_buffers > 0 ? min_buffers / 2 : 2;
 
   if (available < threshold) {
     return nullptr;
@@ -97,18 +97,18 @@ struct valk_aio_handle_t *valk_backpressure_list_try_resume(valk_backpressure_li
   return nullptr;
 }
 
-size_t valk_backpressure_list_timeout_expired(valk_backpressure_list_t *list, uint64_t now_ms,
-                                               valk_aio_handle_t **out_expired, size_t max_expired) {
+u64 valk_backpressure_list_timeout_expired(valk_backpressure_list_t *list, u64 now_ms,
+                                               valk_aio_handle_t **out_expired, u64 max_expired) {
   if (!list || !out_expired || max_expired == 0 || list->timeout_ms == 0) return 0;
 
-  size_t count = 0;
+  u64 count = 0;
   valk_aio_handle_t **pp = &list->head;
 
   while (*pp && count < max_expired) {
     valk_aio_handle_t *conn = *pp;
 
     if (conn->http.backpressure_start_time > 0) {
-      uint64_t age = now_ms - conn->http.backpressure_start_time;
+      u64 age = now_ms - conn->http.backpressure_start_time;
       if (age > list->timeout_ms) {
         *pp = conn->http.backpressure_next;
         conn->http.backpressure_next = nullptr;

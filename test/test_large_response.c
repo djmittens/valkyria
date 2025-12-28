@@ -46,10 +46,8 @@ typedef struct {
   int port;
 } test_context_t;
 
-// Initialize test context with Lisp handler
 static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
-  // Initialize GC heap for Lisp evaluation
-  size_t const GC_THRESHOLD_BYTES = 256 * 1024 * 1024;  // 256 MiB for large responses
+  (void)_suite;
   ctx->gc_heap = valk_gc_malloc_heap_init(0);
   ctx->saved_alloc = valk_thread_ctx.allocator;
   valk_thread_ctx.allocator = (void *)ctx->gc_heap;
@@ -149,8 +147,9 @@ static void cleanup_test_context(test_context_t *ctx) {
 // Returns true if test passed, false otherwise
 static bool test_large_response_size(test_context_t *ctx, const char *path,
                                      size_t expected_size, VALK_TEST_ARGS()) {
+  (void)_suite;
   // Build request
-  uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   memset(req_buf, 0, sizeof(req_buf));  // Zero to avoid stale pointer warnings
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
@@ -162,8 +161,8 @@ static bool test_large_response_size(test_context_t *ctx, const char *path,
     req->method = "GET";
     req->scheme = "https";
     req->authority = "localhost";
-    req->path = path;
-    req->body = (uint8_t *)"";
+    req->path = (char *)path;
+    req->body = (u8 *)"";
     req->bodyLen = 0;
     da_init(&req->headers);
   }
@@ -181,8 +180,8 @@ static bool test_large_response_size(test_context_t *ctx, const char *path,
   }
 
   valk_http2_response_t *response = res->item;
-  printf("[test] Response received: %zu bytes (expected: %zu)\n",
-         response->bodyLen, expected_size);
+  printf("[test] Response received: %llu bytes (expected: %llu)\n",
+         (unsigned long long)response->bodyLen, (unsigned long long)expected_size);
 
   // Verify response size - this is the critical regression test for Issue 1
   if (response->bodyLen != expected_size) {
@@ -320,7 +319,7 @@ void test_response_small(VALK_TEST_ARGS()) {
   }
 
   // Build request for /health endpoint (small response)
-  uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -332,7 +331,7 @@ void test_response_small(VALK_TEST_ARGS()) {
     req->scheme = "https";
     req->authority = "localhost";
     req->path = "/health";
-    req->body = (uint8_t *)"";
+    req->body = (u8 *)"";
     req->bodyLen = 0;
     da_init(&req->headers);
   }
@@ -350,7 +349,7 @@ void test_response_small(VALK_TEST_ARGS()) {
   }
 
   valk_http2_response_t *response = res->item;
-  printf("[test] Response received: %zu bytes\n", response->bodyLen);
+  printf("[test] Response received: %llu bytes\n", (unsigned long long)response->bodyLen);
 
   // Verify "OK" response
   if (response->bodyLen != 2 || memcmp(response->body, "OK", 2) != 0) {
@@ -402,7 +401,7 @@ void cb_onDisconnect(void *arg, valk_aio_handle_t *conn) {
   __atomic_fetch_add(&handler->disconnectedCount, 1, __ATOMIC_RELAXED);
 }
 
-void cb_onHeader(void *arg, valk_aio_handle_t *conn, size_t stream, char *name,
+void cb_onHeader(void *arg, valk_aio_handle_t *conn, u64 stream, char *name,
                  char *value) {
   UNUSED(arg);
   UNUSED(conn);
@@ -411,7 +410,7 @@ void cb_onHeader(void *arg, valk_aio_handle_t *conn, size_t stream, char *name,
   UNUSED(value);
 }
 
-void cb_onBody(void *arg, valk_aio_handle_t *conn, size_t stream, uint8_t flags,
+void cb_onBody(void *arg, valk_aio_handle_t *conn, u64 stream, u8 flags,
                valk_buffer_t *buf) {
   UNUSED(arg);
   UNUSED(conn);

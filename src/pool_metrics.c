@@ -65,39 +65,39 @@ bool valk_pool_metrics_init_custom(valk_pool_metrics_t *m,
 // ============================================================================
 
 void valk_pool_metrics_update_slab(valk_pool_metrics_t *m,
-                                    size_t total_slots,
-                                    size_t free_slots,
-                                    size_t peak_used,
-                                    size_t overflow_count) {
+                                    u64 total_slots,
+                                    u64 free_slots,
+                                    u64 peak_used,
+                                    u64 overflow_count) {
   if (!m) return;
 
-  size_t used = total_slots - free_slots;
+  u64 used = total_slots - free_slots;
   valk_pool_metrics_update(m,
-    (int64_t)used,
-    (int64_t)total_slots,
-    (int64_t)peak_used,
-    (uint64_t)overflow_count);
+    (i64)used,
+    (i64)total_slots,
+    (i64)peak_used,
+    (u64)overflow_count);
 }
 
 void valk_pool_metrics_update_arena(valk_pool_metrics_t *m,
-                                     size_t capacity,
-                                     size_t used,
-                                     size_t high_water_mark,
-                                     size_t overflow_count) {
+                                     u64 capacity,
+                                     u64 used,
+                                     u64 high_water_mark,
+                                     u64 overflow_count) {
   if (!m) return;
 
   valk_pool_metrics_update(m,
-    (int64_t)used,
-    (int64_t)capacity,
-    (int64_t)high_water_mark,
-    (uint64_t)overflow_count);
+    (i64)used,
+    (i64)capacity,
+    (i64)high_water_mark,
+    (u64)overflow_count);
 }
 
 void valk_pool_metrics_update(valk_pool_metrics_t *m,
-                               int64_t used,
-                               int64_t total,
-                               int64_t peak,
-                               uint64_t overflow) {
+                               i64 used,
+                               i64 total,
+                               i64 peak,
+                               u64 overflow) {
   if (!m) return;
 
   if (m->used) valk_gauge_v2_set(m->used, used);
@@ -106,7 +106,7 @@ void valk_pool_metrics_update(valk_pool_metrics_t *m,
 
   // Counter: set to absolute value (counters only increment, so we track delta)
   if (m->overflow) {
-    uint64_t current = atomic_load(&m->overflow->value);
+    u64 current = atomic_load(&m->overflow->value);
     if (overflow > current) {
       valk_counter_v2_add(m->overflow, overflow - current);
     }

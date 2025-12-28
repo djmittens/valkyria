@@ -587,7 +587,7 @@ void test_gc_tlab_alloc_basic(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(atomic_load(&tlab.page->num_allocated) == VALK_GC_TLAB_SLOTS,
                    "num_allocated should be TLAB_SLOTS after refill");
   
-  for (uint32_t i = 0; i < VALK_GC_TLAB_SLOTS; i++) {
+  for (u32 i = 0; i < VALK_GC_TLAB_SLOTS; i++) {
     VALK_TEST_ASSERT(valk_gc_bitmap_test(tlab.page->alloc_bits, i), 
                      "slot %u should be pre-allocated", i);
   }
@@ -621,7 +621,7 @@ void test_gc_tlab_exhaust_and_refill(VALK_TEST_ARGS()) {
 
   valk_gc_page_t *first_page = tlab.page;
 
-  for (uint32_t i = 0; i < VALK_GC_TLAB_SLOTS; i++) {
+  for (u32 i = 0; i < VALK_GC_TLAB_SLOTS; i++) {
     void *ptr = valk_gc_tlab_alloc(&tlab);
     VALK_TEST_ASSERT(ptr != NULL, "Allocation %u should succeed", i);
   }
@@ -647,7 +647,7 @@ void test_gc_tlab_exhaust_and_refill(VALK_TEST_ARGS()) {
 void test_gc_bitmap_operations(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  uint8_t bitmap[16] = {0};
+  u8 bitmap[16] = {0};
 
   VALK_TEST_ASSERT(!valk_gc_bitmap_test(bitmap, 0), "bit 0 should be clear");
   VALK_TEST_ASSERT(!valk_gc_bitmap_test(bitmap, 7), "bit 7 should be clear");
@@ -769,7 +769,7 @@ void test_gc_page_pool_stats(VALK_TEST_ARGS()) {
   valk_gc_page_pool_t pool;
   valk_gc_page_pool_init(&pool);
 
-  size_t pages, total, used;
+  u64 pages, total, used;
   valk_gc_page_pool_stats(&pool, &pages, &total, &used);
   VALK_TEST_ASSERT(pages == 0, "pages should be 0");
   VALK_TEST_ASSERT(total == 0, "total should be 0");
@@ -1037,6 +1037,7 @@ void test_gc_sweep_clears_marks(VALK_TEST_ARGS()) {
 // ============================================================================
 
 void test_gc_maybe_collect_below_threshold(VALK_TEST_ARGS()) {
+  VALK_TEST();
   valk_gc_coordinator_init();
   valk_gc_thread_register();
   
@@ -1061,6 +1062,7 @@ void test_gc_maybe_collect_below_threshold(VALK_TEST_ARGS()) {
 }
 
 void test_gc_full_cycle_basic(VALK_TEST_ARGS()) {
+  VALK_TEST();
   valk_gc_coordinator_init();
   valk_gc_thread_register();
   
@@ -1096,6 +1098,7 @@ void test_gc_full_cycle_basic(VALK_TEST_ARGS()) {
 }
 
 void test_gc_safe_point_with_stw(VALK_TEST_ARGS()) {
+  VALK_TEST();
   valk_gc_coordinator_init();
   valk_gc_thread_register();
   
@@ -1122,7 +1125,7 @@ void test_gc_global_pool_init(VALK_TEST_ARGS()) {
   
   valk_gc_global_pool_init();
   
-  size_t pages, total, used;
+  u64 pages, total, used;
   valk_gc_page_pool_stats(&valk_gc_global_pool, &pages, &total, &used);
   
   VALK_TEST_ASSERT(pages == 0, "global pool should start empty");
@@ -1185,7 +1188,7 @@ void test_gc_tlab_alloc_slow_many(VALK_TEST_ARGS()) {
     }
   }
   
-  size_t pages, total, used;
+  u64 pages, total, used;
   valk_gc_page_pool_stats(&valk_gc_global_pool, &pages, &total, &used);
   VALK_TEST_ASSERT(pages > 0, "should have allocated pages");
   VALK_TEST_ASSERT(used >= 100, "should have 100+ slots used");

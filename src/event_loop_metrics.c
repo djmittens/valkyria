@@ -4,7 +4,6 @@
 #include "log.h"
 #include <uv.h>
 #include <string.h>
-#include <stdatomic.h>
 
 // ============================================================================
 // FACTORY IMPLEMENTATION
@@ -67,8 +66,8 @@ void valk_event_loop_metrics_v2_update(valk_event_loop_metrics_v2_t *m,
   int rc = uv_metrics_info(loop, &metrics);
   if (rc == 0) {
     // Counters: add delta since last update (libuv values are cumulative)
-    uint64_t iter_delta = metrics.loop_count - m->prev_iterations;
-    uint64_t events_delta = metrics.events - m->prev_events;
+    u64 iter_delta = metrics.loop_count - m->prev_iterations;
+    u64 events_delta = metrics.events - m->prev_events;
 
     if (iter_delta > 0 && m->iterations) {
       valk_counter_v2_add(m->iterations, iter_delta);
@@ -83,7 +82,7 @@ void valk_event_loop_metrics_v2_update(valk_event_loop_metrics_v2_t *m,
 
     // Gauges: set current value
     if (m->events_waiting) {
-      valk_gauge_v2_set(m->events_waiting, (int64_t)metrics.events_waiting);
+      valk_gauge_v2_set(m->events_waiting, (i64)metrics.events_waiting);
     }
   } else {
     // Log only once to avoid spam
@@ -97,13 +96,13 @@ void valk_event_loop_metrics_v2_update(valk_event_loop_metrics_v2_t *m,
   // Get idle time (requires UV_METRICS_IDLE_TIME option)
   // Returns nanoseconds, convert to microseconds
   if (m->idle_time_us) {
-    uint64_t idle_ns = uv_metrics_idle_time(loop);
-    valk_gauge_v2_set(m->idle_time_us, (int64_t)(idle_ns / 1000));
+    u64 idle_ns = uv_metrics_idle_time(loop);
+    valk_gauge_v2_set(m->idle_time_us, (i64)(idle_ns / 1000));
   }
 }
 
 void valk_event_loop_metrics_v2_set_handles(valk_event_loop_metrics_v2_t *m,
-                                             int64_t handles) {
+                                             i64 handles) {
   if (!m || !m->handles) return;
   valk_gauge_v2_set(m->handles, handles);
 }

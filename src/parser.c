@@ -1,14 +1,10 @@
 #include "parser.h"
 
 #include <errno.h>
-#include <netinet/in.h>
 #include <stdarg.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <time.h>
 #include <unistd.h>
 #include <uv.h>
 
@@ -38,8 +34,8 @@ static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a);
 // Forward declaration is in aio.h (valk_aio_http2_listen_with_config)
 
 // GC heap allocator size check - ONLY allocate valk_lval_t structures
-size_t __valk_lval_size = sizeof(valk_lval_t);
-size_t __valk_lenv_size = sizeof(valk_lenv_t);
+u64 __valk_lval_size = sizeof(valk_lval_t);
+u64 __valk_lenv_size = sizeof(valk_lenv_t);
 
 // Global interpreter metrics instance
 valk_eval_metrics_t g_eval_metrics = {0};
@@ -54,9 +50,9 @@ void valk_eval_metrics_init(void) {
   atomic_store(&g_eval_metrics.env_lookups, 0);
 }
 
-void valk_eval_metrics_get(uint64_t* evals, uint64_t* func_calls,
-                            uint64_t* builtin_calls, uint32_t* stack_max,
-                            uint64_t* closures, uint64_t* lookups) {
+void valk_eval_metrics_get(u64* evals, u64* func_calls,
+                            u64* builtin_calls, u32* stack_max,
+                            u64* closures, u64* lookups) {
   if (evals) *evals = atomic_load(&g_eval_metrics.evals_total);
   if (func_calls) *func_calls = atomic_load(&g_eval_metrics.function_calls);
   if (builtin_calls) *builtin_calls = atomic_load(&g_eval_metrics.builtin_calls);
@@ -93,9 +89,9 @@ void valk_eval_metrics_get(uint64_t* evals, uint64_t* func_calls,
   do {                                                                       \
     char _found = 0;                                                         \
     valk_ltype_e _expected[] = {(_type), ##__VA_ARGS__};                     \
-    size_t _n_expected = sizeof(_expected) / sizeof(valk_ltype_e);           \
+    u64 _n_expected = sizeof(_expected) / sizeof(valk_ltype_e);           \
                                                                              \
-    for (size_t i = 0; i < _n_expected; i++) {                               \
+    for (u64 i = 0; i < _n_expected; i++) {                               \
       if (LVAL_TYPE(lval) == _expected[i]) {                                 \
         _found = 1;                                                          \
         break;                                                               \
@@ -103,7 +99,7 @@ void valk_eval_metrics_get(uint64_t* evals, uint64_t* func_calls,
     }                                                                        \
     if (!_found) {                                                           \
       char const* _expect_str[_n_expected];                                  \
-      for (size_t i = 0; i < _n_expected; i++) {                             \
+      for (u64 i = 0; i < _n_expected; i++) {                             \
         _expect_str[i] = valk_ltype_name(_expected[i]);                      \
       }                                                                      \
       char* _estr = valk_str_join(_n_expected, _expect_str, ", ");           \
@@ -121,32 +117,32 @@ void valk_eval_metrics_get(uint64_t* evals, uint64_t* func_calls,
 #define LVAL_ASSERT_COUNT_NEQ(args, lval, _count)                     \
   LVAL_ASSERT(args, valk_lval_list_count(lval) != _count,             \
               "Invalid argument count, Actual[%zu] != Expected[%zu]", \
-              valk_lval_list_count(lval), (size_t)_count)
+              valk_lval_list_count(lval), (u64)_count)
 
 #define LVAL_ASSERT_COUNT_EQ(args, lval, _count)                      \
   LVAL_ASSERT(args, valk_lval_list_count(lval) == _count,             \
               "Invalid argument count, Actual[%zu] == Expected[%zu]", \
-              valk_lval_list_count(lval), (size_t)_count)
+              valk_lval_list_count(lval), (u64)_count)
 
 #define LVAL_ASSERT_COUNT_LT(args, lval, _count)                     \
   LVAL_ASSERT(args, valk_lval_list_count(lval) < _count,             \
               "Invalid argument count, Actual[%zu] < Expected[%zu]", \
-              valk_lval_list_count(lval), (size_t)_count)
+              valk_lval_list_count(lval), (u64)_count)
 
 #define LVAL_ASSERT_COUNT_LE(args, lval, _count)                      \
   LVAL_ASSERT(args, valk_lval_list_count(lval) <= _count,             \
               "Invalid argument count, Actual[%zu] <= Expected[%zu]", \
-              valk_lval_list_count(lval), (size_t)_count)
+              valk_lval_list_count(lval), (u64)_count)
 
 #define LVAL_ASSERT_COUNT_GT(args, lval, _count)                     \
   LVAL_ASSERT(args, valk_lval_list_count(lval) > _count,             \
               "Invalid argument count, Actual[%zu] > Expected[%zu]", \
-              valk_lval_list_count(lval), (size_t)_count)
+              valk_lval_list_count(lval), (u64)_count)
 
 #define LVAL_ASSERT_COUNT_GE(args, lval, _count)                      \
   LVAL_ASSERT(args, valk_lval_list_count(lval) >= _count,             \
               "Invalid argument count, Actual[%zu] >= Expected[%zu]", \
-              valk_lval_list_count(lval), (size_t)_count)
+              valk_lval_list_count(lval), (u64)_count)
 
 static valk_lval_t* valk_builtin_eval(valk_lenv_t* e, valk_lval_t* a);
 static valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a);
@@ -161,19 +157,19 @@ static char* lval_str_escapable = "\a\b\f\n\r\t\v\\\'\"";
 /* Possible unescapable characters */
 static char* lval_str_unescapable = "abfnrtv\\\'\"";
 
-char* valk_c_err_format(const char* fmt, const char* file, const size_t line,
+char* valk_c_err_format(const char* fmt, const char* file, const u64 line,
                         const char* function) {
   // NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  size_t len =
-      snprintf(nullptr, 0, "%s:%ld:%s || %s", file, line, function, fmt);
+  u64 len =
+      snprintf(nullptr, 0, "%s:%llu:%s || %s", file, (unsigned long long)line, function, fmt);
   char* buf = valk_mem_alloc(len + 1);
-  snprintf(buf, len + 1, "%s:%ld:%s || %s", file, line, function, fmt);
+  snprintf(buf, len + 1, "%s:%llu:%s || %s", file, (unsigned long long)line, function, fmt);
   // NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   return buf;
 }
 
 // Helper: Get allocation flags from current allocator context
-uint64_t valk_alloc_flags_from_allocator(void* allocator) {
+u64 valk_alloc_flags_from_allocator(void* allocator) {
   if (allocator == NULL) return LVAL_ALLOC_SCRATCH;
   valk_mem_allocator_t* alloc = (valk_mem_allocator_t*)allocator;
   switch (alloc->type) {
@@ -190,13 +186,13 @@ uint64_t valk_alloc_flags_from_allocator(void* allocator) {
   }
 }
 
-char* valk_str_join(const size_t n, const char** strs, const char* sep) {
+char* valk_str_join(const u64 n, const char** strs, const char* sep) {
   // TODO(main): I think i should get my own string type in here
-  size_t res_len = 0;
-  size_t sep_len = strlen(sep);
-  size_t str_lens[n];
-  for (size_t i = 0; i < n; i++) {
-    size_t _len = strlen(strs[i]);
+  u64 res_len = 0;
+  u64 sep_len = strlen(sep);
+  u64 str_lens[n];
+  for (u64 i = 0; i < n; i++) {
+    u64 _len = strlen(strs[i]);
     res_len += _len;
     str_lens[i] = _len;
     if (i < n - 1) {
@@ -204,8 +200,8 @@ char* valk_str_join(const size_t n, const char** strs, const char* sep) {
     }
   }
   char* res = valk_mem_alloc(res_len + 1);
-  size_t offset = 0;
-  for (size_t i = 0; i < n; i++) {
+  u64 offset = 0;
+  for (u64 i = 0; i < n; i++) {
     // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     memcpy(&res[offset], strs[i], str_lens[i]);
     offset += str_lens[i];
@@ -256,7 +252,7 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
       LVAL_REF | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
-  size_t tlen = strlen(type);
+  u64 tlen = strlen(type);
   if (tlen > 100) tlen = 100;
   res->ref.type = valk_mem_alloc(tlen + 1);
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
@@ -291,7 +287,7 @@ valk_lval_t* valk_lval_err(const char* fmt, ...) {
   va_start(va, fmt);
 
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  size_t len = vsnprintf(nullptr, 0, fmt, va);
+  u64 len = vsnprintf(nullptr, 0, fmt, va);
   va_end(va);
   va_start(va, fmt);
 
@@ -311,7 +307,7 @@ valk_lval_t* valk_lval_sym(const char* sym) {
       LVAL_SYM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
-  size_t slen = strlen(sym);
+  u64 slen = strlen(sym);
   if (slen > 200) slen = 200;
   res->str = valk_mem_alloc(slen + 1);
   memcpy(res->str, sym, slen);
@@ -328,7 +324,7 @@ valk_lval_t* valk_lval_str(const char* str) {
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
   // TODO(main): whats a reasonable max for a string length?
-  size_t slen = strlen(str);
+  u64 slen = strlen(str);
   res->str = valk_mem_alloc(slen + 1);
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memcpy(res->str, str, slen + 1);
@@ -337,7 +333,7 @@ valk_lval_t* valk_lval_str(const char* str) {
   return res;
 }
 
-valk_lval_t* valk_lval_str_n(const char* bytes, size_t n) {
+valk_lval_t* valk_lval_str_n(const char* bytes, u64 n) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
       LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
@@ -399,7 +395,7 @@ static void mark_if_branches(valk_lval_t* lval) {
 static void valk_coverage_mark_tree(valk_lval_t* lval) {
   if (lval == NULL) return;
 
-  uint8_t type = LVAL_TYPE(lval);
+  u8 type = LVAL_TYPE(lval);
   // Only mark CONS (s-expressions) as trackable expressions, not QEXPR.
   // QEXPRs are quoted data that is NOT evaluated by the interpreter.
   // Examples of QEXPRs that shouldn't be counted:
@@ -446,7 +442,7 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
   //       {x & args} -> arity = -2 (1+ args)
   int arity = 0;
   bool is_variadic = false;
-  for (size_t i = 0; i < valk_lval_list_count(formals); i++) {
+  for (u64 i = 0; i < valk_lval_list_count(formals); i++) {
     valk_lval_t* formal = valk_lval_list_nth(formals, i);
     if (LVAL_TYPE(formal) == LVAL_SYM && strcmp(formal->str, "&") == 0) {
       // Variadic
@@ -464,7 +460,7 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
   // Allocate name using current allocator (same as lambda itself)
   // This ensures the name follows the same lifecycle as the lambda
   static const char* lambda_name = "<lambda>";
-  size_t name_len = strlen(lambda_name) + 1;
+  u64 name_len = strlen(lambda_name) + 1;
   res->fun.name = valk_mem_alloc(name_len);
   if (res->fun.name) {
     memcpy(res->fun.name, lambda_name, name_len);
@@ -522,18 +518,18 @@ valk_lval_t* valk_lval_qcons(valk_lval_t* head, valk_lval_t* tail) {
   return res;
 }
 
-valk_lval_t* valk_lval_list(valk_lval_t* arr[], size_t count) {
+valk_lval_t* valk_lval_list(valk_lval_t* arr[], u64 count) {
   valk_lval_t* res = valk_lval_nil();
-  for (size_t i = count; i > 0; i--) {
+  for (u64 i = count; i > 0; i--) {
     res = valk_lval_cons(arr[i - 1], res);
   }
   return res;
 }
 
 // Build a Q-expression list from array
-valk_lval_t* valk_lval_qlist(valk_lval_t* arr[], size_t count) {
+valk_lval_t* valk_lval_qlist(valk_lval_t* arr[], u64 count) {
   valk_lval_t* res = valk_lval_nil();
-  for (size_t i = count; i > 0; i--) {
+  for (u64 i = count; i > 0; i--) {
     res = valk_lval_qcons(arr[i - 1], res);
   }
   return res;
@@ -592,8 +588,8 @@ int valk_lval_list_is_empty(valk_lval_t* list) {
 }
 
 // Helper: count elements in a cons list
-size_t valk_lval_list_count(valk_lval_t* list) {
-  size_t count = 0;
+u64 valk_lval_list_count(valk_lval_t* list) {
+  u64 count = 0;
   valk_lval_t* curr = list;
 
   while (curr != nullptr && !valk_lval_list_is_empty(curr)) {
@@ -605,9 +601,9 @@ size_t valk_lval_list_count(valk_lval_t* list) {
 }
 
 // Helper: get nth element from a list (0-indexed)
-valk_lval_t* valk_lval_list_nth(valk_lval_t* list, size_t n) {
+valk_lval_t* valk_lval_list_nth(valk_lval_t* list, u64 n) {
   valk_lval_t* curr = list;
-  for (size_t i = 0; i < n && curr != nullptr && !valk_lval_list_is_empty(curr);
+  for (u64 i = 0; i < n && curr != nullptr && !valk_lval_list_is_empty(curr);
        i++) {
     curr = curr->cons.tail;
   }
@@ -695,7 +691,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
     case LVAL_NIL:
       break;
     case LVAL_SYM: {
-      size_t slen = strlen(lval->str);
+      u64 slen = strlen(lval->str);
       if (slen > 200) slen = 200;
       res->str = valk_mem_alloc(slen + 1);
       memcpy(res->str, lval->str, slen);
@@ -703,7 +699,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
       break;
     }
     case LVAL_ERR: {
-      size_t slen = strlen(lval->str);
+      u64 slen = strlen(lval->str);
       if (slen > 2000) slen = 2000;
       res->str = valk_mem_alloc(slen + 1);
       memcpy(res->str, lval->str, slen);
@@ -711,13 +707,13 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
       break;
     }
     case LVAL_STR: {
-      size_t slen = strlen(lval->str);
+      u64 slen = strlen(lval->str);
       res->str = valk_mem_alloc(slen + 1);
       memcpy(res->str, lval->str, slen + 1);
       break;
     }
     case LVAL_REF: {
-      size_t tlen = strlen(lval->ref.type);
+      u64 tlen = strlen(lval->ref.type);
       if (tlen > 100) tlen = 100;
       res->ref.type = valk_mem_alloc(tlen + 1);
       memcpy(res->ref.type, lval->ref.type, tlen);
@@ -815,6 +811,8 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
              valk_lval_eq(x->cons.tail, y->cons.tail);
     case LVAL_REF:
       return (x->ref.ptr == y->ref.ptr) && (x->ref.free == y->ref.free);
+    case LVAL_HANDLE:
+      return x == y;
     case LVAL_UNDEFINED:
       VALK_RAISE("LVAL is undefined, something went wrong");
       break;
@@ -873,8 +871,8 @@ valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) {
   bool is_qexpr = (LVAL_TYPE(form) == LVAL_QEXPR);
 
   // Collect expanded elements, handling splicing
-  size_t capacity = 16;
-  size_t count = 0;
+  u64 capacity = 16;
+  u64 count = 0;
   valk_lval_t** elements = valk_mem_alloc(sizeof(valk_lval_t*) * capacity);
 
   valk_lval_t* curr = form;
@@ -932,7 +930,7 @@ valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) {
 
   // Build result list from right to left
   valk_lval_t* result = valk_lval_nil();
-  for (size_t j = count; j > 0; j--) {
+  for (u64 j = count; j > 0; j--) {
     if (is_qexpr) {
       result = valk_lval_qcons(elements[j - 1], result);
     } else {
@@ -983,7 +981,7 @@ static valk_lval_t* valk_lval_eval_recursive(valk_lenv_t* env, valk_lval_t* lval
 
   // Cons cells are evaluated as function calls
   if (LVAL_TYPE(lval) == LVAL_CONS) {
-    size_t count = valk_lval_list_count(lval);
+    u64 count = valk_lval_list_count(lval);
 
     // Empty list evaluates to nil
     if (count == 0) {
@@ -1039,7 +1037,7 @@ static valk_lval_t* valk_lval_eval_recursive(valk_lenv_t* env, valk_lval_t* lval
     valk_lval_t* tmp[count - 1];
     valk_lval_t* h = lval->cons.tail;
 
-    for (size_t i = 0; i < (count - 1); i++) {
+    for (u64 i = 0; i < (count - 1); i++) {
       // Evaluate each argument
       // NOTE: Don't propagate errors - allow functions like error? to receive
       // error values as arguments
@@ -1077,7 +1075,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
   LVAL_ASSERT_TYPE(args, func, LVAL_FUN);
 
   // Track stack depth and function call metrics
-  uint32_t depth = atomic_fetch_add(&g_eval_metrics.stack_depth, 1) + 1;
+  u32 depth = atomic_fetch_add(&g_eval_metrics.stack_depth, 1) + 1;
   if (depth > g_eval_metrics.stack_depth_max) {
     g_eval_metrics.stack_depth_max = depth;
   }
@@ -1097,8 +1095,8 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
   // Immutable function application - NO COPYING, NO MUTATION
   // Walk formals and args together, creating bindings in new environment
 
-  size_t given = valk_lval_list_count(args);
-  size_t num_formals = valk_lval_list_count(func->fun.formals);
+  u64 given = valk_lval_list_count(args);
+  u64 num_formals = valk_lval_list_count(func->fun.formals);
 
   // Create new environment for bindings
   // Hybrid scoping using fallback:
@@ -1241,9 +1239,9 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
   return result;
 }
 
-valk_lval_t* valk_lval_pop(valk_lval_t* lval, size_t i) {
+valk_lval_t* valk_lval_pop(valk_lval_t* lval, u64 i) {
   // Pop i-th element from a cons-based list
-  size_t count = valk_lval_list_count(lval);
+  u64 count = valk_lval_list_count(lval);
   LVAL_ASSERT(
       (valk_lval_t*)0, i < count,
       "Cant pop from list at invalid position: [%zu] total length: [%zu]", i,
@@ -1268,7 +1266,7 @@ valk_lval_t* valk_lval_pop(valk_lval_t* lval, size_t i) {
 
   // Pop from middle/end: traverse to i-1'th element
   valk_lval_t* prev = lval;
-  for (size_t j = 0; j < i - 1; j++) {
+  for (u64 j = 0; j < i - 1; j++) {
     prev = prev->cons.tail;
   }
 
@@ -1286,13 +1284,12 @@ valk_lval_t* valk_lval_join(valk_lval_t* a, valk_lval_t* b) {
   // Create new list instead of mutating a
   // Preserve the type of the first argument (QEXPR or CONS)
 
-  // Save original a for source location inheritance
-  valk_lval_t* orig_a = a;
+  valk_lval_t* orig_a __attribute__((unused)) = a;
 
   // Determine if result should be QEXPR (if first arg is QEXPR)
   bool is_qexpr = (LVAL_TYPE(a) == LVAL_QEXPR);
 
-  size_t lena = valk_lval_list_count(a);
+  u64 lena = valk_lval_list_count(a);
 
   // If b is not a list type, wrap it
   // This ensures join always produces proper lists
@@ -1305,28 +1302,28 @@ valk_lval_t* valk_lval_join(valk_lval_t* a, valk_lval_t* b) {
     // If b has different type, we need to rebuild it with the target type
     if (is_qexpr && LVAL_TYPE(b) == LVAL_CONS) {
       // Convert CONS to QEXPR - rebuild the list
-      size_t lenb = valk_lval_list_count(b);
+      u64 lenb = valk_lval_list_count(b);
       res = valk_lval_nil();
       valk_lval_t* items[lenb];
       valk_lval_t* curr = b;
-      for (size_t i = 0; i < lenb; i++) {
+      for (u64 i = 0; i < lenb; i++) {
         items[i] = curr->cons.head;
         curr = curr->cons.tail;
       }
-      for (size_t i = lenb; i > 0; i--) {
+      for (u64 i = lenb; i > 0; i--) {
         res = valk_lval_qcons(items[i - 1], res);
       }
     } else if (!is_qexpr && LVAL_TYPE(b) == LVAL_QEXPR) {
       // Convert QEXPR to CONS - rebuild the list
-      size_t lenb = valk_lval_list_count(b);
+      u64 lenb = valk_lval_list_count(b);
       res = valk_lval_nil();
       valk_lval_t* items[lenb];
       valk_lval_t* curr = b;
-      for (size_t i = 0; i < lenb; i++) {
+      for (u64 i = 0; i < lenb; i++) {
         items[i] = curr->cons.head;
         curr = curr->cons.tail;
       }
-      for (size_t i = lenb; i > 0; i--) {
+      for (u64 i = lenb; i > 0; i--) {
         res = valk_lval_cons(items[i - 1], res);
       }
     } else {
@@ -1336,18 +1333,18 @@ valk_lval_t* valk_lval_join(valk_lval_t* a, valk_lval_t* b) {
 
   struct {
     valk_lval_t** items;
-    size_t count;
-    size_t capacity;
+    u64 count;
+    u64 capacity;
   } tmp = {0};
 
   da_init(&tmp);
 
-  for (size_t i = 0; i < lena; i++) {
+  for (u64 i = 0; i < lena; i++) {
     da_add(&tmp, a->cons.head);
     a = a->cons.tail;
   }
 
-  for (size_t i = lena; i > 0; i--) {
+  for (u64 i = lena; i > 0; i--) {
     if (is_qexpr) {
       res = valk_lval_qcons(tmp.items[i - 1], res);
     } else {
@@ -1430,7 +1427,7 @@ void valk_lval_print(valk_lval_t* val) {
     case LVAL_STR: {
       // Print string with quotes
       putchar('"');
-      for (size_t i = 0; i < strlen(val->str); ++i) {
+      for (u64 i = 0; i < strlen(val->str); ++i) {
         if (strchr(lval_str_escapable, val->str[i])) {
           printf("%s", valk_lval_str_escape(val->str[i]));
         } else {
@@ -1442,6 +1439,9 @@ void valk_lval_print(valk_lval_t* val) {
     }
     case LVAL_REF:
       printf("Reference[%s:%p]", val->ref.type, val->ref.ptr);
+      break;
+    case LVAL_HANDLE:
+      printf("<handle>");
       break;
     case LVAL_FORWARD:
       printf("<forward:%p>", (void*)val->forward);
@@ -1521,11 +1521,11 @@ static valk_lval_t* valk_lval_read_sym(int* i, const char* s) {
   }
 
   // the  length of the new string
-  size_t len = end - (*i);
+  u64 len = end - (*i);
   if (len) {
     char* sym = strndup(&s[*i], len);
     int isNum = strchr("-0123456789", sym[0]) != nullptr;
-    for (size_t i = 1; i < len; ++i) {
+    for (u64 i = 1; i < len; ++i) {
       if (!strchr("0123456789", sym[i])) {
         isNum = 0;
         break;
@@ -1693,8 +1693,8 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
 
   // Collect elements in a temporary array (allocated from GC heap)
   // These arrays will be swept when unreachable after parsing completes
-  size_t capacity = 16;
-  size_t count = 0;
+  u64 capacity = 16;
+  u64 count = 0;
   valk_lval_t** elements = valk_mem_alloc(sizeof(valk_lval_t*) * capacity);
 
   while (s[*i] != end) {
@@ -1728,7 +1728,7 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
   // Build list from right to left, properly terminated with NIL
   // Use QEXPR for {} syntax (quoted data), CONS for () syntax (code)
   valk_lval_t* result = valk_lval_nil();  // Start with nil terminator
-  for (size_t j = count; j > 0; j--) {
+  for (u64 j = count; j > 0; j--) {
     if (is_quoted) {
       result = valk_lval_qcons(elements[j - 1], result);
     } else {
@@ -1778,7 +1778,7 @@ void valk_lenv_free(valk_lenv_t* env) {
   if (alloc && alloc->type != VALK_ALLOC_MALLOC) return;
 
   // Free symbol strings and values
-  for (size_t i = 0; i < env->symbols.count; i++) {
+  for (u64 i = 0; i < env->symbols.count; i++) {
     if (env->symbols.items && env->symbols.items[i]) {
       free(env->symbols.items[i]);
     }
@@ -1815,13 +1815,13 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
 
   // Count total bindings by walking parent chain (with value masking)
   // Use a simple linear scan - O(n*m) but environments are typically small
-  size_t total_count = 0;
+  u64 total_count = 0;
   for (valk_lenv_t* e = env; e != nullptr; e = e->parent) {
-    for (size_t i = 0; i < e->symbols.count; i++) {
+    for (u64 i = 0; i < e->symbols.count; i++) {
       // Check if this symbol is already counted (masked by child scope)
       bool masked = false;
       for (valk_lenv_t* child = env; child != e; child = child->parent) {
-        for (size_t j = 0; j < child->symbols.count; j++) {
+        for (u64 j = 0; j < child->symbols.count; j++) {
           if (strcmp(e->symbols.items[i], child->symbols.items[j]) == 0) {
             masked = true;
             break;
@@ -1844,13 +1844,13 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
   res->vals.capacity = total_count;
 
   // Collect all bindings with value masking
-  size_t idx = 0;
+  u64 idx = 0;
   for (valk_lenv_t* e = env; e != nullptr; e = e->parent) {
-    for (size_t i = 0; i < e->symbols.count; i++) {
+    for (u64 i = 0; i < e->symbols.count; i++) {
       // Check if this symbol is masked by child scope
       bool masked = false;
       for (valk_lenv_t* child = env; child != e; child = child->parent) {
-        for (size_t j = 0; j < child->symbols.count; j++) {
+        for (u64 j = 0; j < child->symbols.count; j++) {
           if (strcmp(e->symbols.items[i], child->symbols.items[j]) == 0) {
             masked = true;
             break;
@@ -1860,7 +1860,7 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
       }
 
       if (!masked) {
-        size_t slen = strlen(e->symbols.items[i]);
+        u64 slen = strlen(e->symbols.items[i]);
         res->symbols.items[idx] = valk_mem_alloc(slen + 1);
         memcpy(res->symbols.items[idx], e->symbols.items[i], slen + 1);
         res->vals.items[idx] = e->vals.items[i];
@@ -1881,7 +1881,7 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
   // (important for tail call optimization which creates environment chains)
   valk_lenv_t* start_env = env;  // Remember start for fallback lookup
   while (env) {
-    for (size_t i = 0; i < env->symbols.count; i++) {
+    for (u64 i = 0; i < env->symbols.count; i++) {
       if (env->symbols.items == NULL || env->symbols.items[i] == NULL) {
         break;
       }
@@ -1918,7 +1918,7 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   // supports symbolic keys");
 
   // Check if symbol already exists - if so, update it
-  for (size_t i = 0; i < env->symbols.count; i++) {
+  for (u64 i = 0; i < env->symbols.count; i++) {
     if (env->symbols.items == NULL || env->symbols.items[i] == NULL) {
       break;
     }
@@ -1930,13 +1930,13 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   }
 
   // Symbol not found - add new binding
-  size_t slen = strlen(key->str);
+  u64 slen = strlen(key->str);
   char* new_symbol = valk_mem_alloc(slen + 1);
   memcpy(new_symbol, key->str, slen + 1);
 
   // Resize arrays if needed (amortized doubling)
   if (env->symbols.count >= env->symbols.capacity) {
-    size_t new_capacity =
+    u64 new_capacity =
         env->symbols.capacity == 0 ? 8 : env->symbols.capacity * 2;
     char** new_items = valk_mem_alloc(sizeof(char*) * new_capacity);
     if (env->symbols.count > 0) {
@@ -1948,7 +1948,7 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     env->symbols.capacity = new_capacity;
   }
   if (env->vals.count >= env->vals.capacity) {
-    size_t new_capacity = env->vals.capacity == 0 ? 8 : env->vals.capacity * 2;
+    u64 new_capacity = env->vals.capacity == 0 ? 8 : env->vals.capacity * 2;
     valk_lval_t** new_items =
         valk_mem_alloc(sizeof(valk_lval_t*) * new_capacity);
     if (env->vals.count > 0) {
@@ -2071,7 +2071,7 @@ static valk_lval_t* valk_builtin_len(valk_lenv_t* e, valk_lval_t* a) {
     case LVAL_NIL:
       return valk_lval_num(valk_lval_list_count(arg));
     case LVAL_STR: {
-      size_t n = strlen(arg->str);
+      u64 n = strlen(arg->str);
       return valk_lval_num((long)n);
     }
     default:
@@ -2148,8 +2148,8 @@ static valk_lval_t* valk_builtin_join(valk_lenv_t* e, valk_lval_t* a) {
 
   // Don't mutate args - extract without popping
   valk_lval_t* x = arg0;
-  size_t count = valk_lval_list_count(a);
-  for (size_t i = 1; i < count; i++) {
+  u64 count = valk_lval_list_count(a);
+  for (u64 i = 1; i < count; i++) {
     x = valk_lval_join(x, valk_lval_list_nth(a, i));
   }
 
@@ -2215,10 +2215,10 @@ static valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a) {
     return a;  // Already a QEXPR or empty
   }
   // Rebuild as QEXPR
-  size_t count = valk_lval_list_count(a);
+  u64 count = valk_lval_list_count(a);
   valk_lval_t* items[count];
   valk_lval_t* curr = a;
-  for (size_t i = 0; i < count; i++) {
+  for (u64 i = 0; i < count; i++) {
     items[i] = curr->cons.head;
     curr = curr->cons.tail;
   }
@@ -2280,7 +2280,7 @@ static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, syms, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
 
   // Verify all elements in syms (starting from index 1) are symbols
-  for (size_t i = 1; i < valk_lval_list_count(syms); i++) {
+  for (u64 i = 1; i < valk_lval_list_count(syms); i++) {
     valk_lval_t* sym_elem = valk_lval_list_nth(syms, i);
     LVAL_ASSERT(a, LVAL_TYPE(sym_elem) == LVAL_SYM,
                 "Builtin `def` requires that symbols parameter only has "
@@ -2290,7 +2290,7 @@ static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
 
   LVAL_ASSERT_COUNT_EQ(a, syms, (valk_lval_list_count(a) - 1));
 
-  for (size_t i = 0; i < valk_lval_list_count(syms); i++) {
+  for (u64 i = 0; i < valk_lval_list_count(syms); i++) {
     valk_lval_t* sym = valk_lval_list_nth(syms, i);
     valk_lval_t* val = valk_resolve_symbol(e, valk_lval_list_nth(a, i + 1));
     if (LVAL_TYPE(val) == LVAL_ERR) {
@@ -2322,7 +2322,7 @@ static valk_lval_t* valk_builtin_put(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, syms, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
 
   // Verify all elements in syms (starting from index 1) are symbols
-  for (size_t i = 1; i < valk_lval_list_count(syms); i++) {
+  for (u64 i = 1; i < valk_lval_list_count(syms); i++) {
     valk_lval_t* sym_elem = valk_lval_list_nth(syms, i);
     LVAL_ASSERT(a, LVAL_TYPE(sym_elem) == LVAL_SYM,
                 "Builtin `def` requires that symbols parameter only has "
@@ -2332,7 +2332,7 @@ static valk_lval_t* valk_builtin_put(valk_lenv_t* e, valk_lval_t* a) {
 
   LVAL_ASSERT_COUNT_EQ(a, syms, (valk_lval_list_count(a) - 1));
 
-  for (size_t i = 0; i < valk_lval_list_count(syms); i++) {
+  for (u64 i = 0; i < valk_lval_list_count(syms); i++) {
     valk_lval_t* val = valk_resolve_symbol(e, valk_lval_list_nth(a, i + 1));
     // NOTE: Don't propagate errors - allow storing error values in variables
     // so users can check them with error? predicate
@@ -2354,7 +2354,7 @@ static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, formals, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
   LVAL_ASSERT_TYPE(a, body, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
 
-  for (size_t i = 0; i < valk_lval_list_count(formals); i++) {
+  for (u64 i = 0; i < valk_lval_list_count(formals); i++) {
     LVAL_ASSERT(a, LVAL_TYPE(valk_lval_list_nth(formals, i)) == LVAL_SYM,
                 "Cannot use a non symbol[%s] for bind",
                 valk_ltype_name(LVAL_TYPE(valk_lval_list_nth(formals, i))));
@@ -2372,7 +2372,7 @@ static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
 static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(a);
   valk_lval_t* res = valk_lval_nil();
-  for (size_t i = 0; i < e->symbols.count; i++) {
+  for (u64 i = 0; i < e->symbols.count; i++) {
     res = valk_lval_cons(
         valk_lval_cons(valk_lval_sym(e->symbols.items[i]),
                        valk_lval_cons(e->vals.items[i], valk_lval_nil())),
@@ -2519,7 +2519,7 @@ static valk_lval_t* valk_builtin_read_file(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   fseek(f, 0, SEEK_END);
-  size_t length = ftell(f);
+  u64 length = ftell(f);
   fseek(f, 0, SEEK_SET);
 
   if (length == UINT64_MAX) {
@@ -2528,7 +2528,7 @@ static valk_lval_t* valk_builtin_read_file(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   char* content = calloc(length + 1, sizeof(char));
-  size_t read_len = fread(content, 1, length, f);
+  u64 read_len = fread(content, 1, length, f);
   fclose(f);
 
   if (read_len != length) {
@@ -2544,7 +2544,7 @@ static valk_lval_t* valk_builtin_read_file(valk_lenv_t* e, valk_lval_t* a) {
 valk_lval_t* valk_parse_file(const char* filename) {
   valk_coverage_record_file(filename);
 #ifdef VALK_COVERAGE
-  uint16_t file_id = valk_source_register_file(filename);
+  u16 file_id = valk_source_register_file(filename);
 #endif
   
   FILE* f = fopen(filename, "rb");
@@ -2553,7 +2553,7 @@ valk_lval_t* valk_parse_file(const char* filename) {
   }
 
   fseek(f, 0, SEEK_END);
-  size_t length = ftell(f);
+  u64 length = ftell(f);
   fseek(f, 0, SEEK_SET);
 
   if (length == UINT64_MAX) {
@@ -2567,8 +2567,8 @@ valk_lval_t* valk_parse_file(const char* filename) {
 
   struct tmp_arr {
     valk_lval_t** items;
-    size_t count;
-    size_t capacity;
+    u64 count;
+    u64 capacity;
   } tmp = {0};
 
   da_init(&tmp);
@@ -2730,8 +2730,8 @@ valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx) {
     end = ')';
   }
   
-  size_t capacity = 16;
-  size_t count = 0;
+  u64 capacity = 16;
+  u64 count = 0;
   valk_lval_t **elements = valk_mem_alloc(sizeof(valk_lval_t *) * capacity);
   
   while (ctx->source[ctx->pos] != end) {
@@ -2753,7 +2753,7 @@ valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx) {
   
   valk_lval_t *result = valk_lval_nil();
   LVAL_SET_SOURCE_LOC(result, ctx->file_id, saved_line, saved_col);
-  for (size_t j = count; j > 0; j--) {
+  for (u64 j = count; j > 0; j--) {
     if (is_quoted) {
       result = valk_lval_qcons(elements[j - 1], result);
     } else {
@@ -2790,8 +2790,8 @@ static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
                             false_branch->cov_column, 0);
   }
   // Record branch coverage at the if statement's line (use true branch line as anchor)
-  uint16_t file_id = true_branch->cov_file_id;
-  uint16_t line = true_branch->cov_line;
+  u16 file_id = true_branch->cov_file_id;
+  u16 line = true_branch->cov_line;
   if (file_id == 0 || line == 0) {
     file_id = false_branch->cov_file_id;
     line = false_branch->cov_line;
@@ -2814,25 +2814,25 @@ static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
-  size_t count = valk_lval_list_count(a);
+  u64 count = valk_lval_list_count(a);
   if (count == 0) {
     return valk_lval_err("No selection found");
   }
 
-  for (size_t i = 0; i < count; i++) {
+  for (u64 i = 0; i < count; i++) {
     valk_lval_t* clause = valk_lval_list_nth(a, i);
     LVAL_ASSERT_TYPE(a, clause, LVAL_CONS, LVAL_QEXPR);
 
 #ifdef VALK_COVERAGE
-    uint16_t file_id = clause->cov_file_id;
-    uint16_t line = clause->cov_line;
+    u16 file_id = clause->cov_file_id;
+    u16 line = clause->cov_line;
 #endif
 
     if (LVAL_TYPE(clause) == LVAL_QEXPR) {
       clause = valk_qexpr_to_cons(clause);
     }
 
-    size_t clause_len = valk_lval_list_count(clause);
+    u64 clause_len = valk_lval_list_count(clause);
     LVAL_ASSERT(a, clause_len == 2, "Select clause must have condition and result");
 
     valk_lval_t* cond_expr = valk_lval_list_nth(clause, 0);
@@ -2865,14 +2865,14 @@ static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_do(valk_lenv_t* e, valk_lval_t* a) {
-  size_t count = valk_lval_list_count(a);
+  u64 count = valk_lval_list_count(a);
 
   if (count == 0) {
     return valk_lval_nil();
   }
 
   // Evaluate first n-1 expressions for side effects
-  for (size_t i = 0; i < count - 1; i++) {
+  for (u64 i = 0; i < count - 1; i++) {
     valk_lval_t* expr = valk_lval_list_nth(a, i);
     // Evaluate and discard result
     valk_lval_eval(e, expr);
@@ -2892,7 +2892,7 @@ static valk_lval_t* valk_builtin_printf(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
 
   const char* fmt = valk_lval_list_nth(a, 0)->str;
-  size_t arg_idx = 1;
+  u64 arg_idx = 1;
 
   for (const char* p = fmt; *p != '\0'; p++) {
     if (*p == '%' && *(p + 1) != '\0') {
@@ -2945,7 +2945,7 @@ static valk_lval_t* valk_builtin_printf(valk_lenv_t* e, valk_lval_t* a) {
 static valk_lval_t* valk_builtin_print(valk_lenv_t* e, valk_lval_t* a) {
   // Print each argument separated by space
   // Automatically converts non-strings using str()
-  for (size_t i = 0; i < valk_lval_list_count(a); i++) {
+  for (u64 i = 0; i < valk_lval_list_count(a); i++) {
     valk_lval_t* arg = valk_lval_list_nth(a, i);
 
     // Convert to string if needed
@@ -3057,6 +3057,9 @@ static void valk_lval_print_user(valk_lval_t* val) {
     case LVAL_REF:
       printf("<ref:%s>", val->ref.type);
       break;
+    case LVAL_HANDLE:
+      printf("<handle>");
+      break;
     case LVAL_FORWARD:
       printf("<forward>");
       break;
@@ -3073,7 +3076,7 @@ static void valk_lval_print_user(valk_lval_t* val) {
 static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
 
-  size_t count = valk_lval_list_count(a);
+  u64 count = valk_lval_list_count(a);
 
   // No arguments - return empty string
   if (count == 0) {
@@ -3082,8 +3085,8 @@ static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
 
   // First pass: calculate total size needed
   // For strings, use their length; for other types, estimate conservatively
-  size_t total_size = 0;
-  for (size_t i = 0; i < count; i++) {
+  u64 total_size = 0;
+  for (u64 i = 0; i < count; i++) {
     valk_lval_t* val = valk_lval_list_nth(a, i);
     if (LVAL_TYPE(val) == LVAL_STR) {
       total_size += strlen(val->str);
@@ -3103,15 +3106,15 @@ static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_err("str: out of memory allocating %zu bytes", total_size);
   }
 
-  size_t offset = 0;
-  size_t remaining = total_size;
+  u64 offset = 0;
+  u64 remaining = total_size;
 
-  for (size_t i = 0; i < count; i++) {
+  for (u64 i = 0; i < count; i++) {
     valk_lval_t* val = valk_lval_list_nth(a, i);
 
     if (LVAL_TYPE(val) == LVAL_STR) {
       // Directly copy string content
-      size_t len = strlen(val->str);
+      u64 len = strlen(val->str);
       memcpy(buffer + offset, val->str, len);
       offset += len;
       remaining -= len;
@@ -3131,7 +3134,7 @@ static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
       stdout = old_stdout;
       fclose(stream);
 
-      size_t written = strlen(buffer + offset);
+      u64 written = strlen(buffer + offset);
       offset += written;
       remaining -= written;
     }
@@ -3166,7 +3169,7 @@ static valk_lval_t* valk_builtin_make_string(valk_lenv_t* e, valk_lval_t* a) {
 
   // Get the pattern to repeat
   const char* pattern;
-  size_t pattern_len;
+  u64 pattern_len;
 
   if (LVAL_TYPE(pattern_val) == LVAL_STR) {
     pattern = pattern_val->str;
@@ -3187,7 +3190,7 @@ static valk_lval_t* valk_builtin_make_string(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   // Calculate total size needed
-  size_t total_size = (size_t)count * pattern_len;
+  u64 total_size = (u64)count * pattern_len;
 
   // Sanity check - don't allocate more than 100MB
   if (total_size > 100 * 1024 * 1024) {
@@ -3297,7 +3300,7 @@ static valk_lval_t* valk_builtin_gc_collect(valk_lenv_t* e, valk_lval_t* a) {
   if (heap == NULL) {
     return valk_lval_num(0);
   }
-  size_t reclaimed =
+  u64 reclaimed =
       valk_gc_malloc_collect(heap, NULL);  // No additional roots needed
   return valk_lval_num((long)reclaimed);
 }
@@ -3326,8 +3329,8 @@ static valk_lval_t* valk_builtin_set_heap_hard_limit(valk_lenv_t* e,
     return valk_lval_err("No GC heap available");
   }
 
-  size_t new_limit = (size_t)valk_lval_list_nth(a, 0)->num;
-  size_t old_limit = heap->hard_limit;
+  u64 new_limit = (u64)valk_lval_list_nth(a, 0)->num;
+  u64 old_limit = heap->hard_limit;
 
   if (new_limit < valk_gc_heap2_used_bytes(heap)) {
     return valk_lval_err(
@@ -3364,8 +3367,8 @@ static valk_lval_t* valk_builtin_set_gc_threshold_pct(valk_lenv_t* e,
     return valk_lval_num(0);
   }
 
-  uint8_t old_pct = heap->gc_threshold_pct;
-  heap->gc_threshold_pct = (uint8_t)new_pct;
+  u8 old_pct = heap->gc_threshold_pct;
+  heap->gc_threshold_pct = (u8)new_pct;
   return valk_lval_num((long)old_pct);
 }
 
@@ -3403,8 +3406,8 @@ static valk_lval_t* valk_builtin_set_gc_min_interval(valk_lenv_t* e,
     return valk_lval_num(0);
   }
 
-  uint32_t old_ms = heap->min_gc_interval_ms;
-  heap->min_gc_interval_ms = (uint32_t)new_ms;
+  u32 old_ms = heap->min_gc_interval_ms;
+  heap->min_gc_interval_ms = (u32)new_ms;
   return valk_lval_num((long)old_ms);
 }
 
@@ -3541,7 +3544,7 @@ static valk_lval_t* valk_builtin_http2_request(valk_lenv_t* e, valk_lval_t* a) {
   // Allocate a dedicated arena so the request can be freed in one go.
   // HTTP client currently reserves up to ~8MB for response body buffers.
   // Use a generous arena (8 MiB + 64 KiB) to avoid OOM in tests.
-  size_t arena_bytes =
+  u64 arena_bytes =
       sizeof(valk_mem_arena_t) + (8 * 1024 * 1024) + (64 * 1024);
   valk_mem_arena_t* arena = malloc(arena_bytes);
   valk_mem_arena_init(arena, arena_bytes - sizeof(*arena));
@@ -3553,7 +3556,7 @@ static valk_lval_t* valk_builtin_http2_request(valk_lenv_t* e, valk_lval_t* a) {
 
   // Copy strings into request arena scope
   VALK_WITH_ALLOC(req->allocator) {
-    size_t len;
+    u64 len;
     len = strlen(valk_lval_list_nth(a, 0)->str);
     req->method = valk_mem_alloc(len + 1);
     memcpy(req->method, valk_lval_list_nth(a, 0)->str, len + 1);
@@ -3570,7 +3573,7 @@ static valk_lval_t* valk_builtin_http2_request(valk_lenv_t* e, valk_lval_t* a) {
     req->path = valk_mem_alloc(len + 1);
     memcpy(req->path, valk_lval_list_nth(a, 3)->str, len + 1);
 
-    req->body = (uint8_t*)"";
+    req->body = (u8*)"";
     req->bodyLen = 0;
     req->bodyCapacity = 0;
     da_init(&req->headers);
@@ -3596,10 +3599,10 @@ static valk_lval_t* valk_builtin_http2_request_add_header(valk_lenv_t* e,
 
   VALK_WITH_ALLOC(req->allocator) {
     struct valk_http2_header_t hdr;
-    size_t nlen = strlen(valk_lval_list_nth(a, 1)->str);
-    size_t vlen = strlen(valk_lval_list_nth(a, 2)->str);
-    uint8_t* n = valk_mem_alloc(nlen + 1);
-    uint8_t* v = valk_mem_alloc(vlen + 1);
+    u64 nlen = strlen(valk_lval_list_nth(a, 1)->str);
+    u64 vlen = strlen(valk_lval_list_nth(a, 2)->str);
+    u8* n = valk_mem_alloc(nlen + 1);
+    u8* v = valk_mem_alloc(vlen + 1);
     memcpy(n, valk_lval_list_nth(a, 1)->str, nlen + 1);
     memcpy(v, valk_lval_list_nth(a, 2)->str, vlen + 1);
     hdr.name = n;
@@ -3654,7 +3657,7 @@ static valk_lval_t* valk_builtin_http2_response_headers(valk_lenv_t* e,
   valk_lval_t* lst = valk_lval_nil();
   if (!res) return lst;
 
-  for (size_t i = 0; i < res->headers.count; ++i) {
+  for (u64 i = 0; i < res->headers.count; ++i) {
     struct valk_http2_header_t* h = &res->headers.items[i];
     valk_lval_t* pair = valk_lval_nil();
     pair = valk_lval_cons(valk_lval_str((const char*)h->value), pair);
@@ -3670,7 +3673,7 @@ static void __valk_mock_response_free(void* ptr) {
   if (resp) {
     free((void*)resp->status);
     free((void*)resp->body);
-    for (size_t i = 0; i < resp->headers.count; i++) {
+    for (u64 i = 0; i < resp->headers.count; i++) {
       free((void*)resp->headers.items[i].name);
       free((void*)resp->headers.items[i].value);
     }
@@ -3687,7 +3690,7 @@ static void __valk_mock_response_free(void* ptr) {
 static valk_lval_t* valk_builtin_http2_mock_response(valk_lenv_t* e,
                                                       valk_lval_t* a) {
   UNUSED(e);
-  size_t argc = valk_lval_list_count(a);
+  u64 argc = valk_lval_list_count(a);
   LVAL_ASSERT(a, argc >= 2 && argc <= 3,
               "http2/mock-response expects 2 or 3 arguments (status body [headers])");
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);  // status
@@ -3695,14 +3698,14 @@ static valk_lval_t* valk_builtin_http2_mock_response(valk_lenv_t* e,
 
   const char* status_str = valk_lval_list_nth(a, 0)->str;
   const char* body_str = valk_lval_list_nth(a, 1)->str;
-  size_t body_len = strlen(body_str);
+  u64 body_len = strlen(body_str);
 
   // Allocate response struct with malloc so it can be freed independently
   valk_http2_response_t* resp = malloc(sizeof(valk_http2_response_t));
   memset(resp, 0, sizeof(*resp));
 
   // Copy status
-  size_t status_len = strlen(status_str);
+  u64 status_len = strlen(status_str);
   resp->status = malloc(status_len + 1);
   memcpy((void*)resp->status, status_str, status_len + 1);
 
@@ -3721,24 +3724,24 @@ static valk_lval_t* valk_builtin_http2_mock_response(valk_lenv_t* e,
     valk_lval_t* headers = valk_lval_list_nth(a, 2);
     // Headers can be a list or nil
     if (LVAL_TYPE(headers) != LVAL_NIL) {
-      size_t header_count = valk_lval_list_count(headers);
+      u64 header_count = valk_lval_list_count(headers);
 
       if (header_count > 0) {
         resp->headers.items = malloc(header_count * sizeof(struct valk_http2_header_t));
         resp->headers.capacity = header_count;
         resp->headers.count = 0;
 
-        for (size_t i = 0; i < header_count; i++) {
+        for (u64 i = 0; i < header_count; i++) {
           valk_lval_t* pair = valk_lval_list_nth(headers, i);
-          size_t pair_len = valk_lval_list_count(pair);
+          u64 pair_len = valk_lval_list_count(pair);
           if (pair_len >= 2) {
             valk_lval_t* name_val = valk_lval_list_nth(pair, 0);
             valk_lval_t* value_val = valk_lval_list_nth(pair, 1);
             if (LVAL_TYPE(name_val) == LVAL_STR && LVAL_TYPE(value_val) == LVAL_STR) {
-              size_t nlen = strlen(name_val->str);
-              size_t vlen = strlen(value_val->str);
-              uint8_t* n = malloc(nlen + 1);
-              uint8_t* v = malloc(vlen + 1);
+              u64 nlen = strlen(name_val->str);
+              u64 vlen = strlen(value_val->str);
+              u8* n = malloc(nlen + 1);
+              u8* v = malloc(vlen + 1);
               memcpy(n, name_val->str, nlen + 1);
               memcpy(v, value_val->str, vlen + 1);
               resp->headers.items[resp->headers.count].name = n;
@@ -3788,31 +3791,31 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
     valk_lval_t* val;
 
     if ((val = valk_plist_get(config_map, ":max-connections")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.max_connections = (uint32_t)val->num;
+      config.max_connections = (u32)val->num;
 
     if ((val = valk_plist_get(config_map, ":max-concurrent-streams")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.max_concurrent_streams = (uint32_t)val->num;
+      config.max_concurrent_streams = (u32)val->num;
 
     if ((val = valk_plist_get(config_map, ":tcp-buffer-pool-size")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.tcp_buffer_pool_size = (uint32_t)val->num;
+      config.tcp_buffer_pool_size = (u32)val->num;
 
     if ((val = valk_plist_get(config_map, ":arena-pool-size")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.arena_pool_size = (uint32_t)val->num;
+      config.arena_pool_size = (u32)val->num;
 
     if ((val = valk_plist_get(config_map, ":arena-size")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.arena_size = (size_t)val->num;
+      config.arena_size = (u64)val->num;
 
     if ((val = valk_plist_get(config_map, ":max-request-body-size")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.max_request_body_size = (size_t)val->num;
+      config.max_request_body_size = (u64)val->num;
 
     if ((val = valk_plist_get(config_map, ":backpressure-timeout-ms")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.backpressure_timeout_ms = (uint32_t)val->num;
+      config.backpressure_timeout_ms = (u32)val->num;
 
     if ((val = valk_plist_get(config_map, ":backpressure-list-max")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.backpressure_list_max = (uint32_t)val->num;
+      config.backpressure_list_max = (u32)val->num;
 
     if ((val = valk_plist_get(config_map, ":pending-stream-pool-size")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.pending_stream_pool_size = (uint32_t)val->num;
+      config.pending_stream_pool_size = (u32)val->num;
 
     VALK_WITH_ALLOC(&valk_malloc_allocator) {
       sys = valk_aio_start_with_config(&config);
@@ -3906,7 +3909,7 @@ static valk_lval_t* valk_builtin_aio_metrics(valk_lenv_t* e, valk_lval_t* a) {
   // Format: {:uptime 3600 :connections {:total 1234 :active 5 :failed 3} ...}
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
-  uint64_t now_us = ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
+  u64 now_us = ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
 
   valk_lval_t* uptime_key = valk_lval_sym(":uptime");
   valk_lval_t* uptime_val = valk_lval_num(
@@ -3998,7 +4001,7 @@ static valk_lval_t* valk_builtin_aio_metrics_json(valk_lenv_t* e,
   valk_aio_update_queue_stats(sys);  // Update queue stats before reading metrics
   valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
   valk_aio_system_stats_t* system_stats = valk_aio_get_system_stats(sys);
-  char* json = valk_aio_combined_to_json(metrics, system_stats, (struct valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  char* json = valk_aio_combined_to_json(metrics, system_stats, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   return valk_lval_str(json);
 #else
   return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
@@ -4020,7 +4023,7 @@ static valk_lval_t* valk_builtin_aio_metrics_prometheus(valk_lenv_t* e,
 #ifdef VALK_METRICS_ENABLED
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
-  char* prom = valk_aio_metrics_to_prometheus(metrics, (struct valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  char* prom = valk_aio_metrics_to_prometheus(metrics, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   return valk_lval_str(prom);
 #else
   return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
@@ -4042,7 +4045,7 @@ static valk_lval_t* valk_builtin_aio_system_stats_prometheus(valk_lenv_t* e,
 #ifdef VALK_METRICS_ENABLED
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_system_stats_t* stats = valk_aio_get_system_stats(sys);
-  char* prom = valk_aio_system_stats_to_prometheus(stats, (struct valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  char* prom = valk_aio_system_stats_to_prometheus(stats, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   if (!prom) {
     return valk_lval_err("Failed to generate system stats Prometheus");
   }
@@ -4073,10 +4076,10 @@ static valk_lval_t* valk_builtin_aio_systems_json(valk_lenv_t* e,
 
   // Get the JSON for this system
   char* sys_json = valk_aio_combined_to_json_named(name, metrics, system_stats,
-    (struct valk_mem_allocator_t*)valk_thread_ctx.allocator);
+    (valk_mem_allocator_t*)valk_thread_ctx.allocator);
 
   // Wrap in array (for future multi-system support)
-  size_t len = strlen(sys_json);
+  u64 len = strlen(sys_json);
   char* result = valk_mem_alloc(len + 3);  // "[" + json + "]" + null
   snprintf(result, len + 3, "[%s]", sys_json);
 
@@ -4111,7 +4114,7 @@ static valk_lval_t* valk_builtin_http_client_register(valk_lenv_t* e, valk_lval_
   }
 
   valk_http_clients_registry_t* reg = valk_aio_get_http_clients_registry(sys);
-  int client_id = valk_http_client_register(reg, name, type, (uint64_t)pool_size);
+  int client_id = valk_http_client_register(reg, name, type, (u64)pool_size);
 
   if (client_id < 0) {
     return valk_lval_err("Failed to register HTTP client (max clients reached)");
@@ -4151,16 +4154,16 @@ static valk_lval_t* valk_builtin_http_client_on_operation(valk_lenv_t* e, valk_l
   }
 
   valk_http_clients_registry_t* reg = valk_aio_get_http_clients_registry(sys);
-  uint32_t count = atomic_load(&reg->count);
+  u32 count = atomic_load(&reg->count);
 
-  if ((uint32_t)client_id >= count) {
+  if ((u32)client_id >= count) {
     return valk_lval_err("Invalid client-id");
   }
 
   bool error = (LVAL_TYPE(error_arg) == LVAL_SYM && strcmp(error_arg->str, "true") == 0);
   bool retry = (LVAL_TYPE(retry_arg) == LVAL_SYM && strcmp(retry_arg->str, "true") == 0);
 
-  valk_http_client_on_operation(&reg->clients[client_id], (uint64_t)duration_us, error, retry);
+  valk_http_client_on_operation(&reg->clients[client_id], (u64)duration_us, error, retry);
 
   return valk_lval_nil();
 #else
@@ -4190,9 +4193,9 @@ static valk_lval_t* valk_builtin_http_client_on_cache(valk_lenv_t* e, valk_lval_
   }
 
   valk_http_clients_registry_t* reg = valk_aio_get_http_clients_registry(sys);
-  uint32_t count = atomic_load(&reg->count);
+  u32 count = atomic_load(&reg->count);
 
-  if ((uint32_t)client_id >= count) {
+  if ((u32)client_id >= count) {
     return valk_lval_err("Invalid client-id");
   }
 
@@ -4220,7 +4223,7 @@ static valk_lval_t* valk_builtin_http_client_metrics_prometheus(valk_lenv_t* e, 
 #ifdef VALK_METRICS_ENABLED
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_http_clients_registry_t* reg = valk_aio_get_http_clients_registry(sys);
-  char* prom = valk_http_clients_to_prometheus(reg, (struct valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  char* prom = valk_http_clients_to_prometheus(reg, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   if (!prom) {
     return valk_lval_str("");  // Return empty string if no clients registered
   }
@@ -4245,7 +4248,7 @@ static valk_lval_t* valk_builtin_aio_delay(valk_lenv_t* e, valk_lval_t* a) {
               "First argument must be aio_system");
 
   valk_aio_system_t* sys = aio_ref->ref.ptr;
-  uint64_t delay_ms = (uint64_t)valk_lval_list_nth(a, 1)->num;
+  u64 delay_ms = (u64)valk_lval_list_nth(a, 1)->num;
   valk_lval_t* continuation = valk_lval_list_nth(a, 2);
 
   return valk_aio_delay(sys, delay_ms, continuation, e);
@@ -4358,7 +4361,7 @@ static valk_lval_t* valk_builtin_net_get_available_port(valk_lenv_t* e,
 static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e,
                                                      valk_lval_t* a) {
   // Accept 3 or 4 arguments
-  size_t argc = valk_lval_list_count(a);
+  u64 argc = valk_lval_list_count(a);
   LVAL_ASSERT(a, argc >= 3 && argc <= 4,
               "http2/server-listen expects 3 or 4 arguments, got %zu", argc);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);  // aio system
@@ -4394,7 +4397,7 @@ static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e,
       if (LVAL_TYPE(result) == LVAL_STR) {
         // Copy rendered body to GC heap for persistence
         VALK_WITH_ALLOC((valk_mem_allocator_t*)valk_thread_ctx.heap) {
-          size_t len = strlen(result->str);
+          u64 len = strlen(result->str);
           char* body_copy = valk_mem_alloc(len + 1);
           memcpy(body_copy, result->str, len + 1);
           config.error_503_body = body_copy;
@@ -4544,7 +4547,7 @@ static valk_lval_t* valk_builtin_aio_schedule(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   valk_aio_system_t* sys = aio_ref->ref.ptr;
-  uint64_t delay_ms = (uint64_t)delay_arg->num;
+  u64 delay_ms = (u64)delay_arg->num;
 
   return valk_aio_schedule(sys, delay_ms, callback, e);
 }
@@ -4622,8 +4625,8 @@ static valk_lval_t* valk_builtin_coverage_branch(valk_lenv_t* e, valk_lval_t* a)
   valk_lval_t* taken_val = valk_lval_list_nth(a, 1);
   LVAL_ASSERT_TYPE(a, line_val, LVAL_NUM);
   LVAL_ASSERT_TYPE(a, taken_val, LVAL_NUM);
-  uint16_t file_id = line_val->cov_file_id;
-  uint16_t line = (uint16_t)line_val->num;
+  u16 file_id = line_val->cov_file_id;
+  u16 line = (u16)line_val->num;
   bool taken = taken_val->num != 0;
   valk_coverage_record_branch(file_id, line, taken);
   return valk_lval_num(taken ? 1 : 0);
@@ -4647,7 +4650,7 @@ static valk_lval_t* valk_builtin_source_file(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t* expr = valk_lval_list_nth(a, 0);
-  uint16_t file_id = expr->cov_file_id;
+  u16 file_id = expr->cov_file_id;
   const char* filename = valk_source_get_filename(file_id);
   if (filename == NULL) {
     return valk_lval_str("<unknown>");

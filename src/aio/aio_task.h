@@ -1,8 +1,8 @@
 #pragma once
 
 #include "aio_types.h"
-#include "../concurrency.h"
-#include "../memory.h"
+#include "concurrency.h"
+#include "memory.h"
 
 typedef struct valk_aio_task_new {
   void *arg;

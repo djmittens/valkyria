@@ -1,6 +1,6 @@
 #include "aio_pressure.h"
 
-static float fmaxf_safe(float a, float b) {
+static float __attribute__((unused)) fmaxf_safe(float a, float b) {
   return (a > b) ? a : b;
 }
 

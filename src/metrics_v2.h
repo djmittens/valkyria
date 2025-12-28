@@ -2,9 +2,9 @@
 #ifndef VALK_METRICS_V2_H
 #define VALK_METRICS_V2_H
 
-#include <stdint.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include "types.h"
 #include "valk_thread.h"
 
 // ============================================================================
@@ -28,8 +28,8 @@ typedef struct {
 #define VALK_MAX_LABELS_V2 8
 typedef struct {
   valk_label_v2_t labels[VALK_MAX_LABELS_V2];
-  uint8_t count;
-  uint32_t hash;  // Pre-computed hash for fast lookup
+  u8 count;
+  u32 hash;  // Pre-computed hash for fast lookup
 } valk_label_set_v2_t;
 
 // ============================================================================
@@ -40,13 +40,13 @@ typedef struct {
   const char *name;
   const char *help;
   valk_label_set_v2_t labels;
-  _Atomic uint64_t value;
-  _Atomic uint64_t last_value;      // For delta calculation
-  _Atomic uint64_t last_timestamp;  // When last_value was captured
+  _Atomic u64 value;
+  _Atomic u64 last_value;      // For delta calculation
+  _Atomic u64 last_timestamp;  // When last_value was captured
 
   // LRU eviction support
-  _Atomic uint64_t last_updated_us; // Timestamp of last update (for LRU)
-  _Atomic uint32_t generation;      // Incremented on eviction (for safe reuse)
+  _Atomic u64 last_updated_us; // Timestamp of last update (for LRU)
+  _Atomic u32 generation;      // Incremented on eviction (for safe reuse)
   _Atomic bool active;              // false = slot available for reuse
   bool evictable;                   // false for persistent metrics (pool, gc)
 } valk_counter_v2_t;
@@ -59,13 +59,13 @@ typedef struct {
   const char *name;
   const char *help;
   valk_label_set_v2_t labels;
-  _Atomic int64_t value;
-  _Atomic int64_t last_value;
-  _Atomic uint64_t last_timestamp;
+  _Atomic i64 value;
+  _Atomic i64 last_value;
+  _Atomic u64 last_timestamp;
 
   // LRU eviction support
-  _Atomic uint64_t last_updated_us; // Timestamp of last update (for LRU)
-  _Atomic uint32_t generation;      // Incremented on eviction (for safe reuse)
+  _Atomic u64 last_updated_us; // Timestamp of last update (for LRU)
+  _Atomic u32 generation;      // Incremented on eviction (for safe reuse)
   _Atomic bool active;              // false = slot available for reuse
   bool evictable;                   // false for persistent metrics (pool, gc)
 } valk_gauge_v2_t;
@@ -83,22 +83,22 @@ typedef struct {
 
   // Bucket configuration
   double bucket_bounds[VALK_MAX_BUCKETS];
-  uint8_t bucket_count;
+  u8 bucket_count;
 
   // Atomic counters
-  _Atomic uint64_t buckets[VALK_MAX_BUCKETS + 1];  // +1 for +Inf
-  _Atomic uint64_t count;
-  _Atomic uint64_t sum_micros;  // Sum in microseconds for precision
+  _Atomic u64 buckets[VALK_MAX_BUCKETS + 1];  // +1 for +Inf
+  _Atomic u64 count;
+  _Atomic u64 sum_micros;  // Sum in microseconds for precision
 
   // Delta tracking (per bucket)
-  uint64_t last_buckets[VALK_MAX_BUCKETS + 1];
-  uint64_t last_count;
-  uint64_t last_sum_micros;
-  uint64_t last_timestamp;
+  u64 last_buckets[VALK_MAX_BUCKETS + 1];
+  u64 last_count;
+  u64 last_sum_micros;
+  u64 last_timestamp;
 
   // LRU eviction support
-  _Atomic uint64_t last_updated_us; // Timestamp of last update (for LRU)
-  _Atomic uint32_t generation;      // Incremented on eviction (for safe reuse)
+  _Atomic u64 last_updated_us; // Timestamp of last update (for LRU)
+  _Atomic u32 generation;      // Incremented on eviction (for safe reuse)
   _Atomic bool active;              // false = slot available for reuse
   bool evictable;                   // false for persistent metrics (pool, gc)
 } valk_histogram_v2_t;
@@ -112,7 +112,7 @@ typedef struct {
 
 typedef struct {
   double mean;
-  uint64_t weight;
+  u64 weight;
 } valk_centroid_t;
 
 typedef struct {
@@ -122,25 +122,25 @@ typedef struct {
 
   // T-Digest centroids
   valk_centroid_t centroids[VALK_SUMMARY_CENTROIDS];
-  uint32_t centroid_count;
-  _Atomic uint64_t total_weight;
+  u32 centroid_count;
+  _Atomic u64 total_weight;
   _Atomic double sum;
 
   // Requested quantiles (e.g., 0.5, 0.9, 0.99)
   double quantiles[8];
-  uint8_t quantile_count;
+  u8 quantile_count;
 
   // Lock for centroid updates (rare path)
   valk_mutex_t lock;
 
   // Delta tracking
-  uint64_t last_total_weight;
+  u64 last_total_weight;
   double last_sum;
-  uint64_t last_timestamp;
+  u64 last_timestamp;
 
   // LRU eviction support
-  _Atomic uint64_t last_updated_us; // Timestamp of last update (for LRU)
-  _Atomic uint32_t generation;      // Incremented on eviction (for safe reuse)
+  _Atomic u64 last_updated_us; // Timestamp of last update (for LRU)
+  _Atomic u32 generation;      // Incremented on eviction (for safe reuse)
   _Atomic bool active;              // false = slot available for reuse
   bool evictable;                   // false for persistent metrics (pool, gc)
 } valk_summary_v2_t;
@@ -151,8 +151,8 @@ typedef struct {
 
 // Handle = slot index + generation (for safe access after potential eviction)
 typedef struct {
-  uint32_t slot;
-  uint32_t generation;
+  u32 slot;
+  u32 generation;
 } valk_metric_handle_t;
 
 #define VALK_INVALID_SLOT 0xFFFFFFFF
@@ -163,7 +163,7 @@ typedef struct {
 // ============================================================================
 
 typedef struct {
-  _Atomic uint32_t head;  // Index of first free slot (VALK_INVALID_SLOT = empty)
+  _Atomic u32 head;  // Index of first free slot (VALK_INVALID_SLOT = empty)
 } valk_free_list_t;
 
 // ============================================================================
@@ -174,43 +174,43 @@ typedef struct {
 // Instead, they're computed on-demand and exported alongside metrics.
 typedef struct {
   // Registry utilization (active counts)
-  size_t counters_active;
-  size_t gauges_active;
-  size_t histograms_active;
-  size_t summaries_active;
+  u64 counters_active;
+  u64 gauges_active;
+  u64 histograms_active;
+  u64 summaries_active;
 
   // High water marks (slots ever used)
-  size_t counters_hwm;
-  size_t gauges_hwm;
-  size_t histograms_hwm;
-  size_t summaries_hwm;
+  u64 counters_hwm;
+  u64 gauges_hwm;
+  u64 histograms_hwm;
+  u64 summaries_hwm;
 
   // Capacity limits
-  size_t counters_capacity;
-  size_t gauges_capacity;
-  size_t histograms_capacity;
-  size_t summaries_capacity;
+  u64 counters_capacity;
+  u64 gauges_capacity;
+  u64 histograms_capacity;
+  u64 summaries_capacity;
 
   // String pool
-  size_t string_pool_used;
-  size_t string_pool_capacity;
+  u64 string_pool_used;
+  u64 string_pool_capacity;
 
   // Eviction stats (lifetime totals)
-  uint64_t evictions_total;
-  uint64_t evictions_counters;
-  uint64_t evictions_gauges;
-  uint64_t evictions_histograms;
-  uint64_t evictions_summaries;
+  u64 evictions_total;
+  u64 evictions_counters;
+  u64 evictions_gauges;
+  u64 evictions_histograms;
+  u64 evictions_summaries;
 
   // Free list depths (available slots for reuse)
-  size_t counters_free;
-  size_t gauges_free;
-  size_t histograms_free;
-  size_t summaries_free;
+  u64 counters_free;
+  u64 gauges_free;
+  u64 histograms_free;
+  u64 summaries_free;
 
   // Collection timing
-  uint64_t last_collect_time_us;
-  uint64_t collect_duration_us;
+  u64 last_collect_time_us;
+  u64 collect_duration_us;
 } valk_registry_stats_t;
 
 // ============================================================================
@@ -230,52 +230,52 @@ typedef struct {
 typedef struct {
   // Metric arrays
   valk_counter_v2_t counters[VALK_REGISTRY_MAX_COUNTERS];
-  _Atomic size_t counter_count;  // High water mark (not current active count)
+  _Atomic u64 counter_count;  // High water mark (not current active count)
 
   valk_gauge_v2_t gauges[VALK_REGISTRY_MAX_GAUGES];
-  _Atomic size_t gauge_count;
+  _Atomic u64 gauge_count;
 
   valk_histogram_v2_t histograms[VALK_REGISTRY_MAX_HISTOGRAMS];
-  _Atomic size_t histogram_count;
+  _Atomic u64 histogram_count;
 
   valk_summary_v2_t summaries[VALK_REGISTRY_MAX_SUMMARIES];
-  _Atomic size_t summary_count;
+  _Atomic u64 summary_count;
 
   // Free lists for slot reuse (per metric type)
   // next_free array stores next pointer for each slot (VALK_INVALID_SLOT = end)
   valk_free_list_t counter_free;
-  uint32_t counter_next_free[VALK_REGISTRY_MAX_COUNTERS];
+  u32 counter_next_free[VALK_REGISTRY_MAX_COUNTERS];
 
   valk_free_list_t gauge_free;
-  uint32_t gauge_next_free[VALK_REGISTRY_MAX_GAUGES];
+  u32 gauge_next_free[VALK_REGISTRY_MAX_GAUGES];
 
   valk_free_list_t histogram_free;
-  uint32_t histogram_next_free[VALK_REGISTRY_MAX_HISTOGRAMS];
+  u32 histogram_next_free[VALK_REGISTRY_MAX_HISTOGRAMS];
 
   valk_free_list_t summary_free;
-  uint32_t summary_next_free[VALK_REGISTRY_MAX_SUMMARIES];
+  u32 summary_next_free[VALK_REGISTRY_MAX_SUMMARIES];
 
   // String interning pool
   const char *string_pool[4096];
-  size_t string_pool_count;
+  u64 string_pool_count;
   valk_mutex_t pool_lock;
 
   // Snapshot interval tracking
-  uint64_t last_snapshot_time;
-  uint64_t snapshot_interval_us;  // Default: 1000000 (1s)
+  u64 last_snapshot_time;
+  u64 snapshot_interval_us;  // Default: 1000000 (1s)
 
   // Eviction configuration
-  uint64_t eviction_threshold_us;  // Default: 5 minutes
+  u64 eviction_threshold_us;  // Default: 5 minutes
 
   // Eviction tracking (for meta-metrics)
-  _Atomic uint64_t evictions_total;
-  _Atomic uint64_t evictions_counters;
-  _Atomic uint64_t evictions_gauges;
-  _Atomic uint64_t evictions_histograms;
-  _Atomic uint64_t evictions_summaries;
+  _Atomic u64 evictions_total;
+  _Atomic u64 evictions_counters;
+  _Atomic u64 evictions_gauges;
+  _Atomic u64 evictions_histograms;
+  _Atomic u64 evictions_summaries;
 
   // Timing
-  uint64_t start_time_us;
+  u64 start_time_us;
 } valk_metrics_registry_t;
 
 // Global registry instance
@@ -294,7 +294,7 @@ void valk_metrics_registry_destroy(void);
 
 // Evict stale metrics when registry is under pressure
 // Returns number of metrics evicted
-size_t valk_metrics_evict_stale(void);
+u64 valk_metrics_evict_stale(void);
 
 // ============================================================================
 // REGISTRY STATS API (Meta-metrics)
@@ -306,8 +306,8 @@ void valk_registry_stats_collect(valk_registry_stats_t *stats);
 
 // Export registry stats as JSON
 // Returns bytes written (excluding null terminator)
-size_t valk_registry_stats_to_json(const valk_registry_stats_t *stats,
-                                    char *buf, size_t buf_size);
+u64 valk_registry_stats_to_json(const valk_registry_stats_t *stats,
+                                    char *buf, u64 buf_size);
 
 // Mark a metric as persistent (non-evictable)
 // Use for core system metrics that should never be evicted
@@ -329,7 +329,7 @@ valk_metric_handle_t valk_histogram_handle(valk_histogram_v2_t *h);
 valk_metric_handle_t valk_summary_handle(valk_summary_v2_t *s);
 
 // Get current time in microseconds (implemented in metrics_v2.c)
-uint64_t valk_metrics_now_us(void);
+u64 valk_metrics_now_us(void);
 
 // ============================================================================
 // COUNTER API
@@ -345,7 +345,7 @@ static inline void valk_counter_v2_inc(valk_counter_v2_t *c) {
   atomic_store_explicit(&c->last_updated_us, valk_metrics_now_us(), memory_order_relaxed);
 }
 
-static inline void valk_counter_v2_add(valk_counter_v2_t *c, uint64_t n) {
+static inline void valk_counter_v2_add(valk_counter_v2_t *c, u64 n) {
   atomic_fetch_add_explicit(&c->value, n, memory_order_relaxed);
   atomic_store_explicit(&c->last_updated_us, valk_metrics_now_us(), memory_order_relaxed);
 }
@@ -359,7 +359,7 @@ valk_gauge_v2_t *valk_gauge_get_or_create(const char *name,
                                           const valk_label_set_v2_t *labels);
 
 // Gauge updates (all update LRU timestamp)
-static inline void valk_gauge_v2_set(valk_gauge_v2_t *g, int64_t v) {
+static inline void valk_gauge_v2_set(valk_gauge_v2_t *g, i64 v) {
   atomic_store_explicit(&g->value, v, memory_order_relaxed);
   atomic_store_explicit(&g->last_updated_us, valk_metrics_now_us(), memory_order_relaxed);
 }
@@ -374,7 +374,7 @@ static inline void valk_gauge_v2_dec(valk_gauge_v2_t *g) {
   atomic_store_explicit(&g->last_updated_us, valk_metrics_now_us(), memory_order_relaxed);
 }
 
-static inline void valk_gauge_v2_add(valk_gauge_v2_t *g, int64_t n) {
+static inline void valk_gauge_v2_add(valk_gauge_v2_t *g, i64 n) {
   atomic_fetch_add_explicit(&g->value, n, memory_order_relaxed);
   atomic_store_explicit(&g->last_updated_us, valk_metrics_now_us(), memory_order_relaxed);
 }
@@ -387,17 +387,17 @@ valk_histogram_v2_t *valk_histogram_get_or_create(
     const char *name,
     const char *help,
     const double *bounds,
-    size_t bound_count,
+    u64 bound_count,
     const valk_label_set_v2_t *labels);
 
 // Lock-free observation (updates LRU timestamp)
-static inline void valk_histogram_v2_observe_us(valk_histogram_v2_t *h, uint64_t us) {
+static inline void valk_histogram_v2_observe_us(valk_histogram_v2_t *h, u64 us) {
   atomic_fetch_add_explicit(&h->count, 1, memory_order_relaxed);
   atomic_fetch_add_explicit(&h->sum_micros, us, memory_order_relaxed);
 
   // Find bucket
   double seconds = (double)us / 1000000.0;
-  for (uint8_t i = 0; i < h->bucket_count; i++) {
+  for (u8 i = 0; i < h->bucket_count; i++) {
     if (seconds <= h->bucket_bounds[i]) {
       atomic_fetch_add_explicit(&h->buckets[i], 1, memory_order_relaxed);
       atomic_store_explicit(&h->last_updated_us, valk_metrics_now_us(), memory_order_relaxed);

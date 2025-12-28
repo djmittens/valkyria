@@ -1,8 +1,7 @@
 #pragma once
 
-#include <stdint.h>
 #include <stdio.h>
-#include <string.h>
+#include "types.h"
 
 // #define VALK_ARC_DEBUG
 #define VALK_ARC_TRACE_DEPTH 10
@@ -84,14 +83,14 @@ typedef struct valk_arc_trace_info {
   const char *file;
   const char *function;
   int line;
-  size_t refcount;
+  u64 refcount;
   void *stack[VALK_ARC_TRACE_DEPTH];
-  size_t size;
+  u64 size;
 } valk_arc_trace_info;
 
 #define valk_capture_trace(_kind, _refcount, ref)                             \
   do {                                                                        \
-    size_t _old = __atomic_fetch_add(&(ref)->nextTrace, 1, __ATOMIC_RELEASE); \
+    u64 _old = __atomic_fetch_add(&(ref)->nextTrace, 1, __ATOMIC_RELEASE); \
     VALK_ASSERT(                                                              \
         _old < VALK_ARC_TRACE_MAX,                                            \
         "Cannot keep tracing this variable, please increase the max traces"); \
@@ -107,7 +106,7 @@ typedef struct valk_arc_trace_info {
 #define valk_arc_trace_report_print(report) \
   __valk_arc_trace_report_print((report)->traces, (report)->nextTrace)
 
-void __valk_arc_trace_report_print(valk_arc_trace_info *traces, size_t num);
+void __valk_arc_trace_report_print(valk_arc_trace_info *traces, u64 num);
 
 #else
 #define valk_capture_trace(_kind, _refcount, ref) UNUSED((_refcount));
@@ -117,17 +116,17 @@ void __valk_arc_trace_report_print(valk_arc_trace_info *traces, size_t num);
 /// generic helper, same as Linux kernel’s container_of
 /// @return the ptr of the right type
 #define valk_container_of(ptr, type, member) \
-  ((type *)((uint8_t *)(ptr) - offsetof(type, member)))
+  ((type *)((u8 *)(ptr) - offsetof(type, member)))
 
 /// @brief efficient way to calculate the next power of 2 for a given size
-static inline size_t valk_next_pow2(size_t x) {
+static inline u64 valk_next_pow2(u64 x) {
   if (x <= 1) return 1;
 
 #if defined(__clang__) || defined(__GNUC__)
 #if SIZE_MAX <= UINT32_MAX
-  return 1u << (32 - __builtin_clz((uint32_t)(x - 1)));
+  return 1u << (32 - __builtin_clz((u32)(x - 1)));
 #else
-  return 1ull << (64 - __builtin_clzll((uint64_t)(x - 1)));
+  return 1ull << (64 - __builtin_clzll((u64)(x - 1)));
 #endif
 #else /* portable smear–add-one method */
   x--;
@@ -162,77 +161,77 @@ typedef struct {
 extern valk_mem_allocator_t valk_malloc_allocator;
 
 typedef struct {
-  size_t capacity;
-  size_t count;
+  u64 capacity;
+  u64 count;
   void *items;
 } valk_buffer_t;
 
-void valk_buffer_alloc(valk_buffer_t *buf, size_t capacity);
-void valk_buffer_append(valk_buffer_t *buf, void *bytes, size_t len);
+void valk_buffer_alloc(valk_buffer_t *buf, u64 capacity);
+void valk_buffer_append(valk_buffer_t *buf, void *bytes, u64 len);
 int valk_buffer_is_full(valk_buffer_t *buf);
 
 typedef struct {
-  size_t capacity;
-  size_t offset;
-  uint64_t items[];
+  u64 capacity;
+  u64 offset;
+  u64 items[];
 } valk_ring_t;
 
 /// @param[out] self buffer to initialize
 /// @param[in] capcity capacity of the ring buffer in bytes
-void valk_ring_init(valk_ring_t *self, size_t capacity);
+void valk_ring_init(valk_ring_t *self, u64 capacity);
 
-void valk_ring_write(valk_ring_t *self, uint8_t *data, size_t len);
+void valk_ring_write(valk_ring_t *self, u8 *data, u64 len);
 
-void valk_ring_rewind(valk_ring_t *self, size_t n);
+void valk_ring_rewind(valk_ring_t *self, u64 n);
 
 // @brief read the contents of the buffer into a buffer dst
-void valk_ring_read(valk_ring_t *self, size_t n, void *dst);
+void valk_ring_read(valk_ring_t *self, u64 n, void *dst);
 
 // @brief read the contents of the buffer into a file
-void valk_ring_fread(valk_ring_t *self, size_t n, FILE *f);
+void valk_ring_fread(valk_ring_t *self, u64 n, FILE *f);
 
 // @brief print the contents of the buffer into a file
 void valk_ring_print(valk_ring_t *self, FILE *f);
 
 typedef struct valk_slab_item_t {
-  size_t handle;
-  uint64_t next;
-  // size_t size; // todo(networking): i should add this to the layout if i need
+  u64 handle;
+  u64 next;
+  // u64 size; // todo(networking): i should add this to the layout if i need
   // it. i dont think this will ever be useful tho, so save a few bytes of
   // overhead
-  uint8_t data[];
+  u8 data[];
 } valk_slab_item_t;
 
 typedef struct {  // extends valk_mem_allocator_t;
   valk_mem_allocator_e type;
-  size_t itemSize;
-  size_t numItems;
-  size_t numFree;
-  size_t peakUsed;  // High water mark: max (numItems - numFree) ever observed
-  uint64_t overflowCount;
-  uint64_t head;
+  u64 itemSize;
+  u64 numItems;
+  u64 numFree;
+  u64 peakUsed;  // High water mark: max (numItems - numFree) ever observed
+  u64 overflowCount;
+  u64 head;
   // treiber list top
 
 #ifdef VALK_METRICS_ENABLED
-  uint64_t bitmap_version;
-  uint8_t *usage_bitmap;
+  u64 bitmap_version;
+  u8 *usage_bitmap;
 #endif
 
   // Memory layout
-  // [sizeof(size_t) * numSlabs | freeList]
-  // [sizeof(valk_slab_t + (size_t * numSlabs)) * capacity | slabs]
-  uint8_t heap[];
+  // [sizeof(u64) * numSlabs | freeList]
+  // [sizeof(valk_slab_t + (u64 * numSlabs)) * capacity | slabs]
+  u8 heap[];
 } valk_slab_t;
 
-valk_slab_t *valk_slab_new(size_t itemSize, size_t numItems);
-void valk_slab_init(valk_slab_t *self, size_t itemSize, size_t numItems);
+valk_slab_t *valk_slab_new(u64 itemSize, u64 numItems);
+void valk_slab_init(valk_slab_t *self, u64 itemSize, u64 numItems);
 
 void valk_slab_free(valk_slab_t *self);
 
 /// @brief estimate the amount of bytes that are needed to contain the entire
 /// slab
 /// @return the total size that should be allocated, to initialize slab
-size_t valk_slab_size(size_t itemSize, size_t numItems);
+u64 valk_slab_size(u64 itemSize, u64 numItems);
 
 /// @brief estimate the the total chunk size in bytes of each item in the array
 ///
@@ -241,7 +240,7 @@ size_t valk_slab_size(size_t itemSize, size_t numItems);
 /// @param itemSize the concrete size of item without padding or headers
 /// @return the actual size of the the item in memory including padding and
 /// headers
-size_t valk_slab_item_stride(size_t itemSize);
+u64 valk_slab_item_stride(u64 itemSize);
 
 valk_slab_item_t *valk_slab_aquire(valk_slab_t *self);
 
@@ -250,29 +249,29 @@ void valk_slab_release_ptr(valk_slab_t *self, void *data);
 
 /// @brief Get number of available (free) items in the slab
 /// @return Current count of free items (may change due to concurrent access)
-static inline size_t valk_slab_available(valk_slab_t *self) {
+static inline u64 valk_slab_available(valk_slab_t *self) {
   return __atomic_load_n(&self->numFree, __ATOMIC_ACQUIRE);
 }
 
 #ifdef VALK_METRICS_ENABLED
 typedef struct {
-  uint8_t *data;
-  size_t bytes;
-  uint64_t version;
+  u8 *data;
+  u64 bytes;
+  u64 version;
 } valk_slab_bitmap_t;
 
 typedef struct {
-  size_t offset;
-  size_t count;
-  uint8_t byte;
+  u64 offset;
+  u64 count;
+  u8 byte;
 } valk_bitmap_delta_run_t;
 
 typedef struct {
   valk_bitmap_delta_run_t *runs;
-  size_t run_count;
-  size_t run_capacity;
-  uint64_t from_version;
-  uint64_t to_version;
+  u64 run_count;
+  u64 run_capacity;
+  u64 from_version;
+  u64 to_version;
 } valk_bitmap_delta_t;
 
 void valk_slab_bitmap_snapshot(valk_slab_t *slab, valk_slab_bitmap_t *out);
@@ -283,57 +282,57 @@ void valk_bitmap_delta_free(valk_bitmap_delta_t *delta);
 bool valk_bitmap_delta_compute(const valk_slab_bitmap_t *curr,
                                 const valk_slab_bitmap_t *prev,
                                 valk_bitmap_delta_t *out);
-size_t valk_bitmap_delta_to_rle(const valk_bitmap_delta_t *delta,
-                                 char *buf, size_t buf_size);
+u64 valk_bitmap_delta_to_rle(const valk_bitmap_delta_t *delta,
+                                 char *buf, u64 buf_size);
 
 typedef struct {
-  size_t used;
-  size_t free;
+  u64 used;
+  u64 free;
 } valk_bitmap_bucket_t;
 
-size_t valk_slab_bitmap_buckets(valk_slab_t *slab,
-                                 size_t start_slot, size_t end_slot,
-                                 size_t num_buckets,
+u64 valk_slab_bitmap_buckets(valk_slab_t *slab,
+                                 u64 start_slot, u64 end_slot,
+                                 u64 num_buckets,
                                  valk_bitmap_bucket_t *out_buckets);
 #endif
 
 // Arena statistics for telemetry
 typedef struct {
-  size_t total_allocations;      // Count of alloc calls
-  size_t total_bytes_allocated;  // Sum of all requested bytes
-  size_t high_water_mark;        // Maximum offset reached
-  size_t num_resets;             // Count of arena_reset calls
-  size_t num_checkpoints;        // Count of checkpoint evacuations
-  size_t bytes_evacuated;        // Total bytes copied to heap
-  size_t values_evacuated;       // Count of values copied to heap
-  size_t overflow_fallbacks;     // Count of heap fallback allocations due to full arena
-  size_t overflow_bytes;         // Bytes allocated via heap fallback
+  u64 total_allocations;      // Count of alloc calls
+  u64 total_bytes_allocated;  // Sum of all requested bytes
+  u64 high_water_mark;        // Maximum offset reached
+  u64 num_resets;             // Count of arena_reset calls
+  u64 num_checkpoints;        // Count of checkpoint evacuations
+  u64 bytes_evacuated;        // Total bytes copied to heap
+  u64 values_evacuated;       // Count of values copied to heap
+  u64 overflow_fallbacks;     // Count of heap fallback allocations due to full arena
+  u64 overflow_bytes;         // Bytes allocated via heap fallback
 } valk_arena_stats_t;
 
 // Process-level memory stats (from OS)
 typedef struct {
-  size_t rss_bytes;            // Resident Set Size (physical RAM)
-  size_t vms_bytes;            // Virtual Memory Size
-  size_t system_total_bytes;   // Total system RAM (for memory pressure calc)
-  size_t shared_bytes;         // Shared memory (Linux only)
-  size_t data_bytes;           // Data + stack segment (Linux only)
-  uint64_t page_faults_minor;  // Soft page faults
-  uint64_t page_faults_major;  // Hard page faults (disk I/O)
+  u64 rss_bytes;            // Resident Set Size (physical RAM)
+  u64 vms_bytes;            // Virtual Memory Size
+  u64 system_total_bytes;   // Total system RAM (for memory pressure calc)
+  u64 shared_bytes;         // Shared memory (Linux only)
+  u64 data_bytes;           // Data + stack segment (Linux only)
+  u64 page_faults_minor;  // Soft page faults
+  u64 page_faults_major;  // Hard page faults (disk I/O)
 } valk_process_memory_t;
 
 // Detailed memory breakdown from /proc/self/smaps (Linux only)
 // Categorizes RSS by region type to identify where untracked memory lives
 typedef struct {
-  size_t heap_rss;       // [heap] - glibc malloc arena
-  size_t stack_rss;      // [stack] and thread stacks
-  size_t anon_rss;       // Anonymous mappings (mmap, buffers)
-  size_t file_rss;       // File-backed mappings (shared libs, etc.)
-  size_t shmem_rss;      // Shared memory regions
-  size_t uring_rss;      // io_uring ring buffers
-  size_t other_rss;      // vdso, vvar, vsyscall, etc.
-  size_t total_rss;      // Sum of all (should match process RSS)
-  uint32_t anon_regions; // Count of anonymous regions
-  uint32_t file_regions; // Count of file-backed regions
+  u64 heap_rss;       // [heap] - glibc malloc arena
+  u64 stack_rss;      // [stack] and thread stacks
+  u64 anon_rss;       // Anonymous mappings (mmap, buffers)
+  u64 file_rss;       // File-backed mappings (shared libs, etc.)
+  u64 shmem_rss;      // Shared memory regions
+  u64 uring_rss;      // io_uring ring buffers
+  u64 other_rss;      // vdso, vvar, vsyscall, etc.
+  u64 total_rss;      // Sum of all (should match process RSS)
+  u32 anon_regions; // Count of anonymous regions
+  u32 file_regions; // Count of file-backed regions
 } valk_smaps_breakdown_t;
 
 // Collect process-level memory stats from OS
@@ -344,16 +343,16 @@ void valk_smaps_collect(valk_smaps_breakdown_t *smaps);
 
 typedef struct {  // extends valk_mem_allocator_t;
   valk_mem_allocator_e type;
-  size_t capacity;
-  size_t offset;
+  u64 capacity;
+  u64 offset;
   bool warned_overflow;          // Reset each checkpoint cycle
   valk_arena_stats_t stats;      // Telemetry statistics
-  uint8_t heap[];
+  u8 heap[];
 } valk_mem_arena_t;
 
-void valk_mem_arena_init(valk_mem_arena_t *self, size_t capacity);
+void valk_mem_arena_init(valk_mem_arena_t *self, u64 capacity);
 void valk_mem_arena_reset(valk_mem_arena_t *self);
-void *valk_mem_arena_alloc(valk_mem_arena_t *self, size_t bytes);
+void *valk_mem_arena_alloc(valk_mem_arena_t *self, u64 bytes);
 
 // Arena statistics API
 void valk_mem_arena_print_stats(valk_mem_arena_t *arena, FILE *out);
@@ -376,14 +375,14 @@ typedef struct {
   struct valk_lenv_t *root_env;   // Root environment for checkpoint evacuation
   float checkpoint_threshold;     // Threshold for automatic checkpointing (0.0-1.0)
   bool checkpoint_enabled;        // Whether automatic checkpointing is enabled
-  size_t call_depth;              // Current function call depth (for TCO testing/debugging)
+  u64 call_depth;              // Current function call depth (for TCO testing/debugging)
   
   // Parallel GC fields (Phase 0)
-  size_t gc_thread_id;            // Index in GC coordinator's thread registry
+  u64 gc_thread_id;            // Index in GC coordinator's thread registry
   bool gc_registered;             // Whether registered with parallel GC
   struct valk_lval_t **root_stack;       // Explicit root stack for protecting temps during GC
-  size_t root_stack_count;
-  size_t root_stack_capacity;
+  u64 root_stack_count;
+  u64 root_stack_capacity;
   
   // TLAB for parallel GC allocations (Phase 7)
   struct valk_gc_tlab *tlab;      // Thread-Local Allocation Buffer
@@ -392,11 +391,11 @@ typedef struct {
 
 extern __thread valk_thread_context_t valk_thread_ctx;
 
-void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, size_t bytes);
+void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, u64 bytes);
 void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
-                                 size_t new_size);
-void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, size_t num,
-                                size_t size);
+                                 u64 new_size);
+void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, u64 num,
+                                u64 size);
 void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr);
 
 void valk_mem_init_malloc();
@@ -412,18 +411,18 @@ typedef struct valk_gc_chunk_t {
 } valk_gc_chunk_t;
 
 typedef struct {
-  size_t capacity;
-  size_t free;
+  u64 capacity;
+  u64 free;
   valk_mem_allocator_t *allocator;
   valk_gc_chunk_t sentinel;
   valk_gc_mark_f *mark;
   valk_gc_finalize_f *finalize;
 } valk_gc_heap_t;
 
-void valk_gc_init(valk_gc_heap_t *self, size_t capacity);
+void valk_gc_init(valk_gc_heap_t *self, u64 capacity);
 void valk_gc_mark(valk_gc_heap_t *self, void *ptr);
-void *valk_gc_alloc(valk_gc_heap_t *heap, size_t size);
-void *valk_gc_realloc(valk_gc_heap_t *heap, void *ptr, size_t size);
+void *valk_gc_alloc(valk_gc_heap_t *heap, u64 size);
+void *valk_gc_realloc(valk_gc_heap_t *heap, void *ptr, u64 size);
 void valk_gc_sweep(valk_gc_heap_t *self);
 
 // No extra resize helper; rely on valk_mem_allocator_realloc which now performs

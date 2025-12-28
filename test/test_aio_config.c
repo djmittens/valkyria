@@ -3,7 +3,6 @@
 #include "common.h"
 #include "memory.h"
 #include <stdio.h>
-#include <stdint.h>
 
 void test_config_defaults(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -20,7 +19,7 @@ void test_config_defaults(VALK_TEST_ARGS()) {
 
   size_t server_conns = cfg.max_servers * cfg.max_connections;
   size_t client_conns = cfg.max_clients * cfg.max_connections_per_client;
-  uint32_t expected_tcp = (uint32_t)((server_conns + client_conns) * 4);
+  u32 expected_tcp = (u32)((server_conns + client_conns) * 4);
   VALK_TEST_ASSERT(cfg.tcp_buffer_pool_size == expected_tcp,
                    "Default tcp_buffer_pool_size should be %u, got %u", expected_tcp, cfg.tcp_buffer_pool_size);
 
@@ -50,7 +49,7 @@ void test_config_derivation_streams(VALK_TEST_ARGS()) {
 
   size_t server_conns = cfg.max_servers * cfg.max_connections;
   size_t client_conns = cfg.max_clients * cfg.max_connections_per_client;
-  uint32_t expected_tcp = (uint32_t)((server_conns + client_conns) * 4);
+  u32 expected_tcp = (u32)((server_conns + client_conns) * 4);
   VALK_TEST_ASSERT(cfg.tcp_buffer_pool_size == expected_tcp,
                    "tcp_buffer_pool_size should be %u, got %u", expected_tcp, cfg.tcp_buffer_pool_size);
 

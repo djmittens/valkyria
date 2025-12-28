@@ -2,10 +2,9 @@
 #define VALK_AIO_SSE_DIAGNOSTICS_H
 
 #include "aio.h"
-#include "../memory.h"
-#include "../gc.h"
+#include "memory.h"
+#include "gc.h"
 #include "metrics_delta.h"
-#include <stdint.h>
 #include <stdbool.h>
 
 #define VALK_DIAG_RETAINED_SET_MAX 10
@@ -19,8 +18,8 @@ typedef struct uv_timer_s uv_timer_t;
 // Per-slot state for connection-aware slabs
 typedef struct {
   char state;        // 'A'=active, 'I'=idle, 'C'=closing, 'F'=free
-  uint16_t owner;    // Owner index (0xFFFF = none)
-  uint32_t age_ms;   // Time since last state change
+  u16 owner;    // Owner index (0xFFFF = none)
+  u32 age_ms;   // Time since last state change
 } valk_slot_diag_t;
 
 // ============================================================================
@@ -33,31 +32,31 @@ typedef struct {
   const char *name;              // e.g., "lval", "lenv", "malloc"
 
   // Byte-level metrics
-  size_t bytes_used;
-  size_t bytes_total;
-  size_t bytes_peak;             // High water mark (bytes)
+  u64 bytes_used;
+  u64 bytes_total;
+  u64 bytes_peak;             // High water mark (bytes)
 
   // Object-level metrics (0 for malloc-style allocators)
-  size_t objects_used;
-  size_t objects_total;
-  size_t objects_peak;           // High water mark (objects)
+  u64 objects_used;
+  u64 objects_total;
+  u64 objects_peak;           // High water mark (objects)
 } valk_heap_tier_snapshot_t;
 
 // Enhanced slab snapshot with optional per-slot diagnostics
 typedef struct {
   const char *name;
-  size_t total_slots;
-  size_t used_slots;
-  size_t peak_used;  // High water mark
-  size_t overflow_count;
+  u64 total_slots;
+  u64 used_slots;
+  u64 peak_used;  // High water mark
+  u64 overflow_count;
 
   // Slab change detection - numFree from slab at snapshot time
   // Used to skip expensive bitmap regeneration when slab unchanged
-  size_t cached_num_free;
+  u64 cached_num_free;
 
   // Binary bitmap (for simple slabs like LVAL, TCP buffers)
-  uint8_t *bitmap;
-  size_t bitmap_bytes;
+  u8 *bitmap;
+  u64 bitmap_bytes;
 
   // Per-slot diagnostics (for connection slabs like handles)
   valk_slot_diag_t *slots;  // NULL for simple bitmap slabs
@@ -65,82 +64,82 @@ typedef struct {
 
   // Summary stats for HTTP connections (only for handle slabs)
   struct {
-    size_t active;
-    size_t idle;
-    size_t closing;
+    u64 active;
+    u64 idle;
+    u64 closing;
   } by_state;
 
   // Handle type breakdown (only for handle slabs)
   struct {
-    size_t tcp_listeners;   // VALK_DIAG_HNDL_TCP
-    size_t tasks;           // VALK_DIAG_HNDL_TASK
-    size_t timers;          // VALK_DIAG_HNDL_TIMER
-    size_t http_conns;      // VALK_DIAG_HNDL_HTTP_CONN
+    u64 tcp_listeners;   // VALK_DIAG_HNDL_TCP
+    u64 tasks;           // VALK_DIAG_HNDL_TASK
+    u64 timers;          // VALK_DIAG_HNDL_TIMER
+    u64 http_conns;      // VALK_DIAG_HNDL_HTTP_CONN
   } by_type;
 
   // Per-owner connection counts with state breakdown (HTTP connections only)
   struct {
-    uint16_t owner_idx;
-    size_t active;
-    size_t idle;
-    size_t closing;
+    u16 owner_idx;
+    u64 active;
+    u64 idle;
+    u64 closing;
   } by_owner[16];
-  size_t owner_count;
+  u64 owner_count;
 } valk_slab_snapshot_t;
 
 // Memory snapshot for SSE transmission
 typedef struct valk_mem_snapshot {
   // Slab snapshots
   valk_slab_snapshot_t slabs[8];
-  size_t slab_count;
+  u64 slab_count;
 
   // Owner map for server/client names
   const char *owner_map[16];
-  size_t owner_count;
+  u64 owner_count;
 
   // Arena gauges
   struct {
     const char *name;
-    size_t used_bytes;
-    size_t capacity_bytes;
-    size_t high_water_mark;
-    size_t overflow_fallbacks;
-    size_t overflow_bytes;
+    u64 used_bytes;
+    u64 capacity_bytes;
+    u64 high_water_mark;
+    u64 overflow_fallbacks;
+    u64 overflow_bytes;
   } arenas[16];
-  size_t arena_count;
+  u64 arena_count;
 
   // GC heap stats (generic tier array)
   struct {
     // Dynamic tier array (populated by collection)
     valk_heap_tier_snapshot_t tiers[8];
-    size_t tier_count;
+    u64 tier_count;
 
     // Common GC stats
-    uint8_t gc_threshold_pct;   // GC triggers at this % of capacity
-    uint64_t gc_cycles;
-    uint64_t emergency_collections;
-    uint8_t efficiency_pct;     // Last GC efficiency (reclaimed/before * 100)
+    u8 gc_threshold_pct;   // GC triggers at this % of capacity
+    u64 gc_cycles;
+    u64 emergency_collections;
+    u8 efficiency_pct;     // Last GC efficiency (reclaimed/before * 100)
 
     // Object survival histogram - tracks how long objects live before dying
     // Used to detect potential memory leaks (objects surviving many GC cycles)
-    uint64_t survival_gen_0;      // Died in first GC (short-lived, expected)
-    uint64_t survival_gen_1_5;    // Survived 1-5 cycles (normal)
-    uint64_t survival_gen_6_20;   // Survived 6-20 cycles (medium-lived)
-    uint64_t survival_gen_21_plus; // Survived 21+ cycles (potential leak)
+    u64 survival_gen_0;      // Died in first GC (short-lived, expected)
+    u64 survival_gen_1_5;    // Survived 1-5 cycles (normal)
+    u64 survival_gen_6_20;   // Survived 6-20 cycles (medium-lived)
+    u64 survival_gen_21_plus; // Survived 21+ cycles (potential leak)
 
     // Frame-time pause histogram - tracks GC pause impact on frame budgets
     // Used by game profile to show distribution of pauses relative to frame time
-    uint64_t pause_0_1ms;         // No impact (0-1ms)
-    uint64_t pause_1_5ms;         // Minor impact (1-5ms)
-    uint64_t pause_5_10ms;        // Noticeable (5-10ms)
-    uint64_t pause_10_16ms;       // Frame drop risk at 60fps (10-16ms)
-    uint64_t pause_16ms_plus;     // Frame drop certain at 60fps (16ms+)
+    u64 pause_0_1ms;         // No impact (0-1ms)
+    u64 pause_1_5ms;         // Minor impact (1-5ms)
+    u64 pause_5_10ms;        // Noticeable (5-10ms)
+    u64 pause_10_16ms;       // Frame drop risk at 60fps (10-16ms)
+    u64 pause_16ms_plus;     // Frame drop certain at 60fps (16ms+)
 
     // Fragmentation metrics - tracks slab utilization vs peak
     double lval_fragmentation;    // 1.0 - (used/peak), 0 = no fragmentation
     double lenv_fragmentation;    // Same for lenv slab
-    size_t free_list_count;       // Objects on malloc free list
-    size_t free_list_bytes;       // Estimated bytes on free list
+    u64 free_list_count;       // Objects on malloc free list
+    u64 free_list_bytes;       // Estimated bytes on free list
   } gc_heap;
 
   // Process-level memory (from OS)
@@ -152,31 +151,31 @@ typedef struct valk_mem_snapshot {
   // Aggregated breakdown by subsystem (for overview widget)
   // Each subsystem has capacity (mapped) and used (resident) bytes
   struct {
-    size_t scratch_arena_used;
-    size_t scratch_arena_capacity;
-    size_t gc_heap_used;
-    size_t gc_heap_capacity;
-    size_t gc_lval_slab_used;
-    size_t gc_lval_slab_capacity;
-    size_t gc_lenv_slab_used;
-    size_t gc_lenv_slab_capacity;
-    size_t gc_malloc_used;         // Malloc has no fixed capacity
-    size_t aio_slabs_used;
-    size_t aio_slabs_capacity;
-    size_t metrics_used;           // Metrics registry active slots
-    size_t metrics_capacity;       // Metrics registry total size
-    size_t untracked_bytes;        // process.rss - tracked used (resident but untracked)
-    size_t untracked_reserved;     // process.vms - tracked capacities (mapped but untracked)
+    u64 scratch_arena_used;
+    u64 scratch_arena_capacity;
+    u64 gc_heap_used;
+    u64 gc_heap_capacity;
+    u64 gc_lval_slab_used;
+    u64 gc_lval_slab_capacity;
+    u64 gc_lenv_slab_used;
+    u64 gc_lenv_slab_capacity;
+    u64 gc_malloc_used;         // Malloc has no fixed capacity
+    u64 aio_slabs_used;
+    u64 aio_slabs_capacity;
+    u64 metrics_used;           // Metrics registry active slots
+    u64 metrics_capacity;       // Metrics registry total size
+    u64 untracked_bytes;        // process.rss - tracked used (resident but untracked)
+    u64 untracked_reserved;     // process.vms - tracked capacities (mapped but untracked)
   } breakdown;
 
   // REPL eval memory delta (only populated when running as REPL)
   struct {
     bool valid;                    // True if running as REPL with eval data
-    int64_t heap_delta;            // Heap change from last eval
-    int64_t scratch_delta;         // Scratch change from last eval
-    int64_t lval_delta;            // LVAL count change
-    int64_t lenv_delta;            // LENV count change
-    uint64_t eval_count;           // Total evals since REPL start
+    i64 heap_delta;            // Heap change from last eval
+    i64 scratch_delta;         // Scratch change from last eval
+    i64 lval_delta;            // LVAL count change
+    i64 lenv_delta;            // LENV count change
+    u64 eval_count;           // Total evals since REPL start
   } repl_eval;
 
   // Retained size sampling (top N bindings by memory size)
@@ -193,12 +192,12 @@ typedef struct valk_sse_diag_conn {
   valk_sse_diag_state_t *state;     // Back-pointer to shared state
   valk_aio_handle_t *handle;        // HTTP connection handle
   nghttp2_session *session;         // HTTP/2 session for data frames
-  int32_t stream_id;                // HTTP/2 stream ID
-  uint64_t last_event_id;           // For resumption
+  i32 stream_id;                // HTTP/2 stream ID
+  u64 last_event_id;           // For resumption
   valk_aio_system_t *aio_system;    // AIO system reference
   char *pending_data;               // Pending SSE data to send
-  size_t pending_len;               // Length of pending data
-  size_t pending_offset;            // Offset into pending data
+  u64 pending_len;               // Length of pending data
+  u64 pending_offset;            // Offset into pending data
   bool active;                      // Connection alive
   bool data_deferred;               // True if waiting for data
 
@@ -208,16 +207,16 @@ typedef struct valk_sse_diag_conn {
 
   // Previous metrics for delta calculation
   struct {
-    uint64_t bytes_sent;
-    uint64_t bytes_recv;
-    uint64_t requests_total;
-    uint64_t connections_total;
-    uint64_t gc_cycles;
+    u64 bytes_sent;
+    u64 bytes_recv;
+    u64 requests_total;
+    u64 connections_total;
+    u64 gc_cycles;
     // Pending streams backpressure metrics
-    uint64_t pending_streams_current;
-    uint64_t pending_streams_total;
-    uint64_t pending_streams_processed;
-    uint64_t pending_streams_dropped;
+    u64 pending_streams_current;
+    u64 pending_streams_total;
+    u64 pending_streams_processed;
+    u64 pending_streams_dropped;
   } prev_metrics;
 } valk_sse_diag_conn_t;
 
@@ -248,7 +247,7 @@ valk_sse_diag_conn_t* valk_sse_diag_init_http2(
     valk_aio_handle_t *handle,
     valk_aio_system_t *aio,
     nghttp2_session *session,
-    int32_t stream_id,
+    i32 stream_id,
     nghttp2_data_provider2 *data_prd_out);
 
 // Stop SSE stream (removes from shared state, stops timer if last stream)
@@ -273,17 +272,17 @@ void valk_http2_flush_pending(valk_aio_handle_t *conn);
 bool valk_aio_http_session_valid(valk_aio_handle_t *handle, void *session);
 
 // Encode snapshot to SSE event (memory only - legacy)
-int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf, size_t buf_size, uint64_t event_id);
+int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf, u64 buf_size, u64 event_id);
 
 // Encode memory delta to SSE event (memory only, no AIO/modular metrics)
 // Returns 0 if no changes detected (skip sending), >0 for bytes written, <0 for error
 int valk_mem_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *prev,
-                           char *buf, size_t buf_size, uint64_t event_id);
+                           char *buf, u64 buf_size, u64 event_id);
 
 // Encode combined diagnostics to SSE event (memory + metrics)
 // This unified event eliminates the need for separate polling from the dashboard
 int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot, valk_aio_system_t *aio,
-                               char *buf, size_t buf_size, uint64_t event_id);
+                               char *buf, u64 buf_size, u64 event_id);
 
 // Encode delta diagnostics to SSE event (only changed fields)
 // Returns 0 if no changes detected (skip sending), >0 for bytes written, <0 for error
@@ -291,11 +290,11 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot, valk_aio_system_t *
 int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *prev,
                             valk_sse_diag_conn_t *conn, valk_aio_system_t *aio,
                             valk_delta_snapshot_t *modular_delta,
-                            char *buf, size_t buf_size, uint64_t event_id);
+                            char *buf, u64 buf_size, u64 event_id);
 
 // Get fresh diagnostics state as JSON (for /debug/metrics/state endpoint)
 // Returns bytes written, or -1 on error
-int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, size_t buf_size);
+int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, u64 buf_size);
 
 // Free snapshot allocations (bitmaps, slots)
 void valk_mem_snapshot_free(valk_mem_snapshot_t *snapshot);

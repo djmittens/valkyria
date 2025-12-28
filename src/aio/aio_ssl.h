@@ -1,13 +1,9 @@
 #pragma once
 
-#include "../common.h"
-#include "../memory.h"
-
-#include <stddef.h>
+#include "common.h"
+#include "memory.h"
 
 #include <openssl/bio.h>
-#include <openssl/conf.h>
-#include <openssl/err.h>
 #include <openssl/ssl.h>
 
 typedef struct valk_aio_ssl_t {

@@ -4,7 +4,6 @@
 
 #include "parser.h"
 #include "memory.h"
-#include "log.h"
 
 // Simple continuation structure - just stores a callback function
 typedef struct {

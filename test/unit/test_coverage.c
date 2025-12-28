@@ -227,8 +227,8 @@ void test_coverage_record_branch(VALK_TEST_ARGS()) {
 void test_coverage_get_line_expr_count(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  size_t hit, total;
-  size_t result = valk_coverage_get_line_expr_count(0, 0, &hit, &total);
+  u64 hit, total;
+  u64 result = valk_coverage_get_line_expr_count(0, 0, &hit, &total);
   VALK_TEST_ASSERT(result == 0, "Invalid file_id should return 0");
   VALK_TEST_ASSERT(hit == 0, "hit should be 0");
   VALK_TEST_ASSERT(total == 0, "total should be 0");
@@ -334,7 +334,7 @@ void test_coverage_get_line_expr_count_valid(VALK_TEST_ARGS()) {
   valk_coverage_record_expr(1, 30, 1);
   valk_coverage_record_expr(1, 30, 15);
 
-  size_t hit, total;
+  u64 hit, total;
   valk_coverage_get_line_expr_count(1, 30, &hit, &total);
 
   VALK_PASS();

@@ -12,27 +12,27 @@ extern bool valk_async_handle_cancel(valk_async_handle_t *handle);
 
 static void __pending_stream_process_batch(valk_aio_system_t *sys);
 
-static inline size_t __align_up(uintptr_t addr, size_t alignment) {
-  size_t mask = alignment - 1;
-  size_t misalign = addr & mask;
+static inline u64 __align_up(uptr addr, u64 alignment) {
+  u64 mask = alignment - 1;
+  u64 misalign = addr & mask;
   return misalign ? (alignment - misalign) : 0;
 }
 
 static inline valk_http2_server_request_t *__http_request_from_slot(
-    valk_slab_t *slab, uint32_t slot) {
+    valk_slab_t *slab, u32 slot) {
   if (slot == UINT32_MAX || !slab || slot >= slab->numItems) return NULL;
-  size_t stride = valk_slab_item_stride(slab->itemSize);
+  u64 stride = valk_slab_item_stride(slab->itemSize);
   valk_slab_item_t *item = (valk_slab_item_t *)&slab->heap[stride * slot];
   valk_mem_arena_t *arena = (valk_mem_arena_t *)item->data;
-  size_t init_off = __align_up((uintptr_t)arena->heap, alignof(max_align_t));
-  size_t hdr = init_off + sizeof(size_t);
-  size_t adj = __align_up((uintptr_t)&arena->heap[hdr], alignof(max_align_t));
-  size_t payload = hdr + adj;
+  u64 init_off = __align_up((uptr)arena->heap, alignof(max_align_t));
+  u64 hdr = init_off + sizeof(size_t);
+  u64 adj = __align_up((uptr)&arena->heap[hdr], alignof(max_align_t));
+  u64 payload = hdr + adj;
   return (valk_http2_server_request_t *)&arena->heap[payload];
 }
 
 void valk_http2_remove_from_active_arenas(valk_aio_handle_t *conn,
-                                             uint32_t target_slot) {
+                                             u32 target_slot) {
   if (!conn->http.server || !conn->http.server->sys) return;
   valk_slab_t *slab = conn->http.server->sys->httpStreamArenas;
 
@@ -43,9 +43,9 @@ void valk_http2_remove_from_active_arenas(valk_aio_handle_t *conn,
     return;
   }
 
-  uint32_t prev_slot = conn->http.active_arena_head;
-  uint32_t iterations = 0;
-  uint32_t max_iterations = slab->numItems + 1;
+  u32 prev_slot = conn->http.active_arena_head;
+  u32 iterations = 0;
+  u32 max_iterations = slab->numItems + 1;
 
   while (prev_slot != UINT32_MAX && iterations < max_iterations) {
     valk_http2_server_request_t *prev_req = __http_request_from_slot(slab, prev_slot);
@@ -58,7 +58,7 @@ void valk_http2_remove_from_active_arenas(valk_aio_handle_t *conn,
       return;
     }
 
-    uint32_t next_slot = prev_req->next_arena_slot;
+    u32 next_slot = prev_req->next_arena_slot;
     VALK_ASSERT(next_slot != prev_slot,
                 "Arena linked list corruption: slot %u points to itself", prev_slot);
     prev_slot = next_slot;
@@ -71,9 +71,9 @@ void valk_http2_remove_from_active_arenas(valk_aio_handle_t *conn,
 
 int valk_http2_on_header_callback(nghttp2_session *session,
                                   const nghttp2_frame *frame,
-                                  const uint8_t *name, size_t namelen,
-                                  const uint8_t *value, size_t valuelen,
-                                  uint8_t flags, void *user_data) {
+                                  const u8 *name, size_t namelen,
+                                  const u8 *value, size_t valuelen,
+                                  u8 flags, void *user_data) {
   UNUSED(flags);
   UNUSED(user_data);
   VALK_TRACE("HDR: %.*s: %.*s", (int)namelen, name, (int)valuelen, value);
@@ -153,7 +153,7 @@ int valk_http2_on_header_callback(nghttp2_session *session,
       }
     } else {
       if (req->headers.count >= req->headers.capacity) {
-        size_t new_cap = req->headers.capacity == 0 ? 8 : req->headers.capacity * 2;
+        u64 new_cap = req->headers.capacity == 0 ? 8 : req->headers.capacity * 2;
         struct valk_http2_header_t *new_items = valk_mem_alloc(
             new_cap * sizeof(struct valk_http2_header_t));
         if (req->headers.items) {
@@ -196,7 +196,7 @@ int valk_http2_on_begin_headers_callback(nghttp2_session *session,
 
     if (conn->http.active_streams == 1) {
       conn->http.diag.state = VALK_DIAG_CONN_ACTIVE;
-      conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+      conn->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
     }
 #endif
 
@@ -212,7 +212,7 @@ int valk_http2_on_begin_headers_callback(nghttp2_session *session,
         ps->headers_complete = false;
 
         nghttp2_session_set_stream_user_data(session, frame->hd.stream_id,
-            (void*)((uintptr_t)ps | (1ULL << 63)));
+            (void*)((uptr)ps | (1ULL << 63)));
 
         valk_pending_stream_enqueue(&sys->pending_streams, ps);
         VALK_INFO("Stream %d queued for backpressure (arena pool exhausted, %zu pending)",
@@ -243,8 +243,8 @@ int valk_http2_on_begin_headers_callback(nghttp2_session *session,
     valk_mem_arena_t *stream_arena = (valk_mem_arena_t *)arena_item->data;
     valk_mem_arena_init(stream_arena, conn->http.server->sys->config.arena_size);
 
-    size_t arena_num_free = __atomic_load_n(&conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
-    VALK_INFO("Arena ACQUIRED for stream %d (slot=%zu, now %zu free)",
+    u64 arena_num_free = __atomic_load_n(&conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
+    VALK_INFO("Arena ACQUIRED for stream %d (slot=%zu, now %llu free)",
               frame->hd.stream_id, arena_item->handle & 0xFFFFFFFF, arena_num_free);
 
 #ifdef VALK_METRICS_ENABLED
@@ -259,7 +259,7 @@ int valk_http2_on_begin_headers_callback(nghttp2_session *session,
       req->stream_id = frame->hd.stream_id;
       req->stream_arena = stream_arena;
       req->arena_slab_item = arena_item;
-      req->arena_slot = (uint32_t)(arena_item->handle & 0xFFFFFFFF);
+      req->arena_slot = (u32)(arena_item->handle & 0xFFFFFFFF);
       req->next_arena_slot = UINT32_MAX;
 #ifdef VALK_METRICS_ENABLED
       req->start_time_us = uv_hrtime() / 1000;
@@ -280,9 +280,9 @@ int valk_http2_on_begin_headers_callback(nghttp2_session *session,
 
 int valk_http2_client_on_header_cb(nghttp2_session *session,
                                    const nghttp2_frame *frame,
-                                   const uint8_t *name, size_t namelen,
-                                   const uint8_t *value, size_t valuelen,
-                                   uint8_t flags, void *user_data) {
+                                   const u8 *name, size_t namelen,
+                                   const u8 *value, size_t valuelen,
+                                   u8 flags, void *user_data) {
   UNUSED(session);
   UNUSED(frame);
   UNUSED(flags);
@@ -345,11 +345,11 @@ static const char valk_http_default_503_html[] =
   "</body>\n"
   "</html>\n";
 
-static const size_t valk_http_default_503_html_len = sizeof(valk_http_default_503_html) - 1;
+static const u64 valk_http_default_503_html_len = sizeof(valk_http_default_503_html) - 1;
 
 nghttp2_ssize valk_http2_byte_body_cb(nghttp2_session *session,
-                                      int32_t stream_id, uint8_t *buf,
-                                      size_t length, uint32_t *data_flags,
+                                      i32 stream_id, u8 *buf,
+                                      size_t length, u32 *data_flags,
                                       nghttp2_data_source *source,
                                       void *user_data) {
   UNUSED(session);
@@ -357,9 +357,9 @@ nghttp2_ssize valk_http2_byte_body_cb(nghttp2_session *session,
   UNUSED(user_data);
 
   http_body_source_t *src = (http_body_source_t *)source->ptr;
-  size_t remaining = src->body_len - src->offset;
+  u64 remaining = src->body_len - src->offset;
 
-  size_t to_copy = remaining < length ? remaining : length;
+  u64 to_copy = remaining < length ? remaining : length;
 
   memcpy(buf, src->body + src->offset, to_copy);
   src->offset += to_copy;
@@ -375,10 +375,10 @@ nghttp2_ssize valk_http2_byte_body_cb(nghttp2_session *session,
 }
 
 int valk_http2_send_overload_response(nghttp2_session *session,
-                                      int32_t stream_id,
+                                      i32 stream_id,
                                       valk_aio_handle_t *conn) {
   const char* body;
-  size_t body_len;
+  u64 body_len;
 
   if (conn->http.server->config.error_503_body) {
     body = conn->http.server->config.error_503_body;
@@ -451,15 +451,15 @@ int valk_http2_send_response(nghttp2_session *session, int stream_id,
       VALK_INFO("Setting up SSE diagnostics stream for stream %d", stream_id);
 
       if (req->arena_slab_item) {
-        uint32_t slot = req->arena_slot;
+        u32 slot = req->arena_slot;
         valk_http2_remove_from_active_arenas(req->conn, slot);
         req->arena_slot = UINT32_MAX;
         valk_slab_item_t *item = req->arena_slab_item;
         req->arena_slab_item = NULL;
         req->stream_arena = NULL;
         valk_slab_release(req->conn->http.server->sys->httpStreamArenas, item);
-        size_t arena_num_free = __atomic_load_n(&req->conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
-        VALK_INFO("Arena RELEASED (SSE) for stream %d (slot=%u, now %zu free)", stream_id, slot, arena_num_free);
+        u64 arena_num_free = __atomic_load_n(&req->conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
+        VALK_INFO("Arena RELEASED (SSE) for stream %d (slot=%u, now %llu free)", stream_id, slot, arena_num_free);
       }
 
       nghttp2_data_provider2 data_prd;
@@ -502,7 +502,7 @@ int valk_http2_send_response(nghttp2_session *session, int stream_id,
   }
 
   const char* body = "";
-  size_t body_len = 0;
+  u64 body_len = 0;
   valk_lval_t* body_val = valk_http2_qexpr_get(response_qexpr, ":body");
   if (body_val && LVAL_TYPE(body_val) == LVAL_STR) {
     body_len = strlen(body_val->str);
@@ -533,7 +533,7 @@ int valk_http2_send_response(nghttp2_session *session, int stream_id,
   }
 
   nghttp2_nv* headers;
-  size_t header_count = 2;
+  u64 header_count = 2;
 
   VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
     headers = valk_mem_alloc(sizeof(nghttp2_nv) * header_count);
@@ -562,7 +562,7 @@ valk_lval_t* valk_http2_build_request_qexpr(valk_http2_server_request_t *req) {
 
   VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
     valk_lval_t *headers_list = valk_lval_nil();
-    for (size_t i = req->headers.count; i > 0; i--) {
+    for (u64 i = req->headers.count; i > 0; i--) {
       valk_lval_t *pair_items[2] = {
         valk_lval_str((char*)req->headers.items[i-1].name),
         valk_lval_str((char*)req->headers.items[i-1].value)
@@ -572,7 +572,7 @@ valk_lval_t* valk_http2_build_request_qexpr(valk_http2_server_request_t *req) {
     }
 
     valk_lval_t *items[8];
-    size_t item_count = 0;
+    u64 item_count = 0;
 
     items[item_count++] = valk_lval_sym(":method");
     items[item_count++] = valk_lval_str(req->method ? req->method : "GET");
@@ -614,8 +614,8 @@ int valk_http2_server_on_frame_send_callback(nghttp2_session *session,
 }
 
 int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
-                                               int32_t stream_id,
-                                               uint32_t error_code,
+                                               i32 stream_id,
+                                               u32 error_code,
                                                void *user_data) {
   UNUSED(error_code);
   valk_aio_handle_t *conn = (valk_aio_handle_t *)user_data;
@@ -664,15 +664,15 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
 
   if (req && req->arena_slab_item) {
 #ifdef VALK_METRICS_ENABLED
-    uint64_t end_time_us;
+    u64 end_time_us;
     if (req->response_complete && req->response_sent_time_us > 0) {
       end_time_us = req->response_sent_time_us;
     } else {
       end_time_us = uv_hrtime() / 1000;
     }
-    uint64_t duration_us = end_time_us - req->start_time_us;
+    u64 duration_us = end_time_us - req->start_time_us;
     bool is_error = (error_code != NGHTTP2_NO_ERROR);
-    uint64_t bytes_recv = req->bytes_recv + req->bodyLen;
+    u64 bytes_recv = req->bytes_recv + req->bodyLen;
     valk_aio_metrics_on_stream_end(&conn->http.server->sys->metrics_state->metrics, is_error,
                                      duration_us, req->bytes_sent, bytes_recv);
 
@@ -702,14 +702,14 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
 #ifdef VALK_METRICS_ENABLED
     valk_aio_system_stats_on_arena_release(&conn->http.server->sys->metrics_state->system_stats);
 #endif
-    uint32_t slot = req->arena_slot;
+    u32 slot = req->arena_slot;
     valk_http2_remove_from_active_arenas(conn, slot);
     req->arena_slot = UINT32_MAX;
     valk_slab_item_t *item = req->arena_slab_item;
     req->arena_slab_item = NULL;
     valk_slab_release(conn->http.server->sys->httpStreamArenas, item);
-    size_t arena_num_free = __atomic_load_n(&conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
-    VALK_INFO("Arena RELEASED (stream close) for stream %d (slot=%u, now %zu free)", stream_id, slot, arena_num_free);
+    u64 arena_num_free = __atomic_load_n(&conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
+    VALK_INFO("Arena RELEASED (stream close) for stream %d (slot=%u, now %llu free)", stream_id, slot, arena_num_free);
 
     if (conn->http.server->sys->pending_streams.count > 0) {
       __pending_stream_process_batch(conn->http.server->sys);
@@ -718,8 +718,8 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
   else if (req && !req->arena_slab_item) {
 #ifdef VALK_METRICS_ENABLED
     if (conn->http.server && conn->http.server->sys) {
-      uint64_t end_time_us = uv_hrtime() / 1000;
-      uint64_t duration_us = end_time_us - req->start_time_us;
+      u64 end_time_us = uv_hrtime() / 1000;
+      u64 duration_us = end_time_us - req->start_time_us;
       bool is_error = !was_sse_stream && (error_code != NGHTTP2_NO_ERROR);
       valk_aio_metrics_on_stream_end(&conn->http.server->sys->metrics_state->metrics, is_error,
                                        duration_us, req->bytes_sent, req->bytes_recv);
@@ -746,7 +746,7 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
 #ifdef VALK_METRICS_ENABLED
   if (conn->http.active_streams == 0) {
     conn->http.diag.state = VALK_DIAG_CONN_IDLE;
-    conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+    conn->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
   }
 #endif
 
@@ -888,7 +888,7 @@ int valk_http2_on_frame_recv_callback(nghttp2_session *session,
         } else {
           VALK_DEBUG("Handle pending/running, will send response when complete");
 
-          uint32_t slot = req->arena_slot;
+          u32 slot = req->arena_slot;
           valk_http2_remove_from_active_arenas(conn, slot);
 
           if (http_ctx) {
@@ -951,8 +951,8 @@ static void __pending_stream_process_batch(valk_aio_system_t *sys) {
     VALK_ASSERT(__is_pending_stream(current_data),
                 "pending stream %d user_data is not a pending stream marker", ps->stream_id);
 
-    uint64_t wait_ms = ps->conn->sys->ops->loop->now(ps->conn->sys) - ps->queued_time_ms;
-    VALK_INFO("Processing pending stream %d (waited %lums)",
+    u64 wait_ms = ps->conn->sys->ops->loop->now(ps->conn->sys) - ps->queued_time_ms;
+    VALK_INFO("Processing pending stream %d (waited %llums)",
               ps->stream_id, (unsigned long)wait_ms);
 
     valk_mem_arena_t *stream_arena = (valk_mem_arena_t *)arena_item->data;
@@ -973,7 +973,7 @@ static void __pending_stream_process_batch(valk_aio_system_t *sys) {
       req->stream_id = ps->stream_id;
       req->stream_arena = stream_arena;
       req->arena_slab_item = arena_item;
-      req->arena_slot = (uint32_t)(arena_item->handle & 0xFFFFFFFF);
+      req->arena_slot = (u32)(arena_item->handle & 0xFFFFFFFF);
       req->next_arena_slot = UINT32_MAX;
 
 #ifdef VALK_METRICS_ENABLED
@@ -983,22 +983,22 @@ static void __pending_stream_process_batch(valk_aio_system_t *sys) {
 #endif
 
       if (ps->method) {
-        size_t len = strlen(ps->method);
+        u64 len = strlen(ps->method);
         req->method = valk_mem_alloc(len + 1);
         memcpy(req->method, ps->method, len + 1);
       }
       if (ps->scheme) {
-        size_t len = strlen(ps->scheme);
+        u64 len = strlen(ps->scheme);
         req->scheme = valk_mem_alloc(len + 1);
         memcpy(req->scheme, ps->scheme, len + 1);
       }
       if (ps->authority) {
-        size_t len = strlen(ps->authority);
+        u64 len = strlen(ps->authority);
         req->authority = valk_mem_alloc(len + 1);
         memcpy(req->authority, ps->authority, len + 1);
       }
       if (ps->path) {
-        size_t len = strlen(ps->path);
+        u64 len = strlen(ps->path);
         req->path = valk_mem_alloc(len + 1);
         memcpy(req->path, ps->path, len + 1);
       }
@@ -1008,7 +1008,7 @@ static void __pending_stream_process_batch(valk_aio_system_t *sys) {
         req->headers.items = valk_mem_alloc(ps->header_count * sizeof(struct valk_http2_header_t));
         req->headers.count = ps->header_count;
 
-        for (size_t i = 0; i < ps->header_count; i++) {
+        for (u64 i = 0; i < ps->header_count; i++) {
           pending_header_t *ph = &ps->headers[i];
           struct valk_http2_header_t *h = &req->headers.items[i];
 
@@ -1073,7 +1073,7 @@ static void __pending_stream_process_batch(valk_aio_system_t *sys) {
   }
 }
 
-int valk_http2_stream_reset(valk_aio_handle_t *conn, int32_t stream_id, uint32_t error_code) {
+int valk_http2_stream_reset(valk_aio_handle_t *conn, i32 stream_id, u32 error_code) {
   if (!conn || !conn->http.session) {
     return -1;
   }
@@ -1086,7 +1086,7 @@ int valk_http2_stream_reset(valk_aio_handle_t *conn, int32_t stream_id, uint32_t
   return 0;
 }
 
-int valk_http2_submit_goaway(valk_aio_handle_t *conn, uint32_t error_code) {
+int valk_http2_submit_goaway(valk_aio_handle_t *conn, u32 error_code) {
   if (!conn || !conn->http.session) {
     return -1;
   }

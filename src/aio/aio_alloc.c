@@ -1,5 +1,5 @@
 #include "aio_alloc.h"
-#include "../common.h"
+#include "common.h"
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -253,15 +253,15 @@ void valk_aio_alloc_init(void) {
           ssl_result == 1 ? "ok" : "FAILED");
 }
 
-size_t valk_aio_ssl_bytes_used(void) {
+u64 valk_aio_ssl_bytes_used(void) {
   return atomic_load(&__ssl_bytes_used);
 }
 
-size_t valk_aio_nghttp2_bytes_used(void) {
+u64 valk_aio_nghttp2_bytes_used(void) {
   return atomic_load(&__nghttp2_bytes_used);
 }
 
-size_t valk_aio_libuv_bytes_used(void) {
+u64 valk_aio_libuv_bytes_used(void) {
   return atomic_load(&__libuv_bytes_used);
 }
 

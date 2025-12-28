@@ -1,7 +1,6 @@
 #pragma once
 
 #include <stdarg.h>
-#include <stddef.h>
 
 typedef enum {
   VALK_LOG_ERROR = 0,

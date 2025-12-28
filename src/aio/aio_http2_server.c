@@ -42,7 +42,7 @@ static inline int __vtable_nodelay(valk_aio_handle_t *conn, int enable) {
   return ops->nodelay(__conn_tcp(conn), enable);
 }
 
-static void __vtable_alloc_cb(valk_io_tcp_t *tcp, size_t suggested, void **buf, size_t *buflen);
+static void __vtable_alloc_cb(valk_io_tcp_t *tcp, u64 suggested, void **buf, u64 *buflen);
 static void __vtable_read_cb(valk_io_tcp_t *tcp, ssize_t nread, const void *buf);
 
 static inline int __vtable_read_start(valk_aio_handle_t *conn) {
@@ -140,7 +140,7 @@ static void __load_shed_close_cb(uv_handle_t *handle) {
   free(handle);
 }
 
-static void __vtable_alloc_cb(valk_io_tcp_t *tcp, size_t suggested, void **buf, size_t *buflen) {
+static void __vtable_alloc_cb(valk_io_tcp_t *tcp, u64 suggested, void **buf, u64 *buflen) {
   UNUSED(suggested);
   valk_aio_handle_t *conn = tcp->user_data;
   *buf = NULL;
@@ -202,7 +202,7 @@ static void __http_server_accept_impl(valk_aio_handle_t *hndl, int status) {
 
   if (!srv->sys || !srv->sys->tcpBufferSlab) return;
 
-  uint64_t now_ms = srv->sys->ops->loop->now(srv->sys);
+  u64 now_ms = srv->sys->ops->loop->now(srv->sys);
   valk_pressure_state_t state = valk_conn_admission_snapshot(srv->sys, now_ms);
   valk_conn_admission_result_t result = valk_conn_admission_check(&srv->sys->admission, &state);
 
@@ -247,7 +247,7 @@ static void __http_server_accept_impl(valk_aio_handle_t *hndl, int status) {
 #ifdef VALK_METRICS_ENABLED
   conn->http.diag.state = VALK_DIAG_CONN_CONNECTING;
   conn->http.diag.owner_idx = srv->owner_idx;
-  conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+  conn->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
 #endif
 
   valk_dll_insert_after(&srv->sys->liveHandles, conn);
@@ -266,7 +266,7 @@ static void __http_server_accept_impl(valk_aio_handle_t *hndl, int status) {
     if (__vtable_getpeername(conn, &client_addr, &addr_len) == 0) {
       char ip[INET6_ADDRSTRLEN];
       memset(ip, 0, sizeof(ip));
-      uint16_t port = 0;
+      u16 port = 0;
       if (client_addr.ss_family == AF_INET) {
         struct sockaddr_in *addr4 = (struct sockaddr_in *)&client_addr;
         tcp_ops->ip4_name(addr4, ip, sizeof(ip));
@@ -316,7 +316,7 @@ static void __http_server_accept_impl(valk_aio_handle_t *hndl, int status) {
     valk_gauge_v2_inc(srv->metrics.connections_active);
 
     conn->http.diag.state = VALK_DIAG_CONN_ACTIVE;
-    conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+    conn->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
     conn->http.diag.owner_idx = srv->owner_idx;
 #endif
 
@@ -332,7 +332,7 @@ static void __http_server_accept_impl(valk_aio_handle_t *hndl, int status) {
       conn->http.state = VALK_CONN_CLOSING;
 #ifdef VALK_METRICS_ENABLED
       conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
-      conn->http.diag.state_change_time = (uint64_t)(uv_hrtime() / 1000000ULL);
+      conn->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
 #endif
       __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
     }
@@ -470,7 +470,7 @@ static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
 static void __valk_sandbox_env_free(valk_lenv_t *env) {
   if (!env) return;
 
-  for (size_t i = 0; i < env->symbols.count; i++) {
+  for (u64 i = 0; i < env->symbols.count; i++) {
     if (env->symbols.items && env->symbols.items[i]) {
       free(env->symbols.items[i]);
     }

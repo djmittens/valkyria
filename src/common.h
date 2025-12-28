@@ -2,9 +2,9 @@
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <signal.h>
-#include <sys/types.h>
 
 #include "debug.h"
+#include "types.h"
 
 #define UNUSED(x) ({ (void)x; })
 

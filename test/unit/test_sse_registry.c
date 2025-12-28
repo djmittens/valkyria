@@ -925,8 +925,8 @@ void test_registry_data_provider_callback_inactive(VALK_TEST_ARGS()) {
 
   atomic_store(&entry->active, false);
 
-  uint8_t buf[1024];
-  uint32_t data_flags = 0;
+  u8 buf[1024];
+  u32 data_flags = 0;
   nghttp2_data_source source = { .ptr = entry };
 
   nghttp2_ssize result = data_prd.read_callback(
@@ -958,8 +958,8 @@ void test_registry_data_provider_callback_no_data(VALK_TEST_ARGS()) {
   ASSERT_NOT_NULL(entry);
   ASSERT_NOT_NULL(data_prd.read_callback);
 
-  uint8_t buf[1024];
-  uint32_t data_flags = 0;
+  u8 buf[1024];
+  u32 data_flags = 0;
   nghttp2_data_source source = { .ptr = entry };
 
   nghttp2_ssize result = data_prd.read_callback(
@@ -996,8 +996,8 @@ void test_registry_data_provider_callback_with_data(VALK_TEST_ARGS()) {
   entry->pending_len = 25;
   entry->pending_offset = 0;
 
-  uint8_t buf[1024];
-  uint32_t data_flags = 0;
+  u8 buf[1024];
+  u32 data_flags = 0;
   nghttp2_data_source source = { .ptr = entry };
 
   nghttp2_ssize result = data_prd.read_callback(
@@ -1036,8 +1036,8 @@ void test_registry_data_provider_callback_partial_read(VALK_TEST_ARGS()) {
   entry->pending_len = 16;
   entry->pending_offset = 0;
 
-  uint8_t buf[10];
-  uint32_t data_flags = 0;
+  u8 buf[10];
+  u32 data_flags = 0;
   nghttp2_data_source source = { .ptr = entry };
 
   nghttp2_ssize result = data_prd.read_callback(
@@ -1083,8 +1083,8 @@ void test_registry_data_provider_null_entry(VALK_TEST_ARGS()) {
   ASSERT_NOT_NULL(entry);
   ASSERT_NOT_NULL(data_prd.read_callback);
 
-  uint8_t buf[1024];
-  uint32_t data_flags = 0;
+  u8 buf[1024];
+  u32 data_flags = 0;
   nghttp2_data_source source = { .ptr = NULL };
 
   nghttp2_ssize result = data_prd.read_callback(

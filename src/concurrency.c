@@ -25,7 +25,7 @@ const int VALK_NUM_WORKERS = 4;
     static valk_mem_allocator_e supported[] = {                             \
         VALK_ALLOC_MALLOC, VALK_ALLOC_SLAB, VALK_ALLOC_ARENA};              \
     bool found = 0;                                                         \
-    for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) { \
+    for (u64 i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i) { \
       if (supported[i] == valk_thread_ctx.allocator->type) {                \
         found = 1;                                                          \
       }                                                                     \
@@ -35,7 +35,7 @@ const int VALK_NUM_WORKERS = 4;
         valk_mem_allocator_e_to_string(valk_thread_ctx.allocator->type));   \
   } while (0)
 
-valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity) {
+valk_arc_box *valk_arc_box_new(valk_res_t type, u64 capacity) {
   valk_arc_box *res = valk_mem_alloc(sizeof(valk_arc_box) + capacity);
   valk_arc_box_init(res, type, capacity);
   __assert_thread_safe_allocator();
@@ -43,7 +43,7 @@ valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity) {
   return res;
 }
 
-void valk_arc_box_init(valk_arc_box *self, valk_res_t type, size_t capacity) {
+void valk_arc_box_init(valk_arc_box *self, valk_res_t type, u64 capacity) {
   memset(self, 0, sizeof(valk_arc_box) + capacity);
   self->type = type;
   self->refcount = 1;
@@ -137,7 +137,7 @@ valk_arc_box *valk_future_await(valk_future *future) {
   return res;
 }
 
-valk_arc_box *valk_future_await_timeout(valk_future *self, uint32_t msec) {
+valk_arc_box *valk_future_await_timeout(valk_future *self, u32 msec) {
   valk_arc_box *res;
   if (self->done) {
     res = self->item;
@@ -181,7 +181,7 @@ valk_arc_box *valk_future_await_timeout(valk_future *self, uint32_t msec) {
 }
 
 void valk_promise_respond(valk_promise *promise, valk_arc_box *result) {
-  size_t count = 0;
+  u64 count = 0;
   valk_future *fut = promise->item;
   valk_arc_retain(fut);
   valk_arc_retain(result);
@@ -261,11 +261,11 @@ int valk_start_pool(valk_worker_pool *pool) {
   pool->items = valk_mem_alloc(sizeof(valk_worker) * VALK_NUM_WORKERS);
   valk_work_init(&pool->queue, 8);
 
-  for (size_t i = 0; i < VALK_NUM_WORKERS; i++) {
+  for (u64 i = 0; i < VALK_NUM_WORKERS; i++) {
     pool->items[i].queue = &pool->queue;
-    int len = snprintf(nullptr, 0, "Worker [%zu]", i);
+    int len = snprintf(nullptr, 0, "Worker [%llu]", (unsigned long long)i);
     pool->items[i].name = malloc(len + 1);
-    snprintf(pool->items[i].name, len + 1, "Worker [%zu]", i);
+    snprintf(pool->items[i].name, len + 1, "Worker [%llu]", (unsigned long long)i);
 
     valk_thread_attr_t attr;
     valk_thread_attr_init(&attr);
@@ -313,8 +313,8 @@ void valk_free_pool(valk_worker_pool *pool) {
 
   valk_mutex_lock(&pool->queue.mutex);
   valk_task poison = {.type = VALK_POISON};
-  size_t numWorkers = pool->queue.numWorkers;
-  for (size_t i = 0; i < numWorkers; i++) {
+  u64 numWorkers = pool->queue.numWorkers;
+  for (u64 i = 0; i < numWorkers; i++) {
     valk_work_add(&pool->queue, poison);
     valk_cond_signal(&pool->queue.notEmpty);
   }
@@ -326,7 +326,7 @@ void valk_free_pool(valk_worker_pool *pool) {
   }
   valk_mutex_unlock(&pool->queue.mutex);
 
-  for (size_t i = 0; i < numWorkers; i++) {
+  for (u64 i = 0; i < numWorkers; i++) {
     free(pool->items[i].name);
   }
   free(pool->items);

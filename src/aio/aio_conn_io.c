@@ -1,7 +1,7 @@
 #include "aio_conn_io.h"
 #include "aio_internal.h"
 
-void valk_conn_io_init(valk_conn_io_t *io, size_t buf_size) {
+void valk_conn_io_init(valk_conn_io_t *io, u64 buf_size) {
   memset(io, 0, sizeof(*io));
   io->buf_size = buf_size;
 }
@@ -39,13 +39,13 @@ void valk_conn_io_read_buf_release(valk_conn_io_t *io, valk_slab_t *slab) {
   io->read_buf = NULL;
 }
 
-uint8_t *valk_conn_io_read_buf_data(valk_conn_io_t *io) {
+u8 *valk_conn_io_read_buf_data(valk_conn_io_t *io) {
   if (!io->read_buf) return NULL;
   __tcp_buffer_slab_item_t *item = (void *)io->read_buf->data;
-  return (uint8_t *)item->data;
+  return (u8 *)item->data;
 }
 
-size_t valk_conn_io_read_buf_size(valk_conn_io_t *io) {
+u64 valk_conn_io_read_buf_size(valk_conn_io_t *io) {
   return io->buf_size;
 }
 
@@ -65,33 +65,33 @@ bool valk_conn_io_write_buf_acquire(valk_conn_io_t *io, valk_slab_t *slab) {
   return true;
 }
 
-uint8_t *valk_conn_io_write_buf_data(valk_conn_io_t *io) {
+u8 *valk_conn_io_write_buf_data(valk_conn_io_t *io) {
   if (!io->write_buf) return NULL;
   __tcp_buffer_slab_item_t *item = (void *)io->write_buf->data;
-  return (uint8_t *)item->data;
+  return (u8 *)item->data;
 }
 
-size_t valk_conn_io_write_buf_available(valk_conn_io_t *io) {
+u64 valk_conn_io_write_buf_available(valk_conn_io_t *io) {
   if (!io->write_buf) return 0;
   return io->buf_size - io->write_pos;
 }
 
-bool valk_conn_io_write_buf_writable(valk_conn_io_t *io, valk_slab_t *slab, size_t min_space) {
+bool valk_conn_io_write_buf_writable(valk_conn_io_t *io, valk_slab_t *slab, u64 min_space) {
   if (io->write_flush_pending) return false;
   if (!io->write_buf && !valk_conn_io_write_buf_acquire(io, slab)) return false;
   return valk_conn_io_write_buf_available(io) >= min_space;
 }
 
-size_t valk_conn_io_write_buf_append(valk_conn_io_t *io, valk_slab_t *slab,
-                                      const uint8_t *data, size_t len) {
+u64 valk_conn_io_write_buf_append(valk_conn_io_t *io, valk_slab_t *slab,
+                                      const u8 *data, u64 len) {
   if (io->write_flush_pending) return 0;
   if (!io->write_buf && !valk_conn_io_write_buf_acquire(io, slab)) return 0;
   
-  size_t available = valk_conn_io_write_buf_available(io);
-  size_t to_write = len < available ? len : available;
+  u64 available = valk_conn_io_write_buf_available(io);
+  u64 to_write = len < available ? len : available;
   
   if (to_write > 0) {
-    uint8_t *buf = valk_conn_io_write_buf_data(io);
+    u8 *buf = valk_conn_io_write_buf_data(io);
     memcpy(buf + io->write_pos, data, to_write);
     io->write_pos += to_write;
   }

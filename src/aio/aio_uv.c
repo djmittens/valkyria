@@ -4,7 +4,7 @@
 
 valk_aio_system_t *g_last_started_aio_system = NULL;
 valk_aio_system_t *valk_aio_active_system = NULL;
-uint64_t g_async_handle_id = 0;
+u64 g_async_handle_id = 0;
 
 static void __uv_handle_closed_cb(uv_handle_t *handle);
 static void __aio_uv_walk_close(uv_handle_t *h, void *arg);
@@ -71,10 +71,10 @@ void __event_loop(void *arg) {
   //
   // Total shutdown budget: 500ms (generous for tests, fast enough for prod)
   
-  uint64_t drain_start = sys->ops->loop->hrtime();
-  uint64_t graceful_drain_ns = 100ULL * 1000000ULL;  // 100ms graceful
-  uint64_t force_close_ns = 300ULL * 1000000ULL;     // 300ms for force close
-  uint64_t hard_deadline_ns = 500ULL * 1000000ULL;   // 500ms hard deadline
+  u64 drain_start = sys->ops->loop->hrtime();
+  u64 graceful_drain_ns = 100ULL * 1000000ULL;  // 100ms graceful
+  u64 force_close_ns = 300ULL * 1000000ULL;     // 300ms for force close
+  u64 hard_deadline_ns = 500ULL * 1000000ULL;   // 500ms hard deadline
   
   bool force_closed = false;
   bool logged_diagnostics = false;
@@ -82,7 +82,7 @@ void __event_loop(void *arg) {
   
   // LCOV_EXCL_START - shutdown drain loop timing-dependent, rarely entered in tests
   while (sys->ops->loop->alive(sys)) {
-    uint64_t elapsed = sys->ops->loop->hrtime() - drain_start;
+    u64 elapsed = sys->ops->loop->hrtime() - drain_start;
     iterations++;
     
     // Phase 1: Graceful drain with UV_RUN_ONCE (allows I/O to complete)
@@ -123,7 +123,7 @@ void __event_loop(void *arg) {
   }
   // LCOV_EXCL_STOP
   
-  uint64_t total_drain_ms = (sys->ops->loop->hrtime() - drain_start) / 1000000ULL;
+  u64 total_drain_ms = (sys->ops->loop->hrtime() - drain_start) / 1000000ULL;
   if (total_drain_ms > 50) {  // LCOV_EXCL_LINE
     VALK_INFO("Shutdown: drain completed in %llu ms (%d iterations)",  // LCOV_EXCL_LINE
               (unsigned long long)total_drain_ms, iterations);  // LCOV_EXCL_LINE

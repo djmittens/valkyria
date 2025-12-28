@@ -264,7 +264,7 @@ void test_aio_active_system_initially_null(VALK_TEST_ARGS()) {
 void test_owner_registry_null_system(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  uint16_t idx = valk_owner_register(NULL, "test", 0, NULL);
+  u16 idx = valk_owner_register(NULL, "test", 0, NULL);
   ASSERT_EQ(idx, UINT16_MAX);
 
   const char *name = valk_owner_get_name(NULL, 0);

@@ -3,7 +3,6 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -111,8 +110,8 @@ typedef struct valk_test_fixture_t {
 typedef struct valk_test_result_t {
   valk_test_result_type type;
   valk_time_precision_e timePrecision;
-  uint64_t startTime;
-  uint64_t stopTime;
+  u64 startTime;
+  u64 stopTime;
 } valk_test_result_t;
 
 typedef struct valk_test_t {
@@ -275,12 +274,14 @@ long valk_get_nanos(void);
 
 #define ASSERT_STR_EQ(a, b)                                                    \
   do {                                                                         \
-    if ((a) == NULL || (b) == NULL) {                                          \
-      if ((a) != (b)) {                                                        \
+    const char *_str_a = (a);                                                  \
+    const char *_str_b = (b);                                                  \
+    if (_str_a == NULL || _str_b == NULL) {                                    \
+      if (_str_a != _str_b) {                                                  \
         VALK_FAIL("ASSERT_STR_EQ: one string is NULL");                        \
       }                                                                        \
-    } else if (strcmp((a), (b)) != 0) {                                        \
-      VALK_FAIL("ASSERT_STR_EQ: expected \"%s\", got \"%s\"", (b), (a));        \
+    } else if (strcmp(_str_a, _str_b) != 0) {                                  \
+      VALK_FAIL("ASSERT_STR_EQ: expected \"%s\", got \"%s\"", _str_b, _str_a);  \
     }                                                                          \
   } while (0)
 

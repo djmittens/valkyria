@@ -33,7 +33,7 @@ static void cb_onDisconnect(void *arg, valk_aio_handle_t *conn) {
   __atomic_fetch_add(&handler->disconnectedCount, 1, __ATOMIC_RELAXED);
 }
 
-static void cb_onHeader(void *arg, valk_aio_handle_t *conn, size_t stream, char *name,
+static void cb_onHeader(void *arg, valk_aio_handle_t *conn, u64 stream, char *name,
                  char *value) {
   UNUSED(arg);
   UNUSED(conn);
@@ -42,7 +42,7 @@ static void cb_onHeader(void *arg, valk_aio_handle_t *conn, size_t stream, char 
   UNUSED(value);
 }
 
-static void cb_onBody(void *arg, valk_aio_handle_t *conn, size_t stream, uint8_t flags,
+static void cb_onBody(void *arg, valk_aio_handle_t *conn, u64 stream, u8 flags,
                valk_buffer_t *buf) {
   UNUSED(arg);
   UNUSED(conn);
@@ -80,24 +80,28 @@ int port = valk_aio_http2_server_get_port(server->item);
 
 #ifdef VALK_METRICS_ENABLED
   valk_aio_system_stats_t *stats = valk_aio_get_system_stats(sys);
-  uint64_t initial_rejected = atomic_load(&stats->connections_rejected_load);
+  u64 initial_rejected = atomic_load(&stats->connections_rejected_load);
 #endif
 
 #define NUM_CLIENTS 16
   valk_future *fclients[NUM_CLIENTS];
   valk_arc_box *clientBoxes[NUM_CLIENTS];
+#ifndef VALK_METRICS_ENABLED
   int rejected_count = 0;
+#endif
 
   for (int i = 0; i < NUM_CLIENTS; i++) {
     fclients[i] = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
     clientBoxes[i] = valk_future_await(fclients[i]);
+#ifndef VALK_METRICS_ENABLED
     if (clientBoxes[i]->type != VALK_SUC) {
       rejected_count++;
     }
+#endif
   }
 
 #ifdef VALK_METRICS_ENABLED
-  uint64_t final_rejected = atomic_load(&stats->connections_rejected_load);
+  u64 final_rejected = atomic_load(&stats->connections_rejected_load);
   ASSERT_GT(final_rejected, initial_rejected);
 #else
   ASSERT_GT(rejected_count, 0);
@@ -147,7 +151,7 @@ int port = valk_aio_http2_server_get_port(server->item);
 
 #ifdef VALK_METRICS_ENABLED
   valk_aio_system_stats_t *stats = valk_aio_get_system_stats(sys);
-  uint64_t initial_rejected = atomic_load(&stats->connections_rejected_load);
+  u64 initial_rejected = atomic_load(&stats->connections_rejected_load);
 #endif
 
 #define NUM_CLIENTS 4
@@ -166,7 +170,7 @@ int port = valk_aio_http2_server_get_port(server->item);
   ASSERT_EQ(successful, NUM_CLIENTS);
 
 #ifdef VALK_METRICS_ENABLED
-  uint64_t final_rejected = atomic_load(&stats->connections_rejected_load);
+  u64 final_rejected = atomic_load(&stats->connections_rejected_load);
   ASSERT_EQ(final_rejected, initial_rejected);
 #endif
 
@@ -256,15 +260,12 @@ int port = valk_aio_http2_server_get_port(server->item);
   valk_future *fclients[NUM_CLIENTS];
   valk_arc_box *clientBoxes[NUM_CLIENTS];
   int successful = 0;
-  int failed = 0;
 
   for (int i = 0; i < NUM_CLIENTS; i++) {
     fclients[i] = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
     clientBoxes[i] = valk_future_await(fclients[i]);
     if (clientBoxes[i]->type == VALK_SUC) {
       successful++;
-    } else {
-      failed++;
     }
   }
 
@@ -300,7 +301,7 @@ static void test_load_shedding_counter_increments(VALK_TEST_ARGS()) {
 
   valk_aio_system_stats_t *stats = valk_aio_get_system_stats(sys);
   ASSERT_NOT_NULL(stats);
-  uint64_t initial_rejected = atomic_load(&stats->connections_rejected_load);
+  u64 initial_rejected = atomic_load(&stats->connections_rejected_load);
   valk_srv_state_t state = {0};
   valk_http2_handler_t handler = {
       .arg = &state,
@@ -326,7 +327,7 @@ int port = valk_aio_http2_server_get_port(server->item);
     clientBoxes[i] = valk_future_await(fclients[i]);
   }
 
-  uint64_t final_rejected = atomic_load(&stats->connections_rejected_load);
+  u64 final_rejected = atomic_load(&stats->connections_rejected_load);
   ASSERT_GT(final_rejected, initial_rejected);
 
   for (int i = 0; i < NUM_CLIENTS; i++) {
@@ -435,7 +436,7 @@ int port = valk_aio_http2_server_get_port(server->item);
   int successful = 0;
 
   for (int i = 0; i < NUM_REQUESTS; i++) {
-    uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
 
@@ -447,7 +448,7 @@ int port = valk_aio_http2_server_get_port(server->item);
       req->scheme = "https";
       req->authority = "localhost";
       req->path = "/";
-      req->body = (uint8_t *)"";
+      req->body = (u8 *)"";
       req->bodyLen = 0;
       da_init(&req->headers);
     }
@@ -611,7 +612,7 @@ int port = valk_aio_http2_server_get_port(server->item);
 
   valk_aio_http2_client *client = clientBox->item;
 
-  uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -623,7 +624,7 @@ int port = valk_aio_http2_server_get_port(server->item);
     req->scheme = "https";
     req->authority = "localhost";
     req->path = "/";
-    req->body = (uint8_t *)"";
+    req->body = (u8 *)"";
     req->bodyLen = 0;
     da_init(&req->headers);
   }
@@ -676,7 +677,7 @@ int port = valk_aio_http2_server_get_port(server->item);
 
   valk_aio_http2_client *client = clientBox->item;
 
-  uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -688,7 +689,7 @@ int port = valk_aio_http2_server_get_port(server->item);
     req->scheme = "https";
     req->authority = "localhost";
     req->path = "/";
-    req->body = (uint8_t *)"";
+    req->body = (u8 *)"";
     req->bodyLen = 0;
     da_init(&req->headers);
   }
@@ -768,7 +769,7 @@ static valk_http2_request_t* create_request(valk_mem_arena_t *arena,
     req->scheme = "https";
     req->authority = "localhost";
     req->path = (char*)path;
-    req->body = (uint8_t *)"";
+    req->body = (u8 *)"";
     req->bodyLen = 0;
     da_init(&req->headers);
   }
@@ -809,7 +810,7 @@ int port = valk_aio_http2_server_get_port(server->item);
 
 #define NUM_REQUESTS 4
   for (int i = 0; i < NUM_REQUESTS; i++) {
-    uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
     valk_http2_request_t *req = create_request(req_arena, "GET", "/");
@@ -862,7 +863,7 @@ int port = valk_aio_http2_server_get_port(server->item);
   valk_future *fclients[NUM_CLIENTS];
   valk_arc_box *clientBoxes[NUM_CLIENTS];
   valk_future *freqs[NUM_CLIENTS * REQUESTS_PER_CLIENT];
-  uint8_t *req_bufs[NUM_CLIENTS * REQUESTS_PER_CLIENT];
+  u8 *req_bufs[NUM_CLIENTS * REQUESTS_PER_CLIENT];
   int req_count = 0;
 
   for (int i = 0; i < NUM_CLIENTS; i++) {
@@ -875,7 +876,7 @@ int port = valk_aio_http2_server_get_port(server->item);
 
     valk_aio_http2_client *client = clientBoxes[i]->item;
     for (int r = 0; r < REQUESTS_PER_CLIENT; r++) {
-      uint8_t *req_buf = malloc(sizeof(valk_mem_arena_t) + 4096);
+      u8 *req_buf = malloc(sizeof(valk_mem_arena_t) + 4096);
       req_bufs[req_count] = req_buf;
       valk_mem_arena_t *req_arena = (void *)req_buf;
       valk_mem_arena_init(req_arena, 4096);
@@ -956,7 +957,7 @@ static void test_backpressure_connections_survive(VALK_TEST_ARGS()) {
   int total_completed = 0;
   for (int round = 0; round < 3; round++) {
     for (int i = 0; i < connected; i++) {
-      uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+      u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
       valk_mem_arena_t *req_arena = (void *)req_buf;
       valk_mem_arena_init(req_arena, 4096);
       valk_http2_request_t *req = create_request(req_arena, "GET", "/");
@@ -1038,7 +1039,7 @@ int port = valk_aio_http2_server_get_port(server->item);
   for (int c = 0; c < successful; c++) {
     valk_aio_http2_client *client = clientBoxes[c]->item;
     for (int r = 0; r < 4; r++) {
-      uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+      u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
       valk_mem_arena_t *req_arena = (void *)req_buf;
       valk_mem_arena_init(req_arena, 4096);
       valk_http2_request_t *req = create_request(req_arena, "GET", "/test");
@@ -1107,7 +1108,7 @@ static void test_backpressure_list_remove_nonhead(VALK_TEST_ARGS()) {
 
   for (int c = 0; c < NUM_CLIENTS; c++) {
     valk_aio_http2_client *client = clientBoxes[c]->item;
-    uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
     valk_http2_request_t *req = create_request(req_arena, "GET", "/test");
@@ -1165,7 +1166,7 @@ int port = valk_aio_http2_server_get_port(server->item);
 #define NUM_REQUESTS 3
   for (int round = 0; round < 2; round++) {
     for (int i = 0; i < NUM_REQUESTS; i++) {
-      uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+      u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
       valk_mem_arena_t *req_arena = (void *)req_buf;
       valk_mem_arena_init(req_arena, 4096);
       valk_http2_request_t *req = create_request(req_arena, "GET", "/");

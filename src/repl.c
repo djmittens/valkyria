@@ -1,6 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
 #include <editline/readline.h>
-#include <errno.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -34,16 +33,10 @@ static void sigusr1_handler(int sig) {
 
 int main(int argc, char* argv[]) {
   char* input;
-  // GC heap + scratch arena approach (Phase 5 complete with forwarding)
-  // - GC heap for persistent values (managed by mark & sweep)
-  // - Scratch arena for temporary values during evaluation
-  // - Forwarding pointers allow scratch values to be promoted to GC heap
-  size_t const GC_THRESHOLD_BYTES = 16 * 1024 * 1024;  // 16 MiB GC threshold
-  size_t const SCRATCH_ARENA_BYTES =
-      4 * 1024 * 1024;  // 4 MiB scratch (REPL only)
+  u64 const SCRATCH_ARENA_BYTES = 4 * 1024 * 1024;
 
   // Check for hard limit env var, default to threshold * 2
-  size_t hard_limit = 0;
+  u64 hard_limit = 0;
   const char* hard_limit_env = getenv("VALK_HEAP_HARD_LIMIT");
   if (hard_limit_env && hard_limit_env[0] != '\0') {
     hard_limit = strtoull(hard_limit_env, NULL, 10);
@@ -200,7 +193,7 @@ int main(int argc, char* argv[]) {
     valk_checkpoint(scratch, gc_heap, env);
 
     valk_repl_mem_take_snapshot(gc_heap, scratch, &g_last_eval_after);
-    int64_t heap_delta, scratch_delta, lval_delta, lenv_delta;
+    i64 heap_delta, scratch_delta, lval_delta, lenv_delta;
     valk_repl_mem_snapshot_delta(&g_last_eval_before, &g_last_eval_after,
                                  &heap_delta, &scratch_delta,
                                  &lval_delta, &lenv_delta);

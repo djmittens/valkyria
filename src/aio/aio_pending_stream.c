@@ -3,9 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../log.h"
+#include "log.h"
 
-int valk_pending_stream_queue_init(valk_pending_stream_queue_t *queue, size_t pool_capacity) {
+int valk_pending_stream_queue_init(valk_pending_stream_queue_t *queue, u64 pool_capacity) {
   if (!queue || pool_capacity == 0) return -1;
 
   queue->head = nullptr;
@@ -45,7 +45,7 @@ void valk_pending_stream_queue_destroy(valk_pending_stream_queue_t *queue) {
 valk_pending_stream_t *valk_pending_stream_alloc(valk_pending_stream_queue_t *queue) {
   if (!queue || !queue->pool.items) return nullptr;
 
-  for (size_t i = 0; i < queue->pool.capacity; i++) {
+  for (u64 i = 0; i < queue->pool.capacity; i++) {
     if (!queue->pool.used[i]) {
       queue->pool.used[i] = true;
       valk_pending_stream_t *ps = &queue->pool.items[i];
@@ -64,7 +64,7 @@ void valk_pending_stream_free(valk_pending_stream_queue_t *queue, valk_pending_s
   if (ps->authority) { free(ps->authority); ps->authority = nullptr; }
   if (ps->path) { free(ps->path); ps->path = nullptr; }
 
-  for (size_t i = 0; i < ps->header_count; i++) {
+  for (u64 i = 0; i < ps->header_count; i++) {
     if (ps->headers[i].name) free(ps->headers[i].name);
     if (ps->headers[i].value) free(ps->headers[i].value);
   }
@@ -73,7 +73,7 @@ void valk_pending_stream_free(valk_pending_stream_queue_t *queue, valk_pending_s
   if (ps->body) { free(ps->body); ps->body = nullptr; }
 
   if (queue && queue->pool.items) {
-    size_t idx = (size_t)(ps - queue->pool.items);
+    u64 idx = (u64)(ps - queue->pool.items);
     if (idx < queue->pool.capacity) {
       queue->pool.used[idx] = false;
     }

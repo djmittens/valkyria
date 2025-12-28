@@ -53,7 +53,7 @@ static void demo_cb_onDisconnect(void *arg, valk_aio_handle_t *conn) {
   __atomic_fetch_add(&handler->disconnectedCount, 1, __ATOMIC_RELAXED);
 }
 
-static void demo_cb_onHeader(void *arg, valk_aio_handle_t *conn, size_t stream, char *name,
+static void demo_cb_onHeader(void *arg, valk_aio_handle_t *conn, u64 stream, char *name,
                  char *value) {
   UNUSED(arg);
   UNUSED(conn);
@@ -62,7 +62,7 @@ static void demo_cb_onHeader(void *arg, valk_aio_handle_t *conn, size_t stream, 
   UNUSED(value);
 }
 
-static void demo_cb_onBody(void *arg, valk_aio_handle_t *conn, size_t stream, uint8_t flags,
+static void demo_cb_onBody(void *arg, valk_aio_handle_t *conn, u64 stream, u8 flags,
                valk_buffer_t *buf) {
   UNUSED(arg);
   UNUSED(conn);
@@ -91,7 +91,7 @@ static valk_http2_handler_t *get_noop_handler(void) {
 
 typedef struct {
   char status[16];    // Copy status to avoid use-after-free
-  uint8_t *body;      // Points to copied body
+  u8 *body;      // Points to copied body
   size_t body_len;
   bool success;
 } test_response_t;
@@ -101,7 +101,7 @@ static test_response_t send_request(valk_aio_system_t *sys, int port,
   test_response_t result = {0};
 
   // Build request
-  uint8_t req_buf[sizeof(valk_mem_arena_t) + 8192];
+  u8 req_buf[sizeof(valk_mem_arena_t) + 8192];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 8192);
 
@@ -113,7 +113,7 @@ static test_response_t send_request(valk_aio_system_t *sys, int port,
     req->scheme = "https";
     req->authority = "localhost";
     req->path = (char *)path;
-    req->body = (uint8_t *)"";
+    req->body = (u8 *)"";
     req->bodyLen = 0;
     da_init(&req->headers);
   }
@@ -298,8 +298,8 @@ void test_aio_metrics(VALK_TEST_ARGS()) {
   valk_aio_metrics_t *metrics = valk_aio_get_metrics(sys);
   VALK_TEST_ASSERT(metrics != NULL, "Metrics should be available");
 
-  uint64_t initial_requests = atomic_load(&metrics->requests_total);
-  uint64_t initial_connections = atomic_load(&metrics->connections_total);
+  u64 initial_requests = atomic_load(&metrics->requests_total);
+  u64 initial_connections = atomic_load(&metrics->connections_total);
 
   // Send some requests
   for (int i = 0; i < 3; i++) {
@@ -309,8 +309,8 @@ void test_aio_metrics(VALK_TEST_ARGS()) {
   }
 
   // Check metrics increased
-  uint64_t final_requests = atomic_load(&metrics->requests_total);
-  uint64_t final_connections = atomic_load(&metrics->connections_total);
+  u64 final_requests = atomic_load(&metrics->requests_total);
+  u64 final_connections = atomic_load(&metrics->connections_total);
 
   VALK_TEST_ASSERT(final_requests > initial_requests,
                    "requests_total should increase: %lu -> %lu",
@@ -343,7 +343,7 @@ void test_system_stats(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(stats != NULL, "System stats should be available");
 
   // Server count should be at least 1
-  uint64_t servers = atomic_load(&stats->servers_count);
+  u64 servers = atomic_load(&stats->servers_count);
   VALK_TEST_ASSERT(servers >= 1, "Should have at least 1 server: %lu", servers);
 
   // Total arenas should be > 0
@@ -457,14 +457,14 @@ void test_modular_metrics_counter(VALK_TEST_ARGS()) {
 
   VALK_TEST_ASSERT(counter != NULL, "Counter should be created");
 
-  uint64_t initial = atomic_load(&counter->value);
+  u64 initial = atomic_load(&counter->value);
 
   // Increment
   valk_counter_v2_inc(counter);
   valk_counter_v2_inc(counter);
   valk_counter_v2_add(counter, 5);
 
-  uint64_t final = atomic_load(&counter->value);
+  u64 final = atomic_load(&counter->value);
   VALK_TEST_ASSERT(final == initial + 7,
                    "Counter should increment by 7: %lu -> %lu", initial, final);
 

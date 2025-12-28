@@ -1,7 +1,6 @@
 #ifndef VALK_AIO_SSE_STREAM_REGISTRY_H
 #define VALK_AIO_SSE_STREAM_REGISTRY_H
 
-#include <stdint.h>
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <nghttp2/nghttp2.h>
@@ -28,64 +27,64 @@ struct valk_sse_stream_entry {
   valk_sse_stream_entry_t *next;
   valk_sse_stream_entry_t *prev;  // Doubly-linked for O(1) removal
 
-  uint64_t stream_id;                 // Unique ID within registry
+  u64 stream_id;                 // Unique ID within registry
   valk_sse_subscription_type_e type;
 
   // HTTP/2 context
   valk_aio_handle_t *handle;
   valk_aio_system_t *aio_system;  // Direct reference (avoid dereferencing handle)
   nghttp2_session *session;
-  int32_t http2_stream_id;
+  i32 http2_stream_id;
 
   // Lifecycle state
   _Atomic bool active;
   _Atomic bool being_removed;
 
   // Activity tracking for idle timeout
-  uint64_t created_at_ms;
-  uint64_t last_activity_ms;
-  uint64_t idle_timeout_ms;       // 0 = no timeout
+  u64 created_at_ms;
+  u64 last_activity_ms;
+  u64 idle_timeout_ms;       // 0 = no timeout
 
   // Per-stream state
   bool first_event_sent;
-  uint64_t last_event_id;
+  u64 last_event_id;
   valk_mem_snapshot_t prev_snapshot;
   valk_metrics_baseline_t *metrics_baseline;
 
   // Pending write buffer
   char *pending_data;
-  size_t pending_len;
-  size_t pending_offset;
-  size_t pending_capacity;
+  u64 pending_len;
+  u64 pending_offset;
+  u64 pending_capacity;
 
   // AIO metrics baseline (must match valk_sse_diag_conn_t.prev_metrics)
   struct {
-    uint64_t bytes_sent;
-    uint64_t bytes_recv;
-    uint64_t requests_total;
-    uint64_t connections_total;
-    uint64_t gc_cycles;
+    u64 bytes_sent;
+    u64 bytes_recv;
+    u64 requests_total;
+    u64 connections_total;
+    u64 gc_cycles;
     // Pending streams backpressure metrics
-    uint64_t pending_streams_current;
-    uint64_t pending_streams_total;
-    uint64_t pending_streams_processed;
-    uint64_t pending_streams_dropped;
+    u64 pending_streams_current;
+    u64 pending_streams_total;
+    u64 pending_streams_processed;
+    u64 pending_streams_dropped;
   } prev_aio_metrics;
 };
 
 // Global registry for all SSE streams
 struct valk_sse_stream_registry {
   valk_sse_stream_entry_t *streams;
-  size_t stream_count;
+  u64 stream_count;
 
   // Global timer
   valk_aio_handle_t *timer_handle;
   bool timer_running;
-  uint64_t timer_interval_ms;
+  u64 timer_interval_ms;
 
   // Shutdown state
   bool shutting_down;
-  uint64_t shutdown_deadline_ms;
+  u64 shutdown_deadline_ms;
 
   // Shared state
   valk_mem_snapshot_t current_snapshot;
@@ -96,10 +95,10 @@ struct valk_sse_stream_registry {
   valk_aio_system_t *aio_system;
 
   // Statistics
-  uint64_t events_pushed_total;
-  uint64_t bytes_pushed_total;
-  uint64_t streams_timed_out;
-  uint64_t streams_cancelled;
+  u64 events_pushed_total;
+  u64 bytes_pushed_total;
+  u64 streams_timed_out;
+  u64 streams_cancelled;
 };
 
 // Registry Lifecycle
@@ -111,7 +110,7 @@ valk_sse_stream_entry_t* valk_sse_registry_subscribe(
     valk_sse_stream_registry_t *registry,
     valk_aio_handle_t *handle,
     nghttp2_session *session,
-    int32_t stream_id,
+    i32 stream_id,
     valk_sse_subscription_type_e type,
     nghttp2_data_provider2 *data_prd_out);
 
@@ -119,7 +118,7 @@ void valk_sse_registry_unsubscribe(valk_sse_stream_registry_t *registry,
                                     valk_sse_stream_entry_t *entry);
 
 // Returns the number of streams that were unsubscribed
-size_t valk_sse_registry_unsubscribe_connection(
+u64 valk_sse_registry_unsubscribe_connection(
     valk_sse_stream_registry_t *registry,
     valk_aio_handle_t *handle);
 
@@ -127,27 +126,27 @@ size_t valk_sse_registry_unsubscribe_connection(
 valk_sse_stream_entry_t* valk_sse_registry_find_by_stream(
     valk_sse_stream_registry_t *registry,
     valk_aio_handle_t *handle,
-    int32_t http2_stream_id);
+    i32 http2_stream_id);
 
 // Timer Control
 void valk_sse_registry_timer_start(valk_sse_stream_registry_t *registry);
 void valk_sse_registry_timer_stop(valk_sse_stream_registry_t *registry);
 
 // Query API
-size_t valk_sse_registry_stream_count(valk_sse_stream_registry_t *registry);
-size_t valk_sse_registry_stats_json(valk_sse_stream_registry_t *registry, char *buf, size_t buf_size);
+u64 valk_sse_registry_stream_count(valk_sse_stream_registry_t *registry);
+u64 valk_sse_registry_stats_json(valk_sse_stream_registry_t *registry, char *buf, u64 buf_size);
 
 // Timeout Management
-void valk_sse_registry_set_idle_timeout(valk_sse_stream_entry_t *entry, uint64_t timeout_ms);
-size_t valk_sse_registry_check_timeouts(valk_sse_stream_registry_t *registry);
+void valk_sse_registry_set_idle_timeout(valk_sse_stream_entry_t *entry, u64 timeout_ms);
+u64 valk_sse_registry_check_timeouts(valk_sse_stream_registry_t *registry);
 
 // Stream Cancellation
-int valk_sse_registry_cancel_stream(valk_sse_stream_registry_t *registry, uint64_t stream_id);
-valk_sse_stream_entry_t *valk_sse_registry_find_by_id(valk_sse_stream_registry_t *registry, uint64_t stream_id);
+int valk_sse_registry_cancel_stream(valk_sse_stream_registry_t *registry, u64 stream_id);
+valk_sse_stream_entry_t *valk_sse_registry_find_by_id(valk_sse_stream_registry_t *registry, u64 stream_id);
 
 // Graceful Shutdown
-int valk_sse_registry_graceful_shutdown(valk_sse_stream_registry_t *registry, uint64_t drain_timeout_ms);
-size_t valk_sse_registry_force_close_all(valk_sse_stream_registry_t *registry);
+int valk_sse_registry_graceful_shutdown(valk_sse_stream_registry_t *registry, u64 drain_timeout_ms);
+u64 valk_sse_registry_force_close_all(valk_sse_stream_registry_t *registry);
 bool valk_sse_registry_is_shutting_down(valk_sse_stream_registry_t *registry);
 
 #endif // VALK_AIO_SSE_STREAM_REGISTRY_H

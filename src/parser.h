@@ -1,9 +1,9 @@
 #pragma once
 #include <stdbool.h>
 #include <stdatomic.h>
-#include <stdint.h>
 #include <stdio.h>
 #include "coverage.h"
+#include "types.h"
 
 #define LVAL_TYPE_BITS 8ULL
 #define LVAL_TYPE_MASK 0x00000000000000FFULL
@@ -34,10 +34,10 @@
 #define LVAL_GC_GEN(lval) (((lval)->flags & LVAL_GC_GEN_MASK) >> LVAL_GC_GEN_SHIFT)
 #define LVAL_GC_GEN_SET(lval, gen) do { \
   (lval)->flags = ((lval)->flags & ~LVAL_GC_GEN_MASK) | \
-                  (((uint64_t)(gen) & 0x7FULL) << LVAL_GC_GEN_SHIFT); \
+                  (((u64)(gen) & 0x7FULL) << LVAL_GC_GEN_SHIFT); \
 } while(0)
 #define LVAL_GC_GEN_INC(lval) do { \
-  uint64_t _gen = LVAL_GC_GEN(lval); \
+  u64 _gen = LVAL_GC_GEN(lval); \
   if (_gen < LVAL_GC_GEN_MAX) LVAL_GC_GEN_SET(lval, _gen + 1); \
 } while(0)
 
@@ -46,7 +46,7 @@
 
 // Helper to get allocation flags from allocator type
 // Implemented in parser.c
-uint64_t valk_alloc_flags_from_allocator(void* allocator);
+u64 valk_alloc_flags_from_allocator(void* allocator);
 
 // Forward declarations
 struct valk_lenv_t;
@@ -75,18 +75,18 @@ const char *valk_ltype_name(valk_ltype_e type);
 typedef valk_lval_t *(valk_lval_builtin_t)(valk_lenv_t *, valk_lval_t *);
 
 struct valk_lenv_t {
-  _Atomic uint64_t flags;
+  _Atomic u64 flags;
   // Dynamic array of symbol names (char*)
   struct {
     char **items;
-    size_t count;
-    size_t capacity;
+    u64 count;
+    u64 capacity;
   } symbols;
   // Dynamic array of values (valk_lval_t*)
   struct {
     valk_lval_t **items;
-    size_t count;
-    size_t capacity;
+    u64 count;
+    u64 capacity;
   } vals;
   struct valk_lenv_t *parent;
   // Fallback environment for dynamic scoping - checked when parent chain fails.
@@ -98,14 +98,14 @@ struct valk_lenv_t {
 };
 
 struct valk_lval_t {
-  _Atomic uint64_t flags;
+  _Atomic u64 flags;
   void *origin_allocator;  // Always track where this value was allocated
   struct valk_lval_t *gc_next;  // Linked list for GC heap tracking
 #ifdef VALK_COVERAGE
-  uint16_t cov_file_id;
-  uint16_t cov_line;
-  uint16_t cov_column;
-  uint16_t cov_reserved;
+  u16 cov_file_id;
+  u16 cov_line;
+  u16 cov_column;
+  u16 cov_reserved;
 #endif
   union {
     struct {
@@ -145,7 +145,7 @@ valk_lval_t *valk_lval_num(long x);
 valk_lval_t *valk_lval_err(const char *fmt, ...);
 valk_lval_t *valk_lval_sym(const char *sym);
 valk_lval_t *valk_lval_str(const char *str);
-valk_lval_t *valk_lval_str_n(const char *bytes, size_t n);
+valk_lval_t *valk_lval_str_n(const char *bytes, u64 n);
 
 // valk_lval_t *valk_lval_builtin(valk_lval_builtin_t *fun);
 valk_lval_t *valk_lval_lambda(valk_lenv_t *env, valk_lval_t *formals, valk_lval_t *body);
@@ -153,9 +153,9 @@ valk_lval_t *valk_lval_lambda(valk_lenv_t *env, valk_lval_t *formals, valk_lval_
 // Cons cell constructors
 valk_lval_t *valk_lval_nil(void);                                   // Empty list (LVAL_NIL)
 valk_lval_t *valk_lval_cons(valk_lval_t *head, valk_lval_t *tail);  // Cons cell
-valk_lval_t *valk_lval_list(valk_lval_t *arr[], size_t count);      // Build list from array
+valk_lval_t *valk_lval_list(valk_lval_t *arr[], u64 count);      // Build list from array
 valk_lval_t *valk_lval_qcons(valk_lval_t *head, valk_lval_t *tail); // Q-expression cons cell
-valk_lval_t *valk_lval_qlist(valk_lval_t *arr[], size_t count);     // Build qexpr from array
+valk_lval_t *valk_lval_qlist(valk_lval_t *arr[], u64 count);     // Build qexpr from array
 
 // Cons cell accessors
 valk_lval_t *valk_lval_head(valk_lval_t *cons);                     // Get head (car)
@@ -174,10 +174,10 @@ int valk_lval_eq(valk_lval_t *x, valk_lval_t *y);
 
 // Helper functions for cons-based lists
 int valk_lval_list_is_empty(valk_lval_t* list);
-size_t valk_lval_list_count(valk_lval_t* list);
-valk_lval_t* valk_lval_list_nth(valk_lval_t* list, size_t n);
+u64 valk_lval_list_count(valk_lval_t* list);
+valk_lval_t* valk_lval_list_nth(valk_lval_t* list, u64 n);
 
-valk_lval_t *valk_lval_pop(valk_lval_t *lval, size_t i);
+valk_lval_t *valk_lval_pop(valk_lval_t *lval, u64 i);
 valk_lval_t *valk_lval_join(valk_lval_t *a, valk_lval_t *b);
 
 valk_lval_t *valk_lval_eval(valk_lenv_t *env, valk_lval_t *lval);
@@ -198,7 +198,7 @@ typedef struct {
   int pos;
   int line;
   int line_start;
-  uint16_t file_id;
+  u16 file_id;
 } valk_parse_ctx_t;
 
 valk_lval_t *valk_lval_read_ctx(valk_parse_ctx_t *ctx);
@@ -208,7 +208,7 @@ valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx);
   (lval)->cov_file_id = (fid); \
   (lval)->cov_line = (ln); \
   (lval)->cov_column = (col); \
-  uint8_t __type = LVAL_TYPE(lval); \
+  u8 __type = LVAL_TYPE(lval); \
   /* Only mark CONS (s-expressions) for coverage, not QEXPR. */ \
   /* QEXPRs are quoted data not evaluated (e.g., function params, def bindings). */ \
   if (__type == LVAL_CONS) { \
@@ -262,8 +262,8 @@ void valk_lenv_builtins(valk_lenv_t *env);
 // These functions should  probably not  be here, but right now they are or
 // something. Maybe there should be a string handling lib
 
-char *valk_str_join(size_t n, const char **strs, const char *sep);
-char *valk_c_err_format(const char *fmt, const char *file, size_t line,
+char *valk_str_join(u64 n, const char **strs, const char *sep);
+char *valk_c_err_format(const char *fmt, const char *file, u64 line,
                         const char *function);
 
 // ============================================================================
@@ -272,13 +272,13 @@ char *valk_c_err_format(const char *fmt, const char *file, size_t line,
 
 // Interpreter metrics for observability
 typedef struct {
-  _Atomic uint64_t evals_total;        // Total lval_eval() calls
-  _Atomic uint64_t function_calls;     // User-defined function invocations
-  _Atomic uint64_t builtin_calls;      // Builtin function invocations
-  _Atomic uint32_t stack_depth;        // Current call stack depth
-  uint32_t stack_depth_max;            // Peak call stack depth ever reached
-  _Atomic uint64_t closures_created;   // Lambda closures created
-  _Atomic uint64_t env_lookups;        // Symbol resolution lookups
+  _Atomic u64 evals_total;        // Total lval_eval() calls
+  _Atomic u64 function_calls;     // User-defined function invocations
+  _Atomic u64 builtin_calls;      // Builtin function invocations
+  _Atomic u32 stack_depth;        // Current call stack depth
+  u32 stack_depth_max;            // Peak call stack depth ever reached
+  _Atomic u64 closures_created;   // Lambda closures created
+  _Atomic u64 env_lookups;        // Symbol resolution lookups
 } valk_eval_metrics_t;
 
 // Global interpreter metrics instance
@@ -288,6 +288,6 @@ extern valk_eval_metrics_t g_eval_metrics;
 void valk_eval_metrics_init(void);
 
 // Get current interpreter metrics (thread-safe)
-void valk_eval_metrics_get(uint64_t* evals, uint64_t* func_calls,
-                            uint64_t* builtin_calls, uint32_t* stack_max,
-                            uint64_t* closures, uint64_t* lookups);
+void valk_eval_metrics_get(u64* evals, u64* func_calls,
+                            u64* builtin_calls, u32* stack_max,
+                            u64* closures, u64* lookups);

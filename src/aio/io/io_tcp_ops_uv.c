@@ -1,5 +1,5 @@
 #include "io_tcp_uv_types.h"
-#include "../aio_internal.h"
+#include "aio/aio_internal.h"
 #include <netdb.h>
 
 typedef struct {
@@ -17,7 +17,7 @@ typedef struct {
 static void __alloc_cb_adapter(uv_handle_t *handle, size_t suggested, uv_buf_t *buf) {
   valk_io_tcp_t *tcp = (valk_io_tcp_t *)handle;
   void *buffer = nullptr;
-  size_t buflen = 0;
+  u64 buflen = 0;
   if (tcp->user_alloc_cb) {
     tcp->user_alloc_cb(tcp, suggested, &buffer, &buflen);
   }
@@ -131,7 +131,7 @@ static int tcp_read_stop(valk_io_tcp_t *tcp) {
   return uv_read_stop((uv_stream_t *)&tcp->uv);
 }
 
-static int tcp_write(valk_io_tcp_t *tcp, const void *data, size_t len, valk_io_write_cb cb) {
+static int tcp_write(valk_io_tcp_t *tcp, const void *data, u64 len, valk_io_write_cb cb) {
   write_req_t *wreq = malloc(sizeof(write_req_t));
   if (!wreq) return -1;
   
@@ -173,11 +173,11 @@ static int tcp_getsockname(valk_io_tcp_t *tcp, void *addr, int *len) {
   return uv_tcp_getsockname(&tcp->uv, (struct sockaddr *)addr, len);
 }
 
-static int tcp_ip4_name(const void *addr, char *dst, size_t size) {
+static int tcp_ip4_name(const void *addr, char *dst, u64 size) {
   return uv_ip4_name((const struct sockaddr_in *)addr, dst, size);
 }
 
-static int tcp_ip6_name(const void *addr, char *dst, size_t size) {
+static int tcp_ip6_name(const void *addr, char *dst, u64 size) {
   return uv_ip6_name((const struct sockaddr_in6 *)addr, dst, size);
 }
 

@@ -30,7 +30,7 @@ static void cb_onDisconnect(void *arg, valk_aio_http_conn *conn) {
   printf("[DEBUG] Client disconnected (count=%d)\n", handler->disconnectedCount);
 }
 
-static void cb_onHeader(void *arg, valk_aio_http_conn *conn, size_t stream,
+static void cb_onHeader(void *arg, valk_aio_http_conn *conn, u64 stream,
                         char *name, char *value) {
   UNUSED(arg);
   UNUSED(conn);
@@ -39,8 +39,8 @@ static void cb_onHeader(void *arg, valk_aio_http_conn *conn, size_t stream,
   UNUSED(value);
 }
 
-static void cb_onBody(void *arg, valk_aio_http_conn *conn, size_t stream,
-                      uint8_t flags, valk_buffer_t *buf) {
+static void cb_onBody(void *arg, valk_aio_http_conn *conn, u64 stream,
+                      u8 flags, valk_buffer_t *buf) {
   UNUSED(arg);
   UNUSED(conn);
   UNUSED(stream);
@@ -63,7 +63,7 @@ int main(void) {
       .onBody = cb_onBody,
   };
 
-  uint8_t buf[sizeof(valk_mem_arena_t) + (24048 + (int)8e6)];
+  u8 buf[sizeof(valk_mem_arena_t) + (24048 + (int)8e6)];
   valk_mem_arena_t *arena = (void *)buf;
   valk_mem_arena_init(arena, (24048 + (int)8e6));
   valk_http2_request_t *req;
@@ -75,7 +75,7 @@ int main(void) {
     req->scheme = "https";
     req->authority = "google.com";
     req->path = "/";
-    req->body = (uint8_t *)"";
+    req->body = (u8 *)"";
     req->bodyLen = 0;
     da_init(&req->headers);
   }

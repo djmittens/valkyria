@@ -29,7 +29,7 @@ void test_maintenance_timer_starts(VALK_TEST_ARGS()) {
   
   ASSERT_EQ(valk_test_timer_pending_count(), 0);
 
-  uint64_t maintenance_interval_ms = 1000;
+  u64 maintenance_interval_ms = 1000;
   valk_io_timer_ops_test.start(timer, test_callback, 
     maintenance_interval_ms, maintenance_interval_ms);
 
@@ -47,7 +47,7 @@ void test_maintenance_timer_fires_at_interval(VALK_TEST_ARGS()) {
 
   valk_io_timer_ops_test.init(nullptr, timer);
   
-  uint64_t maintenance_interval_ms = 1000;
+  u64 maintenance_interval_ms = 1000;
   valk_io_timer_ops_test.start(timer, test_callback,
     maintenance_interval_ms, maintenance_interval_ms);
 
@@ -138,17 +138,17 @@ void test_maintenance_timer_now_advances(VALK_TEST_ARGS()) {
   VALK_TEST();
   reset_state();
 
-  uint64_t t0 = valk_io_timer_ops_test.now(nullptr);
+  u64 t0 = valk_io_timer_ops_test.now(nullptr);
   ASSERT_EQ(t0, 0);
 
   valk_test_timer_advance(500);
 
-  uint64_t t1 = valk_io_timer_ops_test.now(nullptr);
+  u64 t1 = valk_io_timer_ops_test.now(nullptr);
   ASSERT_EQ(t1, 500);
 
   valk_test_timer_advance(250);
 
-  uint64_t t2 = valk_io_timer_ops_test.now(nullptr);
+  u64 t2 = valk_io_timer_ops_test.now(nullptr);
   ASSERT_EQ(t2, 750);
 
   VALK_PASS();

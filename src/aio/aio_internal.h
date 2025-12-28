@@ -5,28 +5,13 @@
 #endif
 #define _POSIX_C_SOURCE 200809L
 
-#include <netinet/in.h>
-#include <netdb.h>
 #include <nghttp2/nghttp2.h>
-#include <openssl/bio.h>
-#include <openssl/conf.h>
-#include <openssl/crypto.h>
-#include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/ssl3.h>
-#include <openssl/tls1.h>
-#include <signal.h>
-#include "valk_thread.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <uv.h>
 #include <stdbool.h>
-#include <stdint.h>
-#include <stdatomic.h>
 
 #include "aio.h"
-#include "aio_alloc.h"
 #include "aio_conn_io.h"
 #include "aio_metrics.h"
 #include "aio_sse.h"
@@ -36,27 +21,25 @@
 #include "aio_backpressure.h"
 #include "aio_conn_admission.h"
 #include "aio_maintenance.h"
-#include "aio_sse_conn_tracking.h"
 #include "aio_ops.h"
 #include "io/io_tcp_uv_types.h"
-#include "../metrics_v2.h"
-#include "../event_loop_metrics.h"
-#include "../common.h"
-#include "../concurrency.h"
-#include "../parser.h"
-#include "../memory.h"
-#include "../log.h"
-#include "../collections.h"
+#include "metrics_v2.h"
+#include "event_loop_metrics.h"
+#include "concurrency.h"
+#include "parser.h"
+#include "memory.h"
+#include "collections.h"
+#include "aio_alloc.h"
 
 #define MAKE_NV(NAME, VALUE, VALUELEN)                         \
   {                                                            \
-      (uint8_t *)NAME, (uint8_t *)VALUE,     sizeof(NAME) - 1, \
+      (u8 *)NAME, (u8 *)VALUE,     sizeof(NAME) - 1, \
       VALUELEN,        NGHTTP2_NV_FLAG_NONE,                   \
   }
 
 #define MAKE_NV2(NAME, VALUE)                                    \
   {                                                              \
-      (uint8_t *)NAME,   (uint8_t *)VALUE,     sizeof(NAME) - 1, \
+      (u8 *)NAME,   (u8 *)VALUE,     sizeof(NAME) - 1, \
       sizeof(VALUE) - 1, NGHTTP2_NV_FLAG_NONE,                   \
   }
 
@@ -102,13 +85,13 @@ typedef struct {
 
 struct valk_owner_entry {
   char name[32];
-  uint8_t type;
+  u8 type;
   void *ptr;
 };
 
 struct valk_owner_registry {
   valk_owner_entry_t entries[VALK_MAX_OWNERS];
-  uint16_t count;
+  u16 count;
 };
 #endif
 
@@ -143,11 +126,11 @@ typedef struct valk_async_handle_uv_data {
 
 typedef struct valk_http_async_ctx {
   void *session;
-  int32_t stream_id;
+  i32 stream_id;
   struct valk_aio_handle_t *conn;
   valk_mem_arena_t *arena;
   void *arena_slab_item;
-  uint32_t arena_slot;
+  u32 arena_slot;
 } valk_http_async_ctx_t;
 
 typedef struct valk_standalone_async_ctx {
@@ -164,7 +147,7 @@ typedef struct __tcp_buffer_slab_item_t {
 } __tcp_buffer_slab_item_t;
 
 typedef struct __http2_req_res_t {
-  size_t streamid;
+  u64 streamid;
   valk_http2_request_t *req;
   valk_arc_box *res_box;
   valk_http2_response_t *res;
@@ -186,24 +169,24 @@ typedef struct valk_http2_server_request {
   char *path;
   struct {
     struct valk_http2_header_t *items;
-    size_t count;
-    size_t capacity;
+    u64 count;
+    u64 capacity;
   } headers;
-  uint8_t *body;
-  size_t bodyLen;
-  size_t bodyCapacity;
+  u8 *body;
+  u64 bodyLen;
+  u64 bodyCapacity;
   valk_aio_handle_t *conn;
-  int32_t stream_id;
+  i32 stream_id;
   valk_mem_arena_t *stream_arena;
   valk_slab_item_t *arena_slab_item;
-  uint32_t arena_slot;
-  uint32_t next_arena_slot;
+  u32 arena_slot;
+  u32 next_arena_slot;
 #ifdef VALK_METRICS_ENABLED
-  uint64_t start_time_us;
-  uint64_t bytes_sent;
-  uint64_t bytes_recv;
+  u64 start_time_us;
+  u64 bytes_sent;
+  u64 bytes_recv;
   int status_code;
-  uint64_t response_sent_time_us;
+  u64 response_sent_time_us;
   bool response_complete;
   struct valk_sse_stream_entry *sse_entry;
 #endif
@@ -211,7 +194,7 @@ typedef struct valk_http2_server_request {
 
 typedef struct valk_http_request_ctx {
   nghttp2_session *session;
-  int32_t stream_id;
+  i32 stream_id;
   valk_aio_handle_t *conn;
   valk_http2_server_request_t *req;
   valk_lenv_t *env;
@@ -221,32 +204,32 @@ typedef struct {
   valk_lval_t* request;
   valk_lval_t* handler_fn;
   valk_aio_handle_t* conn;
-  int32_t stream_id;
+  i32 stream_id;
 } valk_http_request_item_t;
 
 typedef struct {
   valk_lval_t* response;
   valk_aio_handle_t* conn;
-  int32_t stream_id;
+  i32 stream_id;
 } valk_http_response_item_t;
 
 typedef struct {
   valk_mutex_t request_mutex;
   valk_cond_t request_ready;
   valk_http_request_item_t* request_items;
-  size_t request_idx;
-  size_t request_count;
-  size_t request_capacity;
+  u64 request_idx;
+  u64 request_count;
+  u64 request_capacity;
   valk_mutex_t response_mutex;
   valk_cond_t response_ready;
   valk_http_response_item_t* response_items;
-  size_t response_idx;
-  size_t response_count;
-  size_t response_capacity;
+  u64 response_idx;
+  u64 response_count;
+  u64 response_capacity;
 } valk_http_queue_t;
 
 struct valk_aio_handle_t {
-  uint32_t magic;
+  u32 magic;
   handle_kind_t kind;
   valk_aio_handle_t *prev;
   valk_aio_handle_t *next;
@@ -271,11 +254,11 @@ struct valk_aio_handle_t {
     valk_aio_http_server *server;
     int active_streams;
 
-    uint64_t last_activity_ms;
+    u64 last_activity_ms;
 
     bool backpressure;
     valk_aio_handle_t *backpressure_next;
-    uint64_t backpressure_start_time;
+    u64 backpressure_start_time;
 
 #ifdef VALK_METRICS_ENABLED
     valk_handle_diag_t diag;
@@ -283,7 +266,7 @@ struct valk_aio_handle_t {
 
     struct valk_sse_diag_state *sse_state;
     valk_sse_stream_t *sse_streams;
-    uint32_t active_arena_head;
+    u32 active_arena_head;
   } http;
 };
 
@@ -326,7 +309,7 @@ struct valk_aio_system {
   valk_http_request_ctx_t *current_request_ctx;
 
   char (*port_strs)[8];
-  size_t port_str_idx;
+  u64 port_str_idx;
 
 #ifdef VALK_METRICS_ENABLED
   valk_aio_metrics_state_t *metrics_state;
@@ -349,7 +332,7 @@ struct valk_aio_http_server {
   valk_http_server_config_t config;
 #ifdef VALK_METRICS_ENABLED
   valk_server_metrics_t metrics;
-  uint16_t owner_idx;
+  u16 owner_idx;
 #endif
 };
 
@@ -377,8 +360,8 @@ typedef struct __valk_request_client_pair_t {
 
 typedef struct {
   const char *body;
-  size_t body_len;
-  size_t offset;
+  u64 body_len;
+  u64 offset;
   bool needs_free;
 } http_body_source_t;
 
@@ -386,7 +369,7 @@ typedef struct {
   uv_timer_t timer;
   valk_lval_t *continuation;
   nghttp2_session *session;
-  int32_t stream_id;
+  i32 stream_id;
   valk_aio_handle_t *conn;
   valk_mem_arena_t *stream_arena;
   valk_lenv_t *env;
@@ -406,7 +389,7 @@ typedef struct {
 
 extern valk_aio_system_t *g_last_started_aio_system;
 extern valk_aio_system_t *valk_aio_active_system;
-extern uint64_t g_async_handle_id;
+extern u64 g_async_handle_id;
 
 #ifdef VALK_METRICS_ENABLED
 extern valk_gauge_v2_t* client_connections_active;
@@ -430,12 +413,12 @@ static inline bool __conn_is_closing_or_uv(valk_aio_handle_t *conn) {
 #define CONN_UV_LOOP(conn) ((conn)->uv.tcp.uv.loop)
 
 static inline bool __is_pending_stream(void *user_data) {
-  return user_data && ((uintptr_t)user_data & (1ULL << 63));
+  return user_data && ((uptr)user_data & (1ULL << 63));
 }
 
 static inline pending_stream_t *__get_pending_stream(void *user_data) {
   if (!__is_pending_stream(user_data)) return NULL;
-  return (pending_stream_t *)((uintptr_t)user_data & ~(1ULL << 63));
+  return (pending_stream_t *)((uptr)user_data & ~(1ULL << 63));
 }
 
 #define VALK_HANDLE_VALID(h) \
@@ -476,7 +459,7 @@ static inline valk_lval_t* __http_error_qexpr(const char *status, const char *bo
 
 
 // Arena slot management (implemented in aio_uv.c)
-void valk_http2_remove_from_active_arenas(valk_aio_handle_t *conn, uint32_t target_slot);
+void valk_http2_remove_from_active_arenas(valk_aio_handle_t *conn, u32 target_slot);
 
 // Write buffer flush continuation (implemented in aio_uv.c)
 void valk_http2_continue_pending_send(valk_aio_handle_t *conn);

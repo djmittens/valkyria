@@ -27,14 +27,14 @@ valk_slab_t* valk_aio_get_http_clients_slab(valk_aio_system_t* sys) {
   return sys->httpClients;
 }
 
-bool valk_aio_get_handle_diag(valk_aio_system_t* sys, size_t slot_idx,
+bool valk_aio_get_handle_diag(valk_aio_system_t* sys, u64 slot_idx,
                                valk_handle_diag_t* out_diag) {
   if (!sys || !out_diag) return false;
 
   valk_slab_t *slab = sys->handleSlab;
   if (!slab || slot_idx >= slab->numItems) return false;
 
-  size_t stride = valk_slab_item_stride(slab->itemSize);
+  u64 stride = valk_slab_item_stride(slab->itemSize);
   valk_slab_item_t *item = (valk_slab_item_t *)&slab->heap[stride * slot_idx];
   valk_aio_handle_t *handle = (valk_aio_handle_t *)item->data;
 
@@ -46,13 +46,13 @@ bool valk_aio_get_handle_diag(valk_aio_system_t* sys, size_t slot_idx,
   return true;
 }
 
-valk_diag_handle_kind_e valk_aio_get_handle_kind(valk_aio_system_t* sys, size_t slot_idx) {
+valk_diag_handle_kind_e valk_aio_get_handle_kind(valk_aio_system_t* sys, u64 slot_idx) {
   if (!sys) return VALK_DIAG_HNDL_EMPTY;
 
   valk_slab_t *slab = sys->handleSlab;
   if (!slab || slot_idx >= slab->numItems) return VALK_DIAG_HNDL_EMPTY;
 
-  size_t stride = valk_slab_item_stride(slab->itemSize);
+  u64 stride = valk_slab_item_stride(slab->itemSize);
   valk_slab_item_t *item = (valk_slab_item_t *)&slab->heap[stride * slot_idx];
   valk_aio_handle_t *handle = (valk_aio_handle_t *)item->data;
 

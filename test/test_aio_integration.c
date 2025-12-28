@@ -31,7 +31,7 @@ static void cb_onDisconnect(void *arg, valk_aio_handle_t *conn) {
   __atomic_fetch_add(&handler->disconnectedCount, 1, __ATOMIC_RELAXED);
 }
 
-static void cb_onHeader(void *arg, valk_aio_handle_t *conn, size_t stream, char *name,
+static void cb_onHeader(void *arg, valk_aio_handle_t *conn, u64 stream, char *name,
                  char *value) {
   UNUSED(arg);
   UNUSED(conn);
@@ -40,7 +40,7 @@ static void cb_onHeader(void *arg, valk_aio_handle_t *conn, size_t stream, char 
   UNUSED(value);
 }
 
-static void cb_onBody(void *arg, valk_aio_handle_t *conn, size_t stream, uint8_t flags,
+static void cb_onBody(void *arg, valk_aio_handle_t *conn, u64 stream, u8 flags,
                valk_buffer_t *buf) {
   UNUSED(arg);
   UNUSED(conn);
@@ -76,7 +76,7 @@ static void test_basic_http2_connection(VALK_TEST_ARGS()) {
   
   valk_aio_http2_client *client = clientBox->item;
   
-  uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
   
@@ -88,7 +88,7 @@ static void test_basic_http2_connection(VALK_TEST_ARGS()) {
     req->scheme = "https";
     req->authority = "localhost";
     req->path = "/";
-    req->body = (uint8_t *)"";
+    req->body = (u8 *)"";
     req->bodyLen = 0;
     da_init(&req->headers);
   }
@@ -219,7 +219,7 @@ static void test_multiple_requests_single_connection(VALK_TEST_ARGS()) {
   valk_aio_http2_client *client = clientBox->item;
   
   for (int i = 0; i < 5; i++) {
-    uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
     
@@ -231,7 +231,7 @@ static void test_multiple_requests_single_connection(VALK_TEST_ARGS()) {
       req->scheme = "https";
       req->authority = "localhost";
       req->path = "/";
-      req->body = (uint8_t *)"";
+      req->body = (u8 *)"";
       req->bodyLen = 0;
       da_init(&req->headers);
     }
@@ -293,7 +293,7 @@ static void test_multiple_concurrent_clients(VALK_TEST_ARGS()) {
   }
   
   for (int i = 0; i < NUM_CLIENTS; i++) {
-    uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
     
@@ -305,7 +305,7 @@ static void test_multiple_concurrent_clients(VALK_TEST_ARGS()) {
       req->scheme = "https";
       req->authority = "localhost";
       req->path = "/";
-      req->body = (uint8_t *)"";
+      req->body = (u8 *)"";
       req->bodyLen = 0;
       da_init(&req->headers);
     }
@@ -506,7 +506,7 @@ static void test_metrics_available(VALK_TEST_ARGS()) {
   
   valk_aio_http2_client *client = clientBox->item;
   
-  uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
   
@@ -518,7 +518,7 @@ static void test_metrics_available(VALK_TEST_ARGS()) {
     req->scheme = "https";
     req->authority = "localhost";
     req->path = "/";
-    req->body = (uint8_t *)"";
+    req->body = (u8 *)"";
     req->bodyLen = 0;
     da_init(&req->headers);
   }

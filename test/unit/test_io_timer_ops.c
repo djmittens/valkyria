@@ -113,12 +113,12 @@ void test_timer_test_double_now(VALK_TEST_ARGS()) {
   VALK_TEST();
   reset_state();
 
-  uint64_t t0 = valk_io_timer_ops_test.now(nullptr);
+  u64 t0 = valk_io_timer_ops_test.now(nullptr);
   VALK_TEST_ASSERT(t0 == 0, "Initial time should be 0");
 
   valk_test_timer_advance(500);
 
-  uint64_t t1 = valk_io_timer_ops_test.now(nullptr);
+  u64 t1 = valk_io_timer_ops_test.now(nullptr);
   VALK_TEST_ASSERT(t1 == 500, "Time should advance to 500");
 
   VALK_PASS();
@@ -128,12 +128,12 @@ void test_timer_test_double_hrtime(VALK_TEST_ARGS()) {
   VALK_TEST();
   reset_state();
 
-  uint64_t t0 = valk_io_timer_ops_test.hrtime();
+  u64 t0 = valk_io_timer_ops_test.hrtime();
   VALK_TEST_ASSERT(t0 == 0, "Initial hrtime should be 0");
 
   valk_test_timer_advance(500);
 
-  uint64_t t1 = valk_io_timer_ops_test.hrtime();
+  u64 t1 = valk_io_timer_ops_test.hrtime();
   VALK_TEST_ASSERT(t1 == 500 * 1000000ULL, "hrtime should be in nanoseconds");
 
   VALK_PASS();

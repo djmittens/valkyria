@@ -51,25 +51,25 @@ bool valk_pool_metrics_init_custom(valk_pool_metrics_t *m,
 // Update metrics from slab allocator state
 // slab fields: numItems (total), numFree, peakUsed, overflowCount
 void valk_pool_metrics_update_slab(valk_pool_metrics_t *m,
-                                    size_t total_slots,
-                                    size_t free_slots,
-                                    size_t peak_used,
-                                    size_t overflow_count);
+                                    u64 total_slots,
+                                    u64 free_slots,
+                                    u64 peak_used,
+                                    u64 overflow_count);
 
 // Update metrics from arena allocator state
 // arena fields: capacity, offset, stats.high_water_mark, stats.overflow_fallbacks
 void valk_pool_metrics_update_arena(valk_pool_metrics_t *m,
-                                     size_t capacity,
-                                     size_t used,
-                                     size_t high_water_mark,
-                                     size_t overflow_count);
+                                     u64 capacity,
+                                     u64 used,
+                                     u64 high_water_mark,
+                                     u64 overflow_count);
 
 // Update metrics with raw values (generic)
 void valk_pool_metrics_update(valk_pool_metrics_t *m,
-                               int64_t used,
-                               int64_t total,
-                               int64_t peak,
-                               uint64_t overflow);
+                               i64 used,
+                               i64 total,
+                               i64 peak,
+                               u64 overflow);
 
 // ============================================================================
 // CONVENIENCE MACROS

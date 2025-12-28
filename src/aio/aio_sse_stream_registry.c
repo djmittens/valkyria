@@ -2,7 +2,6 @@
 #include "aio.h"
 #include "aio_sse_stream_registry.h"
 
-#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,8 +10,8 @@
 
 #include "aio_metrics.h"
 #include "aio_sse_diagnostics.h"
-#include "../log.h"
-#include "../metrics_v2.h"
+#include "log.h"
+#include "metrics_v2.h"
 #include "metrics_delta.h"
 
 // SSE buffer size - large enough for full snapshot + metrics
@@ -21,8 +20,8 @@
 // Forward declarations
 static void sse_registry_timer_cb(uv_timer_t *timer);
 static nghttp2_ssize sse_registry_data_read_callback(
-    nghttp2_session *session, int32_t stream_id, uint8_t *buf, size_t length,
-    uint32_t *data_flags, nghttp2_data_source *source, void *user_data);
+    nghttp2_session *session, i32 stream_id, u8 *buf, size_t length,
+    u32 *data_flags, nghttp2_data_source *source, void *user_data);
 
 // Forward declare flush function (implemented in aio_uv.c)
 extern void valk_http2_flush_pending(valk_aio_handle_t *conn);
@@ -135,7 +134,7 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
   }
 
   // Debug: log entry state before processing
-  VALK_DEBUG("SSE push: stream_id=%lu http2_stream=%d first_sent=%d last_id=%lu pending=%zu/%zu",
+  VALK_DEBUG("SSE push: stream_id=%llu http2_stream=%d first_sent=%d last_id=%llu pending=%zu/%zu",
              entry->stream_id, entry->http2_stream_id, entry->first_event_sent,
              entry->last_event_id, entry->pending_offset, entry->pending_len);
 
@@ -173,7 +172,7 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
   if (!entry->first_event_sent) {
     // First event: send full snapshot
     // Use next_id so we only update last_event_id if formatting succeeds
-    uint64_t next_id = entry->last_event_id + 1;
+    u64 next_id = entry->last_event_id + 1;
 
     if (entry->type == VALK_SSE_SUB_DIAGNOSTICS) {
       len = valk_diag_snapshot_to_sse(snapshot, entry->aio_system,
@@ -187,11 +186,11 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
       // Format metrics-only snapshot
       char *p = entry->pending_data;
       char *end = entry->pending_data + entry->pending_capacity;
-      int n = snprintf(p, end - p, "event: metrics\nid: %lu\ndata: ", next_id);
+      int n = snprintf(p, end - p, "event: metrics\nid: %llu\ndata: ", next_id);
       if (n > 0 && n < end - p) {
         p += n;
-        size_t json_len = valk_metrics_v2_to_json(&g_metrics, p, end - p - 3);
-        if (json_len > 0 && json_len < (size_t)(end - p - 3)) {
+        u64 json_len = valk_metrics_v2_to_json(&g_metrics, p, end - p - 3);
+        if (json_len > 0 && json_len < (u64)(end - p - 3)) {
           p += json_len;
           n = snprintf(p, end - p, "\n\n");
           if (n > 0 && n < end - p) {
@@ -230,7 +229,7 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
       // Store snapshot for next delta comparison
       valk_mem_snapshot_copy(&entry->prev_snapshot, snapshot);
 
-      VALK_INFO("SSE[stream=%d]: FULL snapshot id=%lu (%d bytes)",
+      VALK_INFO("SSE[stream=%d]: FULL snapshot id=%llu (%d bytes)",
                 entry->http2_stream_id, entry->last_event_id, len);
     }
   } else {
@@ -252,7 +251,7 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
       };
 
       // Use next_id to avoid incrementing last_event_id if no changes
-      uint64_t next_id = entry->last_event_id + 1;
+      u64 next_id = entry->last_event_id + 1;
       len = valk_diag_delta_to_sse(snapshot, &entry->prev_snapshot, &temp_conn,
                                     entry->aio_system, modular_delta,
                                     entry->pending_data, entry->pending_capacity,
@@ -269,7 +268,7 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
       entry->prev_aio_metrics.connections_total = temp_conn.prev_metrics.connections_total;
       entry->prev_aio_metrics.gc_cycles = temp_conn.prev_metrics.gc_cycles;
     } else if (entry->type == VALK_SSE_SUB_MEMORY_ONLY) {
-      uint64_t next_id = entry->last_event_id + 1;
+      u64 next_id = entry->last_event_id + 1;
       len = valk_mem_delta_to_sse(snapshot, &entry->prev_snapshot,
                                    entry->pending_data, entry->pending_capacity,
                                    next_id);
@@ -300,7 +299,7 @@ static bool sse_push_to_entry(valk_sse_stream_entry_t *entry,
     return false;
   }
 
-  entry->pending_len = (size_t)len;
+  entry->pending_len = (u64)len;
   entry->pending_offset = 0;
 
   // Always resume stream when we have data - resume_data is idempotent
@@ -351,12 +350,12 @@ static void sse_registry_timer_cb(uv_timer_t *timer) {
     return;
   }
 
-  uint64_t t_start = uv_hrtime();
-  uint64_t t_snapshot, t_metrics, t_delta, t_push, t_flush;
+  u64 t_start = uv_hrtime();
+  u64 t_snapshot, t_metrics, t_delta, t_push, t_flush;
 
   // Check if we're past the shutdown deadline
   if (registry->shutting_down) {
-    uint64_t now = uv_hrtime() / 1000000;
+    u64 now = uv_hrtime() / 1000000;
     if (now >= registry->shutdown_deadline_ms) {
       VALK_INFO("SSE registry: shutdown deadline reached, force closing streams");
       valk_sse_registry_force_close_all(registry);
@@ -383,7 +382,7 @@ static void sse_registry_timer_cb(uv_timer_t *timer) {
     registry->modular_delta_initialized = true;
   }
 
-  size_t modular_changes = valk_delta_snapshot_collect_stateless(
+  u64 modular_changes = valk_delta_snapshot_collect_stateless(
       &registry->modular_delta, &g_metrics, &registry->global_baseline);
 
   valk_delta_snapshot_t *modular_delta_ptr = modular_changes > 0 ? &registry->modular_delta : NULL;
@@ -399,7 +398,7 @@ static void sse_registry_timer_cb(uv_timer_t *timer) {
   // Push to each active stream, tracking unique handles that need flushing
   // Max 16 concurrent connections should be plenty for debug dashboard
   valk_aio_handle_t *handles_to_flush[16];
-  size_t handle_count = 0;
+  u64 handle_count = 0;
 
   for (valk_sse_stream_entry_t *entry = registry->streams; entry; entry = entry->next) {
     if (!atomic_load(&entry->active)) {
@@ -415,7 +414,7 @@ static void sse_registry_timer_cb(uv_timer_t *timer) {
 
       // Add handle to flush list if not already present
       bool found = false;
-      for (size_t i = 0; i < handle_count; i++) {
+      for (u64 i = 0; i < handle_count; i++) {
         if (handles_to_flush[i] == entry->handle) {
           found = true;
           break;
@@ -429,20 +428,20 @@ static void sse_registry_timer_cb(uv_timer_t *timer) {
   t_push = uv_hrtime();
 
   // Flush ALL connections that have streams with pending data
-  for (size_t i = 0; i < handle_count; i++) {
+  for (u64 i = 0; i < handle_count; i++) {
     valk_http2_flush_pending(handles_to_flush[i]);
   }
   t_flush = uv_hrtime();
 
   // Log timing breakdown (in microseconds)
-  uint64_t us_snapshot = (t_snapshot - t_start) / 1000;
-  uint64_t us_metrics = (t_metrics - t_snapshot) / 1000;
-  uint64_t us_delta = (t_delta - t_metrics) / 1000;
-  uint64_t us_push = (t_push - t_delta) / 1000;
-  uint64_t us_flush = (t_flush - t_push) / 1000;
-  uint64_t us_total = (t_flush - t_start) / 1000;
+  u64 us_snapshot = (t_snapshot - t_start) / 1000;
+  u64 us_metrics = (t_metrics - t_snapshot) / 1000;
+  u64 us_delta = (t_delta - t_metrics) / 1000;
+  u64 us_push = (t_push - t_delta) / 1000;
+  u64 us_flush = (t_flush - t_push) / 1000;
+  u64 us_total = (t_flush - t_start) / 1000;
 
-  VALK_INFO("SSE timer: total=%luus snapshot=%luus metrics=%luus delta=%luus push=%luus flush=%luus",
+  VALK_INFO("SSE timer: total=%lluus snapshot=%lluus metrics=%lluus delta=%lluus push=%lluus flush=%lluus",
             us_total, us_snapshot, us_metrics, us_delta, us_push, us_flush);
 }
 
@@ -451,8 +450,8 @@ static void sse_registry_timer_cb(uv_timer_t *timer) {
 // ============================================================================
 
 static nghttp2_ssize sse_registry_data_read_callback(
-    nghttp2_session *session, int32_t stream_id, uint8_t *buf, size_t length,
-    uint32_t *data_flags, nghttp2_data_source *source, void *user_data) {
+    nghttp2_session *session, i32 stream_id, u8 *buf, size_t length,
+    u32 *data_flags, nghttp2_data_source *source, void *user_data) {
   (void)session;
   (void)user_data;
 
@@ -474,8 +473,8 @@ static nghttp2_ssize sse_registry_data_read_callback(
   }
 
   // Calculate how much to send
-  size_t remaining = entry->pending_len - entry->pending_offset;
-  size_t to_send = remaining < length ? remaining : length;
+  u64 remaining = entry->pending_len - entry->pending_offset;
+  u64 to_send = remaining < length ? remaining : length;
 
   memcpy(buf, entry->pending_data + entry->pending_offset, to_send);
   entry->pending_offset += to_send;
@@ -494,7 +493,7 @@ valk_sse_stream_entry_t* valk_sse_registry_subscribe(
     valk_sse_stream_registry_t *registry,
     valk_aio_handle_t *handle,
     nghttp2_session *session,
-    int32_t stream_id,
+    i32 stream_id,
     valk_sse_subscription_type_e type,
     nghttp2_data_provider2 *data_prd_out) {
 
@@ -513,7 +512,7 @@ valk_sse_stream_entry_t* valk_sse_registry_subscribe(
   memset(entry, 0, sizeof(*entry));
 
   // Generate unique stream ID
-  static _Atomic uint64_t next_id = 1;
+  static _Atomic u64 next_id = 1;
   entry->stream_id = atomic_fetch_add(&next_id, 1);
 
   entry->type = type;
@@ -525,7 +524,7 @@ valk_sse_stream_entry_t* valk_sse_registry_subscribe(
   atomic_store(&entry->being_removed, false);
 
   // Initialize activity tracking
-  uint64_t now = uv_hrtime() / 1000000;
+  u64 now = uv_hrtime() / 1000000;
   entry->created_at_ms = now;
   entry->last_activity_ms = now;
   entry->idle_timeout_ms = 0;  // No timeout by default
@@ -556,7 +555,7 @@ valk_sse_stream_entry_t* valk_sse_registry_subscribe(
     valk_sse_registry_timer_start(registry);
   }
 
-  VALK_INFO("SSE registry: stream %lu subscribed (http2_stream=%d, type=%d, total=%zu)",
+  VALK_INFO("SSE registry: stream %llu subscribed (http2_stream=%d, type=%d, total=%zu)",
             entry->stream_id, stream_id, type, registry->stream_count);
 
   return entry;
@@ -571,11 +570,11 @@ void valk_sse_registry_unsubscribe(valk_sse_stream_registry_t *registry,
   // Atomic double-removal guard
   bool expected = false;
   if (!atomic_compare_exchange_strong(&entry->being_removed, &expected, true)) {
-    VALK_WARN("SSE registry: stream %lu already being removed", entry->stream_id);
+    VALK_WARN("SSE registry: stream %llu already being removed", (unsigned long long)entry->stream_id);
     return;
   }
 
-  VALK_INFO("SSE registry: unsubscribing stream %lu (http2_stream=%d)",
+  VALK_INFO("SSE registry: unsubscribing stream %llu (http2_stream=%d)",
             entry->stream_id, entry->http2_stream_id);
 
   // Mark inactive
@@ -609,7 +608,7 @@ void valk_sse_registry_unsubscribe(valk_sse_stream_registry_t *registry,
   VALK_INFO("SSE registry: stream unsubscribed (remaining=%zu)", registry->stream_count);
 }
 
-size_t valk_sse_registry_unsubscribe_connection(
+u64 valk_sse_registry_unsubscribe_connection(
     valk_sse_stream_registry_t *registry,
     valk_aio_handle_t *handle) {
 
@@ -620,7 +619,7 @@ size_t valk_sse_registry_unsubscribe_connection(
   VALK_INFO("SSE registry: unsubscribing all streams for handle %p", (void*)handle);
 
   // Find all streams for this handle
-  size_t count = 0;
+  u64 count = 0;
   valk_sse_stream_entry_t *entry = registry->streams;
   while (entry) {
     valk_sse_stream_entry_t *next = entry->next;
@@ -636,7 +635,7 @@ size_t valk_sse_registry_unsubscribe_connection(
 valk_sse_stream_entry_t* valk_sse_registry_find_by_stream(
     valk_sse_stream_registry_t *registry,
     valk_aio_handle_t *handle,
-    int32_t http2_stream_id) {
+    i32 http2_stream_id) {
   if (!registry) {
     return NULL;
   }
@@ -699,7 +698,7 @@ void valk_sse_registry_timer_start(valk_sse_stream_registry_t *registry) {
 
   registry->timer_running = true;
 
-  VALK_INFO("SSE registry: timer started (interval=%lu ms)", registry->timer_interval_ms);
+  VALK_INFO("SSE registry: timer started (interval=%llu ms)", (unsigned long long)registry->timer_interval_ms);
 }
 
 void valk_sse_registry_timer_stop(valk_sse_stream_registry_t *registry) {
@@ -721,22 +720,22 @@ void valk_sse_registry_timer_stop(valk_sse_stream_registry_t *registry) {
 // Query API
 // ============================================================================
 
-size_t valk_sse_registry_stream_count(valk_sse_stream_registry_t *registry) {
+u64 valk_sse_registry_stream_count(valk_sse_stream_registry_t *registry) {
   if (!registry) {
     return 0;
   }
   return registry->stream_count;
 }
 
-size_t valk_sse_registry_stats_json(valk_sse_stream_registry_t *registry, char *buf, size_t buf_size) {
+u64 valk_sse_registry_stats_json(valk_sse_stream_registry_t *registry, char *buf, u64 buf_size) {
   if (!registry || !buf || buf_size == 0) {
     return 0;
   }
 
   int n = snprintf(buf, buf_size,
-                   "{\"stream_count\":%zu,\"timer_running\":%s,"
-                   "\"events_pushed_total\":%" PRIu64 ",\"bytes_pushed_total\":%" PRIu64 ","
-                   "\"streams_timed_out\":%" PRIu64 ",\"streams_cancelled\":%" PRIu64 ","
+                   "{\"stream_count\":%llu,\"timer_running\":%s,"
+                   "\"events_pushed_total\":%llu,\"bytes_pushed_total\":%llu,"
+                   "\"streams_timed_out\":%llu,\"streams_cancelled\":%llu,"
                    "\"shutting_down\":%s}",
                    registry->stream_count,
                    registry->timer_running ? "true" : "false",
@@ -746,46 +745,46 @@ size_t valk_sse_registry_stats_json(valk_sse_stream_registry_t *registry, char *
                    registry->streams_cancelled,
                    registry->shutting_down ? "true" : "false");
 
-  if (n < 0 || (size_t)n >= buf_size) {
+  if (n < 0 || (u64)n >= buf_size) {
     return 0;
   }
 
-  return (size_t)n;
+  return (u64)n;
 }
 
 // ============================================================================
 // Timeout Management
 // ============================================================================
 
-static uint64_t registry_get_current_time_ms(void) {
+static u64 registry_get_current_time_ms(void) {
   return uv_hrtime() / 1000000;
 }
 
-void valk_sse_registry_set_idle_timeout(valk_sse_stream_entry_t *entry, uint64_t timeout_ms) {
+void valk_sse_registry_set_idle_timeout(valk_sse_stream_entry_t *entry, u64 timeout_ms) {
   if (!entry) {
     return;
   }
   entry->idle_timeout_ms = timeout_ms;
-  VALK_DEBUG("SSE registry: stream %lu idle timeout set to %" PRIu64 " ms",
+  VALK_DEBUG("SSE registry: stream %llu idle timeout set to %llu ms",
              entry->stream_id, timeout_ms);
 }
 
-size_t valk_sse_registry_check_timeouts(valk_sse_stream_registry_t *registry) {
+u64 valk_sse_registry_check_timeouts(valk_sse_stream_registry_t *registry) {
   if (!registry) {
     return 0;
   }
 
-  uint64_t now = registry_get_current_time_ms();
-  size_t timed_out = 0;
+  u64 now = registry_get_current_time_ms();
+  u64 timed_out = 0;
 
   valk_sse_stream_entry_t *entry = registry->streams;
   while (entry) {
     valk_sse_stream_entry_t *next = entry->next;
 
     if (atomic_load(&entry->active) && entry->idle_timeout_ms > 0) {
-      uint64_t idle_time = now - entry->last_activity_ms;
+      u64 idle_time = now - entry->last_activity_ms;
       if (idle_time >= entry->idle_timeout_ms) {
-        VALK_INFO("SSE registry: stream %" PRIu64 " timed out (idle for %" PRIu64 " ms)",
+        VALK_INFO("SSE registry: stream %llu timed out (idle for %llu ms)",
                   entry->stream_id, idle_time);
 
         registry->streams_timed_out++;
@@ -804,7 +803,7 @@ size_t valk_sse_registry_check_timeouts(valk_sse_stream_registry_t *registry) {
 // Stream Cancellation
 // ============================================================================
 
-valk_sse_stream_entry_t *valk_sse_registry_find_by_id(valk_sse_stream_registry_t *registry, uint64_t stream_id) {
+valk_sse_stream_entry_t *valk_sse_registry_find_by_id(valk_sse_stream_registry_t *registry, u64 stream_id) {
   if (!registry) {
     return NULL;
   }
@@ -817,14 +816,14 @@ valk_sse_stream_entry_t *valk_sse_registry_find_by_id(valk_sse_stream_registry_t
   return NULL;
 }
 
-int valk_sse_registry_cancel_stream(valk_sse_stream_registry_t *registry, uint64_t stream_id) {
+int valk_sse_registry_cancel_stream(valk_sse_stream_registry_t *registry, u64 stream_id) {
   if (!registry) {
     return -1;
   }
 
   valk_sse_stream_entry_t *entry = valk_sse_registry_find_by_id(registry, stream_id);
   if (!entry) {
-    VALK_WARN("SSE registry: cancel failed - stream %" PRIu64 " not found", stream_id);
+    VALK_WARN("SSE registry: cancel failed - stream %llu not found", stream_id);
     return -1;
   }
 
@@ -832,7 +831,7 @@ int valk_sse_registry_cancel_stream(valk_sse_stream_registry_t *registry, uint64
     return 0;  // Already inactive
   }
 
-  VALK_INFO("SSE registry: cancelling stream %" PRIu64 " (http2_stream=%d)",
+  VALK_INFO("SSE registry: cancelling stream %llu (http2_stream=%d)",
             entry->stream_id, entry->http2_stream_id);
 
   // Submit RST_STREAM to HTTP/2 layer
@@ -840,7 +839,7 @@ int valk_sse_registry_cancel_stream(valk_sse_stream_registry_t *registry, uint64
     int rv = nghttp2_submit_rst_stream(entry->session, NGHTTP2_FLAG_NONE,
                                         entry->http2_stream_id, NGHTTP2_CANCEL);
     if (rv != 0) {
-      VALK_WARN("SSE registry: failed to submit RST_STREAM for stream %" PRIu64 ": %s",
+      VALK_WARN("SSE registry: failed to submit RST_STREAM for stream %llu: %s",
                 entry->stream_id, nghttp2_strerror(rv));
     } else if (entry->handle) {
       valk_http2_flush_pending(entry->handle);
@@ -864,7 +863,7 @@ bool valk_sse_registry_is_shutting_down(valk_sse_stream_registry_t *registry) {
   return registry->shutting_down;
 }
 
-int valk_sse_registry_graceful_shutdown(valk_sse_stream_registry_t *registry, uint64_t drain_timeout_ms) {
+int valk_sse_registry_graceful_shutdown(valk_sse_stream_registry_t *registry, u64 drain_timeout_ms) {
   if (!registry) {
     return -1;
   }
@@ -873,7 +872,7 @@ int valk_sse_registry_graceful_shutdown(valk_sse_stream_registry_t *registry, ui
     return 0;  // Already shutting down
   }
 
-  VALK_INFO("SSE registry: initiating graceful shutdown (drain_timeout=%" PRIu64 " ms, streams=%zu)",
+  VALK_INFO("SSE registry: initiating graceful shutdown (drain_timeout=%llu ms, streams=%zu)",
             drain_timeout_ms, registry->stream_count);
 
   registry->shutting_down = true;
@@ -888,14 +887,14 @@ int valk_sse_registry_graceful_shutdown(valk_sse_stream_registry_t *registry, ui
   return 0;
 }
 
-size_t valk_sse_registry_force_close_all(valk_sse_stream_registry_t *registry) {
+u64 valk_sse_registry_force_close_all(valk_sse_stream_registry_t *registry) {
   if (!registry) {
     return 0;
   }
 
-  VALK_INFO("SSE registry: force closing all streams (%zu active)", registry->stream_count);
+  VALK_INFO("SSE registry: force closing all streams (%llu active)", registry->stream_count);
 
-  size_t closed = 0;
+  u64 closed = 0;
   valk_sse_stream_entry_t *entry = registry->streams;
 
   while (entry) {

@@ -1,5 +1,5 @@
 #include "io_loop_ops.h"
-#include "../aio_internal.h"
+#include "aio/aio_internal.h"
 
 static int loop_init(valk_aio_system_t *sys) {
   sys->eventloop = malloc(sizeof(uv_loop_t));
@@ -44,11 +44,11 @@ static void loop_walk(valk_aio_system_t *sys, valk_io_walk_cb cb, void *arg) {
   uv_walk(sys->eventloop, (uv_walk_cb)cb, arg);
 }
 
-static uint64_t loop_now(valk_aio_system_t *sys) {
+static u64 loop_now(valk_aio_system_t *sys) {
   return uv_now(sys->eventloop);
 }
 
-static uint64_t sys_hrtime(void) {
+static u64 sys_hrtime(void) {
   return uv_hrtime();
 }
 

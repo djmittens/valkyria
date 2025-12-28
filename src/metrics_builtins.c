@@ -9,7 +9,6 @@
 #include "metrics_delta.h"
 #include "aio/aio_sse_diagnostics.h"
 #include "aio/aio.h"
-#include "gc.h"
 #include "memory.h"
 #include "parser.h"
 #include "common.h"
@@ -45,7 +44,7 @@ static const double DEFAULT_HTTP_BUCKETS[] = {
 static valk_lval_t *valk_builtin_metrics_counter(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
-  size_t argc = valk_lval_list_count(a);
+  u64 argc = valk_lval_list_count(a);
   if (argc < 1) {
     return valk_lval_err("metrics/counter: expected at least 1 argument (name)");
   }
@@ -57,7 +56,7 @@ static valk_lval_t *valk_builtin_metrics_counter(valk_lenv_t *e, valk_lval_t *a)
 
   // Parse optional labels (key-value pairs)
   valk_label_set_v2_t labels = {0};
-  for (size_t i = 1; i + 1 < argc; i += 2) {
+  for (u64 i = 1; i + 1 < argc; i += 2) {
     valk_lval_t *key = valk_lval_list_nth(a, i);
     valk_lval_t *val = valk_lval_list_nth(a, i + 1);
     if (LVAL_TYPE(key) != LVAL_STR || LVAL_TYPE(val) != LVAL_STR) {
@@ -86,7 +85,7 @@ static valk_lval_t *valk_builtin_metrics_counter(valk_lenv_t *e, valk_lval_t *a)
 static valk_lval_t *valk_builtin_metrics_counter_inc(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
-  size_t argc = valk_lval_list_count(a);
+  u64 argc = valk_lval_list_count(a);
   if (argc < 1 || argc > 2) {
     return valk_lval_err("metrics/counter-inc: expected 1-2 arguments");
   }
@@ -97,14 +96,14 @@ static valk_lval_t *valk_builtin_metrics_counter_inc(valk_lenv_t *e, valk_lval_t
   }
 
   valk_counter_v2_t *counter = (valk_counter_v2_t *)ref->ref.ptr;
-  uint64_t n = 1;
+  u64 n = 1;
 
   if (argc == 2) {
     valk_lval_t *n_arg = valk_lval_list_nth(a, 1);
     if (LVAL_TYPE(n_arg) != LVAL_NUM) {
       return valk_lval_err("metrics/counter-inc: second argument must be a number");
     }
-    n = (uint64_t)n_arg->num;
+    n = (u64)n_arg->num;
   }
 
   valk_counter_add(counter, n);
@@ -119,7 +118,7 @@ static valk_lval_t *valk_builtin_metrics_counter_inc(valk_lenv_t *e, valk_lval_t
 static valk_lval_t *valk_builtin_metrics_gauge(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
-  size_t argc = valk_lval_list_count(a);
+  u64 argc = valk_lval_list_count(a);
   if (argc < 1) {
     return valk_lval_err("metrics/gauge: expected at least 1 argument (name)");
   }
@@ -131,7 +130,7 @@ static valk_lval_t *valk_builtin_metrics_gauge(valk_lenv_t *e, valk_lval_t *a) {
 
   // Parse optional labels
   valk_label_set_v2_t labels = {0};
-  for (size_t i = 1; i + 1 < argc; i += 2) {
+  for (u64 i = 1; i + 1 < argc; i += 2) {
     valk_lval_t *key = valk_lval_list_nth(a, i);
     valk_lval_t *val = valk_lval_list_nth(a, i + 1);
     if (LVAL_TYPE(key) != LVAL_STR || LVAL_TYPE(val) != LVAL_STR) {
@@ -174,7 +173,7 @@ static valk_lval_t *valk_builtin_metrics_gauge_set(valk_lenv_t *e, valk_lval_t *
   }
 
   valk_gauge_v2_t *gauge = (valk_gauge_v2_t *)ref->ref.ptr;
-  valk_gauge_set(gauge, (int64_t)val->num);
+  valk_gauge_set(gauge, (i64)val->num);
 
   return valk_lval_nil();
 }
@@ -227,7 +226,7 @@ static valk_lval_t *valk_builtin_metrics_gauge_dec(valk_lenv_t *e, valk_lval_t *
 static valk_lval_t *valk_builtin_metrics_histogram(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
-  size_t argc = valk_lval_list_count(a);
+  u64 argc = valk_lval_list_count(a);
   if (argc < 1) {
     return valk_lval_err("metrics/histogram: expected at least 1 argument (name)");
   }
@@ -239,10 +238,10 @@ static valk_lval_t *valk_builtin_metrics_histogram(valk_lenv_t *e, valk_lval_t *
 
   // Parse :buckets option and labels
   double buckets[VALK_MAX_BUCKETS];
-  size_t bucket_count = 0;
+  u64 bucket_count = 0;
   valk_label_set_v2_t labels = {0};
 
-  for (size_t i = 1; i < argc; i++) {
+  for (u64 i = 1; i < argc; i++) {
     valk_lval_t *item = valk_lval_list_nth(a, i);
 
     if (LVAL_TYPE(item) == LVAL_SYM && strcmp(item->str, ":buckets") == 0) {
@@ -255,8 +254,8 @@ static valk_lval_t *valk_builtin_metrics_histogram(valk_lenv_t *e, valk_lval_t *
           return valk_lval_err("metrics/histogram: :buckets must be followed by a list");
         }
 
-        size_t len = valk_lval_list_count(bucket_list);
-        for (size_t j = 0; j < len && bucket_count < VALK_MAX_BUCKETS; j++) {
+        u64 len = valk_lval_list_count(bucket_list);
+        for (u64 j = 0; j < len && bucket_count < VALK_MAX_BUCKETS; j++) {
           valk_lval_t *b = valk_lval_list_nth(bucket_list, j);
           if (LVAL_TYPE(b) == LVAL_NUM) {
             buckets[bucket_count++] = (double)b->num;
@@ -314,7 +313,7 @@ static valk_lval_t *valk_builtin_metrics_histogram_observe(valk_lenv_t *e, valk_
   }
 
   valk_histogram_v2_t *h = (valk_histogram_v2_t *)ref->ref.ptr;
-  valk_histogram_observe_us(h, (uint64_t)val->num);
+  valk_histogram_observe_us(h, (u64)val->num);
 
   return valk_lval_nil();
 }
@@ -375,7 +374,7 @@ static valk_lval_t *valk_builtin_metrics_delta_json(valk_lenv_t *e, valk_lval_t 
     return valk_lval_err("metrics/delta-json: allocation failed");
   }
 
-  size_t len = valk_delta_to_json(snap, buf, 65536);
+  u64 len = valk_delta_to_json(snap, buf, 65536);
 
   // Check if buffer was too small
   if (len >= 65536) {
@@ -411,7 +410,7 @@ static valk_lval_t *valk_builtin_metrics_prometheus(valk_lenv_t *e, valk_lval_t 
     return valk_lval_err("metrics/prometheus: allocation failed");
   }
 
-  size_t len = valk_delta_to_prometheus(&snap, &g_metrics, buf, 131072);
+  u64 len = valk_delta_to_prometheus(&snap, &g_metrics, buf, 131072);
 
   valk_delta_snapshot_free(&snap);
 
@@ -443,7 +442,7 @@ static valk_lval_t *valk_builtin_metrics_json(valk_lenv_t *e, valk_lval_t *a) {
     return valk_lval_err("metrics/json: allocation failed");
   }
 
-  size_t len = valk_metrics_v2_to_json(&g_metrics, buf, 131072);
+  u64 len = valk_metrics_v2_to_json(&g_metrics, buf, 131072);
 
   // Check if buffer was too small
   if (len >= 131072) {
@@ -464,10 +463,10 @@ static valk_lval_t *valk_builtin_metrics_json(valk_lenv_t *e, valk_lval_t *a) {
 static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
-  size_t argc = valk_lval_list_count(a);
+  u64 argc = valk_lval_list_count(a);
 
   valk_aio_system_t *sys = valk_aio_active_system;
-  size_t arg_offset = 0;
+  u64 arg_offset = 0;
 
   if (argc >= 5) {
     valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
@@ -499,9 +498,9 @@ static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a
   }
 
   const char *slab_name = name_arg->str;
-  size_t start = (size_t)start_arg->num;
-  size_t end = (size_t)end_arg->num;
-  size_t num_buckets = (size_t)buckets_arg->num;
+  u64 start = (u64)start_arg->num;
+  u64 end = (u64)end_arg->num;
+  u64 num_buckets = (u64)buckets_arg->num;
 
   if (num_buckets == 0 || num_buckets > 4096) {
     return valk_lval_err("aio/slab-buckets: num-buckets must be 1-4096");
@@ -535,9 +534,9 @@ static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a
     return valk_lval_err("aio/slab-buckets: allocation failed");
   }
 
-  size_t actual_buckets = valk_slab_bitmap_buckets(slab, start, end, num_buckets, buckets);
+  u64 actual_buckets = valk_slab_bitmap_buckets(slab, start, end, num_buckets, buckets);
 
-  size_t buf_size = 32 + actual_buckets * 32;
+  u64 buf_size = 32 + actual_buckets * 32;
   char *buf = malloc(buf_size);
   if (!buf) {
     free(buckets);
@@ -549,14 +548,14 @@ static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a
   int n = snprintf(p, buf_end - p, "{\"buckets\":[");
   p += n;
 
-  for (size_t i = 0; i < actual_buckets && p < buf_end - 30; i++) {
+  for (u64 i = 0; i < actual_buckets && p < buf_end - 30; i++) {
     if (i > 0) *p++ = ',';
-    n = snprintf(p, buf_end - p, "{\"u\":%zu,\"f\":%zu}",
-                 buckets[i].used, buckets[i].free);
+    n = snprintf(p, buf_end - p, "{\"u\":%llu,\"f\":%llu}",
+                 (unsigned long long)buckets[i].used, (unsigned long long)buckets[i].free);
     if (n > 0) p += n;
   }
 
-  snprintf(p, buf_end - p, "],\"total\":%zu}", slab->numItems);
+  snprintf(p, buf_end - p, "],\"total\":%llu}", (unsigned long long)slab->numItems);
 
   valk_lval_t *result = valk_lval_str(buf);
   free(buf);

@@ -1,9 +1,10 @@
 #pragma once
 
+#include "types.h"
 #include "io_types.h"
 #include <sys/types.h>
 
-typedef void (*valk_io_alloc_cb)(valk_io_tcp_t *tcp, size_t suggested, void **buf, size_t *buflen);
+typedef void (*valk_io_alloc_cb)(valk_io_tcp_t *tcp, u64 suggested, void **buf, u64 *buflen);
 typedef void (*valk_io_read_cb)(valk_io_tcp_t *tcp, ssize_t nread, const void *buf);
 typedef void (*valk_io_write_cb)(void *req, int status);
 typedef void (*valk_io_write_bufs_cb)(valk_io_write_req_t *req, int status);
@@ -24,7 +25,7 @@ typedef struct valk_io_tcp_ops {
 
   int (*read_start)(valk_io_tcp_t *tcp, valk_io_alloc_cb alloc, valk_io_read_cb read);
   int (*read_stop)(valk_io_tcp_t *tcp);
-  int (*write)(valk_io_tcp_t *tcp, const void *data, size_t len, valk_io_write_cb cb);
+  int (*write)(valk_io_tcp_t *tcp, const void *data, u64 len, valk_io_write_cb cb);
 
   int (*write_bufs)(valk_io_tcp_t *tcp, valk_io_write_req_t *req,
                     const valk_io_buf_t *bufs, unsigned int nbufs,
@@ -38,12 +39,12 @@ typedef struct valk_io_tcp_ops {
   void *(*get_loop)(valk_io_tcp_t *tcp);
 
   int (*getsockname)(valk_io_tcp_t *tcp, void *addr, int *len);
-  int (*ip4_name)(const void *addr, char *dst, size_t size);
-  int (*ip6_name)(const void *addr, char *dst, size_t size);
+  int (*ip4_name)(const void *addr, char *dst, u64 size);
+  int (*ip6_name)(const void *addr, char *dst, u64 size);
   const char *(*strerror)(int err);
 
-  size_t tcp_size;
-  size_t write_req_size;
+  u64 tcp_size;
+  u64 write_req_size;
 } valk_io_tcp_ops_t;
 
 extern const valk_io_tcp_ops_t valk_io_tcp_ops_uv;
@@ -55,15 +56,15 @@ typedef struct valk_test_tcp_state {
     struct valk_test_pending_conn *next;
   } *pending_conns;
 
-  uint8_t *recv_buf;
-  size_t recv_len;
-  size_t recv_cap;
+  u8 *recv_buf;
+  u64 recv_len;
+  u64 recv_cap;
 
-  uint8_t *sent_buf;
-  size_t sent_len;
-  size_t sent_cap;
+  u8 *sent_buf;
+  u64 sent_len;
+  u64 sent_cap;
 } valk_test_tcp_state_t;
 
-void valk_test_tcp_inject_data(valk_io_tcp_t *tcp, const void *data, size_t len);
+void valk_test_tcp_inject_data(valk_io_tcp_t *tcp, const void *data, u64 len);
 void valk_test_tcp_inject_connection(valk_io_tcp_t *server, valk_io_tcp_t *client);
-size_t valk_test_tcp_get_sent(valk_io_tcp_t *tcp, void *buf, size_t max_len);
+u64 valk_test_tcp_get_sent(valk_io_tcp_t *tcp, void *buf, u64 max_len);

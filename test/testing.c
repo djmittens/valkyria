@@ -63,7 +63,7 @@ const char *UND_FILL =
 // Nerd Font: U+E0B8 =  , U+E0BE = 
 #define NF_SLANT ""
 
-static void valk_print_police_tape_line(int tiles) {
+static void __attribute__((unused)) valk_print_police_tape_line(int tiles) {
   printf(ANSI_YELLOW_BG ANSI_BLACK_FG);
   for (int i = 0; i < tiles; ++i) {
     printf(NF_SLANT);
@@ -159,7 +159,7 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
     fflush(stdout);
     fflush(stderr);
 
-    uint8_t *p = (void *)&self->result;
+    u8 *p = (void *)&self->result;
     size_t size = sizeof(self->result);
 
     while (size) {
@@ -217,7 +217,7 @@ void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
       continue;
     }
 
-    uint8_t buf[256];
+    u8 buf[256];
 
     if (fds[0].revents & POLLIN) {
       ssize_t n = read(fds[0].fd, buf, sizeof buf);
@@ -350,7 +350,7 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
   return result;
 }
 
-static void valk_print_io(valk_test_t *test) {
+static void __attribute__((unused)) valk_print_io(valk_test_t *test) {
   putc('\n', stdout);
   valk_print_police_tape_line(1);
   printf("[STDOUT]");

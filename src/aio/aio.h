@@ -1,8 +1,8 @@
 #pragma once
 
 #include <stddef.h>
-#include "../concurrency.h"
-#include "../memory.h"
+#include "concurrency.h"
+#include "memory.h"
 #include "aio_types.h"
 
 #define VALK_HTTP_MOTD "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Valkyria HTTP/2 Server</title><style>body{font-family:system-ui,sans-serif;max-width:800px;margin:80px auto;padding:0 20px;background:#0a0e27;color:#e0e0e0}h1{color:#00d9ff;font-size:3em;margin-bottom:0.2em}p{font-size:1.2em;line-height:1.6;color:#b0b0b0}code{background:#1a1e3a;padding:2px 8px;border-radius:4px;color:#00d9ff}</style></head><body><h1>\u269C Valkyria</h1><p>Valhalla's Treasure - HTTP/2 Server</p><p>This is a <code>Valkyria Lisp</code> web server running on nghttp2 with TLS.</p><p style=\"margin-top:40px;font-size:0.9em;opacity:0.7\">Server is operational and ready to handle requests.</p></body></html>"
@@ -22,7 +22,7 @@ struct valk_mem_arena;
 // The async system is decoupled from specific I/O layers (HTTP, files, etc).
 // Each layer registers callbacks to handle completion and detect cancellation.
 struct valk_async_handle_t {
-  uint64_t id;
+  u64 id;
   valk_async_status_t status;
 
   int cancel_requested;
@@ -49,8 +49,8 @@ struct valk_async_handle_t {
   struct valk_async_handle_t *parent;
   struct {
     struct valk_async_handle_t **items;
-    size_t count;
-    size_t capacity;
+    u64 count;
+    u64 capacity;
   } children;
 
   struct valk_async_handle_t *prev;
@@ -75,7 +75,7 @@ struct valk_lval_t *valk_http2_client_request_with_headers_impl(struct valk_lenv
                                                     struct valk_lval_t *callback);
 
 // Top-level timer scheduling (no HTTP context required)
-struct valk_lval_t *valk_aio_schedule(valk_aio_system_t *sys, uint64_t delay_ms,
+struct valk_lval_t *valk_aio_schedule(valk_aio_system_t *sys, u64 delay_ms,
                                        struct valk_lval_t *callback,
                                        struct valk_lenv_t *env);
 
@@ -87,33 +87,33 @@ typedef struct valk_http2_request_t {
   char *path;
   struct {
     struct valk_http2_header_t *items;
-    size_t count;
-    size_t capacity;
+    u64 count;
+    u64 capacity;
   } headers;
   void *ctx;
-  uint8_t *body;
-  size_t bodyLen;
-  size_t bodyCapacity;
+  u8 *body;
+  u64 bodyLen;
+  u64 bodyCapacity;
 } valk_http2_request_t;
 
 typedef struct valk_http2_response_t {
-  int32_t stream_id;
+  i32 stream_id;
 
   // valk_mem_arena_t *arena;
   valk_http2_request_t *req;
   const char *status;
   struct {
     struct valk_http2_header_t *items;
-    size_t count;
-    size_t capacity;
+    u64 count;
+    u64 capacity;
   } headers;
 
   bool headersReceived;
   bool bodyReceived;
 
-  uint8_t *body;
-  size_t bodyLen;
-  size_t bodyCapacity;
+  u8 *body;
+  u64 bodyLen;
+  u64 bodyCapacity;
 
   valk_promise _promise;
 } valk_http2_response_t;
@@ -146,47 +146,47 @@ typedef struct {
   void *arg;
   void (*onConnect)(void *arg, valk_aio_handle_t *);
   void (*onDisconnect)(void *arg, valk_aio_handle_t *);
-  void (*onHeader)(void *arg, valk_aio_handle_t *, size_t stream, char *name,
+  void (*onHeader)(void *arg, valk_aio_handle_t *, u64 stream, char *name,
                    char *value);
-  void (*onBody)(void *arg, valk_aio_handle_t *, size_t stream, uint8_t flags,
+  void (*onBody)(void *arg, valk_aio_handle_t *, u64 stream, u8 flags,
                  valk_buffer_t *buf);
 } valk_http2_handler_t;
 
 // System configuration for AIO pools
 typedef struct valk_aio_system_config {
   // PRIMARY TUNING PARAMETERS
-  uint32_t max_connections;          // Default: 100
-  uint32_t max_concurrent_streams;   // Default: 100 (per connection, sent via SETTINGS)
+  u32 max_connections;          // Default: 100
+  u32 max_concurrent_streams;   // Default: 100 (per connection, sent via SETTINGS)
 
   // CAPACITY LIMITS
-  uint32_t max_handles;              // Default: 2056
-  uint32_t max_servers;              // Default: 8
-  uint32_t max_clients;              // Default: 8
-  uint32_t max_connections_per_client; // Default: 2 (connections per HTTP/2 client)
+  u32 max_handles;              // Default: 2056
+  u32 max_servers;              // Default: 8
+  u32 max_clients;              // Default: 8
+  u32 max_connections_per_client; // Default: 2 (connections per HTTP/2 client)
 
   // DERIVED SETTINGS (set to 0 for auto-calculation)
-  uint32_t tcp_buffer_pool_size;     // Auto: 2 × total_connections
-  uint32_t arena_pool_size;          // Auto: max_connections × 2
-  uint32_t queue_capacity;           // Auto: max_connections × 2
+  u32 tcp_buffer_pool_size;     // Auto: 2 × total_connections
+  u32 arena_pool_size;          // Auto: max_connections × 2
+  u32 queue_capacity;           // Auto: max_connections × 2
 
   // MEMORY SIZING
-  size_t   arena_size;               // Default: 64MB per arena
-  size_t   max_request_body_size;    // Default: 8MB (required - requests are buffered)
+  u64   arena_size;               // Default: 64MB per arena
+  u64   max_request_body_size;    // Default: 8MB (required - requests are buffered)
 
   // BACKPRESSURE SETTINGS
   float    buffer_high_watermark;     // Default: 0.85 (85%) - start load shedding
   float    buffer_critical_watermark; // Default: 0.95 (95%) - reject all new conns
-  uint32_t min_buffers_per_conn;      // Default: 4 (BUFFERS_PER_CONNECTION)
+  u32 min_buffers_per_conn;      // Default: 4 (BUFFERS_PER_CONNECTION)
 
   // BACKPRESSURE TIMING
-  uint32_t backpressure_list_max;     // Default: 1000
-  uint32_t backpressure_timeout_ms;   // Default: 30000 (30s)
-  uint32_t pending_stream_pool_size;  // Default: 64
-  uint32_t pending_stream_timeout_ms; // Default: 10000 (10s)
+  u32 backpressure_list_max;     // Default: 1000
+  u32 backpressure_timeout_ms;   // Default: 30000 (30s)
+  u32 pending_stream_pool_size;  // Default: 64
+  u32 pending_stream_timeout_ms; // Default: 10000 (10s)
 
   // CONNECTION TIMEOUT SETTINGS
-  uint32_t connection_idle_timeout_ms;  // Default: 60000 (60s) - close idle connections
-  uint32_t maintenance_interval_ms;     // Default: 1000 (1s) - timer for timeout checks
+  u32 connection_idle_timeout_ms;  // Default: 60000 (60s) - close idle connections
+  u32 maintenance_interval_ms;     // Default: 1000 (1s) - timer for timeout checks
 } valk_aio_system_config_t;
 
 // Default system configuration
@@ -196,13 +196,13 @@ static inline valk_aio_system_config_t valk_aio_system_config_default(void) {
 
 // Server configuration for HTTP/2 server behavior
 typedef struct valk_http_server_config {
-  size_t      max_response_body_size;  // Default: 64MB (Lisp API limit, not C runtime)
+  u64      max_response_body_size;  // Default: 64MB (Lisp API limit, not C runtime)
   const char* error_503_body;          // Pre-rendered overload response
-  size_t      error_503_body_len;
+  u64      error_503_body_len;
 
   // SSE CONFIGURATION
-  size_t      sse_buffer_size;         // Default: 64KB (pending write buffer per stream)
-  uint32_t    sse_queue_max;           // Default: 1000 (event queue depth)
+  u64      sse_buffer_size;         // Default: 64KB (pending write buffer per stream)
+  u32    sse_queue_max;           // Default: 1000 (event queue depth)
 } valk_http_server_config_t;
 
 // Default server configuration
@@ -218,14 +218,14 @@ static inline valk_http_server_config_t valk_http_server_config_default(void) {
 
 // Client configuration for HTTP/2 client behavior
 typedef struct valk_http_client_config {
-  uint32_t max_concurrent_streams;     // Default: 100
-  size_t   max_response_body_size;     // Default: 64MB
-  uint32_t connect_timeout_ms;         // Default: 30000 (30s)
-  uint32_t request_timeout_ms;         // Default: 60000 (60s)
+  u32 max_concurrent_streams;     // Default: 100
+  u64   max_response_body_size;     // Default: 64MB
+  u32 connect_timeout_ms;         // Default: 30000 (30s)
+  u32 request_timeout_ms;         // Default: 60000 (60s)
 
   // Connection pooling (future use)
-  uint32_t max_idle_connections;       // Default: 0 (no pooling)
-  uint32_t keepalive_ms;               // Default: 0 (close after use)
+  u32 max_idle_connections;       // Default: 0 (no pooling)
+  u32 keepalive_ms;               // Default: 0 (close after use)
 } valk_http_client_config_t;
 
 // Default client configuration
@@ -407,7 +407,7 @@ valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
 
 #ifdef VALK_METRICS_ENABLED
 #include "aio_metrics.h"
-#include "../gc.h"
+#include "gc.h"
 
 // Forward declaration for SSE stream registry (defined in aio_sse_stream_registry.h)
 typedef struct valk_sse_stream_registry valk_sse_stream_registry_t;
@@ -458,8 +458,8 @@ typedef enum {
 // Per-handle diagnostics metadata
 typedef struct {
   valk_diag_conn_state_e state;
-  uint16_t owner_idx;          // Index into owner registry (server/client ID)
-  uint64_t state_change_time;  // Timestamp of last state change (ms since epoch)
+  u16 owner_idx;          // Index into owner registry (server/client ID)
+  u64 state_change_time;  // Timestamp of last state change (ms since epoch)
 } valk_handle_diag_t;
 
 // Owner registry for server/client attribution (defined in aio_uv.c)
@@ -467,9 +467,9 @@ typedef struct valk_owner_entry valk_owner_entry_t;
 typedef struct valk_owner_registry valk_owner_registry_t;
 
 // Owner registry API
-uint16_t valk_owner_register(valk_aio_system_t *sys, const char *name, uint8_t type, void *ptr);
-const char* valk_owner_get_name(valk_aio_system_t *sys, uint16_t idx);
-size_t valk_owner_get_count(valk_aio_system_t *sys);
+u16 valk_owner_register(valk_aio_system_t *sys, const char *name, u8 type, void *ptr);
+const char* valk_owner_get_name(valk_aio_system_t *sys, u16 idx);
+u64 valk_owner_get_count(valk_aio_system_t *sys);
 
 // Get slab allocators for memory diagnostics
 valk_slab_t* valk_aio_get_tcp_buffer_slab(valk_aio_system_t* sys);
@@ -480,17 +480,17 @@ valk_slab_t* valk_aio_get_http_clients_slab(valk_aio_system_t* sys);
 
 // Get diagnostics for a handle at a given slab slot index
 // Returns false if slot is invalid or not an HTTP connection handle
-bool valk_aio_get_handle_diag(valk_aio_system_t* sys, size_t slot_idx,
+bool valk_aio_get_handle_diag(valk_aio_system_t* sys, u64 slot_idx,
                                valk_handle_diag_t* out_diag);
 
 // Get the kind of handle at a given slab slot index
 // Returns VALK_DIAG_HNDL_EMPTY if slot is invalid or free
-valk_diag_handle_kind_e valk_aio_get_handle_kind(valk_aio_system_t* sys, size_t slot_idx);
+valk_diag_handle_kind_e valk_aio_get_handle_kind(valk_aio_system_t* sys, u64 slot_idx);
 
 // Timer handle management (allocates from handle slab)
 valk_aio_handle_t* valk_aio_timer_alloc(valk_aio_system_t* sys);
 void valk_aio_timer_init(valk_aio_handle_t* handle);
-void valk_aio_timer_start(valk_aio_handle_t* handle, uint64_t timeout_ms, uint64_t repeat_ms,
+void valk_aio_timer_start(valk_aio_handle_t* handle, u64 timeout_ms, u64 repeat_ms,
                            void (*callback)(uv_timer_t*));
 void valk_aio_timer_stop(valk_aio_handle_t* handle);
 void valk_aio_timer_close(valk_aio_handle_t* handle, void (*close_cb)(uv_handle_t*));
@@ -518,7 +518,7 @@ struct valk_lenv_t;
 // Async delay - schedules callback after delay_ms milliseconds
 // Must be called from within an HTTP request handler
 // Returns :deferred symbol on success to indicate async response
-struct valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, uint64_t delay_ms,
+struct valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, u64 delay_ms,
                                     struct valk_lval_t* continuation, struct valk_lenv_t* env);
 
 // Global active AIO system (set by valk_aio_start, cleared by valk_aio_stop)
@@ -535,11 +535,11 @@ void valk_aio_set_sse_state(valk_aio_handle_t* handle, struct valk_sse_diag_stat
 
 // Reset an HTTP/2 stream with the given error code (for testing client stream error handling)
 // Returns 0 on success, -1 on failure
-int valk_http2_stream_reset(valk_aio_handle_t* conn, int32_t stream_id, uint32_t error_code);
+int valk_http2_stream_reset(valk_aio_handle_t* conn, i32 stream_id, u32 error_code);
 
 // Submit GOAWAY frame (for testing client GOAWAY handling)
 // Returns 0 on success, -1 on failure
-int valk_http2_submit_goaway(valk_aio_handle_t* conn, uint32_t error_code);
+int valk_http2_submit_goaway(valk_aio_handle_t* conn, u32 error_code);
 
 // Flush pending HTTP/2 frames (for testing - ensures RST_STREAM is sent immediately)
 void valk_http2_flush_pending(valk_aio_handle_t* conn);

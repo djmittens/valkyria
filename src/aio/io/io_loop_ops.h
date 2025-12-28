@@ -1,5 +1,6 @@
 #pragma once
 
+#include "types.h"
 #include "io_types.h"
 
 typedef void (*valk_io_walk_cb)(void *handle, void *arg);
@@ -14,8 +15,8 @@ typedef struct valk_io_loop_ops {
 
   void (*walk)(valk_aio_system_t *sys, valk_io_walk_cb cb, void *arg);
 
-  uint64_t (*now)(valk_aio_system_t *sys);
-  uint64_t (*hrtime)(void);
+  u64 (*now)(valk_aio_system_t *sys);
+  u64 (*hrtime)(void);
 } valk_io_loop_ops_t;
 
 extern const valk_io_loop_ops_t valk_io_loop_ops_uv;

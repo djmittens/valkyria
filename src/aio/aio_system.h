@@ -3,8 +3,8 @@
 #include <uv.h>
 #include "aio_types.h"
 #include "aio_metrics.h"
-#include "../memory.h"
-#include "../gc.h"
+#include "memory.h"
+#include "gc.h"
 
 valk_aio_system_t *valk_aio_start(void);
 valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config);

@@ -28,7 +28,7 @@ static void cb_onDisconnect(void *arg, valk_aio_handle_t *conn) {
   __atomic_fetch_add(&handler->disconnectedCount, 1, __ATOMIC_RELAXED);
 }
 
-static void cb_onHeader(void *arg, valk_aio_handle_t *conn, size_t stream, char *name,
+static void cb_onHeader(void *arg, valk_aio_handle_t *conn, u64 stream, char *name,
                  char *value) {
   UNUSED(arg);
   UNUSED(conn);
@@ -37,7 +37,7 @@ static void cb_onHeader(void *arg, valk_aio_handle_t *conn, size_t stream, char 
   UNUSED(value);
 }
 
-static void cb_onBody(void *arg, valk_aio_handle_t *conn, size_t stream, uint8_t flags,
+static void cb_onBody(void *arg, valk_aio_handle_t *conn, u64 stream, u8 flags,
                valk_buffer_t *buf) {
   UNUSED(arg);
   UNUSED(conn);
@@ -272,7 +272,7 @@ static void test_sse_registry_init_shutdown(VALK_TEST_ARGS()) {
   valk_arc_box *server = valk_future_await(fserv);
   ASSERT_EQ(server->type, VALK_SUC);
 
-  int port = valk_aio_http2_server_get_port(server->item);
+  (void)valk_aio_http2_server_get_port(server->item);
 
   valk_sse_stream_registry_t *registry = valk_aio_get_sse_registry(sys);
   ASSERT_NOT_NULL(registry);

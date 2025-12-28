@@ -31,7 +31,7 @@ void valk_test_timer_reset_state(void) {
   g_test_state->current_hrtime = 0;
 }
 
-void valk_test_timer_advance(uint64_t ms) {
+void valk_test_timer_advance(u64 ms) {
   if (!g_test_state) return;
   g_test_state->current_time_ms += ms;
   g_test_state->current_hrtime += ms * 1000000ULL;
@@ -53,8 +53,8 @@ void valk_test_timer_advance(uint64_t ms) {
   }
 }
 
-size_t valk_test_timer_pending_count(void) {
-  size_t count = 0;
+u64 valk_test_timer_pending_count(void) {
+  u64 count = 0;
   struct valk_test_pending_timer *pt = g_test_state ? g_test_state->pending_head : nullptr;
   while (pt) {
     if (pt->active) count++;
@@ -63,7 +63,7 @@ size_t valk_test_timer_pending_count(void) {
   return count;
 }
 
-uint64_t valk_test_timer_current_time(void) {
+u64 valk_test_timer_current_time(void) {
   return g_test_state ? g_test_state->current_time_ms : 0;
 }
 
@@ -77,7 +77,7 @@ static int test_timer_init(valk_aio_system_t *sys, valk_io_timer_t *timer) {
 }
 
 static int test_timer_start(valk_io_timer_t *timer, valk_io_timer_cb cb,
-                            uint64_t timeout_ms, uint64_t repeat_ms) {
+                            u64 timeout_ms, u64 repeat_ms) {
   if (!g_test_state) return -1;
 
   struct valk_test_pending_timer *pt = g_test_state->pending_head;

@@ -159,7 +159,7 @@ void test_branch_coverage_records_line(VALK_TEST_ARGS()) {
   valk_coverage_init();
   valk_line_coverage_init();
 
-  uint16_t file_id = valk_source_register_file("test_branch.valk");
+  u16 file_id = valk_source_register_file("test_branch.valk");
 
   valk_coverage_record_branch(file_id, 15, true);
   valk_coverage_record_branch(file_id, 15, false);
@@ -182,7 +182,6 @@ void test_branch_coverage_records_line(VALK_TEST_ARGS()) {
 #endif
 
 int main(void) {
-  size_t heap_size = 16 * 1024 * 1024;
   valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
   valk_thread_ctx.allocator = (valk_mem_allocator_t*)heap;
 

@@ -1,7 +1,6 @@
 #pragma once
+#include "types.h"
 
-#include <stddef.h>
-#include <stdint.h>
 #include <stdbool.h>
 
 typedef struct valk_pressure_state {
@@ -10,23 +9,23 @@ typedef struct valk_pressure_state {
   float pending_stream_usage;
   float handle_slab_usage;
 
-  uint32_t active_connections;
-  uint32_t backpressure_queue_len;
-  uint32_t pending_stream_count;
+  u32 active_connections;
+  u32 backpressure_queue_len;
+  u32 pending_stream_count;
 
-  uint64_t oldest_backpressure_age_ms;
-  uint64_t oldest_pending_stream_age_ms;
+  u64 oldest_backpressure_age_ms;
+  u64 oldest_pending_stream_age_ms;
 } valk_pressure_state_t;
 
 typedef struct valk_pressure_config {
   float high_watermark;
   float critical_watermark;
 
-  uint32_t backpressure_max;
-  uint32_t backpressure_timeout_ms;
+  u32 backpressure_max;
+  u32 backpressure_timeout_ms;
 
-  uint32_t pending_stream_max;
-  uint32_t pending_stream_timeout_ms;
+  u32 pending_stream_max;
+  u32 pending_stream_timeout_ms;
 } valk_pressure_config_t;
 
 typedef enum {
@@ -47,7 +46,7 @@ typedef struct valk_pressure_decision {
 
   bool drop_oldest_backpressure;
   bool drop_oldest_pending_stream;
-  uint32_t connections_to_timeout;
+  u32 connections_to_timeout;
 } valk_pressure_decision_t;
 
 valk_pressure_decision_t valk_pressure_evaluate(

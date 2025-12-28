@@ -29,7 +29,7 @@ void test_ring_write_basic(VALK_TEST_ARGS()) {
   valk_ring_t *ring = malloc(sizeof(valk_ring_t) + ring_size);
   valk_ring_init(ring, ring_size);
 
-  uint8_t data[] = "hello world";
+  u8 data[] = "hello world";
   valk_ring_write(ring, data, sizeof(data) - 1);
 
   VALK_TEST_ASSERT(ring->offset == sizeof(data) - 1, "Offset should advance");
@@ -46,7 +46,7 @@ void test_ring_write_wrap(VALK_TEST_ARGS()) {
   valk_ring_t *ring = malloc(sizeof(valk_ring_t) + ring_size);
   valk_ring_init(ring, ring_size);
 
-  uint8_t data[50];
+  u8 data[50];
   memset(data, 'A', sizeof(data));
   valk_ring_write(ring, data, sizeof(data));
 
@@ -64,7 +64,7 @@ void test_ring_rewind(VALK_TEST_ARGS()) {
   valk_ring_t *ring = malloc(sizeof(valk_ring_t) + ring_size);
   valk_ring_init(ring, ring_size);
 
-  uint8_t data[] = "0123456789";
+  u8 data[] = "0123456789";
   valk_ring_write(ring, data, 10);
 
   size_t before = ring->offset;
@@ -102,12 +102,12 @@ void test_ring_read(VALK_TEST_ARGS()) {
   valk_ring_t *ring = malloc(sizeof(valk_ring_t) + ring_size);
   valk_ring_init(ring, ring_size);
 
-  uint8_t write_data[] = "hello world";
+  u8 write_data[] = "hello world";
   valk_ring_write(ring, write_data, 11);
 
   ring->offset = 0;
 
-  uint8_t read_data[12] = {0};
+  u8 read_data[12] = {0};
   valk_ring_read(ring, 11, read_data);
 
   VALK_TEST_ASSERT(memcmp(read_data, write_data, 11) == 0, "Read data should match written");

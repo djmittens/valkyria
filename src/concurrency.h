@@ -4,7 +4,6 @@
 #endif
 #include "valk_thread.h"
 #include "log.h"
-#include <stdint.h>
 
 #include "memory.h"
 
@@ -69,7 +68,7 @@
 
 #define valk_arc_retain(ref)                                                  \
   ({                                                                          \
-    size_t __old = __atomic_fetch_add(&(ref)->refcount, 1, __ATOMIC_RELEASE); \
+    u64 __old = __atomic_fetch_add(&(ref)->refcount, 1, __ATOMIC_RELEASE); \
     valk_capture_trace(VALK_TRACE_ACQUIRE, __old + 1, ref);                   \
     (ref);                                                                    \
   })
@@ -77,7 +76,7 @@
 // This is bootleg arc
 #define valk_arc_release(ref)                                               \
   do {                                                                      \
-    size_t old = __atomic_fetch_sub(&(ref)->refcount, 1, __ATOMIC_RELEASE); \
+    u64 old = __atomic_fetch_sub(&(ref)->refcount, 1, __ATOMIC_RELEASE); \
     valk_capture_trace(VALK_TRACE_RELEASE, old - 1, ref);                   \
     /*char _buf[512];                                                       \
     pthread_getname_np(pthread_self(), _buf, sizeof(_buf));*/               \
@@ -99,19 +98,19 @@ typedef enum { VALK_SUC, VALK_ERR } valk_res_t;
 
 typedef struct valk_arc_box {
   valk_res_t type;
-  size_t refcount;
+  u64 refcount;
   valk_mem_allocator_t *allocator;
 #ifdef VALK_ARC_DEBUG
   valk_arc_trace_info traces[VALK_ARC_TRACE_MAX];
-  size_t nextTrace;
+  u64 nextTrace;
 #endif
   void (*free)(struct valk_arc_box *);
-  size_t capacity;
+  u64 capacity;
   void *item;
 } valk_arc_box;
 
-valk_arc_box *valk_arc_box_new(valk_res_t type, size_t capacity);
-void valk_arc_box_init(valk_arc_box *self, valk_res_t type, size_t capacity);
+valk_arc_box *valk_arc_box_new(valk_res_t type, u64 capacity);
+void valk_arc_box_init(valk_arc_box *self, valk_res_t type, u64 capacity);
 
 valk_arc_box *valk_arc_box_err(const char *msg);
 
@@ -123,21 +122,21 @@ struct valk_future_and_then {
 typedef void(valk_future_free_cb)(void *userData, void *future);
 typedef struct valk_future {
   int done;
-  size_t refcount;
+  u64 refcount;
   valk_mutex_t mutex;
   valk_cond_t resolved;
   valk_arc_box *item;
 
 #ifdef VALK_ARC_DEBUG
   valk_arc_trace_info traces[VALK_ARC_TRACE_MAX];
-  size_t nextTrace;
+  u64 nextTrace;
 #endif
   void (*free)(struct valk_future *);
   valk_mem_allocator_t *allocator;
   struct {
     struct valk_future_and_then *items;
-    size_t count;
-    size_t capacity;
+    u64 count;
+    u64 capacity;
   } andThen;
 } valk_future;
 
@@ -147,7 +146,7 @@ void valk_future_and_then(valk_future *self,
                           struct valk_future_and_then *callback);
 
 valk_arc_box *valk_future_await(valk_future *future);
-valk_arc_box *valk_future_await_timeout(valk_future *future, uint32_t msec);
+valk_arc_box *valk_future_await_timeout(valk_future *future, u32 msec);
 
 typedef struct valk_promise {
   valk_future *item;
@@ -178,11 +177,11 @@ typedef struct {
   valk_slab_t *futureSlab;
   valk_slab_t *promiseSlab;
   valk_task *items;
-  size_t idx;
-  size_t count;
-  size_t capacity;
-  size_t isShuttingDown;
-  size_t numWorkers;
+  u64 idx;
+  u64 count;
+  u64 capacity;
+  u64 isShuttingDown;
+  u64 numWorkers;
 } valk_task_queue;
 
 typedef struct valk_worker {
@@ -195,8 +194,8 @@ typedef struct {
   // char *name;
   // Dynamic List
   valk_worker *items;
-  size_t count;
-  size_t capacity;
+  u64 count;
+  u64 capacity;
   valk_task_queue queue;
 } valk_worker_pool;
 

@@ -43,7 +43,7 @@ void test_append_single_chunk(VALK_TEST_ARGS()) {
   valk_body_buffer_t bb;
   valk_body_buffer_init(&bb, arena);
 
-  uint8_t data[] = "Hello, World!";
+  u8 data[] = "Hello, World!";
   valk_body_chunk_t chunk = {
     .data = data,
     .len = sizeof(data) - 1,
@@ -54,8 +54,8 @@ void test_append_single_chunk(VALK_TEST_ARGS()) {
   ASSERT_TRUE(result);
   ASSERT_EQ(bb.len, sizeof(data) - 1);
 
-  size_t len;
-  const uint8_t *got = valk_body_buffer_get(&bb, &len);
+  u64 len;
+  const u8 *got = valk_body_buffer_get(&bb, &len);
   ASSERT_NOT_NULL(got);
   ASSERT_EQ(len, sizeof(data) - 1);
   ASSERT_EQ(memcmp(got, data, len), 0);
@@ -71,8 +71,8 @@ void test_append_multiple_chunks(VALK_TEST_ARGS()) {
   valk_body_buffer_t bb;
   valk_body_buffer_init(&bb, arena);
 
-  uint8_t data1[] = "Hello, ";
-  uint8_t data2[] = "World!";
+  u8 data1[] = "Hello, ";
+  u8 data2[] = "World!";
 
   valk_body_chunk_t chunk1 = { .data = data1, .len = 7, .status = VALK_BODY_CONTINUE };
   valk_body_chunk_t chunk2 = { .data = data2, .len = 6, .status = VALK_BODY_COMPLETE };
@@ -81,8 +81,8 @@ void test_append_multiple_chunks(VALK_TEST_ARGS()) {
   ASSERT_TRUE(valk_body_buffer_append(&bb, &chunk2));
   ASSERT_EQ(bb.len, 13);
 
-  size_t len;
-  const uint8_t *got = valk_body_buffer_get(&bb, &len);
+  u64 len;
+  const u8 *got = valk_body_buffer_get(&bb, &len);
   ASSERT_EQ(len, 13);
   ASSERT_EQ(memcmp(got, "Hello, World!", 13), 0);
 
@@ -97,14 +97,14 @@ void test_append_grows_buffer(VALK_TEST_ARGS()) {
   valk_body_buffer_t bb;
   valk_body_buffer_init(&bb, arena);
 
-  uint8_t small[] = "A";
+  u8 small[] = "A";
   valk_body_chunk_t chunk = { .data = small, .len = 1, .status = VALK_BODY_CONTINUE };
 
   ASSERT_TRUE(valk_body_buffer_append(&bb, &chunk));
   size_t initial_capacity = bb.capacity;
   ASSERT_GT(initial_capacity, 0);
 
-  uint8_t large[5000];
+  u8 large[5000];
   memset(large, 'X', sizeof(large));
   valk_body_chunk_t large_chunk = { .data = large, .len = sizeof(large), .status = VALK_BODY_CONTINUE };
 
@@ -123,8 +123,8 @@ void test_get_empty_returns_null(VALK_TEST_ARGS()) {
   valk_body_buffer_t bb;
   valk_body_buffer_init(&bb, arena);
 
-  size_t len = 999;
-  const uint8_t *got = valk_body_buffer_get(&bb, &len);
+  u64 len = 999;
+  const u8 *got = valk_body_buffer_get(&bb, &len);
   ASSERT_NULL(got);
   ASSERT_EQ(len, 0);
 
@@ -139,7 +139,7 @@ void test_reset_keeps_arena(VALK_TEST_ARGS()) {
   valk_body_buffer_t bb;
   valk_body_buffer_init(&bb, arena);
 
-  uint8_t data[] = "test data";
+  u8 data[] = "test data";
   valk_body_chunk_t chunk = { .data = data, .len = 9, .status = VALK_BODY_CONTINUE };
   valk_body_buffer_append(&bb, &chunk);
 
@@ -166,7 +166,7 @@ void test_append_empty_chunk(VALK_TEST_ARGS()) {
   ASSERT_TRUE(valk_body_buffer_append(&bb, &empty));
   ASSERT_EQ(bb.len, 0);
 
-  uint8_t data[] = "x";
+  u8 data[] = "x";
   valk_body_chunk_t zero_len = { .data = data, .len = 0, .status = VALK_BODY_CONTINUE };
   ASSERT_TRUE(valk_body_buffer_append(&bb, &zero_len));
   ASSERT_EQ(bb.len, 0);
@@ -185,12 +185,12 @@ void test_append_bytes_directly(VALK_TEST_ARGS()) {
   valk_body_buffer_t bb;
   valk_body_buffer_init(&bb, arena);
 
-  uint8_t data[] = "direct bytes";
+  u8 data[] = "direct bytes";
   ASSERT_TRUE(valk_body_buffer_append_bytes(&bb, data, sizeof(data) - 1));
   ASSERT_EQ(bb.len, 12);
 
-  size_t len;
-  const uint8_t *got = valk_body_buffer_get(&bb, &len);
+  u64 len;
+  const u8 *got = valk_body_buffer_get(&bb, &len);
   ASSERT_EQ(len, 12);
   ASSERT_EQ(memcmp(got, "direct bytes", 12), 0);
 
@@ -222,10 +222,10 @@ void test_get_with_null_len(VALK_TEST_ARGS()) {
   valk_body_buffer_t bb;
   valk_body_buffer_init(&bb, arena);
 
-  uint8_t data[] = "test data";
+  u8 data[] = "test data";
   valk_body_buffer_append_bytes(&bb, data, sizeof(data) - 1);
 
-  const uint8_t *got = valk_body_buffer_get(&bb, nullptr);
+  const u8 *got = valk_body_buffer_get(&bb, nullptr);
   ASSERT_NOT_NULL(got);
   ASSERT_EQ(memcmp(got, "test data", 9), 0);
 
@@ -243,7 +243,7 @@ void test_remaining_calculation(VALK_TEST_ARGS()) {
   size_t max_size = 1000;
   ASSERT_EQ(valk_body_buffer_remaining(&bb, max_size), 1000);
 
-  uint8_t data[500];
+  u8 data[500];
   memset(data, 'X', sizeof(data));
   valk_body_buffer_append_bytes(&bb, data, 500);
 
@@ -268,7 +268,7 @@ void test_large_append_multiple_grows(VALK_TEST_ARGS()) {
 
   size_t total = 0;
   for (int i = 0; i < 20; i++) {
-    uint8_t chunk_data[1000];
+    u8 chunk_data[1000];
     memset(chunk_data, 'A' + i, sizeof(chunk_data));
     ASSERT_TRUE(valk_body_buffer_append_bytes(&bb, chunk_data, sizeof(chunk_data)));
     total += sizeof(chunk_data);
@@ -277,8 +277,8 @@ void test_large_append_multiple_grows(VALK_TEST_ARGS()) {
   ASSERT_EQ(bb.len, total);
   ASSERT_GE(bb.capacity, total);
 
-  size_t len;
-  const uint8_t *data = valk_body_buffer_get(&bb, &len);
+  u64 len;
+  const u8 *data = valk_body_buffer_get(&bb, &len);
   ASSERT_NOT_NULL(data);
   ASSERT_EQ(len, total);
 

@@ -318,7 +318,7 @@ void test_request_duration_histogram(VALK_TEST_ARGS()) {
 
   // Test various duration ranges to verify bucketing logic
   // Durations: 100us, 1ms, 10ms, 100ms, 1s
-  uint64_t durations[] = {100, 1000, 10000, 100000, 1000000};
+  u64 durations[] = {100, 1000, 10000, 100000, 1000000};
   size_t num_durations = sizeof(durations) / sizeof(durations[0]);
 
   for (size_t i = 0; i < num_durations; i++) {
@@ -331,7 +331,7 @@ void test_request_duration_histogram(VALK_TEST_ARGS()) {
                    "requests_total should match number of durations");
 
   // Verify total duration sum
-  uint64_t expected_sum = 0;
+  u64 expected_sum = 0;
   for (size_t i = 0; i < num_durations; i++) {
     expected_sum += durations[i];
   }
@@ -339,9 +339,9 @@ void test_request_duration_histogram(VALK_TEST_ARGS()) {
                    "request_duration_us_sum should equal sum of all durations");
 
   // Verify average duration calculation
-  uint64_t total_requests = atomic_load(&metrics.requests_total);
-  uint64_t total_duration = atomic_load(&metrics.request_duration_us_sum);
-  uint64_t avg_duration = total_duration / total_requests;
+  u64 total_requests = atomic_load(&metrics.requests_total);
+  u64 total_duration = atomic_load(&metrics.request_duration_us_sum);
+  u64 avg_duration = total_duration / total_requests;
 
   // Average of the test durations: (100 + 1000 + 10000 + 100000 + 1000000) / 5 = 222220
   VALK_TEST_ASSERT(avg_duration == 222220,
@@ -487,8 +487,6 @@ void test_stream_metrics_bytes_tracking(VALK_TEST_ARGS()) {
 void test_vm_metrics_collect_with_gc_heap(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  // Initialize a GC heap
-  size_t threshold = 1024 * 1024;  // 1 MB
   valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
   VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
 
@@ -547,22 +545,17 @@ void test_vm_metrics_collect_null_heap(VALK_TEST_ARGS()) {
 void test_vm_metrics_json_contains_heap_values(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  // Initialize a GC heap with some allocations
-  size_t threshold = 1024 * 1024;  // 1 MB
   valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
   VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
 
-  // Set up thread context
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.heap = heap;
 
-  // Do some allocations
   void* ptr1 = valk_gc_malloc_heap_alloc(heap, 512);
   void* ptr2 = valk_gc_malloc_heap_alloc(heap, 1024);
   VALK_TEST_ASSERT(ptr1 != NULL, "Allocation 1 should succeed");
   VALK_TEST_ASSERT(ptr2 != NULL, "Allocation 2 should succeed");
 
-  // Collect and generate JSON
   valk_vm_metrics_t vm;
   valk_vm_metrics_collect(&vm, heap, NULL);
   char* json = valk_vm_metrics_to_json(&vm, NULL);
@@ -594,16 +587,11 @@ void test_vm_metrics_json_contains_heap_values(VALK_TEST_ARGS()) {
 void test_vm_metrics_prometheus_contains_heap_values(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  // Initialize a GC heap with some allocations
-  size_t threshold = 1024 * 1024;  // 1 MB
   valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
   VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
 
-  // Set up thread context
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.heap = heap;
-
-  // Do some allocations
   void* ptr1 = valk_gc_malloc_heap_alloc(heap, 512);
   void* ptr2 = valk_gc_malloc_heap_alloc(heap, 1024);
   VALK_TEST_ASSERT(ptr1 != NULL, "Allocation 1 should succeed");

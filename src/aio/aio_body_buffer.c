@@ -11,13 +11,13 @@ void valk_body_buffer_init(valk_body_buffer_t *bb, valk_mem_arena_t *arena) {
   bb->capacity = 0;
 }
 
-static bool grow_buffer(valk_body_buffer_t *bb, size_t needed) {
-  size_t new_capacity = bb->capacity == 0 ? INITIAL_CAPACITY : bb->capacity;
+static bool grow_buffer(valk_body_buffer_t *bb, u64 needed) {
+  u64 new_capacity = bb->capacity == 0 ? INITIAL_CAPACITY : bb->capacity;
   while (new_capacity < needed) {
     new_capacity *= GROWTH_FACTOR;
   }
 
-  uint8_t *new_data = valk_mem_arena_alloc(bb->arena, new_capacity);
+  u8 *new_data = valk_mem_arena_alloc(bb->arena, new_capacity);
   if (!new_data) {
     return false;
   }
@@ -38,12 +38,12 @@ bool valk_body_buffer_append(valk_body_buffer_t *bb, const valk_body_chunk_t *ch
   return valk_body_buffer_append_bytes(bb, chunk->data, chunk->len);
 }
 
-bool valk_body_buffer_append_bytes(valk_body_buffer_t *bb, const uint8_t *data, size_t len) {
+bool valk_body_buffer_append_bytes(valk_body_buffer_t *bb, const u8 *data, u64 len) {
   if (!data || len == 0) {
     return true;
   }
 
-  size_t needed = bb->len + len;
+  u64 needed = bb->len + len;
   if (needed > bb->capacity) {
     if (!grow_buffer(bb, needed)) {
       return false;
@@ -55,7 +55,7 @@ bool valk_body_buffer_append_bytes(valk_body_buffer_t *bb, const uint8_t *data, 
   return true;
 }
 
-const uint8_t *valk_body_buffer_get(const valk_body_buffer_t *bb, size_t *len) {
+const u8 *valk_body_buffer_get(const valk_body_buffer_t *bb, u64 *len) {
   if (len) {
     *len = bb->len;
   }
@@ -69,7 +69,7 @@ void valk_body_buffer_reset(valk_body_buffer_t *bb) {
   bb->len = 0;
 }
 
-size_t valk_body_buffer_remaining(const valk_body_buffer_t *bb, size_t max_body_size) {
+u64 valk_body_buffer_remaining(const valk_body_buffer_t *bb, u64 max_body_size) {
   if (bb->len >= max_body_size) {
     return 0;
   }

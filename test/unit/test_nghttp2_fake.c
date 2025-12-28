@@ -6,7 +6,7 @@
 static nghttp2_session *g_session = NULL;
 static int g_begin_headers_count = 0;
 static int g_header_count = 0;
-static int32_t g_last_stream_id = 0;
+static i32 g_last_stream_id = 0;
 
 static void reset_state(void) {
   if (g_session) {
@@ -28,9 +28,9 @@ static int on_begin_headers(nghttp2_session *session, const nghttp2_frame *frame
 }
 
 static int on_header(nghttp2_session *session, const nghttp2_frame *frame,
-                     const uint8_t *name, size_t namelen,
-                     const uint8_t *value, size_t valuelen,
-                     uint8_t flags, void *user_data) {
+                     const u8 *name, size_t namelen,
+                     const u8 *value, size_t valuelen,
+                     u8 flags, void *user_data) {
   (void)session;
   (void)frame;
   (void)name;
@@ -87,7 +87,7 @@ void test_inject_request(VALK_TEST_ARGS()) {
   nghttp2_session_server_new(&g_session, cbs, NULL);
   nghttp2_session_callbacks_del(cbs);
   
-  int32_t stream_id = nghttp2_fake_inject_request(
+  i32 stream_id = nghttp2_fake_inject_request(
     g_session, "GET", "/test",
     NULL, 0, NULL, 0);
   
@@ -128,12 +128,12 @@ void test_submit_response(VALK_TEST_ARGS()) {
   nghttp2_session_server_new(&g_session, cbs, NULL);
   nghttp2_session_callbacks_del(cbs);
   
-  int32_t stream_id = nghttp2_fake_inject_request(
+  i32 stream_id = nghttp2_fake_inject_request(
     g_session, "GET", "/test", NULL, 0, NULL, 0);
   
   nghttp2_nv nva[] = {
-    {(uint8_t *)":status", (uint8_t *)"200", 7, 3, 0},
-    {(uint8_t *)"content-type", (uint8_t *)"text/plain", 12, 10, 0},
+    {(u8 *)":status", (u8 *)"200", 7, 3, 0},
+    {(u8 *)"content-type", (u8 *)"text/plain", 12, 10, 0},
   };
   
   int r = nghttp2_submit_response(g_session, stream_id, nva, 2, NULL);
@@ -177,11 +177,11 @@ void test_rst_stream(VALK_TEST_ARGS()) {
   nghttp2_session_server_new(&g_session, cbs, NULL);
   nghttp2_session_callbacks_del(cbs);
   
-  int32_t stream_id = nghttp2_fake_inject_request(
+  i32 stream_id = nghttp2_fake_inject_request(
     g_session, "GET", "/test", NULL, 0, NULL, 0);
   
   nghttp2_nv nva[] = {
-    {(uint8_t *)":status", (uint8_t *)"200", 7, 3, 0},
+    {(u8 *)":status", (u8 *)"200", 7, 3, 0},
   };
   nghttp2_submit_response(g_session, stream_id, nva, 1, NULL);
   
@@ -205,11 +205,11 @@ void test_want_write(VALK_TEST_ARGS()) {
   
   ASSERT_FALSE(nghttp2_session_want_write(g_session));
   
-  int32_t stream_id = nghttp2_fake_inject_request(
+  i32 stream_id = nghttp2_fake_inject_request(
     g_session, "GET", "/test", NULL, 0, NULL, 0);
   
   nghttp2_nv nva[] = {
-    {(uint8_t *)":status", (uint8_t *)"200", 7, 3, 0},
+    {(u8 *)":status", (u8 *)"200", 7, 3, 0},
   };
   nghttp2_submit_response(g_session, stream_id, nva, 1, NULL);
   

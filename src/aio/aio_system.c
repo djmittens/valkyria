@@ -69,9 +69,9 @@ int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
   if (cfg->max_connections_per_client == 0) cfg->max_connections_per_client = 2;
 
   if (cfg->tcp_buffer_pool_size == 0) {
-    size_t server_conns = cfg->max_servers * cfg->max_connections;
-    size_t client_conns = cfg->max_clients * cfg->max_connections_per_client;
-    size_t total_conns = server_conns + client_conns;
+    u64 server_conns = cfg->max_servers * cfg->max_connections;
+    u64 client_conns = cfg->max_clients * cfg->max_connections_per_client;
+    u64 total_conns = server_conns + client_conns;
     cfg->tcp_buffer_pool_size = total_conns * 4;
   }
 
@@ -353,26 +353,26 @@ void valk_aio_update_queue_stats(valk_aio_system_t* sys) {
   if (!sys || !sys->metrics_state) return;
 
   pthread_mutex_lock(&sys->http_queue.request_mutex);
-  size_t pending_requests = sys->http_queue.request_count - sys->http_queue.request_idx;
+  u64 pending_requests = sys->http_queue.request_count - sys->http_queue.request_idx;
   pthread_mutex_unlock(&sys->http_queue.request_mutex);
 
   pthread_mutex_lock(&sys->http_queue.response_mutex);
-  size_t pending_responses = sys->http_queue.response_count - sys->http_queue.response_idx;
+  u64 pending_responses = sys->http_queue.response_count - sys->http_queue.response_idx;
   pthread_mutex_unlock(&sys->http_queue.response_mutex);
 
   valk_aio_system_stats_update_queue(&sys->metrics_state->system_stats, pending_requests, pending_responses);
 
   if (sys->tcpBufferSlab) {
-    size_t available = valk_slab_available(sys->tcpBufferSlab);
-    size_t total = sys->config.tcp_buffer_pool_size;
-    size_t used = (available <= total) ? (total - available) : 0;
+    u64 available = valk_slab_available(sys->tcpBufferSlab);
+    u64 total = sys->config.tcp_buffer_pool_size;
+    u64 used = (available <= total) ? (total - available) : 0;
     atomic_store(&sys->metrics_state->system_stats.tcp_buffers_used, used);
   }
 
   if (sys->httpStreamArenas) {
-    size_t available = valk_slab_available(sys->httpStreamArenas);
-    size_t total = sys->config.arena_pool_size;
-    size_t used = (available <= total) ? (total - available) : 0;
+    u64 available = valk_slab_available(sys->httpStreamArenas);
+    u64 total = sys->config.arena_pool_size;
+    u64 used = (available <= total) ? (total - available) : 0;
     atomic_store(&sys->metrics_state->system_stats.arenas_used, used);
   }
 }
@@ -387,7 +387,7 @@ void valk_aio_update_loop_metrics(valk_aio_system_t* sys) {
 #ifdef VALK_METRICS_ENABLED
   if (!sys || !sys->eventloop) return;
   valk_event_loop_metrics_v2_update(&sys->loop_metrics, sys->eventloop);
-  int64_t handle_count = 0;
+  i64 handle_count = 0;
   valk_aio_handle_t *h = sys->liveHandles.next;
   while (h && h != &sys->liveHandles) {
     handle_count++;

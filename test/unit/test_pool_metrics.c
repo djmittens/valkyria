@@ -91,16 +91,16 @@ void test_pool_metrics_update_slab(VALK_TEST_ARGS()) {
 
   valk_pool_metrics_update_slab(&m, 100, 25, 80, 5);
 
-  int64_t used_val = atomic_load(&m.used->value);
+  i64 used_val = atomic_load(&m.used->value);
   VALK_TEST_ASSERT(used_val == 75, "used should be total - free = 75, got %lld", (long long)used_val);
 
-  int64_t total_val = atomic_load(&m.total->value);
+  i64 total_val = atomic_load(&m.total->value);
   VALK_TEST_ASSERT(total_val == 100, "total should be 100, got %lld", (long long)total_val);
 
-  int64_t peak_val = atomic_load(&m.peak->value);
+  i64 peak_val = atomic_load(&m.peak->value);
   VALK_TEST_ASSERT(peak_val == 80, "peak should be 80, got %lld", (long long)peak_val);
 
-  uint64_t overflow_val = atomic_load(&m.overflow->value);
+  u64 overflow_val = atomic_load(&m.overflow->value);
   VALK_TEST_ASSERT(overflow_val == 5, "overflow should be 5, got %llu", (unsigned long long)overflow_val);
 
   VALK_PASS();
@@ -117,16 +117,16 @@ void test_pool_metrics_update_arena(VALK_TEST_ARGS()) {
 
   valk_pool_metrics_update_arena(&m, 4096, 1024, 2048, 3);
 
-  int64_t used_val = atomic_load(&m.used->value);
+  i64 used_val = atomic_load(&m.used->value);
   VALK_TEST_ASSERT(used_val == 1024, "used should be 1024, got %lld", (long long)used_val);
 
-  int64_t total_val = atomic_load(&m.total->value);
+  i64 total_val = atomic_load(&m.total->value);
   VALK_TEST_ASSERT(total_val == 4096, "total should be 4096, got %lld", (long long)total_val);
 
-  int64_t peak_val = atomic_load(&m.peak->value);
+  i64 peak_val = atomic_load(&m.peak->value);
   VALK_TEST_ASSERT(peak_val == 2048, "peak should be 2048, got %lld", (long long)peak_val);
 
-  uint64_t overflow_val = atomic_load(&m.overflow->value);
+  u64 overflow_val = atomic_load(&m.overflow->value);
   VALK_TEST_ASSERT(overflow_val == 3, "overflow should be 3, got %llu", (unsigned long long)overflow_val);
 
   VALK_PASS();
@@ -143,16 +143,16 @@ void test_pool_metrics_update_generic(VALK_TEST_ARGS()) {
 
   valk_pool_metrics_update(&m, 500, 1000, 750, 10);
 
-  int64_t used_val = atomic_load(&m.used->value);
+  i64 used_val = atomic_load(&m.used->value);
   VALK_TEST_ASSERT(used_val == 500, "used should be 500, got %lld", (long long)used_val);
 
-  int64_t total_val = atomic_load(&m.total->value);
+  i64 total_val = atomic_load(&m.total->value);
   VALK_TEST_ASSERT(total_val == 1000, "total should be 1000, got %lld", (long long)total_val);
 
-  int64_t peak_val = atomic_load(&m.peak->value);
+  i64 peak_val = atomic_load(&m.peak->value);
   VALK_TEST_ASSERT(peak_val == 750, "peak should be 750, got %lld", (long long)peak_val);
 
-  uint64_t overflow_val = atomic_load(&m.overflow->value);
+  u64 overflow_val = atomic_load(&m.overflow->value);
   VALK_TEST_ASSERT(overflow_val == 10, "overflow should be 10, got %llu", (unsigned long long)overflow_val);
 
   VALK_PASS();
@@ -168,15 +168,15 @@ void test_pool_metrics_overflow_increment(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(result == true, "Init should succeed");
 
   valk_pool_metrics_update(&m, 100, 100, 100, 5);
-  uint64_t first_val = atomic_load(&m.overflow->value);
+  u64 first_val = atomic_load(&m.overflow->value);
   VALK_TEST_ASSERT(first_val == 5, "First overflow should be 5");
 
   valk_pool_metrics_update(&m, 100, 100, 100, 8);
-  uint64_t second_val = atomic_load(&m.overflow->value);
+  u64 second_val = atomic_load(&m.overflow->value);
   VALK_TEST_ASSERT(second_val == 8, "Second overflow should be 8");
 
   valk_pool_metrics_update(&m, 100, 100, 100, 6);
-  uint64_t third_val = atomic_load(&m.overflow->value);
+  u64 third_val = atomic_load(&m.overflow->value);
   VALK_TEST_ASSERT(third_val == 8, "Overflow should not decrease, expected 8, got %llu",
                    (unsigned long long)third_val);
 
@@ -215,10 +215,10 @@ static void *concurrent_update_thread(void *arg) {
   int thread_id = *(int *)arg;
   for (int i = 0; i < 1000; i++) {
     valk_pool_metrics_update(concurrent_test_metrics,
-                              (int64_t)(thread_id * 1000 + i),
+                              (i64)(thread_id * 1000 + i),
                               1000,
-                              (int64_t)(thread_id * 1000 + i),
-                              (uint64_t)(thread_id * 100 + i));
+                              (i64)(thread_id * 1000 + i),
+                              (u64)(thread_id * 100 + i));
   }
   atomic_fetch_add(&concurrent_threads_done, 1);
   return NULL;
@@ -249,8 +249,8 @@ void test_pool_metrics_concurrent_updates(VALK_TEST_ARGS()) {
 
   VALK_TEST_ASSERT(atomic_load(&concurrent_threads_done) == 4, "All threads should complete");
 
-  int64_t final_used = atomic_load(&m.used->value);
-  int64_t final_total = atomic_load(&m.total->value);
+  i64 final_used = atomic_load(&m.used->value);
+  i64 final_total = atomic_load(&m.total->value);
   VALK_TEST_ASSERT(final_total == 1000, "total should be 1000");
   VALK_TEST_ASSERT(final_used >= 0, "used should be non-negative: %lld", (long long)final_used);
 
@@ -285,8 +285,8 @@ void test_pool_metrics_large_values(VALK_TEST_ARGS()) {
   bool result = valk_pool_metrics_init(&m, "large_test");
   VALK_TEST_ASSERT(result == true, "Init should succeed");
 
-  int64_t large_val = 1LL << 40;
-  uint64_t large_overflow = 1ULL << 50;
+  i64 large_val = 1LL << 40;
+  u64 large_overflow = 1ULL << 50;
 
   valk_pool_metrics_update(&m, large_val, large_val * 2, large_val, large_overflow);
 
@@ -307,7 +307,7 @@ void test_pool_metrics_rapid_updates(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(result == true, "Init should succeed");
 
   for (int i = 0; i < 10000; i++) {
-    valk_pool_metrics_update(&m, i, 10000, i, (uint64_t)i);
+    valk_pool_metrics_update(&m, i, 10000, i, (u64)i);
   }
 
   VALK_TEST_ASSERT(atomic_load(&m.used->value) == 9999, "used should be 9999");
@@ -327,7 +327,7 @@ void test_pool_metrics_negative_values(VALK_TEST_ARGS()) {
 
   valk_pool_metrics_update(&m, -100, 1000, 500, 0);
 
-  int64_t used_val = atomic_load(&m.used->value);
+  i64 used_val = atomic_load(&m.used->value);
   VALK_TEST_ASSERT(used_val == -100, "used should accept negative value");
 
   VALK_PASS();
@@ -346,7 +346,7 @@ void test_pool_metrics_update_decreasing(VALK_TEST_ARGS()) {
   valk_pool_metrics_update(&m, 500, 2000, 1000, 5);
   valk_pool_metrics_update(&m, 100, 2000, 1000, 5);
 
-  int64_t used_val = atomic_load(&m.used->value);
+  i64 used_val = atomic_load(&m.used->value);
   VALK_TEST_ASSERT(used_val == 100, "used should update to 100");
 
   VALK_PASS();
@@ -363,10 +363,10 @@ void test_pool_metrics_slab_full_capacity(VALK_TEST_ARGS()) {
 
   valk_pool_metrics_update_slab(&m, 100, 0, 100, 0);
 
-  int64_t used_val = atomic_load(&m.used->value);
+  i64 used_val = atomic_load(&m.used->value);
   VALK_TEST_ASSERT(used_val == 100, "used should be 100 (all slots used)");
 
-  int64_t total_val = atomic_load(&m.total->value);
+  i64 total_val = atomic_load(&m.total->value);
   VALK_TEST_ASSERT(total_val == 100, "total should be 100");
 
   VALK_PASS();
@@ -383,10 +383,10 @@ void test_pool_metrics_arena_empty(VALK_TEST_ARGS()) {
 
   valk_pool_metrics_update_arena(&m, 4096, 0, 0, 0);
 
-  int64_t used_val = atomic_load(&m.used->value);
+  i64 used_val = atomic_load(&m.used->value);
   VALK_TEST_ASSERT(used_val == 0, "used should be 0");
 
-  int64_t total_val = atomic_load(&m.total->value);
+  i64 total_val = atomic_load(&m.total->value);
   VALK_TEST_ASSERT(total_val == 4096, "total should be 4096");
 
   VALK_PASS();
@@ -403,10 +403,10 @@ void test_pool_metrics_arena_full(VALK_TEST_ARGS()) {
 
   valk_pool_metrics_update_arena(&m, 4096, 4096, 4096, 10);
 
-  int64_t used_val = atomic_load(&m.used->value);
+  i64 used_val = atomic_load(&m.used->value);
   VALK_TEST_ASSERT(used_val == 4096, "used should be 4096");
 
-  int64_t peak_val = atomic_load(&m.peak->value);
+  i64 peak_val = atomic_load(&m.peak->value);
   VALK_TEST_ASSERT(peak_val == 4096, "peak should be 4096");
 
   VALK_PASS();
@@ -470,7 +470,7 @@ void test_pool_metrics_overflow_never_decreases(VALK_TEST_ARGS()) {
   valk_pool_metrics_update(&m, 100, 100, 100, 15);
   valk_pool_metrics_update(&m, 100, 100, 100, 12);
 
-  uint64_t overflow_val = atomic_load(&m.overflow->value);
+  u64 overflow_val = atomic_load(&m.overflow->value);
   VALK_TEST_ASSERT(overflow_val == 15, "overflow should be max seen (15), got %llu",
                    (unsigned long long)overflow_val);
 
@@ -523,7 +523,7 @@ void test_pool_metrics_overflow_same_value(VALK_TEST_ARGS()) {
   valk_pool_metrics_update(&m, 100, 100, 100, 10);
   valk_pool_metrics_update(&m, 100, 100, 100, 10);
 
-  uint64_t overflow_val = atomic_load(&m.overflow->value);
+  u64 overflow_val = atomic_load(&m.overflow->value);
   VALK_TEST_ASSERT(overflow_val == 10, "overflow should stay at 10");
 
   VALK_PASS();
@@ -539,15 +539,15 @@ void test_pool_metrics_overflow_decrease_ignored(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(result == true, "Init should succeed");
 
   valk_pool_metrics_update(&m, 100, 100, 100, 20);
-  uint64_t first_val = atomic_load(&m.overflow->value);
+  u64 first_val = atomic_load(&m.overflow->value);
   VALK_TEST_ASSERT(first_val == 20, "overflow should be 20");
 
   valk_pool_metrics_update(&m, 100, 100, 100, 5);
-  uint64_t second_val = atomic_load(&m.overflow->value);
+  u64 second_val = atomic_load(&m.overflow->value);
   VALK_TEST_ASSERT(second_val == 20, "overflow should NOT decrease to 5");
 
   valk_pool_metrics_update(&m, 100, 100, 100, 0);
-  uint64_t third_val = atomic_load(&m.overflow->value);
+  u64 third_val = atomic_load(&m.overflow->value);
   VALK_TEST_ASSERT(third_val == 20, "overflow should NOT decrease to 0");
 
   VALK_PASS();

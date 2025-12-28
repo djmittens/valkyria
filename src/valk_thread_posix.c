@@ -3,7 +3,6 @@
 #ifdef VALK_PLATFORM_POSIX
 
 #include <errno.h>
-#include <string.h>
 
 int valk_mutex_init(valk_mutex_t* mutex) {
   return pthread_mutex_init(mutex, NULL);
@@ -41,7 +40,7 @@ int valk_cond_wait(valk_cond_t* cond, valk_mutex_t* mutex) {
   return pthread_cond_wait(cond, mutex);
 }
 
-int valk_cond_timedwait(valk_cond_t* cond, valk_mutex_t* mutex, uint32_t timeout_ms) {
+int valk_cond_timedwait(valk_cond_t* cond, valk_mutex_t* mutex, u32 timeout_ms) {
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);
   ts.tv_sec += timeout_ms / 1000;
@@ -83,7 +82,7 @@ int valk_thread_setname(valk_thread_t thread, const char* name) {
 #endif
 }
 
-int valk_thread_getname(valk_thread_t thread, char* buf, size_t len) {
+int valk_thread_getname(valk_thread_t thread, char* buf, u64 len) {
 #if defined(__APPLE__) || defined(__linux__)
   return pthread_getname_np(thread, buf, len);
 #else

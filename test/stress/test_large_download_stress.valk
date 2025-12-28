@@ -1,0 +1,123 @@
+; test_large_download_stress.valk
+; Stress tests for large file downloads (1MB, 2MB, 5MB)
+; These are slower and memory intensive - excluded from normal test runs
+
+(load "src/prelude.valk")
+
+(println "=== Large Download Stress Tests ===")
+(println "")
+
+(def {pattern} "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz./")
+
+(def {SIZE_1MB} 1048576)
+(def {SIZE_2MB} 2097152)
+(def {SIZE_5MB} 5242880)
+
+(println "Pre-allocating response strings (this may take a moment)...")
+(def {str-1mb} (make-string (/ SIZE_1MB 64) pattern))
+(def {str-2mb} (make-string (/ SIZE_2MB 64) pattern))
+(def {str-5mb} (make-string (/ SIZE_5MB 64) pattern))
+
+(printf "  1MB:  %d bytes\n" (len str-1mb))
+(printf "  2MB:  %d bytes\n" (len str-2mb))
+(printf "  5MB:  %d bytes\n" (len str-5mb))
+(println "")
+
+(def {aio} (aio/start))
+
+(def {server-handler}
+  (\ {req} {
+    (= {path} (plist/get req (head {:path})))
+    (select
+      {(== path "/1mb") `{:status "200" :content-type "text/plain" :body ,str-1mb}}
+      {(== path "/2mb") `{:status "200" :content-type "text/plain" :body ,str-2mb}}
+      {(== path "/5mb") `{:status "200" :content-type "text/plain" :body ,str-5mb}}
+      {otherwise {:status "404" :content-type "text/plain" :body "Not found"}})
+  }))
+
+(def {server} (http2/server-listen aio 0 server-handler))
+(def {test-port} (http2/server-port server))
+(printf "Starting server on port %d\n" test-port)
+
+(def {tests-passed} 0)
+(def {tests-failed} 0)
+
+(aio/schedule aio 500 (\ {} {
+  (println "Testing 1MB download...")
+  (http2/client-request aio "127.0.0.1" test-port "/1mb"
+    (\ {resp} {
+      (if (error? resp)
+        {(do
+           (printf "FAIL: 1MB download error: %s\n" (error-message resp))
+           (def {tests-failed} (+ tests-failed 1)))}
+        {(do
+           (= {body} (http2/response-body resp))
+           (= {body-len} (len body))
+           (if (== body-len SIZE_1MB)
+             {(do
+                (printf "PASS: 1MB download - %d bytes\n" body-len)
+                (def {tests-passed} (+ tests-passed 1)))}
+             {(do
+                (printf "FAIL: 1MB download - expected %d, got %d\n" SIZE_1MB body-len)
+                (def {tests-failed} (+ tests-failed 1)))}))})
+      
+      (println "Testing 2MB download...")
+      (http2/client-request aio "127.0.0.1" test-port "/2mb"
+        (\ {resp} {
+          (if (error? resp)
+            {(do
+               (printf "FAIL: 2MB download error: %s\n" (error-message resp))
+               (def {tests-failed} (+ tests-failed 1)))}
+            {(do
+               (= {body} (http2/response-body resp))
+               (= {body-len} (len body))
+               (if (== body-len SIZE_2MB)
+                 {(do
+                    (printf "PASS: 2MB download - %d bytes\n" body-len)
+                    (def {tests-passed} (+ tests-passed 1)))}
+                 {(do
+                    (printf "FAIL: 2MB download - expected %d, got %d\n" SIZE_2MB body-len)
+                    (def {tests-failed} (+ tests-failed 1)))}))})
+          
+          (println "Testing 5MB download...")
+          (http2/client-request aio "127.0.0.1" test-port "/5mb"
+            (\ {resp} {
+              (if (error? resp)
+                {(do
+                   (printf "FAIL: 5MB download error: %s\n" (error-message resp))
+                   (def {tests-failed} (+ tests-failed 1)))}
+                {(do
+                   (= {body} (http2/response-body resp))
+                   (= {body-len} (len body))
+                   (if (== body-len SIZE_5MB)
+                     {(do
+                        (printf "PASS: 5MB download - %d bytes\n" body-len)
+                        (def {tests-passed} (+ tests-passed 1)))}
+                     {(do
+                        (printf "FAIL: 5MB download - expected %d, got %d\n" SIZE_5MB body-len)
+                        (def {tests-failed} (+ tests-failed 1)))}))})
+              
+              (println "")
+              (println "=== Results ===")
+              (printf "Passed: %d/3\n" tests-passed)
+              (printf "Failed: %d\n" tests-failed)
+              
+              (if (== tests-failed 0)
+                {(println "PASS: All large download stress tests passed")}
+                {(println "FAIL: Some tests failed")})
+              
+              (aio/stop aio)
+            }))
+        }))
+    }))
+}))
+
+(aio/schedule aio 120000 (\ {} {
+  (println "TIMEOUT: Tests did not complete in 120 seconds")
+  (def {tests-failed} (+ tests-failed 1))
+  (aio/stop aio)
+}))
+
+(aio/run aio)
+
+(exit (if (== tests-failed 0) {0} {1}))

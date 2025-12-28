@@ -21,7 +21,6 @@ typedef struct {
 
 static test_gc_ctx_t test_setup_gc(void) {
   test_gc_ctx_t ctx;
-  size_t threshold = 16 * 1024 * 1024;  // 16 MB
   ctx.heap = valk_gc_malloc_heap_init(0);
   ctx.old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)ctx.heap;
@@ -46,8 +45,8 @@ void test_eval_metrics_init(VALK_TEST_ARGS()) {
   valk_eval_metrics_init();
 
   // Verify all metrics initialize to zero
-  uint64_t evals, func_calls, builtin_calls, closures, lookups;
-  uint32_t stack_max;
+  u64 evals, func_calls, builtin_calls, closures, lookups;
+  u32 stack_max;
 
   valk_eval_metrics_get(&evals, &func_calls, &builtin_calls, &stack_max,
                         &closures, &lookups);
@@ -73,7 +72,7 @@ void test_eval_counter(VALK_TEST_ARGS()) {
   test_gc_ctx_t gc = test_setup_gc();
   valk_lenv_builtins(gc.env);
 
-  uint64_t evals_before = 0;
+  u64 evals_before = 0;
   valk_eval_metrics_get(&evals_before, NULL, NULL, NULL, NULL, NULL);
 
   // Evaluate a simple number (should increment eval counter)
@@ -81,7 +80,7 @@ void test_eval_counter(VALK_TEST_ARGS()) {
   valk_lval_t* result = valk_lval_eval(gc.env, num);
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Result should be a number");
 
-  uint64_t evals_after = 0;
+  u64 evals_after = 0;
   valk_eval_metrics_get(&evals_after, NULL, NULL, NULL, NULL, NULL);
 
   VALK_TEST_ASSERT(evals_after > evals_before,
@@ -102,7 +101,7 @@ void test_builtin_calls(VALK_TEST_ARGS()) {
   test_gc_ctx_t gc = test_setup_gc();
   valk_lenv_builtins(gc.env);
 
-  uint64_t builtin_before = 0;
+  u64 builtin_before = 0;
   valk_eval_metrics_get(NULL, NULL, &builtin_before, NULL, NULL, NULL);
 
   // Call a builtin function (e.g., +)
@@ -117,7 +116,7 @@ void test_builtin_calls(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Result should be a number");
   VALK_TEST_ASSERT(result->num == 3, "Result should be 3");
 
-  uint64_t builtin_after = 0;
+  u64 builtin_after = 0;
   valk_eval_metrics_get(NULL, NULL, &builtin_after, NULL, NULL, NULL);
 
   VALK_TEST_ASSERT(builtin_after > builtin_before,
@@ -138,7 +137,7 @@ void test_stack_depth(VALK_TEST_ARGS()) {
   test_gc_ctx_t gc = test_setup_gc();
   valk_lenv_builtins(gc.env);
 
-  uint32_t stack_before = 0;
+  u32 stack_before = 0;
   valk_eval_metrics_get(NULL, NULL, NULL, &stack_before, NULL, NULL);
 
   // Create a simple nested function call: (+ (+ 1 2) 3)
@@ -157,7 +156,7 @@ void test_stack_depth(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Result should be a number");
   VALK_TEST_ASSERT(result->num == 6, "Result should be 6");
 
-  uint32_t stack_after = 0;
+  u32 stack_after = 0;
   valk_eval_metrics_get(NULL, NULL, NULL, &stack_after, NULL, NULL);
 
   VALK_TEST_ASSERT(stack_after > stack_before,
@@ -178,7 +177,7 @@ void test_closure_counting(VALK_TEST_ARGS()) {
   test_gc_ctx_t gc = test_setup_gc();
   valk_lenv_builtins(gc.env);
 
-  uint64_t closures_before = 0;
+  u64 closures_before = 0;
   valk_eval_metrics_get(NULL, NULL, NULL, NULL, &closures_before, NULL);
 
   // Create a lambda: \ {x} {x}
@@ -192,7 +191,7 @@ void test_closure_counting(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(LVAL_TYPE(lambda) == LVAL_FUN,
                    "Lambda should be a function");
 
-  uint64_t closures_after = 0;
+  u64 closures_after = 0;
   valk_eval_metrics_get(NULL, NULL, NULL, NULL, &closures_after, NULL);
 
   VALK_TEST_ASSERT(closures_after > closures_before,
@@ -213,7 +212,7 @@ void test_env_lookups(VALK_TEST_ARGS()) {
   test_gc_ctx_t gc = test_setup_gc();
   valk_lenv_builtins(gc.env);
 
-  uint64_t lookups_before = 0;
+  u64 lookups_before = 0;
   valk_eval_metrics_get(NULL, NULL, NULL, NULL, NULL, &lookups_before);
 
   // Lookup a symbol (e.g., +)
@@ -222,7 +221,7 @@ void test_env_lookups(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_FUN,
                    "Result should be a function");
 
-  uint64_t lookups_after = 0;
+  u64 lookups_after = 0;
   valk_eval_metrics_get(NULL, NULL, NULL, NULL, NULL, &lookups_after);
 
   VALK_TEST_ASSERT(lookups_after > lookups_before,

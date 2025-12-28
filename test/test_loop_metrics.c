@@ -134,7 +134,7 @@ void test_loop_iterations_counted(VALK_TEST_ARGS()) {
   // Get initial metrics
   valk_event_loop_metrics_t before;
   valk_event_loop_metrics_get(&loop, &before);
-  uint64_t initial_count = before.loop_count;
+  u64 initial_count = before.loop_count;
 
   // Run with repeating timer (fires 3 times)
   uv_timer_start(&timer, timer_multi_cb, 1, 2);

@@ -1,7 +1,7 @@
 #include "aio_internal.h"
 #include "aio_http2_session.h"
 
-extern uint64_t g_async_handle_id;
+extern u64 g_async_handle_id;
 
 extern void valk_http2_continue_pending_send(valk_aio_handle_t *conn);
 
@@ -28,11 +28,11 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
   valk_aio_handle_t *conn = http->conn;
   valk_mem_arena_t *arena = http->arena;
   nghttp2_session *session = (nghttp2_session*)http->session;
-  int32_t stream_id = http->stream_id;
+  i32 stream_id = http->stream_id;
 
   if (!conn || conn->http.state == VALK_CONN_CLOSING ||
       conn->http.state == VALK_CONN_CLOSED || !conn->http.session) {
-    VALK_INFO("Async handle %lu: connection closed, skipping HTTP response for stream %d",
+    VALK_INFO("Async handle %llu: connection closed, skipping HTTP response for stream %d",
               handle->id, stream_id);
     goto cleanup;
   }
@@ -40,13 +40,13 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
   valk_http2_server_request_t *stream_req =
       nghttp2_session_get_stream_user_data(session, stream_id);
   if (!stream_req) {
-    VALK_INFO("Async handle %lu: stream %d no longer exists, skipping HTTP response",
+    VALK_INFO("Async handle %llu: stream %d no longer exists, skipping HTTP response",
               handle->id, stream_id);
     goto cleanup;
   }
 
   if (arena && stream_req->stream_arena != arena) {
-    VALK_INFO("Async handle %lu: stream %d arena mismatch, skipping", handle->id, stream_id);
+    VALK_INFO("Async handle %llu: stream %d arena mismatch, skipping", (unsigned long long)handle->id, stream_id);
     goto cleanup;
   }
 
@@ -177,7 +177,7 @@ void valk_async_handle_free(valk_async_handle_t *handle) {
 }
 
 void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result) {
-  VALK_DEBUG("valk_async_handle_complete: handle=%p, id=%lu", (void*)handle, handle ? handle->id : 0);
+  VALK_DEBUG("valk_async_handle_complete: handle=%p, id=%llu", (void*)handle, handle ? handle->id : 0);
   if (!handle) return;
   if (handle->status != VALK_ASYNC_PENDING && handle->status != VALK_ASYNC_RUNNING) {
     VALK_DEBUG("  handle already in terminal state: %d", handle->status);
@@ -185,7 +185,7 @@ void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result
   }
 
   if (valk_async_is_resource_closed(handle)) {
-    VALK_INFO("Async handle %lu: resource closed during completion, aborting", handle->id);
+    VALK_INFO("Async handle %llu: resource closed during completion, aborting", (unsigned long long)handle->id);
     handle->status = VALK_ASYNC_CANCELLED;
     return;
   }
@@ -207,7 +207,7 @@ void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
   }
 
   if (valk_async_is_resource_closed(handle)) {
-    VALK_INFO("Async handle %lu: resource closed during failure, aborting", handle->id);
+    VALK_INFO("Async handle %llu: resource closed during failure, aborting", (unsigned long long)handle->id);
     handle->status = VALK_ASYNC_CANCELLED;
     return;
   }
@@ -268,7 +268,7 @@ bool valk_async_handle_cancel(valk_async_handle_t *handle) {
     }
   }
 
-  for (size_t i = 0; i < handle->children.count; i++) {
+  for (u64 i = 0; i < handle->children.count; i++) {
     valk_async_handle_cancel(handle->children.items[i]);
   }
 
@@ -281,7 +281,7 @@ void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_handle_
   child->parent = parent;
 
   if (parent->children.count >= parent->children.capacity) {
-    size_t new_cap = parent->children.capacity == 0 ? 4 : parent->children.capacity * 2;
+    u64 new_cap = parent->children.capacity == 0 ? 4 : parent->children.capacity * 2;
     valk_async_handle_t **new_items = realloc(parent->children.items,
                                                new_cap * sizeof(valk_async_handle_t*));
     if (!new_items) return;
@@ -306,7 +306,7 @@ static void valk_async_propagate_allocator_impl(valk_async_handle_t *handle, val
     handle->env = env;
   }
 
-  for (size_t i = 0; i < handle->children.count; i++) {
+  for (u64 i = 0; i < handle->children.count; i++) {
     valk_async_propagate_allocator_impl(handle->children.items[i], allocator, env, expected_loop);
   }
 }

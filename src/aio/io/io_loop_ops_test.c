@@ -1,14 +1,13 @@
 #include "io_loop_ops.h"
 #include "io_timer_ops.h"
 #include <stdlib.h>
-#include <string.h>
 
 typedef struct valk_test_loop_state {
   bool running;
   bool should_stop;
   valk_test_timer_state_t timer_state;
-  uint64_t current_time_ms;
-  uint64_t current_hrtime;
+  u64 current_time_ms;
+  u64 current_hrtime;
 } valk_test_loop_state_t;
 
 static valk_test_loop_state_t *g_test_loop_state = nullptr;
@@ -40,7 +39,7 @@ static int test_loop_run(valk_aio_system_t *sys, valk_io_run_mode_e mode) {
   g_test_loop_state->should_stop = false;
 
   while (g_test_loop_state->running && !g_test_loop_state->should_stop) {
-    size_t pending = valk_test_timer_pending_count();
+    u64 pending = valk_test_timer_pending_count();
     if (pending == 0 && mode != VALK_IO_RUN_DEFAULT) break;
 
     if (mode == VALK_IO_RUN_NOWAIT) break;
@@ -71,12 +70,12 @@ static void test_loop_walk(valk_aio_system_t *sys, valk_io_walk_cb cb, void *arg
   (void)arg;
 }
 
-static uint64_t test_loop_now(valk_aio_system_t *sys) {
+static u64 test_loop_now(valk_aio_system_t *sys) {
   (void)sys;
   return g_test_loop_state ? g_test_loop_state->current_time_ms : 0;
 }
 
-static uint64_t test_hrtime(void) {
+static u64 test_hrtime(void) {
   return g_test_loop_state ? g_test_loop_state->current_hrtime : 0;
 }
 

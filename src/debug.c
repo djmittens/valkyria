@@ -6,16 +6,15 @@
 #endif
 #include <dlfcn.h>
 #include <execinfo.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-size_t valk_trace_capture(void** stack, size_t n) {
+u64 valk_trace_capture(void** stack, u64 n) {
   return backtrace(stack, n);
 }
 
 #ifdef __linux__
-static int __valk_trace_info_cb(void* data, uintptr_t pc, const char* filename,
+static int __valk_trace_info_cb(void* data, uptr pc, const char* filename,
                                 int lineno, const char* function) {
   UNUSED(data);
   UNUSED(pc);
@@ -29,7 +28,7 @@ static void __valk_trace_error_cb(void* data, const char* msg, int errnum) {
 }
 #endif
 
-void valk_trace_print(void** stack, size_t num) {
+void valk_trace_print(void** stack, u64 num) {
   char** strings;
 
 #ifdef __linux__
@@ -41,11 +40,11 @@ void valk_trace_print(void** stack, size_t num) {
 
   strings = backtrace_symbols(stack, num);
 
-  for (size_t j = 0; j < num; ++j) {
-    printf("- [#%ld] %s\n", j, strings[j]);
+  for (u64 j = 0; j < num; ++j) {
+    printf("- [#%llu] %s\n", (unsigned long long)j, strings[j]);
 
 #ifdef __linux__
-    backtrace_pcinfo(valkBtState, (uintptr_t)stack[j], __valk_trace_info_cb,
+    backtrace_pcinfo(valkBtState, (uptr)stack[j], __valk_trace_info_cb,
                      __valk_trace_error_cb, nullptr);
 #else
     void *addr = stack[j];
@@ -53,9 +52,9 @@ void valk_trace_print(void** stack, size_t num) {
 
     // COVERAGE_EXEMPT: Platform-dependent dladdr behavior - can't control symbol resolution
     if (dladdr(addr, &info) && info.dli_sname) {
-      uintptr_t offset_in_sym =
-          info.dli_saddr ? (uintptr_t)addr - (uintptr_t)info.dli_saddr : 0;  // COVERAGE_EXEMPT: dli_saddr NULL depends on linker
-      fprintf(stderr, "  → %s+0x%lx\n", info.dli_sname, offset_in_sym);
+      uptr offset_in_sym =
+          info.dli_saddr ? (uptr)addr - (uptr)info.dli_saddr : 0;  // COVERAGE_EXEMPT: dli_saddr NULL depends on linker
+      fprintf(stderr, "  → %s+0x%llx\n", info.dli_sname, (unsigned long long)offset_in_sym);
     }
 #endif
   }

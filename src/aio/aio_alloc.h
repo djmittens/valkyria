@@ -2,8 +2,8 @@
 #define VALK_AIO_ALLOC_H
 
 #include <stddef.h>
-#include <stdint.h>
 #include <nghttp2/nghttp2.h>
+#include "types.h"
 
 // Memory tracking for AIO subsystem (SSL + nghttp2 + libuv)
 // All counters are atomic for thread-safe access from diagnostics
@@ -12,12 +12,12 @@
 void valk_aio_alloc_init(void);
 
 // Get current memory usage stats
-size_t valk_aio_ssl_bytes_used(void);
-size_t valk_aio_nghttp2_bytes_used(void);
-size_t valk_aio_libuv_bytes_used(void);
+u64 valk_aio_ssl_bytes_used(void);
+u64 valk_aio_nghttp2_bytes_used(void);
+u64 valk_aio_libuv_bytes_used(void);
 
 // Combined AIO library memory (SSL + nghttp2 + libuv)
-static inline size_t valk_aio_lib_bytes_used(void) {
+static inline u64 valk_aio_lib_bytes_used(void) {
   return valk_aio_ssl_bytes_used() + valk_aio_nghttp2_bytes_used() + valk_aio_libuv_bytes_used();
 }
 

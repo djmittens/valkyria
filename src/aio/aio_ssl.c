@@ -1,8 +1,8 @@
 #include "aio_ssl.h"
 #include "aio_alloc.h"
-#include "../common.h"
-#include "../log.h"
-#include "../memory.h"
+#include "common.h"
+#include "log.h"
+#include "memory.h"
 #include <errno.h>
 #include <openssl/bio.h>
 #include <openssl/err.h>
@@ -225,14 +225,14 @@ valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {
   case SSL_ERROR_WANT_WRITE:
   case SSL_ERROR_WANT_READ: {
     // Check how much data is pending in write BIO before reading
-    size_t pending = BIO_ctrl_pending(ssl->write_bio);
+    u64 pending = BIO_ctrl_pending(ssl->write_bio);
     if (pending == 0) {
       // No data to read, just return
       break;
     }
 
     do {
-      size_t available = Out->capacity - Out->count;
+      u64 available = Out->capacity - Out->count;
       if (available == 0) {
         VALK_ERROR("SSL handshake: output buffer full (count=%zu, cap=%zu)",
                    Out->count, Out->capacity);
@@ -240,7 +240,7 @@ valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {
       }
 
       // Limit read size to what's actually pending to avoid reading garbage
-      size_t to_read = (available > pending) ? pending : available;
+      u64 to_read = (available > pending) ? pending : available;
 
       n = BIO_read(ssl->write_bio, &((char *)Out->items)[Out->count], to_read);
       if (n > 0) {
@@ -307,8 +307,8 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
 
     VALK_ASSERT((size_t)n == In->count,
                 "OpenSSL BIO_write, should write exactly once, because it should "
-                "grow to accomodate %ld out of %ld",
-                (size_t)n, In->count);
+                "grow to accomodate %llu out of %llu",
+                (unsigned long long)n, (unsigned long long)In->count);
 
     In->count = 0;
   } else {
@@ -350,14 +350,14 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
   case SSL_ERROR_WANT_WRITE:
     do {
       VALK_ASSERT(!valk_buffer_is_full(Out),
-                  "Output buffer is full to append %zu", Out->count);
+                  "Output buffer is full to append %llu", (unsigned long long)Out->count);
       n = BIO_read(ssl->write_bio, &((char *)Out->items)[Out->count],
                    Out->capacity - Out->count);
       if (n > 0) {
         Out->count += n;
         VALK_ASSERT(!valk_buffer_is_full(Out),
-                    "Output buffer is too full after append %zu",
-                    Out->count + n);
+                    "Output buffer is too full after append %llu",
+                    (unsigned long long)(Out->count + n));
       } else if (!BIO_should_retry(ssl->write_bio)) {
         return VALK_ERR_SSL_READ;
       }
@@ -419,10 +419,10 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
   // Reserve some headroom for SSL overhead (records, padding, MAC)
   // TLS 1.3 record overhead is ~22 bytes per record, but we use a larger
   // margin to be safe with fragmentation
-  const size_t SSL_HEADROOM = 1024;
+  const u64 SSL_HEADROOM = 1024;
 
-  size_t len = In->count;
-  size_t consumed = 0;
+  u64 len = In->count;
+  u64 consumed = 0;
   while (len > 0) {
     // Check if output buffer is getting full - stop early to avoid overflow
     if (Out->count + SSL_HEADROOM >= Out->capacity) {
@@ -450,7 +450,7 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
       consumed += n;
       // Now stuff the encrypted result into the output buffer
       do {
-        size_t space = Out->capacity - Out->count;
+        u64 space = Out->capacity - Out->count;
         if (space == 0) {
           // Output buffer completely full - stop here
           // Remaining encrypted data stays in BIO for next call
@@ -468,7 +468,7 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
         }
 
         // Check pending data in BIO before reading
-        size_t pending = BIO_ctrl_pending(ssl->write_bio);
+        u64 pending = BIO_ctrl_pending(ssl->write_bio);
         if (pending == 0) {
           break;  // No data to read
         }

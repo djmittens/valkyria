@@ -31,7 +31,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
-  uint8_t buf[sizeof(valk_mem_arena_t) + (24048 + (int)8e6)];
+  u8 buf[sizeof(valk_mem_arena_t) + (24048 + (int)8e6)];
   valk_mem_arena_t *arena = (void *)buf;
   valk_mem_arena_init(arena, (24048 + (int)8e6));
   valk_http2_request_t *req;
@@ -43,7 +43,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
     req->scheme = "https";
     req->authority = "google.com";
     req->path = "/";
-    req->body = (uint8_t *)"";
+    req->body = (u8 *)"";
     req->bodyLen = 0;
 
     da_init(&req->headers);
@@ -57,11 +57,11 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   int port = valk_aio_http2_server_get_port(server->item);
 
   valk_future *fut = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
-  printf("Arc count of fut : %ld\n", fut->refcount);
+  printf("Arc count of fut : %lld\n", (long long)fut->refcount);
   valk_arc_box *clientBox = valk_future_await(fut);
 
-  printf("Arc count of fut : %ld\n", fut->refcount);
-  printf("Arc count of box : %ld\n", clientBox->refcount);
+  printf("Arc count of fut : %lld\n", (long long)fut->refcount);
+  printf("Arc count of box : %lld\n", (long long)clientBox->refcount);
 
   // valk_arc_release(fut);
   // printf("Arc count of fut : %d\n", fut->refcount);
@@ -256,7 +256,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   printf("[test] Client connected\n");
 
   // Build request for /big endpoint
-  uint8_t req_buf[sizeof(valk_mem_arena_t) + 4096];
+  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -268,7 +268,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
     req->scheme = "https";
     req->authority = "localhost";
     req->path = "/big";
-    req->body = (uint8_t *)"";
+    req->body = (u8 *)"";
     req->bodyLen = 0;
     da_init(&req->headers);
   }
@@ -292,7 +292,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   }
 
   valk_http2_response_t *response = res->item;
-  printf("[test] Response received: %zu bytes\n", response->bodyLen);
+  printf("[test] Response received: %llu bytes\n", (unsigned long long)response->bodyLen);
 
   // Verify response size
   if (response->bodyLen != LISP_50MB_RESPONSE_SIZE) {
@@ -377,7 +377,7 @@ void cb_onDisconnect(void *arg, valk_aio_handle_t *conn) {
   __atomic_fetch_add(&handler->disconnectedCount, 1, __ATOMIC_RELAXED);
 }
 
-void cb_onHeader(void *arg, valk_aio_handle_t *conn, size_t stream, char *name,
+void cb_onHeader(void *arg, valk_aio_handle_t *conn, u64 stream, char *name,
                  char *value) {
   UNUSED(arg);
   UNUSED(conn);
@@ -386,7 +386,7 @@ void cb_onHeader(void *arg, valk_aio_handle_t *conn, size_t stream, char *name,
   UNUSED(value);
 }
 
-void cb_onBody(void *arg, valk_aio_handle_t *conn, size_t stream, uint8_t flags,
+void cb_onBody(void *arg, valk_aio_handle_t *conn, u64 stream, u8 flags,
                valk_buffer_t *buf) {
   UNUSED(arg);
   UNUSED(conn);
