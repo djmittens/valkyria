@@ -17,7 +17,7 @@ typedef struct valk_lval_t valk_lval_t;
 typedef struct valk_gc_header_t {
   void* origin_allocator;              // Which heap allocated this
   struct valk_gc_header_t* gc_next;    // Linked list for GC tracking
-  u64 size;                         // User-requested allocation size
+  sz size;                         // User-requested allocation size
   // User data follows immediately after this header
 } valk_gc_header_t;
 
@@ -31,10 +31,10 @@ typedef struct valk_gc_heap2 valk_gc_heap2_t;
 typedef struct {
   u64 overflow_allocations;      // Allocations received from scratch overflow
   u64 evacuations_from_scratch;  // Values received from scratch evacuation
-  u64 evacuation_bytes;          // Bytes received from scratch evacuation
+  sz evacuation_bytes;          // Bytes received from scratch evacuation
   u64 evacuation_pointer_fixups; // Pointer updates during evacuation
   u64 emergency_collections;     // Emergency GCs triggered at hard limit
-  u64 peak_usage;                // Maximum allocated_bytes ever reached
+  sz peak_usage;                // Maximum allocated_bytes ever reached
 } valk_gc_heap_stats_t;
 
 // GC runtime metrics for observability (live counters, not telemetry snapshots)
@@ -42,12 +42,12 @@ typedef struct {
   _Atomic u64 cycles_total;           // Total GC collections
   _Atomic u64 pause_us_total;         // Cumulative pause time (microseconds)
   _Atomic u64 pause_us_max;           // Worst-case pause time
-  _Atomic u64 reclaimed_bytes_total;  // Total bytes reclaimed across all cycles
-  _Atomic u64 allocated_bytes_total;  // Total bytes ever allocated (for rate calc)
+  _Atomic sz reclaimed_bytes_total;  // Total bytes reclaimed across all cycles
+  _Atomic sz allocated_bytes_total;  // Total bytes ever allocated (for rate calc)
   _Atomic u64 objects_marked;         // Objects marked in last cycle
   _Atomic u64 objects_swept;          // Objects swept in last cycle
-  _Atomic u64 last_heap_before_gc;    // Heap size before last GC (for efficiency)
-  _Atomic u64 last_reclaimed;         // Bytes reclaimed in last GC cycle
+  _Atomic sz last_heap_before_gc;    // Heap size before last GC (for efficiency)
+  _Atomic sz last_reclaimed;         // Bytes reclaimed in last GC cycle
   u64 last_cycle_start_us;            // Timing for current cycle (internal)
 
   // Object survival histogram - tracks how long objects live
@@ -73,20 +73,20 @@ typedef struct {
 typedef valk_gc_heap2_t valk_gc_malloc_heap_t;
 
 // Initialize GC malloc heap with hard limit (default 250MB if 0)
-valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(u64 hard_limit);
+valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(sz hard_limit);
 
 // Set hard limit for GC heap (must be >= current allocated_bytes)
-void valk_gc_set_hard_limit(valk_gc_malloc_heap_t* heap, u64 limit);
+void valk_gc_set_hard_limit(valk_gc_malloc_heap_t* heap, sz limit);
 
 // Allocate from GC malloc heap (uses malloc, triggers GC if needed)
-void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, u64 bytes);
+void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, sz bytes);
 
 // Set root environment for marking
 void valk_gc_malloc_set_root(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env);
 
 // Perform mark & sweep collection
 // If additional_root is non-NULL, it will be marked in addition to root_env
-u64 valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root);
+sz valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root);
 
 // Check if GC should run (considers both slab and malloc usage as percentage)
 bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap);
@@ -116,11 +116,11 @@ void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap);
 // Get GC runtime metrics for export (thread-safe reads)
 void valk_gc_get_runtime_metrics(valk_gc_malloc_heap_t* heap,
                                   u64* cycles, u64* pause_us_total,
-                                  u64* pause_us_max, u64* reclaimed,
-                                  u64* heap_used, u64* heap_total);
+                                  u64* pause_us_max, sz* reclaimed,
+                                  sz* heap_used, sz* heap_total);
 
 // Get cumulative bytes allocated (for allocation rate calculation)
-u64 valk_gc_get_allocated_bytes_total(valk_gc_malloc_heap_t* heap);
+sz valk_gc_get_allocated_bytes_total(valk_gc_malloc_heap_t* heap);
 
 // Get GC efficiency from last cycle (reclaimed / heap_before * 100, 0-100)
 // Low efficiency suggests long-lived objects accumulating (potential leak)
@@ -141,17 +141,17 @@ void valk_gc_get_pause_histogram(valk_gc_malloc_heap_t* heap,
                                   u64* pause_16ms_plus);
 
 typedef struct {
-  u64 lval_slab_used;
-  u64 lval_slab_total;
-  u64 lval_slab_peak;
-  u64 lenv_slab_used;
-  u64 lenv_slab_total;
-  u64 lenv_slab_peak;
-  u64 malloc_allocated;
-  u64 malloc_limit;
-  u64 malloc_peak;
+  sz lval_slab_used;
+  sz lval_slab_total;
+  sz lval_slab_peak;
+  sz lenv_slab_used;
+  sz lenv_slab_total;
+  sz lenv_slab_peak;
+  sz malloc_allocated;
+  sz malloc_limit;
+  sz malloc_peak;
   u64 free_list_count;
-  u64 free_list_bytes;
+  sz free_list_bytes;
   double lval_fragmentation;
   double lenv_fragmentation;
 } valk_fragmentation_t;
@@ -161,7 +161,7 @@ typedef struct {
 
 typedef struct {
   char name[VALK_RETAINED_SET_NAME_MAX];
-  u64 retained_bytes;
+  sz retained_bytes;
   u64 object_count;
 } valk_retained_set_t;
 
@@ -180,8 +180,8 @@ void valk_gc_sample_retained_sets(valk_gc_malloc_heap_t* heap, valk_lenv_t* root
 // ============================================================================
 
 typedef struct {
-  u64 heap_used_bytes;
-  u64 scratch_used_bytes;
+  sz heap_used_bytes;
+  sz scratch_used_bytes;
   u64 lval_count;
   u64 lenv_count;
 } valk_repl_mem_snapshot_t;
@@ -213,7 +213,7 @@ void valk_repl_set_eval_delta(i64 heap, i64 scratch, i64 lval, i64 lenv);
 void valk_gc_free_object(void* heap, void* ptr);
 
 // Arena-based GC (informational only, for backward compatibility)
-u64 valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena);
+sz valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena);
 bool valk_gc_should_collect_arena(valk_mem_arena_t* arena);
 
 // ============================================================================
@@ -238,13 +238,13 @@ typedef struct {
   valk_mem_arena_t* scratch;      // Source arena
   valk_gc_malloc_heap_t* heap;    // Destination heap
   valk_lval_t** worklist;         // Stack of values to process children
-  u64 worklist_count;          // Current worklist size
-  u64 worklist_capacity;       // Allocated capacity
+  sz worklist_count;          // Current worklist size
+  sz worklist_capacity;       // Allocated capacity
   valk_lval_t** evacuated;        // List of evacuated values (for pointer fixing)
-  u64 evacuated_count;         // Number of evacuated values
-  u64 evacuated_capacity;      // Allocated capacity for evacuated list
+  sz evacuated_count;         // Number of evacuated values
+  sz evacuated_capacity;      // Allocated capacity for evacuated list
   u64 values_copied;           // Stats for this evacuation
-  u64 bytes_copied;            // Stats for this evacuation
+  sz bytes_copied;            // Stats for this evacuation
   u64 pointers_fixed;          // Stats for this evacuation
 } valk_evacuation_ctx_t;
 
@@ -301,8 +301,8 @@ void valk_gc_clear_mark(valk_lval_t* obj);
 
 typedef struct valk_gc_mark_queue {
   _Atomic(valk_lval_t*) items[VALK_GC_MARK_QUEUE_SIZE];
-  _Atomic u64 top;     // Thieves steal from here (FIFO end)
-  _Atomic u64 bottom;  // Owner pushes/pops here (LIFO end)
+  _Atomic sz top;     // Thieves steal from here (FIFO end)
+  _Atomic sz bottom;  // Owner pushes/pops here (LIFO end)
 } valk_gc_mark_queue_t;
 
 // Initialize mark queue
@@ -330,12 +330,12 @@ typedef struct valk_gc_thread_info {
 typedef struct valk_barrier {
   pthread_mutex_t mutex;
   pthread_cond_t cond;
-  u64 count;
-  u64 waiting;
-  u64 phase;
+  sz count;
+  sz waiting;
+  sz phase;
 } valk_barrier_t;
 
-void valk_barrier_init(valk_barrier_t* b, u64 count);
+void valk_barrier_init(valk_barrier_t* b, sz count);
 void valk_barrier_destroy(valk_barrier_t* b);
 void valk_barrier_wait(valk_barrier_t* b);
 
@@ -423,7 +423,7 @@ static const u16 valk_gc_size_classes[VALK_GC_NUM_SIZE_CLASSES] = {
   16, 32, 64, 128, 256, 512, 1024, 2048, 4096
 };
 
-static inline u8 valk_gc_size_class(u64 bytes) {
+static inline u8 valk_gc_size_class(sz bytes) {
   if (bytes <= 16)   return 0;
   if (bytes <= 32)   return 1;
   if (bytes <= 64)   return 2;
@@ -448,7 +448,7 @@ static inline u16 valk_gc_slots_per_page(u8 size_class) {
   u16 slot_size = valk_gc_size_classes[size_class];
   
   // Usable space after header
-  u64 usable = VALK_GC_PAGE_SIZE - VALK_GC_PAGE_HEADER_SIZE;
+  sz usable = VALK_GC_PAGE_SIZE - VALK_GC_PAGE_HEADER_SIZE;
   
   // Each slot costs: slot_size bytes + 2 bits (alloc + mark)
   // Solve: slots * slot_size + ceil(slots/8) * 2 <= usable
@@ -465,13 +465,13 @@ static inline u16 valk_gc_bitmap_bytes(u8 size_class) {
 }
 
 // Calculate total page size including header, bitmaps, and slots
-static inline u64 valk_gc_page_total_size(u8 size_class) {
+static inline sz valk_gc_page_total_size(u8 size_class) {
   if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return 0;
   u16 slots = valk_gc_slots_per_page(size_class);
   u16 bitmap_bytes = valk_gc_bitmap_bytes(size_class);
   u16 slot_size = valk_gc_size_classes[size_class];
   
-  u64 total = VALK_GC_PAGE_HEADER_SIZE + 2 * bitmap_bytes + slots * slot_size;
+  sz total = VALK_GC_PAGE_HEADER_SIZE + 2 * bitmap_bytes + slots * slot_size;
   total = (total + (VALK_GC_PAGE_SIZE - 1)) & ~(VALK_GC_PAGE_SIZE - 1);
   return total;
 }
@@ -555,22 +555,22 @@ typedef struct valk_gc_page_list {
   pthread_mutex_t lock;
   valk_gc_page2_t *all_pages;           // All pages for this class
   valk_gc_page2_t *partial_pages;       // Pages with free slots
-  u64 num_pages;
-  _Atomic u64 total_slots;
-  _Atomic u64 used_slots;
+  sz num_pages;
+  _Atomic sz total_slots;
+  _Atomic sz used_slots;
   _Atomic u32 next_page_offset;    // For allocation within virtual region
   u16 slot_size;                   // Cached
   u16 slots_per_page;              // Cached
-  u64 region_start;                  // Offset from heap base to this class's region
-  u64 region_size;                   // Maximum size of this class's region
-  u64 page_size;                     // Cached page size for this class
+  sz region_start;                  // Offset from heap base to this class's region
+  sz region_size;                   // Maximum size of this class's region
+  sz page_size;                     // Cached page size for this class
 } valk_gc_page_list_t;
 
 // Large object tracking (>4KB allocations)
 typedef struct valk_gc_large_obj {
   struct valk_gc_large_obj *next;
   void *data;                           // mmap'd region
-  u64 size;                          // Allocation size
+  sz size;                          // Allocation size
   bool marked;                          // GC mark
 } valk_gc_large_obj_t;
 
@@ -588,19 +588,19 @@ typedef struct valk_gc_tlab2 {
 struct valk_gc_heap2 {
   valk_mem_allocator_e type;            // VALK_ALLOC_GC_HEAP
   void *base;                           // mmap'd base (PROT_NONE reserved)
-  u64 reserved;                      // Total virtual reservation
+  sz reserved;                      // Total virtual reservation
   
   valk_gc_page_list_t classes[VALK_GC_NUM_SIZE_CLASSES];
   
   valk_gc_large_obj_t *large_objects;   // Linked list of large allocations
   pthread_mutex_t large_lock;
   
-  _Atomic u64 committed_bytes;       // Physical pages committed
-  _Atomic u64 used_bytes;            // Bytes in allocated slots
-  _Atomic u64 large_object_bytes;    // Bytes in large objects
+  _Atomic sz committed_bytes;       // Physical pages committed
+  _Atomic sz used_bytes;            // Bytes in allocated slots
+  _Atomic sz large_object_bytes;    // Bytes in large objects
   
-  u64 hard_limit;                    // Absolute maximum (abort if exceeded)
-  u64 soft_limit;                    // Emergency GC trigger
+  sz hard_limit;                    // Absolute maximum (abort if exceeded)
+  sz soft_limit;                    // Emergency GC trigger
   u8 gc_threshold_pct;             // Normal GC trigger (% of committed)
   u8 gc_target_pct;                // Target usage after GC (informational)
   u32 min_gc_interval_ms;          // Minimum ms between GC cycles
@@ -610,8 +610,8 @@ struct valk_gc_heap2 {
   bool in_emergency_gc;
   
   _Atomic u64 collections;
-  _Atomic u64 bytes_allocated_total;
-  _Atomic u64 bytes_reclaimed_total;
+  _Atomic sz bytes_allocated_total;
+  _Atomic sz bytes_reclaimed_total;
   
   valk_lenv_t *root_env;                // Root environment for marking
   valk_gc_heap_stats_t stats;           // Telemetry statistics
@@ -619,20 +619,20 @@ struct valk_gc_heap2 {
 };
 
 // Initialize new multi-class heap
-valk_gc_heap2_t *valk_gc_heap2_create(u64 hard_limit);
+valk_gc_heap2_t *valk_gc_heap2_create(sz hard_limit);
 
 // Destroy heap and release all memory
 void valk_gc_heap2_destroy(valk_gc_heap2_t *heap);
 
 // Allocate from heap (selects size class or large object path)
-void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, u64 bytes);
+void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes);
 
 // Reallocate - grow or shrink allocation
-void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, u64 new_size);
+void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, sz new_size);
 
 // Get current usage
-static inline u64 valk_gc_heap2_used_bytes(valk_gc_heap2_t *heap) {
-  u64 total = atomic_load(&heap->large_object_bytes);
+static inline sz valk_gc_heap2_used_bytes(valk_gc_heap2_t *heap) {
+  sz total = atomic_load(&heap->large_object_bytes);
   for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     total += atomic_load(&heap->classes[c].used_slots) * valk_gc_size_classes[c];
   }
@@ -706,17 +706,17 @@ static inline bool valk_gc_page2_is_allocated(valk_gc_page2_t *page, u32 slot) {
 bool valk_gc_mark_large_object(valk_gc_heap2_t *heap, void *ptr);
 
 // Sweep a single page, returns number of slots freed
-u64 valk_gc_sweep_page2(valk_gc_page2_t *page);
+sz valk_gc_sweep_page2(valk_gc_page2_t *page);
 
 // Sweep all large objects, returns bytes freed
-u64 valk_gc_sweep_large_objects(valk_gc_heap2_t *heap);
+sz valk_gc_sweep_large_objects(valk_gc_heap2_t *heap);
 
 // Rebuild partial_pages lists after sweep
 void valk_gc_rebuild_partial_lists(valk_gc_heap2_t *heap);
 
 // Reclaim empty pages (release physical memory via madvise)
 // Returns number of pages reclaimed
-u64 valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap);
+sz valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap);
 
 // ============================================================================
 // Phase 3: Memory Limits and GC Cycle
@@ -724,15 +724,15 @@ u64 valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap);
 
 // GC statistics for diagnostics
 typedef struct valk_gc_stats2 {
-  u64 used_bytes;
-  u64 committed_bytes;
-  u64 large_object_bytes;
-  u64 hard_limit;
-  u64 soft_limit;
-  u64 class_used_slots[VALK_GC_NUM_SIZE_CLASSES];
-  u64 class_total_slots[VALK_GC_NUM_SIZE_CLASSES];
+  sz used_bytes;
+  sz committed_bytes;
+  sz large_object_bytes;
+  sz hard_limit;
+  sz soft_limit;
+  sz class_used_slots[VALK_GC_NUM_SIZE_CLASSES];
+  sz class_total_slots[VALK_GC_NUM_SIZE_CLASSES];
   u64 collections;
-  u64 bytes_reclaimed_total;
+  sz bytes_reclaimed_total;
 } valk_gc_stats2_t;
 
 // Get heap statistics
@@ -740,17 +740,17 @@ void valk_gc_heap2_get_stats(valk_gc_heap2_t *heap, valk_gc_stats2_t *out);
 
 // Run a full GC collection cycle (mark + sweep)
 // Returns bytes reclaimed
-u64 valk_gc_heap2_collect(valk_gc_heap2_t *heap);
+sz valk_gc_heap2_collect(valk_gc_heap2_t *heap);
 
 // Auto-select single-threaded or parallel collection based on registered threads
-u64 valk_gc_heap2_collect_auto(valk_gc_heap2_t *heap);
+sz valk_gc_heap2_collect_auto(valk_gc_heap2_t *heap);
 
 // Reset all TLABs after GC
 void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab);
 
 // OOM abort with diagnostics (never returns)
 __attribute__((noreturn))
-void valk_gc_oom_abort(valk_gc_heap2_t *heap, u64 requested);
+void valk_gc_oom_abort(valk_gc_heap2_t *heap, sz requested);
 
 // ============================================================================
 // Phase 4: Mark Phase for heap2
@@ -772,7 +772,7 @@ void valk_gc_heap2_parallel_mark(valk_gc_heap2_t *heap);
 
 void valk_gc_heap2_parallel_sweep(valk_gc_heap2_t *heap);
 
-u64 valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap);
+sz valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap);
 
 bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap);
 
@@ -793,10 +793,10 @@ typedef struct valk_gc_page_pool {
   pthread_mutex_t lock;
   valk_gc_page_t *all_pages;      // All allocated pages (for sweep)
   valk_gc_page_t *partial_pages;  // Pages with free space
-  u64 num_pages;
-  _Atomic u64 total_slots;
-  _Atomic u64 used_slots;
-  _Atomic u64 gc_threshold;    // Trigger GC when used_slots exceeds
+  sz num_pages;
+  _Atomic sz total_slots;
+  _Atomic sz used_slots;
+  _Atomic sz gc_threshold;    // Trigger GC when used_slots exceeds
 } valk_gc_page_pool_t;
 
 // TLAB (Thread-Local Allocation Buffer)
@@ -833,8 +833,8 @@ static inline void *valk_gc_tlab_alloc(valk_gc_tlab_t *tlab) {
 
 // Get page pool statistics
 void valk_gc_page_pool_stats(valk_gc_page_pool_t *pool, 
-                              u64 *out_pages, u64 *out_total, 
-                              u64 *out_used);
+                              sz *out_pages, sz *out_total, 
+                              sz *out_used);
 
 // ============================================================================
 // Phase 2: GC Triggering and Participation
@@ -849,7 +849,7 @@ void valk_gc_participate(void);
 // ============================================================================
 
 typedef struct valk_gc_root {
-  u64 saved_count;
+  sz saved_count;
 } valk_gc_root_t;
 
 static inline valk_gc_root_t valk_gc_root_push(valk_lval_t *val);
@@ -895,7 +895,7 @@ extern valk_gc_page_pool_t valk_gc_global_pool;
 void valk_gc_global_pool_init(void);
 void valk_gc_global_pool_destroy(void);
 
-void *valk_gc_tlab_alloc_slow(u64 bytes);
+void *valk_gc_tlab_alloc_slow(sz bytes);
 
 // ============================================================================
 // Root Stack Inline Implementations
@@ -914,7 +914,7 @@ static inline valk_gc_root_t valk_gc_root_push(valk_lval_t *val) {
                                sizeof(valk_lval_t*) * ctx->root_stack_capacity);
   }
   
-  u64 saved = ctx->root_stack_count;
+  sz saved = ctx->root_stack_count;
   ctx->root_stack[ctx->root_stack_count++] = val;
   return (valk_gc_root_t){ saved };
 }

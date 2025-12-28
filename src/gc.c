@@ -24,7 +24,7 @@ valk_gc_page_pool_t valk_gc_global_pool = {0};
 static bool __global_pool_initialized = false;
 
 // Portable barrier implementation
-void valk_barrier_init(valk_barrier_t* b, u64 count) {
+void valk_barrier_init(valk_barrier_t* b, sz count) {
   pthread_mutex_init(&b->mutex, NULL);
   pthread_cond_init(&b->cond, NULL);
   b->count = count;
@@ -39,7 +39,7 @@ void valk_barrier_destroy(valk_barrier_t* b) {
 
 void valk_barrier_wait(valk_barrier_t* b) {
   pthread_mutex_lock(&b->mutex);
-  u64 my_phase = b->phase;
+  sz my_phase = b->phase;
   b->waiting++;
   if (b->waiting == b->count) {
     b->waiting = 0;
@@ -87,8 +87,8 @@ void valk_gc_mark_queue_init(valk_gc_mark_queue_t* q) {
 }
 
 bool valk_gc_mark_queue_push(valk_gc_mark_queue_t* q, valk_lval_t* val) {
-  u64 b = atomic_load_explicit(&q->bottom, memory_order_relaxed);
-  u64 t = atomic_load_explicit(&q->top, memory_order_acquire);
+  sz b = atomic_load_explicit(&q->bottom, memory_order_relaxed);
+  sz t = atomic_load_explicit(&q->top, memory_order_acquire);
   
   if (b - t >= VALK_GC_MARK_QUEUE_SIZE) {
     return false;  // Queue full
@@ -102,8 +102,8 @@ bool valk_gc_mark_queue_push(valk_gc_mark_queue_t* q, valk_lval_t* val) {
 }
 
 valk_lval_t* valk_gc_mark_queue_pop(valk_gc_mark_queue_t* q) {
-  u64 b = atomic_load_explicit(&q->bottom, memory_order_relaxed);
-  u64 t = atomic_load_explicit(&q->top, memory_order_relaxed);
+  sz b = atomic_load_explicit(&q->bottom, memory_order_relaxed);
+  sz t = atomic_load_explicit(&q->top, memory_order_relaxed);
   
   if (t >= b) {
     return NULL;
@@ -133,9 +133,9 @@ valk_lval_t* valk_gc_mark_queue_pop(valk_gc_mark_queue_t* q) {
 }
 
 valk_lval_t* valk_gc_mark_queue_steal(valk_gc_mark_queue_t* q) {
-  u64 t = atomic_load_explicit(&q->top, memory_order_acquire);
+  sz t = atomic_load_explicit(&q->top, memory_order_acquire);
   atomic_thread_fence(memory_order_seq_cst);
-  u64 b = atomic_load_explicit(&q->bottom, memory_order_acquire);
+  sz b = atomic_load_explicit(&q->bottom, memory_order_acquire);
   
   if (t >= b) {
     return NULL;
@@ -152,8 +152,8 @@ valk_lval_t* valk_gc_mark_queue_steal(valk_gc_mark_queue_t* q) {
 }
 
 bool valk_gc_mark_queue_empty(valk_gc_mark_queue_t* q) {
-  u64 t = atomic_load_explicit(&q->top, memory_order_acquire);
-  u64 b = atomic_load_explicit(&q->bottom, memory_order_acquire);
+  sz t = atomic_load_explicit(&q->top, memory_order_acquire);
+  sz b = atomic_load_explicit(&q->bottom, memory_order_acquire);
   return t >= b;
 }
 
@@ -401,8 +401,8 @@ found:;
 }
 
 void valk_gc_page_pool_stats(valk_gc_page_pool_t *pool, 
-                              u64 *out_pages, u64 *out_total, 
-                              u64 *out_used) {
+                              sz *out_pages, sz *out_total, 
+                              sz *out_used) {
   if (out_pages) *out_pages = pool->num_pages;
   if (out_total) *out_total = atomic_load(&pool->total_slots);
   if (out_used) *out_used = atomic_load(&pool->used_slots);
@@ -838,7 +838,7 @@ void valk_gc_global_pool_destroy(void) {
   __global_pool_initialized = false;
 }
 
-void *valk_gc_tlab_alloc_slow(u64 bytes) {
+void *valk_gc_tlab_alloc_slow(sz bytes) {
   if (bytes > VALK_GC_SLOT_SIZE) {
     VALK_ERROR("TLAB allocation too large: %zu > %d", bytes, VALK_GC_SLOT_SIZE);
     return NULL;
@@ -911,14 +911,14 @@ valk_lval_t* valk_lval_follow_forward(valk_lval_t* v) {
 // ============================================================================
 
 // Initialize GC heap (now delegates to valk_gc_heap2_create)
-valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(u64 hard_limit) {
+valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(sz hard_limit) {
   return valk_gc_heap2_create(hard_limit);
 }
 
 // Set hard limit for GC heap
-void valk_gc_set_hard_limit(valk_gc_malloc_heap_t* heap, u64 limit) {
+void valk_gc_set_hard_limit(valk_gc_malloc_heap_t* heap, sz limit) {
   if (!heap) return;
-  u64 used = valk_gc_heap2_used_bytes(heap);
+  sz used = valk_gc_heap2_used_bytes(heap);
   if (limit < used) {
     VALK_WARN("Cannot set hard limit below current usage (%zu < %zu)", limit, used);
     return;
@@ -935,7 +935,7 @@ void valk_gc_malloc_set_root(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env)
 // Get heap usage as percentage (0-100)
 u8 valk_gc_heap_usage_pct(valk_gc_malloc_heap_t* heap) {
   if (!heap || heap->hard_limit == 0) return 0;
-  u64 used = valk_gc_heap2_used_bytes(heap);
+  sz used = valk_gc_heap2_used_bytes(heap);
   u8 pct = (u8)((used * 100) / heap->hard_limit);
   return pct > 100 ? 100 : pct;
 }
@@ -965,7 +965,7 @@ bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap) {
 }
 
 // Allocate from GC heap (delegates to heap2)
-void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, u64 bytes) {
+void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, sz bytes) {
   return valk_gc_heap2_alloc(heap, bytes);
 }
 
@@ -975,7 +975,7 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, u64 bytes) {
 // ============================================================================
 
 // Perform mark & sweep collection (delegates to heap2)
-u64 valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root) {
+sz valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root) {
   if (!heap) return 0;
   (void)additional_root;
   return valk_gc_heap2_collect(heap);
@@ -998,8 +998,8 @@ void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
 
 void valk_gc_get_runtime_metrics(valk_gc_malloc_heap_t* heap,
                                   u64* cycles, u64* pause_us_total,
-                                  u64* pause_us_max, u64* reclaimed,
-                                  u64* heap_used, u64* heap_total) {
+                                  u64* pause_us_max, sz* reclaimed,
+                                  sz* heap_used, sz* heap_total) {
   if (!heap) return;
 
   if (cycles) *cycles = atomic_load(&heap->runtime_metrics.cycles_total);
@@ -1011,17 +1011,17 @@ void valk_gc_get_runtime_metrics(valk_gc_malloc_heap_t* heap,
   if (heap_total) *heap_total = heap->hard_limit;
 }
 
-u64 valk_gc_get_allocated_bytes_total(valk_gc_malloc_heap_t* heap) {
+sz valk_gc_get_allocated_bytes_total(valk_gc_malloc_heap_t* heap) {
   if (!heap) return 0;
   return atomic_load(&heap->runtime_metrics.allocated_bytes_total);
 }
 
 u8 valk_gc_get_last_efficiency(valk_gc_malloc_heap_t* heap) {
   if (!heap) return 0;
-  u64 before = atomic_load(&heap->runtime_metrics.last_heap_before_gc);
-  u64 reclaimed = atomic_load(&heap->runtime_metrics.last_reclaimed);
+  sz before = atomic_load(&heap->runtime_metrics.last_heap_before_gc);
+  sz reclaimed = atomic_load(&heap->runtime_metrics.last_reclaimed);
   if (before == 0) return 0;
-  u64 pct = (reclaimed * 100) / before;
+  sz pct = (reclaimed * 100) / before;
   return (u8)(pct > 100 ? 100 : pct);
 }
 
@@ -1081,12 +1081,12 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
 
   fprintf(stderr, "\n=== GC Heap Statistics ===\n");
   u8 usage_pct = valk_gc_heap_usage_pct(heap);
-  fprintf(stderr, "Heap usage:       %u%% (threshold: %u%%, hard limit: %llu bytes)\n",
-          usage_pct, heap->gc_threshold_pct, (unsigned long long)heap->hard_limit);
-  fprintf(stderr, "Used bytes:       %llu bytes\n", (unsigned long long)stats.used_bytes);
-  fprintf(stderr, "Committed bytes:  %llu bytes\n", (unsigned long long)stats.committed_bytes);
-  fprintf(stderr, "Large objects:    %llu bytes\n", (unsigned long long)stats.large_object_bytes);
-  fprintf(stderr, "Peak usage:       %llu bytes\n", (unsigned long long)heap->stats.peak_usage);
+  fprintf(stderr, "Heap usage:       %u%% (threshold: %u%%, hard limit: %zu bytes)\n",
+          usage_pct, heap->gc_threshold_pct, heap->hard_limit);
+  fprintf(stderr, "Used bytes:       %zu bytes\n", stats.used_bytes);
+  fprintf(stderr, "Committed bytes:  %zu bytes\n", stats.committed_bytes);
+  fprintf(stderr, "Large objects:    %zu bytes\n", stats.large_object_bytes);
+  fprintf(stderr, "Peak usage:       %zu bytes\n", heap->stats.peak_usage);
   fprintf(stderr, "Collections:      %llu\n", (unsigned long long)stats.collections);
   fprintf(stderr, "Emergency GCs:    %llu\n", (unsigned long long)heap->stats.emergency_collections);
 
@@ -1103,7 +1103,7 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
   if (heap->stats.evacuations_from_scratch > 0) {
     fprintf(stderr, "--- Evacuation Stats ---\n");
     fprintf(stderr, "Values evacuated: %llu\n", (unsigned long long)heap->stats.evacuations_from_scratch);
-    fprintf(stderr, "Bytes evacuated:  %llu\n", (unsigned long long)heap->stats.evacuation_bytes);
+    fprintf(stderr, "Bytes evacuated:  %zu\n", heap->stats.evacuation_bytes);
     fprintf(stderr, "Pointers fixed:   %llu\n", (unsigned long long)heap->stats.evacuation_pointer_fixups);
   }
   fprintf(stderr, "=========================\n\n");
@@ -1117,15 +1117,15 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* h
   if (scratch != NULL) {
     double usage = (double)scratch->offset / scratch->capacity * 100.0;
     fprintf(out, "Scratch Arena:\n");
-    fprintf(out, "  Usage:       %.1f%% (%llu / %llu bytes)\n",
-            usage, (unsigned long long)scratch->offset, (unsigned long long)scratch->capacity);
-    fprintf(out, "  High Water:  %llu bytes\n", (unsigned long long)scratch->stats.high_water_mark);
+    fprintf(out, "  Usage:       %.1f%% (%zu / %zu bytes)\n",
+            usage, scratch->offset, scratch->capacity);
+    fprintf(out, "  High Water:  %zu bytes\n", scratch->stats.high_water_mark);
     fprintf(out, "  Allocations: %llu\n", (unsigned long long)scratch->stats.total_allocations);
     fprintf(out, "  Resets:      %llu\n", (unsigned long long)scratch->stats.num_resets);
     fprintf(out, "  Checkpoints: %llu\n", (unsigned long long)scratch->stats.num_checkpoints);
     if (scratch->stats.overflow_fallbacks > 0) {
-      fprintf(out, "  Overflows:   %llu (%llu bytes)\n",
-              (unsigned long long)scratch->stats.overflow_fallbacks, (unsigned long long)scratch->stats.overflow_bytes);
+      fprintf(out, "  Overflows:   %llu (%zu bytes)\n",
+              (unsigned long long)scratch->stats.overflow_fallbacks, scratch->stats.overflow_bytes);
     }
     fprintf(out, "\n");
   }
@@ -1136,13 +1136,13 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* h
 
     double usage = (double)stats.used_bytes / heap->hard_limit * 100.0;
     fprintf(out, "GC Heap (heap2):\n");
-    fprintf(out, "  Usage:       %.1f%% (%llu / %llu bytes)\n",
-            usage, (unsigned long long)stats.used_bytes, (unsigned long long)heap->hard_limit);
-    fprintf(out, "  Committed:   %llu bytes\n", (unsigned long long)stats.committed_bytes);
-    fprintf(out, "  Large objs:  %llu bytes\n", (unsigned long long)stats.large_object_bytes);
+    fprintf(out, "  Usage:       %.1f%% (%zu / %zu bytes)\n",
+            usage, stats.used_bytes, heap->hard_limit);
+    fprintf(out, "  Committed:   %zu bytes\n", stats.committed_bytes);
+    fprintf(out, "  Large objs:  %zu bytes\n", stats.large_object_bytes);
     fprintf(out, "  Collections: %llu\n", (unsigned long long)stats.collections);
-    fprintf(out, "  Reclaimed:   %llu bytes total\n",
-            (unsigned long long)stats.bytes_reclaimed_total);
+    fprintf(out, "  Reclaimed:   %zu bytes total\n",
+            stats.bytes_reclaimed_total);
   }
 
   fprintf(out, "=========================\n\n");
@@ -1313,7 +1313,7 @@ bool valk_gc_should_collect_arena(valk_mem_arena_t* arena) {
   return (arena->offset > (arena->capacity * 9 / 10));
 }
 
-u64 valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena) {
+sz valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena) {
   if (root_env == NULL) {
     return 0;
   }
@@ -1322,7 +1322,7 @@ u64 valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena) {
   valk_gc_mark_env(root_env);
 
   // Count dead objects (can't actually free from arena)
-  u64 dead_count = 0;
+  sz dead_count = 0;
   u8* ptr = arena->heap;
   u8* end = arena->heap + arena->offset;
 
@@ -1352,8 +1352,8 @@ u64 valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena) {
 
 typedef struct {
   valk_lenv_t** items;
-  u64 count;
-  u64 capacity;
+  sz count;
+  sz capacity;
 } valk_env_worklist_t;
 
 static void env_worklist_init(valk_env_worklist_t* wl) {
@@ -1374,7 +1374,7 @@ static void env_worklist_free(valk_env_worklist_t* wl) {
 static void env_worklist_push(valk_env_worklist_t* wl, valk_lenv_t* env) {
   if (env == NULL) return;
   if (wl->count >= wl->capacity) {
-    u64 new_cap = wl->capacity * 2;
+    sz new_cap = wl->capacity * 2;
     valk_lenv_t** new_items = realloc(wl->items, new_cap * sizeof(valk_lenv_t*));
     if (new_items == NULL) {
       VALK_ERROR("Failed to grow env worklist");
@@ -1432,7 +1432,7 @@ static void evac_add_evacuated(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
 
   // Grow if at capacity
   if (ctx->evacuated_count >= ctx->evacuated_capacity) {
-    u64 new_cap = ctx->evacuated_capacity * 2;
+    sz new_cap = ctx->evacuated_capacity * 2;
     valk_lval_t** new_list = realloc(ctx->evacuated, new_cap * sizeof(valk_lval_t*));
     if (new_list == NULL) {
       VALK_ERROR("Failed to grow evacuated list");
@@ -1451,7 +1451,7 @@ static void evac_worklist_push(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
 
   // Grow if at capacity
   if (ctx->worklist_count >= ctx->worklist_capacity) {
-    u64 new_cap = ctx->worklist_capacity * 2;
+    sz new_cap = ctx->worklist_capacity * 2;
     valk_lval_t** new_list = realloc(ctx->worklist, new_cap * sizeof(valk_lval_t*));
     if (new_list == NULL) {
       VALK_ERROR("Failed to grow evacuation worklist");
@@ -2196,7 +2196,7 @@ static valk_gc_page2_t *valk_gc_page2_alloc(valk_gc_heap2_t *heap, u8 size_class
 }
 
 // Create new multi-class heap
-valk_gc_heap2_t *valk_gc_heap2_create(u64 hard_limit) {
+valk_gc_heap2_t *valk_gc_heap2_create(sz hard_limit) {
   valk_gc_heap2_t *heap = calloc(1, sizeof(valk_gc_heap2_t));
   if (!heap) {
     VALK_ERROR("Failed to allocate heap structure");
@@ -2216,12 +2216,12 @@ valk_gc_heap2_t *valk_gc_heap2_create(u64 hard_limit) {
     return NULL;
   }
   
-  u64 region_size = heap->reserved / VALK_GC_NUM_SIZE_CLASSES;
-  region_size = region_size & ~(u64)4095;
+  sz region_size = heap->reserved / VALK_GC_NUM_SIZE_CLASSES;
+  region_size = region_size & ~(sz)4095;
   
   for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     valk_gc_page_list_init(&heap->classes[c], c);
-    heap->classes[c].region_start = (u64)c * region_size;
+    heap->classes[c].region_start = (sz)c * region_size;
     heap->classes[c].region_size = region_size;
   }
   
@@ -2425,7 +2425,7 @@ static void *valk_gc_heap2_alloc_large(valk_gc_heap2_t *heap, u64 bytes) {
   return data;
 }
 
-void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, u64 bytes) {
+void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes) {
   if (bytes == 0) return NULL;
   
   if (bytes > VALK_GC_LARGE_THRESHOLD) {
@@ -2437,8 +2437,8 @@ void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, u64 bytes) {
     return valk_gc_heap2_alloc_large(heap, bytes);
   }
   
-  u64 alloc_size = valk_gc_size_classes[size_class];
-  u64 current = valk_gc_heap2_used_bytes(heap);
+  sz alloc_size = valk_gc_size_classes[size_class];
+  sz current = valk_gc_heap2_used_bytes(heap);
   
   if (current + alloc_size > heap->hard_limit) {
     if (!valk_gc_heap2_try_emergency_gc(heap, alloc_size)) {
@@ -2480,7 +2480,7 @@ void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, u64 bytes) {
   return ptr;
 }
 
-void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, u64 new_size) {
+void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, sz new_size) {
   if (ptr == NULL) {
     return valk_gc_heap2_alloc(heap, new_size);
   }
@@ -2490,7 +2490,7 @@ void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, u64 new_size) {
   
   valk_gc_ptr_location_t loc;
   if (valk_gc_ptr_to_location(heap, ptr, &loc)) {
-    u64 old_size = valk_gc_size_classes[loc.size_class];
+    sz old_size = valk_gc_size_classes[loc.size_class];
     if (new_size <= old_size) {
       return ptr;
     }
@@ -2622,10 +2622,10 @@ bool valk_gc_mark_large_object(valk_gc_heap2_t *heap, void *ptr) {
   return false;
 }
 
-u64 valk_gc_sweep_page2(valk_gc_page2_t *page) {
+sz valk_gc_sweep_page2(valk_gc_page2_t *page) {
   if (!page) return 0;
   
-  u64 freed = 0;
+  sz freed = 0;
   u16 slots = page->slots_per_page;
   u16 slot_size = valk_gc_size_classes[page->size_class];
   
@@ -2643,7 +2643,7 @@ u64 valk_gc_sweep_page2(valk_gc_page2_t *page) {
     u64 garbage = alloc & ~mark;
     
     if (garbage != 0) {
-      freed += (u64)__builtin_popcountll(garbage);
+      freed += (sz)__builtin_popcountll(garbage);
       alloc_words[w] = alloc & mark;
       
       u64 temp = garbage;
@@ -2674,10 +2674,10 @@ u64 valk_gc_sweep_page2(valk_gc_page2_t *page) {
   return freed;
 }
 
-u64 valk_gc_sweep_large_objects(valk_gc_heap2_t *heap) {
+sz valk_gc_sweep_large_objects(valk_gc_heap2_t *heap) {
   if (!heap) return 0;
   
-  u64 freed = 0;
+  sz freed = 0;
   
   pthread_mutex_lock(&heap->large_lock);
   
@@ -2728,10 +2728,10 @@ void valk_gc_rebuild_partial_lists(valk_gc_heap2_t *heap) {
   }
 }
 
-u64 valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap) {
+sz valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap) {
   if (!heap) return 0;
   
-  u64 pages_reclaimed = 0;
+  sz pages_reclaimed = 0;
   
   for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     valk_gc_page_list_t *list = &heap->classes[c];
@@ -2916,20 +2916,20 @@ void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab) {
 }
 
 __attribute__((noreturn))
-void valk_gc_oom_abort(valk_gc_heap2_t *heap, u64 requested) {
+void valk_gc_oom_abort(valk_gc_heap2_t *heap, sz requested) {
   fprintf(stderr, "\n");
   fprintf(stderr, "================================================================\n");
   fprintf(stderr, "                    FATAL: OUT OF MEMORY                        \n");
   fprintf(stderr, "================================================================\n");
-  fprintf(stderr, " Requested:    %12llu bytes\n", (unsigned long long)requested);
+  fprintf(stderr, " Requested:    %12zu bytes\n", requested);
   
   if (heap) {
     valk_gc_stats2_t stats;
     valk_gc_heap2_get_stats(heap, &stats);
     
-    fprintf(stderr, " Used:         %12llu bytes\n", (unsigned long long)stats.used_bytes);
-    fprintf(stderr, " Hard Limit:   %12llu bytes\n", (unsigned long long)stats.hard_limit);
-    fprintf(stderr, " Committed:    %12llu bytes\n", (unsigned long long)stats.committed_bytes);
+    fprintf(stderr, " Used:         %12zu bytes\n", stats.used_bytes);
+    fprintf(stderr, " Hard Limit:   %12zu bytes\n", stats.hard_limit);
+    fprintf(stderr, " Committed:    %12zu bytes\n", stats.committed_bytes);
     fprintf(stderr, "----------------------------------------------------------------\n");
     fprintf(stderr, " Per-Class Usage:\n");
     for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
@@ -2940,20 +2940,20 @@ void valk_gc_oom_abort(valk_gc_heap2_t *heap, u64 requested) {
                 (unsigned long long)stats.class_used_slots[c], (unsigned long long)stats.class_total_slots[c], (unsigned long long)pct);
       }
     }
-    fprintf(stderr, " Large Objects: %12llu bytes\n", (unsigned long long)stats.large_object_bytes);
+    fprintf(stderr, " Large Objects: %12zu bytes\n", stats.large_object_bytes);
     fprintf(stderr, "----------------------------------------------------------------\n");
-    fprintf(stderr, " GC cycles: %llu, Total reclaimed: %llu bytes\n",
+    fprintf(stderr, " GC cycles: %llu, Total reclaimed: %zu bytes\n",
             (unsigned long long)stats.collections,
-            (unsigned long long)stats.bytes_reclaimed_total);
+            stats.bytes_reclaimed_total);
     fprintf(stderr, "----------------------------------------------------------------\n");
-    fprintf(stderr, " Increase limit: VALK_HEAP_HARD_LIMIT=%llu\n", (unsigned long long)(stats.hard_limit * 2));
+    fprintf(stderr, " Increase limit: VALK_HEAP_HARD_LIMIT=%zu\n", stats.hard_limit * 2);
   }
   fprintf(stderr, "================================================================\n");
   
   abort();
 }
 
-u64 valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
+sz valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
   if (!heap) return 0;
   
   u64 start_ns = uv_hrtime();
@@ -2961,9 +2961,9 @@ u64 valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
   atomic_store(&heap->gc_in_progress, true);
   atomic_fetch_add(&heap->collections, 1);
   
-  u64 bytes_before = valk_gc_heap2_used_bytes(heap);
-  u64 freed_slots_total = 0;
-  u64 freed_large = 0;
+  sz bytes_before = valk_gc_heap2_used_bytes(heap);
+  sz freed_slots_total = 0;
+  sz freed_large = 0;
   
   valk_gc_heap2_mark_roots(heap);
   
@@ -2971,7 +2971,7 @@ u64 valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
     valk_gc_page_list_t *list = &heap->classes[c];
     
     for (valk_gc_page2_t *page = list->all_pages; page != NULL; page = page->next) {
-      u64 freed = valk_gc_sweep_page2(page);
+      sz freed = valk_gc_sweep_page2(page);
       freed_slots_total += freed;
       atomic_fetch_sub(&list->used_slots, freed);
     }
@@ -2981,10 +2981,10 @@ u64 valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
   
   valk_gc_rebuild_partial_lists(heap);
   
-  u64 pages_reclaimed = valk_gc_reclaim_empty_pages(heap);
+  sz pages_reclaimed = valk_gc_reclaim_empty_pages(heap);
   
-  u64 bytes_after = valk_gc_heap2_used_bytes(heap);
-  u64 reclaimed = 0;
+  sz bytes_after = valk_gc_heap2_used_bytes(heap);
+  sz reclaimed = 0;
   if (bytes_before > bytes_after) {
     reclaimed = bytes_before - bytes_after;
   }
@@ -3014,7 +3014,7 @@ u64 valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
   return reclaimed;
 }
 
-u64 valk_gc_heap2_collect_auto(valk_gc_heap2_t *heap) {
+sz valk_gc_heap2_collect_auto(valk_gc_heap2_t *heap) {
   if (!heap) return 0;
   
   u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
@@ -3338,7 +3338,7 @@ bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
   return true;
 }
 
-u64 valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap) {
+sz valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap) {
   if (!heap) return 0;
   
   u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);

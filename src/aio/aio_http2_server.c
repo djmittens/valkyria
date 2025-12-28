@@ -548,7 +548,17 @@ valk_future *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
       srv->config = valk_http_server_config_default();
     }
 
-    valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
+    valk_err_e ssl_err = valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
+    if (ssl_err != VALK_ERR_SUCCESS) {
+      VALK_ERROR("Failed to initialize SSL context (key=%s, cert=%s)", keyfile, certfile);
+      valk_arc_box *err = valk_arc_box_err("SSL initialization failed");
+      valk_promise p = {.item = res};
+      valk_arc_retain(res);
+      valk_promise_respond(&p, err);
+      valk_arc_release(err);
+      valk_arc_release(box);
+      return res;
+    }
     SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
   }
 

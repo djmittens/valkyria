@@ -154,6 +154,7 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
     valk_mem_init_malloc();
 
     printf("🏃 Running: %s\n", self->name);
+    fflush(stdout);
     self->func(suite, &self->result);
 
     fflush(stdout);
@@ -350,7 +351,7 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
   return result;
 }
 
-static void __attribute__((unused)) valk_print_io(valk_test_t *test) {
+static void valk_print_io(valk_test_t *test) {
   putc('\n', stdout);
   valk_print_police_tape_line(1);
   printf("[STDOUT]");
@@ -418,20 +419,13 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
         // Emoji 🐞 + space = 3 display columns
         printf("🐞 %s%.*s  FAIL : in %" PRIu64 "(%s)\n", test->name, len - 3,
                DOT_FILL, (result->stopTime - result->startTime), precision);
-
-#if VALK_TEST_FORK
         valk_print_io(test);
-#endif
-
         break;
       case VALK_TEST_CRSH:
         // Emoji 🌀 + space = 3 display columns
         printf("🌀 %s%.*s  CRSH : in %" PRIu64 "(%s)\n", test->name, len - 3,
                DOT_FILL, (result->stopTime - result->startTime), precision);
-
-#if VALK_TEST_FORK
         valk_print_io(test);
-#endif
         break;
     }
   }

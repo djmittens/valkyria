@@ -66,17 +66,17 @@ static valk_mem_allocator_t __allocator_malloc = {.type = VALK_ALLOC_MALLOC};
 
 void valk_mem_init_malloc() { valk_thread_ctx.allocator = &__allocator_malloc; }
 
-void valk_buffer_alloc(valk_buffer_t *buf, u64 capacity) {
+void valk_buffer_alloc(valk_buffer_t *buf, sz capacity) {
   buf->capacity = capacity;
   buf->count = 0;
   // TODO(networking): use mmap with page-aligned memory for this instead
   buf->items = valk_mem_alloc(capacity);
 }
 
-void valk_buffer_append(valk_buffer_t *buf, void *bytes, u64 len) {
+void valk_buffer_append(valk_buffer_t *buf, void *bytes, sz len) {
   VALK_ASSERT(
       buf->capacity > (buf->count + len),
-      "Buffer too small !!!  capacity [%llu] :: count [%llu] :: new bytes [%llu]",
+      "Buffer too small !!!  capacity [%zu] :: count [%zu] :: new bytes [%zu]",
       buf->capacity, buf->count, len);
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memcpy(&((char *)buf->items)[buf->count], bytes, len);
@@ -89,17 +89,17 @@ int valk_buffer_is_full(valk_buffer_t *buf) {
 
 static inline bool is_pow2(u64 x) { return x && ((x & (x - 1)) == 0); }
 
-void valk_ring_init(valk_ring_t *self, u64 capacity) {
+void valk_ring_init(valk_ring_t *self, sz capacity) {
   VALK_ASSERT(is_pow2(capacity),
-              "Ring buffer capacity must be pow of 2, to reduce branching, %llu",
+              "Ring buffer capacity must be pow of 2, to reduce branching, %zu",
               capacity);
   self->offset = 0;
   self->capacity = capacity;
   memset(self->items, 0, capacity);
 }
 
-void valk_ring_write(valk_ring_t *self, u8 *data, u64 len) {
-  u64 offset = self->offset;
+void valk_ring_write(valk_ring_t *self, u8 *data, sz len) {
+  sz offset = self->offset;
   u8 *buf = (void *)self->items;
 
   // printf("Offset: %ld\n", offset);
@@ -107,7 +107,7 @@ void valk_ring_write(valk_ring_t *self, u8 *data, u64 len) {
   ///     ^           7
 
   while (len) {
-    u64 dt = self->capacity - offset;
+    sz dt = self->capacity - offset;
 
     if (len < dt) {
       // printf("copying offset %ld: dt: %ld, end: %c\n", offset, len, data[len
@@ -129,21 +129,21 @@ void valk_ring_write(valk_ring_t *self, u8 *data, u64 len) {
   self->offset = offset % self->capacity;
 }
 
-void valk_ring_rewind(valk_ring_t *self, u64 n) {
-  u64 mask = self->capacity - 1;         /* 0111… pattern */
+void valk_ring_rewind(valk_ring_t *self, sz n) {
+  sz mask = self->capacity - 1;         /* 0111… pattern */
   self->offset = (self->offset - n) & mask; /* subtract, then wrap by masking */
 }
 
-void valk_ring_read(valk_ring_t *self, u64 n, void *dst) {
+void valk_ring_read(valk_ring_t *self, sz n, void *dst) {
   /* --- normalise inputs ------------------------------------------ */
-  u64 cap = self->capacity;
-  u64 head = self->offset % cap; /* in case callers misbehave  */
+  sz cap = self->capacity;
+  sz head = self->offset % cap; /* in case callers misbehave  */
   n %= cap;                         /* ignore full extra laps     */
 
   /* --- split request into contiguous chunks ---------------------- */
-  u64 first = cap - head; /* bytes until physical end   */
+  sz first = cap - head; /* bytes until physical end   */
   if (first > n) first = n;  /* clamp to what we need      */
-  u64 second = n - first; /* 0 if we stayed in-range    */
+  sz second = n - first; /* 0 if we stayed in-range    */
 
   const u8 *buf = (const u8 *)self->items;
   u8 *out = (u8 *)dst;
@@ -155,14 +155,14 @@ void valk_ring_read(valk_ring_t *self, u64 n, void *dst) {
   self->offset = (head + n) & (cap - 1); /* cap is power-of-2 – cheap */
 }
 
-void valk_ring_fread(valk_ring_t *self, u64 n, FILE *f) {
+void valk_ring_fread(valk_ring_t *self, sz n, FILE *f) {
   const u8 *base = (const u8 *)self->items;
-  u64 cap = self->capacity;
-  u64 head = self->offset; /* local copy for speed   */
+  sz cap = self->capacity;
+  sz head = self->offset; /* local copy for speed   */
 
   while (n) {
     /* contiguous bytes left in this lap */
-    u64 chunk = cap - head;
+    sz chunk = cap - head;
     if (chunk > n) chunk = n;
 
     fwrite(base + head, 1, chunk, f);
@@ -182,41 +182,41 @@ void valk_ring_print(valk_ring_t *self, FILE *f) {
 
 /// helper: round x up to next multiple of A (A must be a power of two)
 /// return multiple of A
-static inline u64 __valk_mem_align_up(u64 x, u64 A) {
+static inline sz __valk_mem_align_up(sz x, sz A) {
   return (x + A - 1) & ~(A - 1);
 }
 static inline valk_slab_item_t *valk_slab_item_at(valk_slab_t *self,
-                                                  u64 offset) {
+                                                  sz offset) {
 #ifdef VALK_SLAB_TREIBER_STACK
   // No free list in concurrency
-  const u64 freeLen = 0;
+  const sz freeLen = 0;
 #else
-  const u64 freeLen = (sizeof(u64) * self->numItems);
+  const sz freeLen = (sizeof(u64) * self->numItems);
 #endif
-  const u64 itemsLen = valk_slab_item_stride(self->itemSize) * offset;
+  const sz itemsLen = valk_slab_item_stride(self->itemSize) * offset;
 
   VALK_ASSERT(offset < self->numItems,
-              "Offset passed in is out of bounds offset: %llu  numItems %llu",
+              "Offset passed in is out of bounds offset: %zu  numItems %zu",
               offset, self->numItems);
   return (void *)&((char *)self->heap)[freeLen + itemsLen];
 }
 
-valk_slab_t *valk_slab_new(u64 itemSize, u64 numItems) {
-  u64 slabSize = valk_slab_size(itemSize, numItems);
-  VALK_DEBUG("Slab size = %ld", slabSize);
+valk_slab_t *valk_slab_new(sz itemSize, sz numItems) {
+  sz slabSize = valk_slab_size(itemSize, numItems);
+  VALK_DEBUG("Slab size = %zu", slabSize);
   valk_slab_t *res = valk_mem_alloc(slabSize);
   valk_slab_init(res, itemSize, numItems);
   return res;
 }
 
-void valk_slab_init(valk_slab_t *self, u64 itemSize, u64 numItems) {
+void valk_slab_init(valk_slab_t *self, sz itemSize, sz numItems) {
   // TODO(networking): do like mmap and some platform specific slab code
   self->type = VALK_ALLOC_SLAB;
 
   self->itemSize = itemSize;
   self->numItems = numItems;
 
-  for (u64 i = 0; i < numItems; i++) {
+  for (sz i = 0; i < numItems; i++) {
     valk_slab_item_t *item = valk_slab_item_at(self, i);
     item->handle = i;
 #ifdef VALK_SLAB_TREIBER_STACK  // Treiber list
@@ -232,7 +232,7 @@ void valk_slab_init(valk_slab_t *self, u64 itemSize, u64 numItems) {
   __atomic_store_n(&self->peakUsed, 0, __ATOMIC_RELAXED);
 
 #ifdef VALK_METRICS_ENABLED
-  u64 bitmap_bytes = (numItems + 7) / 8;
+  sz bitmap_bytes = (numItems + 7) / 8;
   self->usage_bitmap = calloc(bitmap_bytes, 1);
   __atomic_store_n(&self->bitmap_version, 0, __ATOMIC_RELAXED);
 #endif
@@ -249,7 +249,7 @@ void valk_slab_free(valk_slab_t *self) {
   valk_mem_free(self);
 }
 
-u64 valk_slab_item_stride(u64 itemSize) {
+sz valk_slab_item_stride(sz itemSize) {
   // TODO(networking): when implementing AVX or other instruciton sets might
   // need to expand alignment parameters
   // alignof(max_align_t)  <<- is the minimal required
@@ -258,10 +258,10 @@ u64 valk_slab_item_stride(u64 itemSize) {
   return __valk_mem_align_up(sizeof(valk_slab_item_t) + itemSize, 64);
 }
 
-u64 valk_slab_size(u64 itemSize, u64 numItems) {
-  u64 stride = valk_slab_item_stride(itemSize);
-  VALK_DEBUG("Slab stride = %ld", stride);
-  const u64 freelen = sizeof(u64) * numItems;  // guranteed alignment
+sz valk_slab_size(sz itemSize, sz numItems) {
+  sz stride = valk_slab_item_stride(itemSize);
+  VALK_DEBUG("Slab stride = %zu", stride);
+  const sz freelen = sizeof(u64) * numItems;  // guranteed alignment
 
   return sizeof(valk_slab_t) + freelen + (stride * numItems);
 }
@@ -287,7 +287,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   valk_slab_item_t *res;
 #ifdef VALK_SLAB_TREIBER_STACK  // Threadsafe
   // Atomically check and decrement numFree to avoid TOCTOU race
-  u64 expected, desired;
+  sz expected, desired;
   do {
     expected = __atomic_load_n(&self->numFree, __ATOMIC_ACQUIRE);
     if (expected == 0) {
@@ -299,8 +299,9 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
                                         false, __ATOMIC_ACQ_REL,
                                         __ATOMIC_RELAXED));
 
-  u64 oldTag, newTag;
-  u64 head, next, version;
+  sz oldTag, newTag;
+  sz head, next;
+  u64 version;
   do {
     oldTag = __atomic_load_n(&self->head, __ATOMIC_ACQUIRE);
     head = __valk_slab_offset_unpack(oldTag, &version);
@@ -328,8 +329,8 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
 #endif
 
   // Update peak usage (high water mark) tracking
-  u64 used = self->numItems - __atomic_load_n(&self->numFree, __ATOMIC_RELAXED);
-  u64 current_peak;
+  sz used = self->numItems - __atomic_load_n(&self->numFree, __ATOMIC_RELAXED);
+  sz current_peak;
   do {
     current_peak = __atomic_load_n(&self->peakUsed, __ATOMIC_RELAXED);
     if (used <= current_peak) break;
@@ -370,19 +371,20 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
 
 void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
 #ifdef VALK_SLAB_TREIBER_STACK
-  u64 slot_idx = item->handle;
+  sz slot_idx = item->handle;
 
 #ifdef VALK_METRICS_ENABLED
   if (self->usage_bitmap && slot_idx < self->numItems) {
-    u64 byte_idx = slot_idx / 8;
+    sz byte_idx = slot_idx / 8;
     u8 bit_mask = 1 << (slot_idx % 8);
     __atomic_fetch_and(&self->usage_bitmap[byte_idx], ~bit_mask, __ATOMIC_RELAXED);
     __atomic_fetch_add(&self->bitmap_version, 1, __ATOMIC_RELAXED);
   }
 #endif
 
-  u64 oldTag, newTag;
-  u64 head, version;
+  sz oldTag, newTag;
+  sz head;
+  u64 version;
   do {
     oldTag = __atomic_load_n(&self->head, __ATOMIC_ACQUIRE);
     head = __valk_slab_offset_unpack(oldTag, &version);
@@ -427,14 +429,14 @@ void valk_slab_release_ptr(valk_slab_t *self, void *data) {
 
 //
 /* alignment = power‑of‑two */
-static inline u64 __alignment_adjustment(void *ptr, u64 alignment) {
+static inline sz __alignment_adjustment(void *ptr, sz alignment) {
   uptr addr = (uptr)ptr;
   uptr mask = alignment - 1;               /* 0b…111 */
   uptr misalign = addr & mask;             /* how far we're off */
   return misalign ? (alignment - misalign) : 0; /* bytes to *add* forward */
 }
 
-void valk_mem_arena_init(valk_mem_arena_t *self, u64 capacity) {
+void valk_mem_arena_init(valk_mem_arena_t *self, sz capacity) {
   self->type = VALK_ALLOC_ARENA;
   self->capacity = capacity;
   self->offset = __alignment_adjustment(&self->heap, alignof(max_align_t));
@@ -459,15 +461,15 @@ void valk_mem_arena_reset(valk_mem_arena_t *self) {
 }
 
 // TODO(networking): should probably write some unit tests for all this math
-void *valk_mem_arena_alloc(valk_mem_arena_t *self, u64 bytes) {
+void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes) {
   // Layout: [optional padding][u64 size][padding to align payload][payload]
-  u64 old = __atomic_load_n(&self->offset, __ATOMIC_RELAXED);
+  sz old = __atomic_load_n(&self->offset, __ATOMIC_RELAXED);
   for (;;) {
-    u64 hdr = old + sizeof(u64);
+    sz hdr = old + sizeof(u64);
     // Align payload after header to max_align_t
-    u64 adj = __alignment_adjustment(&self->heap[hdr], alignof(max_align_t));
-    u64 payload = hdr + adj;
-    u64 end = payload + bytes;
+    sz adj = __alignment_adjustment(&self->heap[hdr], alignof(max_align_t));
+    sz payload = hdr + adj;
+    sz end = payload + bytes;
 
     // Check if allocation would exceed capacity - fall back to heap
     if (end >= self->capacity) {
@@ -511,21 +513,21 @@ void valk_mem_arena_print_stats(valk_mem_arena_t *arena, FILE *out) {
   if (arena == NULL || out == NULL) return;
 
   fprintf(out, "\n=== Scratch Arena Statistics ===\n");
-  fprintf(out, "Current usage:     %llu / %llu bytes (%.1f%%)\n",
+  fprintf(out, "Current usage:     %zu / %zu bytes (%.1f%%)\n",
           arena->offset, arena->capacity,
           100.0 * arena->offset / arena->capacity);
-  fprintf(out, "High water mark:   %llu bytes (%.1f%%)\n",
+  fprintf(out, "High water mark:   %zu bytes (%.1f%%)\n",
           arena->stats.high_water_mark,
           100.0 * arena->stats.high_water_mark / arena->capacity);
   fprintf(out, "Total allocations: %llu\n", arena->stats.total_allocations);
-  fprintf(out, "Total bytes:       %llu\n", arena->stats.total_bytes_allocated);
+  fprintf(out, "Total bytes:       %zu\n", arena->stats.total_bytes_allocated);
   fprintf(out, "Reset count:       %llu\n", arena->stats.num_resets);
   fprintf(out, "Checkpoints:       %llu\n", arena->stats.num_checkpoints);
   fprintf(out, "Values evacuated:  %llu\n", arena->stats.values_evacuated);
-  fprintf(out, "Bytes evacuated:   %llu\n", arena->stats.bytes_evacuated);
+  fprintf(out, "Bytes evacuated:   %zu\n", arena->stats.bytes_evacuated);
 
   if (arena->stats.overflow_fallbacks > 0) {
-    fprintf(out, "⚠️  Overflow fallbacks: %llu (%llu bytes)\n",
+    fprintf(out, "⚠️  Overflow fallbacks: %llu (%zu bytes)\n",
             arena->stats.overflow_fallbacks, arena->stats.overflow_bytes);
   }
   fprintf(out, "================================\n\n");
@@ -818,16 +820,16 @@ void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
 }
 #endif
 
-void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, u64 bytes) {
+void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, sz bytes) {
   VALK_ASSERT(self,
               "Thread Local ALLOCATOR has not been initialized, please "
               "initialize it with something like valk_mem_init_malloc()\n "
-              "Failed while trying to alloc %llu",
+              "Failed while trying to alloc %zu",
               bytes);
   // Order by performance.
   switch (self->type) {
     case VALK_ALLOC_NULL:
-      VALK_RAISE("Alloc on NULL allocator %llu", bytes);
+      VALK_RAISE("Alloc on NULL allocator %zu", bytes);
       return NULL;
     case VALK_ALLOC_ARENA:
       return valk_mem_arena_alloc((void *)self, bytes);
@@ -851,18 +853,18 @@ void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, u64 bytes) {
   return NULL;
 }
 
-void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, u64 num,
-                                u64 size) {
+void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, sz num,
+                                sz size) {
   VALK_ASSERT(self,
               "Thread Local ALLOCATOR has not been initialized, please "
               "initialize it with something like valk_mem_init_malloc()\n "
-              "Failed while trying to calloc %llu :: size: %llu",
+              "Failed while trying to calloc %zu :: size: %zu",
               num, size);
   void *res;
   // Order by performance.
   switch (self->type) {
     case VALK_ALLOC_NULL:
-      VALK_RAISE("Calloc on NULL allocator num: %llu :: size: %llu", num, size);
+      VALK_RAISE("Calloc on NULL allocator num: %zu :: size: %zu", num, size);
       res = NULL;
       break;
     case VALK_ALLOC_ARENA:
@@ -890,28 +892,28 @@ void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, u64 num,
 }
 
 void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
-                                 u64 new_size) {
+                                 sz new_size) {
   VALK_ASSERT(self,
               "Thread Local ALLOCATOR has not been initialized, please "
               "initialize it with something like valk_mem_init_malloc()\n "
-              "Failed while trying to calloc %p :: size: %llu",
+              "Failed while trying to calloc %p :: size: %zu",
               ptr, new_size);
 
   // Order by performance.
   switch (self->type) {
     case VALK_ALLOC_NULL:
-      VALK_RAISE("Realloc on NULL allocator ptr: %p :: size: %llu", ptr,
+      VALK_RAISE("Realloc on NULL allocator ptr: %p :: size: %zu", ptr,
                  new_size);
       return NULL;
     case VALK_ALLOC_ARENA: {
       // Copy-alloc semantics for arena realloc
-      u64 old_size = 0;
+      sz old_size = 0;
       if (ptr) {
         old_size = *(((u64 *)ptr) - 1);
       }
       void *np = valk_mem_arena_alloc((void *)self, new_size);
       if (ptr && np) {
-        u64 n = old_size < new_size ? old_size : new_size;
+        sz n = old_size < new_size ? old_size : new_size;
         // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         memcpy(np, ptr, n);
       }
@@ -920,11 +922,11 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
     case VALK_ALLOC_SLAB:
       // slabs are all of the same size, make sure we dont try to resize it to
       // something bigger than the slab
-      u64 slabSize = ((valk_slab_t *)self)->itemSize;
+      sz slabSize = ((valk_slab_t *)self)->itemSize;
       VALK_ASSERT(
           new_size <= slabSize,
           "Realloc with slab allocator is unsafe,\n  tried to allocate more "
-          "memory than fits in a slab\n %llu wanted, but %llu is the size",
+          "memory than fits in a slab\n %zu wanted, but %zu is the size",
           new_size, slabSize);
       return ptr;
     case VALK_ALLOC_GC_HEAP: {
@@ -933,7 +935,7 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
     case VALK_ALLOC_MALLOC:
       return realloc(ptr, new_size);
     case VALK_ALLOC_TLAB:
-      VALK_RAISE("Realloc on TLAB allocator not supported: %p -> %llu", ptr, new_size);
+      VALK_RAISE("Realloc on TLAB allocator not supported: %p -> %zu", ptr, new_size);
       return NULL;
   }
 }
@@ -972,7 +974,7 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
   }
 }
 
-void valk_gc_init(valk_gc_heap_t *self, u64 capacity) {
+void valk_gc_init(valk_gc_heap_t *self, sz capacity) {
   self->free = capacity;
   self->capacity = capacity;
   self->allocator = valk_thread_ctx.allocator;
@@ -990,13 +992,13 @@ void valk_gc_mark(valk_gc_heap_t *self, void *ptr) {
   }
 }
 
-void *valk_gc_alloc(valk_gc_heap_t *heap, u64 size) {
+void *valk_gc_alloc(valk_gc_heap_t *heap, sz size) {
   if ((heap->free - size) == 0) {
     // Try to free some memory to allocate this thing.
     valk_gc_sweep(heap);
     VALK_ASSERT(
         (heap->free - size) == 0,
-        "Failed free enough memory to allocate %llu bytes on heap with %llu size",
+        "Failed free enough memory to allocate %zu bytes on heap with %zu size",
         size, heap->capacity);
   }
 
@@ -1009,7 +1011,7 @@ void *valk_gc_alloc(valk_gc_heap_t *heap, u64 size) {
   return res + 1;  // skip over to the good stuff
 }
 
-void *valk_gc_realloc(valk_gc_heap_t *heap, void *ptr, u64 size) {
+void *valk_gc_realloc(valk_gc_heap_t *heap, void *ptr, sz size) {
   valk_gc_chunk_t *self = ptr;
   --self;  // get ourselves the header
   self = valk_mem_allocator_realloc(heap->allocator, self,
@@ -1046,7 +1048,7 @@ void valk_slab_bitmap_snapshot(valk_slab_t *slab, valk_slab_bitmap_t *out) {
 
   if (!slab->usage_bitmap) return;
 
-  u64 bitmap_bytes = (slab->numItems + 7) / 8;
+  sz bitmap_bytes = (slab->numItems + 7) / 8;
   out->data = malloc(bitmap_bytes);
   if (!out->data) return;
 
@@ -1081,9 +1083,9 @@ void valk_bitmap_delta_free(valk_bitmap_delta_t *delta) {
   }
 }
 
-static bool delta_add_run(valk_bitmap_delta_t *delta, u64 offset, u64 count, u8 byte) {
+static bool delta_add_run(valk_bitmap_delta_t *delta, sz offset, sz count, u8 byte) {
   if (delta->run_count >= delta->run_capacity) {
-    u64 new_cap = delta->run_capacity ? delta->run_capacity * 2 : 64;
+    sz new_cap = delta->run_capacity ? delta->run_capacity * 2 : 64;
     valk_bitmap_delta_run_t *new_runs = realloc(delta->runs, new_cap * sizeof(valk_bitmap_delta_run_t));
     if (!new_runs) return false;
     delta->runs = new_runs;
@@ -1107,7 +1109,7 @@ bool valk_bitmap_delta_compute(const valk_slab_bitmap_t *curr,
   out->from_version = prev->version;
   out->to_version = curr->version;
 
-  u64 i = 0;
+  sz i = 0;
   while (i < curr->bytes) {
     if (curr->data[i] == prev->data[i]) {
       i++;
@@ -1115,8 +1117,8 @@ bool valk_bitmap_delta_compute(const valk_slab_bitmap_t *curr,
     }
 
     u8 xor_byte = curr->data[i] ^ prev->data[i];
-    u64 run_start = i;
-    u64 run_len = 1;
+    sz run_start = i;
+    sz run_len = 1;
 
     while (i + run_len < curr->bytes &&
            (curr->data[i + run_len] ^ prev->data[i + run_len]) == xor_byte) {
@@ -1133,8 +1135,8 @@ bool valk_bitmap_delta_compute(const valk_slab_bitmap_t *curr,
   return true;
 }
 
-u64 valk_bitmap_delta_to_rle(const valk_bitmap_delta_t *delta,
-                                 char *buf, u64 buf_size) {
+sz valk_bitmap_delta_to_rle(const valk_bitmap_delta_t *delta,
+                                 char *buf, sz buf_size) {
   if (!delta || !buf || buf_size < 4) {
     if (buf && buf_size > 0) buf[0] = '\0';
     return 0;
@@ -1144,7 +1146,7 @@ u64 valk_bitmap_delta_to_rle(const valk_bitmap_delta_t *delta,
   char *p = buf;
   char *end = buf + buf_size - 1;
 
-  for (u64 i = 0; i < delta->run_count && p < end - 16; i++) {
+  for (sz i = 0; i < delta->run_count && p < end - 16; i++) {
     valk_bitmap_delta_run_t *run = &delta->runs[i];
 
     if (i > 0 && p < end) *p++ = ',';
@@ -1168,9 +1170,9 @@ u64 valk_bitmap_delta_to_rle(const valk_bitmap_delta_t *delta,
   return p - buf;
 }
 
-u64 valk_slab_bitmap_buckets(valk_slab_t *slab,
-                                 u64 start_slot, u64 end_slot,
-                                 u64 num_buckets,
+sz valk_slab_bitmap_buckets(valk_slab_t *slab,
+                                 sz start_slot, sz end_slot,
+                                 sz num_buckets,
                                  valk_bitmap_bucket_t *out_buckets) {
   if (!slab || !out_buckets || num_buckets == 0) return 0;
   if (!slab->usage_bitmap) return 0;
@@ -1178,21 +1180,21 @@ u64 valk_slab_bitmap_buckets(valk_slab_t *slab,
   if (end_slot > slab->numItems) end_slot = slab->numItems;
   if (start_slot >= end_slot) return 0;
 
-  u64 total_slots = end_slot - start_slot;
-  u64 slots_per_bucket = (total_slots + num_buckets - 1) / num_buckets;
+  sz total_slots = end_slot - start_slot;
+  sz slots_per_bucket = (total_slots + num_buckets - 1) / num_buckets;
   if (slots_per_bucket == 0) slots_per_bucket = 1;
 
-  for (u64 b = 0; b < num_buckets; b++) {
+  for (sz b = 0; b < num_buckets; b++) {
     out_buckets[b].used = 0;
     out_buckets[b].free = 0;
   }
 
-  for (u64 slot = start_slot; slot < end_slot; slot++) {
-    u64 byte_idx = slot / 8;
+  for (sz slot = start_slot; slot < end_slot; slot++) {
+    sz byte_idx = slot / 8;
     u8 bit_mask = 1 << (slot % 8);
     bool is_used = (slab->usage_bitmap[byte_idx] & bit_mask) != 0;
 
-    u64 bucket_idx = (slot - start_slot) / slots_per_bucket;
+    sz bucket_idx = (slot - start_slot) / slots_per_bucket;
     if (bucket_idx >= num_buckets) bucket_idx = num_buckets - 1;
 
     if (is_used) {

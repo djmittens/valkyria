@@ -17,9 +17,9 @@ void test_gc_metrics_init(VALK_TEST_ARGS()) {
   u64 cycles = 999;
   u64 pause_us_total = 999;
   u64 pause_us_max = 999;
-  u64 reclaimed = 999;
-  u64 heap_used = 999;
-  u64 heap_total = 999;
+  sz reclaimed = 999;
+  sz heap_used = 999;
+  sz heap_total = 999;
 
   valk_gc_get_runtime_metrics(heap, &cycles, &pause_us_total, &pause_us_max,
                                &reclaimed, &heap_used, &heap_total);
@@ -150,12 +150,11 @@ void test_gc_reclaimed_bytes(VALK_TEST_ARGS()) {
   size_t allocated_after = valk_gc_heap2_used_bytes(heap);
 
   // Get reclaimed bytes metric
-  u64 reclaimed = 0;
+  sz reclaimed = 0;
   valk_gc_get_runtime_metrics(heap, NULL, NULL, NULL, &reclaimed, NULL, NULL);
 
   // Should have reclaimed some bytes
-  VALK_TEST_ASSERT(reclaimed > 0, "reclaimed should be > 0, got %llu",
-                   (unsigned long long)reclaimed);
+  VALK_TEST_ASSERT(reclaimed > 0, "reclaimed should be > 0, got %zu", reclaimed);
   VALK_TEST_ASSERT(allocated_after < allocated_before,
                    "allocated_bytes should decrease after GC");
 
@@ -220,9 +219,9 @@ void test_gc_metrics_null_heap(VALK_TEST_ARGS()) {
   u64 cycles = 999;
   u64 pause_us_total = 999;
   u64 pause_us_max = 999;
-  u64 reclaimed = 999;
-  u64 heap_used = 999;
-  u64 heap_total = 999;
+  sz reclaimed = 999;
+  sz heap_used = 999;
+  sz heap_total = 999;
 
   // Should not crash with NULL heap
   valk_gc_get_runtime_metrics(NULL, &cycles, &pause_us_total, &pause_us_max,

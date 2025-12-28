@@ -769,7 +769,7 @@ void test_gc_page_pool_stats(VALK_TEST_ARGS()) {
   valk_gc_page_pool_t pool;
   valk_gc_page_pool_init(&pool);
 
-  u64 pages, total, used;
+  sz pages, total, used;
   valk_gc_page_pool_stats(&pool, &pages, &total, &used);
   VALK_TEST_ASSERT(pages == 0, "pages should be 0");
   VALK_TEST_ASSERT(total == 0, "total should be 0");
@@ -1125,7 +1125,7 @@ void test_gc_global_pool_init(VALK_TEST_ARGS()) {
   
   valk_gc_global_pool_init();
   
-  u64 pages, total, used;
+  sz pages, total, used;
   valk_gc_page_pool_stats(&valk_gc_global_pool, &pages, &total, &used);
   
   VALK_TEST_ASSERT(pages == 0, "global pool should start empty");
@@ -1188,7 +1188,7 @@ void test_gc_tlab_alloc_slow_many(VALK_TEST_ARGS()) {
     }
   }
   
-  u64 pages, total, used;
+  sz pages, total, used;
   valk_gc_page_pool_stats(&valk_gc_global_pool, &pages, &total, &used);
   VALK_TEST_ASSERT(pages > 0, "should have allocated pages");
   VALK_TEST_ASSERT(used >= 100, "should have 100+ slots used");

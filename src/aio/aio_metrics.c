@@ -761,9 +761,13 @@ void valk_vm_metrics_collect(valk_vm_metrics_t* out,
 
   // GC metrics
   if (heap) {
+    sz reclaimed, heap_used, heap_total;
     valk_gc_get_runtime_metrics(heap,
       &out->gc_cycles, &out->gc_pause_us_total, &out->gc_pause_us_max,
-      &out->gc_reclaimed_bytes, &out->gc_heap_used, &out->gc_heap_total);
+      &reclaimed, &heap_used, &heap_total);
+    out->gc_reclaimed_bytes = reclaimed;
+    out->gc_heap_used = heap_used;
+    out->gc_heap_total = heap_total;
     out->gc_allocated_bytes = valk_gc_get_allocated_bytes_total(heap);
     out->gc_efficiency_pct = valk_gc_get_last_efficiency(heap);
   }

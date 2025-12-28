@@ -1175,23 +1175,23 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
 
   // Process-level memory stats
   n = snprintf(p, end - p,
-               "\"process\":{\"rss\":%llu,\"vms\":%llu,\"system_total\":%llu,"
-               "\"shared\":%llu,\"data\":%llu,\"page_faults_minor\":%llu,"
+               "\"process\":{\"rss\":%zu,\"vms\":%zu,\"system_total\":%zu,"
+               "\"shared\":%zu,\"data\":%zu,\"page_faults_minor\":%llu,"
                "\"page_faults_major\":%llu},",
                snapshot->process.rss_bytes, snapshot->process.vms_bytes,
                snapshot->process.system_total_bytes,
                snapshot->process.shared_bytes, snapshot->process.data_bytes,
-               snapshot->process.page_faults_minor,
-               snapshot->process.page_faults_major);
+               (unsigned long long)snapshot->process.page_faults_minor,
+               (unsigned long long)snapshot->process.page_faults_major);
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
   // Smaps breakdown (detailed RSS by region type - Linux only)
   n = snprintf(p, end - p,
                "\"smaps\":{"
-               "\"heap\":%llu,\"stack\":%llu,\"anon\":%llu,"
-               "\"file\":%llu,\"shmem\":%llu,\"uring\":%llu,"
-               "\"other\":%llu,\"total\":%llu,"
+               "\"heap\":%zu,\"stack\":%zu,\"anon\":%zu,"
+               "\"file\":%zu,\"shmem\":%zu,\"uring\":%zu,"
+               "\"other\":%zu,\"total\":%zu,"
                "\"anon_regions\":%u,\"file_regions\":%u},",
                snapshot->smaps.heap_rss,
                snapshot->smaps.stack_rss,
@@ -1267,8 +1267,8 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
       }
       const valk_retained_set_t *rs = &snapshot->retained_sets.sets[i];
       n = snprintf(p, end - p,
-                   "{\"name\":\"%s\",\"retained_bytes\":%llu,\"object_count\":%llu}",
-                   rs->name, rs->retained_bytes, rs->object_count);
+                   "{\"name\":\"%s\",\"retained_bytes\":%zu,\"object_count\":%llu}",
+                   rs->name, rs->retained_bytes, (unsigned long long)rs->object_count);
       if (n < 0 || n >= end - p) return -1;
       p += n;
     }
@@ -2327,23 +2327,23 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, u64 buf_size) 
 
   // Process-level memory stats
   n = snprintf(p, end - p,
-               "\"process\":{\"rss\":%llu,\"vms\":%llu,\"system_total\":%llu,"
-               "\"shared\":%llu,\"data\":%llu,\"page_faults_minor\":%llu,"
+               "\"process\":{\"rss\":%zu,\"vms\":%zu,\"system_total\":%zu,"
+               "\"shared\":%zu,\"data\":%zu,\"page_faults_minor\":%llu,"
                "\"page_faults_major\":%llu},",
                snapshot.process.rss_bytes, snapshot.process.vms_bytes,
                snapshot.process.system_total_bytes,
                snapshot.process.shared_bytes, snapshot.process.data_bytes,
-               snapshot.process.page_faults_minor,
-               snapshot.process.page_faults_major);
+               (unsigned long long)snapshot.process.page_faults_minor,
+               (unsigned long long)snapshot.process.page_faults_major);
   if (n < 0 || n >= end - p) goto cleanup;
   p += n;
 
   // Smaps breakdown (detailed RSS by region type - Linux only)
   n = snprintf(p, end - p,
                "\"smaps\":{"
-               "\"heap\":%llu,\"stack\":%llu,\"anon\":%llu,"
-               "\"file\":%llu,\"shmem\":%llu,\"uring\":%llu,"
-               "\"other\":%llu,\"total\":%llu,"
+               "\"heap\":%zu,\"stack\":%zu,\"anon\":%zu,"
+               "\"file\":%zu,\"shmem\":%zu,\"uring\":%zu,"
+               "\"other\":%zu,\"total\":%zu,"
                "\"anon_regions\":%u,\"file_regions\":%u},",
                snapshot.smaps.heap_rss,
                snapshot.smaps.stack_rss,

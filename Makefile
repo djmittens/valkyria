@@ -370,6 +370,9 @@ coverage-tests: build-coverage coverage-reset
 	@echo ""
 	export VALK_COVERAGE=1
 	export VALK_TEST_TIMEOUT_SECONDS=30
+	@echo "=== Ensuring SSL certs exist in build/ for tests ==="
+	@mkdir -p build
+	$(call gen_ssl_certs,build)
 	$(call run_tests_c,build-coverage)
 	@echo ""
 	$(call run_tests_valk,build-coverage)

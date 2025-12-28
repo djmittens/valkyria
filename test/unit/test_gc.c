@@ -178,8 +178,8 @@ void test_gc_get_runtime_metrics(VALK_TEST_ARGS()) {
 
   valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
-  u64 cycles, pause_total, pause_max, reclaimed;
-  u64 heap_used, heap_total;
+  u64 cycles, pause_total, pause_max;
+  sz reclaimed, heap_used, heap_total;
 
   valk_gc_get_runtime_metrics(heap, &cycles, &pause_total, &pause_max, &reclaimed,
                                &heap_used, &heap_total);
@@ -200,8 +200,8 @@ void test_gc_runtime_metrics_after_collect(VALK_TEST_ARGS()) {
 
   valk_gc_malloc_collect(heap, NULL);
 
-  u64 cycles, pause_total, pause_max, reclaimed;
-  u64 heap_used, heap_total;
+  u64 cycles, pause_total, pause_max;
+  sz reclaimed, heap_used, heap_total;
 
   valk_gc_get_runtime_metrics(heap, &cycles, &pause_total, &pause_max, &reclaimed,
                                &heap_used, &heap_total);
@@ -454,8 +454,8 @@ void test_gc_follow_forward_chain(VALK_TEST_ARGS()) {
 void test_gc_get_runtime_metrics_null_heap(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  u64 cycles = 999, pause_total = 999, pause_max = 999, reclaimed = 999;
-  u64 heap_used = 999, heap_total = 999;
+  u64 cycles = 999, pause_total = 999, pause_max = 999;
+  sz reclaimed = 999, heap_used = 999, heap_total = 999;
 
   valk_gc_get_runtime_metrics(NULL, &cycles, &pause_total, &pause_max, &reclaimed,
                                &heap_used, &heap_total);
@@ -830,8 +830,8 @@ void test_gc_runtime_metrics_pause_max_updates(VALK_TEST_ARGS()) {
     valk_gc_malloc_collect(heap, NULL);
   }
 
-  u64 cycles, pause_total, pause_max, reclaimed;
-  u64 heap_used, heap_total;
+  u64 cycles, pause_total, pause_max;
+  sz reclaimed, heap_used, heap_total;
 
   valk_gc_get_runtime_metrics(heap, &cycles, &pause_total, &pause_max, &reclaimed,
                                &heap_used, &heap_total);
