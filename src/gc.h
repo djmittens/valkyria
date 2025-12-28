@@ -24,6 +24,9 @@ typedef struct valk_gc_header_t {
 // Forward declare slab allocator
 struct valk_slab_t;
 
+// Forward declare new size-class heap (defined below)
+typedef struct valk_gc_heap2 valk_gc_heap2_t;
+
 // GC heap statistics for telemetry
 typedef struct {
   size_t overflow_allocations;      // Allocations received from scratch overflow
@@ -65,29 +68,9 @@ typedef struct {
   _Atomic uint64_t pause_16ms_plus;        // Frame drop certain at 60fps (16ms+)
 } valk_gc_runtime_metrics_t;
 
-// GC malloc heap - malloc-based allocator with mark & sweep collection
-typedef struct {
-  valk_mem_allocator_e type;  // VALK_ALLOC_GC_HEAP
-  size_t allocated_bytes;     // Current malloc memory usage (excludes slab)
-  size_t hard_limit;          // Absolute maximum heap size (abort if exceeded)
-  size_t num_collections;     // Number of GC runs performed
-  bool in_emergency_gc;       // Prevent recursive emergency GC
-  valk_gc_header_t* objects;  // Linked list of all allocated object headers
-  valk_lenv_t* root_env;      // Root environment for marking
-  valk_gc_header_t* free_list;  // Free-list for fast reuse of swept objects
-  size_t free_list_size;      // Number of objects in free list
-  valk_slab_t* lval_slab;     // Fast slab allocator for valk_lval_t objects
-  size_t lval_size;           // Size of valk_lval_t for slab allocation
-  valk_slab_t* lenv_slab;     // Fast slab allocator for valk_lenv_t objects
-  size_t lenv_size;           // Size of valk_lenv_t for slab allocation
-  valk_gc_heap_stats_t stats; // Telemetry statistics
-  valk_gc_runtime_metrics_t runtime_metrics; // Runtime metrics for observability
-
-  uint8_t gc_threshold_pct;   // Trigger GC when heap usage exceeds this % (default: 75)
-  uint8_t gc_target_pct;      // After GC, aim to be below this % (default: 50)
-  uint64_t last_gc_time_us;   // Timestamp of last GC (for rate limiting)
-  uint32_t min_gc_interval_ms; // Minimum ms between GC cycles (default: 1000)
-} valk_gc_malloc_heap_t;
+// Legacy type alias - valk_gc_malloc_heap_t is now valk_gc_heap2_t
+// All legacy API functions are implemented as wrappers around heap2
+typedef valk_gc_heap2_t valk_gc_malloc_heap_t;
 
 // Initialize GC malloc heap with hard limit (default 250MB if 0)
 valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t hard_limit);
@@ -429,6 +412,369 @@ void valk_gc_remove_global_root(valk_lval_t** root);
 // Bitmap size in bytes (1 bit per slot, rounded up)
 #define VALK_GC_BITMAP_SIZE  ((VALK_GC_SLOTS_PER_PAGE + 7) / 8)
 
+// ============================================================================
+// Size Class System (Phase 1 - New Multi-Class Allocator)
+// ============================================================================
+
+#define VALK_GC_NUM_SIZE_CLASSES 9
+#define VALK_GC_LARGE_THRESHOLD  4096
+
+static const uint16_t valk_gc_size_classes[VALK_GC_NUM_SIZE_CLASSES] = {
+  16, 32, 64, 128, 256, 512, 1024, 2048, 4096
+};
+
+static inline uint8_t valk_gc_size_class(size_t bytes) {
+  if (bytes <= 16)   return 0;
+  if (bytes <= 32)   return 1;
+  if (bytes <= 64)   return 2;
+  if (bytes <= 128)  return 3;
+  if (bytes <= 256)  return 4;
+  if (bytes <= 512)  return 5;
+  if (bytes <= 1024) return 6;
+  if (bytes <= 2048) return 7;
+  if (bytes <= 4096) return 8;
+  return UINT8_MAX;
+}
+
+// Page header size (conservative, includes alignment padding)
+// Actual struct is smaller but we round up to cache line
+#define VALK_GC_PAGE_HEADER_SIZE 64
+
+// Calculate slots per page accounting for header and inline bitmaps
+// Layout: [header (64B)][alloc_bitmap][mark_bitmap][slots...]
+// Each slot needs slot_size bytes + 2 bits for bitmaps
+static inline uint16_t valk_gc_slots_per_page(uint8_t size_class) {
+  if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return 0;
+  uint16_t slot_size = valk_gc_size_classes[size_class];
+  
+  // Usable space after header
+  size_t usable = VALK_GC_PAGE_SIZE - VALK_GC_PAGE_HEADER_SIZE;
+  
+  // Each slot costs: slot_size bytes + 2 bits (alloc + mark)
+  // Solve: slots * slot_size + ceil(slots/8) * 2 <= usable
+  // Approximate: slots * (slot_size + 0.25) <= usable
+  // slots <= usable * 8 / (8 * slot_size + 2)
+  uint16_t slots = (uint16_t)((usable * 8) / (8 * slot_size + 2));
+  
+  return slots;
+}
+
+static inline uint16_t valk_gc_bitmap_bytes(uint8_t size_class) {
+  uint16_t slots = valk_gc_slots_per_page(size_class);
+  return (uint16_t)((slots + 7) / 8);
+}
+
+// Calculate total page size including header, bitmaps, and slots
+static inline size_t valk_gc_page_total_size(uint8_t size_class) {
+  if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return 0;
+  uint16_t slots = valk_gc_slots_per_page(size_class);
+  uint16_t bitmap_bytes = valk_gc_bitmap_bytes(size_class);
+  uint16_t slot_size = valk_gc_size_classes[size_class];
+  
+  // header + 2 bitmaps + slots, aligned to cache line
+  size_t total = VALK_GC_PAGE_HEADER_SIZE + 2 * bitmap_bytes + slots * slot_size;
+  total = (total + 63) & ~63ULL;
+  return total;
+}
+
+// Expected slots per class (for documentation/verification):
+// Class 0 (16B):  usable=65472, slots = 65472*8/(8*16+2) = 4028
+// Class 1 (32B):  usable=65472, slots = 65472*8/(8*32+2) = 2012  
+// Class 2 (64B):  usable=65472, slots = 65472*8/(8*64+2) = 1005
+// Class 3 (128B): usable=65472, slots = 65472*8/(8*128+2) = 510
+// Class 4 (256B): usable=65472, slots = 65472*8/(8*256+2) = 255
+// Class 5 (512B): usable=65472, slots = 65472*8/(8*512+2) = 127
+// Class 6 (1KB):  usable=65472, slots = 65472*8/(8*1024+2) = 63
+// Class 7 (2KB):  usable=65472, slots = 65472*8/(8*2048+2) = 31
+// Class 8 (4KB):  usable=65472, slots = 65472*8/(8*4096+2) = 15
+
+#define VALK_GC_VIRTUAL_RESERVE     (4ULL * 1024 * 1024 * 1024)
+#define VALK_GC_DEFAULT_HARD_LIMIT  (512 * 1024 * 1024)
+#define VALK_GC_DEFAULT_SOFT_LIMIT  (384 * 1024 * 1024)
+#define VALK_GC_INITIAL_COMMIT      (16 * 1024 * 1024)
+
+// Basic bitmap operations (non-atomic, for allocation bitmaps)
+static inline bool valk_gc_bitmap_test(const uint8_t *bitmap, uint32_t idx) {
+  return (bitmap[idx / 8] & (1 << (idx % 8))) != 0;
+}
+
+static inline void valk_gc_bitmap_set(uint8_t *bitmap, uint32_t idx) {
+  bitmap[idx / 8] |= (uint8_t)(1 << (idx % 8));
+}
+
+static inline void valk_gc_bitmap_clear(uint8_t *bitmap, uint32_t idx) {
+  bitmap[idx / 8] &= (uint8_t)~(1 << (idx % 8));
+}
+
+// ============================================================================
+// New Multi-Class Page Structure (Phase 1)
+// ============================================================================
+
+// Page structure for size-class allocator
+// Layout in memory: [valk_gc_page2_t header][alloc_bitmap][mark_bitmap][slots...]
+// Bitmaps immediately follow the header, slots follow bitmaps
+typedef struct valk_gc_page2 {
+  struct valk_gc_page2 *next;           // Next page in all_pages list
+  struct valk_gc_page2 *next_partial;   // Next page in partial_pages list
+  uint32_t page_id;                     // For debugging
+  uint8_t size_class;                   // Which size class (0-8)
+  uint8_t _pad[3];                      // Alignment padding
+  _Atomic uint32_t num_allocated;       // Slots currently in use
+  uint16_t slots_per_page;              // Cached from size_class
+  uint16_t bitmap_bytes;                // Cached bitmap size
+  // Bitmaps and slots follow in memory (not in struct)
+  // Use accessor functions below
+} valk_gc_page2_t;
+
+// Get pointer to allocation bitmap (follows header)
+static inline uint8_t *valk_gc_page2_alloc_bitmap(valk_gc_page2_t *page) {
+  return (uint8_t *)(page + 1);
+}
+
+// Get pointer to mark bitmap (follows alloc bitmap)
+static inline uint8_t *valk_gc_page2_mark_bitmap(valk_gc_page2_t *page) {
+  return (uint8_t *)(page + 1) + page->bitmap_bytes;
+}
+
+// Get pointer to slot data (follows both bitmaps, cache-aligned)
+static inline uint8_t *valk_gc_page2_slots(valk_gc_page2_t *page) {
+  uint8_t *after_bitmaps = (uint8_t *)(page + 1) + 2 * page->bitmap_bytes;
+  // Align to 64-byte cache line
+  uintptr_t addr = (uintptr_t)after_bitmaps;
+  addr = (addr + 63) & ~63ULL;
+  return (uint8_t *)addr;
+}
+
+// Get pointer to specific slot
+static inline void *valk_gc_page2_slot_ptr(valk_gc_page2_t *page, uint32_t slot_idx) {
+  uint16_t slot_size = valk_gc_size_classes[page->size_class];
+  return valk_gc_page2_slots(page) + slot_idx * slot_size;
+}
+
+// Per-class page list
+typedef struct valk_gc_page_list {
+  pthread_mutex_t lock;
+  valk_gc_page2_t *all_pages;           // All pages for this class
+  valk_gc_page2_t *partial_pages;       // Pages with free slots
+  size_t num_pages;
+  _Atomic size_t total_slots;
+  _Atomic size_t used_slots;
+  _Atomic uint32_t next_page_offset;    // For allocation within virtual region
+  uint16_t slot_size;                   // Cached
+  uint16_t slots_per_page;              // Cached
+} valk_gc_page_list_t;
+
+// Large object tracking (>4KB allocations)
+typedef struct valk_gc_large_obj {
+  struct valk_gc_large_obj *next;
+  void *data;                           // mmap'd region
+  size_t size;                          // Allocation size
+  bool marked;                          // GC mark
+} valk_gc_large_obj_t;
+
+// Multi-class TLAB with per-class state
+typedef struct valk_gc_tlab2 {
+  struct valk_gc_heap2 *owner_heap;     // Heap this TLAB is associated with
+  struct {
+    valk_gc_page2_t *page;              // Current page for this class
+    uint32_t next_slot;                 // Next slot to allocate
+    uint32_t limit_slot;                // End of claimed range
+  } classes[VALK_GC_NUM_SIZE_CLASSES];
+} valk_gc_tlab2_t;
+
+// Main heap structure with size classes
+struct valk_gc_heap2 {
+  valk_mem_allocator_e type;            // VALK_ALLOC_GC_HEAP
+  void *base;                           // mmap'd base (PROT_NONE reserved)
+  size_t reserved;                      // Total virtual reservation
+  
+  valk_gc_page_list_t classes[VALK_GC_NUM_SIZE_CLASSES];
+  
+  valk_gc_large_obj_t *large_objects;   // Linked list of large allocations
+  pthread_mutex_t large_lock;
+  
+  _Atomic size_t committed_bytes;       // Physical pages committed
+  _Atomic size_t used_bytes;            // Bytes in allocated slots
+  _Atomic size_t large_object_bytes;    // Bytes in large objects
+  
+  size_t hard_limit;                    // Absolute maximum (abort if exceeded)
+  size_t soft_limit;                    // Emergency GC trigger
+  uint8_t gc_threshold_pct;             // Normal GC trigger (% of committed)
+  uint8_t gc_target_pct;                // Target usage after GC (informational)
+  uint32_t min_gc_interval_ms;          // Minimum ms between GC cycles
+  uint64_t last_gc_time_us;             // Timestamp of last GC
+  
+  _Atomic bool gc_in_progress;
+  bool in_emergency_gc;
+  
+  _Atomic uint64_t collections;
+  _Atomic uint64_t bytes_allocated_total;
+  _Atomic uint64_t bytes_reclaimed_total;
+  
+  valk_lenv_t *root_env;                // Root environment for marking
+  valk_gc_heap_stats_t stats;           // Telemetry statistics
+  valk_gc_runtime_metrics_t runtime_metrics; // Runtime metrics for observability
+};
+
+// Initialize new multi-class heap
+valk_gc_heap2_t *valk_gc_heap2_create(size_t hard_limit);
+
+// Destroy heap and release all memory
+void valk_gc_heap2_destroy(valk_gc_heap2_t *heap);
+
+// Allocate from heap (selects size class or large object path)
+void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, size_t bytes);
+
+// Reallocate - grow or shrink allocation
+void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, size_t new_size);
+
+// Get current usage
+static inline size_t valk_gc_heap2_used_bytes(valk_gc_heap2_t *heap) {
+  size_t total = atomic_load(&heap->large_object_bytes);
+  for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    total += atomic_load(&heap->classes[c].used_slots) * valk_gc_size_classes[c];
+  }
+  return total;
+}
+
+// Initialize multi-class TLAB
+void valk_gc_tlab2_init(valk_gc_tlab2_t *tlab);
+
+// Allocate from TLAB (fast path)
+static inline void *valk_gc_tlab2_alloc(valk_gc_tlab2_t *tlab, uint8_t size_class) {
+  if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return NULL;
+  
+  if (__builtin_expect(tlab->classes[size_class].page != NULL && 
+                       tlab->classes[size_class].next_slot < 
+                       tlab->classes[size_class].limit_slot, 1)) {
+    uint32_t slot = tlab->classes[size_class].next_slot++;
+    return valk_gc_page2_slot_ptr(tlab->classes[size_class].page, slot);
+  }
+  return NULL;
+}
+
+// Refill TLAB for specific class (slow path)
+bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, uint8_t size_class);
+
+// ============================================================================
+// Phase 2: Pointer Location and Marking (Size Class Allocator)
+// ============================================================================
+
+// Result of pointer location lookup
+typedef struct valk_gc_ptr_location {
+  valk_gc_page2_t *page;
+  uint32_t slot;
+  uint8_t size_class;
+  bool is_valid;
+} valk_gc_ptr_location_t;
+
+// Find the page and slot for a pointer
+// Returns false if pointer is not in the heap (may be large object or external)
+bool valk_gc_ptr_to_location(valk_gc_heap2_t *heap, void *ptr, valk_gc_ptr_location_t *out);
+
+// Atomic bitmap operations for mark bitmap (used during parallel marking)
+static inline bool valk_gc_bitmap_try_set_atomic(uint8_t *bitmap, uint32_t idx) {
+  uint8_t *byte = &bitmap[idx / 8];
+  uint8_t bit = (uint8_t)(1 << (idx % 8));
+  uint8_t old = __atomic_fetch_or(byte, bit, __ATOMIC_ACQ_REL);
+  return (old & bit) == 0;
+}
+
+static inline bool valk_gc_bitmap_test_atomic(const uint8_t *bitmap, uint32_t idx) {
+  uint8_t byte = __atomic_load_n(&bitmap[idx / 8], __ATOMIC_ACQUIRE);
+  return (byte & (1 << (idx % 8))) != 0;
+}
+
+// Try to mark a slot (returns true if newly marked, false if already marked)
+static inline bool valk_gc_page2_try_mark(valk_gc_page2_t *page, uint32_t slot) {
+  return valk_gc_bitmap_try_set_atomic(valk_gc_page2_mark_bitmap(page), slot);
+}
+
+// Check if a slot is marked
+static inline bool valk_gc_page2_is_marked(valk_gc_page2_t *page, uint32_t slot) {
+  return valk_gc_bitmap_test_atomic(valk_gc_page2_mark_bitmap(page), slot);
+}
+
+// Check if a slot is allocated
+static inline bool valk_gc_page2_is_allocated(valk_gc_page2_t *page, uint32_t slot) {
+  return valk_gc_bitmap_test(valk_gc_page2_alloc_bitmap(page), slot);
+}
+
+// Mark a large object (returns true if newly marked)
+bool valk_gc_mark_large_object(valk_gc_heap2_t *heap, void *ptr);
+
+// Sweep a single page, returns number of slots freed
+size_t valk_gc_sweep_page2(valk_gc_page2_t *page);
+
+// Sweep all large objects, returns bytes freed
+size_t valk_gc_sweep_large_objects(valk_gc_heap2_t *heap);
+
+// Rebuild partial_pages lists after sweep
+void valk_gc_rebuild_partial_lists(valk_gc_heap2_t *heap);
+
+// Reclaim empty pages (release physical memory via madvise)
+// Returns number of pages reclaimed
+size_t valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap);
+
+// ============================================================================
+// Phase 3: Memory Limits and GC Cycle
+// ============================================================================
+
+// GC statistics for diagnostics
+typedef struct valk_gc_stats2 {
+  size_t used_bytes;
+  size_t committed_bytes;
+  size_t large_object_bytes;
+  size_t hard_limit;
+  size_t soft_limit;
+  size_t class_used_slots[VALK_GC_NUM_SIZE_CLASSES];
+  size_t class_total_slots[VALK_GC_NUM_SIZE_CLASSES];
+  uint64_t collections;
+  uint64_t bytes_reclaimed_total;
+} valk_gc_stats2_t;
+
+// Get heap statistics
+void valk_gc_heap2_get_stats(valk_gc_heap2_t *heap, valk_gc_stats2_t *out);
+
+// Run a full GC collection cycle (mark + sweep)
+// Returns bytes reclaimed
+size_t valk_gc_heap2_collect(valk_gc_heap2_t *heap);
+
+// Reset all TLABs after GC
+void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab);
+
+// OOM abort with diagnostics (never returns)
+__attribute__((noreturn))
+void valk_gc_oom_abort(valk_gc_heap2_t *heap, size_t requested);
+
+// ============================================================================
+// Phase 4: Mark Phase for heap2
+// ============================================================================
+
+typedef struct valk_gc_mark_ctx2 {
+  valk_gc_heap2_t *heap;
+  valk_gc_mark_queue_t *queue;
+} valk_gc_mark_ctx2_t;
+
+void valk_gc_heap2_mark_object(valk_gc_mark_ctx2_t *ctx, void *ptr);
+void valk_gc_heap2_mark_roots(valk_gc_heap2_t *heap);
+
+// ============================================================================
+// Phase 7: Parallel Mark/Sweep for heap2
+// ============================================================================
+
+void valk_gc_heap2_parallel_mark(valk_gc_heap2_t *heap);
+
+void valk_gc_heap2_parallel_sweep(valk_gc_heap2_t *heap);
+
+size_t valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap);
+
+bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap);
+
+// ============================================================================
+// Legacy Single-Class Page Structure (existing, for backward compatibility)
+// ============================================================================
+
 typedef struct valk_gc_page {
   struct valk_gc_page *next;      // Next page in pool list
   _Atomic uint32_t num_allocated; // Slots currently in use
@@ -478,19 +824,6 @@ static inline void *valk_gc_tlab_alloc(valk_gc_tlab_t *tlab) {
     return &tlab->page->slots[slot * VALK_GC_SLOT_SIZE];
   }
   return NULL;  // TLAB exhausted, need slow path
-}
-
-// Bitmap operations
-static inline bool valk_gc_bitmap_test(const uint8_t *bitmap, uint32_t idx) {
-  return (bitmap[idx / 8] & (1 << (idx % 8))) != 0;
-}
-
-static inline void valk_gc_bitmap_set(uint8_t *bitmap, uint32_t idx) {
-  bitmap[idx / 8] |= (uint8_t)(1 << (idx % 8));
-}
-
-static inline void valk_gc_bitmap_clear(uint8_t *bitmap, uint32_t idx) {
-  bitmap[idx / 8] &= (uint8_t)~(1 << (idx % 8));
 }
 
 // Get page pool statistics

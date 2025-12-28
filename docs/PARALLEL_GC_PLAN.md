@@ -4,73 +4,21 @@
 
 This document outlines the implementation plan for a parallel stop-the-world (STW) garbage collector for Valkyria Lisp. The goal is to enable safe multi-threaded access to the Lisp heap from multiple AIO event loops while minimizing GC pause times through parallel marking and sweeping.
 
-## Current State Analysis
+## Design Philosophy
 
-### Existing Memory Architecture
+**The GC is a fallback, not the primary allocator.**
 
-The current system uses a **three-tier memory model**:
+Most Valkyria programs use scratch arenas with bump allocation and reset-after-eval. The GC heap only handles:
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     CURRENT MEMORY LAYOUT                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌─────────────────────┐    Checkpoint     ┌──────────────────┐ │
-│  │   SCRATCH ARENA     │ ──────────────────▶│    GC HEAP       │ │
-│  │   (Bump allocator)  │    Evacuation     │  (Mark & Sweep)  │ │
-│  │                     │                    │                  │ │
-│  │  • Ephemeral values │                    │  • lval slab     │ │
-│  │  • Fast O(1) alloc  │                    │    (256K slots)  │ │
-│  │  • Reset after eval │                    │  • lenv slab     │ │
-│  │                     │                    │    (64K slots)   │ │
-│  └─────────────────────┘                    │  • malloc overflow│ │
-│                                             │                  │ │
-│                                             │  Objects tracked │ │
-│                                             │  via gc_header_t │ │
-│                                             │  linked list     │ │
-│                                             └──────────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
-```
+1. **Escaped objects** - Values that survive checkpoint/evacuation from scratch
+2. **Async handles / futures** - Objects with confusing lifetimes spanning multiple eval cycles  
+3. **Long-lived globals** - def'd symbols, closures, module exports
 
-**Key components in `gc.c`:**
-
-1. **`valk_gc_malloc_heap_t`** - Main GC heap with:
-   - `lval_slab` - Slab allocator for `valk_lval_t` (256K objects)
-   - `lenv_slab` - Slab allocator for `valk_lenv_t` (64K objects)  
-   - `objects` - Linked list of all allocations via `valk_gc_header_t`
-   - `root_env` - Single root for mark phase
-
-2. **`valk_mem_arena_t`** (scratch) - Bump allocator for ephemeral values
-   - Evacuated to GC heap at checkpoint boundaries
-   - Values get `LVAL_ALLOC_SCRATCH` flag, changed to `LVAL_ALLOC_HEAP` after evacuation
-
-3. **Marking** uses iterative worklist (`valk_lval_worklist_t`, `valk_env_worklist_t`)
-   - `valk_gc_mark_lval_single()` - type-switch over `LVAL_TYPE`
-   - Already handles all object types correctly
-
-4. **Single-threaded limitations:**
-   - No safe points in AIO threads
-   - No coordination between GC and AIO threads
-   - Single root environment only
-   - Futures/promises use separate refcounting (`valk_arc_box`)
-
-### What Works Well (Keep)
-
-- **Scratch → Heap evacuation model** - Clean separation of ephemeral vs long-lived
-- **Type-based object scanning** - `switch(LVAL_TYPE(v))` already handles all children
-- **Slab allocators** - Fast fixed-size allocation for common objects
-- **Iterative worklist marking** - No recursion stack overflow
-
-### What Needs to Change (Parallel GC)
-
-| Current | Parallel GC |
-|---------|-------------|
-| Single `heap->root_env` | Per-thread root stacks + global roots registry |
-| `heap->objects` linked list | Per-chunk object arrays with mark bitmaps |
-| Local worklist (`valk_lval_worklist_t`) | Work-stealing deques (Chase-Lev) |
-| Single-threaded mark/sweep | Parallel with barrier synchronization |
-| No safe points | Safe points in eval loop + AIO loops |
-| Implicit GC timing | Coordinated STW with all threads |
+This means:
+- The GC heap stays small
+- Collections are rare
+- Simple single-generation, non-compacting design is sufficient
+- Fragmentation is acceptable (few long-lived objects scattered across pages)
 
 ---
 
@@ -80,6 +28,7 @@ The current system uses a **three-tier memory model**:
 2. **Parallel STW GC** - All threads pause, all threads help with GC
 3. **Unified lifetime management** - Futures become `valk_lval_t`, eliminating double refcounting
 4. **< 10ms pause times** - For heaps up to 100MB with 4-8 threads
+5. **Bounded memory usage** - Hard limits enforced, graceful degradation
 
 ## Non-Goals (Future Work)
 
@@ -91,1000 +40,847 @@ The current system uses a **three-tier memory model**:
 
 ## Architecture
 
-### Memory Layout (Parallel)
+### Memory Layout Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        PARALLEL GC MEMORY LAYOUT                         │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  Per-Thread (TLS)                          Global (Shared)               │
-│  ═══════════════                           ═══════════════               │
-│                                                                          │
-│  ┌────────────────┐                        ┌────────────────────────┐   │
-│  │  Thread 0      │                        │      Chunk Pool        │   │
-│  │  ┌──────────┐  │                        │  ┌────────┬────────┐   │   │
-│  │  │  TLAB    │  │ ◀── acquire ──────────▶│  │Chunk 0 │Chunk 1 │...│   │
-│  │  │ (4 KB)   │  │                        │  │ 64KB   │ 64KB   │   │   │
-│  │  └──────────┘  │                        │  │        │        │   │   │
-│  │  ┌──────────┐  │                        │  │mark_   │mark_   │   │   │
-│  │  │Root Stack│  │                        │  │bits[]  │bits[]  │   │   │
-│  │  │  (eval   │  │                        │  └────────┴────────┘   │   │
-│  │  │ temps)   │  │                        └────────────────────────┘   │
-│  │  └──────────┘  │                                                      │
-│  │  ┌──────────┐  │                        ┌────────────────────────┐   │
-│  │  │Mark Queue│  │ ◀── steal ────────────▶│   Other Thread Queues  │   │
-│  │  │(Chase-Lev│  │                        └────────────────────────┘   │
-│  │  │ deque)   │  │                                                      │
-│  │  └──────────┘  │                        ┌────────────────────────┐   │
-│  │  ┌──────────┐  │                        │    Global Roots        │   │
-│  │  │ Scratch  │  │                        │  • root_env            │   │
-│  │  │ Arena    │  │ ──── evacuate ────────▶│  • registered roots    │   │
-│  │  │(optional)│  │     (at checkpoint)    │  • pending futures     │   │
-│  │  └──────────┘  │                        └────────────────────────┘   │
-│  └────────────────┘                                                      │
-│                                                                          │
-│  ┌────────────────┐                        ┌────────────────────────┐   │
-│  │  Thread 1      │                        │    GC Coordinator      │   │
-│  │  (same layout) │                        │  • phase (atomic)      │   │
-│  └────────────────┘                        │  • threads_registered  │   │
-│                                            │  • threads_paused      │   │
-│  ┌────────────────┐                        │  • barrier             │   │
-│  │  Thread N      │                        └────────────────────────┘   │
-│  │  (same layout) │                                                      │
-│  └────────────────┘                                                      │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Root Discovery (Critical for Parallel GC)
-
-The key challenge is **finding all roots** across multiple threads. Here's the complete root enumeration:
-
-```
-ROOT SOURCES
-════════════
-
-Per-Thread Roots (enumerated by each thread at safe point):
-├── Root Stack
-│   └── Explicit pushes: VALK_GC_ROOT_PUSH(val) during eval
-│       - Function arguments before eval
-│       - Intermediate results
-│       - Loop variables in builtins
-│
-├── Scratch Arena (if not using checkpoint-first model)
-│   └── All LVAL_ALLOC_SCRATCH objects in arena bounds
-│   └── NOTE: Current design evacuates BEFORE GC, so scratch is empty
-│
-└── TLAB In-Flight Allocations
-    └── Objects allocated since last safe point
-    └── Tracked via TLAB bump pointer range
-
-Global Roots (enumerated by thread 0):
-├── root_env (global Lisp environment)
-│   └── All def'd symbols and their values
-│
-├── Global Roots Registry
-│   └── valk_gc_add_global_root(&ptr) - for C-side persistent refs
-│   └── Callback functions, constants, module exports
-│
-└── Pending Async Handles
-    └── LVAL_HANDLE objects with active I/O
-    └── Their callbacks, results, environments
-```
-
-### Object Scanning (Already Well-Structured)
-
-The existing `valk_gc_mark_lval_single()` handles all object types. For parallel GC, we just need **atomic mark bits** and **push to work-stealing queue** instead of local worklist:
-
-```c
-static void mark_children(valk_lval_t *obj) {
-  switch (LVAL_TYPE(obj)) {
-    case LVAL_CONS:
-    case LVAL_QEXPR:
-      mark_and_push(obj->cons.head);  // Push to thread's work-stealing queue
-      mark_and_push(obj->cons.tail);
-      break;
-      
-    case LVAL_FUN:
-      if (obj->fun.builtin == NULL) {  // Lambda, not builtin
-        mark_and_push(obj->fun.formals);
-        mark_and_push(obj->fun.body);
-        mark_env(obj->fun.env);  // Closure environment
-      }
-      break;
-      
-    case LVAL_HANDLE:
-      if (obj->async.handle) {
-        mark_and_push(obj->async.handle->on_complete);
-        mark_and_push(obj->async.handle->on_error);
-        mark_and_push(obj->async.handle->result);
-        mark_env(obj->async.handle->env);
-      }
-      break;
-      
-    case LVAL_ENV:
-      mark_env(&obj->env);
-      break;
-      
-    // Leaf types - no children
-    case LVAL_NUM:
-    case LVAL_SYM:
-    case LVAL_STR:
-    case LVAL_ERR:
-    case LVAL_NIL:
-    case LVAL_REF:
-      break;
-  }
-}
-```
-
-### GC Phases
-
-```
-                    ┌─────────────────────────────────────────┐
-                    │              GC CYCLE                    │
-                    └─────────────────────────────────────────┘
-
-Phase 0: IDLE ──────────────────────────────────────────────────────▶
-    │                                                                │
-    │ (allocation pressure OR explicit trigger)                      │
-    ▼                                                                │
-Phase 1: STW_REQUESTED ─────────────────────────────────────────────▶
-    │                                                                │
-    │ • Set gc_phase = STW_REQUESTED (atomic)                       │
-    │ • Threads check phase at safe points                          │
-    │ • Each thread: evacuate scratch → heap (optional)             │
-    │ • Each thread: increment threads_paused                       │
-    │ • Last thread signals coordinator                              │
-    │                                                                │
-    ▼ (all threads at safe point)                                   │
-Phase 2: MARK ──────────────────────────────────────────────────────▶
-    │                                                                │
-    │ • Each thread marks its own root stack                        │
-    │ • Thread 0 marks global roots (root_env, registry)            │
-    │ • Barrier: wait for root marking complete                      │
-    │ • Work-stealing loop: pop local queue, steal from others      │
-    │ • Termination detection (all queues empty, all idle)          │
-    │                                                                │
-    ▼ (all mark queues empty)                                       │
-Phase 3: SWEEP ─────────────────────────────────────────────────────▶
-    │                                                                │
-    │ • Partition chunks among threads                               │
-    │ • Each thread sweeps its assigned chunks                      │
-    │ • Bitmap scan: unmarked → free, marked → clear bit            │
-    │ • Call finalizers for LVAL_REF objects                        │
-    │ • Barrier: wait for all sweeping complete                      │
-    │                                                                │
-    ▼ (sweep complete)                                               │
-Phase 4: RESUME ────────────────────────────────────────────────────▶
-    │                                                                │
-    │ • Set gc_phase = IDLE                                         │
-    │ • Broadcast gc_done condition                                  │
-    │ • Threads resume execution                                     │
-    │                                                                │
-    └────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         VALKYRIA MEMORY MODEL                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  SCRATCH ARENA (per-thread)                                          │    │
+│  │  • Primary allocator - 99% of allocations                            │    │
+│  │  • Bump allocate, reset after eval                                   │    │
+│  │  • Zero GC involvement                                               │    │
+│  │  • Default: 64MB per thread                                          │    │
+│  └──────────────────────────────┬──────────────────────────────────────┘    │
+│                                 │                                            │
+│                                 │ checkpoint (escape)                        │
+│                                 ▼                                            │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  GC HEAP (virtual address reservation with size classes)             │    │
+│  │                                                                       │    │
+│  │  ┌───────────────────────────────────────────────────────────────┐   │    │
+│  │  │              4GB Virtual Address Reservation                   │   │    │
+│  │  │    mmap(PROT_NONE, MAP_NORESERVE) - no physical RAM yet       │   │    │
+│  │  ├───────────────────────────────────────────────────────────────┤   │    │
+│  │  │                                                                │   │    │
+│  │  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐  │   │    │
+│  │  │  │ Class 0 │ │ Class 1 │ │ Class 2 │ │ Class 3 │ │  Large  │  │   │    │
+│  │  │  │  16 B   │ │  32 B   │ │  64 B   │ │  128 B  │ │ Objects │  │   │    │
+│  │  │  │(strings)│ │(symbols)│ │ (lval)  │ │ (lenv)  │ │ (>4KB)  │  │   │    │
+│  │  │  ├─────────┤ ├─────────┤ ├─────────┤ ├─────────┤ ├─────────┤  │   │    │
+│  │  │  │ Page 0  │ │ Page 0  │ │ Page 0  │ │ Page 0  │ │ Direct  │  │   │    │
+│  │  │  │ Page 1  │ │ Page 1  │ │ Page 1  │ │ Page 1  │ │  mmap   │  │   │    │
+│  │  │  │ ...     │ │ ...     │ │ ...     │ │ ...     │ │  each   │  │   │    │
+│  │  │  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘  │   │    │
+│  │  │                                                                │   │    │
+│  │  │  Per-Page: 64KB committed on demand via mprotect()            │   │    │
+│  │  │  Per-Page: alloc_bitmap + mark_bitmap for slot tracking       │   │    │
+│  │  │                                                                │   │    │
+│  │  └───────────────────────────────────────────────────────────────┘   │    │
+│  │                                                                       │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Implementation Phases
+## Size Classes
 
-### Phase 0: Prerequisites (Current Work)
+### Size Class Table
 
-**Goal:** Prepare codebase for parallel GC without breaking existing functionality.
+| Class | Slot Size | Slots/Page | Use Case | Typical Objects |
+|-------|-----------|------------|----------|-----------------|
+| 0 | 16 bytes | 4096 | Tiny strings | Short symbols, error messages |
+| 1 | 32 bytes | 2048 | Small strings | Medium symbols, small arrays |
+| 2 | 64 bytes | 1024 | Small objects | Small lvals, tiny lenvs |
+| 3 | 128 bytes | 512 | Main objects | `valk_lval_t` (72B), `valk_lenv_t` (80B) |
+| 4 | 256 bytes | 256 | Medium arrays | `lenv->symbols.items`, `lenv->vals.items` |
+| 5 | 512 bytes | 128 | Large arrays | Lists with 32-64 elements |
+| 6 | 1024 bytes | 64 | Large objects | Large function bodies |
+| 7 | 2048 bytes | 32 | XL objects | Very large lists |
+| 8 | 4096 bytes | 16 | XXL objects | Huge strings/arrays |
+| LARGE | N/A | 1 | Huge objects | > 4KB, direct mmap per object |
 
-#### 0.1 Atomic Mark Bit
-
-Replace the current mark bit check with atomic operations:
+### Size Class Selection Algorithm
 
 ```c
-// src/gc.h
+#define VALK_GC_NUM_SIZE_CLASSES 9
+#define VALK_GC_LARGE_THRESHOLD  4096
 
-// Mark bit is already in flags: LVAL_FLAG_GC_MARK = (1ULL << 10)
+static const uint16_t size_classes[VALK_GC_NUM_SIZE_CLASSES] = {
+  16, 32, 64, 128, 256, 512, 1024, 2048, 4096
+};
 
-static inline bool valk_gc_try_mark(valk_lval_t *obj) {
-  uint64_t expected = obj->flags;
-  do {
-    if (expected & LVAL_FLAG_GC_MARK) {
-      return false;  // Already marked
+static inline uint8_t valk_gc_size_class(size_t bytes) {
+  if (bytes <= 16)   return 0;
+  if (bytes <= 32)   return 1;
+  if (bytes <= 64)   return 2;
+  if (bytes <= 128)  return 3;
+  if (bytes <= 256)  return 4;
+  if (bytes <= 512)  return 5;
+  if (bytes <= 1024) return 6;
+  if (bytes <= 2048) return 7;
+  if (bytes <= 4096) return 8;
+  return UINT8_MAX;  // Large object
+}
+```
+
+### Memory Waste Analysis
+
+| Request Size | Class | Slot Size | Waste | Waste % |
+|--------------|-------|-----------|-------|---------|
+| 72 (lval_t) | 3 | 128 | 56 | 44% |
+| 80 (lenv_t) | 3 | 128 | 48 | 38% |
+| 8 (pointer) | 0 | 16 | 8 | 50% |
+| 100 (array) | 3 | 128 | 28 | 22% |
+| 200 (array) | 4 | 256 | 56 | 22% |
+
+**Design Decision**: 44% waste for lval_t seems high, but:
+1. Scratch arena handles 99% of allocations (zero waste there)
+2. Simpler code (fewer size classes to manage)
+3. Better cache alignment (power of 2)
+4. Alternative: Add 80-byte class, but complicates implementation
+
+---
+
+## Memory Limits and Enforcement
+
+### Default Limits
+
+```c
+#define VALK_GC_VIRTUAL_RESERVE     (4ULL * 1024 * 1024 * 1024)  // 4GB virtual
+#define VALK_GC_DEFAULT_HARD_LIMIT  (512 * 1024 * 1024)          // 512MB physical
+#define VALK_GC_DEFAULT_SOFT_LIMIT  (384 * 1024 * 1024)          // 384MB (75% of hard)
+#define VALK_GC_PAGE_SIZE           (64 * 1024)                   // 64KB commit unit
+#define VALK_GC_INITIAL_COMMIT      (16 * 1024 * 1024)            // 16MB initial
+
+#define VALK_SCRATCH_DEFAULT_SIZE   (64 * 1024 * 1024)            // 64MB per thread
+#define VALK_SCRATCH_MAX_SIZE       (256 * 1024 * 1024)           // 256MB max
+```
+
+### Limit Hierarchy
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          MEMORY LIMIT HIERARCHY                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Virtual Reservation (4GB)                                                   │
+│  └── Never exceeded (mmap fails if OS can't reserve)                        │
+│                                                                              │
+│  Hard Limit (512MB default, configurable)                                   │
+│  └── ABSOLUTE MAXIMUM physical memory                                        │
+│  └── Exceeding triggers: abort() with diagnostics                           │
+│  └── Set via: VALK_HEAP_HARD_LIMIT env var or API                           │
+│                                                                              │
+│  Soft Limit (75% of hard limit)                                             │
+│  └── Target maximum during normal operation                                  │
+│  └── Exceeding triggers: emergency GC                                        │
+│  └── If still over after GC: allow up to hard limit, then abort             │
+│                                                                              │
+│  GC Trigger Threshold (configurable, default 75% of committed)              │
+│  └── When used_bytes > committed * threshold_pct                            │
+│  └── Triggers: normal GC cycle                                               │
+│  └── Does NOT block allocation (non-blocking trigger)                        │
+│                                                                              │
+│  Per-Thread Scratch (64MB default)                                          │
+│  └── Separate from GC heap                                                   │
+│  └── Checkpoint at 75% usage evacuates to GC heap                           │
+│  └── Overflow falls back to GC heap allocation                              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Memory Accounting
+
+```c
+typedef struct valk_gc_heap {
+  // ... other fields ...
+  
+  // Memory accounting (all atomic for thread safety)
+  _Atomic size_t committed_bytes;      // Physical pages committed
+  _Atomic size_t used_bytes;           // Bytes in allocated slots
+  _Atomic size_t large_object_bytes;   // Bytes in large objects (separate tracking)
+  
+  // Limits
+  size_t hard_limit;                   // Absolute maximum (abort if exceeded)
+  size_t soft_limit;                   // Emergency GC trigger
+  uint8_t gc_threshold_pct;            // Normal GC trigger (% of committed)
+  
+  // Per-class accounting
+  _Atomic size_t class_used_slots[VALK_GC_NUM_SIZE_CLASSES];
+  _Atomic size_t class_total_slots[VALK_GC_NUM_SIZE_CLASSES];
+} valk_gc_heap_t;
+
+// Current usage calculation
+static inline size_t valk_gc_used_bytes(valk_gc_heap_t *heap) {
+  size_t total = atomic_load(&heap->large_object_bytes);
+  for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    total += atomic_load(&heap->class_used_slots[c]) * size_classes[c];
+  }
+  return total;
+}
+```
+
+### Limit Enforcement Points
+
+```c
+// Called on every allocation
+void *valk_gc_alloc(valk_gc_heap_t *heap, size_t bytes) {
+  // 1. Check hard limit BEFORE allocation
+  size_t current = valk_gc_used_bytes(heap);
+  if (current + bytes > heap->hard_limit) {
+    // Try emergency GC
+    if (!heap->in_emergency_gc) {
+      valk_gc_emergency_collect(heap);
+      current = valk_gc_used_bytes(heap);
     }
-    // CAS to set mark bit atomically
-  } while (!atomic_compare_exchange_weak(&obj->flags, &expected,
-                                          expected | LVAL_FLAG_GC_MARK));
-  return true;  // We marked it
-}
-
-static inline bool valk_gc_is_marked(valk_lval_t *obj) {
-  return (atomic_load(&obj->flags) & LVAL_FLAG_GC_MARK) != 0;
-}
-
-static inline void valk_gc_clear_mark(valk_lval_t *obj) {
-  atomic_fetch_and(&obj->flags, ~LVAL_FLAG_GC_MARK);
-}
-```
-
-#### 0.2 Thread Context Extension
-
-Extend `valk_thread_context_t` in `memory.h`:
-
-```c
-// src/memory.h
-
-typedef struct valk_thread_gc_ctx {
-  // Existing fields
-  valk_mem_allocator_t *allocator;
-  void *heap;
-  valk_mem_arena_t *scratch;
-  struct valk_lenv_t *root_env;
-  float checkpoint_threshold;
-  bool checkpoint_enabled;
-  size_t call_depth;
-  
-  // NEW: Parallel GC fields
-  valk_gc_tlab_t *tlab;           // Thread-local allocation buffer
-  valk_lval_t **root_stack;       // Explicit root stack for eval temps
-  size_t root_stack_count;
-  size_t root_stack_capacity;
-  size_t gc_thread_id;            // Index in thread registry
-  bool gc_registered;             // Whether registered with GC
-} valk_thread_context_t;
-```
-
-#### Test Artifacts - Phase 0
-
-| Test | Description | Pass Criteria |
-|------|-------------|---------------|
-| `test_gc_atomic_mark` | Multiple threads racing to mark same object | Exactly one succeeds |
-| `test_gc_context_init` | Initialize thread GC context | All fields properly set |
-| `test_gc_existing_compat` | Run existing test suite | All tests still pass |
-
----
-
-### Phase 1: Heap Restructuring
-
-**Goal:** Replace linked-list tracking with chunk-based allocator + mark bitmaps.
-
-#### 1.1 Chunk Structure
-
-```c
-// src/gc.h
-
-#define VALK_GC_CHUNK_SIZE   (64 * 1024)   // 64 KB per chunk
-#define VALK_GC_CHUNK_ALIGN  64            // Cache line alignment
-#define VALK_GC_TLAB_SIZE    (4 * 1024)    // 4 KB per TLAB
-
-// Object slot size - exactly sizeof(valk_lval_t) = 104 bytes
-// lenv (80 bytes) also fits with 24 bytes unused
-#define VALK_GC_SLOT_SIZE    104
-
-// Number of slots per chunk
-#define VALK_GC_SLOTS_PER_CHUNK \
-  ((VALK_GC_CHUNK_SIZE - sizeof(valk_gc_chunk_t)) / VALK_GC_SLOT_SIZE)
-
-// Bitmap size in bytes (1 bit per slot)
-#define VALK_GC_BITMAP_SIZE  ((VALK_GC_SLOTS_PER_CHUNK + 7) / 8)
-
-typedef struct valk_gc_chunk {
-  struct valk_gc_chunk *next;     // Next chunk in pool
-  _Atomic uint32_t num_allocated; // Slots currently in use
-  uint32_t chunk_id;              // For debugging
-  uint8_t mark_bits[VALK_GC_BITMAP_SIZE];  // Mark bitmap
-  uint8_t alloc_bits[VALK_GC_BITMAP_SIZE]; // Allocation bitmap
-  // Padding to align slots
-  uint8_t _padding[VALK_GC_CHUNK_ALIGN - 
-                   (sizeof(void*) + sizeof(uint32_t)*2 + VALK_GC_BITMAP_SIZE*2) 
-                   % VALK_GC_CHUNK_ALIGN];
-  uint8_t slots[];  // Object slots start here
-} valk_gc_chunk_t;
-
-typedef struct valk_gc_chunk_pool {
-  valk_mutex_t lock;
-  valk_gc_chunk_t *all_chunks;     // All allocated chunks (for sweep)
-  valk_gc_chunk_t *free_chunks;    // Chunks with free space
-  size_t num_chunks;
-  size_t total_slots;
-  size_t used_slots;
-  _Atomic size_t gc_threshold;     // Trigger GC when used_slots exceeds
-} valk_gc_chunk_pool_t;
-```
-
-#### 1.2 TLAB (Thread-Local Allocation Buffer)
-
-```c
-// src/gc.h
-
-typedef struct valk_gc_tlab {
-  valk_gc_chunk_t *chunk;      // Current chunk
-  uint32_t next_slot;          // Next slot index to allocate
-  uint32_t limit_slot;         // Last slot in TLAB range
-} valk_gc_tlab_t;
-
-// Fast path: bump allocator within TLAB
-static inline void *valk_gc_tlab_alloc(valk_gc_tlab_t *tlab) {
-  if (LIKELY(tlab->next_slot < tlab->limit_slot)) {
-    uint32_t slot = tlab->next_slot++;
-    // Set allocation bit
-    tlab->chunk->alloc_bits[slot / 8] |= (1 << (slot % 8));
-    atomic_fetch_add(&tlab->chunk->num_allocated, 1, memory_order_relaxed);
-    return &tlab->chunk->slots[slot * VALK_GC_SLOT_SIZE];
-  }
-  return NULL;  // TLAB exhausted, need slow path
-}
-
-// Slow path: get new TLAB from chunk pool
-void *valk_gc_alloc_slow(size_t size);
-```
-
-#### 1.3 Two-Tier Memory Model
-
-The parallel GC uses a two-tier allocation strategy:
-
-**Tier 1: TLAB (for lval/lenv - 104 bytes or less)**
-- Lock-free bump-pointer allocation
-- Page-based with mark bitmaps for parallel sweep
-- ~629 slots per 64KB page
-
-**Tier 2: Per-Thread Malloc Lists (for strings, arrays, large objects)**
-- Objects >104 bytes go through malloc()
-- Each thread maintains its own linked list (no contention)
-- Lists merged during STW before sweep
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    TWO-TIER ALLOCATION MODEL                             │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  Allocation Request                                                      │
-│         │                                                                │
-│         ▼                                                                │
-│  ┌─────────────────┐                                                    │
-│  │ bytes <= 104?   │                                                    │
-│  └────────┬────────┘                                                    │
-│           │                                                              │
-│     YES   │   NO                                                         │
-│     ▼     │   ▼                                                          │
-│  ┌────────┴────────┐  ┌────────────────────────────────────────┐       │
-│  │  TLAB Alloc     │  │  malloc() + append to thread's list    │       │
-│  │  (lock-free)    │  │  (thread-local, no contention)         │       │
-│  │                 │  │                                         │       │
-│  │  • valk_lval_t  │  │  • strings (char*)                     │       │
-│  │  • valk_lenv_t  │  │  • large arrays                        │       │
-│  └─────────────────┘  │  • any allocation > 104 bytes          │       │
-│                       └────────────────────────────────────────┘       │
-│                                                                          │
-│  During STW (Stop-The-World):                                           │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │  1. Merge all per-thread malloc lists into global_malloc_list    │  │
-│  │  2. Parallel mark: traverse from roots, mark reachable objects   │  │
-│  │  3. Parallel sweep:                                               │  │
-│  │     - Pages: scan alloc_bits, clear unmarked slots               │  │
-│  │     - Malloc list: traverse, free() unmarked, keep marked        │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-#### 1.4 Per-Thread Malloc List
-
-```c
-// src/gc.h
-
-// Header for malloc'd objects (strings, arrays, large allocations)
-typedef struct valk_gc_malloc_obj {
-  struct valk_gc_malloc_obj *next;  // Thread-local list link
-  size_t size;                       // Allocation size
-  _Atomic uint8_t marked;            // Mark bit for GC
-  // User data follows
-} valk_gc_malloc_obj_t;
-
-// Per-thread malloc tracking (added to valk_thread_context_t)
-typedef struct {
-  valk_gc_malloc_obj_t *malloc_list;  // Head of thread-local list
-  size_t malloc_bytes;                 // Total bytes in thread's list
-} valk_gc_thread_malloc_t;
-```
-
-#### 1.5 Malloc List Operations
-
-```c
-// src/gc.c
-
-// Thread-local allocation for large objects (no lock needed)
-void *valk_gc_malloc_alloc(size_t bytes) {
-  size_t total = sizeof(valk_gc_malloc_obj_t) + bytes;
-  valk_gc_malloc_obj_t *obj = malloc(total);
-  if (!obj) return NULL;
-  
-  obj->size = bytes;
-  atomic_store(&obj->marked, 0);
-  
-  // Prepend to thread's list (thread-local, no lock)
-  obj->next = valk_thread_ctx.malloc_list;
-  valk_thread_ctx.malloc_list = obj;
-  valk_thread_ctx.malloc_bytes += bytes;
-  
-  return (void*)(obj + 1);  // Return pointer past header
-}
-
-// Called during STW to merge all thread lists into global list
-void valk_gc_merge_malloc_lists(valk_gc_malloc_obj_t **global_list) {
-  for (size_t i = 0; i < valk_gc_coord.threads_registered; i++) {
-    valk_thread_context_t *ctx = valk_gc_coord.threads[i].ctx;
-    if (!ctx || !ctx->malloc_list) continue;
     
-    // Find tail of thread's list
-    valk_gc_malloc_obj_t *tail = ctx->malloc_list;
-    while (tail->next) tail = tail->next;
-    
-    // Append global list to thread's tail, then swap
-    tail->next = *global_list;
-    *global_list = ctx->malloc_list;
-    ctx->malloc_list = NULL;
-    ctx->malloc_bytes = 0;
-  }
-}
-
-// Sweep malloc list (during parallel sweep)
-void valk_gc_sweep_malloc_list(valk_gc_malloc_obj_t **list) {
-  valk_gc_malloc_obj_t **curr = list;
-  while (*curr) {
-    valk_gc_malloc_obj_t *obj = *curr;
-    if (atomic_load(&obj->marked)) {
-      // Keep: clear mark for next cycle
-      atomic_store(&obj->marked, 0);
-      curr = &obj->next;
-    } else {
-      // Reclaim: unlink and free
-      *curr = obj->next;
-      free(obj);
+    // Still over? Fatal.
+    if (current + bytes > heap->hard_limit) {
+      valk_gc_oom_abort(heap, bytes);  // Never returns
     }
   }
+  
+  // 2. Check soft limit (trigger emergency GC but don't block)
+  if (current + bytes > heap->soft_limit && !heap->in_emergency_gc) {
+    valk_gc_request_collection();  // Non-blocking
+  }
+  
+  // 3. Normal allocation proceeds
+  return valk_gc_alloc_internal(heap, bytes);
 }
 ```
 
-#### 1.6 Distinguishing TLAB vs Malloc Objects
-
-During marking, we need to know whether a pointer points to a TLAB slot or a malloc'd object:
+### OOM Handling
 
 ```c
-// src/gc.c
-
-// Check if pointer is within any page's slot range
-static inline bool valk_gc_is_page_ptr(void *ptr) {
-  // Pages are 64KB aligned, so we can check alignment
-  // and verify it's in our page pool
-  uintptr_t addr = (uintptr_t)ptr;
-  
-  // Fast path: check if aligned to slot boundary within a page
-  // Page header is ~128 bytes, slots start after
-  // Each slot is 104 bytes
-  
-  // Walk page list (could optimize with hash set for O(1))
-  valk_gc_page_t *page = valk_gc_global_pool.all_pages;
-  while (page) {
-    uintptr_t page_start = (uintptr_t)page->slots;
-    uintptr_t page_end = page_start + (VALK_GC_SLOTS_PER_PAGE * VALK_GC_SLOT_SIZE);
-    if (addr >= page_start && addr < page_end) {
-      return true;
+__attribute__((noreturn))
+static void valk_gc_oom_abort(valk_gc_heap_t *heap, size_t requested) {
+  fprintf(stderr, "\n");
+  fprintf(stderr, "╔══════════════════════════════════════════════════════════════╗\n");
+  fprintf(stderr, "║                    FATAL: OUT OF MEMORY                      ║\n");
+  fprintf(stderr, "╠══════════════════════════════════════════════════════════════╣\n");
+  fprintf(stderr, "║ Requested:    %12zu bytes                              ║\n", requested);
+  fprintf(stderr, "║ Used:         %12zu bytes                              ║\n", valk_gc_used_bytes(heap));
+  fprintf(stderr, "║ Hard Limit:   %12zu bytes                              ║\n", heap->hard_limit);
+  fprintf(stderr, "║ Committed:    %12zu bytes                              ║\n", 
+          atomic_load(&heap->committed_bytes));
+  fprintf(stderr, "╠══════════════════════════════════════════════════════════════╣\n");
+  fprintf(stderr, "║ Per-Class Usage:                                             ║\n");
+  for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    size_t used = atomic_load(&heap->class_used_slots[c]);
+    size_t total = atomic_load(&heap->class_total_slots[c]);
+    if (total > 0) {
+      fprintf(stderr, "║   Class %d (%4d B): %8zu / %8zu slots (%3zu%%)         ║\n",
+              c, size_classes[c], used, total, (used * 100) / total);
     }
-    page = page->next;
   }
-  return false;
-}
-
-// Mark an object (handles both TLAB and malloc'd)
-void valk_gc_mark_object(void *ptr) {
-  if (valk_gc_is_page_ptr(ptr)) {
-    // TLAB object: set mark bit in page bitmap
-    valk_gc_page_t *page = /* find containing page */;
-    uint32_t slot_idx = /* compute slot index */;
-    valk_gc_bitmap_set(page->mark_bits, slot_idx);
-  } else {
-    // Malloc'd object: set mark flag in header
-    valk_gc_malloc_obj_t *obj = ((valk_gc_malloc_obj_t*)ptr) - 1;
-    atomic_store(&obj->marked, 1);
-  }
+  fprintf(stderr, "║ Large Objects: %12zu bytes                             ║\n",
+          atomic_load(&heap->large_object_bytes));
+  fprintf(stderr, "╠══════════════════════════════════════════════════════════════╣\n");
+  fprintf(stderr, "║ Increase limit: VALK_HEAP_HARD_LIMIT=%zu                ║\n",
+          heap->hard_limit * 2);
+  fprintf(stderr, "╚══════════════════════════════════════════════════════════════╝\n");
+  abort();
 }
 ```
-
-#### 1.7 Migration Strategy
-
-To migrate from current slab + linked-list to the two-tier model:
-
-1. Keep existing `lval_slab` and `lenv_slab` initially
-2. Add TLAB + per-thread malloc lists alongside
-3. Migrate incrementally:
-   - New lval/lenv allocations go to TLAB
-   - New large allocations go to per-thread malloc list
-   - Sweep handles both old slabs and new structures
-4. Remove old slabs once all objects migrated
-
-#### Test Artifacts - Phase 1
-
-| Test | Description | Pass Criteria |
-|------|-------------|---------------|
-| `test_gc_chunk_create` | Create and initialize chunk | Bitmaps zeroed, slots accessible |
-| `test_gc_chunk_pool_grow` | Pool grows when exhausted | New chunks added, no corruption |
-| `test_gc_tlab_alloc` | TLAB bump allocation | O(1), no locks, correct slot |
-| `test_gc_tlab_refill` | TLAB exhaustion and refill | Seamless, new chunk acquired |
-| `test_gc_bitmap_ops` | Set/clear/test bitmap bits | Correct bit manipulation |
-| `test_gc_multithread_alloc` | 4 threads allocating concurrently | No races, all allocations valid |
 
 ---
 
-### Phase 2: Safe Points and Thread Coordination
+## Heap Data Structures
 
-**Goal:** Implement mechanism for all threads to pause for GC.
-
-#### 2.1 GC Coordinator
+### Main Heap Structure
 
 ```c
-// src/gc.h
-
-typedef enum {
-  VALK_GC_IDLE = 0,
-  VALK_GC_STW_REQUESTED,
-  VALK_GC_MARKING,
-  VALK_GC_SWEEPING,
-} valk_gc_phase_e;
-
-typedef struct valk_gc_coordinator {
-  _Atomic valk_gc_phase_e phase;
-  _Atomic size_t threads_registered;
-  _Atomic size_t threads_paused;
+typedef struct valk_gc_heap {
+  // Virtual address space
+  void *base;                          // mmap'd base (never changes)
+  size_t reserved;                     // Total virtual reservation (4GB)
   
-  // Synchronization primitives
-  pthread_mutex_t lock;
-  pthread_cond_t all_paused;     // Signaled when all threads at safe point
-  pthread_cond_t gc_done;        // Signaled when GC complete
-  pthread_barrier_t barrier;     // For sync between GC phases
+  // Per-class page lists
+  valk_gc_page_list_t classes[VALK_GC_NUM_SIZE_CLASSES];
   
-  // Thread registry (for work stealing)
-  struct valk_gc_thread_info {
-    valk_thread_context_t *ctx;
-    pthread_t thread_id;
-    bool active;
-  } threads[VALK_GC_MAX_THREADS];
+  // Large object tracking
+  valk_gc_large_obj_t *large_objects;  // Linked list of large allocations
+  pthread_mutex_t large_lock;           // Protects large_objects list
+  
+  // Memory accounting
+  _Atomic size_t committed_bytes;
+  _Atomic size_t used_bytes;
+  _Atomic size_t large_object_bytes;
+  
+  // Limits
+  size_t hard_limit;
+  size_t soft_limit;
+  uint8_t gc_threshold_pct;
+  
+  // GC state
+  _Atomic bool gc_in_progress;
+  bool in_emergency_gc;
   
   // Statistics
-  _Atomic uint64_t cycles_total;
-  _Atomic uint64_t pause_us_total;
-} valk_gc_coordinator_t;
-
-extern valk_gc_coordinator_t valk_gc_coord;
+  _Atomic uint64_t collections;
+  _Atomic uint64_t bytes_allocated_total;
+  _Atomic uint64_t bytes_reclaimed_total;
+} valk_gc_heap_t;
 ```
 
-#### 2.2 Safe Point Macro
+### Per-Class Page List
 
 ```c
-// src/gc.h
-
-// Fast-path check: just read atomic phase
-#define VALK_GC_SAFE_POINT() \
-  do { \
-    if (UNLIKELY(atomic_load_explicit(&valk_gc_coord.phase, \
-                 memory_order_acquire) != VALK_GC_IDLE)) { \
-      valk_gc_safe_point_slow(); \
-    } \
-  } while (0)
-
-// For long-running builtins, check periodically
-#define VALK_GC_SAFE_POINT_PERIODIC(counter, interval) \
-  do { \
-    if (UNLIKELY(++(counter) >= (interval))) { \
-      (counter) = 0; \
-      VALK_GC_SAFE_POINT(); \
-    } \
-  } while (0)
+typedef struct valk_gc_page_list {
+  pthread_mutex_t lock;                 // Protects page list modifications
+  valk_gc_page_t *all_pages;            // All pages for this class
+  valk_gc_page_t *partial_pages;        // Pages with free slots
+  size_t num_pages;
+  _Atomic size_t total_slots;
+  _Atomic size_t used_slots;
+  _Atomic uint32_t next_tlab_page;      // For TLAB round-robin
+  uint16_t slot_size;                   // Size class
+  uint16_t slots_per_page;              // Pre-computed
+} valk_gc_page_list_t;
 ```
 
-#### 2.3 Safe Point Slow Path
+### Page Structure
 
 ```c
-// src/gc.c
+#define VALK_GC_PAGE_SIZE (64 * 1024)  // 64KB
 
-void valk_gc_safe_point_slow(void) {
-  valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
+typedef struct valk_gc_page {
+  struct valk_gc_page *next;           // Next in list
+  struct valk_gc_page *next_partial;   // Next in partial list (may differ)
+  uint32_t page_id;                    // For debugging
+  uint16_t slot_size;                  // Size class
+  uint16_t slots_per_page;             // Cached
+  _Atomic uint32_t num_allocated;      // Slots in use
   
-  // If STW requested, participate in GC
-  if (phase == VALK_GC_STW_REQUESTED) {
-    // Evacuate our scratch arena first (if using checkpoint model)
-    if (valk_thread_ctx.scratch && valk_thread_ctx.scratch->offset > 0) {
-      valk_checkpoint(valk_thread_ctx.scratch, 
-                      valk_thread_ctx.heap,
-                      valk_thread_ctx.root_env);
-    }
-    
-    // Signal we've reached safe point
-    size_t paused = atomic_fetch_add(&valk_gc_coord.threads_paused, 1,
-                                      memory_order_acq_rel) + 1;
-    
-    // If we're the last thread, signal coordinator
-    if (paused == atomic_load(&valk_gc_coord.threads_registered)) {
-      pthread_mutex_lock(&valk_gc_coord.lock);
-      pthread_cond_signal(&valk_gc_coord.all_paused);
-      pthread_mutex_unlock(&valk_gc_coord.lock);
-    }
-    
-    // Participate in GC work (mark/sweep)
-    valk_gc_participate();
-    
-    // Wait for GC to complete
-    pthread_mutex_lock(&valk_gc_coord.lock);
-    while (atomic_load(&valk_gc_coord.phase) != VALK_GC_IDLE) {
-      pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
-    }
-    pthread_mutex_unlock(&valk_gc_coord.lock);
-    
-    atomic_fetch_sub(&valk_gc_coord.threads_paused, 1, memory_order_release);
-  }
+  // Bitmaps: ceil(slots_per_page / 8) bytes each
+  // For 128-byte slots: 512 slots = 64 bytes bitmap
+  // For 16-byte slots: 4096 slots = 512 bytes bitmap
+  uint8_t *alloc_bitmap;               // Points into page or separate allocation
+  uint8_t *mark_bitmap;
+  
+  // Slot data follows (page-aligned)
+  _Alignas(64) uint8_t slots[];
+} valk_gc_page_t;
+
+// Total page size calculation
+static inline size_t valk_gc_page_total_size(uint16_t slot_size) {
+  uint16_t slots = VALK_GC_PAGE_SIZE / slot_size;
+  size_t bitmap_bytes = (slots + 7) / 8;
+  size_t header_size = sizeof(valk_gc_page_t) + 2 * bitmap_bytes;
+  header_size = (header_size + 63) & ~63;  // Align to 64 bytes
+  return header_size + (slots * slot_size);
 }
 ```
 
-#### 2.4 Safe Point Placement
+### Large Object Structure
 
 ```c
-// In eval loop (src/parser.c)
-valk_lval_t *valk_lval_eval(valk_lenv_t *env, valk_lval_t *lval) {
-  VALK_GC_SAFE_POINT();
-  
-  // ... existing eval logic ...
-}
-
-// In AIO event loop (src/aio/aio_system.c)
-void valk_aio_run(valk_aio_system_t *sys) {
-  while (!sys->shutdown) {
-    VALK_GC_SAFE_POINT();
-    uv_run(&sys->loop, UV_RUN_ONCE);
-    // ... process completions ...
-  }
-}
-
-// In long-running builtins
-valk_lval_t *builtin_map(valk_lenv_t *env, valk_lval_t *args) {
-  size_t gc_counter = 0;
-  valk_lval_t *list = /* ... */;
-  
-  while (!valk_lval_list_is_empty(list)) {
-    VALK_GC_SAFE_POINT_PERIODIC(gc_counter, 100);  // Check every 100 iterations
-    // ... process element ...
-  }
-  
-  return result;
-}
+typedef struct valk_gc_large_obj {
+  struct valk_gc_large_obj *next;
+  void *data;                          // mmap'd region
+  size_t size;                         // Allocation size
+  bool marked;                         // GC mark
+} valk_gc_large_obj_t;
 ```
 
-#### 2.5 Thread Registration
+### TLAB (Thread-Local Allocation Buffer)
 
 ```c
-// src/gc.c
+typedef struct valk_gc_tlab {
+  valk_gc_heap_t *heap;
+  
+  // Per-class TLAB state
+  struct {
+    valk_gc_page_t *page;              // Current page
+    uint32_t next_slot;                // Next slot to allocate
+    uint32_t limit_slot;               // End of claimed range
+  } classes[VALK_GC_NUM_SIZE_CLASSES];
+} valk_gc_tlab_t;
 
-void valk_gc_thread_register(void) {
-  size_t idx = atomic_fetch_add(&valk_gc_coord.threads_registered, 1,
-                                 memory_order_acq_rel);
-  
-  if (idx >= VALK_GC_MAX_THREADS) {
-    VALK_ERROR("Too many threads registered with GC");
-    abort();
-  }
-  
-  // Initialize thread-local GC context
-  valk_thread_ctx.gc_thread_id = idx;
-  valk_thread_ctx.gc_registered = true;
-  valk_thread_ctx.tlab = (valk_gc_tlab_t){0};
-  
-  // Allocate root stack
-  valk_thread_ctx.root_stack = malloc(sizeof(valk_lval_t*) * 256);
-  valk_thread_ctx.root_stack_capacity = 256;
-  valk_thread_ctx.root_stack_count = 0;
-  
-  // Register in coordinator
-  valk_gc_coord.threads[idx].ctx = &valk_thread_ctx;
-  valk_gc_coord.threads[idx].thread_id = pthread_self();
-  valk_gc_coord.threads[idx].active = true;
-}
-
-void valk_gc_thread_unregister(void) {
-  if (!valk_thread_ctx.gc_registered) return;
-  
-  // Must be at safe point to unregister
-  VALK_GC_SAFE_POINT();
-  
-  size_t idx = valk_thread_ctx.gc_thread_id;
-  valk_gc_coord.threads[idx].active = false;
-  
-  atomic_fetch_sub(&valk_gc_coord.threads_registered, 1, memory_order_release);
-  
-  free(valk_thread_ctx.root_stack);
-  valk_thread_ctx.root_stack = NULL;
-  valk_thread_ctx.gc_registered = false;
-}
+#define VALK_GC_TLAB_SLOTS 32          // Slots claimed per refill
 ```
-
-#### Test Artifacts - Phase 2
-
-| Test | Description | Pass Criteria |
-|------|-------------|---------------|
-| `test_gc_safe_point_noop` | Safe point when IDLE | No blocking, fast return |
-| `test_gc_safe_point_stw` | Safe point when STW requested | Thread pauses, resumes after |
-| `test_gc_stw_basic` | 4 threads, trigger STW | All threads pause within 10ms |
-| `test_gc_stw_under_load` | Threads allocating during STW | Eventually pause, no deadlock |
-| `test_gc_thread_register` | Register/unregister threads | Correct counting, no races |
-| `test_gc_thread_unregister_during_gc` | Thread exits during GC | Clean shutdown, no hang |
 
 ---
 
-### Phase 3: Root Enumeration
+## Allocation Algorithm
 
-**Goal:** Each thread can enumerate its roots for GC scanning.
+### Overview
 
-#### 3.1 Root Stack Macros
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         ALLOCATION FLOW                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  valk_gc_alloc(heap, bytes)                                                 │
+│       │                                                                      │
+│       ├──► bytes > 4KB?                                                      │
+│       │         │                                                            │
+│       │         YES ──► valk_gc_alloc_large() ──► mmap() individual object  │
+│       │         │                                                            │
+│       │         NO                                                           │
+│       │         ▼                                                            │
+│       ├──► class = size_class(bytes)                                        │
+│       │         │                                                            │
+│       │         ▼                                                            │
+│       ├──► TLAB[class].next_slot < limit_slot?                              │
+│       │         │                                                            │
+│       │         YES ──► return slot[next_slot++]  (FAST PATH - no locks)    │
+│       │         │                                                            │
+│       │         NO                                                           │
+│       │         ▼                                                            │
+│       └──► valk_gc_tlab_refill(class) ──► claim slots from page pool        │
+│                   │                                                          │
+│                   ├──► partial_pages available?                              │
+│                   │         │                                                │
+│                   │         YES ──► claim slots from partial page           │
+│                   │         │                                                │
+│                   │         NO                                               │
+│                   │         ▼                                                │
+│                   └──► allocate new page ──► commit via mprotect()          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Fast Path (TLAB Bump)
 
 ```c
-// src/gc.h
-
-// Push a root to protect it during potential GC
-#define VALK_GC_ROOT(val) \
-  valk_gc_root_t __gc_root_##__LINE__ __attribute__((cleanup(valk_gc_root_cleanup))) = \
-    valk_gc_root_push(val)
-
-// For multiple values in sequence
-#define VALK_GC_ROOT_PUSH(val) valk_gc_root_push(val)
-#define VALK_GC_ROOT_POP()     valk_gc_root_pop()
-
-// Block-scoped root (automatically popped at end of scope)
-#define VALK_GC_WITH_ROOTS(...) \
-  for (size_t __gc_saved = valk_thread_ctx.root_stack_count, __gc_once = 1; \
-       __gc_once; \
-       valk_thread_ctx.root_stack_count = __gc_saved, __gc_once = 0)
-
-// src/gc.c
-
-typedef struct { size_t saved_count; } valk_gc_root_t;
-
-static inline valk_gc_root_t valk_gc_root_push(valk_lval_t *val) {
-  valk_thread_context_t *ctx = &valk_thread_ctx;
-  
-  if (ctx->root_stack_count >= ctx->root_stack_capacity) {
-    ctx->root_stack_capacity *= 2;
-    ctx->root_stack = realloc(ctx->root_stack,
-                               sizeof(valk_lval_t*) * ctx->root_stack_capacity);
+static inline void *valk_gc_alloc(valk_gc_heap_t *heap, size_t bytes) {
+  // Check limits
+  if (__builtin_expect(valk_gc_used_bytes(heap) + bytes > heap->soft_limit, 0)) {
+    valk_gc_check_limits(heap, bytes);
   }
   
-  size_t saved = ctx->root_stack_count;
-  ctx->root_stack[ctx->root_stack_count++] = val;
-  return (valk_gc_root_t){ saved };
-}
-
-static inline void valk_gc_root_pop(void) {
-  valk_thread_ctx.root_stack_count--;
-}
-
-static inline void valk_gc_root_cleanup(valk_gc_root_t *r) {
-  valk_thread_ctx.root_stack_count = r->saved_count;
+  // Large object path
+  if (__builtin_expect(bytes > VALK_GC_LARGE_THRESHOLD, 0)) {
+    return valk_gc_alloc_large(heap, bytes);
+  }
+  
+  // Get size class
+  uint8_t class = valk_gc_size_class(bytes);
+  valk_gc_tlab_t *tlab = valk_thread_ctx.tlab;
+  
+  // Fast path: bump allocate from TLAB
+  if (__builtin_expect(tlab->classes[class].next_slot < 
+                       tlab->classes[class].limit_slot, 1)) {
+    uint32_t slot = tlab->classes[class].next_slot++;
+    void *ptr = valk_gc_page_slot_ptr(tlab->classes[class].page, slot);
+    memset(ptr, 0, size_classes[class]);
+    return ptr;
+  }
+  
+  // Slow path: refill TLAB
+  return valk_gc_alloc_slow(heap, class);
 }
 ```
 
-#### 3.2 Global Roots Registry
+### Slow Path (TLAB Refill)
 
 ```c
-// src/gc.h
-
-#define VALK_GC_MAX_GLOBAL_ROOTS 1024
-
-typedef struct valk_gc_global_roots {
-  pthread_mutex_t lock;
-  valk_lval_t **roots[VALK_GC_MAX_GLOBAL_ROOTS];  // Pointers to root pointers
-  size_t count;
-} valk_gc_global_roots_t;
-
-extern valk_gc_global_roots_t valk_gc_global_roots;
-
-// Register a global root (for C-side persistent references)
-void valk_gc_add_global_root(valk_lval_t **root);
-void valk_gc_remove_global_root(valk_lval_t **root);
+static void *valk_gc_alloc_slow(valk_gc_heap_t *heap, uint8_t class) {
+  valk_gc_tlab_t *tlab = valk_thread_ctx.tlab;
+  valk_gc_page_list_t *list = &heap->classes[class];
+  
+  pthread_mutex_lock(&list->lock);
+  
+  // Try to get slots from a partial page
+  valk_gc_page_t *page = list->partial_pages;
+  uint32_t start_slot = 0;
+  
+  if (page != NULL) {
+    // Find contiguous free slots
+    start_slot = valk_gc_find_free_slots(page, VALK_GC_TLAB_SLOTS);
+    if (start_slot == UINT32_MAX) {
+      // Page is actually full, remove from partial list
+      list->partial_pages = page->next_partial;
+      page = NULL;
+    }
+  }
+  
+  if (page == NULL) {
+    // Allocate new page
+    pthread_mutex_unlock(&list->lock);
+    page = valk_gc_page_alloc(heap, class);
+    if (page == NULL) {
+      return NULL;  // OOM
+    }
+    pthread_mutex_lock(&list->lock);
+    
+    // Add to all_pages and partial_pages
+    page->next = list->all_pages;
+    list->all_pages = page;
+    page->next_partial = list->partial_pages;
+    list->partial_pages = page;
+    list->num_pages++;
+    atomic_fetch_add(&list->total_slots, page->slots_per_page);
+    
+    start_slot = 0;
+  }
+  
+  // Claim slots
+  uint32_t num_slots = VALK_GC_TLAB_SLOTS;
+  if (start_slot + num_slots > page->slots_per_page) {
+    num_slots = page->slots_per_page - start_slot;
+  }
+  
+  // Pre-set alloc bits
+  for (uint32_t i = start_slot; i < start_slot + num_slots; i++) {
+    valk_gc_bitmap_set(page->alloc_bitmap, i);
+  }
+  atomic_fetch_add(&page->num_allocated, num_slots);
+  atomic_fetch_add(&list->used_slots, num_slots);
+  atomic_fetch_add(&heap->used_bytes, num_slots * size_classes[class]);
+  
+  // Check if page is now full
+  if (atomic_load(&page->num_allocated) >= page->slots_per_page) {
+    // Remove from partial list
+    valk_gc_page_t **pp = &list->partial_pages;
+    while (*pp != NULL && *pp != page) {
+      pp = &(*pp)->next_partial;
+    }
+    if (*pp == page) {
+      *pp = page->next_partial;
+    }
+  }
+  
+  pthread_mutex_unlock(&list->lock);
+  
+  // Update TLAB
+  tlab->classes[class].page = page;
+  tlab->classes[class].next_slot = start_slot;
+  tlab->classes[class].limit_slot = start_slot + num_slots;
+  
+  // Return first slot
+  uint32_t slot = tlab->classes[class].next_slot++;
+  void *ptr = valk_gc_page_slot_ptr(page, slot);
+  memset(ptr, 0, size_classes[class]);
+  return ptr;
+}
 ```
 
-#### 3.3 Root Enumeration
+### Large Object Allocation
 
 ```c
-// src/gc.c
-
-typedef void (*valk_gc_root_visitor_t)(valk_lval_t *root, void *ctx);
-
-// Visit all roots for this thread
-void valk_gc_visit_thread_roots(valk_gc_root_visitor_t visitor, void *ctx) {
-  valk_thread_context_t *tc = &valk_thread_ctx;
+static void *valk_gc_alloc_large(valk_gc_heap_t *heap, size_t bytes) {
+  // Round up to page boundary
+  size_t alloc_size = (bytes + VALK_GC_PAGE_SIZE - 1) & ~(VALK_GC_PAGE_SIZE - 1);
   
-  // Visit explicit root stack
-  for (size_t i = 0; i < tc->root_stack_count; i++) {
-    if (tc->root_stack[i] != NULL) {
-      visitor(tc->root_stack[i], ctx);
+  // Check limits
+  size_t current = valk_gc_used_bytes(heap);
+  if (current + alloc_size > heap->hard_limit) {
+    if (!heap->in_emergency_gc) {
+      valk_gc_emergency_collect(heap);
+    }
+    if (valk_gc_used_bytes(heap) + alloc_size > heap->hard_limit) {
+      valk_gc_oom_abort(heap, bytes);
     }
   }
   
-  // Visit TLAB in-flight objects (allocated since last safe point)
-  // These are already marked as allocated in chunk bitmap
-}
-
-// Visit global roots (called by thread 0)
-void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
-  // Root environment
-  valk_lenv_t *root_env = /* get global root env */;
-  if (root_env) {
-    valk_gc_visit_env_roots(root_env, visitor, ctx);
+  // Allocate via mmap
+  void *data = mmap(NULL, alloc_size, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (data == MAP_FAILED) {
+    return NULL;
   }
   
-  // Registered global roots
-  pthread_mutex_lock(&valk_gc_global_roots.lock);
-  for (size_t i = 0; i < valk_gc_global_roots.count; i++) {
-    valk_lval_t *val = *valk_gc_global_roots.roots[i];
-    if (val != NULL) {
-      visitor(val, ctx);
-    }
-  }
-  pthread_mutex_unlock(&valk_gc_global_roots.lock);
+  // Create tracking structure
+  valk_gc_large_obj_t *obj = malloc(sizeof(valk_gc_large_obj_t));
+  obj->data = data;
+  obj->size = alloc_size;
+  obj->marked = false;
+  
+  // Add to list
+  pthread_mutex_lock(&heap->large_lock);
+  obj->next = heap->large_objects;
+  heap->large_objects = obj;
+  pthread_mutex_unlock(&heap->large_lock);
+  
+  atomic_fetch_add(&heap->large_object_bytes, alloc_size);
+  
+  return data;
+}
+```
+
+---
+
+## Marking Algorithm
+
+### Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           PARALLEL MARK PHASE                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. ROOT ENUMERATION (per-thread, parallel)                                 │
+│     ├── Thread root stack (explicit VALK_GC_ROOT pushes)                    │
+│     ├── Thread's TLAB in-flight slots                                       │
+│     └── Thread 0 also marks: global roots, root_env                         │
+│                                                                              │
+│  2. BARRIER: Wait for all threads to finish root marking                    │
+│                                                                              │
+│  3. WORK-STEALING MARK LOOP (parallel)                                      │
+│     ├── Pop from local mark queue (LIFO - better locality)                  │
+│     ├── If empty, steal from other threads' queues (FIFO)                   │
+│     ├── For each object:                                                     │
+│     │   ├── Try atomic mark (CAS on mark bitmap)                            │
+│     │   ├── If already marked: skip                                          │
+│     │   └── If newly marked: scan children, push to queue                   │
+│     └── Repeat until all queues empty                                        │
+│                                                                              │
+│  4. TERMINATION DETECTION                                                   │
+│     ├── All threads report idle                                              │
+│     ├── Verify all queues truly empty                                        │
+│     └── If work found: re-enter loop                                         │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Mark Bit Location
+
+**Design Decision**: Mark bits in bitmap, not in object header.
+
+```c
+// Mark bit is in the page's mark_bitmap, not in lval->flags
+// This is critical for size classes: objects may not have space for header
+
+static inline bool valk_gc_try_mark_slot(valk_gc_page_t *page, uint32_t slot) {
+  uint8_t *byte = &page->mark_bitmap[slot / 8];
+  uint8_t bit = 1 << (slot % 8);
+  
+  // Atomic test-and-set
+  uint8_t old = __atomic_fetch_or(byte, bit, __ATOMIC_ACQ_REL);
+  return (old & bit) == 0;  // True if we set it first
 }
 
-// Visit all values in an environment
-static void valk_gc_visit_env_roots(valk_lenv_t *env, 
-                                     valk_gc_root_visitor_t visitor, 
-                                     void *ctx) {
+static inline bool valk_gc_is_marked_slot(valk_gc_page_t *page, uint32_t slot) {
+  return (page->mark_bitmap[slot / 8] & (1 << (slot % 8))) != 0;
+}
+```
+
+### Pointer to Page/Slot Lookup
+
+```c
+// O(1) pointer lookup using virtual address arithmetic
+static inline bool valk_gc_ptr_to_location(valk_gc_heap_t *heap, void *ptr,
+                                            uint8_t *out_class,
+                                            valk_gc_page_t **out_page,
+                                            uint32_t *out_slot) {
+  // Check if in heap bounds
+  uintptr_t addr = (uintptr_t)ptr;
+  uintptr_t base = (uintptr_t)heap->base;
+  if (addr < base || addr >= base + heap->reserved) {
+    return false;
+  }
+  
+  // Determine which class region
+  // Classes are laid out contiguously: [class0 pages][class1 pages]...
+  // Each class has a known start offset
+  uintptr_t offset = addr - base;
+  
+  for (uint8_t c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page_list_t *list = &heap->classes[c];
+    uintptr_t class_start = list->region_start;
+    uintptr_t class_end = class_start + (list->num_pages * valk_gc_page_total_size(size_classes[c]));
+    
+    if (offset >= class_start && offset < class_end) {
+      // Found the class
+      *out_class = c;
+      
+      // Find page within class
+      size_t page_size = valk_gc_page_total_size(size_classes[c]);
+      size_t page_index = (offset - class_start) / page_size;
+      
+      // Walk page list to find page (or use array if we add one)
+      valk_gc_page_t *page = list->all_pages;
+      for (size_t i = 0; i < page_index && page != NULL; i++) {
+        page = page->next;
+      }
+      if (page == NULL) return false;
+      
+      *out_page = page;
+      
+      // Find slot within page
+      uintptr_t page_base = (uintptr_t)page->slots;
+      if (addr < page_base) return false;
+      *out_slot = (addr - page_base) / size_classes[c];
+      
+      return true;
+    }
+  }
+  
+  return false;  // Not in any class region (might be large object)
+}
+```
+
+### Object Scanning
+
+```c
+static void mark_and_push(void *ptr, valk_gc_mark_queue_t *queue, 
+                          valk_gc_heap_t *heap) {
+  if (ptr == NULL) return;
+  
+  // Find location
+  uint8_t class;
+  valk_gc_page_t *page;
+  uint32_t slot;
+  
+  if (!valk_gc_ptr_to_location(heap, ptr, &class, &page, &slot)) {
+    // Might be large object
+    valk_gc_mark_large_object(heap, ptr);
+    return;
+  }
+  
+  // Try to mark
+  if (!valk_gc_try_mark_slot(page, slot)) {
+    return;  // Already marked
+  }
+  
+  // Push to queue for child scanning
+  if (!valk_gc_mark_queue_push(queue, ptr)) {
+    // Queue full, process immediately
+    scan_object(ptr, class, queue, heap);
+  }
+}
+
+static void scan_object(void *ptr, uint8_t class, 
+                        valk_gc_mark_queue_t *queue,
+                        valk_gc_heap_t *heap) {
+  // Determine object type by examining contents
+  // For lval_t: check flags field for type
+  // For arrays: we need type info from allocator (see below)
+  
+  if (size_classes[class] >= sizeof(valk_lval_t)) {
+    // Could be an lval
+    valk_lval_t *v = (valk_lval_t *)ptr;
+    
+    switch (LVAL_TYPE(v)) {
+      case LVAL_CONS:
+      case LVAL_QEXPR:
+        mark_and_push(v->cons.head, queue, heap);
+        mark_and_push(v->cons.tail, queue, heap);
+        break;
+        
+      case LVAL_FUN:
+        if (v->fun.builtin == NULL) {
+          mark_and_push(v->fun.formals, queue, heap);
+          mark_and_push(v->fun.body, queue, heap);
+          if (v->fun.env) {
+            scan_env(v->fun.env, queue, heap);
+          }
+        }
+        // Mark name string
+        mark_and_push(v->fun.name, queue, heap);
+        break;
+        
+      case LVAL_SYM:
+      case LVAL_STR:
+      case LVAL_ERR:
+        // Mark string data
+        mark_and_push(v->str, queue, heap);
+        break;
+        
+      case LVAL_HANDLE:
+        if (v->async.handle) {
+          mark_and_push(v->async.handle->on_complete, queue, heap);
+          mark_and_push(v->async.handle->on_error, queue, heap);
+          mark_and_push(v->async.handle->on_cancel, queue, heap);
+          mark_and_push(v->async.handle->result, queue, heap);
+          mark_and_push(v->async.handle->error, queue, heap);
+          if (v->async.handle->env) {
+            scan_env(v->async.handle->env, queue, heap);
+          }
+        }
+        break;
+        
+      case LVAL_REF:
+        // REF may point to GC-allocated data
+        mark_and_push(v->ref.type, queue, heap);
+        // ref.ptr is opaque, don't scan
+        break;
+        
+      default:
+        // LVAL_NUM, LVAL_NIL - no children
+        break;
+    }
+  }
+  
+  // For arrays: need metadata to know element count
+  // This requires storing count in allocation header or using conservative scan
+}
+
+static void scan_env(valk_lenv_t *env, valk_gc_mark_queue_t *queue,
+                     valk_gc_heap_t *heap) {
   if (env == NULL) return;
   
-  // Visit all values
+  // Mark the env struct itself
+  mark_and_push(env, queue, heap);
+  
+  // Mark arrays
+  mark_and_push(env->symbols.items, queue, heap);
+  mark_and_push(env->vals.items, queue, heap);
+  
+  // Mark each symbol string
+  for (size_t i = 0; i < env->symbols.count; i++) {
+    mark_and_push(env->symbols.items[i], queue, heap);
+  }
+  
+  // Mark each value
   for (size_t i = 0; i < env->vals.count; i++) {
-    if (env->vals.items[i] != NULL) {
-      visitor(env->vals.items[i], ctx);
-    }
+    mark_and_push(env->vals.items[i], queue, heap);
   }
   
-  // Visit parent chain
-  valk_gc_visit_env_roots(env->parent, visitor, ctx);
-  valk_gc_visit_env_roots(env->fallback, visitor, ctx);
+  // Recurse on parent/fallback
+  scan_env(env->parent, queue, heap);
+  scan_env(env->fallback, queue, heap);
 }
 ```
 
-#### Test Artifacts - Phase 3
-
-| Test | Description | Pass Criteria |
-|------|-------------|---------------|
-| `test_gc_root_push_pop` | Push/pop roots during eval | Stack correctly maintained |
-| `test_gc_root_overflow` | Exceed initial root stack capacity | Resizes correctly |
-| `test_gc_root_scoped` | VALK_GC_ROOT auto-cleanup | Root popped at scope end |
-| `test_gc_global_roots` | Add/remove global roots | No leaks, correct enumeration |
-| `test_gc_roots_multithread` | Each thread has separate root stack | No interference |
-| `test_gc_enumerate_all` | Full root enumeration | All roots found, no duplicates |
-
----
-
-### Phase 4: Parallel Mark
-
-**Goal:** All threads participate in marking phase using work-stealing.
-
-#### 4.1 Work-Stealing Deque (Chase-Lev)
+### Parallel Mark Main Loop
 
 ```c
-// src/gc.h
-
-#define VALK_GC_MARK_QUEUE_SIZE 8192  // Power of 2 for fast modulo
-
-typedef struct valk_gc_mark_queue {
-  _Atomic(valk_lval_t *) items[VALK_GC_MARK_QUEUE_SIZE];
-  _Atomic size_t top;     // Thieves steal from here (FIFO end)
-  _Atomic size_t bottom;  // Owner pushes/pops here (LIFO end)
-} valk_gc_mark_queue_t;
-
-// Per-thread mark queue (in thread context)
-// Owner operations (local thread only)
-bool valk_gc_mark_queue_push(valk_gc_mark_queue_t *q, valk_lval_t *val);
-valk_lval_t *valk_gc_mark_queue_pop(valk_gc_mark_queue_t *q);
-
-// Thief operation (other threads)
-valk_lval_t *valk_gc_mark_queue_steal(valk_gc_mark_queue_t *q);
-```
-
-#### 4.2 Chase-Lev Implementation
-
-```c
-// src/gc.c
-
-bool valk_gc_mark_queue_push(valk_gc_mark_queue_t *q, valk_lval_t *val) {
-  size_t b = atomic_load_explicit(&q->bottom, memory_order_relaxed);
-  size_t t = atomic_load_explicit(&q->top, memory_order_acquire);
-  
-  if (b - t >= VALK_GC_MARK_QUEUE_SIZE) {
-    return false;  // Queue full
-  }
-  
-  atomic_store_explicit(&q->items[b % VALK_GC_MARK_QUEUE_SIZE], val,
-                        memory_order_relaxed);
-  atomic_thread_fence(memory_order_release);
-  atomic_store_explicit(&q->bottom, b + 1, memory_order_relaxed);
-  return true;
-}
-
-valk_lval_t *valk_gc_mark_queue_pop(valk_gc_mark_queue_t *q) {
-  size_t b = atomic_load_explicit(&q->bottom, memory_order_relaxed) - 1;
-  atomic_store_explicit(&q->bottom, b, memory_order_relaxed);
-  atomic_thread_fence(memory_order_seq_cst);
-  
-  size_t t = atomic_load_explicit(&q->top, memory_order_relaxed);
-  
-  if (t <= b) {
-    // Non-empty
-    valk_lval_t *val = atomic_load_explicit(
-        &q->items[b % VALK_GC_MARK_QUEUE_SIZE], memory_order_relaxed);
-    
-    if (t == b) {
-      // Last element, race with stealers
-      if (!atomic_compare_exchange_strong(&q->top, &t, t + 1)) {
-        val = NULL;  // Lost race
-      }
-      atomic_store_explicit(&q->bottom, b + 1, memory_order_relaxed);
-    }
-    return val;
-  }
-  
-  // Empty
-  atomic_store_explicit(&q->bottom, b + 1, memory_order_relaxed);
-  return NULL;
-}
-
-valk_lval_t *valk_gc_mark_queue_steal(valk_gc_mark_queue_t *q) {
-  size_t t = atomic_load_explicit(&q->top, memory_order_acquire);
-  atomic_thread_fence(memory_order_seq_cst);
-  size_t b = atomic_load_explicit(&q->bottom, memory_order_acquire);
-  
-  if (t >= b) {
-    return NULL;  // Empty
-  }
-  
-  valk_lval_t *val = atomic_load_explicit(
-      &q->items[t % VALK_GC_MARK_QUEUE_SIZE], memory_order_relaxed);
-  
-  if (!atomic_compare_exchange_strong(&q->top, &t, t + 1)) {
-    return NULL;  // Lost race with other thief or owner
-  }
-  
-  return val;
-}
-```
-
-#### 4.3 Parallel Mark Algorithm
-
-```c
-// src/gc.c
-
-void valk_gc_parallel_mark(void) {
+void valk_gc_parallel_mark(valk_gc_heap_t *heap) {
   size_t my_id = valk_thread_ctx.gc_thread_id;
   valk_gc_mark_queue_t *my_queue = &valk_gc_coord.threads[my_id].mark_queue;
   
-  // Phase 1: Mark own roots
-  valk_gc_visit_thread_roots(mark_and_push, my_queue);
+  // Initialize queue
+  valk_gc_mark_queue_init(my_queue);
   
-  // Thread 0 also marks global roots
+  // Phase 1: Mark own roots
+  valk_gc_visit_thread_roots(mark_root_visitor, my_queue);
+  
+  // Thread 0 marks global roots
   if (my_id == 0) {
-    valk_gc_visit_global_roots(mark_and_push, my_queue);
+    valk_gc_visit_global_roots(mark_root_visitor, my_queue);
   }
   
   // Barrier: wait for all threads to finish root marking
-  pthread_barrier_wait(&valk_gc_coord.barrier);
+  valk_barrier_wait(&valk_gc_coord.barrier);
   
   // Phase 2: Work-stealing mark loop
   size_t idle_spins = 0;
   const size_t MAX_IDLE_SPINS = 1000;
   
   while (true) {
-    // Try local work first (LIFO - better cache locality)
-    valk_lval_t *obj;
+    // Process local queue (LIFO for locality)
+    void *obj;
     while ((obj = valk_gc_mark_queue_pop(my_queue)) != NULL) {
-      mark_children(obj, my_queue);
+      uint8_t class;
+      valk_gc_page_t *page;
+      uint32_t slot;
+      
+      if (valk_gc_ptr_to_location(heap, obj, &class, &page, &slot)) {
+        scan_object(obj, class, my_queue, heap);
+      }
       idle_spins = 0;
     }
     
-    // Try stealing from others (round-robin)
+    // Try stealing from others
     bool found_work = false;
     size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
     
@@ -1094,7 +890,13 @@ void valk_gc_parallel_mark(void) {
       
       obj = valk_gc_mark_queue_steal(&valk_gc_coord.threads[victim].mark_queue);
       if (obj != NULL) {
-        mark_children(obj, my_queue);
+        uint8_t class;
+        valk_gc_page_t *page;
+        uint32_t slot;
+        
+        if (valk_gc_ptr_to_location(heap, obj, &class, &page, &slot)) {
+          scan_object(obj, class, my_queue, heap);
+        }
         found_work = true;
         idle_spins = 0;
         break;
@@ -1104,551 +906,1682 @@ void valk_gc_parallel_mark(void) {
     if (!found_work) {
       idle_spins++;
       if (idle_spins >= MAX_IDLE_SPINS) {
-        // Check global termination
         if (valk_gc_check_termination()) {
           break;
         }
         idle_spins = 0;
       }
-      // Yield to other threads
       sched_yield();
     }
   }
 }
-
-static void mark_and_push(valk_lval_t *obj, void *ctx) {
-  valk_gc_mark_queue_t *queue = ctx;
-  
-  if (obj == NULL) return;
-  if (!valk_gc_try_mark(obj)) return;  // Already marked
-  
-  if (!valk_gc_mark_queue_push(queue, obj)) {
-    // Queue full, process immediately
-    mark_children(obj, queue);
-  }
-}
-
-static void mark_children(valk_lval_t *obj, valk_gc_mark_queue_t *queue) {
-  switch (LVAL_TYPE(obj)) {
-    case LVAL_CONS:
-    case LVAL_QEXPR:
-      mark_and_push(obj->cons.head, queue);
-      mark_and_push(obj->cons.tail, queue);
-      break;
-      
-    case LVAL_FUN:
-      if (obj->fun.builtin == NULL) {
-        mark_and_push(obj->fun.formals, queue);
-        mark_and_push(obj->fun.body, queue);
-        if (obj->fun.env) {
-          mark_env(obj->fun.env, queue);
-        }
-      }
-      break;
-      
-    case LVAL_HANDLE:
-      if (obj->async.handle) {
-        mark_and_push(obj->async.handle->on_complete, queue);
-        mark_and_push(obj->async.handle->on_error, queue);
-        mark_and_push(obj->async.handle->on_cancel, queue);
-        mark_and_push(obj->async.handle->result, queue);
-        mark_and_push(obj->async.handle->error, queue);
-        if (obj->async.handle->env) {
-          mark_env(obj->async.handle->env, queue);
-        }
-      }
-      break;
-      
-    case LVAL_ENV:
-      mark_env(&obj->env, queue);
-      break;
-      
-    // Leaf types - no children
-    default:
-      break;
-  }
-}
-
-static void mark_env(valk_lenv_t *env, valk_gc_mark_queue_t *queue) {
-  if (env == NULL) return;
-  
-  // Mark environment as GC object (if chunk-allocated)
-  // TODO: environments need to be GC objects too
-  
-  // Mark all values
-  for (size_t i = 0; i < env->vals.count; i++) {
-    mark_and_push(env->vals.items[i], queue);
-  }
-  
-  // Mark parent and fallback
-  mark_env(env->parent, queue);
-  mark_env(env->fallback, queue);
-}
 ```
-
-#### 4.4 Termination Detection
-
-```c
-// src/gc.c
-
-// Simple termination: all threads idle and all queues empty
-static bool valk_gc_check_termination(void) {
-  // Use atomic counter for idle threads
-  static _Atomic size_t idle_count = 0;
-  static _Atomic bool terminated = false;
-  
-  size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
-  size_t idle = atomic_fetch_add(&idle_count, 1, memory_order_acq_rel) + 1;
-  
-  if (idle == num_threads) {
-    // Everyone thinks they're idle - verify all queues are empty
-    bool all_empty = true;
-    for (size_t i = 0; i < num_threads; i++) {
-      valk_gc_mark_queue_t *q = &valk_gc_coord.threads[i].mark_queue;
-      size_t t = atomic_load(&q->top);
-      size_t b = atomic_load(&q->bottom);
-      if (t < b) {
-        all_empty = false;
-        break;
-      }
-    }
-    
-    if (all_empty) {
-      atomic_store(&terminated, true, memory_order_release);
-    }
-  }
-  
-  // Spin briefly waiting for termination
-  for (int i = 0; i < 100; i++) {
-    if (atomic_load(&terminated, memory_order_acquire)) {
-      return true;
-    }
-    __builtin_ia32_pause();
-  }
-  
-  // Not terminated, decrement idle count and continue
-  atomic_fetch_sub(&idle_count, 1, memory_order_release);
-  return false;
-}
-```
-
-#### Test Artifacts - Phase 4
-
-| Test | Description | Pass Criteria |
-|------|-------------|---------------|
-| `test_gc_mark_queue_basic` | Single-thread push/pop | LIFO behavior correct |
-| `test_gc_mark_queue_steal` | Stealer takes from other queue | FIFO order, no duplicates |
-| `test_gc_work_stealing_stress` | 8 threads, high contention | All items processed exactly once |
-| `test_gc_parallel_mark_list` | Mark long linked list | All nodes marked, work distributed |
-| `test_gc_parallel_mark_tree` | Mark balanced tree | All nodes marked, parallel speedup |
-| `test_gc_parallel_mark_cycles` | Graph with cycles | No infinite loop, each marked once |
-| `test_gc_termination_detection` | Detect when all queues empty | Terminates correctly |
 
 ---
 
-### Phase 5: Parallel Sweep
+## Sweeping Algorithm
 
-**Goal:** Threads divide chunks and sweep in parallel.
+### Overview
 
-#### 5.1 Chunk Partitioning
-
-```c
-// src/gc.c
-
-void valk_gc_parallel_sweep(void) {
-  size_t my_id = valk_thread_ctx.gc_thread_id;
-  size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
-  valk_gc_chunk_pool_t *pool = &global_chunk_pool;
-  
-  // Count chunks
-  size_t num_chunks = pool->num_chunks;
-  if (num_chunks == 0) return;
-  
-  // Static partitioning
-  size_t chunks_per_thread = (num_chunks + num_threads - 1) / num_threads;
-  size_t my_start = my_id * chunks_per_thread;
-  size_t my_end = (my_id + 1) * chunks_per_thread;
-  if (my_end > num_chunks) my_end = num_chunks;
-  
-  // Sweep my chunks
-  size_t freed_slots = 0;
-  valk_gc_chunk_t *chunk = pool->all_chunks;
-  
-  for (size_t i = 0; i < my_end && chunk != NULL; i++) {
-    if (i >= my_start) {
-      freed_slots += sweep_chunk(chunk);
-    }
-    chunk = chunk->next;
-  }
-  
-  // Update global stats
-  atomic_fetch_sub(&pool->used_slots, freed_slots, memory_order_relaxed);
-  
-  // Barrier: wait for all sweeping to complete
-  pthread_barrier_wait(&valk_gc_coord.barrier);
-}
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           PARALLEL SWEEP PHASE                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. PARTITION WORK                                                          │
+│     ├── Each class's pages divided among threads                            │
+│     └── Large objects swept by thread 0                                      │
+│                                                                              │
+│  2. PER-PAGE SWEEP (parallel)                                               │
+│     ├── Load alloc_bitmap word (64 bits = 64 slots)                         │
+│     ├── Load mark_bitmap word                                                │
+│     ├── garbage = alloc & ~mark                                              │
+│     ├── For each garbage bit:                                                │
+│     │   ├── Call finalizer if LVAL_REF                                      │
+│     │   └── Clear alloc bit                                                  │
+│     ├── Clear mark bits for next cycle                                       │
+│     └── Update page->num_allocated                                           │
+│                                                                              │
+│  3. PAGE RECLAMATION                                                        │
+│     ├── If page is completely empty:                                         │
+│     │   ├── madvise(MADV_DONTNEED) to release physical memory               │
+│     │   └── Move to free page pool (or just leave for reuse)                │
+│     └── Otherwise: add to partial_pages if has free slots                   │
+│                                                                              │
+│  4. LARGE OBJECT SWEEP (single-threaded)                                    │
+│     ├── Walk large_objects list                                              │
+│     ├── If !marked: munmap() and free tracking struct                       │
+│     └── If marked: clear mark for next cycle                                │
+│                                                                              │
+│  5. UPDATE ACCOUNTING                                                       │
+│     ├── Sum freed slots per class                                            │
+│     ├── Update heap->used_bytes                                              │
+│     └── Reset TLAB pointers (allocations restart from slot 0)               │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### 5.2 Chunk Sweeping with Bitmap
+### Word-at-a-Time Bitmap Sweep
 
 ```c
-// src/gc.c
-
-static size_t sweep_chunk(valk_gc_chunk_t *chunk) {
+static size_t sweep_page(valk_gc_page_t *page, valk_gc_heap_t *heap) {
   size_t freed = 0;
+  uint16_t slots = page->slots_per_page;
+  uint16_t slot_size = page->slot_size;
   
-  // Iterate bitmap - much faster than linked list
-  for (size_t word_idx = 0; word_idx < VALK_GC_BITMAP_SIZE / sizeof(uint64_t); word_idx++) {
-    uint64_t alloc_word = ((uint64_t*)chunk->alloc_bits)[word_idx];
-    uint64_t mark_word = ((uint64_t*)chunk->mark_bits)[word_idx];
+  // Process 64 slots at a time
+  size_t num_words = (slots + 63) / 64;
+  uint64_t *alloc_words = (uint64_t *)page->alloc_bitmap;
+  uint64_t *mark_words = (uint64_t *)page->mark_bitmap;
+  
+  for (size_t w = 0; w < num_words; w++) {
+    uint64_t alloc = alloc_words[w];
+    uint64_t mark = mark_words[w];
     
-    // Allocated but not marked = garbage
-    uint64_t garbage = alloc_word & ~mark_word;
+    // Garbage = allocated but not marked
+    uint64_t garbage = alloc & ~mark;
     
-    if (garbage == 0) {
-      // Clear mark bits for next cycle
-      ((uint64_t*)chunk->mark_bits)[word_idx] = 0;
-      continue;
-    }
-    
-    // Process garbage bits
-    while (garbage) {
-      size_t bit = __builtin_ctzll(garbage);  // Find lowest set bit
-      size_t slot_idx = word_idx * 64 + bit;
+    if (garbage != 0) {
+      // Count freed slots
+      freed += __builtin_popcountll(garbage);
       
-      if (slot_idx < VALK_GC_SLOTS_PER_CHUNK) {
-        valk_lval_t *obj = (valk_lval_t*)&chunk->slots[slot_idx * VALK_GC_SLOT_SIZE];
+      // Clear alloc bits for garbage
+      alloc_words[w] = alloc & mark;
+      
+      // Call finalizers
+      while (garbage) {
+        size_t bit = __builtin_ctzll(garbage);
+        size_t slot = w * 64 + bit;
         
-        // Call finalizer for LVAL_REF
-        if (LVAL_TYPE(obj) == LVAL_REF && obj->ref.free) {
-          obj->ref.free(obj->ref.ptr);
+        if (slot < slots) {
+          void *ptr = page->slots + (slot * slot_size);
+          
+          // Check if this looks like an lval with finalizer
+          if (slot_size >= sizeof(valk_lval_t)) {
+            valk_lval_t *v = (valk_lval_t *)ptr;
+            if (LVAL_TYPE(v) == LVAL_REF && v->ref.free != NULL) {
+              v->ref.free(v->ref.ptr);
+            }
+          }
         }
         
-        // Clear allocation bit
-        chunk->alloc_bits[slot_idx / 8] &= ~(1 << (slot_idx % 8));
-        freed++;
+        garbage &= garbage - 1;  // Clear lowest bit
       }
-      
-      garbage &= garbage - 1;  // Clear lowest set bit
     }
     
     // Clear mark bits for next cycle
-    ((uint64_t*)chunk->mark_bits)[word_idx] = 0;
+    mark_words[w] = 0;
   }
   
-  atomic_fetch_sub(&chunk->num_allocated, freed, memory_order_relaxed);
+  // Update page allocation count
+  atomic_fetch_sub(&page->num_allocated, freed);
+  
   return freed;
 }
 ```
 
-#### Test Artifacts - Phase 5
+### Parallel Sweep Coordinator
 
-| Test | Description | Pass Criteria |
-|------|-------------|---------------|
-| `test_gc_sweep_empty_chunk` | Sweep chunk with nothing marked | All slots freed |
-| `test_gc_sweep_full_chunk` | Sweep chunk with everything marked | Nothing freed |
-| `test_gc_sweep_mixed` | Some live, some dead | Correct slots freed |
-| `test_gc_sweep_parallel` | 4 threads sweeping 16 chunks | No races, correct counts |
-| `test_gc_sweep_finalizers` | Objects with LVAL_REF finalizers | Finalizers called exactly once |
-| `test_gc_bitmap_efficiency` | Large chunk with sparse live objects | Faster than linked list |
+```c
+void valk_gc_parallel_sweep(valk_gc_heap_t *heap) {
+  size_t my_id = valk_thread_ctx.gc_thread_id;
+  size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
+  
+  size_t total_freed = 0;
+  
+  // Sweep each size class
+  for (uint8_t c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page_list_t *list = &heap->classes[c];
+    
+    // Count pages
+    size_t num_pages = list->num_pages;
+    if (num_pages == 0) continue;
+    
+    // Partition pages among threads
+    size_t pages_per_thread = (num_pages + num_threads - 1) / num_threads;
+    size_t my_start = my_id * pages_per_thread;
+    size_t my_end = (my_id + 1) * pages_per_thread;
+    if (my_end > num_pages) my_end = num_pages;
+    
+    // Walk to my starting page
+    valk_gc_page_t *page = list->all_pages;
+    for (size_t i = 0; i < my_start && page != NULL; i++) {
+      page = page->next;
+    }
+    
+    // Sweep my pages
+    for (size_t i = my_start; i < my_end && page != NULL; i++) {
+      size_t freed = sweep_page(page, heap);
+      total_freed += freed * size_classes[c];
+      
+      // Check if page is now empty
+      if (atomic_load(&page->num_allocated) == 0) {
+        // Could madvise to release physical memory
+        // For now, just leave it for reuse
+      }
+      
+      page = page->next;
+    }
+    
+    atomic_fetch_sub(&list->used_slots, total_freed / size_classes[c]);
+  }
+  
+  // Thread 0 sweeps large objects
+  if (my_id == 0) {
+    total_freed += sweep_large_objects(heap);
+  }
+  
+  // Update heap accounting
+  atomic_fetch_sub(&heap->used_bytes, total_freed);
+  
+  // Barrier: wait for all sweep to complete
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  // Reset TLABs (all threads)
+  for (uint8_t c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_thread_ctx.tlab->classes[c].next_slot = 0;
+    valk_thread_ctx.tlab->classes[c].limit_slot = 0;
+    valk_thread_ctx.tlab->classes[c].page = NULL;
+  }
+}
+
+static size_t sweep_large_objects(valk_gc_heap_t *heap) {
+  size_t freed = 0;
+  
+  pthread_mutex_lock(&heap->large_lock);
+  
+  valk_gc_large_obj_t **pp = &heap->large_objects;
+  while (*pp != NULL) {
+    valk_gc_large_obj_t *obj = *pp;
+    
+    if (!obj->marked) {
+      // Remove from list
+      *pp = obj->next;
+      
+      // Free the memory
+      munmap(obj->data, obj->size);
+      freed += obj->size;
+      free(obj);
+    } else {
+      // Clear mark for next cycle
+      obj->marked = false;
+      pp = &obj->next;
+    }
+  }
+  
+  pthread_mutex_unlock(&heap->large_lock);
+  
+  atomic_fetch_sub(&heap->large_object_bytes, freed);
+  return freed;
+}
+```
+
+### Page Reclamation
+
+```c
+// Called after sweep to release empty pages to OS
+void valk_gc_reclaim_empty_pages(valk_gc_heap_t *heap) {
+  for (uint8_t c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page_list_t *list = &heap->classes[c];
+    
+    pthread_mutex_lock(&list->lock);
+    
+    // Rebuild partial_pages list and identify empty pages
+    list->partial_pages = NULL;
+    
+    for (valk_gc_page_t *page = list->all_pages; page != NULL; page = page->next) {
+      uint32_t allocated = atomic_load(&page->num_allocated);
+      
+      if (allocated == 0) {
+        // Page is empty - release physical memory
+        size_t page_size = valk_gc_page_total_size(size_classes[c]);
+        madvise(page, page_size, MADV_DONTNEED);
+        
+        // Keep in all_pages list (virtual address still valid)
+        // Will be recommitted on first allocation
+      } else if (allocated < page->slots_per_page) {
+        // Page has free slots - add to partial list
+        page->next_partial = list->partial_pages;
+        list->partial_pages = page;
+      }
+    }
+    
+    pthread_mutex_unlock(&list->lock);
+  }
+}
+```
 
 ---
+
+## Example Scenarios
+
+### Scenario 1: Simple Allocation and Collection
+
+```
+Initial State:
+  - Heap committed: 16MB
+  - Class 3 (128B): 1 page, 0/512 slots used
+  - GC threshold: 75%
+
+Thread A allocates valk_lval_t (72 bytes):
+  1. size_class(72) = 3 (128B class)
+  2. TLAB[3] empty, refill from page 0
+  3. Claim slots 0-31, set alloc_bits[0..31]
+  4. Return slot 0, TLAB.next_slot = 1
+
+Thread A allocates 100 more lvals:
+  1. Slots 1-31 from TLAB (fast path)
+  2. TLAB exhausted at slot 32
+  3. Refill: claim slots 32-63
+  4. Continue...
+
+At 384 slots used (75% of 512):
+  1. GC trigger condition met
+  2. valk_gc_request_collection() called
+  3. All threads reach safe point
+  4. Mark phase: roots → mark_bitmap
+  5. Sweep phase: alloc & ~mark → free
+  6. Result: freed 200 slots (dead temporaries)
+  7. used_slots = 184
+
+After GC:
+  - TLABs reset
+  - Next allocation: claim from freed slots
+  - Page stays committed (has live data)
+```
+
+### Scenario 2: Multiple Size Classes
+
+```
+Thread creates lenv_t with 10 bindings:
+
+1. Allocate valk_lenv_t (80 bytes):
+   - size_class(80) = 3 (128B)
+   - From class 3 TLAB
+
+2. Allocate symbols array (10 * 8 = 80 bytes):
+   - size_class(80) = 3 (128B)
+   - From class 3 TLAB
+
+3. Allocate vals array (10 * 8 = 80 bytes):
+   - size_class(80) = 3 (128B)
+   - From class 3 TLAB
+
+4. Allocate 10 symbol strings (~8 bytes each):
+   - size_class(8) = 0 (16B)
+   - From class 0 TLAB (different page!)
+
+5. Allocate 10 valk_lval_t values:
+   - size_class(72) = 3 (128B)
+   - From class 3 TLAB
+
+Total: 3 + 10 = 13 slots in class 3
+       10 slots in class 0
+
+GC marks:
+  - Start from root pointing to lenv
+  - Mark lenv slot in class 3
+  - Follow symbols.items → mark array slot
+  - Follow each symbol string → mark in class 0
+  - Follow vals.items → mark array slot
+  - Follow each value → mark lval slots
+
+Sweep:
+  - Class 0: free unmarked string slots
+  - Class 3: free unmarked lval/array slots
+  - (All 23 slots marked if lenv is live)
+```
+
+### Scenario 3: Large Object Lifecycle
+
+```
+Thread allocates 1MB buffer for file read:
+
+1. valk_gc_alloc(heap, 1048576):
+   - bytes > 4096, use large object path
+   - mmap(1MB) directly
+   - Create large_obj tracking struct
+   - Add to heap->large_objects list
+   - heap->large_object_bytes += 1MB
+
+2. Buffer stored in LVAL_STR:
+   - lval->str = buffer pointer
+   - lval in class 3 slot
+
+GC cycle:
+  1. Mark phase: mark lval slot
+  2. scan_object finds LVAL_STR
+  3. mark_and_push(lval->str) called
+  4. valk_gc_mark_large_object() finds buffer
+  5. large_obj->marked = true
+
+  6. Sweep phase: sweep_large_objects()
+  7. Buffer is marked → skip
+  8. Clear mark for next cycle
+
+Later, lval goes out of scope:
+
+GC cycle:
+  1. lval not reachable from roots
+  2. lval slot not marked
+  3. Buffer not marked (no path to it)
+  
+  4. Sweep: free lval slot
+  5. sweep_large_objects:
+     - buffer->marked == false
+     - munmap(buffer, 1MB)
+     - free(large_obj struct)
+     - heap->large_object_bytes -= 1MB
+```
+
+### Scenario 4: Memory Pressure and Emergency GC
+
+```
+Heap state:
+  - hard_limit: 512MB
+  - soft_limit: 384MB
+  - current used: 380MB
+  - gc_in_progress: false
+
+Thread A requests 10MB allocation:
+
+1. valk_gc_alloc checks: 380MB + 10MB > 384MB (soft_limit)
+2. valk_gc_request_collection() (non-blocking)
+3. Allocation proceeds (under hard limit)
+
+Meanwhile, GC coordinator:
+1. Sets gc_phase = STW_REQUESTED
+2. Waits for threads to reach safe points
+3. Runs parallel mark/sweep
+4. Frees 100MB of garbage
+5. used_bytes now 290MB
+6. Sets gc_phase = IDLE
+
+Thread B requests 200MB:
+
+1. current: 290MB + 200MB = 490MB
+2. 490MB < 512MB (hard_limit) → OK
+3. But 490MB > 384MB (soft_limit)
+4. GC requested, allocation proceeds
+
+Thread C requests 50MB while used is 490MB:
+
+1. 490MB + 50MB = 540MB > 512MB (hard_limit)!
+2. Emergency GC triggered (blocking)
+3. heap->in_emergency_gc = true
+4. Synchronous collection runs
+5. Frees 150MB → used = 340MB
+6. 340MB + 50MB = 390MB < 512MB → OK
+7. Allocation succeeds
+
+Thread D requests 200MB while used is 500MB:
+
+1. 500MB + 200MB = 700MB > 512MB
+2. Emergency GC: frees only 20MB → 480MB
+3. 480MB + 200MB = 680MB > 512MB
+4. STILL over limit after emergency GC
+5. valk_gc_oom_abort() → prints diagnostics, abort()
+```
+
+### Scenario 5: Multi-threaded Contention
+
+```
+4 threads allocating concurrently:
+
+Initial state:
+  - Class 3: 1 page, 512 slots
+  - All TLABs empty
+
+T0: valk_gc_alloc(72)
+  - TLAB[3] empty
+  - Lock class[3].lock
+  - Claim slots 0-31
+  - Unlock
+  - Return slot 0
+
+T1: valk_gc_alloc(72) (simultaneous)
+  - TLAB[3] empty
+  - Lock class[3].lock (blocks until T0 releases)
+  - Claim slots 32-63
+  - Unlock
+  - Return slot 32
+
+T2, T3: Same pattern
+  - T2 gets slots 64-95
+  - T3 gets slots 96-127
+
+After initial refill, each thread has 32-slot TLAB:
+  - T0: slots 0-31
+  - T1: slots 32-63
+  - T2: slots 64-95
+  - T3: slots 96-127
+
+Next 31 allocations per thread: FAST PATH (no locks!)
+
+T0's TLAB exhausted first:
+  - Lock class[3].lock
+  - Page has 384 free slots (128-511)
+  - Claim slots 128-159
+  - Unlock
+  - Continue fast path
+
+Page fills up (512 slots):
+  - Next refill: allocate new page
+  - mprotect() to commit 64KB
+  - Add to all_pages and partial_pages
+  - Claim first 32 slots
+```
+
+### Scenario 6: GC During Active I/O
+
+```
+HTTP server with 4 AIO threads:
+
+Main thread: runs REPL, def's handlers
+AIO threads: handle HTTP requests
+
+Request comes in:
+  1. AIO thread 2 parses request
+  2. Allocates lvals for headers, body
+  3. Calls Lisp handler function
+  4. Handler allocates response data
+
+During handler execution:
+  1. Main thread triggers GC (heap pressure)
+  2. gc_phase = STW_REQUESTED
+
+AIO thread 2 at safe point (after libuv poll):
+  1. VALK_GC_SAFE_POINT() sees STW_REQUESTED
+  2. Evacuates scratch arena to GC heap
+  3. Increments threads_paused
+  4. Waits on gc_done condition
+
+Other AIO threads:
+  1. Each reaches safe point
+  2. Each evacuates and pauses
+  3. Last thread signals all_paused
+
+GC runs:
+  1. All 5 threads participate in marking
+  2. AIO thread 2 marks: request lvals, handler closure, response data
+  3. Parallel sweep frees unreachable
+  4. gc_phase = IDLE, broadcast gc_done
+
+Threads resume:
+  1. AIO thread 2 continues handler
+  2. Response data still valid (was marked)
+  3. Sends response, resets scratch arena
+```
+
+### Scenario 7: Closure Escaping Scratch Arena
+
+```
+REPL eval: (def make-counter (fn () (let ((n 0)) (fn () (set! n (+ n 1)) n))))
+
+Scratch arena during eval:
+  1. Parse creates S-expression in scratch
+  2. Eval creates lambda object in scratch
+  3. Lambda captures closure env with n=0
+  
+Checkpoint before REPL prompt:
+  1. valk_should_checkpoint() returns true
+  2. valk_checkpoint() called:
+     a. Walk from root_env
+     b. Find def'd make-counter → lambda
+     c. Evacuate lambda to GC heap (class 3)
+     d. Evacuate closure env to GC heap
+     e. Evacuate n binding to GC heap
+     f. Set forwarding pointers
+     g. Fix internal pointers
+  3. Reset scratch arena
+  4. root_env->vals[make-counter] now points to GC heap
+
+REPL eval: (def c1 (make-counter))
+
+  1. Call make-counter (from GC heap)
+  2. Creates new closure in scratch
+  3. Closure has env with n=0
+  4. Checkpoint:
+     a. Evacuate c1 closure to GC heap
+     b. Evacuate its env to GC heap
+
+REPL eval: (c1) → 1
+REPL eval: (c1) → 2
+REPL eval: (c1) → 3
+
+Each call:
+  1. Closure's env (in GC heap) modified: n incremented
+  2. Mutation happens in GC heap directly
+  3. No scratch involvement for n
+  4. Return value (number) in scratch, discarded after print
+```
+
+---
+
+## Core Operation Scenarios
+
+These scenarios document the expected step-by-step behavior for every core GC operation.
+
+### Op 1: Allocate Small Object (TLAB Fast Path)
+
+**Preconditions**:
+- Thread has TLAB with `next_slot < limit_slot` for target class
+- Heap under soft limit
+
+**Steps**:
+```
+1. valk_gc_alloc(heap, 72)
+   
+2. Check: 72 <= 4096 (not large object)
+   └─ Continue to size class path
+
+3. class = valk_gc_size_class(72)
+   └─ 72 > 64, 72 <= 128 → class = 3
+
+4. tlab = valk_thread_ctx.tlab
+   └─ Thread-local, no lock needed
+
+5. Check: tlab->classes[3].next_slot < tlab->classes[3].limit_slot
+   └─ 5 < 32 → TRUE (fast path)
+
+6. slot = tlab->classes[3].next_slot++
+   └─ slot = 5, next_slot becomes 6
+
+7. ptr = valk_gc_page_slot_ptr(tlab->classes[3].page, 5)
+   └─ ptr = page->slots + (5 * 128)
+
+8. memset(ptr, 0, 128)
+   └─ Zero-initialize slot
+
+9. return ptr
+   └─ Allocation complete, ~15ns
+```
+
+**Postconditions**:
+- `tlab->classes[3].next_slot` incremented by 1
+- No locks acquired
+- No atomic operations (slot was pre-claimed)
+
+---
+
+### Op 2: Allocate Small Object (TLAB Refill - Partial Page)
+
+**Preconditions**:
+- Thread's TLAB exhausted for class 3 (`next_slot >= limit_slot`)
+- Class 3 has partial pages with free slots
+
+**Steps**:
+```
+1. valk_gc_alloc(heap, 72) → class 3
+
+2. Check TLAB: next_slot (32) >= limit_slot (32)
+   └─ TLAB exhausted, slow path
+
+3. valk_gc_alloc_slow(heap, class=3)
+
+4. pthread_mutex_lock(&heap->classes[3].lock)
+   └─ Acquire class lock
+
+5. page = heap->classes[3].partial_pages
+   └─ Get first partial page (has free slots)
+
+6. start_slot = valk_gc_find_free_slots(page, 32)
+   └─ Scan bitmap for 32 contiguous free slots
+   └─ Found at slot 256
+
+7. Mark slots 256-287 allocated:
+   for (i = 256; i < 288; i++)
+     valk_gc_bitmap_set(page->alloc_bitmap, i)
+
+8. atomic_fetch_add(&page->num_allocated, 32)
+   └─ 384 → 416
+
+9. atomic_fetch_add(&heap->classes[3].used_slots, 32)
+
+10. atomic_fetch_add(&heap->used_bytes, 32 * 128)
+    └─ Track memory usage
+
+11. Check: page->num_allocated (416) < slots_per_page (512)
+    └─ Still partial, leave in partial_pages
+
+12. pthread_mutex_unlock(&heap->classes[3].lock)
+
+13. Update TLAB:
+    tlab->classes[3].page = page
+    tlab->classes[3].next_slot = 256
+    tlab->classes[3].limit_slot = 288
+
+14. Return first slot (256), increment next_slot to 257
+```
+
+**Postconditions**:
+- TLAB refilled with 32 slots
+- `page->alloc_bitmap` bits 256-287 set
+- Class lock released
+- ~500ns total
+
+---
+
+### Op 3: Allocate Small Object (TLAB Refill - New Page)
+
+**Preconditions**:
+- Thread's TLAB exhausted for class 3
+- No partial pages available (all full)
+
+**Steps**:
+```
+1. valk_gc_alloc_slow(heap, class=3)
+
+2. pthread_mutex_lock(&heap->classes[3].lock)
+
+3. page = heap->classes[3].partial_pages
+   └─ NULL (no partial pages)
+
+4. pthread_mutex_unlock(&heap->classes[3].lock)
+   └─ Release lock before slow allocation
+
+5. page = valk_gc_page_alloc(heap, class=3)
+
+   5a. page_size = valk_gc_page_total_size(128)
+       └─ sizeof(header) + 2*64 (bitmaps) + 512*128 = ~66KB
+
+   5b. Check: committed_bytes + 66KB <= hard_limit
+       └─ OK
+
+   5c. Allocate page from virtual region:
+       offset = atomic_fetch_add(&heap->classes[3].next_offset, page_size)
+       page = heap->base + heap->classes[3].region_start + offset
+
+   5d. mprotect(page, page_size, PROT_READ | PROT_WRITE)
+       └─ Commit physical memory (first access)
+
+   5e. atomic_fetch_add(&heap->committed_bytes, page_size)
+
+   5f. Initialize page:
+       page->slot_size = 128
+       page->slots_per_page = 512
+       page->num_allocated = 0
+       memset(page->alloc_bitmap, 0, 64)
+       memset(page->mark_bitmap, 0, 64)
+
+6. pthread_mutex_lock(&heap->classes[3].lock)
+
+7. Add page to lists:
+   page->next = heap->classes[3].all_pages
+   heap->classes[3].all_pages = page
+   page->next_partial = heap->classes[3].partial_pages
+   heap->classes[3].partial_pages = page
+   heap->classes[3].num_pages++
+
+8. atomic_fetch_add(&heap->classes[3].total_slots, 512)
+
+9. Claim slots 0-31 (same as Op 2, steps 7-10)
+
+10. pthread_mutex_unlock(&heap->classes[3].lock)
+
+11. Update TLAB, return slot 0
+```
+
+**Postconditions**:
+- New 64KB page committed
+- Page added to `all_pages` and `partial_pages`
+- `committed_bytes` increased by ~66KB
+- ~10μs total (mprotect dominates)
+
+---
+
+### Op 4: Allocate Large Object (>4KB)
+
+**Preconditions**:
+- Requested size > 4096 bytes
+- Heap under hard limit
+
+**Steps**:
+```
+1. valk_gc_alloc(heap, 1048576)  // 1MB
+
+2. Check: 1048576 > 4096
+   └─ Large object path
+
+3. valk_gc_alloc_large(heap, 1048576)
+
+4. alloc_size = (1048576 + 65535) & ~65535
+   └─ Round to 64KB boundary: 1048576 (already aligned)
+
+5. Check limits:
+   current = valk_gc_used_bytes(heap)  // e.g., 100MB
+   if (100MB + 1MB > hard_limit)
+     └─ No, continue
+
+6. data = mmap(NULL, 1048576, PROT_READ|PROT_WRITE,
+               MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
+   └─ OS allocates 1MB
+
+7. obj = malloc(sizeof(valk_gc_large_obj_t))
+   obj->data = data
+   obj->size = 1048576
+   obj->marked = false
+
+8. pthread_mutex_lock(&heap->large_lock)
+
+9. obj->next = heap->large_objects
+   heap->large_objects = obj
+   └─ Add to head of list
+
+10. pthread_mutex_unlock(&heap->large_lock)
+
+11. atomic_fetch_add(&heap->large_object_bytes, 1048576)
+
+12. return data
+```
+
+**Postconditions**:
+- 1MB mmap'd region returned
+- Tracking struct in `large_objects` list
+- `large_object_bytes` increased by 1MB
+- ~100μs (mmap syscall)
+
+---
+
+### Op 5: Mark Single Object (Slot in Page)
+
+**Preconditions**:
+- Object pointer known to be in GC heap
+- Mark phase in progress
+
+**Steps**:
+```
+1. mark_and_push(ptr, queue, heap)
+   └─ ptr = 0x7f0001234500 (example)
+
+2. valk_gc_ptr_to_location(heap, ptr, &class, &page, &slot)
+
+   2a. Check bounds:
+       base = 0x7f0001000000
+       ptr >= base && ptr < base + 4GB
+       └─ TRUE
+
+   2b. offset = ptr - base = 0x234500
+
+   2c. For each class, check region:
+       class 3 region: 0x200000 - 0x400000
+       offset 0x234500 in range
+       └─ class = 3
+
+   2d. page_size = 66KB
+       page_index = (0x234500 - 0x200000) / 66KB = 3
+
+   2e. Walk to page 3 in class 3 list
+       └─ page = 4th page
+
+   2f. slot = (ptr - page->slots) / 128
+       └─ slot = 42
+
+3. valk_gc_try_mark_slot(page, slot=42)
+
+   3a. byte = &page->mark_bitmap[42 / 8]
+       └─ byte = &mark_bitmap[5]
+
+   3b. bit = 1 << (42 % 8)
+       └─ bit = 0x04
+
+   3c. old = __atomic_fetch_or(byte, bit, __ATOMIC_ACQ_REL)
+       └─ Atomic OR sets the bit
+
+   3d. return (old & bit) == 0
+       └─ TRUE if we set it first (newly marked)
+       └─ FALSE if already marked (skip)
+
+4. If newly marked:
+   valk_gc_mark_queue_push(queue, ptr)
+   └─ Add to local mark queue for scanning
+```
+
+**Postconditions**:
+- Mark bit set atomically (no double-marking)
+- Object queued for child scanning
+- ~50ns per object
+
+---
+
+### Op 6: Mark Large Object
+
+**Preconditions**:
+- Pointer not found in page regions (Op 5 step 2 failed)
+- Pointer might be large object
+
+**Steps**:
+```
+1. valk_gc_mark_large_object(heap, ptr)
+
+2. pthread_mutex_lock(&heap->large_lock)
+   └─ Must lock to traverse list safely
+
+3. Search large_objects list:
+   for (obj = heap->large_objects; obj; obj = obj->next)
+     if (ptr >= obj->data && ptr < obj->data + obj->size)
+       └─ Found! ptr is in this large object
+
+4. If found:
+   obj->marked = true
+   └─ Simple bool, no atomic needed (GC is STW)
+
+5. pthread_mutex_unlock(&heap->large_lock)
+
+6. Note: Large objects don't have children to scan
+   (they're raw byte buffers like strings)
+```
+
+**Postconditions**:
+- `large_obj->marked = true`
+- ~100ns (lock contention possible)
+
+---
+
+### Op 7: Scan Object for Children
+
+**Preconditions**:
+- Object was just marked
+- Need to find and mark children
+
+**Steps**:
+```
+1. scan_object(ptr, class=3, queue, heap)
+   └─ ptr points to slot, class tells us size
+
+2. Check if could be lval (class >= 2 for 64+ bytes):
+   size_classes[3] = 128 >= sizeof(valk_lval_t) = 72
+   └─ Yes, interpret as lval
+
+3. v = (valk_lval_t *)ptr
+
+4. Read type: LVAL_TYPE(v)
+   └─ Say it's LVAL_CONS (cons cell)
+
+5. switch (LVAL_CONS):
+   
+   5a. mark_and_push(v->cons.head, queue, heap)
+       └─ Recursively mark head
+       └─ If head is in GC heap, marks and queues it
+
+   5b. mark_and_push(v->cons.tail, queue, heap)
+       └─ Recursively mark tail
+
+6. For LVAL_FUN (closure):
+   mark_and_push(v->fun.formals, queue, heap)
+   mark_and_push(v->fun.body, queue, heap)
+   scan_env(v->fun.env, queue, heap)  // Recurse into env
+   mark_and_push(v->fun.name, queue, heap)
+
+7. For LVAL_STR/SYM/ERR:
+   mark_and_push(v->str, queue, heap)
+   └─ Mark string data (may be in class 0-2)
+
+8. For LVAL_NUM/NIL:
+   └─ No children, nothing to do
+```
+
+**Postconditions**:
+- All reachable children marked and queued
+- ~20-100ns depending on type
+
+---
+
+### Op 8: Sweep Page (Word-at-a-Time)
+
+**Preconditions**:
+- Mark phase complete
+- Page assigned to this thread for sweeping
+
+**Steps**:
+```
+1. sweep_page(page, heap)
+   └─ page has 512 slots, 128 bytes each
+
+2. num_words = (512 + 63) / 64 = 8
+   └─ Process 8 64-bit words
+
+3. For each word w = 0..7:
+
+   3a. alloc = alloc_words[w]  // e.g., 0xFFFF00FF00FF00FF
+       mark  = mark_words[w]   // e.g., 0xFF0000FF00FF0000
+
+   3b. garbage = alloc & ~mark
+       └─ 0xFFFF00FF00FF00FF & 0x00FFFF00FF00FFFF
+       └─ garbage = 0x00FF000000000FFF
+       └─ Bits set = allocated but not marked
+
+   3c. freed = __builtin_popcountll(garbage)
+       └─ Count garbage bits: 20 slots
+
+   3d. alloc_words[w] = alloc & mark
+       └─ Clear garbage from alloc bitmap
+       └─ 0xFF0000FF00FF0000
+
+   3e. For each garbage bit (finalizers):
+       while (garbage) {
+         bit = __builtin_ctzll(garbage)  // Find lowest set bit
+         slot = w * 64 + bit
+         ptr = page->slots + (slot * 128)
+         
+         // Check for finalizer
+         if (LVAL_TYPE((valk_lval_t*)ptr) == LVAL_REF) {
+           valk_lval_t *v = (valk_lval_t*)ptr;
+           if (v->ref.free) v->ref.free(v->ref.ptr);
+         }
+         
+         garbage &= garbage - 1  // Clear lowest bit
+       }
+
+   3f. mark_words[w] = 0
+       └─ Clear mark bits for next cycle
+
+4. atomic_fetch_sub(&page->num_allocated, total_freed)
+
+5. Return total_freed
+```
+
+**Postconditions**:
+- Garbage slots freed (alloc bits cleared)
+- Mark bits cleared for next cycle
+- Finalizers called for LVAL_REF
+- ~100ns per page (mostly CPU-bound)
+
+---
+
+### Op 9: Sweep Large Objects
+
+**Preconditions**:
+- Mark phase complete
+- Thread 0 responsible for large objects
+
+**Steps**:
+```
+1. sweep_large_objects(heap)
+
+2. pthread_mutex_lock(&heap->large_lock)
+
+3. pp = &heap->large_objects  // Pointer to pointer
+
+4. while (*pp != NULL):
+   obj = *pp
+
+   4a. If !obj->marked (garbage):
+       
+       // Remove from list
+       *pp = obj->next
+       
+       // Free memory
+       munmap(obj->data, obj->size)
+       
+       // Track freed bytes
+       freed += obj->size
+       
+       // Free tracking struct
+       free(obj)
+       
+       // Don't advance pp (next item now at *pp)
+
+   4b. If obj->marked (live):
+       
+       // Clear mark for next cycle
+       obj->marked = false
+       
+       // Advance to next
+       pp = &obj->next
+
+5. pthread_mutex_unlock(&heap->large_lock)
+
+6. atomic_fetch_sub(&heap->large_object_bytes, freed)
+
+7. Return freed
+```
+
+**Postconditions**:
+- Unmarked large objects munmap'd
+- `large_object_bytes` decreased
+- Marks cleared for next cycle
+- ~1μs per large object (munmap syscall)
+
+---
+
+### Op 10: Reclaim Empty Page
+
+**Preconditions**:
+- Sweep complete
+- Page has `num_allocated == 0`
+
+**Steps**:
+```
+1. valk_gc_reclaim_empty_pages(heap)
+
+2. For each class c:
+
+   pthread_mutex_lock(&heap->classes[c].lock)
+
+   3. Clear partial_pages list (will rebuild):
+      heap->classes[c].partial_pages = NULL
+
+   4. For each page in all_pages:
+      allocated = atomic_load(&page->num_allocated)
+
+      4a. If allocated == 0 (empty):
+          
+          // Release physical memory back to OS
+          page_size = valk_gc_page_total_size(size_classes[c])
+          madvise(page, page_size, MADV_DONTNEED)
+          
+          // Page stays in all_pages (virtual address valid)
+          // Will be recommitted on first allocation
+
+      4b. Else if allocated < slots_per_page (partial):
+          
+          // Add to partial list for allocation
+          page->next_partial = heap->classes[c].partial_pages
+          heap->classes[c].partial_pages = page
+
+      4c. Else (full):
+          
+          // Not added to partial list
+          // Only accessed via all_pages during sweep
+
+   pthread_mutex_unlock(&heap->classes[c].lock)
+```
+
+**Postconditions**:
+- Empty pages: physical memory released, virtual address retained
+- Partial pages: available for new allocations
+- Full pages: unchanged
+- ~1μs per empty page (madvise)
+
+---
+
+### Op 11: TLAB Reset After GC
+
+**Preconditions**:
+- Sweep complete
+- Threads about to resume
+
+**Steps**:
+```
+1. Each thread in parallel:
+
+2. For each class c = 0..8:
+   
+   tlab->classes[c].page = NULL
+   tlab->classes[c].next_slot = 0
+   tlab->classes[c].limit_slot = 0
+
+3. Why reset?
+   - Pre-sweep slot claims may now be garbage
+   - Safer to force refill from fresh partial pages
+   - Ensures no dangling references to freed slots
+```
+
+**Postconditions**:
+- All TLABs empty
+- Next allocation triggers refill (Op 2 or Op 3)
+- ~10ns per thread
+
+---
+
+### Op 12: Trigger GC (Threshold Reached)
+
+**Preconditions**:
+- Allocation detects: `used_bytes > committed_bytes * threshold_pct`
+- No GC in progress
+
+**Steps**:
+```
+1. In valk_gc_alloc, after allocation:
+
+2. Check threshold:
+   used = valk_gc_used_bytes(heap)
+   threshold = heap->committed_bytes * heap->gc_threshold_pct / 100
+   
+   if (used > threshold && !heap->gc_in_progress)
+     valk_gc_request_collection()
+
+3. valk_gc_request_collection():
+   
+   3a. if (atomic_exchange(&heap->gc_requested, true))
+       return  // Already requested
+   
+   3b. atomic_store(&valk_gc_coord.gc_phase, GC_PHASE_STW_REQUESTED)
+
+4. Allocation continues (non-blocking)
+
+5. Eventually, thread hits safe point:
+   
+   VALK_GC_SAFE_POINT()
+   
+   5a. if (gc_phase == STW_REQUESTED) {
+       valk_gc_enter_stw()
+   }
+```
+
+**Postconditions**:
+- GC requested (will happen at next safe point)
+- Current allocation succeeds
+- Non-blocking for requestor
+
+---
+
+### Op 13: Enter Stop-The-World
+
+**Preconditions**:
+- Thread at safe point
+- `gc_phase == STW_REQUESTED`
+
+**Steps**:
+```
+1. valk_gc_enter_stw()
+
+2. Evacuate thread's scratch arena:
+   valk_checkpoint()
+   └─ Moves live scratch objects to GC heap
+   └─ Fixes pointers
+
+3. Increment paused count:
+   count = atomic_fetch_add(&valk_gc_coord.threads_paused, 1) + 1
+
+4. Check if last to pause:
+   if (count == valk_gc_coord.threads_registered) {
+     // All threads paused, signal coordinator
+     pthread_cond_signal(&valk_gc_coord.all_paused)
+   }
+
+5. Wait for GC completion:
+   while (atomic_load(&valk_gc_coord.gc_phase) != GC_PHASE_IDLE) {
+     // Participate in GC work
+     valk_gc_participate()
+   }
+
+6. Reset thread state:
+   // Ready to resume normal operation
+```
+
+**Postconditions**:
+- Thread's scratch arena checkpointed
+- Thread participating in GC work
+- Will resume when `gc_phase == IDLE`
+
+---
+
+### Op 14: GC Cycle Complete Flow
+
+**Preconditions**:
+- All threads paused
+- Coordinator running GC
+
+**Steps**:
+```
+1. Coordinator detects all_paused:
+
+2. atomic_store(&gc_phase, GC_PHASE_MARKING)
+
+3. Signal threads to start marking:
+   valk_barrier_release(&mark_start_barrier)
+
+4. All threads run valk_gc_parallel_mark():
+   - Each marks own roots
+   - Thread 0 marks global roots
+   - Work-stealing mark loop
+
+5. Barrier: wait for all marking complete
+
+6. atomic_store(&gc_phase, GC_PHASE_SWEEPING)
+
+7. All threads run valk_gc_parallel_sweep():
+   - Each sweeps assigned pages
+   - Thread 0 sweeps large objects
+
+8. Barrier: wait for all sweeping complete
+
+9. Thread 0: valk_gc_reclaim_empty_pages()
+
+10. All threads: reset TLABs
+
+11. atomic_store(&gc_phase, GC_PHASE_IDLE)
+
+12. pthread_cond_broadcast(&gc_done)
+    └─ Wake any threads waiting
+
+13. atomic_store(&heap->gc_requested, false)
+    └─ Allow new GC requests
+
+14. Threads resume normal operation
+```
+
+**Postconditions**:
+- Garbage collected
+- Memory reclaimed
+- `used_bytes` decreased
+- All threads running
+
+---
+
+### Op 15: Emergency GC (Hard Limit Approached)
+
+**Preconditions**:
+- Allocation would exceed hard limit
+- `heap->in_emergency_gc == false`
+
+**Steps**:
+```
+1. In valk_gc_alloc:
+
+2. Check hard limit:
+   current = valk_gc_used_bytes(heap)
+   if (current + bytes > heap->hard_limit) {
+     // Must GC now
+   }
+
+3. valk_gc_emergency_collect(heap):
+
+   3a. heap->in_emergency_gc = true
+       └─ Prevent recursive emergency GC
+
+   3b. // Force synchronous STW
+       atomic_store(&gc_phase, GC_PHASE_STW_REQUESTED)
+
+   3c. // Current thread enters STW immediately
+       valk_gc_enter_stw()
+
+   3d. // Wait for GC to complete
+       // (participates in marking/sweeping)
+
+   3e. heap->in_emergency_gc = false
+
+4. After emergency GC, recheck:
+   current = valk_gc_used_bytes(heap)
+   if (current + bytes > heap->hard_limit) {
+     // Still over! Can't allocate
+     valk_gc_oom_abort(heap, bytes)
+   }
+
+5. Proceed with allocation
+```
+
+**Postconditions**:
+- Synchronous GC completed
+- Either allocation succeeds or process aborts
+- ~10-50ms pause (full GC)
+
+---
+
+### Op 16: OOM Abort
+
+**Preconditions**:
+- Emergency GC didn't free enough
+- Allocation still exceeds hard limit
+
+**Steps**:
+```
+1. valk_gc_oom_abort(heap, requested_bytes)
+
+2. Print diagnostic header:
+   "FATAL: OUT OF MEMORY"
+
+3. Print memory state:
+   Requested: 10485760 bytes
+   Used:      510000000 bytes
+   Hard Limit: 536870912 bytes
+   Committed: 520000000 bytes
+
+4. Print per-class breakdown:
+   Class 0 (16 B):   50000 / 100000 slots (50%)
+   Class 1 (32 B):   25000 / 50000 slots (50%)
+   Class 2 (64 B):   10000 / 20000 slots (50%)
+   Class 3 (128 B): 200000 / 400000 slots (50%)
+   ...
+   Large Objects: 50000000 bytes
+
+5. Print suggestion:
+   "Increase limit: VALK_HEAP_HARD_LIMIT=1073741824"
+
+6. abort()
+   └─ Process terminates, core dump if enabled
+```
+
+**Postconditions**:
+- Process terminated
+- Diagnostics printed to stderr
+- No undefined behavior
+
+---
+
+## Configuration
+
+### Environment Variables
+
+```bash
+# Memory limits
+VALK_HEAP_HARD_LIMIT=536870912    # 512MB (default)
+VALK_HEAP_SOFT_LIMIT=402653184    # 384MB (default = 75% of hard)
+VALK_SCRATCH_SIZE=67108864        # 64MB per thread (default)
+
+# GC tuning
+VALK_GC_THRESHOLD_PCT=75          # Trigger GC at this % of committed
+VALK_GC_TLAB_SLOTS=32             # Slots per TLAB refill
+
+# Debug
+VALK_GC_VERBOSE=1                 # Print GC cycle info
+VALK_GC_STRESS=1                  # GC on every allocation (testing)
+```
+
+### Runtime API
+
+```c
+// Set hard limit (must be >= current usage)
+void valk_gc_set_hard_limit(valk_gc_heap_t *heap, size_t bytes);
+
+// Set soft limit (triggers emergency GC)
+void valk_gc_set_soft_limit(valk_gc_heap_t *heap, size_t bytes);
+
+// Set GC trigger threshold (0-100)
+void valk_gc_set_threshold_pct(valk_gc_heap_t *heap, uint8_t pct);
+
+// Force GC cycle (for testing/debugging)
+void valk_gc_force_collect(valk_gc_heap_t *heap);
+
+// Get current stats
+void valk_gc_get_stats(valk_gc_heap_t *heap, valk_gc_stats_t *out);
+```
+
+---
+
+## Implementation Phases
+
+### Phase 1: Size Class Infrastructure
+
+**Goal**: Implement multi-class allocation without breaking existing code.
+
+1. Define size class table and lookup
+2. Create per-class page lists
+3. Implement class-aware TLAB
+4. Add per-class accounting
+
+**Tests**:
+- `test_gc_size_class_lookup`: Verify class selection for various sizes
+- `test_gc_multiclass_alloc`: Allocate from multiple classes
+- `test_gc_class_accounting`: Verify per-class slot counts
+
+### Phase 2: Large Object Support
+
+**Goal**: Handle allocations > 4KB.
+
+1. Implement mmap-based large object allocation
+2. Add large object tracking list
+3. Integrate with mark/sweep
+
+**Tests**:
+- `test_gc_large_alloc`: Allocate and free large objects
+- `test_gc_large_mark`: Mark phase finds large objects
+- `test_gc_large_sweep`: Sweep frees unmarked large objects
+
+### Phase 3: Memory Limits
+
+**Goal**: Enforce hard/soft limits with proper error handling.
+
+1. Implement limit checking in allocation path
+2. Add emergency GC trigger
+3. Implement OOM abort with diagnostics
+
+**Tests**:
+- `test_gc_soft_limit_trigger`: Exceeding soft limit triggers GC
+- `test_gc_hard_limit_emergency`: Emergency GC when approaching hard
+- `test_gc_hard_limit_oom`: OOM abort when over hard limit
+
+### Phase 4: Bitmap-Based Mark/Sweep
+
+**Goal**: Replace linked-list traversal with bitmap operations.
+
+1. Implement per-page mark bitmaps
+2. Implement word-at-a-time sweep
+3. Implement parallel sweep partitioning
+
+**Tests**:
+- `test_gc_bitmap_mark`: Atomic marking in bitmap
+- `test_gc_bitmap_sweep`: Word-at-a-time sweep correctness
+- `test_gc_parallel_sweep`: Multi-threaded sweep
+
+### Phase 5: Page Reclamation
+
+**Goal**: Return unused memory to OS.
+
+1. Detect empty pages after sweep
+2. Call madvise(MADV_DONTNEED) on empty pages
+3. Rebuild partial_pages lists
+
+**Tests**:
+- `test_gc_page_reclaim`: Empty pages released
+- `test_gc_page_recommit`: Released pages usable again
 
 ### Phase 6: Integration
 
-**Goal:** Wire everything together, make futures use GC, integrate with AIO.
+**Goal**: Wire everything together, remove old GC.
 
-#### 6.1 Unified Async Handle
+1. Replace old slab allocators with new size classes
+2. Update evacuation to use new allocation
+3. Remove legacy GC code
 
-Replace separate refcounting with GC-managed `LVAL_HANDLE`:
-
-```c
-// src/parser.h - already exists
-
-// LVAL_HANDLE is already defined, just ensure GC traces it properly
-case LVAL_HANDLE:
-  if (obj->async.handle) {
-    mark_and_push(obj->async.handle->on_complete, queue);
-    mark_and_push(obj->async.handle->on_error, queue);
-    mark_and_push(obj->async.handle->on_cancel, queue);
-    mark_and_push(obj->async.handle->result, queue);
-    mark_and_push(obj->async.handle->error, queue);
-    if (obj->async.handle->env) {
-      mark_env(obj->async.handle->env, queue);
-    }
-  }
-  break;
-```
-
-#### 6.2 AIO Thread Integration
-
-```c
-// src/aio/aio_system.c
-
-void *valk_aio_thread_main(void *arg) {
-  valk_aio_system_t *sys = arg;
-  
-  // Register with GC
-  valk_gc_thread_register();
-  
-  // Set up thread-local allocator
-  valk_thread_ctx.heap = sys->gc_heap;
-  valk_thread_ctx.scratch = valk_aio_get_scratch(sys);
-  
-  while (!atomic_load(&sys->shutdown)) {
-    // Safe point: may pause for GC
-    VALK_GC_SAFE_POINT();
-    
-    // Run event loop iteration
-    int r = uv_run(&sys->loop, UV_RUN_ONCE);
-    if (r == 0 && !atomic_load(&sys->shutdown)) {
-      // No events, wait briefly
-      uv_sleep(1);
-    }
-  }
-  
-  // Unregister from GC before exit
-  valk_gc_thread_unregister();
-  return NULL;
-}
-```
-
-#### 6.3 GC Trigger
-
-```c
-// src/gc.c
-
-void valk_gc_maybe_collect(valk_gc_malloc_heap_t *heap) {
-  // Check if collection needed
-  size_t used = atomic_load(&heap->chunk_pool.used_slots);
-  size_t threshold = atomic_load(&heap->chunk_pool.gc_threshold);
-  
-  if (used < threshold) return;
-  
-  // Try to become the GC leader
-  valk_gc_phase_e expected = VALK_GC_IDLE;
-  if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected,
-                                       VALK_GC_STW_REQUESTED)) {
-    return;  // Another thread is handling it
-  }
-  
-  // We're the leader - wait for all threads to pause
-  pthread_mutex_lock(&valk_gc_coord.lock);
-  while (atomic_load(&valk_gc_coord.threads_paused) < 
-         atomic_load(&valk_gc_coord.threads_registered)) {
-    pthread_cond_wait(&valk_gc_coord.all_paused, &valk_gc_coord.lock);
-  }
-  pthread_mutex_unlock(&valk_gc_coord.lock);
-  
-  // Start mark phase
-  uint64_t start_us = uv_hrtime() / 1000;
-  atomic_store(&valk_gc_coord.phase, VALK_GC_MARKING, memory_order_release);
-  
-  // Reinitialize barrier for mark phase
-  pthread_barrier_destroy(&valk_gc_coord.barrier);
-  pthread_barrier_init(&valk_gc_coord.barrier, NULL,
-                       atomic_load(&valk_gc_coord.threads_registered));
-  
-  // All threads participate in marking (including leader)
-  valk_gc_parallel_mark();
-  
-  // Mark phase complete, start sweep
-  atomic_store(&valk_gc_coord.phase, VALK_GC_SWEEPING, memory_order_release);
-  valk_gc_parallel_sweep();
-  
-  // Record stats
-  uint64_t end_us = uv_hrtime() / 1000;
-  uint64_t pause_us = end_us - start_us;
-  atomic_fetch_add(&valk_gc_coord.cycles_total, 1, memory_order_relaxed);
-  atomic_fetch_add(&valk_gc_coord.pause_us_total, pause_us, memory_order_relaxed);
-  
-  // Release all threads
-  atomic_store(&valk_gc_coord.phase, VALK_GC_IDLE, memory_order_release);
-  pthread_mutex_lock(&valk_gc_coord.lock);
-  pthread_cond_broadcast(&valk_gc_coord.gc_done);
-  pthread_mutex_unlock(&valk_gc_coord.lock);
-  
-  VALK_INFO("GC: cycle complete, pause=%llu us", (unsigned long long)pause_us);
-}
-```
-
-#### Test Artifacts - Phase 6
-
-| Test | Description | Pass Criteria |
-|------|-------------|---------------|
-| `test_gc_handle_basic` | Create/resolve async handle | No leaks, correct lifecycle |
-| `test_gc_handle_callback` | Handle with completion callback | Callback fires, result correct |
-| `test_gc_handle_collect` | GC while handles pending | Pending handles not collected |
-| `test_gc_aio_integration` | AIO thread registers/unregisters | Clean lifecycle |
-| `test_gc_aio_safe_point` | GC triggered from AIO thread | All AIO threads pause |
-| `test_gc_full_cycle` | Complete GC cycle with multiple threads | Correct mark/sweep |
-| `test_gc_http_stress` | HTTP server under load | No leaks over 10K requests |
+**Tests**:
+- Full test suite passes
+- HTTP stress test stable
+- Memory usage within limits
 
 ---
 
-## Migration Path
+## Performance Targets
 
-### Step 1: Parallel Infrastructure (No Breaking Changes)
-
-1. Add atomic mark bit operations (can coexist with current GC)
-2. Add thread context extensions
-3. Add safe point macro (initially no-op)
-4. Add thread registration (initially single-thread only)
-
-### Step 2: Chunk Allocator (Parallel with Old)
-
-1. Add chunk pool alongside existing slabs
-2. New allocations go to chunks
-3. Old objects remain in slabs until collected
-4. Sweep handles both
-
-### Step 3: Enable Parallelism
-
-1. Enable safe points in eval/AIO loops
-2. Register AIO threads
-3. Enable parallel mark/sweep
-4. Remove old single-threaded code path
-
-### Step 4: Remove Old Infrastructure
-
-1. Remove `heap->objects` linked list
-2. Remove old slab allocators (or keep as optimization)
-3. Remove old mark/sweep functions
-
----
-
-## Testing Strategy
-
-### Unit Tests (`test/unit/test_gc_parallel.c`)
-
-```c
-void test_gc_atomic_mark(VALK_TEST_ARGS());
-void test_gc_chunk_create(VALK_TEST_ARGS());
-void test_gc_tlab_alloc(VALK_TEST_ARGS());
-void test_gc_safe_point_noop(VALK_TEST_ARGS());
-void test_gc_safe_point_stw(VALK_TEST_ARGS());
-void test_gc_root_push_pop(VALK_TEST_ARGS());
-void test_gc_mark_queue_basic(VALK_TEST_ARGS());
-void test_gc_work_stealing_stress(VALK_TEST_ARGS());
-void test_gc_parallel_mark_list(VALK_TEST_ARGS());
-void test_gc_sweep_mixed(VALK_TEST_ARGS());
-void test_gc_full_cycle(VALK_TEST_ARGS());
-```
-
-### Stress Tests (`test/stress/`)
-
-| Test File | Description | Duration |
-|-----------|-------------|----------|
-| `stress_gc_alloc.c` | Continuous allocation across threads | 60s |
-| `stress_gc_churn.c` | High allocation + GC rate | 60s |
-| `stress_gc_work_steal.c` | Work-stealing under contention | 60s |
-| `stress_gc_http.c` | HTTP server under load with GC | 120s |
-
-### Sanitizers
-
-- **ASAN**: Run all tests with `-fsanitize=address`
-- **TSAN**: Run all tests with `-fsanitize=thread`
-- **MSAN**: Run all tests with `-fsanitize=memory`
-
-### Performance Benchmarks
-
-| Benchmark | Metric | Target |
-|-----------|--------|--------|
-| `bench_gc_pause_time` | Max pause time | < 10ms for 100MB heap |
-| `bench_gc_throughput` | Allocations/sec during GC | > 50% of no-GC rate |
-| `bench_gc_parallel_speedup` | N-thread vs 1-thread | > 0.7 * N speedup |
-| `bench_gc_work_steal_overhead` | Stealing vs non-parallel | < 5% overhead |
-
----
-
-## Rollout Plan
-
-### Stage 1: Foundation (2-3 weeks)
-- [ ] Phase 0: Atomic marks, thread context extension
-- [ ] Phase 1: Chunk allocator, TLAB
-- [ ] Phase 2: Safe points, thread coordination
-- [ ] All existing tests still pass
-- [ ] ASAN/TSAN clean
-
-### Stage 2: Parallel GC (2-3 weeks)
-- [ ] Phase 3: Root enumeration
-- [ ] Phase 4: Parallel mark with work-stealing
-- [ ] Phase 5: Parallel sweep
-- [ ] Stress tests passing
-- [ ] < 10ms pause time achieved
-
-### Stage 3: Integration (2 weeks)
-- [ ] Phase 6: AIO integration
-- [ ] Remove old refcounting for futures
-- [ ] Full test suite passing
-- [ ] HTTP benchmark stable
-
-### Stage 4: Optimization (1-2 weeks)
-- [ ] Profile hot paths
-- [ ] Tune TLAB/chunk sizes
-- [ ] Optimize termination detection
-- [ ] Final benchmarks
+| Metric | Target | Notes |
+|--------|--------|-------|
+| Allocation (fast path) | < 20 ns | TLAB bump only |
+| Allocation (slow path) | < 1 μs | TLAB refill |
+| GC pause (100MB heap) | < 10 ms | 4 threads parallel |
+| GC pause (500MB heap) | < 50 ms | 4 threads parallel |
+| Memory overhead | < 5% | Bitmaps + waste |
+| Peak RSS | < hard_limit + scratch | Proper accounting |
 
 ---
 
 ## Implementation Progress
 
-### Session Log
+### Status Legend
+- [ ] Not started
+- [~] In progress
+- [x] Complete
+- [-] Skipped/Not needed
 
-#### 2024-12-27: Initial Implementation Start
+### Phase 0: Infrastructure (COMPLETE)
+- [x] Atomic marks in lval flags
+- [x] Chase-Lev deque for work stealing
+- [x] Thread registration system
+- [x] Safe points with STW coordination
+- [x] Global roots registry
+- [x] Portable barrier implementation
 
-**Decision Points:**
-1. Starting with Phase 0 (Prerequisites) - atomic mark operations and thread context extensions
-2. Will keep existing single-threaded GC working alongside new parallel infrastructure
-3. Using `_Atomic` qualifier from C11/C23 for portability (already used in codebase)
+### Phase 1: Size Class Infrastructure
+- [x] Size class constants and lookup (`VALK_GC_NUM_SIZE_CLASSES`, `valk_gc_size_class()`)
+- [x] Per-class page list (`valk_gc_page_list_t`)
+- [x] Main heap structure (`valk_gc_heap2_t`)
+- [x] Class-aware TLAB (`valk_gc_tlab2_t` with per-class state)
+- [~] Virtual address reservation (using malloc for now, mmap later)
+- [~] Page commit on demand (using malloc for now)
+- [x] Class-aware allocation fast path
+- [x] Class-aware allocation slow path (TLAB refill)
+- [x] Unit tests for size class allocation (12 new tests added)
 
-**Implementation Status:**
+### Phase 2: Large Object Support
+- [x] Large object structure (`valk_gc_large_obj_t`)
+- [x] mmap-based large allocation
+- [x] Large object tracking list
+- [x] Large object marking (`valk_gc_mark_large_object()`)
+- [x] Large object sweeping (`valk_gc_sweep_large_objects()`)
+- [x] Unit tests for large objects
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| Phase 0.1 Atomic Mark Bit | DONE | `valk_gc_try_mark()`, `valk_gc_is_marked()`, `valk_gc_clear_mark()` |
-| Phase 0.2 Thread Context Extension | DONE | `gc_thread_id`, `gc_registered`, `root_stack` in `valk_thread_context_t` |
-| Phase 0.3 Atomic Flags | DONE | Changed `flags` to `_Atomic uint64_t` in `valk_lval_t` and `valk_lenv_t` |
-| Phase 0.4 Portable Barrier | DONE | `valk_barrier_t` (pthread_barrier_t unavailable on macOS) |
-| Phase 0.5 Chase-Lev Deque | DONE | `valk_gc_mark_queue_t` with push/pop/steal |
-| Phase 0.6 GC Coordinator | DONE | `valk_gc_coordinator_t` for multi-threaded coordination |
-| Phase 0.7 Thread Registration | DONE | `valk_gc_thread_register()`, `valk_gc_thread_unregister()` |
-| Phase 0.8 Safe Point Slow Path | DONE | `valk_gc_safe_point_slow()` |
-| Phase 0.9 Global Roots | DONE | `valk_gc_add_global_root()`, `valk_gc_remove_global_root()` |
-| Phase 0 Tests | DONE | 16 tests in `test/unit/test_gc_parallel.c` - all passing |
-| Existing Tests | DONE | All existing tests pass |
-| Phase 1.1 Page Structure | DONE | `valk_gc_page_t` with mark/alloc bitmaps, 64KB pages |
-| Phase 1.2 Page Pool | DONE | `valk_gc_page_pool_t` with mutex-protected management |
-| Phase 1.3 TLAB | DONE | `valk_gc_tlab_t` with bump-pointer allocation |
-| Phase 1.4 TLAB Refill | DONE | Pre-sets alloc bits for thread-safe concurrent access |
-| Phase 1 Tests | DONE | 10 new tests (total 26) - all passing |
+### Phase 3: Memory Limits
+- [x] Hard limit enforcement in allocation
+- [x] Soft limit and emergency GC trigger
+- [x] OOM abort with diagnostics (`valk_gc_oom_abort()`)
+- [x] Memory accounting (committed_bytes, used_bytes) - basic tracking in place
+- [x] GC statistics (`valk_gc_heap2_get_stats()`, `valk_gc_stats2_t`)
+- [x] Full GC collection cycle (`valk_gc_heap2_collect()`)
+- [x] TLAB reset (`valk_gc_tlab2_reset()`)
+- [x] Unit tests for limit enforcement (7 new tests)
 
-#### Next Steps
+### Phase 4: Bitmap-Based Mark/Sweep
+- [x] Per-page mark bitmaps (inline in page2 structure)
+- [x] Atomic mark bit operations (`valk_gc_bitmap_try_set_atomic()`)
+- [x] Pointer-to-location lookup (`valk_gc_ptr_to_location()`)
+- [x] Full mark phase with root enumeration (`valk_gc_heap2_mark_roots()`, `mark_children2()`, `mark_env2()`)
+- [x] Mark context struct (`valk_gc_mark_ctx2_t`)
+- [x] Unit tests for bitmap marking (6 Phase 4 tests)
 
-1. **Phase 2**: Safe points in eval loop and AIO loops  
-2. **Phase 3**: Root enumeration with VALK_GC_ROOT macros
-3. **Phase 4**: Parallel mark with work-stealing
+### Phase 5: Page Reclamation
+- [x] Word-at-a-time bitmap sweep (`valk_gc_sweep_page2()`)
+- [x] Finalizer support (LVAL_REF) - in sweep_page2
+- [x] Page reclamation via madvise (`valk_gc_reclaim_empty_pages()`)
+- [x] Partial page list rebuild (`valk_gc_rebuild_partial_lists()`)
+- [x] TLAB reset after GC
+- [x] Unit tests for sweep and reclamation (12 tests total)
 
----
+### Phase 6: Integration (COMPLETE)
+- [x] Replace valk_gc_malloc_heap_t with new heap (typedef to valk_gc_heap2_t)
+- [x] Update evacuation to use new allocation
+- [x] Update marking to use new heap
+- [x] Remove legacy slab allocators (~1200 lines deleted)
+- [x] Full test suite passes
+- [x] HTTP stress test stable
 
-## Risks and Mitigations
+### Current Session Log
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Work-stealing bugs | Missed objects, double-free | TSAN, extensive testing, formal verification |
-| Safe point placement | Deadlock, long pauses | Audit blocking calls, timeout detection |
-| TLAB fragmentation | Memory waste | Tune sizes, add compaction later |
-| Cross-thread races | Corruption | TSAN, careful atomics review |
-| Performance regression | Slower than single-thread | Benchmark early, optimize critical paths |
-| Finalizer ordering | Resource leaks | Document guarantees, careful testing |
+**2024-12-27**: Starting size class implementation
+- Read existing gc.h/gc.c (~3900 lines total)
+- Existing infrastructure: single 80-byte slot class, page pool, TLAB
+- Next: Add size class constants and multi-class support
+
+**2024-12-27**: Phase 1 Complete - Size Class Infrastructure
+- Added 9 size classes: 16, 32, 64, 128, 256, 512, 1024, 2048, 4096 bytes
+- Fixed page layout math to account for header + inline bitmaps
+- Implemented `valk_gc_page2_t` with accessor functions for bitmaps/slots
+- Implemented `valk_gc_page_list_t` for per-class page tracking
+- Implemented `valk_gc_heap2_t` with per-class arrays
+- Implemented `valk_gc_tlab2_t` with per-class TLAB state
+- Implemented `valk_gc_heap2_create()`, `valk_gc_heap2_destroy()`
+- Implemented `valk_gc_heap2_alloc()` with fast/slow paths
+- Implemented large object allocation via mmap
+- Added 12 unit tests, all passing
+- Full test suite (69 GC tests, all Valk tests) passing
+
+**2024-12-27**: Phase 2 Complete - Pointer Location and Marking/Sweeping
+- Moved basic bitmap operations earlier in gc.h (needed for new inline functions)
+- Added atomic bitmap operations for thread-safe marking:
+  - `valk_gc_bitmap_try_set_atomic()` - atomic test-and-set
+  - `valk_gc_bitmap_test_atomic()` - atomic read
+- Added `valk_gc_ptr_location_t` result structure
+- Implemented `valk_gc_ptr_to_location()` - finds page/slot for a pointer
+- Added inline marking helpers:
+  - `valk_gc_page2_try_mark()` - atomic mark attempt
+  - `valk_gc_page2_is_marked()` - check mark status
+  - `valk_gc_page2_is_allocated()` - check allocation status
+- Implemented `valk_gc_mark_large_object()` - marks large objects
+- Implemented `valk_gc_sweep_page2()` - word-at-a-time bitmap sweep with:
+  - 64-bit word processing for speed
+  - Automatic finalizer calls for LVAL_REF
+  - Atomic num_allocated updates
+- Implemented `valk_gc_sweep_large_objects()` - munmaps unmarked large objects
+- Implemented `valk_gc_rebuild_partial_lists()` - rebuilds after sweep
+- Added 7 new unit tests (total 76 GC tests), all passing
+- Full test suite passing
+
+**2024-12-27**: Phase 3 Complete - Memory Limits and GC Cycle
+- Added `valk_gc_stats2_t` structure for comprehensive GC diagnostics
+- Implemented `valk_gc_heap2_get_stats()` - populates stats from heap
+- Implemented `valk_gc_tlab2_reset()` - clears all TLAB state
+- Implemented `valk_gc_oom_abort()` - prints detailed diagnostics, aborts:
+  - Shows requested/used/limit bytes
+  - Per-class slot usage breakdown
+  - Large object bytes
+  - Collection count and total reclaimed
+  - Suggests doubling limit
+- Implemented `valk_gc_heap2_collect()` - full GC cycle:
+  - Sweeps all pages in all classes
+  - Sweeps large objects
+  - Rebuilds partial lists
+  - Updates reclaimed statistics
+- Updated `valk_gc_heap2_alloc()` and large object allocation:
+  - Hard limit check triggers emergency GC, then OOM abort if still over
+  - Soft limit check triggers non-blocking GC
+  - Emergency GC flag prevents recursive GC
+- Added 7 new Phase 3 tests (total 83 GC tests), all passing:
+  - test_gc_heap2_get_stats
+  - test_gc_tlab2_reset
+  - test_gc_heap2_collect_empty
+  - test_gc_heap2_collect_reclaims_unmarked
+  - test_gc_heap2_collect_preserves_marked
+  - test_gc_heap2_soft_limit_triggers_gc
+  - test_gc_heap2_collect_updates_stats
+- Full test suite passing
+
+**2024-12-27**: Phase 6 Complete - Integration
+- Made `valk_gc_malloc_heap_t` a typedef to `valk_gc_heap2_t`
+- Replaced all legacy API functions with heap2 wrappers:
+  - `valk_gc_malloc_heap_init()` → `valk_gc_heap2_create()`
+  - `valk_gc_malloc_heap_alloc()` → `valk_gc_heap2_alloc()`
+  - `valk_gc_malloc_collect()` → `valk_gc_heap2_collect()`
+  - `valk_gc_malloc_heap_destroy()` → `valk_gc_heap2_destroy()`
+- Deleted ~1200 lines of legacy code:
+  - Removed slab allocators (lval_slab, lenv_slab)
+  - Removed object linked list tracking
+  - Removed flag-based marking (LVAL_FLAG_GC_MARK)
+  - Removed legacy sweep and collection code
+- Updated all callers in parser.c, metrics_builtins.c, aio_sse_diagnostics.c
+- Fixed runtime_metrics updating in valk_gc_heap2_collect()
+- Fixed TLAB owner tracking to prevent use-after-free
+- gc.c reduced from ~4140 to ~2996 lines
+- All 94 GC unit tests passing
+- Full test suite passing
+
+**2024-12-27**: Phase 7 Complete - Parallel Mark/Sweep for heap2
+- Implemented `valk_gc_heap2_parallel_mark()`:
+  - Uses coordinator barrier for synchronization
+  - Thread 0 marks global roots, all threads mark own roots
+  - Work-stealing mark loop with Chase-Lev deques
+  - Termination detection via idle counting
+- Implemented `valk_gc_heap2_parallel_sweep()`:
+  - Partitions pages among threads by size class
+  - Thread 0 handles large object sweep
+  - Uses existing `valk_gc_sweep_page2()` per page
+- Implemented `valk_gc_heap2_parallel_collect()`:
+  - Full parallel GC cycle orchestration
+  - Falls back to single-threaded collect if only 1 thread registered
+  - Updates runtime metrics (pause time, reclaimed bytes)
+  - Updates coordinator statistics
+- Implemented `valk_gc_heap2_request_stw()`:
+  - Requests stop-the-world pause
+  - Sets up barrier for registered thread count
+  - Waits for all threads to pause
+- Added 7 new unit tests for parallel GC functions:
+  - test_gc_heap2_parallel_collect_null
+  - test_gc_heap2_parallel_collect_single_thread
+  - test_gc_heap2_parallel_mark_null
+  - test_gc_heap2_parallel_sweep_null
+  - test_gc_heap2_request_stw_null
+  - test_gc_heap2_parallel_collect_reclaims_bytes
+  - test_gc_heap2_parallel_collect_updates_metrics
+- gc.c now ~3230 lines (added ~230 lines for parallel implementation)
+- All 101 GC unit tests passing
+- Full Valk test suite passing
 
 ---
 
 ## References
 
 1. [The Garbage Collection Handbook](https://gchandbook.org/) - Jones, Hosking, Moss
-2. [Chase-Lev Deque](https://www.dre.vanderbilt.edu/~schmidt/PDF/work-stealing-dequeue.pdf) - Work-stealing algorithm
-3. [V8 Orinoco GC](https://v8.dev/blog/trash-talk) - Parallel GC in practice
-4. [Go GC](https://go.dev/blog/ismmkeynote) - Concurrent GC design
-5. [JVM G1 GC](https://www.oracle.com/technetwork/tutorials/tutorials-1876574.html) - Parallel + concurrent hybrid
-6. [Boehm GC](https://hboehm.info/gc/) - Conservative GC techniques
+2. [Go GC Design](https://go.dev/blog/ismmkeynote) - Rick Hudson, ISMM 2018
+3. [V8 Orinoco GC](https://v8.dev/blog/trash-talk) - Parallel/concurrent GC
+4. [jemalloc Design](https://jemalloc.net/) - Size class allocator
+5. [tcmalloc Design](https://google.github.io/tcmalloc/design.html) - Thread-caching allocator
+6. [Chase-Lev Deque](https://www.dre.vanderbilt.edu/~schmidt/PDF/work-stealing-dequeue.pdf) - Work stealing

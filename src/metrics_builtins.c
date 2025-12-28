@@ -518,12 +518,8 @@ static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a
     slab = valk_aio_get_http_servers_slab(sys);
   } else if (strcmp(slab_name, "http_clients") == 0) {
     slab = valk_aio_get_http_clients_slab(sys);
-  } else if (strcmp(slab_name, "lval") == 0) {
-    valk_gc_malloc_heap_t *gc_heap = valk_aio_get_gc_heap(sys);
-    if (gc_heap) slab = gc_heap->lval_slab;
-  } else if (strcmp(slab_name, "lenv") == 0) {
-    valk_gc_malloc_heap_t *gc_heap = valk_aio_get_gc_heap(sys);
-    if (gc_heap) slab = gc_heap->lenv_slab;
+  } else if (strcmp(slab_name, "lval") == 0 || strcmp(slab_name, "lenv") == 0) {
+    return valk_lval_err("aio/slab-buckets: lval/lenv slabs no longer exist in heap2");
   }
 
   if (!slab) {

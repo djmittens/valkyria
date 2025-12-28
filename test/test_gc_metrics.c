@@ -154,12 +154,12 @@ void test_gc_reclaimed_bytes(VALK_TEST_ARGS()) {
     // Don't add to environment - these will be garbage
   }
 
-  size_t allocated_before = heap->allocated_bytes;
+  size_t allocated_before = valk_gc_heap2_used_bytes(heap);
 
   // Run collection - should reclaim the unreferenced allocations
   valk_gc_malloc_collect(heap, NULL);
 
-  size_t allocated_after = heap->allocated_bytes;
+  size_t allocated_after = valk_gc_heap2_used_bytes(heap);
 
   // Get reclaimed bytes metric
   uint64_t reclaimed = 0;

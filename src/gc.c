@@ -914,147 +914,37 @@ valk_lval_t* valk_lval_follow_forward(valk_lval_t* v) {
 }
 
 // ============================================================================
-// GC Heap - Malloc-based allocator with mark & sweep
+// GC Heap - Legacy API wrappers around valk_gc_heap2_t
 // ============================================================================
 
-// Initialize GC heap
+// Initialize GC heap (now delegates to valk_gc_heap2_create)
 valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(size_t hard_limit) {
-  valk_gc_malloc_heap_t* heap = malloc(sizeof(valk_gc_malloc_heap_t));
-  if (!heap) {
-    VALK_ERROR("Failed to allocate GC heap structure");
-    return NULL;
-  }
-
-  heap->type = VALK_ALLOC_GC_HEAP;
-  heap->allocated_bytes = 0;
-  heap->hard_limit = hard_limit > 0 ? hard_limit : 250 * 1024 * 1024;  // 250 MiB default
-  heap->num_collections = 0;
-  heap->in_emergency_gc = false;
-  heap->objects = NULL;
-  heap->root_env = NULL;
-  heap->free_list = NULL;
-  heap->free_list_size = 0;
-
-  // Initialize statistics to zero
-  heap->stats.overflow_allocations = 0;
-  heap->stats.evacuations_from_scratch = 0;
-  heap->stats.evacuation_bytes = 0;
-  heap->stats.evacuation_pointer_fixups = 0;
-  heap->stats.emergency_collections = 0;
-  heap->stats.peak_usage = 0;
-
-  // Initialize runtime metrics
-  atomic_store(&heap->runtime_metrics.cycles_total, 0);
-  atomic_store(&heap->runtime_metrics.pause_us_total, 0);
-  atomic_store(&heap->runtime_metrics.pause_us_max, 0);
-  atomic_store(&heap->runtime_metrics.reclaimed_bytes_total, 0);
-  atomic_store(&heap->runtime_metrics.allocated_bytes_total, 0);
-  atomic_store(&heap->runtime_metrics.objects_marked, 0);
-  atomic_store(&heap->runtime_metrics.objects_swept, 0);
-  heap->runtime_metrics.last_cycle_start_us = 0;
-
-  // Initialize survival histogram counters
-  atomic_store(&heap->runtime_metrics.survival_gen_0, 0);
-  atomic_store(&heap->runtime_metrics.survival_gen_1_5, 0);
-  atomic_store(&heap->runtime_metrics.survival_gen_6_20, 0);
-  atomic_store(&heap->runtime_metrics.survival_gen_21_plus, 0);
-
-  // Initialize frame-time pause histogram counters
-  atomic_store(&heap->runtime_metrics.pause_0_1ms, 0);
-  atomic_store(&heap->runtime_metrics.pause_1_5ms, 0);
-  atomic_store(&heap->runtime_metrics.pause_5_10ms, 0);
-  atomic_store(&heap->runtime_metrics.pause_10_16ms, 0);
-  atomic_store(&heap->runtime_metrics.pause_16ms_plus, 0);
-
-  // Create fast slab allocator for valk_lval_t objects
-  // Fixed large size - simple and fast, no threshold complexity
-  extern size_t __valk_lval_size;  // Defined in parser.c
-  heap->lval_size = __valk_lval_size;
-
-  // Fixed slab size: 256K objects = ~64MB for 256-byte lval_t+header
-  // Large enough for most workloads, avoids exhaustion during heavy copying
-  size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
-  size_t num_lvals = 256 * 1024;  // 256K objects
-
-  size_t slab_size = valk_slab_size(slab_item_size, num_lvals);
-  heap->lval_slab = malloc(slab_size);
-  if (heap->lval_slab == NULL) {
-    VALK_WARN("Failed to allocate lval slab, will fall back to malloc");
-  } else {
-    valk_slab_init(heap->lval_slab, slab_item_size, num_lvals);
-  }
-
-  // Create fast slab allocator for valk_lenv_t objects
-  // Environments are smaller and less numerous than lvals
-  extern size_t __valk_lenv_size;  // Defined in parser.c
-  heap->lenv_size = __valk_lenv_size;
-
-  // Smaller capacity than lval slab: 64K environments should be plenty
-  // Each lenv is ~80 bytes + header = ~96 bytes per slot
-  size_t lenv_slab_item_size = sizeof(valk_gc_header_t) + heap->lenv_size;
-  size_t num_lenvs = 64 * 1024;  // 64K environments
-
-  size_t lenv_slab_size = valk_slab_size(lenv_slab_item_size, num_lenvs);
-  heap->lenv_slab = malloc(lenv_slab_size);
-  if (heap->lenv_slab == NULL) {
-    VALK_WARN("Failed to allocate lenv slab, will fall back to malloc");
-  } else {
-    valk_slab_init(heap->lenv_slab, lenv_slab_item_size, num_lenvs);
-  }
-
-  // Initialize percentage-based GC tuning with sensible defaults
-  heap->gc_threshold_pct = 75;    // Trigger GC at 75% heap usage
-  heap->gc_target_pct = 50;       // Informational: aim to be below 50% after GC
-  heap->min_gc_interval_ms = 1000; // At most one GC per second
-  heap->last_gc_time_us = 0;
-
-  return heap;
+  return valk_gc_heap2_create(hard_limit);
 }
 
 // Set hard limit for GC heap
 void valk_gc_set_hard_limit(valk_gc_malloc_heap_t* heap, size_t limit) {
-  if (limit < heap->allocated_bytes) {
-    VALK_WARN("Cannot set hard limit below current usage (%zu < %zu)",
-              limit, heap->allocated_bytes);
+  if (!heap) return;
+  size_t used = valk_gc_heap2_used_bytes(heap);
+  if (limit < used) {
+    VALK_WARN("Cannot set hard limit below current usage (%zu < %zu)", limit, used);
     return;
   }
   heap->hard_limit = limit;
+  heap->soft_limit = (limit * 3) / 4;
 }
 
 // Set root environment for GC marking
 void valk_gc_malloc_set_root(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env) {
-  heap->root_env = root_env;
+  if (heap) heap->root_env = root_env;
 }
 
-// Get heap usage percentages for all tiers
-// Returns the MAX of lval_slab%, lenv_slab% and malloc% - triggers on whichever is fuller
+// Get heap usage as percentage (0-100)
 uint8_t valk_gc_heap_usage_pct(valk_gc_malloc_heap_t* heap) {
-  if (!heap) return 0;
-
-  // Calculate lval slab usage percentage
-  uint8_t lval_slab_pct = 0;
-  if (heap->lval_slab != NULL && heap->lval_slab->numItems > 0) {
-    size_t slab_used = heap->lval_slab->numItems - heap->lval_slab->numFree;
-    lval_slab_pct = (uint8_t)((slab_used * 100) / heap->lval_slab->numItems);
-  }
-
-  // Calculate lenv slab usage percentage
-  uint8_t lenv_slab_pct = 0;
-  if (heap->lenv_slab != NULL && heap->lenv_slab->numItems > 0) {
-    size_t slab_used = heap->lenv_slab->numItems - heap->lenv_slab->numFree;
-    lenv_slab_pct = (uint8_t)((slab_used * 100) / heap->lenv_slab->numItems);
-  }
-
-  // Calculate malloc usage percentage
-  uint8_t malloc_pct = 0;
-  if (heap->hard_limit > 0) {
-    malloc_pct = (uint8_t)((heap->allocated_bytes * 100) / heap->hard_limit);
-    if (malloc_pct > 100) malloc_pct = 100;
-  }
-
-  // Return the highest - GC triggers if ANY tier is full
-  uint8_t max_pct = lval_slab_pct > lenv_slab_pct ? lval_slab_pct : lenv_slab_pct;
-  return max_pct > malloc_pct ? max_pct : malloc_pct;
+  if (!heap || heap->hard_limit == 0) return 0;
+  size_t used = valk_gc_heap2_used_bytes(heap);
+  uint8_t pct = (uint8_t)((used * 100) / heap->hard_limit);
+  return pct > 100 ? 100 : pct;
 }
 
 // Configure GC thresholds
@@ -1069,1305 +959,44 @@ void valk_gc_set_thresholds(valk_gc_malloc_heap_t* heap,
 }
 
 // Check if GC should run
-// Uses percentage-based threshold considering both slab and malloc usage
-// Also rate-limits to avoid GC thrashing
 bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap) {
   if (!heap) return false;
-
-  // Check percentage threshold
   uint8_t usage_pct = valk_gc_heap_usage_pct(heap);
-  if (usage_pct < heap->gc_threshold_pct) {
-    return false;  // Below threshold, no GC needed
-  }
-
-  // Above threshold - check rate limiting
+  if (usage_pct < heap->gc_threshold_pct) return false;
   if (heap->min_gc_interval_ms > 0 && heap->last_gc_time_us > 0) {
     uint64_t now_us = uv_hrtime() / 1000;
     uint64_t elapsed_ms = (now_us - heap->last_gc_time_us) / 1000;
-    if (elapsed_ms < heap->min_gc_interval_ms) {
-      return false;  // Too soon since last GC
-    }
+    if (elapsed_ms < heap->min_gc_interval_ms) return false;
   }
-
   return true;
 }
 
-// Allocate from GC heap with header-based tracking
+// Allocate from GC heap (delegates to heap2)
 void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, size_t bytes) {
-  size_t total_size = sizeof(valk_gc_header_t) + bytes;
-
-  // Check hard limit BEFORE allocation - trigger emergency GC if approaching
-  if (heap->allocated_bytes + total_size > heap->hard_limit) {
-    // Try emergency GC if not already in one
-    if (!heap->in_emergency_gc && heap->root_env != NULL) {
-      heap->in_emergency_gc = true;
-
-      size_t before = heap->allocated_bytes;
-      valk_gc_malloc_collect(heap, NULL);  // Emergency GC, no additional roots
-      size_t reclaimed = before - heap->allocated_bytes;
-
-      heap->stats.emergency_collections++;
-      heap->in_emergency_gc = false;
-
-    }
-
-    // Re-check after emergency GC
-    if (heap->allocated_bytes + total_size > heap->hard_limit) {
-      // Still can't allocate - fatal error
-      VALK_ERROR("=== FATAL: HEAP EXHAUSTED ===");
-      VALK_ERROR("Requested: %zu bytes (+ %zu header = %zu total)",
-                 bytes, sizeof(valk_gc_header_t), total_size);
-      VALK_ERROR("Current:   %zu bytes", heap->allocated_bytes);
-      VALK_ERROR("Hard limit: %zu bytes", heap->hard_limit);
-      VALK_ERROR("Shortfall: %zu bytes",
-                 (heap->allocated_bytes + total_size) - heap->hard_limit);
-
-      // Dump full diagnostics
-      valk_gc_malloc_print_stats(heap);
-
-      VALK_ERROR("Consider increasing VALK_HEAP_HARD_LIMIT environment variable");
-      VALK_ERROR("Current: VALK_HEAP_HARD_LIMIT=%zu", heap->hard_limit);
-
-      abort();
-    }
-  }
-
-  valk_gc_header_t* header = NULL;
-  bool from_slab = false;
-
-  // Fastest path: Slab allocator for valk_lval_t objects (most common case)
-  if (bytes == heap->lval_size && heap->lval_slab != NULL) {
-    header = valk_mem_allocator_alloc((void*)heap->lval_slab, total_size);
-    if (header != NULL) {
-      from_slab = true;
-      VALK_TRACE("GC alloc: %zu bytes from lval slab at %p", bytes, (void*)(header + 1));
-    }
-  }
-
-  // Second fast path: Slab allocator for valk_lenv_t objects
-  if (header == NULL && bytes == heap->lenv_size && heap->lenv_slab != NULL) {
-    header = valk_mem_allocator_alloc((void*)heap->lenv_slab, total_size);
-    if (header != NULL) {
-      from_slab = true;
-      VALK_TRACE("GC alloc: %zu bytes from lenv slab at %p", bytes, (void*)(header + 1));
-    }
-  }
-
-  // Slow path: malloc if not found in slab
-  if (header == NULL) {
-    header = malloc(total_size);
-    if (header == NULL) {
-      VALK_ERROR("GC heap malloc failed for %zu bytes (+ %zu header)",
-                 bytes, sizeof(valk_gc_header_t));
-      return NULL;
-    }
-    // Track allocation (header + user data)
-    heap->allocated_bytes += total_size;
-    VALK_TRACE("GC alloc: %zu bytes via malloc at %p", bytes, (void*)(header + 1));
-  }
-
-  // Initialize header
-  header->origin_allocator = heap;
-  header->gc_next = heap->objects;
-  header->size = bytes;
-
-  // Always zero out user data for safety - whether from slab or malloc
-  void* user_data = (void*)(header + 1);
-  memset(user_data, 0, bytes);
-
-  // Add to live objects linked list
-  heap->objects = header;
-
-  // Track peak usage
-  if (heap->allocated_bytes > heap->stats.peak_usage) {
-    heap->stats.peak_usage = heap->allocated_bytes;
-  }
-
-  // Track cumulative allocation (for rate calculations)
-  atomic_fetch_add(&heap->runtime_metrics.allocated_bytes_total, bytes);
-
-  // Return pointer to user data (NOT header!)
-  return (void*)(header + 1);
+  return valk_gc_heap2_alloc(heap, bytes);
 }
+
 
 // ============================================================================
-// Conservative Stack Scanning - Mark objects referenced from C stack
+// Legacy GC API - Implemented using valk_gc_heap2_t
 // ============================================================================
 
-// Helper: Check if a pointer-sized value looks like it points into GC heap
-__attribute__((unused))
-static bool valk_gc_is_heap_pointer(valk_gc_malloc_heap_t* heap, void* ptr) {
-  if (ptr == NULL) return false;
-
-  // Conservative scan: check if this pointer matches any object in our heap
-  for (valk_gc_header_t* header = heap->objects; header != NULL; header = header->gc_next) {
-    void* user_data = (void*)(header + 1);
-    // Check if ptr points to this allocation (within user data range)
-    if (ptr >= user_data && ptr < (void*)((uint8_t*)user_data + header->size)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// ============================================================================
-// Mark Phase - Traverse from roots and mark reachable objects
-// ============================================================================
-
-// Thread-local heap pointer for safe marking checks
-static __thread valk_gc_malloc_heap_t* gc_current_heap = NULL;
-
-// Environment worklist for iterative traversal (avoids stack overflow)
-#define ENV_WORKLIST_INITIAL_CAPACITY 64
-
-typedef struct {
-  valk_lenv_t** items;
-  size_t count;
-  size_t capacity;
-} valk_env_worklist_t;
-
-// Lval worklist for iterative marking (avoids stack overflow on deep lists)
-#define LVAL_WORKLIST_INITIAL_CAPACITY 256
-
-typedef struct {
-  valk_lval_t** items;
-  size_t count;
-  size_t capacity;
-} valk_lval_worklist_t;
-
-static void lval_worklist_init(valk_lval_worklist_t* wl) {
-  wl->items = malloc(LVAL_WORKLIST_INITIAL_CAPACITY * sizeof(valk_lval_t*));
-  wl->count = 0;
-  wl->capacity = LVAL_WORKLIST_INITIAL_CAPACITY;
-}
-
-static void lval_worklist_free(valk_lval_worklist_t* wl) {
-  if (wl->items) {
-    free(wl->items);
-    wl->items = NULL;
-  }
-  wl->count = 0;
-  wl->capacity = 0;
-}
-
-static void lval_worklist_push(valk_lval_worklist_t* wl, valk_lval_t* v) {
-  if (v == NULL) return;
-  if (wl->count >= wl->capacity) {
-    size_t new_cap = wl->capacity * 2;
-    valk_lval_t** new_items = realloc(wl->items, new_cap * sizeof(valk_lval_t*));
-    if (new_items == NULL) {
-      VALK_ERROR("Failed to grow lval worklist");
-      return;
-    }
-    wl->items = new_items;
-    wl->capacity = new_cap;
-  }
-  wl->items[wl->count++] = v;
-}
-
-static valk_lval_t* lval_worklist_pop(valk_lval_worklist_t* wl) {
-  if (wl->count == 0) return NULL;
-  return wl->items[--wl->count];
-}
-
-static void env_worklist_init(valk_env_worklist_t* wl) {
-  wl->items = malloc(ENV_WORKLIST_INITIAL_CAPACITY * sizeof(valk_lenv_t*));
-  wl->count = 0;
-  wl->capacity = ENV_WORKLIST_INITIAL_CAPACITY;
-}
-
-static void env_worklist_free(valk_env_worklist_t* wl) {
-  if (wl->items) {
-    free(wl->items);
-    wl->items = NULL;
-  }
-  wl->count = 0;
-  wl->capacity = 0;
-}
-
-static void env_worklist_push(valk_env_worklist_t* wl, valk_lenv_t* env) {
-  if (env == NULL) return;
-  if (wl->count >= wl->capacity) {
-    size_t new_cap = wl->capacity * 2;
-    valk_lenv_t** new_items = realloc(wl->items, new_cap * sizeof(valk_lenv_t*));
-    if (new_items == NULL) {
-      VALK_ERROR("Failed to grow env worklist");
-      return;
-    }
-    wl->items = new_items;
-    wl->capacity = new_cap;
-  }
-  wl->items[wl->count++] = env;
-}
-
-static valk_lenv_t* env_worklist_pop(valk_env_worklist_t* wl) {
-  if (wl->count == 0) return NULL;
-  return wl->items[--wl->count];
-}
-
-// Process a single lval for marking, pushing children to worklist (non-recursive)
-static void valk_gc_mark_lval_single(valk_lval_t* v, valk_lval_worklist_t* wl) {
-  if (v == NULL) return;
-
-  // Only mark objects allocated by the GC heap - don't mark scratch/arena objects
-  if (LVAL_ALLOC(v) != LVAL_ALLOC_HEAP) return;
-
-  // Already marked - avoid infinite loops
-  if (v->flags & LVAL_FLAG_GC_MARK) return;
-
-  // Mark this value
-  v->flags |= LVAL_FLAG_GC_MARK;
-
-  switch (LVAL_TYPE(v)) {
-    case LVAL_NUM:
-      // True leaf type - no children
-      break;
-
-    case LVAL_REF:
-      // Mark the type string if it's GC-allocated
-      if (v->ref.type != NULL) {
-        valk_gc_mark_allocation(v->ref.type);
-      }
-      // Mark the ref ptr if it's GC-allocated (e.g., aio_system)
-      if (v->ref.ptr != NULL) {
-        valk_gc_mark_allocation(v->ref.ptr);
-      }
-      break;
-
-    case LVAL_SYM:
-    case LVAL_STR:
-    case LVAL_ERR:
-      // Mark the string data if it's GC-allocated (evacuated from scratch)
-      if (v->str != NULL) {
-        valk_gc_mark_allocation(v->str);
-      }
-      break;
-
-    case LVAL_FUN:
-      // Mark function name string if it's GC-allocated
-      if (v->fun.name != NULL) {
-        valk_gc_mark_allocation(v->fun.name);
-      }
-      // Mark function environment, formals, body
-      if (v->fun.env) {
-        valk_gc_mark_env(v->fun.env);
-      }
-      // Push children to worklist instead of recursing
-      lval_worklist_push(wl, v->fun.formals);
-      lval_worklist_push(wl, v->fun.body);
-      break;
-
-    case LVAL_CONS:
-    case LVAL_QEXPR:
-      // Push head and tail to worklist instead of recursing
-      lval_worklist_push(wl, v->cons.head);
-      lval_worklist_push(wl, v->cons.tail);
-      break;
-    case LVAL_NIL:
-      // Nil has no children
-      break;
-
-    case LVAL_UNDEFINED:
-    case LVAL_FORWARD:
-      // Forwarding pointers should not exist during GC marking
-      // (they only exist transiently during evacuation)
-      break;
-
-    case LVAL_HANDLE:
-      // Mark the async handle's stored lval pointers
-      // Note: The handle struct itself is malloc'd, not GC-allocated,
-      // but the lvals it references (callbacks, result, error) may be GC-allocated
-      if (v->async.handle != NULL) {
-        // Push children to worklist instead of recursing
-        lval_worklist_push(wl, v->async.handle->on_complete);
-        lval_worklist_push(wl, v->async.handle->on_error);
-        lval_worklist_push(wl, v->async.handle->on_cancel);
-        lval_worklist_push(wl, v->async.handle->result);
-        lval_worklist_push(wl, v->async.handle->error);
-        if (v->async.handle->env) {
-          valk_gc_mark_env(v->async.handle->env);
-        }
-      }
-      break;
-  }
-}
-
-// Iterative lval marking to avoid stack overflow on deep structures
-static void valk_gc_mark_lval(valk_lval_t* v) {
-  if (v == NULL) return;
-
-  valk_lval_worklist_t worklist;
-  lval_worklist_init(&worklist);
-
-  // Push initial value
-  lval_worklist_push(&worklist, v);
-
-  // Process worklist iteratively
-  while (worklist.count > 0) {
-    valk_lval_t* current = lval_worklist_pop(&worklist);
-    valk_gc_mark_lval_single(current, &worklist);
-  }
-
-  lval_worklist_free(&worklist);
-}
-
-// Helper to check if env is already marked (uses same marking scheme as valk_gc_mark_allocation)
-static bool valk_gc_env_is_marked(valk_lenv_t* env) {
-  if (env == NULL) return true;  // NULL counts as "already processed"
-
-  // Skip scratch arena environments - they're not GC-managed yet
-  if (valk_thread_ctx.scratch && valk_ptr_in_arena(valk_thread_ctx.scratch, env)) {
-    return false;  // Not marked, but safe to skip
-  }
-
-  // Check if already marked by looking at header's origin_allocator low bit
-  valk_gc_header_t* header = ((valk_gc_header_t*)env) - 1;
-  return ((uintptr_t)header->origin_allocator & 1) != 0;
-}
-
-// Process a single environment (marks its direct contents, returns parent/fallback for worklist)
-static void valk_gc_mark_env_contents(valk_lenv_t* env, valk_env_worklist_t* wl) {
-  // Mark the environment structure itself if it's GC-allocated
-  valk_gc_mark_allocation(env);
-
-  // Mark all lval values in this environment
-  for (size_t i = 0; i < env->vals.count; i++) {
-    valk_gc_mark_lval(env->vals.items[i]);
-  }
-
-  // Mark the arrays themselves if they're GC-allocated
-  if (env->symbols.items != NULL) {
-    valk_gc_mark_allocation(env->symbols.items);
-  }
-  if (env->vals.items != NULL) {
-    valk_gc_mark_allocation(env->vals.items);
-  }
-
-  // Mark individual symbol strings if they're GC-allocated
-  for (size_t i = 0; i < env->symbols.count; i++) {
-    if (env->symbols.items[i] != NULL) {
-      valk_gc_mark_allocation(env->symbols.items[i]);
-    }
-  }
-
-  // Push parent and fallback to worklist for iterative processing
-  if (env->parent != NULL && !valk_gc_env_is_marked(env->parent)) {
-    env_worklist_push(wl, env->parent);
-  }
-  if (env->fallback != NULL && !valk_gc_env_is_marked(env->fallback)) {
-    env_worklist_push(wl, env->fallback);
-  }
-}
-
-static void valk_gc_mark_env(valk_lenv_t* env) {
-  if (env == NULL) return;
-
-  // Use iterative worklist to avoid stack overflow on deep env chains
-  valk_env_worklist_t worklist;
-  env_worklist_init(&worklist);
-
-  // Push initial environment
-  env_worklist_push(&worklist, env);
-
-  // Process all environments iteratively
-  while (worklist.count > 0) {
-    valk_lenv_t* current = env_worklist_pop(&worklist);
-    if (current == NULL) continue;
-
-    // Skip if already marked (prevents infinite loops on cycles)
-    if (valk_gc_env_is_marked(current)) continue;
-
-    valk_gc_mark_env_contents(current, &worklist);
-  }
-
-  env_worklist_free(&worklist);
-}
-
-// Mark an arbitrary GC heap allocation (for evacuated strings/arrays)
-// This function should ONLY be called on GC-allocated pointers.
-// NOTE: GC can only run at checkpoint boundaries (between expressions).
-// During expression evaluation, scratch arena pointers are not safe to mark.
-static void valk_gc_mark_allocation(void* ptr) {
-  if (ptr == NULL || gc_current_heap == NULL) return;
-
-  // Skip scratch arena pointers - they don't have GC headers and aren't managed by GC yet
-  // They'll be evacuated at the next checkpoint if they're still reachable
-  // This is the ONLY check we need - O(1) range check instead of O(n) list scan
-  if (valk_thread_ctx.scratch && valk_ptr_in_arena(valk_thread_ctx.scratch, ptr)) {
-    return;  // Scratch pointer - wait for evacuation at checkpoint
-  }
-
-  // If not in scratch arena, it must be GC heap or libc malloc
-  // Both can be safely freed with valk_mem_free
-  // Trust the pointer and dereference the header
-  valk_gc_header_t* header = ((valk_gc_header_t*)ptr) - 1;
-
-  // Short-circuit: if already marked, return immediately (O(1))
-  // This makes repeated marking of the same object very fast
-  if ((uintptr_t)header->origin_allocator & 1) {
-    return;  // Already marked
-  }
-
-  // Mark it by setting the low bit of origin_allocator
-  void* allocator = (void*)((uintptr_t)header->origin_allocator & ~(uintptr_t)1);
-  header->origin_allocator = (void*)((uintptr_t)allocator | 1);
-}
-
-// ============================================================================
-// Sweep Phase - Free unmarked objects
-// ============================================================================
-
-static void record_survival_histogram(valk_gc_malloc_heap_t* heap, uint64_t gen) {
-  if (gen == 0) {
-    atomic_fetch_add(&heap->runtime_metrics.survival_gen_0, 1);
-  } else if (gen <= 5) {
-    atomic_fetch_add(&heap->runtime_metrics.survival_gen_1_5, 1);
-  } else if (gen <= 20) {
-    atomic_fetch_add(&heap->runtime_metrics.survival_gen_6_20, 1);
-  } else {
-    atomic_fetch_add(&heap->runtime_metrics.survival_gen_21_plus, 1);
-  }
-}
-
-static size_t valk_gc_malloc_sweep(valk_gc_malloc_heap_t* heap, size_t* out_freed_count) {
-  size_t reclaimed = 0;
-  size_t freed_count = 0;
-  valk_gc_header_t** header_ptr = &heap->objects;
-
-  while (*header_ptr != NULL) {
-    valk_gc_header_t* header = *header_ptr;
-    void* user_data = (void*)(header + 1);
-
-    // Extract mark bit from origin_allocator (we use low bit as mark flag)
-    bool is_marked = ((uintptr_t)header->origin_allocator & 1) != 0;
-    void* origin_allocator = (void*)((uintptr_t)header->origin_allocator & ~(uintptr_t)1);
-
-    // Safety check: verify allocator pointer (after clearing mark bit)
-    if (origin_allocator != heap) {
-      VALK_ERROR("GC sweep found header with wrong allocator!");
-      VALK_ERROR("  Expected GC heap: %p", heap);
-      VALK_ERROR("  Got allocator: %p (mark bit: %d)", origin_allocator, is_marked);
-      VALK_ERROR("  Header pointer: %p", header);
-      VALK_ERROR("  User data: %p", user_data);
-      VALK_ERROR("  Header size: %zu", header->size);
-
-      VALK_ERROR("BREAKING TRAVERSAL to prevent infinite loop");
-      // Break the list here to prevent following corrupted pointers
-      *header_ptr = NULL;
-      break;
-    }
-
-    // Check if this is an lval object or a raw allocation (string/array)
-    bool is_lval = (header->size == heap->lval_size);
-    bool lval_marked = false;
-
-    if (is_lval) {
-      // Cast to lval and check its mark bit too
-      valk_lval_t* obj = (valk_lval_t*)user_data;
-      lval_marked = (obj->flags & LVAL_FLAG_GC_MARK) != 0;
-    }
-
-    // Object is live if either the header mark bit OR the lval mark bit is set
-    if (is_marked || lval_marked) {
-      // Object is live - keep it and clear mark bit for next GC cycle
-      header->origin_allocator = origin_allocator;
-      header_ptr = &header->gc_next;
-    } else {
-      // Object is garbage - free based on allocation source (slab vs malloc)
-      *header_ptr = header->gc_next;  // Remove from live objects list
-
-      size_t total_size = sizeof(valk_gc_header_t) + header->size;
-      freed_count++;
-
-      // Free internal resources before freeing the lval structure itself
-      // NOTE: Most internal allocations (lval->str, fun.name) use valk_mem_alloc
-      // and are tracked as separate GC objects - they will be swept independently.
-      // Only manually free resources allocated via raw malloc/strdup.
-      if (is_lval) {
-        valk_lval_t* obj = (valk_lval_t*)user_data;
-
-        // Record generation in survival histogram before freeing
-        uint64_t gen = LVAL_GC_GEN(obj);
-        record_survival_histogram(heap, gen);
-
-        switch (LVAL_TYPE(obj)) {
-          case LVAL_REF:
-            // References have custom free functions (raw malloc)
-            if (obj->ref.free != NULL && obj->ref.ptr != NULL) {
-              obj->ref.free(obj->ref.ptr);
-            }
-            // ref.type is strdup'd (raw malloc)
-            if (obj->ref.type != NULL) {
-              free(obj->ref.type);
-            }
-            break;
-          default:
-            break;
-        }
-      }
-
-      // Check if object is from lval slab via address range check
-      uintptr_t obj_addr = (uintptr_t)header;
-      bool from_lval_slab = false;
-      if (heap->lval_slab != NULL) {
-        uintptr_t slab_start = (uintptr_t)heap->lval_slab;
-        size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
-        size_t slab_total_size = valk_slab_size(slab_item_size, 256 * 1024);
-        uintptr_t slab_end = slab_start + slab_total_size;
-        from_lval_slab = (obj_addr >= slab_start && obj_addr < slab_end);
-      }
-
-      // Check if object is from lenv slab
-      bool from_lenv_slab = false;
-      if (!from_lval_slab && heap->lenv_slab != NULL) {
-        uintptr_t slab_start = (uintptr_t)heap->lenv_slab;
-        size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lenv_size;
-        size_t slab_total_size = valk_slab_size(slab_item_size, 64 * 1024);
-        uintptr_t slab_end = slab_start + slab_total_size;
-        from_lenv_slab = (obj_addr >= slab_start && obj_addr < slab_end);
-      }
-
-      if (from_lval_slab) {
-        // Return to lval slab allocator - don't count towards reclaimed bytes
-        // since slab allocations aren't tracked in allocated_bytes
-        valk_mem_allocator_free((void*)heap->lval_slab, header);
-        VALK_TRACE("GC sweep: returned lval %p to slab", user_data);
-      } else if (from_lenv_slab) {
-        // Return to lenv slab allocator
-        valk_mem_allocator_free((void*)heap->lenv_slab, header);
-        VALK_TRACE("GC sweep: returned lenv %p to slab", user_data);
-      } else {
-        // Free malloc'd objects directly
-        // Count towards reclaimed bytes since malloc'd objects are tracked in allocated_bytes
-        reclaimed += total_size;
-        free(header);
-        VALK_TRACE("GC sweep: freed %p (malloc)", user_data);
-      }
-    }
-  }
-
-  // Only subtract reclaimed bytes (from malloc'd objects) from allocated_bytes
-  if (reclaimed <= heap->allocated_bytes) {
-    heap->allocated_bytes -= reclaimed;
-  } else {
-    // Safety: prevent underflow
-    VALK_WARN("GC sweep: reclaimed (%zu) > allocated_bytes (%zu), resetting to 0",
-              reclaimed, heap->allocated_bytes);
-    heap->allocated_bytes = 0;
-  }
-
-  VALK_INFO("GC sweep: freed %zu objects, reclaimed %zu bytes",
-            freed_count, reclaimed);
-
-  if (out_freed_count) {
-    *out_freed_count = freed_count;
-  }
-  return reclaimed;
-}
-
-// ============================================================================
-// Clear marks for next collection
-// ============================================================================
-
-// Clear marks on a single lval, pushing children to worklist (non-recursive)
-static void valk_gc_clear_marks_single(valk_lval_t* v, valk_lval_worklist_t* wl) {
-  if (v == NULL) return;
-
-  // Only clear marks on GC heap objects - don't touch scratch/arena objects
-  if (LVAL_ALLOC(v) != LVAL_ALLOC_HEAP) return;
-
-  // Already cleared
-  if (!(v->flags & LVAL_FLAG_GC_MARK)) return;
-
-  // Clear mark
-  v->flags &= ~LVAL_FLAG_GC_MARK;
-
-  // Push children to worklist - note that children might have been freed if unmarked,
-  // so the recursive calls will check marks before accessing
-  switch (LVAL_TYPE(v)) {
-    case LVAL_FUN:
-      if (v->fun.env) {
-        for (size_t i = 0; i < v->fun.env->vals.count; i++) {
-          lval_worklist_push(wl, v->fun.env->vals.items[i]);
-        }
-      }
-      lval_worklist_push(wl, v->fun.formals);
-      lval_worklist_push(wl, v->fun.body);
-      break;
-
-    case LVAL_CONS:
-    case LVAL_QEXPR:
-      lval_worklist_push(wl, v->cons.head);
-      lval_worklist_push(wl, v->cons.tail);
-      break;
-    case LVAL_NIL:
-      // Nil has no children
-      break;
-
-    default:
-      break;
-  }
-}
-
-// Iterative mark clearing to avoid stack overflow on deep structures
-static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
-  if (v == NULL) return;
-
-  valk_lval_worklist_t worklist;
-  lval_worklist_init(&worklist);
-
-  // Push initial value
-  lval_worklist_push(&worklist, v);
-
-  // Process worklist iteratively
-  while (worklist.count > 0) {
-    valk_lval_t* current = lval_worklist_pop(&worklist);
-    valk_gc_clear_marks_single(current, &worklist);
-  }
-
-  lval_worklist_free(&worklist);
-}
-
-// ============================================================================
-// Main GC Collection
-// ============================================================================
-
-void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
-  if (heap == NULL) return;
-
-  // Count live objects by traversing headers
-  size_t object_count = 0;
-  size_t traversal_limit = 1000000;  // Safety limit
-  for (valk_gc_header_t* header = heap->objects;
-       header != NULL && object_count < traversal_limit;
-       header = header->gc_next) {
-    object_count++;
-  }
-
-  fprintf(stderr, "\n=== GC Heap Statistics ===\n");
-  uint8_t usage_pct = valk_gc_heap_usage_pct(heap);
-  fprintf(stderr, "Heap usage:       %u%% (threshold: %u%%, hard limit: %zu bytes)\n",
-          usage_pct, heap->gc_threshold_pct, heap->hard_limit);
-  fprintf(stderr, "Allocated bytes:  %zu bytes\n", heap->allocated_bytes);
-  fprintf(stderr, "Peak usage:       %zu bytes\n", heap->stats.peak_usage);
-  fprintf(stderr, "Live objects:     %zu\n", object_count);
-  fprintf(stderr, "Collections:      %zu\n", heap->num_collections);
-  fprintf(stderr, "Emergency GCs:    %zu\n", heap->stats.emergency_collections);
-  fprintf(stderr, "Avg allocation:   %.1f bytes/object\n",
-          object_count > 0 ? (double)heap->allocated_bytes / object_count : 0.0);
-
-  // Evacuation stats (from scratch arena)
-  if (heap->stats.evacuations_from_scratch > 0) {
-    fprintf(stderr, "--- Evacuation Stats ---\n");
-    fprintf(stderr, "Values evacuated: %zu\n", heap->stats.evacuations_from_scratch);
-    fprintf(stderr, "Bytes evacuated:  %zu\n", heap->stats.evacuation_bytes);
-    fprintf(stderr, "Pointers fixed:   %zu\n", heap->stats.evacuation_pointer_fixups);
-  }
-
-  // Overflow stats
-  if (heap->stats.overflow_allocations > 0) {
-    fprintf(stderr, "--- Overflow Stats ---\n");
-    fprintf(stderr, "⚠️  Overflow allocs: %zu\n", heap->stats.overflow_allocations);
-  }
-
-  fprintf(stderr, "=========================\n\n");
-}
-
-// Format bytes with human-readable units into provided buffer
-// Buffer should be at least 12 chars. Output is 10 chars wide for alignment.
-static void format_bytes_buf(char* out, size_t outsize, size_t bytes) {
-  if (bytes >= 1024 * 1024 * 1024) {
-    snprintf(out, outsize, "%7.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
-  } else if (bytes >= 1024 * 1024) {
-    snprintf(out, outsize, "%7.2f MB", bytes / (1024.0 * 1024.0));
-  } else if (bytes >= 1024) {
-    snprintf(out, outsize, "%7.2f KB", bytes / 1024.0);
-  } else {
-    snprintf(out, outsize, "%8zu B", bytes);
-  }
-}
-
-// Format a progress bar into buffer. Width is number of cells (each 1 char wide visually).
-// Uses bordered style: [████░░░░░░] with filled and empty blocks
-static void format_progress_bar(char* out, size_t outsize, double fraction, int width) {
-  if (fraction < 0.0) fraction = 0.0;
-  if (fraction > 1.0) fraction = 1.0;
-
-  int filled = (int)(fraction * width + 0.5);
-  if (filled > width) filled = width;
-
-  char* p = out;
-  char* end = out + outsize - 1;
-
-  // Opening bracket
-  if (p < end) *p++ = '[';
-
-  // Filled blocks (█ = U+2588, 3 bytes in UTF-8)
-  for (int i = 0; i < filled && p + 3 < end; i++) {
-    *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x88';  // █
-  }
-
-  // Empty blocks (░ = U+2591, 3 bytes in UTF-8)
-  for (int i = filled; i < width && p + 3 < end; i++) {
-    *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x91';  // ░
-  }
-
-  // Closing bracket
-  if (p < end) *p++ = ']';
-  *p = '\0';
-}
-
-// Format a segmented progress bar for a region within a larger bar (no brackets).
-// - total_width: total bar width in characters
-// - region_start: where this region starts (0.0-1.0 fraction of total)
-// - region_end: where this region ends (0.0-1.0 fraction of total)
-// - fill_fraction: how much of THIS region is filled (0.0-1.0)
-// Outputs: spaces before region, filled░empty for region, spaces after (total_width chars)
-static void format_segment_bar(char* out, size_t outsize, int total_width,
-                               double region_start, double region_end,
-                               double fill_fraction) {
-  if (fill_fraction < 0.0) fill_fraction = 0.0;
-  if (fill_fraction > 1.0) fill_fraction = 1.0;
-
-  int start_col = (int)(region_start * total_width + 0.5);
-  int end_col = (int)(region_end * total_width + 0.5);
-  if (start_col < 0) start_col = 0;
-  if (end_col > total_width) end_col = total_width;
-  int region_width = end_col - start_col;
-  if (region_width < 1) region_width = 1;
-
-  int filled = (int)(fill_fraction * region_width + 0.5);
-  if (filled > region_width) filled = region_width;
-
-  char* p = out;
-  char* end = out + outsize - 1;
-
-  // Leading spaces (before this region)
-  for (int i = 0; i < start_col && p < end; i++) {
-    *p++ = ' ';
-  }
-
-  // Filled blocks (█ = U+2588)
-  for (int i = 0; i < filled && p + 3 < end; i++) {
-    *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x88';
-  }
-
-  // Empty blocks (░ = U+2591)
-  for (int i = filled; i < region_width && p + 3 < end; i++) {
-    *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x91';
-  }
-
-  // Trailing spaces (after this region)
-  for (int i = end_col; i < total_width && p < end; i++) {
-    *p++ = ' ';
-  }
-
-  *p = '\0';
-}
-
-// Calculate display width (accounts for multi-byte UTF-8 characters)
-static int display_width(const char* s) {
-  int width = 0;
-  while (*s) {
-    // UTF-8: if high bit set, it's a multi-byte sequence
-    if ((*s & 0x80) == 0) {
-      // ASCII character
-      width++;
-      s++;
-    } else if ((*s & 0xE0) == 0xC0) {
-      // 2-byte UTF-8 (display width 1)
-      width++;
-      s += 2;
-    } else if ((*s & 0xF0) == 0xE0) {
-      // 3-byte UTF-8 (display width 1) - box drawing chars
-      width++;
-      s += 3;
-    } else if ((*s & 0xF8) == 0xF0) {
-      // 4-byte UTF-8 (display width 1 or 2 for emoji, assume 1)
-      width++;
-      s += 4;
-    } else {
-      // Invalid UTF-8, treat as 1 byte
-      width++;
-      s++;
-    }
-  }
-  return width;
-}
-
-// Print a line with box drawing, auto-padded to width
-static void print_boxed_line(FILE* out, const char* content) {
-  int len = display_width(content);
-  int padding = 64 - len;
-  if (padding < 0) padding = 0;
-  fprintf(out, "║ %s%*s ║\n", content, padding, "");
-}
-
-// Pad a label to a fixed display width (accounting for UTF-8 multi-byte chars)
-// Returns pointer to static buffer - use immediately or copy
-static const char* pad_label(const char* label, int target_width) {
-  static char padded[64];
-  int dw = display_width(label);
-  int pad = target_width - dw;
-  if (pad < 0) pad = 0;
-  snprintf(padded, sizeof(padded), "%s%*s", label, pad, "");
-  return padded;
-}
-
-// Print combined memory statistics (scratch arena + GC heap)
-void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap, FILE* out) {
-  if (out == NULL) out = stderr;
-  char buf[256];
-  char fmt1[16], fmt2[16];  // For formatted byte values
-  char bar[128];            // For progress bars
-
-  // Calculate capacities to determine relative bar sizes
-  size_t scratch_capacity = scratch ? scratch->capacity : 0;
-  size_t heap_capacity = 0;
-  size_t slab_capacity = 0;
-  size_t malloc_capacity = 0;
-  if (heap) {
-    if (heap->lval_slab) {
-      slab_capacity = heap->lval_slab->numItems * heap->lval_slab->itemSize;
-    }
-    malloc_capacity = heap->hard_limit;
-    heap_capacity = slab_capacity + malloc_capacity;
-  }
-
-  // Find max capacity for scaling bars (compare all memory regions)
-  size_t max_capacity = 0;
-  if (scratch_capacity > max_capacity) max_capacity = scratch_capacity;
-  if (heap_capacity > max_capacity) max_capacity = heap_capacity;
-  if (max_capacity == 0) max_capacity = 1;  // Avoid division by zero
-
-  // Calculate max bar width dynamically
-  // Box content width is 64 chars. Line format with padded labels is:
-  // "GC HEAP             [BAR] XXXXX.XX KB / XXXXX.XX MB"
-  //  ^-- 20 chars --^   ^2^   ^-- 10 --^    ^-- 10 --^
-  // = LABEL_WIDTH(20) + "[" (1) + BAR + "] " (2) + value (10) + " / " (3) + value (10) = 46 + BAR
-  const int BOX_CONTENT_WIDTH = 64;
-  const int LABEL_WIDTH = 20;       // display width for label column
-  const int FIXED_TEXT_WIDTH = LABEL_WIDTH + 1 + 2 + 10 + 3 + 10;  // 46 chars
-  const int MAX_BAR_WIDTH = BOX_CONTENT_WIDTH - FIXED_TEXT_WIDTH;  // 18 chars
-
-  fprintf(out, "\n╔══════════════════════════════════════════════════════════════════╗\n");
-  print_boxed_line(out, "                   MEMORY STATISTICS");
-  fprintf(out, "╠══════════════════════════════════════════════════════════════════╣\n");
-
-  if (scratch != NULL) {
-    double scratch_frac = (double)scratch->offset / scratch->capacity;
-    double hwm_frac = (double)scratch->stats.high_water_mark / scratch->capacity;
-    int scratch_bar_width = (int)((double)scratch_capacity / max_capacity * MAX_BAR_WIDTH + 0.5);
-    if (scratch_bar_width < 3) scratch_bar_width = 3;
-
-    // SCRATCH ARENA header with bar
-    format_bytes_buf(fmt1, sizeof(fmt1), scratch->offset);
-    format_bytes_buf(fmt2, sizeof(fmt2), scratch->capacity);
-    format_progress_bar(bar, sizeof(bar), scratch_frac, scratch_bar_width);
-    snprintf(buf, sizeof(buf), "%s%s %s / %s",
-            pad_label("SCRATCH ARENA", LABEL_WIDTH), bar, fmt1, fmt2);
-    print_boxed_line(out, buf);
-
-    // High water mark
-    format_bytes_buf(fmt1, sizeof(fmt1), scratch->stats.high_water_mark);
-    format_progress_bar(bar, sizeof(bar), hwm_frac, scratch_bar_width);
-    snprintf(buf, sizeof(buf), "%s%s %s (hwm)",
-            pad_label("", LABEL_WIDTH), bar, fmt1);
-    print_boxed_line(out, buf);
-
-    // Stats (no bars)
-    snprintf(buf, sizeof(buf), "  Allocations: %zu  Resets: %zu  Checkpoints: %zu",
-            scratch->stats.total_allocations, scratch->stats.num_resets,
-            scratch->stats.num_checkpoints);
-    print_boxed_line(out, buf);
-
-    if (scratch->stats.overflow_fallbacks > 0) {
-      format_bytes_buf(fmt1, sizeof(fmt1), scratch->stats.overflow_bytes);
-      snprintf(buf, sizeof(buf), "  [!] Overflow fallbacks: %zu (%s)",
-              scratch->stats.overflow_fallbacks, fmt1);
-      print_boxed_line(out, buf);
-    }
-    fprintf(out, "╠══════════════════════════════════════════════════════════════════╣\n");
-  }
-
-  if (heap != NULL) {
-    // Count live objects
-    size_t object_count = 0;
-    for (valk_gc_header_t* h = heap->objects; h != NULL && object_count < 1000000; h = h->gc_next) {
-      object_count++;
-    }
-
-    // Calculate slab stats
-    size_t slab_used = 0, slab_total = 0, slab_bytes_used = 0, slab_bytes_total = 0;
-    if (heap->lval_slab != NULL) {
-      slab_used = heap->lval_slab->numItems - heap->lval_slab->numFree;
-      slab_total = heap->lval_slab->numItems;
-      size_t slab_item_size = heap->lval_slab->itemSize;
-      slab_bytes_used = slab_used * slab_item_size;
-      slab_bytes_total = slab_total * slab_item_size;
-    }
-
-    // Total heap = slab + malloc tracked
-    size_t total_heap_used = slab_bytes_used + heap->allocated_bytes;
-    size_t total_heap_capacity = slab_bytes_total + heap->hard_limit;
-
-    // Calculate heap bar width relative to max capacity
-    int heap_bar_width = (int)((double)heap_capacity / max_capacity * MAX_BAR_WIDTH + 0.5);
-    if (heap_bar_width < 3) heap_bar_width = 3;
-
-    // Calculate region boundaries for stacked bar visualization
-    // Slab is first (starts at 0), malloc is second (starts after slab)
-    double slab_region_end = (double)slab_bytes_total / total_heap_capacity;
-    double malloc_region_start = slab_region_end;
-    double slab_fill = slab_bytes_total > 0 ? (double)slab_bytes_used / slab_bytes_total : 0;
-    double malloc_fill = heap->hard_limit > 0 ? (double)heap->allocated_bytes / heap->hard_limit : 0;
-
-    // Build combined heap bar
-    {
-      char* p = bar;
-      char* end = bar + sizeof(bar) - 1;
-      int slab_cols = (int)(slab_region_end * heap_bar_width + 0.5);
-      int malloc_cols = heap_bar_width - slab_cols;
-      int slab_filled = (int)(slab_fill * slab_cols + 0.5);
-      int malloc_filled = (int)(malloc_fill * malloc_cols + 0.5);
-
-      if (p < end) *p++ = '[';
-      for (int i = 0; i < slab_filled && p + 3 < end; i++) {
-        *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x88';
-      }
-      for (int i = slab_filled; i < slab_cols && p + 3 < end; i++) {
-        *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x91';
-      }
-      for (int i = 0; i < malloc_filled && p + 3 < end; i++) {
-        *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x88';
-      }
-      for (int i = malloc_filled; i < malloc_cols && p + 3 < end; i++) {
-        *p++ = '\xe2'; *p++ = '\x96'; *p++ = '\x91';
-      }
-      if (p < end) *p++ = ']';
-      *p = '\0';
-    }
-
-    // GC HEAP header with bar
-    format_bytes_buf(fmt1, sizeof(fmt1), total_heap_used);
-    format_bytes_buf(fmt2, sizeof(fmt2), total_heap_capacity);
-    snprintf(buf, sizeof(buf), "%s%s %s / %s",
-            pad_label("GC HEAP", LABEL_WIDTH), bar, fmt1, fmt2);
-    print_boxed_line(out, buf);
-
-    // Stats under heap (no bars, indented)
-    snprintf(buf, sizeof(buf), "  Live: %zu  GCs: %zu  Evacuations: %zu",
-            object_count, heap->num_collections, heap->stats.evacuations_from_scratch);
-    print_boxed_line(out, buf);
-
-    // Slab sub-allocator
-    if (heap->lval_slab != NULL) {
-      format_segment_bar(bar, sizeof(bar), heap_bar_width, 0.0, slab_region_end, slab_fill);
-      format_bytes_buf(fmt1, sizeof(fmt1), slab_bytes_used);
-      format_bytes_buf(fmt2, sizeof(fmt2), slab_bytes_total);
-      snprintf(buf, sizeof(buf), "%s[%s] %s / %s",
-              pad_label("  ├─Slab", LABEL_WIDTH), bar, fmt1, fmt2);
-      print_boxed_line(out, buf);
-      snprintf(buf, sizeof(buf), "  │   Objects: %zu / %zu", slab_used, slab_total);
-      print_boxed_line(out, buf);
-    }
-
-    // Malloc sub-allocator
-    format_segment_bar(bar, sizeof(bar), heap_bar_width, malloc_region_start, 1.0, malloc_fill);
-    format_bytes_buf(fmt1, sizeof(fmt1), heap->allocated_bytes);
-    format_bytes_buf(fmt2, sizeof(fmt2), heap->hard_limit);
-    snprintf(buf, sizeof(buf), "%s[%s] %s / %s",
-            pad_label("  └─Malloc", LABEL_WIDTH), bar, fmt1, fmt2);
-    print_boxed_line(out, buf);
-    snprintf(buf, sizeof(buf), "      Free list: %zu objects", heap->free_list_size);
-    print_boxed_line(out, buf);
-  }
-
-  fprintf(out, "╚══════════════════════════════════════════════════════════════════╝\n\n");
-}
-
+// Perform mark & sweep collection (delegates to heap2)
 size_t valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root) {
-  // Record start time for pause measurement
-  uint64_t start_time_us = uv_hrtime() / 1000;
-
-  size_t before = heap->allocated_bytes;
-
-  VALK_INFO("GC: Starting collection #%zu (usage: %u%%, threshold: %u%%)",
-            heap->num_collections + 1,
-            valk_gc_heap_usage_pct(heap),
-            heap->gc_threshold_pct);
-
-  // Set thread-local heap pointer for safe marking checks
-  gc_current_heap = heap;
-
-  // Phase 1: Mark reachable objects from root environment and any additional roots
-  // GC only runs at safe points (between expressions). Most live data is in the
-  // environment, but parsed ASTs waiting for evaluation must also be marked.
-  size_t objects_marked = 0;  // Will be counted during mark phase
-  valk_gc_mark_env(heap->root_env);
-  if (additional_root != NULL) {
-    valk_gc_mark_lval(additional_root);
-  }
-
-  // Count marked objects
-  for (valk_gc_header_t* header = heap->objects; header != NULL; header = header->gc_next) {
-    bool is_marked = ((uintptr_t)header->origin_allocator & 1) != 0;
-    if (header->size == heap->lval_size) {
-      void* user_data = (void*)(header + 1);
-      valk_lval_t* obj = (valk_lval_t*)user_data;
-      if ((obj->flags & LVAL_FLAG_GC_MARK) != 0) {
-        is_marked = true;
-      }
-    }
-    if (is_marked) {
-      objects_marked++;
-    }
-  }
-
-  // Phase 2: Sweep unreachable objects
-  size_t objects_swept = 0;
-  size_t reclaimed = valk_gc_malloc_sweep(heap, &objects_swept);
-
-  // Clear thread-local heap pointer
-  gc_current_heap = NULL;
-
-  // Phase 3: Clear marks and increment generation for surviving objects
-  // Walk the object list (which now only contains live objects after sweep)
-  for (valk_gc_header_t* header = heap->objects; header != NULL; header = header->gc_next) {
-    // Clear header mark bit (used for non-lval allocations like strings/arrays)
-    header->origin_allocator = (void*)((uintptr_t)header->origin_allocator & ~(uintptr_t)1);
-
-    // Clear lval mark bit and increment generation for surviving lval objects
-    if (header->size == heap->lval_size) {
-      void* user_data = (void*)(header + 1);
-      valk_lval_t* obj = (valk_lval_t*)user_data;
-      obj->flags &= ~LVAL_FLAG_GC_MARK;
-      LVAL_GC_GEN_INC(obj);
-    }
-  }
-
-  size_t after = heap->allocated_bytes;
-  heap->num_collections++;
-
-  // Calculate pause time
-  uint64_t end_time_us = uv_hrtime() / 1000;
-  uint64_t pause_us = end_time_us - start_time_us;
-
-  // Update runtime metrics atomically
-  atomic_fetch_add(&heap->runtime_metrics.cycles_total, 1);
-  atomic_fetch_add(&heap->runtime_metrics.pause_us_total, pause_us);
-  atomic_fetch_add(&heap->runtime_metrics.reclaimed_bytes_total, reclaimed);
-  atomic_store(&heap->runtime_metrics.objects_marked, objects_marked);
-  atomic_store(&heap->runtime_metrics.objects_swept, objects_swept);
-  atomic_store(&heap->runtime_metrics.last_heap_before_gc, before);
-  atomic_store(&heap->runtime_metrics.last_reclaimed, reclaimed);
-
-  // Update max pause time using compare-exchange
-  uint64_t current_max = atomic_load(&heap->runtime_metrics.pause_us_max);
-  while (pause_us > current_max) {
-    if (atomic_compare_exchange_weak(&heap->runtime_metrics.pause_us_max, &current_max, pause_us)) {
-      break;
-    }
-  }
-
-  // Record pause time in frame-budget histogram (for game profile)
-  // Buckets: 0-1ms, 1-5ms, 5-10ms, 10-16ms, 16ms+
-  uint64_t pause_ms = pause_us / 1000;
-  if (pause_ms < 1) {
-    atomic_fetch_add(&heap->runtime_metrics.pause_0_1ms, 1);
-  } else if (pause_ms < 5) {
-    atomic_fetch_add(&heap->runtime_metrics.pause_1_5ms, 1);
-  } else if (pause_ms < 10) {
-    atomic_fetch_add(&heap->runtime_metrics.pause_5_10ms, 1);
-  } else if (pause_ms < 16) {
-    atomic_fetch_add(&heap->runtime_metrics.pause_10_16ms, 1);
-  } else {
-    atomic_fetch_add(&heap->runtime_metrics.pause_16ms_plus, 1);
-  }
-
-  // Record GC timestamp for rate limiting
-  heap->last_gc_time_us = end_time_us;
-
-  // Calculate new usage percentage for logging
-  uint8_t usage_pct = valk_gc_heap_usage_pct(heap);
-
-  VALK_INFO("GC: Complete - reclaimed %zu bytes (before: %zu, after: %zu, %.1f%% freed), "
-            "heap now at %u%%, pause: %llu us",
-            reclaimed, before, after,
-            before > 0 ? 100.0 * reclaimed / before : 0.0,
-            usage_pct, (unsigned long long)pause_us);
-
-  return reclaimed;
+  if (!heap) return 0;
+  (void)additional_root;
+  return valk_gc_heap2_collect(heap);
 }
 
-// ============================================================================
-// GC Heap Object Management
-// ============================================================================
-
-// Explicitly free a single GC heap object
-// Used when explicitly freeing an object (e.g., when switching allocators)
+// Explicitly free a single GC heap object (no-op for heap2 - objects are freed during sweep)
 void valk_gc_free_object(void* heap_ptr, void* user_ptr) {
-  if (user_ptr == NULL) return;
-
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)heap_ptr;
-
-  // Get header (it's right before the user data)
-  valk_gc_header_t* header = ((valk_gc_header_t*)user_ptr) - 1;
-
-  // Remove from objects list
-  valk_gc_header_t** current_ptr = &heap->objects;
-  while (*current_ptr != NULL) {
-    if (*current_ptr == header) {
-      *current_ptr = header->gc_next;
-      break;
-    }
-    current_ptr = &(*current_ptr)->gc_next;
-  }
-
-  // Determine if from lval slab, lenv slab, or malloc and free accordingly
-  uintptr_t obj_addr = (uintptr_t)header;
-  bool from_lval_slab = false;
-  if (heap->lval_slab != NULL) {
-    uintptr_t slab_start = (uintptr_t)heap->lval_slab;
-    size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
-    size_t slab_total_size = valk_slab_size(slab_item_size, 256 * 1024);
-    uintptr_t slab_end = slab_start + slab_total_size;
-    from_lval_slab = (obj_addr >= slab_start && obj_addr < slab_end);
-  }
-
-  bool from_lenv_slab = false;
-  if (!from_lval_slab && heap->lenv_slab != NULL) {
-    uintptr_t slab_start = (uintptr_t)heap->lenv_slab;
-    size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lenv_size;
-    size_t slab_total_size = valk_slab_size(slab_item_size, 64 * 1024);
-    uintptr_t slab_end = slab_start + slab_total_size;
-    from_lenv_slab = (obj_addr >= slab_start && obj_addr < slab_end);
-  }
-
-  size_t total_size = sizeof(valk_gc_header_t) + header->size;
-
-  if (from_lval_slab) {
-    // Return to lval slab allocator
-    valk_mem_allocator_free((void*)heap->lval_slab, header);
-  } else if (from_lenv_slab) {
-    // Return to lenv slab allocator
-    valk_mem_allocator_free((void*)heap->lenv_slab, header);
-  } else {
-    // Free malloc'd memory directly
-    heap->allocated_bytes -= total_size;
-    free(header);
-  }
+  (void)heap_ptr;
+  (void)user_ptr;
 }
 
-// ============================================================================
-// GC Heap Cleanup - Free all allocations for clean shutdown
-// ============================================================================
-
+// Destroy heap (delegates to heap2)
 void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
-  if (heap == NULL) return;
-
-  VALK_INFO("GC: Destroying heap, freeing all %zu remaining objects",
-            heap->allocated_bytes);
-
-  // Free all objects in the linked list
-  valk_gc_header_t* current = heap->objects;
-  size_t freed_count = 0;
-  size_t freed_bytes = 0;
-
-  while (current != NULL) {
-    valk_gc_header_t* next = current->gc_next;
-
-    // Free internal resources for lval objects before freeing the structure
-    // NOTE: Most internal allocations (fun.name, lval->str) use valk_mem_alloc
-    // and are tracked separately. Only free raw malloc/strdup allocations.
-    bool is_lval = (current->size == heap->lval_size);
-    if (is_lval) {
-      void* user_data = (void*)(current + 1);
-      valk_lval_t* obj = (valk_lval_t*)user_data;
-      switch (LVAL_TYPE(obj)) {
-        case LVAL_REF:
-          if (obj->ref.free != NULL && obj->ref.ptr != NULL) {
-            obj->ref.free(obj->ref.ptr);
-          }
-          break;
-        default:
-          break;
-      }
-    }
-
-    // Check if object is from lval slab via address range check
-    uintptr_t obj_addr = (uintptr_t)current;
-    bool from_lval_slab = false;
-    if (heap->lval_slab != NULL) {
-      uintptr_t slab_start = (uintptr_t)heap->lval_slab;
-      size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
-      size_t slab_total_size = valk_slab_size(slab_item_size, 256 * 1024);
-      uintptr_t slab_end = slab_start + slab_total_size;
-      from_lval_slab = (obj_addr >= slab_start && obj_addr < slab_end);
-    }
-
-    // Check if object is from lenv slab
-    bool from_lenv_slab = false;
-    if (!from_lval_slab && heap->lenv_slab != NULL) {
-      uintptr_t slab_start = (uintptr_t)heap->lenv_slab;
-      size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lenv_size;
-      size_t slab_total_size = valk_slab_size(slab_item_size, 64 * 1024);
-      uintptr_t slab_end = slab_start + slab_total_size;
-      from_lenv_slab = (obj_addr >= slab_start && obj_addr < slab_end);
-    }
-
-    if (!from_lval_slab && !from_lenv_slab) {
-      // Free malloc'd objects directly (slab objects freed with slab itself)
-      size_t total_size = sizeof(valk_gc_header_t) + current->size;
-      freed_bytes += total_size;
-      freed_count++;
-      free(current);
-    }
-    current = next;
-  }
-
-  VALK_INFO("GC: Freed %zu objects (%zu bytes)", freed_count, freed_bytes);
-
-  // Also free the free list (again, skip slab objects)
-  current = heap->free_list;
-  while (current != NULL) {
-    valk_gc_header_t* next = current->gc_next;
-    uintptr_t obj_addr = (uintptr_t)current;
-
-    bool from_lval_slab = false;
-    if (heap->lval_slab != NULL) {
-      uintptr_t slab_start = (uintptr_t)heap->lval_slab;
-      size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lval_size;
-      size_t slab_total_size = valk_slab_size(slab_item_size, 256 * 1024);
-      uintptr_t slab_end = slab_start + slab_total_size;
-      from_lval_slab = (obj_addr >= slab_start && obj_addr < slab_end);
-    }
-
-    bool from_lenv_slab = false;
-    if (!from_lval_slab && heap->lenv_slab != NULL) {
-      uintptr_t slab_start = (uintptr_t)heap->lenv_slab;
-      size_t slab_item_size = sizeof(valk_gc_header_t) + heap->lenv_size;
-      size_t slab_total_size = valk_slab_size(slab_item_size, 64 * 1024);
-      uintptr_t slab_end = slab_start + slab_total_size;
-      from_lenv_slab = (obj_addr >= slab_start && obj_addr < slab_end);
-    }
-
-    if (!from_lval_slab && !from_lenv_slab) {
-      free(current);
-    }
-    current = next;
-  }
-
-  // Free the slab allocators directly (don't use valk_slab_free which goes through valk_mem_free)
-  if (heap->lval_slab != NULL) {
-    free(heap->lval_slab);
-  }
-  if (heap->lenv_slab != NULL) {
-    free(heap->lenv_slab);
-  }
-
-  // Free the heap structure itself
-  free(heap);
+  valk_gc_heap2_destroy(heap);
 }
 
 // ============================================================================
@@ -2385,27 +1014,8 @@ void valk_gc_get_runtime_metrics(valk_gc_malloc_heap_t* heap,
   if (pause_us_max) *pause_us_max = atomic_load(&heap->runtime_metrics.pause_us_max);
   if (reclaimed) *reclaimed = atomic_load(&heap->runtime_metrics.reclaimed_bytes_total);
 
-  // Combined slabs + malloc usage for total heap metrics
-  size_t lval_slab_bytes_used = 0;
-  size_t lval_slab_bytes_total = 0;
-  if (heap->lval_slab) {
-    size_t slab_used = heap->lval_slab->numItems - heap->lval_slab->numFree;
-    size_t item_size = heap->lval_slab->itemSize;
-    lval_slab_bytes_used = slab_used * item_size;
-    lval_slab_bytes_total = heap->lval_slab->numItems * item_size;
-  }
-
-  size_t lenv_slab_bytes_used = 0;
-  size_t lenv_slab_bytes_total = 0;
-  if (heap->lenv_slab) {
-    size_t slab_used = heap->lenv_slab->numItems - heap->lenv_slab->numFree;
-    size_t item_size = heap->lenv_slab->itemSize;
-    lenv_slab_bytes_used = slab_used * item_size;
-    lenv_slab_bytes_total = heap->lenv_slab->numItems * item_size;
-  }
-
-  if (heap_used) *heap_used = lval_slab_bytes_used + lenv_slab_bytes_used + heap->allocated_bytes;
-  if (heap_total) *heap_total = lval_slab_bytes_total + lenv_slab_bytes_total + heap->hard_limit;
+  if (heap_used) *heap_used = valk_gc_heap2_used_bytes(heap);
+  if (heap_total) *heap_total = heap->hard_limit;
 }
 
 uint64_t valk_gc_get_allocated_bytes_total(valk_gc_malloc_heap_t* heap) {
@@ -2448,35 +1058,101 @@ void valk_gc_get_fragmentation(valk_gc_malloc_heap_t* heap, valk_fragmentation_t
   if (!heap || !out) return;
   memset(out, 0, sizeof(*out));
 
-  if (heap->lval_slab) {
-    out->lval_slab_total = heap->lval_slab->numItems;
-    out->lval_slab_used = heap->lval_slab->numItems - heap->lval_slab->numFree;
-    out->lval_slab_peak = heap->lval_slab->peakUsed;
-    if (out->lval_slab_peak > 0) {
-      out->lval_fragmentation = 1.0 - ((double)out->lval_slab_used / out->lval_slab_peak);
-      if (out->lval_fragmentation < 0) out->lval_fragmentation = 0;
-    }
-  }
+  out->lval_slab_total = 0;
+  out->lval_slab_used = 0;
+  out->lval_slab_peak = 0;
+  out->lval_fragmentation = 0;
 
-  if (heap->lenv_slab) {
-    out->lenv_slab_total = heap->lenv_slab->numItems;
-    out->lenv_slab_used = heap->lenv_slab->numItems - heap->lenv_slab->numFree;
-    out->lenv_slab_peak = heap->lenv_slab->peakUsed;
-    if (out->lenv_slab_peak > 0) {
-      out->lenv_fragmentation = 1.0 - ((double)out->lenv_slab_used / out->lenv_slab_peak);
-      if (out->lenv_fragmentation < 0) out->lenv_fragmentation = 0;
-    }
-  }
+  out->lenv_slab_total = 0;
+  out->lenv_slab_used = 0;
+  out->lenv_slab_peak = 0;
+  out->lenv_fragmentation = 0;
 
-  out->malloc_allocated = heap->allocated_bytes;
+  out->malloc_allocated = valk_gc_heap2_used_bytes(heap);
   out->malloc_limit = heap->hard_limit;
   out->malloc_peak = heap->stats.peak_usage;
 
-  out->free_list_count = heap->free_list_size;
-  if (heap->free_list_size > 0) {
-    size_t avg_size = heap->lval_size + sizeof(valk_gc_header_t);
-    out->free_list_bytes = heap->free_list_size * avg_size;
+  out->free_list_count = 0;
+  out->free_list_bytes = 0;
+}
+
+// ============================================================================
+// GC Statistics Printing (heap2)
+// ============================================================================
+
+void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
+  if (heap == NULL) return;
+
+  valk_gc_stats2_t stats;
+  valk_gc_heap2_get_stats(heap, &stats);
+
+  fprintf(stderr, "\n=== GC Heap Statistics ===\n");
+  uint8_t usage_pct = valk_gc_heap_usage_pct(heap);
+  fprintf(stderr, "Heap usage:       %u%% (threshold: %u%%, hard limit: %zu bytes)\n",
+          usage_pct, heap->gc_threshold_pct, heap->hard_limit);
+  fprintf(stderr, "Used bytes:       %zu bytes\n", stats.used_bytes);
+  fprintf(stderr, "Committed bytes:  %zu bytes\n", stats.committed_bytes);
+  fprintf(stderr, "Large objects:    %zu bytes\n", stats.large_object_bytes);
+  fprintf(stderr, "Peak usage:       %zu bytes\n", heap->stats.peak_usage);
+  fprintf(stderr, "Collections:      %llu\n", (unsigned long long)stats.collections);
+  fprintf(stderr, "Emergency GCs:    %zu\n", heap->stats.emergency_collections);
+
+  fprintf(stderr, "--- Per-Class Usage ---\n");
+  for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    if (stats.class_total_slots[c] > 0) {
+      size_t pct = (stats.class_used_slots[c] * 100) / stats.class_total_slots[c];
+      fprintf(stderr, "  Class %d (%4u B): %zu / %zu slots (%zu%%)\n",
+              c, valk_gc_size_classes[c],
+              stats.class_used_slots[c], stats.class_total_slots[c], pct);
+    }
   }
+
+  if (heap->stats.evacuations_from_scratch > 0) {
+    fprintf(stderr, "--- Evacuation Stats ---\n");
+    fprintf(stderr, "Values evacuated: %zu\n", heap->stats.evacuations_from_scratch);
+    fprintf(stderr, "Bytes evacuated:  %zu\n", heap->stats.evacuation_bytes);
+    fprintf(stderr, "Pointers fixed:   %zu\n", heap->stats.evacuation_pointer_fixups);
+  }
+  fprintf(stderr, "=========================\n\n");
+}
+
+void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap, FILE* out) {
+  if (out == NULL) out = stderr;
+
+  fprintf(out, "\n=== Memory Statistics ===\n");
+
+  if (scratch != NULL) {
+    double usage = (double)scratch->offset / scratch->capacity * 100.0;
+    fprintf(out, "Scratch Arena:\n");
+    fprintf(out, "  Usage:       %.1f%% (%zu / %zu bytes)\n",
+            usage, scratch->offset, scratch->capacity);
+    fprintf(out, "  High Water:  %zu bytes\n", scratch->stats.high_water_mark);
+    fprintf(out, "  Allocations: %zu\n", scratch->stats.total_allocations);
+    fprintf(out, "  Resets:      %zu\n", scratch->stats.num_resets);
+    fprintf(out, "  Checkpoints: %zu\n", scratch->stats.num_checkpoints);
+    if (scratch->stats.overflow_fallbacks > 0) {
+      fprintf(out, "  Overflows:   %zu (%zu bytes)\n",
+              scratch->stats.overflow_fallbacks, scratch->stats.overflow_bytes);
+    }
+    fprintf(out, "\n");
+  }
+
+  if (heap != NULL) {
+    valk_gc_stats2_t stats;
+    valk_gc_heap2_get_stats(heap, &stats);
+
+    double usage = (double)stats.used_bytes / heap->hard_limit * 100.0;
+    fprintf(out, "GC Heap (heap2):\n");
+    fprintf(out, "  Usage:       %.1f%% (%zu / %zu bytes)\n",
+            usage, stats.used_bytes, heap->hard_limit);
+    fprintf(out, "  Committed:   %zu bytes\n", stats.committed_bytes);
+    fprintf(out, "  Large objs:  %zu bytes\n", stats.large_object_bytes);
+    fprintf(out, "  Collections: %llu\n", (unsigned long long)stats.collections);
+    fprintf(out, "  Reclaimed:   %llu bytes total\n",
+            (unsigned long long)stats.bytes_reclaimed_total);
+  }
+
+  fprintf(out, "=========================\n\n");
 }
 
 // ============================================================================
@@ -2484,10 +1160,11 @@ void valk_gc_get_fragmentation(valk_gc_malloc_heap_t* heap, valk_fragmentation_t
 // ============================================================================
 
 static size_t estimate_lval_size(valk_lval_t* v, valk_gc_malloc_heap_t* heap) {
+  (void)heap;
   if (v == NULL) return 0;
   if (LVAL_ALLOC(v) != LVAL_ALLOC_HEAP) return 0;
 
-  size_t size = heap->lval_size;
+  size_t size = sizeof(valk_lval_t);
 
   switch (LVAL_TYPE(v)) {
     case LVAL_STR:
@@ -2593,17 +1270,9 @@ void valk_repl_mem_take_snapshot(valk_gc_malloc_heap_t* heap, valk_mem_arena_t* 
   memset(out, 0, sizeof(*out));
 
   if (heap) {
-    if (heap->lval_slab) {
-      size_t slab_used = heap->lval_slab->numItems - heap->lval_slab->numFree;
-      out->heap_used_bytes += slab_used * heap->lval_slab->itemSize;
-      out->lval_count = slab_used;
-    }
-    if (heap->lenv_slab) {
-      size_t slab_used = heap->lenv_slab->numItems - heap->lenv_slab->numFree;
-      out->heap_used_bytes += slab_used * heap->lenv_slab->itemSize;
-      out->lenv_count = slab_used;
-    }
-    out->heap_used_bytes += heap->allocated_bytes;
+    out->heap_used_bytes = valk_gc_heap2_used_bytes(heap);
+    out->lval_count = 0;
+    out->lenv_count = 0;
   }
 
   if (scratch) {
@@ -2680,6 +1349,53 @@ size_t valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena) {
   }
 
   return dead_count * sizeof(valk_lval_t);
+}
+
+// ============================================================================
+// Environment and Lval Worklists for Iterative Traversal
+// ============================================================================
+
+#define ENV_WORKLIST_INITIAL_CAPACITY 64
+
+typedef struct {
+  valk_lenv_t** items;
+  size_t count;
+  size_t capacity;
+} valk_env_worklist_t;
+
+static void env_worklist_init(valk_env_worklist_t* wl) {
+  wl->items = malloc(ENV_WORKLIST_INITIAL_CAPACITY * sizeof(valk_lenv_t*));
+  wl->count = 0;
+  wl->capacity = ENV_WORKLIST_INITIAL_CAPACITY;
+}
+
+static void env_worklist_free(valk_env_worklist_t* wl) {
+  if (wl->items) {
+    free(wl->items);
+    wl->items = NULL;
+  }
+  wl->count = 0;
+  wl->capacity = 0;
+}
+
+static void env_worklist_push(valk_env_worklist_t* wl, valk_lenv_t* env) {
+  if (env == NULL) return;
+  if (wl->count >= wl->capacity) {
+    size_t new_cap = wl->capacity * 2;
+    valk_lenv_t** new_items = realloc(wl->items, new_cap * sizeof(valk_lenv_t*));
+    if (new_items == NULL) {
+      VALK_ERROR("Failed to grow env worklist");
+      return;
+    }
+    wl->items = new_items;
+    wl->capacity = new_cap;
+  }
+  wl->items[wl->count++] = env;
+}
+
+static valk_lenv_t* env_worklist_pop(valk_env_worklist_t* wl) {
+  if (wl->count == 0) return NULL;
+  return wl->items[--wl->count];
 }
 
 // ============================================================================
@@ -2761,14 +1477,83 @@ static valk_lval_t* evac_worklist_pop(valk_evacuation_ctx_t* ctx) {
   return ctx->worklist[--ctx->worklist_count];
 }
 
-// Add an already-allocated value to GC heap's object tracking list
+// Add an already-allocated value to GC heap's object tracking
+// NOTE: With heap2, objects are tracked via page allocation bitmaps,
+// so this function is now a no-op. Kept for API compatibility.
 void valk_gc_add_to_objects(valk_gc_malloc_heap_t* heap, valk_lval_t* v) {
-  // Get the header (it's right before the user data)
-  valk_gc_header_t* header = ((valk_gc_header_t*)v) - 1;
+  (void)heap;
+  (void)v;
+}
 
-  // Add to live objects linked list
-  header->gc_next = heap->objects;
-  heap->objects = header;
+// ============================================================================
+// GC Marking Functions (legacy wrappers for heap2)
+// ============================================================================
+
+static void valk_gc_mark_lval(valk_lval_t* v) {
+  if (v == NULL) return;
+  if (LVAL_ALLOC(v) != LVAL_ALLOC_HEAP) return;
+  if (v->flags & LVAL_FLAG_GC_MARK) return;
+  v->flags |= LVAL_FLAG_GC_MARK;
+
+  switch (LVAL_TYPE(v)) {
+    case LVAL_FUN:
+      if (v->fun.env) valk_gc_mark_env(v->fun.env);
+      valk_gc_mark_lval(v->fun.formals);
+      valk_gc_mark_lval(v->fun.body);
+      break;
+    case LVAL_CONS:
+    case LVAL_QEXPR:
+      valk_gc_mark_lval(v->cons.head);
+      valk_gc_mark_lval(v->cons.tail);
+      break;
+    case LVAL_HANDLE:
+      if (v->async.handle) {
+        valk_gc_mark_lval(v->async.handle->on_complete);
+        valk_gc_mark_lval(v->async.handle->on_error);
+        valk_gc_mark_lval(v->async.handle->on_cancel);
+        valk_gc_mark_lval(v->async.handle->result);
+        valk_gc_mark_lval(v->async.handle->error);
+        if (v->async.handle->env) valk_gc_mark_env(v->async.handle->env);
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+static void valk_gc_mark_env(valk_lenv_t* env) {
+  if (env == NULL) return;
+  for (size_t i = 0; i < env->vals.count; i++) {
+    valk_gc_mark_lval(env->vals.items[i]);
+  }
+  if (env->parent) valk_gc_mark_env(env->parent);
+  if (env->fallback) valk_gc_mark_env(env->fallback);
+}
+
+static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
+  if (v == NULL) return;
+  if (LVAL_ALLOC(v) != LVAL_ALLOC_HEAP) return;
+  if (!(v->flags & LVAL_FLAG_GC_MARK)) return;
+  v->flags &= ~LVAL_FLAG_GC_MARK;
+
+  switch (LVAL_TYPE(v)) {
+    case LVAL_FUN:
+      if (v->fun.env) {
+        for (size_t i = 0; i < v->fun.env->vals.count; i++) {
+          valk_gc_clear_marks_recursive(v->fun.env->vals.items[i]);
+        }
+      }
+      valk_gc_clear_marks_recursive(v->fun.formals);
+      valk_gc_clear_marks_recursive(v->fun.body);
+      break;
+    case LVAL_CONS:
+    case LVAL_QEXPR:
+      valk_gc_clear_marks_recursive(v->cons.head);
+      valk_gc_clear_marks_recursive(v->cons.tail);
+      break;
+    default:
+      break;
+  }
 }
 
 // ============================================================================
@@ -3306,7 +2091,7 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
              ctx.values_copied, ctx.bytes_copied);
 
   // Phase 2: Fix all pointers in evacuated values only
-  // This avoids iterating heap->objects which may contain non-value allocations
+  // This avoids iterating heap pages which may contain non-value allocations
   VALK_DEBUG("Checkpoint Phase 2: Fixing pointers in %zu evacuated values",
              ctx.evacuated_count);
   for (size_t i = 0; i < ctx.evacuated_count; i++) {
@@ -3337,4 +2122,1235 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
 
   // Cleanup
   evac_ctx_free(&ctx);
+}
+
+// ============================================================================
+// Phase 1: Multi-Class Heap Implementation (New Size Class Allocator)
+// ============================================================================
+
+#include <sys/mman.h>
+
+// Initialize a page list for a specific size class
+static void valk_gc_page_list_init(valk_gc_page_list_t *list, uint8_t size_class) {
+  pthread_mutex_init(&list->lock, NULL);
+  list->all_pages = NULL;
+  list->partial_pages = NULL;
+  list->num_pages = 0;
+  atomic_store(&list->total_slots, 0);
+  atomic_store(&list->used_slots, 0);
+  atomic_store(&list->next_page_offset, 0);
+  list->slot_size = valk_gc_size_classes[size_class];
+  list->slots_per_page = valk_gc_slots_per_page(size_class);
+}
+
+// Initialize multi-class TLAB
+void valk_gc_tlab2_init(valk_gc_tlab2_t *tlab) {
+  tlab->owner_heap = NULL;
+  for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    tlab->classes[c].page = NULL;
+    tlab->classes[c].next_slot = 0;
+    tlab->classes[c].limit_slot = 0;
+  }
+}
+
+// Allocate a new page for a specific size class
+static valk_gc_page2_t *valk_gc_page2_alloc(valk_gc_heap2_t *heap, uint8_t size_class) {
+  if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return NULL;
+  
+  size_t page_size = valk_gc_page_total_size(size_class);
+  uint16_t slots = valk_gc_slots_per_page(size_class);
+  uint16_t bitmap_bytes = valk_gc_bitmap_bytes(size_class);
+  
+  // Check hard limit before committing
+  size_t current = atomic_load(&heap->committed_bytes);
+  if (current + page_size > heap->hard_limit) {
+    VALK_WARN("Cannot allocate page: would exceed hard limit (%zu + %zu > %zu)",
+              current, page_size, heap->hard_limit);
+    return NULL;
+  }
+  
+  // Allocate page (for now using malloc, will switch to mmap from reserved region)
+  valk_gc_page2_t *page = aligned_alloc(VALK_GC_PAGE_ALIGN, page_size);
+  if (!page) {
+    VALK_ERROR("Failed to allocate GC page for class %d", size_class);
+    return NULL;
+  }
+  
+  // Initialize page header
+  memset(page, 0, sizeof(valk_gc_page2_t));
+  page->page_id = atomic_fetch_add(&__page_id_counter, 1);
+  page->size_class = size_class;
+  page->slots_per_page = slots;
+  page->bitmap_bytes = bitmap_bytes;
+  atomic_store(&page->num_allocated, 0);
+  
+  // Zero out bitmaps (they follow the header)
+  memset(valk_gc_page2_alloc_bitmap(page), 0, bitmap_bytes);
+  memset(valk_gc_page2_mark_bitmap(page), 0, bitmap_bytes);
+  
+  // Update accounting
+  atomic_fetch_add(&heap->committed_bytes, page_size);
+  
+  return page;
+}
+
+// Create new multi-class heap
+valk_gc_heap2_t *valk_gc_heap2_create(size_t hard_limit) {
+  valk_gc_heap2_t *heap = calloc(1, sizeof(valk_gc_heap2_t));
+  if (!heap) {
+    VALK_ERROR("Failed to allocate heap structure");
+    return NULL;
+  }
+  
+  heap->type = VALK_ALLOC_GC_HEAP;
+  heap->hard_limit = hard_limit > 0 ? hard_limit : VALK_GC_DEFAULT_HARD_LIMIT;
+  heap->soft_limit = heap->hard_limit * 3 / 4;
+  heap->gc_threshold_pct = 75;
+  
+  // For now, skip virtual address reservation (macOS has issues with large PROT_NONE mmaps)
+  // We'll use malloc for pages and add mmap later
+  heap->base = NULL;
+  heap->reserved = 0;
+  
+  // Initialize per-class page lists
+  for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page_list_init(&heap->classes[c], c);
+  }
+  
+  // Initialize large object list
+  heap->large_objects = NULL;
+  pthread_mutex_init(&heap->large_lock, NULL);
+  
+  // Initialize accounting
+  atomic_store(&heap->committed_bytes, 0);
+  atomic_store(&heap->used_bytes, 0);
+  atomic_store(&heap->large_object_bytes, 0);
+  atomic_store(&heap->gc_in_progress, false);
+  heap->in_emergency_gc = false;
+  
+  atomic_store(&heap->collections, 0);
+  atomic_store(&heap->bytes_allocated_total, 0);
+  atomic_store(&heap->bytes_reclaimed_total, 0);
+  
+  memset(&heap->stats, 0, sizeof(heap->stats));
+  memset(&heap->runtime_metrics, 0, sizeof(heap->runtime_metrics));
+  
+  VALK_INFO("Created multi-class GC heap: hard_limit=%zu soft_limit=%zu",
+            heap->hard_limit, heap->soft_limit);
+  
+  return heap;
+}
+
+// Destroy heap and release all memory
+void valk_gc_heap2_destroy(valk_gc_heap2_t *heap) {
+  if (!heap) return;
+  
+  // Free all pages in each size class
+  for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page_list_t *list = &heap->classes[c];
+    pthread_mutex_lock(&list->lock);
+    
+    valk_gc_page2_t *page = list->all_pages;
+    while (page) {
+      valk_gc_page2_t *next = page->next;
+      free(page);
+      page = next;
+    }
+    
+    pthread_mutex_unlock(&list->lock);
+    pthread_mutex_destroy(&list->lock);
+  }
+  
+  // Free large objects
+  pthread_mutex_lock(&heap->large_lock);
+  valk_gc_large_obj_t *large = heap->large_objects;
+  while (large) {
+    valk_gc_large_obj_t *next = large->next;
+    if (large->data) {
+      munmap(large->data, large->size);
+    }
+    free(large);
+    large = next;
+  }
+  pthread_mutex_unlock(&heap->large_lock);
+  pthread_mutex_destroy(&heap->large_lock);
+  
+  VALK_INFO("Destroyed multi-class GC heap");
+  free(heap);
+}
+
+// Find free slots in a page's allocation bitmap
+// Returns starting slot index, or UINT32_MAX if not found
+static uint32_t valk_gc_page2_find_free_slots(valk_gc_page2_t *page, uint32_t count) {
+  uint8_t *bitmap = valk_gc_page2_alloc_bitmap(page);
+  uint16_t slots = page->slots_per_page;
+  
+  for (uint32_t i = 0; i < slots; i++) {
+    if (!valk_gc_bitmap_test(bitmap, i)) {
+      uint32_t run = 1;
+      while (run < count && i + run < slots && 
+             !valk_gc_bitmap_test(bitmap, i + run)) {
+        run++;
+      }
+      if (run >= count) {
+        return i;
+      }
+      i += run;
+    }
+  }
+  return UINT32_MAX;
+}
+
+// Refill TLAB for specific class (slow path)
+bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, uint8_t size_class) {
+  if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return false;
+  
+  valk_gc_page_list_t *list = &heap->classes[size_class];
+  
+  pthread_mutex_lock(&list->lock);
+  
+  valk_gc_page2_t *page = list->partial_pages;
+  uint32_t start_slot = 0;
+  uint32_t num_slots = VALK_GC_TLAB_SLOTS;
+  
+  if (page) {
+    // Try to find contiguous free slots in existing partial page
+    start_slot = valk_gc_page2_find_free_slots(page, num_slots);
+    if (start_slot == UINT32_MAX) {
+      // Page is actually full, remove from partial list
+      list->partial_pages = page->next_partial;
+      page = NULL;
+    }
+  }
+  
+  if (!page) {
+    // Need a new page
+    pthread_mutex_unlock(&list->lock);
+    page = valk_gc_page2_alloc(heap, size_class);
+    if (!page) return false;
+    pthread_mutex_lock(&list->lock);
+    
+    // Add to lists
+    page->next = list->all_pages;
+    list->all_pages = page;
+    page->next_partial = list->partial_pages;
+    list->partial_pages = page;
+    list->num_pages++;
+    atomic_fetch_add(&list->total_slots, page->slots_per_page);
+    
+    start_slot = 0;
+  }
+  
+  // Clamp to available slots
+  if (start_slot + num_slots > page->slots_per_page) {
+    num_slots = page->slots_per_page - start_slot;
+  }
+  
+  // Pre-set allocation bits
+  uint8_t *bitmap = valk_gc_page2_alloc_bitmap(page);
+  for (uint32_t i = start_slot; i < start_slot + num_slots; i++) {
+    valk_gc_bitmap_set(bitmap, i);
+  }
+  atomic_fetch_add(&page->num_allocated, num_slots);
+  atomic_fetch_add(&list->used_slots, num_slots);
+  size_t added_bytes = num_slots * list->slot_size;
+  size_t new_used = atomic_fetch_add(&heap->used_bytes, added_bytes) + added_bytes;
+  if (new_used > heap->stats.peak_usage) {
+    heap->stats.peak_usage = new_used;
+  }
+  
+  // Check if page is now full
+  if (atomic_load(&page->num_allocated) >= page->slots_per_page) {
+    // Remove from partial list
+    valk_gc_page2_t **pp = &list->partial_pages;
+    while (*pp && *pp != page) {
+      pp = &(*pp)->next_partial;
+    }
+    if (*pp == page) {
+      *pp = page->next_partial;
+    }
+  }
+  
+  pthread_mutex_unlock(&list->lock);
+  
+  // Update TLAB
+  tlab->classes[size_class].page = page;
+  tlab->classes[size_class].next_slot = start_slot;
+  tlab->classes[size_class].limit_slot = start_slot + num_slots;
+  
+  return true;
+}
+
+static bool valk_gc_heap2_try_emergency_gc(valk_gc_heap2_t *heap, size_t needed);
+
+static void *valk_gc_heap2_alloc_large(valk_gc_heap2_t *heap, size_t bytes) {
+  size_t alloc_size = (bytes + 4095) & ~4095ULL;
+  
+  size_t current = valk_gc_heap2_used_bytes(heap);
+  
+  if (current + alloc_size > heap->hard_limit) {
+    if (!valk_gc_heap2_try_emergency_gc(heap, alloc_size)) {
+      valk_gc_oom_abort(heap, bytes);
+    }
+  } else if (current + alloc_size > heap->soft_limit) {
+    if (!heap->in_emergency_gc && !atomic_load(&heap->gc_in_progress)) {
+      valk_gc_heap2_collect(heap);
+    }
+  }
+  
+  void *data = mmap(NULL, alloc_size, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (data == MAP_FAILED) {
+    VALK_ERROR("mmap failed for large object of %zu bytes", alloc_size);
+    return NULL;
+  }
+  
+  valk_gc_large_obj_t *obj = malloc(sizeof(valk_gc_large_obj_t));
+  if (!obj) {
+    munmap(data, alloc_size);
+    return NULL;
+  }
+  obj->data = data;
+  obj->size = alloc_size;
+  obj->marked = false;
+  
+  pthread_mutex_lock(&heap->large_lock);
+  obj->next = heap->large_objects;
+  heap->large_objects = obj;
+  pthread_mutex_unlock(&heap->large_lock);
+  
+  atomic_fetch_add(&heap->large_object_bytes, alloc_size);
+  size_t used = valk_gc_heap2_used_bytes(heap);
+  if (used > heap->stats.peak_usage) {
+    heap->stats.peak_usage = used;
+  }
+  
+  return data;
+}
+
+void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, size_t bytes) {
+  if (bytes == 0) return NULL;
+  
+  if (bytes > VALK_GC_LARGE_THRESHOLD) {
+    return valk_gc_heap2_alloc_large(heap, bytes);
+  }
+  
+  uint8_t size_class = valk_gc_size_class(bytes);
+  if (size_class == UINT8_MAX) {
+    return valk_gc_heap2_alloc_large(heap, bytes);
+  }
+  
+  size_t alloc_size = valk_gc_size_classes[size_class];
+  size_t current = valk_gc_heap2_used_bytes(heap);
+  
+  if (current + alloc_size > heap->hard_limit) {
+    if (!valk_gc_heap2_try_emergency_gc(heap, alloc_size)) {
+      valk_gc_oom_abort(heap, bytes);
+    }
+  } else if (current + alloc_size > heap->soft_limit) {
+    if (!heap->in_emergency_gc && !atomic_load(&heap->gc_in_progress)) {
+      valk_gc_heap2_collect(heap);
+    }
+  }
+  
+  static __thread valk_gc_tlab2_t *local_tlab = NULL;
+  if (!local_tlab) {
+    local_tlab = malloc(sizeof(valk_gc_tlab2_t));
+    if (!local_tlab) return NULL;
+    valk_gc_tlab2_init(local_tlab);
+  }
+  
+  if (local_tlab->owner_heap != heap) {
+    valk_gc_tlab2_reset(local_tlab);
+    local_tlab->owner_heap = heap;
+  }
+  
+  void *ptr = valk_gc_tlab2_alloc(local_tlab, size_class);
+  if (ptr) {
+    memset(ptr, 0, alloc_size);
+    return ptr;
+  }
+  
+  if (!valk_gc_tlab2_refill(local_tlab, heap, size_class)) {
+    VALK_ERROR("Failed to refill TLAB for class %d", size_class);
+    return NULL;
+  }
+  
+  ptr = valk_gc_tlab2_alloc(local_tlab, size_class);
+  if (ptr) {
+    memset(ptr, 0, alloc_size);
+  }
+  return ptr;
+}
+
+void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, size_t new_size) {
+  if (ptr == NULL) {
+    return valk_gc_heap2_alloc(heap, new_size);
+  }
+  if (new_size == 0) {
+    return NULL;
+  }
+  
+  valk_gc_ptr_location_t loc;
+  if (valk_gc_ptr_to_location(heap, ptr, &loc)) {
+    size_t old_size = valk_gc_size_classes[loc.size_class];
+    if (new_size <= old_size) {
+      return ptr;
+    }
+    void *new_ptr = valk_gc_heap2_alloc(heap, new_size);
+    if (new_ptr) {
+      memcpy(new_ptr, ptr, old_size);
+    }
+    return new_ptr;
+  }
+  
+  pthread_mutex_lock(&heap->large_lock);
+  for (valk_gc_large_obj_t *obj = heap->large_objects; obj != NULL; obj = obj->next) {
+    if (obj->data == ptr) {
+      size_t old_size = obj->size;
+      pthread_mutex_unlock(&heap->large_lock);
+      
+      if (new_size <= old_size) {
+        return ptr;
+      }
+      void *new_ptr = valk_gc_heap2_alloc(heap, new_size);
+      if (new_ptr) {
+        memcpy(new_ptr, ptr, old_size);
+      }
+      return new_ptr;
+    }
+  }
+  pthread_mutex_unlock(&heap->large_lock);
+  
+  VALK_WARN("valk_gc_heap2_realloc: pointer %p not found in heap", ptr);
+  return NULL;
+}
+
+// ============================================================================
+// Phase 2: Pointer Location and Marking
+// ============================================================================
+
+bool valk_gc_ptr_to_location(valk_gc_heap2_t *heap, void *ptr, valk_gc_ptr_location_t *out) {
+  if (!heap || !ptr || !out) {
+    if (out) out->is_valid = false;
+    return false;
+  }
+  
+  out->is_valid = false;
+  
+  for (uint8_t c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page_list_t *list = &heap->classes[c];
+    uint16_t slot_size = valk_gc_size_classes[c];
+    
+    for (valk_gc_page2_t *page = list->all_pages; page != NULL; page = page->next) {
+      uint8_t *slots_start = valk_gc_page2_slots(page);
+      uint8_t *slots_end = slots_start + page->slots_per_page * slot_size;
+      
+      if ((uint8_t *)ptr >= slots_start && (uint8_t *)ptr < slots_end) {
+        uintptr_t offset = (uintptr_t)ptr - (uintptr_t)slots_start;
+        if (offset % slot_size == 0) {
+          out->page = page;
+          out->slot = (uint32_t)(offset / slot_size);
+          out->size_class = c;
+          out->is_valid = true;
+          return true;
+        }
+      }
+    }
+  }
+  
+  return false;
+}
+
+bool valk_gc_mark_large_object(valk_gc_heap2_t *heap, void *ptr) {
+  if (!heap || !ptr) return false;
+  
+  pthread_mutex_lock(&heap->large_lock);
+  
+  for (valk_gc_large_obj_t *obj = heap->large_objects; obj != NULL; obj = obj->next) {
+    if (ptr >= obj->data && (uint8_t *)ptr < (uint8_t *)obj->data + obj->size) {
+      bool was_unmarked = !obj->marked;
+      obj->marked = true;
+      pthread_mutex_unlock(&heap->large_lock);
+      return was_unmarked;
+    }
+  }
+  
+  pthread_mutex_unlock(&heap->large_lock);
+  return false;
+}
+
+size_t valk_gc_sweep_page2(valk_gc_page2_t *page) {
+  if (!page) return 0;
+  
+  size_t freed = 0;
+  uint16_t slots = page->slots_per_page;
+  uint16_t slot_size = valk_gc_size_classes[page->size_class];
+  
+  uint8_t *alloc_bitmap = valk_gc_page2_alloc_bitmap(page);
+  uint8_t *mark_bitmap = valk_gc_page2_mark_bitmap(page);
+  
+  size_t num_words = (slots + 63) / 64;
+  uint64_t *alloc_words = (uint64_t *)alloc_bitmap;
+  uint64_t *mark_words = (uint64_t *)mark_bitmap;
+  
+  for (size_t w = 0; w < num_words; w++) {
+    uint64_t alloc = alloc_words[w];
+    uint64_t mark = mark_words[w];
+    
+    uint64_t garbage = alloc & ~mark;
+    
+    if (garbage != 0) {
+      freed += (size_t)__builtin_popcountll(garbage);
+      alloc_words[w] = alloc & mark;
+      
+      uint64_t temp = garbage;
+      while (temp) {
+        size_t bit = (size_t)__builtin_ctzll(temp);
+        size_t slot = w * 64 + bit;
+        
+        if (slot < slots) {
+          void *ptr = valk_gc_page2_slot_ptr(page, (uint32_t)slot);
+          
+          if (slot_size >= sizeof(valk_lval_t)) {
+            valk_lval_t *v = (valk_lval_t *)ptr;
+            if (LVAL_TYPE(v) == LVAL_REF && v->ref.free != NULL) {
+              v->ref.free(v->ref.ptr);
+            }
+          }
+        }
+        
+        temp &= temp - 1;
+      }
+    }
+    
+    mark_words[w] = 0;
+  }
+  
+  atomic_fetch_sub(&page->num_allocated, (uint32_t)freed);
+  
+  return freed;
+}
+
+size_t valk_gc_sweep_large_objects(valk_gc_heap2_t *heap) {
+  if (!heap) return 0;
+  
+  size_t freed = 0;
+  
+  pthread_mutex_lock(&heap->large_lock);
+  
+  valk_gc_large_obj_t **pp = &heap->large_objects;
+  while (*pp != NULL) {
+    valk_gc_large_obj_t *obj = *pp;
+    
+    if (!obj->marked) {
+      *pp = obj->next;
+      
+      if (obj->data) {
+        munmap(obj->data, obj->size);
+      }
+      freed += obj->size;
+      free(obj);
+    } else {
+      obj->marked = false;
+      pp = &obj->next;
+    }
+  }
+  
+  pthread_mutex_unlock(&heap->large_lock);
+  
+  atomic_fetch_sub(&heap->large_object_bytes, freed);
+  return freed;
+}
+
+void valk_gc_rebuild_partial_lists(valk_gc_heap2_t *heap) {
+  if (!heap) return;
+  
+  for (uint8_t c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page_list_t *list = &heap->classes[c];
+    
+    pthread_mutex_lock(&list->lock);
+    
+    list->partial_pages = NULL;
+    
+    for (valk_gc_page2_t *page = list->all_pages; page != NULL; page = page->next) {
+      uint32_t allocated = atomic_load(&page->num_allocated);
+      
+      if (allocated < page->slots_per_page) {
+        page->next_partial = list->partial_pages;
+        list->partial_pages = page;
+      }
+    }
+    
+    pthread_mutex_unlock(&list->lock);
+  }
+}
+
+size_t valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap) {
+  if (!heap) return 0;
+  
+  size_t pages_reclaimed = 0;
+  
+  for (uint8_t c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page_list_t *list = &heap->classes[c];
+    
+    pthread_mutex_lock(&list->lock);
+    
+    for (valk_gc_page2_t *page = list->all_pages; page != NULL; page = page->next) {
+      uint32_t allocated = atomic_load(&page->num_allocated);
+      
+      if (allocated == 0) {
+        size_t page_size = valk_gc_page_total_size(valk_gc_size_classes[c]);
+#ifdef __APPLE__
+        madvise(page, page_size, MADV_FREE);
+#else
+        madvise(page, page_size, MADV_DONTNEED);
+#endif
+        pages_reclaimed++;
+      }
+    }
+    
+    pthread_mutex_unlock(&list->lock);
+  }
+  
+  return pages_reclaimed;
+}
+
+// ============================================================================
+// Phase 4: Mark Phase for heap2
+// ============================================================================
+
+static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx);
+static void mark_env2(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx);
+
+static void mark_and_push2(void *ptr, valk_gc_mark_ctx2_t *ctx) {
+  if (ptr == NULL) return;
+  
+  valk_gc_ptr_location_t loc;
+  if (valk_gc_ptr_to_location(ctx->heap, ptr, &loc)) {
+    if (!valk_gc_page2_try_mark(loc.page, loc.slot)) {
+      return;
+    }
+  } else {
+    if (!valk_gc_mark_large_object(ctx->heap, ptr)) {
+      return;
+    }
+  }
+  
+  if (!valk_gc_mark_queue_push(ctx->queue, ptr)) {
+    mark_children2(ptr, ctx);
+  }
+}
+
+static void mark_env2(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx) {
+  if (env == NULL) return;
+  
+  mark_and_push2(env, ctx);
+  mark_and_push2(env->symbols.items, ctx);
+  mark_and_push2(env->vals.items, ctx);
+  
+  for (size_t i = 0; i < env->symbols.count; i++) {
+    mark_and_push2(env->symbols.items[i], ctx);
+  }
+  for (size_t i = 0; i < env->vals.count; i++) {
+    mark_and_push2(env->vals.items[i], ctx);
+  }
+  
+  mark_env2(env->parent, ctx);
+  mark_env2(env->fallback, ctx);
+}
+
+static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
+  if (obj == NULL) return;
+  
+  switch (LVAL_TYPE(obj)) {
+    case LVAL_CONS:
+    case LVAL_QEXPR:
+      mark_and_push2(obj->cons.head, ctx);
+      mark_and_push2(obj->cons.tail, ctx);
+      break;
+      
+    case LVAL_FUN:
+      if (obj->fun.builtin == NULL) {
+        mark_and_push2(obj->fun.formals, ctx);
+        mark_and_push2(obj->fun.body, ctx);
+        if (obj->fun.env) {
+          mark_env2(obj->fun.env, ctx);
+        }
+      }
+      mark_and_push2(obj->fun.name, ctx);
+      break;
+      
+    case LVAL_HANDLE:
+      if (obj->async.handle) {
+        mark_and_push2(obj->async.handle->on_complete, ctx);
+        mark_and_push2(obj->async.handle->on_error, ctx);
+        mark_and_push2(obj->async.handle->on_cancel, ctx);
+        mark_and_push2(obj->async.handle->result, ctx);
+        mark_and_push2(obj->async.handle->error, ctx);
+        if (obj->async.handle->env) {
+          mark_env2(obj->async.handle->env, ctx);
+        }
+      }
+      break;
+      
+    case LVAL_SYM:
+    case LVAL_STR:
+    case LVAL_ERR:
+      mark_and_push2(obj->str, ctx);
+      break;
+      
+    case LVAL_REF:
+      mark_and_push2(obj->ref.type, ctx);
+      break;
+      
+    default:
+      break;
+  }
+}
+
+static void mark_root_visitor2(valk_lval_t *val, void *user) {
+  valk_gc_mark_ctx2_t *ctx = user;
+  mark_and_push2(val, ctx);
+}
+
+void valk_gc_heap2_mark_object(valk_gc_mark_ctx2_t *ctx, void *ptr) {
+  mark_and_push2(ptr, ctx);
+}
+
+void valk_gc_heap2_mark_roots(valk_gc_heap2_t *heap) {
+  if (!heap) return;
+  
+  valk_gc_mark_queue_t local_queue;
+  valk_gc_mark_queue_init(&local_queue);
+  
+  valk_gc_mark_ctx2_t ctx = {
+    .heap = heap,
+    .queue = &local_queue
+  };
+  
+  valk_gc_visit_global_roots(mark_root_visitor2, &ctx);
+  
+  if (valk_thread_ctx.gc_registered) {
+    valk_gc_visit_thread_roots(mark_root_visitor2, &ctx);
+  }
+  
+  valk_lval_t *obj;
+  while ((obj = valk_gc_mark_queue_pop(&local_queue)) != NULL) {
+    mark_children2(obj, &ctx);
+  }
+}
+
+// ============================================================================
+// Phase 3: Memory Limits and GC Cycle
+// ============================================================================
+
+void valk_gc_heap2_get_stats(valk_gc_heap2_t *heap, valk_gc_stats2_t *out) {
+  if (!heap || !out) return;
+  
+  memset(out, 0, sizeof(*out));
+  out->used_bytes = valk_gc_heap2_used_bytes(heap);
+  out->committed_bytes = atomic_load(&heap->committed_bytes);
+  out->large_object_bytes = atomic_load(&heap->large_object_bytes);
+  out->hard_limit = heap->hard_limit;
+  out->soft_limit = heap->soft_limit;
+  out->collections = atomic_load(&heap->collections);
+  out->bytes_reclaimed_total = atomic_load(&heap->bytes_reclaimed_total);
+  
+  for (uint8_t c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    out->class_used_slots[c] = atomic_load(&heap->classes[c].used_slots);
+    out->class_total_slots[c] = atomic_load(&heap->classes[c].total_slots);
+  }
+}
+
+void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab) {
+  if (!tlab) return;
+  
+  for (uint8_t c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    tlab->classes[c].page = NULL;
+    tlab->classes[c].next_slot = 0;
+    tlab->classes[c].limit_slot = 0;
+  }
+}
+
+__attribute__((noreturn))
+void valk_gc_oom_abort(valk_gc_heap2_t *heap, size_t requested) {
+  fprintf(stderr, "\n");
+  fprintf(stderr, "================================================================\n");
+  fprintf(stderr, "                    FATAL: OUT OF MEMORY                        \n");
+  fprintf(stderr, "================================================================\n");
+  fprintf(stderr, " Requested:    %12zu bytes\n", requested);
+  
+  if (heap) {
+    valk_gc_stats2_t stats;
+    valk_gc_heap2_get_stats(heap, &stats);
+    
+    fprintf(stderr, " Used:         %12zu bytes\n", stats.used_bytes);
+    fprintf(stderr, " Hard Limit:   %12zu bytes\n", stats.hard_limit);
+    fprintf(stderr, " Committed:    %12zu bytes\n", stats.committed_bytes);
+    fprintf(stderr, "----------------------------------------------------------------\n");
+    fprintf(stderr, " Per-Class Usage:\n");
+    for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+      if (stats.class_total_slots[c] > 0) {
+        size_t pct = (stats.class_used_slots[c] * 100) / stats.class_total_slots[c];
+        fprintf(stderr, "   Class %d (%4u B): %8zu / %8zu slots (%3zu%%)\n",
+                c, valk_gc_size_classes[c], 
+                stats.class_used_slots[c], stats.class_total_slots[c], pct);
+      }
+    }
+    fprintf(stderr, " Large Objects: %12zu bytes\n", stats.large_object_bytes);
+    fprintf(stderr, "----------------------------------------------------------------\n");
+    fprintf(stderr, " GC cycles: %llu, Total reclaimed: %llu bytes\n",
+            (unsigned long long)stats.collections,
+            (unsigned long long)stats.bytes_reclaimed_total);
+    fprintf(stderr, "----------------------------------------------------------------\n");
+    fprintf(stderr, " Increase limit: VALK_HEAP_HARD_LIMIT=%zu\n", stats.hard_limit * 2);
+  }
+  fprintf(stderr, "================================================================\n");
+  
+  abort();
+}
+
+size_t valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
+  if (!heap) return 0;
+  
+  uint64_t start_ns = uv_hrtime();
+  
+  atomic_store(&heap->gc_in_progress, true);
+  atomic_fetch_add(&heap->collections, 1);
+  
+  size_t bytes_before = valk_gc_heap2_used_bytes(heap);
+  size_t freed_slots_total = 0;
+  size_t freed_large = 0;
+  
+  valk_gc_heap2_mark_roots(heap);
+  
+  for (uint8_t c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page_list_t *list = &heap->classes[c];
+    
+    for (valk_gc_page2_t *page = list->all_pages; page != NULL; page = page->next) {
+      size_t freed = valk_gc_sweep_page2(page);
+      freed_slots_total += freed;
+      atomic_fetch_sub(&list->used_slots, freed);
+    }
+  }
+  
+  freed_large = valk_gc_sweep_large_objects(heap);
+  
+  valk_gc_rebuild_partial_lists(heap);
+  
+  size_t pages_reclaimed = valk_gc_reclaim_empty_pages(heap);
+  
+  size_t bytes_after = valk_gc_heap2_used_bytes(heap);
+  size_t reclaimed = 0;
+  if (bytes_before > bytes_after) {
+    reclaimed = bytes_before - bytes_after;
+  }
+  
+  atomic_fetch_add(&heap->bytes_reclaimed_total, reclaimed);
+  atomic_store(&heap->gc_in_progress, false);
+  
+  uint64_t end_ns = uv_hrtime();
+  uint64_t pause_us = (end_ns - start_ns) / 1000;
+  
+  atomic_fetch_add(&heap->runtime_metrics.cycles_total, 1);
+  atomic_fetch_add(&heap->runtime_metrics.pause_us_total, pause_us);
+  atomic_fetch_add(&heap->runtime_metrics.reclaimed_bytes_total, reclaimed);
+  atomic_store(&heap->runtime_metrics.last_heap_before_gc, bytes_before);
+  atomic_store(&heap->runtime_metrics.last_reclaimed, reclaimed);
+  
+  uint64_t current_max = atomic_load(&heap->runtime_metrics.pause_us_max);
+  while (pause_us > current_max) {
+    if (atomic_compare_exchange_weak(&heap->runtime_metrics.pause_us_max, &current_max, pause_us)) {
+      break;
+    }
+  }
+  
+  VALK_DEBUG("GC cycle complete: reclaimed %zu bytes (%zu slots + %zu large, %zu empty pages) in %llu us",
+             reclaimed, freed_slots_total, freed_large, pages_reclaimed, (unsigned long long)pause_us);
+  
+  return reclaimed;
+}
+
+static bool valk_gc_heap2_try_emergency_gc(valk_gc_heap2_t *heap, size_t needed) {
+  if (heap->in_emergency_gc) {
+    return false;
+  }
+  
+  heap->in_emergency_gc = true;
+  
+  VALK_WARN("Emergency GC: need %zu bytes, used %zu / %zu",
+            needed, valk_gc_heap2_used_bytes(heap), heap->hard_limit);
+  
+  size_t reclaimed = valk_gc_heap2_collect(heap);
+  
+  heap->in_emergency_gc = false;
+  
+  size_t after = valk_gc_heap2_used_bytes(heap);
+  if (after + needed <= heap->hard_limit) {
+    VALK_INFO("Emergency GC recovered %zu bytes, allocation can proceed", reclaimed);
+    return true;
+  }
+  
+  return false;
+}
+
+// ============================================================================
+// Phase 7: Parallel Mark/Sweep for heap2
+// ============================================================================
+
+static _Atomic size_t __gc_heap2_idle_count = 0;
+static _Atomic bool __gc_heap2_terminated = false;
+static valk_gc_heap2_t *__gc_heap2_current = NULL;
+
+static bool valk_gc_heap2_check_termination(void) {
+  size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
+  size_t idle = atomic_fetch_add(&__gc_heap2_idle_count, 1) + 1;
+  
+  if (idle == num_threads) {
+    bool all_empty = true;
+    for (size_t i = 0; i < num_threads; i++) {
+      if (!valk_gc_coord.threads[i].active) continue;
+      valk_gc_mark_queue_t *q = &valk_gc_coord.threads[i].mark_queue;
+      if (!valk_gc_mark_queue_empty(q)) {
+        all_empty = false;
+        break;
+      }
+    }
+    
+    if (all_empty) {
+      atomic_store(&__gc_heap2_terminated, true);
+    }
+  }
+  
+  for (int i = 0; i < 100; i++) {
+    if (atomic_load(&__gc_heap2_terminated)) {
+      return true;
+    }
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#else
+    sched_yield();
+#endif
+  }
+  
+  atomic_fetch_sub(&__gc_heap2_idle_count, 1);
+  return false;
+}
+
+static void mark_and_push2_parallel(void *ptr, valk_gc_mark_ctx2_t *ctx);
+static void mark_children2_parallel(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx);
+static void mark_env2_parallel(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx);
+
+static void mark_and_push2_parallel(void *ptr, valk_gc_mark_ctx2_t *ctx) {
+  if (ptr == NULL) return;
+  
+  valk_gc_ptr_location_t loc;
+  if (valk_gc_ptr_to_location(ctx->heap, ptr, &loc)) {
+    if (!valk_gc_page2_try_mark(loc.page, loc.slot)) {
+      return;
+    }
+  } else {
+    if (!valk_gc_mark_large_object(ctx->heap, ptr)) {
+      return;
+    }
+  }
+  
+  if (!valk_gc_mark_queue_push(ctx->queue, ptr)) {
+    mark_children2_parallel(ptr, ctx);
+  }
+}
+
+static void mark_env2_parallel(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx) {
+  if (env == NULL) return;
+  
+  mark_and_push2_parallel(env, ctx);
+  mark_and_push2_parallel(env->symbols.items, ctx);
+  mark_and_push2_parallel(env->vals.items, ctx);
+  
+  for (size_t i = 0; i < env->symbols.count; i++) {
+    mark_and_push2_parallel(env->symbols.items[i], ctx);
+  }
+  for (size_t i = 0; i < env->vals.count; i++) {
+    mark_and_push2_parallel(env->vals.items[i], ctx);
+  }
+  
+  mark_env2_parallel(env->parent, ctx);
+  mark_env2_parallel(env->fallback, ctx);
+}
+
+static void mark_children2_parallel(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
+  if (obj == NULL) return;
+  
+  switch (LVAL_TYPE(obj)) {
+    case LVAL_CONS:
+    case LVAL_QEXPR:
+      mark_and_push2_parallel(obj->cons.head, ctx);
+      mark_and_push2_parallel(obj->cons.tail, ctx);
+      break;
+      
+    case LVAL_FUN:
+      if (obj->fun.builtin == NULL) {
+        mark_and_push2_parallel(obj->fun.formals, ctx);
+        mark_and_push2_parallel(obj->fun.body, ctx);
+        if (obj->fun.env) {
+          mark_env2_parallel(obj->fun.env, ctx);
+        }
+      }
+      mark_and_push2_parallel(obj->fun.name, ctx);
+      break;
+      
+    case LVAL_HANDLE:
+      if (obj->async.handle) {
+        mark_and_push2_parallel(obj->async.handle->on_complete, ctx);
+        mark_and_push2_parallel(obj->async.handle->on_error, ctx);
+        mark_and_push2_parallel(obj->async.handle->on_cancel, ctx);
+        mark_and_push2_parallel(obj->async.handle->result, ctx);
+        mark_and_push2_parallel(obj->async.handle->error, ctx);
+        if (obj->async.handle->env) {
+          mark_env2_parallel(obj->async.handle->env, ctx);
+        }
+      }
+      break;
+      
+    case LVAL_SYM:
+    case LVAL_STR:
+    case LVAL_ERR:
+      mark_and_push2_parallel(obj->str, ctx);
+      break;
+      
+    case LVAL_REF:
+      mark_and_push2_parallel(obj->ref.type, ctx);
+      break;
+      
+    default:
+      break;
+  }
+}
+
+static void mark_root_visitor2_parallel(valk_lval_t *val, void *user) {
+  valk_gc_mark_ctx2_t *ctx = user;
+  mark_and_push2_parallel(val, ctx);
+}
+
+void valk_gc_heap2_parallel_mark(valk_gc_heap2_t *heap) {
+  if (!heap) return;
+  if (!valk_thread_ctx.gc_registered) return;
+  
+  size_t my_id = valk_thread_ctx.gc_thread_id;
+  valk_gc_mark_queue_t *my_queue = &valk_gc_coord.threads[my_id].mark_queue;
+  
+  valk_gc_mark_queue_init(my_queue);
+  
+  valk_gc_mark_ctx2_t ctx = {
+    .heap = heap,
+    .queue = my_queue
+  };
+  
+  valk_gc_visit_thread_roots(mark_root_visitor2_parallel, &ctx);
+  
+  if (my_id == 0) {
+    valk_gc_visit_global_roots(mark_root_visitor2_parallel, &ctx);
+  }
+  
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  size_t idle_spins = 0;
+  const size_t MAX_IDLE_SPINS = 1000;
+  
+  while (true) {
+    valk_lval_t *obj;
+    while ((obj = valk_gc_mark_queue_pop(my_queue)) != NULL) {
+      mark_children2_parallel(obj, &ctx);
+      idle_spins = 0;
+    }
+    
+    bool found_work = false;
+    size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
+    
+    for (size_t i = 1; i <= num_threads; i++) {
+      size_t victim = (my_id + i) % num_threads;
+      if (!valk_gc_coord.threads[victim].active) continue;
+      
+      obj = valk_gc_mark_queue_steal(&valk_gc_coord.threads[victim].mark_queue);
+      if (obj != NULL) {
+        mark_children2_parallel(obj, &ctx);
+        found_work = true;
+        idle_spins = 0;
+        break;
+      }
+    }
+    
+    if (!found_work) {
+      idle_spins++;
+      if (idle_spins >= MAX_IDLE_SPINS) {
+        if (valk_gc_heap2_check_termination()) {
+          break;
+        }
+        idle_spins = 0;
+      }
+      sched_yield();
+    }
+  }
+}
+
+void valk_gc_heap2_parallel_sweep(valk_gc_heap2_t *heap) {
+  if (!heap) return;
+  if (!valk_thread_ctx.gc_registered) return;
+  
+  size_t my_id = valk_thread_ctx.gc_thread_id;
+  size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
+  
+  for (uint8_t c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page_list_t *list = &heap->classes[c];
+    
+    size_t num_pages = list->num_pages;
+    if (num_pages == 0) continue;
+    
+    size_t pages_per_thread = (num_pages + num_threads - 1) / num_threads;
+    size_t my_start = my_id * pages_per_thread;
+    size_t my_end = (my_id + 1) * pages_per_thread;
+    if (my_end > num_pages) my_end = num_pages;
+    
+    valk_gc_page2_t *page = list->all_pages;
+    for (size_t i = 0; i < my_start && page != NULL; i++) {
+      page = page->next;
+    }
+    
+    size_t freed_slots = 0;
+    for (size_t i = my_start; i < my_end && page != NULL; i++) {
+      freed_slots += valk_gc_sweep_page2(page);
+      page = page->next;
+    }
+    
+    if (freed_slots > 0) {
+      atomic_fetch_sub(&list->used_slots, freed_slots);
+    }
+  }
+  
+  if (my_id == 0) {
+    valk_gc_sweep_large_objects(heap);
+  }
+}
+
+bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
+  if (!heap) return false;
+  
+  valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
+  if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected,
+                                       VALK_GC_PHASE_STW_REQUESTED)) {
+    return false;
+  }
+  
+  size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
+  if (num_threads == 0) {
+    atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+    return false;
+  }
+  
+  if (valk_gc_coord.barrier_initialized) {
+    valk_barrier_destroy(&valk_gc_coord.barrier);
+  }
+  valk_barrier_init(&valk_gc_coord.barrier, num_threads);
+  valk_gc_coord.barrier_initialized = true;
+  
+  __gc_heap2_current = heap;
+  
+  pthread_mutex_lock(&valk_gc_coord.lock);
+  while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_nsec += 100000000;
+    if (ts.tv_nsec >= 1000000000) {
+      ts.tv_sec++;
+      ts.tv_nsec -= 1000000000;
+    }
+    pthread_cond_timedwait(&valk_gc_coord.all_paused, &valk_gc_coord.lock, &ts);
+  }
+  pthread_mutex_unlock(&valk_gc_coord.lock);
+  
+  return true;
+}
+
+size_t valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap) {
+  if (!heap) return 0;
+  
+  size_t num_threads = atomic_load(&valk_gc_coord.threads_registered);
+  
+  if (num_threads <= 1) {
+    return valk_gc_heap2_collect(heap);
+  }
+  
+  if (!valk_thread_ctx.gc_registered) {
+    return valk_gc_heap2_collect(heap);
+  }
+  
+  uint64_t start_ns = uv_hrtime();
+  
+  atomic_store(&heap->gc_in_progress, true);
+  atomic_fetch_add(&heap->collections, 1);
+  
+  size_t bytes_before = valk_gc_heap2_used_bytes(heap);
+  
+  atomic_store(&__gc_heap2_idle_count, 0);
+  atomic_store(&__gc_heap2_terminated, false);
+  
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_MARKING);
+  valk_gc_heap2_parallel_mark(heap);
+  
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_SWEEPING);
+  valk_gc_heap2_parallel_sweep(heap);
+  
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  if (valk_thread_ctx.gc_thread_id == 0) {
+    valk_gc_rebuild_partial_lists(heap);
+    valk_gc_reclaim_empty_pages(heap);
+  }
+  
+  valk_barrier_wait(&valk_gc_coord.barrier);
+  
+  atomic_store(&valk_gc_coord.threads_paused, 0);
+  
+  pthread_mutex_lock(&valk_gc_coord.lock);
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+  pthread_cond_broadcast(&valk_gc_coord.gc_done);
+  pthread_mutex_unlock(&valk_gc_coord.lock);
+  
+  size_t bytes_after = valk_gc_heap2_used_bytes(heap);
+  size_t reclaimed = 0;
+  if (bytes_before > bytes_after) {
+    reclaimed = bytes_before - bytes_after;
+  }
+  
+  atomic_fetch_add(&heap->bytes_reclaimed_total, reclaimed);
+  atomic_store(&heap->gc_in_progress, false);
+  
+  uint64_t end_ns = uv_hrtime();
+  uint64_t pause_us = (end_ns - start_ns) / 1000;
+  
+  atomic_fetch_add(&heap->runtime_metrics.cycles_total, 1);
+  atomic_fetch_add(&heap->runtime_metrics.pause_us_total, pause_us);
+  atomic_fetch_add(&heap->runtime_metrics.reclaimed_bytes_total, reclaimed);
+  atomic_store(&heap->runtime_metrics.last_heap_before_gc, bytes_before);
+  atomic_store(&heap->runtime_metrics.last_reclaimed, reclaimed);
+  
+  uint64_t current_max = atomic_load(&heap->runtime_metrics.pause_us_max);
+  while (pause_us > current_max) {
+    if (atomic_compare_exchange_weak(&heap->runtime_metrics.pause_us_max, &current_max, pause_us)) {
+      break;
+    }
+  }
+  
+  atomic_fetch_add(&valk_gc_coord.parallel_cycles, 1);
+  atomic_fetch_add(&valk_gc_coord.parallel_pause_us_total, pause_us);
+  
+  VALK_DEBUG("Parallel GC heap2 cycle complete: reclaimed %zu bytes in %llu us (%zu threads)",
+             reclaimed, (unsigned long long)pause_us, num_threads);
+  
+  return reclaimed;
 }

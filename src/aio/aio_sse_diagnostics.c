@@ -483,42 +483,8 @@ static void mem_snapshot_collect_internal(valk_mem_snapshot_t *snapshot,
   // HTTP Clients
   ADD_SLAB_CACHED(valk_aio_get_http_clients_slab, "http_clients");
 
-  // LVAL Slab (from GC heap)
-  valk_gc_malloc_heap_t *gc_heap = valk_aio_get_gc_heap(aio);
-  if (gc_heap && gc_heap->lval_slab && slab_idx < 8) {
-    const valk_slab_snapshot_t *prev_lval = find_prev_slab(prev, "lval");
-    snapshot->slabs[slab_idx].name = (const char *)"lval";
-    snapshot->slabs[slab_idx].bitmap =
-        slab_to_bitmap_cached(gc_heap->lval_slab,
-                              &snapshot->slabs[slab_idx].bitmap_bytes,
-                              &snapshot->slabs[slab_idx].used_slots,
-                              &snapshot->slabs[slab_idx].cached_num_free,
-                              prev_lval);
-    snapshot->slabs[slab_idx].total_slots = gc_heap->lval_slab->numItems;
-    snapshot->slabs[slab_idx].peak_used =
-        __atomic_load_n(&gc_heap->lval_slab->peakUsed, __ATOMIC_ACQUIRE);
-    snapshot->slabs[slab_idx].overflow_count =
-        __atomic_load_n(&gc_heap->lval_slab->overflowCount, __ATOMIC_ACQUIRE);
-    slab_idx++;
-  }
-
-  // LENV Slab (from GC heap)
-  if (gc_heap && gc_heap->lenv_slab && slab_idx < 8) {
-    const valk_slab_snapshot_t *prev_lenv = find_prev_slab(prev, "lenv");
-    snapshot->slabs[slab_idx].name = (const char *)"lenv";
-    snapshot->slabs[slab_idx].bitmap =
-        slab_to_bitmap_cached(gc_heap->lenv_slab,
-                              &snapshot->slabs[slab_idx].bitmap_bytes,
-                              &snapshot->slabs[slab_idx].used_slots,
-                              &snapshot->slabs[slab_idx].cached_num_free,
-                              prev_lenv);
-    snapshot->slabs[slab_idx].total_slots = gc_heap->lenv_slab->numItems;
-    snapshot->slabs[slab_idx].peak_used =
-        __atomic_load_n(&gc_heap->lenv_slab->peakUsed, __ATOMIC_ACQUIRE);
-    snapshot->slabs[slab_idx].overflow_count =
-        __atomic_load_n(&gc_heap->lenv_slab->overflowCount, __ATOMIC_ACQUIRE);
-    slab_idx++;
-  }
+  // NOTE: heap2 uses page-based allocation with size classes instead of slabs
+  // lval/lenv slabs no longer exist in heap2
 
   #undef ADD_SLAB_CACHED
 #endif
@@ -551,39 +517,15 @@ static void mem_snapshot_collect_internal(valk_mem_snapshot_t *snapshot,
 
   // Collect GC heap stats (generic tier array)
 #ifdef VALK_METRICS_ENABLED
-  // gc_heap was already fetched above for LVAL slab collection
+  valk_gc_malloc_heap_t *gc_heap = valk_aio_get_gc_heap(aio);
   if (gc_heap) {
     size_t tier_idx = 0;
 
-    // Helper macro to add a slab to the tiers snapshot
-    #define ADD_SLAB_TIER(slab_ptr, tier_name) do { \
-      if ((slab_ptr) && tier_idx < 8) { \
-        valk_heap_tier_snapshot_t *tier = &snapshot->gc_heap.tiers[tier_idx]; \
-        size_t slab_used = (slab_ptr)->numItems - (slab_ptr)->numFree; \
-        size_t slab_total = (slab_ptr)->numItems; \
-        size_t item_size = (slab_ptr)->itemSize; \
-        tier->name = tier_name; \
-        tier->bytes_used = slab_used * item_size; \
-        tier->bytes_total = slab_total * item_size; \
-        tier->bytes_peak = __atomic_load_n(&(slab_ptr)->peakUsed, __ATOMIC_RELAXED) * item_size; \
-        tier->objects_used = slab_used; \
-        tier->objects_total = slab_total; \
-        tier->objects_peak = __atomic_load_n(&(slab_ptr)->peakUsed, __ATOMIC_RELAXED); \
-        tier_idx++; \
-      } \
-    } while(0)
-
-    // Add slab tiers (just slabs with different names)
-    ADD_SLAB_TIER(gc_heap->lval_slab, "lval");
-    ADD_SLAB_TIER(gc_heap->lenv_slab, "lenv");
-
-    #undef ADD_SLAB_TIER
-
-    // Add malloc (no object tracking, just bytes)
+    // Add heap2 tier (page-based allocation)
     if (tier_idx < 8) {
       valk_heap_tier_snapshot_t *tier = &snapshot->gc_heap.tiers[tier_idx];
-      tier->name = "malloc";
-      tier->bytes_used = gc_heap->allocated_bytes;
+      tier->name = "heap2";
+      tier->bytes_used = valk_gc_heap2_used_bytes(gc_heap);
       tier->bytes_total = gc_heap->hard_limit;
       tier->bytes_peak = gc_heap->stats.peak_usage;
       tier->objects_used = 0;

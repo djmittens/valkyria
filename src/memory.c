@@ -928,27 +928,7 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
           new_size, slabSize);
       return ptr;
     case VALK_ALLOC_GC_HEAP: {
-      // For GC heap, implement realloc as alloc + copy + free
-      if (ptr == NULL) {
-        return valk_mem_allocator_alloc(self, new_size);
-      }
-
-      // Get the old size from the header
-      valk_gc_header_t* header = ((valk_gc_header_t*)ptr) - 1;
-      size_t old_size = header->size;
-
-      // If new size fits in old allocation, just return the same pointer
-      if (new_size <= old_size) {
-        return ptr;
-      }
-
-      // Allocate new memory, copy, and free old
-      void* new_ptr = valk_mem_allocator_alloc(self, new_size);
-      if (new_ptr && ptr) {
-        memcpy(new_ptr, ptr, old_size < new_size ? old_size : new_size);
-      }
-      valk_mem_allocator_free(self, ptr);
-      return new_ptr;
+      return valk_gc_heap2_realloc((valk_gc_heap2_t *)self, ptr, new_size);
     }
     case VALK_ALLOC_MALLOC:
       return realloc(ptr, new_size);

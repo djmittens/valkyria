@@ -3277,7 +3277,7 @@ static valk_lval_t* valk_builtin_heap_usage(valk_lenv_t* e, valk_lval_t* a) {
   if (heap == NULL) {
     return valk_lval_num(0);
   }
-  return valk_lval_num((long)heap->allocated_bytes);
+  return valk_lval_num((long)valk_gc_heap2_used_bytes(heap));
 }
 
 // (gc-stats) - Print GC statistics to stderr
@@ -3329,10 +3329,10 @@ static valk_lval_t* valk_builtin_set_heap_hard_limit(valk_lenv_t* e,
   size_t new_limit = (size_t)valk_lval_list_nth(a, 0)->num;
   size_t old_limit = heap->hard_limit;
 
-  if (new_limit < heap->allocated_bytes) {
+  if (new_limit < valk_gc_heap2_used_bytes(heap)) {
     return valk_lval_err(
         "Cannot set hard limit below current usage (%zu < %zu)", new_limit,
-        heap->allocated_bytes);
+        valk_gc_heap2_used_bytes(heap));
   }
 
   valk_gc_set_hard_limit(heap, new_limit);
