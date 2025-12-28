@@ -119,7 +119,7 @@ typedef enum __aio_http_srv_e {
 
 typedef struct valk_async_handle_uv_data {
   union {
-    uv_timer_t timer;
+    alignas(16) uv_timer_t timer;
   } uv;
   valk_async_handle_t *handle;
 } valk_async_handle_uv_data_t;
@@ -366,7 +366,7 @@ typedef struct {
 } http_body_source_t;
 
 typedef struct {
-  uv_timer_t timer;
+  alignas(16) uv_timer_t timer;
   valk_lval_t *continuation;
   nghttp2_session *session;
   i32 stream_id;
@@ -376,7 +376,7 @@ typedef struct {
 } valk_delay_timer_t;
 
 typedef struct {
-  uv_timer_t timer;
+  alignas(16) uv_timer_t timer;
   valk_lval_t *callback;
   valk_lenv_t *env;
 } valk_schedule_timer_t;

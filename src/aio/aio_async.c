@@ -25,6 +25,12 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
   if (!ctx) return;
   valk_http_async_ctx_t *http = (valk_http_async_ctx_t*)ctx;
 
+  // Clear is_closed callback since we're about to free the ctx it points to
+  if (handle->is_closed_ctx == ctx) {
+    handle->is_closed = NULL;
+    handle->is_closed_ctx = NULL;
+  }
+
   valk_aio_handle_t *conn = http->conn;
   valk_mem_arena_t *arena = http->arena;
   nghttp2_session *session = (nghttp2_session*)http->session;

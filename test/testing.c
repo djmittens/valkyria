@@ -38,9 +38,11 @@
 #define VALK_TEST_FORK_COMPILED 1
 #endif
 
+#if VALK_TEST_FORK_COMPILED
 static bool valk_test_fork_disabled(void) {
-  return getenv("VALK_TEST_NO_FORK") != NULL;
+  return getenv("VALK_TEST_NO_FORK") != nullptr;
 }
+#endif
 
 const char *DOT_FILL =
     ".........................................................................."

@@ -33,7 +33,7 @@ if(COVERAGE)
   set(COVERAGE_FLAGS "-fprofile-arcs -ftest-coverage -O0 -g")
 endif()
 
-set(EXTRA_FLAGS "-fcolor-diagnostics -Wall -Wextra -Wpedantic -Wno-gnu-zero-variadic-macro-arguments -Wno-gnu-statement-expression-from-macro-expansion")
+set(EXTRA_FLAGS "-fcolor-diagnostics -Wall -Wextra -Wpedantic -Werror -Wno-gnu-zero-variadic-macro-arguments -Wno-gnu-statement-expression-from-macro-expansion")
 
 
 # Apply to C and C++ compile flags

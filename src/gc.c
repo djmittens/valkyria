@@ -2633,18 +2633,18 @@ sz valk_gc_sweep_page2(valk_gc_page2_t *page) {
   u8 *mark_bitmap = valk_gc_page2_mark_bitmap(page);
   
   u64 num_words = (slots + 63) / 64;
-  u64 *alloc_words = (u64 *)alloc_bitmap;
-  u64 *mark_words = (u64 *)mark_bitmap;
   
   for (u64 w = 0; w < num_words; w++) {
-    u64 alloc = alloc_words[w];
-    u64 mark = mark_words[w];
+    u64 alloc, mark;
+    memcpy(&alloc, alloc_bitmap + w * 8, sizeof(u64));
+    memcpy(&mark, mark_bitmap + w * 8, sizeof(u64));
     
     u64 garbage = alloc & ~mark;
     
     if (garbage != 0) {
       freed += (sz)__builtin_popcountll(garbage);
-      alloc_words[w] = alloc & mark;
+      u64 new_alloc = alloc & mark;
+      memcpy(alloc_bitmap + w * 8, &new_alloc, sizeof(u64));
       
       u64 temp = garbage;
       while (temp) {
@@ -2666,7 +2666,8 @@ sz valk_gc_sweep_page2(valk_gc_page2_t *page) {
       }
     }
     
-    mark_words[w] = 0;
+    u64 zero = 0;
+    memcpy(mark_bitmap + w * 8, &zero, sizeof(u64));
   }
   
   atomic_fetch_sub(&page->num_allocated, (u32)freed);

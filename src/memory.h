@@ -217,11 +217,16 @@ typedef struct {  // extends valk_mem_allocator_t;
   u8 *usage_bitmap;
 #endif
 
+  u8 _pad[8];  // Ensure heap[] starts at 16-byte aligned offset
+
   // Memory layout
   // [sizeof(u64) * numSlabs | freeList]
   // [sizeof(valk_slab_t + (u64 * numSlabs)) * capacity | slabs]
   u8 heap[];
 } valk_slab_t;
+
+_Static_assert(offsetof(valk_slab_t, heap) % 16 == 0,
+               "heap must be 16-byte aligned for AIO handle storage");
 
 valk_slab_t *valk_slab_new(sz itemSize, sz numItems);
 void valk_slab_init(valk_slab_t *self, sz itemSize, sz numItems);

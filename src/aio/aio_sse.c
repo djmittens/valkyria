@@ -215,14 +215,20 @@ int valk_sse_send_event(valk_sse_stream_t *stream, const char *event_type,
   // Format SSE event into buffer
   char *buf = (char *)(event + 1);
   char *p = buf;
+  sz remaining = event_size + 1;
 
   if (id > 0) {
-    p += sprintf(p, "id: %llu\n", (unsigned long long)id);
+    int n = snprintf(p, remaining, "id: %llu\n", (unsigned long long)id);
+    p += n;
+    remaining -= (sz)n;
   }
   if (event_type) {
-    p += sprintf(p, "event: %s\n", event_type);
+    int n = snprintf(p, remaining, "event: %s\n", event_type);
+    p += n;
+    remaining -= (sz)n;
   }
-  p += sprintf(p, "data: ");
+  memcpy(p, "data: ", 6);
+  p += 6;
   memcpy(p, data, len);
   p += len;
   *p++ = '\n';

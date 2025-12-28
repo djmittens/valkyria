@@ -73,7 +73,7 @@ valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, u64 delay_ms,
     return valk_lval_err("aio/delay can only be used within an HTTP request handler");
   }
 
-  valk_delay_timer_t *timer_data = malloc(sizeof(valk_delay_timer_t));
+  valk_delay_timer_t *timer_data = aligned_alloc(alignof(valk_delay_timer_t), sizeof(valk_delay_timer_t));
   if (!timer_data) {
     return valk_lval_err("Failed to allocate timer");
   }
@@ -121,7 +121,7 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
     return valk_lval_err("aio/schedule: invalid AIO system");
   }
 
-  valk_schedule_timer_t *timer_data = malloc(sizeof(valk_schedule_timer_t));
+  valk_schedule_timer_t *timer_data = aligned_alloc(alignof(valk_schedule_timer_t), sizeof(valk_schedule_timer_t));
   if (!timer_data) {
     return valk_lval_err("Failed to allocate timer");
   }
@@ -212,7 +212,7 @@ static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
 
   valk_async_handle_t *async_handle = valk_async_handle_new(loop, e);
 
-  valk_async_handle_uv_data_t *timer_data = malloc(sizeof(valk_async_handle_uv_data_t));
+  valk_async_handle_uv_data_t *timer_data = aligned_alloc(alignof(valk_async_handle_uv_data_t), sizeof(valk_async_handle_uv_data_t));
   timer_data->handle = async_handle;
   timer_data->uv.timer.data = timer_data;
 
