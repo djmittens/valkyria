@@ -141,4 +141,7 @@ valk_sse_manager_t *valk_sse_get_manager(void);
 // Lisp builtins registration
 void valk_register_sse_builtins(struct valk_lenv_t *env);
 
+// HTTP request builtins registration
+void valk_register_http_request_builtins(struct valk_lenv_t *env);
+
 #endif // VALK_AIO_SSE_H

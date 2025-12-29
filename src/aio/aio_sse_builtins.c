@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-#include "aio.h"
+#include "aio_internal.h"
 #include "common.h"
 #include "log.h"
 #include "memory.h"
@@ -12,14 +12,7 @@
 // External Declarations
 // ============================================================================
 
-// Forward declaration from aio_uv.c
-typedef struct {
-  nghttp2_session *session;
-  i32 stream_id;
-  valk_aio_handle_t *conn;
-  void *req;  // valk_http2_server_request_t*
-  valk_lenv_t *env;
-} valk_http_request_ctx_t;
+
 
 
 
@@ -57,24 +50,23 @@ static valk_lval_t *valk_builtin_sse_open(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
   if (valk_lval_list_count(a) != 1) {
-    return valk_lval_err("sse/open: expected 1 argument (req-ctx), got %llu",
+    return valk_lval_err("sse/open: expected 1 argument (request), got %llu",
                          (unsigned long long)valk_lval_list_count(a));
   }
 
-  valk_lval_t *ctx_ref = valk_lval_list_nth(a, 0);
-  if (LVAL_TYPE(ctx_ref) != LVAL_REF || strcmp(ctx_ref->ref.type, "http_req_ctx") != 0) {
-    return valk_lval_err("sse/open: argument must be http request context");
+  valk_lval_t *req_ref = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(req_ref) != LVAL_REF || strcmp(req_ref->ref.type, "http_request") != 0) {
+    return valk_lval_err("sse/open: argument must be http request");
   }
 
-  valk_http_request_ctx_t *ctx = (valk_http_request_ctx_t *)ctx_ref->ref.ptr;
+  valk_http2_server_request_t *req = (valk_http2_server_request_t *)req_ref->ref.ptr;
 
-  // Extract HTTP/2 context
-  nghttp2_session *session = ctx->session;
-  i32 stream_id = ctx->stream_id;
-  valk_aio_handle_t *conn = ctx->conn;
+  valk_aio_handle_t *conn = req->conn;
+  i32 stream_id = req->stream_id;
+  nghttp2_session *session = conn->http.session;
 
   if (!session || !conn) {
-    return valk_lval_err("sse/open: invalid HTTP request context");
+    return valk_lval_err("sse/open: invalid HTTP request");
   }
 
   // Create SSE stream with data provider

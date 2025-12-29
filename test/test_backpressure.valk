@@ -33,7 +33,7 @@
 ; Handler with small delay to keep buffers in use longer on server
 (def {handler}
   (\ {req} {
-    (aio/then (aio/sleep aio 50) (\ {_} {{:status "200" :body "OK"}}))
+    (aio/then (aio/sleep server-aio 50) (\ {_} {{:status "200" :body "OK"}}))
   }))
 
 (println "")

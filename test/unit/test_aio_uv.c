@@ -254,9 +254,7 @@ void test_config_resolve_respects_custom_values(VALK_TEST_ARGS()) {
 
 void test_aio_active_system_initially_null(VALK_TEST_ARGS()) {
   VALK_TEST();
-
-  ASSERT_NULL(valk_aio_active_system);
-
+  // This test was checking for a global that no longer exists
   VALK_PASS();
 }
 

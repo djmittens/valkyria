@@ -193,14 +193,6 @@ typedef struct valk_http2_server_request {
 #endif
 } valk_http2_server_request_t;
 
-typedef struct valk_http_request_ctx {
-  nghttp2_session *session;
-  i32 stream_id;
-  valk_aio_handle_t *conn;
-  valk_http2_server_request_t *req;
-  valk_lenv_t *env;
-} valk_http_request_ctx_t;
-
 typedef struct {
   valk_lval_t* request;
   valk_lval_t* handler_fn;
@@ -313,6 +305,8 @@ struct valk_aio_system {
   bool shuttingDown;
   bool cleanedUp;
 
+  valk_gc_malloc_heap_t *loop_gc_heap;
+
   uv_timer_t maintenance_timer;
 
   valk_http_queue_t http_queue;
@@ -320,8 +314,6 @@ struct valk_aio_system {
   valk_pending_stream_queue_t pending_streams;
   valk_backpressure_list_t backpressure;
   valk_conn_admission_ctx_t admission;
-
-  valk_http_request_ctx_t *current_request_ctx;
 
   char (*port_strs)[8];
   u64 port_str_idx;
@@ -366,6 +358,7 @@ struct valk_aio_http2_client {
 typedef struct valk_aio_task_new {
   void *arg;
   valk_promise promise;
+  valk_async_handle_t *handle;
   void (*callback)(valk_aio_system_t *, struct valk_aio_task_new *);
   valk_mem_allocator_t *allocator;
 } valk_aio_task_new;
@@ -384,16 +377,6 @@ typedef struct {
 
 typedef struct {
   alignas(16) uv_timer_t timer;
-  valk_lval_t *continuation;
-  nghttp2_session *session;
-  i32 stream_id;
-  valk_aio_handle_t *conn;
-  valk_mem_arena_t *stream_arena;
-  valk_lenv_t *env;
-} valk_delay_timer_t;
-
-typedef struct {
-  alignas(16) uv_timer_t timer;
   valk_lval_t *callback;
   valk_lenv_t *env;
 } valk_schedule_timer_t;
@@ -404,7 +387,6 @@ typedef struct {
   int closing;
 } __drain_diag_t;
 
-extern valk_aio_system_t *valk_aio_active_system;
 extern u64 g_async_handle_id;
 
 #ifdef VALK_METRICS_ENABLED

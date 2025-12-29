@@ -6,9 +6,11 @@
 #include <netinet/in.h>
 
 #include "aio/aio.h"
+#include "aio/aio_async.h"
 #include "aio/aio_sse.h"
 #include "common.h"
 #include "memory.h"
+#include "parser.h"
 #include "testing.h"
 
 typedef struct {
@@ -267,18 +269,16 @@ static void test_sse_registry_init_shutdown(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *handle = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
-  valk_arc_box *server = valk_future_await(fserv);
-  ASSERT_EQ(server->type, VALK_SUC);
+  valk_lval_t *result = valk_async_handle_await(handle);
+  ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  (void)valk_aio_http2_server_get_port(server->item);
+  valk_aio_http_server *srv = result->ref.ptr;
+  (void)valk_aio_http2_server_get_port(srv);
 
   valk_sse_stream_registry_t *registry = valk_aio_get_sse_registry(sys);
   ASSERT_NOT_NULL(registry);
-
-  valk_arc_release(server);
-  valk_arc_release(fserv);
 
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);

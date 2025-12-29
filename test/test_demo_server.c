@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "aio/aio.h"
+#include "aio/aio_async.h"
 #include "collections.h"
 #include "common.h"
 #include "concurrency.h"
@@ -180,12 +181,13 @@ void test_basic_server_c_handler(VALK_TEST_ARGS()) {
   // Use demo handler
   valk_http2_handler_t *handler = get_noop_handler();
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *handle = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
-  valk_arc_box *server = valk_future_await(fserv);
-  VALK_TEST_ASSERT(server->type == VALK_SUC, "Server should start successfully");
-  int port = valk_aio_http2_server_get_port(server->item);
+  valk_lval_t *result = valk_async_handle_await(handle);
+  VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR, "Server should start successfully");
+  valk_aio_http_server *srv = result->ref.ptr;
+  int port = valk_aio_http2_server_get_port(srv);
 
   // Send request
   test_response_t resp = send_request(sys, port, "GET", "/");
@@ -195,8 +197,6 @@ void test_basic_server_c_handler(VALK_TEST_ARGS()) {
 
   // Cleanup
   free_response(&resp);
-  valk_arc_release(server);
-  valk_arc_release(fserv);
   valk_aio_stop(sys);
 
   VALK_PASS();
@@ -213,12 +213,13 @@ void test_multiple_requests(VALK_TEST_ARGS()) {
 
   valk_http2_handler_t *handler = get_noop_handler();
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *handle = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
-  valk_arc_box *server = valk_future_await(fserv);
-  VALK_TEST_ASSERT(server->type == VALK_SUC, "Server should start successfully");
-  int port = valk_aio_http2_server_get_port(server->item);
+  valk_lval_t *result = valk_async_handle_await(handle);
+  VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR, "Server should start successfully");
+  valk_aio_http_server *srv = result->ref.ptr;
+  int port = valk_aio_http2_server_get_port(srv);
 
   // Send 5 requests
   for (int i = 0; i < 5; i++) {
@@ -229,8 +230,6 @@ void test_multiple_requests(VALK_TEST_ARGS()) {
     free_response(&resp);
   }
 
-  valk_arc_release(server);
-  valk_arc_release(fserv);
   valk_aio_stop(sys);
 
   VALK_PASS();
@@ -258,19 +257,18 @@ void test_custom_config(VALK_TEST_ARGS()) {
 
   valk_http2_handler_t *handler = get_noop_handler();
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *handle = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
-  valk_arc_box *server = valk_future_await(fserv);
-  VALK_TEST_ASSERT(server->type == VALK_SUC, "Server should start with custom config");
-  int port = valk_aio_http2_server_get_port(server->item);
+  valk_lval_t *result = valk_async_handle_await(handle);
+  VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR, "Server should start with custom config");
+  valk_aio_http_server *srv = result->ref.ptr;
+  int port = valk_aio_http2_server_get_port(srv);
 
   test_response_t resp = send_request(sys, port, "GET", "/");
   VALK_TEST_ASSERT(resp.success, "Request should succeed with custom config");
 
   free_response(&resp);
-  valk_arc_release(server);
-  valk_arc_release(fserv);
   valk_aio_stop(sys);
 
   VALK_PASS();
@@ -288,11 +286,12 @@ void test_aio_metrics(VALK_TEST_ARGS()) {
 
   valk_http2_handler_t *handler = get_noop_handler();
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *handle = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
-  valk_arc_box *server = valk_future_await(fserv);
-  int port = valk_aio_http2_server_get_port(server->item);
+  valk_lval_t *result = valk_async_handle_await(handle);
+  valk_aio_http_server *srv = result->ref.ptr;
+  int port = valk_aio_http2_server_get_port(srv);
 
   // Get metrics before any requests
   valk_aio_metrics_t *metrics = valk_aio_get_metrics(sys);
@@ -319,8 +318,6 @@ void test_aio_metrics(VALK_TEST_ARGS()) {
                    "connections_total should increase: %lu -> %lu",
                    initial_connections, final_connections);
 
-  valk_arc_release(server);
-  valk_arc_release(fserv);
   valk_aio_stop(sys);
 
   VALK_PASS();
@@ -333,10 +330,11 @@ void test_system_stats(VALK_TEST_ARGS()) {
 
   valk_http2_handler_t *handler = get_noop_handler();
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *handle = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
-  valk_arc_box *server = valk_future_await(fserv);
+  valk_lval_t *result = valk_async_handle_await(handle);
+  UNUSED(result);
 
   // Get system stats
   valk_aio_system_stats_t *stats = valk_aio_get_system_stats(sys);
@@ -350,8 +348,6 @@ void test_system_stats(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(stats->arenas_total > 0,
                    "Should have arenas configured: %lu", stats->arenas_total);
 
-  valk_arc_release(server);
-  valk_arc_release(fserv);
   valk_aio_stop(sys);
 
   VALK_PASS();
@@ -364,11 +360,12 @@ void test_metrics_json_rendering(VALK_TEST_ARGS()) {
 
   valk_http2_handler_t *handler = get_noop_handler();
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *handle = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
-  valk_arc_box *server = valk_future_await(fserv);
-  int port = valk_aio_http2_server_get_port(server->item);
+  valk_lval_t *result = valk_async_handle_await(handle);
+  valk_aio_http_server *srv = result->ref.ptr;
+  int port = valk_aio_http2_server_get_port(srv);
 
   // Send a request to generate metrics
   test_response_t resp = send_request(sys, port, "GET", "/");
@@ -394,8 +391,6 @@ void test_metrics_json_rendering(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(strstr(json, "\"uptime_seconds\"") != NULL,
                    "JSON should contain uptime_seconds");
 
-  valk_arc_release(server);
-  valk_arc_release(fserv);
   valk_aio_stop(sys);
 
   VALK_PASS();
@@ -408,11 +403,12 @@ void test_metrics_prometheus_rendering(VALK_TEST_ARGS()) {
 
   valk_http2_handler_t *handler = get_noop_handler();
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *handle = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
-  valk_arc_box *server = valk_future_await(fserv);
-  int port = valk_aio_http2_server_get_port(server->item);
+  valk_lval_t *result = valk_async_handle_await(handle);
+  valk_aio_http_server *srv = result->ref.ptr;
+  int port = valk_aio_http2_server_get_port(srv);
 
   // Send a request
   test_response_t resp = send_request(sys, port, "GET", "/");
@@ -431,8 +427,6 @@ void test_metrics_prometheus_rendering(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(strstr(prom, "valk_aio_") != NULL,
                    "Should contain valk_aio_ prefixed metrics");
 
-  valk_arc_release(server);
-  valk_arc_release(fserv);
   valk_aio_stop(sys);
 
   VALK_PASS();
@@ -577,12 +571,13 @@ void test_connection_states(VALK_TEST_ARGS()) {
 
   valk_aio_system_t *sys = start_demo_server();
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *handle = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
 
-  valk_arc_box *server = valk_future_await(fserv);
-  VALK_TEST_ASSERT(server->type == VALK_SUC, "Server should start");
-  int port = valk_aio_http2_server_get_port(server->item);
+  valk_lval_t *result = valk_async_handle_await(handle);
+  VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR, "Server should start");
+  valk_aio_http_server *srv = result->ref.ptr;
+  int port = valk_aio_http2_server_get_port(srv);
 
   // Initial state
   VALK_TEST_ASSERT(__atomic_load_n(&state.connectedCount, __ATOMIC_ACQUIRE) == 0,
@@ -597,8 +592,6 @@ void test_connection_states(VALK_TEST_ARGS()) {
   size_t connected = __atomic_load_n(&state.connectedCount, __ATOMIC_ACQUIRE);
   VALK_TEST_ASSERT(connected >= 1, "Should have at least 1 connection: %zu", connected);
 
-  valk_arc_release(server);
-  valk_arc_release(fserv);
   valk_aio_stop(sys);
 
   VALK_PASS();
@@ -616,19 +609,21 @@ void test_multiple_servers(VALK_TEST_ARGS()) {
   valk_http2_handler_t *handler = get_noop_handler();
 
   // Start two servers with OS-assigned ports
-  valk_future *fserv1 = valk_aio_http2_listen(
+  valk_async_handle_t *handle1 = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
-  valk_future *fserv2 = valk_aio_http2_listen(
+  valk_async_handle_t *handle2 = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
 
-  valk_arc_box *server1 = valk_future_await(fserv1);
-  valk_arc_box *server2 = valk_future_await(fserv2);
+  valk_lval_t *result1 = valk_async_handle_await(handle1);
+  valk_lval_t *result2 = valk_async_handle_await(handle2);
 
-  VALK_TEST_ASSERT(server1->type == VALK_SUC, "Server 1 should start");
-  VALK_TEST_ASSERT(server2->type == VALK_SUC, "Server 2 should start");
-  
-  int port1 = valk_aio_http2_server_get_port(server1->item);
-  int port2 = valk_aio_http2_server_get_port(server2->item);
+  VALK_TEST_ASSERT(LVAL_TYPE(result1) != LVAL_ERR, "Server 1 should start");
+  VALK_TEST_ASSERT(LVAL_TYPE(result2) != LVAL_ERR, "Server 2 should start");
+
+  valk_aio_http_server *srv1 = result1->ref.ptr;
+  valk_aio_http_server *srv2 = result2->ref.ptr;
+  int port1 = valk_aio_http2_server_get_port(srv1);
+  int port2 = valk_aio_http2_server_get_port(srv2);
   VALK_TEST_ASSERT(port1 != port2, "Ports should be different");
 
   // Request to both servers
@@ -640,10 +635,6 @@ void test_multiple_servers(VALK_TEST_ARGS()) {
 
   free_response(&resp1);
   free_response(&resp2);
-  valk_arc_release(server1);
-  valk_arc_release(server2);
-  valk_arc_release(fserv1);
-  valk_arc_release(fserv2);
   valk_aio_stop(sys);
 
   VALK_PASS();

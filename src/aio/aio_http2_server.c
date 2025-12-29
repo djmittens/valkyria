@@ -372,10 +372,16 @@ static void __http_shutdown_cb(valk_aio_handle_t *hndl) {
   srv->state = VALK_SRV_CLOSED;
 }
 
+extern valk_lval_t *valk_lval_err(const char *fmt, ...);
+extern valk_lval_t *valk_lval_ref(const char *type, void *ptr, void (*free)(void *));
+extern void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result);
+extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
+
 static void __http_listen_cb(valk_aio_system_t *sys,
                              struct valk_aio_task_new *task) {
   int r;
   valk_arc_box *box = task->arg;
+  valk_async_handle_t *handle = task->handle;
 
   valk_aio_http_server *srv = box->item;
   srv->listener = (void *)valk_slab_aquire(sys->handleSlab)->data;
@@ -396,9 +402,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
   r = __vtable_bind(srv->listener, srv->interface, srv->port);
   if (r) {
     VALK_ERROR("Bind error: %d", r);
-    valk_arc_box *err = valk_arc_box_err("Error on Bind");
-    valk_promise_respond(&task->promise, err);
-    valk_arc_release(err);
+    valk_async_handle_fail(handle, valk_lval_err("Error on Bind"));
     valk_arc_release(box);
     valk_slab_release_ptr(sys->handleSlab, srv->listener);
     return;
@@ -426,9 +430,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
   r = __vtable_listen(srv->listener, 128);
   if (r) {
     VALK_ERROR("Listen error: %d", r);
-    valk_arc_box *err = valk_arc_box_err("Error on Listening");
-    valk_promise_respond(&task->promise, err);
-    valk_arc_release(err);
+    valk_async_handle_fail(handle, valk_lval_err("Error on Listening"));
     valk_arc_release(box);
     valk_slab_release_ptr(sys->handleSlab, srv->listener);
     return;
@@ -436,9 +438,9 @@ static void __http_listen_cb(valk_aio_system_t *sys,
 
   VALK_INFO("Listening on %s:%d", srv->interface, srv->port);
 
-  valk_promise_respond(&task->promise, box);
+  valk_lval_t *server_ref = valk_lval_ref("http_server", srv, NULL);
+  valk_async_handle_complete(handle, server_ref);
   valk_dll_insert_after(&sys->liveHandles, srv->listener);
-  valk_arc_release(box);
 }
 
 static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
@@ -487,7 +489,9 @@ static void __valk_aio_http2_server_free(valk_arc_box *box) {
   valk_mem_allocator_free(box->allocator, box);
 }
 
-valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
+extern valk_async_handle_t *valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env);
+
+valk_async_handle_t *valk_aio_http2_listen(valk_aio_system_t *sys,
                                    const char *interface, const int port,
                                    const char *keyfile, const char *certfile,
                                    valk_http2_handler_t *handler,
@@ -496,14 +500,14 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
                                             handler, lisp_handler, NULL);
 }
 
-valk_future *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
+valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
                                    const char *interface, const int port,
                                    const char *keyfile, const char *certfile,
                                    valk_http2_handler_t *handler,
                                    void *lisp_handler,
                                    valk_http_server_config_t *config) {
   valk_arc_box *box = (valk_arc_box *)valk_slab_aquire(sys->httpServers)->data;
-  valk_future *res = valk_future_new();
+  valk_async_handle_t *handle = valk_async_handle_new(sys, NULL);
 
   valk_aio_http_server *srv;
   {
@@ -540,13 +544,9 @@ valk_future *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
     valk_err_e ssl_err = valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
     if (ssl_err != VALK_ERR_SUCCESS) {
       VALK_ERROR("Failed to initialize SSL context (key=%s, cert=%s)", keyfile, certfile);
-      valk_arc_box *err = valk_arc_box_err("SSL initialization failed");
-      valk_promise p = {.item = res};
-      valk_arc_retain(res);
-      valk_promise_respond(&p, err);
-      valk_arc_release(err);
+      valk_async_handle_fail(handle, valk_lval_err("SSL initialization failed"));
       valk_arc_release(box);
-      return res;
+      return handle;
     }
     SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
   }
@@ -557,24 +557,19 @@ valk_future *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
   }
   if (!task) {
     VALK_ERROR("Handle slab exhausted in http2_listen");
-    valk_arc_box *err = valk_arc_box_err("Handle slab exhausted");
-    valk_promise p = {.item = res};
-    valk_arc_retain(res);
-    valk_promise_respond(&p, err);
-    valk_arc_release(err);
+    valk_async_handle_fail(handle, valk_lval_err("Handle slab exhausted"));
     valk_arc_release(box);
-    return res;
+    return handle;
   }
   task->allocator = (valk_mem_allocator_t *)sys->handleSlab;
 
   task->arg = box;
-  task->promise.item = res;
-  valk_arc_retain(res);
+  task->handle = handle;
   task->callback = __http_listen_cb;
 
   valk_uv_exec_task(sys, task);
 
-  return res;
+  return handle;
 }
 
 void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_fn) {

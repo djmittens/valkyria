@@ -121,6 +121,7 @@ set(VALKYRIA_SOURCES
   src/aio/io/io_timer_ops_test.c
   src/aio/http2/http2_ops_nghttp2.c
   src/aio/http2/http2_ops_test.c
+  src/aio/aio_http_builtins.c
 )
 
 # Conditionally add metrics sources (V2 only)

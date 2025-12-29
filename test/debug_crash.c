@@ -4,33 +4,33 @@
 #include <string.h>
 
 #include "aio/aio.h"
+#include "aio/aio_async.h"
 #include "collections.h"
 #include "common.h"
 #include "concurrency.h"
 #include "memory.h"
-
-#define VALK_HTTP_MOTD "Valkyria HTTP/2 Server"
+#include "parser.h"
 
 typedef struct {
   int connectedCount;
   int disconnectedCount;
 } valk_srv_state_t;
 
-static void cb_onConnect(void *arg, valk_aio_http_conn *conn) {
+static void cb_onConnect(void *arg, valk_aio_handle_t *conn) {
   UNUSED(conn);
   valk_srv_state_t *handler = arg;
   __atomic_fetch_add(&handler->connectedCount, 1, __ATOMIC_RELAXED);
   printf("[DEBUG] Client connected (count=%d)\n", handler->connectedCount);
 }
 
-static void cb_onDisconnect(void *arg, valk_aio_http_conn *conn) {
+static void cb_onDisconnect(void *arg, valk_aio_handle_t *conn) {
   UNUSED(conn);
   valk_srv_state_t *handler = arg;
   __atomic_fetch_add(&handler->disconnectedCount, 1, __ATOMIC_RELAXED);
   printf("[DEBUG] Client disconnected (count=%d)\n", handler->disconnectedCount);
 }
 
-static void cb_onHeader(void *arg, valk_aio_http_conn *conn, u64 stream,
+static void cb_onHeader(void *arg, valk_aio_handle_t *conn, u64 stream,
                         char *name, char *value) {
   UNUSED(arg);
   UNUSED(conn);
@@ -39,7 +39,7 @@ static void cb_onHeader(void *arg, valk_aio_http_conn *conn, u64 stream,
   UNUSED(value);
 }
 
-static void cb_onBody(void *arg, valk_aio_http_conn *conn, u64 stream,
+static void cb_onBody(void *arg, valk_aio_handle_t *conn, u64 stream,
                       u8 flags, valk_buffer_t *buf) {
   UNUSED(arg);
   UNUSED(conn);
@@ -81,23 +81,23 @@ int main(void) {
   }
 
   printf("[DEBUG] Starting server on port 6969...\n");
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *hserv = valk_aio_http2_listen(
       sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt", &handler, NULL);
 
-  valk_arc_box *server = valk_future_await(fserv);
-  if (server->type != VALK_SUC) {
-    fprintf(stderr, "Failed to start server: %s\n", (char *)server->item);
+  valk_lval_t *server_result = valk_async_handle_await(hserv);
+  if (LVAL_TYPE(server_result) == LVAL_ERR) {
+    fprintf(stderr, "Failed to start server: %s\n", server_result->str);
     return 1;
   }
   printf("[DEBUG] Server started\n");
 
   printf("[DEBUG] Connecting client...\n");
   valk_future *fut = valk_aio_http2_connect(sys, "127.0.0.1", 6969, "");
-  printf("[DEBUG] Arc count of fut: %ld\n", fut->refcount);
+  printf("[DEBUG] Arc count of fut: %llu\n", (unsigned long long)fut->refcount);
   valk_arc_box *clientBox = valk_future_await(fut);
 
-  printf("[DEBUG] Arc count of fut after await: %ld\n", fut->refcount);
-  printf("[DEBUG] Arc count of box: %ld\n", clientBox->refcount);
+  printf("[DEBUG] Arc count of fut after await: %llu\n", (unsigned long long)fut->refcount);
+  printf("[DEBUG] Arc count of box: %llu\n", (unsigned long long)clientBox->refcount);
 
   valk_arc_release(fut);
   if (clientBox->type != VALK_SUC) {
@@ -132,12 +132,6 @@ int main(void) {
   printf("[DEBUG] Releasing resources...\n");
   valk_arc_release(res);
   valk_arc_release(clientBox);
-
-  size_t count = __atomic_load_n(&server->refcount, __ATOMIC_ACQUIRE);
-  printf("[DEBUG] Server refcount: %ld\n", count);
-  valk_arc_release(server);
-
-  valk_arc_release(fserv);
   valk_arc_release(fres);
 
   printf("[DEBUG] Stopping AIO system...\n");

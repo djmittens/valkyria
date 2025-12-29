@@ -438,3 +438,49 @@ valk_lval_t *valk_lval_handle(valk_async_handle_t *handle) {
   res->async.handle = handle;
   return res;
 }
+
+extern valk_lval_t *valk_lval_err(const char *fmt, ...);
+
+valk_lval_t *valk_async_handle_await_timeout(valk_async_handle_t *handle, u32 timeout_ms) {
+  if (!handle) return valk_lval_err("await: null handle");
+  
+  valk_aio_system_t *sys = handle->sys;
+  if (!sys || !sys->eventloop) {
+    while (!valk_async_handle_is_terminal(valk_async_handle_get_status(handle))) {
+      uv_sleep(1);
+    }
+  } else {
+    u64 start = 0;
+    if (timeout_ms > 0) {
+      struct timespec ts;
+      clock_gettime(CLOCK_MONOTONIC, &ts);
+      start = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    }
+    
+    while (!valk_async_handle_is_terminal(valk_async_handle_get_status(handle))) {
+      uv_run(sys->eventloop, UV_RUN_ONCE);
+      
+      if (timeout_ms > 0) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        u64 now = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+        if (now - start > timeout_ms) {
+          return valk_lval_err("await: timeout");
+        }
+      }
+    }
+  }
+  
+  valk_async_status_t status = valk_async_handle_get_status(handle);
+  if (status == VALK_ASYNC_COMPLETED) {
+    return handle->result;
+  } else if (status == VALK_ASYNC_FAILED) {
+    return handle->error ? handle->error : valk_lval_err("async operation failed");
+  } else {
+    return valk_lval_err("async operation cancelled");
+  }
+}
+
+valk_lval_t *valk_async_handle_await(valk_async_handle_t *handle) {
+  return valk_async_handle_await_timeout(handle, 0);
+}

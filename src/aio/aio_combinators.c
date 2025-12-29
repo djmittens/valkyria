@@ -1,10 +1,4 @@
 #include "aio_internal.h"
-#include "aio_http2_session.h"
-
-static void __delay_timer_close_cb(uv_handle_t *handle) {
-  valk_delay_timer_t *timer_data = (valk_delay_timer_t *)handle->data;
-  free(timer_data);
-}
 
 static void __schedule_timer_close_cb(uv_handle_t *handle) {
   free(handle->data);
@@ -12,92 +6,6 @@ static void __schedule_timer_close_cb(uv_handle_t *handle) {
 
 static void __sleep_timer_close_cb(uv_handle_t *handle) {
   UNUSED(handle);
-}
-
-extern void valk_http2_continue_pending_send(valk_aio_handle_t *conn);
-
-static void __delay_timer_cb(uv_timer_t *handle) {
-  valk_delay_timer_t *timer_data = (valk_delay_timer_t *)handle->data;
-
-  valk_aio_handle_t *conn = timer_data->conn;
-  if (!conn || conn->http.state == VALK_CONN_CLOSING ||
-      conn->http.state == VALK_CONN_CLOSED || !conn->http.session) {
-    uv_timer_stop(handle);
-    uv_close((uv_handle_t *)handle, __delay_timer_close_cb);
-    return;
-  }
-
-  if (timer_data->continuation && timer_data->env) {
-    valk_lval_t *response;
-    VALK_WITH_ALLOC((valk_mem_allocator_t*)timer_data->stream_arena) {
-      valk_lval_t *args = valk_lval_nil();
-      response = valk_lval_eval_call(timer_data->env, timer_data->continuation, args);
-    }
-
-    VALK_INFO("aio/delay continuation returned type %d", LVAL_TYPE(response));
-
-    // LCOV_EXCL_START - delay continuation error: requires handler to return error
-    if (LVAL_TYPE(response) == LVAL_ERR) {
-      VALK_WARN("Delay continuation returned error: %s", response->str);
-      VALK_WITH_ALLOC((valk_mem_allocator_t*)timer_data->stream_arena) {
-        valk_lval_t* error_items[] = {
-          valk_lval_sym(":status"), valk_lval_str("500"),
-          valk_lval_sym(":body"), valk_lval_str(response->str)
-        };
-        valk_lval_t* error_resp = valk_lval_qlist(error_items, 4);
-        valk_http2_send_response(timer_data->session, timer_data->stream_id,
-                             error_resp, timer_data->stream_arena);
-      }
-    // LCOV_EXCL_STOP
-    } else {
-      valk_http2_send_response(timer_data->session, timer_data->stream_id,
-                           response, timer_data->stream_arena);
-    }
-
-    valk_http2_continue_pending_send(timer_data->conn);
-  } else {
-    VALK_WARN("No continuation or env for stream %d", timer_data->stream_id);
-  }
-
-  uv_timer_stop(handle);
-  uv_close((uv_handle_t *)handle, __delay_timer_close_cb);
-}
-
-valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, u64 delay_ms,
-                            valk_lval_t* continuation, valk_lenv_t* env) {
-  UNUSED(env);
-  VALK_INFO("aio/delay called with delay_ms=%llu", (unsigned long)delay_ms);
-
-  if (!sys->current_request_ctx) {
-    VALK_WARN("aio/delay called outside request context");
-    return valk_lval_err("aio/delay can only be used within an HTTP request handler");
-  }
-
-  valk_delay_timer_t *timer_data = aligned_alloc(alignof(valk_delay_timer_t), sizeof(valk_delay_timer_t));
-  if (!timer_data) {
-    return valk_lval_err("Failed to allocate timer");
-  }
-
-  valk_lval_t *heap_continuation;
-  VALK_WITH_ALLOC(&valk_malloc_allocator) {
-    heap_continuation = valk_lval_copy(continuation);
-  }
-
-  timer_data->continuation = heap_continuation;
-  timer_data->session = sys->current_request_ctx->session;
-  timer_data->stream_id = sys->current_request_ctx->stream_id;
-  timer_data->conn = sys->current_request_ctx->conn;
-  timer_data->stream_arena = sys->current_request_ctx->req->stream_arena;
-  timer_data->env = sys->current_request_ctx->env;
-  timer_data->timer.data = timer_data;
-
-  uv_loop_t *loop = sys->eventloop;
-  int r = uv_timer_init(loop, &timer_data->timer);
-  VALK_INFO("uv_timer_init returned %d", r);
-  r = uv_timer_start(&timer_data->timer, __delay_timer_cb, (unsigned long long)delay_ms, 0);
-  VALK_INFO("uv_timer_start returned %d for stream %d", r, timer_data->stream_id);
-
-  return valk_lval_sym(":deferred");
 }
 
 static void __schedule_timer_cb(uv_timer_t *handle) {
@@ -547,17 +455,6 @@ static valk_lval_t* valk_builtin_aio_do(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t *chain = aio_do_build_chain(e, stmts);
 
   return valk_lval_eval(e, chain);
-}
-
-valk_http_request_ctx_t* valk_http_get_request_ctx(valk_aio_system_t *sys) {
-  if (!sys) return NULL;
-  return sys->current_request_ctx;
-}
-
-void valk_http_set_request_ctx(valk_aio_system_t *sys, valk_http_request_ctx_t* ctx) {
-  if (sys) {
-    sys->current_request_ctx = ctx;
-  }
 }
 
 extern valk_lval_t* valk_async_status_to_sym(valk_async_status_t status);

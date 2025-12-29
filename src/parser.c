@@ -3526,6 +3526,13 @@ static valk_lval_t* valk_builtin_list_p(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_num(t == LVAL_CONS || t == LVAL_NIL || t == LVAL_QEXPR ? 1 : 0);
 }
 
+static valk_lval_t* valk_builtin_ref_p(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  return valk_lval_num(LVAL_TYPE(v) == LVAL_REF ? 1 : 0);
+}
+
 static void __valk_http2_request_release(void* arg) {
   valk_http2_request_t* req = (valk_http2_request_t*)arg;
   // The request and all of its allocations live inside this arena buffer.
@@ -4233,26 +4240,7 @@ static valk_lval_t* valk_builtin_http_client_metrics_prometheus(valk_lenv_t* e, 
 #endif
 }
 
-// aio/delay: (aio/delay sys ms continuation) -> :deferred
-// Schedules continuation to be called after ms milliseconds
-// Must be called within an HTTP request handler
-// The continuation receives no arguments and should return a response qexpr
-static valk_lval_t* valk_builtin_aio_delay(valk_lenv_t* e, valk_lval_t* a) {
-  LVAL_ASSERT_COUNT_EQ(a, a, 3);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);   // aio system
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);   // delay ms
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_FUN);   // continuation
 
-  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "First argument must be aio_system");
-
-  valk_aio_system_t* sys = aio_ref->ref.ptr;
-  u64 delay_ms = (u64)valk_lval_list_nth(a, 1)->num;
-  valk_lval_t* continuation = valk_lval_list_nth(a, 2);
-
-  return valk_aio_delay(sys, delay_ms, continuation, e);
-}
 
 // ============================================================================
 // VM METRICS BUILTINS (GC, Interpreter, Event Loop)
@@ -4439,8 +4427,8 @@ static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e,
     heap_handler = valk_lval_copy(handler_fn);
   }
 
-  // Start server with config
-  valk_future* fut =
+  // Start server with config - returns async handle that resolves to server ref
+  valk_async_handle_t* handle =
       valk_aio_http2_listen_with_config(sys,
                             "0.0.0.0",  // Listen on all interfaces
                             port, "build/server.key", "build/server.crt",
@@ -4449,10 +4437,16 @@ static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e,
                             &config       // Server config
       );
 
-  (void)fut;  // Future unused - server runs in background
+  return valk_lval_handle(handle);
+}
 
-  // Return nil (server runs in background via event loop)
-  return valk_lval_nil();
+static valk_lval_t* valk_builtin_http2_server_port(valk_lenv_t* e,
+                                                   valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+  valk_aio_http_server* srv = valk_lval_list_nth(a, 0)->ref.ptr;
+  return valk_lval_num(valk_aio_http2_server_get_port(srv));
 }
 
 // http2/server-handle: (server-ref handler-fn) -> registers Lisp request
@@ -4683,6 +4677,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
   valk_lenv_put_builtin(env, "error?", valk_builtin_error_p);
   valk_lenv_put_builtin(env, "list?", valk_builtin_list_p);
+  valk_lenv_put_builtin(env, "ref?", valk_builtin_ref_p);
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
   valk_lenv_put_builtin(env, "read-file", valk_builtin_read_file);
   valk_lenv_put_builtin(env, "print", valk_builtin_print);
@@ -4755,8 +4750,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
                         valk_builtin_aio_metrics_prometheus);
   valk_lenv_put_builtin(env, "aio/system-stats-prometheus",
                         valk_builtin_aio_system_stats_prometheus);
-  valk_lenv_put_builtin(env, "aio/delay", valk_builtin_aio_delay);
-  valk_lenv_put_builtin(env, "aio/defer", valk_builtin_aio_delay);  // Alias
+
   valk_lenv_put_builtin(env, "aio/schedule", valk_builtin_aio_schedule);
 
   // HTTP Client Metrics Builtins
@@ -4784,6 +4778,8 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   // HTTP/2 Server
   valk_lenv_put_builtin(env, "http2/server-listen",
                         valk_builtin_http2_server_listen);
+  valk_lenv_put_builtin(env, "http2/server-port",
+                        valk_builtin_http2_server_port);
   valk_lenv_put_builtin(env, "http2/server-handle",
                         valk_builtin_http2_server_handle);
 
@@ -4792,6 +4788,9 @@ void valk_lenv_builtins(valk_lenv_t* env) {
                         valk_builtin_http2_client_request);
   valk_lenv_put_builtin(env, "http2/client-request-with-headers",
                         valk_builtin_http2_client_request_with_headers);
+
+  // HTTP request accessor builtins (from aio_http_builtins.c)
+  valk_register_http_request_builtins(env);
 
 #ifdef VALK_METRICS_ENABLED
   // SSE (Server-Sent Events) builtins (from aio_sse_builtins.c)

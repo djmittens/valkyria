@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "aio/aio.h"
+#include "aio/aio_async.h"
 #include "collections.h"
 #include "common.h"
 #include "concurrency.h"
@@ -38,8 +39,8 @@ typedef struct {
   valk_lenv_t *env;
   valk_lval_t *handler_fn;
   valk_aio_system_t *sys;
-  valk_future *fserv;
-  valk_arc_box *server;
+  valk_async_handle_t *hserv;
+  valk_lval_t *server_result;
   valk_future *fclient;
   valk_arc_box *clientBox;
   valk_aio_http2_client *client;
@@ -100,18 +101,19 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   // Start AIO system and server with port 0 for OS-assigned port
   ctx->sys = valk_aio_start();
 
-  ctx->fserv = valk_aio_http2_listen(
+  ctx->hserv = valk_aio_http2_listen(
       ctx->sys, "0.0.0.0", 0, "build/server.key", "build/server.crt",
       NULL, ctx->handler_fn);
 
-  ctx->server = valk_future_await(ctx->fserv);
-  if (ctx->server->type != VALK_SUC) {
-    VALK_FAIL("Failed to start server: %s", (char *)ctx->server->item);
+  ctx->server_result = valk_async_handle_await(ctx->hserv);
+  if (LVAL_TYPE(ctx->server_result) == LVAL_ERR) {
+    VALK_FAIL("Failed to start server: %s", ctx->server_result->str);
     return false;
   }
 
   // Get the actual port assigned by the OS
-  ctx->port = valk_aio_http2_server_get_port(ctx->server->item);
+  valk_aio_http_server *srv = ctx->server_result->ref.ptr;
+  ctx->port = valk_aio_http2_server_get_port(srv);
 
   // Connect client
   ctx->fclient = valk_aio_http2_connect(ctx->sys, "127.0.0.1", ctx->port, "");
@@ -127,11 +129,8 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
 }
 
 // Cleanup test context
-// Note: valk_future_await does NOT retain the result - the future owns it.
-// So we only release the futures, not the boxes they contain.
 static void cleanup_test_context(test_context_t *ctx) {
   if (ctx->fclient) valk_arc_release(ctx->fclient);
-  if (ctx->fserv) valk_arc_release(ctx->fserv);
   if (ctx->sys) {
     valk_aio_stop(ctx->sys);
     valk_aio_wait_for_shutdown(ctx->sys);
@@ -320,6 +319,7 @@ void test_response_small(VALK_TEST_ARGS()) {
 
   // Build request for /health endpoint (small response)
   u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  memset(req_buf, 0, sizeof(req_buf));  // Zero to avoid stale pointer warnings
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 

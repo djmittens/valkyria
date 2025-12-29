@@ -4,7 +4,9 @@ static void __uv_task_close_cb(uv_handle_t *handle) {
   valk_aio_handle_t *hndl = handle->data;
   valk_aio_task_new *task = hndl->arg;
 
-  valk_arc_release(task->promise.item);
+  if (task->promise.item) {
+    valk_arc_release(task->promise.item);
+  }
   valk_mem_allocator_free(task->allocator, task);
 
   valk_dll_pop(hndl);
@@ -20,14 +22,21 @@ static void __uv_task_cb_new(uv_async_t *handle) {
   uv_close((uv_handle_t *)&hndl->uv.task, __uv_task_close_cb);
 }
 
+extern valk_lval_t *valk_lval_err(const char *fmt, ...);
+extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
+
 void valk_uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task) {
   valk_slab_item_t *slab_item = valk_slab_aquire(sys->handleSlab);
   if (!slab_item) {
     VALK_ERROR("Handle slab exhausted in valk_uv_exec_task");
-    valk_arc_box *err = valk_arc_box_err("Handle slab exhausted");
-    valk_promise_respond(&task->promise, err);
-    valk_arc_release(err);
-    valk_arc_release(task->promise.item);
+    if (task->handle) {
+      valk_async_handle_fail(task->handle, valk_lval_err("Handle slab exhausted"));
+    } else if (task->promise.item) {
+      valk_arc_box *err = valk_arc_box_err("Handle slab exhausted");
+      valk_promise_respond(&task->promise, err);
+      valk_arc_release(err);
+      valk_arc_release(task->promise.item);
+    }
     valk_mem_allocator_free(task->allocator, task);
     return;
   }

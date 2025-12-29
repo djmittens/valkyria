@@ -85,9 +85,9 @@
 ;     "/events" (events-handler req)
 ;     ...)
 (fun {sse/handler body-fn}
-  {\ {req ctx}
+  {\ {req}
     {
-      (= {stream} (sse/open ctx))
+      (= {stream} (sse/open req))
       (body-fn stream req)
       (head {:deferred})
     }})

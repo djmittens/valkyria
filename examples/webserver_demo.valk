@@ -191,11 +191,15 @@
 ; Request handler using new aio/let syntax
 ; For async routes: uses aio/let with aio/sleep (returns handle)
 ; For sync routes: returns response map directly
+;
+; NOTE: aio/sleep, aio/delay, etc. require the AIO system as first argument.
+; The handler closes over 'sys' which was defined at module level.
+; Future improvement: Use Service/Filter API with ctx/sleep to avoid this.
 (def {request-handler}
   (\ {req} {
     ; Extract request info
-    (= {method} (plist/get req (head {:method})))
-    (= {path} (plist/get req (head {:path})))
+    (= {method} (req/method req))
+    (= {path} (req/path req))
     (= {start} (time-us))
 
     ; Log request - create counter with labels, then increment
@@ -207,11 +211,12 @@
     (select
       ; ================================================================
       ; /slow - Demonstrates aio/do with interleaved side effects
+      ; NOTE: aio/sleep requires 'sys' as first argument
       ; ================================================================
       {(== path "/slow")
        (aio/do {
          (println "  [/slow] Starting 2s sleep...")
-         (<- _ (aio/sleep 2000))
+         (<- _ (aio/sleep sys 2000))
          (println "  [/slow] Done sleeping!")
          {:status "200" :content-type "text/plain" :body "slept 2s (async)"}})}
 
@@ -221,9 +226,9 @@
       {(== path "/slow-chain")
        (aio/do {
          (println "  [/slow-chain] Starting first 5s sleep...")
-         (<- step1 (aio/sleep 5000))
+         (<- step1 (aio/sleep sys 5000))
          (println "  [/slow-chain] First sleep done, starting second...")
-         (<- step2 (aio/sleep 5000))
+         (<- step2 (aio/sleep sys 5000))
          (println "  [/slow-chain] Both sleeps done!")
          {:status "200" :content-type "text/plain"
           :body "slept 10s (5s + 5s sequential)"}})}
@@ -234,9 +239,9 @@
       ; ================================================================
       {(== path "/slow-parallel")
        (aio/let
-         {((a (aio/sleep 1000))
-           (b (aio/sleep 1000))
-           (c (aio/sleep 1000)))}
+         {((a (aio/sleep sys 1000))
+           (b (aio/sleep sys 1000))
+           (c (aio/sleep sys 1000)))}
          {:status "200" :content-type "text/plain"
           :body "slept ~1s (3x1s parallel)"})}
 
@@ -245,10 +250,10 @@
       ; ================================================================
       {(== path "/complex")
        (aio/let
-         {((user-data (aio/sleep 500))
-           (settings-data (aio/sleep 500))
+         {((user-data (aio/sleep sys 500))
+           (settings-data (aio/sleep sys 500))
            :then
-           (posts-data (aio/sleep 300)))}
+           (posts-data (aio/sleep sys 300)))}
          {:status "200" :content-type "application/json"
           :body "{\"user\":\"loaded\",\"settings\":\"loaded\",\"posts\":\"loaded\"}"})}
 

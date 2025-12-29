@@ -152,8 +152,9 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
     close(perr[0]);
 
     // Reinitialize thread-local allocator after fork - thread-locals are
-    // undefined after fork() and may be NULL even if set in parent
+    // undefined after fork() and may contain stale pointers from parent
     valk_mem_init_malloc();
+    valk_thread_ctx.heap = NULL;  // Clear stale heap pointer to avoid arena overflow crash
 
     printf("🏃 Running: %s\n", self->name);
     fflush(stdout);

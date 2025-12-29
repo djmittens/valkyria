@@ -58,80 +58,137 @@ Completely removed this global:
 - `src/aio/aio_system.c` - Removed extern and usage
 - `src/aio/aio_internal.h` - Removed extern declaration
 
-### Phase 6: Explicit HTTP Request Context
+### Phase 6: Unified HTTP Request Ref
 
-**Problem**: SSE builtins read request context from `sys->current_request_ctx`, which is set/cleared around handler invocation. This is racy and prevents concurrent request handling.
+**Problem**: Originally HTTP handlers received two arguments: a request (as a qexpr/plist) and a context (as a ref for SSE). This was confusing and the context was only needed for SSE.
 
-**Solution**: Pass request context explicitly to handlers and SSE builtins.
+**Solution**: Merge request and context into a single `http_request` ref type.
 
 #### API Changes
 
-HTTP handlers now receive two arguments:
+HTTP handlers now receive a single request ref:
 ```lisp
-; Old: handler receives only request
-(def {handler} (\ {req} { ... }))
-
-; New: handler receives request AND context
+; Old: handler received two arguments
 (def {handler} (\ {req ctx} {
-  (= {stream} (sse/open ctx))  ; Pass ctx to sse/open
+  (= {path} (plist/get req :path))      ; Access via plist
+  (= {stream} (sse/open ctx))           ; SSE needed separate ctx
+  ...
+}))
+
+; New: handler receives single request ref
+(def {handler} (\ {req} {
+  (= {path} (req/path req))             ; Access via builtin
+  (= {stream} (sse/open req))           ; SSE uses same req
   ...
 }))
 ```
 
-SSE builtin changes:
-```lisp
-; Old
-(sse/open)
+#### Request Accessor Builtins
 
-; New
-(sse/open ctx)
-```
-
-#### Backwards Compatibility
-
-Handlers with arity 1 continue to work - context is only passed when handler accepts 2+ arguments:
-```lisp
-; Still works (arity 1)
-(def {simple-handler} (\ {req} {{:status "200" :body "hello"}}))
-
-; New style (arity 2) - required for SSE
-(def {sse-handler} (\ {req ctx} {
-  (= {stream} (sse/open ctx))
-  (sse/send stream "hello")
-  :deferred
-}))
-```
+New builtins in `src/aio/aio_http_builtins.c`:
+- `req/method` - Get HTTP method
+- `req/path` - Get request path
+- `req/authority` - Get authority (host)
+- `req/scheme` - Get scheme (https)
+- `req/headers` - Get all headers as list of pairs
+- `req/header` - Get specific header by name (case-insensitive)
+- `req/body` - Get request body
+- `req/stream-id` - Get HTTP/2 stream ID
 
 #### Files Modified
 
-1. `src/aio/aio_http2_session.c` - Handler invocation creates `http_req_ctx` ref
-2. `src/aio/aio_sse_builtins.c` - `sse/open` takes ctx argument
-3. `src/modules/aio/sse.valk` - `sse/handler` wrapper passes ctx
-4. `src/modules/aio/debug.valk` - Debug handler accepts ctx
-5. `src/modules/aio/metrics-stream.valk` - Metrics handler accepts ctx
+1. `src/aio/aio_http2_session.c` - Handler invocation creates `http_request` ref
+2. `src/aio/aio_sse_builtins.c` - `sse/open` takes request ref
+3. `src/aio/aio_http_builtins.c` - New request accessor builtins
+4. `src/modules/aio/sse.valk` - `sse/handler` wrapper uses single req arg
+5. `src/modules/aio/debug.valk` - Debug handler uses `ref?` for compatibility
+
+### Phase 7: Remove `aio/delay` C Builtin
+
+**Problem**: `aio/delay` was implemented in C and depended on `sys->current_request_ctx` being set during handler invocation. This was a hidden dependency and conflated timer functionality with HTTP response handling.
+
+**Solution**: Reimplement `aio/delay` in Lisp as a composition of `aio/sleep` + `aio/then`.
+
+#### Changes
+
+1. **Removed C builtin** (`src/parser.c`):
+   - Removed `valk_builtin_aio_delay` function
+   - Removed registration of `aio/delay` and `aio/defer` builtins
+
+2. **Removed C implementation** (`src/aio/aio_combinators.c`):
+   - Removed `valk_aio_delay()` function
+   - Removed `__delay_timer_cb` callback
+   - Removed `__delay_timer_close_cb` callback
+
+3. **Removed unused types** (`src/aio/aio_internal.h`):
+   - Removed `valk_delay_timer_t` struct
+   - Removed `valk_http_request_ctx_t` struct
+   - Removed `current_request_ctx` field from `valk_aio_system_t`
+
+4. **Removed declaration** (`src/aio/aio.h`):
+   - Removed `valk_aio_delay()` declaration
+
+5. **Added Lisp implementation** (`src/async_handles.valk`):
+   ```lisp
+   (fun {aio/delay sys ms continuation}
+     {(aio/then (aio/sleep sys ms) (\ {_} {(continuation)}))})
+   ```
+
+6. **Updated helper functions** to take `sys` as first argument:
+   - `with-timeout sys ms handle`
+   - `retry-backoff sys n base-ms handle-fn`
+   - `graceful-shutdown sys handles timeout-ms`
+   - `delay-value sys ms value`
+
+7. **Loaded async_handles in prelude** (`src/prelude.valk`):
+   - Added `(load "src/async_handles.valk")` at end of prelude
+
+### Phase 8: Remove `valk_aio_active_system` Global
+
+Removed the last remaining global:
+
+1. **Removed definition** (`src/aio/aio_uv.c`):
+   - Removed `valk_aio_system_t *valk_aio_active_system = NULL;`
+
+2. **Removed declarations** (`src/aio/aio.h`, `src/aio/aio_internal.h`):
+   - Removed `extern valk_aio_system_t* valk_aio_active_system;`
+
+3. **Removed usage** (`src/aio/aio_system.c`):
+   - Removed setting `valk_aio_active_system = sys;` in start
+   - Removed clearing `valk_aio_active_system = NULL;` in cleanup
+
+4. **Removed test** (`test/unit/test_aio_uv.c`):
+   - Removed `test_aio_active_system_initially_null` test
 
 ## Remaining Global Usage
 
-`valk_aio_active_system` is still used for:
-
-1. **System startup/cleanup** (`aio_system.c`) - Sets/clears when system starts/stops
-2. **aio/delay builtin** - Needs request context for deferred responses
-
-The `current_request_ctx` field remains on `valk_aio_system_t` for `aio/delay` compatibility, but SSE no longer uses it.
+**None.** All implicit global state has been removed from the AIO system.
 
 ## Future Work
 
-1. **Remove `valk_aio_active_system` entirely** - Pass sys through environment or make it a parameter to all AIO builtins
-2. **Thread-local sys** - For multi-system scenarios, use thread-local storage keyed by thread ID
-3. **Compiler support** - When compiling to LLVM, the compiler will:
+1. **Compiler support** - When compiling to LLVM, the compiler will:
    - Track `Aio` effect in the type system
    - Resolve which `sys` is in scope at each call site
    - Insert `sys` parameter automatically
 
+## Summary
+
+All implicit global state has been eliminated from the AIO system:
+
+| Global | Status |
+|--------|--------|
+| `g_last_started_aio_system` | Removed (Phase 5) |
+| `current_request_ctx` | Removed (Phase 7) |
+| `valk_http_request_ctx_t` | Removed (Phase 7) |
+| `valk_delay_timer_t` | Removed (Phase 7) |
+| `valk_aio_active_system` | Removed (Phase 8) |
+
+The AIO system now uses fully explicit context passing, making it ready for LLVM compilation where data flow must be explicit.
+
 ## Testing
 
 All tests pass after refactoring:
-- `test/test_async_http_handlers.valk` - 52 tests
-- `test/test_aio_builtins_coverage.valk` - 82 tests
-- `test/test_sse_integration.valk` - SSE with explicit context
-- `test/test_prelude.valk` - 32 tests
+- `test/test_async_http_handlers.valk` - 52 tests (all pass)
+- `test/test_sse_integration.valk` - 9 tests (all pass)
+- `test/test_prelude.valk` - 32 tests (all pass)
+- `test/test_delay_continuation_error.valk` - Verifies aio/delay error handling

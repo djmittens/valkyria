@@ -1,8 +1,6 @@
 #include "aio_internal.h"
-#include "aio_http2_conn.h"
 #include <execinfo.h>
 
-valk_aio_system_t *valk_aio_active_system = NULL;
 u64 g_async_handle_id = 0;
 
 static void __uv_handle_closed_cb(uv_handle_t *handle);
@@ -30,9 +28,17 @@ void __event_loop(void *arg) {
   valk_aio_system_t *sys = arg;
   valk_mem_init_malloc();
   valk_gc_thread_register();
-  VALK_DEBUG("Initializing UV event loop thread");
 
-  sys->current_request_ctx = NULL;
+  valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(0);
+  if (!gc_heap) {
+    VALK_ERROR("Failed to create event loop GC heap");
+  } else {
+    valk_thread_ctx.heap = gc_heap;
+    sys->loop_gc_heap = gc_heap;
+    VALK_DEBUG("Created event loop GC heap: %p", gc_heap);
+  }
+
+  VALK_DEBUG("Initializing UV event loop thread");
 
   sys->tcpBufferSlab =
       valk_slab_new(sizeof(__tcp_buffer_slab_item_t), sys->config.tcp_buffer_pool_size);
@@ -134,6 +140,11 @@ void __event_loop(void *arg) {
 
   valk_slab_free(sys->tcpBufferSlab);
   valk_slab_free(sys->httpStreamArenas);
+
+  if (sys->loop_gc_heap) {
+    valk_gc_malloc_heap_destroy(sys->loop_gc_heap);
+    sys->loop_gc_heap = NULL;
+  }
   
   valk_gc_thread_unregister();
 }

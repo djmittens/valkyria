@@ -402,9 +402,9 @@ static inline valk_http_server_config_t valk_http_server_config_demo(void) {
 ///
 /// @param[out] srv the server that will be running
 /// @param[in] sys the aio system that will run the server
-/// @return returns a future with a boxed `valk_aio_http2_server`
+/// @return returns an async handle that resolves to the server ref
 ///
-valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
+valk_async_handle_t *valk_aio_http2_listen(valk_aio_system_t *sys,
                                    const char *interface, const int port,
                                    const char *keyfile, const char *certfile,
                                    valk_http2_handler_t *handler,
@@ -419,8 +419,8 @@ valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
 /// @param[in] handler C function handler (optional, can be NULL)
 /// @param[in] lisp_handler Lisp function handler (optional, can be NULL)
 /// @param[in] config server configuration (optional, uses defaults if NULL)
-/// @return returns a future with a boxed `valk_aio_http2_server`
-valk_future *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
+/// @return returns an async handle that resolves to the server ref
+valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
                                    const char *interface, const int port,
                                    const char *keyfile, const char *certfile,
                                    valk_http2_handler_t *handler,
@@ -563,15 +563,6 @@ void valk_aio_set_name(valk_aio_system_t* sys, const char* name);
 struct valk_lval_t;
 struct valk_lenv_t;
 
-// Async delay - schedules callback after delay_ms milliseconds
-// Must be called from within an HTTP request handler
-// Returns :deferred symbol on success to indicate async response
-struct valk_lval_t* valk_aio_delay(valk_aio_system_t* sys, u64 delay_ms,
-                                    struct valk_lval_t* continuation, struct valk_lenv_t* env);
-
-// Global active AIO system (set by valk_aio_start, cleared by valk_aio_stop)
-extern valk_aio_system_t* valk_aio_active_system;
-
 // Close all SSE streams on a connection
 void valk_sse_close_all_streams(valk_aio_handle_t* conn);
 
@@ -591,3 +582,6 @@ int valk_http2_submit_goaway(valk_aio_handle_t* conn, u32 error_code);
 
 // Flush pending HTTP/2 frames (for testing - ensures RST_STREAM is sent immediately)
 void valk_http2_flush_pending(valk_aio_handle_t* conn);
+
+// HTTP request accessor builtins registration
+void valk_register_http_request_builtins(struct valk_lenv_t* env);

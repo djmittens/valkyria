@@ -251,3 +251,6 @@
     {nil}
     {join (list (head (tail pl))) (plist/vals (tail (tail pl)))}
 })
+
+; Load async handles library (aio/delay, with-timeout, etc.)
+(load "src/async_handles.valk")

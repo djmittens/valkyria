@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include "aio/aio.h"
+#include "aio/aio_async.h"
 #include "collections.h"
 #include "common.h"
 #include "concurrency.h"
@@ -49,12 +50,12 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
     da_init(&req->headers);
   }
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *hserv = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
 
-  valk_arc_box *server = valk_future_await(fserv);
-  VALK_ASSERT(server->type == VALK_SUC, "Failed to start server: %s", (char*)server->item);
-  int port = valk_aio_http2_server_get_port(server->item);
+  valk_lval_t *server = valk_async_handle_await(hserv);
+  VALK_ASSERT(LVAL_TYPE(server) != LVAL_ERR, "Failed to start server: %s", server->str);
+  int port = valk_aio_http2_server_get_port(server->ref.ptr);
 
   valk_future *fut = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   printf("Arc count of fut : %lld\n", (long long)fut->refcount);
@@ -92,12 +93,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   //       VALK_HTTP_MOTD, response);
   // }
 
-  size_t count = __atomic_load_n(&server->refcount, __ATOMIC_ACQUIRE);
-  printf("Da fuck %ld\n", count);
-  valk_arc_release(server);
-
-  // valk_arc_trace_report_print(fserv);
-  valk_arc_release(fserv);
+  // Cleanup (server is now an LVAL, not arc_box)
   valk_arc_release(fres);
 
   // Release the response and client boxes
@@ -146,9 +142,10 @@ void test_tcp_client_disconnect(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
-  valk_arc_box *res = valk_future_await(valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL));
-  valk_arc_release(res);
+  valk_async_handle_t *hserv2 = valk_aio_http2_listen(
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+  valk_lval_t *server2 = valk_async_handle_await(hserv2);
+  (void)server2;
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
   VALK_PASS();
@@ -220,20 +217,18 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   valk_aio_system_t *sys = valk_aio_start();
 
   // Start server with Lisp handler on port 0 (OS assigns port)
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *hserv = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt",
       NULL, handler_fn);  // Pass Lisp handler
 
-  valk_arc_box *server = valk_future_await(fserv);
-  if (server->type != VALK_SUC) {
-    VALK_FAIL("Failed to start server: %s", (char*)server->item);
-    valk_arc_release(server);
-    valk_arc_release(fserv);
+  valk_lval_t *server = valk_async_handle_await(hserv);
+  if (LVAL_TYPE(server) == LVAL_ERR) {
+    VALK_FAIL("Failed to start server: %s", server->str);
     valk_aio_stop(sys);
     valk_aio_wait_for_shutdown(sys);
     return;
   }
-  int port = valk_aio_http2_server_get_port(server->item);
+  int port = valk_aio_http2_server_get_port(server->ref.ptr);
   printf("[test] Server started on port %d\n", port);
 
   // Connect client
@@ -243,10 +238,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
 
   if (clientBox->type != VALK_SUC) {
     VALK_FAIL("Failed to connect client: %s", (char*)clientBox->item);
-    valk_arc_release(clientBox);
     valk_arc_release(fclient);
-    valk_arc_release(server);
-    valk_arc_release(fserv);
     valk_aio_stop(sys);
     valk_aio_wait_for_shutdown(sys);
     return;
@@ -280,12 +272,8 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
 
   if (res->type != VALK_SUC) {
     VALK_FAIL("Request failed: %s", (char*)res->item);
-    valk_arc_release(res);
     valk_arc_release(fres);
-    valk_arc_release(clientBox);
     valk_arc_release(fclient);
-    valk_arc_release(server);
-    valk_arc_release(fserv);
     valk_aio_stop(sys);
     valk_aio_wait_for_shutdown(sys);
     return;
@@ -309,12 +297,8 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   }
 
   // Cleanup
-  valk_arc_release(res);
   valk_arc_release(fres);
-  valk_arc_release(clientBox);
   valk_arc_release(fclient);
-  valk_arc_release(server);
-  valk_arc_release(fserv);
 
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);

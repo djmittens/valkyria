@@ -2872,6 +2872,10 @@ void valk_gc_heap2_mark_roots(valk_gc_heap2_t *heap) {
     .queue = &local_queue
   };
   
+  if (heap->root_env != NULL) {
+    mark_env2(heap->root_env, &ctx);
+  }
+  
   valk_gc_visit_global_roots(mark_root_visitor2, &ctx);
   
   if (valk_thread_ctx.gc_registered) {

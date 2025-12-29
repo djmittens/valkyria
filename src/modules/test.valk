@@ -169,4 +169,102 @@
       {(shutdown actual-exit)})
 })
 
+; ============================================================================
+; Async Test Support
+; ============================================================================
+; For tests that require the event loop (HTTP, timers, etc.)
+; Usage:
+;   (test/async "test name" (\ {done} { ... (done true) }))
+;   (test/run-async aio)
+;   (aio/run aio)
+
+(def {*test-async-registry*} {})
+(def {*test-async-pending*} 0)
+(def {*test-async-start-times*} {})
+
+(fun {test/async name body} {
+  (def {*test-async-registry*} (join *test-async-registry* (list (list name body))))
+})
+
+(fun {*test-async-done-callback* test-name start-time passed} {
+  do
+    (= {end-time} (time-us {}))
+    (= {elapsed} (- end-time start-time))
+    
+    (if passed
+      {do
+        (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)
+        (def {*test-passed*} (+ *test-passed* 1))}
+      {do
+        (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
+        (def {*test-failed*} (+ *test-failed* 1))})
+    
+    (def {*test-async-pending*} (- *test-async-pending* 1))
+    true
+})
+
+(fun {*test-start-async-one* aio test} {
+  do
+    (= {test-name} (eval (head test)))
+    (= {test-body} (eval (head (tail test))))
+    (= {start-time} (time-us {}))
+    
+    (= {done-fn} (\ {passed} {
+      (*test-async-done-callback* test-name start-time passed)
+    }))
+    
+    (def {*test-async-pending*} (+ *test-async-pending* 1))
+    
+    (aio/schedule aio 0 (\ {} {
+      (test-body done-fn)
+    }))
+})
+
+(fun {test/run-async aio & args} {
+  do
+    (def {*test-passed*} 0)
+    (def {*test-failed*} 0)
+    (def {*test-skipped*} 0)
+    (def {*test-async-pending*} 0)
+    (= {total} (len *test-async-registry*))
+    (= {suite-name} *test-suite-name*)
+    
+    (if (== total 0)
+      {do
+        (printf "❌ No async tests registered!\n")
+        (shutdown 1)}
+      {true})
+    
+    (printf "🧪 [%ld/%ld] %s (async)\n" total total suite-name)
+    
+    (map (\ {test} {(*test-start-async-one* aio test)}) *test-async-registry*)
+    
+    (aio/schedule aio 30000 (\ {} {
+      (if (> *test-async-pending* 0)
+        {do
+          (printf "\n❌ TIMEOUT: %ld tests still pending\n" *test-async-pending*)
+          (aio/stop aio)
+          (shutdown 1)}
+        {true})
+    }))
+    
+    (aio/schedule aio 100 (\ {} {
+      (*test-async-check-complete* aio)
+    }))
+})
+
+(fun {*test-async-check-complete* aio} {
+  (if (== *test-async-pending* 0)
+    {do
+      (printf "\n🏁 Test Results: ")
+      (if (== *test-failed* 0)
+        {printf "✨ All %ld tests passed! ✨\n" *test-passed*}
+        {printf "⚠️  %ld passed, %ld failed\n" *test-passed* *test-failed*})
+      (aio/stop aio)
+      (if (== *test-failed* 0)
+        {(shutdown 0)}
+        {(shutdown 1)})}
+    {(aio/schedule aio 100 (\ {} {(*test-async-check-complete* aio)}))})
+})
+
 ; Test module loaded - no debug output

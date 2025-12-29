@@ -4,8 +4,6 @@
 #include "aio_http2_client.h"
 #include "aio_http2_conn.h"
 
-extern valk_aio_system_t *valk_aio_active_system;
-
 extern void __event_loop(void *arg);
 extern void __aio_uv_stop(uv_async_t *h);
 
@@ -142,7 +140,6 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   memset(sys, 0, sizeof(valk_aio_system_t));
   sys->config = resolved;
   snprintf(sys->name, sizeof(sys->name), "main");
-  valk_aio_active_system = sys;
 
   valk_aio_ssl_start();
 
@@ -287,10 +284,6 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
 
   if (sys->ops && sys->ops->loop) {
     sys->ops->loop->destroy(sys);
-  }
-
-  if (valk_aio_active_system == sys) {
-    valk_aio_active_system = NULL;
   }
 
   uv_sem_destroy(&sys->startup_sem);

@@ -84,11 +84,13 @@
 ; Usage: (aio/debug-handle-request sys req) => response map or nil
 (fun {aio/debug-handle-request sys req}
   {
-    ; Extract request path
-    (= {path} (plist/get req (head {:path})))
+    ; Extract request path - support both ref (runtime) and qexpr (testing)
+    (= {path} (if (ref? req)
+                {(req/path req)}
+                {(plist/get req :path)}))
 
     ; Extract query parameters if present
-    (= {query} (plist/get req (head {:query})))
+    (= {query} nil)
 
     ; Route to appropriate debug endpoint
     ; Handle both /debug and /debug/ for the dashboard
@@ -105,6 +107,6 @@
 (fun {aio/debug-handler sys}
   {
     (= {captured-sys} sys)
-    (\ {req ctx} {aio/debug-handle-request captured-sys req})
+    (\ {req} {aio/debug-handle-request captured-sys req})
   })
 

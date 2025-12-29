@@ -2,17 +2,18 @@
 #include "types.h"
 
 #include "aio.h"
+#include "aio_async.h"
 
 struct valk_lval_t;
 struct valk_lenv_t;
 
-valk_future *valk_aio_http2_listen(valk_aio_system_t *sys,
+valk_async_handle_t *valk_aio_http2_listen(valk_aio_system_t *sys,
                                    const char *interface, const int port,
                                    const char *keyfile, const char *certfile,
                                    valk_http2_handler_t *handler,
                                    void *lisp_handler);
 
-valk_future *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
+valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
                                    const char *interface, const int port,
                                    const char *keyfile, const char *certfile,
                                    valk_http2_handler_t *handler,

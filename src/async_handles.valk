@@ -11,6 +11,13 @@
   {(exists (aio/status x) {:pending :running :completed :failed :cancelled})})
 
 ; ============================================================================
+; aio/delay: Sleep then call continuation
+; ============================================================================
+
+(fun {aio/delay sys ms continuation}
+  {(aio/then (aio/sleep sys ms) (\ {_} {(continuation)}))})
+
+; ============================================================================
 ; Helper: Convert any value to a handle
 ; ============================================================================
 
@@ -25,10 +32,10 @@
 
 ; with-timeout: Race a handle against a timeout
 ; Returns first to complete - either the result or a timeout error
-(fun {with-timeout ms handle}
+(fun {with-timeout sys ms handle}
   {(aio/race (list
     handle
-    (aio/then (aio/delay ms (\ {} {nil}))
+    (aio/then (aio/delay sys ms (\ {} {nil}))
               (\ {_} {(aio/fail :timeout)}))))})
 
 ; ============================================================================
@@ -36,18 +43,19 @@
 ; ============================================================================
 
 ; retry-backoff: Retry an operation with exponential backoff
+; sys: aio system
 ; n: number of retries remaining
 ; base-ms: initial delay (doubles each retry)
 ; handle-fn: function that returns a handle
-(fun {retry-backoff n base-ms handle-fn}
+(fun {retry-backoff sys n base-ms handle-fn}
   {(if (<= n 0)
     {(handle-fn)}
     {(aio/catch
       (handle-fn)
       (\ {err}
         {(aio/then
-          (aio/delay base-ms (\ {} {nil}))
-          (\ {_} {(retry-backoff (- n 1) (* base-ms 2) handle-fn)}))}))})})
+          (aio/delay sys base-ms (\ {} {nil}))
+          (\ {_} {(retry-backoff sys (- n 1) (* base-ms 2) handle-fn)}))}))})})
 
 
 ; ============================================================================
@@ -55,13 +63,14 @@
 ; ============================================================================
 
 ; graceful-shutdown: Wait for handles to complete, with timeout force-cancel
+; sys: aio system
 ; handles: list of handles to wait for
 ; timeout-ms: max time to wait before force cancelling
-(fun {graceful-shutdown handles timeout-ms}
+(fun {graceful-shutdown sys handles timeout-ms}
   {(aio/race (list
     (aio/all handles)
     (aio/then
-      (aio/delay timeout-ms (\ {} {nil}))
+      (aio/delay sys timeout-ms (\ {} {nil}))
       (\ {_}
         {(map aio/cancel handles)
          :timeout}))))})
@@ -93,8 +102,8 @@
 ; ============================================================================
 
 ; delay-value: Like aio/delay but also returns a value
-(fun {delay-value ms value}
-  {(aio/delay ms (\ {} {value}))})
+(fun {delay-value sys ms value}
+  {(aio/delay sys ms (\ {} {value}))})
 
 ; ============================================================================
 ; Map: Transform the result of a handle

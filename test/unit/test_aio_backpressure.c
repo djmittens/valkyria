@@ -3,7 +3,9 @@
 #include "../../src/memory.h"
 #include "../../src/aio/aio.h"
 #include "../../src/aio/aio_alloc.h"
+#include "../../src/aio/aio_async.h"
 #include "../../src/collections.h"
+#include "../../src/parser.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -120,19 +122,16 @@ void test_server_start_initializes_slabs(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *hserv = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
-  valk_arc_box *server = valk_future_await(fserv);
-  ASSERT_EQ(server->type, VALK_SUC);
+  valk_lval_t *result = valk_async_handle_await(hserv);
+  ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
   valk_slab_t *tcp_slab = valk_aio_get_tcp_buffer_slab(sys);
   ASSERT_NOT_NULL(tcp_slab);
 
   size_t initial_available = valk_slab_available(tcp_slab);
   ASSERT_GT(initial_available, 0);
-
-  valk_arc_release(server);
-  valk_arc_release(fserv);
 
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
@@ -156,12 +155,13 @@ void test_multiple_connections(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *hserv = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
-  valk_arc_box *server = valk_future_await(fserv);
-  ASSERT_EQ(server->type, VALK_SUC);
+  valk_lval_t *result = valk_async_handle_await(hserv);
+  ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(server->item);
+  valk_aio_http_server *srv = result->ref.ptr;
+  int port = valk_aio_http2_server_get_port(srv);
 
   valk_arc_box *clients[4];
   valk_future *futures[4];
@@ -181,9 +181,6 @@ void test_multiple_connections(VALK_TEST_ARGS()) {
     valk_arc_release(clients[i]);
     valk_arc_release(futures[i]);
   }
-
-  valk_arc_release(server);
-  valk_arc_release(fserv);
 
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
@@ -229,12 +226,13 @@ void test_connection_with_request_response(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *hserv = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
-  valk_arc_box *server = valk_future_await(fserv);
-  ASSERT_EQ(server->type, VALK_SUC);
+  valk_lval_t *server_result = valk_async_handle_await(hserv);
+  ASSERT_EQ(LVAL_TYPE(server_result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(server->item);
+  valk_aio_http_server *srv = server_result->ref.ptr;
+  int port = valk_aio_http2_server_get_port(srv);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -271,8 +269,6 @@ void test_connection_with_request_response(VALK_TEST_ARGS()) {
   valk_arc_release(fres);
   valk_arc_release(clientBox);
   valk_arc_release(fclient);
-  valk_arc_release(server);
-  valk_arc_release(fserv);
 
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
@@ -323,13 +319,10 @@ void test_server_listen_invalid_address(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *hserv = valk_aio_http2_listen(
       sys, "not.a.valid.ip.address", 8080, "build/server.key", "build/server.crt", &handler, NULL);
-  valk_arc_box *server = valk_future_await(fserv);
-  ASSERT_EQ(server->type, VALK_ERR);
-
-  valk_arc_release(server);
-  valk_arc_release(fserv);
+  valk_lval_t *result = valk_async_handle_await(hserv);
+  ASSERT_EQ(LVAL_TYPE(result), LVAL_ERR);
 
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
@@ -371,13 +364,10 @@ void test_server_listen_port_already_bound(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
-  valk_future *fserv = valk_aio_http2_listen(
+  valk_async_handle_t *hserv = valk_aio_http2_listen(
       sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, NULL);
-  valk_arc_box *server = valk_future_await(fserv);
-  ASSERT_EQ(server->type, VALK_ERR);
-
-  valk_arc_release(server);
-  valk_arc_release(fserv);
+  valk_lval_t *result = valk_async_handle_await(hserv);
+  ASSERT_EQ(LVAL_TYPE(result), LVAL_ERR);
 
   close(sock);
 
