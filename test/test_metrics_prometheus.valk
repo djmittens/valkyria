@@ -1,13 +1,50 @@
 ; Test Prometheus metrics output
+; Run with: ./build/valk test/test_metrics_prometheus.valk
+
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 
-; Create some test metrics
-(println "Creating test metrics...")
-(metrics/counter-inc "http_requests_total" "server" "api" "port" "8443")
-(metrics/counter-inc "http_requests_total" "server" "api" "port" "8443")
-(metrics/counter-inc "http_requests_total" "server" "api" "port" "8443")
-(metrics/counter-inc "http_requests_total" "server" "web" "port" "8080")
-(metrics/counter-inc "http_requests_total" "server" "web" "port" "8080")
+(test/suite "Prometheus Metrics Format Tests")
 
-(println "Prometheus format output:")
-(println (metrics/prometheus))
+; Test: metrics/prometheus returns valid string
+(test/define "metrics/prometheus returns string"
+  {do
+    (= {result} (metrics/prometheus))
+    (test/assert (string? result) "metrics/prometheus should return a string")
+    true
+  })
+
+; Test: Counter with labels appears in prometheus output
+(test/define "counter with labels in prometheus output"
+  {do
+    (metrics/counter-inc "prom_test_requests" "server" "api" "port" "8443")
+    (metrics/counter-inc "prom_test_requests" "server" "api" "port" "8443")
+    (metrics/counter-inc "prom_test_requests" "server" "api" "port" "8443")
+    (= {result} (metrics/prometheus))
+    (test/assert (string? result) "metrics/prometheus should return string after counter-inc")
+    (test/assert (> (len result) 0) "prometheus output should be non-empty after adding counters")
+    true
+  })
+
+; Test: Multiple label combinations
+(test/define "multiple label combinations"
+  {do
+    (metrics/counter-inc "prom_test_multi" "server" "web" "port" "8080")
+    (metrics/counter-inc "prom_test_multi" "server" "web" "port" "8080")
+    (metrics/counter-inc "prom_test_multi" "server" "api" "port" "9000")
+    (= {result} (metrics/prometheus))
+    (test/assert (string? result) "metrics/prometheus should return string")
+    (test/assert (> (len result) 0) "prometheus output should be non-empty")
+    true
+  })
+
+; Test: Counter without labels
+(test/define "counter without labels in prometheus"
+  {do
+    (metrics/counter-inc "prom_test_simple")
+    (= {result} (metrics/prometheus))
+    (test/assert (string? result) "metrics/prometheus should return string")
+    true
+  })
+
+(test/run)

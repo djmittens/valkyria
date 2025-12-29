@@ -160,7 +160,7 @@ void test_multiple_connections(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(hserv);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  valk_aio_http_server *srv = result->ref.ptr;
+  valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
   int port = valk_aio_http2_server_get_port(srv);
 
   valk_arc_box *clients[4];
@@ -231,7 +231,7 @@ void test_connection_with_request_response(VALK_TEST_ARGS()) {
   valk_lval_t *server_result = valk_async_handle_await(hserv);
   ASSERT_EQ(LVAL_TYPE(server_result), LVAL_REF);
 
-  valk_aio_http_server *srv = server_result->ref.ptr;
+  valk_aio_http_server *srv = valk_aio_http2_server_from_ref(server_result);
   int port = valk_aio_http2_server_get_port(srv);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");

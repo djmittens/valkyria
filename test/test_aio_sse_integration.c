@@ -274,7 +274,7 @@ static void test_sse_registry_init_shutdown(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  valk_aio_http_server *srv = result->ref.ptr;
+  valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
   (void)valk_aio_http2_server_get_port(srv);
 
   valk_sse_stream_registry_t *registry = valk_aio_get_sse_registry(sys);

@@ -84,8 +84,8 @@ build-coverage: build-coverage/.cmake
 	$(call do_build,build-coverage)
 
 .PHONY: lint
-lint : build/.cmake 
-	run-clang-tidy -p build -j $(JOBS) -extra-arg=-std=c23
+lint : build/.cmake
+	run-clang-tidy -p build -j $(JOBS) -extra-arg=-std=c23 -source-filter='^(?!.*vendor/).*$$'
 
 # Install editline (uses autotools)
 # On macOS: brew install autoconf automake libtool

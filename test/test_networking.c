@@ -55,7 +55,8 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
 
   valk_lval_t *server = valk_async_handle_await(hserv);
   VALK_ASSERT(LVAL_TYPE(server) != LVAL_ERR, "Failed to start server: %s", server->str);
-  int port = valk_aio_http2_server_get_port(server->ref.ptr);
+  valk_arc_box *server_box = (valk_arc_box*)server->ref.ptr;
+  int port = valk_aio_http2_server_get_port((valk_aio_http_server*)server_box->item);
 
   valk_future *fut = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   printf("Arc count of fut : %lld\n", (long long)fut->refcount);
@@ -252,7 +253,8 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
     valk_aio_wait_for_shutdown(sys);
     return;
   }
-  int port = valk_aio_http2_server_get_port(server->ref.ptr);
+  valk_arc_box *server_box2 = (valk_arc_box*)server->ref.ptr;
+  int port = valk_aio_http2_server_get_port((valk_aio_http_server*)server_box2->item);
   printf("[test] Server started on port %d\n", port);
 
   // Connect client

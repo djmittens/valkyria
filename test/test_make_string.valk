@@ -1,28 +1,36 @@
 ; Test make-string builtin
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 
-(println "Testing make-string builtin...")
+(test/suite "make-string Builtin Tests")
 
-; Test 1: Basic string repetition
-(println "Test 1: 10 A's")
-(= {s1} (make-string 10 "A"))
-(println s1)
-(printf "Length: %d (expected 10)\n" (len s1))
+(test/define "10 A's from string" {
+  do
+    (= {s} (make-string 10 "A"))
+    (test/assert-eq 10 (len s) "length should be 10")
+    (test/assert-eq "AAAAAAAAAA" s "content should be 10 A's")
+    true
+})
 
-; Test 2: Character code (65 = 'A')
-(println "\nTest 2: 20 A's from char code 65")
-(= {s2} (make-string 20 65))
-(println s2)
-(printf "Length: %d (expected 20)\n" (len s2))
+(test/define "20 A's from char code 65" {
+  do
+    (= {s} (make-string 20 65))
+    (test/assert-eq 20 (len s) "length should be 20")
+    true
+})
 
-; Test 3: Larger string (1MB)
-(println "\nTest 3: 1MB string")
-(= {s3} (make-string 1048576 "X"))
-(printf "Length: %d (expected 1048576)\n" (len s3))
+(test/define "1MB string" {
+  do
+    (= {s} (make-string 1048576 "X"))
+    (test/assert-eq 1048576 (len s) "length should be 1MB")
+    true
+})
 
-; Test 4: 50MB string
-(println "\nTest 4: 50MB string")
-(= {s4} (make-string 52428800 65))
-(printf "Length: %d (expected 52428800)\n" (len s4))
+(test/define "50MB string" {
+  do
+    (= {s} (make-string 52428800 65))
+    (test/assert-eq 52428800 (len s) "length should be 50MB")
+    true
+})
 
-(println "\nAll tests passed!")
+(test/run)

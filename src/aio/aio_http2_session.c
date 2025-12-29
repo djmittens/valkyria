@@ -617,8 +617,12 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
                                                i32 stream_id,
                                                u32 error_code,
                                                void *user_data) {
-  UNUSED(error_code);
   valk_aio_handle_t *conn = (valk_aio_handle_t *)user_data;
+
+  if (error_code != NGHTTP2_NO_ERROR) {
+    VALK_DEBUG("Stream %d closed with error: %s (code=%u)",
+               stream_id, nghttp2_http2_strerror(error_code), error_code);
+  }
 
   void *stream_data = nghttp2_session_get_stream_user_data(session, stream_id);
 

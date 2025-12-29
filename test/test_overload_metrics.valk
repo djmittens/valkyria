@@ -1,18 +1,53 @@
 ; Test: Metrics Verification for Overload
-; This creates a server that exposes metrics to verify overflow tracking
+; Run with: ./build/valk test/test_overload_metrics.valk
 
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 
-(def aio (aio/start))
+(test/suite "Overload Metrics Tests")
 
-(def handler (lambda {req respond}
-  (if (= (req/path req) "/metrics")
-    ; Return prometheus metrics
-    (respond 200 {"content-type" "text/plain"} (metrics/prometheus))
-    (respond 200 {"content-type" "text/plain"} "OK"))))
+; Test: metrics/prometheus output is valid string
+(test/define "metrics/prometheus returns valid output"
+  {do
+    (= {result} (metrics/prometheus))
+    (test/assert (string? result) "metrics/prometheus should return a string")
+    true
+  })
 
-(http2/server-listen aio 8443 handler)
-(print "Check metrics at https://localhost:8443/metrics")
-(print "Look for: http_arena_pool_overflow_total")
-(print "Look for: http_overload_responses_total")
-(aio/run aio)
+; Test: metrics/json output is valid string
+(test/define "metrics/json returns valid output"
+  {do
+    (= {result} (metrics/json))
+    (test/assert (string? result) "metrics/json should return a string")
+    (test/assert (> (len result) 0) "metrics/json should return non-empty string")
+    true
+  })
+
+; Test: aio/start creates valid system
+(test/define "aio/start creates valid system"
+  {do
+    (= {aio} (aio/start))
+    (test/assert (!= aio nil) "aio/start should return a system")
+    true
+  })
+
+; Test: aio/metrics-prometheus works with aio system
+(test/define "aio/metrics-prometheus returns valid output"
+  {do
+    (= {aio} (aio/start))
+    (= {result} (aio/metrics-prometheus aio))
+    (test/assert (string? result) "aio/metrics-prometheus should return a string")
+    true
+  })
+
+; Test: aio/metrics-json works with aio system
+(test/define "aio/metrics-json returns valid output"
+  {do
+    (= {aio} (aio/start))
+    (= {result} (aio/metrics-json aio))
+    (test/assert (string? result) "aio/metrics-json should return a string")
+    (test/assert (> (len result) 0) "aio/metrics-json should return non-empty string")
+    true
+  })
+
+(test/run)

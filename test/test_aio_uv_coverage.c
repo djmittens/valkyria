@@ -415,7 +415,7 @@ static void test_request_with_custom_headers(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  valk_aio_http_server *srv = result->ref.ptr;
+  valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
   int port = valk_aio_http2_server_get_port(srv);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
@@ -469,7 +469,7 @@ static void test_multiple_paths(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  valk_aio_http_server *srv = result->ref.ptr;
+  valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
   int port = valk_aio_http2_server_get_port(srv);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
@@ -523,7 +523,7 @@ static void test_concurrent_streams_same_connection(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  valk_aio_http_server *srv = result->ref.ptr;
+  valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
   int port = valk_aio_http2_server_get_port(srv);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
@@ -595,7 +595,7 @@ static void test_connect_with_hostname(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect_host(sys, "127.0.0.1", port, "test.localhost");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -698,7 +698,7 @@ static void test_handle_diagnostics(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -768,7 +768,7 @@ static void test_update_queue_stats(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  (void)valk_aio_http2_server_get_port(result->ref.ptr);
+  (void)valk_aio_http2_server_get_port_from_ref(result);
 
   valk_aio_update_queue_stats(sys);
   valk_aio_update_queue_stats(NULL);
@@ -815,7 +815,7 @@ static void test_rapid_connect_disconnect(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-int port = valk_aio_http2_server_get_port(result->ref.ptr);
+int port = valk_aio_http2_server_get_port_from_ref(result);
 
 #define RAPID_ITERATIONS 5
   for (int i = 0; i < RAPID_ITERATIONS; i++) {
@@ -895,7 +895,7 @@ static void test_server_with_config(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -943,7 +943,7 @@ static void test_many_headers(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -1050,7 +1050,7 @@ static void test_post_request(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -1099,7 +1099,7 @@ static void test_put_request(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -1148,7 +1148,7 @@ static void test_delete_request(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -1196,7 +1196,7 @@ static void test_sequential_requests(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -1249,7 +1249,7 @@ static void test_parallel_requests_same_stream(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -1311,7 +1311,7 @@ static void test_multiple_clients_sequential(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   for (int c = 0; c < 3; c++) {
     valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
@@ -1368,7 +1368,7 @@ static void test_head_request(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -1416,7 +1416,7 @@ static void test_options_request(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -1464,7 +1464,7 @@ static void test_long_path(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -1520,7 +1520,7 @@ static void test_query_string(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -1720,7 +1720,7 @@ static void test_handle_diagnostics_all_kinds(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -1922,7 +1922,7 @@ static void test_response_with_status(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -1974,7 +1974,7 @@ static void test_localhost_hostname(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect_host(sys, "localhost", port, NULL);
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2022,7 +2022,7 @@ static void test_large_body_post(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2080,7 +2080,7 @@ static void test_many_parallel_clients(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   #define NUM_CLIENTS 10
   valk_future *fclient[NUM_CLIENTS];
@@ -2143,7 +2143,7 @@ static void __attribute__((unused)) test_many_streams_per_client(VALK_TEST_ARGS(
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2239,7 +2239,7 @@ static void __attribute__((unused)) test_burst_requests(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2297,7 +2297,7 @@ static void test_empty_body_post(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2345,7 +2345,7 @@ static void test_special_characters_in_path(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2394,7 +2394,7 @@ static void test_binary_body(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2461,7 +2461,7 @@ static void test_patch_request(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2511,7 +2511,7 @@ static void test_connection_metrics(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2559,7 +2559,7 @@ static void test_stream_metrics(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2625,7 +2625,7 @@ void test_backpressure_under_load(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   #define NUM_CLIENTS 4
   valk_future *client_futures[NUM_CLIENTS];
@@ -2702,7 +2702,7 @@ void test_backpressure_event_driven_resume(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(client_sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2762,7 +2762,7 @@ void test_abrupt_client_disconnect(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2812,7 +2812,7 @@ void test_rapid_client_disconnect_mid_request(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   for (int i = 0; i < 3; i++) {
     valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
@@ -2873,7 +2873,7 @@ void test_multiple_parallel_streams_then_disconnect(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2931,7 +2931,7 @@ void test_large_concurrent_body_then_disconnect(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);
@@ -2990,7 +2990,7 @@ void test_ssl_connection_state_transitions(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   #define TRANSITIONS 10
   for (int i = 0; i < TRANSITIONS; i++) {
@@ -3045,7 +3045,7 @@ void test_connection_closing_state_handling(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
-  int port = valk_aio_http2_server_get_port(result->ref.ptr);
+  int port = valk_aio_http2_server_get_port_from_ref(result);
 
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
   valk_arc_box *clientBox = valk_future_await(fclient);

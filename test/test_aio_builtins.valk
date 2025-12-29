@@ -1,11 +1,33 @@
+; Test suite for AIO metrics builtins
+; Tests: aio/metrics, aio/metrics-json, aio/metrics-prometheus
+
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 
-(print "Testing AIO metrics builtins...")
+(test/suite "AIO Metrics Builtins Tests")
 
-(def {sys} (aio/start))
+(test/define "aio/metrics returns metrics qexpr"
+  {do
+    (def {sys} (aio/start))
+    (def {result} (aio/metrics sys))
+    (aio/stop sys)
+    (not (nil? result))
+  })
 
-(print "Metrics qexpr:" (aio/metrics sys))
-(print "Metrics JSON:" (aio/metrics-json sys))
-(print "Metrics Prometheus:" (aio/metrics-prometheus sys))
+(test/define "aio/metrics-json returns valid result"
+  {do
+    (def {sys} (aio/start))
+    (def {result} (aio/metrics-json sys))
+    (aio/stop sys)
+    (and (not (nil? result)) (not (error? result)))
+  })
 
-(print "AIO metrics builtins test complete")
+(test/define "aio/metrics-prometheus returns valid result"
+  {do
+    (def {sys} (aio/start))
+    (def {result} (aio/metrics-prometheus sys))
+    (aio/stop sys)
+    (and (not (nil? result)) (not (error? result)))
+  })
+
+(test/run)

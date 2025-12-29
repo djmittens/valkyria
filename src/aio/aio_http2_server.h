@@ -18,6 +18,11 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
 void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_fn);
 
 int valk_aio_http2_server_get_port(valk_aio_http_server *srv);
+valk_aio_http_server* valk_aio_http2_server_from_ref(struct valk_lval_t *server_ref);
+int valk_aio_http2_server_get_port_from_ref(struct valk_lval_t *server_ref);
+
+valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv,
+                                         struct valk_arc_box *box);
 
 #ifdef VALK_METRICS_ENABLED
 void valk_http2_server_metrics_init(valk_aio_system_t* sys, 

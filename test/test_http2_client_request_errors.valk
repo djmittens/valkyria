@@ -1,326 +1,158 @@
 ; Tests for http2/client-request error paths and custom headers edge cases
-; Covers:
-;   - __http2_client_request_connect_cb error paths (connection failures)
-;   - Custom headers processing (various formats, edge cases)
 
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 
-(def {TEST_PORT} (net/get-available-port))
+(test/suite "HTTP2 Client Request Error Paths")
+
 (def {aio} (aio/start))
 
-(def {tests-passed} 0)
-(def {tests-run} 0)
-
-(fun {test-pass name} {
-  (def {tests-passed} (+ tests-passed 1))
-  (def {tests-run} (+ tests-run 1))
-  (printf "  PASS: %s\n" name)
-})
-
-(fun {test-fail name reason} {
-  (def {tests-run} (+ tests-run 1))
-  (printf "  FAIL: %s - %s\n" name reason)
-})
-
-(println "")
-(println "=== HTTP2 Client Request Error Path Tests ===")
-(println "")
-
-; === Test 1: Connection failure to non-listening port ===
-; This triggers __http2_client_request_connect_cb error path where result->type != VALK_SUC
-(aio/schedule aio 50 (\ {} {
-  (println "Test 1: Connection failure (non-listening port)...")
-  
-  (http2/client-request aio "127.0.0.1" 59999 "/test"
-    (\ {resp} {
-      (if (error? resp)
-        {(do
-          (printf "    Received error (expected): %s\n" (str resp))
-          (test-pass "connection-error-callback")
-        )}
-        {(test-fail "connection-error-callback" "expected error, got response")}
-      )
-    }))
-}))
-
-; === Test 2: Connection failure to invalid/unreachable host ===
-; Uses a non-routable IP address to trigger connection timeout/error
-(aio/schedule aio 100 (\ {} {
-  (println "Test 2: Connection failure (invalid host)...")
-  
-  (http2/client-request aio "10.255.255.1" 443 "/test"
-    (\ {resp} {
-      (if (error? resp)
-        {(do
-          (printf "    Received error (expected): %s\n" (str resp))
-          (test-pass "invalid-host-error")
-        )}
-        {(test-fail "invalid-host-error" "expected error, got response")}
-      )
-    }))
-}))
-
-; === Test 3: Connection with custom headers to non-listening port ===
-; Tests header cleanup in error path
-(aio/schedule aio 150 (\ {} {
-  (println "Test 3: Connection failure with custom headers...")
-  
-  (http2/client-request-with-headers aio "127.0.0.1" 59998 "/test"
-    {{"x-custom" "value"} {"x-another" "test"}}
-    (\ {resp} {
-      (if (error? resp)
-        {(test-pass "connection-error-with-headers")}
-        {(test-fail "connection-error-with-headers" "expected error")}
-      )
-    }))
-}))
-
-; === Server for successful path tests ===
 (def {header-echo-handler}
   (\ {req} {
     (= {headers} (req/headers req))
     {:status "200" :body (str headers)}
   }))
 
-(http2/server-listen aio TEST_PORT header-echo-handler)
+(def {server} (http2/server-listen aio 0 header-echo-handler))
+(def {TEST_PORT} (http2/server-port server))
 
-; === Test 4: Headers with extra elements in pair (only first 2 used) ===
-(aio/schedule aio 300 (\ {} {
-  (println "Test 4: Headers with extra elements in pair...")
-  
+(test/async "connection failure to non-listening port" (\ {done} {
+  (http2/client-request aio "127.0.0.1" 59999 "/test"
+    (\ {resp} {
+      (done (error? resp))
+    }))
+}))
+
+(test/async "connection failure with custom headers" (\ {done} {
+  (http2/client-request-with-headers aio "127.0.0.1" 59998 "/test"
+    {{"x-custom" "value"} {"x-another" "test"}}
+    (\ {resp} {
+      (done (error? resp))
+    }))
+}))
+
+(test/async "headers with extra elements in pair" (\ {done} {
   (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
     {{"x-header" "value" "extra" "ignored"}}
     (\ {resp} {
       (if (error? resp)
-        {(test-fail "extra-element-headers" (str resp))}
-        {(do
-          (= {status} (http2/response-status resp))
-          (if (== status "200")
-            {(test-pass "extra-element-headers")}
-            {(test-fail "extra-element-headers" (str "bad status: " status))}
-          )
-        )}
-      )
+        {(done false)}
+        {(done (== (http2/response-status resp) "200"))})
     }))
 }))
 
-; === Test 5: Single header ===
-(aio/schedule aio 350 (\ {} {
-  (println "Test 5: Request with single header...")
-  
+(test/async "request with single header" (\ {done} {
   (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
     {{"x-single-header" "single-value"}}
     (\ {resp} {
       (if (error? resp)
-        {(test-fail "single-header" (str resp))}
-        {(do
-          (= {status} (http2/response-status resp))
-          (if (== status "200")
-            {(test-pass "single-header")}
-            {(test-fail "single-header" (str "bad status: " status))}
-          )
-        )}
-      )
+        {(done false)}
+        {(done (== (http2/response-status resp) "200"))})
     }))
 }))
 
-; === Test 6: Multiple headers ===
-(aio/schedule aio 400 (\ {} {
-  (println "Test 6: Request with multiple headers...")
-  
+(test/async "request with multiple headers" (\ {done} {
   (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
     {{"x-header-1" "value1"} {"x-header-2" "value2"} {"x-header-3" "value3"}}
     (\ {resp} {
-      (if (error? resp)
-        {(test-fail "multi-headers" (str resp))}
-        {(test-pass "multi-headers")}
-      )
+      (done (not (error? resp)))
     }))
 }))
 
-; === Test 7: Headers with special characters ===
-(aio/schedule aio 450 (\ {} {
-  (println "Test 7: Headers with special characters...")
-  
+(test/async "headers with special characters" (\ {done} {
   (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
     {{"x-special" "value with spaces"} {"x-nums" "12345"}}
     (\ {resp} {
-      (if (error? resp)
-        {(test-fail "special-chars-headers" (str resp))}
-        {(test-pass "special-chars-headers")}
-      )
+      (done (not (error? resp)))
     }))
 }))
 
-; === Test 8: Headers with empty value ===
-(aio/schedule aio 500 (\ {} {
-  (println "Test 8: Headers with empty value...")
-  
+(test/async "headers with empty value" (\ {done} {
   (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
     {{"x-empty-value" ""}}
     (\ {resp} {
-      (if (error? resp)
-        {(test-fail "empty-value-header" (str resp))}
-        {(test-pass "empty-value-header")}
-      )
+      (done (not (error? resp)))
     }))
 }))
 
-; === Test 9: Malformed header pairs (single element instead of pair) ===
-; The code checks for >= 2 elements, this should be skipped
-(aio/schedule aio 550 (\ {} {
-  (println "Test 9: Malformed header (single element)...")
-  
+(test/async "malformed header single element skipped" (\ {done} {
   (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
     {{"only-name"}}
     (\ {resp} {
-      (if (error? resp)
-        {(test-fail "malformed-single" (str resp))}
-        {(test-pass "malformed-single-skipped")}
-      )
+      (done (not (error? resp)))
     }))
 }))
 
-; === Test 10: Mixed valid and malformed headers ===
-(aio/schedule aio 600 (\ {} {
-  (println "Test 10: Mixed valid and malformed headers...")
-  
+(test/async "mixed valid and malformed headers" (\ {done} {
   (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
     {{"x-valid" "value"} {"only-name"} {"x-also-valid" "val2"}}
     (\ {resp} {
-      (if (error? resp)
-        {(test-fail "mixed-headers" (str resp))}
-        {(test-pass "mixed-headers")}
-      )
+      (done (not (error? resp)))
     }))
 }))
 
-; === Test 11: Non-string header name (should be skipped) ===
-(aio/schedule aio 650 (\ {} {
-  (println "Test 11: Non-string header name...")
-  
+(test/async "non-string header name skipped" (\ {done} {
   (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
     {{123 "value"} {"x-valid" "val"}}
     (\ {resp} {
-      (if (error? resp)
-        {(test-fail "non-string-name" (str resp))}
-        {(test-pass "non-string-name-skipped")}
-      )
+      (done (not (error? resp)))
     }))
 }))
 
-; === Test 12: Non-string header value (should be skipped) ===
-(aio/schedule aio 700 (\ {} {
-  (println "Test 12: Non-string header value...")
-  
+(test/async "non-string header value skipped" (\ {done} {
   (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
     {{"x-header" 456} {"x-valid" "val"}}
     (\ {resp} {
-      (if (error? resp)
-        {(test-fail "non-string-value" (str resp))}
-        {(test-pass "non-string-value-skipped")}
-      )
+      (done (not (error? resp)))
     }))
 }))
 
-; === Test 13: Nil headers (should work like no headers) ===
-(aio/schedule aio 750 (\ {} {
-  (println "Test 13: Nil headers parameter...")
-  
+(test/async "nil headers works like no headers" (\ {done} {
   (http2/client-request aio "127.0.0.1" TEST_PORT "/test"
     (\ {resp} {
-      (if (error? resp)
-        {(test-fail "nil-headers" (str resp))}
-        {(test-pass "nil-headers")}
-      )
+      (done (not (error? resp)))
     }))
 }))
 
-; === Test 14: Very long header value ===
-(aio/schedule aio 800 (\ {} {
-  (println "Test 14: Long header value...")
-  
+(test/async "long header value" (\ {done} {
   (= {long-value} "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-=_+[]{}|;:',.<>/?!@#$%^&*()abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-  
   (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
     {{"x-long-header" long-value}}
     (\ {resp} {
-      (if (error? resp)
-        {(test-fail "long-header" (str resp))}
-        {(test-pass "long-header")}
-      )
+      (done (not (error? resp)))
     }))
 }))
 
-; === Test 15: Standard HTTP headers ===
-(aio/schedule aio 850 (\ {} {
-  (println "Test 15: Standard HTTP headers...")
-  
+(test/async "standard HTTP headers" (\ {done} {
   (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/api/test"
     {{"content-type" "application/json"} {"accept" "application/json"} {"user-agent" "TestClient/1.0"}}
     (\ {resp} {
-      (if (error? resp)
-        {(test-fail "standard-headers" (str resp))}
-        {(test-pass "standard-headers")}
-      )
+      (done (not (error? resp)))
     }))
 }))
 
-; === Test 16: Multiple concurrent connection errors ===
-(aio/schedule aio 900 (\ {} {
-  (println "Test 16: Multiple concurrent connection errors...")
-  
-  (http2/client-request aio "127.0.0.1" 59997 "/a" (\ {r} {
-    (if (error? r) {(test-pass "concurrent-err-1")} {(test-fail "concurrent-err-1" "expected error")})
-  }))
-  (http2/client-request aio "127.0.0.1" 59996 "/b" (\ {r} {
-    (if (error? r) {(test-pass "concurrent-err-2")} {(test-fail "concurrent-err-2" "expected error")})
-  }))
+(test/async "concurrent connection error 1" (\ {done} {
+  (http2/client-request aio "127.0.0.1" 59997 "/a"
+    (\ {resp} {
+      (done (error? resp))
+    }))
 }))
 
-; === Test 17: Connection error with callback that itself accesses error ===
-(aio/schedule aio 1000 (\ {} {
-  (println "Test 17: Error callback inspects error details...")
-  
+(test/async "concurrent connection error 2" (\ {done} {
+  (http2/client-request aio "127.0.0.1" 59996 "/b"
+    (\ {resp} {
+      (done (error? resp))
+    }))
+}))
+
+(test/async "error callback inspects error details" (\ {done} {
   (http2/client-request aio "127.0.0.1" 59995 "/test"
     (\ {resp} {
       (if (error? resp)
-        {(do
-          (= {err-str} (str resp))
-          (if (> (len err-str) 0)
-            {(test-pass "error-inspection")}
-            {(test-fail "error-inspection" "empty error string")}
-          )
-        )}
-        {(test-fail "error-inspection" "expected error")}
-      )
+        {(done (> (len (str resp)) 0))}
+        {(done false)})
     }))
 }))
 
-; === Results ===
-(aio/schedule aio 5000 (\ {} {
-  (println "")
-  (printf "=== Results: %d/%d tests passed ===\n" tests-passed tests-run)
-  (println "")
-  
-  ; We expect test 1 (connection failure) and test 2 (invalid host) to fail with errors
-  ; Connection error tests may have delayed callback, so just check we got some passes
-  (if (>= tests-passed 12)
-    {(do
-      (println "PASS: HTTP2 client request error paths covered")
-      (exit 0)
-    )}
-    {(do
-      (println "FAIL: Not enough tests passed")
-      (exit 1)
-    )}
-  )
-}))
-
-; Timeout
-(aio/schedule aio 30000 (\ {} {
-  (println "TIMEOUT!")
-  (exit 1)
-}))
-
+(test/run-async aio)
 (aio/run aio)

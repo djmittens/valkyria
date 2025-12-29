@@ -70,7 +70,7 @@ static void test_basic_http2_connection(VALK_TEST_ARGS()) {
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
   valk_lval_t *server_result = valk_async_handle_await(server_handle);
   ASSERT_TRUE(LVAL_TYPE(server_result) != LVAL_ERR);
-  valk_aio_http_server *srv = server_result->ref.ptr;
+  valk_aio_http_server *srv = valk_aio_http2_server_from_ref(server_result);
   int port = valk_aio_http2_server_get_port(srv);
   
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
@@ -145,7 +145,7 @@ static void test_minimal_config(VALK_TEST_ARGS()) {
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
   valk_lval_t *server_result = valk_async_handle_await(server_handle);
   ASSERT_TRUE(LVAL_TYPE(server_result) != LVAL_ERR);
-  valk_aio_http_server *srv = server_result->ref.ptr;
+  valk_aio_http_server *srv = valk_aio_http2_server_from_ref(server_result);
   int port = valk_aio_http2_server_get_port(srv);
   
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
@@ -207,7 +207,7 @@ static void test_multiple_requests_single_connection(VALK_TEST_ARGS()) {
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
   valk_lval_t *server_result = valk_async_handle_await(server_handle);
   ASSERT_TRUE(LVAL_TYPE(server_result) != LVAL_ERR);
-  valk_aio_http_server *srv = server_result->ref.ptr;
+  valk_aio_http_server *srv = valk_aio_http2_server_from_ref(server_result);
   int port = valk_aio_http2_server_get_port(srv);
   
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
@@ -274,7 +274,7 @@ static void test_multiple_concurrent_clients(VALK_TEST_ARGS()) {
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
   valk_lval_t *server_result = valk_async_handle_await(server_handle);
   ASSERT_TRUE(LVAL_TYPE(server_result) != LVAL_ERR);
-  valk_aio_http_server *srv = server_result->ref.ptr;
+  valk_aio_http_server *srv = valk_aio_http2_server_from_ref(server_result);
   int port = valk_aio_http2_server_get_port(srv);
   
   #define NUM_CLIENTS 3
@@ -351,7 +351,7 @@ static void test_server_shutdown_with_active_clients(VALK_TEST_ARGS()) {
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
   valk_lval_t *server_result = valk_async_handle_await(server_handle);
   ASSERT_TRUE(LVAL_TYPE(server_result) != LVAL_ERR);
-  valk_aio_http_server *srv = server_result->ref.ptr;
+  valk_aio_http_server *srv = valk_aio_http2_server_from_ref(server_result);
   int port = valk_aio_http2_server_get_port(srv);
   
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
@@ -485,7 +485,7 @@ static void test_metrics_available(VALK_TEST_ARGS()) {
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
   valk_lval_t *server_result = valk_async_handle_await(server_handle);
   ASSERT_TRUE(LVAL_TYPE(server_result) != LVAL_ERR);
-  valk_aio_http_server *srv = server_result->ref.ptr;
+  valk_aio_http_server *srv = valk_aio_http2_server_from_ref(server_result);
   int port = valk_aio_http2_server_get_port(srv);
   
   valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");

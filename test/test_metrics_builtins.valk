@@ -1,37 +1,67 @@
 ; Test metrics builtins
+; Run with: ./build/valk test/test_metrics_builtins.valk
+
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 
-; Test 1: metrics/json should return a string
-(println "Test 1: metrics/json returns string")
-(println (metrics/json))
-(println "")
+(test/suite "Metrics Builtins Tests")
 
-; Test 2: metrics/prometheus should return a string
-(println "Test 2: metrics/prometheus returns string")
-(println (metrics/prometheus))
-(println "")
+; Test: metrics/json returns a string
+(test/define "metrics/json returns string"
+  {do
+    (= {result} (metrics/json))
+    (test/assert (string? result) "metrics/json should return a string")
+    (test/assert (> (len result) 0) "metrics/json should return non-empty string")
+    true
+  })
 
-; Test 3: metrics/counter-inc should work without labels
-(println "Test 3: metrics/counter-inc without labels")
-(metrics/counter-inc "test_counter")
-(println "After incrementing counter, JSON:")
-(println (metrics/json))
-(println "")
+; Test: metrics/prometheus returns a string
+(test/define "metrics/prometheus returns string"
+  {do
+    (= {result} (metrics/prometheus))
+    (test/assert (string? result) "metrics/prometheus should return a string")
+    (test/assert (>= (len result) 0) "metrics/prometheus should return a string (may be empty initially)")
+    true
+  })
 
-; Test 4: metrics/counter-inc should work with labels
-(println "Test 4: metrics/counter-inc with labels")
-(metrics/counter-inc "test_counter_labeled" "server" "test" "port" "8080")
-(println "After incrementing labeled counter, JSON:")
-(println (metrics/json))
-(println "")
+; Test: metrics/counter-inc works without labels
+(test/define "metrics/counter-inc without labels"
+  {do
+    (metrics/counter-inc "test_counter_no_labels")
+    (= {json} (metrics/json))
+    (test/assert (string? json) "metrics/json should still return string after counter-inc")
+    true
+  })
 
-; Test 5: Increment the same counter multiple times
-(println "Test 5: Increment counter multiple times")
-(metrics/counter-inc "test_counter")
-(metrics/counter-inc "test_counter")
-(metrics/counter-inc "test_counter")
-(println "After 3 more increments, JSON:")
-(println (metrics/json))
-(println "")
+; Test: metrics/counter-inc works with labels
+(test/define "metrics/counter-inc with labels"
+  {do
+    (metrics/counter-inc "test_counter_labeled" "server" "test" "port" "8080")
+    (= {json} (metrics/json))
+    (test/assert (string? json) "metrics/json should still return string after labeled counter-inc")
+    true
+  })
 
-(println "All tests passed!")
+; Test: Increment the same counter multiple times
+(test/define "metrics/counter-inc multiple increments"
+  {do
+    (metrics/counter-inc "test_counter_multi")
+    (metrics/counter-inc "test_counter_multi")
+    (metrics/counter-inc "test_counter_multi")
+    (= {json} (metrics/json))
+    (test/assert (string? json) "metrics/json should work after multiple increments")
+    true
+  })
+
+; Test: Both JSON and Prometheus formats work together
+(test/define "metrics/json and metrics/prometheus both work"
+  {do
+    (metrics/counter-inc "test_both_formats")
+    (= {json} (metrics/json))
+    (= {prom} (metrics/prometheus))
+    (test/assert (string? json) "metrics/json should return string")
+    (test/assert (string? prom) "metrics/prometheus should return string")
+    true
+  })
+
+(test/run)

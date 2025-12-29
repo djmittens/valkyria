@@ -3,8 +3,8 @@
 ; Starts a local server and tests the high-level fetch functions
 
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 
-; Define reverse - required by async_monadic.valk
 (fun {reverse l} {
   (fun {reverse-helper acc remaining} {
     (if (== remaining nil)
@@ -16,28 +16,10 @@
 
 (load "src/http_api.valk")
 
-; Test server port - dynamically allocated to avoid conflicts
-(def {TEST_PORT} (net/get-available-port))
+(test/suite "HTTP API Network Tests")
 
-; Create the AIO system
 (def {aio} (aio/start))
 
-; Test counters
-(def {tests-run} 0)
-(def {tests-passed} 0)
-
-; Simple assertion helper
-(fun {assert-test name condition} {
-  (def {tests-run} (+ tests-run 1))
-  (if condition
-    {(do
-      (def {tests-passed} (+ tests-passed 1))
-      (printf "  PASS: %s\n" name))}
-    {(printf "  FAIL: %s\n" name)})
-})
-
-; Server handler - returns different responses based on path for testing
-; Uses quasiquote (`) to build plist without evaluating :status/:body as symbols
 (def {server-handler}
   (\ {req} {
     (= {path} (req/path req))
@@ -46,169 +28,111 @@
       {`{:status "200" :body "Hello from test server"}})
   }))
 
-(println "")
-(println "=== HTTP API Network Tests ===")
-(println "")
-(printf "Starting test server on port %d...\n" TEST_PORT)
-(http2/server-listen aio TEST_PORT server-handler)
+(def {server} (http2/server-listen aio 0 server-handler))
+(def {test-port} (http2/server-port server))
 
-; Run tests after server starts
-(aio/schedule aio 200 (\ {} {
-  (println "Running http_api.valk network tests...")
-  (println "")
+(test/async "http2/fetch returns async operation" (\ {done} {
+  (= {fetch-op} (http2/fetch aio "127.0.0.1" test-port "/"))
+  (if (== fetch-op nil)
+    {(done false)}
+    {(fetch-op (\ {resp} {
+      (done (and (not (error? resp)) (== (http2/response-status resp) "200")))
+    }))})
+}))
 
-  ; Test 1: http2/fetch returns an async operation
-  (println "Test group: http2/fetch")
-  (= {fetch-op} (http2/fetch aio "127.0.0.1" TEST_PORT "/"))
-  (assert-test "http2/fetch returns lambda" (not (== fetch-op nil)))
-
-  ; Test 2: Execute the fetch operation
-  (fetch-op (\ {resp} {
-    (assert-test "http2/fetch callback receives response" (not (error? resp)))
-    (assert-test "http2/fetch response has status 200" (== (http2/response-status resp) "200"))
-    (assert-test "http2/fetch response has body" (!= (http2/response-body resp) ""))
-
-    ; Test 3: http2/fetch-text
-    (println "")
-    (println "Test group: http2/fetch-text")
-    (= {text-op} (http2/fetch-text aio "127.0.0.1" TEST_PORT "/"))
-    (assert-test "http2/fetch-text returns lambda" (not (== text-op nil)))
-
-    (text-op (\ {body} {
-      ; Note: fetch-text returns just the body, not the full response
-      (assert-test "http2/fetch-text returns body" (not (error? body)))
-
-      ; Test 4: http2/fetch-ok?
-      (println "")
-      (println "Test group: http2/fetch-ok?")
-      (= {ok-op} (http2/fetch-ok? aio "127.0.0.1" TEST_PORT "/"))
-      (ok-op (\ {is-ok} {
-        (assert-test "http2/fetch-ok? returns true for 200" (== is-ok 1))
-
-        ; Test 5: http2/health-check
-        (println "")
-        (println "Test group: http2/health-check")
-        (= {health-op} (http2/health-check aio "127.0.0.1" TEST_PORT "/"))
-        (health-op (\ {is-healthy} {
-          (assert-test "http2/health-check returns true for healthy endpoint" (== is-healthy 1))
-
-          ; Note: fetch-sync and fetch-and-print use async/run which doesn't work
-          ; inside an already-async context. Skip these for now.
-
-          ; Test 6: http2/fetch-with-request
-          (println "")
-          (println "Test group: http2/fetch-with-request")
-          (= {req} (http2/get "127.0.0.1"))
-          (= {with-req-op} (http2/fetch-with-request aio "127.0.0.1" TEST_PORT "/" req))
-          (assert-test "http2/fetch-with-request returns lambda" (not (== with-req-op nil)))
-
-          (with-req-op (\ {wr-resp} {
-            (assert-test "http2/fetch-with-request gets response" (not (error? wr-resp)))
-
-            ; Test 9: http2/fetch-retry - just test it creates an operation
-            (println "")
-            (println "Test group: http2/fetch-retry")
-            (= {retry-op} (http2/fetch-retry aio "127.0.0.1" TEST_PORT "/" 2))
-            (assert-test "http2/fetch-retry returns lambda" (not (== retry-op nil)))
-
-            (retry-op (\ {retry-resp} {
-              (assert-test "http2/fetch-retry gets response" (not (error? retry-resp)))
-
-              ; Test 8: http2/health-check-all (batch)
-              (println "")
-              (println "Test group: http2/health-check-all")
-              (= {endpoints} (list
-                (list "127.0.0.1" TEST_PORT "/")
-                (list "127.0.0.1" TEST_PORT "/")))
-              (= {batch-op} (http2/health-check-all aio endpoints))
-              (assert-test "http2/health-check-all returns lambda" (not (== batch-op nil)))
-
-              (batch-op (\ {results} {
-                (assert-test "http2/health-check-all returns results" (not (error? results)))
-
-                ; Test 9: http2/fetch-all (batch fetch)
-                (println "")
-                (println "Test group: http2/fetch-all")
-                (= {fetch-batch-op} (http2/fetch-all aio endpoints))
-                (assert-test "http2/fetch-all returns lambda" (not (== fetch-batch-op nil)))
-
-                (fetch-batch-op (\ {fetch-results} {
-                  (assert-test "http2/fetch-all returns results" (not (error? fetch-results)))
-
-                  ; Test 10: http2/fetch-all-text (batch text fetch)
-                  (println "")
-                  (println "Test group: http2/fetch-all-text")
-                  (= {text-batch-op} (http2/fetch-all-text aio endpoints))
-                  (assert-test "http2/fetch-all-text returns lambda" (not (== text-batch-op nil)))
-
-                  (text-batch-op (\ {text-results} {
-                    (assert-test "http2/fetch-all-text returns results" (not (error? text-results)))
-
-                    ; Test 11: http2/fan-out
-                    (println "")
-                    (println "Test group: http2/fan-out")
-                    (= {extractors} (list
-                      (\ {r} {(list "127.0.0.1" TEST_PORT "/")})
-                      (\ {r} {(list "127.0.0.1" TEST_PORT "/")})))
-                    (= {fanout-op} (http2/fan-out aio "127.0.0.1" TEST_PORT "/" extractors))
-                    (assert-test "http2/fan-out returns lambda" (not (== fanout-op nil)))
-
-                    (fanout-op (\ {fanout-results} {
-                      (assert-test "http2/fan-out returns results" (not (error? fanout-results)))
-
-                      ; Test 12: http2/aggregate
-                      (println "")
-                      (println "Test group: http2/aggregate")
-                      (= {combiner} (\ {responses} {(len responses)}))
-                      (= {agg-op} (http2/aggregate aio endpoints combiner))
-                      (assert-test "http2/aggregate returns lambda" (not (== agg-op nil)))
-
-                      (agg-op (\ {agg-result} {
-                        (assert-test "http2/aggregate returns combined result" (== agg-result 2))
-
-                        ; Test 13: http2/fetch-retry with retry path (error endpoint)
-                        (println "")
-                        (println "Test group: http2/fetch-retry (failure path)")
-                        (= {retry-fail-op} (http2/fetch-retry aio "127.0.0.1" TEST_PORT "/error" 2))
-                        (assert-test "http2/fetch-retry on error path returns lambda" (not (== retry-fail-op nil)))
-
-                        (retry-fail-op (\ {retry-fail-resp} {
-                          ; After 2 retries, should still return the error response
-                          (assert-test "http2/fetch-retry exhausts retries" (not (error? retry-fail-resp)))
-                          (assert-test "http2/fetch-retry returns 500 after retries" (== (http2/response-status retry-fail-resp) "500"))
-
-                          ; Print final results
-                          (println "")
-                          (printf "=== Results: %d/%d tests passed ===\n" tests-passed tests-run)
-                          (println "")
-
-                          ; Stop the server
-                          (aio/stop aio)
-                        }))
-                      }))
-                    }))
-                  }))
-                }))
-              }))
-            }))
-          }))
-        }))
-      }))
-    }))
+(test/async "http2/fetch-text returns body text" (\ {done} {
+  (= {text-op} (http2/fetch-text aio "127.0.0.1" test-port "/"))
+  (text-op (\ {body} {
+    (done (not (error? body)))
   }))
 }))
 
-; Timeout safety
-(aio/schedule aio 10000 (\ {} {
-  (println "TIMEOUT!")
-  (aio/stop aio)
+(test/async "http2/fetch-ok? returns true for 200" (\ {done} {
+  (= {ok-op} (http2/fetch-ok? aio "127.0.0.1" test-port "/"))
+  (ok-op (\ {is-ok} {
+    (done (== is-ok 1))
+  }))
 }))
 
-(aio/run aio)
-(println "HTTP API network tests finished!")
-(println "")
+(test/async "http2/health-check returns true for healthy endpoint" (\ {done} {
+  (= {health-op} (http2/health-check aio "127.0.0.1" test-port "/"))
+  (health-op (\ {is-healthy} {
+    (done (== is-healthy 1))
+  }))
+}))
 
-; Exit with appropriate code
-(if (== tests-passed tests-run)
-  {(exit 0)}
-  {(exit 1)})
+(test/async "http2/fetch-with-request works" (\ {done} {
+  (= {req} (http2/get "127.0.0.1"))
+  (= {with-req-op} (http2/fetch-with-request aio "127.0.0.1" test-port "/" req))
+  (with-req-op (\ {resp} {
+    (done (not (error? resp)))
+  }))
+}))
+
+(test/async "http2/fetch-retry returns response" (\ {done} {
+  (= {retry-op} (http2/fetch-retry aio "127.0.0.1" test-port "/" 2))
+  (retry-op (\ {resp} {
+    (done (not (error? resp)))
+  }))
+}))
+
+(test/async "http2/health-check-all returns results for batch" (\ {done} {
+  (= {endpoints} (list
+    (list "127.0.0.1" test-port "/")
+    (list "127.0.0.1" test-port "/")))
+  (= {batch-op} (http2/health-check-all aio endpoints))
+  (batch-op (\ {results} {
+    (done (not (error? results)))
+  }))
+}))
+
+(test/async "http2/fetch-all returns results for batch" (\ {done} {
+  (= {endpoints} (list
+    (list "127.0.0.1" test-port "/")
+    (list "127.0.0.1" test-port "/")))
+  (= {fetch-batch-op} (http2/fetch-all aio endpoints))
+  (fetch-batch-op (\ {results} {
+    (done (not (error? results)))
+  }))
+}))
+
+(test/async "http2/fetch-all-text returns text results for batch" (\ {done} {
+  (= {endpoints} (list
+    (list "127.0.0.1" test-port "/")
+    (list "127.0.0.1" test-port "/")))
+  (= {text-batch-op} (http2/fetch-all-text aio endpoints))
+  (text-batch-op (\ {results} {
+    (done (not (error? results)))
+  }))
+}))
+
+(test/async "http2/fan-out returns results" (\ {done} {
+  (= {extractors} (list
+    (\ {r} {(list "127.0.0.1" test-port "/")})
+    (\ {r} {(list "127.0.0.1" test-port "/")})))
+  (= {fanout-op} (http2/fan-out aio "127.0.0.1" test-port "/" extractors))
+  (fanout-op (\ {results} {
+    (done (not (error? results)))
+  }))
+}))
+
+(test/async "http2/aggregate combines results" (\ {done} {
+  (= {endpoints} (list
+    (list "127.0.0.1" test-port "/")
+    (list "127.0.0.1" test-port "/")))
+  (= {combiner} (\ {responses} {(len responses)}))
+  (= {agg-op} (http2/aggregate aio endpoints combiner))
+  (agg-op (\ {result} {
+    (done (== result 2))
+  }))
+}))
+
+(test/async "http2/fetch-retry exhausts retries on error path" (\ {done} {
+  (= {retry-op} (http2/fetch-retry aio "127.0.0.1" test-port "/error" 2))
+  (retry-op (\ {resp} {
+    (done (and (not (error? resp)) (== (http2/response-status resp) "500")))
+  }))
+}))
+
+(test/run-async aio)
+(aio/run aio)

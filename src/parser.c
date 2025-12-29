@@ -4786,43 +4786,6 @@ static valk_lval_t* valk_builtin_vm_metrics_prometheus(valk_lenv_t* e,
 }
 
 // ============================================================================
-// NETWORKING UTILITIES
-// ============================================================================
-
-static valk_lval_t* valk_builtin_net_get_available_port(valk_lenv_t* e,
-                                                         valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT(a, valk_lval_list_count(a) == 0,
-              "net/get-available-port takes no arguments");
-
-  int sock = socket(AF_INET, SOCK_STREAM, 0);
-  if (sock < 0) {
-    return valk_lval_err("net/get-available-port: socket() failed");
-  }
-
-  struct sockaddr_in addr = {
-    .sin_family = AF_INET,
-    .sin_addr.s_addr = INADDR_ANY,
-    .sin_port = 0,
-  };
-
-  if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-    close(sock);
-    return valk_lval_err("net/get-available-port: bind() failed");
-  }
-
-  socklen_t len = sizeof(addr);
-  if (getsockname(sock, (struct sockaddr*)&addr, &len) < 0) {
-    close(sock);
-    return valk_lval_err("net/get-available-port: getsockname() failed");
-  }
-
-  int port = ntohs(addr.sin_port);
-  close(sock);
-  return valk_lval_num(port);
-}
-
-// ============================================================================
 // HTTP/2 SERVER BUILTINS
 // ============================================================================
 
@@ -4903,13 +4866,76 @@ static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e,
   return valk_lval_handle(handle);
 }
 
+extern valk_lval_t* valk_async_handle_await(valk_async_handle_t* handle);
+
 static valk_lval_t* valk_builtin_http2_server_port(valk_lenv_t* e,
                                                    valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-  valk_aio_http_server* srv = valk_lval_list_nth(a, 0)->ref.ptr;
+
+  valk_lval_t* arg = valk_lval_list_nth(a, 0);
+  valk_lval_t* server_ref = NULL;
+
+  if (LVAL_TYPE(arg) == LVAL_HANDLE) {
+    valk_async_handle_t* handle = arg->async.handle;
+    valk_async_status_t status = valk_async_handle_get_status(handle);
+    if (status != VALK_ASYNC_COMPLETED) {
+      server_ref = valk_async_handle_await(handle);
+      if (LVAL_TYPE(server_ref) == LVAL_ERR) {
+        return server_ref;
+      }
+    } else {
+      server_ref = handle->result;
+    }
+    if (!server_ref || LVAL_TYPE(server_ref) != LVAL_REF) {
+      return valk_lval_err("http2/server-port: handle result is not a server ref");
+    }
+  } else if (LVAL_TYPE(arg) == LVAL_REF) {
+    server_ref = arg;
+  } else {
+    return valk_lval_err("http2/server-port: expected Handle or Reference, got %s",
+                         valk_ltype_name(LVAL_TYPE(arg)));
+  }
+
+  valk_arc_box* box = (valk_arc_box*)server_ref->ref.ptr;
+  valk_aio_http_server* srv = (valk_aio_http_server*)box->item;
   return valk_lval_num(valk_aio_http2_server_get_port(srv));
+}
+
+static valk_lval_t* valk_builtin_http2_server_stop(valk_lenv_t* e,
+                                                   valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+
+  valk_lval_t* arg = valk_lval_list_nth(a, 0);
+  valk_lval_t* server_ref = NULL;
+
+  if (LVAL_TYPE(arg) == LVAL_HANDLE) {
+    valk_async_handle_t* handle = arg->async.handle;
+    valk_async_status_t status = valk_async_handle_get_status(handle);
+    if (status != VALK_ASYNC_COMPLETED) {
+      server_ref = valk_async_handle_await(handle);
+      if (LVAL_TYPE(server_ref) == LVAL_ERR) {
+        return server_ref;
+      }
+    } else {
+      server_ref = handle->result;
+    }
+    if (!server_ref || LVAL_TYPE(server_ref) != LVAL_REF) {
+      return valk_lval_err("http2/server-stop: handle result is not a server ref");
+    }
+  } else if (LVAL_TYPE(arg) == LVAL_REF) {
+    server_ref = arg;
+  } else {
+    return valk_lval_err("http2/server-stop: expected Handle or Reference, got %s",
+                         valk_ltype_name(LVAL_TYPE(arg)));
+  }
+
+  valk_arc_box* box = (valk_arc_box*)server_ref->ref.ptr;
+  valk_aio_http_server* srv = (valk_aio_http_server*)box->item;
+
+  valk_async_handle_t* stop_handle = valk_aio_http2_stop(srv, box);
+  return valk_lval_handle(stop_handle);
 }
 
 // http2/server-handle: (server-ref handler-fn) -> registers Lisp request
@@ -5234,15 +5260,13 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "vm/metrics-prometheus",
                         valk_builtin_vm_metrics_prometheus);
 
-  // Networking utilities
-  valk_lenv_put_builtin(env, "net/get-available-port",
-                        valk_builtin_net_get_available_port);
-
   // HTTP/2 Server
   valk_lenv_put_builtin(env, "http2/server-listen",
                         valk_builtin_http2_server_listen);
   valk_lenv_put_builtin(env, "http2/server-port",
                         valk_builtin_http2_server_port);
+  valk_lenv_put_builtin(env, "http2/server-stop",
+                        valk_builtin_http2_server_stop);
   valk_lenv_put_builtin(env, "http2/server-handle",
                         valk_builtin_http2_server_handle);
 

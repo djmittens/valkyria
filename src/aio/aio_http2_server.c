@@ -439,7 +439,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
 
   VALK_INFO("Listening on %s:%d", srv->interface, srv->port);
 
-  valk_lval_t *server_ref = valk_lval_ref("http_server", srv, NULL);
+  valk_lval_t *server_ref = valk_lval_ref("http_server", box, NULL);
   valk_async_handle_complete(handle, server_ref);
   valk_dll_insert_after(&sys->liveHandles, srv->listener);
 }
@@ -593,4 +593,124 @@ void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_
 
 int valk_aio_http2_server_get_port(valk_aio_http_server *srv) {
   return srv->port;
+}
+
+valk_aio_http_server* valk_aio_http2_server_from_ref(valk_lval_t *server_ref) {
+  valk_arc_box *box = (valk_arc_box*)server_ref->ref.ptr;
+  return (valk_aio_http_server*)box->item;
+}
+
+int valk_aio_http2_server_get_port_from_ref(valk_lval_t *server_ref) {
+  return valk_aio_http2_server_from_ref(server_ref)->port;
+}
+
+typedef struct {
+  valk_async_handle_t *handle;
+  valk_arc_box *box;
+} __http_stop_ctx_t;
+
+static void __http_stop_listener_close_cb(uv_handle_t *handle) {
+  valk_aio_handle_t *hndl = handle->data;
+  __http_stop_ctx_t *ctx = hndl->arg;
+  valk_arc_box *box = ctx->box;
+  valk_aio_http_server *srv = box->item;
+
+  srv->state = VALK_SRV_CLOSED;
+  VALK_INFO("Server :%d listener closed", srv->port);
+
+  valk_async_handle_complete(ctx->handle, valk_lval_nil());
+  valk_arc_release(box);
+
+  valk_slab_t *slab = hndl->sys->handleSlab;
+  valk_mem_allocator_free((valk_mem_allocator_t *)slab, ctx);
+
+  valk_dll_pop(hndl);
+  valk_slab_release_ptr(slab, hndl);
+}
+
+static void __http_stop_cb(valk_aio_system_t *sys,
+                           struct valk_aio_task_new *task) {
+  valk_arc_box *box = task->arg;
+  valk_async_handle_t *handle = task->handle;
+  valk_aio_http_server *srv = box->item;
+
+  if (srv->state == VALK_SRV_CLOSED) {
+    VALK_INFO("Server :%d already stopped", srv->port);
+    valk_async_handle_complete(handle, valk_lval_nil());
+    valk_arc_release(box);
+    return;
+  }
+
+  if (srv->state == VALK_SRV_CLOSING) {
+    VALK_INFO("Server :%d already stopping", srv->port);
+    valk_async_handle_complete(handle, valk_lval_nil());
+    valk_arc_release(box);
+    return;
+  }
+
+  srv->state = VALK_SRV_CLOSING;
+  VALK_INFO("Server :%d stopping, sending GOAWAY to connections", srv->port);
+
+  if (!sys->shuttingDown) {
+    int goaway_count = 0;
+    valk_aio_handle_t *h = sys->liveHandles.next;
+    while (h && h != &sys->liveHandles) {
+      valk_aio_handle_t *next = h->next;
+      if (h->kind == VALK_HNDL_HTTP_CONN && h->http.server == srv) {
+        if (h->http.state == VALK_CONN_ESTABLISHED &&
+            h->http.session && !__vtable_is_closing(h)) {
+          valk_http2_submit_goaway(h, NGHTTP2_NO_ERROR);
+          valk_http2_flush_pending(h);
+          goaway_count++;
+        }
+      }
+      h = next;
+    }
+    if (goaway_count > 0) {
+      VALK_INFO("Server :%d sent GOAWAY to %d connections", srv->port, goaway_count);
+    }
+  }
+
+  if (srv->listener && !__vtable_is_closing(srv->listener)) {
+    __http_stop_ctx_t *ctx;
+    VALK_WITH_ALLOC((valk_mem_allocator_t *)sys->handleSlab) {
+      ctx = valk_mem_alloc(sizeof(__http_stop_ctx_t));
+    }
+    ctx->handle = handle;
+    ctx->box = box;
+    srv->listener->arg = ctx;
+    srv->listener->onClose = NULL;
+    __vtable_close(srv->listener, (valk_io_close_cb)__http_stop_listener_close_cb);
+  } else {
+    srv->state = VALK_SRV_CLOSED;
+    valk_async_handle_complete(handle, valk_lval_nil());
+    valk_arc_release(box);
+  }
+}
+
+valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv,
+                                         valk_arc_box *box) {
+  valk_aio_system_t *sys = srv->sys;
+  valk_async_handle_t *handle = valk_async_handle_new(sys, NULL);
+
+  valk_arc_retain(box);
+
+  struct valk_aio_task_new *task;
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)sys->handleSlab) {
+    task = valk_mem_alloc(sizeof(valk_aio_task_new));
+  }
+  if (!task) {
+    VALK_ERROR("Handle slab exhausted in http2_stop");
+    valk_async_handle_fail(handle, valk_lval_err("Handle slab exhausted"));
+    valk_arc_release(box);
+    return handle;
+  }
+  task->allocator = (valk_mem_allocator_t *)sys->handleSlab;
+  task->arg = box;
+  task->handle = handle;
+  task->callback = __http_stop_cb;
+
+  valk_uv_exec_task(sys, task);
+
+  return handle;
 }

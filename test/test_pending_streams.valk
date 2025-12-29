@@ -1,13 +1,11 @@
 ; Pending Streams Coverage Test  
 ; Tests that the server can handle multiple concurrent requests with limited arena pool.
-; Some requests may fail due to resource limits, but the server should remain stable.
 
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 
-(def {TEST_PORT} (net/get-available-port))
+(test/suite "Pending Streams Coverage Tests")
 
-; Use adequate buffer pools for per-connection buffer model
-; Each connection holds 1 read buffer until close, so we need 2 * max-connections
 (def {aio} (aio/start {
   :max-connections 16
   :tcp-buffer-pool-size 48
@@ -16,11 +14,6 @@
   :pending-stream-pool-size 32
 }))
 
-(def {requests-started} 0)
-(def {requests-completed} 0)
-(def {requests-errored} 0)
-
-; Handler that sleeps briefly
 (def {handler}
   (\ {req} {
     (= {path} (req/path req))
@@ -29,67 +22,51 @@
     }))
   }))
 
-(println "")
-(println "=== Pending Streams Coverage Test ===")
-(println "")
-(printf "Config: tcp-buffer-pool-size=48, arena-pool-size=8, pending-stream-pool-size=32\n")
-(printf "Starting server on port %d\n" TEST_PORT)
-(http2/server-listen aio TEST_PORT handler)
+(def {server} (http2/server-listen aio 0 handler))
+(def {test-port} (http2/server-port server))
 
-; Helper to send a request and track completion
-(fun {send-request path} {
-  (def {requests-started} (+ requests-started 1))
-  (http2/client-request aio "127.0.0.1" TEST_PORT path (\ {r} {
+(def {requests-completed} 0)
+(def {batch1-done} 0)
+(def {batch2-done} 0)
+(def {batch1-callback} nil)
+(def {batch2-callback} nil)
+
+(fun {send-request path batch-id} {
+  (http2/client-request aio "127.0.0.1" test-port path (\ {r} {
     (if (not (error? r)) 
-      {(do (def {requests-completed} (+ requests-completed 1)) 
-           (printf "  Request to %s completed (total: %d)\n" path requests-completed))}
-      {(do (def {requests-errored} (+ requests-errored 1))
-           (printf "  Request to %s error: %s\n" path (str r)))})
+      {(def {requests-completed} (+ requests-completed 1))}
+      {nil})
+    (if (== batch-id 1)
+      {do
+        (def {batch1-done} (+ batch1-done 1))
+        (if (== batch1-done 4)
+          {(batch1-callback (>= requests-completed 2))}
+          {nil})}
+      {do
+        (def {batch2-done} (+ batch2-done 1))
+        (if (== batch2-done 4)
+          {(batch2-callback (>= requests-completed 4))}
+          {nil})})
   }))
 })
 
-; Send 8 requests in phases
-(aio/schedule aio 100 (\ {} {
-  (println "")
-  (println "Sending first batch of 4 requests...")
-  (send-request "/stream1")
-  (send-request "/stream2")
-  (send-request "/stream3")
-  (send-request "/stream4")
+(test/async "concurrent requests batch 1" (\ {done} {
+  (def {batch1-callback} done)
+  (send-request "/stream1" 1)
+  (send-request "/stream2" 1)
+  (send-request "/stream3" 1)
+  (send-request "/stream4" 1)
 }))
 
-(aio/schedule aio 200 (\ {} {
-  (println "Sending second batch of 4 requests...")
-  (send-request "/stream5")
-  (send-request "/stream6")
-  (send-request "/stream7")
-  (send-request "/stream8")
+(test/async "concurrent requests batch 2" (\ {done} {
+  (def {batch2-callback} done)
+  (aio/schedule aio 200 (\ {} {
+    (send-request "/stream5" 2)
+    (send-request "/stream6" 2)
+    (send-request "/stream7" 2)
+    (send-request "/stream8" 2)
+  }))
 }))
 
-; Check results
-(aio/schedule aio 3000 (\ {} {
-  (println "")
-  (println "=== Results ===")
-  (printf "Requests started: %d\n" requests-started)
-  (printf "Requests completed: %d\n" requests-completed)
-  (printf "Requests errored: %d\n" requests-errored)
-  
-  ; Success if at least half the requests completed
-  (if (>= requests-completed 4)
-    {(do
-      (println "")
-      (println "PASS: Pending streams test completed - server handled concurrent load")
-      (exit 0))}
-    {(do
-      (println "")
-      (printf "FAIL: Only %d of 8 requests completed\n" requests-completed)
-      (exit 1))})
-}))
-
-; Timeout
-(aio/schedule aio 10000 (\ {} {
-  (println "TIMEOUT!")
-  (exit 1)
-}))
-
+(test/run-async aio)
 (aio/run aio)

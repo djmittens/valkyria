@@ -1,8 +1,12 @@
-(load "src/prelude.valk")
+; test_delay_continuation_error.valk
+; Tests that errors in aio/delay continuations are handled properly (return 500)
 
-(def {TEST_PORT} (net/get-available-port))
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "aio/delay Continuation Error Tests")
+
 (def {aio} (aio/start))
-(def {test-passed} 0)
 
 (def {handler}
   (\ {req} {
@@ -15,52 +19,19 @@
     )
   }))
 
-(println "")
-(println "=== aio/delay Continuation Error Test ===")
-(println "")
-(printf "Starting server on port %d\n" TEST_PORT)
-(http2/server-listen aio TEST_PORT handler)
+(def {server} (http2/server-listen aio 0 handler))
+(def {test-port} (http2/server-port server))
 
-(aio/schedule aio 100 (\ {} {
-  (println "Requesting /delay-err endpoint...")
-  (http2/client-request aio "127.0.0.1" TEST_PORT "/delay-err" (\ {resp} {
-    (if (error? resp)
-      {(do
-        (printf "Got error: %s\n" (str resp))
-      )}
-      {(do
-        (= {status} (http2/response-status resp))
-        (printf "Got response with status: %s\n" status)
-        (if (== status "500")
-          {(do
-            (println "PASS: Received 500 error response from aio/delay")
-            (def {test-passed} 1)
-          )}
-          {(println "FAIL: Expected 500 status")}
-        )
-      )}
-    )
-  }))
+(test/async "error in aio/delay continuation returns 500" (\ {done} {
+  (http2/client-request aio "127.0.0.1" test-port "/delay-err"
+    (\ {resp} {
+      (if (error? resp)
+        {(done false)}
+        {do
+          (= {status} (http2/response-status resp))
+          (done (== status "500"))})
+    }))
 }))
 
-(aio/schedule aio 1000 (\ {} {
-  (if (== test-passed 1)
-    {(do
-      (println "")
-      (println "=== Test Passed ===")
-      (exit 0)
-    )}
-    {(do
-      (println "")
-      (println "=== Test Failed ===")
-      (exit 1)
-    )}
-  )
-}))
-
-(aio/schedule aio 5000 (\ {} {
-  (println "TIMEOUT!")
-  (exit 1)
-}))
-
+(test/run-async aio)
 (aio/run aio)
