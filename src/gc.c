@@ -2217,15 +2217,20 @@ static valk_gc_page2_t *valk_gc_page2_alloc(valk_gc_heap2_t *heap, u8 size_class
   u16 slots = list->slots_per_page;
   u16 bitmap_bytes = valk_gc_bitmap_bytes(size_class);
   
-  u64 current = atomic_load(&heap->committed_bytes);
-  if (current + page_size > heap->hard_limit) {
-    VALK_WARN("Cannot allocate page: would exceed hard limit (%zu + %zu > %zu)",
-              current, page_size, heap->hard_limit);
-    return NULL;
-  }
+  sz current = atomic_load(&heap->committed_bytes);
+  sz new_committed;
+  do {
+    if (current + page_size > heap->hard_limit) {
+      VALK_WARN("Cannot allocate page: would exceed hard limit (%zu + %zu > %zu)",
+                current, page_size, heap->hard_limit);
+      return NULL;
+    }
+    new_committed = current + page_size;
+  } while (!atomic_compare_exchange_weak(&heap->committed_bytes, &current, new_committed));
   
   u32 offset = atomic_fetch_add(&list->next_page_offset, (u32)page_size);
   if (offset + page_size > list->region_size) {
+    atomic_fetch_sub(&heap->committed_bytes, page_size);
     VALK_ERROR("Region exhausted for class %d", size_class);
     return NULL;
   }
@@ -2233,6 +2238,7 @@ static valk_gc_page2_t *valk_gc_page2_alloc(valk_gc_heap2_t *heap, u8 size_class
   void *addr = (u8 *)heap->base + list->region_start + offset;
   
   if (mprotect(addr, page_size, PROT_READ | PROT_WRITE) != 0) {
+    atomic_fetch_sub(&heap->committed_bytes, page_size);
     VALK_ERROR("mprotect failed for page at %p (class %d)", addr, size_class);
     return NULL;
   }
@@ -2248,8 +2254,6 @@ static valk_gc_page2_t *valk_gc_page2_alloc(valk_gc_heap2_t *heap, u8 size_class
   
   memset(valk_gc_page2_alloc_bitmap(page), 0, bitmap_bytes);
   memset(valk_gc_page2_mark_bitmap(page), 0, bitmap_bytes);
-  
-  atomic_fetch_add(&heap->committed_bytes, page_size);
   
   return page;
 }
@@ -2808,6 +2812,7 @@ sz valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap) {
 #else
         madvise(page, page_size, MADV_DONTNEED);
 #endif
+        atomic_fetch_sub(&heap->committed_bytes, page_size);
         pages_reclaimed++;
       }
     }
@@ -2974,11 +2979,35 @@ void valk_gc_heap2_get_stats(valk_gc_heap2_t *heap, valk_gc_stats2_t *out) {
 void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab) {
   if (!tlab) return;
   
+  valk_gc_heap2_t *heap = tlab->owner_heap;
+  
   for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page2_t *page = tlab->classes[c].page;
+    u32 next = tlab->classes[c].next_slot;
+    u32 limit = tlab->classes[c].limit_slot;
+    
+    if (page && heap && next < limit) {
+      u32 unused = limit - next;
+      valk_gc_page_list_t *list = &heap->classes[c];
+      u8 *bitmap = valk_gc_page2_alloc_bitmap(page);
+      
+      pthread_mutex_lock(&list->lock);
+      for (u32 i = next; i < limit; i++) {
+        valk_gc_bitmap_clear(bitmap, i);
+      }
+      atomic_fetch_sub(&page->num_allocated, unused);
+      atomic_fetch_sub(&list->used_slots, unused);
+      sz slot_bytes = (sz)unused * list->slot_size;
+      atomic_fetch_sub(&heap->used_bytes, slot_bytes);
+      pthread_mutex_unlock(&list->lock);
+    }
+    
     tlab->classes[c].page = NULL;
     tlab->classes[c].next_slot = 0;
     tlab->classes[c].limit_slot = 0;
   }
+  
+  tlab->owner_heap = NULL;
 }
 
 __attribute__((noreturn))
