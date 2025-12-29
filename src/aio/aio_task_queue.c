@@ -5,6 +5,8 @@ static void __task_queue_notify_cb(uv_async_t *handle) {
 }
 
 static void __task_queue_drain_cb(uv_check_t *handle) {
+  VALK_GC_SAFE_POINT();
+  
   valk_aio_system_t *sys = handle->data;
   if (!sys || sys->shuttingDown) return;
 

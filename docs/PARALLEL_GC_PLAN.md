@@ -2752,6 +2752,428 @@ All major design gaps have been addressed in Phase 10 and Phase 11:
 
 ---
 
+---
+
+## Libuv Event Loop Interrupt for GC Synchronization
+
+### Problem Statement
+
+When GC needs to run, all threads must reach safe points. AIO threads run libuv event loops that can be blocked indefinitely in `uv_run()` waiting for I/O. We need a reliable way to:
+
+1. Wake a libuv loop blocked in `uv_run()` from another thread (the GC coordinator)
+2. Have the loop thread reach a safe point and pause
+3. Participate in parallel GC work
+4. Resume normal operation after GC completes
+
+### Research Findings: libuv Internals
+
+#### 1. `uv_async_send()` - Thread-Safe Loop Wakeup
+
+From libuv source (`src/unix/async.c`):
+
+```c
+int uv_async_send(uv_async_t* handle) {
+  _Atomic int* pending = (_Atomic int*) &handle->pending;
+  _Atomic int* busy = (_Atomic int*) &handle->u.fd;
+
+  if (atomic_load_explicit(pending, memory_order_relaxed) != 0)
+    return 0;  // Already pending, coalesce
+
+  atomic_fetch_add(busy, 1);  // Enter critical section
+  if (atomic_exchange(pending, 1) == 0)
+    uv__async_send(handle->loop);  // Actually wake the loop
+  atomic_fetch_add(busy, -1);  // Exit critical section
+  return 0;
+}
+```
+
+**Key properties:**
+- **Thread-safe**: Uses atomics, safe to call from any thread
+- **Signal-safe**: Uses only async-signal-safe operations (write to eventfd/pipe)
+- **Coalescing**: Multiple sends before callback runs yield single callback
+- **Wakes blocked loop**: Write to eventfd/pipe makes poll return immediately
+
+Internal wakeup mechanism by platform:
+- **Linux**: `eventfd()` - writes 8-byte counter
+- **macOS/BSD with kqueue**: `EVFILT_USER` with `NOTE_TRIGGER` (optimal)
+- **Fallback**: Self-pipe trick - writes 1 byte to pipe
+
+#### 2. `uv_stop()` - Request Loop Exit
+
+```c
+void uv_stop(uv_loop_t* loop) {
+  loop->stop_flag = 1;  // Simple flag set
+}
+```
+
+**Critical limitation**: `uv_stop()` alone is NOT safe from another thread when loop is blocked:
+- Sets `stop_flag = 1` atomically
+- BUT loop may be blocked in `epoll_wait`/`kqueue` with long timeout
+- Loop won't check `stop_flag` until poll returns
+
+**Solution**: Always pair with `uv_async_send()`:
+```c
+void request_loop_stop(gc_coord_t* coord) {
+  uv_stop(coord->loop);        // Set flag (may be blocked)
+  uv_async_send(&coord->wakeup); // Wake loop to check flag
+}
+```
+
+#### 3. Shutdown Race Conditions
+
+libuv handles `uv_async_send()` during shutdown with a spin-wait:
+
+```c
+static void uv__async_spin(uv_async_t* handle) {
+  atomic_store(&handle->pending, 1);  // Block new events
+
+  for (;;) {
+    for (i = 0; i < 997; i++) {
+      if (atomic_load(&handle->u.fd) == 0)  // busy flag
+        return;
+      uv__cpu_relax();  // PAUSE instruction
+    }
+    sched_yield();  // Give up CPU slice
+  }
+}
+```
+
+This ensures all in-flight `uv_async_send()` calls complete before handle is closed.
+
+#### 4. Timeout-Based Safe Points
+
+libuv exposes APIs for external polling with timeouts:
+
+```c
+int fd = uv_backend_fd(loop);        // epoll/kqueue fd
+int timeout = uv_backend_timeout(loop); // -1, 0, or ms
+
+// Poll externally with custom timeout
+poll(&(struct pollfd){.fd = fd, .events = POLLIN}, 1, 
+     min(timeout, GC_SAFEPOINT_INTERVAL_MS));
+
+// Then run without blocking
+uv_run(loop, UV_RUN_NOWAIT);
+```
+
+#### 5. Node.js V8 Pattern
+
+Node.js uses `uv_async_t` for V8 platform task posting:
+
+```cpp
+// Per-isolate async handle
+PerIsolatePlatformData::PerIsolatePlatformData(...) {
+  flush_tasks_ = new uv_async_t();
+  uv_async_init(loop, flush_tasks_, FlushTasks);
+  uv_unref((uv_handle_t*)flush_tasks_);  // Don't keep loop alive!
+  flush_tasks_->data = this;
+}
+
+// Called from any V8 worker thread
+void PostTaskImpl(std::unique_ptr<Task> task, ...) {
+  auto locked = foreground_tasks_.Lock();
+  if (flush_tasks_ == nullptr) return;  // Shutdown check
+  locked.Push(std::make_unique<TaskQueueEntry>(std::move(task), ...));
+  uv_async_send(flush_tasks_);
+}
+```
+
+**Key patterns from Node.js:**
+1. `uv_unref()` async handle - doesn't keep loop alive
+2. Check for `nullptr` in post path for graceful shutdown
+3. Mutex-protected task queue separate from async handle
+4. Async handle only for wakeup, not data transfer
+
+---
+
+### End-to-End GC Interrupt Architecture
+
+#### Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    GC INTERRUPT ARCHITECTURE                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────┐           ┌─────────────────┐                          │
+│  │   Main Thread   │           │  AIO Thread N   │                          │
+│  │  (GC Initiator) │           │  (libuv loop)   │                          │
+│  └────────┬────────┘           └────────┬────────┘                          │
+│           │                             │                                    │
+│           │ 1. GC needed                │ blocked in uv_run()               │
+│           │    (heap pressure)          │                                    │
+│           ▼                             │                                    │
+│  ┌─────────────────┐                    │                                    │
+│  │ Set gc_phase =  │                    │                                    │
+│  │ STW_REQUESTED   │                    │                                    │
+│  └────────┬────────┘                    │                                    │
+│           │                             │                                    │
+│           │ 2. For each AIO loop:       │                                    │
+│           │    uv_async_send(&gc_wakeup)│                                    │
+│           ▼                             │                                    │
+│  ┌─────────────────┐           ┌────────▼────────┐                          │
+│  │ Wait for all    │           │ uv_run() returns│                          │
+│  │ threads_paused  │◄──────────│ (eventfd woke)  │                          │
+│  └────────┬────────┘           └────────┬────────┘                          │
+│           │                             │                                    │
+│           │                    3. gc_wakeup_cb():                            │
+│           │                       ┌────────▼────────┐                        │
+│           │                       │ Check gc_phase  │                        │
+│           │                       │ == STW_REQUESTED│                        │
+│           │                       └────────┬────────┘                        │
+│           │                                │                                 │
+│           │                       4. valk_gc_safe_point_slow():              │
+│           │                       ┌────────▼────────┐                        │
+│           │                       │ Checkpoint arena│                        │
+│           │                       │ threads_paused++│                        │
+│           │                       │ Signal if last  │                        │
+│           │                       └────────┬────────┘                        │
+│           │                                │                                 │
+│           ▼                                ▼                                 │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                    PARALLEL GC PHASE                                │    │
+│  │  - All threads participate via barriers                             │    │
+│  │  - Parallel mark (work-stealing)                                    │    │
+│  │  - Parallel sweep (page partitioning)                               │    │
+│  └───────────────────────────────┬─────────────────────────────────────┘    │
+│                                  │                                          │
+│           │                      │                                          │
+│           ▼                      ▼                                          │
+│  ┌─────────────────┐    ┌─────────────────┐                                │
+│  │ gc_phase = IDLE │    │ Resume uv_run() │                                │
+│  │ broadcast done  │    │ (normal I/O)    │                                │
+│  └─────────────────┘    └─────────────────┘                                │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Data Structures
+
+```c
+typedef struct valk_aio_gc_coord {
+  uv_async_t wakeup;              // Per-loop async handle for GC wakeup
+  _Atomic bool gc_acknowledged;   // This loop has acknowledged GC request
+  uv_loop_t* loop;                // The libuv loop
+  struct valk_aio_system* sys;    // Parent AIO system
+} valk_aio_gc_coord_t;
+
+// In valk_aio_system_t:
+typedef struct valk_aio_system {
+  // ... existing fields ...
+  valk_aio_gc_coord_t gc_coord;   // GC coordination for this loop
+} valk_aio_system_t;
+```
+
+#### Implementation Steps
+
+**Step 1: Initialize GC Wakeup Handle (in `valk_aio_system_create`)**
+
+```c
+static void gc_wakeup_cb(uv_async_t* handle);
+
+int valk_aio_gc_coord_init(valk_aio_system_t* sys) {
+  valk_aio_gc_coord_t* coord = &sys->gc_coord;
+  coord->sys = sys;
+  coord->loop = sys->eventloop;
+  atomic_store(&coord->gc_acknowledged, false);
+  
+  int rv = uv_async_init(sys->eventloop, &coord->wakeup, gc_wakeup_cb);
+  if (rv != 0) return rv;
+  
+  coord->wakeup.data = coord;
+  
+  // CRITICAL: Unref so GC handle doesn't keep loop alive when idle
+  uv_unref((uv_handle_t*)&coord->wakeup);
+  
+  return 0;
+}
+```
+
+**Step 2: GC Wakeup Callback (runs on loop thread)**
+
+```c
+static void gc_wakeup_cb(uv_async_t* handle) {
+  valk_aio_gc_coord_t* coord = (valk_aio_gc_coord_t*)handle->data;
+  
+  // Check if GC is actually requested (coalescing may cause spurious wakeups)
+  valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
+  if (phase != VALK_GC_PHASE_STW_REQUESTED) {
+    return;  // Spurious wakeup or GC already finished
+  }
+  
+  // Already acknowledged? Don't double-count
+  if (atomic_exchange(&coord->gc_acknowledged, true)) {
+    return;
+  }
+  
+  // Enter safe point - this will:
+  // 1. Checkpoint scratch arena
+  // 2. Increment threads_paused
+  // 3. Signal if last thread
+  // 4. Participate in parallel GC work
+  // 5. Wait for GC completion
+  valk_gc_safe_point_slow();
+  
+  // Reset acknowledgment for next GC cycle
+  atomic_store(&coord->gc_acknowledged, false);
+}
+```
+
+**Step 3: Request STW from GC Coordinator**
+
+```c
+void valk_gc_request_stw_all_loops(void) {
+  // Set global phase FIRST (other threads check this)
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_STW_REQUESTED);
+  
+  // Memory barrier to ensure phase is visible before wakeups
+  atomic_thread_fence(memory_order_seq_cst);
+  
+  // Wake all registered AIO loops
+  pthread_mutex_lock(&valk_aio_systems_lock);
+  for (size_t i = 0; i < valk_aio_systems_count; i++) {
+    valk_aio_system_t* sys = valk_aio_systems[i];
+    if (sys && sys->eventloop) {
+      uv_async_send(&sys->gc_coord.wakeup);
+    }
+  }
+  pthread_mutex_unlock(&valk_aio_systems_lock);
+  
+  // Wait for all threads to pause
+  // (includes both AIO threads and non-AIO threads)
+  pthread_mutex_lock(&valk_gc_coord.lock);
+  while (atomic_load(&valk_gc_coord.threads_paused) < 
+         atomic_load(&valk_gc_coord.threads_registered)) {
+    pthread_cond_wait(&valk_gc_coord.all_paused, &valk_gc_coord.lock);
+  }
+  pthread_mutex_unlock(&valk_gc_coord.lock);
+}
+```
+
+**Step 4: Periodic Safe Point Check (Maintenance Timer - Already Exists)**
+
+The maintenance timer already calls `VALK_GC_SAFE_POINT()`:
+
+```c
+// In aio_maintenance.c
+static void __maintenance_timer_cb(uv_timer_t* handle) {
+  valk_aio_system_t* sys = (valk_aio_system_t*)handle->data;
+  
+  // GC safe point - check for STW request
+  VALK_GC_SAFE_POINT();
+  
+  // ... other maintenance work ...
+}
+```
+
+This provides a natural safe point interval (default 100ms) even if no async wakeup is sent.
+
+**Step 5: Graceful Shutdown**
+
+```c
+void valk_aio_gc_coord_destroy(valk_aio_system_t* sys) {
+  valk_aio_gc_coord_t* coord = &sys->gc_coord;
+  
+  // If GC is in progress, wait for it to complete first
+  while (atomic_load(&valk_gc_coord.phase) != VALK_GC_PHASE_IDLE) {
+    VALK_GC_SAFE_POINT();
+  }
+  
+  // Close the async handle
+  uv_close((uv_handle_t*)&coord->wakeup, NULL);
+}
+```
+
+#### Integration with Existing Code
+
+1. **AIO System Creation** (`aio_system.c`):
+   - Add `valk_aio_gc_coord_init()` call after loop initialization
+   - Register AIO system in global list for GC iteration
+
+2. **AIO System Destruction** (`aio_system.c`):
+   - Add `valk_aio_gc_coord_destroy()` before loop cleanup
+   - Unregister from global list
+
+3. **GC Coordinator** (`gc.c`):
+   - Update `valk_gc_heap2_request_stw()` to call `valk_gc_request_stw_all_loops()`
+   - AIO loops now get woken immediately instead of waiting for timer
+
+4. **Safe Point Slow Path** (`gc.c`):
+   - Already correct - participates in parallel GC work
+
+#### Timing Guarantees
+
+| Scenario | Latency to Safe Point |
+|----------|----------------------|
+| AIO blocked in I/O wait | < 1ms (async wakeup) |
+| AIO processing callbacks | < 100ms (maintenance timer) |
+| AIO in Lisp eval | < 1 eval (safe point in eval loop) |
+| Non-AIO thread in eval | < 1 eval (safe point in eval loop) |
+| Main thread in aio/run | < 100ms (sleep loop with safe point) |
+
+#### Why This Works
+
+1. **`uv_async_send()` is thread-safe**: Can be called from GC coordinator thread
+2. **Wakes blocked loops immediately**: Write to eventfd/pipe makes poll return
+3. **Coalescing is fine**: We only need one wakeup per GC cycle
+4. **Unref prevents loop stall**: GC handle doesn't keep loop alive when idle
+5. **Maintenance timer is backup**: Even if async fails, timer provides safe point
+6. **Graceful shutdown**: Waits for GC completion before closing handle
+
+#### Edge Cases Handled
+
+| Edge Case | Handling |
+|-----------|----------|
+| GC requested while loop is idle | Maintenance timer or next I/O event triggers check |
+| Multiple GC requests during one cycle | Coalesced by libuv, single callback |
+| Loop shutdown during GC | Wait for GC completion, then close handle |
+| Async send after handle closed | Won't happen - we wait for GC completion first |
+| Thread unregister during GC | `valk_gc_thread_unregister()` calls safe point first |
+| Main thread in aio/run sleep loop | Safe point checked every 100ms iteration |
+
+---
+
+### Critical Bug Fix: Main Thread Safe Point in aio/run
+
+**Problem Identified**: The main thread calling `aio/run` was GC-registered but never hit safe points. It just slept in a loop:
+
+```c
+// BROKEN - main thread never pauses for GC
+while (!valk_aio_is_shutting_down(sys)) {
+  uv_sleep(100);  // No safe point check!
+}
+```
+
+When the AIO thread triggered GC (e.g., due to heap pressure during allocation):
+1. AIO thread called `request_stw()`, set phase to `STW_REQUESTED`
+2. AIO thread waited for all registered threads to pause
+3. Main thread was sleeping - **never checked `gc_phase`**
+4. **Deadlock**: AIO thread waited forever for main thread
+
+**Fix Applied** (parser.c `valk_builtin_aio_run`):
+
+```c
+while (!valk_aio_is_shutting_down(sys)) {
+  VALK_GC_SAFE_POINT();  // Check if GC needs us to pause
+  uv_sleep(100);
+}
+```
+
+Now when GC is requested:
+1. Main thread wakes from sleep (after up to 100ms)
+2. `VALK_GC_SAFE_POINT()` sees `phase == STW_REQUESTED`
+3. Calls `valk_gc_safe_point_slow()` which:
+   - Checkpoints scratch arena
+   - Increments `threads_paused`
+   - Signals `all_paused` if last thread
+   - Participates in parallel GC work
+   - Waits for GC completion
+4. GC proceeds with all threads properly paused
+
+**Why the original comment was wrong**: The comment claimed "GC is intentionally DISABLED here" but GC was not actually disabled - the main thread was just not participating in STW coordination. This caused the race condition where GC could mark environments while the AIO thread was modifying them (because STW never fully stopped all threads).
+
+---
+
 ## References
 
 1. [The Garbage Collection Handbook](https://gchandbook.org/) - Jones, Hosking, Moss
@@ -2760,3 +3182,6 @@ All major design gaps have been addressed in Phase 10 and Phase 11:
 4. [jemalloc Design](https://jemalloc.net/) - Size class allocator
 5. [tcmalloc Design](https://google.github.io/tcmalloc/design.html) - Thread-caching allocator
 6. [Chase-Lev Deque](https://www.dre.vanderbilt.edu/~schmidt/PDF/work-stealing-dequeue.pdf) - Work stealing
+7. [libuv async handles](https://docs.libuv.org/en/v1.x/async.html) - Thread-safe loop wakeup
+8. [libuv source: async.c](https://github.com/libuv/libuv/blob/v1.x/src/unix/async.c) - Implementation details
+9. [Node.js platform integration](https://github.com/nodejs/node/blob/main/src/node_platform.cc) - V8/libuv coordination pattern

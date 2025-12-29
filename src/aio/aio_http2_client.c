@@ -2,6 +2,7 @@
 #include "aio_http2_conn.h"
 #include "aio_http2_session.h"
 #include "aio_ssl.h"
+#include "gc.h"
 
 extern void valk_uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task);
 
@@ -570,6 +571,8 @@ static char *__client_arena_strdup(const char *s) {
 static void __http2_client_request_response_cb(void *arg, valk_arc_box *result);
 
 static void __http2_client_request_connect_cb(void *arg, valk_arc_box *result) {
+  VALK_GC_SAFE_POINT();
+  
   valk_http2_client_request_ctx_t *ctx = arg;
 
   if (result->type != VALK_SUC) {
@@ -636,6 +639,8 @@ static void __http2_client_request_connect_cb(void *arg, valk_arc_box *result) {
 }
 
 static void __http2_client_request_response_cb(void *arg, valk_arc_box *result) {
+  VALK_GC_SAFE_POINT();
+  
   valk_http2_client_request_ctx_t *ctx = arg;
 
   VALK_INFO("http2/client-request: response received");

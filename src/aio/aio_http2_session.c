@@ -1,5 +1,6 @@
 #include "aio_http2_session.h"
 #include "aio_http2_conn.h"
+#include "gc.h"
 
 extern void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx);
 extern bool valk_http_async_is_closed_callback(void *ctx);
@@ -760,6 +761,8 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
 int valk_http2_on_frame_recv_callback(nghttp2_session *session,
                                       const nghttp2_frame *frame,
                                       void *user_data) {
+  VALK_GC_SAFE_POINT();
+  
   valk_aio_handle_t *conn = (valk_aio_handle_t *)user_data;
 
   // Any frame from the peer proves the connection is alive
@@ -927,6 +930,8 @@ int valk_http2_on_frame_recv_callback(nghttp2_session *session,
 }
 
 static void __pending_stream_process_batch(valk_aio_system_t *sys) {
+  VALK_GC_SAFE_POINT();
+  
   while (sys && sys->pending_streams.count > 0) {
     valk_slab_item_t *arena_item = valk_slab_aquire(sys->httpStreamArenas);
     if (!arena_item) {

@@ -303,6 +303,8 @@ void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
 }
 
 static void valk_async_cancel_task(void *ctx) {
+  VALK_GC_SAFE_POINT();
+  
   valk_async_handle_t *handle = (valk_async_handle_t *)ctx;
   if (!handle) return;
 

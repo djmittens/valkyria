@@ -9,6 +9,8 @@ static void __sleep_timer_close_cb(uv_handle_t *handle) {
 }
 
 static void __schedule_timer_cb(uv_timer_t *handle) {
+  VALK_GC_SAFE_POINT();
+  
   valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)handle->data;
 
   if (timer_data->callback && timer_data->env) {
@@ -578,6 +580,8 @@ static void valk_async_schedule_propagate(valk_async_handle_t *child) {
 }
 
 static void valk_async_propagate_single(void *ctx) {
+  VALK_GC_SAFE_POINT();
+  
   valk_async_handle_t *source = (valk_async_handle_t *)ctx;
   if (!source) return;
 

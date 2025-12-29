@@ -1041,10 +1041,11 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, sz bytes) {
 // ============================================================================
 
 // Perform mark & sweep collection (delegates to heap2)
+// Uses collect_auto which coordinates STW with other threads when multi-threaded
 sz valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root) {
   if (!heap) return 0;
   (void)additional_root;
-  return valk_gc_heap2_collect(heap);
+  return valk_gc_heap2_collect_auto(heap);
 }
 
 // Explicitly free a single GC heap object (no-op for heap2 - objects are freed during sweep)

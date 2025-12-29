@@ -2369,43 +2369,40 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
 }
 
 void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
-  // TODO: obviously this should probably not be void ???
-  // especially since we can't assert in a void function
-  // LVAL_ASSERT_TYPE((valk_lval_t *)nullptr, key, LVAL_SYM);
   if (valk_log_would_log(VALK_LOG_DEBUG)) {
     VALK_DEBUG("env put: %s", key->str);
   }
 
-  // TODO(main): technically this is a failure condition for us, but the
-  // return's void LVAL_ASSERT(nullptr, key->type == LVAL_SYM, "LEnv only
-  // supports symbolic keys");
-
-  // Check if symbol already exists - if so, update it
   for (u64 i = 0; i < env->symbols.count; i++) {
     if (env->symbols.items == NULL || env->symbols.items[i] == NULL) {
       break;
     }
     if (strcmp(key->str, env->symbols.items[i]) == 0) {
-      // if we found it, we update it
       env->vals.items[i] = val;
       return;
     }
   }
 
-  // Symbol not found - add new binding
   u64 slen = strlen(key->str);
   char* new_symbol = valk_mem_alloc(slen + 1);
+  if (!new_symbol) {
+    VALK_RAISE("valk_lenv_put: failed to allocate symbol string for '%s'", key->str);
+    return;
+  }
   memcpy(new_symbol, key->str, slen + 1);
 
-  // Resize arrays if needed (amortized doubling)
   if (env->symbols.count >= env->symbols.capacity) {
     u64 new_capacity =
         env->symbols.capacity == 0 ? 8 : env->symbols.capacity * 2;
     char** new_items = valk_mem_alloc(sizeof(char*) * new_capacity);
+    if (!new_items) {
+      valk_mem_free(new_symbol);
+      VALK_RAISE("valk_lenv_put: failed to allocate symbols array (capacity=%llu)", new_capacity);
+      return;
+    }
     if (env->symbols.count > 0) {
       memcpy(new_items, env->symbols.items, sizeof(char*) * env->symbols.count);
     }
-    // Free old array if it existed
     if (env->symbols.items) valk_mem_free(env->symbols.items);
     env->symbols.items = new_items;
     env->symbols.capacity = new_capacity;
@@ -2414,17 +2411,20 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     u64 new_capacity = env->vals.capacity == 0 ? 8 : env->vals.capacity * 2;
     valk_lval_t** new_items =
         valk_mem_alloc(sizeof(valk_lval_t*) * new_capacity);
+    if (!new_items) {
+      valk_mem_free(new_symbol);
+      VALK_RAISE("valk_lenv_put: failed to allocate vals array (capacity=%llu)", new_capacity);
+      return;
+    }
     if (env->vals.count > 0) {
       memcpy(new_items, env->vals.items,
              sizeof(valk_lval_t*) * env->vals.count);
     }
-    // Free old array if it existed
     if (env->vals.items) valk_mem_free(env->vals.items);
     env->vals.items = new_items;
     env->vals.capacity = new_capacity;
   }
 
-  // Add to arrays
   env->symbols.items[env->symbols.count++] = new_symbol;
   env->vals.items[env->vals.count++] = val;
 }
@@ -4322,17 +4322,11 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
               "Argument must be aio_system");
 
   valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  (void)valk_thread_ctx.heap;  // Unused - see NOTE below
 
-  // Main loop: sleep, check shutdown, run GC if needed
-  // The event loop runs in a background thread (created in valk_aio_start)
   while (!valk_aio_is_shutting_down(sys)) {
-    uv_sleep(100);  // Check more frequently (100ms instead of 1s)
-
-    // Run GC if heap is above threshold
-    if (heap && valk_gc_malloc_should_collect(heap)) {
-      valk_gc_malloc_collect(heap, NULL);
-    }
+    VALK_GC_SAFE_POINT();
+    uv_sleep(100);
   }
 
   // Wait for event loop thread to finish before returning.
