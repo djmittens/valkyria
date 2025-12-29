@@ -16,17 +16,16 @@
 (printf "Created response string: %d bytes\n" (len big-string))
 
 ; Handler function - returns the 50MB string for /big path
+; Note: Using if-else instead of select due to closure capture issue
 (def {handler}
   (\ {req} {
-    (= {path} (plist/get req (head {:path})))
+    (= {path} (req/path req))
     (printf "[handler] Request for path: %s\n" path)
-    (select
-      {(== path "/big")
-       `{:status "200" :content-type "text/plain" :body ,big-string}}
-      {(== path "/size")
-       `{:status "200" :content-type "text/plain" :body ,(str (len big-string))}}
-      {otherwise
-       {:status "200" :content-type "text/plain" :body "Request /big for 50MB"}})
+    (if (== path "/big")
+      {`{:status "200" :content-type "text/plain" :body ,big-string}}
+      {(if (== path "/size")
+        {`{:status "200" :content-type "text/plain" :body ,(str (len big-string))}}
+        {`{:status "200" :content-type "text/plain" :body "Request /big for 50MB"}})})
   }))
 
 ; Export the handler - this is what the C code will use

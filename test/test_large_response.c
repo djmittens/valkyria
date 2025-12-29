@@ -34,8 +34,6 @@ static const char *EXPECTED_PATTERN =
 
 // Test context - shared between setup/teardown
 typedef struct {
-  valk_gc_malloc_heap_t *gc_heap;
-  valk_mem_allocator_t *saved_alloc;
   valk_lenv_t *env;
   valk_lval_t *handler_fn;
   valk_aio_system_t *sys;
@@ -49,12 +47,23 @@ typedef struct {
 
 static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   (void)_suite;
-  ctx->gc_heap = valk_gc_malloc_heap_init(0);
-  ctx->saved_alloc = valk_thread_ctx.allocator;
-  valk_thread_ctx.allocator = (void *)ctx->gc_heap;
-  valk_thread_ctx.heap = ctx->gc_heap;
+  
+  printf("[test] Initializing runtime...\n");
+  fflush(stdout);
+  
+  // Initialize runtime with GC heap - this registers main thread with GC
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  cfg.gc_heap_size = 1024ULL * 1024 * 1024;  // 1GB for large response tests
+  if (valk_runtime_init(&cfg) != 0) {
+    VALK_FAIL("Failed to initialize runtime");
+    return false;
+  }
+  printf("[test] Runtime initialized, heap=%p\n", valk_thread_ctx.heap);
+  fflush(stdout);
 
   // Load prelude
+  printf("[test] Loading prelude...\n");
+  fflush(stdout);
   valk_lval_t *prelude_ast = valk_parse_file("src/prelude.valk");
   if (!prelude_ast || LVAL_TYPE(prelude_ast) == LVAL_ERR) {
     VALK_FAIL("Failed to parse prelude: %s",
@@ -64,6 +73,8 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
 
   ctx->env = valk_lenv_empty();
   valk_lenv_builtins(ctx->env);
+  valk_thread_ctx.root_env = ctx->env;
+  valk_gc_malloc_set_root(valk_thread_ctx.heap, ctx->env);
 
   while (valk_lval_list_count(prelude_ast)) {
     valk_lval_t *x = valk_lval_eval(ctx->env, valk_lval_pop(prelude_ast, 0));
@@ -74,6 +85,8 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   }
 
   // Load the large response handler
+  printf("[test] Loading handler...\n");
+  fflush(stdout);
   valk_lval_t *handler_ast = valk_parse_file("test/test_large_response_handler.valk");
   if (!handler_ast || LVAL_TYPE(handler_ast) == LVAL_ERR) {
     VALK_FAIL("Failed to parse handler: %s",
@@ -91,16 +104,25 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   }
 
   if (!ctx->handler_fn || LVAL_TYPE(ctx->handler_fn) != LVAL_FUN) {
-    VALK_FAIL("Handler is not a function");
+    VALK_FAIL("Handler is not a function, got type: %s",
+              ctx->handler_fn ? valk_ltype_name(LVAL_TYPE(ctx->handler_fn)) : "NULL");
     return false;
   }
+  printf("[test] Handler loaded (type=%s)\n", valk_ltype_name(LVAL_TYPE(ctx->handler_fn)));
+  fflush(stdout);
 
-  // Switch back to malloc allocator before AIO calls
-  valk_thread_ctx.allocator = ctx->saved_alloc;
+  // Switch to malloc for AIO client operations
+  valk_mem_init_malloc();
 
-  // Start AIO system and server with port 0 for OS-assigned port
-  ctx->sys = valk_aio_start();
+  // Start AIO system with thread onboard function for event loop thread
+  printf("[test] Starting AIO system...\n");
+  fflush(stdout);
+  valk_aio_system_config_t aio_cfg = valk_aio_config_large_payload();
+  aio_cfg.thread_onboard_fn = valk_runtime_get_onboard_fn();
+  ctx->sys = valk_aio_start_with_config(&aio_cfg);
 
+  printf("[test] Starting server...\n");
+  fflush(stdout);
   ctx->hserv = valk_aio_http2_listen(
       ctx->sys, "0.0.0.0", 0, "build/server.key", "build/server.crt",
       NULL, ctx->handler_fn);
@@ -114,8 +136,12 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   // Get the actual port assigned by the OS
   valk_aio_http_server *srv = ctx->server_result->ref.ptr;
   ctx->port = valk_aio_http2_server_get_port(srv);
+  printf("[test] Server started on port %d\n", ctx->port);
+  fflush(stdout);
 
   // Connect client
+  printf("[test] Connecting client...\n");
+  fflush(stdout);
   ctx->fclient = valk_aio_http2_connect(ctx->sys, "127.0.0.1", ctx->port, "");
   ctx->clientBox = valk_future_await(ctx->fclient);
 
@@ -124,6 +150,8 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
     return false;
   }
 
+  printf("[test] Client connected\n");
+  fflush(stdout);
   ctx->client = ctx->clientBox->item;
   return true;
 }
@@ -135,11 +163,7 @@ static void cleanup_test_context(test_context_t *ctx) {
     valk_aio_stop(ctx->sys);
     valk_aio_wait_for_shutdown(ctx->sys);
   }
-  if (ctx->gc_heap) {
-    valk_gc_malloc_set_root(ctx->gc_heap, NULL);
-    valk_gc_malloc_collect(ctx->gc_heap, NULL);
-    valk_gc_malloc_heap_destroy(ctx->gc_heap);
-  }
+  valk_runtime_shutdown();
 }
 
 // Parameterized test for large response handling
@@ -337,9 +361,14 @@ void test_response_small(VALK_TEST_ARGS()) {
   }
 
   printf("[test] Requesting /health (small response)...\n");
+  fflush(stdout);
 
   valk_future *fres = valk_aio_http2_request_send(req, ctx.client);
+  printf("[test] Waiting for response...\n");
+  fflush(stdout);
   valk_arc_box *res = valk_future_await(fres);
+  printf("[test] Got response from await\n");
+  fflush(stdout);
 
   if (res->type != VALK_SUC) {
     VALK_FAIL("Request to /health failed: %s", (char *)res->item);
@@ -350,13 +379,17 @@ void test_response_small(VALK_TEST_ARGS()) {
 
   valk_http2_response_t *response = res->item;
   printf("[test] Response received: %llu bytes\n", (unsigned long long)response->bodyLen);
+  fflush(stdout);
 
   // Verify "OK" response
   if (response->bodyLen != 2 || memcmp(response->body, "OK", 2) != 0) {
+    printf("[test] ABOUT TO FAIL: bodyLen=%llu\n", (unsigned long long)response->bodyLen);
+    fflush(stdout);
     VALK_FAIL("Expected 'OK' response, got: %.*s", (int)response->bodyLen,
               (char *)response->body);
   } else {
     printf("[test] SUCCESS: Small response verified\n");
+    fflush(stdout);
   }
 
   // Note: don't release res - future owns it

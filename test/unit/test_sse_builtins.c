@@ -73,7 +73,7 @@ void test_sse_open_wrong_args(VALK_TEST_ARGS()) {
   valk_lval_t *result = call_builtin(env, "sse/open", args);
 
   ASSERT_LVAL_TYPE(result, LVAL_ERR);
-  ASSERT_STR_CONTAINS(result->str, "http request context");
+  ASSERT_STR_CONTAINS(result->str, "http request");
 
   VALK_PASS();
 }

@@ -175,15 +175,9 @@
 ;     { (== n 1) 1 }
 ;     { otherwise (+ (fib (- n 1)) (fib (- n 2))) }
 ; })
-; select - conditional selection like a switch statement
-; Each case is a list: { condition result }
-; Helper: takes cases as a single list (allows recursion without unpack)
-(fun {select-impl cs} {
-     if (== cs nil)
-       {error "No selection found"}
-       {if (eval (fst (fst cs))) {eval (snd (fst cs))} {select-impl (tail cs)}}
-})
-(fun {select & cs} {select-impl cs})
+; select is a C builtin (valk_builtin_select) - it needs to evaluate
+; conditions in the caller's environment, which requires special handling
+; that can't be done in pure Lisp with lexical scoping
 
 ; This is a default case and stuff, i guess its useful, just an alias to true tho
 (def  {otherwise} true)

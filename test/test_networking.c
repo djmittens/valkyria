@@ -157,32 +157,54 @@ void test_tcp_client_disconnect(VALK_TEST_ARGS()) {
 void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(128 * 1024 * 1024);
-  valk_mem_allocator_t *saved_alloc = valk_thread_ctx.allocator;  // Save malloc allocator
-  valk_thread_ctx.allocator = (void *)gc_heap;
-  valk_thread_ctx.heap = gc_heap;
+  printf("[test] Initializing runtime...\n");
+  fflush(stdout);
+  
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  cfg.gc_heap_size = 1024ULL * 1024 * 1024;  // 1GB for 50MB test
+  if (valk_runtime_init(&cfg) != 0) {
+    VALK_FAIL("Failed to initialize runtime");
+    return;
+  }
+  printf("[test] Runtime initialized, heap=%p\n", valk_thread_ctx.heap);
+  fflush(stdout);
 
   // Load prelude
   printf("[test] Loading prelude...\n");
+  fflush(stdout);
   valk_lval_t *prelude_ast = valk_parse_file("src/prelude.valk");
+  printf("[test] Parsed prelude: %p\n", (void*)prelude_ast);
+  fflush(stdout);
   if (!prelude_ast || LVAL_TYPE(prelude_ast) == LVAL_ERR) {
     VALK_FAIL("Failed to parse prelude: %s",
               prelude_ast ? prelude_ast->str : "NULL");
     return;
   }
 
+  printf("[test] Creating env...\n");
+  fflush(stdout);
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);
+  valk_thread_ctx.root_env = env;
+  valk_gc_malloc_set_root(valk_thread_ctx.heap, env);
+  printf("[test] Env created, evaluating prelude...\n");
+  fflush(stdout);
 
   // Evaluate prelude
+  int expr_count = 0;
   while (valk_lval_list_count(prelude_ast)) {
     valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(prelude_ast, 0));
+    expr_count++;
+    if (expr_count % 50 == 0) {
+      printf("[test] Evaluated %d expressions...\n", expr_count);
+      fflush(stdout);
+    }
     if (LVAL_TYPE(x) == LVAL_ERR) {
       VALK_FAIL("Prelude evaluation failed: %s", x->str);
       return;
     }
   }
-  printf("[test] Prelude loaded\n");
+  printf("[test] Prelude loaded (%d expressions)\n", expr_count);
 
   // Load the 50MB handler
   printf("[test] Loading 50MB handler...\n");
@@ -210,11 +232,13 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   }
   printf("[test] Handler loaded (type=%s)\n", valk_ltype_name(LVAL_TYPE(handler_fn)));
 
-  // Switch back to malloc allocator before AIO calls (required for thread safety)
-  valk_thread_ctx.allocator = saved_alloc;
+  // Switch to malloc for AIO client operations (arc boxes require thread-safe allocator)
+  valk_mem_init_malloc();
 
-  // Start AIO system
-  valk_aio_system_t *sys = valk_aio_start();
+  // Start AIO system with thread onboard function for event loop
+  valk_aio_system_config_t aio_cfg = valk_aio_config_large_payload();
+  aio_cfg.thread_onboard_fn = valk_runtime_get_onboard_fn();
+  valk_aio_system_t *sys = valk_aio_start_with_config(&aio_cfg);
 
   // Start server with Lisp handler on port 0 (OS assigns port)
   valk_async_handle_t *hserv = valk_aio_http2_listen(
@@ -249,6 +273,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
 
   // Build request for /big endpoint
   u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  memset(req_buf, 0, sizeof(req_buf));  // Zero to avoid stale pointer warnings
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -303,10 +328,8 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
 
-  // Cleanup GC heap
-  valk_gc_malloc_set_root(gc_heap, NULL);
-  valk_gc_malloc_collect(gc_heap, NULL);
-  valk_gc_malloc_heap_destroy(gc_heap);
+  // Cleanup runtime
+  valk_runtime_shutdown();
 
   VALK_PASS();
 }

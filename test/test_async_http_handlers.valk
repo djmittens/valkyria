@@ -625,7 +625,7 @@
 ; ============================================================================
 (def {router}
   (\ {req} {
-    (= {path} (plist/get req (head {:path})))
+    (= {path} (req/path req))
     (route path (list
       {"/delay" {(delay-handler req)}}
       {"/sleep" {(sleep-handler req)}}

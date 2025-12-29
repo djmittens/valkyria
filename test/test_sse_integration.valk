@@ -34,7 +34,7 @@
 
 (def {test-handler}
   (\ {req ctx} {
-    (= {path} (plist/get req (head {:path})))
+    (= {path} (req/path req))
     
     (if (== path "/test-open")
       {(do

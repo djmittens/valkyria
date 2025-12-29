@@ -6,7 +6,7 @@
 (def aio (aio/start))
 
 (def handler (lambda {req respond}
-  (if (= (plist/get req :path) "/metrics")
+  (if (= (req/path req) "/metrics")
     ; Return prometheus metrics
     (respond 200 {"content-type" "text/plain"} (metrics/prometheus))
     (respond 200 {"content-type" "text/plain"} "OK"))))

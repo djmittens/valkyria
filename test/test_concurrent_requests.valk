@@ -13,7 +13,7 @@
 ; Handler that returns different responses based on path
 (def {handler}
   (\ {req} {
-    (= {path} (plist/get req :path))
+    (= {path} (req/path req))
     (if (== path "/json")
       {{:status "200" :content-type "application/json" :body "{\"ok\":true}"}}
       {(if (== path "/html")

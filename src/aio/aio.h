@@ -221,6 +221,9 @@ typedef struct valk_aio_system_config {
   u64   arena_size;               // Default: 64MB per arena
   u64   max_request_body_size;    // Default: 8MB (required - requests are buffered)
 
+  // THREAD ONBOARDING
+  void (*thread_onboard_fn)(void);  // Function to call when event loop thread starts
+
   // BACKPRESSURE SETTINGS
   float    buffer_high_watermark;     // Default: 0.85 (85%) - start load shedding
   float    buffer_critical_watermark; // Default: 0.95 (95%) - reject all new conns

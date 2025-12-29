@@ -263,7 +263,6 @@ void test_lenv_empty(VALK_TEST_ARGS()) {
   valk_lenv_t *env = valk_lenv_empty();
   VALK_TEST_ASSERT(env != NULL, "valk_lenv_empty should return non-NULL");
   VALK_TEST_ASSERT(env->parent == NULL, "new env should have no parent");
-  VALK_TEST_ASSERT(env->fallback == NULL, "new env should have no fallback");
   VALK_TEST_ASSERT(env->symbols.count == 0, "new env should have no symbols");
 
   valk_lenv_free(env);
@@ -819,27 +818,8 @@ void test_lenv_parent_lookup(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_lenv_fallback_lookup(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_lenv_t *fallback = valk_lenv_empty();
-  valk_lenv_t *env = valk_lenv_empty();
-  env->fallback = fallback;
-
-  valk_lval_t *key = valk_lval_sym("fallback-val");
-  valk_lval_t *val = valk_lval_num(888);
-  valk_lenv_put(fallback, key, val);
-
-  valk_lval_t *result = valk_lenv_get(env, key);
-  VALK_TEST_ASSERT(result != NULL, "Should find in fallback");
-  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Type should be NUM");
-  VALK_TEST_ASSERT(result->num == 888, "Value should be 888");
-
-  valk_lenv_free(env);
-  valk_lenv_free(fallback);
-
-  VALK_PASS();
-}
+// Fallback lookup test removed - we now use pure lexical scoping
+// The fallback chain was for dynamic scoping which we no longer support
 
 void test_lenv_put_overwrite(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -1354,7 +1334,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_lval_ref_type_truncation", test_lval_ref_type_truncation);
   valk_testsuite_add_test(suite, "test_lval_sym_truncation", test_lval_sym_truncation);
   valk_testsuite_add_test(suite, "test_lenv_parent_lookup", test_lenv_parent_lookup);
-  valk_testsuite_add_test(suite, "test_lenv_fallback_lookup", test_lenv_fallback_lookup);
   valk_testsuite_add_test(suite, "test_lenv_put_overwrite", test_lenv_put_overwrite);
   valk_testsuite_add_test(suite, "test_lval_list_is_empty", test_lval_list_is_empty);
   valk_testsuite_add_test(suite, "test_lval_list_nth_out_of_bounds", test_lval_list_nth_out_of_bounds);

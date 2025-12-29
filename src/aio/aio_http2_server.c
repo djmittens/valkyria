@@ -3,6 +3,7 @@
 #include "aio_http2_conn.h"
 #include "aio_http2_session.h"
 #include "aio_ssl.h"
+#include "../gc.h"
 
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
   return conn->sys ? conn->sys->ops->tcp : NULL;
@@ -484,6 +485,9 @@ static void __valk_aio_http2_server_free(valk_arc_box *box) {
 #ifdef VALK_METRICS_ENABLED
   valk_aio_system_stats_on_server_stop(&srv->sys->metrics_state->system_stats);
 #endif
+  if (srv->lisp_handler_fn) {
+    valk_gc_remove_global_root(&srv->lisp_handler_fn);
+  }
   __valk_sandbox_env_free(srv->sandbox_env);
   SSL_CTX_free(srv->ssl_ctx);
   valk_mem_allocator_free(box->allocator, box);
@@ -527,6 +531,7 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
     }
     srv->lisp_handler_fn = (valk_lval_t*)lisp_handler;
     if (lisp_handler) {
+      valk_gc_add_global_root(&srv->lisp_handler_fn);
       void* saved_heap = valk_thread_ctx.heap;
       valk_thread_ctx.heap = NULL;
       VALK_WITH_ALLOC(&valk_malloc_allocator) {

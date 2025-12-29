@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #include "collections.h"
 #include "common.h"
@@ -203,8 +204,20 @@ static inline valk_slab_item_t *valk_slab_item_at(valk_slab_t *self,
 
 valk_slab_t *valk_slab_new(sz itemSize, sz numItems) {
   sz slabSize = valk_slab_size(itemSize, numItems);
-  VALK_DEBUG("Slab size = %zu", slabSize);
-  valk_slab_t *res = valk_mem_alloc(slabSize);
+  VALK_DEBUG("Slab size = %zu (%.2f MB)", slabSize, (double)slabSize / 1024 / 1024);
+  
+  sz pageSize = 4096;
+  sz mmapSize = (slabSize + pageSize - 1) & ~(pageSize - 1);
+  
+  void *mem = mmap(NULL, mmapSize, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mem == MAP_FAILED) {
+    VALK_ERROR("mmap failed for slab of %zu bytes", mmapSize);
+    return NULL;
+  }
+  
+  valk_slab_t *res = mem;
+  res->mmap_size = mmapSize;
   valk_slab_init(res, itemSize, numItems);
   return res;
 }
@@ -238,15 +251,21 @@ void valk_slab_init(valk_slab_t *self, sz itemSize, sz numItems) {
 #endif
 }
 
-// TODO(networking): do we even need this? might be useful for debugging
 void valk_slab_free(valk_slab_t *self) {
+  if (!self) return;
+  
 #ifdef VALK_METRICS_ENABLED
   if (self->usage_bitmap) {
     free(self->usage_bitmap);
     self->usage_bitmap = NULL;
   }
 #endif
-  valk_mem_free(self);
+
+  if (self->mmap_size > 0) {
+    munmap(self, self->mmap_size);
+  } else {
+    valk_mem_free(self);
+  }
 }
 
 sz valk_slab_item_stride(sz itemSize) {

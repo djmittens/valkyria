@@ -9,7 +9,7 @@
 
 (def {handler}
   (\ {req ctx} {
-    (= {path} (plist/get req :path))
+    (= {path} (req/path req))
     (if (== path "/sse-test")
       {(do
         (= {stream} (sse/open ctx))

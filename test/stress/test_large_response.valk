@@ -30,7 +30,7 @@
 ; Server handler - returns the 50MB string via Lisp (uses quasiquote)
 (def {server-handler}
   (\ {req} {
-    (= {path} (plist/get req (head {:path})))
+    (= {path} (req/path req))
     (select
       {(== path "/big")
        ; Use quasiquote - this ensures the response goes through Lisp machinery

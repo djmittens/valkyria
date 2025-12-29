@@ -16,7 +16,7 @@
 ; /fast - delays 10ms (completes first)
 (def {handler}
   (\ {req} {
-    (= {path} (plist/get req :path))
+    (= {path} (req/path req))
     (if (== path "/slow")
       {(aio/then (aio/sleep aio 100) (\ {_} {{:status "200" :body "slow"}}))}
       {(if (== path "/medium")

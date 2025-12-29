@@ -27,7 +27,7 @@
 
 (def {server-handler}
   (\ {req} {
-    (= {path} (plist/get req (head {:path})))
+    (= {path} (req/path req))
     (select
       {(== path "/1mb") `{:status "200" :content-type "text/plain" :body ,str-1mb}}
       {(== path "/2mb") `{:status "200" :content-type "text/plain" :body ,str-2mb}}

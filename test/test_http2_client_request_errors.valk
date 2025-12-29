@@ -78,7 +78,7 @@
 ; === Server for successful path tests ===
 (def {header-echo-handler}
   (\ {req} {
-    (= {headers} (plist/get req :headers))
+    (= {headers} (req/headers req))
     {:status "200" :body (str headers)}
   }))
 

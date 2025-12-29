@@ -35,21 +35,26 @@ int main(int argc, char* argv[]) {
   char* input;
   u64 const SCRATCH_ARENA_BYTES = 4 * 1024 * 1024;
 
-  // Check for hard limit env var, default to threshold * 2
-  u64 hard_limit = 0;
+  // Initialize runtime with GC heap
+  // Check for hard limit env var
+  valk_runtime_config_t runtime_cfg = valk_runtime_config_default();
   const char* hard_limit_env = getenv("VALK_HEAP_HARD_LIMIT");
   if (hard_limit_env && hard_limit_env[0] != '\0') {
-    hard_limit = strtoull(hard_limit_env, NULL, 10);
+    runtime_cfg.gc_heap_size = strtoull(hard_limit_env, NULL, 10);
   }
 
-  valk_gc_malloc_heap_t* gc_heap = valk_gc_malloc_heap_init(hard_limit);
+  if (valk_runtime_init(&runtime_cfg) != 0) {
+    fprintf(stderr, "Failed to initialize runtime\n");
+    return EXIT_FAILURE;
+  }
+
+  valk_gc_malloc_heap_t* gc_heap = (valk_gc_malloc_heap_t*)valk_runtime_get_heap();
 
   valk_mem_arena_t* scratch = malloc(SCRATCH_ARENA_BYTES);
   valk_mem_arena_init(scratch, SCRATCH_ARENA_BYTES - sizeof(*scratch));
 
   // Set thread allocator to GC heap for persistent structures
   valk_thread_ctx.allocator = (void*)gc_heap;
-  valk_thread_ctx.heap = gc_heap;  // Also set as fallback for arena overflow
   valk_thread_ctx.scratch = scratch;
   valk_thread_ctx.checkpoint_threshold = VALK_CHECKPOINT_THRESHOLD_DEFAULT;
   valk_thread_ctx.checkpoint_enabled = true;
@@ -143,9 +148,8 @@ int main(int argc, char* argv[]) {
       valk_coverage_reset();
     }
 
-    // Clean up GC heap for LeakSanitizer
-    valk_gc_malloc_heap_destroy(gc_heap);
     free(scratch);
+    valk_runtime_shutdown();
 
     return EXIT_SUCCESS;
   }
@@ -215,9 +219,8 @@ int main(int argc, char* argv[]) {
     valk_aio_stop((valk_aio_system_t*)val->ref.ptr);
   }
 
-  // Clean up GC heap for LeakSanitizer
-  valk_gc_malloc_heap_destroy(gc_heap);
   free(scratch);
+  valk_runtime_shutdown();
 
   return EXIT_SUCCESS;
 }

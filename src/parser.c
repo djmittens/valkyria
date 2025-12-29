@@ -61,6 +61,43 @@ void valk_eval_metrics_get(u64* evals, u64* func_calls,
   if (lookups) *lookups = atomic_load(&g_eval_metrics.env_lookups);
 }
 
+// ============================================================================
+// Iterative Evaluator Stack Operations
+// ============================================================================
+
+void valk_eval_stack_init(valk_eval_stack_t *stack) {
+  stack->frames = malloc(sizeof(valk_cont_frame_t) * VALK_EVAL_STACK_INIT_CAP);
+  stack->count = 0;
+  stack->capacity = VALK_EVAL_STACK_INIT_CAP;
+}
+
+void valk_eval_stack_push(valk_eval_stack_t *stack, valk_cont_frame_t frame) {
+  if (stack->count >= stack->capacity) {
+    stack->capacity *= 2;
+    stack->frames = realloc(stack->frames, sizeof(valk_cont_frame_t) * stack->capacity);
+  }
+  stack->frames[stack->count++] = frame;
+}
+
+valk_cont_frame_t valk_eval_stack_pop(valk_eval_stack_t *stack) {
+  VALK_ASSERT(stack->count > 0, "Cannot pop from empty eval stack");
+  return stack->frames[--stack->count];
+}
+
+void valk_eval_stack_destroy(valk_eval_stack_t *stack) {
+  if (stack->frames) {
+    for (u64 i = 0; i < stack->count; i++) {
+      if (stack->frames[i].kind == CONT_COLLECT_ARG && stack->frames[i].collect_arg.args) {
+        free(stack->frames[i].collect_arg.args);
+      }
+    }
+    free(stack->frames);
+    stack->frames = NULL;
+  }
+  stack->count = 0;
+  stack->capacity = 0;
+}
+
 // TODO(networking): get rid of args everywhere, cause we dont need to release
 // anymore
 #define LVAL_RAISE(args, fmt, ...)                                       \
@@ -941,7 +978,8 @@ valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) {
   return result;
 }
 
-// Recursive tree-walker eval (original implementation)
+// Recursive tree-walker eval (original implementation, kept for reference)
+__attribute__((unused))
 static valk_lval_t* valk_lval_eval_recursive(valk_lenv_t* env, valk_lval_t* lval) {
   VALK_GC_SAFE_POINT();
   
@@ -1057,9 +1095,444 @@ static valk_lval_t* valk_lval_eval_recursive(valk_lenv_t* env, valk_lval_t* lval
                        valk_ltype_name(LVAL_TYPE(lval)));
 }
 
+// Forward declaration - defined below
+valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args);
+
+// Apply function for iterative evaluator - returns thunk for user-defined functions
+static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args) {
+  if (LVAL_TYPE(func) != LVAL_FUN) {
+    return valk_eval_value(valk_lval_err("Cannot call non-function: %s", valk_ltype_name(LVAL_TYPE(func))));
+  }
+
+  u32 depth = atomic_fetch_add(&g_eval_metrics.stack_depth, 1) + 1;
+  if (depth > g_eval_metrics.stack_depth_max) {
+    g_eval_metrics.stack_depth_max = depth;
+  }
+
+  if (func->fun.builtin) {
+    atomic_fetch_add(&g_eval_metrics.builtin_calls, 1);
+    valk_lval_t* result = func->fun.builtin(env, args);
+    atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+    return valk_eval_value(result);
+  }
+
+  atomic_fetch_add(&g_eval_metrics.function_calls, 1);
+  valk_thread_ctx.call_depth++;
+
+  u64 given = valk_lval_list_count(args);
+  u64 num_formals = valk_lval_list_count(func->fun.formals);
+
+  valk_lenv_t* call_env = valk_lenv_empty();
+  if (func->fun.env) {
+    call_env->parent = func->fun.env;
+  } else {
+    call_env->parent = env;
+  }
+
+  valk_lval_t* formal_iter = func->fun.formals;
+  valk_lval_t* arg_iter = args;
+  bool saw_varargs = false;
+
+  while (!valk_lval_list_is_empty(formal_iter) && !valk_lval_list_is_empty(arg_iter)) {
+    valk_lval_t* formal_sym = formal_iter->cons.head;
+
+    if (LVAL_TYPE(formal_sym) == LVAL_SYM && strcmp(formal_sym->str, "&") == 0) {
+      formal_iter = formal_iter->cons.tail;
+      if (valk_lval_list_is_empty(formal_iter)) {
+        valk_thread_ctx.call_depth--;
+        atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+        return valk_eval_value(valk_lval_err("Invalid function format: & not followed by varargs name"));
+      }
+      valk_lval_t* varargs_sym = formal_iter->cons.head;
+      valk_lval_t* varargs_list = valk_builtin_list(nullptr, arg_iter);
+      valk_lenv_put(call_env, varargs_sym, varargs_list);
+      saw_varargs = true;
+      arg_iter = valk_lval_nil();
+      formal_iter = formal_iter->cons.tail;
+      break;
+    }
+
+    valk_lval_t* val = arg_iter->cons.head;
+    valk_lenv_put(call_env, formal_sym, val);
+    formal_iter = formal_iter->cons.tail;
+    arg_iter = arg_iter->cons.tail;
+  }
+
+  if (!valk_lval_list_is_empty(arg_iter) && !saw_varargs) {
+    valk_thread_ctx.call_depth--;
+    atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+    return valk_eval_value(valk_lval_err("More arguments were given than required. Actual: %zu, Expected: %zu", given, num_formals));
+  }
+
+  if (!valk_lval_list_is_empty(formal_iter)) {
+    if (!valk_lval_list_is_empty(formal_iter) &&
+        LVAL_TYPE(formal_iter->cons.head) == LVAL_SYM &&
+        strcmp(formal_iter->cons.head->str, "&") == 0) {
+      formal_iter = formal_iter->cons.tail;
+      if (valk_lval_list_is_empty(formal_iter)) {
+        valk_thread_ctx.call_depth--;
+        atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+        return valk_eval_value(valk_lval_err("Invalid function format: & not followed by varargs name"));
+      }
+      valk_lval_t* varargs_sym = formal_iter->cons.head;
+      valk_lenv_put(call_env, varargs_sym, valk_lval_nil());
+      formal_iter = formal_iter->cons.tail;
+    }
+
+    if (!valk_lval_list_is_empty(formal_iter)) {
+      valk_lval_t* partial = valk_mem_alloc(sizeof(valk_lval_t));
+      partial->flags = LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+      VALK_SET_ORIGIN_ALLOCATOR(partial);
+      partial->fun.builtin = nullptr;
+      partial->fun.arity = func->fun.arity;
+      partial->fun.name = func->fun.name;
+      partial->fun.env = call_env;
+      partial->fun.formals = formal_iter;
+      partial->fun.body = func->fun.body;
+      valk_thread_ctx.call_depth--;
+      atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+      return valk_eval_value(partial);
+    }
+  }
+
+  valk_lval_t* body = func->fun.body;
+  if (LVAL_TYPE(body) == LVAL_QEXPR) {
+    body = valk_qexpr_to_cons(body);
+  }
+
+  if (valk_is_list_type(LVAL_TYPE(body)) && valk_lval_list_count(body) > 0) {
+    valk_lval_t* first_elem = body->cons.head;
+    if (valk_is_list_type(LVAL_TYPE(first_elem))) {
+      valk_lval_t* first_expr = body->cons.head;
+      valk_lval_t* remaining = body->cons.tail;
+      return valk_eval_thunk_body(first_expr, call_env, remaining, call_env);
+    }
+  }
+
+  return valk_eval_thunk_body(body, call_env, NULL, call_env);
+}
+
+// Iterative evaluator - uses explicit stack instead of C recursion
+static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval) {
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+  
+  valk_lval_t* expr = lval;
+  valk_lenv_t* cur_env = env;
+  valk_lval_t* value = NULL;
+  
+  // Push initial DONE continuation
+  valk_eval_stack_push(&stack, (valk_cont_frame_t){.kind = CONT_DONE, .env = env});
+
+  while (1) {
+    VALK_GC_SAFE_POINT();
+    atomic_fetch_add(&g_eval_metrics.evals_total, 1);
+    
+    // Phase 1: Evaluate current expression if we have one
+    if (expr != NULL) {
+      // Handle NULL
+      if (expr == NULL) {
+        value = valk_lval_nil();
+        expr = NULL;
+        goto apply_cont;
+      }
+      
+      // Self-evaluating forms
+      if (LVAL_TYPE(expr) == LVAL_NUM || LVAL_TYPE(expr) == LVAL_STR ||
+          LVAL_TYPE(expr) == LVAL_FUN || LVAL_TYPE(expr) == LVAL_ERR ||
+          LVAL_TYPE(expr) == LVAL_NIL || LVAL_TYPE(expr) == LVAL_REF ||
+          LVAL_TYPE(expr) == LVAL_QEXPR || LVAL_TYPE(expr) == LVAL_HANDLE) {
+        value = expr;
+        expr = NULL;
+        goto apply_cont;
+      }
+      
+      // Symbol lookup
+      if (LVAL_TYPE(expr) == LVAL_SYM) {
+        VALK_COVERAGE_RECORD_LVAL(expr);
+        if (expr->str[0] == ':') {
+          value = expr;
+        } else {
+          value = valk_lenv_get(cur_env, expr);
+        }
+        expr = NULL;
+        goto apply_cont;
+      }
+      
+      VALK_COVERAGE_RECORD_LVAL(expr);
+      
+      // Cons cell - function application
+      if (LVAL_TYPE(expr) == LVAL_CONS) {
+        u64 count = valk_lval_list_count(expr);
+        
+        if (count == 0) {
+          value = valk_lval_nil();
+          expr = NULL;
+          goto apply_cont;
+        }
+        
+        // Single element - eval and maybe call if function
+        if (count == 1) {
+          valk_eval_stack_push(&stack, (valk_cont_frame_t){
+            .kind = CONT_SINGLE_ELEM,
+            .env = cur_env
+          });
+          expr = valk_lval_list_nth(expr, 0);
+          continue;
+        }
+        
+        // Check special forms
+        valk_lval_t* first = expr->cons.head;
+        if (LVAL_TYPE(first) == LVAL_SYM) {
+          if (strcmp(first->str, "quote") == 0) {
+            if (count != 2) {
+              value = valk_lval_err("quote expects exactly 1 argument, got %zu", count - 1);
+            } else {
+              value = valk_lval_list_nth(expr, 1);
+            }
+            expr = NULL;
+            goto apply_cont;
+          }
+          
+          if (strcmp(first->str, "quasiquote") == 0) {
+            if (count != 2) {
+              value = valk_lval_err("quasiquote expects exactly 1 argument, got %zu", count - 1);
+            } else {
+              value = valk_quasiquote_expand(cur_env, valk_lval_list_nth(expr, 1));
+            }
+            expr = NULL;
+            goto apply_cont;
+          }
+          
+          // Handle 'if' specially to avoid evaluating both branches
+          if (strcmp(first->str, "if") == 0) {
+            if (count < 3 || count > 4) {
+              value = valk_lval_err("if requires 2-3 arguments, got %zu", count - 1);
+              expr = NULL;
+              goto apply_cont;
+            }
+            valk_lval_t* cond = valk_lval_list_nth(expr, 1);
+            valk_lval_t* true_branch = valk_lval_list_nth(expr, 2);
+            valk_lval_t* false_branch = (count == 4) ? valk_lval_list_nth(expr, 3) : valk_lval_nil();
+            
+            valk_eval_stack_push(&stack, (valk_cont_frame_t){
+              .kind = CONT_IF_BRANCH,
+              .env = cur_env,
+              .if_branch = {.true_branch = true_branch, .false_branch = false_branch}
+            });
+            expr = cond;
+            continue;
+          }
+        }
+        
+        // Normal function application: eval function position first
+        valk_eval_stack_push(&stack, (valk_cont_frame_t){
+          .kind = CONT_EVAL_ARGS,
+          .env = cur_env,
+          .eval_args = {.func = NULL, .remaining = expr->cons.tail}
+        });
+        expr = first;
+        continue;
+      }
+      
+      value = valk_lval_err("Unknown value type in evaluation: %s", valk_ltype_name(LVAL_TYPE(expr)));
+      expr = NULL;
+    }
+    
+apply_cont:
+    // Phase 2: Apply continuation to value
+    {
+      valk_cont_frame_t frame = valk_eval_stack_pop(&stack);
+      
+      switch (frame.kind) {
+        case CONT_DONE:
+          valk_eval_stack_destroy(&stack);
+          return value;
+          
+        case CONT_SINGLE_ELEM:
+          if (LVAL_TYPE(value) == LVAL_FUN) {
+            valk_eval_result_t res = valk_eval_apply_func_iter(frame.env, value, valk_lval_nil());
+            if (!res.is_thunk) {
+              value = res.value;
+              if (LVAL_TYPE(value) == LVAL_ERR) goto apply_cont;
+            } else {
+              valk_eval_stack_push(&stack, (valk_cont_frame_t){.kind = CONT_LAMBDA_DONE, .env = frame.env});
+              if (res.thunk.remaining_body != NULL && !valk_lval_list_is_empty(res.thunk.remaining_body)) {
+                valk_eval_stack_push(&stack, (valk_cont_frame_t){
+                  .kind = CONT_BODY_NEXT,
+                  .env = res.thunk.env,
+                  .body_next = {.remaining = res.thunk.remaining_body, .call_env = res.thunk.call_env}
+                });
+              }
+              expr = res.thunk.expr;
+              cur_env = res.thunk.env;
+              continue;
+            }
+          }
+          goto apply_cont;
+          
+        case CONT_EVAL_ARGS: {
+          if (LVAL_TYPE(value) == LVAL_ERR) goto apply_cont;
+          
+          valk_lval_t* func = value;
+          valk_lval_t* remaining = frame.eval_args.remaining;
+          
+          if (valk_lval_list_is_empty(remaining)) {
+            valk_eval_result_t res = valk_eval_apply_func_iter(frame.env, func, valk_lval_nil());
+            if (!res.is_thunk) {
+              value = res.value;
+              goto apply_cont;
+            } else {
+              valk_eval_stack_push(&stack, (valk_cont_frame_t){.kind = CONT_LAMBDA_DONE, .env = frame.env});
+              if (res.thunk.remaining_body != NULL && !valk_lval_list_is_empty(res.thunk.remaining_body)) {
+                valk_eval_stack_push(&stack, (valk_cont_frame_t){
+                  .kind = CONT_BODY_NEXT,
+                  .env = res.thunk.env,
+                  .body_next = {.remaining = res.thunk.remaining_body, .call_env = res.thunk.call_env}
+                });
+              }
+              expr = res.thunk.expr;
+              cur_env = res.thunk.env;
+              continue;
+            }
+          }
+          
+          // Start collecting args
+          u64 arg_count = valk_lval_list_count(remaining);
+          valk_lval_t** args = malloc(sizeof(valk_lval_t*) * arg_count);
+          
+          valk_eval_stack_push(&stack, (valk_cont_frame_t){
+            .kind = CONT_COLLECT_ARG,
+            .env = frame.env,
+            .collect_arg = {
+              .func = func,
+              .args = args,
+              .count = 0,
+              .capacity = arg_count,
+              .remaining = remaining->cons.tail
+            }
+          });
+          expr = remaining->cons.head;
+          cur_env = frame.env;
+          continue;
+        }
+        
+        case CONT_COLLECT_ARG: {
+          frame.collect_arg.args[frame.collect_arg.count++] = value;
+          
+          if (valk_lval_list_is_empty(frame.collect_arg.remaining)) {
+            valk_lval_t* args_list = valk_lval_list(frame.collect_arg.args, frame.collect_arg.count);
+            free(frame.collect_arg.args);
+            valk_eval_result_t res = valk_eval_apply_func_iter(frame.env, frame.collect_arg.func, args_list);
+            if (!res.is_thunk) {
+              value = res.value;
+              goto apply_cont;
+            } else {
+              valk_eval_stack_push(&stack, (valk_cont_frame_t){.kind = CONT_LAMBDA_DONE, .env = frame.env});
+              if (res.thunk.remaining_body != NULL && !valk_lval_list_is_empty(res.thunk.remaining_body)) {
+                valk_eval_stack_push(&stack, (valk_cont_frame_t){
+                  .kind = CONT_BODY_NEXT,
+                  .env = res.thunk.env,
+                  .body_next = {.remaining = res.thunk.remaining_body, .call_env = res.thunk.call_env}
+                });
+              }
+              expr = res.thunk.expr;
+              cur_env = res.thunk.env;
+              continue;
+            }
+          }
+          
+          // More args to eval
+          valk_eval_stack_push(&stack, (valk_cont_frame_t){
+            .kind = CONT_COLLECT_ARG,
+            .env = frame.env,
+            .collect_arg = {
+              .func = frame.collect_arg.func,
+              .args = frame.collect_arg.args,
+              .count = frame.collect_arg.count,
+              .capacity = frame.collect_arg.capacity,
+              .remaining = frame.collect_arg.remaining->cons.tail
+            }
+          });
+          expr = frame.collect_arg.remaining->cons.head;
+          cur_env = frame.env;
+          continue;
+        }
+        
+        case CONT_IF_BRANCH: {
+          if (LVAL_TYPE(value) == LVAL_ERR) goto apply_cont;
+          
+          bool condition = false;
+          if (LVAL_TYPE(value) == LVAL_NUM) {
+            condition = (value->num != 0);
+          } else if (LVAL_TYPE(value) != LVAL_NIL) {
+            condition = true;
+          }
+          
+          valk_lval_t* branch = condition ? frame.if_branch.true_branch : frame.if_branch.false_branch;
+          if (LVAL_TYPE(branch) == LVAL_QEXPR) {
+            branch = valk_qexpr_to_cons(branch);
+          }
+          expr = branch;
+          cur_env = frame.env;
+          continue;
+        }
+        
+        case CONT_DO_NEXT: {
+          if (LVAL_TYPE(value) == LVAL_ERR) goto apply_cont;
+          
+          if (valk_lval_list_is_empty(frame.do_next.remaining)) {
+            goto apply_cont;
+          }
+          
+          valk_eval_stack_push(&stack, (valk_cont_frame_t){
+            .kind = CONT_DO_NEXT,
+            .env = frame.env,
+            .do_next = {.remaining = frame.do_next.remaining->cons.tail}
+          });
+          expr = frame.do_next.remaining->cons.head;
+          cur_env = frame.env;
+          continue;
+        }
+        
+        case CONT_BODY_NEXT: {
+          if (LVAL_TYPE(value) == LVAL_ERR) {
+            goto apply_cont;
+          }
+          
+          if (valk_lval_list_is_empty(frame.body_next.remaining)) {
+            goto apply_cont;
+          }
+          
+          valk_eval_stack_push(&stack, (valk_cont_frame_t){
+            .kind = CONT_BODY_NEXT,
+            .env = frame.env,
+            .body_next = {
+              .remaining = frame.body_next.remaining->cons.tail,
+              .call_env = frame.body_next.call_env
+            }
+          });
+          expr = frame.body_next.remaining->cons.head;
+          cur_env = frame.body_next.call_env;
+          continue;
+        }
+        
+        case CONT_LAMBDA_DONE:
+          valk_thread_ctx.call_depth--;
+          atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+          goto apply_cont;
+        
+        default:
+          value = valk_lval_err("Unknown continuation type: %d", frame.kind);
+          goto apply_cont;
+      }
+    }
+  }
+}
+
 // Public eval function
 valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
-  return valk_lval_eval_recursive(env, lval);
+  return valk_lval_eval_iterative(env, lval);
 }
 
 valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
@@ -1113,9 +1586,6 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
     // No captures - parent is calling environment
     call_env->parent = env;
   }
-  // Always set fallback to calling environment for dynamic scoping.
-  // This is only used when lexical lookup fails.
-  call_env->fallback = env;
 
   // Walk formals and args together without mutation
   valk_lval_t* formal_iter = func->fun.formals;
@@ -1757,7 +2227,6 @@ valk_lenv_t* valk_lenv_empty(void) {
 }
 void valk_lenv_init(valk_lenv_t* env) {
   env->parent = nullptr;
-  env->fallback = nullptr;
   env->symbols.count = 0;
   env->symbols.capacity = 0;
   env->symbols.items = nullptr;
@@ -1810,7 +2279,6 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
 
   valk_lenv_t* res = valk_mem_alloc(sizeof(valk_lenv_t));
   res->parent = nullptr;  // Flattened environment has no parent
-  res->fallback = env->fallback;
   res->allocator = env->allocator;
 
   // Count total bindings by walking parent chain (with value masking)
@@ -1875,11 +2343,13 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
 valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
   atomic_fetch_add(&g_eval_metrics.env_lookups, 1);
 
+  if (env == NULL) {
+    return valk_lval_err("LEnv: Cannot lookup `%s` in NULL environment", key->str);
+  }
+
   LVAL_ASSERT_TYPE((valk_lval_t*)nullptr, key, LVAL_SYM);
 
-  // Iterative lookup to avoid stack overflow with deep environment chains
-  // (important for tail call optimization which creates environment chains)
-  valk_lenv_t* start_env = env;  // Remember start for fallback lookup
+  // Iterative lookup through parent chain (lexical scoping)
   while (env) {
     for (u64 i = 0; i < env->symbols.count; i++) {
       if (env->symbols.items == NULL || env->symbols.items[i] == NULL) {
@@ -1892,14 +2362,7 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
         return env->vals.items[i];
       }
     }
-    env = env->parent;  // Move to parent environment
-  }
-
-  // Parent chain exhausted - try fallback chain (for dynamic scoping).
-  // The fallback allows access to caller's environment when lexical lookup
-  // fails.
-  if (start_env->fallback) {
-    return valk_lenv_get(start_env->fallback, key);
+    env = env->parent;
   }
 
   return valk_lval_err("LEnv: Symbol `%s` is not bound", key->str);
@@ -3788,11 +4251,16 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
 
   // AIO system must be allocated with malloc, not arena
   valk_aio_system_t* sys;
+  valk_aio_system_config_t config = valk_aio_system_config_default();
+
+  // If runtime is initialized, AIO event loop threads should onboard to it
+  if (valk_runtime_is_initialized()) {
+    config.thread_onboard_fn = valk_runtime_get_onboard_fn();
+  }
 
   // Check if config map provided
   if (argc >= 1 && LVAL_TYPE(valk_lval_list_nth(a, 0)) == LVAL_QEXPR) {
     valk_lval_t* config_map = valk_lval_list_nth(a, 0);
-    valk_aio_system_config_t config = valk_aio_system_config_default();
 
     // Parse configuration options from plist
     valk_lval_t* val;
@@ -3823,15 +4291,10 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
 
     if ((val = valk_plist_get(config_map, ":pending-stream-pool-size")) && LVAL_TYPE(val) == LVAL_NUM)
       config.pending_stream_pool_size = (u32)val->num;
+  }
 
-    VALK_WITH_ALLOC(&valk_malloc_allocator) {
-      sys = valk_aio_start_with_config(&config);
-    }
-  } else {
-    // No config provided, use defaults
-    VALK_WITH_ALLOC(&valk_malloc_allocator) {
-      sys = valk_aio_start_with_config(NULL);
-    }
+  VALK_WITH_ALLOC(&valk_malloc_allocator) {
+    sys = valk_aio_start_with_config(&config);
   }
 
   if (!sys) {

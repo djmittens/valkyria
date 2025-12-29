@@ -210,14 +210,13 @@ typedef struct {  // extends valk_mem_allocator_t;
   sz peakUsed;  // High water mark: max (numItems - numFree) ever observed
   u64 overflowCount;
   sz head;
+  sz mmap_size;  // Size of mmap'd region (0 if not mmap'd)
   // treiber list top
 
 #ifdef VALK_METRICS_ENABLED
   u64 bitmap_version;
   u8 *usage_bitmap;
 #endif
-
-  u8 _pad[8];  // Ensure heap[] starts at 16-byte aligned offset
 
   // Memory layout
   // [sizeof(u64) * numSlabs | freeList]

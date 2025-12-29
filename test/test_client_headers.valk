@@ -7,8 +7,8 @@
 
 (def {handler}
   (\ {req} {
-    (= {path} (plist/get req :path))
-    (= {headers} (plist/get req :headers))
+    (= {path} (req/path req))
+    (= {headers} (req/headers req))
     (def {received-headers} headers)
     (printf "Received headers: %s\n" (str headers))
     `{:status "200" :body "OK"}

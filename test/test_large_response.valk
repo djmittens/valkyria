@@ -40,7 +40,7 @@
 ; Server handler - returns the 50MB string via Lisp
 (def {server-handler}
   (\ {req} {
-    (= {path} (plist/get req (head {:path})))
+    (= {path} (req/path req))
     (select
       {(== path "/big")
        {`{:status "200" :content-type "text/plain" :body ,big-string}}}

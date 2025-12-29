@@ -26,16 +26,22 @@ static void __backpressure_list_remove(valk_aio_handle_t *conn) {
 
 void __event_loop(void *arg) {
   valk_aio_system_t *sys = arg;
-  valk_mem_init_malloc();
-  valk_gc_thread_register();
 
-  valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(0);
-  if (!gc_heap) {
-    VALK_ERROR("Failed to create event loop GC heap");
+  if (sys->config.thread_onboard_fn) {
+    sys->config.thread_onboard_fn();
+    VALK_DEBUG("Event loop thread onboarded via config callback");
   } else {
-    valk_thread_ctx.heap = gc_heap;
-    sys->loop_gc_heap = gc_heap;
-    VALK_DEBUG("Created event loop GC heap: %p", gc_heap);
+    valk_mem_init_malloc();
+    valk_gc_thread_register();
+
+    valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(0);
+    if (!gc_heap) {
+      VALK_ERROR("Failed to create event loop GC heap");
+    } else {
+      valk_thread_ctx.heap = gc_heap;
+      sys->loop_gc_heap = gc_heap;
+      VALK_DEBUG("Created event loop GC heap: %p", gc_heap);
+    }
   }
 
   VALK_DEBUG("Initializing UV event loop thread");

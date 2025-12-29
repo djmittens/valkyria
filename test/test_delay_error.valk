@@ -6,7 +6,7 @@
 
 (def {handler}
   (\ {req} {
-    (= {path} (plist/get req :path))
+    (= {path} (req/path req))
     (if (== path "/delay-error")
       {(aio/then (aio/sleep aio 50) (\ {_} {
         (error "Intentional error from delay continuation")

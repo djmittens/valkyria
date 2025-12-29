@@ -131,7 +131,7 @@ void test_slab_alloc(VALK_TEST_ARGS()) {
 
   VALK_TEST_ASSERT(slab->numFree == 0, "Shit should be full %d", slab->numFree);
 
-  valk_mem_free(slab);
+  valk_slab_free(slab);
   VALK_PASS();
 }
 
@@ -246,7 +246,7 @@ void test_slab_concurrency(VALK_TEST_ARGS()) {
                      (size_t)foo);
   }
 
-  valk_mem_free(slab);
+  valk_slab_free(slab);
   VALK_PASS();
 }
 

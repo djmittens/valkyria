@@ -9,7 +9,7 @@
 
 (def {wrapped-handler}
   (\ {req ctx} {
-    (= {path} (plist/get req :path))
+    (= {path} (req/path req))
     (if (== path "/debug/diagnostics/memory")
       {(do
         (def {handler-called} 1)

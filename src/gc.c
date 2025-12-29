@@ -10,6 +10,74 @@
 #include <uv.h>
 
 // ============================================================================
+// Runtime Initialization
+// ============================================================================
+
+static valk_gc_malloc_heap_t *__runtime_heap = NULL;
+static bool __runtime_initialized = false;
+
+int valk_runtime_init(valk_runtime_config_t *config) {
+  if (__runtime_initialized) {
+    VALK_WARN("Runtime already initialized");
+    return 0;
+  }
+
+  valk_gc_coordinator_init();
+
+  valk_runtime_config_t cfg = config ? *config : valk_runtime_config_default();
+
+  __runtime_heap = valk_gc_heap2_create(cfg.gc_heap_size);
+  if (!__runtime_heap) {
+    VALK_ERROR("Failed to create runtime GC heap");
+    return -1;
+  }
+
+  valk_runtime_thread_onboard();
+
+  __runtime_initialized = true;
+  VALK_INFO("Runtime initialized: gc_heap_size=%zu", cfg.gc_heap_size);
+  return 0;
+}
+
+void valk_runtime_shutdown(void) {
+  if (!__runtime_initialized) return;
+
+  if (__runtime_heap) {
+    valk_gc_heap2_destroy(__runtime_heap);
+    __runtime_heap = NULL;
+  }
+
+  __runtime_initialized = false;
+  VALK_INFO("Runtime shutdown complete");
+}
+
+void valk_runtime_thread_onboard(void) {
+  if (!__runtime_heap) {
+    VALK_ERROR("Cannot onboard thread: runtime not initialized");
+    return;
+  }
+
+  valk_mem_init_malloc();
+  valk_thread_ctx.heap = __runtime_heap;
+  valk_gc_thread_register();
+
+  VALK_DEBUG("Thread onboarded to runtime heap: %p (gc_thread_id=%llu)", 
+             __runtime_heap, (unsigned long long)valk_thread_ctx.gc_thread_id);
+}
+
+valk_thread_onboard_fn valk_runtime_get_onboard_fn(void) {
+  return valk_runtime_thread_onboard;
+}
+
+valk_gc_heap2_t *valk_runtime_get_heap(void) {
+  return __runtime_heap;
+}
+
+bool valk_runtime_is_initialized(void) {
+  return __runtime_initialized;
+}
+
+// ============================================================================
 // Parallel GC Infrastructure (Phase 0)
 // ============================================================================
 
@@ -491,7 +559,6 @@ void valk_gc_visit_env_roots(valk_lenv_t *env, valk_gc_root_visitor_t visitor, v
   }
   
   valk_gc_visit_env_roots(env->parent, visitor, ctx);
-  valk_gc_visit_env_roots(env->fallback, visitor, ctx);
 }
 
 void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
@@ -541,7 +608,6 @@ static void mark_env_parallel(valk_lenv_t *env, valk_gc_mark_queue_t *queue) {
   }
   
   mark_env_parallel(env->parent, queue);
-  mark_env_parallel(env->fallback, queue);
 }
 
 static void mark_children(valk_lval_t *obj, valk_gc_mark_queue_t *queue) {
@@ -1520,7 +1586,6 @@ static void valk_gc_mark_env(valk_lenv_t* env) {
     valk_gc_mark_lval(env->vals.items[i]);
   }
   if (env->parent) valk_gc_mark_env(env->parent);
-  if (env->fallback) valk_gc_mark_env(env->fallback);
 }
 
 static void valk_gc_clear_marks_recursive(valk_lval_t* v) {
@@ -1869,15 +1934,12 @@ static void valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
     // Process this environment
     valk_evacuate_env_single(ctx, current);
 
-    // Queue parent and fallback for processing unconditionally.
+    // Queue parent for processing unconditionally.
     // We must traverse ALL reachable environments, not just scratch-allocated ones,
     // because heap-allocated environments may contain pointers to scratch-allocated
     // values that need to be evacuated.
     if (current->parent != NULL) {
       env_worklist_push(&worklist, current->parent);
-    }
-    if (current->fallback != NULL) {
-      env_worklist_push(&worklist, current->fallback);
     }
   }
 
@@ -2026,12 +2088,9 @@ static void valk_fix_env_pointers(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) 
     // Process this environment
     valk_fix_env_pointers_single(ctx, current);
 
-    // Queue parent and fallback for processing
+    // Queue parent for processing
     if (current->parent != NULL) {
       env_worklist_push(&worklist, current->parent);
-    }
-    if (current->fallback != NULL) {
-      env_worklist_push(&worklist, current->fallback);
     }
   }
 
@@ -2241,8 +2300,8 @@ valk_gc_heap2_t *valk_gc_heap2_create(sz hard_limit) {
   memset(&heap->stats, 0, sizeof(heap->stats));
   memset(&heap->runtime_metrics, 0, sizeof(heap->runtime_metrics));
   
-  VALK_INFO("Created multi-class GC heap: hard_limit=%zu soft_limit=%zu reserved=%zu",
-            heap->hard_limit, heap->soft_limit, heap->reserved);
+  VALK_INFO("Created multi-class GC heap: hard_limit=%zu soft_limit=%zu reserved=%zu region_size=%zu",
+            heap->hard_limit, heap->soft_limit, heap->reserved, region_size);
   
   return heap;
 }
@@ -2766,41 +2825,43 @@ sz valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap) {
 static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx);
 static void mark_env2(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx);
 
-static void mark_and_push2(void *ptr, valk_gc_mark_ctx2_t *ctx) {
-  if (ptr == NULL) return;
+static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx2_t *ctx) {
+  if (ptr == NULL) return false;
   
   valk_gc_ptr_location_t loc;
   if (valk_gc_ptr_to_location(ctx->heap, ptr, &loc)) {
-    if (!valk_gc_page2_try_mark(loc.page, loc.slot)) {
-      return;
-    }
+    return valk_gc_page2_try_mark(loc.page, loc.slot);
   } else {
-    if (!valk_gc_mark_large_object(ctx->heap, ptr)) {
-      return;
-    }
+    return valk_gc_mark_large_object(ctx->heap, ptr);
   }
+}
+
+static void mark_lval2(valk_lval_t *lval, valk_gc_mark_ctx2_t *ctx) {
+  if (lval == NULL) return;
   
-  if (!valk_gc_mark_queue_push(ctx->queue, ptr)) {
-    mark_children2(ptr, ctx);
+  if (!mark_ptr_only(lval, ctx)) return;
+  
+  if (!valk_gc_mark_queue_push(ctx->queue, lval)) {
+    mark_children2(lval, ctx);
   }
 }
 
 static void mark_env2(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx) {
-  if (env == NULL) return;
-  
-  mark_and_push2(env, ctx);
-  mark_and_push2(env->symbols.items, ctx);
-  mark_and_push2(env->vals.items, ctx);
-  
-  for (u64 i = 0; i < env->symbols.count; i++) {
-    mark_and_push2(env->symbols.items[i], ctx);
+  while (env != NULL) {
+    if (!mark_ptr_only(env, ctx)) return;
+    
+    mark_ptr_only(env->symbols.items, ctx);
+    mark_ptr_only(env->vals.items, ctx);
+    
+    for (u64 i = 0; i < env->symbols.count; i++) {
+      mark_ptr_only(env->symbols.items[i], ctx);
+    }
+    for (u64 i = 0; i < env->vals.count; i++) {
+      mark_lval2(env->vals.items[i], ctx);
+    }
+    
+    env = env->parent;
   }
-  for (u64 i = 0; i < env->vals.count; i++) {
-    mark_and_push2(env->vals.items[i], ctx);
-  }
-  
-  mark_env2(env->parent, ctx);
-  mark_env2(env->fallback, ctx);
 }
 
 static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
@@ -2809,28 +2870,28 @@ static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
   switch (LVAL_TYPE(obj)) {
     case LVAL_CONS:
     case LVAL_QEXPR:
-      mark_and_push2(obj->cons.head, ctx);
-      mark_and_push2(obj->cons.tail, ctx);
+      mark_lval2(obj->cons.head, ctx);
+      mark_lval2(obj->cons.tail, ctx);
       break;
       
     case LVAL_FUN:
       if (obj->fun.builtin == NULL) {
-        mark_and_push2(obj->fun.formals, ctx);
-        mark_and_push2(obj->fun.body, ctx);
+        mark_lval2(obj->fun.formals, ctx);
+        mark_lval2(obj->fun.body, ctx);
         if (obj->fun.env) {
           mark_env2(obj->fun.env, ctx);
         }
       }
-      mark_and_push2(obj->fun.name, ctx);
+      mark_ptr_only(obj->fun.name, ctx);
       break;
       
     case LVAL_HANDLE:
       if (obj->async.handle) {
-        mark_and_push2(obj->async.handle->on_complete, ctx);
-        mark_and_push2(obj->async.handle->on_error, ctx);
-        mark_and_push2(obj->async.handle->on_cancel, ctx);
-        mark_and_push2(obj->async.handle->result, ctx);
-        mark_and_push2(obj->async.handle->error, ctx);
+        mark_lval2(obj->async.handle->on_complete, ctx);
+        mark_lval2(obj->async.handle->on_error, ctx);
+        mark_lval2(obj->async.handle->on_cancel, ctx);
+        mark_lval2(obj->async.handle->result, ctx);
+        mark_lval2(obj->async.handle->error, ctx);
         if (obj->async.handle->env) {
           mark_env2(obj->async.handle->env, ctx);
         }
@@ -2840,11 +2901,11 @@ static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
     case LVAL_SYM:
     case LVAL_STR:
     case LVAL_ERR:
-      mark_and_push2(obj->str, ctx);
+      mark_ptr_only(obj->str, ctx);
       break;
       
     case LVAL_REF:
-      mark_and_push2(obj->ref.type, ctx);
+      mark_ptr_only(obj->ref.type, ctx);
       break;
       
     default:
@@ -2854,11 +2915,11 @@ static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
 
 static void mark_root_visitor2(valk_lval_t *val, void *user) {
   valk_gc_mark_ctx2_t *ctx = user;
-  mark_and_push2(val, ctx);
+  mark_lval2(val, ctx);
 }
 
 void valk_gc_heap2_mark_object(valk_gc_mark_ctx2_t *ctx, void *ptr) {
-  mark_and_push2(ptr, ctx);
+  mark_lval2(ptr, ctx);
 }
 
 void valk_gc_heap2_mark_roots(valk_gc_heap2_t *heap) {
@@ -3105,45 +3166,46 @@ static bool valk_gc_heap2_check_termination(void) {
   return false;
 }
 
-static void mark_and_push2_parallel(void *ptr, valk_gc_mark_ctx2_t *ctx);
 static void mark_children2_parallel(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx);
 static void mark_env2_parallel(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx);
 
-static void mark_and_push2_parallel(void *ptr, valk_gc_mark_ctx2_t *ctx) {
-  if (ptr == NULL) return;
+static bool mark_ptr_only_parallel(void *ptr, valk_gc_mark_ctx2_t *ctx) {
+  if (ptr == NULL) return false;
   
   valk_gc_ptr_location_t loc;
   if (valk_gc_ptr_to_location(ctx->heap, ptr, &loc)) {
-    if (!valk_gc_page2_try_mark(loc.page, loc.slot)) {
-      return;
-    }
+    return valk_gc_page2_try_mark(loc.page, loc.slot);
   } else {
-    if (!valk_gc_mark_large_object(ctx->heap, ptr)) {
-      return;
-    }
+    return valk_gc_mark_large_object(ctx->heap, ptr);
   }
+}
+
+static void mark_lval2_parallel(valk_lval_t *lval, valk_gc_mark_ctx2_t *ctx) {
+  if (lval == NULL) return;
   
-  if (!valk_gc_mark_queue_push(ctx->queue, ptr)) {
-    mark_children2_parallel(ptr, ctx);
+  if (!mark_ptr_only_parallel(lval, ctx)) return;
+  
+  if (!valk_gc_mark_queue_push(ctx->queue, lval)) {
+    mark_children2_parallel(lval, ctx);
   }
 }
 
 static void mark_env2_parallel(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx) {
-  if (env == NULL) return;
-  
-  mark_and_push2_parallel(env, ctx);
-  mark_and_push2_parallel(env->symbols.items, ctx);
-  mark_and_push2_parallel(env->vals.items, ctx);
-  
-  for (u64 i = 0; i < env->symbols.count; i++) {
-    mark_and_push2_parallel(env->symbols.items[i], ctx);
+  while (env != NULL) {
+    if (!mark_ptr_only_parallel(env, ctx)) return;
+    
+    mark_ptr_only_parallel(env->symbols.items, ctx);
+    mark_ptr_only_parallel(env->vals.items, ctx);
+    
+    for (u64 i = 0; i < env->symbols.count; i++) {
+      mark_ptr_only_parallel(env->symbols.items[i], ctx);
+    }
+    for (u64 i = 0; i < env->vals.count; i++) {
+      mark_lval2_parallel(env->vals.items[i], ctx);
+    }
+    
+    env = env->parent;
   }
-  for (u64 i = 0; i < env->vals.count; i++) {
-    mark_and_push2_parallel(env->vals.items[i], ctx);
-  }
-  
-  mark_env2_parallel(env->parent, ctx);
-  mark_env2_parallel(env->fallback, ctx);
 }
 
 static void mark_children2_parallel(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
@@ -3152,28 +3214,28 @@ static void mark_children2_parallel(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) 
   switch (LVAL_TYPE(obj)) {
     case LVAL_CONS:
     case LVAL_QEXPR:
-      mark_and_push2_parallel(obj->cons.head, ctx);
-      mark_and_push2_parallel(obj->cons.tail, ctx);
+      mark_lval2_parallel(obj->cons.head, ctx);
+      mark_lval2_parallel(obj->cons.tail, ctx);
       break;
       
     case LVAL_FUN:
       if (obj->fun.builtin == NULL) {
-        mark_and_push2_parallel(obj->fun.formals, ctx);
-        mark_and_push2_parallel(obj->fun.body, ctx);
+        mark_lval2_parallel(obj->fun.formals, ctx);
+        mark_lval2_parallel(obj->fun.body, ctx);
         if (obj->fun.env) {
           mark_env2_parallel(obj->fun.env, ctx);
         }
       }
-      mark_and_push2_parallel(obj->fun.name, ctx);
+      mark_ptr_only_parallel(obj->fun.name, ctx);
       break;
       
     case LVAL_HANDLE:
       if (obj->async.handle) {
-        mark_and_push2_parallel(obj->async.handle->on_complete, ctx);
-        mark_and_push2_parallel(obj->async.handle->on_error, ctx);
-        mark_and_push2_parallel(obj->async.handle->on_cancel, ctx);
-        mark_and_push2_parallel(obj->async.handle->result, ctx);
-        mark_and_push2_parallel(obj->async.handle->error, ctx);
+        mark_lval2_parallel(obj->async.handle->on_complete, ctx);
+        mark_lval2_parallel(obj->async.handle->on_error, ctx);
+        mark_lval2_parallel(obj->async.handle->on_cancel, ctx);
+        mark_lval2_parallel(obj->async.handle->result, ctx);
+        mark_lval2_parallel(obj->async.handle->error, ctx);
         if (obj->async.handle->env) {
           mark_env2_parallel(obj->async.handle->env, ctx);
         }
@@ -3183,11 +3245,11 @@ static void mark_children2_parallel(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) 
     case LVAL_SYM:
     case LVAL_STR:
     case LVAL_ERR:
-      mark_and_push2_parallel(obj->str, ctx);
+      mark_ptr_only_parallel(obj->str, ctx);
       break;
       
     case LVAL_REF:
-      mark_and_push2_parallel(obj->ref.type, ctx);
+      mark_ptr_only_parallel(obj->ref.type, ctx);
       break;
       
     default:
@@ -3197,7 +3259,7 @@ static void mark_children2_parallel(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) 
 
 static void mark_root_visitor2_parallel(valk_lval_t *val, void *user) {
   valk_gc_mark_ctx2_t *ctx = user;
-  mark_and_push2_parallel(val, ctx);
+  mark_lval2_parallel(val, ctx);
 }
 
 void valk_gc_heap2_parallel_mark(valk_gc_heap2_t *heap) {

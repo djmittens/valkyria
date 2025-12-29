@@ -40,7 +40,7 @@
 ; Uses quasiquote (`) to build plist without evaluating :status/:body as symbols
 (def {server-handler}
   (\ {req} {
-    (= {path} (plist/get req (head {:path})))
+    (= {path} (req/path req))
     (if (== path "/error")
       {`{:status "500" :body "Internal Server Error"}}
       {`{:status "200" :body "Hello from test server"}})

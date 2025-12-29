@@ -12,6 +12,29 @@
 typedef struct valk_lenv_t valk_lenv_t;
 typedef struct valk_lval_t valk_lval_t;
 
+// ============================================================================
+// Runtime Initialization API
+// ============================================================================
+
+typedef struct {
+  sz gc_heap_size;    // GC heap hard limit (default: 1GB)
+} valk_runtime_config_t;
+
+static inline valk_runtime_config_t valk_runtime_config_default(void) {
+  return (valk_runtime_config_t){
+    .gc_heap_size = 4ULL * 1024 * 1024 * 1024,  // 4GB default
+  };
+}
+
+typedef void (*valk_thread_onboard_fn)(void);
+
+int valk_runtime_init(valk_runtime_config_t *config);
+void valk_runtime_shutdown(void);
+void valk_runtime_thread_onboard(void);
+valk_thread_onboard_fn valk_runtime_get_onboard_fn(void);
+struct valk_gc_heap2 *valk_runtime_get_heap(void);
+bool valk_runtime_is_initialized(void);
+
 // GC allocation header - prepended to every GC-managed allocation
 // This allows arbitrary-sized allocations while maintaining tracking metadata
 typedef struct valk_gc_header_t {
@@ -487,7 +510,8 @@ static inline sz valk_gc_page_total_size(u8 size_class) {
 // Class 7 (2KB):  usable=65472, slots = 65472*8/(8*2048+2) = 31
 // Class 8 (4KB):  usable=65472, slots = 65472*8/(8*4096+2) = 15
 
-#define VALK_GC_VIRTUAL_RESERVE     (4ULL * 1024 * 1024 * 1024)
+#define VALK_GC_VIRTUAL_RESERVE_PER_CLASS  (4ULL * 1024 * 1024 * 1024)
+#define VALK_GC_VIRTUAL_RESERVE     (VALK_GC_VIRTUAL_RESERVE_PER_CLASS * VALK_GC_NUM_SIZE_CLASSES)
 #define VALK_GC_DEFAULT_HARD_LIMIT  (512 * 1024 * 1024)
 #define VALK_GC_DEFAULT_SOFT_LIMIT  (384 * 1024 * 1024)
 #define VALK_GC_INITIAL_COMMIT      (16 * 1024 * 1024)

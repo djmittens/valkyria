@@ -238,9 +238,16 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
     return NULL;
   }
 
-  int status = uv_thread_create(&sys->loopThread, __event_loop, sys);
+  // Use uv_thread_create_ex with a larger stack size (8MB) to support
+  // deep Lisp recursion. Default thread stack is ~512KB which overflows
+  // with recursive evaluators running Lisp handlers.
+  uv_thread_options_t thread_opts = {
+    .flags = UV_THREAD_HAS_STACK_SIZE,
+    .stack_size = 8 * 1024 * 1024  // 8MB stack
+  };
+  int status = uv_thread_create_ex(&sys->loopThread, &thread_opts, __event_loop, sys);
   if (status) {
-    perror("uv_thread_create");
+    perror("uv_thread_create_ex");
     uv_sem_destroy(&sys->startup_sem);
     return NULL;
   }

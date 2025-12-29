@@ -36,7 +36,7 @@
 ; Define handler that returns the 2MB string
 (def {request-handler}
   (\ {req} {
-    (= {path} (plist/get req (head {:path})))
+    (= {path} (req/path req))
     (select
       {(== path "/big")
        {`{:status "200" :content-type "text/plain" :body ,body-2mb}}}
