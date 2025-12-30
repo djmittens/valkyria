@@ -884,6 +884,90 @@
       margin-top: 2px;
     }
 
+    /* ===== PAUSE HISTOGRAM ===== */
+    .pause-histogram {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      height: 50px;
+      gap: 4px;
+      padding: var(--space-sm);
+      background: var(--bg-tertiary);
+      border-radius: var(--radius-sm);
+    }
+
+    .pause-bar-group {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      height: 100%;
+    }
+
+    .pause-bar {
+      width: 100%;
+      max-width: 24px;
+      border-radius: 2px 2px 0 0;
+      min-height: 2px;
+      transition: height 0.3s ease;
+    }
+
+    .pause-bar.ok { background: var(--color-ok); }
+    .pause-bar.ok-muted { background: var(--color-ok-muted); }
+    .pause-bar.warning { background: var(--color-warning); }
+    .pause-bar.warning-strong { background: var(--color-warning-muted); }
+    .pause-bar.error { background: var(--color-error); }
+
+    .pause-bar-label {
+      font-size: 9px;
+      color: var(--text-faint);
+      margin-top: 2px;
+      white-space: nowrap;
+    }
+
+    /* ===== SIZE CLASS GRID ===== */
+    .size-class-grid {
+      display: grid;
+      grid-template-columns: repeat(9, 1fr);
+      gap: 3px;
+      padding: var(--space-sm);
+      background: var(--bg-tertiary);
+      border-radius: var(--radius-sm);
+    }
+
+    .size-class-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .size-class-bar {
+      width: 100%;
+      height: 24px;
+      background: var(--bg-elevated);
+      border-radius: 2px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .size-class-bar::before {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: var(--usage, 0%);
+      background: var(--color-info);
+      border-radius: 2px;
+      transition: height 0.3s ease;
+    }
+
+    .size-class-label {
+      font-size: 8px;
+      color: var(--text-faint);
+      margin-top: 2px;
+    }
+
     /* ===== CONNECTION POOL - STACKED BAR ===== */
     .conn-pool-bar {
       height: 24px;
@@ -1148,42 +1232,121 @@
 
       <div class="grid-3">
         <!-- GC Panel -->
-        <article class="panel" aria-labelledby="gc-panel-title">
+        <article class="panel span-2" aria-labelledby="gc-panel-title">
           <div class="panel-header">
             <div class="panel-icon gc" aria-hidden="true">G</div>
             <h3 class="panel-title" id="gc-panel-title">Garbage Collector</h3>
+            <div class="panel-badge" id="gc-parallel-badge">Parallel (4 threads)</div>
             <div class="panel-badge">142 cycles</div>
           </div>
           <div class="panel-body">
-            <div class="gc-timeline"
-                 id="gc-timeline"
-                 role="img"
-                 aria-label="GC pause timeline showing 142 collection events over the last 60 seconds. Max pause 2.4ms, average 0.8ms.">
-              <div class="gc-timeline-threshold" style="bottom: 40px;">
-                <span class="gc-timeline-threshold-label">10ms</span>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-lg);">
+              <!-- Left: Timeline + Stats -->
+              <div>
+                <div class="gc-timeline"
+                     id="gc-timeline"
+                     role="img"
+                     aria-label="GC pause timeline showing 142 collection events over the last 60 seconds. Max pause 2.4ms, average 0.8ms.">
+                  <div class="gc-timeline-threshold" style="bottom: 40px;">
+                    <span class="gc-timeline-threshold-label">10ms</span>
+                  </div>
+                  <div class="gc-timeline-axis">
+                    <span>-60s</span>
+                    <span>-30s</span>
+                    <span>now</span>
+                  </div>
+                </div>
+                <div class="gc-stats" role="list" aria-label="GC statistics">
+                  <div class="gc-stat" role="listitem">
+                    <div class="gc-stat-value" id="gc-cycles">142</div>
+                    <div class="gc-stat-label">Cycles</div>
+                  </div>
+                  <div class="gc-stat" role="listitem">
+                    <div class="gc-stat-value" id="gc-max-pause">2.4<span class="unit">ms</span></div>
+                    <div class="gc-stat-label">Max Pause</div>
+                  </div>
+                  <div class="gc-stat" role="listitem">
+                    <div class="gc-stat-value" id="gc-efficiency">85<span class="unit">%</span></div>
+                    <div class="gc-stat-label">Efficiency</div>
+                  </div>
+                  <div class="gc-stat" role="listitem">
+                    <div class="gc-stat-value" id="gc-reclaimed">24<span class="unit">MB</span></div>
+                    <div class="gc-stat-label">Reclaimed</div>
+                  </div>
+                </div>
               </div>
-              <div class="gc-timeline-axis">
-                <span>-60s</span>
-                <span>-30s</span>
-                <span>now</span>
-              </div>
-            </div>
-            <div class="gc-stats" role="list" aria-label="GC statistics">
-              <div class="gc-stat" role="listitem">
-                <div class="gc-stat-value">142</div>
-                <div class="gc-stat-label">Cycles</div>
-              </div>
-              <div class="gc-stat" role="listitem">
-                <div class="gc-stat-value">2.4<span class="unit">ms</span></div>
-                <div class="gc-stat-label">Max Pause</div>
-              </div>
-              <div class="gc-stat" role="listitem">
-                <div class="gc-stat-value">0.8<span class="unit">ms</span></div>
-                <div class="gc-stat-label">Avg Pause</div>
-              </div>
-              <div class="gc-stat" role="listitem">
-                <div class="gc-stat-value">24<span class="unit">MB</span></div>
-                <div class="gc-stat-label">Reclaimed</div>
+              <!-- Right: Pause Histogram + Size Classes -->
+              <div>
+                <div style="margin-bottom: var(--space-md);">
+                  <div class="entity-section-title">Pause Distribution (Frame Budget)</div>
+                  <div id="gc-pause-histogram" class="pause-histogram" role="img" aria-label="GC pause distribution by frame budget">
+                    <div class="pause-bar-group">
+                      <div class="pause-bar ok" style="height: 80%" data-count="100" title="0-1ms: 100 pauses"></div>
+                      <div class="pause-bar-label">0-1ms</div>
+                    </div>
+                    <div class="pause-bar-group">
+                      <div class="pause-bar ok-muted" style="height: 60%" data-count="30" title="1-5ms: 30 pauses"></div>
+                      <div class="pause-bar-label">1-5ms</div>
+                    </div>
+                    <div class="pause-bar-group">
+                      <div class="pause-bar warning" style="height: 20%" data-count="8" title="5-10ms: 8 pauses"></div>
+                      <div class="pause-bar-label">5-10ms</div>
+                    </div>
+                    <div class="pause-bar-group">
+                      <div class="pause-bar warning-strong" style="height: 8%" data-count="3" title="10-16ms: 3 pauses"></div>
+                      <div class="pause-bar-label">10-16ms</div>
+                    </div>
+                    <div class="pause-bar-group">
+                      <div class="pause-bar error" style="height: 2%" data-count="1" title="16ms+: 1 pause"></div>
+                      <div class="pause-bar-label">16ms+</div>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <div class="entity-section-title">Size Class Usage</div>
+                  <div id="gc-size-classes" class="size-class-grid">
+                    <div class="size-class-item">
+                      <div class="size-class-bar" style="--usage: 75%"></div>
+                      <div class="size-class-label">16B</div>
+                    </div>
+                    <div class="size-class-item">
+                      <div class="size-class-bar" style="--usage: 60%"></div>
+                      <div class="size-class-label">32B</div>
+                    </div>
+                    <div class="size-class-item">
+                      <div class="size-class-bar" style="--usage: 90%"></div>
+                      <div class="size-class-label">64B</div>
+                    </div>
+                    <div class="size-class-item">
+                      <div class="size-class-bar" style="--usage: 45%"></div>
+                      <div class="size-class-label">128B</div>
+                    </div>
+                    <div class="size-class-item">
+                      <div class="size-class-bar" style="--usage: 30%"></div>
+                      <div class="size-class-label">256B</div>
+                    </div>
+                    <div class="size-class-item">
+                      <div class="size-class-bar" style="--usage: 15%"></div>
+                      <div class="size-class-label">512B</div>
+                    </div>
+                    <div class="size-class-item">
+                      <div class="size-class-bar" style="--usage: 8%"></div>
+                      <div class="size-class-label">1KB</div>
+                    </div>
+                    <div class="size-class-item">
+                      <div class="size-class-bar" style="--usage: 5%"></div>
+                      <div class="size-class-label">2KB</div>
+                    </div>
+                    <div class="size-class-item">
+                      <div class="size-class-bar" style="--usage: 2%"></div>
+                      <div class="size-class-label">4KB</div>
+                    </div>
+                  </div>
+                  <div class="metric-row" style="margin-top: var(--space-sm);">
+                    <span class="metric-label">Large Objects (&gt;4KB)</span>
+                    <span class="metric-value" id="gc-large-objects">1.2 MB</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1856,6 +2019,96 @@
         const oldEvents = container.querySelectorAll('.gc-event');
         oldEvents.forEach(e => e.remove());
         container.appendChild(fragment);
+      }
+
+      // Update GC panel from SSE data
+      function updateGCPanel(gc) {
+        if (!gc) return;
+
+        // Update parallel badge
+        const parallelBadge = document.getElementById('gc-parallel-badge');
+        if (parallelBadge && gc.parallel) {
+          if (gc.parallel.enabled) {
+            parallelBadge.textContent = `Parallel (${gc.parallel.threads} threads)`;
+            parallelBadge.style.background = 'var(--color-ok-bg)';
+            parallelBadge.style.color = 'var(--color-ok)';
+          } else {
+            parallelBadge.textContent = 'Single-threaded';
+            parallelBadge.style.background = 'var(--bg-elevated)';
+            parallelBadge.style.color = 'var(--text-muted)';
+          }
+        }
+
+        // Update basic stats
+        const cycles = document.getElementById('gc-cycles');
+        if (cycles) cycles.textContent = gc.cycles || 0;
+
+        const efficiency = document.getElementById('gc-efficiency');
+        if (efficiency) efficiency.innerHTML = `${gc.efficiency_pct || 0}<span class="unit">%</span>`;
+
+        // Update pause histogram
+        if (gc.pause_histogram) {
+          const hist = gc.pause_histogram;
+          const total = (hist['0_1ms'] || 0) + (hist['1_5ms'] || 0) + (hist['5_10ms'] || 0) +
+                        (hist['10_16ms'] || 0) + (hist['16ms_plus'] || 0);
+          const max = Math.max(hist['0_1ms'] || 0, hist['1_5ms'] || 0, hist['5_10ms'] || 0,
+                               hist['10_16ms'] || 0, hist['16ms_plus'] || 0, 1);
+          
+          const bars = document.querySelectorAll('#gc-pause-histogram .pause-bar');
+          const values = [hist['0_1ms'] || 0, hist['1_5ms'] || 0, hist['5_10ms'] || 0,
+                          hist['10_16ms'] || 0, hist['16ms_plus'] || 0];
+          bars.forEach((bar, i) => {
+            if (i < values.length) {
+              const pct = (values[i] / max) * 100;
+              bar.style.height = Math.max(pct, 2) + '%';
+              bar.title = `${values[i]} pauses`;
+            }
+          });
+        }
+
+        // Update size classes
+        if (gc.size_classes && gc.size_classes.length > 0) {
+          const grid = document.getElementById('gc-size-classes');
+          if (grid) {
+            grid.innerHTML = gc.size_classes.map(cls => {
+              const usage = cls.total > 0 ? (cls.used / cls.total * 100) : 0;
+              const label = cls.size >= 1024 ? `${cls.size / 1024}KB` : `${cls.size}B`;
+              return `<div class="size-class-item">
+                <div class="size-class-bar" style="--usage: ${usage}%"></div>
+                <div class="size-class-label">${label}</div>
+              </div>`;
+            }).join('');
+          }
+        }
+
+        // Update large objects
+        const largeObj = document.getElementById('gc-large-objects');
+        if (largeObj && gc.large_object_bytes !== undefined) {
+          const mb = gc.large_object_bytes / (1024 * 1024);
+          largeObj.textContent = mb >= 1 ? `${mb.toFixed(1)} MB` : `${(gc.large_object_bytes / 1024).toFixed(1)} KB`;
+        }
+      }
+
+      // Format bytes to human readable
+      function formatBytes(bytes) {
+        if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+        if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return bytes + ' B';
+      }
+
+      // Update dashboard from SSE diagnostics event
+      function updateDashboard(data) {
+        if (!data) return;
+
+        // Update memory section
+        if (data.memory) {
+          if (data.memory.gc) {
+            updateGCPanel(data.memory.gc);
+          }
+        }
+
+        updateTime();
       }
 
       // Initialize charts with empty state

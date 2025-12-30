@@ -1592,10 +1592,15 @@ void test_gc_reclaim_empty_pages_after_sweep(VALK_TEST_ARGS()) {
   void *p1 = valk_gc_heap2_alloc(heap, 64);
   VALK_TEST_ASSERT(p1 != NULL, "Allocation should succeed");
   
+  size_t committed_before = atomic_load(&heap->committed_bytes);
+  
   valk_gc_heap2_collect(heap);
   
-  size_t reclaimed = valk_gc_reclaim_empty_pages(heap);
-  VALK_TEST_ASSERT(reclaimed >= 1, "Empty page should be reclaimed after GC");
+  size_t committed_after = atomic_load(&heap->committed_bytes);
+  VALK_TEST_ASSERT(committed_after < committed_before, "committed_bytes should decrease after GC reclaims pages");
+  
+  size_t reclaimed_again = valk_gc_reclaim_empty_pages(heap);
+  VALK_TEST_ASSERT(reclaimed_again == 0, "Second reclaim should return 0 (pages already reclaimed)");
   
   valk_gc_heap2_destroy(heap);
   
@@ -1614,10 +1619,15 @@ void test_gc_reclaim_empty_pages_multiple_classes(VALK_TEST_ARGS()) {
   
   VALK_TEST_ASSERT(p1 && p2 && p3 && p4, "All allocations should succeed");
   
+  size_t committed_before = atomic_load(&heap->committed_bytes);
+  
   valk_gc_heap2_collect(heap);
   
-  size_t reclaimed = valk_gc_reclaim_empty_pages(heap);
-  VALK_TEST_ASSERT(reclaimed >= 4, "All empty pages should be reclaimed");
+  size_t committed_after = atomic_load(&heap->committed_bytes);
+  VALK_TEST_ASSERT(committed_after < committed_before, "committed_bytes should decrease after GC reclaims pages from multiple classes");
+  
+  size_t reclaimed_again = valk_gc_reclaim_empty_pages(heap);
+  VALK_TEST_ASSERT(reclaimed_again == 0, "Second reclaim should return 0 (pages already reclaimed by collect)");
   
   valk_gc_heap2_destroy(heap);
   
@@ -1637,6 +1647,48 @@ void test_gc_reclaim_reallocation_works(VALK_TEST_ARGS()) {
   
   void *p2 = valk_gc_heap2_alloc(heap, 64);
   VALK_TEST_ASSERT(p2 != NULL, "Second allocation after reclaim should succeed");
+  
+  valk_gc_heap2_destroy(heap);
+  
+  VALK_PASS();
+}
+
+void test_gc_reclaim_committed_bytes_accounting(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(64 * 1024 * 1024);
+  
+  size_t committed_before = atomic_load(&heap->committed_bytes);
+  
+  void *p1 = valk_gc_heap2_alloc(heap, 64);
+  VALK_TEST_ASSERT(p1 != NULL, "First allocation should succeed");
+  
+  size_t committed_after_alloc = atomic_load(&heap->committed_bytes);
+  VALK_TEST_ASSERT(committed_after_alloc >= committed_before, "Committed should increase or stay same");
+  
+  valk_gc_heap2_collect(heap);
+  (void)valk_gc_reclaim_empty_pages(heap);
+  
+  size_t committed_after_reclaim1 = atomic_load(&heap->committed_bytes);
+  
+  valk_gc_heap2_collect(heap);
+  sz reclaimed2 = valk_gc_reclaim_empty_pages(heap);
+  (void)reclaimed2;
+  
+  size_t committed_after_reclaim2 = atomic_load(&heap->committed_bytes);
+  
+  VALK_TEST_ASSERT(committed_after_reclaim2 == committed_after_reclaim1 || reclaimed2 == 0,
+    "Second reclaim should not decrease committed_bytes again (no double-decrement)");
+  
+  VALK_TEST_ASSERT(committed_after_reclaim2 <= committed_after_alloc,
+    "committed_bytes should not underflow (wrap to huge value)");
+  
+  void *p2 = valk_gc_heap2_alloc(heap, 64);
+  VALK_TEST_ASSERT(p2 != NULL, "Allocation after reclaim should succeed");
+  
+  size_t committed_after_reuse = atomic_load(&heap->committed_bytes);
+  VALK_TEST_ASSERT(committed_after_reuse >= committed_after_reclaim2,
+    "committed_bytes should be restored when reclaimed page is reused");
   
   valk_gc_heap2_destroy(heap);
   
@@ -2279,6 +2331,135 @@ void test_gc_heap2_realloc_large(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_gc_emergency_gc_trigger(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  size_t hard_limit = 256 * 1024;
+  size_t soft_limit = hard_limit * 3 / 4;
+  
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(hard_limit);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  
+  size_t allocs_to_trigger = soft_limit / 128 + 50;
+  int successful = 0;
+  
+  for (size_t i = 0; i < allocs_to_trigger; i++) {
+    void *p = valk_gc_heap2_alloc(heap, 72);
+    if (p) successful++;
+  }
+  
+  VALK_TEST_ASSERT(successful > 50, "Should have many successful allocations");
+  
+  valk_gc_stats2_t stats;
+  valk_gc_heap2_get_stats(heap, &stats);
+  
+  VALK_TEST_ASSERT(stats.collections >= 1, "Allocation pressure near limit should trigger GC");
+  
+  valk_gc_heap2_destroy(heap);
+  
+  VALK_PASS();
+}
+
+typedef struct {
+  valk_gc_heap2_t *heap;
+  int thread_id;
+  _Atomic int *ready_count;
+  _Atomic bool *start_flag;
+  _Atomic bool *stop_flag;
+  _Atomic int *alloc_success;
+} soft_limit_mt_args_t;
+
+static void *soft_limit_mt_worker(void *arg) {
+  soft_limit_mt_args_t *args = (soft_limit_mt_args_t *)arg;
+  
+  valk_gc_thread_register();
+  atomic_fetch_add(args->ready_count, 1);
+  
+  while (!atomic_load(args->start_flag)) {
+    sched_yield();
+  }
+  
+  int local_allocs = 0;
+  int iterations = 0;
+  while (!atomic_load(args->stop_flag) && iterations < 500) {
+    void *p = valk_gc_heap2_alloc(args->heap, 72);
+    if (p) {
+      local_allocs++;
+    }
+    iterations++;
+    if (iterations % 50 == 0) {
+      VALK_GC_SAFE_POINT();
+    }
+  }
+  
+  atomic_fetch_add(args->alloc_success, local_allocs);
+  
+  valk_gc_thread_unregister();
+  return NULL;
+}
+
+void test_gc_soft_limit_multithread(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  size_t hard_limit = 256 * 1024;
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(hard_limit);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  
+  valk_gc_thread_register();
+  
+  _Atomic int ready_count = 0;
+  _Atomic bool start_flag = false;
+  _Atomic bool stop_flag = false;
+  _Atomic int alloc_success = 0;
+  
+  const int num_workers = 2;
+  pthread_t workers[2];
+  soft_limit_mt_args_t args[2];
+  
+  for (int i = 0; i < num_workers; i++) {
+    args[i].heap = heap;
+    args[i].thread_id = i;
+    args[i].ready_count = &ready_count;
+    args[i].start_flag = &start_flag;
+    args[i].stop_flag = &stop_flag;
+    args[i].alloc_success = &alloc_success;
+    pthread_create(&workers[i], NULL, soft_limit_mt_worker, &args[i]);
+  }
+  
+  while (atomic_load(&ready_count) < num_workers) {
+    sched_yield();
+  }
+  
+  atomic_store(&start_flag, true);
+  
+  size_t allocs_to_trigger = (hard_limit * 3 / 4) / 128 + 100;
+  for (size_t i = 0; i < allocs_to_trigger; i++) {
+    void *p = valk_gc_heap2_alloc(heap, 72);
+    (void)p;
+    if (i % 50 == 0) {
+      VALK_GC_SAFE_POINT();
+    }
+  }
+  
+  atomic_store(&stop_flag, true);
+  
+  for (int i = 0; i < num_workers; i++) {
+    pthread_join(workers[i], NULL);
+  }
+  
+  valk_gc_stats2_t stats;
+  valk_gc_heap2_get_stats(heap, &stats);
+  
+  int total_allocs = atomic_load(&alloc_success);
+  VALK_TEST_ASSERT(total_allocs > 50, "Should have many successful allocations");
+  VALK_TEST_ASSERT(stats.collections >= 1, "Pressure should trigger GC");
+  
+  valk_gc_thread_unregister();
+  valk_gc_heap2_destroy(heap);
+  
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -2387,6 +2568,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_reclaim_empty_pages_after_sweep", test_gc_reclaim_empty_pages_after_sweep);
   valk_testsuite_add_test(suite, "test_gc_reclaim_empty_pages_multiple_classes", test_gc_reclaim_empty_pages_multiple_classes);
   valk_testsuite_add_test(suite, "test_gc_reclaim_reallocation_works", test_gc_reclaim_reallocation_works);
+  valk_testsuite_add_test(suite, "test_gc_reclaim_committed_bytes_accounting", test_gc_reclaim_committed_bytes_accounting);
 
   // Phase 7: Parallel mark/sweep tests
   valk_testsuite_add_test(suite, "test_gc_heap2_parallel_collect_null", test_gc_heap2_parallel_collect_null);
@@ -2413,6 +2595,10 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_heap2_realloc_basic", test_gc_heap2_realloc_basic);
   valk_testsuite_add_test(suite, "test_gc_heap2_realloc_null", test_gc_heap2_realloc_null);
   valk_testsuite_add_test(suite, "test_gc_heap2_realloc_large", test_gc_heap2_realloc_large);
+
+  // Phase 15: Emergency GC and multi-threaded soft limit tests
+  valk_testsuite_add_test(suite, "test_gc_emergency_gc_trigger", test_gc_emergency_gc_trigger);
+  valk_testsuite_add_test(suite, "test_gc_soft_limit_multithread", test_gc_soft_limit_multithread);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

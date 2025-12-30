@@ -7,6 +7,63 @@
 extern void __event_loop(void *arg);
 extern void __aio_uv_stop(uv_async_t *h);
 
+#define VALK_AIO_MAX_SYSTEMS 16
+static valk_aio_system_t *g_aio_systems[VALK_AIO_MAX_SYSTEMS];
+static pthread_mutex_t g_aio_systems_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void __gc_wakeup_cb(uv_async_t *handle);
+
+void valk_aio_register_system(valk_aio_system_t *sys) {
+  pthread_mutex_lock(&g_aio_systems_lock);
+  for (int i = 0; i < VALK_AIO_MAX_SYSTEMS; i++) {
+    if (g_aio_systems[i] == NULL) {
+      g_aio_systems[i] = sys;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&g_aio_systems_lock);
+}
+
+void valk_aio_unregister_system(valk_aio_system_t *sys) {
+  pthread_mutex_lock(&g_aio_systems_lock);
+  for (int i = 0; i < VALK_AIO_MAX_SYSTEMS; i++) {
+    if (g_aio_systems[i] == sys) {
+      g_aio_systems[i] = NULL;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&g_aio_systems_lock);
+}
+
+void valk_aio_wake_all_for_gc(void) {
+  pthread_mutex_lock(&g_aio_systems_lock);
+  for (int i = 0; i < VALK_AIO_MAX_SYSTEMS; i++) {
+    valk_aio_system_t *sys = g_aio_systems[i];
+    if (sys && sys->eventloop && !sys->shuttingDown) {
+      uv_async_send(&sys->gc_wakeup);
+    }
+  }
+  pthread_mutex_unlock(&g_aio_systems_lock);
+}
+
+static void __gc_wakeup_cb(uv_async_t *handle) {
+  valk_aio_system_t *sys = (valk_aio_system_t *)handle->data;
+  if (!sys) return;
+  
+  valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
+  if (phase != VALK_GC_PHASE_STW_REQUESTED) {
+    return;
+  }
+  
+  if (atomic_exchange(&sys->gc_acknowledged, true)) {
+    return;
+  }
+  
+  valk_gc_safe_point_slow();
+  
+  atomic_store(&sys->gc_acknowledged, false);
+}
+
 const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg) {
   if (cfg->max_connections < 1 || cfg->max_connections > 100000)
     return "max_connections must be between 1 and 100,000";
@@ -233,6 +290,13 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   uv_async_init(sys->eventloop, &sys->stopperHandle->uv.task, __aio_uv_stop);
   valk_dll_insert_after(&sys->liveHandles, sys->stopperHandle);
 
+  atomic_store(&sys->gc_acknowledged, false);
+  uv_async_init(sys->eventloop, &sys->gc_wakeup, __gc_wakeup_cb);
+  sys->gc_wakeup.data = sys;
+  uv_unref((uv_handle_t *)&sys->gc_wakeup);
+
+  valk_aio_register_system(sys);
+
   if (uv_sem_init(&sys->startup_sem, 0) != 0) {
     VALK_ERROR("Failed to initialize startup semaphore");
     return NULL;
@@ -264,6 +328,8 @@ bool valk_aio_is_shutting_down(valk_aio_system_t *sys) {
 
 void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
   if (!sys) return;
+
+  valk_aio_unregister_system(sys);
 
   if (!valk_thread_equal(valk_thread_self(), (valk_thread_t)sys->loopThread)) {
     uv_thread_join(&sys->loopThread);

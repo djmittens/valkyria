@@ -140,6 +140,21 @@ typedef struct valk_mem_snapshot {
     double lenv_fragmentation;    // Same for lenv slab
     u64 free_list_count;       // Objects on malloc free list
     u64 free_list_bytes;       // Estimated bytes on free list
+
+    // Parallel GC metrics
+    bool parallel_enabled;        // True if multiple threads registered
+    u64 threads_registered;    // Number of threads participating in GC
+    u64 parallel_cycles;       // Number of parallel GC cycles
+    u64 parallel_pause_us_total; // Total pause time across parallel cycles
+
+    // Size class statistics (heap2)
+    struct {
+      u16 slot_size;           // Slot size in bytes (16, 32, 64, ...)
+      u64 used_slots;
+      u64 total_slots;
+    } size_classes[9];         // 9 size classes: 16B to 4KB
+    u64 size_class_count;
+    u64 large_object_bytes;    // Bytes in large objects (>4KB)
   } gc_heap;
 
   // Process-level memory (from OS)
@@ -177,9 +192,6 @@ typedef struct valk_mem_snapshot {
     i64 lenv_delta;            // LENV count change
     u64 eval_count;           // Total evals since REPL start
   } repl_eval;
-
-  // Retained size sampling (top N bindings by memory size)
-  valk_retained_sets_t retained_sets;
 } valk_mem_snapshot_t;
 
 // Forward declare state struct

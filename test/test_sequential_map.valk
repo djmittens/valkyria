@@ -1,0 +1,175 @@
+; Test suite for sequential-map function in src/async_handles.valk
+; This tests the sequential-map function (lines 134-143) which applies
+; an async function to each item in a list sequentially.
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/async_handles.valk")
+
+(test/suite "Sequential Map Tests")
+
+(def {aio} (aio/start))
+
+; ============================================================================
+; Basic Functionality Tests
+; ============================================================================
+
+(test/async "sequential-map with empty list returns empty list"
+  (\ {done} {
+    (def {result-handle} (sequential-map (\ {x} {(aio/pure (* x 2))}) ()))
+    (aio/then result-handle (\ {result} {
+      (done (== result ()))
+    }))
+  }))
+
+(test/async "sequential-map with single element"
+  (\ {done} {
+    (def {result-handle} (sequential-map (\ {x} {(aio/pure (* x 10))}) (list 5)))
+    (aio/then result-handle (\ {result} {
+      (done (== (head result) 50))
+    }))
+  }))
+
+(test/async "sequential-map with multiple elements"
+  (\ {done} {
+    (def {result-handle} (sequential-map (\ {x} {(aio/pure (* x 2))}) (list 1 2 3)))
+    (aio/then result-handle (\ {result} {
+      ; Result should be (2 4 6)
+      (def {first} (head result))
+      (def {rest1} (tail result))
+      (def {second} (head rest1))
+      (def {rest2} (tail rest1))
+      (def {third} (head rest2))
+      (done (and (== first 2) (and (== second 4) (== third 6))))
+    }))
+  }))
+
+; ============================================================================
+; Sequential Execution Order Tests
+; ============================================================================
+
+(test/async "sequential-map executes in order"
+  (\ {done} {
+    ; We'll track the order items are processed
+    (def {order} ())
+    (def {track-and-double} (\ {x} {
+      (def {order} (join order (list x)))
+      (aio/pure (* x 2))
+    }))
+    
+    (def {result-handle} (sequential-map track-and-double (list 1 2 3 4)))
+    (aio/then result-handle (\ {result} {
+      ; Order should be (1 2 3 4) - items processed in sequence
+      (def {o1} (head order))
+      (def {o2} (head (tail order)))
+      (def {o3} (head (tail (tail order))))
+      (def {o4} (head (tail (tail (tail order)))))
+      (done (and (== o1 1) (and (== o2 2) (and (== o3 3) (== o4 4)))))
+    }))
+  }))
+
+; ============================================================================
+; Transform Function Tests
+; ============================================================================
+
+(test/async "sequential-map with identity transform"
+  (\ {done} {
+    (def {result-handle} (sequential-map (\ {x} {(aio/pure x)}) (list 10 20 30)))
+    (aio/then result-handle (\ {result} {
+      (def {first} (head result))
+      (def {second} (head (tail result)))
+      (def {third} (head (tail (tail result))))
+      (done (and (== first 10) (and (== second 20) (== third 30))))
+    }))
+  }))
+
+(test/async "sequential-map with constant transform"
+  (\ {done} {
+    (def {to-const} (\ {x} {(aio/pure "constant")}))
+    (def {result-handle} (sequential-map to-const (list 1 2)))
+    (aio/then result-handle (\ {result} {
+      (def {first} (head result))
+      (def {second} (head (tail result)))
+      (done (and (== first "constant") (== second "constant")))
+    }))
+  }))
+
+; ============================================================================
+; Test with delayed async operations
+; ============================================================================
+
+(test/async "sequential-map with delayed operations"
+  (\ {done} {
+    ; Each operation takes a small delay
+    (def {delayed-double} (\ {x} {
+      (aio/then (aio/sleep aio 5) (\ {_} {(aio/pure (* x 2))}))
+    }))
+    
+    (def {result-handle} (sequential-map delayed-double (list 1 2 3)))
+    (aio/then result-handle (\ {result} {
+      (def {first} (head result))
+      (def {second} (head (tail result)))
+      (def {third} (head (tail (tail result))))
+      (done (and (== first 2) (and (== second 4) (== third 6))))
+    }))
+  }))
+
+; ============================================================================
+; Result Type Tests
+; ============================================================================
+
+(test/async "sequential-map preserves result types"
+  (\ {done} {
+    ; Mix of different result types
+    (def {items} (list 1 2 3))
+    (def {result-handle} (sequential-map (\ {x} {
+      (if (== x 1)
+        {(aio/pure "one")}
+        {(if (== x 2)
+          {(aio/pure 200)}
+          {(aio/pure (list x x x))})})
+    }) items))
+    
+    (aio/then result-handle (\ {result} {
+      (def {first} (head result))
+      (def {second} (head (tail result)))
+      (def {third} (head (tail (tail result))))
+      (done (and (== first "one") 
+                 (and (== second 200) 
+                      (== (head third) 3))))
+    }))
+  }))
+
+; ============================================================================
+; Edge Cases
+; ============================================================================
+
+(test/async "sequential-map with nil elements in list"
+  (\ {done} {
+    (def {result-handle} (sequential-map (\ {x} {(aio/pure x)}) (list nil nil)))
+    (aio/then result-handle (\ {result} {
+      (def {first} (head result))
+      (def {second} (head (tail result)))
+      (done (and (== first nil) (== second nil)))
+    }))
+  }))
+
+(test/async "sequential-map with larger list"
+  (\ {done} {
+    (def {items} (list 1 2 3 4 5 6 7 8 9 10))
+    (def {result-handle} (sequential-map (\ {x} {(aio/pure (* x x))}) items))
+    (aio/then result-handle (\ {result} {
+      ; Check first and last elements: 1^2 = 1, 10^2 = 100
+      (def {first} (head result))
+      ; Get to the 10th element
+      (def {last} (nth 10 result))
+      (done (and (== first 1) (== last 100)))
+    }))
+  }))
+
+; ============================================================================
+; Run all tests
+; ============================================================================
+
+(test/run-async aio)
+(aio/run aio)

@@ -3758,12 +3758,6 @@
       pushHistory(history.reclaimRate, reclaimRate);
     }
 
-    // ========== Heap Memory Panel ==========
-    updateGauge('heap-gauge-fill', 'heap-gauge-value', heapPct, { warning: 70, critical: 90 });
-    $('heap-used').textContent = fmtBytes(heapUsed);
-    $('heap-total').textContent = fmtBytes(heapTotal);
-    $('heap-reclaimed').textContent = fmtBytes(gc.reclaimed_bytes_total || 0);
-
     // ========== Interpreter Stats (integrated into GC panel) ==========
     var evalsTotal = interp.evals_total || 0;
     var fnCalls = interp.function_calls || 0;
@@ -3900,9 +3894,7 @@
 
   // Global PoolWidget references for memory visualizations
   var arenaGauges = {};  // Map of arena name -> PoolWidget
-  var lvalSlabTierGauge = null;
-  var lenvSlabTierGauge = null;
-  var mallocTierGauge = null;
+  var heapTierGauge = null;  // Single heap tier for parallel GC
 
   function init() {
     showLoadingState();
@@ -3913,80 +3905,7 @@
 
   // Initialize PoolWidgets for GC heap tiers (arenas are created dynamically)
   function initPoolWidgets() {
-    // GC Heap Tiers (LVAL Slab + LENV Slab + Malloc)
-    var heapContainer = document.getElementById('heap-tiers-container');
-    if (heapContainer) {
-      // LVAL Slab Tier PoolWidget (includes LVAL grid)
-      lvalSlabTierGauge = new PoolWidget({
-        id: 'lval-slab-tier-gauge',
-        name: 'LVAL Slab',
-        slabKey: 'lval',
-        icon: 'V',
-        preset: 'slab',
-        variant: 'compact',
-        showGauge: true,
-        showGrid: true,
-        collapsibleGrid: true,
-        markers: PoolWidget.Markers.heapMarkers({
-          hwmFormat: 'count', hwmLabelSuffix: ' obj',
-          thresholdLabel: 'gc', thresholdPosition: 75
-        }),
-        stats: [
-          { id: 'objects', label: 'lvals:' },
-          { id: 'hwm', label: 'hwm:', suffix: '%' }
-        ]
-      });
-
-      // LENV Slab Tier PoolWidget (for environments)
-      lenvSlabTierGauge = new PoolWidget({
-        id: 'lenv-slab-tier-gauge',
-        name: 'LENV Slab',
-        slabKey: 'lenv',
-        icon: 'E',
-        preset: 'slab',
-        variant: 'compact',
-        showGauge: true,
-        showGrid: true,
-        collapsibleGrid: true,
-        markers: PoolWidget.Markers.heapMarkers({
-          hwmFormat: 'count', hwmLabelSuffix: ' env',
-          thresholdLabel: 'gc', thresholdPosition: 75
-        }),
-        stats: [
-          { id: 'objects', label: 'envs:' },
-          { id: 'hwm', label: 'hwm:', suffix: '%' }
-        ]
-      });
-
-      // Malloc PoolWidget (no grid - uses trend indicator instead)
-      mallocTierGauge = new PoolWidget({
-        id: 'malloc-tier-gauge',
-        name: 'Malloc',
-        icon: 'M',
-        preset: 'malloc',
-        variant: 'compact',
-        showGauge: true,
-        showGrid: false,
-        showTrend: true,
-        markers: PoolWidget.Markers.heapMarkers({
-          hwmFormat: 'bytes',
-          thresholdLabel: 'gc', thresholdPosition: 75
-        }),
-        stats: [
-          { id: 'peak', label: 'peak:' },
-          { id: 'hwm', label: 'hwm:', suffix: '%' }
-        ]
-      });
-
-      heapContainer.innerHTML = lvalSlabTierGauge.render() + lenvSlabTierGauge.render() + mallocTierGauge.render();
-      lvalSlabTierGauge.bind();
-      lenvSlabTierGauge.bind();
-      mallocTierGauge.bind();
-
-      // Register slab tiers for grid updates
-      PoolWidget.register('lval', lvalSlabTierGauge);
-      PoolWidget.register('lenv', lenvSlabTierGauge);
-    }
+    // Heap tier gauge removed - now only using the GC panel heap pressure display
   }
 
   // Start when DOM is ready
@@ -4549,10 +4468,6 @@
         this.updateReplEvalDelta(data.repl_eval, data.arenas);
       }
 
-      // Update retained sets display
-      if (data.retained_sets) {
-        this.updateRetainedSets(data.retained_sets);
-      }
     }
 
     // Update REPL eval memory display with SSE data
@@ -4621,52 +4536,6 @@
     formatBytesDelta(bytes) {
       var sign = bytes >= 0 ? '+' : '';
       return sign + this.formatBytes(Math.abs(bytes));
-    }
-
-    // Update retained sets display (top bindings by memory size)
-    updateRetainedSets(retainedSets) {
-      var listEl = document.getElementById('gc-retained-list');
-      var totalEl = document.getElementById('gc-retained-total');
-      if (!listEl) return;
-
-      if (!retainedSets || retainedSets.length === 0) {
-        listEl.innerHTML = '<div class="gc-retained-empty">No retained set data</div>';
-        if (totalEl) totalEl.textContent = '--';
-        return;
-      }
-
-      // Calculate totals and max for scaling
-      var totalBytes = 0;
-      var totalObjects = 0;
-      var maxBytes = 0;
-      retainedSets.forEach(function(rs) {
-        totalBytes += rs.retained_bytes || 0;
-        totalObjects += rs.object_count || 0;
-        if ((rs.retained_bytes || 0) > maxBytes) maxBytes = rs.retained_bytes;
-      });
-
-      // Update total display
-      if (totalEl) {
-        totalEl.textContent = fmtBytes(totalBytes) + ' in ' + totalObjects + ' objects';
-      }
-
-      // Build list HTML
-      var html = '';
-      var self = this;
-      retainedSets.forEach(function(rs) {
-        var name = rs.name || '(unnamed)';
-        var bytes = rs.retained_bytes || 0;
-        var objects = rs.object_count || 0;
-        var pct = maxBytes > 0 ? (bytes / maxBytes) * 100 : 0;
-
-        html += '<div class="gc-retained-item" title="Binding \'' + name + '\' retains ' + fmtBytes(bytes) + ' in ' + objects + ' objects">';
-        html += '<span class="gc-retained-name">' + name + '</span>';
-        html += '<span class="gc-retained-bytes">' + fmtBytes(bytes) + '</span>';
-        html += '<span class="gc-retained-objects">' + objects + ' obj</span>';
-        html += '</div>';
-      });
-
-      listEl.innerHTML = html;
     }
 
     // Update process memory overview widget
@@ -5226,8 +5095,9 @@
     }
 
     updateGCStats(gc) {
-      // Update tiered heap display (supports generic tiers array format)
+      // Update heap pressure gauge (new premium visualization)
       if (gc.tiers && gc.tiers.length > 0) {
+        this.updateHeapPressure(gc);
         this.updateTieredHeap(gc);
       }
 
@@ -5270,9 +5140,19 @@
         }
       }
 
-      // Update fragmentation metrics
-      if (gc.fragmentation) {
-        this.updateFragmentationStats(gc.fragmentation);
+      // Update parallel GC badge
+      if (gc.parallel) {
+        this.updateParallelBadge(gc.parallel);
+      }
+
+      // Update pause histogram (new UI - always show, not just game profile)
+      if (gc.pause_histogram) {
+        this.updateGCPauseHistogram(gc.pause_histogram);
+      }
+
+      // Update size classes
+      if (gc.size_classes) {
+        this.updateSizeClasses(gc.size_classes, gc.large_object_bytes);
       }
     }
 
@@ -5301,6 +5181,208 @@
 
       if (freeListCountEl) freeListCountEl.textContent = (frag.free_list_count || 0).toLocaleString();
       if (freeListBytesEl) freeListBytesEl.textContent = this.formatBytes(frag.free_list_bytes || 0);
+    }
+
+    updateParallelBadge(parallel) {
+      var badge = document.getElementById('gc-parallel-badge');
+      if (!badge) return;
+
+      var textEl = badge.querySelector('.parallel-text');
+      if (!textEl) textEl = badge;
+
+      if (parallel.enabled) {
+        textEl.textContent = parallel.threads + ' threads';
+        badge.classList.add('parallel-active');
+        this.updateThreadActivity(parallel.threads, parallel.cycles > (this._prevParallelCycles || 0));
+        this._prevParallelCycles = parallel.cycles;
+      } else {
+        textEl.textContent = 'Single';
+        badge.classList.remove('parallel-active');
+        this.hideThreadActivity();
+      }
+    }
+
+    updateThreadActivity(threadCount, isActive) {
+      var container = document.getElementById('gc-thread-activity');
+      var grid = document.getElementById('thread-activity-grid');
+      var countEl = document.getElementById('thread-count');
+      
+      if (!container || !grid) return;
+
+      if (threadCount > 1) {
+        container.style.display = '';
+        countEl.textContent = threadCount + ' threads';
+
+        var html = '';
+        for (var i = 0; i < threadCount; i++) {
+          var cls = 'thread-indicator' + (isActive ? ' marking' : ' active');
+          html += '<div class="' + cls + '">' + i + '</div>';
+        }
+        grid.innerHTML = html;
+      } else {
+        container.style.display = 'none';
+      }
+    }
+
+    hideThreadActivity() {
+      var container = document.getElementById('gc-thread-activity');
+      if (container) container.style.display = 'none';
+    }
+
+    updateHeapPressure(gc) {
+      var tiers = gc.tiers || [];
+      var heapTier = this.findTier(tiers, 'heap2') || {};
+      
+      var heapUsed = heapTier.bytes_used || 0;
+      var heapTotal = heapTier.bytes_total || 1;
+      var heapPct = heapTotal > 0 ? (heapUsed / heapTotal) * 100 : 0;
+
+      var arc = document.getElementById('heap-pressure-arc');
+      var valueEl = document.getElementById('heap-pressure-value');
+      var usedEl = document.getElementById('heap-pressure-used');
+      var totalEl = document.getElementById('heap-pressure-total');
+
+      if (arc) {
+        var circumference = 251.2;
+        var offset = circumference * (1 - heapPct / 100);
+        arc.style.strokeDashoffset = offset;
+      }
+
+      if (valueEl) valueEl.textContent = Math.round(heapPct);
+      if (usedEl) usedEl.textContent = this.formatBytes(heapUsed);
+      if (totalEl) totalEl.textContent = this.formatBytes(heapTotal);
+
+      this.updateAllocationRate(heapUsed);
+    }
+
+    updateAllocationRate(currentUsed) {
+      var now = Date.now();
+      var prev = this._prevAllocState || { time: now, used: currentUsed };
+      
+      var dt = (now - prev.time) / 1000;
+      if (dt < 0.05) return;
+
+      var bytesAllocated = currentUsed - prev.used;
+      var rate = bytesAllocated > 0 ? bytesAllocated / dt : 0;
+
+      this._allocRateHistory = this._allocRateHistory || [];
+      this._allocRateHistory.push(rate);
+      if (this._allocRateHistory.length > 60) this._allocRateHistory.shift();
+
+      this._prevAllocState = { time: now, used: currentUsed };
+
+      var rateDisplay = document.getElementById('alloc-rate-display');
+      var badgeValue = document.querySelector('.gc-alloc-rate-badge .alloc-rate-value');
+      
+      var rateStr = this.formatBytesRate(rate);
+      if (rateDisplay) rateDisplay.textContent = rateStr;
+      if (badgeValue) badgeValue.textContent = rateStr.replace('/s', '');
+
+      var sparkContainer = document.getElementById('alloc-rate-spark');
+      if (sparkContainer && this._allocRateHistory.length > 2) {
+        var data = this._allocRateHistory.slice();
+        while (data.length < 60) data.unshift(0);
+        renderMiniSparkline(sparkContainer, data, {
+          width: sparkContainer.clientWidth || 200,
+          height: 48,
+          color: 'var(--color-cyan)',
+          fillOpacity: 0.3
+        });
+      }
+    }
+
+    formatBytesRate(bytesPerSec) {
+      if (bytesPerSec >= 1024 * 1024 * 1024) return (bytesPerSec / (1024 * 1024 * 1024)).toFixed(1) + 'GB/s';
+      if (bytesPerSec >= 1024 * 1024) return (bytesPerSec / (1024 * 1024)).toFixed(1) + 'MB/s';
+      if (bytesPerSec >= 1024) return (bytesPerSec / 1024).toFixed(1) + 'KB/s';
+      return Math.round(bytesPerSec) + 'B/s';
+    }
+
+    updateGCPauseHistogram(pauseHist) {
+      var buckets = [
+        { key: '0_1ms', id: 'gc-pause-0-1', count: pauseHist['0_1ms'] || 0, midpoint: 0.5 },
+        { key: '1_5ms', id: 'gc-pause-1-5', count: pauseHist['1_5ms'] || 0, midpoint: 3 },
+        { key: '5_10ms', id: 'gc-pause-5-10', count: pauseHist['5_10ms'] || 0, midpoint: 7.5 },
+        { key: '10_16ms', id: 'gc-pause-10-16', count: pauseHist['10_16ms'] || 0, midpoint: 13 },
+        { key: '16ms_plus', id: 'gc-pause-16-plus', count: pauseHist['16ms_plus'] || 0, midpoint: 25 }
+      ];
+
+      var maxCount = Math.max(1, Math.max.apply(null, buckets.map(function(b) { return b.count; })));
+      var maxBarHeight = 36;
+
+      var totalPauses = 0;
+      var weightedSum = 0;
+      buckets.forEach(function(b) {
+        totalPauses += b.count;
+        weightedSum += b.count * b.midpoint;
+      });
+      var avgPause = totalPauses > 0 ? weightedSum / totalPauses : 0;
+
+      var avgEl = document.getElementById('gc-avg-pause-inline');
+      if (avgEl) {
+        avgEl.textContent = 'avg: ' + avgPause.toFixed(1) + 'ms';
+        avgEl.classList.remove('warning', 'error');
+        if (avgPause > 10) avgEl.classList.add('error');
+        else if (avgPause > 5) avgEl.classList.add('warning');
+      }
+
+      var self = this;
+      buckets.forEach(function(b) {
+        var el = document.getElementById(b.id);
+        if (!el) return;
+
+        var fill = el.querySelector('.gc-pause-bar-fill');
+        var countEl = el.querySelector('.gc-pause-bar-count');
+
+        if (fill) {
+          var pct = (b.count / maxCount) * maxBarHeight;
+          fill.style.height = Math.max(2, pct) + 'px';
+        }
+        if (countEl) {
+          countEl.textContent = b.count > 0 ? self.fmtCompact(b.count) : '--';
+        }
+      });
+    }
+
+    updateSizeClasses(sizeClasses, largeObjectBytes) {
+      var grid = document.getElementById('gc-size-class-grid');
+      if (!grid) return;
+
+      var self = this;
+      sizeClasses.forEach(function(cls) {
+        var usage = cls.total > 0 ? (cls.used / cls.total * 100) : 0;
+        var sizeEl = grid.querySelector('[data-size="' + cls.size + '"]');
+        if (sizeEl) {
+          var bar = sizeEl.querySelector('.gc-size-class-bar');
+          var fill = sizeEl.querySelector('.gc-size-class-fill');
+          var glow = sizeEl.querySelector('.gc-size-class-glow');
+          var tooltip = sizeEl.querySelector('.gc-size-class-tooltip');
+          
+          if (bar) {
+            bar.style.setProperty('--usage', usage + '%');
+          }
+          if (fill) {
+            fill.style.height = usage + '%';
+          }
+          if (glow) {
+            glow.style.height = usage + '%';
+          }
+          if (tooltip) {
+            tooltip.textContent = self.fmtCompact(cls.used) + '/' + self.fmtCompact(cls.total) + ' (' + usage.toFixed(0) + '%)';
+          }
+        }
+      });
+
+      var largeEl = document.getElementById('gc-large-objects');
+      if (largeEl && largeObjectBytes !== undefined) {
+        largeEl.textContent = 'Large: ' + this.formatBytes(largeObjectBytes);
+      }
+    }
+
+    fmtCompact(n) {
+      if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+      if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+      return n.toString();
     }
 
     updatePauseHistogram(pauseHist) {
@@ -5428,111 +5510,38 @@
     }
 
     updateTieredHeap(gc) {
-      // Generic tier-based update - find tiers by name
+      // Find heap2 tier (the new parallel GC heap)
       var tiers = gc.tiers || [];
-      var lvalTier = this.findTier(tiers, 'lval') || {};
-      var lenvTier = this.findTier(tiers, 'lenv') || {};
-      var mallocTier = this.findTier(tiers, 'malloc') || {};
+      var heapTier = this.findTier(tiers, 'heap2') || {};
 
-      // LVAL slab metrics
-      var lvalSlabUsed = lvalTier.bytes_used || 0;
-      var lvalSlabTotal = lvalTier.bytes_total || 1;
-      var lvalObjUsed = lvalTier.objects_used || 0;
-      var lvalObjTotal = lvalTier.objects_total || 1;
-      var lvalSlabPeakObjects = lvalTier.objects_peak || 0;
-      var lvalSlabHwmPct = lvalObjTotal > 0 ? (lvalSlabPeakObjects / lvalObjTotal) * 100 : 0;
-
-      // LENV slab metrics
-      var lenvSlabUsed = lenvTier.bytes_used || 0;
-      var lenvSlabTotal = lenvTier.bytes_total || 1;
-      var lenvObjUsed = lenvTier.objects_used || 0;
-      var lenvObjTotal = lenvTier.objects_total || 1;
-      var lenvSlabPeakObjects = lenvTier.objects_peak || 0;
-      var lenvSlabHwmPct = lenvObjTotal > 0 ? (lenvSlabPeakObjects / lenvObjTotal) * 100 : 0;
-
-      // Malloc metrics
-      var mallocUsed = mallocTier.bytes_used || 0;
-      var mallocLimit = mallocTier.bytes_total || 1;
-      var mallocPeakBytes = mallocTier.bytes_peak || 0;
-      var mallocHwmPct = mallocLimit > 0 ? (mallocPeakBytes / mallocLimit) * 100 : 0;
-
-      // Combined totals for header
-      var totalUsed = lvalSlabUsed + lenvSlabUsed + mallocUsed;
-      var totalCapacity = lvalSlabTotal + lenvSlabTotal + mallocLimit;
-      var totalPct = totalCapacity > 0 ? (totalUsed / totalCapacity) * 100 : 0;
+      // Heap metrics
+      var heapUsed = heapTier.bytes_used || 0;
+      var heapTotal = heapTier.bytes_total || 1;
+      var heapPeak = heapTier.bytes_peak || 0;
+      var heapHwmPct = heapTotal > 0 ? (heapPeak / heapTotal) * 100 : 0;
+      var heapUsagePct = heapTotal > 0 ? (heapUsed / heapTotal) * 100 : 0;
 
       var thresholdPct = gc.threshold_pct || 75;
 
-      // Update LVAL Slab Tier PoolWidget
-      if (lvalSlabTierGauge) {
-        lvalSlabTierGauge.warningThreshold = thresholdPct;
-        lvalSlabTierGauge.update({
-          used: lvalSlabUsed,
-          total: lvalSlabTotal,
-          usedFormatted: fmtBytes(lvalSlabUsed),
-          totalFormatted: fmtBytes(lvalSlabTotal),
+      // Update Heap Tier PoolWidget
+      if (heapTierGauge) {
+        heapTierGauge.warningThreshold = thresholdPct;
+        heapTierGauge.update({
+          used: heapUsed,
+          total: heapTotal,
+          usedFormatted: fmtBytes(heapUsed),
+          totalFormatted: fmtBytes(heapTotal),
           markers: {
-            hwm: { position: lvalSlabHwmPct, value: lvalSlabPeakObjects },
+            hwm: { position: heapHwmPct, value: heapPeak },
             threshold: { position: thresholdPct, value: thresholdPct }
           },
           stats: {
-            objects: lvalObjUsed.toLocaleString() + '/' + lvalObjTotal.toLocaleString(),
-            hwm: Math.round(lvalSlabHwmPct)
+            peak: fmtBytes(heapPeak),
+            hwm: Math.round(heapHwmPct)
           }
         });
       }
 
-      // Update LENV Slab Tier PoolWidget
-      if (lenvSlabTierGauge) {
-        lenvSlabTierGauge.warningThreshold = thresholdPct;
-        lenvSlabTierGauge.update({
-          used: lenvSlabUsed,
-          total: lenvSlabTotal,
-          usedFormatted: fmtBytes(lenvSlabUsed),
-          totalFormatted: fmtBytes(lenvSlabTotal),
-          markers: {
-            hwm: { position: lenvSlabHwmPct, value: lenvSlabPeakObjects },
-            threshold: { position: thresholdPct, value: thresholdPct }
-          },
-          stats: {
-            objects: lenvObjUsed.toLocaleString() + '/' + lenvObjTotal.toLocaleString(),
-            hwm: Math.round(lenvSlabHwmPct)
-          }
-        });
-      }
-
-      // Update Malloc Tier PoolWidget
-      if (mallocTierGauge) {
-        mallocTierGauge.warningThreshold = thresholdPct;
-        mallocTierGauge.update({
-          used: mallocUsed,
-          total: mallocLimit,
-          usedFormatted: fmtBytes(mallocUsed),
-          totalFormatted: fmtBytes(mallocLimit),
-          markers: {
-            hwm: { position: mallocHwmPct, value: mallocPeakBytes },
-            threshold: { position: thresholdPct, value: thresholdPct }
-          },
-          stats: {
-            peak: fmtBytes(mallocPeakBytes),
-            hwm: Math.round(mallocHwmPct)
-          }
-        });
-      }
-
-      // Update combined heap stats in header
-      var heapUsedEl = $('heap-used');
-      var heapTotalEl = $('heap-total');
-      var heapGaugeValue = $('heap-gauge-value');
-
-      if (heapUsedEl) heapUsedEl.textContent = fmtBytes(totalUsed);
-      if (heapTotalEl) heapTotalEl.textContent = fmtBytes(totalCapacity);
-      if (heapGaugeValue) heapGaugeValue.textContent = Math.round(totalPct);
-
-      // Update aggregate stats
-      var gcThresholdPctEl = $('gc-threshold-pct');
-      if (gcThresholdPctEl) gcThresholdPctEl.textContent = thresholdPct;
-      // heap-reclaimed is updated elsewhere from vm_metrics.gc_reclaimed_bytes
     }
 
     formatBytes(bytes) {

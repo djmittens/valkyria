@@ -77,10 +77,57 @@
             <div class="panel-icon gc" aria-hidden="true">GC</div>
             <h3 class="panel-title" id="gc-panel-title">GC & Interpreter</h3>
             <span class="panel-summary" id="gc-summary">-- cycles, -- evals</span>
+            <div class="panel-badge gc-parallel-badge" id="gc-parallel-badge" title="Parallel GC status and thread count">
+              <span class="parallel-indicator"></span>
+              <span class="parallel-text">--</span>
+            </div>
+            <div class="panel-badge gc-alloc-rate-badge" id="gc-alloc-rate-badge" title="Current allocation rate">
+              <span class="alloc-rate-value">--</span>
+              <span class="alloc-rate-unit">/s</span>
+            </div>
             <div class="panel-badge" id="gc-cycles-badge" title="Total number of GC cycles since process start">-- cycles</div>
             <span class="expand-icon" aria-hidden="true">▼</span>
           </div>
           <div class="panel-body">
+            <!-- Heap Pressure Gauge - Premium visualization -->
+            <div class="gc-heap-pressure" id="gc-heap-pressure" role="img" aria-label="Heap memory pressure">
+              <div class="heap-pressure-gauge">
+                <svg viewBox="0 0 200 100" class="pressure-arc">
+                  <defs>
+                    <linearGradient id="pressure-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                      <stop offset="0%" style="stop-color:var(--color-ok)"/>
+                      <stop offset="50%" style="stop-color:var(--color-warning)"/>
+                      <stop offset="100%" style="stop-color:var(--color-error)"/>
+                    </linearGradient>
+                  </defs>
+                  <path class="arc-bg" d="M 20 90 A 80 80 0 0 1 180 90" fill="none" stroke="var(--bg-elevated)" stroke-width="12"/>
+                  <path class="arc-fill" id="heap-pressure-arc" d="M 20 90 A 80 80 0 0 1 180 90" fill="none" stroke="url(#pressure-gradient)" stroke-width="12" stroke-linecap="round" stroke-dasharray="251.2" stroke-dashoffset="251.2"/>
+                  <path class="arc-threshold" d="M 20 90 A 80 80 0 0 1 180 90" fill="none" stroke="var(--color-warning)" stroke-width="1" stroke-dasharray="2,4" opacity="0.5"/>
+                </svg>
+                <div class="pressure-center">
+                  <div class="pressure-value" id="heap-pressure-value">--</div>
+                  <div class="pressure-label">% heap</div>
+                </div>
+                <div class="pressure-stats">
+                  <div class="pressure-stat">
+                    <span class="pressure-stat-value" id="heap-pressure-used">--</span>
+                    <span class="pressure-stat-label">used</span>
+                  </div>
+                  <div class="pressure-stat">
+                    <span class="pressure-stat-value" id="heap-pressure-total">--</span>
+                    <span class="pressure-stat-label">total</span>
+                  </div>
+                </div>
+              </div>
+              <div class="heap-alloc-sparkline">
+                <div class="alloc-spark-header">
+                  <span class="alloc-spark-title">Allocation Rate</span>
+                  <span class="alloc-spark-value" id="alloc-rate-display">-- /s</span>
+                </div>
+                <div class="alloc-spark-container" id="alloc-rate-spark"></div>
+              </div>
+            </div>
+
             <div class="gc-timeline" id="gc-timeline" role="img" aria-label="GC pause timeline" title="Timeline showing GC pause durations over the last 60 seconds. Tall bars indicate long stop-the-world pauses that may cause request latency spikes. Yellow bars exceed 10ms, red bars exceed 50ms.">
               <div class="gc-timeline-threshold" style="bottom: 40px;">
                 <span class="gc-timeline-threshold-label">10ms</span>
@@ -176,16 +223,116 @@
               </div>
             </div>
 
-            <!-- Retained Sets - Top bindings by memory size -->
-            <div class="gc-retained-section" id="gc-retained-section" title="Top bindings by retained memory. Large bindings may indicate memory-heavy data structures or potential leaks.">
-              <div class="gc-retained-header">
-                <span class="gc-retained-title">Top Retained Sets</span>
-                <span class="gc-retained-total" id="gc-retained-total">--</span>
-              </div>
-              <div class="gc-retained-list" id="gc-retained-list" role="list" aria-label="Top retained memory bindings">
-                <div class="gc-retained-empty">No retained set data</div>
+            <!-- Pause Distribution + Size Classes (Parallel GC) -->
+            <div class="gc-parallel-section" id="gc-parallel-section">
+              <div class="gc-parallel-grid">
+                <!-- Pause Distribution -->
+                <div class="gc-pause-section" title="GC pause distribution by frame budget. Useful for latency-sensitive applications.">
+                  <div class="gc-pause-header">
+                    <span class="gc-pause-title">Pause Distribution</span>
+                    <span class="gc-avg-pause" id="gc-avg-pause-inline">avg: --</span>
+                  </div>
+                  <div class="gc-pause-histogram" id="gc-pause-histogram" role="img" aria-label="GC pause distribution">
+                    <div class="gc-pause-bar" id="gc-pause-0-1" data-bucket="0-1ms" title="0-1ms pauses">
+                      <div class="gc-pause-bar-fill ok"></div>
+                      <span class="gc-pause-bar-label">0-1ms</span>
+                      <span class="gc-pause-bar-count">--</span>
+                    </div>
+                    <div class="gc-pause-bar" id="gc-pause-1-5" data-bucket="1-5ms" title="1-5ms pauses">
+                      <div class="gc-pause-bar-fill ok-muted"></div>
+                      <span class="gc-pause-bar-label">1-5ms</span>
+                      <span class="gc-pause-bar-count">--</span>
+                    </div>
+                    <div class="gc-pause-bar" id="gc-pause-5-10" data-bucket="5-10ms" title="5-10ms pauses">
+                      <div class="gc-pause-bar-fill warning"></div>
+                      <span class="gc-pause-bar-label">5-10ms</span>
+                      <span class="gc-pause-bar-count">--</span>
+                    </div>
+                    <div class="gc-pause-bar" id="gc-pause-10-16" data-bucket="10-16ms" title="10-16ms pauses (frame budget)">
+                      <div class="gc-pause-bar-fill warning-strong"></div>
+                      <span class="gc-pause-bar-label">10-16ms</span>
+                      <span class="gc-pause-bar-count">--</span>
+                    </div>
+                    <div class="gc-pause-bar" id="gc-pause-16-plus" data-bucket="16ms+" title="16ms+ pauses (exceeds frame budget)">
+                      <div class="gc-pause-bar-fill error"></div>
+                      <span class="gc-pause-bar-label">16ms+</span>
+                      <span class="gc-pause-bar-count">--</span>
+                    </div>
+                  </div>
+                </div>
+                <!-- Size Classes - Enhanced -->
+                <div class="gc-size-class-section" title="GC heap size class utilization. Shows allocation distribution across object sizes.">
+                  <div class="gc-size-class-header">
+                    <span class="gc-size-class-title">Size Classes</span>
+                    <span class="gc-large-objects" id="gc-large-objects">Large: --</span>
+                  </div>
+                  <div class="gc-size-class-grid" id="gc-size-class-grid" role="img" aria-label="Size class utilization">
+                    <div class="gc-size-class" data-size="16">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">16B</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="32">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">32B</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="64">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">64B</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="128">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">128B</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="256">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">256B</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="512">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">512B</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="1024">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">1KB</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="2048">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">2KB</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="4096">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">4KB</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                  </div>
+                  <div class="gc-size-class-legend">
+                    <span class="legend-gradient"></span>
+                    <span class="legend-low">0%</span>
+                    <span class="legend-high">100%</span>
+                  </div>
+                </div>
               </div>
             </div>
+
+            <!-- Thread Activity Visualization (for parallel GC) -->
+            <div class="gc-thread-activity" id="gc-thread-activity" style="display: none;">
+              <div class="thread-activity-header">
+                <span class="thread-activity-title">Thread Activity</span>
+                <span class="thread-activity-count" id="thread-count">0 threads</span>
+              </div>
+              <div class="thread-activity-grid" id="thread-activity-grid">
+                <!-- Thread indicators dynamically added -->
+              </div>
+            </div>
+
           </div>
         </article>
 
@@ -338,50 +485,6 @@
           </div>
         </div>
 
-        <!-- GC Heap (Tiered: LVAL Slab + LENV Slab + Malloc) -->
-        <div class="memory-block gc-heap-block">
-          <div class="memory-block-header">
-            <div class="memory-block-title">
-              <span class="memory-icon gc">GC</span>
-              GC Heap
-            </div>
-            <div class="memory-block-summary">
-              <span class="usage-pct" id="heap-gauge-value">--</span>% used
-              <span class="usage-detail">(<span id="heap-used">--</span> / <span id="heap-total">--</span>)</span>
-            </div>
-          </div>
-          <div class="memory-block-body">
-            <!-- Tiered heap: LVAL Slab (values) + LENV Slab (environments) + Malloc (overflow) -->
-            <div class="heap-tiers" id="heap-tiers-container">
-              <!-- LVAL Slab, LENV Slab, and Malloc PoolWidgets initialized by JS -->
-            </div>
-            <!-- Shared legend for all tiers -->
-            <div class="pool-widget-legend" id="heap-legend">
-              <span class="pool-widget-legend-item"><span class="pool-widget-legend-bar" style="background: linear-gradient(90deg, var(--color-cyan), var(--color-warning))"></span>current</span>
-              <span class="pool-widget-legend-item"><span class="pool-widget-legend-marker" style="background: var(--color-info)"></span>high water mark</span>
-              <span class="pool-widget-legend-item"><span class="pool-widget-legend-marker" style="background: var(--color-error)"></span>gc threshold</span>
-              <span class="pool-widget-legend-item" style="margin-left: auto; font-family: var(--font-mono);">reclaimed: <span id="heap-reclaimed">--</span></span>
-            </div>
-            <!-- Fragmentation metrics -->
-            <div class="heap-fragmentation-stats" id="fragmentation-stats">
-              <div class="frag-stat">
-                <span class="frag-label">LVAL fragmentation:</span>
-                <span class="frag-value" id="lval-frag-pct">--</span>%
-                <span class="frag-bar"><span class="frag-bar-fill" id="lval-frag-bar"></span></span>
-              </div>
-              <div class="frag-stat">
-                <span class="frag-label">LENV fragmentation:</span>
-                <span class="frag-value" id="lenv-frag-pct">--</span>%
-                <span class="frag-bar"><span class="frag-bar-fill" id="lenv-frag-bar"></span></span>
-              </div>
-              <div class="frag-stat frag-free-list">
-                <span class="frag-label">Free list:</span>
-                <span class="frag-value" id="free-list-count">--</span> objects
-                <span class="frag-detail">(<span id="free-list-bytes">--</span>)</span>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
     </section>
 

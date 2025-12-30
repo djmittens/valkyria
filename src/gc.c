@@ -1216,111 +1216,6 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* h
 }
 
 // ============================================================================
-// Retained Size Sampling - Sample top bindings by retained memory
-// ============================================================================
-
-static u64 estimate_lval_size(valk_lval_t* v, valk_gc_malloc_heap_t* heap) {
-  (void)heap;
-  if (v == NULL) return 0;
-  if (LVAL_ALLOC(v) != LVAL_ALLOC_HEAP) return 0;
-
-  u64 size = sizeof(valk_lval_t);
-
-  switch (LVAL_TYPE(v)) {
-    case LVAL_STR:
-    case LVAL_SYM:
-    case LVAL_ERR:
-      if (v->str != NULL) {
-        size += strlen(v->str) + 1;
-      }
-      break;
-    case LVAL_FUN:
-      if (v->fun.name != NULL) {
-        size += strlen(v->fun.name) + 1;
-      }
-      size += estimate_lval_size(v->fun.formals, heap);
-      size += estimate_lval_size(v->fun.body, heap);
-      break;
-    case LVAL_CONS:
-    case LVAL_QEXPR:
-      size += estimate_lval_size(v->cons.head, heap);
-      size += estimate_lval_size(v->cons.tail, heap);
-      break;
-    default:
-      break;
-  }
-  return size;
-}
-
-static u64 count_lval_objects(valk_lval_t* v) {
-  if (v == NULL) return 0;
-  if (LVAL_ALLOC(v) != LVAL_ALLOC_HEAP) return 0;
-
-  u64 count = 1;
-  switch (LVAL_TYPE(v)) {
-    case LVAL_FUN:
-      count += count_lval_objects(v->fun.formals);
-      count += count_lval_objects(v->fun.body);
-      break;
-    case LVAL_CONS:
-    case LVAL_QEXPR:
-      count += count_lval_objects(v->cons.head);
-      count += count_lval_objects(v->cons.tail);
-      break;
-    default:
-      break;
-  }
-  return count;
-}
-
-void valk_gc_sample_retained_sets(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env,
-                                   valk_retained_sets_t* out) {
-  if (!out) return;
-  memset(out, 0, sizeof(*out));
-  if (!heap || !root_env) return;
-
-  for (u64 i = 0; i < root_env->vals.count && out->count < VALK_RETAINED_SET_MAX; i++) {
-    const char* sym = root_env->symbols.items[i];
-    valk_lval_t* val = root_env->vals.items[i];
-
-    if (sym == NULL || val == NULL) continue;
-    if (LVAL_TYPE(val) == LVAL_FUN && val->fun.builtin != NULL) continue;
-
-    u64 retained_bytes = estimate_lval_size(val, heap);
-    u64 object_count = count_lval_objects(val);
-
-    if (retained_bytes == 0) continue;
-
-    u64 insert_pos = out->count;
-    for (u64 j = 0; j < out->count; j++) {
-      if (retained_bytes > out->sets[j].retained_bytes) {
-        insert_pos = j;
-        break;
-      }
-    }
-
-    if (insert_pos < VALK_RETAINED_SET_MAX) {
-      if (out->count < VALK_RETAINED_SET_MAX) {
-        for (u64 j = out->count; j > insert_pos; j--) {
-          out->sets[j] = out->sets[j - 1];
-        }
-        out->count++;
-      } else {
-        for (u64 j = VALK_RETAINED_SET_MAX - 1; j > insert_pos; j--) {
-          out->sets[j] = out->sets[j - 1];
-        }
-      }
-
-      valk_retained_set_t* set = &out->sets[insert_pos];
-      strncpy(set->name, sym, VALK_RETAINED_SET_NAME_MAX - 1);
-      set->name[VALK_RETAINED_SET_NAME_MAX - 1] = '\0';
-      set->retained_bytes = retained_bytes;
-      set->object_count = object_count;
-    }
-  }
-}
-
-// ============================================================================
 // Memory Snapshot for REPL Eval Tracking
 // ============================================================================
 
@@ -2259,6 +2154,48 @@ static valk_gc_page2_t *valk_gc_page2_alloc(valk_gc_heap2_t *heap, u8 size_class
   return page;
 }
 
+static _Atomic u64 g_heap_generation = 1;
+
+#define VALK_GC_MAX_LIVE_HEAPS 64
+static valk_gc_heap2_t *g_live_heaps[VALK_GC_MAX_LIVE_HEAPS];
+static pthread_mutex_t g_live_heaps_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void valk_gc_register_heap(valk_gc_heap2_t *heap) {
+  pthread_mutex_lock(&g_live_heaps_lock);
+  for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) {
+    if (g_live_heaps[i] == NULL) {
+      g_live_heaps[i] = heap;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&g_live_heaps_lock);
+}
+
+static void valk_gc_unregister_heap(valk_gc_heap2_t *heap) {
+  pthread_mutex_lock(&g_live_heaps_lock);
+  for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) {
+    if (g_live_heaps[i] == heap) {
+      g_live_heaps[i] = NULL;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&g_live_heaps_lock);
+}
+
+static bool valk_gc_is_heap_alive(valk_gc_heap2_t *heap) {
+  if (!heap) return false;
+  pthread_mutex_lock(&g_live_heaps_lock);
+  bool alive = false;
+  for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) {
+    if (g_live_heaps[i] == heap) {
+      alive = true;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&g_live_heaps_lock);
+  return alive;
+}
+
 // Create new multi-class heap
 valk_gc_heap2_t *valk_gc_heap2_create(sz hard_limit) {
   valk_gc_heap2_t *heap = calloc(1, sizeof(valk_gc_heap2_t));
@@ -2268,6 +2205,7 @@ valk_gc_heap2_t *valk_gc_heap2_create(sz hard_limit) {
   }
   
   heap->type = VALK_ALLOC_GC_HEAP;
+  heap->generation = atomic_fetch_add(&g_heap_generation, 1);
   heap->hard_limit = hard_limit > 0 ? hard_limit : VALK_GC_DEFAULT_HARD_LIMIT;
   heap->soft_limit = heap->hard_limit * 3 / 4;
   heap->gc_threshold_pct = 75;
@@ -2308,12 +2246,15 @@ valk_gc_heap2_t *valk_gc_heap2_create(sz hard_limit) {
   VALK_INFO("Created multi-class GC heap: hard_limit=%zu soft_limit=%zu reserved=%zu region_size=%zu",
             heap->hard_limit, heap->soft_limit, heap->reserved, region_size);
   
+  valk_gc_register_heap(heap);
   return heap;
 }
 
 // Destroy heap and release all memory
 void valk_gc_heap2_destroy(valk_gc_heap2_t *heap) {
   if (!heap) return;
+  
+  valk_gc_unregister_heap(heap);
   
   for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     pthread_mutex_destroy(&heap->classes[c].lock);
@@ -2381,6 +2322,10 @@ bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, u8 size_
       // Page is actually full, remove from partial list
       list->partial_pages = page->next_partial;
       page = NULL;
+    } else if (page->reclaimed) {
+      // Page was reclaimed, re-add to committed_bytes
+      atomic_fetch_add(&heap->committed_bytes, list->page_size);
+      page->reclaimed = false;
     }
   }
   
@@ -2522,8 +2467,13 @@ void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes) {
   }
   
   if (local_tlab->owner_heap != heap) {
-    valk_gc_tlab2_reset(local_tlab);
+    if (valk_gc_is_heap_alive(local_tlab->owner_heap)) {
+      valk_gc_tlab2_reset(local_tlab);
+    } else {
+      valk_gc_tlab2_abandon(local_tlab);
+    }
     local_tlab->owner_heap = heap;
+    local_tlab->owner_generation = heap->generation;
   }
   
   void *ptr = valk_gc_tlab2_alloc(local_tlab, size_class);
@@ -2806,7 +2756,7 @@ sz valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap) {
     for (valk_gc_page2_t *page = list->all_pages; page != NULL; page = page->next) {
       u32 allocated = atomic_load(&page->num_allocated);
       
-      if (allocated == 0) {
+      if (allocated == 0 && !page->reclaimed) {
         u64 page_size = list->page_size;
 #ifdef __APPLE__
         madvise(page, page_size, MADV_FREE);
@@ -2814,6 +2764,7 @@ sz valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap) {
         madvise(page, page_size, MADV_DONTNEED);
 #endif
         atomic_fetch_sub(&heap->committed_bytes, page_size);
+        page->reclaimed = true;
         pages_reclaimed++;
       }
     }
@@ -2975,6 +2926,18 @@ void valk_gc_heap2_get_stats(valk_gc_heap2_t *heap, valk_gc_stats2_t *out) {
     out->class_used_slots[c] = atomic_load(&heap->classes[c].used_slots);
     out->class_total_slots[c] = atomic_load(&heap->classes[c].total_slots);
   }
+}
+
+void valk_gc_tlab2_abandon(valk_gc_tlab2_t *tlab) {
+  if (!tlab) return;
+  
+  for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    tlab->classes[c].page = NULL;
+    tlab->classes[c].next_slot = 0;
+    tlab->classes[c].limit_slot = 0;
+  }
+  
+  tlab->owner_heap = NULL;
 }
 
 void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab) {
@@ -3414,6 +3377,8 @@ bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
   valk_gc_coord.barrier_initialized = true;
   
   atomic_store(&__gc_heap2_current, heap);
+  
+  valk_aio_wake_all_for_gc();
   
   atomic_fetch_add(&valk_gc_coord.threads_paused, 1);
   

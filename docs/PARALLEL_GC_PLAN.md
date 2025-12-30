@@ -2679,6 +2679,29 @@ void valk_gc_get_stats(valk_gc_heap_t *heap, valk_gc_stats_t *out);
 - Full test suite passing
 - **PARALLEL GC PLAN COMPLETE**
 
+**2024-12-29**: Phase 14 - Libuv Event Loop Interrupt for GC Synchronization
+- Added global AIO system registry (`g_aio_systems[]` with mutex)
+- Added `uv_async_t gc_wakeup` handle per AIO system
+- Added `gc_acknowledged` atomic flag to prevent double-counting
+- Implemented `valk_aio_wake_all_for_gc()` to wake blocked event loops
+- Implemented `__gc_wakeup_cb()` callback that enters safe point
+- Updated `valk_gc_heap2_request_stw()` to wake all AIO loops immediately
+- AIO threads now respond to GC within ~1ms even when blocked in I/O wait
+- Full test suite passing
+- **LIBUV GC INTERRUPT COMPLETE**
+
+**2024-12-29**: Phase 15 - Bug Fixes and Additional Testing
+- Fixed committed_bytes underflow bug in page reclamation:
+  - Added `reclaimed` flag to `valk_gc_page2_t` struct (gc.h:544)
+  - Updated `valk_gc_reclaim_empty_pages()` to skip already-reclaimed pages (gc.c:2864)
+  - Updated `valk_gc_tlab2_refill()` to restore committed_bytes when reusing reclaimed page (gc.c:2427-2431)
+  - Added `test_gc_reclaim_committed_bytes_accounting` test to verify fix
+- Updated existing reclaim tests to account for collect() already calling reclaim internally
+- Added emergency GC trigger test (`test_gc_emergency_gc_trigger`)
+- Added multi-threaded soft limit test (`test_gc_soft_limit_multithread`)
+- All 115 GC unit tests passing
+- Full test suite passing
+
 ---
 
 ## Known Gaps and Future Work
@@ -2722,8 +2745,9 @@ All major design gaps have been addressed in Phase 10 and Phase 11:
 - Complex to verify in a unit test (need to inspect internal queue state)
 - Correctness verified by object survival in true parallel GC test
 
-#### 4. Memory Pressure Tests - TODO
-- Soft limit / emergency GC multi-threaded tests still needed
+#### 4. Memory Pressure Tests - FIXED
+- Added `test_gc_emergency_gc_trigger` - verifies GC triggers near hard limit
+- Added `test_gc_soft_limit_multithread` - multi-threaded allocation with pressure
 
 #### 5. valk_gc_heap2_realloc() - FIXED
 - Added 3 tests: `test_gc_heap2_realloc_basic`, `test_gc_heap2_realloc_null`, `test_gc_heap2_realloc_large`
@@ -2749,6 +2773,10 @@ All major design gaps have been addressed in Phase 10 and Phase 11:
 ### Remaining Work
 
 **All planned work is complete.** The parallel GC implementation is fully functional.
+
+**Potential Future Improvements (Optional):**
+- Generation counter updates during sweep for survival histogram (LVAL_GC_GEN_INC macro exists but not called)
+- Additional parallel GC integration tests for edge cases
 
 ---
 

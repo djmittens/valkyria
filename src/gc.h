@@ -179,24 +179,7 @@ typedef struct {
   double lenv_fragmentation;
 } valk_fragmentation_t;
 
-#define VALK_RETAINED_SET_MAX 10
-#define VALK_RETAINED_SET_NAME_MAX 64
-
-typedef struct {
-  char name[VALK_RETAINED_SET_NAME_MAX];
-  sz retained_bytes;
-  u64 object_count;
-} valk_retained_set_t;
-
-typedef struct {
-  valk_retained_set_t sets[VALK_RETAINED_SET_MAX];
-  u64 count;
-} valk_retained_sets_t;
-
 void valk_gc_get_fragmentation(valk_gc_malloc_heap_t* heap, valk_fragmentation_t* out);
-
-void valk_gc_sample_retained_sets(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env,
-                                   valk_retained_sets_t* out);
 
 // ============================================================================
 // Memory Snapshot for REPL Eval Tracking
@@ -541,7 +524,8 @@ typedef struct valk_gc_page2 {
   struct valk_gc_page2 *next_partial;   // Next page in partial_pages list
   u32 page_id;                     // For debugging
   u8 size_class;                   // Which size class (0-8)
-  u8 _pad[3];                      // Alignment padding
+  bool reclaimed;                  // True if madvise was called, committed_bytes decremented
+  u8 _pad[2];                      // Alignment padding
   _Atomic u32 num_allocated;       // Slots currently in use
   u16 slots_per_page;              // Cached from size_class
   u16 bitmap_bytes;                // Cached bitmap size
@@ -601,6 +585,7 @@ typedef struct valk_gc_large_obj {
 // Multi-class TLAB with per-class state
 typedef struct valk_gc_tlab2 {
   struct valk_gc_heap2 *owner_heap;     // Heap this TLAB is associated with
+  u64 owner_generation;                 // Generation of owner_heap when attached
   struct {
     valk_gc_page2_t *page;              // Current page for this class
     u32 next_slot;                 // Next slot to allocate
@@ -611,6 +596,7 @@ typedef struct valk_gc_tlab2 {
 // Main heap structure with size classes
 struct valk_gc_heap2 {
   valk_mem_allocator_e type;            // VALK_ALLOC_GC_HEAP
+  u64 generation;                       // Unique generation for this heap instance
   void *base;                           // mmap'd base (PROT_NONE reserved)
   sz reserved;                      // Total virtual reservation
   
@@ -771,6 +757,9 @@ sz valk_gc_heap2_collect_auto(valk_gc_heap2_t *heap);
 
 // Reset all TLABs after GC
 void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab);
+
+// Abandon TLAB state without accessing owner heap (for heap switching)
+void valk_gc_tlab2_abandon(valk_gc_tlab2_t *tlab);
 
 // OOM abort with diagnostics (never returns)
 __attribute__((noreturn))

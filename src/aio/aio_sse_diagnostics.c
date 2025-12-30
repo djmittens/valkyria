@@ -566,6 +566,22 @@ static void mem_snapshot_collect_internal(valk_mem_snapshot_t *snapshot,
     snapshot->gc_heap.lenv_fragmentation = frag.lenv_fragmentation;
     snapshot->gc_heap.free_list_count = frag.free_list_count;
     snapshot->gc_heap.free_list_bytes = frag.free_list_bytes;
+
+    // Parallel GC metrics from coordinator
+    u64 threads_registered = atomic_load(&valk_gc_coord.threads_registered);
+    snapshot->gc_heap.parallel_enabled = (threads_registered > 1);
+    snapshot->gc_heap.threads_registered = threads_registered;
+    snapshot->gc_heap.parallel_cycles = atomic_load(&valk_gc_coord.parallel_cycles);
+    snapshot->gc_heap.parallel_pause_us_total = atomic_load(&valk_gc_coord.parallel_pause_us_total);
+
+    // Size class statistics
+    snapshot->gc_heap.size_class_count = VALK_GC_NUM_SIZE_CLASSES;
+    for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+      snapshot->gc_heap.size_classes[c].slot_size = valk_gc_size_classes[c];
+      snapshot->gc_heap.size_classes[c].used_slots = atomic_load(&gc_heap->classes[c].used_slots);
+      snapshot->gc_heap.size_classes[c].total_slots = atomic_load(&gc_heap->classes[c].total_slots);
+    }
+    snapshot->gc_heap.large_object_bytes = atomic_load(&gc_heap->large_object_bytes);
   }
 
   // Collect owner map for server/client names
@@ -673,15 +689,6 @@ static void mem_snapshot_collect_internal(valk_mem_snapshot_t *snapshot,
   } else {
     snapshot->repl_eval.valid = false;
   }
-
-  // Sample retained size of top bindings (for leak detection assistance)
-#ifdef VALK_METRICS_ENABLED
-  if (gc_heap && gc_heap->root_env) {
-    valk_gc_sample_retained_sets(gc_heap, gc_heap->root_env, &snapshot->retained_sets);
-  } else {
-    memset(&snapshot->retained_sets, 0, sizeof(snapshot->retained_sets));
-  }
-#endif
 }
 
 // Public wrapper - no caching
@@ -780,8 +787,192 @@ int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf,
   char *p = buf;
   char *end = buf + buf_size;
 
+  int n = snprintf(p, end - p, "event: memory\nid: %llu\ndata: {\"slabs\":[", event_id);
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  for (u64 i = 0; i < snapshot->slab_count; i++) {
+    if (i > 0) {
+      n = snprintf(p, end - p, ",");
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+    }
+
+    valk_slab_snapshot_t *slab = &snapshot->slabs[i];
+
+    if (slab->has_slot_diag && slab->slots) {
+      u64 rle_buf_size = slab->total_slots * 8 + 1;
+      char *states = malloc(rle_buf_size);
+      if (!states) return -1;
+      slots_to_rle_string(slab->slots, slab->total_slots, states, rle_buf_size);
+
+      char by_owner_buf[512] = {0};
+      char *bp = by_owner_buf;
+      char *bp_end = by_owner_buf + sizeof(by_owner_buf);
+      int bn = snprintf(bp, bp_end - bp, "{");
+      if (bn > 0) bp += bn;
+      for (u64 j = 0; j < slab->owner_count && bp < bp_end - 64; j++) {
+        if (j > 0) {
+          bn = snprintf(bp, bp_end - bp, ",");
+          if (bn > 0) bp += bn;
+        }
+        bn = snprintf(bp, bp_end - bp, "\"%u\":{\"A\":%llu,\"I\":%llu,\"C\":%llu}",
+                      slab->by_owner[j].owner_idx,
+                      slab->by_owner[j].active,
+                      slab->by_owner[j].idle,
+                      slab->by_owner[j].closing);
+        if (bn > 0) bp += bn;
+      }
+      snprintf(bp, bp_end - bp, "}");
+
+      n = snprintf(p, end - p,
+                   "{\"name\":\"%s\",\"total\":%llu,\"used\":%llu,\"hwm\":%llu,"
+                   "\"states\":\"%s\","
+                   "\"summary\":{\"A\":%llu,\"I\":%llu,\"C\":%llu,\"by_owner\":%s},"
+                   "\"by_type\":{\"tcp\":%llu,\"task\":%llu,\"timer\":%llu,\"http\":%llu},"
+                   "\"overflow\":%llu}",
+                   slab->name, slab->total_slots, slab->used_slots, slab->peak_used,
+                   states,
+                   slab->by_state.active, slab->by_state.idle, slab->by_state.closing,
+                   by_owner_buf,
+                   slab->by_type.tcp_listeners, slab->by_type.tasks,
+                   slab->by_type.timers, slab->by_type.http_conns,
+                   slab->overflow_count);
+      free(states);
+    } else {
+      u64 rle_buf_size = slab->bitmap_bytes * 4 + 1;
+      char *hex = malloc(rle_buf_size);
+      if (!hex) return -1;
+      if (slab->bitmap) {
+        bitmap_to_rle_hex(slab->bitmap, slab->bitmap_bytes, hex, rle_buf_size);
+      } else {
+        hex[0] = '\0';
+      }
+      n = snprintf(p, end - p,
+                   "{\"name\":\"%s\",\"bitmap\":\"%s\",\"total\":%llu,\"used\":%llu,"
+                   "\"hwm\":%llu,\"overflow\":%llu}",
+                   slab->name, hex, slab->total_slots, slab->used_slots,
+                   slab->peak_used, slab->overflow_count);
+      free(hex);
+    }
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+  }
+
+  n = snprintf(p, end - p, "],\"arenas\":[");
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  for (u64 i = 0; i < snapshot->arena_count; i++) {
+    if (i > 0) {
+      n = snprintf(p, end - p, ",");
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+    }
+    n = snprintf(p, end - p,
+                 "{\"name\":\"%s\",\"used\":%llu,\"capacity\":%llu,\"hwm\":%llu,"
+                 "\"overflow\":%llu,\"overflow_bytes\":%llu}",
+                 snapshot->arenas[i].name, snapshot->arenas[i].used_bytes,
+                 snapshot->arenas[i].capacity_bytes,
+                 snapshot->arenas[i].high_water_mark,
+                 snapshot->arenas[i].overflow_fallbacks,
+                 snapshot->arenas[i].overflow_bytes);
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+  }
+
+  n = snprintf(p, end - p, "],\"gc\":{");
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  n = gc_tiers_to_json(snapshot, p, end - p);
+  if (n < 0) return -1;
+  p += n;
+
+  n = snprintf(p, end - p,
+               ",\"threshold_pct\":%u,\"cycles\":%llu,\"emergency\":%llu,"
+               "\"efficiency_pct\":%u,"
+               "\"survival\":{\"gen_0\":%llu,\"gen_1_5\":%llu,\"gen_6_20\":%llu,\"gen_21_plus\":%llu},"
+               "\"pause_histogram\":{\"0_1ms\":%llu,\"1_5ms\":%llu,\"5_10ms\":%llu,\"10_16ms\":%llu,\"16ms_plus\":%llu},"
+               "\"fragmentation\":{\"lval_pct\":%.1f,\"lenv_pct\":%.1f,\"free_list_count\":%llu,\"free_list_bytes\":%llu},"
+               "\"parallel\":{\"enabled\":%s,\"threads\":%llu,\"cycles\":%llu,\"pause_us_total\":%llu},",
+               (unsigned)snapshot->gc_heap.gc_threshold_pct,
+               snapshot->gc_heap.gc_cycles,
+               snapshot->gc_heap.emergency_collections,
+               (unsigned)snapshot->gc_heap.efficiency_pct,
+               snapshot->gc_heap.survival_gen_0,
+               snapshot->gc_heap.survival_gen_1_5,
+               snapshot->gc_heap.survival_gen_6_20,
+               snapshot->gc_heap.survival_gen_21_plus,
+               snapshot->gc_heap.pause_0_1ms,
+               snapshot->gc_heap.pause_1_5ms,
+               snapshot->gc_heap.pause_5_10ms,
+               snapshot->gc_heap.pause_10_16ms,
+               snapshot->gc_heap.pause_16ms_plus,
+               snapshot->gc_heap.lval_fragmentation * 100.0,
+               snapshot->gc_heap.lenv_fragmentation * 100.0,
+               snapshot->gc_heap.free_list_count,
+               snapshot->gc_heap.free_list_bytes,
+               snapshot->gc_heap.parallel_enabled ? "true" : "false",
+               snapshot->gc_heap.threads_registered,
+               snapshot->gc_heap.parallel_cycles,
+               snapshot->gc_heap.parallel_pause_us_total);
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  n = snprintf(p, end - p, "\"size_classes\":[");
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  for (u64 i = 0; i < snapshot->gc_heap.size_class_count; i++) {
+    if (i > 0) {
+      n = snprintf(p, end - p, ",");
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+    }
+    n = snprintf(p, end - p, "{\"size\":%u,\"used\":%llu,\"total\":%llu}",
+                 snapshot->gc_heap.size_classes[i].slot_size,
+                 snapshot->gc_heap.size_classes[i].used_slots,
+                 snapshot->gc_heap.size_classes[i].total_slots);
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+  }
+
+  n = snprintf(p, end - p, "],\"large_object_bytes\":%llu},",
+               snapshot->gc_heap.large_object_bytes);
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  n = snprintf(p, end - p, "\"owner_map\":[");
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  for (u64 i = 0; i < snapshot->owner_count; i++) {
+    if (i > 0) {
+      n = snprintf(p, end - p, ",");
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+    }
+    n = snprintf(p, end - p, "\"%s\"",
+                 snapshot->owner_map[i] ? snapshot->owner_map[i] : "");
+    if (n < 0 || n >= end - p) return -1;
+    p += n;
+  }
+
+  n = snprintf(p, end - p, "]}\n\n");
+  if (n < 0 || n >= end - p) return -1;
+  p += n;
+
+  return p - buf;
+}
+
+int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot, valk_aio_system_t *aio,
+                               char *buf, u64 buf_size, u64 event_id) {
+  char *p = buf;
+  char *end = buf + buf_size;
+
   // SSE event header
-  int n = snprintf(p, end - p, "event: memory\nid: %llu\ndata: {", event_id);
+  int n = snprintf(p, end - p, "event: diagnostics\nid: %llu\ndata: {\"memory\":{", event_id);
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
@@ -918,7 +1109,8 @@ int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf,
                "\"efficiency_pct\":%u,"
                "\"survival\":{\"gen_0\":%llu,\"gen_1_5\":%llu,\"gen_6_20\":%llu,\"gen_21_plus\":%llu},"
                "\"pause_histogram\":{\"0_1ms\":%llu,\"1_5ms\":%llu,\"5_10ms\":%llu,\"10_16ms\":%llu,\"16ms_plus\":%llu},"
-               "\"fragmentation\":{\"lval_pct\":%.1f,\"lenv_pct\":%.1f,\"free_list_count\":%llu,\"free_list_bytes\":%llu}},",
+               "\"fragmentation\":{\"lval_pct\":%.1f,\"lenv_pct\":%.1f,\"free_list_count\":%llu,\"free_list_bytes\":%llu},"
+               "\"parallel\":{\"enabled\":%s,\"threads\":%llu,\"cycles\":%llu,\"pause_us_total\":%llu},",
                (unsigned)snapshot->gc_heap.gc_threshold_pct,
                snapshot->gc_heap.gc_cycles,
                snapshot->gc_heap.emergency_collections,
@@ -935,220 +1127,35 @@ int valk_mem_snapshot_to_sse(valk_mem_snapshot_t *snapshot, char *buf,
                snapshot->gc_heap.lval_fragmentation * 100.0,
                snapshot->gc_heap.lenv_fragmentation * 100.0,
                snapshot->gc_heap.free_list_count,
-               snapshot->gc_heap.free_list_bytes);
+               snapshot->gc_heap.free_list_bytes,
+               snapshot->gc_heap.parallel_enabled ? "true" : "false",
+               snapshot->gc_heap.threads_registered,
+               snapshot->gc_heap.parallel_cycles,
+               snapshot->gc_heap.parallel_pause_us_total);
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
-  // Owner map for server/client names
-  n = snprintf(p, end - p, "\"owner_map\":[");
+  // Size classes array
+  n = snprintf(p, end - p, "\"size_classes\":[");
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
-  for (u64 i = 0; i < snapshot->owner_count; i++) {
+  for (u64 i = 0; i < snapshot->gc_heap.size_class_count; i++) {
     if (i > 0) {
       n = snprintf(p, end - p, ",");
       if (n < 0 || n >= end - p) return -1;
       p += n;
     }
-    n = snprintf(p, end - p, "\"%s\"",
-                 snapshot->owner_map[i] ? snapshot->owner_map[i] : "");
+    n = snprintf(p, end - p, "{\"size\":%u,\"used\":%llu,\"total\":%llu}",
+                 snapshot->gc_heap.size_classes[i].slot_size,
+                 snapshot->gc_heap.size_classes[i].used_slots,
+                 snapshot->gc_heap.size_classes[i].total_slots);
     if (n < 0 || n >= end - p) return -1;
     p += n;
   }
 
-  n = snprintf(p, end - p, "]");
-  if (n < 0 || n >= end - p) return -1;
-  p += n;
-
-  // Close JSON and add SSE empty line
-  n = snprintf(p, end - p, "}\n\n");
-  if (n < 0 || n >= end - p) return -1;
-  p += n;
-
-  return p - buf;
-}
-
-// ============================================================================
-// Combined Diagnostics SSE Event (Memory + Metrics)
-// ============================================================================
-
-// Format combined diagnostics event with memory snapshot AND metrics
-// This eliminates the need for separate polling from the dashboard
-int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
-                               valk_aio_system_t *aio,
-                               char *buf, u64 buf_size, u64 event_id) {
-  char *p = buf;
-  char *end = buf + buf_size;
-
-  // SSE event header - use "diagnostics" event type for combined data
-  int n = snprintf(p, end - p, "event: diagnostics\nid: %llu\ndata: {", event_id);
-  if (n < 0 || n >= end - p) return -1;
-  p += n;
-
-  // Platform detection for cross-platform UI adaptation
-#ifdef __APPLE__
-  n = snprintf(p, end - p, "\"platform\":\"darwin\",");
-#elif defined(__linux__)
-  n = snprintf(p, end - p, "\"platform\":\"linux\",");
-#elif defined(_WIN32)
-  n = snprintf(p, end - p, "\"platform\":\"windows\",");
-#else
-  n = snprintf(p, end - p, "\"platform\":\"unknown\",");
-#endif
-  if (n < 0 || n >= end - p) return -1;
-  p += n;
-
-  // ===== Memory section (same as valk_mem_snapshot_to_sse) =====
-  n = snprintf(p, end - p, "\"memory\":{");
-  if (n < 0 || n >= end - p) return -1;
-  p += n;
-
-  // Slabs array
-  n = snprintf(p, end - p, "\"slabs\":[");
-  if (n < 0 || n >= end - p) return -1;
-  p += n;
-
-  for (u64 i = 0; i < snapshot->slab_count; i++) {
-    if (i > 0) {
-      n = snprintf(p, end - p, ",");
-      if (n < 0 || n >= end - p) return -1;
-      p += n;
-    }
-
-    valk_slab_snapshot_t *slab = &snapshot->slabs[i];
-
-    if (slab->has_slot_diag && slab->slots) {
-      // RLE-encoded state string
-      u64 rle_buf_size = slab->total_slots * 8 + 1;
-      char *states = malloc(rle_buf_size);
-      if (!states) return -1;
-      slots_to_rle_string(slab->slots, slab->total_slots, states, rle_buf_size);
-
-      char by_owner_buf[512] = {0};
-      char *bp = by_owner_buf;
-      char *bp_end = by_owner_buf + sizeof(by_owner_buf);
-      int bn = snprintf(bp, bp_end - bp, "{");
-      if (bn > 0) bp += bn;
-      for (u64 j = 0; j < slab->owner_count && bp < bp_end - 64; j++) {
-        if (j > 0) {
-          bn = snprintf(bp, bp_end - bp, ",");
-          if (bn > 0) bp += bn;
-        }
-        bn = snprintf(bp, bp_end - bp, "\"%u\":{\"A\":%llu,\"I\":%llu,\"C\":%llu}",
-                      slab->by_owner[j].owner_idx,
-                      slab->by_owner[j].active,
-                      slab->by_owner[j].idle,
-                      slab->by_owner[j].closing);
-        if (bn > 0) bp += bn;
-      }
-      snprintf(bp, bp_end - bp, "}");
-
-      n = snprintf(p, end - p,
-                   "{\"name\":\"%s\",\"total\":%llu,\"used\":%llu,\"hwm\":%llu,"
-                   "\"states\":\"%s\","
-                   "\"summary\":{\"A\":%llu,\"I\":%llu,\"C\":%llu,\"by_owner\":%s},"
-                   "\"by_type\":{\"tcp\":%llu,\"task\":%llu,\"timer\":%llu,\"http\":%llu},"
-                   "\"overflow\":%llu}",
-                   slab->name, slab->total_slots, slab->used_slots, slab->peak_used,
-                   states,
-                   slab->by_state.active, slab->by_state.idle, slab->by_state.closing,
-                   by_owner_buf,
-                   slab->by_type.tcp_listeners, slab->by_type.tasks,
-                   slab->by_type.timers, slab->by_type.http_conns,
-                   slab->overflow_count);
-
-      free(states);
-    } else {
-      // Simple bitmap slab with RLE encoding
-      u64 rle_buf_size = slab->bitmap_bytes * 4 + 1;
-      char *hex = malloc(rle_buf_size);
-      if (!hex) return -1;
-
-      if (slab->bitmap) {
-        bitmap_to_rle_hex(slab->bitmap, slab->bitmap_bytes, hex, rle_buf_size);
-      } else {
-        hex[0] = '\0';
-      }
-
-      n = snprintf(p, end - p,
-                   "{\"name\":\"%s\",\"bitmap\":\"%s\",\"total\":%llu,\"used\":%llu,"
-                   "\"hwm\":%llu,\"overflow\":%llu}",
-                   slab->name, hex, slab->total_slots, slab->used_slots,
-                   slab->peak_used, slab->overflow_count);
-
-      free(hex);
-    }
-
-    if (n < 0 || n >= end - p) return -1;
-    p += n;
-  }
-
-  n = snprintf(p, end - p, "],");
-  if (n < 0 || n >= end - p) return -1;
-  p += n;
-
-  // Arenas array
-  n = snprintf(p, end - p, "\"arenas\":[");
-  if (n < 0 || n >= end - p) return -1;
-  p += n;
-
-  for (u64 i = 0; i < snapshot->arena_count; i++) {
-    if (i > 0) {
-      n = snprintf(p, end - p, ",");
-      if (n < 0 || n >= end - p) return -1;
-      p += n;
-    }
-
-    n = snprintf(
-        p, end - p,
-        "{\"name\":\"%s\",\"used\":%llu,\"capacity\":%llu,\"hwm\":%llu,"
-        "\"overflow\":%llu,\"overflow_bytes\":%llu}",
-        snapshot->arenas[i].name, snapshot->arenas[i].used_bytes,
-        snapshot->arenas[i].capacity_bytes,
-        snapshot->arenas[i].high_water_mark,
-        snapshot->arenas[i].overflow_fallbacks,
-        snapshot->arenas[i].overflow_bytes);
-
-    if (n < 0 || n >= end - p) return -1;
-    p += n;
-  }
-
-  n = snprintf(p, end - p, "],");
-  if (n < 0 || n >= end - p) return -1;
-  p += n;
-
-  // GC heap stats (generic tiers array)
-  n = snprintf(p, end - p, "\"gc\":{");
-  if (n < 0 || n >= end - p) return -1;
-  p += n;
-
-  n = gc_tiers_to_json(snapshot, p, end - p);
-  if (n < 0) return -1;
-  p += n;
-
-  n = snprintf(p, end - p,
-               ",\"threshold_pct\":%u,\"cycles\":%llu,\"emergency\":%llu,"
-               "\"efficiency_pct\":%u,"
-               "\"survival\":{\"gen_0\":%llu,\"gen_1_5\":%llu,\"gen_6_20\":%llu,\"gen_21_plus\":%llu},"
-               "\"pause_histogram\":{\"0_1ms\":%llu,\"1_5ms\":%llu,\"5_10ms\":%llu,\"10_16ms\":%llu,\"16ms_plus\":%llu},"
-               "\"fragmentation\":{\"lval_pct\":%.1f,\"lenv_pct\":%.1f,\"free_list_count\":%llu,\"free_list_bytes\":%llu}},",
-               (unsigned)snapshot->gc_heap.gc_threshold_pct,
-               snapshot->gc_heap.gc_cycles,
-               snapshot->gc_heap.emergency_collections,
-               (unsigned)snapshot->gc_heap.efficiency_pct,
-               snapshot->gc_heap.survival_gen_0,
-               snapshot->gc_heap.survival_gen_1_5,
-               snapshot->gc_heap.survival_gen_6_20,
-               snapshot->gc_heap.survival_gen_21_plus,
-               snapshot->gc_heap.pause_0_1ms,
-               snapshot->gc_heap.pause_1_5ms,
-               snapshot->gc_heap.pause_5_10ms,
-               snapshot->gc_heap.pause_10_16ms,
-               snapshot->gc_heap.pause_16ms_plus,
-               snapshot->gc_heap.lval_fragmentation * 100.0,
-               snapshot->gc_heap.lenv_fragmentation * 100.0,
-               snapshot->gc_heap.free_list_count,
-               snapshot->gc_heap.free_list_bytes);
+  n = snprintf(p, end - p, "],\"large_object_bytes\":%llu},",
+               snapshot->gc_heap.large_object_bytes);
   if (n < 0 || n >= end - p) return -1;
   p += n;
 
@@ -1249,31 +1256,6 @@ int valk_diag_snapshot_to_sse(valk_mem_snapshot_t *snapshot,
                  (long)snapshot->repl_eval.lval_delta,
                  (long)snapshot->repl_eval.lenv_delta,
                  snapshot->repl_eval.eval_count);
-    if (n < 0 || n >= end - p) return -1;
-    p += n;
-  }
-
-  // Retained sets (top N bindings by memory size)
-  if (snapshot->retained_sets.count > 0) {
-    n = snprintf(p, end - p, ",\"retained_sets\":[");
-    if (n < 0 || n >= end - p) return -1;
-    p += n;
-
-    for (u64 i = 0; i < snapshot->retained_sets.count; i++) {
-      if (i > 0) {
-        n = snprintf(p, end - p, ",");
-        if (n < 0 || n >= end - p) return -1;
-        p += n;
-      }
-      const valk_retained_set_t *rs = &snapshot->retained_sets.sets[i];
-      n = snprintf(p, end - p,
-                   "{\"name\":\"%s\",\"retained_bytes\":%zu,\"object_count\":%llu}",
-                   rs->name, rs->retained_bytes, (unsigned long long)rs->object_count);
-      if (n < 0 || n >= end - p) return -1;
-      p += n;
-    }
-
-    n = snprintf(p, end - p, "]");
     if (n < 0 || n >= end - p) return -1;
     p += n;
   }
@@ -1832,7 +1814,8 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
                    ",\"cycles\":%llu,\"emergency\":%llu,"
                    "\"efficiency_pct\":%u,"
                    "\"survival\":{\"gen_0\":%llu,\"gen_1_5\":%llu,\"gen_6_20\":%llu,\"gen_21_plus\":%llu},"
-                   "\"pause_histogram\":{\"0_1ms\":%llu,\"1_5ms\":%llu,\"5_10ms\":%llu,\"10_16ms\":%llu,\"16ms_plus\":%llu}}",
+                   "\"pause_histogram\":{\"0_1ms\":%llu,\"1_5ms\":%llu,\"5_10ms\":%llu,\"10_16ms\":%llu,\"16ms_plus\":%llu},"
+                   "\"parallel\":{\"enabled\":%s,\"threads\":%llu,\"cycles\":%llu,\"pause_us_total\":%llu},",
                    current->gc_heap.gc_cycles,
                    current->gc_heap.emergency_collections,
                    (unsigned)current->gc_heap.efficiency_pct,
@@ -1844,7 +1827,35 @@ int valk_diag_delta_to_sse(valk_mem_snapshot_t *current, valk_mem_snapshot_t *pr
                    current->gc_heap.pause_1_5ms,
                    current->gc_heap.pause_5_10ms,
                    current->gc_heap.pause_10_16ms,
-                   current->gc_heap.pause_16ms_plus);
+                   current->gc_heap.pause_16ms_plus,
+                   current->gc_heap.parallel_enabled ? "true" : "false",
+                   current->gc_heap.threads_registered,
+                   current->gc_heap.parallel_cycles,
+                   current->gc_heap.parallel_pause_us_total);
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+
+      // Size classes array
+      n = snprintf(p, end - p, "\"size_classes\":[");
+      if (n < 0 || n >= end - p) return -1;
+      p += n;
+
+      for (u64 i = 0; i < current->gc_heap.size_class_count; i++) {
+        if (i > 0) {
+          n = snprintf(p, end - p, ",");
+          if (n < 0 || n >= end - p) return -1;
+          p += n;
+        }
+        n = snprintf(p, end - p, "{\"size\":%u,\"used\":%llu,\"total\":%llu}",
+                     current->gc_heap.size_classes[i].slot_size,
+                     current->gc_heap.size_classes[i].used_slots,
+                     current->gc_heap.size_classes[i].total_slots);
+        if (n < 0 || n >= end - p) return -1;
+        p += n;
+      }
+
+      n = snprintf(p, end - p, "],\"large_object_bytes\":%llu}",
+                   current->gc_heap.large_object_bytes);
       if (n < 0 || n >= end - p) return -1;
       p += n;
     }
@@ -2293,14 +2304,56 @@ int valk_diag_fresh_state_json(valk_aio_system_t *aio, char *buf, u64 buf_size) 
 
   n = snprintf(p, end - p,
                ",\"threshold_pct\":%u,\"cycles\":%llu,\"emergency\":%llu,"
-               "\"fragmentation\":{\"lval_pct\":%.1f,\"lenv_pct\":%.1f,\"free_list_count\":%llu,\"free_list_bytes\":%llu}},",
+               "\"efficiency_pct\":%u,"
+               "\"survival\":{\"gen_0\":%llu,\"gen_1_5\":%llu,\"gen_6_20\":%llu,\"gen_21_plus\":%llu},"
+               "\"pause_histogram\":{\"0_1ms\":%llu,\"1_5ms\":%llu,\"5_10ms\":%llu,\"10_16ms\":%llu,\"16ms_plus\":%llu},"
+               "\"fragmentation\":{\"lval_pct\":%.1f,\"lenv_pct\":%.1f,\"free_list_count\":%llu,\"free_list_bytes\":%llu},"
+               "\"parallel\":{\"enabled\":%s,\"threads\":%llu,\"cycles\":%llu,\"pause_us_total\":%llu},",
                (unsigned)snapshot.gc_heap.gc_threshold_pct,
                snapshot.gc_heap.gc_cycles,
                snapshot.gc_heap.emergency_collections,
+               (unsigned)snapshot.gc_heap.efficiency_pct,
+               snapshot.gc_heap.survival_gen_0,
+               snapshot.gc_heap.survival_gen_1_5,
+               snapshot.gc_heap.survival_gen_6_20,
+               snapshot.gc_heap.survival_gen_21_plus,
+               snapshot.gc_heap.pause_0_1ms,
+               snapshot.gc_heap.pause_1_5ms,
+               snapshot.gc_heap.pause_5_10ms,
+               snapshot.gc_heap.pause_10_16ms,
+               snapshot.gc_heap.pause_16ms_plus,
                snapshot.gc_heap.lval_fragmentation * 100.0,
                snapshot.gc_heap.lenv_fragmentation * 100.0,
                snapshot.gc_heap.free_list_count,
-               snapshot.gc_heap.free_list_bytes);
+               snapshot.gc_heap.free_list_bytes,
+               snapshot.gc_heap.parallel_enabled ? "true" : "false",
+               snapshot.gc_heap.threads_registered,
+               snapshot.gc_heap.parallel_cycles,
+               snapshot.gc_heap.parallel_pause_us_total);
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  // Size classes array
+  n = snprintf(p, end - p, "\"size_classes\":[");
+  if (n < 0 || n >= end - p) goto cleanup;
+  p += n;
+
+  for (u64 i = 0; i < snapshot.gc_heap.size_class_count; i++) {
+    if (i > 0) {
+      n = snprintf(p, end - p, ",");
+      if (n < 0 || n >= end - p) goto cleanup;
+      p += n;
+    }
+    n = snprintf(p, end - p, "{\"size\":%u,\"used\":%llu,\"total\":%llu}",
+                 snapshot.gc_heap.size_classes[i].slot_size,
+                 snapshot.gc_heap.size_classes[i].used_slots,
+                 snapshot.gc_heap.size_classes[i].total_slots);
+    if (n < 0 || n >= end - p) goto cleanup;
+    p += n;
+  }
+
+  n = snprintf(p, end - p, "],\"large_object_bytes\":%llu},",
+               snapshot.gc_heap.large_object_bytes);
   if (n < 0 || n >= end - p) goto cleanup;
   p += n;
 
