@@ -453,7 +453,7 @@ void valk_http2_conn_handle_closed_cb(uv_handle_t *handle) {
     hndl->onClose(hndl);
   }
   valk_dll_pop(hndl);
-  // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - sys always valid for allocated handles
+  VALK_ASSERT(hndl->sys != nullptr, "handle must have sys for slab release");
   valk_slab_release_ptr(hndl->sys->handleSlab, hndl);
 }
 

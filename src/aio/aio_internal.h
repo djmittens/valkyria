@@ -423,7 +423,7 @@ static inline bool __is_pending_stream(void *user_data) {
 // Tagged pointer: high bit marks pending stream, clear it to get real pointer
 static inline pending_stream_t *__get_pending_stream(void *user_data) {
   if (!__is_pending_stream(user_data)) return nullptr;
-  return (pending_stream_t *)((uptr)user_data & ~(1ULL << 63));  // NOLINT(performance-no-int-to-ptr)
+  return (pending_stream_t *)((uptr)user_data & ~(1ULL << 63));
 }
 
 #define VALK_HANDLE_VALID(h) \

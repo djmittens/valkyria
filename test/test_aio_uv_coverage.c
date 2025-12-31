@@ -435,8 +435,7 @@ static void test_request_with_custom_headers(VALK_TEST_ARGS()) {
   ASSERT_EQ(res->type, VALK_SUC);
 
   valk_http2_response_t *response = res->item;
-  ASSERT_NOT_NULL(response);
-  // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - test macro continues after failure for cleanup
+  REQUIRE_NOT_NULL(response);
   ASSERT_NOT_NULL(response->body);
 
   valk_arc_release(res);
@@ -1824,7 +1823,7 @@ static void test_multiple_timers(VALK_TEST_ARGS()) {
     timers[i] = valk_aio_timer_alloc(sys);
     ASSERT_NOT_NULL(timers[i]);
     valk_aio_timer_init(timers[i]);
-    valk_aio_timer_set_data(timers[i], (void*)(uptr)i);  // NOLINT(performance-no-int-to-ptr)
+    valk_aio_timer_set_data(timers[i], (void*)(uptr)i);
   }
 
   valk_slab_t *handle_slab = valk_aio_get_handle_slab(sys);
@@ -1940,8 +1939,7 @@ static void test_response_with_status(VALK_TEST_ARGS()) {
   ASSERT_EQ(res->type, VALK_SUC);
 
   valk_http2_response_t *response = res->item;
-  ASSERT_NOT_NULL(response);
-  // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - test macro continues after failure for cleanup
+  REQUIRE_NOT_NULL(response);
   ASSERT_NOT_NULL(response->status);
 
   valk_arc_release(res);

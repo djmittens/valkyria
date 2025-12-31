@@ -151,13 +151,11 @@ void valk_coverage_report_lcov(const char *output_file) {
     return;
   }
   
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   fprintf(f, "TN:\n");
   
   for (int i = 0; i < COVERAGE_HASH_SIZE; i++) {
     valk_line_coverage_file_t *fc = g_line_coverage.buckets[i];
     while (fc != nullptr) {
-      // NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       fprintf(f, "SF:%s\n", fc->filename);
       fprintf(f, "FNF:0\n");
       fprintf(f, "FNH:0\n");
@@ -200,7 +198,6 @@ void valk_coverage_report_lcov(const char *output_file) {
       fprintf(f, "LF:%llu\n", (unsigned long long)(lines_found > 0 ? lines_found : 1));
       fprintf(f, "LH:%llu\n", (unsigned long long)lines_hit);
       fprintf(f, "end_of_record\n");
-      // NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       
       fc = fc->next;
     }
@@ -242,9 +239,7 @@ void valk_coverage_save_on_exit(void) {
       const char *ext = strrchr(g_coverage_output, '.');
       if (ext != nullptr) {
         u64 base_len = (u64)(ext - g_coverage_output);
-        // NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         memcpy(lcov_path, g_coverage_output, base_len);
-        // NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.strcpy)
         strcpy(lcov_path + base_len, ".info");
       } else {

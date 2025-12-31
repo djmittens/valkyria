@@ -65,11 +65,11 @@ static inline bool valk_is_pending_stream_marker(void *user_data) {
 // Tagged pointer: high bit marks pending stream
 static inline valk_pending_stream_t *valk_get_pending_stream_from_marker(void *user_data) {
   if (!valk_is_pending_stream_marker(user_data)) return nullptr;
-  return (valk_pending_stream_t *)((uptr)user_data & ~(1ULL << 63));  // NOLINT(performance-no-int-to-ptr)
+  return (valk_pending_stream_t *)((uptr)user_data & ~(1ULL << 63));
 }
 
 static inline void *valk_make_pending_stream_marker(valk_pending_stream_t *ps) {
-  return (void *)((uptr)ps | (1ULL << 63));  // NOLINT(performance-no-int-to-ptr)
+  return (void *)((uptr)ps | (1ULL << 63));
 }
 
 #endif

@@ -1749,8 +1749,8 @@ static void valk_evacuate_env_single(valk_evacuation_ctx_t* ctx, valk_lenv_t* en
   // - Scratch strings get evacuated (normal case)
   // - Libc malloc strings get evacuated (builtins registered before GC init)
   // After first checkpoint, all symbols will be in GC heap
+  if (env->symbols.count > 0 && env->symbols.items == nullptr) return;
   for (u64 i = 0; i < env->symbols.count; i++) {
-    // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - items non-null when count > 0
     char* sym = env->symbols.items[i];
     if (sym == nullptr) continue;
 
@@ -1782,8 +1782,8 @@ static void valk_evacuate_env_single(valk_evacuation_ctx_t* ctx, valk_lenv_t* en
   }
 
   // Evacuate each value in the environment (only push if freshly evacuated)
+  if (env->vals.count > 0 && env->vals.items == nullptr) return;
   for (u64 i = 0; i < env->vals.count; i++) {
-    // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - items non-null when count > 0
     valk_lval_t* val = env->vals.items[i];
     if (val != nullptr) {
       valk_lval_t* new_val = valk_evacuate_value(ctx, val);
@@ -1918,8 +1918,8 @@ static void valk_fix_env_pointers_single(valk_evacuation_ctx_t* ctx, valk_lenv_t
   }
 
   // Evacuate individual symbol strings if in scratch
+  if (env->symbols.count > 0 && env->symbols.items == nullptr) return;
   for (u64 i = 0; i < env->symbols.count; i++) {
-    // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - items non-null when count > 0
     if (env->symbols.items[i] && valk_ptr_in_arena(ctx->scratch, env->symbols.items[i])) {
       u64 len = strlen(env->symbols.items[i]) + 1;
       char* new_str = nullptr;

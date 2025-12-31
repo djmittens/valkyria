@@ -79,7 +79,6 @@ void valk_buffer_append(valk_buffer_t *buf, void *bytes, sz len) {
       buf->capacity > (buf->count + len),
       "Buffer too small !!!  capacity [%zu] :: count [%zu] :: new bytes [%zu]",
       buf->capacity, buf->count, len);
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memcpy(&((char *)buf->items)[buf->count], bytes, len);
   buf->count += len;
 }
@@ -513,7 +512,6 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes) {
     if (__atomic_compare_exchange_n(&self->offset, &old, end, 1,
                                     __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
       // Store payload size right before payload pointer
-      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       *((u64 *)&self->heap[payload] - 1) = bytes;
 
       // Update statistics
@@ -889,12 +887,10 @@ void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, sz num,
       break;
     case VALK_ALLOC_ARENA:
       res = valk_mem_arena_alloc((void *)self, num * size);
-      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memset(res, 0, num * size);
       break;
     case VALK_ALLOC_SLAB:
       res = valk_slab_aquire((void *)self);
-      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memset(res, 0, num * size);
       break;
     case VALK_ALLOC_MALLOC:
@@ -934,7 +930,6 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
       void *np = valk_mem_arena_alloc((void *)self, new_size);
       if (ptr && np) {
         sz n = old_size < new_size ? old_size : new_size;
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         memcpy(np, ptr, n);
       }
       return np;

@@ -379,7 +379,6 @@ static valk_arc_box *__valk_pool_resolve_promise_cb(valk_arc_box *arg) {
   if (arg->type != VALK_SUC) {
     // Cannot resolve an error - this should not happen
     // TODO(networking): maybe turn this into a hard assert
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr,
             "ERROR: Invalid condition, could not resolve an error "
             "boxsed promise.\n");

@@ -5,6 +5,7 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include "common.h"
 #include "memory.h"
 #include "types.h"
 
@@ -501,15 +502,17 @@ static inline sz valk_gc_page_total_size(u8 size_class) {
 
 // Basic bitmap operations (non-atomic, for allocation bitmaps)
 static inline bool valk_gc_bitmap_test(const u8 *bitmap, u32 idx) {
+  VALK_ASSERT(bitmap != nullptr, "bitmap must not be null");
   return (bitmap[idx / 8] & (1 << (idx % 8))) != 0;
 }
 
 static inline void valk_gc_bitmap_set(u8 *bitmap, u32 idx) {
-  // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - caller guarantees valid bitmap
+  VALK_ASSERT(bitmap != nullptr, "bitmap must not be null");
   bitmap[idx / 8] |= (u8)(1 << (idx % 8));
 }
 
 static inline void valk_gc_bitmap_clear(u8 *bitmap, u32 idx) {
+  VALK_ASSERT(bitmap != nullptr, "bitmap must not be null");
   bitmap[idx / 8] &= (u8)~(1 << (idx % 8));
 }
 
@@ -550,7 +553,7 @@ static inline u8 *valk_gc_page2_slots(valk_gc_page2_t *page) {
   // Align to 64-byte cache line (requires int for bit masking)
   uptr addr = (uptr)after_bitmaps;
   addr = (addr + 63) & ~63ULL;
-  return (u8 *)addr;  // NOLINT(performance-no-int-to-ptr)
+  return (u8 *)addr;
 }
 
 // Get pointer to specific slot

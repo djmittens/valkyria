@@ -772,7 +772,6 @@ static void __pending_stream_process_batch(valk_aio_system_t *sys) {
 
     pending_stream_t *ps = valk_pending_stream_dequeue(&sys->pending_streams);
     VALK_ASSERT(ps != nullptr, "pending_stream_count > 0 but dequeue returned nullptr");
-    // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - VALK_ASSERT traps on null
     VALK_ASSERT(ps->conn != nullptr, "pending stream %d has nullptr conn", ps->stream_id);
     VALK_ASSERT(ps->session != nullptr, "pending stream %d has nullptr session", ps->stream_id);
 

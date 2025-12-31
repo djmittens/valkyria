@@ -114,10 +114,9 @@ static valk_lenv_t* timer_copy_visited_lookup(timer_copy_visited_t* v, valk_lenv
 
 static void timer_copy_visited_add(timer_copy_visited_t* v, valk_lenv_t* orig, valk_lenv_t* copy) {
   if (v->count >= v->capacity) {
+    VALK_ASSERT(v->capacity > 0, "capacity must be initialized before use");
     sz new_cap = v->capacity * 2;
-    // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI) - capacity starts non-zero
     v->orig = realloc(v->orig, new_cap * sizeof(valk_lenv_t*));
-    // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI) - capacity starts non-zero
     v->copy = realloc(v->copy, new_cap * sizeof(valk_lenv_t*));
     v->capacity = new_cap;
   }

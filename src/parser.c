@@ -195,12 +195,10 @@ static char* lval_str_unescapable = "abfnrtv\\\'\"";
 
 char* valk_c_err_format(const char* fmt, const char* file, const u64 line,
                         const char* function) {
-  // NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   u64 len =
       snprintf(nullptr, 0, "%s:%llu:%s || %s", file, (unsigned long long)line, function, fmt);
   char* buf = valk_mem_alloc(len + 1);
   snprintf(buf, len + 1, "%s:%llu:%s || %s", file, (unsigned long long)line, function, fmt);
-  // NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   return buf;
 }
 
@@ -238,11 +236,9 @@ char* valk_str_join(const u64 n, const char** strs, const char* sep) {
   char* res = valk_mem_alloc(res_len + 1);
   u64 offset = 0;
   for (u64 i = 0; i < n; i++) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     memcpy(&res[offset], strs[i], str_lens[i]);
     offset += str_lens[i];
     if (i < n - 1) {
-      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       memcpy(&res[offset], sep, sep_len);
       offset += sep_len;
     }
@@ -291,7 +287,6 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
   u64 tlen = strlen(type);
   if (tlen > 100) tlen = 100;
   res->ref.type = valk_mem_alloc(tlen + 1);
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memcpy(res->ref.type, type, tlen);
   res->ref.type[tlen] = '\0';
   res->ref.ptr = ptr;
@@ -324,14 +319,12 @@ valk_lval_t* valk_lval_err(const char* fmt, ...) {
   // NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) - va_start called above
   va_copy(va2, va);
 
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   u64 len = vsnprintf(nullptr, 0, fmt, va);
   va_end(va);
 
   // TODO(main): look into making this into a constant
   len = len < 10000 ? len : 511;
   res->str = valk_mem_alloc(len + 1);
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   vsnprintf(res->str, len + 1, fmt, va2);
   va_end(va2);
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -363,7 +356,6 @@ valk_lval_t* valk_lval_str(const char* str) {
   // TODO(main): whats a reasonable max for a string length?
   u64 slen = strlen(str);
   res->str = valk_mem_alloc(slen + 1);
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memcpy(res->str, str, slen + 1);
 
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
@@ -1342,15 +1334,15 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
 apply_cont:
     // Phase 2: Apply continuation to value
     {
+      VALK_ASSERT(value != nullptr, "value must not be null at apply_cont");
       valk_cont_frame_t frame = valk_eval_stack_pop(&stack);
-      
+
       switch (frame.kind) {
         case CONT_DONE:
           valk_eval_stack_destroy(&stack);
           return value;
           
         case CONT_SINGLE_ELEM:
-          // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - value always set before apply_cont
           if (LVAL_TYPE(value) == LVAL_FUN) {
             valk_eval_result_t res = valk_eval_apply_func_iter(frame.env, value, valk_lval_nil());
             if (!res.is_thunk) {
@@ -1461,7 +1453,6 @@ apply_cont:
         }
         
         case CONT_IF_BRANCH: {
-          // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - value always set before apply_cont
           if (LVAL_TYPE(value) == LVAL_ERR) goto apply_cont;
           
           bool condition = false;
@@ -1713,6 +1704,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
 
 valk_lval_t* valk_lval_pop(valk_lval_t* lval, u64 i) {
   // Pop i-th element from a cons-based list
+  VALK_ASSERT(lval != nullptr, "valk_lval_pop: lval must not be null");
   u64 count = valk_lval_list_count(lval);
   LVAL_ASSERT(
       (valk_lval_t*)0, i < count,
@@ -1722,7 +1714,6 @@ valk_lval_t* valk_lval_pop(valk_lval_t* lval, u64 i) {
 
   if (i == 0) {
     // Pop first element
-    // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - lval validated by LVAL_ASSERT above
     valk_lval_t* cell = lval->cons.head;
     // Move tail's contents into lval
     if (lval->cons.tail != nullptr &&

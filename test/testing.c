@@ -82,7 +82,6 @@ static char* valk_str_dup(const char* str) {
 
 valk_test_suite_t *valk_testsuite_empty(const char *filename) {
   valk_test_suite_t *res = valk_mem_alloc(sizeof(valk_test_suite_t));
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   memset(res, 0, sizeof(valk_test_suite_t));
   res->filename = valk_str_dup(filename);
 

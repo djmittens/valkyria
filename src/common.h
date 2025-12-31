@@ -8,7 +8,6 @@
 
 #define UNUSED(x) ({ (void)x; })
 
-// NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 #define VALK_RAISE(__msg, ...)                                          \
   do {                                                                  \
     fprintf(stderr, "%s:%d:%s || " __msg "\n", __FILE_NAME__, __LINE__, \
@@ -17,8 +16,8 @@
     int _size = backtrace(stack, 50);                                   \
     valk_trace_print(stack, _size);                                     \
     raise(SIGTRAP);                                                     \
+    __builtin_unreachable();                                            \
   } while (0)
-// NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 
 #define VALK_ASSERT(__cond, __msg, ...) \
   if (!(__cond)) {                      \

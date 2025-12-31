@@ -395,10 +395,10 @@ typedef struct {
 
 extern __thread valk_thread_context_t valk_thread_ctx;
 
-void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, sz bytes);
+__attribute__((malloc)) void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, sz bytes);
 void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
                                  sz new_size);
-void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, sz num,
+__attribute__((malloc)) void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, sz num,
                                 sz size);
 void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr);
 

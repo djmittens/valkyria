@@ -31,7 +31,6 @@
   } while (0)
 
 // Mark test as skipped and optionally log a reason to stderr
-// NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 #define VALK_SKIP(fmt, ...)                                                    \
   do {                                                                         \
     if (_result->type == VALK_TEST_UNDEFINED) {                                \
@@ -43,9 +42,7 @@
       _result->stopTime = valk_get_time(_result->timePrecision);               \
     }                                                                          \
   } while (0)
-// NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 
-// NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 #define VALK_FAIL(fmt, ...)                                                   \
   do {                                                                        \
     DISABLE_FORMAT_NONLITERAL;                                                \
@@ -66,7 +63,6 @@
     _result->stopTime = valk_get_time(_result->timePrecision);                \
     ENABLE_FORMAT_NONLITERAL;                                                 \
   } while (0)
-// NOLINTEND(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
 
 //  Not very useful right now, since this thing doesnt cleanup the resources
 #define VALK_TEST_ASSERT(cond, fmt, ...)                   \
@@ -201,6 +197,12 @@ long valk_get_nanos(void);
     if ((ptr) == nullptr) {                                                       \
       VALK_FAIL("ASSERT_NOT_NULL: pointer is nullptr");                           \
     }                                                                          \
+  } while (0)
+
+#define REQUIRE_NOT_NULL(ptr)                                                  \
+  do {                                                                         \
+    ASSERT_NOT_NULL(ptr);                                                      \
+    if ((ptr) == nullptr) return;                                              \
   } while (0)
 
 #define ASSERT_NULL(ptr)                                                       \

@@ -26,7 +26,6 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
 
   *ssl_ctx = SSL_CTX_new(TLS_server_method());
   if (!*ssl_ctx) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Could not create SSL/TLS context: %s\n",
             ERR_error_string(ERR_get_error(), nullptr));
     return VALK_ERR_SSL_INIT;
@@ -42,7 +41,6 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
   SSL_CTX_set_session_cache_mode(*ssl_ctx, SSL_SESS_CACHE_SERVER);
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
   if (SSL_CTX_set1_curves_list(*ssl_ctx, "P-256") != 1) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "SSL_CTX_set1_curves_list failed: %s\n",
             ERR_error_string(ERR_get_error(), nullptr));
     SSL_CTX_free(*ssl_ctx);
@@ -54,7 +52,6 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
     EC_KEY *ecdh;
     ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
     if (!ecdh) {
-      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       fprintf(stderr, "EC_KEY_new_by_curv_name failed: %s\n",
               ERR_error_string(ERR_get_error(), nullptr));
       SSL_CTX_free(*ssl_ctx);
@@ -67,7 +64,6 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
 #endif /* !(OPENSSL_VERSION_NUMBER >= 0x30000000L) */
 
   if (SSL_CTX_use_PrivateKey_file(*ssl_ctx, keyfile, SSL_FILETYPE_PEM) != 1) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Could not read private key file %s\n", keyfile);
     SSL_CTX_free(*ssl_ctx);
     *ssl_ctx = nullptr;
@@ -76,7 +72,6 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
   }
 
   if (SSL_CTX_use_certificate_chain_file(*ssl_ctx, certfile) != 1) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Could not read certificate file %s\n", certfile);
     SSL_CTX_free(*ssl_ctx);
     *ssl_ctx = nullptr;
@@ -91,7 +86,6 @@ valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx) {
 
   *ssl_ctx = SSL_CTX_new(TLS_client_method());
   if (!*ssl_ctx) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "Could not create SSL/TLS context: %s\n",
             ERR_error_string(ERR_get_error(), nullptr));
     return VALK_ERR_SSL_INIT;
@@ -103,7 +97,6 @@ valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx) {
                           SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION);
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
   if (SSL_CTX_set1_curves_list(*ssl_ctx, "P-256") != 1) {
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     fprintf(stderr, "SSL_CTX_set1_curves_list failed: %s\n",
             ERR_error_string(ERR_get_error(), nullptr));
     SSL_CTX_free(*ssl_ctx);
@@ -115,7 +108,6 @@ valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx) {
     EC_KEY *ecdh;
     ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
     if (!ecdh) {
-      // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       fprintf(stderr, "EC_KEY_new_by_curv_name failed: %s\n",
               ERR_error_string(ERR_get_error(), nullptr));
       SSL_CTX_free(ctx->ssl_ctx);

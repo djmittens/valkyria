@@ -101,8 +101,7 @@ static void test_basic_http2_connection(VALK_TEST_ARGS()) {
   ASSERT_EQ(res->type, VALK_SUC);
   
   valk_http2_response_t *response = res->item;
-  ASSERT_NOT_NULL(response);
-  // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - test macro continues after failure for cleanup
+  REQUIRE_NOT_NULL(response);
   ASSERT_NOT_NULL(response->body);
   ASSERT_STR_CONTAINS((char *)response->body, "Valkyria");
   
@@ -240,8 +239,7 @@ static void test_multiple_requests_single_connection(VALK_TEST_ARGS()) {
     ASSERT_EQ(res->type, VALK_SUC);
     
     valk_http2_response_t *response = res->item;
-    ASSERT_NOT_NULL(response);
-    // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - test macro continues after failure for cleanup
+    REQUIRE_NOT_NULL(response);
     ASSERT_NOT_NULL(response->body);
 
     valk_arc_release(res);

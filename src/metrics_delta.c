@@ -41,8 +41,8 @@ void valk_delta_snapshot_free(valk_delta_snapshot_t *snap) {
 
 static void ensure_delta_capacity(valk_delta_snapshot_t *snap) {
   if (snap->delta_count >= snap->delta_capacity) {
+    VALK_ASSERT(snap->delta_capacity > 0, "delta_capacity must be initialized");
     snap->delta_capacity *= 2;
-    // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI) - capacity initialized to non-zero
     snap->deltas = realloc(snap->deltas,
                            snap->delta_capacity * sizeof(valk_metric_delta_t));
   }
