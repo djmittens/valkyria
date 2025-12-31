@@ -6,7 +6,9 @@
 #include <uv.h>
 
 #include "common.h"
+#include "gc.h"
 #include "log.h"
+#include "parser.h"
 
 static u64 g_stream_body_id = 0;
 
@@ -89,6 +91,27 @@ static void __stream_body_finish_close(valk_stream_body_t *body) {
 
   if (body->on_close) {
     body->on_close(body, body->user_data);
+  }
+
+  if (body->lisp_on_close && body->callback_env) {
+    valk_lval_t *args = valk_lval_nil();
+    valk_lval_t *result = valk_lval_eval_call(body->callback_env, body->lisp_on_close, args);
+    if (LVAL_TYPE(result) == LVAL_ERR) {
+      VALK_WARN("stream_body: on-close callback error: %s", result->str);
+    }
+  }
+
+  if (body->lisp_on_drain) {
+    valk_gc_remove_global_root(&body->lisp_on_drain);
+    body->lisp_on_drain = nullptr;
+  }
+  if (body->lisp_on_close) {
+    valk_gc_remove_global_root(&body->lisp_on_close);
+    body->lisp_on_close = nullptr;
+  }
+  if (body->lisp_on_timeout) {
+    valk_gc_remove_global_root(&body->lisp_on_timeout);
+    body->lisp_on_timeout = nullptr;
   }
 
   valk_stream_body_unregister(body);
@@ -310,10 +333,21 @@ static nghttp2_ssize __stream_data_read_callback(
   memcpy(buf, body->pending_data, to_send);
   body->pending_offset = to_send;
 
-  if (body->queue_len < body->queue_max / 2 && body->on_drain) {
-    VALK_DEBUG("stream_body: body %llu calling on_drain (queue_len=%llu)",
-               (unsigned long long)body->id, (unsigned long long)body->queue_len);
-    body->on_drain(body, body->user_data);
+  if (body->queue_len < body->queue_max / 2) {
+    if (body->on_drain) {
+      VALK_DEBUG("stream_body: body %llu calling on_drain (queue_len=%llu)",
+                 (unsigned long long)body->id, (unsigned long long)body->queue_len);
+      body->on_drain(body, body->user_data);
+    }
+    if (body->lisp_on_drain && body->callback_env) {
+      VALK_DEBUG("stream_body: body %llu calling lisp_on_drain (queue_len=%llu)",
+                 (unsigned long long)body->id, (unsigned long long)body->queue_len);
+      valk_lval_t *args = valk_lval_nil();
+      valk_lval_t *result = valk_lval_eval_call(body->callback_env, body->lisp_on_drain, args);
+      if (LVAL_TYPE(result) == LVAL_ERR) {
+        VALK_WARN("stream_body: on-drain callback error: %s", result->str);
+      }
+    }
   }
 
   return (nghttp2_ssize)to_send;

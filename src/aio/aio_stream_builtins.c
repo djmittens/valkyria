@@ -5,6 +5,7 @@
 #include "aio_internal.h"
 #include "aio_http2_session.h"
 #include "common.h"
+#include "gc.h"
 #include "log.h"
 #include "parser.h"
 
@@ -208,10 +209,12 @@ static valk_lval_t *valk_builtin_stream_on_drain(valk_lenv_t *e, valk_lval_t *a)
     return valk_lval_err("stream/on-drain: second argument must be a function");
   }
 
-  VALK_WITH_ALLOC((valk_mem_allocator_t*)valk_thread_ctx.heap) {
-    body->lisp_on_drain = valk_lval_copy(callback);
-    body->callback_env = e;
+  if (body->lisp_on_drain) {
+    valk_gc_remove_global_root(&body->lisp_on_drain);
   }
+  body->lisp_on_drain = callback;
+  body->callback_env = e;
+  valk_gc_add_global_root(&body->lisp_on_drain);
 
   VALK_DEBUG("stream: registered on-drain callback for body id=%llu",
              (unsigned long long)body->id);
@@ -284,12 +287,43 @@ static valk_lval_t *valk_builtin_stream_id(valk_lenv_t *e, valk_lval_t *a) {
   return valk_lval_num((long)body->id);
 }
 
+static valk_lval_t *valk_builtin_stream_on_close(valk_lenv_t *e, valk_lval_t *a) {
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("stream/on-close: expected 2 arguments, got %llu",
+                         (unsigned long long)valk_lval_list_count(a));
+  }
+
+  valk_lval_t *body_ref = valk_lval_list_nth(a, 0);
+  valk_lval_t *callback = valk_lval_list_nth(a, 1);
+
+  valk_stream_body_t *body = get_stream_body(body_ref);
+  if (!body) {
+    return valk_lval_err("stream/on-close: first argument must be stream body handle");
+  }
+  if (LVAL_TYPE(callback) != LVAL_FUN) {
+    return valk_lval_err("stream/on-close: second argument must be a function");
+  }
+
+  if (body->lisp_on_close) {
+    valk_gc_remove_global_root(&body->lisp_on_close);
+  }
+  body->lisp_on_close = callback;
+  body->callback_env = e;
+  valk_gc_add_global_root(&body->lisp_on_close);
+
+  VALK_DEBUG("stream: registered on-close callback for body id=%llu",
+             (unsigned long long)body->id);
+
+  return body_ref;
+}
+
 void valk_register_stream_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "stream/open", valk_builtin_stream_open);
   valk_lenv_put_builtin(env, "stream/write", valk_builtin_stream_write);
   valk_lenv_put_builtin(env, "stream/writable?", valk_builtin_stream_writable);
   valk_lenv_put_builtin(env, "stream/close", valk_builtin_stream_close);
   valk_lenv_put_builtin(env, "stream/on-drain", valk_builtin_stream_on_drain);
+  valk_lenv_put_builtin(env, "stream/on-close", valk_builtin_stream_on_close);
   valk_lenv_put_builtin(env, "stream/set-timeout", valk_builtin_stream_set_timeout);
   valk_lenv_put_builtin(env, "stream/cancel", valk_builtin_stream_cancel);
   valk_lenv_put_builtin(env, "stream/id", valk_builtin_stream_id);
