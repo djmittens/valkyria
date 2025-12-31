@@ -86,44 +86,45 @@ set(VALKYRIA_SOURCES
   src/log.c
   src/coverage.c
   src/source_loc.c
-  # AIO subsystem (src/aio/)
+  # AIO core (src/aio/)
   src/aio/aio_uv.c
-  src/aio/aio_ssl.c
   src/aio/aio_alloc.c
-  src/aio/aio_conn_io.c
-  src/aio/aio_overload_admission.c
-  src/aio/aio_overload_state.c
-  src/aio/aio_body_buffer.c
   src/aio/aio_async.c
   src/aio/aio_combinators.c
-  src/aio/aio_overload_deferred.c
-  src/aio/aio_overload_backpressure.c
-  # HTTP/2 modular components
-  src/aio/aio_http2_conn.c
-  src/aio/aio_http2_server.c
-  src/aio/aio_http2_client.c
-  src/aio/aio_http2_session.c
-  # AIO modular components
-  src/aio/aio_system.c
-  src/aio/aio_task.c
-  src/aio/aio_task_queue.c
-  src/aio/aio_chase_lev.c
-  src/aio/aio_maintenance.c
-  # Generic streaming response body
-  src/aio/aio_stream_body.c
-  src/aio/aio_stream_body_conn.c
-  src/aio/aio_stream_builtins.c
-  # IO ops abstraction layer
   src/aio/aio_ops.c
+  src/aio/aio_http_builtins.c
+  # AIO system lifecycle (src/aio/system/)
+  src/aio/system/aio_system.c
+  src/aio/system/aio_task.c
+  src/aio/system/aio_task_queue.c
+  src/aio/system/aio_chase_lev.c
+  src/aio/system/aio_maintenance.c
+  # HTTP/2 protocol (src/aio/http2/)
+  src/aio/http2/aio_ssl.c
+  src/aio/http2/aio_conn_io.c
+  src/aio/http2/aio_body_buffer.c
+  src/aio/http2/aio_http2_conn.c
+  src/aio/http2/aio_http2_server.c
+  src/aio/http2/aio_http2_client.c
+  src/aio/http2/aio_http2_session.c
+  src/aio/http2/http2_ops_nghttp2.c
+  src/aio/http2/http2_ops_test.c
+  # HTTP/2 overload management (src/aio/http2/overload/)
+  src/aio/http2/overload/aio_overload_admission.c
+  src/aio/http2/overload/aio_overload_state.c
+  src/aio/http2/overload/aio_overload_deferred.c
+  src/aio/http2/overload/aio_overload_backpressure.c
+  # HTTP/2 streaming responses (src/aio/http2/stream/)
+  src/aio/http2/stream/aio_stream_body.c
+  src/aio/http2/stream/aio_stream_body_conn.c
+  src/aio/http2/stream/aio_stream_builtins.c
+  # IO ops abstraction layer (src/aio/io/)
   src/aio/io/io_loop_ops_uv.c
   src/aio/io/io_loop_ops_test.c
   src/aio/io/io_tcp_ops_uv.c
   src/aio/io/io_tcp_ops_test.c
   src/aio/io/io_timer_ops_uv.c
   src/aio/io/io_timer_ops_test.c
-  src/aio/http2/http2_ops_nghttp2.c
-  src/aio/http2/http2_ops_test.c
-  src/aio/aio_http_builtins.c
 )
 
 # Conditionally add metrics sources (V2 only)
@@ -171,6 +172,11 @@ endif()
 
 target_include_directories(valkyria PRIVATE
   ${PROJECT_SOURCE_DIR}/src
+  ${PROJECT_SOURCE_DIR}/src/aio
+  ${PROJECT_SOURCE_DIR}/src/aio/system
+  ${PROJECT_SOURCE_DIR}/src/aio/http2
+  ${PROJECT_SOURCE_DIR}/src/aio/http2/overload
+  ${PROJECT_SOURCE_DIR}/src/aio/http2/stream
 )
 target_include_directories(valkyria SYSTEM PRIVATE
   ${LIBUV_INCLUDE_DIRS}
@@ -206,6 +212,15 @@ target_include_directories(valk SYSTEM PRIVATE
 )
 
 # TESTS
+
+# Add include directories for AIO subdirectories (needed by test files)
+include_directories(
+  ${PROJECT_SOURCE_DIR}/src/aio
+  ${PROJECT_SOURCE_DIR}/src/aio/system
+  ${PROJECT_SOURCE_DIR}/src/aio/http2
+  ${PROJECT_SOURCE_DIR}/src/aio/http2/overload
+  ${PROJECT_SOURCE_DIR}/src/aio/http2/stream
+)
 
 add_executable(test_std test/test_std.c test/testing.c)
 target_link_libraries(test_std PRIVATE "-lc" valkyria)

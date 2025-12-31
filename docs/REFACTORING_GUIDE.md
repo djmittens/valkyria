@@ -12,11 +12,21 @@ This document defines the target architecture for Valkyria's I/O and networking 
 | Phase 2: SSE Cleanup | **Complete** | Removed `aio_sse_stream_registry.c/h` and `aio_diagnostics_timer.c/h`; diagnostics now Lisp-only per R4.1-R4.2 |
 | Phase 3: Overload Consolidation | **Complete** | All files renamed to `aio_overload_*.c/h` |
 | Phase 4: I/O Cleanup | **Complete** | Size fields removed from vtables |
-| Phase 5: Code Organization | Not Started | Directory restructure pending (low priority, risky) |
+| Phase 5: Code Organization | **Complete** | Directory restructure into `system/`, `http2/`, `http2/overload/`, `http2/stream/` |
 | Phase 6: Complexity Reduction | **Complete** | All 17 `#ifdef` blocks consolidated into helper functions (R6.4) |
 | Phase 7: Generic Streaming | **Complete** | Created generic streaming API; SSE now available as Lisp module |
 
 ### Recent Changes (2025-12-31)
+
+13. **Phase 5 Complete - Directory Restructure (2025-12-31)**: Reorganized AIO subsystem into logical subdirectories:
+    - **CREATED**: `src/aio/system/` - System lifecycle files (aio_system, aio_task, aio_maintenance, aio_chase_lev, aio_task_queue)
+    - **CREATED**: `src/aio/http2/` - HTTP/2 protocol files (aio_http2_*, aio_ssl, aio_conn_io, aio_body_buffer)
+    - **CREATED**: `src/aio/http2/overload/` - Overload management (aio_overload_state, aio_overload_admission, aio_overload_backpressure, aio_overload_deferred)
+    - **CREATED**: `src/aio/http2/stream/` - Streaming responses (aio_stream_body, aio_stream_body_conn, aio_stream_builtins)
+    - **UPDATED**: CMakeLists.txt with new paths and include directories
+    - **UPDATED**: aio_internal.h with new include paths
+    - **UPDATED**: Test files with corrected header paths
+    - **Benefit**: Clear separation of concerns matching target architecture
 
 12. **Moved AIO Diagnostics Builtins (2025-12-31)**: Cleaned up metrics_builtins.c by moving AIO-specific builtins to proper location:
     - **CREATED**: `aio_diagnostics_builtins.c/h` - new file for `aio/slab-buckets` and `aio/diagnostics-state-json` builtins
@@ -964,53 +974,85 @@ Removed size field initializations from:
 
 ## Phase 5: Code Organization
 
+**STATUS: COMPLETE (2025-12-31)**
+
 ### Problem
 
-All code is in flat `src/aio/` directory with unclear boundaries.
+All code was in flat `src/aio/` directory with unclear boundaries.
 
 ### Solution
 
-Organize into subdirectories reflecting architecture.
+Organized into subdirectories reflecting architecture.
 
-### Target Structure
+### Implemented Structure
 
 ```
 src/aio/
-├── io/                      # Core I/O abstraction (existing)
+├── io/                      # Core I/O abstraction (unchanged)
 │   ├── io_loop_ops.h
 │   ├── io_tcp_ops.h
 │   ├── io_timer_ops.h
 │   └── ...
 │
-├── http2/                   # HTTP/2 protocol
-│   ├── server.c
-│   ├── client.c
-│   ├── conn.c
-│   ├── session.c
-│   ├── sse/                 # SSE sub-subsystem
-│   │   ├── sse.c
-│   │   ├── sse_builtins.c
-│   │   └── sse_conn_tracking.c
-│   └── overload/            # Overload management
-│       ├── state.c          # Resource usage snapshots
-│       ├── admission.c      # Accept/defer/reject decisions
-│       ├── backpressure.c   # Watermark-based flow control
-│       └── deferred.c       # Pending stream queue
+├── http2/                   # HTTP/2 protocol ✓
+│   ├── aio_http2_conn.c/h
+│   ├── aio_http2_server.c/h
+│   ├── aio_http2_client.c/h
+│   ├── aio_http2_session.c/h
+│   ├── aio_ssl.c/h
+│   ├── aio_conn_io.c/h
+│   ├── aio_body_buffer.c/h
+│   ├── http2_ops_nghttp2.c
+│   ├── http2_ops_test.c
+│   ├── overload/            # Overload management ✓
+│   │   ├── aio_overload_state.c/h
+│   │   ├── aio_overload_admission.c/h
+│   │   ├── aio_overload_backpressure.c/h
+│   │   └── aio_overload_deferred.c/h
+│   └── stream/              # Streaming responses ✓
+│       ├── aio_stream_body.c/h
+│       ├── aio_stream_body_conn.c
+│       └── aio_stream_builtins.c
 │
-├── system/                  # System lifecycle
-│   ├── aio_system.c
-│   ├── aio_maintenance.c
-│   └── aio_config.c
+├── system/                  # System lifecycle ✓
+│   ├── aio_system.c/h
+│   ├── aio_maintenance.c/h
+│   ├── aio_task.c/h
+│   ├── aio_task_queue.c
+│   └── aio_chase_lev.c/h
 │
-└── aio.h                    # Public API
+├── aio.h                    # Public API
+├── aio_internal.h           # Internal types/includes
+├── aio_alloc.c/h            # Memory allocation
+├── aio_async.c/h            # Async handle management
+├── aio_combinators.c        # Timer/interval builtins
+├── aio_diagnostics_builtins.c/h  # AIO-specific builtins
+├── aio_http_builtins.c      # HTTP builtins
+├── aio_metrics.c/h          # AIO metrics (when VALK_METRICS enabled)
+├── aio_ops.c/h              # Ops abstraction
+├── aio_owner.c/h            # Owner tracking
+├── aio_timer.c/h            # Timer utilities
+├── aio_types.h              # Type definitions
+└── aio_uv.c                 # libuv integration
 ```
 
-### Implementation Steps
+### Implementation Steps ✓
 
-1. Create subdirectories
-2. Move files with minimal changes
-3. Update `#include` paths
-4. Update Makefile/CMake
+1. Create subdirectories ✓
+2. Move files with git mv to preserve history ✓
+3. Update `#include` paths in aio_internal.h ✓
+4. Update CMakeLists.txt with new source paths ✓
+5. Add subdirectories to include path for tests ✓
+6. Update test file includes ✓
+7. Verify build and all tests pass ✓
+
+### Test Plan: Phase 5 ✓
+
+| Test | Description | Expected | Result |
+|------|-------------|----------|--------|
+| Build | All sources compile | Pass | ✓ |
+| Tests | All C and Valk tests pass | Pass | ✓ |
+| Lint | clang-tidy passes | Pass | ✓ |
 
 ---
 
@@ -1318,7 +1360,7 @@ Convert SSE-specific tests to use new generic API:
 | 2. SSE cleanup | Medium | High | Low | **Complete** |
 | 3. Overload consolidation | Medium | Medium | Low | **Complete** |
 | 4. I/O cleanup | Low | Low | Low | **Complete** |
-| 5. Code organization | Medium | Medium | Low | Low priority |
+| 5. Code organization | Medium | Medium | Low | **Complete** - hierarchical directory structure |
 | 6. Complexity reduction | Medium | High | Low | **Complete** |
 | 7. Generic streaming | Medium | High | Medium | **Complete** - generic API + SSE Lisp module |
 
@@ -1335,7 +1377,7 @@ Convert SSE-specific tests to use new generic API:
 | Load management naming | pressure/admission/backpressure | Unified "Overload" |
 | Backpressure | Ad-hoc thresholds | High/low watermarks (80%/40%) with hysteresis |
 | Overload detection | Slab usage only | Request queue latency (primary) + slab usage |
-| Code organization | Flat directory | Hierarchical |
+| Code organization | Flat directory | **Done**: `system/`, `http2/`, `http2/overload/`, `http2/stream/` |
 | Session complexity | CC 11-12, 7 levels | CC < 10, 4 levels |
 | HTTP/2 client | Not implemented | Single connection to sidecar, multiplexed |
 | Deployment model | Unspecified | Envoy sidecar required for production |

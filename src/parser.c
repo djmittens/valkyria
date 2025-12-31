@@ -9,7 +9,7 @@
 #include <uv.h>
 
 #include "aio/aio.h"
-#include "aio/aio_stream_body.h"
+#include "aio/http2/stream/aio_stream_body.h"
 #include "collections.h"
 #include "common.h"
 #include "coverage.h"

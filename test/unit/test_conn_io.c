@@ -1,5 +1,5 @@
 #include "../testing.h"
-#include "../../src/aio/aio_conn_io.h"
+#include "../../src/aio/http2/aio_conn_io.h"
 #include "../../src/aio/aio_internal.h"
 #include "../../src/memory.h"
 
