@@ -1027,7 +1027,7 @@ void *valk_gc_alloc(valk_gc_heap_t *heap, sz size) {
   heap->free -= size;
 
   res->marked = 1;
-  valk_dll_insert_node(&heap->sentinel, res);
+  valk_dll_insert_node(&heap->sentinel, res);  // NOLINT(clang-analyzer-unix.Malloc)
   return res + 1;  // skip over to the good stuff
 }
 

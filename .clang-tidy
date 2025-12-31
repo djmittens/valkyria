@@ -7,7 +7,7 @@ Checks: >
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
   -clang-analyzer-security.insecureAPI.rand,
   -clang-analyzer-optin.performance.Padding
-WarningsAsErrors: 'clang-analyzer-core.*,clang-analyzer-deadcode.*,clang-analyzer-valist.*'
+WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/valkyria-lisp/src/.*\.h$'
 SystemHeaders: false
 UseColor: true

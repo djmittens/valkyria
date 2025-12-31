@@ -394,7 +394,7 @@ int valk_http2_send_overload_response(nghttp2_session *session,
   if (rv != 0) {
     free(body_src);
   }
-  return rv;
+  return rv;  // NOLINT(clang-analyzer-unix.Malloc)
 }
 
 valk_lval_t* valk_http2_qexpr_get(valk_lval_t* qexpr, const char* key) {

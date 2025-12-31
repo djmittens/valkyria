@@ -80,29 +80,80 @@ static void __interval_init_on_loop(void *ctx) {
 extern valk_lenv_t* valk_lenv_copy(valk_lenv_t* env);
 extern valk_lval_t* valk_lval_copy(valk_lval_t* lval);
 
-static valk_lval_t* __deep_copy_lval_for_timer(valk_lval_t* lval);
+#define TIMER_COPY_VISITED_INITIAL_CAP 32
 
-static valk_lenv_t* __deep_copy_env_for_timer(valk_lenv_t* env) {
+typedef struct {
+  valk_lenv_t** orig;
+  valk_lenv_t** copy;
+  sz count;
+  sz capacity;
+} timer_copy_visited_t;
+
+static void timer_copy_visited_init(timer_copy_visited_t* v) {
+  v->orig = malloc(TIMER_COPY_VISITED_INITIAL_CAP * sizeof(valk_lenv_t*));
+  v->copy = malloc(TIMER_COPY_VISITED_INITIAL_CAP * sizeof(valk_lenv_t*));
+  v->count = 0;
+  v->capacity = TIMER_COPY_VISITED_INITIAL_CAP;
+}
+
+static void timer_copy_visited_free(timer_copy_visited_t* v) {
+  free(v->orig);
+  free(v->copy);
+  v->orig = NULL;
+  v->copy = NULL;
+  v->count = 0;
+  v->capacity = 0;
+}
+
+static valk_lenv_t* timer_copy_visited_lookup(timer_copy_visited_t* v, valk_lenv_t* orig) {
+  for (sz i = 0; i < v->count; i++) {
+    if (v->orig[i] == orig) return v->copy[i];
+  }
+  return NULL;
+}
+
+static void timer_copy_visited_add(timer_copy_visited_t* v, valk_lenv_t* orig, valk_lenv_t* copy) {
+  if (v->count >= v->capacity) {
+    sz new_cap = v->capacity * 2;
+    // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI) - capacity starts non-zero
+    v->orig = realloc(v->orig, new_cap * sizeof(valk_lenv_t*));
+    // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI) - capacity starts non-zero
+    v->copy = realloc(v->copy, new_cap * sizeof(valk_lenv_t*));
+    v->capacity = new_cap;
+  }
+  v->orig[v->count] = orig;
+  v->copy[v->count] = copy;
+  v->count++;
+}
+
+static valk_lval_t* __deep_copy_lval_for_timer_impl(valk_lval_t* lval, timer_copy_visited_t* visited);
+
+static valk_lenv_t* __deep_copy_env_for_timer_impl(valk_lenv_t* env, timer_copy_visited_t* visited) {
   if (env == NULL) return NULL;
+  
+  valk_lenv_t* cached = timer_copy_visited_lookup(visited, env);
+  if (cached) return cached;
   
   valk_lenv_t* res = valk_lenv_copy(env);
   if (!res) return NULL;
   
+  timer_copy_visited_add(visited, env, res);
+  
   for (u64 i = 0; i < res->vals.count; i++) {
     valk_lval_t* val = res->vals.items[i];
     if (val) {
-      res->vals.items[i] = __deep_copy_lval_for_timer(val);
+      res->vals.items[i] = __deep_copy_lval_for_timer_impl(val, visited);
     }
   }
   
   if (res->parent) {
-    res->parent = __deep_copy_env_for_timer(res->parent);
+    res->parent = __deep_copy_env_for_timer_impl(res->parent, visited);
   }
   
   return res;
 }
 
-static valk_lval_t* __deep_copy_lval_for_timer(valk_lval_t* lval) {
+static valk_lval_t* __deep_copy_lval_for_timer_impl(valk_lval_t* lval, timer_copy_visited_t* visited) {
   if (lval == NULL) return NULL;
   
   valk_lval_t* res = valk_lval_copy(lval);
@@ -111,23 +162,31 @@ static valk_lval_t* __deep_copy_lval_for_timer(valk_lval_t* lval) {
   switch (LVAL_TYPE(lval)) {
     case LVAL_FUN:
       if (!lval->fun.builtin) {
-        res->fun.body = __deep_copy_lval_for_timer(lval->fun.body);
-        res->fun.formals = __deep_copy_lval_for_timer(lval->fun.formals);
+        res->fun.body = __deep_copy_lval_for_timer_impl(lval->fun.body, visited);
+        res->fun.formals = __deep_copy_lval_for_timer_impl(lval->fun.formals, visited);
         if (lval->fun.env) {
-          res->fun.env = __deep_copy_env_for_timer(lval->fun.env);
+          res->fun.env = __deep_copy_env_for_timer_impl(lval->fun.env, visited);
         }
       }
       break;
     case LVAL_CONS:
     case LVAL_QEXPR:
-      res->cons.head = __deep_copy_lval_for_timer(lval->cons.head);
-      res->cons.tail = __deep_copy_lval_for_timer(lval->cons.tail);
+      res->cons.head = __deep_copy_lval_for_timer_impl(lval->cons.head, visited);
+      res->cons.tail = __deep_copy_lval_for_timer_impl(lval->cons.tail, visited);
       break;
     default:
       break;
   }
   
   return res;
+}
+
+static valk_lval_t* __deep_copy_lval_for_timer(valk_lval_t* lval) {
+  timer_copy_visited_t visited;
+  timer_copy_visited_init(&visited);
+  valk_lval_t* result = __deep_copy_lval_for_timer_impl(lval, &visited);
+  timer_copy_visited_free(&visited);
+  return result;
 }
 
 valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
