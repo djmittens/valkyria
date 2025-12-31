@@ -29,6 +29,7 @@
 #include "memory.h"
 #include "collections.h"
 #include "aio_alloc.h"
+#include "aio_diagnostics_builtins.h"
 #include "gc.h"
 
 #define MAKE_NV(NAME, VALUE, VALUELEN)                         \

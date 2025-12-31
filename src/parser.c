@@ -22,6 +22,7 @@
 
 #ifdef VALK_METRICS_ENABLED
 #include "aio/aio_metrics.h"
+#include "aio/aio_diagnostics_builtins.h"
 #include "metrics_v2.h"
 #include "metrics_delta.h"
 void valk_register_metrics_builtins(valk_lenv_t *env);
@@ -5474,6 +5475,9 @@ void valk_lenv_builtins(valk_lenv_t* env) {
 #ifdef VALK_METRICS_ENABLED
   // Metrics V2 builtins (from metrics_builtins.c)
   valk_register_metrics_builtins(env);
+
+  // AIO diagnostics builtins (from aio/aio_diagnostics_builtins.c)
+  valk_register_aio_diagnostics_builtins(env);
 #endif
 
   // Script classification helpers are implicit via CLI flags; no new builtins

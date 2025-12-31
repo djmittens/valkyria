@@ -136,6 +136,7 @@ if(VALK_METRICS)
   list(APPEND VALKYRIA_SOURCES src/metrics_v2.c)
   list(APPEND VALKYRIA_SOURCES src/metrics_delta.c)
   list(APPEND VALKYRIA_SOURCES src/metrics_builtins.c)
+  list(APPEND VALKYRIA_SOURCES src/aio/aio_diagnostics_builtins.c)
   # Pool metrics factory for standardized pool metrics
   list(APPEND VALKYRIA_SOURCES src/pool_metrics.c)
   # Event loop metrics for libuv loops

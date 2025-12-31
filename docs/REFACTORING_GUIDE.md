@@ -18,12 +18,23 @@ This document defines the target architecture for Valkyria's I/O and networking 
 
 ### Recent Changes (2025-12-31)
 
-10. **Fixed Allocator Mismatch Bugs (2025-12-31)**: During refactoring audit, discovered and fixed critical memory issues:
-    - **FIX 1**: `valk_lenv_copy` at parser.c:2276 was copying the source env's allocator pointer instead of using the current thread-local allocator. This caused double-free when copied envs were modified with a different active allocator.
-    - **FIX 2**: `valk_http2_client_request_with_headers_impl` at aio_http2_client.c was storing a raw pointer to the caller's environment (`ctx->env = e`). Changed to use `valk_aio_deep_copy_callback()` which properly deep-copies the callback including its captured environment. 
-    - **CREATED**: `valk_aio_deep_copy_callback()` - exported version of `__deep_copy_lval_for_timer()` for use by HTTP client
-    - **Result**: No more crashes on test exit. All C tests pass. Basic valk tests pass.
-    - **Remaining**: Some async batch tests (`http2/health-check-all`, `http2/fetch-all`) still timing out - appears to be related to continuation-passing style callbacks not receiving expected arguments. Needs further investigation.
+12. **Moved AIO Diagnostics Builtins (2025-12-31)**: Cleaned up metrics_builtins.c by moving AIO-specific builtins to proper location:
+    - **CREATED**: `aio_diagnostics_builtins.c/h` - new file for `aio/slab-buckets` and `aio/diagnostics-state-json` builtins
+    - **REMOVED**: AIO builtins from `metrics_builtins.c` and its `#include "aio/aio.h"` dependency
+    - **UPDATED**: `aio_internal.h` to include new header, `parser.c` to register new builtins
+    - **Benefit**: Metrics system no longer depends on AIO headers
+
+11. **GC Rooting for Async Callbacks (2025-12-31)**: Replaced deep-copy approach with GC rooting for async callback storage. This is the correct solution to the callback corruption bugs.
+    - **REMOVED**: `valk_aio_deep_copy_callback()` - deep copying was fundamentally flawed due to race conditions with GC
+    - **FIX**: `aio_combinators.c` - `aio/schedule` and `aio/interval` now use `valk_gc_add_global_root()` to protect callbacks
+    - **FIX**: `aio_http2_client.c` - HTTP client requests now root callbacks and headers during async operations
+    - **FIX**: `aio_stream_builtins.c` - `stream/on-drain` and new `stream/on-close` use GC roots
+    - **FIX**: `aio_stream_body.c` - Properly invokes `lisp_on_drain` and `lisp_on_close` callbacks; cleans up roots on stream close
+    - **FIX**: `parser.c` - Rewrote `valk_lenv_copy()` to single-pass dynamic array approach to avoid TOCTOU bugs
+    - **Pattern**: Store original callback reference + `valk_gc_add_global_root(&ctx->callback)`, cleanup with `valk_gc_remove_global_root(&ctx->callback)` before freeing context
+    - **Result**: All async callback tests pass; no more crashes from corrupted environments
+
+10. **Fixed Allocator Mismatch Bugs (2025-12-31)** (SUPERSEDED by #11): Initial attempt using deep copying - later replaced with GC rooting as the correct solution.
 
 ### Recent Changes (2025-12-30)
 
@@ -733,11 +744,12 @@ valk_http2_on_request_start(conn, req);  // Metrics hooks internally
 
 ### Verification Checklist
 
-- [ ] Metrics System has no dependencies on AIO
-- [ ] AIO has no `#include "metrics.h"` (except optional hooks)
-- [ ] `aio_sse_stream_registry.c` deleted or gutted
-- [ ] Diagnostics works via Lisp handler
-- [ ] All metrics still collected (no regression)
+- [x] Metrics System core (`metrics_v2.c/h`, `metrics_delta.c/h`) has no AIO dependencies
+- [x] AIO has no `#include "metrics.h"` (uses `metrics_v2.h` for hooks in `aio_http2_session_metrics.h`)
+- [x] `aio_sse_stream_registry.c` deleted
+- [x] Diagnostics works via Lisp handler (`src/modules/aio/metrics-stream.valk`)
+- [x] All metrics still collected (no regression)
+- [x] `aio/slab-buckets` and `aio/diagnostics-state-json` moved from `metrics_builtins.c` to `aio_diagnostics_builtins.c`
 
 ---
 
