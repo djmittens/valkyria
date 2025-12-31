@@ -179,8 +179,9 @@
 ;   (aio/run aio)
 
 (def {*test-async-registry*} {})
-(def {*test-async-pending*} 0)
-(def {*test-async-start-times*} {})
+(def {*test-async-pending-atom*} (atom 0))
+(def {*test-async-passed-atom*} (atom 0))
+(def {*test-async-failed-atom*} (atom 0))
 
 (fun {test/async name body} {
   (def {*test-async-registry*} (join *test-async-registry* (list (list name body))))
@@ -194,12 +195,12 @@
     (if passed
       {do
         (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)
-        (def {*test-passed*} (+ *test-passed* 1))}
+        (atom/add! *test-async-passed-atom* 1)}
       {do
         (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
-        (def {*test-failed*} (+ *test-failed* 1))})
+        (atom/add! *test-async-failed-atom* 1)})
     
-    (def {*test-async-pending*} (- *test-async-pending* 1))
+    (atom/sub! *test-async-pending-atom* 1)
     true
 })
 
@@ -213,7 +214,7 @@
       (*test-async-done-callback* test-name start-time passed)
     }))
     
-    (def {*test-async-pending*} (+ *test-async-pending* 1))
+    (atom/add! *test-async-pending-atom* 1)
     
     (aio/schedule aio 0 (\ {} {
       (test-body done-fn)
@@ -222,10 +223,9 @@
 
 (fun {test/run-async aio & args} {
   do
-    (def {*test-passed*} 0)
-    (def {*test-failed*} 0)
-    (def {*test-skipped*} 0)
-    (def {*test-async-pending*} 0)
+    (atom/set! *test-async-passed-atom* 0)
+    (atom/set! *test-async-failed-atom* 0)
+    (atom/set! *test-async-pending-atom* 0)
     (= {total} (len *test-async-registry*))
     (= {suite-name} *test-suite-name*)
     
@@ -240,9 +240,9 @@
     (map (\ {test} {(*test-start-async-one* aio test)}) *test-async-registry*)
     
     (aio/schedule aio 30000 (\ {} {
-      (if (> *test-async-pending* 0)
+      (if (> (atom/get *test-async-pending-atom*) 0)
         {do
-          (printf "\n❌ TIMEOUT: %ld tests still pending\n" *test-async-pending*)
+          (printf "\n❌ TIMEOUT: %ld tests still pending\n" (atom/get *test-async-pending-atom*))
           (aio/stop aio)
           (shutdown 1)}
         {true})
@@ -254,14 +254,16 @@
 })
 
 (fun {*test-async-check-complete* aio} {
-  (if (== *test-async-pending* 0)
+  (if (== (atom/get *test-async-pending-atom*) 0)
     {do
+      (= {passed} (atom/get *test-async-passed-atom*))
+      (= {failed} (atom/get *test-async-failed-atom*))
       (printf "\n🏁 Test Results: ")
-      (if (== *test-failed* 0)
-        {printf "✨ All %ld tests passed! ✨\n" *test-passed*}
-        {printf "⚠️  %ld passed, %ld failed\n" *test-passed* *test-failed*})
+      (if (== failed 0)
+        {printf "✨ All %ld tests passed! ✨\n" passed}
+        {printf "⚠️  %ld passed, %ld failed\n" passed failed})
       (aio/stop aio)
-      (if (== *test-failed* 0)
+      (if (== failed 0)
         {(shutdown 0)}
         {(shutdown 1)})}
     {(aio/schedule aio 100 (\ {} {(*test-async-check-complete* aio)}))})

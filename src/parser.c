@@ -2266,71 +2266,60 @@ valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
   if (env == nullptr) {
     return nullptr;
   }
-
-  // Performance optimization: Flatten environment chain when copying
-  // Instead of preserving parent chain, collect all bindings into flat mapping
-  // This eliminates exponential copying through environment chains
+  if (env->symbols.items == nullptr || env->vals.items == nullptr) {
+    return nullptr;
+  }
 
   valk_lenv_t* res = valk_mem_alloc(sizeof(valk_lenv_t));
-  res->parent = nullptr;  // Flattened environment has no parent
-  res->allocator = env->allocator;
+  atomic_store(&res->flags, 0);
+  res->parent = nullptr;
+  res->allocator = valk_thread_ctx.allocator;
+  
+  u64 capacity = 16;
+  u64 count = 0;
+  res->symbols.items = valk_mem_alloc(sizeof(char*) * capacity);
+  res->vals.items = valk_mem_alloc(sizeof(valk_lval_t*) * capacity);
+  res->symbols.capacity = capacity;
+  res->vals.capacity = capacity;
 
-  // Count total bindings by walking parent chain (with value masking)
-  // Use a simple linear scan - O(n*m) but environments are typically small
-  u64 total_count = 0;
   for (valk_lenv_t* e = env; e != nullptr; e = e->parent) {
+    if (e->symbols.items == nullptr || e->vals.items == nullptr) break;
     for (u64 i = 0; i < e->symbols.count; i++) {
-      // Check if this symbol is already counted (masked by child scope)
+      if (e->symbols.items[i] == nullptr) continue;
+      
       bool masked = false;
-      for (valk_lenv_t* child = env; child != e; child = child->parent) {
-        for (u64 j = 0; j < child->symbols.count; j++) {
-          if (strcmp(e->symbols.items[i], child->symbols.items[j]) == 0) {
-            masked = true;
-            break;
-          }
+      for (u64 j = 0; j < count; j++) {
+        if (res->symbols.items[j] && strcmp(e->symbols.items[i], res->symbols.items[j]) == 0) {
+          masked = true;
+          break;
         }
-        if (masked) break;
       }
+      
       if (!masked) {
-        total_count++;
-      }
-    }
-  }
-
-  // Initialize dynamic arrays from GC heap
-  res->symbols.items = valk_mem_alloc(sizeof(char*) * total_count);
-  res->symbols.count = total_count;
-  res->symbols.capacity = total_count;
-  res->vals.items = valk_mem_alloc(sizeof(valk_lval_t*) * total_count);
-  res->vals.count = total_count;
-  res->vals.capacity = total_count;
-
-  // Collect all bindings with value masking
-  u64 idx = 0;
-  for (valk_lenv_t* e = env; e != nullptr; e = e->parent) {
-    for (u64 i = 0; i < e->symbols.count; i++) {
-      // Check if this symbol is masked by child scope
-      bool masked = false;
-      for (valk_lenv_t* child = env; child != e; child = child->parent) {
-        for (u64 j = 0; j < child->symbols.count; j++) {
-          if (strcmp(e->symbols.items[i], child->symbols.items[j]) == 0) {
-            masked = true;
-            break;
-          }
+        if (count >= capacity) {
+          u64 new_capacity = capacity * 2;
+          char** new_symbols = valk_mem_alloc(sizeof(char*) * new_capacity);
+          valk_lval_t** new_vals = valk_mem_alloc(sizeof(valk_lval_t*) * new_capacity);
+          memcpy(new_symbols, res->symbols.items, sizeof(char*) * count);
+          memcpy(new_vals, res->vals.items, sizeof(valk_lval_t*) * count);
+          res->symbols.items = new_symbols;
+          res->vals.items = new_vals;
+          capacity = new_capacity;
+          res->symbols.capacity = capacity;
+          res->vals.capacity = capacity;
         }
-        if (masked) break;
-      }
-
-      if (!masked) {
+        
         u64 slen = strlen(e->symbols.items[i]);
-        res->symbols.items[idx] = valk_mem_alloc(slen + 1);
-        memcpy(res->symbols.items[idx], e->symbols.items[i], slen + 1);
-        res->vals.items[idx] = e->vals.items[i];
-        idx++;
+        res->symbols.items[count] = valk_mem_alloc(slen + 1);
+        memcpy(res->symbols.items[count], e->symbols.items[i], slen + 1);
+        res->vals.items[count] = e->vals.items[i];
+        count++;
       }
     }
   }
 
+  res->symbols.count = count;
+  res->vals.count = count;
   return res;
 }
 
@@ -2377,51 +2366,55 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     }
   }
 
-  u64 slen = strlen(key->str);
-  char* new_symbol = valk_mem_alloc(slen + 1);
-  if (!new_symbol) {
-    VALK_RAISE("valk_lenv_put: failed to allocate symbol string for '%s'", key->str);
-    return;
-  }
-  memcpy(new_symbol, key->str, slen + 1);
-
-  if (env->symbols.count >= env->symbols.capacity) {
-    u64 new_capacity =
-        env->symbols.capacity == 0 ? 8 : env->symbols.capacity * 2;
-    char** new_items = valk_mem_alloc(sizeof(char*) * new_capacity);
-    if (!new_items) {
-      valk_mem_free(new_symbol);
-      VALK_RAISE("valk_lenv_put: failed to allocate symbols array (capacity=%llu)", new_capacity);
+  valk_mem_allocator_t *env_alloc = env->allocator ? (valk_mem_allocator_t*)env->allocator 
+                                                   : valk_thread_ctx.allocator;
+  
+  VALK_WITH_ALLOC(env_alloc) {
+    u64 slen = strlen(key->str);
+    char* new_symbol = valk_mem_alloc(slen + 1);
+    if (!new_symbol) {
+      VALK_RAISE("valk_lenv_put: failed to allocate symbol string for '%s'", key->str);
       return;
     }
-    if (env->symbols.count > 0) {
-      // NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) - items non-null when count > 0
-      memcpy(new_items, env->symbols.items, sizeof(char*) * env->symbols.count);
-    }
-    if (env->symbols.items) valk_mem_free(env->symbols.items);
-    env->symbols.items = new_items;
-    env->symbols.capacity = new_capacity;
-  }
-  if (env->vals.count >= env->vals.capacity) {
-    u64 new_capacity = env->vals.capacity == 0 ? 8 : env->vals.capacity * 2;
-    valk_lval_t** new_items =
-        valk_mem_alloc(sizeof(valk_lval_t*) * new_capacity);
-    if (!new_items) {
-      valk_mem_free(new_symbol);
-      VALK_RAISE("valk_lenv_put: failed to allocate vals array (capacity=%llu)", new_capacity);
-      return;
-    }
-    if (env->vals.count > 0) {
-      memcpy(new_items, env->vals.items,
-             sizeof(valk_lval_t*) * env->vals.count);
-    }
-    if (env->vals.items) valk_mem_free(env->vals.items);
-    env->vals.items = new_items;
-    env->vals.capacity = new_capacity;
-  }
+    memcpy(new_symbol, key->str, slen + 1);
 
-  env->symbols.items[env->symbols.count++] = new_symbol;
-  env->vals.items[env->vals.count++] = val;
+    if (env->symbols.count >= env->symbols.capacity) {
+      u64 new_capacity =
+          env->symbols.capacity == 0 ? 8 : env->symbols.capacity * 2;
+      char** new_items = valk_mem_alloc(sizeof(char*) * new_capacity);
+      if (!new_items) {
+        valk_mem_free(new_symbol);
+        VALK_RAISE("valk_lenv_put: failed to allocate symbols array (capacity=%llu)", new_capacity);
+        return;
+      }
+      if (env->symbols.count > 0) {
+        memcpy(new_items, env->symbols.items, sizeof(char*) * env->symbols.count);
+      }
+      if (env->symbols.items) valk_mem_free(env->symbols.items);
+      env->symbols.items = new_items;
+      env->symbols.capacity = new_capacity;
+    }
+    if (env->vals.count >= env->vals.capacity) {
+      u64 new_capacity = env->vals.capacity == 0 ? 8 : env->vals.capacity * 2;
+      valk_lval_t** new_items =
+          valk_mem_alloc(sizeof(valk_lval_t*) * new_capacity);
+      if (!new_items) {
+        valk_mem_free(new_symbol);
+        VALK_RAISE("valk_lenv_put: failed to allocate vals array (capacity=%llu)", new_capacity);
+        return;
+      }
+      if (env->vals.count > 0) {
+        memcpy(new_items, env->vals.items,
+               sizeof(valk_lval_t*) * env->vals.count);
+      }
+      if (env->vals.items) valk_mem_free(env->vals.items);
+      env->vals.items = new_items;
+      env->vals.capacity = new_capacity;
+    }
+
+    env->symbols.items[env->symbols.count++] = new_symbol;
+    env->vals.items[env->vals.count++] = val;
+  }
 }
 
 // Define the key in global scope
@@ -4104,6 +4097,68 @@ static valk_lval_t* valk_builtin_ref_p(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_num(LVAL_TYPE(v) == LVAL_REF ? 1 : 0);
 }
 
+typedef struct {
+  _Atomic long value;
+} valk_atom_t;
+
+static valk_lval_t* valk_builtin_atom(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+  valk_atom_t* atom = malloc(sizeof(valk_atom_t));
+  atomic_store(&atom->value, valk_lval_list_nth(a, 0)->num);
+  return valk_lval_ref("atom", atom, NULL);
+}
+
+static valk_lval_t* valk_builtin_atom_get(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+  LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 0)->ref.type, "atom") == 0,
+              "Expected atom ref, got %s", valk_lval_list_nth(a, 0)->ref.type);
+  valk_atom_t* atom = valk_lval_list_nth(a, 0)->ref.ptr;
+  return valk_lval_num(atomic_load(&atom->value));
+}
+
+static valk_lval_t* valk_builtin_atom_set(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+  LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 0)->ref.type, "atom") == 0,
+              "Expected atom ref, got %s", valk_lval_list_nth(a, 0)->ref.type);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+  valk_atom_t* atom = valk_lval_list_nth(a, 0)->ref.ptr;
+  long new_val = valk_lval_list_nth(a, 1)->num;
+  atomic_store(&atom->value, new_val);
+  return valk_lval_num(new_val);
+}
+
+static valk_lval_t* valk_builtin_atom_add(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+  LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 0)->ref.type, "atom") == 0,
+              "Expected atom ref, got %s", valk_lval_list_nth(a, 0)->ref.type);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+  valk_atom_t* atom = valk_lval_list_nth(a, 0)->ref.ptr;
+  long delta = valk_lval_list_nth(a, 1)->num;
+  long old_val = atomic_fetch_add(&atom->value, delta);
+  return valk_lval_num(old_val + delta);
+}
+
+static valk_lval_t* valk_builtin_atom_sub(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+  LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 0)->ref.type, "atom") == 0,
+              "Expected atom ref, got %s", valk_lval_list_nth(a, 0)->ref.type);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+  valk_atom_t* atom = valk_lval_list_nth(a, 0)->ref.ptr;
+  long delta = valk_lval_list_nth(a, 1)->num;
+  long old_val = atomic_fetch_sub(&atom->value, delta);
+  return valk_lval_num(old_val - delta);
+}
+
 static void __valk_http2_request_release(void* arg) {
   valk_http2_request_t* req = (valk_http2_request_t*)arg;
   // The request and all of its allocations live inside this arena buffer.
@@ -5338,6 +5393,12 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "==", valk_builtin_eq);
   valk_lenv_put_builtin(env, "!=", valk_builtin_ne);
   valk_lenv_put_builtin(env, "str->num", valk_builtin_str_to_num);
+
+  valk_lenv_put_builtin(env, "atom", valk_builtin_atom);
+  valk_lenv_put_builtin(env, "atom/get", valk_builtin_atom_get);
+  valk_lenv_put_builtin(env, "atom/set!", valk_builtin_atom_set);
+  valk_lenv_put_builtin(env, "atom/add!", valk_builtin_atom_add);
+  valk_lenv_put_builtin(env, "atom/sub!", valk_builtin_atom_sub);
 
   // HTTP/2 utility functions
   valk_lenv_put_builtin(env, "http2/request", valk_builtin_http2_request);

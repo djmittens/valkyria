@@ -583,6 +583,10 @@ static void __http2_client_request_connect_cb(void *arg, valk_arc_box *result) {
       valk_lval_t *args = valk_lval_cons(err, valk_lval_nil());
       valk_lval_eval_call(ctx->env, ctx->callback, args);
     }
+    valk_gc_remove_global_root(&ctx->callback);
+    if (ctx->headers) {
+      valk_gc_remove_global_root(&ctx->headers);
+    }
     free(ctx->host);
     free(ctx->path);
     valk_arc_release(ctx->connect_future);
@@ -667,6 +671,10 @@ static void __http2_client_request_response_cb(void *arg, valk_arc_box *result) 
     }
   }
 
+  valk_gc_remove_global_root(&ctx->callback);
+  if (ctx->headers) {
+    valk_gc_remove_global_root(&ctx->headers);
+  }
   free(ctx->host);
   free(ctx->path);
   if (ctx->connect_future) {
@@ -684,6 +692,7 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
                                              const char *path,
                                              valk_lval_t *headers,
                                              valk_lval_t *callback) {
+  UNUSED(e);
   VALK_INFO("http2/client-request: %s:%d%s (with %zu headers)", host, port, path,
             headers ? valk_lval_list_count(headers) : 0);
 
@@ -694,11 +703,14 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
   ctx->path = strdup(path);
   ctx->client_box = nullptr;
 
-  VALK_WITH_ALLOC(&valk_malloc_allocator) {
-    ctx->callback = valk_lval_copy(callback);
-    ctx->headers = headers ? valk_lval_copy(headers) : nullptr;
+  ctx->callback = callback;
+  ctx->headers = headers;
+  ctx->env = callback->fun.env;
+  
+  valk_gc_add_global_root(&ctx->callback);
+  if (ctx->headers) {
+    valk_gc_add_global_root(&ctx->headers);
   }
-  ctx->env = e;
 
   valk_future *connect_future = valk_aio_http2_connect_host(sys, host, port, host);
   ctx->connect_future = connect_future;

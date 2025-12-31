@@ -16,6 +16,15 @@ This document defines the target architecture for Valkyria's I/O and networking 
 | Phase 6: Complexity Reduction | **Complete** | All 17 `#ifdef` blocks consolidated into helper functions (R6.4) |
 | Phase 7: Generic Streaming | **Complete** | Created generic streaming API; SSE now available as Lisp module |
 
+### Recent Changes (2025-12-31)
+
+10. **Fixed Allocator Mismatch Bugs (2025-12-31)**: During refactoring audit, discovered and fixed critical memory issues:
+    - **FIX 1**: `valk_lenv_copy` at parser.c:2276 was copying the source env's allocator pointer instead of using the current thread-local allocator. This caused double-free when copied envs were modified with a different active allocator.
+    - **FIX 2**: `valk_http2_client_request_with_headers_impl` at aio_http2_client.c was storing a raw pointer to the caller's environment (`ctx->env = e`). Changed to use `valk_aio_deep_copy_callback()` which properly deep-copies the callback including its captured environment. 
+    - **CREATED**: `valk_aio_deep_copy_callback()` - exported version of `__deep_copy_lval_for_timer()` for use by HTTP client
+    - **Result**: No more crashes on test exit. All C tests pass. Basic valk tests pass.
+    - **Remaining**: Some async batch tests (`http2/health-check-all`, `http2/fetch-all`) still timing out - appears to be related to continuation-passing style callbacks not receiving expected arguments. Needs further investigation.
+
 ### Recent Changes (2025-12-30)
 
 9. **Phase 7 Complete - Generic Streaming Responses (2025-12-30)**: Created generic streaming API:

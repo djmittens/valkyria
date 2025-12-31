@@ -1606,6 +1606,20 @@ static valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t*
       }
       break;
 
+    case LVAL_REF:
+      // Copy ref type string if it's in scratch
+      if (new_val->ref.type != nullptr && valk_ptr_in_arena(ctx->scratch, new_val->ref.type)) {
+        u64 len = strlen(v->ref.type) + 1;
+        VALK_WITH_ALLOC((void*)ctx->heap) {
+          new_val->ref.type = valk_mem_alloc(len);
+        }
+        if (new_val->ref.type) {
+          memcpy(new_val->ref.type, v->ref.type, len);
+          ctx->bytes_copied += len;
+        }
+      }
+      break;
+
     default:
       break;
   }

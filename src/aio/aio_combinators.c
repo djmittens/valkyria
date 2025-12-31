@@ -77,116 +77,7 @@ static void __interval_init_on_loop(void *ctx) {
   free(init_ctx);
 }
 
-extern valk_lenv_t* valk_lenv_copy(valk_lenv_t* env);
 extern valk_lval_t* valk_lval_copy(valk_lval_t* lval);
-
-#define TIMER_COPY_VISITED_INITIAL_CAP 32
-
-typedef struct {
-  valk_lenv_t** orig;
-  valk_lenv_t** copy;
-  sz count;
-  sz capacity;
-} timer_copy_visited_t;
-
-static void timer_copy_visited_init(timer_copy_visited_t* v) {
-  v->orig = malloc(TIMER_COPY_VISITED_INITIAL_CAP * sizeof(valk_lenv_t*));
-  v->copy = malloc(TIMER_COPY_VISITED_INITIAL_CAP * sizeof(valk_lenv_t*));
-  v->count = 0;
-  v->capacity = TIMER_COPY_VISITED_INITIAL_CAP;
-}
-
-static void timer_copy_visited_free(timer_copy_visited_t* v) {
-  free(v->orig);
-  free(v->copy);
-  v->orig = NULL;
-  v->copy = NULL;
-  v->count = 0;
-  v->capacity = 0;
-}
-
-static valk_lenv_t* timer_copy_visited_lookup(timer_copy_visited_t* v, valk_lenv_t* orig) {
-  for (sz i = 0; i < v->count; i++) {
-    if (v->orig[i] == orig) return v->copy[i];
-  }
-  return NULL;
-}
-
-static void timer_copy_visited_add(timer_copy_visited_t* v, valk_lenv_t* orig, valk_lenv_t* copy) {
-  if (v->count >= v->capacity) {
-    VALK_ASSERT(v->capacity > 0, "capacity must be initialized before use");
-    sz new_cap = v->capacity * 2;
-    v->orig = realloc(v->orig, new_cap * sizeof(valk_lenv_t*));
-    v->copy = realloc(v->copy, new_cap * sizeof(valk_lenv_t*));
-    v->capacity = new_cap;
-  }
-  v->orig[v->count] = orig;
-  v->copy[v->count] = copy;
-  v->count++;
-}
-
-static valk_lval_t* __deep_copy_lval_for_timer_impl(valk_lval_t* lval, timer_copy_visited_t* visited);
-
-static valk_lenv_t* __deep_copy_env_for_timer_impl(valk_lenv_t* env, timer_copy_visited_t* visited) {
-  if (env == NULL) return NULL;
-  
-  valk_lenv_t* cached = timer_copy_visited_lookup(visited, env);
-  if (cached) return cached;
-  
-  valk_lenv_t* res = valk_lenv_copy(env);
-  if (!res) return NULL;
-  
-  timer_copy_visited_add(visited, env, res);
-  
-  for (u64 i = 0; i < res->vals.count; i++) {
-    valk_lval_t* val = res->vals.items[i];
-    if (val) {
-      res->vals.items[i] = __deep_copy_lval_for_timer_impl(val, visited);
-    }
-  }
-  
-  if (res->parent) {
-    res->parent = __deep_copy_env_for_timer_impl(res->parent, visited);
-  }
-  
-  return res;
-}
-
-static valk_lval_t* __deep_copy_lval_for_timer_impl(valk_lval_t* lval, timer_copy_visited_t* visited) {
-  if (lval == NULL) return NULL;
-  
-  valk_lval_t* res = valk_lval_copy(lval);
-  if (!res) return NULL;
-  
-  switch (LVAL_TYPE(lval)) {
-    case LVAL_FUN:
-      if (!lval->fun.builtin) {
-        res->fun.body = __deep_copy_lval_for_timer_impl(lval->fun.body, visited);
-        res->fun.formals = __deep_copy_lval_for_timer_impl(lval->fun.formals, visited);
-        if (lval->fun.env) {
-          res->fun.env = __deep_copy_env_for_timer_impl(lval->fun.env, visited);
-        }
-      }
-      break;
-    case LVAL_CONS:
-    case LVAL_QEXPR:
-      res->cons.head = __deep_copy_lval_for_timer_impl(lval->cons.head, visited);
-      res->cons.tail = __deep_copy_lval_for_timer_impl(lval->cons.tail, visited);
-      break;
-    default:
-      break;
-  }
-  
-  return res;
-}
-
-static valk_lval_t* __deep_copy_lval_for_timer(valk_lval_t* lval) {
-  timer_copy_visited_t visited;
-  timer_copy_visited_init(&visited);
-  valk_lval_t* result = __deep_copy_lval_for_timer_impl(lval, &visited);
-  timer_copy_visited_free(&visited);
-  return result;
-}
 
 valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
                                 valk_lval_t* callback, valk_lenv_t* env) {
@@ -200,19 +91,7 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
     return valk_lval_err("Failed to allocate interval timer");
   }
 
-  valk_lval_t *heap_callback;
-  valk_gc_malloc_heap_t *gc_heap = valk_thread_ctx.heap;
-  if (gc_heap) {
-    VALK_WITH_ALLOC((valk_mem_allocator_t*)gc_heap) {
-      heap_callback = __deep_copy_lval_for_timer(callback);
-    }
-  } else {
-    VALK_WITH_ALLOC(&valk_malloc_allocator) {
-      heap_callback = __deep_copy_lval_for_timer(callback);
-    }
-  }
-
-  timer_data->callback = heap_callback;
+  timer_data->callback = callback;
   timer_data->interval_id = __atomic_fetch_add(&g_interval_id, 1, __ATOMIC_RELAXED);
   timer_data->stopped = false;
   timer_data->timer.data = timer_data;
@@ -245,6 +124,9 @@ static void __schedule_timer_cb(uv_timer_t *handle) {
     
     valk_lval_t *args = valk_lval_nil();
     valk_lenv_t *env = timer_data->callback->fun.env;
+    
+
+    
     valk_lval_t *result = valk_lval_eval_call(env, timer_data->callback, args);
     if (LVAL_TYPE(result) == LVAL_ERR) {
       VALK_WARN("aio/schedule callback returned error: %s", result->str);
@@ -296,19 +178,7 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
     return valk_lval_err("Failed to allocate timer");
   }
 
-  valk_lval_t *heap_callback;
-  valk_gc_malloc_heap_t *gc_heap = valk_thread_ctx.heap;
-  if (gc_heap) {
-    VALK_WITH_ALLOC((valk_mem_allocator_t*)gc_heap) {
-      heap_callback = __deep_copy_lval_for_timer(callback);
-    }
-  } else {
-    VALK_WITH_ALLOC(&valk_malloc_allocator) {
-      heap_callback = __deep_copy_lval_for_timer(callback);
-    }
-  }
-
-  timer_data->callback = heap_callback;
+  timer_data->callback = callback;
   timer_data->timer.data = timer_data;
 
   valk_gc_add_global_root(&timer_data->callback);

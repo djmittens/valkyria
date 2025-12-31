@@ -6,11 +6,11 @@
 (load "src/modules/test.valk")
 
 (fun {reverse l} {
-  (fun {reverse-helper acc remaining} {
+  (= {reverse-helper} (\ {acc remaining} {
     (if (== remaining nil)
       {acc}
       {(reverse-helper (join (list (head remaining)) acc) (tail remaining))})
-  })
+  }))
   (reverse-helper nil l)
 })
 
