@@ -9,6 +9,7 @@
 #include <uv.h>
 
 #include "aio/aio.h"
+#include "aio/aio_stream_body.h"
 #include "collections.h"
 #include "common.h"
 #include "coverage.h"
@@ -21,10 +22,8 @@
 
 #ifdef VALK_METRICS_ENABLED
 #include "aio/aio_metrics.h"
-#include "aio/aio_sse.h"
 #include "metrics_v2.h"
 #include "metrics_delta.h"
-// Forward declare metrics builtins registration (from metrics_builtins.c)
 void valk_register_metrics_builtins(valk_lenv_t *env);
 #endif
 
@@ -3684,6 +3683,116 @@ static valk_lval_t* valk_builtin_make_string(valk_lenv_t* e, valk_lval_t* a) {
   return res;
 }
 
+static valk_lval_t* valk_builtin_str_split(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+
+  valk_lval_t* str_arg = valk_lval_list_nth(a, 0);
+  valk_lval_t* delim_arg = valk_lval_list_nth(a, 1);
+
+  LVAL_ASSERT_TYPE(a, str_arg, LVAL_STR);
+  LVAL_ASSERT_TYPE(a, delim_arg, LVAL_STR);
+
+  const char* str = str_arg->str;
+  const char* delim = delim_arg->str;
+  u64 delim_len = strlen(delim);
+
+  if (delim_len == 0) {
+    return valk_lval_err("str/split: delimiter cannot be empty");
+  }
+
+  u64 count = 0;
+  const char* p = str;
+  while ((p = strstr(p, delim)) != NULL) {
+    count++;
+    p += delim_len;
+  }
+  count++;
+
+  valk_lval_t** parts = malloc(count * sizeof(valk_lval_t*));
+  if (!parts) {
+    return valk_lval_err("str/split: out of memory");
+  }
+
+  u64 idx = 0;
+  const char* start = str;
+  const char* found;
+  while ((found = strstr(start, delim)) != NULL) {
+    u64 part_len = found - start;
+    parts[idx++] = valk_lval_str_n(start, part_len);
+    start = found + delim_len;
+  }
+  parts[idx++] = valk_lval_str(start);
+
+  valk_lval_t* result = valk_lval_nil();
+  for (u64 i = count; i > 0; i--) {
+    result = valk_lval_cons(parts[i - 1], result);
+  }
+
+  free(parts);
+  return result;
+}
+
+static valk_lval_t* valk_builtin_str_replace(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+
+  valk_lval_t* str_arg = valk_lval_list_nth(a, 0);
+  valk_lval_t* from_arg = valk_lval_list_nth(a, 1);
+  valk_lval_t* to_arg = valk_lval_list_nth(a, 2);
+
+  LVAL_ASSERT_TYPE(a, str_arg, LVAL_STR);
+  LVAL_ASSERT_TYPE(a, from_arg, LVAL_STR);
+  LVAL_ASSERT_TYPE(a, to_arg, LVAL_STR);
+
+  const char* str = str_arg->str;
+  const char* from = from_arg->str;
+  const char* to = to_arg->str;
+  u64 str_len = strlen(str);
+  u64 from_len = strlen(from);
+  u64 to_len = strlen(to);
+
+  if (from_len == 0) {
+    return valk_lval_err("str/replace: search string cannot be empty");
+  }
+
+  u64 count = 0;
+  const char* p = str;
+  while ((p = strstr(p, from)) != NULL) {
+    count++;
+    p += from_len;
+  }
+
+  if (count == 0) {
+    return valk_lval_str(str);
+  }
+
+  u64 new_len = str_len + count * (to_len - from_len);
+  char* result = malloc(new_len + 1);
+  if (!result) {
+    return valk_lval_err("str/replace: out of memory");
+  }
+
+  char* dest = result;
+  const char* src = str;
+  const char* found;
+
+  while ((found = strstr(src, from)) != NULL) {
+    u64 prefix_len = found - src;
+    memcpy(dest, src, prefix_len);
+    dest += prefix_len;
+    memcpy(dest, to, to_len);
+    dest += to_len;
+    src = found + from_len;
+  }
+
+  strcpy(dest, src);
+
+  valk_lval_t* res = valk_lval_str(result);
+  free(result);
+  return res;
+}
+
 // Get current time in microseconds
 static valk_lval_t* valk_builtin_time_us(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -5049,6 +5158,29 @@ static valk_lval_t* valk_builtin_aio_schedule(valk_lenv_t* e, valk_lval_t* a) {
   return valk_aio_schedule(sys, delay_ms, callback, e);
 }
 
+// aio/interval: (aio/interval aio interval-ms callback) -> interval-id
+// Schedules a callback to run repeatedly every interval-ms milliseconds.
+// Callback should return :stop to cancel the interval.
+static valk_lval_t* valk_builtin_aio_interval(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  valk_lval_t* interval_arg = valk_lval_list_nth(a, 1);
+  valk_lval_t* callback = valk_lval_list_nth(a, 2);
+
+  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
+  LVAL_ASSERT_TYPE(a, interval_arg, LVAL_NUM);
+  LVAL_ASSERT_TYPE(a, callback, LVAL_FUN);
+
+  if (strcmp(aio_ref->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/interval: first argument must be an AIO system");
+  }
+
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  u64 interval_ms = (u64)interval_arg->num;
+
+  return valk_aio_interval(sys, interval_ms, callback, e);
+}
+
 // exit: (exit code) -> never returns; terminates process with status code
 static valk_lval_t* valk_builtin_exit(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -5168,6 +5300,8 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "println", valk_builtin_println);
   valk_lenv_put_builtin(env, "str", valk_builtin_str);
   valk_lenv_put_builtin(env, "make-string", valk_builtin_make_string);
+  valk_lenv_put_builtin(env, "str/split", valk_builtin_str_split);
+  valk_lenv_put_builtin(env, "str/replace", valk_builtin_str_replace);
   valk_lenv_put_builtin(env, "time-us", valk_builtin_time_us);
   valk_lenv_put_builtin(env, "sleep", valk_builtin_sleep);
   valk_lenv_put_builtin(env, "stack-depth", valk_builtin_stack_depth);
@@ -5235,6 +5369,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
                         valk_builtin_aio_system_stats_prometheus);
 
   valk_lenv_put_builtin(env, "aio/schedule", valk_builtin_aio_schedule);
+  valk_lenv_put_builtin(env, "aio/interval", valk_builtin_aio_interval);
 
   // HTTP Client Metrics Builtins
   valk_lenv_put_builtin(env, "http-client/register",
@@ -5273,10 +5408,10 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   // HTTP request accessor builtins (from aio_http_builtins.c)
   valk_register_http_request_builtins(env);
 
-#ifdef VALK_METRICS_ENABLED
-  // SSE (Server-Sent Events) builtins (from aio_sse_builtins.c)
-  valk_register_sse_builtins(env);
+  // Generic streaming response builtins (from aio_stream_builtins.c)
+  valk_register_stream_builtins(env);
 
+#ifdef VALK_METRICS_ENABLED
   // Metrics V2 builtins (from metrics_builtins.c)
   valk_register_metrics_builtins(env);
 #endif

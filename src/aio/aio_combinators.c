@@ -1,11 +1,152 @@
 #include "aio_internal.h"
 
 static void __schedule_timer_close_cb(uv_handle_t *handle) {
-  free(handle->data);
+  valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)handle->data;
+  if (timer_data) {
+    free(timer_data);
+  }
 }
 
 static void __sleep_timer_close_cb(uv_handle_t *handle) {
   UNUSED(handle);
+}
+
+static u64 g_interval_id = 1;
+
+static void __interval_timer_close_cb(uv_handle_t *handle) {
+  valk_interval_timer_t *timer_data = (valk_interval_timer_t *)handle->data;
+  if (timer_data) {
+    if (timer_data->callback) {
+      valk_gc_remove_global_root(&timer_data->callback);
+    }
+    free(timer_data);
+  }
+}
+
+static void __interval_timer_cb(uv_timer_t *handle) {
+  VALK_GC_SAFE_POINT();
+
+  valk_interval_timer_t *timer_data = (valk_interval_timer_t *)handle->data;
+  if (!timer_data || timer_data->stopped) {
+    return;
+  }
+
+  if (timer_data->callback) {
+    valk_lval_t *args = valk_lval_nil();
+    valk_lenv_t *env = timer_data->callback->fun.env;
+    valk_lval_t *result = valk_lval_eval_call(env, timer_data->callback, args);
+
+    if (LVAL_TYPE(result) == LVAL_ERR) {
+      VALK_WARN("aio/interval callback returned error: %s", result->str);
+    }
+
+    if (LVAL_TYPE(result) == LVAL_SYM && strcmp(result->str, ":stop") == 0) {
+      timer_data->stopped = true;
+      uv_timer_stop(handle);
+      uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    }
+  }
+}
+
+typedef struct {
+  valk_aio_system_t *sys;
+  valk_interval_timer_t *timer_data;
+  u64 interval_ms;
+} valk_interval_init_ctx_t;
+
+static void __interval_init_on_loop(void *ctx) {
+  valk_interval_init_ctx_t *init_ctx = (valk_interval_init_ctx_t *)ctx;
+  valk_interval_timer_t *timer_data = init_ctx->timer_data;
+  
+  uv_loop_t *loop = init_ctx->sys->eventloop;
+  int r = uv_timer_init(loop, &timer_data->timer);
+  if (r != 0) {
+    valk_gc_remove_global_root(&timer_data->callback);
+    free(timer_data);
+    free(init_ctx);
+    return;
+  }
+
+  r = uv_timer_start(&timer_data->timer, __interval_timer_cb, init_ctx->interval_ms, init_ctx->interval_ms);
+  if (r != 0) {
+    valk_gc_remove_global_root(&timer_data->callback);
+    uv_close((uv_handle_t *)&timer_data->timer, NULL);
+    free(timer_data);
+  }
+  
+  free(init_ctx);
+}
+
+extern valk_lenv_t* valk_lenv_copy(valk_lenv_t* env);
+extern valk_lval_t* valk_lval_copy(valk_lval_t* lval);
+
+static valk_lenv_t* __deep_copy_env_for_timer(valk_lenv_t* env) {
+  if (env == NULL) return NULL;
+  
+  valk_lenv_t* res = valk_lenv_copy(env);
+  if (!res) return NULL;
+  
+  for (u64 i = 0; i < res->vals.count; i++) {
+    valk_lval_t* val = res->vals.items[i];
+    if (val && LVAL_ALLOC(val) == LVAL_ALLOC_SCRATCH) {
+      res->vals.items[i] = valk_lval_copy(val);
+    }
+  }
+  
+  return res;
+}
+
+valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
+                                valk_lval_t* callback, valk_lenv_t* env) {
+  UNUSED(env);
+  if (!sys || !sys->eventloop) {
+    return valk_lval_err("aio/interval: invalid AIO system");
+  }
+
+  valk_interval_timer_t *timer_data = aligned_alloc(alignof(valk_interval_timer_t), sizeof(valk_interval_timer_t));
+  if (!timer_data) {
+    return valk_lval_err("Failed to allocate interval timer");
+  }
+
+  valk_lval_t *heap_callback;
+  valk_gc_malloc_heap_t *gc_heap = valk_thread_ctx.heap;
+  if (gc_heap) {
+    VALK_WITH_ALLOC((valk_mem_allocator_t*)gc_heap) {
+      heap_callback = valk_lval_copy(callback);
+      if (heap_callback->fun.env) {
+        heap_callback->fun.env = __deep_copy_env_for_timer(heap_callback->fun.env);
+      }
+    }
+  } else {
+    VALK_WITH_ALLOC(&valk_malloc_allocator) {
+      heap_callback = valk_lval_copy(callback);
+      if (heap_callback->fun.env) {
+        heap_callback->fun.env = __deep_copy_env_for_timer(heap_callback->fun.env);
+      }
+    }
+  }
+
+  timer_data->callback = heap_callback;
+  timer_data->interval_id = __atomic_fetch_add(&g_interval_id, 1, __ATOMIC_RELAXED);
+  timer_data->stopped = false;
+  timer_data->timer.data = timer_data;
+
+  valk_gc_add_global_root(&timer_data->callback);
+
+  valk_interval_init_ctx_t *init_ctx = malloc(sizeof(valk_interval_init_ctx_t));
+  if (!init_ctx) {
+    valk_gc_remove_global_root(&timer_data->callback);
+    free(timer_data);
+    return valk_lval_err("Failed to allocate interval init context");
+  }
+  
+  init_ctx->sys = sys;
+  init_ctx->timer_data = timer_data;
+  init_ctx->interval_ms = interval_ms;
+  
+  valk_aio_enqueue_task(sys, __interval_init_on_loop, init_ctx);
+
+  return valk_lval_num((long)timer_data->interval_id);
 }
 
 static void __schedule_timer_cb(uv_timer_t *handle) {
@@ -13,9 +154,12 @@ static void __schedule_timer_cb(uv_timer_t *handle) {
   
   valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)handle->data;
 
-  if (timer_data->callback && timer_data->env) {
+  if (timer_data->callback) {
+    valk_gc_remove_global_root(&timer_data->callback);
+    
     valk_lval_t *args = valk_lval_nil();
-    valk_lval_t *result = valk_lval_eval_call(timer_data->env, timer_data->callback, args);
+    valk_lenv_t *env = timer_data->callback->fun.env;
+    valk_lval_t *result = valk_lval_eval_call(env, timer_data->callback, args);
     if (LVAL_TYPE(result) == LVAL_ERR) {
       VALK_WARN("aio/schedule callback returned error: %s", result->str);
     }
@@ -25,8 +169,38 @@ static void __schedule_timer_cb(uv_timer_t *handle) {
   uv_close((uv_handle_t *)handle, __schedule_timer_close_cb);
 }
 
+typedef struct {
+  valk_aio_system_t *sys;
+  valk_schedule_timer_t *timer_data;
+  u64 delay_ms;
+} valk_schedule_init_ctx_t;
+
+static void __schedule_init_on_loop(void *ctx) {
+  valk_schedule_init_ctx_t *init_ctx = (valk_schedule_init_ctx_t *)ctx;
+  valk_schedule_timer_t *timer_data = init_ctx->timer_data;
+  
+  uv_loop_t *loop = init_ctx->sys->eventloop;
+  int r = uv_timer_init(loop, &timer_data->timer);
+  if (r != 0) {
+    valk_gc_remove_global_root(&timer_data->callback);
+    free(timer_data);
+    free(init_ctx);
+    return;
+  }
+
+  r = uv_timer_start(&timer_data->timer, __schedule_timer_cb, init_ctx->delay_ms, 0);
+  if (r != 0) {
+    valk_gc_remove_global_root(&timer_data->callback);
+    uv_close((uv_handle_t *)&timer_data->timer, NULL);
+    free(timer_data);
+  }
+  
+  free(init_ctx);
+}
+
 valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
                                 valk_lval_t* callback, valk_lenv_t* env) {
+  UNUSED(env);
   if (!sys || !sys->eventloop) {
     return valk_lval_err("aio/schedule: invalid AIO system");
   }
@@ -37,30 +211,41 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
   }
 
   valk_lval_t *heap_callback;
-  valk_lenv_t *heap_env;
-  VALK_WITH_ALLOC(&valk_malloc_allocator) {
-    heap_callback = valk_lval_copy(callback);
-    heap_env = valk_lenv_copy(env);
+  valk_gc_malloc_heap_t *gc_heap = valk_thread_ctx.heap;
+  if (gc_heap) {
+    VALK_WITH_ALLOC((valk_mem_allocator_t*)gc_heap) {
+      heap_callback = valk_lval_copy(callback);
+      if (heap_callback->fun.env) {
+        heap_callback->fun.env = valk_lenv_copy(heap_callback->fun.env);
+      }
+    }
+  } else {
+    VALK_WITH_ALLOC(&valk_malloc_allocator) {
+      heap_callback = valk_lval_copy(callback);
+      if (heap_callback->fun.env) {
+        heap_callback->fun.env = valk_lenv_copy(heap_callback->fun.env);
+      }
+    }
   }
 
   timer_data->callback = heap_callback;
-  timer_data->env = heap_env;
   timer_data->timer.data = timer_data;
 
-  uv_loop_t *loop = sys->eventloop;
-  int r = uv_timer_init(loop, &timer_data->timer);
-  if (r != 0) {
-    free(timer_data);
-    return valk_lval_err("Failed to initialize timer");
-  }
+  valk_gc_add_global_root(&timer_data->callback);
 
-  r = uv_timer_start(&timer_data->timer, __schedule_timer_cb, (unsigned long long)delay_ms, 0);
-  if (r != 0) {
+  valk_schedule_init_ctx_t *init_ctx = malloc(sizeof(valk_schedule_init_ctx_t));
+  if (!init_ctx) {
+    valk_gc_remove_global_root(&timer_data->callback);
     free(timer_data);
-    return valk_lval_err("Failed to start timer");
+    return valk_lval_err("Failed to allocate schedule init context");
   }
+  
+  init_ctx->sys = sys;
+  init_ctx->timer_data = timer_data;
+  init_ctx->delay_ms = delay_ms;
+  
+  valk_aio_enqueue_task(sys, __schedule_init_on_loop, init_ctx);
 
-  VALK_INFO("aio/schedule: timer started for %lu ms", (unsigned long)delay_ms);
   return valk_lval_nil();
 }
 

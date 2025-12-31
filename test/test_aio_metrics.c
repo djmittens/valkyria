@@ -140,8 +140,8 @@ void test_metrics_json_output(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(strstr(json, "\"bytes\"") != NULL,
                    "JSON should contain bytes");
 
-  // Check values
-  VALK_TEST_ASSERT(strstr(json, "\"total\": 1") != NULL,
+  // Check values (compact JSON has no spaces after colons)
+  VALK_TEST_ASSERT(strstr(json, "\"total\":1") != NULL,
                    "JSON should show 1 connection/stream/request");
 
   free(json);
@@ -792,9 +792,9 @@ void test_combined_json_output(VALK_TEST_ARGS()) {
                    "JSON should contain streams section");
   VALK_TEST_ASSERT(strstr(json, "\"bytes\"") != NULL,
                    "JSON should contain bytes section");
-  VALK_TEST_ASSERT(strstr(json, "\"servers\": 1") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"servers\":1") != NULL,
                    "JSON should show 1 server");
-  VALK_TEST_ASSERT(strstr(json, "\"arenas_used\": 1") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"arenas_used\":1") != NULL,
                    "JSON should show 1 arena used");
 
   free(json);

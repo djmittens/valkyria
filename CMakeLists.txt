@@ -90,15 +90,14 @@ set(VALKYRIA_SOURCES
   src/aio/aio_uv.c
   src/aio/aio_ssl.c
   src/aio/aio_alloc.c
-  src/aio/aio_sse.c
   src/aio/aio_conn_io.c
-  src/aio/aio_conn_admission.c
-  src/aio/aio_pressure.c
+  src/aio/aio_overload_admission.c
+  src/aio/aio_overload_state.c
   src/aio/aio_body_buffer.c
   src/aio/aio_async.c
   src/aio/aio_combinators.c
-  src/aio/aio_pending_stream.c
-  src/aio/aio_backpressure.c
+  src/aio/aio_overload_deferred.c
+  src/aio/aio_overload_backpressure.c
   # HTTP/2 modular components
   src/aio/aio_http2_conn.c
   src/aio/aio_http2_server.c
@@ -110,7 +109,10 @@ set(VALKYRIA_SOURCES
   src/aio/aio_task_queue.c
   src/aio/aio_chase_lev.c
   src/aio/aio_maintenance.c
-  src/aio/aio_sse_conn_tracking.c
+  # Generic streaming response body
+  src/aio/aio_stream_body.c
+  src/aio/aio_stream_body_conn.c
+  src/aio/aio_stream_builtins.c
   # IO ops abstraction layer
   src/aio/aio_ops.c
   src/aio/io/io_loop_ops_uv.c
@@ -138,12 +140,6 @@ if(VALK_METRICS)
   list(APPEND VALKYRIA_SOURCES src/pool_metrics.c)
   # Event loop metrics for libuv loops
   list(APPEND VALKYRIA_SOURCES src/event_loop_metrics.c)
-  # SSE diagnostics for memory visualization
-  list(APPEND VALKYRIA_SOURCES src/aio/aio_sse_diagnostics.c)
-  # SSE stream registry for global timer management
-  list(APPEND VALKYRIA_SOURCES src/aio/aio_sse_stream_registry.c)
-  # SSE builtins for Lisp API
-  list(APPEND VALKYRIA_SOURCES src/aio/aio_sse_builtins.c)
 endif()
 
 add_library(valkyria ${VALKYRIA_SOURCES})
@@ -266,12 +262,7 @@ if(VALK_METRICS)
 endif()
 include_directories(test_aio_load_shedding src/)
 
-add_executable(test_aio_sse_integration test/test_aio_sse_integration.c test/testing.c)
-target_link_libraries(test_aio_sse_integration PRIVATE "-lc" valkyria)
-if(VALK_METRICS)
-  target_compile_definitions(test_aio_sse_integration PRIVATE VALK_METRICS_ENABLED=1)
-endif()
-include_directories(test_aio_sse_integration src/)
+
 
 # Metrics tests (only built when VALK_METRICS is enabled)
 if(VALK_METRICS)
@@ -288,15 +279,6 @@ if(VALK_METRICS)
   add_executable(test_eval_metrics test/test_eval_metrics.c test/testing.c)
   target_link_libraries(test_eval_metrics PRIVATE "-lc" valkyria)
   include_directories(test_eval_metrics src/)
-
-  add_executable(test_sse_diagnostics test/test_sse_diagnostics.c test/testing.c)
-  target_link_libraries(test_sse_diagnostics PRIVATE "-lc" valkyria)
-  target_compile_definitions(test_sse_diagnostics PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_sse_diagnostics src/)
-
-  add_executable(test_sse test/test_sse.c test/testing.c)
-  target_link_libraries(test_sse PRIVATE "-lc" valkyria)
-  include_directories(test_sse src/)
 
   add_executable(test_metrics_v2 test/test_metrics_v2.c test/testing.c)
   target_link_libraries(test_metrics_v2 PRIVATE "-lc" valkyria)
@@ -330,25 +312,12 @@ if(VALK_METRICS)
   target_compile_definitions(test_event_loop_metrics_unit PRIVATE VALK_METRICS_ENABLED=1)
   include_directories(test_event_loop_metrics_unit src/)
 
-  add_executable(test_sse_core test/unit/test_sse_core.c test/testing.c)
-  target_link_libraries(test_sse_core PRIVATE "-lc" valkyria)
-  target_compile_definitions(test_sse_core PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_sse_core src/)
-
   add_executable(test_metrics_builtins test/unit/test_metrics_builtins.c test/testing.c)
   target_link_libraries(test_metrics_builtins PRIVATE "-lc" valkyria)
   target_compile_definitions(test_metrics_builtins PRIVATE VALK_METRICS_ENABLED=1)
   include_directories(test_metrics_builtins src/)
 
-  add_executable(test_sse_registry_unit test/unit/test_sse_registry.c test/testing.c)
-  target_link_libraries(test_sse_registry_unit PRIVATE "-lc" valkyria)
-  target_compile_definitions(test_sse_registry_unit PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_sse_registry_unit src/)
 
-  add_executable(test_sse_builtins_unit test/unit/test_sse_builtins.c test/testing.c)
-  target_link_libraries(test_sse_builtins_unit PRIVATE "-lc" valkyria)
-  target_compile_definitions(test_sse_builtins_unit PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_sse_builtins_unit src/)
 endif()
 
 add_executable(test_concurrency test/unit/test_concurrency.c test/testing.c)
@@ -435,7 +404,4 @@ add_executable(test_conn_io test/unit/test_conn_io.c test/testing.c)
 target_link_libraries(test_conn_io PRIVATE "-lc" valkyria)
 include_directories(test_conn_io src/)
 
-add_executable(test_sse_stream_registry_unit test/unit/test_sse_stream_registry.c test/testing.c)
-target_link_libraries(test_sse_stream_registry_unit PRIVATE "-lc" valkyria)
-target_compile_definitions(test_sse_stream_registry_unit PRIVATE VALK_METRICS_ENABLED=1)
-include_directories(test_sse_stream_registry_unit src/)
+

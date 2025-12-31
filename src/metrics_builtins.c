@@ -7,7 +7,6 @@
 
 #include "metrics_v2.h"
 #include "metrics_delta.h"
-#include "aio/aio_sse_diagnostics.h"
 #include "aio/aio.h"
 #include "memory.h"
 #include "parser.h"
@@ -549,7 +548,26 @@ static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a
 }
 #endif
 
+static void write_slab_json(char **p, char *end, const char *name, valk_slab_t *slab) {
+  if (!slab || *p >= end - 100) return;
+
+  u64 used = slab->numItems - slab->numFree;
+  u64 total = slab->numItems;
+  u64 hwm = slab->peakUsed;
+  u64 overflow = slab->overflowCount;
+
+  int n = snprintf(*p, end - *p,
+    "{\"name\":\"%s\",\"used\":%llu,\"total\":%llu,\"hwm\":%llu,\"overflow\":%llu}",
+    name,
+    (unsigned long long)used,
+    (unsigned long long)total,
+    (unsigned long long)hwm,
+    (unsigned long long)overflow);
+  if (n > 0 && *p + n < end) *p += n;
+}
+
 // (aio/diagnostics-state-json sys) -> json-string
+// Returns memory diagnostics for the debug dashboard
 static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
@@ -561,24 +579,114 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk
   if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
     return valk_lval_err("aio/diagnostics-state-json: argument must be an aio_system");
   }
+
+#ifdef VALK_METRICS_ENABLED
   valk_aio_system_t *sys = (valk_aio_system_t *)sys_arg->ref.ptr;
 
-  // Allocate buffer (256KB for full state)
-  char *buf = malloc(262144);
+  valk_slab_t *tcp_slab = valk_aio_get_tcp_buffer_slab(sys);
+  valk_slab_t *handle_slab = valk_aio_get_handle_slab(sys);
+  valk_slab_t *arena_slab = valk_aio_get_stream_arenas_slab(sys);
+  valk_slab_t *server_slab = valk_aio_get_http_servers_slab(sys);
+  valk_slab_t *client_slab = valk_aio_get_http_clients_slab(sys);
+
+  valk_process_memory_t pm = {0};
+  valk_process_memory_collect(&pm);
+
+  valk_gc_malloc_heap_t *heap = valk_aio_get_gc_heap(sys);
+  u64 gc_used = 0, gc_total = 0;
+  if (heap) {
+    gc_used = valk_gc_heap2_used_bytes(heap);
+    gc_total = heap->hard_limit;
+  }
+
+  u64 buf_size = 8192;
+  char *buf = malloc(buf_size);
   if (!buf) {
     return valk_lval_err("aio/diagnostics-state-json: allocation failed");
   }
 
-  int len = valk_diag_fresh_state_json(sys, buf, 262144);
-  if (len < 0) {
-    free(buf);
-    return valk_lval_err("aio/diagnostics-state-json: encoding failed");
+  char *p = buf;
+  char *end = buf + buf_size;
+
+  int n = snprintf(p, end - p, "{\"slabs\":[");
+  if (n > 0) p += n;
+
+  int first = 1;
+  if (tcp_slab) {
+    if (!first) { *p++ = ','; } first = 0;
+    write_slab_json(&p, end, "tcp_buffers", tcp_slab);
+  }
+  if (handle_slab) {
+    if (!first) { *p++ = ','; } first = 0;
+    write_slab_json(&p, end, "handles", handle_slab);
+  }
+  if (arena_slab) {
+    if (!first) { *p++ = ','; } first = 0;
+    write_slab_json(&p, end, "stream_arenas", arena_slab);
+  }
+  if (server_slab) {
+    if (!first) { *p++ = ','; } first = 0;
+    write_slab_json(&p, end, "http_servers", server_slab);
+  }
+  if (client_slab) {
+    if (!first) { *p++ = ','; }
+    write_slab_json(&p, end, "http_clients", client_slab);
   }
 
-  valk_lval_t *result = valk_lval_str_n(buf, len);
-  free(buf);
+  n = snprintf(p, end - p, "],\"arenas\":[");
+  if (n > 0) p += n;
 
+  n = snprintf(p, end - p,
+    "{\"name\":\"stream_arenas\",\"used\":%llu,\"capacity\":%llu}",
+    arena_slab ? (unsigned long long)(arena_slab->numItems - arena_slab->numFree) : 0ULL,
+    arena_slab ? (unsigned long long)arena_slab->numItems : 0ULL);
+  if (n > 0) p += n;
+
+  n = snprintf(p, end - p,
+    "],\"gc\":{\"heap_used_bytes\":%llu,\"heap_total_bytes\":%llu}",
+    (unsigned long long)gc_used,
+    (unsigned long long)gc_total);
+  if (n > 0) p += n;
+
+  n = snprintf(p, end - p,
+    ",\"process\":{\"rss\":%llu,\"vms\":%llu,\"system_total\":%llu}",
+    (unsigned long long)pm.rss_bytes,
+    (unsigned long long)pm.vms_bytes,
+    (unsigned long long)pm.system_total_bytes);
+  if (n > 0) p += n;
+
+  u64 aio_used = 0, aio_cap = 0;
+  if (tcp_slab) {
+    aio_used += (tcp_slab->numItems - tcp_slab->numFree) * tcp_slab->itemSize;
+    aio_cap += tcp_slab->numItems * tcp_slab->itemSize;
+  }
+  if (handle_slab) {
+    aio_used += (handle_slab->numItems - handle_slab->numFree) * handle_slab->itemSize;
+    aio_cap += handle_slab->numItems * handle_slab->itemSize;
+  }
+  if (arena_slab) {
+    aio_used += (arena_slab->numItems - arena_slab->numFree) * arena_slab->itemSize;
+    aio_cap += arena_slab->numItems * arena_slab->itemSize;
+  }
+
+  n = snprintf(p, end - p,
+    ",\"breakdown\":{\"gc_used\":%llu,\"gc_cap\":%llu,"
+    "\"aio_used\":%llu,\"aio_cap\":%llu,"
+    "\"scratch_used\":0,\"scratch_cap\":0,"
+    "\"metrics_used\":0,\"metrics_cap\":0}}",
+    (unsigned long long)gc_used,
+    (unsigned long long)gc_total,
+    (unsigned long long)aio_used,
+    (unsigned long long)aio_cap);
+  if (n > 0) p += n;
+
+  valk_lval_t *result = valk_lval_str(buf);
+  free(buf);
   return result;
+#else
+  UNUSED(sys_arg);
+  return valk_lval_str("{}");
+#endif
 }
 
 // ============================================================================

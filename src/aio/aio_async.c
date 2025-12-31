@@ -447,9 +447,27 @@ valk_lval_t *valk_async_handle_await_timeout(valk_async_handle_t *handle, u32 ti
   if (!handle) return valk_lval_err("await: null handle");
   
   valk_aio_system_t *sys = handle->sys;
-  if (!sys || !sys->eventloop) {
+  bool on_loop_thread = sys && uv_thread_self() == sys->loopThread;
+  
+  if (!sys || !sys->eventloop || !on_loop_thread) {
+    u64 start = 0;
+    if (timeout_ms > 0) {
+      struct timespec ts;
+      clock_gettime(CLOCK_MONOTONIC, &ts);
+      start = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    }
+    
     while (!valk_async_handle_is_terminal(valk_async_handle_get_status(handle))) {
       uv_sleep(1);
+      
+      if (timeout_ms > 0) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        u64 now = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+        if (now - start > timeout_ms) {
+          return valk_lval_err("await: timeout");
+        }
+      }
     }
   } else {
     u64 start = 0;

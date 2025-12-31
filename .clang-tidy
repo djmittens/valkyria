@@ -1,4 +1,5 @@
 Checks: 'modernize-*,performance-*,-modernize-use-trailing-return-type'
 WarningsAsErrors: 'clang-analyzer-*'
-HeaderFilterRegex: '.*/src/.*\.h$'
+HeaderFilterRegex: '.*/valkyria-lisp/src/.*\.h$'
+SystemHeaders: false
 UseColor: true

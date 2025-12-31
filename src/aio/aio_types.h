@@ -21,13 +21,7 @@ typedef struct valk_http2_server_request valk_http2_server_request_t;
 typedef struct valk_http2_request_t valk_http2_request_t;
 typedef struct valk_http2_response_t valk_http2_response_t;
 
-typedef struct valk_sse_stream valk_sse_stream_t;
-typedef struct valk_sse_event valk_sse_event_t;
-typedef struct valk_sse_manager valk_sse_manager_t;
-typedef struct valk_sse_stream_entry valk_sse_stream_entry_t;
-typedef struct valk_sse_stream_registry valk_sse_stream_registry_t;
-typedef struct valk_sse_diag_state valk_sse_diag_state_t;
-typedef struct valk_sse_diag_conn valk_sse_diag_conn_t;
+
 
 struct valk_lval_t;
 struct valk_lenv_t;

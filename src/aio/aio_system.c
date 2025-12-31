@@ -277,7 +277,6 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
     sys->metrics_state->scratch_arena = valk_thread_ctx.scratch;
   }
   memset(&sys->owner_registry, 0, sizeof(sys->owner_registry));
-  valk_sse_registry_init(&sys->sse_registry, sys);
   valk_event_loop_metrics_v2_init(&sys->loop_metrics, sys->name);
 #endif
 
@@ -334,10 +333,6 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
   if (!valk_thread_equal(valk_thread_self(), (valk_thread_t)sys->loopThread)) {
     uv_thread_join(&sys->loopThread);
   }
-
-#ifdef VALK_METRICS_ENABLED
-  valk_sse_registry_shutdown(&sys->sse_registry);
-#endif
 
   free(sys->http_queue.request_items);
   free(sys->http_queue.response_items);
@@ -437,6 +432,7 @@ void valk_aio_update_queue_stats(valk_aio_system_t* sys) {
     atomic_store(&sys->metrics_state->system_stats.arenas_used, used);
   }
 }
+
 #endif
 
 uv_loop_t* valk_aio_get_event_loop(valk_aio_system_t* sys) {
@@ -481,8 +477,4 @@ valk_mem_arena_t* valk_aio_get_scratch_arena(valk_aio_system_t* sys) {
   return (valk_mem_arena_t*)sys->metrics_state->scratch_arena;
 }
 
-valk_sse_stream_registry_t* valk_aio_get_sse_registry(valk_aio_system_t* sys) {
-  if (!sys) return nullptr;
-  return &sys->sse_registry;
-}
 #endif

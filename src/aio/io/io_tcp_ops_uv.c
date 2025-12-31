@@ -223,6 +223,4 @@ const valk_io_tcp_ops_t valk_io_tcp_ops_uv = {
   .ip4_name = tcp_ip4_name,
   .ip6_name = tcp_ip6_name,
   .strerror = tcp_strerror,
-  .tcp_size = sizeof(valk_io_tcp_t),
-  .write_req_size = sizeof(valk_io_write_req_t),
 };

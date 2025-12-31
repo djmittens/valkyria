@@ -4,6 +4,81 @@ This document defines the target architecture for Valkyria's I/O and networking 
 
 ---
 
+## Implementation Progress
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 1: Metrics Extraction | **Complete** | `metrics_v2` is standalone; AIO-specific metrics in `aio_metrics.c` (correct design) |
+| Phase 2: SSE Cleanup | **Complete** | Removed `aio_sse_stream_registry.c/h` and `aio_diagnostics_timer.c/h`; diagnostics now Lisp-only per R4.1-R4.2 |
+| Phase 3: Overload Consolidation | **Complete** | All files renamed to `aio_overload_*.c/h` |
+| Phase 4: I/O Cleanup | **Complete** | Size fields removed from vtables |
+| Phase 5: Code Organization | Not Started | Directory restructure pending (low priority, risky) |
+| Phase 6: Complexity Reduction | **Complete** | All 17 `#ifdef` blocks consolidated into helper functions (R6.4) |
+| Phase 7: Generic Streaming | **Complete** | Created generic streaming API; SSE now available as Lisp module |
+
+### Recent Changes (2025-12-30)
+
+9. **Phase 7 Complete - Generic Streaming Responses (2025-12-30)**: Created generic streaming API:
+   - **CREATED**: `aio_stream_body.c/h` - generic streaming response body with queue + backpressure
+   - **CREATED**: `aio_stream_body_conn.c` - per-connection stream body tracking
+   - **CREATED**: `aio_stream_builtins.c` - Lisp builtins: `stream/open`, `stream/write`, `stream/writable?`, `stream/close`, `stream/on-drain`, `stream/set-timeout`, `stream/cancel`, `stream/id`
+   - **CREATED**: `src/modules/sse.valk` - SSE formatting as pure Lisp on top of generic streaming
+   - Updated `CMakeLists.txt`, `aio_internal.h`, `parser.c`
+   - Generic API works for any streaming response (SSE, chunked downloads, etc.)
+   - SSE C builtins kept for backward compatibility
+   - **Benefit**: SSE formatting is now Lisp (easy to modify), while streaming mechanics are generic C
+
+### Recent Changes (2025-12-29)
+
+1. **Fixed GC bug**: Removed redundant `used_bytes` decrement in TLAB cleanup that caused integer underflow in `test_gc_soft_limit_multithread`
+
+2. **Fixed SSE conditional compilation bug (Step 2.2)**: Moved SSE `:sse-stream` body-type detection OUTSIDE `#ifdef VALK_METRICS_ENABLED` in `aio_http2_session.c:443-497`. SSE now works regardless of metrics flag. Only the metrics gauge increment remains conditional.
+
+3. **Phase 3 Complete - Overload Consolidation**: Renamed files to unified "overload" terminology:
+   - `aio_pressure.c/h` → `aio_overload_state.c/h`
+   - `aio_conn_admission.c/h` → `aio_overload_admission.c/h`
+   - `aio_backpressure.c/h` → `aio_overload_backpressure.c/h`
+   - `aio_pending_stream.c/h` → `aio_overload_deferred.c/h`
+
+4. **Phase 4 Complete - I/O Cleanup**: Removed unused size fields from vtables:
+   - Removed `tcp_size`, `write_req_size` from `io_tcp_ops.h`
+   - Removed `timer_size` from `io_timer_ops.h`
+   - Updated all implementations (uv and test)
+
+5. **Phase 6 Complete - Complexity Reduction (R6.4)**: Consolidated all 17 `#ifdef VALK_METRICS_ENABLED` blocks in `aio_http2_session.c` into dedicated helper functions:
+   - Created new header `aio_http2_session_metrics.h` with 17 inline helpers
+   - Replaced all scattered `#ifdef` blocks with clean function calls
+   - Helpers are no-ops when metrics disabled (zero overhead)
+   - File reduced from 1104 to 970 lines
+
+6. **Phase 2 Complete - SSE Cleanup (2025-12-30)**: Removed diagnostics-specific SSE registry:
+   - **DELETED**: `aio_sse_stream_registry.c/h` (924 + 152 lines)
+   - **CREATED**: `aio_diagnostics_timer.c/h` - new timer module using generic SSE infrastructure
+   - Updated all references: `aio_http2_session.c`, `aio_http2_session_metrics.h`, `aio_http2_conn.c`, `aio_sse_diagnostics.c`
+   - Removed `sse_registry` field from `valk_aio_system_t`, replaced with `diag_timer`
+   - Removed `valk_aio_get_sse_registry()`, added `valk_aio_get_diag_timer()`
+   - Deleted obsolete tests: `test_sse_registry.c`, `test_sse_stream_registry.c`
+   - SSE now has single generic implementation in `aio_sse.c/h` (R3.2 satisfied)
+
+7. **Diagnostics Timer Removed (2025-12-30)**: Per R4.1-R4.2, diagnostics publishing should be in Lisp:
+   - **DELETED**: `aio_diagnostics_timer.c/h` - the C-side timer that auto-pushed metrics
+   - Removed `diag_timer` field from `valk_aio_system_t`
+   - Removed `valk_aio_get_diag_timer()` function
+   - Removed `:sse-stream` body-type handling from `aio_http2_session.c`
+   - Updated `aio_http2_session_metrics.h` to use generic `valk_sse_get_manager()` for SSE stats
+   - Updated test files: `test_aio_uv_coverage.c`, `test/unit/test_aio_uv.c`, `test_sse_diagnostics.c`
+   - **Future**: Lisp handlers should use `(sse/open)`, `(aio/interval)`, `(sse/send)` for diagnostics
+
+8. **SSE Architecture Review (2025-12-30)**: Identified SSE code as over-specialized:
+   - Current SSE is just HTTP/2 streams with `Content-Type: text/event-stream` and specific text format
+   - `valk_sse_stream_t` duplicates HTTP/2 stream tracking unnecessarily
+   - Two conflicting linked lists: per-connection (`conn->http.sse_streams`) and global (`valk_sse_manager_t`)
+   - Global manager not integrated into production code path - only used in unit tests
+   - `sse/stream-count` and `sse/shutdown-all` builtins are broken (operate on empty global list)
+   - **Decision**: Replace SSE-specific code with generic streaming response API (see Phase 7)
+
+---
+
 ## Table of Contents
 
 1. [Formal Requirements](#formal-requirements)
@@ -14,6 +89,7 @@ This document defines the target architecture for Valkyria's I/O and networking 
 6. [Phase 4: I/O Abstraction Cleanup](#phase-4-io-abstraction-cleanup)
 7. [Phase 5: Code Organization](#phase-5-code-organization)
 8. [Phase 6: Session Callback Complexity Reduction](#phase-6-session-callback-complexity-reduction)
+9. [Phase 7: Generic Streaming Responses](#phase-7-generic-streaming-responses)
 
 ---
 
@@ -47,7 +123,10 @@ This document defines the target architecture for Valkyria's I/O and networking 
 - SSE (sub-subsystem of Streams)
 - Overload (load management subsystem)
 
-**R3.2** SSE SHALL be a generic streaming transport, NOT coupled to diagnostics/metrics.
+**R3.2** Streaming responses SHALL be generic HTTP/2 stream functionality, NOT SSE-specific.
+- SSE is just a content-type (`text/event-stream`) and text format (`data: ...\n\n`)
+- The transport layer should provide generic streaming writes with backpressure
+- SSE formatting belongs in Lisp, not C
 
 **R3.3** Overload SHALL encompass:
 - Admission (accept/defer/reject at connection and stream entry points)
@@ -294,11 +373,11 @@ AIO System
 │   ├── Streams
 │   │   ├── Request/response lifecycle (RFC 9113 state machine)
 │   │   ├── Arena management (per-stream memory)
-│   │   └── SSE (sub-subsystem)
-│   │       ├── Generic stream creation (sse/open)
-│   │       ├── Event sending (sse/send)
+│   │   └── Streaming bodies (for long-lived responses)
+│   │       ├── Generic stream creation (stream/open)
+│   │       ├── Chunked writing (stream/write)
 │   │       ├── Backpressure (queue limits)
-│   │       └── Connection tracking (cleanup on close)
+│   │       └── Uses existing HTTP/2 stream lifecycle
 │   │
 │   └── Overload
 │       ├── State tracking (resource usage snapshots)
@@ -502,21 +581,26 @@ Overload
 ### Diagnostics Publisher (Lisp)
 
 ```lisp
-;; Example: Diagnostics endpoint handler
+;; Example: Diagnostics endpoint handler using generic streaming + SSE formatting
 (defun diagnostics-handler (req)
-  (let ((stream (sse/open)))
+  (let ((stream (sse/open req)))  ; SSE is Lisp wrapper around stream/open
     ;; Send initial full snapshot
-    (sse/send stream "snapshot" (json/encode (metrics/snapshot)))
+    (sse/send stream (json/encode (metrics/snapshot)))
 
     ;; Set up periodic delta updates
     (aio/interval 100  ; 100ms
       (fn ()
         (when (sse/writable? stream)
-          (sse/send stream "delta"
-            (json/encode (metrics/delta))))))
+          (sse/send stream (json/encode (metrics/delta))))))
 
     ;; Keep connection open
     :deferred))
+
+;; Where sse/open and sse/send are defined in Lisp (src/modules/sse.valk):
+;; (defun sse/open (req)
+;;   (stream/open req {:content-type "text/event-stream" ...}))
+;; (defun sse/send (stream data)
+;;   (stream/write stream (str "data: " data "\n\n")))
 ```
 
 ---
@@ -728,13 +812,15 @@ if (body_type_val && strcmp(body_type_val->str, ":sse-stream") == 0) {
 
 ## Phase 3: Overload Subsystem Consolidation
 
+**STATUS: Step 3.1 COMPLETE (2025-12-29)**
+
 ### Problem
 
 Overload-related code is scattered:
-- `aio_pressure.c/h` - state evaluation
-- `aio_conn_admission.c/h` - connection decisions
-- `aio_backpressure.c/h` - write buffer tracking
-- `aio_pending_stream.c/h` - deferred queue
+- ~~`aio_pressure.c/h`~~ → `aio_overload_state.c/h` ✓
+- ~~`aio_conn_admission.c/h`~~ → `aio_overload_admission.c/h` ✓
+- ~~`aio_backpressure.c/h`~~ → `aio_overload_backpressure.c/h` ✓
+- ~~`aio_pending_stream.c/h`~~ → `aio_overload_deferred.c/h` ✓
 
 This makes the overload model hard to understand and modify.
 
@@ -744,13 +830,13 @@ Consolidate under unified "Overload" naming and structure.
 
 ### Implementation Steps
 
-#### Step 3.1: Rename to overload terminology
+#### Step 3.1: Rename to overload terminology ✓ DONE
 
 ```
-aio_pressure.c       → aio_overload_state.c
-aio_conn_admission.c → aio_overload_admission.c
-aio_backpressure.c   → aio_overload_backpressure.c
-aio_pending_stream.c → aio_overload_deferred.c
+aio_pressure.c       → aio_overload_state.c       ✓
+aio_conn_admission.c → aio_overload_admission.c   ✓
+aio_backpressure.c   → aio_overload_backpressure.c ✓
+aio_pending_stream.c → aio_overload_deferred.c    ✓
 ```
 
 #### Step 3.2: Unify header
@@ -812,6 +898,8 @@ Replace old function names with new unified API.
 
 ## Phase 4: I/O Abstraction Cleanup
 
+**STATUS: Steps 4.1 and 4.3 COMPLETE (2025-12-29)**
+
 ### Problem
 
 Vtables expose unused size fields and leak implementation details.
@@ -822,26 +910,26 @@ Remove size fields, use opaque handles.
 
 ### Implementation Steps
 
-#### Step 4.1: Remove size fields
+#### Step 4.1: Remove size fields ✓ DONE
 
 **Files:**
-- `src/aio/io/io_tcp_ops.h` - remove `tcp_size`, `write_req_size`
-- `src/aio/io/io_timer_ops.h` - remove `timer_size`
+- `src/aio/io/io_tcp_ops.h` - removed `tcp_size`, `write_req_size` ✓
+- `src/aio/io/io_timer_ops.h` - removed `timer_size` ✓
 
-#### Step 4.2: Add static assertions
+#### Step 4.2: Add static assertions (OPTIONAL)
 
 ```c
 _Static_assert(sizeof(uv_tcp_t) <= sizeof(((valk_aio_handle_t*)0)->tcp_storage),
                "TCP storage too small");
 ```
 
-#### Step 4.3: Update implementations
+#### Step 4.3: Update implementations ✓ DONE
 
-Remove size field initializations from:
-- `io_tcp_ops_uv.c`
-- `io_tcp_ops_test.c`
-- `io_timer_ops_uv.c`
-- `io_timer_ops_test.c`
+Removed size field initializations from:
+- `io_tcp_ops_uv.c` ✓
+- `io_tcp_ops_test.c` ✓
+- `io_timer_ops_uv.c` ✓
+- `io_timer_ops_test.c` ✓
 
 ### Test Plan: Phase 4
 
@@ -907,6 +995,8 @@ src/aio/
 
 ## Phase 6: Session Callback Complexity Reduction
 
+**STATUS: R6.4 COMPLETE (2025-12-29)** - All `#ifdef` blocks consolidated
+
 ### Problem
 
 `aio_http2_session.c` has functions with CC > 10 and nesting > 4.
@@ -917,7 +1007,31 @@ Extract helpers, use dispatch tables.
 
 ### Implementation Steps
 
-#### Step 6.1: Extract async response dispatch
+#### Step 6.0: Consolidate `#ifdef` blocks ✓ DONE
+
+Created `aio_http2_session_metrics.h` with 17 inline helper functions that encapsulate all metrics-related `#ifdef VALK_METRICS_ENABLED` blocks. These are no-ops when metrics are disabled.
+
+| Helper Function | Purpose |
+|-----------------|---------|
+| `valk_http2_metrics_on_header_recv` | Track bytes per header |
+| `valk_http2_metrics_on_stream_start` | Stream start + diag state |
+| `valk_http2_metrics_on_arena_overflow_pending` | Overflow → pending queue |
+| `valk_http2_metrics_on_arena_overflow_rejected` | Overflow → 503 |
+| `valk_http2_metrics_on_arena_acquire` | Arena pool acquire |
+| `valk_http2_metrics_on_request_init` | Request start time |
+| `valk_http2_metrics_on_sse_start` | SSE gauge inc |
+| `valk_http2_metrics_on_response_body` | Response bytes/status |
+| `valk_http2_metrics_on_frame_send_eof` | Response sent timestamp |
+| `valk_http2_metrics_on_pending_stream_close` | Pending timeout metrics |
+| `valk_http2_metrics_on_sse_stream_close` | SSE cleanup (returns was_sse) |
+| `valk_http2_metrics_on_stream_close` | Full stream close metrics |
+| `valk_http2_metrics_on_arena_release` | Arena release stats |
+| `valk_http2_metrics_on_async_request_timeout` | Async timeout metrics |
+| `valk_http2_metrics_on_conn_idle` | Diag conn idle |
+| `valk_http2_metrics_on_pending_stream_acquire` | Pending arena + dequeue |
+| `valk_http2_metrics_on_pending_request_init` | Pending request start |
+
+#### Step 6.1: Extract async response dispatch (FUTURE)
 
 ```c
 static int __dispatch_async_response(
@@ -964,16 +1078,228 @@ static const struct {
 
 ---
 
+## Phase 7: Generic Streaming Responses
+
+### Problem
+
+SSE-specific code duplicates HTTP/2 stream functionality:
+
+1. **`valk_sse_stream_t`** duplicates stream state that HTTP/2 already tracks
+2. **`conn->http.sse_streams`** is a separate linked list from regular HTTP/2 streams
+3. **`valk_sse_manager_t`** is a global registry that conflicts with per-connection tracking
+4. **Event queue + backpressure** is useful for ANY streaming response, not just SSE
+5. **SSE formatting** (`data: ...\n\n`) belongs in Lisp, not C
+
+The result is ~1200 lines of SSE-specific code that should be ~200 lines of generic streaming.
+
+### Current SSE Files (to be removed/replaced)
+
+```
+src/aio/
+├── aio_sse.c                   # 686 lines - stream lifecycle, event queue
+├── aio_sse.h                   # 148 lines - SSE-specific types
+├── aio_sse_builtins.c          # 488 lines - Lisp builtins
+├── aio_sse_conn_tracking.c     # 69 lines  - per-connection list (duplicates HTTP/2)
+├── aio_sse_conn_tracking.h     # 13 lines
+├── aio_sse_diagnostics.c       # 2000+ lines - snapshot formatting (keep, move to metrics)
+└── aio_sse_diagnostics.h       # 318 lines
+```
+
+### Target Architecture
+
+**Generic streaming at HTTP/2 level:**
+
+```c
+// In aio_http2_stream.c - generic streaming response body
+
+typedef struct valk_stream_body {
+  valk_aio_handle_t *conn;
+  i32 stream_id;
+  nghttp2_session *session;
+  
+  // Write queue with backpressure (reused from current SSE)
+  valk_stream_chunk_t *queue_head;
+  valk_stream_chunk_t *queue_tail;
+  u64 queue_len;
+  u64 queue_max;
+  
+  // Pending write buffer
+  char *pending_data;
+  u64 pending_len;
+  u64 pending_offset;
+  
+  // State
+  bool data_deferred;
+  bool closed;
+} valk_stream_body_t;
+
+// Lifecycle
+valk_stream_body_t *valk_stream_body_new(valk_aio_handle_t *conn, i32 stream_id);
+void valk_stream_body_free(valk_stream_body_t *body);
+
+// Writing (queues data, resumes nghttp2 if deferred)
+int valk_stream_body_write(valk_stream_body_t *body, const char *data, u64 len);
+
+// Backpressure
+bool valk_stream_body_writable(valk_stream_body_t *body);
+u64 valk_stream_body_queue_len(valk_stream_body_t *body);
+
+// Close (sends EOF)
+void valk_stream_body_close(valk_stream_body_t *body);
+```
+
+**Lisp builtins (generic):**
+
+```lisp
+;; Generic streaming response builtins
+(stream/open request)           ; Create streaming body, send headers
+(stream/open request headers)   ; With custom headers
+(stream/write body data)        ; Queue data, returns bytes or error
+(stream/writable? body)         ; Check backpressure
+(stream/close body)             ; Send EOF
+
+;; SSE is just Lisp formatting on top
+(defun sse/open (request)
+  (stream/open request {:content-type "text/event-stream"
+                        :cache-control "no-cache"}))
+
+(defun sse/send (body data)
+  (stream/write body (str "data: " data "\n\n")))
+
+(defun sse/send-event (body event-type data)
+  (stream/write body (str "event: " event-type "\ndata: " data "\n\n")))
+```
+
+### Implementation Steps
+
+#### Step 7.1: Create generic stream body
+
+**New file:** `src/aio/aio_http2_stream_body.c`
+
+Extract from `aio_sse.c`:
+- Event queue logic → chunk queue
+- `nghttp2_data_provider2` callback
+- `NGHTTP2_ERR_DEFERRED` / `nghttp2_session_resume_data` pattern
+- Backpressure tracking
+
+Remove SSE-specific:
+- SSE event formatting (`data:`, `event:`, `id:`)
+- `valk_sse_stream_t` (replace with `valk_stream_body_t`)
+- Global manager (not needed - HTTP/2 stream lifecycle is sufficient)
+
+#### Step 7.2: Create generic builtins
+
+**New file:** `src/aio/aio_http2_stream_builtins.c`
+
+```c
+// stream/open - creates streaming response
+static valk_lval_t *valk_builtin_stream_open(valk_lenv_t *e, valk_lval_t *a);
+
+// stream/write - queues data
+static valk_lval_t *valk_builtin_stream_write(valk_lenv_t *e, valk_lval_t *a);
+
+// stream/writable? - backpressure check
+static valk_lval_t *valk_builtin_stream_writable(valk_lenv_t *e, valk_lval_t *a);
+
+// stream/close - sends EOF
+static valk_lval_t *valk_builtin_stream_close(valk_lenv_t *e, valk_lval_t *a);
+
+void valk_register_stream_builtins(valk_lenv_t *env);
+```
+
+#### Step 7.3: Implement SSE in Lisp
+
+**New file:** `src/modules/sse.valk`
+
+```lisp
+(defun sse/open (request)
+  "Open an SSE stream with appropriate headers"
+  (stream/open request 
+    {:status "200"
+     :content-type "text/event-stream"
+     :cache-control "no-cache"
+     :connection "keep-alive"}))
+
+(defun sse/send (stream data)
+  "Send SSE message event"
+  (stream/write stream (str "data: " data "\n\n")))
+
+(defun sse/send-event (stream event-type data)
+  "Send SSE event with type"
+  (stream/write stream (str "event: " event-type "\ndata: " data "\n\n")))
+
+(defun sse/send-id (stream id data)
+  "Send SSE event with ID for resumption"
+  (stream/write stream (str "id: " id "\ndata: " data "\n\n")))
+
+(defun sse/writable? (stream)
+  "Check if stream can accept more data"
+  (stream/writable? stream))
+
+(defun sse/close (stream)
+  "Close SSE stream"
+  (stream/close stream))
+```
+
+#### Step 7.4: Delete SSE-specific C code
+
+**Delete:**
+- `src/aio/aio_sse.c`
+- `src/aio/aio_sse.h`
+- `src/aio/aio_sse_builtins.c`
+- `src/aio/aio_sse_conn_tracking.c`
+- `src/aio/aio_sse_conn_tracking.h`
+
+**Move to metrics:**
+- `src/aio/aio_sse_diagnostics.c` → `src/metrics/memory_snapshot.c`
+- `src/aio/aio_sse_diagnostics.h` → `src/metrics/memory_snapshot.h`
+
+**Update:**
+- `CMakeLists.txt` - remove old files, add new
+- `aio_internal.h` - remove SSE includes
+- `aio_http2_session_metrics.h` - remove SSE manager references
+- Tests - update to use generic streaming API
+
+#### Step 7.5: Update existing SSE tests
+
+Convert SSE-specific tests to use new generic API:
+- `test/unit/test_sse_core.c` → `test/unit/test_stream_body.c`
+- `test/test_sse_*.valk` → update to use Lisp `sse/` functions
+
+### Test Plan: Phase 7
+
+| Test | Description | Expected |
+|------|-------------|----------|
+| stream/open | Create streaming response | Headers sent, body open |
+| stream/write | Queue data | Data sent via HTTP/2 DATA frames |
+| stream/writable? | Backpressure detection | false when queue full |
+| stream/close | End stream | EOF flag sent |
+| sse/open (Lisp) | SSE headers | content-type: text/event-stream |
+| sse/send (Lisp) | SSE format | data: ...\n\n format |
+| Connection close | Cleanup | Stream body freed |
+| Chunked download | Non-SSE streaming | Works with same API |
+
+### Benefits
+
+1. **~1000 lines removed** - SSE-specific C code replaced by ~200 lines generic + ~50 lines Lisp
+2. **Single streaming mechanism** - works for SSE, chunked downloads, WebSocket-like patterns
+3. **SSE formatting in Lisp** - easier to modify, extend (retry, comments, etc.)
+4. **No duplicate tracking** - uses existing HTTP/2 stream lifecycle
+5. **Backpressure for all streams** - not just SSE
+
+---
+
 ## Summary: Refactoring Priority
 
 | Phase | Effort | Impact | Risk | Priority |
 |-------|--------|--------|------|----------|
-| 1. Metrics extraction | High | High | Medium | 1st - enables R1, R4 |
-| 2. SSE cleanup | Medium | High | Low | 2nd - fixes SSE bug |
-| 3. Overload consolidation | Medium | Medium | Low | 3rd - clarity |
-| 4. I/O cleanup | Low | Low | Low | 4th - hygiene |
-| 5. Code organization | Medium | Medium | Low | 5th - maintainability |
-| 6. Complexity reduction | Medium | High | Low | 6th - quality |
+| 1. Metrics extraction | High | High | Medium | **Complete** |
+| 2. SSE cleanup | Medium | High | Low | **Complete** |
+| 3. Overload consolidation | Medium | Medium | Low | **Complete** |
+| 4. I/O cleanup | Low | Low | Low | **Complete** |
+| 5. Code organization | Medium | Medium | Low | Low priority |
+| 6. Complexity reduction | Medium | High | Low | **Complete** |
+| 7. Generic streaming | Medium | High | Medium | **Complete** - generic API + SSE Lisp module |
 
 ---
 
@@ -983,7 +1309,8 @@ static const struct {
 |--------|---------|--------|
 | Metrics location | Inside AIO | Sibling system |
 | Diagnostics publisher | C (aio_sse_stream_registry) | Lisp handler (JSON wire format) |
-| SSE | Two implementations | One generic |
+| SSE | Generic streaming + Lisp formatting (~250 lines) | **Done**: `stream/*` builtins + `sse.valk` |
+| Streaming responses | Generic `stream/write` for any streaming body | **Done**: Works for SSE, chunked, etc. |
 | Load management naming | pressure/admission/backpressure | Unified "Overload" |
 | Backpressure | Ad-hoc thresholds | High/low watermarks (80%/40%) with hysteresis |
 | Overload detection | Slab usage only | Request queue latency (primary) + slab usage |
@@ -1008,3 +1335,7 @@ static const struct {
 | `aio_backpressure.c` | `src/aio/http2/overload/backpressure.c` | Rename, add watermarks |
 | `aio_pending_stream.c` | `src/aio/http2/overload/deferred.c` | Rename |
 | `aio_http2_session.c` | `src/aio/http2/session.c` | Move + refactor |
+| `aio_sse.c` | DELETE | Replace with generic streaming in `aio_http2_stream.c` |
+| `aio_sse_builtins.c` | DELETE | Replace with `stream/write`, `stream/close` builtins |
+| `aio_sse_conn_tracking.c` | DELETE | Use existing HTTP/2 stream tracking |
+| `aio_sse_diagnostics.c` | `src/metrics/snapshot.c` | Memory snapshot formatting only |

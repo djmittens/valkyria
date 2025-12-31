@@ -42,9 +42,6 @@ typedef struct valk_io_tcp_ops {
   int (*ip4_name)(const void *addr, char *dst, u64 size);
   int (*ip6_name)(const void *addr, char *dst, u64 size);
   const char *(*strerror)(int err);
-
-  u64 tcp_size;
-  u64 write_req_size;
 } valk_io_tcp_ops_t;
 
 extern const valk_io_tcp_ops_t valk_io_tcp_ops_uv;

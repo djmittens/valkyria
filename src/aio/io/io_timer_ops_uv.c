@@ -51,5 +51,4 @@ const valk_io_timer_ops_t valk_io_timer_ops_uv = {
   .is_closing = timer_is_closing,
   .set_data = timer_set_data,
   .get_data = timer_get_data,
-  .timer_size = sizeof(valk_io_timer_t),
 };

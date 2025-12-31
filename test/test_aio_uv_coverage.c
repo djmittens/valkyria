@@ -8,7 +8,6 @@
 
 #include "aio/aio.h"
 #include "aio/aio_async.h"
-#include "aio/aio_sse_diagnostics.h"
 #include "collections.h"
 #include "common.h"
 #include "concurrency.h"
@@ -651,7 +650,6 @@ static void test_null_metrics_accessors(VALK_TEST_ARGS()) {
   ASSERT_NULL(valk_aio_get_http_clients_registry(NULL));
   ASSERT_NULL(valk_aio_get_gc_heap(NULL));
   ASSERT_NULL(valk_aio_get_scratch_arena(NULL));
-  ASSERT_NULL(valk_aio_get_sse_registry(NULL));
   ASSERT_NULL(valk_aio_get_tcp_buffer_slab(NULL));
   ASSERT_NULL(valk_aio_get_handle_slab(NULL));
   ASSERT_NULL(valk_aio_get_stream_arenas_slab(NULL));
@@ -3081,15 +3079,7 @@ void test_session_validity_checks(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_sse_state_null_handling(VALK_TEST_ARGS()) {
-  VALK_TEST();
 
-  ASSERT_NULL(valk_aio_get_sse_state(nullptr));
-
-  valk_aio_set_sse_state(nullptr, nullptr);
-
-  VALK_PASS();
-}
 
 void test_http2_flush_pending_null(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -3186,7 +3176,7 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_ssl_connection_state_transitions", test_ssl_connection_state_transitions);
   valk_testsuite_add_test(suite, "test_connection_closing_state_handling", test_connection_closing_state_handling);
   valk_testsuite_add_test(suite, "test_session_validity_checks", test_session_validity_checks);
-  valk_testsuite_add_test(suite, "test_sse_state_null_handling", test_sse_state_null_handling);
+
   valk_testsuite_add_test(suite, "test_http2_flush_pending_null", test_http2_flush_pending_null);
 #endif
 

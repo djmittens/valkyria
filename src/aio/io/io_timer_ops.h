@@ -13,8 +13,6 @@ typedef struct valk_io_timer_ops {
   bool (*is_closing)(valk_io_timer_t *timer);
   void (*set_data)(valk_io_timer_t *timer, void *data);
   void *(*get_data)(valk_io_timer_t *timer);
-
-  u64 timer_size;
 } valk_io_timer_ops_t;
 
 extern const valk_io_timer_ops_t valk_io_timer_ops_uv;

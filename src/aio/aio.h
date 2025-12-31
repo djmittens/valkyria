@@ -127,6 +127,11 @@ struct valk_lval_t *valk_aio_schedule(valk_aio_system_t *sys, u64 delay_ms,
                                        struct valk_lval_t *callback,
                                        struct valk_lenv_t *env);
 
+// Repeating interval timer - callback returns :stop to cancel
+struct valk_lval_t *valk_aio_interval(valk_aio_system_t *sys, u64 interval_ms,
+                                       struct valk_lval_t *callback,
+                                       struct valk_lenv_t *env);
+
 typedef struct valk_http2_request_t {
   valk_mem_allocator_t *allocator;
   char *method;
@@ -481,9 +486,6 @@ valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
 #include "aio_metrics.h"
 #include "gc.h"
 
-// Forward declaration for SSE stream registry (defined in aio_sse_stream_registry.h)
-typedef struct valk_sse_stream_registry valk_sse_stream_registry_t;
-
 // Get metrics from AIO system (returns NULL if metrics not enabled)
 valk_aio_metrics_t* valk_aio_get_metrics(valk_aio_system_t* sys);
 
@@ -501,9 +503,6 @@ valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
 
 // Get scratch arena from AIO system (for diagnostics, returns NULL if not available)
 valk_mem_arena_t* valk_aio_get_scratch_arena(valk_aio_system_t* sys);
-
-// Get SSE stream registry from AIO system (returns NULL if metrics not enabled)
-valk_sse_stream_registry_t* valk_aio_get_sse_registry(valk_aio_system_t* sys);
 
 // ============================================================================
 // Connection Diagnostics Types (for SSE memory diagnostics)
@@ -587,14 +586,11 @@ void valk_aio_set_name(valk_aio_system_t* sys, const char* name);
 struct valk_lval_t;
 struct valk_lenv_t;
 
-// Close all SSE streams on a connection
-void valk_sse_close_all_streams(valk_aio_handle_t* conn);
-
-// SSE state accessors (used by SSE diagnostics module)
+// Check if connection is closing
 bool valk_aio_http_connection_closing(valk_aio_handle_t* handle);
-struct valk_sse_diag_state;
-struct valk_sse_diag_state* valk_aio_get_sse_state(valk_aio_handle_t* handle);
-void valk_aio_set_sse_state(valk_aio_handle_t* handle, struct valk_sse_diag_state* state);
+
+// Check if HTTP/2 session is valid for given handle
+bool valk_aio_http_session_valid(valk_aio_handle_t* handle, void* session);
 
 // Reset an HTTP/2 stream with the given error code (for testing client stream error handling)
 // Returns 0 on success, -1 on failure

@@ -295,14 +295,6 @@ void test_system_metrics_access(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_sse_close_all_streams_null_safe(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_sse_close_all_streams(NULL);
-
-  VALK_PASS();
-}
-
 void test_server_listen_invalid_address(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -400,8 +392,6 @@ int main(void) {
                           test_connection_with_request_response);
   valk_testsuite_add_test(suite, "test_system_metrics_access",
                           test_system_metrics_access);
-  valk_testsuite_add_test(suite, "test_sse_close_all_streams_null_safe",
-                          test_sse_close_all_streams_null_safe);
   valk_testsuite_add_test(suite, "test_server_listen_invalid_address",
                           test_server_listen_invalid_address);
   valk_testsuite_add_test(suite, "test_server_listen_port_already_bound",

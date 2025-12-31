@@ -1,4 +1,5 @@
-#pragma once
+#ifndef VALK_AIO_OVERLOAD_DEFERRED_H
+#define VALK_AIO_OVERLOAD_DEFERRED_H
 #include "types.h"
 
 #include <stddef.h>
@@ -69,3 +70,5 @@ static inline valk_pending_stream_t *valk_get_pending_stream_from_marker(void *u
 static inline void *valk_make_pending_stream_marker(valk_pending_stream_t *ps) {
   return (void *)((uptr)ps | (1ULL << 63));
 }
+
+#endif

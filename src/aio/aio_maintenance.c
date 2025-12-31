@@ -1,7 +1,7 @@
 #include "aio_maintenance.h"
 #include "aio_internal.h"
-#include "aio_backpressure.h"
-#include "aio_pending_stream.h"
+#include "aio_overload_backpressure.h"
+#include "aio_overload_deferred.h"
 #include "aio_http2_conn.h"
 
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {

@@ -175,7 +175,9 @@ static void __http2_flush_complete(void *ctx, int status) {
       VALK_DEBUG("Resumed reading after write buffer flush");
     }
     
-    if (nghttp2_session_want_write(conn->http.session)) {
+    if (conn->http.io.write_pos > 0) {
+      valk_http2_conn_write_buf_flush(conn);
+    } else if (nghttp2_session_want_write(conn->http.session)) {
       valk_http2_continue_pending_send(conn);
     }
   }
@@ -257,7 +259,8 @@ void valk_http2_continue_pending_send(valk_aio_handle_t *conn) {
 
     if (Out.count > 0) {
       conn->http.io.write_pos += Out.count;
-      VALK_TRACE("Buffered encrypted data: %zu bytes (total: %zu)", Out.count, conn->http.io.write_pos);
+      VALK_TRACE("Buffered encrypted data: %zu bytes (total: %llu)", Out.count, 
+                 (unsigned long long)conn->http.io.write_pos);
     }
   }
 
@@ -505,22 +508,6 @@ void valk_http2_conn_on_disconnect(valk_aio_handle_t *handle) {
     valk_gauge_v2_dec(client_connections_active);
   }
 #endif
-
-  if (handle->http.sse_streams) {
-    valk_sse_close_all_streams(handle);
-  }
-
-  if (handle->http.server && handle->http.server->sys) {
-    valk_sse_stream_registry_t *registry = &handle->http.server->sys->sse_registry;
-    u64 sse_count = valk_sse_registry_unsubscribe_connection(registry, handle);
-#ifdef VALK_METRICS_ENABLED
-    for (u64 i = 0; i < sse_count; i++) {
-      valk_gauge_v2_dec(handle->http.server->metrics.sse_streams_active);
-    }
-#else
-    UNUSED(sse_count);
-#endif
-  }
 
   if (handle->http.server && handle->http.server->sys) {
     valk_slab_t *slab = handle->http.server->sys->httpStreamArenas;

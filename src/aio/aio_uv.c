@@ -266,15 +266,5 @@ void __aio_uv_stop(uv_async_t *h) {
   uv_walk(h->loop, __aio_uv_walk_close, NULL);
 }
 
-// LCOV_EXCL_START - SSE state accessors: internal API for SSE diagnostics
-valk_sse_diag_state_t* valk_aio_get_sse_state(valk_aio_handle_t *handle) {
-  if (!handle) return NULL;
-  return handle->http.sse_state;
-}
 
-void valk_aio_set_sse_state(valk_aio_handle_t *handle, valk_sse_diag_state_t *state) {
-  if (!handle) return;
-  handle->http.sse_state = state;
-}
-// LCOV_EXCL_STOP
 

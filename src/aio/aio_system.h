@@ -28,5 +28,4 @@ valk_http_clients_registry_t* valk_aio_get_http_clients_registry(valk_aio_system
 void valk_aio_update_queue_stats(valk_aio_system_t* sys);
 valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
 valk_mem_arena_t* valk_aio_get_scratch_arena(valk_aio_system_t* sys);
-valk_sse_stream_registry_t* valk_aio_get_sse_registry(valk_aio_system_t* sys);
 #endif

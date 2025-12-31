@@ -278,7 +278,6 @@ void valk_aio_metrics_state_free(valk_aio_metrics_state_t* state);
 #define VALK_SYSTEM_STATS(sys) ((sys)->metrics_state->system_stats)
 #define VALK_HTTP_CLIENTS(sys) ((sys)->metrics_state->http_clients)
 #define VALK_OWNER_REGISTRY(sys) ((sys)->metrics_state->owner_registry)
-#define VALK_SSE_REGISTRY(sys) ((sys)->metrics_state->sse_registry)
 #define VALK_LOOP_METRICS(sys) ((sys)->metrics_state->loop_metrics)
 
 #endif // VALK_METRICS_ENABLED

@@ -191,8 +191,6 @@ const valk_io_tcp_ops_t valk_io_tcp_ops_test = {
   .ip4_name = test_tcp_ip4_name,
   .ip6_name = test_tcp_ip6_name,
   .strerror = test_tcp_strerror,
-  .tcp_size = sizeof(valk_io_tcp_t),
-  .write_req_size = sizeof(valk_io_write_req_t),
 };
 
 void valk_test_tcp_inject_data(valk_io_tcp_t *tcp, const void *data, u64 len) {

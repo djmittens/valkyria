@@ -85,9 +85,11 @@ build-coverage: build-coverage/.cmake
 
 .PHONY: lint
 lint : build/.cmake
-	run-clang-tidy -p build -j $(JOBS) -extra-arg=-std=c23 \
-		-source-filter='.*/src/.*\.c$$|.*/test/.*\.c$$' \
-		-header-filter='.*/src/.*\.h$$'
+	run-clang-tidy -p build -j $(JOBS) \
+		-extra-arg=-std=c23 \
+		-extra-arg=-isysroot -extra-arg=$$(xcrun --show-sdk-path) \
+		-source-filter='.*/valkyria-lisp/src/.*\.c$$|.*/valkyria-lisp/test/.*\.c$$' \
+		-header-filter='.*/valkyria-lisp/src/.*\.h$$'
 
 # Install editline (uses autotools)
 # On macOS: brew install autoconf automake libtool

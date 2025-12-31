@@ -146,5 +146,4 @@ const valk_io_timer_ops_t valk_io_timer_ops_test = {
   .is_closing = test_timer_is_closing,
   .set_data = test_timer_set_data,
   .get_data = test_timer_get_data,
-  .timer_size = sizeof(valk_io_timer_t),
 };

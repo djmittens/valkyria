@@ -2961,8 +2961,6 @@ void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab) {
       }
       atomic_fetch_sub(&page->num_allocated, unused);
       atomic_fetch_sub(&list->used_slots, unused);
-      sz slot_bytes = (sz)unused * list->slot_size;
-      atomic_fetch_sub(&heap->used_bytes, slot_bytes);
       pthread_mutex_unlock(&list->lock);
     }
     

@@ -15,12 +15,10 @@
 #include "aio_chase_lev.h"
 #include "aio_conn_io.h"
 #include "aio_metrics.h"
-#include "aio_sse.h"
-#include "aio_sse_diagnostics.h"
-#include "aio_sse_stream_registry.h"
-#include "aio_pending_stream.h"
-#include "aio_backpressure.h"
-#include "aio_conn_admission.h"
+#include "aio_stream_body.h"
+#include "aio_overload_deferred.h"
+#include "aio_overload_backpressure.h"
+#include "aio_overload_admission.h"
 #include "aio_maintenance.h"
 #include "aio_ops.h"
 #include "io/io_tcp_uv_types.h"
@@ -258,8 +256,7 @@ struct valk_aio_handle_t {
     valk_handle_diag_t diag;
 #endif
 
-    struct valk_sse_diag_state *sse_state;
-    valk_sse_stream_t *sse_streams;
+    valk_stream_body_t *stream_bodies;
     u32 active_arena_head;
   } http;
 };
@@ -327,7 +324,6 @@ struct valk_aio_system {
 #ifdef VALK_METRICS_ENABLED
   valk_aio_metrics_state_t *metrics_state;
   valk_owner_registry_t owner_registry;
-  valk_sse_stream_registry_t sse_registry;
   valk_event_loop_metrics_v2_t loop_metrics;
 #endif
 };
@@ -382,8 +378,14 @@ typedef struct {
 typedef struct {
   alignas(16) uv_timer_t timer;
   valk_lval_t *callback;
-  valk_lenv_t *env;
 } valk_schedule_timer_t;
+
+typedef struct valk_interval_timer {
+  alignas(16) uv_timer_t timer;
+  valk_lval_t *callback;
+  u64 interval_id;
+  bool stopped;
+} valk_interval_timer_t;
 
 typedef struct {
   int count;

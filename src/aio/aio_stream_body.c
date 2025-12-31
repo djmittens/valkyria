@@ -1,0 +1,364 @@
+#include "aio_stream_body.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <uv.h>
+
+#include "common.h"
+#include "log.h"
+
+static u64 g_stream_body_id = 0;
+
+#define STREAM_DEFAULT_QUEUE_MAX 1000
+#define STREAM_DEFAULT_BUFFER_SIZE 65536
+
+static nghttp2_ssize __stream_data_read_callback(
+    nghttp2_session *session, i32 stream_id, u8 *buf, size_t length,
+    u32 *data_flags, nghttp2_data_source *source, void *user_data);
+
+static void __stream_chunk_free(valk_stream_chunk_t *chunk);
+
+void valk_http2_flush_pending(valk_aio_handle_t *conn);
+
+valk_stream_body_t *valk_stream_body_new(
+    valk_aio_handle_t *conn,
+    nghttp2_session *session,
+    i32 stream_id,
+    nghttp2_data_provider2 *data_prd_out) {
+
+  if (!conn || !session || !data_prd_out) {
+    VALK_ERROR("stream_body: invalid arguments to valk_stream_body_new");
+    return nullptr;
+  }
+
+  valk_stream_body_t *body = malloc(sizeof(valk_stream_body_t));
+  if (!body) {
+    VALK_ERROR("stream_body: failed to allocate body struct");
+    return nullptr;
+  }
+
+  memset(body, 0, sizeof(*body));
+
+  body->id = __atomic_fetch_add(&g_stream_body_id, 1, __ATOMIC_RELAXED);
+  body->state = VALK_STREAM_OPEN;
+  body->conn = conn;
+  body->session = session;
+  body->stream_id = stream_id;
+  body->queue_max = STREAM_DEFAULT_QUEUE_MAX;
+
+  body->pending_capacity = STREAM_DEFAULT_BUFFER_SIZE;
+  body->pending_data = malloc(body->pending_capacity);
+  if (!body->pending_data) {
+    VALK_ERROR("stream_body: failed to allocate pending buffer");
+    free(body);
+    return nullptr;
+  }
+
+  body->data_deferred = true;
+
+  u64 now = uv_hrtime() / 1000000;
+  body->created_at_ms = now;
+  body->last_activity_ms = now;
+  body->idle_timeout_ms = 0;
+
+  data_prd_out->source.ptr = body;
+  data_prd_out->read_callback = __stream_data_read_callback;
+
+  VALK_DEBUG("stream_body: created id=%llu, http2_stream=%d",
+             (unsigned long long)body->id, stream_id);
+
+  return body;
+}
+
+static void __stream_body_finish_close(valk_stream_body_t *body) {
+  valk_stream_chunk_t *chunk = body->queue_head;
+  while (chunk) {
+    valk_stream_chunk_t *next = chunk->next;
+    __stream_chunk_free(chunk);
+    chunk = next;
+  }
+  body->queue_head = nullptr;
+  body->queue_tail = nullptr;
+  body->queue_len = 0;
+
+  if (body->pending_data) {
+    free(body->pending_data);
+    body->pending_data = nullptr;
+  }
+
+  if (body->on_close) {
+    body->on_close(body, body->user_data);
+  }
+
+  valk_stream_body_unregister(body);
+}
+
+void valk_stream_body_close(valk_stream_body_t *body) {
+  if (!body) {
+    return;
+  }
+
+  if (body->state == VALK_STREAM_CLOSED || body->state == VALK_STREAM_CLOSING) {
+    return;
+  }
+
+  VALK_DEBUG("stream_body: closing id=%llu (http2_stream=%d)",
+             (unsigned long long)body->id, body->stream_id);
+
+  body->state = VALK_STREAM_CLOSING;
+
+  if (body->data_deferred) {
+    body->data_deferred = false;
+    int rv = nghttp2_session_resume_data(body->session, body->stream_id);
+    if (rv != 0) {
+      VALK_WARN("stream_body: failed to resume stream %d for close: %s",
+                body->stream_id, nghttp2_strerror(rv));
+    }
+  }
+  valk_http2_flush_pending(body->conn);
+}
+
+void valk_stream_body_free(valk_stream_body_t *body) {
+  if (!body) {
+    return;
+  }
+
+  if (body->state != VALK_STREAM_CLOSED) {
+    valk_stream_body_close(body);
+  }
+
+  free(body);
+}
+
+int valk_stream_body_write(valk_stream_body_t *body, const char *data, u64 len) {
+  if (!body || !data) {
+    return -1;
+  }
+
+  if (body->state != VALK_STREAM_OPEN) {
+    VALK_DEBUG("stream_body: write failed, body %llu not open (state=%d)",
+               body->id, body->state);
+    return -1;
+  }
+
+  if (body->queue_len >= body->queue_max) {
+    VALK_DEBUG("stream_body: write backpressure, body %llu queue full (%zu/%zu)",
+               body->id, body->queue_len, body->queue_max);
+    return -2;
+  }
+
+  valk_stream_chunk_t *chunk = malloc(sizeof(valk_stream_chunk_t) + len + 1);
+  if (!chunk) {
+    VALK_ERROR("stream_body: failed to allocate chunk");
+    return -3;
+  }
+
+  char *buf = (char *)(chunk + 1);
+  memcpy(buf, data, len);
+  buf[len] = '\0';
+
+  chunk->data = buf;
+  chunk->data_len = len;
+  chunk->next = nullptr;
+
+  if (body->queue_tail) {
+    body->queue_tail->next = chunk;
+  } else {
+    body->queue_head = chunk;
+  }
+  body->queue_tail = chunk;
+  body->queue_len++;
+
+  valk_stream_body_touch_activity(body);
+
+  VALK_DEBUG("stream_body: enqueued chunk to body %llu (queue_len=%zu, chunk_size=%zu)",
+             body->id, body->queue_len, len);
+
+  if (body->data_deferred) {
+    body->data_deferred = false;
+    int rv = nghttp2_session_resume_data(body->session, body->stream_id);
+    if (rv != 0) {
+      VALK_ERROR("stream_body: failed to resume stream %d: %s",
+                 body->stream_id, nghttp2_strerror(rv));
+      return -4;
+    }
+    valk_http2_flush_pending(body->conn);
+  }
+
+  return 0;
+}
+
+bool valk_stream_body_writable(valk_stream_body_t *body) {
+  if (!body) {
+    return false;
+  }
+  return body->queue_len < body->queue_max;
+}
+
+u64 valk_stream_body_queue_len(valk_stream_body_t *body) {
+  if (!body) {
+    return 0;
+  }
+  return body->queue_len;
+}
+
+static void __stream_chunk_free(valk_stream_chunk_t *chunk) {
+  if (!chunk) {
+    return;
+  }
+  free(chunk);
+}
+
+static nghttp2_ssize __stream_data_read_callback(
+    nghttp2_session *session, i32 stream_id, u8 *buf, size_t length,
+    u32 *data_flags, nghttp2_data_source *source, void *user_data) {
+
+  UNUSED(session);
+  UNUSED(stream_id);
+  UNUSED(user_data);
+
+  valk_stream_body_t *body = (valk_stream_body_t *)source->ptr;
+
+  if (!body) {
+    VALK_ERROR("stream_body: data_read_callback called with NULL body");
+    *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+    return 0;
+  }
+
+  if (body->state == VALK_STREAM_CLOSED) {
+    VALK_DEBUG("stream_body: body %llu closed, returning EOF",
+               (unsigned long long)body->id);
+    *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+    return 0;
+  }
+
+  if (body->pending_offset < body->pending_len) {
+    u64 remaining = body->pending_len - body->pending_offset;
+    u64 to_send = remaining < length ? remaining : length;
+    memcpy(buf, body->pending_data + body->pending_offset, to_send);
+    body->pending_offset += to_send;
+
+    VALK_DEBUG("stream_body: body %llu flushing pending (%llu bytes, %llu remaining)",
+               (unsigned long long)body->id, (unsigned long long)to_send, 
+               (unsigned long long)(remaining - to_send));
+    return (nghttp2_ssize)to_send;
+  }
+
+  if (!body->queue_head) {
+    if (body->state == VALK_STREAM_CLOSING) {
+      VALK_DEBUG("stream_body: body %llu closing with empty queue, finishing close",
+                 (unsigned long long)body->id);
+      body->state = VALK_STREAM_CLOSED;
+      __stream_body_finish_close(body);
+      *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+      return 0;
+    }
+    body->data_deferred = true;
+    VALK_DEBUG("stream_body: body %llu queue empty, deferring",
+               (unsigned long long)body->id);
+    return NGHTTP2_ERR_DEFERRED;
+  }
+
+  valk_stream_chunk_t *chunk = body->queue_head;
+  body->queue_head = chunk->next;
+  if (!body->queue_head) {
+    body->queue_tail = nullptr;
+  }
+  body->queue_len--;
+
+  if (chunk->data_len > body->pending_capacity) {
+    u64 new_capacity = chunk->data_len;
+    char *new_buf = realloc(body->pending_data, new_capacity);
+    if (!new_buf) {
+      VALK_ERROR("stream_body: failed to grow pending buffer for body %llu",
+                 (unsigned long long)body->id);
+      __stream_chunk_free(chunk);
+      *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+      return 0;
+    }
+    body->pending_data = new_buf;
+    body->pending_capacity = new_capacity;
+  }
+
+  memcpy(body->pending_data, chunk->data, chunk->data_len);
+  body->pending_len = chunk->data_len;
+  body->pending_offset = 0;
+
+  body->chunks_sent++;
+  body->bytes_sent += chunk->data_len;
+
+  VALK_DEBUG("stream_body: body %llu dequeued chunk (size=%zu, queue_len=%zu, total_chunks=%llu)",
+             body->id, chunk->data_len, body->queue_len, (unsigned long long)body->chunks_sent);
+
+  __stream_chunk_free(chunk);
+
+  u64 to_send = body->pending_len < length ? body->pending_len : length;
+  memcpy(buf, body->pending_data, to_send);
+  body->pending_offset = to_send;
+
+  if (body->queue_len < body->queue_max / 2 && body->on_drain) {
+    VALK_DEBUG("stream_body: body %llu calling on_drain (queue_len=%llu)",
+               (unsigned long long)body->id, (unsigned long long)body->queue_len);
+    body->on_drain(body, body->user_data);
+  }
+
+  return (nghttp2_ssize)to_send;
+}
+
+static u64 __get_current_time_ms(void) {
+  return uv_hrtime() / 1000000;
+}
+
+void valk_stream_body_set_idle_timeout(valk_stream_body_t *body, u64 timeout_ms) {
+  if (!body) {
+    return;
+  }
+  body->idle_timeout_ms = timeout_ms;
+  VALK_DEBUG("stream_body: body %llu idle timeout set to %llu ms",
+             (unsigned long long)body->id, (unsigned long long)timeout_ms);
+}
+
+void valk_stream_body_touch_activity(valk_stream_body_t *body) {
+  if (!body) {
+    return;
+  }
+  body->last_activity_ms = __get_current_time_ms();
+}
+
+bool valk_stream_body_is_idle_expired(valk_stream_body_t *body) {
+  if (!body || body->idle_timeout_ms == 0) {
+    return false;
+  }
+  u64 now = __get_current_time_ms();
+  u64 idle_time = now - body->last_activity_ms;
+  return idle_time >= body->idle_timeout_ms;
+}
+
+int valk_stream_body_cancel(valk_stream_body_t *body, u32 error_code) {
+  if (!body) {
+    return -1;
+  }
+
+  if (body->state == VALK_STREAM_CLOSED) {
+    return 0;
+  }
+
+  VALK_INFO("stream_body: cancelling body id=%llu with error_code=%u",
+            (unsigned long long)body->id, error_code);
+
+  if (body->session && body->stream_id > 0) {
+    int rv = nghttp2_submit_rst_stream(body->session, NGHTTP2_FLAG_NONE,
+                                        body->stream_id, error_code);
+    if (rv != 0) {
+      VALK_WARN("stream_body: failed to submit RST_STREAM for body %llu: %s",
+                (unsigned long long)body->id, nghttp2_strerror(rv));
+    } else {
+      valk_http2_flush_pending(body->conn);
+    }
+  }
+
+  valk_stream_body_close(body);
+
+  return 0;
+}

@@ -163,34 +163,14 @@ char* valk_aio_metrics_to_json(const valk_aio_metrics_t* m, valk_mem_allocator_t
   }
 
   int written = snprintf(buffer, buffer_size,
-    "{\n"
-    "  \"uptime_seconds\": %.2f,\n"
-    "  \"connections\": {\n"
-    "    \"total\": %llu,\n"
-    "    \"active\": %llu,\n"
-    "    \"failed\": %llu,\n"
-    "    \"connecting\": %llu,\n"
-    "    \"idle\": %llu,\n"
-    "    \"closing\": %llu\n"
-    "  },\n"
-    "  \"streams\": {\n"
-    "    \"total\": %llu,\n"
-    "    \"active\": %llu\n"
-    "  },\n"
-    "  \"requests\": {\n"
-    "    \"total\": %llu,\n"
-    "    \"active\": %llu,\n"
-    "    \"errors\": %llu,\n"
-    "    \"rate_per_sec\": %.2f,\n"
-    "    \"avg_latency_ms\": %.2f\n"
-    "  },\n"
-    "  \"bytes\": {\n"
-    "    \"sent_total\": %llu,\n"
-    "    \"recv_total\": %llu,\n"
-    "    \"sent_rate_kbps\": %.2f,\n"
-    "    \"recv_rate_kbps\": %.2f\n"
-    "  }\n"
-    "}",
+    "{\"uptime_seconds\":%.2f,"
+    "\"connections\":{\"total\":%llu,\"active\":%llu,\"failed\":%llu,"
+    "\"connecting\":%llu,\"idle\":%llu,\"closing\":%llu},"
+    "\"streams\":{\"total\":%llu,\"active\":%llu},"
+    "\"requests\":{\"total\":%llu,\"active\":%llu,\"errors\":%llu,"
+    "\"rate_per_sec\":%.2f,\"avg_latency_ms\":%.2f},"
+    "\"bytes\":{\"sent_total\":%llu,\"recv_total\":%llu,"
+    "\"sent_rate_kbps\":%.2f,\"recv_rate_kbps\":%.2f}}",
     uptime_seconds,
     connections_total, connections_active, connections_failed,
     connections_connecting, connections_idle, connections_closing,
@@ -480,44 +460,18 @@ char* valk_aio_combined_to_json(const valk_aio_metrics_t* m,
     return nullptr;
   }
 
-  // Note: The outer "aio_metrics" wrapper is added by the Lisp layer in debug.valk
-  // This function returns just the inner object content
   int written = snprintf(buffer, buffer_size,
-    "{\n"
-    "  \"uptime_seconds\": %.2f,\n"
-    "  \"system\": {\n"
-    "    \"servers\": %llu,\n"
-    "    \"clients\": %llu,\n"
-    "    \"handles\": %llu,\n"
-    "    \"arenas_used\": %llu,\n"
-    "    \"arenas_total\": %llu,\n"
-    "    \"tcp_buffers_used\": %llu,\n"
-    "    \"tcp_buffers_total\": %llu,\n"
-    "    \"queue_depth\": %llu,\n"
-    "    \"pending_requests\": %llu,\n"
-    "    \"pending_responses\": %llu\n"
-    "  },\n"
-    "  \"connections\": {\n"
-    "    \"total\": %llu,\n"
-    "    \"active\": %llu,\n"
-    "    \"failed\": %llu,\n"
-    "    \"rejected\": %llu,\n"
-    "    \"rejected_load\": %llu,\n"
-    "    \"connecting\": %llu,\n"
-    "    \"idle\": %llu,\n"
-    "    \"closing\": %llu\n"
-    "  },\n"
-    "  \"streams\": {\n"
-    "    \"total\": %llu,\n"
-    "    \"active\": %llu\n"
-    "  },\n"
-    "  \"bytes\": {\n"
-    "    \"sent_total\": %llu,\n"
-    "    \"recv_total\": %llu,\n"
-    "    \"sent_rate_kbps\": %.2f,\n"
-    "    \"recv_rate_kbps\": %.2f\n"
-    "  }\n"
-    "}",
+    "{\"uptime_seconds\":%.2f,"
+    "\"system\":{\"servers\":%llu,\"clients\":%llu,\"handles\":%llu,"
+    "\"arenas_used\":%llu,\"arenas_total\":%llu,"
+    "\"tcp_buffers_used\":%llu,\"tcp_buffers_total\":%llu,"
+    "\"queue_depth\":%llu,\"pending_requests\":%llu,\"pending_responses\":%llu},"
+    "\"connections\":{\"total\":%llu,\"active\":%llu,\"failed\":%llu,"
+    "\"rejected\":%llu,\"rejected_load\":%llu,"
+    "\"connecting\":%llu,\"idle\":%llu,\"closing\":%llu},"
+    "\"streams\":{\"total\":%llu,\"active\":%llu},"
+    "\"bytes\":{\"sent_total\":%llu,\"recv_total\":%llu,"
+    "\"sent_rate_kbps\":%.2f,\"recv_rate_kbps\":%.2f}}",
     uptime_seconds,
     servers, clients, handles,
     arenas_used, s->arenas_total,
@@ -801,32 +755,13 @@ char* valk_vm_metrics_to_json(const valk_vm_metrics_t* m,
     : 0.0;
 
   int written = snprintf(buf, buf_size,
-    "{\n"
-    "  \"gc\": {\n"
-    "    \"cycles_total\": %llu,\n"
-    "    \"pause_us_total\": %llu,\n"
-    "    \"pause_us_max\": %llu,\n"
-    "    \"pause_ms_avg\": %.3f,\n"
-    "    \"reclaimed_bytes_total\": %llu,\n"
-    "    \"heap_used_bytes\": %llu,\n"
-    "    \"heap_total_bytes\": %llu,\n"
-    "    \"heap_utilization_pct\": %.2f\n"
-    "  },\n"
-    "  \"interpreter\": {\n"
-    "    \"evals_total\": %llu,\n"
-    "    \"function_calls\": %llu,\n"
-    "    \"builtin_calls\": %llu,\n"
-    "    \"stack_depth_max\": %u,\n"
-    "    \"closures_created\": %llu,\n"
-    "    \"env_lookups\": %llu\n"
-    "  },\n"
-    "  \"event_loop\": {\n"
-    "    \"iterations\": %llu,\n"
-    "    \"events_processed\": %llu,\n"
-    "    \"idle_time_us\": %llu,\n"
-    "    \"idle_time_pct\": %.2f\n"
-    "  }\n"
-    "}",
+    "{\"gc\":{\"cycles_total\":%llu,\"pause_us_total\":%llu,\"pause_us_max\":%llu,"
+    "\"pause_ms_avg\":%.3f,\"reclaimed_bytes_total\":%llu,\"heap_used_bytes\":%llu,"
+    "\"heap_total_bytes\":%llu,\"heap_utilization_pct\":%.2f},"
+    "\"interpreter\":{\"evals_total\":%llu,\"function_calls\":%llu,\"builtin_calls\":%llu,"
+    "\"stack_depth_max\":%u,\"closures_created\":%llu,\"env_lookups\":%llu},"
+    "\"event_loop\":{\"iterations\":%llu,\"events_processed\":%llu,"
+    "\"idle_time_us\":%llu,\"idle_time_pct\":%.2f}}",
     m->gc_cycles,
     m->gc_pause_us_total,
     m->gc_pause_us_max,

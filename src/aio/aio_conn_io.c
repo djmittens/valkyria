@@ -103,13 +103,23 @@ static void __conn_io_flush_cb(valk_io_write_req_t *req, int status) {
   valk_conn_io_t *io = req->user_data;
   
   if (status != 0) {
-    VALK_ERROR("Write flush failed: %d", status);
+    VALK_DEBUG("Write flush failed: %d (client likely disconnected)", status);
+  }
+  
+  u64 bytes_sent = io->write_buf_desc.len;
+  u64 bytes_remaining = io->write_pos > bytes_sent ? io->write_pos - bytes_sent : 0;
+  
+  if (bytes_remaining > 0) {
+    u8 *buf = valk_conn_io_write_buf_data(io);
+    memmove(buf, buf + bytes_sent, bytes_remaining);
+    VALK_DEBUG("Write flush complete, preserved %llu bytes added during write", 
+               (unsigned long long)bytes_remaining);
   }
   
   io->write_flush_pending = false;
-  io->write_pos = 0;
+  io->write_pos = bytes_remaining;
   
-  VALK_TRACE("Write flush complete, buffer reset");
+  VALK_TRACE("Write flush complete, %llu bytes remaining", (unsigned long long)bytes_remaining);
   
   if (io->flush_cb) {
     io->flush_cb(io->flush_ctx, status);
