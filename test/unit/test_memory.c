@@ -121,7 +121,7 @@ void test_slab_new_basic(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_slab_t *slab = valk_slab_new(64, 10);
-  VALK_TEST_ASSERT(slab != NULL, "Slab should be created");
+  VALK_TEST_ASSERT(slab != nullptr, "Slab should be created");
   VALK_TEST_ASSERT(slab->type == VALK_ALLOC_SLAB, "Type should be SLAB");
   VALK_TEST_ASSERT(slab->itemSize == 64, "Item size should be 64");
   VALK_TEST_ASSERT(slab->numItems == 10, "Num items should be 10");
@@ -138,11 +138,11 @@ void test_slab_acquire_release(VALK_TEST_ARGS()) {
   valk_slab_t *slab = valk_slab_new(64, 5);
 
   valk_slab_item_t *item1 = valk_slab_aquire(slab);
-  VALK_TEST_ASSERT(item1 != NULL, "Should acquire first item");
+  VALK_TEST_ASSERT(item1 != nullptr, "Should acquire first item");
   VALK_TEST_ASSERT(valk_slab_available(slab) == 4, "Should have 4 free");
 
   valk_slab_item_t *item2 = valk_slab_aquire(slab);
-  VALK_TEST_ASSERT(item2 != NULL, "Should acquire second item");
+  VALK_TEST_ASSERT(item2 != nullptr, "Should acquire second item");
   VALK_TEST_ASSERT(valk_slab_available(slab) == 3, "Should have 3 free");
 
   valk_slab_release(slab, item1);
@@ -164,11 +164,11 @@ void test_slab_exhaustion(VALK_TEST_ARGS()) {
   valk_slab_item_t *items[3];
   for (int i = 0; i < 3; i++) {
     items[i] = valk_slab_aquire(slab);
-    VALK_TEST_ASSERT(items[i] != NULL, "Should acquire item %d", i);
+    VALK_TEST_ASSERT(items[i] != nullptr, "Should acquire item %d", i);
   }
 
   valk_slab_item_t *overflow = valk_slab_aquire(slab);
-  VALK_TEST_ASSERT(overflow == NULL, "Should return NULL when exhausted");
+  VALK_TEST_ASSERT(overflow == nullptr, "Should return nullptr when exhausted");
 
   VALK_TEST_ASSERT(slab->overflowCount >= 1, "Overflow count should increment");
 
@@ -249,10 +249,10 @@ void test_arena_alloc_basic(VALK_TEST_ARGS()) {
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, 4096);
 
-  valk_thread_ctx.heap = NULL;
+  valk_thread_ctx.heap = nullptr;
 
   void *ptr = valk_mem_arena_alloc(arena, 100);
-  VALK_TEST_ASSERT(ptr != NULL, "Should allocate from arena");
+  VALK_TEST_ASSERT(ptr != nullptr, "Should allocate from arena");
   VALK_TEST_ASSERT(arena->stats.total_allocations == 1, "Should count allocation");
   VALK_TEST_ASSERT(arena->offset > 0, "Offset should advance");
 
@@ -352,13 +352,13 @@ void test_ptr_in_arena(VALK_TEST_ARGS()) {
 void test_ptr_in_arena_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  VALK_TEST_ASSERT(valk_ptr_in_arena(NULL, NULL) == false, "NULL arena should return false");
+  VALK_TEST_ASSERT(valk_ptr_in_arena(nullptr, nullptr) == false, "nullptr arena should return false");
 
   size_t arena_size = 4096 + sizeof(valk_mem_arena_t);
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, 4096);
 
-  VALK_TEST_ASSERT(valk_ptr_in_arena(arena, NULL) == false, "NULL ptr should return false");
+  VALK_TEST_ASSERT(valk_ptr_in_arena(arena, nullptr) == false, "nullptr ptr should return false");
 
   free(arena);
 
@@ -373,7 +373,7 @@ void test_buffer_alloc_append(VALK_TEST_ARGS()) {
 
   VALK_TEST_ASSERT(buf.capacity == 1024, "Capacity should be 1024");
   VALK_TEST_ASSERT(buf.count == 0, "Initial count should be 0");
-  VALK_TEST_ASSERT(buf.items != NULL, "Items should be allocated");
+  VALK_TEST_ASSERT(buf.items != nullptr, "Items should be allocated");
 
   char data[] = "hello";
   valk_buffer_append(&buf, data, 5);
@@ -422,7 +422,7 @@ void test_next_pow2(VALK_TEST_ARGS()) {
 void test_allocator_type_to_string(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  VALK_TEST_ASSERT(strcmp(valk_mem_allocator_e_to_string(VALK_ALLOC_NULL), "NULL Alloc") == 0, "NULL");
+  VALK_TEST_ASSERT(strcmp(valk_mem_allocator_e_to_string(VALK_ALLOC_NULL), "nullptr Alloc") == 0, "nullptr");
   VALK_TEST_ASSERT(strcmp(valk_mem_allocator_e_to_string(VALK_ALLOC_MALLOC), "Malloc Alloc") == 0, "MALLOC");
   VALK_TEST_ASSERT(strcmp(valk_mem_allocator_e_to_string(VALK_ALLOC_ARENA), "Arena Alloc") == 0, "ARENA");
   VALK_TEST_ASSERT(strcmp(valk_mem_allocator_e_to_string(VALK_ALLOC_SLAB), "Slab Alloc") == 0, "SLAB");
@@ -447,7 +447,7 @@ void test_process_memory_collect(VALK_TEST_ARGS()) {
 void test_process_memory_collect_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_process_memory_collect(NULL);
+  valk_process_memory_collect(nullptr);
 
   VALK_PASS();
 }
@@ -455,7 +455,7 @@ void test_process_memory_collect_null(VALK_TEST_ARGS()) {
 void test_smaps_collect_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_smaps_collect(NULL);
+  valk_smaps_collect(nullptr);
 
   VALK_PASS();
 }
@@ -472,13 +472,13 @@ void test_smaps_collect_basic(VALK_TEST_ARGS()) {
 void test_arena_print_stats_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_mem_arena_print_stats(NULL, stdout);
-  valk_mem_arena_print_stats(NULL, NULL);
+  valk_mem_arena_print_stats(nullptr, stdout);
+  valk_mem_arena_print_stats(nullptr, nullptr);
 
   size_t arena_size = 4096 + sizeof(valk_mem_arena_t);
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, 4096);
-  valk_mem_arena_print_stats(arena, NULL);
+  valk_mem_arena_print_stats(arena, nullptr);
   free(arena);
 
   VALK_PASS();
@@ -500,7 +500,7 @@ void test_slab_release_ptr(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-static valk_slab_t *concurrent_slab = NULL;
+static valk_slab_t *concurrent_slab = nullptr;
 static _Atomic int concurrent_errors = 0;
 
 static void *concurrent_slab_thread(void *arg) {
@@ -514,7 +514,7 @@ static void *concurrent_slab_thread(void *arg) {
       valk_slab_release(concurrent_slab, item);
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 void test_slab_concurrent(VALK_TEST_ARGS()) {
@@ -527,17 +527,17 @@ void test_slab_concurrent(VALK_TEST_ARGS()) {
   int thread_ids[4] = {0, 1, 2, 3};
 
   for (int i = 0; i < 4; i++) {
-    pthread_create(&threads[i], NULL, concurrent_slab_thread, &thread_ids[i]);
+    pthread_create(&threads[i], nullptr, concurrent_slab_thread, &thread_ids[i]);
   }
 
   for (int i = 0; i < 4; i++) {
-    pthread_join(threads[i], NULL);
+    pthread_join(threads[i], nullptr);
   }
 
   VALK_TEST_ASSERT(valk_slab_available(concurrent_slab) == 20, "All items should be returned");
 
   valk_slab_free(concurrent_slab);
-  concurrent_slab = NULL;
+  concurrent_slab = nullptr;
 
   VALK_PASS();
 }
@@ -546,12 +546,12 @@ void test_allocator_malloc(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   void *ptr = valk_mem_allocator_alloc(&valk_malloc_allocator, 1024);
-  VALK_TEST_ASSERT(ptr != NULL, "Should allocate via malloc");
+  VALK_TEST_ASSERT(ptr != nullptr, "Should allocate via malloc");
 
   memset(ptr, 0xCD, 1024);
 
   ptr = valk_mem_allocator_realloc(&valk_malloc_allocator, ptr, 2048);
-  VALK_TEST_ASSERT(ptr != NULL, "Should realloc via malloc");
+  VALK_TEST_ASSERT(ptr != nullptr, "Should realloc via malloc");
 
   valk_mem_allocator_free(&valk_malloc_allocator, ptr);
 
@@ -562,7 +562,7 @@ void test_allocator_malloc_calloc(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   void *ptr = valk_mem_allocator_calloc(&valk_malloc_allocator, 10, 100);
-  VALK_TEST_ASSERT(ptr != NULL, "Should calloc via malloc");
+  VALK_TEST_ASSERT(ptr != nullptr, "Should calloc via malloc");
 
   char *bytes = (char *)ptr;
   for (int i = 0; i < 1000; i++) {

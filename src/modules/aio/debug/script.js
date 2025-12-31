@@ -4776,20 +4776,32 @@
       // Transform VM metrics
       if (metrics.vm) {
         var vm = metrics.vm;
+        var gcData = {
+          cycles_total: vm.gc ? vm.gc.cycles_total : 0,
+          pause_us_total: vm.gc ? vm.gc.pause_us_total : 0,
+          pause_us_max: vm.gc ? vm.gc.pause_us_max : 0,
+          reclaimed_bytes_total: vm.gc ? vm.gc.reclaimed_bytes_total : 0,
+          allocated_bytes_total: vm.gc ? vm.gc.allocated_bytes : 0,
+          efficiency_pct: vm.gc ? vm.gc.efficiency_pct : 0,
+          heap_used_bytes: vm.gc ? vm.gc.heap_used_bytes : 0,
+          heap_total_bytes: vm.gc ? vm.gc.heap_total_bytes : 0,
+          large_object_bytes: vm.gc ? vm.gc.large_object_bytes : 0,
+          pause_ms_avg: vm.gc && vm.gc.cycles_total > 0
+            ? (vm.gc.pause_us_total / vm.gc.cycles_total) / 1000
+            : 0
+        };
+        // Pass through size_classes, pause_histogram, survival if present
+        if (vm.gc && vm.gc.size_classes) {
+          gcData.size_classes = vm.gc.size_classes;
+        }
+        if (vm.gc && vm.gc.pause_histogram) {
+          gcData.pause_histogram = vm.gc.pause_histogram;
+        }
+        if (vm.gc && vm.gc.survival) {
+          gcData.survival = vm.gc.survival;
+        }
         dashboardData.vm_metrics = {
-          gc: {
-            cycles_total: vm.gc ? vm.gc.cycles_total : 0,
-            pause_us_total: vm.gc ? vm.gc.pause_us_total : 0,
-            pause_us_max: vm.gc ? vm.gc.pause_us_max : 0,
-            reclaimed_bytes_total: vm.gc ? vm.gc.reclaimed_bytes : 0,
-            allocated_bytes_total: vm.gc ? vm.gc.allocated_bytes : 0,
-            efficiency_pct: vm.gc ? vm.gc.efficiency_pct : 0,
-            heap_used_bytes: vm.gc ? vm.gc.heap_used_bytes : 0,
-            heap_total_bytes: vm.gc ? vm.gc.heap_total_bytes : 0,
-            pause_ms_avg: vm.gc && vm.gc.cycles_total > 0
-              ? (vm.gc.pause_us_total / vm.gc.cycles_total) / 1000
-              : 0
-          },
+          gc: gcData,
           interpreter: {
             evals_total: vm.interpreter ? vm.interpreter.evals_total : 0,
             function_calls: vm.interpreter ? vm.interpreter.function_calls : 0,
@@ -4857,6 +4869,11 @@
 
       // Call the main dashboard update function
       updateDashboard(dashboardData);
+
+      // Update GC stats panel with full VM GC data (size_classes, pause_histogram, survival)
+      if (dashboardData.vm_metrics && dashboardData.vm_metrics.gc) {
+        this.updateGCStats(dashboardData.vm_metrics.gc);
+      }
 
       // Update metrics registry panel if registry data is present
       if (metrics.registry) {
@@ -5095,9 +5112,10 @@
     }
 
     updateGCStats(gc) {
-      // Update heap pressure gauge (new premium visualization)
+      // Update heap pressure gauge (works with both tiered and non-tiered GC)
+      this.updateHeapPressure(gc);
+      
       if (gc.tiers && gc.tiers.length > 0) {
-        this.updateHeapPressure(gc);
         this.updateTieredHeap(gc);
       }
 
@@ -5108,15 +5126,17 @@
         var peak = gcPanel.querySelector('[data-gc="peak"]');
         var cycles = gcPanel.querySelector('[data-gc="cycles"]');
 
-        // For legacy panel, show combined bytes from all tiers
+        // For legacy panel, show combined bytes from all tiers or heap_used_bytes
         var totalUsed = 0;
         if (gc.tiers) {
           for (var i = 0; i < gc.tiers.length; i++) {
             totalUsed += gc.tiers[i].bytes_used || 0;
           }
+        } else {
+          totalUsed = gc.heap_used_bytes || 0;
         }
         if (allocated) allocated.textContent = this.formatBytes(totalUsed);
-        if (cycles) cycles.textContent = gc.cycles.toLocaleString();
+        if (cycles) cycles.textContent = (gc.cycles_total || gc.cycles || 0).toLocaleString();
       }
 
       // Update survival histogram (object lifetimes)
@@ -5230,11 +5250,16 @@
     }
 
     updateHeapPressure(gc) {
-      var tiers = gc.tiers || [];
-      var heapTier = this.findTier(tiers, 'heap2') || {};
+      var heapUsed, heapTotal;
       
-      var heapUsed = heapTier.bytes_used || 0;
-      var heapTotal = heapTier.bytes_total || 1;
+      if (gc.tiers && gc.tiers.length > 0) {
+        var heapTier = this.findTier(gc.tiers, 'heap2') || {};
+        heapUsed = heapTier.bytes_used || 0;
+        heapTotal = heapTier.bytes_total || 1;
+      } else {
+        heapUsed = gc.heap_used_bytes || 0;
+        heapTotal = gc.heap_total_bytes || 1;
+      }
       var heapPct = heapTotal > 0 ? (heapUsed / heapTotal) * 100 : 0;
 
       var arc = document.getElementById('heap-pressure-arc');

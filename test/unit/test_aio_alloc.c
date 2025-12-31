@@ -47,7 +47,7 @@ void test_aio_nghttp2_mem_not_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   nghttp2_mem *mem = valk_aio_nghttp2_mem();
-  VALK_TEST_ASSERT(mem != NULL, "nghttp2_mem should not be NULL");
+  VALK_TEST_ASSERT(mem != nullptr, "nghttp2_mem should not be nullptr");
 
   VALK_PASS();
 }
@@ -56,11 +56,11 @@ void test_aio_nghttp2_mem_has_functions(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   nghttp2_mem *mem = valk_aio_nghttp2_mem();
-  VALK_TEST_ASSERT(mem != NULL, "nghttp2_mem should not be NULL");
-  VALK_TEST_ASSERT(mem->malloc != NULL, "malloc function should be set");
-  VALK_TEST_ASSERT(mem->free != NULL, "free function should be set");
-  VALK_TEST_ASSERT(mem->calloc != NULL, "calloc function should be set");
-  VALK_TEST_ASSERT(mem->realloc != NULL, "realloc function should be set");
+  VALK_TEST_ASSERT(mem != nullptr, "nghttp2_mem should not be nullptr");
+  VALK_TEST_ASSERT(mem->malloc != nullptr, "malloc function should be set");
+  VALK_TEST_ASSERT(mem->free != nullptr, "free function should be set");
+  VALK_TEST_ASSERT(mem->calloc != nullptr, "calloc function should be set");
+  VALK_TEST_ASSERT(mem->realloc != nullptr, "realloc function should be set");
 
   VALK_PASS();
 }
@@ -72,7 +72,7 @@ void test_aio_nghttp2_malloc_free(VALK_TEST_ARGS()) {
   size_t before = valk_aio_nghttp2_bytes_used();
 
   void *ptr = mem->malloc(1024, mem->mem_user_data);
-  VALK_TEST_ASSERT(ptr != NULL, "malloc should succeed");
+  VALK_TEST_ASSERT(ptr != nullptr, "malloc should succeed");
 
   size_t during = valk_aio_nghttp2_bytes_used();
   VALK_TEST_ASSERT(during >= before + 1024, "bytes used should increase by at least 1024");
@@ -91,7 +91,7 @@ void test_aio_nghttp2_calloc(VALK_TEST_ARGS()) {
   size_t before = valk_aio_nghttp2_bytes_used();
 
   void *ptr = mem->calloc(10, 100, mem->mem_user_data);
-  VALK_TEST_ASSERT(ptr != NULL, "calloc should succeed");
+  VALK_TEST_ASSERT(ptr != nullptr, "calloc should succeed");
 
   size_t during = valk_aio_nghttp2_bytes_used();
   VALK_TEST_ASSERT(during >= before + 1000, "bytes used should increase by at least 1000");
@@ -112,12 +112,12 @@ void test_aio_nghttp2_realloc(VALK_TEST_ARGS()) {
   nghttp2_mem *mem = valk_aio_nghttp2_mem();
 
   void *ptr = mem->malloc(100, mem->mem_user_data);
-  VALK_TEST_ASSERT(ptr != NULL, "initial malloc should succeed");
+  VALK_TEST_ASSERT(ptr != nullptr, "initial malloc should succeed");
 
   strcpy(ptr, "test data");
 
   void *new_ptr = mem->realloc(ptr, 200, mem->mem_user_data);
-  VALK_TEST_ASSERT(new_ptr != NULL, "realloc should succeed");
+  VALK_TEST_ASSERT(new_ptr != nullptr, "realloc should succeed");
   VALK_TEST_ASSERT(strcmp(new_ptr, "test data") == 0, "data should be preserved");
 
   mem->free(new_ptr, mem->mem_user_data);
@@ -131,8 +131,8 @@ void test_aio_nghttp2_realloc_null_ptr(VALK_TEST_ARGS()) {
   nghttp2_mem *mem = valk_aio_nghttp2_mem();
   size_t before = valk_aio_nghttp2_bytes_used();
 
-  void *ptr = mem->realloc(NULL, 256, mem->mem_user_data);
-  VALK_TEST_ASSERT(ptr != NULL, "realloc(NULL) should act as malloc");
+  void *ptr = mem->realloc(nullptr, 256, mem->mem_user_data);
+  VALK_TEST_ASSERT(ptr != nullptr, "realloc(nullptr) should act as malloc");
 
   size_t after = valk_aio_nghttp2_bytes_used();
   VALK_TEST_ASSERT(after >= before + 256, "bytes should increase");
@@ -148,10 +148,10 @@ void test_aio_nghttp2_realloc_to_zero(VALK_TEST_ARGS()) {
   nghttp2_mem *mem = valk_aio_nghttp2_mem();
 
   void *ptr = mem->malloc(100, mem->mem_user_data);
-  VALK_TEST_ASSERT(ptr != NULL, "initial malloc should succeed");
+  VALK_TEST_ASSERT(ptr != nullptr, "initial malloc should succeed");
 
   void *result = mem->realloc(ptr, 0, mem->mem_user_data);
-  VALK_TEST_ASSERT(result == NULL, "realloc to 0 should return NULL");
+  VALK_TEST_ASSERT(result == nullptr, "realloc to 0 should return nullptr");
 
   VALK_PASS();
 }
@@ -162,10 +162,10 @@ void test_aio_nghttp2_free_null(VALK_TEST_ARGS()) {
   nghttp2_mem *mem = valk_aio_nghttp2_mem();
   size_t before = valk_aio_nghttp2_bytes_used();
 
-  mem->free(NULL, mem->mem_user_data);
+  mem->free(nullptr, mem->mem_user_data);
 
   size_t after = valk_aio_nghttp2_bytes_used();
-  VALK_TEST_ASSERT(before == after, "freeing NULL should not change bytes used");
+  VALK_TEST_ASSERT(before == after, "freeing nullptr should not change bytes used");
 
   VALK_PASS();
 }
@@ -178,7 +178,7 @@ void test_aio_multiple_allocations(VALK_TEST_ARGS()) {
 
   for (int i = 0; i < 10; i++) {
     ptrs[i] = mem->malloc((size_t)(100 * (i + 1)), mem->mem_user_data);
-    VALK_TEST_ASSERT(ptrs[i] != NULL, "malloc should succeed");
+    VALK_TEST_ASSERT(ptrs[i] != nullptr, "malloc should succeed");
   }
 
   for (int i = 0; i < 10; i++) {
@@ -195,7 +195,7 @@ void test_aio_large_allocation(VALK_TEST_ARGS()) {
   size_t before = valk_aio_nghttp2_bytes_used();
 
   void *ptr = mem->malloc(1024 * 1024, mem->mem_user_data);
-  VALK_TEST_ASSERT(ptr != NULL, "large malloc should succeed");
+  VALK_TEST_ASSERT(ptr != nullptr, "large malloc should succeed");
 
   size_t during = valk_aio_nghttp2_bytes_used();
   VALK_TEST_ASSERT(during >= before + 1024 * 1024, "bytes should increase by 1MB");
@@ -225,7 +225,7 @@ void test_aio_nghttp2_realloc_grow(VALK_TEST_ARGS()) {
   nghttp2_mem *mem = valk_aio_nghttp2_mem();
 
   void *ptr = mem->malloc(64, mem->mem_user_data);
-  VALK_TEST_ASSERT(ptr != NULL, "initial malloc should succeed");
+  VALK_TEST_ASSERT(ptr != nullptr, "initial malloc should succeed");
 
   char *data = (char *)ptr;
   for (int i = 0; i < 64; i++) {
@@ -233,7 +233,7 @@ void test_aio_nghttp2_realloc_grow(VALK_TEST_ARGS()) {
   }
 
   void *new_ptr = mem->realloc(ptr, 128, mem->mem_user_data);
-  VALK_TEST_ASSERT(new_ptr != NULL, "realloc grow should succeed");
+  VALK_TEST_ASSERT(new_ptr != nullptr, "realloc grow should succeed");
 
   char *new_data = (char *)new_ptr;
   for (int i = 0; i < 64; i++) {
@@ -251,12 +251,12 @@ void test_aio_nghttp2_realloc_shrink(VALK_TEST_ARGS()) {
   nghttp2_mem *mem = valk_aio_nghttp2_mem();
 
   void *ptr = mem->malloc(256, mem->mem_user_data);
-  VALK_TEST_ASSERT(ptr != NULL, "initial malloc should succeed");
+  VALK_TEST_ASSERT(ptr != nullptr, "initial malloc should succeed");
 
   strcpy(ptr, "hello");
 
   void *new_ptr = mem->realloc(ptr, 32, mem->mem_user_data);
-  VALK_TEST_ASSERT(new_ptr != NULL, "realloc shrink should succeed");
+  VALK_TEST_ASSERT(new_ptr != nullptr, "realloc shrink should succeed");
   VALK_TEST_ASSERT(strcmp(new_ptr, "hello") == 0, "data should be preserved on shrink");
 
   mem->free(new_ptr, mem->mem_user_data);
@@ -270,7 +270,7 @@ void test_aio_nghttp2_calloc_zero_nmemb(VALK_TEST_ARGS()) {
   nghttp2_mem *mem = valk_aio_nghttp2_mem();
 
   void *ptr = mem->calloc(0, 100, mem->mem_user_data);
-  if (ptr != NULL) {
+  if (ptr != nullptr) {
     mem->free(ptr, mem->mem_user_data);
   }
 
@@ -283,7 +283,7 @@ void test_aio_nghttp2_calloc_zero_size(VALK_TEST_ARGS()) {
   nghttp2_mem *mem = valk_aio_nghttp2_mem();
 
   void *ptr = mem->calloc(100, 0, mem->mem_user_data);
-  if (ptr != NULL) {
+  if (ptr != nullptr) {
     mem->free(ptr, mem->mem_user_data);
   }
 
@@ -296,7 +296,7 @@ void test_aio_libuv_allocations_via_uv(VALK_TEST_ARGS()) {
   size_t before = valk_aio_libuv_bytes_used();
 
   uv_loop_t *loop = malloc(sizeof(uv_loop_t));
-  VALK_TEST_ASSERT(loop != NULL, "should allocate loop");
+  VALK_TEST_ASSERT(loop != nullptr, "should allocate loop");
 
   int r = uv_loop_init(loop);
   VALK_TEST_ASSERT(r == 0, "loop init should succeed");

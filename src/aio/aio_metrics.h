@@ -93,6 +93,9 @@ typedef struct {
 // Get current event loop metrics from libuv
 void valk_event_loop_metrics_get(struct uv_loop_s* loop, valk_event_loop_metrics_t* out);
 
+// Size class metrics (9 classes: 16, 32, 64, 128, 256, 512, 1024, 2048, 4096)
+#define VALK_VM_SIZE_CLASSES 9
+
 // Combined VM metrics (all subsystems in one structure)
 typedef struct {
   // GC metrics
@@ -100,10 +103,28 @@ typedef struct {
   u64 gc_pause_us_total;
   u64 gc_pause_us_max;
   u64 gc_reclaimed_bytes;
-  u64 gc_allocated_bytes;  // Cumulative bytes allocated (for rate calculation)
-  u8 gc_efficiency_pct;    // Last GC efficiency (reclaimed/before*100, 0-100)
+  u64 gc_allocated_bytes;
+  u8 gc_efficiency_pct;
   u64 gc_heap_used;
   u64 gc_heap_total;
+  u64 gc_large_object_bytes;
+
+  // Size class breakdown (slots used/total per class)
+  u64 size_class_used[VALK_VM_SIZE_CLASSES];
+  u64 size_class_total[VALK_VM_SIZE_CLASSES];
+
+  // GC pause histogram (buckets: 0-1ms, 1-5ms, 5-10ms, 10-16ms, 16ms+)
+  u64 pause_0_1ms;
+  u64 pause_1_5ms;
+  u64 pause_5_10ms;
+  u64 pause_10_16ms;
+  u64 pause_16ms_plus;
+
+  // Object survival histogram (generations survived)
+  u64 survival_gen_0;
+  u64 survival_gen_1_5;
+  u64 survival_gen_6_20;
+  u64 survival_gen_21_plus;
 
   // Interpreter metrics
   u64 eval_total;
@@ -261,7 +282,7 @@ typedef struct valk_aio_metrics_state {
 } valk_aio_metrics_state_t;
 
 // Allocate and initialize metrics state
-// Returns NULL if allocation fails
+// Returns nullptr if allocation fails
 valk_aio_metrics_state_t* valk_aio_metrics_state_new(
     u64 arenas_total,
     u64 tcp_buffers_total,

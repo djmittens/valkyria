@@ -69,7 +69,7 @@ void test_loop_metrics_basic(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(metrics.loop_count >= 1,
                    "Loop count should be at least 1, got %lu", metrics.loop_count);
 
-  uv_close((uv_handle_t*)&timer, NULL);
+  uv_close((uv_handle_t*)&timer, nullptr);
   uv_run(&loop, UV_RUN_DEFAULT);
   uv_loop_close(&loop);
   VALK_PASS();
@@ -83,10 +83,10 @@ void test_loop_metrics_null_safety(VALK_TEST_ARGS()) {
 
   valk_event_loop_metrics_t metrics;
 
-  // Should not crash with NULL parameters
-  valk_event_loop_metrics_get(NULL, &metrics);
-  valk_event_loop_metrics_get(&loop, NULL);
-  valk_event_loop_metrics_get(NULL, NULL);
+  // Should not crash with nullptr parameters
+  valk_event_loop_metrics_get(nullptr, &metrics);
+  valk_event_loop_metrics_get(&loop, nullptr);
+  valk_event_loop_metrics_get(nullptr, nullptr);
 
   uv_loop_close(&loop);
   VALK_PASS();
@@ -149,7 +149,7 @@ void test_loop_iterations_counted(VALK_TEST_ARGS()) {
                    "Loop count should increase from %lu to %lu",
                    initial_count, after.loop_count);
 
-  uv_close((uv_handle_t*)&timer, NULL);
+  uv_close((uv_handle_t*)&timer, nullptr);
   uv_run(&loop, UV_RUN_DEFAULT);
   uv_loop_close(&loop);
   VALK_PASS();
@@ -188,7 +188,7 @@ void test_loop_events_counted(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(after.events >= before.events,
                    "Events should have been counted");
 
-  uv_close((uv_handle_t*)&timer, NULL);
+  uv_close((uv_handle_t*)&timer, nullptr);
   uv_run(&loop, UV_RUN_DEFAULT);
   uv_loop_close(&loop);
   VALK_PASS();
@@ -236,7 +236,7 @@ void test_loop_multiple_events(VALK_TEST_ARGS()) {
 
   // Clean up
   for (int i = 0; i < 3; i++) {
-    uv_close((uv_handle_t*)&timers[i], NULL);
+    uv_close((uv_handle_t*)&timers[i], nullptr);
   }
   uv_run(&loop, UV_RUN_DEFAULT);
   uv_loop_close(&loop);
@@ -276,7 +276,7 @@ void test_loop_idle_time(VALK_TEST_ARGS()) {
                    "Idle time should be reasonable, got %lu us",
                    metrics.idle_time_us);
 
-  uv_close((uv_handle_t*)&timer, NULL);
+  uv_close((uv_handle_t*)&timer, nullptr);
   uv_run(&loop, UV_RUN_DEFAULT);
   uv_loop_close(&loop);
   VALK_PASS();
@@ -315,7 +315,7 @@ void test_loop_idle_time_increases(VALK_TEST_ARGS()) {
                    "Idle time should increase or stay same: %lu -> %lu",
                    first.idle_time_us, second.idle_time_us);
 
-  uv_close((uv_handle_t*)&timer, NULL);
+  uv_close((uv_handle_t*)&timer, nullptr);
   uv_run(&loop, UV_RUN_DEFAULT);
   uv_loop_close(&loop);
   VALK_PASS();
@@ -358,7 +358,7 @@ void test_loop_events_waiting(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(ctx.fire_count >= 3,
                    "Timer should have fired at least 3 times");
 
-  uv_close((uv_handle_t*)&timer, NULL);
+  uv_close((uv_handle_t*)&timer, nullptr);
   uv_run(&loop, UV_RUN_DEFAULT);
   uv_loop_close(&loop);
   VALK_PASS();

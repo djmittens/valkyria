@@ -84,12 +84,12 @@ u64 valk_coverage_get_line_expr_count(u16 file_id, u16 line, u64 *hit, u64 *tota
 #define VALK_COVERAGE_RECORD_LINE(fid, line) valk_coverage_record_line(fid, line)
 #define VALK_COVERAGE_MARK_LINE(fid, line) valk_coverage_mark_line(fid, line)
 #define VALK_COVERAGE_RECORD_LVAL(lval) do { \
-  if ((lval) != NULL && (lval)->cov_line > 0) { \
+  if ((lval) != nullptr && (lval)->cov_line > 0) { \
     valk_coverage_record_expr((lval)->cov_file_id, (lval)->cov_line, (lval)->cov_column); \
   } \
 } while(0)
 #define VALK_COVERAGE_MARK_LVAL(lval) do { \
-  if ((lval) != NULL && (lval)->cov_line > 0) { \
+  if ((lval) != nullptr && (lval)->cov_line > 0) { \
     valk_coverage_mark_expr((lval)->cov_file_id, (lval)->cov_line, (lval)->cov_column, 0); \
   } \
 } while(0)

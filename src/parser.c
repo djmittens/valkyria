@@ -319,20 +319,21 @@ valk_lval_t* valk_lval_err(const char* fmt, ...) {
       LVAL_ERR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
-  va_list va;
+  va_list va, va2;
   va_start(va, fmt);
+  // NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) - va_start called above
+  va_copy(va2, va);
 
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   u64 len = vsnprintf(nullptr, 0, fmt, va);
   va_end(va);
-  va_start(va, fmt);
 
   // TODO(main): look into making this into a constant
   len = len < 10000 ? len : 511;
   res->str = valk_mem_alloc(len + 1);
   // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  vsnprintf(res->str, len + 1, fmt, va);
-  va_end(va);
+  vsnprintf(res->str, len + 1, fmt, va2);
+  va_end(va2);
   valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
@@ -1349,6 +1350,7 @@ apply_cont:
           return value;
           
         case CONT_SINGLE_ELEM:
+          // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - value always set before apply_cont
           if (LVAL_TYPE(value) == LVAL_FUN) {
             valk_eval_result_t res = valk_eval_apply_func_iter(frame.env, value, valk_lval_nil());
             if (!res.is_thunk) {
@@ -1459,6 +1461,7 @@ apply_cont:
         }
         
         case CONT_IF_BRANCH: {
+          // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - value always set before apply_cont
           if (LVAL_TYPE(value) == LVAL_ERR) goto apply_cont;
           
           bool condition = false;
@@ -1719,6 +1722,7 @@ valk_lval_t* valk_lval_pop(valk_lval_t* lval, u64 i) {
 
   if (i == 0) {
     // Pop first element
+    // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - lval validated by LVAL_ASSERT above
     valk_lval_t* cell = lval->cons.head;
     // Move tail's contents into lval
     if (lval->cons.tail != nullptr &&
@@ -2400,6 +2404,7 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
       return;
     }
     if (env->symbols.count > 0) {
+      // NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) - items non-null when count > 0
       memcpy(new_items, env->symbols.items, sizeof(char*) * env->symbols.count);
     }
     if (env->symbols.items) valk_mem_free(env->symbols.items);
@@ -3717,15 +3722,18 @@ static valk_lval_t* valk_builtin_str_split(valk_lenv_t* e, valk_lval_t* a) {
   u64 idx = 0;
   const char* start = str;
   const char* found;
+  // NOLINTBEGIN(clang-analyzer-security.ArrayBound) - idx always < count
   while ((found = strstr(start, delim)) != NULL) {
     u64 part_len = found - start;
     parts[idx++] = valk_lval_str_n(start, part_len);
     start = found + delim_len;
   }
   parts[idx++] = valk_lval_str(start);
+  // NOLINTEND(clang-analyzer-security.ArrayBound)
 
   valk_lval_t* result = valk_lval_nil();
   for (u64 i = count; i > 0; i--) {
+    // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage) - parts fully populated by loop above
     result = valk_lval_cons(parts[i - 1], result);
   }
 

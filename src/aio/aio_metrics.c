@@ -724,6 +724,25 @@ void valk_vm_metrics_collect(valk_vm_metrics_t* out,
     out->gc_heap_total = heap_total;
     out->gc_allocated_bytes = valk_gc_get_allocated_bytes_total(heap);
     out->gc_efficiency_pct = valk_gc_get_last_efficiency(heap);
+
+    // Size class breakdown
+    valk_gc_stats2_t gc_stats;
+    valk_gc_heap2_get_stats(heap, &gc_stats);
+    out->gc_large_object_bytes = gc_stats.large_object_bytes;
+    for (int i = 0; i < VALK_VM_SIZE_CLASSES; i++) {
+      out->size_class_used[i] = gc_stats.class_used_slots[i];
+      out->size_class_total[i] = gc_stats.class_total_slots[i];
+    }
+
+    // Pause histogram
+    valk_gc_get_pause_histogram(heap,
+      &out->pause_0_1ms, &out->pause_1_5ms, &out->pause_5_10ms,
+      &out->pause_10_16ms, &out->pause_16ms_plus);
+
+    // Survival histogram
+    valk_gc_get_survival_histogram(heap,
+      &out->survival_gen_0, &out->survival_gen_1_5,
+      &out->survival_gen_6_20, &out->survival_gen_21_plus);
   }
 
   // Interpreter metrics
@@ -746,44 +765,96 @@ char* valk_vm_metrics_to_json(const valk_vm_metrics_t* m,
                                valk_mem_allocator_t* alloc) {
   if (!m) return nullptr;
 
-  u64 buf_size = 2048;
+  u64 buf_size = 4096;
   char* buf = alloc ? valk_mem_allocator_alloc(alloc, buf_size) : malloc(buf_size);
   if (!buf) return nullptr;
+
+  char* p = buf;
+  char* end = buf + buf_size;
+  int n;
 
   double heap_util = m->gc_heap_total > 0
     ? 100.0 * (double)m->gc_heap_used / (double)m->gc_heap_total
     : 0.0;
 
-  int written = snprintf(buf, buf_size,
+  // GC section with size_classes, pause_histogram, survival
+  n = snprintf(p, end - p,
     "{\"gc\":{\"cycles_total\":%llu,\"pause_us_total\":%llu,\"pause_us_max\":%llu,"
     "\"pause_ms_avg\":%.3f,\"reclaimed_bytes_total\":%llu,\"heap_used_bytes\":%llu,"
-    "\"heap_total_bytes\":%llu,\"heap_utilization_pct\":%.2f},"
+    "\"heap_total_bytes\":%llu,\"heap_utilization_pct\":%.2f,\"large_object_bytes\":%llu,",
+    (unsigned long long)m->gc_cycles,
+    (unsigned long long)m->gc_pause_us_total,
+    (unsigned long long)m->gc_pause_us_max,
+    m->gc_cycles > 0 ? (double)m->gc_pause_us_total / m->gc_cycles / 1000.0 : 0.0,
+    (unsigned long long)m->gc_reclaimed_bytes,
+    (unsigned long long)m->gc_heap_used,
+    (unsigned long long)m->gc_heap_total,
+    heap_util,
+    (unsigned long long)m->gc_large_object_bytes);
+  if (n < 0 || p + n >= end) goto truncated;
+  p += n;
+
+  // Size classes array: [{size:16,used:N,total:M}, ...]
+  static const u16 sizes[] = {16, 32, 64, 128, 256, 512, 1024, 2048, 4096};
+  n = snprintf(p, end - p, "\"size_classes\":[");
+  if (n < 0 || p + n >= end) goto truncated;
+  p += n;
+
+  for (int i = 0; i < VALK_VM_SIZE_CLASSES; i++) {
+    n = snprintf(p, end - p, "%s{\"size\":%u,\"used\":%llu,\"total\":%llu}",
+      i > 0 ? "," : "",
+      sizes[i],
+      (unsigned long long)m->size_class_used[i],
+      (unsigned long long)m->size_class_total[i]);
+    if (n < 0 || p + n >= end) goto truncated;
+    p += n;
+  }
+
+  // Pause histogram
+  n = snprintf(p, end - p,
+    "],\"pause_histogram\":{\"0_1ms\":%llu,\"1_5ms\":%llu,\"5_10ms\":%llu,"
+    "\"10_16ms\":%llu,\"16ms_plus\":%llu},",
+    (unsigned long long)m->pause_0_1ms,
+    (unsigned long long)m->pause_1_5ms,
+    (unsigned long long)m->pause_5_10ms,
+    (unsigned long long)m->pause_10_16ms,
+    (unsigned long long)m->pause_16ms_plus);
+  if (n < 0 || p + n >= end) goto truncated;
+  p += n;
+
+  // Survival histogram
+  n = snprintf(p, end - p,
+    "\"survival\":{\"gen_0\":%llu,\"gen_1_5\":%llu,\"gen_6_20\":%llu,\"gen_21_plus\":%llu}},",
+    (unsigned long long)m->survival_gen_0,
+    (unsigned long long)m->survival_gen_1_5,
+    (unsigned long long)m->survival_gen_6_20,
+    (unsigned long long)m->survival_gen_21_plus);
+  if (n < 0 || p + n >= end) goto truncated;
+  p += n;
+
+  // Interpreter and event loop sections
+  n = snprintf(p, end - p,
     "\"interpreter\":{\"evals_total\":%llu,\"function_calls\":%llu,\"builtin_calls\":%llu,"
     "\"stack_depth_max\":%u,\"closures_created\":%llu,\"env_lookups\":%llu},"
     "\"event_loop\":{\"iterations\":%llu,\"events_processed\":%llu,"
     "\"idle_time_us\":%llu,\"idle_time_pct\":%.2f}}",
-    m->gc_cycles,
-    m->gc_pause_us_total,
-    m->gc_pause_us_max,
-    m->gc_cycles > 0 ? (double)m->gc_pause_us_total / m->gc_cycles / 1000.0 : 0.0,
-    m->gc_reclaimed_bytes,
-    m->gc_heap_used,
-    m->gc_heap_total,
-    heap_util,
-    m->eval_total,
-    m->function_calls,
-    m->builtin_calls,
+    (unsigned long long)m->eval_total,
+    (unsigned long long)m->function_calls,
+    (unsigned long long)m->builtin_calls,
     m->stack_depth_max,
-    m->closures_created,
-    m->env_lookups,
-    m->loop_count,
-    m->events_processed,
-    m->idle_time_us,
-    0.0  // TODO: Calculate idle percentage when we have total runtime
-  );
+    (unsigned long long)m->closures_created,
+    (unsigned long long)m->env_lookups,
+    (unsigned long long)m->loop_count,
+    (unsigned long long)m->events_processed,
+    (unsigned long long)m->idle_time_us,
+    0.0);
+  if (n < 0 || p + n >= end) goto truncated;
 
-  (void)written;
   return buf;
+
+truncated:
+  if (!alloc) free(buf);
+  return nullptr;
 }
 
 // Export VM metrics in Prometheus format
@@ -1071,7 +1142,7 @@ valk_aio_metrics_state_t* valk_aio_metrics_state_new(
     const char* loop_name) {
   UNUSED(loop_name);
   valk_aio_metrics_state_t* state = calloc(1, sizeof(valk_aio_metrics_state_t));
-  if (!state) return NULL;
+  if (!state) return nullptr;
 
   valk_aio_metrics_init(&state->metrics);
   valk_aio_system_stats_init(&state->system_stats,
@@ -1080,8 +1151,8 @@ valk_aio_metrics_state_t* valk_aio_metrics_state_new(
                               queue_capacity);
   memset(&state->http_clients, 0, sizeof(state->http_clients));
   atomic_store(&state->http_clients.count, 0);
-  state->gc_heap = NULL;
-  state->scratch_arena = NULL;
+  state->gc_heap = nullptr;
+  state->scratch_arena = nullptr;
 
   return state;
 }

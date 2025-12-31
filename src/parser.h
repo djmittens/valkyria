@@ -105,7 +105,7 @@ struct valk_lval_t {
 #endif
   union {
     struct {
-      // Builtin function pointer (NULL for lambdas)
+      // Builtin function pointer (nullptr for lambdas)
       valk_lval_builtin_t *builtin;
       int arity;
       char *name;
@@ -219,7 +219,7 @@ valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx);
   (lval)->cov_reserved = 0; \
 } while(0)
 #define INHERIT_SOURCE_LOC(dst, src) do { \
-  if ((src) != NULL && (dst) != NULL && (src)->cov_line > 0) { \
+  if ((src) != nullptr && (dst) != nullptr && (src)->cov_line > 0) { \
     (dst)->cov_file_id = (src)->cov_file_id; \
     (dst)->cov_line = (src)->cov_line; \
     (dst)->cov_column = (src)->cov_column; \
@@ -386,7 +386,7 @@ static inline valk_eval_result_t valk_eval_value(valk_lval_t *val) {
 static inline valk_eval_result_t valk_eval_thunk(valk_lval_t *expr, valk_lenv_t *env) {
   return (valk_eval_result_t){
     .is_thunk = true,
-    .thunk = {.expr = expr, .env = env, .remaining_body = NULL, .call_env = NULL}
+    .thunk = {.expr = expr, .env = env, .remaining_body = nullptr, .call_env = nullptr}
   };
 }
 

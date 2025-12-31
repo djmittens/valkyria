@@ -48,7 +48,7 @@ u16 valk_source_register_file(const char *filename) {
 }
 
 const char *valk_source_get_filename(u16 file_id) {
-  if (file_id == 0 || file_id > source_registry.count) return NULL;
+  if (file_id == 0 || file_id > source_registry.count) return nullptr;
   ensure_source_registry_init();
 
   valk_mutex_lock(&source_registry.lock);
@@ -64,7 +64,7 @@ void valk_source_registry_reset(void) {
 
   for (u16 i = 1; i <= source_registry.count; i++) {
     free(source_registry.filenames[i]);
-    source_registry.filenames[i] = NULL;
+    source_registry.filenames[i] = nullptr;
   }
   source_registry.count = 0;
 

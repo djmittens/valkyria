@@ -56,9 +56,9 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
     if (!ecdh) {
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       fprintf(stderr, "EC_KEY_new_by_curv_name failed: %s\n",
-              ERR_error_string(ERR_get_error(), NULL));
+              ERR_error_string(ERR_get_error(), nullptr));
       SSL_CTX_free(*ssl_ctx);
-      *ssl_ctx = NULL;
+      *ssl_ctx = nullptr;
       return VALK_ERR_SSL_INIT;
     }
     SSL_CTX_set_tmp_ecdh(*ssl_ctx, ecdh);
@@ -117,9 +117,9 @@ valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx) {
     if (!ecdh) {
       // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       fprintf(stderr, "EC_KEY_new_by_curv_name failed: %s\n",
-              ERR_error_string(ERR_get_error(), NULL));
+              ERR_error_string(ERR_get_error(), nullptr));
       SSL_CTX_free(ctx->ssl_ctx);
-      ctx->ssl_ctx = NULL;
+      ctx->ssl_ctx = nullptr;
       return VALK_ERR_SSL_INIT;
     }
     SSL_CTX_set_tmp_ecdh(ssl_ctx, ecdh);
@@ -132,15 +132,15 @@ valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx) {
 
 int valk_aio_ssl_accept(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
   if (!ssl_ctx) {
-    VALK_ERROR("valk_aio_ssl_accept: ssl_ctx is NULL");
-    ssl->ssl = NULL;
+    VALK_ERROR("valk_aio_ssl_accept: ssl_ctx is nullptr");
+    ssl->ssl = nullptr;
     return -1;
   }
 
   ssl->ssl = SSL_new(ssl_ctx);
   if (!ssl->ssl) {
     VALK_ERROR("valk_aio_ssl_accept: SSL_new failed: %s",
-               ERR_error_string(ERR_get_error(), NULL));
+               ERR_error_string(ERR_get_error(), nullptr));
     return -1;
   }
 
@@ -156,15 +156,15 @@ int valk_aio_ssl_accept(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
 
 int valk_aio_ssl_connect(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
   if (!ssl_ctx) {
-    VALK_ERROR("valk_aio_ssl_connect: ssl_ctx is NULL");
-    ssl->ssl = NULL;
+    VALK_ERROR("valk_aio_ssl_connect: ssl_ctx is nullptr");
+    ssl->ssl = nullptr;
     return -1;
   }
 
   ssl->ssl = SSL_new(ssl_ctx);
   if (!ssl->ssl) {
     VALK_ERROR("valk_aio_ssl_connect: SSL_new failed: %s",
-               ERR_error_string(ERR_get_error(), NULL));
+               ERR_error_string(ERR_get_error(), nullptr));
     return -1;
   }
 
@@ -207,7 +207,7 @@ valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {
   // Validate output buffer
   if (!Out || !Out->items || Out->capacity == 0) {
     VALK_ERROR("SSL handshake: invalid output buffer (Out=%p, items=%p, cap=%zu)",
-               (void *)Out, Out ? Out->items : NULL, Out ? Out->capacity : 0);
+               (void *)Out, Out ? Out->items : nullptr, Out ? Out->capacity : 0);
     return VALK_ERR_SSL_INVALID;
   }
 
@@ -387,8 +387,8 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
   // Null safety checks - prevent use-after-free crashes
   if (!ssl || !ssl->ssl || !ssl->write_bio) {
     VALK_ERROR("SSL encrypt: invalid SSL context (ssl=%p, ssl->ssl=%p, write_bio=%p)",
-               (void *)ssl, ssl ? (void *)ssl->ssl : NULL,
-               ssl ? (void *)ssl->write_bio : NULL);
+               (void *)ssl, ssl ? (void *)ssl->ssl : nullptr,
+               ssl ? (void *)ssl->write_bio : nullptr);
     return VALK_ERR_SSL_INVALID;
   }
 
@@ -401,7 +401,7 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
   // Validate output buffer
   if (!Out || !Out->items || Out->capacity == 0) {
     VALK_ERROR("SSL encrypt: invalid output buffer (Out=%p, items=%p, cap=%zu)",
-               (void *)Out, Out ? Out->items : NULL, Out ? Out->capacity : 0);
+               (void *)Out, Out ? Out->items : nullptr, Out ? Out->capacity : 0);
     return VALK_ERR_SSL_INVALID;
   }
 
@@ -505,7 +505,7 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
 
 void valk_aio_ssl_print_state(valk_aio_ssl_t *ssl) {
   if (!ssl || !ssl->ssl) {
-    printf("SSL-State: [NULL SSL object at %p]\n", (void *)ssl);
+    printf("SSL-State: [nullptr SSL object at %p]\n", (void *)ssl);
     return;
   }
   const char *st = SSL_state_string_long(ssl->ssl);

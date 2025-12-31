@@ -125,23 +125,23 @@ void test_metrics_json_output(VALK_TEST_ARGS()) {
   valk_aio_metrics_on_stream_end(&metrics, false, 5000, 1024, 512);
 
   // Generate JSON
-  char* json = valk_aio_metrics_to_json(&metrics, NULL);
-  VALK_TEST_ASSERT(json != NULL, "JSON output should not be NULL");
+  char* json = valk_aio_metrics_to_json(&metrics, nullptr);
+  VALK_TEST_ASSERT(json != nullptr, "JSON output should not be nullptr");
 
   // Basic validation - check for expected keys
-  VALK_TEST_ASSERT(strstr(json, "\"uptime_seconds\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"uptime_seconds\"") != nullptr,
                    "JSON should contain uptime_seconds");
-  VALK_TEST_ASSERT(strstr(json, "\"connections\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"connections\"") != nullptr,
                    "JSON should contain connections");
-  VALK_TEST_ASSERT(strstr(json, "\"streams\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"streams\"") != nullptr,
                    "JSON should contain streams");
-  VALK_TEST_ASSERT(strstr(json, "\"requests\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"requests\"") != nullptr,
                    "JSON should contain requests");
-  VALK_TEST_ASSERT(strstr(json, "\"bytes\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"bytes\"") != nullptr,
                    "JSON should contain bytes");
 
   // Check values (compact JSON has no spaces after colons)
-  VALK_TEST_ASSERT(strstr(json, "\"total\":1") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"total\":1") != nullptr,
                    "JSON should show 1 connection/stream/request");
 
   free(json);
@@ -160,27 +160,27 @@ void test_metrics_prometheus_output(VALK_TEST_ARGS()) {
   valk_aio_metrics_on_stream_end(&metrics, false, 5000, 1024, 512);
 
   // Generate Prometheus format
-  char* prom = valk_aio_metrics_to_prometheus(&metrics, NULL);
-  VALK_TEST_ASSERT(prom != NULL, "Prometheus output should not be NULL");
+  char* prom = valk_aio_metrics_to_prometheus(&metrics, nullptr);
+  VALK_TEST_ASSERT(prom != nullptr, "Prometheus output should not be nullptr");
 
   // Basic validation - check for expected metric names
-  VALK_TEST_ASSERT(strstr(prom, "# HELP") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# HELP") != nullptr,
                    "Prometheus should contain HELP annotations");
-  VALK_TEST_ASSERT(strstr(prom, "# TYPE") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE") != nullptr,
                    "Prometheus should contain TYPE annotations");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_uptime_seconds") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_uptime_seconds") != nullptr,
                    "Prometheus should contain uptime metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_connections_total") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_connections_total") != nullptr,
                    "Prometheus should contain connections_total");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_streams_total") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_streams_total") != nullptr,
                    "Prometheus should contain streams_total");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_requests_total") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_requests_total") != nullptr,
                    "Prometheus should contain requests_total");
 
   // Check metric types
-  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_connections_total counter") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_connections_total counter") != nullptr,
                    "connections_total should be a counter");
-  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_connections_active gauge") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_connections_active gauge") != nullptr,
                    "connections_active should be a gauge");
 
   free(prom);
@@ -200,63 +200,63 @@ void test_system_stats_prometheus_output(VALK_TEST_ARGS()) {
   valk_aio_system_stats_on_arena_acquire(&stats);
 
   // Generate Prometheus format
-  char* prom = valk_aio_system_stats_to_prometheus(&stats, NULL);
-  VALK_TEST_ASSERT(prom != NULL, "Prometheus output should not be NULL");
+  char* prom = valk_aio_system_stats_to_prometheus(&stats, nullptr);
+  VALK_TEST_ASSERT(prom != nullptr, "Prometheus output should not be nullptr");
 
   // Basic validation - check for expected metric names
-  VALK_TEST_ASSERT(strstr(prom, "# HELP") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# HELP") != nullptr,
                    "Prometheus should contain HELP annotations");
-  VALK_TEST_ASSERT(strstr(prom, "# TYPE") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE") != nullptr,
                    "Prometheus should contain TYPE annotations");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_servers_count") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_servers_count") != nullptr,
                    "Prometheus should contain servers_count metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_clients_count") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_clients_count") != nullptr,
                    "Prometheus should contain clients_count metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_handles_count") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_handles_count") != nullptr,
                    "Prometheus should contain handles_count metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arenas_used") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arenas_used") != nullptr,
                    "Prometheus should contain arenas_used metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arenas_total") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arenas_total") != nullptr,
                    "Prometheus should contain arenas_total metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_tcp_buffers_used") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_tcp_buffers_used") != nullptr,
                    "Prometheus should contain tcp_buffers_used metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_tcp_buffers_total") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_tcp_buffers_total") != nullptr,
                    "Prometheus should contain tcp_buffers_total metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_queue_depth") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_queue_depth") != nullptr,
                    "Prometheus should contain queue_depth metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_pending_requests") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_pending_requests") != nullptr,
                    "Prometheus should contain pending_requests metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_pending_responses") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_pending_responses") != nullptr,
                    "Prometheus should contain pending_responses metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arena_pool_overflow_total") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arena_pool_overflow_total") != nullptr,
                    "Prometheus should contain arena_pool_overflow_total metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_tcp_buffer_overflow_total") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_tcp_buffer_overflow_total") != nullptr,
                    "Prometheus should contain tcp_buffer_overflow_total metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_connections_rejected_load_total") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_connections_rejected_load_total") != nullptr,
                    "Prometheus should contain connections_rejected_load_total metric");
 
   // Check metric types
-  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_servers_count gauge") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_servers_count gauge") != nullptr,
                    "servers_count should be a gauge");
-  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_arena_pool_overflow_total counter") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_arena_pool_overflow_total counter") != nullptr,
                    "arena_pool_overflow_total should be a counter");
-  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_tcp_buffer_overflow_total counter") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_tcp_buffer_overflow_total counter") != nullptr,
                    "tcp_buffer_overflow_total should be a counter");
-  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_connections_rejected_load_total counter") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_aio_connections_rejected_load_total counter") != nullptr,
                    "connections_rejected_load_total should be a counter");
 
   // Check actual values
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_servers_count 1") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_servers_count 1") != nullptr,
                    "servers_count should be 1");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_clients_count 1") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_clients_count 1") != nullptr,
                    "clients_count should be 1");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_handles_count 1") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_handles_count 1") != nullptr,
                    "handles_count should be 1");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arenas_used 1") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arenas_used 1") != nullptr,
                    "arenas_used should be 1");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arenas_total 64") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_arenas_total 64") != nullptr,
                    "arenas_total should be 64");
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_tcp_buffers_total 128") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_tcp_buffers_total 128") != nullptr,
                    "tcp_buffers_total should be 128");
 
   free(prom);
@@ -488,7 +488,7 @@ void test_vm_metrics_collect_with_gc_heap(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
-  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
 
   // Set up thread context with heap pointer
   valk_thread_context_t old_ctx = valk_thread_ctx;
@@ -497,12 +497,12 @@ void test_vm_metrics_collect_with_gc_heap(VALK_TEST_ARGS()) {
   // Do some allocations to generate non-zero metrics
   void* ptr1 = valk_gc_malloc_heap_alloc(heap, 512);
   void* ptr2 = valk_gc_malloc_heap_alloc(heap, 1024);
-  VALK_TEST_ASSERT(ptr1 != NULL, "Allocation 1 should succeed");
-  VALK_TEST_ASSERT(ptr2 != NULL, "Allocation 2 should succeed");
+  VALK_TEST_ASSERT(ptr1 != nullptr, "Allocation 1 should succeed");
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Allocation 2 should succeed");
 
   // Collect VM metrics
   valk_vm_metrics_t vm;
-  valk_vm_metrics_collect(&vm, heap, NULL);
+  valk_vm_metrics_collect(&vm, heap, nullptr);
 
   // Verify that heap metrics are populated
   VALK_TEST_ASSERT(vm.gc_heap_total > 0,
@@ -521,23 +521,23 @@ void test_vm_metrics_collect_with_gc_heap(VALK_TEST_ARGS()) {
 void test_vm_metrics_collect_null_heap(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  // Collect VM metrics with NULL heap
+  // Collect VM metrics with nullptr heap
   valk_vm_metrics_t vm;
-  valk_vm_metrics_collect(&vm, NULL, NULL);
+  valk_vm_metrics_collect(&vm, nullptr, nullptr);
 
-  // Verify that GC metrics are zero when heap is NULL
+  // Verify that GC metrics are zero when heap is nullptr
   VALK_TEST_ASSERT(vm.gc_cycles == 0,
-                   "gc_cycles should be 0 with NULL heap");
+                   "gc_cycles should be 0 with nullptr heap");
   VALK_TEST_ASSERT(vm.gc_pause_us_total == 0,
-                   "gc_pause_us_total should be 0 with NULL heap");
+                   "gc_pause_us_total should be 0 with nullptr heap");
   VALK_TEST_ASSERT(vm.gc_pause_us_max == 0,
-                   "gc_pause_us_max should be 0 with NULL heap");
+                   "gc_pause_us_max should be 0 with nullptr heap");
   VALK_TEST_ASSERT(vm.gc_reclaimed_bytes == 0,
-                   "gc_reclaimed_bytes should be 0 with NULL heap");
+                   "gc_reclaimed_bytes should be 0 with nullptr heap");
   VALK_TEST_ASSERT(vm.gc_heap_used == 0,
-                   "gc_heap_used should be 0 with NULL heap");
+                   "gc_heap_used should be 0 with nullptr heap");
   VALK_TEST_ASSERT(vm.gc_heap_total == 0,
-                   "gc_heap_total should be 0 with NULL heap");
+                   "gc_heap_total should be 0 with nullptr heap");
 
   VALK_PASS();
 }
@@ -546,36 +546,36 @@ void test_vm_metrics_json_contains_heap_values(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
-  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.heap = heap;
 
   void* ptr1 = valk_gc_malloc_heap_alloc(heap, 512);
   void* ptr2 = valk_gc_malloc_heap_alloc(heap, 1024);
-  VALK_TEST_ASSERT(ptr1 != NULL, "Allocation 1 should succeed");
-  VALK_TEST_ASSERT(ptr2 != NULL, "Allocation 2 should succeed");
+  VALK_TEST_ASSERT(ptr1 != nullptr, "Allocation 1 should succeed");
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Allocation 2 should succeed");
 
   valk_vm_metrics_t vm;
-  valk_vm_metrics_collect(&vm, heap, NULL);
-  char* json = valk_vm_metrics_to_json(&vm, NULL);
-  VALK_TEST_ASSERT(json != NULL, "JSON output should not be NULL");
+  valk_vm_metrics_collect(&vm, heap, nullptr);
+  char* json = valk_vm_metrics_to_json(&vm, nullptr);
+  VALK_TEST_ASSERT(json != nullptr, "JSON output should not be nullptr");
 
   // Verify JSON contains heap fields
-  VALK_TEST_ASSERT(strstr(json, "\"heap_used_bytes\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"heap_used_bytes\"") != nullptr,
                    "JSON should contain heap_used_bytes field");
-  VALK_TEST_ASSERT(strstr(json, "\"heap_total_bytes\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"heap_total_bytes\"") != nullptr,
                    "JSON should contain heap_total_bytes field");
 
   // Verify the values are not zero (should have been populated)
   // We can't check exact values, but we can check they're present
   // The JSON format should be like: "heap_used_bytes": 1234,
   char* heap_used_line = strstr(json, "\"heap_used_bytes\"");
-  VALK_TEST_ASSERT(heap_used_line != NULL, "Should find heap_used_bytes in JSON");
+  VALK_TEST_ASSERT(heap_used_line != nullptr, "Should find heap_used_bytes in JSON");
 
   // Basic sanity check - the line should contain a colon and a number
   char* colon = strchr(heap_used_line, ':');
-  VALK_TEST_ASSERT(colon != NULL, "Should find colon after heap_used_bytes");
+  VALK_TEST_ASSERT(colon != nullptr, "Should find colon after heap_used_bytes");
 
   // Cleanup
   free(json);
@@ -588,35 +588,35 @@ void test_vm_metrics_prometheus_contains_heap_values(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
-  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.heap = heap;
   void* ptr1 = valk_gc_malloc_heap_alloc(heap, 512);
   void* ptr2 = valk_gc_malloc_heap_alloc(heap, 1024);
-  VALK_TEST_ASSERT(ptr1 != NULL, "Allocation 1 should succeed");
-  VALK_TEST_ASSERT(ptr2 != NULL, "Allocation 2 should succeed");
+  VALK_TEST_ASSERT(ptr1 != nullptr, "Allocation 1 should succeed");
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Allocation 2 should succeed");
 
   // Collect and generate Prometheus format
   valk_vm_metrics_t vm;
-  valk_vm_metrics_collect(&vm, heap, NULL);
-  char* prom = valk_vm_metrics_to_prometheus(&vm, NULL);
-  VALK_TEST_ASSERT(prom != NULL, "Prometheus output should not be NULL");
+  valk_vm_metrics_collect(&vm, heap, nullptr);
+  char* prom = valk_vm_metrics_to_prometheus(&vm, nullptr);
+  VALK_TEST_ASSERT(prom != nullptr, "Prometheus output should not be nullptr");
 
   // Verify Prometheus contains heap metrics
-  VALK_TEST_ASSERT(strstr(prom, "valk_gc_heap_used_bytes") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_gc_heap_used_bytes") != nullptr,
                    "Prometheus should contain valk_gc_heap_used_bytes metric");
-  VALK_TEST_ASSERT(strstr(prom, "valk_gc_heap_total_bytes") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_gc_heap_total_bytes") != nullptr,
                    "Prometheus should contain valk_gc_heap_total_bytes metric");
 
   // Check for HELP and TYPE annotations
-  VALK_TEST_ASSERT(strstr(prom, "# HELP valk_gc_heap_used_bytes") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# HELP valk_gc_heap_used_bytes") != nullptr,
                    "Prometheus should contain HELP for heap_used");
-  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_gc_heap_used_bytes gauge") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_gc_heap_used_bytes gauge") != nullptr,
                    "heap_used should be a gauge");
-  VALK_TEST_ASSERT(strstr(prom, "# HELP valk_gc_heap_total_bytes") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# HELP valk_gc_heap_total_bytes") != nullptr,
                    "Prometheus should contain HELP for heap_total");
-  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_gc_heap_total_bytes gauge") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "# TYPE valk_gc_heap_total_bytes gauge") != nullptr,
                    "heap_total should be a gauge");
 
   // Cleanup
@@ -779,22 +779,22 @@ void test_combined_json_output(VALK_TEST_ARGS()) {
   valk_aio_system_stats_on_handle_create(&stats);
   valk_aio_system_stats_on_arena_acquire(&stats);
 
-  char* json = valk_aio_combined_to_json(&metrics, &stats, NULL);
-  VALK_TEST_ASSERT(json != NULL, "Combined JSON should not be NULL");
+  char* json = valk_aio_combined_to_json(&metrics, &stats, nullptr);
+  VALK_TEST_ASSERT(json != nullptr, "Combined JSON should not be nullptr");
 
-  VALK_TEST_ASSERT(strstr(json, "\"uptime_seconds\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"uptime_seconds\"") != nullptr,
                    "JSON should contain uptime_seconds");
-  VALK_TEST_ASSERT(strstr(json, "\"system\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"system\"") != nullptr,
                    "JSON should contain system section");
-  VALK_TEST_ASSERT(strstr(json, "\"connections\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"connections\"") != nullptr,
                    "JSON should contain connections section");
-  VALK_TEST_ASSERT(strstr(json, "\"streams\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"streams\"") != nullptr,
                    "JSON should contain streams section");
-  VALK_TEST_ASSERT(strstr(json, "\"bytes\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"bytes\"") != nullptr,
                    "JSON should contain bytes section");
-  VALK_TEST_ASSERT(strstr(json, "\"servers\":1") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"servers\":1") != nullptr,
                    "JSON should show 1 server");
-  VALK_TEST_ASSERT(strstr(json, "\"arenas_used\":1") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"arenas_used\":1") != nullptr,
                    "JSON should show 1 arena used");
 
   free(json);
@@ -813,26 +813,26 @@ void test_combined_json_named_output(VALK_TEST_ARGS()) {
   valk_aio_metrics_on_connection(&metrics, true);
   valk_aio_system_stats_on_server_start(&stats);
 
-  char* json = valk_aio_combined_to_json_named("test-system", &metrics, &stats, NULL);
-  VALK_TEST_ASSERT(json != NULL, "Named JSON should not be NULL");
+  char* json = valk_aio_combined_to_json_named("test-system", &metrics, &stats, nullptr);
+  VALK_TEST_ASSERT(json != nullptr, "Named JSON should not be nullptr");
 
-  VALK_TEST_ASSERT(strstr(json, "\"name\":\"test-system\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"name\":\"test-system\"") != nullptr,
                    "JSON should contain the system name");
-  VALK_TEST_ASSERT(strstr(json, "\"uptime_seconds\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"uptime_seconds\"") != nullptr,
                    "JSON should contain uptime_seconds");
-  VALK_TEST_ASSERT(strstr(json, "\"loop\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"loop\"") != nullptr,
                    "JSON should contain loop section");
-  VALK_TEST_ASSERT(strstr(json, "\"system\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"system\"") != nullptr,
                    "JSON should contain system section");
-  VALK_TEST_ASSERT(strstr(json, "\"connections\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"connections\"") != nullptr,
                    "JSON should contain connections section");
 
   free(json);
 
-  char* json_null_name = valk_aio_combined_to_json_named(NULL, &metrics, &stats, NULL);
-  VALK_TEST_ASSERT(json_null_name != NULL, "JSON with NULL name should not be NULL");
-  VALK_TEST_ASSERT(strstr(json_null_name, "\"name\":\"main\"") != NULL,
-                   "JSON should default to 'main' when name is NULL");
+  char* json_null_name = valk_aio_combined_to_json_named(nullptr, &metrics, &stats, nullptr);
+  VALK_TEST_ASSERT(json_null_name != nullptr, "JSON with nullptr name should not be nullptr");
+  VALK_TEST_ASSERT(strstr(json_null_name, "\"name\":\"main\"") != nullptr,
+                   "JSON should default to 'main' when name is nullptr");
   free(json_null_name);
 
   VALK_PASS();
@@ -897,41 +897,43 @@ void test_http_clients_prometheus_output(VALK_TEST_ARGS()) {
   valk_http_clients_registry_t reg = {0};
   atomic_store(&reg.count, 0);
 
-  char* prom_empty = valk_http_clients_to_prometheus(&reg, NULL);
-  VALK_TEST_ASSERT(prom_empty == NULL, "Empty registry should return NULL");
+  char* prom_empty = valk_http_clients_to_prometheus(&reg, nullptr);
+  VALK_TEST_ASSERT(prom_empty == nullptr, "Empty registry should return nullptr");
 
   int idx1 = valk_http_client_register(&reg, "redis", "cache", 10);
   int idx2 = valk_http_client_register(&reg, "postgres", "db", 5);
   VALK_TEST_ASSERT(idx1 >= 0, "Redis registration should succeed");
   VALK_TEST_ASSERT(idx2 >= 0, "Postgres registration should succeed");
 
+  // NOLINTBEGIN(clang-analyzer-security.ArrayBound) - idx1 validated by ASSERT above
   valk_http_client_on_operation(&reg.clients[idx1], 1000, false, false);
   valk_http_client_on_cache(&reg.clients[idx1], true);
   valk_http_client_on_cache(&reg.clients[idx1], false);
+  // NOLINTEND(clang-analyzer-security.ArrayBound)
 
-  char* prom = valk_http_clients_to_prometheus(&reg, NULL);
-  VALK_TEST_ASSERT(prom != NULL, "Prometheus output should not be NULL");
+  char* prom = valk_http_clients_to_prometheus(&reg, nullptr);
+  VALK_TEST_ASSERT(prom != nullptr, "Prometheus output should not be nullptr");
 
-  VALK_TEST_ASSERT(strstr(prom, "http_client_connections_active") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "http_client_connections_active") != nullptr,
                    "Should contain connections_active metric");
-  VALK_TEST_ASSERT(strstr(prom, "http_client_pool_size") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "http_client_pool_size") != nullptr,
                    "Should contain pool_size metric");
-  VALK_TEST_ASSERT(strstr(prom, "http_client_operations_total") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "http_client_operations_total") != nullptr,
                    "Should contain operations_total metric");
-  VALK_TEST_ASSERT(strstr(prom, "http_client_errors_total") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "http_client_errors_total") != nullptr,
                    "Should contain errors_total metric");
-  VALK_TEST_ASSERT(strstr(prom, "http_client_retries_total") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "http_client_retries_total") != nullptr,
                    "Should contain retries_total metric");
-  VALK_TEST_ASSERT(strstr(prom, "http_client_cache_hits_total") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "http_client_cache_hits_total") != nullptr,
                    "Should contain cache_hits_total metric");
-  VALK_TEST_ASSERT(strstr(prom, "http_client_cache_misses_total") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "http_client_cache_misses_total") != nullptr,
                    "Should contain cache_misses_total metric");
-  VALK_TEST_ASSERT(strstr(prom, "http_client_latency_seconds_avg") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "http_client_latency_seconds_avg") != nullptr,
                    "Should contain latency_seconds_avg metric");
 
-  VALK_TEST_ASSERT(strstr(prom, "client=\"redis\"") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "client=\"redis\"") != nullptr,
                    "Should contain redis client label");
-  VALK_TEST_ASSERT(strstr(prom, "client=\"postgres\"") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "client=\"postgres\"") != nullptr,
                    "Should contain postgres client label");
 
   free(prom);
@@ -941,13 +943,13 @@ void test_http_clients_prometheus_output(VALK_TEST_ARGS()) {
 void test_vm_metrics_null_input(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_vm_metrics_collect(NULL, NULL, NULL);
+  valk_vm_metrics_collect(nullptr, nullptr, nullptr);
 
-  char* json = valk_vm_metrics_to_json(NULL, NULL);
-  VALK_TEST_ASSERT(json == NULL, "JSON should be NULL for NULL input");
+  char* json = valk_vm_metrics_to_json(nullptr, nullptr);
+  VALK_TEST_ASSERT(json == nullptr, "JSON should be nullptr for nullptr input");
 
-  char* prom = valk_vm_metrics_to_prometheus(NULL, NULL);
-  VALK_TEST_ASSERT(prom == NULL, "Prometheus should be NULL for NULL input");
+  char* prom = valk_vm_metrics_to_prometheus(nullptr, nullptr);
+  VALK_TEST_ASSERT(prom == nullptr, "Prometheus should be nullptr for nullptr input");
 
   VALK_PASS();
 }
@@ -955,8 +957,8 @@ void test_vm_metrics_null_input(VALK_TEST_ARGS()) {
 void test_system_stats_prometheus_null_input(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  char* prom = valk_aio_system_stats_to_prometheus(NULL, NULL);
-  VALK_TEST_ASSERT(prom == NULL, "Should return NULL for NULL stats");
+  char* prom = valk_aio_system_stats_to_prometheus(nullptr, nullptr);
+  VALK_TEST_ASSERT(prom == nullptr, "Should return nullptr for nullptr stats");
 
   VALK_PASS();
 }
@@ -964,8 +966,8 @@ void test_system_stats_prometheus_null_input(VALK_TEST_ARGS()) {
 void test_http_clients_prometheus_null_input(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  char* prom = valk_http_clients_to_prometheus(NULL, NULL);
-  VALK_TEST_ASSERT(prom == NULL, "Should return NULL for NULL registry");
+  char* prom = valk_http_clients_to_prometheus(nullptr, nullptr);
+  VALK_TEST_ASSERT(prom == nullptr, "Should return nullptr for nullptr registry");
 
   VALK_PASS();
 }

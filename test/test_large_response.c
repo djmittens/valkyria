@@ -67,7 +67,7 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   valk_lval_t *prelude_ast = valk_parse_file("src/prelude.valk");
   if (!prelude_ast || LVAL_TYPE(prelude_ast) == LVAL_ERR) {
     VALK_FAIL("Failed to parse prelude: %s",
-              prelude_ast ? prelude_ast->str : "NULL");
+              prelude_ast ? prelude_ast->str : "nullptr");
     return false;
   }
 
@@ -90,11 +90,11 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   valk_lval_t *handler_ast = valk_parse_file("test/test_large_response_handler.valk");
   if (!handler_ast || LVAL_TYPE(handler_ast) == LVAL_ERR) {
     VALK_FAIL("Failed to parse handler: %s",
-              handler_ast ? handler_ast->str : "NULL");
+              handler_ast ? handler_ast->str : "nullptr");
     return false;
   }
 
-  ctx->handler_fn = NULL;
+  ctx->handler_fn = nullptr;
   while (valk_lval_list_count(handler_ast)) {
     ctx->handler_fn = valk_lval_eval(ctx->env, valk_lval_pop(handler_ast, 0));
     if (LVAL_TYPE(ctx->handler_fn) == LVAL_ERR) {
@@ -105,7 +105,7 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
 
   if (!ctx->handler_fn || LVAL_TYPE(ctx->handler_fn) != LVAL_FUN) {
     VALK_FAIL("Handler is not a function, got type: %s",
-              ctx->handler_fn ? valk_ltype_name(LVAL_TYPE(ctx->handler_fn)) : "NULL");
+              ctx->handler_fn ? valk_ltype_name(LVAL_TYPE(ctx->handler_fn)) : "nullptr");
     return false;
   }
   printf("[test] Handler loaded (type=%s)\n", valk_ltype_name(LVAL_TYPE(ctx->handler_fn)));
@@ -125,7 +125,7 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   fflush(stdout);
   ctx->hserv = valk_aio_http2_listen(
       ctx->sys, "0.0.0.0", 0, "build/server.key", "build/server.crt",
-      NULL, ctx->handler_fn);
+      nullptr, ctx->handler_fn);
 
   ctx->server_result = valk_async_handle_await(ctx->hserv);
   if (LVAL_TYPE(ctx->server_result) == LVAL_ERR) {

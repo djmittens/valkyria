@@ -140,7 +140,7 @@ void test_lambda_inherits_body_loc(VALK_TEST_ARGS()) {
 void test_ref_has_zero_source_loc(VALK_TEST_ARGS()) {
   VALK_TEST();
 #ifdef VALK_COVERAGE
-  valk_lval_t* ref = valk_lval_ref("test", NULL, NULL);
+  valk_lval_t* ref = valk_lval_ref("test", nullptr, nullptr);
 
   VALK_TEST_ASSERT(ref->cov_file_id == 0, "file_id should be 0, got %d", ref->cov_file_id);
   VALK_TEST_ASSERT(ref->cov_line == 0, "line should be 0, got %d", ref->cov_line);
@@ -165,12 +165,12 @@ void test_branch_coverage_records_line(VALK_TEST_ARGS()) {
   valk_coverage_record_branch(file_id, 15, false);
 
   valk_line_coverage_file_t* fc = valk_coverage_get_file(file_id);
-  VALK_TEST_ASSERT(fc != NULL, "file coverage should exist");
+  VALK_TEST_ASSERT(fc != nullptr, "file coverage should exist");
 
   valk_branch_t* br = fc->branches;
-  while (br != NULL && br->line != 15) br = br->next;
+  while (br != nullptr && br->line != 15) br = br->next;
 
-  VALK_TEST_ASSERT(br != NULL, "branch at line 15 should exist");
+  VALK_TEST_ASSERT(br != nullptr, "branch at line 15 should exist");
   VALK_TEST_ASSERT(br->true_count == 1, "true_count should be 1, got %d", br->true_count);
   VALK_TEST_ASSERT(br->false_count == 1, "false_count should be 1, got %d", br->false_count);
 

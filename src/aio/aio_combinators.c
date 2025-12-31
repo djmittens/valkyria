@@ -80,6 +80,8 @@ static void __interval_init_on_loop(void *ctx) {
 extern valk_lenv_t* valk_lenv_copy(valk_lenv_t* env);
 extern valk_lval_t* valk_lval_copy(valk_lval_t* lval);
 
+static valk_lval_t* __deep_copy_lval_for_timer(valk_lval_t* lval);
+
 static valk_lenv_t* __deep_copy_env_for_timer(valk_lenv_t* env) {
   if (env == NULL) return NULL;
   
@@ -88,9 +90,41 @@ static valk_lenv_t* __deep_copy_env_for_timer(valk_lenv_t* env) {
   
   for (u64 i = 0; i < res->vals.count; i++) {
     valk_lval_t* val = res->vals.items[i];
-    if (val && LVAL_ALLOC(val) == LVAL_ALLOC_SCRATCH) {
-      res->vals.items[i] = valk_lval_copy(val);
+    if (val) {
+      res->vals.items[i] = __deep_copy_lval_for_timer(val);
     }
+  }
+  
+  if (res->parent) {
+    res->parent = __deep_copy_env_for_timer(res->parent);
+  }
+  
+  return res;
+}
+
+static valk_lval_t* __deep_copy_lval_for_timer(valk_lval_t* lval) {
+  if (lval == NULL) return NULL;
+  
+  valk_lval_t* res = valk_lval_copy(lval);
+  if (!res) return NULL;
+  
+  switch (LVAL_TYPE(lval)) {
+    case LVAL_FUN:
+      if (!lval->fun.builtin) {
+        res->fun.body = __deep_copy_lval_for_timer(lval->fun.body);
+        res->fun.formals = __deep_copy_lval_for_timer(lval->fun.formals);
+        if (lval->fun.env) {
+          res->fun.env = __deep_copy_env_for_timer(lval->fun.env);
+        }
+      }
+      break;
+    case LVAL_CONS:
+    case LVAL_QEXPR:
+      res->cons.head = __deep_copy_lval_for_timer(lval->cons.head);
+      res->cons.tail = __deep_copy_lval_for_timer(lval->cons.tail);
+      break;
+    default:
+      break;
   }
   
   return res;
@@ -112,17 +146,11 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
   valk_gc_malloc_heap_t *gc_heap = valk_thread_ctx.heap;
   if (gc_heap) {
     VALK_WITH_ALLOC((valk_mem_allocator_t*)gc_heap) {
-      heap_callback = valk_lval_copy(callback);
-      if (heap_callback->fun.env) {
-        heap_callback->fun.env = __deep_copy_env_for_timer(heap_callback->fun.env);
-      }
+      heap_callback = __deep_copy_lval_for_timer(callback);
     }
   } else {
     VALK_WITH_ALLOC(&valk_malloc_allocator) {
-      heap_callback = valk_lval_copy(callback);
-      if (heap_callback->fun.env) {
-        heap_callback->fun.env = __deep_copy_env_for_timer(heap_callback->fun.env);
-      }
+      heap_callback = __deep_copy_lval_for_timer(callback);
     }
   }
 
@@ -214,17 +242,11 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
   valk_gc_malloc_heap_t *gc_heap = valk_thread_ctx.heap;
   if (gc_heap) {
     VALK_WITH_ALLOC((valk_mem_allocator_t*)gc_heap) {
-      heap_callback = valk_lval_copy(callback);
-      if (heap_callback->fun.env) {
-        heap_callback->fun.env = valk_lenv_copy(heap_callback->fun.env);
-      }
+      heap_callback = __deep_copy_lval_for_timer(callback);
     }
   } else {
     VALK_WITH_ALLOC(&valk_malloc_allocator) {
-      heap_callback = valk_lval_copy(callback);
-      if (heap_callback->fun.env) {
-        heap_callback->fun.env = valk_lenv_copy(heap_callback->fun.env);
-      }
+      heap_callback = __deep_copy_lval_for_timer(callback);
     }
   }
 

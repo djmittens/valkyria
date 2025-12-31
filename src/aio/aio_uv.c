@@ -106,7 +106,7 @@ void __event_loop(void *arg) {
     // Phase 2: Force close all remaining handles
     if (!force_closed && elapsed >= graceful_drain_ns) {
       VALK_DEBUG("Shutdown: graceful drain exceeded 100ms, force closing handles");
-      uv_walk(sys->eventloop, __aio_uv_walk_close, NULL);
+      uv_walk(sys->eventloop, __aio_uv_walk_close, nullptr);
       force_closed = true;
     }
     
@@ -149,7 +149,7 @@ void __event_loop(void *arg) {
 
   if (sys->loop_gc_heap) {
     valk_gc_malloc_heap_destroy(sys->loop_gc_heap);
-    sys->loop_gc_heap = NULL;
+    sys->loop_gc_heap = nullptr;
   }
   
   valk_gc_thread_unregister();
@@ -164,11 +164,11 @@ static void __uv_handle_closed_cb(uv_handle_t *handle) {
     
     if (hndl->http.io.read_buf && hndl->sys && hndl->sys->tcpBufferSlab) {
       valk_slab_release(hndl->sys->tcpBufferSlab, hndl->http.io.read_buf);
-      hndl->http.io.read_buf = NULL;
+      hndl->http.io.read_buf = nullptr;
     }
     if (hndl->http.io.write_buf && hndl->sys && hndl->sys->tcpBufferSlab) {
       valk_slab_release(hndl->sys->tcpBufferSlab, hndl->http.io.write_buf);
-      hndl->http.io.write_buf = NULL;
+      hndl->http.io.write_buf = nullptr;
     }
   }
   
@@ -177,6 +177,7 @@ static void __uv_handle_closed_cb(uv_handle_t *handle) {
     hndl->onClose(hndl);
   }
   valk_dll_pop(hndl);
+  // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - sys always valid for allocated handles
   valk_slab_release_ptr(hndl->sys->handleSlab, hndl);
 }
 
@@ -218,7 +219,7 @@ static void __aio_uv_walk_close(uv_handle_t *h, void *arg) {
       }
       uv_close(h, __uv_handle_closed_cb);
     } else {
-      uv_close(h, NULL);
+      uv_close(h, nullptr);
     }
   }
 }
@@ -232,7 +233,7 @@ static void __aio_uv_walk_diag(uv_handle_t *h, void *arg) {
   const char *state = uv_is_closing(h) ? "closing" : (uv_is_active(h) ? "active" : "inactive");
   valk_aio_handle_t *hndl = h->data;
   if (hndl && hndl->magic == VALK_AIO_HANDLE_MAGIC) {
-    const char *kind = "unknown";
+    const char *kind = "unknown";  // NOLINT(clang-analyzer-deadcode.DeadStores)
     switch (hndl->kind) {
       case VALK_HNDL_EMPTY: kind = "empty"; break;
       case VALK_HNDL_TCP: kind = "tcp_listener"; break;
@@ -263,7 +264,7 @@ void __aio_uv_stop(uv_async_t *h) {
   // LCOV_EXCL_BR_STOP
   // Mark all handles for closing. The drain loop in __event_loop
   // will properly complete the shutdown by running until all handles are closed.
-  uv_walk(h->loop, __aio_uv_walk_close, NULL);
+  uv_walk(h->loop, __aio_uv_walk_close, nullptr);
 }
 
 

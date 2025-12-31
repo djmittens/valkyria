@@ -75,6 +75,7 @@ void valk_stream_body_register(valk_stream_body_t *body);
 void valk_stream_body_unregister(valk_stream_body_t *body);
 void valk_stream_body_close_by_stream_id(valk_aio_handle_t *conn, i32 stream_id);
 void valk_stream_body_close_all(valk_aio_handle_t *conn);
+u64 valk_stream_body_get_bytes_sent(valk_aio_handle_t *conn, i32 stream_id);
 
 int valk_stream_body_write(valk_stream_body_t *body, const char *data, u64 len);
 

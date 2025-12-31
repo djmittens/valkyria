@@ -154,7 +154,7 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
     // Reinitialize thread-local allocator after fork - thread-locals are
     // undefined after fork() and may contain stale pointers from parent
     valk_mem_init_malloc();
-    valk_thread_ctx.heap = NULL;  // Clear stale heap pointer to avoid arena overflow crash
+    valk_thread_ctx.heap = nullptr;  // Clear stale heap pointer to avoid arena overflow crash
 
     printf("🏃 Running: %s\n", self->name);
     fflush(stdout);
@@ -279,7 +279,7 @@ void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
     snprintf(buf, len, "Test timed out after %d seconds\n", timeoutSeconds);
     valk_ring_write(test->_stderr, (void *)buf, len);
     // Still need to reap the child
-    waitpid(pid, NULL, 0);
+    waitpid(pid, nullptr, 0);
     return;
   }
 
@@ -448,7 +448,7 @@ void *valk_testsuite_fixture_get(valk_test_suite_t *suite, const char *name) {
       return suite->fixtures.items[i].copy(suite->fixtures.items[i].value);
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 long valk_get_nanos(void) {

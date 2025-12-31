@@ -25,7 +25,7 @@
           (arr)->capacity == 0 ? DA_INIT_CAPACITY : (arr)->capacity * 2;       \
       (arr)->items =                                                           \
           valk_mem_realloc((arr)->items, (arr)->capacity * sizeof(*(arr)->items)); \
-      VALK_ASSERT((arr)->items != NULL, "Buy more ram LUlz %d\n", 0);          \
+      VALK_ASSERT((arr)->items != nullptr, "Buy more ram LUlz %d\n", 0);          \
     }                                                                          \
     (arr)->items[(arr)->count++] = (elem);                                     \
   } while (0)
@@ -107,7 +107,7 @@
   ({                                                                           \
     __typeof__(head) __it = (head);                                            \
     u64 __i = (n);                                                          \
-    while (__i-- > 0 && __it != NULL)                                          \
+    while (__i-- > 0 && __it != nullptr)                                          \
       __it = __it->next;                                                       \
     __it;                                                                      \
   })

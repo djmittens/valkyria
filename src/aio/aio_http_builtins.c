@@ -7,10 +7,10 @@
 
 static valk_http2_server_request_t *get_request(valk_lval_t *ref) {
   if (!ref || LVAL_TYPE(ref) != LVAL_REF) {
-    return NULL;
+    return nullptr;
   }
   if (strcmp(ref->ref.type, "http_request") != 0) {
-    return NULL;
+    return nullptr;
   }
   return (valk_http2_server_request_t *)ref->ref.ptr;
 }

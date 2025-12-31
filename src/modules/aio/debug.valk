@@ -82,17 +82,15 @@
   })
 
 ; Build diagnostics state JSON for the dashboard
-; Returns: {"metrics": {...}, "memory": {...}, "platform": "..."}
+; Returns: {"metrics": {...}, "memory": {...}}
 (fun {aio/debug-diagnostics-state sys}
   {
     (= {aio-json} (aio/metrics-json sys))
     (= {modular-json} (metrics/json))
     (= {vm-json} (vm/metrics-json))
+    (= {registry-json} (metrics/registry-json))
     (= {memory-json} (aio/diagnostics-state-json sys))
-    ; Parse memory-json to extract fields and merge into top-level
-    ; memory-json is: {"slabs":[...],"arenas":[...],"gc":{...},"process":{...},"breakdown":{...}}
-    ; We need to strip the outer braces and insert as "memory" object
-    (str "{\"metrics\":{\"aio\":" aio-json ",\"modular\":" modular-json ",\"vm\":" vm-json "},\"memory\":" memory-json "}")
+    (str "{\"metrics\":{\"aio\":" aio-json ",\"modular\":" modular-json ",\"vm\":" vm-json ",\"registry\":" registry-json "},\"memory\":" memory-json "}")
   })
 
 ; SSE update interval in milliseconds
@@ -108,10 +106,13 @@
        :body-type :sse-stream}
      (do
        (= {stream} (sse/open req))
-       (aio/interval sys aio/debug-sse-interval-ms (\ {} {
-         (if (== (sse/writable? stream) false)
-           {:stop}
-           {(sse/event stream "diagnostics" (aio/debug-diagnostics-state sys))})}))
+       (= {captured-sys} sys)
+       (aio/interval captured-sys aio/debug-sse-interval-ms (\ {} 
+         (if (== (stream/writable? stream) 0)
+           :stop
+           (do
+             (= {result} (stream/write stream (str "event: diagnostics\ndata: " (aio/debug-diagnostics-state captured-sys) "\n\n")))
+             (if (error? result) :stop result)))))
        :deferred))})
 
 ; Create a debug handler that routes debug requests

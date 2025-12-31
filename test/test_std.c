@@ -25,7 +25,7 @@ void test_prelude_definitions(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(LVAL_TYPE(fun) == LVAL_FUN,
                    "fun should be a function, got %s",
                    valk_ltype_name(LVAL_TYPE(fun)));
-  VALK_TEST_ASSERT(fun->fun.builtin == NULL,
+  VALK_TEST_ASSERT(fun->fun.builtin == nullptr,
                    "fun should be a lambda, not a builtin");
   VALK_TEST_ASSERT(valk_lval_list_count(fun->fun.formals) == 2,
                    "fun should take 2 args (f b), got %zu",
@@ -36,7 +36,7 @@ void test_prelude_definitions(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(LVAL_TYPE(map) == LVAL_FUN,
                    "map should be a function, got %s",
                    valk_ltype_name(LVAL_TYPE(map)));
-  VALK_TEST_ASSERT(map->fun.builtin == NULL,
+  VALK_TEST_ASSERT(map->fun.builtin == nullptr,
                    "map should be a lambda, not a builtin");
   VALK_TEST_ASSERT(valk_lval_list_count(map->fun.formals) == 2,
                    "map should take 2 args (f l), got %zu",
@@ -47,7 +47,7 @@ void test_prelude_definitions(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(LVAL_TYPE(foldl) == LVAL_FUN,
                    "foldl should be a function, got %s",
                    valk_ltype_name(LVAL_TYPE(foldl)));
-  VALK_TEST_ASSERT(foldl->fun.builtin == NULL,
+  VALK_TEST_ASSERT(foldl->fun.builtin == nullptr,
                    "foldl should be a lambda, not a builtin");
   VALK_TEST_ASSERT(valk_lval_list_count(foldl->fun.formals) == 3,
                    "foldl should take 3 args (f z l), got %zu",
@@ -241,8 +241,8 @@ int main(int argc, const char **argv) {
 
   // Final GC collection before destroying heap
   // This collects any remaining unreachable objects
-  valk_gc_malloc_set_root(gc_heap, NULL);
-  valk_gc_malloc_collect(gc_heap, NULL);  // No additional roots in cleanup
+  valk_gc_malloc_set_root(gc_heap, nullptr);
+  valk_gc_malloc_collect(gc_heap, nullptr);  // No additional roots in cleanup
 
   // Clean up GC heap to avoid memory leaks
   valk_gc_malloc_heap_destroy(gc_heap);

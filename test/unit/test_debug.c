@@ -49,7 +49,7 @@ void test_trace_capture_all_pointers_valid(VALK_TEST_ARGS()) {
   size_t captured = valk_trace_capture(stack, VALK_TRACE_DEPTH);
 
   for (size_t i = 0; i < captured; i++) {
-    VALK_TEST_ASSERT(stack[i] != NULL, "Stack frame %zu should not be NULL", i);
+    VALK_TEST_ASSERT(stack[i] != nullptr, "Stack frame %zu should not be nullptr", i);
   }
 
   VALK_PASS();
@@ -58,7 +58,7 @@ void test_trace_capture_all_pointers_valid(VALK_TEST_ARGS()) {
 void test_trace_print_null_safe(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  void *stack[2] = {NULL, NULL};
+  void *stack[2] = {nullptr, nullptr};
   valk_trace_print(stack, 0);
 
   VALK_PASS();
@@ -230,7 +230,7 @@ void test_trace_capture_one_frame(VALK_TEST_ARGS()) {
   size_t captured = valk_trace_capture(stack, 1);
 
   VALK_TEST_ASSERT(captured == 1, "Should capture exactly 1 frame when buffer is size 1");
-  VALK_TEST_ASSERT(stack[0] != NULL, "Captured frame should not be NULL");
+  VALK_TEST_ASSERT(stack[0] != nullptr, "Captured frame should not be nullptr");
 
   VALK_PASS();
 }

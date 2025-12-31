@@ -52,7 +52,7 @@ void test_counter_create_no_args(VALK_TEST_ARGS()) {
   valk_lval_t *result = call_builtin(env, "metrics/counter", args);
 
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should return error for no args");
-  VALK_TEST_ASSERT(strstr(result->str, "expected at least 1 argument") != NULL,
+  VALK_TEST_ASSERT(strstr(result->str, "expected at least 1 argument") != nullptr,
                    "Error should mention expected arguments");
 
   VALK_PASS();
@@ -70,7 +70,7 @@ void test_counter_create_wrong_type(VALK_TEST_ARGS()) {
 
   valk_lval_t *result = call_builtin(env, "metrics/counter", args);
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should return error for wrong type");
-  VALK_TEST_ASSERT(strstr(result->str, "name must be a string") != NULL,
+  VALK_TEST_ASSERT(strstr(result->str, "name must be a string") != nullptr,
                    "Error should mention name must be string");
 
   VALK_PASS();
@@ -177,11 +177,11 @@ void test_counter_inc_wrong_ref_type(VALK_TEST_ARGS()) {
   valk_metrics_registry_init();
   valk_lenv_t *env = create_test_env();
 
-  valk_lval_t *fake_ref = valk_lval_ref("wrong_type", NULL, NULL);
+  valk_lval_t *fake_ref = valk_lval_ref("wrong_type", nullptr, nullptr);
   valk_lval_t *args = valk_lval_list((valk_lval_t*[]){fake_ref}, 1);
   valk_lval_t *result = call_builtin(env, "metrics/counter-inc", args);
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should return error");
-  VALK_TEST_ASSERT(strstr(result->str, "counter handle") != NULL,
+  VALK_TEST_ASSERT(strstr(result->str, "counter handle") != nullptr,
                    "Error should mention counter handle");
 
   VALK_PASS();
@@ -341,7 +341,7 @@ void test_gauge_set_wrong_ref_type(VALK_TEST_ARGS()) {
   valk_metrics_registry_init();
   valk_lenv_t *env = create_test_env();
 
-  valk_lval_t *fake_ref = valk_lval_ref("wrong_type", NULL, NULL);
+  valk_lval_t *fake_ref = valk_lval_ref("wrong_type", nullptr, nullptr);
   valk_lval_t *args = valk_lval_list((valk_lval_t*[]){fake_ref, valk_lval_num(100)}, 2);
   valk_lval_t *result = call_builtin(env, "metrics/gauge-set", args);
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should return error");
@@ -417,7 +417,7 @@ void test_gauge_inc_wrong_ref_type(VALK_TEST_ARGS()) {
   valk_metrics_registry_init();
   valk_lenv_t *env = create_test_env();
 
-  valk_lval_t *fake_ref = valk_lval_ref("wrong_type", NULL, NULL);
+  valk_lval_t *fake_ref = valk_lval_ref("wrong_type", nullptr, nullptr);
   valk_lval_t *args = valk_lval_list((valk_lval_t*[]){fake_ref}, 1);
   valk_lval_t *result = call_builtin(env, "metrics/gauge-inc", args);
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should return error");
@@ -475,7 +475,7 @@ void test_gauge_dec_wrong_ref_type(VALK_TEST_ARGS()) {
   valk_metrics_registry_init();
   valk_lenv_t *env = create_test_env();
 
-  valk_lval_t *fake_ref = valk_lval_ref("wrong_type", NULL, NULL);
+  valk_lval_t *fake_ref = valk_lval_ref("wrong_type", nullptr, nullptr);
   valk_lval_t *args = valk_lval_list((valk_lval_t*[]){fake_ref}, 1);
   valk_lval_t *result = call_builtin(env, "metrics/gauge-dec", args);
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should return error");
@@ -660,7 +660,7 @@ void test_histogram_observe_wrong_ref_type(VALK_TEST_ARGS()) {
   valk_metrics_registry_init();
   valk_lenv_t *env = create_test_env();
 
-  valk_lval_t *fake_ref = valk_lval_ref("wrong_type", NULL, NULL);
+  valk_lval_t *fake_ref = valk_lval_ref("wrong_type", nullptr, nullptr);
   valk_lval_t *args = valk_lval_list((valk_lval_t*[]){fake_ref, valk_lval_num(1000)}, 2);
   valk_lval_t *result = call_builtin(env, "metrics/histogram-observe", args);
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should return error");
@@ -739,7 +739,7 @@ void test_delta_json(VALK_TEST_ARGS()) {
   valk_lval_t *json_args = valk_lval_list((valk_lval_t*[]){delta}, 1);
   valk_lval_t *result = call_builtin(env, "metrics/delta-json", json_args);
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_STR, "Should return string");
-  VALK_TEST_ASSERT(strstr(result->str, "ts") != NULL, "JSON should contain ts");
+  VALK_TEST_ASSERT(strstr(result->str, "ts") != nullptr, "JSON should contain ts");
 
   VALK_PASS();
 }
@@ -763,7 +763,7 @@ void test_delta_json_wrong_ref_type(VALK_TEST_ARGS()) {
   valk_metrics_registry_init();
   valk_lenv_t *env = create_test_env();
 
-  valk_lval_t *fake_ref = valk_lval_ref("wrong_type", NULL, NULL);
+  valk_lval_t *fake_ref = valk_lval_ref("wrong_type", nullptr, nullptr);
   valk_lval_t *args = valk_lval_list((valk_lval_t*[]){fake_ref}, 1);
   valk_lval_t *result = call_builtin(env, "metrics/delta-json", args);
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should return error");
@@ -849,8 +849,8 @@ void test_delta_snapshot_cleanup(VALK_TEST_ARGS()) {
 
   if (delta->ref.free) {
     delta->ref.free(delta->ref.ptr);
-    delta->ref.ptr = NULL;
-    delta->ref.free = NULL;
+    delta->ref.ptr = nullptr;
+    delta->ref.free = nullptr;
   }
 
   VALK_PASS();
@@ -867,7 +867,7 @@ void test_delta_snapshot_cleanup_null(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(LVAL_TYPE(delta) == LVAL_REF, "Should create delta");
 
   if (delta->ref.free) {
-    delta->ref.free(NULL);
+    delta->ref.free(nullptr);
   }
 
   VALK_PASS();

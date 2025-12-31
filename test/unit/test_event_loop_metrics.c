@@ -12,12 +12,12 @@
 void test_event_loop_metrics_init_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  bool result = valk_event_loop_metrics_v2_init(NULL, "test");
-  VALK_TEST_ASSERT(result == false, "NULL metrics should return false");
+  bool result = valk_event_loop_metrics_v2_init(nullptr, "test");
+  VALK_TEST_ASSERT(result == false, "nullptr metrics should return false");
 
   valk_event_loop_metrics_v2_t m;
-  result = valk_event_loop_metrics_v2_init(&m, NULL);
-  VALK_TEST_ASSERT(result == false, "NULL loop name should return false");
+  result = valk_event_loop_metrics_v2_init(&m, nullptr);
+  VALK_TEST_ASSERT(result == false, "nullptr loop name should return false");
 
   VALK_PASS();
 }
@@ -31,13 +31,13 @@ void test_event_loop_metrics_init_success(VALK_TEST_ARGS()) {
   bool result = valk_event_loop_metrics_v2_init(&m, "main_loop");
 
   VALK_TEST_ASSERT(result == true, "Init should succeed");
-  VALK_TEST_ASSERT(m.loop_name != NULL, "loop_name should be set");
+  VALK_TEST_ASSERT(m.loop_name != nullptr, "loop_name should be set");
   VALK_TEST_ASSERT(strcmp(m.loop_name, "main_loop") == 0, "loop_name should match");
-  VALK_TEST_ASSERT(m.iterations != NULL, "iterations counter should be created");
-  VALK_TEST_ASSERT(m.events != NULL, "events counter should be created");
-  VALK_TEST_ASSERT(m.events_waiting != NULL, "events_waiting gauge should be created");
-  VALK_TEST_ASSERT(m.idle_time_us != NULL, "idle_time_us gauge should be created");
-  VALK_TEST_ASSERT(m.handles != NULL, "handles gauge should be created");
+  VALK_TEST_ASSERT(m.iterations != nullptr, "iterations counter should be created");
+  VALK_TEST_ASSERT(m.events != nullptr, "events counter should be created");
+  VALK_TEST_ASSERT(m.events_waiting != nullptr, "events_waiting gauge should be created");
+  VALK_TEST_ASSERT(m.idle_time_us != nullptr, "idle_time_us gauge should be created");
+  VALK_TEST_ASSERT(m.handles != nullptr, "handles gauge should be created");
 
   VALK_PASS();
 }
@@ -66,7 +66,7 @@ void test_event_loop_metrics_set_handles(VALK_TEST_ARGS()) {
 void test_event_loop_metrics_set_handles_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_event_loop_metrics_v2_set_handles(NULL, 42);
+  valk_event_loop_metrics_v2_set_handles(nullptr, 42);
 
   VALK_PASS();
 }
@@ -74,12 +74,12 @@ void test_event_loop_metrics_set_handles_null(VALK_TEST_ARGS()) {
 void test_event_loop_metrics_update_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_event_loop_metrics_v2_update(NULL, NULL);
+  valk_event_loop_metrics_v2_update(nullptr, nullptr);
 
   valk_metrics_registry_init();
   valk_event_loop_metrics_v2_t m;
   valk_event_loop_metrics_v2_init(&m, "null_update_test");
-  valk_event_loop_metrics_v2_update(&m, NULL);
+  valk_event_loop_metrics_v2_update(&m, nullptr);
 
   VALK_PASS();
 }
@@ -190,11 +190,11 @@ void test_event_loop_metrics_all_gauges_created(VALK_TEST_ARGS()) {
   bool result = valk_event_loop_metrics_v2_init(&m, "all_gauges_test");
   VALK_TEST_ASSERT(result == true, "Init should succeed");
 
-  VALK_TEST_ASSERT(m.iterations != NULL, "iterations should be created");
-  VALK_TEST_ASSERT(m.events != NULL, "events should be created");
-  VALK_TEST_ASSERT(m.events_waiting != NULL, "events_waiting should be created");
-  VALK_TEST_ASSERT(m.idle_time_us != NULL, "idle_time_us should be created");
-  VALK_TEST_ASSERT(m.handles != NULL, "handles should be created");
+  VALK_TEST_ASSERT(m.iterations != nullptr, "iterations should be created");
+  VALK_TEST_ASSERT(m.events != nullptr, "events should be created");
+  VALK_TEST_ASSERT(m.events_waiting != nullptr, "events_waiting should be created");
+  VALK_TEST_ASSERT(m.idle_time_us != nullptr, "idle_time_us should be created");
+  VALK_TEST_ASSERT(m.handles != nullptr, "handles should be created");
 
   VALK_PASS();
 }
@@ -295,8 +295,8 @@ void test_event_loop_metrics_counters_monotonic(VALK_TEST_ARGS()) {
   bool result = valk_event_loop_metrics_v2_init(&m, "monotonic_test");
   VALK_TEST_ASSERT(result == true, "Init should succeed");
 
-  VALK_TEST_ASSERT(m.iterations != NULL, "iterations counter should exist");
-  VALK_TEST_ASSERT(m.events != NULL, "events counter should exist");
+  VALK_TEST_ASSERT(m.iterations != nullptr, "iterations counter should exist");
+  VALK_TEST_ASSERT(m.events != nullptr, "events counter should exist");
 
   VALK_PASS();
 }
@@ -310,9 +310,9 @@ void test_event_loop_metrics_gauges_exist(VALK_TEST_ARGS()) {
   bool result = valk_event_loop_metrics_v2_init(&m, "gauges_exist_test");
   VALK_TEST_ASSERT(result == true, "Init should succeed");
 
-  VALK_TEST_ASSERT(m.events_waiting != NULL, "events_waiting gauge should exist");
-  VALK_TEST_ASSERT(m.idle_time_us != NULL, "idle_time_us gauge should exist");
-  VALK_TEST_ASSERT(m.handles != NULL, "handles gauge should exist");
+  VALK_TEST_ASSERT(m.events_waiting != nullptr, "events_waiting gauge should exist");
+  VALK_TEST_ASSERT(m.idle_time_us != nullptr, "idle_time_us gauge should exist");
+  VALK_TEST_ASSERT(m.handles != nullptr, "handles gauge should exist");
 
   VALK_PASS();
 }
@@ -380,7 +380,7 @@ void test_event_loop_metrics_set_handles_null_gauge(VALK_TEST_ARGS()) {
 
   valk_event_loop_metrics_v2_t m;
   memset(&m, 0, sizeof(m));
-  m.handles = NULL;
+  m.handles = nullptr;
 
   valk_event_loop_metrics_v2_set_handles(&m, 42);
 

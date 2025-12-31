@@ -156,7 +156,7 @@ void valk_coverage_report_lcov(const char *output_file) {
   
   for (int i = 0; i < COVERAGE_HASH_SIZE; i++) {
     valk_line_coverage_file_t *fc = g_line_coverage.buckets[i];
-    while (fc != NULL) {
+    while (fc != nullptr) {
       // NOLINTBEGIN(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
       fprintf(f, "SF:%s\n", fc->filename);
       fprintf(f, "FNF:0\n");
@@ -167,10 +167,10 @@ void valk_coverage_report_lcov(const char *output_file) {
       for (u64 line = 1; line < fc->line_capacity; line++) {
         if (fc->line_counts[line] != UINT32_MAX) {
           fprintf(f, "DA:%llu,%u\n", (unsigned long long)line, fc->line_counts[line]);
-          if (fc->expr_buckets != NULL) {
+          if (fc->expr_buckets != nullptr) {
             for (u32 b = 0; b < EXPR_HASH_SIZE; b++) {
               valk_expr_t *e = fc->expr_buckets[b];
-              while (e != NULL) {
+              while (e != nullptr) {
                 if (e->line == line) {
                   fprintf(f, "EXPRDATA:%llu,%u,%u,%u\n", (unsigned long long)line, e->column, e->end_column, e->hit_count);
                 }
@@ -187,7 +187,7 @@ void valk_coverage_report_lcov(const char *output_file) {
       
       u64 branches_found = 0;
       u64 branches_hit = 0;
-      for (valk_branch_t *br = fc->branches; br != NULL; br = br->next) {
+      for (valk_branch_t *br = fc->branches; br != nullptr; br = br->next) {
         fprintf(f, "BRDA:%u,0,0,%s\n", br->line, br->true_count > 0 ? "1" : "-");
         fprintf(f, "BRDA:%u,0,1,%s\n", br->line, br->false_count > 0 ? "1" : "-");
         branches_found += 2;
@@ -273,7 +273,7 @@ void valk_line_coverage_init(void) {
   ensure_line_coverage_init();
   valk_mutex_lock(&g_line_coverage.lock);
   for (int i = 0; i < COVERAGE_HASH_SIZE; i++) {
-    g_line_coverage.buckets[i] = NULL;
+    g_line_coverage.buckets[i] = nullptr;
   }
   g_line_coverage.total_files = 0;
   valk_mutex_unlock(&g_line_coverage.lock);
@@ -282,29 +282,29 @@ void valk_line_coverage_init(void) {
 valk_line_coverage_file_t *valk_coverage_get_file(u16 file_id) {
   for (int i = 0; i < COVERAGE_HASH_SIZE; i++) {
     valk_line_coverage_file_t *fc = g_line_coverage.buckets[i];
-    while (fc != NULL) {
+    while (fc != nullptr) {
       if (fc->file_id == file_id) return fc;
       fc = fc->next;
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 static valk_line_coverage_file_t *get_or_create_file(u16 file_id) {
   valk_line_coverage_file_t *fc = valk_coverage_get_file(file_id);
-  if (fc == NULL) {
+  if (fc == nullptr) {
     fc = malloc(sizeof(valk_line_coverage_file_t));
-    if (fc == NULL) {
-      return NULL;
+    if (fc == nullptr) {
+      return nullptr;
     }
     
     const char *filename = valk_source_get_filename(file_id);
     fc->filename = filename ? strdup(filename) : strdup("<unknown>");
     fc->file_id = file_id;
-    fc->line_counts = NULL;
+    fc->line_counts = nullptr;
     fc->line_capacity = 0;
     fc->lines_hit = 0;
-    fc->branches = NULL;
+    fc->branches = nullptr;
     fc->branches_found = 0;
     fc->branches_hit = 0;
     fc->expr_buckets = calloc(EXPR_HASH_SIZE, sizeof(valk_expr_t *));
@@ -338,7 +338,7 @@ void valk_coverage_mark_line(u16 file_id, u16 line) {
   valk_mutex_lock(&g_line_coverage.lock);
   
   valk_line_coverage_file_t *fc = get_or_create_file(file_id);
-  if (fc == NULL) {
+  if (fc == nullptr) {
     valk_mutex_unlock(&g_line_coverage.lock);
     return;
   }
@@ -358,7 +358,7 @@ void valk_coverage_record_line(u16 file_id, u16 line) {
   valk_mutex_lock(&g_line_coverage.lock);
   
   valk_line_coverage_file_t *fc = get_or_create_file(file_id);
-  if (fc == NULL) {
+  if (fc == nullptr) {
     valk_mutex_unlock(&g_line_coverage.lock);
     return;
   }
@@ -388,7 +388,7 @@ void valk_coverage_mark_expr(u16 file_id, u16 line, u16 column, u16 end_column) 
   valk_mutex_lock(&g_line_coverage.lock);
   
   valk_line_coverage_file_t *fc = get_or_create_file(file_id);
-  if (fc == NULL || fc->expr_buckets == NULL) {
+  if (fc == nullptr || fc->expr_buckets == nullptr) {
     valk_mutex_unlock(&g_line_coverage.lock);
     return;
   }
@@ -400,7 +400,7 @@ void valk_coverage_mark_expr(u16 file_id, u16 line, u16 column, u16 end_column) 
   
   u32 bucket = expr_hash(line, column);
   valk_expr_t *expr = fc->expr_buckets[bucket];
-  while (expr != NULL) {
+  while (expr != nullptr) {
     if (expr->line == line && expr->column == column) {
       valk_mutex_unlock(&g_line_coverage.lock);
       return;
@@ -409,7 +409,7 @@ void valk_coverage_mark_expr(u16 file_id, u16 line, u16 column, u16 end_column) 
   }
   
   expr = malloc(sizeof(valk_expr_t));
-  if (expr == NULL) {
+  if (expr == nullptr) {
     valk_mutex_unlock(&g_line_coverage.lock);
     return;
   }
@@ -432,7 +432,7 @@ void valk_coverage_record_expr(u16 file_id, u16 line, u16 column) {
   valk_mutex_lock(&g_line_coverage.lock);
   
   valk_line_coverage_file_t *fc = get_or_create_file(file_id);
-  if (fc == NULL || fc->expr_buckets == NULL) {
+  if (fc == nullptr || fc->expr_buckets == nullptr) {
     valk_mutex_unlock(&g_line_coverage.lock);
     return;
   }
@@ -441,7 +441,7 @@ void valk_coverage_record_expr(u16 file_id, u16 line, u16 column) {
   
   u32 bucket = expr_hash(line, column);
   valk_expr_t *expr = fc->expr_buckets[bucket];
-  while (expr != NULL) {
+  while (expr != nullptr) {
     if (expr->line == line && expr->column == column) {
       if (expr->hit_count == 0) {
         fc->exprs_hit++;
@@ -458,7 +458,7 @@ void valk_coverage_record_expr(u16 file_id, u16 line, u16 column) {
   }
   
   expr = malloc(sizeof(valk_expr_t));
-  if (expr == NULL) {
+  if (expr == nullptr) {
     valk_mutex_unlock(&g_line_coverage.lock);
     return;
   }
@@ -491,7 +491,7 @@ u64 valk_coverage_get_line_expr_count(u16 file_id, u16 line, u64 *hit, u64 *tota
   valk_mutex_lock(&g_line_coverage.lock);
   
   valk_line_coverage_file_t *fc = valk_coverage_get_file(file_id);
-  if (fc == NULL || fc->expr_buckets == NULL) {
+  if (fc == nullptr || fc->expr_buckets == nullptr) {
     valk_mutex_unlock(&g_line_coverage.lock);
     if (hit) *hit = 0;
     if (total) *total = 0;
@@ -502,7 +502,7 @@ u64 valk_coverage_get_line_expr_count(u16 file_id, u16 line, u64 *hit, u64 *tota
   u64 expr_total = 0;
   for (u32 i = 0; i < EXPR_HASH_SIZE; i++) {
     valk_expr_t *expr = fc->expr_buckets[i];
-    while (expr != NULL) {
+    while (expr != nullptr) {
       if (expr->line == line) {
         expr_total++;
         if (expr->hit_count > 0) expr_hit++;
@@ -525,13 +525,13 @@ void valk_coverage_record_branch(u16 file_id, u16 line, bool taken) {
   valk_mutex_lock(&g_line_coverage.lock);
   
   valk_line_coverage_file_t *fc = get_or_create_file(file_id);
-  if (fc == NULL) {
+  if (fc == nullptr) {
     valk_mutex_unlock(&g_line_coverage.lock);
     return;
   }
   
   valk_branch_t *br = fc->branches;
-  while (br != NULL) {
+  while (br != nullptr) {
     if (br->line == line) {
       if (taken) {
         if (br->true_count == 0) fc->branches_hit++;
@@ -547,7 +547,7 @@ void valk_coverage_record_branch(u16 file_id, u16 line, bool taken) {
   }
   
   br = malloc(sizeof(valk_branch_t));
-  if (br == NULL) {
+  if (br == nullptr) {
     valk_mutex_unlock(&g_line_coverage.lock);
     return;
   }
@@ -568,20 +568,20 @@ void valk_line_coverage_reset(void) {
   
   for (int i = 0; i < COVERAGE_HASH_SIZE; i++) {
     valk_line_coverage_file_t *fc = g_line_coverage.buckets[i];
-    while (fc != NULL) {
+    while (fc != nullptr) {
       valk_line_coverage_file_t *next = fc->next;
       free(fc->filename);
       free(fc->line_counts);
       valk_branch_t *br = fc->branches;
-      while (br != NULL) {
+      while (br != nullptr) {
         valk_branch_t *br_next = br->next;
         free(br);
         br = br_next;
       }
-      if (fc->expr_buckets != NULL) {
+      if (fc->expr_buckets != nullptr) {
         for (u32 j = 0; j < EXPR_HASH_SIZE; j++) {
           valk_expr_t *expr = fc->expr_buckets[j];
-          while (expr != NULL) {
+          while (expr != nullptr) {
             valk_expr_t *expr_next = expr->next;
             free(expr);
             expr = expr_next;
@@ -592,7 +592,7 @@ void valk_line_coverage_reset(void) {
       free(fc);
       fc = next;
     }
-    g_line_coverage.buckets[i] = NULL;
+    g_line_coverage.buckets[i] = nullptr;
   }
   g_line_coverage.total_files = 0;
   

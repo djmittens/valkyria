@@ -39,7 +39,7 @@ static void test_conn_io_write_buf_acquire_null_slab(VALK_TEST_ARGS()) {
   valk_conn_io_t io;
   valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
   
-  bool result = valk_conn_io_write_buf_acquire(&io, NULL);
+  bool result = valk_conn_io_write_buf_acquire(&io, nullptr);
   ASSERT_FALSE(result);
   ASSERT_NULL(io.write_buf);
   
@@ -77,7 +77,7 @@ static void test_conn_io_write_buf_append_no_buf(VALK_TEST_ARGS()) {
   valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
   
   u8 data[] = {1, 2, 3};
-  size_t written = valk_conn_io_write_buf_append(&io, NULL, data, sizeof(data));
+  size_t written = valk_conn_io_write_buf_append(&io, nullptr, data, sizeof(data));
   ASSERT_EQ(written, 0);
   
   VALK_PASS();
@@ -89,7 +89,7 @@ static void test_conn_io_read_buf_acquire_null_slab(VALK_TEST_ARGS()) {
   valk_conn_io_t io;
   valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
   
-  bool result = valk_conn_io_read_buf_acquire(&io, NULL);
+  bool result = valk_conn_io_read_buf_acquire(&io, nullptr);
   ASSERT_FALSE(result);
   ASSERT_NULL(io.read_buf);
   
@@ -111,7 +111,7 @@ static void test_conn_io_read_buf_data_no_buf(VALK_TEST_ARGS()) {
 static void test_conn_io_free_null(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_conn_io_free(NULL, NULL);
+  valk_conn_io_free(nullptr, nullptr);
   
   VALK_PASS();
 }

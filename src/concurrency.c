@@ -254,7 +254,7 @@ static void *valk_worker_routine(void *arg) {
     valk_mutex_unlock(&queue->mutex);
   } while (1);
 
-  return NULL;
+  return nullptr;
 }
 
 int valk_start_pool(valk_worker_pool *pool) {

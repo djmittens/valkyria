@@ -24,8 +24,8 @@ bool valk_http_async_is_closed_callback(void *ctx) {
 static void clear_is_closed_ctx_recursive(valk_async_handle_t *handle, void *ctx) {
   if (!handle) return;
   if (handle->is_closed_ctx == ctx) {
-    handle->is_closed = NULL;
-    handle->is_closed_ctx = NULL;
+    handle->is_closed = nullptr;
+    handle->is_closed_ctx = nullptr;
   }
   for (u64 i = 0; i < handle->children.count; i++) {
     clear_is_closed_ctx_recursive(handle->children.items[i], ctx);
@@ -69,7 +69,7 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
   if (arena && http->arena_slab_item) {
     stream_req->arena_slab_item = http->arena_slab_item;
     stream_req->arena_slot = http->arena_slot;
-    http->arena_slab_item = NULL;
+    http->arena_slab_item = nullptr;
   }
 
   valk_async_status_t done_status = valk_async_handle_get_status(handle);
@@ -125,12 +125,12 @@ void valk_standalone_async_done_callback(valk_async_handle_t *handle, void *ctx)
 }
 
 valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sys) {
-  if (!sys || !sys->httpStreamArenas) return NULL;
+  if (!sys || !sys->httpStreamArenas) return nullptr;
 
   valk_slab_item_t *arena_item = valk_slab_aquire(sys->httpStreamArenas);
   if (!arena_item) {
     VALK_WARN("Standalone async: failed to acquire arena from pool");
-    return NULL;
+    return nullptr;
   }
 
   valk_mem_arena_t *arena = (valk_mem_arena_t *)arena_item->data;
@@ -139,7 +139,7 @@ valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sy
   valk_standalone_async_ctx_t *ctx = malloc(sizeof(valk_standalone_async_ctx_t));
   if (!ctx) {
     valk_slab_release(sys->httpStreamArenas, arena_item);
-    return NULL;
+    return nullptr;
   }
 // LCOV_EXCL_STOP
 
@@ -154,8 +154,8 @@ valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sy
 void valk_async_notify_done(valk_async_handle_t *handle) {
   if (handle->on_done) {
     handle->on_done(handle, handle->on_done_ctx);
-    handle->on_done = NULL;
-    handle->on_done_ctx = NULL;
+    handle->on_done = nullptr;
+    handle->on_done_ctx = nullptr;
   }
 }
 
@@ -169,7 +169,7 @@ bool valk_async_is_resource_closed(valk_async_handle_t *handle) {
 
 valk_async_handle_t* valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env) {
   valk_async_handle_t *handle = malloc(sizeof(valk_async_handle_t));
-  if (!handle) return NULL;
+  if (!handle) return nullptr;
 
   memset(handle, 0, sizeof(valk_async_handle_t));
   handle->id = __atomic_fetch_add(&g_async_handle_id, 1, __ATOMIC_RELAXED);
@@ -199,7 +199,7 @@ void valk_async_handle_free(valk_async_handle_t *handle) {
 }
 
 valk_async_handle_t *valk_async_handle_ref(valk_async_handle_t *handle) {
-  if (!handle) return NULL;
+  if (!handle) return nullptr;
   atomic_fetch_add_explicit(&handle->refcount, 1, memory_order_relaxed);
   return handle;
 }
@@ -344,6 +344,7 @@ static void valk_async_cancel_task(void *ctx) {
       }
     }
     // LCOV_EXCL_STOP
+    // NOLINTNEXTLINE(clang-analyzer-unix.Malloc) - standalone freed in callback
     if (!alloc || alloc->type != VALK_ALLOC_ARENA) alloc = &valk_malloc_allocator;
     VALK_WITH_ALLOC(alloc) {
       valk_lval_t *args = valk_lval_nil();
@@ -418,7 +419,7 @@ static void valk_async_propagate_allocator_impl(valk_async_handle_t *handle, val
 }
 
 void valk_async_propagate_allocator(valk_async_handle_t *handle, valk_mem_allocator_t *allocator, valk_lenv_t *env) {
-  valk_async_propagate_allocator_impl(handle, allocator, env, handle ? handle->sys : NULL);
+  valk_async_propagate_allocator_impl(handle, allocator, env, handle ? handle->sys : nullptr);
 }
 
 valk_lval_t* valk_async_status_to_sym(valk_async_status_t status) {
@@ -436,7 +437,7 @@ valk_lval_t *valk_lval_handle(valk_async_handle_t *handle) {
   valk_lval_t *res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags = LVAL_HANDLE | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   res->origin_allocator = valk_thread_ctx.allocator;
-  res->gc_next = NULL;
+  res->gc_next = nullptr;
   res->async.handle = handle;
   return res;
 }

@@ -16,7 +16,7 @@ static void __gc_wakeup_cb(uv_async_t *handle);
 void valk_aio_register_system(valk_aio_system_t *sys) {
   pthread_mutex_lock(&g_aio_systems_lock);
   for (int i = 0; i < VALK_AIO_MAX_SYSTEMS; i++) {
-    if (g_aio_systems[i] == NULL) {
+    if (g_aio_systems[i] == nullptr) {
       g_aio_systems[i] = sys;
       break;
     }
@@ -28,7 +28,7 @@ void valk_aio_unregister_system(valk_aio_system_t *sys) {
   pthread_mutex_lock(&g_aio_systems_lock);
   for (int i = 0; i < VALK_AIO_MAX_SYSTEMS; i++) {
     if (g_aio_systems[i] == sys) {
-      g_aio_systems[i] = NULL;
+      g_aio_systems[i] = nullptr;
       break;
     }
   }
@@ -110,7 +110,7 @@ const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg)
   if (cfg->arena_pool_size < cfg->max_connections / 10)
     return "arena_pool_size must be >= max_connections / 10";
 
-  return NULL;
+  return nullptr;
 }
 
 int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
@@ -176,7 +176,7 @@ int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
 }
 
 valk_aio_system_t *valk_aio_start(void) {
-  return valk_aio_start_with_config(NULL);
+  return valk_aio_start_with_config(nullptr);
 }
 
 valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) {
@@ -188,7 +188,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   }
 
   if (valk_aio_system_config_resolve(&resolved) != 0) {
-    return NULL;
+    return nullptr;
   }
 
   signal(SIGPIPE, SIG_IGN);
@@ -206,7 +206,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   if (init_rc != 0) {
     VALK_ERROR("Failed to initialize event loop");
     free(sys);
-    return NULL;
+    return nullptr;
   }
 
 #ifdef VALK_METRICS_ENABLED
@@ -230,7 +230,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
 
   if (valk_pending_stream_queue_init(&sys->pending_streams, sys->config.pending_stream_pool_size) != 0) {
     VALK_ERROR("Failed to allocate pending stream pool");
-    return NULL;
+    return nullptr;
   }
   valk_backpressure_list_init(&sys->backpressure, sys->config.backpressure_list_max,
                                sys->config.backpressure_timeout_ms);
@@ -244,7 +244,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   if (!sys->port_strs) {
     VALK_ERROR("Failed to allocate port strings buffer");
     valk_pending_stream_queue_destroy(&sys->pending_streams);
-    return NULL;
+    return nullptr;
   }
 
   sys->http_queue.request_items = malloc(sizeof(valk_http_request_item_t) * sys->config.queue_capacity);
@@ -298,7 +298,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
 
   if (uv_sem_init(&sys->startup_sem, 0) != 0) {
     VALK_ERROR("Failed to initialize startup semaphore");
-    return NULL;
+    return nullptr;
   }
 
   // Use uv_thread_create_ex with a larger stack size (8MB) to support
@@ -312,7 +312,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   if (status) {
     perror("uv_thread_create_ex");
     uv_sem_destroy(&sys->startup_sem);
-    return NULL;
+    return nullptr;
   }
 
   uv_sem_wait(&sys->startup_sem);
@@ -370,7 +370,7 @@ void valk_aio_stop(valk_aio_system_t *sys) {
   sys->shuttingDown = true;
   
   if (!sys->stopperHandle) {
-    VALK_ERROR("valk_aio_stop: stopperHandle is NULL!");
+    VALK_ERROR("valk_aio_stop: stopperHandle is nullptr!");
     return;
   }
   if (sys->stopperHandle->magic != VALK_AIO_HANDLE_MAGIC) {

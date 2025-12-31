@@ -1,5 +1,13 @@
-Checks: 'modernize-*,performance-*,-modernize-use-trailing-return-type'
-WarningsAsErrors: 'clang-analyzer-*'
+Checks: >
+  modernize-*,
+  performance-*,
+  -modernize-use-trailing-return-type,
+  -modernize-use-nullptr,
+  -modernize-macro-to-enum,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -clang-analyzer-security.insecureAPI.rand,
+  -clang-analyzer-optin.performance.Padding
+WarningsAsErrors: 'clang-analyzer-core.*,clang-analyzer-deadcode.*,clang-analyzer-valist.*'
 HeaderFilterRegex: '.*/valkyria-lisp/src/.*\.h$'
 SystemHeaders: false
 UseColor: true

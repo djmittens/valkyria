@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 _Static_assert(sizeof(size_t) == 8, "This codebase supports 64-bit systems only");
 
 // Portable fixed-width types with consistent format specifiers
@@ -17,8 +18,8 @@ typedef signed char        i8;
 typedef float  f32;
 typedef double f64;
 
-typedef unsigned long long uptr;
-typedef signed long long   iptr;
+typedef uintptr_t uptr;
+typedef intptr_t  iptr;
 
 typedef size_t sz;
 

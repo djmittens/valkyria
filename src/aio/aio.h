@@ -174,7 +174,7 @@ typedef struct valk_http2_response_t {
 valk_aio_system_t *valk_aio_start();
 
 /// @brief Start AIO system with custom configuration
-/// @param config System configuration (NULL for defaults)
+/// @param config System configuration (nullptr for defaults)
 /// @return AIO system handle
 valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config);
 
@@ -184,7 +184,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config);
 int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg);
 
 /// @brief Validate configuration
-/// Returns NULL on success, or error message on failure
+/// Returns nullptr on success, or error message on failure
 const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg);
 
 void valk_aio_stop(valk_aio_system_t *sys);
@@ -269,7 +269,7 @@ typedef struct valk_http_server_config {
 static inline valk_http_server_config_t valk_http_server_config_default(void) {
   return (valk_http_server_config_t){
     .max_response_body_size = 64 * 1024 * 1024,  // 64MB
-    .error_503_body = NULL,
+    .error_503_body = nullptr,
     .error_503_body_len = 0,
     .sse_buffer_size = 64 * 1024,   // 64KB
     .sse_queue_max = 1000,
@@ -402,7 +402,7 @@ static inline valk_aio_system_config_t valk_aio_config_large_payload(void) {
 static inline valk_http_server_config_t valk_http_server_config_demo(void) {
   return (valk_http_server_config_t){
     .max_response_body_size = 8 * 1024 * 1024,  // 8MB
-    .error_503_body = NULL,
+    .error_503_body = nullptr,
     .error_503_body_len = 0,
     .sse_buffer_size = 32 * 1024,   // 32KB
     .sse_queue_max = 100,
@@ -428,9 +428,9 @@ valk_async_handle_t *valk_aio_http2_listen(valk_aio_system_t *sys,
 /// @param[in] port the port number to listen on
 /// @param[in] keyfile path to TLS private key file
 /// @param[in] certfile path to TLS certificate file
-/// @param[in] handler C function handler (optional, can be NULL)
-/// @param[in] lisp_handler Lisp function handler (optional, can be NULL)
-/// @param[in] config server configuration (optional, uses defaults if NULL)
+/// @param[in] handler C function handler (optional, can be nullptr)
+/// @param[in] lisp_handler Lisp function handler (optional, can be nullptr)
+/// @param[in] config server configuration (optional, uses defaults if nullptr)
 /// @return returns an async handle that resolves to the server ref
 valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
                                    const char *interface, const int port,
@@ -486,22 +486,22 @@ valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
 #include "aio_metrics.h"
 #include "gc.h"
 
-// Get metrics from AIO system (returns NULL if metrics not enabled)
+// Get metrics from AIO system (returns nullptr if metrics not enabled)
 valk_aio_metrics_t* valk_aio_get_metrics(valk_aio_system_t* sys);
 
-// Get system stats from AIO system (returns NULL if metrics not enabled)
+// Get system stats from AIO system (returns nullptr if metrics not enabled)
 valk_aio_system_stats_t* valk_aio_get_system_stats(valk_aio_system_t* sys);
 
-// Get HTTP clients registry from AIO system (returns NULL if metrics not enabled)
+// Get HTTP clients registry from AIO system (returns nullptr if metrics not enabled)
 valk_http_clients_registry_t* valk_aio_get_http_clients_registry(valk_aio_system_t* sys);
 
 // Update queue stats from HTTP queue (call before rendering metrics)
 void valk_aio_update_queue_stats(valk_aio_system_t* sys);
 
-// Get GC heap from AIO system (returns NULL if metrics not enabled)
+// Get GC heap from AIO system (returns nullptr if metrics not enabled)
 valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
 
-// Get scratch arena from AIO system (for diagnostics, returns NULL if not available)
+// Get scratch arena from AIO system (for diagnostics, returns nullptr if not available)
 valk_mem_arena_t* valk_aio_get_scratch_arena(valk_aio_system_t* sys);
 
 // ============================================================================
@@ -569,7 +569,7 @@ void valk_aio_timer_set_data(valk_aio_handle_t* handle, void* data);
 void valk_aio_timer_free(valk_aio_handle_t* handle);
 #endif
 
-// Get the event loop from AIO system (returns NULL if no loop available)
+// Get the event loop from AIO system (returns nullptr if no loop available)
 struct uv_loop_s* valk_aio_get_event_loop(valk_aio_system_t* sys);
 
 // Update event loop metrics from libuv (reads loop counters and updates modular metrics)

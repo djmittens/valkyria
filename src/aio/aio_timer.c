@@ -3,10 +3,10 @@
 #ifdef VALK_METRICS_ENABLED
 
 valk_aio_handle_t* valk_aio_timer_alloc(valk_aio_system_t* sys) {
-  if (!sys || !sys->handleSlab) return NULL;
+  if (!sys || !sys->handleSlab) return nullptr;
 
   valk_slab_item_t *item = valk_slab_aquire(sys->handleSlab);
-  if (!item) return NULL;
+  if (!item) return nullptr;
 
   valk_aio_handle_t *handle = (valk_aio_handle_t *)item->data;
   VALK_INFO("Timer ALLOC: handle=%p slot=%zu", (void*)handle, item->handle);

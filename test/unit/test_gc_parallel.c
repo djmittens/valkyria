@@ -51,13 +51,13 @@ void test_gc_atomic_mark_single(VALK_TEST_ARGS()) {
 void test_gc_atomic_mark_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  bool result = valk_gc_try_mark(NULL);
-  VALK_TEST_ASSERT(result == false, "try_mark(NULL) should return false");
+  bool result = valk_gc_try_mark(nullptr);
+  VALK_TEST_ASSERT(result == false, "try_mark(nullptr) should return false");
 
-  bool is_marked = valk_gc_is_marked(NULL);
-  VALK_TEST_ASSERT(is_marked == true, "is_marked(NULL) should return true");
+  bool is_marked = valk_gc_is_marked(nullptr);
+  VALK_TEST_ASSERT(is_marked == true, "is_marked(nullptr) should return true");
 
-  valk_gc_clear_mark(NULL);
+  valk_gc_clear_mark(nullptr);
 
   VALK_PASS();
 }
@@ -78,7 +78,7 @@ static void *mark_race_thread(void *arg) {
     valk_gc_clear_mark(ctx->val);
   }
   ctx->success_count = local_success;
-  return NULL;
+  return nullptr;
 }
 
 void test_gc_atomic_mark_multithread(VALK_TEST_ARGS()) {
@@ -97,11 +97,11 @@ void test_gc_atomic_mark_multithread(VALK_TEST_ARGS()) {
     ctxs[i].val = val;
     ctxs[i].success_count = 0;
     ctxs[i].attempts = ATTEMPTS;
-    pthread_create(&threads[i], NULL, mark_race_thread, &ctxs[i]);
+    pthread_create(&threads[i], nullptr, mark_race_thread, &ctxs[i]);
   }
 
   for (int i = 0; i < NUM_THREADS; i++) {
-    pthread_join(threads[i], NULL);
+    pthread_join(threads[i], nullptr);
   }
 
   int total_success = 0;
@@ -144,7 +144,7 @@ static void *barrier_thread(void *arg) {
 
   valk_barrier_wait(ctx->barrier);
 
-  return NULL;
+  return nullptr;
 }
 
 void test_gc_barrier_multithread(VALK_TEST_ARGS()) {
@@ -156,7 +156,7 @@ void test_gc_barrier_multithread(VALK_TEST_ARGS()) {
 
   int counter = 0;
   pthread_mutex_t mutex;
-  pthread_mutex_init(&mutex, NULL);
+  pthread_mutex_init(&mutex, nullptr);
 
   pthread_t threads[NUM_THREADS];
   barrier_ctx_t ctxs[NUM_THREADS];
@@ -165,11 +165,11 @@ void test_gc_barrier_multithread(VALK_TEST_ARGS()) {
     ctxs[i].barrier = &barrier;
     ctxs[i].counter = &counter;
     ctxs[i].mutex = &mutex;
-    pthread_create(&threads[i], NULL, barrier_thread, &ctxs[i]);
+    pthread_create(&threads[i], nullptr, barrier_thread, &ctxs[i]);
   }
 
   for (int i = 0; i < NUM_THREADS; i++) {
-    pthread_join(threads[i], NULL);
+    pthread_join(threads[i], nullptr);
   }
 
   VALK_TEST_ASSERT(counter == NUM_THREADS, "All threads should have incremented counter");
@@ -223,7 +223,7 @@ void test_gc_mark_queue_push_pop(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(valk_gc_mark_queue_empty(&queue), "Queue should be empty after pops");
 
   valk_lval_t *empty_pop = valk_gc_mark_queue_pop(&queue);
-  VALK_TEST_ASSERT(empty_pop == NULL, "Pop from empty queue should return NULL");
+  VALK_TEST_ASSERT(empty_pop == nullptr, "Pop from empty queue should return nullptr");
 
   valk_gc_malloc_heap_destroy(heap);
 
@@ -363,11 +363,11 @@ static void *stealer_thread(void *arg) {
   ctx->stolen = 0;
   for (int i = 0; i < ctx->count * 2; i++) {
     valk_lval_t *val = valk_gc_mark_queue_steal(ctx->queue);
-    if (val != NULL) {
+    if (val != nullptr) {
       ctx->stolen++;
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 void test_gc_mark_queue_concurrent_steal(VALK_TEST_ARGS()) {
@@ -399,18 +399,18 @@ void test_gc_mark_queue_concurrent_steal(VALK_TEST_ARGS()) {
     ctxs[i].vals = vals;
     ctxs[i].count = NUM_VALS;
     ctxs[i].stolen = 0;
-    pthread_create(&threads[i], NULL, stealer_thread, &ctxs[i]);
+    pthread_create(&threads[i], nullptr, stealer_thread, &ctxs[i]);
   }
 
   int owner_popped = 0;
   while (true) {
     valk_lval_t *val = valk_gc_mark_queue_pop(&queue);
-    if (val == NULL) break;
+    if (val == nullptr) break;
     owner_popped++;
   }
 
   for (int i = 0; i < NUM_STEALERS; i++) {
-    pthread_join(threads[i], NULL);
+    pthread_join(threads[i], nullptr);
   }
 
   int total_stolen = 0;
@@ -464,13 +464,13 @@ void test_gc_root_stack_init(VALK_TEST_ARGS()) {
   valk_gc_coordinator_init();
   valk_gc_thread_register();
 
-  VALK_TEST_ASSERT(valk_thread_ctx.root_stack != NULL, "root_stack should be allocated");
+  VALK_TEST_ASSERT(valk_thread_ctx.root_stack != nullptr, "root_stack should be allocated");
   VALK_TEST_ASSERT(valk_thread_ctx.root_stack_capacity == 256, "capacity should be 256");
   VALK_TEST_ASSERT(valk_thread_ctx.root_stack_count == 0, "count should be 0");
 
   valk_gc_thread_unregister();
 
-  VALK_TEST_ASSERT(valk_thread_ctx.root_stack == NULL, "root_stack should be freed");
+  VALK_TEST_ASSERT(valk_thread_ctx.root_stack == nullptr, "root_stack should be freed");
 
   VALK_PASS();
 }
@@ -485,8 +485,8 @@ void test_gc_page_pool_init(VALK_TEST_ARGS()) {
   valk_gc_page_pool_t pool;
   valk_gc_page_pool_init(&pool);
 
-  VALK_TEST_ASSERT(pool.all_pages == NULL, "all_pages should be NULL");
-  VALK_TEST_ASSERT(pool.partial_pages == NULL, "partial_pages should be NULL");
+  VALK_TEST_ASSERT(pool.all_pages == nullptr, "all_pages should be nullptr");
+  VALK_TEST_ASSERT(pool.partial_pages == nullptr, "partial_pages should be nullptr");
   VALK_TEST_ASSERT(pool.num_pages == 0, "num_pages should be 0");
   VALK_TEST_ASSERT(atomic_load(&pool.total_slots) == 0, "total_slots should be 0");
   VALK_TEST_ASSERT(atomic_load(&pool.used_slots) == 0, "used_slots should be 0");
@@ -503,7 +503,7 @@ void test_gc_page_alloc(VALK_TEST_ARGS()) {
   valk_gc_page_pool_init(&pool);
 
   valk_gc_page_t *page = valk_gc_page_alloc(&pool);
-  VALK_TEST_ASSERT(page != NULL, "page should be allocated");
+  VALK_TEST_ASSERT(page != nullptr, "page should be allocated");
   VALK_TEST_ASSERT(pool.num_pages == 1, "num_pages should be 1");
   VALK_TEST_ASSERT(pool.all_pages == page, "all_pages should point to page");
   VALK_TEST_ASSERT(atomic_load(&pool.total_slots) == VALK_GC_SLOTS_PER_PAGE,
@@ -529,7 +529,7 @@ void test_gc_page_alloc_multiple(VALK_TEST_ARGS()) {
   const int NUM_PAGES = 5;
   for (int i = 0; i < NUM_PAGES; i++) {
     valk_gc_page_t *page = valk_gc_page_alloc(&pool);
-    VALK_TEST_ASSERT(page != NULL, "page %d should be allocated", i);
+    VALK_TEST_ASSERT(page != nullptr, "page %d should be allocated", i);
   }
 
   VALK_TEST_ASSERT(pool.num_pages == NUM_PAGES, "num_pages should be %d", NUM_PAGES);
@@ -547,7 +547,7 @@ void test_gc_tlab_init(VALK_TEST_ARGS()) {
   valk_gc_tlab_t tlab;
   valk_gc_tlab_init(&tlab);
 
-  VALK_TEST_ASSERT(tlab.page == NULL, "page should be NULL");
+  VALK_TEST_ASSERT(tlab.page == nullptr, "page should be nullptr");
   VALK_TEST_ASSERT(tlab.next_slot == 0, "next_slot should be 0");
   VALK_TEST_ASSERT(tlab.limit_slot == 0, "limit_slot should be 0");
 
@@ -565,7 +565,7 @@ void test_gc_tlab_refill(VALK_TEST_ARGS()) {
 
   bool success = valk_gc_tlab_refill(&tlab, &pool);
   VALK_TEST_ASSERT(success, "TLAB refill should succeed");
-  VALK_TEST_ASSERT(tlab.page != NULL, "TLAB page should be set");
+  VALK_TEST_ASSERT(tlab.page != nullptr, "TLAB page should be set");
   VALK_TEST_ASSERT(tlab.next_slot == 0, "next_slot should be 0");
   VALK_TEST_ASSERT(tlab.limit_slot == VALK_GC_TLAB_SLOTS, "limit_slot should be TLAB_SLOTS");
 
@@ -595,11 +595,11 @@ void test_gc_tlab_alloc_basic(VALK_TEST_ARGS()) {
                    "slot beyond TLAB should not be allocated");
 
   void *ptr1 = valk_gc_tlab_alloc(&tlab);
-  VALK_TEST_ASSERT(ptr1 != NULL, "First allocation should succeed");
+  VALK_TEST_ASSERT(ptr1 != nullptr, "First allocation should succeed");
   VALK_TEST_ASSERT(tlab.next_slot == 1, "next_slot should be 1");
 
   void *ptr2 = valk_gc_tlab_alloc(&tlab);
-  VALK_TEST_ASSERT(ptr2 != NULL, "Second allocation should succeed");
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Second allocation should succeed");
   VALK_TEST_ASSERT(ptr2 != ptr1, "Allocations should be different");
   VALK_TEST_ASSERT((char*)ptr2 - (char*)ptr1 == VALK_GC_SLOT_SIZE,
                    "Allocations should be SLOT_SIZE apart");
@@ -623,19 +623,19 @@ void test_gc_tlab_exhaust_and_refill(VALK_TEST_ARGS()) {
 
   for (u32 i = 0; i < VALK_GC_TLAB_SLOTS; i++) {
     void *ptr = valk_gc_tlab_alloc(&tlab);
-    VALK_TEST_ASSERT(ptr != NULL, "Allocation %u should succeed", i);
+    VALK_TEST_ASSERT(ptr != nullptr, "Allocation %u should succeed", i);
   }
 
   VALK_TEST_ASSERT(tlab.next_slot == tlab.limit_slot, "TLAB should be exhausted");
 
   void *ptr_exhausted = valk_gc_tlab_alloc(&tlab);
-  VALK_TEST_ASSERT(ptr_exhausted == NULL, "Exhausted TLAB should return NULL");
+  VALK_TEST_ASSERT(ptr_exhausted == nullptr, "Exhausted TLAB should return nullptr");
 
   bool refill_success = valk_gc_tlab_refill(&tlab, &pool);
   VALK_TEST_ASSERT(refill_success, "Second refill should succeed");
 
   void *ptr_after_refill = valk_gc_tlab_alloc(&tlab);
-  VALK_TEST_ASSERT(ptr_after_refill != NULL, "Allocation after refill should succeed");
+  VALK_TEST_ASSERT(ptr_after_refill != nullptr, "Allocation after refill should succeed");
 
   (void)first_page;
 
@@ -705,7 +705,7 @@ static void *tlab_alloc_thread(void *arg) {
     }
   }
   
-  return NULL;
+  return nullptr;
 }
 
 void test_gc_tlab_multithread(VALK_TEST_ARGS()) {
@@ -726,11 +726,11 @@ void test_gc_tlab_multithread(VALK_TEST_ARGS()) {
     ctxs[i].allocs_per_thread = ALLOCS_PER_THREAD;
     ctxs[i].results = results[i];
     ctxs[i].success_count = 0;
-    pthread_create(&threads[i], NULL, tlab_alloc_thread, &ctxs[i]);
+    pthread_create(&threads[i], nullptr, tlab_alloc_thread, &ctxs[i]);
   }
 
   for (int i = 0; i < NUM_THREADS; i++) {
-    pthread_join(threads[i], NULL);
+    pthread_join(threads[i], nullptr);
   }
 
   int total_success = 0;
@@ -745,7 +745,7 @@ void test_gc_tlab_multithread(VALK_TEST_ARGS()) {
   for (int i = 0; i < NUM_THREADS; i++) {
     for (int j = 0; j < ctxs[i].success_count; j++) {
       void *ptr = results[i][j];
-      VALK_TEST_ASSERT(ptr != NULL, "Thread %d alloc %d should not be NULL", i, j);
+      VALK_TEST_ASSERT(ptr != nullptr, "Thread %d alloc %d should not be nullptr", i, j);
       
       for (int k = i; k < NUM_THREADS; k++) {
         int start = (k == i) ? j + 1 : 0;
@@ -929,8 +929,8 @@ void test_gc_mark_linked_list(VALK_TEST_ARGS()) {
   for (int i = 0; i < LIST_LEN; i++) {
     nodes[i] = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
     nodes[i]->flags = LVAL_CONS;
-    nodes[i]->cons.head = NULL;
-    nodes[i]->cons.tail = (i > 0) ? nodes[i-1] : NULL;
+    nodes[i]->cons.head = nullptr;
+    nodes[i]->cons.tail = (i > 0) ? nodes[i-1] : nullptr;
   }
 
   valk_gc_root_push(nodes[LIST_LEN - 1]);
@@ -975,7 +975,7 @@ void test_gc_sweep_page_basic(VALK_TEST_ARGS()) {
   void *ptr2 = valk_gc_tlab_alloc(&tlab);
   void *ptr3 = valk_gc_tlab_alloc(&tlab);
 
-  VALK_TEST_ASSERT(ptr1 != NULL && ptr2 != NULL && ptr3 != NULL, 
+  VALK_TEST_ASSERT(ptr1 != nullptr && ptr2 != nullptr && ptr3 != nullptr, 
                    "All allocations should succeed");
 
   valk_gc_bitmap_set(tlab.page->mark_bits, 0);
@@ -1075,7 +1075,7 @@ void test_gc_full_cycle_basic(VALK_TEST_ARGS()) {
   
   void *slot1 = valk_gc_tlab_alloc(&tlab);
   void *slot2 = valk_gc_tlab_alloc(&tlab);
-  VALK_TEST_ASSERT(slot1 != NULL && slot2 != NULL, "should alloc slots");
+  VALK_TEST_ASSERT(slot1 != nullptr && slot2 != nullptr, "should alloc slots");
   
   size_t used_before = atomic_load(&pool.used_slots);
   
@@ -1143,21 +1143,21 @@ void test_gc_tlab_alloc_slow_basic(VALK_TEST_ARGS()) {
   valk_gc_global_pool_init();
   
   valk_thread_context_t *ctx = &valk_thread_ctx;
-  ctx->tlab = NULL;
+  ctx->tlab = nullptr;
   ctx->tlab_enabled = false;
   
   void *ptr1 = valk_gc_tlab_alloc_slow(sizeof(valk_lval_t));
-  VALK_TEST_ASSERT(ptr1 != NULL, "first slow alloc should succeed");
-  VALK_TEST_ASSERT(ctx->tlab != NULL, "tlab should be initialized after alloc");
+  VALK_TEST_ASSERT(ptr1 != nullptr, "first slow alloc should succeed");
+  VALK_TEST_ASSERT(ctx->tlab != nullptr, "tlab should be initialized after alloc");
   VALK_TEST_ASSERT(ctx->tlab_enabled, "tlab_enabled should be true after alloc");
   
   void *ptr2 = valk_gc_tlab_alloc_slow(sizeof(valk_lval_t));
-  VALK_TEST_ASSERT(ptr2 != NULL, "second slow alloc should succeed");
+  VALK_TEST_ASSERT(ptr2 != nullptr, "second slow alloc should succeed");
   VALK_TEST_ASSERT(ptr2 != ptr1, "allocations should be different");
   
   if (ctx->tlab) {
     free(ctx->tlab);
-    ctx->tlab = NULL;
+    ctx->tlab = nullptr;
     ctx->tlab_enabled = false;
   }
   
@@ -1172,13 +1172,13 @@ void test_gc_tlab_alloc_slow_many(VALK_TEST_ARGS()) {
   valk_gc_global_pool_init();
   
   valk_thread_context_t *ctx = &valk_thread_ctx;
-  ctx->tlab = NULL;
+  ctx->tlab = nullptr;
   ctx->tlab_enabled = false;
   
   void *allocations[100];
   for (int i = 0; i < 100; i++) {
     allocations[i] = valk_gc_tlab_alloc_slow(sizeof(valk_lval_t));
-    VALK_TEST_ASSERT(allocations[i] != NULL, "alloc %d should succeed", i);
+    VALK_TEST_ASSERT(allocations[i] != nullptr, "alloc %d should succeed", i);
   }
   
   for (int i = 0; i < 100; i++) {
@@ -1195,7 +1195,7 @@ void test_gc_tlab_alloc_slow_many(VALK_TEST_ARGS()) {
   
   if (ctx->tlab) {
     free(ctx->tlab);
-    ctx->tlab = NULL;
+    ctx->tlab = nullptr;
     ctx->tlab_enabled = false;
   }
   
@@ -1210,7 +1210,7 @@ void test_gc_tlab_alloc_slow_too_large(VALK_TEST_ARGS()) {
   valk_gc_global_pool_init();
   
   void *ptr = valk_gc_tlab_alloc_slow(VALK_GC_SLOT_SIZE + 1);
-  VALK_TEST_ASSERT(ptr == NULL, "alloc larger than slot size should fail");
+  VALK_TEST_ASSERT(ptr == nullptr, "alloc larger than slot size should fail");
   
   valk_gc_global_pool_destroy();
   

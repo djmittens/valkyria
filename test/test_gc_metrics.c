@@ -11,7 +11,7 @@ void test_gc_metrics_init(VALK_TEST_ARGS()) {
 
   valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
 
-  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
 
   // Get metrics
   u64 cycles = 999;
@@ -60,18 +60,18 @@ void test_gc_metrics_after_collection(VALK_TEST_ARGS()) {
   valk_lenv_put(env, valk_lval_sym("y"), valk_lval_num(100));
 
   // Run collection
-  valk_gc_malloc_collect(heap, NULL);
+  valk_gc_malloc_collect(heap, nullptr);
 
   // Get metrics
   u64 cycles = 0;
-  valk_gc_get_runtime_metrics(heap, &cycles, NULL, NULL, NULL, NULL, NULL);
+  valk_gc_get_runtime_metrics(heap, &cycles, nullptr, nullptr, nullptr, nullptr, nullptr);
 
   VALK_TEST_ASSERT(cycles == 1, "cycles should be 1 after first collection, got %llu",
                    (unsigned long long)cycles);
 
   // Run another collection
-  valk_gc_malloc_collect(heap, NULL);
-  valk_gc_get_runtime_metrics(heap, &cycles, NULL, NULL, NULL, NULL, NULL);
+  valk_gc_malloc_collect(heap, nullptr);
+  valk_gc_get_runtime_metrics(heap, &cycles, nullptr, nullptr, nullptr, nullptr, nullptr);
 
   VALK_TEST_ASSERT(cycles == 2, "cycles should be 2 after second collection, got %llu",
                    (unsigned long long)cycles);
@@ -100,13 +100,13 @@ void test_gc_pause_time_recorded(VALK_TEST_ARGS()) {
   }
 
   // Run collection
-  valk_gc_malloc_collect(heap, NULL);
+  valk_gc_malloc_collect(heap, nullptr);
 
   // Get pause time metrics
   u64 pause_us_total = 0;
   u64 pause_us_max = 0;
-  valk_gc_get_runtime_metrics(heap, NULL, &pause_us_total, &pause_us_max,
-                               NULL, NULL, NULL);
+  valk_gc_get_runtime_metrics(heap, nullptr, &pause_us_total, &pause_us_max,
+                               nullptr, nullptr, nullptr);
 
   // Pause time should be greater than 0 (GC takes some time)
   VALK_TEST_ASSERT(pause_us_total > 0,
@@ -138,20 +138,20 @@ void test_gc_reclaimed_bytes(VALK_TEST_ARGS()) {
   // Use non-lval size to avoid slab allocator (so bytes are tracked)
   for (int i = 0; i < 10; i++) {
     void* ptr = valk_gc_malloc_heap_alloc(heap, 1024);  // 1KB each
-    VALK_TEST_ASSERT(ptr != NULL, "Allocation should succeed");
+    VALK_TEST_ASSERT(ptr != nullptr, "Allocation should succeed");
     // Don't add to environment - these will be garbage
   }
 
   size_t allocated_before = valk_gc_heap2_used_bytes(heap);
 
   // Run collection - should reclaim the unreferenced allocations
-  valk_gc_malloc_collect(heap, NULL);
+  valk_gc_malloc_collect(heap, nullptr);
 
   size_t allocated_after = valk_gc_heap2_used_bytes(heap);
 
   // Get reclaimed bytes metric
   sz reclaimed = 0;
-  valk_gc_get_runtime_metrics(heap, NULL, NULL, NULL, &reclaimed, NULL, NULL);
+  valk_gc_get_runtime_metrics(heap, nullptr, nullptr, nullptr, &reclaimed, nullptr, nullptr);
 
   // Should have reclaimed some bytes
   VALK_TEST_ASSERT(reclaimed > 0, "reclaimed should be > 0, got %zu", reclaimed);
@@ -177,10 +177,10 @@ void test_gc_max_pause_tracking(VALK_TEST_ARGS()) {
   valk_gc_malloc_set_root(heap, env);
 
   // First collection with minimal work
-  valk_gc_malloc_collect(heap, NULL);
+  valk_gc_malloc_collect(heap, nullptr);
 
   u64 pause_us_max_1 = 0;
-  valk_gc_get_runtime_metrics(heap, NULL, NULL, &pause_us_max_1, NULL, NULL, NULL);
+  valk_gc_get_runtime_metrics(heap, nullptr, nullptr, &pause_us_max_1, nullptr, nullptr, nullptr);
 
   // Add lots of objects for second collection
   for (int i = 0; i < 1000; i++) {
@@ -190,12 +190,12 @@ void test_gc_max_pause_tracking(VALK_TEST_ARGS()) {
   }
 
   // Second collection with more work - might be slower
-  valk_gc_malloc_collect(heap, NULL);
+  valk_gc_malloc_collect(heap, nullptr);
 
   u64 pause_us_max_2 = 0;
   u64 pause_us_total = 0;
-  valk_gc_get_runtime_metrics(heap, NULL, &pause_us_total, &pause_us_max_2,
-                               NULL, NULL, NULL);
+  valk_gc_get_runtime_metrics(heap, nullptr, &pause_us_total, &pause_us_max_2,
+                               nullptr, nullptr, nullptr);
 
   // Max should be >= first pause
   VALK_TEST_ASSERT(pause_us_max_2 >= pause_us_max_1,
@@ -212,7 +212,7 @@ void test_gc_max_pause_tracking(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-// Test NULL heap handling
+// Test nullptr heap handling
 void test_gc_metrics_null_heap(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -223,25 +223,25 @@ void test_gc_metrics_null_heap(VALK_TEST_ARGS()) {
   sz heap_used = 999;
   sz heap_total = 999;
 
-  // Should not crash with NULL heap
-  valk_gc_get_runtime_metrics(NULL, &cycles, &pause_us_total, &pause_us_max,
+  // Should not crash with nullptr heap
+  valk_gc_get_runtime_metrics(nullptr, &cycles, &pause_us_total, &pause_us_max,
                                &reclaimed, &heap_used, &heap_total);
 
   // Values should be unchanged
-  VALK_TEST_ASSERT(cycles == 999, "cycles should be unchanged with NULL heap");
+  VALK_TEST_ASSERT(cycles == 999, "cycles should be unchanged with nullptr heap");
   VALK_TEST_ASSERT(pause_us_total == 999, "pause_us_total should be unchanged");
 
   VALK_PASS();
 }
 
-// Test NULL output parameters
+// Test nullptr output parameters
 void test_gc_metrics_null_outputs(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
 
-  // Should not crash with NULL output parameters
-  valk_gc_get_runtime_metrics(heap, NULL, NULL, NULL, NULL, NULL, NULL);
+  // Should not crash with nullptr output parameters
+  valk_gc_get_runtime_metrics(heap, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
 
   valk_gc_malloc_heap_destroy(heap);
   VALK_PASS();

@@ -316,7 +316,7 @@ void valk_gauge_set_persistent(valk_gauge_v2_t *g);
 void valk_histogram_set_persistent(valk_histogram_v2_t *h);
 void valk_summary_set_persistent(valk_summary_v2_t *s);
 
-// Safe handle-based access (returns NULL if evicted)
+// Safe handle-based access (returns nullptr if evicted)
 valk_counter_v2_t *valk_counter_deref(valk_metric_handle_t h);
 valk_gauge_v2_t *valk_gauge_deref(valk_metric_handle_t h);
 valk_histogram_v2_t *valk_histogram_deref(valk_metric_handle_t h);

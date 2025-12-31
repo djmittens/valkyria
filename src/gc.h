@@ -108,7 +108,7 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, sz bytes);
 void valk_gc_malloc_set_root(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env);
 
 // Perform mark & sweep collection
-// If additional_root is non-NULL, it will be marked in addition to root_env
+// If additional_root is non-nullptr, it will be marked in addition to root_env
 sz valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root);
 
 // Check if GC should run (considers both slab and malloc usage as percentage)
@@ -505,6 +505,7 @@ static inline bool valk_gc_bitmap_test(const u8 *bitmap, u32 idx) {
 }
 
 static inline void valk_gc_bitmap_set(u8 *bitmap, u32 idx) {
+  // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - caller guarantees valid bitmap
   bitmap[idx / 8] |= (u8)(1 << (idx % 8));
 }
 
@@ -546,10 +547,10 @@ static inline u8 *valk_gc_page2_mark_bitmap(valk_gc_page2_t *page) {
 // Get pointer to slot data (follows both bitmaps, cache-aligned)
 static inline u8 *valk_gc_page2_slots(valk_gc_page2_t *page) {
   u8 *after_bitmaps = (u8 *)(page + 1) + 2 * page->bitmap_bytes;
-  // Align to 64-byte cache line
+  // Align to 64-byte cache line (requires int for bit masking)
   uptr addr = (uptr)after_bitmaps;
   addr = (addr + 63) & ~63ULL;
-  return (u8 *)addr;
+  return (u8 *)addr;  // NOLINT(performance-no-int-to-ptr)
 }
 
 // Get pointer to specific slot
@@ -654,15 +655,15 @@ void valk_gc_tlab2_init(valk_gc_tlab2_t *tlab);
 
 // Allocate from TLAB (fast path)
 static inline void *valk_gc_tlab2_alloc(valk_gc_tlab2_t *tlab, u8 size_class) {
-  if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return NULL;
+  if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return nullptr;
   
-  if (__builtin_expect(tlab->classes[size_class].page != NULL && 
+  if (__builtin_expect(tlab->classes[size_class].page != nullptr && 
                        tlab->classes[size_class].next_slot < 
                        tlab->classes[size_class].limit_slot, 1)) {
     u32 slot = tlab->classes[size_class].next_slot++;
     return valk_gc_page2_slot_ptr(tlab->classes[size_class].page, slot);
   }
-  return NULL;
+  return nullptr;
 }
 
 // Refill TLAB for specific class (slow path)
@@ -837,11 +838,11 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_page_pool_t *pool);
 // Fast path allocation from TLAB (inline for performance)
 // Note: alloc_bits are pre-set during tlab_refill, so we just bump the pointer
 static inline void *valk_gc_tlab_alloc(valk_gc_tlab_t *tlab) {
-  if (__builtin_expect(tlab->page != NULL && tlab->next_slot < tlab->limit_slot, 1)) {
+  if (__builtin_expect(tlab->page != nullptr && tlab->next_slot < tlab->limit_slot, 1)) {
     u32 slot = tlab->next_slot++;
     return &tlab->page->slots[slot * VALK_GC_SLOT_SIZE];
   }
-  return NULL;  // TLAB exhausted, need slow path
+  return nullptr;  // TLAB exhausted, need slow path
 }
 
 // Get page pool statistics
@@ -917,7 +918,7 @@ void *valk_gc_tlab_alloc_slow(sz bytes);
 static inline valk_gc_root_t valk_gc_root_push(valk_lval_t *val) {
   valk_thread_context_t *ctx = &valk_thread_ctx;
   
-  if (ctx->root_stack == NULL) {
+  if (ctx->root_stack == nullptr) {
     return (valk_gc_root_t){ 0 };
   }
   

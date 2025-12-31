@@ -27,7 +27,7 @@ static void *__ssl_malloc(size_t num, const char *file, int line) {
   UNUSED(line);
 
   void *ptr = malloc(HEADER_SIZE + num);
-  if (!ptr) return NULL;
+  if (!ptr) return nullptr;
 
   alloc_header_t *hdr = (alloc_header_t *)ptr;
   hdr->size = num;
@@ -49,7 +49,7 @@ static void *__ssl_realloc(void *addr, size_t num, const char *file, int line) {
   size_t old_size = old_hdr->size;
 
   void *new_ptr = realloc(old_hdr, HEADER_SIZE + num);
-  if (!new_ptr) return NULL;
+  if (!new_ptr) return nullptr;
 
   alloc_header_t *new_hdr = (alloc_header_t *)new_ptr;
   new_hdr->size = num;
@@ -83,7 +83,7 @@ static void *__nghttp2_malloc(size_t size, void *mem_user_data) {
   UNUSED(mem_user_data);
 
   void *ptr = malloc(HEADER_SIZE + size);
-  if (!ptr) return NULL;
+  if (!ptr) return nullptr;
 
   alloc_header_t *hdr = (alloc_header_t *)ptr;
   hdr->size = size;
@@ -122,14 +122,14 @@ static void *__nghttp2_realloc(void *ptr, size_t size, void *mem_user_data) {
 
   if (size == 0) {
     __nghttp2_free(ptr, mem_user_data);
-    return NULL;
+    return nullptr;
   }
 
   alloc_header_t *old_hdr = (alloc_header_t *)((char *)ptr - HEADER_SIZE);
   size_t old_size = old_hdr->size;
 
   void *new_ptr = realloc(old_hdr, HEADER_SIZE + size);
-  if (!new_ptr) return NULL;
+  if (!new_ptr) return nullptr;
 
   alloc_header_t *new_hdr = (alloc_header_t *)new_ptr;
   new_hdr->size = size;
@@ -142,7 +142,7 @@ static void *__nghttp2_realloc(void *ptr, size_t size, void *mem_user_data) {
 
 // Static nghttp2_mem structure
 static nghttp2_mem __nghttp2_mem = {
-  .mem_user_data = NULL,
+  .mem_user_data = nullptr,
   .malloc = __nghttp2_malloc,
   .free = __nghttp2_free,
   .calloc = __nghttp2_calloc,
@@ -155,7 +155,7 @@ static nghttp2_mem __nghttp2_mem = {
 
 static void *__libuv_malloc(size_t size) {
   void *ptr = malloc(HEADER_SIZE + size);
-  if (!ptr) return NULL;
+  if (!ptr) return nullptr;
 
   alloc_header_t *hdr = (alloc_header_t *)ptr;
   hdr->size = size;
@@ -175,14 +175,14 @@ static void *__libuv_realloc(void *ptr, size_t size) {
     alloc_header_t *hdr = (alloc_header_t *)((char *)ptr - HEADER_SIZE);
     atomic_fetch_sub(&__libuv_bytes_used, hdr->size);
     free(hdr);
-    return NULL;
+    return nullptr;
   }
 
   alloc_header_t *old_hdr = (alloc_header_t *)((char *)ptr - HEADER_SIZE);
   size_t old_size = old_hdr->size;
 
   void *new_ptr = realloc(old_hdr, HEADER_SIZE + size);
-  if (!new_ptr) return NULL;
+  if (!new_ptr) return nullptr;
 
   alloc_header_t *new_hdr = (alloc_header_t *)new_ptr;
   new_hdr->size = size;

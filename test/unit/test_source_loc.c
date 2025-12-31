@@ -12,8 +12,8 @@
 void test_source_register_file_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  u16 id = valk_source_register_file(NULL);
-  VALK_TEST_ASSERT(id == 0, "NULL filename should return 0");
+  u16 id = valk_source_register_file(nullptr);
+  VALK_TEST_ASSERT(id == 0, "nullptr filename should return 0");
 
   VALK_PASS();
 }
@@ -60,7 +60,7 @@ void test_source_get_filename_basic(VALK_TEST_ARGS()) {
 
   u16 id = valk_source_register_file("lookup_test.valk");
   const char *filename = valk_source_get_filename(id);
-  VALK_TEST_ASSERT(filename != NULL, "Should return non-NULL filename");
+  VALK_TEST_ASSERT(filename != nullptr, "Should return non-nullptr filename");
   VALK_TEST_ASSERT(strcmp(filename, "lookup_test.valk") == 0, "Filename should match");
 
   VALK_PASS();
@@ -70,7 +70,7 @@ void test_source_get_filename_zero(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   const char *filename = valk_source_get_filename(0);
-  VALK_TEST_ASSERT(filename == NULL, "file_id 0 should return NULL");
+  VALK_TEST_ASSERT(filename == nullptr, "file_id 0 should return nullptr");
 
   VALK_PASS();
 }
@@ -81,7 +81,7 @@ void test_source_get_filename_invalid(VALK_TEST_ARGS()) {
   valk_source_registry_reset();
 
   const char *filename = valk_source_get_filename(9999);
-  VALK_TEST_ASSERT(filename == NULL, "Invalid file_id should return NULL");
+  VALK_TEST_ASSERT(filename == nullptr, "Invalid file_id should return nullptr");
 
   VALK_PASS();
 }
@@ -97,7 +97,7 @@ void test_source_registry_reset(VALK_TEST_ARGS()) {
   valk_source_registry_reset();
 
   const char *filename = valk_source_get_filename(id1);
-  VALK_TEST_ASSERT(filename == NULL, "After reset, old id should return NULL");
+  VALK_TEST_ASSERT(filename == nullptr, "After reset, old id should return nullptr");
 
   u16 id2 = valk_source_register_file("reset_test.valk");
   VALK_TEST_ASSERT(id2 == 1, "After reset, first id should be 1 again");
@@ -136,7 +136,7 @@ void test_source_register_empty_filename(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(id > 0, "Empty filename should still get registered");
 
   const char *filename = valk_source_get_filename(id);
-  VALK_TEST_ASSERT(filename != NULL, "Should be able to retrieve empty filename");
+  VALK_TEST_ASSERT(filename != nullptr, "Should be able to retrieve empty filename");
   VALK_TEST_ASSERT(strlen(filename) == 0, "Retrieved filename should be empty");
 
   VALK_PASS();
@@ -155,7 +155,7 @@ void test_source_register_long_filename(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(id > 0, "Long filename should get registered");
 
   const char *filename = valk_source_get_filename(id);
-  VALK_TEST_ASSERT(filename != NULL, "Should be able to retrieve long filename");
+  VALK_TEST_ASSERT(filename != nullptr, "Should be able to retrieve long filename");
   VALK_TEST_ASSERT(strcmp(filename, long_name) == 0, "Long filename should match");
 
   VALK_PASS();
@@ -230,7 +230,7 @@ static void *concurrent_register_thread(void *arg) {
   for (int i = 0; i < 100; i++) {
     valk_source_register_file(filename);
   }
-  return NULL;
+  return nullptr;
 }
 
 void test_source_concurrent_registration(VALK_TEST_ARGS()) {
@@ -242,11 +242,11 @@ void test_source_concurrent_registration(VALK_TEST_ARGS()) {
   int thread_ids[4] = {0, 1, 2, 3};
 
   for (int i = 0; i < 4; i++) {
-    pthread_create(&threads[i], NULL, concurrent_register_thread, &thread_ids[i]);
+    pthread_create(&threads[i], nullptr, concurrent_register_thread, &thread_ids[i]);
   }
 
   for (int i = 0; i < 4; i++) {
-    pthread_join(threads[i], NULL);
+    pthread_join(threads[i], nullptr);
   }
 
   for (int i = 0; i < 4; i++) {
@@ -254,7 +254,7 @@ void test_source_concurrent_registration(VALK_TEST_ARGS()) {
     snprintf(filename, sizeof(filename), "thread_%d.valk", i);
     u16 id = valk_source_register_file(filename);
     const char *retrieved = valk_source_get_filename(id);
-    VALK_TEST_ASSERT(retrieved != NULL, "Should retrieve thread %d filename", i);
+    VALK_TEST_ASSERT(retrieved != nullptr, "Should retrieve thread %d filename", i);
     VALK_TEST_ASSERT(strcmp(retrieved, filename) == 0, "Filename should match");
   }
 
@@ -267,7 +267,7 @@ static void *concurrent_get_thread(void *arg) {
     const char *filename = valk_source_get_filename(*file_id);
     (void)filename;
   }
-  return NULL;
+  return nullptr;
 }
 
 void test_source_concurrent_get(VALK_TEST_ARGS()) {
@@ -278,15 +278,15 @@ void test_source_concurrent_get(VALK_TEST_ARGS()) {
 
   pthread_t threads[4];
   for (int i = 0; i < 4; i++) {
-    pthread_create(&threads[i], NULL, concurrent_get_thread, &id);
+    pthread_create(&threads[i], nullptr, concurrent_get_thread, &id);
   }
 
   for (int i = 0; i < 4; i++) {
-    pthread_join(threads[i], NULL);
+    pthread_join(threads[i], nullptr);
   }
 
   const char *filename = valk_source_get_filename(id);
-  VALK_TEST_ASSERT(filename != NULL, "Filename should still be retrievable");
+  VALK_TEST_ASSERT(filename != nullptr, "Filename should still be retrievable");
   VALK_TEST_ASSERT(strcmp(filename, "concurrent_get.valk") == 0, "Filename should be correct");
 
   VALK_PASS();
@@ -307,7 +307,7 @@ void test_source_reset_after_concurrent(VALK_TEST_ARGS()) {
 
   for (int i = 1; i <= 50; i++) {
     const char *filename = valk_source_get_filename(i);
-    VALK_TEST_ASSERT(filename == NULL, "After reset, id %d should return NULL", i);
+    VALK_TEST_ASSERT(filename == nullptr, "After reset, id %d should return nullptr", i);
   }
 
   VALK_PASS();
@@ -319,7 +319,7 @@ void test_source_boundary_file_id(VALK_TEST_ARGS()) {
   valk_source_registry_reset();
 
   const char *filename = valk_source_get_filename(65535);
-  VALK_TEST_ASSERT(filename == NULL, "High file_id should return NULL");
+  VALK_TEST_ASSERT(filename == nullptr, "High file_id should return nullptr");
 
   VALK_PASS();
 }
@@ -344,8 +344,8 @@ void test_source_unicode_filename(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(id > 0, "Unicode filename should register");
 
   const char *filename = valk_source_get_filename(id);
-  VALK_TEST_ASSERT(filename != NULL, "Should retrieve unicode filename");
-  VALK_TEST_ASSERT(strstr(filename, ".valk") != NULL, "Filename should end with .valk");
+  VALK_TEST_ASSERT(filename != nullptr, "Should retrieve unicode filename");
+  VALK_TEST_ASSERT(strstr(filename, ".valk") != nullptr, "Filename should end with .valk");
 
   VALK_PASS();
 }
@@ -398,7 +398,7 @@ void test_source_get_filename_after_many_registrations(VALK_TEST_ARGS()) {
   snprintf(expected, sizeof(expected), "file_25.valk");
   const char *actual = valk_source_get_filename(target_id);
   
-  VALK_TEST_ASSERT(actual != NULL, "Should retrieve file_25.valk");
+  VALK_TEST_ASSERT(actual != nullptr, "Should retrieve file_25.valk");
   VALK_TEST_ASSERT(strcmp(actual, expected) == 0, "Filename should match");
 
   VALK_PASS();
@@ -433,7 +433,7 @@ void test_source_reset_frees_memory(VALK_TEST_ARGS()) {
 
   for (int i = 1; i <= 10; i++) {
     const char *filename = valk_source_get_filename(i);
-    VALK_TEST_ASSERT(filename == NULL, "After reset, id %d should be NULL", i);
+    VALK_TEST_ASSERT(filename == nullptr, "After reset, id %d should be nullptr", i);
   }
 
   u16 new_id = valk_source_register_file("after_reset.valk");

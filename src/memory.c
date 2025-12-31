@@ -49,7 +49,7 @@ void __valk_arc_trace_report_print(valk_arc_trace_info *traces, u64 num) {
 char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self) {
   switch (self) {
     case VALK_ALLOC_NULL:
-      return "NULL Alloc";
+      return "nullptr Alloc";
     case VALK_ALLOC_MALLOC:
       return "Malloc Alloc";
     case VALK_ALLOC_ARENA:
@@ -209,11 +209,11 @@ valk_slab_t *valk_slab_new(sz itemSize, sz numItems) {
   sz pageSize = 4096;
   sz mmapSize = (slabSize + pageSize - 1) & ~(pageSize - 1);
   
-  void *mem = mmap(NULL, mmapSize, PROT_READ | PROT_WRITE,
+  void *mem = mmap(nullptr, mmapSize, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (mem == MAP_FAILED) {
     VALK_ERROR("mmap failed for slab of %zu bytes", mmapSize);
-    return NULL;
+    return nullptr;
   }
   
   valk_slab_t *res = mem;
@@ -246,6 +246,7 @@ void valk_slab_init(valk_slab_t *self, sz itemSize, sz numItems) {
 
 #ifdef VALK_METRICS_ENABLED
   sz bitmap_bytes = (numItems + 7) / 8;
+  // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI) - 0-size calloc is valid edge case
   self->usage_bitmap = calloc(bitmap_bytes, 1);
   __atomic_store_n(&self->bitmap_version, 0, __ATOMIC_RELAXED);
 #endif
@@ -257,7 +258,7 @@ void valk_slab_free(valk_slab_t *self) {
 #ifdef VALK_METRICS_ENABLED
   if (self->usage_bitmap) {
     free(self->usage_bitmap);
-    self->usage_bitmap = NULL;
+    self->usage_bitmap = nullptr;
   }
 #endif
 
@@ -311,7 +312,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
     expected = __atomic_load_n(&self->numFree, __ATOMIC_ACQUIRE);
     if (expected == 0) {
       __atomic_fetch_add(&self->overflowCount, 1, __ATOMIC_RELAXED);
-      return NULL;  // Slab exhausted - caller should fall back to malloc
+      return nullptr;  // Slab exhausted - caller should fall back to malloc
     }
     desired = expected - 1;
   } while (!__atomic_compare_exchange_n(&self->numFree, &expected, desired,
@@ -326,9 +327,9 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
     head = __valk_slab_offset_unpack(oldTag, &version);
     if (head == SIZE_MAX) {
       // Shouldn't happen - we reserved a slot but free list is empty
-      // Restore numFree and return NULL
+      // Restore numFree and return nullptr
       __atomic_fetch_add(&self->numFree, 1, __ATOMIC_RELAXED);
-      return NULL;
+      return nullptr;
     }
     next =
         __atomic_load_n(&valk_slab_item_at(self, head)->next, __ATOMIC_ACQUIRE);
@@ -359,10 +360,10 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   return res;
 
 #else  // Not threadsafe
-  // Return NULL when slab is exhausted
+  // Return nullptr when slab is exhausted
   if (self->numFree == 0) {
     __atomic_fetch_add(&self->overflowCount, 1, __ATOMIC_RELAXED);
-    return NULL;
+    return nullptr;
   }
   // pop  free item
   u64 offset = ((u64 *)self->heap)[0];
@@ -502,7 +503,7 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes) {
       // Allocate from heap instead - value will have LVAL_ALLOC_HEAP flag
       // and will be in GC object list, so no evacuation needed
       valk_gc_malloc_heap_t *heap = (valk_gc_malloc_heap_t *)valk_thread_ctx.heap;
-      if (heap == NULL) {
+      if (heap == nullptr) {
         VALK_ERROR("Scratch overflow but no heap available!");
         abort();
       }
@@ -529,7 +530,7 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes) {
 
 // Print arena statistics to a file stream
 void valk_mem_arena_print_stats(valk_mem_arena_t *arena, FILE *out) {
-  if (arena == NULL || out == NULL) return;
+  if (arena == nullptr || out == nullptr) return;
 
   fprintf(out, "\n=== Scratch Arena Statistics ===\n");
   fprintf(out, "Current usage:     %zu / %zu bytes (%.1f%%)\n",
@@ -554,7 +555,7 @@ void valk_mem_arena_print_stats(valk_mem_arena_t *arena, FILE *out) {
 
 // Reset arena statistics (except high_water_mark which tracks lifetime max)
 void valk_mem_arena_reset_stats(valk_mem_arena_t *arena) {
-  if (arena == NULL) return;
+  if (arena == nullptr) return;
 
   arena->stats.total_allocations = 0;
   arena->stats.total_bytes_allocated = 0;
@@ -569,7 +570,7 @@ void valk_mem_arena_reset_stats(valk_mem_arena_t *arena) {
 
 // Check if a pointer is within the arena's address range
 bool valk_ptr_in_arena(valk_mem_arena_t *arena, void *ptr) {
-  if (arena == NULL || ptr == NULL) return false;
+  if (arena == nullptr || ptr == nullptr) return false;
 
   u8 *start = arena->heap;
   u8 *end = arena->heap + arena->capacity;
@@ -584,7 +585,7 @@ bool valk_ptr_in_arena(valk_mem_arena_t *arena, void *ptr) {
 #include <unistd.h>
 
 void valk_process_memory_collect(valk_process_memory_t *pm) {
-  if (pm == NULL) return;
+  if (pm == nullptr) return;
   memset(pm, 0, sizeof(*pm));
 
   long page_size = sysconf(_SC_PAGESIZE);
@@ -624,14 +625,14 @@ void valk_process_memory_collect(valk_process_memory_t *pm) {
 #include <sys/sysctl.h>
 
 void valk_process_memory_collect(valk_process_memory_t *pm) {
-  if (pm == NULL) return;
+  if (pm == nullptr) return;
   memset(pm, 0, sizeof(*pm));
 
   // System total RAM via sysctl
   int mib[2] = {CTL_HW, HW_MEMSIZE};
   u64 memsize = 0;
   size_t len = sizeof(memsize);
-  if (sysctl(mib, 2, &memsize, &len, NULL, 0) == 0) {
+  if (sysctl(mib, 2, &memsize, &len, nullptr, 0) == 0) {
     pm->system_total_bytes = (u64)memsize;
   }
 
@@ -654,7 +655,7 @@ void valk_process_memory_collect(valk_process_memory_t *pm) {
 #else
 // Fallback for other platforms
 void valk_process_memory_collect(valk_process_memory_t *pm) {
-  if (pm == NULL) return;
+  if (pm == nullptr) return;
   memset(pm, 0, sizeof(*pm));
 }
 #endif
@@ -667,7 +668,7 @@ void valk_process_memory_collect(valk_process_memory_t *pm) {
 #if defined(__linux__)
 
 void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
-  if (smaps == NULL) return;
+  if (smaps == nullptr) return;
   memset(smaps, 0, sizeof(*smaps));
 
   FILE *f = fopen("/proc/self/smaps", "r");
@@ -697,7 +698,7 @@ void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
 
       // Find the pathname (after the inode)
       // Format: addr-addr perms offset dev inode [pathname]
-      char *name_start = NULL;
+      char *name_start = nullptr;
       int spaces = 0;
       for (char *p = line; *p; p++) {
         if (*p == ' ') {
@@ -784,7 +785,7 @@ void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
 #include <mach/mach_vm.h>
 
 void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
-  if (smaps == NULL) return;
+  if (smaps == nullptr) return;
   memset(smaps, 0, sizeof(*smaps));
 
   task_t task = mach_task_self();
@@ -834,7 +835,7 @@ void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
 #else
 // Other platforms: no-op
 void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
-  if (smaps == NULL) return;
+  if (smaps == nullptr) return;
   memset(smaps, 0, sizeof(*smaps));
 }
 #endif
@@ -848,13 +849,13 @@ void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, sz bytes) {
   // Order by performance.
   switch (self->type) {
     case VALK_ALLOC_NULL:
-      VALK_RAISE("Alloc on NULL allocator %zu", bytes);
-      return NULL;
+      VALK_RAISE("Alloc on nullptr allocator %zu", bytes);
+      return nullptr;
     case VALK_ALLOC_ARENA:
       return valk_mem_arena_alloc((void *)self, bytes);
     case VALK_ALLOC_SLAB: {
       valk_slab_item_t *item = valk_slab_aquire((void *)self);
-      return item ? (void *)item->data : NULL;
+      return item ? (void *)item->data : nullptr;
     }
     case VALK_ALLOC_MALLOC:
       return malloc(bytes);
@@ -869,7 +870,7 @@ void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, sz bytes) {
       return valk_gc_tlab_alloc_slow(bytes);
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, sz num,
@@ -883,8 +884,8 @@ void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, sz num,
   // Order by performance.
   switch (self->type) {
     case VALK_ALLOC_NULL:
-      VALK_RAISE("Calloc on NULL allocator num: %zu :: size: %zu", num, size);
-      res = NULL;
+      VALK_RAISE("Calloc on nullptr allocator num: %zu :: size: %zu", num, size);
+      res = nullptr;
       break;
     case VALK_ALLOC_ARENA:
       res = valk_mem_arena_alloc((void *)self, num * size);
@@ -921,9 +922,9 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
   // Order by performance.
   switch (self->type) {
     case VALK_ALLOC_NULL:
-      VALK_RAISE("Realloc on NULL allocator ptr: %p :: size: %zu", ptr,
+      VALK_RAISE("Realloc on nullptr allocator ptr: %p :: size: %zu", ptr,
                  new_size);
-      return NULL;
+      return nullptr;
     case VALK_ALLOC_ARENA: {
       // Copy-alloc semantics for arena realloc
       sz old_size = 0;
@@ -955,7 +956,7 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
       return realloc(ptr, new_size);
     case VALK_ALLOC_TLAB:
       VALK_RAISE("Realloc on TLAB allocator not supported: %p -> %zu", ptr, new_size);
-      return NULL;
+      return nullptr;
   }
 }
 
@@ -969,7 +970,7 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
   // printf("Freeing %p\n", ptr);
   switch (self->type) {
     case VALK_ALLOC_NULL:
-      VALK_RAISE("Free on NULL allocator %p", ptr);
+      VALK_RAISE("Free on nullptr allocator %p", ptr);
     case VALK_ALLOC_ARENA:
       return;
     case VALK_ALLOC_SLAB:
@@ -981,7 +982,7 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
     case VALK_ALLOC_GC_HEAP: {
       // For GC heap objects, we need to properly free them by removing from tracking
       // and returning memory to the appropriate source (slab or malloc)
-      if (ptr == NULL) return;
+      if (ptr == nullptr) return;
 
       // Get header (it's right before the user data)
       extern void valk_gc_free_object(void* heap, void* ptr);
@@ -1043,6 +1044,7 @@ void *valk_gc_realloc(valk_gc_heap_t *heap, void *ptr, sz size) {
 void valk_gc_sweep(valk_gc_heap_t *self) {
   valk_gc_chunk_t *node = self->sentinel.next;
   while (node != &self->sentinel) {
+    valk_gc_chunk_t *next = node->next;  // Save next before potential free
     if (!node->marked) {
       if (self->finalize) {
         self->finalize(node);
@@ -1055,13 +1057,14 @@ void valk_gc_sweep(valk_gc_heap_t *self) {
       // reset this bad boii for the next time
       node->marked = 0;
     }
+    node = next;  // Advance to next node
   }
 }
 
 #ifdef VALK_METRICS_ENABLED
 void valk_slab_bitmap_snapshot(valk_slab_t *slab, valk_slab_bitmap_t *out) {
   if (!slab || !out) return;
-  out->data = NULL;
+  out->data = nullptr;
   out->bytes = 0;
   out->version = 0;
 
@@ -1079,14 +1082,14 @@ void valk_slab_bitmap_snapshot(valk_slab_t *slab, valk_slab_bitmap_t *out) {
 void valk_slab_bitmap_free(valk_slab_bitmap_t *bmp) {
   if (bmp && bmp->data) {
     free(bmp->data);
-    bmp->data = NULL;
+    bmp->data = nullptr;
     bmp->bytes = 0;
   }
 }
 
 void valk_bitmap_delta_init(valk_bitmap_delta_t *delta) {
   if (!delta) return;
-  delta->runs = NULL;
+  delta->runs = nullptr;
   delta->run_count = 0;
   delta->run_capacity = 0;
   delta->from_version = 0;
@@ -1096,7 +1099,7 @@ void valk_bitmap_delta_init(valk_bitmap_delta_t *delta) {
 void valk_bitmap_delta_free(valk_bitmap_delta_t *delta) {
   if (delta && delta->runs) {
     free(delta->runs);
-    delta->runs = NULL;
+    delta->runs = nullptr;
     delta->run_count = 0;
     delta->run_capacity = 0;
   }

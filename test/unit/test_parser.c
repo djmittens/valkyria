@@ -10,7 +10,7 @@ void test_lval_num(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_lval_t *val = valk_lval_num(42);
-  VALK_TEST_ASSERT(val != NULL, "valk_lval_num should return non-NULL");
+  VALK_TEST_ASSERT(val != nullptr, "valk_lval_num should return non-nullptr");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be LVAL_NUM");
   VALK_TEST_ASSERT(val->num == 42, "Value should be 42");
 
@@ -21,7 +21,7 @@ void test_lval_num_negative(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_lval_t *val = valk_lval_num(-1000);
-  VALK_TEST_ASSERT(val != NULL, "Should create negative number");
+  VALK_TEST_ASSERT(val != nullptr, "Should create negative number");
   VALK_TEST_ASSERT(val->num == -1000, "Value should be -1000");
 
   VALK_PASS();
@@ -31,7 +31,7 @@ void test_lval_num_zero(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_lval_t *val = valk_lval_num(0);
-  VALK_TEST_ASSERT(val != NULL, "Should create zero");
+  VALK_TEST_ASSERT(val != nullptr, "Should create zero");
   VALK_TEST_ASSERT(val->num == 0, "Value should be 0");
 
   VALK_PASS();
@@ -41,7 +41,7 @@ void test_lval_sym(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_lval_t *val = valk_lval_sym("test-symbol");
-  VALK_TEST_ASSERT(val != NULL, "valk_lval_sym should return non-NULL");
+  VALK_TEST_ASSERT(val != nullptr, "valk_lval_sym should return non-nullptr");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_SYM, "Type should be LVAL_SYM");
 
   VALK_PASS();
@@ -51,7 +51,7 @@ void test_lval_sym_empty(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_lval_t *val = valk_lval_sym("");
-  VALK_TEST_ASSERT(val != NULL, "Should create empty symbol");
+  VALK_TEST_ASSERT(val != nullptr, "Should create empty symbol");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_SYM, "Type should be LVAL_SYM");
 
   VALK_PASS();
@@ -61,7 +61,7 @@ void test_lval_str(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_lval_t *val = valk_lval_str("hello world");
-  VALK_TEST_ASSERT(val != NULL, "valk_lval_str should return non-NULL");
+  VALK_TEST_ASSERT(val != nullptr, "valk_lval_str should return non-nullptr");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be LVAL_STR");
   VALK_TEST_ASSERT(strcmp(val->str, "hello world") == 0, "String should match");
 
@@ -72,7 +72,7 @@ void test_lval_str_empty(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_lval_t *val = valk_lval_str("");
-  VALK_TEST_ASSERT(val != NULL, "Should create empty string");
+  VALK_TEST_ASSERT(val != nullptr, "Should create empty string");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be LVAL_STR");
   VALK_TEST_ASSERT(strlen(val->str) == 0, "String should be empty");
 
@@ -84,7 +84,7 @@ void test_lval_str_n(VALK_TEST_ARGS()) {
 
   const char *data = "hello\0world";
   valk_lval_t *val = valk_lval_str_n(data, 11);
-  VALK_TEST_ASSERT(val != NULL, "Should create string with embedded null");
+  VALK_TEST_ASSERT(val != nullptr, "Should create string with embedded null");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be LVAL_STR");
 
   VALK_PASS();
@@ -94,9 +94,9 @@ void test_lval_err(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_lval_t *val = valk_lval_err("Test error %d", 42);
-  VALK_TEST_ASSERT(val != NULL, "valk_lval_err should return non-NULL");
+  VALK_TEST_ASSERT(val != nullptr, "valk_lval_err should return non-nullptr");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_ERR, "Type should be LVAL_ERR");
-  VALK_TEST_ASSERT(strstr(val->str, "Test error 42") != NULL, "Error should contain message");
+  VALK_TEST_ASSERT(strstr(val->str, "Test error 42") != nullptr, "Error should contain message");
 
   VALK_PASS();
 }
@@ -105,7 +105,7 @@ void test_lval_err_no_args(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_lval_t *val = valk_lval_err("Simple error");
-  VALK_TEST_ASSERT(val != NULL, "Should create simple error");
+  VALK_TEST_ASSERT(val != nullptr, "Should create simple error");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_ERR, "Type should be LVAL_ERR");
 
   VALK_PASS();
@@ -115,7 +115,7 @@ void test_lval_nil(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_lval_t *val = valk_lval_nil();
-  VALK_TEST_ASSERT(val != NULL, "valk_lval_nil should return non-NULL");
+  VALK_TEST_ASSERT(val != nullptr, "valk_lval_nil should return non-nullptr");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NIL, "Type should be LVAL_NIL");
 
   VALK_PASS();
@@ -128,7 +128,7 @@ void test_lval_cons(VALK_TEST_ARGS()) {
   valk_lval_t *tail = valk_lval_nil();
   valk_lval_t *cons = valk_lval_cons(head, tail);
 
-  VALK_TEST_ASSERT(cons != NULL, "Should create cons cell");
+  VALK_TEST_ASSERT(cons != nullptr, "Should create cons cell");
   VALK_TEST_ASSERT(LVAL_TYPE(cons) == LVAL_CONS, "Type should be LVAL_CONS");
 
   valk_lval_t *h = valk_lval_head(cons);
@@ -147,7 +147,7 @@ void test_lval_qcons(VALK_TEST_ARGS()) {
   valk_lval_t *tail = valk_lval_nil();
   valk_lval_t *qcons = valk_lval_qcons(head, tail);
 
-  VALK_TEST_ASSERT(qcons != NULL, "Should create qexpr cons cell");
+  VALK_TEST_ASSERT(qcons != nullptr, "Should create qexpr cons cell");
   VALK_TEST_ASSERT(LVAL_TYPE(qcons) == LVAL_QEXPR, "Type should be LVAL_QEXPR");
 
   VALK_PASS();
@@ -156,8 +156,8 @@ void test_lval_qcons(VALK_TEST_ARGS()) {
 void test_lval_list_empty(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_lval_t *list = valk_lval_list(NULL, 0);
-  VALK_TEST_ASSERT(list != NULL, "Should create empty list");
+  valk_lval_t *list = valk_lval_list(nullptr, 0);
+  VALK_TEST_ASSERT(list != nullptr, "Should create empty list");
   VALK_TEST_ASSERT(LVAL_TYPE(list) == LVAL_NIL, "Empty list should be NIL");
 
   VALK_PASS();
@@ -170,7 +170,7 @@ void test_lval_list_single(VALK_TEST_ARGS()) {
   valk_lval_t *arr[] = {elem};
   valk_lval_t *list = valk_lval_list(arr, 1);
 
-  VALK_TEST_ASSERT(list != NULL, "Should create single element list");
+  VALK_TEST_ASSERT(list != nullptr, "Should create single element list");
   VALK_TEST_ASSERT(LVAL_TYPE(list) == LVAL_CONS, "Type should be LVAL_CONS");
 
   VALK_PASS();
@@ -185,7 +185,7 @@ void test_lval_list_multiple(VALK_TEST_ARGS()) {
   valk_lval_t *arr[] = {e1, e2, e3};
   valk_lval_t *list = valk_lval_list(arr, 3);
 
-  VALK_TEST_ASSERT(list != NULL, "Should create multi element list");
+  VALK_TEST_ASSERT(list != nullptr, "Should create multi element list");
 
   VALK_PASS();
 }
@@ -193,8 +193,8 @@ void test_lval_list_multiple(VALK_TEST_ARGS()) {
 void test_lval_qlist_empty(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_lval_t *qlist = valk_lval_qlist(NULL, 0);
-  VALK_TEST_ASSERT(qlist != NULL, "Should create empty qlist");
+  valk_lval_t *qlist = valk_lval_qlist(nullptr, 0);
+  VALK_TEST_ASSERT(qlist != nullptr, "Should create empty qlist");
 
   VALK_PASS();
 }
@@ -204,7 +204,7 @@ void test_lval_head_nil(VALK_TEST_ARGS()) {
 
   valk_lval_t *nil = valk_lval_nil();
   valk_lval_t *head = valk_lval_head(nil);
-  VALK_TEST_ASSERT(head == NULL, "head of nil should be NULL");
+  VALK_TEST_ASSERT(head == nullptr, "head of nil should be nullptr");
 
   VALK_PASS();
 }
@@ -214,7 +214,7 @@ void test_lval_tail_nil(VALK_TEST_ARGS()) {
 
   valk_lval_t *nil = valk_lval_nil();
   valk_lval_t *tail = valk_lval_tail(nil);
-  VALK_TEST_ASSERT(tail == NULL, "tail of nil should be NULL");
+  VALK_TEST_ASSERT(tail == nullptr, "tail of nil should be nullptr");
 
   VALK_PASS();
 }
@@ -225,7 +225,7 @@ void test_lval_copy_num(VALK_TEST_ARGS()) {
   valk_lval_t *orig = valk_lval_num(99);
   valk_lval_t *copy = valk_lval_copy(orig);
 
-  VALK_TEST_ASSERT(copy != NULL, "copy should not be NULL");
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
   VALK_TEST_ASSERT(copy != orig, "copy should be different pointer");
   VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_NUM, "copy type should be NUM");
   VALK_TEST_ASSERT(copy->num == 99, "copy value should be 99");
@@ -239,7 +239,7 @@ void test_lval_copy_str(VALK_TEST_ARGS()) {
   valk_lval_t *orig = valk_lval_str("copy test");
   valk_lval_t *copy = valk_lval_copy(orig);
 
-  VALK_TEST_ASSERT(copy != NULL, "copy should not be NULL");
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
   VALK_TEST_ASSERT(strcmp(copy->str, "copy test") == 0, "copy string should match");
 
   VALK_PASS();
@@ -251,7 +251,7 @@ void test_lval_copy_nil(VALK_TEST_ARGS()) {
   valk_lval_t *orig = valk_lval_nil();
   valk_lval_t *copy = valk_lval_copy(orig);
 
-  VALK_TEST_ASSERT(copy != NULL, "copy should not be NULL");
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
   VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_NIL, "copy type should be NIL");
 
   VALK_PASS();
@@ -261,8 +261,8 @@ void test_lenv_empty(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_lenv_t *env = valk_lenv_empty();
-  VALK_TEST_ASSERT(env != NULL, "valk_lenv_empty should return non-NULL");
-  VALK_TEST_ASSERT(env->parent == NULL, "new env should have no parent");
+  VALK_TEST_ASSERT(env != nullptr, "valk_lenv_empty should return non-nullptr");
+  VALK_TEST_ASSERT(env->parent == nullptr, "new env should have no parent");
   VALK_TEST_ASSERT(env->symbols.count == 0, "new env should have no symbols");
 
   valk_lenv_free(env);
@@ -280,7 +280,7 @@ void test_lenv_put_get(VALK_TEST_ARGS()) {
   valk_lenv_put(env, key, val);
   valk_lval_t *result = valk_lenv_get(env, key);
 
-  VALK_TEST_ASSERT(result != NULL, "Should find the value");
+  VALK_TEST_ASSERT(result != nullptr, "Should find the value");
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Type should be NUM");
   VALK_TEST_ASSERT(result->num == 123, "Value should be 123");
 
@@ -296,7 +296,7 @@ void test_lenv_get_not_found(VALK_TEST_ARGS()) {
   valk_lval_t *key = valk_lval_sym("nonexistent");
 
   valk_lval_t *result = valk_lenv_get(env, key);
-  VALK_TEST_ASSERT(result != NULL, "Should return an error lval");
+  VALK_TEST_ASSERT(result != nullptr, "Should return an error lval");
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Type should be ERR");
 
   valk_lenv_free(env);
@@ -317,7 +317,7 @@ void test_lenv_def(VALK_TEST_ARGS()) {
   valk_lenv_def(child, key, val);
 
   valk_lval_t *result = valk_lenv_get(parent, key);
-  VALK_TEST_ASSERT(result != NULL, "Should find in parent");
+  VALK_TEST_ASSERT(result != nullptr, "Should find in parent");
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Type should be NUM");
   VALK_TEST_ASSERT(result->num == 999, "Value should be 999");
 
@@ -336,11 +336,11 @@ void test_lenv_copy(VALK_TEST_ARGS()) {
   valk_lenv_put(orig, key, val);
 
   valk_lenv_t *copy = valk_lenv_copy(orig);
-  VALK_TEST_ASSERT(copy != NULL, "copy should not be NULL");
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
   VALK_TEST_ASSERT(copy != orig, "copy should be different pointer");
 
   valk_lval_t *result = valk_lenv_get(copy, key);
-  VALK_TEST_ASSERT(result != NULL, "Should find value in copy");
+  VALK_TEST_ASSERT(result != nullptr, "Should find value in copy");
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Result should be NUM");
   VALK_TEST_ASSERT(result->num == 555, "Value should be 555");
 
@@ -363,7 +363,7 @@ void test_lval_large_num(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_lval_t *large = valk_lval_num(9999999999L);
-  VALK_TEST_ASSERT(large != NULL, "Should create large number");
+  VALK_TEST_ASSERT(large != nullptr, "Should create large number");
   VALK_TEST_ASSERT(large->num == 9999999999L, "Value should be correct");
 
   VALK_PASS();
@@ -377,7 +377,7 @@ void test_lval_long_str(VALK_TEST_ARGS()) {
   long_str[sizeof(long_str) - 1] = '\0';
 
   valk_lval_t *val = valk_lval_str(long_str);
-  VALK_TEST_ASSERT(val != NULL, "Should create long string");
+  VALK_TEST_ASSERT(val != nullptr, "Should create long string");
   VALK_TEST_ASSERT(strlen(val->str) == sizeof(long_str) - 1, "String length should match");
 
   VALK_PASS();
@@ -423,7 +423,7 @@ void test_lval_eq_types_differ(VALK_TEST_ARGS()) {
 void test_lenv_free_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_lenv_free(NULL);
+  valk_lenv_free(nullptr);
 
   VALK_PASS();
 }
@@ -461,7 +461,7 @@ void test_lval_copy_list(VALK_TEST_ARGS()) {
   valk_lval_t *orig = valk_lval_list(arr, 2);
   valk_lval_t *copy = valk_lval_copy(orig);
 
-  VALK_TEST_ASSERT(copy != NULL, "copy should not be NULL");
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
   VALK_TEST_ASSERT(copy != orig, "copy should be different pointer");
   VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_CONS, "copy should be CONS");
 
@@ -474,7 +474,7 @@ void test_lval_copy_err(VALK_TEST_ARGS()) {
   valk_lval_t *orig = valk_lval_err("test error");
   valk_lval_t *copy = valk_lval_copy(orig);
 
-  VALK_TEST_ASSERT(copy != NULL, "copy should not be NULL");
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
   VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_ERR, "copy type should be ERR");
 
   VALK_PASS();
@@ -485,7 +485,7 @@ void test_lval_read_number(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "123");
-  VALK_TEST_ASSERT(val != NULL, "Should parse number");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse number");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be NUM");
   VALK_TEST_ASSERT(val->num == 123, "Value should be 123");
 
@@ -497,7 +497,7 @@ void test_lval_read_negative_number(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "-456");
-  VALK_TEST_ASSERT(val != NULL, "Should parse negative number");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse negative number");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be NUM");
   VALK_TEST_ASSERT(val->num == -456, "Value should be -456");
 
@@ -509,7 +509,7 @@ void test_lval_read_symbol(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "my-sym");
-  VALK_TEST_ASSERT(val != NULL, "Should parse symbol");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse symbol");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_SYM, "Type should be SYM");
   VALK_TEST_ASSERT(strcmp(val->str, "my-sym") == 0, "Symbol should match");
 
@@ -521,7 +521,7 @@ void test_lval_read_string_simple(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "\"hello\"");
-  VALK_TEST_ASSERT(val != NULL, "Should parse string");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse string");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
   VALK_TEST_ASSERT(strcmp(val->str, "hello") == 0, "String should match");
 
@@ -533,7 +533,7 @@ void test_lval_read_string_with_escapes(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "\"hello\\nworld\"");
-  VALK_TEST_ASSERT(val != NULL, "Should parse string with escapes");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse string with escapes");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
   VALK_TEST_ASSERT(strcmp(val->str, "hello\nworld") == 0, "String should have newline");
 
@@ -545,7 +545,7 @@ void test_lval_read_string_escape_tab(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "\"a\\tb\"");
-  VALK_TEST_ASSERT(val != NULL, "Should parse tab escape");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse tab escape");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
   VALK_TEST_ASSERT(strcmp(val->str, "a\tb") == 0, "Should have tab");
 
@@ -557,7 +557,7 @@ void test_lval_read_string_escape_quote(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "\"say \\\"hi\\\"\"");
-  VALK_TEST_ASSERT(val != NULL, "Should parse quote escapes");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse quote escapes");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
   VALK_TEST_ASSERT(strcmp(val->str, "say \"hi\"") == 0, "Should have quotes");
 
@@ -569,7 +569,7 @@ void test_lval_read_string_unterminated(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "\"unclosed");
-  VALK_TEST_ASSERT(val != NULL, "Should return error");
+  VALK_TEST_ASSERT(val != nullptr, "Should return error");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_ERR, "Type should be ERR");
 
   VALK_PASS();
@@ -580,7 +580,7 @@ void test_lval_read_string_invalid_escape(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "\"bad\\x\"");
-  VALK_TEST_ASSERT(val != NULL, "Should return error");
+  VALK_TEST_ASSERT(val != nullptr, "Should return error");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_ERR, "Type should be ERR for invalid escape");
 
   VALK_PASS();
@@ -591,7 +591,7 @@ void test_lval_read_sexpr(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "(+ 1 2)");
-  VALK_TEST_ASSERT(val != NULL, "Should parse s-expr");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse s-expr");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
   VALK_TEST_ASSERT(valk_lval_list_count(val) == 3, "Should have 3 elements");
 
@@ -603,7 +603,7 @@ void test_lval_read_qexpr(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "{a b c}");
-  VALK_TEST_ASSERT(val != NULL, "Should parse q-expr");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse q-expr");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_QEXPR, "Type should be QEXPR");
   VALK_TEST_ASSERT(valk_lval_list_count(val) == 3, "Should have 3 elements");
 
@@ -615,7 +615,7 @@ void test_lval_read_quote(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "'x");
-  VALK_TEST_ASSERT(val != NULL, "Should parse quote");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse quote");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_QEXPR, "Type should be QEXPR");
 
   VALK_PASS();
@@ -626,7 +626,7 @@ void test_lval_read_quasiquote(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "`x");
-  VALK_TEST_ASSERT(val != NULL, "Should parse quasiquote");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse quasiquote");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
   valk_lval_t *first = valk_lval_list_nth(val, 0);
   VALK_TEST_ASSERT(LVAL_TYPE(first) == LVAL_SYM, "First should be symbol");
@@ -640,7 +640,7 @@ void test_lval_read_unquote(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, ",x");
-  VALK_TEST_ASSERT(val != NULL, "Should parse unquote");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse unquote");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
   valk_lval_t *first = valk_lval_list_nth(val, 0);
   VALK_TEST_ASSERT(LVAL_TYPE(first) == LVAL_SYM, "First should be symbol");
@@ -654,7 +654,7 @@ void test_lval_read_unquote_splicing(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, ",@xs");
-  VALK_TEST_ASSERT(val != NULL, "Should parse unquote-splicing");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse unquote-splicing");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
   valk_lval_t *first = valk_lval_list_nth(val, 0);
   VALK_TEST_ASSERT(LVAL_TYPE(first) == LVAL_SYM, "First should be symbol");
@@ -668,7 +668,7 @@ void test_lval_read_comment(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "; comment\n42");
-  VALK_TEST_ASSERT(val != NULL, "Should parse past comment");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse past comment");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be NUM");
   VALK_TEST_ASSERT(val->num == 42, "Value should be 42");
 
@@ -680,7 +680,7 @@ void test_lval_read_unexpected_char(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "#bad");
-  VALK_TEST_ASSERT(val != NULL, "Should return error");
+  VALK_TEST_ASSERT(val != nullptr, "Should return error");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_ERR, "Type should be ERR");
 
   VALK_PASS();
@@ -691,7 +691,7 @@ void test_lval_read_unclosed_paren(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "(+ 1 2");
-  VALK_TEST_ASSERT(val != NULL, "Should return error");
+  VALK_TEST_ASSERT(val != nullptr, "Should return error");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_ERR, "Type should be ERR for unclosed paren");
 
   VALK_PASS();
@@ -707,7 +707,7 @@ void test_lval_pop_first(VALK_TEST_ARGS()) {
   valk_lval_t *list = valk_lval_list(arr, 3);
 
   valk_lval_t *popped = valk_lval_pop(list, 0);
-  VALK_TEST_ASSERT(popped != NULL, "popped should not be NULL");
+  VALK_TEST_ASSERT(popped != nullptr, "popped should not be nullptr");
   VALK_TEST_ASSERT(popped->num == 1, "popped value should be 1");
   VALK_TEST_ASSERT(valk_lval_list_count(list) == 2, "list should have 2 elements");
 
@@ -724,7 +724,7 @@ void test_lval_pop_middle(VALK_TEST_ARGS()) {
   valk_lval_t *list = valk_lval_list(arr, 3);
 
   valk_lval_t *popped = valk_lval_pop(list, 1);
-  VALK_TEST_ASSERT(popped != NULL, "popped should not be NULL");
+  VALK_TEST_ASSERT(popped != nullptr, "popped should not be nullptr");
   VALK_TEST_ASSERT(popped->num == 2, "popped value should be 2");
   VALK_TEST_ASSERT(valk_lval_list_count(list) == 2, "list should have 2 elements");
 
@@ -745,7 +745,7 @@ void test_lval_join_two_lists(VALK_TEST_ARGS()) {
   valk_lval_t *list2 = valk_lval_list(arr2, 2);
 
   valk_lval_t *joined = valk_lval_join(list1, list2);
-  VALK_TEST_ASSERT(joined != NULL, "joined should not be NULL");
+  VALK_TEST_ASSERT(joined != nullptr, "joined should not be nullptr");
   VALK_TEST_ASSERT(valk_lval_list_count(joined) == 4, "joined should have 4 elements");
 
   VALK_PASS();
@@ -760,7 +760,7 @@ void test_lval_join_single_element(VALK_TEST_ARGS()) {
 
   valk_lval_t *single = valk_lval_num(99);
   valk_lval_t *joined = valk_lval_join(list1, single);
-  VALK_TEST_ASSERT(joined != NULL, "joined should not be NULL");
+  VALK_TEST_ASSERT(joined != nullptr, "joined should not be nullptr");
   VALK_TEST_ASSERT(valk_lval_list_count(joined) == 2, "joined should have 2 elements");
 
   VALK_PASS();
@@ -773,8 +773,8 @@ void test_lval_ref_type_truncation(VALK_TEST_ARGS()) {
   memset(long_type, 'x', sizeof(long_type) - 1);
   long_type[sizeof(long_type) - 1] = '\0';
 
-  valk_lval_t *ref = valk_lval_ref(long_type, NULL, NULL);
-  VALK_TEST_ASSERT(ref != NULL, "ref should not be NULL");
+  valk_lval_t *ref = valk_lval_ref(long_type, nullptr, nullptr);
+  VALK_TEST_ASSERT(ref != nullptr, "ref should not be nullptr");
   VALK_TEST_ASSERT(LVAL_TYPE(ref) == LVAL_REF, "Type should be REF");
   VALK_TEST_ASSERT(strlen(ref->ref.type) <= 100, "Type should be truncated");
 
@@ -789,7 +789,7 @@ void test_lval_sym_truncation(VALK_TEST_ARGS()) {
   long_sym[sizeof(long_sym) - 1] = '\0';
 
   valk_lval_t *sym = valk_lval_sym(long_sym);
-  VALK_TEST_ASSERT(sym != NULL, "sym should not be NULL");
+  VALK_TEST_ASSERT(sym != nullptr, "sym should not be nullptr");
   VALK_TEST_ASSERT(LVAL_TYPE(sym) == LVAL_SYM, "Type should be SYM");
   VALK_TEST_ASSERT(strlen(sym->str) <= 200, "Symbol should be truncated");
 
@@ -808,7 +808,7 @@ void test_lenv_parent_lookup(VALK_TEST_ARGS()) {
   valk_lenv_put(parent, key, val);
 
   valk_lval_t *result = valk_lenv_get(child, key);
-  VALK_TEST_ASSERT(result != NULL, "Should find in parent");
+  VALK_TEST_ASSERT(result != nullptr, "Should find in parent");
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Type should be NUM");
   VALK_TEST_ASSERT(result->num == 777, "Value should be 777");
 
@@ -833,7 +833,7 @@ void test_lenv_put_overwrite(VALK_TEST_ARGS()) {
   valk_lenv_put(env, key, val2);
 
   valk_lval_t *result = valk_lenv_get(env, key);
-  VALK_TEST_ASSERT(result != NULL, "Should find value");
+  VALK_TEST_ASSERT(result != nullptr, "Should find value");
   VALK_TEST_ASSERT(result->num == 200, "Should be overwritten value");
 
   valk_lenv_free(env);
@@ -846,7 +846,7 @@ void test_lval_list_is_empty(VALK_TEST_ARGS()) {
 
   valk_lval_t *nil = valk_lval_nil();
   VALK_TEST_ASSERT(valk_lval_list_is_empty(nil) == 1, "nil should be empty");
-  VALK_TEST_ASSERT(valk_lval_list_is_empty(NULL) == 1, "NULL should be empty");
+  VALK_TEST_ASSERT(valk_lval_list_is_empty(nullptr) == 1, "nullptr should be empty");
 
   valk_lval_t *elem = valk_lval_num(1);
   valk_lval_t *arr[] = {elem};
@@ -864,7 +864,7 @@ void test_lval_list_nth_out_of_bounds(VALK_TEST_ARGS()) {
   valk_lval_t *list = valk_lval_list(arr, 1);
 
   valk_lval_t *result = valk_lval_list_nth(list, 10);
-  VALK_TEST_ASSERT(result == NULL, "out of bounds should return NULL");
+  VALK_TEST_ASSERT(result == nullptr, "out of bounds should return nullptr");
 
   VALK_PASS();
 }
@@ -876,8 +876,8 @@ void test_lval_eq_nil(VALK_TEST_ARGS()) {
   valk_lval_t *nil2 = valk_lval_nil();
 
   VALK_TEST_ASSERT(valk_lval_eq(nil1, nil2) == 1, "nils should be equal");
-  VALK_TEST_ASSERT(valk_lval_eq(nil1, NULL) == 0, "nil should not equal NULL");
-  VALK_TEST_ASSERT(valk_lval_eq(NULL, NULL) == 1, "NULLs should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(nil1, nullptr) == 0, "nil should not equal nullptr");
+  VALK_TEST_ASSERT(valk_lval_eq(nullptr, nullptr) == 1, "NULLs should be equal");
 
   VALK_PASS();
 }
@@ -905,7 +905,7 @@ void test_lval_copy_sym(VALK_TEST_ARGS()) {
   valk_lval_t *orig = valk_lval_sym("my-symbol");
   valk_lval_t *copy = valk_lval_copy(orig);
 
-  VALK_TEST_ASSERT(copy != NULL, "copy should not be NULL");
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
   VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_SYM, "copy type should be SYM");
   VALK_TEST_ASSERT(strcmp(copy->str, "my-symbol") == 0, "copy value should match");
   VALK_TEST_ASSERT(copy->str != orig->str, "copy should have its own string");
@@ -917,10 +917,10 @@ void test_lval_copy_ref(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   int data = 42;
-  valk_lval_t *orig = valk_lval_ref("test-ref", &data, NULL);
+  valk_lval_t *orig = valk_lval_ref("test-ref", &data, nullptr);
   valk_lval_t *copy = valk_lval_copy(orig);
 
-  VALK_TEST_ASSERT(copy != NULL, "copy should not be NULL");
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
   VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_REF, "copy type should be REF");
   VALK_TEST_ASSERT(strcmp(copy->ref.type, "test-ref") == 0, "copy type should match");
   VALK_TEST_ASSERT(copy->ref.ptr == &data, "copy ptr should match");
@@ -931,8 +931,8 @@ void test_lval_copy_ref(VALK_TEST_ARGS()) {
 void test_lval_copy_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_lval_t *copy = valk_lval_copy(NULL);
-  VALK_TEST_ASSERT(copy == NULL, "copy of NULL should be NULL");
+  valk_lval_t *copy = valk_lval_copy(nullptr);
+  VALK_TEST_ASSERT(copy == nullptr, "copy of nullptr should be nullptr");
 
   VALK_PASS();
 }
@@ -940,8 +940,9 @@ void test_lval_copy_null(VALK_TEST_ARGS()) {
 void test_ltype_name_unknown(VALK_TEST_ARGS()) {
   VALK_TEST();
 
+  // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
   const char *name = valk_ltype_name((valk_ltype_e)99);
-  VALK_TEST_ASSERT(name != NULL, "Should return a name");
+  VALK_TEST_ASSERT(name != nullptr, "Should return a name");
   VALK_TEST_ASSERT(strcmp(name, "Unknown") == 0, "Should be Unknown");
 
   VALK_PASS();
@@ -967,7 +968,7 @@ void test_str_join(VALK_TEST_ARGS()) {
   const char *strs[] = {"hello", "world", "test"};
   char *result = valk_str_join(3, strs, ", ");
 
-  VALK_TEST_ASSERT(result != NULL, "result should not be NULL");
+  VALK_TEST_ASSERT(result != nullptr, "result should not be nullptr");
   VALK_TEST_ASSERT(strcmp(result, "hello, world, test") == 0, "join should work");
 
   valk_mem_free(result);
@@ -981,7 +982,7 @@ void test_str_join_single(VALK_TEST_ARGS()) {
   const char *strs[] = {"only"};
   char *result = valk_str_join(1, strs, ", ");
 
-  VALK_TEST_ASSERT(result != NULL, "result should not be NULL");
+  VALK_TEST_ASSERT(result != nullptr, "result should not be nullptr");
   VALK_TEST_ASSERT(strcmp(result, "only") == 0, "single join should work");
 
   valk_mem_free(result);
@@ -992,8 +993,8 @@ void test_str_join_single(VALK_TEST_ARGS()) {
 void test_lenv_copy_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_lenv_t *copy = valk_lenv_copy(NULL);
-  VALK_TEST_ASSERT(copy == NULL, "copy of NULL env should be NULL");
+  valk_lenv_t *copy = valk_lenv_copy(nullptr);
+  VALK_TEST_ASSERT(copy == nullptr, "copy of nullptr env should be nullptr");
 
   VALK_PASS();
 }
@@ -1020,8 +1021,8 @@ void test_lenv_copy_with_parent_chain(VALK_TEST_ARGS()) {
   valk_lenv_put(child, c_key, c_val);
 
   valk_lenv_t *copy = valk_lenv_copy(child);
-  VALK_TEST_ASSERT(copy != NULL, "copy should not be NULL");
-  VALK_TEST_ASSERT(copy->parent == NULL, "copy should have flattened parent");
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(copy->parent == nullptr, "copy should have flattened parent");
 
   valk_lval_t *res_gp = valk_lenv_get(copy, gp_key);
   VALK_TEST_ASSERT(LVAL_TYPE(res_gp) == LVAL_NUM, "Should find grandparent value");
@@ -1042,7 +1043,7 @@ void test_lval_str_n_zero_length(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_lval_t *val = valk_lval_str_n("hello", 0);
-  VALK_TEST_ASSERT(val != NULL, "Should create empty string");
+  VALK_TEST_ASSERT(val != nullptr, "Should create empty string");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
   VALK_TEST_ASSERT(strlen(val->str) == 0, "String should be empty");
 
@@ -1074,7 +1075,7 @@ void test_lval_print_ref(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   int data = 42;
-  valk_lval_t *ref = valk_lval_ref("test-type", &data, NULL);
+  valk_lval_t *ref = valk_lval_ref("test-type", &data, nullptr);
   valk_lval_print(ref);
 
   VALK_PASS();
@@ -1097,7 +1098,7 @@ void test_lval_read_minus_only(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "-");
-  VALK_TEST_ASSERT(val != NULL, "Should parse minus");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse minus");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_SYM, "Minus alone should be symbol");
   VALK_TEST_ASSERT(strcmp(val->str, "-") == 0, "Should be minus symbol");
 
@@ -1134,9 +1135,9 @@ void test_lval_eq_ref(VALK_TEST_ARGS()) {
   int data1 = 42;
   int data2 = 99;
 
-  valk_lval_t *ref1 = valk_lval_ref("test", &data1, NULL);
-  valk_lval_t *ref2 = valk_lval_ref("test", &data1, NULL);
-  valk_lval_t *ref3 = valk_lval_ref("test", &data2, NULL);
+  valk_lval_t *ref1 = valk_lval_ref("test", &data1, nullptr);
+  valk_lval_t *ref2 = valk_lval_ref("test", &data1, nullptr);
+  valk_lval_t *ref3 = valk_lval_ref("test", &data2, nullptr);
 
   VALK_TEST_ASSERT(valk_lval_eq(ref1, ref2) == 1, "refs to same data should be equal");
   VALK_TEST_ASSERT(valk_lval_eq(ref1, ref3) == 0, "refs to different data should not be equal");
@@ -1154,10 +1155,10 @@ void test_lval_copy_lambda(VALK_TEST_ARGS()) {
 
   valk_lval_t *copy = valk_lval_copy(lambda);
 
-  VALK_TEST_ASSERT(copy != NULL, "copy should not be NULL");
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
   VALK_TEST_ASSERT(copy != lambda, "copy should be different pointer");
   VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_FUN, "copy type should be FUN");
-  VALK_TEST_ASSERT(copy->fun.builtin == NULL, "copy should be lambda");
+  VALK_TEST_ASSERT(copy->fun.builtin == nullptr, "copy should be lambda");
 
   VALK_PASS();
 }
@@ -1171,7 +1172,7 @@ void test_lval_copy_qexpr(VALK_TEST_ARGS()) {
   valk_lval_t *orig = valk_lval_qlist(arr, 2);
   valk_lval_t *copy = valk_lval_copy(orig);
 
-  VALK_TEST_ASSERT(copy != NULL, "copy should not be NULL");
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
   VALK_TEST_ASSERT(copy != orig, "copy should be different pointer");
   VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_QEXPR, "copy should be QEXPR");
 
@@ -1226,7 +1227,7 @@ void test_lval_read_nested_expr(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "(+ (* 2 3) (- 5 1))");
-  VALK_TEST_ASSERT(val != NULL, "Should parse nested expr");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse nested expr");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
   VALK_TEST_ASSERT(valk_lval_list_count(val) == 3, "Should have 3 elements");
 
@@ -1238,7 +1239,7 @@ void test_lval_read_empty_list(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "()");
-  VALK_TEST_ASSERT(val != NULL, "Should parse empty list");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse empty list");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NIL, "Empty list should be NIL");
 
   VALK_PASS();
@@ -1249,7 +1250,7 @@ void test_lval_read_empty_qexpr(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "{}");
-  VALK_TEST_ASSERT(val != NULL, "Should parse empty qexpr");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse empty qexpr");
 
   VALK_PASS();
 }
@@ -1259,7 +1260,7 @@ void test_lval_read_deeply_nested(VALK_TEST_ARGS()) {
 
   int pos = 0;
   valk_lval_t *val = valk_lval_read(&pos, "(((((x)))))");
-  VALK_TEST_ASSERT(val != NULL, "Should parse deeply nested");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse deeply nested");
   VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
 
   VALK_PASS();

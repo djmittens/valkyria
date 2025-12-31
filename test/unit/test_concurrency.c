@@ -13,11 +13,11 @@ void test_arc_box_new(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_arc_box *box = valk_arc_box_new(VALK_SUC, 64);
-  VALK_TEST_ASSERT(box != NULL, "arc_box_new should return non-NULL");
+  VALK_TEST_ASSERT(box != nullptr, "arc_box_new should return non-nullptr");
   VALK_TEST_ASSERT(box->type == VALK_SUC, "type should be VALK_SUC");
   VALK_TEST_ASSERT(box->refcount == 1, "refcount should be 1");
   VALK_TEST_ASSERT(box->capacity == 64, "capacity should be 64");
-  VALK_TEST_ASSERT(box->item != NULL, "item pointer should be set");
+  VALK_TEST_ASSERT(box->item != nullptr, "item pointer should be set");
 
   valk_arc_release(box);
 
@@ -34,8 +34,8 @@ void test_arc_box_init(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(box->type == VALK_ERR, "type should be VALK_ERR");
   VALK_TEST_ASSERT(box->refcount == 1, "refcount should be 1");
   VALK_TEST_ASSERT(box->capacity == 64, "capacity should be 64");
-  VALK_TEST_ASSERT(box->allocator == NULL, "allocator should be NULL after init");
-  VALK_TEST_ASSERT(box->free == NULL, "free should be NULL after init");
+  VALK_TEST_ASSERT(box->allocator == nullptr, "allocator should be nullptr after init");
+  VALK_TEST_ASSERT(box->free == nullptr, "free should be nullptr after init");
 
   VALK_PASS();
 }
@@ -46,7 +46,7 @@ void test_arc_box_err(VALK_TEST_ARGS()) {
   const char *msg = "Test error message";
   valk_arc_box *box = valk_arc_box_err(msg);
 
-  VALK_TEST_ASSERT(box != NULL, "arc_box_err should return non-NULL");
+  VALK_TEST_ASSERT(box != nullptr, "arc_box_err should return non-nullptr");
   VALK_TEST_ASSERT(box->type == VALK_ERR, "type should be VALK_ERR");
   VALK_TEST_ASSERT(box->refcount == 1, "refcount should be 1");
   VALK_TEST_ASSERT(strcmp(box->item, msg) == 0, "item should contain error message");
@@ -83,10 +83,10 @@ void test_future_new(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_future *fut = valk_future_new();
-  VALK_TEST_ASSERT(fut != NULL, "future_new should return non-NULL");
+  VALK_TEST_ASSERT(fut != nullptr, "future_new should return non-nullptr");
   VALK_TEST_ASSERT(fut->done == 0, "Future should not be done initially");
   VALK_TEST_ASSERT(fut->refcount == 1, "Initial refcount should be 1");
-  VALK_TEST_ASSERT(fut->item == NULL, "item should be NULL initially");
+  VALK_TEST_ASSERT(fut->item == nullptr, "item should be nullptr initially");
   VALK_TEST_ASSERT(fut->andThen.count == 0, "andThen should be empty");
 
   valk_arc_box *result = valk_arc_box_new(VALK_SUC, 8);
@@ -105,7 +105,7 @@ void test_future_done(VALK_TEST_ARGS()) {
   valk_arc_box *box = valk_arc_box_new(VALK_SUC, 32);
   valk_future *fut = valk_future_done(box);
 
-  VALK_TEST_ASSERT(fut != NULL, "future_done should return non-NULL");
+  VALK_TEST_ASSERT(fut != nullptr, "future_done should return non-nullptr");
   VALK_TEST_ASSERT(fut->done == 1, "Future should be done");
   VALK_TEST_ASSERT(fut->item == box, "item should be the provided box");
 
@@ -201,7 +201,7 @@ static void *respond_after_delay(void *arg) {
   valk_arc_box *result = valk_arc_box_new(VALK_SUC, 8);
   valk_promise_respond(p, result);
   valk_arc_release(result);
-  return NULL;
+  return nullptr;
 }
 
 void test_future_await_with_thread(VALK_TEST_ARGS()) {
@@ -211,15 +211,15 @@ void test_future_await_with_thread(VALK_TEST_ARGS()) {
   valk_promise p = {.item = fut};
 
   pthread_t thread;
-  pthread_create(&thread, NULL, respond_after_delay, &p);
+  pthread_create(&thread, nullptr, respond_after_delay, &p);
 
   valk_arc_retain(fut);
   valk_arc_box *result = valk_future_await(fut);
 
-  VALK_TEST_ASSERT(result != NULL, "await should return result from thread");
+  VALK_TEST_ASSERT(result != nullptr, "await should return result from thread");
   VALK_TEST_ASSERT(result->type == VALK_SUC, "Result type should be VALK_SUC");
 
-  pthread_join(thread, NULL);
+  pthread_join(thread, nullptr);
   valk_arc_release(fut);
 
   VALK_PASS();
@@ -244,7 +244,7 @@ void test_task_type_enum(VALK_TEST_ARGS()) {
 }
 
 static bool and_then_called = false;
-static valk_arc_box *and_then_result = NULL;
+static valk_arc_box *and_then_result = nullptr;
 
 static void and_then_callback(void *arg, valk_arc_box *box) {
   (void)arg;
@@ -256,12 +256,12 @@ void test_future_and_then_immediate(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   and_then_called = false;
-  and_then_result = NULL;
+  and_then_result = nullptr;
 
   valk_arc_box *box = valk_arc_box_new(VALK_SUC, 16);
   valk_future *fut = valk_future_done(box);
 
-  struct valk_future_and_then cb = {.arg = NULL, .cb = and_then_callback};
+  struct valk_future_and_then cb = {.arg = nullptr, .cb = and_then_callback};
   valk_future_and_then(fut, &cb);
 
   VALK_TEST_ASSERT(and_then_called == true, "Callback should be called immediately for done future");
@@ -277,12 +277,12 @@ void test_future_and_then_pending(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   and_then_called = false;
-  and_then_result = NULL;
+  and_then_result = nullptr;
 
   valk_future *fut = valk_future_new();
   valk_promise p = {.item = fut};
 
-  struct valk_future_and_then cb = {.arg = NULL, .cb = and_then_callback};
+  struct valk_future_and_then cb = {.arg = nullptr, .cb = and_then_callback};
   valk_future_and_then(fut, &cb);
 
   VALK_TEST_ASSERT(and_then_called == false, "Callback should not be called for pending future");
@@ -372,7 +372,7 @@ void test_arc_box_err_empty_message(VALK_TEST_ARGS()) {
 
   valk_arc_box *box = valk_arc_box_err("");
 
-  VALK_TEST_ASSERT(box != NULL, "Should create box for empty message");
+  VALK_TEST_ASSERT(box != nullptr, "Should create box for empty message");
   VALK_TEST_ASSERT(box->type == VALK_ERR, "Type should be VALK_ERR");
   VALK_TEST_ASSERT(strlen(box->item) == 0, "Message should be empty");
 
@@ -390,7 +390,7 @@ void test_arc_box_err_long_message(VALK_TEST_ARGS()) {
 
   valk_arc_box *box = valk_arc_box_err(long_msg);
 
-  VALK_TEST_ASSERT(box != NULL, "Should create box for long message");
+  VALK_TEST_ASSERT(box != nullptr, "Should create box for long message");
   VALK_TEST_ASSERT(box->type == VALK_ERR, "Type should be VALK_ERR");
   VALK_TEST_ASSERT(strcmp(box->item, long_msg) == 0, "Message should match");
 
@@ -428,7 +428,7 @@ void test_arc_box_zero_capacity(VALK_TEST_ARGS()) {
 
   valk_arc_box *box = valk_arc_box_new(VALK_SUC, 0);
 
-  VALK_TEST_ASSERT(box != NULL, "Should create box with zero capacity");
+  VALK_TEST_ASSERT(box != nullptr, "Should create box with zero capacity");
   VALK_TEST_ASSERT(box->capacity == 0, "Capacity should be 0");
   VALK_TEST_ASSERT(box->refcount == 1, "Refcount should be 1");
 
@@ -442,7 +442,7 @@ void test_arc_box_large_capacity(VALK_TEST_ARGS()) {
 
   valk_arc_box *box = valk_arc_box_new(VALK_SUC, 1024 * 1024);
 
-  VALK_TEST_ASSERT(box != NULL, "Should create box with large capacity");
+  VALK_TEST_ASSERT(box != nullptr, "Should create box with large capacity");
   VALK_TEST_ASSERT(box->capacity == 1024 * 1024, "Capacity should be 1MB");
   VALK_TEST_ASSERT(box->refcount == 1, "Refcount should be 1");
 
@@ -493,7 +493,7 @@ void test_arc_box_item_pointer(VALK_TEST_ARGS()) {
 
   valk_arc_box *box = valk_arc_box_new(VALK_SUC, 128);
 
-  VALK_TEST_ASSERT(box->item != NULL, "Item pointer should be set");
+  VALK_TEST_ASSERT(box->item != nullptr, "Item pointer should be set");
   VALK_TEST_ASSERT((char *)box->item > (char *)box, "Item should be after box header");
 
   valk_arc_release(box);
@@ -539,7 +539,7 @@ void test_arc_retain_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_arc_box *box = valk_arc_box_new(VALK_SUC, 16);
-  VALK_TEST_ASSERT(box != NULL, "Box should be created");
+  VALK_TEST_ASSERT(box != nullptr, "Box should be created");
 
   valk_arc_retain(box);
   VALK_TEST_ASSERT(box->refcount == 2, "Refcount after retain should be 2");
@@ -607,11 +607,11 @@ void test_schedule_work(VALK_TEST_ARGS()) {
   *(int *)arg->item = 21;
 
   valk_future *fut = valk_schedule(&pool, arg, simple_work_func);
-  VALK_TEST_ASSERT(fut != NULL, "Schedule should return a future");
+  VALK_TEST_ASSERT(fut != nullptr, "Schedule should return a future");
 
   valk_arc_retain(fut);
   valk_arc_box *result = valk_future_await(fut);
-  VALK_TEST_ASSERT(result != NULL, "Result should not be NULL");
+  VALK_TEST_ASSERT(result != nullptr, "Result should not be nullptr");
   VALK_TEST_ASSERT(result->type == VALK_SUC, "Result should be success");
   VALK_TEST_ASSERT(*(int *)result->item == 42, "Value should be doubled to 42");
 
@@ -665,7 +665,7 @@ void test_drain_pool(VALK_TEST_ARGS()) {
   valk_drain_pool(&pool);
 
   valk_arc_box *result = valk_future_await(fut);
-  VALK_TEST_ASSERT(result != NULL, "Should get result after drain");
+  VALK_TEST_ASSERT(result != nullptr, "Should get result after drain");
 
   valk_arc_release(arg);
   valk_arc_release(fut);
@@ -685,7 +685,7 @@ void test_schedule_after_shutdown(VALK_TEST_ARGS()) {
   *(int *)arg->item = 10;
   valk_future *fut = valk_schedule(&pool, arg, simple_work_func);
 
-  VALK_TEST_ASSERT(fut != NULL, "Should return future even during shutdown");
+  VALK_TEST_ASSERT(fut != nullptr, "Should return future even during shutdown");
   valk_arc_retain(fut);
   valk_arc_box *result = valk_future_await(fut);
   VALK_TEST_ASSERT(result->type == VALK_ERR, "Should return error during shutdown");
@@ -707,9 +707,9 @@ void test_future_await_timeout_expires(VALK_TEST_ARGS()) {
   valk_arc_retain(fut);
   valk_arc_box *result = valk_future_await_timeout(fut, 10);
 
-  VALK_TEST_ASSERT(result != NULL, "Should return result on timeout");
+  VALK_TEST_ASSERT(result != nullptr, "Should return result on timeout");
   VALK_TEST_ASSERT(result->type == VALK_ERR, "Should return error on timeout");
-  VALK_TEST_ASSERT(strstr(result->item, "Timeout") != NULL, "Error should mention timeout");
+  VALK_TEST_ASSERT(strstr(result->item, "Timeout") != nullptr, "Error should mention timeout");
 
   valk_arc_release(result);
   valk_arc_release(fut);
@@ -724,15 +724,15 @@ void test_future_await_timeout_large_ms(VALK_TEST_ARGS()) {
   valk_promise p = {.item = fut};
 
   pthread_t thread;
-  pthread_create(&thread, NULL, respond_after_delay, &p);
+  pthread_create(&thread, nullptr, respond_after_delay, &p);
 
   valk_arc_retain(fut);
   valk_arc_box *result = valk_future_await_timeout(fut, 5000);
 
-  VALK_TEST_ASSERT(result != NULL, "Should return result");
+  VALK_TEST_ASSERT(result != nullptr, "Should return result");
   VALK_TEST_ASSERT(result->type == VALK_SUC, "Should succeed before timeout");
 
-  pthread_join(thread, NULL);
+  pthread_join(thread, nullptr);
   valk_arc_release(result);
   valk_arc_release(fut);
 
@@ -747,7 +747,7 @@ void test_future_await_timeout_ns_overflow(VALK_TEST_ARGS()) {
   valk_arc_retain(fut);
   valk_arc_box *result = valk_future_await_timeout(fut, 1999);
 
-  VALK_TEST_ASSERT(result != NULL, "Should return result on timeout");
+  VALK_TEST_ASSERT(result != nullptr, "Should return result on timeout");
   VALK_TEST_ASSERT(result->type == VALK_ERR, "Should return error on timeout");
 
   valk_arc_release(result);
@@ -789,7 +789,7 @@ void test_drain_pool_with_pending_work(VALK_TEST_ARGS()) {
 
   for (int i = 0; i < 5; i++) {
     valk_arc_box *result = valk_future_await(futures[i]);
-    VALK_TEST_ASSERT(result != NULL, "Should get result for task %d", i);
+    VALK_TEST_ASSERT(result != nullptr, "Should get result for task %d", i);
     valk_arc_release(args[i]);
     valk_arc_release(futures[i]);
   }
@@ -811,7 +811,7 @@ void test_free_pool_with_pending_work(VALK_TEST_ARGS()) {
   valk_arc_retain(fut);
 
   valk_arc_box *result = valk_future_await(fut);
-  VALK_TEST_ASSERT(result != NULL, "Should get result");
+  VALK_TEST_ASSERT(result != nullptr, "Should get result");
 
   valk_arc_release(arg);
   valk_arc_release(fut);
@@ -837,7 +837,7 @@ void test_schedule_error_result(VALK_TEST_ARGS()) {
   valk_arc_retain(fut);
 
   valk_arc_box *result = valk_future_await(fut);
-  VALK_TEST_ASSERT(result != NULL, "Should get error result");
+  VALK_TEST_ASSERT(result != nullptr, "Should get error result");
   VALK_TEST_ASSERT(result->type == VALK_ERR, "Result should be error type");
 
   valk_arc_release(arg);
@@ -855,7 +855,7 @@ void test_future_await_timeout_zero(VALK_TEST_ARGS()) {
   valk_arc_retain(fut);
   valk_arc_box *result = valk_future_await_timeout(fut, 0);
 
-  VALK_TEST_ASSERT(result != NULL, "Should return result on timeout");
+  VALK_TEST_ASSERT(result != nullptr, "Should return result on timeout");
   VALK_TEST_ASSERT(result->type == VALK_ERR, "Should return error on timeout");
 
   valk_arc_release(result);
@@ -884,7 +884,7 @@ void test_multiple_futures_concurrent(VALK_TEST_ARGS()) {
 
   for (int i = 0; i < 20; i++) {
     valk_arc_box *result = valk_future_await(futures[i]);
-    VALK_TEST_ASSERT(result != NULL, "Task %d should complete", i);
+    VALK_TEST_ASSERT(result != nullptr, "Task %d should complete", i);
     valk_arc_release(args[i]);
     valk_arc_release(futures[i]);
   }
@@ -969,9 +969,9 @@ void test_await_timeout_normal_expiry(VALK_TEST_ARGS()) {
   valk_arc_retain(fut);
   valk_arc_box *result = valk_future_await_timeout(fut, 50);
 
-  VALK_TEST_ASSERT(result != NULL, "Should return error on timeout");
+  VALK_TEST_ASSERT(result != nullptr, "Should return error on timeout");
   VALK_TEST_ASSERT(result->type == VALK_ERR, "Should be error type");
-  VALK_TEST_ASSERT(strstr(result->item, "Timeout") != NULL, "Should mention timeout");
+  VALK_TEST_ASSERT(strstr(result->item, "Timeout") != nullptr, "Should mention timeout");
 
   valk_arc_release(result);
   valk_arc_release(fut);
@@ -985,7 +985,7 @@ void test_arc_box_new_large_allocation(VALK_TEST_ARGS()) {
   size_t large_size = 10 * 1024 * 1024;
   valk_arc_box *box = valk_arc_box_new(VALK_SUC, large_size);
 
-  VALK_TEST_ASSERT(box != NULL, "Should allocate large box");
+  VALK_TEST_ASSERT(box != nullptr, "Should allocate large box");
   VALK_TEST_ASSERT(box->capacity == large_size, "Capacity should match");
 
   memset(box->item, 0xAB, large_size);

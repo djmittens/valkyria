@@ -299,6 +299,7 @@ void test_level_str(VALK_TEST_ARGS()) {
   ASSERT_STR_EQ(valk_pressure_level_str(VALK_PRESSURE_ELEVATED), "ELEVATED");
   ASSERT_STR_EQ(valk_pressure_level_str(VALK_PRESSURE_HIGH), "HIGH");
   ASSERT_STR_EQ(valk_pressure_level_str(VALK_PRESSURE_CRITICAL), "CRITICAL");
+  // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
   ASSERT_STR_EQ(valk_pressure_level_str((valk_pressure_level_e)999), "UNKNOWN");
 
   VALK_PASS();

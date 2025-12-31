@@ -5,13 +5,13 @@
 
 static uv_loop_t test_loop;
 static int g_callback_count = 0;
-static uv_timer_t *g_last_timer = NULL;
+static uv_timer_t *g_last_timer = nullptr;
 
 static void reset_state(void) {
   uv_loop_init(&test_loop);
   uv_fake_reset(&test_loop);
   g_callback_count = 0;
-  g_last_timer = NULL;
+  g_last_timer = nullptr;
 }
 
 static void timer_cb(uv_timer_t *timer) {
@@ -146,7 +146,7 @@ void test_tcp_bind_listen(VALK_TEST_ARGS()) {
   static int conn_count = 0;
   conn_count = 0;
   
-  r = uv_listen((uv_stream_t *)&server, 128, (uv_connection_cb)NULL);
+  r = uv_listen((uv_stream_t *)&server, 128, (uv_connection_cb)nullptr);
   ASSERT_EQ(r, 0);
   ASSERT_TRUE(server.listening);
   
@@ -239,7 +239,7 @@ void test_tcp_write_capture(VALK_TEST_ARGS()) {
   };
   
   uv_write_t req;
-  uv_write(&req, (uv_stream_t *)&tcp, bufs, 2, NULL);
+  uv_write(&req, (uv_stream_t *)&tcp, bufs, 2, nullptr);
   
   char captured[64];
   size_t len = uv_fake_get_written_data(&tcp, captured, sizeof(captured));
@@ -278,7 +278,7 @@ void test_close(VALK_TEST_ARGS()) {
   
   ASSERT_FALSE(uv_is_closing((uv_handle_t *)&timer));
   
-  uv_close((uv_handle_t *)&timer, NULL);
+  uv_close((uv_handle_t *)&timer, nullptr);
   
   ASSERT_TRUE(uv_is_closing((uv_handle_t *)&timer));
   

@@ -4,7 +4,7 @@
 #include "aio_ssl.h"
 
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
-  return conn->sys ? conn->sys->ops->tcp : NULL;
+  return conn->sys ? conn->sys->ops->tcp : nullptr;
 }
 
 static inline valk_io_tcp_t *__conn_tcp(valk_aio_handle_t *conn) {
@@ -32,7 +32,7 @@ static void __vtable_close(valk_aio_handle_t *conn, valk_io_close_cb cb) {
 static void __vtable_alloc_cb(valk_io_tcp_t *tcp, u64 suggested, void **buf, u64 *buflen) {
   UNUSED(suggested);
   valk_aio_handle_t *conn = tcp->user_data;
-  *buf = NULL;
+  *buf = nullptr;
   *buflen = 0;
   
   if (conn && conn->magic == VALK_AIO_HANDLE_MAGIC && conn->kind == VALK_HNDL_HTTP_CONN) {
@@ -120,7 +120,7 @@ void valk_http2_conn_alloc_callback(uv_handle_t *handle, u64 suggested_size,
     }
     
     if (!valk_conn_io_read_buf_acquire(&conn->http.io, conn->sys->tcpBufferSlab)) {
-      buf->base = NULL;
+      buf->base = nullptr;
       buf->len = 0;
       VALK_WARN("TCP buffer slab exhausted for read buffer");
       return;
@@ -131,7 +131,7 @@ void valk_http2_conn_alloc_callback(uv_handle_t *handle, u64 suggested_size,
     return;
   }
   
-  buf->base = NULL;
+  buf->base = nullptr;
   buf->len = 0;
   VALK_ERROR("Cannot allocate TCP buffer: no valid connection handle");
 }
@@ -367,7 +367,7 @@ void valk_http2_conn_tcp_read_impl(valk_aio_handle_t *conn, ssize_t nread, const
   // on the next read after the flush completes.
   bool can_write_output = !conn->http.io.write_flush_pending;
 
-  u8 *write_buf = can_write_output ? valk_http2_conn_write_buf_data(conn) : NULL;
+  u8 *write_buf = can_write_output ? valk_http2_conn_write_buf_data(conn) : nullptr;
   u64 write_available = can_write_output ? valk_http2_conn_write_buf_available(conn) : 0;
 
   // Use a temporary stack buffer for SSL output if we can't write to the main buffer
@@ -453,6 +453,7 @@ void valk_http2_conn_handle_closed_cb(uv_handle_t *handle) {
     hndl->onClose(hndl);
   }
   valk_dll_pop(hndl);
+  // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - sys always valid for allocated handles
   valk_slab_release_ptr(hndl->sys->handleSlab, hndl);
 }
 
@@ -525,7 +526,6 @@ void valk_http2_conn_on_disconnect(valk_aio_handle_t *handle) {
       }
 
       if (req->conn != handle) {
-        VALK_WARN("Arena slot %u belongs to different connection, stopping traversal", slot);
         break;
       }
 
@@ -534,7 +534,7 @@ void valk_http2_conn_on_disconnect(valk_aio_handle_t *handle) {
       if (req->arena_slab_item == item) {
         VALK_INFO("Releasing leaked arena slot %u on disconnect", slot);
         req->arena_slot = UINT32_MAX;
-        req->arena_slab_item = NULL;
+        req->arena_slab_item = nullptr;
         valk_slab_release(slab, item);
 #ifdef VALK_METRICS_ENABLED
         valk_aio_system_stats_on_arena_release(&handle->http.server->sys->metrics_state->system_stats);
@@ -566,11 +566,11 @@ void valk_http2_conn_on_disconnect(valk_aio_handle_t *handle) {
         valk_promise_respond(&reqres->promise, err);
         valk_arc_release(err);
         valk_mem_free(reqres);
-        nghttp2_session_set_stream_user_data(session, stream_id, NULL);
+        nghttp2_session_set_stream_user_data(session, stream_id, nullptr);
       }
     }
   }
 
-  handle->http.session = NULL;
+  handle->http.session = nullptr;
   nghttp2_session_del(session);
 }

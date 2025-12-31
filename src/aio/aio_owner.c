@@ -20,7 +20,7 @@ u16 valk_owner_register(valk_aio_system_t *sys, const char *name, u8 type, void 
 
 const char* valk_owner_get_name(valk_aio_system_t *sys, u16 idx) {
   if (!sys || idx >= sys->owner_registry.count) {
-    return NULL;
+    return nullptr;
   }
   return sys->owner_registry.entries[idx].name;
 }

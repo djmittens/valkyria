@@ -369,6 +369,7 @@ void test_log_invalid_level_handling(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_log_set_level(VALK_LOG_TRACE);
+  // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
   valk_log((valk_log_level_e)99, "test.c", 1, "func", "invalid level message");
 
   VALK_PASS();
@@ -389,8 +390,8 @@ void test_log_set_all_levels(VALK_TEST_ARGS()) {
 void test_log_level_from_string_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  VALK_TEST_ASSERT(valk_log_level_from_string(NULL) == VALK_LOG_WARN,
-                   "NULL should return WARN");
+  VALK_TEST_ASSERT(valk_log_level_from_string(nullptr) == VALK_LOG_WARN,
+                   "nullptr should return WARN");
 
   VALK_PASS();
 }

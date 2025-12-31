@@ -410,7 +410,7 @@ static void test_request_with_custom_headers(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -436,6 +436,7 @@ static void test_request_with_custom_headers(VALK_TEST_ARGS()) {
 
   valk_http2_response_t *response = res->item;
   ASSERT_NOT_NULL(response);
+  // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - test macro continues after failure for cleanup
   ASSERT_NOT_NULL(response->body);
 
   valk_arc_release(res);
@@ -464,7 +465,7 @@ static void test_multiple_paths(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -518,7 +519,7 @@ static void test_concurrent_streams_same_connection(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -568,7 +569,7 @@ static void test_production_config(VALK_TEST_ARGS()) {
   ASSERT_EQ(res, 0);
 
   const char *err = valk_aio_system_config_validate(&cfg);
-  if (err != NULL) {
+  if (err != nullptr) {
     VALK_FAIL("production config validation failed: %s", err);
   }
 
@@ -590,7 +591,7 @@ static void test_connect_with_hostname(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -626,17 +627,17 @@ static void test_connect_with_hostname(VALK_TEST_ARGS()) {
 static void test_null_aio_system_accessors(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  ASSERT_TRUE(valk_aio_is_shutting_down(NULL));
+  ASSERT_TRUE(valk_aio_is_shutting_down(nullptr));
 
-  ASSERT_NULL(valk_aio_get_event_loop(NULL));
+  ASSERT_NULL(valk_aio_get_event_loop(nullptr));
 
-  const char *unknown_name = valk_aio_get_name(NULL);
+  const char *unknown_name = valk_aio_get_name(nullptr);
   ASSERT_TRUE(strcmp(unknown_name, "unknown") == 0);
 
-  valk_aio_set_name(NULL, "test");
+  valk_aio_set_name(nullptr, "test");
 
-  valk_aio_stop(NULL);
-  valk_aio_wait_for_shutdown(NULL);
+  valk_aio_stop(nullptr);
+  valk_aio_wait_for_shutdown(nullptr);
 
   VALK_PASS();
 }
@@ -645,16 +646,16 @@ static void test_null_aio_system_accessors(VALK_TEST_ARGS()) {
 static void test_null_metrics_accessors(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  ASSERT_NULL(valk_aio_get_metrics(NULL));
-  ASSERT_NULL(valk_aio_get_system_stats(NULL));
-  ASSERT_NULL(valk_aio_get_http_clients_registry(NULL));
-  ASSERT_NULL(valk_aio_get_gc_heap(NULL));
-  ASSERT_NULL(valk_aio_get_scratch_arena(NULL));
-  ASSERT_NULL(valk_aio_get_tcp_buffer_slab(NULL));
-  ASSERT_NULL(valk_aio_get_handle_slab(NULL));
-  ASSERT_NULL(valk_aio_get_stream_arenas_slab(NULL));
-  ASSERT_NULL(valk_aio_get_http_servers_slab(NULL));
-  ASSERT_NULL(valk_aio_get_http_clients_slab(NULL));
+  ASSERT_NULL(valk_aio_get_metrics(nullptr));
+  ASSERT_NULL(valk_aio_get_system_stats(nullptr));
+  ASSERT_NULL(valk_aio_get_http_clients_registry(nullptr));
+  ASSERT_NULL(valk_aio_get_gc_heap(nullptr));
+  ASSERT_NULL(valk_aio_get_scratch_arena(nullptr));
+  ASSERT_NULL(valk_aio_get_tcp_buffer_slab(nullptr));
+  ASSERT_NULL(valk_aio_get_handle_slab(nullptr));
+  ASSERT_NULL(valk_aio_get_stream_arenas_slab(nullptr));
+  ASSERT_NULL(valk_aio_get_http_servers_slab(nullptr));
+  ASSERT_NULL(valk_aio_get_http_clients_slab(nullptr));
 
   VALK_PASS();
 }
@@ -668,8 +669,8 @@ static void test_owner_registry(VALK_TEST_ARGS()) {
   ASSERT_EQ(valk_owner_get_count(sys), 0);
   ASSERT_NULL(valk_owner_get_name(sys, 0));
 
-  ASSERT_EQ(valk_owner_get_count(NULL), 0);
-  ASSERT_NULL(valk_owner_get_name(NULL, 0));
+  ASSERT_EQ(valk_owner_get_count(nullptr), 0);
+  ASSERT_NULL(valk_owner_get_name(nullptr, 0));
 
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
@@ -692,7 +693,7 @@ static void test_handle_diagnostics(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -729,11 +730,11 @@ static void test_handle_diagnostics(VALK_TEST_ARGS()) {
     }
   }
 
-  ASSERT_FALSE(valk_aio_get_handle_diag(NULL, 0, &diag));
+  ASSERT_FALSE(valk_aio_get_handle_diag(nullptr, 0, &diag));
   ASSERT_FALSE(valk_aio_get_handle_diag(sys, 99999, &diag));
-  ASSERT_FALSE(valk_aio_get_handle_diag(sys, 0, NULL));
+  ASSERT_FALSE(valk_aio_get_handle_diag(sys, 0, nullptr));
 
-  ASSERT_EQ(valk_aio_get_handle_kind(NULL, 0), VALK_DIAG_HNDL_EMPTY);
+  ASSERT_EQ(valk_aio_get_handle_kind(nullptr, 0), VALK_DIAG_HNDL_EMPTY);
   ASSERT_EQ(valk_aio_get_handle_kind(sys, 99999), VALK_DIAG_HNDL_EMPTY);
 
   valk_arc_release(res);
@@ -762,14 +763,14 @@ static void test_update_queue_stats(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
   (void)valk_aio_http2_server_get_port_from_ref(result);
 
   valk_aio_update_queue_stats(sys);
-  valk_aio_update_queue_stats(NULL);
+  valk_aio_update_queue_stats(nullptr);
 
 
   valk_aio_stop(sys);
@@ -785,7 +786,7 @@ static void test_update_loop_metrics(VALK_TEST_ARGS()) {
   ASSERT_NOT_NULL(sys);
 
   valk_aio_update_loop_metrics(sys);
-  valk_aio_update_loop_metrics(NULL);
+  valk_aio_update_loop_metrics(nullptr);
 
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
@@ -809,7 +810,7 @@ static void test_rapid_connect_disconnect(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -889,7 +890,7 @@ static void test_server_with_config(VALK_TEST_ARGS()) {
 
   valk_async_handle_t *handle = valk_aio_http2_listen_with_config(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt",
-      &handler, NULL, &srv_cfg);
+      &handler, nullptr, &srv_cfg);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -937,7 +938,7 @@ static void test_many_headers(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -1044,7 +1045,7 @@ static void test_post_request(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -1093,7 +1094,7 @@ static void test_put_request(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -1142,7 +1143,7 @@ static void test_delete_request(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -1190,7 +1191,7 @@ static void test_sequential_requests(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -1243,7 +1244,7 @@ static void test_parallel_requests_same_stream(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -1305,7 +1306,7 @@ static void test_multiple_clients_sequential(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -1362,7 +1363,7 @@ static void test_head_request(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -1410,7 +1411,7 @@ static void test_options_request(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -1458,7 +1459,7 @@ static void test_long_path(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -1514,7 +1515,7 @@ static void test_query_string(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -1576,14 +1577,14 @@ static void test_timer_alloc_free(VALK_TEST_ARGS()) {
 static void test_timer_null_safety(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_aio_timer_init(NULL);
-  valk_aio_timer_start(NULL, 0, 0, NULL);
-  valk_aio_timer_stop(NULL);
-  valk_aio_timer_close(NULL, NULL);
-  valk_aio_timer_set_data(NULL, NULL);
-  valk_aio_timer_free(NULL);
+  valk_aio_timer_init(nullptr);
+  valk_aio_timer_start(nullptr, 0, 0, nullptr);
+  valk_aio_timer_stop(nullptr);
+  valk_aio_timer_close(nullptr, nullptr);
+  valk_aio_timer_set_data(nullptr, nullptr);
+  valk_aio_timer_free(nullptr);
 
-  valk_aio_handle_t *timer = valk_aio_timer_alloc(NULL);
+  valk_aio_handle_t *timer = valk_aio_timer_alloc(nullptr);
   ASSERT_NULL(timer);
 
   VALK_PASS();
@@ -1714,7 +1715,7 @@ static void test_handle_diagnostics_all_kinds(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -1795,7 +1796,7 @@ static void test_handle_diag_edge_cases(VALK_TEST_ARGS()) {
   ASSERT_NOT_NULL(sys);
 
   valk_handle_diag_t diag;
-  ASSERT_FALSE(valk_aio_get_handle_diag(sys, 0, NULL));
+  ASSERT_FALSE(valk_aio_get_handle_diag(sys, 0, nullptr));
 
   valk_slab_t *handle_slab = valk_aio_get_handle_slab(sys);
   ASSERT_NOT_NULL(handle_slab);
@@ -1823,7 +1824,7 @@ static void test_multiple_timers(VALK_TEST_ARGS()) {
     timers[i] = valk_aio_timer_alloc(sys);
     ASSERT_NOT_NULL(timers[i]);
     valk_aio_timer_init(timers[i]);
-    valk_aio_timer_set_data(timers[i], (void*)(uptr)i);
+    valk_aio_timer_set_data(timers[i], (void*)(uptr)i);  // NOLINT(performance-no-int-to-ptr)
   }
 
   valk_slab_t *handle_slab = valk_aio_get_handle_slab(sys);
@@ -1916,7 +1917,7 @@ static void test_response_with_status(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -1940,6 +1941,7 @@ static void test_response_with_status(VALK_TEST_ARGS()) {
 
   valk_http2_response_t *response = res->item;
   ASSERT_NOT_NULL(response);
+  // NOLINTNEXTLINE(clang-analyzer-core.NullDereference) - test macro continues after failure for cleanup
   ASSERT_NOT_NULL(response->status);
 
   valk_arc_release(res);
@@ -1968,13 +1970,13 @@ static void test_localhost_hostname(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
   int port = valk_aio_http2_server_get_port_from_ref(result);
 
-  valk_future *fclient = valk_aio_http2_connect_host(sys, "localhost", port, NULL);
+  valk_future *fclient = valk_aio_http2_connect_host(sys, "localhost", port, nullptr);
   valk_arc_box *clientBox = valk_future_await(fclient);
   ASSERT_EQ(clientBox->type, VALK_SUC);
 
@@ -2016,7 +2018,7 @@ static void test_large_body_post(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2074,7 +2076,7 @@ static void test_many_parallel_clients(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2137,7 +2139,7 @@ static void __attribute__((unused)) test_many_streams_per_client(VALK_TEST_ARGS(
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2233,7 +2235,7 @@ static void __attribute__((unused)) test_burst_requests(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2291,7 +2293,7 @@ static void test_empty_body_post(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2339,7 +2341,7 @@ static void test_special_characters_in_path(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2388,7 +2390,7 @@ static void test_binary_body(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2455,7 +2457,7 @@ static void test_patch_request(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2505,7 +2507,7 @@ static void test_connection_metrics(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2553,7 +2555,7 @@ static void test_stream_metrics(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2619,7 +2621,7 @@ void test_backpressure_under_load(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2696,7 +2698,7 @@ void test_backpressure_event_driven_resume(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      srv_sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      srv_sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2756,7 +2758,7 @@ void test_abrupt_client_disconnect(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2806,7 +2808,7 @@ void test_rapid_client_disconnect_mid_request(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2867,7 +2869,7 @@ void test_multiple_parallel_streams_then_disconnect(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2925,7 +2927,7 @@ void test_large_concurrent_body_then_disconnect(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -2984,7 +2986,7 @@ void test_ssl_connection_state_transitions(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -3025,7 +3027,7 @@ void test_ssl_connection_state_transitions(VALK_TEST_ARGS()) {
 void test_connection_closing_state_handling(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  ASSERT_TRUE(valk_aio_http_connection_closing(NULL));
+  ASSERT_TRUE(valk_aio_http_connection_closing(nullptr));
 
   valk_aio_system_t *sys = valk_aio_start();
   ASSERT_NOT_NULL(sys);
@@ -3039,7 +3041,7 @@ void test_connection_closing_state_handling(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(handle);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 

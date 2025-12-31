@@ -58,7 +58,7 @@
       abort();                                                                \
     }                                                                         \
     size_t __len =                                                            \
-        snprintf(NULL, 0, "%s:%d || %s\n", __FILE__, __LINE__, (fmt));        \
+        snprintf(nullptr, 0, "%s:%d || %s\n", __FILE__, __LINE__, (fmt));        \
     char __efmt[++__len];                                                     \
     snprintf((__efmt), __len, "%s:%d || %s\n", __FILE__, __LINE__, (fmt));    \
     fprintf(stderr, (__efmt), ##__VA_ARGS__);                                 \
@@ -165,8 +165,8 @@ long valk_get_nanos(void);
 
 #define ASSERT_LVAL_TYPE(lval, expected_type)                                  \
   do {                                                                         \
-    if ((lval) == NULL) {                                                      \
-      VALK_FAIL("ASSERT_LVAL_TYPE: lval is NULL");                             \
+    if ((lval) == nullptr) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_TYPE: lval is nullptr");                             \
     } else if (LVAL_TYPE(lval) != (expected_type)) {                           \
       VALK_FAIL("ASSERT_LVAL_TYPE: expected type %d, got %d",                  \
                 (int)(expected_type), (int)LVAL_TYPE(lval));                   \
@@ -175,8 +175,8 @@ long valk_get_nanos(void);
 
 #define ASSERT_LVAL_NUM(lval, expected_num)                                    \
   do {                                                                         \
-    if ((lval) == NULL) {                                                      \
-      VALK_FAIL("ASSERT_LVAL_NUM: lval is NULL");                              \
+    if ((lval) == nullptr) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_NUM: lval is nullptr");                              \
     } else if (LVAL_TYPE(lval) != LVAL_NUM) {                                  \
       VALK_FAIL("ASSERT_LVAL_NUM: expected LVAL_NUM, got %d",                  \
                 (int)LVAL_TYPE(lval));                                         \
@@ -188,8 +188,8 @@ long valk_get_nanos(void);
 
 #define ASSERT_LVAL_ERROR(lval)                                                \
   do {                                                                         \
-    if ((lval) == NULL) {                                                      \
-      VALK_FAIL("ASSERT_LVAL_ERROR: lval is NULL");                            \
+    if ((lval) == nullptr) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_ERROR: lval is nullptr");                            \
     } else if (LVAL_TYPE(lval) != LVAL_ERR) {                                  \
       VALK_FAIL("ASSERT_LVAL_ERROR: expected LVAL_ERR, got %d",                \
                 (int)LVAL_TYPE(lval));                                         \
@@ -198,15 +198,15 @@ long valk_get_nanos(void);
 
 #define ASSERT_NOT_NULL(ptr)                                                   \
   do {                                                                         \
-    if ((ptr) == NULL) {                                                       \
-      VALK_FAIL("ASSERT_NOT_NULL: pointer is NULL");                           \
+    if ((ptr) == nullptr) {                                                       \
+      VALK_FAIL("ASSERT_NOT_NULL: pointer is nullptr");                           \
     }                                                                          \
   } while (0)
 
 #define ASSERT_NULL(ptr)                                                       \
   do {                                                                         \
-    if ((ptr) != NULL) {                                                       \
-      VALK_FAIL("ASSERT_NULL: pointer is not NULL: %p", (void *)(ptr));        \
+    if ((ptr) != nullptr) {                                                       \
+      VALK_FAIL("ASSERT_NULL: pointer is not nullptr: %p", (void *)(ptr));        \
     }                                                                          \
   } while (0)
 
@@ -276,9 +276,9 @@ long valk_get_nanos(void);
   do {                                                                         \
     const char *_str_a = (a);                                                  \
     const char *_str_b = (b);                                                  \
-    if (_str_a == NULL || _str_b == NULL) {                                    \
+    if (_str_a == nullptr || _str_b == nullptr) {                                    \
       if (_str_a != _str_b) {                                                  \
-        VALK_FAIL("ASSERT_STR_EQ: one string is NULL");                        \
+        VALK_FAIL("ASSERT_STR_EQ: one string is nullptr");                        \
       }                                                                        \
     } else if (strcmp(_str_a, _str_b) != 0) {                                  \
       VALK_FAIL("ASSERT_STR_EQ: expected \"%s\", got \"%s\"", _str_b, _str_a);  \
@@ -287,9 +287,9 @@ long valk_get_nanos(void);
 
 #define ASSERT_STR_CONTAINS(haystack, needle)                                  \
   do {                                                                         \
-    if ((haystack) == NULL || (needle) == NULL) {                              \
-      VALK_FAIL("ASSERT_STR_CONTAINS: NULL argument");                         \
-    } else if (strstr((haystack), (needle)) == NULL) {                         \
+    if ((haystack) == nullptr || (needle) == nullptr) {                              \
+      VALK_FAIL("ASSERT_STR_CONTAINS: nullptr argument");                         \
+    } else if (strstr((haystack), (needle)) == nullptr) {                         \
       VALK_FAIL("ASSERT_STR_CONTAINS: \"%s\" not found in \"%s\"",             \
                 (needle), (haystack));                                         \
     }                                                                          \
@@ -297,8 +297,8 @@ long valk_get_nanos(void);
 
 #define ASSERT_MEM_EQ(a, b, len)                                               \
   do {                                                                         \
-    if ((a) == NULL || (b) == NULL) {                                          \
-      VALK_FAIL("ASSERT_MEM_EQ: NULL argument");                               \
+    if ((a) == nullptr || (b) == nullptr) {                                          \
+      VALK_FAIL("ASSERT_MEM_EQ: nullptr argument");                               \
     } else if (memcmp((a), (b), (len)) != 0) {                                 \
       VALK_FAIL("ASSERT_MEM_EQ: memory regions differ");                       \
     }                                                                          \
@@ -324,14 +324,14 @@ long valk_get_nanos(void);
 
 #define ASSERT_LVAL_ERROR_MSG(lval, expected_substr)                           \
   do {                                                                         \
-    if ((lval) == NULL) {                                                      \
-      VALK_FAIL("ASSERT_LVAL_ERROR_MSG: lval is NULL");                        \
+    if ((lval) == nullptr) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_ERROR_MSG: lval is nullptr");                        \
     } else if (LVAL_TYPE(lval) != LVAL_ERR) {                                  \
       VALK_FAIL("ASSERT_LVAL_ERROR_MSG: expected LVAL_ERR, got %d",            \
                 (int)LVAL_TYPE(lval));                                         \
-    } else if ((lval)->err == NULL) {                                          \
-      VALK_FAIL("ASSERT_LVAL_ERROR_MSG: error message is NULL");               \
-    } else if (strstr((lval)->err, (expected_substr)) == NULL) {               \
+    } else if ((lval)->err == nullptr) {                                          \
+      VALK_FAIL("ASSERT_LVAL_ERROR_MSG: error message is nullptr");               \
+    } else if (strstr((lval)->err, (expected_substr)) == nullptr) {               \
       VALK_FAIL("ASSERT_LVAL_ERROR_MSG: \"%s\" not found in \"%s\"",           \
                 (expected_substr), (lval)->err);                               \
     }                                                                          \
@@ -339,13 +339,13 @@ long valk_get_nanos(void);
 
 #define ASSERT_LVAL_STR(lval, expected_str)                                    \
   do {                                                                         \
-    if ((lval) == NULL) {                                                      \
-      VALK_FAIL("ASSERT_LVAL_STR: lval is NULL");                              \
+    if ((lval) == nullptr) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_STR: lval is nullptr");                              \
     } else if (LVAL_TYPE(lval) != LVAL_STR) {                                  \
       VALK_FAIL("ASSERT_LVAL_STR: expected LVAL_STR, got %d",                  \
                 (int)LVAL_TYPE(lval));                                         \
-    } else if ((lval)->str == NULL) {                                          \
-      VALK_FAIL("ASSERT_LVAL_STR: str is NULL");                               \
+    } else if ((lval)->str == nullptr) {                                          \
+      VALK_FAIL("ASSERT_LVAL_STR: str is nullptr");                               \
     } else if (strcmp((lval)->str, (expected_str)) != 0) {                     \
       VALK_FAIL("ASSERT_LVAL_STR: expected \"%s\", got \"%s\"",                \
                 (expected_str), (lval)->str);                                  \
@@ -354,13 +354,13 @@ long valk_get_nanos(void);
 
 #define ASSERT_LVAL_SYM(lval, expected_sym)                                    \
   do {                                                                         \
-    if ((lval) == NULL) {                                                      \
-      VALK_FAIL("ASSERT_LVAL_SYM: lval is NULL");                              \
+    if ((lval) == nullptr) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_SYM: lval is nullptr");                              \
     } else if (LVAL_TYPE(lval) != LVAL_SYM) {                                  \
       VALK_FAIL("ASSERT_LVAL_SYM: expected LVAL_SYM, got %d",                  \
                 (int)LVAL_TYPE(lval));                                         \
-    } else if ((lval)->str == NULL) {                                          \
-      VALK_FAIL("ASSERT_LVAL_SYM: str is NULL");                               \
+    } else if ((lval)->str == nullptr) {                                          \
+      VALK_FAIL("ASSERT_LVAL_SYM: str is nullptr");                               \
     } else if (strcmp((lval)->str, (expected_sym)) != 0) {                     \
       VALK_FAIL("ASSERT_LVAL_SYM: expected \"%s\", got \"%s\"",                \
                 (expected_sym), (lval)->str);                                  \
@@ -369,8 +369,8 @@ long valk_get_nanos(void);
 
 #define ASSERT_LVAL_BOOL(lval, expected_bool)                                  \
   do {                                                                         \
-    if ((lval) == NULL) {                                                      \
-      VALK_FAIL("ASSERT_LVAL_BOOL: lval is NULL");                             \
+    if ((lval) == nullptr) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_BOOL: lval is nullptr");                             \
     } else if (LVAL_TYPE(lval) != LVAL_BOOL) {                                 \
       VALK_FAIL("ASSERT_LVAL_BOOL: expected LVAL_BOOL, got %d",                \
                 (int)LVAL_TYPE(lval));                                         \
@@ -382,8 +382,8 @@ long valk_get_nanos(void);
 
 #define ASSERT_LVAL_COUNT(lval, expected_count)                                \
   do {                                                                         \
-    if ((lval) == NULL) {                                                      \
-      VALK_FAIL("ASSERT_LVAL_COUNT: lval is NULL");                            \
+    if ((lval) == nullptr) {                                                      \
+      VALK_FAIL("ASSERT_LVAL_COUNT: lval is nullptr");                            \
     } else if ((lval)->count != (expected_count)) {                            \
       VALK_FAIL("ASSERT_LVAL_COUNT: expected %d children, got %d",             \
                 (int)(expected_count), (int)(lval)->count);                    \
@@ -415,7 +415,7 @@ typedef struct valk_mock_aio_context {
   ({                                                                           \
     valk_mock_aio_context_t *ctx = calloc(1, sizeof(valk_mock_aio_context_t)); \
     ctx->status_code = 0;                                                      \
-    ctx->response_body = NULL;                                                 \
+    ctx->response_body = nullptr;                                                 \
     ctx->response_body_len = 0;                                                \
     ctx->headers_sent = false;                                                 \
     ctx->body_sent = false;                                                    \
@@ -464,7 +464,7 @@ typedef struct valk_mock_http_response {
 
 #define ASSERT_HTTP_BODY_CONTAINS(resp, expected_substr)                       \
   do {                                                                         \
-    if ((resp)->body == NULL || strstr((resp)->body, expected_substr) == NULL) { \
+    if ((resp)->body == nullptr || strstr((resp)->body, expected_substr) == nullptr) { \
       VALK_FAIL("ASSERT_HTTP_BODY_CONTAINS: \"%s\" not found in body",         \
                 (expected_substr));                                            \
     }                                                                          \

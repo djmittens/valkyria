@@ -5,7 +5,7 @@
 #include <errno.h>
 
 int valk_mutex_init(valk_mutex_t* mutex) {
-  return pthread_mutex_init(mutex, NULL);
+  return pthread_mutex_init(mutex, nullptr);
 }
 
 int valk_mutex_destroy(valk_mutex_t* mutex) {
@@ -21,7 +21,7 @@ int valk_mutex_unlock(valk_mutex_t* mutex) {
 }
 
 int valk_cond_init(valk_cond_t* cond) {
-  return pthread_cond_init(cond, NULL);
+  return pthread_cond_init(cond, nullptr);
 }
 
 int valk_cond_destroy(valk_cond_t* cond) {

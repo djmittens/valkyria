@@ -93,7 +93,7 @@ static int tcp_connect(valk_io_tcp_t *tcp, const char *ip, int port, valk_io_con
   struct sockaddr_in addr;
   int r = uv_ip4_addr(ip, port, &addr);
   if (r) {
-    struct addrinfo hints, *res = NULL;
+    struct addrinfo hints, *res = nullptr;
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;

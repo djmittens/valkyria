@@ -73,7 +73,7 @@ void test_eval_counter(VALK_TEST_ARGS()) {
   valk_lenv_builtins(gc.env);
 
   u64 evals_before = 0;
-  valk_eval_metrics_get(&evals_before, NULL, NULL, NULL, NULL, NULL);
+  valk_eval_metrics_get(&evals_before, nullptr, nullptr, nullptr, nullptr, nullptr);
 
   // Evaluate a simple number (should increment eval counter)
   valk_lval_t* num = valk_lval_num(42);
@@ -81,7 +81,7 @@ void test_eval_counter(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Result should be a number");
 
   u64 evals_after = 0;
-  valk_eval_metrics_get(&evals_after, NULL, NULL, NULL, NULL, NULL);
+  valk_eval_metrics_get(&evals_after, nullptr, nullptr, nullptr, nullptr, nullptr);
 
   VALK_TEST_ASSERT(evals_after > evals_before,
                    "Eval counter should increment");
@@ -102,7 +102,7 @@ void test_builtin_calls(VALK_TEST_ARGS()) {
   valk_lenv_builtins(gc.env);
 
   u64 builtin_before = 0;
-  valk_eval_metrics_get(NULL, NULL, &builtin_before, NULL, NULL, NULL);
+  valk_eval_metrics_get(nullptr, nullptr, &builtin_before, nullptr, nullptr, nullptr);
 
   // Call a builtin function (e.g., +)
   valk_lval_t* plus_sym = valk_lval_sym("+");
@@ -117,7 +117,7 @@ void test_builtin_calls(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(result->num == 3, "Result should be 3");
 
   u64 builtin_after = 0;
-  valk_eval_metrics_get(NULL, NULL, &builtin_after, NULL, NULL, NULL);
+  valk_eval_metrics_get(nullptr, nullptr, &builtin_after, nullptr, nullptr, nullptr);
 
   VALK_TEST_ASSERT(builtin_after > builtin_before,
                    "Builtin call counter should increment");
@@ -138,7 +138,7 @@ void test_stack_depth(VALK_TEST_ARGS()) {
   valk_lenv_builtins(gc.env);
 
   u32 stack_before = 0;
-  valk_eval_metrics_get(NULL, NULL, NULL, &stack_before, NULL, NULL);
+  valk_eval_metrics_get(nullptr, nullptr, nullptr, &stack_before, nullptr, nullptr);
 
   // Create a simple nested function call: (+ (+ 1 2) 3)
   valk_lval_t* plus1 = valk_lval_sym("+");
@@ -157,7 +157,7 @@ void test_stack_depth(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(result->num == 6, "Result should be 6");
 
   u32 stack_after = 0;
-  valk_eval_metrics_get(NULL, NULL, NULL, &stack_after, NULL, NULL);
+  valk_eval_metrics_get(nullptr, nullptr, nullptr, &stack_after, nullptr, nullptr);
 
   VALK_TEST_ASSERT(stack_after > stack_before,
                    "Stack depth max should increase after nested calls");
@@ -178,7 +178,7 @@ void test_closure_counting(VALK_TEST_ARGS()) {
   valk_lenv_builtins(gc.env);
 
   u64 closures_before = 0;
-  valk_eval_metrics_get(NULL, NULL, NULL, NULL, &closures_before, NULL);
+  valk_eval_metrics_get(nullptr, nullptr, nullptr, nullptr, &closures_before, nullptr);
 
   // Create a lambda: \ {x} {x}
   valk_lval_t* param_x = valk_lval_sym("x");
@@ -192,7 +192,7 @@ void test_closure_counting(VALK_TEST_ARGS()) {
                    "Lambda should be a function");
 
   u64 closures_after = 0;
-  valk_eval_metrics_get(NULL, NULL, NULL, NULL, &closures_after, NULL);
+  valk_eval_metrics_get(nullptr, nullptr, nullptr, nullptr, &closures_after, nullptr);
 
   VALK_TEST_ASSERT(closures_after > closures_before,
                    "Closure counter should increment");
@@ -213,7 +213,7 @@ void test_env_lookups(VALK_TEST_ARGS()) {
   valk_lenv_builtins(gc.env);
 
   u64 lookups_before = 0;
-  valk_eval_metrics_get(NULL, NULL, NULL, NULL, NULL, &lookups_before);
+  valk_eval_metrics_get(nullptr, nullptr, nullptr, nullptr, nullptr, &lookups_before);
 
   // Lookup a symbol (e.g., +)
   valk_lval_t* plus_sym = valk_lval_sym("+");
@@ -222,7 +222,7 @@ void test_env_lookups(VALK_TEST_ARGS()) {
                    "Result should be a function");
 
   u64 lookups_after = 0;
-  valk_eval_metrics_get(NULL, NULL, NULL, NULL, NULL, &lookups_after);
+  valk_eval_metrics_get(nullptr, nullptr, nullptr, nullptr, nullptr, &lookups_after);
 
   VALK_TEST_ASSERT(lookups_after > lookups_before,
                    "Lookup counter should increment");

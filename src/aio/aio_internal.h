@@ -420,9 +420,10 @@ static inline bool __is_pending_stream(void *user_data) {
   return user_data && ((uptr)user_data & (1ULL << 63));
 }
 
+// Tagged pointer: high bit marks pending stream, clear it to get real pointer
 static inline pending_stream_t *__get_pending_stream(void *user_data) {
-  if (!__is_pending_stream(user_data)) return NULL;
-  return (pending_stream_t *)((uptr)user_data & ~(1ULL << 63));
+  if (!__is_pending_stream(user_data)) return nullptr;
+  return (pending_stream_t *)((uptr)user_data & ~(1ULL << 63));  // NOLINT(performance-no-int-to-ptr)
 }
 
 #define VALK_HANDLE_VALID(h) \
@@ -432,13 +433,13 @@ static inline pending_stream_t *__get_pending_stream(void *user_data) {
   VALK_ASSERT(VALK_HANDLE_VALID(h), "Invalid handle magic: %x", (h) ? (h)->magic : 0)
 
 #define VALK_ASSERT_SESSION(conn) \
-  VALK_ASSERT((conn)->http.session != NULL, "NULL session on connection")
+  VALK_ASSERT((conn)->http.session != nullptr, "nullptr session on connection")
 
 #define VALK_ASSERT_SERVER(conn) \
-  VALK_ASSERT((conn)->http.server != NULL, "NULL server on connection")
+  VALK_ASSERT((conn)->http.server != nullptr, "nullptr server on connection")
 
 #define VALK_ASSERT_SYS(conn) \
-  VALK_ASSERT((conn)->http.server && (conn)->http.server->sys, "NULL sys on connection")
+  VALK_ASSERT((conn)->http.server && (conn)->http.server->sys, "nullptr sys on connection")
 
 #define GUARD_CONN_CLOSING(conn) \
   do { if (__conn_is_closing(conn)) return; } while(0)

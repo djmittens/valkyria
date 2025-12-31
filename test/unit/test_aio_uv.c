@@ -262,13 +262,13 @@ void test_aio_active_system_initially_null(VALK_TEST_ARGS()) {
 void test_owner_registry_null_system(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  u16 idx = valk_owner_register(NULL, "test", 0, NULL);
+  u16 idx = valk_owner_register(nullptr, "test", 0, nullptr);
   ASSERT_EQ(idx, UINT16_MAX);
 
-  const char *name = valk_owner_get_name(NULL, 0);
+  const char *name = valk_owner_get_name(nullptr, 0);
   ASSERT_NULL(name);
 
-  size_t count = valk_owner_get_count(NULL);
+  size_t count = valk_owner_get_count(nullptr);
   ASSERT_EQ(count, 0);
 
   VALK_PASS();
@@ -277,7 +277,7 @@ void test_owner_registry_null_system(VALK_TEST_ARGS()) {
 void test_aio_get_metrics_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_aio_metrics_t *metrics = valk_aio_get_metrics(NULL);
+  valk_aio_metrics_t *metrics = valk_aio_get_metrics(nullptr);
   ASSERT_NULL(metrics);
 
   VALK_PASS();
@@ -286,7 +286,7 @@ void test_aio_get_metrics_null(VALK_TEST_ARGS()) {
 void test_aio_get_system_stats_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_aio_system_stats_t *stats = valk_aio_get_system_stats(NULL);
+  valk_aio_system_stats_t *stats = valk_aio_get_system_stats(nullptr);
   ASSERT_NULL(stats);
 
   VALK_PASS();
@@ -295,7 +295,7 @@ void test_aio_get_system_stats_null(VALK_TEST_ARGS()) {
 void test_aio_get_http_clients_registry_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_http_clients_registry_t *registry = valk_aio_get_http_clients_registry(NULL);
+  valk_http_clients_registry_t *registry = valk_aio_get_http_clients_registry(nullptr);
   ASSERT_NULL(registry);
 
   VALK_PASS();
@@ -304,7 +304,7 @@ void test_aio_get_http_clients_registry_null(VALK_TEST_ARGS()) {
 void test_aio_get_gc_heap_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_aio_get_gc_heap(NULL);
+  valk_gc_malloc_heap_t *heap = valk_aio_get_gc_heap(nullptr);
   ASSERT_NULL(heap);
 
   VALK_PASS();
@@ -313,7 +313,7 @@ void test_aio_get_gc_heap_null(VALK_TEST_ARGS()) {
 void test_aio_get_scratch_arena_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_mem_arena_t *arena = valk_aio_get_scratch_arena(NULL);
+  valk_mem_arena_t *arena = valk_aio_get_scratch_arena(nullptr);
   ASSERT_NULL(arena);
 
   VALK_PASS();
@@ -322,7 +322,7 @@ void test_aio_get_scratch_arena_null(VALK_TEST_ARGS()) {
 void test_aio_get_tcp_buffer_slab_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_slab_t *slab = valk_aio_get_tcp_buffer_slab(NULL);
+  valk_slab_t *slab = valk_aio_get_tcp_buffer_slab(nullptr);
   ASSERT_NULL(slab);
 
   VALK_PASS();
@@ -332,7 +332,7 @@ void test_aio_get_tcp_buffer_slab_null(VALK_TEST_ARGS()) {
 void test_aio_get_event_loop_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  struct uv_loop_s *loop = valk_aio_get_event_loop(NULL);
+  struct uv_loop_s *loop = valk_aio_get_event_loop(nullptr);
   ASSERT_NULL(loop);
 
   VALK_PASS();
@@ -341,7 +341,7 @@ void test_aio_get_event_loop_null(VALK_TEST_ARGS()) {
 void test_aio_get_name_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  const char *name = valk_aio_get_name(NULL);
+  const char *name = valk_aio_get_name(nullptr);
   ASSERT_STR_EQ(name, "unknown");
 
   VALK_PASS();
@@ -350,14 +350,14 @@ void test_aio_get_name_null(VALK_TEST_ARGS()) {
 void test_aio_set_name_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_aio_set_name(NULL, "test");
+  valk_aio_set_name(nullptr, "test");
   VALK_PASS();
 }
 
 void test_aio_is_shutting_down_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  bool result = valk_aio_is_shutting_down(NULL);
+  bool result = valk_aio_is_shutting_down(nullptr);
   ASSERT_TRUE(result);
 
   VALK_PASS();

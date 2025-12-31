@@ -48,7 +48,7 @@ void test_metrics_v2_reinit(VALK_TEST_ARGS()) {
 
     valk_label_set_v2_t labels = {0};
     valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", "Test", &labels);
-    VALK_TEST_ASSERT(c != NULL, "Counter should be created");
+    VALK_TEST_ASSERT(c != nullptr, "Counter should be created");
 
     valk_counter_v2_inc(c);
     VALK_TEST_ASSERT(atomic_load(&c->value) == 1, "Counter value should be 1");
@@ -71,7 +71,7 @@ void test_counter_v2_create(VALK_TEST_ARGS()) {
   valk_label_set_v2_t labels = {0};
   valk_counter_v2_t *c = valk_counter_get_or_create("requests_total", "Total requests", &labels);
 
-  VALK_TEST_ASSERT(c != NULL, "Counter should be created");
+  VALK_TEST_ASSERT(c != nullptr, "Counter should be created");
   VALK_TEST_ASSERT(atomic_load(&g_metrics.counter_count) == 1,
                    "counter_count should be 1");
   VALK_TEST_ASSERT(atomic_load(&c->value) == 0, "Initial value should be 0");
@@ -88,8 +88,8 @@ void test_counter_v2_inc(VALK_TEST_ARGS()) {
   valk_metrics_registry_init();
 
   valk_label_set_v2_t labels = {0};
-  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", NULL, &labels);
-  VALK_TEST_ASSERT(c != NULL, "Counter should be created");
+  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", nullptr, &labels);
+  VALK_TEST_ASSERT(c != nullptr, "Counter should be created");
 
   // Test increment
   valk_counter_v2_inc(c);
@@ -108,8 +108,8 @@ void test_counter_v2_add(VALK_TEST_ARGS()) {
   valk_metrics_registry_init();
 
   valk_label_set_v2_t labels = {0};
-  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", NULL, &labels);
-  VALK_TEST_ASSERT(c != NULL, "Counter should be created");
+  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", nullptr, &labels);
+  VALK_TEST_ASSERT(c != nullptr, "Counter should be created");
 
   // Test add
   valk_counter_v2_add(c, 10);
@@ -140,7 +140,7 @@ void test_counter_v2_labels(VALK_TEST_ARGS()) {
   };
 
   valk_counter_v2_t *c1 = valk_counter_get_or_create("http_requests", "HTTP requests", &labels1);
-  VALK_TEST_ASSERT(c1 != NULL, "Counter with labels should be created");
+  VALK_TEST_ASSERT(c1 != nullptr, "Counter with labels should be created");
   VALK_TEST_ASSERT(c1->labels.count == 2, "Should have 2 labels");
 
   valk_counter_v2_inc(c1);
@@ -156,7 +156,7 @@ void test_counter_v2_labels(VALK_TEST_ARGS()) {
   };
 
   valk_counter_v2_t *c2 = valk_counter_get_or_create("http_requests", "HTTP requests", &labels2);
-  VALK_TEST_ASSERT(c2 != NULL && c2 != c1,
+  VALK_TEST_ASSERT(c2 != nullptr && c2 != c1,
                    "Different labels should create different counter");
   VALK_TEST_ASSERT(atomic_load(&c2->value) == 0, "New counter value should be 0");
 
@@ -206,7 +206,7 @@ void test_gauge_v2_create(VALK_TEST_ARGS()) {
   valk_label_set_v2_t labels = {0};
   valk_gauge_v2_t *g = valk_gauge_get_or_create("memory_bytes", "Memory usage", &labels);
 
-  VALK_TEST_ASSERT(g != NULL, "Gauge should be created");
+  VALK_TEST_ASSERT(g != nullptr, "Gauge should be created");
   VALK_TEST_ASSERT(atomic_load(&g_metrics.gauge_count) == 1,
                    "gauge_count should be 1");
   VALK_TEST_ASSERT(atomic_load(&g->value) == 0, "Initial value should be 0");
@@ -221,8 +221,8 @@ void test_gauge_v2_set_inc_dec(VALK_TEST_ARGS()) {
   valk_metrics_registry_init();
 
   valk_label_set_v2_t labels = {0};
-  valk_gauge_v2_t *g = valk_gauge_get_or_create("test_gauge", NULL, &labels);
-  VALK_TEST_ASSERT(g != NULL, "Gauge should be created");
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("test_gauge", nullptr, &labels);
+  VALK_TEST_ASSERT(g != nullptr, "Gauge should be created");
 
   // Test set
   valk_gauge_v2_set(g, 100);
@@ -266,7 +266,7 @@ void test_histogram_v2_create(VALK_TEST_ARGS()) {
   valk_histogram_v2_t *h = valk_histogram_get_or_create(
       "request_duration", "Request duration", bounds, 4, &labels);
 
-  VALK_TEST_ASSERT(h != NULL, "Histogram should be created");
+  VALK_TEST_ASSERT(h != nullptr, "Histogram should be created");
   VALK_TEST_ASSERT(h->bucket_count == 4, "Should have 4 buckets");
   VALK_TEST_ASSERT(atomic_load(&g_metrics.histogram_count) == 1,
                    "histogram_count should be 1");
@@ -289,8 +289,8 @@ void test_histogram_v2_observe(VALK_TEST_ARGS()) {
   double bounds[] = {0.1, 0.5, 1.0, 5.0};
   valk_label_set_v2_t labels = {0};
   valk_histogram_v2_t *h = valk_histogram_get_or_create(
-      "request_duration", NULL, bounds, 4, &labels);
-  VALK_TEST_ASSERT(h != NULL, "Histogram should be created");
+      "request_duration", nullptr, bounds, 4, &labels);
+  VALK_TEST_ASSERT(h != nullptr, "Histogram should be created");
 
   // Initial state
   VALK_TEST_ASSERT(atomic_load(&h->count) == 0, "Initial count should be 0");
@@ -338,7 +338,7 @@ void test_histogram_v2_custom_buckets(VALK_TEST_ARGS()) {
   valk_histogram_v2_t *h = valk_histogram_get_or_create(
       "latency", "Latency distribution", bounds, 10, &labels);
 
-  VALK_TEST_ASSERT(h != NULL, "Histogram should be created");
+  VALK_TEST_ASSERT(h != nullptr, "Histogram should be created");
   VALK_TEST_ASSERT(h->bucket_count == 10, "Should have 10 buckets");
 
   // Observe some values
@@ -366,7 +366,7 @@ void test_delta_snapshot_init_free(VALK_TEST_ARGS()) {
   valk_delta_snapshot_init(&snap);
 
   // Implementation pre-allocates with default capacity
-  VALK_TEST_ASSERT(snap.deltas != NULL, "Deltas should be allocated initially");
+  VALK_TEST_ASSERT(snap.deltas != nullptr, "Deltas should be allocated initially");
   VALK_TEST_ASSERT(snap.delta_count == 0, "delta_count should be 0");
   VALK_TEST_ASSERT(snap.delta_capacity == 256, "delta_capacity should be 256 (default)");
 
@@ -381,7 +381,7 @@ void test_delta_counter_change(VALK_TEST_ARGS()) {
 
   // Create and increment counter
   valk_label_set_v2_t labels = {0};
-  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", NULL, &labels);
+  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", nullptr, &labels);
   valk_counter_v2_add(c, 10);
 
   // Collect delta
@@ -404,7 +404,7 @@ void test_delta_gauge_threshold(VALK_TEST_ARGS()) {
 
   // Create gauge and set value
   valk_label_set_v2_t labels = {0};
-  valk_gauge_v2_t *g = valk_gauge_get_or_create("test_gauge", NULL, &labels);
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("test_gauge", nullptr, &labels);
   valk_gauge_v2_set(g, 100);
 
   // Collect delta
@@ -429,7 +429,7 @@ void test_delta_histogram_buckets(VALK_TEST_ARGS()) {
   double bounds[] = {0.1, 1.0};
   valk_label_set_v2_t labels = {0};
   valk_histogram_v2_t *h = valk_histogram_get_or_create(
-      "test_histogram", NULL, bounds, 2, &labels);
+      "test_histogram", nullptr, bounds, 2, &labels);
 
   valk_histogram_v2_observe_us(h, 50000);  // 0.05s
   valk_histogram_v2_observe_us(h, 500000); // 0.5s
@@ -458,10 +458,10 @@ void test_delta_to_json(VALK_TEST_ARGS()) {
 
   // Create some metrics
   valk_label_set_v2_t labels = {0};
-  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", NULL, &labels);
+  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", nullptr, &labels);
   valk_counter_v2_add(c, 42);
 
-  valk_gauge_v2_t *g = valk_gauge_get_or_create("test_gauge", NULL, &labels);
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("test_gauge", nullptr, &labels);
   valk_gauge_v2_set(g, 100);
 
   // Collect delta
@@ -477,8 +477,8 @@ void test_delta_to_json(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(len < sizeof(buf), "JSON output should fit in buffer");
 
   // Verify JSON contains expected fields
-  VALK_TEST_ASSERT(strstr(buf, "\"ts\"") != NULL, "Should contain timestamp");
-  VALK_TEST_ASSERT(strstr(buf, "\"deltas\"") != NULL, "Should contain deltas array");
+  VALK_TEST_ASSERT(strstr(buf, "\"ts\"") != nullptr, "Should contain timestamp");
+  VALK_TEST_ASSERT(strstr(buf, "\"deltas\"") != nullptr, "Should contain deltas array");
 
   valk_delta_snapshot_free(&snap);
   valk_metrics_registry_destroy();
@@ -492,7 +492,7 @@ void test_delta_to_sse(VALK_TEST_ARGS()) {
 
   // Create metric
   valk_label_set_v2_t labels = {0};
-  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", NULL, &labels);
+  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", nullptr, &labels);
   valk_counter_v2_add(c, 10);
 
   // Collect delta
@@ -505,8 +505,8 @@ void test_delta_to_sse(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_sse(&snap, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "SSE output should be non-empty");
-  VALK_TEST_ASSERT(strstr(buf, "event:") != NULL, "Should contain event type");
-  VALK_TEST_ASSERT(strstr(buf, "data:") != NULL, "Should contain data field");
+  VALK_TEST_ASSERT(strstr(buf, "event:") != nullptr, "Should contain event type");
+  VALK_TEST_ASSERT(strstr(buf, "data:") != nullptr, "Should contain data field");
 
   valk_delta_snapshot_free(&snap);
   valk_metrics_registry_destroy();
@@ -555,8 +555,8 @@ void test_metric_active_flag(VALK_TEST_ARGS()) {
   valk_metrics_registry_init();
 
   valk_label_set_v2_t labels = {0};
-  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", NULL, &labels);
-  VALK_TEST_ASSERT(c != NULL, "Counter should be created");
+  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", nullptr, &labels);
+  VALK_TEST_ASSERT(c != nullptr, "Counter should be created");
 
   // Verify active flag is set
   VALK_TEST_ASSERT(atomic_load(&c->active) == true, "Counter should be active");
@@ -574,8 +574,8 @@ void test_metric_persistent(VALK_TEST_ARGS()) {
   valk_metrics_registry_init();
 
   valk_label_set_v2_t labels = {0};
-  valk_counter_v2_t *c = valk_counter_get_or_create("persistent_counter", NULL, &labels);
-  VALK_TEST_ASSERT(c != NULL, "Counter should be created");
+  valk_counter_v2_t *c = valk_counter_get_or_create("persistent_counter", nullptr, &labels);
+  VALK_TEST_ASSERT(c != nullptr, "Counter should be created");
   VALK_TEST_ASSERT(c->evictable == true, "Should be evictable initially");
 
   // Mark as persistent
@@ -583,13 +583,13 @@ void test_metric_persistent(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(c->evictable == false, "Should be non-evictable after set_persistent");
 
   // Create persistent gauge
-  valk_gauge_v2_t *g = valk_gauge_get_or_create("persistent_gauge", NULL, &labels);
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("persistent_gauge", nullptr, &labels);
   valk_gauge_set_persistent(g);
   VALK_TEST_ASSERT(g->evictable == false, "Gauge should be non-evictable");
 
   // Create persistent histogram
   double bounds[] = {0.1, 1.0};
-  valk_histogram_v2_t *h = valk_histogram_get_or_create("persistent_hist", NULL, bounds, 2, &labels);
+  valk_histogram_v2_t *h = valk_histogram_get_or_create("persistent_hist", nullptr, bounds, 2, &labels);
   valk_histogram_set_persistent(h);
   VALK_TEST_ASSERT(h->evictable == false, "Histogram should be non-evictable");
 
@@ -605,7 +605,7 @@ void test_metric_last_updated(VALK_TEST_ARGS()) {
   valk_label_set_v2_t labels = {0};
 
   // Create counter and verify initial timestamp
-  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", NULL, &labels);
+  valk_counter_v2_t *c = valk_counter_get_or_create("test_counter", nullptr, &labels);
   u64 ts1 = atomic_load(&c->last_updated_us);
   VALK_TEST_ASSERT(ts1 > 0, "Counter should have non-zero timestamp on creation");
 
@@ -616,7 +616,7 @@ void test_metric_last_updated(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(ts2 >= ts1, "Timestamp should increase after update");
 
   // Test gauge timestamp update
-  valk_gauge_v2_t *g = valk_gauge_get_or_create("test_gauge", NULL, &labels);
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("test_gauge", nullptr, &labels);
   u64 gts1 = atomic_load(&g->last_updated_us);
   valk_gauge_v2_set(g, 42);
   u64 gts2 = atomic_load(&g->last_updated_us);
@@ -634,7 +634,7 @@ void test_eviction_no_stale_metrics(VALK_TEST_ARGS()) {
   valk_label_set_v2_t labels = {0};
 
   // Create a fresh metric
-  valk_counter_v2_t *c = valk_counter_get_or_create("fresh_counter", NULL, &labels);
+  valk_counter_v2_t *c = valk_counter_get_or_create("fresh_counter", nullptr, &labels);
   valk_counter_v2_inc(c);
 
   // Try to evict - should evict 0 since metric is fresh
@@ -654,7 +654,7 @@ void test_eviction_persistent_protected(VALK_TEST_ARGS()) {
   valk_label_set_v2_t labels = {0};
 
   // Create a persistent metric
-  valk_counter_v2_t *c = valk_counter_get_or_create("protected_counter", NULL, &labels);
+  valk_counter_v2_t *c = valk_counter_get_or_create("protected_counter", nullptr, &labels);
   valk_counter_set_persistent(c);
 
   // Even with very old timestamp (manually set for test), persistent should not evict
@@ -677,7 +677,7 @@ void test_metric_generation(VALK_TEST_ARGS()) {
   valk_label_set_v2_t labels = {0};
 
   // Create first metric
-  valk_counter_v2_t *c1 = valk_counter_get_or_create("gen_counter", NULL, &labels);
+  valk_counter_v2_t *c1 = valk_counter_get_or_create("gen_counter", nullptr, &labels);
   u32 gen1 = atomic_load(&c1->generation);
   VALK_TEST_ASSERT(gen1 >= 1, "Generation should be at least 1 after creation");
 
@@ -693,7 +693,7 @@ void test_handle_create_deref(VALK_TEST_ARGS()) {
   valk_label_set_v2_t labels = {0};
 
   // Create counter and get handle
-  valk_counter_v2_t *c = valk_counter_get_or_create("handle_test", NULL, &labels);
+  valk_counter_v2_t *c = valk_counter_get_or_create("handle_test", nullptr, &labels);
   valk_metric_handle_t handle = valk_counter_handle(c);
 
   VALK_TEST_ASSERT(handle.slot != VALK_INVALID_SLOT, "Handle slot should be valid");
@@ -704,14 +704,14 @@ void test_handle_create_deref(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(c2 == c, "Dereferenced pointer should match original");
 
   // Test gauge handle
-  valk_gauge_v2_t *g = valk_gauge_get_or_create("gauge_handle", NULL, &labels);
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("gauge_handle", nullptr, &labels);
   valk_metric_handle_t gh = valk_gauge_handle(g);
   valk_gauge_v2_t *g2 = valk_gauge_deref(gh);
   VALK_TEST_ASSERT(g2 == g, "Gauge dereference should match original");
 
   // Test histogram handle
   double bounds[] = {0.1, 1.0};
-  valk_histogram_v2_t *h = valk_histogram_get_or_create("hist_handle", NULL, bounds, 2, &labels);
+  valk_histogram_v2_t *h = valk_histogram_get_or_create("hist_handle", nullptr, bounds, 2, &labels);
   valk_metric_handle_t hh = valk_histogram_handle(h);
   valk_histogram_v2_t *h2 = valk_histogram_deref(hh);
   VALK_TEST_ASSERT(h2 == h, "Histogram dereference should match original");
@@ -725,19 +725,19 @@ void test_handle_invalid(VALK_TEST_ARGS()) {
 
   valk_metrics_registry_init();
 
-  // Invalid handle should return NULL
+  // Invalid handle should return nullptr
   valk_metric_handle_t invalid = VALK_HANDLE_INVALID;
-  VALK_TEST_ASSERT(valk_counter_deref(invalid) == NULL,
-                   "Invalid counter handle should return NULL");
-  VALK_TEST_ASSERT(valk_gauge_deref(invalid) == NULL,
-                   "Invalid gauge handle should return NULL");
-  VALK_TEST_ASSERT(valk_histogram_deref(invalid) == NULL,
-                   "Invalid histogram handle should return NULL");
+  VALK_TEST_ASSERT(valk_counter_deref(invalid) == nullptr,
+                   "Invalid counter handle should return nullptr");
+  VALK_TEST_ASSERT(valk_gauge_deref(invalid) == nullptr,
+                   "Invalid gauge handle should return nullptr");
+  VALK_TEST_ASSERT(valk_histogram_deref(invalid) == nullptr,
+                   "Invalid histogram handle should return nullptr");
 
-  // Handle for NULL pointer
-  valk_metric_handle_t null_handle = valk_counter_handle(NULL);
+  // Handle for nullptr pointer
+  valk_metric_handle_t null_handle = valk_counter_handle(nullptr);
   VALK_TEST_ASSERT(null_handle.slot == VALK_INVALID_SLOT,
-                   "NULL counter should produce invalid handle");
+                   "nullptr counter should produce invalid handle");
 
   valk_metrics_registry_destroy();
   VALK_PASS();
@@ -757,8 +757,8 @@ void test_eviction_slot_reuse(VALK_TEST_ARGS()) {
   };
 
   // Create and immediately age a metric
-  valk_counter_v2_t *c1 = valk_counter_get_or_create("reuse_test", NULL, &labels1);
-  VALK_TEST_ASSERT(c1 != NULL, "Counter should be created");
+  valk_counter_v2_t *c1 = valk_counter_get_or_create("reuse_test", nullptr, &labels1);
+  VALK_TEST_ASSERT(c1 != nullptr, "Counter should be created");
   size_t initial_count = atomic_load(&g_metrics.counter_count);
 
   // Wait a tiny bit to make the metric "stale"
@@ -780,8 +780,8 @@ void test_eviction_slot_reuse(VALK_TEST_ARGS()) {
     .labels = {{.key = "id", .value = "2"}},
     .count = 1
   };
-  valk_counter_v2_t *c2 = valk_counter_get_or_create("reuse_test2", NULL, &labels2);
-  VALK_TEST_ASSERT(c2 != NULL, "New counter should be created");
+  valk_counter_v2_t *c2 = valk_counter_get_or_create("reuse_test2", nullptr, &labels2);
+  VALK_TEST_ASSERT(c2 != nullptr, "New counter should be created");
 
   // Counter count should not have increased if slot was reused
   // (or only increased by 1 if free list was used for reuse)
@@ -808,14 +808,14 @@ void test_pool_metrics_init(VALK_TEST_ARGS()) {
   bool ok = valk_pool_metrics_init(&pm, "test_pool");
 
   VALK_TEST_ASSERT(ok == true, "Pool metrics init should succeed");
-  VALK_TEST_ASSERT(pm.pool_name != NULL, "Pool name should be set");
+  VALK_TEST_ASSERT(pm.pool_name != nullptr, "Pool name should be set");
   VALK_TEST_ASSERT(strcmp(pm.pool_name, "test_pool") == 0, "Pool name should match");
 
   // All metrics should be created
-  VALK_TEST_ASSERT(pm.used != NULL, "Used gauge should be created");
-  VALK_TEST_ASSERT(pm.total != NULL, "Total gauge should be created");
-  VALK_TEST_ASSERT(pm.peak != NULL, "Peak gauge should be created");
-  VALK_TEST_ASSERT(pm.overflow != NULL, "Overflow counter should be created");
+  VALK_TEST_ASSERT(pm.used != nullptr, "Used gauge should be created");
+  VALK_TEST_ASSERT(pm.total != nullptr, "Total gauge should be created");
+  VALK_TEST_ASSERT(pm.peak != nullptr, "Peak gauge should be created");
+  VALK_TEST_ASSERT(pm.overflow != nullptr, "Overflow counter should be created");
 
   // Metrics should be persistent (non-evictable)
   VALK_TEST_ASSERT(pm.used->evictable == false, "Used gauge should be persistent");
@@ -838,7 +838,7 @@ void test_pool_metrics_init_custom(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(ok == true, "Custom pool metrics init should succeed");
 
   // Verify metric names contain custom prefix
-  VALK_TEST_ASSERT(strstr(pm.used->name, "slab") != NULL ||
+  VALK_TEST_ASSERT(strstr(pm.used->name, "slab") != nullptr ||
                    strcmp(pm.used->name, "slab_used") == 0,
                    "Used metric should have custom prefix");
 
@@ -956,18 +956,18 @@ void test_pool_metrics_null_safety(VALK_TEST_ARGS()) {
 
   valk_metrics_registry_init();
 
-  // Test NULL handling
-  bool ok = valk_pool_metrics_init(NULL, "test");
-  VALK_TEST_ASSERT(ok == false, "Init with NULL metrics should fail");
+  // Test nullptr handling
+  bool ok = valk_pool_metrics_init(nullptr, "test");
+  VALK_TEST_ASSERT(ok == false, "Init with nullptr metrics should fail");
 
   valk_pool_metrics_t pm;
-  ok = valk_pool_metrics_init(&pm, NULL);
-  VALK_TEST_ASSERT(ok == false, "Init with NULL name should fail");
+  ok = valk_pool_metrics_init(&pm, nullptr);
+  VALK_TEST_ASSERT(ok == false, "Init with nullptr name should fail");
 
-  // Update with NULL should not crash
-  valk_pool_metrics_update(NULL, 0, 0, 0, 0);
-  valk_pool_metrics_update_slab(NULL, 0, 0, 0, 0);
-  valk_pool_metrics_update_arena(NULL, 0, 0, 0, 0);
+  // Update with nullptr should not crash
+  valk_pool_metrics_update(nullptr, 0, 0, 0, 0);
+  valk_pool_metrics_update_slab(nullptr, 0, 0, 0, 0);
+  valk_pool_metrics_update_arena(nullptr, 0, 0, 0, 0);
 
   // Should reach here without crashing
   valk_metrics_registry_destroy();
@@ -1018,7 +1018,7 @@ static void *counter_increment_thread(void *arg) {
     valk_counter_v2_inc(ctx->counter);
   }
 
-  return NULL;
+  return nullptr;
 }
 
 void test_counter_concurrent_inc(VALK_TEST_ARGS()) {
@@ -1027,8 +1027,8 @@ void test_counter_concurrent_inc(VALK_TEST_ARGS()) {
   valk_metrics_registry_init();
 
   valk_label_set_v2_t labels = {0};
-  valk_counter_v2_t *c = valk_counter_get_or_create("concurrent_counter", NULL, &labels);
-  VALK_TEST_ASSERT(c != NULL, "Counter should be created");
+  valk_counter_v2_t *c = valk_counter_get_or_create("concurrent_counter", nullptr, &labels);
+  VALK_TEST_ASSERT(c != nullptr, "Counter should be created");
 
   const int NUM_THREADS = 4;
   const int ITERATIONS = 10000;
@@ -1036,11 +1036,11 @@ void test_counter_concurrent_inc(VALK_TEST_ARGS()) {
   thread_test_ctx_t ctx = {.counter = c, .iterations = ITERATIONS};
 
   for (int i = 0; i < NUM_THREADS; i++) {
-    pthread_create(&threads[i], NULL, counter_increment_thread, &ctx);
+    pthread_create(&threads[i], nullptr, counter_increment_thread, &ctx);
   }
 
   for (int i = 0; i < NUM_THREADS; i++) {
-    pthread_join(threads[i], NULL);
+    pthread_join(threads[i], nullptr);
   }
 
   u64 expected = NUM_THREADS * ITERATIONS;
@@ -1064,11 +1064,11 @@ void test_registry_stats_json_small_buffer(VALK_TEST_ARGS()) {
   size_t len = valk_registry_stats_to_json(&stats, tiny_buf, sizeof(tiny_buf));
   VALK_TEST_ASSERT(len == 0, "Should return 0 when buffer too small");
 
-  len = valk_registry_stats_to_json(&stats, NULL, 100);
-  VALK_TEST_ASSERT(len == 0, "Should return 0 when buffer is NULL");
+  len = valk_registry_stats_to_json(&stats, nullptr, 100);
+  VALK_TEST_ASSERT(len == 0, "Should return 0 when buffer is nullptr");
 
-  len = valk_registry_stats_to_json(NULL, tiny_buf, sizeof(tiny_buf));
-  VALK_TEST_ASSERT(len == 0, "Should return 0 when stats is NULL");
+  len = valk_registry_stats_to_json(nullptr, tiny_buf, sizeof(tiny_buf));
+  VALK_TEST_ASSERT(len == 0, "Should return 0 when stats is nullptr");
 
   valk_metrics_registry_destroy();
   VALK_PASS();
@@ -1079,7 +1079,7 @@ void test_summary_persistent(VALK_TEST_ARGS()) {
 
   valk_metrics_registry_init();
 
-  valk_summary_set_persistent(NULL);
+  valk_summary_set_persistent(nullptr);
 
   valk_metrics_registry_destroy();
   VALK_PASS();
@@ -1090,13 +1090,13 @@ void test_summary_handle(VALK_TEST_ARGS()) {
 
   valk_metrics_registry_init();
 
-  valk_metric_handle_t null_handle = valk_summary_handle(NULL);
+  valk_metric_handle_t null_handle = valk_summary_handle(nullptr);
   VALK_TEST_ASSERT(null_handle.slot == VALK_INVALID_SLOT,
-                   "NULL summary should produce invalid handle");
+                   "nullptr summary should produce invalid handle");
 
   valk_metric_handle_t invalid = VALK_HANDLE_INVALID;
   valk_summary_v2_t *s = valk_summary_deref(invalid);
-  VALK_TEST_ASSERT(s == NULL, "Invalid handle should return NULL");
+  VALK_TEST_ASSERT(s == nullptr, "Invalid handle should return nullptr");
 
   valk_metrics_registry_destroy();
   VALK_PASS();
@@ -1122,12 +1122,12 @@ void test_eviction_with_actual_evictions(VALK_TEST_ARGS()) {
     .count = 1
   };
 
-  valk_counter_v2_t *c = valk_counter_get_or_create("evict_me_counter", NULL, &labels1);
-  valk_gauge_v2_t *g = valk_gauge_get_or_create("evict_me_gauge", NULL, &labels2);
+  valk_counter_v2_t *c = valk_counter_get_or_create("evict_me_counter", nullptr, &labels1);
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("evict_me_gauge", nullptr, &labels2);
   double bounds[] = {0.1, 1.0};
-  valk_histogram_v2_t *h = valk_histogram_get_or_create("evict_me_hist", NULL, bounds, 2, &labels3);
+  valk_histogram_v2_t *h = valk_histogram_get_or_create("evict_me_hist", nullptr, bounds, 2, &labels3);
 
-  VALK_TEST_ASSERT(c != NULL && g != NULL && h != NULL, "All metrics should be created");
+  VALK_TEST_ASSERT(c != nullptr && g != nullptr && h != nullptr, "All metrics should be created");
 
   for (volatile int i = 0; i < 100000; i++) {}
 
@@ -1152,7 +1152,7 @@ void test_registry_stats_null(VALK_TEST_ARGS()) {
 
   valk_metrics_registry_init();
 
-  valk_registry_stats_collect(NULL);
+  valk_registry_stats_collect(nullptr);
 
   valk_metrics_registry_destroy();
   VALK_PASS();
@@ -1173,8 +1173,8 @@ void test_labels_equality_hash_mismatch(VALK_TEST_ARGS()) {
     .count = 2
   };
 
-  valk_counter_v2_t *c1 = valk_counter_get_or_create("test", NULL, &labels1);
-  valk_counter_v2_t *c2 = valk_counter_get_or_create("test", NULL, &labels2);
+  valk_counter_v2_t *c1 = valk_counter_get_or_create("test", nullptr, &labels1);
+  valk_counter_v2_t *c2 = valk_counter_get_or_create("test", nullptr, &labels2);
 
   VALK_TEST_ASSERT(c1 != c2, "Different label values should create different counters");
 

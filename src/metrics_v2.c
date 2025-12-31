@@ -32,7 +32,7 @@ u64 valk_metrics_now_us(void) {
 // ============================================================================
 
 static const char *intern_string(const char *str) {
-  if (!str) return NULL;
+  if (!str) return nullptr;
 
   valk_mutex_lock(&g_metrics.pool_lock);
 
@@ -176,10 +176,10 @@ valk_counter_v2_t *valk_counter_get_or_create(const char *name,
       if (valk_metrics_evict_stale() > 0) {
         idx = free_list_pop(&g_metrics.counter_free, g_metrics.counter_next_free);
         if (idx == VALK_INVALID_SLOT) {
-          return NULL;  // Still no space
+          return nullptr;  // Still no space
         }
       } else {
-        return NULL;  // Registry full
+        return nullptr;  // Registry full
       }
     }
   }
@@ -239,10 +239,10 @@ valk_gauge_v2_t *valk_gauge_get_or_create(const char *name,
       if (valk_metrics_evict_stale() > 0) {
         idx = free_list_pop(&g_metrics.gauge_free, g_metrics.gauge_next_free);
         if (idx == VALK_INVALID_SLOT) {
-          return NULL;  // Still no space
+          return nullptr;  // Still no space
         }
       } else {
-        return NULL;  // Registry full
+        return nullptr;  // Registry full
       }
     }
   }
@@ -305,10 +305,10 @@ valk_histogram_v2_t *valk_histogram_get_or_create(
       if (valk_metrics_evict_stale() > 0) {
         idx = free_list_pop(&g_metrics.histogram_free, g_metrics.histogram_next_free);
         if (idx == VALK_INVALID_SLOT) {
-          return NULL;  // Still no space
+          return nullptr;  // Still no space
         }
       } else {
-        return NULL;  // Registry full
+        return nullptr;  // Registry full
       }
     }
   }
@@ -490,34 +490,34 @@ valk_metric_handle_t valk_summary_handle(valk_summary_v2_t *s) {
 }
 
 valk_counter_v2_t *valk_counter_deref(valk_metric_handle_t h) {
-  if (h.slot == VALK_INVALID_SLOT || h.slot >= VALK_REGISTRY_MAX_COUNTERS) return NULL;
+  if (h.slot == VALK_INVALID_SLOT || h.slot >= VALK_REGISTRY_MAX_COUNTERS) return nullptr;
   valk_counter_v2_t *c = &g_metrics.counters[h.slot];
-  if (!atomic_load(&c->active)) return NULL;
-  if (atomic_load(&c->generation) != h.generation) return NULL;
+  if (!atomic_load(&c->active)) return nullptr;
+  if (atomic_load(&c->generation) != h.generation) return nullptr;
   return c;
 }
 
 valk_gauge_v2_t *valk_gauge_deref(valk_metric_handle_t h) {
-  if (h.slot == VALK_INVALID_SLOT || h.slot >= VALK_REGISTRY_MAX_GAUGES) return NULL;
+  if (h.slot == VALK_INVALID_SLOT || h.slot >= VALK_REGISTRY_MAX_GAUGES) return nullptr;
   valk_gauge_v2_t *g = &g_metrics.gauges[h.slot];
-  if (!atomic_load(&g->active)) return NULL;
-  if (atomic_load(&g->generation) != h.generation) return NULL;
+  if (!atomic_load(&g->active)) return nullptr;
+  if (atomic_load(&g->generation) != h.generation) return nullptr;
   return g;
 }
 
 valk_histogram_v2_t *valk_histogram_deref(valk_metric_handle_t h) {
-  if (h.slot == VALK_INVALID_SLOT || h.slot >= VALK_REGISTRY_MAX_HISTOGRAMS) return NULL;
+  if (h.slot == VALK_INVALID_SLOT || h.slot >= VALK_REGISTRY_MAX_HISTOGRAMS) return nullptr;
   valk_histogram_v2_t *histo = &g_metrics.histograms[h.slot];
-  if (!atomic_load(&histo->active)) return NULL;
-  if (atomic_load(&histo->generation) != h.generation) return NULL;
+  if (!atomic_load(&histo->active)) return nullptr;
+  if (atomic_load(&histo->generation) != h.generation) return nullptr;
   return histo;
 }
 
 valk_summary_v2_t *valk_summary_deref(valk_metric_handle_t h) {
-  if (h.slot == VALK_INVALID_SLOT || h.slot >= VALK_REGISTRY_MAX_SUMMARIES) return NULL;
+  if (h.slot == VALK_INVALID_SLOT || h.slot >= VALK_REGISTRY_MAX_SUMMARIES) return nullptr;
   valk_summary_v2_t *s = &g_metrics.summaries[h.slot];
-  if (!atomic_load(&s->active)) return NULL;
-  if (atomic_load(&s->generation) != h.generation) return NULL;
+  if (!atomic_load(&s->active)) return nullptr;
+  if (atomic_load(&s->generation) != h.generation) return nullptr;
   return s;
 }
 

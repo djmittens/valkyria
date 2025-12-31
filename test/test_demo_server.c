@@ -76,7 +76,7 @@ static valk_http2_handler_t *get_noop_handler(void) {
   static valk_http2_handler_t handler;
   static int initialized = 0;
   if (!initialized) {
-    handler.arg = NULL;
+    handler.arg = nullptr;
     handler.onConnect = demo_cb_onConnect;
     handler.onDisconnect = demo_cb_onDisconnect;
     handler.onHeader = demo_cb_onHeader;
@@ -165,7 +165,7 @@ static test_response_t send_request(valk_aio_system_t *sys, int port,
 static void free_response(test_response_t *resp) {
   if (resp->body) {
     free(resp->body);
-    resp->body = NULL;
+    resp->body = nullptr;
   }
 }
 
@@ -182,7 +182,7 @@ void test_basic_server_c_handler(VALK_TEST_ARGS()) {
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR, "Server should start successfully");
@@ -214,7 +214,7 @@ void test_multiple_requests(VALK_TEST_ARGS()) {
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR, "Server should start successfully");
@@ -253,12 +253,12 @@ void test_custom_config(VALK_TEST_ARGS()) {
   };
 
   valk_aio_system_t *sys = valk_aio_start_with_config(&config);
-  VALK_TEST_ASSERT(sys != NULL, "AIO system should start with custom config");
+  VALK_TEST_ASSERT(sys != nullptr, "AIO system should start with custom config");
 
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR, "Server should start with custom config");
@@ -287,7 +287,7 @@ void test_aio_metrics(VALK_TEST_ARGS()) {
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
@@ -295,7 +295,7 @@ void test_aio_metrics(VALK_TEST_ARGS()) {
 
   // Get metrics before any requests
   valk_aio_metrics_t *metrics = valk_aio_get_metrics(sys);
-  VALK_TEST_ASSERT(metrics != NULL, "Metrics should be available");
+  VALK_TEST_ASSERT(metrics != nullptr, "Metrics should be available");
 
   u64 initial_requests = atomic_load(&metrics->requests_total);
   u64 initial_connections = atomic_load(&metrics->connections_total);
@@ -331,14 +331,14 @@ void test_system_stats(VALK_TEST_ARGS()) {
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   UNUSED(result);
 
   // Get system stats
   valk_aio_system_stats_t *stats = valk_aio_get_system_stats(sys);
-  VALK_TEST_ASSERT(stats != NULL, "System stats should be available");
+  VALK_TEST_ASSERT(stats != nullptr, "System stats should be available");
 
   // Server count should be at least 1
   u64 servers = atomic_load(&stats->servers_count);
@@ -361,7 +361,7 @@ void test_metrics_json_rendering(VALK_TEST_ARGS()) {
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
@@ -380,15 +380,15 @@ void test_metrics_json_rendering(VALK_TEST_ARGS()) {
   valk_mem_allocator_t *alloc = valk_thread_ctx.allocator;
   char *json = valk_aio_combined_to_json(metrics, stats, alloc);
 
-  VALK_TEST_ASSERT(json != NULL, "JSON rendering should succeed");
+  VALK_TEST_ASSERT(json != nullptr, "JSON rendering should succeed");
   VALK_TEST_ASSERT(strlen(json) > 100, "JSON should have substantial content: %zu bytes", strlen(json));
 
   // Check for expected fields (JSON uses nested structure)
-  VALK_TEST_ASSERT(strstr(json, "\"connections\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"connections\"") != nullptr,
                    "JSON should contain connections object");
-  VALK_TEST_ASSERT(strstr(json, "\"total\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"total\"") != nullptr,
                    "JSON should contain total field");
-  VALK_TEST_ASSERT(strstr(json, "\"uptime_seconds\"") != NULL,
+  VALK_TEST_ASSERT(strstr(json, "\"uptime_seconds\"") != nullptr,
                    "JSON should contain uptime_seconds");
 
   valk_aio_stop(sys);
@@ -404,7 +404,7 @@ void test_metrics_prometheus_rendering(VALK_TEST_ARGS()) {
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
@@ -420,11 +420,11 @@ void test_metrics_prometheus_rendering(VALK_TEST_ARGS()) {
   valk_mem_allocator_t *alloc = valk_thread_ctx.allocator;
   char *prom = valk_aio_metrics_to_prometheus(metrics, alloc);
 
-  VALK_TEST_ASSERT(prom != NULL, "Prometheus rendering should succeed");
+  VALK_TEST_ASSERT(prom != nullptr, "Prometheus rendering should succeed");
   VALK_TEST_ASSERT(strlen(prom) > 50, "Prometheus output should have content");
 
   // Check for Prometheus format (metrics use valk_aio_ prefix)
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_") != NULL,
+  VALK_TEST_ASSERT(strstr(prom, "valk_aio_") != nullptr,
                    "Should contain valk_aio_ prefixed metrics");
 
   valk_aio_stop(sys);
@@ -449,7 +449,7 @@ void test_modular_metrics_counter(VALK_TEST_ARGS()) {
   valk_counter_v2_t *counter = valk_counter_get_or_create(
       "test_demo_requests", "Test counter for demo", &labels);
 
-  VALK_TEST_ASSERT(counter != NULL, "Counter should be created");
+  VALK_TEST_ASSERT(counter != nullptr, "Counter should be created");
 
   u64 initial = atomic_load(&counter->value);
 
@@ -485,8 +485,8 @@ void test_modular_metrics_labeled_counter(VALK_TEST_ARGS()) {
   valk_counter_v2_t *counter_post = valk_counter_get_or_create(
       "test_http_requests", "HTTP requests by method", &labels_post);
 
-  VALK_TEST_ASSERT(counter_get != NULL, "GET counter should be created");
-  VALK_TEST_ASSERT(counter_post != NULL, "POST counter should be created");
+  VALK_TEST_ASSERT(counter_get != nullptr, "GET counter should be created");
+  VALK_TEST_ASSERT(counter_post != nullptr, "POST counter should be created");
   VALK_TEST_ASSERT(counter_get != counter_post, "Different labels should create different counters");
 
   valk_counter_v2_inc(counter_get);
@@ -508,7 +508,7 @@ void test_modular_metrics_gauge(VALK_TEST_ARGS()) {
   valk_gauge_v2_t *gauge = valk_gauge_get_or_create(
       "test_active_connections", "Active connection count", &labels);
 
-  VALK_TEST_ASSERT(gauge != NULL, "Gauge should be created");
+  VALK_TEST_ASSERT(gauge != nullptr, "Gauge should be created");
 
   valk_gauge_v2_set(gauge, 10);
   VALK_TEST_ASSERT(atomic_load(&gauge->value) == 10, "Gauge should be 10");
@@ -536,7 +536,7 @@ void test_modular_metrics_histogram(VALK_TEST_ARGS()) {
       "test_request_duration", "Request duration histogram",
       buckets, 8, &labels);
 
-  VALK_TEST_ASSERT(hist != NULL, "Histogram should be created");
+  VALK_TEST_ASSERT(hist != nullptr, "Histogram should be created");
 
   // Record some observations (in microseconds)
   valk_histogram_v2_observe_us(hist, 500);    // 0.5ms
@@ -572,7 +572,7 @@ void test_connection_states(VALK_TEST_ARGS()) {
   valk_aio_system_t *sys = start_demo_server();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR, "Server should start");
@@ -610,9 +610,9 @@ void test_multiple_servers(VALK_TEST_ARGS()) {
 
   // Start two servers with OS-assigned ports
   valk_async_handle_t *handle1 = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
   valk_async_handle_t *handle2 = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
 
   valk_lval_t *result1 = valk_async_handle_await(handle1);
   valk_lval_t *result2 = valk_async_handle_await(handle2);

@@ -11,7 +11,7 @@ extern valk_gauge_v2_t* client_connections_active;
 #endif
 
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
-  return conn->sys ? conn->sys->ops->tcp : NULL;
+  return conn->sys ? conn->sys->ops->tcp : nullptr;
 }
 
 static inline valk_io_tcp_t *__conn_tcp(valk_aio_handle_t *conn) {
@@ -45,7 +45,7 @@ static inline int __vtable_nodelay(valk_aio_handle_t *conn, int enable) {
 static void __vtable_alloc_cb(valk_io_tcp_t *tcp, u64 suggested, void **buf, u64 *buflen) {
   UNUSED(suggested);
   valk_aio_handle_t *conn = tcp->user_data;
-  *buf = NULL;
+  *buf = nullptr;
   *buflen = 0;
   
   if (conn && conn->magic == VALK_AIO_HANDLE_MAGIC && conn->kind == VALK_HNDL_HTTP_CONN) {
@@ -97,7 +97,7 @@ static void __valk_http2_response_free(valk_arc_box *box) {
   valk_http2_response_t *res = (valk_http2_response_t *)box->item;
   if (res->body) {
     free(res->body);
-    res->body = NULL;
+    res->body = nullptr;
   }
   if (res->headers.items) {
     for (u64 i = 0; i < res->headers.count; i++) {
@@ -105,7 +105,7 @@ static void __valk_http2_response_free(valk_arc_box *box) {
       if (res->headers.items[i].value) free((void*)res->headers.items[i].value);
     }
     free(res->headers.items);
-    res->headers.items = NULL;
+    res->headers.items = nullptr;
   }
 }
 
@@ -208,7 +208,7 @@ static void __http2_connect_impl(valk_aio_handle_t *conn, int status) {
       .count = 1
     };
     client_connections_active = valk_gauge_get_or_create("http_connections_active",
-      NULL, &client_labels);
+      nullptr, &client_labels);
   }
   valk_gauge_v2_inc(client_connections_active);
 #endif
@@ -656,7 +656,7 @@ static void __http2_client_request_response_cb(void *arg, valk_arc_box *result) 
   } else {
     valk_http2_response_t *response = result->item;
 
-    valk_lval_t *resp_ref = valk_lval_ref("success", response, NULL);
+    valk_lval_t *resp_ref = valk_lval_ref("success", response, nullptr);
     valk_arc_retain(result);
 
     if (ctx->callback && ctx->env) {
@@ -692,11 +692,11 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
   ctx->host = strdup(host);
   ctx->port = port;
   ctx->path = strdup(path);
-  ctx->client_box = NULL;
+  ctx->client_box = nullptr;
 
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     ctx->callback = valk_lval_copy(callback);
-    ctx->headers = headers ? valk_lval_copy(headers) : NULL;
+    ctx->headers = headers ? valk_lval_copy(headers) : nullptr;
   }
   ctx->env = e;
 
@@ -717,5 +717,5 @@ valk_lval_t *valk_http2_client_request_impl(valk_lenv_t *e,
                                              const char *host, int port,
                                              const char *path,
                                              valk_lval_t *callback) {
-  return valk_http2_client_request_with_headers_impl(e, sys, host, port, path, NULL, callback);
+  return valk_http2_client_request_with_headers_impl(e, sys, host, port, path, nullptr, callback);
 }

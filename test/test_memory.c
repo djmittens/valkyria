@@ -267,12 +267,12 @@ void test_arena_stats(VALK_TEST_ARGS()) {
 
   // Allocate some memory
   void *ptr1 = valk_mem_arena_alloc(arena, 100);
-  VALK_TEST_ASSERT(ptr1 != NULL, "First allocation should succeed");
+  VALK_TEST_ASSERT(ptr1 != nullptr, "First allocation should succeed");
   VALK_TEST_ASSERT(arena->stats.total_allocations == 1,
                    "total_allocations should be 1 after first alloc");
 
   void *ptr2 = valk_mem_arena_alloc(arena, 200);
-  VALK_TEST_ASSERT(ptr2 != NULL, "Second allocation should succeed");
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Second allocation should succeed");
   VALK_TEST_ASSERT(arena->stats.total_allocations == 2,
                    "total_allocations should be 2 after second alloc");
 
@@ -297,8 +297,8 @@ void test_arena_stats(VALK_TEST_ARGS()) {
                    "ptr3 should be in arena");
   VALK_TEST_ASSERT(!valk_ptr_in_arena(arena, (void *)0x12345678),
                    "Random pointer should not be in arena");
-  VALK_TEST_ASSERT(!valk_ptr_in_arena(arena, NULL),
-                   "NULL should not be in arena");
+  VALK_TEST_ASSERT(!valk_ptr_in_arena(arena, nullptr),
+                   "nullptr should not be in arena");
 
   // Test reset_stats
   valk_mem_arena_reset_stats(arena);
@@ -330,7 +330,7 @@ void test_gc_heap_stats(VALK_TEST_ARGS()) {
 
   // Allocate something
   void *ptr = valk_gc_malloc_heap_alloc(heap, 123);
-  VALK_TEST_ASSERT(ptr != NULL, "Allocation should succeed");
+  VALK_TEST_ASSERT(ptr != nullptr, "Allocation should succeed");
   VALK_TEST_ASSERT(valk_gc_heap2_used_bytes(heap) > 0,
                    "used_bytes should be > 0");
   VALK_TEST_ASSERT(heap->stats.peak_usage > 0,
@@ -372,7 +372,7 @@ void test_arena_overflow_fallback(VALK_TEST_ARGS()) {
   size_t alloc_count = 0;
   while (arena->offset < arena->capacity - 100) {
     void *p = valk_mem_arena_alloc(arena, 32);
-    VALK_TEST_ASSERT(p != NULL, "Arena allocation should succeed");
+    VALK_TEST_ASSERT(p != nullptr, "Arena allocation should succeed");
     alloc_count++;
     if (alloc_count > 100) break;  // Safety limit
   }
@@ -383,7 +383,7 @@ void test_arena_overflow_fallback(VALK_TEST_ARGS()) {
   size_t overflow_size = remaining + 100;  // Definitely won't fit
 
   void *overflow_ptr = valk_mem_arena_alloc(arena, overflow_size);
-  VALK_TEST_ASSERT(overflow_ptr != NULL,
+  VALK_TEST_ASSERT(overflow_ptr != nullptr,
                    "Overflow allocation should succeed via heap fallback");
   VALK_TEST_ASSERT(arena->stats.overflow_fallbacks == 1,
                    "overflow_fallbacks should be 1");
@@ -447,9 +447,9 @@ void test_forward_set_and_check(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(!valk_lval_is_forwarded(dst),
                    "dst should not be forwarded");
 
-  // Test NULL handling
-  VALK_TEST_ASSERT(!valk_lval_is_forwarded(NULL),
-                   "NULL should not be forwarded");
+  // Test nullptr handling
+  VALK_TEST_ASSERT(!valk_lval_is_forwarded(nullptr),
+                   "nullptr should not be forwarded");
 
   // Restore context and cleanup
   valk_thread_ctx = old_ctx;
@@ -495,10 +495,10 @@ void test_forward_follow_chain(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(result_d == d,
                    "Following from d should return d itself");
 
-  // Following NULL should return NULL
-  valk_lval_t *result_null = valk_lval_follow_forward(NULL);
-  VALK_TEST_ASSERT(result_null == NULL,
-                   "Following NULL should return NULL");
+  // Following nullptr should return nullptr
+  valk_lval_t *result_null = valk_lval_follow_forward(nullptr);
+  VALK_TEST_ASSERT(result_null == nullptr,
+                   "Following nullptr should return nullptr");
 
   // Restore context and cleanup
   valk_thread_ctx = old_ctx;
@@ -615,9 +615,9 @@ void test_should_checkpoint(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(valk_should_checkpoint(arena, 0.50f),
                    "50%+1 should trigger at 50% threshold");
 
-  // NULL arena should not crash and return false
-  VALK_TEST_ASSERT(!valk_should_checkpoint(NULL, 0.75f),
-                   "NULL arena should return false");
+  // nullptr arena should not crash and return false
+  VALK_TEST_ASSERT(!valk_should_checkpoint(nullptr, 0.75f),
+                   "nullptr arena should return false");
 
   free(arena);
   VALK_PASS();
@@ -1043,8 +1043,8 @@ void test_checkpoint_closure(VALK_TEST_ARGS()) {
     // Verify closure survived with captured env
     valk_lval_t *closure = valk_lenv_get(env, valk_lval_sym("my_closure"));
     VALK_TEST_ASSERT(LVAL_TYPE(closure) == LVAL_FUN, "Should be function type");
-    VALK_TEST_ASSERT(closure->fun.builtin == NULL, "Should be lambda not builtin");
-    VALK_TEST_ASSERT(closure->fun.env != NULL, "Should have captured env");
+    VALK_TEST_ASSERT(closure->fun.builtin == nullptr, "Should be lambda not builtin");
+    VALK_TEST_ASSERT(closure->fun.env != nullptr, "Should have captured env");
 
     // Check captured value
     valk_lval_t *captured_val =
@@ -1073,24 +1073,24 @@ void test_slab_overflow_counter(VALK_TEST_ARGS()) {
   valk_slab_item_t* item1 = valk_slab_aquire(slab);
   valk_slab_item_t* item2 = valk_slab_aquire(slab);
 
-  VALK_TEST_ASSERT(item1 != NULL, "First acquire should succeed");
-  VALK_TEST_ASSERT(item2 != NULL, "Second acquire should succeed");
+  VALK_TEST_ASSERT(item1 != nullptr, "First acquire should succeed");
+  VALK_TEST_ASSERT(item2 != nullptr, "Second acquire should succeed");
 
   // This should fail and increment overflow counter
   valk_slab_item_t* item3 = valk_slab_aquire(slab);
-  VALK_TEST_ASSERT(item3 == NULL, "Third acquire should fail");
+  VALK_TEST_ASSERT(item3 == nullptr, "Third acquire should fail");
   VALK_TEST_ASSERT(slab->overflowCount == 1, "overflowCount should be 1 after first overflow");
 
   // Try again - should increment again
   valk_slab_item_t* item4 = valk_slab_aquire(slab);
-  VALK_TEST_ASSERT(item4 == NULL, "Fourth acquire should also fail");
+  VALK_TEST_ASSERT(item4 == nullptr, "Fourth acquire should also fail");
   VALK_TEST_ASSERT(slab->overflowCount == 2, "overflowCount should be 2 after second overflow");
 
   // Release one and try again
   valk_slab_release(slab, item1);
 
   valk_slab_item_t* item5 = valk_slab_aquire(slab);
-  VALK_TEST_ASSERT(item5 != NULL, "Fifth acquire should succeed after release");
+  VALK_TEST_ASSERT(item5 != nullptr, "Fifth acquire should succeed after release");
   VALK_TEST_ASSERT(slab->overflowCount == 2, "overflowCount should still be 2 after successful acquire");
 
   valk_slab_free(slab);
@@ -1189,7 +1189,7 @@ void test_buffer_alloc_and_append(VALK_TEST_ARGS()) {
 
   VALK_TEST_ASSERT(buf.capacity == 128, "Buffer capacity should be 128");
   VALK_TEST_ASSERT(buf.count == 0, "Buffer count should start at 0");
-  VALK_TEST_ASSERT(buf.items != NULL, "Buffer items should be allocated");
+  VALK_TEST_ASSERT(buf.items != nullptr, "Buffer items should be allocated");
 
   u8 data[] = "Test data";
   valk_buffer_append(&buf, data, sizeof(data) - 1);
@@ -1205,20 +1205,20 @@ void test_allocator_type_strings(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   const char* s_null = valk_mem_allocator_e_to_string(VALK_ALLOC_NULL);
-  VALK_TEST_ASSERT(s_null != NULL, "NULL alloc string should not be NULL");
-  VALK_TEST_ASSERT(strstr(s_null, "NULL") != NULL, "NULL alloc string should contain 'NULL'");
+  VALK_TEST_ASSERT(s_null != nullptr, "nullptr alloc string should not be nullptr");
+  VALK_TEST_ASSERT(strstr(s_null, "nullptr") != nullptr, "nullptr alloc string should contain 'nullptr'");
 
   const char* s_malloc = valk_mem_allocator_e_to_string(VALK_ALLOC_MALLOC);
-  VALK_TEST_ASSERT(strstr(s_malloc, "Malloc") != NULL, "Malloc alloc string should contain 'Malloc'");
+  VALK_TEST_ASSERT(strstr(s_malloc, "Malloc") != nullptr, "Malloc alloc string should contain 'Malloc'");
 
   const char* s_arena = valk_mem_allocator_e_to_string(VALK_ALLOC_ARENA);
-  VALK_TEST_ASSERT(strstr(s_arena, "Arena") != NULL, "Arena alloc string should contain 'Arena'");
+  VALK_TEST_ASSERT(strstr(s_arena, "Arena") != nullptr, "Arena alloc string should contain 'Arena'");
 
   const char* s_slab = valk_mem_allocator_e_to_string(VALK_ALLOC_SLAB);
-  VALK_TEST_ASSERT(strstr(s_slab, "Slab") != NULL, "Slab alloc string should contain 'Slab'");
+  VALK_TEST_ASSERT(strstr(s_slab, "Slab") != nullptr, "Slab alloc string should contain 'Slab'");
 
   const char* s_gc = valk_mem_allocator_e_to_string(VALK_ALLOC_GC_HEAP);
-  VALK_TEST_ASSERT(strstr(s_gc, "GC") != NULL, "GC Heap alloc string should contain 'GC'");
+  VALK_TEST_ASSERT(strstr(s_gc, "GC") != nullptr, "GC Heap alloc string should contain 'GC'");
 
   VALK_PASS();
 }
@@ -1232,7 +1232,7 @@ void test_process_memory_collect(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(pm.rss_bytes >= 0, "RSS should be non-negative");
   VALK_TEST_ASSERT(pm.vms_bytes >= pm.rss_bytes, "VMS should be >= RSS");
 
-  valk_process_memory_collect(NULL);
+  valk_process_memory_collect(nullptr);
 
   VALK_PASS();
 }
@@ -1245,7 +1245,7 @@ void test_smaps_collect(VALK_TEST_ARGS()) {
 
   VALK_TEST_ASSERT(smaps.total_rss >= 0, "Total RSS should be non-negative");
 
-  valk_smaps_collect(NULL);
+  valk_smaps_collect(nullptr);
 
   VALK_PASS();
 }
@@ -1267,8 +1267,8 @@ void test_arena_print_stats(VALK_TEST_ARGS()) {
     fclose(devnull);
   }
 
-  valk_mem_arena_print_stats(NULL, NULL);
-  valk_mem_arena_print_stats(arena, NULL);
+  valk_mem_arena_print_stats(nullptr, nullptr);
+  valk_mem_arena_print_stats(arena, nullptr);
 
   free(arena);
   VALK_PASS();
@@ -1280,10 +1280,10 @@ void test_slab_allocator_api(VALK_TEST_ARGS()) {
   valk_slab_t* slab = valk_slab_new(128, 8);
 
   void* ptr1 = valk_mem_allocator_alloc((valk_mem_allocator_t*)slab, 64);
-  VALK_TEST_ASSERT(ptr1 != NULL, "Slab alloc should succeed");
+  VALK_TEST_ASSERT(ptr1 != nullptr, "Slab alloc should succeed");
 
   void* ptr2 = valk_mem_allocator_calloc((valk_mem_allocator_t*)slab, 1, 64);
-  VALK_TEST_ASSERT(ptr2 != NULL, "Slab calloc should succeed");
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Slab calloc should succeed");
 
   void* ptr3 = valk_mem_allocator_realloc((valk_mem_allocator_t*)slab, ptr1, 64);
   VALK_TEST_ASSERT(ptr3 == ptr1, "Slab realloc within size should return same ptr");
@@ -1303,12 +1303,12 @@ void test_arena_allocator_realloc(VALK_TEST_ARGS()) {
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
   void* ptr1 = valk_mem_allocator_alloc((valk_mem_allocator_t*)arena, 100);
-  VALK_TEST_ASSERT(ptr1 != NULL, "Arena alloc should succeed");
+  VALK_TEST_ASSERT(ptr1 != nullptr, "Arena alloc should succeed");
 
   memset(ptr1, 'A', 100);
 
   void* ptr2 = valk_mem_allocator_realloc((valk_mem_allocator_t*)arena, ptr1, 200);
-  VALK_TEST_ASSERT(ptr2 != NULL, "Arena realloc should succeed");
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Arena realloc should succeed");
 
   u8* bytes = (u8*)ptr2;
   int match = 1;
@@ -1318,7 +1318,7 @@ void test_arena_allocator_realloc(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(match, "Realloc should preserve original data");
 
   void* ptr3 = valk_mem_allocator_calloc((valk_mem_allocator_t*)arena, 10, 10);
-  VALK_TEST_ASSERT(ptr3 != NULL, "Arena calloc should succeed");
+  VALK_TEST_ASSERT(ptr3 != nullptr, "Arena calloc should succeed");
 
   bytes = (u8*)ptr3;
   match = 1;
@@ -1418,7 +1418,7 @@ void test_arena_reset_stats(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(arena->stats.num_resets == 0, "Resets should be 0");
   VALK_TEST_ASSERT(arena->stats.high_water_mark == old_hwm, "HWM should be preserved");
 
-  valk_mem_arena_reset_stats(NULL);
+  valk_mem_arena_reset_stats(nullptr);
 
   free(arena);
   VALK_PASS();
@@ -1430,13 +1430,13 @@ void test_malloc_allocator_api(VALK_TEST_ARGS()) {
   valk_mem_allocator_t alloc = {.type = VALK_ALLOC_MALLOC};
 
   void *ptr = valk_mem_allocator_alloc(&alloc, 128);
-  VALK_TEST_ASSERT(ptr != NULL, "Malloc alloc should succeed");
+  VALK_TEST_ASSERT(ptr != nullptr, "Malloc alloc should succeed");
 
   void *ptr2 = valk_mem_allocator_calloc(&alloc, 4, 32);
-  VALK_TEST_ASSERT(ptr2 != NULL, "Malloc calloc should succeed");
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Malloc calloc should succeed");
 
   void *ptr3 = valk_mem_allocator_realloc(&alloc, ptr, 256);
-  VALK_TEST_ASSERT(ptr3 != NULL, "Malloc realloc should succeed");
+  VALK_TEST_ASSERT(ptr3 != nullptr, "Malloc realloc should succeed");
 
   valk_mem_allocator_free(&alloc, ptr3);
   valk_mem_allocator_free(&alloc, ptr2);
@@ -1450,10 +1450,10 @@ void test_gc_heap_allocator_api(VALK_TEST_ARGS()) {
   valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
   void *ptr = valk_mem_allocator_alloc((valk_mem_allocator_t*)heap, 128);
-  VALK_TEST_ASSERT(ptr != NULL, "GC heap alloc should succeed");
+  VALK_TEST_ASSERT(ptr != nullptr, "GC heap alloc should succeed");
 
   void *ptr2 = valk_mem_allocator_calloc((valk_mem_allocator_t*)heap, 4, 32);
-  VALK_TEST_ASSERT(ptr2 != NULL, "GC heap calloc should succeed");
+  VALK_TEST_ASSERT(ptr2 != nullptr, "GC heap calloc should succeed");
 
   valk_gc_malloc_heap_destroy(heap);
   VALK_PASS();

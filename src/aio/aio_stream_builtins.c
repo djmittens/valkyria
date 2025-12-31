@@ -163,12 +163,12 @@ static valk_lval_t *valk_builtin_stream_writable(valk_lenv_t *e, valk_lval_t *a)
 
   valk_lval_t *body_ref = valk_lval_list_nth(a, 0);
   valk_stream_body_t *body = get_stream_body(body_ref);
-  if (!body || body->state == VALK_STREAM_CLOSED) {
-    return valk_lval_sym("false");
+  if (!body || body->state != VALK_STREAM_OPEN) {
+    return valk_lval_num(0);
   }
 
   bool writable = valk_stream_body_writable(body);
-  return valk_lval_sym(writable ? "true" : "false");
+  return valk_lval_num(writable ? 1 : 0);
 }
 
 static valk_lval_t *valk_builtin_stream_close(valk_lenv_t *e, valk_lval_t *a) {

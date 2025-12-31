@@ -6,7 +6,7 @@
 #include "../gc.h"
 
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
-  return conn->sys ? conn->sys->ops->tcp : NULL;
+  return conn->sys ? conn->sys->ops->tcp : nullptr;
 }
 
 static inline valk_io_tcp_t *__conn_tcp(valk_aio_handle_t *conn) {
@@ -79,7 +79,7 @@ static inline int __vtable_getpeername(valk_aio_handle_t *conn, void *addr, int 
 }
 
 #ifdef VALK_METRICS_ENABLED
-valk_gauge_v2_t* client_connections_active = NULL;
+valk_gauge_v2_t* client_connections_active = nullptr;
 
 void valk_http2_server_metrics_init(valk_aio_system_t* sys, valk_server_metrics_t* m,
                                  const char* name, int port, const char* protocol,
@@ -92,28 +92,28 @@ void valk_http2_server_metrics_init(valk_aio_system_t* sys, valk_server_metrics_
     .count = 4
   };
 
-  m->requests_total = valk_counter_get_or_create("http_requests_total", NULL, &base_labels);
+  m->requests_total = valk_counter_get_or_create("http_requests_total", nullptr, &base_labels);
 
   valk_label_set_v2_t success_labels = {
     .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}, {"loop", loop_name}, {"status", "2xx"}},
     .count = 5
   };
-  m->requests_success = valk_counter_get_or_create("http_requests_total", NULL, &success_labels);
+  m->requests_success = valk_counter_get_or_create("http_requests_total", nullptr, &success_labels);
 
   valk_label_set_v2_t client_err_labels = {
     .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}, {"loop", loop_name}, {"status", "4xx"}},
     .count = 5
   };
-  m->requests_client_error = valk_counter_get_or_create("http_requests_total", NULL, &client_err_labels);
+  m->requests_client_error = valk_counter_get_or_create("http_requests_total", nullptr, &client_err_labels);
 
   valk_label_set_v2_t server_err_labels = {
     .labels = {{"server", name}, {"port", port_str}, {"protocol", protocol}, {"loop", loop_name}, {"status", "5xx"}},
     .count = 5
   };
-  m->requests_server_error = valk_counter_get_or_create("http_requests_total", NULL, &server_err_labels);
+  m->requests_server_error = valk_counter_get_or_create("http_requests_total", nullptr, &server_err_labels);
 
-  m->connections_active = valk_gauge_get_or_create("http_connections_active", NULL, &base_labels);
-  m->sse_streams_active = valk_gauge_get_or_create("http_sse_streams_active", NULL, &base_labels);
+  m->connections_active = valk_gauge_get_or_create("http_connections_active", nullptr, &base_labels);
+  m->sse_streams_active = valk_gauge_get_or_create("http_sse_streams_active", nullptr, &base_labels);
 
   static const double latency_buckets[] = {
     0.00005, 0.0001, 0.00025, 0.0005,
@@ -122,18 +122,18 @@ void valk_http2_server_metrics_init(valk_aio_system_t* sys, valk_server_metrics_
     1.0, 2.5, 5.0, 10.0
   };
   m->request_duration = valk_histogram_get_or_create("http_request_duration_seconds",
-    NULL, latency_buckets, 17, &base_labels);
+    nullptr, latency_buckets, 17, &base_labels);
 
   static const double sse_duration_buckets[] = {
     1.0, 5.0, 10.0, 30.0, 60.0,
     120.0, 300.0, 600.0, 1800.0, 3600.0
   };
   m->sse_stream_duration = valk_histogram_get_or_create("http_sse_stream_duration_seconds",
-    NULL, sse_duration_buckets, 10, &base_labels);
+    nullptr, sse_duration_buckets, 10, &base_labels);
 
-  m->bytes_sent = valk_counter_get_or_create("http_bytes_sent_total", NULL, &base_labels);
-  m->bytes_recv = valk_counter_get_or_create("http_bytes_recv_total", NULL, &base_labels);
-  m->overload_responses = valk_counter_get_or_create("http_overload_responses_total", NULL, &base_labels);
+  m->bytes_sent = valk_counter_get_or_create("http_bytes_sent_total", nullptr, &base_labels);
+  m->bytes_recv = valk_counter_get_or_create("http_bytes_recv_total", nullptr, &base_labels);
+  m->overload_responses = valk_counter_get_or_create("http_overload_responses_total", nullptr, &base_labels);
 }
 #endif
 
@@ -144,7 +144,7 @@ static void __load_shed_close_cb(uv_handle_t *handle) {
 static void __vtable_alloc_cb(valk_io_tcp_t *tcp, u64 suggested, void **buf, u64 *buflen) {
   UNUSED(suggested);
   valk_aio_handle_t *conn = tcp->user_data;
-  *buf = NULL;
+  *buf = nullptr;
   *buflen = 0;
   
   if (conn && conn->magic == VALK_AIO_HANDLE_MAGIC && conn->kind == VALK_HNDL_HTTP_CONN) {
@@ -439,7 +439,7 @@ static void __http_listen_cb(valk_aio_system_t *sys,
 
   VALK_INFO("Listening on %s:%d", srv->interface, srv->port);
 
-  valk_lval_t *server_ref = valk_lval_ref("http_server", box, NULL);
+  valk_lval_t *server_ref = valk_lval_ref("http_server", box, nullptr);
   valk_async_handle_complete(handle, server_ref);
   valk_dll_insert_after(&sys->liveHandles, srv->listener);
 }
@@ -501,7 +501,7 @@ valk_async_handle_t *valk_aio_http2_listen(valk_aio_system_t *sys,
                                    valk_http2_handler_t *handler,
                                    void *lisp_handler) {
   return valk_aio_http2_listen_with_config(sys, interface, port, keyfile, certfile,
-                                            handler, lisp_handler, NULL);
+                                            handler, lisp_handler, nullptr);
 }
 
 valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
@@ -511,7 +511,7 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
                                    void *lisp_handler,
                                    valk_http_server_config_t *config) {
   valk_arc_box *box = (valk_arc_box *)valk_slab_aquire(sys->httpServers)->data;
-  valk_async_handle_t *handle = valk_async_handle_new(sys, NULL);
+  valk_async_handle_t *handle = valk_async_handle_new(sys, nullptr);
 
   valk_aio_http_server *srv;
   {
@@ -533,7 +533,7 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
     if (lisp_handler) {
       valk_gc_add_global_root(&srv->lisp_handler_fn);
       void* saved_heap = valk_thread_ctx.heap;
-      valk_thread_ctx.heap = NULL;
+      valk_thread_ctx.heap = nullptr;
       VALK_WITH_ALLOC(&valk_malloc_allocator) {
         srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)lisp_handler)->fun.env);
       }
@@ -553,7 +553,7 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
       valk_arc_release(box);
       return handle;
     }
-    SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, NULL);
+    SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, nullptr);
   }
 
   struct valk_aio_task_new *task;
@@ -580,10 +580,10 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
 void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_fn) {
   srv->lisp_handler_fn = (valk_lval_t*)handler_fn;
   __valk_sandbox_env_free(srv->sandbox_env);
-  srv->sandbox_env = NULL;
+  srv->sandbox_env = nullptr;
   if (handler_fn) {
     void* saved_heap = valk_thread_ctx.heap;
-    valk_thread_ctx.heap = NULL;
+    valk_thread_ctx.heap = nullptr;
     VALK_WITH_ALLOC(&valk_malloc_allocator) {
       srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)handler_fn)->fun.env);
     }
@@ -679,7 +679,7 @@ static void __http_stop_cb(valk_aio_system_t *sys,
     ctx->handle = handle;
     ctx->box = box;
     srv->listener->arg = ctx;
-    srv->listener->onClose = NULL;
+    srv->listener->onClose = nullptr;
     __vtable_close(srv->listener, (valk_io_close_cb)__http_stop_listener_close_cb);
   } else {
     srv->state = VALK_SRV_CLOSED;
@@ -691,7 +691,7 @@ static void __http_stop_cb(valk_aio_system_t *sys,
 valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv,
                                          valk_arc_box *box) {
   valk_aio_system_t *sys = srv->sys;
-  valk_async_handle_t *handle = valk_async_handle_new(sys, NULL);
+  valk_async_handle_t *handle = valk_async_handle_new(sys, nullptr);
 
   valk_arc_retain(box);
 

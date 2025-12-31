@@ -73,3 +73,18 @@ void valk_stream_body_close_all(valk_aio_handle_t *conn) {
               (unsigned long long)count);
   }
 }
+
+u64 valk_stream_body_get_bytes_sent(valk_aio_handle_t *conn, i32 stream_id) {
+  if (!conn) {
+    return 0;
+  }
+
+  valk_stream_body_t *body = conn->http.stream_bodies;
+  while (body) {
+    if (body->stream_id == stream_id) {
+      return body->bytes_sent;
+    }
+    body = body->next;
+  }
+  return 0;
+}

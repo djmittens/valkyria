@@ -177,11 +177,18 @@ int valk_stream_body_write(valk_stream_body_t *body, const char *data, u64 len) 
 
   if (body->data_deferred) {
     body->data_deferred = false;
+    if (!nghttp2_session_find_stream(body->session, body->stream_id)) {
+      VALK_DEBUG("stream_body: stream %d no longer exists, closing body %llu",
+                 body->stream_id, (unsigned long long)body->id);
+      body->state = VALK_STREAM_CLOSING;
+      return -1;
+    }
     int rv = nghttp2_session_resume_data(body->session, body->stream_id);
     if (rv != 0) {
-      VALK_ERROR("stream_body: failed to resume stream %d: %s",
-                 body->stream_id, nghttp2_strerror(rv));
-      return -4;
+      VALK_WARN("stream_body: failed to resume stream %d: %s, closing body",
+                body->stream_id, nghttp2_strerror(rv));
+      body->state = VALK_STREAM_CLOSING;
+      return -1;
     }
     valk_http2_flush_pending(body->conn);
   }
@@ -191,6 +198,12 @@ int valk_stream_body_write(valk_stream_body_t *body, const char *data, u64 len) 
 
 bool valk_stream_body_writable(valk_stream_body_t *body) {
   if (!body) {
+    return false;
+  }
+  if (body->state != VALK_STREAM_OPEN) {
+    return false;
+  }
+  if (!nghttp2_session_find_stream(body->session, body->stream_id)) {
     return false;
   }
   return body->queue_len < body->queue_max;
@@ -221,7 +234,7 @@ static nghttp2_ssize __stream_data_read_callback(
   valk_stream_body_t *body = (valk_stream_body_t *)source->ptr;
 
   if (!body) {
-    VALK_ERROR("stream_body: data_read_callback called with NULL body");
+    VALK_ERROR("stream_body: data_read_callback called with nullptr body");
     *data_flags |= NGHTTP2_DATA_FLAG_EOF;
     return 0;
   }

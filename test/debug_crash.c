@@ -82,7 +82,7 @@ int main(void) {
 
   printf("[DEBUG] Starting server on port 6969...\n");
   valk_async_handle_t *hserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 6969, "build/server.key", "build/server.crt", &handler, nullptr);
 
   valk_lval_t *server_result = valk_async_handle_await(hserv);
   if (LVAL_TYPE(server_result) == LVAL_ERR) {

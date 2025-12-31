@@ -60,6 +60,6 @@ void valk_log(valk_log_level_e lvl, const char *file, int line,
   va_list va;
   va_start(va, fmt);
   vfprintf(out, fmt, va);
-  va_end(va);
+  va_end(va);  // NOLINT(clang-analyzer-valist.Uninitialized) - false positive: va_start called above
   fputc('\n', out);
 }

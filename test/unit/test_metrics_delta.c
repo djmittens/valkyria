@@ -31,7 +31,7 @@ void test_delta_snapshot_init(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(snap.interval_us == 0, "interval should be 0");
   VALK_TEST_ASSERT(snap.delta_count == 0, "delta_count should be 0");
   VALK_TEST_ASSERT(snap.delta_capacity == 256, "delta_capacity should be 256");
-  VALK_TEST_ASSERT(snap.deltas != NULL, "deltas should be allocated");
+  VALK_TEST_ASSERT(snap.deltas != nullptr, "deltas should be allocated");
   VALK_TEST_ASSERT(snap.counters_changed == 0, "counters_changed should be 0");
   VALK_TEST_ASSERT(snap.gauges_changed == 0, "gauges_changed should be 0");
   VALK_TEST_ASSERT(snap.histograms_changed == 0, "histograms_changed should be 0");
@@ -59,7 +59,7 @@ void test_delta_snapshot_collect(VALK_TEST_ARGS()) {
 
   valk_label_set_v2_t labels = {0};
   valk_counter_v2_t *counter = valk_counter_get_or_create("test_counter", "Test counter", &labels);
-  VALK_TEST_ASSERT(counter != NULL, "Counter should be created");
+  VALK_TEST_ASSERT(counter != nullptr, "Counter should be created");
 
   valk_counter_v2_inc(counter);
   valk_counter_v2_inc(counter);
@@ -146,8 +146,8 @@ void test_delta_to_json(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_json(&snap, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce output");
-  VALK_TEST_ASSERT(strstr(buf, "\"ts\"") != NULL, "Should contain ts");
-  VALK_TEST_ASSERT(strstr(buf, "\"interval_us\"") != NULL, "Should contain interval_us");
+  VALK_TEST_ASSERT(strstr(buf, "\"ts\"") != nullptr, "Should contain ts");
+  VALK_TEST_ASSERT(strstr(buf, "\"interval_us\"") != nullptr, "Should contain interval_us");
 
   valk_delta_snapshot_free(&snap);
 
@@ -165,9 +165,9 @@ void test_delta_to_sse(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_sse(&snap, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce output");
-  VALK_TEST_ASSERT(strstr(buf, "event:") != NULL, "Should contain event header");
-  VALK_TEST_ASSERT(strstr(buf, "data:") != NULL, "Should contain data");
-  VALK_TEST_ASSERT(strstr(buf, "\n\n") != NULL, "Should end with double newline");
+  VALK_TEST_ASSERT(strstr(buf, "event:") != nullptr, "Should contain event header");
+  VALK_TEST_ASSERT(strstr(buf, "data:") != nullptr, "Should contain data");
+  VALK_TEST_ASSERT(strstr(buf, "\n\n") != nullptr, "Should end with double newline");
 
   valk_delta_snapshot_free(&snap);
 
@@ -203,7 +203,7 @@ void test_metrics_v2_to_json(VALK_TEST_ARGS()) {
   size_t len = valk_metrics_v2_to_json(&g_metrics, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce output");
-  VALK_TEST_ASSERT(strstr(buf, "json_test_counter") != NULL, "Should contain counter name");
+  VALK_TEST_ASSERT(strstr(buf, "json_test_counter") != nullptr, "Should contain counter name");
 
   VALK_PASS();
 }
@@ -259,7 +259,7 @@ void test_delta_to_json_with_deltas(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_json(&snap, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce output");
-  VALK_TEST_ASSERT(strstr(buf, "\"ts\"") != NULL, "Should contain timestamp");
+  VALK_TEST_ASSERT(strstr(buf, "\"ts\"") != nullptr, "Should contain timestamp");
 
   valk_delta_snapshot_free(&snap);
 
@@ -277,8 +277,8 @@ void test_delta_to_sse_format(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_sse(&snap, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce SSE output");
-  VALK_TEST_ASSERT(strstr(buf, "event:") != NULL, "Should have event header");
-  VALK_TEST_ASSERT(strstr(buf, "data:") != NULL, "Should have data section");
+  VALK_TEST_ASSERT(strstr(buf, "event:") != nullptr, "Should have event header");
+  VALK_TEST_ASSERT(strstr(buf, "data:") != nullptr, "Should have data section");
 
   valk_delta_snapshot_free(&snap);
 
@@ -330,7 +330,7 @@ void test_delta_snapshot_capacity(VALK_TEST_ARGS()) {
   valk_delta_snapshot_init(&snap);
 
   VALK_TEST_ASSERT(snap.delta_capacity == 256, "Default capacity should be 256");
-  VALK_TEST_ASSERT(snap.deltas != NULL, "Deltas array should be allocated");
+  VALK_TEST_ASSERT(snap.deltas != nullptr, "Deltas array should be allocated");
 
   valk_delta_snapshot_free(&snap);
 
@@ -344,7 +344,7 @@ void test_delta_with_gauge(VALK_TEST_ARGS()) {
 
   valk_label_set_v2_t labels = {0};
   valk_gauge_v2_t *gauge = valk_gauge_get_or_create("test_gauge", "Test gauge", &labels);
-  VALK_TEST_ASSERT(gauge != NULL, "Gauge should be created");
+  VALK_TEST_ASSERT(gauge != nullptr, "Gauge should be created");
 
   valk_gauge_v2_set(gauge, 100);
   valk_gauge_v2_set(gauge, 200);
@@ -454,7 +454,7 @@ void test_delta_json_includes_timestamp(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_json(&snap, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce JSON");
-  VALK_TEST_ASSERT(strstr(buf, "9876543210") != NULL, "Should contain timestamp");
+  VALK_TEST_ASSERT(strstr(buf, "9876543210") != nullptr, "Should contain timestamp");
 
   valk_delta_snapshot_free(&snap);
 
@@ -475,7 +475,7 @@ void test_delta_snapshot_interval_tracking(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_json(&snap, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce JSON");
-  VALK_TEST_ASSERT(strstr(buf, "\"interval_us\":1000000") != NULL, "Should contain interval");
+  VALK_TEST_ASSERT(strstr(buf, "\"interval_us\":1000000") != nullptr, "Should contain interval");
 
   valk_delta_snapshot_free(&snap);
 
@@ -507,7 +507,7 @@ void test_delta_with_histogram(VALK_TEST_ARGS()) {
   double bounds[] = {1000, 5000, 10000, 50000, 100000, 500000, 1000000};
   valk_histogram_v2_t *hist = valk_histogram_get_or_create(
       "test_histogram", "Test histogram", bounds, 7, &labels);
-  VALK_TEST_ASSERT(hist != NULL, "Histogram should be created");
+  VALK_TEST_ASSERT(hist != nullptr, "Histogram should be created");
 
   valk_histogram_v2_observe_us(hist, 3000);
   valk_histogram_v2_observe_us(hist, 20000);
@@ -543,8 +543,8 @@ void test_delta_to_prometheus(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_prometheus(&snap, &g_metrics, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce prometheus output");
-  VALK_TEST_ASSERT(strstr(buf, "prom_counter") != NULL, "Should contain counter");
-  VALK_TEST_ASSERT(strstr(buf, "prom_gauge") != NULL, "Should contain gauge");
+  VALK_TEST_ASSERT(strstr(buf, "prom_counter") != nullptr, "Should contain counter");
+  VALK_TEST_ASSERT(strstr(buf, "prom_gauge") != nullptr, "Should contain gauge");
 
   valk_delta_snapshot_free(&snap);
 
@@ -571,10 +571,10 @@ void test_delta_to_prometheus_with_histogram(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_prometheus(&snap, &g_metrics, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce prometheus output");
-  VALK_TEST_ASSERT(strstr(buf, "prom_histogram_bucket") != NULL, "Should contain bucket");
-  VALK_TEST_ASSERT(strstr(buf, "_sum") != NULL, "Should contain sum");
-  VALK_TEST_ASSERT(strstr(buf, "_count") != NULL, "Should contain count");
-  VALK_TEST_ASSERT(strstr(buf, "+Inf") != NULL, "Should contain +Inf bucket");
+  VALK_TEST_ASSERT(strstr(buf, "prom_histogram_bucket") != nullptr, "Should contain bucket");
+  VALK_TEST_ASSERT(strstr(buf, "_sum") != nullptr, "Should contain sum");
+  VALK_TEST_ASSERT(strstr(buf, "_count") != nullptr, "Should contain count");
+  VALK_TEST_ASSERT(strstr(buf, "+Inf") != nullptr, "Should contain +Inf bucket");
 
   valk_delta_snapshot_free(&snap);
 
@@ -630,7 +630,7 @@ void test_delta_to_prometheus_with_labels(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_prometheus(&snap, &g_metrics, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce output");
-  VALK_TEST_ASSERT(strstr(buf, "endpoint=\"api\"") != NULL, "Should contain label");
+  VALK_TEST_ASSERT(strstr(buf, "endpoint=\"api\"") != nullptr, "Should contain label");
 
   valk_delta_snapshot_free(&snap);
 
@@ -761,7 +761,7 @@ void test_delta_json_with_counter_delta(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_json(&snap, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce JSON");
-  VALK_TEST_ASSERT(strstr(buf, "\"t\":\"c\"") != NULL, "Should contain counter type");
+  VALK_TEST_ASSERT(strstr(buf, "\"t\":\"c\"") != nullptr, "Should contain counter type");
 
   valk_delta_snapshot_free(&snap);
 
@@ -785,7 +785,7 @@ void test_delta_json_with_gauge_delta(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_json(&snap, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce JSON");
-  VALK_TEST_ASSERT(strstr(buf, "\"t\":\"g\"") != NULL, "Should contain gauge type");
+  VALK_TEST_ASSERT(strstr(buf, "\"t\":\"g\"") != nullptr, "Should contain gauge type");
 
   valk_delta_snapshot_free(&snap);
 
@@ -811,7 +811,7 @@ void test_delta_json_with_histogram_delta(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_json(&snap, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce JSON");
-  VALK_TEST_ASSERT(strstr(buf, "\"t\":\"h\"") != NULL, "Should contain histogram type");
+  VALK_TEST_ASSERT(strstr(buf, "\"t\":\"h\"") != nullptr, "Should contain histogram type");
 
   valk_delta_snapshot_free(&snap);
 
@@ -840,7 +840,7 @@ void test_delta_prometheus_histogram_with_labels(VALK_TEST_ARGS()) {
   size_t len = valk_delta_to_prometheus(&snap, &g_metrics, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce output");
-  VALK_TEST_ASSERT(strstr(buf, "handler=\"test\"") != NULL, "Should contain label in bucket");
+  VALK_TEST_ASSERT(strstr(buf, "handler=\"test\"") != nullptr, "Should contain label in bucket");
 
   valk_delta_snapshot_free(&snap);
 
@@ -869,9 +869,9 @@ void test_metrics_v2_to_json_with_all_types(VALK_TEST_ARGS()) {
   size_t len = valk_metrics_v2_to_json(&g_metrics, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce JSON");
-  VALK_TEST_ASSERT(strstr(buf, "\"counters\"") != NULL, "Should contain counters");
-  VALK_TEST_ASSERT(strstr(buf, "\"gauges\"") != NULL, "Should contain gauges");
-  VALK_TEST_ASSERT(strstr(buf, "\"histograms\"") != NULL, "Should contain histograms");
+  VALK_TEST_ASSERT(strstr(buf, "\"counters\"") != nullptr, "Should contain counters");
+  VALK_TEST_ASSERT(strstr(buf, "\"gauges\"") != nullptr, "Should contain gauges");
+  VALK_TEST_ASSERT(strstr(buf, "\"histograms\"") != nullptr, "Should contain histograms");
 
   VALK_PASS();
 }
@@ -893,7 +893,7 @@ void test_metrics_v2_to_json_with_labels(VALK_TEST_ARGS()) {
   size_t len = valk_metrics_v2_to_json(&g_metrics, buf, sizeof(buf));
 
   VALK_TEST_ASSERT(len > 0, "Should produce JSON");
-  VALK_TEST_ASSERT(strstr(buf, "\"labels\"") != NULL, "Should contain labels");
+  VALK_TEST_ASSERT(strstr(buf, "\"labels\"") != nullptr, "Should contain labels");
 
   VALK_PASS();
 }

@@ -13,14 +13,14 @@ typedef struct {
 } valk_continuation_t;
 
 // Global to track current continuation (simplified for now)
-static __thread valk_continuation_t* current_continuation = NULL;
+static __thread valk_continuation_t* current_continuation = nullptr;
 
 // Create a continuation
 valk_lval_t* valk_continuation_new(valk_lenv_t* env) {
   valk_continuation_t* cont = valk_mem_alloc(sizeof(valk_continuation_t));
   cont->env = env;
-  cont->resume = NULL;
-  cont->user_data = NULL;
+  cont->resume = nullptr;
+  cont->user_data = nullptr;
 
   return valk_lval_ref("continuation", cont, valk_mem_free);
 }

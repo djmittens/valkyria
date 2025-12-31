@@ -12,11 +12,11 @@ void test_pool_metrics_init_null_args(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_pool_metrics_t m;
-  bool result = valk_pool_metrics_init(NULL, "test");
-  VALK_TEST_ASSERT(result == false, "Should return false for NULL metrics");
+  bool result = valk_pool_metrics_init(nullptr, "test");
+  VALK_TEST_ASSERT(result == false, "Should return false for nullptr metrics");
 
-  result = valk_pool_metrics_init(&m, NULL);
-  VALK_TEST_ASSERT(result == false, "Should return false for NULL pool name");
+  result = valk_pool_metrics_init(&m, nullptr);
+  VALK_TEST_ASSERT(result == false, "Should return false for nullptr pool name");
 
   VALK_PASS();
 }
@@ -25,14 +25,14 @@ void test_pool_metrics_init_custom_null_args(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_pool_metrics_t m;
-  bool result = valk_pool_metrics_init_custom(NULL, "test", "pool");
-  VALK_TEST_ASSERT(result == false, "Should return false for NULL metrics");
+  bool result = valk_pool_metrics_init_custom(nullptr, "test", "pool");
+  VALK_TEST_ASSERT(result == false, "Should return false for nullptr metrics");
 
-  result = valk_pool_metrics_init_custom(&m, NULL, "pool");
-  VALK_TEST_ASSERT(result == false, "Should return false for NULL pool name");
+  result = valk_pool_metrics_init_custom(&m, nullptr, "pool");
+  VALK_TEST_ASSERT(result == false, "Should return false for nullptr pool name");
 
-  result = valk_pool_metrics_init_custom(&m, "test", NULL);
-  VALK_TEST_ASSERT(result == false, "Should return false for NULL prefix");
+  result = valk_pool_metrics_init_custom(&m, "test", nullptr);
+  VALK_TEST_ASSERT(result == false, "Should return false for nullptr prefix");
 
   VALK_PASS();
 }
@@ -46,11 +46,11 @@ void test_pool_metrics_init_success(VALK_TEST_ARGS()) {
   bool result = valk_pool_metrics_init(&m, "test_pool");
   VALK_TEST_ASSERT(result == true, "Should return true on success");
 
-  VALK_TEST_ASSERT(m.pool_name != NULL, "pool_name should be set");
-  VALK_TEST_ASSERT(m.used != NULL, "used gauge should be created");
-  VALK_TEST_ASSERT(m.total != NULL, "total gauge should be created");
-  VALK_TEST_ASSERT(m.peak != NULL, "peak gauge should be created");
-  VALK_TEST_ASSERT(m.overflow != NULL, "overflow counter should be created");
+  VALK_TEST_ASSERT(m.pool_name != nullptr, "pool_name should be set");
+  VALK_TEST_ASSERT(m.used != nullptr, "used gauge should be created");
+  VALK_TEST_ASSERT(m.total != nullptr, "total gauge should be created");
+  VALK_TEST_ASSERT(m.peak != nullptr, "peak gauge should be created");
+  VALK_TEST_ASSERT(m.overflow != nullptr, "overflow counter should be created");
 
   VALK_PASS();
 }
@@ -64,7 +64,7 @@ void test_pool_metrics_init_custom_success(VALK_TEST_ARGS()) {
   bool result = valk_pool_metrics_init_custom(&m, "custom_pool", "slab");
   VALK_TEST_ASSERT(result == true, "Should return true on success");
 
-  VALK_TEST_ASSERT(m.pool_name != NULL, "pool_name should be set");
+  VALK_TEST_ASSERT(m.pool_name != nullptr, "pool_name should be set");
   VALK_TEST_ASSERT(strcmp(m.pool_name, "custom_pool") == 0, "pool_name should match");
 
   VALK_PASS();
@@ -73,9 +73,9 @@ void test_pool_metrics_init_custom_success(VALK_TEST_ARGS()) {
 void test_pool_metrics_update_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_pool_metrics_update(NULL, 100, 1000, 500, 0);
-  valk_pool_metrics_update_slab(NULL, 100, 50, 75, 0);
-  valk_pool_metrics_update_arena(NULL, 4096, 1024, 2048, 0);
+  valk_pool_metrics_update(nullptr, 100, 1000, 500, 0);
+  valk_pool_metrics_update_slab(nullptr, 100, 50, 75, 0);
+  valk_pool_metrics_update_arena(nullptr, 4096, 1024, 2048, 0);
 
   VALK_PASS();
 }
@@ -208,7 +208,7 @@ void test_pool_metrics_multiple_pools(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-static valk_pool_metrics_t *concurrent_test_metrics = NULL;
+static valk_pool_metrics_t *concurrent_test_metrics = nullptr;
 static _Atomic int concurrent_threads_done = 0;
 
 static void *concurrent_update_thread(void *arg) {
@@ -221,7 +221,7 @@ static void *concurrent_update_thread(void *arg) {
                               (u64)(thread_id * 100 + i));
   }
   atomic_fetch_add(&concurrent_threads_done, 1);
-  return NULL;
+  return nullptr;
 }
 
 void test_pool_metrics_concurrent_updates(VALK_TEST_ARGS()) {
@@ -240,11 +240,11 @@ void test_pool_metrics_concurrent_updates(VALK_TEST_ARGS()) {
   int thread_ids[4] = {0, 1, 2, 3};
 
   for (int i = 0; i < 4; i++) {
-    pthread_create(&threads[i], NULL, concurrent_update_thread, &thread_ids[i]);
+    pthread_create(&threads[i], nullptr, concurrent_update_thread, &thread_ids[i]);
   }
 
   for (int i = 0; i < 4; i++) {
-    pthread_join(threads[i], NULL);
+    pthread_join(threads[i], nullptr);
   }
 
   VALK_TEST_ASSERT(atomic_load(&concurrent_threads_done) == 4, "All threads should complete");
@@ -421,8 +421,8 @@ void test_pool_metrics_custom_prefix_long(VALK_TEST_ARGS()) {
   bool result = valk_pool_metrics_init_custom(&m, "test_pool", "memory_subsystem");
   VALK_TEST_ASSERT(result == true, "Init with long prefix should succeed");
 
-  VALK_TEST_ASSERT(m.used != NULL, "used gauge should be created");
-  VALK_TEST_ASSERT(m.total != NULL, "total gauge should be created");
+  VALK_TEST_ASSERT(m.used != nullptr, "used gauge should be created");
+  VALK_TEST_ASSERT(m.total != nullptr, "total gauge should be created");
 
   VALK_PASS();
 }
@@ -446,10 +446,10 @@ void test_pool_metrics_all_fields_null_metrics(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_pool_metrics_t m = {0};
-  m.used = NULL;
-  m.total = NULL;
-  m.peak = NULL;
-  m.overflow = NULL;
+  m.used = nullptr;
+  m.total = nullptr;
+  m.peak = nullptr;
+  m.overflow = nullptr;
 
   valk_pool_metrics_update(&m, 100, 200, 150, 5);
 
@@ -491,19 +491,19 @@ void test_pool_metrics_partial_null_fields(VALK_TEST_ARGS()) {
   valk_gauge_v2_t *saved_peak = m.peak;
   valk_counter_v2_t *saved_overflow = m.overflow;
 
-  m.used = NULL;
+  m.used = nullptr;
   valk_pool_metrics_update(&m, 100, 200, 150, 5);
 
   m.used = saved_used;
-  m.total = NULL;
+  m.total = nullptr;
   valk_pool_metrics_update(&m, 100, 200, 150, 6);
 
   m.total = saved_total;
-  m.peak = NULL;
+  m.peak = nullptr;
   valk_pool_metrics_update(&m, 100, 200, 150, 7);
 
   m.peak = saved_peak;
-  m.overflow = NULL;
+  m.overflow = nullptr;
   valk_pool_metrics_update(&m, 100, 200, 150, 8);
 
   m.overflow = saved_overflow;

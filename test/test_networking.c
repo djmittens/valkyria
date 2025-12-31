@@ -51,7 +51,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   }
 
   valk_async_handle_t *hserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
 
   valk_lval_t *server = valk_async_handle_await(hserv);
   VALK_ASSERT(LVAL_TYPE(server) != LVAL_ERR, "Failed to start server: %s", server->str);
@@ -144,7 +144,7 @@ void test_tcp_client_disconnect(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *hserv2 = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, NULL);
+      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
   valk_lval_t *server2 = valk_async_handle_await(hserv2);
   (void)server2;
   valk_aio_stop(sys);
@@ -178,7 +178,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   fflush(stdout);
   if (!prelude_ast || LVAL_TYPE(prelude_ast) == LVAL_ERR) {
     VALK_FAIL("Failed to parse prelude: %s",
-              prelude_ast ? prelude_ast->str : "NULL");
+              prelude_ast ? prelude_ast->str : "nullptr");
     return;
   }
 
@@ -212,12 +212,12 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   valk_lval_t *handler_ast = valk_parse_file("test/test_lisp_50mb_handler.valk");
   if (!handler_ast || LVAL_TYPE(handler_ast) == LVAL_ERR) {
     VALK_FAIL("Failed to parse handler: %s",
-              handler_ast ? handler_ast->str : "NULL");
+              handler_ast ? handler_ast->str : "nullptr");
     return;
   }
 
   // Evaluate handler file - the last expression is the handler lambda
-  valk_lval_t *handler_fn = NULL;
+  valk_lval_t *handler_fn = nullptr;
   while (valk_lval_list_count(handler_ast)) {
     handler_fn = valk_lval_eval(env, valk_lval_pop(handler_ast, 0));
     if (LVAL_TYPE(handler_fn) == LVAL_ERR) {
@@ -228,7 +228,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
 
   if (!handler_fn || LVAL_TYPE(handler_fn) != LVAL_FUN) {
     VALK_FAIL("Handler is not a function, got type: %s",
-              handler_fn ? valk_ltype_name(LVAL_TYPE(handler_fn)) : "NULL");
+              handler_fn ? valk_ltype_name(LVAL_TYPE(handler_fn)) : "nullptr");
     return;
   }
   printf("[test] Handler loaded (type=%s)\n", valk_ltype_name(LVAL_TYPE(handler_fn)));
@@ -244,7 +244,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   // Start server with Lisp handler on port 0 (OS assigns port)
   valk_async_handle_t *hserv = valk_aio_http2_listen(
       sys, "0.0.0.0", 0, "build/server.key", "build/server.crt",
-      NULL, handler_fn);  // Pass Lisp handler
+      nullptr, handler_fn);  // Pass Lisp handler
 
   valk_lval_t *server = valk_async_handle_await(hserv);
   if (LVAL_TYPE(server) == LVAL_ERR) {

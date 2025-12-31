@@ -5,7 +5,7 @@
 #include "aio_http2_conn.h"
 
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
-  return conn->sys ? conn->sys->ops->tcp : NULL;
+  return conn->sys ? conn->sys->ops->tcp : nullptr;
 }
 
 static inline valk_io_tcp_t *__conn_tcp(valk_aio_handle_t *conn) {

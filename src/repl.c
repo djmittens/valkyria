@@ -14,8 +14,8 @@
 #include "parser.h"
 
 // Global pointers for signal handler (Phase 8: Telemetry)
-static valk_mem_arena_t* g_scratch_for_signal = NULL;
-static valk_gc_malloc_heap_t* g_heap_for_signal = NULL;
+static valk_mem_arena_t* g_scratch_for_signal = nullptr;
+static valk_gc_malloc_heap_t* g_heap_for_signal = nullptr;
 
 // Per-evaluation memory tracking for REPL profile dashboard
 static valk_repl_mem_snapshot_t g_last_eval_before;
@@ -25,7 +25,7 @@ static valk_repl_mem_snapshot_t g_last_eval_after;
 // Usage: kill -USR1 <pid>
 static void sigusr1_handler(int sig) {
   (void)sig;
-  if (g_scratch_for_signal != NULL && g_heap_for_signal != NULL) {
+  if (g_scratch_for_signal != nullptr && g_heap_for_signal != nullptr) {
     fprintf(stderr, "\n[SIGUSR1] Memory statistics requested:\n");
     valk_memory_print_stats(g_scratch_for_signal, g_heap_for_signal, stderr);
   }
@@ -40,7 +40,7 @@ int main(int argc, char* argv[]) {
   valk_runtime_config_t runtime_cfg = valk_runtime_config_default();
   const char* hard_limit_env = getenv("VALK_HEAP_HARD_LIMIT");
   if (hard_limit_env && hard_limit_env[0] != '\0') {
-    runtime_cfg.gc_heap_size = strtoull(hard_limit_env, NULL, 10);
+    runtime_cfg.gc_heap_size = strtoull(hard_limit_env, nullptr, 10);
   }
 
   if (valk_runtime_init(&runtime_cfg) != 0) {
@@ -80,7 +80,7 @@ int main(int argc, char* argv[]) {
       .sa_flags = SA_RESTART,  // Restart interrupted syscalls (e.g., readline)
   };
   sigemptyset(&sa.sa_mask);
-  sigaction(SIGUSR1, &sa, NULL);
+  sigaction(SIGUSR1, &sa, nullptr);
 
   // If we got here, we processed files but did not request exit; drop into
   // REPL. Set mode to repl now so shutdown inside REPL performs teardown.
@@ -159,7 +159,7 @@ int main(int argc, char* argv[]) {
   valk_lenv_put(env, valk_lval_sym("VALK_MODE"), valk_lval_str("repl"));
 
   // This is the L in repL
-  while ((input = readline("valkyria> ")) != NULL) {
+  while ((input = readline("valkyria> ")) != nullptr) {
     int pos = 0;
     add_history(input);
 
@@ -207,7 +207,7 @@ int main(int argc, char* argv[]) {
     // live Classic Lisp approach - collect between expressions, never during
     // evaluation
     if (valk_gc_malloc_should_collect(gc_heap)) {
-      valk_gc_malloc_collect(gc_heap, NULL);  // No additional roots in REPL
+      valk_gc_malloc_collect(gc_heap, nullptr);  // No additional roots in REPL
     }
   }
 

@@ -30,7 +30,7 @@ void test_coverage_output_path(VALK_TEST_ARGS()) {
   valk_coverage_init();
   const char *path = valk_coverage_output_path();
   if (valk_coverage_enabled()) {
-    VALK_TEST_ASSERT(path != NULL, "path should not be NULL when coverage enabled");
+    VALK_TEST_ASSERT(path != nullptr, "path should not be nullptr when coverage enabled");
   }
 
   VALK_PASS();
@@ -154,10 +154,10 @@ void test_coverage_output_path_consistent(VALK_TEST_ARGS()) {
   const char *first = valk_coverage_output_path();
   const char *second = valk_coverage_output_path();
 
-  if (first != NULL && second != NULL) {
+  if (first != nullptr && second != nullptr) {
     VALK_TEST_ASSERT(strcmp(first, second) == 0, "output_path should be consistent");
   } else {
-    VALK_TEST_ASSERT(first == second, "both should be NULL or both non-NULL");
+    VALK_TEST_ASSERT(first == second, "both should be nullptr or both non-nullptr");
   }
 
   VALK_PASS();
@@ -240,7 +240,7 @@ void test_coverage_get_file_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_line_coverage_file_t *fc = valk_coverage_get_file(0);
-  VALK_TEST_ASSERT(fc == NULL, "file_id 0 should return NULL");
+  VALK_TEST_ASSERT(fc == nullptr, "file_id 0 should return nullptr");
 
   VALK_PASS();
 }
@@ -348,7 +348,7 @@ void test_coverage_get_line_expr_count_null_params(VALK_TEST_ARGS()) {
   valk_coverage_mark_expr(1, 40, 1, 10);
   valk_coverage_record_expr(1, 40, 1);
 
-  size_t result = valk_coverage_get_line_expr_count(1, 40, NULL, NULL);
+  size_t result = valk_coverage_get_line_expr_count(1, 40, nullptr, nullptr);
   (void)result;
 
   VALK_PASS();

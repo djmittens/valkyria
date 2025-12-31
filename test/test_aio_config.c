@@ -82,18 +82,18 @@ void test_config_validation_limits(VALK_TEST_ARGS()) {
 
   cfg.max_connections = 0;
   const char *err1 = valk_aio_system_config_validate(&cfg);
-  VALK_TEST_ASSERT(err1 != NULL,
+  VALK_TEST_ASSERT(err1 != nullptr,
                    "Validation should fail for max_connections = 0");
 
   cfg.max_connections = 100001;
   const char *err2 = valk_aio_system_config_validate(&cfg);
-  VALK_TEST_ASSERT(err2 != NULL,
+  VALK_TEST_ASSERT(err2 != nullptr,
                    "Validation should fail for max_connections = 100001");
 
   cfg.max_connections = 100;
   const char *err3 = valk_aio_system_config_validate(&cfg);
-  VALK_TEST_ASSERT(err3 == NULL,
-                   "Validation should pass for max_connections = 100, got: %s", err3 ? err3 : "NULL");
+  VALK_TEST_ASSERT(err3 == nullptr,
+                   "Validation should pass for max_connections = 100, got: %s", err3 ? err3 : "nullptr");
 
   VALK_PASS();
 }
@@ -107,14 +107,14 @@ void test_config_validation_relationships(VALK_TEST_ARGS()) {
   cfg.max_connections = 100;
   cfg.tcp_buffer_pool_size = 50;
   const char *err1 = valk_aio_system_config_validate(&cfg);
-  VALK_TEST_ASSERT(err1 != NULL,
+  VALK_TEST_ASSERT(err1 != nullptr,
                    "Validation should fail when tcp_buffer_pool_size < max_connections");
 
   cfg.tcp_buffer_pool_size = 100;
   const char *err2 = valk_aio_system_config_validate(&cfg);
-  VALK_TEST_ASSERT(err2 == NULL,
+  VALK_TEST_ASSERT(err2 == nullptr,
                    "Validation should pass when tcp_buffer_pool_size >= max_connections, got: %s",
-                   err2 ? err2 : "NULL");
+                   err2 ? err2 : "nullptr");
 
   VALK_PASS();
 }
@@ -127,7 +127,7 @@ void test_system_start_with_config(VALK_TEST_ARGS()) {
   cfg.max_concurrent_streams = 50;
 
   valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
-  VALK_TEST_ASSERT(sys != NULL,
+  VALK_TEST_ASSERT(sys != nullptr,
                    "System should start with valid config");
 
   valk_aio_stop(sys);
@@ -143,7 +143,7 @@ void test_system_start_invalid_config(VALK_TEST_ARGS()) {
   cfg.tcp_buffer_pool_size = 50;
 
   valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
-  VALK_TEST_ASSERT(sys == NULL,
+  VALK_TEST_ASSERT(sys == nullptr,
                    "System should fail to start with invalid config");
 
   VALK_PASS();

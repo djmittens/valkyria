@@ -20,7 +20,7 @@ void test_ssl_server_init_invalid_files(VALK_TEST_ARGS()) {
   
   valk_aio_ssl_start();
   
-  SSL_CTX *ctx = NULL;
+  SSL_CTX *ctx = nullptr;
   valk_err_e err = valk_aio_ssl_server_init(&ctx, "/nonexistent/key.pem", "/nonexistent/cert.pem");
   ASSERT_EQ(err, VALK_ERR_SSL_INIT);
   ASSERT_NULL(ctx);
@@ -33,7 +33,7 @@ void test_ssl_server_init_valid_key_invalid_cert(VALK_TEST_ARGS()) {
   
   valk_aio_ssl_start();
   
-  SSL_CTX *ctx = NULL;
+  SSL_CTX *ctx = nullptr;
   valk_err_e err = valk_aio_ssl_server_init(&ctx, 
     "vendor/nghttp2/tests/testdata/privkey.pem",
     "/nonexistent/cert.pem");
@@ -49,7 +49,7 @@ void test_ssl_handshake_null_ssl(VALK_TEST_ARGS()) {
   char buf[1024];
   valk_buffer_t out = {.items = buf, .count = 0, .capacity = sizeof(buf)};
   
-  valk_err_e err = valk_aio_ssl_handshake(NULL, &out);
+  valk_err_e err = valk_aio_ssl_handshake(nullptr, &out);
   ASSERT_EQ(err, VALK_ERR_SSL_INVALID);
   
   VALK_PASS();
@@ -62,9 +62,9 @@ void test_ssl_handshake_invalid_ssl_fields(VALK_TEST_ARGS()) {
   valk_buffer_t out = {.items = buf, .count = 0, .capacity = sizeof(buf)};
   
   valk_aio_ssl_t ssl = {0};
-  ssl.ssl = NULL;
-  ssl.read_bio = NULL;
-  ssl.write_bio = NULL;
+  ssl.ssl = nullptr;
+  ssl.read_bio = nullptr;
+  ssl.write_bio = nullptr;
   
   valk_err_e err = valk_aio_ssl_handshake(&ssl, &out);
   ASSERT_EQ(err, VALK_ERR_SSL_INVALID);
@@ -84,7 +84,7 @@ void test_ssl_handshake_null_output_buffer(VALK_TEST_ARGS()) {
   valk_aio_ssl_connect(&ssl, ctx);
   ASSERT_NOT_NULL(ssl.ssl);
   
-  valk_err_e err = valk_aio_ssl_handshake(&ssl, NULL);
+  valk_err_e err = valk_aio_ssl_handshake(&ssl, nullptr);
   ASSERT_EQ(err, VALK_ERR_SSL_INVALID);
   
   valk_aio_ssl_free(&ssl);
@@ -105,7 +105,7 @@ void test_ssl_handshake_invalid_output_buffer(VALK_TEST_ARGS()) {
   valk_aio_ssl_connect(&ssl, ctx);
   ASSERT_NOT_NULL(ssl.ssl);
   
-  valk_buffer_t out = {.items = NULL, .count = 0, .capacity = 0};
+  valk_buffer_t out = {.items = nullptr, .count = 0, .capacity = 0};
   valk_err_e err = valk_aio_ssl_handshake(&ssl, &out);
   ASSERT_EQ(err, VALK_ERR_SSL_INVALID);
   
@@ -144,7 +144,7 @@ void test_ssl_on_read_null_ssl(VALK_TEST_ARGS()) {
   valk_buffer_t in = {.items = ibuf, .count = 0, .capacity = sizeof(ibuf)};
   valk_buffer_t out = {.items = obuf, .count = 0, .capacity = sizeof(obuf)};
   
-  valk_err_e err = valk_aio_ssl_on_read(NULL, &in, &out, NULL, NULL);
+  valk_err_e err = valk_aio_ssl_on_read(nullptr, &in, &out, nullptr, nullptr);
   ASSERT_EQ(err, VALK_ERR_SSL_INVALID);
   
   VALK_PASS();
@@ -158,7 +158,7 @@ void test_ssl_on_read_invalid_ssl_fields(VALK_TEST_ARGS()) {
   valk_buffer_t out = {.items = obuf, .count = 0, .capacity = sizeof(obuf)};
   
   valk_aio_ssl_t ssl = {0};
-  valk_err_e err = valk_aio_ssl_on_read(&ssl, &in, &out, NULL, NULL);
+  valk_err_e err = valk_aio_ssl_on_read(&ssl, &in, &out, nullptr, nullptr);
   ASSERT_EQ(err, VALK_ERR_SSL_INVALID);
   
   VALK_PASS();
@@ -171,7 +171,7 @@ void test_ssl_encrypt_null_ssl(VALK_TEST_ARGS()) {
   valk_buffer_t in = {.items = ibuf, .count = 10, .capacity = sizeof(ibuf)};
   valk_buffer_t out = {.items = obuf, .count = 0, .capacity = sizeof(obuf)};
   
-  valk_err_e err = valk_aio_ssl_encrypt(NULL, &in, &out);
+  valk_err_e err = valk_aio_ssl_encrypt(nullptr, &in, &out);
   ASSERT_EQ(err, VALK_ERR_SSL_INVALID);
   
   VALK_PASS();
@@ -205,7 +205,7 @@ void test_ssl_encrypt_null_input_buffer(VALK_TEST_ARGS()) {
   char obuf[256];
   valk_buffer_t out = {.items = obuf, .count = 0, .capacity = sizeof(obuf)};
   
-  valk_err_e err = valk_aio_ssl_encrypt(&ssl, NULL, &out);
+  valk_err_e err = valk_aio_ssl_encrypt(&ssl, nullptr, &out);
   ASSERT_EQ(err, VALK_ERR_SSL_INVALID);
   
   valk_aio_ssl_free(&ssl);
@@ -225,7 +225,7 @@ void test_ssl_encrypt_null_input_items(VALK_TEST_ARGS()) {
   valk_aio_ssl_t ssl = {0};
   valk_aio_ssl_connect(&ssl, ctx);
   
-  valk_buffer_t in = {.items = NULL, .count = 10, .capacity = 256};
+  valk_buffer_t in = {.items = nullptr, .count = 10, .capacity = 256};
   char obuf[256];
   valk_buffer_t out = {.items = obuf, .count = 0, .capacity = sizeof(obuf)};
   
@@ -252,7 +252,7 @@ void test_ssl_encrypt_null_output_buffer(VALK_TEST_ARGS()) {
   char ibuf[256];
   valk_buffer_t in = {.items = ibuf, .count = 10, .capacity = sizeof(ibuf)};
   
-  valk_err_e err = valk_aio_ssl_encrypt(&ssl, &in, NULL);
+  valk_err_e err = valk_aio_ssl_encrypt(&ssl, &in, nullptr);
   ASSERT_EQ(err, VALK_ERR_SSL_INVALID);
   
   valk_aio_ssl_free(&ssl);
@@ -274,7 +274,7 @@ void test_ssl_encrypt_invalid_output_buffer(VALK_TEST_ARGS()) {
   
   char ibuf[256];
   valk_buffer_t in = {.items = ibuf, .count = 10, .capacity = sizeof(ibuf)};
-  valk_buffer_t out = {.items = NULL, .count = 0, .capacity = 0};
+  valk_buffer_t out = {.items = nullptr, .count = 0, .capacity = 0};
   
   valk_err_e err = valk_aio_ssl_encrypt(&ssl, &in, &out);
   ASSERT_EQ(err, VALK_ERR_SSL_INVALID);
@@ -312,7 +312,7 @@ void test_ssl_encrypt_output_buffer_overflow(VALK_TEST_ARGS()) {
 void test_ssl_free_null(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_aio_ssl_free(NULL);
+  valk_aio_ssl_free(nullptr);
   
   valk_aio_ssl_t ssl = {0};
   valk_aio_ssl_free(&ssl);
@@ -347,7 +347,7 @@ void test_ssl_free_double_free(VALK_TEST_ARGS()) {
 void test_ssl_print_state_null(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_aio_ssl_print_state(NULL);
+  valk_aio_ssl_print_state(nullptr);
   
   valk_aio_ssl_t ssl = {0};
   valk_aio_ssl_print_state(&ssl);
@@ -410,7 +410,7 @@ void test_ssl_client_init(VALK_TEST_ARGS()) {
   
   valk_aio_ssl_start();
   
-  SSL_CTX *ctx = NULL;
+  SSL_CTX *ctx = nullptr;
   valk_err_e err = valk_aio_ssl_client_init(&ctx);
   ASSERT_EQ(err, VALK_ERR_SUCCESS);
   ASSERT_NOT_NULL(ctx);
@@ -425,7 +425,7 @@ void test_ssl_handshake_empty_output(VALK_TEST_ARGS()) {
   
   valk_aio_ssl_start();
   
-  SSL_CTX *ctx = NULL;
+  SSL_CTX *ctx = nullptr;
   valk_err_e err = valk_aio_ssl_client_init(&ctx);
   ASSERT_EQ(err, VALK_ERR_SUCCESS);
   
@@ -449,7 +449,7 @@ void test_ssl_on_read_empty_input(VALK_TEST_ARGS()) {
   
   valk_aio_ssl_start();
   
-  SSL_CTX *ctx = NULL;
+  SSL_CTX *ctx = nullptr;
   valk_err_e err = valk_aio_ssl_client_init(&ctx);
   ASSERT_EQ(err, VALK_ERR_SUCCESS);
   
@@ -460,7 +460,7 @@ void test_ssl_on_read_empty_input(VALK_TEST_ARGS()) {
   valk_buffer_t in = {.items = ibuf, .count = 0, .capacity = sizeof(ibuf)};
   valk_buffer_t out = {.items = obuf, .count = 0, .capacity = sizeof(obuf)};
   
-  err = valk_aio_ssl_on_read(&ssl, &in, &out, NULL, NULL);
+  err = valk_aio_ssl_on_read(&ssl, &in, &out, nullptr, nullptr);
   ASSERT_EQ(err, VALK_ERR_SUCCESS);
   
   valk_aio_ssl_free(&ssl);
@@ -474,7 +474,7 @@ void test_ssl_encrypt_not_finished(VALK_TEST_ARGS()) {
   
   valk_aio_ssl_start();
   
-  SSL_CTX *ctx = NULL;
+  SSL_CTX *ctx = nullptr;
   valk_err_e err = valk_aio_ssl_client_init(&ctx);
   ASSERT_EQ(err, VALK_ERR_SUCCESS);
   
@@ -500,7 +500,7 @@ void test_ssl_handshake_tiny_buffer(VALK_TEST_ARGS()) {
   
   valk_aio_ssl_start();
   
-  SSL_CTX *ctx = NULL;
+  SSL_CTX *ctx = nullptr;
   valk_err_e err = valk_aio_ssl_client_init(&ctx);
   ASSERT_EQ(err, VALK_ERR_SUCCESS);
   
@@ -525,7 +525,7 @@ void test_ssl_handshake_full_buffer(VALK_TEST_ARGS()) {
   
   valk_aio_ssl_start();
   
-  SSL_CTX *ctx = NULL;
+  SSL_CTX *ctx = nullptr;
   valk_err_e err = valk_aio_ssl_client_init(&ctx);
   ASSERT_EQ(err, VALK_ERR_SUCCESS);
   
@@ -550,7 +550,7 @@ void test_ssl_on_read_with_garbage_data(VALK_TEST_ARGS()) {
   
   valk_aio_ssl_start();
   
-  SSL_CTX *ctx = NULL;
+  SSL_CTX *ctx = nullptr;
   valk_err_e err = valk_aio_ssl_client_init(&ctx);
   ASSERT_EQ(err, VALK_ERR_SUCCESS);
   
@@ -562,7 +562,7 @@ void test_ssl_on_read_with_garbage_data(VALK_TEST_ARGS()) {
   valk_buffer_t in = {.items = ibuf, .count = 100, .capacity = sizeof(ibuf)};
   valk_buffer_t out = {.items = obuf, .count = 0, .capacity = sizeof(obuf)};
   
-  err = valk_aio_ssl_on_read(&ssl, &in, &out, NULL, NULL);
+  err = valk_aio_ssl_on_read(&ssl, &in, &out, nullptr, nullptr);
   VALK_TEST_ASSERT(err == VALK_ERR_SSL_PROTOCOL || err == VALK_ERR_SSL_RE_NEGOTIATE,
                    "Expected PROTOCOL error or RE_NEGOTIATE with garbage data, got %d", err);
   

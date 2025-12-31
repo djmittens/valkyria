@@ -11,11 +11,11 @@ void valk_conn_io_free(valk_conn_io_t *io, valk_slab_t *slab) {
   
   if (io->read_buf && slab) {
     valk_slab_release(slab, io->read_buf);
-    io->read_buf = NULL;
+    io->read_buf = nullptr;
   }
   if (io->write_buf && slab) {
     valk_slab_release(slab, io->write_buf);
-    io->write_buf = NULL;
+    io->write_buf = nullptr;
   }
 }
 
@@ -36,11 +36,11 @@ bool valk_conn_io_read_buf_acquire(valk_conn_io_t *io, valk_slab_t *slab) {
 void valk_conn_io_read_buf_release(valk_conn_io_t *io, valk_slab_t *slab) {
   if (!io || !io->read_buf || !slab) return;
   valk_slab_release(slab, io->read_buf);
-  io->read_buf = NULL;
+  io->read_buf = nullptr;
 }
 
 u8 *valk_conn_io_read_buf_data(valk_conn_io_t *io) {
-  if (!io->read_buf) return NULL;
+  if (!io->read_buf) return nullptr;
   __tcp_buffer_slab_item_t *item = (void *)io->read_buf->data;
   return (u8 *)item->data;
 }
@@ -66,7 +66,7 @@ bool valk_conn_io_write_buf_acquire(valk_conn_io_t *io, valk_slab_t *slab) {
 }
 
 u8 *valk_conn_io_write_buf_data(valk_conn_io_t *io) {
-  if (!io->write_buf) return NULL;
+  if (!io->write_buf) return nullptr;
   __tcp_buffer_slab_item_t *item = (void *)io->write_buf->data;
   return (u8 *)item->data;
 }

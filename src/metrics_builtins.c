@@ -67,13 +67,13 @@ static valk_lval_t *valk_builtin_metrics_counter(valk_lenv_t *e, valk_lval_t *a)
   }
 
   valk_counter_v2_t *counter = valk_counter_get_or_create(
-      name_arg->str, NULL, &labels);
+      name_arg->str, nullptr, &labels);
 
   if (!counter) {
     return valk_lval_err("metrics/counter: registry full");
   }
 
-  return valk_lval_ref("metrics_counter", counter, NULL);
+  return valk_lval_ref("metrics_counter", counter, nullptr);
 }
 
 // (metrics/counter-inc counter [n]) -> nil
@@ -141,13 +141,13 @@ static valk_lval_t *valk_builtin_metrics_gauge(valk_lenv_t *e, valk_lval_t *a) {
   }
 
   valk_gauge_v2_t *gauge = valk_gauge_get_or_create(
-      name_arg->str, NULL, &labels);
+      name_arg->str, nullptr, &labels);
 
   if (!gauge) {
     return valk_lval_err("metrics/gauge: registry full");
   }
 
-  return valk_lval_ref("metrics_gauge", gauge, NULL);
+  return valk_lval_ref("metrics_gauge", gauge, nullptr);
 }
 
 // (metrics/gauge-set gauge value) -> nil
@@ -280,13 +280,13 @@ static valk_lval_t *valk_builtin_metrics_histogram(valk_lenv_t *e, valk_lval_t *
   }
 
   valk_histogram_v2_t *h = valk_histogram_get_or_create(
-      name_arg->str, NULL, buckets, bucket_count, &labels);
+      name_arg->str, nullptr, buckets, bucket_count, &labels);
 
   if (!h) {
     return valk_lval_err("metrics/histogram: registry full");
   }
 
-  return valk_lval_ref("metrics_histogram", h, NULL);
+  return valk_lval_ref("metrics_histogram", h, nullptr);
 }
 
 // (metrics/histogram-observe histogram value-us) -> nil
@@ -452,6 +452,34 @@ static valk_lval_t *valk_builtin_metrics_json(valk_lenv_t *e, valk_lval_t *a) {
   return result;
 }
 
+// (metrics/registry-json) -> json-string
+// Returns registry meta-metrics (capacity, usage, evictions)
+static valk_lval_t *valk_builtin_metrics_registry_json(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  if (valk_lval_list_count(a) != 0) {
+    return valk_lval_err("metrics/registry-json: expected 0 arguments");
+  }
+
+  valk_registry_stats_t stats;
+  valk_registry_stats_collect(&stats);
+
+  char *buf = malloc(2048);
+  if (!buf) {
+    return valk_lval_err("metrics/registry-json: allocation failed");
+  }
+
+  u64 len = valk_registry_stats_to_json(&stats, buf, 2048);
+  if (len == 0 || len >= 2048) {
+    free(buf);
+    return valk_lval_err("metrics/registry-json: output too large");
+  }
+
+  valk_lval_t *result = valk_lval_str_n(buf, len);
+  free(buf);
+  return result;
+}
+
 #ifdef VALK_METRICS_ENABLED
 // (aio/slab-buckets sys slab-name start end num-buckets) -> json-string
 static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a) {
@@ -489,7 +517,7 @@ static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a
     return valk_lval_err("aio/slab-buckets: num-buckets must be 1-4096");
   }
 
-  valk_slab_t *slab = NULL;
+  valk_slab_t *slab = nullptr;
   if (strcmp(slab_name, "tcp_buffers") == 0) {
     slab = valk_aio_get_tcp_buffer_slab(sys);
   } else if (strcmp(slab_name, "handles") == 0) {
@@ -713,6 +741,7 @@ void valk_register_metrics_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "metrics/delta-json", valk_builtin_metrics_delta_json);
   valk_lenv_put_builtin(env, "metrics/prometheus", valk_builtin_metrics_prometheus);
   valk_lenv_put_builtin(env, "metrics/json", valk_builtin_metrics_json);
+  valk_lenv_put_builtin(env, "metrics/registry-json", valk_builtin_metrics_registry_json);
 
   // Diagnostics builtin
   valk_lenv_put_builtin(env, "aio/diagnostics-state-json",
