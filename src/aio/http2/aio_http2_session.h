@@ -63,3 +63,5 @@ int valk_http2_on_data_chunk_recv_callback(nghttp2_session *session,
                                            u8 flags, i32 stream_id,
                                            const u8 *data, size_t len,
                                            void *user_data);
+
+void valk_http2_release_stream_arena(valk_aio_handle_t *conn, i32 stream_id);

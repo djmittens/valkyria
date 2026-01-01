@@ -341,15 +341,15 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
   case SSL_ERROR_WANT_READ:
   case SSL_ERROR_WANT_WRITE:
     do {
-      VALK_ASSERT(!valk_buffer_is_full(Out),
-                  "Output buffer is full to append %llu", (unsigned long long)Out->count);
-      n = BIO_read(ssl->write_bio, &((char *)Out->items)[Out->count],
-                   Out->capacity - Out->count);
+      u64 remaining = Out->capacity - Out->count;
+      if (remaining == 0) {
+        VALK_DEBUG("SSL output buffer full (%llu bytes), will retry later",
+                   (unsigned long long)Out->count);
+        break;
+      }
+      n = BIO_read(ssl->write_bio, &((char *)Out->items)[Out->count], remaining);
       if (n > 0) {
         Out->count += n;
-        VALK_ASSERT(!valk_buffer_is_full(Out),
-                    "Output buffer is too full after append %llu",
-                    (unsigned long long)(Out->count + n));
       } else if (!BIO_should_retry(ssl->write_bio)) {
         return VALK_ERR_SSL_READ;
       }

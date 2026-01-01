@@ -493,6 +493,8 @@ void valk_http2_conn_on_disconnect(valk_aio_handle_t *handle) {
 
   handle->http.state = VALK_CONN_CLOSED;
 
+  valk_stream_body_close_all(handle);
+
   if (handle->http.httpHandler && handle->http.httpHandler->onDisconnect) {
     VALK_TRACE("HTTP/2 onDisconnect handler");
     handle->http.httpHandler->onDisconnect(handle->http.httpHandler->arg, handle);

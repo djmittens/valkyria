@@ -1,4 +1,5 @@
 #include "aio_stream_body.h"
+#include "aio_http2_session.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,6 +115,8 @@ static void __stream_body_finish_close(valk_stream_body_t *body) {
     body->lisp_on_timeout = nullptr;
   }
 
+  valk_http2_release_stream_arena(body->conn, body->stream_id);
+
   valk_stream_body_unregister(body);
 }
 
@@ -135,8 +138,11 @@ void valk_stream_body_close(valk_stream_body_t *body) {
     body->data_deferred = false;
     int rv = nghttp2_session_resume_data(body->session, body->stream_id);
     if (rv != 0) {
-      VALK_WARN("stream_body: failed to resume stream %d for close: %s",
-                body->stream_id, nghttp2_strerror(rv));
+      VALK_DEBUG("stream_body: stream %d already closed, finishing body %llu immediately",
+                 body->stream_id, (unsigned long long)body->id);
+      body->state = VALK_STREAM_CLOSED;
+      __stream_body_finish_close(body);
+      return;
     }
   }
   valk_http2_flush_pending(body->conn);
@@ -201,16 +207,18 @@ int valk_stream_body_write(valk_stream_body_t *body, const char *data, u64 len) 
   if (body->data_deferred) {
     body->data_deferred = false;
     if (!nghttp2_session_find_stream(body->session, body->stream_id)) {
-      VALK_DEBUG("stream_body: stream %d no longer exists, closing body %llu",
+      VALK_DEBUG("stream_body: stream %d no longer exists, closing body %llu immediately",
                  body->stream_id, (unsigned long long)body->id);
-      body->state = VALK_STREAM_CLOSING;
+      body->state = VALK_STREAM_CLOSED;
+      __stream_body_finish_close(body);
       return -1;
     }
     int rv = nghttp2_session_resume_data(body->session, body->stream_id);
     if (rv != 0) {
-      VALK_WARN("stream_body: failed to resume stream %d: %s, closing body",
-                body->stream_id, nghttp2_strerror(rv));
-      body->state = VALK_STREAM_CLOSING;
+      VALK_DEBUG("stream_body: failed to resume stream %d: %s, closing body %llu immediately",
+                 body->stream_id, nghttp2_strerror(rv), (unsigned long long)body->id);
+      body->state = VALK_STREAM_CLOSED;
+      __stream_body_finish_close(body);
       return -1;
     }
     valk_http2_flush_pending(body->conn);

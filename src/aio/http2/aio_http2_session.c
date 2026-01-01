@@ -923,3 +923,33 @@ bool valk_aio_http_connection_closing(valk_aio_handle_t *handle) {
   return handle->http.state == VALK_CONN_CLOSING ||
          handle->http.state == VALK_CONN_CLOSED;
 }
+
+void valk_http2_release_stream_arena(valk_aio_handle_t *conn, i32 stream_id) {
+  if (!conn || !conn->http.session || !conn->http.server || !conn->http.server->sys) {
+    return;
+  }
+
+  void *stream_data = nghttp2_session_get_stream_user_data(conn->http.session, stream_id);
+  if (!stream_data || __is_pending_stream(stream_data)) {
+    return;
+  }
+
+  valk_http2_server_request_t *req = (valk_http2_server_request_t *)stream_data;
+  if (!req->arena_slab_item) {
+    return;
+  }
+
+  VALK_INFO("Releasing arena for stream %d (early close)", stream_id);
+
+  valk_http2_metrics_on_arena_release(conn);
+  u32 slot = req->arena_slot;
+  valk_http2_remove_from_active_arenas(conn, slot);
+  req->arena_slot = UINT32_MAX;
+  valk_slab_item_t *item = req->arena_slab_item;
+  req->arena_slab_item = nullptr;
+  valk_slab_release(conn->http.server->sys->httpStreamArenas, item);
+
+  if (conn->http.server->sys->pending_streams.count > 0) {
+    __pending_stream_process_batch(conn->http.server->sys);
+  }
+}
