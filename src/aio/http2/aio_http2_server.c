@@ -554,8 +554,8 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
     if (handler) {
       srv->handler = *handler;
     }
-    srv->lisp_handler_fn = (valk_lval_t*)lisp_handler;
-    if (lisp_handler) {
+    srv->lisp_handler_fn = lisp_handler ? valk_evacuate_to_heap((valk_lval_t*)lisp_handler) : nullptr;
+    if (srv->lisp_handler_fn) {
       valk_gc_add_global_root(&srv->lisp_handler_fn);
       void* saved_heap = valk_thread_ctx.heap;
       valk_thread_ctx.heap = nullptr;

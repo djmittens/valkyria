@@ -740,16 +740,16 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
   ctx->arena = nullptr;
   ctx->request_id = req_id;
 
-  ctx->callback = callback;
-  ctx->headers = headers;
+  ctx->callback = valk_evacuate_to_heap(callback);
+  ctx->headers = headers ? valk_evacuate_to_heap(headers) : nullptr;
   
   valk_gc_add_global_root(&ctx->callback);
   if (ctx->headers) {
     valk_gc_add_global_root(&ctx->headers);
   }
 
-  VALK_INFO("http2/client-request[%llu]: callback=%p rooted", 
-            (unsigned long long)req_id, (void*)callback);
+  VALK_INFO("http2/client-request[%llu]: callback=%p rooted (was %p)", 
+            (unsigned long long)req_id, (void*)ctx->callback, (void*)callback);
 
   valk_async_handle_t *connect_handle = valk_aio_http2_connect_host(sys, host, port, host);
   connect_handle->on_done = __http2_client_request_connect_done;

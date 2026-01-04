@@ -212,7 +212,8 @@ static valk_lval_t *valk_builtin_stream_on_drain(valk_lenv_t *e, valk_lval_t *a)
   if (body->lisp_on_drain) {
     valk_gc_remove_global_root(&body->lisp_on_drain);
   }
-  body->lisp_on_drain = callback;
+  valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
+  body->lisp_on_drain = heap_callback;
   body->callback_env = e;
   valk_gc_add_global_root(&body->lisp_on_drain);
 
@@ -307,7 +308,8 @@ static valk_lval_t *valk_builtin_stream_on_close(valk_lenv_t *e, valk_lval_t *a)
   if (body->lisp_on_close) {
     valk_gc_remove_global_root(&body->lisp_on_close);
   }
-  body->lisp_on_close = callback;
+  valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
+  body->lisp_on_close = heap_callback;
   body->callback_env = e;
   valk_gc_add_global_root(&body->lisp_on_close);
 
