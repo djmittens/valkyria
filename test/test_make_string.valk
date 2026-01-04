@@ -1,0 +1,36 @@
+; Test make-string builtin
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "make-string Builtin Tests")
+
+(test/define "10 A's from string" {
+  do
+    (= {s} (make-string 10 "A"))
+    (test/assert-eq 10 (len s) "length should be 10")
+    (test/assert-eq "AAAAAAAAAA" s "content should be 10 A's")
+    true
+})
+
+(test/define "20 A's from char code 65" {
+  do
+    (= {s} (make-string 20 65))
+    (test/assert-eq 20 (len s) "length should be 20")
+    true
+})
+
+(test/define "1MB string" {
+  do
+    (= {s} (make-string 1048576 "X"))
+    (test/assert-eq 1048576 (len s) "length should be 1MB")
+    true
+})
+
+(test/define "50MB string" {
+  do
+    (= {s} (make-string 52428800 65))
+    (test/assert-eq 52428800 (len s) "length should be 50MB")
+    true
+})
+
+(test/run)

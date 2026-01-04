@@ -1,0 +1,54 @@
+; HTTP Client-Server Integration Tests
+; Tests real HTTP/2 communication between client and server using http2/client-request
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "HTTP Client-Server Integration Tests")
+
+(fun {http2/response-ok? resp} {
+  (= {status} (str->num (http2/response-status resp)))
+  (if (>= status 200)
+    {(< status 300)}
+    {0})
+})
+
+(def {aio} (aio/start))
+
+(def {server-handler}
+  (\ {req} {
+    {:status "200" :body "Hello, World!"}
+  }))
+
+(def {server} (http2/server-listen aio 0 server-handler))
+(def {test-port} (http2/server-port server))
+
+(test/async "basic request returns status 200" (\ {done} {
+  (http2/client-request aio "127.0.0.1" test-port "/"
+    (\ {resp} {
+      (if (error? resp)
+        {(done false)}
+        {(done (== (http2/response-status resp) "200"))})
+    }))
+}))
+
+(test/async "response body is correct" (\ {done} {
+  (http2/client-request aio "127.0.0.1" test-port "/"
+    (\ {resp} {
+      (if (error? resp)
+        {(done false)}
+        {(done (== (http2/response-body resp) "Hello, World!"))})
+    }))
+}))
+
+(test/async "response-ok? returns true for 200" (\ {done} {
+  (http2/client-request aio "127.0.0.1" test-port "/"
+    (\ {resp} {
+      (if (error? resp)
+        {(done false)}
+        {(done (== 1 (http2/response-ok? resp)))})
+    }))
+}))
+
+(test/run-async aio)
+(aio/run aio)

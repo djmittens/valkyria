@@ -1,0 +1,668 @@
+
+  </style>
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <header role="banner" aria-label="Dashboard header">
+    <div class="header-left">
+      <div class="logo">
+        <div class="logo-icon" aria-hidden="true">V</div>
+        <div class="logo-text">Valkyria <span>Dashboard</span></div>
+      </div>
+      <div class="status-indicator" role="status" aria-live="polite" id="global-status" title="Connection status">
+        <span class="status-dot" aria-hidden="true"></span>
+      </div>
+    </div>
+    <div class="header-metrics" aria-label="System health metrics">
+      <div class="header-metric" title="Requests per second">
+        <div class="header-metric-spark" id="spark-request-rate"></div>
+        <span class="header-metric-value" id="health-request-rate">--</span>
+        <span class="header-metric-label">req/s</span>
+      </div>
+      <div class="header-metric" title="Error rate">
+        <div class="header-metric-spark" id="spark-error-rate"></div>
+        <span class="header-metric-value" id="health-error-rate">--</span>
+        <span class="header-metric-label">% err</span>
+      </div>
+      <div class="header-metric" title="Average latency">
+        <div class="header-metric-spark" id="spark-latency"></div>
+        <span class="header-metric-value" id="health-avg-latency">--</span>
+        <span class="header-metric-label">ms</span>
+      </div>
+      <div class="header-metric" title="Heap usage">
+        <div class="header-metric-spark" id="spark-heap"></div>
+        <span class="header-metric-value" id="health-heap-pct">--</span>
+        <span class="header-metric-label">% heap</span>
+      </div>
+    </div>
+  </header>
+
+  <main role="main" id="main-content">
+
+    <!-- Error Banner (hidden by default) -->
+    <div class="error-banner" role="alert" aria-live="assertive" id="error-banner">
+      <span class="error-banner-icon" aria-hidden="true">⚠</span>
+      <span class="error-banner-text" id="error-text">Connection lost. Metrics may be stale.</span>
+      <button class="error-banner-dismiss" onclick="dismissError()" aria-label="Dismiss">×</button>
+    </div>
+
+    <!-- SSE Disconnection Warning -->
+    <div class="sse-status-warning" id="sse-warning" role="alert">
+      <span>Memory diagnostics stream disconnected. Last update: <span id="sse-last-update">--</span></span>
+    </div>
+
+    <!-- Capacity Warning Banner -->
+    <div class="capacity-warning-banner" id="capacity-warning-banner" role="alert" aria-live="polite">
+      <span class="capacity-warning-icon" aria-hidden="true">!</span>
+      <span class="capacity-warning-text">Memory pool(s) approaching capacity</span>
+    </div>
+
+    <!-- ==================== RUNTIME METRICS ==================== -->
+    <section class="section-group runtime-section" aria-labelledby="runtime-section-title">
+      <div class="section-header">
+        <div class="section-icon runtime" aria-hidden="true">RT</div>
+        <h2 class="section-title" id="runtime-section-title">Runtime</h2>
+        <span class="section-subtitle">Interpreter, GC, and Memory</span>
+        <div class="section-badges" aria-label="Section status">
+          <span class="section-badge" id="vm-gc-badge">-- cycles</span>
+          <span class="section-badge" id="vm-heap-badge">-- heap</span>
+        </div>
+      </div>
+
+      <div class="grid-1">
+        <!-- GC + Interpreter Panel - spans full width -->
+        <article class="panel" aria-labelledby="gc-panel-title" id="gc-panel">
+          <div class="panel-header" onclick="togglePanel('gc-panel')" role="button" tabindex="0" aria-expanded="true">
+            <div class="panel-icon gc" aria-hidden="true">GC</div>
+            <h3 class="panel-title" id="gc-panel-title">GC & Interpreter</h3>
+            <span class="panel-summary" id="gc-summary">-- cycles, -- evals</span>
+            <div class="panel-badge gc-parallel-badge" id="gc-parallel-badge" title="Parallel GC status and thread count">
+              <span class="parallel-indicator"></span>
+              <span class="parallel-text">--</span>
+            </div>
+            <div class="panel-badge gc-alloc-rate-badge" id="gc-alloc-rate-badge" title="Current allocation rate">
+              <span class="alloc-rate-value">--</span>
+              <span class="alloc-rate-unit">/s</span>
+            </div>
+            <div class="panel-badge" id="gc-cycles-badge" title="Total number of GC cycles since process start">-- cycles</div>
+            <span class="expand-icon" aria-hidden="true">▼</span>
+          </div>
+          <div class="panel-body">
+            <!-- Heap Pressure Gauge - Premium visualization -->
+            <div class="gc-heap-pressure" id="gc-heap-pressure" role="img" aria-label="Heap memory pressure">
+              <div class="heap-pressure-gauge">
+                <svg viewBox="0 0 200 100" class="pressure-arc">
+                  <defs>
+                    <linearGradient id="pressure-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                      <stop offset="0%" style="stop-color:var(--color-ok)"/>
+                      <stop offset="50%" style="stop-color:var(--color-warning)"/>
+                      <stop offset="100%" style="stop-color:var(--color-error)"/>
+                    </linearGradient>
+                  </defs>
+                  <path class="arc-bg" d="M 20 90 A 80 80 0 0 1 180 90" fill="none" stroke="var(--bg-elevated)" stroke-width="12"/>
+                  <path class="arc-fill" id="heap-pressure-arc" d="M 20 90 A 80 80 0 0 1 180 90" fill="none" stroke="url(#pressure-gradient)" stroke-width="12" stroke-linecap="round" stroke-dasharray="251.2" stroke-dashoffset="251.2"/>
+                  <path class="arc-threshold" d="M 20 90 A 80 80 0 0 1 180 90" fill="none" stroke="var(--color-warning)" stroke-width="1" stroke-dasharray="2,4" opacity="0.5"/>
+                </svg>
+                <div class="pressure-center">
+                  <div class="pressure-value" id="heap-pressure-value">--</div>
+                  <div class="pressure-label">% heap</div>
+                </div>
+                <div class="pressure-stats">
+                  <div class="pressure-stat">
+                    <span class="pressure-stat-value" id="heap-pressure-used">--</span>
+                    <span class="pressure-stat-label">used</span>
+                  </div>
+                  <div class="pressure-stat">
+                    <span class="pressure-stat-value" id="heap-pressure-total">--</span>
+                    <span class="pressure-stat-label">total</span>
+                  </div>
+                </div>
+              </div>
+              <div class="heap-alloc-sparkline">
+                <div class="alloc-spark-header">
+                  <span class="alloc-spark-title">Allocation Rate</span>
+                  <span class="alloc-spark-value" id="alloc-rate-display">-- /s</span>
+                </div>
+                <div class="alloc-spark-container" id="alloc-rate-spark"></div>
+              </div>
+            </div>
+
+            <div class="gc-timeline" id="gc-timeline" role="img" aria-label="GC pause timeline" title="Timeline showing GC pause durations over the last 60 seconds. Tall bars indicate long stop-the-world pauses that may cause request latency spikes. Yellow bars exceed 10ms, red bars exceed 50ms.">
+              <div class="gc-timeline-threshold" style="bottom: 40px;">
+                <span class="gc-timeline-threshold-label">10ms</span>
+              </div>
+              <div class="gc-timeline-axis">
+                <span>-60s</span>
+                <span>-45s</span>
+                <span>-30s</span>
+                <span>-15s</span>
+                <span>now</span>
+              </div>
+            </div>
+            <!-- GC + Interpreter stats in a unified row -->
+            <div class="gc-interp-stats">
+              <div class="gc-stats" role="list" aria-label="GC statistics">
+                <div class="gc-stat" role="listitem" title="Total GC cycles since process start. Rapidly increasing cycle count indicates high allocation rate or memory pressure.">
+                  <div class="gc-stat-value" id="gc-cycles">--</div>
+                  <div class="gc-stat-label">Cycles</div>
+                </div>
+                <div class="gc-stat" role="listitem" title="Longest single GC pause observed. Pauses >10ms impact P99 latency.">
+                  <div class="gc-stat-value" id="gc-max-pause">--<span class="unit">ms</span></div>
+                  <div class="gc-stat-label">Max Pause</div>
+                </div>
+                <div class="gc-stat" role="listitem" title="Average GC pause duration. Should stay under 5ms for low-latency services.">
+                  <div class="gc-stat-value" id="gc-avg-pause">--<span class="unit">ms</span></div>
+                  <div class="gc-stat-label">Avg Pause</div>
+                </div>
+                <div class="gc-stat" role="listitem" title="Total memory freed by GC.">
+                  <div class="gc-stat-value" id="gc-reclaimed">--<span class="unit">MB</span></div>
+                  <div class="gc-stat-label">Reclaimed</div>
+                </div>
+              </div>
+              <div class="gc-interp-sep"></div>
+              <div class="interp-stats" role="list" aria-label="Interpreter statistics">
+                <div class="interp-stat" role="listitem" title="Total expression evaluations">
+                  <div class="interp-stat-value" id="interp-evals">--</div>
+                  <div class="interp-stat-label">Evals</div>
+                </div>
+                <div class="interp-stat" role="listitem" title="User-defined function calls">
+                  <div class="interp-stat-value" id="interp-fn-calls">--</div>
+                  <div class="interp-stat-label">Fn Calls</div>
+                </div>
+                <div class="interp-stat" role="listitem" title="Built-in function calls">
+                  <div class="interp-stat-value" id="interp-builtins">--</div>
+                  <div class="interp-stat-label">Builtins</div>
+                </div>
+                <div class="interp-stat" role="listitem" title="Max call stack depth">
+                  <div class="interp-stat-value" id="interp-stack-depth">--</div>
+                  <div class="interp-stat-label">Stack</div>
+                </div>
+                <div class="interp-stat with-spark" role="listitem" title="Evaluations per second">
+                  <div class="interp-stat-spark" id="interp-eval-spark"></div>
+                  <div class="interp-stat-value" id="interp-eval-rate">--<span class="unit">/s</span></div>
+                  <div class="interp-stat-label">Eval Rate</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Object Survival Histogram - Leak Detection -->
+            <div class="gc-survival-section" title="Object lifetimes: shows how many GC cycles objects survive before being collected. High numbers in 'Old' bucket (21+ cycles) suggest potential memory leaks.">
+              <div class="gc-survival-header">
+                <span class="gc-survival-title">Object Lifetimes</span>
+                <span class="gc-survival-efficiency" id="gc-efficiency">Efficiency: <span id="gc-efficiency-value">--</span>%</span>
+                <span class="gc-leak-warning" id="gc-leak-warning" style="display: none;">Potential leak detected</span>
+              </div>
+              <div class="gc-survival-histogram" role="img" aria-label="Object survival histogram">
+                <div class="gc-survival-bar gen-0" id="gc-survival-gen0" title="Objects that died in first GC (short-lived - expected)">
+                  <div class="gc-survival-bar-fill"></div>
+                  <span class="gc-survival-bar-label">Gen 0</span>
+                  <span class="gc-survival-bar-count" id="gc-survival-gen0-count">--</span>
+                </div>
+                <div class="gc-survival-bar gen-1-5" id="gc-survival-gen1-5" title="Objects that survived 1-5 GC cycles (normal)">
+                  <div class="gc-survival-bar-fill"></div>
+                  <span class="gc-survival-bar-label">1-5</span>
+                  <span class="gc-survival-bar-count" id="gc-survival-gen1-5-count">--</span>
+                </div>
+                <div class="gc-survival-bar gen-6-20" id="gc-survival-gen6-20" title="Objects that survived 6-20 GC cycles (medium-lived)">
+                  <div class="gc-survival-bar-fill"></div>
+                  <span class="gc-survival-bar-label">6-20</span>
+                  <span class="gc-survival-bar-count" id="gc-survival-gen6-20-count">--</span>
+                </div>
+                <div class="gc-survival-bar gen-21-plus" id="gc-survival-gen21-plus" title="Objects that survived 21+ GC cycles (long-lived - potential leak)">
+                  <div class="gc-survival-bar-fill"></div>
+                  <span class="gc-survival-bar-label">21+</span>
+                  <span class="gc-survival-bar-count" id="gc-survival-gen21-plus-count">--</span>
+                </div>
+              </div>
+              <div class="gc-survival-legend">
+                <span class="gc-survival-legend-item"><span class="legend-dot gen-0"></span>Short-lived (expected)</span>
+                <span class="gc-survival-legend-item"><span class="legend-dot gen-1-5"></span>Normal</span>
+                <span class="gc-survival-legend-item"><span class="legend-dot gen-6-20"></span>Medium</span>
+                <span class="gc-survival-legend-item"><span class="legend-dot gen-21-plus"></span>Long-lived</span>
+              </div>
+            </div>
+
+            <!-- Pause Distribution + Size Classes (Parallel GC) -->
+            <div class="gc-parallel-section" id="gc-parallel-section">
+              <div class="gc-parallel-grid">
+                <!-- Pause Distribution -->
+                <div class="gc-pause-section" title="GC pause distribution by frame budget. Useful for latency-sensitive applications.">
+                  <div class="gc-pause-header">
+                    <span class="gc-pause-title">Pause Distribution</span>
+                    <span class="gc-avg-pause" id="gc-avg-pause-inline">avg: --</span>
+                  </div>
+                  <div class="gc-pause-histogram" id="gc-pause-histogram" role="img" aria-label="GC pause distribution">
+                    <div class="gc-pause-bar" id="gc-pause-0-1" data-bucket="0-1ms" title="0-1ms pauses">
+                      <div class="gc-pause-bar-fill ok"></div>
+                      <span class="gc-pause-bar-label">0-1ms</span>
+                      <span class="gc-pause-bar-count">--</span>
+                    </div>
+                    <div class="gc-pause-bar" id="gc-pause-1-5" data-bucket="1-5ms" title="1-5ms pauses">
+                      <div class="gc-pause-bar-fill ok-muted"></div>
+                      <span class="gc-pause-bar-label">1-5ms</span>
+                      <span class="gc-pause-bar-count">--</span>
+                    </div>
+                    <div class="gc-pause-bar" id="gc-pause-5-10" data-bucket="5-10ms" title="5-10ms pauses">
+                      <div class="gc-pause-bar-fill warning"></div>
+                      <span class="gc-pause-bar-label">5-10ms</span>
+                      <span class="gc-pause-bar-count">--</span>
+                    </div>
+                    <div class="gc-pause-bar" id="gc-pause-10-16" data-bucket="10-16ms" title="10-16ms pauses (frame budget)">
+                      <div class="gc-pause-bar-fill warning-strong"></div>
+                      <span class="gc-pause-bar-label">10-16ms</span>
+                      <span class="gc-pause-bar-count">--</span>
+                    </div>
+                    <div class="gc-pause-bar" id="gc-pause-16-plus" data-bucket="16ms+" title="16ms+ pauses (exceeds frame budget)">
+                      <div class="gc-pause-bar-fill error"></div>
+                      <span class="gc-pause-bar-label">16ms+</span>
+                      <span class="gc-pause-bar-count">--</span>
+                    </div>
+                  </div>
+                </div>
+                <!-- Size Classes - Enhanced -->
+                <div class="gc-size-class-section" title="GC heap size class utilization. Shows allocation distribution across object sizes.">
+                  <div class="gc-size-class-header">
+                    <span class="gc-size-class-title">Size Classes</span>
+                    <span class="gc-large-objects" id="gc-large-objects">Large: --</span>
+                  </div>
+                  <div class="gc-size-class-grid" id="gc-size-class-grid" role="img" aria-label="Size class utilization">
+                    <div class="gc-size-class" data-size="16">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">16B</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="32">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">32B</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="64">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">64B</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="128">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">128B</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="256">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">256B</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="512">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">512B</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="1024">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">1KB</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="2048">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">2KB</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                    <div class="gc-size-class" data-size="4096">
+                      <div class="gc-size-class-bar"><div class="gc-size-class-fill"></div><div class="gc-size-class-glow"></div></div>
+                      <span class="gc-size-class-label">4KB</span>
+                      <span class="gc-size-class-tooltip"></span>
+                    </div>
+                  </div>
+                  <div class="gc-size-class-legend">
+                    <span class="legend-gradient"></span>
+                    <span class="legend-low">0%</span>
+                    <span class="legend-high">100%</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Thread Activity Visualization (for parallel GC) -->
+            <div class="gc-thread-activity" id="gc-thread-activity" style="display: none;">
+              <div class="thread-activity-header">
+                <span class="thread-activity-title">Thread Activity</span>
+                <span class="thread-activity-count" id="thread-count">0 threads</span>
+              </div>
+              <div class="thread-activity-grid" id="thread-activity-grid">
+                <!-- Thread indicators dynamically added -->
+              </div>
+            </div>
+
+          </div>
+        </article>
+
+      </div>
+
+      <!-- Runtime Memory (Consolidated) -->
+      <div class="subsection-header memory-subsection-header" id="memory-subsection">
+        <h3 class="subsection-title">Memory</h3>
+        <div class="process-memory-overview">
+          <div class="process-gauge-inline" title="Memory pressure: RSS as % of system RAM">
+            <div class="process-gauge-bar">
+              <div class="process-gauge-fill" id="process-gauge-fill"></div>
+            </div>
+          </div>
+          <span class="process-memory-stats">
+            <span class="process-stat rss-stat" title="RSS trend over time - shows memory growth pattern">
+              <span class="rss-spark" id="spark-rss"></span>
+              <span>RSS: <span id="process-rss-text">--</span></span>
+            </span>
+            <span class="process-stat-sep">/</span>
+            <span class="process-stat">VMS: <span id="process-vms-text">--</span></span>
+          </span>
+          <button class="breakdown-toggle" onclick="toggleBreakdown()" aria-expanded="false" aria-controls="process-breakdown" title="Show memory breakdown">
+            <span class="breakdown-toggle-icon">▼</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Collapsible Process Breakdown -->
+      <div class="process-breakdown collapsed" id="process-breakdown">
+        <!-- Stacked bar: segment width = capacity, inner fill = used -->
+        <div class="stacked-bar">
+          <div class="stacked-segment runtime" id="segment-runtime" title="Runtime (GC + Scratch)">
+            <div class="segment-fill" id="fill-runtime"></div>
+          </div>
+          <div class="stacked-segment aio" id="segment-aio" title="AIO Slabs">
+            <div class="segment-fill" id="fill-aio"></div>
+          </div>
+          <div class="stacked-segment metrics" id="segment-metrics" title="Metrics Registry">
+            <div class="segment-fill" id="fill-metrics"></div>
+          </div>
+          <div class="stacked-segment other" id="segment-other" title="Other (untracked)">
+            <div class="segment-fill" id="fill-other"></div>
+          </div>
+        </div>
+
+        <!-- Legend: shows used / capacity per subsystem -->
+        <div class="breakdown-legend">
+          <div class="legend-item">
+            <span class="legend-dot runtime"><span class="legend-dot-fill"></span></span>
+            <span class="legend-label">Runtime</span>
+            <span class="legend-value" id="breakdown-runtime-value">--</span>
+            <span class="legend-cap">/ <span id="breakdown-runtime-cap">--</span></span>
+            <span class="legend-pct" id="breakdown-runtime-pct">(--%)</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot aio"><span class="legend-dot-fill"></span></span>
+            <span class="legend-label">AIO</span>
+            <span class="legend-value" id="breakdown-aio-value">--</span>
+            <span class="legend-cap">/ <span id="breakdown-aio-cap">--</span></span>
+            <span class="legend-pct" id="breakdown-aio-pct">(--%)</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot metrics"><span class="legend-dot-fill"></span></span>
+            <span class="legend-label">Metrics</span>
+            <span class="legend-value" id="breakdown-metrics-value">--</span>
+            <span class="legend-cap">/ <span id="breakdown-metrics-cap">--</span></span>
+            <span class="legend-pct" id="breakdown-metrics-pct">(--%)</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot other"><span class="legend-dot-fill"></span></span>
+            <span class="legend-label">Other</span>
+            <span class="legend-value" id="breakdown-other-value">--</span>
+            <span class="legend-cap">/ <span id="breakdown-other-cap">--</span></span>
+            <span class="legend-pct" id="breakdown-other-pct">(--%)</span>
+          </div>
+        </div>
+
+        <!-- OS Memory Regions (from /proc/self/smaps) -->
+        <div class="smaps-breakdown">
+          <div class="smaps-header">
+            <span class="smaps-title">OS Memory Regions</span>
+            <span class="smaps-subtitle">(from /proc/self/smaps)</span>
+          </div>
+          <div class="smaps-bar">
+            <div class="smaps-segment smaps-heap" id="smaps-seg-heap" title="Heap (glibc malloc arena)"></div>
+            <div class="smaps-segment smaps-anon" id="smaps-seg-anon" title="Anonymous (mmap buffers)"></div>
+            <div class="smaps-segment smaps-file" id="smaps-seg-file" title="File-backed (shared libs)"></div>
+            <div class="smaps-segment smaps-stack" id="smaps-seg-stack" title="Stack (thread stacks)"></div>
+            <div class="smaps-segment smaps-uring" id="smaps-seg-uring" title="io_uring ring buffers"></div>
+            <div class="smaps-segment smaps-other" id="smaps-seg-other" title="Other (vdso, vvar)"></div>
+          </div>
+          <div class="smaps-legend">
+            <div class="smaps-legend-item">
+              <span class="smaps-dot smaps-heap"></span>
+              <span class="smaps-label">Heap</span>
+              <span class="smaps-value" id="smaps-heap-value">--</span>
+            </div>
+            <div class="smaps-legend-item">
+              <span class="smaps-dot smaps-anon"></span>
+              <span class="smaps-label">Anon</span>
+              <span class="smaps-value" id="smaps-anon-value">--</span>
+              <span class="smaps-regions">(<span id="smaps-anon-regions">--</span> regions)</span>
+            </div>
+            <div class="smaps-legend-item">
+              <span class="smaps-dot smaps-file"></span>
+              <span class="smaps-label">File</span>
+              <span class="smaps-value" id="smaps-file-value">--</span>
+              <span class="smaps-regions">(<span id="smaps-file-regions">--</span> regions)</span>
+            </div>
+            <div class="smaps-legend-item">
+              <span class="smaps-dot smaps-stack"></span>
+              <span class="smaps-label">Stack</span>
+              <span class="smaps-value" id="smaps-stack-value">--</span>
+            </div>
+            <div class="smaps-legend-item">
+              <span class="smaps-dot smaps-uring"></span>
+              <span class="smaps-label">io_uring</span>
+              <span class="smaps-value" id="smaps-uring-value">--</span>
+            </div>
+            <div class="smaps-legend-item">
+              <span class="smaps-dot smaps-other"></span>
+              <span class="smaps-label">Other</span>
+              <span class="smaps-value" id="smaps-other-value">--</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer stats -->
+        <div class="breakdown-footer">
+          <span>VMS: <span id="process-vms">--</span></span>
+          <span class="sep">•</span>
+          <span>Page Faults: <span id="process-pf-minor">--</span> minor / <span id="process-pf-major">--</span> major</span>
+        </div>
+      </div>
+
+      <div class="vm-memory-consolidated">
+        <!-- Arenas (dynamically populated from server data) -->
+        <div class="memory-block arenas-block">
+          <div class="memory-block-header">
+            <div class="memory-block-title">
+              <span class="memory-icon arena">A</span>
+              Arenas
+            </div>
+          </div>
+          <div class="memory-block-body">
+            <div class="arena-tiers" id="arenas-container">
+              <!-- Arena PoolWidgets initialized dynamically from SSE data -->
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ==================== AIO SYSTEMS ==================== -->
+    <!-- Phase 2: HTTP Servers and Clients are now nested under their parent AIO system -->
+    <section class="section-group aio-section" aria-labelledby="aio-section-title" data-profile-hideable>
+      <div class="section-header">
+        <div class="section-icon aio" aria-hidden="true">AIO</div>
+        <h2 class="section-title" id="aio-section-title">Async I/O System</h2>
+        <span class="section-subtitle">Event Loop, Resources, Servers & Clients</span>
+        <div class="section-badges">
+          <span class="section-badge" id="aio-systems-badge" title="Number of independent AIO event loop systems. Each system has its own connection pool and buffers.">-- systems</span>
+          <span class="section-badge" id="aio-conns-badge" title="Total active connections across all AIO systems. High connection count may indicate connection leaks or slow clients.">-- conns</span>
+          <span class="section-badge" id="http-servers-count" title="Number of HTTP server endpoints listening for requests.">-- servers</span>
+          <span class="section-badge" id="http-total-rate" title="Combined request rate across all HTTP servers.">-- req/s</span>
+        </div>
+      </div>
+
+      <!-- Aggregate Health Bar -->
+      <div class="aio-aggregate-health" id="aio-health-bar">
+        <div class="aio-health-status">
+          <span class="health-group ok" title="Healthy endpoints">
+            <span class="health-icon">●</span>
+            <span class="health-count" id="aio-ok-count">0</span> OK
+          </span>
+          <span class="health-group warning" title="Endpoints with warnings">
+            <span class="health-icon">▲</span>
+            <span class="health-count" id="aio-warn-count">0</span> Warn
+          </span>
+          <span class="health-group error" title="Endpoints with errors or offline">
+            <span class="health-icon">■</span>
+            <span class="health-count" id="aio-error-count">0</span> Down
+          </span>
+        </div>
+        <div class="aio-health-divider"></div>
+        <div class="aio-health-metrics">
+          <span class="aio-health-metric" title="Total operations per second across all I/O">
+            <span class="aio-health-value" id="aio-total-ops">--</span>
+            <span class="aio-health-label">ops/s</span>
+          </span>
+          <span class="aio-health-metric" title="Aggregate error rate">
+            <span class="aio-health-value" id="aio-error-rate">--</span>
+            <span class="aio-health-label">% err</span>
+          </span>
+          <span class="aio-health-metric" title="Aggregate P99 latency">
+            <span class="aio-health-value" id="aio-p99">--</span>
+            <span class="aio-health-label">ms P99</span>
+          </span>
+        </div>
+      </div>
+
+      <div id="aio-systems-container">
+        <!-- AIO system panels will be dynamically populated here -->
+        <!-- Each panel now contains: Event Loop, Shared Pools, HTTP Servers, HTTP Clients -->
+        <div class="panel" id="aio-no-systems">
+          <div class="panel-body" style="text-align: center; color: var(--text-muted); padding: var(--space-xl);">
+            No AIO systems registered
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== METRICS SYSTEM ==================== -->
+    <section class="section-group metrics-section" aria-labelledby="metrics-section-title" data-profile-hideable>
+      <div class="section-header">
+        <div class="section-icon metrics" aria-hidden="true">M</div>
+        <h2 class="section-title" id="metrics-section-title">Metrics Registry</h2>
+        <span class="section-subtitle">Counters, Gauges, Histograms & String Pool</span>
+        <div class="section-badges">
+          <span class="section-badge" id="metrics-total-badge" title="Total active metrics in registry">-- metrics</span>
+          <span class="section-badge" id="metrics-strings-badge" title="Interned strings for metric names and labels">-- strings</span>
+        </div>
+      </div>
+
+      <div class="registry-content">
+        <div class="registry-stats-grid">
+          <!-- Counters -->
+          <div class="registry-stat-card" title="Counter metrics track monotonically increasing values like total requests or bytes processed">
+            <div class="registry-stat-header">
+              <span class="registry-stat-icon counter">C</span>
+              <span class="registry-stat-label">Counters</span>
+            </div>
+            <div class="registry-stat-bar">
+              <div class="registry-stat-fill" id="registry-counters-bar" style="width: 0%"></div>
+            </div>
+            <div class="registry-stat-values">
+              <span class="registry-stat-active" id="registry-counters-active">--</span>
+              <span class="registry-stat-sep">/</span>
+              <span class="registry-stat-capacity" id="registry-counters-capacity">--</span>
+              <span class="registry-stat-detail">(<span id="registry-counters-free">--</span> free)</span>
+            </div>
+          </div>
+          <!-- Gauges -->
+          <div class="registry-stat-card" title="Gauge metrics track values that can go up or down like active connections or memory usage">
+            <div class="registry-stat-header">
+              <span class="registry-stat-icon gauge">G</span>
+              <span class="registry-stat-label">Gauges</span>
+            </div>
+            <div class="registry-stat-bar">
+              <div class="registry-stat-fill" id="registry-gauges-bar" style="width: 0%"></div>
+            </div>
+            <div class="registry-stat-values">
+              <span class="registry-stat-active" id="registry-gauges-active">--</span>
+              <span class="registry-stat-sep">/</span>
+              <span class="registry-stat-capacity" id="registry-gauges-capacity">--</span>
+              <span class="registry-stat-detail">(<span id="registry-gauges-free">--</span> free)</span>
+            </div>
+          </div>
+          <!-- Histograms -->
+          <div class="registry-stat-card" title="Histogram metrics track distributions like request latency with configurable buckets">
+            <div class="registry-stat-header">
+              <span class="registry-stat-icon histogram">H</span>
+              <span class="registry-stat-label">Histograms</span>
+            </div>
+            <div class="registry-stat-bar">
+              <div class="registry-stat-fill" id="registry-histograms-bar" style="width: 0%"></div>
+            </div>
+            <div class="registry-stat-values">
+              <span class="registry-stat-active" id="registry-histograms-active">--</span>
+              <span class="registry-stat-sep">/</span>
+              <span class="registry-stat-capacity" id="registry-histograms-capacity">--</span>
+              <span class="registry-stat-detail">(<span id="registry-histograms-free">--</span> free)</span>
+            </div>
+          </div>
+          <!-- String Pool -->
+          <div class="registry-stat-card" title="Interned strings for metric names and labels - reused across metrics for memory efficiency">
+            <div class="registry-stat-header">
+              <span class="registry-stat-icon strings">S</span>
+              <span class="registry-stat-label">String Pool</span>
+            </div>
+            <div class="registry-stat-bar">
+              <div class="registry-stat-fill" id="registry-strings-bar" style="width: 0%"></div>
+            </div>
+            <div class="registry-stat-values">
+              <span class="registry-stat-active" id="registry-strings-used">--</span>
+              <span class="registry-stat-sep">/</span>
+              <span class="registry-stat-capacity" id="registry-strings-capacity">--</span>
+            </div>
+          </div>
+        </div>
+        <!-- Eviction Stats -->
+        <div class="registry-eviction-stats" title="Stale metrics are automatically evicted to free registry slots. High eviction counts may indicate metric cardinality explosion.">
+          <span class="registry-eviction-label">Evictions:</span>
+          <span class="registry-eviction-value" id="registry-evictions-total">--</span>
+          <span class="registry-eviction-breakdown">
+            (C: <span id="registry-evictions-counters">--</span>,
+             G: <span id="registry-evictions-gauges">--</span>,
+             H: <span id="registry-evictions-histograms">--</span>)
+          </span>
+          <span class="registry-collect-time">
+            collect: <span id="registry-collect-time">--</span>μs
+          </span>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+    <!-- Keyboard Help Overlay -->
+    <div class="keyboard-help-overlay" id="keyboard-help" role="dialog" aria-labelledby="keyboard-help-title" aria-hidden="true" style="display: none;">
+      <div class="keyboard-help-content">
+        <h3 id="keyboard-help-title">Keyboard Shortcuts</h3>
+        <button class="keyboard-help-close" onclick="hideKeyboardHelp()" aria-label="Close">&times;</button>
+        <div class="keyboard-help-grid">
+          <div class="shortcut-group">
+            <h4>Navigation</h4>
+            <div class="shortcut"><kbd>j</kbd> <span>Next card</span></div>
+            <div class="shortcut"><kbd>k</kbd> <span>Previous card</span></div>
+            <div class="shortcut"><kbd>G</kbd> <span>Last card</span></div>
+          </div>
+          <div class="shortcut-group">
+            <h4>Actions</h4>
+            <div class="shortcut"><kbd>Space</kbd> <span>Toggle expand</span></div>
+            <div class="shortcut"><kbd>l</kbd> <span>Expand card</span></div>
+            <div class="shortcut"><kbd>h</kbd> <span>Collapse card</span></div>
+            <div class="shortcut"><kbd>Esc</kbd> <span>Clear focus</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  <script>

@@ -4,3 +4,6 @@
 [submodule "vendor/mpc"]
 	path = vendor/mpc
 	url = https://github.com/orangeduck/mpc.git
+[submodule "vendor/nghttp2"]
+	path = vendor/nghttp2
+	url = https://github.com/nghttp2/nghttp2.git

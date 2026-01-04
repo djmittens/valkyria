@@ -1,0 +1,137 @@
+; HTTP API Network Integration Tests
+; Tests http_api.valk functions that require real network connections
+; Starts a local server and tests the high-level fetch functions
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(fun {reverse l} {
+  (= {reverse-helper} (\ {acc remaining} {
+    (if (== remaining nil)
+      {acc}
+      {(reverse-helper (join (list (head remaining)) acc) (tail remaining))})
+  }))
+  (reverse-helper nil l)
+})
+
+(load "src/http_api.valk")
+
+(test/suite "HTTP API Network Tests")
+
+(def {aio} (aio/start))
+
+(def {server-handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (if (== path "/error")
+      {`{:status "500" :body "Internal Server Error"}}
+      {`{:status "200" :body "Hello from test server"}})
+  }))
+
+(def {server} (http2/server-listen aio 0 server-handler))
+(def {test-port} (http2/server-port server))
+
+(test/async "http2/fetch returns async operation" (\ {done} {
+  (= {fetch-op} (http2/fetch aio "127.0.0.1" test-port "/"))
+  (if (== fetch-op nil)
+    {(done false)}
+    {(fetch-op (\ {resp} {
+      (done (and (not (error? resp)) (== (http2/response-status resp) "200")))
+    }))})
+}))
+
+(test/async "http2/fetch-text returns body text" (\ {done} {
+  (= {text-op} (http2/fetch-text aio "127.0.0.1" test-port "/"))
+  (text-op (\ {body} {
+    (done (not (error? body)))
+  }))
+}))
+
+(test/async "http2/fetch-ok? returns true for 200" (\ {done} {
+  (= {ok-op} (http2/fetch-ok? aio "127.0.0.1" test-port "/"))
+  (ok-op (\ {is-ok} {
+    (done (== is-ok 1))
+  }))
+}))
+
+(test/async "http2/health-check returns true for healthy endpoint" (\ {done} {
+  (= {health-op} (http2/health-check aio "127.0.0.1" test-port "/"))
+  (health-op (\ {is-healthy} {
+    (done (== is-healthy 1))
+  }))
+}))
+
+(test/async "http2/fetch with path works" (\ {done} {
+  (= {fetch-op} (http2/fetch aio "127.0.0.1" test-port "/"))
+  (fetch-op (\ {resp} {
+    (done (not (error? resp)))
+  }))
+}))
+
+(test/async "http2/fetch-retry returns response" (\ {done} {
+  (= {retry-op} (http2/fetch-retry aio "127.0.0.1" test-port "/" 2))
+  (retry-op (\ {resp} {
+    (done (not (error? resp)))
+  }))
+}))
+
+(test/async "http2/health-check-all returns results for batch" (\ {done} {
+  (= {endpoints} (list
+    (list "127.0.0.1" test-port "/")
+    (list "127.0.0.1" test-port "/")))
+  (= {batch-op} (http2/health-check-all aio endpoints))
+  (batch-op (\ {results} {
+    (done (not (error? results)))
+  }))
+}))
+
+(test/async "http2/fetch-all returns results for batch" (\ {done} {
+  (= {endpoints} (list
+    (list "127.0.0.1" test-port "/")
+    (list "127.0.0.1" test-port "/")))
+  (= {fetch-batch-op} (http2/fetch-all aio endpoints))
+  (fetch-batch-op (\ {results} {
+    (done (not (error? results)))
+  }))
+}))
+
+(test/async "http2/fetch-all-text returns text results for batch" (\ {done} {
+  (= {endpoints} (list
+    (list "127.0.0.1" test-port "/")
+    (list "127.0.0.1" test-port "/")))
+  (= {text-batch-op} (http2/fetch-all-text aio endpoints))
+  (text-batch-op (\ {results} {
+    (done (not (error? results)))
+  }))
+}))
+
+(test/async "http2/fan-out returns results" (\ {done} {
+  (= {extractors} (list
+    (\ {r} {(list "127.0.0.1" test-port "/")})
+    (\ {r} {(list "127.0.0.1" test-port "/")})))
+  (= {fanout-op} (http2/fan-out aio "127.0.0.1" test-port "/" extractors))
+  (fanout-op (\ {results} {
+    (done (not (error? results)))
+  }))
+}))
+
+(test/async "http2/aggregate combines results" (\ {done} {
+  (= {endpoints} (list
+    (list "127.0.0.1" test-port "/")
+    (list "127.0.0.1" test-port "/")))
+  (= {combiner} (\ {responses} {(len responses)}))
+  (= {agg-op} (http2/aggregate aio endpoints combiner))
+  (agg-op (\ {result} {
+    (done (== result 2))
+  }))
+}))
+
+(test/async "http2/fetch-retry exhausts retries on error path" (\ {done} {
+  (= {retry-op} (http2/fetch-retry aio "127.0.0.1" test-port "/error" 2))
+  (retry-op (\ {resp} {
+    (done (and (not (error? resp)) (== (http2/response-status resp) "500")))
+  }))
+}))
+
+(test/run-async aio)
+(aio/run aio)

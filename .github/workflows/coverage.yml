@@ -1,0 +1,59 @@
+name: Coverage
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/coverage.yml'
+  push:
+    branches:
+      - main
+
+jobs:
+  coverage:
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Install Dependencies
+        run: |
+          brew install llvm cmake ninja pkg-config openssl@3 libuv nghttp2
+          echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
+      
+      - name: Build with Coverage
+        run: |
+          make build-coverage
+      
+      - name: Run Tests
+        run: |
+          make coverage-tests
+      
+      - name: Generate Coverage Report
+        run: |
+          make coverage-report
+      
+      - name: Check Runtime Coverage Requirements
+        run: |
+          python3 bin/check-coverage.py --build-dir build-coverage
+      
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage-report/
+          retention-days: 30
+      
+      - name: Upload Coverage to Codecov (optional)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage-report/coverage.xml
+          fail_ci_if_error: false
+          verbose: true

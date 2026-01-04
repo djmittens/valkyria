@@ -1,0 +1,206 @@
+; Quasiquote Tests
+; Run with: ./build/valk test/test_quasiquote.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "Quasiquote Tests")
+
+; Test: Basic quasiquote without any unquoting
+(test/define "quasiquote-basic-no-unquote"
+  {do
+    ; Quasiquoting atoms returns them as-is (they're self-quoting)
+    ; Quasiquoting a number should return the number
+    (test/assert-eq 42 `42 "quasiquote number should return number")
+    ; Quasiquoting a string should return the string
+    (test/assert-eq "hello" `"hello" "quasiquote string should return string")
+    true
+  })
+
+; Test: Quasiquote list without unquote
+(test/define "quasiquote-list-no-unquote"
+  {do
+    ; Quasiquote preserves the list type (CONS vs QEXPR)
+    ; `{a b c} should return {a b c}
+    (test/assert (== `{a b c} {a b c}) "quasiquote qexpr should return qexpr")
+    true
+  })
+
+; Test: Simple unquote
+(test/define "quasiquote-unquote-simple"
+  {do
+    (= {x} 42)
+    ; Unquote should evaluate the expression
+    (test/assert-eq 42 `,x "unquote should evaluate variable")
+    ; Unquote in list
+    (test/assert (== `{a ,x c} {a 42 c}) "unquote in qexpr should substitute value")
+    true
+  })
+
+; Test: Multiple unquotes
+(test/define "quasiquote-multiple-unquotes"
+  {do
+    (= {a} 1)
+    (= {b} 2)
+    (= {c} 3)
+    (test/assert (== `{,a ,b ,c} {1 2 3}) "multiple unquotes should all substitute")
+    (test/assert (== `{x ,a y ,b z ,c} {x 1 y 2 z 3}) "mixed quoted and unquoted")
+    true
+  })
+
+; Test: Unquote with expressions
+(test/define "quasiquote-unquote-expressions"
+  {do
+    (= {x} 5)
+    (test/assert (== `{result ,(+ x 10)} {result 15}) "unquote with arithmetic expression")
+    (test/assert (== `{doubled ,(* x 2)} {doubled 10}) "unquote with multiplication")
+    true
+  })
+
+; Test: Unquote-splicing basic
+(test/define "quasiquote-unquote-splicing"
+  {do
+    (= {lst} {1 2 3})
+    ; Unquote-splicing should splice list elements
+    (test/assert (== `{a ,@lst b} {a 1 2 3 b}) "unquote-splicing should splice elements")
+    true
+  })
+
+; Test: Unquote-splicing at different positions
+(test/define "quasiquote-unquote-splicing-positions"
+  {do
+    (= {lst} {x y})
+    ; At start
+    (test/assert (== `{,@lst z} {x y z}) "splice at start")
+    ; At end
+    (test/assert (== `{a ,@lst} {a x y}) "splice at end")
+    ; Multiple splices
+    (= {lst2} {1 2})
+    (test/assert (== `{,@lst ,@lst2} {x y 1 2}) "multiple splices")
+    true
+  })
+
+; Test: Empty list splicing
+(test/define "quasiquote-empty-splice"
+  {do
+    (= {empty} {})
+    (test/assert (== `{a ,@empty b} {a b}) "splicing empty list should add nothing")
+    true
+  })
+
+; Test: Mixed unquote and unquote-splicing
+(test/define "quasiquote-mixed-operations"
+  {do
+    (= {x} 100)
+    (= {lst} {a b})
+    (test/assert (== `{start ,x ,@lst end} {start 100 a b end}) "mixed unquote and splice")
+    true
+  })
+
+; Test: Nested lists with quasiquote
+(test/define "quasiquote-nested-lists"
+  {do
+    (= {inner} {1 2})
+    ; Nested quasiquote should work on inner lists
+    (test/assert (== `{outer {,@inner} more} {outer {1 2} more}) "nested list with splice")
+    true
+  })
+
+; Test: Building response maps (the webserver use case)
+(test/define "quasiquote-response-map"
+  {do
+    (= {status} "200")
+    (= {body} "<h1>Hello</h1>")
+    ; This is the key use case - building response maps cleanly
+    (= {response} `{:status ,status :body ,body})
+    (test/assert (== response {:status "200" :body "<h1>Hello</h1>"})
+      "building response map with quasiquote")
+    true
+  })
+
+; Test: Building response with content-type (full webserver case)
+(test/define "quasiquote-full-response"
+  {do
+    (= {html-body} "<h1>Test</h1>")
+    (= {response} `{:status "200" :content-type "text/html; charset=utf-8" :body ,html-body})
+    (test/assert-eq "200" (nth 2 response) "status should be 200")
+    (test/assert-eq "text/html; charset=utf-8" (nth 4 response) "content-type should match")
+    (test/assert-eq "<h1>Test</h1>" (nth 6 response) "body should be substituted")
+    true
+  })
+
+; Test: Quasiquote inside lambda
+(test/define "quasiquote-in-lambda"
+  {do
+    (= {make-response} (\ {status body} {`{:status ,status :body ,body}}))
+    (= {resp} (make-response "404" "Not Found"))
+    (test/assert (== resp {:status "404" :body "Not Found"}) "lambda should build correct response")
+    true
+  })
+
+; Test: Quasiquote with function call results
+(test/define "quasiquote-function-results"
+  {do
+    (fun {double x} {* x 2})
+    (= {result} `{answer ,(double 21)})
+    (test/assert (== result {answer 42}) "unquote should use function result")
+    true
+  })
+
+; Test: Join builtin (useful for manual splicing)
+(test/define "join-builtin"
+  {do
+    (test/assert (== (join {1 2} {3 4}) {1 2 3 4}) "join should combine lists")
+    (test/assert (== (join {a} {b c} {d}) {a b c d}) "join should combine multiple lists")
+    ; Note: join with empty first returns the second list's type (may convert to CONS)
+    (test/assert-eq 2 (len (join {} {1 2})) "join with empty first should have right length")
+    (test/assert-eq 2 (len (join {1 2} {})) "join with empty second should have right length")
+    true
+  })
+
+; Test: Unquote with no arguments should error
+(test/define "unquote-no-args-error"
+  {do
+    (= {result} (error? (eval (read "`{a , b}"))))
+    (test/assert result "unquote with nothing should error")
+    true
+  })
+
+; Test: Unquote-splicing with non-list should error
+(test/define "unquote-splicing-non-list-error"
+  {do
+    (= {x} 42)
+    (= {result} (error? (eval (read "`{a ,@x b}"))))
+    (test/assert result "unquote-splicing non-list should error")
+    true
+  })
+
+; Test: plist access with :key syntax
+(test/define "plist-get-basic"
+  {do
+    (= {data} {:name "Alice" :age 30})
+    (test/assert-eq "Alice" (plist/get data :name) "should get name")
+    (test/assert-eq 30 (plist/get data :age) "should get age")
+    true
+  })
+
+; Test: plist access with missing key
+(test/define "plist-get-missing-key"
+  {do
+    (= {data} {:a 1 :b 2})
+    (= {result} (plist/get data :missing))
+    (test/assert (== result nil) "missing key should return nil")
+    true
+  })
+
+; Test: plist access with empty plist
+(test/define "plist-get-empty"
+  {do
+    (= {data} {})
+    (= {result} (plist/get data :key))
+    (test/assert (== result nil) "empty plist should return nil")
+    true
+  })
+
+; Run all tests
+(test/run)

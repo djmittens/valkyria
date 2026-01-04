@@ -1,0 +1,39 @@
+(defun sse/open (request)
+  (stream/open request 
+    {:status "200"
+     :content-type "text/event-stream"
+     :cache-control "no-cache"}))
+
+(defun sse/send (stream data)
+  (stream/write stream (str "data: " data "\n\n")))
+
+(defun sse/send-event (stream event-type data)
+  (stream/write stream (str "event: " event-type "\ndata: " data "\n\n")))
+
+(defun sse/send-id (stream id data)
+  (stream/write stream (str "id: " id "\ndata: " data "\n\n")))
+
+(defun sse/send-full (stream event-type id data)
+  (stream/write stream 
+    (str "event: " event-type "\nid: " id "\ndata: " data "\n\n")))
+
+(defun sse/send-retry (stream retry-ms)
+  (stream/write stream (str "retry: " retry-ms "\n\n")))
+
+(defun sse/writable? (stream)
+  (stream/writable? stream))
+
+(defun sse/close (stream)
+  (stream/close stream))
+
+(defun sse/cancel (stream)
+  (stream/cancel stream))
+
+(defun sse/set-timeout (stream timeout-ms)
+  (stream/set-timeout stream timeout-ms))
+
+(defun sse/on-drain (stream callback)
+  (stream/on-drain stream callback))
+
+(defun sse/id (stream)
+  (stream/id stream))
