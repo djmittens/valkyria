@@ -1,4 +1,5 @@
 #include "aio_http2_conn.h"
+#include "aio_http2_session.h"
 #include "aio_internal.h"
 #include "aio_conn_io.h"
 #include "aio_ssl.h"
@@ -284,73 +285,134 @@ void valk_http2_flush_pending(valk_aio_handle_t *conn) {
 static void __http_tcp_unencrypted_read_cb(void *arg, const valk_buffer_t *buf) {
   valk_aio_handle_t *conn = arg;
 
+  VALK_TRACE("nghttp2_session_mem_recv2: %zu bytes", buf->count);
   ssize_t rv = nghttp2_session_mem_recv2(
       conn->http.session, (const u8 *)buf->items, buf->count);
   if (rv < 0) {
     VALK_ERROR("nghttp2_session_mem_recv error: %zd", rv);
     if (!__vtable_is_closing(conn)) {
-      conn->http.state = VALK_CONN_CLOSING;
+      valk_conn_transition(conn, VALK_CONN_EVT_ERROR);
       __backpressure_list_remove(conn);
-#ifdef VALK_METRICS_ENABLED
-      conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
-      conn->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
-#endif
       __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
     }
+  } else {
+    VALK_TRACE("nghttp2_session_mem_recv2 consumed %zd bytes", rv);
+  }
+}
+
+static void __tcp_read_close_with_error(valk_aio_handle_t *conn) {
+  if (__vtable_is_closing(conn)) return;
+  valk_conn_transition(conn, VALK_CONN_EVT_ERROR);
+  __backpressure_list_remove(conn);
+  __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
+}
+
+static void __tcp_read_close_graceful(valk_aio_handle_t *conn) {
+  if (__vtable_is_closing(conn)) return;
+  valk_conn_transition(conn, VALK_CONN_EVT_CLOSE);
+  __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
+}
+
+static bool __tcp_read_enter_backpressure(valk_aio_handle_t *conn) {
+  __vtable_read_stop(conn);
+  if (__backpressure_list_add(conn)) return true;
+  __tcp_read_close_graceful(conn);
+  return false;
+}
+
+static void __tcp_read_handle_null_buffer(valk_aio_handle_t *conn) {
+  VALK_WARN("TCP buffer alloc failed - applying backpressure on connection");
+  __tcp_read_enter_backpressure(conn);
+}
+
+static void __tcp_read_handle_error(valk_aio_handle_t *conn) {
+  __tcp_read_close_with_error(conn);
+}
+
+static void __tcp_read_handle_write_buf_exhausted(valk_aio_handle_t *conn, const void *buf_base, ssize_t nread) {
+  VALK_WARN("Failed to acquire write buffer - applying backpressure on connection");
+  int n = BIO_write(conn->http.io.ssl.read_bio, buf_base, (int)nread);
+  if (n != (int)nread) {
+    VALK_ERROR("BIO_write during backpressure failed: wrote %d of %zd", n, nread);
+  }
+  __vtable_read_stop(conn);
+  valk_conn_io_read_buf_release(&conn->http.io, conn->sys->tcpBufferSlab);
+  __tcp_read_enter_backpressure(conn);
+#ifdef VALK_METRICS_ENABLED
+  if (conn->http.server) {
+    atomic_fetch_add(&conn->http.server->sys->metrics_state->system_stats.tcp_buffer_overflow, 1);
+  }
+#endif
+}
+
+static void __tcp_read_flush_http2_frames(valk_aio_handle_t *conn, u8 *write_buf) {
+  if (!conn->sys || !conn->sys->tcpBufferSlab) return;
+  
+  valk_slab_item_t *frameSlabRaw = valk_slab_aquire(conn->sys->tcpBufferSlab);
+  if (!frameSlabRaw) return;
+  
+  __tcp_buffer_slab_item_t *frameSlabItem = (void *)frameSlabRaw->data;
+  valk_buffer_t FrameIn = {
+      .items = frameSlabItem->data, .count = 0, .capacity = HTTP_SLAB_ITEM_SIZE};
+
+  valk_http2_flush_frames(&FrameIn, conn);
+
+  if (FrameIn.count > 0) {
+    u64 write_available = valk_http2_conn_write_buf_available(conn);
+    valk_buffer_t Out = {
+        .items = write_buf + conn->http.io.write_pos,
+        .count = 0,
+        .capacity = write_available};
+    valk_aio_ssl_encrypt(&conn->http.io.ssl, &FrameIn, &Out);
+
+    if (Out.count > 0) {
+      conn->http.io.write_pos += Out.count;
+      VALK_TRACE("HTTP/2 frames encrypted: %zu bytes (total: %zu)", Out.count, conn->http.io.write_pos);
+    }
+  }
+
+  valk_slab_release_ptr(conn->sys->tcpBufferSlab, frameSlabItem);
+}
+
+static void __tcp_read_process_ssl(valk_aio_handle_t *conn, const void *buf_base, ssize_t nread) {
+  bool can_write_output = !conn->http.io.write_flush_pending;
+  u8 *write_buf = can_write_output ? valk_http2_conn_write_buf_data(conn) : nullptr;
+  u64 write_available = can_write_output ? valk_http2_conn_write_buf_available(conn) : 0;
+
+  u8 temp_ssl_out[256];
+  valk_buffer_t In = {.items = (void *)buf_base, .count = nread, .capacity = HTTP_SLAB_ITEM_SIZE};
+  valk_buffer_t Out = {
+      .items = can_write_output ? (write_buf + conn->http.io.write_pos) : temp_ssl_out,
+      .count = 0,
+      .capacity = can_write_output ? write_available : sizeof(temp_ssl_out)};
+
+  int err = valk_aio_ssl_on_read(&conn->http.io.ssl, &In, &Out, conn, __http_tcp_unencrypted_read_cb);
+
+  if (Out.count > 0 && can_write_output) {
+    conn->http.io.write_pos += Out.count;
+    VALK_TRACE("SSL output: %zu bytes (total: %zu)", Out.count, conn->http.io.write_pos);
+  }
+
+  if (err) return;
+
+  if (conn->http.state == VALK_CONN_INIT && SSL_is_init_finished(conn->http.io.ssl.ssl)) {
+    valk_conn_transition(conn, VALK_CONN_EVT_HANDSHAKE_COMPLETE);
+  }
+
+  if (can_write_output && SSL_is_init_finished(conn->http.io.ssl.ssl)) {
+    __tcp_read_flush_http2_frames(conn, write_buf);
   }
 }
 
 void valk_http2_conn_tcp_read_impl(valk_aio_handle_t *conn, ssize_t nread, const void *buf_base) {
-  if (conn->http.state == VALK_CONN_CLOSING || conn->http.state == VALK_CONN_CLOSED) {
-    return;
-  }
-
-  if (!buf_base) {
-    VALK_WARN("TCP buffer alloc failed - applying backpressure on connection");
-    __vtable_read_stop(conn);
-    if (!__backpressure_list_add(conn)) {
-      if (!__vtable_is_closing(conn)) {
-        conn->http.state = VALK_CONN_CLOSING;
-        __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
-      }
-    }
-    return;
-  }
-
-  if (nread < 0) {
-    if (!__vtable_is_closing(conn)) {
-      conn->http.state = VALK_CONN_CLOSING;
-      __backpressure_list_remove(conn);
-#ifdef VALK_METRICS_ENABLED
-      conn->http.diag.state = VALK_DIAG_CONN_CLOSING;
-      conn->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
-#endif
-      __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
-    }
-    return;
-  }
+  if (__conn_is_closing(conn)) return;
+  if (!buf_base) { __tcp_read_handle_null_buffer(conn); return; }
+  if (nread < 0) { __tcp_read_handle_error(conn); return; }
 
   VALK_TRACE("Feeding data to OpenSSL %ld", nread);
 
   if (!valk_http2_conn_write_buf_acquire(conn)) {
-    VALK_WARN("Failed to acquire write buffer - applying backpressure on connection");
-    int n = BIO_write(conn->http.io.ssl.read_bio, buf_base, (int)nread);
-    if (n != (int)nread) {
-      VALK_ERROR("BIO_write during backpressure failed: wrote %d of %zd", n, nread);
-    }
-    __vtable_read_stop(conn);
-    valk_conn_io_read_buf_release(&conn->http.io, conn->sys->tcpBufferSlab);
-    if (!__backpressure_list_add(conn)) {
-      if (!__vtable_is_closing(conn)) {
-        conn->http.state = VALK_CONN_CLOSING;
-        __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
-      }
-    }
-#ifdef VALK_METRICS_ENABLED
-    if (conn->http.server) {
-      atomic_fetch_add(&conn->http.server->sys->metrics_state->system_stats.tcp_buffer_overflow, 1);
-    }
-#endif
+    __tcp_read_handle_write_buf_exhausted(conn, buf_base, nread);
     return;
   }
 
@@ -358,68 +420,7 @@ void valk_http2_conn_tcp_read_impl(valk_aio_handle_t *conn, ssize_t nread, const
     conn->http.last_activity_ms = conn->sys->ops->loop->now(conn->sys);
   }
 
-  valk_buffer_t In = {
-      .items = (void *)buf_base, .count = nread, .capacity = HTTP_SLAB_ITEM_SIZE};
-
-  // If a write is pending, we still need to process incoming data (to receive
-  // WINDOW_UPDATE, PING, etc.) but we can't safely append to the write buffer.
-  // Buffer the incoming SSL data and process it - any output will be generated
-  // on the next read after the flush completes.
-  bool can_write_output = !conn->http.io.write_flush_pending;
-
-  u8 *write_buf = can_write_output ? valk_http2_conn_write_buf_data(conn) : nullptr;
-  u64 write_available = can_write_output ? valk_http2_conn_write_buf_available(conn) : 0;
-
-  // Use a temporary stack buffer for SSL output if we can't write to the main buffer
-  u8 temp_ssl_out[256];  // Small buffer for handshake/alert data
-  valk_buffer_t Out = {
-      .items = can_write_output ? (write_buf + conn->http.io.write_pos) : temp_ssl_out,
-      .count = 0,
-      .capacity = can_write_output ? write_available : sizeof(temp_ssl_out)};
-
-  int err = valk_aio_ssl_on_read(&conn->http.io.ssl, &In, &Out, conn,
-                                 __http_tcp_unencrypted_read_cb);
-
-  if (Out.count > 0 && can_write_output) {
-    conn->http.io.write_pos += Out.count;
-    VALK_TRACE("SSL output: %zu bytes (total: %zu)", Out.count, conn->http.io.write_pos);
-  }
-
-  if (!err) {
-    if (conn->http.state == VALK_CONN_INIT && SSL_is_init_finished(conn->http.io.ssl.ssl)) {
-      conn->http.state = VALK_CONN_ESTABLISHED;
-#ifdef VALK_METRICS_ENABLED
-      conn->http.diag.state = VALK_DIAG_CONN_ACTIVE;
-      conn->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
-#endif
-    }
-    // Only flush HTTP/2 frames if we can write output
-    if (can_write_output && SSL_is_init_finished(conn->http.io.ssl.ssl) && conn->sys && conn->sys->tcpBufferSlab) {
-      valk_slab_item_t *frameSlabRaw = valk_slab_aquire(conn->sys->tcpBufferSlab);
-      if (frameSlabRaw) {
-        __tcp_buffer_slab_item_t *frameSlabItem = (void *)frameSlabRaw->data;
-        valk_buffer_t FrameIn = {
-            .items = frameSlabItem->data, .count = 0, .capacity = HTTP_SLAB_ITEM_SIZE};
-
-        valk_http2_flush_frames(&FrameIn, conn);
-
-        if (FrameIn.count > 0) {
-          write_available = valk_http2_conn_write_buf_available(conn);
-          Out.items = write_buf + conn->http.io.write_pos;
-          Out.count = 0;
-          Out.capacity = write_available;
-          valk_aio_ssl_encrypt(&conn->http.io.ssl, &FrameIn, &Out);
-
-          if (Out.count > 0) {
-            conn->http.io.write_pos += Out.count;
-            VALK_TRACE("HTTP/2 frames encrypted: %zu bytes (total: %zu)", Out.count, conn->http.io.write_pos);
-          }
-        }
-
-        valk_slab_release_ptr(conn->sys->tcpBufferSlab, frameSlabItem);
-      }
-    }
-  }
+  __tcp_read_process_ssl(conn, buf_base, nread);
 
   if (conn->http.io.write_pos > 0 && !conn->http.io.write_flush_pending) {
     valk_http2_conn_write_buf_flush(conn);
@@ -486,20 +487,42 @@ int valk_http2_send_client_connection_header(nghttp2_session *session, valk_aio_
   return 0;
 }
 
-void valk_http2_conn_on_disconnect(valk_aio_handle_t *handle) {
-  VALK_DEBUG("HTTP/2 disconnect called");
+void valk_http2_enter_arena_backpressure(valk_aio_handle_t *conn) {
+  if (!conn || !conn->http.session) return;
+  if (conn->http.arena_backpressure) return;
 
-  __backpressure_list_remove(handle);
+  conn->http.arena_backpressure = true;
 
-  handle->http.state = VALK_CONN_CLOSED;
-
-  valk_stream_body_close_all(handle);
-
-  if (handle->http.httpHandler && handle->http.httpHandler->onDisconnect) {
-    VALK_TRACE("HTTP/2 onDisconnect handler");
-    handle->http.httpHandler->onDisconnect(handle->http.httpHandler->arg, handle);
+  nghttp2_settings_entry iv[] = {
+    {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, (u32)conn->http.active_streams}
+  };
+  int rv = nghttp2_submit_settings(conn->http.session, NGHTTP2_FLAG_NONE, iv, 1);
+  if (rv == 0) {
+    nghttp2_session_send(conn->http.session);
+    VALK_INFO("Entered arena backpressure on connection (max_streams=%d)",
+              conn->http.active_streams);
   }
+}
 
+void valk_http2_exit_arena_backpressure(valk_aio_handle_t *conn) {
+  if (!conn || !conn->http.session) return;
+  if (!conn->http.arena_backpressure) return;
+  if (!conn->http.server || !conn->http.server->sys) return;
+
+  conn->http.arena_backpressure = false;
+
+  u32 max_streams = conn->http.server->sys->config.max_concurrent_streams;
+  nghttp2_settings_entry iv[] = {
+    {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, max_streams}
+  };
+  int rv = nghttp2_submit_settings(conn->http.session, NGHTTP2_FLAG_NONE, iv, 1);
+  if (rv == 0) {
+    nghttp2_session_send(conn->http.session);
+    VALK_INFO("Exited arena backpressure on connection (max_streams=%u)", max_streams);
+  }
+}
+
+static void __disconnect_update_metrics(valk_aio_handle_t *handle) {
 #ifdef VALK_METRICS_ENABLED
   VALK_METRICS_IF(handle->sys) {
     valk_aio_metrics_on_close(&VALK_METRICS(handle->sys));
@@ -510,69 +533,107 @@ void valk_http2_conn_on_disconnect(valk_aio_handle_t *handle) {
   } else if (client_connections_active) {
     valk_gauge_v2_dec(client_connections_active);
   }
+#else
+  UNUSED(handle);
 #endif
+}
 
-  if (handle->http.server && handle->http.server->sys) {
-    valk_slab_t *slab = handle->http.server->sys->httpStreamArenas;
-    u64 leaked_arenas = 0;
-    u32 slot = handle->http.active_arena_head;
-    while (slot != UINT32_MAX && slot < slab->numItems) {
-      u64 stride = valk_slab_item_stride(slab->itemSize);
-      valk_slab_item_t *item = (valk_slab_item_t *)&slab->heap[stride * slot];
-      valk_mem_arena_t *arena = (valk_mem_arena_t *)item->data;
-      valk_http2_server_request_t *req = (valk_http2_server_request_t *)&arena->heap[0];
+static void __disconnect_release_orphaned_arenas(valk_aio_handle_t *handle) {
+  if (!handle->http.server || !handle->http.server->sys) return;
 
-      if (req->arena_slot == UINT32_MAX) {
-        VALK_DEBUG("Arena slot %u already released (sentinel found), skipping", slot);
-        break;
-      }
+  valk_slab_t *slab = handle->http.server->sys->httpStreamArenas;
+  u64 orphaned_count = 0;
+  u32 slot = handle->http.active_arena_head;
 
-      if (req->conn != handle) {
-        break;
-      }
+  while (slot != UINT32_MAX && slot < slab->numItems) {
+    u64 stride = valk_slab_item_stride(slab->itemSize);
+    valk_slab_item_t *item = (valk_slab_item_t *)&slab->heap[stride * slot];
+    valk_mem_arena_t *arena = (valk_mem_arena_t *)item->data;
+    valk_http2_server_request_t *req = (valk_http2_server_request_t *)&arena->heap[0];
 
-      u32 next_slot = req->next_arena_slot;
+    if (req->arena_ref.slot == UINT32_MAX) {
+      VALK_DEBUG("Arena slot %u already released (sentinel found), skipping", slot);
+      break;
+    }
+    if (req->conn != handle) break;
 
-      if (req->arena_slab_item == item) {
-        VALK_INFO("Releasing leaked arena slot %u on disconnect", slot);
-        req->arena_slot = UINT32_MAX;
-        req->arena_slab_item = nullptr;
-        valk_slab_release(slab, item);
+    u32 next_slot = req->next_arena_slot;
+
+    if (req->arena_ref.slab_item != item) {
+      VALK_WARN("Arena slot %u already released or corrupted (item=%p, expected=%p)",
+                slot, (void*)req->arena_ref.slab_item, (void*)item);
+      break;
+    }
+
+    VALK_DEBUG("Releasing orphaned arena slot %u on disconnect", slot);
+    valk_arena_ref_release(&req->arena_ref, slab);
 #ifdef VALK_METRICS_ENABLED
-        valk_aio_system_stats_on_arena_release(&handle->http.server->sys->metrics_state->system_stats);
+    valk_aio_system_stats_on_arena_release(&handle->http.server->sys->metrics_state->system_stats);
 #endif
-        leaked_arenas++;
-      } else {
-        VALK_WARN("Arena slot %u already released or corrupted (item=%p, expected=%p)",
-                  slot, (void*)req->arena_slab_item, (void*)item);
-        break;
-      }
-      slot = next_slot;
-    }
-    handle->http.active_arena_head = UINT32_MAX;
-    if (leaked_arenas > 0) {
-      VALK_WARN("Released %zu leaked stream arenas on disconnect", leaked_arenas);
-    }
+    orphaned_count++;
+    slot = next_slot;
   }
 
-  valk_aio_ssl_free(&handle->http.io.ssl);
+  handle->http.active_arena_head = UINT32_MAX;
+  if (orphaned_count > 0) {
+    VALK_DEBUG("Released %llu orphaned stream arenas on disconnect (normal for abrupt close)",
+               (unsigned long long)orphaned_count);
+  }
+}
 
-  nghttp2_session *session = handle->http.session;
-  if (session && !handle->http.server) {
-    i32 next_id = nghttp2_session_get_next_stream_id(session);
-    for (i32 stream_id = 1; stream_id < next_id; stream_id += 2) {
-      __http2_req_res_t *reqres = nghttp2_session_get_stream_user_data(session, stream_id);
-      if (reqres) {
-        VALK_WARN("Resolving orphaned client request on stream %d due to disconnect", stream_id);
-        valk_arc_box *err = valk_arc_box_err("Connection closed before response received");
-        valk_promise_respond(&reqres->promise, err);
-        valk_arc_release(err);
-        valk_mem_free(reqres);
-        nghttp2_session_set_stream_user_data(session, stream_id, nullptr);
-      }
+static void __disconnect_close_server_streams(valk_aio_handle_t *handle, nghttp2_session *session) {
+  i32 last_stream_id = nghttp2_session_get_last_proc_stream_id(session);
+  for (i32 stream_id = 1; stream_id <= last_stream_id; stream_id += 2) {
+    if (nghttp2_session_find_stream(session, stream_id)) {
+      VALK_DEBUG("Forcing stream close for server stream %d on disconnect", stream_id);
+      valk_http2_server_on_stream_close_callback(session, stream_id, NGHTTP2_CANCEL, handle);
     }
+  }
+}
+
+static void __disconnect_close_client_streams(nghttp2_session *session) {
+  i32 next_id = nghttp2_session_get_next_stream_id(session);
+  for (i32 stream_id = 1; stream_id < next_id; stream_id += 2) {
+    __http2_req_res_t *reqres = nghttp2_session_get_stream_user_data(session, stream_id);
+    if (!reqres) continue;
+
+    VALK_WARN("Resolving orphaned client request on stream %d due to disconnect", stream_id);
+    valk_arc_box *err = valk_arc_box_err("Connection closed before response received");
+    valk_promise_respond(&reqres->promise, err);
+    valk_arc_release(err);
+    valk_mem_free(reqres);
+    nghttp2_session_set_stream_user_data(session, stream_id, nullptr);
+  }
+}
+
+static void __disconnect_cleanup_session(valk_aio_handle_t *handle) {
+  nghttp2_session *session = handle->http.session;
+  if (!session) return;
+
+  if (handle->http.server) {
+    __disconnect_close_server_streams(handle, session);
+  } else {
+    __disconnect_close_client_streams(session);
   }
 
   handle->http.session = nullptr;
   nghttp2_session_del(session);
+}
+
+void valk_http2_conn_on_disconnect(valk_aio_handle_t *handle) {
+  VALK_DEBUG("HTTP/2 disconnect called");
+
+  __backpressure_list_remove(handle);
+  valk_conn_transition(handle, VALK_CONN_EVT_CLOSED);
+  valk_stream_body_close_all(handle);
+
+  if (handle->http.httpHandler && handle->http.httpHandler->onDisconnect) {
+    VALK_TRACE("HTTP/2 onDisconnect handler");
+    handle->http.httpHandler->onDisconnect(handle->http.httpHandler->arg, handle);
+  }
+
+  __disconnect_update_metrics(handle);
+  __disconnect_release_orphaned_arenas(handle);
+  valk_aio_ssl_free(&handle->http.io.ssl);
+  __disconnect_cleanup_session(handle);
 }

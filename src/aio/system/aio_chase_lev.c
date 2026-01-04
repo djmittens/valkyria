@@ -1,4 +1,5 @@
 #include "aio_chase_lev.h"
+#include "types.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -114,7 +115,7 @@ bool valk_chase_lev_empty(valk_chase_lev_deque_t *deque) {
   return t >= b;
 }
 
-int64_t valk_chase_lev_size(valk_chase_lev_deque_t *deque) {
+i64 valk_chase_lev_size(valk_chase_lev_deque_t *deque) {
   int64_t t = atomic_load_explicit(&deque->top, memory_order_relaxed);
   int64_t b = atomic_load_explicit(&deque->bottom, memory_order_relaxed);
   return b - t;

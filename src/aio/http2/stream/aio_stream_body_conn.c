@@ -88,3 +88,33 @@ u64 valk_stream_body_get_bytes_sent(valk_aio_handle_t *conn, i32 stream_id) {
   }
   return 0;
 }
+
+void valk_stream_body_check_orphaned(valk_aio_handle_t *conn) {
+  if (!conn || !conn->http.session) {
+    return;
+  }
+
+  valk_stream_body_t *body = conn->http.stream_bodies;
+  while (body) {
+    valk_stream_body_t *next = body->next;
+
+    if (body->state != VALK_STREAM_OPEN) {
+      body = next;
+      continue;
+    }
+
+    nghttp2_stream *stream = nghttp2_session_find_stream(body->session, body->stream_id);
+    if (!stream) {
+      VALK_WARN("BUG: orphaned stream body id=%llu http2_stream=%d (stream gone but body not closed) - "
+                "this indicates a missing cleanup path, please report",
+                (unsigned long long)body->id, body->stream_id);
+      valk_stream_body_close(body);
+    } else if (valk_stream_body_is_idle_expired(body)) {
+      VALK_INFO("stream_body: idle timeout for id=%llu http2_stream=%d, closing",
+                (unsigned long long)body->id, body->stream_id);
+      valk_stream_body_cancel(body, NGHTTP2_NO_ERROR);
+    }
+
+    body = next;
+  }
+}

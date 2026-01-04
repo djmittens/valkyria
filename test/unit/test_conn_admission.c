@@ -27,8 +27,6 @@ void test_admission_init_custom_config(VALK_TEST_ARGS()) {
     .critical_watermark = 0.90f,
     .backpressure_max = 500,
     .backpressure_timeout_ms = 15000,
-    .pending_stream_max = 32,
-    .pending_stream_timeout_ms = 5000,
   };
 
   valk_conn_admission_ctx_t ctx;
@@ -63,7 +61,6 @@ void test_admission_check_connection_normal(VALK_TEST_ARGS()) {
   valk_pressure_state_t state = {
     .tcp_write_slab_usage = 0.3f,
     .arena_slab_usage = 0.4f,
-    .pending_stream_usage = 0.2f,
     .handle_slab_usage = 0.5f,
   };
 
@@ -85,7 +82,6 @@ void test_admission_check_connection_critical_rejects(VALK_TEST_ARGS()) {
   valk_pressure_state_t state = {
     .tcp_write_slab_usage = 0.96f,
     .arena_slab_usage = 0.4f,
-    .pending_stream_usage = 0.2f,
     .handle_slab_usage = 0.5f,
   };
 
@@ -107,7 +103,6 @@ void test_admission_check_connection_high_rejects(VALK_TEST_ARGS()) {
   valk_pressure_state_t state = {
     .tcp_write_slab_usage = 0.90f,
     .arena_slab_usage = 0.4f,
-    .pending_stream_usage = 0.2f,
     .handle_slab_usage = 0.5f,
   };
 
@@ -164,7 +159,6 @@ void test_admission_probabilistic_shedding(VALK_TEST_ARGS()) {
   valk_pressure_state_t state = {
     .tcp_write_slab_usage = 0.75f,
     .arena_slab_usage = 0.4f,
-    .pending_stream_usage = 0.2f,
     .handle_slab_usage = 0.3f,
   };
 
@@ -196,7 +190,6 @@ void test_admission_check_stream_normal(VALK_TEST_ARGS()) {
   valk_pressure_state_t state = {
     .tcp_write_slab_usage = 0.3f,
     .arena_slab_usage = 0.4f,
-    .pending_stream_usage = 0.2f,
     .handle_slab_usage = 0.5f,
   };
 
@@ -217,7 +210,6 @@ void test_admission_check_stream_arena_pressure(VALK_TEST_ARGS()) {
   valk_pressure_state_t state = {
     .tcp_write_slab_usage = 0.3f,
     .arena_slab_usage = 0.90f,
-    .pending_stream_usage = 0.2f,
     .handle_slab_usage = 0.5f,
   };
 

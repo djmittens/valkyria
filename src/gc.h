@@ -269,6 +269,11 @@ bool valk_should_checkpoint(valk_mem_arena_t* scratch, float threshold);
 void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
                      valk_lenv_t* root_env);
 
+// Evacuate a single value and all its transitive dependencies to heap
+// Use this for values that need to survive across checkpoints immediately
+// (e.g., callbacks that may fire before next checkpoint)
+valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v);
+
 // Add a value to the GC heap's object list (for evacuated values)
 void valk_gc_add_to_objects(valk_gc_malloc_heap_t* heap, valk_lval_t* v);
 

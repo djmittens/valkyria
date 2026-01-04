@@ -1,5 +1,6 @@
 #include "aio_stream_body.h"
 #include "aio_http2_session.h"
+#include "aio_http2_server.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +10,7 @@
 #include "common.h"
 #include "gc.h"
 #include "log.h"
+#include "metrics_v2.h"
 #include "parser.h"
 
 static u64 g_stream_body_id = 0;
@@ -331,6 +333,11 @@ static nghttp2_ssize __stream_data_read_callback(
 
   body->chunks_sent++;
   body->bytes_sent += chunk->data_len;
+
+  if (body->conn && body->conn->http.server) {
+    atomic_fetch_add(&body->conn->http.server->sys->metrics_state->metrics.bytes_sent_total, chunk->data_len);
+    valk_counter_v2_add(body->conn->http.server->metrics.bytes_sent, chunk->data_len);
+  }
 
   VALK_DEBUG("stream_body: body %llu dequeued chunk (size=%zu, queue_len=%zu, total_chunks=%llu)",
              body->id, chunk->data_len, body->queue_len, (unsigned long long)body->chunks_sent);

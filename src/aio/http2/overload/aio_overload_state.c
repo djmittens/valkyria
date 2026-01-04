@@ -10,8 +10,6 @@ valk_pressure_config_t valk_pressure_config_default(void) {
     .critical_watermark = 0.95f,
     .backpressure_max = 1000,
     .backpressure_timeout_ms = 30000,
-    .pending_stream_max = 64,
-    .pending_stream_timeout_ms = 10000,
   };
 }
 
@@ -64,23 +62,10 @@ valk_pressure_decision_t valk_pressure_evaluate(
       break;
   }
 
-  if (state->arena_slab_usage >= config->critical_watermark) {
-    decision.accept_stream = false;
-    decision.use_pending_queue = false;
-  } else if (state->arena_slab_usage >= config->high_watermark) {
-    decision.accept_stream = false;
-    decision.use_pending_queue =
-      state->pending_stream_usage < config->high_watermark;
-  } else {
-    decision.accept_stream = true;
-    decision.use_pending_queue = false;
-  }
+  decision.accept_stream = state->arena_slab_usage < config->critical_watermark;
 
   if (state->oldest_backpressure_age_ms > config->backpressure_timeout_ms) {
     decision.drop_oldest_backpressure = true;
-  }
-  if (state->oldest_pending_stream_age_ms > config->pending_stream_timeout_ms) {
-    decision.drop_oldest_pending_stream = true;
   }
 
   return decision;

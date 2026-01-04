@@ -23,3 +23,6 @@ void valk_http2_backpressure_try_resume_one(valk_aio_system_t *sys);
 
 int valk_http2_send_server_connection_header(nghttp2_session *session, valk_aio_system_t *sys);
 int valk_http2_send_client_connection_header(nghttp2_session *session, valk_aio_system_t *sys);
+
+void valk_http2_enter_arena_backpressure(valk_aio_handle_t *conn);
+void valk_http2_exit_arena_backpressure(valk_aio_handle_t *conn);

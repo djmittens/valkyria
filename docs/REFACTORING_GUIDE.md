@@ -4,17 +4,504 @@ This document defines the target architecture for Valkyria's I/O and networking 
 
 ---
 
+## 🚨 RULES FOR AI AGENTS (MANDATORY)
+
+**These rules exist because previous AI runs marked phases "complete" without doing the work.**
+
+### Rule 1: No Phase May Be Marked Complete Without ALL Verifications Passing
+
+Each phase has TWO types of verification:
+1. **Negative verification**: Old pattern is gone (e.g., no direct `http.state =` assignments)
+2. **Positive verification**: New pattern exists and is used (e.g., `valk_conn_transition` called 16+ times)
+
+**BOTH must pass.** Just removing old code is not completion.
+
+### Rule 2: No Cancelling or Descoping
+
+You may NOT:
+- Mark a phase as "cancelled" or "out of scope"
+- Reduce the requirements (e.g., "only 4 states needed instead of 8")
+- Claim the current implementation is "good enough"
+- Skip verification steps
+
+If a phase is too hard, say so and stop. Do not claim completion.
+
+### Rule 3: Tests Must Pass
+
+After any change:
+```bash
+make build && make test
+```
+If tests fail, fix them. Do not mark complete with failing tests.
+
+### Rule 4: Verification Is Auditable
+
+Every verification command is designed to be run by a human. If you claim a phase is complete, the human will run the verification commands. If they don't pass, you lied.
+
+### Rule 5: The Functional Requirements Are Non-Negotiable
+
+These requirements from the Formal Requirements section MUST be met:
+- **R3.6**: 8 connection states with centralized FSM
+- **R3.7**: Two-phase GOAWAY graceful shutdown  
+- **R6.1**: Cyclomatic complexity < 10 for all functions
+- **R6.2**: Nesting depth < 4 levels
+
+"Partial" completion of these requirements means "not complete".
+
+---
+
+## ⚠️ CRITICAL: ROOT CAUSE ANALYSIS (2026-01-01)
+
+**THIS SECTION MUST BE READ FIRST. DO NOT SKIP.**
+
+Previous refactoring efforts completed organizational tasks (file moves, renames, `#ifdef` consolidation) but **DID NOT address the architectural root causes** of HTTP/2 connection, session, and request bugs. The bugs persist because:
+
+### The Three Root Causes of HTTP/2 Bugs
+
+#### Root Cause 1: No Centralized State Machine
+
+**Current state:** 4 connection states (`INIT`, `ESTABLISHED`, `CLOSING`, `CLOSED`) with **16 scattered transition points** across 6 files:
+- `aio_http2_conn.c` - 6 transitions
+- `aio_http2_client.c` - 5 transitions  
+- `aio_http2_server.c` - 2 transitions
+- `aio_maintenance.c` - 2 transitions
+- `aio_uv.c` - 1 transition
+
+**Required state (per R3.6):** 8 states with centralized transition function:
+```
+INIT → HANDSHAKING → ESTABLISHED → GOAWAY_SENT → DRAINING → CLOSING → CLOSED
+                                                                    ↑
+ERROR ──────────────────────────────────────────────────────────────┘
+```
+
+**Why this causes bugs:** State transitions happen ad-hoc with repeated boilerplate. No single place validates transitions. Race conditions between cleanup paths. No graceful shutdown (two-phase GOAWAY per R3.7).
+
+**Evidence:**
+```bash
+$ grep -rn "http.state = " src/aio --include="*.c" | wc -l
+16  # Should be 1 (the transition function)
+```
+
+#### Root Cause 2: Implicit Arena Ownership via Nullable Pointers
+
+**Current state:** Arena ownership transfers implicitly by setting pointers to `nullptr`:
+
+| Location | What Happens |
+|----------|--------------|
+| `aio_http2_session.c:245` | Request gets arena: `req->arena_slab_item = arena_item` |
+| `aio_http2_session.c:731` | Transfer to async ctx: `http_ctx->arena_slab_item = req->arena_slab_item` |
+| `aio_http2_session.c:735` | Clear request's copy: `req->arena_slab_item = nullptr` |
+| `aio_async.c:70` | Transfer back: `stream_req->arena_slab_item = http->arena_slab_item` |
+| `aio_async.c:72` | Clear async ctx: `http->arena_slab_item = nullptr` |
+| `aio_http2_conn.c:543` | Cleanup sets: `req->arena_slab_item = nullptr` |
+
+**Why this causes bugs:** 
+- 11 assignment sites with no type system enforcement
+- Easy to forget to clear source after transfer → double-free
+- Easy to use after clearing → use-after-free
+- Defensive cleanup in `aio_http2_conn.c:519-559` exists because normal paths leak
+
+**Evidence:** The disconnect handler has a "leaked arenas" loop that shouldn't exist if cleanup worked:
+```c
+// aio_http2_conn.c:519-559
+u64 leaked_arenas = 0;
+while (slot != UINT32_MAX) {
+  // ... release each leaked arena
+  leaked_arenas++;
+}
+if (leaked_arenas > 0) {
+  VALK_WARN("Released %zu leaked stream arenas on disconnect", leaked_arenas);
+}
+```
+
+#### Root Cause 3: Tagged Pointer Anti-Pattern for Stream User Data
+
+**Current state:** nghttp2 stream user data uses pointer tagging to distinguish types:
+```c
+// aio_internal.h:420-428
+static inline bool __is_pending_stream(void *user_data) {
+  return user_data && ((uptr)user_data & (1ULL << 63));
+}
+```
+
+Stream user data can be:
+1. `nullptr` - no data
+2. `valk_http2_server_request_t*` - normal request (high bit clear)
+3. `valk_pending_stream_t*` - pending stream (high bit set)
+
+**Why this causes bugs:**
+- 8 call sites must check `__is_pending_stream()` before casting
+- Forgetting the check → crash or memory corruption
+- Platform-dependent (assumes 64-bit with unused high bit)
+- No compiler help - it's just `void*`
+
+**Evidence:**
+```bash
+$ grep -rn "__is_pending_stream\|__get_pending_stream" src/aio --include="*.c" | grep -v define | wc -l
+8  # Each is a potential bug if check is forgotten
+```
+
+### What Previous Refactoring Actually Did (vs What Was Claimed)
+
+| Phase | Claimed | Actually Done | Root Cause Addressed? |
+|-------|---------|---------------|----------------------|
+| 1. Metrics | ✅ Complete | ✅ Moved to `metrics_v2` | N/A |
+| 2. SSE Cleanup | ✅ Complete | ✅ Deleted old registry | N/A |
+| 3. Overload | ✅ Complete | ✅ Renamed files | N/A |
+| 4. I/O Cleanup | ✅ Complete | ✅ Removed size fields | N/A |
+| 5. Organization | ✅ Complete | ✅ Directory restructure | N/A |
+| 6. Complexity | ✅ Complete | ⚠️ PARTIAL - only `#ifdef` consolidation | **NO** - CC still >20, nesting still >4 |
+| 7. Streaming | ✅ Complete | ✅ Generic `stream/` API | N/A |
+
+**Phase 6 was marked complete but only addressed R6.4 (`#ifdef` blocks). It did NOT address:**
+- R6.1: Cyclomatic complexity < 10 (`on_frame_recv_callback` is CC ≈ 25)
+- R6.2: Nesting depth < 4 (still 5-6 levels deep)
+- R3.6: Connection state machine (not implemented)
+- R3.7: Two-phase GOAWAY (not implemented)
+
+### Dead Code Still Present
+
+**`http2_ops_nghttp2.c`**: 297 lines of abstraction layer that is **never used** in the main code path.
+```bash
+$ grep -r "http2_ops" src/aio --include="*.c" | grep -v "http2_ops_nghttp2.c" | grep -v "http2_ops_test.c"
+src/aio/aio_ops.c:  .http2 = &valk_http2_ops_nghttp2,  # Registered but never called
+src/aio/aio_ops.c:  .http2 = &valk_http2_ops_test,
+```
+
+The main code calls nghttp2 directly (e.g., `nghttp2_session_mem_recv2` in `aio_http2_conn.c:289`).
+
+---
+
+## Mandatory Next Steps (DO NOT SKIP)
+
+Before claiming any phase is "complete", the following MUST be done:
+
+### Phase 8: State Machine Implementation (REQUIRED)
+
+**Files to create:**
+- `src/aio/http2/aio_http2_conn_fsm.c` - State machine implementation
+- `src/aio/http2/aio_http2_conn_fsm.h` - State/event enums, transition function
+
+**Implementation:**
+1. Add states: `HANDSHAKING`, `GOAWAY_SENT`, `DRAINING`, `ERROR`
+2. Create `valk_conn_transition(conn, event)` function
+3. Replace ALL 16 `conn->http.state = X` with `valk_conn_transition(conn, EVENT_Y)`
+4. Add `on_enter`/`on_exit` callbacks for cleanup actions
+
+**Verification (ALL must pass):**
+```bash
+# NEGATIVE: No direct state assignments outside FSM (must return 0)
+grep -rn "http\.state = " src/aio --include="*.c" | grep -v "conn_fsm.c" | wc -l
+
+# POSITIVE: FSM files exist
+test -f src/aio/http2/aio_http2_conn_fsm.c && echo "FSM impl exists"
+test -f src/aio/http2/aio_http2_conn_fsm.h && echo "FSM header exists"
+
+# POSITIVE: All 8 states defined (must return 8)
+grep -c "VALK_CONN_" src/aio/http2/aio_http2_conn_fsm.h | grep -E "^8$"
+
+# POSITIVE: Transition function exists and is called (must return >= 16)
+grep -rn "valk_conn_transition" src/aio --include="*.c" | wc -l
+
+# POSITIVE: Two-phase GOAWAY implemented (must find both)
+grep -q "VALK_CONN_GOAWAY_SENT" src/aio/http2/aio_http2_conn_fsm.h && echo "GOAWAY_SENT state exists"
+grep -q "VALK_CONN_DRAINING" src/aio/http2/aio_http2_conn_fsm.h && echo "DRAINING state exists"
+
+# POSITIVE: on_enter callbacks for graceful shutdown
+grep -q "on_enter_goaway_sent\|on_enter.*goaway" src/aio/http2/aio_http2_conn_fsm.c && echo "GOAWAY entry action exists"
+grep -q "on_enter_draining\|on_enter.*drain" src/aio/http2/aio_http2_conn_fsm.c && echo "DRAINING entry action exists"
+
+# FUNCTIONAL: Tests pass
+make build && make test
+```
+
+### Phase 9: Arena Ownership Tokens (REQUIRED)
+
+**Replace implicit transfers with explicit tokens:**
+
+```c
+// BEFORE (bug-prone)
+http_ctx->arena_slab_item = req->arena_slab_item;
+req->arena_slab_item = nullptr;
+
+// AFTER (compiler-enforced)
+valk_arena_token_t token = valk_arena_take(&req->arena);  // Clears source
+valk_arena_give(&http_ctx->arena, token);                  // Sets destination
+```
+
+**Files to modify:**
+- `aio_internal.h` - Add `valk_arena_token_t` type
+- `aio_http2_session.c` - Use token transfers
+- `aio_async.c` - Use token transfers
+
+**Verification (ALL must pass):**
+```bash
+# NEGATIVE: No direct arena_slab_item assignments (must return 0)
+grep -rn "arena_slab_item\s*=" src/aio --include="*.c" | wc -l
+
+# POSITIVE: Arena token type exists
+grep -q "typedef.*valk_arena_token_t\|struct valk_arena_token" src/aio/aio_internal.h && echo "Token type exists"
+
+# POSITIVE: Arena ref type exists in request struct
+grep -q "valk_arena_ref_t\s*arena" src/aio/aio_internal.h && echo "Arena ref in request"
+
+# POSITIVE: Token API functions exist and are used
+grep -c "valk_arena_take\|valk_arena_give\|valk_arena_release" src/aio/http2/aio_http2_session.c | grep -E "^[6-9]|^[0-9]{2}"
+
+# POSITIVE: The "leaked arenas" defensive loop is REMOVED (we don't need it if ownership is correct)
+grep -q "leaked_arenas\|leaked.*arena" src/aio/http2/aio_http2_conn.c && echo "FAIL: Leaked arena hack still exists" || echo "PASS: No leaked arena hack"
+
+# FUNCTIONAL: Tests pass
+make build && make test
+```
+
+### Phase 10: Stream User Data Type Safety (REQUIRED)
+
+**Replace tagged pointers with discriminated union:**
+
+```c
+// BEFORE (crash-prone)
+void *stream_data = nghttp2_session_get_stream_user_data(session, stream_id);
+if (__is_pending_stream(stream_data)) {
+  pending_stream_t *ps = __get_pending_stream(stream_data);
+  // ...
+}
+
+// AFTER (type-safe)
+valk_stream_data_t data = valk_stream_get_data(session, stream_id);
+switch (data.type) {
+  case STREAM_DATA_NONE: break;
+  case STREAM_DATA_REQUEST: handle_request(data.request); break;
+  case STREAM_DATA_PENDING: handle_pending(data.pending); break;
+}
+```
+
+**Files to modify:**
+- `aio_internal.h` - Add `valk_stream_data_t` union
+- `aio_http2_session.c` - Replace all 8 tagged pointer sites
+
+**Verification (ALL must pass):**
+```bash
+# NEGATIVE: No tagged pointer usage (must return 0)
+grep -rn "__is_pending_stream\|__get_pending_stream" src/aio --include="*.c" | grep -v "define\|inline" | wc -l
+
+# POSITIVE: Discriminated union type exists
+grep -q "STREAM_DATA_NONE\|STREAM_DATA_REQUEST\|STREAM_DATA_PENDING" src/aio/aio_internal.h && echo "Stream data enum exists"
+grep -q "valk_stream_data_t" src/aio/aio_internal.h && echo "Stream data type exists"
+
+# POSITIVE: Type-safe accessor is used (must return >= 8)
+grep -c "valk_stream_get_data" src/aio/http2/aio_http2_session.c | grep -E "^[8-9]|^[0-9]{2}"
+
+# POSITIVE: Switch statements on stream data type exist
+grep -c "case STREAM_DATA_" src/aio/http2/aio_http2_session.c | grep -E "^[0-9]+"
+
+# FUNCTIONAL: Tests pass
+make build && make test
+```
+
+### Phase 11: Complexity Reduction (REQUIRED)
+
+**Extract from `valk_http2_on_frame_recv_callback` (currently ~175 lines → target <50 lines):**
+
+```c
+// Create these helper functions:
+static int handle_goaway_frame(conn, frame);
+static int handle_rst_stream_frame(conn, frame);
+static int handle_pending_stream(conn, stream_id, pending);
+static int invoke_handler_sync(conn, req, handler, env);
+static int invoke_handler_async(conn, req, handle, http_ctx);
+static int send_error_response(session, stream_id, status, message, arena);
+```
+
+**Verification (ALL must pass):**
+```bash
+# NEGATIVE: on_frame_recv_callback is small (must return number < 50)
+# This counts lines from function start to next function
+awk '/^int valk_http2_on_frame_recv_callback/,/^(int|static int|void|static void) [a-z_]+\(/' \
+  src/aio/http2/aio_http2_session.c | head -n -1 | wc -l
+
+# POSITIVE: Helper functions exist (must find all 4)
+grep -q "static int handle_goaway_frame" src/aio/http2/aio_http2_session.c && echo "handle_goaway_frame exists"
+grep -q "static int handle_rst_stream_frame" src/aio/http2/aio_http2_session.c && echo "handle_rst_stream_frame exists"
+grep -q "static int handle_headers_frame\|static int handle_request_headers" src/aio/http2/aio_http2_session.c && echo "handle_headers_frame exists"
+grep -q "static int.*send_error_response\|static void.*send_error_response" src/aio/http2/aio_http2_session.c && echo "send_error_response exists"
+
+# POSITIVE: Helper functions are called from on_frame_recv_callback
+grep -A50 "int valk_http2_on_frame_recv_callback" src/aio/http2/aio_http2_session.c | grep -q "handle_goaway_frame\|handle_rst_stream_frame\|handle_headers_frame"
+
+# POSITIVE: No deep nesting in main callback (max 4 levels - count leading spaces)
+awk '/^int valk_http2_on_frame_recv_callback/,/^(int|static|void) [a-z]/' src/aio/http2/aio_http2_session.c | \
+  grep -E "^\s{16,}" | wc -l
+# Must return 0 (no lines indented 16+ spaces = 4+ levels at 4-space indent, or 8+ at 2-space)
+
+# FUNCTIONAL: Tests pass
+make build && make test
+```
+
+### Phase 12: Dead Code Removal (REQUIRED)
+
+**Delete unused `http2_ops` abstraction:**
+- `src/aio/http2/http2_ops.h` - DELETE or migrate all calls to use it
+- `src/aio/http2/http2_ops_nghttp2.c` - DELETE or migrate
+- `src/aio/http2/http2_ops_test.c` - DELETE or migrate
+
+**Decision required:** Either delete 297 lines of dead code, OR migrate all nghttp2 calls to use the abstraction (enables testing).
+
+**Verification (ALL must pass):**
+```bash
+# Option A chosen: Files deleted
+test ! -f src/aio/http2/http2_ops.h && echo "http2_ops.h deleted"
+test ! -f src/aio/http2/http2_ops_nghttp2.c && echo "http2_ops_nghttp2.c deleted"  
+test ! -f src/aio/http2/http2_ops_test.c && echo "http2_ops_test.c deleted"
+
+# OR Option B chosen: Abstraction is actually used
+# (must return >= 20 - every nghttp2 call goes through ops)
+grep -rn "ops->http2->" src/aio --include="*.c" | wc -l
+
+# No direct nghttp2 calls outside the ops implementation (must return 0)
+grep -rn "nghttp2_session_\|nghttp2_submit_" src/aio --include="*.c" | grep -v "http2_ops_nghttp2.c" | wc -l
+
+# FUNCTIONAL: Tests pass
+make build && make test
+```
+
+---
+
+## Master Verification Script
+
+Run this script to verify all phases. **ALL checks must pass** before any phase can be marked complete.
+
+```bash
+#!/bin/bash
+# Save as: scripts/verify_refactoring.sh
+# Run from repo root: ./scripts/verify_refactoring.sh
+
+set -e
+FAIL=0
+
+echo "=== Phase 8: State Machine ==="
+
+echo -n "  [NEG] No direct state assignments: "
+COUNT=$(grep -rn "http\.state = " src/aio --include="*.c" | grep -v "conn_fsm.c" | wc -l | tr -d ' ')
+if [ "$COUNT" -eq 0 ]; then echo "PASS"; else echo "FAIL ($COUNT found)"; FAIL=1; fi
+
+echo -n "  [POS] FSM implementation exists: "
+if [ -f src/aio/http2/aio_http2_conn_fsm.c ]; then echo "PASS"; else echo "FAIL"; FAIL=1; fi
+
+echo -n "  [POS] 8 states defined: "
+COUNT=$(grep -c "VALK_CONN_[A-Z]" src/aio/http2/aio_http2_conn_fsm.h 2>/dev/null || echo 0)
+if [ "$COUNT" -ge 8 ]; then echo "PASS ($COUNT states)"; else echo "FAIL ($COUNT states, need 8)"; FAIL=1; fi
+
+echo -n "  [POS] Transition function called: "
+COUNT=$(grep -rn "valk_conn_transition" src/aio --include="*.c" | wc -l | tr -d ' ')
+if [ "$COUNT" -ge 16 ]; then echo "PASS ($COUNT calls)"; else echo "FAIL ($COUNT calls, need 16)"; FAIL=1; fi
+
+echo -n "  [POS] GOAWAY_SENT state exists: "
+grep -q "VALK_CONN_GOAWAY_SENT" src/aio/http2/aio_http2_conn_fsm.h 2>/dev/null && echo "PASS" || { echo "FAIL"; FAIL=1; }
+
+echo -n "  [POS] DRAINING state exists: "
+grep -q "VALK_CONN_DRAINING" src/aio/http2/aio_http2_conn_fsm.h 2>/dev/null && echo "PASS" || { echo "FAIL"; FAIL=1; }
+
+echo ""
+echo "=== Phase 9: Arena Ownership ==="
+
+echo -n "  [NEG] No direct arena_slab_item assignments: "
+COUNT=$(grep -rn "arena_slab_item\s*=" src/aio --include="*.c" | wc -l | tr -d ' ')
+if [ "$COUNT" -eq 0 ]; then echo "PASS"; else echo "FAIL ($COUNT found)"; FAIL=1; fi
+
+echo -n "  [POS] Arena token type exists: "
+grep -q "valk_arena_token_t\|valk_arena_ref_t" src/aio/aio_internal.h && echo "PASS" || { echo "FAIL"; FAIL=1; }
+
+echo -n "  [POS] Token API used: "
+COUNT=$(grep -c "valk_arena_take\|valk_arena_give" src/aio/http2/aio_http2_session.c 2>/dev/null || echo 0)
+if [ "$COUNT" -ge 6 ]; then echo "PASS ($COUNT uses)"; else echo "FAIL ($COUNT uses, need 6)"; FAIL=1; fi
+
+echo -n "  [NEG] Leaked arena hack removed: "
+grep -q "leaked_arenas" src/aio/http2/aio_http2_conn.c && { echo "FAIL (still exists)"; FAIL=1; } || echo "PASS"
+
+echo ""
+echo "=== Phase 10: Stream Data Type Safety ==="
+
+echo -n "  [NEG] No tagged pointer usage: "
+COUNT=$(grep -rn "__is_pending_stream\|__get_pending_stream" src/aio --include="*.c" | grep -v "define\|inline" | wc -l | tr -d ' ')
+if [ "$COUNT" -eq 0 ]; then echo "PASS"; else echo "FAIL ($COUNT found)"; FAIL=1; fi
+
+echo -n "  [POS] Stream data enum exists: "
+grep -q "STREAM_DATA_NONE\|STREAM_DATA_REQUEST" src/aio/aio_internal.h && echo "PASS" || { echo "FAIL"; FAIL=1; }
+
+echo -n "  [POS] Type-safe accessor used: "
+COUNT=$(grep -c "valk_stream_get_data" src/aio/http2/aio_http2_session.c 2>/dev/null || echo 0)
+if [ "$COUNT" -ge 8 ]; then echo "PASS ($COUNT uses)"; else echo "FAIL ($COUNT uses, need 8)"; FAIL=1; fi
+
+echo ""
+echo "=== Phase 11: Complexity Reduction ==="
+
+echo -n "  [NEG] on_frame_recv_callback < 50 lines: "
+COUNT=$(awk '/^int valk_http2_on_frame_recv_callback/,/^(int|static int|void|static void) [a-z_]+\(/' \
+  src/aio/http2/aio_http2_session.c | head -n -1 | wc -l | tr -d ' ')
+if [ "$COUNT" -lt 50 ]; then echo "PASS ($COUNT lines)"; else echo "FAIL ($COUNT lines)"; FAIL=1; fi
+
+echo -n "  [POS] Helper functions exist: "
+HELPERS=0
+grep -q "static int handle_goaway_frame" src/aio/http2/aio_http2_session.c && HELPERS=$((HELPERS+1))
+grep -q "static int handle_rst_stream" src/aio/http2/aio_http2_session.c && HELPERS=$((HELPERS+1))
+grep -q "static int handle_headers_frame\|static int handle_request" src/aio/http2/aio_http2_session.c && HELPERS=$((HELPERS+1))
+if [ "$HELPERS" -ge 3 ]; then echo "PASS ($HELPERS found)"; else echo "FAIL ($HELPERS found, need 3)"; FAIL=1; fi
+
+echo ""
+echo "=== Phase 12: Dead Code Removal ==="
+
+echo -n "  [CHK] http2_ops files status: "
+if [ ! -f src/aio/http2/http2_ops_nghttp2.c ]; then
+  echo "DELETED (Option A)"
+else
+  COUNT=$(grep -rn "ops->http2->" src/aio --include="*.c" | wc -l | tr -d ' ')
+  if [ "$COUNT" -ge 20 ]; then
+    echo "USED (Option B, $COUNT calls)"
+  else
+    echo "FAIL (exists but unused)"
+    FAIL=1
+  fi
+fi
+
+echo ""
+echo "=== Functional Tests ==="
+echo -n "  Building and testing: "
+if make build >/dev/null 2>&1 && make test >/dev/null 2>&1; then
+  echo "PASS"
+else
+  echo "FAIL"
+  FAIL=1
+fi
+
+echo ""
+if [ "$FAIL" -eq 0 ]; then
+  echo "✅ ALL VERIFICATIONS PASSED"
+  exit 0
+else
+  echo "❌ SOME VERIFICATIONS FAILED"
+  exit 1
+fi
+```
+
+---
+
 ## Implementation Progress
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| Phase 1: Metrics Extraction | **Complete** | `metrics_v2` is standalone; AIO-specific metrics in `aio_metrics.c` (correct design) |
-| Phase 2: SSE Cleanup | **Complete** | Removed `aio_sse_stream_registry.c/h` and `aio_diagnostics_timer.c/h`; diagnostics now Lisp-only per R4.1-R4.2 |
-| Phase 3: Overload Consolidation | **Complete** | All files renamed to `aio_overload_*.c/h` |
+| Phase 1: Metrics Extraction | **Complete** | `metrics_v2` is standalone |
+| Phase 2: SSE Cleanup | **Complete** | Old registry deleted |
+| Phase 3: Overload Consolidation | **Complete** | Files renamed to `aio_overload_*` |
 | Phase 4: I/O Cleanup | **Complete** | Size fields removed from vtables |
-| Phase 5: Code Organization | **Complete** | Directory restructure into `system/`, `http2/`, `http2/overload/`, `http2/stream/` |
-| Phase 6: Complexity Reduction | **Complete** | All 17 `#ifdef` blocks consolidated into helper functions (R6.4) |
-| Phase 7: Generic Streaming | **Complete** | Created generic streaming API; SSE now available as Lisp module |
+| Phase 5: Code Organization | **Complete** | Directory restructure done |
+| Phase 6: Complexity Reduction | **PARTIAL** | Only `#ifdef` consolidation done; CC/nesting NOT addressed |
+| Phase 7: Generic Streaming | **Complete** | `stream/` API created |
+| Phase 8: State Machine | **NOT STARTED** | 16 scattered transitions, no FSM |
+| Phase 9: Arena Ownership | **NOT STARTED** | 11 implicit transfer sites |
+| Phase 10: Stream Data Safety | **NOT STARTED** | 8 tagged pointer sites |
+| Phase 11: Function Extraction | **NOT STARTED** | `on_frame_recv_callback` CC ≈ 25 |
+| Phase 12: Dead Code Removal | **NOT STARTED** | 297 lines unused `http2_ops` |
 
 ### Recent Changes (2025-12-31)
 
@@ -1058,7 +1545,16 @@ src/aio/
 
 ## Phase 6: Session Callback Complexity Reduction
 
-**STATUS: R6.4 COMPLETE (2025-12-29)** - All `#ifdef` blocks consolidated
+**STATUS: PARTIAL** - Only Step 6.0 (`#ifdef` consolidation) done. Steps 6.1-6.3 NOT DONE.
+
+> ⚠️ **WARNING**: This phase was previously marked "Complete" but that was incorrect.
+> Only the `#ifdef` consolidation was done. The actual complexity reduction (function
+> extraction, dispatch tables) was marked "FUTURE" and never implemented.
+>
+> **Current state of `aio_http2_session.c`:**
+> - 964 lines total
+> - `valk_http2_on_frame_recv_callback`: ~175 lines, CC ≈ 25, nesting 5-6 levels
+> - Requirements R6.1 (CC < 10) and R6.2 (nesting < 4): **NOT MET**
 
 ### Problem
 
@@ -1070,7 +1566,7 @@ Extract helpers, use dispatch tables.
 
 ### Implementation Steps
 
-#### Step 6.0: Consolidate `#ifdef` blocks ✓ DONE
+#### Step 6.0: Consolidate `#ifdef` blocks ✅ DONE
 
 Created `aio_http2_session_metrics.h` with 17 inline helper functions that encapsulate all metrics-related `#ifdef VALK_METRICS_ENABLED` blocks. These are no-ops when metrics are disabled.
 
@@ -1094,7 +1590,7 @@ Created `aio_http2_session_metrics.h` with 17 inline helper functions that encap
 | `valk_http2_metrics_on_pending_stream_acquire` | Pending arena + dequeue |
 | `valk_http2_metrics_on_pending_request_init` | Pending request start |
 
-#### Step 6.1: Extract async response dispatch (FUTURE)
+#### Step 6.1: Extract async response dispatch ❌ NOT DONE
 
 ```c
 static int __dispatch_async_response(
@@ -1112,11 +1608,11 @@ static int __dispatch_async_response(
 }
 ```
 
-#### Step 6.2: Unify header processing
+#### Step 6.2: Unify header processing ❌ NOT DONE
 
 Extract duplicate header parsing for pending vs active streams.
 
-#### Step 6.3: Response type dispatch table
+#### Step 6.3: Response type dispatch table ❌ NOT DONE
 
 ```c
 static const struct {
@@ -1354,51 +1850,678 @@ Convert SSE-specific tests to use new generic API:
 
 ## Summary: Refactoring Priority
 
-| Phase | Effort | Impact | Risk | Priority |
-|-------|--------|--------|------|----------|
-| 1. Metrics extraction | High | High | Medium | **Complete** |
-| 2. SSE cleanup | Medium | High | Low | **Complete** |
-| 3. Overload consolidation | Medium | Medium | Low | **Complete** |
-| 4. I/O cleanup | Low | Low | Low | **Complete** |
-| 5. Code organization | Medium | Medium | Low | **Complete** - hierarchical directory structure |
-| 6. Complexity reduction | Medium | High | Low | **Complete** |
-| 7. Generic streaming | Medium | High | Medium | **Complete** - generic API + SSE Lisp module |
+| Phase | Effort | Impact | Risk | Status |
+|-------|--------|--------|------|--------|
+| 1. Metrics extraction | High | High | Medium | ✅ Complete |
+| 2. SSE cleanup | Medium | High | Low | ✅ Complete |
+| 3. Overload consolidation | Medium | Medium | Low | ✅ Complete |
+| 4. I/O cleanup | Low | Low | Low | ✅ Complete |
+| 5. Code organization | Medium | Medium | Low | ✅ Complete |
+| 6. Complexity reduction | Medium | High | Low | ⚠️ PARTIAL - only `#ifdef` done |
+| 7. Generic streaming | Medium | High | Medium | ✅ Complete |
+| **8. State Machine** | **High** | **Critical** | **Medium** | ❌ NOT STARTED |
+| **9. Arena Ownership** | **Medium** | **Critical** | **Medium** | ❌ NOT STARTED |
+| **10. Stream Data Safety** | **Medium** | **High** | **Low** | ❌ NOT STARTED |
+| **11. Function Extraction** | **Medium** | **High** | **Low** | ❌ NOT STARTED |
+| **12. Dead Code Removal** | **Low** | **Medium** | **Low** | ❌ NOT STARTED |
+
+---
+
+## Phase 8: Connection State Machine (REQUIRED - ROOT CAUSE FIX)
+
+**STATUS: NOT STARTED**
+
+> ⚠️ This phase addresses **Root Cause 1** from the critical section above.
+> HTTP/2 bugs will persist until this is implemented.
+
+### Problem
+
+Connection state transitions are scattered across 6 files with 16 assignment sites:
+- No validation of legal transitions
+- No entry/exit actions
+- No graceful shutdown (two-phase GOAWAY)
+- Race conditions between cleanup paths
+
+### Current State (4 states, 16 scattered transitions)
+
+```c
+// aio_internal.h:107-112
+typedef enum __aio_http_conn_e {
+  VALK_CONN_INIT,        // Missing: HANDSHAKING
+  VALK_CONN_ESTABLISHED,
+  VALK_CONN_CLOSING,     // Missing: GOAWAY_SENT, DRAINING
+  VALK_CONN_CLOSED       // Missing: ERROR
+} __aio_http_conn_e;
+```
+
+Transition sites (must be replaced with FSM calls):
+```
+aio_http2_conn.c:294    → CLOSING (nghttp2 error)
+aio_http2_conn.c:317    → CLOSING (backpressure failure)
+aio_http2_conn.c:326    → CLOSING (read error)
+aio_http2_conn.c:349    → CLOSING (backpressure timeout)
+aio_http2_conn.c:394    → ESTABLISHED (SSL complete)
+aio_http2_conn.c:498    → CLOSED (disconnect)
+aio_http2_client.c:196  → CLOSING (connect error)
+aio_http2_client.c:222  → CLOSING (SSL error)
+aio_http2_client.c:256  → CLOSING (nghttp2 error)
+aio_http2_client.c:312  → INIT (new connection)
+aio_http2_client.c:343  → CLOSING (setup error)
+aio_http2_server.c:231  → INIT (accept)
+aio_http2_server.c:322  → CLOSING (SSL error)
+aio_maintenance.c:85    → CLOSING (idle timeout)
+aio_maintenance.c:130   → CLOSING (backpressure timeout)
+aio_uv.c:217           → CLOSING (shutdown)
+```
+
+### Target State (8 states, centralized FSM)
+
+```c
+// aio_http2_conn_fsm.h
+typedef enum {
+  VALK_CONN_INIT,           // TCP accepted, not yet handshaking
+  VALK_CONN_HANDSHAKING,    // SSL/TLS in progress
+  VALK_CONN_ESTABLISHED,    // HTTP/2 session active
+  VALK_CONN_GOAWAY_SENT,    // First GOAWAY sent (max stream ID)
+  VALK_CONN_DRAINING,       // Second GOAWAY sent, waiting for streams
+  VALK_CONN_CLOSING,        // UV handle close initiated
+  VALK_CONN_CLOSED,         // Terminal state
+  VALK_CONN_ERROR,          // Error occurred, transitioning to CLOSING
+} valk_conn_state_e;
+
+typedef enum {
+  VALK_CONN_EVT_SSL_COMPLETE,
+  VALK_CONN_EVT_SSL_ERROR,
+  VALK_CONN_EVT_DATA,
+  VALK_CONN_EVT_GOAWAY_RECV,
+  VALK_CONN_EVT_SHUTDOWN,
+  VALK_CONN_EVT_DRAIN_TIMEOUT,
+  VALK_CONN_EVT_CLOSE_TIMEOUT,
+  VALK_CONN_EVT_ALL_STREAMS_CLOSED,
+  VALK_CONN_EVT_IO_ERROR,
+  VALK_CONN_EVT_PROTOCOL_ERROR,
+} valk_conn_event_e;
+
+// Single transition function - ALL state changes go through here
+bool valk_conn_transition(valk_aio_handle_t *conn, valk_conn_event_e event);
+```
+
+### Implementation Steps
+
+#### Step 8.1: Create FSM header and implementation
+
+**Create:** `src/aio/http2/aio_http2_conn_fsm.h`
+```c
+#pragma once
+#include "aio_internal.h"
+
+typedef enum valk_conn_state_e { /* 8 states */ } valk_conn_state_e;
+typedef enum valk_conn_event_e { /* 10 events */ } valk_conn_event_e;
+
+typedef struct {
+  void (*on_enter)(valk_aio_handle_t *conn);
+  void (*on_exit)(valk_aio_handle_t *conn);
+  const char *name;
+} valk_conn_state_def_t;
+
+bool valk_conn_transition(valk_aio_handle_t *conn, valk_conn_event_e event);
+const char *valk_conn_state_name(valk_conn_state_e state);
+const char *valk_conn_event_name(valk_conn_event_e event);
+```
+
+**Create:** `src/aio/http2/aio_http2_conn_fsm.c`
+```c
+#include "aio_http2_conn_fsm.h"
+
+static const valk_conn_state_def_t state_defs[] = {
+  [VALK_CONN_INIT] = { .on_enter = on_enter_init, .name = "INIT" },
+  [VALK_CONN_HANDSHAKING] = { .on_enter = on_enter_handshaking, .name = "HANDSHAKING" },
+  // ... etc
+};
+
+// Transition table: [current_state][event] = next_state
+static const valk_conn_state_e transitions[VALK_CONN_STATE_COUNT][VALK_CONN_EVT_COUNT] = {
+  [VALK_CONN_INIT] = {
+    [VALK_CONN_EVT_SSL_COMPLETE] = VALK_CONN_HANDSHAKING,
+    [VALK_CONN_EVT_SSL_ERROR] = VALK_CONN_ERROR,
+    // ...
+  },
+  // ...
+};
+
+bool valk_conn_transition(valk_aio_handle_t *conn, valk_conn_event_e event) {
+  valk_conn_state_e current = conn->http.state;
+  valk_conn_state_e next = transitions[current][event];
+  
+  if (next == current) return false;  // No transition
+  
+  VALK_DEBUG("conn %p: %s + %s → %s",
+             conn, state_defs[current].name,
+             event_names[event], state_defs[next].name);
+  
+  if (state_defs[current].on_exit) state_defs[current].on_exit(conn);
+  conn->http.state = next;
+  if (state_defs[next].on_enter) state_defs[next].on_enter(conn);
+  
+  return true;
+}
+```
+
+#### Step 8.2: Replace all direct state assignments
+
+For each of the 16 sites, replace:
+```c
+// BEFORE
+conn->http.state = VALK_CONN_CLOSING;
+
+// AFTER
+valk_conn_transition(conn, VALK_CONN_EVT_IO_ERROR);
+```
+
+#### Step 8.3: Implement two-phase GOAWAY (R3.7)
+
+```c
+static void on_enter_goaway_sent(valk_aio_handle_t *conn) {
+  // Phase 1: Send GOAWAY with max stream ID
+  nghttp2_submit_goaway(conn->http.session, NGHTTP2_FLAG_NONE,
+                        INT32_MAX, NGHTTP2_NO_ERROR, NULL, 0);
+  valk_http2_flush_pending(conn);
+  
+  // Start drain timer
+  uv_timer_start(&conn->http.drain_timer, drain_timeout_cb,
+                 conn->sys->config.drain_timeout_ms, 0);
+}
+
+static void on_enter_draining(valk_aio_handle_t *conn) {
+  // Phase 2: Send GOAWAY with actual last stream ID
+  i32 last_id = nghttp2_session_get_last_proc_stream_id(conn->http.session);
+  nghttp2_submit_goaway(conn->http.session, NGHTTP2_FLAG_NONE,
+                        last_id, NGHTTP2_NO_ERROR, NULL, 0);
+  valk_http2_flush_pending(conn);
+  
+  // Start close timer
+  uv_timer_start(&conn->http.close_timer, close_timeout_cb,
+                 conn->sys->config.close_timeout_ms, 0);
+}
+```
+
+### Verification
+
+```bash
+# After implementation, this must return 0:
+grep -rn "http.state = " src/aio --include="*.c" | grep -v "conn_fsm.c" | wc -l
+
+# And this must return >= 16:
+grep -rn "valk_conn_transition" src/aio --include="*.c" | wc -l
+```
+
+---
+
+## Phase 9: Arena Ownership Tokens (REQUIRED - ROOT CAUSE FIX)
+
+**STATUS: NOT STARTED**
+
+> ⚠️ This phase addresses **Root Cause 2** from the critical section above.
+> Memory bugs (double-free, use-after-free, leaks) will persist until this is implemented.
+
+### Problem
+
+Arena ownership transfers via nullable pointers with no compiler enforcement:
+- 11 `arena_slab_item =` assignment sites
+- Transfer = assign to destination, set source to `nullptr`
+- Easy to forget either step
+- Defensive cleanup exists because normal paths leak
+
+### Current Pattern (bug-prone)
+
+```c
+// Transfer arena from request to async context
+http_ctx->arena_slab_item = req->arena_slab_item;
+http_ctx->arena_slot = req->arena_slot;
+req->arena_slab_item = nullptr;  // Easy to forget!
+req->arena_slot = UINT32_MAX;
+
+// Transfer back
+stream_req->arena_slab_item = http->arena_slab_item;
+stream_req->arena_slot = http->arena_slot;
+http->arena_slab_item = nullptr;  // Easy to forget!
+```
+
+### Target Pattern (compiler-enforced)
+
+```c
+// aio_internal.h - new types
+typedef struct {
+  valk_slab_item_t *item;
+  u32 slot;
+  bool valid;  // Set to false after take
+} valk_arena_ref_t;
+
+typedef struct {
+  valk_slab_item_t *item;
+  u32 slot;
+} valk_arena_token_t;
+
+// Take ownership - invalidates source
+static inline valk_arena_token_t valk_arena_take(valk_arena_ref_t *ref) {
+  VALK_ASSERT(ref->valid, "Taking from invalid arena ref");
+  valk_arena_token_t token = { .item = ref->item, .slot = ref->slot };
+  ref->item = nullptr;
+  ref->slot = UINT32_MAX;
+  ref->valid = false;
+  return token;
+}
+
+// Give ownership - token consumed
+static inline void valk_arena_give(valk_arena_ref_t *ref, valk_arena_token_t token) {
+  VALK_ASSERT(!ref->valid, "Giving to already-valid arena ref");
+  ref->item = token.item;
+  ref->slot = token.slot;
+  ref->valid = true;
+}
+
+// Release to slab
+static inline void valk_arena_release(valk_arena_ref_t *ref, valk_slab_t *slab) {
+  if (ref->valid && ref->item) {
+    valk_slab_release(slab, ref->item);
+    ref->item = nullptr;
+    ref->slot = UINT32_MAX;
+    ref->valid = false;
+  }
+}
+```
+
+### Implementation Steps
+
+#### Step 9.1: Add arena ref type to structures
+
+```c
+// In valk_http2_server_request_t:
+// BEFORE:
+valk_slab_item_t *arena_slab_item;
+u32 arena_slot;
+
+// AFTER:
+valk_arena_ref_t arena;
+
+// In valk_http_async_ctx_t:
+// BEFORE:
+void *arena_slab_item;
+u32 arena_slot;
+
+// AFTER:
+valk_arena_ref_t arena;
+```
+
+#### Step 9.2: Replace all 11 assignment sites
+
+Sites to update:
+```
+aio_async.c:70,72         - transfer back to request
+aio_async.c:147           - standalone ctx init
+aio_http2_session.c:245   - request init
+aio_http2_session.c:573   - stream close clear
+aio_http2_session.c:670   - async ctx init (nullptr)
+aio_http2_session.c:731   - transfer to async ctx
+aio_http2_session.c:735   - clear request
+aio_http2_session.c:808   - pending stream promote
+aio_http2_session.c:958   - clear after SSE
+aio_http2_conn.c:543      - disconnect cleanup
+```
+
+### Verification
+
+```bash
+# After implementation, this must return 0:
+grep -rn "arena_slab_item = " src/aio --include="*.c" | wc -l
+
+# All arena operations go through the API:
+grep -rn "valk_arena_take\|valk_arena_give\|valk_arena_release" src/aio --include="*.c" | wc -l
+# Expected: >= 11
+```
+
+---
+
+## Phase 10: Stream User Data Type Safety (REQUIRED - ROOT CAUSE FIX)
+
+**STATUS: NOT STARTED**
+
+> ⚠️ This phase addresses **Root Cause 3** from the critical section above.
+> Crashes from incorrect stream data casting will persist until this is implemented.
+
+### Problem
+
+nghttp2 stream user data uses tagged pointers:
+- High bit set = pending stream
+- High bit clear = normal request (or nullptr)
+- 8 sites must check before casting
+- No compiler enforcement
+
+### Current Pattern (crash-prone)
+
+```c
+void *stream_data = nghttp2_session_get_stream_user_data(session, stream_id);
+if (__is_pending_stream(stream_data)) {
+  pending_stream_t *ps = __get_pending_stream(stream_data);
+  // Use ps...
+} else {
+  valk_http2_server_request_t *req = (valk_http2_server_request_t *)stream_data;
+  // Use req... (might be nullptr!)
+}
+```
+
+### Target Pattern (type-safe)
+
+```c
+// aio_internal.h - new types
+typedef enum {
+  STREAM_DATA_NONE,
+  STREAM_DATA_REQUEST,
+  STREAM_DATA_PENDING,
+} valk_stream_data_type_e;
+
+typedef struct {
+  valk_stream_data_type_e type;
+  union {
+    valk_http2_server_request_t *request;
+    valk_pending_stream_t *pending;
+  };
+} valk_stream_data_t;
+
+static inline valk_stream_data_t valk_stream_get_data(
+    nghttp2_session *session, i32 stream_id) {
+  void *raw = nghttp2_session_get_stream_user_data(session, stream_id);
+  if (!raw) {
+    return (valk_stream_data_t){ .type = STREAM_DATA_NONE };
+  }
+  if ((uptr)raw & (1ULL << 63)) {
+    return (valk_stream_data_t){
+      .type = STREAM_DATA_PENDING,
+      .pending = (valk_pending_stream_t *)((uptr)raw & ~(1ULL << 63))
+    };
+  }
+  return (valk_stream_data_t){
+    .type = STREAM_DATA_REQUEST,
+    .request = (valk_http2_server_request_t *)raw
+  };
+}
+
+// Usage:
+valk_stream_data_t data = valk_stream_get_data(session, stream_id);
+switch (data.type) {
+  case STREAM_DATA_NONE:
+    // Handle no data
+    break;
+  case STREAM_DATA_REQUEST:
+    handle_request(data.request);
+    break;
+  case STREAM_DATA_PENDING:
+    handle_pending(data.pending);
+    break;
+}
+```
+
+### Implementation Steps
+
+#### Step 10.1: Add discriminated union type
+
+Add `valk_stream_data_t` and `valk_stream_get_data()` to `aio_internal.h`.
+
+#### Step 10.2: Replace all 8 tagged pointer sites
+
+Sites to update:
+```
+aio_http2_session.c:84    - on_header_callback
+aio_http2_session.c:547   - on_stream_close_callback
+aio_http2_session.c:624   - on_frame_recv_callback
+aio_http2_session.c:626   - pending stream check
+aio_http2_session.c:787   - pending stream process
+aio_http2_session.c:789   - assertion
+aio_maintenance.c:109     - pending stream timeout
+aio_maintenance.c:112     - RST_STREAM for pending
+```
+
+### Verification
+
+```bash
+# After implementation, this must return 0:
+grep -rn "__is_pending_stream\|__get_pending_stream" src/aio --include="*.c" | grep -v "define" | wc -l
+
+# All stream data access goes through the type-safe API:
+grep -rn "valk_stream_get_data" src/aio --include="*.c" | wc -l
+# Expected: >= 8
+```
+
+---
+
+## Phase 11: Function Extraction (REQUIRED - COMPLEXITY FIX)
+
+**STATUS: NOT STARTED**
+
+> This phase completes the complexity reduction started in Phase 6.
+> Requirement R6.1 (CC < 10) is not met until this is done.
+
+### Problem
+
+`valk_http2_on_frame_recv_callback` is ~175 lines with CC ≈ 25 and nesting 5-6 levels.
+
+### Implementation Steps
+
+#### Step 11.1: Extract frame type handlers
+
+```c
+// Extract from on_frame_recv_callback:
+static int handle_goaway_frame(valk_aio_handle_t *conn, const nghttp2_frame *frame);
+static int handle_rst_stream_frame(valk_aio_handle_t *conn, const nghttp2_frame *frame);
+static int handle_headers_frame(nghttp2_session *session, valk_aio_handle_t *conn,
+                                const nghttp2_frame *frame);
+```
+
+#### Step 11.2: Extract pending stream handler
+
+```c
+static int handle_pending_stream_headers(valk_aio_handle_t *conn,
+                                         pending_stream_t *ps,
+                                         i32 stream_id);
+```
+
+#### Step 11.3: Extract async response dispatch
+
+```c
+static int dispatch_async_response(nghttp2_session *session,
+                                   i32 stream_id,
+                                   valk_async_handle_t *handle,
+                                   valk_http2_server_request_t *req,
+                                   valk_http_async_ctx_t *http_ctx);
+```
+
+#### Step 11.4: Extract error response helper
+
+```c
+static int send_error_response(nghttp2_session *session,
+                               i32 stream_id,
+                               const char *status,
+                               const char *message,
+                               valk_mem_arena_t *arena);
+```
+
+### Target: `on_frame_recv_callback` after extraction
+
+```c
+int valk_http2_on_frame_recv_callback(nghttp2_session *session,
+                                      const nghttp2_frame *frame,
+                                      void *user_data) {
+  VALK_GC_SAFE_POINT();
+  valk_aio_handle_t *conn = (valk_aio_handle_t *)user_data;
+  
+  // Update activity timestamp
+  if (conn->sys) {
+    conn->http.last_activity_ms = conn->sys->ops->loop->now(conn->sys);
+  }
+  
+  switch (frame->hd.type) {
+    case NGHTTP2_GOAWAY:
+      return handle_goaway_frame(conn, frame);
+    case NGHTTP2_RST_STREAM:
+      return handle_rst_stream_frame(conn, frame);
+    case NGHTTP2_HEADERS:
+      if (frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
+        return handle_headers_frame(session, conn, frame);
+      }
+      return 0;
+    default:
+      return 0;
+  }
+}
+```
+
+### Verification
+
+```bash
+# Count lines in on_frame_recv_callback - must be < 50
+awk '/^int valk_http2_on_frame_recv_callback/,/^(int|static|void) [a-z]/' \
+  src/aio/http2/aio_http2_session.c | head -n -1 | wc -l
+```
+
+---
+
+## Phase 12: Dead Code Removal (CLEANUP)
+
+**STATUS: NOT STARTED**
+
+### Problem
+
+`http2_ops_nghttp2.c` is 297 lines of abstraction that is never used.
+
+### Decision Required
+
+**Option A: Delete the abstraction**
+- Remove `http2_ops.h`, `http2_ops_nghttp2.c`, `http2_ops_test.c`
+- Remove `.http2` from `valk_aio_ops_t`
+- Simplest, removes 300+ lines of dead code
+
+**Option B: Migrate to use the abstraction**
+- Replace all direct `nghttp2_*` calls with `ops->http2->*` calls
+- Enables mocking nghttp2 for tests
+- More work, but enables better testing
+
+### Implementation (Option A)
+
+```bash
+# Delete files
+rm src/aio/http2/http2_ops.h
+rm src/aio/http2/http2_ops_nghttp2.c
+rm src/aio/http2/http2_ops_test.c
+
+# Remove from CMakeLists.txt
+# Remove .http2 field from valk_aio_ops_t in aio_ops.h
+# Remove .http2 initialization from aio_ops.c
+```
+
+### Verification
+
+```bash
+# Files removed
+ls src/aio/http2/http2_ops* 2>/dev/null | wc -l
+# Expected: 0
+
+# No references remain
+grep -rn "http2_ops" src/aio --include="*.c" --include="*.h" | wc -l
+# Expected: 0
+```
 
 ---
 
 ## Appendix: Current vs Target Comparison
 
-| Aspect | Current | Target |
-|--------|---------|--------|
-| Metrics location | Inside AIO | Sibling system |
-| Diagnostics publisher | C (aio_sse_stream_registry) | Lisp handler (JSON wire format) |
-| SSE | Generic streaming + Lisp formatting (~250 lines) | **Done**: `stream/*` builtins + `sse.valk` |
-| Streaming responses | Generic `stream/write` for any streaming body | **Done**: Works for SSE, chunked, etc. |
-| Load management naming | pressure/admission/backpressure | Unified "Overload" |
-| Backpressure | Ad-hoc thresholds | High/low watermarks (80%/40%) with hysteresis |
-| Overload detection | Slab usage only | Request queue latency (primary) + slab usage |
-| Code organization | Flat directory | **Done**: `system/`, `http2/`, `http2/overload/`, `http2/stream/` |
-| Session complexity | CC 11-12, 7 levels | CC < 10, 4 levels |
-| HTTP/2 client | Not implemented | Single connection to sidecar, multiplexed |
-| Deployment model | Unspecified | Envoy sidecar required for production |
-| Connection pooling | N/A | Delegated to Envoy sidecar |
+| Aspect | Current | Target | Status |
+|--------|---------|--------|--------|
+| Metrics location | Standalone `metrics_v2` | Sibling system | ✅ Done |
+| Diagnostics publisher | Lisp handler | Lisp handler | ✅ Done |
+| SSE | Generic `stream/*` + Lisp | Generic streaming | ✅ Done |
+| Load management naming | `aio_overload_*` | Unified "Overload" | ✅ Done |
+| Code organization | `system/`, `http2/`, etc. | Hierarchical | ✅ Done |
+| **Connection state machine** | **4 states, 16 scattered sites** | **8 states, centralized FSM** | ❌ NOT DONE |
+| **Arena ownership** | **Implicit via nullptr** | **Explicit tokens** | ❌ NOT DONE |
+| **Stream data typing** | **Tagged pointers** | **Discriminated union** | ❌ NOT DONE |
+| **Session complexity** | **CC ≈ 25, nesting 5-6** | **CC < 10, nesting < 4** | ❌ NOT DONE |
+| **Dead code** | **297 lines unused http2_ops** | **Delete or use** | ❌ NOT DONE |
+| Two-phase GOAWAY | Not implemented | R3.7 graceful shutdown | ❌ NOT DONE |
+| Backpressure watermarks | Ad-hoc thresholds | 80%/40% hysteresis | ❌ NOT DONE |
 
 ---
 
-## Appendix: File Mapping
+## Appendix: Verification Commands
 
-| Current File | Target Location | Notes |
-|--------------|-----------------|-------|
-| `aio_metrics.c` | `src/metrics/metrics.c` | Standalone system |
-| `aio_sse_stream_registry.c` | DELETE | Replace with Lisp handler |
-| `aio_sse_diagnostics.c` | `src/metrics/snapshot.c` | Part of metrics |
-| `aio_sse.c` | `src/aio/http2/sse/sse.c` | Keep, generic |
-| `aio_pressure.c` | `src/aio/http2/overload/state.c` | Rename |
-| `aio_conn_admission.c` | `src/aio/http2/overload/admission.c` | Rename |
-| `aio_backpressure.c` | `src/aio/http2/overload/backpressure.c` | Rename, add watermarks |
-| `aio_pending_stream.c` | `src/aio/http2/overload/deferred.c` | Rename |
-| `aio_http2_session.c` | `src/aio/http2/session.c` | Move + refactor |
-| `aio_sse.c` | DELETE | Replace with generic streaming in `aio_http2_stream.c` |
-| `aio_sse_builtins.c` | DELETE | Replace with `stream/write`, `stream/close` builtins |
-| `aio_sse_conn_tracking.c` | DELETE | Use existing HTTP/2 stream tracking |
-| `aio_sse_diagnostics.c` | `src/metrics/snapshot.c` | Memory snapshot formatting only |
+**Use the Master Verification Script above.** It runs all checks and reports PASS/FAIL for each.
+
+```bash
+# Run the master script:
+./scripts/verify_refactoring.sh
+
+# Or create it from the script in the "Master Verification Script" section above
+```
+
+### Quick Manual Checks
+
+These are the same checks from the master script, for quick manual verification:
+
+```bash
+# Phase 8: State Machine
+grep -rn "http\.state = " src/aio --include="*.c" | grep -v "conn_fsm.c" | wc -l  # Must be 0
+test -f src/aio/http2/aio_http2_conn_fsm.c && echo "FSM exists"                    # Must print
+grep -c "VALK_CONN_" src/aio/http2/aio_http2_conn_fsm.h                            # Must be >= 8
+grep -rn "valk_conn_transition" src/aio --include="*.c" | wc -l                    # Must be >= 16
+
+# Phase 9: Arena Ownership
+grep -rn "arena_slab_item\s*=" src/aio --include="*.c" | wc -l                     # Must be 0
+grep -q "valk_arena_token_t" src/aio/aio_internal.h && echo "Token type exists"    # Must print
+grep -c "valk_arena_take\|valk_arena_give" src/aio/http2/aio_http2_session.c       # Must be >= 6
+grep -q "leaked_arenas" src/aio/http2/aio_http2_conn.c && echo "FAIL" || echo "OK" # Must print OK
+
+# Phase 10: Stream Data Safety
+grep -rn "__is_pending_stream" src/aio --include="*.c" | grep -v define | wc -l   # Must be 0
+grep -q "STREAM_DATA_NONE" src/aio/aio_internal.h && echo "Enum exists"           # Must print
+grep -c "valk_stream_get_data" src/aio/http2/aio_http2_session.c                  # Must be >= 8
+
+# Phase 11: Complexity Reduction
+awk '/^int valk_http2_on_frame_recv_callback/,/^(int|static) [a-z]/' \
+  src/aio/http2/aio_http2_session.c | head -n -1 | wc -l                          # Must be < 50
+grep -q "static int handle_goaway_frame" src/aio/http2/aio_http2_session.c        # Must match
+
+# Phase 12: Dead Code
+ls src/aio/http2/http2_ops*.c 2>/dev/null | wc -l                                 # Must be 0 (Option A)
+# OR
+grep -rn "ops->http2->" src/aio --include="*.c" | wc -l                           # Must be >= 20 (Option B)
+```
+
+### Anti-Gaming Notes
+
+These checks are designed so that:
+
+1. **Deleting code doesn't pass** - Positive checks require new code to exist
+2. **Partial work doesn't pass** - Multiple positive checks must all pass
+3. **Comments/dead code don't count** - Checks look for actual usage, not just definitions
+4. **Tests must pass** - `make build && make test` is part of every verification
+
+---
+
+## Appendix: File Inventory (Current State)
+
+Files that need modification for Phases 8-12:
+
+| File | Lines | Phase 8 | Phase 9 | Phase 10 | Phase 11 |
+|------|-------|---------|---------|----------|----------|
+| `aio_internal.h` | 482 | Add states | Add arena types | Add stream data type | - |
+| `aio_http2_session.c` | 964 | 1 site | 6 sites | 6 sites | Extract 4 functions |
+| `aio_http2_conn.c` | 593 | 6 sites | 1 site | - | - |
+| `aio_http2_client.c` | 346 | 5 sites | - | - | - |
+| `aio_http2_server.c` | 374 | 2 sites | - | - | - |
+| `aio_maintenance.c` | 145 | 2 sites | - | 2 sites | - |
+| `aio_uv.c` | 272 | 1 site | - | - | - |
+| `aio_async.c` | 508 | - | 3 sites | - | - |
+
+Files to delete in Phase 12:
+- `http2_ops.h` (interface)
+- `http2_ops_nghttp2.c` (297 lines)
+- `http2_ops_test.c` (test double)

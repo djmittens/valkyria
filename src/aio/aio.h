@@ -152,7 +152,7 @@ typedef struct valk_http2_request_t {
 typedef struct valk_http2_response_t {
   i32 stream_id;
 
-  // valk_mem_arena_t *arena;
+  valk_mem_allocator_t *allocator;
   valk_http2_request_t *req;
   const char *status;
   struct {
@@ -241,8 +241,6 @@ typedef struct valk_aio_system_config {
   // BACKPRESSURE TIMING
   u32 backpressure_list_max;     // Default: 1000
   u32 backpressure_timeout_ms;   // Default: 30000 (30s)
-  u32 pending_stream_pool_size;  // Default: 64
-  u32 pending_stream_timeout_ms; // Default: 10000 (10s)
 
   // CONNECTION TIMEOUT SETTINGS
   u32 connection_idle_timeout_ms;  // Default: 60000 (60s) - close idle connections
@@ -318,7 +316,6 @@ static inline valk_aio_system_config_t valk_aio_config_demo(void) {
     .max_request_body_size = 1 * 1024 * 1024,  // 1MB
     .backpressure_list_max = 50,
     .backpressure_timeout_ms = 30000,
-    .pending_stream_pool_size = 24,
   };
 }
 
@@ -337,7 +334,6 @@ static inline valk_aio_system_config_t valk_aio_config_production(void) {
     .max_request_body_size = 8 * 1024 * 1024,  // 8MB
     .backpressure_list_max = 5000,
     .backpressure_timeout_ms = 30000,
-    .pending_stream_pool_size = 200,    // 20% overflow capacity
   };
 }
 
@@ -356,7 +352,6 @@ static inline valk_aio_system_config_t valk_aio_config_minimal(void) {
     .max_request_body_size = 256 * 1024,  // 256KB
     .backpressure_list_max = 16,
     .backpressure_timeout_ms = 10000,
-    .pending_stream_pool_size = 4,
   };
 }
 
@@ -375,7 +370,6 @@ static inline valk_aio_system_config_t valk_aio_config_api(void) {
     .max_request_body_size = 1 * 1024 * 1024,  // 1MB
     .backpressure_list_max = 2000,
     .backpressure_timeout_ms = 15000,   // Faster timeout for APIs
-    .pending_stream_pool_size = 500,    // 25% overflow
   };
 }
 
@@ -394,7 +388,6 @@ static inline valk_aio_system_config_t valk_aio_config_large_payload(void) {
     .max_request_body_size = 128 * 1024 * 1024,  // 128MB uploads
     .backpressure_list_max = 100,
     .backpressure_timeout_ms = 60000,   // Longer timeout for large transfers
-    .pending_stream_pool_size = 32,
   };
 }
 
@@ -467,20 +460,20 @@ valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv,
                                          struct valk_arc_box *box);
 
 ///
-/// @return returns a future with a boxed `valk_aio_http2_client`
+/// @return returns an async handle that completes with the client
 ///
-valk_future *valk_aio_http2_connect(valk_aio_system_t *sys,
-                                    const char *interface, const int port,
-                                    const char *certfile);
+valk_async_handle_t *valk_aio_http2_connect(valk_aio_system_t *sys,
+                                             const char *interface, const int port,
+                                             const char *certfile);
 
 // Connect to an IP with an explicit SNI/hostname used for TLS and HTTP/2.
-// Returns a future with a boxed `valk_aio_http2_client`.
-valk_future *valk_aio_http2_connect_host(valk_aio_system_t *sys,
-                                         const char *ip, const int port,
-                                         const char *hostname);
+// Returns an async handle that completes with the client.
+valk_async_handle_t *valk_aio_http2_connect_host(valk_aio_system_t *sys,
+                                                  const char *ip, const int port,
+                                                  const char *hostname);
 
-valk_future *valk_aio_http2_request_send(valk_http2_request_t *req,
-                                         valk_aio_http2_client *client);
+valk_async_handle_t *valk_aio_http2_request_send(valk_http2_request_t *req,
+                                                  valk_aio_http2_client *client);
 
 #ifdef VALK_METRICS_ENABLED
 #include "aio_metrics.h"

@@ -48,8 +48,14 @@ void valk_uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task) {
   hndl->arg = task;
   hndl->uv.task.data = hndl;
 
-  uv_async_init(sys->eventloop, &hndl->uv.task, __uv_task_cb_new);
+  int r = uv_async_init(sys->eventloop, &hndl->uv.task, __uv_task_cb_new);
+  if (r) {
+    VALK_ERROR("uv_async_init failed: %d", r);
+  }
   valk_dll_insert_after(&sys->liveHandles, hndl);
-
-  uv_async_send(&hndl->uv.task);
+  
+  r = uv_async_send(&hndl->uv.task);
+  if (r) {
+    VALK_ERROR("uv_async_send failed: %d", r);
+  }
 }

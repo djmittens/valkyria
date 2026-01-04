@@ -126,18 +126,6 @@
   })
 
 ; ============================================================================
-; Response Pipeline Tests - http2/parse-json-response
-; ============================================================================
-
-(test/define "http2/parse-json-response returns body"
-  {do
-    (def {resp} (http2/mock-response "200" "{\"key\": \"value\"}"))
-    ; Currently just returns body (JSON parsing is TODO)
-    (def {result} (http2/parse-json-response resp))
-    (== result "{\"key\": \"value\"}")
-  })
-
-; ============================================================================
 ; Response Pipeline Tests - http2/validate-status
 ; ============================================================================
 

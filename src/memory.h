@@ -391,6 +391,11 @@ typedef struct {
   // TLAB for parallel GC allocations (Phase 7)
   struct valk_gc_tlab *tlab;      // Thread-Local Allocation Buffer
   bool tlab_enabled;              // Whether TLAB allocation is active
+  
+  // Eval stack for checkpoint evacuation
+  void *eval_stack;               // Current valk_eval_stack_t* (forward ref)
+  struct valk_lval_t *eval_expr;  // Current expression being evaluated
+  struct valk_lval_t *eval_value; // Current value in evaluation
 } valk_thread_context_t;
 
 extern __thread valk_thread_context_t valk_thread_ctx;

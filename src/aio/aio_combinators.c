@@ -16,9 +16,19 @@ static u64 g_interval_id = 1;
 static void __interval_timer_close_cb(uv_handle_t *handle) {
   valk_interval_timer_t *timer_data = (valk_interval_timer_t *)handle->data;
   if (timer_data) {
+    VALK_DEBUG("aio/interval[%llu]: close_cb freeing timer_data=%p magic=0x%x", 
+               (unsigned long long)timer_data->interval_id, (void*)timer_data, timer_data->magic);
+    if (timer_data->magic != VALK_INTERVAL_TIMER_MAGIC) {
+      VALK_ERROR("aio/interval: close_cb bad magic 0x%x (expected 0x%x), use-after-free?",
+                 timer_data->magic, VALK_INTERVAL_TIMER_MAGIC);
+      return;
+    }
     if (timer_data->callback) {
       valk_gc_remove_global_root(&timer_data->callback);
     }
+    timer_data->magic = VALK_INTERVAL_TIMER_FREED;
+    timer_data->callback = nullptr;
+    handle->data = nullptr;
     free(timer_data);
   }
 }
@@ -26,25 +36,104 @@ static void __interval_timer_close_cb(uv_handle_t *handle) {
 static void __interval_timer_cb(uv_timer_t *handle) {
   VALK_GC_SAFE_POINT();
 
-  valk_interval_timer_t *timer_data = (valk_interval_timer_t *)handle->data;
-  if (!timer_data || timer_data->stopped) {
+  if (uv_is_closing((uv_handle_t *)handle)) {
+    VALK_DEBUG("aio/interval: timer is closing, skipping callback");
     return;
   }
 
-  if (timer_data->callback) {
-    valk_lval_t *args = valk_lval_nil();
-    valk_lenv_t *env = timer_data->callback->fun.env;
-    valk_lval_t *result = valk_lval_eval_call(env, timer_data->callback, args);
+  valk_interval_timer_t *timer_data = (valk_interval_timer_t *)handle->data;
+  if (!timer_data) {
+    VALK_DEBUG("aio/interval: timer_data is NULL, skipping callback");
+    return;
+  }
+  
+  if (timer_data->magic == VALK_INTERVAL_TIMER_FREED) {
+    VALK_ERROR("aio/interval: timer_data already freed (magic=0x%x), use-after-free!", timer_data->magic);
+    return;
+  }
+  
+  if (timer_data->magic != VALK_INTERVAL_TIMER_MAGIC) {
+    VALK_ERROR("aio/interval: bad magic 0x%x (expected 0x%x), corruption or use-after-free?",
+               timer_data->magic, VALK_INTERVAL_TIMER_MAGIC);
+    return;
+  }
+  
+  if (timer_data->stopped) {
+    VALK_DEBUG("aio/interval[%llu]: timer already stopped, skipping callback", 
+               (unsigned long long)timer_data->interval_id);
+    return;
+  }
 
-    if (LVAL_TYPE(result) == LVAL_ERR) {
-      VALK_WARN("aio/interval callback returned error: %s", result->str);
+  valk_lval_t *callback = atomic_load_explicit((_Atomic(valk_lval_t *)*)&timer_data->callback, memory_order_acquire);
+  
+  VALK_DEBUG("aio/interval[%llu]: callback ptr=%p type=%d alloc=%d", 
+             (unsigned long long)timer_data->interval_id,
+             (void*)callback,
+             callback ? LVAL_TYPE(callback) : -1,
+             callback ? LVAL_ALLOC(callback) : -1);
+  
+  if (!callback) {
+    VALK_ERROR("aio/interval[%llu]: callback is NULL", 
+               (unsigned long long)timer_data->interval_id);
+    timer_data->stopped = true;
+    uv_timer_stop(handle);
+    uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    return;
+  }
+  
+  int forward_count = 0;
+  while (callback && LVAL_TYPE(callback) == LVAL_FORWARD) {
+    VALK_DEBUG("aio/interval[%llu]: following forward %p -> %p", 
+               (unsigned long long)timer_data->interval_id,
+               (void*)callback, (void*)callback->forward);
+    callback = callback->forward;
+    forward_count++;
+    if (forward_count > 10) {
+      VALK_ERROR("aio/interval[%llu]: too many forward hops, breaking", 
+                 (unsigned long long)timer_data->interval_id);
+      break;
     }
+  }
+  
+  if (!callback) {
+    VALK_ERROR("aio/interval[%llu]: callback became NULL after following %d forwards", 
+               (unsigned long long)timer_data->interval_id, forward_count);
+    timer_data->stopped = true;
+    uv_timer_stop(handle);
+    uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    return;
+  }
+  
+  atomic_store_explicit((_Atomic(valk_lval_t *)*)&timer_data->callback, callback, memory_order_release);
+  
+  if (LVAL_TYPE(callback) != LVAL_FUN) {
+    VALK_ERROR("aio/interval[%llu]: callback type is %d (%s) after %d forwards, expected LVAL_FUN, ptr=%p alloc=%d", 
+               (unsigned long long)timer_data->interval_id,
+               LVAL_TYPE(callback), valk_ltype_name(LVAL_TYPE(callback)),
+               forward_count, (void*)callback, LVAL_ALLOC(callback));
+    timer_data->stopped = true;
+    uv_timer_stop(handle);
+    uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    return;
+  }
+  
+  valk_lval_t *args = valk_lval_nil();
+  valk_lval_t *result = valk_lval_eval_call(
+      callback->fun.env, 
+      callback, 
+      args);
 
-    if (LVAL_TYPE(result) == LVAL_SYM && strcmp(result->str, ":stop") == 0) {
-      timer_data->stopped = true;
-      uv_timer_stop(handle);
-      uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
-    }
+  if (LVAL_TYPE(result) == LVAL_ERR) {
+    VALK_WARN("aio/interval callback returned error: %s", result->str);
+  }
+
+  if (LVAL_TYPE(result) == LVAL_SYM && strcmp(result->str, ":stop") == 0) {
+    fprintf(stderr, "[TRACE] aio/interval[%llu]: STOPPING callback=%p\n",
+            (unsigned long long)timer_data->interval_id, (void*)callback);
+    fflush(stderr);
+    timer_data->stopped = true;
+    uv_timer_stop(handle);
+    uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
   }
 }
 
@@ -91,8 +180,19 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
     return valk_lval_err("Failed to allocate interval timer");
   }
 
-  timer_data->callback = callback;
+  // Evacuate callback and all its dependencies to heap immediately
+  // This is necessary because the timer callback may fire before checkpoint runs
+  valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
+  
+  timer_data->callback = heap_callback;
   timer_data->interval_id = __atomic_fetch_add(&g_interval_id, 1, __ATOMIC_RELAXED);
+  timer_data->magic = VALK_INTERVAL_TIMER_MAGIC;
+  
+  fprintf(stderr, "[TRACE] aio/interval[%llu]: CREATED callback=%p (was %p) type=%u alloc=%u\n",
+          (unsigned long long)timer_data->interval_id,
+          (void*)heap_callback, (void*)callback, 
+          (unsigned)LVAL_TYPE(heap_callback), (unsigned)LVAL_ALLOC(heap_callback));
+  fflush(stderr);
   timer_data->stopped = false;
   timer_data->timer.data = timer_data;
 
@@ -118,19 +218,27 @@ static void __schedule_timer_cb(uv_timer_t *handle) {
   VALK_GC_SAFE_POINT();
   
   valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)handle->data;
+  VALK_INFO("schedule[%llu]: timer_cb fired ptr=%p", timer_data->schedule_id, (void*)timer_data);
 
-  if (timer_data->callback) {
-    valk_gc_remove_global_root(&timer_data->callback);
+  valk_lval_t *callback = atomic_load_explicit((_Atomic(valk_lval_t *)*)&timer_data->callback, memory_order_acquire);
+  if (callback) {
+    while (LVAL_TYPE(callback) == LVAL_FORWARD) {
+      callback = callback->forward;
+    }
+    atomic_store_explicit((_Atomic(valk_lval_t *)*)&timer_data->callback, callback, memory_order_release);
     
     valk_lval_t *args = valk_lval_nil();
-    valk_lenv_t *env = timer_data->callback->fun.env;
-    
-
-    
-    valk_lval_t *result = valk_lval_eval_call(env, timer_data->callback, args);
+    valk_lval_t *result = valk_lval_eval_call(
+        callback->fun.env, 
+        callback, 
+        args);
     if (LVAL_TYPE(result) == LVAL_ERR) {
       VALK_WARN("aio/schedule callback returned error: %s", result->str);
     }
+    
+    valk_gc_remove_global_root(&timer_data->callback);
+  } else {
+    VALK_ERROR("aio/schedule: timer_data->callback is NULL!");
   }
 
   uv_timer_stop(handle);
@@ -147,9 +255,12 @@ static void __schedule_init_on_loop(void *ctx) {
   valk_schedule_init_ctx_t *init_ctx = (valk_schedule_init_ctx_t *)ctx;
   valk_schedule_timer_t *timer_data = init_ctx->timer_data;
   
+  VALK_INFO("schedule[%llu]: init_on_loop ptr=%p", timer_data->schedule_id, (void*)timer_data);
+  
   uv_loop_t *loop = init_ctx->sys->eventloop;
   int r = uv_timer_init(loop, &timer_data->timer);
   if (r != 0) {
+    VALK_ERROR("schedule[%llu]: uv_timer_init failed r=%d", timer_data->schedule_id, r);
     valk_gc_remove_global_root(&timer_data->callback);
     free(timer_data);
     free(init_ctx);
@@ -158,13 +269,18 @@ static void __schedule_init_on_loop(void *ctx) {
 
   r = uv_timer_start(&timer_data->timer, __schedule_timer_cb, init_ctx->delay_ms, 0);
   if (r != 0) {
+    VALK_ERROR("schedule[%llu]: uv_timer_start failed r=%d", timer_data->schedule_id, r);
     valk_gc_remove_global_root(&timer_data->callback);
     uv_close((uv_handle_t *)&timer_data->timer, NULL);
     free(timer_data);
+  } else {
+    VALK_INFO("schedule[%llu]: timer started delay=%llu", timer_data->schedule_id, init_ctx->delay_ms);
   }
   
   free(init_ctx);
 }
+
+static _Atomic(u64) g_schedule_id = 0;
 
 valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
                                 valk_lval_t* callback, valk_lenv_t* env) {
@@ -173,6 +289,8 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
     return valk_lval_err("aio/schedule: invalid AIO system");
   }
 
+  u64 schedule_id = atomic_fetch_add(&g_schedule_id, 1);
+
   valk_schedule_timer_t *timer_data = aligned_alloc(alignof(valk_schedule_timer_t), sizeof(valk_schedule_timer_t));
   if (!timer_data) {
     return valk_lval_err("Failed to allocate timer");
@@ -180,8 +298,11 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
 
   timer_data->callback = callback;
   timer_data->timer.data = timer_data;
+  timer_data->schedule_id = schedule_id;
 
   valk_gc_add_global_root(&timer_data->callback);
+
+  VALK_INFO("schedule[%llu]: enqueuing delay=%llu ptr=%p", schedule_id, delay_ms, (void*)timer_data);
 
   valk_schedule_init_ctx_t *init_ctx = malloc(sizeof(valk_schedule_init_ctx_t));
   if (!init_ctx) {

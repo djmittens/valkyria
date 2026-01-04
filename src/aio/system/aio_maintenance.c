@@ -1,8 +1,8 @@
 #include "aio_maintenance.h"
 #include "aio_internal.h"
 #include "aio_overload_backpressure.h"
-#include "aio_overload_deferred.h"
 #include "aio_http2_conn.h"
+#include "aio_stream_body.h"
 
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
   return conn->sys ? conn->sys->ops->tcp : nullptr;
@@ -28,6 +28,8 @@ static void __maintenance_timer_close_cb(uv_handle_t *handle) {
   UNUSED(handle);
 }
 
+void valk_maintenance_check_orphaned_streams(valk_aio_system_t *sys);
+
 static void __maintenance_timer_cb(uv_timer_t *timer) {
   valk_aio_system_t *sys = timer->data;
   if (!sys || sys->shuttingDown) return;
@@ -37,8 +39,8 @@ static void __maintenance_timer_cb(uv_timer_t *timer) {
   u64 now = sys->ops->loop->now(sys);
 
   valk_maintenance_check_connection_timeouts(sys, now);
-  valk_maintenance_check_pending_stream_timeouts(sys, now);
   valk_maintenance_check_backpressure_timeouts(sys, now);
+  valk_maintenance_check_orphaned_streams(sys);
 }
 
 void valk_maintenance_timer_init(valk_aio_system_t *sys) {
@@ -78,38 +80,13 @@ void valk_maintenance_check_connection_timeouts(valk_aio_system_t *sys, u64 now)
         VALK_INFO("Connection idle timeout after %llu ms (limit: %u ms)",
                   (unsigned long long)idle_time, sys->config.connection_idle_timeout_ms);
         if (!__vtable_is_closing(h)) {
-          h->http.state = VALK_CONN_CLOSING;
+          valk_conn_transition(h, VALK_CONN_EVT_TIMEOUT);
           valk_backpressure_list_remove(&sys->backpressure, h);
-#ifdef VALK_METRICS_ENABLED
-          h->http.diag.state = VALK_DIAG_CONN_CLOSING;
-          h->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
-#endif
           __vtable_close(h, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
         }
       }
     }
     h = next;
-  }
-}
-
-void valk_maintenance_check_pending_stream_timeouts(valk_aio_system_t *sys, u64 now) {
-  if (sys->config.pending_stream_timeout_ms == 0) return;
-  
-  pending_stream_t *ps = sys->pending_streams.head;
-  while (ps) {
-    pending_stream_t *next_ps = ps->next;
-    u64 age = now - ps->queued_time_ms;
-    if (age > sys->config.pending_stream_timeout_ms) {
-      VALK_WARN("Pending stream %d timeout after %llu ms",
-                ps->stream_id, (unsigned long long)age);
-      if (ps->session) {
-        nghttp2_submit_rst_stream(ps->session, NGHTTP2_FLAG_NONE,
-                                   ps->stream_id, NGHTTP2_REFUSED_STREAM);
-        nghttp2_session_send(ps->session);
-      }
-      valk_pending_stream_remove(&sys->pending_streams, ps);
-    }
-    ps = next_ps;
   }
 }
 
@@ -123,12 +100,21 @@ void valk_maintenance_check_backpressure_timeouts(valk_aio_system_t *sys, u64 no
     valk_aio_handle_t *bp = expired[i];
     VALK_WARN("Connection backpressure timeout");
     if (!__vtable_is_closing(bp)) {
-      bp->http.state = VALK_CONN_CLOSING;
-#ifdef VALK_METRICS_ENABLED
-      bp->http.diag.state = VALK_DIAG_CONN_CLOSING;
-      bp->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
-#endif
+      valk_conn_transition(bp, VALK_CONN_EVT_TIMEOUT);
       __vtable_close(bp, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
     }
+  }
+}
+
+void valk_maintenance_check_orphaned_streams(valk_aio_system_t *sys) {
+  valk_aio_handle_t *h = sys->liveHandles.next;
+  while (h && h != &sys->liveHandles) {
+    valk_aio_handle_t *next = h->next;
+    if (h->kind == VALK_HNDL_HTTP_CONN &&
+        h->http.state == VALK_CONN_ESTABLISHED &&
+        h->http.stream_bodies != nullptr) {
+      valk_stream_body_check_orphaned(h);
+    }
+    h = next;
   }
 }

@@ -104,15 +104,13 @@ set(VALKYRIA_SOURCES
   src/aio/http2/aio_conn_io.c
   src/aio/http2/aio_body_buffer.c
   src/aio/http2/aio_http2_conn.c
+  src/aio/http2/aio_http2_conn_fsm.c
   src/aio/http2/aio_http2_server.c
   src/aio/http2/aio_http2_client.c
   src/aio/http2/aio_http2_session.c
-  src/aio/http2/http2_ops_nghttp2.c
-  src/aio/http2/http2_ops_test.c
   # HTTP/2 overload management (src/aio/http2/overload/)
   src/aio/http2/overload/aio_overload_admission.c
   src/aio/http2/overload/aio_overload_state.c
-  src/aio/http2/overload/aio_overload_deferred.c
   src/aio/http2/overload/aio_overload_backpressure.c
   # HTTP/2 streaming responses (src/aio/http2/stream/)
   src/aio/http2/stream/aio_stream_body.c

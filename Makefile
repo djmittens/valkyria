@@ -223,6 +223,7 @@ define run_tests_valk
 	$(1)/valk test/test_pending_streams.valk
 	$(1)/valk test/test_pending_stream_headers.valk
 	$(1)/valk test/test_concurrent_requests.valk
+	$(1)/valk test/test_gc_async_regression.valk
 	$(1)/valk test/test_arena_out_of_order.valk
 	$(1)/valk test/test_client_headers.valk
 	$(1)/valk test/test_http2_client_request_errors.valk

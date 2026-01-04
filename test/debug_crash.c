@@ -92,32 +92,27 @@ int main(void) {
   printf("[DEBUG] Server started\n");
 
   printf("[DEBUG] Connecting client...\n");
-  valk_future *fut = valk_aio_http2_connect(sys, "127.0.0.1", 6969, "");
-  printf("[DEBUG] Arc count of fut: %llu\n", (unsigned long long)fut->refcount);
-  valk_arc_box *clientBox = valk_future_await(fut);
+  valk_async_handle_t *hclient = valk_aio_http2_connect(sys, "127.0.0.1", 6969, "");
+  valk_lval_t *client_result = valk_async_handle_await(hclient);
 
-  printf("[DEBUG] Arc count of fut after await: %llu\n", (unsigned long long)fut->refcount);
-  printf("[DEBUG] Arc count of box: %llu\n", (unsigned long long)clientBox->refcount);
-
-  valk_arc_release(fut);
-  if (clientBox->type != VALK_SUC) {
-    fprintf(stderr, "Error creating client: %s\n", (char *)clientBox->item);
+  if (LVAL_TYPE(client_result) == LVAL_ERR) {
+    fprintf(stderr, "Error creating client: %s\n", client_result->str);
     return 1;
   }
 
-  valk_aio_http2_client *client = clientBox->item;
+  valk_aio_http2_client *client = client_result->ref.ptr;
   printf("[DEBUG] Client connected, sending request...\n");
 
-  valk_future *fres = valk_aio_http2_request_send(req, client);
+  valk_async_handle_t *hres = valk_aio_http2_request_send(req, client);
   printf("[DEBUG] Awaiting response...\n");
-  valk_arc_box *res = valk_future_await(fres);
+  valk_lval_t *res = valk_async_handle_await(hres);
 
-  if (res->type != VALK_SUC) {
-    fprintf(stderr, "Request failed: %s\n", (char *)res->item);
+  if (LVAL_TYPE(res) == LVAL_ERR) {
+    fprintf(stderr, "Request failed: %s\n", res->str);
     return 1;
   }
 
-  valk_http2_response_t *response = res->item;
+  valk_http2_response_t *response = res->ref.ptr;
   printf("[DEBUG] Response received: %s\n", (char *)response->body);
 
   if (strcmp((char *)response->body, VALK_HTTP_MOTD) != 0) {
@@ -128,11 +123,6 @@ int main(void) {
   }
 
   printf("[DEBUG] Response matches expected MOTD\n");
-
-  printf("[DEBUG] Releasing resources...\n");
-  valk_arc_release(res);
-  valk_arc_release(clientBox);
-  valk_arc_release(fres);
 
   printf("[DEBUG] Stopping AIO system...\n");
   valk_aio_stop(sys);

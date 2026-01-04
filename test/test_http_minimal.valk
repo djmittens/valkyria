@@ -114,9 +114,6 @@
 (test/define "http2/log-response exists"
   {(!= http2/log-response ())})
 
-(test/define "http2/parse-json-response exists"
-  {(!= http2/parse-json-response ())})
-
 (test/define "http2/parallel creates operation"
   {do
     (def {ops} (list (async/pure 10) (async/pure 20)))
@@ -201,57 +198,11 @@
     (== route nil)
   })
 
-(test/define "http2/request-builder creates structure"
-  {do
-    (def {builder} (http2/request-builder "GET" "example.com"))
-    (== (len builder) 3)
-  })
-
-(test/define "http2/request-builder method field"
-  {do
-    (def {builder} (http2/request-builder "POST" "api.example.com"))
-    (== (head (head builder)) "method")
-  })
-
-(test/define "http2/request-builder url field"
-  {do
-    (def {builder} (http2/request-builder "GET" "example.com"))
-    (def {url-entry} (head (tail builder)))
-    (== (head url-entry) "url")
-  })
-
-(test/define "http2/builder-add-header returns builder"
-  {do
-    (def {builder} (http2/request-builder "GET" "example.com"))
-    (def {b2} (http2/builder-add-header builder "x-test" "value"))
-    (!= b2 ())
-  })
-
-(test/define "http2/builder-build creates request"
-  {do
-    (def {builder} (http2/request-builder "GET" "example.com"))
-    (def {req} (http2/builder-build builder))
-    (!= req ())
-  })
-
 (test/define "http2/health-check creates async op"
   {do (def {op} (http2/health-check "example.com")) (!= op ()) })
 
 (test/define "http2/health-check-all creates async op"
   {do (def {op} (http2/health-check-all (list "url1" "url2"))) (!= op ()) })
-
-(test/define "http2/fetch-sync exists"
-  {(!= http2/fetch-sync ())})
-
-(test/define "http2/fetch-and-print exists"
-  {(!= http2/fetch-and-print ())})
-
-(test/define "http2/fetch-with-request creates async op"
-  {do
-    (def {req} (http2/get "example.com"))
-    (def {op} (http2/fetch-with-request "example.com" req))
-    (!= op ())
-  })
 
 (test/define "http2/validate-status lambda executes"
   {do

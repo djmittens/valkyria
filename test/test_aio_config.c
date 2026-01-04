@@ -30,8 +30,6 @@ void test_config_defaults(VALK_TEST_ARGS()) {
 
   VALK_TEST_ASSERT(cfg.connection_idle_timeout_ms == 60000,
                    "Default connection_idle_timeout_ms should be 60000, got %u", cfg.connection_idle_timeout_ms);
-  VALK_TEST_ASSERT(cfg.pending_stream_timeout_ms == 10000,
-                   "Default pending_stream_timeout_ms should be 10000, got %u", cfg.pending_stream_timeout_ms);
   VALK_TEST_ASSERT(cfg.maintenance_interval_ms == 1000,
                    "Default maintenance_interval_ms should be 1000, got %u", cfg.maintenance_interval_ms);
 

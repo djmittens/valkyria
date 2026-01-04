@@ -4174,10 +4174,22 @@
           });
         }
 
-        // Apply GC deltas
-        if (delta.memory.gc) {
+        // Apply GC deltas - handle both full and compact formats
+        if (delta.memory.gc !== undefined) {
           if (!mem.gc) mem.gc = {};
-          Object.assign(mem.gc, delta.memory.gc);
+          // Compact format: just a number (heap_used_bytes)
+          if (typeof delta.memory.gc === 'number') {
+            mem.gc.heap_used_bytes = delta.memory.gc;
+          } else {
+            // Full format: object with all fields
+            Object.assign(mem.gc, delta.memory.gc);
+          }
+        }
+
+        // Apply process memory delta (compact format: rss number)
+        if (delta.memory.rss !== undefined) {
+          if (!mem.process) mem.process = {};
+          mem.process.rss = delta.memory.rss;
         }
 
         memoryUpdated = true;
@@ -4187,19 +4199,73 @@
       if (delta.metrics && this.fullState.metrics) {
         var metrics = this.fullState.metrics;
 
-        // Apply VM metrics (GC stats) - these are absolute values
+        // Apply VM metrics - handle both full and compact formats
         if (delta.metrics.vm) {
           if (!metrics.vm) metrics.vm = {};
+          // Compact format: {gc: {heap_used, heap_pct, cycles}, interp: {...}, loop: {...}}
           if (delta.metrics.vm.gc) {
             if (!metrics.vm.gc) metrics.vm.gc = {};
+            // Compact gc uses short names
+            if (typeof delta.metrics.vm.gc.heap_used !== 'undefined') {
+              metrics.vm.gc.heap_used_bytes = delta.metrics.vm.gc.heap_used;
+            }
+            if (typeof delta.metrics.vm.gc.heap_pct !== 'undefined') {
+              metrics.vm.gc.heap_utilization_pct = delta.metrics.vm.gc.heap_pct;
+            }
+            if (typeof delta.metrics.vm.gc.cycles !== 'undefined') {
+              metrics.vm.gc.cycles_total = delta.metrics.vm.gc.cycles;
+            }
+            // Also copy any full-format fields
             Object.assign(metrics.vm.gc, delta.metrics.vm.gc);
+          }
+          // Compact interp section
+          if (delta.metrics.vm.interp) {
+            if (!metrics.vm.interpreter) metrics.vm.interpreter = {};
+            if (typeof delta.metrics.vm.interp.evals !== 'undefined') {
+              metrics.vm.interpreter.evals_total = delta.metrics.vm.interp.evals;
+            }
+            if (typeof delta.metrics.vm.interp.calls !== 'undefined') {
+              metrics.vm.interpreter.function_calls = delta.metrics.vm.interp.calls;
+            }
+            if (typeof delta.metrics.vm.interp.builtins !== 'undefined') {
+              metrics.vm.interpreter.builtin_calls = delta.metrics.vm.interp.builtins;
+            }
           }
         }
 
         if (delta.metrics.aio) {
           if (!metrics.aio) metrics.aio = {};
 
-          // Apply byte deltas (accumulate)
+          // Compact format: {up, conn, streams, arenas, bufs, tx, rx}
+          if (typeof delta.metrics.aio.up !== 'undefined') {
+            metrics.aio.uptime_seconds = delta.metrics.aio.up;
+          }
+          if (typeof delta.metrics.aio.conn !== 'undefined') {
+            if (!metrics.aio.connections) metrics.aio.connections = {};
+            metrics.aio.connections.active = delta.metrics.aio.conn;
+          }
+          if (typeof delta.metrics.aio.streams !== 'undefined') {
+            if (!metrics.aio.streams) metrics.aio.streams = {};
+            metrics.aio.streams.active = delta.metrics.aio.streams;
+          }
+          if (typeof delta.metrics.aio.arenas !== 'undefined') {
+            if (!metrics.aio.system) metrics.aio.system = {};
+            metrics.aio.system.arenas_used = delta.metrics.aio.arenas;
+          }
+          if (typeof delta.metrics.aio.bufs !== 'undefined') {
+            if (!metrics.aio.system) metrics.aio.system = {};
+            metrics.aio.system.tcp_buffers_used = delta.metrics.aio.bufs;
+          }
+          if (typeof delta.metrics.aio.tx !== 'undefined') {
+            if (!metrics.aio.bytes) metrics.aio.bytes = {};
+            metrics.aio.bytes.sent_total = delta.metrics.aio.tx;
+          }
+          if (typeof delta.metrics.aio.rx !== 'undefined') {
+            if (!metrics.aio.bytes) metrics.aio.bytes = {};
+            metrics.aio.bytes.recv_total = delta.metrics.aio.rx;
+          }
+
+          // Legacy full format support
           if (delta.metrics.aio.bytes) {
             if (!metrics.aio.bytes) metrics.aio.bytes = { sent: 0, recv: 0 };
             if (delta.metrics.aio.bytes.d_sent) {
@@ -4210,7 +4276,6 @@
             }
           }
 
-          // Apply request deltas
           if (delta.metrics.aio.requests) {
             if (!metrics.aio.requests) metrics.aio.requests = { total: 0 };
             if (delta.metrics.aio.requests.d_total) {
@@ -4218,23 +4283,19 @@
             }
           }
 
-          // Connection counts are absolute (gauges)
           if (delta.metrics.aio.connections) {
             if (!metrics.aio.connections) metrics.aio.connections = {};
             Object.assign(metrics.aio.connections, delta.metrics.aio.connections);
           }
 
-          // Pending streams metrics (current is absolute, others are deltas)
           if (delta.metrics.aio.pending_streams) {
             if (!metrics.aio.pending_streams) {
               metrics.aio.pending_streams = { current: 0, total: 0, processed: 0, dropped: 0, pool_size: 64 };
             }
             var ps = delta.metrics.aio.pending_streams;
-            // Current is absolute (gauge)
             if (typeof ps.current !== 'undefined') {
               metrics.aio.pending_streams.current = ps.current;
             }
-            // Deltas for counters
             if (ps.d_total) {
               metrics.aio.pending_streams.total = (metrics.aio.pending_streams.total || 0) + ps.d_total;
             }
@@ -4247,13 +4308,11 @@
           }
         }
 
-        // Apply SSE registry stats (long-lived diagnostic streams)
         if (delta.metrics.sse) {
           if (!metrics.sse) metrics.sse = {};
           Object.assign(metrics.sse, delta.metrics.sse);
         }
 
-        // Apply registry stats (meta-metrics) - these are absolute values
         if (delta.metrics.registry) {
           metrics.registry = delta.metrics.registry;
         }

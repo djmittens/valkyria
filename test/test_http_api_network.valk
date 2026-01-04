@@ -61,10 +61,9 @@
   }))
 }))
 
-(test/async "http2/fetch-with-request works" (\ {done} {
-  (= {req} (http2/get "127.0.0.1"))
-  (= {with-req-op} (http2/fetch-with-request aio "127.0.0.1" test-port "/" req))
-  (with-req-op (\ {resp} {
+(test/async "http2/fetch with path works" (\ {done} {
+  (= {fetch-op} (http2/fetch aio "127.0.0.1" test-port "/"))
+  (fetch-op (\ {resp} {
     (done (not (error? resp)))
   }))
 }))

@@ -12,7 +12,6 @@ void valk_maintenance_timer_stop(valk_aio_system_t *sys);
 void valk_maintenance_timer_close(valk_aio_system_t *sys);
 
 void valk_maintenance_check_connection_timeouts(valk_aio_system_t *sys, u64 now);
-void valk_maintenance_check_pending_stream_timeouts(valk_aio_system_t *sys, u64 now);
 void valk_maintenance_check_backpressure_timeouts(valk_aio_system_t *sys, u64 now);
 
 #endif // VALK_AIO_MAINTENANCE_H

@@ -86,11 +86,6 @@
   (http2/fetch-async aio host port path)
 })
 
-; Fetch with custom request (not implemented - use http2/fetch-async directly)
-(fun {http2/fetch-with-request aio host port path request} {
-  (http2/fetch-async aio host port path)
-})
-
 ; Fetch and extract body
 (fun {http2/fetch-text aio host port path} {
   (async/bind (http2/fetch aio host port path) (\ {resp} {
@@ -194,12 +189,6 @@
   resp
 })
 
-; Extract JSON body (placeholder - needs JSON parser)
-(fun {http2/parse-json-response resp} {
-  ; TODO: Implement JSON parsing
-  (http2/response-body resp)
-})
-
 ; Validate response status
 ; Returns response if status matches, otherwise returns error
 ; Note: Uses simple error message to avoid memory issues with string concatenation
@@ -278,24 +267,6 @@
 ; PART 9: Convenience Functions
 ; ============================================================================
 
-; Simple synchronous-style fetch (using async/run)
-; WARNING: This does NOT work for I/O operations because async/run relies on
-; mocked continuation primitives. Use the async callback pattern instead:
-;   ((http2/fetch aio host port path) (\ {resp} { ... handle response ... }))
-; TODO(networking): Implement proper delimited continuations to fix this
-(fun {http2/fetch-sync aio host port path} {
-  (async/run (http2/fetch aio host port path))
-})
-
-; Fetch and print response
-; WARNING: Broken - see http2/fetch-sync note above
-(fun {http2/fetch-and-print aio host port path} {
-  (= {resp} (http2/fetch-sync aio host port path))
-  (print "Status:" (http2/response-status resp))
-  (print "Body:" (http2/response-body resp))
-  resp
-})
-
 ; Health check endpoint
 (fun {http2/health-check aio host port path} {
   (async/bind (http2/fetch aio host port path) (\ {resp} {
@@ -310,59 +281,5 @@
     (http2/health-check aio (nth 1 ep) (nth 2 ep) (nth 3 ep))
   }) endpoints)
 })
-
-; ============================================================================
-; PART 10: Builder Pattern
-; ============================================================================
-
-; Request builder for fluent API
-(fun {http2/request-builder method url} {
-  (list
-    (list "method" method)
-    (list "url" url)
-    (list "headers" ())
-  )
-})
-
-; Add header to builder
-(fun {http2/builder-add-header builder name value} {
-  ; TODO: Implement proper builder pattern
-  builder
-})
-
-; Build final request from builder
-(fun {http2/builder-build builder} {
-  ; TODO: Convert builder to actual request
-  (http2/make-request
-    (head (tail (head builder)))
-    (head (tail (head (tail builder)))))
-})
-
-; ============================================================================
-; EXPORTS / PUBLIC API
-; ============================================================================
-
-; Core request creation
-; - http2/get, http2/post, http2/make-request
-; - http2/with-header, http2/with-headers
-
-; Fetching
-; - http2/fetch, http2/fetch-text, http2/fetch-ok?
-; - http2/fetch-all, http2/fetch-all-text
-; - http2/fetch-sync, http2/fetch-and-print
-
-; Response handling (use http2/response-* builtins directly)
-; - http2/response-ok?
-
-; Middleware
-; - http2/with-auth, http2/with-user-agent, http2/with-logging
-; - http2/compose-middleware, http2/apply-middleware
-
-; Patterns
-; - http2/parallel, http2/sequential, http2/fan-out, http2/aggregate
-; - http2/health-check, http2/health-check-all
-
-; Error handling (use async_monadic.valk)
-; - async/try, async/recover
 
 ; HTTP/2 API loaded

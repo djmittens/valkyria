@@ -9,15 +9,15 @@ static void __task_queue_drain_cb(uv_check_t *handle) {
   
   valk_aio_system_t *sys = handle->data;
   if (!sys || sys->shuttingDown) return;
-
+  
   valk_aio_task_queue_t *tq = &sys->task_queue;
   void *item;
   int processed = 0;
   const int max_per_iteration = 256;
 
   while (processed < max_per_iteration) {
-    item = valk_chase_lev_pop(&tq->deque);
-    if (item == VALK_CHASE_LEV_EMPTY) break;
+    item = valk_chase_lev_steal(&tq->deque);
+    if (item == VALK_CHASE_LEV_EMPTY || item == VALK_CHASE_LEV_ABORT) break;
 
     valk_aio_task_item_t *task = (valk_aio_task_item_t *)item;
     if (task->fn) {
@@ -61,7 +61,8 @@ void valk_aio_task_queue_shutdown(valk_aio_system_t *sys) {
   }
 
   void *item;
-  while ((item = valk_chase_lev_pop(&tq->deque)) != VALK_CHASE_LEV_EMPTY) {
+  while ((item = valk_chase_lev_steal(&tq->deque)) != VALK_CHASE_LEV_EMPTY && 
+         item != VALK_CHASE_LEV_ABORT) {
     free(item);
   }
   valk_chase_lev_destroy(&tq->deque);
@@ -85,7 +86,7 @@ bool valk_aio_task_queue_empty(valk_aio_system_t *sys) {
   return valk_chase_lev_empty(&sys->task_queue.deque);
 }
 
-int64_t valk_aio_task_queue_size(valk_aio_system_t *sys) {
+i64 valk_aio_task_queue_size(valk_aio_system_t *sys) {
   if (!sys) return 0;
   return valk_chase_lev_size(&sys->task_queue.deque);
 }

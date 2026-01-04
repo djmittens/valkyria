@@ -214,7 +214,7 @@ static void __aio_uv_walk_close(uv_handle_t *h, void *arg) {
         valk_aio_http_server *srv = hndl->arg;
         srv->state = VALK_SRV_CLOSING;
       } else if (hndl->kind == VALK_HNDL_HTTP_CONN) {
-        hndl->http.state = VALK_CONN_CLOSING;
+        valk_conn_transition(hndl, VALK_CONN_EVT_CLOSE);
         __backpressure_list_remove(hndl);
       }
       uv_close(h, __uv_handle_closed_cb);

@@ -133,6 +133,16 @@
       {foldl f (f z (head l)) (tail  l)}
 })
 
+; Reverse a list
+(fun {reverse l} {
+  (= {reverse-helper} (\ {acc remaining} {
+    (if (== remaining nil)
+      {acc}
+      {(reverse-helper (join (list (head remaining)) acc) (tail remaining))})
+  }))
+  (reverse-helper nil l)
+})
+
 ; Returns the sum of the list
 (fun {sum l} {foldl + 0 l})
 (fun {product l} {foldl * 1 l})

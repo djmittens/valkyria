@@ -16,7 +16,6 @@
 #include "http2/aio_conn_io.h"
 #include "aio_metrics.h"
 #include "http2/stream/aio_stream_body.h"
-#include "http2/overload/aio_overload_deferred.h"
 #include "http2/overload/aio_overload_backpressure.h"
 #include "http2/overload/aio_overload_admission.h"
 #include "system/aio_maintenance.h"
@@ -104,12 +103,7 @@ typedef enum handle_kind_t {
   VALK_HNDL_HTTP_CONN,
 } handle_kind_t;
 
-typedef enum __aio_http_conn_e {
-  VALK_CONN_INIT,
-  VALK_CONN_ESTABLISHED,
-  VALK_CONN_CLOSING,
-  VALK_CONN_CLOSED
-} __aio_http_conn_e;
+#include "http2/aio_http2_conn_fsm.h"
 
 typedef enum __aio_http_srv_e {
   VALK_SRV_INIT,
@@ -125,18 +119,45 @@ typedef struct valk_async_handle_uv_data {
   valk_async_handle_t *handle;
 } valk_async_handle_uv_data_t;
 
+typedef struct valk_arena_ref {
+  valk_slab_item_t *slab_item;
+  u32 slot;
+} valk_arena_ref_t;
+
+#define VALK_ARENA_REF_EMPTY ((valk_arena_ref_t){.slab_item = nullptr, .slot = UINT32_MAX})
+
+static inline bool valk_arena_ref_valid(valk_arena_ref_t ref) {
+  return ref.slab_item != nullptr;
+}
+
+static inline valk_arena_ref_t valk_arena_ref_take(valk_arena_ref_t *src) {
+  valk_arena_ref_t ref = *src;
+  *src = VALK_ARENA_REF_EMPTY;
+  return ref;
+}
+
+static inline void valk_arena_ref_give(valk_arena_ref_t *dst, valk_arena_ref_t ref) {
+  *dst = ref;
+}
+
+static inline void valk_arena_ref_release(valk_arena_ref_t *ref, valk_slab_t *pool) {
+  if (ref->slab_item && pool) {
+    valk_slab_release(pool, ref->slab_item);
+  }
+  *ref = VALK_ARENA_REF_EMPTY;
+}
+
 typedef struct valk_http_async_ctx {
   void *session;
   i32 stream_id;
   struct valk_aio_handle_t *conn;
   valk_mem_arena_t *arena;
-  void *arena_slab_item;
-  u32 arena_slot;
+  valk_arena_ref_t arena_ref;
 } valk_http_async_ctx_t;
 
 typedef struct valk_standalone_async_ctx {
   valk_mem_arena_t *arena;
-  valk_slab_item_t *arena_slab_item;
+  valk_arena_ref_t arena_ref;
   valk_aio_system_t *sys;
 } valk_standalone_async_ctx_t;
 
@@ -160,9 +181,6 @@ typedef struct __http2_connect_req {
   valk_aio_http2_client *client;
 } __http2_connect_req;
 
-typedef valk_pending_header_t pending_header_t;
-typedef valk_pending_stream_t pending_stream_t;
-
 typedef struct valk_http2_server_request {
   char *method;
   char *scheme;
@@ -179,8 +197,7 @@ typedef struct valk_http2_server_request {
   valk_aio_handle_t *conn;
   i32 stream_id;
   valk_mem_arena_t *stream_arena;
-  valk_slab_item_t *arena_slab_item;
-  u32 arena_slot;
+  valk_arena_ref_t arena_ref;
   u32 next_arena_slot;
 #ifdef VALK_METRICS_ENABLED
   u64 start_time_us;
@@ -253,6 +270,8 @@ struct valk_aio_handle_t {
     valk_aio_handle_t *backpressure_next;
     u64 backpressure_start_time;
 
+    bool arena_backpressure;
+
 #ifdef VALK_METRICS_ENABLED
     valk_handle_diag_t diag;
 #endif
@@ -310,7 +329,6 @@ struct valk_aio_system {
 
   valk_http_queue_t http_queue;
 
-  valk_pending_stream_queue_t pending_streams;
   valk_backpressure_list_t backpressure;
   valk_conn_admission_ctx_t admission;
 
@@ -379,6 +397,7 @@ typedef struct {
 typedef struct {
   alignas(16) uv_timer_t timer;
   valk_lval_t *callback;
+  u64 schedule_id;
 } valk_schedule_timer_t;
 
 typedef struct valk_interval_timer {
@@ -386,7 +405,11 @@ typedef struct valk_interval_timer {
   valk_lval_t *callback;
   u64 interval_id;
   bool stopped;
+  u32 magic;
 } valk_interval_timer_t;
+
+#define VALK_INTERVAL_TIMER_MAGIC 0xDEADBEEF
+#define VALK_INTERVAL_TIMER_FREED 0xFEEDFACE
 
 typedef struct {
   int count;
@@ -416,16 +439,6 @@ static inline bool __conn_is_closing_or_uv(valk_aio_handle_t *conn) {
 #define CONN_UV_STREAM(conn) ((uv_stream_t *)&(conn)->uv.tcp.uv)
 #define CONN_UV_HANDLE(conn) ((uv_handle_t *)&(conn)->uv.tcp.uv)
 #define CONN_UV_LOOP(conn) ((conn)->uv.tcp.uv.loop)
-
-static inline bool __is_pending_stream(void *user_data) {
-  return user_data && ((uptr)user_data & (1ULL << 63));
-}
-
-// Tagged pointer: high bit marks pending stream, clear it to get real pointer
-static inline pending_stream_t *__get_pending_stream(void *user_data) {
-  if (!__is_pending_stream(user_data)) return nullptr;
-  return (pending_stream_t *)((uptr)user_data & ~(1ULL << 63));
-}
 
 #define VALK_HANDLE_VALID(h) \
   ((h) && (h)->magic == VALK_AIO_HANDLE_MAGIC)
@@ -478,4 +491,4 @@ void valk_aio_task_queue_init(valk_aio_system_t *sys);
 void valk_aio_task_queue_shutdown(valk_aio_system_t *sys);
 void valk_aio_enqueue_task(valk_aio_system_t *sys, valk_aio_task_fn fn, void *ctx);
 bool valk_aio_task_queue_empty(valk_aio_system_t *sys);
-int64_t valk_aio_task_queue_size(valk_aio_system_t *sys);
+i64 valk_aio_task_queue_size(valk_aio_system_t *sys);

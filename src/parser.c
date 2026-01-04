@@ -1106,6 +1106,9 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
     atomic_fetch_add(&g_eval_metrics.builtin_calls, 1);
     valk_lval_t* result = func->fun.builtin(env, args);
     atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+    if (result == NULL) {
+      return valk_eval_value(valk_lval_err("Internal error: builtin returned NULL"));
+    }
     return valk_eval_value(result);
   }
 
@@ -1214,22 +1217,30 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
   valk_lenv_t* cur_env = env;
   valk_lval_t* value = NULL;
   
+  // Register with thread context for checkpoint evacuation
+  void *saved_stack = valk_thread_ctx.eval_stack;
+  valk_lval_t *saved_expr = valk_thread_ctx.eval_expr;
+  valk_lval_t *saved_value = valk_thread_ctx.eval_value;
+  valk_thread_ctx.eval_stack = &stack;
+  
   // Push initial DONE continuation
   valk_eval_stack_push(&stack, (valk_cont_frame_t){.kind = CONT_DONE, .env = env});
 
   while (1) {
+    // Sync locals with thread context for checkpoint evacuation
+    valk_thread_ctx.eval_expr = expr;
+    valk_thread_ctx.eval_value = value;
+    
     VALK_GC_SAFE_POINT();
+    
+    // Reload from thread context in case checkpoint modified them
+    expr = valk_thread_ctx.eval_expr;
+    value = valk_thread_ctx.eval_value;
+    
     atomic_fetch_add(&g_eval_metrics.evals_total, 1);
     
     // Phase 1: Evaluate current expression if we have one
     if (expr != NULL) {
-      // Handle NULL
-      if (expr == NULL) {
-        value = valk_lval_nil();
-        expr = NULL;
-        goto apply_cont;
-      }
-      
       // Self-evaluating forms
       if (LVAL_TYPE(expr) == LVAL_NUM || LVAL_TYPE(expr) == LVAL_STR ||
           LVAL_TYPE(expr) == LVAL_FUN || LVAL_TYPE(expr) == LVAL_ERR ||
@@ -1341,6 +1352,10 @@ apply_cont:
       switch (frame.kind) {
         case CONT_DONE:
           valk_eval_stack_destroy(&stack);
+          // Restore thread context
+          valk_thread_ctx.eval_stack = saved_stack;
+          valk_thread_ctx.eval_expr = saved_expr;
+          valk_thread_ctx.eval_value = saved_value;
           return value;
           
         case CONT_SINGLE_ELEM:
@@ -1531,14 +1546,13 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
 
 valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
                                  valk_lval_t* args) {
-  // TODO(llvm): Proper tail call optimization requires either:
-  // 1. An explicit evaluation stack (stack machine) instead of using C's call
-  // stack
-  // 2. LLVM backend with tail call attribute
-  // The current tree-walking interpreter cannot do TCO for calls through
-  // if/do/let/etc because those create C stack frames that we can't eliminate.
-  // For now, deep recursion will use stack space. With malloc fallback from
-  // slab, reasonable depths are supported.
+  while (func && LVAL_TYPE(func) == LVAL_FORWARD) {
+    func = func->forward;
+  }
+  if (func == nullptr) {
+    return valk_lval_err("valk_lval_eval_call: function is NULL after forward-following");
+  }
+  
   LVAL_ASSERT_TYPE(args, func, LVAL_FUN);
 
   // Track stack depth and function call metrics
@@ -2218,6 +2232,12 @@ valk_lenv_t* valk_lenv_empty(void) {
   }
   memset(res, 0, sizeof(valk_lenv_t));
   valk_lenv_init(res);
+  
+  // Override allocator to use heap for all env contents.
+  // This ensures env arrays survive scratch arena resets.
+  if (valk_thread_ctx.heap != NULL) {
+    res->allocator = valk_thread_ctx.heap;
+  }
   return res;
 }
 void valk_lenv_init(valk_lenv_t* env) {
@@ -2335,15 +2355,24 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
 
   // Iterative lookup through parent chain (lexical scoping)
   while (env) {
+    if (env->symbols.items == NULL) {
+      env = env->parent;
+      continue;
+    }
     for (u64 i = 0; i < env->symbols.count; i++) {
-      if (env->symbols.items == NULL || env->symbols.items[i] == NULL) {
+      if (env->symbols.items[i] == NULL) {
         break;
       }
       if (strcmp(key->str, env->symbols.items[i]) == 0) {
         if (valk_log_would_log(VALK_LOG_TRACE)) {
           VALK_TRACE("env get idx=%zu key=%s", i, env->symbols.items[i]);
         }
-        return env->vals.items[i];
+        valk_lval_t* val = env->vals.items[i];
+        while (val && LVAL_TYPE(val) == LVAL_FORWARD) {
+          val = val->forward;
+          env->vals.items[i] = val;
+        }
+        return val;
       }
     }
     env = env->parent;
@@ -2367,8 +2396,17 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     }
   }
 
-  valk_mem_allocator_t *env_alloc = env->allocator ? (valk_mem_allocator_t*)env->allocator 
-                                                   : valk_thread_ctx.allocator;
+  // Always prefer heap for env allocations to survive scratch arena resets.
+  // This is critical for closures that capture environments and are later
+  // invoked after GC moves them to heap.
+  valk_mem_allocator_t *env_alloc;
+  if (valk_thread_ctx.heap != NULL) {
+    env_alloc = valk_thread_ctx.heap;
+  } else if (env->allocator != NULL) {
+    env_alloc = (valk_mem_allocator_t*)env->allocator;
+  } else {
+    env_alloc = valk_thread_ctx.allocator;
+  }
   
   VALK_WITH_ALLOC(env_alloc) {
     u64 slen = strlen(key->str);
@@ -4452,9 +4490,6 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
 
     if ((val = valk_plist_get(config_map, ":backpressure-list-max")) && LVAL_TYPE(val) == LVAL_NUM)
       config.backpressure_list_max = (u32)val->num;
-
-    if ((val = valk_plist_get(config_map, ":pending-stream-pool-size")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.pending_stream_pool_size = (u32)val->num;
   }
 
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
@@ -4630,6 +4665,28 @@ static valk_lval_t* valk_builtin_aio_metrics_json(valk_lenv_t* e,
   valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
   valk_aio_system_stats_t* system_stats = valk_aio_get_system_stats(sys);
   char* json = valk_aio_combined_to_json(metrics, system_stats, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  return valk_lval_str(json);
+#else
+  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
+static valk_lval_t* valk_builtin_aio_metrics_json_compact(valk_lenv_t* e,
+                                                           valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "Argument must be aio_system");
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  valk_aio_update_queue_stats(sys);
+  valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
+  valk_aio_system_stats_t* system_stats = valk_aio_get_system_stats(sys);
+  char* json = valk_aio_combined_to_json_compact(metrics, system_stats, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   return valk_lval_str(json);
 #else
   return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
@@ -4937,6 +4994,44 @@ static valk_lval_t* valk_builtin_vm_metrics_prometheus(valk_lenv_t* e,
     return valk_lval_err("Failed to generate VM metrics Prometheus");
   }
   return valk_lval_str(prom);
+#else
+  UNUSED(a);
+  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
+static valk_lval_t* valk_builtin_vm_metrics_json_compact(valk_lenv_t* e,
+                                                          valk_lval_t* a) {
+  UNUSED(e);
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_t *sys = NULL;
+  u64 argc = valk_lval_list_count(a);
+
+  if (argc > 1) {
+    return valk_lval_err("vm/metrics-json-compact: expected 0-1 arguments");
+  }
+
+  if (argc == 1) {
+    valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
+    if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
+      return valk_lval_err("vm/metrics-json-compact: argument must be an aio_system");
+    }
+    sys = (valk_aio_system_t *)sys_arg->ref.ptr;
+  }
+
+  valk_gc_malloc_heap_t* heap = sys && valk_aio_get_gc_heap(sys)
+    ? valk_aio_get_gc_heap(sys)
+    : (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+
+  valk_vm_metrics_t vm;
+  valk_vm_metrics_collect(&vm, heap, sys ? valk_aio_get_event_loop(sys) : NULL);
+
+  char* json = valk_vm_metrics_to_json_compact(&vm, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
+  if (!json) {
+    return valk_lval_err("Failed to generate compact VM metrics JSON");
+  }
+  return valk_lval_str(json);
 #else
   UNUSED(a);
   return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
@@ -5423,6 +5518,8 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "aio/stop", valk_builtin_aio_stop);
   valk_lenv_put_builtin(env, "aio/metrics", valk_builtin_aio_metrics);
   valk_lenv_put_builtin(env, "aio/metrics-json", valk_builtin_aio_metrics_json);
+  valk_lenv_put_builtin(env, "aio/metrics-json-compact",
+                        valk_builtin_aio_metrics_json_compact);
   valk_lenv_put_builtin(env, "aio/systems-json", valk_builtin_aio_systems_json);
   valk_lenv_put_builtin(env, "aio/metrics-prometheus",
                         valk_builtin_aio_metrics_prometheus);
@@ -5447,6 +5544,8 @@ void valk_lenv_builtins(valk_lenv_t* env) {
 
   // VM Metrics (GC, Interpreter, Event Loop)
   valk_lenv_put_builtin(env, "vm/metrics-json", valk_builtin_vm_metrics_json);
+  valk_lenv_put_builtin(env, "vm/metrics-json-compact",
+                        valk_builtin_vm_metrics_json_compact);
   valk_lenv_put_builtin(env, "vm/metrics-prometheus",
                         valk_builtin_vm_metrics_prometheus);
 

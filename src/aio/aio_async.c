@@ -66,10 +66,8 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
     goto cleanup;
   }
 
-  if (arena && http->arena_slab_item) {
-    stream_req->arena_slab_item = http->arena_slab_item;
-    stream_req->arena_slot = http->arena_slot;
-    http->arena_slab_item = nullptr;
+  if (arena && valk_arena_ref_valid(http->arena_ref)) {
+    valk_arena_ref_give(&stream_req->arena_ref, valk_arena_ref_take(&http->arena_ref));
   }
 
   valk_async_status_t done_status = valk_async_handle_get_status(handle);
@@ -116,9 +114,9 @@ void valk_standalone_async_done_callback(valk_async_handle_t *handle, void *ctx)
   if (!ctx) return;
   valk_standalone_async_ctx_t *standalone = (valk_standalone_async_ctx_t*)ctx;
 
-  if (standalone->arena_slab_item && standalone->sys && standalone->sys->httpStreamArenas) {
+  if (valk_arena_ref_valid(standalone->arena_ref) && standalone->sys && standalone->sys->httpStreamArenas) {
     VALK_DEBUG("Releasing standalone async arena back to pool");
-    valk_slab_release(standalone->sys->httpStreamArenas, standalone->arena_slab_item);
+    valk_arena_ref_release(&standalone->arena_ref, standalone->sys->httpStreamArenas);
   }
 
   free(standalone);
@@ -144,7 +142,7 @@ valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sy
 // LCOV_EXCL_STOP
 
   ctx->arena = arena;
-  ctx->arena_slab_item = arena_item;
+  ctx->arena_ref = (valk_arena_ref_t){.slab_item = arena_item, .slot = UINT32_MAX};
   ctx->sys = sys;
 
   VALK_DEBUG("Allocated standalone async arena from pool");

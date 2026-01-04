@@ -88,6 +88,8 @@ bool valk_stream_body_is_idle_expired(valk_stream_body_t *body);
 
 int valk_stream_body_cancel(valk_stream_body_t *body, u32 error_code);
 
+void valk_stream_body_check_orphaned(valk_aio_handle_t *conn);
+
 void valk_register_stream_builtins(struct valk_lenv_t *env);
 
 #endif

@@ -42,19 +42,6 @@ static u64 oldest_backpressure_age(valk_backpressure_list_t *list, u64 now_ms) {
   return oldest;
 }
 
-static u64 oldest_pending_stream_age(valk_pending_stream_queue_t *queue, u64 now_ms) {
-  if (!queue || !queue->head) return 0;
-  
-  u64 oldest = 0;
-  for (valk_pending_stream_t *ps = queue->head; ps; ps = ps->next) {
-    if (ps->queued_time_ms > 0 && ps->queued_time_ms <= now_ms) {
-      u64 age = now_ms - ps->queued_time_ms;
-      if (age > oldest) oldest = age;
-    }
-  }
-  return oldest;
-}
-
 valk_pressure_state_t valk_conn_admission_snapshot(valk_aio_system_t *sys, u64 now_ms) {
   valk_pressure_state_t state = {0};
   if (!sys) return state;
@@ -63,15 +50,8 @@ valk_pressure_state_t valk_conn_admission_snapshot(valk_aio_system_t *sys, u64 n
   state.arena_slab_usage = slab_usage(sys->httpStreamArenas);
   state.handle_slab_usage = slab_usage(sys->handleSlab);
 
-  if (sys->pending_streams.pool.capacity > 0) {
-    state.pending_stream_usage = (float)sys->pending_streams.count /
-                                  (float)sys->pending_streams.pool.capacity;
-    state.pending_stream_count = (u32)sys->pending_streams.count;
-  }
-
   state.backpressure_queue_len = (u32)sys->backpressure.size;
   state.oldest_backpressure_age_ms = oldest_backpressure_age(&sys->backpressure, now_ms);
-  state.oldest_pending_stream_age_ms = oldest_pending_stream_age(&sys->pending_streams, now_ms);
 
   return state;
 }

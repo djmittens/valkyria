@@ -718,50 +718,6 @@ void test_system_stats_full_lifecycle(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_pending_stream_backpressure_metrics(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_aio_system_stats_t stats;
-  valk_aio_system_stats_init(&stats, 64, 128, 256);
-
-  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_current) == 0,
-                   "pending_streams_current should start at 0");
-  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_total) == 0,
-                   "pending_streams_total should start at 0");
-
-  valk_aio_system_stats_on_pending_enqueue(&stats);
-  valk_aio_system_stats_on_pending_enqueue(&stats);
-  valk_aio_system_stats_on_pending_enqueue(&stats);
-  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_current) == 3,
-                   "pending_streams_current should be 3");
-  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_total) == 3,
-                   "pending_streams_total should be 3");
-
-  valk_aio_system_stats_on_pending_dequeue(&stats, 1000);
-  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_current) == 2,
-                   "pending_streams_current should be 2");
-  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_processed) == 1,
-                   "pending_streams_processed should be 1");
-  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_wait_us) == 1000,
-                   "pending_streams_wait_us should be 1000");
-
-  valk_aio_system_stats_on_pending_dequeue(&stats, 2000);
-  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_wait_us) == 3000,
-                   "pending_streams_wait_us should be 3000");
-
-  valk_aio_system_stats_on_pending_drop(&stats);
-  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_current) == 0,
-                   "pending_streams_current should be 0");
-  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_dropped) == 1,
-                   "pending_streams_dropped should be 1");
-
-  valk_aio_system_stats_update_pending_current(&stats, 42);
-  VALK_TEST_ASSERT(atomic_load(&stats.pending_streams_current) == 42,
-                   "pending_streams_current should be 42");
-
-  VALK_PASS();
-}
-
 void test_combined_json_output(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -1019,8 +975,6 @@ int main(void) {
                           test_connection_state_tracking);
   valk_testsuite_add_test(suite, "test_system_stats_full_lifecycle",
                           test_system_stats_full_lifecycle);
-  valk_testsuite_add_test(suite, "test_pending_stream_backpressure_metrics",
-                          test_pending_stream_backpressure_metrics);
   valk_testsuite_add_test(suite, "test_combined_json_output",
                           test_combined_json_output);
   valk_testsuite_add_test(suite, "test_combined_json_named_output",

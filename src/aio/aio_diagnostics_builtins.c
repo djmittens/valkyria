@@ -242,9 +242,49 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk
 #endif
 }
 
+static valk_lval_t *valk_builtin_aio_diagnostics_state_json_compact(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/diagnostics-state-json-compact: expected 1 argument");
+  }
+
+  valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/diagnostics-state-json-compact: argument must be an aio_system");
+  }
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_t *sys = (valk_aio_system_t *)sys_arg->ref.ptr;
+
+  valk_process_memory_t pm = {0};
+  valk_process_memory_collect(&pm);
+
+  valk_gc_malloc_heap_t *heap = valk_aio_get_gc_heap(sys);
+  u64 gc_used = heap ? valk_gc_heap2_used_bytes(heap) : 0;
+
+  char buf[128];
+  int n = snprintf(buf, sizeof(buf),
+    "{\"gc\":%llu,\"rss\":%llu}",
+    (unsigned long long)gc_used,
+    (unsigned long long)pm.rss_bytes);
+
+  if (n < 0 || (size_t)n >= sizeof(buf)) {
+    return valk_lval_str("{}");
+  }
+
+  return valk_lval_str(buf);
+#else
+  UNUSED(sys_arg);
+  return valk_lval_str("{}");
+#endif
+}
+
 void valk_register_aio_diagnostics_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "aio/diagnostics-state-json",
                         valk_builtin_aio_diagnostics_state_json);
+  valk_lenv_put_builtin(env, "aio/diagnostics-state-json-compact",
+                        valk_builtin_aio_diagnostics_state_json_compact);
 
 #ifdef VALK_METRICS_ENABLED
   valk_lenv_put_builtin(env, "aio/slab-buckets",

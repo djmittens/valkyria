@@ -68,14 +68,6 @@ typedef struct {
 
   // Load shedding
   _Atomic u64 connections_rejected_load;  // Rejected due to buffer pressure
-
-  // Pending stream backpressure metrics
-  _Atomic u64 pending_streams_current;    // Currently queued streams waiting for arenas
-  _Atomic u64 pending_streams_total;      // Total streams queued (cumulative)
-  _Atomic u64 pending_streams_processed;  // Successfully processed from queue (cumulative)
-  _Atomic u64 pending_streams_dropped;    // Dropped due to client disconnect (cumulative)
-  _Atomic u64 pending_streams_wait_us;    // Total wait time in microseconds (for avg calc)
-  u64 pending_streams_pool_size;          // Pool capacity (set at init)
 } valk_aio_system_stats_t;
 
 // Forward declaration for libuv loop
@@ -149,6 +141,10 @@ void valk_vm_metrics_collect(valk_vm_metrics_t* out,
 char* valk_vm_metrics_to_json(const valk_vm_metrics_t* m,
                                valk_mem_allocator_t* alloc);
 
+// Export compact VM metrics for SSE deltas (no size_classes, histograms)
+char* valk_vm_metrics_to_json_compact(const valk_vm_metrics_t* m,
+                                       valk_mem_allocator_t* alloc);
+
 // Export VM metrics in Prometheus format
 char* valk_vm_metrics_to_prometheus(const valk_vm_metrics_t* m,
                                      valk_mem_allocator_t* alloc);
@@ -191,12 +187,6 @@ void valk_aio_system_stats_update_queue(valk_aio_system_stats_t* s,
                                          u64 pending_requests,
                                          u64 pending_responses);
 
-// Pending stream backpressure instrumentation
-void valk_aio_system_stats_on_pending_enqueue(valk_aio_system_stats_t* s);
-void valk_aio_system_stats_on_pending_dequeue(valk_aio_system_stats_t* s, u64 wait_us);
-void valk_aio_system_stats_on_pending_drop(valk_aio_system_stats_t* s);
-void valk_aio_system_stats_update_pending_current(valk_aio_system_stats_t* s, u64 count);
-
 // Rendering
 char* valk_aio_metrics_to_json(const valk_aio_metrics_t* m, valk_mem_allocator_t* alloc);
 char* valk_aio_metrics_to_prometheus(const valk_aio_metrics_t* m, valk_mem_allocator_t* alloc);
@@ -205,6 +195,11 @@ char* valk_aio_metrics_to_prometheus(const valk_aio_metrics_t* m, valk_mem_alloc
 char* valk_aio_combined_to_json(const valk_aio_metrics_t* m,
                                  const valk_aio_system_stats_t* s,
                                  valk_mem_allocator_t* alloc);
+
+// Compact JSON for SSE deltas (minimal fields only)
+char* valk_aio_combined_to_json_compact(const valk_aio_metrics_t* m,
+                                         const valk_aio_system_stats_t* s,
+                                         valk_mem_allocator_t* alloc);
 
 // Combined JSON rendering with system name (for multi-system support)
 char* valk_aio_combined_to_json_named(const char* name,

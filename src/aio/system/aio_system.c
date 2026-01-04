@@ -101,9 +101,6 @@ const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg)
   if (cfg->backpressure_timeout_ms < 1000 || cfg->backpressure_timeout_ms > 600000)
     return "backpressure_timeout_ms must be between 1,000 and 600,000 (1s-10min)";
 
-  if (cfg->pending_stream_pool_size < 1 || cfg->pending_stream_pool_size > PENDING_STREAM_POOL_MAX_LIMIT)
-    return "pending_stream_pool_size must be between 1 and 10,000";
-
   if (cfg->tcp_buffer_pool_size > 16 && cfg->tcp_buffer_pool_size < cfg->max_connections)
     return "tcp_buffer_pool_size must be >= max_connections (or <= 16 for testing)";
 
@@ -155,8 +152,6 @@ int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
 
   if (cfg->backpressure_list_max == 0) cfg->backpressure_list_max = 1000;
   if (cfg->backpressure_timeout_ms == 0) cfg->backpressure_timeout_ms = 30000;
-  if (cfg->pending_stream_pool_size == 0) cfg->pending_stream_pool_size = 64;
-  if (cfg->pending_stream_timeout_ms == 0) cfg->pending_stream_timeout_ms = 10000;
 
   if (cfg->connection_idle_timeout_ms == 0) cfg->connection_idle_timeout_ms = 60000;
   if (cfg->maintenance_interval_ms == 0) cfg->maintenance_interval_ms = 1000;
@@ -228,10 +223,6 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
     sys->handleSlab = valk_slab_new(sizeof(valk_aio_handle_t), sys->config.max_handles);
   }
 
-  if (valk_pending_stream_queue_init(&sys->pending_streams, sys->config.pending_stream_pool_size) != 0) {
-    VALK_ERROR("Failed to allocate pending stream pool");
-    return nullptr;
-  }
   valk_backpressure_list_init(&sys->backpressure, sys->config.backpressure_list_max,
                                sys->config.backpressure_timeout_ms);
 
@@ -243,7 +234,6 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   sys->port_strs = calloc(sys->config.max_servers, 8);
   if (!sys->port_strs) {
     VALK_ERROR("Failed to allocate port strings buffer");
-    valk_pending_stream_queue_destroy(&sys->pending_streams);
     return nullptr;
   }
 
@@ -347,7 +337,6 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
     valk_slab_free(sys->handleSlab);
   }
 
-  valk_pending_stream_queue_destroy(&sys->pending_streams);
   free(sys->port_strs);
 
   if (sys->ops && sys->ops->loop) {

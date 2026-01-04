@@ -120,23 +120,21 @@ static test_response_t send_request(valk_aio_system_t *sys, int port,
   }
 
   // Connect
-  valk_future *fclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
-  valk_arc_box *clientBox = valk_future_await(fclient);
+  valk_async_handle_t *hclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
+  valk_lval_t *client_result = valk_async_handle_await(hclient);
 
-  if (clientBox->type != VALK_SUC) {
-    valk_arc_release(fclient);
-    valk_arc_release(clientBox);
+  if (LVAL_TYPE(client_result) == LVAL_ERR) {
     return result;
   }
 
-  valk_aio_http2_client *client = clientBox->item;
+  valk_aio_http2_client *client = client_result->ref.ptr;
 
   // Send request
-  valk_future *fres = valk_aio_http2_request_send(req, client);
-  valk_arc_box *res = valk_future_await(fres);
+  valk_async_handle_t *hres = valk_aio_http2_request_send(req, client);
+  valk_lval_t *res = valk_async_handle_await(hres);
 
-  if (res->type == VALK_SUC) {
-    valk_http2_response_t *response = res->item;
+  if (LVAL_TYPE(res) != LVAL_ERR) {
+    valk_http2_response_t *response = res->ref.ptr;
     // Copy status to result (avoid use-after-free)
     if (response->status) {
       strncpy(result.status, response->status, sizeof(result.status) - 1);
@@ -153,11 +151,6 @@ static test_response_t send_request(valk_aio_system_t *sys, int port,
     }
     result.success = true;
   }
-
-  valk_arc_release(res);
-  valk_arc_release(fres);
-  valk_arc_release(clientBox);
-  valk_arc_release(fclient);
 
   return result;
 }

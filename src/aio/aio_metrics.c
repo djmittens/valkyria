@@ -337,14 +337,6 @@ void valk_aio_system_stats_init(valk_aio_system_stats_t* s,
   atomic_store(&s->arena_pool_overflow, 0);
   atomic_store(&s->tcp_buffer_overflow, 0);
   atomic_store(&s->connections_rejected_load, 0);
-
-  // Pending stream backpressure metrics
-  atomic_store(&s->pending_streams_current, 0);
-  atomic_store(&s->pending_streams_total, 0);
-  atomic_store(&s->pending_streams_processed, 0);
-  atomic_store(&s->pending_streams_dropped, 0);
-  atomic_store(&s->pending_streams_wait_us, 0);
-  s->pending_streams_pool_size = 64;  // PENDING_STREAM_POOL_SIZE from aio_uv.c
 }
 
 // Server tracking
@@ -390,27 +382,6 @@ void valk_aio_system_stats_update_queue(valk_aio_system_stats_t* s,
   atomic_store(&s->pending_requests, pending_requests);
   atomic_store(&s->pending_responses, pending_responses);
   atomic_store(&s->queue_depth, pending_requests + pending_responses);
-}
-
-// Pending stream backpressure instrumentation
-void valk_aio_system_stats_on_pending_enqueue(valk_aio_system_stats_t* s) {
-  atomic_fetch_add(&s->pending_streams_current, 1);
-  atomic_fetch_add(&s->pending_streams_total, 1);
-}
-
-void valk_aio_system_stats_on_pending_dequeue(valk_aio_system_stats_t* s, u64 wait_us) {
-  atomic_fetch_sub(&s->pending_streams_current, 1);
-  atomic_fetch_add(&s->pending_streams_processed, 1);
-  atomic_fetch_add(&s->pending_streams_wait_us, wait_us);
-}
-
-void valk_aio_system_stats_on_pending_drop(valk_aio_system_stats_t* s) {
-  atomic_fetch_sub(&s->pending_streams_current, 1);
-  atomic_fetch_add(&s->pending_streams_dropped, 1);
-}
-
-void valk_aio_system_stats_update_pending_current(valk_aio_system_stats_t* s, u64 count) {
-  atomic_store(&s->pending_streams_current, count);
 }
 
 // Combined JSON rendering (HTTP metrics + AIO system stats)
@@ -488,6 +459,36 @@ char* valk_aio_combined_to_json(const valk_aio_metrics_t* m,
     if (!alloc) {
       free(buffer);
     }
+    return nullptr;
+  }
+
+  return buffer;
+}
+
+char* valk_aio_combined_to_json_compact(const valk_aio_metrics_t* m,
+                                         const valk_aio_system_stats_t* s,
+                                         valk_mem_allocator_t* alloc) {
+  u64 connections_active = atomic_load(&m->connections_active);
+  u64 streams_active = atomic_load(&m->streams_active);
+  u64 bytes_sent_total = atomic_load(&m->bytes_sent_total);
+  u64 bytes_recv_total = atomic_load(&m->bytes_recv_total);
+  u64 arenas_used = atomic_load(&s->arenas_used);
+  u64 tcp_buffers_used = atomic_load(&s->tcp_buffers_used);
+
+  double uptime_seconds = valk_aio_metrics_uptime_seconds(m);
+
+  u64 buffer_size = 256;
+  char* buffer = alloc ? valk_mem_allocator_alloc(alloc, buffer_size) : malloc(buffer_size);
+  if (!buffer) return nullptr;
+
+  int written = snprintf(buffer, buffer_size,
+    "{\"up\":%.1f,\"conn\":%llu,\"streams\":%llu,"
+    "\"arenas\":%llu,\"bufs\":%llu,\"tx\":%llu,\"rx\":%llu}",
+    uptime_seconds, connections_active, streams_active,
+    arenas_used, tcp_buffers_used, bytes_sent_total, bytes_recv_total);
+
+  if (written < 0 || (u64)written >= buffer_size) {
+    if (!alloc) free(buffer);
     return nullptr;
   }
 
@@ -855,6 +856,39 @@ char* valk_vm_metrics_to_json(const valk_vm_metrics_t* m,
 truncated:
   if (!alloc) free(buf);
   return nullptr;
+}
+
+char* valk_vm_metrics_to_json_compact(const valk_vm_metrics_t* m,
+                                       valk_mem_allocator_t* alloc) {
+  if (!m) return nullptr;
+
+  u64 buf_size = 512;
+  char* buf = alloc ? valk_mem_allocator_alloc(alloc, buf_size) : malloc(buf_size);
+  if (!buf) return nullptr;
+
+  double heap_util = m->gc_heap_total > 0
+    ? 100.0 * (double)m->gc_heap_used / (double)m->gc_heap_total
+    : 0.0;
+
+  int n = snprintf(buf, buf_size,
+    "{\"gc\":{\"heap_used\":%llu,\"heap_pct\":%.1f,\"cycles\":%llu},"
+    "\"interp\":{\"evals\":%llu,\"calls\":%llu,\"builtins\":%llu},"
+    "\"loop\":{\"iters\":%llu,\"events\":%llu}}",
+    (unsigned long long)m->gc_heap_used,
+    heap_util,
+    (unsigned long long)m->gc_cycles,
+    (unsigned long long)m->eval_total,
+    (unsigned long long)m->function_calls,
+    (unsigned long long)m->builtin_calls,
+    (unsigned long long)m->loop_count,
+    (unsigned long long)m->events_processed);
+
+  if (n < 0 || (u64)n >= buf_size) {
+    if (!alloc) free(buf);
+    return nullptr;
+  }
+
+  return buf;
 }
 
 // Export VM metrics in Prometheus format

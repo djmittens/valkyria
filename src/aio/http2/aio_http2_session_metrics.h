@@ -33,16 +33,6 @@ static inline void valk_http2_metrics_on_stream_start(
 #endif
 }
 
-static inline void valk_http2_metrics_on_arena_overflow_pending(
-    valk_aio_handle_t *conn) {
-#ifdef VALK_METRICS_ENABLED
-  atomic_fetch_add(&conn->http.server->sys->metrics_state->system_stats.arena_pool_overflow, 1);
-  valk_aio_system_stats_on_pending_enqueue(&conn->http.server->sys->metrics_state->system_stats);
-#else
-  UNUSED(conn);
-#endif
-}
-
 static inline void valk_http2_metrics_on_arena_overflow_rejected(
     valk_aio_handle_t *conn) {
 #ifdef VALK_METRICS_ENABLED
@@ -112,24 +102,6 @@ static inline void valk_http2_metrics_on_frame_send_eof(
 #endif
 }
 
-static inline void valk_http2_metrics_on_pending_stream_close(
-    valk_aio_handle_t *conn, i32 stream_id) {
-#ifdef VALK_METRICS_ENABLED
-  if (conn->http.server && conn->http.server->sys) {
-    valk_aio_metrics_on_stream_end(&conn->http.server->sys->metrics_state->metrics, true, 0, 0, 0);
-    valk_aio_system_stats_on_pending_drop(&conn->http.server->sys->metrics_state->system_stats);
-
-    valk_server_metrics_t* m = &conn->http.server->metrics;
-    valk_counter_v2_inc(m->requests_total);
-    valk_counter_v2_inc(m->requests_server_error);
-
-    VALK_INFO("Pending stream %d timeout: recorded as 5xx", stream_id);
-  }
-#else
-  UNUSED(conn); UNUSED(stream_id);
-#endif
-}
-
 static inline bool valk_http2_metrics_on_sse_stream_close(
     valk_aio_handle_t *conn, i32 stream_id) {
 #ifdef VALK_METRICS_ENABLED
@@ -153,7 +125,7 @@ static inline bool valk_http2_metrics_on_sse_stream_close(
 
 static inline void valk_http2_metrics_on_stream_close(
     valk_aio_handle_t *conn, valk_http2_server_request_t *req,
-    u32 error_code, bool was_sse_stream) {
+    u32 error_code, bool was_sse_stream, u64 stream_body_bytes) {
 #ifdef VALK_METRICS_ENABLED
   u64 end_time_us;
   if (req->response_complete && req->response_sent_time_us > 0) {
@@ -164,8 +136,9 @@ static inline void valk_http2_metrics_on_stream_close(
   u64 duration_us = end_time_us - req->start_time_us;
   bool is_error = (error_code != 0);
   u64 bytes_recv = req->bytes_recv + req->bodyLen;
+  u64 non_body_bytes_sent = req->bytes_sent > stream_body_bytes ? req->bytes_sent - stream_body_bytes : 0;
   valk_aio_metrics_on_stream_end(&conn->http.server->sys->metrics_state->metrics, is_error,
-                                   duration_us, req->bytes_sent, bytes_recv);
+                                   duration_us, non_body_bytes_sent, bytes_recv);
 
   valk_server_metrics_t* m = &conn->http.server->metrics;
 
@@ -186,10 +159,11 @@ static inline void valk_http2_metrics_on_stream_close(
     valk_histogram_v2_observe_us(m->sse_stream_duration, duration_us);
   }
 
-  valk_counter_v2_add(m->bytes_sent, req->bytes_sent);
+  u64 non_body_bytes = req->bytes_sent > stream_body_bytes ? req->bytes_sent - stream_body_bytes : 0;
+  valk_counter_v2_add(m->bytes_sent, non_body_bytes);
   valk_counter_v2_add(m->bytes_recv, bytes_recv);
 #else
-  UNUSED(conn); UNUSED(req); UNUSED(error_code); UNUSED(was_sse_stream);
+  UNUSED(conn); UNUSED(req); UNUSED(error_code); UNUSED(was_sse_stream); UNUSED(stream_body_bytes);
 #endif
 }
 
@@ -202,32 +176,33 @@ static inline void valk_http2_metrics_on_arena_release(
 #endif
 }
 
-static inline void valk_http2_metrics_on_async_request_timeout(
+static inline void valk_http2_metrics_on_client_close(
     valk_aio_handle_t *conn, valk_http2_server_request_t *req,
-    i32 stream_id, u32 error_code, bool was_sse_stream) {
+    i32 stream_id, u32 error_code, bool was_sse_stream, u64 stream_body_bytes) {
 #ifdef VALK_METRICS_ENABLED
   if (conn->http.server && conn->http.server->sys) {
     u64 end_time_us = uv_hrtime() / 1000;
     u64 duration_us = end_time_us - req->start_time_us;
-    bool is_error = !was_sse_stream && (error_code != 0);
-    valk_aio_metrics_on_stream_end(&conn->http.server->sys->metrics_state->metrics, is_error,
-                                     duration_us, req->bytes_sent, req->bytes_recv);
+    u64 non_body_bytes_sent = req->bytes_sent > stream_body_bytes ? req->bytes_sent - stream_body_bytes : 0;
+    
+    // Client-initiated closes are NOT errors - they're normal behavior
+    // (e.g., browser refresh, navigation away, connection reuse)
+    valk_aio_metrics_on_stream_end(&conn->http.server->sys->metrics_state->metrics, false,
+                                     duration_us, non_body_bytes_sent, req->bytes_recv);
 
     if (was_sse_stream) {
       valk_server_metrics_t* m = &conn->http.server->metrics;
       valk_histogram_v2_observe_us(m->sse_stream_duration, duration_us);
-      VALK_INFO("SSE stream %d closed by client (already counted as 2xx)", stream_id);
+      VALK_DEBUG("SSE stream %d closed by client (already counted as 2xx)", stream_id);
     } else {
-      valk_server_metrics_t* m = &conn->http.server->metrics;
-      valk_counter_v2_inc(m->requests_total);
-      valk_counter_v2_inc(m->requests_server_error);
-      valk_histogram_v2_observe_us(m->request_duration, duration_us);
-      VALK_INFO("Async request timeout: stream %d closed by client after %llu us",
-                stream_id, (unsigned long long)duration_us);
+      // Client closed before we sent a response - not an error, just incomplete
+      // Don't count as 5xx, just log for debugging
+      VALK_DEBUG("Stream %d closed by client before response (error_code=%u, duration=%llu us)",
+                stream_id, error_code, (unsigned long long)duration_us);
     }
   }
 #else
-  UNUSED(conn); UNUSED(req); UNUSED(stream_id); UNUSED(error_code); UNUSED(was_sse_stream);
+  UNUSED(conn); UNUSED(req); UNUSED(stream_id); UNUSED(error_code); UNUSED(was_sse_stream); UNUSED(stream_body_bytes);
 #endif
 }
 
@@ -243,25 +218,4 @@ static inline void valk_http2_metrics_on_conn_idle(
 #endif
 }
 
-static inline void valk_http2_metrics_on_pending_stream_acquire(
-    valk_aio_system_t *sys, u64 wait_ms) {
-#ifdef VALK_METRICS_ENABLED
-  VALK_METRICS_IF(sys) {
-    valk_aio_system_stats_on_arena_acquire(&VALK_SYSTEM_STATS(sys));
-    valk_aio_system_stats_on_pending_dequeue(&VALK_SYSTEM_STATS(sys), wait_ms * 1000);
-  }
-#else
-  UNUSED(sys); UNUSED(wait_ms);
-#endif
-}
 
-static inline void valk_http2_metrics_on_pending_request_init(
-    valk_http2_server_request_t *req, u64 wait_ms) {
-#ifdef VALK_METRICS_ENABLED
-  req->start_time_us = (uv_hrtime() / 1000) - (wait_ms * 1000);
-  req->bytes_sent = 0;
-  req->bytes_recv = 0;
-#else
-  UNUSED(req); UNUSED(wait_ms);
-#endif
-}

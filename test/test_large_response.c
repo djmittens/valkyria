@@ -39,8 +39,8 @@ typedef struct {
   valk_aio_system_t *sys;
   valk_async_handle_t *hserv;
   valk_lval_t *server_result;
-  valk_future *fclient;
-  valk_arc_box *clientBox;
+  valk_async_handle_t *hclient;
+  valk_lval_t *client_result;
   valk_aio_http2_client *client;
   int port;
 } test_context_t;
@@ -143,23 +143,22 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   // Connect client
   printf("[test] Connecting client...\n");
   fflush(stdout);
-  ctx->fclient = valk_aio_http2_connect(ctx->sys, "127.0.0.1", ctx->port, "");
-  ctx->clientBox = valk_future_await(ctx->fclient);
+  ctx->hclient = valk_aio_http2_connect(ctx->sys, "127.0.0.1", ctx->port, "");
+  ctx->client_result = valk_async_handle_await(ctx->hclient);
 
-  if (ctx->clientBox->type != VALK_SUC) {
-    VALK_FAIL("Failed to connect client: %s", (char *)ctx->clientBox->item);
+  if (LVAL_TYPE(ctx->client_result) == LVAL_ERR) {
+    VALK_FAIL("Failed to connect client: %s", ctx->client_result->str);
     return false;
   }
 
   printf("[test] Client connected\n");
   fflush(stdout);
-  ctx->client = ctx->clientBox->item;
+  ctx->client = ctx->client_result->ref.ptr;
   return true;
 }
 
 // Cleanup test context
 static void cleanup_test_context(test_context_t *ctx) {
-  if (ctx->fclient) valk_arc_release(ctx->fclient);
   if (ctx->sys) {
     valk_aio_stop(ctx->sys);
     valk_aio_wait_for_shutdown(ctx->sys);
@@ -193,17 +192,15 @@ static bool test_large_response_size(test_context_t *ctx, const char *path,
 
   printf("[test] Requesting %s (expecting %zu bytes)...\n", path, expected_size);
 
-  valk_future *fres = valk_aio_http2_request_send(req, ctx->client);
-  valk_arc_box *res = valk_future_await(fres);
+  valk_async_handle_t *hres = valk_aio_http2_request_send(req, ctx->client);
+  valk_lval_t *res = valk_async_handle_await(hres);
 
-  if (res->type != VALK_SUC) {
-    VALK_FAIL("Request to %s failed: %s", path, (char *)res->item);
-    // Note: don't release res - future owns it
-    valk_arc_release(fres);
+  if (LVAL_TYPE(res) == LVAL_ERR) {
+    VALK_FAIL("Request to %s failed: %s", path, res->str);
     return false;
   }
 
-  valk_http2_response_t *response = res->item;
+  valk_http2_response_t *response = res->ref.ptr;
   printf("[test] Response received: %llu bytes (expected: %llu)\n",
          (unsigned long long)response->bodyLen, (unsigned long long)expected_size);
 
@@ -212,7 +209,6 @@ static bool test_large_response_size(test_context_t *ctx, const char *path,
     ssize_t diff = (ssize_t)response->bodyLen - (ssize_t)expected_size;
     VALK_FAIL("Size mismatch for %s: expected %zu bytes, got %zu bytes (diff: %zd)",
               path, expected_size, response->bodyLen, diff);
-    valk_arc_release(fres);
     return false;
   }
 
@@ -220,22 +216,18 @@ static bool test_large_response_size(test_context_t *ctx, const char *path,
   if (response->bodyLen >= 64) {
     if (memcmp(response->body, EXPECTED_PATTERN, 64) != 0) {
       VALK_FAIL("Content mismatch at start of response for %s", path);
-      valk_arc_release(fres);
       return false;
     }
     // Check last 64 bytes to catch truncation issues
     size_t end_offset = response->bodyLen - 64;
     if (memcmp((char *)response->body + end_offset, EXPECTED_PATTERN, 64) != 0) {
       VALK_FAIL("Content mismatch at end of response for %s (offset %zu)", path, end_offset);
-      valk_arc_release(fres);
       return false;
     }
   }
 
   printf("[test] SUCCESS: %s response verified (%zu bytes)\n", path, expected_size);
 
-  // Note: don't release res - future owns it
-  valk_arc_release(fres);
   return true;
 }
 
@@ -364,21 +356,20 @@ void test_response_small(VALK_TEST_ARGS()) {
   printf("[test] Requesting /health (small response)...\n");
   fflush(stdout);
 
-  valk_future *fres = valk_aio_http2_request_send(req, ctx.client);
+  valk_async_handle_t *hres = valk_aio_http2_request_send(req, ctx.client);
   printf("[test] Waiting for response...\n");
   fflush(stdout);
-  valk_arc_box *res = valk_future_await(fres);
+  valk_lval_t *res = valk_async_handle_await(hres);
   printf("[test] Got response from await\n");
   fflush(stdout);
 
-  if (res->type != VALK_SUC) {
-    VALK_FAIL("Request to /health failed: %s", (char *)res->item);
-    valk_arc_release(fres);
+  if (LVAL_TYPE(res) == LVAL_ERR) {
+    VALK_FAIL("Request to /health failed: %s", res->str);
     cleanup_test_context(&ctx);
     return;
   }
 
-  valk_http2_response_t *response = res->item;
+  valk_http2_response_t *response = res->ref.ptr;
   printf("[test] Response received: %llu bytes\n", (unsigned long long)response->bodyLen);
   fflush(stdout);
 
@@ -393,8 +384,6 @@ void test_response_small(VALK_TEST_ARGS()) {
     fflush(stdout);
   }
 
-  // Note: don't release res - future owns it
-  valk_arc_release(fres);
   cleanup_test_context(&ctx);
 
   VALK_PASS();
