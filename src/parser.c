@@ -971,125 +971,8 @@ valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) {
   return result;
 }
 
-// Recursive tree-walker eval (original implementation, kept for reference)
-__attribute__((unused))
-static valk_lval_t* valk_lval_eval_recursive(valk_lenv_t* env, valk_lval_t* lval) {
-  VALK_GC_SAFE_POINT();
-  
-  atomic_fetch_add(&g_eval_metrics.evals_total, 1);
-
-  // Handle NULL gracefully
-  if (lval == NULL) {
-    return valk_lval_nil();
-  }
-
-  // Return literals as-is (self-evaluating forms)
-  // QEXPR is quoted data - it evaluates to itself, not executed as code
-  // LVAL_HANDLE is an async handle - it evaluates to itself
-  // Note: We skip coverage recording for self-evaluating types because they
-  // are not actually "executed" - they just pass through. This prevents
-  // false coverage hits when if/cond receive unevaluated branches as QEXPRs.
-  if (LVAL_TYPE(lval) == LVAL_NUM || LVAL_TYPE(lval) == LVAL_STR ||
-      LVAL_TYPE(lval) == LVAL_FUN || LVAL_TYPE(lval) == LVAL_ERR ||
-      LVAL_TYPE(lval) == LVAL_NIL || LVAL_TYPE(lval) == LVAL_REF ||
-      LVAL_TYPE(lval) == LVAL_QEXPR || LVAL_TYPE(lval) == LVAL_HANDLE) {
-    return lval;
-  }
-
-  // Symbols are looked up in the environment
-  // Record coverage for symbols since evaluating a symbol IS executing code on that line
-  if (LVAL_TYPE(lval) == LVAL_SYM) {
-    VALK_COVERAGE_RECORD_LVAL(lval);
-    // Keyword symbols (starting with :) are self-evaluating - return as-is
-    if (lval->str[0] == ':') {
-      return lval;
-    }
-    return valk_lenv_get(env, lval);
-  }
-
-  // Record coverage for cons cells (actual expressions being evaluated)
-  VALK_COVERAGE_RECORD_LVAL(lval);
-
-  // Cons cells are evaluated as function calls
-  if (LVAL_TYPE(lval) == LVAL_CONS) {
-    u64 count = valk_lval_list_count(lval);
-
-    // Empty list evaluates to nil
-    if (count == 0) {
-      return valk_lval_nil();
-    }
-
-    // Single element list - evaluate the element
-    // If it evaluates to a function, call it with no arguments
-    if (count == 1) {
-      valk_lval_t* first = valk_lval_eval(env, valk_lval_list_nth(lval, 0));
-      if (LVAL_TYPE(first) == LVAL_FUN) {
-        // Call function with empty args list
-        return valk_lval_eval_call(env, first, valk_lval_nil());
-      }
-      return first;
-    }
-
-    // Check for special forms BEFORE evaluating first element
-    valk_lval_t* first = lval->cons.head;
-    if (LVAL_TYPE(first) == LVAL_SYM) {
-      // quote: return argument unevaluated
-      if (strcmp(first->str, "quote") == 0) {
-        if (count != 2) {
-          return valk_lval_err("quote expects exactly 1 argument, got %zu",
-                               count - 1);
-        }
-        return valk_lval_list_nth(lval, 1);
-      }
-
-      // quasiquote: template with selective evaluation via unquote/unquote-splicing
-      if (strcmp(first->str, "quasiquote") == 0) {
-        if (count != 2) {
-          return valk_lval_err("quasiquote expects exactly 1 argument, got %zu",
-                               count - 1);
-        }
-        valk_lval_t* arg = valk_lval_list_nth(lval, 1);
-        return valk_quasiquote_expand(env, arg);
-      }
-
-      // Note: \ (lambda) and def are regular builtins, not special forms
-      // They receive evaluated arguments, which works with the prelude's macro
-      // patterns
-    }
-
-    // Multi-element list is function application
-    // First evaluate the function position
-    valk_lval_t* func = valk_lval_eval(env, first);
-    if (LVAL_TYPE(func) == LVAL_ERR) {
-      return func;
-    }
-
-    // Evaluate arguments (unless it's a macro)
-    valk_lval_t* tmp[count - 1];
-    valk_lval_t* h = lval->cons.tail;
-
-    for (u64 i = 0; i < (count - 1); i++) {
-      // Evaluate each argument
-      // NOTE: Don't propagate errors - allow functions like error? to receive
-      // error values as arguments
-      tmp[i] = valk_lval_eval(env, h->cons.head);
-      h = h->cons.tail;
-    }
-
-    // Call the function
-    valk_lval_t* result =
-        valk_lval_eval_call(env, func, valk_lval_list(tmp, count - 1));
-
-    return result;
-  }
-
-  // Unknown type
-  return valk_lval_err("Unknown value type in evaluation: %s",
-                       valk_ltype_name(LVAL_TYPE(lval)));
-}
-
-// Forward declaration - defined below
-valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args);
+// Forward declaration for apply helper
+static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args);
 
 // Apply function for iterative evaluator - returns thunk for user-defined functions
 static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args) {
@@ -1207,6 +1090,21 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
 
   return valk_eval_thunk_body(body, call_env, NULL, call_env);
 }
+
+// Helper macro: Set up thunk continuation from valk_eval_result_t
+// Pushes LAMBDA_DONE, optionally BODY_NEXT, and sets expr/cur_env
+#define SETUP_THUNK_CONTINUATION(res, stack_ptr, frame_env, expr_var, cur_env_var) do { \
+  valk_eval_stack_push((stack_ptr), (valk_cont_frame_t){.kind = CONT_LAMBDA_DONE, .env = (frame_env)}); \
+  if ((res).thunk.remaining_body != NULL && !valk_lval_list_is_empty((res).thunk.remaining_body)) { \
+    valk_eval_stack_push((stack_ptr), (valk_cont_frame_t){ \
+      .kind = CONT_BODY_NEXT, \
+      .env = (res).thunk.env, \
+      .body_next = {.remaining = (res).thunk.remaining_body, .call_env = (res).thunk.call_env} \
+    }); \
+  } \
+  (expr_var) = (res).thunk.expr; \
+  (cur_env_var) = (res).thunk.env; \
+} while(0)
 
 // Iterative evaluator - uses explicit stack instead of C recursion
 static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval) {
@@ -1365,16 +1263,7 @@ apply_cont:
               value = res.value;
               if (LVAL_TYPE(value) == LVAL_ERR) goto apply_cont;
             } else {
-              valk_eval_stack_push(&stack, (valk_cont_frame_t){.kind = CONT_LAMBDA_DONE, .env = frame.env});
-              if (res.thunk.remaining_body != NULL && !valk_lval_list_is_empty(res.thunk.remaining_body)) {
-                valk_eval_stack_push(&stack, (valk_cont_frame_t){
-                  .kind = CONT_BODY_NEXT,
-                  .env = res.thunk.env,
-                  .body_next = {.remaining = res.thunk.remaining_body, .call_env = res.thunk.call_env}
-                });
-              }
-              expr = res.thunk.expr;
-              cur_env = res.thunk.env;
+              SETUP_THUNK_CONTINUATION(res, &stack, frame.env, expr, cur_env);
               continue;
             }
           }
@@ -1392,16 +1281,7 @@ apply_cont:
               value = res.value;
               goto apply_cont;
             } else {
-              valk_eval_stack_push(&stack, (valk_cont_frame_t){.kind = CONT_LAMBDA_DONE, .env = frame.env});
-              if (res.thunk.remaining_body != NULL && !valk_lval_list_is_empty(res.thunk.remaining_body)) {
-                valk_eval_stack_push(&stack, (valk_cont_frame_t){
-                  .kind = CONT_BODY_NEXT,
-                  .env = res.thunk.env,
-                  .body_next = {.remaining = res.thunk.remaining_body, .call_env = res.thunk.call_env}
-                });
-              }
-              expr = res.thunk.expr;
-              cur_env = res.thunk.env;
+              SETUP_THUNK_CONTINUATION(res, &stack, frame.env, expr, cur_env);
               continue;
             }
           }
@@ -1437,16 +1317,7 @@ apply_cont:
               value = res.value;
               goto apply_cont;
             } else {
-              valk_eval_stack_push(&stack, (valk_cont_frame_t){.kind = CONT_LAMBDA_DONE, .env = frame.env});
-              if (res.thunk.remaining_body != NULL && !valk_lval_list_is_empty(res.thunk.remaining_body)) {
-                valk_eval_stack_push(&stack, (valk_cont_frame_t){
-                  .kind = CONT_BODY_NEXT,
-                  .env = res.thunk.env,
-                  .body_next = {.remaining = res.thunk.remaining_body, .call_env = res.thunk.call_env}
-                });
-              }
-              expr = res.thunk.expr;
-              cur_env = res.thunk.env;
+              SETUP_THUNK_CONTINUATION(res, &stack, frame.env, expr, cur_env);
               continue;
             }
           }
@@ -1537,6 +1408,7 @@ apply_cont:
       }
     }
   }
+#undef SETUP_THUNK_CONTINUATION
 }
 
 // Public eval function
@@ -1555,163 +1427,37 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
   
   LVAL_ASSERT_TYPE(args, func, LVAL_FUN);
 
-  // Track stack depth and function call metrics
-  u32 depth = atomic_fetch_add(&g_eval_metrics.stack_depth, 1) + 1;
-  if (depth > g_eval_metrics.stack_depth_max) {
-    g_eval_metrics.stack_depth_max = depth;
+  valk_eval_result_t res = valk_eval_apply_func_iter(env, func, args);
+  
+  if (!res.is_thunk) {
+    return res.value;
   }
-
-  if (func->fun.builtin) {
-    atomic_fetch_add(&g_eval_metrics.builtin_calls, 1);
-    valk_lval_t* result = func->fun.builtin(env, args);
-    atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
-    return result;
-  }
-
-  atomic_fetch_add(&g_eval_metrics.function_calls, 1);
-
-  // Track call depth for user-defined functions (not builtins)
-  valk_thread_ctx.call_depth++;
-
-  // Immutable function application - NO COPYING, NO MUTATION
-  // Walk formals and args together, creating bindings in new environment
-
-  u64 given = valk_lval_list_count(args);
-  u64 num_formals = valk_lval_list_count(func->fun.formals);
-
-  // Create new environment for bindings
-  // Hybrid scoping using fallback:
-  // - Primary lookup: call_env -> func->fun.env chain (lexical/captured
-  // bindings)
-  // - Fallback lookup: calling env chain (dynamic/caller's bindings)
-  // This allows closures to work (curry captures 'f') while also supporting
-  // dynamic access to caller's variables (select can see local 'n').
-  valk_lenv_t* call_env = valk_lenv_empty();
-  if (func->fun.env) {
-    // Function has captured environment - use as parent for lexical scoping
-    call_env->parent = func->fun.env;
-  } else {
-    // No captures - parent is calling environment
-    call_env->parent = env;
-  }
-
-  // Walk formals and args together without mutation
-  valk_lval_t* formal_iter = func->fun.formals;
-  valk_lval_t* arg_iter = args;
-  bool saw_varargs = false;
-
-  while (!valk_lval_list_is_empty(formal_iter) &&
-         !valk_lval_list_is_empty(arg_iter)) {
-    valk_lval_t* formal_sym = formal_iter->cons.head;
-
-    // Handle varargs
-    if (LVAL_TYPE(formal_sym) == LVAL_SYM &&
-        strcmp(formal_sym->str, "&") == 0) {
-      // Next formal is the varargs name
-      formal_iter = formal_iter->cons.tail;
-      if (valk_lval_list_is_empty(formal_iter)) {
-        valk_thread_ctx.call_depth--;
-        atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
-        return valk_lval_err(
-            "Invalid function format: & not followed by varargs name");
-      }
-      valk_lval_t* varargs_sym = formal_iter->cons.head;
-      valk_lval_t* varargs_list = valk_builtin_list(nullptr, arg_iter);
-      valk_lenv_put(call_env, varargs_sym, varargs_list);
-      saw_varargs = true;
-      arg_iter = valk_lval_nil();            // All remaining args consumed
-      formal_iter = formal_iter->cons.tail;  // Should be empty now
-      break;
-    }
-
-    // Regular formal - bind it
-    valk_lval_t* val = arg_iter->cons.head;
-    valk_lenv_put(call_env, formal_sym, val);
-
-    formal_iter = formal_iter->cons.tail;
-    arg_iter = arg_iter->cons.tail;
-  }
-
-  // Check if more args than formals (error unless varargs)
-  if (!valk_lval_list_is_empty(arg_iter) && !saw_varargs) {
-    valk_thread_ctx.call_depth--;
-    atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
-    return valk_lval_err(
-        "More arguments were given than required. Actual: %zu, Expected: %zu",
-        given, num_formals);
-  }
-
-  // Handle remaining formals (partial application or varargs default)
-  if (!valk_lval_list_is_empty(formal_iter)) {
-    // Check for varargs with no args provided
-    if (!valk_lval_list_is_empty(formal_iter) &&
-        LVAL_TYPE(formal_iter->cons.head) == LVAL_SYM &&
-        strcmp(formal_iter->cons.head->str, "&") == 0) {
-      formal_iter = formal_iter->cons.tail;
-      if (valk_lval_list_is_empty(formal_iter)) {
-        valk_thread_ctx.call_depth--;
-        atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
-        return valk_lval_err(
-            "Invalid function format: & not followed by varargs name");
-      }
-      valk_lval_t* varargs_sym = formal_iter->cons.head;
-      valk_lenv_put(call_env, varargs_sym, valk_lval_nil());
-      formal_iter = formal_iter->cons.tail;
-    }
-
-    // If still have unbound formals, return partially applied function
-    if (!valk_lval_list_is_empty(formal_iter)) {
-      valk_lval_t* partial = valk_mem_alloc(sizeof(valk_lval_t));
-      partial->flags =
-          LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-      VALK_SET_ORIGIN_ALLOCATOR(partial);
-      partial->fun.builtin = nullptr;
-      partial->fun.arity = func->fun.arity;  // Keep original arity
-      partial->fun.name = func->fun.name;    // Keep original name
-      partial->fun.env = call_env;
-      partial->fun.formals =
-          formal_iter;  // Remaining formals (immutable, can alias)
-      partial->fun.body = func->fun.body;  // Body (immutable, can alias)
-      valk_thread_ctx.call_depth--;
-      atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
-      return partial;
-    }
-  }
-
-  valk_lval_t* body = func->fun.body;
-  if (LVAL_TYPE(body) == LVAL_QEXPR) {
-    body = valk_qexpr_to_cons(body);
-  }
-
-  // If body is a list of expressions (first element is also a list),
-  // evaluate each expression and return the last result (implicit do)
-  if (valk_is_list_type(LVAL_TYPE(body)) && valk_lval_list_count(body) > 0) {
-    valk_lval_t* first_elem = body->cons.head;
-    // Check if this looks like a sequence (first element is a list, not a
-    // symbol) For QEXPR bodies, the first element being a CONS or QEXPR means
-    // we have multiple expressions to evaluate
-    if (valk_is_list_type(LVAL_TYPE(first_elem))) {
-      // Implicit do: evaluate each expression, return last
-      valk_lval_t* result = valk_lval_nil();
-      valk_lval_t* curr = body;
-      while (!valk_lval_list_is_empty(curr)) {
-        valk_lval_t* expr = curr->cons.head;
-        result = valk_lval_eval(call_env, expr);
-        if (LVAL_TYPE(result) == LVAL_ERR) {
-          valk_thread_ctx.call_depth--;
-          atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
-          return result;
-        }
-        curr = curr->cons.tail;
-      }
+  
+  if (res.thunk.remaining_body != NULL && !valk_lval_list_is_empty(res.thunk.remaining_body)) {
+    valk_lval_t* result = valk_lval_eval(res.thunk.env, res.thunk.expr);
+    if (LVAL_TYPE(result) == LVAL_ERR) {
       valk_thread_ctx.call_depth--;
       atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
       return result;
     }
+    
+    valk_lval_t* curr = res.thunk.remaining_body;
+    while (!valk_lval_list_is_empty(curr)) {
+      result = valk_lval_eval(res.thunk.call_env, curr->cons.head);
+      if (LVAL_TYPE(result) == LVAL_ERR) {
+        valk_thread_ctx.call_depth--;
+        atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+        return result;
+      }
+      curr = curr->cons.tail;
+    }
+    
+    valk_thread_ctx.call_depth--;
+    atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+    return result;
   }
-
-  // Single expression body - evaluate it
-  valk_lval_t* result = valk_lval_eval(call_env, body);
+  
+  valk_lval_t* result = valk_lval_eval(res.thunk.env, res.thunk.expr);
   valk_thread_ctx.call_depth--;
   atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
   return result;

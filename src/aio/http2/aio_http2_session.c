@@ -514,10 +514,11 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
     valk_http2_metrics_on_client_close(conn, req, stream_id, error_code, was_sse_stream, stream_body_bytes);
   }
 
-  conn->http.active_streams--;
-  VALK_DEBUG("%d active streams remaining", conn->http.active_streams);
-
-  valk_http2_metrics_on_conn_idle(conn);
+  if (req) {
+    conn->http.active_streams--;
+    VALK_DEBUG("%d active streams remaining", conn->http.active_streams);
+    valk_http2_metrics_on_conn_idle(conn);
+  }
 
   return 0;
 }

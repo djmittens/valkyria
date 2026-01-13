@@ -341,11 +341,13 @@ valk_counter_v2_t *valk_counter_get_or_create(const char *name,
 
 // Lock-free increment (updates LRU timestamp)
 static inline void valk_counter_v2_inc(valk_counter_v2_t *c) {
+  if (!c) return;
   atomic_fetch_add_explicit(&c->value, 1, memory_order_relaxed);
   atomic_store_explicit(&c->last_updated_us, valk_metrics_now_us(), memory_order_relaxed);
 }
 
 static inline void valk_counter_v2_add(valk_counter_v2_t *c, u64 n) {
+  if (!c) return;
   atomic_fetch_add_explicit(&c->value, n, memory_order_relaxed);
   atomic_store_explicit(&c->last_updated_us, valk_metrics_now_us(), memory_order_relaxed);
 }
@@ -360,21 +362,25 @@ valk_gauge_v2_t *valk_gauge_get_or_create(const char *name,
 
 // Gauge updates (all update LRU timestamp)
 static inline void valk_gauge_v2_set(valk_gauge_v2_t *g, i64 v) {
+  if (!g) return;
   atomic_store_explicit(&g->value, v, memory_order_relaxed);
   atomic_store_explicit(&g->last_updated_us, valk_metrics_now_us(), memory_order_relaxed);
 }
 
 static inline void valk_gauge_v2_inc(valk_gauge_v2_t *g) {
+  if (!g) return;
   atomic_fetch_add_explicit(&g->value, 1, memory_order_relaxed);
   atomic_store_explicit(&g->last_updated_us, valk_metrics_now_us(), memory_order_relaxed);
 }
 
 static inline void valk_gauge_v2_dec(valk_gauge_v2_t *g) {
+  if (!g) return;
   atomic_fetch_sub_explicit(&g->value, 1, memory_order_relaxed);
   atomic_store_explicit(&g->last_updated_us, valk_metrics_now_us(), memory_order_relaxed);
 }
 
 static inline void valk_gauge_v2_add(valk_gauge_v2_t *g, i64 n) {
+  if (!g) return;
   atomic_fetch_add_explicit(&g->value, n, memory_order_relaxed);
   atomic_store_explicit(&g->last_updated_us, valk_metrics_now_us(), memory_order_relaxed);
 }
@@ -392,6 +398,7 @@ valk_histogram_v2_t *valk_histogram_get_or_create(
 
 // Lock-free observation (updates LRU timestamp)
 static inline void valk_histogram_v2_observe_us(valk_histogram_v2_t *h, u64 us) {
+  if (!h) return;
   atomic_fetch_add_explicit(&h->count, 1, memory_order_relaxed);
   atomic_fetch_add_explicit(&h->sum_micros, us, memory_order_relaxed);
 

@@ -117,7 +117,6 @@ void valk_metrics_registry_destroy(void) {
 // FREE LIST HELPERS
 // ============================================================================
 
-// Pop a slot from free list (returns VALK_INVALID_SLOT if empty)
 static u32 free_list_pop(valk_free_list_t *fl, u32 *next_free) {
   u32 head = atomic_load(&fl->head);
   while (head != VALK_INVALID_SLOT) {
@@ -125,17 +124,44 @@ static u32 free_list_pop(valk_free_list_t *fl, u32 *next_free) {
     if (atomic_compare_exchange_weak(&fl->head, &head, next)) {
       return head;
     }
-    // CAS failed, head was updated - loop will retry with new head
   }
   return VALK_INVALID_SLOT;
 }
 
-// Push a slot onto free list
 static void free_list_push(valk_free_list_t *fl, u32 *next_free, u32 slot) {
   u32 head = atomic_load(&fl->head);
   do {
     next_free[slot] = head;
   } while (!atomic_compare_exchange_weak(&fl->head, &head, slot));
+}
+
+// ============================================================================
+// SHARED METRIC HELPERS
+// ============================================================================
+
+static valk_label_set_v2_t intern_labels(const valk_label_set_v2_t *labels) {
+  valk_label_set_v2_t ilabels = {0};
+  for (u8 i = 0; i < labels->count && i < VALK_MAX_LABELS_V2; i++) {
+    ilabels.labels[i].key = intern_string(labels->labels[i].key);
+    ilabels.labels[i].value = intern_string(labels->labels[i].value);
+    ilabels.count++;
+  }
+  ilabels.hash = hash_label_set(&ilabels);
+  return ilabels;
+}
+
+static u32 allocate_metric_slot(valk_free_list_t *fl, u32 *next_free,
+                                 _Atomic u64 *count, u64 max_slots) {
+  u32 idx = free_list_pop(fl, next_free);
+  if (idx != VALK_INVALID_SLOT) return idx;
+
+  idx = atomic_fetch_add(count, 1);
+  if (idx < max_slots) return idx;
+
+  atomic_fetch_sub(count, 1);
+  if (valk_metrics_evict_stale() == 0) return VALK_INVALID_SLOT;
+
+  return free_list_pop(fl, next_free);
 }
 
 // ============================================================================
@@ -146,43 +172,19 @@ valk_counter_v2_t *valk_counter_get_or_create(const char *name,
                                                const char *help,
                                                const valk_label_set_v2_t *labels) {
   const char *iname = intern_string(name);
-  valk_label_set_v2_t ilabels = {0};
+  valk_label_set_v2_t ilabels = intern_labels(labels);
 
-  // Intern all label strings
-  for (u8 i = 0; i < labels->count && i < VALK_MAX_LABELS_V2; i++) {
-    ilabels.labels[i].key = intern_string(labels->labels[i].key);
-    ilabels.labels[i].value = intern_string(labels->labels[i].value);
-    ilabels.count++;
-  }
-  ilabels.hash = hash_label_set(&ilabels);
-
-  // Search existing active slots (lock-free read)
   u64 count = atomic_load(&g_metrics.counter_count);
   for (u64 i = 0; i < count; i++) {
     valk_counter_v2_t *c = &g_metrics.counters[i];
     if (atomic_load(&c->active) && c->name == iname && labels_equal(&c->labels, &ilabels)) {
-      return c;  // Found existing
+      return c;
     }
   }
 
-  // Try to get a slot from free list first
-  u32 idx = free_list_pop(&g_metrics.counter_free, g_metrics.counter_next_free);
-  if (idx == VALK_INVALID_SLOT) {
-    // No free slots, allocate new
-    idx = atomic_fetch_add(&g_metrics.counter_count, 1);
-    if (idx >= VALK_REGISTRY_MAX_COUNTERS) {
-      atomic_fetch_sub(&g_metrics.counter_count, 1);
-      // Try eviction and retry once
-      if (valk_metrics_evict_stale() > 0) {
-        idx = free_list_pop(&g_metrics.counter_free, g_metrics.counter_next_free);
-        if (idx == VALK_INVALID_SLOT) {
-          return nullptr;  // Still no space
-        }
-      } else {
-        return nullptr;  // Registry full
-      }
-    }
-  }
+  u32 idx = allocate_metric_slot(&g_metrics.counter_free, g_metrics.counter_next_free,
+                                  &g_metrics.counter_count, VALK_REGISTRY_MAX_COUNTERS);
+  if (idx == VALK_INVALID_SLOT) return nullptr;
 
   valk_counter_v2_t *c = &g_metrics.counters[idx];
   u64 now = get_timestamp_us();
@@ -194,8 +196,8 @@ valk_counter_v2_t *valk_counter_get_or_create(const char *name,
   atomic_store(&c->last_value, 0);
   atomic_store(&c->last_timestamp, 0);
   atomic_store(&c->last_updated_us, now);
-  atomic_fetch_add(&c->generation, 1);  // Increment generation on reuse
-  c->evictable = true;  // Default to evictable
+  atomic_fetch_add(&c->generation, 1);
+  c->evictable = true;
   atomic_store(&c->active, true);
 
   return c;
@@ -209,43 +211,19 @@ valk_gauge_v2_t *valk_gauge_get_or_create(const char *name,
                                           const char *help,
                                           const valk_label_set_v2_t *labels) {
   const char *iname = intern_string(name);
-  valk_label_set_v2_t ilabels = {0};
+  valk_label_set_v2_t ilabels = intern_labels(labels);
 
-  // Intern all label strings
-  for (u8 i = 0; i < labels->count && i < VALK_MAX_LABELS_V2; i++) {
-    ilabels.labels[i].key = intern_string(labels->labels[i].key);
-    ilabels.labels[i].value = intern_string(labels->labels[i].value);
-    ilabels.count++;
-  }
-  ilabels.hash = hash_label_set(&ilabels);
-
-  // Search existing active slots (lock-free read)
   u64 count = atomic_load(&g_metrics.gauge_count);
   for (u64 i = 0; i < count; i++) {
     valk_gauge_v2_t *g = &g_metrics.gauges[i];
     if (atomic_load(&g->active) && g->name == iname && labels_equal(&g->labels, &ilabels)) {
-      return g;  // Found existing
+      return g;
     }
   }
 
-  // Try to get a slot from free list first
-  u32 idx = free_list_pop(&g_metrics.gauge_free, g_metrics.gauge_next_free);
-  if (idx == VALK_INVALID_SLOT) {
-    // No free slots, allocate new
-    idx = atomic_fetch_add(&g_metrics.gauge_count, 1);
-    if (idx >= VALK_REGISTRY_MAX_GAUGES) {
-      atomic_fetch_sub(&g_metrics.gauge_count, 1);
-      // Try eviction and retry once
-      if (valk_metrics_evict_stale() > 0) {
-        idx = free_list_pop(&g_metrics.gauge_free, g_metrics.gauge_next_free);
-        if (idx == VALK_INVALID_SLOT) {
-          return nullptr;  // Still no space
-        }
-      } else {
-        return nullptr;  // Registry full
-      }
-    }
-  }
+  u32 idx = allocate_metric_slot(&g_metrics.gauge_free, g_metrics.gauge_next_free,
+                                  &g_metrics.gauge_count, VALK_REGISTRY_MAX_GAUGES);
+  if (idx == VALK_INVALID_SLOT) return nullptr;
 
   valk_gauge_v2_t *g = &g_metrics.gauges[idx];
   u64 now = get_timestamp_us();
@@ -257,8 +235,8 @@ valk_gauge_v2_t *valk_gauge_get_or_create(const char *name,
   atomic_store(&g->last_value, 0);
   atomic_store(&g->last_timestamp, 0);
   atomic_store(&g->last_updated_us, now);
-  atomic_fetch_add(&g->generation, 1);  // Increment generation on reuse
-  g->evictable = true;  // Default to evictable
+  atomic_fetch_add(&g->generation, 1);
+  g->evictable = true;
   atomic_store(&g->active, true);
 
   return g;
@@ -276,16 +254,8 @@ valk_histogram_v2_t *valk_histogram_get_or_create(
     const valk_label_set_v2_t *labels) {
 
   const char *iname = intern_string(name);
-  valk_label_set_v2_t ilabels = {0};
+  valk_label_set_v2_t ilabels = intern_labels(labels);
 
-  for (u8 i = 0; i < labels->count && i < VALK_MAX_LABELS_V2; i++) {
-    ilabels.labels[i].key = intern_string(labels->labels[i].key);
-    ilabels.labels[i].value = intern_string(labels->labels[i].value);
-    ilabels.count++;
-  }
-  ilabels.hash = hash_label_set(&ilabels);
-
-  // Search existing active slots
   u64 count = atomic_load(&g_metrics.histogram_count);
   for (u64 i = 0; i < count; i++) {
     valk_histogram_v2_t *h = &g_metrics.histograms[i];
@@ -294,24 +264,9 @@ valk_histogram_v2_t *valk_histogram_get_or_create(
     }
   }
 
-  // Try to get a slot from free list first
-  u32 idx = free_list_pop(&g_metrics.histogram_free, g_metrics.histogram_next_free);
-  if (idx == VALK_INVALID_SLOT) {
-    // No free slots, allocate new
-    idx = atomic_fetch_add(&g_metrics.histogram_count, 1);
-    if (idx >= VALK_REGISTRY_MAX_HISTOGRAMS) {
-      atomic_fetch_sub(&g_metrics.histogram_count, 1);
-      // Try eviction and retry once
-      if (valk_metrics_evict_stale() > 0) {
-        idx = free_list_pop(&g_metrics.histogram_free, g_metrics.histogram_next_free);
-        if (idx == VALK_INVALID_SLOT) {
-          return nullptr;  // Still no space
-        }
-      } else {
-        return nullptr;  // Registry full
-      }
-    }
-  }
+  u32 idx = allocate_metric_slot(&g_metrics.histogram_free, g_metrics.histogram_next_free,
+                                  &g_metrics.histogram_count, VALK_REGISTRY_MAX_HISTOGRAMS);
+  if (idx == VALK_INVALID_SLOT) return nullptr;
 
   valk_histogram_v2_t *h = &g_metrics.histograms[idx];
   u64 now = get_timestamp_us();
@@ -320,11 +275,9 @@ valk_histogram_v2_t *valk_histogram_get_or_create(
   h->help = intern_string(help);
   h->labels = ilabels;
 
-  // Set bucket bounds
   h->bucket_count = bound_count > VALK_MAX_BUCKETS ? VALK_MAX_BUCKETS : bound_count;
   memcpy(h->bucket_bounds, bounds, h->bucket_count * sizeof(double));
 
-  // Initialize atomic counters
   for (u64 i = 0; i <= h->bucket_count; i++) {
     atomic_store(&h->buckets[i], 0);
     h->last_buckets[i] = 0;
@@ -335,10 +288,9 @@ valk_histogram_v2_t *valk_histogram_get_or_create(
   h->last_sum_micros = 0;
   h->last_timestamp = 0;
 
-  // LRU fields
   atomic_store(&h->last_updated_us, now);
-  atomic_fetch_add(&h->generation, 1);  // Increment generation on reuse
-  h->evictable = true;  // Default to evictable
+  atomic_fetch_add(&h->generation, 1);
+  h->evictable = true;
   atomic_store(&h->active, true);
 
   return h;
@@ -348,80 +300,69 @@ valk_histogram_v2_t *valk_histogram_get_or_create(
 // EVICTION
 // ============================================================================
 
-// Evict stale metrics (called when registry is under pressure)
-// Returns number of metrics evicted
+static u64 evict_stale_metrics_of_type(void *array, u64 elem_size, u64 count,
+                                        u64 active_offset, u64 evictable_offset,
+                                        u64 last_updated_offset,
+                                        valk_free_list_t *fl, u32 *next_free,
+                                        u64 now, u64 threshold) {
+  u64 evicted = 0;
+  for (u64 i = 0; i < count; i++) {
+    char *m = (char *)array + i * elem_size;
+    _Atomic bool *active = (_Atomic bool *)(m + active_offset);
+    bool *evictable = (bool *)(m + evictable_offset);
+    _Atomic u64 *last_updated = (_Atomic u64 *)(m + last_updated_offset);
+
+    if (!atomic_load(active) || !*evictable) continue;
+    if (now - atomic_load(last_updated) > threshold) {
+      atomic_store(active, false);
+      free_list_push(fl, next_free, i);
+      evicted++;
+    }
+  }
+  return evicted;
+}
+
 u64 valk_metrics_evict_stale(void) {
   u64 now = get_timestamp_us();
   u64 threshold = g_metrics.eviction_threshold_us;
-  u64 evicted = 0;
-  u64 counters_evicted = 0;
-  u64 gauges_evicted = 0;
-  u64 histograms_evicted = 0;
-  u64 summaries_evicted = 0;
 
-  // Evict stale counters
-  u64 counter_count = atomic_load(&g_metrics.counter_count);
-  for (u64 i = 0; i < counter_count; i++) {
-    valk_counter_v2_t *c = &g_metrics.counters[i];
-    if (!atomic_load(&c->active)) continue;
-    if (!c->evictable) continue;
+  u64 counters_evicted = evict_stale_metrics_of_type(
+      g_metrics.counters, sizeof(valk_counter_v2_t),
+      atomic_load(&g_metrics.counter_count),
+      offsetof(valk_counter_v2_t, active),
+      offsetof(valk_counter_v2_t, evictable),
+      offsetof(valk_counter_v2_t, last_updated_us),
+      &g_metrics.counter_free, g_metrics.counter_next_free,
+      now, threshold);
 
-    u64 last_updated = atomic_load(&c->last_updated_us);
-    if (now - last_updated > threshold) {
-      // Mark as inactive and push to free list
-      atomic_store(&c->active, false);
-      free_list_push(&g_metrics.counter_free, g_metrics.counter_next_free, i);
-      counters_evicted++;
-    }
-  }
+  u64 gauges_evicted = evict_stale_metrics_of_type(
+      g_metrics.gauges, sizeof(valk_gauge_v2_t),
+      atomic_load(&g_metrics.gauge_count),
+      offsetof(valk_gauge_v2_t, active),
+      offsetof(valk_gauge_v2_t, evictable),
+      offsetof(valk_gauge_v2_t, last_updated_us),
+      &g_metrics.gauge_free, g_metrics.gauge_next_free,
+      now, threshold);
 
-  // Evict stale gauges
-  u64 gauge_count = atomic_load(&g_metrics.gauge_count);
-  for (u64 i = 0; i < gauge_count; i++) {
-    valk_gauge_v2_t *g = &g_metrics.gauges[i];
-    if (!atomic_load(&g->active)) continue;
-    if (!g->evictable) continue;
+  u64 histograms_evicted = evict_stale_metrics_of_type(
+      g_metrics.histograms, sizeof(valk_histogram_v2_t),
+      atomic_load(&g_metrics.histogram_count),
+      offsetof(valk_histogram_v2_t, active),
+      offsetof(valk_histogram_v2_t, evictable),
+      offsetof(valk_histogram_v2_t, last_updated_us),
+      &g_metrics.histogram_free, g_metrics.histogram_next_free,
+      now, threshold);
 
-    u64 last_updated = atomic_load(&g->last_updated_us);
-    if (now - last_updated > threshold) {
-      atomic_store(&g->active, false);
-      free_list_push(&g_metrics.gauge_free, g_metrics.gauge_next_free, i);
-      gauges_evicted++;
-    }
-  }
+  u64 summaries_evicted = evict_stale_metrics_of_type(
+      g_metrics.summaries, sizeof(valk_summary_v2_t),
+      atomic_load(&g_metrics.summary_count),
+      offsetof(valk_summary_v2_t, active),
+      offsetof(valk_summary_v2_t, evictable),
+      offsetof(valk_summary_v2_t, last_updated_us),
+      &g_metrics.summary_free, g_metrics.summary_next_free,
+      now, threshold);
 
-  // Evict stale histograms
-  u64 histogram_count = atomic_load(&g_metrics.histogram_count);
-  for (u64 i = 0; i < histogram_count; i++) {
-    valk_histogram_v2_t *h = &g_metrics.histograms[i];
-    if (!atomic_load(&h->active)) continue;
-    if (!h->evictable) continue;
-
-    u64 last_updated = atomic_load(&h->last_updated_us);
-    if (now - last_updated > threshold) {
-      atomic_store(&h->active, false);
-      free_list_push(&g_metrics.histogram_free, g_metrics.histogram_next_free, i);
-      histograms_evicted++;
-    }
-  }
-
-  // Evict stale summaries
-  u64 summary_count = atomic_load(&g_metrics.summary_count);
-  for (u64 i = 0; i < summary_count; i++) {
-    valk_summary_v2_t *s = &g_metrics.summaries[i];
-    if (!atomic_load(&s->active)) continue;
-    if (!s->evictable) continue;
-
-    u64 last_updated = atomic_load(&s->last_updated_us);
-    if (now - last_updated > threshold) {
-      atomic_store(&s->active, false);
-      free_list_push(&g_metrics.summary_free, g_metrics.summary_next_free, i);
-      summaries_evicted++;
-    }
-  }
-
-  // Update eviction tracking counters
-  evicted = counters_evicted + gauges_evicted + histograms_evicted + summaries_evicted;
+  u64 evicted = counters_evicted + gauges_evicted + histograms_evicted + summaries_evicted;
   if (evicted > 0) {
     atomic_fetch_add(&g_metrics.evictions_total, evicted);
     if (counters_evicted > 0)

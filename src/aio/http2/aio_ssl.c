@@ -172,41 +172,72 @@ int valk_aio_ssl_connect(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
 
 void valk_aio_ssl_free(valk_aio_ssl_t *ssl) {
   if (!ssl || !ssl->ssl) {
-    return;  // Already freed or never initialized
+    return;
   }
 
   SSL_free_buffers(ssl->ssl);
-
-  // Seems like the ssl object itself frees the bio's associated?
-  // I hate this library desing, should try wolf ssl or something with better
-  // memory management BIO_free_all(ssl->write_bio);
-  // BIO_free_all(ssl->read_bio);
-
   SSL_free(ssl->ssl);
 
-  // Clear all pointers to prevent use-after-free
   ssl->ssl = nullptr;
-  ssl->read_bio = nullptr;   // Freed by SSL_free
-  ssl->write_bio = nullptr;  // Freed by SSL_free
+  ssl->read_bio = nullptr;
+  ssl->write_bio = nullptr;
+}
+
+static valk_err_e ssl_drain_write_bio(BIO *write_bio, valk_buffer_t *Out) {
+  int n;
+  do {
+    u64 space = Out->capacity - Out->count;
+    if (space == 0) break;
+
+    u64 pending = BIO_ctrl_pending(write_bio);
+    if (pending == 0) break;
+
+    u64 to_read = (space > pending) ? pending : space;
+    n = BIO_read(write_bio, &((char *)Out->items)[Out->count], to_read);
+    if (n > 0) {
+      Out->count += n;
+    } else if (!BIO_should_retry(write_bio)) {
+      return VALK_ERR_SSL_READ;
+    }
+  } while (n > 0);
+  return VALK_ERR_SUCCESS;
+}
+
+static valk_err_e ssl_handle_syscall_error(int n, const char *op) {
+  unsigned long err_code = ERR_get_error();
+  if (err_code != 0) {
+    char err_buf[256];
+    ERR_error_string_n(err_code, err_buf, sizeof(err_buf));
+    VALK_ERROR("SSL %s SYSCALL error: %s", op, err_buf);
+    return VALK_ERR_SSL_SYSCALL;
+  }
+  if (n == 0) {
+    VALK_DEBUG("SSL %s: peer closed connection", op);
+    return VALK_ERR_SSL_PEER_CLOSED;
+  }
+  if (errno == EAGAIN || errno == EWOULDBLOCK) {
+    return VALK_ERR_SUCCESS;
+  }
+  if (errno == 0) {
+    VALK_DEBUG("SSL %s: connection reset by peer", op);
+    return VALK_ERR_SSL_PEER_CLOSED;
+  }
+  VALK_ERROR("SSL %s: I/O error (errno=%d: %s)", op, errno, strerror(errno));
+  return VALK_ERR_SSL_SYSCALL;
+}
+
+static bool ssl_context_valid(valk_aio_ssl_t *ssl) {
+  return ssl && ssl->ssl && ssl->read_bio && ssl->write_bio;
+}
+
+static bool ssl_buffer_valid(valk_buffer_t *buf) {
+  return buf && buf->items && buf->capacity > 0 && buf->count <= buf->capacity;
 }
 
 valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {
-  // Null safety check - prevent use-after-free crashes
-  if (!ssl || !ssl->ssl || !ssl->read_bio || !ssl->write_bio) {
-    return VALK_ERR_SSL_INVALID;
-  }
-
-  // Validate output buffer
-  if (!Out || !Out->items || Out->capacity == 0) {
-    VALK_ERROR("SSL handshake: invalid output buffer (Out=%p, items=%p, cap=%zu)",
-               (void *)Out, Out ? Out->items : nullptr, Out ? Out->capacity : 0);
-    return VALK_ERR_SSL_INVALID;
-  }
-
-  // Check for buffer overflow condition
-  if (Out->count > Out->capacity) {
-    VALK_ERROR("SSL handshake: buffer count (%zu) exceeds capacity (%zu)",
-               Out->count, Out->capacity);
+  if (!ssl_context_valid(ssl)) return VALK_ERR_SSL_INVALID;
+  if (!ssl_buffer_valid(Out)) {
+    VALK_ERROR("SSL handshake: invalid output buffer");
     return VALK_ERR_SSL_INVALID;
   }
 
@@ -216,56 +247,14 @@ valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {
   switch (ssl_err) {
   case SSL_ERROR_WANT_WRITE:
   case SSL_ERROR_WANT_READ: {
-    // Check how much data is pending in write BIO before reading
-    u64 pending = BIO_ctrl_pending(ssl->write_bio);
-    if (pending == 0) {
-      // No data to read, just return
-      break;
-    }
-
-    do {
-      u64 available = Out->capacity - Out->count;
-      if (available == 0) {
-        VALK_ERROR("SSL handshake: output buffer full (count=%zu, cap=%zu)",
-                   Out->count, Out->capacity);
-        return VALK_ERR_SSL_BUFFER_FULL;
-      }
-
-      // Limit read size to what's actually pending to avoid reading garbage
-      u64 to_read = (available > pending) ? pending : available;
-
-      n = BIO_read(ssl->write_bio, &((char *)Out->items)[Out->count], to_read);
-      if (n > 0) {
-        Out->count += n;
-        pending = BIO_ctrl_pending(ssl->write_bio);  // Update pending for next iteration
-      } else if (!BIO_should_retry(ssl->write_bio)) {
-        return VALK_ERR_SSL_READ;
-      }
-    } while (n > 0 && pending > 0);
+    valk_err_e drain_err = ssl_drain_write_bio(ssl->write_bio, Out);
+    if (drain_err != VALK_ERR_SUCCESS) return drain_err;
     break;
   }
   case SSL_ERROR_SYSCALL: {
-    unsigned long err_code = ERR_get_error();
-    if (err_code != 0) {
-      char err_buf[256];
-      ERR_error_string_n(err_code, err_buf, sizeof(err_buf));
-      VALK_ERROR("SSL handshake SYSCALL error: %s", err_buf);
-      return VALK_ERR_SSL_SYSCALL;
-    } else if (n == 0) {
-      // Peer closed connection - not an error under load, just cleanup
-      VALK_DEBUG("SSL handshake: peer closed connection");
-      return VALK_ERR_SSL_PEER_CLOSED;
-    } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      // Non-blocking socket needs more data - not an error
-      break;
-    } else if (errno == 0) {
-      // Peer reset connection - common under load testing
-      VALK_DEBUG("SSL handshake: connection reset by peer");
-      return VALK_ERR_SSL_PEER_CLOSED;
-    } else {
-      VALK_ERROR("SSL handshake: I/O error (errno=%d: %s)", errno, strerror(errno));
-      return VALK_ERR_SSL_SYSCALL;
-    }
+    valk_err_e syscall_err = ssl_handle_syscall_error(n, "handshake");
+    if (syscall_err != VALK_ERR_SUCCESS) return syscall_err;
+    break;
   }
   case SSL_ERROR_SSL: {
     unsigned long err_code = ERR_get_error();
@@ -284,77 +273,44 @@ valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {
 valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
                                 valk_buffer_t *Out, void *arg,
                                 void(onRead)(void *, const valk_buffer_t *)) {
-  // Null safety checks - prevent use-after-free crashes
-  if (!ssl || !ssl->ssl || !ssl->read_bio || !ssl->write_bio) {
-    return VALK_ERR_SSL_INVALID;
-  }
+  if (!ssl_context_valid(ssl)) return VALK_ERR_SSL_INVALID;
 
   int n, err;
 
   if (In->count > 0) {
     n = BIO_write(ssl->read_bio, In->items, In->count);
-    VALK_ASSERT(n >= 0,
-                "OpenSSL BIO_write must be able to write, got error %d",
-                n);
-
-    VALK_ASSERT((size_t)n == In->count,
-                "OpenSSL BIO_write, should write exactly once, because it should "
-                "grow to accomodate %llu out of %llu",
-                (unsigned long long)n, (unsigned long long)In->count);
-
+    VALK_ASSERT(n >= 0, "OpenSSL BIO_write failed: %d", n);
+    VALK_ASSERT((size_t)n == In->count, "BIO_write partial: %d of %llu",
+                n, (unsigned long long)In->count);
     In->count = 0;
   } else {
-    // No new data - check if there's pending data to process
-    // SSL_pending: data already decrypted, waiting to be read
-    // BIO_ctrl_pending: data still encrypted in read BIO
     int ssl_pending = SSL_pending(ssl->ssl);
     int bio_pending = (int)BIO_ctrl_pending(ssl->read_bio);
     if (ssl_pending == 0 && bio_pending == 0 && !SSL_is_init_finished(ssl->ssl)) {
       return VALK_ERR_SUCCESS;
     }
-    // If there IS pending data (encrypted or decrypted), fall through to process it
   }
 
   if (!SSL_is_init_finished(ssl->ssl)) {
     err = valk_aio_ssl_handshake(ssl, Out);
-    if (err) {
-      return err;
-    }
-    if (!SSL_is_init_finished(ssl->ssl)) {
-      // Still need to do init
-      return VALK_ERR_SSL_RE_NEGOTIATE;
-    }
+    if (err) return err;
+    if (!SSL_is_init_finished(ssl->ssl)) return VALK_ERR_SSL_RE_NEGOTIATE;
   }
 
   do {
-    // Reuse the incoming data buffer, now that we no longer need it
     n = In->count = SSL_read(ssl->ssl, In->items, In->capacity);
-    if (n > 0) {
-      onRead(arg, In);
-    }
+    if (n > 0) onRead(arg, In);
   } while (n > 0);
 
-  // Consume the incoming buffer
   In->count = 0;
 
   switch (SSL_get_error(ssl->ssl, n)) {
   case SSL_ERROR_WANT_READ:
-  case SSL_ERROR_WANT_WRITE:
-    do {
-      u64 remaining = Out->capacity - Out->count;
-      if (remaining == 0) {
-        VALK_DEBUG("SSL output buffer full (%llu bytes), will retry later",
-                   (unsigned long long)Out->count);
-        break;
-      }
-      n = BIO_read(ssl->write_bio, &((char *)Out->items)[Out->count], remaining);
-      if (n > 0) {
-        Out->count += n;
-      } else if (!BIO_should_retry(ssl->write_bio)) {
-        return VALK_ERR_SSL_READ;
-      }
-    } while (n > 0);
+  case SSL_ERROR_WANT_WRITE: {
+    valk_err_e drain_err = ssl_drain_write_bio(ssl->write_bio, Out);
+    if (drain_err != VALK_ERR_SUCCESS) return drain_err;
     break;
+  }
   case SSL_ERROR_SYSCALL: {
     unsigned long err_code = ERR_get_error();
     if (err_code != 0) {
@@ -370,57 +326,44 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
   }
   case SSL_ERROR_ZERO_RETURN:
   case SSL_ERROR_NONE:
+    break;
   }
   return VALK_ERR_SUCCESS;
 }
 
+static void update_input_buffer(valk_buffer_t *In, u64 consumed) {
+  if (consumed < In->count) {
+    memmove(In->items, &((char *)In->items)[consumed], In->count - consumed);
+    In->count -= consumed;
+  } else {
+    In->count = 0;
+  }
+}
+
 valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
                                 valk_buffer_t *Out) {
-  // Null safety checks - prevent use-after-free crashes
   if (!ssl || !ssl->ssl || !ssl->write_bio) {
-    VALK_ERROR("SSL encrypt: invalid SSL context (ssl=%p, ssl->ssl=%p, write_bio=%p)",
-               (void *)ssl, ssl ? (void *)ssl->ssl : nullptr,
-               ssl ? (void *)ssl->write_bio : nullptr);
+    VALK_ERROR("SSL encrypt: invalid SSL context");
     return VALK_ERR_SSL_INVALID;
   }
-
-  // Validate input buffer
   if (!In || !In->items) {
     VALK_ERROR("SSL encrypt: invalid input buffer");
     return VALK_ERR_SSL_INVALID;
   }
-
-  // Validate output buffer
-  if (!Out || !Out->items || Out->capacity == 0) {
-    VALK_ERROR("SSL encrypt: invalid output buffer (Out=%p, items=%p, cap=%zu)",
-               (void *)Out, Out ? Out->items : nullptr, Out ? Out->capacity : 0);
+  if (!ssl_buffer_valid(Out)) {
+    VALK_ERROR("SSL encrypt: invalid output buffer");
     return VALK_ERR_SSL_INVALID;
   }
 
-  // Check for buffer overflow condition
-  if (Out->count > Out->capacity) {
-    VALK_ERROR("SSL encrypt: buffer count (%zu) exceeds capacity (%zu)",
-               Out->count, Out->capacity);
-    return VALK_ERR_SSL_INVALID;
-  }
+  if (!SSL_is_init_finished(ssl->ssl)) return VALK_ERR_SUCCESS;
 
-  if (!SSL_is_init_finished(ssl->ssl)) {
-    return VALK_ERR_SUCCESS;
-  }
-
-  // Reserve some headroom for SSL overhead (records, padding, MAC)
-  // TLS 1.3 record overhead is ~22 bytes per record, but we use a larger
-  // margin to be safe with fragmentation
   const u64 SSL_HEADROOM = 1024;
-
   u64 len = In->count;
   u64 consumed = 0;
+
   while (len > 0) {
-    // Check if output buffer is getting full - stop early to avoid overflow
     if (Out->count + SSL_HEADROOM >= Out->capacity) {
-      VALK_TRACE("SSL encrypt: output buffer near capacity (%zu/%zu), "
-                 "stopping with %zu bytes remaining",
-                 Out->count, Out->capacity, len);
+      VALK_TRACE("SSL encrypt: buffer near capacity, stopping");
       break;
     }
 
@@ -432,7 +375,6 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
     case SSL_ERROR_WANT_READ:
       break;
     default:
-      // we just drop everything
       In->count = 0;
       return VALK_ERR_SSL_ENCRYPT;
     }
@@ -440,58 +382,16 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
     if (n > 0) {
       len -= n;
       consumed += n;
-      // Now stuff the encrypted result into the output buffer
-      do {
-        u64 space = Out->capacity - Out->count;
-        if (space == 0) {
-          // Output buffer completely full - stop here
-          // Remaining encrypted data stays in BIO for next call
-          VALK_TRACE("SSL encrypt: output buffer full, %zu bytes consumed",
-                     consumed);
-          // Update In to reflect how much we consumed
-          if (consumed < In->count) {
-            memmove(In->items, &((char *)In->items)[consumed],
-                    In->count - consumed);
-            In->count -= consumed;
-          } else {
-            In->count = 0;
-          }
-          return VALK_ERR_SUCCESS;
-        }
-
-        // Check pending data in BIO before reading
-        u64 pending = BIO_ctrl_pending(ssl->write_bio);
-        if (pending == 0) {
-          break;  // No data to read
-        }
-
-        // Limit read to available space
-        if (space > pending) {
-          space = pending;
-        }
-
-        n = BIO_read(ssl->write_bio, &((char *)Out->items)[Out->count], space);
-        if (n > 0) {
-          Out->count += n;
-        } else if (!BIO_should_retry(ssl->write_bio)) {
-          VALK_ERROR("SSL encrypt: BIO_read failed");
-          return VALK_ERR_SSL_READ;
-        }
-      } while (n > 0);
+      valk_err_e drain_err = ssl_drain_write_bio(ssl->write_bio, Out);
+      if (drain_err != VALK_ERR_SUCCESS) {
+        update_input_buffer(In, consumed);
+        return drain_err;
+      }
     }
-    if (n == 0) {
-      break;
-    }
+    if (n == 0) break;
   }
 
-  // Update In to reflect how much we consumed
-  if (consumed < In->count) {
-    memmove(In->items, &((char *)In->items)[consumed], In->count - consumed);
-    In->count -= consumed;
-  } else {
-    In->count = 0;
-  }
-
+  update_input_buffer(In, consumed);
   return VALK_ERR_SUCCESS;
 }
 

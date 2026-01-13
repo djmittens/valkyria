@@ -27,6 +27,9 @@ def check_coverage_requirements(runtime_files: dict, stdlib_files: dict, show_pa
     failures = []
     passes = []
     
+    all_filenames = [p.replace("src/", "") for p in list(runtime_files.keys()) + list(stdlib_files.keys())]
+    max_width = max(len(f) for f in all_filenames) if all_filenames else 30
+    
     print("=" * 80)
     print("VALKYRIA RUNTIME COVERAGE GATE CHECK")
     print("=" * 80)
@@ -41,7 +44,7 @@ def check_coverage_requirements(runtime_files: dict, stdlib_files: dict, show_pa
         branch_pass = fc.branch_coverage_pct >= RUNTIME_REQUIREMENT_BRANCH
         status = "✓" if (line_pass and branch_pass) else "✗"
         
-        line = f"  {filename:30s} {status}  {fc.line_coverage_pct:5.1f}% line, {fc.branch_coverage_pct:5.1f}% branch"
+        line = f"  {filename:{max_width}s} {status}  {fc.line_coverage_pct:5.1f}% line, {fc.branch_coverage_pct:5.1f}% branch"
         
         if not line_pass or not branch_pass:
             gaps = []
@@ -62,7 +65,7 @@ def check_coverage_requirements(runtime_files: dict, stdlib_files: dict, show_pa
         branch_pass = fc.branch_coverage_pct >= RUNTIME_REQUIREMENT_BRANCH
         status = "✓" if (expr_pass and branch_pass) else "✗"
         
-        line = f"  {filename:30s} {status}  {expr_pct:5.1f}% expr, {fc.branch_coverage_pct:5.1f}% branch"
+        line = f"  {filename:{max_width}s} {status}  {expr_pct:5.1f}% expr, {fc.branch_coverage_pct:5.1f}% branch"
         
         if not expr_pass or not branch_pass:
             gaps = []

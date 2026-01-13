@@ -592,17 +592,6 @@ static void mark_and_push(valk_lval_t *obj, void *ctx);
 static void mark_children(valk_lval_t *obj, valk_gc_mark_queue_t *queue);
 static void mark_env_parallel(valk_lenv_t *env, valk_gc_mark_queue_t *queue);
 
-static void mark_and_push(valk_lval_t *obj, void *ctx) {
-  valk_gc_mark_queue_t *queue = ctx;
-  
-  if (obj == nullptr) return;
-  if (!valk_gc_try_mark(obj)) return;
-  
-  if (!valk_gc_mark_queue_push(queue, obj)) {
-    mark_children(obj, queue);
-  }
-}
-
 static void mark_env_parallel(valk_lenv_t *env, valk_gc_mark_queue_t *queue) {
   if (env == nullptr) return;
   
@@ -614,23 +603,20 @@ static void mark_env_parallel(valk_lenv_t *env, valk_gc_mark_queue_t *queue) {
 }
 
 static void mark_children(valk_lval_t *obj, valk_gc_mark_queue_t *queue) {
+  if (obj == nullptr) return;
   switch (LVAL_TYPE(obj)) {
     case LVAL_CONS:
     case LVAL_QEXPR:
       mark_and_push(obj->cons.head, queue);
       mark_and_push(obj->cons.tail, queue);
       break;
-      
     case LVAL_FUN:
       if (obj->fun.builtin == nullptr) {
         mark_and_push(obj->fun.formals, queue);
         mark_and_push(obj->fun.body, queue);
-        if (obj->fun.env) {
-          mark_env_parallel(obj->fun.env, queue);
-        }
+        if (obj->fun.env) mark_env_parallel(obj->fun.env, queue);
       }
       break;
-      
     case LVAL_HANDLE:
       if (obj->async.handle) {
         mark_and_push(obj->async.handle->on_complete, queue);
@@ -638,14 +624,22 @@ static void mark_children(valk_lval_t *obj, valk_gc_mark_queue_t *queue) {
         mark_and_push(obj->async.handle->on_cancel, queue);
         mark_and_push(obj->async.handle->result, queue);
         mark_and_push(obj->async.handle->error, queue);
-        if (obj->async.handle->env) {
-          mark_env_parallel(obj->async.handle->env, queue);
-        }
+        if (obj->async.handle->env) mark_env_parallel(obj->async.handle->env, queue);
       }
       break;
-      
     default:
       break;
+  }
+}
+
+static void mark_and_push(valk_lval_t *obj, void *ctx) {
+  valk_gc_mark_queue_t *queue = ctx;
+  
+  if (obj == nullptr) return;
+  if (!valk_gc_try_mark(obj)) return;
+  
+  if (!valk_gc_mark_queue_push(queue, obj)) {
+    mark_children(obj, queue);
   }
 }
 
@@ -1540,6 +1534,96 @@ static void valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env);
 static void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
 static void valk_fix_env_pointers(valk_evacuation_ctx_t* ctx, valk_lenv_t* env);
 
+static inline void evac_value_and_process_env(valk_evacuation_ctx_t* ctx, valk_lval_t** ptr) {
+  valk_lval_t* val = *ptr;
+  if (val == nullptr) return;
+  valk_lval_t* new_val = valk_evacuate_value(ctx, val);
+  if (new_val != val) {
+    *ptr = new_val;
+  } else if (LVAL_TYPE(val) == LVAL_FUN && val->fun.builtin == nullptr && val->fun.env != nullptr) {
+    valk_evacuate_env(ctx, val->fun.env);
+  }
+}
+
+static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
+  if (valk_thread_ctx.eval_stack == nullptr) return;
+  
+  valk_eval_stack_t* stack = (valk_eval_stack_t*)valk_thread_ctx.eval_stack;
+  for (u64 i = 0; i < stack->count; i++) {
+    valk_cont_frame_t* frame = &stack->frames[i];
+    switch (frame->kind) {
+      case CONT_EVAL_ARGS:
+        evac_value_and_process_env(ctx, &frame->eval_args.func);
+        evac_value_and_process_env(ctx, &frame->eval_args.remaining);
+        break;
+      case CONT_COLLECT_ARG:
+        evac_value_and_process_env(ctx, &frame->collect_arg.func);
+        evac_value_and_process_env(ctx, &frame->collect_arg.remaining);
+        for (u64 j = 0; j < frame->collect_arg.count; j++) {
+          evac_value_and_process_env(ctx, &frame->collect_arg.args[j]);
+        }
+        break;
+      case CONT_IF_BRANCH:
+        evac_value_and_process_env(ctx, &frame->if_branch.true_branch);
+        evac_value_and_process_env(ctx, &frame->if_branch.false_branch);
+        break;
+      case CONT_DO_NEXT:
+        evac_value_and_process_env(ctx, &frame->do_next.remaining);
+        break;
+      case CONT_SELECT_CHECK:
+        evac_value_and_process_env(ctx, &frame->select_check.result_expr);
+        evac_value_and_process_env(ctx, &frame->select_check.remaining);
+        evac_value_and_process_env(ctx, &frame->select_check.original_args);
+        break;
+      case CONT_BODY_NEXT:
+        evac_value_and_process_env(ctx, &frame->body_next.remaining);
+        break;
+      default:
+        break;
+    }
+  }
+  
+  evac_value_and_process_env(ctx, &valk_thread_ctx.eval_expr);
+  evac_value_and_process_env(ctx, &valk_thread_ctx.eval_value);
+}
+
+static void evac_checkpoint_global_roots(valk_evacuation_ctx_t* ctx) {
+  pthread_mutex_lock(&valk_gc_global_roots.lock);
+  fprintf(stderr, "[TRACE] Checkpoint: processing %llu global roots\n",
+          (unsigned long long)valk_gc_global_roots.count);
+  for (u64 i = 0; i < valk_gc_global_roots.count; i++) {
+    valk_lval_t** root_ptr = valk_gc_global_roots.roots[i];
+    valk_lval_t* val = atomic_load_explicit((_Atomic(valk_lval_t*)*)root_ptr, memory_order_acquire);
+    if (val != nullptr) {
+      fprintf(stderr, "[TRACE] Checkpoint: root[%llu] ptr=%p val=%p type=%u alloc=%u\n",
+              (unsigned long long)i, (void*)root_ptr, (void*)val,
+              (unsigned)LVAL_TYPE(val), (unsigned)LVAL_ALLOC(val));
+      valk_lval_t* new_val = valk_evacuate_value(ctx, val);
+      if (new_val != val) {
+        atomic_store_explicit((_Atomic(valk_lval_t*)*)root_ptr, new_val, memory_order_release);
+        fprintf(stderr, "[TRACE] Checkpoint: root[%llu] UPDATED %p -> %p\n",
+                (unsigned long long)i, (void*)val, (void*)new_val);
+      } else if (LVAL_TYPE(val) == LVAL_FUN && val->fun.builtin == nullptr && val->fun.env != nullptr) {
+        valk_evacuate_env(ctx, val->fun.env);
+      }
+    }
+  }
+  pthread_mutex_unlock(&valk_gc_global_roots.lock);
+}
+
+static void fix_checkpoint_global_roots(valk_evacuation_ctx_t* ctx) {
+  pthread_mutex_lock(&valk_gc_global_roots.lock);
+  for (u64 i = 0; i < valk_gc_global_roots.count; i++) {
+    valk_lval_t** root_ptr = valk_gc_global_roots.roots[i];
+    valk_lval_t* val = atomic_load_explicit((_Atomic(valk_lval_t*)*)root_ptr, memory_order_acquire);
+    if (val != nullptr && LVAL_TYPE(val) == LVAL_FUN &&
+        val->fun.builtin == nullptr && val->fun.env != nullptr) {
+      valk_fix_env_pointers(ctx, val->fun.env);
+    }
+  }
+  pthread_mutex_unlock(&valk_gc_global_roots.lock);
+}
+
 // ============================================================================
 // Phase 1: Copy Values from Scratch to Heap
 // ============================================================================
@@ -2105,96 +2189,20 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
 
   evac_ctx_init(&ctx);
 
-  // Helper: evacuate a value and also process its env if it's a heap lambda
-  #define EVACUATE_AND_PROCESS_ENV(ptr) do { \
-    valk_lval_t *_val = *(ptr); \
-    if (_val != nullptr) { \
-      valk_lval_t *_new = valk_evacuate_value(&ctx, _val); \
-      if (_new != _val) { \
-        *(ptr) = _new; \
-      } else if (LVAL_TYPE(_val) == LVAL_FUN && _val->fun.builtin == nullptr && _val->fun.env != nullptr) { \
-        valk_evacuate_env(&ctx, _val->fun.env); \
-      } \
-    } \
-  } while(0)
-
   // Phase 1: Evacuate all reachable values from root environment and global roots
   VALK_DEBUG("Checkpoint Phase 1: Starting evacuation from scratch arena");
   if (root_env != nullptr) {
     valk_evacuate_env(&ctx, root_env);
   }
 
-  // Also evacuate values from global roots (interval timers, stream callbacks, etc.)
-  // Use atomic operations because event loop thread may read these concurrently
-  pthread_mutex_lock(&valk_gc_global_roots.lock);
-  fprintf(stderr, "[TRACE] Checkpoint: processing %llu global roots\n", (unsigned long long)valk_gc_global_roots.count);
-  for (u64 i = 0; i < valk_gc_global_roots.count; i++) {
-    valk_lval_t **root_ptr = valk_gc_global_roots.roots[i];
-    valk_lval_t *val = atomic_load_explicit((_Atomic(valk_lval_t *)*)root_ptr, memory_order_acquire);
-    if (val != nullptr) {
-      fprintf(stderr, "[TRACE] Checkpoint: root[%llu] ptr=%p val=%p type=%u alloc=%u\n",
-              (unsigned long long)i, (void*)root_ptr, (void*)val, 
-              (unsigned)LVAL_TYPE(val), (unsigned)LVAL_ALLOC(val));
-      valk_lval_t *new_val = valk_evacuate_value(&ctx, val);
-      if (new_val != val) {
-        atomic_store_explicit((_Atomic(valk_lval_t *)*)root_ptr, new_val, memory_order_release);
-        fprintf(stderr, "[TRACE] Checkpoint: root[%llu] UPDATED %p -> %p\n", (unsigned long long)i, (void*)val, (void*)new_val);
-      } else if (LVAL_TYPE(val) == LVAL_FUN && val->fun.builtin == nullptr && val->fun.env != nullptr) {
-        valk_evacuate_env(&ctx, val->fun.env);
-      }
-    }
-  }
-  pthread_mutex_unlock(&valk_gc_global_roots.lock);
-
-  // Evacuate values in the current eval stack (continuation frames)
-  if (valk_thread_ctx.eval_stack != nullptr) {
-    valk_eval_stack_t *stack = (valk_eval_stack_t *)valk_thread_ctx.eval_stack;
-    for (u64 i = 0; i < stack->count; i++) {
-      valk_cont_frame_t *frame = &stack->frames[i];
-      switch (frame->kind) {
-        case CONT_EVAL_ARGS:
-          EVACUATE_AND_PROCESS_ENV(&frame->eval_args.func);
-          EVACUATE_AND_PROCESS_ENV(&frame->eval_args.remaining);
-          break;
-        case CONT_COLLECT_ARG:
-          EVACUATE_AND_PROCESS_ENV(&frame->collect_arg.func);
-          EVACUATE_AND_PROCESS_ENV(&frame->collect_arg.remaining);
-          for (u64 j = 0; j < frame->collect_arg.count; j++) {
-            EVACUATE_AND_PROCESS_ENV(&frame->collect_arg.args[j]);
-          }
-          break;
-        case CONT_IF_BRANCH:
-          EVACUATE_AND_PROCESS_ENV(&frame->if_branch.true_branch);
-          EVACUATE_AND_PROCESS_ENV(&frame->if_branch.false_branch);
-          break;
-        case CONT_DO_NEXT:
-          EVACUATE_AND_PROCESS_ENV(&frame->do_next.remaining);
-          break;
-        case CONT_SELECT_CHECK:
-          EVACUATE_AND_PROCESS_ENV(&frame->select_check.result_expr);
-          EVACUATE_AND_PROCESS_ENV(&frame->select_check.remaining);
-          EVACUATE_AND_PROCESS_ENV(&frame->select_check.original_args);
-          break;
-        case CONT_BODY_NEXT:
-          EVACUATE_AND_PROCESS_ENV(&frame->body_next.remaining);
-          break;
-        default:
-          break;
-      }
-    }
-  }
-  
-  // Evacuate the current expr and value being evaluated
-  EVACUATE_AND_PROCESS_ENV(&valk_thread_ctx.eval_expr);
-  EVACUATE_AND_PROCESS_ENV(&valk_thread_ctx.eval_value);
+  evac_checkpoint_global_roots(&ctx);
+  evac_checkpoint_eval_stack(&ctx);
 
   // Process worklist until empty (evacuate children)
   while (ctx.worklist_count > 0) {
     valk_lval_t* v = evac_worklist_pop(&ctx);
     valk_evacuate_children(&ctx, v);
   }
-
-  #undef EVACUATE_AND_PROCESS_ENV
 
   VALK_DEBUG("Checkpoint Phase 1: Evacuated %zu values (%zu bytes)",
              ctx.values_copied, ctx.bytes_copied);
@@ -2210,21 +2218,7 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
     valk_fix_env_pointers(&ctx, root_env);
   }
 
-  // Fix pointers in global roots' environments
-  // This is critical: even if a global root callback was already on heap
-  // (not evacuated), its environment may contain pointers to scratch values
-  // that were evacuated and need fixing
-  // Use atomic load because event loop thread may read these concurrently
-  pthread_mutex_lock(&valk_gc_global_roots.lock);
-  for (u64 i = 0; i < valk_gc_global_roots.count; i++) {
-    valk_lval_t **root_ptr = valk_gc_global_roots.roots[i];
-    valk_lval_t *val = atomic_load_explicit((_Atomic(valk_lval_t *)*)root_ptr, memory_order_acquire);
-    if (val != nullptr && LVAL_TYPE(val) == LVAL_FUN && 
-        val->fun.builtin == nullptr && val->fun.env != nullptr) {
-      valk_fix_env_pointers(&ctx, val->fun.env);
-    }
-  }
-  pthread_mutex_unlock(&valk_gc_global_roots.lock);
+  fix_checkpoint_global_roots(&ctx);
 
   VALK_DEBUG("Checkpoint Phase 2: Fixed %zu pointers", ctx.pointers_fixed);
 
@@ -3044,9 +3038,7 @@ static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx2_t *ctx) {
 
 static void mark_lval2(valk_lval_t *lval, valk_gc_mark_ctx2_t *ctx) {
   if (lval == nullptr) return;
-  
   if (!mark_ptr_only(lval, ctx)) return;
-  
   if (!valk_gc_mark_queue_push(ctx->queue, lval)) {
     mark_children2(lval, ctx);
   }
@@ -3055,42 +3047,34 @@ static void mark_lval2(valk_lval_t *lval, valk_gc_mark_ctx2_t *ctx) {
 static void mark_env2(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx) {
   while (env != nullptr) {
     if (!mark_ptr_only(env, ctx)) return;
-    
     mark_ptr_only(env->symbols.items, ctx);
     mark_ptr_only(env->vals.items, ctx);
-    
     for (u64 i = 0; i < env->symbols.count; i++) {
       mark_ptr_only(env->symbols.items[i], ctx);
     }
     for (u64 i = 0; i < env->vals.count; i++) {
       mark_lval2(env->vals.items[i], ctx);
     }
-    
     env = env->parent;
   }
 }
 
 static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
   if (obj == nullptr) return;
-  
   switch (LVAL_TYPE(obj)) {
     case LVAL_CONS:
     case LVAL_QEXPR:
       mark_lval2(obj->cons.head, ctx);
       mark_lval2(obj->cons.tail, ctx);
       break;
-      
     case LVAL_FUN:
       if (obj->fun.builtin == nullptr) {
         mark_lval2(obj->fun.formals, ctx);
         mark_lval2(obj->fun.body, ctx);
-        if (obj->fun.env) {
-          mark_env2(obj->fun.env, ctx);
-        }
+        if (obj->fun.env) mark_env2(obj->fun.env, ctx);
       }
       mark_ptr_only(obj->fun.name, ctx);
       break;
-      
     case LVAL_HANDLE:
       if (obj->async.handle) {
         mark_lval2(obj->async.handle->on_complete, ctx);
@@ -3098,22 +3082,17 @@ static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
         mark_lval2(obj->async.handle->on_cancel, ctx);
         mark_lval2(obj->async.handle->result, ctx);
         mark_lval2(obj->async.handle->error, ctx);
-        if (obj->async.handle->env) {
-          mark_env2(obj->async.handle->env, ctx);
-        }
+        if (obj->async.handle->env) mark_env2(obj->async.handle->env, ctx);
       }
       break;
-      
     case LVAL_SYM:
     case LVAL_STR:
     case LVAL_ERR:
       mark_ptr_only(obj->str, ctx);
       break;
-      
     case LVAL_REF:
       mark_ptr_only(obj->ref.type, ctx);
       break;
-      
     default:
       break;
   }
@@ -3409,22 +3388,9 @@ static bool valk_gc_heap2_check_termination(void) {
 static void mark_children2_parallel(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx);
 static void mark_env2_parallel(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx);
 
-static bool mark_ptr_only_parallel(void *ptr, valk_gc_mark_ctx2_t *ctx) {
-  if (ptr == nullptr) return false;
-  
-  valk_gc_ptr_location_t loc;
-  if (valk_gc_ptr_to_location(ctx->heap, ptr, &loc)) {
-    return valk_gc_page2_try_mark(loc.page, loc.slot);
-  } else {
-    return valk_gc_mark_large_object(ctx->heap, ptr);
-  }
-}
-
 static void mark_lval2_parallel(valk_lval_t *lval, valk_gc_mark_ctx2_t *ctx) {
   if (lval == nullptr) return;
-  
-  if (!mark_ptr_only_parallel(lval, ctx)) return;
-  
+  if (!mark_ptr_only(lval, ctx)) return;
   if (!valk_gc_mark_queue_push(ctx->queue, lval)) {
     mark_children2_parallel(lval, ctx);
   }
@@ -3432,43 +3398,35 @@ static void mark_lval2_parallel(valk_lval_t *lval, valk_gc_mark_ctx2_t *ctx) {
 
 static void mark_env2_parallel(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx) {
   while (env != nullptr) {
-    if (!mark_ptr_only_parallel(env, ctx)) return;
-    
-    mark_ptr_only_parallel(env->symbols.items, ctx);
-    mark_ptr_only_parallel(env->vals.items, ctx);
-    
+    if (!mark_ptr_only(env, ctx)) return;
+    mark_ptr_only(env->symbols.items, ctx);
+    mark_ptr_only(env->vals.items, ctx);
     for (u64 i = 0; i < env->symbols.count; i++) {
-      mark_ptr_only_parallel(env->symbols.items[i], ctx);
+      mark_ptr_only(env->symbols.items[i], ctx);
     }
     for (u64 i = 0; i < env->vals.count; i++) {
       mark_lval2_parallel(env->vals.items[i], ctx);
     }
-    
     env = env->parent;
   }
 }
 
 static void mark_children2_parallel(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
   if (obj == nullptr) return;
-  
   switch (LVAL_TYPE(obj)) {
     case LVAL_CONS:
     case LVAL_QEXPR:
       mark_lval2_parallel(obj->cons.head, ctx);
       mark_lval2_parallel(obj->cons.tail, ctx);
       break;
-      
     case LVAL_FUN:
       if (obj->fun.builtin == nullptr) {
         mark_lval2_parallel(obj->fun.formals, ctx);
         mark_lval2_parallel(obj->fun.body, ctx);
-        if (obj->fun.env) {
-          mark_env2_parallel(obj->fun.env, ctx);
-        }
+        if (obj->fun.env) mark_env2_parallel(obj->fun.env, ctx);
       }
-      mark_ptr_only_parallel(obj->fun.name, ctx);
+      mark_ptr_only(obj->fun.name, ctx);
       break;
-      
     case LVAL_HANDLE:
       if (obj->async.handle) {
         mark_lval2_parallel(obj->async.handle->on_complete, ctx);
@@ -3476,22 +3434,17 @@ static void mark_children2_parallel(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) 
         mark_lval2_parallel(obj->async.handle->on_cancel, ctx);
         mark_lval2_parallel(obj->async.handle->result, ctx);
         mark_lval2_parallel(obj->async.handle->error, ctx);
-        if (obj->async.handle->env) {
-          mark_env2_parallel(obj->async.handle->env, ctx);
-        }
+        if (obj->async.handle->env) mark_env2_parallel(obj->async.handle->env, ctx);
       }
       break;
-      
     case LVAL_SYM:
     case LVAL_STR:
     case LVAL_ERR:
-      mark_ptr_only_parallel(obj->str, ctx);
+      mark_ptr_only(obj->str, ctx);
       break;
-      
     case LVAL_REF:
-      mark_ptr_only_parallel(obj->ref.type, ctx);
+      mark_ptr_only(obj->ref.type, ctx);
       break;
-      
     default:
       break;
   }

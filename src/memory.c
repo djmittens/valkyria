@@ -665,6 +665,61 @@ void valk_process_memory_collect(valk_process_memory_t *pm) {
 
 #if defined(__linux__)
 
+typedef enum {
+  SMAPS_REGION_HEAP,
+  SMAPS_REGION_STACK,
+  SMAPS_REGION_ANON,
+  SMAPS_REGION_FILE,
+  SMAPS_REGION_URING,
+  SMAPS_REGION_SPECIAL,
+} smaps_region_type_e;
+
+static smaps_region_type_e categorize_smaps_region(const char *name) {
+  if (strstr(name, "[heap]")) {
+    return SMAPS_REGION_HEAP;
+  }
+  if (strstr(name, "[stack]") || strstr(name, "stack:")) {
+    return SMAPS_REGION_STACK;
+  }
+  if (strstr(name, "[vdso]") || strstr(name, "[vvar]") || strstr(name, "[vsyscall]")) {
+    return SMAPS_REGION_SPECIAL;
+  }
+  if (strstr(name, "io_uring")) {
+    return SMAPS_REGION_URING;
+  }
+  if (name[0] == '\0') {
+    return SMAPS_REGION_ANON;
+  }
+  if (name[0] == '/') {
+    return SMAPS_REGION_FILE;
+  }
+  return SMAPS_REGION_SPECIAL;
+}
+
+static const char *extract_smaps_pathname(const char *line, char *out_name, sz out_size) {
+  out_name[0] = '\0';
+  int spaces = 0;
+  const char *name_start = nullptr;
+  for (const char *p = line; *p; p++) {
+    if (*p == ' ') {
+      spaces++;
+      if (spaces == 5) {
+        while (*p == ' ') p++;
+        name_start = p;
+        break;
+      }
+    }
+  }
+  if (name_start) {
+    sz len = strlen(name_start);
+    if (len > 0 && name_start[len - 1] == '\n') len--;
+    if (len >= out_size) len = out_size - 1;
+    memcpy(out_name, name_start, len);
+    out_name[len] = '\0';
+  }
+  return out_name;
+}
+
 void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
   if (smaps == nullptr) return;
   memset(smaps, 0, sizeof(*smaps));
@@ -674,99 +729,36 @@ void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
 
   char line[512];
   char current_name[256] = {0};
-  bool is_heap = false;
-  bool is_stack = false;
-  bool is_anon = false;
-  bool is_file = false;
-  bool is_uring = false;
-  bool is_special = false;
+  smaps_region_type_e region_type = SMAPS_REGION_SPECIAL;
 
   while (fgets(line, sizeof(line), f)) {
-    // Region header line: "addr-addr perms offset dev inode pathname"
-    // Example: "7f560a600000-7f560a624000 r--p 00000000 00:1b 844871  /usr/lib/libc.so.6"
     if (line[0] != ' ' && strchr(line, '-')) {
-      // Reset flags for new region
-      is_heap = false;
-      is_stack = false;
-      is_anon = false;
-      is_file = false;
-      is_uring = false;
-      is_special = false;
-      current_name[0] = '\0';
+      extract_smaps_pathname(line, current_name, sizeof(current_name));
+      region_type = categorize_smaps_region(current_name);
 
-      // Find the pathname (after the inode)
-      // Format: addr-addr perms offset dev inode [pathname]
-      char *name_start = nullptr;
-      int spaces = 0;
-      for (char *p = line; *p; p++) {
-        if (*p == ' ') {
-          spaces++;
-          // After 5 spaces, we're at the pathname
-          if (spaces == 5) {
-            // Skip leading spaces
-            while (*p == ' ') p++;
-            name_start = p;
-            break;
-          }
-        }
-      }
-
-      if (name_start) {
-        // Remove trailing newline
-        char *nl = strchr(name_start, '\n');
-        if (nl) *nl = '\0';
-        strncpy(current_name, name_start, sizeof(current_name) - 1);
-      }
-
-      // Categorize the region
-      if (strstr(current_name, "[heap]")) {
-        is_heap = true;
-      } else if (strstr(current_name, "[stack]") || strstr(current_name, "stack:")) {
-        is_stack = true;
-      } else if (strstr(current_name, "[vdso]") || strstr(current_name, "[vvar]") ||
-                 strstr(current_name, "[vsyscall]")) {
-        is_special = true;
-      } else if (strstr(current_name, "io_uring")) {
-        is_uring = true;
-      } else if (current_name[0] == '\0') {
-        // Anonymous mapping (no pathname)
-        is_anon = true;
+      if (region_type == SMAPS_REGION_ANON) {
         smaps->anon_regions++;
-      } else if (current_name[0] == '/') {
-        // File-backed mapping
-        is_file = true;
+      } else if (region_type == SMAPS_REGION_FILE) {
         smaps->file_regions++;
-      } else {
-        is_special = true;
       }
     }
 
-    // Look for Rss line within a region
-    // Format: "Rss:               1234 kB"
     if (strncmp(line, "Rss:", 4) == 0) {
       u64 rss_kb = 0;
       if (sscanf(line, "Rss: %zu kB", &rss_kb) == 1) {
         u64 rss_bytes = rss_kb * 1024;
-
-        if (is_heap) {
-          smaps->heap_rss += rss_bytes;
-        } else if (is_stack) {
-          smaps->stack_rss += rss_bytes;
-        } else if (is_uring) {
-          smaps->uring_rss += rss_bytes;
-        } else if (is_anon) {
-          smaps->anon_rss += rss_bytes;
-        } else if (is_file) {
-          smaps->file_rss += rss_bytes;
-        } else if (is_special) {
-          smaps->other_rss += rss_bytes;
+        switch (region_type) {
+          case SMAPS_REGION_HEAP:   smaps->heap_rss += rss_bytes; break;
+          case SMAPS_REGION_STACK:  smaps->stack_rss += rss_bytes; break;
+          case SMAPS_REGION_URING:  smaps->uring_rss += rss_bytes; break;
+          case SMAPS_REGION_ANON:   smaps->anon_rss += rss_bytes; break;
+          case SMAPS_REGION_FILE:   smaps->file_rss += rss_bytes; break;
+          case SMAPS_REGION_SPECIAL: smaps->other_rss += rss_bytes; break;
         }
-
         smaps->total_rss += rss_bytes;
       }
     }
 
-    // Also check for Shmem (shared memory)
     if (strncmp(line, "Shmem:", 6) == 0) {
       u64 shmem_kb = 0;
       if (sscanf(line, "Shmem: %zu kB", &shmem_kb) == 1) {
@@ -934,9 +926,7 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
       }
       return np;
     }
-    case VALK_ALLOC_SLAB:
-      // slabs are all of the same size, make sure we dont try to resize it to
-      // something bigger than the slab
+    case VALK_ALLOC_SLAB: {
       sz slabSize = ((valk_slab_t *)self)->itemSize;
       VALK_ASSERT(
           new_size <= slabSize,
@@ -944,6 +934,7 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
           "memory than fits in a slab\n %zu wanted, but %zu is the size",
           new_size, slabSize);
       return ptr;
+    }
     case VALK_ALLOC_GC_HEAP: {
       return valk_gc_heap2_realloc((valk_gc_heap2_t *)self, ptr, new_size);
     }
@@ -966,6 +957,7 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
   switch (self->type) {
     case VALK_ALLOC_NULL:
       VALK_RAISE("Free on nullptr allocator %p", ptr);
+      return;
     case VALK_ALLOC_ARENA:
       return;
     case VALK_ALLOC_SLAB:
