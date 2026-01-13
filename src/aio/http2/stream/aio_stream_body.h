@@ -2,6 +2,7 @@
 #define VALK_AIO_STREAM_BODY_H
 
 #include "aio.h"
+#include "memory.h"
 #include <nghttp2/nghttp2.h>
 #include <stdbool.h>
 
@@ -43,6 +44,9 @@ struct valk_stream_body {
   u64 pending_offset;
   u64 pending_capacity;
 
+  valk_mem_arena_t *arena;
+  valk_arena_checkpoint_t chunk_checkpoint;
+
   bool data_deferred;
   u64 bytes_sent;
   u64 chunks_sent;
@@ -66,7 +70,8 @@ valk_stream_body_t *valk_stream_body_new(
     valk_aio_handle_t *conn,
     nghttp2_session *session,
     i32 stream_id,
-    nghttp2_data_provider2 *data_prd_out);
+    nghttp2_data_provider2 *data_prd_out,
+    valk_mem_arena_t *arena);
 
 void valk_stream_body_close(valk_stream_body_t *body);
 void valk_stream_body_free(valk_stream_body_t *body);

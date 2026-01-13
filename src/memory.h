@@ -313,6 +313,10 @@ typedef struct {
   sz overflow_bytes;          // Bytes allocated via heap fallback
 } valk_arena_stats_t;
 
+typedef struct {
+  sz offset;
+} valk_arena_checkpoint_t;
+
 // Process-level memory stats (from OS)
 typedef struct {
   sz rss_bytes;             // Resident Set Size (physical RAM)
@@ -357,6 +361,9 @@ typedef struct {  // extends valk_mem_allocator_t;
 void valk_mem_arena_init(valk_mem_arena_t *self, sz capacity);
 void valk_mem_arena_reset(valk_mem_arena_t *self);
 void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes);
+
+valk_arena_checkpoint_t valk_arena_checkpoint_save(valk_mem_arena_t *arena);
+void valk_arena_checkpoint_restore(valk_mem_arena_t *arena, valk_arena_checkpoint_t cp);
 
 // Arena statistics API
 void valk_mem_arena_print_stats(valk_mem_arena_t *arena, FILE *out);

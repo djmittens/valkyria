@@ -118,6 +118,7 @@ int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
   if (cfg->max_servers == 0) cfg->max_servers = 8;
   if (cfg->max_clients == 0) cfg->max_clients = 8;
   if (cfg->max_connections_per_client == 0) cfg->max_connections_per_client = 2;
+  if (cfg->max_timers == 0) cfg->max_timers = cfg->max_handles / 4;
 
   if (cfg->tcp_buffer_pool_size == 0) {
     u64 server_conns = cfg->max_servers * cfg->max_connections;
@@ -221,6 +222,9 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
     sys->httpClients = valk_slab_new(
         sizeof(valk_arc_box) + sizeof(valk_aio_http2_client), sys->config.max_clients);
     sys->handleSlab = valk_slab_new(sizeof(valk_aio_handle_t), sys->config.max_handles);
+    sz timer_item_size = sizeof(valk_interval_timer_t) > sizeof(valk_schedule_timer_t)
+                         ? sizeof(valk_interval_timer_t) : sizeof(valk_schedule_timer_t);
+    sys->timerDataSlab = valk_slab_new(timer_item_size, sys->config.max_timers);
   }
 
   valk_backpressure_list_init(&sys->backpressure, sys->config.backpressure_list_max,
@@ -335,6 +339,7 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
     valk_slab_free(sys->httpServers);
     valk_slab_free(sys->httpClients);
     valk_slab_free(sys->handleSlab);
+    valk_slab_free(sys->timerDataSlab);
   }
 
   free(sys->port_strs);

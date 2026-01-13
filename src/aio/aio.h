@@ -220,6 +220,7 @@ typedef struct valk_aio_system_config {
   u32 max_servers;              // Default: 8
   u32 max_clients;              // Default: 8
   u32 max_connections_per_client; // Default: 2 (connections per HTTP/2 client)
+  u32 max_timers;               // Default: max_handles / 4
 
   // DERIVED SETTINGS (set to 0 for auto-calculation)
   u32 tcp_buffer_pool_size;     // Auto: 2 × total_connections

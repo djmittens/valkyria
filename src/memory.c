@@ -479,6 +479,15 @@ void valk_mem_arena_reset(valk_mem_arena_t *self) {
   self->stats.num_resets++;
 }
 
+valk_arena_checkpoint_t valk_arena_checkpoint_save(valk_mem_arena_t *arena) {
+  return (valk_arena_checkpoint_t){ .offset = arena->offset };
+}
+
+void valk_arena_checkpoint_restore(valk_mem_arena_t *arena, valk_arena_checkpoint_t cp) {
+  arena->offset = cp.offset;
+  arena->stats.num_checkpoints++;
+}
+
 // TODO(networking): should probably write some unit tests for all this math
 void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes) {
   // Layout: [optional padding][u64 size][padding to align payload][payload]

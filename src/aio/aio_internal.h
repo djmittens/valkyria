@@ -318,6 +318,7 @@ struct valk_aio_system {
   valk_slab_t *tcpBufferSlab;
 
   valk_slab_t *handleSlab;
+  valk_slab_t *timerDataSlab;
   valk_aio_handle_t liveHandles;
 
   bool shuttingDown;
@@ -398,6 +399,7 @@ typedef struct {
   alignas(16) uv_timer_t timer;
   valk_lval_t *callback;
   u64 schedule_id;
+  valk_slab_t *slab;
 } valk_schedule_timer_t;
 
 typedef struct valk_interval_timer {
@@ -406,6 +408,7 @@ typedef struct valk_interval_timer {
   u64 interval_id;
   bool stopped;
   u32 magic;
+  valk_slab_t *slab;
 } valk_interval_timer_t;
 
 #define VALK_INTERVAL_TIMER_MAGIC 0xDEADBEEF
