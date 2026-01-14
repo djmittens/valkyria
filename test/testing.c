@@ -19,6 +19,10 @@
 #include "gc.h"
 #include "memory.h"
 
+#if defined(__GNUC__) && defined(VALK_COVERAGE_BUILD)
+extern void __gcov_dump(void);
+#endif
+
 #define SEC_TO_MS(sec) ((sec) * 1000)
 #define SEC_TO_US(sec) ((sec) * 1000000)
 #define SEC_TO_NS(sec) ((sec) * 1000000000)
@@ -180,6 +184,9 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
       size -= (size_t)n;
     }
 
+#if defined(__GNUC__) && defined(VALK_COVERAGE_BUILD)
+    __gcov_dump();
+#endif
     _exit(0);
   }
 

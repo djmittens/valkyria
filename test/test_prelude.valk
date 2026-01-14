@@ -297,5 +297,85 @@
     true
   })
 
+; ============================================================================
+; List reverse tests
+; ============================================================================
+
+(test/define "prelude-reverse"
+  {do
+    (test/assert (== (reverse {1 2 3}) {3 2 1}) "reverse should reverse 3 elements")
+    (test/assert (== (reverse {1}) {1}) "reverse single element")
+    (test/assert (== (reverse {}) {}) "reverse empty list")
+    (test/assert (== (reverse {5 4 3 2 1}) {1 2 3 4 5}) "reverse 5 elements")
+    true
+  })
+
+; ============================================================================
+; Property list (plist) tests
+; ============================================================================
+
+(test/define "prelude-plist-get"
+  {do
+    (= {pl} {:name "Alice" :age 30 :city "NYC"})
+    (test/assert-eq "Alice" (plist/get pl :name) "plist/get should find name")
+    (test/assert-eq 30 (plist/get pl :age) "plist/get should find age")
+    (test/assert-eq "NYC" (plist/get pl :city) "plist/get should find city")
+    (test/assert-eq nil (plist/get pl :unknown) "plist/get should return nil for missing")
+    (test/assert-eq nil (plist/get {} :any) "plist/get on empty returns nil")
+    true
+  })
+
+(test/define "prelude-plist-set"
+  {do
+    (= {pl} {:name "Alice"})
+    (= {pl2} (plist/set pl :age 25))
+    (test/assert-eq "Alice" (plist/get pl2 :name) "plist/set preserves existing")
+    (test/assert-eq 25 (plist/get pl2 :age) "plist/set adds new key")
+    
+    ; Update existing key
+    (= {pl3} (plist/set pl2 :name "Bob"))
+    (test/assert-eq "Bob" (plist/get pl3 :name) "plist/set updates existing")
+    (test/assert-eq 25 (plist/get pl3 :age) "plist/set preserves other keys")
+    
+    ; Set on empty plist
+    (= {pl4} (plist/set {} :key "val"))
+    (test/assert-eq "val" (plist/get pl4 :key) "plist/set on empty creates plist")
+    true
+  })
+
+(test/define "prelude-plist-has"
+  {do
+    (= {pl} {:name "Alice" :age 30})
+    (test/assert-eq true (plist/has? pl :name) "plist/has? finds existing key")
+    (test/assert-eq true (plist/has? pl :age) "plist/has? finds second key")
+    (test/assert-eq false (plist/has? pl :missing) "plist/has? returns false for missing")
+    (test/assert-eq false (plist/has? {} :any) "plist/has? on empty is false")
+    true
+  })
+
+(test/define "prelude-plist-keys"
+  {do
+    (= {pl} {:a 1 :b 2 :c 3})
+    (= {keys} (plist/keys pl))
+    (test/assert-eq 3 (len keys) "plist/keys returns all keys")
+    (test/assert-eq :a (nth 1 keys) "first key is :a")
+    (test/assert-eq :b (nth 2 keys) "second key is :b")
+    (test/assert-eq :c (nth 3 keys) "third key is :c")
+    (test/assert (== (plist/keys {}) nil) "plist/keys of empty is nil")
+    true
+  })
+
+(test/define "prelude-plist-vals"
+  {do
+    (= {pl} {:a 1 :b 2 :c 3})
+    (= {vals} (plist/vals pl))
+    (test/assert-eq 3 (len vals) "plist/vals returns all values")
+    (test/assert-eq 1 (nth 1 vals) "first value is 1")
+    (test/assert-eq 2 (nth 2 vals) "second value is 2")
+    (test/assert-eq 3 (nth 3 vals) "third value is 3")
+    (test/assert (== (plist/vals {}) nil) "plist/vals of empty is nil")
+    true
+  })
+
 ; Run all tests
 (test/run {})

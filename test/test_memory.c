@@ -55,10 +55,10 @@ void test_implicit_alloc(VALK_TEST_ARGS()) {
 }
 
 void test_slab_alloc(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  VALK_SKIP_NO_FORK("modifies global slab state");
 
   const char msg[] = "Get fucked";
-
-  VALK_TEST();
 
   int itemLen = sizeof(test_box_t) + sizeof(msg);
   size_t numItems = rand() % 1000;
@@ -175,6 +175,7 @@ static size_t __next_thread_rand(size_t *state) {
 
 void test_slab_concurrency(VALK_TEST_ARGS()) {
   VALK_TEST();
+  VALK_SKIP_NO_FORK("modifies global slab state");
 
   const char msg[] = "Get fucked";
   int itemLen = sizeof(test_box_t) + sizeof(msg);
@@ -345,6 +346,7 @@ void test_gc_heap_hard_limit(VALK_TEST_ARGS()) {
 // Test GC heap statistics tracking
 void test_gc_heap_stats(VALK_TEST_ARGS()) {
   VALK_TEST();
+  VALK_SKIP_NO_FORK("GC heap destroy leaves stale TLAB pointers");
 
   valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
@@ -1022,6 +1024,310 @@ void test_checkpoint_many_bindings(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// Slab bitmap tests
+void test_slab_bitmap_snapshot(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_slab_t *slab = valk_slab_new(64, 16);
+  ASSERT_NOT_NULL(slab);
+  ASSERT_NOT_NULL(slab->usage_bitmap);
+
+  valk_slab_item_t *item1 = valk_slab_aquire(slab);
+  valk_slab_item_t *item2 = valk_slab_aquire(slab);
+
+  valk_slab_bitmap_t snapshot;
+  valk_slab_bitmap_snapshot(slab, &snapshot);
+
+  ASSERT_NOT_NULL(snapshot.data);
+  ASSERT_GT(snapshot.bytes, 0);
+  ASSERT_GT(snapshot.version, 0);
+
+  valk_slab_bitmap_free(&snapshot);
+  ASSERT_NULL(snapshot.data);
+  ASSERT_EQ(snapshot.bytes, 0);
+
+  valk_slab_release(slab, item1);
+  valk_slab_release(slab, item2);
+  valk_slab_free(slab);
+
+  VALK_PASS();
+}
+
+void test_slab_bitmap_snapshot_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_slab_bitmap_t snapshot = {0};
+
+  valk_slab_bitmap_snapshot(nullptr, &snapshot);
+  ASSERT_NULL(snapshot.data);
+  ASSERT_EQ(snapshot.bytes, 0);
+
+  valk_slab_t *slab = valk_slab_new(64, 16);
+  valk_slab_bitmap_snapshot(slab, nullptr);
+
+  valk_slab_free(slab);
+
+  VALK_PASS();
+}
+
+void test_bitmap_delta_init_free(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_bitmap_delta_t delta;
+
+  valk_bitmap_delta_init(&delta);
+  ASSERT_NULL(delta.runs);
+  ASSERT_EQ(delta.run_count, 0);
+  ASSERT_EQ(delta.run_capacity, 0);
+
+  valk_bitmap_delta_free(&delta);
+  ASSERT_NULL(delta.runs);
+
+  valk_bitmap_delta_init(nullptr);
+  valk_bitmap_delta_free(nullptr);
+
+  VALK_PASS();
+}
+
+void test_bitmap_delta_compute_basic(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_slab_t *slab = valk_slab_new(64, 32);
+  ASSERT_NOT_NULL(slab);
+
+  valk_slab_bitmap_t prev;
+  valk_slab_bitmap_snapshot(slab, &prev);
+
+  valk_slab_item_t *item1 = valk_slab_aquire(slab);
+  valk_slab_item_t *item2 = valk_slab_aquire(slab);
+
+  valk_slab_bitmap_t curr;
+  valk_slab_bitmap_snapshot(slab, &curr);
+
+  valk_bitmap_delta_t delta;
+  bool ok = valk_bitmap_delta_compute(&curr, &prev, &delta);
+  ASSERT_TRUE(ok);
+  ASSERT_GT(delta.run_count, 0);
+
+  valk_bitmap_delta_free(&delta);
+  valk_slab_bitmap_free(&prev);
+  valk_slab_bitmap_free(&curr);
+
+  valk_slab_release(slab, item1);
+  valk_slab_release(slab, item2);
+  valk_slab_free(slab);
+
+  VALK_PASS();
+}
+
+void test_bitmap_delta_compute_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_slab_bitmap_t bmp = {.data = malloc(8), .bytes = 8, .version = 1};
+  memset(bmp.data, 0, 8);
+  valk_bitmap_delta_t delta;
+
+  bool ok1 = valk_bitmap_delta_compute(nullptr, &bmp, &delta);
+  ASSERT_FALSE(ok1);
+
+  bool ok2 = valk_bitmap_delta_compute(&bmp, nullptr, &delta);
+  ASSERT_FALSE(ok2);
+
+  bool ok3 = valk_bitmap_delta_compute(&bmp, &bmp, nullptr);
+  ASSERT_FALSE(ok3);
+
+  valk_slab_bitmap_t empty = {.data = nullptr, .bytes = 0, .version = 0};
+  bool ok4 = valk_bitmap_delta_compute(&empty, &bmp, &delta);
+  ASSERT_FALSE(ok4);
+
+  valk_slab_bitmap_t diff_size = {.data = malloc(4), .bytes = 4, .version = 1};
+  bool ok5 = valk_bitmap_delta_compute(&diff_size, &bmp, &delta);
+  ASSERT_FALSE(ok5);
+
+  free(bmp.data);
+  free(diff_size.data);
+
+  VALK_PASS();
+}
+
+void test_bitmap_delta_to_rle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_slab_t *slab = valk_slab_new(64, 64);
+  ASSERT_NOT_NULL(slab);
+
+  valk_slab_bitmap_t prev;
+  valk_slab_bitmap_snapshot(slab, &prev);
+
+  for (int i = 0; i < 8; i++) {
+    valk_slab_aquire(slab);
+  }
+
+  valk_slab_bitmap_t curr;
+  valk_slab_bitmap_snapshot(slab, &curr);
+
+  valk_bitmap_delta_t delta;
+  bool ok = valk_bitmap_delta_compute(&curr, &prev, &delta);
+  ASSERT_TRUE(ok);
+
+  char buf[256];
+  sz len = valk_bitmap_delta_to_rle(&delta, buf, sizeof(buf));
+  ASSERT_GT(len, 0);
+  ASSERT_TRUE(buf[0] != '\0');
+
+  valk_bitmap_delta_free(&delta);
+  valk_slab_bitmap_free(&prev);
+  valk_slab_bitmap_free(&curr);
+  valk_slab_free(slab);
+
+  VALK_PASS();
+}
+
+void test_bitmap_delta_to_rle_edge_cases(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  char buf[16];
+
+  sz len1 = valk_bitmap_delta_to_rle(nullptr, buf, sizeof(buf));
+  ASSERT_EQ(len1, 0);
+
+  valk_bitmap_delta_t empty = {0};
+  sz len2 = valk_bitmap_delta_to_rle(&empty, nullptr, 0);
+  ASSERT_EQ(len2, 0);
+
+  sz len3 = valk_bitmap_delta_to_rle(&empty, buf, 2);
+  ASSERT_EQ(len3, 0);
+
+  VALK_PASS();
+}
+
+void test_slab_bitmap_buckets(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_slab_t *slab = valk_slab_new(64, 100);
+  ASSERT_NOT_NULL(slab);
+
+  for (int i = 0; i < 30; i++) {
+    valk_slab_aquire(slab);
+  }
+
+  valk_bitmap_bucket_t buckets[10];
+  sz result = valk_slab_bitmap_buckets(slab, 0, 100, 10, buckets);
+  ASSERT_EQ(result, 10);
+
+  u64 total_used = 0;
+  u64 total_free = 0;
+  for (int i = 0; i < 10; i++) {
+    total_used += buckets[i].used;
+    total_free += buckets[i].free;
+  }
+  ASSERT_EQ(total_used, 30);
+  ASSERT_EQ(total_free, 70);
+
+  valk_slab_free(slab);
+
+  VALK_PASS();
+}
+
+void test_slab_bitmap_buckets_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_bitmap_bucket_t buckets[10];
+
+  sz r1 = valk_slab_bitmap_buckets(nullptr, 0, 100, 10, buckets);
+  ASSERT_EQ(r1, 0);
+
+  valk_slab_t *slab = valk_slab_new(64, 100);
+  sz r2 = valk_slab_bitmap_buckets(slab, 0, 100, 10, nullptr);
+  ASSERT_EQ(r2, 0);
+
+  sz r3 = valk_slab_bitmap_buckets(slab, 0, 100, 0, buckets);
+  ASSERT_EQ(r3, 0);
+
+  sz r4 = valk_slab_bitmap_buckets(slab, 50, 50, 10, buckets);
+  ASSERT_EQ(r4, 0);
+
+  sz r5 = valk_slab_bitmap_buckets(slab, 100, 50, 10, buckets);
+  ASSERT_EQ(r5, 0);
+
+  valk_slab_free(slab);
+
+  VALK_PASS();
+}
+
+void test_slab_bitmap_buckets_partial_range(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_slab_t *slab = valk_slab_new(64, 100);
+  ASSERT_NOT_NULL(slab);
+
+  for (int i = 0; i < 50; i++) {
+    valk_slab_aquire(slab);
+  }
+
+  valk_bitmap_bucket_t buckets[5];
+  sz result = valk_slab_bitmap_buckets(slab, 20, 80, 5, buckets);
+  ASSERT_EQ(result, 5);
+
+  u64 total = 0;
+  for (int i = 0; i < 5; i++) {
+    total += buckets[i].used + buckets[i].free;
+  }
+  ASSERT_EQ(total, 60);
+
+  valk_slab_free(slab);
+
+  VALK_PASS();
+}
+
+void test_slab_peak_tracking(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_slab_t *slab = valk_slab_new(64, 20);
+  ASSERT_NOT_NULL(slab);
+  ASSERT_EQ(slab->peakUsed, 0);
+
+  valk_slab_item_t *items[10];
+  for (int i = 0; i < 10; i++) {
+    items[i] = valk_slab_aquire(slab);
+  }
+  ASSERT_EQ(slab->peakUsed, 10);
+
+  for (int i = 0; i < 5; i++) {
+    valk_slab_release(slab, items[i]);
+  }
+  ASSERT_EQ(slab->peakUsed, 10);
+
+  for (int i = 0; i < 8; i++) {
+    valk_slab_aquire(slab);
+  }
+  ASSERT_EQ(slab->peakUsed, 13);
+
+  valk_slab_free(slab);
+
+  VALK_PASS();
+}
+
+void test_slab_free_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_slab_free(nullptr);
+
+  VALK_PASS();
+}
+
+void test_slab_bitmap_free_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_slab_bitmap_free(nullptr);
+
+  valk_slab_bitmap_t bmp = {0};
+  valk_slab_bitmap_free(&bmp);
+  ASSERT_NULL(bmp.data);
+
+  VALK_PASS();
+}
+
 // Phase 7: Edge case test - closure with captured environment
 void test_checkpoint_closure(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -1466,6 +1772,7 @@ void test_malloc_allocator_api(VALK_TEST_ARGS()) {
 
 void test_gc_heap_allocator_api(VALK_TEST_ARGS()) {
   VALK_TEST();
+  VALK_SKIP_NO_FORK("GC heap destroy leaves stale TLAB pointers");
 
   valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
@@ -1555,6 +1862,21 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_checkpoint_deep_env_chain", test_checkpoint_deep_env_chain);
   valk_testsuite_add_test(suite, "test_checkpoint_many_bindings", test_checkpoint_many_bindings);
   valk_testsuite_add_test(suite, "test_checkpoint_closure", test_checkpoint_closure);
+
+  // Slab bitmap and delta tests
+  valk_testsuite_add_test(suite, "test_slab_bitmap_snapshot", test_slab_bitmap_snapshot);
+  valk_testsuite_add_test(suite, "test_slab_bitmap_snapshot_null", test_slab_bitmap_snapshot_null);
+  valk_testsuite_add_test(suite, "test_bitmap_delta_init_free", test_bitmap_delta_init_free);
+  valk_testsuite_add_test(suite, "test_bitmap_delta_compute_basic", test_bitmap_delta_compute_basic);
+  valk_testsuite_add_test(suite, "test_bitmap_delta_compute_null", test_bitmap_delta_compute_null);
+  valk_testsuite_add_test(suite, "test_bitmap_delta_to_rle", test_bitmap_delta_to_rle);
+  valk_testsuite_add_test(suite, "test_bitmap_delta_to_rle_edge_cases", test_bitmap_delta_to_rle_edge_cases);
+  valk_testsuite_add_test(suite, "test_slab_bitmap_buckets", test_slab_bitmap_buckets);
+  valk_testsuite_add_test(suite, "test_slab_bitmap_buckets_null", test_slab_bitmap_buckets_null);
+  valk_testsuite_add_test(suite, "test_slab_bitmap_buckets_partial_range", test_slab_bitmap_buckets_partial_range);
+  valk_testsuite_add_test(suite, "test_slab_peak_tracking", test_slab_peak_tracking);
+  valk_testsuite_add_test(suite, "test_slab_free_null", test_slab_free_null);
+  valk_testsuite_add_test(suite, "test_slab_bitmap_free_null", test_slab_bitmap_free_null);
 
   // load fixtures
   // valk_lval_t *ast = valk_parse_file("src/prelude.valk");

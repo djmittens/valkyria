@@ -43,6 +43,14 @@
     }                                                                          \
   } while (0)
 
+#define VALK_SKIP_NO_FORK(reason)                                              \
+  do {                                                                         \
+    if (getenv("VALK_TEST_NO_FORK") != nullptr) {                              \
+      VALK_SKIP("requires fork: %s", reason);                                  \
+      return;                                                                  \
+    }                                                                          \
+  } while (0)
+
 #define VALK_FAIL(fmt, ...)                                                   \
   do {                                                                        \
     DISABLE_FORMAT_NONLITERAL;                                                \

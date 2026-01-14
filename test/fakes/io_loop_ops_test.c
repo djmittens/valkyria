@@ -1,5 +1,5 @@
-#include "io_loop_ops.h"
-#include "io_timer_ops.h"
+#include "aio/io/io_loop_ops.h"
+#include "aio/io/io_timer_ops.h"
 #include <stdlib.h>
 
 typedef struct valk_test_loop_state {

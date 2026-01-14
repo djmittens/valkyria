@@ -51,12 +51,56 @@
               :deferred
             )}
             
-            {`{:status "200" :body "OK"}}
+            {(if (== path "/sse-id")
+              {(do
+                (= {stream} (sse/open req))
+                (sse/id stream "evt-123" "event with id")
+                (sse/close stream)
+                :deferred
+              )}
+              
+              {(if (== path "/sse-retry")
+                {(do
+                  (= {stream} (sse/open req))
+                  (sse/retry stream 5000)
+                  (sse/send stream "retry test")
+                  (sse/close stream)
+                  :deferred
+                )}
+                
+                {(if (== path "/sse-json")
+                  {(do
+                    (= {stream} (sse/open req))
+                    (sse/json stream {:key "value" :num 42})
+                    (sse/close stream)
+                    :deferred
+                  )}
+                  
+                  {(if (== path "/sse-json-event")
+                    {(do
+                      (= {stream} (sse/open req))
+                      (sse/json-event stream "update" {:status "ok"})
+                      (sse/close stream)
+                      :deferred
+                    )}
+                    
+                    {`{:status "200" :body "OK"}}
+                  )}
+                )}
+              )}
+            )}
           )}
         )}
       )}
     )
   }))
+
+; Handler using sse/handler wrapper
+(def {wrapped-handler}
+  (sse/handler (\ {stream req} {
+    (sse/send stream "wrapped handler test")
+    (sse/close stream)
+  })))
 
 (def {server} (http2/server-listen aio 0 test-handler))
 (def {TEST_PORT} (http2/server-port server))
@@ -111,6 +155,38 @@
 (test/async "sse/writable? returns truthy" (\ {done} {
   ; Already verified - sends only work when writable
   (done true)
+}))
+
+; Test 7: sse/id sends event with ID
+(test/async "sse/id sends event with ID" (\ {done} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-id" (\ {resp} {}))
+  (aio/schedule aio 300 (\ {} {
+    (done true)
+  }))
+}))
+
+; Test 8: sse/retry sends retry directive
+(test/async "sse/retry sends retry directive" (\ {done} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-retry" (\ {resp} {}))
+  (aio/schedule aio 300 (\ {} {
+    (done true)
+  }))
+}))
+
+; Test 9: sse/json sends JSON-encoded data
+(test/async "sse/json sends JSON data" (\ {done} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-json" (\ {resp} {}))
+  (aio/schedule aio 300 (\ {} {
+    (done true)
+  }))
+}))
+
+; Test 10: sse/json-event sends JSON with event type
+(test/async "sse/json-event sends typed JSON" (\ {done} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-json-event" (\ {resp} {}))
+  (aio/schedule aio 300 (\ {} {
+    (done true)
+  }))
 }))
 
 (test/run-async aio)

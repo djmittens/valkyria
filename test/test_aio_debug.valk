@@ -225,6 +225,77 @@
     true
   })
 
+; Test: aio/debug-diagnostics-state function directly
+(test/define "diagnostics-state-function"
+  {do
+    (= {result} (aio/debug-diagnostics-state mock-sys))
+    (test/assert (> (len result) 0) "diagnostics state should not be empty")
+    (test/assert (> (len result) 50) "diagnostics state should have substantial content")
+    true
+  })
+
+; Test: aio/debug-diagnostics-delta function directly  
+(test/define "diagnostics-delta-function"
+  {do
+    (= {result} (aio/debug-diagnostics-delta mock-sys))
+    (test/assert (> (len result) 0) "diagnostics delta should not be empty")
+    (test/assert (> (len result) 50) "diagnostics delta should have substantial content")
+    true
+  })
+
+; Test: /debug/slab/buckets route returns JSON
+(test/define "route-slab-buckets-returns-json"
+  {do
+    (= {req} {:path "/debug/slab/buckets"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (plist/get resp (head {:status}))
+      "status should be 200")
+    (test/assert-eq "application/json" (plist/get resp (head {:content-type}))
+      "content-type should be application/json")
+    true
+  })
+
+; Test: aio/debug-handle-slab-buckets with nil query
+(test/define "slab-buckets-nil-query"
+  {do
+    (= {resp} (aio/debug-handle-slab-buckets mock-sys nil))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (plist/get resp (head {:status}))
+      "status should be 200")
+    true
+  })
+
+; Test: aio/debug-handle-slab-buckets with query params
+(test/define "slab-buckets-with-query"
+  {do
+    (= {resp} (aio/debug-handle-slab-buckets mock-sys "slab=tcp_buffers&start=0&end=1000&buckets=50"))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (plist/get resp (head {:status}))
+      "status should be 200")
+    true
+  })
+
+; Test: aio/debug-handle-slab-buckets with partial query params
+(test/define "slab-buckets-partial-query"
+  {do
+    (= {resp} (aio/debug-handle-slab-buckets mock-sys "start=100&end=500"))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (plist/get resp (head {:status}))
+      "status should be 200")
+    true
+  })
+
+; Test: aio/debug-handle-slab-buckets with invalid query format (no equals)
+(test/define "slab-buckets-invalid-query-format"
+  {do
+    (= {resp} (aio/debug-handle-slab-buckets mock-sys "invalidparam"))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (plist/get resp (head {:status}))
+      "status should be 200")
+    true
+  })
+
 ; Test: /debug/metrics/state route returns diagnostics state JSON
 (test/define "route-debug-metrics-state-returns-json"
   {do

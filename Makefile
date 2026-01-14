@@ -172,6 +172,10 @@ define run_tests_c
 	if [ -f $(1)/test_source_loc_unit ]; then $(1)/test_source_loc_unit; fi
 	$(1)/test_pressure
 	$(1)/test_conn_io
+	$(1)/test_aio_timer_unit
+	$(1)/test_io_timer_ops_unit
+	$(1)/test_thread_posix_unit
+	$(1)/test_aio_handle_diag
 	@echo "=== All C tests passed ($(1)) ==="
 endef
 
@@ -221,6 +225,7 @@ define run_tests_valk
 	$(1)/valk test/test_client_headers.valk
 	$(1)/valk test/test_http2_client_request_errors.valk
 	$(1)/valk test/test_sequential_map.valk
+	$(1)/valk test/test_async_handles.valk
 
 	$(1)/valk test/stress/test_gc_stress.valk
 	$(1)/valk test/stress/test_networking_stress.valk

@@ -2461,6 +2461,280 @@ void test_gc_soft_limit_multithread(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_gc_mark_queue_init(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_mark_queue_t q;
+  valk_gc_mark_queue_init(&q);
+
+  VALK_TEST_ASSERT(atomic_load(&q.top) == 0, "top should be 0");
+  VALK_TEST_ASSERT(atomic_load(&q.bottom) == 0, "bottom should be 0");
+  VALK_TEST_ASSERT(valk_gc_mark_queue_empty(&q), "queue should be empty after init");
+
+  VALK_PASS();
+}
+
+void test_gc_mark_queue_push_pop(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_mark_queue_t q;
+  valk_gc_mark_queue_init(&q);
+
+  valk_lval_t dummy1 = {.flags = LVAL_NUM, .num = 1};
+  valk_lval_t dummy2 = {.flags = LVAL_NUM, .num = 2};
+  valk_lval_t dummy3 = {.flags = LVAL_NUM, .num = 3};
+
+  VALK_TEST_ASSERT(valk_gc_mark_queue_push(&q, &dummy1), "push should succeed");
+  VALK_TEST_ASSERT(valk_gc_mark_queue_push(&q, &dummy2), "push should succeed");
+  VALK_TEST_ASSERT(valk_gc_mark_queue_push(&q, &dummy3), "push should succeed");
+
+  VALK_TEST_ASSERT(!valk_gc_mark_queue_empty(&q), "queue should not be empty");
+
+  valk_lval_t *popped = valk_gc_mark_queue_pop(&q);
+  VALK_TEST_ASSERT(popped == &dummy3, "LIFO: should pop dummy3 first");
+
+  popped = valk_gc_mark_queue_pop(&q);
+  VALK_TEST_ASSERT(popped == &dummy2, "LIFO: should pop dummy2 second");
+
+  popped = valk_gc_mark_queue_pop(&q);
+  VALK_TEST_ASSERT(popped == &dummy1, "LIFO: should pop dummy1 third");
+
+  VALK_TEST_ASSERT(valk_gc_mark_queue_empty(&q), "queue should be empty after all pops");
+
+  popped = valk_gc_mark_queue_pop(&q);
+  VALK_TEST_ASSERT(popped == nullptr, "pop from empty queue should return nullptr");
+
+  VALK_PASS();
+}
+
+void test_gc_mark_queue_steal(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_mark_queue_t q;
+  valk_gc_mark_queue_init(&q);
+
+  valk_lval_t dummy1 = {.flags = LVAL_NUM, .num = 1};
+  valk_lval_t dummy2 = {.flags = LVAL_NUM, .num = 2};
+
+  valk_gc_mark_queue_push(&q, &dummy1);
+  valk_gc_mark_queue_push(&q, &dummy2);
+
+  valk_lval_t *stolen = valk_gc_mark_queue_steal(&q);
+  VALK_TEST_ASSERT(stolen == &dummy1, "FIFO steal: should get dummy1 first");
+
+  stolen = valk_gc_mark_queue_steal(&q);
+  VALK_TEST_ASSERT(stolen == &dummy2, "FIFO steal: should get dummy2 second");
+
+  stolen = valk_gc_mark_queue_steal(&q);
+  VALK_TEST_ASSERT(stolen == nullptr, "steal from empty should return nullptr");
+
+  VALK_PASS();
+}
+
+void test_gc_mark_queue_empty_check(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_mark_queue_t q;
+  valk_gc_mark_queue_init(&q);
+
+  VALK_TEST_ASSERT(valk_gc_mark_queue_empty(&q) == true, "new queue is empty");
+
+  valk_lval_t dummy = {.flags = LVAL_NUM, .num = 42};
+  valk_gc_mark_queue_push(&q, &dummy);
+  VALK_TEST_ASSERT(valk_gc_mark_queue_empty(&q) == false, "queue with item is not empty");
+
+  valk_gc_mark_queue_pop(&q);
+  VALK_TEST_ASSERT(valk_gc_mark_queue_empty(&q) == true, "queue after pop is empty");
+
+  VALK_PASS();
+}
+
+void test_gc_mark_queue_fill_to_capacity(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_mark_queue_t q;
+  valk_gc_mark_queue_init(&q);
+
+  valk_lval_t dummies[VALK_GC_MARK_QUEUE_SIZE];
+  for (u64 i = 0; i < VALK_GC_MARK_QUEUE_SIZE; i++) {
+    dummies[i].flags = LVAL_NUM;
+    dummies[i].num = (i64)i;
+    bool ok = valk_gc_mark_queue_push(&q, &dummies[i]);
+    VALK_TEST_ASSERT(ok, "push %llu should succeed", (unsigned long long)i);
+  }
+
+  valk_lval_t overflow = {.flags = LVAL_NUM, .num = 9999};
+  bool ok = valk_gc_mark_queue_push(&q, &overflow);
+  VALK_TEST_ASSERT(!ok, "push to full queue should fail");
+
+  for (u64 i = 0; i < VALK_GC_MARK_QUEUE_SIZE; i++) {
+    valk_lval_t *p = valk_gc_mark_queue_pop(&q);
+    VALK_TEST_ASSERT(p != nullptr, "pop %llu should succeed", (unsigned long long)i);
+  }
+
+  VALK_TEST_ASSERT(valk_gc_mark_queue_empty(&q), "queue should be empty after draining");
+
+  VALK_PASS();
+}
+
+void test_gc_heap2_realloc_grow(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(10 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
+
+  void *ptr = valk_gc_heap2_alloc(heap, 64);
+  VALK_TEST_ASSERT(ptr != nullptr, "Initial alloc should succeed");
+  memset(ptr, 0xAB, 64);
+
+  void *ptr2 = valk_gc_heap2_realloc(heap, ptr, 256);
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Realloc grow should succeed");
+
+  unsigned char *bytes = ptr2;
+  bool data_preserved = true;
+  for (int i = 0; i < 64; i++) {
+    if (bytes[i] != 0xAB) {
+      data_preserved = false;
+      break;
+    }
+  }
+  VALK_TEST_ASSERT(data_preserved, "Data should be preserved after realloc");
+
+  valk_gc_heap2_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_heap2_realloc_shrink(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(10 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
+
+  void *ptr = valk_gc_heap2_alloc(heap, 256);
+  VALK_TEST_ASSERT(ptr != nullptr, "Initial alloc should succeed");
+  memset(ptr, 0xCD, 256);
+
+  void *ptr2 = valk_gc_heap2_realloc(heap, ptr, 64);
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Realloc shrink should succeed");
+
+  unsigned char *bytes = ptr2;
+  bool data_preserved = true;
+  for (int i = 0; i < 64; i++) {
+    if (bytes[i] != 0xCD) {
+      data_preserved = false;
+      break;
+    }
+  }
+  VALK_TEST_ASSERT(data_preserved, "First 64 bytes should be preserved");
+
+  valk_gc_heap2_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_heap2_realloc_zero_size(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(10 * 1024 * 1024);
+
+  void *ptr = valk_gc_heap2_alloc(heap, 128);
+  VALK_TEST_ASSERT(ptr != nullptr, "Initial alloc should succeed");
+
+  void *ptr2 = valk_gc_heap2_realloc(heap, ptr, 0);
+  (void)ptr2;
+
+  valk_gc_heap2_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_heap2_collect_auto(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(64 * 1024);
+  VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
+
+  valk_gc_thread_register();
+
+  for (int i = 0; i < 100; i++) {
+    void *p = valk_gc_heap2_alloc(heap, 256);
+    (void)p;
+  }
+
+  sz reclaimed = valk_gc_heap2_collect_auto(heap);
+  (void)reclaimed;
+
+  valk_gc_stats2_t stats;
+  valk_gc_heap2_get_stats(heap, &stats);
+  VALK_TEST_ASSERT(stats.collections >= 1, "Should have at least 1 collection");
+
+  valk_gc_thread_unregister();
+  valk_gc_heap2_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_tlab2_refill(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(10 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
+
+  valk_gc_tlab2_t tlab;
+  valk_gc_tlab2_init(&tlab);
+
+  bool refilled = valk_gc_tlab2_refill(&tlab, heap, 0);
+  VALK_TEST_ASSERT(refilled, "TLAB refill should succeed");
+  VALK_TEST_ASSERT(tlab.classes[0].page != nullptr, "TLAB page should be set after refill");
+
+  valk_gc_heap2_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_tlab2_refill_invalid_class(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(10 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
+
+  valk_gc_tlab2_t tlab;
+  valk_gc_tlab2_init(&tlab);
+
+  bool refilled = valk_gc_tlab2_refill(&tlab, heap, 255);
+  VALK_TEST_ASSERT(!refilled, "TLAB refill with invalid size class should fail");
+
+  refilled = valk_gc_tlab2_refill(&tlab, heap, VALK_GC_NUM_SIZE_CLASSES);
+  VALK_TEST_ASSERT(!refilled, "TLAB refill with out-of-range size class should fail");
+
+  valk_gc_heap2_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_tlab2_alloc_inline(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_heap2_t *heap = valk_gc_heap2_create(10 * 1024 * 1024);
+  VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
+
+  valk_gc_tlab2_t tlab;
+  valk_gc_tlab2_init(&tlab);
+  valk_gc_tlab2_refill(&tlab, heap, 0);
+
+  void *ptr = valk_gc_tlab2_alloc(&tlab, 0);
+  VALK_TEST_ASSERT(ptr != nullptr, "TLAB alloc should succeed");
+
+  void *ptr2 = valk_gc_tlab2_alloc(&tlab, 0);
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Second TLAB alloc should succeed");
+  VALK_TEST_ASSERT(ptr != ptr2, "Allocations should be different");
+
+  valk_gc_heap2_destroy(heap);
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -2600,6 +2874,24 @@ int main(void) {
   // Phase 15: Emergency GC and multi-threaded soft limit tests
   valk_testsuite_add_test(suite, "test_gc_emergency_gc_trigger", test_gc_emergency_gc_trigger);
   valk_testsuite_add_test(suite, "test_gc_soft_limit_multithread", test_gc_soft_limit_multithread);
+
+  // Phase 16: Mark queue (Chase-Lev deque) tests
+  valk_testsuite_add_test(suite, "test_gc_mark_queue_init", test_gc_mark_queue_init);
+  valk_testsuite_add_test(suite, "test_gc_mark_queue_push_pop", test_gc_mark_queue_push_pop);
+  valk_testsuite_add_test(suite, "test_gc_mark_queue_steal", test_gc_mark_queue_steal);
+  valk_testsuite_add_test(suite, "test_gc_mark_queue_empty_check", test_gc_mark_queue_empty_check);
+  valk_testsuite_add_test(suite, "test_gc_mark_queue_fill_to_capacity", test_gc_mark_queue_fill_to_capacity);
+
+  // Phase 17: Heap2 realloc extended tests
+  valk_testsuite_add_test(suite, "test_gc_heap2_realloc_grow", test_gc_heap2_realloc_grow);
+  valk_testsuite_add_test(suite, "test_gc_heap2_realloc_shrink", test_gc_heap2_realloc_shrink);
+  valk_testsuite_add_test(suite, "test_gc_heap2_realloc_zero_size", test_gc_heap2_realloc_zero_size);
+
+  // Phase 18: Auto collection and TLAB tests
+  valk_testsuite_add_test(suite, "test_gc_heap2_collect_auto", test_gc_heap2_collect_auto);
+  valk_testsuite_add_test(suite, "test_gc_tlab2_refill", test_gc_tlab2_refill);
+  valk_testsuite_add_test(suite, "test_gc_tlab2_refill_invalid_class", test_gc_tlab2_refill_invalid_class);
+  valk_testsuite_add_test(suite, "test_gc_tlab2_alloc_inline", test_gc_tlab2_alloc_inline);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

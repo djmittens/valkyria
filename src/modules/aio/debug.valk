@@ -46,8 +46,8 @@
     (= {end-val} 10000)
     (= {num-buckets} 100)
 
-    ; Parse each param
-    (each params (\ {p} {
+    ; Parse each param using map (for side effects, result discarded)
+    (map (\ {p} {
       (= {kv} (str/split p "="))
       (if (== (len kv) 2)
         {
@@ -61,7 +61,7 @@
             {otherwise nil})
         }
         nil)
-    }))
+    }) params)
 
     ; Call the builtin
     (= {result} (aio/slab-buckets sys slab-name start-val end-val num-buckets))
@@ -85,8 +85,7 @@
 ; Returns: {"metrics": {...}, "memory": {...}}
 (fun {aio/debug-diagnostics-state sys}
   {
-    ; Update event loop + queue metrics BEFORE collecting metrics JSON
-    (aio/update-metrics sys)
+    ; Metrics are updated continuously, no explicit update needed
     (= {aio-json} (aio/metrics-json sys))
     (= {modular-json} (metrics/json))
     (= {vm-json} (vm/metrics-json))
@@ -102,9 +101,7 @@
 ; Uses compact JSON for all sections to minimize bandwidth
 (fun {aio/debug-diagnostics-delta sys}
   {
-    ; Update event loop + queue metrics BEFORE collecting delta
-    ; Otherwise the modular metrics will have stale values
-    (aio/update-metrics sys)
+    ; Metrics are updated continuously, no explicit update needed
     (= {delta} (metrics/collect-delta))
     (= {delta-json} (metrics/delta-json delta))
     (= {aio-json} (aio/metrics-json-compact sys))

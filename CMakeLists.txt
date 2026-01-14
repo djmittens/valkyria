@@ -30,6 +30,7 @@ if(COVERAGE)
   # -fprofile-arcs -ftest-coverage: basic line coverage
   # -fprofile-conditions: branch/MC-DC coverage (Clang 18+)
   set(COVERAGE_FLAGS "-fprofile-arcs -ftest-coverage -O0 -g")
+  add_compile_definitions(VALK_COVERAGE_BUILD=1)
 endif()
 
 set(EXTRA_FLAGS "-fcolor-diagnostics -Wall -Wextra -Wpedantic -Werror -Wno-gnu-zero-variadic-macro-arguments -Wno-gnu-statement-expression-from-macro-expansion")
@@ -119,11 +120,8 @@ set(VALKYRIA_SOURCES
   src/aio/http2/stream/aio_stream_builtins.c
   # IO ops abstraction layer (src/aio/io/)
   src/aio/io/io_loop_ops_uv.c
-  src/aio/io/io_loop_ops_test.c
   src/aio/io/io_tcp_ops_uv.c
-  src/aio/io/io_tcp_ops_test.c
   src/aio/io/io_timer_ops_uv.c
-  src/aio/io/io_timer_ops_test.c
   # Metrics (always enabled)
   src/aio/aio_metrics.c
   src/aio/aio_metrics_v2.c
@@ -181,6 +179,20 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND BACKTRACE_LIBRARIES)
   target_link_libraries(valkyria PRIVATE ${BACKTRACE_LIBRARIES})
 endif()
 
+# Test fakes library (test doubles for IO ops)
+# These are NOT included in coverage metrics since they're in test/
+add_library(valk_test_fakes STATIC
+  test/fakes/io_loop_ops_test.c
+  test/fakes/io_tcp_ops_test.c
+  test/fakes/io_timer_ops_test.c
+  test/fakes/aio_ops_test.c
+)
+target_include_directories(valk_test_fakes PRIVATE
+  ${PROJECT_SOURCE_DIR}/src
+  ${PROJECT_SOURCE_DIR}/src/aio
+  ${PROJECT_SOURCE_DIR}/src/aio/io
+)
+target_link_libraries(valk_test_fakes PRIVATE valkyria)
 
 ### REPL
 add_executable(valk
@@ -360,4 +372,34 @@ add_executable(test_conn_io test/unit/test_conn_io.c test/testing.c)
 target_link_libraries(test_conn_io PRIVATE "-lc" valkyria)
 include_directories(test_conn_io src/)
 
+add_executable(test_aio_timer_unit test/unit/test_aio_timer.c test/testing.c)
+target_link_libraries(test_aio_timer_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_aio_timer_unit src/)
+
+add_executable(test_io_timer_ops_unit test/unit/test_io_timer_ops.c test/testing.c)
+target_link_libraries(test_io_timer_ops_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_io_timer_ops_unit src/)
+
+add_executable(test_thread_posix_unit test/unit/test_thread_posix.c test/testing.c)
+target_link_libraries(test_thread_posix_unit PRIVATE "-lc" valkyria)
+include_directories(test_thread_posix_unit src/)
+
+add_executable(test_aio_handle_diag test/test_aio_handle_diag.c test/testing.c)
+target_link_libraries(test_aio_handle_diag PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_aio_handle_diag src/)
+
+# HTTP2/Streaming tests
+add_executable(test_http2_streaming test/test_http2_streaming.c test/testing.c)
+target_link_libraries(test_http2_streaming PRIVATE "-lc" valkyria)
+include_directories(test_http2_streaming src/)
+
+# Parser error path tests
+add_executable(test_parser_errors test/test_parser_errors.c test/testing.c)
+target_link_libraries(test_parser_errors PRIVATE "-lc" valkyria)
+include_directories(test_parser_errors src/)
+
+# Concurrent metrics tests
+add_executable(test_metrics_concurrent test/test_metrics_concurrent.c test/testing.c)
+target_link_libraries(test_metrics_concurrent PRIVATE "-lc" valkyria)
+include_directories(test_metrics_concurrent src/)
 

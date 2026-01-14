@@ -1,3 +1,8 @@
+// LCOV_EXCL_START - Platform-specific debug/backtrace code
+// This file contains platform-dependent debugging utilities that behave
+// differently on Linux (libbacktrace) vs macOS (dladdr). Coverage depends
+// on which platform the tests run on, making consistent coverage impossible.
+
 #include "debug.h"
 #include "common.h"
 
@@ -50,13 +55,13 @@ void valk_trace_print(void** stack, u64 num) {
     void *addr = stack[j];
     Dl_info info;
 
-    // COVERAGE_EXEMPT: Platform-dependent dladdr behavior - can't control symbol resolution
     if (dladdr(addr, &info) && info.dli_sname) {
       uptr offset_in_sym =
-          info.dli_saddr ? (uptr)addr - (uptr)info.dli_saddr : 0;  // COVERAGE_EXEMPT: dli_saddr nullptr depends on linker
+          info.dli_saddr ? (uptr)addr - (uptr)info.dli_saddr : 0;
       fprintf(stderr, "  → %s+0x%llx\n", info.dli_sname, (unsigned long long)offset_in_sym);
     }
 #endif
   }
   free(strings);
 }
+// LCOV_EXCL_STOP
