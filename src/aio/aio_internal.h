@@ -30,6 +30,7 @@
 #include "aio_alloc.h"
 #include "aio_diagnostics_builtins.h"
 #include "gc.h"
+#include "system/aio_task.h"
 
 #define MAKE_NV(NAME, VALUE, VALUELEN)                         \
   {                                                            \
@@ -165,14 +166,6 @@ typedef struct __tcp_buffer_slab_item_t {
   valk_aio_handle_t *conn;
   char data[HTTP_SLAB_ITEM_SIZE];
 } __tcp_buffer_slab_item_t;
-
-typedef struct __http2_req_res_t {
-  u64 streamid;
-  valk_http2_request_t *req;
-  valk_arc_box *res_box;
-  valk_http2_response_t *res;
-  valk_promise promise;
-} __http2_req_res_t;
 
 typedef struct __http2_connect_req {
   valk_aio_system_t *sys;
@@ -362,16 +355,7 @@ struct valk_aio_http2_client {
   char interface[200];
   int port;
   char hostname[200];
-  valk_promise _promise;
 };
-
-typedef struct valk_aio_task_new {
-  void *arg;
-  valk_promise promise;
-  valk_async_handle_t *handle;
-  void (*callback)(valk_aio_system_t *, struct valk_aio_task_new *);
-  valk_mem_allocator_t *allocator;
-} valk_aio_task_new;
 
 typedef struct __valk_request_client_pair_t {
   valk_aio_http2_client *client;

@@ -167,8 +167,6 @@ typedef struct valk_http2_response_t {
   u8 *body;
   u64 bodyLen;
   u64 bodyCapacity;
-
-  valk_promise _promise;
 } valk_http2_response_t;
 
 valk_aio_system_t *valk_aio_start();

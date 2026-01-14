@@ -5,6 +5,16 @@
 #include "aio_ssl.h"
 #include "aio_metrics_v2.h"
 
+typedef struct {
+  u64 streamid;
+  valk_http2_request_t *req;
+  valk_http2_response_t *res;
+  valk_async_handle_t *handle;
+} __http2_client_req_res_t;
+
+extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
+extern valk_lval_t *valk_lval_err(const char *fmt, ...);
+
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
   return conn->sys ? conn->sys->ops->tcp : nullptr;
 }
@@ -589,14 +599,14 @@ static void __disconnect_close_server_streams(valk_aio_handle_t *handle, nghttp2
 static void __disconnect_close_client_streams(nghttp2_session *session) {
   i32 next_id = nghttp2_session_get_next_stream_id(session);
   for (i32 stream_id = 1; stream_id < next_id; stream_id += 2) {
-    __http2_req_res_t *reqres = nghttp2_session_get_stream_user_data(session, stream_id);
+    __http2_client_req_res_t *reqres = nghttp2_session_get_stream_user_data(session, stream_id);
     if (!reqres) continue;
 
     VALK_WARN("Resolving orphaned client request on stream %d due to disconnect", stream_id);
-    valk_arc_box *err = valk_arc_box_err("Connection closed before response received");
-    valk_promise_respond(&reqres->promise, err);
-    valk_arc_release(err);
-    valk_mem_free(reqres);
+    if (reqres->handle) {
+      valk_async_handle_fail(reqres->handle, valk_lval_err("Connection closed before response received"));
+    }
+    free(reqres);
     nghttp2_session_set_stream_user_data(session, stream_id, nullptr);
   }
 }

@@ -1,12 +1,10 @@
 #pragma once
 
 #include "aio_types.h"
-#include "concurrency.h"
 #include "memory.h"
 
 typedef struct valk_aio_task_new {
   void *arg;
-  valk_promise promise;
   valk_async_handle_t *handle;
   void (*callback)(valk_aio_system_t *, struct valk_aio_task_new *);
   valk_mem_allocator_t *allocator;
