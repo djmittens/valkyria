@@ -291,7 +291,6 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
   res->ref.ptr = ptr;
   res->ref.free = free;
 
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -302,7 +301,6 @@ valk_lval_t* valk_lval_num(long x) {
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
   res->num = x;
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -326,7 +324,6 @@ valk_lval_t* valk_lval_err(const char* fmt, ...) {
   res->str = valk_mem_alloc(len + 1);
   vsnprintf(res->str, len + 1, fmt, va2);
   va_end(va2);
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -342,7 +339,6 @@ valk_lval_t* valk_lval_sym(const char* sym) {
   memcpy(res->str, sym, slen);
   res->str[slen] = '\0';
 
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -357,7 +353,6 @@ valk_lval_t* valk_lval_str(const char* str) {
   res->str = valk_mem_alloc(slen + 1);
   memcpy(res->str, str, slen + 1);
 
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -371,7 +366,6 @@ valk_lval_t* valk_lval_str_n(const char* bytes, u64 n) {
   if (n) memcpy(res->str, bytes, n);
   res->str[n] = '\0';
 
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -501,7 +495,6 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
   valk_coverage_mark_tree(body);
 #endif
 
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -515,7 +508,6 @@ valk_lval_t* valk_lval_nil(void) {
   LVAL_INIT_SOURCE_LOC(res);
   res->cons.head = nullptr;
   res->cons.tail = nullptr;
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -528,7 +520,6 @@ valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
   INHERIT_SOURCE_LOC(res, head);
   res->cons.head = head;
   res->cons.tail = tail;
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -542,7 +533,6 @@ valk_lval_t* valk_lval_qcons(valk_lval_t* head, valk_lval_t* tail) {
   INHERIT_SOURCE_LOC(res, head);
   res->cons.head = head;
   res->cons.tail = tail;
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -3451,7 +3441,6 @@ static valk_lval_t* valk_builtin_make_string(valk_lenv_t* e, valk_lval_t* a) {
   }
   res->str[total_size] = '\0';
 
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -4585,8 +4574,10 @@ static valk_lval_t* valk_builtin_http2_server_port(valk_lenv_t* e,
                          valk_ltype_name(LVAL_TYPE(arg)));
   }
 
-  valk_arc_box* box = (valk_arc_box*)server_ref->ref.ptr;
-  valk_aio_http_server* srv = (valk_aio_http_server*)box->item;
+  valk_aio_http_server* srv = (valk_aio_http_server*)server_ref->ref.ptr;
+  if (valk_aio_http2_server_is_stopped(srv)) {
+    return valk_lval_err("http2/server-port: server is stopped");
+  }
   return valk_lval_num(valk_aio_http2_server_get_port(srv));
 }
 
@@ -4619,10 +4610,12 @@ static valk_lval_t* valk_builtin_http2_server_stop(valk_lenv_t* e,
                          valk_ltype_name(LVAL_TYPE(arg)));
   }
 
-  valk_arc_box* box = (valk_arc_box*)server_ref->ref.ptr;
-  valk_aio_http_server* srv = (valk_aio_http_server*)box->item;
+  valk_aio_http_server* srv = (valk_aio_http_server*)server_ref->ref.ptr;
+  if (valk_aio_http2_server_is_stopped(srv)) {
+    return valk_lval_err("http2/server-stop: server already stopped");
+  }
 
-  valk_async_handle_t* stop_handle = valk_aio_http2_stop(srv, box);
+  valk_async_handle_t* stop_handle = valk_aio_http2_stop(srv);
   return valk_lval_handle(stop_handle);
 }
 
@@ -4638,11 +4631,11 @@ static valk_lval_t* valk_builtin_http2_server_handle(valk_lenv_t* e,
   valk_lval_t* server_ref = valk_lval_list_nth(a, 0);
   valk_lval_t* handler_fn = valk_lval_list_nth(a, 1);
 
-  // Extract server from arc_box
-  valk_arc_box* box = (valk_arc_box*)server_ref->ref.ptr;
-  valk_aio_http_server* server = (valk_aio_http_server*)box->item;
+  valk_aio_http_server* server = (valk_aio_http_server*)server_ref->ref.ptr;
+  if (valk_aio_http2_server_is_stopped(server)) {
+    return valk_lval_err("http2/server-handle: server is stopped");
+  }
 
-  // Copy handler function to GC heap (will be shared across requests)
   valk_lval_t* heap_handler;
   VALK_WITH_ALLOC((valk_mem_allocator_t*)valk_thread_ctx.heap) {
     heap_handler = valk_lval_copy(handler_fn);

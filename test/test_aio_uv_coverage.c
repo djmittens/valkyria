@@ -10,7 +10,6 @@
 #include "aio/aio_async.h"
 #include "collections.h"
 #include "common.h"
-#include "concurrency.h"
 #include "memory.h"
 #include "parser.h"
 #include "testing.h"

@@ -14,7 +14,6 @@
 #include "collections.h"
 #include "parser.h"
 #include "common.h"
-#include "concurrency.h"
 #include "memory.h"
 #include "testing.h"
 typedef struct {

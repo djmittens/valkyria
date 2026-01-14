@@ -23,7 +23,6 @@
 #include "io/io_tcp_uv_types.h"
 #include "metrics_v2.h"
 #include "event_loop_metrics.h"
-#include "concurrency.h"
 #include "parser.h"
 #include "memory.h"
 #include "collections.h"
@@ -300,6 +299,7 @@ struct valk_aio_system {
   valk_aio_handle_t *stopperHandle;
 
   valk_slab_t *httpServers;
+  valk_aio_http_server *serverList;
   valk_slab_t *httpClients;
   valk_slab_t *httpStreamArenas;
   valk_slab_t *tcpBufferSlab;
@@ -346,6 +346,8 @@ struct valk_aio_http_server {
   valk_http_server_config_t config;
   valk_server_metrics_t metrics;
   u16 owner_idx;
+  struct valk_aio_http_server *next;
+  struct valk_aio_http_server *prev;
 };
 
 struct valk_aio_http2_client {

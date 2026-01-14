@@ -19,33 +19,6 @@ __thread valk_thread_context_t valk_thread_ctx = {.allocator = nullptr, .heap = 
 // Global malloc allocator for use with VALK_WITH_ALLOC when malloc is needed
 valk_mem_allocator_t valk_malloc_allocator = {.type = VALK_ALLOC_MALLOC};
 
-#ifdef VALK_ARC_DEBUG
-#include "debug.h"
-void __valk_arc_trace_report_print(valk_arc_trace_info *traces, u64 num) {
-  for (u64 i = 0; i < num; i++) {
-    const char *kind_str;
-    switch (traces->kind) {
-      case VALK_TRACE_ACQUIRE:
-        kind_str = "ACQUIRE";
-        break;
-      case VALK_TRACE_RELEASE:
-        kind_str = "RELEASE";
-        break;
-      case VALK_TRACE_NEW:
-        kind_str = "NEW";
-        break;
-      case VALK_TRACE_FREE:
-        kind_str = "FREE";
-        break;
-    }
-    fprintf(stderr, "[%s] refcount[%ld] %s()|%s:%d \n", kind_str, traces->refcount,
-            traces->function, traces->file, traces->line);
-    valk_trace_print(traces->stack, traces->size);
-    traces++;
-  }
-}
-#endif
-
 char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self) {
   switch (self) {
     case VALK_ALLOC_NULL:

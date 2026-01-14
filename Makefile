@@ -141,7 +141,6 @@ define run_tests_c
 	$(1)/test_large_response
 	$(1)/test_per_stream_arena
 	$(1)/test_debug
-	$(1)/test_concurrency
 	$(1)/test_loop_metrics
 	$(1)/test_eval_metrics
 	if [ -f $(1)/test_sse_diagnostics ]; then $(1)/test_sse_diagnostics; fi

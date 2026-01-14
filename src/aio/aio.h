@@ -2,7 +2,6 @@
 
 #include <stddef.h>
 #include <stdatomic.h>
-#include "concurrency.h"
 #include "memory.h"
 #include "aio_types.h"
 
@@ -441,22 +440,25 @@ void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_
 /// @return The actual port number the server is listening on
 int valk_aio_http2_server_get_port(valk_aio_http_server *srv);
 
-/// @brief Extract the server from a server ref lval (unwraps arc_box)
-/// @param server_ref LVAL_REF containing the server arc_box
+/// @brief Check if the server has been stopped or is stopping
+/// @param srv The HTTP/2 server
+/// @return true if the server is stopped or stopping
+bool valk_aio_http2_server_is_stopped(valk_aio_http_server *srv);
+
+/// @brief Extract the server from a server ref lval
+/// @param server_ref LVAL_REF containing the server pointer
 /// @return The HTTP/2 server pointer
 valk_aio_http_server* valk_aio_http2_server_from_ref(struct valk_lval_t *server_ref);
 
 /// @brief Get port from a server ref lval (convenience wrapper)
-/// @param server_ref LVAL_REF containing the server arc_box
+/// @param server_ref LVAL_REF containing the server arc
 /// @return The actual port number the server is listening on
 int valk_aio_http2_server_get_port_from_ref(struct valk_lval_t *server_ref);
 
 /// @brief Gracefully stop an HTTP/2 server
 /// @param srv The HTTP/2 server to stop
-/// @param box The arc_box containing the server (for ref counting)
 /// @return Async handle that completes when server is stopped
-valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv,
-                                         struct valk_arc_box *box);
+valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv);
 
 ///
 /// @return returns an async handle that completes with the client

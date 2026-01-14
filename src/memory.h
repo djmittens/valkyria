@@ -3,9 +3,6 @@
 #include <stdio.h>
 #include "types.h"
 
-// #define VALK_ARC_DEBUG
-#define VALK_ARC_TRACE_DEPTH 10
-
 #define VALK_WITH_CTX(_ctx_)                        \
   for (struct {                                     \
          int exec;                                  \
@@ -34,86 +31,7 @@
 #define valk_mem_free(__ptr) \
   valk_mem_allocator_free(valk_thread_ctx.allocator, __ptr)
 
-#define valk_retain(ref)                                            \
-  ({                                                                \
-    if (ref != nullptr) {                                           \
-      (ref)->refcount++;                                            \
-      valk_capture_trace(VALK_TRACE_ACQUIRE, (ref)->refcount, ref); \
-    }                                                               \
-    (ref);                                                          \
-  })
-
-// This is bootleg arc
-#define valk_release(ref)                                               \
-  do {                                                                  \
-    if (ref == nullptr) break;                                          \
-    (ref)->refcount--;                                                  \
-    /*char _buf[512];                                                   \
-    pthread_getname_np(pthread_self(), _buf, sizeof(_buf));*/           \
-    if ((ref)->refcount == 0) {                                         \
-      /* printf("[%s] Arc is freeing %d\n", _buf, old); */              \
-      /* Only free using the allocator if a custom one is not defined*/ \
-      valk_capture_trace(VALK_TRACE_FREE, (ref)->refcount, ref);        \
-      if ((ref)->free) {                                                \
-        valk_arc_trace_report_print(ref);                               \
-        (ref)->free(ref);                                               \
-      } else if ((ref)->allocator) {                                    \
-        valk_mem_allocator_free((ref)->allocator, (ref));               \
-      }                                                                 \
-    } else {                                                            \
-      /* printf("[%s] Arc is decrementing %d\n", _buf, old); */         \
-      valk_capture_trace(VALK_TRACE_RELEASE, (ref)->refcount, ref);     \
-    }                                                                   \
-  } while (0)
-
-#ifdef VALK_ARC_DEBUG
-#include <dlfcn.h>
-#include <execinfo.h>
-#define VALK_ARC_TRACE_MAX 50
-
-typedef enum {
-  VALK_TRACE_NEW,
-  VALK_TRACE_ACQUIRE,
-  VALK_TRACE_RELEASE,
-  VALK_TRACE_FREE
-} valk_trace_kind_e;
-
-typedef struct valk_arc_trace_info {
-  valk_trace_kind_e kind;
-  const char *file;
-  const char *function;
-  int line;
-  u64 refcount;
-  void *stack[VALK_ARC_TRACE_DEPTH];
-  u64 size;
-} valk_arc_trace_info;
-
-#define valk_capture_trace(_kind, _refcount, ref)                             \
-  do {                                                                        \
-    u64 _old = __atomic_fetch_add(&(ref)->nextTrace, 1, __ATOMIC_RELEASE); \
-    VALK_ASSERT(                                                              \
-        _old < VALK_ARC_TRACE_MAX,                                            \
-        "Cannot keep tracing this variable, please increase the max traces"); \
-    (ref)->traces[_old].kind = (_kind);                                       \
-    (ref)->traces[_old].file = __FILE__;                                      \
-    (ref)->traces[_old].function = __func__;                                  \
-    (ref)->traces[_old].line = __LINE__;                                      \
-    (ref)->traces[_old].refcount = (_refcount);                               \
-    (ref)->traces[_old].size =                                                \
-        backtrace((ref)->traces[_old].stack, VALK_ARC_TRACE_DEPTH);           \
-  } while (0)
-
-#define valk_arc_trace_report_print(report) \
-  __valk_arc_trace_report_print((report)->traces, (report)->nextTrace)
-
-void __valk_arc_trace_report_print(valk_arc_trace_info *traces, u64 num);
-
-#else
-#define valk_capture_trace(_kind, _refcount, ref) UNUSED((_refcount));
-#define valk_arc_trace_report_print(report)
-#endif
-
-/// generic helper, same as Linux kernel’s container_of
+/// generic helper, same as Linux kernel's container_of
 /// @return the ptr of the right type
 #define valk_container_of(ptr, type, member) \
   ((type *)((u8 *)(ptr) - offsetof(type, member)))

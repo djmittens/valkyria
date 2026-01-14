@@ -217,9 +217,9 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
 
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     sys->httpServers = valk_slab_new(
-        sizeof(valk_arc_box) + sizeof(valk_aio_http_server), sys->config.max_servers);
+        sizeof(valk_aio_http_server), sys->config.max_servers);
     sys->httpClients = valk_slab_new(
-        sizeof(valk_arc_box) + sizeof(valk_aio_http2_client), sys->config.max_clients);
+        sizeof(valk_aio_http2_client), sys->config.max_clients);
     sys->handleSlab = valk_slab_new(sizeof(valk_aio_handle_t), sys->config.max_handles);
     sz timer_item_size = sizeof(valk_interval_timer_t) > sizeof(valk_schedule_timer_t)
                          ? sizeof(valk_interval_timer_t) : sizeof(valk_schedule_timer_t);
@@ -331,6 +331,8 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
   valk_cond_destroy(&sys->http_queue.request_ready);
   valk_mutex_destroy(&sys->http_queue.response_mutex);
   valk_cond_destroy(&sys->http_queue.response_ready);
+
+  valk_aio_http2_cleanup_all_servers(sys);
 
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     valk_slab_free(sys->httpServers);

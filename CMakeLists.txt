@@ -79,7 +79,7 @@ set(VALKYRIA_SOURCES
   src/parser.c
   src/memory.c
   src/valk_thread_posix.c
-  src/concurrency.c  # TODO: Remove once AIO is updated to use continuations
+
   src/gc.c
   src/debug.c
   src/log.c
@@ -296,10 +296,6 @@ include_directories(test_event_loop_metrics_unit src/)
 add_executable(test_metrics_builtins test/unit/test_metrics_builtins.c test/testing.c)
 target_link_libraries(test_metrics_builtins PRIVATE "-lc" valkyria)
 include_directories(test_metrics_builtins src/)
-
-add_executable(test_concurrency test/unit/test_concurrency.c test/testing.c)
-target_link_libraries(test_concurrency PRIVATE "-lc" valkyria)
-include_directories(test_concurrency src/)
 
 add_executable(test_log test/unit/test_log.c test/testing.c)
 target_link_libraries(test_log PRIVATE "-lc" valkyria)
