@@ -1,10 +1,7 @@
 UNAME := $(shell uname -s)
 
-# Feature flags
-VALK_METRICS ?= 1
-
 # Shared CMake flags
-CMAKE_BASE = cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug -DVALK_METRICS=$(VALK_METRICS)
+CMAKE_BASE = cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ifeq ($(UNAME), Darwin)
 	CMAKE_BASE += -DHOMEBREW_CLANG=on
 endif
@@ -144,41 +141,37 @@ define run_tests_c
 	$(1)/test_large_response
 	$(1)/test_per_stream_arena
 	$(1)/test_debug
-	$(1)/test_concurrency
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_metrics ]; then $(1)/test_aio_metrics; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_loop_metrics ]; then $(1)/test_loop_metrics; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_eval_metrics ]; then $(1)/test_eval_metrics; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_diagnostics ]; then $(1)/test_sse_diagnostics; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse ]; then $(1)/test_sse; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_pool_metrics ]; then $(1)/test_pool_metrics; fi
-
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_metrics_delta ]; then $(1)/test_metrics_delta; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_event_loop_metrics_unit ]; then $(1)/test_event_loop_metrics_unit; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_metrics_v2 ]; then $(1)/test_metrics_v2; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_metrics_builtins ]; then $(1)/test_metrics_builtins; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_registry_unit ]; then $(1)/test_sse_registry_unit; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_stream_registry_unit ]; then $(1)/test_sse_stream_registry_unit; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_builtins_unit ]; then $(1)/test_sse_builtins_unit; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_sse_core ]; then $(1)/test_sse_core; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_backpressure ]; then $(1)/test_aio_backpressure; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_uv_coverage ]; then $(1)/test_aio_uv_coverage; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_integration ]; then $(1)/test_aio_integration; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_combinators ]; then $(1)/test_aio_combinators; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_load_shedding ]; then $(1)/test_aio_load_shedding; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_sse_integration ]; then $(1)/test_aio_sse_integration; fi
-	if [ "$(VALK_METRICS)" = "1" ] && [ -f $(1)/test_aio_config ]; then $(1)/test_aio_config; fi
-	if [ -f $(1)/test_aio_uv_unit ]; then $(1)/test_aio_uv_unit; fi
-	if [ -f $(1)/test_aio_alloc_unit ]; then $(1)/test_aio_alloc_unit; fi
-	if [ -f $(1)/test_aio_ssl_unit ]; then $(1)/test_aio_ssl_unit; fi
+	$(1)/test_loop_metrics
+	$(1)/test_eval_metrics
+	if [ -f $(1)/test_sse_diagnostics ]; then $(1)/test_sse_diagnostics; fi
+	if [ -f $(1)/test_sse ]; then $(1)/test_sse; fi
+	$(1)/test_pool_metrics
+	$(1)/test_metrics_delta
+	$(1)/test_event_loop_metrics_unit
+	$(1)/test_metrics_v2
+	$(1)/test_metrics_builtins
+	if [ -f $(1)/test_sse_registry_unit ]; then $(1)/test_sse_registry_unit; fi
+	if [ -f $(1)/test_sse_stream_registry_unit ]; then $(1)/test_sse_stream_registry_unit; fi
+	if [ -f $(1)/test_sse_builtins_unit ]; then $(1)/test_sse_builtins_unit; fi
+	if [ -f $(1)/test_sse_core ]; then $(1)/test_sse_core; fi
+	$(1)/test_aio_backpressure
+	$(1)/test_aio_uv_coverage
+	$(1)/test_aio_integration
+	$(1)/test_aio_combinators
+	$(1)/test_aio_load_shedding
+	if [ -f $(1)/test_aio_sse_integration ]; then $(1)/test_aio_sse_integration; fi
+	$(1)/test_aio_config
+	$(1)/test_aio_uv_unit
+	$(1)/test_aio_alloc_unit
+	$(1)/test_aio_ssl_unit
 	if [ -f $(1)/test_coverage_unit ]; then $(1)/test_coverage_unit; fi
-	if [ -f $(1)/test_gc_unit ]; then $(1)/test_gc_unit; fi
-	if [ -f $(1)/test_memory_unit ]; then $(1)/test_memory_unit; fi
-	if [ -f $(1)/test_log ]; then $(1)/test_log; fi
-	if [ -f $(1)/test_parser_unit ]; then $(1)/test_parser_unit; fi
+	$(1)/test_gc_unit
+	$(1)/test_memory_unit
+	$(1)/test_log
+	$(1)/test_parser_unit
 	if [ -f $(1)/test_source_loc_unit ]; then $(1)/test_source_loc_unit; fi
-	if [ -f $(1)/test_body_buffer ]; then $(1)/test_body_buffer; fi
-	if [ -f $(1)/test_pressure ]; then $(1)/test_pressure; fi
-	if [ -f $(1)/test_conn_io ]; then $(1)/test_conn_io; fi
+	$(1)/test_pressure
+	$(1)/test_conn_io
 	@echo "=== All C tests passed ($(1)) ==="
 endef
 
@@ -188,8 +181,8 @@ endef
 define run_tests_valk
 	@echo "=== Running Valk tests from $(1) ==="
 	@if [ -n "$$ASAN_OPTIONS" ]; then echo "ASAN_OPTIONS=$$ASAN_OPTIONS"; fi
-	if [ "$(VALK_METRICS)" = "1" ]; then $(1)/valk test/test_metrics.valk; fi
-	if [ "$(VALK_METRICS)" = "1" ]; then $(1)/valk test/test_metrics_builtins_comprehensive.valk; fi
+	$(1)/valk test/test_metrics.valk
+	$(1)/valk test/test_metrics_builtins_comprehensive.valk
 	$(1)/valk test/test_prelude.valk
 	$(1)/valk test/test_namespace.valk
 	$(1)/valk test/test_varargs.valk
@@ -347,14 +340,6 @@ test-all:
 .PHONY: todo
 todo:
 	rg "TODO\($(shell git rev-parse --abbrev-ref HEAD)\)"
-
-.PHONY: build-metrics
-build-metrics:
-	$(MAKE) build VALK_METRICS=1
-
-.PHONY: test-metrics
-test-metrics:
-	$(MAKE) test VALK_METRICS=1
 
 # Coverage targets
 .ONESHELL:

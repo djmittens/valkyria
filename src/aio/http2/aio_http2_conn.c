@@ -3,6 +3,17 @@
 #include "aio_internal.h"
 #include "aio_conn_io.h"
 #include "aio_ssl.h"
+#include "aio_metrics_v2.h"
+
+typedef struct {
+  u64 streamid;
+  valk_http2_request_t *req;
+  valk_http2_response_t *res;
+  valk_async_handle_t *handle;
+} __http2_client_req_res_t;
+
+extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
+extern valk_lval_t *valk_lval_err(const char *fmt, ...);
 
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
   return conn->sys ? conn->sys->ops->tcp : nullptr;
@@ -338,11 +349,10 @@ static void __tcp_read_handle_write_buf_exhausted(valk_aio_handle_t *conn, const
   __vtable_read_stop(conn);
   valk_conn_io_read_buf_release(&conn->http.io, conn->sys->tcpBufferSlab);
   __tcp_read_enter_backpressure(conn);
-#ifdef VALK_METRICS_ENABLED
   if (conn->http.server) {
-    atomic_fetch_add(&conn->http.server->sys->metrics_state->system_stats.tcp_buffer_overflow, 1);
+    valk_aio_system_stats_v2_on_tcp_buffer_overflow(
+        (valk_aio_system_stats_v2_t*)conn->http.server->sys->metrics_state->system_stats_v2);
   }
-#endif
 }
 
 static void __tcp_read_flush_http2_frames(valk_aio_handle_t *conn, u8 *write_buf) {
@@ -523,9 +533,8 @@ void valk_http2_exit_arena_backpressure(valk_aio_handle_t *conn) {
 }
 
 static void __disconnect_update_metrics(valk_aio_handle_t *handle) {
-#ifdef VALK_METRICS_ENABLED
   VALK_METRICS_IF(handle->sys) {
-    valk_aio_metrics_on_close(&VALK_METRICS(handle->sys));
+    valk_aio_metrics_v2_on_close(VALK_METRICS_V2(handle->sys));
   }
   extern valk_gauge_v2_t* client_connections_active;
   if (handle->http.server) {
@@ -533,9 +542,6 @@ static void __disconnect_update_metrics(valk_aio_handle_t *handle) {
   } else if (client_connections_active) {
     valk_gauge_v2_dec(client_connections_active);
   }
-#else
-  UNUSED(handle);
-#endif
 }
 
 static void __disconnect_release_orphaned_arenas(valk_aio_handle_t *handle) {
@@ -567,9 +573,8 @@ static void __disconnect_release_orphaned_arenas(valk_aio_handle_t *handle) {
 
     VALK_DEBUG("Releasing orphaned arena slot %u on disconnect", slot);
     valk_arena_ref_release(&req->arena_ref, slab);
-#ifdef VALK_METRICS_ENABLED
-    valk_aio_system_stats_on_arena_release(&handle->http.server->sys->metrics_state->system_stats);
-#endif
+    valk_aio_system_stats_v2_on_arena_release(
+        (valk_aio_system_stats_v2_t*)handle->http.server->sys->metrics_state->system_stats_v2);
     orphaned_count++;
     slot = next_slot;
   }
@@ -594,14 +599,14 @@ static void __disconnect_close_server_streams(valk_aio_handle_t *handle, nghttp2
 static void __disconnect_close_client_streams(nghttp2_session *session) {
   i32 next_id = nghttp2_session_get_next_stream_id(session);
   for (i32 stream_id = 1; stream_id < next_id; stream_id += 2) {
-    __http2_req_res_t *reqres = nghttp2_session_get_stream_user_data(session, stream_id);
+    __http2_client_req_res_t *reqres = nghttp2_session_get_stream_user_data(session, stream_id);
     if (!reqres) continue;
 
     VALK_WARN("Resolving orphaned client request on stream %d due to disconnect", stream_id);
-    valk_arc_box *err = valk_arc_box_err("Connection closed before response received");
-    valk_promise_respond(&reqres->promise, err);
-    valk_arc_release(err);
-    valk_mem_free(reqres);
+    if (reqres->handle) {
+      valk_async_handle_fail(reqres->handle, valk_lval_err("Connection closed before response received"));
+    }
+    free(reqres);
     nghttp2_session_set_stream_user_data(session, stream_id, nullptr);
   }
 }

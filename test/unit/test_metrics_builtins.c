@@ -1,8 +1,6 @@
 #include "../testing.h"
 #include "../../src/memory.h"
 #include "../../src/parser.h"
-
-#ifdef VALK_METRICS_ENABLED
 #include "../../src/metrics_v2.h"
 
 #include <stdio.h>
@@ -1001,20 +999,10 @@ void test_counter_inc_too_many_args(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-#else
-
-void test_metrics_builtins_disabled(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  VALK_SKIP("Metrics builtins tests require VALK_METRICS_ENABLED");
-}
-
-#endif
-
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
-#ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_counter_create", test_counter_create);
   valk_testsuite_add_test(suite, "test_counter_create_no_args", test_counter_create_no_args);
   valk_testsuite_add_test(suite, "test_counter_create_wrong_type", test_counter_create_wrong_type);
@@ -1073,9 +1061,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gauge_create_max_labels", test_gauge_create_max_labels);
   valk_testsuite_add_test(suite, "test_histogram_create_max_labels", test_histogram_create_max_labels);
   valk_testsuite_add_test(suite, "test_histogram_create_max_buckets", test_histogram_create_max_buckets);
-#else
-  valk_testsuite_add_test(suite, "test_metrics_builtins_disabled", test_metrics_builtins_disabled);
-#endif
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

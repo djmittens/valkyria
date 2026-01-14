@@ -3,7 +3,11 @@
 static void __schedule_timer_close_cb(uv_handle_t *handle) {
   valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)handle->data;
   if (timer_data) {
-    free(timer_data);
+    if (timer_data->slab) {
+      valk_slab_release_ptr(timer_data->slab, timer_data);
+    } else {
+      free(timer_data);
+    }
   }
 }
 
@@ -29,7 +33,11 @@ static void __interval_timer_close_cb(uv_handle_t *handle) {
     timer_data->magic = VALK_INTERVAL_TIMER_FREED;
     timer_data->callback = nullptr;
     handle->data = nullptr;
-    free(timer_data);
+    if (timer_data->slab) {
+      valk_slab_release_ptr(timer_data->slab, timer_data);
+    } else {
+      free(timer_data);
+    }
   }
 }
 
@@ -151,7 +159,11 @@ static void __interval_init_on_loop(void *ctx) {
   int r = uv_timer_init(loop, &timer_data->timer);
   if (r != 0) {
     valk_gc_remove_global_root(&timer_data->callback);
-    free(timer_data);
+    if (timer_data->slab) {
+      valk_slab_release_ptr(timer_data->slab, timer_data);
+    } else {
+      free(timer_data);
+    }
     free(init_ctx);
     return;
   }
@@ -160,7 +172,11 @@ static void __interval_init_on_loop(void *ctx) {
   if (r != 0) {
     valk_gc_remove_global_root(&timer_data->callback);
     uv_close((uv_handle_t *)&timer_data->timer, NULL);
-    free(timer_data);
+    if (timer_data->slab) {
+      valk_slab_release_ptr(timer_data->slab, timer_data);
+    } else {
+      free(timer_data);
+    }
   }
   
   free(init_ctx);
@@ -175,18 +191,28 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
     return valk_lval_err("aio/interval: invalid AIO system");
   }
 
-  valk_interval_timer_t *timer_data = aligned_alloc(alignof(valk_interval_timer_t), sizeof(valk_interval_timer_t));
-  if (!timer_data) {
-    return valk_lval_err("Failed to allocate interval timer");
+  valk_interval_timer_t *timer_data;
+  valk_slab_t *timer_slab = nullptr;
+  if (sys->timerDataSlab) {
+    valk_slab_item_t *item = valk_slab_aquire(sys->timerDataSlab);
+    if (!item) {
+      return valk_lval_err("Timer pool exhausted");
+    }
+    timer_data = (valk_interval_timer_t *)item->data;
+    timer_slab = sys->timerDataSlab;
+  } else {
+    timer_data = aligned_alloc(alignof(valk_interval_timer_t), sizeof(valk_interval_timer_t));
+    if (!timer_data) {
+      return valk_lval_err("Failed to allocate interval timer");
+    }
   }
 
-  // Evacuate callback and all its dependencies to heap immediately
-  // This is necessary because the timer callback may fire before checkpoint runs
   valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
   
   timer_data->callback = heap_callback;
   timer_data->interval_id = __atomic_fetch_add(&g_interval_id, 1, __ATOMIC_RELAXED);
   timer_data->magic = VALK_INTERVAL_TIMER_MAGIC;
+  timer_data->slab = timer_slab;
   
   fprintf(stderr, "[TRACE] aio/interval[%llu]: CREATED callback=%p (was %p) type=%u alloc=%u\n",
           (unsigned long long)timer_data->interval_id,
@@ -201,7 +227,11 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
   valk_interval_init_ctx_t *init_ctx = malloc(sizeof(valk_interval_init_ctx_t));
   if (!init_ctx) {
     valk_gc_remove_global_root(&timer_data->callback);
-    free(timer_data);
+    if (timer_slab) {
+      valk_slab_release_ptr(timer_slab, timer_data);
+    } else {
+      free(timer_data);
+    }
     return valk_lval_err("Failed to allocate interval init context");
   }
   
@@ -262,7 +292,11 @@ static void __schedule_init_on_loop(void *ctx) {
   if (r != 0) {
     VALK_ERROR("schedule[%llu]: uv_timer_init failed r=%d", timer_data->schedule_id, r);
     valk_gc_remove_global_root(&timer_data->callback);
-    free(timer_data);
+    if (timer_data->slab) {
+      valk_slab_release_ptr(timer_data->slab, timer_data);
+    } else {
+      free(timer_data);
+    }
     free(init_ctx);
     return;
   }
@@ -272,7 +306,11 @@ static void __schedule_init_on_loop(void *ctx) {
     VALK_ERROR("schedule[%llu]: uv_timer_start failed r=%d", timer_data->schedule_id, r);
     valk_gc_remove_global_root(&timer_data->callback);
     uv_close((uv_handle_t *)&timer_data->timer, NULL);
-    free(timer_data);
+    if (timer_data->slab) {
+      valk_slab_release_ptr(timer_data->slab, timer_data);
+    } else {
+      free(timer_data);
+    }
   } else {
     VALK_INFO("schedule[%llu]: timer started delay=%llu", timer_data->schedule_id, init_ctx->delay_ms);
   }
@@ -291,14 +329,26 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
 
   u64 schedule_id = atomic_fetch_add(&g_schedule_id, 1);
 
-  valk_schedule_timer_t *timer_data = aligned_alloc(alignof(valk_schedule_timer_t), sizeof(valk_schedule_timer_t));
-  if (!timer_data) {
-    return valk_lval_err("Failed to allocate timer");
+  valk_schedule_timer_t *timer_data;
+  valk_slab_t *timer_slab = nullptr;
+  if (sys->timerDataSlab) {
+    valk_slab_item_t *item = valk_slab_aquire(sys->timerDataSlab);
+    if (!item) {
+      return valk_lval_err("Timer pool exhausted");
+    }
+    timer_data = (valk_schedule_timer_t *)item->data;
+    timer_slab = sys->timerDataSlab;
+  } else {
+    timer_data = aligned_alloc(alignof(valk_schedule_timer_t), sizeof(valk_schedule_timer_t));
+    if (!timer_data) {
+      return valk_lval_err("Failed to allocate timer");
+    }
   }
 
   timer_data->callback = callback;
   timer_data->timer.data = timer_data;
   timer_data->schedule_id = schedule_id;
+  timer_data->slab = timer_slab;
 
   valk_gc_add_global_root(&timer_data->callback);
 
@@ -307,7 +357,11 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
   valk_schedule_init_ctx_t *init_ctx = malloc(sizeof(valk_schedule_init_ctx_t));
   if (!init_ctx) {
     valk_gc_remove_global_root(&timer_data->callback);
-    free(timer_data);
+    if (timer_slab) {
+      valk_slab_release_ptr(timer_slab, timer_data);
+    } else {
+      free(timer_data);
+    }
     return valk_lval_err("Failed to allocate schedule init context");
   }
   

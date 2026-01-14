@@ -3,6 +3,7 @@
 #include "aio_http2_conn.h"
 #include "aio_http2_session.h"
 #include "aio_ssl.h"
+#include "aio_metrics_v2.h"
 #include "../gc.h"
 
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
@@ -78,7 +79,6 @@ static inline int __vtable_getpeername(valk_aio_handle_t *conn, void *addr, int 
   return ops->getpeername(__conn_tcp(conn), addr, len);
 }
 
-#ifdef VALK_METRICS_ENABLED
 valk_gauge_v2_t* client_connections_active = nullptr;
 
 void valk_http2_server_metrics_init(valk_aio_system_t* sys, valk_server_metrics_t* m,
@@ -135,7 +135,6 @@ void valk_http2_server_metrics_init(valk_aio_system_t* sys, valk_server_metrics_
   m->bytes_recv = valk_counter_get_or_create("http_bytes_recv_total", nullptr, &base_labels);
   m->overload_responses = valk_counter_get_or_create("http_overload_responses_total", nullptr, &base_labels);
 }
-#endif
 
 static void __load_shed_close_cb(uv_handle_t *handle) {
   free(handle);
@@ -196,9 +195,7 @@ static bool __accept_should_reject(valk_aio_http_server *srv, valk_aio_handle_t 
   VALK_WARN("Load shedding: rejecting connection (%s, level=%s)",
             result.reason ? result.reason : "unknown",
             valk_pressure_level_str(result.level));
-#ifdef VALK_METRICS_ENABLED
-  atomic_fetch_add(&srv->sys->metrics_state->system_stats.connections_rejected_load, 1);
-#endif
+  valk_counter_v2_inc(((valk_aio_system_stats_v2_t*)srv->sys->metrics_state->system_stats_v2)->connections_rejected_load);
   uv_tcp_t *reject_tcp = malloc(sizeof(uv_tcp_t));
   if (reject_tcp) {
     uv_tcp_init(srv->sys->eventloop, reject_tcp);
@@ -230,9 +227,7 @@ static valk_aio_handle_t *__accept_alloc_conn(valk_aio_http_server *srv) {
   conn->http.active_arena_head = UINT32_MAX;
   conn->http.io.buf_size = HTTP_SLAB_ITEM_SIZE;
 
-#ifdef VALK_METRICS_ENABLED
   conn->http.diag.owner_idx = srv->owner_idx;
-#endif
 
   valk_dll_insert_after(&srv->sys->liveHandles, conn);
 
@@ -295,26 +290,20 @@ static void __accept_finalize(valk_aio_handle_t *conn, valk_aio_http_server *srv
     conn->http.httpHandler->onConnect(conn->http.httpHandler->arg, conn);
   }
 
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_metrics_on_connection(&srv->sys->metrics_state->metrics, true);
+  valk_aio_metrics_v2_on_connection(
+      (valk_aio_metrics_v2_t*)srv->sys->metrics_state->metrics_v2, true);
   valk_gauge_v2_inc(srv->metrics.connections_active);
   conn->http.diag.state = VALK_DIAG_CONN_ACTIVE;
   conn->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
   conn->http.diag.owner_idx = srv->owner_idx;
-#else
-  UNUSED(srv);
-#endif
 
   __vtable_read_start(conn);
 }
 
 static void __accept_handle_error(valk_aio_handle_t *conn, valk_aio_http_server *srv, int res) {
   VALK_WARN("Accept error: %s", srv->sys->ops->tcp->strerror(res));
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_metrics_on_connection(&srv->sys->metrics_state->metrics, false);
-#else
-  UNUSED(srv);
-#endif
+  valk_aio_metrics_v2_on_connection(
+      (valk_aio_metrics_v2_t*)srv->sys->metrics_state->metrics_v2, false);
   if (!__vtable_is_closing(conn)) {
     valk_conn_transition(conn, VALK_CONN_EVT_ERROR);
     __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
@@ -345,11 +334,26 @@ static void __http_server_accept_impl(valk_aio_handle_t *hndl, int status) {
   __accept_finalize(conn, srv);
 }
 
+static int __send_goaway_to_all_conns(valk_aio_system_t *sys, valk_aio_http_server *srv) {
+  int goaway_count = 0;
+  valk_aio_handle_t *h = sys->liveHandles.next;
+  while (h && h != &sys->liveHandles) {
+    valk_aio_handle_t *next = h->next;
+    if (h->kind == VALK_HNDL_HTTP_CONN && h->http.server == srv &&
+        h->http.state == VALK_CONN_ESTABLISHED && h->http.session &&
+        !__vtable_is_closing(h)) {
+      valk_http2_submit_goaway(h, NGHTTP2_NO_ERROR);
+      valk_http2_flush_pending(h);
+      goaway_count++;
+    }
+    h = next;
+  }
+  return goaway_count;
+}
+
 static void __http_shutdown_cb(valk_aio_handle_t *hndl) {
   valk_aio_http_server *srv = hndl->arg;
-  if (!srv || !srv->sys) {
-    return;
-  }
+  if (!srv || !srv->sys) return;
 
   valk_aio_system_t *sys = srv->sys;
   
@@ -373,25 +377,7 @@ static void __http_shutdown_cb(valk_aio_handle_t *hndl) {
     return;
   }
 
-  int goaway_count = 0;
-
-  valk_aio_handle_t *h = sys->liveHandles.next;
-  while (h && h != &sys->liveHandles) {
-    valk_aio_handle_t *next = h->next;
-
-    if (h->kind == VALK_HNDL_HTTP_CONN && h->http.server == srv) {
-      if (h->http.state == VALK_CONN_ESTABLISHED && 
-          h->http.session &&
-          !__vtable_is_closing(h)) {
-        valk_http2_submit_goaway(h, NGHTTP2_NO_ERROR);
-        valk_http2_flush_pending(h);
-        goaway_count++;
-      }
-    }
-
-    h = next;
-  }
-
+  int goaway_count = __send_goaway_to_all_conns(sys, srv);
   if (goaway_count > 0) {
     VALK_INFO("Server :%d sent GOAWAY to %d connections", srv->port, goaway_count);
   }
@@ -402,87 +388,6 @@ extern valk_lval_t *valk_lval_err(const char *fmt, ...);
 extern valk_lval_t *valk_lval_ref(const char *type, void *ptr, void (*free)(void *));
 extern void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result);
 extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
-
-static void __http_listen_cb(valk_aio_system_t *sys,
-                             struct valk_aio_task_new *task) {
-  int r;
-  valk_arc_box *box = task->arg;
-  valk_async_handle_t *handle = task->handle;
-
-  valk_aio_http_server *srv = box->item;
-  srv->listener = (void *)valk_slab_aquire(sys->handleSlab)->data;
-
-  memset(srv->listener, 0, sizeof(valk_aio_handle_t));
-  srv->listener->magic = VALK_AIO_HANDLE_MAGIC;
-  srv->listener->kind = VALK_HNDL_TCP;
-  srv->listener->sys = sys;
-  srv->listener->arg = srv;
-  srv->listener->onClose = __http_shutdown_cb;
-
-  r = __vtable_init(srv->listener);
-  srv->listener->uv.tcp.uv.data = srv->listener;
-  srv->listener->uv.tcp.user_data = srv->listener;
-  VALK_ASSERT(r == 0, "tcp init failed: %d", r);
-  __vtable_nodelay(srv->listener, 1);
-
-  r = __vtable_bind(srv->listener, srv->interface, srv->port);
-  if (r) {
-    VALK_ERROR("Bind error: %d", r);
-    valk_async_handle_fail(handle, valk_lval_err("Error on Bind"));
-    valk_arc_release(box);
-    valk_slab_release_ptr(sys->handleSlab, srv->listener);
-    return;
-  }
-
-  if (srv->port == 0) {
-    struct sockaddr_in bound_addr;
-    int namelen = sizeof(bound_addr);
-    r = __vtable_getsockname(srv->listener, &bound_addr, &namelen);
-    if (r == 0) {
-      srv->port = ntohs(bound_addr.sin_port);
-    }
-  }
-
-#ifdef VALK_METRICS_ENABLED
-  const char* protocol = srv->ssl_ctx ? "https" : "http";
-  valk_http2_server_metrics_init(sys, &srv->metrics, srv->interface, srv->port, protocol, sys->name);
-  valk_aio_system_stats_on_server_start(&sys->metrics_state->system_stats);
-
-  char owner_name[32];
-  snprintf(owner_name, sizeof(owner_name), ":%d", srv->port);
-  srv->owner_idx = valk_owner_register(sys, owner_name, 0, srv);
-#endif
-
-  r = __vtable_listen(srv->listener, 128);
-  if (r) {
-    VALK_ERROR("Listen error: %d", r);
-    valk_async_handle_fail(handle, valk_lval_err("Error on Listening"));
-    valk_arc_release(box);
-    valk_slab_release_ptr(sys->handleSlab, srv->listener);
-    return;
-  }
-
-  VALK_INFO("Listening on %s:%d", srv->interface, srv->port);
-
-  valk_lval_t *server_ref = valk_lval_ref("http_server", box, nullptr);
-  valk_async_handle_complete(handle, server_ref);
-  valk_dll_insert_after(&sys->liveHandles, srv->listener);
-}
-
-static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
-                                  unsigned char *outlen,
-                                  const unsigned char *in, unsigned int inlen,
-                                  void *arg) {
-  UNUSED(ssl);
-  UNUSED(arg);
-
-  int rv;
-  rv = nghttp2_select_alpn(out, outlen, in, inlen);
-  if (rv == -1) {
-    return SSL_TLSEXT_ERR_NOACK;
-  }
-  return SSL_TLSEXT_ERR_OK;
-}
 
 static void __valk_sandbox_env_free(valk_lenv_t *env) {
   if (!env) return;
@@ -505,17 +410,124 @@ static void __valk_sandbox_env_free(valk_lenv_t *env) {
   free(env);
 }
 
-static void __valk_aio_http2_server_free(valk_arc_box *box) {
-  valk_aio_http_server *srv = box->item;
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_system_stats_on_server_stop(&srv->sys->metrics_state->system_stats);
-#endif
+static void __valk_aio_http2_server_cleanup(valk_aio_http_server *srv) {
+  if (!srv || !srv->sys) return;
+  valk_aio_system_stats_v2_on_server_stop(
+      (valk_aio_system_stats_v2_t*)srv->sys->metrics_state->system_stats_v2);
   if (srv->lisp_handler_fn) {
     valk_gc_remove_global_root(&srv->lisp_handler_fn);
+    srv->lisp_handler_fn = nullptr;
   }
   __valk_sandbox_env_free(srv->sandbox_env);
+  srv->sandbox_env = nullptr;
   SSL_CTX_free(srv->ssl_ctx);
-  valk_mem_allocator_free(box->allocator, box);
+  srv->ssl_ctx = nullptr;
+}
+
+static void __valk_server_list_remove(valk_aio_http_server *srv) {
+  if (!srv || !srv->sys) return;
+  valk_aio_system_t *sys = srv->sys;
+  if (srv->prev) {
+    srv->prev->next = srv->next;
+  } else {
+    sys->serverList = srv->next;
+  }
+  if (srv->next) {
+    srv->next->prev = srv->prev;
+  }
+  srv->next = nullptr;
+  srv->prev = nullptr;
+}
+
+static void __valk_server_list_insert(valk_aio_system_t *sys, valk_aio_http_server *srv) {
+  srv->next = sys->serverList;
+  srv->prev = nullptr;
+  if (sys->serverList) {
+    sys->serverList->prev = srv;
+  }
+  sys->serverList = srv;
+}
+
+static void __http_listen_cb(valk_aio_system_t *sys,
+                             struct valk_aio_task_new *task) {
+  int r;
+  valk_aio_http_server *srv = task->arg;
+  valk_async_handle_t *handle = task->handle;
+
+  srv->listener = (void *)valk_slab_aquire(sys->handleSlab)->data;
+
+  memset(srv->listener, 0, sizeof(valk_aio_handle_t));
+  srv->listener->magic = VALK_AIO_HANDLE_MAGIC;
+  srv->listener->kind = VALK_HNDL_TCP;
+  srv->listener->sys = sys;
+  srv->listener->arg = srv;
+  srv->listener->onClose = __http_shutdown_cb;
+
+  r = __vtable_init(srv->listener);
+  srv->listener->uv.tcp.uv.data = srv->listener;
+  srv->listener->uv.tcp.user_data = srv->listener;
+  VALK_ASSERT(r == 0, "tcp init failed: %d", r);
+  __vtable_nodelay(srv->listener, 1);
+
+  r = __vtable_bind(srv->listener, srv->interface, srv->port);
+  if (r) {
+    VALK_ERROR("Bind error: %d", r);
+    valk_async_handle_fail(handle, valk_lval_err("Error on Bind"));
+    __valk_aio_http2_server_cleanup(srv);
+    valk_slab_release_ptr(sys->httpServers, srv);
+    valk_slab_release_ptr(sys->handleSlab, srv->listener);
+    return;
+  }
+
+  if (srv->port == 0) {
+    struct sockaddr_in bound_addr;
+    int namelen = sizeof(bound_addr);
+    r = __vtable_getsockname(srv->listener, &bound_addr, &namelen);
+    if (r == 0) {
+      srv->port = ntohs(bound_addr.sin_port);
+    }
+  }
+
+  const char* protocol = srv->ssl_ctx ? "https" : "http";
+  valk_http2_server_metrics_init(sys, &srv->metrics, srv->interface, srv->port, protocol, sys->name);
+  valk_aio_system_stats_v2_on_server_start(
+      (valk_aio_system_stats_v2_t*)sys->metrics_state->system_stats_v2);
+
+  char owner_name[32];
+  snprintf(owner_name, sizeof(owner_name), ":%d", srv->port);
+  srv->owner_idx = valk_owner_register(sys, owner_name, 0, srv);
+
+  r = __vtable_listen(srv->listener, 128);
+  if (r) {
+    VALK_ERROR("Listen error: %d", r);
+    valk_async_handle_fail(handle, valk_lval_err("Error on Listening"));
+    __valk_aio_http2_server_cleanup(srv);
+    valk_slab_release_ptr(sys->httpServers, srv);
+    valk_slab_release_ptr(sys->handleSlab, srv->listener);
+    return;
+  }
+
+  VALK_INFO("Listening on %s:%d", srv->interface, srv->port);
+
+  __valk_server_list_insert(sys, srv);
+  valk_lval_t *server_ref = valk_lval_ref("http_server", srv, nullptr);
+  valk_async_handle_complete(handle, server_ref);
+  valk_dll_insert_after(&sys->liveHandles, srv->listener);
+}
+
+static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
+                                  unsigned char *outlen,
+                                  const unsigned char *in, unsigned int inlen,
+                                  void *arg) {
+  UNUSED(ssl);
+  UNUSED(arg);
+
+  int rv;
+  rv = nghttp2_select_alpn(out, outlen, in, inlen);
+  if (rv == -1) {
+    return SSL_TLSEXT_ERR_NOACK;
+  }
+  return SSL_TLSEXT_ERR_OK;
 }
 
 extern valk_async_handle_t *valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env);
@@ -535,51 +547,48 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
                                    valk_http2_handler_t *handler,
                                    void *lisp_handler,
                                    valk_http_server_config_t *config) {
-  valk_arc_box *box = (valk_arc_box *)valk_slab_aquire(sys->httpServers)->data;
+  valk_slab_item_t *slab_item = valk_slab_aquire(sys->httpServers);
+  if (!slab_item) {
+    valk_async_handle_t *handle = valk_async_handle_new(sys, nullptr);
+    valk_async_handle_fail(handle, valk_lval_err("Server slab exhausted"));
+    return handle;
+  }
+  valk_aio_http_server *srv = (valk_aio_http_server *)slab_item->data;
   valk_async_handle_t *handle = valk_async_handle_new(sys, nullptr);
 
-  valk_aio_http_server *srv;
-  {
-    valk_arc_box_init(box, VALK_SUC, sizeof(valk_aio_http_server));
+  memset(srv, 0, sizeof(valk_aio_http_server));
+  srv->sys = sys;
 
-    box->allocator = (valk_mem_allocator_t *)sys->httpServers;
-    box->free = __valk_aio_http2_server_free;
-
-    srv = box->item;
-    memset(srv, 0, sizeof(valk_aio_http_server));
-    srv->sys = sys;
-
-    strncpy(srv->interface, interface, 200);
-    srv->port = port;
-    if (handler) {
-      srv->handler = *handler;
-    }
-    srv->lisp_handler_fn = lisp_handler ? valk_evacuate_to_heap((valk_lval_t*)lisp_handler) : nullptr;
-    if (srv->lisp_handler_fn) {
-      valk_gc_add_global_root(&srv->lisp_handler_fn);
-      void* saved_heap = valk_thread_ctx.heap;
-      valk_thread_ctx.heap = nullptr;
-      VALK_WITH_ALLOC(&valk_malloc_allocator) {
-        srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)lisp_handler)->fun.env);
-      }
-      valk_thread_ctx.heap = saved_heap;
-    }
-
-    if (config) {
-      srv->config = *config;
-    } else {
-      srv->config = valk_http_server_config_default();
-    }
-
-    valk_err_e ssl_err = valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
-    if (ssl_err != VALK_ERR_SUCCESS) {
-      VALK_ERROR("Failed to initialize SSL context (key=%s, cert=%s)", keyfile, certfile);
-      valk_async_handle_fail(handle, valk_lval_err("SSL initialization failed"));
-      valk_arc_release(box);
-      return handle;
-    }
-    SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, nullptr);
+  strncpy(srv->interface, interface, 200);
+  srv->port = port;
+  if (handler) {
+    srv->handler = *handler;
   }
+  srv->lisp_handler_fn = lisp_handler ? valk_evacuate_to_heap((valk_lval_t*)lisp_handler) : nullptr;
+  if (srv->lisp_handler_fn) {
+    valk_gc_add_global_root(&srv->lisp_handler_fn);
+    void* saved_heap = valk_thread_ctx.heap;
+    valk_thread_ctx.heap = nullptr;
+    VALK_WITH_ALLOC(&valk_malloc_allocator) {
+      srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)lisp_handler)->fun.env);
+    }
+    valk_thread_ctx.heap = saved_heap;
+  }
+
+  if (config) {
+    srv->config = *config;
+  } else {
+    srv->config = valk_http_server_config_default();
+  }
+
+  valk_err_e ssl_err = valk_aio_ssl_server_init(&srv->ssl_ctx, keyfile, certfile);
+  if (ssl_err != VALK_ERR_SUCCESS) {
+    VALK_ERROR("Failed to initialize SSL context (key=%s, cert=%s)", keyfile, certfile);
+    valk_async_handle_fail(handle, valk_lval_err("SSL initialization failed"));
+    valk_slab_release_ptr(sys->httpServers, srv);
+    return handle;
+  }
+  SSL_CTX_set_alpn_select_cb(srv->ssl_ctx, __alpn_select_proto_cb, nullptr);
 
   struct valk_aio_task_new *task;
   VALK_WITH_ALLOC((valk_mem_allocator_t *)sys->handleSlab) {
@@ -588,12 +597,13 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
   if (!task) {
     VALK_ERROR("Handle slab exhausted in http2_listen");
     valk_async_handle_fail(handle, valk_lval_err("Handle slab exhausted"));
-    valk_arc_release(box);
+    __valk_aio_http2_server_cleanup(srv);
+    valk_slab_release_ptr(sys->httpServers, srv);
     return handle;
   }
   task->allocator = (valk_mem_allocator_t *)sys->handleSlab;
 
-  task->arg = box;
+  task->arg = srv;
   task->handle = handle;
   task->callback = __http_listen_cb;
 
@@ -620,9 +630,12 @@ int valk_aio_http2_server_get_port(valk_aio_http_server *srv) {
   return srv->port;
 }
 
+bool valk_aio_http2_server_is_stopped(valk_aio_http_server *srv) {
+  return !srv || srv->state == VALK_SRV_CLOSED || srv->state == VALK_SRV_CLOSING;
+}
+
 valk_aio_http_server* valk_aio_http2_server_from_ref(valk_lval_t *server_ref) {
-  valk_arc_box *box = (valk_arc_box*)server_ref->ref.ptr;
-  return (valk_aio_http_server*)box->item;
+  return (valk_aio_http_server*)server_ref->ref.ptr;
 }
 
 int valk_aio_http2_server_get_port_from_ref(valk_lval_t *server_ref) {
@@ -631,22 +644,25 @@ int valk_aio_http2_server_get_port_from_ref(valk_lval_t *server_ref) {
 
 typedef struct {
   valk_async_handle_t *handle;
-  valk_arc_box *box;
+  valk_aio_http_server *srv;
 } __http_stop_ctx_t;
 
 static void __http_stop_listener_close_cb(uv_handle_t *handle) {
   valk_aio_handle_t *hndl = handle->data;
   __http_stop_ctx_t *ctx = hndl->arg;
-  valk_arc_box *box = ctx->box;
-  valk_aio_http_server *srv = box->item;
+  valk_aio_http_server *srv = ctx->srv;
+  valk_aio_system_t *sys = hndl->sys;
 
   srv->state = VALK_SRV_CLOSED;
   VALK_INFO("Server :%d listener closed", srv->port);
 
-  valk_async_handle_complete(ctx->handle, valk_lval_nil());
-  valk_arc_release(box);
+  __valk_server_list_remove(srv);
+  __valk_aio_http2_server_cleanup(srv);
+  valk_slab_release_ptr(sys->httpServers, srv);
 
-  valk_slab_t *slab = hndl->sys->handleSlab;
+  valk_async_handle_complete(ctx->handle, valk_lval_nil());
+
+  valk_slab_t *slab = sys->handleSlab;
   valk_mem_allocator_free((valk_mem_allocator_t *)slab, ctx);
 
   valk_dll_pop(hndl);
@@ -655,21 +671,13 @@ static void __http_stop_listener_close_cb(uv_handle_t *handle) {
 
 static void __http_stop_cb(valk_aio_system_t *sys,
                            struct valk_aio_task_new *task) {
-  valk_arc_box *box = task->arg;
+  valk_aio_http_server *srv = task->arg;
   valk_async_handle_t *handle = task->handle;
-  valk_aio_http_server *srv = box->item;
 
-  if (srv->state == VALK_SRV_CLOSED) {
-    VALK_INFO("Server :%d already stopped", srv->port);
+  if (srv->state == VALK_SRV_CLOSED || srv->state == VALK_SRV_CLOSING) {
+    VALK_INFO("Server :%d already %s", srv->port,
+              srv->state == VALK_SRV_CLOSED ? "stopped" : "stopping");
     valk_async_handle_complete(handle, valk_lval_nil());
-    valk_arc_release(box);
-    return;
-  }
-
-  if (srv->state == VALK_SRV_CLOSING) {
-    VALK_INFO("Server :%d already stopping", srv->port);
-    valk_async_handle_complete(handle, valk_lval_nil());
-    valk_arc_release(box);
     return;
   }
 
@@ -677,20 +685,7 @@ static void __http_stop_cb(valk_aio_system_t *sys,
   VALK_INFO("Server :%d stopping, sending GOAWAY to connections", srv->port);
 
   if (!sys->shuttingDown) {
-    int goaway_count = 0;
-    valk_aio_handle_t *h = sys->liveHandles.next;
-    while (h && h != &sys->liveHandles) {
-      valk_aio_handle_t *next = h->next;
-      if (h->kind == VALK_HNDL_HTTP_CONN && h->http.server == srv) {
-        if (h->http.state == VALK_CONN_ESTABLISHED &&
-            h->http.session && !__vtable_is_closing(h)) {
-          valk_http2_submit_goaway(h, NGHTTP2_NO_ERROR);
-          valk_http2_flush_pending(h);
-          goaway_count++;
-        }
-      }
-      h = next;
-    }
+    int goaway_count = __send_goaway_to_all_conns(sys, srv);
     if (goaway_count > 0) {
       VALK_INFO("Server :%d sent GOAWAY to %d connections", srv->port, goaway_count);
     }
@@ -702,23 +697,25 @@ static void __http_stop_cb(valk_aio_system_t *sys,
       ctx = valk_mem_alloc(sizeof(__http_stop_ctx_t));
     }
     ctx->handle = handle;
-    ctx->box = box;
+    ctx->srv = srv;
     srv->listener->arg = ctx;
     srv->listener->onClose = nullptr;
     __vtable_close(srv->listener, (valk_io_close_cb)__http_stop_listener_close_cb);
   } else {
     srv->state = VALK_SRV_CLOSED;
+    __valk_server_list_remove(srv);
+    __valk_aio_http2_server_cleanup(srv);
+    valk_slab_release_ptr(sys->httpServers, srv);
     valk_async_handle_complete(handle, valk_lval_nil());
-    valk_arc_release(box);
   }
 }
 
-valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv,
-                                         valk_arc_box *box) {
+valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv) {
+  if (!srv || !srv->sys) {
+    return nullptr;
+  }
   valk_aio_system_t *sys = srv->sys;
   valk_async_handle_t *handle = valk_async_handle_new(sys, nullptr);
-
-  valk_arc_retain(box);
 
   struct valk_aio_task_new *task;
   VALK_WITH_ALLOC((valk_mem_allocator_t *)sys->handleSlab) {
@@ -727,15 +724,27 @@ valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv,
   if (!task) {
     VALK_ERROR("Handle slab exhausted in http2_stop");
     valk_async_handle_fail(handle, valk_lval_err("Handle slab exhausted"));
-    valk_arc_release(box);
     return handle;
   }
   task->allocator = (valk_mem_allocator_t *)sys->handleSlab;
-  task->arg = box;
+  task->arg = srv;
   task->handle = handle;
   task->callback = __http_stop_cb;
 
   valk_uv_exec_task(sys, task);
 
   return handle;
+}
+
+void valk_aio_http2_cleanup_all_servers(valk_aio_system_t *sys) {
+  if (!sys) return;
+
+  valk_aio_http_server *srv = sys->serverList;
+  while (srv) {
+    valk_aio_http_server *next = srv->next;
+    __valk_aio_http2_server_cleanup(srv);
+    valk_slab_release_ptr(sys->httpServers, srv);
+    srv = next;
+  }
+  sys->serverList = nullptr;
 }

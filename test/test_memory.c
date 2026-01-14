@@ -1,6 +1,5 @@
 #include "test_memory.h"
 #include "common.h"
-#include "concurrency.h"
 #include "gc.h"
 #include "memory.h"
 #include "parser.h"
@@ -9,6 +8,27 @@
 #include <pthread.h>
 #include <time.h>
 #include <unistd.h>
+
+typedef struct test_box {
+  valk_mem_allocator_t *allocator;
+  u64 capacity;
+  void *item;
+} test_box_t;
+
+static test_box_t *test_box_new(sz capacity) {
+  test_box_t *box = valk_mem_alloc(sizeof(test_box_t) + capacity);
+  memset(box, 0, sizeof(test_box_t) + capacity);
+  box->allocator = valk_thread_ctx.allocator;
+  box->capacity = capacity;
+  box->item = (char*)box + sizeof(test_box_t);
+  return box;
+}
+
+static void test_box_init(test_box_t *box, sz capacity) {
+  memset(box, 0, sizeof(test_box_t) + capacity);
+  box->capacity = capacity;
+  box->item = (char*)box + sizeof(test_box_t);
+}
 
 const char *THREAD_FMT = "T%ldT%ldT%ld";
 
@@ -40,11 +60,11 @@ void test_slab_alloc(VALK_TEST_ARGS()) {
 
   VALK_TEST();
 
-  int itemLen = sizeof(valk_arc_box) + sizeof(msg);
+  int itemLen = sizeof(test_box_t) + sizeof(msg);
   size_t numItems = rand() % 1000;
   valk_slab_t *slab = valk_slab_new(itemLen, numItems);
 
-  valk_arc_box *boxes[numItems];
+  test_box_t *boxes[numItems];
   size_t slabIds[numItems];
 
   printf("Aquiring %ld boxes\n", numItems);
@@ -52,13 +72,13 @@ void test_slab_alloc(VALK_TEST_ARGS()) {
   for (size_t i = 0; i < numItems; ++i) {
     if (rand() % 2) {
       valk_slab_item_t *item = valk_slab_aquire(slab);
-      boxes[i] = (valk_arc_box *)item->data;
-      valk_arc_box_init(boxes[i], VALK_SUC, sizeof(msg));
+      boxes[i] = (test_box_t *)item->data;
+      test_box_init(boxes[i], sizeof(msg));
       boxes[i]->allocator = (valk_mem_allocator_t *)slab;
       slabIds[i] = item->handle;
     } else {
       VALK_WITH_ALLOC((valk_mem_allocator_t *)slab) {
-        boxes[i] = valk_arc_box_new(VALK_SUC, sizeof(msg));
+        boxes[i] = test_box_new(sizeof(msg));
         slabIds[i] =
             valk_container_of(boxes[i], valk_slab_item_t, data)->handle;
       }
@@ -83,7 +103,7 @@ void test_slab_alloc(VALK_TEST_ARGS()) {
 
   // should be smaller than the other messge
   const char newMsg[] = "XOXOXO";
-  valk_arc_box *newBoxes[reapNum];
+  test_box_t *newBoxes[reapNum];
 
   for (size_t i = 0; i < reapNum; ++i) {
     do {
@@ -108,8 +128,8 @@ void test_slab_alloc(VALK_TEST_ARGS()) {
   // ok we are done with the context one, just to keep things simple lets just
   // do the normal api
   for (size_t i = 0; i < reapNum; ++i) {
-    newBoxes[i] = (valk_arc_box *)valk_slab_aquire(slab)->data;
-    valk_arc_box_init(newBoxes[i], VALK_SUC, sizeof(newMsg));
+    newBoxes[i] = (test_box_t *)valk_slab_aquire(slab)->data;
+    test_box_init(newBoxes[i], sizeof(newMsg));
     newBoxes[i]->allocator = (valk_mem_allocator_t *)slab;
     strncpy(newBoxes[i]->item, newMsg, sizeof(newMsg));
   }
@@ -138,7 +158,7 @@ void test_slab_alloc(VALK_TEST_ARGS()) {
 typedef struct {
   size_t id;
   valk_slab_t *slab;
-  valk_arc_box **boxes;
+  test_box_t **boxes;
   size_t numItems;
   size_t rand;
 } shuffle_thread_arg_t;
@@ -157,12 +177,12 @@ void test_slab_concurrency(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   const char msg[] = "Get fucked";
-  int itemLen = sizeof(valk_arc_box) + sizeof(msg);
+  int itemLen = sizeof(test_box_t) + sizeof(msg);
   size_t numItems = rand() % 1000;
 
   valk_slab_t *slab = valk_slab_new(itemLen, numItems);
 
-  valk_arc_box *boxes[numItems];
+  test_box_t *boxes[numItems];
   printf("Aquiring %ld boxes\n", numItems);
 
   size_t slabIds[numItems];
@@ -171,13 +191,13 @@ void test_slab_concurrency(VALK_TEST_ARGS()) {
   for (size_t i = 0; i < numItems; ++i) {
     if (rand() % 2) {
       valk_slab_item_t *item = valk_slab_aquire(slab);
-      boxes[i] = (valk_arc_box *)item->data;
-      valk_arc_box_init(boxes[i], VALK_SUC, sizeof(msg));
+      boxes[i] = (test_box_t *)item->data;
+      test_box_init(boxes[i], sizeof(msg));
       boxes[i]->allocator = (valk_mem_allocator_t *)slab;
       slabIds[i] = item->handle;
     } else {
       VALK_WITH_ALLOC((valk_mem_allocator_t *)slab) {
-        boxes[i] = valk_arc_box_new(VALK_SUC, sizeof(msg));
+        boxes[i] = test_box_new(sizeof(msg));
         slabIds[i] =
             valk_container_of(boxes[i], valk_slab_item_t, data)->handle;
       }
@@ -190,7 +210,7 @@ void test_slab_concurrency(VALK_TEST_ARGS()) {
 
   // Split the boxes randomly between threads
   size_t numThreads = 1 + rand() % 10;
-  valk_arc_box *splitBoxes[numThreads][numItems];
+  test_box_t *splitBoxes[numThreads][numItems];
 
   for (size_t i = 0; i < numThreads; ++i) {
     for (size_t j = 0; j < numItems; ++j) {
@@ -1577,7 +1597,7 @@ void *slab_shuffle_thread(void *arg) {
   }
 
   // lets get to it
-  valk_arc_box *myBoxes[numBoxes];
+  test_box_t *myBoxes[numBoxes];
   for (size_t j = 0, remBoxes = numBoxes; j < params->numItems; ++j) {
     if (params->boxes[j] != nullptr) {
       myBoxes[--remBoxes] = params->boxes[j];
@@ -1600,7 +1620,7 @@ void *slab_shuffle_thread(void *arg) {
 
       if (myBoxes[randomBox] == nullptr) {
         myBoxes[randomBox] =
-            (valk_arc_box *)valk_slab_aquire(params->slab)->data;
+            (test_box_t *)valk_slab_aquire(params->slab)->data;
         strncpy(myBoxes[randomBox]->item, msg, count);
       } else {
         // check if we have our message in this box, and then release it

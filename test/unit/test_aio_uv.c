@@ -258,7 +258,6 @@ void test_aio_active_system_initially_null(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-#ifdef VALK_METRICS_ENABLED
 void test_owner_registry_null_system(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -270,33 +269,6 @@ void test_owner_registry_null_system(VALK_TEST_ARGS()) {
 
   size_t count = valk_owner_get_count(nullptr);
   ASSERT_EQ(count, 0);
-
-  VALK_PASS();
-}
-
-void test_aio_get_metrics_null(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_aio_metrics_t *metrics = valk_aio_get_metrics(nullptr);
-  ASSERT_NULL(metrics);
-
-  VALK_PASS();
-}
-
-void test_aio_get_system_stats_null(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_aio_system_stats_t *stats = valk_aio_get_system_stats(nullptr);
-  ASSERT_NULL(stats);
-
-  VALK_PASS();
-}
-
-void test_aio_get_http_clients_registry_null(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_http_clients_registry_t *registry = valk_aio_get_http_clients_registry(nullptr);
-  ASSERT_NULL(registry);
 
   VALK_PASS();
 }
@@ -327,7 +299,6 @@ void test_aio_get_tcp_buffer_slab_null(VALK_TEST_ARGS()) {
 
   VALK_PASS();
 }
-#endif
 
 void test_aio_get_event_loop_null(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -387,15 +358,11 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_config_resolve_fills_defaults", test_config_resolve_fills_defaults);
   valk_testsuite_add_test(suite, "test_config_resolve_respects_custom_values", test_config_resolve_respects_custom_values);
   valk_testsuite_add_test(suite, "test_aio_active_system_initially_null", test_aio_active_system_initially_null);
-#ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_owner_registry_null_system", test_owner_registry_null_system);
-  valk_testsuite_add_test(suite, "test_aio_get_metrics_null", test_aio_get_metrics_null);
-  valk_testsuite_add_test(suite, "test_aio_get_system_stats_null", test_aio_get_system_stats_null);
-  valk_testsuite_add_test(suite, "test_aio_get_http_clients_registry_null", test_aio_get_http_clients_registry_null);
+
   valk_testsuite_add_test(suite, "test_aio_get_gc_heap_null", test_aio_get_gc_heap_null);
   valk_testsuite_add_test(suite, "test_aio_get_scratch_arena_null", test_aio_get_scratch_arena_null);
   valk_testsuite_add_test(suite, "test_aio_get_tcp_buffer_slab_null", test_aio_get_tcp_buffer_slab_null);
-#endif
   valk_testsuite_add_test(suite, "test_aio_get_event_loop_null", test_aio_get_event_loop_null);
   valk_testsuite_add_test(suite, "test_aio_get_name_null", test_aio_get_name_null);
   valk_testsuite_add_test(suite, "test_aio_set_name_null", test_aio_set_name_null);

@@ -1,7 +1,5 @@
 #include "aio_internal.h"
 
-#ifdef VALK_METRICS_ENABLED
-
 u16 valk_owner_register(valk_aio_system_t *sys, const char *name, u8 type, void *ptr) {
   if (!sys || sys->owner_registry.count >= VALK_MAX_OWNERS) {
     return UINT16_MAX;
@@ -29,5 +27,3 @@ u64 valk_owner_get_count(valk_aio_system_t *sys) {
   if (!sys) return 0;
   return sys->owner_registry.count;
 }
-
-#endif

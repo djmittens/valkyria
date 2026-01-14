@@ -7,9 +7,6 @@
 #include <pthread.h>
 #include "testing.h"
 #include "common.h"
-
-#ifdef VALK_METRICS_ENABLED
-
 #include "aio/aio_metrics.h"
 #include <uv.h>
 #include <string.h>
@@ -445,21 +442,3 @@ int main(int argc, const char** argv) {
 
   return res;
 }
-
-#else
-
-//=============================================================================
-// METRICS DISABLED - Skip Tests
-//=============================================================================
-
-#include <stdio.h>
-
-int main(int argc, const char** argv) {
-  UNUSED(argc);
-  UNUSED(argv);
-
-  fprintf(stderr, "SKIP: Event loop metrics tests disabled (VALK_METRICS not enabled)\n");
-  return 0;
-}
-
-#endif // VALK_METRICS_ENABLED

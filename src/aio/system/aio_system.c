@@ -3,6 +3,7 @@
 #include "aio_http2_server.h"
 #include "aio_http2_client.h"
 #include "aio_http2_conn.h"
+#include "aio_metrics_v2.h"
 
 extern void __event_loop(void *arg);
 extern void __aio_uv_stop(uv_async_t *h);
@@ -118,6 +119,7 @@ int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
   if (cfg->max_servers == 0) cfg->max_servers = 8;
   if (cfg->max_clients == 0) cfg->max_clients = 8;
   if (cfg->max_connections_per_client == 0) cfg->max_connections_per_client = 2;
+  if (cfg->max_timers == 0) cfg->max_timers = cfg->max_handles / 4;
 
   if (cfg->tcp_buffer_pool_size == 0) {
     u64 server_conns = cfg->max_servers * cfg->max_connections;
@@ -204,12 +206,10 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
     return nullptr;
   }
 
-#ifdef VALK_METRICS_ENABLED
   int rc = uv_loop_configure(sys->eventloop, UV_METRICS_IDLE_TIME);
   if (rc != 0) {
     VALK_WARN("Failed to enable loop metrics: %s", uv_strerror(rc));
   }
-#endif
 
   memset(&sys->liveHandles, 0, sizeof(valk_aio_handle_t));
   sys->liveHandles.magic = VALK_AIO_HANDLE_MAGIC;
@@ -217,10 +217,13 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
 
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     sys->httpServers = valk_slab_new(
-        sizeof(valk_arc_box) + sizeof(valk_aio_http_server), sys->config.max_servers);
+        sizeof(valk_aio_http_server), sys->config.max_servers);
     sys->httpClients = valk_slab_new(
-        sizeof(valk_arc_box) + sizeof(valk_aio_http2_client), sys->config.max_clients);
+        sizeof(valk_aio_http2_client), sys->config.max_clients);
     sys->handleSlab = valk_slab_new(sizeof(valk_aio_handle_t), sys->config.max_handles);
+    sz timer_item_size = sizeof(valk_interval_timer_t) > sizeof(valk_schedule_timer_t)
+                         ? sizeof(valk_interval_timer_t) : sizeof(valk_schedule_timer_t);
+    sys->timerDataSlab = valk_slab_new(timer_item_size, sys->config.max_timers);
   }
 
   valk_backpressure_list_init(&sys->backpressure, sys->config.backpressure_list_max,
@@ -251,7 +254,6 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   valk_mutex_init(&sys->http_queue.response_mutex);
   valk_cond_init(&sys->http_queue.response_ready);
 
-#ifdef VALK_METRICS_ENABLED
   static bool metrics_initialized = false;
   if (!metrics_initialized) {
     valk_metrics_registry_init();
@@ -268,7 +270,6 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   }
   memset(&sys->owner_registry, 0, sizeof(sys->owner_registry));
   valk_event_loop_metrics_v2_init(&sys->loop_metrics, sys->name);
-#endif
 
   sys->stopperHandle = (valk_aio_handle_t *)valk_slab_aquire(sys->handleSlab)->data;
   memset(sys->stopperHandle, 0, sizeof(valk_aio_handle_t));
@@ -331,10 +332,13 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
   valk_mutex_destroy(&sys->http_queue.response_mutex);
   valk_cond_destroy(&sys->http_queue.response_ready);
 
+  valk_aio_http2_cleanup_all_servers(sys);
+
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     valk_slab_free(sys->httpServers);
     valk_slab_free(sys->httpClients);
     valk_slab_free(sys->handleSlab);
+    valk_slab_free(sys->timerDataSlab);
   }
 
   free(sys->port_strs);
@@ -378,21 +382,7 @@ void valk_aio_stop(valk_aio_system_t *sys) {
   }
 }
 
-#ifdef VALK_METRICS_ENABLED
-valk_aio_metrics_t* valk_aio_get_metrics(valk_aio_system_t* sys) {
-  if (!sys || !sys->metrics_state) return nullptr;
-  return &sys->metrics_state->metrics;
-}
 
-valk_aio_system_stats_t* valk_aio_get_system_stats(valk_aio_system_t* sys) {
-  if (!sys || !sys->metrics_state) return nullptr;
-  return &sys->metrics_state->system_stats;
-}
-
-valk_http_clients_registry_t* valk_aio_get_http_clients_registry(valk_aio_system_t* sys) {
-  if (!sys || !sys->metrics_state) return nullptr;
-  return &sys->metrics_state->http_clients;
-}
 
 void valk_aio_update_queue_stats(valk_aio_system_t* sys) {
   if (!sys || !sys->metrics_state) return;
@@ -405,24 +395,26 @@ void valk_aio_update_queue_stats(valk_aio_system_t* sys) {
   u64 pending_responses = sys->http_queue.response_count - sys->http_queue.response_idx;
   pthread_mutex_unlock(&sys->http_queue.response_mutex);
 
-  valk_aio_system_stats_update_queue(&sys->metrics_state->system_stats, pending_requests, pending_responses);
+  valk_aio_system_stats_v2_update_queue(
+      (valk_aio_system_stats_v2_t*)sys->metrics_state->system_stats_v2,
+      pending_requests, pending_responses);
 
   if (sys->tcpBufferSlab) {
     u64 available = valk_slab_available(sys->tcpBufferSlab);
     u64 total = sys->config.tcp_buffer_pool_size;
     u64 used = (available <= total) ? (total - available) : 0;
-    atomic_store(&sys->metrics_state->system_stats.tcp_buffers_used, used);
+    valk_aio_system_stats_v2_t* s_v2 = (valk_aio_system_stats_v2_t*)sys->metrics_state->system_stats_v2;
+    if (s_v2) valk_gauge_v2_set(s_v2->tcp_buffers_used, (i64)used);
   }
 
   if (sys->httpStreamArenas) {
     u64 available = valk_slab_available(sys->httpStreamArenas);
     u64 total = sys->config.arena_pool_size;
     u64 used = (available <= total) ? (total - available) : 0;
-    atomic_store(&sys->metrics_state->system_stats.arenas_used, used);
+    valk_aio_system_stats_v2_t* s_v2 = (valk_aio_system_stats_v2_t*)sys->metrics_state->system_stats_v2;
+    if (s_v2) valk_gauge_v2_set(s_v2->arenas_used, (i64)used);
   }
 }
-
-#endif
 
 uv_loop_t* valk_aio_get_event_loop(valk_aio_system_t* sys) {
   if (!sys) return nullptr;
@@ -430,7 +422,6 @@ uv_loop_t* valk_aio_get_event_loop(valk_aio_system_t* sys) {
 }
 
 void valk_aio_update_loop_metrics(valk_aio_system_t* sys) {
-#ifdef VALK_METRICS_ENABLED
   if (!sys || !sys->eventloop) return;
   valk_event_loop_metrics_v2_update(&sys->loop_metrics, sys->eventloop);
   i64 handle_count = 0;
@@ -440,9 +431,6 @@ void valk_aio_update_loop_metrics(valk_aio_system_t* sys) {
     h = h->next;
   }
   valk_event_loop_metrics_v2_set_handles(&sys->loop_metrics, handle_count);
-#else
-  (void)sys;
-#endif
 }
 
 const char* valk_aio_get_name(valk_aio_system_t* sys) {
@@ -455,7 +443,6 @@ void valk_aio_set_name(valk_aio_system_t* sys, const char* name) {
   snprintf(sys->name, sizeof(sys->name), "%s", name);
 }
 
-#ifdef VALK_METRICS_ENABLED
 valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys) {
   if (!sys || !sys->metrics_state) return nullptr;
   return (valk_gc_malloc_heap_t*)sys->metrics_state->gc_heap;
@@ -465,5 +452,3 @@ valk_mem_arena_t* valk_aio_get_scratch_arena(valk_aio_system_t* sys) {
   if (!sys || !sys->metrics_state) return nullptr;
   return (valk_mem_arena_t*)sys->metrics_state->scratch_arena;
 }
-
-#endif

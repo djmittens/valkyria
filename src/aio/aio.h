@@ -2,7 +2,6 @@
 
 #include <stddef.h>
 #include <stdatomic.h>
-#include "concurrency.h"
 #include "memory.h"
 #include "aio_types.h"
 
@@ -167,8 +166,6 @@ typedef struct valk_http2_response_t {
   u8 *body;
   u64 bodyLen;
   u64 bodyCapacity;
-
-  valk_promise _promise;
 } valk_http2_response_t;
 
 valk_aio_system_t *valk_aio_start();
@@ -220,6 +217,7 @@ typedef struct valk_aio_system_config {
   u32 max_servers;              // Default: 8
   u32 max_clients;              // Default: 8
   u32 max_connections_per_client; // Default: 2 (connections per HTTP/2 client)
+  u32 max_timers;               // Default: max_handles / 4
 
   // DERIVED SETTINGS (set to 0 for auto-calculation)
   u32 tcp_buffer_pool_size;     // Auto: 2 × total_connections
@@ -442,22 +440,25 @@ void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_
 /// @return The actual port number the server is listening on
 int valk_aio_http2_server_get_port(valk_aio_http_server *srv);
 
-/// @brief Extract the server from a server ref lval (unwraps arc_box)
-/// @param server_ref LVAL_REF containing the server arc_box
+/// @brief Check if the server has been stopped or is stopping
+/// @param srv The HTTP/2 server
+/// @return true if the server is stopped or stopping
+bool valk_aio_http2_server_is_stopped(valk_aio_http_server *srv);
+
+/// @brief Extract the server from a server ref lval
+/// @param server_ref LVAL_REF containing the server pointer
 /// @return The HTTP/2 server pointer
 valk_aio_http_server* valk_aio_http2_server_from_ref(struct valk_lval_t *server_ref);
 
 /// @brief Get port from a server ref lval (convenience wrapper)
-/// @param server_ref LVAL_REF containing the server arc_box
+/// @param server_ref LVAL_REF containing the server arc
 /// @return The actual port number the server is listening on
 int valk_aio_http2_server_get_port_from_ref(struct valk_lval_t *server_ref);
 
 /// @brief Gracefully stop an HTTP/2 server
 /// @param srv The HTTP/2 server to stop
-/// @param box The arc_box containing the server (for ref counting)
 /// @return Async handle that completes when server is stopped
-valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv,
-                                         struct valk_arc_box *box);
+valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv);
 
 ///
 /// @return returns an async handle that completes with the client
@@ -475,26 +476,16 @@ valk_async_handle_t *valk_aio_http2_connect_host(valk_aio_system_t *sys,
 valk_async_handle_t *valk_aio_http2_request_send(valk_http2_request_t *req,
                                                   valk_aio_http2_client *client);
 
-#ifdef VALK_METRICS_ENABLED
 #include "aio_metrics.h"
 #include "gc.h"
-
-// Get metrics from AIO system (returns nullptr if metrics not enabled)
-valk_aio_metrics_t* valk_aio_get_metrics(valk_aio_system_t* sys);
-
-// Get system stats from AIO system (returns nullptr if metrics not enabled)
-valk_aio_system_stats_t* valk_aio_get_system_stats(valk_aio_system_t* sys);
-
-// Get HTTP clients registry from AIO system (returns nullptr if metrics not enabled)
-valk_http_clients_registry_t* valk_aio_get_http_clients_registry(valk_aio_system_t* sys);
 
 // Update queue stats from HTTP queue (call before rendering metrics)
 void valk_aio_update_queue_stats(valk_aio_system_t* sys);
 
-// Get GC heap from AIO system (returns nullptr if metrics not enabled)
+// Get GC heap from AIO system
 valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
 
-// Get scratch arena from AIO system (for diagnostics, returns nullptr if not available)
+// Get scratch arena from AIO system (for diagnostics)
 valk_mem_arena_t* valk_aio_get_scratch_arena(valk_aio_system_t* sys);
 
 // ============================================================================
@@ -560,7 +551,6 @@ void valk_aio_timer_stop(valk_aio_handle_t* handle);
 void valk_aio_timer_close(valk_aio_handle_t* handle, void (*close_cb)(uv_handle_t*));
 void valk_aio_timer_set_data(valk_aio_handle_t* handle, void* data);
 void valk_aio_timer_free(valk_aio_handle_t* handle);
-#endif
 
 // Get the event loop from AIO system (returns nullptr if no loop available)
 struct uv_loop_s* valk_aio_get_event_loop(valk_aio_system_t* sys);

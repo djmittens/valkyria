@@ -12,7 +12,6 @@
 #include "aio/aio_async.h"
 #include "collections.h"
 #include "common.h"
-#include "concurrency.h"
 #include "memory.h"
 #include "parser.h"
 #include "testing.h"
@@ -624,13 +623,9 @@ static void test_null_aio_system_accessors(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-#ifdef VALK_METRICS_ENABLED
 static void test_null_metrics_accessors(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  ASSERT_NULL(valk_aio_get_metrics(nullptr));
-  ASSERT_NULL(valk_aio_get_system_stats(nullptr));
-  ASSERT_NULL(valk_aio_get_http_clients_registry(nullptr));
   ASSERT_NULL(valk_aio_get_gc_heap(nullptr));
   ASSERT_NULL(valk_aio_get_scratch_arena(nullptr));
   ASSERT_NULL(valk_aio_get_tcp_buffer_slab(nullptr));
@@ -775,7 +770,6 @@ static void test_update_loop_metrics(VALK_TEST_ARGS()) {
 
   VALK_PASS();
 }
-#endif
 
 static void test_rapid_connect_disconnect(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -1531,7 +1525,6 @@ static void test_query_string(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-#ifdef VALK_METRICS_ENABLED
 static void timer_close_cb(uv_handle_t *handle) {
   UNUSED(handle);
 }
@@ -1882,7 +1875,6 @@ static void test_timer_stop_before_fire(VALK_TEST_ARGS()) {
 
   VALK_PASS();
 }
-#endif
 
 static void test_response_with_status(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -2464,7 +2456,6 @@ static void test_patch_request(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-#ifdef VALK_METRICS_ENABLED
 static void test_connection_metrics(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -3035,8 +3026,6 @@ void test_http2_flush_pending_null(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-#endif
-
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
@@ -3067,13 +3056,11 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_production_config", test_production_config);
   valk_testsuite_add_test(suite, "test_connect_with_hostname", test_connect_with_hostname);
   valk_testsuite_add_test(suite, "test_null_aio_system_accessors", test_null_aio_system_accessors);
-#ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_null_metrics_accessors", test_null_metrics_accessors);
   valk_testsuite_add_test(suite, "test_owner_registry", test_owner_registry);
   valk_testsuite_add_test(suite, "test_handle_diagnostics", test_handle_diagnostics);
   valk_testsuite_add_test(suite, "test_update_queue_stats", test_update_queue_stats);
   valk_testsuite_add_test(suite, "test_update_loop_metrics", test_update_loop_metrics);
-#endif
   valk_testsuite_add_test(suite, "test_rapid_connect_disconnect", test_rapid_connect_disconnect);
   valk_testsuite_add_test(suite, "test_double_stop", test_double_stop);
   valk_testsuite_add_test(suite, "test_server_with_config", test_server_with_config);
@@ -3088,7 +3075,6 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_options_request", test_options_request);
   valk_testsuite_add_test(suite, "test_long_path", test_long_path);
   valk_testsuite_add_test(suite, "test_query_string", test_query_string);
-#ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_timer_alloc_free", test_timer_alloc_free);
   valk_testsuite_add_test(suite, "test_timer_null_safety", test_timer_null_safety);
   valk_testsuite_add_test(suite, "test_timer_full_lifecycle", test_timer_full_lifecycle);
@@ -3100,7 +3086,6 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_multiple_timers", test_multiple_timers);
   valk_testsuite_add_test(suite, "test_timer_free_lifecycle", test_timer_free_lifecycle);
   valk_testsuite_add_test(suite, "test_timer_stop_before_fire", test_timer_stop_before_fire);
-#endif
   valk_testsuite_add_test(suite, "test_response_with_status", test_response_with_status);
   valk_testsuite_add_test(suite, "test_localhost_hostname", test_localhost_hostname);
   valk_testsuite_add_test(suite, "test_large_body_post", test_large_body_post);
@@ -3109,7 +3094,6 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_special_characters_in_path", test_special_characters_in_path);
   valk_testsuite_add_test(suite, "test_binary_body", test_binary_body);
   valk_testsuite_add_test(suite, "test_patch_request", test_patch_request);
-#ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_connection_metrics", test_connection_metrics);
   valk_testsuite_add_test(suite, "test_stream_metrics", test_stream_metrics);
   valk_testsuite_add_test(suite, "test_backpressure_under_load", test_backpressure_under_load);
@@ -3121,9 +3105,7 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_ssl_connection_state_transitions", test_ssl_connection_state_transitions);
   valk_testsuite_add_test(suite, "test_connection_closing_state_handling", test_connection_closing_state_handling);
   valk_testsuite_add_test(suite, "test_session_validity_checks", test_session_validity_checks);
-
   valk_testsuite_add_test(suite, "test_http2_flush_pending_null", test_http2_flush_pending_null);
-#endif
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

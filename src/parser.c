@@ -20,13 +20,11 @@
 #include "source_loc.h"
 #endif
 
-#ifdef VALK_METRICS_ENABLED
 #include "aio/aio_metrics.h"
 #include "aio/aio_diagnostics_builtins.h"
 #include "metrics_v2.h"
 #include "metrics_delta.h"
 void valk_register_metrics_builtins(valk_lenv_t *env);
-#endif
 
 // TODO(networking): temp forward declare for debugging
 static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a);
@@ -293,7 +291,6 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
   res->ref.ptr = ptr;
   res->ref.free = free;
 
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -304,7 +301,6 @@ valk_lval_t* valk_lval_num(long x) {
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
   res->num = x;
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -328,7 +324,6 @@ valk_lval_t* valk_lval_err(const char* fmt, ...) {
   res->str = valk_mem_alloc(len + 1);
   vsnprintf(res->str, len + 1, fmt, va2);
   va_end(va2);
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -344,7 +339,6 @@ valk_lval_t* valk_lval_sym(const char* sym) {
   memcpy(res->str, sym, slen);
   res->str[slen] = '\0';
 
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -359,7 +353,6 @@ valk_lval_t* valk_lval_str(const char* str) {
   res->str = valk_mem_alloc(slen + 1);
   memcpy(res->str, str, slen + 1);
 
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -373,7 +366,6 @@ valk_lval_t* valk_lval_str_n(const char* bytes, u64 n) {
   if (n) memcpy(res->str, bytes, n);
   res->str[n] = '\0';
 
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -503,7 +495,6 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
   valk_coverage_mark_tree(body);
 #endif
 
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -517,7 +508,6 @@ valk_lval_t* valk_lval_nil(void) {
   LVAL_INIT_SOURCE_LOC(res);
   res->cons.head = nullptr;
   res->cons.tail = nullptr;
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -530,7 +520,6 @@ valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
   INHERIT_SOURCE_LOC(res, head);
   res->cons.head = head;
   res->cons.tail = tail;
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -544,7 +533,6 @@ valk_lval_t* valk_lval_qcons(valk_lval_t* head, valk_lval_t* tail) {
   INHERIT_SOURCE_LOC(res, head);
   res->cons.head = head;
   res->cons.tail = tail;
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -971,125 +959,8 @@ valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) {
   return result;
 }
 
-// Recursive tree-walker eval (original implementation, kept for reference)
-__attribute__((unused))
-static valk_lval_t* valk_lval_eval_recursive(valk_lenv_t* env, valk_lval_t* lval) {
-  VALK_GC_SAFE_POINT();
-  
-  atomic_fetch_add(&g_eval_metrics.evals_total, 1);
-
-  // Handle NULL gracefully
-  if (lval == NULL) {
-    return valk_lval_nil();
-  }
-
-  // Return literals as-is (self-evaluating forms)
-  // QEXPR is quoted data - it evaluates to itself, not executed as code
-  // LVAL_HANDLE is an async handle - it evaluates to itself
-  // Note: We skip coverage recording for self-evaluating types because they
-  // are not actually "executed" - they just pass through. This prevents
-  // false coverage hits when if/cond receive unevaluated branches as QEXPRs.
-  if (LVAL_TYPE(lval) == LVAL_NUM || LVAL_TYPE(lval) == LVAL_STR ||
-      LVAL_TYPE(lval) == LVAL_FUN || LVAL_TYPE(lval) == LVAL_ERR ||
-      LVAL_TYPE(lval) == LVAL_NIL || LVAL_TYPE(lval) == LVAL_REF ||
-      LVAL_TYPE(lval) == LVAL_QEXPR || LVAL_TYPE(lval) == LVAL_HANDLE) {
-    return lval;
-  }
-
-  // Symbols are looked up in the environment
-  // Record coverage for symbols since evaluating a symbol IS executing code on that line
-  if (LVAL_TYPE(lval) == LVAL_SYM) {
-    VALK_COVERAGE_RECORD_LVAL(lval);
-    // Keyword symbols (starting with :) are self-evaluating - return as-is
-    if (lval->str[0] == ':') {
-      return lval;
-    }
-    return valk_lenv_get(env, lval);
-  }
-
-  // Record coverage for cons cells (actual expressions being evaluated)
-  VALK_COVERAGE_RECORD_LVAL(lval);
-
-  // Cons cells are evaluated as function calls
-  if (LVAL_TYPE(lval) == LVAL_CONS) {
-    u64 count = valk_lval_list_count(lval);
-
-    // Empty list evaluates to nil
-    if (count == 0) {
-      return valk_lval_nil();
-    }
-
-    // Single element list - evaluate the element
-    // If it evaluates to a function, call it with no arguments
-    if (count == 1) {
-      valk_lval_t* first = valk_lval_eval(env, valk_lval_list_nth(lval, 0));
-      if (LVAL_TYPE(first) == LVAL_FUN) {
-        // Call function with empty args list
-        return valk_lval_eval_call(env, first, valk_lval_nil());
-      }
-      return first;
-    }
-
-    // Check for special forms BEFORE evaluating first element
-    valk_lval_t* first = lval->cons.head;
-    if (LVAL_TYPE(first) == LVAL_SYM) {
-      // quote: return argument unevaluated
-      if (strcmp(first->str, "quote") == 0) {
-        if (count != 2) {
-          return valk_lval_err("quote expects exactly 1 argument, got %zu",
-                               count - 1);
-        }
-        return valk_lval_list_nth(lval, 1);
-      }
-
-      // quasiquote: template with selective evaluation via unquote/unquote-splicing
-      if (strcmp(first->str, "quasiquote") == 0) {
-        if (count != 2) {
-          return valk_lval_err("quasiquote expects exactly 1 argument, got %zu",
-                               count - 1);
-        }
-        valk_lval_t* arg = valk_lval_list_nth(lval, 1);
-        return valk_quasiquote_expand(env, arg);
-      }
-
-      // Note: \ (lambda) and def are regular builtins, not special forms
-      // They receive evaluated arguments, which works with the prelude's macro
-      // patterns
-    }
-
-    // Multi-element list is function application
-    // First evaluate the function position
-    valk_lval_t* func = valk_lval_eval(env, first);
-    if (LVAL_TYPE(func) == LVAL_ERR) {
-      return func;
-    }
-
-    // Evaluate arguments (unless it's a macro)
-    valk_lval_t* tmp[count - 1];
-    valk_lval_t* h = lval->cons.tail;
-
-    for (u64 i = 0; i < (count - 1); i++) {
-      // Evaluate each argument
-      // NOTE: Don't propagate errors - allow functions like error? to receive
-      // error values as arguments
-      tmp[i] = valk_lval_eval(env, h->cons.head);
-      h = h->cons.tail;
-    }
-
-    // Call the function
-    valk_lval_t* result =
-        valk_lval_eval_call(env, func, valk_lval_list(tmp, count - 1));
-
-    return result;
-  }
-
-  // Unknown type
-  return valk_lval_err("Unknown value type in evaluation: %s",
-                       valk_ltype_name(LVAL_TYPE(lval)));
-}
-
-// Forward declaration - defined below
-valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args);
+// Forward declaration for apply helper
+static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args);
 
 // Apply function for iterative evaluator - returns thunk for user-defined functions
 static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args) {
@@ -1207,6 +1078,21 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
 
   return valk_eval_thunk_body(body, call_env, NULL, call_env);
 }
+
+// Helper macro: Set up thunk continuation from valk_eval_result_t
+// Pushes LAMBDA_DONE, optionally BODY_NEXT, and sets expr/cur_env
+#define SETUP_THUNK_CONTINUATION(res, stack_ptr, frame_env, expr_var, cur_env_var) do { \
+  valk_eval_stack_push((stack_ptr), (valk_cont_frame_t){.kind = CONT_LAMBDA_DONE, .env = (frame_env)}); \
+  if ((res).thunk.remaining_body != NULL && !valk_lval_list_is_empty((res).thunk.remaining_body)) { \
+    valk_eval_stack_push((stack_ptr), (valk_cont_frame_t){ \
+      .kind = CONT_BODY_NEXT, \
+      .env = (res).thunk.env, \
+      .body_next = {.remaining = (res).thunk.remaining_body, .call_env = (res).thunk.call_env} \
+    }); \
+  } \
+  (expr_var) = (res).thunk.expr; \
+  (cur_env_var) = (res).thunk.env; \
+} while(0)
 
 // Iterative evaluator - uses explicit stack instead of C recursion
 static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval) {
@@ -1365,16 +1251,7 @@ apply_cont:
               value = res.value;
               if (LVAL_TYPE(value) == LVAL_ERR) goto apply_cont;
             } else {
-              valk_eval_stack_push(&stack, (valk_cont_frame_t){.kind = CONT_LAMBDA_DONE, .env = frame.env});
-              if (res.thunk.remaining_body != NULL && !valk_lval_list_is_empty(res.thunk.remaining_body)) {
-                valk_eval_stack_push(&stack, (valk_cont_frame_t){
-                  .kind = CONT_BODY_NEXT,
-                  .env = res.thunk.env,
-                  .body_next = {.remaining = res.thunk.remaining_body, .call_env = res.thunk.call_env}
-                });
-              }
-              expr = res.thunk.expr;
-              cur_env = res.thunk.env;
+              SETUP_THUNK_CONTINUATION(res, &stack, frame.env, expr, cur_env);
               continue;
             }
           }
@@ -1392,16 +1269,7 @@ apply_cont:
               value = res.value;
               goto apply_cont;
             } else {
-              valk_eval_stack_push(&stack, (valk_cont_frame_t){.kind = CONT_LAMBDA_DONE, .env = frame.env});
-              if (res.thunk.remaining_body != NULL && !valk_lval_list_is_empty(res.thunk.remaining_body)) {
-                valk_eval_stack_push(&stack, (valk_cont_frame_t){
-                  .kind = CONT_BODY_NEXT,
-                  .env = res.thunk.env,
-                  .body_next = {.remaining = res.thunk.remaining_body, .call_env = res.thunk.call_env}
-                });
-              }
-              expr = res.thunk.expr;
-              cur_env = res.thunk.env;
+              SETUP_THUNK_CONTINUATION(res, &stack, frame.env, expr, cur_env);
               continue;
             }
           }
@@ -1437,16 +1305,7 @@ apply_cont:
               value = res.value;
               goto apply_cont;
             } else {
-              valk_eval_stack_push(&stack, (valk_cont_frame_t){.kind = CONT_LAMBDA_DONE, .env = frame.env});
-              if (res.thunk.remaining_body != NULL && !valk_lval_list_is_empty(res.thunk.remaining_body)) {
-                valk_eval_stack_push(&stack, (valk_cont_frame_t){
-                  .kind = CONT_BODY_NEXT,
-                  .env = res.thunk.env,
-                  .body_next = {.remaining = res.thunk.remaining_body, .call_env = res.thunk.call_env}
-                });
-              }
-              expr = res.thunk.expr;
-              cur_env = res.thunk.env;
+              SETUP_THUNK_CONTINUATION(res, &stack, frame.env, expr, cur_env);
               continue;
             }
           }
@@ -1537,6 +1396,7 @@ apply_cont:
       }
     }
   }
+#undef SETUP_THUNK_CONTINUATION
 }
 
 // Public eval function
@@ -1555,163 +1415,37 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
   
   LVAL_ASSERT_TYPE(args, func, LVAL_FUN);
 
-  // Track stack depth and function call metrics
-  u32 depth = atomic_fetch_add(&g_eval_metrics.stack_depth, 1) + 1;
-  if (depth > g_eval_metrics.stack_depth_max) {
-    g_eval_metrics.stack_depth_max = depth;
+  valk_eval_result_t res = valk_eval_apply_func_iter(env, func, args);
+  
+  if (!res.is_thunk) {
+    return res.value;
   }
-
-  if (func->fun.builtin) {
-    atomic_fetch_add(&g_eval_metrics.builtin_calls, 1);
-    valk_lval_t* result = func->fun.builtin(env, args);
-    atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
-    return result;
-  }
-
-  atomic_fetch_add(&g_eval_metrics.function_calls, 1);
-
-  // Track call depth for user-defined functions (not builtins)
-  valk_thread_ctx.call_depth++;
-
-  // Immutable function application - NO COPYING, NO MUTATION
-  // Walk formals and args together, creating bindings in new environment
-
-  u64 given = valk_lval_list_count(args);
-  u64 num_formals = valk_lval_list_count(func->fun.formals);
-
-  // Create new environment for bindings
-  // Hybrid scoping using fallback:
-  // - Primary lookup: call_env -> func->fun.env chain (lexical/captured
-  // bindings)
-  // - Fallback lookup: calling env chain (dynamic/caller's bindings)
-  // This allows closures to work (curry captures 'f') while also supporting
-  // dynamic access to caller's variables (select can see local 'n').
-  valk_lenv_t* call_env = valk_lenv_empty();
-  if (func->fun.env) {
-    // Function has captured environment - use as parent for lexical scoping
-    call_env->parent = func->fun.env;
-  } else {
-    // No captures - parent is calling environment
-    call_env->parent = env;
-  }
-
-  // Walk formals and args together without mutation
-  valk_lval_t* formal_iter = func->fun.formals;
-  valk_lval_t* arg_iter = args;
-  bool saw_varargs = false;
-
-  while (!valk_lval_list_is_empty(formal_iter) &&
-         !valk_lval_list_is_empty(arg_iter)) {
-    valk_lval_t* formal_sym = formal_iter->cons.head;
-
-    // Handle varargs
-    if (LVAL_TYPE(formal_sym) == LVAL_SYM &&
-        strcmp(formal_sym->str, "&") == 0) {
-      // Next formal is the varargs name
-      formal_iter = formal_iter->cons.tail;
-      if (valk_lval_list_is_empty(formal_iter)) {
-        valk_thread_ctx.call_depth--;
-        atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
-        return valk_lval_err(
-            "Invalid function format: & not followed by varargs name");
-      }
-      valk_lval_t* varargs_sym = formal_iter->cons.head;
-      valk_lval_t* varargs_list = valk_builtin_list(nullptr, arg_iter);
-      valk_lenv_put(call_env, varargs_sym, varargs_list);
-      saw_varargs = true;
-      arg_iter = valk_lval_nil();            // All remaining args consumed
-      formal_iter = formal_iter->cons.tail;  // Should be empty now
-      break;
-    }
-
-    // Regular formal - bind it
-    valk_lval_t* val = arg_iter->cons.head;
-    valk_lenv_put(call_env, formal_sym, val);
-
-    formal_iter = formal_iter->cons.tail;
-    arg_iter = arg_iter->cons.tail;
-  }
-
-  // Check if more args than formals (error unless varargs)
-  if (!valk_lval_list_is_empty(arg_iter) && !saw_varargs) {
-    valk_thread_ctx.call_depth--;
-    atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
-    return valk_lval_err(
-        "More arguments were given than required. Actual: %zu, Expected: %zu",
-        given, num_formals);
-  }
-
-  // Handle remaining formals (partial application or varargs default)
-  if (!valk_lval_list_is_empty(formal_iter)) {
-    // Check for varargs with no args provided
-    if (!valk_lval_list_is_empty(formal_iter) &&
-        LVAL_TYPE(formal_iter->cons.head) == LVAL_SYM &&
-        strcmp(formal_iter->cons.head->str, "&") == 0) {
-      formal_iter = formal_iter->cons.tail;
-      if (valk_lval_list_is_empty(formal_iter)) {
-        valk_thread_ctx.call_depth--;
-        atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
-        return valk_lval_err(
-            "Invalid function format: & not followed by varargs name");
-      }
-      valk_lval_t* varargs_sym = formal_iter->cons.head;
-      valk_lenv_put(call_env, varargs_sym, valk_lval_nil());
-      formal_iter = formal_iter->cons.tail;
-    }
-
-    // If still have unbound formals, return partially applied function
-    if (!valk_lval_list_is_empty(formal_iter)) {
-      valk_lval_t* partial = valk_mem_alloc(sizeof(valk_lval_t));
-      partial->flags =
-          LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-      VALK_SET_ORIGIN_ALLOCATOR(partial);
-      partial->fun.builtin = nullptr;
-      partial->fun.arity = func->fun.arity;  // Keep original arity
-      partial->fun.name = func->fun.name;    // Keep original name
-      partial->fun.env = call_env;
-      partial->fun.formals =
-          formal_iter;  // Remaining formals (immutable, can alias)
-      partial->fun.body = func->fun.body;  // Body (immutable, can alias)
-      valk_thread_ctx.call_depth--;
-      atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
-      return partial;
-    }
-  }
-
-  valk_lval_t* body = func->fun.body;
-  if (LVAL_TYPE(body) == LVAL_QEXPR) {
-    body = valk_qexpr_to_cons(body);
-  }
-
-  // If body is a list of expressions (first element is also a list),
-  // evaluate each expression and return the last result (implicit do)
-  if (valk_is_list_type(LVAL_TYPE(body)) && valk_lval_list_count(body) > 0) {
-    valk_lval_t* first_elem = body->cons.head;
-    // Check if this looks like a sequence (first element is a list, not a
-    // symbol) For QEXPR bodies, the first element being a CONS or QEXPR means
-    // we have multiple expressions to evaluate
-    if (valk_is_list_type(LVAL_TYPE(first_elem))) {
-      // Implicit do: evaluate each expression, return last
-      valk_lval_t* result = valk_lval_nil();
-      valk_lval_t* curr = body;
-      while (!valk_lval_list_is_empty(curr)) {
-        valk_lval_t* expr = curr->cons.head;
-        result = valk_lval_eval(call_env, expr);
-        if (LVAL_TYPE(result) == LVAL_ERR) {
-          valk_thread_ctx.call_depth--;
-          atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
-          return result;
-        }
-        curr = curr->cons.tail;
-      }
+  
+  if (res.thunk.remaining_body != NULL && !valk_lval_list_is_empty(res.thunk.remaining_body)) {
+    valk_lval_t* result = valk_lval_eval(res.thunk.env, res.thunk.expr);
+    if (LVAL_TYPE(result) == LVAL_ERR) {
       valk_thread_ctx.call_depth--;
       atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
       return result;
     }
+    
+    valk_lval_t* curr = res.thunk.remaining_body;
+    while (!valk_lval_list_is_empty(curr)) {
+      result = valk_lval_eval(res.thunk.call_env, curr->cons.head);
+      if (LVAL_TYPE(result) == LVAL_ERR) {
+        valk_thread_ctx.call_depth--;
+        atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+        return result;
+      }
+      curr = curr->cons.tail;
+    }
+    
+    valk_thread_ctx.call_depth--;
+    atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+    return result;
   }
-
-  // Single expression body - evaluate it
-  valk_lval_t* result = valk_lval_eval(call_env, body);
+  
+  valk_lval_t* result = valk_lval_eval(res.thunk.env, res.thunk.expr);
   valk_thread_ctx.call_depth--;
   atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
   return result;
@@ -3707,7 +3441,6 @@ static valk_lval_t* valk_builtin_make_string(valk_lenv_t* e, valk_lval_t* a) {
   }
   res->str[total_size] = '\0';
 
-  valk_capture_trace(VALK_TRACE_NEW, 1, res);
   return res;
 }
 
@@ -4554,101 +4287,8 @@ static valk_lval_t* valk_builtin_aio_stop(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 // aio/metrics: (aio/metrics aio-system) -> qexpr with metric values
-// Returns metrics as a Q-expression data structure
-static valk_lval_t* valk_builtin_aio_metrics(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-
-  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "Argument must be aio_system");
-
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_system_t* sys = aio_ref->ref.ptr;
-  const valk_aio_metrics_t* m = valk_aio_get_metrics(sys);
-
-  // Build qexpr with metric values as nested structures
-  // Format: {:uptime 3600 :connections {:total 1234 :active 5 :failed 3} ...}
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  u64 now_us = ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
-
-  valk_lval_t* uptime_key = valk_lval_sym(":uptime");
-  valk_lval_t* uptime_val = valk_lval_num(
-      (long)((now_us - m->start_time_us) / 1000000));
-
-  valk_lval_t* conn_key = valk_lval_sym(":connections");
-  valk_lval_t* conn_total_key = valk_lval_sym(":total");
-  valk_lval_t* conn_total_val =
-      valk_lval_num((long)atomic_load(&m->connections_total));
-  valk_lval_t* conn_active_key = valk_lval_sym(":active");
-  valk_lval_t* conn_active_val =
-      valk_lval_num((long)atomic_load(&m->connections_active));
-  valk_lval_t* conn_failed_key = valk_lval_sym(":failed");
-  valk_lval_t* conn_failed_val =
-      valk_lval_num((long)atomic_load(&m->connections_failed));
-
-  valk_lval_t* conn_map_items[] = {conn_total_key,  conn_total_val,
-                                    conn_active_key, conn_active_val,
-                                    conn_failed_key, conn_failed_val};
-  valk_lval_t* conn_val = valk_lval_qlist(conn_map_items, 6);
-
-  valk_lval_t* streams_key = valk_lval_sym(":streams");
-  valk_lval_t* streams_total_key = valk_lval_sym(":total");
-  valk_lval_t* streams_total_val =
-      valk_lval_num((long)atomic_load(&m->streams_total));
-  valk_lval_t* streams_active_key = valk_lval_sym(":active");
-  valk_lval_t* streams_active_val =
-      valk_lval_num((long)atomic_load(&m->streams_active));
-
-  valk_lval_t* streams_map_items[] = {streams_total_key, streams_total_val,
-                                       streams_active_key, streams_active_val};
-  valk_lval_t* streams_val = valk_lval_qlist(streams_map_items, 4);
-
-  valk_lval_t* requests_key = valk_lval_sym(":requests");
-  valk_lval_t* req_total_key = valk_lval_sym(":total");
-  valk_lval_t* req_total_val =
-      valk_lval_num((long)atomic_load(&m->requests_total));
-  valk_lval_t* req_active_key = valk_lval_sym(":active");
-  valk_lval_t* req_active_val =
-      valk_lval_num((long)atomic_load(&m->requests_active));
-  valk_lval_t* req_errors_key = valk_lval_sym(":errors");
-  valk_lval_t* req_errors_val =
-      valk_lval_num((long)atomic_load(&m->requests_errors));
-
-  valk_lval_t* req_map_items[] = {req_total_key,  req_total_val,
-                                   req_active_key, req_active_val,
-                                   req_errors_key, req_errors_val};
-  valk_lval_t* req_val = valk_lval_qlist(req_map_items, 6);
-
-  valk_lval_t* bytes_key = valk_lval_sym(":bytes");
-  valk_lval_t* bytes_sent_key = valk_lval_sym(":sent_total");
-  valk_lval_t* bytes_sent_val =
-      valk_lval_num((long)atomic_load(&m->bytes_sent_total));
-  valk_lval_t* bytes_recv_key = valk_lval_sym(":recv_total");
-  valk_lval_t* bytes_recv_val =
-      valk_lval_num((long)atomic_load(&m->bytes_recv_total));
-
-  valk_lval_t* bytes_map_items[] = {bytes_sent_key, bytes_sent_val,
-                                     bytes_recv_key, bytes_recv_val};
-  valk_lval_t* bytes_val = valk_lval_qlist(bytes_map_items, 4);
-
-  valk_lval_t* result_items[] = {uptime_key,   uptime_val, conn_key,
-                                  conn_val,     streams_key, streams_val,
-                                  requests_key, req_val,    bytes_key,
-                                  bytes_val};
-  valk_lval_t* result = valk_lval_qlist(result_items, 10);
-
-  return result;
-#else
-  return valk_lval_err(
-      "Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
-}
-
 // aio/metrics-json: (aio/metrics-json aio-system) -> JSON string
-// Returns metrics as a JSON string using the C formatting function
+// Returns metrics from V2 registry as JSON
 static valk_lval_t* valk_builtin_aio_metrics_json(valk_lenv_t* e,
                                                    valk_lval_t* a) {
   UNUSED(e);
@@ -4659,17 +4299,15 @@ static valk_lval_t* valk_builtin_aio_metrics_json(valk_lenv_t* e,
   LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
               "Argument must be aio_system");
 
-#ifdef VALK_METRICS_ENABLED
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_update_queue_stats(sys);
-  valk_aio_update_loop_metrics(sys);
-  valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
-  valk_aio_system_stats_t* system_stats = valk_aio_get_system_stats(sys);
-  char* json = valk_aio_combined_to_json(metrics, system_stats, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
-  return valk_lval_str(json);
-#else
-  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
+  char* buf = valk_mem_alloc(131072);
+  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON");
+  u64 len = valk_metrics_v2_to_json(&g_metrics, buf, 131072);
+  if (len == 0) {
+    return valk_lval_err("Failed to generate metrics JSON");
+  }
+  return valk_lval_str(buf);
 }
 
 static valk_lval_t* valk_builtin_aio_metrics_json_compact(valk_lenv_t* e,
@@ -4682,91 +4320,19 @@ static valk_lval_t* valk_builtin_aio_metrics_json_compact(valk_lenv_t* e,
   LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
               "Argument must be aio_system");
 
-#ifdef VALK_METRICS_ENABLED
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_update_queue_stats(sys);
-  valk_aio_update_loop_metrics(sys);
-  valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
-  valk_aio_system_stats_t* system_stats = valk_aio_get_system_stats(sys);
-  char* json = valk_aio_combined_to_json_compact(metrics, system_stats, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
-  return valk_lval_str(json);
-#else
-  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
-}
-
-// aio/update-metrics: (aio/update-metrics aio-system) -> nil
-// Updates event loop and queue metrics in the modular metrics registry
-// Call this before metrics/collect-delta to ensure fresh values
-static valk_lval_t* valk_builtin_aio_update_metrics(valk_lenv_t* e,
-                                                     valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-
-  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "Argument must be aio_system");
-
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_system_t* sys = aio_ref->ref.ptr;
-  valk_aio_update_queue_stats(sys);
-  valk_aio_update_loop_metrics(sys);
-  return valk_lval_nil();
-#else
-  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
-}
-
-// aio/metrics-prometheus: (aio/metrics-prometheus aio-system) -> Prometheus text
-// Returns metrics in Prometheus exposition format
-static valk_lval_t* valk_builtin_aio_metrics_prometheus(valk_lenv_t* e,
-                                                         valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-
-  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "Argument must be aio_system");
-
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_system_t* sys = aio_ref->ref.ptr;
-  valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
-  char* prom = valk_aio_metrics_to_prometheus(metrics, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
-  return valk_lval_str(prom);
-#else
-  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
-}
-
-// aio/system-stats-prometheus: (aio/system-stats-prometheus aio-system) -> Prometheus text
-// Returns AIO system stats in Prometheus exposition format
-static valk_lval_t* valk_builtin_aio_system_stats_prometheus(valk_lenv_t* e,
-                                                               valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-
-  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "Argument must be aio_system");
-
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_system_t* sys = aio_ref->ref.ptr;
-  valk_aio_system_stats_t* stats = valk_aio_get_system_stats(sys);
-  char* prom = valk_aio_system_stats_to_prometheus(stats, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
-  if (!prom) {
-    return valk_lval_err("Failed to generate system stats Prometheus");
+  char* buf = valk_mem_alloc(65536);
+  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON");
+  u64 len = valk_metrics_v2_to_json(&g_metrics, buf, 65536);
+  if (len == 0) {
+    return valk_lval_err("Failed to generate metrics JSON");
   }
-  return valk_lval_str(prom);
-#else
-  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
+  return valk_lval_str(buf);
 }
 
 // aio/systems-json: (aio/systems-json aio-system) -> JSON array of AIO systems
-// Returns metrics as a JSON array for multi-system dashboard support
+// Returns metrics from V2 registry wrapped in array
 static valk_lval_t* valk_builtin_aio_systems_json(valk_lenv_t* e,
                                                    valk_lval_t* a) {
   UNUSED(e);
@@ -4777,170 +4343,18 @@ static valk_lval_t* valk_builtin_aio_systems_json(valk_lenv_t* e,
   LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
               "Argument must be aio_system");
 
-#ifdef VALK_METRICS_ENABLED
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_update_queue_stats(sys);
-  valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
-  valk_aio_system_stats_t* system_stats = valk_aio_get_system_stats(sys);
-  const char* name = valk_aio_get_name(sys);
-
-  // Get the JSON for this system
-  char* sys_json = valk_aio_combined_to_json_named(name, metrics, system_stats,
-    (valk_mem_allocator_t*)valk_thread_ctx.allocator);
-
-  // Wrap in array (for future multi-system support)
-  u64 len = strlen(sys_json);
-  char* result = valk_mem_alloc(len + 3);  // "[" + json + "]" + null
-  snprintf(result, len + 3, "[%s]", sys_json);
-
+  char* buf = valk_mem_alloc(131072);
+  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON");
+  u64 len = valk_metrics_v2_to_json(&g_metrics, buf, 131072);
+  if (len == 0) {
+    return valk_lval_err("Failed to generate metrics JSON");
+  }
+  
+  char* result = valk_mem_alloc(len + 3);
+  snprintf(result, len + 3, "[%s]", buf);
   return valk_lval_str(result);
-#else
-  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
-}
-
-// http-client/register: (http-client/register sys name type pool-size) -> client-id
-// Registers an HTTP client for metrics tracking
-static valk_lval_t* valk_builtin_http_client_register(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 4);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);   // aio system
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);   // name
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_STR);   // type
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 3), LVAL_NUM);   // pool_size
-
-  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "Argument 0 must be aio_system");
-
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_system_t* sys = aio_ref->ref.ptr;
-  const char* name = valk_lval_list_nth(a, 1)->str;
-  const char* type = valk_lval_list_nth(a, 2)->str;
-  long pool_size = valk_lval_list_nth(a, 3)->num;
-
-  if (pool_size < 0) {
-    return valk_lval_err("pool-size must be non-negative");
-  }
-
-  valk_http_clients_registry_t* reg = valk_aio_get_http_clients_registry(sys);
-  int client_id = valk_http_client_register(reg, name, type, (u64)pool_size);
-
-  if (client_id < 0) {
-    return valk_lval_err("Failed to register HTTP client (max clients reached)");
-  }
-
-  return valk_lval_num(client_id);
-#else
-  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
-}
-
-// http-client/on-operation: (http-client/on-operation sys client-id duration-us error? retry?) -> nil
-// Records an operation on an HTTP client
-static valk_lval_t* valk_builtin_http_client_on_operation(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 5);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);   // aio system
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);   // client_id
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_NUM);   // duration_us
-
-  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "Argument 0 must be aio_system");
-
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_system_t* sys = aio_ref->ref.ptr;
-  long client_id = valk_lval_list_nth(a, 1)->num;
-  long duration_us = valk_lval_list_nth(a, 2)->num;
-  valk_lval_t* error_arg = valk_lval_list_nth(a, 3);
-  valk_lval_t* retry_arg = valk_lval_list_nth(a, 4);
-
-  if (client_id < 0) {
-    return valk_lval_err("client-id must be non-negative");
-  }
-  if (duration_us < 0) {
-    return valk_lval_err("duration-us must be non-negative");
-  }
-
-  valk_http_clients_registry_t* reg = valk_aio_get_http_clients_registry(sys);
-  u32 count = atomic_load(&reg->count);
-
-  if ((u32)client_id >= count) {
-    return valk_lval_err("Invalid client-id");
-  }
-
-  bool error = (LVAL_TYPE(error_arg) == LVAL_SYM && strcmp(error_arg->str, "true") == 0);
-  bool retry = (LVAL_TYPE(retry_arg) == LVAL_SYM && strcmp(retry_arg->str, "true") == 0);
-
-  valk_http_client_on_operation(&reg->clients[client_id], (u64)duration_us, error, retry);
-
-  return valk_lval_nil();
-#else
-  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
-}
-
-// http-client/on-cache: (http-client/on-cache sys client-id hit?) -> nil
-// Records a cache hit or miss for an HTTP client
-static valk_lval_t* valk_builtin_http_client_on_cache(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 3);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);   // aio system
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);   // client_id
-
-  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "Argument 0 must be aio_system");
-
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_system_t* sys = aio_ref->ref.ptr;
-  long client_id = valk_lval_list_nth(a, 1)->num;
-  valk_lval_t* hit_arg = valk_lval_list_nth(a, 2);
-
-  if (client_id < 0) {
-    return valk_lval_err("client-id must be non-negative");
-  }
-
-  valk_http_clients_registry_t* reg = valk_aio_get_http_clients_registry(sys);
-  u32 count = atomic_load(&reg->count);
-
-  if ((u32)client_id >= count) {
-    return valk_lval_err("Invalid client-id");
-  }
-
-  bool hit = (LVAL_TYPE(hit_arg) == LVAL_SYM && strcmp(hit_arg->str, "true") == 0);
-
-  valk_http_client_on_cache(&reg->clients[client_id], hit);
-
-  return valk_lval_nil();
-#else
-  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
-}
-
-// http-client/metrics-prometheus: (http-client/metrics-prometheus sys) -> string
-// Exports HTTP client metrics in Prometheus format
-static valk_lval_t* valk_builtin_http_client_metrics_prometheus(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-
-  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "Argument must be aio_system");
-
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_system_t* sys = aio_ref->ref.ptr;
-  valk_http_clients_registry_t* reg = valk_aio_get_http_clients_registry(sys);
-  char* prom = valk_http_clients_to_prometheus(reg, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
-  if (!prom) {
-    return valk_lval_str("");  // Return empty string if no clients registered
-  }
-  return valk_lval_str(prom);
-#else
-  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
 }
 
 
@@ -4953,7 +4367,6 @@ static valk_lval_t* valk_builtin_vm_metrics_json(valk_lenv_t* e,
                                                   valk_lval_t* a) {
   UNUSED(e);
 
-#ifdef VALK_METRICS_ENABLED
   valk_aio_system_t *sys = NULL;
   u64 argc = valk_lval_list_count(a);
 
@@ -4981,17 +4394,12 @@ static valk_lval_t* valk_builtin_vm_metrics_json(valk_lenv_t* e,
     return valk_lval_err("Failed to generate VM metrics JSON");
   }
   return valk_lval_str(json);
-#else
-  UNUSED(a);
-  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
 }
 
 static valk_lval_t* valk_builtin_vm_metrics_prometheus(valk_lenv_t* e,
                                                         valk_lval_t* a) {
   UNUSED(e);
 
-#ifdef VALK_METRICS_ENABLED
   valk_aio_system_t *sys = NULL;
   u64 argc = valk_lval_list_count(a);
 
@@ -5019,17 +4427,12 @@ static valk_lval_t* valk_builtin_vm_metrics_prometheus(valk_lenv_t* e,
     return valk_lval_err("Failed to generate VM metrics Prometheus");
   }
   return valk_lval_str(prom);
-#else
-  UNUSED(a);
-  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
 }
 
 static valk_lval_t* valk_builtin_vm_metrics_json_compact(valk_lenv_t* e,
                                                           valk_lval_t* a) {
   UNUSED(e);
 
-#ifdef VALK_METRICS_ENABLED
   valk_aio_system_t *sys = NULL;
   u64 argc = valk_lval_list_count(a);
 
@@ -5057,10 +4460,6 @@ static valk_lval_t* valk_builtin_vm_metrics_json_compact(valk_lenv_t* e,
     return valk_lval_err("Failed to generate compact VM metrics JSON");
   }
   return valk_lval_str(json);
-#else
-  UNUSED(a);
-  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
-#endif
 }
 
 // ============================================================================
@@ -5175,8 +4574,10 @@ static valk_lval_t* valk_builtin_http2_server_port(valk_lenv_t* e,
                          valk_ltype_name(LVAL_TYPE(arg)));
   }
 
-  valk_arc_box* box = (valk_arc_box*)server_ref->ref.ptr;
-  valk_aio_http_server* srv = (valk_aio_http_server*)box->item;
+  valk_aio_http_server* srv = (valk_aio_http_server*)server_ref->ref.ptr;
+  if (valk_aio_http2_server_is_stopped(srv)) {
+    return valk_lval_err("http2/server-port: server is stopped");
+  }
   return valk_lval_num(valk_aio_http2_server_get_port(srv));
 }
 
@@ -5209,10 +4610,12 @@ static valk_lval_t* valk_builtin_http2_server_stop(valk_lenv_t* e,
                          valk_ltype_name(LVAL_TYPE(arg)));
   }
 
-  valk_arc_box* box = (valk_arc_box*)server_ref->ref.ptr;
-  valk_aio_http_server* srv = (valk_aio_http_server*)box->item;
+  valk_aio_http_server* srv = (valk_aio_http_server*)server_ref->ref.ptr;
+  if (valk_aio_http2_server_is_stopped(srv)) {
+    return valk_lval_err("http2/server-stop: server already stopped");
+  }
 
-  valk_async_handle_t* stop_handle = valk_aio_http2_stop(srv, box);
+  valk_async_handle_t* stop_handle = valk_aio_http2_stop(srv);
   return valk_lval_handle(stop_handle);
 }
 
@@ -5228,11 +4631,11 @@ static valk_lval_t* valk_builtin_http2_server_handle(valk_lenv_t* e,
   valk_lval_t* server_ref = valk_lval_list_nth(a, 0);
   valk_lval_t* handler_fn = valk_lval_list_nth(a, 1);
 
-  // Extract server from arc_box
-  valk_arc_box* box = (valk_arc_box*)server_ref->ref.ptr;
-  valk_aio_http_server* server = (valk_aio_http_server*)box->item;
+  valk_aio_http_server* server = (valk_aio_http_server*)server_ref->ref.ptr;
+  if (valk_aio_http2_server_is_stopped(server)) {
+    return valk_lval_err("http2/server-handle: server is stopped");
+  }
 
-  // Copy handler function to GC heap (will be shared across requests)
   valk_lval_t* heap_handler;
   VALK_WITH_ALLOC((valk_mem_allocator_t*)valk_thread_ctx.heap) {
     heap_handler = valk_lval_copy(handler_fn);
@@ -5541,29 +4944,13 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "aio/start", valk_builtin_aio_start);
   valk_lenv_put_builtin(env, "aio/run", valk_builtin_aio_run);
   valk_lenv_put_builtin(env, "aio/stop", valk_builtin_aio_stop);
-  valk_lenv_put_builtin(env, "aio/metrics", valk_builtin_aio_metrics);
   valk_lenv_put_builtin(env, "aio/metrics-json", valk_builtin_aio_metrics_json);
   valk_lenv_put_builtin(env, "aio/metrics-json-compact",
                         valk_builtin_aio_metrics_json_compact);
-  valk_lenv_put_builtin(env, "aio/update-metrics", valk_builtin_aio_update_metrics);
   valk_lenv_put_builtin(env, "aio/systems-json", valk_builtin_aio_systems_json);
-  valk_lenv_put_builtin(env, "aio/metrics-prometheus",
-                        valk_builtin_aio_metrics_prometheus);
-  valk_lenv_put_builtin(env, "aio/system-stats-prometheus",
-                        valk_builtin_aio_system_stats_prometheus);
 
   valk_lenv_put_builtin(env, "aio/schedule", valk_builtin_aio_schedule);
   valk_lenv_put_builtin(env, "aio/interval", valk_builtin_aio_interval);
-
-  // HTTP Client Metrics Builtins
-  valk_lenv_put_builtin(env, "http-client/register",
-                        valk_builtin_http_client_register);
-  valk_lenv_put_builtin(env, "http-client/on-operation",
-                        valk_builtin_http_client_on_operation);
-  valk_lenv_put_builtin(env, "http-client/on-cache",
-                        valk_builtin_http_client_on_cache);
-  valk_lenv_put_builtin(env, "http-client/metrics-prometheus",
-                        valk_builtin_http_client_metrics_prometheus);
 
   // Async Handle Builtins (from aio_uv.c)
   valk_register_async_handle_builtins(env);
@@ -5597,13 +4984,11 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   // Generic streaming response builtins (from aio_stream_builtins.c)
   valk_register_stream_builtins(env);
 
-#ifdef VALK_METRICS_ENABLED
   // Metrics V2 builtins (from metrics_builtins.c)
   valk_register_metrics_builtins(env);
 
   // AIO diagnostics builtins (from aio/aio_diagnostics_builtins.c)
   valk_register_aio_diagnostics_builtins(env);
-#endif
 
   // Script classification helpers are implicit via CLI flags; no new builtins
 

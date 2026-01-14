@@ -22,9 +22,7 @@ extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *err
 extern valk_lval_t *valk_lval_err(const char *fmt, ...);
 extern valk_lval_t *valk_lval_ref(const char *type, void *ptr, void (*free)(void *));
 
-#ifdef VALK_METRICS_ENABLED
 extern valk_gauge_v2_t* client_connections_active;
-#endif
 
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
   return conn->sys ? conn->sys->ops->tcp : nullptr;
@@ -219,7 +217,6 @@ static void __http2_connect_impl(valk_aio_handle_t *conn, int status) {
     return;
   }
 
-#ifdef VALK_METRICS_ENABLED
   if (!client_connections_active) {
     valk_label_set_v2_t client_labels = {
       .labels = {{"role", "client"}},
@@ -229,7 +226,6 @@ static void __http2_connect_impl(valk_aio_handle_t *conn, int status) {
       nullptr, &client_labels);
   }
   valk_gauge_v2_inc(client_connections_active);
-#endif
 
   if (!valk_http2_conn_write_buf_acquire(client->connection)) {
     VALK_ERROR("Failed to acquire write buffer for client handshake");

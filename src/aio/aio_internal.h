@@ -23,13 +23,13 @@
 #include "io/io_tcp_uv_types.h"
 #include "metrics_v2.h"
 #include "event_loop_metrics.h"
-#include "concurrency.h"
 #include "parser.h"
 #include "memory.h"
 #include "collections.h"
 #include "aio_alloc.h"
 #include "aio_diagnostics_builtins.h"
 #include "gc.h"
+#include "system/aio_task.h"
 
 #define MAKE_NV(NAME, VALUE, VALUELEN)                         \
   {                                                            \
@@ -66,7 +66,6 @@ enum {
 #define ARENA_SLOT_RELEASED UINT32_MAX
 #define VALK_AIO_HANDLE_MAGIC 0xBA1CADA1
 
-#ifdef VALK_METRICS_ENABLED
 typedef struct {
   valk_counter_v2_t* requests_total;
   valk_counter_v2_t* requests_success;
@@ -93,7 +92,6 @@ struct valk_owner_registry {
   valk_owner_entry_t entries[VALK_MAX_OWNERS];
   u16 count;
 };
-#endif
 
 typedef enum handle_kind_t {
   VALK_HNDL_EMPTY,
@@ -168,14 +166,6 @@ typedef struct __tcp_buffer_slab_item_t {
   char data[HTTP_SLAB_ITEM_SIZE];
 } __tcp_buffer_slab_item_t;
 
-typedef struct __http2_req_res_t {
-  u64 streamid;
-  valk_http2_request_t *req;
-  valk_arc_box *res_box;
-  valk_http2_response_t *res;
-  valk_promise promise;
-} __http2_req_res_t;
-
 typedef struct __http2_connect_req {
   valk_aio_system_t *sys;
   valk_aio_http2_client *client;
@@ -199,7 +189,6 @@ typedef struct valk_http2_server_request {
   valk_mem_arena_t *stream_arena;
   valk_arena_ref_t arena_ref;
   u32 next_arena_slot;
-#ifdef VALK_METRICS_ENABLED
   u64 start_time_us;
   u64 bytes_sent;
   u64 bytes_recv;
@@ -207,7 +196,6 @@ typedef struct valk_http2_server_request {
   u64 response_sent_time_us;
   bool response_complete;
   struct valk_sse_stream_entry *sse_entry;
-#endif
 } valk_http2_server_request_t;
 
 typedef struct {
@@ -272,9 +260,7 @@ struct valk_aio_handle_t {
 
     bool arena_backpressure;
 
-#ifdef VALK_METRICS_ENABLED
     valk_handle_diag_t diag;
-#endif
 
     valk_stream_body_t *stream_bodies;
     u32 active_arena_head;
@@ -313,11 +299,13 @@ struct valk_aio_system {
   valk_aio_handle_t *stopperHandle;
 
   valk_slab_t *httpServers;
+  valk_aio_http_server *serverList;
   valk_slab_t *httpClients;
   valk_slab_t *httpStreamArenas;
   valk_slab_t *tcpBufferSlab;
 
   valk_slab_t *handleSlab;
+  valk_slab_t *timerDataSlab;
   valk_aio_handle_t liveHandles;
 
   bool shuttingDown;
@@ -340,11 +328,9 @@ struct valk_aio_system {
   uv_async_t gc_wakeup;
   _Atomic bool gc_acknowledged;
 
-#ifdef VALK_METRICS_ENABLED
   valk_aio_metrics_state_t *metrics_state;
   valk_owner_registry_t owner_registry;
   valk_event_loop_metrics_v2_t loop_metrics;
-#endif
 };
 
 struct valk_aio_http_server {
@@ -358,10 +344,10 @@ struct valk_aio_http_server {
   valk_lval_t* lisp_handler_fn;
   valk_lenv_t* sandbox_env;
   valk_http_server_config_t config;
-#ifdef VALK_METRICS_ENABLED
   valk_server_metrics_t metrics;
   u16 owner_idx;
-#endif
+  struct valk_aio_http_server *next;
+  struct valk_aio_http_server *prev;
 };
 
 struct valk_aio_http2_client {
@@ -371,16 +357,7 @@ struct valk_aio_http2_client {
   char interface[200];
   int port;
   char hostname[200];
-  valk_promise _promise;
 };
-
-typedef struct valk_aio_task_new {
-  void *arg;
-  valk_promise promise;
-  valk_async_handle_t *handle;
-  void (*callback)(valk_aio_system_t *, struct valk_aio_task_new *);
-  valk_mem_allocator_t *allocator;
-} valk_aio_task_new;
 
 typedef struct __valk_request_client_pair_t {
   valk_aio_http2_client *client;
@@ -398,6 +375,7 @@ typedef struct {
   alignas(16) uv_timer_t timer;
   valk_lval_t *callback;
   u64 schedule_id;
+  valk_slab_t *slab;
 } valk_schedule_timer_t;
 
 typedef struct valk_interval_timer {
@@ -406,6 +384,7 @@ typedef struct valk_interval_timer {
   u64 interval_id;
   bool stopped;
   u32 magic;
+  valk_slab_t *slab;
 } valk_interval_timer_t;
 
 #define VALK_INTERVAL_TIMER_MAGIC 0xDEADBEEF
@@ -419,9 +398,7 @@ typedef struct {
 
 extern u64 g_async_handle_id;
 
-#ifdef VALK_METRICS_ENABLED
 extern valk_gauge_v2_t* client_connections_active;
-#endif
 
 
 

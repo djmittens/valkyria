@@ -14,7 +14,6 @@
 #include "aio/aio_async.h"
 #include "collections.h"
 #include "common.h"
-#include "concurrency.h"
 #include "gc.h"
 #include "memory.h"
 #include "parser.h"
@@ -134,8 +133,7 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   }
 
   // Get the actual port assigned by the OS
-  valk_arc_box *srv_box = (valk_arc_box*)ctx->server_result->ref.ptr;
-  valk_aio_http_server *srv = (valk_aio_http_server*)srv_box->item;
+  valk_aio_http_server *srv = (valk_aio_http_server*)ctx->server_result->ref.ptr;
   ctx->port = valk_aio_http2_server_get_port(srv);
   printf("[test] Server started on port %d\n", ctx->port);
   fflush(stdout);

@@ -15,16 +15,14 @@
 #include "aio/aio_async.h"
 #include "collections.h"
 #include "common.h"
-#include "concurrency.h"
 #include "gc.h"
 #include "memory.h"
 #include "parser.h"
 #include "testing.h"
 
-#ifdef VALK_METRICS_ENABLED
 #include "aio/aio_metrics.h"
 #include "metrics_v2.h"
-#endif
+#include "metrics_delta.h"
 
 // ============================================================================
 // Test Configuration
@@ -271,7 +269,6 @@ void test_custom_config(VALK_TEST_ARGS()) {
 // Test: Metrics collection
 // ============================================================================
 
-#ifdef VALK_METRICS_ENABLED
 void test_aio_metrics(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -286,60 +283,12 @@ void test_aio_metrics(VALK_TEST_ARGS()) {
   valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
   int port = valk_aio_http2_server_get_port(srv);
 
-  // Get metrics before any requests
-  valk_aio_metrics_t *metrics = valk_aio_get_metrics(sys);
-  VALK_TEST_ASSERT(metrics != nullptr, "Metrics should be available");
-
-  u64 initial_requests = atomic_load(&metrics->requests_total);
-  u64 initial_connections = atomic_load(&metrics->connections_total);
-
   // Send some requests
   for (int i = 0; i < 3; i++) {
     test_response_t resp = send_request(sys, port, "GET", "/");
     VALK_TEST_ASSERT(resp.success, "Request %d should succeed", i);
     free_response(&resp);
   }
-
-  // Check metrics increased
-  u64 final_requests = atomic_load(&metrics->requests_total);
-  u64 final_connections = atomic_load(&metrics->connections_total);
-
-  VALK_TEST_ASSERT(final_requests > initial_requests,
-                   "requests_total should increase: %lu -> %lu",
-                   initial_requests, final_requests);
-  VALK_TEST_ASSERT(final_connections > initial_connections,
-                   "connections_total should increase: %lu -> %lu",
-                   initial_connections, final_connections);
-
-  valk_aio_stop(sys);
-
-  VALK_PASS();
-}
-
-void test_system_stats(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_aio_system_t *sys = start_demo_server();
-
-  valk_http2_handler_t *handler = get_noop_handler();
-
-  valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
-
-  valk_lval_t *result = valk_async_handle_await(handle);
-  UNUSED(result);
-
-  // Get system stats
-  valk_aio_system_stats_t *stats = valk_aio_get_system_stats(sys);
-  VALK_TEST_ASSERT(stats != nullptr, "System stats should be available");
-
-  // Server count should be at least 1
-  u64 servers = atomic_load(&stats->servers_count);
-  VALK_TEST_ASSERT(servers >= 1, "Should have at least 1 server: %lu", servers);
-
-  // Total arenas should be > 0
-  VALK_TEST_ASSERT(stats->arenas_total > 0,
-                   "Should have arenas configured: %lu", stats->arenas_total);
 
   valk_aio_stop(sys);
 
@@ -365,72 +314,19 @@ void test_metrics_json_rendering(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(resp.success, "Request should succeed");
   free_response(&resp);
 
-  // Render metrics as JSON
-  valk_aio_metrics_t *metrics = valk_aio_get_metrics(sys);
-  valk_aio_system_stats_t *stats = valk_aio_get_system_stats(sys);
+  // Render metrics as JSON using V2 registry
+  char *buf = malloc(131072);
+  VALK_TEST_ASSERT(buf != nullptr, "Buffer allocation should succeed");
+  u64 len = valk_metrics_v2_to_json(&g_metrics, buf, 131072);
 
-  // Use malloc for rendering
-  valk_mem_allocator_t *alloc = valk_thread_ctx.allocator;
-  char *json = valk_aio_combined_to_json(metrics, stats, alloc);
+  VALK_TEST_ASSERT(len > 100, "JSON should have substantial content: %zu bytes", len);
 
-  VALK_TEST_ASSERT(json != nullptr, "JSON rendering should succeed");
-  VALK_TEST_ASSERT(strlen(json) > 100, "JSON should have substantial content: %zu bytes", strlen(json));
-
-  // Check for expected fields (JSON uses nested structure)
-  VALK_TEST_ASSERT(strstr(json, "\"connections\"") != nullptr,
-                   "JSON should contain connections object");
-  VALK_TEST_ASSERT(strstr(json, "\"total\"") != nullptr,
-                   "JSON should contain total field");
-  VALK_TEST_ASSERT(strstr(json, "\"uptime_seconds\"") != nullptr,
-                   "JSON should contain uptime_seconds");
-
+  free(buf);
   valk_aio_stop(sys);
 
   VALK_PASS();
 }
 
-void test_metrics_prometheus_rendering(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_aio_system_t *sys = start_demo_server();
-
-  valk_http2_handler_t *handler = get_noop_handler();
-
-  valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
-
-  valk_lval_t *result = valk_async_handle_await(handle);
-  valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
-  int port = valk_aio_http2_server_get_port(srv);
-
-  // Send a request
-  test_response_t resp = send_request(sys, port, "GET", "/");
-  VALK_TEST_ASSERT(resp.success, "Request should succeed");
-  free_response(&resp);
-
-  // Render metrics as Prometheus format
-  valk_aio_metrics_t *metrics = valk_aio_get_metrics(sys);
-  valk_mem_allocator_t *alloc = valk_thread_ctx.allocator;
-  char *prom = valk_aio_metrics_to_prometheus(metrics, alloc);
-
-  VALK_TEST_ASSERT(prom != nullptr, "Prometheus rendering should succeed");
-  VALK_TEST_ASSERT(strlen(prom) > 50, "Prometheus output should have content");
-
-  // Check for Prometheus format (metrics use valk_aio_ prefix)
-  VALK_TEST_ASSERT(strstr(prom, "valk_aio_") != nullptr,
-                   "Should contain valk_aio_ prefixed metrics");
-
-  valk_aio_stop(sys);
-
-  VALK_PASS();
-}
-#endif  // VALK_METRICS_ENABLED
-
-// ============================================================================
-// Test: V2 Modular Metrics
-// ============================================================================
-
-#ifdef VALK_METRICS_ENABLED
 void test_modular_metrics_counter(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -544,11 +440,6 @@ void test_modular_metrics_histogram(VALK_TEST_ARGS()) {
 
   VALK_PASS();
 }
-#endif  // VALK_METRICS_ENABLED
-
-// ============================================================================
-// Test: Connection state tracking
-// ============================================================================
 
 void test_connection_states(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -651,20 +542,12 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_custom_config", test_custom_config);
   valk_testsuite_add_test(suite, "test_connection_states", test_connection_states);
   valk_testsuite_add_test(suite, "test_multiple_servers", test_multiple_servers);
-
-#ifdef VALK_METRICS_ENABLED
-  // AIO Metrics tests
   valk_testsuite_add_test(suite, "test_aio_metrics", test_aio_metrics);
-  valk_testsuite_add_test(suite, "test_system_stats", test_system_stats);
   valk_testsuite_add_test(suite, "test_metrics_json_rendering", test_metrics_json_rendering);
-  valk_testsuite_add_test(suite, "test_metrics_prometheus_rendering", test_metrics_prometheus_rendering);
-
-  // Modular metrics tests
   valk_testsuite_add_test(suite, "test_modular_metrics_counter", test_modular_metrics_counter);
   valk_testsuite_add_test(suite, "test_modular_metrics_labeled_counter", test_modular_metrics_labeled_counter);
   valk_testsuite_add_test(suite, "test_modular_metrics_gauge", test_modular_metrics_gauge);
   valk_testsuite_add_test(suite, "test_modular_metrics_histogram", test_modular_metrics_histogram);
-#endif
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

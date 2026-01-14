@@ -77,7 +77,8 @@ static valk_lval_t *valk_builtin_stream_open(valk_lenv_t *e, valk_lval_t *a) {
   }
 
   nghttp2_data_provider2 data_prd;
-  valk_stream_body_t *body = valk_stream_body_new(conn, session, stream_id, &data_prd);
+  valk_mem_arena_t *stream_arena = req->stream_arena;
+  valk_stream_body_t *body = valk_stream_body_new(conn, session, stream_id, &data_prd, stream_arena);
   if (!body) {
     return valk_lval_err("stream/open: failed to create stream body");
   }

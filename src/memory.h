@@ -3,9 +3,6 @@
 #include <stdio.h>
 #include "types.h"
 
-// #define VALK_ARC_DEBUG
-#define VALK_ARC_TRACE_DEPTH 10
-
 #define VALK_WITH_CTX(_ctx_)                        \
   for (struct {                                     \
          int exec;                                  \
@@ -34,86 +31,7 @@
 #define valk_mem_free(__ptr) \
   valk_mem_allocator_free(valk_thread_ctx.allocator, __ptr)
 
-#define valk_retain(ref)                                            \
-  ({                                                                \
-    if (ref != nullptr) {                                           \
-      (ref)->refcount++;                                            \
-      valk_capture_trace(VALK_TRACE_ACQUIRE, (ref)->refcount, ref); \
-    }                                                               \
-    (ref);                                                          \
-  })
-
-// This is bootleg arc
-#define valk_release(ref)                                               \
-  do {                                                                  \
-    if (ref == nullptr) break;                                          \
-    (ref)->refcount--;                                                  \
-    /*char _buf[512];                                                   \
-    pthread_getname_np(pthread_self(), _buf, sizeof(_buf));*/           \
-    if ((ref)->refcount == 0) {                                         \
-      /* printf("[%s] Arc is freeing %d\n", _buf, old); */              \
-      /* Only free using the allocator if a custom one is not defined*/ \
-      valk_capture_trace(VALK_TRACE_FREE, (ref)->refcount, ref);        \
-      if ((ref)->free) {                                                \
-        valk_arc_trace_report_print(ref);                               \
-        (ref)->free(ref);                                               \
-      } else if ((ref)->allocator) {                                    \
-        valk_mem_allocator_free((ref)->allocator, (ref));               \
-      }                                                                 \
-    } else {                                                            \
-      /* printf("[%s] Arc is decrementing %d\n", _buf, old); */         \
-      valk_capture_trace(VALK_TRACE_RELEASE, (ref)->refcount, ref);     \
-    }                                                                   \
-  } while (0)
-
-#ifdef VALK_ARC_DEBUG
-#include <dlfcn.h>
-#include <execinfo.h>
-#define VALK_ARC_TRACE_MAX 50
-
-typedef enum {
-  VALK_TRACE_NEW,
-  VALK_TRACE_ACQUIRE,
-  VALK_TRACE_RELEASE,
-  VALK_TRACE_FREE
-} valk_trace_kind_e;
-
-typedef struct valk_arc_trace_info {
-  valk_trace_kind_e kind;
-  const char *file;
-  const char *function;
-  int line;
-  u64 refcount;
-  void *stack[VALK_ARC_TRACE_DEPTH];
-  u64 size;
-} valk_arc_trace_info;
-
-#define valk_capture_trace(_kind, _refcount, ref)                             \
-  do {                                                                        \
-    u64 _old = __atomic_fetch_add(&(ref)->nextTrace, 1, __ATOMIC_RELEASE); \
-    VALK_ASSERT(                                                              \
-        _old < VALK_ARC_TRACE_MAX,                                            \
-        "Cannot keep tracing this variable, please increase the max traces"); \
-    (ref)->traces[_old].kind = (_kind);                                       \
-    (ref)->traces[_old].file = __FILE__;                                      \
-    (ref)->traces[_old].function = __func__;                                  \
-    (ref)->traces[_old].line = __LINE__;                                      \
-    (ref)->traces[_old].refcount = (_refcount);                               \
-    (ref)->traces[_old].size =                                                \
-        backtrace((ref)->traces[_old].stack, VALK_ARC_TRACE_DEPTH);           \
-  } while (0)
-
-#define valk_arc_trace_report_print(report) \
-  __valk_arc_trace_report_print((report)->traces, (report)->nextTrace)
-
-void __valk_arc_trace_report_print(valk_arc_trace_info *traces, u64 num);
-
-#else
-#define valk_capture_trace(_kind, _refcount, ref) UNUSED((_refcount));
-#define valk_arc_trace_report_print(report)
-#endif
-
-/// generic helper, same as Linux kernel’s container_of
+/// generic helper, same as Linux kernel's container_of
 /// @return the ptr of the right type
 #define valk_container_of(ptr, type, member) \
   ((type *)((u8 *)(ptr) - offsetof(type, member)))
@@ -213,10 +131,8 @@ typedef struct {  // extends valk_mem_allocator_t;
   sz mmap_size;  // Size of mmap'd region (0 if not mmap'd)
   // treiber list top
 
-#ifdef VALK_METRICS_ENABLED
   u64 bitmap_version;
   u8 *usage_bitmap;
-#endif
 
   // Memory layout
   // [sizeof(u64) * numSlabs | freeList]
@@ -257,7 +173,6 @@ static inline sz valk_slab_available(valk_slab_t *self) {
   return __atomic_load_n(&self->numFree, __ATOMIC_ACQUIRE);
 }
 
-#ifdef VALK_METRICS_ENABLED
 typedef struct {
   u8 *data;
   sz bytes;
@@ -298,7 +213,6 @@ sz valk_slab_bitmap_buckets(valk_slab_t *slab,
                                  sz start_slot, sz end_slot,
                                  sz num_buckets,
                                  valk_bitmap_bucket_t *out_buckets);
-#endif
 
 // Arena statistics for telemetry
 typedef struct {
@@ -312,6 +226,10 @@ typedef struct {
   u64 overflow_fallbacks;     // Count of heap fallback allocations due to full arena
   sz overflow_bytes;          // Bytes allocated via heap fallback
 } valk_arena_stats_t;
+
+typedef struct {
+  sz offset;
+} valk_arena_checkpoint_t;
 
 // Process-level memory stats (from OS)
 typedef struct {
@@ -357,6 +275,9 @@ typedef struct {  // extends valk_mem_allocator_t;
 void valk_mem_arena_init(valk_mem_arena_t *self, sz capacity);
 void valk_mem_arena_reset(valk_mem_arena_t *self);
 void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes);
+
+valk_arena_checkpoint_t valk_arena_checkpoint_save(valk_mem_arena_t *arena);
+void valk_arena_checkpoint_restore(valk_mem_arena_t *arena, valk_arena_checkpoint_t cp);
 
 // Arena statistics API
 void valk_mem_arena_print_stats(valk_mem_arena_t *arena, FILE *out);

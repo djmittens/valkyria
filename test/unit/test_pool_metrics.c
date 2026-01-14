@@ -3,8 +3,6 @@
 #include "../../src/common.h"
 
 #include <pthread.h>
-
-#ifdef VALK_METRICS_ENABLED
 #include "../../src/pool_metrics.h"
 #include "../../src/metrics_v2.h"
 
@@ -553,20 +551,10 @@ void test_pool_metrics_overflow_decrease_ignored(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-#else
-
-void test_pool_metrics_disabled(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  VALK_SKIP("Pool metrics tests require VALK_METRICS_ENABLED");
-}
-
-#endif
-
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
-#ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_pool_metrics_init_null_args", test_pool_metrics_init_null_args);
   valk_testsuite_add_test(suite, "test_pool_metrics_init_custom_null_args", test_pool_metrics_init_custom_null_args);
   valk_testsuite_add_test(suite, "test_pool_metrics_init_success", test_pool_metrics_init_success);
@@ -593,9 +581,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_pool_metrics_partial_null_fields", test_pool_metrics_partial_null_fields);
   valk_testsuite_add_test(suite, "test_pool_metrics_overflow_same_value", test_pool_metrics_overflow_same_value);
   valk_testsuite_add_test(suite, "test_pool_metrics_overflow_decrease_ignored", test_pool_metrics_overflow_decrease_ignored);
-#else
-  valk_testsuite_add_test(suite, "test_pool_metrics_disabled", test_pool_metrics_disabled);
-#endif
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

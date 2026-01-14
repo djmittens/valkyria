@@ -9,10 +9,12 @@
 #include <pthread.h>
 #include "aio/aio.h"
 #include "aio/aio_async.h"
+#include "aio/aio_internal.h"
+#include "aio/aio_metrics.h"
+#include "aio/aio_metrics_v2.h"
 #include "collections.h"
 #include "parser.h"
 #include "common.h"
-#include "concurrency.h"
 #include "memory.h"
 #include "testing.h"
 typedef struct {
@@ -68,31 +70,17 @@ static void test_critical_watermark_rejects_all(VALK_TEST_ARGS()) {
   ASSERT_TRUE(LVAL_TYPE(result) != LVAL_ERR);
   valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
   int port = valk_aio_http2_server_get_port(srv);
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_system_stats_t *stats = valk_aio_get_system_stats(sys);
-  u64 initial_rejected = atomic_load(&stats->connections_rejected_load);
-#endif
+  valk_aio_system_stats_v2_t *stats = VALK_SYSTEM_STATS_V2(sys);
+  u64 initial_rejected = atomic_load(&stats->connections_rejected_load->value);
 #define NUM_CLIENTS 16
   valk_async_handle_t *hclients[NUM_CLIENTS];
   valk_lval_t *client_results[NUM_CLIENTS];
-#ifndef VALK_METRICS_ENABLED
-  int rejected_count = 0;
-#endif
   for (int i = 0; i < NUM_CLIENTS; i++) {
     hclients[i] = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
     client_results[i] = valk_async_handle_await(hclients[i]);
-#ifndef VALK_METRICS_ENABLED
-    if (LVAL_TYPE(client_results[i]) == LVAL_ERR) {
-      rejected_count++;
-    }
-#endif
   }
-#ifdef VALK_METRICS_ENABLED
-  u64 final_rejected = atomic_load(&stats->connections_rejected_load);
+  u64 final_rejected = atomic_load(&stats->connections_rejected_load->value);
   ASSERT_GT(final_rejected, initial_rejected);
-#else
-  ASSERT_GT(rejected_count, 0);
-#endif
 #undef NUM_CLIENTS
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
@@ -121,10 +109,8 @@ static void test_below_high_watermark_accepts_all(VALK_TEST_ARGS()) {
   ASSERT_TRUE(LVAL_TYPE(result) != LVAL_ERR);
   valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
   int port = valk_aio_http2_server_get_port(srv);
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_system_stats_t *stats = valk_aio_get_system_stats(sys);
-  u64 initial_rejected = atomic_load(&stats->connections_rejected_load);
-#endif
+  valk_aio_system_stats_v2_t *stats = VALK_SYSTEM_STATS_V2(sys);
+  u64 initial_rejected = atomic_load(&stats->connections_rejected_load->value);
 #define NUM_CLIENTS 4
   valk_async_handle_t *hclients[NUM_CLIENTS];
   valk_lval_t *client_results[NUM_CLIENTS];
@@ -137,10 +123,8 @@ static void test_below_high_watermark_accepts_all(VALK_TEST_ARGS()) {
     }
   }
   ASSERT_EQ(successful, NUM_CLIENTS);
-#ifdef VALK_METRICS_ENABLED
-  u64 final_rejected = atomic_load(&stats->connections_rejected_load);
+  u64 final_rejected = atomic_load(&stats->connections_rejected_load->value);
   ASSERT_EQ(final_rejected, initial_rejected);
-#endif
 #undef NUM_CLIENTS
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
@@ -218,7 +202,6 @@ static void test_probabilistic_shedding_range(VALK_TEST_ARGS()) {
   valk_aio_wait_for_shutdown(sys);
   VALK_PASS();
 }
-#ifdef VALK_METRICS_ENABLED
 static void test_load_shedding_counter_increments(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_aio_system_config_t cfg = valk_aio_config_demo();
@@ -228,9 +211,9 @@ static void test_load_shedding_counter_increments(VALK_TEST_ARGS()) {
   cfg.max_connections = 32;
   valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
   ASSERT_NOT_NULL(sys);
-  valk_aio_system_stats_t *stats = valk_aio_get_system_stats(sys);
+  valk_aio_system_stats_v2_t *stats = VALK_SYSTEM_STATS_V2(sys);
   ASSERT_NOT_NULL(stats);
-  u64 initial_rejected = atomic_load(&stats->connections_rejected_load);
+  u64 initial_rejected = atomic_load(&stats->connections_rejected_load->value);
   valk_srv_state_t state = {0};
   valk_http2_handler_t handler = {
       .arg = &state,
@@ -252,7 +235,7 @@ static void test_load_shedding_counter_increments(VALK_TEST_ARGS()) {
     hclients[i] = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
     client_results[i] = valk_async_handle_await(hclients[i]);
   }
-  u64 final_rejected = atomic_load(&stats->connections_rejected_load);
+  u64 final_rejected = atomic_load(&stats->connections_rejected_load->value);
   ASSERT_GT(final_rejected, initial_rejected);
   for (int i = 0; i < NUM_CLIENTS; i++) {
     ;
@@ -263,7 +246,6 @@ static void test_load_shedding_counter_increments(VALK_TEST_ARGS()) {
   valk_aio_wait_for_shutdown(sys);
   VALK_PASS();
 }
-#endif
 static void test_high_watermark_load_shedding(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_aio_system_config_t cfg = valk_aio_config_demo();
@@ -366,7 +348,6 @@ static void test_many_concurrent_requests(VALK_TEST_ARGS()) {
   valk_aio_wait_for_shutdown(sys);
   VALK_PASS();
 }
-#ifdef VALK_METRICS_ENABLED
 static void test_load_shedding_metrics(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_aio_system_config_t cfg = valk_aio_config_demo();
@@ -375,7 +356,7 @@ static void test_load_shedding_metrics(VALK_TEST_ARGS()) {
   cfg.tcp_buffer_pool_size = 24;
   valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
   ASSERT_NOT_NULL(sys);
-  valk_aio_system_stats_t *stats = valk_aio_get_system_stats(sys);
+  valk_aio_system_stats_v2_t *stats = VALK_SYSTEM_STATS_V2(sys);
   ASSERT_NOT_NULL(stats);
   valk_srv_state_t state = {0};
   valk_http2_handler_t handler = {
@@ -495,7 +476,6 @@ static void test_arena_pool_usage(VALK_TEST_ARGS()) {
   valk_aio_wait_for_shutdown(sys);
   VALK_PASS();
 }
-#endif
 static void test_connection_state_transitions(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_aio_system_t *sys = valk_aio_start();
@@ -861,16 +841,12 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_below_high_watermark_accepts_all", test_below_high_watermark_accepts_all);
   valk_testsuite_add_test(suite, "test_watermark_defaults_applied", test_watermark_defaults_applied);
   valk_testsuite_add_test(suite, "test_probabilistic_shedding_range", test_probabilistic_shedding_range);
-#ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_load_shedding_counter_increments", test_load_shedding_counter_increments);
-#endif
   valk_testsuite_add_test(suite, "test_high_watermark_load_shedding", test_high_watermark_load_shedding);
   valk_testsuite_add_test(suite, "test_many_concurrent_requests", test_many_concurrent_requests);
-#ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_load_shedding_metrics", test_load_shedding_metrics);
   valk_testsuite_add_test(suite, "test_buffer_pool_usage", test_buffer_pool_usage);
   valk_testsuite_add_test(suite, "test_arena_pool_usage", test_arena_pool_usage);
-#endif
   valk_testsuite_add_test(suite, "test_connection_state_transitions", test_connection_state_transitions);
   valk_testsuite_add_test(suite, "test_rapid_connect_disconnect", test_rapid_connect_disconnect);
   valk_testsuite_add_test(suite, "test_arena_exhaustion_returns_503", test_arena_exhaustion_returns_503);
