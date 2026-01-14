@@ -1,7 +1,6 @@
 #include "aio_internal.h"
 #include "log.h"
 
-#ifdef VALK_METRICS_ENABLED
 static valk_diag_conn_state_e __conn_state_to_diag(__aio_http_conn_e state) {
   switch (state) {
     case VALK_CONN_INIT:
@@ -19,7 +18,6 @@ static valk_diag_conn_state_e __conn_state_to_diag(__aio_http_conn_e state) {
   }
   return VALK_DIAG_CONN_FREE;
 }
-#endif
 
 static const char *STATE_NAMES[] = {
   [VALK_CONN_INIT] = "INIT",
@@ -126,10 +124,8 @@ static __aio_http_conn_e __next_state(__aio_http_conn_e current, valk_conn_event
 void __valk_conn_set_init_state(valk_aio_handle_t *conn) {
   if (!conn) return;
   conn->http.state = VALK_CONN_INIT;
-#ifdef VALK_METRICS_ENABLED
   conn->http.diag.state = __conn_state_to_diag(VALK_CONN_INIT);
   conn->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
-#endif
   VALK_DEBUG("FSM: initialized to INIT state");
 }
 
@@ -173,10 +169,8 @@ bool valk_conn_transition(valk_aio_handle_t *conn, valk_conn_event_e event) {
   conn->http.state = new_state;
   __on_enter_state(conn, new_state);
 
-#ifdef VALK_METRICS_ENABLED
   conn->http.diag.state = __conn_state_to_diag(new_state);
   conn->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
-#endif
 
   return true;
 }

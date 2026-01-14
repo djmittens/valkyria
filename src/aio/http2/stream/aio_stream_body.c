@@ -365,7 +365,6 @@ static nghttp2_ssize __stream_data_read_callback(
   body->bytes_sent += chunk->data_len;
 
   if (body->conn && body->conn->http.server) {
-    atomic_fetch_add(&body->conn->http.server->sys->metrics_state->metrics.bytes_sent_total, chunk->data_len);
     valk_counter_v2_add(body->conn->http.server->metrics.bytes_sent, chunk->data_len);
   }
 

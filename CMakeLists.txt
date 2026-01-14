@@ -12,7 +12,6 @@ endif()
 project(valkyria LANGUAGES C)
 
 # Feature flags
-option(VALK_METRICS "Enable metrics collection" OFF)
 option(VALK_COVERAGE "Enable Valk line coverage instrumentation" OFF)
 option(VALK_TRAMPOLINE "Use trampoline-based eval (for algebraic effects)" OFF)
 
@@ -102,7 +101,6 @@ set(VALKYRIA_SOURCES
   # HTTP/2 protocol (src/aio/http2/)
   src/aio/http2/aio_ssl.c
   src/aio/http2/aio_conn_io.c
-  src/aio/http2/aio_body_buffer.c
   src/aio/http2/aio_http2_conn.c
   src/aio/http2/aio_http2_conn_fsm.c
   src/aio/http2/aio_http2_server.c
@@ -123,31 +121,23 @@ set(VALKYRIA_SOURCES
   src/aio/io/io_tcp_ops_test.c
   src/aio/io/io_timer_ops_uv.c
   src/aio/io/io_timer_ops_test.c
+  # Metrics (always enabled)
+  src/aio/aio_metrics.c
+  src/aio/aio_metrics_v2.c
+  src/aio/aio_timer.c
+  src/aio/aio_owner.c
+  src/aio/aio_handle_diag.c
+  src/metrics_v2.c
+  src/metrics_delta.c
+  src/metrics_builtins.c
+  src/aio/aio_diagnostics_builtins.c
+  src/pool_metrics.c
+  src/event_loop_metrics.c
 )
-
-# Conditionally add metrics sources (V2 only)
-if(VALK_METRICS)
-  list(APPEND VALKYRIA_SOURCES src/aio/aio_metrics.c)
-  list(APPEND VALKYRIA_SOURCES src/aio/aio_timer.c)
-  list(APPEND VALKYRIA_SOURCES src/aio/aio_owner.c)
-  list(APPEND VALKYRIA_SOURCES src/aio/aio_handle_diag.c)
-  # Metrics V2 - unified registry with delta streaming
-  list(APPEND VALKYRIA_SOURCES src/metrics_v2.c)
-  list(APPEND VALKYRIA_SOURCES src/metrics_delta.c)
-  list(APPEND VALKYRIA_SOURCES src/metrics_builtins.c)
-  list(APPEND VALKYRIA_SOURCES src/aio/aio_diagnostics_builtins.c)
-  # Pool metrics factory for standardized pool metrics
-  list(APPEND VALKYRIA_SOURCES src/pool_metrics.c)
-  # Event loop metrics for libuv loops
-  list(APPEND VALKYRIA_SOURCES src/event_loop_metrics.c)
-endif()
 
 add_library(valkyria ${VALKYRIA_SOURCES})
 
-# Conditionally enable metrics
-if(VALK_METRICS)
-  target_compile_definitions(valkyria PRIVATE VALK_METRICS_ENABLED=1)
-endif()
+
 
 if(VALK_COVERAGE)
   add_compile_definitions(VALK_COVERAGE)
@@ -230,9 +220,6 @@ include_directories(test_networking src/)
 
 add_executable(test_demo_server test/test_demo_server.c test/testing.c)
 target_link_libraries(test_demo_server PRIVATE "-lc" valkyria)
-if(VALK_METRICS)
-  target_compile_definitions(test_demo_server PRIVATE VALK_METRICS_ENABLED=1)
-endif()
 include_directories(test_demo_server src/)
 
 add_executable(test_large_response test/test_large_response.c test/testing.c)
@@ -264,41 +251,25 @@ include_directories(test_aio_config src/)
 
 add_executable(test_aio_integration test/test_aio_integration.c test/testing.c)
 target_link_libraries(test_aio_integration PRIVATE "-lc" valkyria)
-if(VALK_METRICS)
-  target_compile_definitions(test_aio_integration PRIVATE VALK_METRICS_ENABLED=1)
-endif()
 include_directories(test_aio_integration src/)
 
 add_executable(test_aio_load_shedding test/test_aio_load_shedding.c test/testing.c)
 target_link_libraries(test_aio_load_shedding PRIVATE "-lc" valkyria)
-if(VALK_METRICS)
-  target_compile_definitions(test_aio_load_shedding PRIVATE VALK_METRICS_ENABLED=1)
-endif()
 include_directories(test_aio_load_shedding src/)
 
 
 
-# Metrics tests (only built when VALK_METRICS is enabled)
-if(VALK_METRICS)
-  add_executable(test_aio_metrics test/test_aio_metrics.c test/testing.c)
-  target_link_libraries(test_aio_metrics PRIVATE "-lc" valkyria)
-  target_compile_definitions(test_aio_metrics PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_aio_metrics src/)
+add_executable(test_loop_metrics test/test_loop_metrics.c test/testing.c)
+target_link_libraries(test_loop_metrics PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_loop_metrics src/)
 
-  add_executable(test_loop_metrics test/test_loop_metrics.c test/testing.c)
-  target_link_libraries(test_loop_metrics PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-  target_compile_definitions(test_loop_metrics PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_loop_metrics src/)
+add_executable(test_eval_metrics test/test_eval_metrics.c test/testing.c)
+target_link_libraries(test_eval_metrics PRIVATE "-lc" valkyria)
+include_directories(test_eval_metrics src/)
 
-  add_executable(test_eval_metrics test/test_eval_metrics.c test/testing.c)
-  target_link_libraries(test_eval_metrics PRIVATE "-lc" valkyria)
-  include_directories(test_eval_metrics src/)
-
-  add_executable(test_metrics_v2 test/test_metrics_v2.c test/testing.c)
-  target_link_libraries(test_metrics_v2 PRIVATE "-lc" valkyria)
-  target_compile_definitions(test_metrics_v2 PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_metrics_v2 src/)
-endif()
+add_executable(test_metrics_v2 test/test_metrics_v2.c test/testing.c)
+target_link_libraries(test_metrics_v2 PRIVATE "-lc" valkyria)
+include_directories(test_metrics_v2 src/)
 
 if(VALK_COVERAGE)
   add_executable(test_source_loc test/test_source_loc.c test/testing.c)
@@ -310,29 +281,21 @@ add_executable(test_debug test/unit/test_debug.c test/testing.c)
 target_link_libraries(test_debug PRIVATE "-lc" valkyria)
 include_directories(test_debug src/)
 
-if(VALK_METRICS)
-  add_executable(test_pool_metrics test/unit/test_pool_metrics.c test/testing.c)
-  target_link_libraries(test_pool_metrics PRIVATE "-lc" valkyria)
-  target_compile_definitions(test_pool_metrics PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_pool_metrics src/)
+add_executable(test_pool_metrics test/unit/test_pool_metrics.c test/testing.c)
+target_link_libraries(test_pool_metrics PRIVATE "-lc" valkyria)
+include_directories(test_pool_metrics src/)
 
-  add_executable(test_metrics_delta test/unit/test_metrics_delta.c test/testing.c)
-  target_link_libraries(test_metrics_delta PRIVATE "-lc" valkyria)
-  target_compile_definitions(test_metrics_delta PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_metrics_delta src/)
+add_executable(test_metrics_delta test/unit/test_metrics_delta.c test/testing.c)
+target_link_libraries(test_metrics_delta PRIVATE "-lc" valkyria)
+include_directories(test_metrics_delta src/)
 
-  add_executable(test_event_loop_metrics_unit test/unit/test_event_loop_metrics.c test/testing.c)
-  target_link_libraries(test_event_loop_metrics_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-  target_compile_definitions(test_event_loop_metrics_unit PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_event_loop_metrics_unit src/)
+add_executable(test_event_loop_metrics_unit test/unit/test_event_loop_metrics.c test/testing.c)
+target_link_libraries(test_event_loop_metrics_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_event_loop_metrics_unit src/)
 
-  add_executable(test_metrics_builtins test/unit/test_metrics_builtins.c test/testing.c)
-  target_link_libraries(test_metrics_builtins PRIVATE "-lc" valkyria)
-  target_compile_definitions(test_metrics_builtins PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_metrics_builtins src/)
-
-
-endif()
+add_executable(test_metrics_builtins test/unit/test_metrics_builtins.c test/testing.c)
+target_link_libraries(test_metrics_builtins PRIVATE "-lc" valkyria)
+include_directories(test_metrics_builtins src/)
 
 add_executable(test_concurrency test/unit/test_concurrency.c test/testing.c)
 target_link_libraries(test_concurrency PRIVATE "-lc" valkyria)
@@ -352,24 +315,15 @@ include_directories(test_aio_uv_unit src/)
 
 add_executable(test_aio_uv_coverage test/test_aio_uv_coverage.c test/testing.c)
 target_link_libraries(test_aio_uv_coverage PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-if(VALK_METRICS)
-  target_compile_definitions(test_aio_uv_coverage PRIVATE VALK_METRICS_ENABLED=1)
-endif()
 include_directories(test_aio_uv_coverage src/)
 
 add_executable(test_aio_combinators test/test_aio_combinators.c test/testing.c)
 target_link_libraries(test_aio_combinators PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-if(VALK_METRICS)
-  target_compile_definitions(test_aio_combinators PRIVATE VALK_METRICS_ENABLED=1)
-endif()
 include_directories(test_aio_combinators src/)
 
-if(VALK_METRICS)
-  add_executable(test_aio_backpressure test/unit/test_aio_backpressure.c test/testing.c)
-  target_link_libraries(test_aio_backpressure PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-  target_compile_definitions(test_aio_backpressure PRIVATE VALK_METRICS_ENABLED=1)
-  include_directories(test_aio_backpressure src/)
-endif()
+add_executable(test_aio_backpressure test/unit/test_aio_backpressure.c test/testing.c)
+target_link_libraries(test_aio_backpressure PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_aio_backpressure src/)
 
 add_executable(test_coverage_unit test/unit/test_coverage.c test/testing.c)
 target_link_libraries(test_coverage_unit PRIVATE "-lc" valkyria)
@@ -409,10 +363,6 @@ include_directories(test_aio_ssl_unit src/)
 add_executable(test_pressure test/unit/test_pressure.c test/testing.c)
 target_link_libraries(test_pressure PRIVATE "-lc" valkyria)
 include_directories(test_pressure src/)
-
-add_executable(test_body_buffer test/unit/test_body_buffer.c test/testing.c)
-target_link_libraries(test_body_buffer PRIVATE "-lc" valkyria)
-include_directories(test_body_buffer src/)
 
 add_executable(test_conn_io test/unit/test_conn_io.c test/testing.c)
 target_link_libraries(test_conn_io PRIVATE "-lc" valkyria)

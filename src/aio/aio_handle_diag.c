@@ -1,7 +1,5 @@
 #include "aio_internal.h"
 
-#ifdef VALK_METRICS_ENABLED
-
 valk_slab_t* valk_aio_get_tcp_buffer_slab(valk_aio_system_t* sys) {
   if (!sys) return nullptr;
   return sys->tcpBufferSlab;
@@ -65,5 +63,3 @@ valk_diag_handle_kind_e valk_aio_get_handle_kind(valk_aio_system_t* sys, u64 slo
     default:                  return VALK_DIAG_HNDL_EMPTY;
   }
 }
-
-#endif

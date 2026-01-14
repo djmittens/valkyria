@@ -476,26 +476,16 @@ valk_async_handle_t *valk_aio_http2_connect_host(valk_aio_system_t *sys,
 valk_async_handle_t *valk_aio_http2_request_send(valk_http2_request_t *req,
                                                   valk_aio_http2_client *client);
 
-#ifdef VALK_METRICS_ENABLED
 #include "aio_metrics.h"
 #include "gc.h"
-
-// Get metrics from AIO system (returns nullptr if metrics not enabled)
-valk_aio_metrics_t* valk_aio_get_metrics(valk_aio_system_t* sys);
-
-// Get system stats from AIO system (returns nullptr if metrics not enabled)
-valk_aio_system_stats_t* valk_aio_get_system_stats(valk_aio_system_t* sys);
-
-// Get HTTP clients registry from AIO system (returns nullptr if metrics not enabled)
-valk_http_clients_registry_t* valk_aio_get_http_clients_registry(valk_aio_system_t* sys);
 
 // Update queue stats from HTTP queue (call before rendering metrics)
 void valk_aio_update_queue_stats(valk_aio_system_t* sys);
 
-// Get GC heap from AIO system (returns nullptr if metrics not enabled)
+// Get GC heap from AIO system
 valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
 
-// Get scratch arena from AIO system (for diagnostics, returns nullptr if not available)
+// Get scratch arena from AIO system (for diagnostics)
 valk_mem_arena_t* valk_aio_get_scratch_arena(valk_aio_system_t* sys);
 
 // ============================================================================
@@ -561,7 +551,6 @@ void valk_aio_timer_stop(valk_aio_handle_t* handle);
 void valk_aio_timer_close(valk_aio_handle_t* handle, void (*close_cb)(uv_handle_t*));
 void valk_aio_timer_set_data(valk_aio_handle_t* handle, void* data);
 void valk_aio_timer_free(valk_aio_handle_t* handle);
-#endif
 
 // Get the event loop from AIO system (returns nullptr if no loop available)
 struct uv_loop_s* valk_aio_get_event_loop(valk_aio_system_t* sys);

@@ -807,10 +807,7 @@ void valk_gc_full_cycle(valk_gc_page_pool_t *pool) {
   u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
   if (num_threads == 0) return;
   
-  u64 start_ns = 0;
-  #ifdef VALK_METRICS_ENABLED
-  start_ns = uv_hrtime();
-  #endif
+  u64 start_ns = uv_hrtime();
   
   valk_barrier_wait(&valk_gc_coord.barrier);
   
@@ -824,11 +821,9 @@ void valk_gc_full_cycle(valk_gc_page_pool_t *pool) {
   
   valk_barrier_wait(&valk_gc_coord.barrier);
   
-  #ifdef VALK_METRICS_ENABLED
   u64 end_ns = uv_hrtime();
   u64 pause_us = (end_ns - start_ns) / 1000;
   atomic_fetch_add(&valk_gc_coord.parallel_pause_us_total, pause_us);
-  #endif
   
   atomic_store(&valk_gc_coord.threads_paused, 0);
   

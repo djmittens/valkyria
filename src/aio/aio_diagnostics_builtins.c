@@ -8,7 +8,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-#ifdef VALK_METRICS_ENABLED
 static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
@@ -101,7 +100,6 @@ static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a
 
   return result;
 }
-#endif
 
 static void write_slab_json(char **p, char *end, const char *name, valk_slab_t *slab) {
   if (!slab || *p >= end - 100) return;
@@ -133,7 +131,6 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk
     return valk_lval_err("aio/diagnostics-state-json: argument must be an aio_system");
   }
 
-#ifdef VALK_METRICS_ENABLED
   valk_aio_system_t *sys = (valk_aio_system_t *)sys_arg->ref.ptr;
 
   valk_slab_t *tcp_slab = valk_aio_get_tcp_buffer_slab(sys);
@@ -236,10 +233,6 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk
   valk_lval_t *result = valk_lval_str(buf);
   free(buf);
   return result;
-#else
-  UNUSED(sys_arg);
-  return valk_lval_str("{}");
-#endif
 }
 
 static valk_lval_t *valk_builtin_aio_diagnostics_state_json_compact(valk_lenv_t *e, valk_lval_t *a) {
@@ -254,7 +247,6 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json_compact(valk_lenv_t 
     return valk_lval_err("aio/diagnostics-state-json-compact: argument must be an aio_system");
   }
 
-#ifdef VALK_METRICS_ENABLED
   valk_aio_system_t *sys = (valk_aio_system_t *)sys_arg->ref.ptr;
 
   valk_process_memory_t pm = {0};
@@ -274,10 +266,6 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json_compact(valk_lenv_t 
   }
 
   return valk_lval_str(buf);
-#else
-  UNUSED(sys_arg);
-  return valk_lval_str("{}");
-#endif
 }
 
 void valk_register_aio_diagnostics_builtins(valk_lenv_t *env) {
@@ -285,9 +273,6 @@ void valk_register_aio_diagnostics_builtins(valk_lenv_t *env) {
                         valk_builtin_aio_diagnostics_state_json);
   valk_lenv_put_builtin(env, "aio/diagnostics-state-json-compact",
                         valk_builtin_aio_diagnostics_state_json_compact);
-
-#ifdef VALK_METRICS_ENABLED
   valk_lenv_put_builtin(env, "aio/slab-buckets",
                         valk_builtin_aio_slab_buckets);
-#endif
 }

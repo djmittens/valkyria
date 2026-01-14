@@ -213,10 +213,8 @@ typedef struct {  // extends valk_mem_allocator_t;
   sz mmap_size;  // Size of mmap'd region (0 if not mmap'd)
   // treiber list top
 
-#ifdef VALK_METRICS_ENABLED
   u64 bitmap_version;
   u8 *usage_bitmap;
-#endif
 
   // Memory layout
   // [sizeof(u64) * numSlabs | freeList]
@@ -257,7 +255,6 @@ static inline sz valk_slab_available(valk_slab_t *self) {
   return __atomic_load_n(&self->numFree, __ATOMIC_ACQUIRE);
 }
 
-#ifdef VALK_METRICS_ENABLED
 typedef struct {
   u8 *data;
   sz bytes;
@@ -298,7 +295,6 @@ sz valk_slab_bitmap_buckets(valk_slab_t *slab,
                                  sz start_slot, sz end_slot,
                                  sz num_buckets,
                                  valk_bitmap_bucket_t *out_buckets);
-#endif
 
 // Arena statistics for telemetry
 typedef struct {

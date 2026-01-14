@@ -1,7 +1,5 @@
 #include "../testing.h"
 #include "../../src/memory.h"
-
-#ifdef VALK_METRICS_ENABLED
 #include "../../src/event_loop_metrics.h"
 #include "../../src/metrics_v2.h"
 
@@ -428,20 +426,10 @@ void test_event_loop_metrics_update_null_gauges(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-#else
-
-void test_event_loop_metrics_disabled(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  VALK_SKIP("Event loop metrics tests require VALK_METRICS_ENABLED");
-}
-
-#endif
-
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
-#ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_event_loop_metrics_init_null", test_event_loop_metrics_init_null);
   valk_testsuite_add_test(suite, "test_event_loop_metrics_init_success", test_event_loop_metrics_init_success);
   valk_testsuite_add_test(suite, "test_event_loop_metrics_set_handles", test_event_loop_metrics_set_handles);
@@ -466,9 +454,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_event_loop_metrics_set_handles_null_gauge", test_event_loop_metrics_set_handles_null_gauge);
   valk_testsuite_add_test(suite, "test_event_loop_metrics_multiple_updates", test_event_loop_metrics_multiple_updates);
   valk_testsuite_add_test(suite, "test_event_loop_metrics_update_null_gauges", test_event_loop_metrics_update_null_gauges);
-#else
-  valk_testsuite_add_test(suite, "test_event_loop_metrics_disabled", test_event_loop_metrics_disabled);
-#endif
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

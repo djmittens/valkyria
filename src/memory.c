@@ -243,23 +243,19 @@ void valk_slab_init(valk_slab_t *self, sz itemSize, sz numItems) {
   __atomic_store_n(&self->overflowCount, 0, __ATOMIC_RELAXED);
   __atomic_store_n(&self->peakUsed, 0, __ATOMIC_RELAXED);
 
-#ifdef VALK_METRICS_ENABLED
   sz bitmap_bytes = (numItems + 7) / 8;
   // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI) - 0-size calloc is valid edge case
   self->usage_bitmap = calloc(bitmap_bytes, 1);
   __atomic_store_n(&self->bitmap_version, 0, __ATOMIC_RELAXED);
-#endif
 }
 
 void valk_slab_free(valk_slab_t *self) {
   if (!self) return;
   
-#ifdef VALK_METRICS_ENABLED
   if (self->usage_bitmap) {
     free(self->usage_bitmap);
     self->usage_bitmap = nullptr;
   }
-#endif
 
   if (self->mmap_size > 0) {
     munmap(self, self->mmap_size);
@@ -338,14 +334,12 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   res = valk_slab_item_at(self, head);
   // printf("Slab Aquired %ld %p\n", head, res->data);
 
-#ifdef VALK_METRICS_ENABLED
   if (self->usage_bitmap) {
     u64 byte_idx = head / 8;
     u8 bit_mask = 1 << (head % 8);
     __atomic_fetch_or(&self->usage_bitmap[byte_idx], bit_mask, __ATOMIC_RELAXED);
     __atomic_fetch_add(&self->bitmap_version, 1, __ATOMIC_RELAXED);
   }
-#endif
 
   // Update peak usage (high water mark) tracking
   sz used = self->numItems - __atomic_load_n(&self->numFree, __ATOMIC_RELAXED);
@@ -392,14 +386,12 @@ void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
 #ifdef VALK_SLAB_TREIBER_STACK
   sz slot_idx = item->handle;
 
-#ifdef VALK_METRICS_ENABLED
   if (self->usage_bitmap && slot_idx < self->numItems) {
     sz byte_idx = slot_idx / 8;
     u8 bit_mask = 1 << (slot_idx % 8);
     __atomic_fetch_and(&self->usage_bitmap[byte_idx], ~bit_mask, __ATOMIC_RELAXED);
     __atomic_fetch_add(&self->bitmap_version, 1, __ATOMIC_RELAXED);
   }
-#endif
 
   sz oldTag, newTag;
   sz head;
@@ -1057,7 +1049,6 @@ void valk_gc_sweep(valk_gc_heap_t *self) {
   }
 }
 
-#ifdef VALK_METRICS_ENABLED
 void valk_slab_bitmap_snapshot(valk_slab_t *slab, valk_slab_bitmap_t *out) {
   if (!slab || !out) return;
   out->data = nullptr;
@@ -1224,4 +1215,3 @@ sz valk_slab_bitmap_buckets(valk_slab_t *slab,
 
   return num_buckets;
 }
-#endif

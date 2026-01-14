@@ -1,8 +1,6 @@
 #include "../testing.h"
 #include "../../src/memory.h"
 #include "../../src/common.h"
-
-#ifdef VALK_METRICS_ENABLED
 #include "../../src/metrics_v2.h"
 #include "../../src/metrics_delta.h"
 
@@ -1011,20 +1009,10 @@ void test_delta_with_empty_labels(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-#else
-
-void test_metrics_delta_disabled(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  VALK_SKIP("Metrics delta tests require VALK_METRICS_ENABLED");
-}
-
-#endif
-
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
-#ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_delta_type_enum", test_delta_type_enum);
   valk_testsuite_add_test(suite, "test_delta_snapshot_init", test_delta_snapshot_init);
   valk_testsuite_add_test(suite, "test_delta_snapshot_free_null", test_delta_snapshot_free_null);
@@ -1070,9 +1058,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_stateless_no_change_all_types", test_stateless_no_change_all_types);
   valk_testsuite_add_test(suite, "test_delta_json_small_buffer_truncation", test_delta_json_small_buffer_truncation);
   valk_testsuite_add_test(suite, "test_delta_with_empty_labels", test_delta_with_empty_labels);
-#else
-  valk_testsuite_add_test(suite, "test_metrics_delta_disabled", test_metrics_delta_disabled);
-#endif
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

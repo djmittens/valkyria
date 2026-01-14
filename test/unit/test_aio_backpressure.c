@@ -4,6 +4,9 @@
 #include "../../src/aio/aio.h"
 #include "../../src/aio/aio_alloc.h"
 #include "../../src/aio/aio_async.h"
+#include "../../src/aio/aio_internal.h"
+#include "../../src/aio/aio_metrics.h"
+#include "../../src/aio/aio_metrics_v2.h"
 #include "../../src/collections.h"
 #include "../../src/parser.h"
 
@@ -104,7 +107,6 @@ void test_backpressure_config_validation(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-#ifdef VALK_METRICS_ENABLED
 void test_server_start_initializes_slabs(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -272,10 +274,10 @@ void test_system_metrics_access(VALK_TEST_ARGS()) {
   valk_aio_system_t *sys = valk_aio_start_with_config(&cfg);
   ASSERT_NOT_NULL(sys);
 
-  valk_aio_metrics_t *metrics = valk_aio_get_metrics(sys);
+  valk_aio_metrics_v2_t *metrics = VALK_METRICS_V2(sys);
   ASSERT_NOT_NULL(metrics);
 
-  valk_aio_system_stats_t *stats = valk_aio_get_system_stats(sys);
+  valk_aio_system_stats_v2_t *stats = VALK_SYSTEM_STATS_V2(sys);
   ASSERT_NOT_NULL(stats);
 
   valk_aio_stop(sys);
@@ -358,7 +360,6 @@ void test_server_listen_port_already_bound(VALK_TEST_ARGS()) {
 
   VALK_PASS();
 }
-#endif
 
 int main(void) {
   valk_mem_init_malloc();
@@ -371,7 +372,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_backpressure_config_validation",
                           test_backpressure_config_validation);
 
-#ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_server_start_initializes_slabs",
                           test_server_start_initializes_slabs);
   valk_testsuite_add_test(suite, "test_multiple_connections",
@@ -386,7 +386,6 @@ int main(void) {
                           test_server_listen_invalid_address);
   valk_testsuite_add_test(suite, "test_server_listen_port_already_bound",
                           test_server_listen_port_already_bound);
-#endif
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

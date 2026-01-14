@@ -24,10 +24,8 @@ int valk_aio_http2_server_get_port_from_ref(struct valk_lval_t *server_ref);
 valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv,
                                          struct valk_arc_box *box);
 
-#ifdef VALK_METRICS_ENABLED
 void valk_http2_server_metrics_init(valk_aio_system_t* sys, 
                                      valk_server_metrics_t* m,
                                      const char* name, int port, 
                                      const char* protocol,
                                      const char* loop_name);
-#endif

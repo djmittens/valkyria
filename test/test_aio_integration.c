@@ -7,6 +7,9 @@
 
 #include "aio/aio.h"
 #include "aio/aio_async.h"
+#include "aio/aio_internal.h"
+#include "aio/aio_metrics.h"
+#include "aio/aio_metrics_v2.h"
 #include "collections.h"
 #include "common.h"
 #include "concurrency.h"
@@ -384,7 +387,6 @@ static void test_server_only_no_clients(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-#ifdef VALK_METRICS_ENABLED
 static void test_slab_accessors(VALK_TEST_ARGS()) {
   VALK_TEST();
   
@@ -432,10 +434,10 @@ static void test_metrics_available(VALK_TEST_ARGS()) {
   valk_aio_system_t *sys = valk_aio_start();
   ASSERT_NOT_NULL(sys);
   
-  valk_aio_metrics_t *metrics = valk_aio_get_metrics(sys);
+  valk_aio_metrics_v2_t *metrics = VALK_METRICS_V2(sys);
   ASSERT_NOT_NULL(metrics);
   
-  valk_aio_system_stats_t *stats = valk_aio_get_system_stats(sys);
+  valk_aio_system_stats_v2_t *stats = VALK_SYSTEM_STATS_V2(sys);
   ASSERT_NOT_NULL(stats);
   
   valk_srv_state_t arg = {0};
@@ -486,8 +488,6 @@ static void test_metrics_available(VALK_TEST_ARGS()) {
   
   VALK_PASS();
 }
-
-#endif
 
 static void test_custom_watermarks(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -640,10 +640,8 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_server_shutdown_with_active_clients", test_server_shutdown_with_active_clients);
   valk_testsuite_add_test(suite, "test_connect_to_nonexistent_server", test_connect_to_nonexistent_server);
   valk_testsuite_add_test(suite, "test_server_only_no_clients", test_server_only_no_clients);
-#ifdef VALK_METRICS_ENABLED
   valk_testsuite_add_test(suite, "test_metrics_available", test_metrics_available);
   valk_testsuite_add_test(suite, "test_slab_accessors", test_slab_accessors);
-#endif
   valk_testsuite_add_test(suite, "test_custom_watermarks", test_custom_watermarks);
   valk_testsuite_add_test(suite, "test_api_config", test_api_config);
   valk_testsuite_add_test(suite, "test_large_payload_config", test_large_payload_config);

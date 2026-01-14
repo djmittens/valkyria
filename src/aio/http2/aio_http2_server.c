@@ -3,6 +3,7 @@
 #include "aio_http2_conn.h"
 #include "aio_http2_session.h"
 #include "aio_ssl.h"
+#include "aio_metrics_v2.h"
 #include "../gc.h"
 
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
@@ -78,7 +79,6 @@ static inline int __vtable_getpeername(valk_aio_handle_t *conn, void *addr, int 
   return ops->getpeername(__conn_tcp(conn), addr, len);
 }
 
-#ifdef VALK_METRICS_ENABLED
 valk_gauge_v2_t* client_connections_active = nullptr;
 
 void valk_http2_server_metrics_init(valk_aio_system_t* sys, valk_server_metrics_t* m,
@@ -135,7 +135,6 @@ void valk_http2_server_metrics_init(valk_aio_system_t* sys, valk_server_metrics_
   m->bytes_recv = valk_counter_get_or_create("http_bytes_recv_total", nullptr, &base_labels);
   m->overload_responses = valk_counter_get_or_create("http_overload_responses_total", nullptr, &base_labels);
 }
-#endif
 
 static void __load_shed_close_cb(uv_handle_t *handle) {
   free(handle);
@@ -196,9 +195,7 @@ static bool __accept_should_reject(valk_aio_http_server *srv, valk_aio_handle_t 
   VALK_WARN("Load shedding: rejecting connection (%s, level=%s)",
             result.reason ? result.reason : "unknown",
             valk_pressure_level_str(result.level));
-#ifdef VALK_METRICS_ENABLED
-  atomic_fetch_add(&srv->sys->metrics_state->system_stats.connections_rejected_load, 1);
-#endif
+  valk_counter_v2_inc(((valk_aio_system_stats_v2_t*)srv->sys->metrics_state->system_stats_v2)->connections_rejected_load);
   uv_tcp_t *reject_tcp = malloc(sizeof(uv_tcp_t));
   if (reject_tcp) {
     uv_tcp_init(srv->sys->eventloop, reject_tcp);
@@ -230,9 +227,7 @@ static valk_aio_handle_t *__accept_alloc_conn(valk_aio_http_server *srv) {
   conn->http.active_arena_head = UINT32_MAX;
   conn->http.io.buf_size = HTTP_SLAB_ITEM_SIZE;
 
-#ifdef VALK_METRICS_ENABLED
   conn->http.diag.owner_idx = srv->owner_idx;
-#endif
 
   valk_dll_insert_after(&srv->sys->liveHandles, conn);
 
@@ -295,26 +290,20 @@ static void __accept_finalize(valk_aio_handle_t *conn, valk_aio_http_server *srv
     conn->http.httpHandler->onConnect(conn->http.httpHandler->arg, conn);
   }
 
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_metrics_on_connection(&srv->sys->metrics_state->metrics, true);
+  valk_aio_metrics_v2_on_connection(
+      (valk_aio_metrics_v2_t*)srv->sys->metrics_state->metrics_v2, true);
   valk_gauge_v2_inc(srv->metrics.connections_active);
   conn->http.diag.state = VALK_DIAG_CONN_ACTIVE;
   conn->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
   conn->http.diag.owner_idx = srv->owner_idx;
-#else
-  UNUSED(srv);
-#endif
 
   __vtable_read_start(conn);
 }
 
 static void __accept_handle_error(valk_aio_handle_t *conn, valk_aio_http_server *srv, int res) {
   VALK_WARN("Accept error: %s", srv->sys->ops->tcp->strerror(res));
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_metrics_on_connection(&srv->sys->metrics_state->metrics, false);
-#else
-  UNUSED(srv);
-#endif
+  valk_aio_metrics_v2_on_connection(
+      (valk_aio_metrics_v2_t*)srv->sys->metrics_state->metrics_v2, false);
   if (!__vtable_is_closing(conn)) {
     valk_conn_transition(conn, VALK_CONN_EVT_ERROR);
     __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
@@ -440,15 +429,14 @@ static void __http_listen_cb(valk_aio_system_t *sys,
     }
   }
 
-#ifdef VALK_METRICS_ENABLED
   const char* protocol = srv->ssl_ctx ? "https" : "http";
   valk_http2_server_metrics_init(sys, &srv->metrics, srv->interface, srv->port, protocol, sys->name);
-  valk_aio_system_stats_on_server_start(&sys->metrics_state->system_stats);
+  valk_aio_system_stats_v2_on_server_start(
+      (valk_aio_system_stats_v2_t*)sys->metrics_state->system_stats_v2);
 
   char owner_name[32];
   snprintf(owner_name, sizeof(owner_name), ":%d", srv->port);
   srv->owner_idx = valk_owner_register(sys, owner_name, 0, srv);
-#endif
 
   r = __vtable_listen(srv->listener, 128);
   if (r) {
@@ -504,9 +492,8 @@ static void __valk_sandbox_env_free(valk_lenv_t *env) {
 
 static void __valk_aio_http2_server_free(valk_arc_box *box) {
   valk_aio_http_server *srv = box->item;
-#ifdef VALK_METRICS_ENABLED
-  valk_aio_system_stats_on_server_stop(&srv->sys->metrics_state->system_stats);
-#endif
+  valk_aio_system_stats_v2_on_server_stop(
+      (valk_aio_system_stats_v2_t*)srv->sys->metrics_state->system_stats_v2);
   if (srv->lisp_handler_fn) {
     valk_gc_remove_global_root(&srv->lisp_handler_fn);
   }

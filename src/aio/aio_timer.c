@@ -1,7 +1,5 @@
 #include "aio_internal.h"
 
-#ifdef VALK_METRICS_ENABLED
-
 valk_aio_handle_t* valk_aio_timer_alloc(valk_aio_system_t* sys) {
   if (!sys || !sys->handleSlab) return nullptr;
 
@@ -59,5 +57,3 @@ void valk_aio_timer_free(valk_aio_handle_t* handle) {
   handle->kind = 0;
   valk_slab_release_ptr(handle->sys->handleSlab, handle);
 }
-
-#endif
