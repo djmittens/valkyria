@@ -353,6 +353,25 @@ static inline valk_aio_system_config_t valk_aio_config_minimal(void) {
   };
 }
 
+// Test profile: fast timeouts for deterministic test execution
+// Identical to demo config but with short idle timeout to prevent test hangs
+static inline valk_aio_system_config_t valk_aio_config_test(void) {
+  return (valk_aio_system_config_t){
+    .max_connections = 8,
+    .max_concurrent_streams = 8,
+    .max_handles = 128,
+    .max_servers = 3,
+    .max_clients = 3,
+    .arena_size = 4 * 1024 * 1024,
+    .arena_pool_size = 24,
+    .max_request_body_size = 1 * 1024 * 1024,
+    .backpressure_list_max = 50,
+    .backpressure_timeout_ms = 5000,
+    .connection_idle_timeout_ms = 500,      // 500ms for fast test cleanup
+    .maintenance_interval_ms = 100,         // 100ms for quick timeout detection
+  };
+}
+
 // High-throughput API profile: maximum requests per second, small payloads
 // Memory: 2000 arenas × 1MB = 2GB total
 // Capacity: 50 conns × 256 streams = 12,800 max concurrent

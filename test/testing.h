@@ -123,6 +123,8 @@ typedef struct valk_test_t {
   valk_ring_t *_stderr;
 } valk_test_t;
 
+typedef void(valk_fork_handler_f)(void);
+
 typedef struct valk_test_suite_t {
   char *filename;
   struct {
@@ -136,6 +138,8 @@ typedef struct valk_test_suite_t {
     size_t count;
     valk_test_fixture_t *items;
   } fixtures;
+  
+  valk_fork_handler_f *fork_child_handler;
 } valk_test_suite_t;
 
 valk_test_suite_t *valk_testsuite_empty(const char *filename);

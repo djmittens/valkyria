@@ -5,6 +5,7 @@
 #endif
 #define _POSIX_C_SOURCE 200809L
 
+#include <pthread.h>
 #include <nghttp2/nghttp2.h>
 #include <openssl/ssl.h>
 #include <openssl/ssl3.h>

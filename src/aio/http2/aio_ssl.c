@@ -7,18 +7,27 @@
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 #include <openssl/ssl.h>
 
+static int ssl_uninitialized = true;
+
 void valk_aio_ssl_start() {
-  static int uninitialized = true;
-  if (uninitialized) {
-    uninitialized = false;
+  if (ssl_uninitialized) {
+    ssl_uninitialized = false;
     // Initialize tracking allocators - must be called FIRST before any SSL call
     valk_aio_alloc_init();
     SSL_library_init();
     OpenSSL_add_all_algorithms();
     ERR_load_crypto_strings();
   }
+}
+
+void valk_aio_ssl_fork_reset() {
+  ssl_uninitialized = true;
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+  RAND_poll();
+#endif
 }
 
 valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,

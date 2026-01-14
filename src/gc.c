@@ -1736,6 +1736,13 @@ static void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
       if (v->cons.head != nullptr) {
         valk_lval_t* old_head = v->cons.head;
         valk_lval_t* new_head = valk_evacuate_value(ctx, old_head);
+        if ((void*)new_head == (void*)ctx->scratch) {
+          fprintf(stderr, "BUG in evacuation: new_head == scratch! old_head=%p new_head=%p scratch=%p\n",
+                  (void*)old_head, (void*)new_head, (void*)ctx->scratch);
+          fprintf(stderr, "  old_head type=%d alloc=%llu\n", LVAL_TYPE(old_head), 
+                  (unsigned long long)LVAL_ALLOC(old_head));
+          abort();
+        }
         if (new_head != old_head) {
           v->cons.head = new_head;
           // Only push if pointer changed (freshly evacuated from scratch)
@@ -2562,7 +2569,16 @@ bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, u8 size_
       list->partial_pages = page->next_partial;
       page = nullptr;
     } else if (page->reclaimed) {
-      // Page was reclaimed, re-add to committed_bytes
+      // Page was reclaimed (MADV_DONTNEED zeroed the memory), re-initialize header
+      // The header was zeroed, so restore it
+      page->size_class = size_class;
+      page->slots_per_page = list->slots_per_page;
+      page->bitmap_bytes = valk_gc_bitmap_bytes(size_class);
+      atomic_store(&page->num_allocated, 0);
+      // Clear bitmaps
+      memset(valk_gc_page2_alloc_bitmap(page), 0, page->bitmap_bytes);
+      memset(valk_gc_page2_mark_bitmap(page), 0, page->bitmap_bytes);
+      // Re-add to committed_bytes
       atomic_fetch_add(&heap->committed_bytes, list->page_size);
       page->reclaimed = false;
     }
@@ -2699,6 +2715,7 @@ void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes) {
   }
   
   static __thread valk_gc_tlab2_t *local_tlab = nullptr;
+  
   if (!local_tlab) {
     local_tlab = malloc(sizeof(valk_gc_tlab2_t));
     if (!local_tlab) return nullptr;
@@ -2706,7 +2723,7 @@ void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes) {
   }
   
   if (local_tlab->owner_heap != heap) {
-    if (valk_gc_is_heap_alive(local_tlab->owner_heap)) {
+    if (local_tlab->owner_heap && valk_gc_is_heap_alive(local_tlab->owner_heap)) {
       valk_gc_tlab2_reset(local_tlab);
     } else {
       valk_gc_tlab2_abandon(local_tlab);
@@ -2717,6 +2734,14 @@ void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes) {
   
   void *ptr = valk_gc_tlab2_alloc(local_tlab, size_class);
   if (ptr) {
+    // Debug: track consecutive allocations
+    static __thread void* prev_ptr = NULL;
+    if (prev_ptr && bytes == 72 && (uintptr_t)ptr - (uintptr_t)prev_ptr < 72) {
+      fprintf(stderr, "BUG: consecutive allocs too close! prev=%p cur=%p diff=%zu bytes=%zu class=%u alloc_size=%zu\n",
+              prev_ptr, ptr, (uintptr_t)ptr - (uintptr_t)prev_ptr, bytes, size_class, alloc_size);
+      abort();
+    }
+    prev_ptr = ptr;
     memset(ptr, 0, alloc_size);
     return ptr;
   }
@@ -3365,7 +3390,7 @@ static bool valk_gc_heap2_check_termination(void) {
     }
   }
   
-  for (int i = 0; i < 100; i++) {
+  for (int i = 0; i < 16; i++) {
     if (atomic_load(&__gc_heap2_terminated)) {
       return true;
     }
@@ -3473,7 +3498,7 @@ void valk_gc_heap2_parallel_mark(valk_gc_heap2_t *heap) {
   valk_barrier_wait(&valk_gc_coord.barrier);
   
   u64 idle_spins = 0;
-  const u64 MAX_IDLE_SPINS = 1000;
+  const u64 MAX_IDLE_SPINS = 64;
   
   while (true) {
     valk_lval_t *obj;
@@ -3622,7 +3647,7 @@ sz valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap) {
   // All threads (initiator + workers) must hit this barrier before marking starts
   // Workers enter via valk_gc_participate_in_parallel_gc()
   valk_barrier_wait(&valk_gc_coord.barrier);
-  
+
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_MARKING);
   valk_gc_heap2_parallel_mark(heap);
   
@@ -3720,4 +3745,57 @@ static void valk_gc_participate_in_parallel_gc(void) {
     pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
   }
   pthread_mutex_unlock(&valk_gc_coord.lock);
+}
+
+// ============================================================================
+// Fork Safety - Reset global state after fork() in child process
+// ============================================================================
+
+void valk_gc_reset_after_fork(void) {
+  __runtime_heap = nullptr;
+  __runtime_initialized = false;
+  __global_pool_initialized = false;
+  
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+  atomic_store(&valk_gc_coord.threads_registered, 0);
+  atomic_store(&valk_gc_coord.threads_paused, 0);
+  valk_gc_coord.barrier_initialized = false;
+  
+  for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
+    valk_gc_coord.threads[i].ctx = nullptr;
+    valk_gc_coord.threads[i].active = false;
+  }
+  
+  atomic_store(&valk_gc_coord.parallel_cycles, 0);
+  atomic_store(&valk_gc_coord.parallel_pause_us_total, 0);
+  
+  valk_gc_global_roots.count = 0;
+  
+  atomic_store(&__gc_heap2_idle_count, 0);
+  atomic_store(&__gc_heap2_terminated, false);
+  atomic_store(&__gc_heap2_current, nullptr);
+  
+  pthread_mutex_lock(&g_live_heaps_lock);
+  for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) {
+    g_live_heaps[i] = nullptr;
+  }
+  pthread_mutex_unlock(&g_live_heaps_lock);
+  
+  valk_thread_ctx.heap = nullptr;
+  valk_thread_ctx.scratch = nullptr;
+  valk_thread_ctx.root_env = nullptr;
+  valk_thread_ctx.gc_registered = false;
+  valk_thread_ctx.gc_thread_id = 0;
+  valk_thread_ctx.tlab = nullptr;
+  valk_thread_ctx.tlab_enabled = false;
+  valk_thread_ctx.eval_stack = nullptr;
+  valk_thread_ctx.eval_expr = nullptr;
+  valk_thread_ctx.eval_value = nullptr;
+  
+  if (valk_thread_ctx.root_stack) {
+    free(valk_thread_ctx.root_stack);
+    valk_thread_ctx.root_stack = nullptr;
+  }
+  valk_thread_ctx.root_stack_count = 0;
+  valk_thread_ctx.root_stack_capacity = 0;
 }

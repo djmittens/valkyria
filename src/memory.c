@@ -495,6 +495,8 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes) {
         self->stats.high_water_mark = end;
       }
 
+      // Zero the allocated memory to prevent uninitialized data bugs
+      memset(&self->heap[payload], 0, bytes);
       return &self->heap[payload];
     }
   }

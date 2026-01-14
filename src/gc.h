@@ -36,6 +36,10 @@ valk_thread_onboard_fn valk_runtime_get_onboard_fn(void);
 struct valk_gc_heap2 *valk_runtime_get_heap(void);
 bool valk_runtime_is_initialized(void);
 
+// Reset global state after fork() in child process
+// Must be called before any GC operations in a forked child
+void valk_gc_reset_after_fork(void);
+
 // GC allocation header - prepended to every GC-managed allocation
 // This allows arbitrary-sized allocations while maintaining tracking metadata
 typedef struct valk_gc_header_t {
@@ -665,11 +669,13 @@ void valk_gc_tlab2_init(valk_gc_tlab2_t *tlab);
 static inline void *valk_gc_tlab2_alloc(valk_gc_tlab2_t *tlab, u8 size_class) {
   if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return nullptr;
   
-  if (__builtin_expect(tlab->classes[size_class].page != nullptr && 
+  valk_gc_page2_t *page = tlab->classes[size_class].page;
+  if (__builtin_expect(page != nullptr && 
+                       !page->reclaimed &&
                        tlab->classes[size_class].next_slot < 
                        tlab->classes[size_class].limit_slot, 1)) {
     u32 slot = tlab->classes[size_class].next_slot++;
-    return valk_gc_page2_slot_ptr(tlab->classes[size_class].page, slot);
+    return valk_gc_page2_slot_ptr(page, slot);
   }
   return nullptr;
 }

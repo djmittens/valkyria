@@ -108,10 +108,11 @@ void valk_eval_stack_destroy(valk_eval_stack_t *stack) {
   } while (0)
 
 // Helper: Set origin_allocator
-// Note: GC heap zeroes memory, malloc doesn't - always set to be safe
+// Note: GC heap zeroes memory, arena doesn't - initialize gc_next to be safe
 #define VALK_SET_ORIGIN_ALLOCATOR(obj)                   \
   do {                                                   \
     (obj)->origin_allocator = valk_thread_ctx.allocator; \
+    (obj)->gc_next = nullptr;                            \
   } while (0)
 
 #define LVAL_ASSERT(args, cond, fmt, ...) \
@@ -518,6 +519,18 @@ valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
   INHERIT_SOURCE_LOC(res, head);
+  if (head != NULL && (void*)head == (void*)valk_thread_ctx.scratch) {
+    fprintf(stderr, "BUG in valk_lval_cons: head == scratch! head=%p scratch=%p\n",
+            (void*)head, (void*)valk_thread_ctx.scratch);
+    abort();
+  }
+  if (tail != NULL && tail->gc_next != NULL && (uintptr_t)tail->gc_next < 0x1000) {
+    fprintf(stderr, "BUG in valk_lval_cons: tail->gc_next looks invalid! tail=%p gc_next=%p res=%p\n",
+            (void*)tail, (void*)tail->gc_next, (void*)res);
+    fprintf(stderr, "  tail raw: flags=%llu origin=%p gc_next=%p\n",
+            (unsigned long long)tail->flags, tail->origin_allocator, (void*)tail->gc_next);
+    abort();
+  }
   res->cons.head = head;
   res->cons.tail = tail;
   return res;
@@ -531,6 +544,18 @@ valk_lval_t* valk_lval_qcons(valk_lval_t* head, valk_lval_t* tail) {
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
   INHERIT_SOURCE_LOC(res, head);
+  if (head != NULL && (void*)head == (void*)valk_thread_ctx.scratch) {
+    fprintf(stderr, "BUG in valk_lval_qcons: head == scratch! head=%p scratch=%p\n",
+            (void*)head, (void*)valk_thread_ctx.scratch);
+    abort();
+  }
+  if (tail != NULL && tail->gc_next != NULL && (uintptr_t)tail->gc_next < 0x1000) {
+    fprintf(stderr, "BUG in valk_lval_qcons: tail->gc_next looks invalid! tail=%p gc_next=%p res=%p\n",
+            (void*)tail, (void*)tail->gc_next, (void*)res);
+    fprintf(stderr, "  tail raw: flags=%llu origin=%p gc_next=%p\n",
+            (unsigned long long)tail->flags, tail->origin_allocator, (void*)tail->gc_next);
+    abort();
+  }
   res->cons.head = head;
   res->cons.tail = tail;
   return res;
@@ -674,9 +699,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
   // Keep type, add allocation flags from the current allocator
   res->flags = (lval->flags & LVAL_TYPE_MASK) |
                valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  if (res->origin_allocator == NULL) {
-    VALK_SET_ORIGIN_ALLOCATOR(res);
-  }
+  VALK_SET_ORIGIN_ALLOCATOR(res);
 
 #ifdef VALK_COVERAGE
   res->cov_file_id = lval->cov_file_id;
@@ -1096,6 +1119,12 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
 
 // Iterative evaluator - uses explicit stack instead of C recursion
 static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval) {
+  if ((void*)lval == (void*)valk_thread_ctx.scratch) {
+    fprintf(stderr, "BUG AT ENTRY: lval == scratch! lval=%p scratch=%p\n",
+            (void*)lval, (void*)valk_thread_ctx.scratch);
+    abort();
+  }
+  
   valk_eval_stack_t stack;
   valk_eval_stack_init(&stack);
   
@@ -1116,6 +1145,17 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
     // Sync locals with thread context for checkpoint evacuation
     valk_thread_ctx.eval_expr = expr;
     valk_thread_ctx.eval_value = value;
+    
+    if (expr != NULL && (void*)expr == (void*)valk_thread_ctx.scratch) {
+      fprintf(stderr, "BUG: expr == scratch! expr=%p stack_count=%llu value=%p\n", 
+              (void*)expr, (unsigned long long)stack.count, (void*)value);
+      fprintf(stderr, "  saved_expr=%p saved_value=%p\n", (void*)saved_expr, (void*)saved_value);
+      fprintf(stderr, "  scratch=%p heap=%p\n", (void*)valk_thread_ctx.scratch, (void*)valk_thread_ctx.heap);
+      for (u64 dbg_i = 0; dbg_i < stack.count && dbg_i < 5; dbg_i++) {
+        fprintf(stderr, "  frame[%llu].kind=%d\n", (unsigned long long)dbg_i, stack.frames[dbg_i].kind);
+      }
+      abort();
+    }
     
     VALK_GC_SAFE_POINT();
     
@@ -1140,6 +1180,13 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
       // Symbol lookup
       if (LVAL_TYPE(expr) == LVAL_SYM) {
         VALK_COVERAGE_RECORD_LVAL(expr);
+        if (expr->str == NULL || (uintptr_t)expr->str < 0x1000) {
+          fprintf(stderr, "FATAL: Invalid symbol string pointer expr=%p str=%p flags=0x%llx origin=%p\n",
+                  (void*)expr, (void*)expr->str, (unsigned long long)expr->flags, expr->origin_allocator);
+          fprintf(stderr, "  valk_thread_ctx.scratch=%p allocator=%p\n",
+                  (void*)valk_thread_ctx.scratch, (void*)valk_thread_ctx.allocator);
+          abort();
+        }
         if (expr->str[0] == ':') {
           value = expr;
         } else {
@@ -2205,6 +2252,7 @@ void valk_lenv_put_builtin(valk_lenv_t* env, char* key,
     valk_lval_t* lfun = valk_mem_alloc(sizeof(valk_lval_t));
     lfun->flags =
         LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+    VALK_SET_ORIGIN_ALLOCATOR(lfun);
     lfun->fun.builtin = _fun;
     lfun->fun.env = nullptr;
     // Create symbol lval, use it for put, then free it (put only copies the string)
@@ -3104,6 +3152,19 @@ static valk_lval_t* valk_builtin_do(valk_lenv_t* e, valk_lval_t* a) {
 
   // Evaluate and return last expression using thread-local VM
   valk_lval_t* last = valk_lval_list_nth(a, count - 1);
+  if ((void*)last == (void*)valk_thread_ctx.scratch) {
+    fprintf(stderr, "BUG in builtin_do: last == scratch! a=%p count=%llu last=%p scratch=%p\n",
+            (void*)a, (unsigned long long)count, (void*)last, (void*)valk_thread_ctx.scratch);
+    fprintf(stderr, "  a type=%d, list contents:\n", LVAL_TYPE(a));
+    valk_lval_t* curr = a;
+    for (u64 i = 0; i < count && curr; i++) {
+      fprintf(stderr, "    [%llu] curr=%p type=%d head=%p tail=%p\n",
+              (unsigned long long)i, (void*)curr, LVAL_TYPE(curr),
+              (void*)curr->cons.head, (void*)curr->cons.tail);
+      curr = curr->cons.tail;
+    }
+    abort();
+  }
   return valk_lval_eval(e, last);
 }
 

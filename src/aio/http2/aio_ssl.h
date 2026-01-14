@@ -13,6 +13,7 @@ typedef struct valk_aio_ssl_t {
 } valk_aio_ssl_t;
 
 void valk_aio_ssl_start();
+void valk_aio_ssl_fork_reset();
 
 valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
                                     const char *certfile);

@@ -43,6 +43,9 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${COVERAGE_FLA
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${COVERAGE_FLAGS} ${EXTRA_FLAGS}")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS} ${COVERAGE_FLAGS} ${EXTRA_FLAGS}")
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_compile_definitions(_XOPEN_SOURCE=700 _GNU_SOURCE)
+endif()
 
 find_package(PkgConfig REQUIRED)
 
@@ -149,14 +152,7 @@ if(VALK_TRAMPOLINE)
   message(STATUS "Trampoline eval: ENABLED")
 endif()
 
-# On glibc-based Linux, expose required pthread and POSIX interfaces
-# for libuv headers (e.g. pthread_rwlock_t) without enabling non-portable APIs.
-if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  target_compile_definitions(valkyria PRIVATE _XOPEN_SOURCE=700)
-  # Some distros still gate rwlocks behind GNU feature selection; enable it
-  # for this target only. This is a no-op on non-glibc platforms.
-  target_compile_definitions(valkyria PRIVATE _GNU_SOURCE)
-endif()
+
 
 target_include_directories(valkyria PRIVATE
   ${PROJECT_SOURCE_DIR}/src

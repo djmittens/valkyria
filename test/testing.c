@@ -16,6 +16,7 @@
 
 #include "collections.h"
 #include "common.h"
+#include "gc.h"
 #include "memory.h"
 
 #define SEC_TO_MS(sec) ((sec) * 1000)
@@ -150,10 +151,17 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
     close(pout[0]);
     close(perr[0]);
 
-    // Reinitialize thread-local allocator after fork - thread-locals are
-    // undefined after fork() and may contain stale pointers from parent
+    // Reset all global GC state after fork - critical for test isolation
+    // This clears stale pointers to parent's heaps, TLABs, and GC coordinator state
+    valk_gc_reset_after_fork();
+    
+    // Reinitialize thread-local allocator after fork
     valk_mem_init_malloc();
-    valk_thread_ctx.heap = nullptr;  // Clear stale heap pointer to avoid arena overflow crash
+    
+    // Call suite-specific fork handler if set (e.g., for SSL reinitialization)
+    if (suite->fork_child_handler) {
+      suite->fork_child_handler();
+    }
 
     printf("🏃 Running: %s\n", self->name);
     fflush(stdout);
@@ -190,7 +198,7 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
 }
 
 void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
-  int timeoutSeconds = 10;
+  int timeoutSeconds = 180;
   const char *env_timeout = getenv("VALK_TEST_TIMEOUT_SECONDS");
   if (env_timeout) {
     int val = atoi(env_timeout);

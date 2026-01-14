@@ -2065,7 +2065,7 @@ static void *true_parallel_gc_worker(void *arg) {
     sched_yield();
   }
   
-  for (int i = 0; i < 100 && !atomic_load(args->gc_done_flag); i++) {
+  while (!atomic_load(args->gc_done_flag)) {
     VALK_GC_SAFE_POINT();
     usleep(100);
   }
@@ -2188,7 +2188,7 @@ static void *root_marking_worker(void *arg) {
     sched_yield();
   }
   
-  for (int i = 0; i < 100 && !atomic_load(args->gc_done_flag); i++) {
+  while (!atomic_load(args->gc_done_flag)) {
     VALK_GC_SAFE_POINT();
     usleep(100);
   }
