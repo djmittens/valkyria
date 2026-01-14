@@ -1,3 +1,4 @@
+#define _DEFAULT_SOURCE
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>

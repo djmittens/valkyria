@@ -745,7 +745,7 @@ void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
     // Format: "Rss:               1234 kB"
     if (strncmp(line, "Rss:", 4) == 0) {
       u64 rss_kb = 0;
-      if (sscanf(line, "Rss: %zu kB", &rss_kb) == 1) {
+      if (sscanf(line, "Rss: %llu kB", &rss_kb) == 1) {
         u64 rss_bytes = rss_kb * 1024;
 
         if (is_heap) {
@@ -769,7 +769,7 @@ void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
     // Also check for Shmem (shared memory)
     if (strncmp(line, "Shmem:", 6) == 0) {
       u64 shmem_kb = 0;
-      if (sscanf(line, "Shmem: %zu kB", &shmem_kb) == 1) {
+      if (sscanf(line, "Shmem: %llu kB", &shmem_kb) == 1) {
         smaps->shmem_rss += shmem_kb * 1024;
       }
     }

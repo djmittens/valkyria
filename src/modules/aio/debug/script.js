@@ -2613,15 +2613,10 @@
     var now = Date.now();
     var prev = panel._prevLoop || {};
 
-    // Store current values
-    panel._prevLoop = {
-      time: now,
-      iter: iterNow,
-      idle: idleNow
-    };
-
-    // Skip calculations on first update or when values are still 0 (not yet populated)
-    if (!prev.time || idleNow === 0) {
+    // Skip calculations on first update
+    // We need at least one previous sample to compute rates
+    if (!prev.time) {
+      panel._prevLoop = { time: now, iter: iterNow, idle: idleNow };
       var utilFill = panel.querySelector('.aio-sys-util-fill');
       var utilPctEl = panel.querySelector('.aio-sys-util-pct');
       if (utilFill && utilPctEl) {
@@ -2634,6 +2629,13 @@
       if (handlesEl) handlesEl.textContent = handlesNow || '--';
       return;
     }
+
+    // Store current values for next iteration
+    panel._prevLoop = {
+      time: now,
+      iter: iterNow,
+      idle: idleNow
+    };
 
     // Calculate rates - gauges now sent every 100ms (Prometheus-style)
     var dt = (now - prev.time) / 1000;

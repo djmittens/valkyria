@@ -1,3 +1,5 @@
+#define _DEFAULT_SOURCE
+#include <pthread.h>
 #include "../testing.h"
 #include "../../src/aio/http2/aio_conn_io.h"
 #include "../../src/aio/aio_internal.h"

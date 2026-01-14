@@ -85,6 +85,8 @@
 ; Returns: {"metrics": {...}, "memory": {...}}
 (fun {aio/debug-diagnostics-state sys}
   {
+    ; Update event loop + queue metrics BEFORE collecting metrics JSON
+    (aio/update-metrics sys)
     (= {aio-json} (aio/metrics-json sys))
     (= {modular-json} (metrics/json))
     (= {vm-json} (vm/metrics-json))
@@ -100,6 +102,9 @@
 ; Uses compact JSON for all sections to minimize bandwidth
 (fun {aio/debug-diagnostics-delta sys}
   {
+    ; Update event loop + queue metrics BEFORE collecting delta
+    ; Otherwise the modular metrics will have stale values
+    (aio/update-metrics sys)
     (= {delta} (metrics/collect-delta))
     (= {delta-json} (metrics/delta-json delta))
     (= {aio-json} (aio/metrics-json-compact sys))

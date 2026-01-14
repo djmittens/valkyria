@@ -1,3 +1,5 @@
+#define _DEFAULT_SOURCE
+#include <pthread.h>
 #include "../testing.h"
 #include "../../src/memory.h"
 #include "../../src/aio/aio_alloc.h"

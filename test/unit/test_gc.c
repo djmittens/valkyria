@@ -1,3 +1,4 @@
+#define _DEFAULT_SOURCE
 #include "../testing.h"
 #include "../../src/memory.h"
 #include "../../src/gc.h"

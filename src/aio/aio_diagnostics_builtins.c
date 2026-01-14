@@ -4,6 +4,7 @@
 #include "memory.h"
 #include "parser.h"
 #include "metrics_v2.h"
+#include "aio/aio_alloc.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -121,6 +122,122 @@ static void write_slab_json(char **p, char *end, const char *name, valk_slab_t *
   if (n > 0 && *p + n < end) *p += n;
 }
 
+static char get_handle_state_char(valk_aio_system_t *sys, u64 slot_idx) {
+  valk_diag_handle_kind_e kind = valk_aio_get_handle_kind(sys, slot_idx);
+  switch (kind) {
+    case VALK_DIAG_HNDL_EMPTY:
+      return 'F';
+    case VALK_DIAG_HNDL_TCP:
+      return 'T';
+    case VALK_DIAG_HNDL_TASK:
+      return 'K';
+    case VALK_DIAG_HNDL_TIMER:
+      return 'M';
+    case VALK_DIAG_HNDL_HTTP_CONN: {
+      valk_handle_diag_t diag;
+      if (valk_aio_get_handle_diag(sys, slot_idx, &diag)) {
+        switch (diag.state) {
+          case VALK_DIAG_CONN_CONNECTING: return 'N';
+          case VALK_DIAG_CONN_ACTIVE:     return 'A';
+          case VALK_DIAG_CONN_IDLE:       return 'I';
+          case VALK_DIAG_CONN_CLOSING:    return 'C';
+          default:                        return 'A';
+        }
+      }
+      return 'A';
+    }
+    default:
+      return 'F';
+  }
+}
+
+static void write_handle_slab_json(char **p, char *end, valk_aio_system_t *sys, valk_slab_t *slab) {
+  if (!slab || *p >= end - 200) return;
+
+  u64 used = slab->numItems - slab->numFree;
+  u64 total = slab->numItems;
+  u64 hwm = slab->peakUsed;
+  u64 overflow = slab->overflowCount;
+
+  int n = snprintf(*p, end - *p,
+    "{\"name\":\"handles\",\"used\":%llu,\"total\":%llu,\"hwm\":%llu,\"overflow\":%llu,\"states\":\"",
+    (unsigned long long)used,
+    (unsigned long long)total,
+    (unsigned long long)hwm,
+    (unsigned long long)overflow);
+  if (n < 0 || *p + n >= end) return;
+  *p += n;
+
+  u64 owner_active[VALK_MAX_OWNERS] = {0};
+  u64 owner_idle[VALK_MAX_OWNERS] = {0};
+  u64 owner_closing[VALK_MAX_OWNERS] = {0};
+
+  if (total > 0 && *p < end - total * 6) {
+    char prev_char = get_handle_state_char(sys, 0);
+    u64 run_count = 1;
+
+    valk_handle_diag_t diag;
+    if (valk_aio_get_handle_kind(sys, 0) == VALK_DIAG_HNDL_HTTP_CONN) {
+      if (valk_aio_get_handle_diag(sys, 0, &diag) && diag.owner_idx < VALK_MAX_OWNERS) {
+        switch (diag.state) {
+          case VALK_DIAG_CONN_ACTIVE:  owner_active[diag.owner_idx]++; break;
+          case VALK_DIAG_CONN_IDLE:    owner_idle[diag.owner_idx]++; break;
+          case VALK_DIAG_CONN_CLOSING: owner_closing[diag.owner_idx]++; break;
+          default: owner_active[diag.owner_idx]++; break;
+        }
+      }
+    }
+
+    for (u64 i = 1; i < total; i++) {
+      char cur_char = get_handle_state_char(sys, i);
+
+      if (valk_aio_get_handle_kind(sys, i) == VALK_DIAG_HNDL_HTTP_CONN) {
+        if (valk_aio_get_handle_diag(sys, i, &diag) && diag.owner_idx < VALK_MAX_OWNERS) {
+          switch (diag.state) {
+            case VALK_DIAG_CONN_ACTIVE:  owner_active[diag.owner_idx]++; break;
+            case VALK_DIAG_CONN_IDLE:    owner_idle[diag.owner_idx]++; break;
+            case VALK_DIAG_CONN_CLOSING: owner_closing[diag.owner_idx]++; break;
+            default: owner_active[diag.owner_idx]++; break;
+          }
+        }
+      }
+
+      if (cur_char == prev_char) {
+        run_count++;
+      } else {
+        n = snprintf(*p, end - *p, "%c%llu", prev_char, (unsigned long long)run_count);
+        if (n > 0 && *p + n < end) *p += n;
+        prev_char = cur_char;
+        run_count = 1;
+      }
+    }
+    n = snprintf(*p, end - *p, "%c%llu", prev_char, (unsigned long long)run_count);
+    if (n > 0 && *p + n < end) *p += n;
+  }
+
+  n = snprintf(*p, end - *p, "\",\"summary\":{\"by_owner\":{");
+  if (n > 0 && *p + n < end) *p += n;
+
+  int first_owner = 1;
+  for (u16 oi = 0; oi < VALK_MAX_OWNERS; oi++) {
+    u64 a = owner_active[oi];
+    u64 i = owner_idle[oi];
+    u64 c = owner_closing[oi];
+    if (a > 0 || i > 0 || c > 0) {
+      if (!first_owner) {
+        if (*p < end) *(*p)++ = ',';
+      }
+      first_owner = 0;
+      n = snprintf(*p, end - *p, "\"%u\":{\"A\":%llu,\"I\":%llu,\"C\":%llu}",
+        (unsigned)oi, (unsigned long long)a, (unsigned long long)i, (unsigned long long)c);
+      if (n > 0 && *p + n < end) *p += n;
+    }
+  }
+
+  n = snprintf(*p, end - *p, "}}}");
+  if (n > 0 && *p + n < end) *p += n;
+}
+
 static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
@@ -152,7 +269,7 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk
     gc_total = heap->hard_limit;
   }
 
-  u64 buf_size = 8192;
+  u64 buf_size = 65536;
   char *buf = malloc(buf_size);
   if (!buf) {
     return valk_lval_err("aio/diagnostics-state-json: allocation failed");
@@ -171,7 +288,7 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk
   }
   if (handle_slab) {
     if (!first) { *p++ = ','; } first = 0;
-    write_slab_json(&p, end, "handles", handle_slab);
+    write_handle_slab_json(&p, end, sys, handle_slab);
   }
   if (arena_slab) {
     if (!first) { *p++ = ','; } first = 0;
@@ -226,11 +343,33 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk
     ",\"breakdown\":{\"gc_used\":%llu,\"gc_cap\":%llu,"
     "\"aio_used\":%llu,\"aio_cap\":%llu,"
     "\"scratch_used\":0,\"scratch_cap\":0,"
-    "\"metrics_used\":0,\"metrics_cap\":0}}",
+    "\"metrics_used\":0,\"metrics_cap\":0,"
+    "\"ssl_used\":%llu,\"nghttp2_used\":%llu,\"libuv_used\":%llu}",
     (unsigned long long)gc_used,
     (unsigned long long)gc_total,
     (unsigned long long)aio_used,
-    (unsigned long long)aio_cap);
+    (unsigned long long)aio_cap,
+    (unsigned long long)valk_aio_ssl_bytes_used(),
+    (unsigned long long)valk_aio_nghttp2_bytes_used(),
+    (unsigned long long)valk_aio_libuv_bytes_used());
+  if (n > 0) p += n;
+
+  n = snprintf(p, end - p, ",\"owner_map\":[");
+  if (n > 0) p += n;
+
+  u64 owner_count = valk_owner_get_count(sys);
+  for (u64 oi = 0; oi < owner_count; oi++) {
+    const char *name = valk_owner_get_name(sys, (u16)oi);
+    if (oi > 0 && p < end) *p++ = ',';
+    if (name) {
+      n = snprintf(p, end - p, "\"%s\"", name);
+    } else {
+      n = snprintf(p, end - p, "null");
+    }
+    if (n > 0 && p + n < end) p += n;
+  }
+
+  n = snprintf(p, end - p, "]}");
   if (n > 0) p += n;
 
   valk_lval_t *result = valk_lval_str(buf);

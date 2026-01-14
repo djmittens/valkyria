@@ -409,24 +409,24 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
       }
       case VALK_TEST_PASS:
         // Emoji ✅ + space = 3 display columns
-        printf("✅ %s%.*s  PASS : in %" PRIu64 "(%s)\n", test->name, len - 3,
-               DOT_FILL, (result->stopTime - result->startTime), precision);
+        printf("✅ %s%.*s  PASS : in %llu(%s)\n", test->name, len - 3,
+               DOT_FILL, (unsigned long long)(result->stopTime - result->startTime), precision);
         break;
       case VALK_TEST_SKIP:
         // Emoji ⏭️ + space = 3 display columns
-        printf("⏭️  %s%.*s  SKIP : in %" PRIu64 "(%s)\n", test->name, len - 3,
-               DOT_FILL, (result->stopTime - result->startTime), precision);
+        printf("⏭️  %s%.*s  SKIP : in %llu(%s)\n", test->name, len - 3,
+               DOT_FILL, (unsigned long long)(result->stopTime - result->startTime), precision);
         break;
       case VALK_TEST_FAIL:
         // Emoji 🐞 + space = 3 display columns
-        printf("🐞 %s%.*s  FAIL : in %" PRIu64 "(%s)\n", test->name, len - 3,
-               DOT_FILL, (result->stopTime - result->startTime), precision);
+        printf("🐞 %s%.*s  FAIL : in %llu(%s)\n", test->name, len - 3,
+               DOT_FILL, (unsigned long long)(result->stopTime - result->startTime), precision);
         valk_print_io(test);
         break;
       case VALK_TEST_CRSH:
         // Emoji 🌀 + space = 3 display columns
-        printf("🌀 %s%.*s  CRSH : in %" PRIu64 "(%s)\n", test->name, len - 3,
-               DOT_FILL, (result->stopTime - result->startTime), precision);
+        printf("🌀 %s%.*s  CRSH : in %llu(%s)\n", test->name, len - 3,
+               DOT_FILL, (unsigned long long)(result->stopTime - result->startTime), precision);
         valk_print_io(test);
         break;
     }

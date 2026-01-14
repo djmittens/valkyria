@@ -4661,7 +4661,8 @@ static valk_lval_t* valk_builtin_aio_metrics_json(valk_lenv_t* e,
 
 #ifdef VALK_METRICS_ENABLED
   valk_aio_system_t* sys = aio_ref->ref.ptr;
-  valk_aio_update_queue_stats(sys);  // Update queue stats before reading metrics
+  valk_aio_update_queue_stats(sys);
+  valk_aio_update_loop_metrics(sys);
   valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
   valk_aio_system_stats_t* system_stats = valk_aio_get_system_stats(sys);
   char* json = valk_aio_combined_to_json(metrics, system_stats, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
@@ -4684,10 +4685,34 @@ static valk_lval_t* valk_builtin_aio_metrics_json_compact(valk_lenv_t* e,
 #ifdef VALK_METRICS_ENABLED
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_update_queue_stats(sys);
+  valk_aio_update_loop_metrics(sys);
   valk_aio_metrics_t* metrics = valk_aio_get_metrics(sys);
   valk_aio_system_stats_t* system_stats = valk_aio_get_system_stats(sys);
   char* json = valk_aio_combined_to_json_compact(metrics, system_stats, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   return valk_lval_str(json);
+#else
+  return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
+#endif
+}
+
+// aio/update-metrics: (aio/update-metrics aio-system) -> nil
+// Updates event loop and queue metrics in the modular metrics registry
+// Call this before metrics/collect-delta to ensure fresh values
+static valk_lval_t* valk_builtin_aio_update_metrics(valk_lenv_t* e,
+                                                     valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "Argument must be aio_system");
+
+#ifdef VALK_METRICS_ENABLED
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  valk_aio_update_queue_stats(sys);
+  valk_aio_update_loop_metrics(sys);
+  return valk_lval_nil();
 #else
   return valk_lval_err("Metrics not enabled (compile with VALK_METRICS_ENABLED)");
 #endif
@@ -5520,6 +5545,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "aio/metrics-json", valk_builtin_aio_metrics_json);
   valk_lenv_put_builtin(env, "aio/metrics-json-compact",
                         valk_builtin_aio_metrics_json_compact);
+  valk_lenv_put_builtin(env, "aio/update-metrics", valk_builtin_aio_update_metrics);
   valk_lenv_put_builtin(env, "aio/systems-json", valk_builtin_aio_systems_json);
   valk_lenv_put_builtin(env, "aio/metrics-prometheus",
                         valk_builtin_aio_metrics_prometheus);
