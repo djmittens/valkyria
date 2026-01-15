@@ -87,7 +87,7 @@ void test_dynamic_lists(VALK_TEST_ARGS()) {
     size_t val;
   };
 
-  constexpr size_t size = 100;
+  enum { size = 100 };
   struct node buf[size] = {0};
 
   struct node *head = &buf[0];
