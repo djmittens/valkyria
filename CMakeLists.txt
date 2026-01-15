@@ -136,7 +136,11 @@ set(VALKYRIA_SOURCES
   src/event_loop_metrics.c
 )
 
-add_library(valkyria ${VALKYRIA_SOURCES})
+if(COVERAGE)
+  add_library(valkyria STATIC ${VALKYRIA_SOURCES})
+else()
+  add_library(valkyria ${VALKYRIA_SOURCES})
+endif()
 
 
 

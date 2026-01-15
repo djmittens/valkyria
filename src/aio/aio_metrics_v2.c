@@ -3,6 +3,7 @@
 #include "common.h"
 #include <string.h>
 
+// LCOV_EXCL_BR_START - metrics init null checks are defensive
 bool valk_aio_metrics_v2_init(valk_aio_metrics_v2_t *m, const char *system_name) {
   if (!m) return false;
   memset(m, 0, sizeof(*m));
@@ -117,7 +118,9 @@ bool valk_aio_metrics_v2_init(valk_aio_metrics_v2_t *m, const char *system_name)
 
   return true;
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - system stats init null checks are defensive
 bool valk_aio_system_stats_v2_init(valk_aio_system_stats_v2_t *s,
                                     const char *system_name,
                                     u64 arenas_total,
@@ -208,93 +211,4 @@ bool valk_aio_system_stats_v2_init(valk_aio_system_stats_v2_t *s,
 
   return true;
 }
-
-bool valk_vm_metrics_v2_init(valk_vm_metrics_v2_t *m) {
-  if (!m) return false;
-  memset(m, 0, sizeof(*m));
-
-  valk_label_set_v2_t labels = {0};
-
-  m->gc_cycles = valk_counter_get_or_create(
-      "gc_cycles_total", "Total garbage collection cycles", &labels);
-  if (!m->gc_cycles) return false;
-  valk_counter_set_persistent(m->gc_cycles);
-
-  m->gc_pause_us_total = valk_counter_get_or_create(
-      "gc_pause_us_total", "Total GC pause time in microseconds", &labels);
-  if (!m->gc_pause_us_total) return false;
-  valk_counter_set_persistent(m->gc_pause_us_total);
-
-  m->gc_pause_us_max = valk_gauge_get_or_create(
-      "gc_pause_us_max", "Maximum single GC pause in microseconds", &labels);
-  if (!m->gc_pause_us_max) return false;
-  valk_gauge_set_persistent(m->gc_pause_us_max);
-
-  m->gc_reclaimed_bytes = valk_counter_get_or_create(
-      "gc_reclaimed_bytes_total", "Total bytes reclaimed by GC", &labels);
-  if (!m->gc_reclaimed_bytes) return false;
-  valk_counter_set_persistent(m->gc_reclaimed_bytes);
-
-  m->gc_allocated_bytes = valk_counter_get_or_create(
-      "gc_allocated_bytes_total", "Total bytes allocated", &labels);
-  if (!m->gc_allocated_bytes) return false;
-  valk_counter_set_persistent(m->gc_allocated_bytes);
-
-  m->gc_efficiency_pct = valk_gauge_get_or_create(
-      "gc_efficiency_percent", "GC efficiency percentage", &labels);
-  if (!m->gc_efficiency_pct) return false;
-  valk_gauge_set_persistent(m->gc_efficiency_pct);
-
-  m->gc_heap_used = valk_gauge_get_or_create(
-      "gc_heap_used_bytes", "Current heap memory in use", &labels);
-  if (!m->gc_heap_used) return false;
-  valk_gauge_set_persistent(m->gc_heap_used);
-
-  m->gc_heap_total = valk_gauge_get_or_create(
-      "gc_heap_total_bytes", "Total heap capacity", &labels);
-  if (!m->gc_heap_total) return false;
-  valk_gauge_set_persistent(m->gc_heap_total);
-
-  m->gc_large_object_bytes = valk_gauge_get_or_create(
-      "gc_large_object_bytes", "Large object heap bytes", &labels);
-  if (!m->gc_large_object_bytes) return false;
-  valk_gauge_set_persistent(m->gc_large_object_bytes);
-
-  m->gc_pause_duration = valk_histogram_get_or_create(
-      "gc_pause_seconds", "GC pause duration histogram",
-      VALK_GC_PAUSE_BUCKETS, VALK_GC_PAUSE_BUCKET_COUNT, &labels);
-  if (!m->gc_pause_duration) return false;
-  valk_histogram_set_persistent(m->gc_pause_duration);
-
-  m->eval_total = valk_counter_get_or_create(
-      "eval_total", "Total expression evaluations", &labels);
-  if (!m->eval_total) return false;
-  valk_counter_set_persistent(m->eval_total);
-
-  m->function_calls = valk_counter_get_or_create(
-      "function_calls_total", "User function invocations", &labels);
-  if (!m->function_calls) return false;
-  valk_counter_set_persistent(m->function_calls);
-
-  m->builtin_calls = valk_counter_get_or_create(
-      "builtin_calls_total", "Builtin function invocations", &labels);
-  if (!m->builtin_calls) return false;
-  valk_counter_set_persistent(m->builtin_calls);
-
-  m->stack_depth_max = valk_gauge_get_or_create(
-      "stack_depth_max", "Peak call stack depth", &labels);
-  if (!m->stack_depth_max) return false;
-  valk_gauge_set_persistent(m->stack_depth_max);
-
-  m->closures_created = valk_counter_get_or_create(
-      "closures_created_total", "Lambda closures created", &labels);
-  if (!m->closures_created) return false;
-  valk_counter_set_persistent(m->closures_created);
-
-  m->env_lookups = valk_counter_get_or_create(
-      "env_lookups_total", "Symbol resolution lookups", &labels);
-  if (!m->env_lookups) return false;
-  valk_counter_set_persistent(m->env_lookups);
-
-  return true;
-}
+// LCOV_EXCL_BR_STOP

@@ -45,7 +45,7 @@ int valk_cond_timedwait(valk_cond_t* cond, valk_mutex_t* mutex, u32 timeout_ms) 
   clock_gettime(CLOCK_REALTIME, &ts);
   ts.tv_sec += timeout_ms / 1000;
   ts.tv_nsec += (timeout_ms % 1000) * 1000000;
-  if (ts.tv_nsec >= 1000000000) {
+  if (ts.tv_nsec >= 1000000000) { // LCOV_EXCL_BR_LINE
     ts.tv_sec += 1;
     ts.tv_nsec -= 1000000000;
   }

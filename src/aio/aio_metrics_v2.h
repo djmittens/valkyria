@@ -104,31 +104,7 @@ static const double VALK_REQUEST_DURATION_BUCKETS[VALK_REQUEST_DURATION_BUCKET_C
   1.000    // 1s
 };
 
-// VM-level metrics using V2 registry
-typedef struct valk_vm_metrics_v2 {
-  // GC metrics
-  valk_counter_v2_t *gc_cycles;
-  valk_counter_v2_t *gc_pause_us_total;
-  valk_gauge_v2_t *gc_pause_us_max;
-  valk_counter_v2_t *gc_reclaimed_bytes;
-  valk_counter_v2_t *gc_allocated_bytes;
-  valk_gauge_v2_t *gc_efficiency_pct;
-  valk_gauge_v2_t *gc_heap_used;
-  valk_gauge_v2_t *gc_heap_total;
-  valk_gauge_v2_t *gc_large_object_bytes;
-  valk_histogram_v2_t *gc_pause_duration;
 
-  // Interpreter metrics
-  valk_counter_v2_t *eval_total;
-  valk_counter_v2_t *function_calls;
-  valk_counter_v2_t *builtin_calls;
-  valk_gauge_v2_t *stack_depth_max;
-  valk_counter_v2_t *closures_created;
-  valk_counter_v2_t *env_lookups;
-
-  // Event loop metrics (via event_loop_metrics.h)
-  // These are created separately to allow multiple loops
-} valk_vm_metrics_v2_t;
 
 // ============================================================================
 // FACTORY API
@@ -146,8 +122,7 @@ bool valk_aio_system_stats_v2_init(valk_aio_system_stats_v2_t *s,
                                     u64 tcp_buffers_total,
                                     u64 queue_capacity);
 
-// Initialize VM-level metrics (singleton, no labels needed)
-bool valk_vm_metrics_v2_init(valk_vm_metrics_v2_t *m);
+
 
 // ============================================================================
 // INSTRUMENTATION API (replaces valk_aio_metrics_on_* functions)

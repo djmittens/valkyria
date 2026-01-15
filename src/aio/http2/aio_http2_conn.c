@@ -156,12 +156,6 @@ u64 valk_http2_conn_write_buf_available(valk_aio_handle_t *conn) {
   return valk_conn_io_write_buf_available(&conn->http.io);
 }
 
-bool valk_http2_conn_write_buf_writable(valk_aio_handle_t *conn) {
-  if (!conn->sys || !conn->sys->tcpBufferSlab) return false;
-  return valk_conn_io_write_buf_writable(&conn->http.io, conn->sys->tcpBufferSlab, 
-                                          HTTP2_MAX_SERIALIZED_FRAME);
-}
-
 u64 valk_http2_conn_write_buf_append(valk_aio_handle_t *conn, const u8 *data, u64 len) {
   if (!conn->sys || !conn->sys->tcpBufferSlab) return 0;
   return valk_conn_io_write_buf_append(&conn->http.io, conn->sys->tcpBufferSlab, data, len);

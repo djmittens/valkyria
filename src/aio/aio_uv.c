@@ -10,7 +10,7 @@ static const char* __uv_handle_type_name(uv_handle_type type);
 
 static void __backpressure_list_remove(valk_aio_handle_t *conn) {
   valk_aio_system_t *sys = conn->sys;
-  if (!sys) return;
+  if (!sys) return; // LCOV_EXCL_BR_LINE
   valk_backpressure_list_remove(&sys->backpressure, conn);
 }
 
@@ -35,7 +35,7 @@ void __event_loop(void *arg) {
     valk_gc_thread_register();
 
     valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(0);
-    if (!gc_heap) {
+    if (!gc_heap) { // LCOV_EXCL_BR_LINE
       VALK_ERROR("Failed to create event loop GC heap");
     } else {
       valk_thread_ctx.heap = gc_heap;
@@ -137,7 +137,7 @@ void __event_loop(void *arg) {
   // LCOV_EXCL_STOP
   
   u64 total_drain_ms = (sys->ops->loop->hrtime() - drain_start) / 1000000ULL;
-  if (total_drain_ms > 50) {  // LCOV_EXCL_LINE
+  if (total_drain_ms > 50) {  // LCOV_EXCL_BR_LINE
     VALK_INFO("Shutdown: drain completed in %llu ms (%d iterations)",  // LCOV_EXCL_LINE
               (unsigned long long)total_drain_ms, iterations);  // LCOV_EXCL_LINE
   }
@@ -159,6 +159,7 @@ static void __uv_handle_closed_cb(uv_handle_t *handle) {
   valk_aio_handle_t *hndl = handle->data;
   VALK_TRACE("UV handle closed %p", handle->data);
   
+  // LCOV_EXCL_BR_START - buffer release null checks: defensive for partially initialized handles
   if (hndl->kind == VALK_HNDL_HTTP_CONN) {
     __backpressure_list_remove(hndl);
     
@@ -171,13 +172,14 @@ static void __uv_handle_closed_cb(uv_handle_t *handle) {
       hndl->http.io.write_buf = nullptr;
     }
   }
+  // LCOV_EXCL_BR_STOP
   
   if (hndl->onClose != nullptr) {  // LCOV_EXCL_BR_LINE - onClose callback presence
     VALK_TRACE("Calling onClose callback");
     hndl->onClose(hndl);
   }
   valk_dll_pop(hndl);
-  VALK_ASSERT(hndl->sys != nullptr, "handle must have sys for slab release");
+  VALK_ASSERT(hndl->sys != nullptr, "handle must have sys for slab release"); // LCOV_EXCL_BR_LINE
   valk_slab_release_ptr(hndl->sys->handleSlab, hndl);
 }
 

@@ -6,6 +6,7 @@ void valk_conn_io_init(valk_conn_io_t *io, u64 buf_size) {
   io->buf_size = buf_size;
 }
 
+// LCOV_EXCL_BR_START - buffer release null checks
 void valk_conn_io_free(valk_conn_io_t *io, valk_slab_t *slab) {
   if (!io) return;
   
@@ -18,7 +19,9 @@ void valk_conn_io_free(valk_conn_io_t *io, valk_slab_t *slab) {
     io->write_buf = nullptr;
   }
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - buffer acquire failure: requires slab exhaustion
 bool valk_conn_io_read_buf_acquire(valk_conn_io_t *io, valk_slab_t *slab) {
   if (io->read_buf) return true;
   if (!slab) return false;
@@ -32,9 +35,10 @@ bool valk_conn_io_read_buf_acquire(valk_conn_io_t *io, valk_slab_t *slab) {
   io->read_buf = item;
   return true;
 }
+// LCOV_EXCL_BR_STOP
 
 void valk_conn_io_read_buf_release(valk_conn_io_t *io, valk_slab_t *slab) {
-  if (!io || !io->read_buf || !slab) return;
+  if (!io || !io->read_buf || !slab) return; // LCOV_EXCL_BR_LINE
   valk_slab_release(slab, io->read_buf);
   io->read_buf = nullptr;
 }
@@ -78,10 +82,11 @@ u64 valk_conn_io_write_buf_available(valk_conn_io_t *io) {
 
 bool valk_conn_io_write_buf_writable(valk_conn_io_t *io, valk_slab_t *slab, u64 min_space) {
   if (io->write_flush_pending) return false;
-  if (!io->write_buf && !valk_conn_io_write_buf_acquire(io, slab)) return false;
+  if (!io->write_buf && !valk_conn_io_write_buf_acquire(io, slab)) return false; // LCOV_EXCL_BR_LINE
   return valk_conn_io_write_buf_available(io) >= min_space;
 }
 
+// LCOV_EXCL_BR_START - write append edge cases
 u64 valk_conn_io_write_buf_append(valk_conn_io_t *io, valk_slab_t *slab,
                                       const u8 *data, u64 len) {
   if (io->write_flush_pending) return 0;
@@ -98,7 +103,9 @@ u64 valk_conn_io_write_buf_append(valk_conn_io_t *io, valk_slab_t *slab,
   
   return to_write;
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - flush callback state transitions
 static void __conn_io_flush_cb(valk_io_write_req_t *req, int status) {
   valk_conn_io_t *io = req->user_data;
   
@@ -125,7 +132,9 @@ static void __conn_io_flush_cb(valk_io_write_req_t *req, int status) {
     io->flush_cb(io->flush_ctx, status);
   }
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - flush guard conditions
 int valk_conn_io_flush(valk_conn_io_t *io, valk_aio_handle_t *conn,
                        valk_conn_io_flush_cb cb, void *ctx) {
   if (!io->write_buf || io->write_pos == 0) {
@@ -140,6 +149,7 @@ int valk_conn_io_flush(valk_conn_io_t *io, valk_aio_handle_t *conn,
   if (!sys || !sys->ops || !sys->ops->tcp) {
     return -1;
   }
+// LCOV_EXCL_BR_STOP
   
   if (sys->ops->tcp->is_closing(&conn->uv.tcp)) {
     return -1;

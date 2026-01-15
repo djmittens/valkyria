@@ -1180,6 +1180,527 @@ void test_labels_equality_hash_mismatch(VALK_TEST_ARGS()) {
 }
 
 // ============================================================================
+// TEST: Stateless Delta Collection (Per-Connection Baseline)
+// ============================================================================
+
+void test_delta_stateless_first_call(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+  valk_counter_v2_t *c = valk_counter_get_or_create("stateless_counter", nullptr, &labels);
+  valk_counter_v2_add(c, 100);
+
+  valk_metrics_baseline_t baseline;
+  valk_metrics_baseline_init(&baseline);
+
+  VALK_TEST_ASSERT(baseline.initialized == false, "Baseline should not be initialized");
+
+  valk_delta_snapshot_t snap;
+  valk_delta_snapshot_init(&snap);
+
+  u64 changed = valk_delta_snapshot_collect_stateless(&snap, &g_metrics, &baseline);
+
+  VALK_TEST_ASSERT(changed == 0, "First call should return 0 (just synced baseline)");
+  VALK_TEST_ASSERT(baseline.initialized == true, "Baseline should now be initialized");
+
+  valk_delta_snapshot_free(&snap);
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_delta_stateless_subsequent_calls(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+  valk_counter_v2_t *c = valk_counter_get_or_create("stateless_counter", nullptr, &labels);
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("stateless_gauge", nullptr, &labels);
+
+  valk_metrics_baseline_t baseline;
+  valk_metrics_baseline_init(&baseline);
+
+  valk_delta_snapshot_t snap;
+  valk_delta_snapshot_init(&snap);
+
+  valk_delta_snapshot_collect_stateless(&snap, &g_metrics, &baseline);
+
+  valk_counter_v2_add(c, 50);
+  valk_gauge_v2_set(g, 42);
+
+  u64 changed = valk_delta_snapshot_collect_stateless(&snap, &g_metrics, &baseline);
+
+  VALK_TEST_ASSERT(changed >= 2, "Should detect changes after baseline init");
+  VALK_TEST_ASSERT(snap.counters_changed >= 1, "Counter should have changed");
+  VALK_TEST_ASSERT(snap.gauges_changed >= 1, "Gauge should have changed");
+
+  valk_delta_snapshot_free(&snap);
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_delta_stateless_histogram(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  double bounds[] = {0.1, 0.5, 1.0};
+  valk_label_set_v2_t labels = {0};
+  valk_histogram_v2_t *h = valk_histogram_get_or_create(
+      "stateless_hist", nullptr, bounds, 3, &labels);
+
+  valk_metrics_baseline_t baseline;
+  valk_metrics_baseline_init(&baseline);
+
+  valk_delta_snapshot_t snap;
+  valk_delta_snapshot_init(&snap);
+
+  valk_delta_snapshot_collect_stateless(&snap, &g_metrics, &baseline);
+
+  valk_histogram_v2_observe_us(h, 50000);
+  valk_histogram_v2_observe_us(h, 250000);
+
+  u64 changed = valk_delta_snapshot_collect_stateless(&snap, &g_metrics, &baseline);
+
+  VALK_TEST_ASSERT(changed >= 1, "Should detect histogram changes");
+  VALK_TEST_ASSERT(snap.histograms_changed >= 1, "Histogram should have changed");
+
+  valk_delta_snapshot_free(&snap);
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+// ============================================================================
+// TEST: Prometheus Encoding
+// ============================================================================
+
+void test_delta_to_prometheus(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {
+    .labels = {{.key = "env", .value = "test"}},
+    .count = 1
+  };
+  valk_counter_v2_t *c = valk_counter_get_or_create("prom_counter", nullptr, &labels);
+  valk_counter_v2_add(c, 100);
+
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("prom_gauge", nullptr, &labels);
+  valk_gauge_v2_set(g, -42);
+
+  double bounds[] = {0.1, 1.0};
+  valk_histogram_v2_t *h = valk_histogram_get_or_create(
+      "prom_hist", nullptr, bounds, 2, &labels);
+  valk_histogram_v2_observe_us(h, 50000);
+
+  valk_delta_snapshot_t snap;
+  valk_delta_snapshot_init(&snap);
+  valk_delta_snapshot_collect(&snap, &g_metrics);
+
+  char buf[4096];
+  u64 len = valk_delta_to_prometheus(&snap, &g_metrics, buf, sizeof(buf));
+
+  VALK_TEST_ASSERT(len > 0, "Prometheus output should be non-empty");
+  VALK_TEST_ASSERT(strstr(buf, "prom_counter") != nullptr, "Should contain counter");
+  VALK_TEST_ASSERT(strstr(buf, "prom_gauge") != nullptr, "Should contain gauge");
+  VALK_TEST_ASSERT(strstr(buf, "prom_hist_bucket") != nullptr, "Should contain histogram buckets");
+  VALK_TEST_ASSERT(strstr(buf, "prom_hist_sum") != nullptr, "Should contain histogram sum");
+  VALK_TEST_ASSERT(strstr(buf, "prom_hist_count") != nullptr, "Should contain histogram count");
+  VALK_TEST_ASSERT(strstr(buf, "le=\"+Inf\"") != nullptr, "Should contain +Inf bucket");
+  VALK_TEST_ASSERT(strstr(buf, "env=\"test\"") != nullptr, "Should contain label");
+
+  valk_delta_snapshot_free(&snap);
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_delta_to_prometheus_no_labels(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+  valk_counter_v2_t *c = valk_counter_get_or_create("simple_counter", nullptr, &labels);
+  valk_counter_v2_add(c, 10);
+
+  valk_delta_snapshot_t snap;
+  valk_delta_snapshot_init(&snap);
+  valk_delta_snapshot_collect(&snap, &g_metrics);
+
+  char buf[2048];
+  u64 len = valk_delta_to_prometheus(&snap, &g_metrics, buf, sizeof(buf));
+
+  VALK_TEST_ASSERT(len > 0, "Prometheus output should be non-empty");
+  VALK_TEST_ASSERT(strstr(buf, "simple_counter 10") != nullptr ||
+                   strstr(buf, "simple_counter") != nullptr,
+                   "Should contain counter without labels");
+
+  valk_delta_snapshot_free(&snap);
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+// ============================================================================
+// TEST: Full JSON Export
+// ============================================================================
+
+void test_metrics_v2_to_json(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {
+    .labels = {{.key = "service", .value = "api"}},
+    .count = 1
+  };
+
+  valk_counter_v2_t *c = valk_counter_get_or_create("json_counter", nullptr, &labels);
+  valk_counter_v2_add(c, 42);
+
+  valk_gauge_v2_t *g = valk_gauge_get_or_create("json_gauge", nullptr, &labels);
+  valk_gauge_v2_set(g, 100);
+
+  double bounds[] = {0.5, 1.0};
+  valk_histogram_v2_t *h = valk_histogram_get_or_create(
+      "json_hist", nullptr, bounds, 2, &labels);
+  valk_histogram_v2_observe_us(h, 100000);
+
+  char buf[8192];
+  u64 len = valk_metrics_v2_to_json(&g_metrics, buf, sizeof(buf));
+
+  VALK_TEST_ASSERT(len > 0 && len < sizeof(buf), "JSON output should fit in buffer");
+  VALK_TEST_ASSERT(strstr(buf, "\"counters\"") != nullptr, "Should contain counters array");
+  VALK_TEST_ASSERT(strstr(buf, "\"gauges\"") != nullptr, "Should contain gauges array");
+  VALK_TEST_ASSERT(strstr(buf, "\"histograms\"") != nullptr, "Should contain histograms array");
+  VALK_TEST_ASSERT(strstr(buf, "\"uptime_seconds\"") != nullptr, "Should contain uptime");
+  VALK_TEST_ASSERT(strstr(buf, "\"labels\"") != nullptr, "Should contain labels object");
+  VALK_TEST_ASSERT(strstr(buf, "json_counter") != nullptr, "Should contain counter name");
+  VALK_TEST_ASSERT(strstr(buf, "\"buckets\"") != nullptr, "Should contain buckets");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_metrics_v2_to_json_no_labels(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+  valk_counter_v2_t *c = valk_counter_get_or_create("nolabel_counter", nullptr, &labels);
+  valk_counter_v2_add(c, 5);
+
+  char buf[4096];
+  u64 len = valk_metrics_v2_to_json(&g_metrics, buf, sizeof(buf));
+
+  VALK_TEST_ASSERT(len > 0, "JSON output should be non-empty");
+  VALK_TEST_ASSERT(strstr(buf, "nolabel_counter") != nullptr, "Should contain counter");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+// ============================================================================
+// TEST: Delta JSON with Labels
+// ============================================================================
+
+void test_delta_json_with_labels(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {
+    .labels = {
+      {.key = "method", .value = "GET"},
+      {.key = "status", .value = "200"}
+    },
+    .count = 2
+  };
+  valk_counter_v2_t *c = valk_counter_get_or_create("labeled_counter", nullptr, &labels);
+  valk_counter_v2_add(c, 10);
+
+  valk_delta_snapshot_t snap;
+  valk_delta_snapshot_init(&snap);
+  valk_delta_snapshot_collect(&snap, &g_metrics);
+
+  char buf[2048];
+  u64 len = valk_delta_to_json(&snap, buf, sizeof(buf));
+
+  VALK_TEST_ASSERT(len > 0, "JSON output should be non-empty");
+  VALK_TEST_ASSERT(strstr(buf, "\"l\":") != nullptr || strstr(buf, "labeled_counter") != nullptr,
+                   "Should contain labels or counter name");
+
+  valk_delta_snapshot_free(&snap);
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+// ============================================================================
+// TEST: Handle Out-of-Bounds
+// ============================================================================
+
+void test_handle_out_of_bounds(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_metric_handle_t oob_counter = {.slot = VALK_REGISTRY_MAX_COUNTERS, .generation = 1};
+  valk_metric_handle_t oob_gauge = {.slot = VALK_REGISTRY_MAX_GAUGES, .generation = 1};
+  valk_metric_handle_t oob_hist = {.slot = VALK_REGISTRY_MAX_HISTOGRAMS, .generation = 1};
+  valk_metric_handle_t oob_summary = {.slot = VALK_REGISTRY_MAX_SUMMARIES, .generation = 1};
+
+  VALK_TEST_ASSERT(valk_counter_deref(oob_counter) == nullptr,
+                   "Out of bounds counter handle should return nullptr");
+  VALK_TEST_ASSERT(valk_gauge_deref(oob_gauge) == nullptr,
+                   "Out of bounds gauge handle should return nullptr");
+  VALK_TEST_ASSERT(valk_histogram_deref(oob_hist) == nullptr,
+                   "Out of bounds histogram handle should return nullptr");
+  VALK_TEST_ASSERT(valk_summary_deref(oob_summary) == nullptr,
+                   "Out of bounds summary handle should return nullptr");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_handle_generation_mismatch(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+  valk_counter_v2_t *c = valk_counter_get_or_create("gen_test", nullptr, &labels);
+  valk_metric_handle_t handle = valk_counter_handle(c);
+
+  valk_metric_handle_t wrong_gen = {.slot = handle.slot, .generation = handle.generation + 100};
+
+  VALK_TEST_ASSERT(valk_counter_deref(wrong_gen) == nullptr,
+                   "Wrong generation handle should return nullptr");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_handle_inactive_metric(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  g_metrics.eviction_threshold_us = 1;
+
+  valk_label_set_v2_t labels = {0};
+  valk_counter_v2_t *c = valk_counter_get_or_create("inactive_test", nullptr, &labels);
+  valk_metric_handle_t handle = valk_counter_handle(c);
+
+  for (volatile int i = 0; i < 100000; i++) {}
+
+  valk_metrics_evict_stale();
+
+  VALK_TEST_ASSERT(valk_counter_deref(handle) == nullptr,
+                   "Inactive metric handle should return nullptr");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+// ============================================================================
+// TEST: Registry Stats
+// ============================================================================
+
+void test_registry_stats_full(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+  for (int i = 0; i < 5; i++) {
+    char name[32];
+    snprintf(name, sizeof(name), "counter_%d", i);
+    valk_label_set_v2_t unique_labels = {
+      .labels = {{.key = "id", .value = name}},
+      .count = 1
+    };
+    valk_counter_get_or_create(name, nullptr, &unique_labels);
+  }
+  for (int i = 0; i < 3; i++) {
+    char name[32];
+    snprintf(name, sizeof(name), "gauge_%d", i);
+    valk_label_set_v2_t unique_labels = {
+      .labels = {{.key = "id", .value = name}},
+      .count = 1
+    };
+    valk_gauge_get_or_create(name, nullptr, &unique_labels);
+  }
+  double bounds[] = {0.1, 1.0};
+  valk_histogram_get_or_create("hist_0", nullptr, bounds, 2, &labels);
+
+  valk_registry_stats_t stats;
+  valk_registry_stats_collect(&stats);
+
+  VALK_TEST_ASSERT(stats.counters_active >= 5, "Should have at least 5 active counters");
+  VALK_TEST_ASSERT(stats.gauges_active >= 3, "Should have at least 3 active gauges");
+  VALK_TEST_ASSERT(stats.histograms_active >= 1, "Should have at least 1 active histogram");
+  VALK_TEST_ASSERT(stats.counters_hwm >= stats.counters_active, "HWM >= active");
+  VALK_TEST_ASSERT(stats.counters_capacity == VALK_REGISTRY_MAX_COUNTERS, "Capacity should match");
+  VALK_TEST_ASSERT(stats.string_pool_used > 0, "String pool should be used");
+
+  char buf[2048];
+  u64 len = valk_registry_stats_to_json(&stats, buf, sizeof(buf));
+  VALK_TEST_ASSERT(len > 0, "Stats JSON should be non-empty");
+  VALK_TEST_ASSERT(strstr(buf, "\"counters\"") != nullptr, "Should contain counters object");
+  VALK_TEST_ASSERT(strstr(buf, "\"active\"") != nullptr, "Should contain active field");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+// ============================================================================
+// TEST: Small Buffer Encoding Edge Cases
+// ============================================================================
+
+void test_delta_json_tiny_buffer(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+  valk_counter_v2_t *c = valk_counter_get_or_create("tiny_buf_test", nullptr, &labels);
+  valk_counter_v2_add(c, 1);
+
+  valk_delta_snapshot_t snap;
+  valk_delta_snapshot_init(&snap);
+  valk_delta_snapshot_collect(&snap, &g_metrics);
+
+  char tiny_buf[10];
+  u64 len = valk_delta_to_json(&snap, tiny_buf, sizeof(tiny_buf));
+
+  VALK_TEST_ASSERT(len == sizeof(tiny_buf), "Should return buffer size on overflow");
+
+  valk_delta_snapshot_free(&snap);
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_delta_sse_tiny_buffer(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+  valk_counter_v2_t *c = valk_counter_get_or_create("sse_buf_test", nullptr, &labels);
+  valk_counter_v2_add(c, 1);
+
+  valk_delta_snapshot_t snap;
+  valk_delta_snapshot_init(&snap);
+  valk_delta_snapshot_collect(&snap, &g_metrics);
+
+  char tiny_buf[10];
+  u64 len = valk_delta_to_sse(&snap, tiny_buf, sizeof(tiny_buf));
+
+  VALK_TEST_ASSERT(len == sizeof(tiny_buf), "Should return buffer size on overflow");
+
+  valk_delta_snapshot_free(&snap);
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_delta_prometheus_tiny_buffer(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+  valk_counter_v2_t *c = valk_counter_get_or_create("prom_buf_test", nullptr, &labels);
+  valk_counter_v2_add(c, 1);
+
+  valk_delta_snapshot_t snap;
+  valk_delta_snapshot_init(&snap);
+  valk_delta_snapshot_collect(&snap, &g_metrics);
+
+  char tiny_buf[10];
+  u64 len = valk_delta_to_prometheus(&snap, &g_metrics, tiny_buf, sizeof(tiny_buf));
+
+  VALK_TEST_ASSERT(len == sizeof(tiny_buf), "Should return buffer size on overflow");
+
+  valk_delta_snapshot_free(&snap);
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_metrics_json_tiny_buffer(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_label_set_v2_t labels = {0};
+  valk_counter_v2_t *c = valk_counter_get_or_create("json_buf_test", nullptr, &labels);
+  valk_counter_v2_add(c, 1);
+
+  char tiny_buf[10];
+  u64 len = valk_metrics_v2_to_json(&g_metrics, tiny_buf, sizeof(tiny_buf));
+
+  VALK_TEST_ASSERT(len == sizeof(tiny_buf), "Should return buffer size on overflow");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+// ============================================================================
+// TEST: Null pointer safety for inline functions
+// ============================================================================
+
+void test_inline_null_safety(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_counter_v2_inc(nullptr);
+  valk_counter_v2_add(nullptr, 10);
+  valk_gauge_v2_set(nullptr, 10);
+  valk_gauge_v2_inc(nullptr);
+  valk_gauge_v2_dec(nullptr);
+  valk_gauge_v2_add(nullptr, 10);
+  valk_histogram_v2_observe_us(nullptr, 1000);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// TEST: Delta capacity growth
+// ============================================================================
+
+void test_delta_capacity_growth(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  for (int i = 0; i < 300; i++) {
+    char name[64];
+    snprintf(name, sizeof(name), "cap_test_%d", i);
+    valk_label_set_v2_t labels = {
+      .labels = {{.key = "idx", .value = name}},
+      .count = 1
+    };
+    valk_counter_v2_t *c = valk_counter_get_or_create(name, nullptr, &labels);
+    valk_counter_v2_add(c, i + 1);
+  }
+
+  valk_delta_snapshot_t snap;
+  valk_delta_snapshot_init(&snap);
+
+  VALK_TEST_ASSERT(snap.delta_capacity == 256, "Initial capacity should be 256");
+
+  u64 changed = valk_delta_snapshot_collect(&snap, &g_metrics);
+
+  VALK_TEST_ASSERT(changed >= 300, "Should detect 300+ counter changes");
+  VALK_TEST_ASSERT(snap.delta_capacity > 256, "Capacity should have grown");
+
+  valk_delta_snapshot_free(&snap);
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -1298,6 +1819,60 @@ int main(int argc, const char **argv) {
                           test_registry_stats_null);
   valk_testsuite_add_test(suite, "test_labels_equality_hash_mismatch",
                           test_labels_equality_hash_mismatch);
+
+  // Stateless delta collection tests
+  valk_testsuite_add_test(suite, "test_delta_stateless_first_call",
+                          test_delta_stateless_first_call);
+  valk_testsuite_add_test(suite, "test_delta_stateless_subsequent_calls",
+                          test_delta_stateless_subsequent_calls);
+  valk_testsuite_add_test(suite, "test_delta_stateless_histogram",
+                          test_delta_stateless_histogram);
+
+  // Prometheus encoding tests
+  valk_testsuite_add_test(suite, "test_delta_to_prometheus",
+                          test_delta_to_prometheus);
+  valk_testsuite_add_test(suite, "test_delta_to_prometheus_no_labels",
+                          test_delta_to_prometheus_no_labels);
+
+  // Full JSON export tests
+  valk_testsuite_add_test(suite, "test_metrics_v2_to_json",
+                          test_metrics_v2_to_json);
+  valk_testsuite_add_test(suite, "test_metrics_v2_to_json_no_labels",
+                          test_metrics_v2_to_json_no_labels);
+
+  // Delta JSON with labels
+  valk_testsuite_add_test(suite, "test_delta_json_with_labels",
+                          test_delta_json_with_labels);
+
+  // Handle edge cases
+  valk_testsuite_add_test(suite, "test_handle_out_of_bounds",
+                          test_handle_out_of_bounds);
+  valk_testsuite_add_test(suite, "test_handle_generation_mismatch",
+                          test_handle_generation_mismatch);
+  valk_testsuite_add_test(suite, "test_handle_inactive_metric",
+                          test_handle_inactive_metric);
+
+  // Registry stats
+  valk_testsuite_add_test(suite, "test_registry_stats_full",
+                          test_registry_stats_full);
+
+  // Buffer overflow tests
+  valk_testsuite_add_test(suite, "test_delta_json_tiny_buffer",
+                          test_delta_json_tiny_buffer);
+  valk_testsuite_add_test(suite, "test_delta_sse_tiny_buffer",
+                          test_delta_sse_tiny_buffer);
+  valk_testsuite_add_test(suite, "test_delta_prometheus_tiny_buffer",
+                          test_delta_prometheus_tiny_buffer);
+  valk_testsuite_add_test(suite, "test_metrics_json_tiny_buffer",
+                          test_metrics_json_tiny_buffer);
+
+  // Null safety
+  valk_testsuite_add_test(suite, "test_inline_null_safety",
+                          test_inline_null_safety);
+
+  // Capacity growth
+  valk_testsuite_add_test(suite, "test_delta_capacity_growth",
+                          test_delta_capacity_growth);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

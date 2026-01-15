@@ -25,6 +25,37 @@
 - Return `valk_lval_err()` for recoverable errors in builtins
 - Use `VALK_ASSERT()` for invariant violations
 
+## Defensive Code Principles
+
+### Validate at API Boundaries, Trust Internally
+- Type checking happens via `LVAL_ASSERT_TYPE` in builtins (parser.c)
+- Internal functions trust these guarantees - no redundant type/null checks
+- Don't re-validate what the API boundary already guarantees
+
+### Don't Sanity-Check Other Subsystems
+- If GC is broken, fix GC - don't scatter forward-pointer checks everywhere
+- If memory is corrupted, fix the corruption source - don't add magic number validation
+- Each subsystem is responsible for its own correctness
+
+### LCOV Exclusions - Only for Truly Untestable Code
+Use `// LCOV_EXCL_START` / `// LCOV_EXCL_STOP` ONLY for:
+- OOM paths (malloc/aligned_alloc failures)
+- Platform API failures that essentially never fail (e.g., uv_timer_init)
+- Impossible branches required by API contracts
+
+DO NOT exclude:
+- Error handling that can be triggered by bad input
+- Callback paths that just need integration tests
+- Code that's "hard to test" but not impossible
+
+### Anti-Patterns to Remove
+When refactoring, eliminate these patterns:
+- **Magic number validation**: `if (x->magic != EXPECTED_MAGIC)` - unreliable, masks real bugs
+- **Forward pointer chasing**: `while (val->forward) val = val->forward` - GC's job, not caller's
+- **Redundant null/type checks**: Already validated at API boundary
+- **Atomic loads/stores**: Unnecessary with stop-the-world GC
+- **Debug fprintf/tracing**: Remove or gate behind compile-time flag
+
 ## Required Workflow (CRITICAL - MUST FOLLOW)
 
 ### Before ANY Code Change

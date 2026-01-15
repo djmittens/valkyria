@@ -35,8 +35,6 @@ int valk_http2_send_response(nghttp2_session *session, int stream_id,
                              valk_lval_t* response_qexpr, 
                              valk_mem_arena_t* arena);
 
-valk_lval_t* valk_http2_build_request_qexpr(valk_http2_server_request_t *req);
-
 int valk_http2_server_on_frame_send_callback(nghttp2_session *session,
                                              const nghttp2_frame *frame,
                                              void *user_data);

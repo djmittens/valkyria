@@ -36,6 +36,7 @@ void valk_aio_unregister_system(valk_aio_system_t *sys) {
   pthread_mutex_unlock(&g_aio_systems_lock);
 }
 
+// LCOV_EXCL_START - GC coordination only triggered during concurrent STW collection
 void valk_aio_wake_all_for_gc(void) {
   pthread_mutex_lock(&g_aio_systems_lock);
   for (int i = 0; i < VALK_AIO_MAX_SYSTEMS; i++) {
@@ -64,6 +65,7 @@ static void __gc_wakeup_cb(uv_async_t *handle) {
   
   atomic_store(&sys->gc_acknowledged, false);
 }
+// LCOV_EXCL_STOP
 
 const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg) {
   if (cfg->max_connections < 1 || cfg->max_connections > 100000)
@@ -200,15 +202,15 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   sys->ops = &valk_aio_ops_production;
 
   int init_rc = sys->ops->loop->init(sys);
-  if (init_rc != 0) {
+  if (init_rc != 0) { // LCOV_EXCL_START - libuv init failure
     VALK_ERROR("Failed to initialize event loop");
     free(sys);
     return nullptr;
-  }
+  } // LCOV_EXCL_STOP
 
   int rc = uv_loop_configure(sys->eventloop, UV_METRICS_IDLE_TIME);
-  if (rc != 0) {
-    VALK_WARN("Failed to enable loop metrics: %s", uv_strerror(rc));
+  if (rc != 0) { // LCOV_EXCL_BR_LINE - platform-specific
+    VALK_WARN("Failed to enable loop metrics: %s", uv_strerror(rc)); // LCOV_EXCL_LINE
   }
 
   memset(&sys->liveHandles, 0, sizeof(valk_aio_handle_t));
@@ -235,10 +237,10 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
                                         sys->config.backpressure_timeout_ms);
 
   sys->port_strs = calloc(sys->config.max_servers, 8);
-  if (!sys->port_strs) {
+  if (!sys->port_strs) { // LCOV_EXCL_START - OOM handling
     VALK_ERROR("Failed to allocate port strings buffer");
     return nullptr;
-  }
+  } // LCOV_EXCL_STOP
 
   sys->http_queue.request_items = malloc(sizeof(valk_http_request_item_t) * sys->config.queue_capacity);
   sys->http_queue.request_idx = 0;
@@ -362,6 +364,7 @@ void valk_aio_stop(valk_aio_system_t *sys) {
 
   sys->shuttingDown = true;
   
+  // LCOV_EXCL_START - defensive error checks for corrupted state
   if (!sys->stopperHandle) {
     VALK_ERROR("valk_aio_stop: stopperHandle is nullptr!");
     return;
@@ -375,10 +378,11 @@ void valk_aio_stop(valk_aio_system_t *sys) {
     VALK_ERROR("valk_aio_stop: stopperHandle is already closing!");
     return;
   }
+  // LCOV_EXCL_STOP
   
   int rv = uv_async_send(&sys->stopperHandle->uv.task);
-  if (rv != 0) {
-    VALK_ERROR("valk_aio_stop: uv_async_send failed: %s", uv_strerror(rv));
+  if (rv != 0) { // LCOV_EXCL_BR_LINE - libuv send failure
+    VALK_ERROR("valk_aio_stop: uv_async_send failed: %s", uv_strerror(rv)); // LCOV_EXCL_LINE
   }
 }
 

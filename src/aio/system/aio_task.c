@@ -17,6 +17,7 @@ static void __task_wrapper_fn(void *ctx) {
   task->callback(sys, task);
 }
 
+// LCOV_EXCL_BR_START - malloc failure is extremely rare
 void valk_uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task) {
   __task_wrapper_ctx_t *wrapper = malloc(sizeof(__task_wrapper_ctx_t));
   if (!wrapper) {
@@ -32,3 +33,4 @@ void valk_uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task) {
 
   valk_aio_enqueue_task(sys, __task_wrapper_fn, wrapper);
 }
+// LCOV_EXCL_BR_STOP

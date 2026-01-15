@@ -253,30 +253,6 @@ void test_gc_should_checkpoint(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_collect_arena_null(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  size_t collected = valk_gc_collect_arena(nullptr, nullptr);
-  VALK_TEST_ASSERT(collected == 0, "Null args should return 0");
-
-  VALK_PASS();
-}
-
-void test_gc_should_collect_arena_empty(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  size_t arena_size = 4096 + sizeof(valk_mem_arena_t);
-  valk_mem_arena_t *arena = malloc(arena_size);
-  valk_mem_arena_init(arena, 4096);
-
-  bool should = valk_gc_should_collect_arena(arena);
-  VALK_TEST_ASSERT(should == false || should == true, "Result should be boolean");
-
-  free(arena);
-
-  VALK_PASS();
-}
-
 void test_gc_heap_destroy_null_safe(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -612,36 +588,6 @@ void test_gc_mark_lval_external_null(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_free_object(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-
-  void *ptr = valk_gc_malloc_heap_alloc(heap, 1024);
-  VALK_TEST_ASSERT(ptr != nullptr, "Should allocate");
-
-  size_t before = valk_gc_heap2_used_bytes(heap);
-  valk_gc_free_object(heap, ptr);
-
-  VALK_TEST_ASSERT(valk_gc_heap2_used_bytes(heap) <= before, "used_bytes should decrease or stay same");
-
-  valk_gc_malloc_heap_destroy(heap);
-
-  VALK_PASS();
-}
-
-void test_gc_free_object_null(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-
-  valk_gc_free_object(heap, nullptr);
-
-  valk_gc_malloc_heap_destroy(heap);
-
-  VALK_PASS();
-}
-
 void test_gc_should_checkpoint_null_scratch(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -756,44 +702,6 @@ void test_gc_heap_usage_pct_with_allocations(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(pct_after >= pct_before, "Usage should increase after allocations");
 
   valk_gc_malloc_heap_destroy(heap);
-
-  VALK_PASS();
-}
-
-void test_gc_collect_arena_with_env(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  size_t arena_size = 65536 + sizeof(valk_mem_arena_t);
-  valk_mem_arena_t *arena = malloc(arena_size);
-  valk_mem_arena_init(arena, 65536);
-
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-
-  valk_lenv_t *env = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lenv_t));
-  memset(env, 0, sizeof(valk_lenv_t));
-
-  size_t collected = valk_gc_collect_arena(env, arena);
-  (void)collected;
-
-  valk_gc_malloc_heap_destroy(heap);
-  free(arena);
-
-  VALK_PASS();
-}
-
-void test_gc_should_collect_arena_high_usage(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  size_t arena_size = 4096 + sizeof(valk_mem_arena_t);
-  valk_mem_arena_t *arena = malloc(arena_size);
-  valk_mem_arena_init(arena, 4096);
-
-  arena->offset = 3800;
-
-  bool should = valk_gc_should_collect_arena(arena);
-  VALK_TEST_ASSERT(should == true, "Should collect at >90% usage");
-
-  free(arena);
 
   VALK_PASS();
 }
@@ -2755,8 +2663,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_print_stats_does_not_crash", test_gc_print_stats_does_not_crash);
   valk_testsuite_add_test(suite, "test_gc_forwarding_null", test_gc_forwarding_null);
   valk_testsuite_add_test(suite, "test_gc_should_checkpoint", test_gc_should_checkpoint);
-  valk_testsuite_add_test(suite, "test_gc_collect_arena_null", test_gc_collect_arena_null);
-  valk_testsuite_add_test(suite, "test_gc_should_collect_arena_empty", test_gc_should_collect_arena_empty);
+
   valk_testsuite_add_test(suite, "test_gc_heap_destroy_null_safe", test_gc_heap_destroy_null_safe);
   valk_testsuite_add_test(suite, "test_gc_multiple_collections", test_gc_multiple_collections);
   valk_testsuite_add_test(suite, "test_gc_stats_tracking", test_gc_stats_tracking);
@@ -2781,8 +2688,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_print_stats_null", test_gc_print_stats_null);
   valk_testsuite_add_test(suite, "test_gc_mark_lval_external", test_gc_mark_lval_external);
   valk_testsuite_add_test(suite, "test_gc_mark_lval_external_null", test_gc_mark_lval_external_null);
-  valk_testsuite_add_test(suite, "test_gc_free_object", test_gc_free_object);
-  valk_testsuite_add_test(suite, "test_gc_free_object_null", test_gc_free_object_null);
+
   valk_testsuite_add_test(suite, "test_gc_should_checkpoint_null_scratch", test_gc_should_checkpoint_null_scratch);
   valk_testsuite_add_test(suite, "test_gc_should_checkpoint_high_threshold", test_gc_should_checkpoint_high_threshold);
   valk_testsuite_add_test(suite, "test_gc_lval_sizes_set", test_gc_lval_sizes_set);
@@ -2791,8 +2697,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_should_collect_rate_limiting", test_gc_should_collect_rate_limiting);
   valk_testsuite_add_test(suite, "test_gc_should_collect_above_threshold", test_gc_should_collect_above_threshold);
   valk_testsuite_add_test(suite, "test_gc_heap_usage_pct_with_allocations", test_gc_heap_usage_pct_with_allocations);
-  valk_testsuite_add_test(suite, "test_gc_collect_arena_with_env", test_gc_collect_arena_with_env);
-  valk_testsuite_add_test(suite, "test_gc_should_collect_arena_high_usage", test_gc_should_collect_arena_high_usage);
+
   valk_testsuite_add_test(suite, "test_gc_forwarding_preserves_alloc_bits", test_gc_forwarding_preserves_alloc_bits);
   valk_testsuite_add_test(suite, "test_gc_runtime_metrics_pause_max_updates", test_gc_runtime_metrics_pause_max_updates);
   valk_testsuite_add_test(suite, "test_gc_alloc_tracks_to_objects_list", test_gc_alloc_tracks_to_objects_list);

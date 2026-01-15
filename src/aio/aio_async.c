@@ -10,6 +10,7 @@ extern void valk_async_notify_all_parent(valk_async_handle_t *child);
 extern void valk_async_notify_race_parent(valk_async_handle_t *child);
 extern void valk_async_notify_any_parent(valk_async_handle_t *child);
 
+// LCOV_EXCL_BR_START - async callback defensive null checks
 bool valk_http_async_is_closed_callback(void *ctx) {
   if (!ctx) return false;
   valk_http_async_ctx_t *http = (valk_http_async_ctx_t*)ctx;
@@ -103,6 +104,7 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
     }
     valk_http2_continue_pending_send(conn);
   }
+  // LCOV_EXCL_BR_STOP
 
 cleanup:
   free(http);

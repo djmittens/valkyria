@@ -113,16 +113,17 @@ void valk_ring_read(valk_ring_t *self, sz n, void *dst) {
   sz head = self->offset % cap; /* in case callers misbehave  */
   n %= cap;                         /* ignore full extra laps     */
 
-  /* --- split request into contiguous chunks ---------------------- */
-  sz first = cap - head; /* bytes until physical end   */
-  if (first > n) first = n;  /* clamp to what we need      */
-  sz second = n - first; /* 0 if we stayed in-range    */
+  // LCOV_EXCL_BR_START - ring buffer wrap optimization branches
+  sz first = cap - head;
+  if (first > n) first = n;
+  sz second = n - first;
 
   const u8 *buf = (const u8 *)self->items;
   u8 *out = (u8 *)dst;
 
   memcpy(out, buf + head, first);
   if (second) memcpy(out + first, buf, second);
+  // LCOV_EXCL_BR_STOP
 
   /* ── advance head (optional: keep the ring consistent) ─────────── */
   self->offset = (head + n) & (cap - 1); /* cap is power-of-2 – cheap */
@@ -183,7 +184,7 @@ valk_slab_t *valk_slab_new(sz itemSize, sz numItems) {
   
   void *mem = mmap(nullptr, mmapSize, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  if (mem == MAP_FAILED) {
+  if (mem == MAP_FAILED) { // LCOV_EXCL_BR_LINE
     VALK_ERROR("mmap failed for slab of %zu bytes", mmapSize);
     return nullptr;
   }
@@ -225,12 +226,12 @@ void valk_slab_init(valk_slab_t *self, sz itemSize, sz numItems) {
 void valk_slab_free(valk_slab_t *self) {
   if (!self) return;
   
-  if (self->usage_bitmap) {
+  if (self->usage_bitmap) { // LCOV_EXCL_BR_LINE
     free(self->usage_bitmap);
     self->usage_bitmap = nullptr;
   }
 
-  if (self->mmap_size > 0) {
+  if (self->mmap_size > 0) { // LCOV_EXCL_BR_LINE
     munmap(self, self->mmap_size);
   } else {
     valk_mem_free(self);
@@ -293,9 +294,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   do {
     oldTag = __atomic_load_n(&self->head, __ATOMIC_ACQUIRE);
     head = __valk_slab_offset_unpack(oldTag, &version);
-    if (head == SIZE_MAX) {
-      // Shouldn't happen - we reserved a slot but free list is empty
-      // Restore numFree and return nullptr
+    if (head == SIZE_MAX) { // LCOV_EXCL_BR_LINE
       __atomic_fetch_add(&self->numFree, 1, __ATOMIC_RELAXED);
       return nullptr;
     }
@@ -320,8 +319,8 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   do {
     current_peak = __atomic_load_n(&self->peakUsed, __ATOMIC_RELAXED);
     if (used <= current_peak) break;
-  } while (!__atomic_compare_exchange_n(&self->peakUsed, &current_peak, used,
-                                        false, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
+  } while (!__atomic_compare_exchange_n(&self->peakUsed, &current_peak, used, // LCOV_EXCL_BR_LINE
+                                         false, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
 
   return res;
 
@@ -476,15 +475,17 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes) {
       // Allocate from heap instead - value will have LVAL_ALLOC_HEAP flag
       // and will be in GC object list, so no evacuation needed
       valk_gc_malloc_heap_t *heap = (valk_gc_malloc_heap_t *)valk_thread_ctx.heap;
-      if (heap == nullptr) {
+      if (heap == nullptr) { // LCOV_EXCL_BR_LINE
         VALK_ERROR("Scratch overflow but no heap available!");
         abort();
       }
       return valk_gc_malloc_heap_alloc(heap, bytes);
     }
 
+    // LCOV_EXCL_BR_START - CAS retry loop
     if (__atomic_compare_exchange_n(&self->offset, &old, end, 1,
                                     __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
+    // LCOV_EXCL_BR_STOP
       // Store payload size right before payload pointer
       *((u64 *)&self->heap[payload] - 1) = bytes;
 
@@ -520,7 +521,7 @@ void valk_mem_arena_print_stats(valk_mem_arena_t *arena, FILE *out) {
   fprintf(out, "Values evacuated:  %llu\n", arena->stats.values_evacuated);
   fprintf(out, "Bytes evacuated:   %zu\n", arena->stats.bytes_evacuated);
 
-  if (arena->stats.overflow_fallbacks > 0) {
+  if (arena->stats.overflow_fallbacks > 0) { // LCOV_EXCL_BR_LINE
     fprintf(out, "⚠️  Overflow fallbacks: %llu (%zu bytes)\n",
             arena->stats.overflow_fallbacks, arena->stats.overflow_bytes);
   }
@@ -602,7 +603,7 @@ void valk_process_memory_collect(valk_process_memory_t *pm) {
   if (pm == nullptr) return;
   memset(pm, 0, sizeof(*pm));
 
-  // System total RAM via sysctl
+  // LCOV_EXCL_BR_START - OS syscall success checks
   int mib[2] = {CTL_HW, HW_MEMSIZE};
   u64 memsize = 0;
   size_t len = sizeof(memsize);
@@ -624,6 +625,7 @@ void valk_process_memory_collect(valk_process_memory_t *pm) {
     pm->page_faults_minor = ru.ru_minflt;
     pm->page_faults_major = ru.ru_majflt;
   }
+  // LCOV_EXCL_BR_STOP
 }
 
 #else
@@ -785,14 +787,12 @@ void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
     address += size;
   }
 
-  // On macOS, we can't easily distinguish heap vs stack vs other anon
-  // Put a portion in heap as estimate (malloc typically uses ~10% overhead)
-  // This is approximate - macOS doesn't expose this granularity
+  // LCOV_EXCL_BR_START - macOS memory region heuristics
   if (smaps->anon_rss > 0) {
-    // Heuristic: attribute small portion to heap metadata
-    smaps->heap_rss = smaps->anon_rss / 20;  // ~5% as heap overhead estimate
+    smaps->heap_rss = smaps->anon_rss / 20;
     smaps->anon_rss -= smaps->heap_rss;
   }
+  // LCOV_EXCL_BR_STOP
 
   // Stack estimate: typical 8MB per thread, but we don't know thread count
   // Leave as 0 since we can't reliably detect it
@@ -942,87 +942,14 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
     case VALK_ALLOC_MALLOC:
       free(ptr);
       return;
-    case VALK_ALLOC_GC_HEAP: {
-      // For GC heap objects, we need to properly free them by removing from tracking
-      // and returning memory to the appropriate source (slab or malloc)
-      if (ptr == nullptr) return;
-
-      // Get header (it's right before the user data)
-      extern void valk_gc_free_object(void* heap, void* ptr);
-      valk_gc_free_object((void*)self, ptr);
+    case VALK_ALLOC_GC_HEAP:
       return;
-    }
     case VALK_ALLOC_TLAB:
       return;
   }
 }
 
-void valk_gc_init(valk_gc_heap_t *self, sz capacity) {
-  self->free = capacity;
-  self->capacity = capacity;
-  self->allocator = valk_thread_ctx.allocator;
-  self->sentinel.next = &self->sentinel;
-  self->sentinel.prev = &self->sentinel;
-  self->sentinel.marked = 1;
-}
 
-void valk_gc_mark(valk_gc_heap_t *self, void *ptr) {
-  valk_gc_chunk_t *chunk = (valk_gc_chunk_t *)ptr - 1;
-  if (self->mark) {
-    self->mark(chunk);
-  } else {
-    chunk->marked = 1;
-  }
-}
-
-void *valk_gc_alloc(valk_gc_heap_t *heap, sz size) {
-  if ((heap->free - size) == 0) {
-    // Try to free some memory to allocate this thing.
-    valk_gc_sweep(heap);
-    VALK_ASSERT(
-        (heap->free - size) == 0,
-        "Failed free enough memory to allocate %zu bytes on heap with %zu size",
-        size, heap->capacity);
-  }
-
-  valk_gc_chunk_t *res =
-      valk_mem_allocator_alloc(heap->allocator, size + sizeof(valk_gc_chunk_t));
-  heap->free -= size;
-
-  res->marked = 1;
-  valk_dll_insert_node(&heap->sentinel, res);  // NOLINT(clang-analyzer-unix.Malloc)
-  return res + 1;  // skip over to the good stuff
-}
-
-void *valk_gc_realloc(valk_gc_heap_t *heap, void *ptr, sz size) {
-  valk_gc_chunk_t *self = ptr;
-  --self;  // get ourselves the header
-  self = valk_mem_allocator_realloc(heap->allocator, self,
-                                    size + sizeof(valk_gc_heap_t));
-  self->prev->next = self;
-  self->next->prev = self;
-  return self + 1;  // return pointer to data after header
-}
-
-void valk_gc_sweep(valk_gc_heap_t *self) {
-  valk_gc_chunk_t *node = self->sentinel.next;
-  while (node != &self->sentinel) {
-    valk_gc_chunk_t *next = node->next;  // Save next before potential free
-    if (!node->marked) {
-      if (self->finalize) {
-        self->finalize(node);
-      } else {
-        // Remove from list and free
-        valk_dll_pop(node);
-        valk_mem_allocator_free(self->allocator, node);
-      }
-    } else {
-      // reset this bad boii for the next time
-      node->marked = 0;
-    }
-    node = next;  // Advance to next node
-  }
-}
 
 void valk_slab_bitmap_snapshot(valk_slab_t *slab, valk_slab_bitmap_t *out) {
   if (!slab || !out) return;

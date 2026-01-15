@@ -24,6 +24,33 @@
     VALK_RAISE(__msg, ##__VA_ARGS__);   \
   }
 
+#define VALK_OOM_ASSERT(__ptr) \
+  VALK_ASSERT((__ptr) != nullptr, "Out of memory")
+
+// Buffer write macros for JSON/text encoding.
+// These wrap snprintf with buffer overflow checks.
+//
+// Usage:
+//   char *p = buf, *end = buf + size;
+//   VALK_BUF_PRINTF(p, end, buf_size, "{\"key\":%d}", value);
+//   return p - buf;
+//
+// On buffer overflow, returns the specified overflow_ret value.
+// NOTE: Wrap calls with LCOV_EXCL_BR_START/STOP to exclude overflow guards.
+
+#define VALK_BUF_PRINTF(__p, __end, __overflow_ret, ...)                      \
+  do {                                                                        \
+    int __n = snprintf((__p), (__end) - (__p), __VA_ARGS__);                  \
+    if (__n < 0 || (__p) + __n >= (__end)) return (__overflow_ret);           \
+    (__p) += __n;                                                             \
+  } while (0)
+
+#define VALK_BUF_CHECK(__p, __end, __n, __overflow_ret)                       \
+  do {                                                                        \
+    if ((__n) < 0 || (__p) + (__n) >= (__end)) return (__overflow_ret);       \
+    (__p) += (__n);                                                           \
+  } while (0)
+
 typedef enum {
   VALK_ERR_SUCCESS,
   VALK_ERR_SSL_INIT,

@@ -394,6 +394,151 @@ void test_loop_metrics_cumulative(VALK_TEST_ARGS()) {
 }
 
 //-----------------------------------------------------------------------------
+// Test: Event Loop Metrics V2 Factory
+//-----------------------------------------------------------------------------
+
+#include "event_loop_metrics.h"
+
+void test_event_loop_metrics_v2_init(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_event_loop_metrics_v2_t m;
+  bool ok = valk_event_loop_metrics_v2_init(&m, "test_loop");
+
+  VALK_TEST_ASSERT(ok == true, "Init should succeed");
+  VALK_TEST_ASSERT(m.loop_name != nullptr, "Loop name should be set");
+  VALK_TEST_ASSERT(strcmp(m.loop_name, "test_loop") == 0, "Loop name should match");
+  VALK_TEST_ASSERT(m.iterations != nullptr, "Iterations counter should be created");
+  VALK_TEST_ASSERT(m.events != nullptr, "Events counter should be created");
+  VALK_TEST_ASSERT(m.events_waiting != nullptr, "Events waiting gauge should be created");
+  VALK_TEST_ASSERT(m.idle_time_us != nullptr, "Idle time gauge should be created");
+  VALK_TEST_ASSERT(m.handles != nullptr, "Handles gauge should be created");
+
+  VALK_TEST_ASSERT(m.iterations->evictable == false, "Iterations should be persistent");
+  VALK_TEST_ASSERT(m.events->evictable == false, "Events should be persistent");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_v2_null_safety(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  bool ok = valk_event_loop_metrics_v2_init(nullptr, "test");
+  VALK_TEST_ASSERT(ok == false, "Init with nullptr metrics should fail");
+
+  valk_event_loop_metrics_v2_t m;
+  ok = valk_event_loop_metrics_v2_init(&m, nullptr);
+  VALK_TEST_ASSERT(ok == false, "Init with nullptr name should fail");
+
+  valk_event_loop_metrics_v2_update(nullptr, nullptr);
+  valk_event_loop_metrics_v2_set_handles(nullptr, 10);
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_v2_update(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  uv_loop_t loop;
+  uv_loop_init(&loop);
+  uv_loop_configure(&loop, UV_METRICS_IDLE_TIME);
+
+  valk_event_loop_metrics_v2_t m;
+  valk_event_loop_metrics_v2_init(&m, "update_test");
+
+  uv_timer_t timer;
+  timer_context_t ctx = {.timer = &timer, .fire_count = 0};
+  timer.data = &ctx;
+  uv_timer_init(&loop, &timer);
+  uv_timer_start(&timer, timer_stop_cb, 1, 0);
+
+  uv_run(&loop, UV_RUN_DEFAULT);
+
+  valk_event_loop_metrics_v2_update(&m, &loop);
+
+  VALK_TEST_ASSERT(atomic_load(&m.iterations->value) >= 1,
+                   "Iterations should be at least 1");
+
+  uv_timer_start(&timer, timer_stop_cb, 1, 0);
+  uv_run(&loop, UV_RUN_DEFAULT);
+  valk_event_loop_metrics_v2_update(&m, &loop);
+
+  VALK_TEST_ASSERT(atomic_load(&m.iterations->value) >= 2,
+                   "Iterations should have increased");
+
+  uv_close((uv_handle_t*)&timer, nullptr);
+  uv_run(&loop, UV_RUN_DEFAULT);
+  uv_loop_close(&loop);
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_v2_set_handles(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_event_loop_metrics_v2_t m;
+  valk_event_loop_metrics_v2_init(&m, "handles_test");
+
+  valk_event_loop_metrics_v2_set_handles(&m, 42);
+  VALK_TEST_ASSERT(atomic_load(&m.handles->value) == 42, "Handles should be 42");
+
+  valk_event_loop_metrics_v2_set_handles(&m, 100);
+  VALK_TEST_ASSERT(atomic_load(&m.handles->value) == 100, "Handles should be 100");
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_v2_update_null_loop(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_event_loop_metrics_v2_t m;
+  valk_event_loop_metrics_v2_init(&m, "null_loop_test");
+
+  valk_event_loop_metrics_v2_update(&m, nullptr);
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+void test_event_loop_metrics_v2_zero_delta(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  uv_loop_t loop;
+  uv_loop_init(&loop);
+  uv_loop_configure(&loop, UV_METRICS_IDLE_TIME);
+
+  valk_event_loop_metrics_v2_t m;
+  valk_event_loop_metrics_v2_init(&m, "zero_delta_test");
+
+  valk_event_loop_metrics_v2_update(&m, &loop);
+  u64 iters_before = atomic_load(&m.iterations->value);
+
+  valk_event_loop_metrics_v2_update(&m, &loop);
+  u64 iters_after = atomic_load(&m.iterations->value);
+
+  VALK_TEST_ASSERT(iters_after >= iters_before, "Iterations should not decrease");
+
+  uv_loop_close(&loop);
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+//-----------------------------------------------------------------------------
 // Main
 //-----------------------------------------------------------------------------
 
@@ -435,6 +580,20 @@ int main(int argc, const char** argv) {
   // Cumulative tests
   valk_testsuite_add_test(suite, "test_loop_metrics_cumulative",
                           test_loop_metrics_cumulative);
+
+  // Event Loop Metrics V2 Factory tests
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_v2_init",
+                          test_event_loop_metrics_v2_init);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_v2_null_safety",
+                          test_event_loop_metrics_v2_null_safety);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_v2_update",
+                          test_event_loop_metrics_v2_update);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_v2_set_handles",
+                          test_event_loop_metrics_v2_set_handles);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_v2_update_null_loop",
+                          test_event_loop_metrics_v2_update_null_loop);
+  valk_testsuite_add_test(suite, "test_event_loop_metrics_v2_zero_delta",
+                          test_event_loop_metrics_v2_zero_delta);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

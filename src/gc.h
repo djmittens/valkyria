@@ -220,13 +220,6 @@ bool valk_repl_get_last_eval_delta(valk_repl_eval_delta_t* out);
 // Update REPL eval deltas (called from repl.c after each eval)
 void valk_repl_set_eval_delta(i64 heap, i64 scratch, i64 lval, i64 lenv);
 
-// Explicitly free a single GC heap object (for cleanup when switching allocators)
-void valk_gc_free_object(void* heap, void* ptr);
-
-// Arena-based GC (informational only, for backward compatibility)
-sz valk_gc_collect_arena(valk_lenv_t* root_env, valk_mem_arena_t* arena);
-bool valk_gc_should_collect_arena(valk_mem_arena_t* arena);
-
 // ============================================================================
 // Forwarding Pointer Helpers (for scratch evacuation)
 // ============================================================================

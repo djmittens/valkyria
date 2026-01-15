@@ -421,42 +421,7 @@ int valk_http2_send_response(nghttp2_session *session, int stream_id,
   return nghttp2_submit_response2(session, stream_id, headers, header_count, &data_prd);
 }
 
-valk_lval_t* valk_http2_build_request_qexpr(valk_http2_server_request_t *req) {
-  valk_lval_t *qexpr;
 
-  VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
-    valk_lval_t *headers_list = valk_lval_nil();
-    for (u64 i = req->headers.count; i > 0; i--) {
-      valk_lval_t *pair_items[2] = {
-        valk_lval_str((char*)req->headers.items[i-1].name),
-        valk_lval_str((char*)req->headers.items[i-1].value)
-      };
-      valk_lval_t *pair = valk_lval_qlist(pair_items, 2);
-      headers_list = valk_lval_qcons(pair, headers_list);
-    }
-
-    valk_lval_t *items[8];
-    u64 item_count = 0;
-
-    items[item_count++] = valk_lval_sym(":method");
-    items[item_count++] = valk_lval_str(req->method ? req->method : "GET");
-
-    items[item_count++] = valk_lval_sym(":path");
-    items[item_count++] = valk_lval_str(req->path ? req->path : "/");
-
-    if (req->authority) {
-      items[item_count++] = valk_lval_sym(":authority");
-      items[item_count++] = valk_lval_str(req->authority);
-    }
-
-    items[item_count++] = valk_lval_sym(":headers");
-    items[item_count++] = headers_list;
-
-    qexpr = valk_lval_qlist(items, item_count);
-  }
-
-  return qexpr;
-}
 
 int valk_http2_server_on_frame_send_callback(nghttp2_session *session,
                                              const nghttp2_frame *frame,

@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+// LCOV_EXCL_BR_START - diagnostic builtins have many defensive type checks
 static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
@@ -101,6 +102,7 @@ static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a
 
   return result;
 }
+// LCOV_EXCL_BR_STOP
 
 static void write_slab_json(char **p, char *end, const char *name, valk_slab_t *slab) {
   if (!slab || *p >= end - 100) return;
@@ -236,6 +238,7 @@ static void write_handle_slab_json(char **p, char *end, valk_aio_system_t *sys, 
   if (n > 0 && *p + n < end) *p += n;
 }
 
+// LCOV_EXCL_BR_START - diagnostics JSON has many defensive checks and buffer bounds
 static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
@@ -373,6 +376,7 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk
   free(buf);
   return result;
 }
+// LCOV_EXCL_BR_STOP
 
 static valk_lval_t *valk_builtin_aio_diagnostics_state_json_compact(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);

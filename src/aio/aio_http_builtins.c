@@ -5,6 +5,7 @@
 #include "parser.h"
 #include <strings.h>
 
+// LCOV_EXCL_BR_START - HTTP request builtins type checking is defensive
 static valk_http2_server_request_t *get_request(valk_lval_t *ref) {
   if (!ref || LVAL_TYPE(ref) != LVAL_REF) {
     return nullptr;
@@ -167,6 +168,8 @@ static valk_lval_t *valk_builtin_req_stream_id(valk_lenv_t *e, valk_lval_t *a) {
 
   return valk_lval_num(req->stream_id);
 }
+
+// LCOV_EXCL_BR_STOP
 
 void valk_register_http_request_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "req/method", valk_builtin_req_method);

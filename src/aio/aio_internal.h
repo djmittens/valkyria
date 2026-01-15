@@ -384,12 +384,8 @@ typedef struct valk_interval_timer {
   valk_lval_t *callback;
   u64 interval_id;
   bool stopped;
-  u32 magic;
   valk_slab_t *slab;
 } valk_interval_timer_t;
-
-#define VALK_INTERVAL_TIMER_MAGIC 0xDEADBEEF
-#define VALK_INTERVAL_TIMER_FREED 0xFEEDFACE
 
 typedef struct {
   int count;

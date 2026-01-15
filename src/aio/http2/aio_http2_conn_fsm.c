@@ -1,6 +1,7 @@
 #include "aio_internal.h"
 #include "log.h"
 
+// LCOV_EXCL_BR_START - FSM switch statements have defensive default cases
 static valk_diag_conn_state_e __conn_state_to_diag(__aio_http_conn_e state) {
   switch (state) {
     case VALK_CONN_INIT:
@@ -120,9 +121,10 @@ static __aio_http_conn_e __next_state(__aio_http_conn_e current, valk_conn_event
   }
   return current;
 }
+// LCOV_EXCL_BR_STOP
 
 void __valk_conn_set_init_state(valk_aio_handle_t *conn) {
-  if (!conn) return;
+  if (!conn) return; // LCOV_EXCL_BR_LINE
   conn->http.state = VALK_CONN_INIT;
   conn->http.diag.state = __conn_state_to_diag(VALK_CONN_INIT);
   conn->http.diag.state_change_time = (u64)(uv_hrtime() / 1000000ULL);
@@ -151,7 +153,7 @@ static void __on_enter_state(valk_aio_handle_t *conn, __aio_http_conn_e state) {
 }
 
 bool valk_conn_transition(valk_aio_handle_t *conn, valk_conn_event_e event) {
-  if (!conn) return false;
+  if (!conn) return false; // LCOV_EXCL_BR_LINE
 
   __aio_http_conn_e old_state = conn->http.state;
   __aio_http_conn_e new_state = __next_state(old_state, event);

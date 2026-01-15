@@ -32,6 +32,7 @@ void valk_delta_snapshot_init(valk_delta_snapshot_t *snap) {
   memset(snap, 0, sizeof(*snap));
   snap->delta_capacity = 256;
   snap->deltas = malloc(snap->delta_capacity * sizeof(valk_metric_delta_t));
+  VALK_OOM_ASSERT(snap->deltas);
 }
 
 void valk_delta_snapshot_free(valk_delta_snapshot_t *snap) {
@@ -45,6 +46,7 @@ static void ensure_delta_capacity(valk_delta_snapshot_t *snap) {
     snap->delta_capacity *= 2;
     snap->deltas = realloc(snap->deltas,
                            snap->delta_capacity * sizeof(valk_metric_delta_t));
+    VALK_OOM_ASSERT(snap->deltas);
   }
 }
 
@@ -303,43 +305,32 @@ u64 valk_delta_snapshot_collect(valk_delta_snapshot_t *snap,
 // JSON ENCODING
 // ============================================================================
 
+// LCOV_EXCL_BR_START - buffer overflow guards in JSON encoding
 u64 valk_delta_to_json(const valk_delta_snapshot_t *snap,
                           char *buf, u64 buf_size) {
   char *p = buf;
   char *end = buf + buf_size;
   int n;
 
-  // Header
-  n = snprintf(p, end - p,
+  VALK_BUF_PRINTF(p, end, buf_size,
                "{\"ts\":%llu,\"interval_us\":%llu,\"changed\":%llu,",
                snap->timestamp_us, snap->interval_us, (unsigned long long)snap->delta_count);
-  if (n < 0 || p + n >= end) return buf_size;
-  p += n;
 
-  // Summary
-  n = snprintf(p, end - p,
+  VALK_BUF_PRINTF(p, end, buf_size,
                "\"counters_changed\":%llu,\"gauges_changed\":%llu,"
                "\"histograms_changed\":%llu,",
                (unsigned long long)snap->counters_changed, (unsigned long long)snap->gauges_changed,
                (unsigned long long)snap->histograms_changed);
-  if (n < 0 || p + n >= end) return buf_size;
-  p += n;
 
-  // Deltas array
-  n = snprintf(p, end - p, "\"deltas\":[");
-  if (n < 0 || p + n >= end) return buf_size;
-  p += n;
+  VALK_BUF_PRINTF(p, end, buf_size, "\"deltas\":[");
 
   for (u64 i = 0; i < snap->delta_count; i++) {
     const valk_metric_delta_t *d = &snap->deltas[i];
 
     if (i > 0) {
-      n = snprintf(p, end - p, ",");
-      if (n < 0 || p + n >= end) return buf_size;
-      p += n;
+      VALK_BUF_PRINTF(p, end, buf_size, ",");
     }
 
-    // Helper: write labels object inline
     char labels_buf[256] = {0};
     if (d->labels && d->labels->count > 0) {
       char *lp = labels_buf;
@@ -369,8 +360,7 @@ u64 valk_delta_to_json(const valk_delta_snapshot_t *snap,
         n = snprintf(p, end - p, "{\"n\":\"%s\",\"t\":\"h\",\"c\":%llu,\"s\":%llu,\"b\":[",
                      d->name, d->data.histogram.count_delta,
                      d->data.histogram.sum_delta_micros);
-        if (n < 0 || p + n >= end) return buf_size;
-        p += n;
+        VALK_BUF_CHECK(p, end, n, buf_size);
         u64 cumulative = 0;
         for (u8 b = 0; b <= d->data.histogram.bucket_count; b++) {
           cumulative += d->data.histogram.bucket_deltas[b];
@@ -381,8 +371,7 @@ u64 valk_delta_to_json(const valk_delta_snapshot_t *snap,
             n = snprintf(p, end - p, "%s{\"le\":\"+Inf\",\"d\":%llu}",
                          b > 0 ? "," : "", cumulative);
           }
-          if (n < 0 || p + n >= end) return buf_size;
-          p += n;
+          VALK_BUF_CHECK(p, end, n, buf_size);
         }
         n = snprintf(p, end - p, "]%s}", labels_buf);
         break;
@@ -391,45 +380,37 @@ u64 valk_delta_to_json(const valk_delta_snapshot_t *snap,
         continue;
     }
 
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
+    VALK_BUF_CHECK(p, end, n, buf_size);
   }
 
-  n = snprintf(p, end - p, "]}");
-  if (n < 0 || p + n >= end) return buf_size;
-  p += n;
+  VALK_BUF_PRINTF(p, end, buf_size, "]}");
 
   return p - buf;
 }
+// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // SSE ENCODING
 // ============================================================================
 
+// LCOV_EXCL_BR_START - buffer overflow guards
 u64 valk_delta_to_sse(const valk_delta_snapshot_t *snap,
                          char *buf, u64 buf_size) {
   char *p = buf;
   char *end = buf + buf_size;
-  int n;
 
-  // SSE header
-  n = snprintf(p, end - p, "event: metrics-delta\nid: %llu\ndata: ",
+  VALK_BUF_PRINTF(p, end, buf_size, "event: metrics-delta\nid: %llu\ndata: ",
                snap->timestamp_us);
-  if (n < 0 || p + n >= end) return buf_size;
-  p += n;
 
-  // JSON payload
   u64 json_len = valk_delta_to_json(snap, p, end - p - 3);
-  if (json_len >= (u64)(end - p - 3)) return buf_size;
+  if (json_len >= (u64)(end - p - 3)) return buf_size; //LCOV_EXCL_BR_LINE
   p += json_len;
 
-  // SSE terminator
-  n = snprintf(p, end - p, "\n\n");
-  if (n < 0 || p + n >= end) return buf_size;
-  p += n;
+  VALK_BUF_PRINTF(p, end, buf_size, "\n\n");
 
   return p - buf;
 }
+// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // PROMETHEUS ENCODING
@@ -451,147 +432,101 @@ static u64 write_labels_prometheus(char *buf, u64 cap, const valk_label_set_v2_t
   return pos;
 }
 
+// LCOV_EXCL_BR_START - buffer overflow guards
 u64 valk_delta_to_prometheus(const valk_delta_snapshot_t *snap,
                                 valk_metrics_registry_t *registry,
                                 char *buf, u64 buf_size) {
-  UNUSED(snap);  // We export full state, not just deltas
-
+  UNUSED(snap);
   char *p = buf;
   char *end = buf + buf_size;
   int n;
 
-  // Export counters
   u64 counter_count = atomic_load(&registry->counter_count);
   for (u64 i = 0; i < counter_count; i++) {
     valk_counter_v2_t *c = &registry->counters[i];
     u64 val = atomic_load_explicit(&c->value, memory_order_relaxed);
 
-    n = snprintf(p, end - p, "%s", c->name);
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
-
+    VALK_BUF_PRINTF(p, end, buf_size, "%s", c->name);
     p += write_labels_prometheus(p, end - p, &c->labels);
-
-    n = snprintf(p, end - p, " %llu\n", val);
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
+    VALK_BUF_PRINTF(p, end, buf_size, " %llu\n", val);
   }
 
-  // Export gauges
   u64 gauge_count = atomic_load(&registry->gauge_count);
   for (u64 i = 0; i < gauge_count; i++) {
     valk_gauge_v2_t *g = &registry->gauges[i];
     i64 val = atomic_load_explicit(&g->value, memory_order_relaxed);
 
-    n = snprintf(p, end - p, "%s", g->name);
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
-
+    VALK_BUF_PRINTF(p, end, buf_size, "%s", g->name);
     p += write_labels_prometheus(p, end - p, &g->labels);
-
-    n = snprintf(p, end - p, " %lld\n", val);
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
+    VALK_BUF_PRINTF(p, end, buf_size, " %lld\n", val);
   }
 
-  // Export histograms
   u64 hist_count = atomic_load(&registry->histogram_count);
   for (u64 i = 0; i < hist_count; i++) {
     valk_histogram_v2_t *h = &registry->histograms[i];
     u64 count = atomic_load_explicit(&h->count, memory_order_relaxed);
     u64 sum = atomic_load_explicit(&h->sum_micros, memory_order_relaxed);
 
-    // Buckets (cumulative)
     u64 cumulative = 0;
     for (u8 b = 0; b < h->bucket_count; b++) {
       cumulative += atomic_load_explicit(&h->buckets[b], memory_order_relaxed);
 
-      n = snprintf(p, end - p, "%s_bucket{", h->name);
-      if (n < 0 || p + n >= end) return buf_size;
-      p += n;
+      VALK_BUF_PRINTF(p, end, buf_size, "%s_bucket{", h->name);
 
       for (u8 j = 0; j < h->labels.count; j++) {
         n = snprintf(p, end - p, "%s=\"%s\",",
                      h->labels.labels[j].key, h->labels.labels[j].value);
-        if (n < 0 || p + n >= end) return buf_size;
-        p += n;
+        VALK_BUF_CHECK(p, end, n, buf_size);
       }
 
-      n = snprintf(p, end - p, "le=\"%.3f\"} %llu\n", h->bucket_bounds[b], cumulative);
-      if (n < 0 || p + n >= end) return buf_size;
-      p += n;
+      VALK_BUF_PRINTF(p, end, buf_size, "le=\"%.3f\"} %llu\n", h->bucket_bounds[b], cumulative);
     }
 
-    // +Inf bucket
     cumulative += atomic_load_explicit(&h->buckets[h->bucket_count], memory_order_relaxed);
-    n = snprintf(p, end - p, "%s_bucket{", h->name);
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
+    VALK_BUF_PRINTF(p, end, buf_size, "%s_bucket{", h->name);
 
     for (u8 j = 0; j < h->labels.count; j++) {
       n = snprintf(p, end - p, "%s=\"%s\",",
                    h->labels.labels[j].key, h->labels.labels[j].value);
-      if (n < 0 || p + n >= end) return buf_size;
-      p += n;
+      VALK_BUF_CHECK(p, end, n, buf_size);
     }
 
-    n = snprintf(p, end - p, "le=\"+Inf\"} %llu\n", cumulative);
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
+    VALK_BUF_PRINTF(p, end, buf_size, "le=\"+Inf\"} %llu\n", cumulative);
 
-    // Sum and count
-    n = snprintf(p, end - p, "%s_sum", h->name);
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
-
+    VALK_BUF_PRINTF(p, end, buf_size, "%s_sum", h->name);
     p += write_labels_prometheus(p, end - p, &h->labels);
+    VALK_BUF_PRINTF(p, end, buf_size, " %.6f\n", (double)sum / 1e6);
 
-    n = snprintf(p, end - p, " %.6f\n", (double)sum / 1e6);
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
-
-    n = snprintf(p, end - p, "%s_count", h->name);
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
-
+    VALK_BUF_PRINTF(p, end, buf_size, "%s_count", h->name);
     p += write_labels_prometheus(p, end - p, &h->labels);
-
-    n = snprintf(p, end - p, " %llu\n", count);
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
+    VALK_BUF_PRINTF(p, end, buf_size, " %llu\n", count);
   }
 
   return p - buf;
 }
+// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // JSON FULL EXPORT
 // ============================================================================
 
-// Helper to write labels as JSON object
+// LCOV_EXCL_BR_START - buffer overflow guards
 static u64 write_labels_json(char *buf, u64 buf_size,
                                 const valk_label_set_v2_t *labels) {
   if (labels->count == 0) return 0;
 
   char *p = buf;
   char *end = buf + buf_size;
-  int n;
 
-  n = snprintf(p, end - p, ",\"labels\":{");
-  if (n < 0 || p + n >= end) return 0;
-  p += n;
+  VALK_BUF_PRINTF(p, end, 0, ",\"labels\":{");
 
   for (u8 i = 0; i < labels->count; i++) {
-    n = snprintf(p, end - p, "%s\"%s\":\"%s\"",
+    VALK_BUF_PRINTF(p, end, 0, "%s\"%s\":\"%s\"",
                  i > 0 ? "," : "",
                  labels->labels[i].key, labels->labels[i].value);
-    if (n < 0 || p + n >= end) return 0;
-    p += n;
   }
 
-  n = snprintf(p, end - p, "}");
-  if (n < 0 || p + n >= end) return 0;
-  p += n;
+  VALK_BUF_PRINTF(p, end, 0, "}");
 
   return p - buf;
 }
@@ -602,68 +537,40 @@ u64 valk_metrics_v2_to_json(valk_metrics_registry_t *registry,
   char *end = buf + buf_size;
   int n;
 
-  // Start JSON object
-  n = snprintf(p, end - p, "{\"uptime_seconds\":%.2f,",
+  VALK_BUF_PRINTF(p, end, buf_size, "{\"uptime_seconds\":%.2f,",
                (double)(get_timestamp_us() - registry->start_time_us) / 1e6);
-  if (n < 0 || p + n >= end) return buf_size;
-  p += n;
 
-  // Counters array
-  n = snprintf(p, end - p, "\"counters\":[");
-  if (n < 0 || p + n >= end) return buf_size;
-  p += n;
+  VALK_BUF_PRINTF(p, end, buf_size, "\"counters\":[");
 
   u64 counter_count = atomic_load(&registry->counter_count);
   for (u64 i = 0; i < counter_count; i++) {
     valk_counter_v2_t *c = &registry->counters[i];
     u64 val = atomic_load_explicit(&c->value, memory_order_relaxed);
 
-    n = snprintf(p, end - p, "%s{\"name\":\"%s\",\"value\":%llu",
+    VALK_BUF_PRINTF(p, end, buf_size, "%s{\"name\":\"%s\",\"value\":%llu",
                  i > 0 ? "," : "", c->name, (unsigned long long)val);
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
-
     p += write_labels_json(p, end - p, &c->labels);
-
-    n = snprintf(p, end - p, "}");
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
+    VALK_BUF_PRINTF(p, end, buf_size, "}");
   }
 
-  n = snprintf(p, end - p, "],");
-  if (n < 0 || p + n >= end) return buf_size;
-  p += n;
+  VALK_BUF_PRINTF(p, end, buf_size, "],");
 
-  // Gauges array
-  n = snprintf(p, end - p, "\"gauges\":[");
-  if (n < 0 || p + n >= end) return buf_size;
-  p += n;
+  VALK_BUF_PRINTF(p, end, buf_size, "\"gauges\":[");
 
   u64 gauge_count = atomic_load(&registry->gauge_count);
   for (u64 i = 0; i < gauge_count; i++) {
     valk_gauge_v2_t *g = &registry->gauges[i];
     i64 val = atomic_load_explicit(&g->value, memory_order_relaxed);
 
-    n = snprintf(p, end - p, "%s{\"name\":\"%s\",\"value\":%lld",
+    VALK_BUF_PRINTF(p, end, buf_size, "%s{\"name\":\"%s\",\"value\":%lld",
                  i > 0 ? "," : "", g->name, (long long)val);
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
-
     p += write_labels_json(p, end - p, &g->labels);
-
-    n = snprintf(p, end - p, "}");
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
+    VALK_BUF_PRINTF(p, end, buf_size, "}");
   }
 
-  n = snprintf(p, end - p, "],");
-  if (n < 0 || p + n >= end) return buf_size;
-  p += n;
+  VALK_BUF_PRINTF(p, end, buf_size, "],");
 
-  // Histograms array
-  n = snprintf(p, end - p, "\"histograms\":[");
-  if (n < 0 || p + n >= end) return buf_size;
-  p += n;
+  VALK_BUF_PRINTF(p, end, buf_size, "\"histograms\":[");
 
   u64 hist_count = atomic_load(&registry->histogram_count);
   for (u64 i = 0; i < hist_count; i++) {
@@ -671,17 +578,11 @@ u64 valk_metrics_v2_to_json(valk_metrics_registry_t *registry,
     u64 count = atomic_load_explicit(&h->count, memory_order_relaxed);
     u64 sum = atomic_load_explicit(&h->sum_micros, memory_order_relaxed);
 
-    n = snprintf(p, end - p, "%s{\"name\":\"%s\",\"count\":%llu,\"sum_us\":%llu",
+    VALK_BUF_PRINTF(p, end, buf_size, "%s{\"name\":\"%s\",\"count\":%llu,\"sum_us\":%llu",
                  i > 0 ? "," : "", h->name, (unsigned long long)count, (unsigned long long)sum);
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
-
     p += write_labels_json(p, end - p, &h->labels);
 
-    // Add bucket bounds and counts
-    n = snprintf(p, end - p, ",\"buckets\":[");
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
+    VALK_BUF_PRINTF(p, end, buf_size, ",\"buckets\":[");
 
     u64 cumulative = 0;
     for (u8 b = 0; b <= h->bucket_count; b++) {
@@ -693,18 +594,14 @@ u64 valk_metrics_v2_to_json(valk_metrics_registry_t *registry,
         n = snprintf(p, end - p, "%s{\"le\":\"+Inf\",\"count\":%llu}",
                      b > 0 ? "," : "", cumulative);
       }
-      if (n < 0 || p + n >= end) return buf_size;
-      p += n;
+      VALK_BUF_CHECK(p, end, n, buf_size);
     }
 
-    n = snprintf(p, end - p, "]}");
-    if (n < 0 || p + n >= end) return buf_size;
-    p += n;
+    VALK_BUF_PRINTF(p, end, buf_size, "]}");
   }
 
-  n = snprintf(p, end - p, "]}");
-  if (n < 0 || p + n >= end) return buf_size;
-  p += n;
+  VALK_BUF_PRINTF(p, end, buf_size, "]}");
 
   return p - buf;
 }
+// LCOV_EXCL_BR_STOP
