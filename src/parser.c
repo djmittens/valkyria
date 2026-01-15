@@ -442,24 +442,19 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
     valk_lval_free(valk_lval_pop(func->fun.formals, 0));
     valk_lval_t *sym = valk_lval_pop(func->fun.formals, 0);
     valk_lval_t *val = valk_lval_qexpr_empty();
-    valk_lenv_put(env, sym, val);
+    valk_lenv_put(func->fun.env, sym, val);
     valk_lval_free(sym);
     valk_lval_free(val);
   }
 
   // If everything is bound we evalutate
   if (func->fun.formals->expr.count == 0) {
-    // Copy the environment to avoid mutating shared lambda state
-    // This prevents race conditions when the same lambda is called from
-    // multiple contexts (e.g., timers, SSE events, multiple clients)
-    valk_lenv_t *eval_env = valk_lenv_copy(func->fun.env);
-    // Set parent to calling environment for dynamic scope resolution
-    // This allows functions like 'def' to properly walk up to the current root
-    eval_env->parent = env;
+    // Set parent to caller's env (dynamic scoping - allows prelude functions
+    // like 'select' to access variables from the calling scope)
+    func->fun.env->parent = env;
     res = valk_builtin_eval(
-        eval_env,
+        func->fun.env,
         valk_lval_add(valk_lval_sexpr_empty(), valk_lval_copy(func->fun.body)));
-    valk_lenv_free(eval_env);
     valk_lval_free(func);
   } else {
     res = func;
@@ -814,7 +809,8 @@ void valk_lenv_free(valk_lenv_t *env) {
   }
   free(env->vals);
   free(env->symbols);
-  // Don't free parent - it's a shared reference, not owned
+  // Don't free parent - it's either global (long-lived) or caller's scope
+  // which we don't own (set dynamically at call time)
   free(env);
 }
 
@@ -823,8 +819,8 @@ valk_lenv_t *valk_lenv_copy(valk_lenv_t *env) {
     return NULL;
   }
   valk_lenv_t *res = malloc(sizeof(valk_lenv_t));
-  // Shallow copy of parent pointer - environments form a shared chain
-  // up to the global scope. Only local bindings are deep copied.
+  // Shallow copy of parent - with dynamic scoping, parent is set at call time,
+  // so lambdas start with parent=NULL and it doesn't matter for copying
   res->parent = env->parent;
   res->count = env->count;
   res->symbols = malloc(sizeof(char *) * env->count);
@@ -1085,6 +1081,7 @@ static valk_lval_t *valk_builtin_put(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_COUNT_EQ(a, syms, (a->expr.count - 1));
 
   for (size_t i = 0; i < syms->expr.count; i++) {
+    // = puts into local scope (unlike def which goes to global)
     valk_lenv_put(e, syms->expr.cell[i], a->expr.cell[i + 1]);
   }
 
@@ -1111,19 +1108,9 @@ static valk_lval_t *valk_builtin_lambda(valk_lenv_t *e, valk_lval_t *a) {
   body = valk_lval_pop(a, 0);
   valk_lval_free(a);
 
-  // Create lambda and capture the lexical environment at definition time
-  valk_lval_t *lambda = valk_lval_lambda(formals, body);
-  // For root/global env (no parent), reference it directly to allow
-  // forward references and mutual recursion. For nested scopes, copy
-  // to capture the local bindings.
-  if (e->parent == NULL) {
-    // Root/global env - reference directly
-    lambda->fun.env->parent = e;
-  } else {
-    // Nested scope - copy to capture local bindings
-    lambda->fun.env->parent = valk_lenv_copy(e);
-  }
-  return lambda;
+  // Create lambda with no captured scope - parent will be set at call time
+  // (dynamic scoping allows prelude functions to access caller's variables)
+  return valk_lval_lambda(formals, body);
 }
 
 static valk_lval_t *valk_builtin_penv(valk_lenv_t *e, valk_lval_t *a) {
