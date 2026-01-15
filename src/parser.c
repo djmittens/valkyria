@@ -245,7 +245,7 @@ valk_lval_t *valk_lval_copy(valk_lval_t *lval) {
     break;
   case LVAL_QEXPR:
   case LVAL_SEXPR:
-    res->expr.cell = malloc(sizeof(res->expr.cell) * lval->expr.count);
+    res->expr.cell = malloc(sizeof(valk_lval_t *) * lval->expr.count);
     res->expr.count = lval->expr.count;
     for (int i = 0; i < lval->expr.count; ++i) {
       res->expr.cell[i] = valk_lval_copy(lval->expr.cell[i]);
@@ -310,7 +310,7 @@ int valk_lval_eq(valk_lval_t *x, valk_lval_t *y) {
   case LVAL_SYM:
   case LVAL_STR:
   case LVAL_ERR:
-    return (strcmp(x->str, y->str));
+    return (strcmp(x->str, y->str) == 0);
   case LVAL_FUN: {
     if (x->fun.builtin || y->fun.builtin) {
       return x->fun.builtin == y->fun.builtin;
@@ -449,10 +449,15 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
 
   // If everything is bound we evalutate
   if (func->fun.formals->expr.count == 0) {
-    func->fun.env->parent = env;
+    // Copy the environment to avoid mutating shared lambda state
+    // This prevents race conditions when the same lambda is called from
+    // multiple contexts (e.g., timers, SSE events, multiple clients)
+    valk_lenv_t *eval_env = valk_lenv_copy(func->fun.env);
+    eval_env->parent = env;
     res = valk_builtin_eval(
-        func->fun.env,
+        eval_env,
         valk_lval_add(valk_lval_sexpr_empty(), valk_lval_copy(func->fun.body)));
+    valk_lenv_free(eval_env);
     valk_lval_free(func);
   } else {
     res = func;
@@ -812,13 +817,13 @@ valk_lenv_t *valk_lenv_copy(valk_lenv_t *env) {
   if (env == NULL) {
     return NULL;
   }
-  valk_lenv_t *res = malloc(sizeof(valk_lval_t));
+  valk_lenv_t *res = malloc(sizeof(valk_lenv_t));
   // TODO(main): Man lotta copying, especially deep copying, in case things
   // change the problem with this ofcourse is that, globals cant be changed
   res->parent = env->parent;
   res->count = env->count;
-  res->symbols = malloc(sizeof(env->symbols) * env->count);
-  res->vals = malloc(sizeof(env->vals) * env->count);
+  res->symbols = malloc(sizeof(char *) * env->count);
+  res->vals = malloc(sizeof(valk_lval_t *) * env->count);
 
   for (size_t i = 0; i < env->count; i++) {
     res->symbols[i] = strdup(env->symbols[i]);
@@ -858,8 +863,8 @@ void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val) {
   // TODO(main): technically we should be able to do the ammortized arraylist
   // where we double the array on overflow, but i guess it doesnt matter for
   // now
-  env->symbols = realloc(env->symbols, sizeof(env->symbols) * (env->count + 1));
-  env->vals = realloc(env->vals, sizeof(env->vals) * (env->count + 1));
+  env->symbols = realloc(env->symbols, sizeof(char *) * (env->count + 1));
+  env->vals = realloc(env->vals, sizeof(valk_lval_t *) * (env->count + 1));
 
   env->symbols[env->count] = strndup(key->str, 200);
   env->vals[env->count] = valk_lval_copy(val);
@@ -937,9 +942,9 @@ static valk_lval_t *valk_builtin_cons(valk_lenv_t *e, valk_lval_t *a) {
   valk_lval_t *tail = valk_lval_pop(a, 0);
   // TODO(main): this should be implmented as push
   tail->expr.cell = realloc(tail->expr.cell,
-                            sizeof(tail->expr.cell) * (tail->expr.count + 1));
+                            sizeof(valk_lval_t *) * (tail->expr.count + 1));
   memmove(&tail->expr.cell[1], tail->expr.cell,
-          sizeof(tail->expr.cell) * tail->expr.count);
+          sizeof(valk_lval_t *) * tail->expr.count);
   tail->expr.cell[0] = head;
   tail->expr.count++;
   valk_lval_free(a);

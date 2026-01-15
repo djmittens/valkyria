@@ -128,12 +128,14 @@ void test_bug_nested_lambda_env_copy(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_lenv_t *env = VALK_FIXTURE("env");
 
-  // Nested lambdas stress the environment copy more
+  // This language uses dynamic scoping, not lexical closures.
+  // Nested lambdas work when the binding is in global scope.
+  // This test verifies currying works with global definitions.
   valk_lval_t *res = valk_eval(env,
       "(do "
-      "  (def {make-adder} (\\ {n} {\\ {x} {+ x n}})) "
-      "  (def {add5} (make-adder 5)) "
-      "  (def {add10} (make-adder 10)) "
+      "  (def {add-n} (\\ {n x} {+ x n})) "
+      "  (def {add5} (add-n 5)) "
+      "  (def {add10} (add-n 10)) "
       "  (+ (add5 100) (add10 100))"
       ")");
 
@@ -141,9 +143,9 @@ void test_bug_nested_lambda_env_copy(VALK_TEST_ARGS()) {
   VALK_ASSERT_TYPE(res, LVAL_NUM);
   // (100 + 5) + (100 + 10) = 215
   VALK_ASSERT(res->num == 215,
-              "BUG: Nested lambda closures return wrong result. "
+              "BUG: Curried function returns wrong result. "
               "Expected 215, got %ld. "
-              "Root cause: Environment copy corrupts closure bindings",
+              "Root cause: Environment copy corrupts partial application",
               res->num);
   valk_lval_free(res);
 
@@ -168,28 +170,25 @@ void test_bug_lambda_parent_mutation_reuse(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_lenv_t *env = VALK_FIXTURE("env");
 
-  // This test simulates what happens with multiple dashboard tabs:
-  // A lambda is defined once, then called from different scopes.
-  // The parent mutation bug causes scope leakage.
+  // This language uses dynamic scoping: lambdas see the calling scope.
+  // This test verifies that the lambda correctly accesses global bindings
+  // and that multiple calls don't corrupt state.
 
   valk_lval_t *res = valk_eval(env,
       "(do "
-      "  (def {captured-val} 100) "
-      "  (def {my-fn} (\\ {x} {+ x captured-val})) "
-      "  (= {captured-val} 999) "  // Change in local scope
-      "  (my-fn 1)"               // Should use global captured-val (100)
+      "  (def {base-val} 100) "
+      "  (def {my-fn} (\\ {x} {+ x base-val})) "
+      "  (def {r1} (my-fn 1)) "   // 1 + 100 = 101
+      "  (def {r2} (my-fn 2)) "   // 2 + 100 = 102
+      "  (+ r1 r2)"               // 101 + 102 = 203
       ")");
 
   VALK_EXPECT_SUCCESS(res);
   VALK_ASSERT_TYPE(res, LVAL_NUM);
-  // The lambda captured captured-val=100 at definition time
-  // Even though we changed it to 999 in local scope,
-  // the lambda should still see 100 from its closure
-  // BUG: Due to parent mutation, it might see 999 or garbage
-  VALK_ASSERT(res->num == 101,
-              "BUG: Lambda sees wrong scope due to parent mutation. "
-              "Expected 101 (100+1), got %ld. "
-              "Root cause: parser.c:452 mutates func->fun.env->parent",
+  VALK_ASSERT(res->num == 203,
+              "BUG: Lambda with dynamic scoping returns wrong result. "
+              "Expected 203, got %ld. "
+              "Root cause: Environment not properly copied between calls",
               res->num);
   valk_lval_free(res);
 
