@@ -19,9 +19,11 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZE_ADDRESS_FLAGS} -fcolor-diagno
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS} -fcolor-diagnostics")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${SANITIZE_ADDRESS_FLAGS} -fcolor-diagnostics")
 
-find_package(PkgConfig REQUIRED)
+find_package(PkgConfig QUIET)
 
-pkg_check_modules(EDITLINE REQUIRED IMPORTED_TARGET libeditline)
+if(PkgConfig_FOUND)
+  pkg_check_modules(EDITLINE IMPORTED_TARGET libeditline)
+endif()
 
 set(CMAKE_C_STANDARD  17) # LOL current year - 6 is gold
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -32,17 +34,25 @@ endif()
 
 add_library(valkyria src/parser.c)
 
-add_executable(valk
-  "src/repl.c"
-)
+if(EDITLINE_FOUND)
+  add_executable(valk
+    "src/repl.c"
+  )
 
-include_directories(valk
-  # vendor/editline/include/
-  ${EDITLINE_INCLUDE_DIRS}
-)
-# set_property(TARGET valkyria PROPERTY C_STANDARD 23)
-target_link_libraries(valk PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
+  include_directories(valk
+    # vendor/editline/include/
+    ${EDITLINE_INCLUDE_DIRS}
+  )
+  # set_property(TARGET valkyria PROPERTY C_STANDARD 23)
+  target_link_libraries(valk PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
+else()
+  message(WARNING "libeditline not found, valk REPL will not be built")
+endif()
 
 add_executable(test_std test/test_std.c test/testing.c)
 target_link_libraries(test_std PRIVATE "-lc" valkyria)
 include_directories(test_std src/)
+
+add_executable(test_regression test/test_regression.c test/testing.c)
+target_link_libraries(test_regression PRIVATE "-lc" valkyria)
+include_directories(test_regression src/)

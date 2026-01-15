@@ -47,3 +47,12 @@ debug: debug
 .PHONY: test
 test: build
 	build/test_std
+
+.PHONY: test-regression
+test-regression: build
+	build/test_regression
+
+.PHONY: test-all
+test-all: build
+	build/test_std
+	build/test_regression
