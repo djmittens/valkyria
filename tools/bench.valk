@@ -76,6 +76,31 @@
                          {(atom/add! bucket-over-1s 1)})})})})})})})})
 })
 
+; Estimate percentile from buckets (returns upper bound of bucket containing pth percentile)
+; Uses cumulative count to find which bucket contains the Nth percentile
+(fun {bucket-percentile p b1 b2 b3 b4 b5 b6 b7 b8 b9 total} {
+  (= {target} (/ (* total p) 100))
+  ; Cumulative counts for each bucket boundary
+  (= {c1} b1)
+  (= {c2} (+ c1 b2))
+  (= {c3} (+ c2 b3))
+  (= {c4} (+ c3 b4))
+  (= {c5} (+ c4 b5))
+  (= {c6} (+ c5 b6))
+  (= {c7} (+ c6 b7))
+  (= {c8} (+ c7 b8))
+  ; Return upper bound of bucket containing target
+  (if (>= c1 target) {1000}
+    {(if (>= c2 target) {5000}
+       {(if (>= c3 target) {10000}
+          {(if (>= c4 target) {25000}
+             {(if (>= c5 target) {50000}
+                {(if (>= c6 target) {100000}
+                   {(if (>= c7 target) {250000}
+                      {(if (>= c8 target) {1000000}
+                         {999999999})})})})})})})})
+})
+
 ; ============================================================================
 ; Header
 ; ============================================================================
@@ -181,18 +206,7 @@
     {(printf "  Error rate:  %d%%\n" (/ (* err 100) done))}
     {1})
 
-  ; Latency statistics
-  (println "")
-  (println "Latency (microseconds):")
-  (printf "  Min:    %d us\n" min-lat)
-  (printf "  Max:    %d us\n" max-lat)
-  (if (> done 0)
-    {(printf "  Mean:   %d us\n" (/ sum-lat done))}
-    {1})
-
-  ; Histogram
-  (println "")
-  (println "Latency Distribution:")
+  ; Get bucket counts
   (= {b1} (atom/get bucket-0-1ms))
   (= {b2} (atom/get bucket-1-5ms))
   (= {b3} (atom/get bucket-5-10ms))
@@ -202,6 +216,29 @@
   (= {b7} (atom/get bucket-100-250ms))
   (= {b8} (atom/get bucket-250-1s))
   (= {b9} (atom/get bucket-over-1s))
+
+  ; Latency statistics
+  (println "")
+  (println "Latency:")
+  (printf "  Min:    %d us\n" min-lat)
+  (printf "  Max:    %d us\n" max-lat)
+  (if (> done 0)
+    {(printf "  Mean:   %d us\n" (/ sum-lat done))}
+    {1})
+
+  ; Percentiles (estimated from buckets)
+  (= {p50} (bucket-percentile 50 b1 b2 b3 b4 b5 b6 b7 b8 b9 done))
+  (= {p90} (bucket-percentile 90 b1 b2 b3 b4 b5 b6 b7 b8 b9 done))
+  (= {p95} (bucket-percentile 95 b1 b2 b3 b4 b5 b6 b7 b8 b9 done))
+  (= {p99} (bucket-percentile 99 b1 b2 b3 b4 b5 b6 b7 b8 b9 done))
+  (printf "  p50:    %d us\n" p50)
+  (printf "  p90:    %d us\n" p90)
+  (printf "  p95:    %d us\n" p95)
+  (printf "  p99:    %d us\n" p99)
+
+  ; Histogram
+  (println "")
+  (println "Latency Distribution:")
 
   ; Print non-zero buckets with simple bars
   (if (> b1 0) {(printf "  < 1ms     : %d (%d%%)\n" b1 (/ (* b1 100) done))} {1})
