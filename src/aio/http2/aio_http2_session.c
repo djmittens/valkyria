@@ -3,15 +3,54 @@
 #include "aio_http2_conn.h"
 #include "aio_stream_body.h"
 #include "gc.h"
+#include "../aio_request_ctx.h"
 
 extern void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx);
 extern bool valk_http_async_is_closed_callback(void *ctx);
-extern void valk_async_propagate_allocator(valk_async_handle_t *handle, valk_mem_allocator_t *allocator, valk_lenv_t *env);
+extern void valk_async_propagate_region(valk_async_handle_t *handle, valk_region_t *region, valk_lenv_t *env);
 extern valk_async_handle_t* valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env);
 extern void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result);
 extern void valk_async_handle_free(valk_async_handle_t *handle);
 extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
 extern bool valk_async_handle_cancel(valk_async_handle_t *handle);
+
+static const char *__http2_get_header(valk_http2_server_request_t *req, const char *name) {
+  if (!req || !name) return nullptr;
+  size_t name_len = strlen(name);
+  for (u64 i = 0; i < req->headers.count; i++) {
+    struct valk_http2_header_t *h = &req->headers.items[i];
+    if (h->nameLen == name_len && strncasecmp((char*)h->name, name, name_len) == 0) {
+      return (const char *)h->value;
+    }
+  }
+  return nullptr;
+}
+
+static valk_request_ctx_t *__http2_create_request_ctx(valk_http2_server_request_t *req) {
+  valk_mem_allocator_t *allocator = (valk_mem_allocator_t *)&req->region;
+  valk_request_ctx_t *ctx = valk_request_ctx_new(allocator);
+  if (!ctx) return nullptr;
+
+  const char *trace_id_str = __http2_get_header(req, "x-trace-id");
+  if (trace_id_str) {
+    ctx->trace_id = (u64)strtoll(trace_id_str, nullptr, 10);
+  }
+
+  const char *parent_span_str = __http2_get_header(req, "x-span-id");
+  if (parent_span_str) {
+    ctx->parent_span_id = (u64)strtoll(parent_span_str, nullptr, 10);
+  }
+
+  const char *deadline_str = __http2_get_header(req, "x-deadline-ms");
+  if (deadline_str) {
+    u64 deadline_ms = (u64)strtoll(deadline_str, nullptr, 10);
+    if (deadline_ms > 0) {
+      ctx->deadline_us = valk_time_now_us() + (deadline_ms * 1000);
+    }
+  }
+
+  return ctx;
+}
 
 static inline u64 __align_up(uptr addr, u64 alignment) {
   u64 mask = alignment - 1;
@@ -85,7 +124,7 @@ int valk_http2_on_header_callback(nghttp2_session *session,
 
   valk_http2_metrics_on_header_recv(req, namelen, valuelen);
 
-  VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
+  VALK_WITH_ALLOC((valk_mem_allocator_t*)&req->region) {
     if (namelen > 0 && name[0] == ':') {
       char *str = valk_mem_alloc(valuelen + 1);
       memcpy(str, value, valuelen);
@@ -174,6 +213,7 @@ int valk_http2_on_begin_headers_callback(nghttp2_session *session,
       req->arena_ref.slab_item = arena_item;
       req->arena_ref.slot = (u32)(arena_item->handle & 0xFFFFFFFF);
       req->next_arena_slot = UINT32_MAX;
+      valk_region_init(&req->region, VALK_LIFETIME_REQUEST, nullptr, stream_arena);
       valk_http2_metrics_on_request_init(req);
     }
 
@@ -517,8 +557,9 @@ static void __send_default_response(nghttp2_session *session, i32 stream_id,
 static valk_http_async_ctx_t *__create_async_ctx(nghttp2_session *session,
                                                   i32 stream_id,
                                                   valk_aio_handle_t *conn,
-                                                  valk_mem_arena_t *arena) {
-  valk_http_async_ctx_t *ctx = malloc(sizeof(valk_http_async_ctx_t));
+                                                  valk_mem_arena_t *arena,
+                                                  valk_region_t *region) {
+  valk_http_async_ctx_t *ctx = valk_region_alloc(region, sizeof(valk_http_async_ctx_t));
   if (!ctx) return nullptr;
   ctx->session = session;
   ctx->stream_id = stream_id;
@@ -545,7 +586,6 @@ static int __async_state_completed(async_response_ctx_t *ctx) {
   } else {
     valk_http2_send_response(ctx->session, ctx->stream_id, result, ctx->req->stream_arena);
   }
-  if (ctx->http_ctx) free(ctx->http_ctx);
   return 0;
 }
 
@@ -554,14 +594,12 @@ static int __async_state_failed(async_response_ctx_t *ctx) {
   const char *msg = LVAL_TYPE(err) == LVAL_ERR ? err->str : "Async operation failed";
   VALK_WARN("Handle failed: %s", msg);
   __send_error_response(ctx->session, ctx->stream_id, "500", msg, ctx->req->stream_arena);
-  if (ctx->http_ctx) free(ctx->http_ctx);
   return 0;
 }
 
 static int __async_state_cancelled(async_response_ctx_t *ctx) {
   VALK_DEBUG("Handle cancelled, sending 503 for stream %d", ctx->stream_id);
   __send_error_response(ctx->session, ctx->stream_id, "503", "Request cancelled", ctx->req->stream_arena);
-  if (ctx->http_ctx) free(ctx->http_ctx);
   return 0;
 }
 
@@ -589,10 +627,10 @@ static int __handle_async_response(nghttp2_session *session, i32 stream_id,
                                    valk_http2_server_request_t *req,
                                    valk_async_handle_t *handle,
                                    valk_lenv_t *env) {
-  handle->allocator = (valk_mem_allocator_t*)req->stream_arena;
+  handle->region = &req->region;
   handle->env = env;
 
-  valk_http_async_ctx_t *http_ctx = __create_async_ctx(session, stream_id, conn, req->stream_arena);
+  valk_http_async_ctx_t *http_ctx = __create_async_ctx(session, stream_id, conn, req->stream_arena, &req->region);
   if (http_ctx) {
     handle->on_done = valk_http_async_done_callback;
     handle->on_done_ctx = http_ctx;
@@ -601,9 +639,9 @@ static int __handle_async_response(nghttp2_session *session, i32 stream_id,
   }
 
   for (valk_async_handle_t *p = handle->parent; p != nullptr; p = p->parent) {
-    valk_async_propagate_allocator(p, handle->allocator, env);
+    valk_async_propagate_region(p, handle->region, env);
   }
-  valk_async_propagate_allocator(handle, handle->allocator, env);
+  valk_async_propagate_region(handle, handle->region, env);
 
   async_response_ctx_t ctx = {
     .session = session, .stream_id = stream_id, .conn = conn,
@@ -626,19 +664,23 @@ static int __handle_request_headers(nghttp2_session *session,
     return 0;
   }
 
-  if (!conn->http.server || !conn->http.server->lisp_handler_fn) {
+  valk_lval_t *handler = valk_handle_resolve(&valk_global_handle_table, 
+                                              conn->http.server->lisp_handler_handle);
+  if (!conn->http.server || !handler) {
     __send_default_response(session, frame->hd.stream_id, req->stream_arena);
     return 0;
   }
-
-  valk_lval_t *handler = conn->http.server->lisp_handler_fn;
   valk_lenv_t *env = conn->http.server->sandbox_env;
   valk_lval_t *response;
 
+  req->request_ctx = __http2_create_request_ctx(req);
+
   valk_lval_t *req_ref = valk_lval_ref("http_request", req, nullptr);
-  VALK_WITH_ALLOC((valk_mem_allocator_t*)req->stream_arena) {
-    valk_lval_t *args = valk_lval_cons(req_ref, valk_lval_nil());
-    response = valk_lval_eval_call(env, handler, args);
+  VALK_WITH_REQUEST_CTX(req->request_ctx) {
+    VALK_WITH_ALLOC((valk_mem_allocator_t*)&req->region) {
+      valk_lval_t *args = valk_lval_cons(req_ref, valk_lval_nil());
+      response = valk_lval_eval_call(env, handler, args);
+    }
   }
 
   if (LVAL_TYPE(response) == LVAL_SYM && strcmp(response->str, ":deferred") == 0) {
@@ -646,6 +688,7 @@ static int __handle_request_headers(nghttp2_session *session,
   }
 
   if (LVAL_TYPE(response) == LVAL_HANDLE) {
+    response->async.handle->request_ctx = req->request_ctx;
     int pending = __handle_async_response(session, frame->hd.stream_id, conn, req,
                                           response->async.handle, env);
     if (pending) return 0;

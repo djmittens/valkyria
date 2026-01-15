@@ -223,10 +223,13 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
     sys->httpClients = valk_slab_new(
         sizeof(valk_aio_http2_client), sys->config.max_clients);
     sys->handleSlab = valk_slab_new(sizeof(valk_aio_handle_t), sys->config.max_handles);
-    sz timer_item_size = sizeof(valk_interval_timer_t) > sizeof(valk_schedule_timer_t)
-                         ? sizeof(valk_interval_timer_t) : sizeof(valk_schedule_timer_t);
-    sys->timerDataSlab = valk_slab_new(timer_item_size, sys->config.max_timers);
   }
+
+  sz system_arena_size = 16 * 1024 * 1024;
+  valk_mem_arena_t *system_arena = malloc(sizeof(valk_mem_arena_t) + system_arena_size);
+  valk_mem_arena_init(system_arena, system_arena_size);
+  valk_region_init(&sys->system_region, VALK_LIFETIME_REQUEST, nullptr, system_arena);
+  sys->system_region.owns_arena = true;
 
   valk_backpressure_list_init(&sys->backpressure, sys->config.backpressure_list_max,
                                sys->config.backpressure_timeout_ms);
@@ -336,17 +339,20 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
 
   valk_aio_http2_cleanup_all_servers(sys);
 
-  VALK_WITH_ALLOC(&valk_malloc_allocator) {
-    valk_slab_free(sys->httpServers);
-    valk_slab_free(sys->httpClients);
-    valk_slab_free(sys->handleSlab);
-    valk_slab_free(sys->timerDataSlab);
-  }
-
   free(sys->port_strs);
 
   if (sys->ops && sys->ops->loop) {
     sys->ops->loop->destroy(sys);
+  }
+
+  VALK_WITH_ALLOC(&valk_malloc_allocator) {
+    valk_slab_free(sys->httpServers);
+    valk_slab_free(sys->httpClients);
+    valk_slab_free(sys->handleSlab);
+  }
+
+  if (sys->system_region.owns_arena && sys->system_region.arena) {
+    free(sys->system_region.arena);
   }
 
   uv_sem_destroy(&sys->startup_sem);

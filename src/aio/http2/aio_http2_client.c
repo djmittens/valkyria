@@ -3,17 +3,8 @@
 #include "aio_http2_session.h"
 #include "aio_ssl.h"
 #include "gc.h"
+#include "../aio_request_ctx.h"
 #include <stdatomic.h>
-
-static inline valk_lval_t *__load_callback_atomic(valk_lval_t **callback_ptr) {
-  valk_lval_t *callback = atomic_load_explicit((_Atomic(valk_lval_t *)*)callback_ptr, memory_order_acquire);
-  if (!callback) return nullptr;
-  while (LVAL_TYPE(callback) == LVAL_FORWARD) {
-    callback = callback->forward;
-  }
-  atomic_store_explicit((_Atomic(valk_lval_t *)*)callback_ptr, callback, memory_order_release);
-  return callback;
-}
 
 extern void valk_uv_exec_task(valk_aio_system_t *sys, valk_aio_task_new *task);
 extern valk_async_handle_t *valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env);
@@ -417,6 +408,7 @@ typedef struct {
   valk_aio_http2_client *client;
   valk_http2_request_t *req;
   valk_async_handle_t *handle;
+  valk_request_ctx_t *request_ctx;
 } __request_send_ctx_t;
 
 static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
@@ -460,7 +452,23 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
 
   VALK_WITH_ALLOC(alloc) {
     const u64 NUM_PSEUDO_HEADERS = 4;
-    u64 hdrCount = ctx->req->headers.count + NUM_PSEUDO_HEADERS;
+    u64 trace_header_count = 0;
+    char trace_id_buf[32] = {0};
+    char span_id_buf[32] = {0};
+    char deadline_buf[32] = {0};
+
+    if (ctx->request_ctx) {
+      snprintf(trace_id_buf, sizeof(trace_id_buf), "%llu", (unsigned long long)ctx->request_ctx->trace_id);
+      snprintf(span_id_buf, sizeof(span_id_buf), "%llu", (unsigned long long)ctx->request_ctx->span_id);
+      trace_header_count = 2;
+      if (ctx->request_ctx->deadline_us != VALK_NO_DEADLINE) {
+        u64 remaining_ms = valk_request_ctx_remaining_ms(ctx->request_ctx);
+        snprintf(deadline_buf, sizeof(deadline_buf), "%llu", (unsigned long long)remaining_ms);
+        trace_header_count = 3;
+      }
+    }
+
+    u64 hdrCount = ctx->req->headers.count + NUM_PSEUDO_HEADERS + trace_header_count;
     struct valk_http2_header_t *phds = ctx->req->headers.items;
 
     nghttp2_nv hdrs[hdrCount];
@@ -498,6 +506,31 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
           NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
     }
 
+    u64 trace_idx = NUM_PSEUDO_HEADERS + ctx->req->headers.count;
+    if (trace_header_count >= 2) {
+      hdrs[trace_idx].name = (u8 *)"x-trace-id";
+      hdrs[trace_idx].value = (u8 *)valk_mem_alloc(strlen(trace_id_buf) + 1);
+      memcpy((char*)hdrs[trace_idx].value, trace_id_buf, strlen(trace_id_buf) + 1);
+      hdrs[trace_idx].namelen = 10;
+      hdrs[trace_idx].valuelen = strlen(trace_id_buf);
+      hdrs[trace_idx].flags = NGHTTP2_NV_FLAG_NO_COPY_NAME;
+
+      hdrs[trace_idx + 1].name = (u8 *)"x-span-id";
+      hdrs[trace_idx + 1].value = (u8 *)valk_mem_alloc(strlen(span_id_buf) + 1);
+      memcpy((char*)hdrs[trace_idx + 1].value, span_id_buf, strlen(span_id_buf) + 1);
+      hdrs[trace_idx + 1].namelen = 9;
+      hdrs[trace_idx + 1].valuelen = strlen(span_id_buf);
+      hdrs[trace_idx + 1].flags = NGHTTP2_NV_FLAG_NO_COPY_NAME;
+    }
+    if (trace_header_count >= 3) {
+      hdrs[trace_idx + 2].name = (u8 *)"x-deadline-ms";
+      hdrs[trace_idx + 2].value = (u8 *)valk_mem_alloc(strlen(deadline_buf) + 1);
+      memcpy((char*)hdrs[trace_idx + 2].value, deadline_buf, strlen(deadline_buf) + 1);
+      hdrs[trace_idx + 2].namelen = 13;
+      hdrs[trace_idx + 2].valuelen = strlen(deadline_buf);
+      hdrs[trace_idx + 2].flags = NGHTTP2_NV_FLAG_NO_COPY_NAME;
+    }
+
     reqres->streamid = nghttp2_submit_request2(conn->http.session, nullptr, hdrs,
                                                hdrCount, nullptr, reqres);
 
@@ -524,10 +557,20 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
 
 valk_async_handle_t *valk_aio_http2_request_send(valk_http2_request_t *req,
                                                   valk_aio_http2_client *client) {
+  valk_request_ctx_t *req_ctx = valk_thread_ctx.request_ctx;
+  if (req_ctx && valk_request_ctx_deadline_exceeded(req_ctx)) {
+    valk_async_handle_t *failed_handle = valk_async_handle_new(client->sys, nullptr);
+    if (failed_handle) {
+      valk_async_handle_fail(failed_handle, valk_lval_err(":deadline-exceeded"));
+    }
+    return failed_handle;
+  }
+
   valk_async_handle_t *handle = valk_async_handle_new(client->sys, nullptr);
   if (!handle) {
     return nullptr;
   }
+  handle->request_ctx = req_ctx;
 
   valk_aio_task_new *task;
   VALK_WITH_ALLOC((valk_mem_allocator_t *)client->sys->handleSlab) {
@@ -545,6 +588,7 @@ valk_async_handle_t *valk_aio_http2_request_send(valk_http2_request_t *req,
   ctx->client = client;
   ctx->req = req;
   ctx->handle = handle;
+  ctx->request_ctx = valk_thread_ctx.request_ctx;
 
   task->arg = ctx;
   task->handle = handle;
@@ -558,12 +602,12 @@ static _Atomic u64 g_client_request_id = 0;
 
 typedef struct {
   valk_aio_system_t *sys;
-  valk_lval_t *callback;
+  valk_handle_t callback_handle;
+  valk_handle_t headers_handle;
   char *host;
   int port;
   char *path;
   valk_aio_http2_client *client;
-  valk_lval_t *headers;
   valk_mem_arena_t *arena;
   u64 request_id;
 } valk_http2_client_request_ctx_t;
@@ -591,7 +635,7 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
     VALK_ERROR("http2/client-request[%llu]: connection failed: %s", 
                (unsigned long long)ctx->request_id,
                LVAL_TYPE(err) == LVAL_ERR ? err->str : "unknown");
-    valk_lval_t *cb = __load_callback_atomic(&ctx->callback);
+    valk_lval_t *cb = valk_handle_resolve(&valk_global_handle_table, ctx->callback_handle);
     if (cb) {
       valk_lval_t *args = valk_lval_cons(err, valk_lval_nil());
       valk_lval_eval_call(cb->fun.env, cb, args);
@@ -603,7 +647,7 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
   if (!result || LVAL_TYPE(result) != LVAL_REF) {
     VALK_ERROR("http2/client-request[%llu]: invalid connect result", 
                (unsigned long long)ctx->request_id);
-    valk_lval_t *cb = __load_callback_atomic(&ctx->callback);
+    valk_lval_t *cb = valk_handle_resolve(&valk_global_handle_table, ctx->callback_handle);
     if (cb) {
       valk_lval_t *err = valk_lval_err("Invalid connect result");
       valk_lval_t *args = valk_lval_cons(err, valk_lval_nil());
@@ -632,9 +676,10 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
     req->path = __client_arena_strdup(ctx->path);
     da_init(&req->headers);
 
-    if (ctx->headers && LVAL_TYPE(ctx->headers) == LVAL_QEXPR) {
-      for (u64 i = 0; i < valk_lval_list_count(ctx->headers); i++) {
-        valk_lval_t *pair = valk_lval_list_nth(ctx->headers, i);
+    valk_lval_t *headers = valk_handle_resolve(&valk_global_handle_table, ctx->headers_handle);
+    if (headers && LVAL_TYPE(headers) == LVAL_QEXPR) {
+      for (u64 i = 0; i < valk_lval_list_count(headers); i++) {
+        valk_lval_t *pair = valk_lval_list_nth(headers, i);
         if (LVAL_TYPE(pair) == LVAL_QEXPR && valk_lval_list_count(pair) >= 2) {
           valk_lval_t *name_val = valk_lval_list_nth(pair, 0);
           valk_lval_t *value_val = valk_lval_list_nth(pair, 1);
@@ -657,10 +702,8 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
   return;
 
 cleanup:
-  valk_gc_remove_global_root(&ctx->callback);
-  if (ctx->headers) {
-    valk_gc_remove_global_root(&ctx->headers);
-  }
+  valk_handle_release(&valk_global_handle_table, ctx->callback_handle);
+  valk_handle_release(&valk_global_handle_table, ctx->headers_handle);
   free(ctx->host);
   free(ctx->path);
   free(ctx);
@@ -675,7 +718,7 @@ static void __http2_client_request_response_done(valk_async_handle_t *handle, vo
   VALK_INFO("http2/client-request[%llu]: response_done status=%d", 
             (unsigned long long)ctx->request_id, status);
 
-  valk_lval_t *cb = __load_callback_atomic(&ctx->callback);
+  valk_lval_t *cb = valk_handle_resolve(&valk_global_handle_table, ctx->callback_handle);
   if (status != VALK_ASYNC_COMPLETED) {
     valk_lval_t *err = handle->error ? handle->error : valk_lval_err("Request failed");
     VALK_ERROR("http2/client-request[%llu]: request failed: %s",
@@ -703,10 +746,8 @@ static void __http2_client_request_response_done(valk_async_handle_t *handle, vo
     }
   }
 
-  valk_gc_remove_global_root(&ctx->callback);
-  if (ctx->headers) {
-    valk_gc_remove_global_root(&ctx->headers);
-  }
+  valk_handle_release(&valk_global_handle_table, ctx->callback_handle);
+  valk_handle_release(&valk_global_handle_table, ctx->headers_handle);
   free(ctx->host);
   free(ctx->path);
   if (ctx->arena) {
@@ -736,16 +777,16 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
   ctx->arena = nullptr;
   ctx->request_id = req_id;
 
-  ctx->callback = valk_evacuate_to_heap(callback);
-  ctx->headers = headers ? valk_evacuate_to_heap(headers) : nullptr;
+  valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
+  valk_lval_t *heap_headers = headers ? valk_evacuate_to_heap(headers) : nullptr;
   
-  valk_gc_add_global_root(&ctx->callback);
-  if (ctx->headers) {
-    valk_gc_add_global_root(&ctx->headers);
-  }
+  ctx->callback_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
+  ctx->headers_handle = heap_headers 
+    ? valk_handle_create(&valk_global_handle_table, heap_headers)
+    : (valk_handle_t){0, 0};
 
-  VALK_INFO("http2/client-request[%llu]: callback=%p rooted (was %p)", 
-            (unsigned long long)req_id, (void*)ctx->callback, (void*)callback);
+  VALK_INFO("http2/client-request[%llu]: callback handle created (was %p)", 
+            (unsigned long long)req_id, (void*)callback);
 
   valk_async_handle_t *connect_handle = valk_aio_http2_connect_host(sys, host, port, host);
   connect_handle->on_done = __http2_client_request_connect_done;

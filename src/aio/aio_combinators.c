@@ -1,14 +1,8 @@
 #include "aio_internal.h"
+#include "aio_request_ctx.h"
 
 static void __schedule_timer_close_cb(uv_handle_t *handle) {
-  valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)handle->data;
-  if (timer_data) {
-    if (timer_data->slab) {
-      valk_slab_release_ptr(timer_data->slab, timer_data);
-    } else {
-      free(timer_data);
-    }
-  }
+  UNUSED(handle);
 }
 
 static void __sleep_timer_close_cb(uv_handle_t *handle) {
@@ -22,12 +16,7 @@ static void __interval_timer_close_cb(uv_handle_t *handle) {
   if (!timer_data) return;
 
   if (timer_data->callback) {
-    valk_gc_remove_global_root(&timer_data->callback);
-  }
-  if (timer_data->slab) {
-    valk_slab_release_ptr(timer_data->slab, timer_data);
-  } else {
-    free(timer_data);
+    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
   }
 }
 
@@ -39,7 +28,13 @@ static void __interval_timer_cb(uv_timer_t *handle) {
   valk_interval_timer_t *timer_data = (valk_interval_timer_t *)handle->data;
   if (!timer_data || timer_data->stopped) return;
 
-  valk_lval_t *callback = timer_data->callback;
+  valk_lval_t *callback = valk_handle_resolve(&valk_global_handle_table, timer_data->callback_handle);
+  if (!callback) {
+    timer_data->stopped = true;
+    uv_timer_stop(handle);
+    uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    return;
+  }
   valk_lval_t *args = valk_lval_nil();
   valk_lval_t *result = valk_lval_eval_call(callback->fun.env, callback, args);
 
@@ -68,13 +63,7 @@ static void __interval_init_on_loop(void *ctx) {
   int r = uv_timer_init(loop, &timer_data->timer);
   // LCOV_EXCL_START - libuv timer init essentially never fails
   if (r != 0) {
-    valk_gc_remove_global_root(&timer_data->callback);
-    if (timer_data->slab) {
-      valk_slab_release_ptr(timer_data->slab, timer_data);
-    } else {
-      free(timer_data);
-    }
-    free(init_ctx);
+    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
     return;
   }
   // LCOV_EXCL_STOP
@@ -82,17 +71,10 @@ static void __interval_init_on_loop(void *ctx) {
   r = uv_timer_start(&timer_data->timer, __interval_timer_cb, init_ctx->interval_ms, init_ctx->interval_ms);
   // LCOV_EXCL_START - libuv timer start essentially never fails
   if (r != 0) {
-    valk_gc_remove_global_root(&timer_data->callback);
+    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
     uv_close((uv_handle_t *)&timer_data->timer, NULL);
-    if (timer_data->slab) {
-      valk_slab_release_ptr(timer_data->slab, timer_data);
-    } else {
-      free(timer_data);
-    }
   }
   // LCOV_EXCL_STOP
-  
-  free(init_ctx);
 }
 
 extern valk_lval_t* valk_lval_copy(valk_lval_t* lval);
@@ -104,44 +86,24 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
     return valk_lval_err("aio/interval: invalid AIO system");
   }
 
-  valk_interval_timer_t *timer_data;
-  valk_slab_t *timer_slab = nullptr;
-  if (sys->timerDataSlab) {
-    valk_slab_item_t *item = valk_slab_aquire(sys->timerDataSlab);
-    if (!item) {
-      return valk_lval_err("Timer pool exhausted");
-    }
-    timer_data = (valk_interval_timer_t *)item->data;
-    timer_slab = sys->timerDataSlab;
-  } else {
-    timer_data = aligned_alloc(alignof(valk_interval_timer_t), sizeof(valk_interval_timer_t));
-    if (!timer_data) { // LCOV_EXCL_BR_LINE - OOM
-      return valk_lval_err("Failed to allocate interval timer"); // LCOV_EXCL_LINE
-    }
+  valk_interval_timer_t *timer_data = valk_region_alloc(&sys->system_region, sizeof(valk_interval_timer_t));
+  if (!timer_data) {
+    return valk_lval_err("Failed to allocate interval timer");
   }
 
   valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
   
   timer_data->callback = heap_callback;
+  timer_data->callback_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
   timer_data->interval_id = __atomic_fetch_add(&g_interval_id, 1, __ATOMIC_RELAXED);
-  timer_data->slab = timer_slab;
   timer_data->stopped = false;
   timer_data->timer.data = timer_data;
 
-  valk_gc_add_global_root(&timer_data->callback);
-
-  valk_interval_init_ctx_t *init_ctx = malloc(sizeof(valk_interval_init_ctx_t));
-  // LCOV_EXCL_START - OOM path
+  valk_interval_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_interval_init_ctx_t));
   if (!init_ctx) {
-    valk_gc_remove_global_root(&timer_data->callback);
-    if (timer_slab) {
-      valk_slab_release_ptr(timer_slab, timer_data);
-    } else {
-      free(timer_data);
-    }
+    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
     return valk_lval_err("Failed to allocate interval init context");
   }
-  // LCOV_EXCL_STOP
   
   init_ctx->sys = sys;
   init_ctx->timer_data = timer_data;
@@ -156,15 +118,17 @@ static void __schedule_timer_cb(uv_timer_t *handle) {
   VALK_GC_SAFE_POINT();
   
   valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)handle->data;
-  valk_lval_t *callback = timer_data->callback;
+  valk_lval_t *callback = valk_handle_resolve(&valk_global_handle_table, timer_data->callback_handle);
 
-  valk_lval_t *args = valk_lval_nil();
-  valk_lval_t *result = valk_lval_eval_call(callback->fun.env, callback, args);
-  if (LVAL_TYPE(result) == LVAL_ERR) {
-    VALK_WARN("aio/schedule callback returned error: %s", result->str);
+  if (callback) {
+    valk_lval_t *args = valk_lval_nil();
+    valk_lval_t *result = valk_lval_eval_call(callback->fun.env, callback, args);
+    if (LVAL_TYPE(result) == LVAL_ERR) {
+      VALK_WARN("aio/schedule callback returned error: %s", result->str);
+    }
   }
 
-  valk_gc_remove_global_root(&timer_data->callback);
+  valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
   uv_timer_stop(handle);
   uv_close((uv_handle_t *)handle, __schedule_timer_close_cb);
 }
@@ -183,13 +147,7 @@ static void __schedule_init_on_loop(void *ctx) {
   int r = uv_timer_init(loop, &timer_data->timer);
   // LCOV_EXCL_START - libuv timer init essentially never fails
   if (r != 0) {
-    valk_gc_remove_global_root(&timer_data->callback);
-    if (timer_data->slab) {
-      valk_slab_release_ptr(timer_data->slab, timer_data);
-    } else {
-      free(timer_data);
-    }
-    free(init_ctx);
+    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
     return;
   }
   // LCOV_EXCL_STOP
@@ -197,17 +155,10 @@ static void __schedule_init_on_loop(void *ctx) {
   r = uv_timer_start(&timer_data->timer, __schedule_timer_cb, init_ctx->delay_ms, 0);
   // LCOV_EXCL_START - libuv timer start essentially never fails
   if (r != 0) {
-    valk_gc_remove_global_root(&timer_data->callback);
+    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
     uv_close((uv_handle_t *)&timer_data->timer, NULL);
-    if (timer_data->slab) {
-      valk_slab_release_ptr(timer_data->slab, timer_data);
-    } else {
-      free(timer_data);
-    }
   }
   // LCOV_EXCL_STOP
-  
-  free(init_ctx);
 }
 
 static _Atomic(u64) g_schedule_id = 0;
@@ -221,43 +172,23 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
 
   u64 schedule_id = atomic_fetch_add(&g_schedule_id, 1);
 
-  valk_schedule_timer_t *timer_data;
-  valk_slab_t *timer_slab = nullptr;
-  if (sys->timerDataSlab) {
-    valk_slab_item_t *item = valk_slab_aquire(sys->timerDataSlab);
-    if (!item) {
-      return valk_lval_err("Timer pool exhausted");
-    }
-    timer_data = (valk_schedule_timer_t *)item->data;
-    timer_slab = sys->timerDataSlab;
-  } else {
-    timer_data = aligned_alloc(alignof(valk_schedule_timer_t), sizeof(valk_schedule_timer_t));
-    if (!timer_data) { // LCOV_EXCL_BR_LINE - OOM
-      return valk_lval_err("Failed to allocate timer"); // LCOV_EXCL_LINE
-    }
+  valk_schedule_timer_t *timer_data = valk_region_alloc(&sys->system_region, sizeof(valk_schedule_timer_t));
+  if (!timer_data) {
+    return valk_lval_err("Failed to allocate timer");
   }
 
   valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
 
   timer_data->callback = heap_callback;
+  timer_data->callback_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
   timer_data->timer.data = timer_data;
   timer_data->schedule_id = schedule_id;
-  timer_data->slab = timer_slab;
 
-  valk_gc_add_global_root(&timer_data->callback);
-
-  valk_schedule_init_ctx_t *init_ctx = malloc(sizeof(valk_schedule_init_ctx_t));
-  // LCOV_EXCL_START - OOM path
+  valk_schedule_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_schedule_init_ctx_t));
   if (!init_ctx) {
-    valk_gc_remove_global_root(&timer_data->callback);
-    if (timer_slab) {
-      valk_slab_release_ptr(timer_slab, timer_data);
-    } else {
-      free(timer_data);
-    }
+    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
     return valk_lval_err("Failed to allocate schedule init context");
   }
-  // LCOV_EXCL_STOP
   
   init_ctx->sys = sys;
   init_ctx->timer_data = timer_data;
@@ -274,7 +205,7 @@ extern void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t 
 extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
 extern bool valk_async_handle_cancel(valk_async_handle_t *handle);
 extern void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_handle_t *child);
-extern void valk_async_propagate_allocator(valk_async_handle_t *handle, valk_mem_allocator_t *allocator, valk_lenv_t *env);
+extern void valk_async_propagate_region(valk_async_handle_t *handle, valk_region_t *region, valk_lenv_t *env);
 extern void valk_async_notify_done(valk_async_handle_t *handle);
 extern bool valk_async_is_resource_closed(valk_async_handle_t *handle);
 extern valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sys);
@@ -318,10 +249,23 @@ static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_err("aio/sleep: second argument must be a number");
   }
 
+  valk_request_ctx_t *req_ctx = valk_thread_ctx.request_ctx;
+  if (req_ctx && valk_request_ctx_deadline_exceeded(req_ctx)) {
+    return valk_lval_err(":deadline-exceeded");
+  }
+
   valk_aio_system_t *sys = sys_arg->ref.ptr;
   u64 delay_ms = (u64)ms_arg->num;
 
+  if (req_ctx && valk_request_ctx_has_deadline(req_ctx)) {
+    u64 remaining_ms = valk_request_ctx_remaining_ms(req_ctx);
+    if (delay_ms > remaining_ms) {
+      delay_ms = remaining_ms;
+    }
+  }
+
   valk_async_handle_t *async_handle = valk_async_handle_new(sys, e);
+  async_handle->request_ctx = req_ctx;
 
   valk_async_handle_uv_data_t *timer_data = aligned_alloc(alignof(valk_async_handle_uv_data_t), sizeof(valk_async_handle_uv_data_t));
   timer_data->handle = async_handle;
@@ -763,8 +707,9 @@ static bool valk_async_is_chain_closed(valk_async_handle_t *handle) {
     depth++;
   }
 
-  for (u64 i = 0; i < handle->children.count && i < 100; i++) {
-    valk_async_handle_t *child = handle->children.items[i];
+  u32 child_count = valk_chunked_ptrs_count(&handle->children);
+  for (u32 i = 0; i < child_count && i < 100; i++) {
+    valk_async_handle_t *child = valk_chunked_ptrs_get(&handle->children, i);
     if (child && valk_async_is_resource_closed(child)) {
       return true;
     }
@@ -789,8 +734,9 @@ static void valk_async_propagate_single(void *ctx) {
   valk_async_handle_t *source = (valk_async_handle_t *)ctx;
   if (!source) return;
 
-  VALK_INFO("Propagating from handle %llu (status=%d, children=%zu)",
-            source->id, valk_async_handle_get_status(source), source->children.count);
+  u32 children_count = valk_chunked_ptrs_count(&source->children);
+  VALK_INFO("Propagating from handle %llu (status=%d, children=%u)",
+            source->id, valk_async_handle_get_status(source), children_count);
 
   if (valk_async_is_chain_closed(source)) {
     VALK_INFO("Async propagation: connection closed, aborting propagation");
@@ -799,8 +745,8 @@ static void valk_async_propagate_single(void *ctx) {
 
   valk_async_status_t source_status = valk_async_handle_get_status(source);
 
-  for (u64 i = 0; i < source->children.count; i++) {
-    valk_async_handle_t *child = source->children.items[i];
+  for (u32 i = 0; i < children_count; i++) {
+    valk_async_handle_t *child = valk_chunked_ptrs_get(&source->children, i);
     valk_async_status_t child_status = valk_async_handle_get_status(child);
     VALK_DEBUG("  Child %zu: handle %llu, status=%d, parent=%llu (source=%llu), on_complete=%p",
               i, child->id, child_status,
@@ -819,27 +765,11 @@ static void valk_async_propagate_single(void *ctx) {
         if (child->on_complete && child->env) {
           valk_lval_t *args;
           valk_lval_t *transformed;
-          valk_mem_allocator_t *alloc = child->allocator;
-          bool needs_arena = !alloc || 
-                             alloc->type == VALK_ALLOC_MALLOC ||
-                             alloc->type == VALK_ALLOC_GC_HEAP ||
-                             alloc->type == VALK_ALLOC_NULL;
-          // LCOV_EXCL_START - fallback arena allocation rarely triggered
-          if (needs_arena && child->sys) {
-            valk_standalone_async_ctx_t *standalone = valk_standalone_async_ctx_new(child->sys);
-            if (standalone) {
-              alloc = (valk_mem_allocator_t*)standalone->arena;
-              child->allocator = alloc;
-              valk_async_handle_t *root = child;
-              while (root->parent) root = root->parent;
-              if (!root->on_done) {
-                root->on_done = valk_standalone_async_done_callback;
-                root->on_done_ctx = standalone;
-              }
-            }
+          valk_mem_allocator_t *alloc = child->region ? (valk_mem_allocator_t*)child->region : nullptr;
+          if (!alloc && child->sys) {
+            alloc = (valk_mem_allocator_t*)&child->sys->system_region;
           }
-          // LCOV_EXCL_STOP
-          if (!alloc || alloc->type != VALK_ALLOC_ARENA) alloc = &valk_malloc_allocator;
+          if (!alloc) alloc = &valk_malloc_allocator;
           VALK_WITH_ALLOC(alloc) {
             args = valk_lval_cons(source->result, valk_lval_nil());
             transformed = valk_lval_eval_call(child->env, child->on_complete, args);
@@ -870,7 +800,7 @@ static void valk_async_propagate_single(void *ctx) {
                 inner->on_done_ctx = child->on_done_ctx;
                 inner->is_closed = child->is_closed;
                 inner->is_closed_ctx = child->is_closed_ctx;
-                inner->allocator = child->allocator;
+                inner->region = child->region;
                 inner->env = child->env;
                 child->on_done = NULL;
                 child->on_done_ctx = NULL;
@@ -896,27 +826,11 @@ static void valk_async_propagate_single(void *ctx) {
         if (child->on_error && child->env) {
           valk_lval_t *args;
           valk_lval_t *recovered;
-          valk_mem_allocator_t *alloc = child->allocator;
-          bool needs_arena = !alloc || 
-                             alloc->type == VALK_ALLOC_MALLOC ||
-                             alloc->type == VALK_ALLOC_GC_HEAP ||
-                             alloc->type == VALK_ALLOC_NULL;
-          // LCOV_EXCL_START - fallback arena allocation rarely triggered
-          if (needs_arena && child->sys) {
-            valk_standalone_async_ctx_t *standalone = valk_standalone_async_ctx_new(child->sys);
-            if (standalone) {
-              alloc = (valk_mem_allocator_t*)standalone->arena;
-              child->allocator = alloc;
-              valk_async_handle_t *root = child;
-              while (root->parent) root = root->parent;
-              if (!root->on_done) {
-                root->on_done = valk_standalone_async_done_callback;
-                root->on_done_ctx = standalone;
-              }
-            }
+          valk_mem_allocator_t *alloc = child->region ? (valk_mem_allocator_t*)child->region : nullptr;
+          if (!alloc && child->sys) {
+            alloc = (valk_mem_allocator_t*)&child->sys->system_region;
           }
-          // LCOV_EXCL_STOP
-          if (!alloc || alloc->type != VALK_ALLOC_ARENA) alloc = &valk_malloc_allocator;
+          if (!alloc) alloc = &valk_malloc_allocator;
           VALK_WITH_ALLOC(alloc) {
             args = valk_lval_cons(source->error, valk_lval_nil());
             recovered = valk_lval_eval_call(child->env, child->on_error, args);
@@ -964,6 +878,7 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
   if (!result) {
     return valk_lval_err("Failed to allocate async handle");
   }
+  result->request_ctx = source->request_ctx;
 
   if (source->status == VALK_ASYNC_COMPLETED) {
     valk_lval_t *args = valk_lval_cons(source->result, valk_lval_nil());
@@ -1037,6 +952,7 @@ static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
   if (!catch_handle) {
     return valk_lval_err("Failed to allocate async handle");
   }
+  catch_handle->request_ctx = source->request_ctx;
 
   if (source->status == VALK_ASYNC_COMPLETED) {
     catch_handle->status = VALK_ASYNC_COMPLETED;
@@ -1093,6 +1009,7 @@ static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
   if (!finally_handle) {
     return valk_lval_err("Failed to allocate async handle");
   }
+  finally_handle->request_ctx = source->request_ctx;
 
   // LCOV_EXCL_START - aio/finally immediate: requires already-complete handle
   if (source->status == VALK_ASYNC_COMPLETED) {
@@ -1134,12 +1051,14 @@ typedef struct {
   valk_async_handle_t **handles;
   u64 total;
   u64 completed;
+  valk_mem_allocator_t *allocator;
 } valk_all_ctx_t;
 
 static void valk_all_ctx_cleanup(void *ctx) {
   valk_all_ctx_t *all_ctx = (valk_all_ctx_t *)ctx;
   if (!all_ctx) return;
   all_ctx->magic = 0;
+  if (all_ctx->allocator && all_ctx->allocator->type != VALK_ALLOC_MALLOC) return;
   if (all_ctx->results) free(all_ctx->results);
   if (all_ctx->handles) free(all_ctx->handles);
   free(all_ctx);
@@ -1175,12 +1094,19 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_handle(result);
   }
 
+  valk_mem_allocator_t *allocator = valk_thread_ctx.allocator;
+
   valk_async_handle_t *all_handle = valk_async_handle_new(NULL, e);
   if (!all_handle) {
     return valk_lval_err("Failed to allocate async handle");
   }
 
-  valk_lval_t **results = calloc(count, sizeof(valk_lval_t*));
+  valk_lval_t *first_h = valk_lval_head(handles_list);
+  if (first_h && LVAL_TYPE(first_h) == LVAL_HANDLE && first_h->async.handle->request_ctx) {
+    all_handle->request_ctx = first_h->async.handle->request_ctx;
+  }
+
+  valk_lval_t **results = valk_mem_calloc(count, sizeof(valk_lval_t*));
   if (!results) {
     valk_async_handle_free(all_handle);
     return valk_lval_err("Failed to allocate results array");
@@ -1215,7 +1141,7 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   if (any_failed) {
-    free(results);
+    valk_mem_free(results);
     all_handle->status = VALK_ASYNC_FAILED;
     all_handle->error = first_error;
 
@@ -1236,7 +1162,7 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
     for (u64 i = count; i > 0; i--) {
       result_list = valk_lval_cons(results[i-1], result_list);
     }
-    free(results);
+    valk_mem_free(results);
     all_handle->status = VALK_ASYNC_COMPLETED;
     all_handle->result = result_list;
     return valk_lval_handle(all_handle);
@@ -1245,19 +1171,19 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
   all_handle->status = VALK_ASYNC_RUNNING;
   all_handle->env = e;
 
-  valk_async_handle_t **handles = calloc(count, sizeof(valk_async_handle_t*));
+  valk_async_handle_t **handles = valk_mem_calloc(count, sizeof(valk_async_handle_t*));
   // LCOV_EXCL_START - calloc failure: requires OOM
   if (!handles) {
-    free(results);
+    valk_mem_free(results);
     valk_async_handle_free(all_handle);
     return valk_lval_err("Failed to allocate handles array");
   }
   // LCOV_EXCL_STOP
 
-  valk_all_ctx_t *ctx = malloc(sizeof(valk_all_ctx_t));
+  valk_all_ctx_t *ctx = valk_mem_alloc(sizeof(valk_all_ctx_t));
   if (!ctx) {
-    free(results);
-    free(handles);
+    valk_mem_free(results);
+    valk_mem_free(handles);
     valk_async_handle_free(all_handle);
     return valk_lval_err("Failed to allocate all context");
   }
@@ -1267,6 +1193,7 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
   ctx->handles = handles;
   ctx->total = count;
   ctx->completed = completed;
+  ctx->allocator = allocator;
   all_handle->uv_handle_ptr = ctx;
 
   valk_async_handle_on_cleanup(all_handle, valk_all_ctx_cleanup, ctx);
@@ -1373,12 +1300,14 @@ typedef struct {
   valk_async_handle_t *race_handle;
   valk_async_handle_t **handles;
   u64 total;
+  valk_mem_allocator_t *allocator;
 } valk_race_ctx_t;
 
 static void valk_race_ctx_cleanup(void *ctx) {
   valk_race_ctx_t *race_ctx = (valk_race_ctx_t *)ctx;
   if (!race_ctx) return;
   race_ctx->magic = 0;
+  if (race_ctx->allocator && race_ctx->allocator->type != VALK_ALLOC_MALLOC) return;
   if (race_ctx->handles) free(race_ctx->handles);
   free(race_ctx);
 }
@@ -1442,6 +1371,8 @@ static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
   }
   valk_lval_t *handles_list = valk_lval_list_nth(a, 0);
 
+  valk_mem_allocator_t *allocator = valk_thread_ctx.allocator;
+
   u64 count = 0;
   valk_async_handle_t *first_done = NULL;
   valk_lval_t *iter = handles_list;
@@ -1471,6 +1402,11 @@ static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
   valk_async_handle_t *race_handle = valk_async_handle_new(NULL, e);
   if (!race_handle) {
     return valk_lval_err("Failed to allocate async handle");
+  }
+
+  valk_lval_t *first_h = valk_lval_head(handles_list);
+  if (first_h && LVAL_TYPE(first_h) == LVAL_HANDLE && first_h->async.handle->request_ctx) {
+    race_handle->request_ctx = first_h->async.handle->request_ctx;
   }
 
   if (first_done) {
@@ -1505,15 +1441,15 @@ static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
     race_handle->sys = handle->sys;
   }
 
-  valk_async_handle_t **handles = calloc(count, sizeof(valk_async_handle_t*));
+  valk_async_handle_t **handles = valk_mem_calloc(count, sizeof(valk_async_handle_t*));
   if (!handles) {
     valk_async_handle_free(race_handle);
     return valk_lval_err("Failed to allocate handles array");
   }
 
-  valk_race_ctx_t *ctx = malloc(sizeof(valk_race_ctx_t));
+  valk_race_ctx_t *ctx = valk_mem_alloc(sizeof(valk_race_ctx_t));
   if (!ctx) {
-    free(handles);
+    valk_mem_free(handles);
     valk_async_handle_free(race_handle);
     return valk_lval_err("Failed to allocate race context");
   }
@@ -1521,6 +1457,7 @@ static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
   ctx->race_handle = race_handle;
   ctx->handles = handles;
   ctx->total = count;
+  ctx->allocator = allocator;
   race_handle->uv_handle_ptr = ctx;
 
   valk_async_handle_on_cleanup(race_handle, valk_race_ctx_cleanup, ctx);
@@ -1544,12 +1481,14 @@ typedef struct {
   u64 total;
   u64 failed_count;
   valk_lval_t *last_error;
+  valk_mem_allocator_t *allocator;
 } valk_any_ctx_t;
 
 static void valk_any_ctx_cleanup(void *ctx) {
   valk_any_ctx_t *any_ctx = (valk_any_ctx_t *)ctx;
   if (!any_ctx) return;
   any_ctx->magic = 0;
+  if (any_ctx->allocator && any_ctx->allocator->type != VALK_ALLOC_MALLOC) return;
   if (any_ctx->handles) free(any_ctx->handles);
   free(any_ctx);
 }
@@ -1637,6 +1576,8 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
   }
   valk_lval_t *handles_list = valk_lval_list_nth(a, 0);
 
+  valk_mem_allocator_t *allocator = valk_thread_ctx.allocator;
+
   u64 count = 0;
   u64 failed_count = 0;
   valk_async_handle_t *first_success = NULL;
@@ -1671,6 +1612,11 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
   valk_async_handle_t *any_handle = valk_async_handle_new(NULL, e);
   if (!any_handle) {
     return valk_lval_err("Failed to allocate async handle");
+  }
+
+  valk_lval_t *first_h = valk_lval_head(handles_list);
+  if (first_h && LVAL_TYPE(first_h) == LVAL_HANDLE && first_h->async.handle->request_ctx) {
+    any_handle->request_ctx = first_h->async.handle->request_ctx;
   }
 
   if (first_success) {
@@ -1710,15 +1656,15 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
     iter = valk_lval_tail(iter);
   }
 
-  valk_async_handle_t **handles = calloc(count, sizeof(valk_async_handle_t*));
+  valk_async_handle_t **handles = valk_mem_calloc(count, sizeof(valk_async_handle_t*));
   if (!handles) {
     valk_async_handle_free(any_handle);
     return valk_lval_err("Failed to allocate handles array");
   }
 
-  valk_any_ctx_t *ctx = malloc(sizeof(valk_any_ctx_t));
+  valk_any_ctx_t *ctx = valk_mem_alloc(sizeof(valk_any_ctx_t));
   if (!ctx) {
-    free(handles);
+    valk_mem_free(handles);
     valk_async_handle_free(any_handle);
     return valk_lval_err("Failed to allocate any context");
   }
@@ -1728,6 +1674,7 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
   ctx->total = count;
   ctx->failed_count = failed_count;
   ctx->last_error = last_error;
+  ctx->allocator = allocator;
   any_handle->uv_handle_ptr = ctx;
 
   valk_async_handle_on_cleanup(any_handle, valk_any_ctx_cleanup, ctx);
@@ -1796,6 +1743,7 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
   if (!bracket_handle) {
     return valk_lval_err("Failed to allocate async handle");
   }
+  bracket_handle->request_ctx = acquire->request_ctx;
 
   if (acquire->status == VALK_ASYNC_COMPLETED) {
     valk_lval_t *resource = acquire->result;

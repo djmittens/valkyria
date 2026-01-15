@@ -15,6 +15,8 @@ typedef struct uv_handle_s uv_handle_t;
 struct valk_lval_t;
 struct valk_lenv_t;
 struct valk_mem_arena;
+struct valk_region;
+struct valk_request_ctx;
 
 // Async handle - represents an in-flight async operation
 // This is the main structure for composable async operations.
@@ -44,7 +46,9 @@ struct valk_async_handle_t {
   struct valk_lval_t *result;
   struct valk_lval_t *error;
 
-  valk_mem_allocator_t *allocator;
+  struct valk_region *region;
+
+  struct valk_request_ctx *request_ctx;
 
   valk_async_done_fn on_done;
   void *on_done_ctx;
@@ -53,25 +57,19 @@ struct valk_async_handle_t {
   void *is_closed_ctx;
 
   struct valk_async_handle_t *parent;
-  struct {
-    struct valk_async_handle_t **items;
-    u64 count;
-    u64 capacity;
-  } children;
+  valk_chunked_ptrs_t children;
 
   struct valk_async_handle_t *prev;
   struct valk_async_handle_t *next;
 
   _Atomic u32 refcount;
 
-  struct {
-    valk_async_cleanup_fn fn;
-    void *ctx;
-  } *cleanup_callbacks;
-  u32 cleanup_count;
-  u32 cleanup_capacity;
+  valk_async_cleanup_fn cleanup_fn;
+  void *cleanup_ctx;
 };
 
+valk_async_handle_t *valk_async_handle_new(struct valk_aio_system *sys, struct valk_lenv_t *env);
+valk_async_handle_t *valk_async_handle_new_in_region(struct valk_aio_system *sys, struct valk_lenv_t *env, struct valk_region *region);
 valk_async_handle_t *valk_async_handle_ref(valk_async_handle_t *handle);
 void valk_async_handle_unref(valk_async_handle_t *handle);
 u32 valk_async_handle_refcount(valk_async_handle_t *handle);
@@ -106,6 +104,9 @@ static inline bool valk_async_handle_is_terminal(valk_async_status_t status) {
 
 void valk_register_async_handle_builtins(struct valk_lenv_t *env);
 
+void valk_async_propagate_region(valk_async_handle_t *handle, struct valk_region *region, struct valk_lenv_t *env);
+void valk_async_propagate_context(valk_async_handle_t *handle, struct valk_region *region, struct valk_lenv_t *env, struct valk_request_ctx *request_ctx);
+
 // HTTP/2 client request implementation (called from parser.c builtin)
 struct valk_lval_t *valk_http2_client_request_impl(struct valk_lenv_t *e,
                                                     valk_aio_system_t *sys,
@@ -133,6 +134,7 @@ struct valk_lval_t *valk_aio_interval(valk_aio_system_t *sys, u64 interval_ms,
 
 typedef struct valk_http2_request_t {
   valk_mem_allocator_t *allocator;
+  struct valk_region *region;
   char *method;
   char *scheme;
   char *authority;

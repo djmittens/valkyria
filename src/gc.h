@@ -221,17 +221,146 @@ bool valk_repl_get_last_eval_delta(valk_repl_eval_delta_t* out);
 void valk_repl_set_eval_delta(i64 heap, i64 scratch, i64 lval, i64 lenv);
 
 // ============================================================================
-// Forwarding Pointer Helpers (for scratch evacuation)
+// Lifetime and Region Types (Arena-GC Architecture)
 // ============================================================================
 
-// Set forwarding pointer: mark src as forwarded, point to dst
-void valk_lval_set_forward(valk_lval_t* src, valk_lval_t* dst);
+typedef enum {
+  VALK_LIFETIME_IMMORTAL,   // Builtins, stdlib - never collected
+  VALK_LIFETIME_SESSION,    // REPL or server lifetime
+  VALK_LIFETIME_REQUEST,    // HTTP request, single eval
+  VALK_LIFETIME_SCRATCH,    // Expression evaluation (current scratch arena)
+} valk_lifetime_e;
 
-// Check if value is a forwarding pointer
-bool valk_lval_is_forwarded(valk_lval_t* v);
+typedef struct valk_region_stats {
+  sz bytes_allocated;             // Current bytes allocated in this region
+  sz bytes_limit;                 // Maximum bytes allowed (0 = unlimited)
+  sz bytes_promoted;              // Bytes promoted to parent region
+  u64 alloc_count;                // Number of allocations
+  u64 promotion_count;            // Number of objects promoted to parent
+  u64 overflow_count;             // Number of overflow fallbacks to parent
+} valk_region_stats_t;
 
-// Follow forwarding pointer chain to find final destination
-valk_lval_t* valk_lval_follow_forward(valk_lval_t* v);
+typedef struct valk_region {
+  valk_mem_allocator_e type;      // VALK_ALLOC_REGION - must be first for allocator casting
+  valk_lifetime_e lifetime;       // Which tier
+  struct valk_region *parent;     // Fallback for overflow / promotion
+  valk_mem_arena_t *arena;        // Bump allocator for REQUEST/SCRATCH (owned or external)
+  struct valk_gc_heap2 *gc_heap;  // For SESSION lifetime only
+  bool owns_arena;                // True if region owns arena memory (should free on destroy)
+  valk_region_stats_t stats;      // Memory tracking statistics
+} valk_region_t;
+
+// Region API - create, destroy, and reset regions
+// Regions provide hierarchical memory management with automatic cleanup
+valk_region_t *valk_region_create(valk_lifetime_e lifetime, valk_region_t *parent);
+
+// Create a region with an externally-managed arena (e.g., from slab pool)
+// The region does NOT own the arena - caller is responsible for arena lifecycle
+valk_region_t *valk_region_create_with_arena(valk_lifetime_e lifetime, 
+                                              valk_region_t *parent,
+                                              valk_mem_arena_t *arena);
+
+// Initialize a region in-place (for stack or embedded allocation)
+void valk_region_init(valk_region_t *region, valk_lifetime_e lifetime, 
+                      valk_region_t *parent, valk_mem_arena_t *arena);
+
+void valk_region_destroy(valk_region_t *region);
+void valk_region_reset(valk_region_t *region);
+
+// Allocate from a region (bump allocation for REQUEST/SCRATCH, heap for SESSION)
+void *valk_region_alloc(valk_region_t *region, sz bytes);
+
+// Set memory limit for a region (0 = unlimited)
+// Returns false if current usage already exceeds limit
+bool valk_region_set_limit(valk_region_t *region, sz limit);
+
+// Get region statistics
+void valk_region_get_stats(valk_region_t *region, valk_region_stats_t *out);
+
+// ============================================================================
+// Cross-Region Reference Checking
+// ============================================================================
+
+// Lifetime comparison - returns true if 'from' can safely reference 'to'
+// Rule: longer-lived objects must not point to shorter-lived objects
+// IMMORTAL > SESSION > REQUEST > SCRATCH
+static inline bool valk_lifetime_can_reference(valk_lifetime_e from, valk_lifetime_e to) {
+  return from >= to;
+}
+
+// Get lifetime of an allocator (for write barrier checks)
+valk_lifetime_e valk_allocator_lifetime(void *allocator);
+
+// Write barrier - check if storing 'child' pointer in 'parent' object is safe
+// Returns true if safe, false if cross-region violation detected
+// If promote_on_escape is true, will promote child to parent's region on violation
+bool valk_region_write_barrier(void *parent_allocator, void *child_allocator, 
+                                bool promote_on_escape);
+
+// Promote an lval and its transitive dependencies to a target region
+// Used when an object escapes its original region
+struct valk_lval_t *valk_region_promote_lval(valk_region_t *target, 
+                                              struct valk_lval_t *val);
+
+// Ensure a child lval can be safely referenced by a parent lval.
+// If the child has a shorter lifetime, promotes it to the parent's region.
+// Returns the (possibly promoted) child pointer to use.
+struct valk_lval_t *valk_region_ensure_safe_ref(struct valk_lval_t *parent, 
+                                                 struct valk_lval_t *child);
+
+// ============================================================================
+// Pointer Map - hashmap for tracking src->dst during evacuation
+// ============================================================================
+
+#define VALK_PTR_MAP_INIT_CAPACITY 256
+#define VALK_PTR_MAP_LOAD_FACTOR 0.75f
+
+typedef struct {
+  void *src;
+  void *dst;
+} valk_ptr_map_entry_t;
+
+typedef struct {
+  valk_ptr_map_entry_t *entries;
+  sz count;
+  sz capacity;
+} valk_ptr_map_t;
+
+void valk_ptr_map_init(valk_ptr_map_t *map);
+void valk_ptr_map_free(valk_ptr_map_t *map);
+void valk_ptr_map_put(valk_ptr_map_t *map, void *src, void *dst);
+void *valk_ptr_map_get(valk_ptr_map_t *map, void *src);
+
+// ============================================================================
+// Handle Table - for cross-region references (e.g., timer callbacks)
+// ============================================================================
+
+#define VALK_HANDLE_TABLE_INIT_SIZE 64
+
+typedef struct {
+  u32 index;       // Slot in handle table
+  u32 generation;  // Detect stale handles
+} valk_handle_t;
+
+typedef struct {
+  pthread_mutex_t lock;
+  valk_lval_t **slots;
+  u32 *generations;
+  u32 capacity;
+  u32 count;
+  u32 free_head;
+} valk_handle_table_t;
+
+void valk_handle_table_init(valk_handle_table_t *table);
+void valk_handle_table_free(valk_handle_table_t *table);
+valk_handle_t valk_handle_create(valk_handle_table_t *table, valk_lval_t *val);
+valk_lval_t *valk_handle_resolve(valk_handle_table_t *table, valk_handle_t h);
+void valk_handle_release(valk_handle_table_t *table, valk_handle_t h);
+void valk_handle_table_visit(valk_handle_table_t *table, 
+                             void (*visitor)(valk_lval_t*, void*), void *ctx);
+
+// Global handle table for cross-region references
+extern valk_handle_table_t valk_global_handle_table;
 
 // ============================================================================
 // Evacuation Context (for checkpoint-based memory management)
@@ -250,6 +379,7 @@ typedef struct {
   u64 values_copied;           // Stats for this evacuation
   sz bytes_copied;            // Stats for this evacuation
   u64 pointers_fixed;          // Stats for this evacuation
+  valk_ptr_map_t ptr_map;         // Hashmap for src->dst deduplication (single-pass)
 } valk_evacuation_ctx_t;
 
 // ============================================================================
@@ -388,21 +518,6 @@ void valk_gc_thread_unregister(void);
 
 // Safe point slow path (called when GC is pending)
 void valk_gc_safe_point_slow(void);
-
-// Global roots registry (for C-side persistent references)
-#define VALK_GC_MAX_GLOBAL_ROOTS 1024
-
-typedef struct valk_gc_global_roots {
-  pthread_mutex_t lock;
-  valk_lval_t** roots[VALK_GC_MAX_GLOBAL_ROOTS];
-  u64 count;
-} valk_gc_global_roots_t;
-
-extern valk_gc_global_roots_t valk_gc_global_roots;
-
-// Register/unregister global roots
-void valk_gc_add_global_root(valk_lval_t** root);
-void valk_gc_remove_global_root(valk_lval_t** root);
 
 // ============================================================================
 // Phase 1: Page-based Allocator with Mark Bitmaps (Parallel GC)
@@ -798,75 +913,7 @@ sz valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap);
 bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap);
 
 // ============================================================================
-// Legacy Single-Class Page Structure (existing, for backward compatibility)
-// ============================================================================
-
-typedef struct valk_gc_page {
-  struct valk_gc_page *next;      // Next page in pool list
-  _Atomic u32 num_allocated; // Slots currently in use
-  u32 page_id;               // For debugging
-  u8 mark_bits[VALK_GC_BITMAP_SIZE];  // Mark bitmap (1 = marked)
-  u8 alloc_bits[VALK_GC_BITMAP_SIZE]; // Allocation bitmap (1 = in use)
-  _Alignas(VALK_GC_PAGE_ALIGN) u8 slots[VALK_GC_SLOTS_PER_PAGE * VALK_GC_SLOT_SIZE];
-} valk_gc_page_t;
-
-typedef struct valk_gc_page_pool {
-  pthread_mutex_t lock;
-  valk_gc_page_t *all_pages;      // All allocated pages (for sweep)
-  valk_gc_page_t *partial_pages;  // Pages with free space
-  sz num_pages;
-  _Atomic sz total_slots;
-  _Atomic sz used_slots;
-  _Atomic sz gc_threshold;    // Trigger GC when used_slots exceeds
-} valk_gc_page_pool_t;
-
-// TLAB (Thread-Local Allocation Buffer)
-typedef struct valk_gc_tlab {
-  valk_gc_page_t *page;        // Current page
-  u32 next_slot;          // Next slot index to allocate from
-  u32 limit_slot;         // Last slot in TLAB range (exclusive)
-} valk_gc_tlab_t;
-
-// Initialize page pool
-void valk_gc_page_pool_init(valk_gc_page_pool_t *pool);
-
-// Destroy page pool (frees all pages)
-void valk_gc_page_pool_destroy(valk_gc_page_pool_t *pool);
-
-// Allocate a new page and add to pool
-valk_gc_page_t *valk_gc_page_alloc(valk_gc_page_pool_t *pool);
-
-// Initialize TLAB (must be called per-thread)
-void valk_gc_tlab_init(valk_gc_tlab_t *tlab);
-
-// Refill TLAB from page pool (slow path)
-bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_page_pool_t *pool);
-
-// Fast path allocation from TLAB (inline for performance)
-// Note: alloc_bits are pre-set during tlab_refill, so we just bump the pointer
-static inline void *valk_gc_tlab_alloc(valk_gc_tlab_t *tlab) {
-  if (__builtin_expect(tlab->page != nullptr && tlab->next_slot < tlab->limit_slot, 1)) {
-    u32 slot = tlab->next_slot++;
-    return &tlab->page->slots[slot * VALK_GC_SLOT_SIZE];
-  }
-  return nullptr;  // TLAB exhausted, need slow path
-}
-
-// Get page pool statistics
-void valk_gc_page_pool_stats(valk_gc_page_pool_t *pool, 
-                              sz *out_pages, sz *out_total, 
-                              sz *out_used);
-
-// ============================================================================
-// Phase 2: GC Triggering and Participation
-// ============================================================================
-
-void valk_gc_request_collection(void);
-
-void valk_gc_participate(void);
-
-// ============================================================================
-// Phase 3: Root Enumeration
+// Root Enumeration
 // ============================================================================
 
 typedef struct valk_gc_root {
@@ -887,36 +934,8 @@ void valk_gc_visit_thread_roots(valk_gc_root_visitor_t visitor, void *ctx);
 void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx);
 void valk_gc_visit_env_roots(valk_lenv_t *env, valk_gc_root_visitor_t visitor, void *ctx);
 
-// ============================================================================
-// Phase 4: Parallel Mark
-// ============================================================================
-
 void valk_gc_parallel_mark(void);
 bool valk_gc_check_termination(void);
-
-// ============================================================================
-// Phase 5: Parallel Sweep
-// ============================================================================
-
-void valk_gc_parallel_sweep(valk_gc_page_pool_t *pool);
-
-// ============================================================================
-// Phase 6: Integration - GC Trigger and Full Cycle
-// ============================================================================
-
-void valk_gc_maybe_collect(valk_gc_page_pool_t *pool);
-void valk_gc_full_cycle(valk_gc_page_pool_t *pool);
-
-// ============================================================================
-// Global Page Pool for TLAB Allocation
-// ============================================================================
-
-extern valk_gc_page_pool_t valk_gc_global_pool;
-
-void valk_gc_global_pool_init(void);
-void valk_gc_global_pool_destroy(void);
-
-void *valk_gc_tlab_alloc_slow(sz bytes);
 
 // ============================================================================
 // Root Stack Inline Implementations

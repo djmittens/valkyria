@@ -1,0 +1,239 @@
+; hey.valk - HTTP/2 Load Testing Tool for Valkyria
+; Similar to rakyll/hey but native to the Valkyria ecosystem
+;
+; Usage: Modify the configuration below and run:
+;   ./build/valk tools/hey.valk
+;
+; Output: Summary statistics including latency percentiles, RPS, error rate
+
+(load "src/prelude.valk")
+
+; ============================================================================
+; Configuration - Modify these values
+; ============================================================================
+
+(def {cfg-host} "localhost")
+(def {cfg-port} 18443)
+(def {cfg-path} "/")
+(def {cfg-total} 20)
+(def {cfg-conc} 5)
+
+; ============================================================================
+; Results State
+; ============================================================================
+
+(def {completed} 0)
+(def {success-count} 0)
+(def {error-count} 0)
+(def {latencies-list} {})
+(def {start-time} 0)
+(def {end-time} 0)
+(def {requests-sent} 0)
+(def {active-workers} 0)
+(def {finish-callback} nil)
+
+; ============================================================================
+; Statistics Functions  
+; ============================================================================
+
+; Quicksort for latency calculations
+(fun {qsort lst} {
+  (if (<= (len lst) 1)
+    {lst}
+    {(= {pivot} (head lst))
+     (= {rest} (tail lst))
+     (= {less} (filter (\ {x} {< x pivot}) rest))
+     (= {greater} (filter (\ {x} {>= x pivot}) rest))
+     (join (qsort less) (join (list pivot) (qsort greater)))})
+})
+
+; Calculate percentile from sorted list (1-indexed)
+(fun {percentile sorted p} {
+  (if (== sorted nil)
+    {0}
+    {(= {n} (len sorted))
+     (= {idx} (/ (* n p) 100))
+     (= {idx} (if (< idx 1) {1} {(if (> idx n) {n} {idx})}))
+     (nth idx sorted)})
+})
+
+; Calculate mean
+(fun {mean lst} {
+  (if (== lst nil)
+    {0}
+    {(/ (sum lst) (len lst))})
+})
+
+; Calculate min
+(fun {list-min lst} {
+  (if (== lst nil)
+    {0}
+    {(foldl (\ {acc x} {(if (< x acc) {x} {acc})}) (head lst) (tail lst))})
+})
+
+; Calculate max
+(fun {list-max lst} {
+  (if (== lst nil)
+    {0}
+    {(foldl (\ {acc x} {(if (> x acc) {x} {acc})}) (head lst) (tail lst))})
+})
+
+; ============================================================================
+; Request Handling
+; ============================================================================
+
+(def {aio} (aio/start))
+
+; Called when a request completes - handles result and potentially sends more
+(fun {on-request-done latency-ms is-success} {
+  (def {completed} (+ completed 1))
+  (def {latencies-list} (join latencies-list (list latency-ms)))
+  
+  (if is-success
+    {(def {success-count} (+ success-count 1))}
+    {(def {error-count} (+ error-count 1))})
+  
+  (def {active-workers} (- active-workers 1))
+  
+  ; Try to send more requests if quota not exhausted
+  (if (< requests-sent cfg-total)
+    {(send-request)}
+    {; Check if all done
+     (if (== active-workers 0)
+       {(finish-callback)}
+       {true})})
+})
+
+; Send a single request
+(fun {send-request} {
+  (def {requests-sent} (+ requests-sent 1))
+  (def {active-workers} (+ active-workers 1))
+  (= {req-start} (time-us))
+  
+  (http2/client-request aio cfg-host cfg-port cfg-path (\ {resp} {
+    (= {req-end} (time-us))
+    (= {latency-ms} (/ (- req-end req-start) 1000))
+    
+    ; Check response status
+    (= {is-success} 
+      (if (error? resp)
+        {false}
+        {(= {status} (str->num (http2/response-status resp)))
+         (if (>= status 200)
+           {(< status 300)}
+           {false})}))
+    
+    (on-request-done latency-ms is-success)
+  }))
+})
+
+; ============================================================================
+; Print Results
+; ============================================================================
+
+(fun {print-results} {
+  (= {duration-us} (- end-time start-time))
+  (= {duration-s} (/ duration-us 1000000))
+  (= {sorted} (qsort latencies-list))
+  
+  (println "")
+  (println "Summary:")
+  (printf "  Total:        %d requests\n" cfg-total)
+  (printf "  Completed:    %d\n" completed)
+  (printf "  Successful:   %d\n" success-count)
+  (printf "  Failed:       %d\n" error-count)
+  
+  (if (> duration-s 0)
+    {(printf "  Duration:     %d ms\n" (/ duration-us 1000))
+     (printf "  RPS:          %d\n" (/ completed duration-s))}
+    {(println "  Duration:     N/A")
+     (println "  RPS:          N/A")})
+  
+  (println "")
+  (println "Latency Distribution:")
+  (if (> (len sorted) 0)
+    {(printf "  Min:          %d ms\n" (list-min sorted))
+     (printf "  Mean:         %d ms\n" (mean sorted))
+     (printf "  P50:          %d ms\n" (percentile sorted 50))
+     (printf "  P90:          %d ms\n" (percentile sorted 90))
+     (printf "  P95:          %d ms\n" (percentile sorted 95))
+     (printf "  P99:          %d ms\n" (percentile sorted 99))
+     (printf "  Max:          %d ms\n" (list-max sorted))}
+    {(println "  No data")})
+  
+  (println "")
+  (= {error-rate} (if (> completed 0) {(/ (* 100 error-count) completed)} {0}))
+  (printf "Error Rate: %d%%\n" error-rate)
+})
+
+; ============================================================================
+; Main Entry Point
+; ============================================================================
+
+(fun {run-hey host port path total conc} {
+  ; Set config
+  (def {cfg-host} host)
+  (def {cfg-port} port)
+  (def {cfg-path} path)
+  (def {cfg-total} total)
+  (def {cfg-conc} conc)
+  
+  ; Reset state
+  (def {completed} 0)
+  (def {success-count} 0)
+  (def {error-count} 0)
+  (def {latencies-list} {})
+  (def {requests-sent} 0)
+  (def {active-workers} 0)
+  
+  (println "")
+  (println "hey - Valkyria HTTP/2 Load Tester")
+  (println "")
+  (printf "Target:       https://%s:%d%s\n" host port path)
+  (printf "Requests:     %d\n" total)
+  (printf "Concurrency:  %d\n" conc)
+  (println "")
+  (println "Running...")
+  
+  ; Record start time
+  (def {start-time} (time-us))
+  
+  ; Set finish callback
+  (def {finish-callback} (\ {} {
+    (def {end-time} (time-us))
+    (print-results)
+    (aio/stop aio)
+  }))
+  
+  ; Launch initial batch of workers
+  (= {num-workers} (if (< conc total) {conc} {total}))
+  (= {i} 0)
+  (= {launch} (\ {n} {
+    (if (< n num-workers)
+      {(send-request)
+       (launch (+ n 1))}
+      {true})
+  }))
+  (launch 0)
+  
+  ; Run event loop
+  (aio/run aio)
+})
+
+; ============================================================================
+; Default Run
+; ============================================================================
+
+(println "")
+(println "hey.valk - HTTP/2 Load Tester for Valkyria")
+(println "")
+(println "Usage:")
+(println "  1. Start a test server: ./build/valk tools/test_server.valk")
+(println "  2. Run this tool:       ./build/valk tools/hey.valk")
+(println "")
+(printf "Config: %s:%d%s, %d requests, %d concurrent\n" 
+        cfg-host cfg-port cfg-path cfg-total cfg-conc)
+(println "")
+
+; Run with defaults
+(run-hey cfg-host cfg-port cfg-path cfg-total cfg-conc)

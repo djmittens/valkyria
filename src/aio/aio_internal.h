@@ -26,6 +26,7 @@
 #include "event_loop_metrics.h"
 #include "parser.h"
 #include "memory.h"
+#include "gc.h"
 #include "collections.h"
 #include "aio_alloc.h"
 #include "aio_diagnostics_builtins.h"
@@ -189,6 +190,7 @@ typedef struct valk_http2_server_request {
   i32 stream_id;
   valk_mem_arena_t *stream_arena;
   valk_arena_ref_t arena_ref;
+  valk_region_t region;
   u32 next_arena_slot;
   u64 start_time_us;
   u64 bytes_sent;
@@ -197,6 +199,7 @@ typedef struct valk_http2_server_request {
   u64 response_sent_time_us;
   bool response_complete;
   struct valk_sse_stream_entry *sse_entry;
+  struct valk_request_ctx *request_ctx;
 } valk_http2_server_request_t;
 
 typedef struct {
@@ -306,8 +309,9 @@ struct valk_aio_system {
   valk_slab_t *tcpBufferSlab;
 
   valk_slab_t *handleSlab;
-  valk_slab_t *timerDataSlab;
   valk_aio_handle_t liveHandles;
+
+  valk_region_t system_region;
 
   bool shuttingDown;
   bool cleanedUp;
@@ -342,7 +346,7 @@ struct valk_aio_http_server {
   char interface[200];
   int port;
   valk_http2_handler_t handler;
-  valk_lval_t* lisp_handler_fn;
+  valk_handle_t lisp_handler_handle;
   valk_lenv_t* sandbox_env;
   valk_http_server_config_t config;
   valk_server_metrics_t metrics;
@@ -375,16 +379,16 @@ typedef struct {
 typedef struct {
   alignas(16) uv_timer_t timer;
   valk_lval_t *callback;
+  valk_handle_t callback_handle;
   u64 schedule_id;
-  valk_slab_t *slab;
 } valk_schedule_timer_t;
 
 typedef struct valk_interval_timer {
   alignas(16) uv_timer_t timer;
   valk_lval_t *callback;
+  valk_handle_t callback_handle;
   u64 interval_id;
   bool stopped;
-  valk_slab_t *slab;
 } valk_interval_timer_t;
 
 typedef struct {

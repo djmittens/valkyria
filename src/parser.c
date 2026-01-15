@@ -22,9 +22,11 @@
 
 #include "aio/aio_metrics.h"
 #include "aio/aio_diagnostics_builtins.h"
+#include "aio/aio_request_ctx.h"
 #include "metrics_v2.h"
 #include "metrics_delta.h"
 void valk_register_metrics_builtins(valk_lenv_t *env);
+void valk_register_ctx_builtins(valk_lenv_t *env);
 
 // TODO(networking): temp forward declare for debugging
 static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a);
@@ -273,8 +275,6 @@ const char* valk_ltype_name(valk_ltype_e type) {
       return "Reference";
     case LVAL_HANDLE:
       return "Handle";
-    case LVAL_FORWARD:
-      return "Forward";
     case LVAL_UNDEFINED:
       return "UNDEFINED";
   }
@@ -523,8 +523,8 @@ valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
   INHERIT_SOURCE_LOC(res, head);
-  res->cons.head = head;
-  res->cons.tail = tail;
+  res->cons.head = valk_region_ensure_safe_ref(res, head);
+  res->cons.tail = valk_region_ensure_safe_ref(res, tail);
   return res;
 }
 
@@ -535,8 +535,8 @@ valk_lval_t* valk_lval_qcons(valk_lval_t* head, valk_lval_t* tail) {
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
   INHERIT_SOURCE_LOC(res, head);
-  res->cons.head = head;
-  res->cons.tail = tail;
+  res->cons.head = valk_region_ensure_safe_ref(res, head);
+  res->cons.tail = valk_region_ensure_safe_ref(res, tail);
   return res;
 }
 
@@ -742,7 +742,6 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
       res->ref.free = lval->ref.free;
       break;
     }
-    case LVAL_FORWARD:
     case LVAL_UNDEFINED:
       break;
     case LVAL_HANDLE:
@@ -835,8 +834,6 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
       return x == y;
     case LVAL_UNDEFINED:
       VALK_RAISE("LVAL is undefined, something went wrong");
-      break;
-    case LVAL_FORWARD:
       break;
   }
 
@@ -1215,6 +1212,45 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
             expr = cond;
             continue;
           }
+
+          // (ctx/with-deadline timeout-ms body...) - sets deadline, evals body, restores ctx
+          if (strcmp(first->str, "ctx/with-deadline") == 0) {
+            if (count < 3) {
+              value = valk_lval_err("ctx/with-deadline requires timeout-ms and body, got %zu args", count - 1);
+              expr = NULL;
+              goto apply_cont;
+            }
+            valk_lval_t* timeout_expr = valk_lval_list_nth(expr, 1);
+            valk_lval_t* body = expr->cons.tail->cons.tail;
+
+            valk_eval_stack_push(&stack, (valk_cont_frame_t){
+              .kind = CONT_CTX_DEADLINE,
+              .env = cur_env,
+              .ctx_deadline = {.body = body, .old_ctx = valk_thread_ctx.request_ctx}
+            });
+            expr = timeout_expr;
+            continue;
+          }
+
+          // (ctx/with key value body...) - adds local, evals body, restores ctx
+          if (strcmp(first->str, "ctx/with") == 0) {
+            if (count < 4) {
+              value = valk_lval_err("ctx/with requires key, value, and body, got %zu args", count - 1);
+              expr = NULL;
+              goto apply_cont;
+            }
+            valk_lval_t* key_expr = valk_lval_list_nth(expr, 1);
+            valk_lval_t* value_expr = valk_lval_list_nth(expr, 2);
+            valk_lval_t* body = expr->cons.tail->cons.tail->cons.tail;
+
+            valk_eval_stack_push(&stack, (valk_cont_frame_t){
+              .kind = CONT_CTX_WITH,
+              .env = cur_env,
+              .ctx_with = {.value_expr = value_expr, .body = body, .old_ctx = valk_thread_ctx.request_ctx}
+            });
+            expr = key_expr;
+            continue;
+          }
         }
         
         // Normal function application: eval function position first
@@ -1391,7 +1427,98 @@ apply_cont:
           valk_thread_ctx.call_depth--;
           atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
           goto apply_cont;
-        
+
+        case CONT_CTX_DEADLINE: {
+          if (LVAL_TYPE(value) == LVAL_ERR) {
+            valk_thread_ctx.request_ctx = frame.ctx_deadline.old_ctx;
+            goto apply_cont;
+          }
+          if (LVAL_TYPE(value) != LVAL_NUM) {
+            valk_thread_ctx.request_ctx = frame.ctx_deadline.old_ctx;
+            value = valk_lval_err("ctx/with-deadline timeout must be a number, got %s", valk_ltype_name(LVAL_TYPE(value)));
+            goto apply_cont;
+          }
+
+          u64 timeout_ms = (u64)value->num;
+          valk_request_ctx_t *new_ctx = valk_request_ctx_with_timeout(
+            valk_thread_ctx.request_ctx, timeout_ms, valk_thread_ctx.allocator);
+          valk_thread_ctx.request_ctx = new_ctx;
+
+          valk_lval_t *body = frame.ctx_deadline.body;
+          if (valk_lval_list_is_empty(body)) {
+            valk_thread_ctx.request_ctx = frame.ctx_deadline.old_ctx;
+            value = valk_lval_nil();
+            goto apply_cont;
+          }
+
+          if (valk_lval_list_is_empty(body->cons.tail)) {
+            valk_eval_stack_push(&stack, (valk_cont_frame_t){
+              .kind = CONT_CTX_DEADLINE,
+              .env = frame.env,
+              .ctx_deadline = {.body = valk_lval_nil(), .old_ctx = frame.ctx_deadline.old_ctx}
+            });
+            expr = body->cons.head;
+            cur_env = frame.env;
+            continue;
+          }
+
+          valk_eval_stack_push(&stack, (valk_cont_frame_t){
+            .kind = CONT_CTX_DEADLINE,
+            .env = frame.env,
+            .ctx_deadline = {.body = body->cons.tail, .old_ctx = frame.ctx_deadline.old_ctx}
+          });
+          expr = body->cons.head;
+          cur_env = frame.env;
+          continue;
+        }
+
+        case CONT_CTX_WITH: {
+          if (LVAL_TYPE(value) == LVAL_ERR) {
+            valk_thread_ctx.request_ctx = frame.ctx_with.old_ctx;
+            goto apply_cont;
+          }
+
+          valk_lval_t *key = value;
+          valk_lval_t *value_expr = frame.ctx_with.value_expr;
+          valk_lval_t *val = valk_lval_eval(frame.env, value_expr);
+          if (LVAL_TYPE(val) == LVAL_ERR) {
+            valk_thread_ctx.request_ctx = frame.ctx_with.old_ctx;
+            value = val;
+            goto apply_cont;
+          }
+
+          valk_request_ctx_t *new_ctx = valk_request_ctx_with_local(
+            valk_thread_ctx.request_ctx, key, val, valk_thread_ctx.allocator);
+          valk_thread_ctx.request_ctx = new_ctx;
+
+          valk_lval_t *body = frame.ctx_with.body;
+          if (valk_lval_list_is_empty(body)) {
+            valk_thread_ctx.request_ctx = frame.ctx_with.old_ctx;
+            value = valk_lval_nil();
+            goto apply_cont;
+          }
+
+          if (valk_lval_list_is_empty(body->cons.tail)) {
+            valk_eval_stack_push(&stack, (valk_cont_frame_t){
+              .kind = CONT_CTX_DEADLINE,
+              .env = frame.env,
+              .ctx_deadline = {.body = valk_lval_nil(), .old_ctx = frame.ctx_with.old_ctx}
+            });
+            expr = body->cons.head;
+            cur_env = frame.env;
+            continue;
+          }
+
+          valk_eval_stack_push(&stack, (valk_cont_frame_t){
+            .kind = CONT_CTX_DEADLINE,
+            .env = frame.env,
+            .ctx_deadline = {.body = body->cons.tail, .old_ctx = frame.ctx_with.old_ctx}
+          });
+          expr = body->cons.head;
+          cur_env = frame.env;
+          continue;
+        }
+
         default:
           value = valk_lval_err("Unknown continuation type: %d", frame.kind);
           goto apply_cont;
@@ -1408,9 +1535,6 @@ valk_lval_t* valk_lval_eval(valk_lenv_t* env, valk_lval_t* lval) {
 
 valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
                                  valk_lval_t* args) {
-  while (func && LVAL_TYPE(func) == LVAL_FORWARD) {
-    func = func->forward;
-  }
   LVAL_ASSERT_TYPE(args, func, LVAL_FUN);
 
   valk_eval_result_t res = valk_eval_apply_func_iter(env, func, args);
@@ -1653,9 +1777,6 @@ void valk_lval_print(valk_lval_t* val) {
       break;
     case LVAL_HANDLE:
       printf("<handle>");
-      break;
-    case LVAL_FORWARD:
-      printf("<forward:%p>", (void*)val->forward);
       break;
     case LVAL_UNDEFINED:
       printf("[Undefined]");
@@ -2099,12 +2220,7 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
         if (valk_log_would_log(VALK_LOG_TRACE)) {
           VALK_TRACE("env get idx=%zu key=%s", i, env->symbols.items[i]);
         }
-        valk_lval_t* val = env->vals.items[i];
-        while (val && LVAL_TYPE(val) == LVAL_FORWARD) {
-          val = val->forward;
-          env->vals.items[i] = val;
-        }
-        return val;
+        return env->vals.items[i];
       }
     }
     env = env->parent;
@@ -2113,17 +2229,43 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
   return valk_lval_err("LEnv: Symbol `%s` is not bound", key->str);
 }
 
+static valk_lval_t* __lenv_ensure_safe_val(valk_lenv_t* env, valk_lval_t* val) {
+  if (!val) return val;
+  
+  void *env_alloc = env->allocator;
+  if (!env_alloc && valk_thread_ctx.heap) {
+    env_alloc = valk_thread_ctx.heap;
+  }
+  if (!env_alloc) return val;
+  
+  void *val_alloc = val->origin_allocator;
+  if (!val_alloc) return val;
+  
+  if (valk_region_write_barrier(env_alloc, val_alloc, false)) {
+    return val;
+  }
+  
+  valk_mem_allocator_t *alloc = (valk_mem_allocator_t *)env_alloc;
+  if (alloc->type == VALK_ALLOC_REGION) {
+    return valk_region_promote_lval((valk_region_t *)env_alloc, val);
+  }
+  
+  return val;
+}
+
 void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   if (valk_log_would_log(VALK_LOG_DEBUG)) {
     VALK_DEBUG("env put: %s", key->str);
   }
+
+  valk_lval_t* safe_val = __lenv_ensure_safe_val(env, val);
 
   for (u64 i = 0; i < env->symbols.count; i++) {
     if (env->symbols.items == NULL || env->symbols.items[i] == NULL) {
       break;
     }
     if (strcmp(key->str, env->symbols.items[i]) == 0) {
-      env->vals.items[i] = val;
+      env->vals.items[i] = safe_val;
       return;
     }
   }
@@ -2184,7 +2326,7 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     }
 
     env->symbols.items[env->symbols.count++] = new_symbol;
-    env->vals.items[env->vals.count++] = val;
+    env->vals.items[env->vals.count++] = safe_val;
   }
 }
 
@@ -2206,6 +2348,7 @@ void valk_lenv_put_builtin(valk_lenv_t* env, char* key,
     VALK_SET_ORIGIN_ALLOCATOR(lfun);
     lfun->fun.builtin = _fun;
     lfun->fun.env = nullptr;
+    valk_lval_set_immortal(lfun);
     // Create symbol lval, use it for put, then free it (put only copies the string)
     valk_lval_t* sym = valk_lval_sym(key);
     valk_lenv_put(env, sym, lfun);
@@ -3283,9 +3426,6 @@ static void valk_lval_print_user(valk_lval_t* val) {
     case LVAL_HANDLE:
       printf("<handle>");
       break;
-    case LVAL_FORWARD:
-      printf("<forward>");
-      break;
     case LVAL_UNDEFINED:
       printf("<undefined>");
       break;
@@ -3932,8 +4072,11 @@ static valk_lval_t* valk_builtin_atom_sub(valk_lenv_t* e, valk_lval_t* a) {
 
 static void __valk_http2_request_release(void* arg) {
   valk_http2_request_t* req = (valk_http2_request_t*)arg;
-  // The request and all of its allocations live inside this arena buffer.
-  free((void*)req->allocator);
+  // The request and all of its allocations live inside the region's arena.
+  valk_region_t* region = req->region;
+  valk_mem_arena_t* arena = region->arena;
+  free(region);
+  free(arena);
 }
 
 // http2/request: (http2/request method scheme authority path) -> http2_request
@@ -3953,12 +4096,16 @@ static valk_lval_t* valk_builtin_http2_request(valk_lenv_t* e, valk_lval_t* a) {
   valk_mem_arena_t* arena = malloc(arena_bytes);
   valk_mem_arena_init(arena, arena_bytes - sizeof(*arena));
 
-  valk_http2_request_t* req =
-      valk_mem_arena_alloc(arena, sizeof(valk_http2_request_t));
-  memset(req, 0, sizeof(*req));
-  req->allocator = (valk_mem_allocator_t*)arena;
+  valk_region_t* region = malloc(sizeof(valk_region_t));
+  valk_region_init(region, VALK_LIFETIME_REQUEST, nullptr, arena);
 
-  // Copy strings into request arena scope
+  valk_http2_request_t* req =
+      valk_region_alloc(region, sizeof(valk_http2_request_t));
+  memset(req, 0, sizeof(*req));
+  req->allocator = (valk_mem_allocator_t*)region;
+  req->region = region;
+
+  // Copy strings into request region scope
   VALK_WITH_ALLOC(req->allocator) {
     u64 len;
     len = strlen(valk_lval_list_nth(a, 0)->str);
@@ -4988,6 +5135,9 @@ void valk_lenv_builtins(valk_lenv_t* env) {
 
   // AIO diagnostics builtins (from aio/aio_diagnostics_builtins.c)
   valk_register_aio_diagnostics_builtins(env);
+
+  // Request context builtins (from aio/aio_ctx_builtins.c)
+  valk_register_ctx_builtins(env);
 
   // Script classification helpers are implicit via CLI flags; no new builtins
 

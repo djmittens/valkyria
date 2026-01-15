@@ -3,6 +3,7 @@
 
 #include "aio.h"
 #include "memory.h"
+#include "gc.h"
 #include <nghttp2/nghttp2.h>
 #include <stdbool.h>
 
@@ -60,9 +61,9 @@ struct valk_stream_body {
   void (*on_timeout)(valk_stream_body_t *body, void *user_data);
   void *user_data;
 
-  struct valk_lval_t *lisp_on_drain;
-  struct valk_lval_t *lisp_on_close;
-  struct valk_lval_t *lisp_on_timeout;
+  valk_handle_t lisp_on_drain_handle;
+  valk_handle_t lisp_on_close_handle;
+  valk_handle_t lisp_on_timeout_handle;
   struct valk_lenv_t *callback_env;
 };
 

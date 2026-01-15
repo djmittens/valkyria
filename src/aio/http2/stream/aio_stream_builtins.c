@@ -210,13 +210,12 @@ static valk_lval_t *valk_builtin_stream_on_drain(valk_lenv_t *e, valk_lval_t *a)
     return valk_lval_err("stream/on-drain: second argument must be a function");
   }
 
-  if (body->lisp_on_drain) {
-    valk_gc_remove_global_root(&body->lisp_on_drain);
+  if (body->lisp_on_drain_handle.generation > 0) {
+    valk_handle_release(&valk_global_handle_table, body->lisp_on_drain_handle);
   }
   valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
-  body->lisp_on_drain = heap_callback;
+  body->lisp_on_drain_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
   body->callback_env = e;
-  valk_gc_add_global_root(&body->lisp_on_drain);
 
   VALK_DEBUG("stream: registered on-drain callback for body id=%llu",
              (unsigned long long)body->id);
@@ -306,13 +305,12 @@ static valk_lval_t *valk_builtin_stream_on_close(valk_lenv_t *e, valk_lval_t *a)
     return valk_lval_err("stream/on-close: second argument must be a function");
   }
 
-  if (body->lisp_on_close) {
-    valk_gc_remove_global_root(&body->lisp_on_close);
+  if (body->lisp_on_close_handle.generation > 0) {
+    valk_handle_release(&valk_global_handle_table, body->lisp_on_close_handle);
   }
   valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
-  body->lisp_on_close = heap_callback;
+  body->lisp_on_close_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
   body->callback_env = e;
-  valk_gc_add_global_root(&body->lisp_on_close);
 
   VALK_DEBUG("stream: registered on-close callback for body id=%llu",
              (unsigned long long)body->id);

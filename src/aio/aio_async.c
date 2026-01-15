@@ -1,5 +1,6 @@
 #include "aio_internal.h"
 #include "aio_http2_session.h"
+#include "aio_request_ctx.h"
 
 extern u64 g_async_handle_id;
 
@@ -28,8 +29,9 @@ static void clear_is_closed_ctx_recursive(valk_async_handle_t *handle, void *ctx
     handle->is_closed = nullptr;
     handle->is_closed_ctx = nullptr;
   }
-  for (u64 i = 0; i < handle->children.count; i++) {
-    clear_is_closed_ctx_recursive(handle->children.items[i], ctx);
+  u32 count = valk_chunked_ptrs_count(&handle->children);
+  for (u32 i = 0; i < count; i++) {
+    clear_is_closed_ctx_recursive(valk_chunked_ptrs_get(&handle->children, i), ctx);
   }
 }
 
@@ -107,7 +109,7 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
   // LCOV_EXCL_BR_STOP
 
 cleanup:
-  free(http);
+  (void)0;
 }
 
 // LCOV_EXCL_START - standalone async context: used for non-HTTP async ops
@@ -120,8 +122,6 @@ void valk_standalone_async_done_callback(valk_async_handle_t *handle, void *ctx)
     VALK_DEBUG("Releasing standalone async arena back to pool");
     valk_arena_ref_release(&standalone->arena_ref, standalone->sys->httpStreamArenas);
   }
-
-  free(standalone);
 }
 
 valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sys) {
@@ -136,7 +136,7 @@ valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sy
   valk_mem_arena_t *arena = (valk_mem_arena_t *)arena_item->data;
   valk_mem_arena_init(arena, sys->config.arena_size);
 
-  valk_standalone_async_ctx_t *ctx = malloc(sizeof(valk_standalone_async_ctx_t));
+  valk_standalone_async_ctx_t *ctx = valk_region_alloc(&sys->system_region, sizeof(valk_standalone_async_ctx_t));
   if (!ctx) {
     valk_slab_release(sys->httpStreamArenas, arena_item);
     return nullptr;
@@ -168,7 +168,20 @@ bool valk_async_is_resource_closed(valk_async_handle_t *handle) {
 }
 
 valk_async_handle_t* valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env) {
-  valk_async_handle_t *handle = malloc(sizeof(valk_async_handle_t));
+  return valk_async_handle_new_in_region(sys, env, nullptr);
+}
+
+valk_async_handle_t* valk_async_handle_new_in_region(valk_aio_system_t *sys, valk_lenv_t *env, valk_region_t *region) {
+  if (!region && sys) {
+    region = &sys->system_region;
+  }
+
+  valk_async_handle_t *handle;
+  if (region) {
+    handle = valk_region_alloc(region, sizeof(valk_async_handle_t));
+  } else {
+    handle = malloc(sizeof(valk_async_handle_t));
+  }
   if (!handle) return nullptr;
 
   memset(handle, 0, sizeof(valk_async_handle_t));
@@ -178,23 +191,15 @@ valk_async_handle_t* valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *
   handle->refcount = 1;
   handle->sys = sys;
   handle->env = env;
-  
-  handle->allocator = valk_thread_ctx.allocator;
+  handle->region = region;
 
   return handle;
 }
 
 void valk_async_handle_free(valk_async_handle_t *handle) {
   if (!handle) return;
-
-  if (handle->cleanup_callbacks) {
-    free(handle->cleanup_callbacks);
-  }
-
-  if (handle->children.items) {
-    free(handle->children.items);
-  }
-
+  if (handle->region) return;
+  valk_chunked_ptrs_free(&handle->children);
   free(handle);
 }
 
@@ -210,14 +215,13 @@ void valk_async_handle_unref(valk_async_handle_t *handle) {
   u32 old = atomic_fetch_sub_explicit(&handle->refcount, 1, memory_order_acq_rel);
   if (old != 1) return;
 
-  for (i32 i = (i32)handle->cleanup_count - 1; i >= 0; i--) {
-    if (handle->cleanup_callbacks[i].fn) {
-      handle->cleanup_callbacks[i].fn(handle->cleanup_callbacks[i].ctx);
-    }
+  if (handle->cleanup_fn) {
+    handle->cleanup_fn(handle->cleanup_ctx);
   }
 
-  for (u64 i = 0; i < handle->children.count; i++) {
-    valk_async_handle_unref(handle->children.items[i]);
+  u32 count = valk_chunked_ptrs_count(&handle->children);
+  for (u32 i = 0; i < count; i++) {
+    valk_async_handle_unref(valk_chunked_ptrs_get(&handle->children, i));
   }
 
   valk_async_handle_free(handle);
@@ -231,19 +235,8 @@ u32 valk_async_handle_refcount(valk_async_handle_t *handle) {
 void valk_async_handle_on_cleanup(valk_async_handle_t *handle,
                                    valk_async_cleanup_fn fn, void *ctx) {
   if (!handle || !fn) return;
-
-  if (handle->cleanup_count >= handle->cleanup_capacity) {
-    u32 new_cap = handle->cleanup_capacity == 0 ? 4 : handle->cleanup_capacity * 2;
-    void *new_arr = realloc(handle->cleanup_callbacks,
-                            new_cap * sizeof(handle->cleanup_callbacks[0]));
-    if (!new_arr) return;
-    handle->cleanup_callbacks = new_arr;
-    handle->cleanup_capacity = new_cap;
-  }
-
-  handle->cleanup_callbacks[handle->cleanup_count].fn = fn;
-  handle->cleanup_callbacks[handle->cleanup_count].ctx = ctx;
-  handle->cleanup_count++;
+  handle->cleanup_fn = fn;
+  handle->cleanup_ctx = ctx;
 }
 
 void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result) {
@@ -324,28 +317,13 @@ static void valk_async_cancel_task(void *ctx) {
   }
 
   if (handle->on_cancel && handle->env) {
-    valk_mem_allocator_t *alloc = handle->allocator;
-    bool needs_arena = !alloc || 
-                       alloc->type == VALK_ALLOC_MALLOC ||
-                       alloc->type == VALK_ALLOC_GC_HEAP ||
-                       alloc->type == VALK_ALLOC_NULL;
+    valk_mem_allocator_t *alloc = handle->region ? (valk_mem_allocator_t*)handle->region : nullptr;
     // LCOV_EXCL_START - fallback arena allocation rarely triggered
-    if (needs_arena && handle->sys) {
-      valk_standalone_async_ctx_t *standalone = valk_standalone_async_ctx_new(handle->sys);
-      if (standalone) {
-        alloc = (valk_mem_allocator_t*)standalone->arena;
-        handle->allocator = alloc;
-        valk_async_handle_t *root = handle;
-        while (root->parent) root = root->parent;
-        if (!root->on_done) {
-          root->on_done = valk_standalone_async_done_callback;
-          root->on_done_ctx = standalone;
-        }
-      }
+    if (!alloc && handle->sys) {
+      alloc = (valk_mem_allocator_t*)&handle->sys->system_region;
     }
     // LCOV_EXCL_STOP
-    // NOLINTNEXTLINE(clang-analyzer-unix.Malloc) - standalone freed in callback
-    if (!alloc || alloc->type != VALK_ALLOC_ARENA) alloc = &valk_malloc_allocator;
+    if (!alloc) alloc = &valk_malloc_allocator;
     VALK_WITH_ALLOC(alloc) {
       valk_lval_t *args = valk_lval_nil();
       valk_lval_eval_call(handle->env, handle->on_cancel, args);
@@ -354,8 +332,9 @@ static void valk_async_cancel_task(void *ctx) {
 
   valk_aio_system_t *sys = handle->sys;
   if (sys) {
-    for (u64 i = 0; i < handle->children.count; i++) {
-      valk_aio_enqueue_task(sys, valk_async_cancel_task, handle->children.items[i]);
+    u32 count = valk_chunked_ptrs_count(&handle->children);
+    for (u32 i = 0; i < count; i++) {
+      valk_aio_enqueue_task(sys, valk_async_cancel_task, valk_chunked_ptrs_get(&handle->children, i));
     }
   }
 }
@@ -384,42 +363,43 @@ bool valk_async_handle_cancel(valk_async_handle_t *handle) {
 
 void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_handle_t *child) {
   if (!parent || !child) return;
-
   child->parent = parent;
-
-  if (parent->children.count >= parent->children.capacity) {
-    u64 new_cap = parent->children.capacity == 0 ? 4 : parent->children.capacity * 2;
-    valk_async_handle_t **new_items = realloc(parent->children.items,
-                                               new_cap * sizeof(valk_async_handle_t*));
-    if (!new_items) return;
-    parent->children.items = new_items;
-    parent->children.capacity = new_cap;
+  if (parent->request_ctx && !child->request_ctx) {
+    child->request_ctx = parent->request_ctx;
   }
-
-  parent->children.items[parent->children.count++] = child;
+  valk_chunked_ptrs_push(&parent->children, child, parent->region);
 }
 
-static void valk_async_propagate_allocator_impl(valk_async_handle_t *handle, valk_mem_allocator_t *allocator, valk_lenv_t *env, valk_aio_system_t *expected_sys) {
+static void valk_async_propagate_context_impl(valk_async_handle_t *handle, valk_region_t *region, valk_lenv_t *env, valk_request_ctx_t *request_ctx, valk_aio_system_t *expected_sys) {
   if (!handle) return;
 
   if (expected_sys && handle->sys && handle->sys != expected_sys) {
     return;
   }
 
-  if (!handle->allocator) {
-    handle->allocator = allocator;
+  if (!handle->region) {
+    handle->region = region;
   }
   if (!handle->env && env) {
     handle->env = env;
   }
+  if (!handle->request_ctx && request_ctx) {
+    handle->request_ctx = request_ctx;
+  }
 
-  for (u64 i = 0; i < handle->children.count; i++) {
-    valk_async_propagate_allocator_impl(handle->children.items[i], allocator, env, expected_sys);
+  u32 count = valk_chunked_ptrs_count(&handle->children);
+  for (u32 i = 0; i < count; i++) {
+    valk_async_propagate_context_impl(valk_chunked_ptrs_get(&handle->children, i), region, env, request_ctx, expected_sys);
   }
 }
 
-void valk_async_propagate_allocator(valk_async_handle_t *handle, valk_mem_allocator_t *allocator, valk_lenv_t *env) {
-  valk_async_propagate_allocator_impl(handle, allocator, env, handle ? handle->sys : nullptr);
+void valk_async_propagate_region(valk_async_handle_t *handle, valk_region_t *region, valk_lenv_t *env) {
+  valk_request_ctx_t *request_ctx = handle ? handle->request_ctx : nullptr;
+  valk_async_propagate_context_impl(handle, region, env, request_ctx, handle ? handle->sys : nullptr);
+}
+
+void valk_async_propagate_context(valk_async_handle_t *handle, valk_region_t *region, valk_lenv_t *env, valk_request_ctx_t *request_ctx) {
+  valk_async_propagate_context_impl(handle, region, env, request_ctx, handle ? handle->sys : nullptr);
 }
 
 valk_lval_t* valk_async_status_to_sym(valk_async_status_t status) {

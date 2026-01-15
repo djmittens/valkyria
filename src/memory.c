@@ -31,8 +31,8 @@ char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self) {
       return "Slab Alloc";
     case VALK_ALLOC_GC_HEAP:
       return "GC Heap Alloc";
-    case VALK_ALLOC_TLAB:
-      return "TLAB Alloc";
+    case VALK_ALLOC_REGION:
+      return "Region Alloc";
   }
 }
 
@@ -826,14 +826,10 @@ void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, sz bytes) {
     case VALK_ALLOC_MALLOC:
       return malloc(bytes);
     case VALK_ALLOC_GC_HEAP: {
-      // GC heap allocates ALL structures (lval_t + auxiliary data like arrays/strings)
-      // Slab is used for lval_t, malloc fallback for other sizes
-      // Everything goes through unified GC interface for proper tracking
       return valk_gc_malloc_heap_alloc((valk_gc_malloc_heap_t *)self, bytes);
     }
-    case VALK_ALLOC_TLAB: {
-      // TLAB uses the parallel GC page pool for lval-sized allocations
-      return valk_gc_tlab_alloc_slow(bytes);
+    case VALK_ALLOC_REGION: {
+      return valk_region_alloc((valk_region_t *)self, bytes);
     }
   }
   return nullptr;
@@ -868,8 +864,9 @@ void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, sz num,
       res = valk_gc_malloc_heap_alloc((valk_gc_malloc_heap_t *)self, num * size);
       memset(res, 0, num * size);
       break;
-    case VALK_ALLOC_TLAB:
-      res = valk_gc_tlab_alloc_slow(num * size);
+    case VALK_ALLOC_REGION:
+      res = valk_region_alloc((valk_region_t *)self, num * size);
+      if (res) memset(res, 0, num * size);
       break;
   }
   return res;
@@ -916,10 +913,27 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
     }
     case VALK_ALLOC_MALLOC:
       return realloc(ptr, new_size);
-    case VALK_ALLOC_TLAB:
-      VALK_RAISE("Realloc on TLAB allocator not supported: %p -> %zu", ptr, new_size);
+    case VALK_ALLOC_REGION: {
+      valk_region_t *region = (valk_region_t *)self;
+      if (region->arena) {
+        sz old_size = 0;
+        if (ptr) {
+          old_size = *(((u64 *)ptr) - 1);
+        }
+        void *np = valk_region_alloc(region, new_size);
+        if (ptr && np) {
+          sz n = old_size < new_size ? old_size : new_size;
+          memcpy(np, ptr, n);
+        }
+        return np;
+      }
+      if (region->gc_heap) {
+        return valk_gc_heap2_realloc(region->gc_heap, ptr, new_size);
+      }
       return nullptr;
+    }
   }
+  return nullptr;
 }
 
 void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
@@ -944,7 +958,7 @@ void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr) {
       return;
     case VALK_ALLOC_GC_HEAP:
       return;
-    case VALK_ALLOC_TLAB:
+    case VALK_ALLOC_REGION:
       return;
   }
 }
@@ -1116,4 +1130,67 @@ sz valk_slab_bitmap_buckets(valk_slab_t *slab,
   }
 
   return num_buckets;
+}
+
+void valk_chunked_ptrs_init(valk_chunked_ptrs_t *self) {
+  self->head = nullptr;
+  self->tail = nullptr;
+  self->count = 0;
+  self->tail_count = 0;
+  self->malloc_chunks = false;
+}
+
+bool valk_chunked_ptrs_push(valk_chunked_ptrs_t *self, void *ptr, void *alloc_ctx) {
+  if (!self->tail || self->tail_count >= VALK_CHUNK_SIZE) {
+    valk_ptr_chunk_t *chunk;
+    if (alloc_ctx) {
+      chunk = valk_region_alloc((valk_region_t *)alloc_ctx, sizeof(valk_ptr_chunk_t));
+    } else {
+      chunk = malloc(sizeof(valk_ptr_chunk_t));
+      self->malloc_chunks = true;
+    }
+    if (!chunk) return false;
+    chunk->next = nullptr;
+    
+    if (self->tail) {
+      self->tail->next = chunk;
+    } else {
+      self->head = chunk;
+    }
+    self->tail = chunk;
+    self->tail_count = 0;
+  }
+  
+  self->tail->items[self->tail_count++] = ptr;
+  self->count++;
+  return true;
+}
+
+void *valk_chunked_ptrs_get(valk_chunked_ptrs_t *self, u32 index) {
+  if (index >= self->count) return nullptr;
+  
+  u32 chunk_idx = index / VALK_CHUNK_SIZE;
+  u32 item_idx = index % VALK_CHUNK_SIZE;
+  
+  valk_ptr_chunk_t *chunk = self->head;
+  for (u32 i = 0; i < chunk_idx && chunk; i++) {
+    chunk = chunk->next;
+  }
+  
+  return chunk ? chunk->items[item_idx] : nullptr;
+}
+
+void valk_chunked_ptrs_free(valk_chunked_ptrs_t *self) {
+  if (!self->malloc_chunks) return;
+  valk_ptr_chunk_t *chunk = self->head;
+  while (chunk) {
+    valk_ptr_chunk_t *next = chunk->next;
+    free(chunk);
+    chunk = next;
+  }
+  self->head = nullptr;
+  self->tail = nullptr;
+  self->count = 0;
+  self->tail_count = 0;
+  self->malloc_chunks = false;
 }

@@ -19,6 +19,14 @@
        __ctx.exec; valk_thread_ctx.allocator = __ctx.old_alloc) \
     for (valk_thread_ctx.allocator = (_alloc_); __ctx.exec; __ctx.exec = 0)
 
+#define VALK_WITH_REQUEST_CTX(_req_ctx_)                              \
+  for (struct {                                                       \
+         int exec;                                                    \
+         struct valk_request_ctx *old_ctx;                            \
+       } __rctx = {1, valk_thread_ctx.request_ctx};                   \
+       __rctx.exec; valk_thread_ctx.request_ctx = __rctx.old_ctx)     \
+    for (valk_thread_ctx.request_ctx = (_req_ctx_); __rctx.exec; __rctx.exec = 0)
+
 #define valk_mem_alloc(__bytes) \
   valk_mem_allocator_alloc(valk_thread_ctx.allocator, (__bytes))
 
@@ -66,7 +74,7 @@ typedef enum {
   VALK_ALLOC_ARENA,
   VALK_ALLOC_SLAB,
   VALK_ALLOC_GC_HEAP,
-  VALK_ALLOC_TLAB,
+  VALK_ALLOC_REGION,
 } valk_mem_allocator_e;
 
 char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self);
@@ -302,16 +310,15 @@ typedef struct {
   bool checkpoint_enabled;        // Whether automatic checkpointing is enabled
   u64 call_depth;              // Current function call depth (for TCO testing/debugging)
   
+  // Request context (Finagle-style context propagation)
+  struct valk_request_ctx *request_ctx;   // Current request context for deadline/tracing
+  
   // Parallel GC fields (Phase 0)
   u64 gc_thread_id;            // Index in GC coordinator's thread registry
   bool gc_registered;             // Whether registered with parallel GC
   struct valk_lval_t **root_stack;       // Explicit root stack for protecting temps during GC
   sz root_stack_count;
   sz root_stack_capacity;
-  
-  // TLAB for parallel GC allocations (Phase 7)
-  struct valk_gc_tlab *tlab;      // Thread-Local Allocation Buffer
-  bool tlab_enabled;              // Whether TLAB allocation is active
   
   // Eval stack for checkpoint evacuation
   void *eval_stack;               // Current valk_eval_stack_t* (forward ref)
@@ -329,3 +336,27 @@ __attribute__((malloc)) void *valk_mem_allocator_calloc(valk_mem_allocator_t *se
 void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr);
 
 void valk_mem_init_malloc();
+
+#define VALK_CHUNK_SIZE 8
+
+typedef struct valk_ptr_chunk {
+  struct valk_ptr_chunk *next;
+  void *items[VALK_CHUNK_SIZE];
+} valk_ptr_chunk_t;
+
+typedef struct {
+  valk_ptr_chunk_t *head;
+  valk_ptr_chunk_t *tail;
+  u32 count;
+  u32 tail_count;
+  bool malloc_chunks;
+} valk_chunked_ptrs_t;
+
+void valk_chunked_ptrs_init(valk_chunked_ptrs_t *self);
+bool valk_chunked_ptrs_push(valk_chunked_ptrs_t *self, void *ptr, void *alloc_ctx);
+void *valk_chunked_ptrs_get(valk_chunked_ptrs_t *self, u32 index);
+void valk_chunked_ptrs_free(valk_chunked_ptrs_t *self);
+
+static inline u32 valk_chunked_ptrs_count(valk_chunked_ptrs_t *self) {
+  return self->count;
+}

@@ -226,17 +226,7 @@ void test_gc_print_stats_does_not_crash(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_forwarding_null(VALK_TEST_ARGS()) {
-  VALK_TEST();
 
-  bool is_forwarded = valk_lval_is_forwarded(nullptr);
-  VALK_TEST_ASSERT(is_forwarded == false, "nullptr should not be forwarded");
-
-  valk_lval_t *followed = valk_lval_follow_forward(nullptr);
-  VALK_TEST_ASSERT(followed == nullptr, "Following nullptr should return nullptr");
-
-  VALK_PASS();
-}
 
 void test_gc_should_checkpoint(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -379,54 +369,9 @@ void test_gc_set_hard_limit_below_usage(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_lval_forwarding(VALK_TEST_ARGS()) {
-  VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
-  valk_lval_t *src = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  valk_lval_t *dst = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
 
-  src->flags = LVAL_NUM;
-  src->num = 42;
-  dst->flags = LVAL_NUM;
-  dst->num = 99;
-
-  valk_lval_set_forward(src, dst);
-  VALK_TEST_ASSERT(valk_lval_is_forwarded(src), "src should be forwarded");
-  VALK_TEST_ASSERT(LVAL_TYPE(src) == LVAL_FORWARD, "src type should be FORWARD");
-
-  valk_lval_t *followed = valk_lval_follow_forward(src);
-  VALK_TEST_ASSERT(followed == dst, "follow should return dst");
-
-  valk_gc_malloc_heap_destroy(heap);
-
-  VALK_PASS();
-}
-
-void test_gc_follow_forward_chain(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-
-  valk_lval_t *a = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  valk_lval_t *b = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  valk_lval_t *c = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-
-  c->flags = LVAL_NUM;
-  c->num = 123;
-
-  valk_lval_set_forward(a, b);
-  valk_lval_set_forward(b, c);
-
-  valk_lval_t *result = valk_lval_follow_forward(a);
-  VALK_TEST_ASSERT(result == c, "Should follow chain to c");
-  VALK_TEST_ASSERT(result->num == 123, "Value should be 123");
-
-  valk_gc_malloc_heap_destroy(heap);
-
-  VALK_PASS();
-}
 
 void test_gc_get_runtime_metrics_null_heap(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -706,26 +651,7 @@ void test_gc_heap_usage_pct_with_allocations(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_forwarding_preserves_alloc_bits(VALK_TEST_ARGS()) {
-  VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-
-  valk_lval_t *src = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  valk_lval_t *dst = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-
-  src->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
-
-  valk_lval_set_forward(src, dst);
-
-  u64 alloc_bits = LVAL_ALLOC(src);
-  VALK_TEST_ASSERT(alloc_bits == LVAL_ALLOC_HEAP, "Alloc bits should be preserved");
-  VALK_TEST_ASSERT(LVAL_TYPE(src) == LVAL_FORWARD, "Type should be FORWARD");
-
-  valk_gc_malloc_heap_destroy(heap);
-
-  VALK_PASS();
-}
 
 void test_gc_runtime_metrics_pause_max_updates(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -2661,7 +2587,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_get_runtime_metrics", test_gc_get_runtime_metrics);
   valk_testsuite_add_test(suite, "test_gc_runtime_metrics_after_collect", test_gc_runtime_metrics_after_collect);
   valk_testsuite_add_test(suite, "test_gc_print_stats_does_not_crash", test_gc_print_stats_does_not_crash);
-  valk_testsuite_add_test(suite, "test_gc_forwarding_null", test_gc_forwarding_null);
   valk_testsuite_add_test(suite, "test_gc_should_checkpoint", test_gc_should_checkpoint);
 
   valk_testsuite_add_test(suite, "test_gc_heap_destroy_null_safe", test_gc_heap_destroy_null_safe);
@@ -2675,8 +2600,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_should_collect_null", test_gc_should_collect_null);
   valk_testsuite_add_test(suite, "test_gc_heap_usage_pct_null", test_gc_heap_usage_pct_null);
   valk_testsuite_add_test(suite, "test_gc_set_hard_limit_below_usage", test_gc_set_hard_limit_below_usage);
-  valk_testsuite_add_test(suite, "test_gc_lval_forwarding", test_gc_lval_forwarding);
-  valk_testsuite_add_test(suite, "test_gc_follow_forward_chain", test_gc_follow_forward_chain);
   valk_testsuite_add_test(suite, "test_gc_get_runtime_metrics_null_heap", test_gc_get_runtime_metrics_null_heap);
   valk_testsuite_add_test(suite, "test_gc_get_runtime_metrics_null_params", test_gc_get_runtime_metrics_null_params);
   valk_testsuite_add_test(suite, "test_gc_peak_usage_tracking", test_gc_peak_usage_tracking);
@@ -2698,7 +2621,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_should_collect_above_threshold", test_gc_should_collect_above_threshold);
   valk_testsuite_add_test(suite, "test_gc_heap_usage_pct_with_allocations", test_gc_heap_usage_pct_with_allocations);
 
-  valk_testsuite_add_test(suite, "test_gc_forwarding_preserves_alloc_bits", test_gc_forwarding_preserves_alloc_bits);
   valk_testsuite_add_test(suite, "test_gc_runtime_metrics_pause_max_updates", test_gc_runtime_metrics_pause_max_updates);
   valk_testsuite_add_test(suite, "test_gc_alloc_tracks_to_objects_list", test_gc_alloc_tracks_to_objects_list);
 

@@ -433,138 +433,6 @@ void test_arena_overflow_fallback(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-// Phase 2: Test forwarding pointer set/check
-void test_forward_set_and_check(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
-
-  valk_thread_context_t old_ctx = valk_thread_ctx;
-  valk_thread_ctx.allocator = (void *)heap;
-  valk_thread_ctx.heap = heap;
-
-  valk_lval_t *src = valk_lval_num(42);
-  valk_lval_t *dst = valk_lval_num(100);
-
-  // Initially, neither should be forwarded
-  VALK_TEST_ASSERT(!valk_lval_is_forwarded(src),
-                   "src should not be forwarded initially");
-  VALK_TEST_ASSERT(!valk_lval_is_forwarded(dst),
-                   "dst should not be forwarded initially");
-  VALK_TEST_ASSERT(LVAL_TYPE(src) == LVAL_NUM,
-                   "src should be LVAL_NUM initially");
-
-  // Set forwarding pointer
-  valk_lval_set_forward(src, dst);
-
-  // Now src should be forwarded
-  VALK_TEST_ASSERT(valk_lval_is_forwarded(src),
-                   "src should be forwarded after set_forward");
-  VALK_TEST_ASSERT(LVAL_TYPE(src) == LVAL_FORWARD,
-                   "src type should be LVAL_FORWARD");
-  VALK_TEST_ASSERT(src->forward == dst,
-                   "src->forward should point to dst");
-
-  // dst should NOT be forwarded
-  VALK_TEST_ASSERT(!valk_lval_is_forwarded(dst),
-                   "dst should not be forwarded");
-
-  // Test nullptr handling
-  VALK_TEST_ASSERT(!valk_lval_is_forwarded(nullptr),
-                   "nullptr should not be forwarded");
-
-  // Restore context and cleanup
-  valk_thread_ctx = old_ctx;
-  valk_gc_malloc_heap_destroy(heap);
-  VALK_PASS();
-}
-
-// Phase 2: Test following forwarding pointer chains
-void test_forward_follow_chain(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
-
-  valk_thread_context_t old_ctx = valk_thread_ctx;
-  valk_thread_ctx.allocator = (void *)heap;
-  valk_thread_ctx.heap = heap;
-
-  valk_lval_t *a = valk_lval_num(1);
-  valk_lval_t *b = valk_lval_num(2);
-  valk_lval_t *c = valk_lval_num(3);
-  valk_lval_t *d = valk_lval_num(4);  // Final destination
-
-  // Build the chain
-  valk_lval_set_forward(a, b);
-  valk_lval_set_forward(b, c);
-  valk_lval_set_forward(c, d);
-
-  // Following from any point should reach d
-  valk_lval_t *result_a = valk_lval_follow_forward(a);
-  VALK_TEST_ASSERT(result_a == d,
-                   "Following from a should reach d");
-
-  valk_lval_t *result_b = valk_lval_follow_forward(b);
-  VALK_TEST_ASSERT(result_b == d,
-                   "Following from b should reach d");
-
-  valk_lval_t *result_c = valk_lval_follow_forward(c);
-  VALK_TEST_ASSERT(result_c == d,
-                   "Following from c should reach d");
-
-  // Following from d should return d (not forwarded)
-  valk_lval_t *result_d = valk_lval_follow_forward(d);
-  VALK_TEST_ASSERT(result_d == d,
-                   "Following from d should return d itself");
-
-  // Following nullptr should return nullptr
-  valk_lval_t *result_null = valk_lval_follow_forward(nullptr);
-  VALK_TEST_ASSERT(result_null == nullptr,
-                   "Following nullptr should return nullptr");
-
-  // Restore context and cleanup
-  valk_thread_ctx = old_ctx;
-  valk_gc_malloc_heap_destroy(heap);
-  VALK_PASS();
-}
-
-// Phase 2: Test forwarding preserves allocation flags
-void test_forward_preserves_alloc_flags(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
-
-  valk_thread_context_t old_ctx = valk_thread_ctx;
-  valk_thread_ctx.allocator = (void *)heap;
-  valk_thread_ctx.heap = heap;
-
-  valk_lval_t *src = valk_lval_num(42);
-  valk_lval_t *dst = valk_lval_num(100);
-
-  // Get original allocation flags
-  u64 orig_alloc_flags = LVAL_ALLOC(src);
-
-  // Set forwarding pointer
-  valk_lval_set_forward(src, dst);
-
-  // Check that allocation flags are preserved
-  u64 new_alloc_flags = LVAL_ALLOC(src);
-  VALK_TEST_ASSERT(new_alloc_flags == orig_alloc_flags,
-                   "Allocation flags should be preserved after forwarding, "
-                   "got %llu expected %llu",
-                   (unsigned long long)new_alloc_flags,
-                   (unsigned long long)orig_alloc_flags);
-
-  // Type should still be LVAL_FORWARD
-  VALK_TEST_ASSERT(LVAL_TYPE(src) == LVAL_FORWARD,
-                   "Type should be LVAL_FORWARD");
-
-  // Restore context and cleanup
-  valk_thread_ctx = old_ctx;
-  valk_gc_malloc_heap_destroy(heap);
-  VALK_PASS();
-}
-
 // Test total_bytes_allocated tracking
 void test_arena_total_bytes(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -1786,6 +1654,253 @@ void test_gc_heap_allocator_api(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_region_create_destroy(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+  
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
+  ASSERT_NOT_NULL(region);
+  ASSERT_EQ(region->type, VALK_ALLOC_REGION);
+  ASSERT_EQ(region->lifetime, VALK_LIFETIME_REQUEST);
+  ASSERT_NOT_NULL(region->arena);
+  ASSERT_TRUE(region->owns_arena);
+  
+  valk_region_destroy(region);
+  
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_region_stats_tracking(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+  
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
+  ASSERT_NOT_NULL(region);
+  
+  ASSERT_EQ(region->stats.bytes_allocated, 0);
+  ASSERT_EQ(region->stats.alloc_count, 0);
+  
+  void *ptr1 = valk_region_alloc(region, 100);
+  ASSERT_NOT_NULL(ptr1);
+  ASSERT_EQ(region->stats.bytes_allocated, 100);
+  ASSERT_EQ(region->stats.alloc_count, 1);
+  
+  void *ptr2 = valk_region_alloc(region, 200);
+  ASSERT_NOT_NULL(ptr2);
+  ASSERT_EQ(region->stats.bytes_allocated, 300);
+  ASSERT_EQ(region->stats.alloc_count, 2);
+  
+  valk_region_stats_t stats;
+  valk_region_get_stats(region, &stats);
+  ASSERT_EQ(stats.bytes_allocated, 300);
+  ASSERT_EQ(stats.alloc_count, 2);
+  
+  valk_region_destroy(region);
+  
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_region_memory_limit(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+  
+  valk_region_t *parent = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
+  valk_region_t *child = valk_region_create(VALK_LIFETIME_REQUEST, parent);
+  ASSERT_NOT_NULL(child);
+  
+  bool set_ok = valk_region_set_limit(child, 500);
+  ASSERT_TRUE(set_ok);
+  ASSERT_EQ(child->stats.bytes_limit, 500);
+  
+  void *ptr1 = valk_region_alloc(child, 200);
+  ASSERT_NOT_NULL(ptr1);
+  ASSERT_EQ(child->stats.bytes_allocated, 200);
+  
+  void *ptr2 = valk_region_alloc(child, 200);
+  ASSERT_NOT_NULL(ptr2);
+  ASSERT_EQ(child->stats.bytes_allocated, 400);
+  
+  void *ptr3 = valk_region_alloc(child, 200);
+  ASSERT_NOT_NULL(ptr3);
+  ASSERT_EQ(child->stats.overflow_count, 1);
+  
+  valk_region_destroy(child);
+  valk_region_destroy(parent);
+  
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_region_reset_preserves_limit(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+  
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
+  ASSERT_NOT_NULL(region);
+  
+  valk_region_set_limit(region, 1000);
+  
+  valk_region_alloc(region, 100);
+  ASSERT_EQ(region->stats.bytes_allocated, 100);
+  
+  valk_region_reset(region);
+  
+  ASSERT_EQ(region->stats.bytes_allocated, 0);
+  ASSERT_EQ(region->stats.alloc_count, 0);
+  ASSERT_EQ(region->stats.bytes_limit, 1000);
+  
+  valk_region_destroy(region);
+  
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_lifetime_reference_rules(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  // IMMORTAL (longest-lived, enum=0) can only reference IMMORTAL
+  // because it lives forever and must not hold refs to shorter-lived objects
+  ASSERT_TRUE(valk_lifetime_can_reference(VALK_LIFETIME_IMMORTAL, VALK_LIFETIME_IMMORTAL));
+  ASSERT_FALSE(valk_lifetime_can_reference(VALK_LIFETIME_IMMORTAL, VALK_LIFETIME_SESSION));
+  ASSERT_FALSE(valk_lifetime_can_reference(VALK_LIFETIME_IMMORTAL, VALK_LIFETIME_REQUEST));
+  ASSERT_FALSE(valk_lifetime_can_reference(VALK_LIFETIME_IMMORTAL, VALK_LIFETIME_SCRATCH));
+  
+  // SESSION can reference IMMORTAL and SESSION
+  ASSERT_TRUE(valk_lifetime_can_reference(VALK_LIFETIME_SESSION, VALK_LIFETIME_IMMORTAL));
+  ASSERT_TRUE(valk_lifetime_can_reference(VALK_LIFETIME_SESSION, VALK_LIFETIME_SESSION));
+  ASSERT_FALSE(valk_lifetime_can_reference(VALK_LIFETIME_SESSION, VALK_LIFETIME_REQUEST));
+  ASSERT_FALSE(valk_lifetime_can_reference(VALK_LIFETIME_SESSION, VALK_LIFETIME_SCRATCH));
+  
+  // REQUEST can reference IMMORTAL, SESSION, REQUEST
+  ASSERT_TRUE(valk_lifetime_can_reference(VALK_LIFETIME_REQUEST, VALK_LIFETIME_IMMORTAL));
+  ASSERT_TRUE(valk_lifetime_can_reference(VALK_LIFETIME_REQUEST, VALK_LIFETIME_SESSION));
+  ASSERT_TRUE(valk_lifetime_can_reference(VALK_LIFETIME_REQUEST, VALK_LIFETIME_REQUEST));
+  ASSERT_FALSE(valk_lifetime_can_reference(VALK_LIFETIME_REQUEST, VALK_LIFETIME_SCRATCH));
+  
+  // SCRATCH (shortest-lived, enum=3) can reference anything
+  ASSERT_TRUE(valk_lifetime_can_reference(VALK_LIFETIME_SCRATCH, VALK_LIFETIME_IMMORTAL));
+  ASSERT_TRUE(valk_lifetime_can_reference(VALK_LIFETIME_SCRATCH, VALK_LIFETIME_SESSION));
+  ASSERT_TRUE(valk_lifetime_can_reference(VALK_LIFETIME_SCRATCH, VALK_LIFETIME_REQUEST));
+  ASSERT_TRUE(valk_lifetime_can_reference(VALK_LIFETIME_SCRATCH, VALK_LIFETIME_SCRATCH));
+  
+  VALK_PASS();
+}
+
+void test_allocator_lifetime_detection(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+  
+  valk_region_t *session_region = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
+  valk_region_t *request_region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
+  
+  ASSERT_EQ(valk_allocator_lifetime(session_region), VALK_LIFETIME_SESSION);
+  ASSERT_EQ(valk_allocator_lifetime(request_region), VALK_LIFETIME_REQUEST);
+  ASSERT_EQ(valk_allocator_lifetime(nullptr), VALK_LIFETIME_SCRATCH);
+  ASSERT_EQ(valk_allocator_lifetime(&valk_malloc_allocator), VALK_LIFETIME_IMMORTAL);
+  
+  valk_region_destroy(request_region);
+  valk_region_destroy(session_region);
+  
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_region_write_barrier(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+  
+  valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
+  valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
+  
+  // REQUEST can safely reference SESSION (shorter-lived -> longer-lived)
+  ASSERT_TRUE(valk_region_write_barrier(request, session, false));
+  
+  // SESSION cannot safely reference REQUEST (would create dangling pointer)
+  ASSERT_FALSE(valk_region_write_barrier(session, request, false));
+  
+  // Same lifetime is always safe
+  ASSERT_TRUE(valk_region_write_barrier(session, session, false));
+  ASSERT_TRUE(valk_region_write_barrier(request, request, false));
+  
+  valk_region_destroy(request);
+  valk_region_destroy(session);
+  
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_region_promote_lval(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+  
+  valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
+  valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
+  
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)request) {
+    valk_lval_t *num = valk_lval_num(42);
+    ASSERT_NOT_NULL(num);
+    ASSERT_LVAL_NUM(num, 42);
+    
+    valk_lval_t *promoted = valk_region_promote_lval(session, num);
+    ASSERT_NOT_NULL(promoted);
+    ASSERT_LVAL_NUM(promoted, 42);
+    
+    ASSERT_EQ(promoted->origin_allocator, session);
+    ASSERT_GT(session->stats.promotion_count, 0);
+  }
+  
+  valk_region_destroy(request);
+  valk_region_destroy(session);
+  
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_region_init_embedded(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+  
+  sz arena_size = sizeof(valk_mem_arena_t) + 4096;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, 4096);
+  
+  valk_region_t region;
+  valk_region_init(&region, VALK_LIFETIME_REQUEST, nullptr, arena);
+  
+  ASSERT_EQ(region.type, VALK_ALLOC_REGION);
+  ASSERT_EQ(region.lifetime, VALK_LIFETIME_REQUEST);
+  ASSERT_EQ(region.arena, arena);
+  ASSERT_FALSE(region.owns_arena);
+  ASSERT_EQ(region.stats.bytes_allocated, 0);
+  
+  void *ptr = valk_region_alloc(&region, 100);
+  ASSERT_NOT_NULL(ptr);
+  ASSERT_EQ(region.stats.bytes_allocated, 100);
+  
+  free(arena);
+  
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
@@ -1845,11 +1960,6 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_arena_overflow_fallback", test_arena_overflow_fallback);
   valk_testsuite_add_test(suite, "test_arena_total_bytes", test_arena_total_bytes);
 
-  // Phase 2 forwarding pointer tests
-  valk_testsuite_add_test(suite, "test_forward_set_and_check", test_forward_set_and_check);
-  valk_testsuite_add_test(suite, "test_forward_follow_chain", test_forward_follow_chain);
-  valk_testsuite_add_test(suite, "test_forward_preserves_alloc_flags", test_forward_preserves_alloc_flags);
-
   // Phase 3 checkpoint/evacuation tests
   valk_testsuite_add_test(suite, "test_should_checkpoint", test_should_checkpoint);
   valk_testsuite_add_test(suite, "test_checkpoint_empty", test_checkpoint_empty);
@@ -1877,6 +1987,17 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_slab_peak_tracking", test_slab_peak_tracking);
   valk_testsuite_add_test(suite, "test_slab_free_null", test_slab_free_null);
   valk_testsuite_add_test(suite, "test_slab_bitmap_free_null", test_slab_bitmap_free_null);
+
+  // Region API tests
+  valk_testsuite_add_test(suite, "test_region_create_destroy", test_region_create_destroy);
+  valk_testsuite_add_test(suite, "test_region_stats_tracking", test_region_stats_tracking);
+  valk_testsuite_add_test(suite, "test_region_memory_limit", test_region_memory_limit);
+  valk_testsuite_add_test(suite, "test_region_reset_preserves_limit", test_region_reset_preserves_limit);
+  valk_testsuite_add_test(suite, "test_lifetime_reference_rules", test_lifetime_reference_rules);
+  valk_testsuite_add_test(suite, "test_allocator_lifetime_detection", test_allocator_lifetime_detection);
+  valk_testsuite_add_test(suite, "test_region_write_barrier", test_region_write_barrier);
+  valk_testsuite_add_test(suite, "test_region_promote_lval", test_region_promote_lval);
+  valk_testsuite_add_test(suite, "test_region_init_embedded", test_region_init_embedded);
 
   // load fixtures
   // valk_lval_t *ast = valk_parse_file("src/prelude.valk");

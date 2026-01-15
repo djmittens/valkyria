@@ -358,9 +358,9 @@ static void __http_shutdown_cb(valk_aio_handle_t *hndl) {
   valk_aio_system_t *sys = srv->sys;
   
   if (srv->state == VALK_SRV_CLOSING || srv->state == VALK_SRV_CLOSED) {
-    if (sys->shuttingDown && srv->lisp_handler_fn) {
-      valk_gc_remove_global_root(&srv->lisp_handler_fn);
-      srv->lisp_handler_fn = nullptr;
+    if (sys->shuttingDown && srv->lisp_handler_handle.generation > 0) {
+      valk_handle_release(&valk_global_handle_table, srv->lisp_handler_handle);
+      srv->lisp_handler_handle = (valk_handle_t){0, 0};
     }
     return;
   }
@@ -369,9 +369,9 @@ static void __http_shutdown_cb(valk_aio_handle_t *hndl) {
   VALK_INFO("Server :%d shutting down, sending GOAWAY to connections", srv->port);
 
   if (sys->shuttingDown) {
-    if (srv->lisp_handler_fn) {
-      valk_gc_remove_global_root(&srv->lisp_handler_fn);
-      srv->lisp_handler_fn = nullptr;
+    if (srv->lisp_handler_handle.generation > 0) {
+      valk_handle_release(&valk_global_handle_table, srv->lisp_handler_handle);
+      srv->lisp_handler_handle = (valk_handle_t){0, 0};
     }
     srv->state = VALK_SRV_CLOSED;
     return;
@@ -414,9 +414,9 @@ static void __valk_aio_http2_server_cleanup(valk_aio_http_server *srv) {
   if (!srv || !srv->sys) return;
   valk_aio_system_stats_v2_on_server_stop(
       (valk_aio_system_stats_v2_t*)srv->sys->metrics_state->system_stats_v2);
-  if (srv->lisp_handler_fn) {
-    valk_gc_remove_global_root(&srv->lisp_handler_fn);
-    srv->lisp_handler_fn = nullptr;
+  if (srv->lisp_handler_handle.generation > 0) {
+    valk_handle_release(&valk_global_handle_table, srv->lisp_handler_handle);
+    srv->lisp_handler_handle = (valk_handle_t){0, 0};
   }
   __valk_sandbox_env_free(srv->sandbox_env);
   srv->sandbox_env = nullptr;
@@ -564,15 +564,17 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
   if (handler) {
     srv->handler = *handler;
   }
-  srv->lisp_handler_fn = lisp_handler ? valk_evacuate_to_heap((valk_lval_t*)lisp_handler) : nullptr;
-  if (srv->lisp_handler_fn) {
-    valk_gc_add_global_root(&srv->lisp_handler_fn);
+  if (lisp_handler) {
+    valk_lval_t *heap_handler = valk_evacuate_to_heap((valk_lval_t*)lisp_handler);
+    srv->lisp_handler_handle = valk_handle_create(&valk_global_handle_table, heap_handler);
     void* saved_heap = valk_thread_ctx.heap;
     valk_thread_ctx.heap = nullptr;
     VALK_WITH_ALLOC(&valk_malloc_allocator) {
       srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)lisp_handler)->fun.env);
     }
     valk_thread_ctx.heap = saved_heap;
+  } else {
+    srv->lisp_handler_handle = (valk_handle_t){0, 0};
   }
 
   if (config) {
@@ -613,16 +615,22 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
 }
 
 void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_fn) {
-  srv->lisp_handler_fn = (valk_lval_t*)handler_fn;
+  if (srv->lisp_handler_handle.generation > 0) {
+    valk_handle_release(&valk_global_handle_table, srv->lisp_handler_handle);
+  }
   __valk_sandbox_env_free(srv->sandbox_env);
   srv->sandbox_env = nullptr;
   if (handler_fn) {
+    valk_lval_t *heap_handler = valk_evacuate_to_heap((valk_lval_t*)handler_fn);
+    srv->lisp_handler_handle = valk_handle_create(&valk_global_handle_table, heap_handler);
     void* saved_heap = valk_thread_ctx.heap;
     valk_thread_ctx.heap = nullptr;
     VALK_WITH_ALLOC(&valk_malloc_allocator) {
       srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)handler_fn)->fun.env);
     }
     valk_thread_ctx.heap = saved_heap;
+  } else {
+    srv->lisp_handler_handle = (valk_handle_t){0, 0};
   }
 }
 

@@ -1,0 +1,32 @@
+; test_server.valk - Simple test server for hey load testing
+; Run with: ./build/valk tools/test_server.valk
+; Then in another terminal: ./build/valk tools/hey.valk
+
+(load "src/prelude.valk")
+
+(def {port} 18443)
+
+(println "Starting test server on port 18443...")
+
+(def {aio} (aio/start))
+
+(def {handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (select
+      {(== path "/")
+       {{:status "200" :content-type "text/plain" :body "OK"}}}
+      {(== path "/health")
+       {{:status "200" :content-type "application/json" :body "{\"status\":\"healthy\"}"}}}
+      {(== path "/json")
+       {{:status "200" :content-type "application/json" :body "{\"message\":\"hello\",\"count\":42}"}}}
+      {(== path "/shutdown")
+       {(do (aio/stop aio) {:status "200" :body "shutting down"})}}
+      {otherwise
+       {{:status "404" :body "Not Found"}}})
+  }))
+
+(http2/server-listen aio port handler)
+(printf "Test server ready on https://localhost:%d\n" port)
+(println "Endpoints: /, /health, /json, /shutdown")
+(aio/run aio)

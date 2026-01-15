@@ -24,6 +24,7 @@ int valk_runtime_init(valk_runtime_config_t *config) {
   }
 
   valk_gc_coordinator_init();
+  valk_handle_table_init(&valk_global_handle_table);
 
   valk_runtime_config_t cfg = config ? *config : valk_runtime_config_default();
 
@@ -86,12 +87,7 @@ bool valk_runtime_is_initialized(void) {
 // Global coordinator instance
 valk_gc_coordinator_t valk_gc_coord = {0};
 
-// Global roots registry
-valk_gc_global_roots_t valk_gc_global_roots = {0};
 
-// Global page pool for TLAB allocation
-valk_gc_page_pool_t valk_gc_global_pool = {0};
-static bool __global_pool_initialized = false;
 
 // Portable barrier implementation
 void valk_barrier_init(valk_barrier_t* b, sz count) {
@@ -248,9 +244,6 @@ void valk_gc_coordinator_init(void) {
   
   atomic_store(&valk_gc_coord.parallel_cycles, 0);
   atomic_store(&valk_gc_coord.parallel_pause_us_total, 0);
-  
-  pthread_mutex_init(&valk_gc_global_roots.lock, nullptr);
-  valk_gc_global_roots.count = 0;
 }
 
 // LCOV_EXCL_BR_START - thread registration error paths
@@ -326,164 +319,11 @@ void valk_gc_safe_point_slow(void) {
   }
 }
 
-// Global roots
-void valk_gc_add_global_root(valk_lval_t** root) {
-  pthread_mutex_lock(&valk_gc_global_roots.lock);
-  if (valk_gc_global_roots.count < VALK_GC_MAX_GLOBAL_ROOTS) {
-    valk_gc_global_roots.roots[valk_gc_global_roots.count++] = root;
-    VALK_TRACE("Added global root ptr=%p val=%p, count now %llu", 
-               (void*)root, (void*)*root, (unsigned long long)valk_gc_global_roots.count);
-  } else {
-    VALK_WARN("Global roots registry full");
-  }
-  pthread_mutex_unlock(&valk_gc_global_roots.lock);
-}
-
-void valk_gc_remove_global_root(valk_lval_t** root) {
-  pthread_mutex_lock(&valk_gc_global_roots.lock);
-  for (u64 i = 0; i < valk_gc_global_roots.count; i++) {
-    if (valk_gc_global_roots.roots[i] == root) {
-      valk_gc_global_roots.roots[i] = valk_gc_global_roots.roots[--valk_gc_global_roots.count];
-      VALK_DEBUG("Removed global root %p, count now %llu", (void*)root, (unsigned long long)valk_gc_global_roots.count);
-      break;
-    }
-  }
-  pthread_mutex_unlock(&valk_gc_global_roots.lock);
-}
-
 // ============================================================================
 // Phase 1: Page-based Allocator (Parallel GC)
 // ============================================================================
 
 static _Atomic u32 __page_id_counter = 0;
-
-void valk_gc_page_pool_init(valk_gc_page_pool_t *pool) {
-  pthread_mutex_init(&pool->lock, nullptr);
-  pool->all_pages = nullptr;
-  pool->partial_pages = nullptr;
-  pool->num_pages = 0;
-  atomic_store(&pool->total_slots, 0);
-  atomic_store(&pool->used_slots, 0);
-  atomic_store(&pool->gc_threshold, VALK_GC_SLOTS_PER_PAGE * 10);
-}
-
-void valk_gc_page_pool_destroy(valk_gc_page_pool_t *pool) {
-  pthread_mutex_lock(&pool->lock);
-  valk_gc_page_t *page = pool->all_pages;
-  while (page) {
-    valk_gc_page_t *next = page->next;
-    free(page);
-    page = next;
-  }
-  pool->all_pages = nullptr;
-  pool->partial_pages = nullptr;
-  pool->num_pages = 0;
-  atomic_store(&pool->total_slots, 0);
-  atomic_store(&pool->used_slots, 0);
-  pthread_mutex_unlock(&pool->lock);
-  pthread_mutex_destroy(&pool->lock);
-}
-
-valk_gc_page_t *valk_gc_page_alloc(valk_gc_page_pool_t *pool) {
-  valk_gc_page_t *page = aligned_alloc(VALK_GC_PAGE_ALIGN, sizeof(valk_gc_page_t));
-  if (!page) {
-    VALK_ERROR("Failed to allocate GC page");
-    return nullptr;
-  }
-  
-  memset(page, 0, sizeof(valk_gc_page_t));
-  page->page_id = atomic_fetch_add(&__page_id_counter, 1);
-  atomic_store(&page->num_allocated, 0);
-  
-  pthread_mutex_lock(&pool->lock);
-  page->next = pool->all_pages;
-  pool->all_pages = page;
-  pool->num_pages++;
-  atomic_fetch_add(&pool->total_slots, VALK_GC_SLOTS_PER_PAGE);
-  pthread_mutex_unlock(&pool->lock);
-  
-  return page;
-}
-
-void valk_gc_tlab_init(valk_gc_tlab_t *tlab) {
-  tlab->page = nullptr;
-  tlab->next_slot = 0;
-  tlab->limit_slot = 0;
-}
-
-bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_page_pool_t *pool) {
-  pthread_mutex_lock(&pool->lock);
-  
-  valk_gc_page_t *page = pool->partial_pages;
-  u32 start_slot = 0;
-  u32 num_slots = VALK_GC_TLAB_SLOTS;
-  
-  if (page) {
-    u32 allocated = atomic_load(&page->num_allocated);
-    if (allocated + VALK_GC_TLAB_SLOTS <= VALK_GC_SLOTS_PER_PAGE) {
-      for (u32 i = 0; i < VALK_GC_SLOTS_PER_PAGE; i++) {
-        if (!valk_gc_bitmap_test(page->alloc_bits, i)) {
-          u32 free_run = 0;
-          for (u32 j = i; j < VALK_GC_SLOTS_PER_PAGE && free_run < VALK_GC_TLAB_SLOTS; j++) {
-            if (!valk_gc_bitmap_test(page->alloc_bits, j)) {
-              free_run++;
-            } else {
-              break;
-            }
-          }
-          if (free_run >= VALK_GC_TLAB_SLOTS) {
-            start_slot = i;
-            goto found;
-          }
-          i += free_run;
-        }
-      }
-    }
-    pool->partial_pages = page->next;
-    page = nullptr;
-  }
-  
-  if (!page) {
-    pthread_mutex_unlock(&pool->lock);
-    page = valk_gc_page_alloc(pool);
-    if (!page) return false;
-    pthread_mutex_lock(&pool->lock);
-    start_slot = 0;
-  }
-
-found:;
-  u32 limit = start_slot + num_slots;
-  if (limit > VALK_GC_SLOTS_PER_PAGE) {
-    limit = VALK_GC_SLOTS_PER_PAGE;
-    num_slots = limit - start_slot;
-  }
-  
-  for (u32 i = start_slot; i < limit; i++) {
-    valk_gc_bitmap_set(page->alloc_bits, i);
-  }
-  atomic_fetch_add(&page->num_allocated, num_slots);
-  atomic_fetch_add(&pool->used_slots, num_slots);
-  
-  if (page != pool->partial_pages) {
-    page->next = pool->partial_pages;
-    pool->partial_pages = page;
-  }
-  pthread_mutex_unlock(&pool->lock);
-  
-  tlab->page = page;
-  tlab->next_slot = start_slot;
-  tlab->limit_slot = limit;
-  
-  return true;
-}
-
-void valk_gc_page_pool_stats(valk_gc_page_pool_t *pool, 
-                              sz *out_pages, sz *out_total, 
-                              sz *out_used) {
-  if (out_pages) *out_pages = pool->num_pages;
-  if (out_total) *out_total = atomic_load(&pool->total_slots);
-  if (out_used) *out_used = atomic_load(&pool->used_slots);
-}
 
 // ============================================================================
 // Phase 2: GC Triggering and Participation
@@ -571,14 +411,7 @@ void valk_gc_visit_env_roots(valk_lenv_t *env, valk_gc_root_visitor_t visitor, v
 }
 
 void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
-  pthread_mutex_lock(&valk_gc_global_roots.lock);
-  for (u64 i = 0; i < valk_gc_global_roots.count; i++) {
-    valk_lval_t *val = *valk_gc_global_roots.roots[i];
-    if (val != nullptr) {
-      visitor(val, ctx);
-    }
-  }
-  pthread_mutex_unlock(&valk_gc_global_roots.lock);
+  valk_handle_table_visit(&valk_global_handle_table, visitor, ctx);
   
   for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
     if (valk_gc_coord.threads[i].active && valk_gc_coord.threads[i].ctx != nullptr) {
@@ -642,6 +475,7 @@ static void mark_and_push(valk_lval_t *obj, void *ctx) {
   valk_gc_mark_queue_t *queue = ctx;
   
   if (obj == nullptr) return;
+  if (obj->flags & LVAL_FLAG_IMMORTAL) return;
   if (!valk_gc_try_mark(obj)) return;
   
   if (!valk_gc_mark_queue_push(queue, obj)) {
@@ -745,229 +579,11 @@ void valk_gc_parallel_mark(void) {
   }
 }
 
-// ============================================================================
-// Phase 5: Parallel Sweep
-// ============================================================================
 
-static u64 sweep_page(valk_gc_page_t *page) {
-  u64 freed = 0;
-  
-  for (u32 slot = 0; slot < VALK_GC_SLOTS_PER_PAGE; slot++) {
-    if (valk_gc_bitmap_test(page->alloc_bits, slot)) {
-      if (!valk_gc_bitmap_test(page->mark_bits, slot)) {
-        valk_gc_bitmap_clear(page->alloc_bits, slot);
-        freed++;
-      } else {
-        valk_gc_bitmap_clear(page->mark_bits, slot);
-      }
-    }
-  }
-  
-  if (freed > 0) {
-    atomic_fetch_sub(&page->num_allocated, freed);
-  }
-  
-  return freed;
-}
-
-void valk_gc_parallel_sweep(valk_gc_page_pool_t *pool) {
-  if (!valk_thread_ctx.gc_registered || pool == nullptr) return;
-  
-  u64 my_id = valk_thread_ctx.gc_thread_id;
-  u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
-  
-  pthread_mutex_lock(&pool->lock);
-  u64 num_pages = pool->num_pages;
-  valk_gc_page_t *pages_start = pool->all_pages;
-  pthread_mutex_unlock(&pool->lock);
-  
-  if (num_pages == 0) return;
-  
-  u64 pages_per_thread = (num_pages + num_threads - 1) / num_threads;
-  u64 my_start = my_id * pages_per_thread;
-  u64 my_end = (my_id + 1) * pages_per_thread;
-  if (my_end > num_pages) my_end = num_pages;
-  
-  u64 freed_slots = 0;
-  valk_gc_page_t *page = pages_start;
-  
-  for (u64 i = 0; i < my_end && page != nullptr; i++) {
-    if (i >= my_start) {
-      freed_slots += sweep_page(page);
-    }
-    page = page->next;
-  }
-  
-  if (freed_slots > 0) {
-    atomic_fetch_sub(&pool->used_slots, freed_slots);
-  }
-}
-
-// ============================================================================
-// Phase 6: Integration - GC Trigger and Full Cycle
-// ============================================================================
-
-void valk_gc_full_cycle(valk_gc_page_pool_t *pool) {
-  if (!valk_thread_ctx.gc_registered) return;
-  
-  u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
-  if (num_threads == 0) return;
-  
-  u64 start_ns = uv_hrtime();
-  
-  valk_barrier_wait(&valk_gc_coord.barrier);
-  
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_MARKING);
-  valk_gc_parallel_mark();
-  
-  valk_barrier_wait(&valk_gc_coord.barrier);
-  
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_SWEEPING);
-  valk_gc_parallel_sweep(pool);
-  
-  valk_barrier_wait(&valk_gc_coord.barrier);
-  
-  u64 end_ns = uv_hrtime();
-  u64 pause_us = (end_ns - start_ns) / 1000;
-  atomic_fetch_add(&valk_gc_coord.parallel_pause_us_total, pause_us);
-  
-  atomic_store(&valk_gc_coord.threads_paused, 0);
-  
-  pthread_mutex_lock(&valk_gc_coord.lock);
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
-  pthread_cond_broadcast(&valk_gc_coord.gc_done);
-  pthread_mutex_unlock(&valk_gc_coord.lock);
-  
-  atomic_fetch_add(&valk_gc_coord.parallel_cycles, 1);
-}
-
-void valk_gc_maybe_collect(valk_gc_page_pool_t *pool) {
-  if (!valk_thread_ctx.gc_registered || pool == nullptr) return;
-  
-  u64 used = atomic_load(&pool->used_slots);
-  u64 threshold = atomic_load(&pool->gc_threshold);
-  
-  if (used < threshold) return;
-  
-  valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
-  if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected,
-                                       VALK_GC_PHASE_STW_REQUESTED)) {
-    return;
-  }
-  
-  u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
-  if (num_threads == 0) {
-    atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
-    return;
-  }
-  
-  if (valk_gc_coord.barrier_initialized) {
-    valk_barrier_destroy(&valk_gc_coord.barrier);
-  }
-  valk_barrier_init(&valk_gc_coord.barrier, num_threads);
-  valk_gc_coord.barrier_initialized = true;
-  
-  pthread_mutex_lock(&valk_gc_coord.lock);
-  while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_nsec += 100000000;
-    if (ts.tv_nsec >= 1000000000) {
-      ts.tv_sec++;
-      ts.tv_nsec -= 1000000000;
-    }
-    pthread_cond_timedwait(&valk_gc_coord.all_paused, &valk_gc_coord.lock, &ts);
-  }
-  pthread_mutex_unlock(&valk_gc_coord.lock);
-  
-  valk_gc_full_cycle(pool);
-  
-  VALK_DEBUG("Parallel GC cycle complete: used=%zu freed=%zu", 
-             atomic_load(&pool->used_slots), used - atomic_load(&pool->used_slots));
-}
-
-// ============================================================================
-// Global Page Pool for TLAB Allocation
-// ============================================================================
-
-void valk_gc_global_pool_init(void) {
-  if (__global_pool_initialized) return;
-  valk_gc_page_pool_init(&valk_gc_global_pool);
-  __global_pool_initialized = true;
-}
-
-void valk_gc_global_pool_destroy(void) {
-  if (!__global_pool_initialized) return;
-  valk_gc_page_pool_destroy(&valk_gc_global_pool);
-  __global_pool_initialized = false;
-}
-
-void *valk_gc_tlab_alloc_slow(sz bytes) {
-  if (bytes > VALK_GC_SLOT_SIZE) {
-    VALK_ERROR("TLAB allocation too large: %zu > %d", bytes, VALK_GC_SLOT_SIZE);
-    return nullptr;
-  }
-  
-  valk_thread_context_t *ctx = &valk_thread_ctx;
-  
-  if (!ctx->tlab) {
-    ctx->tlab = malloc(sizeof(valk_gc_tlab_t));
-    if (!ctx->tlab) return nullptr;
-    valk_gc_tlab_init(ctx->tlab);
-  }
-  
-  if (!ctx->tlab_enabled) {
-    if (!__global_pool_initialized) {
-      valk_gc_global_pool_init();
-    }
-    ctx->tlab_enabled = true;
-  }
-  
-  void *ptr = valk_gc_tlab_alloc(ctx->tlab);
-  if (ptr) {
-    memset(ptr, 0, bytes);
-    return ptr;
-  }
-  
-  if (!valk_gc_tlab_refill(ctx->tlab, &valk_gc_global_pool)) {
-    VALK_ERROR("Failed to refill TLAB from global pool");
-    return nullptr;
-  }
-  
-  ptr = valk_gc_tlab_alloc(ctx->tlab);
-  if (ptr) {
-    memset(ptr, 0, bytes);
-  }
-  return ptr;
-}
 
 // Forward declarations
 static void valk_gc_mark_lval(valk_lval_t* v);
 static void valk_gc_mark_env(valk_lenv_t* env);
-
-// ============================================================================
-// Forwarding Pointer Helpers (for scratch evacuation)
-// ============================================================================
-
-// Set forwarding pointer: mark src as forwarded, point to dst
-void valk_lval_set_forward(valk_lval_t* src, valk_lval_t* dst) {
-  // Preserve allocation bits but set type to LVAL_FORWARD
-  src->flags = LVAL_FORWARD | (src->flags & ~LVAL_TYPE_MASK);
-  src->forward = dst;
-}
-
-// Check if value is a forwarding pointer
-bool valk_lval_is_forwarded(valk_lval_t* v) {
-  return v != nullptr && LVAL_TYPE(v) == LVAL_FORWARD;
-}
-
-// Follow forwarding pointer chain to find final destination
-valk_lval_t* valk_lval_follow_forward(valk_lval_t* v) {
-  while (v != nullptr && LVAL_TYPE(v) == LVAL_FORWARD) {
-    v = v->forward;
-  }
-  return v;
-}
 
 // ============================================================================
 // GC Heap - Legacy API wrappers around valk_gc_heap2_t
@@ -1259,6 +875,495 @@ void valk_repl_set_eval_delta(i64 heap, i64 scratch, i64 lval, i64 lenv) {
 }
 
 // ============================================================================
+// Pointer Map - hashmap for src->dst tracking during evacuation
+// ============================================================================
+
+static inline sz valk_ptr_hash(void *ptr) {
+  uptr p = (uptr)ptr;
+  p = (p ^ (p >> 30)) * 0xbf58476d1ce4e5b9ULL;
+  p = (p ^ (p >> 27)) * 0x94d049bb133111ebULL;
+  return (sz)(p ^ (p >> 31));
+}
+
+void valk_ptr_map_init(valk_ptr_map_t *map) {
+  map->capacity = VALK_PTR_MAP_INIT_CAPACITY;
+  map->count = 0;
+  map->entries = calloc(map->capacity, sizeof(valk_ptr_map_entry_t));
+}
+
+void valk_ptr_map_free(valk_ptr_map_t *map) {
+  if (map->entries) {
+    free(map->entries);
+    map->entries = nullptr;
+  }
+  map->count = 0;
+  map->capacity = 0;
+}
+
+static void valk_ptr_map_grow(valk_ptr_map_t *map) {
+  sz old_cap = map->capacity;
+  valk_ptr_map_entry_t *old_entries = map->entries;
+  
+  map->capacity = old_cap * 2;
+  map->entries = calloc(map->capacity, sizeof(valk_ptr_map_entry_t));
+  map->count = 0;
+  
+  for (sz i = 0; i < old_cap; i++) {
+    if (old_entries[i].src != nullptr) {
+      valk_ptr_map_put(map, old_entries[i].src, old_entries[i].dst);
+    }
+  }
+  
+  free(old_entries);
+}
+
+void valk_ptr_map_put(valk_ptr_map_t *map, void *src, void *dst) {
+  if ((float)map->count / map->capacity >= VALK_PTR_MAP_LOAD_FACTOR) {
+    valk_ptr_map_grow(map);
+  }
+  
+  sz idx = valk_ptr_hash(src) % map->capacity;
+  while (map->entries[idx].src != nullptr) {
+    if (map->entries[idx].src == src) {
+      map->entries[idx].dst = dst;
+      return;
+    }
+    idx = (idx + 1) % map->capacity;
+  }
+  
+  map->entries[idx].src = src;
+  map->entries[idx].dst = dst;
+  map->count++;
+}
+
+void *valk_ptr_map_get(valk_ptr_map_t *map, void *src) {
+  if (map->count == 0) return nullptr;
+  
+  sz idx = valk_ptr_hash(src) % map->capacity;
+  sz start = idx;
+  
+  while (map->entries[idx].src != nullptr) {
+    if (map->entries[idx].src == src) {
+      return map->entries[idx].dst;
+    }
+    idx = (idx + 1) % map->capacity;
+    if (idx == start) break;
+  }
+  
+  return nullptr;
+}
+
+// ============================================================================
+// Handle Table - for cross-region references
+// ============================================================================
+
+valk_handle_table_t valk_global_handle_table = {0};
+
+void valk_handle_table_init(valk_handle_table_t *table) {
+  pthread_mutex_init(&table->lock, nullptr);
+  table->capacity = VALK_HANDLE_TABLE_INIT_SIZE;
+  table->count = 0;
+  table->free_head = UINT32_MAX;
+  table->slots = calloc(table->capacity, sizeof(valk_lval_t *));
+  table->generations = calloc(table->capacity, sizeof(u32));
+}
+
+void valk_handle_table_free(valk_handle_table_t *table) {
+  pthread_mutex_lock(&table->lock);
+  if (table->slots) {
+    free(table->slots);
+    table->slots = nullptr;
+  }
+  if (table->generations) {
+    free(table->generations);
+    table->generations = nullptr;
+  }
+  table->capacity = 0;
+  table->count = 0;
+  table->free_head = UINT32_MAX;
+  pthread_mutex_unlock(&table->lock);
+  pthread_mutex_destroy(&table->lock);
+}
+
+static void valk_handle_table_grow(valk_handle_table_t *table) {
+  u32 old_cap = table->capacity;
+  u32 new_cap = old_cap * 2;
+  
+  valk_lval_t **new_slots = realloc(table->slots, new_cap * sizeof(valk_lval_t *));
+  u32 *new_gens = realloc(table->generations, new_cap * sizeof(u32));
+  
+  if (!new_slots || !new_gens) {
+    VALK_ERROR("Failed to grow handle table");
+    return;
+  }
+  
+  table->slots = new_slots;
+  table->generations = new_gens;
+  
+  for (u32 i = old_cap; i < new_cap; i++) {
+    table->slots[i] = nullptr;
+    table->generations[i] = 0;
+  }
+  
+  table->capacity = new_cap;
+}
+
+valk_handle_t valk_handle_create(valk_handle_table_t *table, valk_lval_t *val) {
+  pthread_mutex_lock(&table->lock);
+  
+  u32 idx;
+  if (table->free_head != UINT32_MAX) {
+    idx = table->free_head;
+    table->free_head = (u32)(uptr)table->slots[idx];
+  } else {
+    if (table->count >= table->capacity) {
+      valk_handle_table_grow(table);
+    }
+    idx = table->count++;
+  }
+  
+  table->slots[idx] = val;
+  table->generations[idx]++;
+  
+  valk_handle_t h = {.index = idx, .generation = table->generations[idx]};
+  pthread_mutex_unlock(&table->lock);
+  return h;
+}
+
+valk_lval_t *valk_handle_resolve(valk_handle_table_t *table, valk_handle_t h) {
+  pthread_mutex_lock(&table->lock);
+  valk_lval_t *result = nullptr;
+  if (h.index < table->capacity && table->generations[h.index] == h.generation) {
+    result = table->slots[h.index];
+  }
+  pthread_mutex_unlock(&table->lock);
+  return result;
+}
+
+void valk_handle_release(valk_handle_table_t *table, valk_handle_t h) {
+  pthread_mutex_lock(&table->lock);
+  if (h.index < table->capacity && table->generations[h.index] == h.generation) {
+    table->slots[h.index] = (valk_lval_t *)(uptr)table->free_head;
+    table->free_head = h.index;
+  }
+  pthread_mutex_unlock(&table->lock);
+}
+
+void valk_handle_table_visit(valk_handle_table_t *table,
+                             void (*visitor)(valk_lval_t*, void*), void *ctx) {
+  if (!table || !table->slots) return;
+  
+  pthread_mutex_lock(&table->lock);
+  for (u32 i = 0; i < table->count; i++) {
+    valk_lval_t *val = table->slots[i];
+    if (val != nullptr && ((uptr)val > table->capacity)) {
+      visitor(val, ctx);
+    }
+  }
+  pthread_mutex_unlock(&table->lock);
+}
+
+// ============================================================================
+// Region API Implementation
+// ============================================================================
+
+#define VALK_REGION_DEFAULT_SIZE (64 * 1024)
+
+void valk_region_init(valk_region_t *region, valk_lifetime_e lifetime, 
+                      valk_region_t *parent, valk_mem_arena_t *arena) {
+  region->type = VALK_ALLOC_REGION;
+  region->lifetime = lifetime;
+  region->parent = parent;
+  region->arena = arena;
+  region->owns_arena = false;
+  region->gc_heap = nullptr;
+  memset(&region->stats, 0, sizeof(region->stats));
+  
+  if (lifetime == VALK_LIFETIME_SESSION) {
+    region->gc_heap = valk_runtime_get_heap();
+  }
+}
+
+valk_region_t *valk_region_create(valk_lifetime_e lifetime, valk_region_t *parent) {
+  valk_region_t *region = malloc(sizeof(valk_region_t));
+  if (!region) return nullptr;
+  
+  region->type = VALK_ALLOC_REGION;
+  region->lifetime = lifetime;
+  region->parent = parent;
+  region->gc_heap = nullptr;
+  region->arena = nullptr;
+  region->owns_arena = false;
+  memset(&region->stats, 0, sizeof(region->stats));
+  
+  switch (lifetime) {
+    case VALK_LIFETIME_IMMORTAL:
+      break;
+      
+    case VALK_LIFETIME_SESSION:
+      region->gc_heap = valk_runtime_get_heap();
+      break;
+      
+    case VALK_LIFETIME_REQUEST:
+    case VALK_LIFETIME_SCRATCH: {
+      sz arena_size = sizeof(valk_mem_arena_t) + VALK_REGION_DEFAULT_SIZE;
+      region->arena = malloc(arena_size);
+      if (!region->arena) {
+        free(region);
+        return nullptr;
+      }
+      valk_mem_arena_init(region->arena, VALK_REGION_DEFAULT_SIZE);
+      region->owns_arena = true;
+      break;
+    }
+  }
+  
+  return region;
+}
+
+valk_region_t *valk_region_create_with_arena(valk_lifetime_e lifetime, 
+                                              valk_region_t *parent,
+                                              valk_mem_arena_t *arena) {
+  valk_region_t *region = malloc(sizeof(valk_region_t));
+  if (!region) return nullptr;
+  
+  region->type = VALK_ALLOC_REGION;
+  region->lifetime = lifetime;
+  region->parent = parent;
+  region->arena = arena;
+  region->owns_arena = false;
+  region->gc_heap = nullptr;
+  memset(&region->stats, 0, sizeof(region->stats));
+  
+  if (lifetime == VALK_LIFETIME_SESSION) {
+    region->gc_heap = valk_runtime_get_heap();
+  }
+  
+  return region;
+}
+
+void valk_region_destroy(valk_region_t *region) {
+  if (!region) return;
+  
+  if (region->arena && region->owns_arena) {
+    free(region->arena);
+    region->arena = nullptr;
+  }
+  
+  free(region);
+}
+
+void valk_region_reset(valk_region_t *region) {
+  if (!region) return;
+  
+  if (region->arena) {
+    valk_mem_arena_reset(region->arena);
+  }
+  
+  sz limit = region->stats.bytes_limit;
+  memset(&region->stats, 0, sizeof(region->stats));
+  region->stats.bytes_limit = limit;
+}
+
+void *valk_region_alloc(valk_region_t *region, sz bytes) {
+  if (!region) return nullptr;
+  
+  if (region->stats.bytes_limit > 0 && 
+      region->stats.bytes_allocated + bytes > region->stats.bytes_limit) {
+    if (region->parent) {
+      region->stats.overflow_count++;
+      return valk_region_alloc(region->parent, bytes);
+    }
+    return nullptr;
+  }
+  
+  void *ptr = nullptr;
+  
+  switch (region->lifetime) {
+    case VALK_LIFETIME_IMMORTAL:
+      return nullptr;
+      
+    case VALK_LIFETIME_SESSION:
+      if (region->gc_heap) {
+        ptr = valk_gc_heap2_alloc(region->gc_heap, bytes);
+      }
+      break;
+      
+    case VALK_LIFETIME_REQUEST:
+    case VALK_LIFETIME_SCRATCH:
+      if (region->arena) {
+        ptr = valk_mem_arena_alloc(region->arena, bytes);
+      }
+      if (!ptr && region->parent) {
+        region->stats.overflow_count++;
+        return valk_region_alloc(region->parent, bytes);
+      }
+      break;
+  }
+  
+  if (ptr) {
+    region->stats.bytes_allocated += bytes;
+    region->stats.alloc_count++;
+  }
+  
+  return ptr;
+}
+
+bool valk_region_set_limit(valk_region_t *region, sz limit) {
+  if (!region) return false;
+  if (limit > 0 && region->stats.bytes_allocated > limit) {
+    return false;
+  }
+  region->stats.bytes_limit = limit;
+  return true;
+}
+
+void valk_region_get_stats(valk_region_t *region, valk_region_stats_t *out) {
+  if (!region || !out) return;
+  *out = region->stats;
+}
+
+// ============================================================================
+// Cross-Region Reference Checking
+// ============================================================================
+
+valk_lifetime_e valk_allocator_lifetime(void *allocator) {
+  if (!allocator) return VALK_LIFETIME_SCRATCH;
+  
+  valk_mem_allocator_t *alloc = (valk_mem_allocator_t *)allocator;
+  switch (alloc->type) {
+    case VALK_ALLOC_REGION: {
+      valk_region_t *region = (valk_region_t *)allocator;
+      return region->lifetime;
+    }
+    case VALK_ALLOC_GC_HEAP:
+      return VALK_LIFETIME_SESSION;
+    case VALK_ALLOC_ARENA:
+      return VALK_LIFETIME_SCRATCH;
+    case VALK_ALLOC_MALLOC:
+      return VALK_LIFETIME_IMMORTAL;
+    default:
+      return VALK_LIFETIME_SCRATCH;
+  }
+}
+
+bool valk_region_write_barrier(void *parent_allocator, void *child_allocator,
+                                bool promote_on_escape) {
+  if (!parent_allocator || !child_allocator) return true;
+  
+  valk_lifetime_e parent_lifetime = valk_allocator_lifetime(parent_allocator);
+  valk_lifetime_e child_lifetime = valk_allocator_lifetime(child_allocator);
+  
+  if (valk_lifetime_can_reference(parent_lifetime, child_lifetime)) {
+    return true;
+  }
+  
+  if (promote_on_escape) {
+    return false;
+  }
+  
+  return false;
+}
+
+static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_t *src,
+                                                valk_ptr_map_t *copied) {
+  if (!src) return nullptr;
+  
+  valk_lval_t *existing = valk_ptr_map_get(copied, src);
+  if (existing) return existing;
+  
+  valk_lifetime_e src_lifetime = valk_allocator_lifetime(src->origin_allocator);
+  if (valk_lifetime_can_reference(target->lifetime, src_lifetime)) {
+    return src;
+  }
+  
+  sz lval_size = sizeof(valk_lval_t);
+  valk_lval_t *copy = valk_region_alloc(target, lval_size);
+  if (!copy) return nullptr;
+  
+  memcpy(copy, src, lval_size);
+  copy->origin_allocator = target;
+  copy->gc_next = nullptr;
+  
+  valk_ptr_map_put(copied, src, copy);
+  
+  valk_ltype_e type = LVAL_TYPE(src);
+  switch (type) {
+    case LVAL_CONS:
+    case LVAL_QEXPR:
+      copy->cons.head = region_copy_lval_recursive(target, src->cons.head, copied);
+      copy->cons.tail = region_copy_lval_recursive(target, src->cons.tail, copied);
+      break;
+      
+    case LVAL_FUN:
+      if (src->fun.name) {
+        sz len = strlen(src->fun.name) + 1;
+        copy->fun.name = valk_region_alloc(target, len);
+        if (copy->fun.name) memcpy(copy->fun.name, src->fun.name, len);
+      }
+      copy->fun.formals = region_copy_lval_recursive(target, src->fun.formals, copied);
+      copy->fun.body = region_copy_lval_recursive(target, src->fun.body, copied);
+      break;
+      
+    case LVAL_SYM:
+    case LVAL_STR:
+    case LVAL_ERR:
+      if (src->str) {
+        sz len = strlen(src->str) + 1;
+        copy->str = valk_region_alloc(target, len);
+        if (copy->str) memcpy(copy->str, src->str, len);
+      }
+      break;
+      
+    default:
+      break;
+  }
+  
+  target->stats.bytes_promoted += lval_size;
+  target->stats.promotion_count++;
+  
+  return copy;
+}
+
+valk_lval_t *valk_region_promote_lval(valk_region_t *target, valk_lval_t *val) {
+  if (!target || !val) return val;
+  
+  valk_lifetime_e val_lifetime = valk_allocator_lifetime(val->origin_allocator);
+  if (valk_lifetime_can_reference(target->lifetime, val_lifetime)) {
+    return val;
+  }
+  
+  valk_ptr_map_t copied;
+  valk_ptr_map_init(&copied);
+  
+  valk_lval_t *promoted = region_copy_lval_recursive(target, val, &copied);
+  
+  valk_ptr_map_free(&copied);
+  
+  return promoted;
+}
+
+valk_lval_t *valk_region_ensure_safe_ref(valk_lval_t *parent, valk_lval_t *child) {
+  if (!parent || !child) return child;
+  
+  void *parent_alloc = parent->origin_allocator;
+  void *child_alloc = child->origin_allocator;
+  
+  if (!parent_alloc || !child_alloc) return child;
+  
+  if (valk_region_write_barrier(parent_alloc, child_alloc, false)) {
+    return child;
+  }
+  
+  valk_mem_allocator_t *alloc = (valk_mem_allocator_t *)parent_alloc;
+  if (alloc->type == VALK_ALLOC_REGION) {
+    return valk_region_promote_lval((valk_region_t *)parent_alloc, child);
+  }
+  
+  return child;
+}
+
+// ============================================================================
 // Environment and Lval Worklists for Iterative Traversal
 // ============================================================================
 
@@ -1321,6 +1426,8 @@ static void evac_ctx_init(valk_evacuation_ctx_t* ctx) {
   ctx->evacuated = malloc(EVAC_WORKLIST_INITIAL_CAPACITY * sizeof(valk_lval_t*));
   ctx->evacuated_count = 0;
   ctx->evacuated_capacity = EVAC_WORKLIST_INITIAL_CAPACITY;
+  
+  valk_ptr_map_init(&ctx->ptr_map);
 }
 
 // Free evacuation context lists
@@ -1338,6 +1445,8 @@ static void evac_ctx_free(valk_evacuation_ctx_t* ctx) {
   }
   ctx->evacuated_count = 0;
   ctx->evacuated_capacity = 0;
+  
+  valk_ptr_map_free(&ctx->ptr_map);
 }
 
 // Add value to evacuated list (for pointer fixing phase)
@@ -1390,6 +1499,7 @@ static valk_lval_t* evac_worklist_pop(valk_evacuation_ctx_t* ctx) {
 
 static void valk_gc_mark_lval(valk_lval_t* v) {
   if (v == nullptr) return;
+  if (v->flags & LVAL_FLAG_IMMORTAL) return;
   if (LVAL_ALLOC(v) != LVAL_ALLOC_HEAP) return;
   if (v->flags & LVAL_FLAG_GC_MARK) return;
   v->flags |= LVAL_FLAG_GC_MARK;
@@ -1499,6 +1609,13 @@ static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
       case CONT_BODY_NEXT:
         evac_value_and_process_env(ctx, &frame->body_next.remaining);
         break;
+      case CONT_CTX_DEADLINE:
+        evac_value_and_process_env(ctx, &frame->ctx_deadline.body);
+        break;
+      case CONT_CTX_WITH:
+        evac_value_and_process_env(ctx, &frame->ctx_with.value_expr);
+        evac_value_and_process_env(ctx, &frame->ctx_with.body);
+        break;
       default:
         break;
     }
@@ -1508,60 +1625,32 @@ static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
   evac_value_and_process_env(ctx, &valk_thread_ctx.eval_value);
 }
 
-static void evac_checkpoint_global_roots(valk_evacuation_ctx_t* ctx) {
-  pthread_mutex_lock(&valk_gc_global_roots.lock);
-  VALK_TRACE("Checkpoint: processing %llu global roots",
-             (unsigned long long)valk_gc_global_roots.count);
-  for (u64 i = 0; i < valk_gc_global_roots.count; i++) {
-    valk_lval_t** root_ptr = valk_gc_global_roots.roots[i];
-    valk_lval_t* val = atomic_load_explicit((_Atomic(valk_lval_t*)*)root_ptr, memory_order_acquire);
-    if (val != nullptr) {
-      VALK_TRACE("Checkpoint: root[%llu] ptr=%p val=%p type=%u alloc=%u",
-                 (unsigned long long)i, (void*)root_ptr, (void*)val,
-                 (unsigned)LVAL_TYPE(val), (unsigned)LVAL_ALLOC(val));
-      valk_lval_t* new_val = valk_evacuate_value(ctx, val);
-      if (new_val != val) {
-        atomic_store_explicit((_Atomic(valk_lval_t*)*)root_ptr, new_val, memory_order_release);
-        VALK_TRACE("Checkpoint: root[%llu] UPDATED %p -> %p",
-                   (unsigned long long)i, (void*)val, (void*)new_val);
-      } else if (LVAL_TYPE(val) == LVAL_FUN && val->fun.builtin == nullptr && val->fun.env != nullptr) {
-        valk_evacuate_env(ctx, val->fun.env);
-      }
-    }
-  }
-  pthread_mutex_unlock(&valk_gc_global_roots.lock);
-}
 
-static void fix_checkpoint_global_roots(valk_evacuation_ctx_t* ctx) {
-  pthread_mutex_lock(&valk_gc_global_roots.lock);
-  for (u64 i = 0; i < valk_gc_global_roots.count; i++) {
-    valk_lval_t** root_ptr = valk_gc_global_roots.roots[i];
-    valk_lval_t* val = atomic_load_explicit((_Atomic(valk_lval_t*)*)root_ptr, memory_order_acquire);
-    if (val != nullptr && LVAL_TYPE(val) == LVAL_FUN &&
-        val->fun.builtin == nullptr && val->fun.env != nullptr) {
-      valk_fix_env_pointers(ctx, val->fun.env);
-    }
-  }
-  pthread_mutex_unlock(&valk_gc_global_roots.lock);
-}
 
 // ============================================================================
 // Phase 1: Copy Values from Scratch to Heap
 // ============================================================================
 
-// Evacuate a single value from scratch to heap
-// Returns the new location (or original if not in scratch or already forwarded)
+// Evacuate a single value from scratch to heap using hashmap deduplication
+// Returns the new location (or original if not in scratch or already copied)
+// This is a single-pass approach - no forwarding pointers needed
 static valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
   if (v == nullptr) return nullptr;
 
-  // Already forwarded? Return destination
-  if (LVAL_TYPE(v) == LVAL_FORWARD) {
-    return v->forward;
+  // Immortal objects are never evacuated
+  if (v->flags & LVAL_FLAG_IMMORTAL) {
+    return v;
   }
 
   // Not in scratch? Return as-is (already in heap or global)
   if (LVAL_ALLOC(v) != LVAL_ALLOC_SCRATCH) {
     return v;
+  }
+  
+  // Check if already copied using hashmap (replaces forward pointer check)
+  void *existing = valk_ptr_map_get(&ctx->ptr_map, v);
+  if (existing != nullptr) {
+    return (valk_lval_t *)existing;
   }
   
   // Allocate new value in heap
@@ -1574,6 +1663,9 @@ static valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t*
     VALK_ERROR("Failed to allocate value during evacuation");
     return v;
   }
+
+  // Register in hashmap BEFORE copying to handle cycles
+  valk_ptr_map_put(&ctx->ptr_map, v, new_val);
 
   // Copy the value data
   memcpy(new_val, v, sizeof(valk_lval_t));
@@ -1638,10 +1730,7 @@ static valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t*
       break;
   }
 
-  // Set forwarding pointer in old location
-  valk_lval_set_forward(v, new_val);
-
-  // Add to evacuated list for pointer fixing phase
+  // Add to evacuated list (still useful for stats and iteration)
   evac_add_evacuated(ctx, new_val);
 
   // Update stats
@@ -1905,35 +1994,37 @@ static void valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
 // Phase 2: Fix Pointers to Use New Locations
 // ============================================================================
 
-// Helper: Check if pointer is in scratch and handle accordingly
-// Returns true if pointer was in scratch (and should be handled), false otherwise
+// Helper: Check if pointer is in scratch and handle accordingly using hashmap
+// Returns true if pointer was updated, false otherwise
 static inline bool fix_scratch_pointer(valk_evacuation_ctx_t* ctx, valk_lval_t** ptr) {
   valk_lval_t* val = *ptr;
   if (val == nullptr) return false;
 
-  // If in scratch and forwarded, update to new location
-  if (valk_lval_is_forwarded(val)) {
-    valk_lval_t* new_loc = valk_lval_follow_forward(val);
-    VALK_DEBUG("Fixing forward pointer %p -> %p", (void*)val, (void*)new_loc);
-    *ptr = new_loc;
+  // Immortal objects are never updated
+  if (val->flags & LVAL_FLAG_IMMORTAL) {
+    return false;
+  }
+
+  // Check hashmap for already-copied value
+  void *new_loc = valk_ptr_map_get(&ctx->ptr_map, val);
+  if (new_loc != nullptr) {
+    VALK_DEBUG("Fixing pointer via hashmap %p -> %p", (void*)val, new_loc);
+    *ptr = (valk_lval_t *)new_loc;
     ctx->pointers_fixed++;
     return true;
   }
 
-  // If in scratch but NOT forwarded, try to evacuate it now
+  // If in scratch but NOT in hashmap, try to evacuate it now
   // This can happen if Phase 1 didn't reach this value through its traversal
-  // Check both by arena (if available) and by allocation type
   bool in_scratch = (ctx->scratch != nullptr && valk_ptr_in_arena(ctx->scratch, val)) ||
                     (LVAL_ALLOC(val) == LVAL_ALLOC_SCRATCH);
   if (in_scratch) {
-    // Evacuate the value now in Phase 2
     valk_lval_t* new_val = valk_evacuate_value(ctx, val);
     if (new_val != val) {
       *ptr = new_val;
       ctx->pointers_fixed++;
       return true;
     }
-    // If evacuation didn't change it (shouldn't happen), null it out
     *ptr = nullptr;
     return true;
   }
@@ -2125,7 +2216,6 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
     valk_evacuate_env(&ctx, root_env);
   }
 
-  evac_checkpoint_global_roots(&ctx);
   evac_checkpoint_eval_stack(&ctx);
 
   // Process worklist until empty (evacuate children)
@@ -2147,8 +2237,6 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
   if (root_env != nullptr) {
     valk_fix_env_pointers(&ctx, root_env);
   }
-
-  fix_checkpoint_global_roots(&ctx);
 
   VALK_DEBUG("Checkpoint Phase 2: Fixed %zu pointers", ctx.pointers_fixed);
 
@@ -3692,7 +3780,6 @@ static void valk_gc_participate_in_parallel_gc(void) {
 void valk_gc_reset_after_fork(void) {
   __runtime_heap = nullptr;
   __runtime_initialized = false;
-  __global_pool_initialized = false;
   
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
   atomic_store(&valk_gc_coord.threads_registered, 0);
@@ -3706,8 +3793,6 @@ void valk_gc_reset_after_fork(void) {
   
   atomic_store(&valk_gc_coord.parallel_cycles, 0);
   atomic_store(&valk_gc_coord.parallel_pause_us_total, 0);
-  
-  valk_gc_global_roots.count = 0;
   
   atomic_store(&__gc_heap2_idle_count, 0);
   atomic_store(&__gc_heap2_terminated, false);
@@ -3724,8 +3809,6 @@ void valk_gc_reset_after_fork(void) {
   valk_thread_ctx.root_env = nullptr;
   valk_thread_ctx.gc_registered = false;
   valk_thread_ctx.gc_thread_id = 0;
-  valk_thread_ctx.tlab = nullptr;
-  valk_thread_ctx.tlab_enabled = false;
   valk_thread_ctx.eval_stack = nullptr;
   valk_thread_ctx.eval_expr = nullptr;
   valk_thread_ctx.eval_value = nullptr;

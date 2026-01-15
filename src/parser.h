@@ -31,6 +31,10 @@
 #define LVAL_GC_GEN_MASK    (0x7FULL << LVAL_GC_GEN_SHIFT)
 #define LVAL_GC_GEN_MAX     127
 
+// Immortal bit - objects that are never collected (builtins, stdlib)
+// This allows GC to skip these objects during both mark and sweep
+#define LVAL_FLAG_IMMORTAL  (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS))
+
 #define LVAL_GC_GEN(lval) (((lval)->flags & LVAL_GC_GEN_MASK) >> LVAL_GC_GEN_SHIFT)
 #define LVAL_GC_GEN_SET(lval, gen) do { \
   (lval)->flags = ((lval)->flags & ~LVAL_GC_GEN_MASK) | \
@@ -67,7 +71,6 @@ typedef enum {
   LVAL_QEXPR,  // Cons cell - Q-expression (quoted data, not code)
   LVAL_ERR,
   LVAL_HANDLE,   // Async operation handle (cancellable promise)
-  LVAL_FORWARD,  // Forwarding pointer - only valid during scratch evacuation
 } valk_ltype_e;
 
 const char *valk_ltype_name(valk_ltype_e type);
@@ -129,9 +132,17 @@ struct valk_lval_t {
     } async;  // LVAL_HANDLE - async operation handle
     long num;
     char *str;
-    valk_lval_t *forward;  // Forwarding pointer to new location (for LVAL_FORWARD)
   };
 };
+
+// Immortal object helpers - must be after valk_lval_t definition
+static inline bool valk_lval_is_immortal(valk_lval_t *v) {
+  return v != nullptr && (v->flags & LVAL_FLAG_IMMORTAL) != 0;
+}
+
+static inline void valk_lval_set_immortal(valk_lval_t *v) {
+  if (v != nullptr) v->flags |= LVAL_FLAG_IMMORTAL;
+}
 
 //// lval Constructors ////
 
@@ -299,6 +310,8 @@ typedef enum {
   CONT_BODY_NEXT,      // Evaluated one expr in function body
   CONT_SINGLE_ELEM,    // Single-element list: if result is function, call it
   CONT_LAMBDA_DONE,    // Lambda body evaluated, decrement call depth
+  CONT_CTX_DEADLINE,   // ctx/with-deadline: timeout evaluated, now eval body
+  CONT_CTX_WITH,       // ctx/with: key/value evaluated, now eval body
 } valk_cont_kind_e;
 
 // Continuation frame - represents pending work after evaluating something
@@ -345,6 +358,19 @@ typedef struct valk_cont_frame {
       valk_lval_t *remaining;  // Remaining body expressions
       valk_lenv_t *call_env;   // Function's local environment
     } body_next;
+
+    // CONT_CTX_DEADLINE: ctx/with-deadline body pending
+    struct {
+      valk_lval_t *body;                    // Body to evaluate
+      struct valk_request_ctx *old_ctx;     // Previous request context to restore
+    } ctx_deadline;
+
+    // CONT_CTX_WITH: ctx/with body pending
+    struct {
+      valk_lval_t *value_expr;              // Value expression (unevaluated)
+      valk_lval_t *body;                    // Body to evaluate
+      struct valk_request_ctx *old_ctx;     // Previous request context to restore
+    } ctx_with;
   };
 } valk_cont_frame_t;
 

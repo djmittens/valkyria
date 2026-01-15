@@ -956,7 +956,6 @@ void test_ltype_name_all_types(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_QEXPR), "Q-Expr") == 0, "QEXPR type");
   VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_REF), "Reference") == 0, "REF type");
   VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_HANDLE), "Handle") == 0, "HANDLE type");
-  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_FORWARD), "Forward") == 0, "FORWARD type");
   VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_UNDEFINED), "UNDEFINED") == 0, "UNDEFINED type");
 
   VALK_PASS();
@@ -1050,16 +1049,7 @@ void test_lval_str_n_zero_length(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_lval_print_forward(VALK_TEST_ARGS()) {
-  VALK_TEST();
 
-  valk_lval_t val;
-  val.flags = LVAL_FORWARD;
-  val.forward = (struct valk_lval_t *)0xDEADBEEF;
-  valk_lval_print(&val);
-
-  VALK_PASS();
-}
 
 void test_lval_print_undefined(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -1350,7 +1340,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_lenv_copy_null", test_lenv_copy_null);
   valk_testsuite_add_test(suite, "test_lenv_copy_with_parent_chain", test_lenv_copy_with_parent_chain);
   valk_testsuite_add_test(suite, "test_lval_str_n_zero_length", test_lval_str_n_zero_length);
-  valk_testsuite_add_test(suite, "test_lval_print_forward", test_lval_print_forward);
   valk_testsuite_add_test(suite, "test_lval_print_undefined", test_lval_print_undefined);
   valk_testsuite_add_test(suite, "test_lval_print_ref", test_lval_print_ref);
   valk_testsuite_add_test(suite, "test_lval_print_lambda", test_lval_print_lambda);

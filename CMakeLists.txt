@@ -132,6 +132,8 @@ set(VALKYRIA_SOURCES
   src/metrics_delta.c
   src/metrics_builtins.c
   src/aio/aio_diagnostics_builtins.c
+  src/aio/aio_request_ctx.c
+  src/aio/aio_ctx_builtins.c
   src/pool_metrics.c
   src/event_loop_metrics.c
 )
@@ -406,4 +408,9 @@ include_directories(test_parser_errors src/)
 add_executable(test_metrics_concurrent test/test_metrics_concurrent.c test/testing.c)
 target_link_libraries(test_metrics_concurrent PRIVATE "-lc" valkyria)
 include_directories(test_metrics_concurrent src/)
+
+# Request context tests
+add_executable(test_request_ctx_unit test/unit/test_request_ctx.c test/testing.c)
+target_link_libraries(test_request_ctx_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_request_ctx_unit src/)
 
