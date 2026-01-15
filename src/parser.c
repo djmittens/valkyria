@@ -453,6 +453,8 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
     // This prevents race conditions when the same lambda is called from
     // multiple contexts (e.g., timers, SSE events, multiple clients)
     valk_lenv_t *eval_env = valk_lenv_copy(func->fun.env);
+    // Set parent to calling environment for dynamic scope resolution
+    // This allows functions like 'def' to properly walk up to the current root
     eval_env->parent = env;
     res = valk_builtin_eval(
         eval_env,
@@ -803,13 +805,16 @@ void valk_lenv_init(valk_lenv_t *env) {
 }
 
 void valk_lenv_free(valk_lenv_t *env) {
-  // Doesnt free the  parent
+  if (env == NULL) {
+    return;
+  }
   for (int i = 0; i < env->count; ++i) {
     valk_lval_free(env->vals[i]);
     free(env->symbols[i]);
   }
   free(env->vals);
   free(env->symbols);
+  // Don't free parent - it's a shared reference, not owned
   free(env);
 }
 
@@ -818,8 +823,8 @@ valk_lenv_t *valk_lenv_copy(valk_lenv_t *env) {
     return NULL;
   }
   valk_lenv_t *res = malloc(sizeof(valk_lenv_t));
-  // TODO(main): Man lotta copying, especially deep copying, in case things
-  // change the problem with this ofcourse is that, globals cant be changed
+  // Shallow copy of parent pointer - environments form a shared chain
+  // up to the global scope. Only local bindings are deep copied.
   res->parent = env->parent;
   res->count = env->count;
   res->symbols = malloc(sizeof(char *) * env->count);
@@ -1106,7 +1111,19 @@ static valk_lval_t *valk_builtin_lambda(valk_lenv_t *e, valk_lval_t *a) {
   body = valk_lval_pop(a, 0);
   valk_lval_free(a);
 
-  return valk_lval_lambda(formals, body);
+  // Create lambda and capture the lexical environment at definition time
+  valk_lval_t *lambda = valk_lval_lambda(formals, body);
+  // For root/global env (no parent), reference it directly to allow
+  // forward references and mutual recursion. For nested scopes, copy
+  // to capture the local bindings.
+  if (e->parent == NULL) {
+    // Root/global env - reference directly
+    lambda->fun.env->parent = e;
+  } else {
+    // Nested scope - copy to capture local bindings
+    lambda->fun.env->parent = valk_lenv_copy(e);
+  }
+  return lambda;
 }
 
 static valk_lval_t *valk_builtin_penv(valk_lenv_t *e, valk_lval_t *a) {
