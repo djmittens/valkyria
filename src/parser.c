@@ -9,6 +9,7 @@
 #include <uv.h>
 
 #include "aio/aio.h"
+#include "aio/http2/aio_http2_client.h"
 #include "aio/http2/stream/aio_stream_body.h"
 #include "collections.h"
 #include "common.h"
@@ -4859,6 +4860,94 @@ static valk_lval_t* valk_builtin_http2_client_request_with_headers(valk_lenv_t* 
   return valk_http2_client_request_with_headers_impl(e, sys, host, port, path, headers_arg, callback);
 }
 
+// Callback for http2/connect completion
+static void valk_http2_connect_done_callback(valk_async_handle_t* handle, void* ctx_ptr) {
+  VALK_GC_SAFE_POINT();
+
+  valk_handle_t callback_handle = {.index = (u32)(uintptr_t)ctx_ptr, .generation = 0};
+  valk_lval_t* cb = valk_handle_resolve(&valk_global_handle_table, callback_handle);
+  if (!cb) {
+    valk_handle_release(&valk_global_handle_table, callback_handle);
+    return;
+  }
+
+  valk_async_status_t status = valk_async_handle_get_status(handle);
+  valk_lval_t* result;
+
+  if (status != VALK_ASYNC_COMPLETED) {
+    result = handle->error ? handle->error : valk_lval_err("Connection failed");
+  } else {
+    result = handle->result ? handle->result : valk_lval_err("No connection result");
+  }
+
+  valk_lval_t* args = valk_lval_cons(result, valk_lval_nil());
+  valk_lval_eval_call(cb->fun.env, cb, args);
+  valk_handle_release(&valk_global_handle_table, callback_handle);
+}
+
+// http2/connect: (http2/connect aio host port callback) -> nil
+// Creates a persistent HTTP/2 connection, calls callback with client ref on success
+static valk_lval_t* valk_builtin_http2_connect(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 4);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
+  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
+              "First argument must be aio_system");
+
+  valk_lval_t* host_arg = valk_lval_list_nth(a, 1);
+  LVAL_ASSERT_TYPE(a, host_arg, LVAL_STR);
+
+  valk_lval_t* port_arg = valk_lval_list_nth(a, 2);
+  LVAL_ASSERT_TYPE(a, port_arg, LVAL_NUM);
+
+  valk_lval_t* callback = valk_lval_list_nth(a, 3);
+  LVAL_ASSERT_TYPE(a, callback, LVAL_FUN);
+
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+  const char* host = host_arg->str;
+  int port = (int)port_arg->num;
+
+  // Store callback for when connection completes
+  valk_lval_t* heap_callback = valk_evacuate_to_heap(callback);
+  valk_handle_t callback_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
+
+  valk_async_handle_t* connect_handle = valk_aio_http2_connect_host(sys, host, port, host);
+  if (!connect_handle) {
+    valk_handle_release(&valk_global_handle_table, callback_handle);
+    return valk_lval_err("Failed to initiate connection");
+  }
+
+  // Set up callback to be invoked when connection completes
+  connect_handle->on_done = valk_http2_connect_done_callback;
+  connect_handle->on_done_ctx = (void*)(uintptr_t)callback_handle.index;
+
+  return valk_lval_nil();
+}
+
+// http2/request: (http2/request client path callback) -> nil
+// Sends a request on an existing HTTP/2 connection
+static valk_lval_t* valk_builtin_http2_request_on_conn(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+
+  valk_lval_t* client_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, client_ref, LVAL_REF);
+  LVAL_ASSERT(a, strcmp(client_ref->ref.type, "http2_client") == 0,
+              "First argument must be http2_client");
+
+  valk_lval_t* path_arg = valk_lval_list_nth(a, 1);
+  LVAL_ASSERT_TYPE(a, path_arg, LVAL_STR);
+
+  valk_lval_t* callback = valk_lval_list_nth(a, 2);
+  LVAL_ASSERT_TYPE(a, callback, LVAL_FUN);
+
+  valk_aio_http2_client* client = client_ref->ref.ptr;
+  const char* path = path_arg->str;
+
+  return valk_http2_client_request_on_conn_impl(e, client, path, callback);
+}
+
 // aio/schedule: (aio/schedule aio delay-ms callback) -> nil
 // Schedules a callback to run after delay-ms milliseconds.
 // Works at the top level (outside request handlers).
@@ -5123,6 +5212,12 @@ void valk_lenv_builtins(valk_lenv_t* env) {
                         valk_builtin_http2_client_request);
   valk_lenv_put_builtin(env, "http2/client-request-with-headers",
                         valk_builtin_http2_client_request_with_headers);
+
+  // HTTP/2 Connection reuse (persistent connections)
+  valk_lenv_put_builtin(env, "http2/connect",
+                        valk_builtin_http2_connect);
+  valk_lenv_put_builtin(env, "http2/request-on-conn",
+                        valk_builtin_http2_request_on_conn);
 
   // HTTP request accessor builtins (from aio_http_builtins.c)
   valk_register_http_request_builtins(env);

@@ -25,3 +25,9 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
                                              const char *path,
                                              valk_lval_t *headers,
                                              valk_lval_t *callback);
+
+// Send request on an existing connection (for connection reuse)
+valk_lval_t *valk_http2_client_request_on_conn_impl(valk_lenv_t *e,
+                                                     valk_aio_http2_client *client,
+                                                     const char *path,
+                                                     valk_lval_t *callback);

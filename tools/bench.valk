@@ -5,6 +5,7 @@
 ;   - Latency statistics (min, max, mean)
 ;   - Bucket-based latency distribution
 ;   - Concurrency control
+;   - Connection reuse (single HTTP/2 connection)
 ;
 ; Usage: ./build/valk tools/bench.valk
 ; First start: ./build/valk tools/test_server.valk
@@ -49,7 +50,10 @@
 ; AIO Setup
 ; ============================================================================
 (def {aio} (aio/start))
-(def {start-time} (time-us))
+(def {start-time} (atom 0))
+
+; Store client connection (will be set after connect)
+(def {client-conn} (atom nil))
 
 ; ============================================================================
 ; Utility Functions
@@ -105,26 +109,27 @@
 ; Header
 ; ============================================================================
 (println "")
-(println "bench.valk - HTTP/2 Benchmarking Tool")
-(println "======================================")
+(println "bench.valk - HTTP/2 Benchmarking Tool (Connection Reuse)")
+(println "=========================================================")
 (printf "Target:      https://%s:%d%s\n" cfg-host cfg-port cfg-path)
 (printf "Requests:    %d\n" cfg-total)
 (printf "Concurrency: %d\n" cfg-concurrency)
 (println "")
-(println "Running...")
+(println "Connecting...")
 
 ; ============================================================================
 ; Request Handling
 ; ============================================================================
 
-; Function to send a single request
+; Function to send a single request on the existing connection
 (fun {send-one-request} {
   (= {idx} (atom/get next-idx))
+  (= {conn} (atom/get client-conn))
   (if (< idx cfg-total)
     {(atom/add! next-idx 1)
      (atom/add! in-flight 1)
      (= {req-start} (time-us))
-     (http2/client-request aio cfg-host cfg-port cfg-path (\ {resp} {
+     (http2/request-on-conn conn cfg-path (\ {resp} {
        (= {req-end} (time-us))
        (= {latency} (- req-end req-start))
 
@@ -175,7 +180,8 @@
 ; ============================================================================
 (fun {print-results} {
   (= {end-time} (time-us))
-  (= {total-dur-us} (- end-time start-time))
+  (= {bench-start} (atom/get start-time))
+  (= {total-dur-us} (- end-time bench-start))
   (= {total-dur-ms} (/ total-dur-us 1000))
 
   (= {done} (atom/get completed))
@@ -186,9 +192,9 @@
   (= {max-lat} (atom/get latency-max))
 
   (println "")
-  (println "======================================")
+  (println "=========================================================")
   (println "Results")
-  (println "======================================")
+  (println "=========================================================")
   (println "")
 
   ; Summary
@@ -252,15 +258,24 @@
   (if (> b9 0) {(printf "  > 1s      : %d (%d%%)\n" b9 (/ (* b9 100) done))} {1})
 
   (println "")
-  (println "======================================")
+  (println "=========================================================")
 
   (aio/stop aio)
 })
 
 ; ============================================================================
-; Start benchmark
+; Start benchmark - First establish connection, then fire requests
 ; ============================================================================
-(map (\ {_} {(send-one-request)}) (range 0 cfg-concurrency))
+(http2/connect aio cfg-host cfg-port (\ {conn} {
+  (if (error? conn)
+    {(println "Connection failed!")
+     (println (error-msg conn))
+     (aio/stop aio)}
+    {(println "Connected! Starting benchmark...")
+     (atom/set! client-conn conn)
+     (atom/set! start-time (time-us))
+     (map (\ {_} {(send-one-request)}) (range 0 cfg-concurrency))})
+}))
 
 ; Run event loop
 (aio/run aio)

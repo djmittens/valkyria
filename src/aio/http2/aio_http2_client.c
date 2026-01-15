@@ -805,3 +805,97 @@ valk_lval_t *valk_http2_client_request_impl(valk_lenv_t *e,
                                              valk_lval_t *callback) {
   return valk_http2_client_request_with_headers_impl(e, sys, host, port, path, nullptr, callback);
 }
+
+// Send a request on an existing client connection (for connection reuse)
+typedef struct {
+  valk_aio_http2_client *client;
+  valk_handle_t callback_handle;
+  valk_mem_arena_t *arena;
+  char *path;
+} valk_http2_client_reuse_ctx_t;
+
+static void __http2_client_reuse_response_done(valk_async_handle_t *handle, void *ctx_ptr) {
+  VALK_GC_SAFE_POINT();
+
+  valk_http2_client_reuse_ctx_t *ctx = ctx_ptr;
+  valk_async_status_t status = valk_async_handle_get_status(handle);
+
+  valk_lval_t *cb = valk_handle_resolve(&valk_global_handle_table, ctx->callback_handle);
+  if (!cb) {
+    goto cleanup;
+  }
+
+  valk_lval_t *result;
+  if (status != VALK_ASYNC_COMPLETED) {
+    result = handle->error ? handle->error : valk_lval_err("Request failed");
+  } else {
+    result = handle->result ? handle->result : valk_lval_nil();
+  }
+
+  valk_lval_t *args = valk_lval_cons(result, valk_lval_nil());
+  valk_lval_eval_call(cb->fun.env, cb, args);
+
+cleanup:
+  valk_handle_release(&valk_global_handle_table, ctx->callback_handle);
+  if (ctx->arena) {
+    free(ctx->arena);
+  }
+  free(ctx->path);
+  free(ctx);
+}
+
+valk_lval_t *valk_http2_client_request_on_conn_impl(valk_lenv_t *e,
+                                                     valk_aio_http2_client *client,
+                                                     const char *path,
+                                                     valk_lval_t *callback) {
+  UNUSED(e);
+
+  valk_http2_client_reuse_ctx_t *ctx = malloc(sizeof(valk_http2_client_reuse_ctx_t));
+  if (!ctx) {
+    return valk_lval_err("Failed to allocate request context");
+  }
+  ctx->client = client;
+  ctx->path = strdup(path);
+
+  valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
+  ctx->callback_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
+
+  // Allocate arena for request
+  const u64 arena_bytes = 4096;
+  valk_mem_arena_t *arena = malloc(arena_bytes);
+  if (!arena) {
+    valk_handle_release(&valk_global_handle_table, ctx->callback_handle);
+    free(ctx->path);
+    free(ctx);
+    return valk_lval_err("Failed to allocate arena");
+  }
+  valk_mem_arena_init(arena, arena_bytes - sizeof(*arena));
+  ctx->arena = arena;
+
+  // Create request
+  valk_http2_request_t *req;
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)arena) {
+    req = valk_mem_alloc(sizeof(valk_http2_request_t));
+    memset(req, 0, sizeof(*req));
+    req->allocator = (valk_mem_allocator_t *)arena;
+    req->method = __client_arena_strdup("GET");
+    req->scheme = __client_arena_strdup("https");
+    req->authority = __client_arena_strdup(client->hostname[0] ? client->hostname : client->interface);
+    req->path = __client_arena_strdup(path);
+    da_init(&req->headers);
+  }
+
+  valk_async_handle_t *request_handle = valk_aio_http2_request_send(req, client);
+  if (!request_handle) {
+    valk_handle_release(&valk_global_handle_table, ctx->callback_handle);
+    free(arena);
+    free(ctx->path);
+    free(ctx);
+    return valk_lval_err("Failed to send request");
+  }
+
+  request_handle->on_done = __http2_client_reuse_response_done;
+  request_handle->on_done_ctx = ctx;
+
+  return valk_lval_nil();
+}
