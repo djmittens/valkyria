@@ -189,6 +189,7 @@ define run_tests_c
 	$(1)/test_http2_conn_unit
 	$(1)/test_http2_server_unit
 	$(1)/test_aio_async_unit
+	$(1)/test_conn_admission_unit
 	@echo "=== All C tests passed ($(1)) ==="
 endef
 

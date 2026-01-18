@@ -188,7 +188,15 @@
 
 ### Low Priority Files (<15% line coverage gap)
 
-- [ ] **aio/http2/overload/aio_overload_admission.c** - 76.8% line / 52.4% branch
+- [x] **aio/http2/overload/aio_overload_admission.c** - ~~76.8%~~ 100% line / ~~52.4%~~ 95.2% branch - DONE
+  - Added 15 unit tests to test/unit/test_conn_admission.c (now 28 total)
+  - Tests cover: valk_conn_admission_snapshot with real slabs (empty, partial, full usage)
+  - Tests cover: backpressure list traversal (multiple handles, future timestamp, zero start time)
+  - Tests cover: null slab handling, null ctx safety, zero config values
+  - Tests cover: reason string verification ("critical pressure", "high pressure", "probabilistic shed")
+  - Tests cover: multiple slabs with different usage levels
+  - Fixed incorrect test expectation (arena_slab_usage doesn't affect connection admission)
+  - Added test to CMakeLists.txt and Makefile run_tests
 - [ ] **aio/system/aio_task_queue.c** - 77.3% line / 55.9% branch
 - [x] **aio/system/aio_task.c** - 70.0% line / 100% branch - LCOV EXCLUSIONS ADDED
   - Added LCOV exclusions for OOM path in valk_uv_exec_task (malloc failure)
