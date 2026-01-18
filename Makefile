@@ -136,6 +136,7 @@ define run_tests_c
 	@echo "=== Running C tests from $(1) ==="
 	@if [ -n "$$ASAN_OPTIONS" ]; then echo "ASAN_OPTIONS=$$ASAN_OPTIONS"; fi
 	$(1)/test_std
+	$(1)/test_regression
 	$(1)/test_memory
 	$(1)/test_networking
 	$(1)/test_large_response

@@ -228,6 +228,10 @@ add_executable(test_std test/test_std.c test/testing.c)
 target_link_libraries(test_std PRIVATE "-lc" valkyria)
 include_directories(test_std src/)
 
+add_executable(test_regression test/test_regression.c test/testing.c)
+target_link_libraries(test_regression PRIVATE "-lc" valkyria)
+include_directories(test_regression src/)
+
 add_executable(test_networking test/test_networking.c test/testing.c)
 target_link_libraries(test_networking PRIVATE "-lc" valkyria)
 include_directories(test_networking src/)
