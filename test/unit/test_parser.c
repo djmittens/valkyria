@@ -1257,7 +1257,286 @@ void test_lval_read_deeply_nested(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_eval_stack_init_destroy(VALK_TEST_ARGS()) {
+  VALK_TEST();
 
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  ASSERT_NOT_NULL(stack.frames);
+  ASSERT_EQ(stack.count, 0);
+  ASSERT_EQ(stack.capacity, VALK_EVAL_STACK_INIT_CAP);
+
+  valk_eval_stack_destroy(&stack);
+  ASSERT_NULL(stack.frames);
+  ASSERT_EQ(stack.count, 0);
+  ASSERT_EQ(stack.capacity, 0);
+
+  VALK_PASS();
+}
+
+void test_eval_stack_push_single(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_DONE,
+    .env = NULL,
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  ASSERT_EQ(stack.count, 1);
+  ASSERT_EQ(stack.frames[0].kind, CONT_DONE);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_push_pop_single(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_IF_BRANCH,
+    .env = NULL,
+  };
+  valk_eval_stack_push(&stack, frame);
+  ASSERT_EQ(stack.count, 1);
+
+  valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+  ASSERT_EQ(stack.count, 0);
+  ASSERT_EQ(popped.kind, CONT_IF_BRANCH);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_push_multiple(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  for (int i = 0; i < 10; i++) {
+    valk_cont_frame_t frame = {
+      .kind = (valk_cont_kind_e)(i % 5),
+      .env = NULL,
+    };
+    valk_eval_stack_push(&stack, frame);
+  }
+
+  ASSERT_EQ(stack.count, 10);
+
+  for (int i = 9; i >= 0; i--) {
+    valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+    ASSERT_EQ(popped.kind, (valk_cont_kind_e)(i % 5));
+  }
+
+  ASSERT_EQ(stack.count, 0);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_grow(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  u64 initial_cap = stack.capacity;
+
+  for (u64 i = 0; i < initial_cap + 10; i++) {
+    valk_cont_frame_t frame = {
+      .kind = CONT_DONE,
+      .env = NULL,
+    };
+    valk_eval_stack_push(&stack, frame);
+  }
+
+  ASSERT_GT(stack.capacity, initial_cap);
+  ASSERT_EQ(stack.count, initial_cap + 10);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_cont_kinds(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_cont_kind_e kinds[] = {
+    CONT_DONE,
+    CONT_EVAL_ARGS,
+    CONT_COLLECT_ARG,
+    CONT_APPLY_FUNC,
+    CONT_IF_BRANCH,
+    CONT_DO_NEXT,
+    CONT_SELECT_CHECK,
+    CONT_BODY_NEXT,
+    CONT_SINGLE_ELEM,
+    CONT_LAMBDA_DONE,
+    CONT_CTX_DEADLINE,
+    CONT_CTX_WITH,
+  };
+
+  for (size_t i = 0; i < sizeof(kinds)/sizeof(kinds[0]); i++) {
+    valk_cont_frame_t frame = {
+      .kind = kinds[i],
+      .env = NULL,
+    };
+    valk_eval_stack_push(&stack, frame);
+  }
+
+  ASSERT_EQ(stack.count, sizeof(kinds)/sizeof(kinds[0]));
+
+  for (size_t i = sizeof(kinds)/sizeof(kinds[0]); i > 0; i--) {
+    valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+    ASSERT_EQ(popped.kind, kinds[i-1]);
+  }
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_if_branch_frame(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_lval_t *true_branch = valk_lval_num(1);
+  valk_lval_t *false_branch = valk_lval_num(0);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_IF_BRANCH,
+    .env = NULL,
+    .if_branch = {
+      .true_branch = true_branch,
+      .false_branch = false_branch,
+    },
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+  ASSERT_EQ(popped.kind, CONT_IF_BRANCH);
+  ASSERT_EQ(popped.if_branch.true_branch, true_branch);
+  ASSERT_EQ(popped.if_branch.false_branch, false_branch);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_do_next_frame(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_lval_t *remaining = valk_lval_list((valk_lval_t*[]){valk_lval_num(1)}, 1);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_DO_NEXT,
+    .env = NULL,
+    .do_next = {
+      .remaining = remaining,
+    },
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+  ASSERT_EQ(popped.kind, CONT_DO_NEXT);
+  ASSERT_EQ(popped.do_next.remaining, remaining);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_collect_arg_cleanup(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_lval_t **args = malloc(sizeof(valk_lval_t*) * 4);
+  args[0] = valk_lval_num(1);
+  args[1] = valk_lval_num(2);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_COLLECT_ARG,
+    .env = NULL,
+    .collect_arg = {
+      .func = NULL,
+      .args = args,
+      .count = 2,
+      .capacity = 4,
+      .remaining = NULL,
+    },
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  ASSERT_EQ(stack.count, 1);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_body_next_frame(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lval_t *remaining = valk_lval_num(42);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_BODY_NEXT,
+    .env = NULL,
+    .body_next = {
+      .remaining = remaining,
+      .call_env = env,
+    },
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+  ASSERT_EQ(popped.kind, CONT_BODY_NEXT);
+  ASSERT_EQ(popped.body_next.remaining, remaining);
+  ASSERT_EQ(popped.body_next.call_env, env);
+
+  valk_eval_stack_destroy(&stack);
+  valk_lenv_free(env);
+  VALK_PASS();
+}
+
+void test_eval_stack_with_env(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_lenv_t *env = valk_lenv_empty();
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_DONE,
+    .env = env,
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+  ASSERT_EQ(popped.env, env);
+
+  valk_eval_stack_destroy(&stack);
+  valk_lenv_free(env);
+  VALK_PASS();
+}
 
 int main(void) {
   valk_mem_init_malloc();
@@ -1356,6 +1635,18 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_lval_read_empty_list", test_lval_read_empty_list);
   valk_testsuite_add_test(suite, "test_lval_read_empty_qexpr", test_lval_read_empty_qexpr);
   valk_testsuite_add_test(suite, "test_lval_read_deeply_nested", test_lval_read_deeply_nested);
+
+  valk_testsuite_add_test(suite, "test_eval_stack_init_destroy", test_eval_stack_init_destroy);
+  valk_testsuite_add_test(suite, "test_eval_stack_push_single", test_eval_stack_push_single);
+  valk_testsuite_add_test(suite, "test_eval_stack_push_pop_single", test_eval_stack_push_pop_single);
+  valk_testsuite_add_test(suite, "test_eval_stack_push_multiple", test_eval_stack_push_multiple);
+  valk_testsuite_add_test(suite, "test_eval_stack_grow", test_eval_stack_grow);
+  valk_testsuite_add_test(suite, "test_eval_stack_cont_kinds", test_eval_stack_cont_kinds);
+  valk_testsuite_add_test(suite, "test_eval_stack_if_branch_frame", test_eval_stack_if_branch_frame);
+  valk_testsuite_add_test(suite, "test_eval_stack_do_next_frame", test_eval_stack_do_next_frame);
+  valk_testsuite_add_test(suite, "test_eval_stack_collect_arg_cleanup", test_eval_stack_collect_arg_cleanup);
+  valk_testsuite_add_test(suite, "test_eval_stack_body_next_frame", test_eval_stack_body_next_frame);
+  valk_testsuite_add_test(suite, "test_eval_stack_with_env", test_eval_stack_with_env);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
