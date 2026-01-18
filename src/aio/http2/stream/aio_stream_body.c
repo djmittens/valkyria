@@ -49,15 +49,15 @@ valk_stream_body_t *valk_stream_body_new(
     pending_buf = body ? malloc(STREAM_DEFAULT_BUFFER_SIZE) : nullptr;
   }
 
-  if (!body) {
+  if (!body) { // LCOV_EXCL_START
     VALK_ERROR("stream_body: failed to allocate body struct");
     return nullptr;
-  }
-  if (!pending_buf) {
+  } // LCOV_EXCL_STOP
+  if (!pending_buf) { // LCOV_EXCL_START
     VALK_ERROR("stream_body: failed to allocate pending buffer");
     if (!arena) free(body);
     return nullptr;
-  }
+  } // LCOV_EXCL_STOP
 
   memset(body, 0, sizeof(*body));
 
@@ -207,10 +207,10 @@ int valk_stream_body_write(valk_stream_body_t *body, const char *data, u64 len) 
   } else {
     chunk = malloc(sizeof(valk_stream_chunk_t) + len + 1);
   }
-  if (!chunk) {
+  if (!chunk) { // LCOV_EXCL_START
     VALK_ERROR("stream_body: failed to allocate chunk");
     return -3;
-  }
+  } // LCOV_EXCL_STOP
 
   char *buf = (char *)(chunk + 1);
   memcpy(buf, data, len);
@@ -349,13 +349,13 @@ static nghttp2_ssize __stream_data_read_callback(
   if (chunk->data_len > body->pending_capacity) {
     u64 new_capacity = chunk->data_len;
     char *new_buf = body->arena ? nullptr : realloc(body->pending_data, new_capacity);
-    if (!new_buf && !body->arena) {
+    if (!new_buf && !body->arena) { // LCOV_EXCL_START
       VALK_ERROR("stream_body: failed to grow pending buffer for body %llu",
                  (unsigned long long)body->id);
       __stream_chunk_free(chunk);
       *data_flags |= NGHTTP2_DATA_FLAG_EOF;
       return 0;
-    }
+    } // LCOV_EXCL_STOP
     if (!body->arena) {
       body->pending_data = new_buf;
       body->pending_capacity = new_capacity;

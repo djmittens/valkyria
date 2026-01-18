@@ -7,6 +7,51 @@
 3. When you discover issues, immediately update @IMPLEMENTATION_PLAN.md with your findings. When resolved, update and remove the item.
 4. When the tests pass, update @IMPLEMENTATION_PLAN.md, then `git add -A` then `git commit` with a message describing the changes. After the commit, `git push`.
 
+## Progress Reporting
+
+After EACH significant action, print a status line:
+```
+[RALPH] ACTION: <what you just did>
+[RALPH] STATUS: <current state - building/testing/passing/failing>
+[RALPH] NEXT: <what you will do next>
+```
+
+When starting a task:
+```
+[RALPH] === STARTING TASK: <task name from plan> ===
+[RALPH] FILE: <primary file being worked on>
+[RALPH] GOAL: <what success looks like>
+```
+
+When finishing a task:
+```
+[RALPH] === COMPLETED: <task name> ===
+[RALPH] RESULT: <pass/fail and brief summary>
+[RALPH] COVERAGE: <if relevant, coverage delta>
+```
+
+## Issue Handling - CRITICAL
+
+When you encounter a problem (test failure, build error, unexpected behavior):
+
+1. **STOP and DOCUMENT FIRST** - Add the issue to @IMPLEMENTATION_PLAN.md under a new section "## Discovered Issues" with:
+   - File and line number
+   - What you expected vs what happened
+   - Root cause if known
+   - Suggested fix
+
+2. **DO NOT WORK AROUND** - Never:
+   - Skip a failing test
+   - Add LCOV exclusions to hide coverage gaps
+   - Comment out problematic code
+   - Add defensive checks that mask the real bug
+
+3. **FIX SYSTEMATICALLY** - Either:
+   - Fix the root cause properly, OR
+   - Document it fully and move to next task if fix is too large
+
+4. **If stuck for >5 minutes on same issue**: Document what you tried, mark as blocked, move on.
+
 99999. Important: When authoring documentation, capture the why — tests and implementation importance.
 999999. Important: Single sources of truth, no migrations/adapters. If tests unrelated to your work fail, resolve them as part of the increment.
 9999999. Run `make lint` before committing. All lint errors must be fixed.

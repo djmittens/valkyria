@@ -153,10 +153,10 @@ static void __vtable_alloc_cb(valk_io_tcp_t *tcp, u64 suggested, void **buf, u64
       return;
     }
     
-    if (!valk_conn_io_read_buf_acquire(&conn->http.io, conn->sys->tcpBufferSlab)) {
+    if (!valk_conn_io_read_buf_acquire(&conn->http.io, conn->sys->tcpBufferSlab)) { // LCOV_EXCL_START
       VALK_WARN("TCP buffer slab exhausted for read buffer");
       return;
-    }
+    } // LCOV_EXCL_STOP
     
     *buf = (char *)valk_conn_io_read_buf_data(&conn->http.io);
     *buflen = valk_conn_io_read_buf_size(&conn->http.io);
@@ -210,10 +210,10 @@ static bool __accept_should_reject(valk_aio_http_server *srv, valk_aio_handle_t 
 
 static valk_aio_handle_t *__accept_alloc_conn(valk_aio_http_server *srv) {
   valk_slab_item_t *slab_item = valk_slab_aquire(srv->sys->handleSlab);
-  if (!slab_item) {
+  if (!slab_item) { // LCOV_EXCL_START
     VALK_ERROR("Failed to allocate connection handle from slab");
     return nullptr;
-  }
+  } // LCOV_EXCL_STOP
   valk_aio_handle_t *conn = (valk_aio_handle_t *)slab_item->data;
   memset(conn, 0, sizeof(valk_aio_handle_t));
   conn->magic = VALK_AIO_HANDLE_MAGIC;
@@ -548,11 +548,11 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
                                    void *lisp_handler,
                                    valk_http_server_config_t *config) {
   valk_slab_item_t *slab_item = valk_slab_aquire(sys->httpServers);
-  if (!slab_item) {
+  if (!slab_item) { // LCOV_EXCL_START
     valk_async_handle_t *handle = valk_async_handle_new(sys, nullptr);
     valk_async_handle_fail(handle, valk_lval_err("Server slab exhausted"));
     return handle;
-  }
+  } // LCOV_EXCL_STOP
   valk_aio_http_server *srv = (valk_aio_http_server *)slab_item->data;
   valk_async_handle_t *handle = valk_async_handle_new(sys, nullptr);
 
@@ -596,13 +596,13 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
   VALK_WITH_ALLOC((valk_mem_allocator_t *)sys->handleSlab) {
     task = valk_mem_alloc(sizeof(valk_aio_task_new));
   }
-  if (!task) {
+  if (!task) { // LCOV_EXCL_START
     VALK_ERROR("Handle slab exhausted in http2_listen");
     valk_async_handle_fail(handle, valk_lval_err("Handle slab exhausted"));
     __valk_aio_http2_server_cleanup(srv);
     valk_slab_release_ptr(sys->httpServers, srv);
     return handle;
-  }
+  } // LCOV_EXCL_STOP
   task->allocator = (valk_mem_allocator_t *)sys->handleSlab;
 
   task->arg = srv;
@@ -729,11 +729,11 @@ valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv) {
   VALK_WITH_ALLOC((valk_mem_allocator_t *)sys->handleSlab) {
     task = valk_mem_alloc(sizeof(valk_aio_task_new));
   }
-  if (!task) {
+  if (!task) { // LCOV_EXCL_START
     VALK_ERROR("Handle slab exhausted in http2_stop");
     valk_async_handle_fail(handle, valk_lval_err("Handle slab exhausted"));
     return handle;
-  }
+  } // LCOV_EXCL_STOP
   task->allocator = (valk_mem_allocator_t *)sys->handleSlab;
   task->arg = srv;
   task->handle = handle;

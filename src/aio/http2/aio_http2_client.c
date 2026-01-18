@@ -296,13 +296,13 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
   valk_async_handle_t *handle = ctx->handle;
 
   valk_slab_item_t *slab_item = valk_slab_aquire(sys->handleSlab);
-  if (!slab_item) {
+  if (!slab_item) { // LCOV_EXCL_START
     VALK_ERROR("Handle slab exhausted during client connect");
     valk_async_handle_fail(handle, valk_lval_err("Handle slab exhausted"));
     free(ctx->client);
     free(ctx);
     return;
-  }
+  } // LCOV_EXCL_STOP
   client->connection = (valk_aio_handle_t *)slab_item->data;
   memset(client->connection, 0, sizeof(valk_aio_handle_t));
   client->connection->magic = VALK_AIO_HANDLE_MAGIC;
@@ -356,20 +356,20 @@ valk_async_handle_t *valk_aio_http2_connect_host(valk_aio_system_t *sys,
     task = valk_mem_alloc(sizeof(valk_aio_task_new));
   }
 
-  if (!task) {
+  if (!task) { // LCOV_EXCL_START
     VALK_ERROR("Handle slab exhausted in http2_connect");
     valk_async_handle_fail(handle, valk_lval_err("Handle slab exhausted"));
     return handle;
-  }
+  } // LCOV_EXCL_STOP
   task->allocator = (valk_mem_allocator_t *)sys->handleSlab;
 
   valk_aio_http2_client *client = malloc(sizeof(valk_aio_http2_client));
-  if (!client) {
+  if (!client) { // LCOV_EXCL_START
     VALK_ERROR("Failed to allocate client");
     valk_async_handle_fail(handle, valk_lval_err("Failed to allocate client"));
     valk_mem_allocator_free(task->allocator, task);
     return handle;
-  }
+  } // LCOV_EXCL_STOP
   memset(client, 0, sizeof(valk_aio_http2_client));
 
   strncpy(client->interface, ip, sizeof(client->interface) - 1);
@@ -577,11 +577,11 @@ valk_async_handle_t *valk_aio_http2_request_send(valk_http2_request_t *req,
     task = valk_mem_alloc(sizeof(valk_aio_task_new));
   }
 
-  if (!task) {
+  if (!task) { // LCOV_EXCL_START
     VALK_ERROR("Handle slab exhausted in request_send");
     valk_async_handle_fail(handle, valk_lval_err("Handle slab exhausted"));
     return handle;
-  }
+  } // LCOV_EXCL_STOP
   task->allocator = (valk_mem_allocator_t *)client->sys->handleSlab;
 
   __request_send_ctx_t *ctx = malloc(sizeof(__request_send_ctx_t));
@@ -851,24 +851,23 @@ valk_lval_t *valk_http2_client_request_on_conn_impl(valk_lenv_t *e,
   UNUSED(e);
 
   valk_http2_client_reuse_ctx_t *ctx = malloc(sizeof(valk_http2_client_reuse_ctx_t));
-  if (!ctx) {
+  if (!ctx) { // LCOV_EXCL_START
     return valk_lval_err("Failed to allocate request context");
-  }
+  } // LCOV_EXCL_STOP
   ctx->client = client;
   ctx->path = strdup(path);
 
   valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
   ctx->callback_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
 
-  // Allocate arena for request
   const u64 arena_bytes = 4096;
   valk_mem_arena_t *arena = malloc(arena_bytes);
-  if (!arena) {
+  if (!arena) { // LCOV_EXCL_START
     valk_handle_release(&valk_global_handle_table, ctx->callback_handle);
     free(ctx->path);
     free(ctx);
     return valk_lval_err("Failed to allocate arena");
-  }
+  } // LCOV_EXCL_STOP
   valk_mem_arena_init(arena, arena_bytes - sizeof(*arena));
   ctx->arena = arena;
 

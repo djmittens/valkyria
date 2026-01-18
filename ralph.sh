@@ -24,11 +24,13 @@ fi
 
 ITERATION=0
 CURRENT_BRANCH=$(git branch --show-current)
+LOG_FILE="ralph-$(date +%Y%m%d-%H%M%S).log"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Mode:   $MODE"
 echo "Prompt: $PROMPT_FILE"
 echo "Branch: $CURRENT_BRANCH"
+echo "Log:    $LOG_FILE"
 [ $MAX_ITERATIONS -gt 0 ] && echo "Max:    $MAX_ITERATIONS iterations"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -40,23 +42,45 @@ fi
 
 while true; do
     if [ $MAX_ITERATIONS -gt 0 ] && [ $ITERATION -ge $MAX_ITERATIONS ]; then
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "Reached max iterations: $MAX_ITERATIONS"
+        echo "Log saved to: $LOG_FILE"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         break
     fi
 
+    ITERATION=$((ITERATION + 1))
+    START_TIME=$(date +%s)
+    
+    echo ""
+    echo "╔═══════════════════════════════════════════════════════════════╗"
+    echo "║  RALPH ITERATION $ITERATION - $(date '+%Y-%m-%d %H:%M:%S')                       ║"
+    echo "╚═══════════════════════════════════════════════════════════════╝"
+    echo ""
+
     # Run Ralph iteration with selected prompt
-    # -p: Headless mode (non-interactive, reads from stdin)
-    # --dangerously-skip-permissions: Auto-approve all tool calls
+    # Show output in real-time AND log it
     cat "$PROMPT_FILE" | claude -p \
         --dangerously-skip-permissions \
-        --verbose
+        --verbose 2>&1 | tee -a "$LOG_FILE"
+
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
+    
+    echo ""
+    echo "┌───────────────────────────────────────────────────────────────┐"
+    echo "│  Iteration $ITERATION completed in ${DURATION}s                              │"
+    echo "└───────────────────────────────────────────────────────────────┘"
 
     # Push changes after each iteration
     git push origin "$CURRENT_BRANCH" 2>/dev/null || {
-        echo "Failed to push. Creating remote branch..."
+        echo "[RALPH] Creating remote branch..."
         git push -u origin "$CURRENT_BRANCH"
     }
 
-    ITERATION=$((ITERATION + 1))
-    echo -e "\n\n======================== LOOP $ITERATION ========================\n"
+    # Show git log of what was committed this iteration
+    echo ""
+    echo "Recent commits:"
+    git log --oneline -3
+    echo ""
 done

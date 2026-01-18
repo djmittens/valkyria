@@ -16,5 +16,8 @@ __pycache__/
 *.gcda
 *.gcno
 
+# Logs n shit
+*.log
+
 # Ralph Wiggum (optional - remove if you want to track plan state)
 IMPLEMENTATION_PLAN.md

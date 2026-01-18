@@ -216,6 +216,66 @@ void test_http2_stop_null_sys(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_server_set_handler_null_handler(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_http_server *srv = create_test_server();
+  srv->lisp_handler_handle = (valk_handle_t){0, 0};
+  srv->sandbox_env = nullptr;
+
+  valk_aio_http2_server_set_handler(srv, nullptr);
+
+  ASSERT_EQ(srv->lisp_handler_handle.generation, 0);
+  ASSERT_NULL(srv->sandbox_env);
+
+  free_test_server(srv);
+  VALK_PASS();
+}
+
+void test_cleanup_all_servers_with_servers(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_system_t *sys = create_test_system();
+
+  valk_aio_http_server *srv1 = calloc(1, sizeof(valk_aio_http_server));
+  valk_aio_http_server *srv2 = calloc(1, sizeof(valk_aio_http_server));
+
+  srv1->sys = sys;
+  srv1->port = 8080;
+  srv1->ssl_ctx = nullptr;
+  srv1->sandbox_env = nullptr;
+  srv1->lisp_handler_handle = (valk_handle_t){0, 0};
+
+  srv2->sys = sys;
+  srv2->port = 8081;
+  srv2->ssl_ctx = nullptr;
+  srv2->sandbox_env = nullptr;
+  srv2->lisp_handler_handle = (valk_handle_t){0, 0};
+
+  srv1->next = srv2;
+  srv2->prev = srv1;
+  sys->serverList = srv1;
+  sys->httpServers = valk_slab_new(sizeof(valk_aio_http_server), 4);
+
+  valk_aio_http2_cleanup_all_servers(sys);
+
+  ASSERT_NULL(sys->serverList);
+
+  valk_slab_free(sys->httpServers);
+  free_test_system(sys);
+  VALK_PASS();
+}
+
+void test_server_is_stopped_init_state(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_http_server *srv = create_test_server();
+  srv->state = VALK_SRV_INIT;
+
+  bool stopped = valk_aio_http2_server_is_stopped(srv);
+  ASSERT_FALSE(stopped);
+
+  free_test_server(srv);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -233,6 +293,9 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_server_metrics_init_port_str_wrap", test_server_metrics_init_port_str_wrap);
   valk_testsuite_add_test(suite, "test_http2_stop_null_srv", test_http2_stop_null_srv);
   valk_testsuite_add_test(suite, "test_http2_stop_null_sys", test_http2_stop_null_sys);
+  valk_testsuite_add_test(suite, "test_server_set_handler_null_handler", test_server_set_handler_null_handler);
+  valk_testsuite_add_test(suite, "test_cleanup_all_servers_with_servers", test_cleanup_all_servers_with_servers);
+  valk_testsuite_add_test(suite, "test_server_is_stopped_init_state", test_server_is_stopped_init_state);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

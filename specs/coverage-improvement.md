@@ -18,6 +18,7 @@ Improve test coverage for all runtime code in `src/` to meet requirements:
 | aio/aio_http_builtins.c | 30.9% | 100.0% | -59.1% | - |
 
 ### High Priority (30-50% gap)
+
 | File | Line | Branch | Line Gap | Branch Gap |
 |------|------|--------|----------|------------|
 | aio/http2/stream/aio_stream_body_conn.c | 46.7% | 31.0% | -43.3% | -54.0% |
@@ -26,6 +27,7 @@ Improve test coverage for all runtime code in `src/` to meet requirements:
 | aio/http2/aio_http2_conn_fsm.c | 57.9% | 60.0% | -32.1% | -25.0% |
 
 ### Medium Priority (15-30% gap)
+
 | File | Line | Branch | Line Gap | Branch Gap |
 |------|------|--------|----------|------------|
 | aio/http2/stream/aio_stream_builtins.c | 62.1% | 39.8% | -27.9% | -45.2% |
@@ -40,6 +42,7 @@ Improve test coverage for all runtime code in `src/` to meet requirements:
 | parser.c | 75.1% | 50.0% | -14.9% | -35.0% |
 
 ### Low Priority (<15% gap)
+
 | File | Line | Branch | Line Gap | Branch Gap |
 |------|------|--------|----------|------------|
 | aio/http2/overload/aio_overload_admission.c | 76.8% | 52.4% | -13.2% | -32.6% |

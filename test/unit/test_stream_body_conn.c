@@ -638,6 +638,50 @@ void test_free_null_body(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_writable_null_body(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  bool writable = valk_stream_body_writable(nullptr);
+  ASSERT_FALSE(writable);
+  VALK_PASS();
+}
+
+void test_writable_null_session(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->state = VALK_STREAM_OPEN;
+  body->session = nullptr;
+
+  bool writable = valk_stream_body_writable(body);
+  ASSERT_FALSE(writable);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_queue_len_null_body(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  u64 len = valk_stream_body_queue_len(nullptr);
+  ASSERT_EQ(len, 0);
+  VALK_PASS();
+}
+
+void test_cancel_no_session(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->state = VALK_STREAM_OPEN;
+  body->session = nullptr;
+
+  int rv = valk_stream_body_cancel(body, NGHTTP2_CANCEL);
+  ASSERT_EQ(rv, 0);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -696,6 +740,10 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_close_already_closed", test_close_already_closed);
   valk_testsuite_add_test(suite, "test_close_already_closing", test_close_already_closing);
   valk_testsuite_add_test(suite, "test_free_null_body", test_free_null_body);
+  valk_testsuite_add_test(suite, "test_writable_null_body", test_writable_null_body);
+  valk_testsuite_add_test(suite, "test_writable_null_session", test_writable_null_session);
+  valk_testsuite_add_test(suite, "test_queue_len_null_body", test_queue_len_null_body);
+  valk_testsuite_add_test(suite, "test_cancel_no_session", test_cancel_no_session);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

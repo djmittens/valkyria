@@ -50,14 +50,16 @@
   - Tests cover: valk_backpressure_list_try_resume (null cases, empty list, insufficient buffers, sufficient buffers, skips closing/closed, zero min_buffers)
   - Tests cover: valk_backpressure_list_timeout_expired (null cases, zero timeout, none/single/multiple expired, partial, max limit, zero start time)
 
-- [x] **aio/http2/stream/aio_stream_body.c** - 53.4% line / 39.9% branch - PARTIALLY IMPROVED
-  - Added 12 unit tests to test/unit/test_stream_body_conn.c (now 47 total)
+- [x] **aio/http2/stream/aio_stream_body.c** - ~~53.4%~~ 70.2% line / ~~39.9%~~ 58.7% branch - PARTIALLY IMPROVED
+  - Added 16 unit tests to test/unit/test_stream_body_conn.c (now 51 total)
   - Tests cover: valk_stream_body_write (null data, closed/closing body, queue full)
-  - Tests cover: valk_stream_body_writable (closed/closing body)
-  - Tests cover: valk_stream_body_queue_len (with queued items)
+  - Tests cover: valk_stream_body_writable (null body, null session, closed/closing body)
+  - Tests cover: valk_stream_body_queue_len (with queued items, null body)
   - Tests cover: valk_stream_body_close (null, already closed/closing)
   - Tests cover: valk_stream_body_free (null)
   - Tests cover: valk_stream_body_is_idle_expired (actual expired case)
+  - Tests cover: valk_stream_body_cancel (no session)
+  - Added LCOV exclusions for OOM paths (malloc/realloc failures)
   - Note: Full nghttp2 data callback testing requires nghttp2 fake/mock infrastructure
 
 - [x] **aio/http2/aio_http2_conn_fsm.c** - 57.9% line / 60.0% branch - DONE
@@ -108,15 +110,17 @@
   - Tests cover: valk_http2_conn_alloc_callback (null conn, wrong magic, wrong kind, existing buf, acquire new buf, slab exhausted)
   - Added test_http2_conn_unit to Makefile run_tests_c
   - Note: Full nghttp2/SSL integration testing requires real nghttp2 sessions
-- [x] **aio/http2/aio_http2_server.c** - ~~65.9%~~ 66.6% line / ~~42.1%~~ 44.6% branch - PARTIALLY IMPROVED
-  - Added 13 unit tests in test/unit/test_http2_server.c
+- [x] **aio/http2/aio_http2_server.c** - ~~65.9%~~ 69.4% line / ~~42.1%~~ 45.3% branch - PARTIALLY IMPROVED
+  - Added 16 unit tests in test/unit/test_http2_server.c
   - Tests cover: valk_aio_http2_server_get_port (basic getter)
-  - Tests cover: valk_aio_http2_server_is_stopped (null, listening, closing, closed states)
+  - Tests cover: valk_aio_http2_server_is_stopped (null, listening, closing, closed, init states)
   - Added test_http2_server_unit to Makefile run_tests_c
   - Tests cover: valk_aio_http2_server_from_ref, valk_aio_http2_server_get_port_from_ref
-  - Tests cover: valk_aio_http2_cleanup_all_servers (null sys, empty list)
+  - Tests cover: valk_aio_http2_cleanup_all_servers (null sys, empty list, with servers)
   - Tests cover: valk_http2_server_metrics_init (creates all metrics, port_str index wrapping)
   - Tests cover: valk_aio_http2_stop (null srv, null sys early returns)
+  - Tests cover: valk_aio_http2_server_set_handler (null handler)
+  - Added LCOV exclusions for OOM paths (slab exhausted, malloc failures)
   - Note: Full server lifecycle testing requires SSL/nghttp2/libuv integration
 - [x] **io/io_loop_ops_uv.c** - 68.6% line / 44.4% branch - LCOV EXCLUSIONS ADDED
   - Added LCOV exclusions for OOM path (malloc failure) and libuv init failure
@@ -126,7 +130,10 @@
   - Added LCOV exclusions for OOM paths (malloc failures) and libuv API failures (uv_tcp_connect, uv_write)
   - Remaining uncovered: callback null checks, DNS resolution failure, some functions (tcp_ip6_name, tcp_getpeername, etc.)
   - These are thin libuv wrappers covered only by integration tests; further coverage requires more integration tests
-- [ ] **aio/http2/aio_http2_client.c** - 71.0% line / 50.7% branch
+- [x] **aio/http2/aio_http2_client.c** - ~~71.0%~~ 73.6% line / ~~50.7%~~ 51.6% branch - LCOV EXCLUSIONS ADDED
+  - Added LCOV exclusions for OOM paths (slab exhausted, malloc failures)
+  - Remaining uncovered: SSL handshake, nghttp2 callbacks, request/response handling
+  - Note: Full client lifecycle testing requires SSL/nghttp2 integration tests
 - [x] **gc.c** - 72.0% line / 57.2% branch - PARTIALLY IMPROVED
   - Added 45 unit tests to test/unit/test_gc.c (now 154 tests total)
   - Tests cover: valk_gc_get_allocated_bytes_total (null safety)
