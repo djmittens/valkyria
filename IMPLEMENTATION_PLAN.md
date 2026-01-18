@@ -182,6 +182,7 @@
   - Added test/test_parser_edge_cases.valk (25 tests) covering partial application, varargs edge cases, range, ord, select, quasiquote, eval, list
   - Added test/test_parser_errors.valk (25 tests) covering error paths for quote, quasiquote, if, ctx/with-deadline, ctx/with, unquote, head, tail, nth, divide-by-zero, str/split, str/replace, read, load
   - Added test/test_atom_builtins.valk (15 tests) covering atom/get, atom/set, atom/add, atom/sub, arena-size, arena-usage, arena-high-water, list?, ref?, error
+  - Added test/test_parser_branch_coverage.valk (53 tests) covering select error paths, if edge cases, printf format, lambda/varargs edge cases, eval edge cases, quasiquote, string ops, list ops, comparison chains, repeat, range, env lookup, def, print, error propagation
   - Added LCOV exclusions for exit() and shutdown() exit paths (terminates process)
   - Added LCOV exclusion for LVAL_UNDEFINED case (invariant violation)
   - Remaining uncovered: HTTP/2 server config error paths, coverage builtins (only in VALK_COVERAGE builds), LVAL_HANDLE copy path

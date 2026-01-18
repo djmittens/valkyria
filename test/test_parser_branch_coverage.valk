@@ -1,0 +1,447 @@
+; Parser Branch Coverage Tests
+; These tests specifically target uncovered branches in parser.c
+; Run with: ./build/valk test/test_parser_branch_coverage.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "Parser Branch Coverage Tests")
+
+; === Select builtin edge cases ===
+
+(test/define "select-no-match-all-false"
+  {do
+    (= {result} (select
+      {false "never1"}
+      {false "never2"}
+      {false "never3"}))
+    (test/assert (error? result) "select with no match should error")
+    true
+  })
+
+(test/define "select-empty"
+  {do
+    (= {result} (eval (read "(select)")))
+    (test/assert (error? result) "empty select should error")
+    true
+  })
+
+(test/define "select-bad-clause-not-list"
+  {do
+    (= {result} (eval (read "(select 123)")))
+    (test/assert (error? result) "select with non-list clause should error")
+    true
+  })
+
+(test/define "select-clause-wrong-length"
+  {do
+    (= {result} (eval (read "(select {true})")))
+    (test/assert (error? result) "select clause with 1 element should error")
+    true
+  })
+
+(test/define "select-condition-error-propagates"
+  {do
+    (= {result} (select {(/ 1 0) "never"}))
+    (test/assert (error? result) "select with error in condition propagates")
+    true
+  })
+
+(test/define "select-condition-non-number"
+  {do
+    (= {result} (eval (read "(select {\"not-a-number\" 42})")))
+    (test/assert (error? result) "select with non-number condition should error")
+    true
+  })
+
+; === If builtin edge cases ===
+
+(test/define "if-non-boolean-condition"
+  {do
+    (= {result} (if 42 "truthy" "falsy"))
+    (test/assert-eq "truthy" result "non-zero treated as true")
+    (= {result2} (if 0 "truthy" "falsy"))
+    (test/assert-eq "falsy" result2 "zero treated as false")
+    true
+  })
+
+(test/define "if-condition-is-zero"
+  {do
+    (= {result} (if (- 1 1) "true" "false"))
+    (test/assert-eq "false" result "computed zero is false")
+    true
+  })
+
+(test/define "if-branches-are-nil"
+  {do
+    (= {result} (if true nil nil))
+    (test/assert (== result nil) "if with nil branches works")
+    true
+  })
+
+; === Printf edge cases ===
+; Note: printf tests use the format string carefully to avoid parse errors
+
+(test/define "printf-basic"
+  {do
+    (printf "hello world\n")
+    true
+  })
+
+(test/define "printf-string-format"
+  {do
+    (printf "name: %s\n" "test")
+    true
+  })
+
+(test/define "printf-number-format"
+  {do
+    (printf "value: %d\n" 42)
+    true
+  })
+
+(test/define "printf-ld-format"
+  {do
+    (printf "value: %ld\n" 12345678901234)
+    true
+  })
+
+; === Lambda/function edge cases ===
+
+(test/define "lambda-ampersand-at-end-error"
+  {do
+    (= {result} (eval (read "(\\ {x &} {x})")))
+    (test/assert (error? result) "& at end of formals should error")
+    true
+  })
+
+(test/define "lambda-call-with-extra-args-error"
+  {do
+    (= {f} (\ {x} {x}))
+    (= {result} (f 1 2 3))
+    (test/assert (error? result) "too many args without varargs errors")
+    true
+  })
+
+(test/define "lambda-varargs-only"
+  {do
+    (= {f} (\ {& all} {len all}))
+    (test/assert-eq 0 (f) "varargs-only with no args")
+    (test/assert-eq 3 (f 1 2 3) "varargs-only with args")
+    true
+  })
+
+(test/define "lambda-partial-then-complete"
+  {do
+    (= {add3} (\ {a b c} {+ (+ a b) c}))
+    (= {p1} (add3 1))
+    (= {p2} (p1 2))
+    (= {result} (p2 3))
+    (test/assert-eq 6 result "chained partial application")
+    true
+  })
+
+(test/define "lambda-partial-with-varargs"
+  {do
+    (= {f} (\ {x & rest} {cons x rest}))
+    (= {g} (f 1))
+    (= {result} (g 2 3 4))
+    (test/assert-eq 4 (len result) "partial with varargs collects rest")
+    true
+  })
+
+; === Do builtin edge cases ===
+
+(test/define "do-single-expression"
+  {do
+    (= {result} (do 42))
+    (test/assert-eq 42 result "do with single expression")
+    true
+  })
+
+(test/define "do-side-effects-before-last"
+  {do
+    (= {counter} 0)
+    (= {result} (do
+      (def {counter} 1)
+      (def {counter} 2)
+      (def {counter} 3)
+      counter))
+    (test/assert-eq 3 result "do evaluates all but returns last")
+    true
+  })
+
+; === Eval and apply edge cases ===
+
+(test/define "eval-self-evaluating"
+  {do
+    (test/assert-eq 42 (eval 42) "eval number is identity")
+    (test/assert-eq "hi" (eval "hi") "eval string is identity")
+    true
+  })
+
+(test/define "apply-non-function"
+  {do
+    (= {result} (eval (read "(42 1 2 3)")))
+    (test/assert (error? result) "applying non-function errors")
+    true
+  })
+
+(test/define "builtin-returned-null-protection"
+  {do
+    (test/assert-eq 3 (+ 1 2) "builtins return values not null")
+    true
+  })
+
+; === Quasiquote edge cases ===
+
+(test/define "quasiquote-multiple-unquotes"
+  {do
+    (= {a} 1)
+    (= {b} 2)
+    (= {c} 3)
+    (= {result} `{,a ,b ,c})
+    (test/assert-eq 3 (len result) "multiple unquotes")
+    (test/assert-eq 1 (nth 1 result) "first unquote")
+    (test/assert-eq 2 (nth 2 result) "second unquote")
+    (test/assert-eq 3 (nth 3 result) "third unquote")
+    true
+  })
+
+(test/define "quasiquote-splice-empty"
+  {do
+    (= {empty} {})
+    (= {result} `{before ,@empty after})
+    (test/assert-eq 2 (len result) "splice empty list")
+    true
+  })
+
+(test/define "quasiquote-nested"
+  {do
+    (= {x} 5)
+    (= {result} `{outer `{inner ,x}})
+    (test/assert-eq 2 (len result) "nested quasiquote structure")
+    true
+  })
+
+; === String operations edge cases ===
+
+(test/define "str-to-num-valid"
+  {do
+    (test/assert-eq 42 (str->num "42") "parse positive")
+    (test/assert-eq -17 (str->num "-17") "parse negative")
+    (test/assert-eq 0 (str->num "0") "parse zero")
+    true
+  })
+
+(test/define "str-to-num-invalid"
+  {do
+    (= {result} (str->num "not-a-number"))
+    (test/assert (error? result) "invalid number string errors")
+    true
+  })
+
+(test/define "str-to-num-wrong-type"
+  {do
+    (= {result} (str->num 42))
+    (test/assert (error? result) "str->num with number errors")
+    true
+  })
+
+; === List operations edge cases ===
+
+(test/define "nth-negative-index"
+  {do
+    (= {result} (nth -1 {1 2 3}))
+    (test/assert (error? result) "negative index errors")
+    true
+  })
+
+(test/define "nth-zero-index"
+  {do
+    (= {result} (nth 0 {1 2 3}))
+    (test/assert (error? result) "zero index errors (1-based)")
+    true
+  })
+
+(test/define "init-single-element"
+  {do
+    (= {result} (init {1}))
+    (test/assert (== result nil) "init of single element is nil")
+    true
+  })
+
+(test/define "last-single-element"
+  {do
+    (= {result} (last {42}))
+    (test/assert-eq 42 result "last of single element")
+    true
+  })
+
+; === Math operations edge cases ===
+
+(test/define "divide-negative"
+  {do
+    (= {result} (/ -10 3))
+    (test/assert-eq -3 result "divide with negative")
+    true
+  })
+
+(test/define "multiply-negative"
+  {do
+    (= {result} (* -5 3))
+    (test/assert-eq -15 result "multiply with negative")
+    true
+  })
+
+(test/define "subtract-to-negative"
+  {do
+    (= {result} (- 3 10))
+    (test/assert-eq -7 result "subtract to negative")
+    true
+  })
+
+; === Comparison edge cases ===
+
+(test/define "ord-different-types"
+  {do
+    (= {result} (ord 1 "a"))
+    (test/assert (error? result) "ord different types errors")
+    true
+  })
+
+(test/define "cmp-chained"
+  {do
+    (test/assert (< 1 2 3 4) "chained less than")
+    (test/assert (not (< 1 2 5 3)) "chained less than fails")
+    (test/assert (> 4 3 2 1) "chained greater than")
+    (test/assert (<= 1 1 2 3) "chained less equal")
+    (test/assert (>= 3 2 2 1) "chained greater equal")
+    true
+  })
+
+; === Repeat builtin ===
+
+(test/define "repeat-zero-times"
+  {do
+    (= {result} (repeat 0 42))
+    (test/assert (== result nil) "repeat 0 times is nil")
+    true
+  })
+
+(test/define "repeat-negative-times"
+  {do
+    (= {result} (repeat -5 42))
+    (test/assert (== result nil) "repeat negative times is nil")
+    true
+  })
+
+; === Range edge cases ===
+
+(test/define "range-single-element"
+  {do
+    (= {result} (range 0 1))
+    (test/assert-eq 1 (len result) "range 0 1 has one element")
+    (test/assert-eq 0 (nth 1 result) "range starts at 0")
+    true
+  })
+
+(test/define "range-crossing-zero"
+  {do
+    (= {result} (range -2 2))
+    (test/assert-eq 4 (len result) "range crossing zero")
+    (test/assert-eq -2 (nth 1 result) "starts at -2")
+    (test/assert-eq 1 (nth 4 result) "ends at 1")
+    true
+  })
+
+; === Env lookup edge cases ===
+
+(test/define "keyword-self-evaluating"
+  {do
+    (test/assert-eq :foo :foo "keywords are self-evaluating")
+    (test/assert-eq :bar (eval :bar) "eval keyword is itself")
+    true
+  })
+
+(test/define "symbol-not-found"
+  {do
+    (= {result} (eval (read "nonexistent-symbol-xyz")))
+    (test/assert (error? result) "undefined symbol errors")
+    true
+  })
+
+; === Def vs = (put) ===
+
+(test/define "def-creates-global"
+  {do
+    (def {global-test-var} 123)
+    (test/assert-eq 123 global-test-var "def creates global")
+    true
+  })
+
+(test/define "def-wrong-args-count"
+  {do
+    (= {result} (eval (read "(def {x})")))
+    (test/assert (error? result) "def without value errors")
+    true
+  })
+
+; === Print builtin edge cases ===
+
+(test/define "print-multiple-args"
+  {do
+    (print "hello" 42 "world")
+    true
+  })
+
+(test/define "print-list"
+  {do
+    (print {1 2 3})
+    true
+  })
+
+(test/define "print-lambda"
+  {do
+    (= {f} (\ {x} {x}))
+    (print f)
+    true
+  })
+
+; === Error propagation ===
+
+(test/define "nested-error-propagation"
+  {do
+    (= {result} (+ 1 (/ 1 0)))
+    (test/assert (error? result) "error propagates through +")
+    true
+  })
+
+(test/define "list-with-error"
+  {do
+    (= {result} (list 1 2 (/ 1 0) 4))
+    (test/assert (error? result) "error in list propagates")
+    true
+  })
+
+; === Body evaluation edge cases ===
+
+(test/define "lambda-multi-expr-body"
+  {do
+    (= {f} (\ {x}
+      {(def {temp} (* x 2))
+       (+ temp 1)}))
+    (= {result} (f 5))
+    (test/assert-eq 11 result "multi-expr body returns last")
+    true
+  })
+
+(test/define "lambda-single-list-body"
+  {do
+    (= {f} (\ {} {+ 1 2}))
+    (= {result} (f))
+    (test/assert-eq 3 result "single list body evaluates")
+    true
+  })
+
+(test/run)
