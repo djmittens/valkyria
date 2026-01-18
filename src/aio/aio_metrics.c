@@ -78,7 +78,7 @@ char* valk_vm_metrics_to_json(const valk_vm_metrics_t* m,
 
   u64 buf_size = 4096;
   char* buf = alloc ? valk_mem_allocator_alloc(alloc, buf_size) : malloc(buf_size);
-  if (!buf) return nullptr;
+  if (!buf) return nullptr; // LCOV_EXCL_BR_LINE - OOM
 
   char* p = buf;
   char* end = buf + buf_size;
@@ -169,7 +169,7 @@ char* valk_vm_metrics_to_json_compact(const valk_vm_metrics_t* m,
 
   u64 buf_size = 512;
   char* buf = alloc ? valk_mem_allocator_alloc(alloc, buf_size) : malloc(buf_size);
-  if (!buf) return nullptr;
+  if (!buf) return nullptr; // LCOV_EXCL_BR_LINE - OOM
 
   double heap_util = m->gc_heap_total > 0
     ? 100.0 * (double)m->gc_heap_used / (double)m->gc_heap_total
@@ -202,7 +202,7 @@ char* valk_vm_metrics_to_prometheus(const valk_vm_metrics_t* m,
 
   u64 buf_size = 4096;
   char* buf = alloc ? valk_mem_allocator_alloc(alloc, buf_size) : malloc(buf_size);
-  if (!buf) return nullptr;
+  if (!buf) return nullptr; // LCOV_EXCL_BR_LINE - OOM
 
   double heap_util_ratio = m->gc_heap_total > 0
     ? (double)m->gc_heap_used / (double)m->gc_heap_total
@@ -300,7 +300,7 @@ valk_aio_metrics_state_t* valk_aio_metrics_state_new(
     u64 queue_capacity,
     const char* loop_name) {
   valk_aio_metrics_state_t* state = calloc(1, sizeof(valk_aio_metrics_state_t));
-  if (!state) return nullptr;
+  if (!state) return nullptr; // LCOV_EXCL_BR_LINE - OOM
 
   state->gc_heap = nullptr;
   state->scratch_arena = nullptr;

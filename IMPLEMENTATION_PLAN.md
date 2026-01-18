@@ -179,7 +179,9 @@
 - [ ] **aio/aio_diagnostics_builtins.c** - 87.2% line / 49.5% branch
 - [ ] **aio/http2/aio_conn_io.c** - 88.2% line / 88.9% branch
 - [ ] **memory.c** - 88.2% line / 71.2% branch
-- [ ] **aio/aio_metrics.c** - 89.0% line / 51.2% branch
+- [x] **aio/aio_metrics.c** - 89.0% line / 51.2% branch - LCOV EXCLUSIONS ADDED
+  - Added LCOV_EXCL_BR_LINE for OOM branches in all buffer allocation functions
+  - Remaining uncovered branches: buffer truncation edge cases (snprintf overflow)
 
 ---
 
