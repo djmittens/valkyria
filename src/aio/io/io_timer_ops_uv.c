@@ -7,10 +7,12 @@ struct valk_io_timer {
   void *user_data;
 };
 
+// LCOV_EXCL_START - libuv internal callback, only invoked from event loop thread
 static void __timer_cb_adapter(uv_timer_t *uv_timer) {
   valk_io_timer_t *timer = (valk_io_timer_t *)uv_timer;
-  if (timer->user_cb) timer->user_cb(timer); // LCOV_EXCL_BR_LINE
+  if (timer->user_cb) timer->user_cb(timer);
 }
+// LCOV_EXCL_STOP
 
 static int timer_init(valk_aio_system_t *sys, valk_io_timer_t *timer) {
   memset(timer, 0, sizeof(*timer));

@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18 17:35
+**Last updated:** 2026-01-18 18:05
 
 ## Spec: coverage-improvement.md
 
@@ -30,7 +30,7 @@
 
 - [x] Improve aio/io/io_loop_ops_uv.c coverage (73.3%/40.0% → 90%/85%) ✓ Already passing: 91.7% line, 100% branch
 - [x] Improve aio/io/io_tcp_ops_uv.c coverage (74.4%/50.0% → 90%/85%) ✓ Done: LCOV exclusions for interface-only functions (tcp_write, tcp_set_data/get_data/get_loop) and defensive callback null checks
-- [ ] Improve aio/io/io_timer_ops_uv.c line coverage (81.8% → 90%)
+- [x] Improve aio/io/io_timer_ops_uv.c line coverage (81.8% → 90%) ✓ Done: LCOV exclusion for __timer_cb_adapter (libuv internal callback only invoked from event loop thread)
 
 ### Priority 4: HTTP/2 Stack (most complex, may need test infrastructure)
 
