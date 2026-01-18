@@ -2100,6 +2100,60 @@ void test_lval_lambda_null_env(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_lval_copy_sym_long_truncation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *orig = valk_lval_sym("x");
+  char *long_str = malloc(300);
+  memset(long_str, 'a', 299);
+  long_str[299] = '\0';
+  free(orig->str);
+  orig->str = long_str;
+
+  valk_lval_t *copy = valk_lval_copy(orig);
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_SYM, "copy type should be SYM");
+  VALK_TEST_ASSERT(strlen(copy->str) == 200, "copy should truncate to 200");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_err_long_truncation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *orig = valk_lval_err("x");
+  char *long_str = malloc(3000);
+  memset(long_str, 'e', 2999);
+  long_str[2999] = '\0';
+  free(orig->str);
+  orig->str = long_str;
+
+  valk_lval_t *copy = valk_lval_copy(orig);
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_ERR, "copy type should be ERR");
+  VALK_TEST_ASSERT(strlen(copy->str) == 2000, "copy should truncate to 2000");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_ref_long_type_truncation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *orig = valk_lval_ref("x", nullptr, nullptr);
+  char *long_type = malloc(200);
+  memset(long_type, 't', 199);
+  long_type[199] = '\0';
+  free((void*)orig->ref.type);
+  orig->ref.type = long_type;
+
+  valk_lval_t *copy = valk_lval_copy(orig);
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_REF, "copy type should be REF");
+  VALK_TEST_ASSERT(strlen(copy->ref.type) == 100, "copy should truncate to 100");
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -2250,6 +2304,9 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_lval_list_is_empty_qexpr_null_head", test_lval_list_is_empty_qexpr_null_head);
   valk_testsuite_add_test(suite, "test_lval_list_is_empty_non_empty_qexpr", test_lval_list_is_empty_non_empty_qexpr);
   valk_testsuite_add_test(suite, "test_lval_lambda_null_env", test_lval_lambda_null_env);
+  valk_testsuite_add_test(suite, "test_lval_copy_sym_long_truncation", test_lval_copy_sym_long_truncation);
+  valk_testsuite_add_test(suite, "test_lval_copy_err_long_truncation", test_lval_copy_err_long_truncation);
+  valk_testsuite_add_test(suite, "test_lval_copy_ref_long_type_truncation", test_lval_copy_ref_long_type_truncation);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
