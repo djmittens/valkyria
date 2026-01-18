@@ -106,7 +106,15 @@
   - Tests cover: valk_http2_flush_pending, valk_http2_continue_pending_send (null cases)
   - Tests cover: valk_http2_conn_alloc_callback (null conn, wrong magic, wrong kind, existing buf, acquire new buf, slab exhausted)
   - Note: Full nghttp2/SSL integration testing requires real nghttp2 sessions
-- [ ] **aio/http2/aio_http2_server.c** - 65.9% line / 42.1% branch
+- [x] **aio/http2/aio_http2_server.c** - 65.9% line / 42.1% branch - PARTIALLY IMPROVED
+  - Added 13 unit tests in test/unit/test_http2_server.c
+  - Tests cover: valk_aio_http2_server_get_port (basic getter)
+  - Tests cover: valk_aio_http2_server_is_stopped (null, listening, closing, closed states)
+  - Tests cover: valk_aio_http2_server_from_ref, valk_aio_http2_server_get_port_from_ref
+  - Tests cover: valk_aio_http2_cleanup_all_servers (null sys, empty list)
+  - Tests cover: valk_http2_server_metrics_init (creates all metrics, port_str index wrapping)
+  - Tests cover: valk_aio_http2_stop (null srv, null sys early returns)
+  - Note: Full server lifecycle testing requires SSL/nghttp2/libuv integration
 - [ ] **io/io_loop_ops_uv.c** - 68.6% line / 44.4% branch
 - [ ] **io/io_tcp_ops_uv.c** - 69.2% line / 40.6% branch
 - [ ] **aio/http2/aio_http2_client.c** - 71.0% line / 50.7% branch

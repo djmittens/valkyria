@@ -465,3 +465,8 @@ add_executable(test_http2_conn_unit test/unit/test_http2_conn.c test/testing.c)
 target_link_libraries(test_http2_conn_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES})
 include_directories(test_http2_conn_unit src/)
 
+# HTTP/2 server tests (lifecycle, metrics, getters)
+add_executable(test_http2_server_unit test/unit/test_http2_server.c test/testing.c)
+target_link_libraries(test_http2_server_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES})
+include_directories(test_http2_server_unit src/)
+
