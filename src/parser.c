@@ -1386,13 +1386,14 @@ apply_cont:
           continue;
         }
         
+        // LCOV_EXCL_START - Dead code: CONT_DO_NEXT is never initialized (do is a builtin)
         case CONT_DO_NEXT: {
           if (LVAL_TYPE(value) == LVAL_ERR) goto apply_cont;
-          
+
           if (valk_lval_list_is_empty(frame.do_next.remaining)) {
             goto apply_cont;
           }
-          
+
           valk_eval_stack_push(&stack, (valk_cont_frame_t){
             .kind = CONT_DO_NEXT,
             .env = frame.env,
@@ -1402,6 +1403,7 @@ apply_cont:
           cur_env = frame.env;
           continue;
         }
+        // LCOV_EXCL_STOP
         
         case CONT_BODY_NEXT: {
           if (LVAL_TYPE(value) == LVAL_ERR) {
@@ -2826,6 +2828,17 @@ static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   return valk_lval_nil();
+}
+
+// Parse a string and return the AST
+static valk_lval_t* valk_builtin_read(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  const char* input = valk_lval_list_nth(a, 0)->str;
+  int pos = 0;
+  return valk_lval_read(&pos, input);
 }
 
 // Read a file and return its contents as a string
@@ -5050,6 +5063,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "list?", valk_builtin_list_p);
   valk_lenv_put_builtin(env, "ref?", valk_builtin_ref_p);
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
+  valk_lenv_put_builtin(env, "read", valk_builtin_read);
   valk_lenv_put_builtin(env, "read-file", valk_builtin_read_file);
   valk_lenv_put_builtin(env, "print", valk_builtin_print);
   valk_lenv_put_builtin(env, "printf", valk_builtin_printf);

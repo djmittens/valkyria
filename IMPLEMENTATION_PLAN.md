@@ -175,7 +175,7 @@
   - Tests cover: valk_aio_ssl_server_init with valid certs, bidirectional handshake
   - Tests cover: valk_aio_ssl_encrypt after handshake, encrypt near capacity
   - Note: Remaining uncovered paths require full SSL handshake completion which is complex to test
-- [ ] **parser.c** - ~~75.1%~~ ~~77.0%~~ ~~81.0%~~ 81.7% line / ~~50.0%~~ ~~51.1%~~ ~~55.1%~~ 55.8% branch - INCREMENTALLY IMPROVING
+- [ ] **parser.c** - ~~75.1%~~ ~~77.0%~~ ~~81.0%~~ ~~81.7%~~ 83.3% line / ~~50.0%~~ ~~51.1%~~ ~~55.1%~~ ~~55.8%~~ 56.8% branch - INCREMENTALLY IMPROVING
   - Added test/test_string_builtins.valk (16 tests) covering str/split, str/replace, str->num
   - Added test/test_memory_builtins.valk (10 tests) covering heap-usage, gc-collect, heap-hard-limit, set-heap-hard-limit, stack-depth, time-us
   - Added test_lval_copy_builtin, test_lval_eq_handle, and test_lval_copy_handle unit tests to test/unit/test_parser.c
@@ -188,9 +188,13 @@
   - Added test/test_error_handler_edge_cases.valk (3 tests) covering error handler returning error, number, or list instead of string
   - Added test/test_parser_coverage_supplement.valk (37 tests) covering ctx/with-deadline multiple body, ctx/with multiple body, quasiquote splicing edge cases, varargs error paths, function application edge cases, do block continuations, escape character parsing/printing
   - Added 6 unit tests to test/unit/test_parser.c covering valk_lval_print (handles, improper lists, escape chars, builtins), valk_lval_eq (lambdas, builtins)
+  - **Added `read` builtin** to parse strings into ASTs (was missing, tests were passing incorrectly)
+  - Added test/test_parser_continuations.valk (39 tests) covering do-block, lambda multi-body, ctx-with-deadline, ctx-with, quasiquote splice errors, varargs, if branches
+  - Added 16 new C unit tests in test/unit/test_parser.c covering escape sequences (\a, \b, \f, \v, \'), env capacity growth, list pop operations
   - Added LCOV exclusions for exit() and shutdown() exit paths (terminates process)
   - Added LCOV exclusion for LVAL_UNDEFINED case (invariant violation)
-  - Remaining uncovered: coverage builtins (only in VALK_COVERAGE builds), continuation handling thunk paths, allocator SLAB case (unused for lvals)
+  - Added LCOV exclusion for CONT_DO_NEXT (dead code: do is a builtin, never triggers continuation path)
+  - Remaining uncovered: coverage builtins (only in VALK_COVERAGE builds), HTTP/2 server builtins (require integration tests), continuation handling thunk paths, allocator SLAB case (unused for lvals)
 
 ### Low Priority Files (<15% line coverage gap)
 

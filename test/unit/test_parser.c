@@ -1679,6 +1679,228 @@ void test_lval_eq_builtin_functions(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_lval_read_string_escape_bell(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"hello\\aworld\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse bell escape");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strchr(val->str, '\a') != nullptr, "Should contain bell char");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_escape_backspace(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"hello\\bworld\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse backspace escape");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strchr(val->str, '\b') != nullptr, "Should contain backspace char");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_escape_formfeed(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"hello\\fworld\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse formfeed escape");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strchr(val->str, '\f') != nullptr, "Should contain formfeed char");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_escape_vtab(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"hello\\vworld\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse vtab escape");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strchr(val->str, '\v') != nullptr, "Should contain vtab char");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_escape_single_quote(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"it\\'s\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse single quote escape");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strchr(val->str, '\'') != nullptr, "Should contain single quote");
+
+  VALK_PASS();
+}
+
+void test_lval_print_string_rare_escapes(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_str("bell:\a bs:\b ff:\f vt:\v sq:\'");
+  valk_lval_print(val);
+
+  VALK_PASS();
+}
+
+void test_lenv_capacity_growth(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+
+  for (int i = 0; i < 50; i++) {
+    char name[32];
+    snprintf(name, sizeof(name), "var-%d", i);
+    valk_lval_t *key = valk_lval_sym(name);
+    valk_lval_t *val = valk_lval_num(i);
+    valk_lenv_put(env, key, val);
+  }
+
+  VALK_TEST_ASSERT(env->symbols.count == 50, "Should have 50 symbols");
+
+  for (int i = 0; i < 50; i++) {
+    char name[32];
+    snprintf(name, sizeof(name), "var-%d", i);
+    valk_lval_t *key = valk_lval_sym(name);
+    valk_lval_t *result = valk_lenv_get(env, key);
+    VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Should find NUM");
+    VALK_TEST_ASSERT(result->num == i, "Value should match");
+  }
+
+  valk_lenv_free(env);
+  VALK_PASS();
+}
+
+void test_lval_pop_deep_index(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *e1 = valk_lval_num(1);
+  valk_lval_t *e2 = valk_lval_num(2);
+  valk_lval_t *e3 = valk_lval_num(3);
+  valk_lval_t *e4 = valk_lval_num(4);
+  valk_lval_t *e5 = valk_lval_num(5);
+  valk_lval_t *arr[] = {e1, e2, e3, e4, e5};
+  valk_lval_t *list = valk_lval_list(arr, 5);
+
+  valk_lval_t *popped = valk_lval_pop(list, 3);
+  VALK_TEST_ASSERT(popped != nullptr, "Should pop element");
+  VALK_TEST_ASSERT(popped->num == 4, "Popped value should be 4");
+
+  VALK_PASS();
+}
+
+void test_lval_pop_last_element(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *e1 = valk_lval_num(10);
+  valk_lval_t *e2 = valk_lval_num(20);
+  valk_lval_t *e3 = valk_lval_num(30);
+  valk_lval_t *arr[] = {e1, e2, e3};
+  valk_lval_t *list = valk_lval_list(arr, 3);
+
+  valk_lval_t *popped = valk_lval_pop(list, 2);
+  VALK_TEST_ASSERT(popped != nullptr, "Should pop last element");
+  VALK_TEST_ASSERT(popped->num == 30, "Popped value should be 30");
+
+  VALK_PASS();
+}
+
+void test_lenv_get_null_env(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *key = valk_lval_sym("test");
+  valk_lval_t *result = valk_lenv_get(nullptr, key);
+  VALK_TEST_ASSERT(result != nullptr, "Should return error");
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should be error type");
+
+  VALK_PASS();
+}
+
+void test_lenv_copy_with_many_symbols(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  for (int i = 0; i < 30; i++) {
+    char name[32];
+    snprintf(name, sizeof(name), "sym-%d", i);
+    valk_lval_t *key = valk_lval_sym(name);
+    valk_lval_t *val = valk_lval_num(i * 10);
+    valk_lenv_put(env, key, val);
+  }
+
+  valk_lenv_t *copy = valk_lenv_copy(env);
+  VALK_TEST_ASSERT(copy != nullptr, "Should copy env");
+  VALK_TEST_ASSERT(copy->symbols.count == 30, "Copy should have 30 symbols");
+
+  for (int i = 0; i < 30; i++) {
+    char name[32];
+    snprintf(name, sizeof(name), "sym-%d", i);
+    valk_lval_t *key = valk_lval_sym(name);
+    valk_lval_t *result = valk_lenv_get(copy, key);
+    VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Should find NUM");
+    VALK_TEST_ASSERT(result->num == i * 10, "Value should match");
+  }
+
+  valk_lenv_free(env);
+  VALK_PASS();
+}
+
+void test_lval_read_very_long_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  char buffer[1024] = "(";
+  for (int i = 0; i < 30; i++) {
+    char num[8];
+    snprintf(num, sizeof(num), "%d ", i);
+    strcat(buffer, num);
+  }
+  strcat(buffer, ")");
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, buffer);
+  VALK_TEST_ASSERT(val != nullptr, "Should parse long list");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
+  VALK_TEST_ASSERT(valk_lval_list_count(val) == 30, "Should have 30 elements");
+
+  VALK_PASS();
+}
+
+void test_lval_print_nil(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *nil = valk_lval_nil();
+  valk_lval_print(nil);
+
+  VALK_PASS();
+}
+
+void test_lenv_masked_parent_symbol(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *parent = valk_lenv_empty();
+  valk_lval_t *key = valk_lval_sym("x");
+  valk_lenv_put(parent, key, valk_lval_num(10));
+
+  valk_lenv_t *child = valk_lenv_empty();
+  child->parent = parent;
+  valk_lenv_put(child, key, valk_lval_num(20));
+
+  valk_lenv_t *copy = valk_lenv_copy(child);
+
+  valk_lval_t *result = valk_lenv_get(copy, key);
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Should find NUM");
+  VALK_TEST_ASSERT(result->num == 20, "Should be child value");
+
+  valk_lenv_free(parent);
+  valk_lenv_free(child);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -1798,6 +2020,21 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_lval_print_builtin", test_lval_print_builtin);
   valk_testsuite_add_test(suite, "test_lval_eq_two_lambdas", test_lval_eq_two_lambdas);
   valk_testsuite_add_test(suite, "test_lval_eq_builtin_functions", test_lval_eq_builtin_functions);
+
+  valk_testsuite_add_test(suite, "test_lval_read_string_escape_bell", test_lval_read_string_escape_bell);
+  valk_testsuite_add_test(suite, "test_lval_read_string_escape_backspace", test_lval_read_string_escape_backspace);
+  valk_testsuite_add_test(suite, "test_lval_read_string_escape_formfeed", test_lval_read_string_escape_formfeed);
+  valk_testsuite_add_test(suite, "test_lval_read_string_escape_vtab", test_lval_read_string_escape_vtab);
+  valk_testsuite_add_test(suite, "test_lval_read_string_escape_single_quote", test_lval_read_string_escape_single_quote);
+  valk_testsuite_add_test(suite, "test_lval_print_string_rare_escapes", test_lval_print_string_rare_escapes);
+  valk_testsuite_add_test(suite, "test_lenv_capacity_growth", test_lenv_capacity_growth);
+  valk_testsuite_add_test(suite, "test_lval_pop_deep_index", test_lval_pop_deep_index);
+  valk_testsuite_add_test(suite, "test_lval_pop_last_element", test_lval_pop_last_element);
+  valk_testsuite_add_test(suite, "test_lenv_get_null_env", test_lenv_get_null_env);
+  valk_testsuite_add_test(suite, "test_lenv_copy_with_many_symbols", test_lenv_copy_with_many_symbols);
+  valk_testsuite_add_test(suite, "test_lval_read_very_long_list", test_lval_read_very_long_list);
+  valk_testsuite_add_test(suite, "test_lval_print_nil", test_lval_print_nil);
+  valk_testsuite_add_test(suite, "test_lenv_masked_parent_symbol", test_lenv_masked_parent_symbol);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
