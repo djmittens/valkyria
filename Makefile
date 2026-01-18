@@ -214,6 +214,8 @@ define run_tests_valk
 	$(1)/valk test/test_checkpoint.valk
 	$(1)/valk test/test_integration.valk
 	$(1)/valk test/test_quasiquote.valk
+	$(1)/valk test/test_string_builtins.valk
+	$(1)/valk test/test_memory_builtins.valk
 	$(1)/valk test/test_read_file.valk
 	$(1)/valk test/test_aio_debug.valk
 	$(1)/valk test/test_test_framework.valk

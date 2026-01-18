@@ -173,7 +173,13 @@
   - Tests cover: valk_aio_ssl_server_init with valid certs, bidirectional handshake
   - Tests cover: valk_aio_ssl_encrypt after handshake, encrypt near capacity
   - Note: Remaining uncovered paths require full SSL handshake completion which is complex to test
-- [ ] **parser.c** - 75.1% line / 50.0% branch
+- [ ] **parser.c** - ~~75.1%~~ 77.0% line / ~~50.0%~~ 51.1% branch - PARTIALLY IMPROVED
+  - Added test/test_string_builtins.valk (16 tests) covering str/split, str/replace, str->num
+  - Added test/test_memory_builtins.valk (10 tests) covering heap-usage, gc-collect, heap-hard-limit, set-heap-hard-limit, stack-depth, time-us
+  - Added test_lval_copy_builtin and test_lval_eq_handle unit tests to test/unit/test_parser.c
+  - Added LCOV exclusions for exit() and shutdown() exit paths (terminates process)
+  - Added LCOV exclusion for LVAL_UNDEFINED case (invariant violation)
+  - Remaining uncovered: HTTP/2 client builtins (require network integration), quasiquote edge cases (tested via Valk), varargs/partial application edge cases
 
 ### Low Priority Files (<15% line coverage gap)
 

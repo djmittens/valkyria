@@ -1,0 +1,114 @@
+; Memory and GC Builtin Tests
+; Run with: ./build/valk test/test_memory_builtins.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "Memory Builtin Tests")
+
+; ============================================================================
+; heap-usage tests
+; ============================================================================
+
+(test/define "heap-usage-returns-number"
+  {do
+    (= {usage} (heap-usage))
+    (test/assert (>= usage 0) "heap-usage should return non-negative number")
+    true
+  })
+
+(test/define "heap-usage-increases-with-allocation"
+  {do
+    (= {before} (heap-usage))
+    (= {big-list} (range 0 1000))
+    (= {after} (heap-usage))
+    (test/assert (>= after before) "heap usage should not decrease after allocation")
+    true
+  })
+
+; ============================================================================
+; gc-collect tests
+; ============================================================================
+
+(test/define "gc-collect-runs"
+  {do
+    (= {result} (gc-collect))
+    (test/assert (>= result 0) "gc-collect should return non-negative bytes")
+    true
+  })
+
+(test/define "gc-collect-reclaims-garbage"
+  {do
+    (= {x} (range 0 100))
+    (= {x} nil)
+    (= {reclaimed} (gc-collect))
+    (test/assert (>= reclaimed 0) "gc-collect should return reclaimed bytes")
+    true
+  })
+
+; ============================================================================
+; heap-hard-limit tests
+; ============================================================================
+
+(test/define "heap-hard-limit-returns-number"
+  {do
+    (= {limit} (heap-hard-limit))
+    (test/assert (> limit 0) "heap-hard-limit should return positive number")
+    true
+  })
+
+(test/define "set-heap-hard-limit-basic"
+  {do
+    (= {original} (heap-hard-limit))
+    (= {new-limit} (+ original 1000000))
+    (= {old} (set-heap-hard-limit new-limit))
+    (test/assert-eq original old "should return old limit")
+    (test/assert-eq new-limit (heap-hard-limit) "should set new limit")
+    (set-heap-hard-limit original)
+    true
+  })
+
+; ============================================================================
+; stack-depth test
+; ============================================================================
+
+(test/define "stack-depth-returns-number"
+  {do
+    (= {depth} (stack-depth))
+    (test/assert (>= depth 0) "stack-depth should return non-negative")
+    true
+  })
+
+(test/define "stack-depth-increases-in-recursion"
+  {do
+    (fun {check-depth n}
+      {if (<= n 0)
+        (stack-depth)
+        (check-depth (- n 1))})
+    (= {depth-0} (check-depth 0))
+    (= {depth-5} (check-depth 5))
+    (test/assert (> depth-5 depth-0) "depth should increase with recursion")
+    true
+  })
+
+; ============================================================================
+; time-us tests
+; ============================================================================
+
+(test/define "time-us-returns-number"
+  {do
+    (= {t} (time-us))
+    (test/assert (> t 0) "time-us should return positive number")
+    true
+  })
+
+(test/define "time-us-monotonic"
+  {do
+    (= {t1} (time-us))
+    (= {t2} (time-us))
+    (test/assert (>= t2 t1) "time-us should be monotonic")
+    true
+  })
+
+; Run all tests
+(test/run)

@@ -829,12 +829,14 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
       return (x->ref.ptr == y->ref.ptr) && (x->ref.free == y->ref.free);
     case LVAL_HANDLE:
       return x == y;
+    // LCOV_EXCL_START - invariant violation, should never happen
     case LVAL_UNDEFINED:
       VALK_RAISE("LVAL is undefined, something went wrong");
       break;
   }
 
   return 0;
+  // LCOV_EXCL_STOP
 }
 
 // Helper: check if lval is a list starting with a specific symbol
@@ -4931,6 +4933,7 @@ static valk_lval_t* valk_builtin_aio_interval(valk_lenv_t* e, valk_lval_t* a) {
   return valk_aio_interval(sys, interval_ms, callback, e);
 }
 
+// LCOV_EXCL_START - exit() terminates process, cannot be unit tested
 // exit: (exit code) -> never returns; terminates process with status code
 static valk_lval_t* valk_builtin_exit(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -4941,6 +4944,7 @@ static valk_lval_t* valk_builtin_exit(valk_lenv_t* e, valk_lval_t* a) {
   fflush(stderr);
   exit(code);
 }
+// LCOV_EXCL_STOP
 
 // shutdown: ([code]) -> never returns; gracefully stops subsystems then exits
 static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
@@ -4961,6 +4965,7 @@ static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_num(code);
   }
 
+  // LCOV_EXCL_START - exit path terminates process
   // Gracefully stop AIO if present in env under symbol 'aio'
   valk_lval_t* val = valk_lenv_get(e, valk_lval_sym("aio"));
   if (LVAL_TYPE(val) != LVAL_ERR && LVAL_TYPE(val) == LVAL_REF &&
@@ -4973,6 +4978,7 @@ static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
   printf("About to exit with code %d\n", code);
   fflush(stdout);
   exit(code);
+  // LCOV_EXCL_STOP
 }
 
 // module: (module value) -> value; captures as VALK_LAST_MODULE

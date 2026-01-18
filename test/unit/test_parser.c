@@ -1154,6 +1154,30 @@ void test_lval_copy_lambda(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_lval_copy_builtin(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lenv_builtins(env);
+
+  valk_lval_t *plus_sym = valk_lval_sym("+");
+  valk_lval_t *plus = valk_lenv_get(env, plus_sym);
+
+  VALK_TEST_ASSERT(plus != nullptr, "+ builtin should exist");
+  VALK_TEST_ASSERT(LVAL_TYPE(plus) == LVAL_FUN, "+ should be a function");
+  VALK_TEST_ASSERT(plus->fun.builtin != nullptr, "+ should be a builtin");
+
+  valk_lval_t *copy = valk_lval_copy(plus);
+
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(copy != plus, "copy should be different pointer");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_FUN, "copy type should be FUN");
+  VALK_TEST_ASSERT(copy->fun.builtin == plus->fun.builtin, "copy should have same builtin");
+  VALK_TEST_ASSERT(copy->fun.env == nullptr, "copy env should be null for builtin");
+
+  VALK_PASS();
+}
+
 void test_lval_copy_qexpr(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -1209,6 +1233,18 @@ void test_lval_eq_sym(VALK_TEST_ARGS()) {
 
   VALK_TEST_ASSERT(valk_lval_eq(sym1, sym2) == 1, "same symbols should be equal");
   VALK_TEST_ASSERT(valk_lval_eq(sym1, sym3) == 0, "different symbols should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_eq_handle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *handle1 = valk_lval_handle(NULL);
+  valk_lval_t *handle2 = valk_lval_handle(NULL);
+
+  VALK_TEST_ASSERT(valk_lval_eq(handle1, handle1) == 1, "same handle should equal itself");
+  VALK_TEST_ASSERT(valk_lval_eq(handle1, handle2) == 0, "different handles should not be equal");
 
   VALK_PASS();
 }
@@ -1627,10 +1663,12 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_lval_eq_lambda", test_lval_eq_lambda);
   valk_testsuite_add_test(suite, "test_lval_eq_ref", test_lval_eq_ref);
   valk_testsuite_add_test(suite, "test_lval_copy_lambda", test_lval_copy_lambda);
+  valk_testsuite_add_test(suite, "test_lval_copy_builtin", test_lval_copy_builtin);
   valk_testsuite_add_test(suite, "test_lval_copy_qexpr", test_lval_copy_qexpr);
   valk_testsuite_add_test(suite, "test_lval_eq_qexpr", test_lval_eq_qexpr);
   valk_testsuite_add_test(suite, "test_lval_eq_err", test_lval_eq_err);
   valk_testsuite_add_test(suite, "test_lval_eq_sym", test_lval_eq_sym);
+  valk_testsuite_add_test(suite, "test_lval_eq_handle", test_lval_eq_handle);
   valk_testsuite_add_test(suite, "test_lval_read_nested_expr", test_lval_read_nested_expr);
   valk_testsuite_add_test(suite, "test_lval_read_empty_list", test_lval_read_empty_list);
   valk_testsuite_add_test(suite, "test_lval_read_empty_qexpr", test_lval_read_empty_qexpr);
