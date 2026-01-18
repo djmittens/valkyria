@@ -77,21 +77,22 @@
 
 ### Medium Priority Files (15-30% line coverage gap)
 
-- [x] **aio/http2/stream/aio_stream_builtins.c** - 62.1% line / 39.8% branch - PARTIALLY IMPROVED
-  - Added 37 unit tests in test/unit/test_stream_builtins.c
-  - Tests cover: stream/write (arg validation, body ref validation, data type validation)
+- [x] **aio/http2/stream/aio_stream_builtins.c** - ~~62.1%~~ 94.4% line / ~~39.8%~~ 79.6% branch - DONE
+  - Added 46 unit tests in test/unit/test_stream_builtins.c
+  - Tests cover: stream/write (arg validation, body ref validation, data type validation, body closed/closing, queue full)
   - Tests cover: stream/writable? (arg validation, invalid body, closed/closing body states)
   - Tests cover: stream/close (arg validation, invalid body, success case)
-  - Tests cover: stream/on-drain (arg validation, callback type validation)
-  - Tests cover: stream/on-close (arg validation, callback type validation)
+  - Tests cover: stream/on-drain (arg validation, callback type validation, success with runtime, replaces existing callback)
+  - Tests cover: stream/on-close (arg validation, callback type validation, success with runtime, replaces existing callback)
   - Tests cover: stream/set-timeout (arg validation, timeout type, success case)
-  - Tests cover: stream/cancel (arg validation, invalid body)
+  - Tests cover: stream/cancel (arg validation, invalid body, already closed, no session)
   - Tests cover: stream/id (arg validation, success case)
   - Tests cover: stream/open (arg validation, wrong ref types)
   - Tests cover: get_stream_body helper (null ref, wrong type)
   - Bug fix: valk_stream_body_writable now checks for null session before calling nghttp2
-  - Note: Full stream/open testing requires nghttp2 session setup
-- [x] **aio/http2/aio_http2_conn.c** - 64.8% line / 51.7% branch - PARTIALLY IMPROVED
+  - Added test_stream_builtins_unit to Makefile run_tests_c
+  - Note: Full stream/open testing requires nghttp2 session setup (remaining 5.6% gap)
+- [x] **aio/http2/aio_http2_conn.c** - ~~64.8%~~ 72.5% line / ~~51.7%~~ 66.1% branch - PARTIALLY IMPROVED
   - Added 33 unit tests in test/unit/test_http2_conn.c
   - Tests cover: valk_http2_backpressure_try_resume_one (null sys, empty list)
   - Tests cover: valk_http2_conn_write_buf_acquire (null sys, null slab, success)
@@ -105,11 +106,13 @@
   - Tests cover: valk_http2_conn_tcp_read_impl (closing/closed conn early returns)
   - Tests cover: valk_http2_flush_pending, valk_http2_continue_pending_send (null cases)
   - Tests cover: valk_http2_conn_alloc_callback (null conn, wrong magic, wrong kind, existing buf, acquire new buf, slab exhausted)
+  - Added test_http2_conn_unit to Makefile run_tests_c
   - Note: Full nghttp2/SSL integration testing requires real nghttp2 sessions
-- [x] **aio/http2/aio_http2_server.c** - 65.9% line / 42.1% branch - PARTIALLY IMPROVED
+- [x] **aio/http2/aio_http2_server.c** - ~~65.9%~~ 66.6% line / ~~42.1%~~ 44.6% branch - PARTIALLY IMPROVED
   - Added 13 unit tests in test/unit/test_http2_server.c
   - Tests cover: valk_aio_http2_server_get_port (basic getter)
   - Tests cover: valk_aio_http2_server_is_stopped (null, listening, closing, closed states)
+  - Added test_http2_server_unit to Makefile run_tests_c
   - Tests cover: valk_aio_http2_server_from_ref, valk_aio_http2_server_get_port_from_ref
   - Tests cover: valk_aio_http2_cleanup_all_servers (null sys, empty list)
   - Tests cover: valk_http2_server_metrics_init (creates all metrics, port_str index wrapping)
