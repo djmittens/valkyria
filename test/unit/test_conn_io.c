@@ -163,23 +163,111 @@ static void test_conn_io_with_slab(VALK_TEST_ARGS()) {
 
 static void test_conn_io_writable(VALK_TEST_ARGS()) {
   VALK_TEST();
-  
+
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     valk_slab_t *slab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 4);
-    
+
     valk_conn_io_t io;
     valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
-    
+
     ASSERT_TRUE(valk_conn_io_write_buf_writable(&io, slab, 100));
     ASSERT_NOT_NULL(io.write_buf);
-    
+
     io.write_flush_pending = true;
     ASSERT_FALSE(valk_conn_io_write_buf_writable(&io, slab, 100));
-    
+
     valk_conn_io_free(&io, slab);
     valk_slab_free(slab);
   }
-  
+
+  VALK_PASS();
+}
+
+static void test_conn_io_read_buf_release_null_io(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_WITH_ALLOC(&valk_malloc_allocator) {
+    valk_slab_t *slab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 4);
+
+    valk_conn_io_read_buf_release(nullptr, slab);
+
+    valk_slab_free(slab);
+  }
+
+  VALK_PASS();
+}
+
+static void test_conn_io_read_buf_release_null_slab(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_conn_io_t io;
+  valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
+
+  valk_conn_io_read_buf_release(&io, nullptr);
+
+  VALK_PASS();
+}
+
+static void test_conn_io_read_buf_release_no_buf(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_WITH_ALLOC(&valk_malloc_allocator) {
+    valk_slab_t *slab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 4);
+
+    valk_conn_io_t io;
+    valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
+
+    valk_conn_io_read_buf_release(&io, slab);
+    ASSERT_NULL(io.read_buf);
+
+    valk_slab_free(slab);
+  }
+
+  VALK_PASS();
+}
+
+static void test_conn_io_read_buf_release_with_buf(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_WITH_ALLOC(&valk_malloc_allocator) {
+    valk_slab_t *slab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 4);
+
+    valk_conn_io_t io;
+    valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
+
+    ASSERT_TRUE(valk_conn_io_read_buf_acquire(&io, slab));
+    ASSERT_NOT_NULL(io.read_buf);
+
+    valk_conn_io_read_buf_release(&io, slab);
+    ASSERT_NULL(io.read_buf);
+
+    valk_slab_free(slab);
+  }
+
+  VALK_PASS();
+}
+
+static void test_conn_io_read_buf_release_twice(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_WITH_ALLOC(&valk_malloc_allocator) {
+    valk_slab_t *slab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 4);
+
+    valk_conn_io_t io;
+    valk_conn_io_init(&io, HTTP_SLAB_ITEM_SIZE);
+
+    ASSERT_TRUE(valk_conn_io_read_buf_acquire(&io, slab));
+    ASSERT_NOT_NULL(io.read_buf);
+
+    valk_conn_io_read_buf_release(&io, slab);
+    ASSERT_NULL(io.read_buf);
+
+    valk_conn_io_read_buf_release(&io, slab);
+    ASSERT_NULL(io.read_buf);
+
+    valk_slab_free(slab);
+  }
+
   VALK_PASS();
 }
 
@@ -201,7 +289,12 @@ int main(int argc, const char *argv[]) {
   valk_testsuite_add_test(suite, "test_conn_io_free_null", test_conn_io_free_null);
   valk_testsuite_add_test(suite, "test_conn_io_with_slab", test_conn_io_with_slab);
   valk_testsuite_add_test(suite, "test_conn_io_writable", test_conn_io_writable);
-  
+  valk_testsuite_add_test(suite, "test_conn_io_read_buf_release_null_io", test_conn_io_read_buf_release_null_io);
+  valk_testsuite_add_test(suite, "test_conn_io_read_buf_release_null_slab", test_conn_io_read_buf_release_null_slab);
+  valk_testsuite_add_test(suite, "test_conn_io_read_buf_release_no_buf", test_conn_io_read_buf_release_no_buf);
+  valk_testsuite_add_test(suite, "test_conn_io_read_buf_release_with_buf", test_conn_io_read_buf_release_with_buf);
+  valk_testsuite_add_test(suite, "test_conn_io_read_buf_release_twice", test_conn_io_read_buf_release_twice);
+
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
   valk_testsuite_free(suite);

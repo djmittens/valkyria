@@ -197,7 +197,9 @@
   - Tests cover: multiple slabs with different usage levels
   - Fixed incorrect test expectation (arena_slab_usage doesn't affect connection admission)
   - Added test to CMakeLists.txt and Makefile run_tests
-- [ ] **aio/system/aio_task_queue.c** - 77.3% line / 55.9% branch
+- [x] **aio/system/aio_task_queue.c** - ~~77.3%~~ 100% line / ~~55.9%~~ 85.3% branch - DONE
+  - Has 12 unit tests in test/unit/test_task_queue.c
+  - Coverage was already meeting requirements, just not tracked in plan
 - [x] **aio/system/aio_task.c** - 70.0% line / 100% branch - LCOV EXCLUSIONS ADDED
   - Added LCOV exclusions for OOM path in valk_uv_exec_task (malloc failure)
   - The 20% uncovered lines were all in the malloc failure error handling path
@@ -208,7 +210,9 @@
 - [ ] **aio/http2/aio_http2_session.c** - 83.9% line / 66.1% branch
 - [ ] **aio/aio_combinators.c** - 84.8% line / 66.9% branch
 - [ ] **aio/aio_diagnostics_builtins.c** - 87.2% line / 49.5% branch
-- [ ] **aio/http2/aio_conn_io.c** - 88.2% line / 88.9% branch
+- [x] **aio/http2/aio_conn_io.c** - ~~88.2%~~ 92.4% line / 88.9% branch - DONE
+  - Added 5 unit tests to test/unit/test_conn_io.c (now 16 total)
+  - Tests cover: valk_conn_io_read_buf_release (null io, null slab, no buf, with buf, twice)
 - [x] **memory.c** - 88.2% line / 71.2% branch - LCOV EXCLUSIONS ADDED
   - Added LCOV_EXCL_BR_START/STOP for Linux process memory collection (OS syscalls)
   - Added LCOV_EXCL_BR_START/STOP for Linux smaps parsing (depends on /proc content)
