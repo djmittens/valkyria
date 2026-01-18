@@ -21,3 +21,4 @@ __pycache__/
 
 # Ralph Wiggum (optional - remove if you want to track plan state)
 IMPLEMENTATION_PLAN.md
+build-cov/

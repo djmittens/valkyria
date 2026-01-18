@@ -178,16 +178,17 @@
 - [ ] **parser.c** - ~~75.1%~~ ~~77.0%~~ 81.0% line / ~~50.0%~~ ~~51.1%~~ 55.1% branch - SIGNIFICANTLY IMPROVED
   - Added test/test_string_builtins.valk (16 tests) covering str/split, str/replace, str->num
   - Added test/test_memory_builtins.valk (10 tests) covering heap-usage, gc-collect, heap-hard-limit, set-heap-hard-limit, stack-depth, time-us
-  - Added test_lval_copy_builtin and test_lval_eq_handle unit tests to test/unit/test_parser.c
+  - Added test_lval_copy_builtin, test_lval_eq_handle, and test_lval_copy_handle unit tests to test/unit/test_parser.c
   - Added test/test_ctx_builtins.valk (12 tests) covering ctx/with-deadline, ctx/with, repeat
   - Added test/test_vm_metrics.valk (16 tests) covering vm/metrics-json, vm/metrics-prometheus, vm/metrics-json-compact, sleep, gc-stats, memory-stats
   - Added test/test_parser_edge_cases.valk (25 tests) covering partial application, varargs edge cases, range, ord, select, quasiquote, eval, list
   - Added test/test_parser_errors.valk (25 tests) covering error paths for quote, quasiquote, if, ctx/with-deadline, ctx/with, unquote, head, tail, nth, divide-by-zero, str/split, str/replace, read, load
   - Added test/test_atom_builtins.valk (15 tests) covering atom/get, atom/set, atom/add, atom/sub, arena-size, arena-usage, arena-high-water, list?, ref?, error
   - Added test/test_parser_branch_coverage.valk (53 tests) covering select error paths, if edge cases, printf format, lambda/varargs edge cases, eval edge cases, quasiquote, string ops, list ops, comparison chains, repeat, range, env lookup, def, print, error propagation
+  - Added test/test_error_handler_edge_cases.valk (3 tests) covering error handler returning error, number, or list instead of string
   - Added LCOV exclusions for exit() and shutdown() exit paths (terminates process)
   - Added LCOV exclusion for LVAL_UNDEFINED case (invariant violation)
-  - Remaining uncovered: HTTP/2 server config error paths, coverage builtins (only in VALK_COVERAGE builds), LVAL_HANDLE copy path
+  - Remaining uncovered: coverage builtins (only in VALK_COVERAGE builds)
 
 ### Low Priority Files (<15% line coverage gap)
 

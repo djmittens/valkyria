@@ -247,6 +247,7 @@ define run_tests_valk
 	$(1)/valk test/test_parser_edge_cases.valk
 	$(1)/valk test/test_parser_errors.valk
 	$(1)/valk test/test_atom_builtins.valk
+	$(1)/valk test/test_error_handler_edge_cases.valk
 
 	$(1)/valk test/stress/test_gc_stress.valk
 	$(1)/valk test/stress/test_networking_stress.valk

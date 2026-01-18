@@ -1,6 +1,7 @@
 #include "../testing.h"
 #include "../../src/memory.h"
 #include "../../src/parser.h"
+#include "../../src/aio/aio_async.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1194,6 +1195,27 @@ void test_lval_copy_qexpr(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_lval_copy_handle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_async_handle_t *handle = valk_async_handle_new(NULL, NULL);
+  VALK_TEST_ASSERT(handle != nullptr, "handle should be created");
+
+  valk_lval_t *orig = valk_lval_handle(handle);
+  VALK_TEST_ASSERT(orig != nullptr, "orig should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(orig) == LVAL_HANDLE, "orig should be LVAL_HANDLE");
+
+  valk_lval_t *copy = valk_lval_copy(orig);
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(copy != orig, "copy should be different pointer");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_HANDLE, "copy should be LVAL_HANDLE");
+  VALK_TEST_ASSERT(copy->async.handle == orig->async.handle, "copy should share same handle");
+
+  valk_async_handle_free(handle);
+
+  VALK_PASS();
+}
+
 void test_lval_eq_qexpr(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -1665,6 +1687,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_lval_copy_lambda", test_lval_copy_lambda);
   valk_testsuite_add_test(suite, "test_lval_copy_builtin", test_lval_copy_builtin);
   valk_testsuite_add_test(suite, "test_lval_copy_qexpr", test_lval_copy_qexpr);
+  valk_testsuite_add_test(suite, "test_lval_copy_handle", test_lval_copy_handle);
   valk_testsuite_add_test(suite, "test_lval_eq_qexpr", test_lval_eq_qexpr);
   valk_testsuite_add_test(suite, "test_lval_eq_err", test_lval_eq_err);
   valk_testsuite_add_test(suite, "test_lval_eq_sym", test_lval_eq_sym);
