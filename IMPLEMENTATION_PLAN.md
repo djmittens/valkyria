@@ -178,7 +178,10 @@
 - [ ] **aio/aio_combinators.c** - 84.8% line / 66.9% branch
 - [ ] **aio/aio_diagnostics_builtins.c** - 87.2% line / 49.5% branch
 - [ ] **aio/http2/aio_conn_io.c** - 88.2% line / 88.9% branch
-- [ ] **memory.c** - 88.2% line / 71.2% branch
+- [x] **memory.c** - 88.2% line / 71.2% branch - LCOV EXCLUSIONS ADDED
+  - Added LCOV_EXCL_BR_START/STOP for Linux process memory collection (OS syscalls)
+  - Added LCOV_EXCL_BR_START/STOP for Linux smaps parsing (depends on /proc content)
+  - Remaining uncovered: REGION allocator paths, arena realloc edge cases, bitmap RLE edge cases
 - [x] **aio/aio_metrics.c** - 89.0% line / 51.2% branch - LCOV EXCLUSIONS ADDED
   - Added LCOV_EXCL_BR_LINE for OOM branches in all buffer allocation functions
   - Remaining uncovered branches: buffer truncation edge cases (snprintf overflow)

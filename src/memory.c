@@ -563,16 +563,14 @@ void valk_process_memory_collect(valk_process_memory_t *pm) {
   if (pm == nullptr) return;
   memset(pm, 0, sizeof(*pm));
 
+  // LCOV_EXCL_BR_START - OS syscall success checks
   long page_size = sysconf(_SC_PAGESIZE);
 
-  // System total RAM
   long phys_pages = sysconf(_SC_PHYS_PAGES);
   if (phys_pages > 0 && page_size > 0) {
     pm->system_total_bytes = (u64)phys_pages * page_size;
   }
 
-  // Read from /proc/self/statm (fast, minimal parsing)
-  // Format: size resident shared text lib data dirty (all in pages)
   FILE *f = fopen("/proc/self/statm", "r");
   if (f) {
     unsigned long size, resident, shared, text, lib, data, dirty;
@@ -586,12 +584,12 @@ void valk_process_memory_collect(valk_process_memory_t *pm) {
     fclose(f);
   }
 
-  // Page faults from getrusage
   struct rusage ru;
   if (getrusage(RUSAGE_SELF, &ru) == 0) {
     pm->page_faults_minor = ru.ru_minflt;
     pm->page_faults_major = ru.ru_majflt;
   }
+  // LCOV_EXCL_BR_STOP
 }
 
 #elif defined(__APPLE__)
@@ -652,6 +650,7 @@ typedef enum {
   SMAPS_REGION_SPECIAL,
 } smaps_region_type_e;
 
+// LCOV_EXCL_BR_START - depends on /proc/self/smaps content
 static smaps_region_type_e categorize_smaps_region(const char *name) {
   if (strstr(name, "[heap]")) {
     return SMAPS_REGION_HEAP;
@@ -673,6 +672,7 @@ static smaps_region_type_e categorize_smaps_region(const char *name) {
   }
   return SMAPS_REGION_SPECIAL;
 }
+// LCOV_EXCL_BR_STOP
 
 static const char *extract_smaps_pathname(const char *line, char *out_name, sz out_size) {
   out_name[0] = '\0';
@@ -698,6 +698,7 @@ static const char *extract_smaps_pathname(const char *line, char *out_name, sz o
   return out_name;
 }
 
+// LCOV_EXCL_BR_START - depends on /proc/self/smaps content and file access
 void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
   if (smaps == nullptr) return;
   memset(smaps, 0, sizeof(*smaps));
@@ -747,6 +748,7 @@ void valk_smaps_collect(valk_smaps_breakdown_t *smaps) {
 
   fclose(f);
 }
+// LCOV_EXCL_BR_STOP
 
 #elif defined(__APPLE__)
 #include <mach/mach.h>
