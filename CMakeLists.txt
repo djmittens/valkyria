@@ -460,3 +460,8 @@ add_executable(test_stream_builtins_unit test/unit/test_stream_builtins.c test/t
 target_link_libraries(test_stream_builtins_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_stream_builtins_unit src/)
 
+# HTTP/2 connection tests (write buffer, backpressure, alloc callbacks)
+add_executable(test_http2_conn_unit test/unit/test_http2_conn.c test/testing.c)
+target_link_libraries(test_http2_conn_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES})
+include_directories(test_http2_conn_unit src/)
+

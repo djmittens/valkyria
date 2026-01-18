@@ -91,7 +91,21 @@
   - Tests cover: get_stream_body helper (null ref, wrong type)
   - Bug fix: valk_stream_body_writable now checks for null session before calling nghttp2
   - Note: Full stream/open testing requires nghttp2 session setup
-- [ ] **aio/http2/aio_http2_conn.c** - 64.8% line / 51.7% branch
+- [x] **aio/http2/aio_http2_conn.c** - 64.8% line / 51.7% branch - PARTIALLY IMPROVED
+  - Added 33 unit tests in test/unit/test_http2_conn.c
+  - Tests cover: valk_http2_backpressure_try_resume_one (null sys, empty list)
+  - Tests cover: valk_http2_conn_write_buf_acquire (null sys, null slab, success)
+  - Tests cover: valk_http2_conn_write_buf_data (no buf, with buf)
+  - Tests cover: valk_http2_conn_write_buf_available (no buf, with buf)
+  - Tests cover: valk_http2_conn_write_buf_append (null sys, null slab, success)
+  - Tests cover: valk_http2_flush_frames (null conn, null session)
+  - Tests cover: valk_http2_enter_arena_backpressure (null, null session, already backpressured)
+  - Tests cover: valk_http2_exit_arena_backpressure (null, null session, not backpressured, null server)
+  - Tests cover: valk_http2_conn_on_disconnect (closing state transition)
+  - Tests cover: valk_http2_conn_tcp_read_impl (closing/closed conn early returns)
+  - Tests cover: valk_http2_flush_pending, valk_http2_continue_pending_send (null cases)
+  - Tests cover: valk_http2_conn_alloc_callback (null conn, wrong magic, wrong kind, existing buf, acquire new buf, slab exhausted)
+  - Note: Full nghttp2/SSL integration testing requires real nghttp2 sessions
 - [ ] **aio/http2/aio_http2_server.c** - 65.9% line / 42.1% branch
 - [ ] **io/io_loop_ops_uv.c** - 68.6% line / 44.4% branch
 - [ ] **io/io_tcp_ops_uv.c** - 69.2% line / 40.6% branch
