@@ -1,0 +1,464 @@
+; Parser Builtin Coverage Tests
+; Additional tests for parser.c coverage gaps
+; Run with: ./build/valk test/test_parser_builtin_coverage.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "Parser Builtin Coverage Tests")
+
+; === Printf edge cases ===
+
+(test/define "printf-missing-string-arg"
+  {do
+    (= {result} (printf "%s"))
+    (test/assert (error? result) "printf %s without arg errors")
+    true
+  })
+
+(test/define "printf-missing-number-arg"
+  {do
+    (= {result} (printf "%d"))
+    (test/assert (error? result) "printf %d without arg errors")
+    true
+  })
+
+(test/define "printf-wrong-type-for-s"
+  {do
+    (= {result} (printf "%s" 42))
+    (test/assert (error? result) "printf %s with number errors")
+    true
+  })
+
+(test/define "printf-wrong-type-for-d"
+  {do
+    (= {result} (printf "%d" "hello"))
+    (test/assert (error? result) "printf %d with string errors")
+    true
+  })
+
+(test/define "printf-literal-percent"
+  {do
+    (printf "100%% complete\n")
+    true
+  })
+
+(test/define "printf-unknown-format"
+  {do
+    (printf "value is %x hex\n")
+    true
+  })
+
+(test/define "printf-multiple-formats"
+  {do
+    (printf "name=%s value=%d\n" "test" 42)
+    true
+  })
+
+(test/define "printf-ld-missing-arg"
+  {do
+    (= {result} (printf "%ld"))
+    (test/assert (error? result) "printf %ld without arg errors")
+    true
+  })
+
+; === make-string edge cases ===
+
+(test/define "make-string-negative-count"
+  {do
+    (= {result} (make-string -5 "x"))
+    (test/assert (error? result) "negative count errors")
+    true
+  })
+
+(test/define "make-string-zero-count"
+  {do
+    (= {result} (make-string 0 "x"))
+    (test/assert-eq "" result "zero count returns empty")
+    true
+  })
+
+(test/define "make-string-char-code"
+  {do
+    (= {result} (make-string 3 65))
+    (test/assert-eq "AAA" result "char code 65 creates AAA")
+    true
+  })
+
+(test/define "make-string-empty-pattern"
+  {do
+    (= {result} (make-string 5 ""))
+    (test/assert-eq "" result "empty pattern returns empty")
+    true
+  })
+
+(test/define "make-string-multi-char-pattern"
+  {do
+    (= {result} (make-string 3 "ab"))
+    (test/assert-eq "ababab" result "multi-char pattern repeats")
+    true
+  })
+
+(test/define "make-string-wrong-count-type"
+  {do
+    (= {result} (make-string "five" "x"))
+    (test/assert (error? result) "non-number count errors")
+    true
+  })
+
+(test/define "make-string-wrong-pattern-type"
+  {do
+    (= {result} (make-string 5 {1 2 3}))
+    (test/assert (error? result) "non-string/num pattern errors")
+    true
+  })
+
+; === str/split edge cases ===
+
+(test/define "str-split-multi-char-delim"
+  {do
+    (= {result} (str/split "a::b::c" "::"))
+    (test/assert-eq 3 (len result) "splits on multi-char delim")
+    (test/assert-eq "a" (nth 1 result) "first part")
+    (test/assert-eq "b" (nth 2 result) "middle part")
+    (test/assert-eq "c" (nth 3 result) "last part")
+    true
+  })
+
+(test/define "str-split-delim-at-start"
+  {do
+    (= {result} (str/split ",a,b" ","))
+    (test/assert-eq 3 (len result) "splits with leading delim")
+    (test/assert-eq "" (nth 1 result) "first part empty")
+    true
+  })
+
+(test/define "str-split-delim-at-end"
+  {do
+    (= {result} (str/split "a,b," ","))
+    (test/assert-eq 3 (len result) "splits with trailing delim")
+    (test/assert-eq "" (nth 3 result) "last part empty")
+    true
+  })
+
+(test/define "str-split-no-match"
+  {do
+    (= {result} (str/split "hello" ","))
+    (test/assert-eq 1 (len result) "no match returns single element")
+    (test/assert-eq "hello" (nth 1 result) "original string returned")
+    true
+  })
+
+(test/define "str-split-consecutive-delims"
+  {do
+    (= {result} (str/split "a,,b" ","))
+    (test/assert-eq 3 (len result) "consecutive delims create empty")
+    (test/assert-eq "" (nth 2 result) "middle part empty")
+    true
+  })
+
+(test/define "str-split-empty-string"
+  {do
+    (= {result} (str/split "" ","))
+    (test/assert-eq 1 (len result) "empty string returns single")
+    (test/assert-eq "" (nth 1 result) "single empty element")
+    true
+  })
+
+(test/define "str-split-empty-delim-error"
+  {do
+    (= {result} (str/split "hello" ""))
+    (test/assert (error? result) "empty delimiter errors")
+    true
+  })
+
+; === str/replace edge cases ===
+
+(test/define "str-replace-no-occurrences"
+  {do
+    (= {result} (str/replace "hello" "x" "y"))
+    (test/assert-eq "hello" result "no match returns original")
+    true
+  })
+
+(test/define "str-replace-empty-from-error"
+  {do
+    (= {result} (str/replace "hello" "" "x"))
+    (test/assert (error? result) "empty from string errors")
+    true
+  })
+
+(test/define "str-replace-larger-replacement"
+  {do
+    (= {result} (str/replace "ab" "a" "xyz"))
+    (test/assert-eq "xyzb" result "larger replacement works")
+    true
+  })
+
+(test/define "str-replace-smaller-replacement"
+  {do
+    (= {result} (str/replace "aaab" "aa" "x"))
+    (test/assert-eq "xab" result "smaller replacement works")
+    true
+  })
+
+(test/define "str-replace-empty-replacement"
+  {do
+    (= {result} (str/replace "hello" "l" ""))
+    (test/assert-eq "heo" result "empty replacement removes chars")
+    true
+  })
+
+(test/define "str-replace-multiple-occurrences"
+  {do
+    (= {result} (str/replace "ababa" "a" "x"))
+    (test/assert-eq "xbxbx" result "replaces all occurrences")
+    true
+  })
+
+(test/define "str-replace-multi-char-search"
+  {do
+    (= {result} (str/replace "hello world hello" "hello" "hi"))
+    (test/assert-eq "hi world hi" result "multi-char search works")
+    true
+  })
+
+; === read-file edge cases ===
+
+(test/define "read-file-nonexistent"
+  {do
+    (= {result} (read-file "/nonexistent/path/file.txt"))
+    (test/assert (error? result) "reading nonexistent file errors")
+    true
+  })
+
+; === str->num edge cases ===
+
+(test/define "str-to-num-float"
+  {do
+    (= {result} (str->num "314"))
+    (test/assert (== result 314) "parses larger number")
+    true
+  })
+
+(test/define "str-to-num-negative-large"
+  {do
+    (= {result} (str->num "-25"))
+    (test/assert (== result -25) "parses negative number")
+    true
+  })
+
+(test/define "str-to-num-with-whitespace"
+  {do
+    (= {result} (str->num "  42  "))
+    (test/assert-eq 42 result "ignores whitespace")
+    true
+  })
+
+(test/define "str-to-num-partial-number"
+  {do
+    (= {result} (str->num "42abc"))
+    (test/assert (error? result) "partial number errors")
+    true
+  })
+
+; === ord/cmp edge cases ===
+
+(test/define "ord-strings"
+  {do
+    (= {result} (ord "apple" "banana"))
+    (test/assert (< result 0) "apple < banana")
+    true
+  })
+
+(test/define "ord-equal-strings"
+  {do
+    (= {result} (ord "same" "same"))
+    (test/assert-eq 0 result "equal strings ord is 0")
+    true
+  })
+
+(test/define "ord-numbers"
+  {do
+    (test/assert (< (ord 1 2) 0) "1 < 2")
+    (test/assert (> (ord 2 1) 0) "2 > 1")
+    (test/assert (== (ord 5 5) 0) "5 == 5")
+    true
+  })
+
+; === len edge cases ===
+
+(test/define "len-empty-list"
+  {do
+    (= {result} (len {}))
+    (test/assert-eq 0 result "empty list len is 0")
+    true
+  })
+
+(test/define "len-string"
+  {do
+    (= {result} (len "hello"))
+    (test/assert-eq 5 result "string length")
+    true
+  })
+
+(test/define "len-empty-string"
+  {do
+    (= {result} (len ""))
+    (test/assert-eq 0 result "empty string len is 0")
+    true
+  })
+
+; === join edge cases ===
+
+(test/define "join-empty-lists"
+  {do
+    (= {result} (join {} {}))
+    (test/assert-eq 0 (len result) "joining empty lists")
+    true
+  })
+
+(test/define "join-one-empty"
+  {do
+    (= {result} (join {1 2} {}))
+    (test/assert-eq 2 (len result) "join with one empty")
+    true
+  })
+
+; === cons edge cases ===
+
+(test/define "cons-to-empty"
+  {do
+    (= {result} (cons 1 {}))
+    (test/assert-eq 1 (len result) "cons to empty")
+    (test/assert-eq 1 (nth 1 result) "cons value")
+    true
+  })
+
+(test/define "cons-nil"
+  {do
+    (= {result} (cons nil {1}))
+    (test/assert-eq 2 (len result) "cons nil")
+    true
+  })
+
+; === type checking edge cases ===
+
+(test/define "type-of-nil"
+  {do
+    (= {result} (type nil))
+    (test/assert-eq "nil" result "type of nil")
+    true
+  })
+
+(test/define "type-of-lambda"
+  {do
+    (= {f} (\ {x} {x}))
+    (= {result} (type f))
+    (test/assert-eq "function" result "type of lambda")
+    true
+  })
+
+(test/define "type-of-builtin"
+  {do
+    (= {result} (type +))
+    (test/assert-eq "function" result "type of builtin")
+    true
+  })
+
+; === error? edge cases ===
+
+(test/define "error-predicate-on-number"
+  {do
+    (test/assert (not (error? 42)) "number is not error")
+    true
+  })
+
+(test/define "error-predicate-on-nil"
+  {do
+    (test/assert (not (error? nil)) "nil is not error")
+    true
+  })
+
+(test/define "error-predicate-on-error"
+  {do
+    (= {e} (error "test"))
+    (test/assert (error? e) "error is error")
+    true
+  })
+
+; === eval edge cases ===
+
+(test/define "eval-quoted-expr"
+  {do
+    (= {result} (eval {+ 1 2}))
+    (test/assert-eq 3 result "eval quoted expr")
+    true
+  })
+
+(test/define "eval-nested-quote"
+  {do
+    (= {result} (eval (eval {{+ 1 2}})))
+    (test/assert-eq 3 result "nested eval")
+    true
+  })
+
+; === Logic operations ===
+
+(test/define "and-short-circuit"
+  {do
+    (= {result} (and false (/ 1 0)))
+    (test/assert (not result) "and short-circuits on false")
+    true
+  })
+
+(test/define "or-short-circuit"
+  {do
+    (= {result} (or true (/ 1 0)))
+    (test/assert result "or short-circuits on true")
+    true
+  })
+
+(test/define "not-on-zero"
+  {do
+    (test/assert (not 0) "not 0 is true")
+    true
+  })
+
+(test/define "not-on-nonzero"
+  {do
+    (test/assert (not (not 42)) "not not 42 is true")
+    true
+  })
+
+; === Variadic functions edge cases ===
+
+(test/define "plus-no-args"
+  {do
+    (= {result} (+))
+    (test/assert-eq 0 result "+ with no args is 0")
+    true
+  })
+
+(test/define "plus-single-arg"
+  {do
+    (= {result} (+ 42))
+    (test/assert-eq 42 result "+ with one arg")
+    true
+  })
+
+(test/define "multiply-no-args"
+  {do
+    (= {result} (*))
+    (test/assert-eq 1 result "* with no args is 1")
+    true
+  })
+
+(test/define "multiply-single-arg"
+  {do
+    (= {result} (* 42))
+    (test/assert-eq 42 result "* with one arg")
+    true
+  })
+
+(test/run)

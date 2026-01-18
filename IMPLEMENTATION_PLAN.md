@@ -194,6 +194,7 @@
   - Added LCOV exclusions for exit() and shutdown() exit paths (terminates process)
   - Added LCOV exclusion for LVAL_UNDEFINED case (invariant violation)
   - Added LCOV exclusion for CONT_DO_NEXT (dead code: do is a builtin, never triggers continuation path)
+  - Added test/test_parser_builtin_coverage.valk (60 tests) covering printf error cases, make-string edge cases, str/split edge cases, str/replace edge cases, read-file errors, ord/type/len/join/cons edge cases, error? predicate, eval edge cases, logic short-circuit, variadic math builtins
   - Remaining uncovered: coverage builtins (only in VALK_COVERAGE builds), HTTP/2 server builtins (require integration tests), continuation handling thunk paths, allocator SLAB case (unused for lvals)
 
 ### Low Priority Files (<15% line coverage gap)
