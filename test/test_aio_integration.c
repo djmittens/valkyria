@@ -714,6 +714,195 @@ static void test_diagnostics_slab_buckets_wrong_args(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static void test_diagnostics_slab_buckets_wrong_ref_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_register_aio_diagnostics_builtins(env);
+
+  valk_lval_t *ref = valk_lval_ref("wrong_type", sys, nullptr);
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){
+    ref,
+    valk_lval_str("handles"),
+    valk_lval_num(0),
+    valk_lval_num(100),
+    valk_lval_num(10)
+  }, 5);
+
+  valk_lval_t *result = call_diag_builtin(env, "aio/slab-buckets", args);
+  ASSERT_TRUE(LVAL_TYPE(result) == LVAL_ERR);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_diagnostics_slab_buckets_invalid_buckets(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_register_aio_diagnostics_builtins(env);
+
+  valk_lval_t *ref = valk_lval_ref("aio_system", sys, nullptr);
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){
+    ref,
+    valk_lval_str("handles"),
+    valk_lval_num(0),
+    valk_lval_num(100),
+    valk_lval_num(0)
+  }, 5);
+
+  valk_lval_t *result = call_diag_builtin(env, "aio/slab-buckets", args);
+  ASSERT_TRUE(LVAL_TYPE(result) == LVAL_ERR);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_diagnostics_slab_buckets_invalid_arg_types(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_register_aio_diagnostics_builtins(env);
+
+  valk_lval_t *ref = valk_lval_ref("aio_system", sys, nullptr);
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){
+    ref,
+    valk_lval_num(123),
+    valk_lval_num(0),
+    valk_lval_num(100),
+    valk_lval_num(10)
+  }, 5);
+
+  valk_lval_t *result = call_diag_builtin(env, "aio/slab-buckets", args);
+  ASSERT_TRUE(LVAL_TYPE(result) == LVAL_ERR);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_diagnostics_slab_buckets_lval_slab(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_register_aio_diagnostics_builtins(env);
+
+  valk_lval_t *ref = valk_lval_ref("aio_system", sys, nullptr);
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){
+    ref,
+    valk_lval_str("lval"),
+    valk_lval_num(0),
+    valk_lval_num(100),
+    valk_lval_num(10)
+  }, 5);
+
+  valk_lval_t *result = call_diag_builtin(env, "aio/slab-buckets", args);
+  ASSERT_TRUE(LVAL_TYPE(result) == LVAL_ERR);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_diagnostics_json_wrong_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_register_aio_diagnostics_builtins(env);
+
+  valk_lval_t *args = valk_lval_list(nullptr, 0);
+
+  valk_lval_t *result = call_diag_builtin(env, "aio/diagnostics-state-json", args);
+  ASSERT_TRUE(LVAL_TYPE(result) == LVAL_ERR);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_diagnostics_json_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_register_aio_diagnostics_builtins(env);
+
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){ valk_lval_num(42) }, 1);
+
+  valk_lval_t *result = call_diag_builtin(env, "aio/diagnostics-state-json", args);
+  ASSERT_TRUE(LVAL_TYPE(result) == LVAL_ERR);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_diagnostics_json_compact_wrong_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_register_aio_diagnostics_builtins(env);
+
+  valk_lval_t *args = valk_lval_list(nullptr, 0);
+
+  valk_lval_t *result = call_diag_builtin(env, "aio/diagnostics-state-json-compact", args);
+  ASSERT_TRUE(LVAL_TYPE(result) == LVAL_ERR);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
+static void test_diagnostics_json_compact_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_register_aio_diagnostics_builtins(env);
+
+  valk_lval_t *ref = valk_lval_ref("wrong_type", sys, nullptr);
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){ ref }, 1);
+
+  valk_lval_t *result = call_diag_builtin(env, "aio/diagnostics-state-json-compact", args);
+  ASSERT_TRUE(LVAL_TYPE(result) == LVAL_ERR);
+
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+
+  VALK_PASS();
+}
+
 static void test_system_name(VALK_TEST_ARGS()) {
   VALK_TEST();
   
@@ -794,7 +983,15 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_diagnostics_slab_buckets", test_diagnostics_slab_buckets);
   valk_testsuite_add_test(suite, "test_diagnostics_slab_buckets_invalid_slab", test_diagnostics_slab_buckets_invalid_slab);
   valk_testsuite_add_test(suite, "test_diagnostics_slab_buckets_wrong_args", test_diagnostics_slab_buckets_wrong_args);
-  
+  valk_testsuite_add_test(suite, "test_diagnostics_slab_buckets_wrong_ref_type", test_diagnostics_slab_buckets_wrong_ref_type);
+  valk_testsuite_add_test(suite, "test_diagnostics_slab_buckets_invalid_buckets", test_diagnostics_slab_buckets_invalid_buckets);
+  valk_testsuite_add_test(suite, "test_diagnostics_slab_buckets_invalid_arg_types", test_diagnostics_slab_buckets_invalid_arg_types);
+  valk_testsuite_add_test(suite, "test_diagnostics_slab_buckets_lval_slab", test_diagnostics_slab_buckets_lval_slab);
+  valk_testsuite_add_test(suite, "test_diagnostics_json_wrong_args", test_diagnostics_json_wrong_args);
+  valk_testsuite_add_test(suite, "test_diagnostics_json_wrong_type", test_diagnostics_json_wrong_type);
+  valk_testsuite_add_test(suite, "test_diagnostics_json_compact_wrong_args", test_diagnostics_json_compact_wrong_args);
+  valk_testsuite_add_test(suite, "test_diagnostics_json_compact_wrong_type", test_diagnostics_json_compact_wrong_type);
+
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
   valk_testsuite_free(suite);
