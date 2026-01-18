@@ -1652,6 +1652,653 @@ static void test_set_heap_hard_limit_wrong_count(VALK_TEST_ARGS()) {
 }
 
 // ============================================================================
+// AIO Type Error Tests
+// ============================================================================
+
+static void test_aio_schedule_wrong_first_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/schedule 42 100 (\\ {} nil))");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_schedule_wrong_second_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/schedule (atom 0) \"100\" (\\ {} nil))");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_schedule_wrong_third_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/schedule (atom 0) 100 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_schedule_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/schedule (atom 0) 100)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_interval_wrong_first_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/interval 42 100 (\\ {} nil))");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_interval_wrong_second_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/interval (atom 0) \"100\" (\\ {} nil))");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_interval_wrong_third_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/interval (atom 0) 100 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_interval_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/interval (atom 0) 100)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_run_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/run)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_run_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/run 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_stop_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/stop)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_stop_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/stop 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_metrics_json_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/metrics-json)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_metrics_json_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/metrics-json 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_metrics_json_compact_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/metrics-json-compact)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_metrics_json_compact_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/metrics-json-compact 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_systems_json_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/systems-json)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_aio_systems_json_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/systems-json 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// HTTP Mock Response Type Error Tests
+// ============================================================================
+
+static void test_http2_mock_response_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(http2/mock-response \"200\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_http2_mock_response_wrong_status_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(http2/mock-response 200 \"body\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_http2_mock_response_wrong_body_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(http2/mock-response \"200\" 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_http2_mock_response_too_many_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(http2/mock-response \"200\" \"body\" {} \"extra\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// HTTP Request Add Header Tests
+// ============================================================================
+
+static void test_http2_request_add_header_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(http2/request-add-header)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_http2_request_add_header_wrong_first_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(http2/request-add-header 42 \"name\" \"value\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_http2_request_add_header_wrong_second_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  parse_and_eval("(def {req} (http2/request \"GET\" \"https\" \"example.com\" \"/\"))");
+  valk_lval_t *result = parse_and_eval("(http2/request-add-header req 42 \"value\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_http2_request_add_header_wrong_third_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  parse_and_eval("(def {req} (http2/request \"GET\" \"https\" \"example.com\" \"/\"))");
+  valk_lval_t *result = parse_and_eval("(http2/request-add-header req \"name\" 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_http2_request_add_header_wrong_ref_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(http2/request-add-header (atom 0) \"name\" \"value\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Cons Builtin Type Error Tests
+// ============================================================================
+
+static void test_cons_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(cons 1)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_cons_wrong_second_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(cons 1 2)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Shutdown Tests
+// ============================================================================
+
+static void test_shutdown_with_code(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Shutdown in REPL mode returns the code instead of exiting
+  parse_and_eval("(def {VALK_MODE} \"repl\")");
+  valk_lval_t *result = parse_and_eval("(shutdown 42)");
+  ASSERT_LVAL_TYPE(result, LVAL_NUM);
+  ASSERT_LVAL_NUM(result, 42);
+
+  VALK_PASS();
+}
+
+static void test_shutdown_without_code(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Shutdown in REPL mode returns 0 if no code given
+  parse_and_eval("(def {VALK_MODE} \"repl\")");
+  valk_lval_t *result = parse_and_eval("(shutdown)");
+  ASSERT_LVAL_TYPE(result, LVAL_NUM);
+  ASSERT_LVAL_NUM(result, 0);
+
+  VALK_PASS();
+}
+
+static void test_shutdown_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(shutdown \"not-a-number\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_shutdown_too_many_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(shutdown 1 2)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// AIO System Ref Type Mismatch Tests
+// ============================================================================
+
+static void test_aio_schedule_wrong_ref_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Use a valid function, then the error should be about the ref type
+  valk_lval_t *result = parse_and_eval("(aio/schedule (atom 0) 100 (\\ {} {}))");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "AIO system");
+
+  VALK_PASS();
+}
+
+static void test_aio_interval_wrong_ref_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/interval (atom 0) 100 (\\ {} {}))");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "AIO system");
+
+  VALK_PASS();
+}
+
+static void test_aio_run_wrong_ref_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/run (atom 0))");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "aio_system");
+
+  VALK_PASS();
+}
+
+static void test_aio_stop_wrong_ref_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/stop (atom 0))");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "aio_system");
+
+  VALK_PASS();
+}
+
+static void test_aio_metrics_json_wrong_ref_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/metrics-json (atom 0))");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "aio_system");
+
+  VALK_PASS();
+}
+
+static void test_aio_metrics_json_compact_wrong_ref_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/metrics-json-compact (atom 0))");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "aio_system");
+
+  VALK_PASS();
+}
+
+static void test_aio_systems_json_wrong_ref_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/systems-json (atom 0))");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "aio_system");
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Init (all but last) Builtin Tests
+// ============================================================================
+
+static void test_init_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(init)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_init_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(init 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_init_empty_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(init {})");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_init_valid(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(init {1 2 3})");
+  ASSERT_LVAL_TYPE(result, LVAL_CONS);
+  ASSERT_TRUE(valk_lval_list_count(result) == 2);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Set (local binding) Builtin Tests
+// ============================================================================
+
+static void test_set_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(= {x})");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_set_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(= 42 1)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_set_non_symbol_in_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(= {a 42} 1 2)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_set_count_mismatch(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(= {a b} 1)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Ord/Cmp Type Error Tests
+// ============================================================================
+
+static void test_ord_wrong_first_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(> \"x\" 2)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_ord_wrong_second_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(> 1 \"x\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_ord_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(> 1)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_cmp_wrong_count_too_few(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(== 1)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_cmp_wrong_count_too_many(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(== 1 2 3)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Eval Builtin Tests
+// ============================================================================
+
+static void test_eval_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(eval)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_eval_too_many_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(eval 1 2)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Load Builtin Tests
+// ============================================================================
+
+static void test_load_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(load)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_load_wrong_type_numeric(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(load 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Join Builtin Tests
+// ============================================================================
+
+static void test_join_empty_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // join with one list is identity
+  valk_lval_t *result = parse_and_eval("(join {1 2})");
+  ASSERT_LVAL_TYPE(result, LVAL_CONS);
+  ASSERT_TRUE(valk_lval_list_count(result) == 2);
+
+  VALK_PASS();
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -1819,6 +2466,65 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_println_builtin", test_println_builtin);
   valk_testsuite_add_test(suite, "test_set_heap_hard_limit_wrong_type", test_set_heap_hard_limit_wrong_type);
   valk_testsuite_add_test(suite, "test_set_heap_hard_limit_wrong_count", test_set_heap_hard_limit_wrong_count);
+
+  valk_testsuite_add_test(suite, "test_aio_schedule_wrong_first_type", test_aio_schedule_wrong_first_type);
+  valk_testsuite_add_test(suite, "test_aio_schedule_wrong_second_type", test_aio_schedule_wrong_second_type);
+  valk_testsuite_add_test(suite, "test_aio_schedule_wrong_third_type", test_aio_schedule_wrong_third_type);
+  valk_testsuite_add_test(suite, "test_aio_schedule_wrong_count", test_aio_schedule_wrong_count);
+  valk_testsuite_add_test(suite, "test_aio_interval_wrong_first_type", test_aio_interval_wrong_first_type);
+  valk_testsuite_add_test(suite, "test_aio_interval_wrong_second_type", test_aio_interval_wrong_second_type);
+  valk_testsuite_add_test(suite, "test_aio_interval_wrong_third_type", test_aio_interval_wrong_third_type);
+  valk_testsuite_add_test(suite, "test_aio_interval_wrong_count", test_aio_interval_wrong_count);
+  valk_testsuite_add_test(suite, "test_aio_run_wrong_count", test_aio_run_wrong_count);
+  valk_testsuite_add_test(suite, "test_aio_run_wrong_type", test_aio_run_wrong_type);
+  valk_testsuite_add_test(suite, "test_aio_stop_wrong_count", test_aio_stop_wrong_count);
+  valk_testsuite_add_test(suite, "test_aio_stop_wrong_type", test_aio_stop_wrong_type);
+  valk_testsuite_add_test(suite, "test_aio_metrics_json_wrong_count", test_aio_metrics_json_wrong_count);
+  valk_testsuite_add_test(suite, "test_aio_metrics_json_wrong_type", test_aio_metrics_json_wrong_type);
+  valk_testsuite_add_test(suite, "test_aio_metrics_json_compact_wrong_count", test_aio_metrics_json_compact_wrong_count);
+  valk_testsuite_add_test(suite, "test_aio_metrics_json_compact_wrong_type", test_aio_metrics_json_compact_wrong_type);
+  valk_testsuite_add_test(suite, "test_aio_systems_json_wrong_count", test_aio_systems_json_wrong_count);
+  valk_testsuite_add_test(suite, "test_aio_systems_json_wrong_type", test_aio_systems_json_wrong_type);
+  valk_testsuite_add_test(suite, "test_http2_mock_response_wrong_count", test_http2_mock_response_wrong_count);
+  valk_testsuite_add_test(suite, "test_http2_mock_response_wrong_status_type", test_http2_mock_response_wrong_status_type);
+  valk_testsuite_add_test(suite, "test_http2_mock_response_wrong_body_type", test_http2_mock_response_wrong_body_type);
+  valk_testsuite_add_test(suite, "test_http2_mock_response_too_many_args", test_http2_mock_response_too_many_args);
+  valk_testsuite_add_test(suite, "test_http2_request_add_header_wrong_count", test_http2_request_add_header_wrong_count);
+  valk_testsuite_add_test(suite, "test_http2_request_add_header_wrong_first_type", test_http2_request_add_header_wrong_first_type);
+  valk_testsuite_add_test(suite, "test_http2_request_add_header_wrong_second_type", test_http2_request_add_header_wrong_second_type);
+  valk_testsuite_add_test(suite, "test_http2_request_add_header_wrong_third_type", test_http2_request_add_header_wrong_third_type);
+  valk_testsuite_add_test(suite, "test_http2_request_add_header_wrong_ref_type", test_http2_request_add_header_wrong_ref_type);
+  valk_testsuite_add_test(suite, "test_cons_wrong_count", test_cons_wrong_count);
+  valk_testsuite_add_test(suite, "test_cons_wrong_second_type", test_cons_wrong_second_type);
+  valk_testsuite_add_test(suite, "test_shutdown_with_code", test_shutdown_with_code);
+  valk_testsuite_add_test(suite, "test_shutdown_without_code", test_shutdown_without_code);
+  valk_testsuite_add_test(suite, "test_shutdown_wrong_type", test_shutdown_wrong_type);
+  valk_testsuite_add_test(suite, "test_shutdown_too_many_args", test_shutdown_too_many_args);
+  valk_testsuite_add_test(suite, "test_aio_schedule_wrong_ref_type", test_aio_schedule_wrong_ref_type);
+  valk_testsuite_add_test(suite, "test_aio_interval_wrong_ref_type", test_aio_interval_wrong_ref_type);
+  valk_testsuite_add_test(suite, "test_aio_run_wrong_ref_type", test_aio_run_wrong_ref_type);
+  valk_testsuite_add_test(suite, "test_aio_stop_wrong_ref_type", test_aio_stop_wrong_ref_type);
+  valk_testsuite_add_test(suite, "test_aio_metrics_json_wrong_ref_type", test_aio_metrics_json_wrong_ref_type);
+  valk_testsuite_add_test(suite, "test_aio_metrics_json_compact_wrong_ref_type", test_aio_metrics_json_compact_wrong_ref_type);
+  valk_testsuite_add_test(suite, "test_aio_systems_json_wrong_ref_type", test_aio_systems_json_wrong_ref_type);
+  valk_testsuite_add_test(suite, "test_init_wrong_count", test_init_wrong_count);
+  valk_testsuite_add_test(suite, "test_init_wrong_type", test_init_wrong_type);
+  valk_testsuite_add_test(suite, "test_init_empty_list", test_init_empty_list);
+  valk_testsuite_add_test(suite, "test_init_valid", test_init_valid);
+  valk_testsuite_add_test(suite, "test_set_wrong_count", test_set_wrong_count);
+  valk_testsuite_add_test(suite, "test_set_wrong_type", test_set_wrong_type);
+  valk_testsuite_add_test(suite, "test_set_non_symbol_in_list", test_set_non_symbol_in_list);
+  valk_testsuite_add_test(suite, "test_set_count_mismatch", test_set_count_mismatch);
+  valk_testsuite_add_test(suite, "test_ord_wrong_first_type", test_ord_wrong_first_type);
+  valk_testsuite_add_test(suite, "test_ord_wrong_second_type", test_ord_wrong_second_type);
+  valk_testsuite_add_test(suite, "test_ord_wrong_count", test_ord_wrong_count);
+  valk_testsuite_add_test(suite, "test_cmp_wrong_count_too_few", test_cmp_wrong_count_too_few);
+  valk_testsuite_add_test(suite, "test_cmp_wrong_count_too_many", test_cmp_wrong_count_too_many);
+  valk_testsuite_add_test(suite, "test_eval_wrong_count", test_eval_wrong_count);
+  valk_testsuite_add_test(suite, "test_eval_too_many_args", test_eval_too_many_args);
+  valk_testsuite_add_test(suite, "test_load_wrong_count", test_load_wrong_count);
+  valk_testsuite_add_test(suite, "test_load_wrong_type_numeric", test_load_wrong_type_numeric);
+  valk_testsuite_add_test(suite, "test_join_empty_args", test_join_empty_args);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

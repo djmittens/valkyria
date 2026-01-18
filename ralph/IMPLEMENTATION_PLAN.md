@@ -1,19 +1,19 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18 16:45
+**Last updated:** 2026-01-18 17:30
 
 ## Spec: coverage-improvement.md
 
 **Goal:** 90% line coverage, 85% branch coverage for all files
 
-**Current Status:** 86.4% lines (approx), 72.5% branches (approx)
+**Current Status:** 86.4% lines, 71.9% branches
 
 ## Pending Tasks
 
 ### Priority 1: Core C Files (high impact, fewer dependencies)
 
-- [ ] Improve parser.c branch coverage (74.0% → 85%)
+- [ ] Improve parser.c branch coverage (79.4% → 85%)
 - [ ] Improve memory.c branch coverage (72.5% → 85%)
 - [ ] Improve gc.c coverage (75.1% line, 61.9% branch → 90%/85%)
 
@@ -58,7 +58,8 @@
 ## Completed
 
 - [x] Improve parser.c branch coverage 69.9% → 74.0% (added 57 new tests for type error branches)
+- [x] Improve parser.c branch coverage 74.0% → 79.4% (added 63 new tests for AIO, HTTP, shutdown, init, set, ord/cmp, eval, load error branches)
 
 ## Discovered Issues
 
-- (Document issues found during implementation)
+- Many remaining uncovered branches in parser.c are internal implementation details (memory allocation null checks, dynamic array growth logic) that require mocking infrastructure to test effectively
