@@ -455,3 +455,8 @@ add_executable(test_conn_fsm_unit test/unit/test_conn_fsm.c test/testing.c)
 target_link_libraries(test_conn_fsm_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_conn_fsm_unit src/)
 
+# Stream builtins tests (Lisp API for stream operations)
+add_executable(test_stream_builtins_unit test/unit/test_stream_builtins.c test/testing.c)
+target_link_libraries(test_stream_builtins_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_stream_builtins_unit src/)
+

@@ -263,6 +263,9 @@ bool valk_stream_body_writable(valk_stream_body_t *body) {
   if (body->state != VALK_STREAM_OPEN) {
     return false;
   }
+  if (!body->session) {
+    return false;
+  }
   if (!nghttp2_session_find_stream(body->session, body->stream_id)) {
     return false;
   }

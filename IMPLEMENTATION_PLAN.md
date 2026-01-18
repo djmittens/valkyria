@@ -1,0 +1,302 @@
+# Implementation Plan
+
+*Run `./ralph.sh plan` to generate/update this plan from specs/*
+
+## Priority Legend
+- **P0 (Critical)**: Blocks other work or has severe gaps
+- **P1 (High)**: Important for production readiness
+- **P2 (Medium)**: Valuable improvements
+- **P3 (Low)**: Nice to have / deferred optimizations
+
+---
+
+## P0: Critical - Test Coverage (from specs/coverage-improvement.md)
+
+### Critical Priority Files (>50% line coverage gap)
+
+- [x] **aio/aio_ctx_builtins.c** - 11.7% line / 0.0% branch coverage - DONE
+  - Added 31 unit tests in test/unit/test_ctx_builtins.c
+  - Tests cover: ctx/deadline, ctx/deadline-exceeded?, ctx/get, ctx/locals, trace/id, trace/span, trace/parent-span
+  - Tests cover: no context, zero values, non-zero values, wrong argument count, deadline exceeded/not exceeded
+
+- [x] **aio/aio_request_ctx.c** - 23.5% line / 2.1% branch coverage - DONE
+  - Added 11 new tests to test/unit/test_request_ctx.c (now 20 total)
+  - Tests cover: span_id generation, copy null parent, new span null parent, deadline direct
+  - Tests cover: get_local with string/number keys, null cases, multiple locals
+  - Tests cover: remaining_us, remaining_ms, has_deadline
+
+- [x] **aio/aio_http_builtins.c** - 30.9% line / 100% branch coverage - DONE
+  - Added 27 unit tests in test/unit/test_http_builtins.c
+  - Tests cover: req/method, req/path, req/authority, req/scheme, req/headers, req/header, req/body, req/stream-id
+  - Tests cover: success cases, null values, wrong arguments, wrong types, case-insensitive header lookup
+
+### High Priority Files (30-50% line coverage gap)
+
+- [x] **aio/http2/stream/aio_stream_body_conn.c** - 46.7% line / 31.0% branch - DONE
+  - Added 35 unit tests in test/unit/test_stream_body_conn.c
+  - Tests cover: valk_stream_body_register (null, single, multiple bodies)
+  - Tests cover: valk_stream_body_unregister (null, head/middle/tail removal, not-in-list)
+  - Tests cover: valk_stream_body_close_by_stream_id (null conn, empty list, not found)
+  - Tests cover: valk_stream_body_close_all (null conn, empty list)
+  - Tests cover: valk_stream_body_get_bytes_sent (null, empty, found/not found, multiple)
+  - Tests cover: valk_stream_body_check_orphaned (null conn/session, closed/closing skipped)
+  - Tests cover: idle timeout/touch activity/is_idle_expired, cancel
+
+- [x] **aio/http2/overload/aio_overload_backpressure.c** - 56.6% line / 43.1% branch - DONE
+  - Added 35 unit tests in test/unit/test_backpressure_list.c
+  - Tests cover: valk_backpressure_list_init (null, basic, zero values)
+  - Tests cover: valk_backpressure_list_add (null list/conn, single, multiple, already backpressured, queue full)
+  - Tests cover: valk_backpressure_list_remove (null list/conn, not backpressured, head/middle/tail removal)
+  - Tests cover: valk_backpressure_list_try_resume (null cases, empty list, insufficient buffers, sufficient buffers, skips closing/closed, zero min_buffers)
+  - Tests cover: valk_backpressure_list_timeout_expired (null cases, zero timeout, none/single/multiple expired, partial, max limit, zero start time)
+
+- [x] **aio/http2/stream/aio_stream_body.c** - 53.4% line / 39.9% branch - PARTIALLY IMPROVED
+  - Added 12 unit tests to test/unit/test_stream_body_conn.c (now 47 total)
+  - Tests cover: valk_stream_body_write (null data, closed/closing body, queue full)
+  - Tests cover: valk_stream_body_writable (closed/closing body)
+  - Tests cover: valk_stream_body_queue_len (with queued items)
+  - Tests cover: valk_stream_body_close (null, already closed/closing)
+  - Tests cover: valk_stream_body_free (null)
+  - Tests cover: valk_stream_body_is_idle_expired (actual expired case)
+  - Note: Full nghttp2 data callback testing requires nghttp2 fake/mock infrastructure
+
+- [x] **aio/http2/aio_http2_conn_fsm.c** - 57.9% line / 60.0% branch - DONE
+  - Added 37 unit tests in test/unit/test_conn_fsm.c
+  - Tests cover: valk_conn_state_str (valid values, invalid/out-of-range values)
+  - Tests cover: valk_conn_event_str (valid values, invalid/out-of-range values)
+  - Tests cover: valk_conn_is_closing_or_closed (all 8 states)
+  - Tests cover: valk_conn_init_state (null conn, valid conn)
+  - Tests cover: valk_conn_transition (null conn, and all valid state transitions)
+  - Transitions tested: INIT→HANDSHAKING/ESTABLISHED/CLOSING/ERROR
+  - Transitions tested: HANDSHAKING→ESTABLISHED/ERROR/CLOSING (complete/failed/timeout)
+  - Transitions tested: ESTABLISHED→GOAWAY_SENT/CLOSING/ERROR (send_goaway/close/error/timeout)
+  - Transitions tested: GOAWAY_SENT→DRAINING/CLOSING/ERROR (ack/drained/close/error/timeout)
+  - Transitions tested: DRAINING→CLOSING/ERROR (drained/close/error/timeout)
+  - Transitions tested: CLOSING→CLOSED (and no-change cases)
+  - Transitions tested: CLOSED→no-change, ERROR→CLOSING/CLOSED/no-change
+
+### Medium Priority Files (15-30% line coverage gap)
+
+- [x] **aio/http2/stream/aio_stream_builtins.c** - 62.1% line / 39.8% branch - PARTIALLY IMPROVED
+  - Added 37 unit tests in test/unit/test_stream_builtins.c
+  - Tests cover: stream/write (arg validation, body ref validation, data type validation)
+  - Tests cover: stream/writable? (arg validation, invalid body, closed/closing body states)
+  - Tests cover: stream/close (arg validation, invalid body, success case)
+  - Tests cover: stream/on-drain (arg validation, callback type validation)
+  - Tests cover: stream/on-close (arg validation, callback type validation)
+  - Tests cover: stream/set-timeout (arg validation, timeout type, success case)
+  - Tests cover: stream/cancel (arg validation, invalid body)
+  - Tests cover: stream/id (arg validation, success case)
+  - Tests cover: stream/open (arg validation, wrong ref types)
+  - Tests cover: get_stream_body helper (null ref, wrong type)
+  - Bug fix: valk_stream_body_writable now checks for null session before calling nghttp2
+  - Note: Full stream/open testing requires nghttp2 session setup
+- [ ] **aio/http2/aio_http2_conn.c** - 64.8% line / 51.7% branch
+- [ ] **aio/http2/aio_http2_server.c** - 65.9% line / 42.1% branch
+- [ ] **io/io_loop_ops_uv.c** - 68.6% line / 44.4% branch
+- [ ] **io/io_tcp_ops_uv.c** - 69.2% line / 40.6% branch
+- [ ] **aio/http2/aio_http2_client.c** - 71.0% line / 50.7% branch
+- [ ] **gc.c** - 72.0% line / 57.2% branch
+- [ ] **aio/aio_async.c** - 72.4% line / 53.2% branch
+- [ ] **aio/http2/aio_ssl.c** - 72.1% line / 63.8% branch
+- [ ] **parser.c** - 75.1% line / 50.0% branch
+
+### Low Priority Files (<15% line coverage gap)
+
+- [ ] **aio/http2/overload/aio_overload_admission.c** - 76.8% line / 52.4% branch
+- [ ] **aio/system/aio_task_queue.c** - 77.3% line / 55.9% branch
+- [ ] **io/io_timer_ops_uv.c** - 81.8% line / 100% branch
+- [ ] **aio/http2/aio_http2_session.c** - 83.9% line / 66.1% branch
+- [ ] **aio/aio_combinators.c** - 84.8% line / 66.9% branch
+- [ ] **aio/aio_diagnostics_builtins.c** - 87.2% line / 49.5% branch
+- [ ] **aio/http2/aio_conn_io.c** - 88.2% line / 88.9% branch
+- [ ] **memory.c** - 88.2% line / 71.2% branch
+- [ ] **aio/aio_metrics.c** - 89.0% line / 51.2% branch
+
+---
+
+## P0: Critical - Untested Critical Components
+
+- [x] **Chase-Lev Deque** (aio_chase_lev.c - 123 lines) - DONE
+  - Added 13 unit tests in test/unit/test_chase_lev.c
+  - Tests cover: init/destroy, push/pop, steal, grow, concurrent operations
+
+- [x] **Task Queue** (aio_task_queue.c - 93 lines) - DONE
+  - Added 12 unit tests in test/unit/test_task_queue.c
+  - Tests cover: null safety, init/shutdown, enqueue, task execution, shutting down flag
+
+- [x] **Eval Stack (Continuations)** (parser.c - valk_eval_stack_* functions) - DONE
+  - Added 11 unit tests in test/unit/test_parser.c
+  - Tests cover: init/destroy, push/pop, stack growth, all continuation kinds
+  - Tests for CONT_IF_BRANCH, CONT_DO_NEXT, CONT_BODY_NEXT, CONT_COLLECT_ARG frames
+
+- [ ] **continuations_simple.c** (178 lines) - DEAD CODE
+  - File is NOT compiled into the library (missing from CMakeLists.txt VALKYRIA_SOURCES)
+  - Contains placeholder async-shift/async-reset implementation that was never integrated
+  - Decision needed: delete dead code or integrate and test
+
+---
+
+## P0: Critical - Skipped/Broken Tests
+
+- [ ] **Fix flaky test**: `test_backpressure_connections_survive` in test_aio_load_shedding.c:676
+  - Times out under coverage instrumentation
+  - Options: increase timeout, refactor for determinism, separate non-coverage version
+
+- [ ] **Fix GC heap2 migration tests** (4 tests skipped in test/unit/test_gc.c)
+  - `test_gc_free_list_initially_empty` - heap2 uses page-based allocation
+  - `test_gc_slab_allocated` - heap2 uses page-based allocation
+  - `test_gc_object_sizes` - heap2 has no lval_size/lenv_size fields
+  - `test_gc_objects_linked_list` - heap2 uses bitmaps, no linked list
+  - Need: Update tests for new heap2 API or remove if obsolete
+
+- [ ] **Fork-isolated memory tests** (4 tests skipped in test_memory.c)
+  - `test_slab_alloc`, `test_slab_concurrency` - modify global slab state
+  - `test_gc_heap_destroy`, `test_gc_destroy_regression` - stale TLAB pointers
+  - Need: Investigate if these can be run in isolation or refactored
+
+---
+
+## P1: High - Source Code TODOs
+
+### parser.c TODOs
+
+- [ ] **TODO(main): String type** (line 229)
+  - Create dedicated string type instead of raw C strings
+
+- [ ] **TODO(main): UTF-8 support** (line 311)
+  - Add Unicode support for string handling
+
+- [ ] **TODO(main): String length constants** (lines 326, 355)
+  - Define reasonable max string lengths as constants
+
+- [ ] **TODO(main): Stack overflow from large strings** (line 1866)
+  - Investigate if large strings can blow the stack
+
+- [ ] **TODO(main): Dedupe functions** (line 2636)
+  - Consolidate duplicate builtin implementations
+
+- [ ] **TODO(networking): Singleton pattern** (line 2518)
+  - Make something a singleton (context unclear)
+
+### memory.c TODOs
+
+- [ ] **TODO(networking): mmap for buffers** (line 46)
+  - Use mmap with page-aligned memory for buffer_alloc
+
+- [ ] **TODO(networking): Platform-specific slab** (line 199)
+  - Use mmap and platform-specific slab code
+
+- [ ] **TODO(networking): SIMD operations** (line 242)
+  - Consider AVX/SIMD for memory operations
+
+- [ ] **TODO(networking): Unit tests for math** (line 455)
+  - Write unit tests for memory allocation math
+
+### gc.c TODOs
+
+- [ ] **TODO(networking): GC-allocated names** (line 1787)
+  - Consider using GC-allocated names from start to avoid leak
+
+### Stdlib TODOs
+
+- [ ] **TODO(main): Partial application bug** (prelude.valk:163)
+  - `flip` function is broken, error message is also broken
+
+- [ ] **TODO: HTTP POST body support** (http_api.valk:32)
+  - POST body not yet implemented in HTTP API
+
+---
+
+## P1: High - Roadmap Features (from docs/ROADMAP.md)
+
+### In Progress Features
+
+- [ ] **Namespaces** - Basic parsing works, needs module system
+- [ ] **Macros** - Works but no hygiene system
+- [ ] **HTTP Server Lisp API** - C API complete, needs Lisp bindings
+
+### Blocked Features
+
+- [ ] **TCO (Tail Call Optimization)** - Blocked by stack machine / compilation
+- [ ] **LLVM Backend** - Design work needed (unlocks 10-100x performance)
+
+### Planned Features (Layer 5: I/O)
+
+- [ ] **HTTP/2 Server Routing** (M) - Route matching for handlers
+- [ ] **WebSocket support** (M) - Protocol implementation
+- [ ] **UDP Sockets** (S) - Raw libuv UDP for game server foundation
+
+---
+
+## P2: Medium - Test Infrastructure Improvements
+
+- [ ] **Track skip reasons in test results** (testing.c:303)
+  - Currently prints to stderr but not collected
+  - Distinguish "expected skip" from "broken skip"
+
+- [ ] **Parameterized test fixtures**
+  - Reduce duplication in similar test scenarios
+
+- [ ] **Reorganize tests by module**
+  - Current structure makes it hard to find tests for features
+
+- [ ] **Add stress tests for concurrency**
+  - Thread safety tests
+  - Memory leak detection through repeated operations
+  - Error recovery stress tests
+
+---
+
+## P2: Medium - Missing Documentation
+
+- [ ] **Test framework quirks** - Document fork requirements, skip patterns
+- [ ] **Coverage build differences** - Document timeout behavior under instrumentation
+- [ ] **Platform-specific code** - Document POSIX vs Windows differences
+
+---
+
+## P3: Low - Deferred Optimizations
+
+- [ ] **Fixed-Point numerics** - Default numeric type for determinism
+- [ ] **Generational GC** - Currently mark & sweep only
+- [ ] **Work Stealing** - Currently basic worker pool
+- [ ] **REPL tab completion** (M)
+- [ ] **Hot reload** (M)
+- [ ] **Debugger** - Step through code
+- [ ] **LSP** - Language Server Protocol for editor integration
+
+---
+
+## P3: Low - Real-Time / Game Server Features (Layer 6)
+
+- [ ] **Fixed Timestep** - Accumulator-based tick loop
+- [ ] **SOA Keyword** - Struct-of-arrays layout for cache efficiency
+- [ ] **Delta Compression** - Snapshot diff for networking
+- [ ] **Spatial Index** - Grid/octree for interest management
+- [ ] **NetChannel** - Quake-style reliable UDP layer
+
+---
+
+## Completed
+
+- [x] Core Parser (2.9k LOC) - S-expressions, Q-expressions, numbers, strings, symbols
+- [x] Tree-Walker Evaluator - Environments, closures, 75+ builtins
+- [x] Memory Allocators - Arena, slab, GC heap with mark & sweep
+- [x] Continuations - shift/reset style delimited continuations
+- [x] Concurrency - Thread pool, futures, promises, ARC boxes
+- [x] HTTP/2 Client & Server - nghttp2 integration with TLS
+- [x] Load Shedding - Backpressure and admission control
+- [x] Metrics System - V2 registry with Prometheus/JSON export
+- [x] Test Framework - C tests (testing.{c,h}) and Valk tests (test.valk)
+- [x] Logging System - Log levels, VALK_LOG env var
+- [x] Debug Dashboard - Real-time metrics via SSE
+
+---
+
+## Notes
+
+- Run `make todo` to see branch-specific TODOs
+- Run `make coverage` to check test coverage status
+- Run `make test-all` for comprehensive tests with and without ASAN
+- Coverage target: 90% line, 85% branch for all src/ files
