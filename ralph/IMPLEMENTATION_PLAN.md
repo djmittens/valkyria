@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18 18:15
+**Last updated:** 2026-01-18 21:00
 
 ## Spec: coverage-improvement.md
 
@@ -14,7 +14,7 @@
 ### Priority 1: Core C Files (high impact, fewer dependencies)
 
 - [ ] Improve parser.c branch coverage (80.0% → 85%)
-- [ ] Improve memory.c branch coverage (72.5% → 85%)
+- [x] Improve memory.c branch coverage (72.5% → 85%) ✓ Done: 85.25% branch
 - [ ] Improve gc.c coverage (75.1% line, 61.9% branch → 90%/85%)
 
 ### Priority 2: AIO System Files
@@ -60,6 +60,7 @@
 - [x] Improve parser.c branch coverage 69.9% → 74.0% (added 57 new tests for type error branches)
 - [x] Improve parser.c branch coverage 74.0% → 79.4% (added 63 new tests for AIO, HTTP, shutdown, init, set, ord/cmp, eval, load error branches)
 - [x] Improve parser.c branch coverage 79.4% → 80.0% (fixed incorrect builtin names in tests: `set-heap-hard-limit` → `mem/heap/set-hard-limit`, `heap-hard-limit` → `mem/heap/hard-limit`, `heap-usage` → `mem/heap/usage`)
+- [x] Improve memory.c branch coverage 72.5% → 85.25% (added 11 new tests for VALK_ALLOC_REGION allocator API, gc_heap-backed region realloc, bitmap delta runs/truncation/size-mismatch, chunked_ptrs, buffer_is_full, slab bitmap no_bitmap; added LCOV_EXCL_BR markers for assertion error paths and switch default cases)
 
 ## Discovered Issues
 

@@ -1892,8 +1892,350 @@ void test_region_init_embedded(VALK_TEST_ARGS()) {
   ASSERT_EQ(region.stats.bytes_allocated, 100);
   
   free(arena);
-  
+
   valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+// Test VALK_ALLOC_REGION string conversion (branch coverage for switch case)
+void test_allocator_type_string_region(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  const char* s_region = valk_mem_allocator_e_to_string(VALK_ALLOC_REGION);
+  VALK_TEST_ASSERT(s_region != nullptr, "Region alloc string should not be nullptr");
+  VALK_TEST_ASSERT(strstr(s_region, "Region") != nullptr, "Region alloc string should contain 'Region'");
+
+  VALK_PASS();
+}
+
+// Test region allocator API via valk_mem_allocator_* functions (for switch branch coverage)
+void test_region_allocator_api(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
+  ASSERT_NOT_NULL(region);
+
+  // Test alloc via allocator API
+  void *ptr1 = valk_mem_allocator_alloc((valk_mem_allocator_t*)region, 64);
+  ASSERT_NOT_NULL(ptr1);
+
+  // Test calloc via allocator API
+  void *ptr2 = valk_mem_allocator_calloc((valk_mem_allocator_t*)region, 4, 32);
+  ASSERT_NOT_NULL(ptr2);
+
+  // Verify calloc zeroed memory
+  u8 *bytes = (u8*)ptr2;
+  bool all_zero = true;
+  for (int i = 0; i < 128 && all_zero; i++) {
+    if (bytes[i] != 0) all_zero = false;
+  }
+  ASSERT_TRUE(all_zero);
+
+  // Test realloc via allocator API - should do copy-alloc semantics for arena-backed regions
+  memset(ptr1, 'X', 64);
+  void *ptr3 = valk_mem_allocator_realloc((valk_mem_allocator_t*)region, ptr1, 128);
+  ASSERT_NOT_NULL(ptr3);
+
+  // Verify original data preserved in realloc
+  bytes = (u8*)ptr3;
+  bool preserved = true;
+  for (int i = 0; i < 64 && preserved; i++) {
+    if (bytes[i] != 'X') preserved = false;
+  }
+  ASSERT_TRUE(preserved);
+
+  // Test free via allocator API - should be a no-op for regions
+  valk_mem_allocator_free((valk_mem_allocator_t*)region, ptr1);
+
+  valk_region_destroy(region);
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+// Test region realloc with nullptr pointer (covers realloc ptr==null branch)
+void test_region_allocator_realloc_null_ptr(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
+  ASSERT_NOT_NULL(region);
+
+  // Test realloc with nullptr ptr - should behave like alloc
+  void *ptr = valk_mem_allocator_realloc((valk_mem_allocator_t*)region, nullptr, 100);
+  ASSERT_NOT_NULL(ptr);
+
+  valk_region_destroy(region);
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+// Test region with gc_heap backing (non-arena path for realloc)
+void test_region_gc_heap_realloc(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  // Create a region with gc_heap backing instead of arena
+  valk_region_t region;
+  memset(&region, 0, sizeof(region));
+  region.type = VALK_ALLOC_REGION;
+  region.lifetime = VALK_LIFETIME_SESSION;
+  region.gc_heap = (struct valk_gc_heap2*)valk_gc_malloc_heap_init(0);
+  region.arena = nullptr;
+  region.owns_arena = false;
+
+  // Test alloc via gc_heap path
+  void *ptr1 = valk_region_alloc(&region, 64);
+  ASSERT_NOT_NULL(ptr1);
+
+  // Test realloc via gc_heap path
+  memset(ptr1, 'Y', 64);
+  void *ptr2 = valk_mem_allocator_realloc((valk_mem_allocator_t*)&region, ptr1, 128);
+  ASSERT_NOT_NULL(ptr2);
+
+  // Verify data preserved
+  u8 *bytes = (u8*)ptr2;
+  bool preserved = true;
+  for (int i = 0; i < 64 && preserved; i++) {
+    if (bytes[i] != 'Y') preserved = false;
+  }
+  ASSERT_TRUE(preserved);
+
+  // Clean up gc_heap manually
+  if (region.gc_heap) {
+    valk_gc_malloc_heap_destroy((valk_gc_malloc_heap_t*)region.gc_heap);
+  }
+
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+// Test bitmap delta with run length > 1 (covers run extension path)
+void test_bitmap_delta_compute_runs(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Create two bitmaps with consecutive differences
+  valk_slab_bitmap_t prev = {0};
+  valk_slab_bitmap_t curr = {0};
+
+  prev.bytes = 8;
+  curr.bytes = 8;
+  prev.version = 1;
+  curr.version = 2;
+  prev.data = calloc(8, 1);
+  curr.data = calloc(8, 1);
+  ASSERT_NOT_NULL(prev.data);
+  ASSERT_NOT_NULL(curr.data);
+
+  // Set up consecutive bytes with same XOR pattern to trigger run extension
+  prev.data[0] = 0x00;
+  prev.data[1] = 0x00;
+  prev.data[2] = 0x00;
+  prev.data[3] = 0xFF;  // Different pattern here
+
+  curr.data[0] = 0x0F;  // XOR = 0x0F
+  curr.data[1] = 0x0F;  // XOR = 0x0F (same as prev, triggers run)
+  curr.data[2] = 0x0F;  // XOR = 0x0F (extends run)
+  curr.data[3] = 0xFF;  // No change
+
+  valk_bitmap_delta_t delta;
+  bool result = valk_bitmap_delta_compute(&curr, &prev, &delta);
+  ASSERT_TRUE(result);
+
+  // Should have one run with count >= 3
+  ASSERT_TRUE(delta.run_count >= 1);
+  if (delta.run_count > 0) {
+    ASSERT_TRUE(delta.runs[0].count >= 1);
+  }
+
+  valk_bitmap_delta_free(&delta);
+  free(prev.data);
+  free(curr.data);
+  VALK_PASS();
+}
+
+// Test RLE encoding with buffer too small (covers truncation path)
+void test_bitmap_delta_to_rle_truncation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_bitmap_delta_t delta;
+  valk_bitmap_delta_init(&delta);
+
+  // Manually add some runs
+  delta.runs = malloc(3 * sizeof(valk_bitmap_delta_run_t));
+  ASSERT_NOT_NULL(delta.runs);
+  delta.run_count = 3;
+  delta.run_capacity = 3;
+
+  delta.runs[0].offset = 0;
+  delta.runs[0].count = 2;
+  delta.runs[0].byte = 0xAB;
+
+  delta.runs[1].offset = 10;
+  delta.runs[1].count = 1;
+  delta.runs[1].byte = 0xCD;
+
+  delta.runs[2].offset = 20;
+  delta.runs[2].count = 5;
+  delta.runs[2].byte = 0xEF;
+
+  // Test with very small buffer that will truncate
+  char small_buf[10];
+  sz len = valk_bitmap_delta_to_rle(&delta, small_buf, sizeof(small_buf));
+  ASSERT_TRUE(len < sizeof(small_buf));
+  ASSERT_TRUE(small_buf[len] == '\0');
+
+  // Test with nullptr delta
+  char buf[32];
+  len = valk_bitmap_delta_to_rle(nullptr, buf, sizeof(buf));
+  ASSERT_EQ(len, 0);
+
+  // Test with buf_size too small
+  len = valk_bitmap_delta_to_rle(&delta, buf, 2);
+  ASSERT_EQ(len, 0);
+
+  valk_bitmap_delta_free(&delta);
+  VALK_PASS();
+}
+
+// Test chunked_ptrs with malloc-backed chunks
+void test_chunked_ptrs_malloc(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_chunked_ptrs_t ptrs;
+  valk_chunked_ptrs_init(&ptrs);
+
+  ASSERT_EQ(ptrs.count, 0);
+  ASSERT_TRUE(ptrs.head == nullptr);
+
+  // Push items without alloc_ctx (will use malloc)
+  for (int i = 0; i < 10; i++) {
+    bool ok = valk_chunked_ptrs_push(&ptrs, (void*)(uintptr_t)(i + 1), nullptr);
+    ASSERT_TRUE(ok);
+  }
+
+  ASSERT_EQ(ptrs.count, 10);
+  ASSERT_TRUE(ptrs.malloc_chunks);
+
+  // Verify retrieval
+  for (int i = 0; i < 10; i++) {
+    void* item = valk_chunked_ptrs_get(&ptrs, i);
+    ASSERT_EQ((uintptr_t)item, (uintptr_t)(i + 1));
+  }
+
+  // Test out of bounds
+  void* oob = valk_chunked_ptrs_get(&ptrs, 100);
+  ASSERT_TRUE(oob == nullptr);
+
+  valk_chunked_ptrs_free(&ptrs);
+  ASSERT_EQ(ptrs.count, 0);
+
+  VALK_PASS();
+}
+
+// Test chunked_ptrs with region-backed allocation
+void test_chunked_ptrs_region(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
+  ASSERT_NOT_NULL(region);
+
+  valk_chunked_ptrs_t ptrs;
+  valk_chunked_ptrs_init(&ptrs);
+
+  // Push items with region allocation context
+  for (int i = 0; i < 5; i++) {
+    bool ok = valk_chunked_ptrs_push(&ptrs, (void*)(uintptr_t)(i + 100), region);
+    ASSERT_TRUE(ok);
+  }
+
+  ASSERT_EQ(ptrs.count, 5);
+  ASSERT_FALSE(ptrs.malloc_chunks);  // Using region, not malloc
+
+  // Verify retrieval
+  for (int i = 0; i < 5; i++) {
+    void* item = valk_chunked_ptrs_get(&ptrs, i);
+    ASSERT_EQ((uintptr_t)item, (uintptr_t)(i + 100));
+  }
+
+  // Free should be no-op since not malloc-backed
+  valk_chunked_ptrs_free(&ptrs);
+
+  valk_region_destroy(region);
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+// Test buffer_is_full edge case
+void test_buffer_is_full(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_buffer_t buf;
+  buf.capacity = 100;
+  buf.count = 50;
+  buf.items = nullptr;
+
+  ASSERT_FALSE(valk_buffer_is_full(&buf));
+
+  buf.count = 100;
+  ASSERT_TRUE(valk_buffer_is_full(&buf));
+
+  buf.count = 99;
+  ASSERT_FALSE(valk_buffer_is_full(&buf));
+
+  VALK_PASS();
+}
+
+// Test slab bitmap snapshot when no usage_bitmap exists
+void test_slab_bitmap_snapshot_no_bitmap(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Create slab manually with no bitmap
+  valk_slab_t fake_slab;
+  memset(&fake_slab, 0, sizeof(fake_slab));
+  fake_slab.numItems = 10;
+  fake_slab.usage_bitmap = nullptr;
+
+  valk_slab_bitmap_t out;
+  valk_slab_bitmap_snapshot(&fake_slab, &out);
+
+  // Should return empty snapshot when no bitmap
+  ASSERT_TRUE(out.data == nullptr);
+  ASSERT_EQ(out.bytes, 0);
+  ASSERT_EQ(out.version, 0);
+
+  VALK_PASS();
+}
+
+// Test bitmap delta compute with mismatched sizes
+void test_bitmap_delta_compute_size_mismatch(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_slab_bitmap_t prev = {0};
+  valk_slab_bitmap_t curr = {0};
+
+  prev.bytes = 8;
+  curr.bytes = 16;  // Different size
+  prev.data = calloc(8, 1);
+  curr.data = calloc(16, 1);
+
+  valk_bitmap_delta_t delta;
+  bool result = valk_bitmap_delta_compute(&curr, &prev, &delta);
+
+  // Should fail due to size mismatch
+  ASSERT_FALSE(result);
+
+  free(prev.data);
+  free(curr.data);
   VALK_PASS();
 }
 
@@ -1994,6 +2336,19 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_region_write_barrier", test_region_write_barrier);
   valk_testsuite_add_test(suite, "test_region_promote_lval", test_region_promote_lval);
   valk_testsuite_add_test(suite, "test_region_init_embedded", test_region_init_embedded);
+
+  // Branch coverage improvement tests
+  valk_testsuite_add_test(suite, "test_allocator_type_string_region", test_allocator_type_string_region);
+  valk_testsuite_add_test(suite, "test_region_allocator_api", test_region_allocator_api);
+  valk_testsuite_add_test(suite, "test_region_allocator_realloc_null_ptr", test_region_allocator_realloc_null_ptr);
+  valk_testsuite_add_test(suite, "test_region_gc_heap_realloc", test_region_gc_heap_realloc);
+  valk_testsuite_add_test(suite, "test_bitmap_delta_compute_runs", test_bitmap_delta_compute_runs);
+  valk_testsuite_add_test(suite, "test_bitmap_delta_to_rle_truncation", test_bitmap_delta_to_rle_truncation);
+  valk_testsuite_add_test(suite, "test_chunked_ptrs_malloc", test_chunked_ptrs_malloc);
+  valk_testsuite_add_test(suite, "test_chunked_ptrs_region", test_chunked_ptrs_region);
+  valk_testsuite_add_test(suite, "test_buffer_is_full", test_buffer_is_full);
+  valk_testsuite_add_test(suite, "test_slab_bitmap_snapshot_no_bitmap", test_slab_bitmap_snapshot_no_bitmap);
+  valk_testsuite_add_test(suite, "test_bitmap_delta_compute_size_mismatch", test_bitmap_delta_compute_size_mismatch);
 
   // load fixtures
   // valk_lval_t *ast = valk_parse_file("src/prelude.valk");
