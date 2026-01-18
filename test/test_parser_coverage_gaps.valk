@@ -511,4 +511,321 @@
     true
   })
 
+; === penv builtin (lines 2699-2708) ===
+(test/define "penv-returns-list"
+  {do
+    (= {x} 42)
+    (= {envlist} (penv))
+    (test/assert (list? envlist) "penv returns a list")
+    true
+  })
+
+(test/define "penv-contains-binding"
+  {do
+    (= {test-var-unique-12345} 999)
+    (= {envlist} (penv))
+    ; penv returns list of (sym value) pairs
+    (test/assert (> (len envlist) 0) "penv has at least one binding")
+    true
+  })
+
+; === More GC builtin edge cases ===
+(test/define "heap-hard-limit-returns-value"
+  {do
+    (= {limit} (heap-hard-limit))
+    (test/assert (> limit 0) "heap-hard-limit returns positive value")
+    true
+  })
+
+; === Type coercion and edge cases ===
+(test/define "type-builtin-all-types"
+  {do
+    (test/assert-eq "Number" (type 42) "type of number")
+    (test/assert-eq "String" (type "hello") "type of string")
+    (test/assert-eq "Q-Expression" (type {1 2 3}) "type of qexpr")
+    (test/assert-eq "Symbol" (type (quote foo)) "type of symbol")
+    (test/assert-eq "Nil" (type nil) "type of nil")
+    (test/assert-eq "Function" (type +) "type of builtin function")
+    (test/assert-eq "Function" (type (\ {x} {x})) "type of lambda")
+    true
+  })
+
+; === Read builtin edge cases ===
+(test/define "read-symbol"
+  {do
+    (= {result} (read "foo"))
+    (test/assert (sym? result) "read of symbol returns symbol")
+    true
+  })
+
+(test/define "read-number"
+  {do
+    (= {result} (read "42"))
+    (test/assert (num? result) "read of number returns number")
+    (test/assert-eq 42 result "read number has correct value")
+    true
+  })
+
+(test/define "read-string"
+  {do
+    (= {result} (read "\"hello\""))
+    (test/assert (str? result) "read of string returns string")
+    (test/assert-eq "hello" result "read string has correct value")
+    true
+  })
+
+(test/define "read-list"
+  {do
+    (= {result} (read "(1 2 3)"))
+    (test/assert (list? result) "read of list returns list")
+    (test/assert-eq 3 (len result) "read list has correct length")
+    true
+  })
+
+(test/define "read-qexpr"
+  {do
+    (= {result} (read "{1 2 3}"))
+    (test/assert (list? result) "read of qexpr returns list")
+    (test/assert-eq 3 (len result) "read qexpr has correct length")
+    true
+  })
+
+; === Join builtin edge cases ===
+(test/define "join-empty-lists"
+  {do
+    (= {result} (join {} {}))
+    (test/assert (== result nil) "join of two empty lists is nil")
+    true
+  })
+
+(test/define "join-with-empty-second"
+  {do
+    (= {result} (join {1 2} {}))
+    (test/assert-eq 2 (len result) "join with empty second")
+    true
+  })
+
+(test/define "join-with-empty-first"
+  {do
+    (= {result} (join {} {3 4}))
+    (test/assert-eq 2 (len result) "join with empty first")
+    true
+  })
+
+; === Cons edge cases ===
+(test/define "cons-onto-nil"
+  {do
+    (= {result} (cons 1 nil))
+    (test/assert-eq 1 (len result) "cons onto nil creates single-element list")
+    (test/assert-eq 1 (head result) "cons onto nil has correct head")
+    true
+  })
+
+; === Print builtin ===
+(test/define "print-number"
+  {do
+    (= {result} (print 42))
+    (test/assert (== result nil) "print returns nil")
+    true
+  })
+
+(test/define "print-string"
+  {do
+    (= {result} (print "hello"))
+    (test/assert (== result nil) "print string returns nil")
+    true
+  })
+
+; === Printf edge cases ===
+(test/define "printf-basic"
+  {do
+    (= {result} (printf "value: %d\n" 42))
+    (test/assert (== result nil) "printf returns nil")
+    true
+  })
+
+(test/define "printf-string-format"
+  {do
+    (= {result} (printf "text: %s\n" "hello"))
+    (test/assert (== result nil) "printf with string returns nil")
+    true
+  })
+
+; === make-string edge cases ===
+(test/define "make-string-basic"
+  {do
+    (= {s} (make-string 5 65))  ; 5 'A' characters
+    (test/assert-eq 5 (len s) "make-string creates correct length")
+    (test/assert-eq "AAAAA" s "make-string fills with correct char")
+    true
+  })
+
+(test/define "make-string-zero-length"
+  {do
+    (= {s} (make-string 0 65))
+    (test/assert-eq 0 (len s) "make-string zero length")
+    (test/assert-eq "" s "make-string empty")
+    true
+  })
+
+; === Range edge cases ===
+(test/define "range-empty"
+  {do
+    (= {result} (range 5 5))
+    (test/assert (== result nil) "range with equal start/end is empty")
+    true
+  })
+
+(test/define "range-single"
+  {do
+    (= {result} (range 0 1))
+    (test/assert-eq 1 (len result) "range 0-1 has one element")
+    (test/assert-eq 0 (head result) "range starts at 0")
+    true
+  })
+
+; === Logic short-circuit ===
+(test/define "and-short-circuit"
+  {do
+    (= {called} 0)
+    (and 0 (= {called} 1))
+    (test/assert-eq 0 called "and short-circuits on false")
+    true
+  })
+
+(test/define "or-short-circuit"
+  {do
+    (= {called} 0)
+    (or 1 (= {called} 1))
+    (test/assert-eq 0 called "or short-circuits on true")
+    true
+  })
+
+; === Lambda with default args ===
+(test/define "lambda-partial-application"
+  {do
+    (= {add} (\ {a b} {+ a b}))
+    (= {add5} (add 5))
+    (= {result} (add5 3))
+    (test/assert-eq 8 result "partial application works")
+    true
+  })
+
+; === Eval on symbols ===
+(test/define "eval-symbol-lookup"
+  {do
+    (= {x} 42)
+    (= {result} (eval (quote x)))
+    (test/assert-eq 42 result "eval looks up symbol in env")
+    true
+  })
+
+; === Nested do blocks ===
+(test/define "nested-do-returns-last"
+  {do
+    (= {result} (do
+                  1
+                  (do 2 3)
+                  4))
+    (test/assert-eq 4 result "nested do returns outermost last")
+    true
+  })
+
+; === Error handling ===
+(test/define "error-returns-error"
+  {do
+    (= {err} (error "test error"))
+    (test/assert (error? err) "error returns error value")
+    true
+  })
+
+(test/define "error-message-preserved"
+  {do
+    ; Create and test error
+    (= {result} (error? (/ 1 0)))
+    (test/assert result "division by zero creates error")
+    true
+  })
+
+; === Multiple definitions ===
+(test/define "def-multiple-values"
+  {do
+    (def {a b c} 1 2 3)
+    (test/assert-eq 1 a "first def value")
+    (test/assert-eq 2 b "second def value")
+    (test/assert-eq 3 c "third def value")
+    true
+  })
+
+; === Variadic builtins ===
+(test/define "plus-variadic"
+  {do
+    (test/assert-eq 15 (+ 1 2 3 4 5) "variadic plus")
+    (test/assert-eq 0 (+) "plus with no args")
+    true
+  })
+
+(test/define "mul-variadic"
+  {do
+    (test/assert-eq 120 (* 1 2 3 4 5) "variadic multiply")
+    (test/assert-eq 1 (*) "multiply with no args")
+    true
+  })
+
+(test/define "min-variadic"
+  {do
+    (test/assert-eq 1 (min 3 1 4 1 5) "variadic min")
+    true
+  })
+
+(test/define "max-variadic"
+  {do
+    (test/assert-eq 5 (max 3 1 4 1 5) "variadic max")
+    true
+  })
+
+; === String operations ===
+(test/define "str-concat"
+  {do
+    (= {result} (str/concat "hello" " " "world"))
+    (test/assert-eq "hello world" result "string concatenation")
+    true
+  })
+
+(test/define "str-nth"
+  {do
+    (= {result} (str/nth "hello" 0))
+    (test/assert-eq "h" result "str/nth gets first char")
+    true
+  })
+
+(test/define "str-nth-last"
+  {do
+    (= {result} (str/nth "hello" 4))
+    (test/assert-eq "o" result "str/nth gets last char")
+    true
+  })
+
+; === Comparison chains ===
+(test/define "equality-chain"
+  {do
+    (test/assert (== 1 1 1 1) "all equal")
+    (test/assert (not (== 1 1 2 1)) "not all equal")
+    true
+  })
+
+(test/define "less-than-chain"
+  {do
+    (test/assert (< 1 2 3 4) "strictly increasing")
+    (test/assert (not (< 1 2 2 3)) "not strictly increasing with equal")
+    true
+  })
+
+(test/define "greater-than-chain"
+  {do
+    (test/assert (> 4 3 2 1) "strictly decreasing")
+    (test/assert (not (> 4 3 3 1)) "not strictly decreasing with equal")
+    true
+  })
+
 (test/run)

@@ -249,6 +249,10 @@ define run_tests_valk
 	$(1)/valk test/test_parser_builtin_coverage.valk
 	$(1)/valk test/test_atom_builtins.valk
 	$(1)/valk test/test_error_handler_edge_cases.valk
+	$(1)/valk test/test_parser_coverage_gaps.valk
+	$(1)/valk test/test_parser_continuations.valk
+	$(1)/valk test/test_parser_branch_coverage.valk
+	$(1)/valk test/test_parser_coverage_supplement.valk
 
 	$(1)/valk test/stress/test_gc_stress.valk
 	$(1)/valk test/stress/test_networking_stress.valk
