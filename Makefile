@@ -170,6 +170,7 @@ define run_tests_c
 	$(1)/test_memory_unit
 	$(1)/test_log
 	$(1)/test_parser_unit
+	$(1)/test_parser_errors
 	if [ -f $(1)/test_source_loc_unit ]; then $(1)/test_source_loc_unit; fi
 	$(1)/test_pressure
 	$(1)/test_conn_io

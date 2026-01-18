@@ -968,6 +968,689 @@ static void test_string_free_on_copy(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static void test_lambda_copy(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Create a lambda using eval (body must be a Q-expr)
+  valk_lval_t *lambda = parse_and_eval("(\\ {x} {+ x 1})");
+  ASSERT_LVAL_TYPE(lambda, LVAL_FUN);
+  ASSERT_TRUE(lambda->fun.builtin == nullptr);  // Not a builtin
+
+  // Copy the lambda
+  valk_lval_t *copy = valk_lval_copy(lambda);
+  ASSERT_LVAL_TYPE(copy, LVAL_FUN);
+  ASSERT_TRUE(copy->fun.builtin == nullptr);
+  // Lambda copies should share the same body/formals/env pointers (shallow copy)
+  ASSERT_TRUE(copy->fun.env == lambda->fun.env);
+  ASSERT_TRUE(copy->fun.body == lambda->fun.body);
+  ASSERT_TRUE(copy->fun.formals == lambda->fun.formals);
+
+  VALK_PASS();
+}
+
+static void test_builtin_copy(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Get a builtin function
+  valk_lval_t *builtin = parse_and_eval("+");
+  ASSERT_LVAL_TYPE(builtin, LVAL_FUN);
+  ASSERT_TRUE(builtin->fun.builtin != nullptr);  // Is a builtin
+
+  // Copy the builtin
+  valk_lval_t *copy = valk_lval_copy(builtin);
+  ASSERT_LVAL_TYPE(copy, LVAL_FUN);
+  ASSERT_TRUE(copy->fun.builtin == builtin->fun.builtin);
+
+  VALK_PASS();
+}
+
+static void test_nil_copy(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *nil = valk_lval_nil();
+  valk_lval_t *copy = valk_lval_copy(nil);
+  ASSERT_LVAL_TYPE(copy, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_error_copy(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Create a long error message to test truncation
+  char long_msg[2100];
+  memset(long_msg, 'x', 2050);
+  long_msg[2050] = '\0';
+
+  valk_lval_t *err = valk_lval_err("%s", long_msg);
+  ASSERT_LVAL_TYPE(err, LVAL_ERR);
+
+  valk_lval_t *copy = valk_lval_copy(err);
+  ASSERT_LVAL_TYPE(copy, LVAL_ERR);
+  // Error message should be truncated to 2000 chars
+  ASSERT_TRUE(strlen(copy->str) <= 2000);
+  // Original and copy should be different strings (not aliased)
+  ASSERT_TRUE(copy->str != err->str);
+
+  VALK_PASS();
+}
+
+static void test_symbol_copy_truncation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // Create a long symbol to test truncation (symbols are truncated to 200 chars)
+  char long_sym[250];
+  memset(long_sym, 'a', 210);
+  long_sym[210] = '\0';
+
+  valk_lval_t *sym = valk_lval_sym(long_sym);
+  ASSERT_LVAL_TYPE(sym, LVAL_SYM);
+
+  valk_lval_t *copy = valk_lval_copy(sym);
+  ASSERT_LVAL_TYPE(copy, LVAL_SYM);
+  // Symbol should be truncated to 200 chars
+  ASSERT_TRUE(strlen(copy->str) <= 200);
+  // Original and copy should be different strings
+  ASSERT_TRUE(copy->str != sym->str);
+
+  VALK_PASS();
+}
+
+static void test_cons_copy(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *list = valk_lval_cons(valk_lval_num(1),
+                       valk_lval_cons(valk_lval_num(2), valk_lval_nil()));
+  ASSERT_LVAL_TYPE(list, LVAL_CONS);
+
+  valk_lval_t *copy = valk_lval_copy(list);
+  ASSERT_LVAL_TYPE(copy, LVAL_CONS);
+  // Shallow copy - head/tail should be same pointers
+  ASSERT_TRUE(copy->cons.head == list->cons.head);
+  ASSERT_TRUE(copy->cons.tail == list->cons.tail);
+
+  VALK_PASS();
+}
+
+static void test_number_copy(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *num = valk_lval_num(42);
+  valk_lval_t *copy = valk_lval_copy(num);
+  ASSERT_LVAL_TYPE(copy, LVAL_NUM);
+  ASSERT_EQ(copy->num, 42);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Builtin Type Error Tests (for branch coverage)
+// ============================================================================
+
+static void test_repeat_wrong_count_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(repeat (\\ {_} 1) \"not-a-number\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_repeat_wrong_arg_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(repeat (\\ {_} 1))");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_str_to_num_invalid(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str->num \"not-a-number\")");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "Invalid number");
+
+  VALK_PASS();
+}
+
+static void test_str_to_num_overflow(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str->num \"99999999999999999999999999999\")");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "out of range");
+
+  VALK_PASS();
+}
+
+static void test_str_to_num_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str->num 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_read_builtin_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(read 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_read_file_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(read-file 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_read_file_not_found(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(read-file \"/nonexistent/path/file.txt\")");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "Could not open");
+
+  VALK_PASS();
+}
+
+static void test_atom_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(atom \"not-a-number\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_atom_get_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(atom/get 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_atom_set_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(atom/set 42 1)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_atom_add_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(atom/add 42 1)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_atom_sub_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(atom/sub 42 1)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_http2_request_wrong_types(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(http2/request 1 2 3 4)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_http2_request_add_header_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(http2/request-add-header 42 \"name\" \"value\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_http2_response_body_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(http2/response-body 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_http2_response_status_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(http2/response-status 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_http2_response_headers_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(http2/response-headers 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_ord_wrong_type_first(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(> \"a\" 1)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_ord_wrong_type_second(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(> 1 \"a\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_cmp_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(== 1)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_lambda_non_symbol_formal(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(\\ {42} 1)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_def_non_symbol_in_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(def {x 42} 1 2)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_load_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(load 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_penv(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(penv)");
+  ASSERT_TRUE(LVAL_TYPE(result) == LVAL_CONS || LVAL_TYPE(result) == LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_list_empty(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(list)");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_list_with_elements(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(list 1 2 3)");
+  ASSERT_LVAL_TYPE(result, LVAL_CONS);
+  ASSERT_EQ(valk_lval_list_count(result), 3);
+
+  VALK_PASS();
+}
+
+static void test_comparison_operators(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *r1 = parse_and_eval("(> 5 3)");
+  ASSERT_LVAL_NUM(r1, 1);
+
+  valk_lval_t *r2 = parse_and_eval("(< 3 5)");
+  ASSERT_LVAL_NUM(r2, 1);
+
+  valk_lval_t *r3 = parse_and_eval("(>= 5 5)");
+  ASSERT_LVAL_NUM(r3, 1);
+
+  valk_lval_t *r4 = parse_and_eval("(<= 5 5)");
+  ASSERT_LVAL_NUM(r4, 1);
+
+  valk_lval_t *r5 = parse_and_eval("(!= 1 2)");
+  ASSERT_LVAL_NUM(r5, 1);
+
+  VALK_PASS();
+}
+
+static void test_lambda_with_nil_formals(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("((\\ {} {42}))");
+  ASSERT_LVAL_NUM(result, 42);
+
+  VALK_PASS();
+}
+
+static void test_def_with_qexpr(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(def {testvar123} 42)");
+  ASSERT_TRUE(LVAL_TYPE(result) == LVAL_NIL);
+
+  valk_lval_t *val = parse_and_eval("testvar123");
+  ASSERT_LVAL_NUM(val, 42);
+
+  VALK_PASS();
+}
+
+static void test_if_with_nil_branch(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(if 1 () ())");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_if_with_qexpr_branches(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(if 1 {(+ 1 2)} {0})");
+  ASSERT_LVAL_NUM(result, 3);
+
+  VALK_PASS();
+}
+
+static void test_if_non_numeric_cond(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(if \"not-a-number\" {1} {2})");
+  ASSERT_LVAL_NUM(result, 1);
+
+  VALK_PASS();
+}
+
+static void test_join_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(join 1 2)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_cons_builtin(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(cons 1 {2 3})");
+  ASSERT_LVAL_TYPE(result, LVAL_CONS);
+  ASSERT_EQ(valk_lval_list_count(result), 3);
+
+  VALK_PASS();
+}
+
+static void test_nth_out_of_bounds(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(nth {1 2 3} 10)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_nth_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(nth 42 0)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_len_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(len 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_map_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(map 42 {1 2 3})");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_filter_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(filter 42 {1 2 3})");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_foldl_wrong_types(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(foldl 42 0 {1 2 3})");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_range_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(range \"a\" 10)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_str_replace_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/replace 42 \"a\" \"b\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_str_split_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/split 42 \",\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_str_join_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/join 42 \",\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_str_concat_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/concat 42 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_str_length_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/length 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_str_substring_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/substring 42 0 5)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_error_builtin(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(error \"custom error message\")");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "custom error message");
+
+  VALK_PASS();
+}
+
+static void test_error_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(error 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_print_builtin(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(print 42)");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_println_builtin(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(println \"%d\" 42)");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+
+static void test_set_heap_hard_limit_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(set-heap-hard-limit \"not-a-number\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_set_heap_hard_limit_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(set-heap-hard-limit)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -1074,6 +1757,68 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_comment_skipping", test_comment_skipping);
   valk_testsuite_add_test(suite, "test_sexpr_read_error_propagation", test_sexpr_read_error_propagation);
   valk_testsuite_add_test(suite, "test_string_free_on_copy", test_string_free_on_copy);
+  valk_testsuite_add_test(suite, "test_lambda_copy", test_lambda_copy);
+  valk_testsuite_add_test(suite, "test_builtin_copy", test_builtin_copy);
+  valk_testsuite_add_test(suite, "test_nil_copy", test_nil_copy);
+  valk_testsuite_add_test(suite, "test_error_copy", test_error_copy);
+  valk_testsuite_add_test(suite, "test_symbol_copy_truncation", test_symbol_copy_truncation);
+  valk_testsuite_add_test(suite, "test_cons_copy", test_cons_copy);
+  valk_testsuite_add_test(suite, "test_number_copy", test_number_copy);
+
+  valk_testsuite_add_test(suite, "test_repeat_wrong_count_type", test_repeat_wrong_count_type);
+  valk_testsuite_add_test(suite, "test_repeat_wrong_arg_count", test_repeat_wrong_arg_count);
+  valk_testsuite_add_test(suite, "test_str_to_num_invalid", test_str_to_num_invalid);
+  valk_testsuite_add_test(suite, "test_str_to_num_overflow", test_str_to_num_overflow);
+  valk_testsuite_add_test(suite, "test_str_to_num_wrong_type", test_str_to_num_wrong_type);
+  valk_testsuite_add_test(suite, "test_read_builtin_wrong_type", test_read_builtin_wrong_type);
+  valk_testsuite_add_test(suite, "test_read_file_wrong_type", test_read_file_wrong_type);
+  valk_testsuite_add_test(suite, "test_read_file_not_found", test_read_file_not_found);
+  valk_testsuite_add_test(suite, "test_atom_wrong_type", test_atom_wrong_type);
+  valk_testsuite_add_test(suite, "test_atom_get_wrong_type", test_atom_get_wrong_type);
+  valk_testsuite_add_test(suite, "test_atom_set_wrong_type", test_atom_set_wrong_type);
+  valk_testsuite_add_test(suite, "test_atom_add_wrong_type", test_atom_add_wrong_type);
+  valk_testsuite_add_test(suite, "test_atom_sub_wrong_type", test_atom_sub_wrong_type);
+  valk_testsuite_add_test(suite, "test_http2_request_wrong_types", test_http2_request_wrong_types);
+  valk_testsuite_add_test(suite, "test_http2_request_add_header_wrong_type", test_http2_request_add_header_wrong_type);
+  valk_testsuite_add_test(suite, "test_http2_response_body_wrong_type", test_http2_response_body_wrong_type);
+  valk_testsuite_add_test(suite, "test_http2_response_status_wrong_type", test_http2_response_status_wrong_type);
+  valk_testsuite_add_test(suite, "test_http2_response_headers_wrong_type", test_http2_response_headers_wrong_type);
+  valk_testsuite_add_test(suite, "test_ord_wrong_type_first", test_ord_wrong_type_first);
+  valk_testsuite_add_test(suite, "test_ord_wrong_type_second", test_ord_wrong_type_second);
+  valk_testsuite_add_test(suite, "test_cmp_wrong_count", test_cmp_wrong_count);
+  valk_testsuite_add_test(suite, "test_lambda_non_symbol_formal", test_lambda_non_symbol_formal);
+  valk_testsuite_add_test(suite, "test_def_non_symbol_in_list", test_def_non_symbol_in_list);
+  valk_testsuite_add_test(suite, "test_load_wrong_type", test_load_wrong_type);
+  valk_testsuite_add_test(suite, "test_penv", test_penv);
+  valk_testsuite_add_test(suite, "test_list_empty", test_list_empty);
+  valk_testsuite_add_test(suite, "test_list_with_elements", test_list_with_elements);
+  valk_testsuite_add_test(suite, "test_comparison_operators", test_comparison_operators);
+  valk_testsuite_add_test(suite, "test_lambda_with_nil_formals", test_lambda_with_nil_formals);
+  valk_testsuite_add_test(suite, "test_def_with_qexpr", test_def_with_qexpr);
+  valk_testsuite_add_test(suite, "test_if_with_nil_branch", test_if_with_nil_branch);
+  valk_testsuite_add_test(suite, "test_if_with_qexpr_branches", test_if_with_qexpr_branches);
+  valk_testsuite_add_test(suite, "test_if_non_numeric_cond", test_if_non_numeric_cond);
+  valk_testsuite_add_test(suite, "test_join_wrong_type", test_join_wrong_type);
+  valk_testsuite_add_test(suite, "test_cons_builtin", test_cons_builtin);
+  valk_testsuite_add_test(suite, "test_nth_out_of_bounds", test_nth_out_of_bounds);
+  valk_testsuite_add_test(suite, "test_nth_wrong_type", test_nth_wrong_type);
+  valk_testsuite_add_test(suite, "test_len_wrong_type", test_len_wrong_type);
+  valk_testsuite_add_test(suite, "test_map_wrong_type", test_map_wrong_type);
+  valk_testsuite_add_test(suite, "test_filter_wrong_type", test_filter_wrong_type);
+  valk_testsuite_add_test(suite, "test_foldl_wrong_types", test_foldl_wrong_types);
+  valk_testsuite_add_test(suite, "test_range_wrong_type", test_range_wrong_type);
+  valk_testsuite_add_test(suite, "test_str_replace_wrong_type", test_str_replace_wrong_type);
+  valk_testsuite_add_test(suite, "test_str_split_wrong_type", test_str_split_wrong_type);
+  valk_testsuite_add_test(suite, "test_str_join_wrong_type", test_str_join_wrong_type);
+  valk_testsuite_add_test(suite, "test_str_concat_wrong_type", test_str_concat_wrong_type);
+  valk_testsuite_add_test(suite, "test_str_length_wrong_type", test_str_length_wrong_type);
+  valk_testsuite_add_test(suite, "test_str_substring_wrong_type", test_str_substring_wrong_type);
+  valk_testsuite_add_test(suite, "test_error_builtin", test_error_builtin);
+  valk_testsuite_add_test(suite, "test_error_wrong_type", test_error_wrong_type);
+  valk_testsuite_add_test(suite, "test_print_builtin", test_print_builtin);
+  valk_testsuite_add_test(suite, "test_println_builtin", test_println_builtin);
+  valk_testsuite_add_test(suite, "test_set_heap_hard_limit_wrong_type", test_set_heap_hard_limit_wrong_type);
+  valk_testsuite_add_test(suite, "test_set_heap_hard_limit_wrong_count", test_set_heap_hard_limit_wrong_count);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

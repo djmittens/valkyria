@@ -5,6 +5,7 @@
 - `make test` - Run all C and Valk tests
 - `make lint` - Run clang-tidy (must pass before committing)
 - `make coverage` - Generate aggregated C+Valk coverage (HTML: `coverage-report/index.html`)
+- `python3 scripts/find-uncovered-branches.py <file.c>` - Find specific uncovered branches
 - Single C test: `build/test_memory` (binary name matches `test/*.c`)
 - Single Valk test: `build/valk test/test_prelude.valk`
 - ASAN tests: `make test-c-asan`, `make test-valk-asan`
