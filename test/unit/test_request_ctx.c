@@ -255,7 +255,10 @@ void test_request_ctx_get_local_null_cases(VALK_TEST_ARGS()) {
   found = valk_request_ctx_get_local(&ctx, valk_lval_sym(":key"));
   VALK_TEST_ASSERT(found == nullptr, "null locals should return null");
 
-  found = valk_request_ctx_get_local(&ctx, nullptr);
+  valk_request_ctx_t *ctx2 = valk_request_ctx_with_local(
+    valk_request_ctx_new(&valk_malloc_allocator),
+    valk_lval_sym(":foo"), valk_lval_num(1), &valk_malloc_allocator);
+  found = valk_request_ctx_get_local(ctx2, nullptr);
   VALK_TEST_ASSERT(found == nullptr, "null key should return null");
 
   VALK_PASS();
@@ -333,6 +336,26 @@ void test_request_ctx_multiple_locals(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_request_ctx_get_local_type_mismatch(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_request_ctx_t *ctx = valk_request_ctx_new(&valk_malloc_allocator);
+  ctx = valk_request_ctx_with_local(ctx, valk_lval_sym(":sym-key"), valk_lval_num(1), &valk_malloc_allocator);
+  ctx = valk_request_ctx_with_local(ctx, valk_lval_str("str-key"), valk_lval_num(2), &valk_malloc_allocator);
+  ctx = valk_request_ctx_with_local(ctx, valk_lval_num(42), valk_lval_num(3), &valk_malloc_allocator);
+
+  valk_lval_t *found = valk_request_ctx_get_local(ctx, valk_lval_str(":sym-key"));
+  VALK_TEST_ASSERT(found == nullptr, "string key should not match symbol key");
+
+  found = valk_request_ctx_get_local(ctx, valk_lval_num(100));
+  VALK_TEST_ASSERT(found == nullptr, "num key should not match str key");
+
+  found = valk_request_ctx_get_local(ctx, valk_lval_sym("str-key"));
+  VALK_TEST_ASSERT(found == nullptr, "symbol key should not match string key");
+
+  VALK_PASS();
+}
+
 void test_thread_ctx_request_ctx(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -370,6 +393,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_request_ctx_get_local_num_key", test_request_ctx_get_local_num_key);
   valk_testsuite_add_test(suite, "test_request_ctx_get_local_null_cases", test_request_ctx_get_local_null_cases);
   valk_testsuite_add_test(suite, "test_request_ctx_multiple_locals", test_request_ctx_multiple_locals);
+  valk_testsuite_add_test(suite, "test_request_ctx_get_local_type_mismatch", test_request_ctx_get_local_type_mismatch);
   valk_testsuite_add_test(suite, "test_trace_id_generation", test_trace_id_generation);
   valk_testsuite_add_test(suite, "test_span_id_generation", test_span_id_generation);
   valk_testsuite_add_test(suite, "test_thread_ctx_request_ctx", test_thread_ctx_request_ctx);

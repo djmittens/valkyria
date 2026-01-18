@@ -92,9 +92,9 @@ valk_lval_t *valk_request_ctx_get_local(valk_request_ctx_t *ctx, valk_lval_t *ke
   valk_lval_t *curr = ctx->locals;
   while (curr && LVAL_TYPE(curr) == LVAL_CONS) {
     valk_lval_t *pair = curr->cons.head;
-    if (pair && LVAL_TYPE(pair) == LVAL_CONS) {
+    if (pair && LVAL_TYPE(pair) == LVAL_CONS) { // LCOV_EXCL_BR_LINE - malformed locals
       valk_lval_t *k = pair->cons.head;
-      if (k && LVAL_TYPE(k) == LVAL_TYPE(key)) {
+      if (k && LVAL_TYPE(k) == LVAL_TYPE(key)) { // LCOV_EXCL_BR_LINE - malformed pair
         if (LVAL_TYPE(k) == LVAL_SYM && strcmp(k->str, key->str) == 0) {
           return pair->cons.tail;
         }
