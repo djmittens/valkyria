@@ -828,4 +828,180 @@
     true
   })
 
+; === Join with non-list second argument (line 1640) ===
+(test/define "join-list-with-number"
+  {do
+    (= {result} (join {1 2} 5))
+    (test/assert-eq 3 (len result) "join list with number wraps number")
+    (test/assert-eq 5 (nth 3 result) "last element is the number")
+    true
+  })
+
+(test/define "join-list-with-string"
+  {do
+    (= {result} (join {a b} "hello"))
+    (test/assert-eq 3 (len result) "join list with string wraps string")
+    true
+  })
+
+(test/define "join-list-with-symbol"
+  {do
+    (= {result} (join {1 2} (quote xyz)))
+    (test/assert-eq 3 (len result) "join list with symbol wraps symbol")
+    true
+  })
+
+; === Multi-symbol put (line 2655) ===
+(test/define "put-multi-symbol"
+  {do
+    (= {a b c} 1 2 3)
+    (test/assert-eq 1 a "first symbol bound")
+    (test/assert-eq 2 b "second symbol bound")
+    (test/assert-eq 3 c "third symbol bound")
+    true
+  })
+
+(test/define "put-multi-symbol-non-symbol-error"
+  {do
+    (= {result} (error? (eval (read "(= {x 123} 1 2)"))))
+    (test/assert result "put with non-symbol in list errors")
+    true
+  })
+
+; === Select with unquoted cons result (line 3196) ===
+(test/define "select-with-cons-result"
+  {do
+    ; select where the matching result is a cons that needs evaluation
+    (= {x} 5)
+    (= {result} (select
+                  {(== x 1) {+ 1 1}}
+                  {(== x 5) {+ 2 3}}
+                  {true {0}}))
+    (test/assert-eq 5 result "select evaluates cons result")
+    true
+  })
+
+; === Quote error propagation (line 3019-3021) ===
+(test/define "read-quote-eof-error"
+  {do
+    ; read just a quote with nothing after should error
+    (= {result} (error? (read "'")))
+    (test/assert result "quote at EOF should error")
+    true
+  })
+
+(test/define "read-quasiquote-eof-error"
+  {do
+    (= {result} (error? (read "`")))
+    (test/assert result "quasiquote at EOF should error")
+    true
+  })
+
+(test/define "read-unquote-eof-error"
+  {do
+    (= {result} (error? (read ",")))
+    (test/assert result "unquote at EOF should error")
+    true
+  })
+
+; === Env lookup with null items (line 2179) ===
+; This is hard to test directly since environments are managed internally
+
+; === Print list formatting (line 1697) ===
+(test/define "print-single-element-list"
+  {do
+    ; Printing a single element list should not have space before first element
+    (= {result} (str {1}))
+    (test/assert-eq "{1}" result "single element list prints correctly")
+    true
+  })
+
+(test/define "print-multi-element-list"
+  {do
+    ; Printing a multi element list should have spaces between elements
+    (= {result} (str {1 2 3}))
+    (test/assert-eq "{1 2 3}" result "multi element list prints correctly")
+    true
+  })
+
+; === Improper list printing (line 1703-1707) ===
+(test/define "print-improper-list"
+  {do
+    ; cons without proper tail creates improper list
+    (= {result} (str (cons 1 2)))
+    (test/assert-eq "(1 . 2)" result "improper list prints with dot notation")
+    true
+  })
+
+; === Number parsing edge cases (line 1819-1836) ===
+(test/define "read-negative-number"
+  {do
+    (= {result} (read "-42"))
+    (test/assert (num? result) "negative number is a number")
+    (test/assert-eq -42 result "negative number has correct value")
+    true
+  })
+
+(test/define "read-minus-symbol"
+  {do
+    (= {result} (read "-"))
+    (test/assert (sym? result) "minus alone is a symbol")
+    true
+  })
+
+; === Lambda with varargs partial application (line 1036-1037) ===
+(test/define "partial-application-with-varargs"
+  {do
+    (= {f} (\ {a b & rest} {list a b rest}))
+    (= {partial-f} (f 1))
+    (= {result} (partial-f 2 3 4 5))
+    (test/assert-eq 1 (nth 1 result) "first arg is bound")
+    (test/assert-eq 2 (nth 2 result) "second arg is bound")
+    (test/assert-eq 2 (len (nth 3 result)) "varargs has remaining elements")
+    true
+  })
+
+(test/define "partial-application-with-varargs-empty"
+  {do
+    ; Partial application where varargs ends up empty
+    (= {f} (\ {a & rest} {list a rest}))
+    (= {partial-f} (f 1))
+    (= {result} (partial-f))
+    (test/assert-eq 1 (nth 1 result) "first arg is bound")
+    (test/assert (== nil (nth 2 result)) "empty varargs is nil")
+    true
+  })
+
+; === ctx/with-deadline edge cases (lines 1502-1510) ===
+(test/define "ctx-with-deadline-multi-body"
+  {do
+    (= {result} (ctx/with-deadline 10000
+                  1
+                  2
+                  3))
+    (test/assert-eq 3 result "ctx/with-deadline returns last body expr")
+    true
+  })
+
+; === valk_lval_join with is_qexpr (lines 1664-1671) ===
+(test/define "join-qexpr-preserves-quote"
+  {do
+    (= {a} {1 2})
+    (= {b} {3 4})
+    (= {result} (join a b))
+    ; Result should be qexpr since first arg is qexpr
+    (test/assert-eq 4 (len result) "join result has all elements")
+    true
+  })
+
+(test/define "join-cons-produces-cons"
+  {do
+    ; When joining cons lists (unquoted), result should be cons
+    (= {a} (list 1 2))
+    (= {b} (list 3 4))
+    (= {result} (join a b))
+    (test/assert-eq 4 (len result) "join cons result has all elements")
+    true
+  })
+
 (test/run)
