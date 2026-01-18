@@ -2569,6 +2569,693 @@ void test_gc_tlab2_alloc_inline(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_gc_get_allocated_bytes_total(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+
+  sz result = valk_gc_get_allocated_bytes_total(heap);
+  (void)result;
+
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_get_allocated_bytes_total_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  sz result = valk_gc_get_allocated_bytes_total(nullptr);
+  VALK_TEST_ASSERT(result == 0, "nullptr should return 0");
+
+  VALK_PASS();
+}
+
+void test_gc_get_last_efficiency(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+
+  u8 efficiency_initial = valk_gc_get_last_efficiency(heap);
+  VALK_TEST_ASSERT(efficiency_initial == 0, "Initial efficiency should be 0 (no GC yet)");
+
+  for (int i = 0; i < 100; i++) {
+    valk_gc_malloc_heap_alloc(heap, 128);
+  }
+  valk_gc_malloc_collect(heap, nullptr);
+
+  u8 efficiency_after = valk_gc_get_last_efficiency(heap);
+  VALK_TEST_ASSERT(efficiency_after <= 100, "Efficiency should be 0-100");
+
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_get_last_efficiency_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  u8 result = valk_gc_get_last_efficiency(nullptr);
+  VALK_TEST_ASSERT(result == 0, "nullptr should return 0");
+
+  VALK_PASS();
+}
+
+void test_gc_get_survival_histogram(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+
+  u64 gen_0 = 999, gen_1_5 = 999, gen_6_20 = 999, gen_21_plus = 999;
+  valk_gc_get_survival_histogram(heap, &gen_0, &gen_1_5, &gen_6_20, &gen_21_plus);
+
+  VALK_TEST_ASSERT(gen_0 == 0, "Initial gen_0 should be 0");
+  VALK_TEST_ASSERT(gen_1_5 == 0, "Initial gen_1_5 should be 0");
+  VALK_TEST_ASSERT(gen_6_20 == 0, "Initial gen_6_20 should be 0");
+  VALK_TEST_ASSERT(gen_21_plus == 0, "Initial gen_21_plus should be 0");
+
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_get_survival_histogram_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_get_survival_histogram(nullptr, nullptr, nullptr, nullptr, nullptr);
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+  valk_gc_get_survival_histogram(heap, nullptr, nullptr, nullptr, nullptr);
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_get_pause_histogram(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+
+  u64 p0_1 = 999, p1_5 = 999, p5_10 = 999, p10_16 = 999, p16_plus = 999;
+  valk_gc_get_pause_histogram(heap, &p0_1, &p1_5, &p5_10, &p10_16, &p16_plus);
+
+  VALK_TEST_ASSERT(p0_1 == 0, "Initial pause_0_1ms should be 0");
+  VALK_TEST_ASSERT(p1_5 == 0, "Initial pause_1_5ms should be 0");
+  VALK_TEST_ASSERT(p5_10 == 0, "Initial pause_5_10ms should be 0");
+  VALK_TEST_ASSERT(p10_16 == 0, "Initial pause_10_16ms should be 0");
+  VALK_TEST_ASSERT(p16_plus == 0, "Initial pause_16ms_plus should be 0");
+
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_get_pause_histogram_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_get_pause_histogram(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+  valk_gc_get_pause_histogram(heap, nullptr, nullptr, nullptr, nullptr, nullptr);
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_get_fragmentation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+
+  for (int i = 0; i < 50; i++) {
+    valk_gc_malloc_heap_alloc(heap, 128);
+  }
+
+  valk_fragmentation_t frag;
+  valk_gc_get_fragmentation(heap, &frag);
+
+  VALK_TEST_ASSERT(frag.malloc_limit == 10 * 1024 * 1024, "malloc_limit should match heap size");
+  VALK_TEST_ASSERT(frag.malloc_allocated > 0, "malloc_allocated should be > 0");
+
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_get_fragmentation_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_get_fragmentation(nullptr, nullptr);
+
+  valk_fragmentation_t frag;
+  valk_gc_get_fragmentation(nullptr, &frag);
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+  valk_gc_get_fragmentation(heap, nullptr);
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_ptr_map_basic(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_ptr_map_t map;
+  valk_ptr_map_init(&map);
+
+  VALK_TEST_ASSERT(map.count == 0, "Initial count should be 0");
+  VALK_TEST_ASSERT(map.capacity > 0, "Initial capacity should be > 0");
+
+  int a = 1, b = 2, c = 3;
+  valk_ptr_map_put(&map, &a, &b);
+  VALK_TEST_ASSERT(map.count == 1, "Count should be 1 after put");
+
+  void *result = valk_ptr_map_get(&map, &a);
+  VALK_TEST_ASSERT(result == &b, "Get should return mapped value");
+
+  void *not_found = valk_ptr_map_get(&map, &c);
+  VALK_TEST_ASSERT(not_found == nullptr, "Get of unmapped key should return nullptr");
+
+  valk_ptr_map_free(&map);
+  VALK_TEST_ASSERT(map.count == 0, "Count should be 0 after free");
+  VALK_TEST_ASSERT(map.capacity == 0, "Capacity should be 0 after free");
+
+  VALK_PASS();
+}
+
+void test_gc_ptr_map_overwrite(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_ptr_map_t map;
+  valk_ptr_map_init(&map);
+
+  int a = 1, b = 2, c = 3;
+  valk_ptr_map_put(&map, &a, &b);
+  valk_ptr_map_put(&map, &a, &c);
+
+  VALK_TEST_ASSERT(map.count == 1, "Count should still be 1 after overwrite");
+
+  void *result = valk_ptr_map_get(&map, &a);
+  VALK_TEST_ASSERT(result == &c, "Get should return new value after overwrite");
+
+  valk_ptr_map_free(&map);
+
+  VALK_PASS();
+}
+
+void test_gc_ptr_map_grow(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_ptr_map_t map;
+  valk_ptr_map_init(&map);
+
+  int keys[100];
+  int vals[100];
+  for (int i = 0; i < 100; i++) {
+    keys[i] = i;
+    vals[i] = i * 10;
+    valk_ptr_map_put(&map, &keys[i], &vals[i]);
+  }
+
+  VALK_TEST_ASSERT(map.count == 100, "Should have 100 entries");
+
+  for (int i = 0; i < 100; i++) {
+    void *result = valk_ptr_map_get(&map, &keys[i]);
+    VALK_TEST_ASSERT(result == &vals[i], "Get should return correct value after grow");
+  }
+
+  valk_ptr_map_free(&map);
+
+  VALK_PASS();
+}
+
+void test_gc_ptr_map_empty_get(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_ptr_map_t map;
+  valk_ptr_map_init(&map);
+
+  int a = 1;
+  void *result = valk_ptr_map_get(&map, &a);
+  VALK_TEST_ASSERT(result == nullptr, "Get from empty map should return nullptr");
+
+  valk_ptr_map_free(&map);
+
+  VALK_PASS();
+}
+
+void test_gc_handle_table_basic(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_handle_table_t table;
+  valk_handle_table_init(&table);
+
+  VALK_TEST_ASSERT(table.count == 0, "Initial count should be 0");
+  VALK_TEST_ASSERT(table.capacity > 0, "Initial capacity should be > 0");
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+  valk_lval_t *val = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  val->flags = LVAL_NUM;
+  val->num = 42;
+
+  valk_handle_t h = valk_handle_create(&table, val);
+  VALK_TEST_ASSERT(h.generation > 0, "Handle generation should be > 0");
+
+  valk_lval_t *resolved = valk_handle_resolve(&table, h);
+  VALK_TEST_ASSERT(resolved == val, "Resolved handle should match original");
+
+  valk_handle_release(&table, h);
+
+  valk_handle_table_free(&table);
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_handle_table_multiple(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_handle_table_t table;
+  valk_handle_table_init(&table);
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+
+  valk_handle_t handles[10];
+  valk_lval_t *vals[10];
+
+  for (int i = 0; i < 10; i++) {
+    vals[i] = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+    vals[i]->flags = LVAL_NUM;
+    vals[i]->num = i;
+    handles[i] = valk_handle_create(&table, vals[i]);
+  }
+
+  for (int i = 0; i < 10; i++) {
+    valk_lval_t *resolved = valk_handle_resolve(&table, handles[i]);
+    VALK_TEST_ASSERT(resolved == vals[i], "Handle %d should resolve correctly", i);
+    VALK_TEST_ASSERT(resolved->num == i, "Value should be %d", i);
+  }
+
+  valk_handle_release(&table, handles[5]);
+  VALK_TEST_ASSERT(valk_handle_resolve(&table, handles[4]) == vals[4],
+                   "Other handles should still resolve after release");
+
+  valk_handle_table_free(&table);
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_handle_table_reuse(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_handle_table_t table;
+  valk_handle_table_init(&table);
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+
+  valk_lval_t *val1 = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  val1->flags = LVAL_NUM;
+  val1->num = 1;
+
+  valk_handle_t h1 = valk_handle_create(&table, val1);
+  u32 old_gen = h1.generation;
+
+  valk_handle_release(&table, h1);
+
+  valk_lval_t *val2 = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  val2->flags = LVAL_NUM;
+  val2->num = 2;
+
+  valk_handle_t h2 = valk_handle_create(&table, val2);
+  VALK_TEST_ASSERT(h2.index == h1.index, "Slot should be reused");
+  VALK_TEST_ASSERT(h2.generation > old_gen, "Generation should increase");
+
+  VALK_TEST_ASSERT(valk_handle_resolve(&table, h1) == nullptr,
+                   "Old handle should not resolve");
+  VALK_TEST_ASSERT(valk_handle_resolve(&table, h2) == val2,
+                   "New handle should resolve to new value");
+
+  valk_handle_table_free(&table);
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_handle_table_invalid_handle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_handle_table_t table;
+  valk_handle_table_init(&table);
+
+  valk_handle_t invalid = {.index = 9999, .generation = 1};
+  valk_lval_t *result = valk_handle_resolve(&table, invalid);
+  VALK_TEST_ASSERT(result == nullptr, "Invalid handle should resolve to nullptr");
+
+  valk_handle_release(&table, invalid);
+
+  valk_handle_table_free(&table);
+
+  VALK_PASS();
+}
+
+void test_gc_repl_mem_snapshot(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+
+  size_t arena_size = 4096 + sizeof(valk_mem_arena_t);
+  valk_mem_arena_t *scratch = malloc(arena_size);
+  valk_mem_arena_init(scratch, 4096);
+
+  valk_repl_mem_snapshot_t snap;
+  valk_repl_mem_take_snapshot(heap, scratch, &snap);
+
+  size_t initial_offset = scratch->offset;
+  VALK_TEST_ASSERT(snap.scratch_used_bytes == initial_offset, "Initial scratch should match arena offset");
+
+  scratch->offset = 100;
+  valk_repl_mem_snapshot_t snap2;
+  valk_repl_mem_take_snapshot(heap, scratch, &snap2);
+  VALK_TEST_ASSERT(snap2.scratch_used_bytes == 100, "Scratch should reflect offset");
+
+  valk_gc_malloc_heap_destroy(heap);
+  free(scratch);
+
+  VALK_PASS();
+}
+
+void test_gc_repl_mem_snapshot_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_repl_mem_take_snapshot(nullptr, nullptr, nullptr);
+
+  valk_repl_mem_snapshot_t snap;
+  valk_repl_mem_take_snapshot(nullptr, nullptr, &snap);
+
+  VALK_TEST_ASSERT(snap.heap_used_bytes == 0, "Heap bytes should be 0 with nullptr");
+  VALK_TEST_ASSERT(snap.scratch_used_bytes == 0, "Scratch bytes should be 0 with nullptr");
+
+  VALK_PASS();
+}
+
+void test_gc_repl_mem_snapshot_delta(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_repl_mem_snapshot_t before = {
+    .heap_used_bytes = 1000,
+    .scratch_used_bytes = 500,
+    .lval_count = 10,
+    .lenv_count = 5
+  };
+
+  valk_repl_mem_snapshot_t after = {
+    .heap_used_bytes = 1500,
+    .scratch_used_bytes = 700,
+    .lval_count = 15,
+    .lenv_count = 7
+  };
+
+  i64 heap_delta, scratch_delta, lval_delta, lenv_delta;
+  valk_repl_mem_snapshot_delta(&before, &after, &heap_delta, &scratch_delta,
+                                &lval_delta, &lenv_delta);
+
+  VALK_TEST_ASSERT(heap_delta == 500, "Heap delta should be 500");
+  VALK_TEST_ASSERT(scratch_delta == 200, "Scratch delta should be 200");
+  VALK_TEST_ASSERT(lval_delta == 5, "Lval delta should be 5");
+  VALK_TEST_ASSERT(lenv_delta == 2, "Lenv delta should be 2");
+
+  VALK_PASS();
+}
+
+void test_gc_repl_mem_snapshot_delta_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_repl_mem_snapshot_delta(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+
+  valk_repl_mem_snapshot_t snap = {0};
+  valk_repl_mem_snapshot_delta(&snap, nullptr, nullptr, nullptr, nullptr, nullptr);
+  valk_repl_mem_snapshot_delta(nullptr, &snap, nullptr, nullptr, nullptr, nullptr);
+
+  VALK_PASS();
+}
+
+void test_gc_repl_eval_delta(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_repl_eval_delta_t delta;
+  bool has_delta = valk_repl_get_last_eval_delta(&delta);
+
+  valk_repl_set_eval_delta(100, 50, 10, 5);
+  has_delta = valk_repl_get_last_eval_delta(&delta);
+  VALK_TEST_ASSERT(has_delta == true, "Should have delta after set");
+  VALK_TEST_ASSERT(delta.heap_delta == 100, "Heap delta should be 100");
+  VALK_TEST_ASSERT(delta.scratch_delta == 50, "Scratch delta should be 50");
+  VALK_TEST_ASSERT(delta.lval_delta == 10, "Lval delta should be 10");
+  VALK_TEST_ASSERT(delta.lenv_delta == 5, "Lenv delta should be 5");
+
+  VALK_PASS();
+}
+
+void test_gc_repl_eval_delta_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  bool result = valk_repl_get_last_eval_delta(nullptr);
+  VALK_TEST_ASSERT(result == false, "nullptr should return false");
+
+  VALK_PASS();
+}
+
+void test_gc_region_create_destroy(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_SCRATCH, nullptr);
+  VALK_TEST_ASSERT(region != nullptr, "Region should be created");
+  VALK_TEST_ASSERT(region->lifetime == VALK_LIFETIME_SCRATCH, "Lifetime should be SCRATCH");
+  VALK_TEST_ASSERT(region->arena != nullptr, "Arena should be created for SCRATCH");
+  VALK_TEST_ASSERT(region->owns_arena == true, "Region should own arena");
+
+  valk_region_destroy(region);
+
+  VALK_PASS();
+}
+
+void test_gc_region_create_request(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
+  VALK_TEST_ASSERT(region != nullptr, "Region should be created");
+  VALK_TEST_ASSERT(region->lifetime == VALK_LIFETIME_REQUEST, "Lifetime should be REQUEST");
+  VALK_TEST_ASSERT(region->arena != nullptr, "Arena should be created for REQUEST");
+
+  valk_region_destroy(region);
+
+  VALK_PASS();
+}
+
+void test_gc_region_alloc(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_SCRATCH, nullptr);
+
+  void *ptr = valk_region_alloc(region, 100);
+  VALK_TEST_ASSERT(ptr != nullptr, "Allocation should succeed");
+  VALK_TEST_ASSERT(region->stats.bytes_allocated == 100, "bytes_allocated should be 100");
+  VALK_TEST_ASSERT(region->stats.alloc_count == 1, "alloc_count should be 1");
+
+  void *ptr2 = valk_region_alloc(region, 50);
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Second allocation should succeed");
+  VALK_TEST_ASSERT(region->stats.bytes_allocated == 150, "bytes_allocated should be 150");
+  VALK_TEST_ASSERT(region->stats.alloc_count == 2, "alloc_count should be 2");
+
+  valk_region_destroy(region);
+
+  VALK_PASS();
+}
+
+void test_gc_region_alloc_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  void *ptr = valk_region_alloc(nullptr, 100);
+  VALK_TEST_ASSERT(ptr == nullptr, "nullptr region should return nullptr");
+
+  VALK_PASS();
+}
+
+void test_gc_region_reset(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_SCRATCH, nullptr);
+
+  valk_region_alloc(region, 100);
+  valk_region_alloc(region, 50);
+  VALK_TEST_ASSERT(region->stats.bytes_allocated == 150, "bytes_allocated should be 150");
+
+  valk_region_reset(region);
+  VALK_TEST_ASSERT(region->stats.bytes_allocated == 0, "bytes_allocated should be 0 after reset");
+  VALK_TEST_ASSERT(region->stats.alloc_count == 0, "alloc_count should be 0 after reset");
+
+  valk_region_destroy(region);
+
+  VALK_PASS();
+}
+
+void test_gc_region_reset_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_region_reset(nullptr);
+
+  VALK_PASS();
+}
+
+void test_gc_region_set_limit(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_SCRATCH, nullptr);
+
+  bool result = valk_region_set_limit(region, 1000);
+  VALK_TEST_ASSERT(result == true, "set_limit should succeed");
+  VALK_TEST_ASSERT(region->stats.bytes_limit == 1000, "bytes_limit should be 1000");
+
+  valk_region_alloc(region, 500);
+  result = valk_region_set_limit(region, 200);
+  VALK_TEST_ASSERT(result == false, "set_limit below usage should fail");
+  VALK_TEST_ASSERT(region->stats.bytes_limit == 1000, "bytes_limit should still be 1000");
+
+  valk_region_destroy(region);
+
+  VALK_PASS();
+}
+
+void test_gc_region_set_limit_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  bool result = valk_region_set_limit(nullptr, 1000);
+  VALK_TEST_ASSERT(result == false, "nullptr region should return false");
+
+  VALK_PASS();
+}
+
+void test_gc_region_get_stats(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_SCRATCH, nullptr);
+
+  valk_region_alloc(region, 100);
+  valk_region_set_limit(region, 500);
+
+  valk_region_stats_t stats;
+  valk_region_get_stats(region, &stats);
+
+  VALK_TEST_ASSERT(stats.bytes_allocated == 100, "bytes_allocated should be 100");
+  VALK_TEST_ASSERT(stats.alloc_count == 1, "alloc_count should be 1");
+  VALK_TEST_ASSERT(stats.bytes_limit == 500, "bytes_limit should be 500");
+
+  valk_region_destroy(region);
+
+  VALK_PASS();
+}
+
+void test_gc_region_get_stats_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_region_get_stats(nullptr, nullptr);
+
+  valk_region_stats_t stats;
+  valk_region_get_stats(nullptr, &stats);
+
+  VALK_PASS();
+}
+
+void test_gc_region_limit_exceeded(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_SCRATCH, nullptr);
+  valk_region_set_limit(region, 100);
+
+  void *ptr = valk_region_alloc(region, 50);
+  VALK_TEST_ASSERT(ptr != nullptr, "First allocation should succeed");
+
+  ptr = valk_region_alloc(region, 100);
+  VALK_TEST_ASSERT(ptr == nullptr, "Allocation exceeding limit should fail (no parent)");
+
+  valk_region_destroy(region);
+
+  VALK_PASS();
+}
+
+void test_gc_region_init(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 4096 + sizeof(valk_mem_arena_t);
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, 4096);
+
+  valk_region_t region;
+  valk_region_init(&region, VALK_LIFETIME_SCRATCH, nullptr, arena);
+
+  VALK_TEST_ASSERT(region.lifetime == VALK_LIFETIME_SCRATCH, "Lifetime should be SCRATCH");
+  VALK_TEST_ASSERT(region.arena == arena, "Arena should be set");
+  VALK_TEST_ASSERT(region.owns_arena == false, "Should not own arena when initialized");
+  VALK_TEST_ASSERT(region.parent == nullptr, "Parent should be nullptr");
+
+  free(arena);
+
+  VALK_PASS();
+}
+
+void test_gc_region_destroy_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_region_destroy(nullptr);
+
+  VALK_PASS();
+}
+
+void test_gc_allocator_lifetime(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lifetime_e result = valk_allocator_lifetime(nullptr);
+  VALK_TEST_ASSERT(result == VALK_LIFETIME_SCRATCH, "nullptr should return SCRATCH");
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_SCRATCH, nullptr);
+  result = valk_allocator_lifetime(region);
+  VALK_TEST_ASSERT(result == VALK_LIFETIME_SCRATCH, "Region should return SCRATCH");
+  valk_region_destroy(region);
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+  result = valk_allocator_lifetime(heap);
+  VALK_TEST_ASSERT(result == VALK_LIFETIME_SESSION, "GC heap should return SESSION");
+  valk_gc_malloc_heap_destroy(heap);
+
+  size_t arena_size = 4096 + sizeof(valk_mem_arena_t);
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, 4096);
+  result = valk_allocator_lifetime(arena);
+  VALK_TEST_ASSERT(result == VALK_LIFETIME_SCRATCH, "Arena should return SCRATCH");
+  free(arena);
+
+  VALK_PASS();
+}
+
+void test_gc_region_write_barrier(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  bool result = valk_region_write_barrier(nullptr, nullptr, false);
+  VALK_TEST_ASSERT(result == true, "nullptr allocators should return true");
+
+  valk_region_t *parent = valk_region_create(VALK_LIFETIME_SCRATCH, nullptr);
+  result = valk_region_write_barrier(parent, nullptr, false);
+  VALK_TEST_ASSERT(result == true, "nullptr child should return true");
+
+  result = valk_region_write_barrier(nullptr, parent, false);
+  VALK_TEST_ASSERT(result == true, "nullptr parent should return true");
+
+  valk_region_destroy(parent);
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -2719,6 +3406,55 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_tlab2_refill", test_gc_tlab2_refill);
   valk_testsuite_add_test(suite, "test_gc_tlab2_refill_invalid_class", test_gc_tlab2_refill_invalid_class);
   valk_testsuite_add_test(suite, "test_gc_tlab2_alloc_inline", test_gc_tlab2_alloc_inline);
+
+  // Phase 19: Metrics and histogram tests
+  valk_testsuite_add_test(suite, "test_gc_get_allocated_bytes_total", test_gc_get_allocated_bytes_total);
+  valk_testsuite_add_test(suite, "test_gc_get_allocated_bytes_total_null", test_gc_get_allocated_bytes_total_null);
+  valk_testsuite_add_test(suite, "test_gc_get_last_efficiency", test_gc_get_last_efficiency);
+  valk_testsuite_add_test(suite, "test_gc_get_last_efficiency_null", test_gc_get_last_efficiency_null);
+  valk_testsuite_add_test(suite, "test_gc_get_survival_histogram", test_gc_get_survival_histogram);
+  valk_testsuite_add_test(suite, "test_gc_get_survival_histogram_null", test_gc_get_survival_histogram_null);
+  valk_testsuite_add_test(suite, "test_gc_get_pause_histogram", test_gc_get_pause_histogram);
+  valk_testsuite_add_test(suite, "test_gc_get_pause_histogram_null", test_gc_get_pause_histogram_null);
+  valk_testsuite_add_test(suite, "test_gc_get_fragmentation", test_gc_get_fragmentation);
+  valk_testsuite_add_test(suite, "test_gc_get_fragmentation_null", test_gc_get_fragmentation_null);
+
+  // Phase 20: Pointer map tests
+  valk_testsuite_add_test(suite, "test_gc_ptr_map_basic", test_gc_ptr_map_basic);
+  valk_testsuite_add_test(suite, "test_gc_ptr_map_overwrite", test_gc_ptr_map_overwrite);
+  valk_testsuite_add_test(suite, "test_gc_ptr_map_grow", test_gc_ptr_map_grow);
+  valk_testsuite_add_test(suite, "test_gc_ptr_map_empty_get", test_gc_ptr_map_empty_get);
+
+  // Phase 21: Handle table tests
+  valk_testsuite_add_test(suite, "test_gc_handle_table_basic", test_gc_handle_table_basic);
+  valk_testsuite_add_test(suite, "test_gc_handle_table_multiple", test_gc_handle_table_multiple);
+  valk_testsuite_add_test(suite, "test_gc_handle_table_reuse", test_gc_handle_table_reuse);
+  valk_testsuite_add_test(suite, "test_gc_handle_table_invalid_handle", test_gc_handle_table_invalid_handle);
+
+  // Phase 22: REPL memory snapshot tests
+  valk_testsuite_add_test(suite, "test_gc_repl_mem_snapshot", test_gc_repl_mem_snapshot);
+  valk_testsuite_add_test(suite, "test_gc_repl_mem_snapshot_null", test_gc_repl_mem_snapshot_null);
+  valk_testsuite_add_test(suite, "test_gc_repl_mem_snapshot_delta", test_gc_repl_mem_snapshot_delta);
+  valk_testsuite_add_test(suite, "test_gc_repl_mem_snapshot_delta_null", test_gc_repl_mem_snapshot_delta_null);
+  valk_testsuite_add_test(suite, "test_gc_repl_eval_delta", test_gc_repl_eval_delta);
+  valk_testsuite_add_test(suite, "test_gc_repl_eval_delta_null", test_gc_repl_eval_delta_null);
+
+  // Phase 23: Region API tests
+  valk_testsuite_add_test(suite, "test_gc_region_create_destroy", test_gc_region_create_destroy);
+  valk_testsuite_add_test(suite, "test_gc_region_create_request", test_gc_region_create_request);
+  valk_testsuite_add_test(suite, "test_gc_region_alloc", test_gc_region_alloc);
+  valk_testsuite_add_test(suite, "test_gc_region_alloc_null", test_gc_region_alloc_null);
+  valk_testsuite_add_test(suite, "test_gc_region_reset", test_gc_region_reset);
+  valk_testsuite_add_test(suite, "test_gc_region_reset_null", test_gc_region_reset_null);
+  valk_testsuite_add_test(suite, "test_gc_region_set_limit", test_gc_region_set_limit);
+  valk_testsuite_add_test(suite, "test_gc_region_set_limit_null", test_gc_region_set_limit_null);
+  valk_testsuite_add_test(suite, "test_gc_region_get_stats", test_gc_region_get_stats);
+  valk_testsuite_add_test(suite, "test_gc_region_get_stats_null", test_gc_region_get_stats_null);
+  valk_testsuite_add_test(suite, "test_gc_region_limit_exceeded", test_gc_region_limit_exceeded);
+  valk_testsuite_add_test(suite, "test_gc_region_init", test_gc_region_init);
+  valk_testsuite_add_test(suite, "test_gc_region_destroy_null", test_gc_region_destroy_null);
+  valk_testsuite_add_test(suite, "test_gc_allocator_lifetime", test_gc_allocator_lifetime);
+  valk_testsuite_add_test(suite, "test_gc_region_write_barrier", test_gc_region_write_barrier);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

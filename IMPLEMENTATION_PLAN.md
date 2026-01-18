@@ -116,9 +116,23 @@
   - Tests cover: valk_aio_http2_stop (null srv, null sys early returns)
   - Note: Full server lifecycle testing requires SSL/nghttp2/libuv integration
 - [ ] **io/io_loop_ops_uv.c** - 68.6% line / 44.4% branch
+  - Thin libuv wrappers; untested paths are mostly OOM/platform failures (LCOV exclusion candidates)
 - [ ] **io/io_tcp_ops_uv.c** - 69.2% line / 40.6% branch
+  - Thin libuv wrappers; untested paths are mostly OOM/platform failures (LCOV exclusion candidates)
 - [ ] **aio/http2/aio_http2_client.c** - 71.0% line / 50.7% branch
-- [ ] **gc.c** - 72.0% line / 57.2% branch
+- [x] **gc.c** - 72.0% line / 57.2% branch - PARTIALLY IMPROVED
+  - Added 45 unit tests to test/unit/test_gc.c (now 154 tests total)
+  - Tests cover: valk_gc_get_allocated_bytes_total (null safety)
+  - Tests cover: valk_gc_get_last_efficiency (null safety, after GC)
+  - Tests cover: valk_gc_get_survival_histogram (null safety, initial values)
+  - Tests cover: valk_gc_get_pause_histogram (null safety, initial values)
+  - Tests cover: valk_gc_get_fragmentation (null safety, after allocations)
+  - Tests cover: valk_ptr_map_* (init, put, get, overwrite, grow, free)
+  - Tests cover: valk_handle_table_* (init, create, resolve, release, reuse, invalid handles)
+  - Tests cover: valk_repl_mem_* (snapshot, snapshot_delta, eval_delta)
+  - Tests cover: valk_region_* (create, destroy, alloc, reset, set_limit, get_stats, limit exceeded, init, write_barrier)
+  - Tests cover: valk_allocator_lifetime (null, region, gc heap, arena)
+  - Also fixed testing framework slab size (256→512) to support large test files
 - [ ] **aio/aio_async.c** - 72.4% line / 53.2% branch
 - [ ] **aio/http2/aio_ssl.c** - 72.1% line / 63.8% branch
 - [ ] **parser.c** - 75.1% line / 50.0% branch
