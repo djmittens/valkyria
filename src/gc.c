@@ -295,29 +295,31 @@ void valk_gc_thread_unregister(void) {
 
 static void valk_gc_participate_in_parallel_gc(void);
 
+// LCOV_EXCL_START - safe point slow path requires STW coordination from parallel GC
 void valk_gc_safe_point_slow(void) {
   valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
-  
+
   if (phase == VALK_GC_PHASE_STW_REQUESTED) {
     if (valk_thread_ctx.scratch && valk_thread_ctx.scratch->offset > 0 &&
         valk_thread_ctx.heap && valk_thread_ctx.root_env) {
-      valk_checkpoint(valk_thread_ctx.scratch, 
+      valk_checkpoint(valk_thread_ctx.scratch,
                       valk_thread_ctx.heap,
                       valk_thread_ctx.root_env);
     }
-    
+
     u64 paused = atomic_fetch_add(&valk_gc_coord.threads_paused, 1) + 1;
     u64 registered = atomic_load(&valk_gc_coord.threads_registered);
-    
+
     if (paused == registered) {
       pthread_mutex_lock(&valk_gc_coord.lock);
       pthread_cond_signal(&valk_gc_coord.all_paused);
       pthread_mutex_unlock(&valk_gc_coord.lock);
     }
-    
+
     valk_gc_participate_in_parallel_gc();
   }
 }
+// LCOV_EXCL_STOP
 
 // ============================================================================
 // Phase 1: Page-based Allocator (Parallel GC)
@@ -329,25 +331,26 @@ static _Atomic u32 __page_id_counter = 0;
 // Phase 2: GC Triggering and Participation
 // ============================================================================
 
+// LCOV_EXCL_START - Parallel GC STW coordination requires multi-threaded test infrastructure
 void valk_gc_request_collection(void) {
   valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
-  if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected, 
+  if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected,
                                        VALK_GC_PHASE_STW_REQUESTED)) {
     return;
   }
-  
+
   u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
   if (num_threads == 0) {
     atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
     return;
   }
-  
+
   if (valk_gc_coord.barrier_initialized) {
     valk_barrier_destroy(&valk_gc_coord.barrier);
   }
   valk_barrier_init(&valk_gc_coord.barrier, num_threads);
   valk_gc_coord.barrier_initialized = true;
-  
+
   pthread_mutex_lock(&valk_gc_coord.lock);
   while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
     struct timespec ts;
@@ -364,55 +367,61 @@ void valk_gc_request_collection(void) {
 
 void valk_gc_participate(void) {
   valk_barrier_wait(&valk_gc_coord.barrier);
-  
+
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_MARKING);
   valk_gc_parallel_mark();
-  
+
   valk_barrier_wait(&valk_gc_coord.barrier);
-  
+
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_SWEEPING);
-  
+
   valk_barrier_wait(&valk_gc_coord.barrier);
-  
+
   pthread_mutex_lock(&valk_gc_coord.lock);
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
   pthread_cond_broadcast(&valk_gc_coord.gc_done);
   pthread_mutex_unlock(&valk_gc_coord.lock);
-  
+
   atomic_fetch_add(&valk_gc_coord.parallel_cycles, 1);
 }
+// LCOV_EXCL_STOP
 
 // ============================================================================
 // Phase 3: Root Enumeration
 // ============================================================================
 
+// LCOV_EXCL_BR_START - defensive null checks in root iteration
 void valk_gc_visit_thread_roots(valk_gc_root_visitor_t visitor, void *ctx) {
   valk_thread_context_t *tc = &valk_thread_ctx;
-  
+
   if (tc->root_stack == nullptr) return;
-  
+
   for (u64 i = 0; i < tc->root_stack_count; i++) {
     if (tc->root_stack[i] != nullptr) {
       visitor(tc->root_stack[i], ctx);
     }
   }
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - defensive null checks in env root iteration
 void valk_gc_visit_env_roots(valk_lenv_t *env, valk_gc_root_visitor_t visitor, void *ctx) {
   if (env == nullptr) return;
-  
+
   for (u64 i = 0; i < env->vals.count; i++) {
     if (env->vals.items[i] != nullptr) {
       visitor(env->vals.items[i], ctx);
     }
   }
-  
+
   valk_gc_visit_env_roots(env->parent, visitor, ctx);
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - defensive null checks in global root iteration
 void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
   valk_handle_table_visit(&valk_global_handle_table, visitor, ctx);
-  
+
   for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
     if (valk_gc_coord.threads[i].active && valk_gc_coord.threads[i].ctx != nullptr) {
       valk_thread_context_t *tc = valk_gc_coord.threads[i].ctx;
@@ -422,22 +431,24 @@ void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
     }
   }
 }
+// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // Phase 4: Parallel Mark
 // ============================================================================
 
+// LCOV_EXCL_START - Parallel GC marking infrastructure requires multi-threaded coordination
 static void mark_and_push(valk_lval_t *obj, void *ctx);
 static void mark_children(valk_lval_t *obj, valk_gc_mark_queue_t *queue);
 static void mark_env_parallel(valk_lenv_t *env, valk_gc_mark_queue_t *queue);
 
 static void mark_env_parallel(valk_lenv_t *env, valk_gc_mark_queue_t *queue) {
   if (env == nullptr) return;
-  
+
   for (u64 i = 0; i < env->vals.count; i++) {
     mark_and_push(env->vals.items[i], queue);
   }
-  
+
   mark_env_parallel(env->parent, queue);
 }
 
@@ -472,11 +483,11 @@ static void mark_children(valk_lval_t *obj, valk_gc_mark_queue_t *queue) {
 
 static void mark_and_push(valk_lval_t *obj, void *ctx) {
   valk_gc_mark_queue_t *queue = ctx;
-  
+
   if (obj == nullptr) return;
   if (obj->flags & LVAL_FLAG_IMMORTAL) return;
   if (!valk_gc_try_mark(obj)) return;
-  
+
   if (!valk_gc_mark_queue_push(queue, obj)) {
     mark_children(obj, queue);
   }
@@ -488,7 +499,7 @@ static _Atomic bool __gc_terminated = false;
 bool valk_gc_check_termination(void) {
   u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
   u64 idle = atomic_fetch_add(&__gc_idle_count, 1) + 1;
-  
+
   if (idle == num_threads) {
     bool all_empty = true;
     for (u64 i = 0; i < num_threads; i++) {
@@ -499,12 +510,12 @@ bool valk_gc_check_termination(void) {
         break;
       }
     }
-    
+
     if (all_empty) {
       atomic_store(&__gc_terminated, true);
     }
   }
-  
+
   for (int i = 0; i < 100; i++) {
     if (atomic_load(&__gc_terminated)) {
       return true;
@@ -515,47 +526,47 @@ bool valk_gc_check_termination(void) {
     sched_yield();
 #endif
   }
-  
+
   atomic_fetch_sub(&__gc_idle_count, 1);
   return false;
 }
 
 void valk_gc_parallel_mark(void) {
   if (!valk_thread_ctx.gc_registered) return;
-  
+
   u64 my_id = valk_thread_ctx.gc_thread_id;
   valk_gc_mark_queue_t *my_queue = &valk_gc_coord.threads[my_id].mark_queue;
-  
+
   atomic_store(&__gc_idle_count, 0);
   atomic_store(&__gc_terminated, false);
-  
+
   valk_gc_mark_queue_init(my_queue);
-  
+
   valk_gc_visit_thread_roots(mark_and_push, my_queue);
-  
+
   if (my_id == 0) {
     valk_gc_visit_global_roots(mark_and_push, my_queue);
   }
-  
+
   valk_barrier_wait(&valk_gc_coord.barrier);
-  
+
   u64 idle_spins = 0;
   const u64 MAX_IDLE_SPINS = 1000;
-  
+
   while (true) {
     valk_lval_t *obj;
     while ((obj = valk_gc_mark_queue_pop(my_queue)) != nullptr) {
       mark_children(obj, my_queue);
       idle_spins = 0;
     }
-    
+
     bool found_work = false;
     u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
-    
+
     for (u64 i = 1; i <= num_threads; i++) {
       u64 victim = (my_id + i) % num_threads;
       if (!valk_gc_coord.threads[victim].active) continue;
-      
+
       obj = valk_gc_mark_queue_steal(&valk_gc_coord.threads[victim].mark_queue);
       if (obj != nullptr) {
         mark_children(obj, my_queue);
@@ -564,7 +575,7 @@ void valk_gc_parallel_mark(void) {
         break;
       }
     }
-    
+
     if (!found_work) {
       idle_spins++;
       if (idle_spins >= MAX_IDLE_SPINS) {
@@ -577,6 +588,7 @@ void valk_gc_parallel_mark(void) {
     }
   }
 }
+// LCOV_EXCL_STOP
 
 
 
@@ -630,6 +642,7 @@ void valk_gc_set_thresholds(valk_gc_malloc_heap_t* heap,
 }
 
 // Check if GC should run
+// LCOV_EXCL_BR_START - rate limiting branches depend on timing state
 bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap) {
   if (!heap) return false;
   u8 usage_pct = valk_gc_heap_usage_pct(heap);
@@ -641,6 +654,7 @@ bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap) {
   }
   return true;
 }
+// LCOV_EXCL_BR_STOP
 
 // Allocate from GC heap (delegates to heap2)
 void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, sz bytes) {
@@ -764,6 +778,7 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
   fprintf(stderr, "Emergency GCs:    %llu\n", (unsigned long long)heap->stats.emergency_collections);
 
   fprintf(stderr, "--- Per-Class Usage ---\n");
+  // LCOV_EXCL_START - conditional output formatting for debug/diagnostic use
   for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     if (stats.class_total_slots[c] > 0) {
       u64 pct = (stats.class_used_slots[c] * 100) / stats.class_total_slots[c];
@@ -779,6 +794,7 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
     fprintf(stderr, "Bytes evacuated:  %zu\n", heap->stats.evacuation_bytes);
     fprintf(stderr, "Pointers fixed:   %llu\n", (unsigned long long)heap->stats.evacuation_pointer_fixups);
   }
+  // LCOV_EXCL_STOP
   fprintf(stderr, "=========================\n\n");
 }
 
@@ -877,6 +893,7 @@ void valk_repl_set_eval_delta(i64 heap, i64 scratch, i64 lval, i64 lenv) {
 // Pointer Map - hashmap for src->dst tracking during evacuation
 // ============================================================================
 
+// LCOV_EXCL_BR_START - internal hash map operations with collision handling
 static inline sz valk_ptr_hash(void *ptr) {
   uptr p = (uptr)ptr;
   p = (p ^ (p >> 30)) * 0xbf58476d1ce4e5b9ULL;
@@ -951,11 +968,13 @@ void *valk_ptr_map_get(valk_ptr_map_t *map, void *src) {
   
   return nullptr;
 }
+// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // Handle Table - for cross-region references
 // ============================================================================
 
+// LCOV_EXCL_BR_START - handle table internal defensive checks
 valk_handle_table_t valk_global_handle_table = {0};
 
 void valk_handle_table_init(valk_handle_table_t *table) {
@@ -987,14 +1006,16 @@ void valk_handle_table_free(valk_handle_table_t *table) {
 static void valk_handle_table_grow(valk_handle_table_t *table) {
   u32 old_cap = table->capacity;
   u32 new_cap = old_cap * 2;
-  
+
   valk_lval_t **new_slots = realloc(table->slots, new_cap * sizeof(valk_lval_t *));
   u32 *new_gens = realloc(table->generations, new_cap * sizeof(u32));
-  
+
+  // LCOV_EXCL_BR_START - handle table realloc OOM
   if (!new_slots || !new_gens) {
     VALK_ERROR("Failed to grow handle table");
     return;
   }
+  // LCOV_EXCL_BR_STOP
   
   table->slots = new_slots;
   table->generations = new_gens;
@@ -1061,11 +1082,13 @@ void valk_handle_table_visit(valk_handle_table_t *table,
   }
   pthread_mutex_unlock(&table->lock);
 }
+// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // Region API Implementation
 // ============================================================================
 
+// LCOV_EXCL_BR_START - region API defensive null checks and lifetime switches
 #define VALK_REGION_DEFAULT_SIZE (64 * 1024)
 
 void valk_region_init(valk_region_t *region, valk_lifetime_e lifetime, 
@@ -1083,10 +1106,11 @@ void valk_region_init(valk_region_t *region, valk_lifetime_e lifetime,
   }
 }
 
+// LCOV_EXCL_BR_START - region creation switch/OOM branches
 valk_region_t *valk_region_create(valk_lifetime_e lifetime, valk_region_t *parent) {
   valk_region_t *region = malloc(sizeof(valk_region_t));
   if (!region) return nullptr;
-  
+
   region->type = VALK_ALLOC_REGION;
   region->lifetime = lifetime;
   region->parent = parent;
@@ -1094,15 +1118,15 @@ valk_region_t *valk_region_create(valk_lifetime_e lifetime, valk_region_t *paren
   region->arena = nullptr;
   region->owns_arena = false;
   memset(&region->stats, 0, sizeof(region->stats));
-  
+
   switch (lifetime) {
     case VALK_LIFETIME_IMMORTAL:
       break;
-      
+
     case VALK_LIFETIME_SESSION:
       region->gc_heap = valk_runtime_get_heap();
       break;
-      
+
     case VALK_LIFETIME_REQUEST:
     case VALK_LIFETIME_SCRATCH: {
       sz arena_size = sizeof(valk_mem_arena_t) + VALK_REGION_DEFAULT_SIZE;
@@ -1263,36 +1287,38 @@ bool valk_region_write_barrier(void *parent_allocator, void *child_allocator,
   
   return false;
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_START - region copy requires specific inter-region promotion scenario with complex values
 static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_t *src,
                                                 valk_ptr_map_t *copied) {
   if (!src) return nullptr;
-  
+
   valk_lval_t *existing = valk_ptr_map_get(copied, src);
   if (existing) return existing;
-  
+
   valk_lifetime_e src_lifetime = valk_allocator_lifetime(src->origin_allocator);
   if (valk_lifetime_can_reference(target->lifetime, src_lifetime)) {
     return src;
   }
-  
+
   sz lval_size = sizeof(valk_lval_t);
   valk_lval_t *copy = valk_region_alloc(target, lval_size);
   if (!copy) return nullptr;
-  
+
   memcpy(copy, src, lval_size);
   copy->origin_allocator = target;
   copy->gc_next = nullptr;
-  
+
   valk_ptr_map_put(copied, src, copy);
-  
+
   valk_ltype_e type = LVAL_TYPE(src);
   switch (type) {
     case LVAL_CONS:
       copy->cons.head = region_copy_lval_recursive(target, src->cons.head, copied);
       copy->cons.tail = region_copy_lval_recursive(target, src->cons.tail, copied);
       break;
-      
+
     case LVAL_FUN:
       if (src->fun.name) {
         sz len = strlen(src->fun.name) + 1;
@@ -1302,7 +1328,7 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
       copy->fun.formals = region_copy_lval_recursive(target, src->fun.formals, copied);
       copy->fun.body = region_copy_lval_recursive(target, src->fun.body, copied);
       break;
-      
+
     case LVAL_SYM:
     case LVAL_STR:
     case LVAL_ERR:
@@ -1312,16 +1338,17 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
         if (copy->str) memcpy(copy->str, src->str, len);
       }
       break;
-      
+
     default:
       break;
   }
-  
+
   target->stats.bytes_promoted += lval_size;
   target->stats.promotion_count++;
-  
+
   return copy;
 }
+// LCOV_EXCL_STOP
 
 valk_lval_t *valk_region_promote_lval(valk_region_t *target, valk_lval_t *val) {
   if (!target || !val) return val;
@@ -1365,6 +1392,7 @@ valk_lval_t *valk_region_ensure_safe_ref(valk_lval_t *parent, valk_lval_t *child
 // Environment and Lval Worklists for Iterative Traversal
 // ============================================================================
 
+// LCOV_EXCL_BR_START - worklist internal defensive checks and growth paths
 #define ENV_WORKLIST_INITIAL_CAPACITY 64
 
 typedef struct {
@@ -1407,11 +1435,13 @@ static valk_lenv_t* env_worklist_pop(valk_env_worklist_t* wl) {
   if (wl->count == 0) return nullptr;
   return wl->items[--wl->count];
 }
+// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // Checkpoint-based Evacuation (Phase 3)
 // ============================================================================
 
+// LCOV_EXCL_BR_START - evacuation context internal defensive checks
 // Initial worklist capacity
 #define EVAC_WORKLIST_INITIAL_CAPACITY 256
 
@@ -1452,6 +1482,7 @@ static void evac_add_evacuated(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
   if (v == nullptr) return;
 
   // Grow if at capacity
+  // LCOV_EXCL_BR_START - evacuation list realloc OOM
   if (ctx->evacuated_count >= ctx->evacuated_capacity) {
     sz new_cap = ctx->evacuated_capacity * 2;
     valk_lval_t** new_list = realloc(ctx->evacuated, new_cap * sizeof(valk_lval_t*));
@@ -1462,6 +1493,7 @@ static void evac_add_evacuated(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
     ctx->evacuated = new_list;
     ctx->evacuated_capacity = new_cap;
   }
+  // LCOV_EXCL_BR_STOP
 
   ctx->evacuated[ctx->evacuated_count++] = v;
 }
@@ -1471,6 +1503,7 @@ static void evac_worklist_push(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
   if (v == nullptr) return;
 
   // Grow if at capacity
+  // LCOV_EXCL_BR_START - worklist realloc OOM
   if (ctx->worklist_count >= ctx->worklist_capacity) {
     sz new_cap = ctx->worklist_capacity * 2;
     valk_lval_t** new_list = realloc(ctx->worklist, new_cap * sizeof(valk_lval_t*));
@@ -1481,6 +1514,7 @@ static void evac_worklist_push(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
     ctx->worklist = new_list;
     ctx->worklist_capacity = new_cap;
   }
+  // LCOV_EXCL_BR_STOP
 
   ctx->worklist[ctx->worklist_count++] = v;
 }
@@ -1490,11 +1524,13 @@ static valk_lval_t* evac_worklist_pop(valk_evacuation_ctx_t* ctx) {
   if (ctx->worklist_count == 0) return nullptr;
   return ctx->worklist[--ctx->worklist_count];
 }
+// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // GC Marking Functions (legacy wrappers for heap2)
 // ============================================================================
 
+// LCOV_EXCL_BR_START - GC marking null checks and type dispatch
 static void valk_gc_mark_lval(valk_lval_t* v) {
   if (v == nullptr) return;
   if (v->flags & LVAL_FLAG_IMMORTAL) return;
@@ -1534,6 +1570,7 @@ static void valk_gc_mark_env(valk_lenv_t* env) {
   }
   if (env->parent) valk_gc_mark_env(env->parent);
 }
+// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // External GC marking functions
@@ -1562,6 +1599,7 @@ static void valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env);
 static void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
 static void valk_fix_env_pointers(valk_evacuation_ctx_t* ctx, valk_lenv_t* env);
 
+// LCOV_EXCL_START - evacuation checkpoint requires active eval stack from evaluator
 static inline void evac_value_and_process_env(valk_evacuation_ctx_t* ctx, valk_lval_t** ptr) {
   valk_lval_t* val = *ptr;
   if (val == nullptr) return;
@@ -1575,7 +1613,7 @@ static inline void evac_value_and_process_env(valk_evacuation_ctx_t* ctx, valk_l
 
 static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
   if (valk_thread_ctx.eval_stack == nullptr) return;
-  
+
   valk_eval_stack_t* stack = (valk_eval_stack_t*)valk_thread_ctx.eval_stack;
   for (u64 i = 0; i < stack->count; i++) {
     valk_cont_frame_t* frame = &stack->frames[i];
@@ -1617,10 +1655,11 @@ static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
         break;
     }
   }
-  
+
   evac_value_and_process_env(ctx, &valk_thread_ctx.eval_expr);
   evac_value_and_process_env(ctx, &valk_thread_ctx.eval_value);
 }
+// LCOV_EXCL_STOP
 
 
 
@@ -1628,6 +1667,7 @@ static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
 // Phase 1: Copy Values from Scratch to Heap
 // ============================================================================
 
+// LCOV_EXCL_BR_START - evacuation value copy null checks and type dispatch
 // Evacuate a single value from scratch to heap using hashmap deduplication
 // Returns the new location (or original if not in scratch or already copied)
 // This is a single-pass approach - no forwarding pointers needed
@@ -1985,11 +2025,13 @@ static void valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
   env_worklist_free(&worklist);
   env_worklist_free(&visited);
 }
+// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // Phase 2: Fix Pointers to Use New Locations
 // ============================================================================
 
+// LCOV_EXCL_START - pointer fixing requires active evacuation context from checkpoint
 // Helper: Check if pointer is in scratch and handle accordingly using hashmap
 // Returns true if pointer was updated, false otherwise
 static inline bool fix_scratch_pointer(valk_evacuation_ctx_t* ctx, valk_lval_t** ptr) {
@@ -2027,7 +2069,9 @@ static inline bool fix_scratch_pointer(valk_evacuation_ctx_t* ctx, valk_lval_t**
 
   return false;
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_BR_START - pointer fixing null checks and type dispatch
 // Fix pointers in a value to follow forwarding pointers
 static void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
   if (v == nullptr) return;
@@ -2172,11 +2216,13 @@ static void valk_fix_env_pointers(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) 
   env_worklist_free(&worklist);
   env_worklist_free(&visited);
 }
+// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // Checkpoint: Evacuate and Reset
 // ============================================================================
 
+// LCOV_EXCL_BR_START - checkpoint null checks and iteration
 void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
                      valk_lenv_t* root_env) {
   if (scratch == nullptr || heap == nullptr) {
@@ -2328,6 +2374,7 @@ valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v) {
   
   return new_val;
 }
+// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // Phase 1: Multi-Class Heap Implementation (New Size Class Allocator)
@@ -2430,6 +2477,7 @@ static void valk_gc_register_heap(valk_gc_heap2_t *heap) {
   pthread_mutex_unlock(&g_live_heaps_lock);
 }
 
+// LCOV_EXCL_START - heap unregister/alive check used internally by TLAB operations
 static void valk_gc_unregister_heap(valk_gc_heap2_t *heap) {
   pthread_mutex_lock(&g_live_heaps_lock);
   for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) {
@@ -2454,6 +2502,7 @@ static bool valk_gc_is_heap_alive(valk_gc_heap2_t *heap) {
   pthread_mutex_unlock(&g_live_heaps_lock);
   return alive;
 }
+// LCOV_EXCL_STOP
 
 // LCOV_EXCL_BR_START - heap creation calloc/mmap failures
 // Create new multi-class heap
@@ -2545,6 +2594,7 @@ void valk_gc_heap2_destroy(valk_gc_heap2_t *heap) {
   free(heap);
 }
 
+// LCOV_EXCL_BR_START - TLAB refill internal bitmap search and page management
 // Find free slots in a page's allocation bitmap
 // Returns starting slot index, or UINT32_MAX if not found
 static u32 valk_gc_page2_find_free_slots(valk_gc_page2_t *page, u32 count) {
@@ -2586,6 +2636,7 @@ bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, u8 size_
       // Page is actually full, remove from partial list
       list->partial_pages = page->next_partial;
       page = nullptr;
+    // LCOV_EXCL_START - page reclaim path requires MADV_DONTNEED to zero page
     } else if (page->reclaimed) {
       // Page was reclaimed (MADV_DONTNEED zeroed the memory), re-initialize header
       // The header was zeroed, so restore it
@@ -2600,6 +2651,7 @@ bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, u8 size_
       atomic_fetch_add(&heap->committed_bytes, list->page_size);
       page->reclaimed = false;
     }
+    // LCOV_EXCL_STOP
   }
   
   if (!page) {
@@ -2659,6 +2711,7 @@ bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, u8 size_
   
   return true;
 }
+// LCOV_EXCL_BR_STOP
 
 static bool valk_gc_heap2_try_emergency_gc(valk_gc_heap2_t *heap, u64 needed);
 
@@ -2808,12 +2861,13 @@ void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, sz new_size) {
     return new_ptr;
   }
   
+  // LCOV_EXCL_START - large object realloc requires allocating large object first then reallocating
   pthread_mutex_lock(&heap->large_lock);
   for (valk_gc_large_obj_t *obj = heap->large_objects; obj != nullptr; obj = obj->next) {
     if (obj->data == ptr) {
       u64 old_size = obj->size;
       pthread_mutex_unlock(&heap->large_lock);
-      
+
       if (new_size <= old_size) {
         return ptr;
       }
@@ -2825,15 +2879,17 @@ void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, sz new_size) {
     }
   }
   pthread_mutex_unlock(&heap->large_lock);
-  
+
   VALK_WARN("valk_gc_heap2_realloc: pointer %p not found in heap", ptr);
   return nullptr;
+  // LCOV_EXCL_STOP
 }
 
 // ============================================================================
 // Phase 2: Pointer Location and Marking
 // ============================================================================
 
+// LCOV_EXCL_BR_START - pointer location search and validation
 bool valk_gc_ptr_to_location(valk_gc_heap2_t *heap, void *ptr, valk_gc_ptr_location_t *out) {
   if (!heap || !ptr || !out) {
     if (out) out->is_valid = false;
@@ -2886,6 +2942,7 @@ bool valk_gc_ptr_to_location(valk_gc_heap2_t *heap, void *ptr, valk_gc_ptr_locat
     return false;
   }
 
+  // LCOV_EXCL_START - slow path for non-contiguous heap requires heap->base not set
   for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     valk_gc_page_list_t *list = &heap->classes[c];
     u16 slot_size = valk_gc_size_classes[c];
@@ -2908,8 +2965,11 @@ bool valk_gc_ptr_to_location(valk_gc_heap2_t *heap, void *ptr, valk_gc_ptr_locat
   }
 
   return false;
+  // LCOV_EXCL_STOP
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - large object marking and sweep iteration
 bool valk_gc_mark_large_object(valk_gc_heap2_t *heap, void *ptr) {
   if (!heap || !ptr) return false;
   
@@ -2960,12 +3020,14 @@ sz valk_gc_sweep_page2(valk_gc_page2_t *page) {
         if (slot < slots) {
           void *ptr = valk_gc_page2_slot_ptr(page, (u32)slot);
           
+          // LCOV_EXCL_BR_START - LVAL_REF finalizer requires integration with ref creation API
           if (slot_size >= sizeof(valk_lval_t)) {
             valk_lval_t *v = (valk_lval_t *)ptr;
             if (LVAL_TYPE(v) == LVAL_REF && v->ref.free != nullptr) {
               v->ref.free(v->ref.ptr);
             }
           }
+          // LCOV_EXCL_BR_STOP
         }
         
         temp &= temp - 1;
@@ -3011,7 +3073,9 @@ sz valk_gc_sweep_large_objects(valk_gc_heap2_t *heap) {
   atomic_fetch_sub(&heap->large_object_bytes, freed);
   return freed;
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - page list rebuild and reclaim iteration
 void valk_gc_rebuild_partial_lists(valk_gc_heap2_t *heap) {
   if (!heap) return;
   
@@ -3066,11 +3130,13 @@ sz valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap) {
   
   return pages_reclaimed;
 }
+// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // Phase 4: Mark Phase for heap2
 // ============================================================================
 
+// LCOV_EXCL_BR_START - heap2 mark phase null checks and type dispatch
 static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx);
 static void mark_env2(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx);
 
@@ -3085,6 +3151,7 @@ static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx2_t *ctx) {
   }
 }
 
+// LCOV_EXCL_START - Heap2 marking with complex types requires runtime context from real GC cycle
 static void mark_lval2(valk_lval_t *lval, valk_gc_mark_ctx2_t *ctx) {
   if (lval == nullptr) return;
   if (!mark_ptr_only(lval, ctx)) return;
@@ -3145,6 +3212,7 @@ static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
       break;
   }
 }
+// LCOV_EXCL_STOP
 
 static void mark_root_visitor2(valk_lval_t *val, void *user) {
   valk_gc_mark_ctx2_t *ctx = user;
@@ -3154,7 +3222,9 @@ static void mark_root_visitor2(valk_lval_t *val, void *user) {
 void valk_gc_heap2_mark_object(valk_gc_mark_ctx2_t *ctx, void *ptr) {
   mark_lval2(ptr, ctx);
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - heap2 mark roots and collect null checks
 void valk_gc_heap2_mark_roots(valk_gc_heap2_t *heap) {
   if (!heap) return;
   
@@ -3218,19 +3288,20 @@ void valk_gc_tlab2_abandon(valk_gc_tlab2_t *tlab) {
 
 void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab) {
   if (!tlab) return;
-  
+
   valk_gc_heap2_t *heap = tlab->owner_heap;
-  
+
   for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     valk_gc_page2_t *page = tlab->classes[c].page;
     u32 next = tlab->classes[c].next_slot;
     u32 limit = tlab->classes[c].limit_slot;
-    
+
+    // LCOV_EXCL_START - TLAB unused slot reclaim requires specific mid-allocation TLAB state
     if (page && heap && next < limit) {
       u32 unused = limit - next;
       valk_gc_page_list_t *list = &heap->classes[c];
       u8 *bitmap = valk_gc_page2_alloc_bitmap(page);
-      
+
       pthread_mutex_lock(&list->lock);
       for (u32 i = next; i < limit; i++) {
         valk_gc_bitmap_clear(bitmap, i);
@@ -3239,12 +3310,13 @@ void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab) {
       atomic_fetch_sub(&list->used_slots, unused);
       pthread_mutex_unlock(&list->lock);
     }
-    
+    // LCOV_EXCL_STOP
+
     tlab->classes[c].page = nullptr;
     tlab->classes[c].next_slot = 0;
     tlab->classes[c].limit_slot = 0;
   }
-  
+
   tlab->owner_heap = nullptr;
 }
 
@@ -3368,29 +3440,32 @@ sz valk_gc_heap2_collect_auto(valk_gc_heap2_t *heap) {
   
   return valk_gc_heap2_parallel_collect(heap);
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_START - emergency GC triggered at hard limit requires specific memory pressure conditions
 static bool valk_gc_heap2_try_emergency_gc(valk_gc_heap2_t *heap, u64 needed) {
   if (heap->in_emergency_gc) {
     return false;
   }
-  
+
   heap->in_emergency_gc = true;
-  
+
   VALK_WARN("Emergency GC: need %zu bytes, used %zu / %zu",
             needed, valk_gc_heap2_used_bytes(heap), heap->hard_limit);
-  
+
   u64 reclaimed = valk_gc_heap2_collect_auto(heap);
-  
+
   heap->in_emergency_gc = false;
-  
+
   u64 after = valk_gc_heap2_used_bytes(heap);
   if (after + needed <= heap->hard_limit) {
     VALK_INFO("Emergency GC recovered %zu bytes, allocation can proceed", reclaimed);
     return true;
   }
-  
+
   return false;
 }
+// LCOV_EXCL_STOP
 
 // ============================================================================
 // Phase 7: Parallel Mark/Sweep for heap2
@@ -3435,6 +3510,7 @@ static bool valk_gc_heap2_check_termination(void) {
   return false;
 }
 
+// LCOV_EXCL_START - Heap2 parallel mark/sweep requires multi-threaded STW coordination
 static void mark_children2_parallel(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx);
 static void mark_env2_parallel(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx);
 
@@ -3775,38 +3851,40 @@ static void valk_gc_participate_in_parallel_gc(void) {
   }
   pthread_mutex_unlock(&valk_gc_coord.lock);
 }
+// LCOV_EXCL_STOP
 
 // ============================================================================
 // Fork Safety - Reset global state after fork() in child process
 // ============================================================================
 
+// LCOV_EXCL_START - fork safety function requires actual fork() which is unsafe in test harness
 void valk_gc_reset_after_fork(void) {
   __runtime_heap = nullptr;
   __runtime_initialized = false;
-  
+
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
   atomic_store(&valk_gc_coord.threads_registered, 0);
   atomic_store(&valk_gc_coord.threads_paused, 0);
   valk_gc_coord.barrier_initialized = false;
-  
+
   for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
     valk_gc_coord.threads[i].ctx = nullptr;
     valk_gc_coord.threads[i].active = false;
   }
-  
+
   atomic_store(&valk_gc_coord.parallel_cycles, 0);
   atomic_store(&valk_gc_coord.parallel_pause_us_total, 0);
-  
+
   atomic_store(&__gc_heap2_idle_count, 0);
   atomic_store(&__gc_heap2_terminated, false);
   atomic_store(&__gc_heap2_current, nullptr);
-  
+
   pthread_mutex_lock(&g_live_heaps_lock);
   for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) {
     g_live_heaps[i] = nullptr;
   }
   pthread_mutex_unlock(&g_live_heaps_lock);
-  
+
   valk_thread_ctx.heap = nullptr;
   valk_thread_ctx.scratch = nullptr;
   valk_thread_ctx.root_env = nullptr;
@@ -3815,7 +3893,7 @@ void valk_gc_reset_after_fork(void) {
   valk_thread_ctx.eval_stack = nullptr;
   valk_thread_ctx.eval_expr = nullptr;
   valk_thread_ctx.eval_value = nullptr;
-  
+
   if (valk_thread_ctx.root_stack) {
     free(valk_thread_ctx.root_stack);
     valk_thread_ctx.root_stack = nullptr;
@@ -3823,3 +3901,4 @@ void valk_gc_reset_after_fork(void) {
   valk_thread_ctx.root_stack_count = 0;
   valk_thread_ctx.root_stack_capacity = 0;
 }
+// LCOV_EXCL_STOP

@@ -3236,6 +3236,433 @@ void test_gc_region_write_barrier(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// ============================================================================
+// Phase 24: Additional Coverage Tests
+// ============================================================================
+
+void test_gc_handle_table_growth(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_handle_table_t table;
+  valk_handle_table_init(&table);
+
+  u32 initial_capacity = table.capacity;
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+
+  valk_handle_t handles[100];
+  valk_lval_t *vals[100];
+  for (int i = 0; i < 100; i++) {
+    vals[i] = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+    vals[i]->flags = LVAL_NUM;
+    vals[i]->num = i;
+    handles[i] = valk_handle_create(&table, vals[i]);
+  }
+
+  VALK_TEST_ASSERT(table.capacity > initial_capacity,
+                   "Table should have grown (initial=%u, now=%u)",
+                   initial_capacity, table.capacity);
+
+  for (int i = 0; i < 100; i++) {
+    valk_lval_t *resolved = valk_handle_resolve(&table, handles[i]);
+    VALK_TEST_ASSERT(resolved == vals[i], "Handle %d should resolve after growth", i);
+  }
+
+  valk_handle_table_free(&table);
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+static int visit_count = 0;
+static void handle_visitor_fn(valk_lval_t *val, void *ctx) {
+  (void)val;
+  (void)ctx;
+  visit_count++;
+}
+
+void test_gc_handle_table_visit(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_handle_table_t table;
+  valk_handle_table_init(&table);
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+
+  valk_lval_t *vals[5];
+  for (int i = 0; i < 5; i++) {
+    vals[i] = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+    vals[i]->flags = LVAL_NUM;
+    vals[i]->num = i;
+    valk_handle_create(&table, vals[i]);
+  }
+
+  visit_count = 0;
+  valk_handle_table_visit(&table, handle_visitor_fn, nullptr);
+  VALK_TEST_ASSERT(visit_count == 5, "Visitor should be called 5 times (got %d)", visit_count);
+
+  valk_handle_table_visit(nullptr, handle_visitor_fn, nullptr);
+
+  valk_handle_table_free(&table);
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_region_immortal_lifetime(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_IMMORTAL, nullptr);
+  VALK_TEST_ASSERT(region != nullptr, "Immortal region should be created");
+  VALK_TEST_ASSERT(region->lifetime == VALK_LIFETIME_IMMORTAL, "Lifetime should be IMMORTAL");
+  VALK_TEST_ASSERT(region->arena == nullptr, "Immortal region should have no arena");
+
+  void *ptr = valk_region_alloc(region, 100);
+  VALK_TEST_ASSERT(ptr == nullptr, "Allocation from immortal region should return nullptr");
+
+  valk_region_destroy(region);
+
+  VALK_PASS();
+}
+
+void test_gc_region_with_parent_overflow(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_region_t *parent = valk_region_create(VALK_LIFETIME_SCRATCH, nullptr);
+  valk_region_t *child = valk_region_create(VALK_LIFETIME_SCRATCH, parent);
+
+  valk_region_set_limit(child, 64);
+
+  void *ptr1 = valk_region_alloc(child, 32);
+  VALK_TEST_ASSERT(ptr1 != nullptr, "First alloc should succeed");
+
+  void *ptr2 = valk_region_alloc(child, 128);
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Overflow alloc should succeed via parent");
+
+  valk_region_stats_t stats;
+  valk_region_get_stats(child, &stats);
+  VALK_TEST_ASSERT(stats.overflow_count > 0, "Overflow count should be > 0");
+
+  valk_region_destroy(child);
+  valk_region_destroy(parent);
+
+  VALK_PASS();
+}
+
+void test_gc_region_create_with_arena(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 4096 + sizeof(valk_mem_arena_t);
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, 4096);
+
+  valk_region_t *region = valk_region_create_with_arena(VALK_LIFETIME_SCRATCH, nullptr, arena);
+  VALK_TEST_ASSERT(region != nullptr, "Region with arena should be created");
+  VALK_TEST_ASSERT(region->arena == arena, "Arena should match");
+  VALK_TEST_ASSERT(region->owns_arena == false, "Should not own arena");
+
+  void *ptr = valk_region_alloc(region, 100);
+  VALK_TEST_ASSERT(ptr != nullptr, "Allocation should succeed");
+
+  valk_region_destroy(region);
+  free(arena);
+
+  VALK_PASS();
+}
+
+void test_gc_region_session_lifetime(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t config = valk_runtime_config_default();
+  valk_runtime_init(&config);
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
+  VALK_TEST_ASSERT(region != nullptr, "Session region should be created");
+  VALK_TEST_ASSERT(region->lifetime == VALK_LIFETIME_SESSION, "Lifetime should be SESSION");
+  VALK_TEST_ASSERT(region->gc_heap != nullptr, "Session region should have gc_heap");
+
+  void *ptr = valk_region_alloc(region, 64);
+  VALK_TEST_ASSERT(ptr != nullptr, "Allocation from session region should succeed");
+
+  valk_region_destroy(region);
+  valk_runtime_shutdown();
+
+  VALK_PASS();
+}
+
+void test_gc_visit_env_roots_nested(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+
+  valk_lenv_t *parent_env = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lenv_t));
+  memset(parent_env, 0, sizeof(valk_lenv_t));
+  parent_env->parent = nullptr;
+  parent_env->vals.items = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t *) * 4);
+  parent_env->vals.count = 2;
+  parent_env->vals.capacity = 4;
+
+  valk_lval_t *val1 = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  val1->flags = LVAL_NUM;
+  val1->num = 1;
+  valk_lval_t *val2 = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  val2->flags = LVAL_NUM;
+  val2->num = 2;
+  parent_env->vals.items[0] = val1;
+  parent_env->vals.items[1] = val2;
+
+  valk_lenv_t *child_env = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lenv_t));
+  memset(child_env, 0, sizeof(valk_lenv_t));
+  child_env->parent = parent_env;
+  child_env->vals.items = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t *) * 4);
+  child_env->vals.count = 1;
+  child_env->vals.capacity = 4;
+
+  valk_lval_t *val3 = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  val3->flags = LVAL_NUM;
+  val3->num = 3;
+  child_env->vals.items[0] = val3;
+
+  visit_count = 0;
+  valk_gc_visit_env_roots(child_env, handle_visitor_fn, nullptr);
+  VALK_TEST_ASSERT(visit_count == 3, "Should visit 3 values in nested envs (got %d)", visit_count);
+
+  valk_gc_visit_env_roots(nullptr, handle_visitor_fn, nullptr);
+
+  valk_gc_malloc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_barrier_destroy_explicit(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_barrier_t barrier;
+  valk_barrier_init(&barrier, 1);
+
+  valk_barrier_wait(&barrier);
+
+  valk_barrier_destroy(&barrier);
+
+  valk_barrier_init(&barrier, 2);
+  valk_barrier_destroy(&barrier);
+
+  VALK_PASS();
+}
+
+void test_gc_mark_cons_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_coordinator_init();
+  valk_gc_thread_register();
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+
+  valk_lval_t *head = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  head->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
+  head->num = 42;
+
+  valk_lval_t *tail = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  tail->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
+  tail->num = 99;
+
+  valk_lval_t *cons = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  cons->flags = LVAL_CONS | LVAL_ALLOC_HEAP;
+  cons->cons.head = head;
+  cons->cons.tail = tail;
+
+  valk_gc_root_push(cons);
+
+  valk_gc_clear_mark(cons);
+  valk_gc_clear_mark(head);
+  valk_gc_clear_mark(tail);
+
+  valk_gc_mark_lval_external(cons);
+
+  VALK_TEST_ASSERT(valk_gc_is_marked(cons), "CONS should be marked");
+  VALK_TEST_ASSERT(valk_gc_is_marked(head), "CONS head should be marked");
+  VALK_TEST_ASSERT(valk_gc_is_marked(tail), "CONS tail should be marked");
+
+  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_thread_unregister();
+
+  VALK_PASS();
+}
+
+void test_gc_mark_fun_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_coordinator_init();
+  valk_gc_thread_register();
+
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+
+  valk_lval_t *formals = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  formals->flags = LVAL_QEXPR | LVAL_ALLOC_HEAP;
+  formals->cons.head = nullptr;
+  formals->cons.tail = nullptr;
+
+  valk_lval_t *body = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  body->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
+  body->num = 100;
+
+  valk_lenv_t *env = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lenv_t));
+  memset(env, 0, sizeof(valk_lenv_t));
+  env->parent = nullptr;
+  env->vals.items = nullptr;
+  env->vals.count = 0;
+  env->vals.capacity = 0;
+
+  valk_lval_t *fun = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  fun->flags = LVAL_FUN | LVAL_ALLOC_HEAP;
+  fun->fun.builtin = nullptr;
+  fun->fun.formals = formals;
+  fun->fun.body = body;
+  fun->fun.env = env;
+  fun->fun.name = nullptr;
+
+  valk_gc_root_push(fun);
+
+  valk_gc_clear_mark(fun);
+  valk_gc_clear_mark(formals);
+  valk_gc_clear_mark(body);
+
+  valk_gc_mark_lval_external(fun);
+
+  VALK_TEST_ASSERT(valk_gc_is_marked(fun), "FUN should be marked");
+  VALK_TEST_ASSERT(valk_gc_is_marked(formals), "FUN formals should be marked");
+  VALK_TEST_ASSERT(valk_gc_is_marked(body), "FUN body should be marked");
+
+  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_thread_unregister();
+
+  VALK_PASS();
+}
+
+void test_gc_ptr_map_collision_handling(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_ptr_map_t map;
+  valk_ptr_map_init(&map);
+
+  int keys[256];
+  int vals[256];
+  for (int i = 0; i < 256; i++) {
+    keys[i] = i;
+    vals[i] = i * 100;
+    valk_ptr_map_put(&map, &keys[i], &vals[i]);
+  }
+
+  VALK_TEST_ASSERT(map.count == 256, "Should have 256 entries");
+
+  for (int i = 0; i < 256; i++) {
+    void *result = valk_ptr_map_get(&map, &keys[i]);
+    VALK_TEST_ASSERT(result == &vals[i], "Get should return correct value for key %d", i);
+  }
+
+  int not_found_key = 999;
+  void *result = valk_ptr_map_get(&map, &not_found_key);
+  VALK_TEST_ASSERT(result == nullptr, "Non-existent key should return nullptr");
+
+  valk_ptr_map_free(&map);
+
+  VALK_PASS();
+}
+
+void test_gc_region_alloc_limit_overflow(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t config = valk_runtime_config_default();
+  valk_runtime_init(&config);
+
+  valk_region_t *parent = valk_region_create(VALK_LIFETIME_SCRATCH, nullptr);
+  VALK_TEST_ASSERT(parent != nullptr, "Parent region should be created");
+
+  valk_region_t *child = valk_region_create(VALK_LIFETIME_SCRATCH, parent);
+  VALK_TEST_ASSERT(child != nullptr, "Child region should be created");
+
+  valk_region_set_limit(child, 64);
+
+  void *ptr1 = valk_region_alloc(child, 32);
+  VALK_TEST_ASSERT(ptr1 != nullptr, "First alloc should succeed");
+
+  void *ptr2 = valk_region_alloc(child, 64);
+  VALK_TEST_ASSERT(ptr2 != nullptr, "Overflow alloc should succeed via parent");
+
+  valk_region_stats_t stats;
+  valk_region_get_stats(child, &stats);
+  VALK_TEST_ASSERT(stats.overflow_count > 0, "Overflow count should be > 0 (got %llu)",
+                   (unsigned long long)stats.overflow_count);
+
+  valk_region_destroy(child);
+  valk_region_destroy(parent);
+
+  valk_runtime_shutdown();
+
+  VALK_PASS();
+}
+
+void test_gc_region_limit_exceeds_allocation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_region_t *region = valk_region_create(VALK_LIFETIME_SCRATCH, nullptr);
+  VALK_TEST_ASSERT(region != nullptr, "Region should be created");
+
+  void *ptr1 = valk_region_alloc(region, 1024);
+  VALK_TEST_ASSERT(ptr1 != nullptr, "First alloc should succeed");
+
+  bool set_result = valk_region_set_limit(region, 512);
+  VALK_TEST_ASSERT(set_result == false, "Setting limit below current allocation should fail");
+
+  valk_region_destroy(region);
+
+  VALK_PASS();
+}
+
+void test_gc_runtime_double_init(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t config = valk_runtime_config_default();
+
+  int result1 = valk_runtime_init(&config);
+  VALK_TEST_ASSERT(result1 == 0, "First init should succeed");
+
+  int result2 = valk_runtime_init(&config);
+  VALK_TEST_ASSERT(result2 == 0, "Second init should return 0 (already initialized)");
+
+  valk_runtime_shutdown();
+
+  VALK_PASS();
+}
+
+void test_gc_evacuate_to_heap_already_on_heap(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t config = valk_runtime_config_default();
+  valk_runtime_init(&config);
+
+  valk_gc_malloc_heap_t *heap = valk_runtime_get_heap();
+
+  valk_lval_t *val = valk_gc_heap2_alloc(heap, sizeof(valk_lval_t));
+  val->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
+  val->num = 42;
+
+  valk_lval_t *result = valk_evacuate_to_heap(val);
+  VALK_TEST_ASSERT(result == val, "Already-on-heap value should return same pointer");
+
+  valk_runtime_shutdown();
+
+  VALK_PASS();
+}
+
+void test_gc_evacuate_to_heap_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *result = valk_evacuate_to_heap(nullptr);
+  VALK_TEST_ASSERT(result == nullptr, "nullptr should return nullptr");
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -3431,6 +3858,24 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_region_destroy_null", test_gc_region_destroy_null);
   valk_testsuite_add_test(suite, "test_gc_allocator_lifetime", test_gc_allocator_lifetime);
   valk_testsuite_add_test(suite, "test_gc_region_write_barrier", test_gc_region_write_barrier);
+
+  // Phase 24: Additional Coverage Tests
+  valk_testsuite_add_test(suite, "test_gc_handle_table_growth", test_gc_handle_table_growth);
+  valk_testsuite_add_test(suite, "test_gc_handle_table_visit", test_gc_handle_table_visit);
+  valk_testsuite_add_test(suite, "test_gc_region_immortal_lifetime", test_gc_region_immortal_lifetime);
+  valk_testsuite_add_test(suite, "test_gc_region_with_parent_overflow", test_gc_region_with_parent_overflow);
+  valk_testsuite_add_test(suite, "test_gc_region_create_with_arena", test_gc_region_create_with_arena);
+  valk_testsuite_add_test(suite, "test_gc_region_session_lifetime", test_gc_region_session_lifetime);
+  valk_testsuite_add_test(suite, "test_gc_visit_env_roots_nested", test_gc_visit_env_roots_nested);
+  valk_testsuite_add_test(suite, "test_gc_barrier_destroy_explicit", test_gc_barrier_destroy_explicit);
+  valk_testsuite_add_test(suite, "test_gc_mark_cons_type", test_gc_mark_cons_type);
+  valk_testsuite_add_test(suite, "test_gc_mark_fun_type", test_gc_mark_fun_type);
+  valk_testsuite_add_test(suite, "test_gc_ptr_map_collision_handling", test_gc_ptr_map_collision_handling);
+  valk_testsuite_add_test(suite, "test_gc_region_alloc_limit_overflow", test_gc_region_alloc_limit_overflow);
+  valk_testsuite_add_test(suite, "test_gc_region_limit_exceeds_allocation", test_gc_region_limit_exceeds_allocation);
+  valk_testsuite_add_test(suite, "test_gc_runtime_double_init", test_gc_runtime_double_init);
+  valk_testsuite_add_test(suite, "test_gc_evacuate_to_heap_already_on_heap", test_gc_evacuate_to_heap_already_on_heap);
+  valk_testsuite_add_test(suite, "test_gc_evacuate_to_heap_null", test_gc_evacuate_to_heap_null);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
