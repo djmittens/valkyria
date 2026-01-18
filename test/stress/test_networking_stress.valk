@@ -1,0 +1,115 @@
+; Networking Stress Test Suite
+; Heavy load tests for HTTP/2 request/response object creation and manipulation
+; Note: These tests stress the networking API without requiring actual network I/O
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(test/suite "Networking Stress Tests")
+
+; ============================================================================
+; Request Object Creation Stress
+; ============================================================================
+
+(test/define "networking-stress-create-single-request"
+  {do
+    (def {req} (http2/request "GET" "https" "www.example.com" "/"))
+    (!= req ())
+  })
+
+(test/define "networking-stress-create-multiple-requests"
+  {do
+    (def {req1} (http2/request "GET" "https" "www.example.com" "/"))
+    (def {req2} (http2/request "POST" "https" "api.example.com" "/data"))
+    (def {req3} (http2/request "PUT" "https" "api.example.com" "/resource"))
+    (if (!= req1 ())
+      {(if (!= req2 ())
+        {(!= req3 ())}
+        {0})}
+      {0})
+  })
+
+; ============================================================================
+; Header Manipulation Stress
+; ============================================================================
+
+(test/define "networking-stress-add-headers"
+  {do
+    (def {req} (http2/request "GET" "https" "www.example.com" "/"))
+    (http2/request-add-header req ":method" "GET")
+    (http2/request-add-header req "user-agent" "Valkyria/1.0")
+    (http2/request-add-header req "accept" "*/*")
+    (http2/request-add-header req "accept-encoding" "gzip, deflate")
+    (http2/request-add-header req "connection" "keep-alive")
+    (!= req ())
+  })
+
+; ============================================================================
+; Multiple Request Objects with Headers
+; ============================================================================
+
+(test/define "networking-stress-requests-with-headers"
+  {do
+    (def {req1} (http2/request "GET" "https" "www.example.com" "/"))
+    (http2/request-add-header req1 ":method" "GET")
+    (http2/request-add-header req1 "user-agent" "Valkyria")
+
+    (def {req2} (http2/request "POST" "https" "api.example.com" "/data"))
+    (http2/request-add-header req2 ":method" "POST")
+    (http2/request-add-header req2 "content-type" "application/json")
+
+    (def {req3} (http2/request "PUT" "https" "api.example.com" "/resource"))
+    (http2/request-add-header req3 ":method" "PUT")
+    (http2/request-add-header req3 "authorization" "Bearer token123")
+
+    (if (!= req1 ())
+      {(if (!= req2 ())
+        {(!= req3 ())}
+        {0})}
+      {0})
+  })
+
+; ============================================================================
+; Request Method Variations
+; ============================================================================
+
+(test/define "networking-stress-different-methods"
+  {do
+    (def {get-req} (http2/request "GET" "https" "api.example.com" "/users"))
+    (def {post-req} (http2/request "POST" "https" "api.example.com" "/users"))
+    (def {put-req} (http2/request "PUT" "https" "api.example.com" "/users/1"))
+    (def {delete-req} (http2/request "DELETE" "https" "api.example.com" "/users/1"))
+    (def {head-req} (http2/request "HEAD" "https" "api.example.com" "/users"))
+
+    (if (!= get-req ())
+      {(if (!= post-req ())
+        {(if (!= put-req ())
+          {(if (!= delete-req ())
+            {(!= head-req ())}
+            {0})}
+          {0})}
+        {0})}
+      {0})
+  })
+
+; ============================================================================
+; Different Hosts and Paths
+; ============================================================================
+
+(test/define "networking-stress-different-hosts"
+  {do
+    (def {req1} (http2/request "GET" "https" "www.example.com" "/"))
+    (def {req2} (http2/request "GET" "https" "api.example.com" "/v1/data"))
+    (def {req3} (http2/request "GET" "https" "cdn.example.com" "/assets/style.css"))
+    (def {req4} (http2/request "GET" "https" "auth.example.com" "/oauth/token"))
+
+    (if (!= req1 ())
+      {(if (!= req2 ())
+        {(if (!= req3 ())
+          {(!= req4 ())}
+          {0})}
+        {0})}
+      {0})
+  })
+
+; Run all networking stress tests
+(test/run {})

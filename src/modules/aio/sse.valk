@@ -1,0 +1,72 @@
+; src/modules/aio/sse.valk - Server-Sent Events
+; Load with: (load "src/modules/aio/sse.valk")
+;
+; SSE wrapper over generic stream/* builtins.
+;
+; Core API:
+;   (sse/open request)              - Open SSE stream with proper headers
+;   (sse/send stream data)          - Send data event
+;   (sse/event stream type data)    - Send named event  
+;   (sse/id stream event-id data)   - Send event with ID
+;   (sse/retry stream ms)           - Send retry directive
+;   (sse/close stream)              - Close stream
+;   (sse/writable? stream)          - Check backpressure
+;   (sse/on-drain stream callback)  - Register drain callback
+;
+; High-level utilities:
+;   (sse/create request)            - Alias for sse/open
+;   (sse/message stream data)       - Alias for sse/send
+;   (sse/json stream data)          - Send JSON-encoded data
+;   (sse/json-event stream type d)  - Send named event with JSON data
+;   (sse/handler body-fn)           - Create SSE endpoint handler
+
+(fun {sse/open request}
+  {stream/open request 
+    {:status "200"
+     :content-type "text/event-stream"
+     :cache-control "no-cache"}})
+
+(fun {sse/send stream data}
+  {stream/write stream (str "data: " data "\n\n")})
+
+(fun {sse/event stream event-type data}
+  {stream/write stream (str "event: " event-type "\ndata: " data "\n\n")})
+
+(fun {sse/id stream event-id data}
+  {stream/write stream (str "id: " event-id "\ndata: " data "\n\n")})
+
+(fun {sse/retry stream ms}
+  {stream/write stream (str "retry: " ms "\n\n")})
+
+(fun {sse/close stream}
+  {stream/close stream})
+
+(fun {sse/writable? stream}
+  {stream/writable? stream})
+
+(fun {sse/on-drain stream callback}
+  {stream/on-drain stream callback})
+
+(fun {sse/cancel stream}
+  {stream/cancel stream})
+
+; Aliases
+(def {sse/create} sse/open)
+(fun {sse/message stream data} {sse/send stream data})
+
+; JSON helpers
+(fun {sse/json stream data}
+  {sse/send stream (json/encode data)})
+
+(fun {sse/json-event stream event-type data}
+  {sse/event stream event-type (json/encode data)})
+
+; Handler wrapper - creates SSE endpoint from body function
+; Usage: (def {handler} (sse/handler (\ {stream req} { ... })))
+(fun {sse/handler body-fn}
+  {\ {req}
+    {
+      (= {stream} (sse/open req))
+      (body-fn stream req)
+      :deferred
+    }})

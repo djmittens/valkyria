@@ -1,0 +1,272 @@
+; Simple test framework for Valkyria
+
+(def {*test-registry*} {})
+(def {*test-passed*} 0)
+(def {*test-failed*} 0)
+(def {*test-skipped*} 0)
+(def {*test-suite-name*} "Valkyria Test Suite")
+(def {*test-skip-suite*} 0)      ; Set to 1 to skip all tests in suite
+(def {*test-skip-reason*} "")    ; Reason for skipping
+(def {*test-debug*} 0)           ; Set to 1 to enable debug output
+(def {*test-expected-exit*} 0)   ; Expected exit code (0 = pass, 1 = fail expected)
+
+(fun {test/debug enabled} {
+  (def {*test-debug*} enabled)
+})
+
+(fun {test/suite name} {
+  (def {*test-suite-name*} name)
+})
+
+; Skip all tests in this suite with a reason
+(fun {test/skip reason} {
+  (def {*test-skip-suite*} 1)
+  (def {*test-skip-reason*} reason)
+})
+
+; Expect the test suite to exit with a specific code
+; Use this when testing error paths that should cause test failures
+(fun {test/expect-exit code} {
+  (def {*test-expected-exit*} code)
+})
+
+(fun {test/define name body} {
+  (def {*test-registry*} (join *test-registry* (list (list name body))))
+})
+
+(fun {test/assert cond msg} {
+  if cond
+    {true}
+    {error msg}
+})
+
+(fun {test/assert-eq expected actual msg} {
+  (test/assert (== expected actual) msg)
+})
+
+; Tail-recursive helper to print n dots
+(fun {*test-pad-dots-helper* n} {
+  if (<= n 0)
+    {true}
+    {do (printf ".") (*test-pad-dots-helper* (- n 1))}
+})
+
+(fun {*test-pad-dots* str width} {
+  do
+    (printf "%s" str)
+    (*test-pad-dots-helper* (- width (len str)))
+})
+
+(fun {*test-run-one* test} {
+  do
+    ; Extract from the Q-expression
+    ; head returns {name} so we eval it to get name
+    ; tail returns {body} - keep as qexpr, don't eval yet!
+    (= {test-name} (eval (head test)))
+    (= {test-body} (head (tail test)))
+
+    ; Check if suite is skipped
+    (if (== *test-skip-suite* 1)
+      {do
+        (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")
+        (def {*test-skipped*} (+ *test-skipped* 1))
+        true}
+      {do
+        ; Debug output if enabled
+        (if (== *test-debug* 1)
+          {do
+            (printf "[DEBUG] Running test: ")
+            (print test)
+            (printf "[DEBUG] Test name: %s\n" test-name)
+            (printf "[DEBUG] Test body: ")
+            (print test-body)}
+          {true})
+
+        ; Time the test - eval the body here
+        (= {start-time} (time-us {}))
+        (= {result} (eval test-body))
+        (= {end-time} (time-us {}))
+        (= {elapsed} (- end-time start-time))
+
+        ; Debug output if enabled
+        (if (== *test-debug* 1)
+          {do
+            (printf "[DEBUG] Result: ")
+            (print result)
+            (if (error? result)
+              {printf "[DEBUG] Result is an ERROR!\n"}
+              {true})}
+          {true})
+
+        ; Check if result is truthy (not error, not 0)
+        (= {passed} (if (== result true) {1} {0}))
+
+        ; Print result with emoji first, then name + dots (aligned with C tests)
+        ; C tests use 100 char width: emoji(3) + name + dots = 97 total before "  PASS"
+        (if (== passed 1)
+          {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
+          {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)})
+
+        (if (== passed 1)
+          {(def {*test-passed*} (+ *test-passed* 1))}
+          {(def {*test-failed*} (+ *test-failed* 1))})
+
+        ; Return true to indicate test ran (even if it failed)
+        true})
+})
+
+(fun {test/run & args} {
+  do
+    (def {*test-passed*} 0)
+    (def {*test-failed*} 0)
+    (def {*test-skipped*} 0)
+    (= {total} (len *test-registry*))
+
+    ; Get suite name from args or from global variable
+    (= {suite-name} *test-suite-name*)
+
+    ; Check if we have any tests to run
+    (if (== total 0)
+      {do
+        (printf "❌ No tests registered!\n")
+        (if (== *test-expected-exit* 1)
+          {(shutdown 0)}
+          {(shutdown 1)})}
+      {true}
+    )
+
+    ; Print skip reason if suite is skipped
+    (if (== *test-skip-suite* 1)
+      {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name *test-skip-reason*}
+      {printf "🧪 [%ld/%ld] %s\n" total total suite-name})
+
+    ; Run tests and collect results
+    (= {run-results} (map *test-run-one* *test-registry*))
+    (= {tests-executed} (len run-results))
+
+    ; Check if all tests executed
+    (if (!= tests-executed total)
+      {do
+        (printf "\n❌ ERROR: Only %ld/%ld tests executed!\n" tests-executed total)
+        (shutdown 1)}
+      {true})
+
+    ; Print summary
+    (printf "\n🏁 Test Results: ")
+    (if (> *test-skipped* 0)
+      {printf "⏭️  %ld skipped\n" *test-skipped*}
+      {(if (== *test-failed* 0)
+        {printf "✨ All %ld tests passed! ✨\n" *test-passed*}
+        {printf "⚠️  %ld passed, %ld failed\n" *test-passed* *test-failed*})})
+
+    ; Determine actual exit code
+    (= {actual-exit} (if (== *test-failed* 0) {0} {1}))
+
+    ; If expected exit matches actual, exit 0 (test suite passed)
+    ; This allows testing error paths without breaking the test run
+    (if (== actual-exit *test-expected-exit*)
+      {(shutdown 0)}
+      {(shutdown actual-exit)})
+})
+
+; ============================================================================
+; Async Test Support
+; ============================================================================
+; For tests that require the event loop (HTTP, timers, etc.)
+; Usage:
+;   (test/async "test name" (\ {done} { ... (done true) }))
+;   (test/run-async aio)
+;   (aio/run aio)
+
+(def {*test-async-registry*} {})
+(def {*test-async-pending-atom*} (atom 0))
+(def {*test-async-passed-atom*} (atom 0))
+(def {*test-async-failed-atom*} (atom 0))
+
+(fun {test/async name body} {
+  (def {*test-async-registry*} (join *test-async-registry* (list (list name body))))
+})
+
+(fun {*test-async-done-callback* test-name start-time passed} {
+  do
+    (= {end-time} (time-us {}))
+    (= {elapsed} (- end-time start-time))
+    
+    (if passed
+      {do
+        (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)
+        (atom/add! *test-async-passed-atom* 1)}
+      {do
+        (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
+        (atom/add! *test-async-failed-atom* 1)})
+    
+    (atom/sub! *test-async-pending-atom* 1)
+    true
+})
+
+(fun {*test-start-async-one* aio test} {
+  do
+    (= {test-name} (eval (head test)))
+    (= {test-body} (eval (head (tail test))))
+    (= {start-time} (time-us {}))
+    
+    (= {done-fn} (\ {passed} {
+      (*test-async-done-callback* test-name start-time passed)
+    }))
+    
+    (atom/add! *test-async-pending-atom* 1)
+    
+    (aio/schedule aio 0 (\ {} {
+      (test-body done-fn)
+    }))
+})
+
+(fun {test/run-async aio & args} {
+  do
+    (atom/set! *test-async-passed-atom* 0)
+    (atom/set! *test-async-failed-atom* 0)
+    (atom/set! *test-async-pending-atom* 0)
+    (= {total} (len *test-async-registry*))
+    (= {suite-name} *test-suite-name*)
+    
+    (if (== total 0)
+      {do
+        (printf "❌ No async tests registered!\n")
+        (shutdown 1)}
+      {true})
+    
+    (printf "🧪 [%ld/%ld] %s (async)\n" total total suite-name)
+    
+    (map (\ {test} {(*test-start-async-one* aio test)}) *test-async-registry*)
+    
+    (aio/schedule aio 30000 (\ {} {
+      (if (> (atom/get *test-async-pending-atom*) 0)
+        {do
+          (printf "\n❌ TIMEOUT: %ld tests still pending\n" (atom/get *test-async-pending-atom*))
+          (aio/stop aio)
+          (shutdown 1)}
+        {true})
+    }))
+    
+    (aio/schedule aio 100 (\ {} {
+      (*test-async-check-complete* aio)
+    }))
+})
+
+(fun {*test-async-check-complete* aio} {
+  (if (== (atom/get *test-async-pending-atom*) 0)
+    {do
+      (= {passed} (atom/get *test-async-passed-atom*))
+      (= {failed} (atom/get *test-async-failed-atom*))
+      (printf "\n🏁 Test Results: ")
+      (if (== failed 0)
+        {printf "✨ All %ld tests passed! ✨\n" passed}
+        {printf "⚠️  %ld passed, %ld failed\n" passed failed})
+      (aio/stop aio)
+      (if (== failed 0)
+        {(shutdown 0)}
+        {(shutdown 1)})}
+    {(aio/schedule aio 100 (\ {} {(*test-async-check-complete* aio)}))})
+})
+
+; Test module loaded - no debug output

@@ -1,0 +1,67 @@
+; Test pending stream header buffering and copy paths
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "Pending Stream Headers Tests")
+
+(def {aio} (aio/start {
+  :max-connections 8
+  :arena-pool-size 4
+  :arena-size 1048576
+  :pending-stream-pool-size 16
+}))
+
+(def {custom-headers-received} 0)
+(def {responses-received} 0)
+(def {test-callback} nil)
+
+(fun {has-test-header headers}
+  {if (nil? headers)
+    {0}
+    {if (== (head (head headers)) "x-test-header")
+      {1}
+      {has-test-header (tail headers)}}})
+
+(def {handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (= {headers} (req/headers req))
+    
+    (if (== (has-test-header headers) 1)
+      {(def {custom-headers-received} (+ custom-headers-received 1))}
+      {nil})
+    
+    (aio/then (aio/sleep aio 200) (\ {_} {
+      {:status "200" :body (str "OK: " path)}
+    }))
+  }))
+
+(def {server} (http2/server-listen aio 0 handler))
+(def {test-port} (http2/server-port server))
+
+(fun {on-response resp} {
+  (def {responses-received} (+ responses-received 1))
+  (if (== responses-received 4)
+    {(test-callback (>= custom-headers-received 4))}
+    {nil})
+})
+
+(test/async "custom headers received with multiple concurrent requests" (\ {done} {
+  (def {test-callback} done)
+  
+  (http2/client-request-with-headers aio "127.0.0.1" test-port "/r1" 
+    {{"x-test-header" "v1"}} on-response)
+  
+  (http2/client-request-with-headers aio "127.0.0.1" test-port "/r2" 
+    {{"x-test-header" "v2"}} on-response)
+    
+  (http2/client-request-with-headers aio "127.0.0.1" test-port "/r3" 
+    {{"x-test-header" "v3"}} on-response)
+    
+  (http2/client-request-with-headers aio "127.0.0.1" test-port "/r4" 
+    {{"x-test-header" "v4"}} on-response)
+}))
+
+(test/run-async aio)
+(aio/run aio)

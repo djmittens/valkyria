@@ -1,0 +1,44 @@
+; Test server that serves a 50MB file from disk
+; Run: ./build/valk test/test_50mb_file_server.valk
+; Test: curl -k -o /dev/null -w "%{size_download}\n" https://localhost:8443/big
+
+(load "src/prelude.valk")
+
+(println "=== 50MB File Server Test ===")
+(println "")
+
+; Read the 50MB file from disk
+(println "Reading /tmp/50mb.txt...")
+(def {big-string} (read-file "/tmp/50mb.txt"))
+(printf "Read file: %d bytes\n" (len big-string))
+(println "")
+
+; Initialize AIO
+(def {sys} aio)
+
+; The big-string is loaded once and kept in memory
+; Response is built inside the handler using quasiquote (like webserver_demo.valk)
+
+; Define handler that returns the 50MB string
+(def {request-handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (select
+      {(== path "/big")
+       {`{:status "200" :content-type "text/plain" :body ,big-string}}}
+      {otherwise
+       {{:status "200" :content-type "text/plain" :body "Request /big for 50MB response"}}})
+  }))
+
+; Start server
+(println "Starting server on https://localhost:8443")
+(println "Request /big for 50MB response")
+(println "")
+(println "Test with: curl -k -o /dev/null -w '%{size_download}\\n' https://localhost:8443/big")
+(printf "Expected:  %d bytes\n" (len big-string))
+(println "")
+(println "Press Ctrl+C to stop")
+(println "")
+
+(http2/server-listen sys 8443 request-handler)
+(aio/run sys)

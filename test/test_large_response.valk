@@ -1,0 +1,107 @@
+; Large Response Test
+; Tests that the server can send large responses (50MB) through the Lisp machinery
+; This exercises the full path: Lisp handler -> response building -> HTTP/2 framing -> SSL
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(test/suite "Large Response Tests")
+
+; 50MB = 52428800 bytes
+(def {RESPONSE_SIZE} 52428800)
+
+; Generate the test file if it doesn't exist
+(def {test-file-path} "test/test_large_response_data.txt")
+
+(println "Checking for test data file...")
+(def {big-string}
+  (do
+    ; Try to read existing file first
+    (= {existing} (read-file test-file-path))
+    (if (> (len existing) 0)
+      {(do
+         (printf "Using existing test data: %d bytes\n" (len existing))
+         existing)}
+      {(do
+         ; File doesn't exist or is empty - create it
+         (println "Creating 50MB test data file (one-time setup)...")
+         ; Build string in chunks to avoid memory issues
+         ; Use 1KB chunks (1024 'A' chars)
+         (= {chunk} "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+         ; 1024 bytes per chunk, need 51200 chunks for 50MB
+         ; But this is too slow in Lisp, so just use a smaller test size
+         (println "Note: Using read-file for large data is preferred")
+         (println "Please run: dd if=/dev/zero bs=1M count=50 | tr '\\0' 'A' > test/test_large_response_data.txt")
+         (exit 1))})))
+
+; Track test state
+(def {test-passed} 0)
+(def {response-size} 0)
+
+; Server handler - returns the 50MB string via Lisp
+(def {server-handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (select
+      {(== path "/big")
+       {`{:status "200" :content-type "text/plain" :body ,big-string}}}
+      {(== path "/shutdown")
+       {(do
+          (aio/stop aio)
+          {:status "200" :content-type "text/plain" :body "shutting down"})}}
+      {otherwise
+       {{:status "200" :content-type "text/plain" :body "Request /big for 50MB"}}})
+  }))
+
+; Client callback - receives the response and verifies size
+(def {client-callback}
+  (\ {resp} {
+    (= {body} (plist/get resp (head {:body})))
+    (= {body-len} (len body))
+    (printf "Client received response: %d bytes\n" body-len)
+    (set! {response-size} body-len)
+    (if (== body-len RESPONSE_SIZE)
+      {(do
+         (println "SUCCESS: Received full 50MB response!")
+         (set! {test-passed} 1))}
+      {(printf "FAIL: Expected %d bytes, got %d\n" RESPONSE_SIZE body-len)})
+    ; Shutdown server after receiving response
+    (http2/client-request aio "127.0.0.1" 8444 "/shutdown" (\ {_} {}))
+  }))
+
+; Run the test
+(println "")
+(println "=== Starting Large Response Test ===")
+(println "")
+
+; Start server on port 8444
+(println "Starting server on port 8444...")
+(http2/server-listen aio 8444 server-handler)
+
+; Give server a moment to start, then make client request
+(aio/defer aio 100 (\ {} {
+  (println "Making client request for /big...")
+  (http2/client-request aio "127.0.0.1" 8444 "/big" client-callback)
+}))
+
+; Timeout after 60 seconds
+(aio/defer aio 60000 (\ {} {
+  (if (== test-passed 0)
+    {(do
+       (println "TIMEOUT: Test did not complete in 60 seconds")
+       (aio/stop aio))}
+    {})
+}))
+
+; Run the event loop
+(aio/run aio)
+
+; Report results
+(println "")
+(println "=== Test Complete ===")
+(printf "Response size: %d bytes\n" response-size)
+(printf "Expected size: %d bytes\n" RESPONSE_SIZE)
+
+; Exit with appropriate code
+(if (== test-passed 1)
+  {(do (println "PASS") (exit 0))}
+  {(do (println "FAIL") (exit 1))})

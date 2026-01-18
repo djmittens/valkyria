@@ -1,0 +1,32 @@
+; test_lisp_50mb_handler.valk
+; Lisp handler that returns a 50MB response
+; Used by test_networking.c for testing large responses through the full Lisp machinery
+;
+; The handler uses make-string (C builtin) to efficiently create a 50MB string
+; This tests the full path: Lisp handler -> response building -> HTTP/2 framing -> SSL
+
+; Define the response size: 50MB = 52428800 bytes
+(def {RESPONSE_SIZE} 52428800)
+
+; Create the 50MB string using make-string builtin (efficient C implementation)
+; Pattern: 64-char block repeated to fill 50MB
+(def {pattern} "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz./")
+(def {big-string} (make-string (/ RESPONSE_SIZE 64) pattern))
+
+(printf "Created response string: %d bytes\n" (len big-string))
+
+; Handler function - returns the 50MB string for /big path
+; Note: Using if-else instead of select due to closure capture issue
+(def {handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (printf "[handler] Request for path: %s\n" path)
+    (if (== path "/big")
+      {`{:status "200" :content-type "text/plain" :body ,big-string}}
+      {(if (== path "/size")
+        {`{:status "200" :content-type "text/plain" :body ,(str (len big-string))}}
+        {`{:status "200" :content-type "text/plain" :body "Request /big for 50MB"}})})
+  }))
+
+; Export the handler - this is what the C code will use
+handler

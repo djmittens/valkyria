@@ -1,0 +1,33 @@
+; Custom Headers Test
+; Tests sending custom headers with HTTP/2 client requests
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "Client Headers Tests")
+
+(def {aio} (aio/start))
+(def {received-headers} nil)
+
+(def {handler}
+  (\ {req} {
+    (= {headers} (req/headers req))
+    (def {received-headers} headers)
+    `{:status "200" :body "OK"}
+  }))
+
+(def {server} (http2/server-listen aio 0 handler))
+(def {test-port} (http2/server-port server))
+
+(test/async "custom headers are received by server" (\ {done} {
+  (http2/client-request-with-headers aio "127.0.0.1" test-port "/test" 
+    {{"x-custom-header" "test-value"} {"user-agent" "TestClient/1.0"}}
+    (\ {resp} {
+      (if (error? resp)
+        {(done false)}
+        {(done (== (http2/response-status resp) "200"))})
+    }))
+}))
+
+(test/run-async aio)
+(aio/run aio)

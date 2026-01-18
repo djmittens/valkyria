@@ -1,0 +1,50 @@
+; GC Async Regression Test Suite
+; Tests for GC bugs that occurred with async/timer operations
+; These test garbage collection across checkpoint boundaries
+
+(load "src/prelude.valk")
+(load "src/http_api.valk")
+(load "src/modules/test.valk")
+
+(test/suite "GC Async Regression Tests")
+
+(def {aio} (aio/start))
+
+; ============================================================================
+; Parallel Timer Callback Crash (Fixed 2026-01-02)
+; Bug: When 4+ parallel HTTP requests were made through timer callbacks,
+; the GC checkpoint would crash with "value must not be null at apply_cont"
+; Root cause: Phase 2 of GC could visit environments that Phase 1 hadn't
+; processed, leading to un-forwarded scratch pointers being NULLed.
+; ============================================================================
+
+(def {server-handler} (\ {req} { `{:status "200" :body "Hi"} }))
+(def {server} (http2/server-listen aio 0 server-handler))
+(def {port} (http2/server-port server))
+
+(def {callbacks-completed} (atom 0))
+
+(fun {spawn-request aio port done i total} {
+  (= {body} (\ {} {
+    (= {op} (http2/fetch aio "127.0.0.1" port "/"))
+    (op (\ {r} { 
+      (atom/add! callbacks-completed 1)
+      (if (>= (atom/get callbacks-completed) total)
+        {(done true)}
+        {nil})
+    }))
+  }))
+  (aio/schedule aio 0 (\ {} { (body) }))
+})
+
+(test/async "gc-parallel-timer-callbacks-no-crash" (\ {done} {
+  (atom/set! callbacks-completed 0)
+  (spawn-request aio port done 1 4)
+  (spawn-request aio port done 2 4)
+  (spawn-request aio port done 3 4)
+  (spawn-request aio port done 4 4)
+}))
+
+; Run all async tests
+(test/run-async aio)
+(aio/run aio)

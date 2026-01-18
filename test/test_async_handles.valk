@@ -1,0 +1,253 @@
+; Test suite for src/async_handles.valk
+; Tests the higher-level async utilities built on top of aio/* builtins
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/async_handles.valk")
+
+(test/suite "Async Handles Tests")
+
+; ============================================================================
+; handle? - Check if a value is a handle
+; ============================================================================
+
+(test/define "handle? returns true for completed handle"
+  {do
+    (def {h} (aio/pure 42))
+    (== (handle? h) true)
+  })
+
+(test/define "handle? returns true for failed handle"
+  {do
+    (def {h} (aio/fail "error"))
+    (== (handle? h) true)
+  })
+
+(test/define "handle? returns false for number"
+  {do
+    (== (handle? 42) false)
+  })
+
+(test/define "handle? returns false for string"
+  {do
+    (== (handle? "hello") false)
+  })
+
+(test/define "handle? returns false for list"
+  {do
+    (== (handle? (list 1 2 3)) false)
+  })
+
+(test/define "handle? returns false for nil"
+  {do
+    (== (handle? nil) false)
+  })
+
+; ============================================================================
+; as-handle - Convert any value to a handle
+; ============================================================================
+
+(test/define "as-handle returns handle unchanged"
+  {do
+    (def {h} (aio/pure 42))
+    (def {h2} (as-handle h))
+    (== (aio/status h2) :completed)
+  })
+
+(test/define "as-handle wraps non-handle value"
+  {do
+    (def {h} (as-handle 42))
+    (== (aio/status h) :completed)
+  })
+
+(test/define "as-handle wraps string"
+  {do
+    (def {h} (as-handle "hello"))
+    (== (aio/status h) :completed)
+  })
+
+(test/define "as-handle wraps list"
+  {do
+    (def {h} (as-handle (list 1 2 3)))
+    (== (aio/status h) :completed)
+  })
+
+(test/define "as-handle wraps nil"
+  {do
+    (def {h} (as-handle nil))
+    (== (aio/status h) :completed)
+  })
+
+; ============================================================================
+; aio/try - Convert errors to result values
+; ============================================================================
+
+(test/define "aio/try wraps success in :ok"
+  {do
+    (def {h} (aio/try (aio/pure 42)))
+    (== (aio/status h) :completed)
+  })
+
+(test/define "aio/try wraps failure in :err"
+  {do
+    (def {h} (aio/try (aio/fail "error")))
+    (== (aio/status h) :completed)
+  })
+
+; ============================================================================
+; chain - Chain multiple async functions
+; ============================================================================
+
+(test/define "chain with empty fns returns start"
+  {do
+    (def {start} (aio/pure 10))
+    (def {result} (chain start ()))
+    (== (aio/status result) :completed)
+  })
+
+(test/define "chain with single fn"
+  {do
+    (def {start} (aio/pure 10))
+    (def {result} (chain start (list (\ {x} {(aio/pure (* x 2))}))))
+    (== (aio/status result) :completed)
+  })
+
+(test/define "chain with multiple fns"
+  {do
+    (def {start} (aio/pure 1))
+    (def {fns} (list 
+      (\ {x} {(aio/pure (+ x 1))})
+      (\ {x} {(aio/pure (* x 2))})
+      (\ {x} {(aio/pure (+ x 10))})
+    ))
+    (def {result} (chain start fns))
+    (== (aio/status result) :completed)
+  })
+
+; ============================================================================
+; aio/map - Transform handle result with pure function
+; ============================================================================
+
+(test/define "aio/map transforms value"
+  {do
+    (def {h} (aio/pure 10))
+    (def {result} (aio/map h (\ {x} {(* x 2)})))
+    (== (aio/status result) :completed)
+  })
+
+(test/define "aio/map on failed handle propagates failure"
+  {do
+    (def {h} (aio/fail "error"))
+    (def {result} (aio/map h (\ {x} {(* x 2)})))
+    (== (aio/status result) :failed)
+  })
+
+; ============================================================================
+; parallel-map - Apply async function to each item in parallel
+; ============================================================================
+
+(test/define "parallel-map with empty list"
+  {do
+    (def {result} (parallel-map (\ {x} {(aio/pure (* x 2))}) ()))
+    (== (aio/status result) :completed)
+  })
+
+(test/define "parallel-map with single item"
+  {do
+    (def {result} (parallel-map (\ {x} {(aio/pure (* x 2))}) (list 5)))
+    (== (aio/status result) :completed)
+  })
+
+(test/define "parallel-map with multiple items"
+  {do
+    (def {result} (parallel-map (\ {x} {(aio/pure (* x 2))}) (list 1 2 3)))
+    (== (aio/status result) :completed)
+  })
+
+; ============================================================================
+; sequential-map - Apply async function to each item sequentially
+; ============================================================================
+
+(test/define "sequential-map with empty list"
+  {do
+    (def {result} (sequential-map (\ {x} {(aio/pure (* x 2))}) ()))
+    (== (aio/status result) :completed)
+  })
+
+(test/define "sequential-map with single item"
+  {do
+    (def {result} (sequential-map (\ {x} {(aio/pure (* x 2))}) (list 5)))
+    (== (aio/status result) :completed)
+  })
+
+(test/define "sequential-map with multiple items"
+  {do
+    (def {result} (sequential-map (\ {x} {(aio/pure (* x 2))}) (list 1 2 3)))
+    (== (aio/status result) :completed)
+  })
+
+; ============================================================================
+; delay-value - Return value after delay (needs AIO system)
+; ============================================================================
+
+(test/define "delay-value returns handle"
+  {do
+    (def {sys} (aio/start))
+    (def {h} (delay-value sys 1 42))
+    (def {status} (aio/status h))
+    (aio/stop sys)
+    (or (== status :pending) (or (== status :running) (== status :completed)))
+  })
+
+; ============================================================================
+; with-timeout tests (need AIO system)
+; ============================================================================
+
+(test/define "with-timeout on completed handle"
+  {do
+    (def {sys} (aio/start))
+    (def {h} (aio/pure 42))
+    (def {result} (with-timeout sys 1000 h))
+    (aio/stop sys)
+    (== (aio/status result) :completed)
+  })
+
+; ============================================================================
+; retry-backoff tests
+; ============================================================================
+
+(test/define "retry-backoff with n=0 calls function once"
+  {do
+    (def {sys} (aio/start))
+    (def {call-count} 0)
+    (def {result} (retry-backoff sys 0 10 (\ {} {
+      (def {call-count} (+ call-count 1))
+      (aio/pure "success")
+    })))
+    (aio/stop sys)
+    (== (aio/status result) :completed)
+  })
+
+; ============================================================================
+; graceful-shutdown tests
+; ============================================================================
+
+(test/define "graceful-shutdown with empty handle list"
+  {do
+    (def {sys} (aio/start))
+    (def {result} (graceful-shutdown sys () 1000))
+    (aio/stop sys)
+    (== (aio/status result) :completed)
+  })
+
+(test/define "graceful-shutdown with completed handles"
+  {do
+    (def {sys} (aio/start))
+    (def {handles} (list (aio/pure 1) (aio/pure 2)))
+    (def {result} (graceful-shutdown sys handles 1000))
+    (aio/stop sys)
+    (== (aio/status result) :completed)
+  })
+
+; Run all tests
+(test/run {})

@@ -1,0 +1,285 @@
+; High-Level HTTP/2 API for Valkyria
+; Built on top of async monadic combinators and http2 primitives
+; NOTE: Only HTTP/2 is supported - all functions use http2/ prefix
+;
+; Architecture:
+;   1. Request/Response abstraction layer
+;   2. Client API with connection management
+;   3. Route matching and handler system
+;   4. Middleware composition
+;   5. Error handling patterns
+
+(load "src/async_monadic.valk")
+
+; ============================================================================
+; PART 1: Request/Response Helpers
+; ============================================================================
+
+; Create a GET request
+(fun {http2/get url} {
+  (= {req} (http2/request "GET" "https" url "/"))
+  (http2/request-add-header req ":method" "GET")
+  (http2/request-add-header req "user-agent" "Valkyria/1.0")
+  req
+})
+
+; Create a POST request with body
+(fun {http2/post url body} {
+  (= {req} (http2/request "POST" "https" url "/"))
+  (http2/request-add-header req ":method" "POST")
+  (http2/request-add-header req "content-type" "application/json")
+  (http2/request-add-header req "user-agent" "Valkyria/1.0")
+  ; TODO: Add body support
+  req
+})
+
+; Create a request with custom method
+(fun {http2/make-request method url} {
+  (= {req} (http2/request method "https" url "/"))
+  (http2/request-add-header req ":method" method)
+  (http2/request-add-header req "user-agent" "Valkyria/1.0")
+  req
+})
+
+; Add header to request (chainable)
+(fun {http2/with-header req name value} {
+  (http2/request-add-header req name value)
+  req
+})
+
+; Add multiple headers
+(fun {http2/with-headers req headers} {
+  (= {add-header} (\ {r h} {
+    (http2/with-header r (head h) (head (tail h)))
+  }))
+  (foldl add-header req headers)
+})
+
+; Check if response is success (2xx)
+(fun {http2/response-ok? resp} {
+  (= {status} (str->num (http2/response-status resp)))
+  (if (>= status 200)
+    {(< status 300)}
+    {0})
+})
+
+; ============================================================================
+; PART 2: Async HTTP Client API
+; ============================================================================
+
+; Low-level: Make HTTP request (returns async operation)
+; Uses http2/client-request which handles connection and request in one call
+; Arguments: aio - async I/O system from (aio/start)
+;            host - hostname string
+;            port - port number
+;            path - request path (default "/")
+(fun {http2/fetch-async aio host port path} {
+  (\ {k} {
+    ; http2/client-request: (aio host port path callback)
+    (http2/client-request aio host port path k)
+  })
+})
+
+; High-level: Fetch from host/port/path with GET request
+; Note: aio must be passed in - use (aio/start) to create one
+(fun {http2/fetch aio host port path} {
+  (http2/fetch-async aio host port path)
+})
+
+; Fetch and extract body
+(fun {http2/fetch-text aio host port path} {
+  (async/bind (http2/fetch aio host port path) (\ {resp} {
+    (async/pure (http2/response-body resp))
+  }))
+})
+
+; Fetch and check if successful
+(fun {http2/fetch-ok? aio host port path} {
+  (async/bind (http2/fetch aio host port path) (\ {resp} {
+    (async/pure (http2/response-ok? resp))
+  }))
+})
+
+; ============================================================================
+; PART 3: Batch Operations
+; ============================================================================
+
+; Fetch multiple endpoints in sequence
+; endpoints is a list of {host port path} lists
+(fun {http2/fetch-all aio endpoints} {
+  (async/map-list (\ {ep} {
+    (http2/fetch aio (nth 1 ep) (nth 2 ep) (nth 3 ep))
+  }) endpoints)
+})
+
+; Fetch multiple endpoints and extract bodies
+(fun {http2/fetch-all-text aio endpoints} {
+  (async/map-list (\ {ep} {
+    (http2/fetch-text aio (nth 1 ep) (nth 2 ep) (nth 3 ep))
+  }) endpoints)
+})
+
+; Fetch with retry logic (simple version)
+; Type: AIO -> String -> Int -> String -> Int -> Async Response
+(fun {http2/fetch-retry aio host port path max-retries} {
+  (\ {k} {
+    (= {try-fetch} (\ {retries} {
+      (= {fetch-op} (http2/fetch aio host port path))
+      (fetch-op (\ {resp} {
+        (if (http2/response-ok? resp)
+          {(k resp)}
+          {(if (> retries 0)
+            {(try-fetch (- retries 1))}
+            {(k resp)})})
+      }))
+    }))
+    (try-fetch max-retries)
+  })
+})
+
+; ============================================================================
+; PART 4: Request Pipeline & Middleware
+; ============================================================================
+
+; Middleware: function that transforms request → async request
+; Type: Request → (Request → k) → k
+
+; Add authentication header
+(fun {http2/with-auth token} {
+  (\ {req} {
+    (http2/with-header req "authorization" token)
+  })
+})
+
+; Add custom user agent
+(fun {http2/with-user-agent agent} {
+  (\ {req} {
+    (http2/with-header req "user-agent" agent)
+  })
+})
+
+; Log request before sending
+(fun {http2/with-logging req} {
+  (print "HTTP Request:" req)
+  req
+})
+
+; Apply middleware to request
+(fun {http2/apply-middleware req middleware} {
+  (middleware req)
+})
+
+; Compose multiple middleware functions
+(fun {http2/compose-middleware middleware-list} {
+  (\ {req} {
+    (foldl (\ {r mw} {(mw r)}) req middleware-list)
+  })
+})
+
+; ============================================================================
+; PART 5: Response Pipeline
+; ============================================================================
+
+; Response middleware: function that transforms response → async response
+; Type: Response → (Response → k) → k
+
+; Log response
+(fun {http2/log-response resp} {
+  (print "HTTP Response:" (http2/response-status resp))
+  resp
+})
+
+; Validate response status
+; Returns response if status matches, otherwise returns error
+; Note: Uses simple error message to avoid memory issues with string concatenation
+(fun {http2/validate-status expected-status} {
+  (\ {resp} {
+    (= {status} (str->num (http2/response-status resp)))
+    (if (== status expected-status)
+      {resp}
+      {(error "Unexpected HTTP status")})
+  })
+})
+
+; ============================================================================
+; PART 6: Route Matching (for server-side, future)
+; ============================================================================
+
+; Route: (method, path-pattern, handler)
+; Handler: Request → (Response → k) → k
+
+; Simple path matching (exact match for now)
+(fun {http2/route-matches? pattern path} {
+  (== pattern path)
+})
+
+; Find matching route
+(fun {http2/find-route routes method path} {
+  (= {matches} (\ {route} {
+    (if (== (head route) method)
+      {(http2/route-matches? (head (tail route)) path)}
+      {0})
+  }))
+  (= {matched} (filter matches routes))
+  (if (== matched nil) {nil} {(head matched)})
+})
+
+; ============================================================================
+; PART 7: Error Handling
+; ============================================================================
+
+; NOTE: Use async/try and async/recover from async_monadic.valk for error handling
+; Example: (async/try risky-op) -> returns (list "ok" result) or (list "error" err)
+; Example: (async/recover risky-op fallback-op) -> tries risky-op, falls back on error
+
+; ============================================================================
+; PART 8: Common Patterns
+; ============================================================================
+
+; Parallel requests (currently sequential due to implementation)
+(fun {http2/parallel async-ops} {
+  (async/collect async-ops)
+})
+
+; Sequential requests with dependencies
+(fun {http2/sequential async-ops} {
+  (async/sequence async-ops)
+})
+
+; Fan-out pattern: fetch related resources
+; extractors return {host port path} lists
+(fun {http2/fan-out aio host port path extractors} {
+  (async/bind (http2/fetch aio host port path) (\ {resp} {
+    (= {endpoints} (map (\ {ext} {(ext resp)}) extractors))
+    (http2/fetch-all aio endpoints)
+  }))
+})
+
+; Aggregate pattern: fetch and combine
+; endpoints is a list of {host port path} lists
+(fun {http2/aggregate aio endpoints combiner} {
+  (async/bind (http2/fetch-all aio endpoints) (\ {responses} {
+    (async/pure (combiner responses))
+  }))
+})
+
+; ============================================================================
+; PART 9: Convenience Functions
+; ============================================================================
+
+; Health check endpoint
+(fun {http2/health-check aio host port path} {
+  (async/bind (http2/fetch aio host port path) (\ {resp} {
+    (async/pure (http2/response-ok? resp))
+  }))
+})
+
+; Batch health checks
+; endpoints is a list of {host port path} lists
+(fun {http2/health-check-all aio endpoints} {
+  (async/map-list (\ {ep} {
+    (http2/health-check aio (nth 1 ep) (nth 2 ep) (nth 3 ep))
+  }) endpoints)
+})
+
+; HTTP/2 API loaded
