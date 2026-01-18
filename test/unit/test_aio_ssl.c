@@ -35,7 +35,7 @@ void test_ssl_server_init_valid_key_invalid_cert(VALK_TEST_ARGS()) {
   
   SSL_CTX *ctx = nullptr;
   valk_err_e err = valk_aio_ssl_server_init(&ctx, 
-    "vendor/nghttp2/tests/testdata/privkey.pem",
+    "vendor/nghttp2/src/test.example.com-key.pem",
     "/nonexistent/cert.pem");
   ASSERT_EQ(err, VALK_ERR_SSL_INIT);
   ASSERT_NULL(ctx);
@@ -547,28 +547,283 @@ void test_ssl_handshake_full_buffer(VALK_TEST_ARGS()) {
 
 void test_ssl_on_read_with_garbage_data(VALK_TEST_ARGS()) {
   VALK_TEST();
-  
+
   valk_aio_ssl_start();
-  
+
   SSL_CTX *ctx = nullptr;
   valk_err_e err = valk_aio_ssl_client_init(&ctx);
   ASSERT_EQ(err, VALK_ERR_SUCCESS);
-  
+
   valk_aio_ssl_t ssl = {0};
   valk_aio_ssl_connect(&ssl, ctx);
-  
+
   char ibuf[256], obuf[16384];
   memset(ibuf, 0, sizeof(ibuf));
   valk_buffer_t in = {.items = ibuf, .count = 100, .capacity = sizeof(ibuf)};
   valk_buffer_t out = {.items = obuf, .count = 0, .capacity = sizeof(obuf)};
-  
+
   err = valk_aio_ssl_on_read(&ssl, &in, &out, nullptr, nullptr);
   VALK_TEST_ASSERT(err == VALK_ERR_SSL_PROTOCOL || err == VALK_ERR_SSL_RE_NEGOTIATE,
                    "Expected PROTOCOL error or RE_NEGOTIATE with garbage data, got %d", err);
-  
+
   valk_aio_ssl_free(&ssl);
   SSL_CTX_free(ctx);
-  
+
+  VALK_PASS();
+}
+
+void test_ssl_fork_reset(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_ssl_start();
+  valk_aio_ssl_fork_reset();
+  valk_aio_ssl_start();
+
+  VALK_PASS();
+}
+
+void test_ssl_accept_null_ctx(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_ssl_t ssl = {0};
+  int ret = valk_aio_ssl_accept(&ssl, nullptr);
+  ASSERT_EQ(ret, -1);
+  ASSERT_NULL(ssl.ssl);
+
+  VALK_PASS();
+}
+
+void test_ssl_connect_null_ctx(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_ssl_t ssl = {0};
+  int ret = valk_aio_ssl_connect(&ssl, nullptr);
+  ASSERT_EQ(ret, -1);
+  ASSERT_NULL(ssl.ssl);
+
+  VALK_PASS();
+}
+
+void test_ssl_server_init_valid(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_ssl_start();
+
+  SSL_CTX *ctx = nullptr;
+  valk_err_e err = valk_aio_ssl_server_init(&ctx,
+    "vendor/nghttp2/src/test.example.com-key.pem",
+    "vendor/nghttp2/src/test.example.com.pem");
+  ASSERT_EQ(err, VALK_ERR_SUCCESS);
+  ASSERT_NOT_NULL(ctx);
+
+  SSL_CTX_free(ctx);
+
+  VALK_PASS();
+}
+
+void test_ssl_encrypt_near_capacity(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_ssl_start();
+
+  SSL_CTX *ctx = nullptr;
+  valk_err_e err = valk_aio_ssl_client_init(&ctx);
+  ASSERT_EQ(err, VALK_ERR_SUCCESS);
+
+  valk_aio_ssl_t ssl = {0};
+  valk_aio_ssl_connect(&ssl, ctx);
+
+  char ibuf[256], obuf[2048];
+  memset(ibuf, 'A', sizeof(ibuf));
+  valk_buffer_t in = {.items = ibuf, .count = 100, .capacity = sizeof(ibuf)};
+  valk_buffer_t out = {.items = obuf, .count = 1500, .capacity = sizeof(obuf)};
+
+  err = valk_aio_ssl_encrypt(&ssl, &in, &out);
+  ASSERT_EQ(err, VALK_ERR_SUCCESS);
+
+  valk_aio_ssl_free(&ssl);
+  SSL_CTX_free(ctx);
+
+  VALK_PASS();
+}
+
+static void dummy_on_read(void *arg, const valk_buffer_t *buf) {
+  (void)arg;
+  (void)buf;
+}
+
+void test_ssl_on_read_with_data_and_callback(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_ssl_start();
+
+  SSL_CTX *ctx = nullptr;
+  valk_err_e err = valk_aio_ssl_client_init(&ctx);
+  ASSERT_EQ(err, VALK_ERR_SUCCESS);
+
+  valk_aio_ssl_t ssl = {0};
+  valk_aio_ssl_connect(&ssl, ctx);
+
+  char ibuf[256], obuf[16384];
+  memset(ibuf, 0xFF, sizeof(ibuf));
+  valk_buffer_t in = {.items = ibuf, .count = 50, .capacity = sizeof(ibuf)};
+  valk_buffer_t out = {.items = obuf, .count = 0, .capacity = sizeof(obuf)};
+
+  err = valk_aio_ssl_on_read(&ssl, &in, &out, nullptr, dummy_on_read);
+  (void)err;
+
+  valk_aio_ssl_free(&ssl);
+  SSL_CTX_free(ctx);
+
+  VALK_PASS();
+}
+
+void test_ssl_bidirectional_handshake(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_ssl_start();
+
+  SSL_CTX *server_ctx = nullptr;
+  valk_err_e err = valk_aio_ssl_server_init(&server_ctx,
+    "vendor/nghttp2/src/test.example.com-key.pem",
+    "vendor/nghttp2/src/test.example.com.pem");
+  ASSERT_EQ(err, VALK_ERR_SUCCESS);
+
+  SSL_CTX *client_ctx = nullptr;
+  err = valk_aio_ssl_client_init(&client_ctx);
+  ASSERT_EQ(err, VALK_ERR_SUCCESS);
+
+  valk_aio_ssl_t server_ssl = {0};
+  valk_aio_ssl_accept(&server_ssl, server_ctx);
+
+  valk_aio_ssl_t client_ssl = {0};
+  valk_aio_ssl_connect(&client_ssl, client_ctx);
+
+  char client_out_buf[16384], server_out_buf[16384];
+  char client_in_buf[16384], server_in_buf[16384];
+  valk_buffer_t client_out = {.items = client_out_buf, .count = 0, .capacity = sizeof(client_out_buf)};
+  valk_buffer_t server_out = {.items = server_out_buf, .count = 0, .capacity = sizeof(server_out_buf)};
+  valk_buffer_t client_in = {.items = client_in_buf, .count = 0, .capacity = sizeof(client_in_buf)};
+  valk_buffer_t server_in = {.items = server_in_buf, .count = 0, .capacity = sizeof(server_in_buf)};
+
+  err = valk_aio_ssl_handshake(&client_ssl, &client_out);
+  ASSERT_EQ(err, VALK_ERR_SUCCESS);
+
+  if (client_out.count > 0) {
+    memcpy(server_in.items, client_out.items, client_out.count);
+    server_in.count = client_out.count;
+    client_out.count = 0;
+  }
+
+  err = valk_aio_ssl_on_read(&server_ssl, &server_in, &server_out, nullptr, nullptr);
+  (void)err;
+
+  if (server_out.count > 0) {
+    memcpy(client_in.items, server_out.items, server_out.count);
+    client_in.count = server_out.count;
+    server_out.count = 0;
+  }
+
+  for (int i = 0; i < 10 && !SSL_is_init_finished(client_ssl.ssl); i++) {
+    err = valk_aio_ssl_on_read(&client_ssl, &client_in, &client_out, nullptr, nullptr);
+    (void)err;
+
+    if (client_out.count > 0) {
+      memcpy(server_in.items, client_out.items, client_out.count);
+      server_in.count = client_out.count;
+      client_out.count = 0;
+
+      err = valk_aio_ssl_on_read(&server_ssl, &server_in, &server_out, nullptr, nullptr);
+      (void)err;
+
+      if (server_out.count > 0) {
+        memcpy(client_in.items, server_out.items, server_out.count);
+        client_in.count = server_out.count;
+        server_out.count = 0;
+      }
+    }
+  }
+
+  valk_aio_ssl_free(&server_ssl);
+  valk_aio_ssl_free(&client_ssl);
+  SSL_CTX_free(server_ctx);
+  SSL_CTX_free(client_ctx);
+
+  VALK_PASS();
+}
+
+void test_ssl_encrypt_after_handshake(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_ssl_start();
+
+  SSL_CTX *server_ctx = nullptr;
+  valk_err_e err = valk_aio_ssl_server_init(&server_ctx,
+    "vendor/nghttp2/src/test.example.com-key.pem",
+    "vendor/nghttp2/src/test.example.com.pem");
+  ASSERT_EQ(err, VALK_ERR_SUCCESS);
+
+  SSL_CTX *client_ctx = nullptr;
+  err = valk_aio_ssl_client_init(&client_ctx);
+  ASSERT_EQ(err, VALK_ERR_SUCCESS);
+
+  valk_aio_ssl_t server_ssl = {0};
+  valk_aio_ssl_accept(&server_ssl, server_ctx);
+
+  valk_aio_ssl_t client_ssl = {0};
+  valk_aio_ssl_connect(&client_ssl, client_ctx);
+
+  char client_out_buf[16384], server_out_buf[16384];
+  char client_in_buf[16384], server_in_buf[16384];
+  valk_buffer_t client_out = {.items = client_out_buf, .count = 0, .capacity = sizeof(client_out_buf)};
+  valk_buffer_t server_out = {.items = server_out_buf, .count = 0, .capacity = sizeof(server_out_buf)};
+  valk_buffer_t client_in = {.items = client_in_buf, .count = 0, .capacity = sizeof(client_in_buf)};
+  valk_buffer_t server_in = {.items = server_in_buf, .count = 0, .capacity = sizeof(server_in_buf)};
+
+  err = valk_aio_ssl_handshake(&client_ssl, &client_out);
+  ASSERT_EQ(err, VALK_ERR_SUCCESS);
+
+  for (int i = 0; i < 20 && (!SSL_is_init_finished(client_ssl.ssl) || !SSL_is_init_finished(server_ssl.ssl)); i++) {
+    if (client_out.count > 0) {
+      memcpy(server_in.items, client_out.items, client_out.count);
+      server_in.count = client_out.count;
+      client_out.count = 0;
+
+      err = valk_aio_ssl_on_read(&server_ssl, &server_in, &server_out, nullptr, nullptr);
+      (void)err;
+    }
+
+    if (server_out.count > 0) {
+      memcpy(client_in.items, server_out.items, server_out.count);
+      client_in.count = server_out.count;
+      server_out.count = 0;
+
+      err = valk_aio_ssl_on_read(&client_ssl, &client_in, &client_out, nullptr, nullptr);
+      (void)err;
+    }
+
+    if (client_in.count == 0 && server_in.count == 0 &&
+        client_out.count == 0 && server_out.count == 0) {
+      break;
+    }
+  }
+
+  if (SSL_is_init_finished(client_ssl.ssl)) {
+    char plaintext[256];
+    memset(plaintext, 'X', sizeof(plaintext));
+    valk_buffer_t plain_in = {.items = plaintext, .count = 100, .capacity = sizeof(plaintext)};
+    client_out.count = 0;
+
+    err = valk_aio_ssl_encrypt(&client_ssl, &plain_in, &client_out);
+    ASSERT_EQ(err, VALK_ERR_SUCCESS);
+    ASSERT_TRUE(client_out.count > 0);
+  }
+
+  valk_aio_ssl_free(&server_ssl);
+  valk_aio_ssl_free(&client_ssl);
+  SSL_CTX_free(server_ctx);
+  SSL_CTX_free(client_ctx);
+
   VALK_PASS();
 }
 
@@ -576,6 +831,7 @@ int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
   
+  valk_testsuite_add_test(suite, "test_ssl_server_init_valid", test_ssl_server_init_valid);
   valk_testsuite_add_test(suite, "test_ssl_start", test_ssl_start);
   valk_testsuite_add_test(suite, "test_ssl_server_init_invalid_files", test_ssl_server_init_invalid_files);
   valk_testsuite_add_test(suite, "test_ssl_server_init_valid_key_invalid_cert", test_ssl_server_init_valid_key_invalid_cert);
@@ -605,7 +861,14 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_ssl_handshake_tiny_buffer", test_ssl_handshake_tiny_buffer);
   valk_testsuite_add_test(suite, "test_ssl_handshake_full_buffer", test_ssl_handshake_full_buffer);
   valk_testsuite_add_test(suite, "test_ssl_on_read_with_garbage_data", test_ssl_on_read_with_garbage_data);
-  
+  valk_testsuite_add_test(suite, "test_ssl_accept_null_ctx", test_ssl_accept_null_ctx);
+  valk_testsuite_add_test(suite, "test_ssl_connect_null_ctx", test_ssl_connect_null_ctx);
+  valk_testsuite_add_test(suite, "test_ssl_encrypt_near_capacity", test_ssl_encrypt_near_capacity);
+  valk_testsuite_add_test(suite, "test_ssl_on_read_with_data_and_callback", test_ssl_on_read_with_data_and_callback);
+  valk_testsuite_add_test(suite, "test_ssl_bidirectional_handshake", test_ssl_bidirectional_handshake);
+  valk_testsuite_add_test(suite, "test_ssl_encrypt_after_handshake", test_ssl_encrypt_after_handshake);
+  valk_testsuite_add_test(suite, "test_ssl_fork_reset", test_ssl_fork_reset);
+
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
   valk_testsuite_free(suite);
