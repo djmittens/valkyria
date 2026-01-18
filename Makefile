@@ -184,6 +184,7 @@ define run_tests_c
 	$(1)/test_http_builtins_unit
 	$(1)/test_stream_body_conn_unit
 	$(1)/test_backpressure_list_unit
+	$(1)/test_conn_fsm_unit
 	@echo "=== All C tests passed ($(1)) ==="
 endef
 

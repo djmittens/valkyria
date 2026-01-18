@@ -450,3 +450,8 @@ add_executable(test_backpressure_list_unit test/unit/test_backpressure_list.c te
 target_link_libraries(test_backpressure_list_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES})
 include_directories(test_backpressure_list_unit src/)
 
+# Connection FSM state machine tests
+add_executable(test_conn_fsm_unit test/unit/test_conn_fsm.c test/testing.c)
+target_link_libraries(test_conn_fsm_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_conn_fsm_unit src/)
+
