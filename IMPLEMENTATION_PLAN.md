@@ -194,12 +194,11 @@
   - No global state modified, tests are fully self-contained
   - Skip removed - tests now run normally
 
-- [ ] **Fork-isolated GC heap tests** (2 tests still skipped in test_memory.c)
-  - `test_gc_heap_stats`, `test_gc_heap_allocator_api` - stale TLAB pointers after heap destroy
-  - Root cause: Thread-local TLAB (`local_tlab`) persists after heap destruction
-  - TLAB's `owner_heap` becomes stale pointer until next allocation detects dead heap
-  - Fix needed: Add TLAB reset hook in `valk_gc_heap2_destroy()` or make TLAB detect stale heap
-  - These tests remain skipped under `VALK_TEST_NO_FORK` mode
+- [x] **Fork-isolated GC heap tests** (2 tests in test_memory.c) - DONE
+  - `test_gc_heap_stats`, `test_gc_heap_allocator_api` - previously skipped due to stale TLAB pointers
+  - Fixed by adding `valk_gc_tlab2_invalidate_heap()` that resets the thread-local TLAB if it points to the destroyed heap
+  - Called from `valk_gc_heap2_destroy()` before unregistering the heap
+  - Tests now run normally in all modes (with and without fork isolation)
 
 ---
 

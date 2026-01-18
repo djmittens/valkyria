@@ -2511,10 +2511,13 @@ valk_gc_heap2_t *valk_gc_heap2_create(sz hard_limit) {
   return heap;
 }
 
+void valk_gc_tlab2_invalidate_heap(valk_gc_heap2_t *heap);
+
 // Destroy heap and release all memory
 void valk_gc_heap2_destroy(valk_gc_heap2_t *heap) {
   if (!heap) return;
-  
+
+  valk_gc_tlab2_invalidate_heap(heap);
   valk_gc_unregister_heap(heap);
   
   for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
@@ -2706,22 +2709,31 @@ static void *valk_gc_heap2_alloc_large(valk_gc_heap2_t *heap, u64 bytes) {
 }
 // LCOV_EXCL_BR_STOP
 
+static __thread valk_gc_tlab2_t *valk_gc_local_tlab = nullptr;
+
+void valk_gc_tlab2_invalidate_heap(valk_gc_heap2_t *heap) {
+  if (!valk_gc_local_tlab) return;
+  if (valk_gc_local_tlab->owner_heap == heap) {
+    valk_gc_tlab2_abandon(valk_gc_local_tlab);
+  }
+}
+
 // LCOV_EXCL_BR_START - heap alloc OOM and TLAB failure paths
 void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes) {
   if (bytes == 0) return nullptr;
-  
+
   if (bytes > VALK_GC_LARGE_THRESHOLD) {
     return valk_gc_heap2_alloc_large(heap, bytes);
   }
-  
+
   u8 size_class = valk_gc_size_class(bytes);
   if (size_class == UINT8_MAX) {
     return valk_gc_heap2_alloc_large(heap, bytes);
   }
-  
+
   sz alloc_size = valk_gc_size_classes[size_class];
   sz current = valk_gc_heap2_used_bytes(heap);
-  
+
   if (current + alloc_size > heap->hard_limit) {
     if (!valk_gc_heap2_try_emergency_gc(heap, alloc_size)) {
       valk_gc_oom_abort(heap, bytes);
@@ -2731,26 +2743,24 @@ void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes) {
       valk_gc_heap2_collect_auto(heap);
     }
   }
-  
-  static __thread valk_gc_tlab2_t *local_tlab = nullptr;
-  
-  if (!local_tlab) {
-    local_tlab = malloc(sizeof(valk_gc_tlab2_t));
-    if (!local_tlab) return nullptr;
-    valk_gc_tlab2_init(local_tlab);
+
+  if (!valk_gc_local_tlab) {
+    valk_gc_local_tlab = malloc(sizeof(valk_gc_tlab2_t));
+    if (!valk_gc_local_tlab) return nullptr;
+    valk_gc_tlab2_init(valk_gc_local_tlab);
   }
   
-  if (local_tlab->owner_heap != heap) {
-    if (local_tlab->owner_heap && valk_gc_is_heap_alive(local_tlab->owner_heap)) {
-      valk_gc_tlab2_reset(local_tlab);
+  if (valk_gc_local_tlab->owner_heap != heap) {
+    if (valk_gc_local_tlab->owner_heap && valk_gc_is_heap_alive(valk_gc_local_tlab->owner_heap)) {
+      valk_gc_tlab2_reset(valk_gc_local_tlab);
     } else {
-      valk_gc_tlab2_abandon(local_tlab);
+      valk_gc_tlab2_abandon(valk_gc_local_tlab);
     }
-    local_tlab->owner_heap = heap;
-    local_tlab->owner_generation = heap->generation;
+    valk_gc_local_tlab->owner_heap = heap;
+    valk_gc_local_tlab->owner_generation = heap->generation;
   }
   
-  void *ptr = valk_gc_tlab2_alloc(local_tlab, size_class);
+  void *ptr = valk_gc_tlab2_alloc(valk_gc_local_tlab, size_class);
   if (ptr) {
     // Debug: track consecutive allocations
     static __thread void* prev_ptr = NULL;
@@ -2764,12 +2774,12 @@ void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes) {
     return ptr;
   }
   
-  if (!valk_gc_tlab2_refill(local_tlab, heap, size_class)) {
+  if (!valk_gc_tlab2_refill(valk_gc_local_tlab, heap, size_class)) {
     VALK_ERROR("Failed to refill TLAB for class %d", size_class);
     return nullptr;
   }
   
-  ptr = valk_gc_tlab2_alloc(local_tlab, size_class);
+  ptr = valk_gc_tlab2_alloc(valk_gc_local_tlab, size_class);
   if (ptr) {
     memset(ptr, 0, alloc_size);
   }

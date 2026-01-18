@@ -344,7 +344,6 @@ void test_gc_heap_hard_limit(VALK_TEST_ARGS()) {
 // Test GC heap statistics tracking
 void test_gc_heap_stats(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("GC heap destroy leaves stale TLAB pointers");
 
   valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
 
@@ -1638,7 +1637,6 @@ void test_malloc_allocator_api(VALK_TEST_ARGS()) {
 
 void test_gc_heap_allocator_api(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("GC heap destroy leaves stale TLAB pointers");
 
   valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
 
