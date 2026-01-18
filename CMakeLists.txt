@@ -440,3 +440,8 @@ add_executable(test_task_queue_unit test/unit/test_task_queue.c test/testing.c)
 target_link_libraries(test_task_queue_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_task_queue_unit src/)
 
+# Stream body connection management tests
+add_executable(test_stream_body_conn_unit test/unit/test_stream_body_conn.c test/testing.c)
+target_link_libraries(test_stream_body_conn_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_stream_body_conn_unit src/)
+
