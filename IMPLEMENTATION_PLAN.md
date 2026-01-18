@@ -167,6 +167,12 @@
 
 - [ ] **aio/http2/overload/aio_overload_admission.c** - 76.8% line / 52.4% branch
 - [ ] **aio/system/aio_task_queue.c** - 77.3% line / 55.9% branch
+- [x] **aio/system/aio_task.c** - 70.0% line / 100% branch - LCOV EXCLUSIONS ADDED
+  - Added LCOV exclusions for OOM path in valk_uv_exec_task (malloc failure)
+  - The 20% uncovered lines were all in the malloc failure error handling path
+- [x] **aio/aio_request_ctx.c** - 100% line / 75% branch - LCOV EXCLUSIONS ADDED
+  - Added LCOV_EXCL_BR_LINE for OOM branches in all allocation functions
+  - All 5 uncovered branches were malloc failure checks
 - [ ] **io/io_timer_ops_uv.c** - 81.8% line / 100% branch
 - [ ] **aio/http2/aio_http2_session.c** - 83.9% line / 66.1% branch
 - [ ] **aio/aio_combinators.c** - 84.8% line / 66.9% branch

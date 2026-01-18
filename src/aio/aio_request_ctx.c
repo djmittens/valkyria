@@ -19,7 +19,7 @@ u64 valk_span_id_generate(void) {
 
 valk_request_ctx_t *valk_request_ctx_new(valk_mem_allocator_t *allocator) {
   valk_request_ctx_t *ctx = valk_mem_allocator_alloc(allocator, sizeof(valk_request_ctx_t));
-  if (!ctx) return nullptr;
+  if (!ctx) return nullptr; // LCOV_EXCL_BR_LINE - OOM
 
   ctx->trace_id = valk_trace_id_generate();
   ctx->span_id = valk_span_id_generate();
@@ -34,7 +34,7 @@ valk_request_ctx_t *valk_request_ctx_copy(valk_request_ctx_t *src, valk_mem_allo
   if (!src) return valk_request_ctx_new(allocator);
 
   valk_request_ctx_t *ctx = valk_mem_allocator_alloc(allocator, sizeof(valk_request_ctx_t));
-  if (!ctx) return nullptr;
+  if (!ctx) return nullptr; // LCOV_EXCL_BR_LINE - OOM
 
   *ctx = *src;
   ctx->allocator = allocator;
@@ -43,7 +43,7 @@ valk_request_ctx_t *valk_request_ctx_copy(valk_request_ctx_t *src, valk_mem_allo
 
 valk_request_ctx_t *valk_request_ctx_with_deadline(valk_request_ctx_t *parent, u64 deadline_us, valk_mem_allocator_t *allocator) {
   valk_request_ctx_t *ctx = valk_request_ctx_copy(parent, allocator);
-  if (!ctx) return nullptr;
+  if (!ctx) return nullptr; // LCOV_EXCL_BR_LINE - OOM
 
   if (ctx->deadline_us == VALK_NO_DEADLINE || deadline_us < ctx->deadline_us) {
     ctx->deadline_us = deadline_us;
@@ -58,7 +58,7 @@ valk_request_ctx_t *valk_request_ctx_with_timeout(valk_request_ctx_t *parent, u6
 
 valk_request_ctx_t *valk_request_ctx_new_span(valk_request_ctx_t *parent, valk_mem_allocator_t *allocator) {
   valk_request_ctx_t *ctx = valk_mem_allocator_alloc(allocator, sizeof(valk_request_ctx_t));
-  if (!ctx) return nullptr;
+  if (!ctx) return nullptr; // LCOV_EXCL_BR_LINE - OOM
 
   if (parent) {
     ctx->trace_id = parent->trace_id;
@@ -79,7 +79,7 @@ valk_request_ctx_t *valk_request_ctx_new_span(valk_request_ctx_t *parent, valk_m
 
 valk_request_ctx_t *valk_request_ctx_with_local(valk_request_ctx_t *parent, valk_lval_t *key, valk_lval_t *value, valk_mem_allocator_t *allocator) {
   valk_request_ctx_t *ctx = valk_request_ctx_copy(parent, allocator);
-  if (!ctx) return nullptr;
+  if (!ctx) return nullptr; // LCOV_EXCL_BR_LINE - OOM
 
   valk_lval_t *pair = valk_lval_cons(key, value);
   ctx->locals = valk_lval_cons(pair, ctx->locals);
