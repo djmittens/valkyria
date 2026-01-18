@@ -148,21 +148,21 @@
   - Tests cover: valk_allocator_lifetime (null, region, gc heap, arena)
   - Also fixed testing framework slab size (256→512) to support large test files
 - [x] **aio/aio_async.c** - 72.4% line / 53.2% branch - DONE
-  - Added 40 unit tests in test/unit/test_aio_async.c
+  - Added 50 unit tests in test/unit/test_aio_async.c
   - Tests cover: valk_async_handle_new (null sys/region, with sys)
   - Tests cover: valk_async_handle_free (null, with region does nothing)
   - Tests cover: valk_async_handle_ref/unref (null safety, increment, decrement, free at zero)
   - Tests cover: valk_async_handle_refcount (null safety, return count)
   - Tests cover: valk_async_handle_on_cleanup (null safety, invoked on unref)
-  - Tests cover: valk_async_handle_complete (null, transitions, already terminal)
-  - Tests cover: valk_async_handle_fail (null, transitions, already terminal)
+  - Tests cover: valk_async_handle_complete (null, transitions from pending/running, already terminal, resource closed)
+  - Tests cover: valk_async_handle_fail (null, transitions from pending/running, already terminal, resource closed)
   - Tests cover: valk_async_handle_cancel (null, already terminal, pending no sys)
   - Tests cover: valk_async_handle_add_child (null, sets parent, propagates ctx)
   - Tests cover: valk_async_is_resource_closed (null, no callback, with callback)
   - Tests cover: valk_async_propagate_region (null, sets region)
-  - Tests cover: valk_async_propagate_context (null, sets all fields)
+  - Tests cover: valk_async_propagate_context (null, sets all fields, with children, sys mismatch, does not overwrite)
   - Tests cover: valk_async_status_to_sym (all status values)
-  - Tests cover: valk_async_handle_await (null, already completed/failed/cancelled)
+  - Tests cover: valk_async_handle_await (null, already completed/failed/cancelled, failed with no error)
   - Tests cover: valk_lval_handle (creates lval with handle)
   - Tests cover: valk_async_notify_done (calls callback, no callback)
   - Tests cover: valk_async_handle_unref_with_children (recursive cleanup)

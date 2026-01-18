@@ -424,6 +424,42 @@ void test_async_is_resource_closed_with_callback(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_async_complete_resource_closed(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  handle->is_closed = test_is_closed_callback;
+  test_is_closed_result = true;
+
+  valk_lval_t *result = valk_lval_num(42);
+  valk_async_handle_complete(handle, result);
+
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_CANCELLED);
+
+  valk_async_handle_free(handle);
+  VALK_PASS();
+}
+
+void test_async_fail_resource_closed(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  handle->is_closed = test_is_closed_callback;
+  test_is_closed_result = true;
+
+  valk_lval_t *err = valk_lval_err("test error");
+  valk_async_handle_fail(handle, err);
+
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_CANCELLED);
+
+  valk_async_handle_free(handle);
+  VALK_PASS();
+}
+
 void test_async_propagate_region_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -648,6 +684,212 @@ void test_async_handle_unref_with_children(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_async_handle_complete_from_running(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_RUNNING);
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_RUNNING);
+
+  valk_lval_t *result = valk_lval_num(42);
+  valk_async_handle_complete(handle, result);
+
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_COMPLETED);
+  ASSERT_EQ(handle->result, result);
+
+  valk_async_handle_free(handle);
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_async_handle_fail_from_running(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_RUNNING);
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_RUNNING);
+
+  valk_lval_t *err = valk_lval_err("running error");
+  valk_async_handle_fail(handle, err);
+
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_FAILED);
+  ASSERT_EQ(handle->error, err);
+
+  valk_async_handle_free(handle);
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_async_complete_resource_closed_from_running(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_RUNNING);
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_RUNNING);
+
+  handle->is_closed = test_is_closed_callback;
+  test_is_closed_result = true;
+
+  valk_lval_t *result = valk_lval_num(42);
+  valk_async_handle_complete(handle, result);
+
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_CANCELLED);
+
+  valk_async_handle_free(handle);
+  VALK_PASS();
+}
+
+void test_async_fail_resource_closed_from_running(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_RUNNING);
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_RUNNING);
+
+  handle->is_closed = test_is_closed_callback;
+  test_is_closed_result = true;
+
+  valk_lval_t *err = valk_lval_err("test error");
+  valk_async_handle_fail(handle, err);
+
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_CANCELLED);
+
+  valk_async_handle_free(handle);
+  VALK_PASS();
+}
+
+void test_async_propagate_context_with_children(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_async_handle_t *parent = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  valk_async_handle_t *child1 = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  valk_async_handle_t *child2 = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(parent);
+  ASSERT_NOT_NULL(child1);
+  ASSERT_NOT_NULL(child2);
+
+  valk_async_handle_add_child(parent, child1);
+  valk_async_handle_add_child(parent, child2);
+
+  valk_region_t region = {0};
+  valk_lenv_t env = {0};
+  valk_request_ctx_t ctx = {0};
+
+  valk_async_propagate_context(parent, &region, &env, &ctx);
+
+  ASSERT_EQ(parent->region, &region);
+  ASSERT_EQ(parent->env, &env);
+  ASSERT_EQ(parent->request_ctx, &ctx);
+  ASSERT_EQ(child1->region, &region);
+  ASSERT_EQ(child1->env, &env);
+  ASSERT_EQ(child1->request_ctx, &ctx);
+  ASSERT_EQ(child2->region, &region);
+  ASSERT_EQ(child2->env, &env);
+  ASSERT_EQ(child2->request_ctx, &ctx);
+
+  valk_async_handle_free(child1);
+  valk_async_handle_free(child2);
+  valk_async_handle_free(parent);
+  VALK_PASS();
+}
+
+void test_async_propagate_context_sys_mismatch(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t fake_sys1 = {0};
+  valk_aio_system_t fake_sys2 = {0};
+
+  valk_async_handle_t *parent = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  valk_async_handle_t *child = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(parent);
+  ASSERT_NOT_NULL(child);
+
+  parent->sys = &fake_sys1;
+  child->sys = &fake_sys2;
+
+  valk_async_handle_add_child(parent, child);
+
+  valk_region_t region = {0};
+  valk_lenv_t env = {0};
+  valk_request_ctx_t ctx = {0};
+
+  valk_async_propagate_context(parent, &region, &env, &ctx);
+
+  ASSERT_EQ(parent->region, &region);
+  ASSERT_EQ(parent->env, &env);
+  ASSERT_EQ(parent->request_ctx, &ctx);
+  ASSERT_NULL(child->region);
+  ASSERT_NULL(child->env);
+
+  valk_async_handle_free(child);
+  valk_async_handle_free(parent);
+  VALK_PASS();
+}
+
+void test_async_propagate_context_does_not_overwrite(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_region_t region1 = {0};
+  valk_lenv_t env1 = {0};
+  valk_request_ctx_t ctx1 = {0};
+
+  handle->region = &region1;
+  handle->env = &env1;
+  handle->request_ctx = &ctx1;
+
+  valk_region_t region2 = {0};
+  valk_lenv_t env2 = {0};
+  valk_request_ctx_t ctx2 = {0};
+
+  valk_async_propagate_context(handle, &region2, &env2, &ctx2);
+
+  ASSERT_EQ(handle->region, &region1);
+  ASSERT_EQ(handle->env, &env1);
+  ASSERT_EQ(handle->request_ctx, &ctx1);
+
+  valk_async_handle_free(handle);
+  VALK_PASS();
+}
+
+void test_async_await_failed_no_error(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_FAILED);
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_FAILED);
+  ASSERT_NULL(handle->error);
+
+  valk_lval_t *awaited = valk_async_handle_await(handle);
+  ASSERT_EQ(awaited->flags & LVAL_TYPE_MASK, LVAL_ERR);
+  ASSERT_STR_CONTAINS(awaited->str, "async operation failed");
+
+  valk_async_handle_free(handle);
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
 
@@ -680,6 +922,8 @@ int main(void) {
   valk_testsuite_add_test(suite, "async_is_resource_closed_null", test_async_is_resource_closed_null);
   valk_testsuite_add_test(suite, "async_is_resource_closed_no_callback", test_async_is_resource_closed_no_callback);
   valk_testsuite_add_test(suite, "async_is_resource_closed_with_callback", test_async_is_resource_closed_with_callback);
+  valk_testsuite_add_test(suite, "async_complete_resource_closed", test_async_complete_resource_closed);
+  valk_testsuite_add_test(suite, "async_fail_resource_closed", test_async_fail_resource_closed);
   valk_testsuite_add_test(suite, "async_propagate_region_null", test_async_propagate_region_null);
   valk_testsuite_add_test(suite, "async_propagate_region_sets_region", test_async_propagate_region_sets_region);
   valk_testsuite_add_test(suite, "async_propagate_context_null", test_async_propagate_context_null);
@@ -693,6 +937,14 @@ int main(void) {
   valk_testsuite_add_test(suite, "async_notify_done_calls_callback", test_async_notify_done_calls_callback);
   valk_testsuite_add_test(suite, "async_notify_done_no_callback", test_async_notify_done_no_callback);
   valk_testsuite_add_test(suite, "async_handle_unref_with_children", test_async_handle_unref_with_children);
+  valk_testsuite_add_test(suite, "async_handle_complete_from_running", test_async_handle_complete_from_running);
+  valk_testsuite_add_test(suite, "async_handle_fail_from_running", test_async_handle_fail_from_running);
+  valk_testsuite_add_test(suite, "async_complete_resource_closed_from_running", test_async_complete_resource_closed_from_running);
+  valk_testsuite_add_test(suite, "async_fail_resource_closed_from_running", test_async_fail_resource_closed_from_running);
+  valk_testsuite_add_test(suite, "async_propagate_context_with_children", test_async_propagate_context_with_children);
+  valk_testsuite_add_test(suite, "async_propagate_context_sys_mismatch", test_async_propagate_context_sys_mismatch);
+  valk_testsuite_add_test(suite, "async_propagate_context_does_not_overwrite", test_async_propagate_context_does_not_overwrite);
+  valk_testsuite_add_test(suite, "async_await_failed_no_error", test_async_await_failed_no_error);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
