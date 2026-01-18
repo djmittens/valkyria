@@ -1919,6 +1919,115 @@ void test_lenv_masked_parent_symbol(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_lval_err_very_long_message(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  char long_str[15000];
+  memset(long_str, 'x', 14999);
+  long_str[14999] = '\0';
+
+  valk_lval_t *err = valk_lval_err("Error: %s", long_str);
+  VALK_TEST_ASSERT(err != nullptr, "Should create error");
+  VALK_TEST_ASSERT(LVAL_TYPE(err) == LVAL_ERR, "Type should be LVAL_ERR");
+  VALK_TEST_ASSERT(strlen(err->str) <= 512, "Should truncate to 512 chars");
+
+  VALK_PASS();
+}
+
+void test_lval_read_comment_eof(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "42 ;comment no newline");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse number before comment");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be NUM");
+  VALK_TEST_ASSERT(val->num == 42, "Value should be 42");
+
+  VALK_PASS();
+}
+
+void test_lval_read_only_comment_eof(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, ";only comment no newline");
+  VALK_TEST_ASSERT(val == nullptr || LVAL_TYPE(val) == LVAL_ERR, "Should return null or error for only comment");
+
+  VALK_PASS();
+}
+
+void test_eval_stack_collect_arg_null_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_COLLECT_ARG,
+    .env = NULL,
+    .collect_arg = {
+      .func = NULL,
+      .args = NULL,
+      .count = 0,
+      .capacity = 0,
+      .remaining = NULL,
+    },
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  ASSERT_EQ(stack.count, 1);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_lval_list_is_empty_null_head(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *cons = valk_mem_alloc(sizeof(valk_lval_t));
+  cons->flags = LVAL_CONS;
+  cons->cons.head = NULL;
+  cons->cons.tail = NULL;
+
+  VALK_TEST_ASSERT(valk_lval_list_is_empty(cons) == 1, "Should be empty when head is NULL");
+
+  VALK_PASS();
+}
+
+void test_lval_list_nth_early_end(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *list = valk_lval_cons(valk_lval_num(1), valk_lval_nil());
+  valk_lval_t *result = valk_lval_list_nth(list, 5);
+  VALK_TEST_ASSERT(result == nullptr, "Should return nullptr for index past end");
+
+  VALK_PASS();
+}
+
+void test_lval_read_vtab_whitespace(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\v42");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse number after vtab");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be NUM");
+  VALK_TEST_ASSERT(val->num == 42, "Value should be 42");
+
+  VALK_PASS();
+}
+
+void test_lval_read_carriage_return_whitespace(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\r42");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse number after CR");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be NUM");
+  VALK_TEST_ASSERT(val->num == 42, "Value should be 42");
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -2055,6 +2164,15 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_lval_read_very_long_list", test_lval_read_very_long_list);
   valk_testsuite_add_test(suite, "test_lval_print_nil", test_lval_print_nil);
   valk_testsuite_add_test(suite, "test_lenv_masked_parent_symbol", test_lenv_masked_parent_symbol);
+
+  valk_testsuite_add_test(suite, "test_lval_err_very_long_message", test_lval_err_very_long_message);
+  valk_testsuite_add_test(suite, "test_lval_read_comment_eof", test_lval_read_comment_eof);
+  valk_testsuite_add_test(suite, "test_lval_read_only_comment_eof", test_lval_read_only_comment_eof);
+  valk_testsuite_add_test(suite, "test_eval_stack_collect_arg_null_args", test_eval_stack_collect_arg_null_args);
+  valk_testsuite_add_test(suite, "test_lval_list_is_empty_null_head", test_lval_list_is_empty_null_head);
+  valk_testsuite_add_test(suite, "test_lval_list_nth_early_end", test_lval_list_nth_early_end);
+  valk_testsuite_add_test(suite, "test_lval_read_vtab_whitespace", test_lval_read_vtab_whitespace);
+  valk_testsuite_add_test(suite, "test_lval_read_carriage_return_whitespace", test_lval_read_carriage_return_whitespace);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

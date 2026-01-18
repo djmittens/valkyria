@@ -1962,15 +1962,16 @@ valk_lval_t* valk_lval_read(int* i, const char* s) {
     ++(*i);
   }
 
-  // Skip white space and comments
-  while (strchr(" \t\v\r\n", s[*i]) && s[*i] != '\0') {
+  // Skip trailing white space and comments
+  while (strchr(" ;\t\v\r\n", s[*i]) && s[*i] != '\0') {
     // Read comment
     if (s[*i] == ';') {
       while (s[*i] != '\n' && s[*i] != '\0') {
         ++(*i);
       }
+    } else {
+      ++(*i);
     }
-    ++(*i);
   }
   return res;
 }
