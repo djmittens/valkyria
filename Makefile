@@ -177,6 +177,8 @@ define run_tests_c
 	$(1)/test_io_timer_ops_unit
 	$(1)/test_thread_posix_unit
 	$(1)/test_aio_handle_diag
+	$(1)/test_chase_lev_unit
+	$(1)/test_task_queue_unit
 	@echo "=== All C tests passed ($(1)) ==="
 endef
 

@@ -420,3 +420,13 @@ add_executable(test_request_ctx_unit test/unit/test_request_ctx.c test/testing.c
 target_link_libraries(test_request_ctx_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_request_ctx_unit src/)
 
+# Chase-Lev deque tests (lock-free work-stealing data structure)
+add_executable(test_chase_lev_unit test/unit/test_chase_lev.c test/testing.c)
+target_link_libraries(test_chase_lev_unit PRIVATE "-lc" valkyria)
+include_directories(test_chase_lev_unit src/)
+
+# Task queue tests (async task execution via libuv event loop)
+add_executable(test_task_queue_unit test/unit/test_task_queue.c test/testing.c)
+target_link_libraries(test_task_queue_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_task_queue_unit src/)
+
