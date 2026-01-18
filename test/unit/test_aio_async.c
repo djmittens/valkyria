@@ -890,6 +890,63 @@ void test_async_await_failed_no_error(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_async_handle_await_timeout_already_completed(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_lval_t *result = valk_lval_num(42);
+  valk_async_handle_complete(handle, result);
+
+  valk_lval_t *awaited = valk_async_handle_await_timeout(handle, 1000);
+  ASSERT_EQ(awaited, result);
+
+  valk_async_handle_free(handle);
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_async_handle_await_timeout_already_failed(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_lval_t *err = valk_lval_err("test error");
+  valk_async_handle_fail(handle, err);
+
+  valk_lval_t *awaited = valk_async_handle_await_timeout(handle, 1000);
+  ASSERT_EQ(awaited, err);
+
+  valk_async_handle_free(handle);
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_async_handle_cancel_from_running_no_sys(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_RUNNING);
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_RUNNING);
+
+  bool cancelled = valk_async_handle_cancel(handle);
+  ASSERT_TRUE(cancelled);
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_CANCELLED);
+
+  valk_async_handle_free(handle);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
 
@@ -945,6 +1002,9 @@ int main(void) {
   valk_testsuite_add_test(suite, "async_propagate_context_sys_mismatch", test_async_propagate_context_sys_mismatch);
   valk_testsuite_add_test(suite, "async_propagate_context_does_not_overwrite", test_async_propagate_context_does_not_overwrite);
   valk_testsuite_add_test(suite, "async_await_failed_no_error", test_async_await_failed_no_error);
+  valk_testsuite_add_test(suite, "async_await_timeout_already_completed", test_async_handle_await_timeout_already_completed);
+  valk_testsuite_add_test(suite, "async_await_timeout_already_failed", test_async_handle_await_timeout_already_failed);
+  valk_testsuite_add_test(suite, "async_cancel_from_running_no_sys", test_async_handle_cancel_from_running_no_sys);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

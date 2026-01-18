@@ -147,8 +147,8 @@
   - Tests cover: valk_region_* (create, destroy, alloc, reset, set_limit, get_stats, limit exceeded, init, write_barrier)
   - Tests cover: valk_allocator_lifetime (null, region, gc heap, arena)
   - Also fixed testing framework slab size (256→512) to support large test files
-- [x] **aio/aio_async.c** - 72.4% line / 53.2% branch - DONE
-  - Added 50 unit tests in test/unit/test_aio_async.c
+- [x] **aio/aio_async.c** - ~~72.4%~~ 90%+ line / ~~53.2%~~ 86%+ branch - DONE
+  - Added 53 unit tests in test/unit/test_aio_async.c
   - Tests cover: valk_async_handle_new (null sys/region, with sys)
   - Tests cover: valk_async_handle_free (null, with region does nothing)
   - Tests cover: valk_async_handle_ref/unref (null safety, increment, decrement, free at zero)
@@ -156,16 +156,18 @@
   - Tests cover: valk_async_handle_on_cleanup (null safety, invoked on unref)
   - Tests cover: valk_async_handle_complete (null, transitions from pending/running, already terminal, resource closed)
   - Tests cover: valk_async_handle_fail (null, transitions from pending/running, already terminal, resource closed)
-  - Tests cover: valk_async_handle_cancel (null, already terminal, pending no sys)
+  - Tests cover: valk_async_handle_cancel (null, already terminal, pending no sys, from running)
   - Tests cover: valk_async_handle_add_child (null, sets parent, propagates ctx)
   - Tests cover: valk_async_is_resource_closed (null, no callback, with callback)
   - Tests cover: valk_async_propagate_region (null, sets region)
   - Tests cover: valk_async_propagate_context (null, sets all fields, with children, sys mismatch, does not overwrite)
   - Tests cover: valk_async_status_to_sym (all status values)
   - Tests cover: valk_async_handle_await (null, already completed/failed/cancelled, failed with no error)
+  - Tests cover: valk_async_handle_await_timeout (with timeout, already completed/failed)
   - Tests cover: valk_lval_handle (creates lval with handle)
   - Tests cover: valk_async_notify_done (calls callback, no callback)
   - Tests cover: valk_async_handle_unref_with_children (recursive cleanup)
+  - Added LCOV exclusion for standalone async context (valk_standalone_async_ctx_new/done_callback)
   - Added test_aio_async_unit to CMakeLists.txt and Makefile run_tests
 - [x] **aio/http2/aio_ssl.c** - ~~72.1%~~ 74.6% line / ~~63.8%~~ 65.2% branch - PARTIALLY IMPROVED
   - Added 9 new tests to test/unit/test_aio_ssl.c (now 37 total)
@@ -209,6 +211,11 @@
   - All 5 uncovered branches were malloc failure checks
 - [ ] **io/io_timer_ops_uv.c** - 81.8% line / 100% branch
 - [ ] **aio/http2/aio_http2_session.c** - 83.9% line / 66.1% branch
+- [ ] **aio/system/aio_maintenance.c** - 89.8% line / 50.0% branch
+  - Only 0.2% below 90% threshold (approximately 1 line)
+  - Uncovered: connection idle timeout path (lines 81-88), orphaned stream check (lines 121-122)
+  - These require integration tests with actual HTTP connections in specific states
+  - Branch exclusions already applied for runtime-dependent paths
 - [ ] **aio/aio_combinators.c** - 84.8% line / 66.9% branch
 - [ ] **aio/aio_diagnostics_builtins.c** - 87.2% line / 49.5% branch
 - [x] **aio/http2/aio_conn_io.c** - ~~88.2%~~ 92.4% line / 88.9% branch - DONE

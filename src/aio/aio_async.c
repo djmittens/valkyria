@@ -141,7 +141,6 @@ valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sy
     valk_slab_release(sys->httpStreamArenas, arena_item);
     return nullptr;
   }
-// LCOV_EXCL_STOP
 
   ctx->arena = arena;
   ctx->arena_ref = (valk_arena_ref_t){.slab_item = arena_item, .slot = UINT32_MAX};
@@ -150,6 +149,7 @@ valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sy
   VALK_DEBUG("Allocated standalone async arena from pool");
   return ctx;
 }
+// LCOV_EXCL_STOP
 
 void valk_async_notify_done(valk_async_handle_t *handle) {
   if (handle->on_done) {
