@@ -217,10 +217,12 @@ u64 valk_alloc_flags_from_allocator(void* allocator) {
       return LVAL_ALLOC_GLOBAL;
     case VALK_ALLOC_GC_HEAP:
       return LVAL_ALLOC_HEAP;
+    // LCOV_EXCL_START - SLAB allocator not used for lval allocation
     case VALK_ALLOC_SLAB:
       return LVAL_ALLOC_GLOBAL;
     default:
       return LVAL_ALLOC_SCRATCH;
+    // LCOV_EXCL_STOP
   }
 }
 // LCOV_EXCL_BR_STOP
@@ -740,8 +742,10 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
       res->ref.free = lval->ref.free;
       break;
     }
+    // LCOV_EXCL_START - LVAL_UNDEFINED is an invariant violation, should never happen
     case LVAL_UNDEFINED:
       break;
+    // LCOV_EXCL_STOP
     case LVAL_HANDLE:
       // Handles share the underlying async_handle - just copy the pointer
       res->async.handle = lval->async.handle;
@@ -842,9 +846,6 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
 // Helper: check if lval is a list starting with a specific symbol
 static bool valk_is_tagged_list(valk_lval_t* lval, const char* tag) {
   if (LVAL_TYPE(lval) != LVAL_CONS && LVAL_TYPE(lval) != LVAL_QEXPR) {
-    return false;
-  }
-  if (LVAL_TYPE(lval) == LVAL_NIL) {
     return false;
   }
   valk_lval_t* first = lval->cons.head;
@@ -975,9 +976,11 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
     atomic_fetch_add(&g_eval_metrics.builtin_calls, 1);
     valk_lval_t* result = func->fun.builtin(env, args);
     atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+    // LCOV_EXCL_START - defensive check: builtins should never return NULL
     if (result == NULL) {
       return valk_eval_value(valk_lval_err("Internal error: builtin returned NULL"));
     }
+    // LCOV_EXCL_STOP
     return valk_eval_value(result);
   }
 

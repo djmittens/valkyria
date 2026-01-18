@@ -175,7 +175,7 @@
   - Tests cover: valk_aio_ssl_server_init with valid certs, bidirectional handshake
   - Tests cover: valk_aio_ssl_encrypt after handshake, encrypt near capacity
   - Note: Remaining uncovered paths require full SSL handshake completion which is complex to test
-- [ ] **parser.c** - ~~75.1%~~ ~~77.0%~~ ~~81.0%~~ ~~81.7%~~ ~~83.3%~~ 83.9% line / ~~50.0%~~ ~~51.1%~~ ~~55.1%~~ ~~55.8%~~ ~~56.8%~~ 57.5% branch - INCREMENTALLY IMPROVING
+- [ ] **parser.c** - ~~75.1%~~ ~~77.0%~~ ~~81.0%~~ ~~81.7%~~ ~~83.3%~~ ~~83.9%~~ 85.9% line / ~~50.0%~~ ~~51.1%~~ ~~55.1%~~ ~~55.8%~~ ~~56.8%~~ ~~57.5%~~ 59.8% branch - INCREMENTALLY IMPROVING
   - Added test/test_string_builtins.valk (16 tests) covering str/split, str/replace, str->num
   - Added test/test_memory_builtins.valk (10 tests) covering heap-usage, gc-collect, heap-hard-limit, set-heap-hard-limit, stack-depth, time-us
   - Added test_lval_copy_builtin, test_lval_eq_handle, and test_lval_copy_handle unit tests to test/unit/test_parser.c
@@ -196,7 +196,12 @@
   - Added LCOV exclusion for CONT_DO_NEXT (dead code: do is a builtin, never triggers continuation path)
   - Added test/test_parser_builtin_coverage.valk (60 tests) covering printf error cases, make-string edge cases, str/split edge cases, str/replace edge cases, read-file errors, ord/type/len/join/cons edge cases, error? predicate, eval edge cases, logic short-circuit, variadic math builtins
   - Added 30 new C unit tests to test/test_parser_errors.c covering empty list eval, quasiquote errors, ctx/with-deadline errors, ctx/with errors, varargs edge cases, string escapes, read edge cases
-  - Remaining uncovered: coverage builtins (only in VALK_COVERAGE builds), HTTP/2 server builtins (require integration tests), continuation handling thunk paths, allocator SLAB case (unused for lvals)
+  - Added test/test_parser_coverage_gaps.valk (50 tests) covering quasiquote edge cases, ctx continuation paths, varargs errors, GC builtins
+  - Added 2 unit tests for \r and \" escape sequences in valk_lval_str_escape (test_lval_print_string_carriage_return, test_lval_print_string_double_quote)
+  - Added LCOV exclusion for NULL builtin return check (defensive invariant)
+  - Added LCOV exclusion for SLAB allocator path (not used for lval allocation)
+  - Removed dead code: redundant NIL check in valk_is_tagged_list after CONS/QEXPR type check
+  - Remaining uncovered: coverage builtins (only in VALK_COVERAGE builds), HTTP/2 server builtins (require integration tests), continuation handling thunk paths, penv builtin
 
 ### Low Priority Files (<15% line coverage gap)
 

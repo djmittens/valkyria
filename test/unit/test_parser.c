@@ -1748,6 +1748,24 @@ void test_lval_print_string_rare_escapes(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_lval_print_string_carriage_return(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_str("line1\rline2");
+  valk_lval_print(val);
+
+  VALK_PASS();
+}
+
+void test_lval_print_string_double_quote(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_str("he said \"hello\"");
+  valk_lval_print(val);
+
+  VALK_PASS();
+}
+
 void test_lenv_capacity_growth(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -2027,6 +2045,8 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_lval_read_string_escape_vtab", test_lval_read_string_escape_vtab);
   valk_testsuite_add_test(suite, "test_lval_read_string_escape_single_quote", test_lval_read_string_escape_single_quote);
   valk_testsuite_add_test(suite, "test_lval_print_string_rare_escapes", test_lval_print_string_rare_escapes);
+  valk_testsuite_add_test(suite, "test_lval_print_string_carriage_return", test_lval_print_string_carriage_return);
+  valk_testsuite_add_test(suite, "test_lval_print_string_double_quote", test_lval_print_string_double_quote);
   valk_testsuite_add_test(suite, "test_lenv_capacity_growth", test_lenv_capacity_growth);
   valk_testsuite_add_test(suite, "test_lval_pop_deep_index", test_lval_pop_deep_index);
   valk_testsuite_add_test(suite, "test_lval_pop_last_element", test_lval_pop_last_element);
