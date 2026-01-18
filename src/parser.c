@@ -265,9 +265,7 @@ const char* valk_ltype_name(valk_ltype_e type) {
     case LVAL_NIL:
       return "Nil";
     case LVAL_CONS:
-      return "S-Expr";
-    case LVAL_QEXPR:
-      return "Q-Expr";
+      return "List";
     case LVAL_ERR:
       return "Error";
     case LVAL_STR:
@@ -532,7 +530,7 @@ valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
 valk_lval_t* valk_lval_qcons(valk_lval_t* head, valk_lval_t* tail) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
-      LVAL_QEXPR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+      LVAL_CONS | LVAL_FLAG_QUOTED | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
   INHERIT_SOURCE_LOC(res, head);
@@ -676,8 +674,8 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
 
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
 
-  // Keep type, add allocation flags from the current allocator
-  res->flags = (lval->flags & LVAL_TYPE_MASK) |
+  // Keep type and quoted flag, add allocation flags from the current allocator
+  res->flags = (lval->flags & (LVAL_TYPE_MASK | LVAL_FLAG_QUOTED)) |
                valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
 
@@ -705,7 +703,6 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
       }
       break;
     case LVAL_CONS:
-    case LVAL_QEXPR:
       res->cons.head = lval->cons.head;
       res->cons.tail = lval->cons.tail;
       break;
@@ -825,8 +822,7 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
     case LVAL_NIL:
       return 1;  // Both are nil (types already matched)
     case LVAL_CONS:
-    case LVAL_QEXPR:
-      // Compare cons/qexpr cells recursively
+      // Compare cons cells recursively (ignores quoted flag - structural equality)
       return valk_lval_eq(x->cons.head, y->cons.head) &&
              valk_lval_eq(x->cons.tail, y->cons.tail);
     case LVAL_REF:
@@ -886,7 +882,7 @@ valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) {
 
   // It's a list - process each element
   // We need to handle unquote-splicing specially
-  bool is_qexpr = (LVAL_TYPE(form) == LVAL_QEXPR);
+  bool is_qexpr = (form->flags & LVAL_FLAG_QUOTED) != 0;
 
   // Collect expanded elements, handling splicing
   u64 capacity = 16;
@@ -1063,7 +1059,7 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
   }
 
   valk_lval_t* body = func->fun.body;
-  if (LVAL_TYPE(body) == LVAL_QEXPR) {
+  if (LVAL_TYPE(body) == LVAL_CONS && (body->flags & LVAL_FLAG_QUOTED)) {
     body = valk_qexpr_to_cons(body);
   }
 
@@ -1128,10 +1124,13 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
     // Phase 1: Evaluate current expression if we have one
     if (expr != NULL) {
       // Self-evaluating forms
+      // Quoted cons cells (created with {} syntax) are self-evaluating
+      // Non-quoted cons cells (S-expressions) need to be evaluated as function calls
       if (LVAL_TYPE(expr) == LVAL_NUM || LVAL_TYPE(expr) == LVAL_STR ||
           LVAL_TYPE(expr) == LVAL_FUN || LVAL_TYPE(expr) == LVAL_ERR ||
           LVAL_TYPE(expr) == LVAL_NIL || LVAL_TYPE(expr) == LVAL_REF ||
-          LVAL_TYPE(expr) == LVAL_QEXPR || LVAL_TYPE(expr) == LVAL_HANDLE) {
+          LVAL_TYPE(expr) == LVAL_HANDLE ||
+          (LVAL_TYPE(expr) == LVAL_CONS && (expr->flags & LVAL_FLAG_QUOTED))) {
         value = expr;
         expr = NULL;
         goto apply_cont;
@@ -1377,7 +1376,7 @@ apply_cont:
           }
           
           valk_lval_t* branch = condition ? frame.if_branch.true_branch : frame.if_branch.false_branch;
-          if (LVAL_TYPE(branch) == LVAL_QEXPR) {
+          if (LVAL_TYPE(branch) == LVAL_CONS && (branch->flags & LVAL_FLAG_QUOTED)) {
             branch = valk_qexpr_to_cons(branch);
           }
           expr = branch;
@@ -1622,49 +1621,21 @@ valk_lval_t* valk_lval_join(valk_lval_t* a, valk_lval_t* b) {
 
   valk_lval_t* orig_a __attribute__((unused)) = a;
 
-  // Determine if result should be QEXPR (if first arg is QEXPR)
-  bool is_qexpr = (LVAL_TYPE(a) == LVAL_QEXPR);
+  // Determine if result should be quoted (if first arg is quoted)
+  bool is_qexpr = (a->flags & LVAL_FLAG_QUOTED) != 0;
 
   u64 lena = valk_lval_list_count(a);
 
   // If b is not a list type, wrap it
   // This ensures join always produces proper lists
   valk_lval_t* res;
-  if (LVAL_TYPE(b) != LVAL_CONS && LVAL_TYPE(b) != LVAL_QEXPR &&
-      LVAL_TYPE(b) != LVAL_NIL) {
+  if (LVAL_TYPE(b) != LVAL_CONS && LVAL_TYPE(b) != LVAL_NIL) {
     res = is_qexpr ? valk_lval_qcons(b, valk_lval_nil())
                    : valk_lval_cons(b, valk_lval_nil());
   } else {
     // If b has different type, we need to rebuild it with the target type
-    if (is_qexpr && LVAL_TYPE(b) == LVAL_CONS) {
-      // Convert CONS to QEXPR - rebuild the list
-      u64 lenb = valk_lval_list_count(b);
-      res = valk_lval_nil();
-      valk_lval_t* items[lenb];
-      valk_lval_t* curr = b;
-      for (u64 i = 0; i < lenb; i++) {
-        items[i] = curr->cons.head;
-        curr = curr->cons.tail;
-      }
-      for (u64 i = lenb; i > 0; i--) {
-        res = valk_lval_qcons(items[i - 1], res);
-      }
-    } else if (!is_qexpr && LVAL_TYPE(b) == LVAL_QEXPR) {
-      // Convert QEXPR to CONS - rebuild the list
-      u64 lenb = valk_lval_list_count(b);
-      res = valk_lval_nil();
-      valk_lval_t* items[lenb];
-      valk_lval_t* curr = b;
-      for (u64 i = 0; i < lenb; i++) {
-        items[i] = curr->cons.head;
-        curr = curr->cons.tail;
-      }
-      for (u64 i = lenb; i > 0; i--) {
-        res = valk_lval_cons(items[i - 1], res);
-      }
-    } else {
-      res = b;
-    }
+    // Use b directly - CONS and QEXPR are now the same type
+    res = b;
   }
 
   struct {
@@ -1710,7 +1681,9 @@ void valk_lval_print(valk_lval_t* val) {
       printf("()");
       break;
     case LVAL_CONS: {
-      printf("(");
+      // Check if this is a quoted list (should print with {})
+      bool is_quoted = (val->flags & LVAL_FLAG_QUOTED) != 0;
+      printf(is_quoted ? "{" : "(");
       valk_lval_t* curr = val;
       int first = 1;
       while (curr != nullptr && LVAL_TYPE(curr) == LVAL_CONS) {
@@ -1724,26 +1697,7 @@ void valk_lval_print(valk_lval_t* val) {
         printf(" . ");
         valk_lval_print(curr);
       }
-      printf(")");
-      break;
-    }
-    case LVAL_QEXPR: {
-      // Q-expressions print with {} to show they are quoted data
-      printf("{");
-      valk_lval_t* curr = val;
-      int first = 1;
-      while (curr != nullptr && LVAL_TYPE(curr) == LVAL_QEXPR) {
-        if (!first) putchar(' ');
-        valk_lval_print(curr->cons.head);
-        curr = curr->cons.tail;
-        first = 0;
-      }
-      // Check for improper list (tail is not nil)
-      if (curr != nullptr && LVAL_TYPE(curr) != LVAL_NIL) {
-        printf(" . ");
-        valk_lval_print(curr);
-      }
-      printf("}");
+      printf(is_quoted ? "}" : ")");
       break;
     }
     case LVAL_ERR:
@@ -2434,7 +2388,6 @@ static valk_lval_t* valk_builtin_len(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* arg = valk_lval_list_nth(a, 0);
   switch (LVAL_TYPE(arg)) {
     case LVAL_CONS:
-    case LVAL_QEXPR:
     case LVAL_NIL:
       return valk_lval_num(valk_lval_list_count(arg));
     case LVAL_STR: {
@@ -2442,7 +2395,7 @@ static valk_lval_t* valk_builtin_len(valk_lenv_t* e, valk_lval_t* a) {
       return valk_lval_num((long)n);
     }
     default:
-      LVAL_RAISE(a, "Actual: %s, Expected(One-Of): [Cons, Qexpr, Nil, String]",
+      LVAL_RAISE(a, "Actual: %s, Expected(One-Of): [List, Nil, String]",
                  valk_ltype_name(LVAL_TYPE(arg)));
       return valk_lval_err("len invalid type");
   }
@@ -2500,11 +2453,11 @@ static valk_lval_t* valk_builtin_init(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS, LVAL_QEXPR);
+  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS);
   LVAL_ASSERT_COUNT_GT(a, arg0, 0);
 
-  // Remove last element, preserving type
-  bool is_qexpr = (LVAL_TYPE(arg0) == LVAL_QEXPR);
+  // Remove last element, preserving quoted flag
+  bool is_qexpr = (arg0->flags & LVAL_FLAG_QUOTED) != 0;
   return valk_list_init(arg0, is_qexpr);
 }
 
@@ -2576,12 +2529,12 @@ static valk_lval_t* valk_builtin_repeat(valk_lenv_t* e, valk_lval_t* a) {
 
 static valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  // Convert argument list (CONS) to QEXPR (data, not code)
-  // The arguments have already been evaluated, so we just change the type
-  if (LVAL_TYPE(a) == LVAL_QEXPR || LVAL_TYPE(a) == LVAL_NIL) {
-    return a;  // Already a QEXPR or empty
+  if (LVAL_TYPE(a) == LVAL_NIL) {
+    return a;
   }
-  // Rebuild as QEXPR
+  if (LVAL_TYPE(a) == LVAL_CONS && (a->flags & LVAL_FLAG_QUOTED)) {
+    return a;
+  }
   u64 count = valk_lval_list_count(a);
   valk_lval_t* items[count];
   valk_lval_t* curr = a;
@@ -2608,7 +2561,7 @@ static valk_lval_t* valk_builtin_eval(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
 
-  if (LVAL_TYPE(arg0) == LVAL_QEXPR) {
+  if (LVAL_TYPE(arg0) == LVAL_CONS && (arg0->flags & LVAL_FLAG_QUOTED)) {
     arg0 = valk_qexpr_to_cons(arg0);
   }
 
@@ -3171,7 +3124,7 @@ static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
     branch = false_branch;
   }
 
-  if (LVAL_TYPE(branch) == LVAL_QEXPR) {
+  if (LVAL_TYPE(branch) == LVAL_CONS && (branch->flags & LVAL_FLAG_QUOTED)) {
     VALK_COVERAGE_RECORD_LVAL(branch);
     branch = valk_qexpr_to_cons(branch);
   }
@@ -3195,7 +3148,7 @@ static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
     u16 line = clause->cov_line;
 #endif
 
-    if (LVAL_TYPE(clause) == LVAL_QEXPR) {
+    if (LVAL_TYPE(clause) == LVAL_CONS && (clause->flags & LVAL_FLAG_QUOTED)) {
       clause = valk_qexpr_to_cons(clause);
     }
 
@@ -3220,7 +3173,7 @@ static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
 #endif
 
     if (condition) {
-      if (LVAL_TYPE(result_expr) == LVAL_QEXPR) {
+      if (LVAL_TYPE(result_expr) == LVAL_CONS && (result_expr->flags & LVAL_FLAG_QUOTED)) {
         VALK_COVERAGE_RECORD_LVAL(result_expr);
         result_expr = valk_qexpr_to_cons(result_expr);
       }
@@ -3374,7 +3327,8 @@ static void valk_lval_print_user(valk_lval_t* val) {
       printf("()");
       break;
     case LVAL_CONS: {
-      printf("(");
+      bool is_quoted = (val->flags & LVAL_FLAG_QUOTED) != 0;
+      printf(is_quoted ? "{" : "(");
       valk_lval_t* curr = val;
       int first = 1;
       while (curr != nullptr && LVAL_TYPE(curr) == LVAL_CONS) {
@@ -3387,24 +3341,7 @@ static void valk_lval_print_user(valk_lval_t* val) {
         printf(" . ");
         valk_lval_print_user(curr);
       }
-      printf(")");
-      break;
-    }
-    case LVAL_QEXPR: {
-      printf("{");
-      valk_lval_t* curr = val;
-      int first = 1;
-      while (curr != nullptr && LVAL_TYPE(curr) == LVAL_QEXPR) {
-        if (!first) putchar(' ');
-        valk_lval_print_user(curr->cons.head);
-        curr = curr->cons.tail;
-        first = 0;
-      }
-      if (curr != nullptr && LVAL_TYPE(curr) != LVAL_NIL) {
-        printf(" . ");
-        valk_lval_print_user(curr);
-      }
-      printf("}");
+      printf(is_quoted ? "}" : ")");
       break;
     }
     case LVAL_ERR:

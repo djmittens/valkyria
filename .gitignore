@@ -15,3 +15,6 @@ __pycache__/
 *.gcov
 *.gcda
 *.gcno
+
+# Ralph Wiggum (optional - remove if you want to track plan state)
+IMPLEMENTATION_PLAN.md

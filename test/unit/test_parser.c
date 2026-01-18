@@ -952,8 +952,9 @@ void test_ltype_name_all_types(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_FUN), "Function") == 0, "FUN type");
-  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_CONS), "S-Expr") == 0, "CONS type");
-  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_QEXPR), "Q-Expr") == 0, "QEXPR type");
+  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_CONS), "List") == 0, "CONS type");
+  // LVAL_QEXPR is now an alias for LVAL_CONS
+  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_QEXPR), "List") == 0, "QEXPR type (alias for CONS)");
   VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_REF), "Reference") == 0, "REF type");
   VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_HANDLE), "Handle") == 0, "HANDLE type");
   VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_UNDEFINED), "UNDEFINED") == 0, "UNDEFINED type");

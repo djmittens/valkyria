@@ -254,8 +254,7 @@ valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
   switch (LVAL_TYPE(ast)) {
     case LVAL_ERR:
       return ast;
-    case LVAL_CONS:
-    case LVAL_QEXPR: {
+    case LVAL_CONS: {
       if(valk_lval_list_is_empty(ast)) return nullptr;
       valk_lval_t *err = valk_lval_find_error(ast->cons.head);
       if (err) return err;

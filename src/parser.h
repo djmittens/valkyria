@@ -35,6 +35,10 @@
 // This allows GC to skip these objects during both mark and sweep
 #define LVAL_FLAG_IMMORTAL  (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS))
 
+// Quoted flag - for cons cells, indicates this should print as {} not ()
+// Used to preserve round-trip fidelity for quoted expressions
+#define LVAL_FLAG_QUOTED    (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 1))
+
 #define LVAL_GC_GEN(lval) (((lval)->flags & LVAL_GC_GEN_MASK) >> LVAL_GC_GEN_SHIFT)
 #define LVAL_GC_GEN_SET(lval, gen) do { \
   (lval)->flags = ((lval)->flags & ~LVAL_GC_GEN_MASK) | \
@@ -67,11 +71,13 @@ typedef enum {
   LVAL_FUN,  // Function (bytecode or builtin)
   LVAL_REF,
   LVAL_NIL,    // Empty list / nil value
-  LVAL_CONS,   // Cons cell - S-expression (code to execute)
-  LVAL_QEXPR,  // Cons cell - Q-expression (quoted data, not code)
+  LVAL_CONS,   // Cons cell (list) - use LVAL_FLAG_QUOTED for {} vs () printing
   LVAL_ERR,
   LVAL_HANDLE,   // Async operation handle (cancellable promise)
 } valk_ltype_e;
+
+// LVAL_QEXPR is now an alias for LVAL_CONS (deprecated, use LVAL_CONS)
+#define LVAL_QEXPR LVAL_CONS
 
 const char *valk_ltype_name(valk_ltype_e type);
 

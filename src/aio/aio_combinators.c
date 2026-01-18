@@ -455,7 +455,7 @@ static valk_lval_t* valk_builtin_aio_let(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   valk_lval_t *body_expr = body;
-  if (LVAL_TYPE(body) == LVAL_QEXPR && !valk_lval_list_is_empty(body)) {
+  if (LVAL_TYPE(body) == LVAL_CONS && (body->flags & LVAL_FLAG_QUOTED) && !valk_lval_list_is_empty(body)) {
     if (valk_lval_list_is_empty(body->cons.tail)) {
       body_expr = body->cons.head;
     }
@@ -590,7 +590,7 @@ static valk_lval_t* valk_builtin_aio_do(valk_lenv_t* e, valk_lval_t* a) {
 
   valk_lval_t *stmts = valk_lval_list_nth(a, 0);
 
-  if (LVAL_TYPE(stmts) != LVAL_QEXPR) {
+  if (LVAL_TYPE(stmts) != LVAL_CONS || !(stmts->flags & LVAL_FLAG_QUOTED)) {
     return valk_lval_err("aio/do: argument must be a qexpr {stmt1 stmt2 ...}");
   }
   // LCOV_EXCL_STOP

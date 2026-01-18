@@ -445,7 +445,6 @@ static void mark_children(valk_lval_t *obj, valk_gc_mark_queue_t *queue) {
   if (obj == nullptr) return;
   switch (LVAL_TYPE(obj)) {
     case LVAL_CONS:
-    case LVAL_QEXPR:
       mark_and_push(obj->cons.head, queue);
       mark_and_push(obj->cons.tail, queue);
       break;
@@ -1290,7 +1289,6 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
   valk_ltype_e type = LVAL_TYPE(src);
   switch (type) {
     case LVAL_CONS:
-    case LVAL_QEXPR:
       copy->cons.head = region_copy_lval_recursive(target, src->cons.head, copied);
       copy->cons.tail = region_copy_lval_recursive(target, src->cons.tail, copied);
       break;
@@ -1511,7 +1509,6 @@ static void valk_gc_mark_lval(valk_lval_t* v) {
       valk_gc_mark_lval(v->fun.body);
       break;
     case LVAL_CONS:
-    case LVAL_QEXPR:
       valk_gc_mark_lval(v->cons.head);
       valk_gc_mark_lval(v->cons.tail);
       break;
@@ -1746,7 +1743,6 @@ static void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
 
   switch (LVAL_TYPE(v)) {
     case LVAL_CONS:
-    case LVAL_QEXPR:
       // Evacuate and queue head (only if freshly evacuated, not already processed)
       if (v->cons.head != nullptr) {
         valk_lval_t* old_head = v->cons.head;
@@ -2041,7 +2037,6 @@ static void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
 
   switch (LVAL_TYPE(v)) {
     case LVAL_CONS:
-    case LVAL_QEXPR:
       fix_scratch_pointer(ctx, &v->cons.head);
       fix_scratch_pointer(ctx, &v->cons.tail);
       break;
@@ -3107,7 +3102,6 @@ static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
   if (obj == nullptr) return;
   switch (LVAL_TYPE(obj)) {
     case LVAL_CONS:
-    case LVAL_QEXPR:
       mark_lval2(obj->cons.head, ctx);
       mark_lval2(obj->cons.tail, ctx);
       break;
@@ -3461,7 +3455,6 @@ static void mark_children2_parallel(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) 
   if (obj == nullptr) return;
   switch (LVAL_TYPE(obj)) {
     case LVAL_CONS:
-    case LVAL_QEXPR:
       mark_lval2_parallel(obj->cons.head, ctx);
       mark_lval2_parallel(obj->cons.tail, ctx);
       break;
