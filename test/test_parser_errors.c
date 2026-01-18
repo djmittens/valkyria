@@ -2312,6 +2312,384 @@ static void test_join_empty_args(VALK_TEST_ARGS()) {
 }
 
 // ============================================================================
+// Additional Coverage Tests for Error Branches
+// ============================================================================
+
+static void test_sleep_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(sleep)");
+  ASSERT_LVAL_ERROR(result);
+
+  result = parse_and_eval("(sleep 1 2)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_sleep_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(sleep \"not a number\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_str_split_second_arg_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/split \"hello,world\" 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_str_replace_second_arg_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/replace \"hello\" 42 \"world\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_str_replace_third_arg_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/replace \"hello\" \"world\" 42)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_gc_set_threshold_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(mem/gc/set-threshold)");
+  ASSERT_LVAL_ERROR(result);
+
+  result = parse_and_eval("(mem/gc/set-threshold 50 100)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_gc_set_threshold_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(mem/gc/set-threshold \"not a number\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_gc_set_min_interval_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(mem/gc/set-min-interval)");
+  ASSERT_LVAL_ERROR(result);
+
+  result = parse_and_eval("(mem/gc/set-min-interval 100 200)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_gc_set_min_interval_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(mem/gc/set-min-interval \"not a number\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_printf_not_enough_args_for_s(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"%s\")");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "not enough arguments");
+
+  VALK_PASS();
+}
+
+static void test_printf_s_requires_string(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"%s\" 42)");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "requires string");
+
+  VALK_PASS();
+}
+
+static void test_printf_not_enough_args_for_d(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"%d\")");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "not enough arguments");
+
+  VALK_PASS();
+}
+
+static void test_printf_d_requires_number(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"%d\" \"not a number\")");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "requires number");
+
+  VALK_PASS();
+}
+
+static void test_printf_ld_format(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // %ld should work the same as %d
+  valk_lval_t *result = parse_and_eval("(printf \"%ld\" 42)");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_printf_percent_escape(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // %% should print a literal %
+  valk_lval_t *result = parse_and_eval("(printf \"100%%\")");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_printf_invalid_format(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Invalid format specifier should be ignored/skipped
+  valk_lval_t *result = parse_and_eval("(printf \"%x\" 42)");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_print_user_with_lambda(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // print should handle lambda functions
+  valk_lval_t *result = parse_and_eval("(print (\\ {x} x))");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_print_user_with_ref(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Testing ref printing via http2/request (creates a ref)
+  valk_lval_t *result = parse_and_eval("(print (http2/request \"GET\" \"https\" \"example.com\" \"/\"))");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_print_user_with_error(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // print should handle error values by converting to string
+  valk_lval_t *result = parse_and_eval("(print (error \"test error\"))");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_str_split_empty_delimiter(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/split \"hello\" \"\")");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "delimiter cannot be empty");
+
+  VALK_PASS();
+}
+
+static void test_str_replace_empty_from(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/replace \"hello\" \"\" \"world\")");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "search string cannot be empty");
+
+  VALK_PASS();
+}
+
+static void test_str_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // str with no args should return empty string (not an error)
+  valk_lval_t *result = parse_and_eval("(str)");
+  ASSERT_LVAL_TYPE(result, LVAL_STR);
+  ASSERT_STR_EQ(result->str, "");
+
+  VALK_PASS();
+}
+
+static void test_print_with_non_string_value(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // print should convert values to string using str()
+  valk_lval_t *result = parse_and_eval("(print 42)");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  result = parse_and_eval("(print {1 2 3})");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_println_error_propagation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // println should propagate errors from printf
+  valk_lval_t *result = parse_and_eval("(println)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_init_on_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Test init on multi-element list
+  valk_lval_t *result = parse_and_eval("(init {1 2 3})");
+  ASSERT_LVAL_TYPE(result, LVAL_CONS);
+  ASSERT_TRUE(valk_lval_list_count(result) == 2);
+
+  VALK_PASS();
+}
+
+static void test_init_empty_list_error(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Test init on empty list - should error
+  valk_lval_t *result = parse_and_eval("(init {})");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+static void test_lambda_body_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Test lambda with qexpr body that returns constant
+  valk_lval_t *result = parse_and_eval("((\\ {} {(+ 1 2)}))");
+  ASSERT_LVAL_TYPE(result, LVAL_NUM);
+  ASSERT_LVAL_NUM(result, 3);
+
+  VALK_PASS();
+}
+
+static void test_lambda_with_arg(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Test lambda with one arg
+  valk_lval_t *result = parse_and_eval("((\\ {x} {(+ x 1)}) 5)");
+  ASSERT_LVAL_TYPE(result, LVAL_NUM);
+  ASSERT_LVAL_NUM(result, 6);
+
+  VALK_PASS();
+}
+
+static void test_range_basic(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // range should create a list of numbers
+  valk_lval_t *result = parse_and_eval("(range 0 5)");
+  ASSERT_LVAL_TYPE(result, LVAL_CONS);
+  ASSERT_TRUE(valk_lval_list_count(result) == 5);
+
+  VALK_PASS();
+}
+
+static void test_range_empty(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // range with equal start/end should give empty list
+  valk_lval_t *result = parse_and_eval("(range 5 5)");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_str_multi_values(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Test str with multiple values
+  valk_lval_t *result = parse_and_eval("(str 1 2 3)");
+  ASSERT_LVAL_TYPE(result, LVAL_STR);
+  ASSERT_STR_EQ(result->str, "123");
+
+  VALK_PASS();
+}
+
+static void test_make_string(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Test make-string builtin
+  valk_lval_t *result = parse_and_eval("(make-string 3 65)");  // 'A' = 65
+  ASSERT_LVAL_TYPE(result, LVAL_STR);
+  ASSERT_STR_EQ(result->str, "AAA");
+
+  VALK_PASS();
+}
+
+static void test_str_to_num_valid(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Test str->num with valid string
+  valk_lval_t *result = parse_and_eval("(str->num \"42\")");
+  ASSERT_LVAL_TYPE(result, LVAL_NUM);
+  ASSERT_LVAL_NUM(result, 42);
+
+  VALK_PASS();
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -2539,6 +2917,41 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_load_wrong_count", test_load_wrong_count);
   valk_testsuite_add_test(suite, "test_load_wrong_type_numeric", test_load_wrong_type_numeric);
   valk_testsuite_add_test(suite, "test_join_empty_args", test_join_empty_args);
+
+  // Additional coverage tests for error branches
+  valk_testsuite_add_test(suite, "test_sleep_wrong_count", test_sleep_wrong_count);
+  valk_testsuite_add_test(suite, "test_sleep_wrong_type", test_sleep_wrong_type);
+  valk_testsuite_add_test(suite, "test_str_split_second_arg_wrong_type", test_str_split_second_arg_wrong_type);
+  valk_testsuite_add_test(suite, "test_str_replace_second_arg_wrong_type", test_str_replace_second_arg_wrong_type);
+  valk_testsuite_add_test(suite, "test_str_replace_third_arg_wrong_type", test_str_replace_third_arg_wrong_type);
+  valk_testsuite_add_test(suite, "test_gc_set_threshold_wrong_count", test_gc_set_threshold_wrong_count);
+  valk_testsuite_add_test(suite, "test_gc_set_threshold_wrong_type", test_gc_set_threshold_wrong_type);
+  valk_testsuite_add_test(suite, "test_gc_set_min_interval_wrong_count", test_gc_set_min_interval_wrong_count);
+  valk_testsuite_add_test(suite, "test_gc_set_min_interval_wrong_type", test_gc_set_min_interval_wrong_type);
+  valk_testsuite_add_test(suite, "test_printf_not_enough_args_for_s", test_printf_not_enough_args_for_s);
+  valk_testsuite_add_test(suite, "test_printf_s_requires_string", test_printf_s_requires_string);
+  valk_testsuite_add_test(suite, "test_printf_not_enough_args_for_d", test_printf_not_enough_args_for_d);
+  valk_testsuite_add_test(suite, "test_printf_d_requires_number", test_printf_d_requires_number);
+  valk_testsuite_add_test(suite, "test_printf_ld_format", test_printf_ld_format);
+  valk_testsuite_add_test(suite, "test_printf_percent_escape", test_printf_percent_escape);
+  valk_testsuite_add_test(suite, "test_printf_invalid_format", test_printf_invalid_format);
+  valk_testsuite_add_test(suite, "test_print_user_with_lambda", test_print_user_with_lambda);
+  valk_testsuite_add_test(suite, "test_print_user_with_ref", test_print_user_with_ref);
+  valk_testsuite_add_test(suite, "test_print_user_with_error", test_print_user_with_error);
+  valk_testsuite_add_test(suite, "test_str_split_empty_delimiter", test_str_split_empty_delimiter);
+  valk_testsuite_add_test(suite, "test_str_replace_empty_from", test_str_replace_empty_from);
+  valk_testsuite_add_test(suite, "test_str_wrong_count", test_str_wrong_count);
+  valk_testsuite_add_test(suite, "test_print_with_non_string_value", test_print_with_non_string_value);
+  valk_testsuite_add_test(suite, "test_println_error_propagation", test_println_error_propagation);
+  valk_testsuite_add_test(suite, "test_init_on_list", test_init_on_list);
+  valk_testsuite_add_test(suite, "test_init_empty_list_error", test_init_empty_list_error);
+  valk_testsuite_add_test(suite, "test_lambda_body_list", test_lambda_body_list);
+  valk_testsuite_add_test(suite, "test_lambda_with_arg", test_lambda_with_arg);
+  valk_testsuite_add_test(suite, "test_range_basic", test_range_basic);
+  valk_testsuite_add_test(suite, "test_range_empty", test_range_empty);
+  valk_testsuite_add_test(suite, "test_str_multi_values", test_str_multi_values);
+  valk_testsuite_add_test(suite, "test_make_string", test_make_string);
+  valk_testsuite_add_test(suite, "test_str_to_num_valid", test_str_to_num_valid);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
