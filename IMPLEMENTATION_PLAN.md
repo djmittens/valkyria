@@ -169,10 +169,11 @@
   - Tests cover: init/destroy, push/pop, stack growth, all continuation kinds
   - Tests for CONT_IF_BRANCH, CONT_DO_NEXT, CONT_BODY_NEXT, CONT_COLLECT_ARG frames
 
-- [ ] **continuations_simple.c** (178 lines) - DEAD CODE
-  - File is NOT compiled into the library (missing from CMakeLists.txt VALKYRIA_SOURCES)
-  - Contains placeholder async-shift/async-reset implementation that was never integrated
-  - Decision needed: delete dead code or integrate and test
+- [x] **continuations_simple.c** (178 lines) - DELETED
+  - File was NOT compiled (missing from CMakeLists.txt)
+  - Contained obsolete async-shift/async-reset prototype that was superseded by handle-based async
+  - Current async design (aio_combinators.c with monadic handles) is superior and fully working
+  - File deleted as dead code - no integration path or value
 
 ---
 
