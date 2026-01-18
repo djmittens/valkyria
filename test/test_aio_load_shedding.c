@@ -673,8 +673,9 @@ static void test_tcp_buffer_exhaustion_backpressure(VALK_TEST_ARGS()) {
 }
 static void test_backpressure_connections_survive(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP("Flaky timeout under coverage instrumentation");
-  return;
+#ifdef VALK_COVERAGE_BUILD
+  VALK_SKIP("Slow under coverage instrumentation");
+#endif
   valk_aio_system_config_t cfg = valk_aio_config_demo();
   cfg.tcp_buffer_pool_size = 32;
   cfg.max_connections = 16;

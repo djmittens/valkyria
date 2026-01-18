@@ -282,16 +282,6 @@ void test_gc_stats_tracking(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_free_list_initially_empty(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  VALK_SKIP("heap2 uses page-based allocation, no free list");
-}
-
-void test_gc_slab_allocated(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  VALK_SKIP("heap2 uses page-based allocation, no slab sizes");
-}
-
 void test_gc_thresholds_boundary(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -559,11 +549,6 @@ void test_gc_should_checkpoint_high_threshold(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_lval_sizes_set(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  VALK_SKIP("heap2 uses page-based allocation, no lval_size/lenv_size fields");
-}
-
 void test_gc_mark_env_external(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -677,11 +662,6 @@ void test_gc_runtime_metrics_pause_max_updates(VALK_TEST_ARGS()) {
   valk_gc_malloc_heap_destroy(heap);
 
   VALK_PASS();
-}
-
-void test_gc_alloc_tracks_to_objects_list(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  VALK_SKIP("heap2 uses page-based allocation with bitmaps, no objects linked list");
 }
 
 // ============================================================================
@@ -3279,8 +3259,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_heap_destroy_null_safe", test_gc_heap_destroy_null_safe);
   valk_testsuite_add_test(suite, "test_gc_multiple_collections", test_gc_multiple_collections);
   valk_testsuite_add_test(suite, "test_gc_stats_tracking", test_gc_stats_tracking);
-  valk_testsuite_add_test(suite, "test_gc_free_list_initially_empty", test_gc_free_list_initially_empty);
-  valk_testsuite_add_test(suite, "test_gc_slab_allocated", test_gc_slab_allocated);
   valk_testsuite_add_test(suite, "test_gc_thresholds_boundary", test_gc_thresholds_boundary);
   valk_testsuite_add_test(suite, "test_gc_set_thresholds_null", test_gc_set_thresholds_null);
   valk_testsuite_add_test(suite, "test_gc_set_thresholds_zero_defaults", test_gc_set_thresholds_zero_defaults);
@@ -3301,7 +3279,6 @@ int main(void) {
 
   valk_testsuite_add_test(suite, "test_gc_should_checkpoint_null_scratch", test_gc_should_checkpoint_null_scratch);
   valk_testsuite_add_test(suite, "test_gc_should_checkpoint_high_threshold", test_gc_should_checkpoint_high_threshold);
-  valk_testsuite_add_test(suite, "test_gc_lval_sizes_set", test_gc_lval_sizes_set);
   valk_testsuite_add_test(suite, "test_gc_mark_env_external", test_gc_mark_env_external);
   valk_testsuite_add_test(suite, "test_gc_checkpoint_null_args", test_gc_checkpoint_null_args);
   valk_testsuite_add_test(suite, "test_gc_should_collect_rate_limiting", test_gc_should_collect_rate_limiting);
@@ -3309,7 +3286,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_heap_usage_pct_with_allocations", test_gc_heap_usage_pct_with_allocations);
 
   valk_testsuite_add_test(suite, "test_gc_runtime_metrics_pause_max_updates", test_gc_runtime_metrics_pause_max_updates);
-  valk_testsuite_add_test(suite, "test_gc_alloc_tracks_to_objects_list", test_gc_alloc_tracks_to_objects_list);
 
   // Size class infrastructure tests (Phase 1 - Multi-Class Allocator)
   valk_testsuite_add_test(suite, "test_gc_size_class_lookup", test_gc_size_class_lookup);

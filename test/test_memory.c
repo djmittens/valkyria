@@ -56,7 +56,6 @@ void test_implicit_alloc(VALK_TEST_ARGS()) {
 
 void test_slab_alloc(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("modifies global slab state");
 
   const char msg[] = "Get fucked";
 
@@ -175,7 +174,6 @@ static size_t __next_thread_rand(size_t *state) {
 
 void test_slab_concurrency(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("modifies global slab state");
 
   const char msg[] = "Get fucked";
   int itemLen = sizeof(test_box_t) + sizeof(msg);
