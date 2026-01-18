@@ -539,6 +539,195 @@ void test_event_loop_metrics_v2_zero_delta(VALK_TEST_ARGS()) {
 }
 
 //-----------------------------------------------------------------------------
+// Test: VM Metrics Collection
+//-----------------------------------------------------------------------------
+
+void test_vm_metrics_collect_null_out(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_vm_metrics_collect(nullptr, nullptr, nullptr);
+  VALK_PASS();
+}
+
+void test_vm_metrics_collect_no_heap(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  uv_loop_t loop;
+  uv_loop_init(&loop);
+  uv_loop_configure(&loop, UV_METRICS_IDLE_TIME);
+
+  valk_vm_metrics_t m;
+  valk_vm_metrics_collect(&m, nullptr, &loop);
+
+  VALK_TEST_ASSERT(m.gc_cycles == 0, "GC cycles should be 0 without heap");
+  VALK_TEST_ASSERT(m.gc_heap_used == 0, "Heap used should be 0 without heap");
+
+  uv_loop_close(&loop);
+  VALK_PASS();
+}
+
+void test_vm_metrics_collect_no_loop(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_vm_metrics_t m;
+  valk_vm_metrics_collect(&m, nullptr, nullptr);
+
+  VALK_TEST_ASSERT(m.loop_count == 0, "Loop count should be 0 without loop");
+  VALK_TEST_ASSERT(m.events_processed == 0, "Events should be 0 without loop");
+  VALK_TEST_ASSERT(m.idle_time_us == 0, "Idle time should be 0 without loop");
+
+  VALK_PASS();
+}
+
+//-----------------------------------------------------------------------------
+// Test: VM Metrics JSON Rendering
+//-----------------------------------------------------------------------------
+
+void test_vm_metrics_to_json_null_metrics(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  char* result = valk_vm_metrics_to_json(nullptr, nullptr);
+  VALK_TEST_ASSERT(result == nullptr, "Should return nullptr for null metrics");
+  VALK_PASS();
+}
+
+void test_vm_metrics_to_json_compact_null_metrics(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  char* result = valk_vm_metrics_to_json_compact(nullptr, nullptr);
+  VALK_TEST_ASSERT(result == nullptr, "Should return nullptr for null metrics");
+  VALK_PASS();
+}
+
+void test_vm_metrics_to_prometheus_null_metrics(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  char* result = valk_vm_metrics_to_prometheus(nullptr, nullptr);
+  VALK_TEST_ASSERT(result == nullptr, "Should return nullptr for null metrics");
+  VALK_PASS();
+}
+
+void test_vm_metrics_to_json_with_allocator(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_vm_metrics_t m = {0};
+  m.gc_cycles = 10;
+  m.gc_heap_used = 1024;
+  m.gc_heap_total = 4096;
+
+  char* result = valk_vm_metrics_to_json(&m, &valk_malloc_allocator);
+  VALK_TEST_ASSERT(result != nullptr, "Should succeed with allocator");
+  VALK_TEST_ASSERT(strstr(result, "\"cycles_total\":10") != nullptr,
+                   "Should contain gc cycles");
+  free(result);
+
+  VALK_PASS();
+}
+
+void test_vm_metrics_to_json_compact_with_allocator(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_vm_metrics_t m = {0};
+  m.gc_cycles = 5;
+  m.gc_heap_used = 512;
+  m.gc_heap_total = 2048;
+
+  char* result = valk_vm_metrics_to_json_compact(&m, &valk_malloc_allocator);
+  VALK_TEST_ASSERT(result != nullptr, "Should succeed with allocator");
+  VALK_TEST_ASSERT(strstr(result, "\"cycles\":5") != nullptr,
+                   "Should contain gc cycles");
+  free(result);
+
+  VALK_PASS();
+}
+
+void test_vm_metrics_to_prometheus_with_allocator(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_vm_metrics_t m = {0};
+  m.gc_cycles = 3;
+  m.gc_heap_used = 256;
+  m.gc_heap_total = 1024;
+
+  char* result = valk_vm_metrics_to_prometheus(&m, &valk_malloc_allocator);
+  VALK_TEST_ASSERT(result != nullptr, "Should succeed with allocator");
+  VALK_TEST_ASSERT(strstr(result, "valk_gc_cycles_total 3") != nullptr,
+                   "Should contain gc cycles");
+  free(result);
+
+  VALK_PASS();
+}
+
+void test_vm_metrics_to_json_zero_heap_total(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_vm_metrics_t m = {0};
+  m.gc_heap_used = 100;
+  m.gc_heap_total = 0;
+  m.gc_cycles = 0;
+
+  char* result = valk_vm_metrics_to_json(&m, nullptr);
+  VALK_TEST_ASSERT(result != nullptr, "Should succeed even with zero heap total");
+  VALK_TEST_ASSERT(strstr(result, "\"heap_utilization_pct\":0.00") != nullptr,
+                   "Should show 0% utilization when total is 0");
+  free(result);
+
+  VALK_PASS();
+}
+
+void test_vm_metrics_to_json_compact_zero_heap_total(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_vm_metrics_t m = {0};
+  m.gc_heap_used = 100;
+  m.gc_heap_total = 0;
+
+  char* result = valk_vm_metrics_to_json_compact(&m, nullptr);
+  VALK_TEST_ASSERT(result != nullptr, "Should succeed even with zero heap total");
+  VALK_TEST_ASSERT(strstr(result, "\"heap_pct\":0.0") != nullptr,
+                   "Should show 0% utilization when total is 0");
+  free(result);
+
+  VALK_PASS();
+}
+
+void test_vm_metrics_to_prometheus_zero_heap_total(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_vm_metrics_t m = {0};
+  m.gc_heap_used = 100;
+  m.gc_heap_total = 0;
+
+  char* result = valk_vm_metrics_to_prometheus(&m, nullptr);
+  VALK_TEST_ASSERT(result != nullptr, "Should succeed even with zero heap total");
+  VALK_TEST_ASSERT(strstr(result, "valk_gc_heap_utilization_ratio 0.000000") != nullptr,
+                   "Should show 0 ratio when total is 0");
+  free(result);
+
+  VALK_PASS();
+}
+
+//-----------------------------------------------------------------------------
+// Test: AIO Metrics State
+//-----------------------------------------------------------------------------
+
+void test_aio_metrics_state_free_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_metrics_state_free(nullptr);
+  VALK_PASS();
+}
+
+void test_aio_metrics_state_new_and_free(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+
+  valk_aio_metrics_state_t* state = valk_aio_metrics_state_new(4, 8, 16, "test_loop");
+  VALK_TEST_ASSERT(state != nullptr, "State should be created");
+
+  valk_aio_metrics_state_free(state);
+
+  valk_metrics_registry_destroy();
+  VALK_PASS();
+}
+
+//-----------------------------------------------------------------------------
 // Main
 //-----------------------------------------------------------------------------
 
@@ -594,6 +783,40 @@ int main(int argc, const char** argv) {
                           test_event_loop_metrics_v2_update_null_loop);
   valk_testsuite_add_test(suite, "test_event_loop_metrics_v2_zero_delta",
                           test_event_loop_metrics_v2_zero_delta);
+
+  // VM Metrics Collection tests
+  valk_testsuite_add_test(suite, "test_vm_metrics_collect_null_out",
+                          test_vm_metrics_collect_null_out);
+  valk_testsuite_add_test(suite, "test_vm_metrics_collect_no_heap",
+                          test_vm_metrics_collect_no_heap);
+  valk_testsuite_add_test(suite, "test_vm_metrics_collect_no_loop",
+                          test_vm_metrics_collect_no_loop);
+
+  // VM Metrics JSON Rendering tests
+  valk_testsuite_add_test(suite, "test_vm_metrics_to_json_null_metrics",
+                          test_vm_metrics_to_json_null_metrics);
+  valk_testsuite_add_test(suite, "test_vm_metrics_to_json_compact_null_metrics",
+                          test_vm_metrics_to_json_compact_null_metrics);
+  valk_testsuite_add_test(suite, "test_vm_metrics_to_prometheus_null_metrics",
+                          test_vm_metrics_to_prometheus_null_metrics);
+  valk_testsuite_add_test(suite, "test_vm_metrics_to_json_with_allocator",
+                          test_vm_metrics_to_json_with_allocator);
+  valk_testsuite_add_test(suite, "test_vm_metrics_to_json_compact_with_allocator",
+                          test_vm_metrics_to_json_compact_with_allocator);
+  valk_testsuite_add_test(suite, "test_vm_metrics_to_prometheus_with_allocator",
+                          test_vm_metrics_to_prometheus_with_allocator);
+  valk_testsuite_add_test(suite, "test_vm_metrics_to_json_zero_heap_total",
+                          test_vm_metrics_to_json_zero_heap_total);
+  valk_testsuite_add_test(suite, "test_vm_metrics_to_json_compact_zero_heap_total",
+                          test_vm_metrics_to_json_compact_zero_heap_total);
+  valk_testsuite_add_test(suite, "test_vm_metrics_to_prometheus_zero_heap_total",
+                          test_vm_metrics_to_prometheus_zero_heap_total);
+
+  // AIO Metrics State tests
+  valk_testsuite_add_test(suite, "test_aio_metrics_state_free_null",
+                          test_aio_metrics_state_free_null);
+  valk_testsuite_add_test(suite, "test_aio_metrics_state_new_and_free",
+                          test_aio_metrics_state_new_and_free);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

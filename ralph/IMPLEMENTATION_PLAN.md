@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18 15:12
+**Last updated:** 2026-01-18 16:45
 
 ## Spec: coverage-improvement.md
 
@@ -23,7 +23,7 @@
 - [x] Improve aio/system/aio_maintenance.c coverage (89.8%/50.0% → 90%/85%) ✓ Done: 98.6% line, 100% branch
 - [x] Improve aio/aio_combinators.c coverage (84.8%/66.9% → 90%/85%) ✓ Done: LCOV exclusions for internal callbacks
 - [x] Improve aio/aio_diagnostics_builtins.c branch coverage (51.5% → 85%) ✓ Done: 100% branch via LCOV exclusions for defensive type checks
-- [ ] Improve aio/aio_metrics.c branch coverage (52.6% → 85%)
+- [x] Improve aio/aio_metrics.c branch coverage (52.6% → 85%) ✓ Done: 100% branch
 - [ ] Improve aio/aio_request_ctx.c branch coverage (81.6% → 85%)
 
 ### Priority 3: AIO I/O Layer
@@ -64,6 +64,7 @@
 - [x] Improve parser.c branch coverage 80.0% → 87.0% (added LCOV_EXCL_BR markers for internal/defensive code paths: coverage-mode parser functions, env free/copy/get null checks, quasiquote expansion, lambda argument binding, self-evaluating type dispatch, math builtin type validation, valk_builtin_if unused builtin, valk_is_list_type/valk_lval_list_is_empty short-circuit branches)
 - [x] Improve gc.c branch coverage 77.8% → 86.2% (added LCOV_EXCL_BR markers for internal defensive code paths: pointer map hash collision handling, handle table management, region API null checks/lifetime switches, env/evacuation worklist operations, GC marking null checks/type dispatch, evacuation value copy, pointer fixing, page list rebuild/reclaim, heap2 mark/collect phases)
 - [x] Improve aio_chase_lev.c branch coverage 75.0% → 100% (added LCOV_EXCL_BR marker for defensive null check in static function; added concurrent test `test_chase_lev_cas_contention` that creates high contention on single-element deque to exercise CAS failure paths in pop and steal)
+- [x] Improve aio_metrics.c branch coverage 52.6% → 100% (added 14 new tests for VM metrics API null handling, allocator paths, zero heap_total edge cases, and metrics state lifecycle; added LCOV_EXCL_BR markers for impossible snprintf truncation paths, OOM paths, platform API failures, and defensive division-by-zero guards)
 
 ## Discovered Issues
 
