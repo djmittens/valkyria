@@ -1,0 +1,133 @@
+; VM Metrics Builtins Tests
+; Run with: ./build/valk test/test_vm_metrics.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "VM Metrics Builtins Tests")
+
+(test/define "vm-metrics-json-no-args"
+  {do
+    (= {json} (vm/metrics-json))
+    (test/assert (not (== json nil)) "vm/metrics-json returns non-nil")
+    (test/assert (> (len json) 10) "vm/metrics-json returns JSON string")
+    true
+  })
+
+(test/define "vm-metrics-prometheus-no-args"
+  {do
+    (= {prom} (vm/metrics-prometheus))
+    (test/assert (not (== prom nil)) "vm/metrics-prometheus returns non-nil")
+    (test/assert (> (len prom) 10) "vm/metrics-prometheus returns string")
+    true
+  })
+
+(test/define "vm-metrics-json-compact-no-args"
+  {do
+    (= {json} (vm/metrics-json-compact))
+    (test/assert (not (== json nil)) "vm/metrics-json-compact returns non-nil")
+    (test/assert (> (len json) 10) "vm/metrics-json-compact returns JSON")
+    true
+  })
+
+(test/define "vm-metrics-json-with-sys"
+  {do
+    (= {sys} (aio/start))
+    (= {json} (vm/metrics-json sys))
+    (test/assert (not (== json nil)) "vm/metrics-json with sys returns non-nil")
+    true
+  })
+
+(test/define "vm-metrics-prometheus-with-sys"
+  {do
+    (= {sys} (aio/start))
+    (= {prom} (vm/metrics-prometheus sys))
+    (test/assert (not (== prom nil)) "vm/metrics-prometheus with sys returns non-nil")
+    true
+  })
+
+(test/define "vm-metrics-json-compact-with-sys"
+  {do
+    (= {sys} (aio/start))
+    (= {json} (vm/metrics-json-compact sys))
+    (test/assert (not (== json nil)) "vm/metrics-json-compact with sys returns non-nil")
+    true
+  })
+
+(test/define "vm-metrics-json-too-many-args"
+  {do
+    (= {sys} (aio/start))
+    (= {result} (vm/metrics-json sys sys))
+    (test/assert (error? result) "vm/metrics-json with 2 args returns error")
+    true
+  })
+
+(test/define "vm-metrics-prometheus-too-many-args"
+  {do
+    (= {sys} (aio/start))
+    (= {result} (vm/metrics-prometheus sys sys))
+    (test/assert (error? result) "vm/metrics-prometheus with 2 args returns error")
+    true
+  })
+
+(test/define "vm-metrics-json-compact-too-many-args"
+  {do
+    (= {sys} (aio/start))
+    (= {result} (vm/metrics-json-compact sys sys))
+    (test/assert (error? result) "vm/metrics-json-compact with 2 args returns error")
+    true
+  })
+
+(test/define "vm-metrics-json-wrong-type"
+  {do
+    (= {result} (vm/metrics-json 123))
+    (test/assert (error? result) "vm/metrics-json with number returns error")
+    true
+  })
+
+(test/define "vm-metrics-prometheus-wrong-type"
+  {do
+    (= {result} (vm/metrics-prometheus "string"))
+    (test/assert (error? result) "vm/metrics-prometheus with string returns error")
+    true
+  })
+
+(test/define "vm-metrics-json-compact-wrong-type"
+  {do
+    (= {result} (vm/metrics-json-compact {a b c}))
+    (test/assert (error? result) "vm/metrics-json-compact with list returns error")
+    true
+  })
+
+(test/define "sleep-basic"
+  {do
+    (= {start} (time-us))
+    (sleep 10)
+    (= {end} (time-us))
+    (= {elapsed} (- end start))
+    (test/assert (>= elapsed 5000) "sleep 10ms should take at least 5ms")
+    true
+  })
+
+(test/define "sleep-zero"
+  {do
+    (sleep 0)
+    (test/assert true "sleep 0 should not block")
+    true
+  })
+
+(test/define "gc-stats-no-error"
+  {do
+    (gc-stats)
+    (test/assert true "gc-stats should run without error")
+    true
+  })
+
+(test/define "memory-stats-no-error"
+  {do
+    (memory-stats)
+    (test/assert true "memory-stats should run without error")
+    true
+  })
+
+(test/run)

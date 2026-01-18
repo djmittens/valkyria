@@ -1,0 +1,113 @@
+; Context and Request Context Builtins Tests
+; Run with: ./build/valk test/test_ctx_builtins.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "Context Builtins Tests")
+
+(test/define "ctx-with-deadline-basic"
+  {do
+    (= {result} (ctx/with-deadline 1000 {do 42}))
+    (test/assert-eq 42 result "ctx/with-deadline should return body result")
+    true
+  })
+
+(test/define "ctx-with-deadline-multiple-exprs"
+  {do
+    (= {x} 0)
+    (= {result} (ctx/with-deadline 1000 {do
+      (= {x} 10)
+      (+ x 5)
+    }))
+    (test/assert-eq 15 result "ctx/with-deadline multi-expr body")
+    true
+  })
+
+(test/define "ctx-with-deadline-empty-body"
+  {do
+    (= {result} (ctx/with-deadline 1000))
+    (test/assert-eq nil result "ctx/with-deadline empty body returns nil")
+    true
+  })
+
+(test/define "ctx-with-deadline-single-expr"
+  {do
+    (= {result} (ctx/with-deadline 1000 100))
+    (test/assert-eq 100 result "ctx/with-deadline single expr")
+    true
+  })
+
+(test/define "ctx-with-basic"
+  {do
+    (= {result} (ctx/with :mykey "myval" {do
+      (ctx/get :mykey)
+    }))
+    (test/assert-eq "myval" result "ctx/with should set local")
+    true
+  })
+
+(test/define "ctx-with-nested"
+  {do
+    (= {result} (ctx/with :outer "outer-val" {do
+      (ctx/with :inner "inner-val" {do
+        (str (ctx/get :outer) "-" (ctx/get :inner))
+      })
+    }))
+    (test/assert-eq "outer-val-inner-val" result "nested ctx/with")
+    true
+  })
+
+(test/define "ctx-with-multiple-body-exprs"
+  {do
+    (= {x} 0)
+    (= {result} (ctx/with :key 42 {do
+      (= {x} (ctx/get :key))
+      (+ x 8)
+    }))
+    (test/assert-eq 50 result "ctx/with multi-expr body")
+    true
+  })
+
+(test/define "ctx-deadline-without-context"
+  {do
+    (= {deadline} (ctx/deadline))
+    (test/assert-eq 0 deadline "ctx/deadline outside request context is 0")
+    true
+  })
+
+(test/define "ctx-deadline-exceeded-without-context"
+  {do
+    (= {exceeded} (ctx/deadline-exceeded?))
+    (test/assert (not exceeded) "ctx/deadline-exceeded? false without context")
+    true
+  })
+
+(test/define "repeat-basic"
+  {do
+    (= {result} (repeat (\ {i} {i}) 5))
+    (test/assert-eq 5 (len result) "repeat should return list of 5 elements")
+    (test/assert-eq 0 (nth 1 result) "first element is 0")
+    (test/assert-eq 4 (nth 5 result) "last element is 4")
+    true
+  })
+
+(test/define "repeat-zero"
+  {do
+    (= {result} (repeat (\ {i} {i}) 0))
+    (test/assert-eq 0 (len result) "repeat 0 times returns empty list")
+    true
+  })
+
+(test/define "repeat-with-side-effect"
+  {do
+    (= {counter} 0)
+    (= {result} (repeat (\ {i} {do
+      (= {counter} (+ counter 1))
+      i
+    }) 3))
+    (test/assert-eq 3 counter "repeat should execute function n times")
+    true
+  })
+
+(test/run)
