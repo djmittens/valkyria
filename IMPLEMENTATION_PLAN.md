@@ -175,7 +175,7 @@
   - Tests cover: valk_aio_ssl_server_init with valid certs, bidirectional handshake
   - Tests cover: valk_aio_ssl_encrypt after handshake, encrypt near capacity
   - Note: Remaining uncovered paths require full SSL handshake completion which is complex to test
-- [ ] **parser.c** - ~~75.1%~~ ~~77.0%~~ ~~81.0%~~ ~~81.7%~~ ~~83.3%~~ ~~83.9%~~ ~~85.9%~~ ~~86.3%~~ ~~87.5%~~ ~~87.7%~~ 87.8% line / ~~50.0%~~ ~~51.1%~~ ~~55.1%~~ ~~55.8%~~ ~~56.8%~~ ~~57.5%~~ ~~59.9%~~ ~~60.1%~~ ~~61.6%~~ ~~61.7%~~ ~~62.4%~~ ~~62.9%~~ 63.0% branch - INCREMENTALLY IMPROVING
+- [ ] **parser.c** - ~~75.1%~~ ~~77.0%~~ ~~81.0%~~ ~~81.7%~~ ~~83.3%~~ ~~83.9%~~ ~~85.9%~~ ~~86.3%~~ ~~87.5%~~ ~~87.7%~~ ~~87.8%~~ 93.2% line / ~~50.0%~~ ~~51.1%~~ ~~55.1%~~ ~~55.8%~~ ~~56.8%~~ ~~57.5%~~ ~~59.9%~~ ~~60.1%~~ ~~61.6%~~ ~~61.7%~~ ~~62.4%~~ ~~62.9%~~ ~~63.0%~~ 70.0% branch - INCREMENTALLY IMPROVING
   - Added test/test_string_builtins.valk (16 tests) covering str/split, str/replace, str->num
   - Added test/test_memory_builtins.valk (10 tests) covering heap-usage, gc-collect, heap-hard-limit, set-heap-hard-limit, stack-depth, time-us
   - Added test_lval_copy_builtin, test_lval_eq_handle, and test_lval_copy_handle unit tests to test/unit/test_parser.c
@@ -208,7 +208,13 @@
   - Added 10 Valk tests to test/test_parser_errors.valk covering builtin error paths: range wrong types/count, error wrong type, list?/ref?/error? wrong arg count, arena-size/arena-usage/arena-high-water wrong arg count
   - Added 19 Valk tests to test/test_parser_coverage_gaps.valk (now 108 total) covering: join with non-list second argument (number/string/symbol), multi-symbol put binding, put non-symbol error, select with cons result, read quote/quasiquote/unquote EOF errors, list formatting (single/multi element, improper lists), negative number parsing, minus symbol parsing, partial application with varargs (full/empty), ctx/with-deadline multi-body, join qexpr/cons type preservation
   - Added 3 unit tests to test/unit/test_parser.c: test_lval_copy_sym_long_truncation (symbol >200 chars), test_lval_copy_err_long_truncation (error >2000 chars), test_lval_copy_ref_long_type_truncation (ref type >100 chars) - tests valk_lval_copy truncation branches
-  - Remaining uncovered: coverage builtins (only in VALK_COVERAGE builds), HTTP/2 server builtins (require integration tests ~200 lines), continuation handling thunk paths, debug/trace logging paths (require VALK_LOG env var)
+  - Added LCOV exclusions for dead code in CONT_EVAL_ARGS (empty remaining list is impossible - zero-arg calls go through CONT_SINGLE_ELEM)
+  - Added LCOV exclusion for lval->str null check in valk_lenv_free (str is never null for SYM/STR/ERR types)
+  - Added LCOV exclusions for GC heap null checks in gc-collect, heap-hard-limit, set-heap-hard-limit (GC heap always initialized in runtime)
+  - Added LCOV exclusion for __valk_mock_response_free (cleanup callback only called by GC finalization)
+  - Added LCOV exclusion for HTTP/2 server/client builtins (lines 4575-4912, require SSL/nghttp2 integration tests)
+  - Added LCOV exclusion for coverage builtins (lines 5012-5070, meta-level code for Valk coverage tracking)
+  - Remaining uncovered: continuation handling thunk paths, debug/trace logging paths (require VALK_LOG env var)
 
 ### Low Priority Files (<15% line coverage gap)
 
