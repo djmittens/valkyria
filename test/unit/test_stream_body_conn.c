@@ -3,6 +3,8 @@
 #include "../../src/aio/http2/stream/aio_stream_body.h"
 #include "../../src/aio/aio_internal.h"
 
+#include <unistd.h>
+
 static valk_stream_body_t *create_test_body(valk_aio_handle_t *conn, i32 stream_id) {
   valk_stream_body_t *body = calloc(1, sizeof(valk_stream_body_t));
   body->id = (u64)stream_id;
@@ -481,6 +483,161 @@ void test_cancel_already_closed(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_is_idle_expired_actual_expired(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->idle_timeout_ms = 1;
+  body->last_activity_ms = 0;
+
+  usleep(2000);
+
+  bool expired = valk_stream_body_is_idle_expired(body);
+  ASSERT_TRUE(expired);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_write_null_data(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+
+  int rv = valk_stream_body_write(body, nullptr, 10);
+  ASSERT_EQ(rv, -1);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_write_closed_body(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->state = VALK_STREAM_CLOSED;
+
+  int rv = valk_stream_body_write(body, "test", 4);
+  ASSERT_EQ(rv, -1);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_write_closing_body(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->state = VALK_STREAM_CLOSING;
+
+  int rv = valk_stream_body_write(body, "test", 4);
+  ASSERT_EQ(rv, -1);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_write_queue_full(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->queue_max = 5;
+  body->queue_len = 5;
+
+  int rv = valk_stream_body_write(body, "test", 4);
+  ASSERT_EQ(rv, -2);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_writable_closed_body(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->state = VALK_STREAM_CLOSED;
+
+  bool writable = valk_stream_body_writable(body);
+  ASSERT_FALSE(writable);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_writable_closing_body(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->state = VALK_STREAM_CLOSING;
+
+  bool writable = valk_stream_body_writable(body);
+  ASSERT_FALSE(writable);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_queue_len_with_items(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->queue_len = 42;
+
+  u64 len = valk_stream_body_queue_len(body);
+  ASSERT_EQ(len, 42);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_close_null_body(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_stream_body_close(nullptr);
+  VALK_PASS();
+}
+
+void test_close_already_closed(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->state = VALK_STREAM_CLOSED;
+
+  valk_stream_body_close(body);
+  ASSERT_EQ(body->state, VALK_STREAM_CLOSED);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_close_already_closing(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->state = VALK_STREAM_CLOSING;
+
+  valk_stream_body_close(body);
+  ASSERT_EQ(body->state, VALK_STREAM_CLOSING);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_free_null_body(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_stream_body_free(nullptr);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -526,6 +683,19 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_is_idle_expired_not_expired", test_is_idle_expired_not_expired);
   valk_testsuite_add_test(suite, "test_cancel_null", test_cancel_null);
   valk_testsuite_add_test(suite, "test_cancel_already_closed", test_cancel_already_closed);
+
+  valk_testsuite_add_test(suite, "test_is_idle_expired_actual_expired", test_is_idle_expired_actual_expired);
+  valk_testsuite_add_test(suite, "test_write_null_data", test_write_null_data);
+  valk_testsuite_add_test(suite, "test_write_closed_body", test_write_closed_body);
+  valk_testsuite_add_test(suite, "test_write_closing_body", test_write_closing_body);
+  valk_testsuite_add_test(suite, "test_write_queue_full", test_write_queue_full);
+  valk_testsuite_add_test(suite, "test_writable_closed_body", test_writable_closed_body);
+  valk_testsuite_add_test(suite, "test_writable_closing_body", test_writable_closing_body);
+  valk_testsuite_add_test(suite, "test_queue_len_with_items", test_queue_len_with_items);
+  valk_testsuite_add_test(suite, "test_close_null_body", test_close_null_body);
+  valk_testsuite_add_test(suite, "test_close_already_closed", test_close_already_closed);
+  valk_testsuite_add_test(suite, "test_close_already_closing", test_close_already_closing);
+  valk_testsuite_add_test(suite, "test_free_null_body", test_free_null_body);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
