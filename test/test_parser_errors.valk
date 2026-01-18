@@ -182,4 +182,74 @@
     true
   })
 
+(test/define "range-wrong-type-first-arg"
+  {do
+    (= {result} (range "a" 5))
+    (test/assert (error? result) "range with string first arg errors")
+    true
+  })
+
+(test/define "range-wrong-type-second-arg"
+  {do
+    (= {result} (range 0 "b"))
+    (test/assert (error? result) "range with string second arg errors")
+    true
+  })
+
+(test/define "range-wrong-arg-count"
+  {do
+    (= {result} (range 1))
+    (test/assert (error? result) "range with 1 arg errors")
+    true
+  })
+
+(test/define "error-wrong-type"
+  {do
+    (= {result} (error 123))
+    (test/assert (error? result) "error with number errors")
+    true
+  })
+
+(test/define "list-predicate-wrong-arg-count"
+  {do
+    (= {result} (list?))
+    (test/assert (error? result) "list? with 0 args errors")
+    true
+  })
+
+(test/define "ref-predicate-wrong-arg-count"
+  {do
+    (= {result} (ref?))
+    (test/assert (error? result) "ref? with 0 args errors")
+    true
+  })
+
+(test/define "error-predicate-wrong-arg-count"
+  {do
+    (= {result} (error?))
+    (test/assert (error? result) "error? with 0 args errors")
+    true
+  })
+
+(test/define "arena-size-wrong-arg-count"
+  {do
+    (= {result} (arena-size 1))
+    (test/assert (error? result) "arena-size with args errors")
+    true
+  })
+
+(test/define "arena-usage-wrong-arg-count"
+  {do
+    (= {result} (arena-usage 1))
+    (test/assert (error? result) "arena-usage with args errors")
+    true
+  })
+
+(test/define "arena-high-water-wrong-arg-count"
+  {do
+    (= {result} (arena-high-water 1))
+    (test/assert (error? result) "arena-high-water with args errors")
+    true
+  })
+
 (test/run)

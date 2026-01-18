@@ -2028,6 +2028,78 @@ void test_lval_read_carriage_return_whitespace(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_eval_stack_destroy_null_frames(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  stack.frames = NULL;
+  stack.count = 0;
+  stack.capacity = 0;
+
+  valk_eval_stack_destroy(&stack);
+
+  ASSERT_NULL(stack.frames);
+  ASSERT_EQ(stack.count, 0);
+  ASSERT_EQ(stack.capacity, 0);
+
+  VALK_PASS();
+}
+
+void test_eval_stack_destroy_twice(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+  valk_cont_frame_t frame = {.kind = CONT_DONE, .env = NULL};
+  valk_eval_stack_push(&stack, frame);
+
+  valk_eval_stack_destroy(&stack);
+  ASSERT_NULL(stack.frames);
+
+  valk_eval_stack_destroy(&stack);
+  ASSERT_NULL(stack.frames);
+
+  VALK_PASS();
+}
+
+void test_lval_list_is_empty_qexpr_null_head(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *qexpr = valk_mem_alloc(sizeof(valk_lval_t));
+  qexpr->flags = LVAL_QEXPR;
+  qexpr->cons.head = NULL;
+  qexpr->cons.tail = NULL;
+
+  VALK_TEST_ASSERT(valk_lval_list_is_empty(qexpr) == 1, "QEXPR with NULL head should be empty");
+
+  VALK_PASS();
+}
+
+void test_lval_list_is_empty_non_empty_qexpr(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *qexpr = valk_lval_qcons(valk_lval_num(1), valk_lval_nil());
+
+  VALK_TEST_ASSERT(valk_lval_list_is_empty(qexpr) == 0, "Non-empty QEXPR should not be empty");
+
+  VALK_PASS();
+}
+
+void test_lval_lambda_null_env(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *formals = valk_lval_nil();
+  valk_lval_t *body = valk_lval_num(42);
+  valk_lval_t *lambda = valk_lval_lambda(NULL, formals, body);
+
+  VALK_TEST_ASSERT(lambda != nullptr, "Lambda with NULL env should be created");
+  VALK_TEST_ASSERT(LVAL_TYPE(lambda) == LVAL_FUN, "Type should be FUN");
+  VALK_TEST_ASSERT(lambda->fun.env == NULL, "Lambda env should be NULL");
+  VALK_TEST_ASSERT(lambda->fun.builtin == NULL, "Should not be builtin");
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -2173,6 +2245,11 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_lval_list_nth_early_end", test_lval_list_nth_early_end);
   valk_testsuite_add_test(suite, "test_lval_read_vtab_whitespace", test_lval_read_vtab_whitespace);
   valk_testsuite_add_test(suite, "test_lval_read_carriage_return_whitespace", test_lval_read_carriage_return_whitespace);
+  valk_testsuite_add_test(suite, "test_eval_stack_destroy_null_frames", test_eval_stack_destroy_null_frames);
+  valk_testsuite_add_test(suite, "test_eval_stack_destroy_twice", test_eval_stack_destroy_twice);
+  valk_testsuite_add_test(suite, "test_lval_list_is_empty_qexpr_null_head", test_lval_list_is_empty_qexpr_null_head);
+  valk_testsuite_add_test(suite, "test_lval_list_is_empty_non_empty_qexpr", test_lval_list_is_empty_non_empty_qexpr);
+  valk_testsuite_add_test(suite, "test_lval_lambda_null_env", test_lval_lambda_null_env);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
