@@ -445,3 +445,8 @@ add_executable(test_stream_body_conn_unit test/unit/test_stream_body_conn.c test
 target_link_libraries(test_stream_body_conn_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_stream_body_conn_unit src/)
 
+# Backpressure list tests (linked list operations for overload protection)
+add_executable(test_backpressure_list_unit test/unit/test_backpressure_list.c test/testing.c)
+target_link_libraries(test_backpressure_list_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES})
+include_directories(test_backpressure_list_unit src/)
+
