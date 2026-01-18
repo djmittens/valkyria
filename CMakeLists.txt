@@ -425,6 +425,11 @@ add_executable(test_ctx_builtins_unit test/unit/test_ctx_builtins.c test/testing
 target_link_libraries(test_ctx_builtins_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_ctx_builtins_unit src/)
 
+# HTTP request builtins tests (req/method, req/path, req/headers, etc.)
+add_executable(test_http_builtins_unit test/unit/test_http_builtins.c test/testing.c)
+target_link_libraries(test_http_builtins_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_http_builtins_unit src/)
+
 # Chase-Lev deque tests (lock-free work-stealing data structure)
 add_executable(test_chase_lev_unit test/unit/test_chase_lev.c test/testing.c)
 target_link_libraries(test_chase_lev_unit PRIVATE "-lc" valkyria)

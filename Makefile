@@ -181,6 +181,7 @@ define run_tests_c
 	$(1)/test_task_queue_unit
 	$(1)/test_request_ctx_unit
 	$(1)/test_ctx_builtins_unit
+	$(1)/test_http_builtins_unit
 	@echo "=== All C tests passed ($(1)) ==="
 endef
 
