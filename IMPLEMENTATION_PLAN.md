@@ -225,10 +225,12 @@
   - These require integration tests with actual HTTP connections in specific states
   - Branch exclusions already applied for runtime-dependent paths
 - [ ] **aio/aio_combinators.c** - 84.8% line / 66.9% branch
-- [ ] **aio/aio_diagnostics_builtins.c** - 87.2% line / 49.5% branch - PARTIALLY IMPROVED
-  - Added 8 unit tests to test/test_aio_integration.c (now 29 total)
+- [ ] **aio/aio_diagnostics_builtins.c** - ~~87.2%~~ 89.9%+ line / ~~49.5%~~ 51.5%+ branch - NEARLY DONE
+  - Added 8 unit tests to test/test_aio_integration.c (now 32 total)
   - Tests cover: wrong ref type, invalid buckets (0), invalid arg types, lval slab (removed in heap2)
   - Tests cover: json wrong args, json wrong type, compact wrong args, compact wrong type
+  - Tests cover: stream_arenas, http_servers, http_clients slab buckets
+  - Remaining: handle state character mappings (require HTTP connections in specific states)
 - [x] **aio/http2/aio_conn_io.c** - ~~88.2%~~ 92.4% line / 88.9% branch - DONE
   - Added 5 unit tests to test/unit/test_conn_io.c (now 16 total)
   - Tests cover: valk_conn_io_read_buf_release (null io, null slab, no buf, with buf, twice)
