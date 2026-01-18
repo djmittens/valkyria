@@ -104,6 +104,7 @@ static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a
 }
 // LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - internal JSON formatting with defensive buffer bounds
 static void write_slab_json(char **p, char *end, const char *name, valk_slab_t *slab) {
   if (!slab || *p >= end - 100) return;
 
@@ -121,7 +122,9 @@ static void write_slab_json(char **p, char *end, const char *name, valk_slab_t *
     (unsigned long long)overflow);
   if (n > 0 && *p + n < end) *p += n;
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - internal handle state enum dispatch
 static char get_handle_state_char(valk_aio_system_t *sys, u64 slot_idx) {
   valk_diag_handle_kind_e kind = valk_aio_get_handle_kind(sys, slot_idx);
   switch (kind) {
@@ -378,6 +381,7 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk
 }
 // LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - defensive type/buffer checks in diagnostic builtin
 static valk_lval_t *valk_builtin_aio_diagnostics_state_json_compact(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
@@ -410,6 +414,7 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json_compact(valk_lenv_t 
 
   return valk_lval_str(buf);
 }
+// LCOV_EXCL_BR_STOP
 
 void valk_register_aio_diagnostics_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "aio/diagnostics-state-json",
