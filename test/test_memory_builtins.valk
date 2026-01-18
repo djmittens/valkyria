@@ -47,24 +47,24 @@
   })
 
 ; ============================================================================
-; heap-hard-limit tests
+; mem/heap/hard-limit tests
 ; ============================================================================
 
 (test/define "heap-hard-limit-returns-number"
   {do
-    (= {limit} (heap-hard-limit))
-    (test/assert (> limit 0) "heap-hard-limit should return positive number")
+    (= {limit} (mem/heap/hard-limit))
+    (test/assert (> limit 0) "mem/heap/hard-limit should return positive number")
     true
   })
 
 (test/define "set-heap-hard-limit-basic"
   {do
-    (= {original} (heap-hard-limit))
+    (= {original} (mem/heap/hard-limit))
     (= {new-limit} (+ original 1000000))
-    (= {old} (set-heap-hard-limit new-limit))
+    (= {old} (mem/heap/set-hard-limit new-limit))
     (test/assert-eq original old "should return old limit")
-    (test/assert-eq new-limit (heap-hard-limit) "should set new limit")
-    (set-heap-hard-limit original)
+    (test/assert-eq new-limit (mem/heap/hard-limit) "should set new limit")
+    (mem/heap/set-hard-limit original)
     true
   })
 

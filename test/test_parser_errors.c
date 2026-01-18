@@ -1635,8 +1635,9 @@ static void test_set_heap_hard_limit_wrong_type(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(set-heap-hard-limit \"not-a-number\")");
+  valk_lval_t *result = parse_and_eval("(mem/heap/set-hard-limit \"not-a-number\")");
   ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "Expected");
 
   VALK_PASS();
 }
@@ -1645,8 +1646,20 @@ static void test_set_heap_hard_limit_wrong_count(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(set-heap-hard-limit)");
+  valk_lval_t *result = parse_and_eval("(mem/heap/set-hard-limit)");
   ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "count");
+
+  VALK_PASS();
+}
+
+static void test_set_heap_hard_limit_too_many_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(mem/heap/set-hard-limit 100 200)");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "count");
 
   VALK_PASS();
 }
@@ -2466,6 +2479,7 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_println_builtin", test_println_builtin);
   valk_testsuite_add_test(suite, "test_set_heap_hard_limit_wrong_type", test_set_heap_hard_limit_wrong_type);
   valk_testsuite_add_test(suite, "test_set_heap_hard_limit_wrong_count", test_set_heap_hard_limit_wrong_count);
+  valk_testsuite_add_test(suite, "test_set_heap_hard_limit_too_many_args", test_set_heap_hard_limit_too_many_args);
 
   valk_testsuite_add_test(suite, "test_aio_schedule_wrong_first_type", test_aio_schedule_wrong_first_type);
   valk_testsuite_add_test(suite, "test_aio_schedule_wrong_second_type", test_aio_schedule_wrong_second_type);

@@ -242,13 +242,13 @@
     true
   })
 
-; Lines 3760-3771: set-heap-hard-limit error path
-(test/define "set-heap-hard-limit-below-usage"
+; Lines 3760-3781: mem/heap/set-hard-limit error path
+(test/define "mem-heap-set-hard-limit-below-usage"
   {do
-    (= {current-usage} (heap-usage))
+    (= {current-usage} (mem/heap/usage))
     ; Try to set limit below current usage
-    (= {result} (error? (set-heap-hard-limit 1)))
-    (test/assert result "set-heap-hard-limit below usage should error")
+    (= {result} (error? (mem/heap/set-hard-limit 1)))
+    (test/assert result "mem/heap/set-hard-limit below usage should error")
     true
   })
 
