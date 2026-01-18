@@ -175,7 +175,7 @@
   - Tests cover: valk_aio_ssl_server_init with valid certs, bidirectional handshake
   - Tests cover: valk_aio_ssl_encrypt after handshake, encrypt near capacity
   - Note: Remaining uncovered paths require full SSL handshake completion which is complex to test
-- [ ] **parser.c** - ~~75.1%~~ ~~77.0%~~ 81.0% line / ~~50.0%~~ ~~51.1%~~ 55.1% branch - SIGNIFICANTLY IMPROVED
+- [ ] **parser.c** - ~~75.1%~~ ~~77.0%~~ ~~81.0%~~ 81.7% line / ~~50.0%~~ ~~51.1%~~ ~~55.1%~~ 55.8% branch - INCREMENTALLY IMPROVING
   - Added test/test_string_builtins.valk (16 tests) covering str/split, str/replace, str->num
   - Added test/test_memory_builtins.valk (10 tests) covering heap-usage, gc-collect, heap-hard-limit, set-heap-hard-limit, stack-depth, time-us
   - Added test_lval_copy_builtin, test_lval_eq_handle, and test_lval_copy_handle unit tests to test/unit/test_parser.c
@@ -186,9 +186,11 @@
   - Added test/test_atom_builtins.valk (15 tests) covering atom/get, atom/set, atom/add, atom/sub, arena-size, arena-usage, arena-high-water, list?, ref?, error
   - Added test/test_parser_branch_coverage.valk (53 tests) covering select error paths, if edge cases, printf format, lambda/varargs edge cases, eval edge cases, quasiquote, string ops, list ops, comparison chains, repeat, range, env lookup, def, print, error propagation
   - Added test/test_error_handler_edge_cases.valk (3 tests) covering error handler returning error, number, or list instead of string
+  - Added test/test_parser_coverage_supplement.valk (37 tests) covering ctx/with-deadline multiple body, ctx/with multiple body, quasiquote splicing edge cases, varargs error paths, function application edge cases, do block continuations, escape character parsing/printing
+  - Added 6 unit tests to test/unit/test_parser.c covering valk_lval_print (handles, improper lists, escape chars, builtins), valk_lval_eq (lambdas, builtins)
   - Added LCOV exclusions for exit() and shutdown() exit paths (terminates process)
   - Added LCOV exclusion for LVAL_UNDEFINED case (invariant violation)
-  - Remaining uncovered: coverage builtins (only in VALK_COVERAGE builds)
+  - Remaining uncovered: coverage builtins (only in VALK_COVERAGE builds), continuation handling thunk paths, allocator SLAB case (unused for lvals)
 
 ### Low Priority Files (<15% line coverage gap)
 

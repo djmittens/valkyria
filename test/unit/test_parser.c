@@ -1596,6 +1596,89 @@ void test_eval_stack_with_env(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_lval_print_handle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_async_handle_t *handle = valk_async_handle_new(NULL, NULL);
+  valk_lval_t *val = valk_lval_handle(handle);
+  valk_lval_print(val);
+  valk_async_handle_free(handle);
+
+  VALK_PASS();
+}
+
+void test_lval_print_improper_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *head = valk_lval_num(1);
+  valk_lval_t *tail = valk_lval_num(2);
+  valk_lval_t *cons = valk_lval_cons(head, tail);
+  valk_lval_print(cons);
+
+  VALK_PASS();
+}
+
+void test_lval_print_string_with_escapes(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_str("hello\nworld\ttab\\slash");
+  valk_lval_print(val);
+
+  VALK_PASS();
+}
+
+void test_lval_print_builtin(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lenv_builtins(env);
+  valk_lval_t *plus_sym = valk_lval_sym("+");
+  valk_lval_t *plus = valk_lenv_get(env, plus_sym);
+  valk_lval_print(plus);
+
+  VALK_PASS();
+}
+
+void test_lval_eq_two_lambdas(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env1 = valk_lenv_empty();
+  valk_lenv_t *env2 = valk_lenv_empty();
+
+  valk_lval_t *formals1 = valk_lval_qlist((valk_lval_t*[]){valk_lval_sym("x")}, 1);
+  valk_lval_t *body1 = valk_lval_sym("x");
+  valk_lval_t *lambda1 = valk_lval_lambda(env1, formals1, body1);
+
+  valk_lval_t *formals2 = valk_lval_qlist((valk_lval_t*[]){valk_lval_sym("x")}, 1);
+  valk_lval_t *body2 = valk_lval_sym("x");
+  valk_lval_t *lambda2 = valk_lval_lambda(env2, formals2, body2);
+
+  valk_lval_t *formals3 = valk_lval_qlist((valk_lval_t*[]){valk_lval_sym("y")}, 1);
+  valk_lval_t *body3 = valk_lval_sym("y");
+  valk_lval_t *lambda3 = valk_lval_lambda(env2, formals3, body3);
+
+  VALK_TEST_ASSERT(valk_lval_eq(lambda1, lambda2) == 1, "identical lambdas should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(lambda1, lambda3) == 0, "different lambdas should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_eq_builtin_functions(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lenv_builtins(env);
+
+  valk_lval_t *plus = valk_lenv_get(env, valk_lval_sym("+"));
+  valk_lval_t *minus = valk_lenv_get(env, valk_lval_sym("-"));
+  valk_lval_t *plus2 = valk_lenv_get(env, valk_lval_sym("+"));
+
+  VALK_TEST_ASSERT(valk_lval_eq(plus, plus2) == 1, "same builtin should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(plus, minus) == 0, "different builtins should not be equal");
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -1708,6 +1791,13 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_eval_stack_collect_arg_cleanup", test_eval_stack_collect_arg_cleanup);
   valk_testsuite_add_test(suite, "test_eval_stack_body_next_frame", test_eval_stack_body_next_frame);
   valk_testsuite_add_test(suite, "test_eval_stack_with_env", test_eval_stack_with_env);
+
+  valk_testsuite_add_test(suite, "test_lval_print_handle", test_lval_print_handle);
+  valk_testsuite_add_test(suite, "test_lval_print_improper_list", test_lval_print_improper_list);
+  valk_testsuite_add_test(suite, "test_lval_print_string_with_escapes", test_lval_print_string_with_escapes);
+  valk_testsuite_add_test(suite, "test_lval_print_builtin", test_lval_print_builtin);
+  valk_testsuite_add_test(suite, "test_lval_eq_two_lambdas", test_lval_eq_two_lambdas);
+  valk_testsuite_add_test(suite, "test_lval_eq_builtin_functions", test_lval_eq_builtin_functions);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
