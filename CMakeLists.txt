@@ -62,11 +62,11 @@ set (WITH_LIBBPF off)
 set (WITH_WOLFSSL off)
 add_subdirectory(vendor/nghttp2)
 
-pkg_check_modules(EDITLINE REQUIRED IMPORTED_TARGET libedit)
+pkg_check_modules(EDITLINE REQUIRED IMPORTED_TARGET libeditline)
 
-set(CMAKE_C_STANDARD 23) # LOL current year - 6 is gold
+set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
+set(CMAKE_C_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 
@@ -172,7 +172,7 @@ target_include_directories(valkyria SYSTEM PRIVATE
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  target_include_directories(valkyria SYSTEM PRIVATE ${BACKTRACE_INCLUDE_DIR})
+  target_include_directories(valkyria PRIVATE ${PROJECT_SOURCE_DIR}/vendor/backtrace)
 endif()
 
 target_link_libraries(valkyria PRIVATE
@@ -222,6 +222,8 @@ include_directories(
   ${PROJECT_SOURCE_DIR}/src/aio/http2
   ${PROJECT_SOURCE_DIR}/src/aio/http2/overload
   ${PROJECT_SOURCE_DIR}/src/aio/http2/stream
+  ${PROJECT_SOURCE_DIR}/vendor/nghttp2/lib/includes
+  ${PROJECT_BINARY_DIR}/vendor/nghttp2/lib/includes
 )
 
 add_executable(test_std test/test_std.c test/testing.c)
