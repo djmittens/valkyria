@@ -11,7 +11,7 @@ static valk_chase_lev_array_t *valk_chase_lev_array_new(int64_t size) {
 }
 
 static void valk_chase_lev_array_free(valk_chase_lev_array_t *arr) {
-  if (!arr) return;
+  if (!arr) return; // LCOV_EXCL_BR_LINE: defensive null check, static function always called with valid arr
   free(arr->buffer);
   free(arr);
 }

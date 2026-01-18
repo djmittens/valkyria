@@ -334,6 +334,76 @@ void test_chase_lev_interleaved_operations(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+typedef struct {
+  valk_chase_lev_deque_t *deque;
+  _Atomic int *pop_cas_failures;
+  _Atomic int *steal_cas_failures;
+  _Atomic int *iterations_done;
+  int target_iterations;
+} cas_contention_arg_t;
+
+static void *cas_contention_stealer(void *arg) {
+  cas_contention_arg_t *ctx = (cas_contention_arg_t *)arg;
+  while (atomic_load(ctx->iterations_done) < ctx->target_iterations) {
+    void *item = valk_chase_lev_steal(ctx->deque);
+    if (item == VALK_CHASE_LEV_ABORT) {
+      atomic_fetch_add(ctx->steal_cas_failures, 1);
+    }
+  }
+  return NULL;
+}
+
+static void *cas_contention_popper(void *arg) {
+  cas_contention_arg_t *ctx = (cas_contention_arg_t *)arg;
+  int value = 42;
+  for (int i = 0; i < ctx->target_iterations; i++) {
+    valk_chase_lev_push(ctx->deque, &value);
+    void *result = valk_chase_lev_pop(ctx->deque);
+    if (result == VALK_CHASE_LEV_EMPTY) {
+      atomic_fetch_add(ctx->pop_cas_failures, 1);
+    }
+    atomic_fetch_add(ctx->iterations_done, 1);
+  }
+  return NULL;
+}
+
+void test_chase_lev_cas_contention(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  VALK_SKIP_NO_FORK("concurrent test needs fork isolation");
+
+  valk_chase_lev_deque_t deque;
+  valk_chase_lev_init(&deque, 4);
+
+  _Atomic int pop_cas_failures = 0;
+  _Atomic int steal_cas_failures = 0;
+  _Atomic int iterations_done = 0;
+  const int target = 10000;
+
+  cas_contention_arg_t arg = {
+    .deque = &deque,
+    .pop_cas_failures = &pop_cas_failures,
+    .steal_cas_failures = &steal_cas_failures,
+    .iterations_done = &iterations_done,
+    .target_iterations = target,
+  };
+
+  pthread_t stealers[4];
+  pthread_t popper;
+
+  for (int i = 0; i < 4; i++) {
+    pthread_create(&stealers[i], NULL, cas_contention_stealer, &arg);
+  }
+  pthread_create(&popper, NULL, cas_contention_popper, &arg);
+
+  pthread_join(popper, NULL);
+  for (int i = 0; i < 4; i++) {
+    pthread_join(stealers[i], NULL);
+  }
+
+  valk_chase_lev_destroy(&deque);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -351,6 +421,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_chase_lev_concurrent_steal", test_chase_lev_concurrent_steal);
   valk_testsuite_add_test(suite, "test_chase_lev_stress_push_pop", test_chase_lev_stress_push_pop);
   valk_testsuite_add_test(suite, "test_chase_lev_interleaved_operations", test_chase_lev_interleaved_operations);
+  valk_testsuite_add_test(suite, "test_chase_lev_cas_contention", test_chase_lev_cas_contention);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
