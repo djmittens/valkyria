@@ -396,6 +396,10 @@ add_executable(test_thread_posix_unit test/unit/test_thread_posix.c test/testing
 target_link_libraries(test_thread_posix_unit PRIVATE "-lc" valkyria)
 include_directories(test_thread_posix_unit src/)
 
+add_executable(test_aio_async_unit test/unit/test_aio_async.c test/testing.c)
+target_link_libraries(test_aio_async_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_aio_async_unit src/)
+
 add_executable(test_aio_handle_diag test/test_aio_handle_diag.c test/testing.c)
 target_link_libraries(test_aio_handle_diag PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_aio_handle_diag src/)
