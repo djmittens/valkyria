@@ -3,14 +3,18 @@
 
 static int loop_init(valk_aio_system_t *sys) {
   sys->eventloop = malloc(sizeof(uv_loop_t));
+  // LCOV_EXCL_START - OOM path
   if (!sys->eventloop) return -1;
-  
+  // LCOV_EXCL_STOP
+
   int rc = uv_loop_init(sys->eventloop);
+  // LCOV_EXCL_START - libuv init failure (essentially never fails)
   if (rc != 0) {
     free(sys->eventloop);
     sys->eventloop = nullptr;
     return rc;
   }
+  // LCOV_EXCL_STOP
   return 0;
 }
 

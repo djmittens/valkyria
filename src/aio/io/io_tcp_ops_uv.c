@@ -108,16 +108,20 @@ static int tcp_connect(valk_io_tcp_t *tcp, const char *ip, int port, valk_io_con
       return -1;
     }
   }
-  
+
   connect_req_t *creq = malloc(sizeof(connect_req_t));
+  // LCOV_EXCL_START - OOM path
   if (!creq) return -1;
+  // LCOV_EXCL_STOP
   creq->tcp = tcp;
   tcp->user_connect_cb = cb;
-  
+
   int rv = uv_tcp_connect(&creq->req, &tcp->uv, (const struct sockaddr *)&addr, __connect_cb_adapter);
+  // LCOV_EXCL_START - libuv connect init failure (essentially never fails for valid socket)
   if (rv != 0) {
     free(creq);
   }
+  // LCOV_EXCL_STOP
   return rv;
 }
 
@@ -133,23 +137,29 @@ static int tcp_read_stop(valk_io_tcp_t *tcp) {
 
 static int tcp_write(valk_io_tcp_t *tcp, const void *data, u64 len, valk_io_write_cb cb) {
   write_req_t *wreq = malloc(sizeof(write_req_t));
+  // LCOV_EXCL_START - OOM path
   if (!wreq) return -1;
-  
+  // LCOV_EXCL_STOP
+
   wreq->buf.base = malloc(len);
+  // LCOV_EXCL_START - OOM path
   if (!wreq->buf.base) {
     free(wreq);
     return -1;
   }
+  // LCOV_EXCL_STOP
   memcpy(wreq->buf.base, data, len);
   wreq->buf.len = len;
   wreq->user_cb = cb;
   wreq->tcp = tcp;
-  
+
   int rv = uv_write(&wreq->req, (uv_stream_t *)&tcp->uv, &wreq->buf, 1, __write_cb_adapter);
+  // LCOV_EXCL_START - libuv write failure (essentially never fails for valid stream)
   if (rv != 0) {
     free(wreq->buf.base);
     free(wreq);
   }
+  // LCOV_EXCL_STOP
   return rv;
 }
 

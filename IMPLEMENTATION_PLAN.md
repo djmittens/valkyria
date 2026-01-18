@@ -118,10 +118,14 @@
   - Tests cover: valk_http2_server_metrics_init (creates all metrics, port_str index wrapping)
   - Tests cover: valk_aio_http2_stop (null srv, null sys early returns)
   - Note: Full server lifecycle testing requires SSL/nghttp2/libuv integration
-- [ ] **io/io_loop_ops_uv.c** - 68.6% line / 44.4% branch
-  - Thin libuv wrappers; untested paths are mostly OOM/platform failures (LCOV exclusion candidates)
-- [ ] **io/io_tcp_ops_uv.c** - 69.2% line / 40.6% branch
-  - Thin libuv wrappers; untested paths are mostly OOM/platform failures (LCOV exclusion candidates)
+- [x] **io/io_loop_ops_uv.c** - 68.6% line / 44.4% branch - LCOV EXCLUSIONS ADDED
+  - Added LCOV exclusions for OOM path (malloc failure) and libuv init failure
+  - Remaining uncovered: callback adapters, loop_walk, loop_stop, some branches in loop_run
+  - These are thin libuv wrappers covered only by integration tests; further coverage requires more integration tests
+- [x] **io/io_tcp_ops_uv.c** - 69.2% line / 40.6% branch - LCOV EXCLUSIONS ADDED
+  - Added LCOV exclusions for OOM paths (malloc failures) and libuv API failures (uv_tcp_connect, uv_write)
+  - Remaining uncovered: callback null checks, DNS resolution failure, some functions (tcp_ip6_name, tcp_getpeername, etc.)
+  - These are thin libuv wrappers covered only by integration tests; further coverage requires more integration tests
 - [ ] **aio/http2/aio_http2_client.c** - 71.0% line / 50.7% branch
 - [x] **gc.c** - 72.0% line / 57.2% branch - PARTIALLY IMPROVED
   - Added 45 unit tests to test/unit/test_gc.c (now 154 tests total)
@@ -219,6 +223,20 @@
   - Fixed by adding `valk_gc_tlab2_invalidate_heap()` that resets the thread-local TLAB if it points to the destroyed heap
   - Called from `valk_gc_heap2_destroy()` before unregistering the heap
   - Tests now run normally in all modes (with and without fork isolation)
+
+---
+
+## Discovered Issues
+
+### Intermittent Test Failures
+
+- [ ] **test_gc_parallel_thread_local_roots** (test/unit/test_gc.c:2018) - FLAKY
+  - Intermittently times out after 5 seconds
+  - Root cause: Race condition in parallel GC thread coordination
+  - The test spawns 3 worker threads that allocate GC-managed values, wait for GC, then verify values
+  - The hang appears to occur during the pthread_join phase or the GC safe point coordination
+  - Suggested fix: Add timeout handling or investigate valk_gc_coordinator interaction with thread-local roots
+  - Priority: P2 (doesn't block development, but should be fixed for reliability)
 
 ---
 
