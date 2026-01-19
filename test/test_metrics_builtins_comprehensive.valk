@@ -289,5 +289,73 @@
     (= {result} (metrics/counter-inc c 1 2 3))
     (test/assert (error? result) "counter-inc with too many args should fail")
     true
+  })
+  (test "metrics-baseline-create"
+    {do
+    (= {baseline} (metrics/baseline))
+    (test/assert (! (error? baseline)) "metrics/baseline should succeed")
+    true
+  })
+  (test "metrics-baseline-with-args-fails"
+    {do
+    (= {result} (metrics/baseline "extra-arg"))
+    (test/assert (error? result) "metrics/baseline with args should fail")
+    true
+  })
+  (test "metrics-collect-delta-stateless"
+    {do
+    (= {baseline} (metrics/baseline))
+    (= {delta} (metrics/collect-delta-stateless baseline))
+    (test/assert (! (error? delta)) "metrics/collect-delta-stateless should succeed")
+    true
+  })
+  (test "metrics-collect-delta-stateless-no-args-fails"
+    {do
+    (= {result} (metrics/collect-delta-stateless))
+    (test/assert (error? result) "metrics/collect-delta-stateless without args should fail")
+    true
+  })
+  (test "metrics-collect-delta-stateless-wrong-type-fails"
+    {do
+    (= {result} (metrics/collect-delta-stateless "not-a-baseline"))
+    (test/assert (error? result) "metrics/collect-delta-stateless with string should fail")
+    true
+  })
+  (test "metrics-collect-delta-stateless-produces-json"
+    {do
+    (= {baseline} (metrics/baseline))
+    (= {delta} (metrics/collect-delta-stateless baseline))
+    (= {json} (metrics/delta-json delta))
+    (test/assert (! (error? json)) "delta-json on stateless delta should succeed")
+    (test/assert (str? json) "delta-json should return string")
+    true
+  })
+  (test "metrics-collect-delta-stateless-tracks-changes"
+    {do
+    (= {c} (metrics/counter "stateless_test_counter"))
+    (= {baseline} (metrics/baseline))
+    (= {delta1} (metrics/collect-delta-stateless baseline))
+    (= {json1} (metrics/delta-json delta1))
+    (metrics/counter-inc c 10)
+    (= {delta2} (metrics/collect-delta-stateless baseline))
+    (= {json2} (metrics/delta-json delta2))
+    (test/assert (str? json2) "should produce valid json after change")
+    true
+  })
+  (test "metrics-collect-delta-stateless-isolation"
+    {do
+    (= {c} (metrics/counter "isolation_test_counter"))
+    (= {baseline1} (metrics/baseline))
+    (= {baseline2} (metrics/baseline))
+    (= {delta1-init} (metrics/collect-delta-stateless baseline1))
+    (= {delta2-init} (metrics/collect-delta-stateless baseline2))
+    (metrics/counter-inc c 5)
+    (= {delta1-after} (metrics/collect-delta-stateless baseline1))
+    (= {delta2-after} (metrics/collect-delta-stateless baseline2))
+    (= {json1} (metrics/delta-json delta1-after))
+    (= {json2} (metrics/delta-json delta2-after))
+    (test/assert (str? json1) "baseline1 should produce valid json")
+    (test/assert (str? json2) "baseline2 should produce valid json")
+    true
   }))
   {:suite-name "Metrics Builtins Comprehensive"})

@@ -326,6 +326,60 @@ static void delta_snapshot_cleanup(void *ptr) {
   }
 }
 
+// Cleanup function for baseline
+static void baseline_cleanup(void *ptr) {
+  if (ptr) {
+    free(ptr);
+  }
+}
+
+// (metrics/baseline) -> baseline-handle
+// Creates a new per-subscriber baseline for stateless delta collection
+static valk_lval_t *valk_builtin_metrics_baseline(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  if (valk_lval_list_count(a) != 0) {
+    return valk_lval_err("metrics/baseline: expected 0 arguments, got %zu",
+                         valk_lval_list_count(a));
+  }
+
+  valk_metrics_baseline_t *baseline = malloc(sizeof(valk_metrics_baseline_t));
+  if (!baseline) {
+    return valk_lval_err("metrics/baseline: allocation failed");
+  }
+
+  valk_metrics_baseline_init(baseline);
+  return valk_lval_ref("metrics_baseline", baseline, baseline_cleanup);
+}
+
+// (metrics/collect-delta-stateless baseline) -> delta-snapshot-handle
+// Collects delta snapshot using per-subscriber baseline (doesn't modify global state)
+static valk_lval_t *valk_builtin_metrics_collect_delta_stateless(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("metrics/collect-delta-stateless: expected 1 argument (baseline), got %zu",
+                         valk_lval_list_count(a));
+  }
+
+  valk_lval_t *baseline_ref = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(baseline_ref) != LVAL_REF || strcmp(baseline_ref->ref.type, "metrics_baseline") != 0) {
+    return valk_lval_err("metrics/collect-delta-stateless: argument must be baseline handle");
+  }
+
+  valk_metrics_baseline_t *baseline = (valk_metrics_baseline_t *)baseline_ref->ref.ptr;
+
+  valk_delta_snapshot_t *snap = malloc(sizeof(valk_delta_snapshot_t));
+  if (!snap) {
+    return valk_lval_err("metrics/collect-delta-stateless: allocation failed");
+  }
+
+  valk_delta_snapshot_init(snap);
+  valk_delta_snapshot_collect_stateless(snap, &g_metrics, baseline);
+
+  return valk_lval_ref("metrics_delta", snap, delta_snapshot_cleanup);
+}
+
 // (metrics/collect-delta) -> delta-snapshot-handle
 // Collects a delta snapshot from the global registry
 static valk_lval_t *valk_builtin_metrics_collect_delta(valk_lenv_t *e, valk_lval_t *a) {
@@ -499,7 +553,9 @@ void valk_register_metrics_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "metrics/histogram-observe", valk_builtin_metrics_histogram_observe);
 
   // Export builtins
+  valk_lenv_put_builtin(env, "metrics/baseline", valk_builtin_metrics_baseline);
   valk_lenv_put_builtin(env, "metrics/collect-delta", valk_builtin_metrics_collect_delta);
+  valk_lenv_put_builtin(env, "metrics/collect-delta-stateless", valk_builtin_metrics_collect_delta_stateless);
   valk_lenv_put_builtin(env, "metrics/delta-json", valk_builtin_metrics_delta_json);
   valk_lenv_put_builtin(env, "metrics/prometheus", valk_builtin_metrics_prometheus);
   valk_lenv_put_builtin(env, "metrics/json", valk_builtin_metrics_json);

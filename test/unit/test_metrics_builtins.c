@@ -835,6 +835,161 @@ void test_metrics_json_wrong_args(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_baseline_create(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+  valk_lenv_t *env = create_test_env();
+
+  valk_lval_t *args = valk_lval_nil();
+  valk_lval_t *result = call_builtin(env, "metrics/baseline", args);
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_REF, "Should return a ref");
+  VALK_TEST_ASSERT(strcmp(result->ref.type, "metrics_baseline") == 0, "Ref type should be metrics_baseline");
+  VALK_TEST_ASSERT(result->ref.free != nullptr, "Should have cleanup function");
+
+  VALK_PASS();
+}
+
+void test_baseline_wrong_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+  valk_lenv_t *env = create_test_env();
+
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){valk_lval_num(42)}, 1);
+  valk_lval_t *result = call_builtin(env, "metrics/baseline", args);
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should return error");
+
+  VALK_PASS();
+}
+
+void test_collect_delta_stateless(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+  valk_lenv_t *env = create_test_env();
+
+  valk_lval_t *baseline_args = valk_lval_nil();
+  valk_lval_t *baseline = call_builtin(env, "metrics/baseline", baseline_args);
+  VALK_TEST_ASSERT(LVAL_TYPE(baseline) == LVAL_REF, "Should create baseline");
+
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){baseline}, 1);
+  valk_lval_t *result = call_builtin(env, "metrics/collect-delta-stateless", args);
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_REF, "Should return a ref");
+  VALK_TEST_ASSERT(strcmp(result->ref.type, "metrics_delta") == 0, "Ref type should be metrics_delta");
+
+  VALK_PASS();
+}
+
+void test_collect_delta_stateless_no_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+  valk_lenv_t *env = create_test_env();
+
+  valk_lval_t *args = valk_lval_nil();
+  valk_lval_t *result = call_builtin(env, "metrics/collect-delta-stateless", args);
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should return error for no args");
+
+  VALK_PASS();
+}
+
+void test_collect_delta_stateless_wrong_ref_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+  valk_lenv_t *env = create_test_env();
+
+  valk_lval_t *fake_ref = valk_lval_ref("wrong_type", nullptr, nullptr);
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){fake_ref}, 1);
+  valk_lval_t *result = call_builtin(env, "metrics/collect-delta-stateless", args);
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should return error for wrong ref type");
+
+  VALK_PASS();
+}
+
+void test_collect_delta_stateless_not_ref(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+  valk_lenv_t *env = create_test_env();
+
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){valk_lval_str("not ref")}, 1);
+  valk_lval_t *result = call_builtin(env, "metrics/collect-delta-stateless", args);
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should return error for non-ref arg");
+
+  VALK_PASS();
+}
+
+void test_collect_delta_stateless_with_changes(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+  valk_lenv_t *env = create_test_env();
+
+  valk_lval_t *counter_args = valk_lval_list((valk_lval_t*[]){valk_lval_str("test_stateless_counter")}, 1);
+  valk_lval_t *counter = call_builtin(env, "metrics/counter", counter_args);
+  VALK_TEST_ASSERT(LVAL_TYPE(counter) == LVAL_REF, "Should create counter");
+
+  valk_lval_t *baseline_args = valk_lval_nil();
+  valk_lval_t *baseline = call_builtin(env, "metrics/baseline", baseline_args);
+  VALK_TEST_ASSERT(LVAL_TYPE(baseline) == LVAL_REF, "Should create baseline");
+
+  valk_lval_t *delta1_args = valk_lval_list((valk_lval_t*[]){baseline}, 1);
+  valk_lval_t *delta1 = call_builtin(env, "metrics/collect-delta-stateless", delta1_args);
+  VALK_TEST_ASSERT(LVAL_TYPE(delta1) == LVAL_REF, "First collect should succeed");
+
+  valk_lval_t *inc_args = valk_lval_list((valk_lval_t*[]){counter, valk_lval_num(5)}, 2);
+  call_builtin(env, "metrics/counter-inc", inc_args);
+
+  valk_lval_t *delta2_args = valk_lval_list((valk_lval_t*[]){baseline}, 1);
+  valk_lval_t *delta2 = call_builtin(env, "metrics/collect-delta-stateless", delta2_args);
+  VALK_TEST_ASSERT(LVAL_TYPE(delta2) == LVAL_REF, "Second collect should succeed");
+
+  valk_lval_t *json_args = valk_lval_list((valk_lval_t*[]){delta2}, 1);
+  valk_lval_t *json = call_builtin(env, "metrics/delta-json", json_args);
+  VALK_TEST_ASSERT(LVAL_TYPE(json) == LVAL_STR, "Should return JSON string");
+  VALK_TEST_ASSERT(strstr(json->str, "test_stateless_counter") != nullptr, "JSON should contain counter name");
+
+  VALK_PASS();
+}
+
+void test_baseline_cleanup(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+  valk_lenv_t *env = create_test_env();
+
+  valk_lval_t *args = valk_lval_nil();
+  valk_lval_t *baseline = call_builtin(env, "metrics/baseline", args);
+  VALK_TEST_ASSERT(LVAL_TYPE(baseline) == LVAL_REF, "Should create baseline");
+
+  if (baseline->ref.free) {
+    baseline->ref.free(baseline->ref.ptr);
+    baseline->ref.ptr = nullptr;
+    baseline->ref.free = nullptr;
+  }
+
+  VALK_PASS();
+}
+
+void test_baseline_cleanup_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_metrics_registry_init();
+  valk_lenv_t *env = create_test_env();
+
+  valk_lval_t *args = valk_lval_nil();
+  valk_lval_t *baseline = call_builtin(env, "metrics/baseline", args);
+  VALK_TEST_ASSERT(LVAL_TYPE(baseline) == LVAL_REF, "Should create baseline");
+
+  if (baseline->ref.free) {
+    baseline->ref.free(nullptr);
+  }
+
+  VALK_PASS();
+}
+
 void test_delta_snapshot_cleanup(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -1055,6 +1210,15 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_prometheus_wrong_args", test_prometheus_wrong_args);
   valk_testsuite_add_test(suite, "test_metrics_json", test_metrics_json);
   valk_testsuite_add_test(suite, "test_metrics_json_wrong_args", test_metrics_json_wrong_args);
+  valk_testsuite_add_test(suite, "test_baseline_create", test_baseline_create);
+  valk_testsuite_add_test(suite, "test_baseline_wrong_args", test_baseline_wrong_args);
+  valk_testsuite_add_test(suite, "test_collect_delta_stateless", test_collect_delta_stateless);
+  valk_testsuite_add_test(suite, "test_collect_delta_stateless_no_args", test_collect_delta_stateless_no_args);
+  valk_testsuite_add_test(suite, "test_collect_delta_stateless_wrong_ref_type", test_collect_delta_stateless_wrong_ref_type);
+  valk_testsuite_add_test(suite, "test_collect_delta_stateless_not_ref", test_collect_delta_stateless_not_ref);
+  valk_testsuite_add_test(suite, "test_collect_delta_stateless_with_changes", test_collect_delta_stateless_with_changes);
+  valk_testsuite_add_test(suite, "test_baseline_cleanup", test_baseline_cleanup);
+  valk_testsuite_add_test(suite, "test_baseline_cleanup_null", test_baseline_cleanup_null);
   valk_testsuite_add_test(suite, "test_delta_snapshot_cleanup", test_delta_snapshot_cleanup);
   valk_testsuite_add_test(suite, "test_delta_snapshot_cleanup_null", test_delta_snapshot_cleanup_null);
   valk_testsuite_add_test(suite, "test_counter_create_max_labels", test_counter_create_max_labels);
