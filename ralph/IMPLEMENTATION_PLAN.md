@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18T3
+**Last updated:** 2026-01-18T4
 
 ---
 
@@ -21,7 +21,7 @@ The main thread and event loop thread share environments. `valk_lenv_put` has no
   - [x] Create `test/context-new` returning immutable context struct
   - [x] Refactor `test/run-one` to take and return context
   - [x] Refactor `test/run` to use fold over tests with context
-  - [ ] Keep atoms only for async cross-thread state
+  - [x] Keep atoms only for async cross-thread state
   - [ ] Update all test files to new API
 
 - [ ] **Phase 2: Audit all .valk files** - Find and fix `(def {*` mutations
