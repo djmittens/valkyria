@@ -34,6 +34,9 @@ ALLOWED_PATTERNS = {
     "test/test_test_framework_empty.valk": {
         "*test-registry*": "testing empty registry path",
     },
+    "src/async_monadic.valk": {
+        "*async-run-result*": "local capture in async/run (pure sync op, no threading concern)",
+    },
 }
 
 ATOM_PATTERN = re.compile(r'\(atom\s')
