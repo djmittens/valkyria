@@ -4437,6 +4437,21 @@ static valk_lval_t* valk_builtin_aio_stop(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_nil();
 }
 
+static valk_lval_t* valk_builtin_aio_on_loop_thread(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  if (strcmp(aio_ref->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/on-loop-thread?: argument must be an aio_system");
+  }
+
+  valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
+  bool on_loop = uv_thread_self() == sys->loopThread;
+  return valk_lval_num(on_loop ? 1 : 0);
+}
+
 // aio/metrics: (aio/metrics aio-system) -> qexpr with metric values
 // aio/metrics-json: (aio/metrics-json aio-system) -> JSON string
 // Returns metrics from V2 registry as JSON
@@ -5192,6 +5207,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "aio/start", valk_builtin_aio_start);
   valk_lenv_put_builtin(env, "aio/run", valk_builtin_aio_run);
   valk_lenv_put_builtin(env, "aio/stop", valk_builtin_aio_stop);
+  valk_lenv_put_builtin(env, "aio/on-loop-thread?", valk_builtin_aio_on_loop_thread);
   valk_lenv_put_builtin(env, "aio/metrics-json", valk_builtin_aio_metrics_json);
   valk_lenv_put_builtin(env, "aio/metrics-json-compact",
                         valk_builtin_aio_metrics_json_compact);

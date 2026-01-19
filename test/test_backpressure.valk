@@ -80,4 +80,3 @@
 }))
 
 (test/run-async client-aio)
-(aio/run client-aio)

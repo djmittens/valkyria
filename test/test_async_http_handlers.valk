@@ -799,7 +799,4 @@
 
 (def {server} (http2/server-listen aio 0 router))
 (def {TEST_PORT} (http2/server-port server))
-(aio/schedule aio 100 (\ {} {
-  (test/run-async aio)
-}))
-(aio/run aio)
+(test/run-async aio)

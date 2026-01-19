@@ -47,4 +47,3 @@
 
 ; Run all async tests
 (test/run-async aio)
-(aio/run aio)

@@ -68,4 +68,3 @@
 }))
 
 (test/run-async aio)
-(aio/run aio)

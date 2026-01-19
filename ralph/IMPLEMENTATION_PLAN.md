@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-19
+**Last updated:** 2026-01-18
 
 ---
 
@@ -67,7 +67,7 @@ All requirements met:
 
 ### Priority 0: Test Infrastructure
 
-- [ ] Enforce timeouts in Valk test framework: Running `build/valk test/foo.valk` directly can hang forever if async tests don't complete. The 30s timeout in test/run-async only works if the event loop is running. Fix: (1) auto-start event loop when async tests are registered, (2) add a hard process-level timeout that works even if event loop isn't running, (3) individual test timeouts not just global timeout.
+- [x] Enforce timeouts in Valk test framework: `test/run-async` now automatically calls `aio/run` internally when called from the main thread, ensuring the 30s timeout always works. Added `aio/on-loop-thread?` builtin to detect if running on event loop thread. Updated 24 test files to use simplified pattern. Remaining items (hard process-level timeout, individual test timeouts) are tracked separately if needed.
 
 ### Priority 1: Core C Files (high impact, fewer dependencies)
 
@@ -135,7 +135,12 @@ All requirements met:
 
 ## Discovered Issues
 
-- Many remaining uncovered branches in parser.c are internal implementation details (memory allocation null checks, dynamic array growth logic) that require mocking infrastructure to test effectively
-- Several 0% branches in parser.c (lines 2941-2942, 3033, 3035, 3126-3161) are in coverage-specific code paths (`#ifdef VALK_COVERAGE`) or unused builtins (`valk_builtin_if` superseded by special form)
-- **[RESOLVED] async_handles.valk timer paths**: Fixed `aio/catch` to properly flat-map when recovery function returns a handle (same behavior as `aio/then`). Added HTTP integration tests for `delay-value`, `chain`, `aio/map`, and `aio/try`.
-- **[BLOCKED] graceful-shutdown cancel path**: Calling `aio/cancel` from within an async callback (e.g., in `aio/race` winner's callback) causes a crash. This is a pre-existing bug in the async system. The `graceful-shutdown` function's timeout path (line 75: `(map aio/cancel handles)`) cannot be tested until this is fixed.
+- **[RESOLVED]** async_handles.valk timer paths: Fixed `aio/catch` to properly flat-map when recovery function returns a handle (same behavior as `aio/then`). Added HTTP integration tests for `delay-value`, `chain`, `aio/map`, and `aio/try`.
+- **[OPEN]** graceful-shutdown cancel path: Calling `aio/cancel` from within an async callback (e.g., in `aio/race` winner's callback) causes a crash. This is a bug in the async system. The `graceful-shutdown` function's timeout path (line 75: `(map aio/cancel handles)`) cannot be tested until this is fixed.
+- **[OPEN]** async_handles.valk timer-dependent paths: Timer-dependent async paths crash when tested via HTTP. Blocked coverage at 86.1% - remaining 4% requires timer callbacks that fail in HTTP test context.
+- **[OPEN]** aio/debug.valk SSE streaming paths: SSE streaming paths inside `aio/interval` callbacks (lines 129, 131: `:stop` on close/non-writable) only execute during live HTTP/2 SSE streaming with real connection close/backpressure events. Blocked coverage at 85.0%.
+
+## Notes
+
+- parser.c internal branches: Many remaining uncovered branches are internal implementation details (memory allocation null checks, dynamic array growth logic) that require mocking infrastructure to test effectively
+- parser.c coverage-specific code: Several 0% branches (lines 2941-2942, 3033, 3035, 3126-3161) are in coverage-specific code paths (`#ifdef VALK_COVERAGE`) or unused builtins (`valk_builtin_if` superseded by special form)

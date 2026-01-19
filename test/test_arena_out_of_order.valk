@@ -37,8 +37,4 @@
   }))
 }))
 
-(aio/schedule aio 100 (\ {} {
-  (test/run-async aio)
-}))
-
-(aio/run aio)
+(test/run-async aio)

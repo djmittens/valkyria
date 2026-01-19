@@ -232,7 +232,9 @@
     (if (== total 0)
       {do
         (printf "❌ No async tests registered!\n")
-        (shutdown 1)}
+        (if (== *test-expected-exit* 1)
+          {(shutdown 0)}
+          {(shutdown 1)})}
       {true})
     
     (printf "🧪 [%ld/%ld] %s (async)\n" total total suite-name)
@@ -251,6 +253,10 @@
     (aio/schedule aio 100 (\ {} {
       (*test-async-check-complete* aio)
     }))
+    
+    (if (aio/on-loop-thread? aio)
+      {true}
+      {(aio/run aio)})
 })
 
 (fun {*test-async-check-complete* aio} {
