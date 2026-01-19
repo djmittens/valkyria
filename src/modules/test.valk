@@ -31,8 +31,12 @@
   (def {*test-expected-exit*} code)
 })
 
+(fun {test name body} {
+  (list name body)
+})
+
 (fun {test/define name body} {
-  (def {*test-registry*} (join *test-registry* (list (list name body))))
+  (def {*test-registry*} (join *test-registry* (list (test name body))))
 })
 
 (fun {test/assert cond msg} {
@@ -104,9 +108,24 @@
           {(plist/set ctx :failed (+ (plist/get ctx :failed) 1))})})
 })
 
+(fun {*is-test-list* arg} {
+  (if (not (list? arg))
+    {false}
+    {(if (== (len arg) 0)
+      {false}
+      {(if (list? (head arg))
+        {(== (len (head arg)) 2)}
+        {false})})})
+})
+
 (fun {test/run & args} {
   do
-    (= {total} (len *test-registry*))
+    (= {tests} (if (> (len args) 0)
+      {(if (*is-test-list* (head args))
+        {(head args)}
+        {*test-registry*})}
+      {*test-registry*}))
+    (= {total} (len tests))
 
     (if (== total 0)
       {do
@@ -131,7 +150,7 @@
       {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
       {printf "🧪 [%ld/%ld] %s\n" total total suite-name})
 
-    (= {final-ctx} (foldl *test-run-one-ctx* ctx *test-registry*))
+    (= {final-ctx} (foldl *test-run-one-ctx* ctx tests))
 
     (= {passed} (plist/get final-ctx :passed))
     (= {failed} (plist/get final-ctx :failed))
@@ -166,8 +185,12 @@
 (def {*test-async-passed-atom*} (atom 0))
 (def {*test-async-failed-atom*} (atom 0))
 
+(fun {test-async name body} {
+  (list name body)
+})
+
 (fun {test/async name body} {
-  (def {*test-async-registry*} (join *test-async-registry* (list (list name body))))
+  (def {*test-async-registry*} (join *test-async-registry* (list (test-async name body))))
 })
 
 (fun {*test-async-done-callback* test-name start-time passed} {
@@ -209,7 +232,12 @@
     (atom/set! *test-async-passed-atom* 0)
     (atom/set! *test-async-failed-atom* 0)
     (atom/set! *test-async-pending-atom* 0)
-    (= {total} (len *test-async-registry*))
+    (= {tests} (if (> (len args) 0)
+      {(if (list? (head args))
+        {(head args)}
+        {*test-async-registry*})}
+      {*test-async-registry*}))
+    (= {total} (len tests))
     (= {suite-name} *test-suite-name*)
     
     (if (== total 0)
@@ -222,7 +250,7 @@
     
     (printf "🧪 [%ld/%ld] %s (async)\n" total total suite-name)
     
-    (map (\ {test} {(*test-start-async-one* aio test)}) *test-async-registry*)
+    (map (\ {test} {(*test-start-async-one* aio test)}) tests)
     
     (aio/schedule aio 30000 (\ {} {
       (if (> (atom/get *test-async-pending-atom*) 0)

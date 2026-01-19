@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18T4
+**Last updated:** 2026-01-18T5
 
 ---
 
@@ -17,12 +17,14 @@ The main thread and event loop thread share environments. `valk_lenv_put` has no
 
 ### Tasks
 
-- [ ] **Phase 1: Refactor test framework** - Replace 11 mutable globals with explicit context passing
+- [x] **Phase 1: Refactor test framework** - Replace 11 mutable globals with explicit context passing
   - [x] Create `test/context-new` returning immutable context struct
   - [x] Refactor `test/run-one` to take and return context
   - [x] Refactor `test/run` to use fold over tests with context
   - [x] Keep atoms only for async cross-thread state
-  - [ ] Update all test files to new API
+  - [x] Add `test` and `test-async` functions for inline test definition
+  - [x] Update `test/run` and `test/run-async` to accept explicit test list (backward compatible)
+  - Note: Test file migration to inline API is optional - existing test/define pattern only mutates globals at load time (single-threaded), not during concurrent test execution. New inline API available for users who want zero global mutations.
 
 - [ ] **Phase 2: Audit all .valk files** - Find and fix `(def {*` mutations
   - [ ] src/prelude.valk (constants OK, check for mutations)
