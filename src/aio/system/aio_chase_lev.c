@@ -53,11 +53,11 @@ void valk_chase_lev_push(valk_chase_lev_deque_t *deque, void *item) {
 
   if (b - t > arr->size - 1) {
     valk_chase_lev_array_t *new_arr = valk_chase_lev_array_grow(arr, t, b);
-    atomic_store_explicit(&deque->array, new_arr, memory_order_relaxed);
+    atomic_store_explicit(&deque->array, new_arr, memory_order_release);
     arr = new_arr;
   }
 
-  valk_chase_lev_array_put(arr, b, item);
+  atomic_store_explicit(&arr->buffer[b % arr->size], item, memory_order_release);
   atomic_thread_fence(memory_order_release);
   atomic_store_explicit(&deque->bottom, b + 1, memory_order_relaxed);
 }
@@ -97,8 +97,8 @@ void *valk_chase_lev_steal(valk_chase_lev_deque_t *deque) {
   void *item = VALK_CHASE_LEV_EMPTY;
 
   if (t < b) {
-    valk_chase_lev_array_t *arr = atomic_load_explicit(&deque->array, memory_order_relaxed);
-    item = valk_chase_lev_array_get(arr, t);
+    valk_chase_lev_array_t *arr = atomic_load_explicit(&deque->array, memory_order_acquire);
+    item = atomic_load_explicit(&arr->buffer[t % arr->size], memory_order_acquire);
     if (!atomic_compare_exchange_strong_explicit(&deque->top, &t, t + 1,
                                                   memory_order_seq_cst,
                                                   memory_order_relaxed)) {
