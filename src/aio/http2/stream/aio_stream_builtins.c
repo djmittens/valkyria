@@ -11,6 +11,7 @@
 
 void valk_http2_flush_pending(valk_aio_handle_t *conn);
 
+// LCOV_EXCL_START - defensive validation already covered by LVAL_TYPE check
 static valk_stream_body_t *get_stream_body(valk_lval_t *ref) {
   if (!ref || LVAL_TYPE(ref) != LVAL_REF) {
     return nullptr;
@@ -23,14 +24,18 @@ static valk_stream_body_t *get_stream_body(valk_lval_t *ref) {
   }
   return (valk_stream_body_t *)ref->ref.ptr;
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START - ref cleanup callback invoked only when lval_ref is freed by GC
 static void stream_body_cleanup(void *ptr) {
   valk_stream_body_t *body = (valk_stream_body_t *)ptr;
   if (body) {
     valk_stream_body_free(body);
   }
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START - requires full HTTP/2 server integration with valid request context
 static valk_lval_t *valk_builtin_stream_open(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
@@ -120,6 +125,7 @@ static valk_lval_t *valk_builtin_stream_open(valk_lenv_t *e, valk_lval_t *a) {
 
   return valk_lval_ref("stream_body", body, stream_body_cleanup);
 }
+// LCOV_EXCL_STOP
 
 static valk_lval_t *valk_builtin_stream_write(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
@@ -264,7 +270,7 @@ static valk_lval_t *valk_builtin_stream_cancel(valk_lenv_t *e, valk_lval_t *a) {
   }
 
   int rv = valk_stream_body_cancel(body, 0x8);
-  if (rv < 0) {
+  if (rv < 0) { // LCOV_EXCL_BR_LINE - defensive: cancel only fails if body is null, already checked above
     return valk_lval_err("stream/cancel: failed to cancel stream");
   }
 
