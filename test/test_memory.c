@@ -1678,23 +1678,23 @@ void test_region_stats_tracking(VALK_TEST_ARGS()) {
   valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
   ASSERT_NOT_NULL(region);
   
-  ASSERT_EQ(region->stats.bytes_allocated, 0);
-  ASSERT_EQ(region->stats.alloc_count, 0);
+  ASSERT_EQ(atomic_load(&region->stats.bytes_allocated), 0);
+  ASSERT_EQ(atomic_load(&region->stats.alloc_count), 0);
   
   void *ptr1 = valk_region_alloc(region, 100);
   ASSERT_NOT_NULL(ptr1);
-  ASSERT_EQ(region->stats.bytes_allocated, 100);
-  ASSERT_EQ(region->stats.alloc_count, 1);
+  ASSERT_EQ(atomic_load(&region->stats.bytes_allocated), 100);
+  ASSERT_EQ(atomic_load(&region->stats.alloc_count), 1);
   
   void *ptr2 = valk_region_alloc(region, 200);
   ASSERT_NOT_NULL(ptr2);
-  ASSERT_EQ(region->stats.bytes_allocated, 300);
-  ASSERT_EQ(region->stats.alloc_count, 2);
+  ASSERT_EQ(atomic_load(&region->stats.bytes_allocated), 300);
+  ASSERT_EQ(atomic_load(&region->stats.alloc_count), 2);
   
   valk_region_stats_t stats;
   valk_region_get_stats(region, &stats);
-  ASSERT_EQ(stats.bytes_allocated, 300);
-  ASSERT_EQ(stats.alloc_count, 2);
+  ASSERT_EQ(atomic_load(&stats.bytes_allocated), 300);
+  ASSERT_EQ(atomic_load(&stats.alloc_count), 2);
   
   valk_region_destroy(region);
   
@@ -1718,15 +1718,15 @@ void test_region_memory_limit(VALK_TEST_ARGS()) {
   
   void *ptr1 = valk_region_alloc(child, 200);
   ASSERT_NOT_NULL(ptr1);
-  ASSERT_EQ(child->stats.bytes_allocated, 200);
+  ASSERT_EQ(atomic_load(&child->stats.bytes_allocated), 200);
   
   void *ptr2 = valk_region_alloc(child, 200);
   ASSERT_NOT_NULL(ptr2);
-  ASSERT_EQ(child->stats.bytes_allocated, 400);
+  ASSERT_EQ(atomic_load(&child->stats.bytes_allocated), 400);
   
   void *ptr3 = valk_region_alloc(child, 200);
   ASSERT_NOT_NULL(ptr3);
-  ASSERT_EQ(child->stats.overflow_count, 1);
+  ASSERT_EQ(atomic_load(&child->stats.overflow_count), 1);
   
   valk_region_destroy(child);
   valk_region_destroy(parent);
@@ -1747,12 +1747,12 @@ void test_region_reset_preserves_limit(VALK_TEST_ARGS()) {
   valk_region_set_limit(region, 1000);
   
   valk_region_alloc(region, 100);
-  ASSERT_EQ(region->stats.bytes_allocated, 100);
+  ASSERT_EQ(atomic_load(&region->stats.bytes_allocated), 100);
   
   valk_region_reset(region);
   
-  ASSERT_EQ(region->stats.bytes_allocated, 0);
-  ASSERT_EQ(region->stats.alloc_count, 0);
+  ASSERT_EQ(atomic_load(&region->stats.bytes_allocated), 0);
+  ASSERT_EQ(atomic_load(&region->stats.alloc_count), 0);
   ASSERT_EQ(region->stats.bytes_limit, 1000);
   
   valk_region_destroy(region);
@@ -1858,7 +1858,7 @@ void test_region_promote_lval(VALK_TEST_ARGS()) {
     ASSERT_LVAL_NUM(promoted, 42);
     
     ASSERT_EQ(promoted->origin_allocator, session);
-    ASSERT_GT(session->stats.promotion_count, 0);
+    ASSERT_GT(atomic_load(&session->stats.promotion_count), 0);
   }
   
   valk_region_destroy(request);

@@ -1184,20 +1184,27 @@ void valk_region_reset(valk_region_t *region) {
   }
   
   sz limit = region->stats.bytes_limit;
-  memset(&region->stats, 0, sizeof(region->stats));
+  atomic_store_explicit(&region->stats.bytes_allocated, 0, memory_order_relaxed);
+  atomic_store_explicit(&region->stats.bytes_promoted, 0, memory_order_relaxed);
+  atomic_store_explicit(&region->stats.alloc_count, 0, memory_order_relaxed);
+  atomic_store_explicit(&region->stats.promotion_count, 0, memory_order_relaxed);
+  atomic_store_explicit(&region->stats.overflow_count, 0, memory_order_relaxed);
   region->stats.bytes_limit = limit;
 }
 
 void *valk_region_alloc(valk_region_t *region, sz bytes) {
   if (!region) return nullptr;
   
-  if (region->stats.bytes_limit > 0 && 
-      region->stats.bytes_allocated + bytes > region->stats.bytes_limit) {
-    if (region->parent) {
-      region->stats.overflow_count++;
-      return valk_region_alloc(region->parent, bytes);
+  sz limit = region->stats.bytes_limit;
+  if (limit > 0) {
+    sz current = atomic_load_explicit(&region->stats.bytes_allocated, memory_order_relaxed);
+    if (current + bytes > limit) {
+      if (region->parent) {
+        atomic_fetch_add_explicit(&region->stats.overflow_count, 1, memory_order_relaxed);
+        return valk_region_alloc(region->parent, bytes);
+      }
+      return nullptr;
     }
-    return nullptr;
   }
   
   void *ptr = nullptr;
@@ -1218,15 +1225,15 @@ void *valk_region_alloc(valk_region_t *region, sz bytes) {
         ptr = valk_mem_arena_alloc(region->arena, bytes);
       }
       if (!ptr && region->parent) {
-        region->stats.overflow_count++;
+        atomic_fetch_add_explicit(&region->stats.overflow_count, 1, memory_order_relaxed);
         return valk_region_alloc(region->parent, bytes);
       }
       break;
   }
   
   if (ptr) {
-    region->stats.bytes_allocated += bytes;
-    region->stats.alloc_count++;
+    atomic_fetch_add_explicit(&region->stats.bytes_allocated, bytes, memory_order_relaxed);
+    atomic_fetch_add_explicit(&region->stats.alloc_count, 1, memory_order_relaxed);
   }
   
   return ptr;
@@ -1234,7 +1241,7 @@ void *valk_region_alloc(valk_region_t *region, sz bytes) {
 
 bool valk_region_set_limit(valk_region_t *region, sz limit) {
   if (!region) return false;
-  if (limit > 0 && region->stats.bytes_allocated > limit) {
+  if (limit > 0 && atomic_load_explicit(&region->stats.bytes_allocated, memory_order_relaxed) > limit) {
     return false;
   }
   region->stats.bytes_limit = limit;
@@ -1243,7 +1250,17 @@ bool valk_region_set_limit(valk_region_t *region, sz limit) {
 
 void valk_region_get_stats(valk_region_t *region, valk_region_stats_t *out) {
   if (!region || !out) return;
-  *out = region->stats;
+  atomic_store_explicit(&out->bytes_allocated, 
+      atomic_load_explicit(&region->stats.bytes_allocated, memory_order_relaxed), memory_order_relaxed);
+  out->bytes_limit = region->stats.bytes_limit;
+  atomic_store_explicit(&out->bytes_promoted,
+      atomic_load_explicit(&region->stats.bytes_promoted, memory_order_relaxed), memory_order_relaxed);
+  atomic_store_explicit(&out->alloc_count,
+      atomic_load_explicit(&region->stats.alloc_count, memory_order_relaxed), memory_order_relaxed);
+  atomic_store_explicit(&out->promotion_count,
+      atomic_load_explicit(&region->stats.promotion_count, memory_order_relaxed), memory_order_relaxed);
+  atomic_store_explicit(&out->overflow_count,
+      atomic_load_explicit(&region->stats.overflow_count, memory_order_relaxed), memory_order_relaxed);
 }
 
 // ============================================================================
@@ -1343,8 +1360,8 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
       break;
   }
 
-  target->stats.bytes_promoted += lval_size;
-  target->stats.promotion_count++;
+  atomic_fetch_add_explicit(&target->stats.bytes_promoted, lval_size, memory_order_relaxed);
+  atomic_fetch_add_explicit(&target->stats.promotion_count, 1, memory_order_relaxed);
 
   return copy;
 }

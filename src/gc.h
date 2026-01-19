@@ -232,12 +232,12 @@ typedef enum {
 } valk_lifetime_e;
 
 typedef struct valk_region_stats {
-  sz bytes_allocated;             // Current bytes allocated in this region
+  _Atomic sz bytes_allocated;     // Current bytes allocated in this region
   sz bytes_limit;                 // Maximum bytes allowed (0 = unlimited)
-  sz bytes_promoted;              // Bytes promoted to parent region
-  u64 alloc_count;                // Number of allocations
-  u64 promotion_count;            // Number of objects promoted to parent
-  u64 overflow_count;             // Number of overflow fallbacks to parent
+  _Atomic sz bytes_promoted;      // Bytes promoted to parent region
+  _Atomic u64 alloc_count;        // Number of allocations
+  _Atomic u64 promotion_count;    // Number of objects promoted to parent
+  _Atomic u64 overflow_count;     // Number of overflow fallbacks to parent
 } valk_region_stats_t;
 
 typedef struct valk_region {

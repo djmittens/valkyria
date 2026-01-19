@@ -3040,13 +3040,13 @@ void test_gc_region_alloc(VALK_TEST_ARGS()) {
 
   void *ptr = valk_region_alloc(region, 100);
   VALK_TEST_ASSERT(ptr != nullptr, "Allocation should succeed");
-  VALK_TEST_ASSERT(region->stats.bytes_allocated == 100, "bytes_allocated should be 100");
-  VALK_TEST_ASSERT(region->stats.alloc_count == 1, "alloc_count should be 1");
+  VALK_TEST_ASSERT(atomic_load(&region->stats.bytes_allocated) == 100, "bytes_allocated should be 100");
+  VALK_TEST_ASSERT(atomic_load(&region->stats.alloc_count) == 1, "alloc_count should be 1");
 
   void *ptr2 = valk_region_alloc(region, 50);
   VALK_TEST_ASSERT(ptr2 != nullptr, "Second allocation should succeed");
-  VALK_TEST_ASSERT(region->stats.bytes_allocated == 150, "bytes_allocated should be 150");
-  VALK_TEST_ASSERT(region->stats.alloc_count == 2, "alloc_count should be 2");
+  VALK_TEST_ASSERT(atomic_load(&region->stats.bytes_allocated) == 150, "bytes_allocated should be 150");
+  VALK_TEST_ASSERT(atomic_load(&region->stats.alloc_count) == 2, "alloc_count should be 2");
 
   valk_region_destroy(region);
 
@@ -3069,11 +3069,11 @@ void test_gc_region_reset(VALK_TEST_ARGS()) {
 
   valk_region_alloc(region, 100);
   valk_region_alloc(region, 50);
-  VALK_TEST_ASSERT(region->stats.bytes_allocated == 150, "bytes_allocated should be 150");
+  VALK_TEST_ASSERT(atomic_load(&region->stats.bytes_allocated) == 150, "bytes_allocated should be 150");
 
   valk_region_reset(region);
-  VALK_TEST_ASSERT(region->stats.bytes_allocated == 0, "bytes_allocated should be 0 after reset");
-  VALK_TEST_ASSERT(region->stats.alloc_count == 0, "alloc_count should be 0 after reset");
+  VALK_TEST_ASSERT(atomic_load(&region->stats.bytes_allocated) == 0, "bytes_allocated should be 0 after reset");
+  VALK_TEST_ASSERT(atomic_load(&region->stats.alloc_count) == 0, "alloc_count should be 0 after reset");
 
   valk_region_destroy(region);
 
