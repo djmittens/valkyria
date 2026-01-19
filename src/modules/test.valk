@@ -11,7 +11,7 @@
 (def {*test-expected-exit*} 0)   ; Expected exit code (0 = pass, 1 = fail expected)
 
 (fun {test/context-new} {
-  {passed 0 failed 0 skipped 0 suite-name "Valkyria Test Suite" skip-suite 0 skip-reason "" debug 0 expected-exit 0}
+  {:passed 0 :failed 0 :skipped 0 :suite-name "Valkyria Test Suite" :skip-suite 0 :skip-reason "" :debug 0 :expected-exit 0}
 })
 
 (fun {test/debug enabled} {
@@ -123,13 +123,13 @@
   do
     (= {test-name} (eval (head test)))
     (= {test-body} (head (tail test)))
-    (= {skip-suite} (dict/get ctx skip-suite))
-    (= {debug} (dict/get ctx debug))
+    (= {skip-suite} (plist/get ctx :skip-suite))
+    (= {debug} (plist/get ctx :debug))
 
     (if (== skip-suite 1)
       {do
         (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")
-        (dict/set ctx skipped (+ (dict/get ctx skipped) 1))}
+        (plist/set ctx :skipped (+ (plist/get ctx :skipped) 1))}
       {do
         (if (== debug 1)
           {do
@@ -161,60 +161,54 @@
           {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)})
 
         (if (== passed 1)
-          {(dict/set ctx passed (+ (dict/get ctx passed) 1))}
-          {(dict/set ctx failed (+ (dict/get ctx failed) 1))})})
+          {(plist/set ctx :passed (+ (plist/get ctx :passed) 1))}
+          {(plist/set ctx :failed (+ (plist/get ctx :failed) 1))})})
 })
 
 (fun {test/run & args} {
   do
-    (def {*test-passed*} 0)
-    (def {*test-failed*} 0)
-    (def {*test-skipped*} 0)
     (= {total} (len *test-registry*))
 
-    ; Get suite name from args or from global variable
-    (= {suite-name} *test-suite-name*)
-
-    ; Check if we have any tests to run
     (if (== total 0)
       {do
         (printf "❌ No tests registered!\n")
         (if (== *test-expected-exit* 1)
           {(shutdown 0)}
           {(shutdown 1)})}
-      {true}
-    )
-
-    ; Print skip reason if suite is skipped
-    (if (== *test-skip-suite* 1)
-      {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name *test-skip-reason*}
-      {printf "🧪 [%ld/%ld] %s\n" total total suite-name})
-
-    ; Run tests and collect results
-    (= {run-results} (map *test-run-one* *test-registry*))
-    (= {tests-executed} (len run-results))
-
-    ; Check if all tests executed
-    (if (!= tests-executed total)
-      {do
-        (printf "\n❌ ERROR: Only %ld/%ld tests executed!\n" tests-executed total)
-        (shutdown 1)}
       {true})
 
-    ; Print summary
+    (= {ctx} (test/context-new))
+    (= {ctx} (plist/set ctx :suite-name *test-suite-name*))
+    (= {ctx} (plist/set ctx :skip-suite *test-skip-suite*))
+    (= {ctx} (plist/set ctx :skip-reason *test-skip-reason*))
+    (= {ctx} (plist/set ctx :debug *test-debug*))
+    (= {ctx} (plist/set ctx :expected-exit *test-expected-exit*))
+
+    (= {suite-name} (plist/get ctx :suite-name))
+    (= {skip-suite} (plist/get ctx :skip-suite))
+    (= {skip-reason} (plist/get ctx :skip-reason))
+
+    (if (== skip-suite 1)
+      {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
+      {printf "🧪 [%ld/%ld] %s\n" total total suite-name})
+
+    (= {final-ctx} (foldl *test-run-one-ctx* ctx *test-registry*))
+
+    (= {passed} (plist/get final-ctx :passed))
+    (= {failed} (plist/get final-ctx :failed))
+    (= {skipped} (plist/get final-ctx :skipped))
+    (= {expected-exit} (plist/get final-ctx :expected-exit))
+
     (printf "\n🏁 Test Results: ")
-    (if (> *test-skipped* 0)
-      {printf "⏭️  %ld skipped\n" *test-skipped*}
-      {(if (== *test-failed* 0)
-        {printf "✨ All %ld tests passed! ✨\n" *test-passed*}
-        {printf "⚠️  %ld passed, %ld failed\n" *test-passed* *test-failed*})})
+    (if (> skipped 0)
+      {printf "⏭️  %ld skipped\n" skipped}
+      {(if (== failed 0)
+        {printf "✨ All %ld tests passed! ✨\n" passed}
+        {printf "⚠️  %ld passed, %ld failed\n" passed failed})})
 
-    ; Determine actual exit code
-    (= {actual-exit} (if (== *test-failed* 0) {0} {1}))
+    (= {actual-exit} (if (== failed 0) {0} {1}))
 
-    ; If expected exit matches actual, exit 0 (test suite passed)
-    ; This allows testing error paths without breaking the test run
-    (if (== actual-exit *test-expected-exit*)
+    (if (== actual-exit expected-exit)
       {(shutdown 0)}
       {(shutdown actual-exit)})
 })
