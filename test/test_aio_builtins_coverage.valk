@@ -144,11 +144,11 @@
     (== (aio/status h2) (quote :completed))
   })
 
-(test/define "aio/catch recovery that returns failed handle"
+(test/define "aio/catch recovery that returns failed handle propagates failure"
   {do
     (def {h} (aio/fail "error"))
     (def {h2} (aio/catch h (\ {err} {(aio/fail "recovery also failed")})))
-    (== (aio/status h2) (quote :completed))
+    (== (aio/status h2) (quote :failed))
   })
 
 ; ============================================================================
@@ -612,11 +612,11 @@
     (== (aio/status h2) (quote :completed))
   })
 
-(test/define "aio/catch that re-raises"
+(test/define "aio/catch that re-raises propagates failure"
   {do
     (def {h} (aio/fail "error1"))
     (def {h2} (aio/catch h (\ {e} {(aio/fail "error2")})))
-    (== (aio/status h2) (quote :completed))
+    (== (aio/status h2) (quote :failed))
   })
 
 (test/define "nested aio/all"

@@ -1045,15 +1045,30 @@ static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
   if (source->status == VALK_ASYNC_FAILED) {
     valk_lval_t *args = valk_lval_cons(source->error, valk_lval_nil());
     valk_lval_t *recovered = valk_lval_eval_call(e, fn, args);
-    // LCOV_EXCL_BR_START - error in recovery: callback-dependent
     if (LVAL_TYPE(recovered) == LVAL_ERR) {
       catch_handle->status = VALK_ASYNC_FAILED;
       catch_handle->error = recovered;
+    } else if (LVAL_TYPE(recovered) == LVAL_HANDLE) {
+      valk_async_handle_t *inner = recovered->async.handle;
+      if (inner->status == VALK_ASYNC_COMPLETED) {
+        catch_handle->status = VALK_ASYNC_COMPLETED;
+        catch_handle->result = inner->result;
+      } else if (inner->status == VALK_ASYNC_FAILED) {
+        catch_handle->status = VALK_ASYNC_FAILED;
+        catch_handle->error = inner->error;
+      } else {
+        catch_handle->status = VALK_ASYNC_RUNNING;
+        catch_handle->env = e;
+        catch_handle->on_complete = valk_lval_lambda(e,
+          valk_lval_qcons(valk_lval_sym("x"), valk_lval_nil()),
+          valk_lval_nil());
+        catch_handle->parent = inner;
+        valk_async_handle_add_child(inner, catch_handle);
+      }
     } else {
       catch_handle->status = VALK_ASYNC_COMPLETED;
       catch_handle->result = recovered;
     }
-    // LCOV_EXCL_BR_STOP
     return valk_lval_handle(catch_handle);
   }
 

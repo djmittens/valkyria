@@ -1,27 +1,53 @@
-0a. Run `git branch --show-current` to identify the current branch.
-0b. Study `ralph/specs/*` to learn the project specifications.
-0c. Study @ralph/IMPLEMENTATION_PLAN.md (if present) to understand the plan so far.
-0d. Study the source code to understand the current implementation.
+Follow all rules from AGENTS.md (prepended above). This prompt adds planning workflow.
 
-## Branch Awareness
+## Setup
 
-IMPORTANT: Check the **Branch:** field in @ralph/IMPLEMENTATION_PLAN.md.
-- If it doesn't match current branch, note this - the plan may be from different work.
-- Update the **Branch:** and **Last updated:** fields when you modify the plan.
+1. Run `git branch --show-current`
+2. Read `ralph/specs/*` for requirements
+3. Read current codebase to understand what exists
 
-## Task
+## Task: Gap Analysis
 
-Analyze specs vs existing code and create/update @ralph/IMPLEMENTATION_PLAN.md:
-1. Use subagents to study specs and source code
-2. Compare specs against implementation (gap analysis)
-3. Create prioritized task list in @ralph/IMPLEMENTATION_PLAN.md
-4. DO NOT implement anything - planning only
+Compare specs against CURRENT codebase. Create tasks ONLY for what's missing or broken.
 
-## Output
+DO NOT implement anything - planning only.
 
-Update @ralph/IMPLEMENTATION_PLAN.md with:
-- **Branch:** `<current branch>` at the top
-- **Last updated:** timestamp
-- Prioritized bullet list of tasks
-- Each task should be small enough for one iteration
-- Mark completed items with [x]
+## Updating Existing Plan
+
+If @ralph/IMPLEMENTATION_PLAN.md exists:
+- IGNORE old pending tasks (may be stale)
+- KEEP "## Completed" section
+- KEEP "## Discovered Issues" section
+- Generate NEW pending tasks from fresh analysis
+
+## Output Format
+
+Write @ralph/IMPLEMENTATION_PLAN.md:
+
+```markdown
+# Implementation Plan
+
+**Branch:** `<branch>`
+**Last updated:** <timestamp>
+
+## Spec: <spec-file.md>
+
+## Pending Tasks
+
+- [ ] Task 1 (highest priority)
+- [ ] Task 2
+
+## Completed
+
+- [x] Previous tasks (preserve)
+
+## Discovered Issues
+
+- [ISSUE-N] Title: description, reproduction steps, what was tried
+```
+
+## Rules
+
+- Each task completable in ONE iteration
+- Order by priority
+- Be specific - "Add X to Y" not "Improve Z"

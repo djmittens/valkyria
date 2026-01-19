@@ -421,6 +421,44 @@
       (\ {result} {{:status "200" :body "retry-success"}}))
   }))
 
+(def {delay-value-handler}
+  (\ {req} {
+    (aio/then
+      (delay-value aio 10 "delayed-val")
+      (\ {result} {(list :status "200" :body result)}))
+  }))
+
+(def {chain-fns-handler}
+  (\ {req} {
+    (aio/then
+      (chain (aio/pure 1) (list
+        (\ {x} {(aio/pure (+ x 1))})
+        (\ {x} {(aio/pure (* x 2))})
+        (\ {x} {(aio/pure (+ x 10))})))
+      (\ {result} {(list :status "200" :body (str "chain-" result))}))
+  }))
+
+(def {aio-map-handler}
+  (\ {req} {
+    (aio/then
+      (aio/map (aio/pure 10) (\ {x} {(* x 3)}))
+      (\ {result} {(list :status "200" :body (str "aiomap-" result))}))
+  }))
+
+(def {aio-try-success-handler}
+  (\ {req} {
+    (aio/then
+      (aio/try (aio/pure 42))
+      (\ {result} {{:status "200" :body "try-ok"}}))
+  }))
+
+(def {aio-try-fail-handler}
+  (\ {req} {
+    (aio/then
+      (aio/try (aio/fail "err"))
+      (\ {result} {{:status "200" :body "try-err-ok"}}))
+  }))
+
 ; ============================================================================
 ; Router
 ; ============================================================================
@@ -491,7 +529,12 @@
       {"/async-pure-error" {(async-pure-error-handler req)}}
       {"/async-direct-fail" {(async-direct-fail-handler req)}}
       {"/with-timeout-wins" {(with-timeout-wins-handler req)}}
-      {"/retry-backoff-success" {(retry-backoff-success-handler req)}}))
+      {"/retry-backoff-success" {(retry-backoff-success-handler req)}}
+      {"/delay-value" {(delay-value-handler req)}}
+      {"/chain-fns" {(chain-fns-handler req)}}
+      {"/aio-map" {(aio-map-handler req)}}
+      {"/aio-try-success" {(aio-try-success-handler req)}}
+      {"/aio-try-fail" {(aio-try-fail-handler req)}}))
   }))
 
 ; ============================================================================
@@ -728,6 +771,26 @@
 
 (test/async "retry-backoff immediate success" (\ {done} {
   (make-test "/retry-backoff-success" "200" "retry-success" done)
+}))
+
+(test/async "delay-value helper" (\ {done} {
+  (make-test "/delay-value" "200" "delayed-val" done)
+}))
+
+(test/async "chain with multiple fns" (\ {done} {
+  (make-test "/chain-fns" "200" "chain-14" done)
+}))
+
+(test/async "aio/map transform" (\ {done} {
+  (make-test "/aio-map" "200" "aiomap-30" done)
+}))
+
+(test/async "aio/try on success" (\ {done} {
+  (make-test "/aio-try-success" "200" "try-ok" done)
+}))
+
+(test/async "aio/try on failure" (\ {done} {
+  (make-test "/aio-try-fail" "200" "try-err-ok" done)
 }))
 
 ; ============================================================================

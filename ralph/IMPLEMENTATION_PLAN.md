@@ -137,7 +137,5 @@ All requirements met:
 
 - Many remaining uncovered branches in parser.c are internal implementation details (memory allocation null checks, dynamic array growth logic) that require mocking infrastructure to test effectively
 - Several 0% branches in parser.c (lines 2941-2942, 3033, 3035, 3126-3161) are in coverage-specific code paths (`#ifdef VALK_COVERAGE`) or unused builtins (`valk_builtin_if` superseded by special form)
-- **async_handles.valk timer paths**: Functions like `retry-backoff`, `with-timeout`, and `graceful-shutdown` use `aio/delay` which requires timer callbacks from the event loop. Testing these paths via HTTP handlers causes issues:
-  - `aio/catch` with async recovery returns the recovery handle as a value (not awaited), breaking `retry-backoff`'s retry logic
-  - Race results with timer-based outcomes return empty HTTP response bodies
-  - `graceful-shutdown` cancel path (line 75) requires timer-based race to win, untestable in current infrastructure
+- **[RESOLVED] async_handles.valk timer paths**: Fixed `aio/catch` to properly flat-map when recovery function returns a handle (same behavior as `aio/then`). Added HTTP integration tests for `delay-value`, `chain`, `aio/map`, and `aio/try`.
+- **[BLOCKED] graceful-shutdown cancel path**: Calling `aio/cancel` from within an async callback (e.g., in `aio/race` winner's callback) causes a crash. This is a pre-existing bug in the async system. The `graceful-shutdown` function's timeout path (line 75: `(map aio/cancel handles)`) cannot be tested until this is fixed.
