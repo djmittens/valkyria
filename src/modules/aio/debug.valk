@@ -3,6 +3,7 @@
 ; Load with: (load "src/modules/aio/debug.valk")
 
 (load "src/modules/aio/sse.valk")
+(load "src/modules/aio/debug-broadcaster.valk")
 
 ; Base path for debug assets (relative to where valk is run from)
 (def {aio/debug-assets-path} "src/modules/aio/debug/")
@@ -94,24 +95,8 @@
     (str "{\"metrics\":{\"aio\":" aio-json ",\"modular\":" modular-json ",\"vm\":" vm-json ",\"registry\":" registry-json "},\"memory\":" memory-json "}")
   })
 
-; SSE update interval in milliseconds
-(def {aio/debug-sse-interval-ms} 100)
-
-; Build delta state for SSE streaming
-; Uses compact JSON for all sections to minimize bandwidth
-(fun {aio/debug-diagnostics-delta sys}
-  {
-    ; Metrics are updated continuously, no explicit update needed
-    (= {delta} (metrics/collect-delta))
-    (= {delta-json} (metrics/delta-json delta))
-    (= {aio-json} (aio/metrics-json-compact sys))
-    (= {vm-json} (vm/metrics-json-compact))
-    (= {memory-json} (aio/diagnostics-state-json-compact sys))
-    (str "{\"metrics\":{\"aio\":" aio-json ",\"vm\":" vm-json ",\"modular\":" delta-json "},\"memory\":" memory-json "}")
-  })
-
 ; SSE handler for /debug/diagnostics/memory
-; Sends full state first, then deltas on subsequent intervals
+; Uses shared broadcaster for efficient multi-client streaming
 (fun {aio/debug-diagnostics-sse-handler sys req}
   {(if (not (ref? req))
      `{:status "200" 
@@ -120,23 +105,7 @@
        :body-type :sse-stream}
      (do
        (= {stream} (sse/open req))
-       (= {captured-sys} sys)
-       (= {closed} (atom false))
-       (= {first-sent} (atom false))
-       (stream/on-close stream (\ {} {(atom/set! closed true)}))
-       (aio/interval captured-sys aio/debug-sse-interval-ms (\ {} 
-         {(if (atom/get closed)
-           :stop
-           (if (== (stream/writable? stream) 0)
-             :stop
-             (if (atom/get first-sent)
-               (do
-                 (= {result} (stream/write stream (str "event: diagnostics-delta\ndata: " (aio/debug-diagnostics-delta captured-sys) "\n\n")))
-                 (if (error? result) :stop result))
-               (do
-                 (atom/set! first-sent true)
-                 (= {result} (stream/write stream (str "event: diagnostics\ndata: " (aio/debug-diagnostics-state captured-sys) "\n\n")))
-                 (if (error? result) :stop result)))))}))
+       (debug/subscribe sys stream)
        :deferred))})
 
 ; Create a debug handler that routes debug requests
