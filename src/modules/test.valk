@@ -10,6 +10,10 @@
 (def {*test-debug*} 0)           ; Set to 1 to enable debug output
 (def {*test-expected-exit*} 0)   ; Expected exit code (0 = pass, 1 = fail expected)
 
+(fun {test/context-new} {
+  {passed 0 failed 0 skipped 0 suite-name "Valkyria Test Suite" skip-suite 0 skip-reason "" debug 0 expected-exit 0}
+})
+
 (fun {test/debug enabled} {
   (def {*test-debug*} enabled)
 })
