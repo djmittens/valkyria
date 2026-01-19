@@ -1,28 +1,55 @@
-Follow all rules from AGENTS.md (prepended above). This prompt adds verification workflow.
+# VERIFY Stage
 
-## Spec Verification
+All tasks are done. Verify the spec is actually complete.
 
-INDEPENDENT verification - do not trust previous claims of completion.
+## Step 1: Get Context
 
-1. Read `ralph/specs/*` for acceptance criteria
-2. Run actual verification commands (tests, coverage, benchmarks)
-3. Compare results against spec requirements
+Run `ralph query` to see completed tasks.
 
-## Output Signal (required)
+Read the spec file: `ralph/specs/<spec>`
 
+## Step 2: Verify Each Requirement
+
+For EACH requirement/acceptance criterion in the spec:
+
+1. **Check implementation exists** - search codebase, read relevant files
+2. **Check tests exist and pass** - run the test suite
+3. **Check edge cases** - verify the implementation handles them
+
+Be thorough. The goal is to catch gaps before marking the spec complete.
+
+## Step 3: Decision
+
+### If ALL requirements are met:
+
+```
+ralph task accept
+```
+
+Then output:
 ```
 [RALPH] SPEC_COMPLETE
 ```
-ALL acceptance criteria verified. Ready to exit.
+
+### If requirements are NOT met:
+
+For each gap found, add a task:
+```
+ralph task add '{"name": "what's missing", "accept": "how to verify"}'
+```
+
+Then output:
+```
+[RALPH] SPEC_INCOMPLETE: <summary of what's missing>
+```
+
+The loop will continue with BUILD stage to implement the new tasks.
+
+## Progress Reporting
 
 ```
-[RALPH] SPEC_INCOMPLETE
+[RALPH] === VERIFY: <spec name> ===
+[RALPH] Checking: <requirement being verified>
 ```
-Then list what's missing. Will trigger re-planning.
 
-## Rules
-
-- Actually run commands, don't assume
-- Be strict - partial is not complete
-- Do not make changes, only verify
-- Use `timeout 60` for commands that might hang
+## EXIT after either accepting or adding tasks

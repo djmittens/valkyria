@@ -1,65 +1,42 @@
-0a. Run `git branch --show-current` to identify the current branch.
-0b. List files in `ralph/specs/` to see active specifications.
-0c. Study the source code to understand the current implementation.
+## Target Spec: {{SPEC_FILE}}
 
-## Task: Gap Analysis
+1. Run `ralph query` to see current state
+2. Read the spec file: `ralph/specs/{{SPEC_FILE}}`
+3. Study the source code to understand the current implementation
 
-Compare specs against the CURRENT codebase and generate a fresh task list:
+## Task: Gap Analysis for {{SPEC_FILE}}
 
-1. Use subagents to study each spec file and relevant source code
-2. For each spec requirement, check if it's already implemented
+Compare the spec against the CURRENT codebase and generate a task list:
+
+1. Use subagents to study the spec and relevant source code thoroughly
+2. For each requirement in the spec, check if it's already implemented
 3. Create tasks ONLY for what's missing or broken
 4. DO NOT implement anything - planning only
 
-## Spec Lifecycle
-
-Specs in `ralph/specs/` are ACTIVE work. When fully implemented, they get deleted (git preserves history).
-
-If `ralph/specs/` is empty:
-- Output: `[RALPH] ALL_SPECS_COMPLETE`
-- EXIT immediately - nothing to plan
-
-## Updating an Existing Plan
-
-The plan is disposable - regenerate it based on current reality, not the old plan.
-
-If @ralph/IMPLEMENTATION_PLAN.md exists:
-- IGNORE the old pending tasks (they may be stale)
-- KEEP the "## Completed" section as historical record  
-- KEEP the "## Discovered Issues" section
-- Generate NEW pending tasks from fresh gap analysis
-
 ## Output
 
-Write @ralph/IMPLEMENTATION_PLAN.md with:
-
-```markdown
-# Implementation Plan
-
-**Branch:** `<current branch>`
-**Last updated:** <timestamp>
-
-## Spec: <spec-filename.md>
-
-- [ ] Task 1 for this spec
-- [ ] Task 2 for this spec
-
-## Spec: <another-spec.md>
-
-- [ ] Task 1 for another spec
-
-## Completed
-
-- [x] Previous completed tasks (preserve from old plan)
-
-## Discovered Issues
-
-- Issues found during implementation (preserve from old plan)
+For each task identified, run:
 ```
+ralph task add '{"name": "Short task name", "notes": "Implementation details", "accept": "How to verify", "deps": ["t-xxxx"]}'
+```
+
+Task fields:
+- `name` (required): Short description of what to do (e.g., "Add unit tests for parser")
+- `notes` (optional): Implementation context, hints, relevant files
+- `accept` (optional): Acceptance criteria / test plan (e.g., "pytest tests/test_parser.py passes")
+- `deps` (optional): List of task IDs this task depends on
+
+The command returns the new task ID (e.g., "Task added: t-1a2b - ..."). Use this ID when other tasks depend on it.
 
 Rules:
 - Each task should be completable in ONE iteration
-- Order by priority (most important first)
+- Add tasks in dependency order - add prerequisite tasks first so you have their IDs
 - Be specific - "Add X to Y" not "Improve Z"
-- Group tasks under their source spec using `## Spec: <filename>`
-- Only create sections for specs that exist in `ralph/specs/`
+- Tasks are for {{SPEC_FILE}} only
+- Include `accept` criteria when testable
+- Use `deps` when a task requires another task to be done first
+
+When done adding tasks, output:
+```
+[RALPH] PLAN_COMPLETE: Added N tasks for {{SPEC_FILE}}
+```

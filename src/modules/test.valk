@@ -11,28 +11,48 @@
   {:passed 0 :failed 0 :skipped 0 :suite-name "Valkyria Test Suite" :skip-suite 0 :skip-reason "" :debug 0 :expected-exit 0}
 })
 
-(fun {test/debug enabled} {
-  (def {*test-debug*} enabled)
+(fun {test/debug ctx-or-enabled & args} {
+  (if (== (len args) 0)
+    {do
+      (def {*test-debug*} ctx-or-enabled)
+      ctx-or-enabled}
+    {(plist/set ctx-or-enabled :debug (head args))})
 })
 
-(fun {test/suite name} {
-  (def {*test-suite-name*} name)
+(fun {test/suite ctx-or-name & args} {
+  (if (== (len args) 0)
+    {do
+      (def {*test-suite-name*} ctx-or-name)
+      ctx-or-name}
+    {(plist/set ctx-or-name :suite-name (head args))})
 })
 
-; Skip all tests in this suite with a reason
-(fun {test/skip reason} {
-  (def {*test-skip-suite*} 1)
-  (def {*test-skip-reason*} reason)
+(fun {test/skip ctx-or-reason & args} {
+  (if (== (len args) 0)
+    {do
+      (def {*test-skip-suite*} 1)
+      (def {*test-skip-reason*} ctx-or-reason)
+      ctx-or-reason}
+    {do
+      (= {ctx} ctx-or-reason)
+      (= {ctx} (plist/set ctx :skip-suite 1))
+      (plist/set ctx :skip-reason (head args))})
 })
 
-; Expect the test suite to exit with a specific code
-; Use this when testing error paths that should cause test failures
-(fun {test/expect-exit code} {
-  (def {*test-expected-exit*} code)
+(fun {test/expect-exit ctx-or-code & args} {
+  (if (== (len args) 0)
+    {do
+      (def {*test-expected-exit*} ctx-or-code)
+      ctx-or-code}
+    {(plist/set ctx-or-code :expected-exit (head args))})
 })
 
 (fun {test name body} {
   (list name body)
+})
+
+(fun {test/add tests name body} {
+  (join tests (list (test name body)))
 })
 
 (fun {test/define name body} {
@@ -118,29 +138,78 @@
         {false})})})
 })
 
+(fun {*test-is-keyword* val} {
+  (= {s} (str val))
+  (= {parts} (str/split s ":"))
+  (if (< (len parts) 2)
+    {false}
+    {(== (head parts) "")})
+})
+
+(fun {*test-is-config* arg} {
+  (if (not (list? arg))
+    {false}
+    {(if (== (len arg) 0)
+      {false}
+      {(*test-is-keyword* (head arg))})})
+})
+
+(fun {*test-parse-args* args} {
+  (= {tests} *test-registry*)
+  (= {config} {})
+  (if (== (len args) 0)
+    {(list tests config)}
+    {do
+      (= {first} (head args))
+      (if (*is-test-list* first)
+        {do
+          (= {tests} first)
+          (if (> (len args) 1)
+            {(= {config} (head (tail args)))}
+            {true})}
+        {(if (*test-is-config* first)
+          {(= {config} first)}
+          {true})})
+      (list tests config)})
+})
+
+(fun {*test-ctx-from-config* config} {
+  (= {ctx} (test/context-new))
+  (= {ctx} (plist/set ctx :suite-name (if (plist/has? config :suite-name)
+    {(plist/get config :suite-name)}
+    {*test-suite-name*})))
+  (= {ctx} (plist/set ctx :skip-suite (if (plist/has? config :skip-suite)
+    {(plist/get config :skip-suite)}
+    {*test-skip-suite*})))
+  (= {ctx} (plist/set ctx :skip-reason (if (plist/has? config :skip-reason)
+    {(plist/get config :skip-reason)}
+    {*test-skip-reason*})))
+  (= {ctx} (plist/set ctx :debug (if (plist/has? config :debug)
+    {(plist/get config :debug)}
+    {*test-debug*})))
+  (= {ctx} (plist/set ctx :expected-exit (if (plist/has? config :expected-exit)
+    {(plist/get config :expected-exit)}
+    {*test-expected-exit*})))
+  ctx
+})
+
 (fun {test/run & args} {
   do
-    (= {tests} (if (> (len args) 0)
-      {(if (*is-test-list* (head args))
-        {(head args)}
-        {*test-registry*})}
-      {*test-registry*}))
+    (= {parsed} (*test-parse-args* args))
+    (= {tests} (head parsed))
+    (= {config} (head (tail parsed)))
     (= {total} (len tests))
+
+    (= {ctx} (*test-ctx-from-config* config))
+    (= {expected-exit} (plist/get ctx :expected-exit))
 
     (if (== total 0)
       {do
         (printf "❌ No tests registered!\n")
-        (if (== *test-expected-exit* 1)
+        (if (== expected-exit 1)
           {(shutdown 0)}
           {(shutdown 1)})}
       {true})
-
-    (= {ctx} (test/context-new))
-    (= {ctx} (plist/set ctx :suite-name *test-suite-name*))
-    (= {ctx} (plist/set ctx :skip-suite *test-skip-suite*))
-    (= {ctx} (plist/set ctx :skip-reason *test-skip-reason*))
-    (= {ctx} (plist/set ctx :debug *test-debug*))
-    (= {ctx} (plist/set ctx :expected-exit *test-expected-exit*))
 
     (= {suite-name} (plist/get ctx :suite-name))
     (= {skip-suite} (plist/get ctx :skip-suite))

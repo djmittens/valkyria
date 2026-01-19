@@ -1,75 +1,59 @@
-0a. Run `git branch --show-current` to identify the current branch.
-0b. Study @ralph/IMPLEMENTATION_PLAN.md for current task list.
-0c. List files in `ralph/specs/` to see active specifications.
+# BUILD Stage
 
-## Branch Awareness
+Implement the next pending task.
 
-IMPORTANT: Check the **Branch:** field in @ralph/IMPLEMENTATION_PLAN.md.
-- If it matches current branch, continue with tasks.
-- If it doesn't match, the plan is from different work - proceed carefully or run `ralph plan` first.
+## Step 1: Get Task
 
-## Termination Check
+Run `ralph query` to get current state. The `next.task` field shows:
+- `name`: what to do
+- `notes`: implementation hints (if provided)
+- `accept`: how to verify it works (if provided)
 
-If `ralph/specs/` is empty (no spec files):
-- Output: `[RALPH] ALL_SPECS_COMPLETE`
-- EXIT immediately - all work is done
+## Step 2: Understand Context
 
-If @ralph/IMPLEMENTATION_PLAN.md has no pending tasks (no `- [ ]` items):
-- Output: `[RALPH] ALL_SPECS_COMPLETE`
-- EXIT immediately
+1. Read the spec file: `ralph/specs/<spec>`
+2. Search codebase first - don't assume something isn't implemented
+3. Review `notes` for implementation hints
 
-## CRITICAL: ONE TASK, THEN EXIT
+## Step 3: Implement
 
-1. Pick ONE incomplete `- [ ]` item from @ralph/IMPLEMENTATION_PLAN.md
-2. Identify which `## Spec:` section the task belongs to
-3. Read ONLY that specific spec file from `ralph/specs/`
-4. Implement the task (search codebase first - don't assume not implemented)
-5. Run tests to validate the functionality
-6. Update @ralph/IMPLEMENTATION_PLAN.md:
-   - Mark task complete: `- [x]`
-   - Update **Last updated:** timestamp
-7. `git add -A && git commit && git push`
+Build the feature/fix. Rules:
+- Complete implementations only, no stubs
+- No code comments unless explicitly requested
 
-## Spec Completion Check
+## Step 4: Validate
 
-After marking a task complete, check if ALL tasks under that spec's `## Spec:` section are now `[x]`.
+Before marking done, verify the implementation:
+1. If `accept` criteria provided, verify those specifically
+2. Run relevant tests
+3. Ensure the implementation matches the spec
 
-If ALL tasks for a spec are complete:
-1. **VALIDATE**: Re-read the spec file and verify ALL requirements/acceptance criteria are met
-2. If validation PASSES:
-   - Delete the spec file: `rm ralph/specs/<filename>.md`
-   - Move completed tasks to "## Completed" section
-   - Output: `[RALPH] SPEC_COMPLETE: <filename>.md`
-   - `git add -A && git commit -m "spec complete: <filename>" && git push`
-3. If validation FAILS:
-   - Add new tasks to the spec's section for missing requirements
-   - Document gaps in "## Discovered Issues"
-   - Output: `[RALPH] SPEC_INCOMPLETE: <filename>.md - <reason>`
+## Step 5: Complete
 
-**EXIT** after completing ONE task (and any spec validation).
+```
+ralph task done
+```
+
+This marks the task done and auto-commits.
+
+## Discovering Issues
+
+If you find a problem unrelated to the current task:
+```
+ralph issue add "description of issue"
+```
+
+Issues are investigated later in the INVESTIGATE stage.
 
 ## Progress Reporting
 
 ```
-[RALPH] BRANCH: <current branch>
-[RALPH] SPEC: <spec-filename.md>
-[RALPH] === START: <task> ===
+[RALPH] === START: <task name> ===
 ```
 
 ```
-[RALPH] === DONE: <task> ===
+[RALPH] === DONE: <task name> ===
 [RALPH] RESULT: <summary>
 ```
 
-## Issue Handling
-
-1. Document issues in @ralph/IMPLEMENTATION_PLAN.md under "## Discovered Issues"
-2. DO NOT work around problems - fix them or document them
-3. If stuck >5 min, document and EXIT
-
-## Rules
-
-- ONE task, then EXIT (the loop restarts you fresh)
-- Complete implementations only, no stubs
-- No comments in code unless explicitly requested
-- Validate spec completion thoroughly before archiving
+## EXIT after marking task done

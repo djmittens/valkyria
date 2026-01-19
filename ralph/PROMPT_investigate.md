@@ -1,62 +1,55 @@
-Follow all rules from AGENTS.md (prepended above). This prompt adds investigation workflow.
+# INVESTIGATE Stage
 
-## Issue: ISSUE-N
+An issue was discovered during build. Research and resolve it.
 
-Deep-dive investigation on a blocker. This is a RESEARCH-ONLY task - do not implement fixes.
+## Step 1: Get Issue
 
-## Steps
+Run `ralph query` to see current state. The `next.item` shows the issue description.
 
-1. **Reproduce** - Verify issue still exists, find minimal repro
-2. **Analyze** - Understand root cause (not just symptoms)
-3. **Research** - Search codebase AND web for similar patterns, known issues, solutions
-4. **Document** - Update the issue in IMPLEMENTATION_PLAN.md with findings and options
+## Step 2: Research
 
-## Web Search
+Investigate thoroughly:
+1. Read relevant code
+2. Run tests to understand the failure
+3. Check git history if relevant
+4. Understand root cause before acting
 
-Use web search to:
-- Find known issues / bug reports for similar problems
-- Check library documentation for correct usage
-- Research error messages
-- Find solutions others have used
+## Step 3: Resolve
 
-Do NOT use web search for:
-- Project-specific code (use codebase search)
-- Things you already know confidently
+Choose ONE approach:
 
-## Output: Update the Issue
+### Option A: Create a fix task
 
-Update the issue in IMPLEMENTATION_PLAN.md with your findings:
-
+If the fix is non-trivial:
 ```
-- **[NEEDS_DECISION]** Title: Root cause explanation.
-  - **Option A**: [approach] - Pros: ... Cons: ...
-  - **Option B**: [approach] - Pros: ... Cons: ...
-  - **Recommendation**: [which option and why]
+ralph task add '{"name": "fix for issue", "notes": "root cause analysis", "accept": "how to verify fix"}'
+ralph issue done
 ```
 
-If only one clear fix exists, you may mark it `**[RESOLVED]**` and implement it.
+### Option B: Fix directly
 
-## Output Signal (required)
+If the fix is trivial (typo, simple bug):
+1. Make the fix
+2. Run tests to verify
+3. Mark resolved:
+```
+ralph issue done
+```
+
+### Option C: Out of scope
+
+If the issue is outside the current spec's scope:
+```
+ralph issue done
+```
+Note in the commit message why it's being deferred.
+
+## Progress Reporting
 
 ```
-[RALPH] ISSUE_DOCUMENTED ISSUE-N
+[RALPH] === INVESTIGATE: <issue description> ===
+[RALPH] Root cause: <what you found>
+[RALPH] Resolution: <what you're doing about it>
 ```
-Options documented, waiting for user decision.
 
-```
-[RALPH] ISSUE_RESOLVED ISSUE-N
-```
-Clear fix existed, implemented and tested.
-
-```
-[RALPH] ISSUE_WONTFIX ISSUE-N
-```
-Not a real blocker / intentionally not fixing. Explain why.
-
-## Critical Rules
-
-- **Research first, document options** - Don't jump to implementation
-- If multiple valid approaches exist, document them and let user decide
-- If you discover NEW bugs, document them as new issues
-- DO NOT work around bugs - fix them or document them
-- Use `timeout 60` for commands that might hang
+## EXIT after resolving the issue
