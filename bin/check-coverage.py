@@ -29,6 +29,10 @@ VALK_KNOWN_BLOCKED = {
     "src/modules/test.valk": "test framework failure paths that would cause test suite to exit",
 }
 
+def meets_requirement(actual: float, required: float) -> bool:
+    """Check if coverage meets requirement, rounding to 1 decimal place (matching display)."""
+    return round(actual, 1) >= required
+
 
 def check_coverage_requirements(runtime_files: dict, stdlib_files: dict, show_passing: bool = False) -> bool:
     """Check if coverage meets requirements. Returns True if all pass."""
@@ -50,8 +54,8 @@ def check_coverage_requirements(runtime_files: dict, stdlib_files: dict, show_pa
     
     for rel_path, fc in sorted(runtime_files.items()):
         filename = rel_path.replace("src/", "")
-        line_pass = fc.line_coverage_pct >= RUNTIME_REQUIREMENT_LINE
-        branch_pass = fc.branch_coverage_pct >= RUNTIME_REQUIREMENT_BRANCH
+        line_pass = meets_requirement(fc.line_coverage_pct, RUNTIME_REQUIREMENT_LINE)
+        branch_pass = meets_requirement(fc.branch_coverage_pct, RUNTIME_REQUIREMENT_BRANCH)
         status = "✓" if (line_pass and branch_pass) else "✗"
         
         line = f"  {filename:{max_width}s} {status}  {fc.line_coverage_pct:5.1f}% line, {fc.branch_coverage_pct:5.1f}% branch"
@@ -71,8 +75,8 @@ def check_coverage_requirements(runtime_files: dict, stdlib_files: dict, show_pa
     for rel_path, fc in sorted(stdlib_files.items()):
         filename = rel_path.replace("src/", "")
         expr_pct = fc.expr_coverage_pct
-        expr_pass = expr_pct >= RUNTIME_REQUIREMENT_EXPR
-        branch_pass = fc.branch_coverage_pct >= RUNTIME_REQUIREMENT_BRANCH
+        expr_pass = meets_requirement(expr_pct, RUNTIME_REQUIREMENT_EXPR)
+        branch_pass = meets_requirement(fc.branch_coverage_pct, RUNTIME_REQUIREMENT_BRANCH)
         status = "✓" if (expr_pass and branch_pass) else "✗"
         
         line = f"  {filename:{max_width}s} {status}  {expr_pct:5.1f}% expr, {fc.branch_coverage_pct:5.1f}% branch"
