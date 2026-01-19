@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18T22:45
+**Last updated:** 2026-01-18T23:00
 
 ---
 
@@ -26,7 +26,7 @@ The main thread and event loop thread share environments. `valk_lenv_put` has no
   - [x] Update `test/run` and `test/run-async` to accept explicit test list (backward compatible)
   - Note: Test file migration to inline API is optional - existing test/define pattern only mutates globals at load time (single-threaded), not during concurrent test execution. New inline API available for users who want zero global mutations.
 
-- [ ] **Phase 2: Audit all .valk files** - Find and fix `(def {*` mutations
+- [x] **Phase 2: Audit all .valk files** - Find and fix `(def {*` mutations
   - [x] src/prelude.valk - Clean: only constant definitions (nil, true, false, otherwise, curry, fun)
   - [x] src/async_monadic.valk - Clean: `async/run` uses local `*async-run-result*` capture (pure sync op, no threading concern)
   - [x] src/async_handles.valk - Clean: only function definitions
