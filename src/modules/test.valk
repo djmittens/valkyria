@@ -119,6 +119,52 @@
         true})
 })
 
+(fun {*test-run-one-ctx* ctx test} {
+  do
+    (= {test-name} (eval (head test)))
+    (= {test-body} (head (tail test)))
+    (= {skip-suite} (dict/get ctx skip-suite))
+    (= {debug} (dict/get ctx debug))
+
+    (if (== skip-suite 1)
+      {do
+        (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")
+        (dict/set ctx skipped (+ (dict/get ctx skipped) 1))}
+      {do
+        (if (== debug 1)
+          {do
+            (printf "[DEBUG] Running test: ")
+            (print test)
+            (printf "[DEBUG] Test name: %s\n" test-name)
+            (printf "[DEBUG] Test body: ")
+            (print test-body)}
+          {true})
+
+        (= {start-time} (time-us {}))
+        (= {result} (eval test-body))
+        (= {end-time} (time-us {}))
+        (= {elapsed} (- end-time start-time))
+
+        (if (== debug 1)
+          {do
+            (printf "[DEBUG] Result: ")
+            (print result)
+            (if (error? result)
+              {printf "[DEBUG] Result is an ERROR!\n"}
+              {true})}
+          {true})
+
+        (= {passed} (if (== result true) {1} {0}))
+
+        (if (== passed 1)
+          {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
+          {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)})
+
+        (if (== passed 1)
+          {(dict/set ctx passed (+ (dict/get ctx passed) 1))}
+          {(dict/set ctx failed (+ (dict/get ctx failed) 1))})})
+})
+
 (fun {test/run & args} {
   do
     (def {*test-passed*} 0)
