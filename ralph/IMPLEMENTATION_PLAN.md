@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18 17:10
+**Last updated:** 2026-01-18 17:35
 
 ## Spec: coverage-improvement.md
 
@@ -50,8 +50,8 @@
 
 - [~] Improve async_handles.valk expr coverage (80.2% → 90%) - Blocked at 86.1%: remaining 4% requires timer-dependent async paths that crash when tested via HTTP
 - [~] Improve async_monadic.valk expr coverage (86.1% → 90%) - Blocked at 86.8%: added tests for async/try-result edge cases; remaining gap is async/forever (infinite loop, untestable) and 113 partial-coverage lines from CPS internal unwrapping (continuation-passing internals not directly exercisable)
-- [ ] Improve http_api.valk expr coverage (89.1% → 90%)
-- [ ] Improve modules/aio/debug.valk expr coverage (84.7% → 90%)
+- [~] Improve http_api.valk expr coverage (89.1% → 90%) - Blocked at 89.1%: remaining 0.9% (5 exprs) is from partial eval-point coverage on function definitions (e.g., "3/4 eval points" on `fun` forms); all function bodies and branches are fully tested (100% branch coverage), but the Valk coverage tool counts internal AST evaluation points within function/lambda definitions that aren't exercisable through normal test invocations; added 59 comprehensive tests covering all public API functions multiple times
+- [~] Improve modules/aio/debug.valk expr coverage (84.7% → 90%) - Blocked at 85.0%: remaining 5% is from SSE streaming paths inside `aio/interval` callbacks (lines 129, 131: `:stop` on close/non-writable) and quasiquote internal eval points (lines 69, 117-120); these paths only execute during live HTTP/2 SSE streaming with real connection close/backpressure events; added test for unknown query param key to cover `otherwise` branch in slab-buckets handler
 - [ ] Improve modules/aio/sse.valk expr coverage (76.5% → 90%)
 - [ ] Improve modules/test.valk expr coverage (86.0% → 90%)
 

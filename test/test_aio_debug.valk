@@ -296,6 +296,16 @@
     true
   })
 
+; Test: aio/debug-handle-slab-buckets with unknown query param key (hits otherwise branch)
+(test/define "slab-buckets-unknown-param-key"
+  {do
+    (= {resp} (aio/debug-handle-slab-buckets mock-sys "unknown=value&start=100"))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (plist/get resp (head {:status}))
+      "status should be 200")
+    true
+  })
+
 ; Test: /debug/metrics/state route returns diagnostics state JSON
 (test/define "route-debug-metrics-state-returns-json"
   {do
