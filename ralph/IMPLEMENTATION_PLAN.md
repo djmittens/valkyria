@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-19 01:20
+**Last updated:** 2026-01-18 17:10
 
 ## Spec: coverage-improvement.md
 
@@ -49,7 +49,7 @@
 ### Priority 6: Valk Stdlib Files
 
 - [~] Improve async_handles.valk expr coverage (80.2% → 90%) - Blocked at 86.1%: remaining 4% requires timer-dependent async paths that crash when tested via HTTP
-- [ ] Improve async_monadic.valk expr coverage (86.1% → 90%)
+- [~] Improve async_monadic.valk expr coverage (86.1% → 90%) - Blocked at 86.8%: added tests for async/try-result edge cases; remaining gap is async/forever (infinite loop, untestable) and 113 partial-coverage lines from CPS internal unwrapping (continuation-passing internals not directly exercisable)
 - [ ] Improve http_api.valk expr coverage (89.1% → 90%)
 - [ ] Improve modules/aio/debug.valk expr coverage (84.7% → 90%)
 - [ ] Improve modules/aio/sse.valk expr coverage (76.5% → 90%)

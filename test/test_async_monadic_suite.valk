@@ -332,6 +332,37 @@
     (and (== (head result) "ok") (== (nth 2 result) 42))
   })
 
+(test/define "async/try-result wraps list with length 1"
+  {do
+    ; Async op that returns a single-element list (not a tagged tuple)
+    (def {single-elem-async} (\ {k} { (k (list "value")) }))
+    (def {async-op} (async/try-result single-elem-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (and (== (head result) "ok") (== (nth 2 result) (list "value")))
+  })
+
+(test/define "async/try-result wraps list with length 3"
+  {do
+    ; Async op that returns a three-element list (not a tagged tuple)
+    (def {triple-elem-async} (\ {k} { (k (list 1 2 3)) }))
+    (def {async-op} (async/try-result triple-elem-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    (and (== (head result) "ok") (== (nth 2 result) (list 1 2 3)))
+  })
+
+(test/define "async/try-result wraps list with non-standard tag"
+  {do
+    ; Async op that returns a 2-element list but with non-ok/error tag
+    (def {custom-tag-async} (\ {k} { (k (list "warning" "something happened")) }))
+    (def {async-op} (async/try-result custom-tag-async))
+    (def {result} nil)
+    (async-op (\ {x} {(def {result} x)}))
+    ; Should wrap the whole list in "ok" since "warning" is not a recognized tag
+    (and (== (head result) "ok") (== (nth 2 result) (list "warning" "something happened")))
+  })
+
 (test/define "async/recover uses primary on success"
   {do
     ; Using tagged ok result
