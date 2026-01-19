@@ -62,8 +62,8 @@ static void test_aio_all_multiple_completed(VALK_TEST_ARGS()) {
   ASSERT_LVAL_TYPE(result, LVAL_HANDLE);
   valk_async_handle_t *handle = result->async.handle;
   ASSERT_NOT_NULL(handle);
-  ASSERT_EQ(handle->status, VALK_ASYNC_COMPLETED);
-  ASSERT_NOT_NULL(handle->result);
+  ASSERT_EQ(atomic_load_explicit(&handle->status, memory_order_acquire), VALK_ASYNC_COMPLETED);
+  ASSERT_NOT_NULL(atomic_load_explicit(&handle->result, memory_order_acquire));
 
   valk_lenv_free(env);
   VALK_PASS();
@@ -78,7 +78,7 @@ static void test_aio_all_one_failed(VALK_TEST_ARGS()) {
   ASSERT_LVAL_TYPE(result, LVAL_HANDLE);
   valk_async_handle_t *handle = result->async.handle;
   ASSERT_NOT_NULL(handle);
-  ASSERT_EQ(handle->status, VALK_ASYNC_FAILED);
+  ASSERT_EQ(atomic_load_explicit(&handle->status, memory_order_acquire), VALK_ASYNC_FAILED);
 
   valk_lenv_free(env);
   VALK_PASS();

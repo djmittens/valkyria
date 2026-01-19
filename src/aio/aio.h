@@ -43,8 +43,8 @@ struct valk_async_handle_t {
   struct valk_lval_t *on_cancel;
   struct valk_lenv_t *env;
 
-  struct valk_lval_t *result;
-  struct valk_lval_t *error;
+  _Atomic(struct valk_lval_t *) result;
+  _Atomic(struct valk_lval_t *) error;
 
   struct valk_region *region;
 

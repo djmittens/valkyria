@@ -647,7 +647,8 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
             (unsigned long long)ctx->request_id, status);
   // LCOV_EXCL_BR_START connection failure paths in async callback
   if (status != VALK_ASYNC_COMPLETED) {
-    valk_lval_t *err = handle->error ? handle->error : valk_lval_err("Connection failed");
+    valk_lval_t *err_val = atomic_load_explicit(&handle->error, memory_order_acquire);
+    valk_lval_t *err = err_val ? err_val : valk_lval_err("Connection failed");
     VALK_ERROR("http2/client-request[%llu]: connection failed: %s", 
                (unsigned long long)ctx->request_id,
                LVAL_TYPE(err) == LVAL_ERR ? err->str : "unknown");
@@ -659,7 +660,7 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
     goto cleanup;
   }
 
-  valk_lval_t *result = handle->result;
+  valk_lval_t *result = atomic_load_explicit(&handle->result, memory_order_acquire);
   if (!result || LVAL_TYPE(result) != LVAL_REF) {
     VALK_ERROR("http2/client-request[%llu]: invalid connect result", 
                (unsigned long long)ctx->request_id);
@@ -740,7 +741,8 @@ static void __http2_client_request_response_done(valk_async_handle_t *handle, vo
   valk_lval_t *cb = valk_handle_resolve(&valk_global_handle_table, ctx->callback_handle);
   // LCOV_EXCL_BR_START response callback defensive paths
   if (status != VALK_ASYNC_COMPLETED) {
-    valk_lval_t *err = handle->error ? handle->error : valk_lval_err("Request failed");
+    valk_lval_t *err_val = atomic_load_explicit(&handle->error, memory_order_acquire);
+    valk_lval_t *err = err_val ? err_val : valk_lval_err("Request failed");
     VALK_ERROR("http2/client-request[%llu]: request failed: %s",
                (unsigned long long)ctx->request_id,
                LVAL_TYPE(err) == LVAL_ERR ? err->str : "unknown");
@@ -754,7 +756,7 @@ static void __http2_client_request_response_done(valk_async_handle_t *handle, vo
                  (unsigned long long)ctx->request_id);
     }
   } else {
-    valk_lval_t *result = handle->result;
+    valk_lval_t *result = atomic_load_explicit(&handle->result, memory_order_acquire);
     if (cb) {
       valk_lval_t *args = valk_lval_cons(result, valk_lval_nil());
       VALK_INFO("http2/client-request[%llu]: calling success callback", 
@@ -847,9 +849,11 @@ static void __http2_client_reuse_response_done(valk_async_handle_t *handle, void
 
   valk_lval_t *result;
   if (status != VALK_ASYNC_COMPLETED) {
-    result = handle->error ? handle->error : valk_lval_err("Request failed");
+    valk_lval_t *err_val = atomic_load_explicit(&handle->error, memory_order_acquire);
+    result = err_val ? err_val : valk_lval_err("Request failed");
   } else {
-    result = handle->result ? handle->result : valk_lval_nil();
+    valk_lval_t *res_val = atomic_load_explicit(&handle->result, memory_order_acquire);
+    result = res_val ? res_val : valk_lval_nil();
   }
 
   valk_lval_t *args = valk_lval_cons(result, valk_lval_nil());

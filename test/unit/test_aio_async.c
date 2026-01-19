@@ -213,7 +213,7 @@ void test_async_handle_complete_transitions_pending_to_completed(VALK_TEST_ARGS(
   valk_async_handle_complete(handle, result);
 
   ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_COMPLETED);
-  ASSERT_EQ(handle->result, result);
+  ASSERT_EQ(atomic_load_explicit(&handle->result, memory_order_acquire), result);
 
   valk_async_handle_free(handle);
   valk_runtime_shutdown();
@@ -234,10 +234,10 @@ void test_async_handle_complete_already_terminal(VALK_TEST_ARGS()) {
 
   valk_async_handle_complete(handle, result1);
   ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_COMPLETED);
-  ASSERT_EQ(handle->result, result1);
+  ASSERT_EQ(atomic_load_explicit(&handle->result, memory_order_acquire), result1);
 
   valk_async_handle_complete(handle, result2);
-  ASSERT_EQ(handle->result, result1);
+  ASSERT_EQ(atomic_load_explicit(&handle->result, memory_order_acquire), result1);
 
   valk_async_handle_free(handle);
   valk_runtime_shutdown();
@@ -266,7 +266,7 @@ void test_async_handle_fail_transitions_pending_to_failed(VALK_TEST_ARGS()) {
   valk_async_handle_fail(handle, err);
 
   ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_FAILED);
-  ASSERT_EQ(handle->error, err);
+  ASSERT_EQ(atomic_load_explicit(&handle->error, memory_order_acquire), err);
 
   valk_async_handle_free(handle);
   valk_runtime_shutdown();
@@ -289,7 +289,7 @@ void test_async_handle_fail_already_terminal(VALK_TEST_ARGS()) {
   valk_async_handle_fail(handle, err);
 
   ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_COMPLETED);
-  ASSERT_NULL(handle->error);
+  ASSERT_NULL(atomic_load_explicit(&handle->error, memory_order_acquire));
 
   valk_async_handle_free(handle);
   valk_runtime_shutdown();
@@ -702,7 +702,7 @@ void test_async_handle_complete_from_running(VALK_TEST_ARGS()) {
   valk_async_handle_complete(handle, result);
 
   ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_COMPLETED);
-  ASSERT_EQ(handle->result, result);
+  ASSERT_EQ(atomic_load_explicit(&handle->result, memory_order_acquire), result);
 
   valk_async_handle_free(handle);
   valk_runtime_shutdown();
@@ -725,7 +725,7 @@ void test_async_handle_fail_from_running(VALK_TEST_ARGS()) {
   valk_async_handle_fail(handle, err);
 
   ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_FAILED);
-  ASSERT_EQ(handle->error, err);
+  ASSERT_EQ(atomic_load_explicit(&handle->error, memory_order_acquire), err);
 
   valk_async_handle_free(handle);
   valk_runtime_shutdown();
@@ -881,7 +881,7 @@ void test_async_await_failed_no_error(VALK_TEST_ARGS()) {
 
   valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_FAILED);
   ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_FAILED);
-  ASSERT_NULL(handle->error);
+  ASSERT_NULL(atomic_load_explicit(&handle->error, memory_order_acquire));
 
   valk_lval_t *awaited = valk_async_handle_await(handle);
   ASSERT_EQ(awaited->flags & LVAL_TYPE_MASK, LVAL_ERR);

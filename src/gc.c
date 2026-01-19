@@ -471,8 +471,8 @@ static void mark_children(valk_lval_t *obj, valk_gc_mark_queue_t *queue) {
         mark_and_push(obj->async.handle->on_complete, queue);
         mark_and_push(obj->async.handle->on_error, queue);
         mark_and_push(obj->async.handle->on_cancel, queue);
-        mark_and_push(obj->async.handle->result, queue);
-        mark_and_push(obj->async.handle->error, queue);
+        mark_and_push(atomic_load_explicit(&obj->async.handle->result, memory_order_acquire), queue);
+        mark_and_push(atomic_load_explicit(&obj->async.handle->error, memory_order_acquire), queue);
         if (obj->async.handle->env) mark_env_parallel(obj->async.handle->env, queue);
       }
       break;
@@ -1553,8 +1553,8 @@ static void valk_gc_mark_lval(valk_lval_t* v) {
         valk_gc_mark_lval(v->async.handle->on_complete);
         valk_gc_mark_lval(v->async.handle->on_error);
         valk_gc_mark_lval(v->async.handle->on_cancel);
-        valk_gc_mark_lval(v->async.handle->result);
-        valk_gc_mark_lval(v->async.handle->error);
+        valk_gc_mark_lval(atomic_load_explicit(&v->async.handle->result, memory_order_acquire));
+        valk_gc_mark_lval(atomic_load_explicit(&v->async.handle->error, memory_order_acquire));
         if (v->async.handle->env) valk_gc_mark_env(v->async.handle->env);
       }
       break;
@@ -3195,8 +3195,8 @@ static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
         mark_lval2(obj->async.handle->on_complete, ctx);
         mark_lval2(obj->async.handle->on_error, ctx);
         mark_lval2(obj->async.handle->on_cancel, ctx);
-        mark_lval2(obj->async.handle->result, ctx);
-        mark_lval2(obj->async.handle->error, ctx);
+        mark_lval2(atomic_load_explicit(&obj->async.handle->result, memory_order_acquire), ctx);
+        mark_lval2(atomic_load_explicit(&obj->async.handle->error, memory_order_acquire), ctx);
         if (obj->async.handle->env) mark_env2(obj->async.handle->env, ctx);
       }
       break;
@@ -3557,8 +3557,8 @@ static void mark_children2_parallel(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) 
         mark_lval2_parallel(obj->async.handle->on_complete, ctx);
         mark_lval2_parallel(obj->async.handle->on_error, ctx);
         mark_lval2_parallel(obj->async.handle->on_cancel, ctx);
-        mark_lval2_parallel(obj->async.handle->result, ctx);
-        mark_lval2_parallel(obj->async.handle->error, ctx);
+        mark_lval2_parallel(atomic_load_explicit(&obj->async.handle->result, memory_order_acquire), ctx);
+        mark_lval2_parallel(atomic_load_explicit(&obj->async.handle->error, memory_order_acquire), ctx);
         if (obj->async.handle->env) mark_env2_parallel(obj->async.handle->env, ctx);
       }
       break;

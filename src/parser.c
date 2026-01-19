@@ -4720,7 +4720,7 @@ static valk_lval_t* valk_builtin_http2_server_port(valk_lenv_t* e,
         return server_ref;
       }
     } else {
-      server_ref = handle->result;
+      server_ref = atomic_load_explicit(&handle->result, memory_order_acquire);
     }
     if (!server_ref || LVAL_TYPE(server_ref) != LVAL_REF) {
       return valk_lval_err("http2/server-port: handle result is not a server ref");
@@ -4756,7 +4756,7 @@ static valk_lval_t* valk_builtin_http2_server_stop(valk_lenv_t* e,
         return server_ref;
       }
     } else {
-      server_ref = handle->result;
+      server_ref = atomic_load_explicit(&handle->result, memory_order_acquire);
     }
     if (!server_ref || LVAL_TYPE(server_ref) != LVAL_REF) {
       return valk_lval_err("http2/server-stop: handle result is not a server ref");
@@ -4886,9 +4886,11 @@ static void valk_http2_connect_done_callback(valk_async_handle_t* handle, void* 
   valk_lval_t* result;
 
   if (status != VALK_ASYNC_COMPLETED) {
-    result = handle->error ? handle->error : valk_lval_err("Connection failed");
+    valk_lval_t* err = atomic_load_explicit(&handle->error, memory_order_acquire);
+    result = err ? err : valk_lval_err("Connection failed");
   } else {
-    result = handle->result ? handle->result : valk_lval_err("No connection result");
+    valk_lval_t* res = atomic_load_explicit(&handle->result, memory_order_acquire);
+    result = res ? res : valk_lval_err("No connection result");
   }
 
   valk_lval_t* args = valk_lval_cons(result, valk_lval_nil());

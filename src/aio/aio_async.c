@@ -75,7 +75,7 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
 
   valk_async_status_t done_status = valk_async_handle_get_status(handle);
   if (done_status == VALK_ASYNC_COMPLETED) {
-    valk_lval_t *result = handle->result;
+    valk_lval_t *result = atomic_load_explicit(&handle->result, memory_order_acquire);
     if (LVAL_TYPE(result) == LVAL_ERR) {
       VALK_WARN("Handle completed with error for stream %d: %s", stream_id, result->str);
       VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
@@ -92,7 +92,8 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
     }
     valk_http2_continue_pending_send(conn);
   } else if (done_status == VALK_ASYNC_FAILED) {
-    valk_lval_t *err = handle->error ? handle->error : valk_lval_err("Async operation failed");
+    valk_lval_t *err_val = atomic_load_explicit(&handle->error, memory_order_acquire);
+    valk_lval_t *err = err_val ? err_val : valk_lval_err("Async operation failed");
     VALK_WARN("Handle failed for stream %d: %s",
               stream_id, LVAL_TYPE(err) == LVAL_ERR ? err->str : "unknown");
     VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
@@ -256,8 +257,7 @@ void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result
     return;
   }
 
-  handle->result = result;
-  atomic_thread_fence(memory_order_release);
+  atomic_store_explicit(&handle->result, result, memory_order_release);
 
   bool transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_COMPLETED);
   if (!transitioned) {
@@ -289,8 +289,7 @@ void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
     return;
   }
 
-  handle->error = error;
-  atomic_thread_fence(memory_order_release);
+  atomic_store_explicit(&handle->error, error, memory_order_release);
 
   bool transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_FAILED);
   if (!transitioned) {
@@ -489,9 +488,10 @@ valk_lval_t *valk_async_handle_await_timeout(valk_async_handle_t *handle, u32 ti
   
   valk_async_status_t status = valk_async_handle_get_status(handle);
   if (status == VALK_ASYNC_COMPLETED) {
-    return handle->result;
+    return atomic_load_explicit(&handle->result, memory_order_acquire);
   } else if (status == VALK_ASYNC_FAILED) {
-    return handle->error ? handle->error : valk_lval_err("async operation failed");
+    valk_lval_t *err = atomic_load_explicit(&handle->error, memory_order_acquire);
+    return err ? err : valk_lval_err("async operation failed");
   } else {
     return valk_lval_err("async operation cancelled");
   }

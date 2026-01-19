@@ -604,7 +604,7 @@ typedef struct {
 } async_response_ctx_t;
 
 static int __async_state_completed(async_response_ctx_t *ctx) {
-  valk_lval_t *result = ctx->handle->result;
+  valk_lval_t *result = atomic_load_explicit(&ctx->handle->result, memory_order_acquire);
   if (LVAL_TYPE(result) == LVAL_ERR) {
     VALK_WARN("Handle completed with error: %s", result->str);
     __send_error_response(ctx->session, ctx->stream_id, "500", result->str, ctx->req->stream_arena);
@@ -615,7 +615,8 @@ static int __async_state_completed(async_response_ctx_t *ctx) {
 }
 
 static int __async_state_failed(async_response_ctx_t *ctx) {
-  valk_lval_t *err = ctx->handle->error ? ctx->handle->error : valk_lval_err("Handle failed");
+  valk_lval_t *err_val = atomic_load_explicit(&ctx->handle->error, memory_order_acquire);
+  valk_lval_t *err = err_val ? err_val : valk_lval_err("Handle failed");
   const char *msg = LVAL_TYPE(err) == LVAL_ERR ? err->str : "Async operation failed";
   VALK_WARN("Handle failed: %s", msg);
   __send_error_response(ctx->session, ctx->stream_id, "500", msg, ctx->req->stream_arena);
