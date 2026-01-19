@@ -1,0 +1,46 @@
+; Stress test: interval timers while main thread evaluates expressions with checkpoints
+; This tests for races in gc.c:1911-2166 where checkpoint mutates env pointers
+
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+(def {counter} (atom 0))
+(def {iterations} 50)
+(def {test-passed} (atom false))
+
+(println "=== Checkpoint + Timer Stress Test ===")
+(println "Running interval timer while evaluating expressions...")
+
+; Timer callback reads from env (callback->fun.env) while main thread checkpoints
+(aio/interval aio 10 (\ {} {
+  (= {c} (atom/get counter))
+  (if (>= c iterations)
+    :stop
+    (do
+      (atom/set! counter (+ c 1))
+      nil))}))
+
+; Evaluate expressions to trigger checkpoints between expressions
+; These should coordinate with the timer via STW
+(def {x1} (+ 1 2 3 4 5))
+(def {x2} (* x1 x1))
+(def {x3} (list x1 x2 (+ x1 x2)))
+(def {x4} (map (\ {n} {* n 2}) x3))
+(def {x5} (filter (\ {n} {> n 10}) x4))
+
+; Wait for timer to run enough iterations
+(aio/schedule aio 1000 (\ {} {
+  (= {final-count} (atom/get counter))
+  (printf "Counter reached: %d\n" final-count)
+  (if (>= final-count 10)
+    (do
+      (atom/set! test-passed true)
+      (println "PASS: Timer ran while expressions evaluated"))
+    (println "FAIL: Timer did not run enough"))
+  (aio/stop aio)}))
+
+(aio/run aio)
+
+(if (atom/get test-passed)
+  (exit 0)
+  (exit 1))

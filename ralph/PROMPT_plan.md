@@ -2,7 +2,18 @@
 
 1. Run `ralph query` to see current state
 2. Read the spec file: `ralph/specs/{{SPEC_FILE}}`
-3. Study the source code to understand the current implementation
+
+## CRITICAL: Use Subagents for Research
+
+Your context window is LIMITED. Do NOT read many files yourself.
+
+**Launch subagents in parallel to research different aspects:**
+
+```
+Task: "Research how [aspect] is currently implemented. Find relevant files, understand the patterns used, and report back what exists and what's missing for [spec requirement]"
+```
+
+Launch multiple Task calls in a single message to parallelize research.
 
 ## Task: Gap Analysis for {{SPEC_FILE}}
 

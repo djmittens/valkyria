@@ -299,6 +299,24 @@ static void valk_gc_participate_in_parallel_gc(void);
 void valk_gc_safe_point_slow(void) {
   valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
 
+  if (phase == VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
+    u64 paused = atomic_fetch_add(&valk_gc_coord.threads_paused, 1) + 1;
+    u64 registered = atomic_load(&valk_gc_coord.threads_registered);
+
+    if (paused == registered) {
+      pthread_mutex_lock(&valk_gc_coord.lock);
+      pthread_cond_signal(&valk_gc_coord.all_paused);
+      pthread_mutex_unlock(&valk_gc_coord.lock);
+    }
+
+    pthread_mutex_lock(&valk_gc_coord.lock);
+    while (atomic_load(&valk_gc_coord.phase) == VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
+      pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
+    }
+    pthread_mutex_unlock(&valk_gc_coord.lock);
+    return;
+  }
+
   if (phase == VALK_GC_PHASE_STW_REQUESTED) {
     if (valk_thread_ctx.scratch && valk_thread_ctx.scratch->offset > 0 &&
         valk_thread_ctx.heap && valk_thread_ctx.root_env) {
@@ -2239,6 +2257,51 @@ static void valk_fix_env_pointers(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) 
 // Checkpoint: Evacuate and Reset
 // ============================================================================
 
+static void valk_checkpoint_request_stw(void) {
+  valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
+  if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected,
+                                       VALK_GC_PHASE_CHECKPOINT_REQUESTED)) {
+    return;
+  }
+
+  u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
+  if (num_threads <= 1) {
+    atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+    return;
+  }
+
+  valk_aio_wake_all_for_gc();
+
+  atomic_fetch_add(&valk_gc_coord.threads_paused, 1);
+
+  pthread_mutex_lock(&valk_gc_coord.lock);
+  while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_nsec += 100000000;
+    if (ts.tv_nsec >= 1000000000) {
+      ts.tv_sec++;
+      ts.tv_nsec -= 1000000000;
+    }
+    pthread_cond_timedwait(&valk_gc_coord.all_paused, &valk_gc_coord.lock, &ts);
+  }
+  pthread_mutex_unlock(&valk_gc_coord.lock);
+}
+
+static void valk_checkpoint_release_stw(void) {
+  valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
+  if (phase != VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
+    return;
+  }
+
+  atomic_store(&valk_gc_coord.threads_paused, 0);
+
+  pthread_mutex_lock(&valk_gc_coord.lock);
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+  pthread_cond_broadcast(&valk_gc_coord.gc_done);
+  pthread_mutex_unlock(&valk_gc_coord.lock);
+}
+
 // LCOV_EXCL_BR_START - checkpoint null checks and iteration
 void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
                      valk_lenv_t* root_env) {
@@ -2249,7 +2312,7 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
   
   VALK_DEBUG("Checkpoint starting, scratch offset=%llu", (unsigned long long)scratch->offset);
 
-
+  valk_checkpoint_request_stw();
 
   // Initialize evacuation context
   valk_evacuation_ctx_t ctx = {
@@ -2316,6 +2379,8 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
 
   // Cleanup
   evac_ctx_free(&ctx);
+
+  valk_checkpoint_release_stw();
 }
 
 // Evacuate a single value and all its transitive dependencies to heap
@@ -2350,6 +2415,10 @@ valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v) {
   
   // Note: scratch can be NULL when called from event loop thread
   // In that case, we conservatively copy all strings from scratch-allocated values
+  
+  // Request STW to prevent races with event loop thread reading environments
+  // while we mutate env->symbols.items and env->vals.items pointers
+  valk_checkpoint_request_stw();
   
   // Create a mini evacuation context
   valk_evacuation_ctx_t ctx = {
@@ -2388,6 +2457,9 @@ valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v) {
   }
   
   evac_ctx_free(&ctx);
+  
+  // Release STW - event loop can resume
+  valk_checkpoint_release_stw();
   
   return new_val;
 }

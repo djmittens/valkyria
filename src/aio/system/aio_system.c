@@ -53,7 +53,7 @@ static void __gc_wakeup_cb(uv_async_t *handle) {
   if (!sys) return;
   
   valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
-  if (phase != VALK_GC_PHASE_STW_REQUESTED) {
+  if (phase != VALK_GC_PHASE_STW_REQUESTED && phase != VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
     return;
   }
   

@@ -424,6 +424,7 @@ void valk_gc_mark_env_external(valk_lenv_t* env);
 typedef enum {
   VALK_GC_PHASE_IDLE = 0,
   VALK_GC_PHASE_STW_REQUESTED,
+  VALK_GC_PHASE_CHECKPOINT_REQUESTED,
   VALK_GC_PHASE_MARKING,
   VALK_GC_PHASE_SWEEPING,
 } valk_gc_phase_e;

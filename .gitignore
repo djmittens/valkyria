@@ -19,6 +19,7 @@ __pycache__/
 
 # Logs n shit
 *.log
+*.log.*
 
 # Ralph Wiggum
 build/ralph-logs/
