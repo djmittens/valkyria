@@ -18,7 +18,7 @@ The main thread and event loop thread share environments. `valk_lenv_put` has no
 ### Tasks
 
 - [ ] **Phase 1: Refactor test framework** - Replace 11 mutable globals with explicit context passing
-  - [ ] Create `test/context-new` returning immutable context struct
+  - [x] Create `test/context-new` returning immutable context struct
   - [ ] Refactor `test/run-one` to take and return context
   - [ ] Refactor `test/run` to use fold over tests with context
   - [ ] Keep atoms only for async cross-thread state
