@@ -4,6 +4,7 @@
 
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
+(load "src/async_handles.valk")
 
 (test/suite "Async HTTP Handlers")
 
@@ -406,6 +407,20 @@
     (aio/then (aio/sleep aio 10) (\ {_} {(aio/fail (error "async-direct-fail"))}))
   }))
 
+(def {with-timeout-wins-handler}
+  (\ {req} {
+    (aio/catch
+      (with-timeout aio 10 (aio/sleep aio 10000))
+      (\ {err} {{:status "200" :body "timeout-won"}}))
+  }))
+
+(def {retry-backoff-success-handler}
+  (\ {req} {
+    (aio/then
+      (retry-backoff aio 0 10 (\ {} {(aio/pure "success")}))
+      (\ {result} {{:status "200" :body "retry-success"}}))
+  }))
+
 ; ============================================================================
 ; Router
 ; ============================================================================
@@ -474,7 +489,9 @@
       {"/pre-cancelled" {(pre-cancelled-handler req)}}
       {"/pure-error" {(pure-error-handler req)}}
       {"/async-pure-error" {(async-pure-error-handler req)}}
-      {"/async-direct-fail" {(async-direct-fail-handler req)}}))
+      {"/async-direct-fail" {(async-direct-fail-handler req)}}
+      {"/with-timeout-wins" {(with-timeout-wins-handler req)}}
+      {"/retry-backoff-success" {(retry-backoff-success-handler req)}}))
   }))
 
 ; ============================================================================
@@ -703,6 +720,14 @@
 
 (test/async "async VALK_ASYNC_FAILED handler" (\ {done} {
   (make-test "/async-direct-fail" "500" "async-direct-fail" done)
+}))
+
+(test/async "with-timeout timeout path wins" (\ {done} {
+  (make-test "/with-timeout-wins" "200" "timeout-won" done)
+}))
+
+(test/async "retry-backoff immediate success" (\ {done} {
+  (make-test "/retry-backoff-success" "200" "retry-success" done)
 }))
 
 ; ============================================================================

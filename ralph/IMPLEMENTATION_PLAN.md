@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18 19:15
+**Last updated:** 2026-01-19 01:20
 
 ## Spec: coverage-improvement.md
 
@@ -48,7 +48,7 @@
 
 ### Priority 6: Valk Stdlib Files
 
-- [ ] Improve async_handles.valk expr coverage (80.2% → 90%)
+- [~] Improve async_handles.valk expr coverage (80.2% → 90%) - Blocked at 86.1%: remaining 4% requires timer-dependent async paths that crash when tested via HTTP
 - [ ] Improve async_monadic.valk expr coverage (86.1% → 90%)
 - [ ] Improve http_api.valk expr coverage (89.1% → 90%)
 - [ ] Improve modules/aio/debug.valk expr coverage (84.7% → 90%)
@@ -77,3 +77,7 @@
 
 - Many remaining uncovered branches in parser.c are internal implementation details (memory allocation null checks, dynamic array growth logic) that require mocking infrastructure to test effectively
 - Several 0% branches in parser.c (lines 2941-2942, 3033, 3035, 3126-3161) are in coverage-specific code paths (`#ifdef VALK_COVERAGE`) or unused builtins (`valk_builtin_if` superseded by special form)
+- **async_handles.valk timer paths**: Functions like `retry-backoff`, `with-timeout`, and `graceful-shutdown` use `aio/delay` which requires timer callbacks from the event loop. Testing these paths via HTTP handlers causes issues:
+  - `aio/catch` with async recovery returns the recovery handle as a value (not awaited), breaking `retry-backoff`'s retry logic
+  - Race results with timer-based outcomes return empty HTTP response bodies
+  - `graceful-shutdown` cancel path (line 75) requires timer-based race to win, untestable in current infrastructure

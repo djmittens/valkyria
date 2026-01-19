@@ -212,6 +212,15 @@
     (== (aio/status result) :completed)
   })
 
+(test/define "with-timeout passes handle to race"
+  {do
+    (def {sys} (aio/start))
+    (def {h} (aio/pure "test-value"))
+    (def {result} (with-timeout sys 5000 h))
+    (aio/stop sys)
+    (== (aio/status result) :completed)
+  })
+
 ; ============================================================================
 ; retry-backoff tests
 ; ============================================================================
@@ -223,6 +232,27 @@
     (def {result} (retry-backoff sys 0 10 (\ {} {
       (def {call-count} (+ call-count 1))
       (aio/pure "success")
+    })))
+    (aio/stop sys)
+    (== (aio/status result) :completed)
+  })
+
+(test/define "retry-backoff with n>0 and failure triggers catch path"
+  {do
+    (def {sys} (aio/start))
+    (def {result} (retry-backoff sys 1 1 (\ {} {
+      (aio/fail "transient-error")
+    })))
+    (aio/run sys 10)
+    (aio/stop sys)
+    true
+  })
+
+(test/define "retry-backoff with n>0 and success returns immediately"
+  {do
+    (def {sys} (aio/start))
+    (def {result} (retry-backoff sys 3 10 (\ {} {
+      (aio/pure "first-try-success")
     })))
     (aio/stop sys)
     (== (aio/status result) :completed)
