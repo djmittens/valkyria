@@ -6,7 +6,7 @@
 
 typedef struct valk_chase_lev_array {
   int64_t size;
-  void **buffer;
+  _Atomic(void *) *buffer;
 } valk_chase_lev_array_t;
 
 typedef struct valk_chase_lev_deque {

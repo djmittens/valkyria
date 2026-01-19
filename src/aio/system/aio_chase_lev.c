@@ -6,7 +6,7 @@
 static valk_chase_lev_array_t *valk_chase_lev_array_new(int64_t size) {
   valk_chase_lev_array_t *arr = malloc(sizeof(valk_chase_lev_array_t));
   arr->size = size;
-  arr->buffer = calloc((size_t)size, sizeof(void *));
+  arr->buffer = calloc((size_t)size, sizeof(_Atomic(void *)));
   return arr;
 }
 
@@ -17,11 +17,11 @@ static void valk_chase_lev_array_free(valk_chase_lev_array_t *arr) {
 }
 
 static void *valk_chase_lev_array_get(valk_chase_lev_array_t *arr, int64_t idx) {
-  return arr->buffer[idx % arr->size];
+  return atomic_load_explicit(&arr->buffer[idx % arr->size], memory_order_relaxed);
 }
 
 static void valk_chase_lev_array_put(valk_chase_lev_array_t *arr, int64_t idx, void *item) {
-  arr->buffer[idx % arr->size] = item;
+  atomic_store_explicit(&arr->buffer[idx % arr->size], item, memory_order_relaxed);
 }
 
 static valk_chase_lev_array_t *valk_chase_lev_array_grow(valk_chase_lev_array_t *arr,

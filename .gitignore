@@ -4,6 +4,7 @@
 .cache
 build/
 build-asan/
+build-tsan/
 build-coverage/
 coverage-report/
 .venv/

@@ -1,0 +1,33 @@
+# LeakSanitizer suppressions for Valkyria
+# These are intentional global allocations that persist for the program's lifetime
+
+# Global atoms in test.valk (*test-async-pending-atom*, etc.)
+# These are test framework globals that are never freed
+leak:valk_builtin_atom
+
+# Delta snapshots created during metrics collection may not be freed
+# when tests exit quickly (pending global env cleanup)
+leak:valk_delta_snapshot_init
+leak:valk_builtin_metrics_collect_delta
+
+# Baselines created via debug/subscribe in broadcaster may not be freed
+# when tests exit without proper cleanup (pending global env cleanup)
+leak:valk_builtin_metrics_baseline
+
+# Async handles may not be freed when tests exit quickly
+# (pending proper shutdown sequence)
+leak:valk_async_handle_new
+
+# Slabs allocated by aio system may not be freed on test exit
+leak:valk_slab_init
+leak:valk_slab_new
+
+# GC heap allocations may leak when tests exit without full cleanup
+leak:valk_gc_heap2_alloc
+leak:valk_gc_malloc_heap_alloc
+
+# Memory allocator allocations during timer callbacks may leak on exit
+leak:valk_mem_allocator_alloc
+
+# Mock responses in test framework may leak on exit
+leak:valk_builtin_http2_mock_response

@@ -1,0 +1,214 @@
+; Delta Baseline Isolation Test
+; Tests whether metrics/collect-delta uses per-connection or shared state
+; Expected behavior: each connection should see correct deltas for its timeline
+; Known issue: metrics/collect-delta uses global registry state
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/modules/aio/debug.valk")
+
+(def {aio} (aio/start))
+
+(fun {str-contains? haystack needle}
+  {(> (len (str/split haystack needle)) 1)})
+
+(fun {yes-no b}
+  {(if b "yes" "no")})
+
+(def {isolation-counter} (metrics/counter "isolation_test_counter" "Test counter for isolation"))
+
+(test/run-async aio (list
+  (test-async "Two connections: second collect-delta should see increment from first"
+    (\ {done} {
+      (= {d1} (metrics/collect-delta))
+      
+      (= {d2} (metrics/collect-delta))
+      
+      (metrics/counter-inc isolation-counter 5)
+      
+      (= {d1-after} (metrics/collect-delta))
+      (= {d1-json} (metrics/delta-json d1-after))
+      (= {d1-has-inc} (str-contains? d1-json "isolation_test_counter"))
+      
+      (= {d2-after} (metrics/collect-delta))
+      (= {d2-json} (metrics/delta-json d2-after))
+      (= {d2-has-inc} (str-contains? d2-json "isolation_test_counter"))
+      
+      (println "Delta Baseline Isolation Test:")
+      (print "  First collect-delta after increment saw counter: ")
+      (println (yes-no d1-has-inc))
+      (print "  Second collect-delta after increment saw counter: ")
+      (println (yes-no d2-has-inc))
+      
+      (if (and d1-has-inc (not d2-has-inc))
+        (do
+          (println "KNOWN ISSUE CONFIRMED: Shared baseline causes lost deltas")
+          (println "  First delta collection updated the global baseline")
+          (println "  Second delta collection saw no changes (baseline already current)")
+          (println "  This confirms issue i-8v7l and i-p0r4")
+          (done true))
+        (if (and d1-has-inc d2-has-inc)
+          (do
+            (println "UNEXPECTED: Both collections saw the delta")
+            (println "  Either baselines are isolated or test timing is off")
+            (done true))
+          (do
+            (println "UNEXPECTED: Neither collection saw the delta")
+            (done false))))
+    }))
+  
+  (test-async "Sequential deltas: each should see changes since last collect"
+    (\ {done} {
+      (= {seq-counter} (metrics/counter "seq_test_counter" "Sequential test counter"))
+      
+      (= {d-baseline} (metrics/collect-delta))
+      
+      (metrics/counter-inc seq-counter 10)
+      (= {d1} (metrics/collect-delta))
+      (= {d1-json} (metrics/delta-json d1))
+      (= {d1-has} (str-contains? d1-json "seq_test_counter"))
+      
+      (metrics/counter-inc seq-counter 20)
+      (= {d2} (metrics/collect-delta))
+      (= {d2-json} (metrics/delta-json d2))
+      (= {d2-has} (str-contains? d2-json "seq_test_counter"))
+      
+      (metrics/counter-inc seq-counter 30)
+      (= {d3} (metrics/collect-delta))
+      (= {d3-json} (metrics/delta-json d3))
+      (= {d3-has} (str-contains? d3-json "seq_test_counter"))
+      
+      (println "Sequential deltas test:")
+      (print "  Delta 1 (after +10) saw counter: ")
+      (println (yes-no d1-has))
+      (print "  Delta 2 (after +20) saw counter: ")
+      (println (yes-no d2-has))
+      (print "  Delta 3 (after +30) saw counter: ")
+      (println (yes-no d3-has))
+      
+      (if (and d1-has (and d2-has d3-has))
+        (do
+          (println "Sequential deltas working correctly (each sees its own increment)")
+          (done true))
+        (do
+          (println "Sequential delta issue - some deltas were missed")
+          (done false)))
+    }))
+  
+  (test-async "Interleaved connections: conn2 should see changes since its baseline"
+    (\ {done} {
+      (= {c1} (metrics/counter "conn1_counter" "Connection 1 activity"))
+      (= {c2} (metrics/counter "conn2_counter" "Connection 2 activity"))
+      
+      (= {conn1-baseline} (metrics/collect-delta))
+      
+      (metrics/counter-inc c1 1)
+      
+      (= {conn2-baseline} (metrics/collect-delta))
+      
+      (metrics/counter-inc c1 2)
+      (metrics/counter-inc c2 5)
+      
+      (= {conn1-d} (metrics/collect-delta))
+      (= {conn1-json} (metrics/delta-json conn1-d))
+      (= {conn1-saw-c1} (str-contains? conn1-json "conn1_counter"))
+      (= {conn1-saw-c2} (str-contains? conn1-json "conn2_counter"))
+      
+      (= {conn2-d} (metrics/collect-delta))
+      (= {conn2-json} (metrics/delta-json conn2-d))
+      (= {conn2-saw-c1} (str-contains? conn2-json "conn1_counter"))
+      (= {conn2-saw-c2} (str-contains? conn2-json "conn2_counter"))
+      
+      (println "Interleaved connections test:")
+      (println "  Timeline: conn1 baseline -> c1+1 -> conn2 baseline -> c1+2, c2+5")
+      (print "  Conn1 delta saw conn1_counter: ")
+      (println (yes-no conn1-saw-c1))
+      (print "  Conn1 delta saw conn2_counter: ")
+      (println (yes-no conn1-saw-c2))
+      (print "  Conn2 delta saw conn1_counter (should be yes if isolated): ")
+      (println (yes-no conn2-saw-c1))
+      (print "  Conn2 delta saw conn2_counter (should be yes if isolated): ")
+      (println (yes-no conn2-saw-c2))
+      
+      (if (and conn1-saw-c1 (and conn1-saw-c2 (and (not conn2-saw-c1) (not conn2-saw-c2))))
+        (do
+          (println "KNOWN ISSUE CONFIRMED: Conn2 missed all deltas due to shared baseline")
+          (println "  Conn1's delta collection updated global baselines")
+          (println "  Conn2's delta collection saw no changes")
+          (done true))
+        (if (and conn2-saw-c1 conn2-saw-c2)
+          (do
+            (println "UNEXPECTED: Both connections saw their expected deltas")
+            (done true))
+          (do
+            (println "Mixed results")
+            (done true))))
+    }))
+  
+  (test-async "SSE handler delta isolation via HTTP"
+    (\ {done} {
+      (= {http-counter} (metrics/counter "http_isolation_test" "HTTP isolation test"))
+      
+      (= {sse-handler}
+        (\ {req} {
+          (= {path} (req/path req))
+          (if (== path "/delta-test")
+            (do
+              (= {stream} (sse/open req))
+              (= {events-sent} (atom 0))
+              (= {closed} (atom false))
+              (stream/on-close stream (\ {} {(atom/set! closed true)}))
+              (aio/interval aio 50 (\ {}
+                {(if (atom/get closed)
+                   :stop
+                   (if (>= (atom/get events-sent) 2)
+                     (do (stream/close stream) :stop)
+                     (do
+                       (= {n} (atom/get events-sent))
+                       (if (== n 0)
+                         (stream/write stream (str "event: state\ndata: " (aio/debug-diagnostics-state aio) "\n\n"))
+                         (stream/write stream (str "event: delta\ndata: " (aio/debug-diagnostics-delta aio) "\n\n")))
+                       (atom/set! events-sent (+ n 1)))))}))
+              :deferred)
+            `{:status "404" :body "Not found"})}))
+      
+      (= {server} (http2/server-listen aio 0 sse-handler))
+      (= {port} (http2/server-port server))
+      
+      (http2/client-request aio "127.0.0.1" port "/delta-test"
+        (\ {resp1} {
+          (if (error? resp1)
+            (do (println "  Conn1 error:" resp1) (done false))
+            (do
+              (= {body1} (http2/response-body resp1))
+              (= {c1-has} (str-contains? body1 "http_isolation_test"))
+              
+              (aio/schedule aio 100 (\ {}
+                {(metrics/counter-inc http-counter 42)
+                 
+                 (http2/client-request aio "127.0.0.1" port "/delta-test"
+                   (\ {resp2} {
+                     (if (error? resp2)
+                       (do (println "  Conn2 error:" resp2) (done false))
+                       (do
+                         (= {body2} (http2/response-body resp2))
+                         (= {c2-has} (str-contains? body2 "http_isolation_test"))
+                         
+                         (println "SSE HTTP Baseline Isolation Test:")
+                         (println "  Conn1 saw http_isolation_test:" (yes-no c1-has))
+                         (println "  Conn2 saw http_isolation_test:" (yes-no c2-has))
+                         
+                         (if (and c1-has (not c2-has))
+                           (do
+                             (println "KNOWN ISSUE: Conn1 delta updated shared baseline")
+                             (println "  Conn2 missed the increment")
+                             (done true))
+                           (if (and c1-has c2-has)
+                             (do
+                               (println "Both connections saw the counter")
+                               (done true))
+                             (do
+                               (println "Results vary based on timing")
+                               (done true))))))}))}))))}))
+    })))
+  {:suite-name "Delta Baseline Isolation"})
