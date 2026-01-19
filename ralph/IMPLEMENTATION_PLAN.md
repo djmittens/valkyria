@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18T5
+**Last updated:** 2026-01-18T6
 
 ---
 
@@ -26,12 +26,13 @@ The main thread and event loop thread share environments. `valk_lenv_put` has no
   - [x] Update `test/run` and `test/run-async` to accept explicit test list (backward compatible)
   - Note: Test file migration to inline API is optional - existing test/define pattern only mutates globals at load time (single-threaded), not during concurrent test execution. New inline API available for users who want zero global mutations.
 
-- [ ] **Phase 2: Audit all .valk files** - Find and fix `(def {*` mutations
-  - [ ] src/prelude.valk (constants OK, check for mutations)
-  - [ ] src/async_monadic.valk (aliases OK, check for mutations)
-  - [ ] src/async_handles.valk
-  - [ ] src/http_api.valk
-  - [ ] All test/*.valk files
+- [x] **Phase 2: Audit all .valk files** - Find and fix `(def {*` mutations
+  - [x] src/prelude.valk - Clean: only constant definitions (nil, true, false, otherwise, curry, fun)
+  - [x] src/async_monadic.valk - Fixed: `async/run` was using `def` for mutable global; refactored to use thread-safe atom
+  - [x] src/async_handles.valk - Clean: only function definitions
+  - [x] src/http_api.valk - Clean: only function definitions
+  - [x] All test/*.valk files - Clean: only test/test_test_framework_empty.valk resets `*test-registry*` for testing empty list path (acceptable for test infrastructure)
+  - Note: modules/test.valk globals remain for backward compatibility (load-time only, single-threaded)
 
 - [ ] **Phase 3: Add CI lint** - Script to fail on global mutation pattern
   - [ ] Create bin/check-no-globals.py

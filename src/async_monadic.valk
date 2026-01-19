@@ -275,12 +275,11 @@
 ; NOTE: This only works for pure async operations (async/pure, async/bind chains
 ; that don't involve actual I/O). For I/O operations, use aio/run which runs
 ; the event loop.
-; Implementation: Pass a continuation that sets a captured result variable.
 (fun {async/run async-op} {
   do
-  (def {*async-run-result*} nil)
-  (async-op (\ {x} {(def {*async-run-result*} x)}))
-  *async-run-result*
+  (= {result-atom} (atom nil))
+  (async-op (\ {x} {(atom/set! result-atom x)}))
+  (atom/get result-atom)
 })
 
 ; === Higher-Level Patterns ===
