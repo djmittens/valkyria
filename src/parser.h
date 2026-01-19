@@ -222,9 +222,8 @@ valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx);
   (lval)->cov_line = (ln); \
   (lval)->cov_column = (col); \
   u8 __type = LVAL_TYPE(lval); \
-  /* Only mark CONS (s-expressions) for coverage, not QEXPR. */ \
-  /* QEXPRs are quoted data not evaluated (e.g., function params, def bindings). */ \
-  if (__type == LVAL_CONS) { \
+  bool __is_quoted = ((lval)->flags & LVAL_FLAG_QUOTED) != 0; \
+  if (__type == LVAL_CONS && !__is_quoted) { \
     VALK_COVERAGE_MARK_LINE((fid), (ln)); \
     VALK_COVERAGE_MARK_LVAL(lval); \
   } \

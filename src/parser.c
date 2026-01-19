@@ -425,26 +425,15 @@ static void valk_coverage_mark_tree(valk_lval_t* lval) {
   if (lval == NULL) return;
 
   u8 type = LVAL_TYPE(lval);
-  // Only mark CONS (s-expressions) as trackable expressions, not QEXPR.
-  // QEXPRs are quoted data that is NOT evaluated by the interpreter.
-  // Examples of QEXPRs that shouldn't be counted:
-  //   - Function parameters: (fun {name args} body) - {name args} is data
-  //   - def bindings: (def {x} 1) - {x} is the binding name
-  // If a QEXPR is actually evaluated (via list/eval/etc), it gets recorded
-  // dynamically through valk_qexpr_to_cons.
-  //
-  // Exception: for 'if' expressions, we mark both branch qexprs as coverable
-  // since they represent conditional code paths that should be tested.
+  bool is_quoted = (lval->flags & LVAL_FLAG_QUOTED) != 0;
+  
   if (type == LVAL_CONS) {
-    VALK_COVERAGE_MARK_LVAL(lval);
-    // Special handling for 'if': mark both branches as coverable
-    if (is_if_expr(lval)) {
-      mark_if_branches(lval);
+    if (!is_quoted) {
+      VALK_COVERAGE_MARK_LVAL(lval);
+      if (is_if_expr(lval)) {
+        mark_if_branches(lval);
+      }
     }
-    valk_coverage_mark_tree(lval->cons.head);
-    valk_coverage_mark_tree(lval->cons.tail);
-  } else if (type == LVAL_QEXPR) {
-    // Still recurse into QEXPR children to find nested CONS expressions
     valk_coverage_mark_tree(lval->cons.head);
     valk_coverage_mark_tree(lval->cons.tail);
   }

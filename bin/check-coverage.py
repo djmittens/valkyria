@@ -20,14 +20,7 @@ RUNTIME_REQUIREMENT_LINE = 90.0
 RUNTIME_REQUIREMENT_BRANCH = 85.0
 RUNTIME_REQUIREMENT_EXPR = 90.0
 
-VALK_KNOWN_BLOCKED = {
-    "src/async_handles.valk": "timer-dependent async paths that crash when tested via HTTP",
-    "src/async_monadic.valk": "async/forever infinite loop, CPS internals not directly exercisable",
-    "src/http_api.valk": "partial eval-point coverage on function/lambda definitions",
-    "src/modules/aio/debug.valk": "SSE streaming paths in aio/interval callbacks",
-    "src/modules/aio/sse.valk": "partial eval-point coverage on function/lambda definitions",
-    "src/modules/test.valk": "test framework failure paths that would cause test suite to exit",
-}
+VALK_KNOWN_BLOCKED = {}
 
 def meets_requirement(actual: float, required: float) -> bool:
     """Check if coverage meets requirement, rounding to 1 decimal place (matching display)."""
