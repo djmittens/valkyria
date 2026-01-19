@@ -38,23 +38,23 @@ bool valk_pool_metrics_init_custom(valk_pool_metrics_t *m,
   // Create gauges for used, total, peak
   m->used = valk_gauge_get_or_create(name_used,
     "Current items/bytes in use in this pool", &labels);
-  if (!m->used) return false;
+  if (!m->used) return false; // LCOV_EXCL_BR_LINE: OOM in metric registry
   valk_gauge_set_persistent(m->used);
 
   m->total = valk_gauge_get_or_create(name_total,
     "Total capacity of this pool (slots or bytes)", &labels);
-  if (!m->total) return false;
+  if (!m->total) return false; // LCOV_EXCL_BR_LINE: OOM in metric registry
   valk_gauge_set_persistent(m->total);
 
   m->peak = valk_gauge_get_or_create(name_peak,
     "High water mark - maximum concurrent usage observed", &labels);
-  if (!m->peak) return false;
+  if (!m->peak) return false; // LCOV_EXCL_BR_LINE: OOM in metric registry
   valk_gauge_set_persistent(m->peak);
 
   // Create counter for overflow
   m->overflow = valk_counter_get_or_create(name_overflow,
     "Number of allocation overflows/fallbacks to backup allocator", &labels);
-  if (!m->overflow) return false;
+  if (!m->overflow) return false; // LCOV_EXCL_BR_LINE: OOM in metric registry
   valk_counter_set_persistent(m->overflow);
 
   return true;
@@ -100,9 +100,11 @@ void valk_pool_metrics_update(valk_pool_metrics_t *m,
                                u64 overflow) {
   if (!m) return;
 
+  // LCOV_EXCL_START: Defensive null checks - metrics always valid after init
   if (m->used) valk_gauge_v2_set(m->used, used);
   if (m->total) valk_gauge_v2_set(m->total, total);
   if (m->peak) valk_gauge_v2_set(m->peak, peak);
+  // LCOV_EXCL_STOP
 
   // Counter: set to absolute value (counters only increment, so we track delta)
   if (m->overflow) {

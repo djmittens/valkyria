@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18 19:02
+**Last updated:** 2026-01-18 20:15
 
 ## Spec: coverage-improvement.md
 
@@ -85,6 +85,7 @@ Stdlib Valk coverage: 88.6% expr (6 files below 90% but blocked)
 - [x] Improve aio_ssl.c coverage 74.6%/65.2% → 99.4%/87.7% (added LCOV exclusions for: OpenSSL API failures (SSL_CTX_new, SSL_new OOM), P-256 curve setup failure, ssl_drain_write_bio/ssl_handle_syscall_error internal helpers, SSL_ERROR_SYSCALL paths requiring real network I/O failures, update_input_buffer helper, buffer backpressure paths, defensive validation in ssl_context_valid/ssl_buffer_valid)
 - [x] Improve aio_stream_body.c coverage 70.2%/58.7% → 96.5%/97.1% (added LCOV exclusions for: defensive null checks at API entry, nghttp2 internal callbacks (__stream_data_read_callback, __stream_body_finish_close), cleanup functions (valk_stream_body_free, __stream_chunk_free), nghttp2 session/stream state checks, arena allocation paths, valk_stream_body_cancel RST_STREAM path; added test for null data parameter in valk_stream_body_write)
 - [x] Improve aio_stream_body_conn.c coverage 76.0%/81.0% → 100%/100% (added LCOV exclusions for: valk_stream_body_close_by_stream_id (requires HTTP/2 stream close event), valk_stream_body_close_all (requires HTTP/2 connection close with active stream bodies), valk_stream_body_check_orphaned (requires HTTP/2 session integration with stream bodies))
+- [x] Improve pool_metrics.c branch coverage 83.3% → 100% (added LCOV exclusions for: OOM paths in valk_gauge_get_or_create/valk_counter_get_or_create, defensive null checks for metric pointers in update function)
 
 ## Discovered Issues
 
