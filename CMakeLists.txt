@@ -409,6 +409,11 @@ add_executable(test_http2_streaming test/test_http2_streaming.c test/testing.c)
 target_link_libraries(test_http2_streaming PRIVATE "-lc" valkyria)
 include_directories(test_http2_streaming src/)
 
+# Stream body integration tests (data flow through nghttp2)
+add_executable(test_stream_body_integration test/test_stream_body_integration.c test/testing.c)
+target_link_libraries(test_stream_body_integration PRIVATE "-lc" valkyria)
+include_directories(test_stream_body_integration src/)
+
 # Parser error path tests
 add_executable(test_parser_errors test/test_parser_errors.c test/testing.c)
 target_link_libraries(test_parser_errors PRIVATE "-lc" valkyria)
