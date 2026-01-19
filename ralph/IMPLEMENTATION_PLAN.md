@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18T7
+**Last updated:** 2026-01-18T8
 
 ---
 
@@ -39,10 +39,10 @@ The main thread and event loop thread share environments. `valk_lenv_put` has no
   - [x] Add to CI workflow - Added to .github/workflows/coverage.yml before coverage check
   - [x] Document exceptions (atom creation, constants) - Documented in script via ALLOWED_PATTERNS dict and docstring
 
-- [ ] **Phase 4: Document threading model**
-  - [ ] Add THREADING.md or section in AGENTS.md
-  - [ ] Document: main thread vs event loop thread
-  - [ ] Document: what's safe (atoms, immutable bindings) vs unsafe (def mutation)
+- [x] **Phase 4: Document threading model**
+  - [x] Add THREADING.md or section in AGENTS.md - Created docs/THREADING.md
+  - [x] Document: main thread vs event loop thread
+  - [x] Document: what's safe (atoms, immutable bindings) vs unsafe (def mutation)
 
 ---
 

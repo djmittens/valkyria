@@ -149,7 +149,7 @@ Create a script that fails CI if `(def {*` pattern appears outside of:
 - [ ] All test files work with refactored framework
 - [ ] No `(def {*...*} ...)` mutations in src/*.valk (except atom creation)
 - [ ] CI lint check for global mutation pattern
-- [ ] Document threading model in AGENTS.md or similar
+- [x] Document threading model in AGENTS.md or similar - Added docs/THREADING.md
 
 ## Notes
 
