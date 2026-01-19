@@ -1,64 +1,75 @@
-Follow all rules from AGENTS.md (prepended above). This prompt adds ralph-specific workflow.
+0a. Run `git branch --show-current` to identify the current branch.
+0b. Study @ralph/IMPLEMENTATION_PLAN.md for current task list.
+0c. List files in `ralph/specs/` to see active specifications.
 
-## Setup
+## Branch Awareness
 
-1. Run `git branch --show-current` to identify the current branch
-2. Read `ralph/specs/*` for requirements
-3. Read @ralph/IMPLEMENTATION_PLAN.md for current task list and issues
+IMPORTANT: Check the **Branch:** field in @ralph/IMPLEMENTATION_PLAN.md.
+- If it matches current branch, continue with tasks.
+- If it doesn't match, the plan is from different work - proceed carefully or run `ralph plan` first.
 
-Check **Branch:** field matches current branch. If not, the plan is stale.
+## Termination Check
 
-## Workflow: ONE TASK OR ISSUE, THEN EXIT
+If `ralph/specs/` is empty (no spec files):
+- Output: `[RALPH] ALL_SPECS_COMPLETE`
+- EXIT immediately - all work is done
 
-Pick ONE of the following (in priority order):
+If @ralph/IMPLEMENTATION_PLAN.md has no pending tasks (no `- [ ]` items):
+- Output: `[RALPH] ALL_SPECS_COMPLETE`
+- EXIT immediately
 
-### A) Open Issue (status: OPEN or BLOCKED)
-If there are issues without `**[NEEDS_DECISION]**` or `**[RESOLVED]**` status:
-1. Investigate: reproduce, find root cause
-2. If clear fix exists: implement it, run tests, mark `**[RESOLVED]**`
-3. If multiple valid approaches: document options in the issue, mark `**[NEEDS_DECISION]**`
-4. If creates new tasks: add them to plan, mark issue `**[RESOLVED]**`
+## CRITICAL: ONE TASK, THEN EXIT
 
-### B) Incomplete Task
-If no actionable issues, pick ONE incomplete `- [ ]` item:
-1. Implement it fully (search first - don't assume not implemented)
-2. Run `make build && make test` to validate
-3. Mark `- [x]`, update timestamp
+1. Pick ONE incomplete `- [ ]` item from @ralph/IMPLEMENTATION_PLAN.md
+2. Identify which `## Spec:` section the task belongs to
+3. Read ONLY that specific spec file from `ralph/specs/`
+4. Implement the task (search codebase first - don't assume not implemented)
+5. Run tests to validate the functionality
+6. Update @ralph/IMPLEMENTATION_PLAN.md:
+   - Mark task complete: `- [x]`
+   - Update **Last updated:** timestamp
+7. `git add -A && git commit && git push`
 
-Then: `git add -A && git commit && git push` and **EXIT**
+## Spec Completion Check
 
-## Issue Statuses
+After marking a task complete, check if ALL tasks under that spec's `## Spec:` section are now `[x]`.
 
-- `**[OPEN]**` or no marker - Needs investigation (pick this up)
-- `**[BLOCKED]**` - Known blocker, needs investigation (pick this up)
-- `**[NEEDS_DECISION]**` - Options documented, waiting for user (SKIP)
-- `**[RESOLVED]**` - Fixed (SKIP)
-- `**[WONTFIX]**` - Intentionally not fixing (SKIP)
+If ALL tasks for a spec are complete:
+1. **VALIDATE**: Re-read the spec file and verify ALL requirements/acceptance criteria are met
+2. If validation PASSES:
+   - Delete the spec file: `rm ralph/specs/<filename>.md`
+   - Move completed tasks to "## Completed" section
+   - Output: `[RALPH] SPEC_COMPLETE: <filename>.md`
+   - `git add -A && git commit -m "spec complete: <filename>" && git push`
+3. If validation FAILS:
+   - Add new tasks to the spec's section for missing requirements
+   - Document gaps in "## Discovered Issues"
+   - Output: `[RALPH] SPEC_INCOMPLETE: <filename>.md - <reason>`
 
-## Documenting Options (for NEEDS_DECISION)
+**EXIT** after completing ONE task (and any spec validation).
 
-When marking an issue as NEEDS_DECISION, format it like:
-
-```
-- **[NEEDS_DECISION]** Title: Root cause explanation.
-  - **Option A**: [approach] - Pros: ... Cons: ...
-  - **Option B**: [approach] - Pros: ... Cons: ...
-  - **Recommendation**: [which option and why]
-```
-
-## Progress Signals
-
-```
-[RALPH] === START: <task or issue> ===
-[RALPH] === DONE: <task or issue> ===
-```
-
-## Creating New Issues
-
-When blocked by something new, add to "## Discovered Issues":
+## Progress Reporting
 
 ```
-- **[OPEN]** Title: What's wrong. Reproduction: `command`. Tried: what failed.
+[RALPH] BRANCH: <current branch>
+[RALPH] SPEC: <spec-filename.md>
+[RALPH] === START: <task> ===
 ```
 
-Then EXIT - don't work around it.
+```
+[RALPH] === DONE: <task> ===
+[RALPH] RESULT: <summary>
+```
+
+## Issue Handling
+
+1. Document issues in @ralph/IMPLEMENTATION_PLAN.md under "## Discovered Issues"
+2. DO NOT work around problems - fix them or document them
+3. If stuck >5 min, document and EXIT
+
+## Rules
+
+- ONE task, then EXIT (the loop restarts you fresh)
+- Complete implementations only, no stubs
+- No comments in code unless explicitly requested
+- Validate spec completion thoroughly before archiving

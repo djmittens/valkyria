@@ -1,80 +1,65 @@
-Follow all rules from AGENTS.md (prepended above). This prompt adds planning workflow.
-
-## Setup
-
-1. Run `git branch --show-current`
-2. Read `ralph/specs/*` for requirements
-3. Read current codebase to understand what exists
-
-## Research (when needed)
-
-Use web search to:
-- Find best practices for unfamiliar patterns
-- Check library/API documentation
-- Research architectural approaches
-- Understand error messages or edge cases
-
-Do NOT use web search for:
-- Project-specific code questions (use codebase search instead)
-- Things you already know confidently
+0a. Run `git branch --show-current` to identify the current branch.
+0b. List files in `ralph/specs/` to see active specifications.
+0c. Study the source code to understand the current implementation.
 
 ## Task: Gap Analysis
 
-Compare specs against CURRENT codebase. Create tasks ONLY for what's missing or broken.
+Compare specs against the CURRENT codebase and generate a fresh task list:
 
-DO NOT implement anything - planning only.
+1. Use subagents to study each spec file and relevant source code
+2. For each spec requirement, check if it's already implemented
+3. Create tasks ONLY for what's missing or broken
+4. DO NOT implement anything - planning only
 
-## Updating Existing Plan
+## Spec Lifecycle
+
+Specs in `ralph/specs/` are ACTIVE work. When fully implemented, they get deleted (git preserves history).
+
+If `ralph/specs/` is empty:
+- Output: `[RALPH] ALL_SPECS_COMPLETE`
+- EXIT immediately - nothing to plan
+
+## Updating an Existing Plan
+
+The plan is disposable - regenerate it based on current reality, not the old plan.
 
 If @ralph/IMPLEMENTATION_PLAN.md exists:
-- IGNORE old pending tasks (may be stale)
-- KEEP "## Completed" section
-- KEEP "## Discovered Issues" section
-- Generate NEW pending tasks from fresh analysis
+- IGNORE the old pending tasks (they may be stale)
+- KEEP the "## Completed" section as historical record  
+- KEEP the "## Discovered Issues" section
+- Generate NEW pending tasks from fresh gap analysis
 
-## Output Format
+## Output
 
-Write @ralph/IMPLEMENTATION_PLAN.md:
+Write @ralph/IMPLEMENTATION_PLAN.md with:
 
 ```markdown
 # Implementation Plan
 
-**Branch:** `<branch>`
+**Branch:** `<current branch>`
 **Last updated:** <timestamp>
 
-## Spec: <spec-file.md>
+## Spec: <spec-filename.md>
 
-## Pending Tasks
+- [ ] Task 1 for this spec
+- [ ] Task 2 for this spec
 
-- [ ] Task 1 (highest priority)
-- [ ] Task 2
+## Spec: <another-spec.md>
+
+- [ ] Task 1 for another spec
 
 ## Completed
 
-- [x] Previous tasks (preserve)
+- [x] Previous completed tasks (preserve from old plan)
 
 ## Discovered Issues
 
-(Issue IDs like ISSUE-1, ISSUE-2 are auto-assigned by ralph - don't add them manually)
-
-- **[OPEN]** Title: description (or no status marker = OPEN)
-- **[BLOCKED]** Title: known blocker, needs investigation
-- **[NEEDS_DECISION]** Title: options documented, waiting for user
-  - **Option A**: approach - Pros/Cons
-  - **Option B**: approach - Pros/Cons
-- **[RESOLVED]** Title: fixed
-- **[WONTFIX]** Title: intentionally not fixing
+- Issues found during implementation (preserve from old plan)
 ```
 
-## Issue Status Rules
-
-- Preserve existing issues and their statuses
-- OPEN/BLOCKED: Build loop will investigate and either fix or document options
-- NEEDS_DECISION: Waiting for user to choose (build skips these)
-- RESOLVED/WONTFIX: Done (build skips these)
-
-## Rules
-
-- Each task completable in ONE iteration
-- Order by priority
+Rules:
+- Each task should be completable in ONE iteration
+- Order by priority (most important first)
 - Be specific - "Add X to Y" not "Improve Z"
+- Group tasks under their source spec using `## Spec: <filename>`
+- Only create sections for specs that exist in `ralph/specs/`

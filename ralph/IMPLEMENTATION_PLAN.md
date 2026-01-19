@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18T23:00
+**Last updated:** 2026-01-18T23:45
 
 ---
 
@@ -50,11 +50,15 @@ The main thread and event loop thread share environments. `valk_lenv_put` has no
 
 **Goal:** 90% line coverage, 85% branch coverage for all files
 
-**Current Status:** IN PROGRESS
+**Current Status:** COMPLETE
+
+All coverage requirements are met:
+- Runtime (src/*.c): 95.0% lines, 88.8% branches
+- Stdlib (src/*.valk): 98.4% exprs
 
 ## Pending Tasks
 
-- [x] Fix async/run to work with arbitrary values (reverted to `def`-based capture)
+(none)
 
 ## Completed
 
@@ -83,6 +87,7 @@ The main thread and event loop thread share environments. `valk_lenv_put` has no
 - **[RESOLVED]** **CRITICAL: Async handle on_complete pointer staleness**: Fixed by calling `valk_evacuate_to_heap()` on callback functions before storing them in async handles. This pins the lambdas to heap immediately, avoiding the scratch arena staleness issue. Applied fix to: `aio/then` (on_complete), `aio/catch` (on_error), `aio/finally` (on_cancel), `aio/on-cancel` (on_cancel), `aio/bracket` (on_complete, on_cancel). All tests pass.
 - **[RESOLVED]** Valk coverage counts structural forms: Fixed by checking `LVAL_FLAG_QUOTED` in both `valk_coverage_mark_tree()` and `LVAL_SET_SOURCE_LOC` macro. Quoted expressions (qexprs like function formals, binding names) are no longer marked for coverage. Result: Stdlib coverage improved from 88.5% to 98.7% expr. All 6 previously blocked files now pass coverage requirements.
 - **[RESOLVED]** async/run uses atoms but atoms only support numbers: Commit 7e3c75e changed `async/run` to use `(atom nil)` for capturing results, but the `atom` builtin only accepts numbers (see parser.c:4010). **Fixed by reverting to `def`-based capture.** The `async/run` function is for pure synchronous operations (no I/O) so there's no threading concern - the callback runs immediately in the same thread. Added `*async-run-result*` to allowed patterns in `bin/check-no-globals.py`.
+- **[OPEN]** Flaky coverage timeout: The 30-second timeout in `make coverage` is sometimes insufficient for all async tests to complete. Setting `VALK_TEST_TIMEOUT_SECONDS=60` makes it reliable. Consider increasing the default timeout in the Makefile.
 
 ---
 
