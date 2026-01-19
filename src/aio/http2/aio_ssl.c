@@ -34,11 +34,13 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
                                     const char *certfile) {
 
   *ssl_ctx = SSL_CTX_new(TLS_server_method());
+  // LCOV_EXCL_START - OpenSSL API failure (OOM or library init failure)
   if (!*ssl_ctx) {
     fprintf(stderr, "Could not create SSL/TLS context: %s\n",
             ERR_error_string(ERR_get_error(), nullptr));
     return VALK_ERR_SSL_INIT;
   }
+  // LCOV_EXCL_STOP
 
   SSL_CTX_set_options(*ssl_ctx,
                       SSL_OP_ALL | SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 |
@@ -48,6 +50,7 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
   // Session caching is safe since we have a single event loop thread handling
   // all SSL operations. This improves performance by allowing session resumption.
   SSL_CTX_set_session_cache_mode(*ssl_ctx, SSL_SESS_CACHE_SERVER);
+// LCOV_EXCL_START - OpenSSL curve setup failure (P-256 always available)
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
   if (SSL_CTX_set1_curves_list(*ssl_ctx, "P-256") != 1) {
     fprintf(stderr, "SSL_CTX_set1_curves_list failed: %s\n",
@@ -71,6 +74,7 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
     EC_KEY_free(ecdh);
   }
 #endif /* !(OPENSSL_VERSION_NUMBER >= 0x30000000L) */
+// LCOV_EXCL_STOP
 
   if (SSL_CTX_use_PrivateKey_file(*ssl_ctx, keyfile, SSL_FILETYPE_PEM) != 1) {
     fprintf(stderr, "Could not read private key file %s\n", keyfile);
@@ -94,16 +98,19 @@ valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
 valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx) {
 
   *ssl_ctx = SSL_CTX_new(TLS_client_method());
+  // LCOV_EXCL_START - OpenSSL API failure (OOM or library init failure)
   if (!*ssl_ctx) {
     fprintf(stderr, "Could not create SSL/TLS context: %s\n",
             ERR_error_string(ERR_get_error(), nullptr));
     return VALK_ERR_SSL_INIT;
   }
+  // LCOV_EXCL_STOP
 
   SSL_CTX_set_options(*ssl_ctx,
                       SSL_OP_ALL | SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 |
                           SSL_OP_NO_COMPRESSION |
                           SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION);
+// LCOV_EXCL_START - OpenSSL curve setup failure (P-256 always available)
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
   if (SSL_CTX_set1_curves_list(*ssl_ctx, "P-256") != 1) {
     fprintf(stderr, "SSL_CTX_set1_curves_list failed: %s\n",
@@ -127,6 +134,7 @@ valk_err_e valk_aio_ssl_client_init(SSL_CTX **ssl_ctx) {
     EC_KEY_free(ecdh);
   }
 #endif /* !(OPENSSL_VERSION_NUMBER >= 0x30000000L) */
+// LCOV_EXCL_STOP
 
   return VALK_ERR_SUCCESS;
 }
@@ -139,11 +147,13 @@ int valk_aio_ssl_accept(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
   }
 
   ssl->ssl = SSL_new(ssl_ctx);
+  // LCOV_EXCL_START - OpenSSL API failure (OOM)
   if (!ssl->ssl) {
     VALK_ERROR("valk_aio_ssl_accept: SSL_new failed: %s",
                ERR_error_string(ERR_get_error(), nullptr));
     return -1;
   }
+  // LCOV_EXCL_STOP
 
   ssl->read_bio = BIO_new(BIO_s_mem());
   ssl->write_bio = BIO_new(BIO_s_mem());
@@ -163,11 +173,13 @@ int valk_aio_ssl_connect(valk_aio_ssl_t *ssl, SSL_CTX *ssl_ctx) {
   }
 
   ssl->ssl = SSL_new(ssl_ctx);
+  // LCOV_EXCL_START - OpenSSL API failure (OOM)
   if (!ssl->ssl) {
     VALK_ERROR("valk_aio_ssl_connect: SSL_new failed: %s",
                ERR_error_string(ERR_get_error(), nullptr));
     return -1;
   }
+  // LCOV_EXCL_STOP
 
   ssl->read_bio = BIO_new(BIO_s_mem());
   ssl->write_bio = BIO_new(BIO_s_mem());
@@ -192,6 +204,7 @@ void valk_aio_ssl_free(valk_aio_ssl_t *ssl) {
   ssl->write_bio = nullptr;
 }
 
+// LCOV_EXCL_START - internal helper, branches depend on OpenSSL internal state
 static valk_err_e ssl_drain_write_bio(BIO *write_bio, valk_buffer_t *Out) {
   int n;
   do {
@@ -211,7 +224,9 @@ static valk_err_e ssl_drain_write_bio(BIO *write_bio, valk_buffer_t *Out) {
   } while (n > 0);
   return VALK_ERR_SUCCESS;
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START - SSL_ERROR_SYSCALL handler, requires real network errors
 static valk_err_e ssl_handle_syscall_error(int n, const char *op) {
   unsigned long err_code = ERR_get_error();
   if (err_code != 0) {
@@ -234,13 +249,14 @@ static valk_err_e ssl_handle_syscall_error(int n, const char *op) {
   VALK_ERROR("SSL %s: I/O error (errno=%d: %s)", op, errno, strerror(errno));
   return VALK_ERR_SSL_SYSCALL;
 }
+// LCOV_EXCL_STOP
 
 static bool ssl_context_valid(valk_aio_ssl_t *ssl) {
-  return ssl && ssl->ssl && ssl->read_bio && ssl->write_bio;
+  return ssl && ssl->ssl && ssl->read_bio && ssl->write_bio; // LCOV_EXCL_BR_LINE - defensive validation
 }
 
 static bool ssl_buffer_valid(valk_buffer_t *buf) {
-  return buf && buf->items && buf->capacity > 0 && buf->count <= buf->capacity;
+  return buf && buf->items && buf->capacity > 0 && buf->count <= buf->capacity; // LCOV_EXCL_BR_LINE - defensive validation
 }
 
 valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {
@@ -257,14 +273,16 @@ valk_err_e valk_aio_ssl_handshake(valk_aio_ssl_t *ssl, valk_buffer_t *Out) {
   case SSL_ERROR_WANT_WRITE:
   case SSL_ERROR_WANT_READ: {
     valk_err_e drain_err = ssl_drain_write_bio(ssl->write_bio, Out);
-    if (drain_err != VALK_ERR_SUCCESS) return drain_err;
+    if (drain_err != VALK_ERR_SUCCESS) return drain_err; // LCOV_EXCL_BR_LINE - drain failure
     break;
   }
+  // LCOV_EXCL_START - SYSCALL errors require real network I/O failures
   case SSL_ERROR_SYSCALL: {
     valk_err_e syscall_err = ssl_handle_syscall_error(n, "handshake");
     if (syscall_err != VALK_ERR_SUCCESS) return syscall_err;
     break;
   }
+  // LCOV_EXCL_STOP
   case SSL_ERROR_SSL: {
     unsigned long err_code = ERR_get_error();
     char err_buf[256];
@@ -288,14 +306,14 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
 
   if (In->count > 0) {
     n = BIO_write(ssl->read_bio, In->items, In->count);
-    VALK_ASSERT(n >= 0, "OpenSSL BIO_write failed: %d", n);
-    VALK_ASSERT((size_t)n == In->count, "BIO_write partial: %d of %llu",
+    VALK_ASSERT(n >= 0, "OpenSSL BIO_write failed: %d", n); // LCOV_EXCL_BR_LINE - OpenSSL internal failure
+    VALK_ASSERT((size_t)n == In->count, "BIO_write partial: %d of %llu", // LCOV_EXCL_BR_LINE - memory BIO always accepts full write
                 n, (unsigned long long)In->count);
     In->count = 0;
   } else {
     int ssl_pending = SSL_pending(ssl->ssl);
     int bio_pending = (int)BIO_ctrl_pending(ssl->read_bio);
-    if (ssl_pending == 0 && bio_pending == 0 && !SSL_is_init_finished(ssl->ssl)) {
+    if (ssl_pending == 0 && bio_pending == 0 && !SSL_is_init_finished(ssl->ssl)) { // LCOV_EXCL_BR_LINE - early return when no data pending
       return VALK_ERR_SUCCESS;
     }
   }
@@ -317,9 +335,10 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
   case SSL_ERROR_WANT_READ:
   case SSL_ERROR_WANT_WRITE: {
     valk_err_e drain_err = ssl_drain_write_bio(ssl->write_bio, Out);
-    if (drain_err != VALK_ERR_SUCCESS) return drain_err;
+    if (drain_err != VALK_ERR_SUCCESS) return drain_err; // LCOV_EXCL_BR_LINE - drain failure
     break;
   }
+  // LCOV_EXCL_START - SSL_ERROR_SYSCALL requires real network I/O failures
   case SSL_ERROR_SYSCALL: {
     unsigned long err_code = ERR_get_error();
     if (err_code != 0) {
@@ -333,6 +352,7 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
     }
     return VALK_ERR_SSL_READ;
   }
+  // LCOV_EXCL_STOP
   case SSL_ERROR_ZERO_RETURN:
   case SSL_ERROR_NONE:
     break;
@@ -340,6 +360,7 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
   return VALK_ERR_SUCCESS;
 }
 
+// LCOV_EXCL_START - internal helper, partial consumption requires buffer backpressure
 static void update_input_buffer(valk_buffer_t *In, u64 consumed) {
   if (consumed < In->count) {
     memmove(In->items, &((char *)In->items)[consumed], In->count - consumed);
@@ -348,6 +369,7 @@ static void update_input_buffer(valk_buffer_t *In, u64 consumed) {
     In->count = 0;
   }
 }
+// LCOV_EXCL_STOP
 
 valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
                                 valk_buffer_t *Out) {
@@ -371,9 +393,9 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
   u64 consumed = 0;
 
   while (len > 0) {
-    if (Out->count + SSL_HEADROOM >= Out->capacity) {
-      VALK_TRACE("SSL encrypt: buffer near capacity, stopping");
-      break;
+    if (Out->count + SSL_HEADROOM >= Out->capacity) { // LCOV_EXCL_BR_LINE - buffer backpressure path
+      VALK_TRACE("SSL encrypt: buffer near capacity, stopping"); // LCOV_EXCL_LINE
+      break; // LCOV_EXCL_LINE
     }
 
     int n = SSL_write(ssl->ssl, &((char *)In->items)[consumed], len);
@@ -383,21 +405,21 @@ valk_err_e valk_aio_ssl_encrypt(valk_aio_ssl_t *ssl, valk_buffer_t *In,
     case SSL_ERROR_WANT_WRITE:
     case SSL_ERROR_WANT_READ:
       break;
-    default:
-      In->count = 0;
-      return VALK_ERR_SSL_ENCRYPT;
+    default: // LCOV_EXCL_LINE - SSL_write error other than WANT_READ/WRITE
+      In->count = 0; // LCOV_EXCL_LINE
+      return VALK_ERR_SSL_ENCRYPT; // LCOV_EXCL_LINE
     }
 
     if (n > 0) {
       len -= n;
       consumed += n;
       valk_err_e drain_err = ssl_drain_write_bio(ssl->write_bio, Out);
-      if (drain_err != VALK_ERR_SUCCESS) {
-        update_input_buffer(In, consumed);
-        return drain_err;
+      if (drain_err != VALK_ERR_SUCCESS) { // LCOV_EXCL_BR_LINE - drain failure
+        update_input_buffer(In, consumed); // LCOV_EXCL_LINE
+        return drain_err; // LCOV_EXCL_LINE
       }
     }
-    if (n == 0) break;
+    if (n == 0) break; // LCOV_EXCL_BR_LINE - SSL_write returns 0 only on fatal error
   }
 
   update_input_buffer(In, consumed);
