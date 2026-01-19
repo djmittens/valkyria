@@ -4010,7 +4010,7 @@ static valk_lval_t* valk_builtin_atom(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
   valk_atom_t* atom = malloc(sizeof(valk_atom_t));
   atomic_store(&atom->value, valk_lval_list_nth(a, 0)->num);
-  return valk_lval_ref("atom", atom, NULL);
+  return valk_lval_ref("atom", atom, free);
 }
 
 static valk_lval_t* valk_builtin_atom_get(valk_lenv_t* e, valk_lval_t* a) {
@@ -4405,6 +4405,8 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
   // This is important when aio/stop is called from within the event loop
   // (e.g., from an aio/schedule callback), as aio/stop can't join itself.
   valk_aio_wait_for_shutdown(sys);
+
+  aio_ref->ref.ptr = nullptr;
 
   return valk_lval_nil();
 }

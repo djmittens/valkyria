@@ -250,16 +250,22 @@ void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result
     return;
   }
 
+  valk_async_status_t current = valk_async_handle_get_status(handle);
+  if (valk_async_handle_is_terminal(current)) {
+    VALK_DEBUG("  handle already in terminal state: %d", current);
+    return;
+  }
+
+  handle->result = result;
+  atomic_thread_fence(memory_order_release);
+
   bool transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_COMPLETED);
   if (!transitioned) {
     transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, VALK_ASYNC_COMPLETED);
   }
   if (!transitioned) {
-    VALK_DEBUG("  handle already in terminal state: %d", valk_async_handle_get_status(handle));
     return;
   }
-
-  handle->result = result;
 
   valk_async_notify_all_parent(handle);
   valk_async_notify_race_parent(handle);
@@ -278,6 +284,14 @@ void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
     return;
   }
 
+  valk_async_status_t current = valk_async_handle_get_status(handle);
+  if (valk_async_handle_is_terminal(current)) {
+    return;
+  }
+
+  handle->error = error;
+  atomic_thread_fence(memory_order_release);
+
   bool transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_FAILED);
   if (!transitioned) {
     transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, VALK_ASYNC_FAILED);
@@ -285,8 +299,6 @@ void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
   if (!transitioned) {
     return;
   }
-
-  handle->error = error;
 
   valk_async_notify_all_parent(handle);
   valk_async_notify_race_parent(handle);
