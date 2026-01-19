@@ -38,6 +38,10 @@ jobs:
         run: |
           make coverage-report
       
+      - name: Check Global Mutation Lint
+        run: |
+          python3 bin/check-no-globals.py
+      
       - name: Check Runtime Coverage Requirements
         run: |
           python3 bin/check-coverage.py --build-dir build-coverage

@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18T6
+**Last updated:** 2026-01-18T7
 
 ---
 
@@ -34,10 +34,10 @@ The main thread and event loop thread share environments. `valk_lenv_put` has no
   - [x] All test/*.valk files - Clean: only test/test_test_framework_empty.valk resets `*test-registry*` for testing empty list path (acceptable for test infrastructure)
   - Note: modules/test.valk globals remain for backward compatibility (load-time only, single-threaded)
 
-- [ ] **Phase 3: Add CI lint** - Script to fail on global mutation pattern
-  - [ ] Create bin/check-no-globals.py
-  - [ ] Add to CI workflow
-  - [ ] Document exceptions (atom creation, constants)
+- [x] **Phase 3: Add CI lint** - Script to fail on global mutation pattern
+  - [x] Create bin/check-no-globals.py - Scans all .valk files for `(def {*...*} ...)` mutations
+  - [x] Add to CI workflow - Added to .github/workflows/coverage.yml before coverage check
+  - [x] Document exceptions (atom creation, constants) - Documented in script via ALLOWED_PATTERNS dict and docstring
 
 - [ ] **Phase 4: Document threading model**
   - [ ] Add THREADING.md or section in AGENTS.md
