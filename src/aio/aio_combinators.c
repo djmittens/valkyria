@@ -286,6 +286,7 @@ static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
   async_handle->request_ctx = req_ctx;
 
   valk_async_handle_uv_data_t *timer_data = aligned_alloc(alignof(valk_async_handle_uv_data_t), sizeof(valk_async_handle_uv_data_t));
+  timer_data->magic = VALK_UV_DATA_TIMER_MAGIC;
   timer_data->handle = async_handle;
   timer_data->uv.timer.data = timer_data;
 

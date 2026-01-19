@@ -2,43 +2,61 @@ Follow all rules from AGENTS.md (prepended above). This prompt adds investigatio
 
 ## Issue: ISSUE-N
 
-Deep-dive investigation on a blocker that the normal build loop couldn't resolve.
+Deep-dive investigation on a blocker. This is a RESEARCH-ONLY task - do not implement fixes.
 
 ## Steps
 
 1. **Reproduce** - Verify issue still exists, find minimal repro
 2. **Analyze** - Understand root cause (not just symptoms)
-3. **Research** - Search codebase for similar patterns, check if it's a known problem
-4. **Fix or Document** - Either fix it, or create concrete tasks, or escalate
+3. **Research** - Search codebase AND web for similar patterns, known issues, solutions
+4. **Document** - Update the issue in IMPLEMENTATION_PLAN.md with findings and options
+
+## Web Search
+
+Use web search to:
+- Find known issues / bug reports for similar problems
+- Check library documentation for correct usage
+- Research error messages
+- Find solutions others have used
+
+Do NOT use web search for:
+- Project-specific code (use codebase search)
+- Things you already know confidently
+
+## Output: Update the Issue
+
+Update the issue in IMPLEMENTATION_PLAN.md with your findings:
+
+```
+- **[NEEDS_DECISION]** Title: Root cause explanation.
+  - **Option A**: [approach] - Pros: ... Cons: ...
+  - **Option B**: [approach] - Pros: ... Cons: ...
+  - **Recommendation**: [which option and why]
+```
+
+If only one clear fix exists, you may mark it `**[RESOLVED]**` and implement it.
 
 ## Output Signal (required)
 
-End with exactly ONE of:
+```
+[RALPH] ISSUE_DOCUMENTED ISSUE-N
+```
+Options documented, waiting for user decision.
 
 ```
 [RALPH] ISSUE_RESOLVED ISSUE-N
 ```
-You fixed it. Tests pass.
+Clear fix existed, implemented and tested.
 
 ```
-[RALPH] ISSUE_TASKS_CREATED ISSUE-N
+[RALPH] ISSUE_WONTFIX ISSUE-N
 ```
-Broke it into tasks in IMPLEMENTATION_PLAN.md. Run `ralph build` to continue.
-
-```
-[RALPH] ISSUE_NEEDS_HUMAN ISSUE-N
-```
-Requires human decision. Explain what decision is needed.
-
-```
-[RALPH] ISSUE_CLOSED ISSUE-N
-```
-Not a real blocker / won't fix. Explain why.
+Not a real blocker / intentionally not fixing. Explain why.
 
 ## Critical Rules
 
-- If you discover NEW bugs, document them as new `[ISSUE-N]` entries
+- **Research first, document options** - Don't jump to implementation
+- If multiple valid approaches exist, document them and let user decide
+- If you discover NEW bugs, document them as new issues
 - DO NOT work around bugs - fix them or document them
-- DO NOT write tests that avoid triggering bugs
-- Run `make build && make test` after any changes
 - Use `timeout 60` for commands that might hang

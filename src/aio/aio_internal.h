@@ -112,7 +112,10 @@ typedef enum __aio_http_srv_e {
   VALK_SRV_CLOSED,
 } __aio_http_srv_e;
 
+#define VALK_UV_DATA_TIMER_MAGIC 0x71AE8721
+
 typedef struct valk_async_handle_uv_data {
+  u32 magic;
   union {
     alignas(16) uv_timer_t timer;
   } uv;

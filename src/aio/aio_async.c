@@ -312,8 +312,11 @@ static void valk_async_cancel_task(void *ctx) {
   atomic_store_explicit(&handle->cancel_requested, 1, memory_order_release);
 
   if (handle->uv_handle_ptr) {
-    valk_async_handle_uv_data_t *uv_data = handle->uv_handle_ptr;
-    uv_timer_stop(&uv_data->uv.timer);
+    u32 *magic_ptr = (u32*)handle->uv_handle_ptr;
+    if (*magic_ptr == VALK_UV_DATA_TIMER_MAGIC) {
+      valk_async_handle_uv_data_t *uv_data = handle->uv_handle_ptr;
+      uv_timer_stop(&uv_data->uv.timer);
+    }
   }
 
   if (handle->on_cancel && handle->env) {
