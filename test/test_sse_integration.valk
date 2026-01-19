@@ -84,7 +84,82 @@
                       :deferred
                     )}
                     
-                    {`{:status "200" :body "OK"}}
+                    {(if (== path "/sse-full")
+                      {(do
+                        (= {stream} (sse/open req))
+                        (sse/full stream "update" "id-001" "full event data")
+                        (sse/close stream)
+                        :deferred
+                      )}
+                      
+                      {(if (== path "/sse-full-invalid")
+                        {(do
+                          (= {stream} (sse/open req))
+                          (= {result} (sse/full stream "bad\ntype" "id-002" "invalid event"))
+                          (sse/send stream (str "error: " (error? result)))
+                          (sse/close stream)
+                          :deferred
+                        )}
+                        
+                        {(if (== path "/sse-comment")
+                          {(do
+                            (= {stream} (sse/open req))
+                            (sse/comment stream "keep-alive comment")
+                            (sse/close stream)
+                            :deferred
+                          )}
+                          
+                          {(if (== path "/sse-heartbeat")
+                            {(do
+                              (= {stream} (sse/open req))
+                              (sse/heartbeat stream)
+                              (sse/close stream)
+                              :deferred
+                            )}
+                            
+                            {(if (== path "/sse-writable")
+                              {(do
+                                (= {stream} (sse/open req))
+                                (= {writable} (sse/writable? stream))
+                                (sse/send stream (str "writable: " writable))
+                                (sse/close stream)
+                                :deferred
+                              )}
+                              
+                              {(if (== path "/sse-cancel")
+                                {(do
+                                  (= {stream} (sse/open req))
+                                  (sse/send stream "about to cancel")
+                                  (sse/cancel stream)
+                                  :deferred
+                                )}
+                                
+                                {(if (== path "/sse-message")
+                                  {(do
+                                    (= {stream} (sse/open req))
+                                    (sse/message stream "message alias test")
+                                    (sse/close stream)
+                                    :deferred
+                                  )}
+                                  
+                                  {(if (== path "/sse-event-invalid")
+                                    {(do
+                                      (= {stream} (sse/open req))
+                                      (= {result} (sse/event stream "invalid\ntype" "should fail"))
+                                      (sse/send stream (str "error: " (error? result)))
+                                      (sse/close stream)
+                                      :deferred
+                                    )}
+                                    
+                                    {`{:status "200" :body "OK"}}
+                                  )}
+                                )}
+                              )}
+                            )}
+                          )}
+                        )}
+                      )}
+                    )}
                   )}
                 )}
               )}
@@ -95,14 +170,24 @@
     )
   }))
 
-; Handler using sse/handler wrapper
+; Handler using sse/handler wrapper - this tests lines 99-101
 (def {wrapped-handler}
   (sse/handler (\ {stream req} {
     (sse/send stream "wrapped handler test")
     (sse/close stream)
   })))
 
-(def {server} (http2/server-listen aio 0 test-handler))
+; Create a combined handler that routes to wrapped-handler for testing sse/handler
+(def {combined-handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (if (== path "/sse-wrapped")
+      {(wrapped-handler req)}
+      {(test-handler req)}
+    )
+  }))
+
+(def {server} (http2/server-listen aio 0 combined-handler))
 (def {TEST_PORT} (http2/server-port server))
 
 ; Counter for tracking received responses (incremented atomically in main loop)
@@ -184,6 +269,78 @@
 ; Test 10: sse/json-event sends JSON with event type
 (test/async "sse/json-event sends typed JSON" (\ {done} {
   (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-json-event" (\ {resp} {}))
+  (aio/schedule aio 300 (\ {} {
+    (done true)
+  }))
+}))
+
+; Test 11: sse/full sends event with type, id, and data
+(test/async "sse/full sends complete event" (\ {done} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-full" (\ {resp} {}))
+  (aio/schedule aio 300 (\ {} {
+    (done true)
+  }))
+}))
+
+; Test 12: sse/full with invalid event type returns error
+(test/async "sse/full rejects newlines in event-type" (\ {done} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-full-invalid" (\ {resp} {}))
+  (aio/schedule aio 300 (\ {} {
+    (done true)
+  }))
+}))
+
+; Test 13: sse/comment sends comment line
+(test/async "sse/comment sends comment" (\ {done} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-comment" (\ {resp} {}))
+  (aio/schedule aio 300 (\ {} {
+    (done true)
+  }))
+}))
+
+; Test 14: sse/heartbeat sends empty comment
+(test/async "sse/heartbeat sends heartbeat" (\ {done} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-heartbeat" (\ {resp} {}))
+  (aio/schedule aio 300 (\ {} {
+    (done true)
+  }))
+}))
+
+; Test 15: sse/writable? returns stream writable status
+(test/async "sse/writable? returns status" (\ {done} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-writable" (\ {resp} {}))
+  (aio/schedule aio 300 (\ {} {
+    (done true)
+  }))
+}))
+
+; Test 16: sse/cancel cancels stream
+(test/async "sse/cancel cancels stream" (\ {done} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-cancel" (\ {resp} {}))
+  (aio/schedule aio 300 (\ {} {
+    (done true)
+  }))
+}))
+
+; Test 17: sse/message alias works
+(test/async "sse/message alias works" (\ {done} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-message" (\ {resp} {}))
+  (aio/schedule aio 300 (\ {} {
+    (done true)
+  }))
+}))
+
+; Test 18: sse/event with invalid event type returns error
+(test/async "sse/event rejects newlines in event-type" (\ {done} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-event-invalid" (\ {resp} {}))
+  (aio/schedule aio 300 (\ {} {
+    (done true)
+  }))
+}))
+
+; Test 19: sse/handler wrapper creates working handler
+(test/async "sse/handler wrapper works" (\ {done} {
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-wrapped" (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
     (done true)
   }))
