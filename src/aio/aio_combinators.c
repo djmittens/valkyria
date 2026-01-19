@@ -1002,7 +1002,7 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
 
   result->status = VALK_ASYNC_RUNNING;
   result->env = e;
-  result->on_complete = fn;
+  result->on_complete = valk_evacuate_to_heap(fn);
   result->on_error = NULL;
   result->parent = source;
 
@@ -1083,7 +1083,7 @@ static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
   catch_handle->status = VALK_ASYNC_RUNNING;
   catch_handle->env = e;
   catch_handle->on_complete = NULL;
-  catch_handle->on_error = fn;
+  catch_handle->on_error = valk_evacuate_to_heap(fn);
   catch_handle->parent = source;
 
   valk_async_handle_add_child(source, catch_handle);
@@ -1144,7 +1144,7 @@ static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
 
   finally_handle->status = VALK_ASYNC_RUNNING;
   finally_handle->env = e;
-  finally_handle->on_cancel = fn;
+  finally_handle->on_cancel = valk_evacuate_to_heap(fn);
   finally_handle->parent = source;
 
   valk_async_handle_add_child(source, finally_handle);
@@ -1885,7 +1885,7 @@ static valk_lval_t* valk_builtin_aio_on_cancel(valk_lenv_t* e, valk_lval_t* a) {
   }
   // LCOV_EXCL_BR_STOP
 
-  handle->on_cancel = fn;
+  handle->on_cancel = valk_evacuate_to_heap(fn);
   // LCOV_EXCL_BR_START - env check: defensive
   if (!handle->env) handle->env = e;
   // LCOV_EXCL_BR_STOP
@@ -1953,7 +1953,7 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
         bracket_handle->env = e;
         bracket_handle->parent = use_handle;
 
-        bracket_handle->on_cancel = release_fn;
+        bracket_handle->on_cancel = valk_evacuate_to_heap(release_fn);
         bracket_handle->result = resource;
 
         valk_async_handle_add_child(use_handle, bracket_handle);
@@ -1990,8 +1990,8 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
   bracket_handle->status = VALK_ASYNC_RUNNING;
   bracket_handle->env = e;
 
-  bracket_handle->on_complete = use_fn;
-  bracket_handle->on_cancel = release_fn;
+  bracket_handle->on_complete = valk_evacuate_to_heap(use_fn);
+  bracket_handle->on_cancel = valk_evacuate_to_heap(release_fn);
   bracket_handle->parent = acquire;
 
   valk_async_handle_add_child(acquire, bracket_handle);

@@ -137,9 +137,96 @@ All requirements met:
 
 - **[RESOLVED]** async_handles.valk timer paths: Fixed `aio/catch` to properly flat-map when recovery function returns a handle (same behavior as `aio/then`). Added HTTP integration tests for `delay-value`, `chain`, `aio/map`, and `aio/try`.
 - **[RESOLVED]** graceful-shutdown cancel path: The original hypothesis was wrong. `aio/cancel` from async callbacks works correctly. The actual issue was a **checkpoint pointer staleness bug** where async handle `on_complete` callbacks become stale after checkpoint resets the scratch arena. Root cause: checkpoint doesn't fix pointers in async handles (only root environment). When multiple `aio/then` callbacks are created sequentially, they allocate at the same scratch offset, and checkpoint evacuates them, but the async handle's `on_complete` field still points to the pre-evacuation scratch address which gets reused. **This is a separate, more fundamental GC/checkpoint bug that affects all chained async operations.**
-- **[OPEN]** **CRITICAL: Async handle on_complete pointer staleness**: When `aio/then` is called on a pending handle, the callback lambda is stored in `result->on_complete`. This pointer points to a scratch arena allocation. After checkpoint, the lambda is evacuated to the heap, but the async handle's `on_complete` pointer is NOT updated (checkpoint only fixes pointers in root env and evacuated values, not in async handles). When a new lambda is allocated at the same scratch offset, it overwrites the memory that `on_complete` still points to. **Reproduction**: Create two chained `aio/then` on a pending sleep - the first callback never executes, the second executes instead. **Fix options**: (A) Pin lambdas used in async handles to heap immediately in `aio/then`, or (B) Track async handles in checkpoint and fix their pointers.
+- **[RESOLVED]** **CRITICAL: Async handle on_complete pointer staleness**: Fixed by calling `valk_evacuate_to_heap()` on callback functions before storing them in async handles. This pins the lambdas to heap immediately, avoiding the scratch arena staleness issue. Applied fix to: `aio/then` (on_complete), `aio/catch` (on_error), `aio/finally` (on_cancel), `aio/on-cancel` (on_cancel), `aio/bracket` (on_complete, on_cancel). All tests pass.
 - **[OPEN]** async_handles.valk timer-dependent paths: Timer-dependent async paths crash when tested via HTTP. Blocked coverage at 86.1% - remaining 4% requires timer callbacks that fail in HTTP test context.
 - **[OPEN]** aio/debug.valk SSE streaming paths: SSE streaming paths inside `aio/interval` callbacks (lines 129, 131: `:stop` on close/non-writable) only execute during live HTTP/2 SSE streaming with real connection close/backpressure events. Blocked coverage at 85.0%.
+- **[OPEN]** Valk coverage counts structural forms: The coverage tool marks ALL parsed AST nodes (including function formals, binding names) as expressions. This inflates totals and lowers percentages. Files like `http_api.valk` show 89.1% expr but 100% branch - all code is tested but formals aren't "executed". Fix: Only instrument expressions in evaluating position (like Clojure's Cloverage). See `coverage-tool-fix.md` spec for design.
+
+---
+
+## Spec: coverage-tool-fix.md
+
+**Goal:** Fix Valk expression coverage to only count expressions in evaluating position, not structural forms
+
+**Current Status:** NOT STARTED
+
+### Problem
+
+The Valk coverage tool currently marks ALL parsed AST nodes as "found" expressions, including:
+- Function formals: `{x y}` in `(fun {foo x y} ...)`
+- Binding names: `{a}` in `(= {a} 5)`
+- Quoted/stored bodies before they're called
+
+This causes inflated "total" counts and artificially low coverage percentages. For example, `http_api.valk` shows 89.1% expr coverage but 100% branch coverage - all logic is tested, but formals aren't "executed".
+
+### Research (from Clojure Cloverage)
+
+Cloverage solves this by wrapping forms **at macro-expansion time**, explicitly handling each form type:
+- `:fn` forms: wrap only the **body**, not the args
+- `:let` forms: wrap only the **values**, not the binding symbols
+- `:def` forms: wrap only the initialization expression
+
+Key principle: **Only instrument expressions in evaluating position**.
+
+### Design
+
+**Approach:** Don't mark structural AST nodes for coverage during parsing. Only mark nodes that will actually be evaluated at runtime.
+
+**Files to modify:**
+- `src/parser.c` - Where `VALK_COVERAGE_MARK_LVAL` is called during special form handling
+- `src/coverage.c` / `src/coverage.h` - Possibly add helper to distinguish structural vs evaluating
+
+**Special forms requiring changes:**
+
+| Form | Don't count | Do count |
+|------|-------------|----------|
+| `(fun {name args} {body})` | `{name args}` formals | `body` when called |
+| `(\ {args} {body})` | `{args}` formals | `body` when called |
+| `(= {binding} value)` | `{binding}` name | `value` |
+| `(def {name} value)` | `{name}` | `value` |
+| `(if cond {then} {else})` | N/A | `cond`, `then`/`else` when taken |
+
+**Implementation approach:**
+
+1. In special form handlers (`valk_builtin_lambda`, `valk_builtin_def`, `valk_builtin_put`, etc.), explicitly skip `VALK_COVERAGE_MARK_LVAL` for structural children
+2. Alternatively, tag lvals during parsing with a flag indicating "structural" vs "evaluating"
+3. The body of lambdas/functions should only be marked when actually evaluated (in `valk_lval_call`)
+
+### Tasks
+
+- [ ] **Phase 1: Audit current coverage marking** - Find all `VALK_COVERAGE_MARK_LVAL` and `VALK_COVERAGE_RECORD_LVAL` calls
+  - [ ] List which special forms mark their structural children
+  - [ ] Identify which calls need to be conditional or removed
+
+- [ ] **Phase 2: Fix lambda/function formals** - Don't mark formals as coverage expressions
+  - [ ] `valk_builtin_lambda` - don't mark formals qexpr
+  - [ ] `valk_builtin_fun` (if separate) - same
+  - [ ] Verify function body is only marked when called in `valk_lval_call`
+
+- [ ] **Phase 3: Fix binding forms** - Don't mark binding names
+  - [ ] `valk_builtin_put` (`=`) - don't mark the binding name qexpr
+  - [ ] `valk_builtin_def` - don't mark the name qexpr
+  - [ ] Only mark the value being bound
+
+- [ ] **Phase 4: Test and validate**
+  - [ ] Run `make coverage` and verify Valk file percentages improve
+  - [ ] `http_api.valk` should go from 89.1% to ~100% (matching branch coverage)
+  - [ ] `sse.valk` should improve similarly
+  - [ ] Ensure no false negatives (real uncovered code still shows as uncovered)
+
+- [ ] **Phase 5: Update VALK_KNOWN_BLOCKED** - Remove files that are no longer blocked
+  - [ ] Review each blocked file
+  - [ ] Remove "partial eval-point coverage" reason if fixed
+  - [ ] Keep files blocked for real reasons (timer crashes, infinite loops, etc.)
+
+### Success Criteria
+
+- Valk expression coverage aligns with branch coverage for fully-tested files
+- `http_api.valk`: 100% expr (was 89.1%)
+- `sse.valk`: ~100% expr (was 87.7%)
+- No regressions in detecting actual uncovered code
+
+---
 
 ## Notes
 
