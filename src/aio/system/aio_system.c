@@ -364,11 +364,10 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
 void valk_aio_stop(valk_aio_system_t *sys) {
   if (!sys) return;
 
-  if (sys->shuttingDown) {
+  bool expected = false;
+  if (!atomic_compare_exchange_strong(&sys->shuttingDown, &expected, true)) {
     return;
   }
-
-  sys->shuttingDown = true;
   
   // LCOV_EXCL_START - defensive error checks for corrupted state
   if (!sys->stopperHandle) {
