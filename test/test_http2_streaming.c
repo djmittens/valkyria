@@ -108,6 +108,16 @@ static void test_stream_body_write_null(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static void test_stream_body_write_null_data(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_stream_body_t fake_body = {0};
+  int rv = valk_stream_body_write(&fake_body, nullptr, 4);
+  ASSERT_EQ(rv, -1);
+
+  VALK_PASS();
+}
+
 static void test_stream_body_writable_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -596,6 +606,7 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_stream_body_close_null", test_stream_body_close_null);
   valk_testsuite_add_test(suite, "test_stream_body_free_null", test_stream_body_free_null);
   valk_testsuite_add_test(suite, "test_stream_body_write_null", test_stream_body_write_null);
+  valk_testsuite_add_test(suite, "test_stream_body_write_null_data", test_stream_body_write_null_data);
   valk_testsuite_add_test(suite, "test_stream_body_writable_null", test_stream_body_writable_null);
   valk_testsuite_add_test(suite, "test_stream_body_queue_len_null", test_stream_body_queue_len_null);
 

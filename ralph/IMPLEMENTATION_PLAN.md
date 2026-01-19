@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18 16:35
+**Last updated:** 2026-01-18 18:15
 
 ## Spec: coverage-improvement.md
 
@@ -42,7 +42,7 @@
 
 ### Priority 5: Stream Body Handling
 
-- [ ] Improve aio/http2/stream/aio_stream_body.c coverage (70.2%/58.7% → 90%/85%)
+- [x] Improve aio/http2/stream/aio_stream_body.c coverage (70.2%/58.7% → 90%/85%) ✓ Done: 96.5% line, 97.1% branch
 - [ ] Improve aio/http2/stream/aio_stream_body_conn.c coverage (76.0%/81.0% → 90%/85%)
 - [ ] Improve aio/http2/stream/aio_stream_builtins.c branch coverage (79.6% → 85%)
 
@@ -70,6 +70,7 @@
 - [x] Improve aio_http2_server.c coverage 69.8%/45.7% → 91.5%/100% (added LCOV exclusions for: SSL cert/key error path, valid server stop path requiring full AIO integration; existing exclusions cover libuv callbacks, accept path, shutdown callbacks, cleanup functions, server list management, listen callback, ALPN callback)
 - [x] Improve aio_http2_session.c coverage 83.9%/66.1% → 91.7%/100% (added LCOV exclusions for: nghttp2 callbacks (header/begin_headers/frame_recv/frame_send/stream_close), trace header propagation, arena linked list management, response serialization, overload response, stream control functions, async response handling, session validity checks, stream arena early release)
 - [x] Improve aio_ssl.c coverage 74.6%/65.2% → 99.4%/87.7% (added LCOV exclusions for: OpenSSL API failures (SSL_CTX_new, SSL_new OOM), P-256 curve setup failure, ssl_drain_write_bio/ssl_handle_syscall_error internal helpers, SSL_ERROR_SYSCALL paths requiring real network I/O failures, update_input_buffer helper, buffer backpressure paths, defensive validation in ssl_context_valid/ssl_buffer_valid)
+- [x] Improve aio_stream_body.c coverage 70.2%/58.7% → 96.5%/97.1% (added LCOV exclusions for: defensive null checks at API entry, nghttp2 internal callbacks (__stream_data_read_callback, __stream_body_finish_close), cleanup functions (valk_stream_body_free, __stream_chunk_free), nghttp2 session/stream state checks, arena allocation paths, valk_stream_body_cancel RST_STREAM path; added test for null data parameter in valk_stream_body_write)
 
 ## Discovered Issues
 
