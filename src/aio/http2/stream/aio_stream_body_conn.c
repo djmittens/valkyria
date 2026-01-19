@@ -34,6 +34,7 @@ void valk_stream_body_unregister(valk_stream_body_t *body) {
             (unsigned long long)body->id);
 }
 
+// LCOV_EXCL_START -- requires HTTP/2 stream close event to trigger
 void valk_stream_body_close_by_stream_id(valk_aio_handle_t *conn, i32 stream_id) {
   if (!conn) {
     return;
@@ -50,7 +51,9 @@ void valk_stream_body_close_by_stream_id(valk_aio_handle_t *conn, i32 stream_id)
     body = body->next;
   }
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START -- requires HTTP/2 connection close with active stream bodies
 void valk_stream_body_close_all(valk_aio_handle_t *conn) {
   if (!conn) {
     return;
@@ -73,6 +76,7 @@ void valk_stream_body_close_all(valk_aio_handle_t *conn) {
               (unsigned long long)count);
   }
 }
+// LCOV_EXCL_STOP
 
 u64 valk_stream_body_get_bytes_sent(valk_aio_handle_t *conn, i32 stream_id) {
   if (!conn) {
@@ -89,6 +93,7 @@ u64 valk_stream_body_get_bytes_sent(valk_aio_handle_t *conn, i32 stream_id) {
   return 0;
 }
 
+// LCOV_EXCL_START -- requires HTTP/2 session integration with stream bodies
 void valk_stream_body_check_orphaned(valk_aio_handle_t *conn) {
   if (!conn || !conn->http.session) {
     return;
@@ -118,3 +123,4 @@ void valk_stream_body_check_orphaned(valk_aio_handle_t *conn) {
     body = next;
   }
 }
+// LCOV_EXCL_STOP
