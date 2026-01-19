@@ -3,8 +3,6 @@
 ; This exercises the full path: Lisp handler -> response building -> HTTP/2 framing -> SSL
 
 (load "src/prelude.valk")
-(load "src/modules/test.valk")
-(test/suite "Large Response Tests")
 
 ; 50MB = 52428800 bytes
 (def {RESPONSE_SIZE} 52428800)

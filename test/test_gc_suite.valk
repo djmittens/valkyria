@@ -5,30 +5,27 @@
 (load "src/modules/test.valk")
 
 ; Set the test suite name
-(test/suite "Garbage Collection Tests")
 
 ; ============================================================================
 ; Basic GC Tests
 ; ============================================================================
 
-(test/define "gc-basic-allocation"
-  {do
+; Run all GC tests
+(test/run (list
+  (test "gc-basic-allocation"
+    {do
     (def {x} 42)
     (== x 42)
   })
-
-(test/define "gc-list-allocation"
-  {do
+  (test "gc-list-allocation"
+    {do
     (def {lst} (list 1 2 3))
     (== (len lst) 3)
   })
-
-(test/define "gc-preserves-values"
-  {do
+  (test "gc-preserves-values"
+    {do
     (def {a} 10)
     (def {b} 20)
     (== (+ a b) 30)
-  })
-
-; Run all GC tests
-(test/run)
+  }))
+  {:suite-name "Garbage Collection Tests"})

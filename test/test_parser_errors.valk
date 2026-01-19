@@ -4,252 +4,216 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Parser Error Path Tests")
-
-(test/define "empty-list-eval"
-  {do
+(test/run (list
+  (test "empty-list-eval"
+    {do
     (= {result} (eval {}))
     (test/assert (== result nil) "empty list evals to nil")
     true
   })
-
-(test/define "quote-wrong-args"
-  {do
+  (test "quote-wrong-args"
+    {do
     (= {result} (error? (eval (read "(quote)"))))
     (test/assert result "quote with 0 args errors")
     true
   })
-
-(test/define "quote-too-many-args"
-  {do
+  (test "quote-too-many-args"
+    {do
     (= {result} (error? (eval (read "(quote a b)"))))
     (test/assert result "quote with 2 args errors")
     true
   })
-
-(test/define "quasiquote-wrong-args"
-  {do
+  (test "quasiquote-wrong-args"
+    {do
     (= {result} (error? (eval (read "(quasiquote)"))))
     (test/assert result "quasiquote with 0 args errors")
     true
   })
-
-(test/define "if-too-few-args"
-  {do
+  (test "if-too-few-args"
+    {do
     (= {result} (if true))
     (test/assert (error? result) "if with 1 arg errors")
     true
   })
-
-(test/define "if-too-many-args"
-  {do
+  (test "if-too-many-args"
+    {do
     (= {result} (error? (eval (read "(if true 1 2 3 4)"))))
     (test/assert result "if with too many args errors")
     true
   })
-
-(test/define "ctx-with-deadline-too-few-args"
-  {do
+  (test "ctx-with-deadline-too-few-args"
+    {do
     (= {result} (ctx/with-deadline 100))
     (test/assert (not (error? result)) "ctx/with-deadline with 1 arg returns nil body")
     true
   })
-
-(test/define "ctx-with-deadline-non-number"
-  {do
+  (test "ctx-with-deadline-non-number"
+    {do
     (= {result} (ctx/with-deadline "not-a-number" 42))
     (test/assert (error? result) "ctx/with-deadline with non-number errors")
     true
   })
-
-(test/define "ctx-with-too-few-args"
-  {do
+  (test "ctx-with-too-few-args"
+    {do
     (= {result} (error? (eval (read "(ctx/with :key)"))))
     (test/assert result "ctx/with with 2 args errors")
     true
   })
-
-(test/define "unquote-outside-quasiquote"
-  {do
+  (test "unquote-outside-quasiquote"
+    {do
     (= {result} (error? (unquote 42)))
     (test/assert result "unquote outside quasiquote errors")
     true
   })
-
-(test/define "unquote-splicing-arg-error"
-  {do
+  (test "unquote-splicing-arg-error"
+    {do
     (= {result} (error? (eval (read "`{a ,@(+ 1 2) b}"))))
     (test/assert result "unquote-splicing non-list errors")
     true
   })
-
-(test/define "do-with-error-propagates"
-  {do
+  (test "do-with-error-propagates"
+    {do
     (= {result} (do (error "test error")))
     (test/assert (error? result) "do propagates errors")
     true
   })
-
-(test/define "single-elem-list-eval"
-  {do
+  (test "single-elem-list-eval"
+    {do
     (= {f} (\ {} {42}))
     (= {result} (f))
     (test/assert-eq 42 result "single elem list eval")
     true
   })
-
-(test/define "lambda-no-body-error"
-  {do
-    (= {result} (error? (eval (read "(\\)"))))
+  (test "lambda-no-body-error"
+    {do
+    (= {result} (error? (eval (read "(\)"))))
     (test/assert result "lambda with no args errors")
     true
   })
-
-(test/define "def-odd-args-error"
-  {do
+  (test "def-odd-args-error"
+    {do
     (= {result} (error? (eval (read "(def {x} 1 2)"))))
     (test/assert result "def with extra args errors")
     true
   })
-
-(test/define "head-empty-list-error"
-  {do
+  (test "head-empty-list-error"
+    {do
     (= {result} (head {}))
     (test/assert (error? result) "head of empty list errors")
     true
   })
-
-(test/define "tail-empty-list-error"
-  {do
+  (test "tail-empty-list-error"
+    {do
     (= {result} (tail {}))
     (test/assert (error? result) "tail of empty list errors")
     true
   })
-
-(test/define "nth-out-of-bounds"
-  {do
+  (test "nth-out-of-bounds"
+    {do
     (= {result} (nth 10 {1 2 3}))
     (test/assert (error? result) "nth out of bounds errors")
     true
   })
-
-(test/define "divide-by-zero"
-  {do
+  (test "divide-by-zero"
+    {do
     (= {result} (/ 1 0))
     (test/assert (error? result) "divide by zero errors")
     true
   })
-
-(test/define "join-non-list-error"
-  {do
+  (test "join-non-list-error"
+    {do
     (= {result} (join 123 {1 2}))
     (test/assert (error? result) "join non-list errors")
     true
   })
-
-(test/define "init-empty-list"
-  {do
+  (test "init-empty-list"
+    {do
     (= {result} (init {}))
     (test/assert (error? result) "init of empty list errors")
     true
   })
-
-(test/define "str-split-wrong-types"
-  {do
+  (test "str-split-wrong-types"
+    {do
     (= {result} (str/split 123 "x"))
     (test/assert (error? result) "str/split non-string errors")
     true
   })
-
-(test/define "str-replace-wrong-types"
-  {do
+  (test "str-replace-wrong-types"
+    {do
     (= {result} (str/replace 123 "a" "b"))
     (test/assert (error? result) "str/replace non-string errors")
     true
   })
-
-(test/define "read-invalid-syntax"
-  {do
+  (test "read-invalid-syntax"
+    {do
     (= {result} (read "(unclosed"))
     (test/assert (error? result) "read invalid syntax errors")
     true
   })
-
-(test/define "load-nonexistent-file"
-  {do
+  (test "load-nonexistent-file"
+    {do
     (= {result} (load "/nonexistent/path.valk"))
     (test/assert (error? result) "load nonexistent file errors")
     true
   })
-
-(test/define "range-wrong-type-first-arg"
-  {do
+  (test "range-wrong-type-first-arg"
+    {do
     (= {result} (range "a" 5))
     (test/assert (error? result) "range with string first arg errors")
     true
   })
-
-(test/define "range-wrong-type-second-arg"
-  {do
+  (test "range-wrong-type-second-arg"
+    {do
     (= {result} (range 0 "b"))
     (test/assert (error? result) "range with string second arg errors")
     true
   })
-
-(test/define "range-wrong-arg-count"
-  {do
+  (test "range-wrong-arg-count"
+    {do
     (= {result} (range 1))
     (test/assert (error? result) "range with 1 arg errors")
     true
   })
-
-(test/define "error-wrong-type"
-  {do
+  (test "error-wrong-type"
+    {do
     (= {result} (error 123))
     (test/assert (error? result) "error with number errors")
     true
   })
-
-(test/define "list-predicate-wrong-arg-count"
-  {do
+  (test "list-predicate-wrong-arg-count"
+    {do
     (= {result} (list?))
     (test/assert (error? result) "list? with 0 args errors")
     true
   })
-
-(test/define "ref-predicate-wrong-arg-count"
-  {do
+  (test "ref-predicate-wrong-arg-count"
+    {do
     (= {result} (ref?))
     (test/assert (error? result) "ref? with 0 args errors")
     true
   })
-
-(test/define "error-predicate-wrong-arg-count"
-  {do
+  (test "error-predicate-wrong-arg-count"
+    {do
     (= {result} (error?))
     (test/assert (error? result) "error? with 0 args errors")
     true
   })
-
-(test/define "arena-size-wrong-arg-count"
-  {do
+  (test "arena-size-wrong-arg-count"
+    {do
     (= {result} (arena-size 1))
     (test/assert (error? result) "arena-size with args errors")
     true
   })
-
-(test/define "arena-usage-wrong-arg-count"
-  {do
+  (test "arena-usage-wrong-arg-count"
+    {do
     (= {result} (arena-usage 1))
     (test/assert (error? result) "arena-usage with args errors")
     true
   })
-
-(test/define "arena-high-water-wrong-arg-count"
-  {do
+  (test "arena-high-water-wrong-arg-count"
+    {do
     (= {result} (arena-high-water 1))
     (test/assert (error? result) "arena-high-water with args errors")
     true
-  })
-
-(test/run)
+  }))
+  {:suite-name "Parser Error Path Tests"})

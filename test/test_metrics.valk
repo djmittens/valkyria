@@ -8,7 +8,6 @@
 (load "src/modules/test.valk")
 
 ; Set the test suite name
-(test/suite "Metrics Tests")
 
 ; ============================================================================
 ; Helper functions for testing
@@ -46,41 +45,76 @@
 ; Test: metrics/json returns a string
 ; ============================================================================
 
-(test/define "metrics-json-returns-string"
-  {do
-    (= {result} (metrics/json))
-    (test/assert (is-string? result) "metrics/json should return a string")
-    true
-  })
-
 ; ============================================================================
 ; Test: metrics/json returns non-empty output
 ; ============================================================================
-
-(test/define "metrics-json-non-empty"
-  {do
-    (= {result} (metrics/json))
-    (test/assert (> (len result) 0) "metrics/json should return non-empty string")
-    true
-  })
 
 ; ============================================================================
 ; Test: metrics/prometheus returns a string
 ; ============================================================================
 
-(test/define "metrics-prometheus-returns-string"
-  {do
-    (= {result} (metrics/prometheus))
-    (test/assert (is-string? result) "metrics/prometheus should return a string")
-    true
-  })
-
 ; ============================================================================
 ; Test: metrics/prometheus returns output after creating metrics
 ; ============================================================================
 
-(test/define "metrics-prometheus-with-metric"
-  {do
+; ============================================================================
+; Test: Counter increment without labels
+; ============================================================================
+
+; ============================================================================
+; Test: Counter increment with single label
+; ============================================================================
+
+; ============================================================================
+; Test: Counter increment with multiple labels
+; ============================================================================
+
+; ============================================================================
+; Test: Counter with different label values creates separate metrics
+; ============================================================================
+
+; ============================================================================
+; Test: Multiple counter increments accumulate
+; ============================================================================
+
+; ============================================================================
+; Test: Prometheus format structure
+; ============================================================================
+
+; ============================================================================
+; Test: Both JSON and Prometheus formats work together
+; ============================================================================
+
+; ============================================================================
+; Test: Empty metric name handling
+; ============================================================================
+
+; ============================================================================
+; Test: Metrics persist across multiple calls
+; ============================================================================
+
+; Run all tests
+(test/run (list
+  (test "metrics-json-returns-string"
+    {do
+    (= {result} (metrics/json))
+    (test/assert (is-string? result) "metrics/json should return a string")
+    true
+  })
+  (test "metrics-json-non-empty"
+    {do
+    (= {result} (metrics/json))
+    (test/assert (> (len result) 0) "metrics/json should return non-empty string")
+    true
+  })
+  (test "metrics-prometheus-returns-string"
+    {do
+    (= {result} (metrics/prometheus))
+    (test/assert (is-string? result) "metrics/prometheus should return a string")
+    true
+  })
+  (test "metrics-prometheus-with-metric"
+    {do
     ; Create a metric first (V2 API: create counter handle, then increment)
     (= {counter} (metrics/counter "test_prom_basic"))
     (metrics/counter-inc counter)
@@ -88,13 +122,8 @@
     (test/assert (> (len result) 0) "metrics/prometheus should return non-empty string after creating metric")
     true
   })
-
-; ============================================================================
-; Test: Counter increment without labels
-; ============================================================================
-
-(test/define "counter-inc-no-labels"
-  {do
+  (test "counter-inc-no-labels"
+    {do
     ; Create and increment a test counter (V2 API)
     (= {counter} (metrics/counter "test_counter_basic"))
     (metrics/counter-inc counter)
@@ -110,13 +139,8 @@
 
     true
   })
-
-; ============================================================================
-; Test: Counter increment with single label
-; ============================================================================
-
-(test/define "counter-inc-single-label"
-  {do
+  (test "counter-inc-single-label"
+    {do
     ; Create counters with labels (V2 API)
     (= {counter-get} (metrics/counter "test_counter_labeled" "method" "GET"))
     (= {counter-post} (metrics/counter "test_counter_labeled" "method" "POST"))
@@ -133,13 +157,8 @@
 
     true
   })
-
-; ============================================================================
-; Test: Counter increment with multiple labels
-; ============================================================================
-
-(test/define "counter-inc-multiple-labels"
-  {do
+  (test "counter-inc-multiple-labels"
+    {do
     ; Create counters with multiple labels (V2 API)
     (= {c1} (metrics/counter "test_counter_multi" "method" "GET" "status" "200"))
     (= {c2} (metrics/counter "test_counter_multi" "method" "GET" "status" "404"))
@@ -157,13 +176,8 @@
 
     true
   })
-
-; ============================================================================
-; Test: Counter with different label values creates separate metrics
-; ============================================================================
-
-(test/define "counter-different-label-values"
-  {do
+  (test "counter-different-label-values"
+    {do
     ; Create counters with same name but different label values (V2 API)
     (= {users-counter} (metrics/counter "test_requests" "endpoint" "/api/users"))
     (= {posts-counter} (metrics/counter "test_requests" "endpoint" "/api/posts"))
@@ -180,13 +194,8 @@
 
     true
   })
-
-; ============================================================================
-; Test: Multiple counter increments accumulate
-; ============================================================================
-
-(test/define "counter-accumulation"
-  {do
+  (test "counter-accumulation"
+    {do
     ; Create a counter and increment it multiple times (V2 API)
     (= {counter} (metrics/counter "test_accumulator"))
     (= {iterations} 10)
@@ -209,13 +218,8 @@
 
     true
   })
-
-; ============================================================================
-; Test: Prometheus format structure
-; ============================================================================
-
-(test/define "prometheus-format-structure"
-  {do
+  (test "prometheus-format-structure"
+    {do
     ; Create some metrics (V2 API)
     (= {counter} (metrics/counter "test_prom_counter" "label" "value"))
     (metrics/counter-inc counter)
@@ -229,13 +233,8 @@
 
     true
   })
-
-; ============================================================================
-; Test: Both JSON and Prometheus formats work together
-; ============================================================================
-
-(test/define "both-formats-work"
-  {do
+  (test "both-formats-work"
+    {do
     ; Create a counter (V2 API)
     (= {counter} (metrics/counter "test_dual_format"))
     (metrics/counter-inc counter)
@@ -254,13 +253,8 @@
 
     true
   })
-
-; ============================================================================
-; Test: Empty metric name handling
-; ============================================================================
-
-(test/define "empty-metric-name"
-  {do
+  (test "empty-metric-name"
+    {do
     ; Try to create counter with empty name (V2 API)
     ; This should either work or fail gracefully
     (= {counter} (metrics/counter ""))
@@ -272,13 +266,8 @@
 
     true
   })
-
-; ============================================================================
-; Test: Metrics persist across multiple calls
-; ============================================================================
-
-(test/define "metrics-persistence"
-  {do
+  (test "metrics-persistence"
+    {do
     ; Create and increment a counter (V2 API)
     (= {counter} (metrics/counter "test_persist"))
     (metrics/counter-inc counter)
@@ -297,7 +286,5 @@
     (test/assert (is-string? result2) "Second call should return string")
 
     true
-  })
-
-; Run all tests
-(test/run {})
+  }))
+  {:suite-name "Metrics Tests"})

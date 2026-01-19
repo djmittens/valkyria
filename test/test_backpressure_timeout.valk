@@ -10,8 +10,6 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Backpressure Timeout Coverage Test")
-
 (def {aio} (aio/start {
   :max-connections 8
   :tcp-buffer-pool-size 10
@@ -52,7 +50,8 @@
   }))
 })
 
-(test/async "backpressure timeout and recovery" (\ {done} {
+(test/run-async aio (list
+  (test-async "backpressure timeout and recovery" (\ {done} {
   (def {test-done-callback} done)
   
   (aio/schedule aio 50 (\ {} {
@@ -84,6 +83,5 @@
   (aio/schedule aio 5000 (\ {} {
     (finish-test)
   }))
-}))
-
-(test/run-async aio)
+})))
+  {:suite-name "Backpressure Timeout Coverage Test"})

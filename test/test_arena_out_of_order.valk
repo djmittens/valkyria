@@ -6,8 +6,6 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Arena Out-of-Order Completion")
-
 (def {aio} (aio/start))
 
 (def {handler}
@@ -25,7 +23,8 @@
 (def {server} (http2/server-listen aio 0 handler))
 (def {TEST_PORT} (http2/server-port server))
 
-(test/async "out-of-order arena removal works" (\ {done} {
+(test/run-async aio (list
+  (test-async "out-of-order arena removal works" (\ {done} {
   ; Fire 3 requests that complete in different order than sent
   (http2/client-request aio "127.0.0.1" TEST_PORT "/slow" (\ {resp} {}))
   (http2/client-request aio "127.0.0.1" TEST_PORT "/medium" (\ {resp} {}))
@@ -35,6 +34,5 @@
   (aio/schedule aio 500 (\ {} {
     (done true)
   }))
-}))
-
-(test/run-async aio)
+})))
+  {:suite-name "Arena Out-of-Order Completion"})

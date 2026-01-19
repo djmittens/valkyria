@@ -5,25 +5,24 @@
 
 ; Define tests using test/define
 ; Note: test body must be quoted with {}
-(test/define "math-works"
-  {(do
-    (test/assert-eq 4 (+ 2 2) "2 + 2 should equal 4")
-    (test/assert-eq 10 (* 2 5) "2 * 5 should equal 10"))})
-
-(test/define "lists-work"
-  {(do
-    (test/assert-eq 3 (len {a b c}) "list should have 3 elements")
-    (test/assert-eq (quote a) (fst {a b c}) "first element should be a"))})
 
 ; Tests with custom assertions
-(test/define "comparisons"
-  {(do
-    (test/assert (> 5 3) "5 should be greater than 3")
-    (test/assert (< 1 10) "1 should be less than 10"))})
 
 ; Run all tests
 ; Note: must call with {} due to zero-arg function limitation
-(test/run {})
+(test/run (list
+  (test "math-works"
+    {(do
+    (test/assert-eq 4 (+ 2 2) "2 + 2 should equal 4")
+    (test/assert-eq 10 (* 2 5) "2 * 5 should equal 10"))})
+  (test "lists-work"
+    {(do
+    (test/assert-eq 3 (len {a b c}) "list should have 3 elements")
+    (test/assert-eq (quote a) (fst {a b c}) "first element should be a"))})
+  (test "comparisons"
+    {(do
+    (test/assert (> 5 3) "5 should be greater than 3")
+    (test/assert (< 1 10) "1 should be less than 10"))})))
 
 ; Exit
 (shutdown 0)

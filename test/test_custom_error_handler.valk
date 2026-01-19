@@ -4,8 +4,6 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Custom Error Handler Tests")
-
 (def {my-error-handler} (\ {status-code} {
   (str "<html><body>"
        "<h1>Custom " status-code "</h1>"
@@ -26,7 +24,8 @@
 (def {server} (http2/server-listen aio 0 handler {:error-handler my-error-handler}))
 (def {test-port} (http2/server-port server))
 
-(test/async "custom error handler renders custom 500 page" (\ {done} {
+(test/run-async aio (list
+  (test-async "custom error handler renders custom 500 page" (\ {done} {
   (http2/client-request aio "127.0.0.1" test-port "/trigger-500"
     (\ {resp} {
       (if (error? resp)
@@ -37,8 +36,7 @@
           (done (and (== status "500") (> (len body) 0)))})
     }))
 }))
-
-(test/async "normal requests still work" (\ {done} {
+  (test-async "normal requests still work" (\ {done} {
   (http2/client-request aio "127.0.0.1" test-port "/ok"
     (\ {resp} {
       (if (error? resp)
@@ -47,6 +45,5 @@
           (= {status} (http2/response-status resp))
           (done (== status "200"))})
     }))
-}))
-
-(test/run-async aio)
+})))
+  {:suite-name "Custom Error Handler Tests"})

@@ -4,8 +4,6 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Large Download Tests")
-
 (def {pattern} "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz./")
 
 (def {SIZE_10KB} 10240)
@@ -31,7 +29,8 @@
 (def {server} (http2/server-listen aio 0 server-handler))
 (def {test-port} (http2/server-port server))
 
-(test/async "10KB download" (\ {done} {
+(test/run-async aio (list
+  (test-async "10KB download" (\ {done} {
   (http2/client-request aio "127.0.0.1" test-port "/10kb"
     (\ {resp} {
       (if (error? resp)
@@ -42,8 +41,7 @@
           (done (== body-len SIZE_10KB))})
     }))
 }))
-
-(test/async "50KB download" (\ {done} {
+  (test-async "50KB download" (\ {done} {
   (http2/client-request aio "127.0.0.1" test-port "/50kb"
     (\ {resp} {
       (if (error? resp)
@@ -54,8 +52,7 @@
           (done (== body-len SIZE_50KB))})
     }))
 }))
-
-(test/async "100KB download" (\ {done} {
+  (test-async "100KB download" (\ {done} {
   (http2/client-request aio "127.0.0.1" test-port "/100kb"
     (\ {resp} {
       (if (error? resp)
@@ -65,6 +62,5 @@
           (= {body-len} (len body))
           (done (== body-len SIZE_100KB))})
     }))
-}))
-
-(test/run-async aio)
+})))
+  {:suite-name "Large Download Tests"})

@@ -19,24 +19,6 @@ from pathlib import Path
 
 
 ALLOWED_PATTERNS = {
-    "src/modules/test.valk": {
-        "*test-registry*": "test registration (load-time only)",
-        "*test-suite-name*": "test suite config (load-time only)",
-        "*test-skip-suite*": "test skip flag (load-time only)",
-        "*test-skip-reason*": "test skip reason (load-time only)",
-        "*test-debug*": "test debug flag (load-time only)",
-        "*test-expected-exit*": "test expected exit (load-time only)",
-        "*test-async-registry*": "async test registration (load-time only)",
-        "*test-async-pending-atom*": "atom creation (thread-safe)",
-        "*test-async-passed-atom*": "atom creation (thread-safe)",
-        "*test-async-failed-atom*": "atom creation (thread-safe)",
-    },
-    "test/test_test_framework_empty.valk": {
-        "*test-registry*": "testing empty registry path",
-    },
-    "src/async_monadic.valk": {
-        "*async-run-result*": "local capture in async/run (pure sync op, no threading concern)",
-    },
 }
 
 ATOM_PATTERN = re.compile(r'\(atom\s')

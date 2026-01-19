@@ -6,8 +6,6 @@
 (load "src/modules/test.valk")
 (load "src/modules/aio/sse.valk")
 
-(test/suite "SSE Async Timeout Tests")
-
 (def {aio} (aio/start))
 
 (def {handler}
@@ -32,7 +30,9 @@
 
 ; Test: SSE stream is created and closed via async timer
 ; Verifies by receiving response (close triggers response completion)
-(test/async "SSE stream created and closed via async timer" (\ {done} {
+
+(test/run-async aio (list
+  (test-async "SSE stream created and closed via async timer" (\ {done} {
   ; Fire request - if async close works, we'll get a response
   (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-test" (\ {resp} {}))
   ; Wait for timer + response processing
@@ -40,6 +40,5 @@
     ; If we got here without crash, async close worked
     (done true)
   }))
-}))
-
-(test/run-async aio)
+})))
+  {:suite-name "SSE Async Timeout Tests"})

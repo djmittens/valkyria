@@ -4,51 +4,45 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Atom Builtins Tests")
-
-(test/define "atom-create"
-  {do
+(test/run (list
+  (test "atom-create"
+    {do
     (= {a} (atom 42))
     (test/assert (ref? a) "atom returns ref")
     true
   })
-
-(test/define "atom-get"
-  {do
+  (test "atom-get"
+    {do
     (= {a} (atom 100))
     (= {val} (atom/get a))
     (test/assert-eq 100 val "atom/get returns initial value")
     true
   })
-
-(test/define "atom-set"
-  {do
+  (test "atom-set"
+    {do
     (= {a} (atom 0))
     (atom/set a 50)
     (test/assert-eq 50 (atom/get a) "atom/set updates value")
     true
   })
-
-(test/define "atom-add"
-  {do
+  (test "atom-add"
+    {do
     (= {a} (atom 10))
     (= {result} (atom/add a 5))
     (test/assert-eq 15 result "atom/add returns new value")
     (test/assert-eq 15 (atom/get a) "atom value is updated")
     true
   })
-
-(test/define "atom-sub"
-  {do
+  (test "atom-sub"
+    {do
     (= {a} (atom 100))
     (= {result} (atom/sub a 30))
     (test/assert-eq 70 result "atom/sub returns new value")
     (test/assert-eq 70 (atom/get a) "atom value is updated")
     true
   })
-
-(test/define "atom-multiple-operations"
-  {do
+  (test "atom-multiple-operations"
+    {do
     (= {a} (atom 0))
     (atom/add a 10)
     (atom/add a 20)
@@ -56,72 +50,62 @@
     (test/assert-eq 25 (atom/get a) "multiple atom operations")
     true
   })
-
-(test/define "atom-negative"
-  {do
+  (test "atom-negative"
+    {do
     (= {a} (atom -50))
     (test/assert-eq -50 (atom/get a) "atom with negative")
     (atom/add a 100)
     (test/assert-eq 50 (atom/get a) "atom add to negative")
     true
   })
-
-(test/define "arena-size-returns-number"
-  {do
+  (test "arena-size-returns-number"
+    {do
     (= {size} (arena-size))
     (test/assert (> size 0) "arena-size returns positive number")
     true
   })
-
-(test/define "arena-usage-returns-number"
-  {do
+  (test "arena-usage-returns-number"
+    {do
     (= {usage} (arena-usage))
     (test/assert (>= usage 0) "arena-usage returns non-negative number")
     true
   })
-
-(test/define "arena-high-water-returns-number"
-  {do
+  (test "arena-high-water-returns-number"
+    {do
     (= {hw} (arena-high-water))
     (test/assert (>= hw 0) "arena-high-water returns non-negative number")
     true
   })
-
-(test/define "list-predicate-true"
-  {do
+  (test "list-predicate-true"
+    {do
     (test/assert (list? {1 2 3}) "list? on qexpr")
     (test/assert (list? (list 1 2 3)) "list? on cons")
     (test/assert (list? nil) "list? on nil")
     (test/assert (list? {}) "list? on empty qexpr")
     true
   })
-
-(test/define "list-predicate-false"
-  {do
+  (test "list-predicate-false"
+    {do
     (test/assert (not (list? 42)) "list? on number")
     (test/assert (not (list? "string")) "list? on string")
     true
   })
-
-(test/define "ref-predicate-true"
-  {do
+  (test "ref-predicate-true"
+    {do
     (= {a} (atom 1))
     (test/assert (ref? a) "ref? on atom")
     true
   })
-
-(test/define "ref-predicate-false"
-  {do
+  (test "ref-predicate-false"
+    {do
     (test/assert (not (ref? 42)) "ref? on number")
     (test/assert (not (ref? {1 2})) "ref? on list")
     true
   })
-
-(test/define "error-builtin"
-  {do
+  (test "error-builtin"
+    {do
     (= {e} (error "custom error"))
     (test/assert (error? e) "error creates error value")
     true
-  })
-
-(test/run)
+  }))
+  {:suite-name "Atom Builtins Tests"})

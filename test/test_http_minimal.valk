@@ -11,205 +11,170 @@
 })
 
 (load "src/http_api.valk")
-(test/suite "HTTP/2 API Tests")
 
 ; All working tests
-(test/define "http2/get creates request"
-  {do (def {req} (http2/get "example.com")) (!= req ()) })
 
-(test/define "http2/post creates request"
-  {do (def {req} (http2/post "api.example.com" "body")) (!= req ()) })
-
-(test/define "http2/make-request custom method"
-  {do (def {req} (http2/make-request "PUT" "api.example.com")) (!= req ()) })
-
-(test/define "http2/with-headers adds multiple headers"
-  {do
+(test/run (list
+  (test "http2/get creates request"
+    {do (def {req} (http2/get "example.com")) (!= req ()) })
+  (test "http2/post creates request"
+    {do (def {req} (http2/post "api.example.com" "body")) (!= req ()) })
+  (test "http2/make-request custom method"
+    {do (def {req} (http2/make-request "PUT" "api.example.com")) (!= req ()) })
+  (test "http2/with-headers adds multiple headers"
+    {do
     (def {req} (http2/get "example.com"))
     (def {headers} (list (list "x-header1" "value1") (list "x-header2" "value2")))
     (def {req2} (http2/with-headers req headers))
     (!= req2 ())
   })
-
-(test/define "http2/with-header returns request"
-  {do
+  (test "http2/with-header returns request"
+    {do
     (def {req} (http2/get "example.com"))
     (def {req2} (http2/with-header req "x-test" "value"))
     (!= req2 ())
   })
-
-(test/define "http2/fetch creates async op"
-  {do (def {op} (http2/fetch "example.com")) (!= op ()) })
-
-(test/define "http2/fetch-text creates async op"
-  {do (def {op} (http2/fetch-text "example.com")) (!= op ()) })
-
-(test/define "http2/fetch-ok? creates async op"
-  {do (def {op} (http2/fetch-ok? "example.com")) (!= op ()) })
-
-(test/define "http2/fetch-all creates async op"
-  {do (def {op} (http2/fetch-all (list "url1" "url2"))) (!= op ()) })
-
-(test/define "http2/fetch-all-text creates async op"
-  {do (def {op} (http2/fetch-all-text (list "url1" "url2"))) (!= op ()) })
-
-(test/define "http2/fetch-retry creates async op"
-  {do (def {op} (http2/fetch-retry "example.com" 3)) (!= op ()) })
-
-(test/define "http2/with-auth creates middleware"
-  {do (def {mw} (http2/with-auth "Bearer token")) (!= mw ()) })
-
-(test/define "http2/with-auth executes on request"
-  {do
+  (test "http2/fetch creates async op"
+    {do (def {op} (http2/fetch "example.com")) (!= op ()) })
+  (test "http2/fetch-text creates async op"
+    {do (def {op} (http2/fetch-text "example.com")) (!= op ()) })
+  (test "http2/fetch-ok? creates async op"
+    {do (def {op} (http2/fetch-ok? "example.com")) (!= op ()) })
+  (test "http2/fetch-all creates async op"
+    {do (def {op} (http2/fetch-all (list "url1" "url2"))) (!= op ()) })
+  (test "http2/fetch-all-text creates async op"
+    {do (def {op} (http2/fetch-all-text (list "url1" "url2"))) (!= op ()) })
+  (test "http2/fetch-retry creates async op"
+    {do (def {op} (http2/fetch-retry "example.com" 3)) (!= op ()) })
+  (test "http2/with-auth creates middleware"
+    {do (def {mw} (http2/with-auth "Bearer token")) (!= mw ()) })
+  (test "http2/with-auth executes on request"
+    {do
     (def {req} (http2/get "example.com"))
     (def {mw} (http2/with-auth "Bearer token"))
     (def {req2} (mw req))
     (!= req2 ())
   })
-
-(test/define "http2/with-user-agent creates middleware"
-  {do (def {mw} (http2/with-user-agent "MyAgent/1.0")) (!= mw ()) })
-
-(test/define "http2/with-user-agent executes on request"
-  {do
+  (test "http2/with-user-agent creates middleware"
+    {do (def {mw} (http2/with-user-agent "MyAgent/1.0")) (!= mw ()) })
+  (test "http2/with-user-agent executes on request"
+    {do
     (def {req} (http2/get "example.com"))
     (def {mw} (http2/with-user-agent "MyAgent/1.0"))
     (def {req2} (mw req))
     (!= req2 ())
   })
-
-(test/define "http2/with-logging executes"
-  {do
+  (test "http2/with-logging executes"
+    {do
     (def {result} (http2/with-logging "mock-request"))
     (== result "mock-request")
   })
-
-(test/define "http2/apply-middleware executes"
-  {do
+  (test "http2/apply-middleware executes"
+    {do
     (def {identity-mw} (\ {x} {x}))
     (def {result} (http2/apply-middleware "input" identity-mw))
     (== result "input")
   })
-
-(test/define "http2/compose-middleware creates composite"
-  {do
+  (test "http2/compose-middleware creates composite"
+    {do
     (def {mw} (http2/compose-middleware (list
       (http2/with-auth "token")
       (http2/with-user-agent "Agent"))))
     (!= mw ())
   })
-
-(test/define "http2/compose-middleware executes chain"
-  {do
+  (test "http2/compose-middleware executes chain"
+    {do
     (def {add-a} (\ {x} {(join x (list "a"))}))
     (def {add-b} (\ {x} {(join x (list "b"))}))
     (def {composed} (http2/compose-middleware (list add-a add-b)))
     (def {result} (composed (list "start")))
     (== result (list "start" "a" "b"))
   })
-
-(test/define "http2/validate-status creates validator"
-  {do (def {validator} (http2/validate-status 200)) (!= validator ()) })
-
-(test/define "http2/log-response exists"
-  {(!= http2/log-response ())})
-
-(test/define "http2/parallel creates operation"
-  {do
+  (test "http2/validate-status creates validator"
+    {do (def {validator} (http2/validate-status 200)) (!= validator ()) })
+  (test "http2/log-response exists"
+    {(!= http2/log-response ())})
+  (test "http2/parallel creates operation"
+    {do
     (def {ops} (list (async/pure 10) (async/pure 20)))
     (def {par} (http2/parallel ops))
     (!= par ())
   })
-
-(test/define "http2/parallel executes and collects"
-  {do
+  (test "http2/parallel executes and collects"
+    {do
     (def {ops} (list (async/pure 10) (async/pure 20)))
     (def {par} (http2/parallel ops))
     (def {result} nil)
     (par (\ {x} {(def {result} x)}))
     (== result (list 10 20))
   })
-
-(test/define "http2/sequential creates operation"
-  {do
+  (test "http2/sequential creates operation"
+    {do
     (def {ops} (list (async/pure 10) (async/pure 20)))
     (def {seq} (http2/sequential ops))
     (!= seq ())
   })
-
-(test/define "http2/sequential executes in order"
-  {do
+  (test "http2/sequential executes in order"
+    {do
     (def {ops} (list (async/pure 10) (async/pure 20)))
     (def {seq} (http2/sequential ops))
     (def {result} nil)
     (seq (\ {x} {(def {result} x)}))
     (== result 20)
   })
-
-(test/define "http2/aggregate creates operation"
-  {do
+  (test "http2/aggregate creates operation"
+    {do
     (def {combiner} (\ {responses} {(len responses)}))
     (def {op} (http2/aggregate (list "url1" "url2") combiner))
     (!= op ())
   })
-
-(test/define "http2/fan-out creates operation"
-  {do
+  (test "http2/fan-out creates operation"
+    {do
     (def {extractor} (\ {resp} {"related-url"}))
     (def {op} (http2/fan-out "base-url" (list extractor)))
     (!= op ())
   })
-
-(test/define "http2/route-matches? exact match"
-  {(== 1 (http2/route-matches? "/api/users" "/api/users"))})
-
-(test/define "http2/route-matches? no match"
-  {(== 0 (http2/route-matches? "/api/users" "/api/posts"))})
-
-(test/define "http2/find-route finds GET route"
-  {do
+  (test "http2/route-matches? exact match"
+    {(== 1 (http2/route-matches? "/api/users" "/api/users"))})
+  (test "http2/route-matches? no match"
+    {(== 0 (http2/route-matches? "/api/users" "/api/posts"))})
+  (test "http2/find-route finds GET route"
+    {do
     (def {routes} (list
       (list "GET" "/api/users" "get-handler")
       (list "POST" "/api/users" "post-handler")))
     (def {route} (http2/find-route routes "GET" "/api/users"))
     (== route (list "GET" "/api/users" "get-handler"))
   })
-
-(test/define "http2/find-route finds POST route"
-  {do
+  (test "http2/find-route finds POST route"
+    {do
     (def {routes} (list
       (list "GET" "/api/users" "get-handler")
       (list "POST" "/api/users" "post-handler")))
     (def {route} (http2/find-route routes "POST" "/api/users"))
     (== route (list "POST" "/api/users" "post-handler"))
   })
-
-(test/define "http2/find-route method mismatch"
-  {do
+  (test "http2/find-route method mismatch"
+    {do
     (def {routes} (list (list "GET" "/api/users" "handler")))
     (def {route} (http2/find-route routes "DELETE" "/api/users"))
     (== route nil)
   })
-
-(test/define "http2/find-route path mismatch"
-  {do
+  (test "http2/find-route path mismatch"
+    {do
     (def {routes} (list (list "GET" "/api/users" "handler")))
     (def {route} (http2/find-route routes "GET" "/api/posts"))
     (== route nil)
   })
-
-(test/define "http2/health-check creates async op"
-  {do (def {op} (http2/health-check "example.com")) (!= op ()) })
-
-(test/define "http2/health-check-all creates async op"
-  {do (def {op} (http2/health-check-all (list "url1" "url2"))) (!= op ()) })
-
-(test/define "http2/validate-status lambda executes"
-  {do
+  (test "http2/health-check creates async op"
+    {do (def {op} (http2/health-check "example.com")) (!= op ()) })
+  (test "http2/health-check-all creates async op"
+    {do (def {op} (http2/health-check-all (list "url1" "url2"))) (!= op ()) })
+  (test "http2/validate-status lambda executes"
+    {do
     (def {validator} (http2/validate-status 200))
     ; The validator is a lambda - we can't fully test it without a real response
     ; but we verify it exists and is callable
     (!= validator ())
-  })
-
-(test/run {})
+  }))
+  {:suite-name "HTTP/2 API Tests"})

@@ -3,8 +3,6 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Pending Stream Headers Tests")
-
 (def {aio} (aio/start {
   :max-connections 8
   :arena-pool-size 4
@@ -47,7 +45,8 @@
     {nil})
 })
 
-(test/async "custom headers received with multiple concurrent requests" (\ {done} {
+(test/run-async aio (list
+  (test-async "custom headers received with multiple concurrent requests" (\ {done} {
   (def {test-callback} done)
   
   (http2/client-request-with-headers aio "127.0.0.1" test-port "/r1" 
@@ -61,6 +60,5 @@
     
   (http2/client-request-with-headers aio "127.0.0.1" test-port "/r4" 
     {{"x-test-header" "v4"}} on-response)
-}))
-
-(test/run-async aio)
+})))
+  {:suite-name "Pending Stream Headers Tests"})

@@ -6,8 +6,6 @@
 (load "src/http_api.valk")
 (load "src/modules/test.valk")
 
-(test/suite "GC Async Regression Tests")
-
 (def {aio} (aio/start))
 
 ; ============================================================================
@@ -37,13 +35,13 @@
   (aio/schedule aio 0 (\ {} { (body) }))
 })
 
-(test/async "gc-parallel-timer-callbacks-no-crash" (\ {done} {
+; Run all async tests
+(test/run-async aio (list
+  (test-async "gc-parallel-timer-callbacks-no-crash" (\ {done} {
   (atom/set! callbacks-completed 0)
   (spawn-request aio port done 1 4)
   (spawn-request aio port done 2 4)
   (spawn-request aio port done 3 4)
   (spawn-request aio port done 4 4)
-}))
-
-; Run all async tests
-(test/run-async aio)
+})))
+  {:suite-name "GC Async Regression Tests"})

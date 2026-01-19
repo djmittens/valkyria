@@ -5,34 +5,40 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "GC and Log Builtin Tests")
-
 ; === mem/gc/usage tests ===
 ; Line 3806-3813: gc_usage_pct builtin
 
-(test/define "gc-usage-returns-number"
-  {do
+; === mem/gc/min-interval tests ===
+; Line 3816-3823: gc_min_interval builtin
+
+; === mem/gc/set-min-interval tests ===
+; Lines 3826-3842: set_gc_min_interval builtin
+
+; === sys/log/set-level tests ===
+; Lines 3846-3867: set_log_level builtin
+
+; === mem/checkpoint/stats tests ===
+; Lines 3877-3896: checkpoint_stats builtin
+
+; Reset log level to warn at end of tests
+(sys/log/set-level "warn")
+
+(test/run (list
+  (test "gc-usage-returns-number"
+    {do
     (= {usage} (mem/gc/usage))
     (test/assert (>= usage 0) "gc usage should be >= 0")
     (test/assert (<= usage 100) "gc usage should be <= 100")
     true
   })
-
-; === mem/gc/min-interval tests ===
-; Line 3816-3823: gc_min_interval builtin
-
-(test/define "gc-min-interval-returns-number"
-  {do
+  (test "gc-min-interval-returns-number"
+    {do
     (= {interval} (mem/gc/min-interval))
     (test/assert (>= interval 0) "gc min interval should be >= 0")
     true
   })
-
-; === mem/gc/set-min-interval tests ===
-; Lines 3826-3842: set_gc_min_interval builtin
-
-(test/define "gc-set-min-interval-basic"
-  {do
+  (test "gc-set-min-interval-basic"
+    {do
     (= {old-interval} (mem/gc/min-interval))
     (= {result} (mem/gc/set-min-interval 500))
     (= {new-interval} (mem/gc/min-interval))
@@ -40,18 +46,16 @@
     (mem/gc/set-min-interval old-interval)
     true
   })
-
-(test/define "gc-set-min-interval-returns-old-value"
-  {do
+  (test "gc-set-min-interval-returns-old-value"
+    {do
     (= {old-interval} (mem/gc/min-interval))
     (= {returned} (mem/gc/set-min-interval 1000))
     (test/assert-eq returned old-interval "should return old interval value")
     (mem/gc/set-min-interval old-interval)
     true
   })
-
-(test/define "gc-set-min-interval-negative-clamped-to-zero"
-  {do
+  (test "gc-set-min-interval-negative-clamped-to-zero"
+    {do
     (= {old-interval} (mem/gc/min-interval))
     (mem/gc/set-min-interval -100)
     (= {new-interval} (mem/gc/min-interval))
@@ -59,9 +63,8 @@
     (mem/gc/set-min-interval old-interval)
     true
   })
-
-(test/define "gc-set-min-interval-zero"
-  {do
+  (test "gc-set-min-interval-zero"
+    {do
     (= {old-interval} (mem/gc/min-interval))
     (mem/gc/set-min-interval 0)
     (= {new-interval} (mem/gc/min-interval))
@@ -69,118 +72,94 @@
     (mem/gc/set-min-interval old-interval)
     true
   })
-
-(test/define "gc-set-min-interval-wrong-arg-count"
-  {do
+  (test "gc-set-min-interval-wrong-arg-count"
+    {do
     (= {result} (error? (mem/gc/set-min-interval)))
     (test/assert result "should error with no args")
     true
   })
-
-(test/define "gc-set-min-interval-wrong-type"
-  {do
+  (test "gc-set-min-interval-wrong-type"
+    {do
     (= {result} (error? (mem/gc/set-min-interval "string")))
     (test/assert result "should error with string arg")
     true
   })
-
-; === sys/log/set-level tests ===
-; Lines 3846-3867: set_log_level builtin
-
-(test/define "log-set-level-error"
-  {do
+  (test "log-set-level-error"
+    {do
     (= {result} (sys/log/set-level "error"))
     (test/assert-eq result "error" "should return level string")
     true
   })
-
-(test/define "log-set-level-warn"
-  {do
+  (test "log-set-level-warn"
+    {do
     (= {result} (sys/log/set-level "warn"))
     (test/assert-eq result "warn" "should return level string")
     true
   })
-
-(test/define "log-set-level-warning"
-  {do
+  (test "log-set-level-warning"
+    {do
     (= {result} (sys/log/set-level "warning"))
     (test/assert-eq result "warning" "should return level string")
     true
   })
-
-(test/define "log-set-level-info"
-  {do
+  (test "log-set-level-info"
+    {do
     (= {result} (sys/log/set-level "info"))
     (test/assert-eq result "info" "should return level string")
     true
   })
-
-(test/define "log-set-level-debug"
-  {do
+  (test "log-set-level-debug"
+    {do
     (= {result} (sys/log/set-level "debug"))
     (test/assert-eq result "debug" "should return level string")
     true
   })
-
-(test/define "log-set-level-trace"
-  {do
+  (test "log-set-level-trace"
+    {do
     (= {result} (sys/log/set-level "trace"))
     (test/assert-eq result "trace" "should return level string")
     true
   })
-
-(test/define "log-set-level-case-insensitive"
-  {do
+  (test "log-set-level-case-insensitive"
+    {do
     (= {result1} (sys/log/set-level "ERROR"))
     (test/assert-eq result1 "ERROR" "uppercase ERROR should work")
     (= {result2} (sys/log/set-level "Warn"))
     (test/assert-eq result2 "Warn" "mixed case Warn should work")
     true
   })
-
-(test/define "log-set-level-invalid-defaults-to-warn"
-  {do
+  (test "log-set-level-invalid-defaults-to-warn"
+    {do
     (= {result} (sys/log/set-level "invalid"))
     (test/assert-eq result "invalid" "should return the string even if invalid")
     true
   })
-
-(test/define "log-set-level-wrong-arg-count"
-  {do
+  (test "log-set-level-wrong-arg-count"
+    {do
     (= {result} (error? (sys/log/set-level)))
     (test/assert result "should error with no args")
     true
   })
-
-(test/define "log-set-level-wrong-type"
-  {do
+  (test "log-set-level-wrong-type"
+    {do
     (= {result} (error? (sys/log/set-level 123)))
     (test/assert result "should error with number arg")
     true
   })
-
-; === mem/checkpoint/stats tests ===
-; Lines 3877-3896: checkpoint_stats builtin
-
-(test/define "checkpoint-stats-returns-list"
-  {do
+  (test "checkpoint-stats-returns-list"
+    {do
     (= {stats} (mem/checkpoint/stats))
     (test/assert (list? stats) "should return a list")
     (test/assert (>= (len stats) 4) "should have at least 4 elements")
     true
   })
-
-(test/define "checkpoint-stats-elements-are-numbers"
-  {do
+  (test "checkpoint-stats-elements-are-numbers"
+    {do
     (= {stats} (mem/checkpoint/stats))
     (test/assert (>= (nth 1 stats) 0) "num-checkpoints should be >= 0")
     (test/assert (>= (nth 2 stats) 0) "values-evacuated should be >= 0")
     (test/assert (>= (nth 3 stats) 0) "bytes-evacuated should be >= 0")
     (test/assert (>= (nth 4 stats) 0) "pointers-fixed should be >= 0")
     true
-  })
-
-; Reset log level to warn at end of tests
-(sys/log/set-level "warn")
-
-(test/run)
+  }))
+  {:suite-name "GC and Log Builtin Tests"})

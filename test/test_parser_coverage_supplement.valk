@@ -5,12 +5,33 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Parser Coverage Supplement Tests")
-
 ; === ctx/with-deadline multiple body expressions ===
 
-(test/define "ctx-with-deadline-multiple-body"
-  {do
+; === ctx/with multiple body expressions ===
+
+; === quasiquote with unquote-splicing edge cases ===
+
+; === varargs error paths ===
+
+; === function application edge cases ===
+
+; === do block edge cases ===
+
+; === lambda body edge cases ===
+
+; === escape character printing ===
+
+; === zero-argument function call with eval_args ===
+
+; === thunk execution paths ===
+
+; === allocator flag paths ===
+
+; === empty cons cell evaluation ===
+
+(test/run (list
+  (test "ctx-with-deadline-multiple-body"
+    {do
     (= {result} (ctx/with-deadline 1000
                   (+ 1 1)
                   (+ 2 2)
@@ -18,26 +39,21 @@
     (test/assert-eq 6 result "ctx/with-deadline multiple body returns last")
     true
   })
-
-(test/define "ctx-with-deadline-error-in-body"
-  {do
+  (test "ctx-with-deadline-error-in-body"
+    {do
     (= {result} (ctx/with-deadline 1000
                   (/ 1 0)))
     (test/assert (error? result) "ctx/with-deadline propagates body error")
     true
   })
-
-(test/define "ctx-with-deadline-empty-body"
-  {do
+  (test "ctx-with-deadline-empty-body"
+    {do
     (= {result} (ctx/with-deadline 1000))
     (test/assert (== result nil) "ctx/with-deadline empty body returns nil")
     true
   })
-
-; === ctx/with multiple body expressions ===
-
-(test/define "ctx-with-multiple-body"
-  {do
+  (test "ctx-with-multiple-body"
+    {do
     (= {result} (ctx/with :key "value"
                   (+ 1 1)
                   (+ 2 2)
@@ -45,79 +61,65 @@
     (test/assert-eq 6 result "ctx/with multiple body returns last")
     true
   })
-
-(test/define "ctx-with-error-in-body"
-  {do
+  (test "ctx-with-error-in-body"
+    {do
     (= {result} (ctx/with :key "value"
                   (/ 1 0)))
     (test/assert (error? result) "ctx/with propagates body error")
     true
   })
-
-(test/define "ctx-with-empty-body"
-  {do
+  (test "ctx-with-empty-body"
+    {do
     (= {result} (ctx/with :key "value"))
     (test/assert (== result nil) "ctx/with empty body returns nil")
     true
   })
-
-(test/define "ctx-with-value-error"
-  {do
+  (test "ctx-with-value-error"
+    {do
     (= {result} (ctx/with :key (/ 1 0) 42))
     (test/assert (error? result) "ctx/with with error in value propagates error")
     true
   })
-
-; === quasiquote with unquote-splicing edge cases ===
-
-(test/define "quasiquote-splicing-wrong-arg-count"
-  {do
+  (test "quasiquote-splicing-wrong-arg-count"
+    {do
     (= {result} (error? (eval (read "`{a ,@() b}"))))
     (test/assert (not result) "empty splicing should work")
     true
   })
-
-(test/define "quasiquote-splicing-empty-list"
-  {do
+  (test "quasiquote-splicing-empty-list"
+    {do
     (= {empty} {})
     (= {result} `{1 ,@empty 2})
     (test/assert-eq 2 (len result) "splicing empty list works")
     true
   })
-
-(test/define "quasiquote-splicing-error-propagates"
-  {do
+  (test "quasiquote-splicing-error-propagates"
+    {do
     (= {result} (error? (eval (read "`{a ,@(error \"test\") b}"))))
     (test/assert result "splicing error propagates")
     true
   })
-
-(test/define "quasiquote-large-splicing"
-  {do
+  (test "quasiquote-large-splicing"
+    {do
     (= {large} (range 1 20))
     (= {result} `{start ,@large end})
     (test/assert-eq 21 (len result) "large splicing works")
     true
   })
-
-(test/define "quasiquote-nested-expansion-error"
-  {do
+  (test "quasiquote-nested-expansion-error"
+    {do
     (= {result} (error? `{outer (inner ,@"not-a-list")}))
     (test/assert result "nested expansion error propagates")
     true
   })
-
-; === varargs error paths ===
-
-(test/define "varargs-ampersand-not-followed"
-  {do
-    (= {result} (error? (eval (read "((\\ {&} {1}) 1 2)"))))
+  (test "varargs-ampersand-not-followed"
+    {do
+    (= {result} (error? (eval (read "((\ {&} {1}) 1 2)"))))
     (test/assert result "ampersand not followed by name should error")
     true
   })
-
-(test/define "varargs-partial-application-with-ampersand"
-  {do
+  (test "varargs-partial-application-with-ampersand"
+    {do
     (= {f} (\ {x y & rest} {list x y rest}))
     (= {partial} (f 1))
     (= {result} (partial 2 3 4 5))
@@ -126,35 +128,27 @@
     (test/assert-eq 2 (len (nth 3 result)) "rest has 2 elements")
     true
   })
-
-; === function application edge cases ===
-
-(test/define "function-without-closure-env"
-  {do
+  (test "function-without-closure-env"
+    {do
     (= {result} ((\ {x} {x}) 42))
     (test/assert-eq 42 result "lambda without closure works")
     true
   })
-
-(test/define "function-call-no-args-returns-partial"
-  {do
+  (test "function-call-no-args-returns-partial"
+    {do
     (= {add} (\ {x y} {+ x y}))
     (= {partial} (add))
     (test/assert-eq 5 (partial 2 3) "partial with no args works")
     true
   })
-
-; === do block edge cases ===
-
-(test/define "do-empty-remaining"
-  {do
+  (test "do-empty-remaining"
+    {do
     (= {result} (do 1))
     (test/assert-eq 1 result "do with single element returns it")
     true
   })
-
-(test/define "do-error-early-exit"
-  {do
+  (test "do-error-early-exit"
+    {do
     (= {called} 0)
     (= {result} (do
                   (/ 1 0)
@@ -162,158 +156,127 @@
     (test/assert (error? result) "do with error stops early")
     true
   })
-
-; === lambda body edge cases ===
-
-(test/define "lambda-multi-body-expressions"
-  {do
+  (test "lambda-multi-body-expressions"
+    {do
     (= {f} (\ {x} {(+ x 1) (+ x 2) (+ x 3)}))
     (= {result} (f 10))
     (test/assert-eq 13 result "lambda multi-body returns last")
     true
   })
-
-(test/define "lambda-body-error-propagates"
-  {do
+  (test "lambda-body-error-propagates"
+    {do
     (= {f} (\ {x} {(/ 1 0)}))
     (= {result} (f 10))
     (test/assert (error? result) "lambda body error propagates")
     true
   })
-
-; === escape character printing ===
-
-(test/define "print-string-with-all-escapes"
-  {do
-    (= {s} "tab:\there\nnewline\rcarriage\\backslash\"quote")
+  (test "print-string-with-all-escapes"
+    {do
+    (= {s} "tab:	here
+newlinecarriage\backslash\"quote")
     (print s)
     true
   })
-
-(test/define "read-string-with-bell-escape"
-  {do
-    (= {s} (read "\"hello\\aworld\""))
+  (test "read-string-with-bell-escape"
+    {do
+    (= {s} (read "\"hello\aworld\""))
     (test/assert (not (error? s)) "string with bell escape parses")
     true
   })
-
-(test/define "read-string-with-backspace-escape"
-  {do
-    (= {s} (read "\"hello\\bworld\""))
+  (test "read-string-with-backspace-escape"
+    {do
+    (= {s} (read "\"hello\bworld\""))
     (test/assert (not (error? s)) "string with backspace escape parses")
     true
   })
-
-(test/define "read-string-with-formfeed-escape"
-  {do
-    (= {s} (read "\"hello\\fworld\""))
+  (test "read-string-with-formfeed-escape"
+    {do
+    (= {s} (read "\"hello\fworld\""))
     (test/assert (not (error? s)) "string with formfeed escape parses")
     true
   })
-
-(test/define "read-string-with-vtab-escape"
-  {do
-    (= {s} (read "\"hello\\vworld\""))
+  (test "read-string-with-vtab-escape"
+    {do
+    (= {s} (read "\"hello\vworld\""))
     (test/assert (not (error? s)) "string with vtab escape parses")
     true
   })
-
-(test/define "read-string-with-single-quote-escape"
-  {do
-    (= {s} (read "\"hello\\'world\""))
+  (test "read-string-with-single-quote-escape"
+    {do
+    (= {s} (read "\"hello\'world\""))
     (test/assert (not (error? s)) "string with single quote escape parses")
     true
   })
-
-(test/define "print-rare-escapes"
-  {do
-    (= {s} "\a\b\f\v\'")
+  (test "print-rare-escapes"
+    {do
+    (= {s} "\'")
     (print s)
     true
   })
-
-; === zero-argument function call with eval_args ===
-
-(test/define "zero-arg-function-thunk"
-  {do
+  (test "zero-arg-function-thunk"
+    {do
     (= {counter} 0)
     (= {f} (\ {} {42}))
     (= {result} (f))
     (test/assert-eq 42 result "zero arg function returns value")
     true
   })
-
-(test/define "function-returning-function"
-  {do
+  (test "function-returning-function"
+    {do
     (= {make-adder} (\ {x} {(\ {y} {+ x y})}))
     (= {add5} (make-adder 5))
     (test/assert-eq 8 (add5 3) "function returning function works")
     true
   })
-
-(test/define "deeply-nested-function-call"
-  {do
+  (test "deeply-nested-function-call"
+    {do
     (= {f} (\ {x} {(\ {y} {(\ {z} {+ x y z})})}))
     (= {result} (((f 1) 2) 3))
     (test/assert-eq 6 result "deeply nested works")
     true
   })
-
-; === thunk execution paths ===
-
-(test/define "thunk-with-remaining-body-error"
-  {do
+  (test "thunk-with-remaining-body-error"
+    {do
     (= {f} (\ {x} {(+ x 1) (/ 1 0)}))
     (= {result} (f 10))
     (test/assert (error? result) "thunk body error propagates")
     true
   })
-
-; === allocator flag paths ===
-
-(test/define "alloc-flags-from-gc-heap"
-  {do
+  (test "alloc-flags-from-gc-heap"
+    {do
     (def {persistent-list} {1 2 3 4 5})
     (test/assert-eq 5 (len persistent-list) "gc heap allocation works")
     true
   })
-
-; === empty cons cell evaluation ===
-
-(test/define "eval-empty-sexpr"
-  {do
+  (test "eval-empty-sexpr"
+    {do
     (= {result} (eval {}))
     (test/assert (== result nil) "eval of empty expr is nil")
     true
   })
-
-(test/define "single-elem-list-call-function"
-  {do
+  (test "single-elem-list-call-function"
+    {do
     (= {f} (\ {} {42}))
     (= {result} ((f)))
     (test/assert-eq 42 result "single elem list with function call")
     true
   })
-
-(test/define "builtin-null-return-error"
-  {do
+  (test "builtin-null-return-error"
+    {do
     true
   })
-
-(test/define "do-block-with-do-continuation"
-  {do
+  (test "do-block-with-do-continuation"
+    {do
     (= {x} 1)
     (= {y} 2)
     (= {z} 3)
     (test/assert-eq 6 (+ x y z) "do block with multiple expressions")
     true
   })
-
-(test/define "if-qexpr-branch-conversion"
-  {do
+  (test "if-qexpr-branch-conversion"
+    {do
     (= {result} (if true {+ 1 2} {+ 3 4}))
     (test/assert-eq 3 result "if with qexpr branch converts")
     true
-  })
-
-(test/run)
+  }))
+  {:suite-name "Parser Coverage Supplement Tests"})

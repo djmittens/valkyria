@@ -5,21 +5,37 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Parser Continuation Coverage Tests")
-
 ; === CONT_DO_NEXT path ===
 
-(test/define "do-block-multiple-expressions"
-  {do
+; === CONT_BODY_NEXT path (lambda body evaluation) ===
+
+; === CONT_CTX_DEADLINE path ===
+
+; === CONT_CTX_WITH path ===
+
+; === Empty cons/single element paths ===
+
+; === Quasiquote error paths ===
+
+; === Varargs error paths ===
+
+; === Quote/quasiquote argument count ===
+
+; === If branch evaluation ===
+
+; === Function application edge cases ===
+
+(test/run (list
+  (test "do-block-multiple-expressions"
+    {do
     (= {a} 1)
     (= {b} 2)
     (= {c} (+ a b))
     (test/assert-eq 3 c "do block evaluates all expressions")
     true
   })
-
-(test/define "do-block-error-stops-evaluation"
-  {do
+  (test "do-block-error-stops-evaluation"
+    {do
     (= {side-effect} 0)
     (= {result} (do
                   (= {side-effect} 1)
@@ -28,25 +44,20 @@
     (test/assert (error? result) "do stops on error")
     true
   })
-
-(test/define "do-block-returns-last-value"
-  {do
+  (test "do-block-returns-last-value"
+    {do
     (= {result} (do 1 2 3 4 5))
     (test/assert-eq 5 result "do returns last value")
     true
   })
-
-; === CONT_BODY_NEXT path (lambda body evaluation) ===
-
-(test/define "lambda-multi-body-basic"
-  {do
+  (test "lambda-multi-body-basic"
+    {do
     (= {f} (\ {x} {(+ x 1) (+ x 2) (+ x 3)}))
     (test/assert-eq 13 (f 10) "lambda evaluates all body expressions")
     true
   })
-
-(test/define "lambda-body-with-side-effects"
-  {do
+  (test "lambda-body-with-side-effects"
+    {do
     (= {counter} 0)
     (= {f} (\ {x}
              {(= {counter} (+ counter 1))
@@ -55,180 +66,147 @@
     (test/assert-eq 12 (f 10) "lambda body side effects execute")
     true
   })
-
-(test/define "lambda-body-error-propagation"
-  {do
+  (test "lambda-body-error-propagation"
+    {do
     (= {f} (\ {x} {(+ x 1) (/ 1 0) (+ x 2)}))
     (= {result} (f 10))
     (test/assert (error? result) "lambda body error propagates")
     true
   })
-
-; === CONT_CTX_DEADLINE path ===
-
-(test/define "ctx-deadline-evaluates-body"
-  {do
+  (test "ctx-deadline-evaluates-body"
+    {do
     (= {result} (ctx/with-deadline 5000 (+ 1 2)))
     (test/assert-eq 3 result "ctx/with-deadline returns body result")
     true
   })
-
-(test/define "ctx-deadline-multiple-body"
-  {do
+  (test "ctx-deadline-multiple-body"
+    {do
     (= {result} (ctx/with-deadline 5000 1 2 3))
     (test/assert-eq 3 result "ctx/with-deadline multiple body returns last")
     true
   })
-
-(test/define "ctx-deadline-error-in-timeout"
-  {do
+  (test "ctx-deadline-error-in-timeout"
+    {do
     (= {result} (ctx/with-deadline (/ 1 0) (+ 1 2)))
     (test/assert (error? result) "ctx/with-deadline propagates timeout error")
     true
   })
-
-(test/define "ctx-deadline-error-in-body"
-  {do
+  (test "ctx-deadline-error-in-body"
+    {do
     (= {result} (ctx/with-deadline 5000 (/ 1 0)))
     (test/assert (error? result) "ctx/with-deadline propagates body error")
     true
   })
-
-(test/define "ctx-deadline-timeout-not-number"
-  {do
+  (test "ctx-deadline-timeout-not-number"
+    {do
     (= {result} (ctx/with-deadline "not-a-number" (+ 1 2)))
     (test/assert (error? result) "ctx/with-deadline errors on non-number timeout")
     true
   })
-
-(test/define "ctx-deadline-empty-body"
-  {do
+  (test "ctx-deadline-empty-body"
+    {do
     (= {result} (ctx/with-deadline 5000))
     (test/assert (== result nil) "ctx/with-deadline empty body returns nil")
     true
   })
-
-; === CONT_CTX_WITH path ===
-
-(test/define "ctx-with-sets-local"
-  {do
+  (test "ctx-with-sets-local"
+    {do
     (= {result} (ctx/with :mykey "myvalue"
                   (ctx/get :mykey)))
     (test/assert-eq "myvalue" result "ctx/with sets local value")
     true
   })
-
-(test/define "ctx-with-multiple-body"
-  {do
+  (test "ctx-with-multiple-body"
+    {do
     (= {result} (ctx/with :key "value" 1 2 3))
     (test/assert-eq 3 result "ctx/with multiple body returns last")
     true
   })
-
-(test/define "ctx-with-error-in-key"
-  {do
+  (test "ctx-with-error-in-key"
+    {do
     (= {result} (ctx/with (/ 1 0) "value" (+ 1 2)))
     (test/assert (error? result) "ctx/with propagates key error")
     true
   })
-
-(test/define "ctx-with-error-in-value"
-  {do
+  (test "ctx-with-error-in-value"
+    {do
     (= {result} (ctx/with :key (/ 1 0) (+ 1 2)))
     (test/assert (error? result) "ctx/with propagates value error")
     true
   })
-
-(test/define "ctx-with-error-in-body"
-  {do
+  (test "ctx-with-error-in-body"
+    {do
     (= {result} (ctx/with :key "value" (/ 1 0)))
     (test/assert (error? result) "ctx/with propagates body error")
     true
   })
-
-(test/define "ctx-with-empty-body"
-  {do
+  (test "ctx-with-empty-body"
+    {do
     (= {result} (ctx/with :key "value"))
     (test/assert (== result nil) "ctx/with empty body returns nil")
     true
   })
-
-; === Empty cons/single element paths ===
-
-(test/define "eval-empty-list"
-  {do
+  (test "eval-empty-list"
+    {do
     (= {result} (eval {}))
     (test/assert (== result nil) "eval empty list returns nil")
     true
   })
-
-(test/define "eval-single-element-function"
-  {do
+  (test "eval-single-element-function"
+    {do
     (= {f} (\ {} {42}))
     (= {result} (eval (list f)))
     (test/assert-eq 42 result "single element list calls function")
     true
   })
-
-; === Quasiquote error paths ===
-
-(test/define "quasiquote-unquote-wrong-args"
-  {do
+  (test "quasiquote-unquote-wrong-args"
+    {do
     (= {result} (error? (eval (read "`(,)"))))
     (test/assert result "unquote with no args errors")
     true
   })
-
-(test/define "quasiquote-unquote-too-many-args"
-  {do
+  (test "quasiquote-unquote-too-many-args"
+    {do
     (= {result} (error? (eval (read "`(,1 2)"))))
     (test/assert (not result) "unquote with args works")
     true
   })
-
-(test/define "quasiquote-splice-non-list"
-  {do
+  (test "quasiquote-splice-non-list"
+    {do
     (= {x} 42)
     (= {result} (error? `{a ,@x b}))
     (test/assert result "splice non-list errors")
     true
   })
-
-(test/define "quasiquote-splice-empty-list"
-  {do
+  (test "quasiquote-splice-empty-list"
+    {do
     (= {x} {})
     (= {result} `{a ,@x b})
     (test/assert-eq 2 (len result) "splice empty list works")
     true
   })
-
-(test/define "quasiquote-splice-large-list"
-  {do
+  (test "quasiquote-splice-large-list"
+    {do
     (= {x} (range 1 25))
     (= {result} `{start ,@x end})
     (test/assert-eq 26 (len result) "splice large list works")
     true
   })
-
-(test/define "quasiquote-nested-splicing"
-  {do
+  (test "quasiquote-nested-splicing"
+    {do
     (= {inner} {1 2 3})
     (= {result} `{outer {nested ,@inner end}})
     (test/assert-eq 2 (len result) "nested splicing works")
     true
   })
-
-; === Varargs error paths ===
-
-(test/define "varargs-ampersand-at-end"
-  {do
-    (= {result} (error? (eval (read "((\\ {&} {1}) 1)"))))
+  (test "varargs-ampersand-at-end"
+    {do
+    (= {result} (error? (eval (read "((\ {&} {1}) 1)"))))
     (test/assert result "ampersand at end of formals errors")
     true
   })
-
-(test/define "varargs-with-partial"
-  {do
+  (test "varargs-with-partial"
+    {do
     (= {f} (\ {x & rest} {list x rest}))
     (= {p} (f 1))
     (= {result} (p 2 3 4))
@@ -236,90 +214,72 @@
     (test/assert-eq 3 (len (nth 2 result)) "partial varargs rest has 3 elements")
     true
   })
-
-; === Quote/quasiquote argument count ===
-
-(test/define "quote-wrong-arg-count"
-  {do
+  (test "quote-wrong-arg-count"
+    {do
     (= {result} (error? (eval (read "(quote)"))))
     (test/assert result "quote with no args errors")
     true
   })
-
-(test/define "quasiquote-wrong-arg-count"
-  {do
+  (test "quasiquote-wrong-arg-count"
+    {do
     (= {result} (error? (eval (read "(quasiquote)"))))
     (test/assert result "quasiquote with no args errors")
     true
   })
-
-; === If branch evaluation ===
-
-(test/define "if-qexpr-true-branch"
-  {do
+  (test "if-qexpr-true-branch"
+    {do
     (= {result} (if true {+ 1 2} {+ 3 4}))
     (test/assert-eq 3 result "if evaluates qexpr true branch")
     true
   })
-
-(test/define "if-qexpr-false-branch"
-  {do
+  (test "if-qexpr-false-branch"
+    {do
     (= {result} (if false {+ 1 2} {+ 3 4}))
     (test/assert-eq 7 result "if evaluates qexpr false branch")
     true
   })
-
-(test/define "if-number-condition"
-  {do
+  (test "if-number-condition"
+    {do
     (= {result} (if 0 "true" "false"))
     (test/assert-eq "false" result "if treats 0 as false")
     true
   })
-
-(test/define "if-nil-condition"
-  {do
+  (test "if-nil-condition"
+    {do
     (= {result} (if nil "true" "false"))
     (test/assert-eq "false" result "if treats nil as false")
     true
   })
-
-(test/define "if-non-zero-condition"
-  {do
+  (test "if-non-zero-condition"
+    {do
     (= {result} (if 42 "true" "false"))
     (test/assert-eq "true" result "if treats non-zero as true")
     true
   })
-
-(test/define "if-string-condition"
-  {do
+  (test "if-string-condition"
+    {do
     (= {result} (if "hello" "true" "false"))
     (test/assert-eq "true" result "if treats string as true")
     true
   })
-
-; === Function application edge cases ===
-
-(test/define "too-many-args-error"
-  {do
+  (test "too-many-args-error"
+    {do
     (= {f} (\ {x y} {+ x y}))
     (= {result} (f 1 2 3))
     (test/assert (error? result) "too many args errors")
     true
   })
-
-(test/define "zero-arg-function-call"
-  {do
+  (test "zero-arg-function-call"
+    {do
     (= {f} (\ {} {42}))
     (test/assert-eq 42 (f) "zero arg function returns value")
     true
   })
-
-(test/define "deeply-nested-call"
-  {do
+  (test "deeply-nested-call"
+    {do
     (= {f} (\ {x} {(\ {y} {(\ {z} {+ x y z})})}))
     (= {result} (((f 1) 2) 3))
     (test/assert-eq 6 result "deeply nested calls work")
     true
-  })
-
-(test/run)
+  }))
+  {:suite-name "Parser Continuation Coverage Tests"})

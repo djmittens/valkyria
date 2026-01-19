@@ -4,21 +4,19 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Skip Suite Test")
-
 ; Enable skipping with a reason
-(test/skip "Testing skip functionality")
 
 ; Define a test that will be skipped
-(test/define "this-test-is-skipped"
-  {do
+
+; Define another skipped test
+
+; Run - all tests should be skipped
+(test/run (list
+  (test "this-test-is-skipped"
+    {do
     (test/assert false "This should never run")
     true
   })
-
-; Define another skipped test
-(test/define "another-skipped-test"
-  {true})
-
-; Run - all tests should be skipped
-(test/run {})
+  (test "another-skipped-test"
+    {true}))
+  {:suite-name "Skip Suite Test" :skip-reason "Testing skip functionality" :skip-suite 1})

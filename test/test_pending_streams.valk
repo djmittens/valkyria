@@ -4,8 +4,6 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Pending Streams Coverage Tests")
-
 (def {aio} (aio/start {
   :max-connections 16
   :tcp-buffer-pool-size 48
@@ -50,15 +48,15 @@
   }))
 })
 
-(test/async "concurrent requests batch 1" (\ {done} {
+(test/run-async aio (list
+  (test-async "concurrent requests batch 1" (\ {done} {
   (def {batch1-callback} done)
   (send-request "/stream1" 1)
   (send-request "/stream2" 1)
   (send-request "/stream3" 1)
   (send-request "/stream4" 1)
 }))
-
-(test/async "concurrent requests batch 2" (\ {done} {
+  (test-async "concurrent requests batch 2" (\ {done} {
   (def {batch2-callback} done)
   (aio/schedule aio 200 (\ {} {
     (send-request "/stream5" 2)
@@ -66,6 +64,5 @@
     (send-request "/stream7" 2)
     (send-request "/stream8" 2)
   }))
-}))
-
-(test/run-async aio)
+})))
+  {:suite-name "Pending Streams Coverage Tests"})

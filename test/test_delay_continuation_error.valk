@@ -4,8 +4,6 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "aio/delay Continuation Error Tests")
-
 (def {aio} (aio/start))
 
 (def {handler}
@@ -22,7 +20,8 @@
 (def {server} (http2/server-listen aio 0 handler))
 (def {test-port} (http2/server-port server))
 
-(test/async "error in aio/delay continuation returns 500" (\ {done} {
+(test/run-async aio (list
+  (test-async "error in aio/delay continuation returns 500" (\ {done} {
   (http2/client-request aio "127.0.0.1" test-port "/delay-err"
     (\ {resp} {
       (if (error? resp)
@@ -31,6 +30,5 @@
           (= {status} (http2/response-status resp))
           (done (== status "500"))})
     }))
-}))
-
-(test/run-async aio)
+})))
+  {:suite-name "aio/delay Continuation Error Tests"})

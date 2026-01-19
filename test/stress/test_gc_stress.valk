@@ -3,14 +3,23 @@
 
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
-(test/suite "GC Stress Tests")
 
 ; ============================================================================
 ; Allocation Stress Tests
 ; ============================================================================
 
-(test/define "gc-stress-allocate-100-lists"
-  {do
+; ============================================================================
+; Live Data Preservation Tests
+; ============================================================================
+
+; ============================================================================
+; Memory Churn Tests
+; ============================================================================
+
+; Run all GC stress tests
+(test/run (list
+  (test "gc-stress-allocate-100-lists"
+    {do
     (def {allocate} (\ {n} {
       (if (<= n 0)
         {0}
@@ -21,9 +30,8 @@
     (def {result} (allocate 100))
     (== result 0)
   })
-
-(test/define "gc-stress-allocate-1000-lists"
-  {do
+  (test "gc-stress-allocate-1000-lists"
+    {do
     (def {allocate} (\ {n} {
       (if (<= n 0)
         {0}
@@ -34,9 +42,8 @@
     (def {result} (allocate 1000))
     (== result 0)
   })
-
-(test/define "gc-stress-nested-structures-depth-50"
-  {do
+  (test "gc-stress-nested-structures-depth-50"
+    {do
     (def {make-nested} (\ {depth} {
       (if (<= depth 0)
         {42}
@@ -45,9 +52,8 @@
     (def {nested} (make-nested 50))
     (!= nested ())
   })
-
-(test/define "gc-stress-nested-structures-depth-100"
-  {do
+  (test "gc-stress-nested-structures-depth-100"
+    {do
     (def {make-nested} (\ {depth} {
       (if (<= depth 0)
         {42}
@@ -56,13 +62,8 @@
     (def {nested} (make-nested 100))
     (!= nested ())
   })
-
-; ============================================================================
-; Live Data Preservation Tests
-; ============================================================================
-
-(test/define "gc-stress-preserve-large-list"
-  {do
+  (test "gc-stress-preserve-large-list"
+    {do
     ; Create a large list that should survive garbage collection
     (def {large-list} (list 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20))
     ; Allocate a bunch of garbage
@@ -77,9 +78,8 @@
     ; Verify original list is still intact
     (== (len large-list) 20)
   })
-
-(test/define "gc-stress-interleaved-allocation"
-  {do
+  (test "gc-stress-interleaved-allocation"
+    {do
     (def {data1} (list 1 2 3))
     (def {garbage1} (list 9 9 9 9 9))
     (def {data2} (list 4 5 6))
@@ -92,13 +92,8 @@
         {0})}
       {0})
   })
-
-; ============================================================================
-; Memory Churn Tests
-; ============================================================================
-
-(test/define "gc-stress-repeated-allocation-cycles"
-  {do
+  (test "gc-stress-repeated-allocation-cycles"
+    {do
     (def {cycle} (\ {n} {
       (if (<= n 0)
         {0}
@@ -111,9 +106,8 @@
     (def {result} (cycle 100))
     (== result 0)
   })
-
-(test/define "gc-stress-large-list-operations"
-  {do
+  (test "gc-stress-large-list-operations"
+    {do
     (def {make-range} (\ {n acc} {
       (if (<= n 0)
         {acc}
@@ -122,7 +116,5 @@
     (def {numbers} (make-range 100 ()))
     (def {sum} (foldl + 0 numbers))
     (== sum 5050)
-  })
-
-; Run all GC stress tests
-(test/run {})
+  }))
+  {:suite-name "GC Stress Tests"})

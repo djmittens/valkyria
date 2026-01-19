@@ -4,47 +4,49 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Metrics Builtins Tests")
-
 ; Test: metrics/json returns a string
-(test/define "metrics/json returns string"
-  {do
+
+; Test: metrics/prometheus returns a string
+
+; Test: metrics/counter-inc works without labels
+
+; Test: metrics/counter-inc works with labels
+
+; Test: Increment the same counter multiple times
+
+; Test: Both JSON and Prometheus formats work together
+
+(test/run (list
+  (test "metrics/json returns string"
+    {do
     (= {result} (metrics/json))
     (test/assert (string? result) "metrics/json should return a string")
     (test/assert (> (len result) 0) "metrics/json should return non-empty string")
     true
   })
-
-; Test: metrics/prometheus returns a string
-(test/define "metrics/prometheus returns string"
-  {do
+  (test "metrics/prometheus returns string"
+    {do
     (= {result} (metrics/prometheus))
     (test/assert (string? result) "metrics/prometheus should return a string")
     (test/assert (>= (len result) 0) "metrics/prometheus should return a string (may be empty initially)")
     true
   })
-
-; Test: metrics/counter-inc works without labels
-(test/define "metrics/counter-inc without labels"
-  {do
+  (test "metrics/counter-inc without labels"
+    {do
     (metrics/counter-inc "test_counter_no_labels")
     (= {json} (metrics/json))
     (test/assert (string? json) "metrics/json should still return string after counter-inc")
     true
   })
-
-; Test: metrics/counter-inc works with labels
-(test/define "metrics/counter-inc with labels"
-  {do
+  (test "metrics/counter-inc with labels"
+    {do
     (metrics/counter-inc "test_counter_labeled" "server" "test" "port" "8080")
     (= {json} (metrics/json))
     (test/assert (string? json) "metrics/json should still return string after labeled counter-inc")
     true
   })
-
-; Test: Increment the same counter multiple times
-(test/define "metrics/counter-inc multiple increments"
-  {do
+  (test "metrics/counter-inc multiple increments"
+    {do
     (metrics/counter-inc "test_counter_multi")
     (metrics/counter-inc "test_counter_multi")
     (metrics/counter-inc "test_counter_multi")
@@ -52,16 +54,13 @@
     (test/assert (string? json) "metrics/json should work after multiple increments")
     true
   })
-
-; Test: Both JSON and Prometheus formats work together
-(test/define "metrics/json and metrics/prometheus both work"
-  {do
+  (test "metrics/json and metrics/prometheus both work"
+    {do
     (metrics/counter-inc "test_both_formats")
     (= {json} (metrics/json))
     (= {prom} (metrics/prometheus))
     (test/assert (string? json) "metrics/json should return string")
     (test/assert (string? prom) "metrics/prometheus should return string")
     true
-  })
-
-(test/run)
+  }))
+  {:suite-name "Metrics Builtins Tests"})

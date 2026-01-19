@@ -4,61 +4,64 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Memory Builtin Tests")
-
 ; ============================================================================
 ; heap-usage tests
 ; ============================================================================
 
-(test/define "heap-usage-returns-number"
-  {do
+; ============================================================================
+; gc-collect tests
+; ============================================================================
+
+; ============================================================================
+; mem/heap/hard-limit tests
+; ============================================================================
+
+; ============================================================================
+; stack-depth test
+; ============================================================================
+
+; ============================================================================
+; time-us tests
+; ============================================================================
+
+; Run all tests
+(test/run (list
+  (test "heap-usage-returns-number"
+    {do
     (= {usage} (heap-usage))
     (test/assert (>= usage 0) "heap-usage should return non-negative number")
     true
   })
-
-(test/define "heap-usage-increases-with-allocation"
-  {do
+  (test "heap-usage-increases-with-allocation"
+    {do
     (= {before} (heap-usage))
     (= {big-list} (range 0 1000))
     (= {after} (heap-usage))
     (test/assert (>= after before) "heap usage should not decrease after allocation")
     true
   })
-
-; ============================================================================
-; gc-collect tests
-; ============================================================================
-
-(test/define "gc-collect-runs"
-  {do
+  (test "gc-collect-runs"
+    {do
     (= {result} (gc-collect))
     (test/assert (>= result 0) "gc-collect should return non-negative bytes")
     true
   })
-
-(test/define "gc-collect-reclaims-garbage"
-  {do
+  (test "gc-collect-reclaims-garbage"
+    {do
     (= {x} (range 0 100))
     (= {x} nil)
     (= {reclaimed} (gc-collect))
     (test/assert (>= reclaimed 0) "gc-collect should return reclaimed bytes")
     true
   })
-
-; ============================================================================
-; mem/heap/hard-limit tests
-; ============================================================================
-
-(test/define "heap-hard-limit-returns-number"
-  {do
+  (test "heap-hard-limit-returns-number"
+    {do
     (= {limit} (mem/heap/hard-limit))
     (test/assert (> limit 0) "mem/heap/hard-limit should return positive number")
     true
   })
-
-(test/define "set-heap-hard-limit-basic"
-  {do
+  (test "set-heap-hard-limit-basic"
+    {do
     (= {original} (mem/heap/hard-limit))
     (= {new-limit} (+ original 1000000))
     (= {old} (mem/heap/set-hard-limit new-limit))
@@ -67,20 +70,14 @@
     (mem/heap/set-hard-limit original)
     true
   })
-
-; ============================================================================
-; stack-depth test
-; ============================================================================
-
-(test/define "stack-depth-returns-number"
-  {do
+  (test "stack-depth-returns-number"
+    {do
     (= {depth} (stack-depth))
     (test/assert (>= depth 0) "stack-depth should return non-negative")
     true
   })
-
-(test/define "stack-depth-increases-in-recursion"
-  {do
+  (test "stack-depth-increases-in-recursion"
+    {do
     (fun {check-depth n}
       {if (<= n 0)
         (stack-depth)
@@ -90,25 +87,17 @@
     (test/assert (> depth-5 depth-0) "depth should increase with recursion")
     true
   })
-
-; ============================================================================
-; time-us tests
-; ============================================================================
-
-(test/define "time-us-returns-number"
-  {do
+  (test "time-us-returns-number"
+    {do
     (= {t} (time-us))
     (test/assert (> t 0) "time-us should return positive number")
     true
   })
-
-(test/define "time-us-monotonic"
-  {do
+  (test "time-us-monotonic"
+    {do
     (= {t1} (time-us))
     (= {t2} (time-us))
     (test/assert (>= t2 t1) "time-us should be monotonic")
     true
-  })
-
-; Run all tests
-(test/run)
+  }))
+  {:suite-name "Memory Builtin Tests"})

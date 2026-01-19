@@ -4,104 +4,91 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Parser Edge Cases Tests")
-
-(test/define "partial-application-basic"
-  {do
+(test/run (list
+  (test "partial-application-basic"
+    {do
     (= {add} (\ {x y} {+ x y}))
     (= {add5} (add 5))
     (test/assert-eq 8 (add5 3) "partial application should work")
     true
   })
-
-(test/define "partial-application-multiple"
-  {do
+  (test "partial-application-multiple"
+    {do
     (= {add3} (\ {a b c} {+ (+ a b) c}))
     (= {add3-first} (add3 1))
     (= {add3-second} (add3-first 2))
     (test/assert-eq 6 (add3-second 3) "multiple partial applications")
     true
   })
-
-(test/define "varargs-with-no-extra-args"
-  {do
+  (test "varargs-with-no-extra-args"
+    {do
     (= {f} (\ {x & rest} {x}))
     (test/assert-eq 1 (f 1) "varargs with no extra args")
     true
   })
-
-(test/define "varargs-collect-all"
-  {do
+  (test "varargs-collect-all"
+    {do
     (= {collect} (\ {& args} {args}))
     (= {result} (collect 1 2 3))
     (test/assert-eq 3 (len result) "varargs collect all")
     true
   })
-
-(test/define "varargs-empty-call"
-  {do
+  (test "varargs-empty-call"
+    {do
     (= {no-args} (\ {& args} {len args}))
     (test/assert-eq 0 (no-args) "varargs with empty call")
     true
   })
-
-(test/define "too-many-args-error"
-  {do
+  (test "too-many-args-error"
+    {do
     (= {f} (\ {x} {x}))
     (= {result} (f 1 2))
     (test/assert (error? result) "too many args should error")
     true
   })
-
-(test/define "too-few-args-returns-partial"
-  {do
+  (test "too-few-args-returns-partial"
+    {do
     (= {f} (\ {x y} {+ x y}))
     (= {partial} (f 1))
     (test/assert-eq 3 (partial 2) "too few args returns partial")
     true
   })
-
-(test/define "range-empty"
-  {do
+  (test "range-empty"
+    {do
     (= {result} (range 5 5))
     (test/assert-eq 0 (len result) "range with equal start/end is empty")
     true
   })
-
-(test/define "range-negative"
-  {do
+  (test "range-negative"
+    {do
     (= {result} (range 10 5))
     (test/assert-eq 0 (len result) "range with start > end is empty")
     true
   })
-
-(test/define "range-negative-numbers"
-  {do
+  (test "range-negative-numbers"
+    {do
     (= {result} (range -5 -2))
     (test/assert-eq 3 (len result) "range with negative numbers")
     (test/assert-eq -5 (nth 1 result) "first elem is -5")
     (test/assert-eq -3 (nth 3 result) "last elem is -3")
     true
   })
-
-(test/define "ord-basic"
-  {do
+  (test "ord-basic"
+    {do
     (test/assert (< (ord 1 2) 0) "ord 1 2 < 0")
     (test/assert (> (ord 2 1) 0) "ord 2 1 > 0")
     (test/assert-eq 0 (ord 1 1) "ord 1 1 == 0")
     true
   })
-
-(test/define "ord-strings"
-  {do
+  (test "ord-strings"
+    {do
     (test/assert (< (ord "a" "b") 0) "ord a b < 0")
     (test/assert (> (ord "b" "a") 0) "ord b a > 0")
     (test/assert-eq 0 (ord "x" "x") "ord x x == 0")
     true
   })
-
-(test/define "select-first-match"
-  {do
+  (test "select-first-match"
+    {do
     (= {result} (select
       {(== 1 2) "wrong"}
       {(== 1 1) "correct"}
@@ -109,9 +96,8 @@
     (test/assert-eq "correct" result "select picks first true")
     true
   })
-
-(test/define "select-default"
-  {do
+  (test "select-default"
+    {do
     (= {result} (select
       {false "wrong1"}
       {false "wrong2"}
@@ -119,18 +105,16 @@
     (test/assert-eq "default" result "select falls to default")
     true
   })
-
-(test/define "quasiquote-nested-unquote"
-  {do
+  (test "quasiquote-nested-unquote"
+    {do
     (= {x} 10)
     (= {y} 20)
     (= {result} `{outer {inner ,x} ,y})
     (test/assert-eq 3 (len result) "nested quasiquote structure")
     true
   })
-
-(test/define "quasiquote-in-function"
-  {do
+  (test "quasiquote-in-function"
+    {do
     (= {make-pair} (\ {a b} {`{,a ,b}}))
     (= {result} (make-pair 1 2))
     (test/assert-eq 2 (len result) "quasiquote in function")
@@ -138,79 +122,69 @@
     (test/assert-eq 2 (nth 2 result) "second is b")
     true
   })
-
-(test/define "unquote-splicing-multiple"
-  {do
+  (test "unquote-splicing-multiple"
+    {do
     (= {a} {1 2})
     (= {b} {3 4})
     (= {result} `{,@a ,@b})
     (test/assert-eq 4 (len result) "multiple splices")
     true
   })
-
-(test/define "unquote-splicing-growth"
-  {do
+  (test "unquote-splicing-growth"
+    {do
     (= {big} (range 0 50))
     (= {result} `{start ,@big end})
     (test/assert-eq 52 (len result) "splice large list causes growth")
     true
   })
-
-(test/define "str-join-basic"
-  {do
+  (test "str-join-basic"
+    {do
     (= {result} (str "a" "b" "c"))
     (test/assert-eq "abc" result "str joins strings")
     true
   })
-
-(test/define "str-join-with-numbers"
-  {do
+  (test "str-join-with-numbers"
+    {do
     (= {result} (str "count: " 42))
     (test/assert-eq "count: 42" result "str with numbers")
     true
   })
-
-(test/define "plist-get-in-nested"
-  {do
+  (test "plist-get-in-nested"
+    {do
     (= {data} {:outer {:inner 42}})
     (= {inner} (plist/get data :outer))
     (= {result} (plist/get inner :inner))
     (test/assert-eq 42 result "nested plist access")
     true
   })
-
-(test/define "eval-quoted-list"
-  {do
+  (test "eval-quoted-list"
+    {do
     (= {code} {+ 1 2})
     (= {result} (eval code))
     (test/assert-eq 3 result "eval quoted list")
     true
   })
-
-(test/define "eval-nested"
-  {do
+  (test "eval-nested"
+    {do
     (= {code} {eval {+ 2 3}})
     (= {result} (eval code))
     (test/assert-eq 5 result "eval nested eval")
     true
   })
-
-(test/define "list-from-quoted"
-  {do
+  (test "list-from-quoted"
+    {do
     (= {q} {1 2 3})
     (= {l} (list 1 2 3))
     (test/assert-eq 3 (len q) "quoted list len")
     (test/assert-eq 3 (len l) "list len")
     true
   })
-
-(test/define "def-vs-put"
-  {do
+  (test "def-vs-put"
+    {do
     (= {x} 1)
     (def {y} 2)
     (test/assert-eq 1 x "= works locally")
     (test/assert-eq 2 y "def works globally")
     true
-  })
-
-(test/run)
+  }))
+  {:suite-name "Parser Edge Cases Tests"})

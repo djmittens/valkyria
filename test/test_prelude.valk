@@ -8,11 +8,96 @@
 (load "src/modules/test.valk")
 
 ; Set the test suite name
-(test/suite "Prelude Tests")
 
 ; Test: fun macro creates callable functions
-(test/define "prelude-fun-definition"
-  {do
+
+; Test: curry (unpack) transforms function to take list
+
+; Test: uncurry (pack) transforms function to take varargs
+
+; Test: do executes multiple expressions, returns last
+
+; Test: let creates new scope
+
+; Test: nth accesses list elements (1-indexed!)
+
+; Test: split divides list at index
+
+; Test: map applies function to each element
+
+; Test: logical not
+
+; Test: fst, snd, trd accessors
+
+; Test: last accessor
+
+; Test: take n elements from list
+
+; Test: drop n elements from list
+
+; Test: exists checks if element in list
+
+; Test: filter keeps elements matching predicate
+
+; Test: foldl reduces list
+
+; Test: sum and product convenience functions
+
+; Test: logical operators
+
+; Test: flip swaps function arguments
+
+; Test: select (switch/case with conditions)
+
+; Test: case (switch on specific value)
+
+; ============================================================================
+; Regression tests for environment scoping and varargs
+; ============================================================================
+
+; Test: select with dynamic scoping - accessing caller's local variables
+; Uses hybrid scoping: lexical (parent chain) with dynamic fallback
+
+; Test: varargs bind to empty when only required args provided
+
+; ============================================================================
+; Builtin function tests
+; ============================================================================
+
+; Test: eval evaluates quoted expressions
+
+; Test: head returns first element directly
+
+; Test: tail returns rest of list
+
+; Test: head and tail composition
+
+; Test: join concatenates lists
+
+; Test: list creates a qexpr from arguments
+
+; Test: len returns list length
+
+; ============================================================================
+; String operation tests
+; ============================================================================
+
+; Test: string comparison
+
+; Test: strings in lists
+
+; ============================================================================
+; List reverse tests
+; ============================================================================
+
+; ============================================================================
+; Property list (plist) tests
+; ============================================================================
+
+; Run all tests
+(test/run (list
+  (test "prelude-fun-definition"
+    {do
     (fun {add a b} {+ a b})
     (test/assert-eq 110 (add 10 100) "defined function should be callable")
 
@@ -21,26 +106,18 @@
     ; Note: We can't easily test error cases yet without try/catch
     true
   })
-
-; Test: curry (unpack) transforms function to take list
-(test/define "prelude-curry"
-  {test/assert-eq 6 ((curry +) {1 2 3}) "curry should unpack list to args"})
-
-; Test: uncurry (pack) transforms function to take varargs
-(test/define "prelude-uncurry"
-  {test/assert-eq 6 ((uncurry (curry +)) 1 2 3)
+  (test "prelude-curry"
+    {test/assert-eq 6 ((curry +) {1 2 3}) "curry should unpack list to args"})
+  (test "prelude-uncurry"
+    {test/assert-eq 6 ((uncurry (curry +)) 1 2 3)
     "uncurry should pack varargs to list"})
-
-; Test: do executes multiple expressions, returns last
-(test/define "prelude-do"
-  {do
+  (test "prelude-do"
+    {do
     (= {a} 2)
     (test/assert-eq 3 (do (= {a} 2) (+ 1 2 3) (+ 1 a))
       "do should return last expression")})
-
-; Test: let creates new scope
-(test/define "prelude-let"
-  {do
+  (test "prelude-let"
+    {do
     ; do leaks scope
     (do (= {a} 2) (+ 1 2 3) (+ 1 a))
     (test/assert-eq 2 a "do should leak scope")
@@ -51,19 +128,15 @@
     ; Note: Can't test error cases easily yet
     true
   })
-
-; Test: nth accesses list elements (1-indexed!)
-(test/define "prelude-nth"
-  {do
+  (test "prelude-nth"
+    {do
     (test/assert-eq 1 (nth 1 {1 2 3}) "nth 1 should return first element")
     (test/assert-eq 40 (nth 4 {99 2 3 40 5 6}) "nth 4 should return 4th element")
     ; nth 0 should error - can't test yet
     true
   })
-
-; Test: split divides list at index
-(test/define "prelude-split"
-  {do
+  (test "prelude-split"
+    {do
     (= {result} (split 3 {1 2 3 4 5 6 7 8}))
     (test/assert-eq 2 (len result) "split should return 2 lists")
     (test/assert-eq 3 (len (nth 1 result)) "left side should have 3 elements")
@@ -72,74 +145,52 @@
     ; Edge case: split at 0
     (= {result2} (split 0 {1 2 3 4 5 6 7 8}))
     (test/assert-eq 2 (len result2) "split 0 should still return 2 lists")})
-
-; Test: map applies function to each element
-(test/define "prelude-map"
-  {test/assert
+  (test "prelude-map"
+    {test/assert
     (== (map (\ {x} {* 2 x}) {1 2 3}) {2 4 6})
     "map should double each element"})
-
-; Test: logical not
-(test/define "prelude-not"
-  {do
+  (test "prelude-not"
+    {do
     (test/assert-eq 0 (not true) "not true should be false (0)")
     (test/assert-eq 1 (not false) "not false should be true (1)")})
-
-; Test: fst, snd, trd accessors
-(test/define "prelude-list-accessors"
-  {do
+  (test "prelude-list-accessors"
+    {do
     (test/assert-eq 1 (fst {1 2 3}) "fst should return first element")
     (test/assert-eq 2 (snd {1 2 3}) "snd should return second element")
     (test/assert-eq 3 (trd {1 2 3}) "trd should return third element")})
-
-; Test: last accessor
-(test/define "prelude-last"
-  {test/assert-eq 5 (last {1 2 3 4 5}) "last should return final element"})
-
-; Test: take n elements from list
-(test/define "prelude-take"
-  {do
+  (test "prelude-last"
+    {test/assert-eq 5 (last {1 2 3 4 5}) "last should return final element"})
+  (test "prelude-take"
+    {do
     (= {result} (take 3 {1 2 3 4 5}))
     (test/assert-eq 3 (len result) "take 3 should return 3 elements")
     (test/assert-eq 1 (nth 1 result) "first element should be 1")
     (test/assert-eq 3 (nth 3 result) "third element should be 3")})
-
-; Test: drop n elements from list
-(test/define "prelude-drop"
-  {do
+  (test "prelude-drop"
+    {do
     (= {result} (drop 2 {1 2 3 4 5}))
     (test/assert-eq 3 (len result) "drop 2 should leave 3 elements")
     (test/assert-eq 3 (nth 1 result) "first element should now be 3")})
-
-; Test: exists checks if element in list
-(test/define "prelude-exists"
-  {do
+  (test "prelude-exists"
+    {do
     (test/assert-eq 1 (exists 3 {1 2 3 4 5}) "3 should exist in list")
     (test/assert-eq 0 (exists 99 {1 2 3 4 5}) "99 should not exist in list")
     (test/assert-eq 0 (exists 1 {}) "nothing exists in empty list")})
-
-; Test: filter keeps elements matching predicate
-(test/define "prelude-filter"
-  {do
+  (test "prelude-filter"
+    {do
     (= {result} (filter (\ {x} {> x 2}) {1 2 3 4 5}))
     (test/assert-eq 3 (len result) "should keep 3 elements > 2")
     (test/assert-eq 3 (nth 1 result) "first filtered element should be 3")})
-
-; Test: foldl reduces list
-(test/define "prelude-foldl"
-  {do
+  (test "prelude-foldl"
+    {do
     (test/assert-eq 15 (foldl + 0 {1 2 3 4 5}) "foldl + should sum to 15")
     (test/assert-eq 120 (foldl * 1 {1 2 3 4 5}) "foldl * should multiply to 120")})
-
-; Test: sum and product convenience functions
-(test/define "prelude-sum-product"
-  {do
+  (test "prelude-sum-product"
+    {do
     (test/assert-eq 15 (sum {1 2 3 4 5}) "sum should add all elements")
     (test/assert-eq 120 (product {1 2 3 4 5}) "product should multiply all")})
-
-; Test: logical operators
-(test/define "prelude-logic"
-  {do
+  (test "prelude-logic"
+    {do
     (test/assert-eq 1 (and 1 1) "and 1 1 should be 1")
     (test/assert-eq 0 (and 1 0) "and 1 0 should be 0")
     (test/assert-eq 0 (and 0 1) "and 0 1 should be 0")
@@ -147,47 +198,32 @@
     (test/assert-eq 1 (or 1 0) "or 1 0 should be 1")
     (test/assert-eq 1 (or 0 1) "or 0 1 should be 1")
     (test/assert-eq 0 (or 0 0) "or 0 0 should be 0")})
-
-; Test: flip swaps function arguments
-(test/define "prelude-flip"
-  {do
+  (test "prelude-flip"
+    {do
     (fun {div a b} {/ a b})
     (test/assert-eq 2 (div 10 5) "10 / 5 should be 2")
     (test/assert-eq 0 (flip div 10 2) "flip should swap: (div 2 10) = 2 / 10 = 0")})
-
-; Test: select (switch/case with conditions)
-(test/define "prelude-select"
-  {do
+  (test "prelude-select"
+    {do
     (= {result} (select
       {(== 1 2) "bad"}
       {(== 2 3) "also bad"}
       {otherwise "good"}))
     (test/assert-eq "good" result "select should match otherwise clause")})
-
-; Test: case (switch on specific value)
-(test/define "prelude-case"
-  {do
+  (test "prelude-case"
+    {do
     (= {result} (case 2
       {{1} "one"}
       {{2} "two"}
       {{3} "three"}))
     (test/assert-eq "two" result "case should match value 2")})
-
-; ============================================================================
-; Regression tests for environment scoping and varargs
-; ============================================================================
-
-; Test: select with dynamic scoping - accessing caller's local variables
-; Uses hybrid scoping: lexical (parent chain) with dynamic fallback
-(test/define "select-dynamic-scoping"
-  {do
+  (test "select-dynamic-scoping"
+    {do
     (fun {my-test n} {select {(== n 1) 100} {otherwise 999}})
     (test/assert-eq 100 (my-test 1) "select should access lambda parameter n")
     (test/assert-eq 999 (my-test 2) "select otherwise should work")})
-
-; Test: varargs bind to empty when only required args provided
-(test/define "varargs-with-required"
-  {do
+  (test "varargs-with-required"
+    {do
     (fun {test-fn a & as} {list a as})
     (= {result} (test-fn 42))
     (test/assert-eq 2 (len result) "result should have 2 elements")
@@ -197,14 +233,8 @@
     ; Test with actual varargs
     (= {result2} (test-fn 1 2 3))
     (test/assert-eq 2 (len (nth 2 result2)) "varargs should have 2 elements")})
-
-; ============================================================================
-; Builtin function tests
-; ============================================================================
-
-; Test: eval evaluates quoted expressions
-(test/define "builtin-eval"
-  {do
+  (test "builtin-eval"
+    {do
     (test/assert-eq 6 (eval {+ 1 2 3}) "eval should evaluate arithmetic")
     (test/assert-eq 42 (eval {* 6 7}) "eval should evaluate multiplication")
 
@@ -216,106 +246,76 @@
     (test/assert-eq 100 (eval {eval {* 10 10}}) "nested eval should work")
     true
   })
-
-; Test: head returns first element directly
-(test/define "builtin-head"
-  {do
+  (test "builtin-head"
+    {do
     (test/assert-eq 1 (head {1 2 3}) "head extracts first element")
     (test/assert-eq 42 (head {42}) "head of single element")
     (test/assert-eq 1 (fst {1 2 3}) "fst also extracts first element")
     true
   })
-
-; Test: tail returns rest of list
-(test/define "builtin-tail"
-  {do
+  (test "builtin-tail"
+    {do
     (test/assert-eq 2 (len (tail {1 2 3})) "tail of 3 elements has 2")
     (test/assert-eq 0 (len (tail {1})) "tail of single element is empty")
     (test/assert-eq 2 (fst (tail {1 2 3})) "first of tail is second element")
     true
   })
-
-; Test: head and tail composition
-(test/define "builtin-head-tail-composition"
-  {do
+  (test "builtin-head-tail-composition"
+    {do
     (= {lst} {1 2 3 4 5})
     (test/assert-eq 2 (head (tail lst)) "head of tail gives second element")
     (test/assert-eq 3 (head (tail (tail lst))) "head of tail of tail gives third")
     (test/assert-eq 2 (len (tail (tail (tail lst)))) "triple tail leaves 2 elements")
     true
   })
-
-; Test: join concatenates lists
-(test/define "builtin-join"
-  {do
+  (test "builtin-join"
+    {do
     (test/assert-eq 4 (len (join {1 2} {3 4})) "join two lists has 4 elements")
     (test/assert-eq 2 (len (join {} {1 2})) "join empty with list")
     (test/assert-eq 3 (len (join {1} {2} {3})) "join multiple lists")
     (test/assert-eq 4 (fst (tail (tail (tail (join {1 2} {3 4}))))) "fourth element is 4")
     true
   })
-
-; Test: list creates a qexpr from arguments
-(test/define "builtin-list"
-  {do
+  (test "builtin-list"
+    {do
     (test/assert-eq 3 (len (list 1 2 3)) "list creates 3-element qexpr")
     (test/assert-eq 0 (len (list)) "empty list")
     (test/assert-eq 1 (len (list 42)) "single element list")
     (test/assert-eq 42 (fst (list 42)) "list element accessible")
     true
   })
-
-; Test: len returns list length
-(test/define "builtin-len"
-  {do
+  (test "builtin-len"
+    {do
     (test/assert-eq 0 (len {}) "empty list has length 0")
     (test/assert-eq 1 (len {a}) "single element has length 1")
     (test/assert-eq 5 (len {1 2 3 4 5}) "five elements has length 5")
     true
   })
-
-; ============================================================================
-; String operation tests
-; ============================================================================
-
-; Test: string comparison
-(test/define "string-comparison"
-  {do
+  (test "string-comparison"
+    {do
     (test/assert (== "hello" "hello") "equal strings")
     (test/assert (not (== "hello" "world")) "unequal strings")
     (test/assert (== "" "") "empty strings equal")
     true
   })
-
-; Test: strings in lists
-(test/define "strings-in-lists"
-  {do
+  (test "strings-in-lists"
+    {do
     (= {strs} {"apple" "banana" "cherry"})
     (test/assert-eq 3 (len strs) "list of strings has correct length")
     (test/assert-eq "apple" (fst strs) "fst returns first string")
     (test/assert-eq "banana" (snd strs) "snd returns second string")
     true
   })
-
-; ============================================================================
-; List reverse tests
-; ============================================================================
-
-(test/define "prelude-reverse"
-  {do
+  (test "prelude-reverse"
+    {do
     (test/assert (== (reverse {1 2 3}) {3 2 1}) "reverse should reverse 3 elements")
     (test/assert (== (reverse {1}) {1}) "reverse single element")
     (test/assert (== (reverse {}) {}) "reverse empty list")
     (test/assert (== (reverse {5 4 3 2 1}) {1 2 3 4 5}) "reverse 5 elements")
     true
   })
-
-; ============================================================================
-; Property list (plist) tests
-; ============================================================================
-
-(test/define "prelude-plist-get"
-  {do
+  (test "prelude-plist-get"
+    {do
     (= {pl} {:name "Alice" :age 30 :city "NYC"})
     (test/assert-eq "Alice" (plist/get pl :name) "plist/get should find name")
     (test/assert-eq 30 (plist/get pl :age) "plist/get should find age")
@@ -324,9 +324,8 @@
     (test/assert-eq nil (plist/get {} :any) "plist/get on empty returns nil")
     true
   })
-
-(test/define "prelude-plist-set"
-  {do
+  (test "prelude-plist-set"
+    {do
     (= {pl} {:name "Alice"})
     (= {pl2} (plist/set pl :age 25))
     (test/assert-eq "Alice" (plist/get pl2 :name) "plist/set preserves existing")
@@ -342,9 +341,8 @@
     (test/assert-eq "val" (plist/get pl4 :key) "plist/set on empty creates plist")
     true
   })
-
-(test/define "prelude-plist-has"
-  {do
+  (test "prelude-plist-has"
+    {do
     (= {pl} {:name "Alice" :age 30})
     (test/assert-eq true (plist/has? pl :name) "plist/has? finds existing key")
     (test/assert-eq true (plist/has? pl :age) "plist/has? finds second key")
@@ -352,9 +350,8 @@
     (test/assert-eq false (plist/has? {} :any) "plist/has? on empty is false")
     true
   })
-
-(test/define "prelude-plist-keys"
-  {do
+  (test "prelude-plist-keys"
+    {do
     (= {pl} {:a 1 :b 2 :c 3})
     (= {keys} (plist/keys pl))
     (test/assert-eq 3 (len keys) "plist/keys returns all keys")
@@ -364,9 +361,8 @@
     (test/assert (== (plist/keys {}) nil) "plist/keys of empty is nil")
     true
   })
-
-(test/define "prelude-plist-vals"
-  {do
+  (test "prelude-plist-vals"
+    {do
     (= {pl} {:a 1 :b 2 :c 3})
     (= {vals} (plist/vals pl))
     (test/assert-eq 3 (len vals) "plist/vals returns all values")
@@ -375,7 +371,5 @@
     (test/assert-eq 3 (nth 3 vals) "third value is 3")
     (test/assert (== (plist/vals {}) nil) "plist/vals of empty is nil")
     true
-  })
-
-; Run all tests
-(test/run {})
+  }))
+  {:suite-name "Prelude Tests"})

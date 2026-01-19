@@ -4,8 +4,6 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Integration Tests")
-
 ; Test that many top-level defs work (checkpoint happens between each)
 (def {integration-var-1} 1)
 (def {integration-var-2} 2)
@@ -13,60 +11,57 @@
 (def {integration-var-4} 4)
 (def {integration-var-5} 5)
 
-(test/define "many-defs-survive"
-  {== (+ integration-var-1 integration-var-2 integration-var-3
-         integration-var-4 integration-var-5) 15})
-
 ; Test function definitions survive
 (fun {integration-add x y} {+ x y})
 (fun {integration-mul x y} {* x y})
-
-(test/define "function-defs-survive"
-  {and (== (integration-add 3 4) 7)
-       (== (integration-mul 3 4) 12)})
 
 ; Test closures survive
 (fun {make-counter start} {\ {n} {+ start n}})
 (def {counter-from-10} (make-counter 10))
 (def {counter-from-100} (make-counter 100))
 
-(test/define "closures-survive"
-  {and (== (counter-from-10 5) 15)
-       (== (counter-from-100 5) 105)})
-
 ; Test map over moderate list
-(test/define "map-over-list"
-  {do
-    (= {nums} {1 2 3 4 5 6 7 8 9 10})
-    (= {doubled} (map (\ {x} {* x 2}) nums))
-    (== (sum doubled) 110)})
 
 ; Test filter over list (filter numbers > 5)
-(test/define "filter-over-list"
-  {do
-    (= {nums} {1 2 3 4 5 6 7 8 9 10})
-    (= {big} (filter (\ {x} {> x 5}) nums))
-    (== (sum big) 40)})
 
 ; Test foldl over list
-(test/define "foldl-over-list"
-  {do
-    (= {nums} {1 2 3 4 5})
-    (== (foldl + 0 nums) 15)})
 
 ; Test recursive function with many calls
 (fun {countdown n} {
   if (<= n 0) {0} {countdown (- n 1)}
 })
 
-(test/define "recursive-function-many-calls"
-  {== (countdown 100) 0})
-
 ; Test arena-usage returns reasonable value
-(test/define "arena-usage-reasonable"
-  {do
+
+(test/run (list
+  (test "many-defs-survive"
+    {== (+ integration-var-1 integration-var-2 integration-var-3
+         integration-var-4 integration-var-5) 15})
+  (test "function-defs-survive"
+    {and (== (integration-add 3 4) 7)
+       (== (integration-mul 3 4) 12)})
+  (test "closures-survive"
+    {and (== (counter-from-10 5) 15)
+       (== (counter-from-100 5) 105)})
+  (test "map-over-list"
+    {do
+    (= {nums} {1 2 3 4 5 6 7 8 9 10})
+    (= {doubled} (map (\ {x} {* x 2}) nums))
+    (== (sum doubled) 110)})
+  (test "filter-over-list"
+    {do
+    (= {nums} {1 2 3 4 5 6 7 8 9 10})
+    (= {big} (filter (\ {x} {> x 5}) nums))
+    (== (sum big) 40)})
+  (test "foldl-over-list"
+    {do
+    (= {nums} {1 2 3 4 5})
+    (== (foldl + 0 nums) 15)})
+  (test "recursive-function-many-calls"
+    {== (countdown 100) 0})
+  (test "arena-usage-reasonable"
+    {do
     (= {usage} (mem/arena/usage))
     (= {capacity} (mem/arena/capacity))
-    (< usage capacity)})
-
-(test/run)
+    (< usage capacity)}))
+  {:suite-name "Integration Tests"})

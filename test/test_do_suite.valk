@@ -5,103 +5,84 @@
 
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
-(test/suite "Do Block Tests")
 
 ; ============================================================================
 ; Basic Do Block Tests
 ; ============================================================================
 
-(test/define "do-returns-last-expression"
-  ; do should return the value of its last expression
-  ; Source: debug_do_return.valk
-  {do
-    (def {r1} (do 1 2 3))
-    (def {r2} (do (+ 1 1) (+ 2 2) (+ 3 3)))
-    (and (== r1 3) (== r2 6))
-  })
-
-(test/define "do-empty-returns-nil"
-  ; Empty do block should compile and return a value
-  ; NOTE: Currently returns 0, may change to nil in future
-  {do
-    (def {result} (do))
-    ; Just verify it doesn't crash
-    true
-  })
-
-(test/define "do-single-expression"
-  ; do with single expression should return that expression
-  {do
-    (def {result} (do 42))
-    (== result 42)
-  })
-
 ; ============================================================================
 ; Do Block with Assignments
 ; ============================================================================
 
-(test/define "do-with-assignments"
-  ; do blocks should support variable assignments
-  ; Source: debug_do_assignment.valk
-  {do
+; ============================================================================
+; Do Block Scoping
+; ============================================================================
+
+; ============================================================================
+; Do Block with Recursion (TCO)
+; ============================================================================
+
+; ============================================================================
+; Do Block Edge Cases
+; ============================================================================
+
+; Run all do block tests
+(test/run (list
+  (test "do-returns-last-expression"
+    {do
+    (def {r1} (do 1 2 3))
+    (def {r2} (do (+ 1 1) (+ 2 2) (+ 3 3)))
+    (and (== r1 3) (== r2 6))
+  })
+  (test "do-empty-returns-nil"
+    {do
+    (def {result} (do))
+    ; Just verify it doesn't crash
+    true
+  })
+  (test "do-single-expression"
+    {do
+    (def {result} (do 42))
+    (== result 42)
+  })
+  (test "do-with-assignments"
+    {do
     (def {result} (do
       (= {a} 1)
       (= {b} 2)
       (+ a b)))
     (== result 3)
   })
-
-(test/define "do-assignment-then-value"
-  ; Verify assignment followed by explicit return value
-  ; Source: debug_do_assignment.valk
-  {do
+  (test "do-assignment-then-value"
+    {do
     (def {result} (do
       (= {x} 5)
       10))
     (== result 10)
   })
-
-(test/define "do-nested-assignments"
-  ; Nested do blocks with assignments
-  ; Source: debug_do_nested.valk
-  {do
+  (test "do-nested-assignments"
+    {do
     (= {a} 2)
     (def {inner} (do
       (= {a} 3)
       (+ 1 a)))
     (== inner 4)
   })
-
-; ============================================================================
-; Do Block Scoping
-; ============================================================================
-
-(test/define "do-preserves-outer-scope"
-  ; do blocks should see variables from outer scope
-  ; Source: debug_do_scope.valk
-  {do
+  (test "do-preserves-outer-scope"
+    {do
     (= {x} 100)
     (def {result} (do
       (+ x 5)))
     (== result 105)
   })
-
-(test/define "do-can-modify-outer-scope"
-  ; Variables assigned in do should be visible outside
-  {do
+  (test "do-can-modify-outer-scope"
+    {do
     (do
       (= {outer_var} 42))
     (== outer_var 42)
   })
-
-; ============================================================================
-; Do Block with Recursion (TCO)
-; ============================================================================
-
-(test/define "do-preserves-tail-call-optimization"
-  ; do blocks should not break TCO
-  ; Source: debug_do_recursion.valk
-  {do
+  (test "do-preserves-tail-call-optimization"
+    {do
     (def {countdown} (\ {n} {
       (if (<= n 0)
         {0}
@@ -111,24 +92,15 @@
     (def {result} (countdown 1000))
     (== result 0)
   })
-
-; ============================================================================
-; Do Block Edge Cases
-; ============================================================================
-
-(test/define "do-with-def-inside"
-  ; do blocks can contain def statements
-  ; Source: debug_do_def_eq.valk
-  {do
+  (test "do-with-def-inside"
+    {do
     (def {result} (do
       (def {local} 123)
       local))
     (== result 123)
   })
-
-(test/define "do-in-lambda"
-  ; do blocks should work inside lambda bodies
-  {do
+  (test "do-in-lambda"
+    {do
     (def {fn} (\ {x} {
       (do
         (def {y} (* x 2))
@@ -136,20 +108,16 @@
     }))
     (== (fn 5) 11)
   })
-
-(test/define "do-nested-multiple-levels"
-  ; Multiple levels of nested do blocks
-  {do
+  (test "do-nested-multiple-levels"
+    {do
     (def {result} (do
       (do
         (do
           42))))
     (== result 42)
   })
-
-(test/define "do-with-function-calls"
-  ; do blocks should handle function calls properly
-  {do
+  (test "do-with-function-calls"
+    {do
     (def {add} (\ {a b} {(+ a b)}))
     (def {result} (do
       (def {x} (add 1 2))
@@ -157,14 +125,9 @@
       y))
     (== result 6)
   })
-
-(test/define "do-direct-use-no-parens"
-  ; Test do used directly in expressions
-  ; Source: debug_do_direct.valk
-  {do
+  (test "do-direct-use-no-parens"
+    {do
     (def {x} (do 1 2 3))
     (== x 3)
-  })
-
-; Run all do block tests
-(test/run {})
+  }))
+  {:suite-name "Do Block Tests"})

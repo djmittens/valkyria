@@ -4,13 +4,6 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Empty Suite Test")
-
-; Expect exit code 1 (failure due to no tests)
-(test/expect-exit 1)
-
-; Clear the registry to ensure it's empty
-(def {*test-registry*} {})
-
-; Run - would normally exit 1, but expect-exit makes suite pass
-(test/run {})
+; Run with empty list - would normally exit 1, but expected-exit makes suite pass
+(test/run (list)
+  {:suite-name "Empty Suite Test" :expected-exit 1})

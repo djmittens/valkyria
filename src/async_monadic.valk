@@ -275,13 +275,9 @@
 ; NOTE: This only works for pure async operations (async/pure, async/bind chains
 ; that don't involve actual I/O). For I/O operations, use aio/run which runs
 ; the event loop.
-; Implementation: Pass a continuation that sets a captured result variable.
-; This uses def because async/run is for pure synchronous ops - no threading concern.
+; Implementation: Uses identity continuation - for pure ops, the result flows back directly.
 (fun {async/run async-op} {
-  do
-  (def {*async-run-result*} nil)
-  (async-op (\ {x} {(def {*async-run-result*} x)}))
-  *async-run-result*
+  (async-op (\ {x} {x}))
 })
 
 ; === Higher-Level Patterns ===

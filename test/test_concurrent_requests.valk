@@ -5,8 +5,6 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Concurrent Request Stress Test")
-
 (def {aio} (aio/start))
 
 (def {handler}
@@ -37,7 +35,8 @@
   }))
 })
 
-(test/async "50 concurrent requests complete" (\ {done} {
+(test/run-async aio (list
+  (test-async "50 concurrent requests complete" (\ {done} {
   (def {test-done-callback} done)
   
   (make-request "/")
@@ -94,6 +93,5 @@
   (make-request "/")
   (make-request "/json")
   (make-request "/html")
-}))
-
-(test/run-async aio)
+})))
+  {:suite-name "Concurrent Request Stress Test"})

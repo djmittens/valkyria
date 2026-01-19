@@ -4,29 +4,31 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Overload Handling Tests")
-
 ; Test: aio/start creates valid system
-(test/define "aio/start creates system"
-  {do
+
+; Test: system can be started multiple times (independent instances)
+
+; Test: metrics available immediately after aio/start
+
+; Test: global metrics functions work
+
+(test/run (list
+  (test "aio/start creates system"
+    {do
     (= {aio} (aio/start))
     (test/assert (!= aio nil) "aio/start should return a system")
     true
   })
-
-; Test: system can be started multiple times (independent instances)
-(test/define "multiple aio systems can be created"
-  {do
+  (test "multiple aio systems can be created"
+    {do
     (= {aio1} (aio/start))
     (= {aio2} (aio/start))
     (test/assert (!= aio1 nil) "first aio/start should return a system")
     (test/assert (!= aio2 nil) "second aio/start should return a system")
     true
   })
-
-; Test: metrics available immediately after aio/start
-(test/define "metrics available after aio/start"
-  {do
+  (test "metrics available after aio/start"
+    {do
     (= {aio} (aio/start))
     (= {json} (aio/metrics-json aio))
     (= {prom} (aio/metrics-prometheus aio))
@@ -34,15 +36,12 @@
     (test/assert (string? prom) "aio/metrics-prometheus should return string")
     true
   })
-
-; Test: global metrics functions work
-(test/define "global metrics functions work"
-  {do
+  (test "global metrics functions work"
+    {do
     (= {json} (metrics/json))
     (= {prom} (metrics/prometheus))
     (test/assert (string? json) "metrics/json should return string")
     (test/assert (string? prom) "metrics/prometheus should return string")
     true
-  })
-
-(test/run)
+  }))
+  {:suite-name "Overload Handling Tests"})

@@ -1,10 +1,9 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Coverage Integration Tests")
-
-(test/define "if-both-branches"
-  {do
+(test/run (list
+  (test "if-both-branches"
+    {do
     (fun {test-if x} {
       if (> x 0)
         {"positive"}
@@ -14,9 +13,8 @@
     (test/assert-eq "non-positive" (test-if -1) "false branch")
     true
   })
-
-(test/define "nested-if-coverage"
-  {do
+  (test "nested-if-coverage"
+    {do
     (fun {classify x} {
       if (> x 0)
         {if (> x 100)
@@ -29,9 +27,8 @@
     (test/assert-eq "non-positive" (classify -5) "non-positive path")
     true
   })
-
-(test/define "select-clause-coverage"
-  {do
+  (test "select-clause-coverage"
+    {do
     (fun {day-type d} {
       select
         {(== d 0) "sunday"}
@@ -43,18 +40,16 @@
     (test/assert-eq "weekday" (day-type 3) "weekday")
     true
   })
-
-(test/define "higher-order-coverage"
-  {do
+  (test "higher-order-coverage"
+    {do
     (= {doubled} (map (\ {x} {* x 2}) {1 2 3}))
     (= {positives} (filter (\ {x} {> x 0}) {-1 0 1 2}))
     (test/assert-eq 3 (len doubled) "map result length")
     (test/assert-eq 2 (len positives) "filter result length")
     true
   })
-
-(test/define "recursive-coverage"
-  {do
+  (test "recursive-coverage"
+    {do
     (fun {factorial n} {
       if (<= n 1)
         {1}
@@ -63,18 +58,16 @@
     (test/assert-eq 120 (factorial 5) "factorial 5")
     true
   })
-
-(test/define "do-block-coverage"
-  {do
+  (test "do-block-coverage"
+    {do
     (= {a} 1)
     (= {b} 2)
     (= {c} 3)
     (test/assert-eq 6 (+ a b c) "sum of three")
     true
   })
-
-(test/define "error-path-coverage"
-  {do
+  (test "error-path-coverage"
+    {do
     (fun {safe-div a b} {
       if (== b 0)
         {0}
@@ -83,6 +76,5 @@
     (test/assert-eq 0 (safe-div 10 0) "div by zero handled")
     (test/assert-eq 5 (safe-div 10 2) "normal division")
     true
-  })
-
-(test/run {})
+  }))
+  {:suite-name "Coverage Integration Tests"})

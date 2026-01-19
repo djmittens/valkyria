@@ -8,19 +8,18 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(test/suite "Checkpoint API Tests")
-
 ; Test arena-capacity returns a positive number
-(test/define "arena-capacity-positive"
-  {> (mem/arena/capacity) 0})
 
 ; Test arena-usage returns a non-negative number
-(test/define "arena-usage-returns-number"
-  {>= (mem/arena/usage) 0})
 
 ; Test arena-usage is less than capacity
-(test/define "arena-usage-less-than-capacity"
-  {< (mem/arena/usage) (mem/arena/capacity)})
 
 ; Run all tests
-(test/run)
+(test/run (list
+  (test "arena-capacity-positive"
+    {> (mem/arena/capacity) 0})
+  (test "arena-usage-returns-number"
+    {>= (mem/arena/usage) 0})
+  (test "arena-usage-less-than-capacity"
+    {< (mem/arena/usage) (mem/arena/capacity)}))
+  {:suite-name "Checkpoint API Tests"})
