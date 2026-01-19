@@ -35,16 +35,18 @@ void test_async_handle_new_with_sys(VALK_TEST_ARGS()) {
   valk_runtime_init(&cfg);
 
   valk_aio_system_t fake_sys = {0};
-  valk_mem_arena_t arena = {0};
-  valk_mem_arena_init(&arena, 4096);
-  valk_region_init(&fake_sys.system_region, VALK_LIFETIME_REQUEST, NULL, &arena);
+  sz arena_size = sizeof(valk_mem_arena_t) + 4096;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, 4096);
+  valk_region_init(&fake_sys.system_region, VALK_LIFETIME_REQUEST, NULL, arena);
 
   valk_async_handle_t *handle = valk_async_handle_new(&fake_sys, NULL);
   ASSERT_NOT_NULL(handle);
   ASSERT_EQ(handle->sys, &fake_sys);
   ASSERT_EQ(handle->region, &fake_sys.system_region);
 
-  valk_mem_arena_reset(&arena);
+  valk_mem_arena_reset(arena);
+  free(arena);
   valk_runtime_shutdown();
   VALK_PASS();
 }
