@@ -28,9 +28,9 @@ define gen_ssl_certs
 	fi
 endef
 
-# Configure a build directory: $(call cmake_configure,build-dir,asan-flag)
+# Configure a build directory: $(call cmake_configure,build-dir,asan-flag,tsan-flag)
 define cmake_configure
-	$(CMAKE_BASE) -DASAN=$(2) -S . -B $(1)
+	$(CMAKE_BASE) -DASAN=$(2) -DTSAN=$(3) -S . -B $(1)
 	$(call gen_ssl_certs,$(1))
 	touch $(1)/.cmake
 endef
@@ -45,11 +45,11 @@ define do_build
 	fi
 endef
 
-# Default build (no ASAN)
+# Default build (no sanitizers)
 .ONESHELL:
 .PHONY: cmake
 cmake build/.cmake: CMakeLists.txt homebrew.cmake Makefile
-	$(call cmake_configure,build,0)
+	$(call cmake_configure,build,0,0)
 
 .ONESHELL:
 .PHONY: build
@@ -60,7 +60,18 @@ build: build/.cmake
 .ONESHELL:
 .PHONY: cmake-asan
 cmake-asan build-asan/.cmake: CMakeLists.txt homebrew.cmake Makefile
-	$(call cmake_configure,build-asan,1)
+	$(call cmake_configure,build-asan,1,0)
+
+# TSAN build
+.ONESHELL:
+.PHONY: cmake-tsan
+cmake-tsan build-tsan/.cmake: CMakeLists.txt homebrew.cmake Makefile
+	$(call cmake_configure,build-tsan,0,1)
+
+.ONESHELL:
+.PHONY: build-tsan
+build-tsan: build-tsan/.cmake
+	$(call do_build,build-tsan)
 
 .ONESHELL:
 .PHONY: build-asan
@@ -99,7 +110,7 @@ configure:
 
 .PHONY: clean
 clean:
-	rm -rf build build-asan build-coverage
+	rm -rf build build-asan build-tsan build-coverage
 
 .PHONY: cppcheck
 cppcheck:
@@ -320,6 +331,32 @@ test-valk-asan: build-asan
 	export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
 	export LSAN_OPTIONS=verbosity=0:log_threads=1
 	$(call run_tests_valk,build-asan)
+
+# C tests with TSAN enabled (catches data races)
+.ONESHELL:
+.PHONY: test-c-tsan
+test-c-tsan: build-tsan
+	set -e
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running C tests with ThreadSanitizer (TSAN) enabled        ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	export TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1
+	$(call run_tests_c,build-tsan)
+
+# Valk/Lisp tests with TSAN enabled
+.ONESHELL:
+.PHONY: test-valk-tsan
+test-valk-tsan: build-tsan
+	set -e
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running Valk tests with ThreadSanitizer (TSAN) enabled     ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	export TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1
+	$(call run_tests_valk,build-tsan)
 
 # Test example demos (gc_demo, checkpoint_demo, test_example)
 .ONESHELL:
