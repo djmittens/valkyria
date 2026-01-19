@@ -1,0 +1,14 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/suite "Test Framework Async Fail")
+(test/expect-exit 1)
+
+(def {aio} (aio/start))
+
+(test/async "this test will fail" (\ {done} {
+  (done false)
+}))
+
+(test/run-async aio)
+(aio/run aio)

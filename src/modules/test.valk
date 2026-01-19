@@ -263,9 +263,10 @@
         {printf "✨ All %ld tests passed! ✨\n" passed}
         {printf "⚠️  %ld passed, %ld failed\n" passed failed})
       (aio/stop aio)
-      (if (== failed 0)
+      (= {actual-exit} (if (== failed 0) {0} {1}))
+      (if (== actual-exit *test-expected-exit*)
         {(shutdown 0)}
-        {(shutdown 1)})}
+        {(shutdown actual-exit)})}
     {(aio/schedule aio 100 (\ {} {(*test-async-check-complete* aio)}))})
 })
 

@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18 18:05
+**Last updated:** 2026-01-18 18:45
 
 ## Spec: coverage-improvement.md
 
@@ -53,7 +53,7 @@
 - [~] Improve http_api.valk expr coverage (89.1% → 90%) - Blocked at 89.1%: remaining 0.9% (5 exprs) is from partial eval-point coverage on function definitions (e.g., "3/4 eval points" on `fun` forms); all function bodies and branches are fully tested (100% branch coverage), but the Valk coverage tool counts internal AST evaluation points within function/lambda definitions that aren't exercisable through normal test invocations; added 59 comprehensive tests covering all public API functions multiple times
 - [~] Improve modules/aio/debug.valk expr coverage (84.7% → 90%) - Blocked at 85.0%: remaining 5% is from SSE streaming paths inside `aio/interval` callbacks (lines 129, 131: `:stop` on close/non-writable) and quasiquote internal eval points (lines 69, 117-120); these paths only execute during live HTTP/2 SSE streaming with real connection close/backpressure events; added test for unknown query param key to cover `otherwise` branch in slab-buckets handler
 - [~] Improve modules/aio/sse.valk expr coverage (76.5% → 90%) - Blocked at 87.7%: added tests for sse/full, sse/full invalid type, sse/comment, sse/heartbeat, sse/writable?, sse/cancel, sse/message, sse/event invalid type, and sse/handler wrapper; remaining 2.3% (22 exprs) is from partial eval-point coverage on function/lambda definitions (e.g., "2/3 eval points" on `fun` forms) and dict literal arguments that aren't directly exercisable through normal test invocations
-- [ ] Improve modules/test.valk expr coverage (86.0% → 90%)
+- [~] Improve modules/test.valk expr coverage (86.0% → 90%) - Blocked at 87.1%: added async test failure path test and fixed async completion to use `*test-expected-exit*` for consistency; remaining 2.9% is from: (1) test framework failure paths that would cause test suite to exit 1 (lines 134, 169, 269: "failure not expected" branches), (2) async timeout path requiring 30+ second wait (lines 243-248), (3) empty async tests path (lines 233-235), (4) defensive check for map returning wrong count (lines 149-151), and (5) partial eval-point coverage on function/lambda definitions (68 points from `fun`/`def` forms)
 
 ## Completed
 
