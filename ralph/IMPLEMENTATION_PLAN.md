@@ -1,7 +1,47 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18 (verified complete)
+**Last updated:** 2026-01-19
+
+---
+
+## Spec: eliminate-global-state.md
+
+**Goal:** Remove all global mutable state from Valk code to fix concurrency issues
+
+**Current Status:** NOT STARTED
+
+### Problem
+
+The main thread and event loop thread share environments. `valk_lenv_put` has no synchronization, causing data races when `def` mutates globals from callbacks.
+
+### Tasks
+
+- [ ] **Phase 1: Refactor test framework** - Replace 11 mutable globals with explicit context passing
+  - [ ] Create `test/context-new` returning immutable context struct
+  - [ ] Refactor `test/run-one` to take and return context
+  - [ ] Refactor `test/run` to use fold over tests with context
+  - [ ] Keep atoms only for async cross-thread state
+  - [ ] Update all test files to new API
+
+- [ ] **Phase 2: Audit all .valk files** - Find and fix `(def {*` mutations
+  - [ ] src/prelude.valk (constants OK, check for mutations)
+  - [ ] src/async_monadic.valk (aliases OK, check for mutations)
+  - [ ] src/async_handles.valk
+  - [ ] src/http_api.valk
+  - [ ] All test/*.valk files
+
+- [ ] **Phase 3: Add CI lint** - Script to fail on global mutation pattern
+  - [ ] Create bin/check-no-globals.py
+  - [ ] Add to CI workflow
+  - [ ] Document exceptions (atom creation, constants)
+
+- [ ] **Phase 4: Document threading model**
+  - [ ] Add THREADING.md or section in AGENTS.md
+  - [ ] Document: main thread vs event loop thread
+  - [ ] Document: what's safe (atoms, immutable bindings) vs unsafe (def mutation)
+
+---
 
 ## Spec: coverage-improvement.md
 
@@ -24,6 +64,10 @@ All requirements met:
 5. Test framework failure paths that would cause test suite to exit with failure
 
 ## Pending Tasks
+
+### Priority 0: Test Infrastructure
+
+- [ ] Enforce timeouts in Valk test framework: Running `build/valk test/foo.valk` directly can hang forever if async tests don't complete. The 30s timeout in test/run-async only works if the event loop is running. Fix: (1) auto-start event loop when async tests are registered, (2) add a hard process-level timeout that works even if event loop isn't running, (3) individual test timeouts not just global timeout.
 
 ### Priority 1: Core C Files (high impact, fewer dependencies)
 
