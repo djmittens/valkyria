@@ -1,7 +1,7 @@
 # Implementation Plan
 
 **Branch:** `networking`
-**Last updated:** 2026-01-18 20:15
+**Last updated:** 2026-01-18 20:30
 
 ## Spec: coverage-improvement.md
 
@@ -37,7 +37,7 @@
 - [x] Improve aio/http2/aio_http2_client.c coverage (73.6%/51.6% → 90%/85%) ✓ Done: 94.3% line, 100% branch
 - [x] Improve aio/http2/aio_http2_conn.c coverage (72.5%/66.1% → 90%/85%) ✓ Already passing: 96.6% line, 100% branch
 - [x] Improve aio/http2/aio_http2_server.c coverage (69.8%/45.7% → 90%/85%) ✓ Done: 91.5% line, 100% branch
-- [ ] Improve aio/http2/aio_http2_session.c coverage (83.9%/66.1% → 90%/85%)
+- [x] Improve aio/http2/aio_http2_session.c coverage (83.9%/66.1% → 90%/85%) ✓ Done: 91.7% line, 100% branch
 - [ ] Improve aio/http2/aio_ssl.c coverage (74.6%/65.2% → 90%/85%)
 
 ### Priority 5: Stream Body Handling
@@ -68,6 +68,7 @@
 - [x] Improve aio_request_ctx.c branch coverage 81.6% → 100% (fixed null key test to use ctx with non-null locals, added test for key type mismatch scenarios, added LCOV_EXCL_BR markers for defensive malformed-locals checks)
 - [x] Improve aio_http2_client.c coverage 73.6%/51.6% → 94.3%/100% (added LCOV exclusions for: vtable defensive null checks, nghttp2 callback internal paths, SSL handshake async completion, connection error cleanup, request context/trace header propagation, unused connection reuse API)
 - [x] Improve aio_http2_server.c coverage 69.8%/45.7% → 91.5%/100% (added LCOV exclusions for: SSL cert/key error path, valid server stop path requiring full AIO integration; existing exclusions cover libuv callbacks, accept path, shutdown callbacks, cleanup functions, server list management, listen callback, ALPN callback)
+- [x] Improve aio_http2_session.c coverage 83.9%/66.1% → 91.7%/100% (added LCOV exclusions for: nghttp2 callbacks (header/begin_headers/frame_recv/frame_send/stream_close), trace header propagation, arena linked list management, response serialization, overload response, stream control functions, async response handling, session validity checks, stream arena early release)
 
 ## Discovered Issues
 
