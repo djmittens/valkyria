@@ -1,0 +1,34 @@
+(load "src/prelude.valk")
+(load "src/modules/aio/sse.valk")
+
+(= {aio} (aio/start))
+(= {conn-count} (atom 0))
+
+(= {handler} (\ {req} {
+  (atom/set! conn-count (+ (atom/get conn-count) 1))
+  (print "[SERVER] Request" (atom/get conn-count) "path:" (req/path req))
+  (= {stream} (sse/open req))
+  (stream/write stream "data: hello\n\n")
+  (stream/close stream)
+  (print "[SERVER] Stream closed for request" (atom/get conn-count))
+  :deferred
+}))
+
+(= {server} (http2/server-listen aio 0 handler))
+(= {port} (http2/server-port server))
+(print "[TEST] Server on port" port)
+
+(http2/client-request aio "127.0.0.1" port "/test1"
+  (\ {resp1} {
+    (print "[TEST] Got resp1:" (str-slice (http2/response-body resp1) 0 20))
+    (aio/schedule aio 100 (\ {} {
+      (print "[TEST] Making request2...")
+      (http2/client-request aio "127.0.0.1" port "/test2"
+        (\ {resp2} {
+          (print "[TEST] Got resp2:" (str-slice (http2/response-body resp2) 0 20))
+          (aio/stop aio)
+        }))
+    }))
+  }))
+
+(aio/run aio)
