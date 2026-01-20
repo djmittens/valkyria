@@ -251,6 +251,17 @@ extern void valk_standalone_async_done_callback(valk_async_handle_t *handle, voi
 #define VALK_RACE_CTX_MAGIC_EARLY 0x9ACE7821
 #define VALK_ANY_CTX_MAGIC 0xA4177821
 #define VALK_ANY_CTX_MAGIC_EARLY 0xA4177821
+#define VALK_SEMAPHORE_MAGIC 0x5E4A7821
+
+typedef struct {
+  u32 magic;
+  valk_aio_system_t *sys;
+  int max_permits;
+  int available;
+  valk_async_handle_t **waiting;
+  u64 waiting_count;
+  u64 waiting_capacity;
+} valk_semaphore_t;
 
 void valk_async_propagate_completion(valk_async_handle_t *source);
 void valk_async_notify_all_parent(valk_async_handle_t *child);
