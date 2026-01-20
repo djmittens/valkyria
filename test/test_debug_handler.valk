@@ -1008,7 +1008,9 @@
     (= {timed-out} (atom 0))
     (printf "START: %s\n" test-name)
 
+    (printf "DIAG: scheduling timeout for %s with %ld ms\n" test-name main-timeout-ms)
     (= {timer-handle} (aio/schedule aio main-timeout-ms (\ {} {
+      (printf "DIAG: timeout callback fired for: %s\n" test-name)
       (= {prev} (atom/get timed-out))
       (if (== prev 0)
         (do
