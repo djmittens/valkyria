@@ -12,6 +12,52 @@
 (def {server} (http2/server-listen aio 0 test-handler))
 (def {TEST_PORT} (http2/server-port server))
 
+(fun {run-tests-sequentially aio tests on-all-done}
+  {(= {total} (len tests))
+   (= {passed} (atom 0))
+   (= {failed} (atom 0))
+   (= {current-idx} (atom 0))
+
+   (fun {run-next-test} {
+     (= {idx} (atom/get current-idx))
+     (if (>= idx total)
+       (on-all-done (atom/get passed) (atom/get failed))
+       (do
+         (= {test} (nth idx tests))
+         (= {test-name} (eval (head test)))
+         (= {test-body} (eval (head (tail test))))
+         (= {start-time} (time-us {}))
+         (= {timed-out} (atom 0))
+         (= {timer-handle} (aio/schedule aio 5000 (\ {} {
+           (if (== (atom/get timed-out) 0)
+             (do
+               (atom/set! timed-out 1)
+               (printf "  ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT\n")
+               (atom/add! failed 1)
+               (atom/add! current-idx 1)
+               (aio/schedule aio 0 (\ {} (run-next-test))))
+             nil)})))
+         (= {done-fn} (\ {result} {
+           (= {prev-state} (atom/get timed-out))
+           (atom/set! timed-out 2)
+           (if (!= prev-state 0)
+             nil
+             (do
+               (aio/cancel timer-handle)
+               (= {end-time} (time-us {}))
+               (= {elapsed} (- end-time start-time))
+               (if result
+                 (do
+                   (printf "  ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(us)\n" elapsed)
+                   (atom/add! passed 1))
+                 (do
+                   (printf "  ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(us)\n" elapsed)
+                   (atom/add! failed 1)))
+               (atom/add! current-idx 1)
+               (aio/schedule aio 0 (\ {} (run-next-test)))))}))
+         (aio/schedule aio 0 (\ {} (test-body done-fn)))))})
+   (run-next-test)})
+
 (fun {str-contains? haystack needle}
   {(> (len (str/split haystack needle)) 1)})
 
