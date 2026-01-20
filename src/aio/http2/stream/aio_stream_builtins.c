@@ -113,13 +113,17 @@ static valk_lval_t *valk_builtin_stream_open(valk_lenv_t *e, valk_lval_t *a) {
     };
   }
 
+  fprintf(stderr, "[DEBUG] stream/open: submitting response for stream_id=%d\n", stream_id);
   int rv = nghttp2_submit_response2(session, stream_id, headers, header_count, &data_prd);
+  fprintf(stderr, "[DEBUG] stream/open: nghttp2_submit_response2 returned %d\n", rv);
   if (rv != 0) {
     valk_stream_body_close(body);
     return valk_lval_err("stream/open: failed to submit response: %s", nghttp2_strerror(rv));
   }
 
+  fprintf(stderr, "[DEBUG] stream/open: calling valk_http2_flush_pending\n");
   valk_http2_flush_pending(conn);
+  fprintf(stderr, "[DEBUG] stream/open: valk_http2_flush_pending returned\n");
 
   VALK_DEBUG("stream: opened body id=%llu for http2_stream=%d",
              (unsigned long long)body->id, stream_id);

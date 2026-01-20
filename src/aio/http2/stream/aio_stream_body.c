@@ -308,6 +308,8 @@ static nghttp2_ssize __stream_data_read_callback(
   UNUSED(stream_id);
   UNUSED(user_data);
 
+  fprintf(stderr, "[DEBUG] __stream_data_read_callback called for stream_id=%d\n", stream_id);
+
   valk_stream_body_t *body = (valk_stream_body_t *)source->ptr;
 
   if (!body) {

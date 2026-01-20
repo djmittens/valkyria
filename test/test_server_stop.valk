@@ -25,7 +25,7 @@
   (= {port} (http2/server-port server))
   (= {stop-handle} (http2/server-stop server))
   (aio/then stop-handle (\ {_} {
-    (http2/client-request aio "127.0.0.1" port "/"
+    (aio/then (http2/client-request aio "127.0.0.1" port "/")
       (\ {resp} {
         (done (error? resp))
       }))

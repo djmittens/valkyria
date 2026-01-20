@@ -26,9 +26,9 @@
 (test/run-async aio (list
   (test-async "out-of-order arena removal works" (\ {done} {
   ; Fire 3 requests that complete in different order than sent
-  (http2/client-request aio "127.0.0.1" TEST_PORT "/slow" (\ {resp} {}))
-  (http2/client-request aio "127.0.0.1" TEST_PORT "/medium" (\ {resp} {}))
-  (http2/client-request aio "127.0.0.1" TEST_PORT "/fast" (\ {resp} {}))
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/slow") (\ {resp} {}))
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/medium") (\ {resp} {}))
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/fast") (\ {resp} {}))
   
   ; Wait for all to complete - if arena removal works, no crash
   (aio/schedule aio 500 (\ {} {

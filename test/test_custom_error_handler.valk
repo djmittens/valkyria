@@ -26,7 +26,7 @@
 
 (test/run-async aio (list
   (test-async "custom error handler renders custom 500 page" (\ {done} {
-  (http2/client-request aio "127.0.0.1" test-port "/trigger-500"
+  (aio/then (http2/client-request aio "127.0.0.1" test-port "/trigger-500")
     (\ {resp} {
       (if (error? resp)
         {(done false)}
@@ -37,7 +37,7 @@
     }))
 }))
   (test-async "normal requests still work" (\ {done} {
-  (http2/client-request aio "127.0.0.1" test-port "/ok"
+  (aio/then (http2/client-request aio "127.0.0.1" test-port "/ok")
     (\ {resp} {
       (if (error? resp)
         {(done false)}

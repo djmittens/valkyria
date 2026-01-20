@@ -49,16 +49,16 @@
   (test-async "custom headers received with multiple concurrent requests" (\ {done} {
   (def {test-callback} done)
   
-  (http2/client-request-with-headers aio "127.0.0.1" test-port "/r1" 
-    {{"x-test-header" "v1"}} on-response)
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" test-port "/r1" 
+    {{"x-test-header" "v1"}}) on-response)
   
-  (http2/client-request-with-headers aio "127.0.0.1" test-port "/r2" 
-    {{"x-test-header" "v2"}} on-response)
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" test-port "/r2" 
+    {{"x-test-header" "v2"}}) on-response)
     
-  (http2/client-request-with-headers aio "127.0.0.1" test-port "/r3" 
-    {{"x-test-header" "v3"}} on-response)
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" test-port "/r3" 
+    {{"x-test-header" "v3"}}) on-response)
     
-  (http2/client-request-with-headers aio "127.0.0.1" test-port "/r4" 
-    {{"x-test-header" "v4"}} on-response)
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" test-port "/r4" 
+    {{"x-test-header" "v4"}}) on-response)
 })))
   {:suite-name "Pending Stream Headers Tests"})

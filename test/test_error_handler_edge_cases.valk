@@ -40,7 +40,7 @@
 
 (test/run-async aio (list
   (test-async "error-returning handler: server starts successfully" (\ {done} {
-  (http2/client-request aio "127.0.0.1" port1 "/"
+  (aio/then (http2/client-request aio "127.0.0.1" port1 "/")
     (\ {resp} {
       (if (error? resp)
         {(done false)}
@@ -50,7 +50,7 @@
     }))
 }))
   (test-async "number-returning handler: server starts successfully" (\ {done} {
-  (http2/client-request aio "127.0.0.1" port2 "/"
+  (aio/then (http2/client-request aio "127.0.0.1" port2 "/")
     (\ {resp} {
       (if (error? resp)
         {(done false)}
@@ -60,7 +60,7 @@
     }))
 }))
   (test-async "list-returning handler: server starts successfully" (\ {done} {
-  (http2/client-request aio "127.0.0.1" port3 "/"
+  (aio/then (http2/client-request aio "127.0.0.1" port3 "/")
     (\ {resp} {
       (if (error? resp)
         {(done false)}

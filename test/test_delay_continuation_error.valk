@@ -22,7 +22,7 @@
 
 (test/run-async aio (list
   (test-async "error in aio/delay continuation returns 500" (\ {done} {
-  (http2/client-request aio "127.0.0.1" test-port "/delay-err"
+  (aio/then (http2/client-request aio "127.0.0.1" test-port "/delay-err")
     (\ {resp} {
       (if (error? resp)
         {(done false)}

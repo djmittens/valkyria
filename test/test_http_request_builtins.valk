@@ -112,7 +112,7 @@
 (def {TEST_PORT} (http2/server-port server))
 
 (fun {make-test path expected-body done} {
-  (http2/client-request aio "127.0.0.1" TEST_PORT path
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT path)
     (\ {resp} {
       (if (error? resp)
         {(done false)}
@@ -127,7 +127,7 @@
   (make-test "/path" "/path" done)
 }))
   (test-async "req/headers returns headers list" (\ {done} {
-  (http2/client-request aio "127.0.0.1" TEST_PORT "/headers"
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/headers")
     (\ {resp} {
       (if (error? resp)
         {(done false)}
@@ -138,8 +138,8 @@
     }))
 }))
   (test-async "req/header returns header value" (\ {done} {
-  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/header"
-    {{"user-agent" "TestAgent/1.0"}}
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/header"
+    {{"user-agent" "TestAgent/1.0"}})
     (\ {resp} {
       (if (error? resp)
         {(done false)}
@@ -155,7 +155,7 @@
   (make-test "/body" "no-body" done)
 }))
   (test-async "req/stream-id returns stream id" (\ {done} {
-  (http2/client-request aio "127.0.0.1" TEST_PORT "/stream-id"
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/stream-id")
     (\ {resp} {
       (if (error? resp)
         {(done false)}
@@ -166,7 +166,7 @@
     }))
 }))
   (test-async "req/authority returns authority" (\ {done} {
-  (http2/client-request aio "127.0.0.1" TEST_PORT "/authority"
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/authority")
     (\ {resp} {
       (if (error? resp)
         {(done false)}
@@ -176,7 +176,7 @@
     }))
 }))
   (test-async "req/scheme returns scheme" (\ {done} {
-  (http2/client-request aio "127.0.0.1" TEST_PORT "/scheme"
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/scheme")
     (\ {resp} {
       (if (error? resp)
         {(done false)}

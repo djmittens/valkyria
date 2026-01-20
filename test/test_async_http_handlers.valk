@@ -540,7 +540,7 @@
 ; ============================================================================
 
 (fun {make-test path expected-status expected-body done} {
-  (http2/client-request aio "127.0.0.1" TEST_PORT path
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT path)
     (\ {resp} {
       (if (error? resp)
         {(done false)}

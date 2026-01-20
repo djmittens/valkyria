@@ -16,21 +16,21 @@
 
 (test/run-async aio (list
   (test-async "connection failure to non-listening port" (\ {done} {
-  (http2/client-request aio "127.0.0.1" 59999 "/test"
+  (aio/then (http2/client-request aio "127.0.0.1" 59999 "/test")
     (\ {resp} {
       (done (error? resp))
     }))
 }))
   (test-async "connection failure with custom headers" (\ {done} {
-  (http2/client-request-with-headers aio "127.0.0.1" 59998 "/test"
-    {{"x-custom" "value"} {"x-another" "test"}}
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" 59998 "/test"
+    {{"x-custom" "value"} {"x-another" "test"}})
     (\ {resp} {
       (done (error? resp))
     }))
 }))
   (test-async "headers with extra elements in pair" (\ {done} {
-  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
-    {{"x-header" "value" "extra" "ignored"}}
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
+    {{"x-header" "value" "extra" "ignored"}})
     (\ {resp} {
       (if (error? resp)
         {(done false)}
@@ -38,8 +38,8 @@
     }))
 }))
   (test-async "request with single header" (\ {done} {
-  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
-    {{"x-single-header" "single-value"}}
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
+    {{"x-single-header" "single-value"}})
     (\ {resp} {
       (if (error? resp)
         {(done false)}
@@ -47,89 +47,89 @@
     }))
 }))
   (test-async "request with multiple headers" (\ {done} {
-  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
-    {{"x-header-1" "value1"} {"x-header-2" "value2"} {"x-header-3" "value3"}}
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
+    {{"x-header-1" "value1"} {"x-header-2" "value2"} {"x-header-3" "value3"}})
     (\ {resp} {
       (done (not (error? resp)))
     }))
 }))
   (test-async "headers with special characters" (\ {done} {
-  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
-    {{"x-special" "value with spaces"} {"x-nums" "12345"}}
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
+    {{"x-special" "value with spaces"} {"x-nums" "12345"}})
     (\ {resp} {
       (done (not (error? resp)))
     }))
 }))
   (test-async "headers with empty value" (\ {done} {
-  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
-    {{"x-empty-value" ""}}
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
+    {{"x-empty-value" ""}})
     (\ {resp} {
       (done (not (error? resp)))
     }))
 }))
   (test-async "malformed header single element skipped" (\ {done} {
-  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
-    {{"only-name"}}
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
+    {{"only-name"}})
     (\ {resp} {
       (done (not (error? resp)))
     }))
 }))
   (test-async "mixed valid and malformed headers" (\ {done} {
-  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
-    {{"x-valid" "value"} {"only-name"} {"x-also-valid" "val2"}}
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
+    {{"x-valid" "value"} {"only-name"} {"x-also-valid" "val2"}})
     (\ {resp} {
       (done (not (error? resp)))
     }))
 }))
   (test-async "non-string header name skipped" (\ {done} {
-  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
-    {{123 "value"} {"x-valid" "val"}}
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
+    {{123 "value"} {"x-valid" "val"}})
     (\ {resp} {
       (done (not (error? resp)))
     }))
 }))
   (test-async "non-string header value skipped" (\ {done} {
-  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
-    {{"x-header" 456} {"x-valid" "val"}}
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
+    {{"x-header" 456} {"x-valid" "val"}})
     (\ {resp} {
       (done (not (error? resp)))
     }))
 }))
   (test-async "nil headers works like no headers" (\ {done} {
-  (http2/client-request aio "127.0.0.1" TEST_PORT "/test"
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/test")
     (\ {resp} {
       (done (not (error? resp)))
     }))
 }))
   (test-async "long header value" (\ {done} {
   (= {long-value} "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-=_+[]{}|;:',.<>/?!@#$%^&*()abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
-    {{"x-long-header" long-value}}
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/test"
+    {{"x-long-header" long-value}})
     (\ {resp} {
       (done (not (error? resp)))
     }))
 }))
   (test-async "standard HTTP headers" (\ {done} {
-  (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/api/test"
-    {{"content-type" "application/json"} {"accept" "application/json"} {"user-agent" "TestClient/1.0"}}
+  (aio/then (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/api/test"
+    {{"content-type" "application/json"} {"accept" "application/json"} {"user-agent" "TestClient/1.0"}})
     (\ {resp} {
       (done (not (error? resp)))
     }))
 }))
   (test-async "concurrent connection error 1" (\ {done} {
-  (http2/client-request aio "127.0.0.1" 59997 "/a"
+  (aio/then (http2/client-request aio "127.0.0.1" 59997 "/a")
     (\ {resp} {
       (done (error? resp))
     }))
 }))
   (test-async "concurrent connection error 2" (\ {done} {
-  (http2/client-request aio "127.0.0.1" 59996 "/b"
+  (aio/then (http2/client-request aio "127.0.0.1" 59996 "/b")
     (\ {resp} {
       (done (error? resp))
     }))
 }))
   (test-async "error callback inspects error details" (\ {done} {
-  (http2/client-request aio "127.0.0.1" 59995 "/test"
+  (aio/then (http2/client-request aio "127.0.0.1" 59995 "/test")
     (\ {resp} {
       (if (error? resp)
         {(done (> (len (str resp)) 0))}

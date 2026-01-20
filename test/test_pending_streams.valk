@@ -30,7 +30,7 @@
 (def {batch2-callback} nil)
 
 (fun {send-request path batch-id} {
-  (http2/client-request aio "127.0.0.1" test-port path (\ {r} {
+  (aio/then (http2/client-request aio "127.0.0.1" test-port path) (\ {r} {
     (if (not (error? r)) 
       {(def {requests-completed} (+ requests-completed 1))}
       {nil})

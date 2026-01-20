@@ -31,7 +31,7 @@
 
 (test/run-async aio (list
   (test-async "10KB download" (\ {done} {
-  (http2/client-request aio "127.0.0.1" test-port "/10kb"
+  (aio/then (http2/client-request aio "127.0.0.1" test-port "/10kb")
     (\ {resp} {
       (if (error? resp)
         {(done false)}
@@ -42,7 +42,7 @@
     }))
 }))
   (test-async "50KB download" (\ {done} {
-  (http2/client-request aio "127.0.0.1" test-port "/50kb"
+  (aio/then (http2/client-request aio "127.0.0.1" test-port "/50kb")
     (\ {resp} {
       (if (error? resp)
         {(done false)}
@@ -53,7 +53,7 @@
     }))
 }))
   (test-async "100KB download" (\ {done} {
-  (http2/client-request aio "127.0.0.1" test-port "/100kb"
+  (aio/then (http2/client-request aio "127.0.0.1" test-port "/100kb")
     (\ {resp} {
       (if (error? resp)
         {(done false)}

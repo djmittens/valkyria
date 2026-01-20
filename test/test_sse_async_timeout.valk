@@ -34,7 +34,7 @@
 (test/run-async aio (list
   (test-async "SSE stream created and closed via async timer" (\ {done} {
   ; Fire request - if async close works, we'll get a response
-  (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-test" (\ {resp} {}))
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-test") (\ {resp} {}))
   ; Wait for timer + response processing
   (aio/schedule aio 300 (\ {} {
     ; If we got here without crash, async close worked

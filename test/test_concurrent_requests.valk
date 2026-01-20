@@ -27,7 +27,7 @@
 (def {test-done-callback} nil)
 
 (fun {make-request path} {
-  (http2/client-request aio "127.0.0.1" test-port path (\ {resp} {
+  (aio/then (http2/client-request aio "127.0.0.1" test-port path) (\ {resp} {
     (def {requests-completed} (+ requests-completed 1))
     (if (>= requests-completed requests-total)
       {(test-done-callback true)}
