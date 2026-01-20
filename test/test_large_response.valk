@@ -63,7 +63,7 @@
          (set! {test-passed} 1))}
       {(printf "FAIL: Expected %d bytes, got %d\n" RESPONSE_SIZE body-len)})
     ; Shutdown server after receiving response
-    (http2/client-request aio "127.0.0.1" 8444 "/shutdown" (\ {_} {}))
+    (aio/then (http2/client-request aio "127.0.0.1" 8444 "/shutdown") (\ {_} {}))
   }))
 
 ; Run the test
@@ -78,7 +78,7 @@
 ; Give server a moment to start, then make client request
 (aio/defer aio 100 (\ {} {
   (println "Making client request for /big...")
-  (http2/client-request aio "127.0.0.1" 8444 "/big" client-callback)
+  (aio/then (http2/client-request aio "127.0.0.1" 8444 "/big") client-callback)
 }))
 
 ; Timeout after 60 seconds
