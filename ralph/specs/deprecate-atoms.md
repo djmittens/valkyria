@@ -25,6 +25,17 @@ typedef struct { _Atomic long value; } valk_atom_t;
 | `test/stress/test_sse_concurrency.valk` | 6 | Metrics counters |
 | `test/test_atom_builtins.valk` | N/A | Tests atom API itself |
 
+### Design Principle: Monadic APIs Only
+
+**All async APIs must be monadic (return handles/futures), not callback-based.**
+
+Callback-based APIs like `http2/client-request` (which returns `nil` and invokes a callback) cannot be composed with `aio/all`, `aio/race`, or `aio/then`. The monadic pattern requires every async operation to return a handle that can be:
+- Passed to `aio/then` for sequencing
+- Collected with `aio/all` for parallel completion
+- Raced with `aio/race` for timeout/cancellation
+
+Existing callback-based APIs should be deprecated in favor of handle-returning equivalents.
+
 ### Replacement Patterns
 
 | Atom Usage | Replacement |
@@ -33,7 +44,7 @@ typedef struct { _Atomic long value; } valk_atom_t;
 | Rate limiting | `aio/semaphore` (new builtin) |
 | Cancellation flags | `aio/race` with timeout |
 | Per-stream state | Recursive `aio/then` chains |
-| Callback coordination | Future-returning APIs |
+| Callback coordination | Handle-returning APIs (not callbacks) |
 
 ### New Builtin: `aio/semaphore`
 
@@ -64,6 +75,42 @@ typedef struct {
 | `stream/closed` | `stream` → handle | Returns future that completes with `:closed` when stream closes |
 
 This enables `aio/race` instead of callback + atom coordination.
+
+### Refactor: `http2/client-request` to Return Handle
+
+**File:** `src/aio/http2/aio_http2_client.c`
+
+| Function | Old Signature | New Signature |
+|----------|---------------|---------------|
+| `http2/client-request` | `aio host port path callback` → nil | `aio host port path` → handle |
+| `http2/client-request-with-headers` | `aio host port path headers callback` → nil | `aio host port path headers` → handle |
+
+**Rationale:** Callback-based APIs cannot be composed with `aio/all`, `aio/race`, or `aio/then`. The callback parameter is removed; instead the function returns a handle that completes with the response.
+
+```lisp
+; Old (callback-based, incompatible with aio/all):
+(http2/client-request aio host port path (\ {resp} {...}))
+
+; New (monadic, composable):
+(aio/then (http2/client-request aio host port path)
+  (\ {resp} {...}))
+
+; Collect results from multiple concurrent requests:
+(aio/then
+  (aio/all (map (\ {url} {(http2/client-request aio host port url)}) urls))
+  (\ {responses} {(process-responses responses)}))
+```
+
+**Implementation:** Return the async handle instead of nil:
+
+```c
+valk_lval_t *valk_builtin_http2_client_request(valk_lenv_t *e, valk_lval_t *a) {
+  // ... validation (no callback parameter) ...
+  valk_async_handle_t *handle = valk_async_handle_new(sys, e);
+  // Connect and send request, complete handle with response
+  return valk_lval_handle(handle);
+}
+```
 
 ### Refactored Test Framework
 
@@ -136,8 +183,11 @@ static valk_lval_t* valk_builtin_atom(valk_lenv_t* e, valk_lval_t* a) {
 - [ ] `aio/semaphore-acquire sem` returns future that completes when permit acquired
 - [ ] `aio/semaphore-release sem` releases permit and returns nil
 - [ ] `stream/closed stream` returns future that completes when stream closes
+- [ ] `http2/client-request aio host port path` returns handle (remove callback param)
+- [ ] `http2/client-request-with-headers aio host port path headers` returns handle
 - [ ] `test/test_aio_semaphore.valk` exists with tests for acquire/release/blocking
 - [ ] `test/test_sse_builtins.valk` has tests for `stream/closed`
+- [ ] All existing `http2/client-request` callers updated to use `aio/then`
 - [ ] `make build` succeeds
 - [ ] `make test` passes
 
@@ -153,6 +203,7 @@ static valk_lval_t* valk_builtin_atom(valk_lenv_t* e, valk_lval_t* a) {
 - [ ] `grep -c "atom" test/test_sse_concurrency_short.valk` returns 0
 - [ ] `grep -c "atom" test/stress/test_sse_concurrency_short.valk` returns 0
 - [ ] `grep -c "atom" test/stress/test_sse_concurrency.valk` returns 0
+
 - [ ] All stress tests still validate concurrency (connections > 0, events > 0)
 
 ### Phase 4: Deprecation

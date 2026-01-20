@@ -2297,12 +2297,131 @@ static valk_lval_t* valk_builtin_aio_pool_stats(valk_lenv_t* e, valk_lval_t* a) 
   return valk_lval_qlist(result_items, 6);
 }
 
+#define VALK_DEFERRED_MAGIC 0xDEF37821
+
+typedef struct {
+  u32 magic;
+  valk_async_handle_t *handle;
+} valk_deferred_t;
+
+static valk_lval_t* valk_builtin_aio_deferred_complete(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("aio/deferred-complete!: expected 2 arguments (deferred value)");
+  }
+  valk_lval_t *deferred_ref = valk_lval_list_nth(a, 0);
+  valk_lval_t *value = valk_lval_list_nth(a, 1);
+
+  if (LVAL_TYPE(deferred_ref) != LVAL_REF || strcmp(deferred_ref->ref.type, "deferred") != 0) {
+    return valk_lval_err("aio/deferred-complete!: first argument must be a deferred");
+  }
+
+  valk_deferred_t *deferred = deferred_ref->ref.ptr;
+  if (!deferred || deferred->magic != VALK_DEFERRED_MAGIC) {
+    return valk_lval_err("aio/deferred-complete!: invalid deferred");
+  }
+
+  valk_async_handle_t *handle = deferred->handle;
+  if (!handle) {
+    return valk_lval_err("aio/deferred-complete!: deferred has no handle");
+  }
+
+  valk_async_status_t status = valk_async_handle_get_status(handle);
+  if (valk_async_handle_is_terminal(status)) {
+    return valk_lval_sym(":already-resolved");
+  }
+
+  valk_async_handle_complete(handle, value);
+  return valk_lval_sym(":ok");
+}
+
+static valk_lval_t* valk_builtin_aio_deferred_fail(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("aio/deferred-fail!: expected 2 arguments (deferred error)");
+  }
+  valk_lval_t *deferred_ref = valk_lval_list_nth(a, 0);
+  valk_lval_t *error = valk_lval_list_nth(a, 1);
+
+  if (LVAL_TYPE(deferred_ref) != LVAL_REF || strcmp(deferred_ref->ref.type, "deferred") != 0) {
+    return valk_lval_err("aio/deferred-fail!: first argument must be a deferred");
+  }
+
+  valk_deferred_t *deferred = deferred_ref->ref.ptr;
+  if (!deferred || deferred->magic != VALK_DEFERRED_MAGIC) {
+    return valk_lval_err("aio/deferred-fail!: invalid deferred");
+  }
+
+  valk_async_handle_t *handle = deferred->handle;
+  if (!handle) {
+    return valk_lval_err("aio/deferred-fail!: deferred has no handle");
+  }
+
+  valk_async_status_t status = valk_async_handle_get_status(handle);
+  if (valk_async_handle_is_terminal(status)) {
+    return valk_lval_sym(":already-resolved");
+  }
+
+  valk_async_handle_fail(handle, error);
+  return valk_lval_sym(":ok");
+}
+
+static valk_lval_t* valk_builtin_aio_deferred(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/deferred: expected 1 argument (aio)");
+  }
+  valk_lval_t *aio_ref = valk_lval_list_nth(a, 0);
+
+  if (LVAL_TYPE(aio_ref) != LVAL_REF || strcmp(aio_ref->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/deferred: first argument must be aio system");
+  }
+
+  valk_aio_system_t *sys = aio_ref->ref.ptr;
+
+  valk_async_handle_t *handle = valk_async_handle_new(sys, e);
+  if (!handle) {
+    return valk_lval_err("aio/deferred: failed to allocate handle");
+  }
+  handle->status = VALK_ASYNC_RUNNING;
+
+  valk_deferred_t *deferred = valk_region_alloc(&sys->system_region, sizeof(valk_deferred_t));
+  if (!deferred) {
+    return valk_lval_err("aio/deferred: failed to allocate deferred");
+  }
+  deferred->magic = VALK_DEFERRED_MAGIC;
+  deferred->handle = handle;
+
+  valk_lval_t *deferred_ref = valk_lval_ref("deferred", deferred, NULL);
+  valk_lval_t *handle_lval = valk_lval_handle(handle);
+
+  valk_lval_t *complete_formals = valk_lval_qcons(valk_lval_sym("v"), valk_lval_nil());
+  valk_lval_t *complete_body = valk_lval_cons(
+    valk_lval_sym("aio/deferred-complete!"),
+    valk_lval_cons(deferred_ref,
+      valk_lval_cons(valk_lval_sym("v"), valk_lval_nil())));
+  valk_lval_t *complete_fn = valk_lval_lambda(e, complete_formals, complete_body);
+
+  valk_lval_t *fail_formals = valk_lval_qcons(valk_lval_sym("e"), valk_lval_nil());
+  valk_lval_t *fail_body = valk_lval_cons(
+    valk_lval_sym("aio/deferred-fail!"),
+    valk_lval_cons(valk_lval_copy(deferred_ref),
+      valk_lval_cons(valk_lval_sym("e"), valk_lval_nil())));
+  valk_lval_t *fail_fn = valk_lval_lambda(e, fail_formals, fail_body);
+
+  valk_lval_t *result_items[] = { handle_lval, complete_fn, fail_fn };
+  return valk_lval_qlist(result_items, 3);
+}
+
 void valk_register_async_handle_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "aio/cancel", valk_builtin_aio_cancel);
   valk_lenv_put_builtin(env, "aio/cancelled?", valk_builtin_aio_cancelled);
   valk_lenv_put_builtin(env, "aio/status", valk_builtin_aio_status);
   valk_lenv_put_builtin(env, "aio/pure", valk_builtin_aio_pure);
   valk_lenv_put_builtin(env, "aio/fail", valk_builtin_aio_fail);
+
+  valk_lenv_put_builtin(env, "aio/deferred", valk_builtin_aio_deferred);
+  valk_lenv_put_builtin(env, "aio/deferred-complete!", valk_builtin_aio_deferred_complete);
+  valk_lenv_put_builtin(env, "aio/deferred-fail!", valk_builtin_aio_deferred_fail);
 
   valk_lenv_put_builtin(env, "aio/then", valk_builtin_aio_then);
   valk_lenv_put_builtin(env, "aio/catch", valk_builtin_aio_catch);
