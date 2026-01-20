@@ -205,6 +205,18 @@ lldb -- build/test_networking
 
 **Note:** Linux VMs on macOS don't work with rr (perf counters not virtualized).
 
+### How nginx/envoy Debug Async Code
+Production async servers (nginx, envoy) use simple, proven methods:
+1. **Core dumps + GDB backtrace** - Primary debugging method
+2. **Debug logging** - With levels, to memory buffer, per-IP filtering
+3. **Debug symbols** - Always compile with `-g`
+
+They do NOT use time-travel debuggers. When something crashes:
+```bash
+gdb /path/to/nginx /path/to/core.dump
+(gdb) backtrace
+```
+
 ### Alternative: Deterministic Simulation Testing (DST)
 For async/event-loop code, a better long-term approach than rr is **Deterministic Simulation Testing**:
 - Control all non-determinism: time, randomness, I/O scheduling
