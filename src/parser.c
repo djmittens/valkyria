@@ -1881,6 +1881,9 @@ static valk_lval_t* valk_lval_read_str(int* i, const char* s) {
     }
     if (next == '\\') {
       ++end;
+      if (s[end] == '\0') {
+        return valk_lval_err("Unexpected end of input after escape character");
+      }
       if (!strchr(lval_str_unescapable, s[end])) {
         return valk_lval_err("Invalid escape character \\%c", s[end]);
       }
