@@ -603,16 +603,13 @@ int valk_lval_list_is_empty(valk_lval_t* list) {
 }
 // LCOV_EXCL_BR_STOP
 
-// Helper: count elements in a cons list
 u64 valk_lval_list_count(valk_lval_t* list) {
   u64 count = 0;
   valk_lval_t* curr = list;
-
   while (curr != nullptr && !valk_lval_list_is_empty(curr)) {
     count++;
     curr = curr->cons.tail;
   }
-
   return count;
 }
 
