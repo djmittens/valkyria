@@ -964,13 +964,7 @@
 (def {*main-pending*} (atom 0))
 
 (fun {run-main-tests-then-broadcaster aio main-tests broadcaster-tests} {
-  (print "DEBUG: func entered")
-  (print "DEBUG: about to call len on a small list...")
-  (= {small} (list 1 2 3))
-  (print "DEBUG: small len=" (len small))
-  (print "DEBUG: about to call len on main-tests")
   (= {main-total} (len main-tests))
-  (printf "DEBUG: main-total=%ld\n" main-total)
   (atom/set! *main-pending* main-total)
   (= {main-timeout-ms} 5000)
 

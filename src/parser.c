@@ -606,9 +606,21 @@ int valk_lval_list_is_empty(valk_lval_t* list) {
 u64 valk_lval_list_count(valk_lval_t* list) {
   u64 count = 0;
   valk_lval_t* curr = list;
+  valk_lval_t* slow = list;
   while (curr != nullptr && !valk_lval_list_is_empty(curr)) {
     count++;
     curr = curr->cons.tail;
+    if (count % 2 == 0 && slow) {
+      slow = slow->cons.tail;
+      if (slow == curr) {
+        fprintf(stderr, "DEBUG: cycle detected in list at count=%llu\n", count);
+        abort();
+      }
+    }
+    if (count > 10000) {
+      fprintf(stderr, "DEBUG: list_count > 10000, possible infinite loop\n");
+      abort();
+    }
   }
   return count;
 }
@@ -971,6 +983,9 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
   if (func->fun.builtin) {
     atomic_fetch_add(&g_eval_metrics.builtin_calls, 1);
     valk_lval_t* result = func->fun.builtin(env, args);
+    if (func->fun.name && strcmp(func->fun.name, "len") == 0) {
+      fprintf(stderr, "DEBUG: builtin len returned, result type=%s\n", valk_ltype_name(LVAL_TYPE(result)));
+    }
     atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
     // LCOV_EXCL_START - defensive check: builtins should never return NULL
     if (result == NULL) {
@@ -1349,6 +1364,9 @@ apply_cont:
           if (valk_lval_list_is_empty(frame.collect_arg.remaining)) {
             valk_lval_t* args_list = valk_lval_list(frame.collect_arg.args, frame.collect_arg.count);
             free(frame.collect_arg.args);
+            if (frame.collect_arg.func->fun.name && strcmp(frame.collect_arg.func->fun.name, "=") == 0) {
+              fprintf(stderr, "DEBUG: calling = with %llu args\n", valk_lval_list_count(args_list));
+            }
             valk_eval_result_t res = valk_eval_apply_func_iter(frame.env, frame.collect_arg.func, args_list);
             if (!res.is_thunk) {
               value = res.value;
@@ -2420,8 +2438,10 @@ static valk_lval_t* valk_builtin_len(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* arg = valk_lval_list_nth(a, 0);
   switch (LVAL_TYPE(arg)) {
     case LVAL_CONS:
-    case LVAL_NIL:
-      return valk_lval_num(valk_lval_list_count(arg));
+    case LVAL_NIL: {
+      u64 count = valk_lval_list_count(arg);
+      return valk_lval_num(count);
+    }
     case LVAL_STR: {
       u64 n = strlen(arg->str);
       return valk_lval_num((long)n);
