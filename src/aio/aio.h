@@ -50,8 +50,8 @@ struct valk_async_handle_t {
 
   struct valk_request_ctx *request_ctx;
 
-  valk_async_done_fn on_done;
-  void *on_done_ctx;
+  _Atomic(valk_async_done_fn) on_done;
+  _Atomic(void *) on_done_ctx;
 
   valk_async_is_closed_fn is_closed;
   void *is_closed_ctx;

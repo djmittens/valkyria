@@ -153,10 +153,10 @@ valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sy
 // LCOV_EXCL_STOP
 
 void valk_async_notify_done(valk_async_handle_t *handle) {
-  if (handle->on_done) {
-    handle->on_done(handle, handle->on_done_ctx);
-    handle->on_done = nullptr;
-    handle->on_done_ctx = nullptr;
+  valk_async_done_fn on_done = atomic_exchange_explicit(&handle->on_done, nullptr, memory_order_acq_rel);
+  if (on_done) {
+    void *ctx = atomic_exchange_explicit(&handle->on_done_ctx, nullptr, memory_order_relaxed);
+    on_done(handle, ctx);
   }
 }
 

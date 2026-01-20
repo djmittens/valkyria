@@ -222,17 +222,17 @@ sz valk_slab_bitmap_buckets(valk_slab_t *slab,
                                  sz num_buckets,
                                  valk_bitmap_bucket_t *out_buckets);
 
-// Arena statistics for telemetry
+// Arena statistics for telemetry (all fields atomic for thread-safe access)
 typedef struct {
-  u64 total_allocations;      // Count of alloc calls
-  sz total_bytes_allocated;   // Sum of all requested bytes
-  sz high_water_mark;         // Maximum offset reached
-  u64 num_resets;             // Count of arena_reset calls
-  u64 num_checkpoints;        // Count of checkpoint evacuations
-  sz bytes_evacuated;         // Total bytes copied to heap
-  u64 values_evacuated;       // Count of values copied to heap
-  u64 overflow_fallbacks;     // Count of heap fallback allocations due to full arena
-  sz overflow_bytes;          // Bytes allocated via heap fallback
+  _Atomic u64 total_allocations;      // Count of alloc calls
+  _Atomic sz total_bytes_allocated;   // Sum of all requested bytes
+  _Atomic sz high_water_mark;         // Maximum offset reached
+  _Atomic u64 num_resets;             // Count of arena_reset calls
+  _Atomic u64 num_checkpoints;        // Count of checkpoint evacuations
+  _Atomic sz bytes_evacuated;         // Total bytes copied to heap
+  _Atomic u64 values_evacuated;       // Count of values copied to heap
+  _Atomic u64 overflow_fallbacks;     // Count of heap fallback allocations due to full arena
+  _Atomic sz overflow_bytes;          // Bytes allocated via heap fallback
 } valk_arena_stats_t;
 
 typedef struct {

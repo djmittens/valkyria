@@ -833,16 +833,22 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* h
 
   if (scratch != nullptr) {
     double usage = (double)scratch->offset / scratch->capacity * 100.0;
+    u64 overflow_fallbacks = atomic_load_explicit(&scratch->stats.overflow_fallbacks, memory_order_relaxed);
     fprintf(out, "Scratch Arena:\n");
     fprintf(out, "  Usage:       %.1f%% (%zu / %zu bytes)\n",
             usage, scratch->offset, scratch->capacity);
-    fprintf(out, "  High Water:  %zu bytes\n", scratch->stats.high_water_mark);
-    fprintf(out, "  Allocations: %llu\n", (unsigned long long)scratch->stats.total_allocations);
-    fprintf(out, "  Resets:      %llu\n", (unsigned long long)scratch->stats.num_resets);
-    fprintf(out, "  Checkpoints: %llu\n", (unsigned long long)scratch->stats.num_checkpoints);
-    if (scratch->stats.overflow_fallbacks > 0) {
+    fprintf(out, "  High Water:  %zu bytes\n",
+            atomic_load_explicit(&scratch->stats.high_water_mark, memory_order_relaxed));
+    fprintf(out, "  Allocations: %llu\n",
+            (unsigned long long)atomic_load_explicit(&scratch->stats.total_allocations, memory_order_relaxed));
+    fprintf(out, "  Resets:      %llu\n",
+            (unsigned long long)atomic_load_explicit(&scratch->stats.num_resets, memory_order_relaxed));
+    fprintf(out, "  Checkpoints: %llu\n",
+            (unsigned long long)atomic_load_explicit(&scratch->stats.num_checkpoints, memory_order_relaxed));
+    if (overflow_fallbacks > 0) {
       fprintf(out, "  Overflows:   %llu (%zu bytes)\n",
-              (unsigned long long)scratch->stats.overflow_fallbacks, scratch->stats.overflow_bytes);
+              (unsigned long long)overflow_fallbacks,
+              atomic_load_explicit(&scratch->stats.overflow_bytes, memory_order_relaxed));
     }
     fprintf(out, "\n");
   }
@@ -2372,9 +2378,9 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
   VALK_DEBUG("Checkpoint Phase 2: Fixed %zu pointers", ctx.pointers_fixed);
 
   // Update scratch arena stats
-  scratch->stats.num_checkpoints++;
-  scratch->stats.bytes_evacuated += ctx.bytes_copied;
-  scratch->stats.values_evacuated += ctx.values_copied;
+  atomic_fetch_add_explicit(&scratch->stats.num_checkpoints, 1, memory_order_relaxed);
+  atomic_fetch_add_explicit(&scratch->stats.bytes_evacuated, ctx.bytes_copied, memory_order_relaxed);
+  atomic_fetch_add_explicit(&scratch->stats.values_evacuated, ctx.values_copied, memory_order_relaxed);
 
   // Update heap stats
   heap->stats.evacuations_from_scratch += ctx.values_copied;

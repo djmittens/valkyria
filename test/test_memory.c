@@ -279,35 +279,35 @@ void test_arena_stats(VALK_TEST_ARGS()) {
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
   // Initial stats should be zero (except high_water_mark which starts at 0)
-  VALK_TEST_ASSERT(arena->stats.total_allocations == 0,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_allocations) == 0,
                    "Initial total_allocations should be 0");
-  VALK_TEST_ASSERT(arena->stats.num_resets == 0,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.num_resets) == 0,
                    "Initial num_resets should be 0");
 
   // Allocate some memory
   void *ptr1 = valk_mem_arena_alloc(arena, 100);
   VALK_TEST_ASSERT(ptr1 != nullptr, "First allocation should succeed");
-  VALK_TEST_ASSERT(arena->stats.total_allocations == 1,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_allocations) == 1,
                    "total_allocations should be 1 after first alloc");
 
   void *ptr2 = valk_mem_arena_alloc(arena, 200);
   VALK_TEST_ASSERT(ptr2 != nullptr, "Second allocation should succeed");
-  VALK_TEST_ASSERT(arena->stats.total_allocations == 2,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_allocations) == 2,
                    "total_allocations should be 2 after second alloc");
 
   // Check high water mark was updated
-  VALK_TEST_ASSERT(arena->stats.high_water_mark > 0,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.high_water_mark) > 0,
                    "high_water_mark should be > 0");
-  size_t hwm_before_reset = arena->stats.high_water_mark;
+  size_t hwm_before_reset = atomic_load(&arena->stats.high_water_mark);
 
   // Reset the arena
   valk_mem_arena_reset(arena);
-  VALK_TEST_ASSERT(arena->stats.num_resets == 1,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.num_resets) == 1,
                    "num_resets should be 1 after reset");
   VALK_TEST_ASSERT(arena->offset == 0,
                    "Arena offset should be 0 after reset");
   // high_water_mark should be preserved
-  VALK_TEST_ASSERT(arena->stats.high_water_mark >= hwm_before_reset,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.high_water_mark) >= hwm_before_reset,
                    "high_water_mark should be preserved after reset");
 
   // Test valk_ptr_in_arena
@@ -321,12 +321,12 @@ void test_arena_stats(VALK_TEST_ARGS()) {
 
   // Test reset_stats
   valk_mem_arena_reset_stats(arena);
-  VALK_TEST_ASSERT(arena->stats.total_allocations == 0,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_allocations) == 0,
                    "total_allocations should be 0 after reset_stats");
-  VALK_TEST_ASSERT(arena->stats.num_resets == 0,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.num_resets) == 0,
                    "num_resets should be 0 after reset_stats");
   // high_water_mark is intentionally NOT reset
-  VALK_TEST_ASSERT(arena->stats.high_water_mark >= hwm_before_reset,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.high_water_mark) >= hwm_before_reset,
                    "high_water_mark should NOT be reset");
 
   free(arena);
@@ -382,9 +382,9 @@ void test_arena_overflow_fallback(VALK_TEST_ARGS()) {
   valk_thread_ctx.heap = heap;
 
   // Initial state: no overflow
-  VALK_TEST_ASSERT(arena->stats.overflow_fallbacks == 0,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.overflow_fallbacks) == 0,
                    "Initial overflow_fallbacks should be 0");
-  VALK_TEST_ASSERT(arena->stats.overflow_bytes == 0,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.overflow_bytes) == 0,
                    "Initial overflow_bytes should be 0");
 
   // Fill up most of the arena with small allocations
@@ -404,9 +404,9 @@ void test_arena_overflow_fallback(VALK_TEST_ARGS()) {
   void *overflow_ptr = valk_mem_arena_alloc(arena, overflow_size);
   VALK_TEST_ASSERT(overflow_ptr != nullptr,
                    "Overflow allocation should succeed via heap fallback");
-  VALK_TEST_ASSERT(arena->stats.overflow_fallbacks == 1,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.overflow_fallbacks) == 1,
                    "overflow_fallbacks should be 1");
-  VALK_TEST_ASSERT(arena->stats.overflow_bytes == overflow_size,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.overflow_bytes) == overflow_size,
                    "overflow_bytes should match requested size");
 
   // The overflow pointer should NOT be in the arena
@@ -438,26 +438,26 @@ void test_arena_total_bytes(VALK_TEST_ARGS()) {
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
-  VALK_TEST_ASSERT(arena->stats.total_bytes_allocated == 0,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_bytes_allocated) == 0,
                    "Initial total_bytes_allocated should be 0");
 
   // Allocate various sizes
   valk_mem_arena_alloc(arena, 100);
-  VALK_TEST_ASSERT(arena->stats.total_bytes_allocated == 100,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_bytes_allocated) == 100,
                    "total_bytes_allocated should be 100");
 
   valk_mem_arena_alloc(arena, 200);
-  VALK_TEST_ASSERT(arena->stats.total_bytes_allocated == 300,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_bytes_allocated) == 300,
                    "total_bytes_allocated should be 300");
 
   valk_mem_arena_alloc(arena, 50);
-  VALK_TEST_ASSERT(arena->stats.total_bytes_allocated == 350,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_bytes_allocated) == 350,
                    "total_bytes_allocated should be 350");
 
   // Reset arena - total_bytes should keep accumulating
   valk_mem_arena_reset(arena);
   valk_mem_arena_alloc(arena, 75);
-  VALK_TEST_ASSERT(arena->stats.total_bytes_allocated == 425,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_bytes_allocated) == 425,
                    "total_bytes_allocated should accumulate across resets");
 
   free(arena);
@@ -531,9 +531,9 @@ void test_checkpoint_empty(VALK_TEST_ARGS()) {
   valk_checkpoint(arena, heap, env);
 
   // Stats should show 0 evacuations
-  VALK_TEST_ASSERT(arena->stats.num_checkpoints == 1,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 1,
                    "num_checkpoints should be 1");
-  VALK_TEST_ASSERT(arena->stats.values_evacuated == 0,
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.values_evacuated) == 0,
                    "values_evacuated should be 0 for empty arena");
   VALK_TEST_ASSERT(arena->offset == 0,
                    "Arena offset should be 0 after checkpoint");
@@ -592,7 +592,7 @@ void test_checkpoint_evacuate_number(VALK_TEST_ARGS()) {
                      "Arena should be reset after checkpoint");
 
     // Verify value was evacuated
-    VALK_TEST_ASSERT(arena->stats.values_evacuated > 0,
+    VALK_TEST_ASSERT(atomic_load(&arena->stats.values_evacuated) > 0,
                      "Should have evacuated at least one value");
 
     // Verify we can still get the value from environment
@@ -699,7 +699,7 @@ void test_checkpoint_stats(VALK_TEST_ARGS()) {
   VALK_WITH_ALLOC((void *)heap) {
     valk_lenv_t *env = valk_lenv_empty();
     valk_gc_malloc_set_root(heap, env);
-    VALK_TEST_ASSERT(arena->stats.num_checkpoints == 0,
+    VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 0,
                      "Initial checkpoints should be 0");
     VALK_TEST_ASSERT(heap->stats.evacuations_from_scratch == 0,
                      "Initial evacuations should be 0");
@@ -714,9 +714,9 @@ void test_checkpoint_stats(VALK_TEST_ARGS()) {
     // First checkpoint
     valk_checkpoint(arena, heap, env);
 
-    VALK_TEST_ASSERT(arena->stats.num_checkpoints == 1,
+    VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 1,
                      "num_checkpoints should be 1");
-    size_t evac1 = arena->stats.values_evacuated;
+    size_t evac1 = atomic_load(&arena->stats.values_evacuated);
     VALK_TEST_ASSERT(evac1 > 0, "Should have evacuated some values");
 
     // Create more values
@@ -727,9 +727,9 @@ void test_checkpoint_stats(VALK_TEST_ARGS()) {
     // Second checkpoint
     valk_checkpoint(arena, heap, env);
 
-    VALK_TEST_ASSERT(arena->stats.num_checkpoints == 2,
+    VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 2,
                      "num_checkpoints should be 2");
-    VALK_TEST_ASSERT(arena->stats.values_evacuated > evac1,
+    VALK_TEST_ASSERT(atomic_load(&arena->stats.values_evacuated) > evac1,
                      "Total evacuations should have increased");
 
     // Heap should track evacuations received
@@ -1599,15 +1599,15 @@ void test_arena_reset_stats(VALK_TEST_ARGS()) {
   valk_mem_arena_alloc(arena, 200);
   valk_mem_arena_reset(arena);
 
-  VALK_TEST_ASSERT(arena->stats.total_allocations > 0, "Should have allocations");
-  VALK_TEST_ASSERT(arena->stats.num_resets > 0, "Should have resets");
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_allocations) > 0, "Should have allocations");
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.num_resets) > 0, "Should have resets");
 
-  size_t old_hwm = arena->stats.high_water_mark;
+  size_t old_hwm = atomic_load(&arena->stats.high_water_mark);
   valk_mem_arena_reset_stats(arena);
 
-  VALK_TEST_ASSERT(arena->stats.total_allocations == 0, "Allocations should be 0");
-  VALK_TEST_ASSERT(arena->stats.num_resets == 0, "Resets should be 0");
-  VALK_TEST_ASSERT(arena->stats.high_water_mark == old_hwm, "HWM should be preserved");
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_allocations) == 0, "Allocations should be 0");
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.num_resets) == 0, "Resets should be 0");
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.high_water_mark) == old_hwm, "HWM should be preserved");
 
   valk_mem_arena_reset_stats(nullptr);
 

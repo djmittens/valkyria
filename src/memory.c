@@ -434,21 +434,21 @@ void valk_mem_arena_init(valk_mem_arena_t *self, sz capacity) {
   self->warned_overflow = false;
 
   // Initialize statistics to zero
-  self->stats.total_allocations = 0;
-  self->stats.total_bytes_allocated = 0;
-  self->stats.high_water_mark = 0;
-  self->stats.num_resets = 0;
-  self->stats.num_checkpoints = 0;
-  self->stats.bytes_evacuated = 0;
-  self->stats.values_evacuated = 0;
-  self->stats.overflow_fallbacks = 0;
-  self->stats.overflow_bytes = 0;
+  atomic_store_explicit(&self->stats.total_allocations, 0, memory_order_relaxed);
+  atomic_store_explicit(&self->stats.total_bytes_allocated, 0, memory_order_relaxed);
+  atomic_store_explicit(&self->stats.high_water_mark, 0, memory_order_relaxed);
+  atomic_store_explicit(&self->stats.num_resets, 0, memory_order_relaxed);
+  atomic_store_explicit(&self->stats.num_checkpoints, 0, memory_order_relaxed);
+  atomic_store_explicit(&self->stats.bytes_evacuated, 0, memory_order_relaxed);
+  atomic_store_explicit(&self->stats.values_evacuated, 0, memory_order_relaxed);
+  atomic_store_explicit(&self->stats.overflow_fallbacks, 0, memory_order_relaxed);
+  atomic_store_explicit(&self->stats.overflow_bytes, 0, memory_order_relaxed);
 }
 
 void valk_mem_arena_reset(valk_mem_arena_t *self) {
   __atomic_store_n(&self->offset, 0, __ATOMIC_SEQ_CST);
   self->warned_overflow = false;
-  self->stats.num_resets++;
+  atomic_fetch_add_explicit(&self->stats.num_resets, 1, memory_order_relaxed);
 }
 
 valk_arena_checkpoint_t valk_arena_checkpoint_save(valk_mem_arena_t *arena) {
@@ -457,7 +457,7 @@ valk_arena_checkpoint_t valk_arena_checkpoint_save(valk_mem_arena_t *arena) {
 
 void valk_arena_checkpoint_restore(valk_mem_arena_t *arena, valk_arena_checkpoint_t cp) {
   arena->offset = cp.offset;
-  arena->stats.num_checkpoints++;
+  atomic_fetch_add_explicit(&arena->stats.num_checkpoints, 1, memory_order_relaxed);
 }
 
 // TODO(networking): should probably write some unit tests for all this math
@@ -474,8 +474,8 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes) {
     // Check if allocation would exceed capacity - fall back to heap
     if (end >= self->capacity) {
       // OVERFLOW: Fall back to heap allocation
-      self->stats.overflow_fallbacks++;
-      self->stats.overflow_bytes += bytes;
+      atomic_fetch_add_explicit(&self->stats.overflow_fallbacks, 1, memory_order_relaxed);
+      atomic_fetch_add_explicit(&self->stats.overflow_bytes, bytes, memory_order_relaxed);
 
       // Track that overflow occurred (logged at checkpoint)
       self->warned_overflow = true;
@@ -497,11 +497,14 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes) {
       // Store payload size right before payload pointer
       *((u64 *)&self->heap[payload] - 1) = bytes;
 
-      // Update statistics
-      self->stats.total_allocations++;
-      self->stats.total_bytes_allocated += bytes;
-      if (end > self->stats.high_water_mark) {
-        self->stats.high_water_mark = end;
+      // Update statistics (relaxed atomics - telemetry doesn't need precision)
+      atomic_fetch_add_explicit(&self->stats.total_allocations, 1, memory_order_relaxed);
+      atomic_fetch_add_explicit(&self->stats.total_bytes_allocated, bytes, memory_order_relaxed);
+      sz cur_hwm = atomic_load_explicit(&self->stats.high_water_mark, memory_order_relaxed);
+      while (end > cur_hwm) {
+        if (atomic_compare_exchange_weak_explicit(&self->stats.high_water_mark, &cur_hwm, end,
+                                                   memory_order_relaxed, memory_order_relaxed))
+          break;
       }
 
       // Zero the allocated memory to prevent uninitialized data bugs
@@ -515,23 +518,32 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes) {
 void valk_mem_arena_print_stats(valk_mem_arena_t *arena, FILE *out) {
   if (arena == nullptr || out == nullptr) return;
 
+  sz hwm = atomic_load_explicit(&arena->stats.high_water_mark, memory_order_relaxed);
+  u64 overflow_fallbacks = atomic_load_explicit(&arena->stats.overflow_fallbacks, memory_order_relaxed);
+
   fprintf(out, "\n=== Scratch Arena Statistics ===\n");
   fprintf(out, "Current usage:     %zu / %zu bytes (%.1f%%)\n",
           arena->offset, arena->capacity,
           100.0 * arena->offset / arena->capacity);
   fprintf(out, "High water mark:   %zu bytes (%.1f%%)\n",
-          arena->stats.high_water_mark,
-          100.0 * arena->stats.high_water_mark / arena->capacity);
-  fprintf(out, "Total allocations: %llu\n", arena->stats.total_allocations);
-  fprintf(out, "Total bytes:       %zu\n", arena->stats.total_bytes_allocated);
-  fprintf(out, "Reset count:       %llu\n", arena->stats.num_resets);
-  fprintf(out, "Checkpoints:       %llu\n", arena->stats.num_checkpoints);
-  fprintf(out, "Values evacuated:  %llu\n", arena->stats.values_evacuated);
-  fprintf(out, "Bytes evacuated:   %zu\n", arena->stats.bytes_evacuated);
+          hwm, 100.0 * hwm / arena->capacity);
+  fprintf(out, "Total allocations: %llu\n",
+          (unsigned long long)atomic_load_explicit(&arena->stats.total_allocations, memory_order_relaxed));
+  fprintf(out, "Total bytes:       %zu\n",
+          atomic_load_explicit(&arena->stats.total_bytes_allocated, memory_order_relaxed));
+  fprintf(out, "Reset count:       %llu\n",
+          (unsigned long long)atomic_load_explicit(&arena->stats.num_resets, memory_order_relaxed));
+  fprintf(out, "Checkpoints:       %llu\n",
+          (unsigned long long)atomic_load_explicit(&arena->stats.num_checkpoints, memory_order_relaxed));
+  fprintf(out, "Values evacuated:  %llu\n",
+          (unsigned long long)atomic_load_explicit(&arena->stats.values_evacuated, memory_order_relaxed));
+  fprintf(out, "Bytes evacuated:   %zu\n",
+          atomic_load_explicit(&arena->stats.bytes_evacuated, memory_order_relaxed));
 
-  if (arena->stats.overflow_fallbacks > 0) { // LCOV_EXCL_BR_LINE
+  if (overflow_fallbacks > 0) { // LCOV_EXCL_BR_LINE
     fprintf(out, "⚠️  Overflow fallbacks: %llu (%zu bytes)\n",
-            arena->stats.overflow_fallbacks, arena->stats.overflow_bytes);
+            (unsigned long long)overflow_fallbacks,
+            atomic_load_explicit(&arena->stats.overflow_bytes, memory_order_relaxed));
   }
   fprintf(out, "================================\n\n");
 }
@@ -540,15 +552,15 @@ void valk_mem_arena_print_stats(valk_mem_arena_t *arena, FILE *out) {
 void valk_mem_arena_reset_stats(valk_mem_arena_t *arena) {
   if (arena == nullptr) return;
 
-  arena->stats.total_allocations = 0;
-  arena->stats.total_bytes_allocated = 0;
+  atomic_store_explicit(&arena->stats.total_allocations, 0, memory_order_relaxed);
+  atomic_store_explicit(&arena->stats.total_bytes_allocated, 0, memory_order_relaxed);
   // Note: high_water_mark is intentionally NOT reset
-  arena->stats.num_resets = 0;
-  arena->stats.num_checkpoints = 0;
-  arena->stats.bytes_evacuated = 0;
-  arena->stats.values_evacuated = 0;
-  arena->stats.overflow_fallbacks = 0;
-  arena->stats.overflow_bytes = 0;
+  atomic_store_explicit(&arena->stats.num_resets, 0, memory_order_relaxed);
+  atomic_store_explicit(&arena->stats.num_checkpoints, 0, memory_order_relaxed);
+  atomic_store_explicit(&arena->stats.bytes_evacuated, 0, memory_order_relaxed);
+  atomic_store_explicit(&arena->stats.values_evacuated, 0, memory_order_relaxed);
+  atomic_store_explicit(&arena->stats.overflow_fallbacks, 0, memory_order_relaxed);
+  atomic_store_explicit(&arena->stats.overflow_bytes, 0, memory_order_relaxed);
 }
 
 // Check if a pointer is within the arena's address range

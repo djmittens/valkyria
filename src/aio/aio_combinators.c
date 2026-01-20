@@ -863,15 +863,18 @@ static void valk_async_propagate_single(void *ctx) {
               valk_async_handle_add_child(inner, child);
               child->parent = inner;
               child->on_complete = NULL;
-              if (child->on_done && !inner->on_done) {
-                inner->on_done = child->on_done;
-                inner->on_done_ctx = child->on_done_ctx;
+              valk_async_done_fn child_on_done = atomic_load_explicit(&child->on_done, memory_order_acquire);
+              valk_async_done_fn inner_on_done = atomic_load_explicit(&inner->on_done, memory_order_acquire);
+              if (child_on_done && !inner_on_done) {
+                void *child_ctx = atomic_load_explicit(&child->on_done_ctx, memory_order_relaxed);
+                atomic_store_explicit(&inner->on_done, child_on_done, memory_order_release);
+                atomic_store_explicit(&inner->on_done_ctx, child_ctx, memory_order_relaxed);
                 inner->is_closed = child->is_closed;
                 inner->is_closed_ctx = child->is_closed_ctx;
                 inner->region = child->region;
                 inner->env = child->env;
-                child->on_done = NULL;
-                child->on_done_ctx = NULL;
+                atomic_store_explicit(&child->on_done, NULL, memory_order_relaxed);
+                atomic_store_explicit(&child->on_done_ctx, NULL, memory_order_relaxed);
                 child->is_closed = NULL;
                 child->is_closed_ctx = NULL;
               }

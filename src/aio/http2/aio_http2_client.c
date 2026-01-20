@@ -717,8 +717,8 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
   }
 
   valk_async_handle_t *request_handle = valk_aio_http2_request_send(req, ctx->client);
-  request_handle->on_done = __http2_client_request_response_done;
-  request_handle->on_done_ctx = ctx;
+  atomic_store_explicit(&request_handle->on_done, __http2_client_request_response_done, memory_order_release);
+  atomic_store_explicit(&request_handle->on_done_ctx, ctx, memory_order_relaxed);
   return;
 
 cleanup:
@@ -811,8 +811,8 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
             (unsigned long long)req_id, (void*)callback);
 
   valk_async_handle_t *connect_handle = valk_aio_http2_connect_host(sys, host, port, host);
-  connect_handle->on_done = __http2_client_request_connect_done;
-  connect_handle->on_done_ctx = ctx;
+  atomic_store_explicit(&connect_handle->on_done, __http2_client_request_connect_done, memory_order_release);
+  atomic_store_explicit(&connect_handle->on_done_ctx, ctx, memory_order_relaxed);
 
   VALK_INFO("http2/client-request[%llu]: connect_handle=%p created", 
             (unsigned long long)req_id, (void*)connect_handle);
@@ -916,8 +916,8 @@ valk_lval_t *valk_http2_client_request_on_conn_impl(valk_lenv_t *e,
     return valk_lval_err("Failed to send request");
   }
 
-  request_handle->on_done = __http2_client_reuse_response_done;
-  request_handle->on_done_ctx = ctx;
+  atomic_store_explicit(&request_handle->on_done, __http2_client_reuse_response_done, memory_order_release);
+  atomic_store_explicit(&request_handle->on_done_ctx, ctx, memory_order_relaxed);
 
   return valk_lval_nil();
 }

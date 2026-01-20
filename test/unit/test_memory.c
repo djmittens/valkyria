@@ -276,7 +276,7 @@ void test_arena_reset(VALK_TEST_ARGS()) {
 
   valk_mem_arena_reset(arena);
   VALK_TEST_ASSERT(arena->offset == 0, "Offset should be 0 after reset");
-  VALK_TEST_ASSERT(arena->stats.num_resets == 1, "Reset count should increment");
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.num_resets) == 1, "Reset count should increment");
 
   free(arena);
 
@@ -294,9 +294,9 @@ void test_arena_stats(VALK_TEST_ARGS()) {
   valk_mem_arena_alloc(arena, 200);
   valk_mem_arena_alloc(arena, 300);
 
-  VALK_TEST_ASSERT(arena->stats.total_allocations == 3, "Should count 3 allocations");
-  VALK_TEST_ASSERT(arena->stats.total_bytes_allocated >= 600, "Should count at least 600 bytes");
-  VALK_TEST_ASSERT(arena->stats.high_water_mark > 0, "High water mark should be set");
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_allocations) == 3, "Should count 3 allocations");
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_bytes_allocated) >= 600, "Should count at least 600 bytes");
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.high_water_mark) > 0, "High water mark should be set");
 
   free(arena);
 
@@ -313,13 +313,13 @@ void test_arena_reset_stats(VALK_TEST_ARGS()) {
   valk_mem_arena_alloc(arena, 100);
   valk_mem_arena_reset(arena);
 
-  size_t hwm_before = arena->stats.high_water_mark;
+  size_t hwm_before = atomic_load(&arena->stats.high_water_mark);
 
   valk_mem_arena_reset_stats(arena);
 
-  VALK_TEST_ASSERT(arena->stats.total_allocations == 0, "Allocations should be reset");
-  VALK_TEST_ASSERT(arena->stats.num_resets == 0, "Resets should be reset");
-  VALK_TEST_ASSERT(arena->stats.high_water_mark == hwm_before, "HWM should NOT be reset");
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.total_allocations) == 0, "Allocations should be reset");
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.num_resets) == 0, "Resets should be reset");
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.high_water_mark) == hwm_before, "HWM should NOT be reset");
 
   free(arena);
 
