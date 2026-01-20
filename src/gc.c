@@ -8,6 +8,9 @@
 #include <pthread.h>
 #include <sched.h>
 #include <uv.h>
+#ifdef __linux__
+#include <dirent.h>
+#endif
 
 // ============================================================================
 // Runtime Initialization
@@ -2920,14 +2923,6 @@ void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes) {
   
   void *ptr = valk_gc_tlab2_alloc(valk_gc_local_tlab, size_class);
   if (ptr) {
-    // Debug: track consecutive allocations
-    static __thread void* prev_ptr = NULL;
-    if (prev_ptr && bytes == 72 && (uintptr_t)ptr - (uintptr_t)prev_ptr < 72) {
-      fprintf(stderr, "BUG: consecutive allocs too close! prev=%p cur=%p diff=%zu bytes=%zu class=%u alloc_size=%zu\n",
-              prev_ptr, ptr, (uintptr_t)ptr - (uintptr_t)prev_ptr, bytes, size_class, alloc_size);
-      abort();
-    }
-    prev_ptr = ptr;
     memset(ptr, 0, alloc_size);
     return ptr;
   }
@@ -4027,3 +4022,113 @@ void valk_gc_reset_after_fork(void) {
   valk_thread_ctx.root_stack_capacity = 0;
 }
 // LCOV_EXCL_STOP
+
+// ============================================================================
+// Diagnostic Dump for Debugging Hangs
+// ============================================================================
+
+static const char *valk_gc_phase_name(valk_gc_phase_e phase) {
+  switch (phase) {
+    case VALK_GC_PHASE_IDLE: return "IDLE";
+    case VALK_GC_PHASE_STW_REQUESTED: return "STW_REQUESTED";
+    case VALK_GC_PHASE_CHECKPOINT_REQUESTED: return "CHECKPOINT_REQUESTED";
+    case VALK_GC_PHASE_MARKING: return "MARKING";
+    case VALK_GC_PHASE_SWEEPING: return "SWEEPING";
+    default: return "UNKNOWN";
+  }
+}
+
+void valk_diag_dump_on_timeout(void) {
+  valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
+  u64 registered = atomic_load(&valk_gc_coord.threads_registered);
+  u64 paused = atomic_load(&valk_gc_coord.threads_paused);
+  
+  fprintf(stderr, "\n");
+  fprintf(stderr, "╔══════════════════════════════════════════════════════════════╗\n");
+  fprintf(stderr, "║  TIMEOUT DIAGNOSTIC DUMP                                     ║\n");
+  fprintf(stderr, "╚══════════════════════════════════════════════════════════════╝\n");
+  fprintf(stderr, "\n");
+  
+  fprintf(stderr, "=== GC Coordinator State ===\n");
+  fprintf(stderr, "  phase:              %s (%d)\n", valk_gc_phase_name(phase), phase);
+  fprintf(stderr, "  threads_registered: %llu\n", (unsigned long long)registered);
+  fprintf(stderr, "  threads_paused:     %llu\n", (unsigned long long)paused);
+  fprintf(stderr, "  barrier_init:       %s\n", valk_gc_coord.barrier_initialized ? "yes" : "no");
+  fprintf(stderr, "\n");
+  
+  if (phase != VALK_GC_PHASE_IDLE) {
+    fprintf(stderr, "  *** GC is NOT idle - possible deadlock in GC coordination ***\n");
+    if (paused < registered) {
+      fprintf(stderr, "  *** Waiting for %llu threads to reach safe point ***\n",
+              (unsigned long long)(registered - paused));
+    }
+    fprintf(stderr, "\n");
+  }
+  
+  fprintf(stderr, "=== Registered Threads ===\n");
+  for (u64 i = 0; i < VALK_GC_MAX_THREADS && i < 16; i++) {
+    if (valk_gc_coord.threads[i].active) {
+      valk_thread_context_t *tc = valk_gc_coord.threads[i].ctx;
+      fprintf(stderr, "  [%llu] pthread=%lu active=yes", 
+              (unsigned long long)i,
+              (unsigned long)valk_gc_coord.threads[i].thread_id);
+      if (tc) {
+        fprintf(stderr, " gc_id=%llu", (unsigned long long)tc->gc_thread_id);
+      }
+      fprintf(stderr, "\n");
+    }
+  }
+  fprintf(stderr, "\n");
+  
+  fprintf(stderr, "=== Current Thread Context ===\n");
+  fprintf(stderr, "  gc_registered:   %s\n", valk_thread_ctx.gc_registered ? "yes" : "no");
+  fprintf(stderr, "  gc_thread_id:    %llu\n", (unsigned long long)valk_thread_ctx.gc_thread_id);
+  fprintf(stderr, "  root_stack_cnt:  %zu\n", valk_thread_ctx.root_stack_count);
+  fprintf(stderr, "\n");
+
+#ifdef __linux__
+  fprintf(stderr, "=== Thread Stacks (from /proc) ===\n");
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/%d/task", getpid());
+  DIR *dir = opendir(path);
+  if (dir) {
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != nullptr) {
+      if (ent->d_name[0] == '.') continue;
+      char stack_path[128];
+      snprintf(stack_path, sizeof(stack_path), "/proc/%d/task/%s/stack", getpid(), ent->d_name);
+      FILE *f = fopen(stack_path, "r");
+      if (f) {
+        fprintf(stderr, "--- Thread %s ---\n", ent->d_name);
+        char line[256];
+        int lines = 0;
+        while (fgets(line, sizeof(line), f) && lines < 10) {
+          fprintf(stderr, "  %s", line);
+          lines++;
+        }
+        fclose(f);
+      }
+    }
+    closedir(dir);
+  }
+  fprintf(stderr, "\n");
+#endif
+
+  fprintf(stderr, "=== Likely Cause ===\n");
+  if (phase == VALK_GC_PHASE_STW_REQUESTED || phase == VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
+    fprintf(stderr, "  GC/checkpoint requested but not all threads reached safe point.\n");
+    fprintf(stderr, "  A thread may be stuck in a long-running operation without\n");
+    fprintf(stderr, "  calling VALK_GC_SAFE_POINT().\n");
+  } else if (phase == VALK_GC_PHASE_MARKING || phase == VALK_GC_PHASE_SWEEPING) {
+    fprintf(stderr, "  GC is in progress. Threads may be stuck at a barrier.\n");
+    fprintf(stderr, "  Check barrier_wait calls in gc.c.\n");
+  } else {
+    fprintf(stderr, "  GC is idle. Hang may be in application logic:\n");
+    fprintf(stderr, "  - Event loop waiting for I/O that never arrives\n");
+    fprintf(stderr, "  - Deadlock in application mutex\n");
+    fprintf(stderr, "  - Infinite loop in user code\n");
+  }
+  fprintf(stderr, "\n");
+  
+  fflush(stderr);
+}

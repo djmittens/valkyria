@@ -138,6 +138,11 @@ static void valk_set_nonblocking(int fd) {
   fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+static void valk_timeout_signal_handler(int sig) {
+  (void)sig;
+  valk_diag_dump_on_timeout();
+}
+
 int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
                    struct pollfd fds[2]) {
   int pout[2], perr[2];
@@ -154,6 +159,9 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
     // close(perr[1]);
     close(pout[0]);
     close(perr[0]);
+    
+    // Install SIGUSR1 handler for timeout diagnostics
+    signal(SIGUSR1, valk_timeout_signal_handler);
 
     // Reset all global GC state after fork - critical for test isolation
     // This clears stale pointers to parent's heaps, TLABs, and GC coordinator state
@@ -282,7 +290,32 @@ void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
   if (fds[1].fd >= 0) close(fds[1].fd);
 
   if (timedOut) {
-    // Timeout was reached - kill the child process
+    // Timeout was reached - send SIGUSR1 to trigger diagnostic dump, then kill
+    kill(pid, SIGUSR1);
+    
+    // Give the child time to write diagnostics (up to 500ms)
+    struct pollfd wait_fds[2] = {
+      {.fd = fds[0].fd >= 0 ? fds[0].fd : -1, .events = POLLIN},
+      {.fd = fds[1].fd >= 0 ? fds[1].fd : -1, .events = POLLIN}
+    };
+    int wait_ms = 500;
+    while (wait_ms > 0) {
+      int r = poll(wait_fds, 2, 50);
+      if (r > 0) {
+        u8 buf[1024];
+        if (wait_fds[0].revents & POLLIN) {
+          ssize_t n = read(wait_fds[0].fd, buf, sizeof buf);
+          if (n > 0) valk_ring_write(test->_stdout, buf, (size_t)n);
+        }
+        if (wait_fds[1].revents & POLLIN) {
+          ssize_t n = read(wait_fds[1].fd, buf, sizeof buf);
+          if (n > 0) valk_ring_write(test->_stderr, buf, (size_t)n);
+        }
+      }
+      wait_ms -= 50;
+    }
+    
+    // Now kill for real
     kill(pid, SIGKILL);
 
     test->result.type = VALK_TEST_CRSH;

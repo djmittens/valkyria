@@ -969,3 +969,11 @@ static inline void valk_gc_root_pop(void) {
 static inline void valk_gc_root_cleanup(valk_gc_root_t *r) {
   valk_thread_ctx.root_stack_count = r->saved_count;
 }
+
+// ============================================================================
+// Diagnostic Dump for Debugging Hangs
+// ============================================================================
+
+// Dump diagnostic info to stderr when a test times out
+// Called from signal handler, so must be async-signal-safe
+void valk_diag_dump_on_timeout(void);
