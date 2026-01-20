@@ -81,15 +81,6 @@
     (shutdown 1)
 })
 
-; Per-test timeout callback
-(fun {*test-timeout-cb* test-name timeout-atom} {
-  (if (== (atom/get timeout-atom) 0)
-    {do
-      (atom/set! timeout-atom 1)
-      (printf "\n⏰ TEST TIMEOUT: %s\n" test-name)}
-    {true})
-})
-
 ; Run a single sync test with timeout (requires aio)
 (fun {*test-run-one-with-timeout* aio ctx test} {
   do
@@ -114,9 +105,8 @@
           {true})
 
         ; Set up per-test timeout
-        (= {timed-out} (atom 0))
         (= {timer-handle} (aio/schedule aio timeout-ms (\ {} {
-          (*test-timeout-cb* test-name timed-out)
+          (printf "\n⏰ TEST TIMEOUT: %s\n" test-name)
         })))
 
         (= {start-time} (time-us {}))
@@ -124,11 +114,11 @@
         (= {end-time} (time-us {}))
         (= {elapsed} (- end-time start-time))
 
-        ; Cancel timeout timer
-        (aio/cancel timer-handle)
+        ; Cancel timeout timer - returns :true if cancelled, :false if already completed
+        (= {cancelled} (aio/cancel timer-handle))
 
-        ; Check if we timed out
-        (if (== (atom/get timed-out) 1)
+        ; Check if we timed out (cancel failed means timer already fired)
+        (if (== cancelled :false)
           {do
             (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
             (plist/set ctx :timed-out (+ (plist/get ctx :timed-out) 1))}
