@@ -69,6 +69,33 @@ ralph issue done-ids i-abc1 i-def2 i-ghi3
 [RALPH] Out of scope: Z
 ```
 
+## Handling Auto-Generated Pattern Issues
+
+Issues starting with "REPEATED REJECTION" or "COMMON FAILURE PATTERN" are auto-generated from rejection analysis.
+These require special handling:
+
+**For REPEATED REJECTION issues:**
+1. The same task has failed 3+ times with similar errors
+2. Read the spec and task to understand what's expected
+3. Compare with rejection reasons to find the gap
+4. Usually indicates: missing prerequisite, wrong approach, or spec ambiguity
+5. Create a HIGH PRIORITY blocking task that addresses the root cause
+6. Consider if the failing task's `deps` should include the new task
+
+**For COMMON FAILURE PATTERN issues:**
+1. Multiple different tasks fail with the same error type
+2. This strongly indicates a missing prerequisite that all tasks need
+3. Read the spec section about the failing functionality
+4. The error message tells you what's missing (e.g., "argument count mismatch" = API changed)
+5. Create a single HIGH PRIORITY task to fix the root cause
+6. Mark existing failing tasks as depending on this new task using `ralph task add '{"deps": [...]}'`
+
+**Example:**
+If multiple tasks fail with "grep returns 0, expected 1" and they all involve `aio/then`, likely:
+- The API wasn't changed to return handles yet
+- A prerequisite C implementation task is missing
+- Create: `ralph task add '{"name": "Refactor X to return handle", "priority": "high", "notes": "..."}'`
+
 ## IMPORTANT
 
 - Launch ALL investigations in parallel using multiple Task tool calls in a single message
