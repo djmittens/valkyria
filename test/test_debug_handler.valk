@@ -378,8 +378,29 @@
   }))
 
    (test-async "/debug/diagnostics/memory SSE endpoint responds" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/diagnostics/memory" (\ {resp} {}))
-    (aio/schedule aio 300 (\ {} {(done true)}))
+    ; Create a custom handler that opens SSE and closes after first event
+    (= {test-closed} (atom false))
+    (= {test-sse-respond-handler}
+      (\ {req} {
+        (= {path} (req/path req))
+        (if (== path "/test-sse-respond")
+          {(do
+            (= {stream} (sse/open req))
+            (stream/on-close stream (\ {} {(atom/set! test-closed true)}))
+            (stream/write stream "event: test\ndata: ok\n\n")
+            (stream/close stream)
+            :deferred)}
+          {(test-handler req)})}))
+    (= {test-server-respond} (http2/server-listen aio 0 test-sse-respond-handler))
+    (= {test-port-respond} (http2/server-port test-server-respond))
+    (http2/client-request aio "127.0.0.1" test-port-respond "/test-sse-respond"
+      (\ {resp} {
+        (if (error? resp)
+          {(do (print "Error:" resp) (done false))}
+          {(= {body} (http2/response-body resp))
+           (if (str-contains? body "event: test")
+             {(done true)}
+             {(do (print "Expected SSE event") (done false))})})}))
   }))
 
   (test-async "/debug/diagnostics/memory SSE first event is 'diagnostics'" (\ {done} {
@@ -655,6 +676,7 @@
   }))
 
   (test-async "Broadcaster: multiple connections both receive SSE events" (\ {done} {
+    (debug/reset-state)
     (= {conn1-received} (atom false))
     (= {conn2-received} (atom false))
     (= {connections-complete} (atom 0))
@@ -709,6 +731,7 @@
   }))
 
   (test-async "Broadcaster: subscriber receives events until disconnect" (\ {done} {
+    (debug/reset-state)
     (= {bc-event-handler}
       (\ {req} {
         (= {path} (req/path req))
@@ -732,6 +755,7 @@
   }))
 
   (test-async "Broadcaster: subscriber count increases when subscribing" (\ {done} {
+    (debug/reset-state)
     (= {count-before} (atom 0))
     (= {count-after} (atom 0))
     (= {bc-count-handler}
@@ -761,6 +785,7 @@
   }))
 
   (test-async "Broadcaster: subscriber receives first and delta events" (\ {done} {
+    (debug/reset-state)
     (= {bc-delta-handler}
       (\ {req} {
         (= {path} (req/path req))
