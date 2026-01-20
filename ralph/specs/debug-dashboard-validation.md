@@ -1,247 +1,100 @@
 # Debug Dashboard Validation
 
-## Problem
+## Overview
 
-The debug dashboard SSE system lacks test coverage at critical layers, and manual testing reveals concurrency issues. Trust in the implementation is low.
+Build trust in the debug dashboard SSE system through comprehensive testing at all architecture layers. Manual testing reveals concurrency issues and the system lacks test coverage at critical layers. This spec establishes correctness from the bottom up (stream infrastructure → SSE format → debug handler) before optimizing with a shared broadcaster.
 
-**Observed Issues:**
-1. Concurrency problems during manual testing (specifics TBD from user)
-2. Per-connection timers create O(N) overhead for N connections
-3. No tests verify correctness of SSE wire format
-4. Debug handler has only 1 integration test, no unit tests
-5. Stream body integration paths are untested (LCOV excluded)
+## Requirements
 
-## Architecture Layers
+### Architecture Layers
 
 ```
-Layer 4: Dashboard JavaScript (script.js)         - NO TESTS
-Layer 3: Debug Handler (debug.valk)               - 1 test (minimal)
-Layer 2: SSE Wrapper (sse.valk)                   - 55 tests (good)
-Layer 1: Stream Builtins (aio_stream_builtins.c)  - 58 tests (arg validation only)
-Layer 0: Stream Body (aio_stream_body.c)          - 47 tests (unit, no integration)
+┌─────────────────────────────────────────────────────────────────┐
+│ Layer 4: Dashboard JavaScript (script.js)         - NO TESTS    │
+├─────────────────────────────────────────────────────────────────┤
+│ Layer 3: Debug Handler (debug.valk)               - 1 test      │
+├─────────────────────────────────────────────────────────────────┤
+│ Layer 2: SSE Wrapper (sse.valk)                   - 55 tests    │
+├─────────────────────────────────────────────────────────────────┤
+│ Layer 1: Stream Builtins (aio_stream_builtins.c)  - 58 tests    │
+├─────────────────────────────────────────────────────────────────┤
+│ Layer 0: Stream Body (aio_stream_body.c)          - 47 tests    │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-Trust must be built bottom-up: fix and test foundational layers before optimizing higher layers.
+**Trust must be built bottom-up.** Fix and test foundational layers before optimizing higher layers.
 
-## Scope
+### Known Issues
 
-### Phase 1: Verify Layer 0-1 (Stream Infrastructure)
+| Issue | Layer | Severity |
+|-------|-------|----------|
+| Concurrency problems in manual testing | TBD | High |
+| Per-connection timers create O(N) overhead | 3 | Medium |
+| No tests for SSE wire format correctness | 2 | Medium |
+| Debug handler has only 1 integration test | 3 | Medium |
+| Stream body integration paths untested | 0-1 | High |
 
-Ensure the C stream infrastructure is correct under concurrent use.
+### SSE Wire Format Specification
 
-### Phase 2: Verify Layer 2 (SSE Wire Format)
+| Function | Input | Expected Output |
+|----------|-------|-----------------|
+| `sse/send` | `"hello"` | `"data: hello\n\n"` |
+| `sse/send` | `"a\nb"` | `"data: a\ndata: b\n\n"` |
+| `sse/send` | `""` | `"data: \n\n"` |
+| `sse/event` | `"msg" "data"` | `"event: msg\ndata: data\n\n"` |
+| `sse/event` | `"msg" "a\nb"` | `"event: msg\ndata: a\ndata: b\n\n"` |
+| `sse/id` | `"123" "data"` | `"id: 123\ndata: data\n\n"` |
+| `sse/full` | `"msg" "123" "data"` | `"id: 123\nevent: msg\ndata: data\n\n"` |
+| `sse/retry` | `5000` | `"retry: 5000\n\n"` |
+| `sse/comment` | `"ping"` | `": ping\n"` |
+| `sse/heartbeat` | (none) | `":\n"` |
 
-Ensure SSE formatting produces spec-compliant output.
+### Debug Handler Routes
 
-### Phase 3: Verify Layer 3 (Debug Handler)
+| Route | Response Type | Description |
+|-------|---------------|-------------|
+| `/debug` | HTML | Dashboard page |
+| `/debug/` | HTML | Dashboard page |
+| `/debug/metrics` | JSON | Current metrics snapshot |
+| `/debug/metrics/state` | JSON | Full state with `metrics.aio`, `metrics.modular`, `metrics.vm`, `metrics.registry`, `memory` |
+| `/metrics` | Text | Prometheus exposition format |
+| `/debug/diagnostics/memory` | SSE | First event: `diagnostics` (full), then `diagnostics-delta` |
+| `/debug/slab/buckets` | JSON | Slab allocator bucket info |
+| Unknown routes | Redirect | 302 to `/debug/` |
 
-Add unit and integration tests for the debug handler.
+### Global Timer Broadcaster Design (Phase 5)
 
-### Phase 4: Fix Concurrency Issues
+Replace per-connection timers with single shared timer:
 
-Identify and fix the race conditions observed in manual testing.
+```
+┌─────────────────────────────────────────────────────────┐
+│                  BROADCASTER                             │
+│                                                          │
+│  ┌──────────┐     ┌─────────────────────────────────┐   │
+│  │  Timer   │────>│     Collect Metrics Once        │   │
+│  │ (100ms)  │     │     Broadcast to All            │   │
+│  └──────────┘     └─────────────────────────────────┘   │
+│                              │                           │
+│         ┌────────────────────┼────────────────────┐     │
+│         v                    v                    v     │
+│    ┌─────────┐         ┌─────────┐         ┌─────────┐ │
+│    │ Stream1 │         │ Stream2 │         │ Stream3 │ │
+│    │baseline1│         │baseline2│         │baseline3│ │
+│    └─────────┘         └─────────┘         └─────────┘ │
+└─────────────────────────────────────────────────────────┘
+```
 
-### Phase 5: Optimize with Global Timer
+**API:**
+- `debug/subscribe sys stream` - Add to list, start timer if first subscriber
+- `debug/unsubscribe stream` - Remove from list, stop timer if last subscriber
+- Auto-unsubscribe on stream close
 
-Replace per-connection timers with shared broadcaster (only after correctness verified).
+**Backpressure:**
+- Track consecutive failed writes per subscriber
+- Disconnect after 10 failures (1 second at 100ms tick)
+- Log disconnection
 
----
-
-## Phase 1: Stream Infrastructure Verification
-
-### Goal
-Verify that `stream/*` builtins and `valk_stream_body_t` work correctly, especially under concurrent writes and connection close scenarios.
-
-- [ ] **Task 1.1: Add stream body integration test**
-  - File: `test/test_stream_body_integration.c`
-  - Test actual data flow through nghttp2 (not just state management)
-  - Verify: Write queues data, read callback dequeues it
-  - Verify: Close triggers on-close callback
-  - Verify: Backpressure when queue full
-
-- [ ] **Task 1.2: Test stream/write under connection close race**
-  - In integration test: Start write, close connection mid-write
-  - Verify: No crash, no use-after-free
-  - Verify: Error returned to caller
-  - Run under TSAN and ASAN
-
-- [ ] **Task 1.3: Test concurrent writes to same stream**
-  - Multiple rapid writes from same context
-  - Verify: All data delivered in order
-  - Verify: No corruption
-
-- [ ] **Task 1.4: Test on-close callback timing**
-  - Verify: Callback fires exactly once
-  - Verify: Callback fires before stream body freed
-  - Verify: Callback can safely access stream state
-
----
-
-## Phase 2: SSE Wire Format Verification
-
-### Goal
-Verify that `sse/*` functions produce SSE-spec-compliant wire format.
-
-- [ ] **Task 2.1: Test sse/send wire format**
-  - File: `test/test_sse_format.valk`
-  - `(sse/send stream "hello")` → verify output is `"data: hello\n\n"`
-  - `(sse/send stream "a\nb")` → verify output is `"data: a\ndata: b\n\n"`
-  - `(sse/send stream "")` → verify output is `"data: \n\n"`
-
-- [ ] **Task 2.2: Test sse/event wire format**
-  - `(sse/event stream "msg" "data")` → `"event: msg\ndata: data\n\n"`
-  - `(sse/event stream "msg" "a\nb")` → `"event: msg\ndata: a\ndata: b\n\n"`
-
-- [ ] **Task 2.3: Test sse/id and sse/full wire format**
-  - `(sse/id stream "123" "data")` → `"id: 123\ndata: data\n\n"`
-  - `(sse/full stream "msg" "123" "data")` → `"id: 123\nevent: msg\ndata: data\n\n"`
-
-- [ ] **Task 2.4: Test sse/retry and sse/comment**
-  - `(sse/retry stream 5000)` → `"retry: 5000\n\n"`
-  - `(sse/comment stream "ping")` → `": ping\n"`
-  - `(sse/heartbeat stream)` → `":\n"`
-
----
-
-## Phase 3: Debug Handler Verification
-
-### Goal
-Add comprehensive tests for `debug.valk` handler logic.
-
-- [ ] **Task 3.1: Test route matching**
-  - File: `test/test_debug_handler.valk`
-  - Test all routes: `/debug`, `/debug/`, `/debug/metrics`, `/debug/metrics/state`, `/metrics`, `/debug/diagnostics/memory`, `/debug/slab/buckets`
-  - Verify: Correct handler invoked for each
-  - Verify: Unknown routes return redirect to /debug/
-
-- [ ] **Task 3.2: Test /debug/metrics/state JSON structure**
-  - Request endpoint, parse JSON response
-  - Verify: Has `metrics.aio`, `metrics.modular`, `metrics.vm`, `metrics.registry`
-  - Verify: Has `memory` key
-  - Verify: All values are correct types (numbers, objects)
-
-- [ ] **Task 3.3: Test /debug/diagnostics/memory SSE events**
-  - Connect to SSE endpoint
-  - Verify: First event is `diagnostics` with full state
-  - Verify: Subsequent events are `diagnostics-delta`
-  - Verify: Events are valid JSON
-  - Parse and validate structure matches expected schema
-
-- [ ] **Task 3.4: Test SSE handler lifecycle**
-  - Connect, receive events, disconnect
-  - Verify: Timer stops after disconnect (check via side effect or log)
-  - Verify: No errors after disconnect
-  - Verify: Reconnect works
-
-- [ ] **Task 3.5: Test /metrics Prometheus format**
-  - Request endpoint
-  - Verify: Contains expected metric names
-  - Verify: Format matches Prometheus exposition format
-  - Verify: No duplicate metrics
-
----
-
-## Phase 4: Concurrency Issue Investigation and Fix
-
-### Goal
-Identify and fix the race conditions observed in manual testing.
-
-- [ ] **Task 4.1: Document observed concurrency issues**
-  - Capture specific symptoms from manual testing
-  - Note: Which operations trigger the issue?
-  - Note: Error messages, crashes, or incorrect behavior?
-
-- [ ] **Task 4.2: Add stress test for SSE connections**
-  - File: `test/stress/test_sse_concurrency.valk`
-  - 10 concurrent SSE connections
-  - Rapid connect/disconnect cycles
-  - Run for 60 seconds
-  - Verify: No crashes, no hangs, no resource leaks
-
-- [ ] **Task 4.3: Test delta baseline isolation**
-  - Two SSE connections active
-  - Increment metrics between their events
-  - Verify: Each connection sees correct deltas for its timeline
-  - This tests whether `metrics/collect-delta` uses shared or per-connection state
-
-- [ ] **Task 4.4: Run under TSAN**
-  - Run stress test with ThreadSanitizer
-  - Identify any data races
-  - Fix races found
-
-- [ ] **Task 4.5: Run under ASAN**
-  - Run stress test with AddressSanitizer
-  - Identify any memory errors
-  - Fix errors found
-
-- [ ] **Task 4.6: Fix identified issues**
-  - Create subtasks for each issue found
-  - Verify fix with regression test
-
----
-
-## Phase 5: Global Timer Optimization
-
-### Goal
-Replace per-connection timers with a single shared timer (only after Phase 1-4 complete).
-
-**Prerequisite**: All Phase 1-4 tests pass.
-
-- [ ] **Task 5.1: Create debug-broadcaster.valk**
-  - File: `src/modules/aio/debug-broadcaster.valk`
-  - Single timer (100ms) shared across all subscribers
-  - Subscriber list as atom
-  - On tick: collect once, broadcast to all
-
-- [ ] **Task 5.2: Implement per-subscriber baseline**
-  - Each subscriber tracks its own delta baseline
-  - First event sends full state
-  - Subsequent events send delta from that subscriber's baseline
-
-- [ ] **Task 5.3: Implement subscribe/unsubscribe API**
-  - `debug/subscribe sys stream` - Add to list, start timer if first
-  - `debug/unsubscribe stream` - Remove from list, stop timer if last
-  - Auto-unsubscribe on stream close
-
-- [ ] **Task 5.4: Implement backpressure handling**
-  - Track consecutive failed writes per subscriber
-  - Disconnect subscriber after 10 failures (1 second)
-  - Log disconnection
-
-- [ ] **Task 5.5: Update debug.valk to use broadcaster**
-  - Replace `aio/interval` with `debug/subscribe`
-  - Verify dashboard still works
-
-- [ ] **Task 5.6: Add broadcaster tests**
-  - Verify: Single timer for multiple connections
-  - Verify: Timer stops when last subscriber leaves
-  - Verify: Slow subscriber disconnected, fast subscribers unaffected
-
----
-
-## Acceptance Criteria
-
-### Phase 1-3 (Correctness)
-- [ ] All new tests pass
-- [ ] No TSAN warnings
-- [ ] No ASAN errors
-- [ ] SSE wire format matches spec
-- [ ] Debug handler returns correct data
-
-### Phase 4 (Stability)
-- [ ] 60-second stress test passes
-- [ ] No crashes under concurrent connections
-- [ ] No resource leaks (memory stable)
-- [ ] Concurrency issues identified and fixed
-
-### Phase 5 (Performance)
-- [ ] Single timer regardless of connection count
-- [ ] Metrics collected once per tick (not N times)
-- [ ] Slow clients disconnected without affecting fast clients
-
----
-
-## Files to Create/Modify
+### Files to Create/Modify
 
 | File | Action | Phase |
 |------|--------|-------|
@@ -252,11 +105,74 @@ Replace per-connection timers with a single shared timer (only after Phase 1-4 c
 | `src/modules/aio/debug-broadcaster.valk` | NEW | 5 |
 | `src/modules/aio/debug.valk` | MODIFY | 5 |
 
----
+### Phase Dependencies
 
-## Notes
+```
+Phase 1 ──┐
+          ├──> Phase 4 ──> Phase 5
+Phase 2 ──┤
+          │
+Phase 3 ──┘
+```
 
-- Phase 1-4 must complete before Phase 5 - don't optimize broken code
-- The user is seeing concurrency issues in manual testing - Phase 4 is critical
-- `metrics/collect-delta` may need investigation for thread safety
-- Stream close callbacks need careful verification for timing
+Phases 1-3 can run in parallel. Phase 4 requires all of 1-3. Phase 5 requires Phase 4.
+
+## Acceptance Criteria
+
+### Phase 1: Stream Infrastructure
+- [ ] `test/test_stream_body_integration.c` exists
+- [ ] Integration test verifies write queues data, read callback dequeues
+- [ ] Integration test verifies close triggers on-close callback
+- [ ] Integration test verifies backpressure when queue full
+- [ ] Test verifies no crash when write during connection close (run under ASAN)
+- [ ] Test verifies no use-after-free on connection close (run under ASAN)
+- [ ] Test verifies concurrent writes deliver data in order without corruption
+- [ ] Test verifies on-close callback fires exactly once
+- [ ] Test verifies on-close callback fires before stream body freed
+- [ ] All tests pass under TSAN with no warnings
+
+### Phase 2: SSE Wire Format
+- [ ] `test/test_sse_format.valk` exists
+- [ ] `sse/send` produces correct wire format for simple string
+- [ ] `sse/send` produces correct wire format for multi-line string
+- [ ] `sse/send` produces correct wire format for empty string
+- [ ] `sse/event` produces correct wire format
+- [ ] `sse/id` produces correct wire format
+- [ ] `sse/full` produces correct wire format
+- [ ] `sse/retry` produces correct wire format
+- [ ] `sse/comment` produces correct wire format
+- [ ] `sse/heartbeat` produces correct wire format
+
+### Phase 3: Debug Handler
+- [ ] `test/test_debug_handler.valk` exists
+- [ ] Test verifies all routes return correct handler (see Routes table)
+- [ ] Test verifies unknown routes redirect to `/debug/`
+- [ ] Test verifies `/debug/metrics/state` JSON has required keys
+- [ ] Test verifies `/debug/diagnostics/memory` first event is `diagnostics`
+- [ ] Test verifies subsequent events are `diagnostics-delta`
+- [ ] Test verifies SSE events are valid JSON
+- [ ] Test verifies timer stops after client disconnect
+- [ ] Test verifies reconnect works after disconnect
+- [ ] Test verifies `/metrics` contains expected metric names in Prometheus format
+
+### Phase 4: Concurrency
+- [ ] `test/stress/test_sse_concurrency.valk` exists
+- [ ] 10 concurrent SSE connections handled without crash
+- [ ] Rapid connect/disconnect cycles (60 seconds) handled without crash
+- [ ] No resource leaks (memory stable during stress test)
+- [ ] Delta baseline isolation verified (two connections see correct individual deltas)
+- [ ] TSAN stress test shows no data races
+- [ ] ASAN stress test shows no memory errors
+- [ ] All concurrency issues identified and fixed with regression tests
+
+### Phase 5: Global Timer
+- [ ] `src/modules/aio/debug-broadcaster.valk` exists
+- [ ] Single timer runs regardless of connection count
+- [ ] Metrics collected once per tick (not N times for N connections)
+- [ ] Each subscriber maintains independent delta baseline
+- [ ] First event sends full state, subsequent events send delta
+- [ ] Timer starts on first subscribe, stops on last unsubscribe
+- [ ] Slow subscribers (10 consecutive write failures) auto-disconnected
+- [ ] Fast subscribers unaffected by slow subscriber disconnection
+- [ ] `src/modules/aio/debug.valk` updated to use broadcaster
+- [ ] Dashboard still functions correctly after refactor

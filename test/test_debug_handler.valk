@@ -221,10 +221,10 @@
           {(do (print "Error:" resp) (done false))}
           {(= {headers} (http2/response-headers resp))
            (= {cc} (get-header headers "cache-control"))
-           (if (== cc "no-cache")
+           (if (== cc "no-cache, no-store, must-revalidate")
              {(done true)}
              {(do
-               (print "Expected: Cache-Control: no-cache")
+               (print "Expected: Cache-Control: no-cache, no-store, must-revalidate")
                (print "Got:" cc)
                (done false)
              )})})
