@@ -691,6 +691,7 @@
   }))
 
   (test-async "Broadcaster: multiple connections both receive SSE events" (\ {done} {
+    (debug/reset-state)
     (= {conn1-received} (atom false))
     (= {conn2-received} (atom false))
     (= {connections-complete} (atom 0))
@@ -745,6 +746,7 @@
   }))
 
   (test-async "Broadcaster: subscriber receives events until disconnect" (\ {done} {
+    (debug/reset-state)
     (= {bc-event-handler}
       (\ {req} {
         (= {path} (req/path req))
@@ -768,6 +770,7 @@
   }))
 
   (test-async "Broadcaster: subscriber count increases when subscribing" (\ {done} {
+    (debug/reset-state)
     (= {count-before} (atom 0))
     (= {count-after} (atom 0))
     (= {bc-count-handler}
@@ -797,6 +800,7 @@
   }))
 
   (test-async "Broadcaster: subscriber receives first and delta events" (\ {done} {
+    (debug/reset-state)
     (= {bc-delta-handler}
       (\ {req} {
         (= {path} (req/path req))
