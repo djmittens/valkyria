@@ -468,3 +468,29 @@ coverage: build-coverage coverage-tests coverage-report coverage-check
 coverage-check:
 	@echo "=== Checking runtime coverage requirements ==="
 	@python3 bin/check-coverage.py --build-dir build-coverage
+
+# Run stress tests in test/stress/ (long-running, not included in normal test suite)
+# Usage: $(call run_tests_stress,build-dir)
+define run_tests_stress
+	@echo "=== Running stress tests from $(1) ==="
+	$(1)/valk test/stress/test_sse_concurrency.valk
+	$(1)/valk test/stress/test_delta_baseline_isolation.valk
+	$(1)/valk test/stress/test_checkpoint_timer_stress.valk
+	$(1)/valk test/stress/test_gc_stress.valk
+	$(1)/valk test/stress/test_networking_stress.valk
+	$(1)/valk test/stress/test_recursion_stress.valk
+	$(1)/valk test/stress/test_large_download_stress.valk
+	$(1)/valk test/stress/test_large_response.valk
+	@echo "=== All stress tests passed ($(1)) ==="
+endef
+
+.ONESHELL:
+.PHONY: test-stress
+test-stress: build
+	set -e
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running stress tests (long-running)                         ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	$(call run_tests_stress,build)

@@ -9,6 +9,23 @@
 - Single C test: `build/test_memory` (binary name matches `test/*.c`)
 - Single Valk test: `build/valk test/test_prelude.valk`
 - ASAN tests: `make test-c-asan`, `make test-valk-asan`
+- TSAN tests: `make test-c-tsan`, `make test-valk-tsan`
+
+## Sanitizer Output (CRITICAL)
+Sanitizer output can flood context. **Always redirect to file, then summarize.**
+
+```bash
+# TSAN - redirect and summarize
+TSAN_OPTIONS="log_path=build/tsan.log" make test-c-tsan
+echo "TSAN: $(grep -c 'WARNING: ThreadSanitizer' build/tsan.log 2>/dev/null || echo 0) races"
+grep -A2 "WARNING: ThreadSanitizer" build/tsan.log | grep "#0" | sort -u | head -5
+
+# ASAN - redirect and summarize  
+ASAN_OPTIONS="log_path=build/asan.log" make test-c-asan
+grep -c "ERROR: AddressSanitizer" build/asan.log 2>/dev/null || echo "0 errors"
+```
+
+**NEVER** run sanitizer tests without redirecting output - it will flood your context.
 
 ## Code Style
 - C23 with GNU extensions, 2-space indent, no comments unless essential

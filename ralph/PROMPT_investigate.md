@@ -13,6 +13,7 @@ Use the Task tool to investigate ALL issues in parallel. Launch one subagent per
 ```
 For each issue, launch a Task with prompt:
 "Investigate this issue: <issue description>
+Issue priority: <issue priority or 'medium' if not set>
 
 1. Read relevant code to understand the problem
 2. Determine root cause
@@ -29,7 +30,8 @@ Return a JSON object:
   \"task\": {  // only if resolution is \"task\"
     \"name\": \"<fix description>\",
     \"notes\": \"<root cause and approach>\",
-    \"accept\": \"<how to verify>\"
+    \"accept\": \"<how to verify>\",
+    \"priority\": \"<inherit from issue priority above>\"
   },
   \"trivial_fix\": \"<description>\"  // only if resolution is \"trivial\"
 }
@@ -40,10 +42,10 @@ Return a JSON object:
 
 After all subagents complete:
 
-1. Add all tasks in batch:
+1. Add all tasks in batch (include `created_from` to link back to issue, and `priority` from originating issue):
 ```
-ralph task add '{"name": "...", "notes": "...", "accept": "..."}'
-ralph task add '{"name": "...", "notes": "...", "accept": "..."}'
+ralph task add '{"name": "...", "notes": "...", "accept": "...", "created_from": "i-xxxx", "priority": "high|medium|low"}'
+ralph task add '{"name": "...", "notes": "...", "accept": "...", "created_from": "i-yyyy", "priority": "high|medium|low"}'
 ...
 ```
 

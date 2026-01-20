@@ -1,55 +1,75 @@
 # VERIFY Stage
 
-All tasks are done. Verify the spec is actually complete.
+All tasks are done. Verify they meet their acceptance criteria.
 
-## Step 1: Get Context
+## Step 1: Get State
 
-Run `ralph query` to see completed tasks.
+Run `ralph query` to get:
+- `spec`: the current spec name (e.g., "construct-mode.md")
+- `tasks.done`: list of done tasks with their acceptance criteria
 
-Read the spec file: `ralph/specs/<spec>`
+## Step 2: Verify Each Done Task
 
-## Step 2: Verify Each Requirement
-
-For EACH requirement/acceptance criterion in the spec:
-
-1. **Check implementation exists** - search codebase, read relevant files
-2. **Check tests exist and pass** - run the test suite
-3. **Check edge cases** - verify the implementation handles them
-
-Be thorough. The goal is to catch gaps before marking the spec complete.
-
-## Step 3: Decision
-
-### If ALL requirements are met:
+For EACH done task, spawn a subagent to verify:
 
 ```
-ralph task accept
+Task: "Verify task '{task.name}' meets its acceptance criteria: {task.accept}
+
+1. Search codebase for the implementation
+2. Check if acceptance criteria is satisfied
+3. Run any tests mentioned in criteria
+
+Return JSON:
+{
+  \"task_id\": \"{task.id}\",
+  \"passed\": true | false,
+  \"evidence\": \"<what you found>\",
+  \"reason\": \"<why it failed>\"  // only if passed=false
+}"
 ```
 
-Then output:
+**Run all verifications in parallel.**
+
+## Step 3: Apply Results
+
+### For each task:
+
+**If passed** → `ralph task accept <task-id>`
+
+**If failed** → Choose one:
+
+1. **Implementation bug** (can be fixed):
+   `ralph task reject <task-id> "<reason>"`
+
+2. **Architectural blocker** (cannot be done):
+   `ralph issue add "Task <task-id> blocked: <why>"`
+   `ralph task delete <task-id>`
+   
+Signs of architectural blocker:
+- "Cannot do X mid-execution"
+- Same rejection reason recurring
+- Requires changes outside this spec
+
+## Step 4: Check for Gaps
+
+Read the spec\'s **Acceptance Criteria section only** (not entire spec):
+`ralph/specs/<spec-name>` - scroll to "## Acceptance Criteria"
+
+For any unchecked criteria (`- [ ]`) not covered by existing tasks:
+```
+ralph task add '{"name": "...", "accept": "..."}\'
+```
+
+## Step 5: Final Decision
+
+If all tasks accepted and no new tasks created:
 ```
 [RALPH] SPEC_COMPLETE
 ```
 
-### If requirements are NOT met:
-
-For each gap found, add a task:
+Otherwise:
 ```
-ralph task add '{"name": "what's missing", "accept": "how to verify"}'
+[RALPH] SPEC_INCOMPLETE: <summary>
 ```
 
-Then output:
-```
-[RALPH] SPEC_INCOMPLETE: <summary of what's missing>
-```
-
-The loop will continue with BUILD stage to implement the new tasks.
-
-## Progress Reporting
-
-```
-[RALPH] === VERIFY: <spec name> ===
-[RALPH] Checking: <requirement being verified>
-```
-
-## EXIT after either accepting or adding tasks
+## EXIT after completing
