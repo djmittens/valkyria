@@ -55,3 +55,14 @@ leak:intern_string
 
 # HTTP2 connection structures may not be freed when connection fails early
 leak:valk_aio_http2_connect_host
+
+# SSL/OpenSSL allocations routed through our custom allocator may not be freed
+# when tests exit without proper cleanup
+leak:__ssl_malloc
+leak:__ssl_realloc
+
+# nghttp2 allocations routed through our custom allocator may not be freed
+# when tests exit without proper cleanup
+leak:__nghttp2_malloc
+leak:__nghttp2_realloc
+leak:__nghttp2_calloc
