@@ -80,7 +80,7 @@
      {(head (str/split (str (make-string 1 (ord s))) ""))}
      {""})})
 
-(test/run-async aio (list
+(def {main-tests} (list
   (test-async "/debug returns HTML dashboard" (\ {done} {
     (http2/client-request aio "127.0.0.1" TEST_PORT "/debug"
       (\ {resp} {
@@ -736,6 +736,61 @@
       )
   }))
 
+  (test-async "debug/reset-state: session ID increments after reset" (\ {done} {
+    (= {session-before} (atom/get debug/session-id))
+    (debug/reset-state)
+    (= {session-after} (atom/get debug/session-id))
+    (if (== session-after (+ session-before 1))
+      {(done true)}
+      {(do
+        (print "Expected session ID to increment by 1")
+        (print "before:" session-before "after:" session-after)
+        (done false))})
+  }))
+
+  (test-async "debug/reset-state: subscriber count resets to zero" (\ {done} {
+    (debug/reset-state)
+    (= {count-after-reset} (debug/get-subscriber-count))
+    (if (== count-after-reset 0)
+      {(done true)}
+      {(do
+        (print "Expected subscriber count to be 0 after reset")
+        (print "Got:" count-after-reset)
+        (done false))})
+  }))
+
+  (test-async "debug/reset-state: old subscribers stop after session ID change" (\ {done} {
+    (debug/reset-state)
+    (= {old-session} (atom/get debug/session-id))
+    (= {event-count} (atom 0))
+    (= {bc-reset-handler}
+      (\ {req} {
+        (= {path} (req/path req))
+        (if (== path "/bc-old-sub")
+          {(do
+            (= {stream} (sse/open req))
+            (debug/subscribe aio stream)
+            (aio/schedule aio 150 (\ {} {
+              (debug/reset-state)
+            }))
+            (aio/schedule aio 500 (\ {} {(stream/close stream)}))
+            :deferred)}
+          {(test-handler req)})}))
+    (= {bc-server-reset} (http2/server-listen aio 0 bc-reset-handler))
+    (= {bc-port-reset} (http2/server-port bc-server-reset))
+    (http2/client-request aio "127.0.0.1" bc-port-reset "/bc-old-sub"
+      (\ {resp} {
+        (= {new-session} (atom/get debug/session-id))
+        (if (> new-session old-session)
+          {(done true)}
+          {(do
+            (print "Expected session ID to have incremented after reset")
+            (print "old:" old-session "new:" new-session)
+            (done false))})}))
+  }))
+))
+
+(def {broadcaster-tests} (list
   (test-async "Broadcaster: multiple connections both receive SSE events" (\ {done} {
     (debug/reset-state)
     (= {conn1-received} (atom false))
@@ -873,59 +928,6 @@
                   (done false))})})}))
   }))
 
-  (test-async "debug/reset-state: session ID increments after reset" (\ {done} {
-    (= {session-before} (atom/get debug/session-id))
-    (debug/reset-state)
-    (= {session-after} (atom/get debug/session-id))
-    (if (== session-after (+ session-before 1))
-      {(done true)}
-      {(do
-        (print "Expected session ID to increment by 1")
-        (print "before:" session-before "after:" session-after)
-        (done false))})
-  }))
-
-  (test-async "debug/reset-state: subscriber count resets to zero" (\ {done} {
-    (debug/reset-state)
-    (= {count-after-reset} (debug/get-subscriber-count))
-    (if (== count-after-reset 0)
-      {(done true)}
-      {(do
-        (print "Expected subscriber count to be 0 after reset")
-        (print "Got:" count-after-reset)
-        (done false))})
-  }))
-
-  (test-async "debug/reset-state: old subscribers stop after session ID change" (\ {done} {
-    (debug/reset-state)
-    (= {old-session} (atom/get debug/session-id))
-    (= {event-count} (atom 0))
-    (= {bc-reset-handler}
-      (\ {req} {
-        (= {path} (req/path req))
-        (if (== path "/bc-old-sub")
-          {(do
-            (= {stream} (sse/open req))
-            (debug/subscribe aio stream)
-            (aio/schedule aio 150 (\ {} {
-              (debug/reset-state)
-            }))
-            (aio/schedule aio 500 (\ {} {(stream/close stream)}))
-            :deferred)}
-          {(test-handler req)})}))
-    (= {bc-server-reset} (http2/server-listen aio 0 bc-reset-handler))
-    (= {bc-port-reset} (http2/server-port bc-server-reset))
-    (http2/client-request aio "127.0.0.1" bc-port-reset "/bc-old-sub"
-      (\ {resp} {
-        (= {new-session} (atom/get debug/session-id))
-        (if (> new-session old-session)
-          {(done true)}
-          {(do
-            (print "Expected session ID to have incremented after reset")
-            (print "old:" old-session "new:" new-session)
-            (done false))})}))
-  }))
-
   (test-async "debug/reset-state: new subscribers work after reset" (\ {done} {
     (debug/reset-state)
     (= {bc-new-handler}
@@ -951,5 +953,8 @@
                (print "Expected new subscriber to receive events after reset")
                (print "Got body:" (if (> (len body) 100) (str (str/slice body 0 100) "...") body))
                (done false))})})}))
-  }))))
+  }))
+))
+
+(test/run-async aio main-tests
   {:suite-name "Debug Handler Route Matching"})
