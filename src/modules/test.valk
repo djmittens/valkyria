@@ -5,8 +5,7 @@
 (def {*test-default-timeout-ms*} 5000)       ; 5 seconds per test
 (def {*test-default-suite-timeout-ms*} 60000) ; 60 seconds for entire suite
 
-; Atoms for tracking test state
-(def {*test-suite-timed-out*} (atom 0))
+
 
 (fun {test/context-new} {
   {:passed 0 :failed 0 :skipped 0 :timed-out 0
@@ -76,7 +75,6 @@
 ; Suite timeout callback - called if suite takes too long
 (fun {*test-suite-timeout-cb* suite-name} {
   do
-    (atom/set! *test-suite-timed-out* 1)
     (printf "\n\n⏰ SUITE TIMEOUT: %s exceeded time limit\n" suite-name)
     (shutdown 1)
 })
@@ -292,7 +290,6 @@
 ; Main test runner - sync tests without aio (no per-test timeout, but has suite timeout awareness)
 (fun {test/run & args} {
   do
-    (atom/set! *test-suite-timed-out* 0)
     (= {parsed} (*test-parse-args* args))
     (= {tests} (head parsed))
     (= {config} (head (tail parsed)))
@@ -326,7 +323,6 @@
 ; Usage: (test/run-with-timeout aio tests {:suite-name "My Suite" :timeout-ms 5000})
 (fun {test/run-with-timeout aio & args} {
   do
-    (atom/set! *test-suite-timed-out* 0)
     (= {parsed} (*test-parse-args* args))
     (= {tests} (head parsed))
     (= {config} (head (tail parsed)))
@@ -497,7 +493,6 @@
     (atom/set! *test-async-failed-atom* 0)
     (atom/set! *test-async-pending-atom* 0)
     (atom/set! *test-async-timed-out-atom* 0)
-    (atom/set! *test-suite-timed-out* 0)
     
     (= {parsed} (*test-async-parse-args* args))
     (= {tests} (head parsed))
@@ -527,7 +522,6 @@
     (aio/schedule aio suite-timeout-ms (\ {} {
       (if (> (atom/get *test-async-pending-atom*) 0)
         {do
-          (atom/set! *test-suite-timed-out* 1)
           (printf "\n⏰ SUITE TIMEOUT: %ld tests still pending after %ldms\n" 
                   (atom/get *test-async-pending-atom*) suite-timeout-ms)
           (aio/stop aio)
