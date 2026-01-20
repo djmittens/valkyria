@@ -1,212 +1,172 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-; New timeout/cancellation/shutdown tests
+(def {aio} (aio/start))
 
-(test/run (list
-  (test "sse-open-outside-handler-fails"
-    {do
-    (= {result} (sse/open))
-    (test/assert (error? result) "sse/open outside HTTP handler should fail")
-    true
-  })
-  (test "sse-open-with-args-fails"
-    {do
-    (= {result} (sse/open "extra-arg"))
-    (test/assert (error? result) "sse/open with arguments should fail")
-    true
-  })
-  (test "sse-send-no-args-fails"
-    {do
-    (= {result} (sse/send))
-    (test/assert (error? result) "sse/send with no args should fail")
-    true
-  })
-  (test "sse-send-one-arg-fails"
-    {do
-    (= {result} (sse/send "not-a-stream"))
-    (test/assert (error? result) "sse/send with one arg should fail")
-    true
-  })
-  (test "sse-send-wrong-type-fails"
-    {do
-    (= {result} (sse/send "not-a-stream" "data"))
-    (test/assert (error? result) "sse/send with string as stream should fail")
-    true
-  })
-  (test "sse-send-too-many-args-fails"
-    {do
-    (= {result} (sse/send "a" "b" "c" "d"))
-    (test/assert (error? result) "sse/send with 4 args should fail")
-    true
-  })
-  (test "sse-close-no-args-fails"
-    {do
-    (= {result} (sse/close))
-    (test/assert (error? result) "sse/close with no args should fail")
-    true
-  })
-  (test "sse-close-wrong-type-fails"
-    {do
-    (= {result} (sse/close "not-a-stream"))
-    (test/assert (error? result) "sse/close with string should fail")
-    true
-  })
-  (test "sse-writable-no-args-fails"
-    {do
-    (= {result} (sse/writable?))
-    (test/assert (error? result) "sse/writable? with no args should fail")
-    true
-  })
-  (test "sse-writable-wrong-type-fails"
-    {do
-    (= {result} (sse/writable? "not-a-stream"))
-    (test/assert (error? result) "sse/writable? with string should fail")
-    true
-  })
-  (test "sse-on-drain-no-args-fails"
-    {do
-    (= {result} (sse/on-drain))
-    (test/assert (error? result) "sse/on-drain with no args should fail")
-    true
-  })
-  (test "sse-on-drain-one-arg-fails"
-    {do
-    (= {result} (sse/on-drain "stream"))
-    (test/assert (error? result) "sse/on-drain with one arg should fail")
-    true
-  })
-  (test "sse-on-drain-wrong-stream-type-fails"
-    {do
-    (= {result} (sse/on-drain "not-a-stream" (\ {} {})))
-    (test/assert (error? result) "sse/on-drain with string stream should fail")
-    true
-  })
-  (test "sse-on-drain-wrong-callback-type-fails"
-    {do
-    (= {result} (sse/on-drain "stream" "not-a-function"))
-    (test/assert (error? result) "sse/on-drain with string callback should fail")
-    true
-  })
-  (test "sse-set-timeout-no-args-fails"
-    {do
-    (= {result} (sse/set-timeout))
-    (test/assert (error? result) "sse/set-timeout with no args should fail")
-    true
-  })
-  (test "sse-set-timeout-one-arg-fails"
-    {do
-    (= {result} (sse/set-timeout "stream"))
-    (test/assert (error? result) "sse/set-timeout with one arg should fail")
-    true
-  })
-  (test "sse-set-timeout-wrong-stream-type-fails"
-    {do
-    (= {result} (sse/set-timeout "not-a-stream" 1000))
-    (test/assert (error? result) "sse/set-timeout with string stream should fail")
-    true
-  })
-  (test "sse-set-timeout-wrong-timeout-type-fails"
-    {do
-    (= {result} (sse/set-timeout "stream" "not-a-number"))
-    (test/assert (error? result) "sse/set-timeout with string timeout should fail")
-    true
-  })
-  (test "sse-cancel-no-args-fails"
-    {do
-    (= {result} (sse/cancel))
-    (test/assert (error? result) "sse/cancel with no args should fail")
-    true
-  })
-  (test "sse-cancel-wrong-type-fails"
-    {do
-    (= {result} (sse/cancel "not-a-stream"))
-    (test/assert (error? result) "sse/cancel with string should fail")
-    true
-  })
-  (test "sse-stream-id-no-args-fails"
-    {do
-    (= {result} (sse/stream-id))
-    (test/assert (error? result) "sse/stream-id with no args should fail")
-    true
-  })
-  (test "sse-stream-id-wrong-type-fails"
-    {do
-    (= {result} (sse/stream-id "not-a-stream"))
-    (test/assert (error? result) "sse/stream-id with string should fail")
-    true
-  })
-  (test "sse-cancel-by-id-no-args-fails"
-    {do
-    (= {result} (sse/cancel-by-id))
-    (test/assert (error? result) "sse/cancel-by-id with no args should fail")
-    true
-  })
-  (test "sse-cancel-by-id-wrong-type-fails"
-    {do
-    (= {result} (sse/cancel-by-id "not-a-number"))
-    (test/assert (error? result) "sse/cancel-by-id with string should fail")
-    true
-  })
-  (test "sse-cancel-by-id-nonexistent"
-    {do
-    (= {result} (sse/cancel-by-id 999999))
-    (test/assert (= result false) "sse/cancel-by-id with nonexistent ID should return false")
-    true
-  })
-  (test "sse-shutdown-all-no-args"
-    {do
-    (= {result} (sse/shutdown-all))
-    (test/assert (number? result) "sse/shutdown-all should return a number")
-    true
-  })
-  (test "sse-shutdown-all-with-timeout"
-    {do
-    (= {result} (sse/shutdown-all 0))
-    (test/assert (number? result) "sse/shutdown-all with timeout should return a number")
-    true
-  })
-  (test "sse-shutdown-all-too-many-args-fails"
-    {do
-    (= {result} (sse/shutdown-all 1000 2000))
-    (test/assert (error? result) "sse/shutdown-all with 2 args should fail")
-    true
-  })
-  (test "sse-shutdown-all-wrong-type-fails"
-    {do
-    (= {result} (sse/shutdown-all "not-a-number"))
-    (test/assert (error? result) "sse/shutdown-all with string should fail")
-    true
-  })
-  (test "sse-stream-count-no-args"
-    {do
-    (= {result} (sse/stream-count))
-    (test/assert (number? result) "sse/stream-count should return a number")
-    (test/assert (>= result 0) "sse/stream-count should return >= 0")
-    true
-  })
-  (test "sse-stream-count-with-args-fails"
-    {do
-    (= {result} (sse/stream-count "extra"))
-    (test/assert (error? result) "sse/stream-count with args should fail")
-    true
-  })
-  (test "stream-closed-no-args-fails"
-    {do
-    (= {result} (stream/closed))
-    (test/assert (error? result) "stream/closed with no args should fail")
-    true
-  })
-  (test "stream-closed-wrong-type-fails"
-    {do
-    (= {result} (stream/closed "not-a-stream"))
-    (test/assert (error? result) "stream/closed with string should fail")
-    true
-  })
-  (test "stream-closed-too-many-args-fails"
-    {do
-    (= {result} (stream/closed "a" "b"))
-    (test/assert (error? result) "stream/closed with 2 args should fail")
-    true
+(def {stream-closed-result} (atom 0))
+
+(def {stream-closed-test-handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (if (== path "/test-stream-closed")
+      {(do
+        (= {stream} (sse/open req))
+        (= {closed-future} (stream/closed stream))
+        (aio/then closed-future (\ {result} {
+          (if (== result (quote :closed))
+            {(atom/set! stream-closed-result 1)}
+            {(atom/set! stream-closed-result 2)})}))
+        (stream/write stream "data: test\n\n")
+        (stream/close stream)
+        :deferred)}
+      {{:status "404" :body "Not found"}})}))
+
+(def {stream-closed-server} (http2/server-listen aio 0 stream-closed-test-handler))
+(def {STREAM_CLOSED_PORT} (http2/server-port stream-closed-server))
+
+(test/run-async aio (list
+  (test-async "stream/closed future completes with :closed when stream closes" (\ {done} {
+    (http2/client-request aio "127.0.0.1" STREAM_CLOSED_PORT "/test-stream-closed" (\ {resp} {}))
+    (aio/schedule aio 200 (\ {} {
+      (= {result} (atom/get stream-closed-result))
+      (if (== result 1)
+        {(done true)}
+        {(do (print "Expected 1 (got :closed), got:" result) (done false))})}))
   }))
-  {:suite-name "SSE Builtins Error Cases"})
+  (test-async "sse-open-outside-handler-fails" (\ {done} {
+    (= {result} (sse/open))
+    (done (error? result))
+  }))
+  (test-async "sse-open-with-args-fails" (\ {done} {
+    (= {result} (sse/open "extra-arg"))
+    (done (error? result))
+  }))
+  (test-async "sse-send-no-args-fails" (\ {done} {
+    (= {result} (sse/send))
+    (done (error? result))
+  }))
+  (test-async "sse-send-one-arg-fails" (\ {done} {
+    (= {result} (sse/send "not-a-stream"))
+    (done (error? result))
+  }))
+  (test-async "sse-send-wrong-type-fails" (\ {done} {
+    (= {result} (sse/send "not-a-stream" "data"))
+    (done (error? result))
+  }))
+  (test-async "sse-send-too-many-args-fails" (\ {done} {
+    (= {result} (sse/send "a" "b" "c" "d"))
+    (done (error? result))
+  }))
+  (test-async "sse-close-no-args-fails" (\ {done} {
+    (= {result} (sse/close))
+    (done (error? result))
+  }))
+  (test-async "sse-close-wrong-type-fails" (\ {done} {
+    (= {result} (sse/close "not-a-stream"))
+    (done (error? result))
+  }))
+  (test-async "sse-writable-no-args-fails" (\ {done} {
+    (= {result} (sse/writable?))
+    (done (error? result))
+  }))
+  (test-async "sse-writable-wrong-type-fails" (\ {done} {
+    (= {result} (sse/writable? "not-a-stream"))
+    (done (error? result))
+  }))
+  (test-async "sse-on-drain-no-args-fails" (\ {done} {
+    (= {result} (sse/on-drain))
+    (done (error? result))
+  }))
+  (test-async "sse-on-drain-one-arg-fails" (\ {done} {
+    (= {result} (sse/on-drain "stream"))
+    (done (error? result))
+  }))
+  (test-async "sse-on-drain-wrong-stream-type-fails" (\ {done} {
+    (= {result} (sse/on-drain "not-a-stream" (\ {} {})))
+    (done (error? result))
+  }))
+  (test-async "sse-on-drain-wrong-callback-type-fails" (\ {done} {
+    (= {result} (sse/on-drain "stream" "not-a-function"))
+    (done (error? result))
+  }))
+  (test-async "sse-set-timeout-no-args-fails" (\ {done} {
+    (= {result} (sse/set-timeout))
+    (done (error? result))
+  }))
+  (test-async "sse-set-timeout-one-arg-fails" (\ {done} {
+    (= {result} (sse/set-timeout "stream"))
+    (done (error? result))
+  }))
+  (test-async "sse-set-timeout-wrong-stream-type-fails" (\ {done} {
+    (= {result} (sse/set-timeout "not-a-stream" 1000))
+    (done (error? result))
+  }))
+  (test-async "sse-set-timeout-wrong-timeout-type-fails" (\ {done} {
+    (= {result} (sse/set-timeout "stream" "not-a-number"))
+    (done (error? result))
+  }))
+  (test-async "sse-cancel-no-args-fails" (\ {done} {
+    (= {result} (sse/cancel))
+    (done (error? result))
+  }))
+  (test-async "sse-cancel-wrong-type-fails" (\ {done} {
+    (= {result} (sse/cancel "not-a-stream"))
+    (done (error? result))
+  }))
+  (test-async "sse-stream-id-no-args-fails" (\ {done} {
+    (= {result} (sse/stream-id))
+    (done (error? result))
+  }))
+  (test-async "sse-stream-id-wrong-type-fails" (\ {done} {
+    (= {result} (sse/stream-id "not-a-stream"))
+    (done (error? result))
+  }))
+  (test-async "sse-cancel-by-id-no-args-fails" (\ {done} {
+    (= {result} (sse/cancel-by-id))
+    (done (error? result))
+  }))
+  (test-async "sse-cancel-by-id-wrong-type-fails" (\ {done} {
+    (= {result} (sse/cancel-by-id "not-a-number"))
+    (done (error? result))
+  }))
+  (test-async "sse-cancel-by-id-nonexistent" (\ {done} {
+    (= {result} (sse/cancel-by-id 999999))
+    (done (= result false))
+  }))
+  (test-async "sse-shutdown-all-no-args" (\ {done} {
+    (= {result} (sse/shutdown-all))
+    (done (number? result))
+  }))
+  (test-async "sse-shutdown-all-with-timeout" (\ {done} {
+    (= {result} (sse/shutdown-all 0))
+    (done (number? result))
+  }))
+  (test-async "sse-shutdown-all-too-many-args-fails" (\ {done} {
+    (= {result} (sse/shutdown-all 1000 2000))
+    (done (error? result))
+  }))
+  (test-async "sse-shutdown-all-wrong-type-fails" (\ {done} {
+    (= {result} (sse/shutdown-all "not-a-number"))
+    (done (error? result))
+  }))
+  (test-async "sse-stream-count-no-args" (\ {done} {
+    (= {result} (sse/stream-count))
+    (done (and (number? result) (>= result 0)))
+  }))
+  (test-async "sse-stream-count-with-args-fails" (\ {done} {
+    (= {result} (sse/stream-count "extra"))
+    (done (error? result))
+  }))
+  (test-async "stream-closed-no-args-fails" (\ {done} {
+    (= {result} (stream/closed))
+    (done (error? result))
+  }))
+  (test-async "stream-closed-wrong-type-fails" (\ {done} {
+    (= {result} (stream/closed "not-a-stream"))
+    (done (error? result))
+  }))
+  (test-async "stream-closed-too-many-args-fails" (\ {done} {
+    (= {result} (stream/closed "a" "b"))
+    (done (error? result))
+  })))
+  {:suite-name "SSE Builtins Tests" :timeout 5000})

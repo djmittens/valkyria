@@ -70,7 +70,7 @@
 
 (def {main-tests} (list
   (test-async "/debug returns HTML dashboard" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -88,7 +88,7 @@
   }))
 
   (test-async "/debug/ returns HTML dashboard" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -106,7 +106,7 @@
   }))
 
   (test-async "/debug/metrics returns JSON with aio_metrics" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -124,7 +124,7 @@
   }))
 
   (test-async "/debug/metrics/state returns diagnostics JSON" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -142,7 +142,7 @@
   }))
 
   (test-async "/debug/metrics/state has metrics.aio structure" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -160,7 +160,7 @@
   }))
 
   (test-async "/debug/metrics/state has metrics.modular structure" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -178,7 +178,7 @@
   }))
 
   (test-async "/debug/metrics/state has metrics.vm structure" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -196,7 +196,7 @@
   }))
 
   (test-async "/debug/metrics/state has metrics.registry structure" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -214,7 +214,7 @@
   }))
 
   (test-async "/debug/metrics/state has memory structure" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -232,7 +232,7 @@
   }))
 
   (test-async "/debug/metrics/state returns Content-Type: application/json" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -249,7 +249,7 @@
   }))
 
   (test-async "/debug/metrics/state returns Cache-Control: no-cache" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -266,7 +266,7 @@
   }))
 
   (test-async "/metrics returns Content-Type: text/plain; version=0.0.4" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -283,7 +283,7 @@
   }))
 
   (test-async "/metrics returns Prometheus format" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -300,7 +300,7 @@
   }))
 
   (test-async "/metrics contains valk_gc_ metrics" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -319,7 +319,7 @@
   }))
 
   (test-async "/metrics contains http_ metrics" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -337,7 +337,7 @@
   }))
 
   (test-async "/metrics has valid Prometheus HELP lines" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -355,7 +355,7 @@
   }))
 
   (test-async "/metrics has valid Prometheus TYPE lines" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -373,7 +373,7 @@
   }))
 
   (test-async "/metrics TYPE lines have valid metric types" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -393,7 +393,7 @@
   }))
 
   (test-async "/metrics contains valk_eval_total metric" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -410,7 +410,7 @@
   }))
 
   (test-async "/metrics contains valk_loop_iterations_total metric" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -442,7 +442,7 @@
           {(test-handler req)})}))
     (= {test-server-respond} (http2/server-listen aio 0 test-sse-respond-handler))
     (= {test-port-respond} (http2/server-port test-server-respond))
-    (http2/client-request aio "127.0.0.1" test-port-respond "/test-sse-respond"
+    (aio/then (http2/client-request aio "127.0.0.1" test-port-respond "/test-sse-respond")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -481,7 +481,7 @@
           {(test-handler req)})}))
     (= {test-server} (http2/server-listen aio 0 test-sse-handler))
     (= {test-port} (http2/server-port test-server))
-    (http2/client-request aio "127.0.0.1" test-port "/test-sse-capture"
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/test-sse-capture")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -526,7 +526,7 @@
           {(test-handler req)})}))
     (= {test-server2} (http2/server-listen aio 0 test-sse-handler2))
     (= {test-port2} (http2/server-port test-server2))
-    (http2/client-request aio "127.0.0.1" test-port2 "/test-sse-capture2"
+    (aio/then (http2/client-request aio "127.0.0.1" test-port2 "/test-sse-capture2")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -571,7 +571,7 @@
           {(test-handler req)})}))
     (= {test-server3} (http2/server-listen aio 0 test-sse-handler3))
     (= {test-port3} (http2/server-port test-server3))
-    (http2/client-request aio "127.0.0.1" test-port3 "/test-sse-capture3"
+    (aio/then (http2/client-request aio "127.0.0.1" test-port3 "/test-sse-capture3")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -593,7 +593,7 @@
   }))
 
   (test-async "/debug/slab/buckets returns JSON" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/slab/buckets"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/slab/buckets")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -611,7 +611,7 @@
   }))
 
   (test-async "/unknown routes redirect to /debug/" (\ {done} {
-    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/unknown/route"
+    (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/unknown/route")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -655,14 +655,14 @@
           {(test-handler req)})}))
     (= {test-server-lifecycle} (http2/server-listen aio 0 test-sse-lifecycle-handler))
     (= {test-port-lifecycle} (http2/server-port test-server-lifecycle))
-    (http2/client-request aio "127.0.0.1" test-port-lifecycle "/test-sse-lifecycle"
+    (aio/then (http2/client-request aio "127.0.0.1" test-port-lifecycle "/test-sse-lifecycle")
       (\ {resp1} {
         (if (error? resp1)
           {(do (print "First connection error:" resp1) (done false))}
           {(= {body1} (http2/response-body resp1))
            (if (str-contains? body1 "event: diagnostics")
              {(aio/schedule aio 100 (\ {} {
-               (http2/client-request aio "127.0.0.1" test-port-lifecycle "/test-sse-lifecycle"
+               (aio/then (http2/client-request aio "127.0.0.1" test-port-lifecycle "/test-sse-lifecycle")
                  (\ {resp2} {
                    (if (error? resp2)
                      {(do (print "Second connection error:" resp2) (done false))}
@@ -707,7 +707,7 @@
           {(test-handler req)})}))
     (= {test-server-timer} (http2/server-listen aio 0 test-sse-timer-handler))
     (= {test-port-timer} (http2/server-port test-server-timer))
-    (http2/client-request aio "127.0.0.1" test-port-timer "/test-sse-timer-stop"
+    (aio/then (http2/client-request aio "127.0.0.1" test-port-timer "/test-sse-timer-stop")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Connection error:" resp) (done false))}
@@ -720,7 +720,7 @@
                {(do
                  (print "Timer continued after disconnect! final:" final-count "post:" post-count)
                  (done false)
-               )})}))})})
+               )})})})}))
       )
   }))
 
@@ -766,7 +766,7 @@
           {(test-handler req)})}))
     (= {bc-server-reset} (http2/server-listen aio 0 bc-reset-handler))
     (= {bc-port-reset} (http2/server-port bc-server-reset))
-    (http2/client-request aio "127.0.0.1" bc-port-reset "/bc-old-sub"
+    (aio/then (http2/client-request aio "127.0.0.1" bc-port-reset "/bc-old-sub")
       (\ {resp} {
         (= {new-session} (atom/get debug/session-id))
         (if (> new-session old-session)
@@ -796,7 +796,7 @@
           {(test-handler req)})}))
     (= {bc-server} (http2/server-listen aio 0 bc-multi-handler))
     (= {bc-port} (http2/server-port bc-server))
-    (http2/client-request aio "127.0.0.1" bc-port "/bc-multi"
+    (aio/then (http2/client-request aio "127.0.0.1" bc-port "/bc-multi")
       (\ {resp1} {
         (atom/set! connections-complete (+ (atom/get connections-complete) 1))
         (if (not (error? resp1))
@@ -812,7 +812,7 @@
                   (print "conn1:" (atom/get conn1-received) "conn2:" (atom/get conn2-received))
                   (done false))})}
           nil)}))
-    (http2/client-request aio "127.0.0.1" bc-port "/bc-multi"
+    (aio/then (http2/client-request aio "127.0.0.1" bc-port "/bc-multi")
       (\ {resp2} {
         (atom/set! connections-complete (+ (atom/get connections-complete) 1))
         (if (not (error? resp2))
@@ -848,7 +848,7 @@
           {(test-handler req)})}))
     (= {bc-server2} (http2/server-listen aio 0 bc-event-handler))
     (= {bc-port2} (http2/server-port bc-server2))
-    (http2/client-request aio "127.0.0.1" bc-port2 "/bc-event"
+    (aio/then (http2/client-request aio "127.0.0.1" bc-port2 "/bc-event")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -876,7 +876,7 @@
           {(test-handler req)})}))
     (= {bc-server3} (http2/server-listen aio 0 bc-count-handler))
     (= {bc-port3} (http2/server-port bc-server3))
-    (http2/client-request aio "127.0.0.1" bc-port3 "/bc-count"
+    (aio/then (http2/client-request aio "127.0.0.1" bc-port3 "/bc-count")
       (\ {resp} {
         (= {before} (atom/get count-before))
         (= {after} (atom/get count-after))
@@ -902,7 +902,7 @@
           {(test-handler req)})}))
     (= {bc-server4} (http2/server-listen aio 0 bc-delta-handler))
     (= {bc-port4} (http2/server-port bc-server4))
-    (http2/client-request aio "127.0.0.1" bc-port4 "/bc-delta"
+    (aio/then (http2/client-request aio "127.0.0.1" bc-port4 "/bc-delta")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}
@@ -930,7 +930,7 @@
           {(test-handler req)})}))
     (= {bc-server-new} (http2/server-listen aio 0 bc-new-handler))
     (= {bc-port-new} (http2/server-port bc-server-new))
-    (http2/client-request aio "127.0.0.1" bc-port-new "/bc-new-sub"
+    (aio/then (http2/client-request aio "127.0.0.1" bc-port-new "/bc-new-sub")
       (\ {resp} {
         (if (error? resp)
           {(do (print "Error:" resp) (done false))}

@@ -40,14 +40,15 @@
 
 (fun {send-request} {
   (def {requests-started} (+ requests-started 1))
-  (http2/client-request aio "127.0.0.1" test-port "/" (\ {resp} {
-    (if (error? resp)
-      {(def {errors} (+ errors 1))}
-      {(def {requests-completed} (+ requests-completed 1))})
-    (if (>= (+ requests-completed errors) 14)
-      {(finish-test)}
-      {true})
-  }))
+  (aio/then (http2/client-request aio "127.0.0.1" test-port "/")
+    (\ {resp} {
+      (if (error? resp)
+        {(def {errors} (+ errors 1))}
+        {(def {requests-completed} (+ requests-completed 1))})
+      (if (>= (+ requests-completed errors) 14)
+        {(finish-test)}
+        {true})
+    }))
 })
 
 (test/run-async aio (list
