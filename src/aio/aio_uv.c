@@ -32,7 +32,6 @@ void __event_loop(void *arg) {
     VALK_DEBUG("Event loop thread onboarded via config callback");
   } else {
     valk_mem_init_malloc();
-    valk_gc_thread_register();
 
     valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(0);
     if (!gc_heap) { // LCOV_EXCL_BR_LINE
@@ -72,6 +71,12 @@ void __event_loop(void *arg) {
 
   // Signal that event loop is ready (all slabs initialized)
   uv_sem_post(&sys->startup_sem);
+
+  // Register with GC right before entering uv_run - this ensures the thread
+  // is only counted for GC when it can respond to async signals
+  if (!sys->config.thread_onboard_fn) {
+    valk_gc_thread_register();
+  }
 
   sys->ops->loop->run(sys, VALK_IO_RUN_DEFAULT);
 
