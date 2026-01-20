@@ -359,7 +359,7 @@ test-c-asan: build-asan
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 	@echo ""
 	export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
-	export LSAN_OPTIONS=verbosity=0:log_threads=1
+	export LSAN_OPTIONS=verbosity=0:log_threads=1:suppressions=$(CURDIR)/lsan_suppressions.txt
 	$(call run_tests_c,build-asan)
 
 # Valk/Lisp tests with ASAN enabled

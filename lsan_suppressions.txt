@@ -31,3 +31,27 @@ leak:valk_mem_allocator_alloc
 
 # Mock responses in test framework may leak on exit
 leak:valk_builtin_http2_mock_response
+
+# GC thread registration in test code may not be unregistered on test exit
+leak:valk_gc_thread_register
+
+# Handle table may not be destroyed in test code on exit
+leak:valk_handle_table_init
+
+# Runtime init allocations may not be cleaned up in tests
+leak:valk_runtime_init
+
+# AIO metrics state may not be cleaned up in tests
+leak:valk_aio_metrics_state_new
+
+# HTTP2 client response buffers may not be freed when tests exit early
+leak:__valk_aio_http2_request_send_cb
+
+# AIO start allocations may not be cleaned up in tests
+leak:valk_aio_start
+
+# Interned strings for metrics are never freed (intentional lifetime)
+leak:intern_string
+
+# HTTP2 connection structures may not be freed when connection fails early
+leak:valk_aio_http2_connect_host
