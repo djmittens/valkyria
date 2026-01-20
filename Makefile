@@ -494,3 +494,24 @@ test-stress: build
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 	@echo ""
 	$(call run_tests_stress,build)
+
+# Stress tests with TSAN - redirects output to file per AGENTS.md
+.ONESHELL:
+.PHONY: test-stress-tsan
+test-stress-tsan: build-tsan
+	set -e
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running stress tests with ThreadSanitizer (TSAN)            ║"
+	@echo "║  Output: build/tsan-stress.log                               ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	export TSAN_OPTIONS="log_path=build/tsan-stress.log:halt_on_error=0:second_deadlock_stack=1"
+	$(call run_tests_stress,build-tsan) 2>&1 | tee build/tsan-stress-stdout.log
+	@echo ""
+	@echo "=== TSAN Summary ==="
+	@echo "Races found: $$(grep -c 'WARNING: ThreadSanitizer' build/tsan-stress.log* 2>/dev/null || echo 0)"
+	@if [ "$$(grep -c 'WARNING: ThreadSanitizer' build/tsan-stress.log* 2>/dev/null || echo 0)" -gt 0 ]; then \
+		echo "Race locations:"; \
+		grep -A2 "WARNING: ThreadSanitizer" build/tsan-stress.log* 2>/dev/null | grep "#0" | sort -u | head -5; \
+	fi
