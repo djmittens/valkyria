@@ -75,8 +75,7 @@
 ;            path - request path (default "/")
 (fun {http2/fetch-async aio host port path} {
   (\ {k} {
-    ; http2/client-request: (aio host port path callback)
-    (http2/client-request aio host port path k)
+    (aio/then (http2/client-request aio host port path) k)
   })
 })
 
