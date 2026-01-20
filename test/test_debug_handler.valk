@@ -1,16 +1,24 @@
 ; Debug Handler Route Matching Tests
 ; Tests that aio/debug-handle-request routes requests correctly
 
+(print "DIAG: before prelude")
 (load "src/prelude.valk")
+(print "DIAG: after prelude")
 (load "src/modules/test.valk")
+(print "DIAG: after test.valk")
 (load "src/modules/aio/debug.valk")
+(print "DIAG: after debug.valk")
 
 (def {aio} (aio/start))
+(print "DIAG: after aio/start")
 
 (def {test-handler} (aio/debug-handler aio))
+(print "DIAG: after debug-handler")
 
 (def {server} (http2/server-listen aio 0 test-handler))
+(print "DIAG: after server-listen")
 (def {TEST_PORT} (http2/server-port server))
+(print "DIAG: after TEST_PORT")
 
 (fun {run-tests-sequentially aio tests on-all-done}
   {(= {total} (len tests))
@@ -953,11 +961,14 @@
 (def {*main-pending*} (atom 0))
 
 (fun {run-main-tests-then-broadcaster aio main-tests broadcaster-tests} {
+  (print "DIAG: inside run-main-tests-then-broadcaster")
   (= {main-total} (len main-tests))
+  (print "DIAG: main-total" main-total)
   (atom/set! *main-pending* main-total)
   (= {main-timeout-ms} 5000)
 
   (printf "🧪 [%ld/%ld] Debug Handler Route Matching (main tests)\n" main-total main-total)
+  (print "DIAG: after printf header")
 
   (fun {print-final-results-and-exit} {
     (= {total-passed} (+ (atom/get *main-passed*) (atom/get *bc-passed*)))
@@ -995,6 +1006,7 @@
     (= {test-body} (eval (head (tail test))))
     (= {start-time} (time-us {}))
     (= {timed-out} (atom 0))
+    (printf "START: %s\n" test-name)
 
     (= {timer-handle} (aio/schedule aio main-timeout-ms (\ {} {
       (= {prev} (atom/get timed-out))
@@ -1008,6 +1020,7 @@
         nil)})))
 
     (= {done-fn} (\ {passed} {
+      (printf "DONE: %s\n" test-name)
       (= {prev} (atom/get timed-out))
       (atom/set! timed-out 2)
       (if (!= prev 0)
@@ -1029,14 +1042,21 @@
     (aio/schedule aio 0 (\ {} (test-body done-fn)))
   })
 
+  (print "DIAG: about to map start-one-main-test")
   (map start-one-main-test main-tests)
+  (print "DIAG: after map")
 
   (aio/schedule aio 60000 (\ {} {
     (printf "\nSUITE TIMEOUT: tests still pending\n")
     (aio/stop aio)
     (shutdown 1)}))
+  (print "DIAG: after scheduling suite timeout")
 
+  (print "DIAG: about to call aio/run")
   (aio/run aio)
+  (print "DIAG: after aio/run returned")
 })
 
+(print "DIAG: calling run-main-tests-then-broadcaster")
 (run-main-tests-then-broadcaster aio main-tests broadcaster-tests)
+(print "DIAG: returned from run-main-tests-then-broadcaster")
