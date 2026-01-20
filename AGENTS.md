@@ -106,6 +106,46 @@ When refactoring, eliminate these patterns:
 Don't add logging to debug transient issues - you can never log enough, and logging changes timing.
 Instead, capture full execution state on failure via core dumps or rr recordings.
 
+### When a Test Fails (MANDATORY WORKFLOW)
+
+**Step 1: If it's a crash (SIGSEGV, SIGABRT), check core dumps first:**
+```bash
+make cores                         # List recent crashes
+make debug-core                    # Debug most recent crash in GDB
+```
+
+**Step 2: If it's a flaky/intermittent failure, capture with rr:**
+```bash
+# Run until failure (for flaky tests)
+make test-rr-until-fail TEST=test_networking MAX=100
+
+# Replay the recording
+rr replay
+```
+
+**Step 3: In rr replay, find root cause:**
+```gdb
+reverse-continue     # Run backwards to previous breakpoint/watchpoint
+reverse-step         # Step backwards
+watch -l variable    # Hardware watchpoint - stops when value changes
+                     # Then reverse-continue to find who changed it
+when                 # Show current event number
+run 12345            # Jump to specific event
+```
+
+### Known Flaky Tests (test/flaky.txt)
+Tests listed in `test/flaky.txt` are known to be flaky. Run them under rr:
+```bash
+make test-flaky      # Run all flaky tests under rr, recordings saved on failure
+```
+
+When adding a new flaky test to the list, or when a flaky test fails:
+1. Add/keep the test in `test/flaky.txt`
+2. Run `make test-flaky` to get a recording
+3. Debug with `rr replay`
+4. Fix the root cause
+5. Remove from `test/flaky.txt` once stable
+
 ### Core Dumps (for crashes/SIGSEGV)
 Core dumps are already captured automatically via systemd-coredump:
 ```bash
@@ -134,16 +174,6 @@ make test-rr-until-fail TEST=test_networking MAX=100
 
 # Replay the recording
 rr replay
-```
-
-Essential GDB commands in rr replay:
-```gdb
-reverse-continue     # Run backwards to previous breakpoint/watchpoint
-reverse-step         # Step backwards
-watch -l variable    # Hardware watchpoint - stops when value changes
-                     # Then reverse-continue to find who changed it
-when                 # Show current event number
-run 12345            # Jump to specific event
 ```
 
 ### ASAN/TSAN with Core Dumps

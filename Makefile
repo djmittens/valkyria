@@ -623,15 +623,48 @@ test-rr-until-fail: test-rr-check build
 	done
 	echo "No failure in $$max iterations"
 
+# Run all known-flaky tests under rr (from test/flaky.txt)
+# These are always recorded so failures can be debugged
+.ONESHELL:
+.PHONY: test-flaky
+test-flaky: test-rr-check build
+	set -e
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running flaky tests under rr (from test/flaky.txt)         ║"
+	@echo "║  Recordings saved to ~/.local/share/rr/                     ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	export VALK_TEST_NO_FORK=1
+	failed=""
+	while IFS= read -r test || [ -n "$$test" ]; do \
+		case "$$test" in \#*|"") continue;; esac; \
+		echo "=== Recording: $$test ==="; \
+		if echo "$$test" | grep -q "\.valk$$"; then \
+			rr record build/valk "$$test" || { echo "FAILED: $$test"; failed="$$failed $$test"; }; \
+		else \
+			rr record build/"$$test" || { echo "FAILED: $$test"; failed="$$failed $$test"; }; \
+		fi; \
+	done < test/flaky.txt
+	if [ -n "$$failed" ]; then \
+		echo ""; \
+		echo "╔══════════════════════════════════════════════════════════════╗"; \
+		echo "║  FAILURES RECORDED - debug with: rr replay                   ║"; \
+		echo "╚══════════════════════════════════════════════════════════════╝"; \
+		echo "Failed tests:$$failed"; \
+		exit 1; \
+	fi
+	@echo "All flaky tests passed"
+
 else
 # macOS stubs - explain alternatives
 .PHONY: test-rr-check
 test-rr-check:
 	@echo "rr is Linux-only. On macOS, use these alternatives:"
 	@echo ""
-	@echo "  For crashes:     lldb -- build/$(TEST)"
-	@echo "  For profiling:   xcrun xctrace record --template 'Time Profiler' --launch -- build/$(TEST)"
-	@echo "  For race detection: make test-c-tsan TEST=$(TEST)"
+	@echo "  For crashes:     lldb -- build/\$$(TEST)"
+	@echo "  For profiling:   xcrun xctrace record --template 'Time Profiler' --launch -- build/\$$(TEST)"
+	@echo "  For race detection: make test-c-tsan TEST=\$$(TEST)"
 	@echo ""
 	@exit 1
 
@@ -639,9 +672,18 @@ test-rr-check:
 test-rr-until-fail:
 	@echo "rr is Linux-only. On macOS, run tests in a loop with lldb:"
 	@echo ""
-	@echo "  for i in {1..100}; do build/$(TEST) || { echo \"Failed on \$$i\"; break; }; done"
+	@echo "  for i in {1..100}; do build/\$$(TEST) || { echo \"Failed on \$$i\"; break; }; done"
 	@echo ""
-	@echo "Then debug the failure with: lldb -- build/$(TEST)"
+	@echo "Then debug the failure with: lldb -- build/\$$(TEST)"
+	@exit 1
+
+.PHONY: test-flaky
+test-flaky:
+	@echo "rr is Linux-only. On macOS, run flaky tests with TSAN instead:"
+	@echo ""
+	@echo "  make test-c-tsan"
+	@echo "  make test-valk-tsan"
+	@echo ""
 	@exit 1
 endif
 
