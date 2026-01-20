@@ -298,10 +298,18 @@ static void valk_gc_participate_in_parallel_gc(void);
 // LCOV_EXCL_START - safe point slow path requires STW coordination from parallel GC
 void valk_gc_safe_point_slow(void) {
   valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
+  fprintf(stderr, "[GC DEBUG] safe_point_slow: phase=%d, thread_id=%llu\n",
+          phase, (unsigned long long)valk_thread_ctx.gc_thread_id);
+  fflush(stderr);
 
   if (phase == VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
+    fprintf(stderr, "[GC DEBUG] CHECKPOINT_REQUESTED: entering\n");
+    fflush(stderr);
     u64 paused = atomic_fetch_add(&valk_gc_coord.threads_paused, 1) + 1;
     u64 registered = atomic_load(&valk_gc_coord.threads_registered);
+    fprintf(stderr, "[GC DEBUG] CHECKPOINT: paused=%llu, registered=%llu\n",
+            (unsigned long long)paused, (unsigned long long)registered);
+    fflush(stderr);
 
     if (paused == registered) {
       pthread_mutex_lock(&valk_gc_coord.lock);
@@ -309,15 +317,21 @@ void valk_gc_safe_point_slow(void) {
       pthread_mutex_unlock(&valk_gc_coord.lock);
     }
 
+    fprintf(stderr, "[GC DEBUG] CHECKPOINT: waiting for gc_done\n");
+    fflush(stderr);
     pthread_mutex_lock(&valk_gc_coord.lock);
     while (atomic_load(&valk_gc_coord.phase) == VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
       pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
     }
     pthread_mutex_unlock(&valk_gc_coord.lock);
+    fprintf(stderr, "[GC DEBUG] CHECKPOINT: done\n");
+    fflush(stderr);
     return;
   }
 
   if (phase == VALK_GC_PHASE_STW_REQUESTED) {
+    fprintf(stderr, "[GC DEBUG] STW_REQUESTED: about to increment threads_paused\n");
+    fflush(stderr);
     if (valk_thread_ctx.scratch && valk_thread_ctx.scratch->offset > 0 &&
         valk_thread_ctx.heap && valk_thread_ctx.root_env) {
       valk_checkpoint(valk_thread_ctx.scratch,
@@ -327,6 +341,9 @@ void valk_gc_safe_point_slow(void) {
 
     u64 paused = atomic_fetch_add(&valk_gc_coord.threads_paused, 1) + 1;
     u64 registered = atomic_load(&valk_gc_coord.threads_registered);
+    fprintf(stderr, "[GC DEBUG] STW: paused=%llu, registered=%llu\n",
+            (unsigned long long)paused, (unsigned long long)registered);
+    fflush(stderr);
 
     if (paused == registered) {
       pthread_mutex_lock(&valk_gc_coord.lock);
@@ -334,7 +351,11 @@ void valk_gc_safe_point_slow(void) {
       pthread_mutex_unlock(&valk_gc_coord.lock);
     }
 
+    fprintf(stderr, "[GC DEBUG] calling participate_in_parallel_gc\n");
+    fflush(stderr);
     valk_gc_participate_in_parallel_gc();
+    fprintf(stderr, "[GC DEBUG] returned from participate_in_parallel_gc\n");
+    fflush(stderr);
   }
 }
 // LCOV_EXCL_STOP
@@ -3772,11 +3793,18 @@ void valk_gc_heap2_parallel_sweep(valk_gc_heap2_t *heap) {
 bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
   if (!heap) return false;
   
+  fprintf(stderr, "[GC DEBUG] request_stw: entering\n");
+  fflush(stderr);
+  
   valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
   if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected,
                                        VALK_GC_PHASE_STW_REQUESTED)) {
+    fprintf(stderr, "[GC DEBUG] request_stw: CAS failed, phase was %d\n", expected);
+    fflush(stderr);
     return false;
   }
+  fprintf(stderr, "[GC DEBUG] request_stw: CAS succeeded, phase now STW_REQUESTED\n");
+  fflush(stderr);
   
   u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
   if (num_threads == 0) {
@@ -3792,11 +3820,17 @@ bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
   
   atomic_store(&__gc_heap2_current, heap);
   
+  fprintf(stderr, "[GC DEBUG] request_stw: waking AIO threads\n");
+  fflush(stderr);
   valk_aio_wake_all_for_gc();
   
-  atomic_fetch_add(&valk_gc_coord.threads_paused, 1);
+  u64 my_paused = atomic_fetch_add(&valk_gc_coord.threads_paused, 1) + 1;
+  fprintf(stderr, "[GC DEBUG] request_stw: threads_paused now %llu\n", (unsigned long long)my_paused);
+  fflush(stderr);
   
   if (num_threads > 1) {
+    fprintf(stderr, "[GC DEBUG] request_stw: waiting for all threads\n");
+    fflush(stderr);
     pthread_mutex_lock(&valk_gc_coord.lock);
     while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
       struct timespec ts;
@@ -3806,9 +3840,15 @@ bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
         ts.tv_sec++;
         ts.tv_nsec -= 1000000000;
       }
+      fprintf(stderr, "[GC DEBUG] request_stw: threads_paused=%llu/%llu, waiting...\n",
+              (unsigned long long)atomic_load(&valk_gc_coord.threads_paused),
+              (unsigned long long)num_threads);
+      fflush(stderr);
       pthread_cond_timedwait(&valk_gc_coord.all_paused, &valk_gc_coord.lock, &ts);
     }
     pthread_mutex_unlock(&valk_gc_coord.lock);
+    fprintf(stderr, "[GC DEBUG] request_stw: all threads paused!\n");
+    fflush(stderr);
   }
   
   return true;
@@ -3827,6 +3867,10 @@ sz valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap) {
     return valk_gc_heap2_collect(heap);
   }
   
+  fprintf(stderr, "[GC DEBUG] parallel_collect: entering with %llu threads\n",
+          (unsigned long long)num_threads);
+  fflush(stderr);
+  
   u64 start_ns = uv_hrtime();
   
   atomic_store(&heap->gc_in_progress, true);
@@ -3837,40 +3881,68 @@ sz valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap) {
   atomic_store(&__gc_heap2_idle_count, 0);
   atomic_store(&__gc_heap2_terminated, false);
   
+  fprintf(stderr, "[GC DEBUG] parallel_collect: hitting BARRIER 1\n");
+  fflush(stderr);
   // BARRIER 1: Sync before mark phase
   // All threads (initiator + workers) must hit this barrier before marking starts
   // Workers enter via valk_gc_participate_in_parallel_gc()
   valk_barrier_wait(&valk_gc_coord.barrier);
+  fprintf(stderr, "[GC DEBUG] parallel_collect: past BARRIER 1\n");
+  fflush(stderr);
 
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_MARKING);
+  fprintf(stderr, "[GC DEBUG] parallel_collect: starting mark\n");
+  fflush(stderr);
   valk_gc_heap2_parallel_mark(heap);
+  fprintf(stderr, "[GC DEBUG] parallel_collect: mark done, hitting BARRIER 2\n");
+  fflush(stderr);
   
   // BARRIER 2: Sync after mark phase
   // Ensures all marking is complete before sweep begins
   valk_barrier_wait(&valk_gc_coord.barrier);
+  fprintf(stderr, "[GC DEBUG] parallel_collect: past BARRIER 2\n");
+  fflush(stderr);
   
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_SWEEPING);
+  fprintf(stderr, "[GC DEBUG] parallel_collect: starting sweep\n");
+  fflush(stderr);
   valk_gc_heap2_parallel_sweep(heap);
+  fprintf(stderr, "[GC DEBUG] parallel_collect: sweep done, hitting BARRIER 3\n");
+  fflush(stderr);
   
   // BARRIER 3: Sync after sweep phase
   // Ensures all sweeping is complete before page reclamation
   valk_barrier_wait(&valk_gc_coord.barrier);
+  fprintf(stderr, "[GC DEBUG] parallel_collect: past BARRIER 3\n");
+  fflush(stderr);
   
   if (valk_thread_ctx.gc_thread_id == 0) {
+    fprintf(stderr, "[GC DEBUG] parallel_collect: thread 0 doing reclaim\n");
+    fflush(stderr);
     valk_gc_rebuild_partial_lists(heap);
     valk_gc_reclaim_empty_pages(heap);
+    fprintf(stderr, "[GC DEBUG] parallel_collect: reclaim done\n");
+    fflush(stderr);
   }
   
+  fprintf(stderr, "[GC DEBUG] parallel_collect: hitting BARRIER 4\n");
+  fflush(stderr);
   // BARRIER 4: Sync after reclamation
   // Ensures thread 0's cleanup is complete before threads resume
   valk_barrier_wait(&valk_gc_coord.barrier);
+  fprintf(stderr, "[GC DEBUG] parallel_collect: past BARRIER 4\n");
+  fflush(stderr);
   
   atomic_store(&valk_gc_coord.threads_paused, 0);
   
+  fprintf(stderr, "[GC DEBUG] parallel_collect: broadcasting gc_done\n");
+  fflush(stderr);
   pthread_mutex_lock(&valk_gc_coord.lock);
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
   pthread_cond_broadcast(&valk_gc_coord.gc_done);
   pthread_mutex_unlock(&valk_gc_coord.lock);
+  fprintf(stderr, "[GC DEBUG] parallel_collect: done!\n");
+  fflush(stderr);
   
   u64 bytes_after = valk_gc_heap2_used_bytes(heap);
   u64 reclaimed = 0;
@@ -3908,7 +3980,11 @@ sz valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap) {
 
 static void valk_gc_participate_in_parallel_gc(void) {
   valk_gc_heap2_t *heap = atomic_load(&__gc_heap2_current);
+  fprintf(stderr, "[GC DEBUG] participate: heap=%p\n", (void*)heap);
+  fflush(stderr);
   if (!heap) {
+    fprintf(stderr, "[GC DEBUG] participate: no heap, waiting for gc_done\n");
+    fflush(stderr);
     pthread_mutex_lock(&valk_gc_coord.lock);
     while (atomic_load(&valk_gc_coord.phase) != VALK_GC_PHASE_IDLE) {
       pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
@@ -3917,28 +3993,54 @@ static void valk_gc_participate_in_parallel_gc(void) {
     return;
   }
   
+  fprintf(stderr, "[GC DEBUG] participate: BARRIER 1\n");
+  fflush(stderr);
   // BARRIER 1: Sync before mark phase (matches parallel_collect)
   valk_barrier_wait(&valk_gc_coord.barrier);
+  fprintf(stderr, "[GC DEBUG] participate: past BARRIER 1, marking\n");
+  fflush(stderr);
   
   valk_gc_heap2_parallel_mark(heap);
   
+  fprintf(stderr, "[GC DEBUG] participate: BARRIER 2\n");
+  fflush(stderr);
   // BARRIER 2: Sync after mark phase (matches parallel_collect)
   valk_barrier_wait(&valk_gc_coord.barrier);
+  fprintf(stderr, "[GC DEBUG] participate: past BARRIER 2, sweeping\n");
+  fflush(stderr);
   
   valk_gc_heap2_parallel_sweep(heap);
   
+  fprintf(stderr, "[GC DEBUG] participate: BARRIER 3\n");
+  fflush(stderr);
   // BARRIER 3: Sync after sweep phase (matches parallel_collect)
   valk_barrier_wait(&valk_gc_coord.barrier);
+  fprintf(stderr, "[GC DEBUG] participate: past BARRIER 3\n");
+  fflush(stderr);
   
+  fprintf(stderr, "[GC DEBUG] participate: BARRIER 4\n");
+  fflush(stderr);
   // BARRIER 4: Sync after reclamation (matches parallel_collect)
   // Workers just wait here while thread 0 does cleanup
   valk_barrier_wait(&valk_gc_coord.barrier);
+  fprintf(stderr, "[GC DEBUG] participate: past BARRIER 4, waiting for gc_done\n");
+  fflush(stderr);
   
   pthread_mutex_lock(&valk_gc_coord.lock);
-  while (atomic_load(&valk_gc_coord.phase) != VALK_GC_PHASE_IDLE) {
+  valk_gc_phase_e current = atomic_load(&valk_gc_coord.phase);
+  fprintf(stderr, "[GC DEBUG] participate: checking phase=%d (IDLE=%d)\n", current, VALK_GC_PHASE_IDLE);
+  fflush(stderr);
+  while (current != VALK_GC_PHASE_IDLE) {
+    fprintf(stderr, "[GC DEBUG] participate: waiting on gc_done\n");
+    fflush(stderr);
     pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
+    current = atomic_load(&valk_gc_coord.phase);
+    fprintf(stderr, "[GC DEBUG] participate: woke up, phase=%d\n", current);
+    fflush(stderr);
   }
   pthread_mutex_unlock(&valk_gc_coord.lock);
+  fprintf(stderr, "[GC DEBUG] participate: done\n");
+  fflush(stderr);
 }
 // LCOV_EXCL_STOP
 

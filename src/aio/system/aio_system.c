@@ -51,19 +51,7 @@ void valk_aio_wake_all_for_gc(void) {
 static void __gc_wakeup_cb(uv_async_t *handle) {
   valk_aio_system_t *sys = (valk_aio_system_t *)handle->data;
   if (!sys) return;
-  
-  valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
-  if (phase != VALK_GC_PHASE_STW_REQUESTED && phase != VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
-    return;
-  }
-  
-  if (atomic_exchange(&sys->gc_acknowledged, true)) {
-    return;
-  }
-  
   valk_gc_safe_point_slow();
-  
-  atomic_store(&sys->gc_acknowledged, false);
 }
 // LCOV_EXCL_STOP
 
@@ -285,7 +273,6 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   uv_async_init(sys->eventloop, &sys->stopperHandle->uv.task, __aio_uv_stop);
   valk_dll_insert_after(&sys->liveHandles, sys->stopperHandle);
 
-  atomic_store(&sys->gc_acknowledged, false);
   uv_async_init(sys->eventloop, &sys->gc_wakeup, __gc_wakeup_cb);
   sys->gc_wakeup.data = sys;
   uv_unref((uv_handle_t *)&sys->gc_wakeup);

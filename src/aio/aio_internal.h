@@ -334,7 +334,6 @@ struct valk_aio_system {
   valk_aio_task_queue_t task_queue;
 
   uv_async_t gc_wakeup;
-  _Atomic bool gc_acknowledged;
 
   valk_aio_metrics_state_t *metrics_state;
   valk_owner_registry_t owner_registry;
