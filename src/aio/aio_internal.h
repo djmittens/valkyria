@@ -383,6 +383,7 @@ typedef struct {
   valk_lval_t *callback;
   valk_handle_t callback_handle;
   u64 schedule_id;
+  valk_async_handle_t *async_handle;
 } valk_schedule_timer_t;
 
 typedef struct valk_interval_timer {

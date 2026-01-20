@@ -8,23 +8,26 @@ endif
 
 JOBS := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
-# Time-travel debugging support
-# Linux: rr record (set RR=1 or RR=chaos)
-# macOS: no rr, but we document lldb/Instruments alternatives
-# Usage: RR=1 make test-c TEST=test_networking
-#        RR=chaos make test-valk TEST=test/test_http_integration.valk
-ifdef RR
-  ifeq ($(UNAME), Darwin)
-    $(error rr is Linux-only. On macOS use: lldb -- build/$(TEST) or Instruments)
-  endif
-  ifeq ($(RR),chaos)
-    RR_PREFIX := rr record --chaos
+# Time-travel debugging with rr (Linux only)
+# - $(RR_FLAKY) prefix: always record known-flaky tests
+# - RR=1 make test-c TEST=foo: record a specific test
+# - RR=chaos make test-c TEST=foo: record with chaos mode
+#
+# macOS has no rr equivalent. Debug flaky tests on Linux.
+ifeq ($(UNAME), Linux)
+  RR_FLAKY := rr record
+  ifdef RR
+    RR_PREFIX := rr record$(if $(filter chaos,$(RR)), --chaos)
+    export VALK_TEST_NO_FORK := 1
   else
-    RR_PREFIX := rr record
+    RR_PREFIX :=
   endif
-  export VALK_TEST_NO_FORK := 1
 else
+  RR_FLAKY :=
   RR_PREFIX :=
+  ifdef RR
+    $(error rr is Linux-only. Debug flaky tests on Linux.)
+  endif
 endif
 
 # SSL Certificate Generation
@@ -175,7 +178,7 @@ define run_tests_c
 	$(RR_PREFIX) $(1)/test_std
 	$(1)/test_regression
 	$(1)/test_memory
-	$(1)/test_networking
+	$(RR_FLAKY) $(1)/test_networking
 	$(1)/test_large_response
 	$(1)/test_per_stream_arena
 	$(1)/test_debug
@@ -194,7 +197,7 @@ define run_tests_c
 	if [ -f $(1)/test_sse_core ]; then $(1)/test_sse_core; fi
 	$(1)/test_aio_backpressure
 	$(1)/test_aio_uv_coverage
-	$(1)/test_aio_integration
+	$(RR_FLAKY) $(1)/test_aio_integration
 	$(1)/test_aio_combinators
 	$(1)/test_aio_load_shedding
 	if [ -f $(1)/test_aio_sse_integration ]; then $(1)/test_aio_sse_integration; fi
@@ -324,9 +327,13 @@ endef
 test: test-c test-valk
 
 # C tests (no ASAN, fast)
+# On Linux, flaky tests run under rr (requires VALK_TEST_NO_FORK=1)
 .ONESHELL:
 .PHONY: test-c
 test-c: export VALK_TEST_TIMEOUT_SECONDS=5
+ifeq ($(UNAME), Linux)
+test-c: export VALK_TEST_NO_FORK=1
+endif
 test-c: build
 	set -e
 	$(call run_tests_c,build)
@@ -624,34 +631,6 @@ test-rr-until-fail: test-rr-check build
 	done
 	echo "No failure in $$max iterations (all recordings cleaned up)"
 
-# Known flaky tests - run under rr to capture failures
-FLAKY_C_TESTS := test_networking test_aio_integration
-FLAKY_VALK_TESTS := test/test_http_integration.valk test/test_concurrent_requests.valk
-
-# Run flaky tests under rr (Linux only)
-# Uses existing RR_PREFIX mechanism, cleans up recordings on success
-.ONESHELL:
-.PHONY: test-flaky
-test-flaky: test-rr-check build
-	set -e
-	export VALK_TEST_NO_FORK=1
-	failed=""
-	for test in $(FLAKY_C_TESTS); do \
-		echo "=== $$test ==="; \
-		if rr record build/$$test; then rr rm -f latest-trace 2>/dev/null || true; \
-		else failed="$$failed $$test"; fi; \
-	done
-	for test in $(FLAKY_VALK_TESTS); do \
-		echo "=== $$test ==="; \
-		if rr record build/valk $$test; then rr rm -f latest-trace 2>/dev/null || true; \
-		else failed="$$failed $$test"; fi; \
-	done
-	if [ -n "$$failed" ]; then \
-		echo "FAILED (recording kept):$$failed"; \
-		echo "Debug with: rr replay"; \
-		exit 1; \
-	fi
-
 else
 # macOS stubs - explain alternatives
 .PHONY: test-rr-check
@@ -671,15 +650,6 @@ test-rr-until-fail:
 	@echo "  for i in {1..100}; do build/\$$(TEST) || { echo \"Failed on \$$i\"; break; }; done"
 	@echo ""
 	@echo "Then debug the failure with: lldb -- build/\$$(TEST)"
-	@exit 1
-
-.PHONY: test-flaky
-test-flaky:
-	@echo "rr is Linux-only. On macOS, run flaky tests with TSAN instead:"
-	@echo ""
-	@echo "  make test-c-tsan"
-	@echo "  make test-valk-tsan"
-	@echo ""
 	@exit 1
 endif
 

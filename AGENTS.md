@@ -133,18 +133,20 @@ when                 # Show current event number
 run 12345            # Jump to specific event
 ```
 
-### Known Flaky Tests (test/flaky.txt)
-Tests listed in `FLAKY_C_TESTS` and `FLAKY_VALK_TESTS` in the Makefile are known to be flaky. Run them under rr:
-```bash
-make test-flaky      # Run all flaky tests under rr, recordings saved on failure
+### Known Flaky Tests (auto-recorded)
+Tests marked with `$(RR_FLAKY)` in the Makefile automatically run under rr on Linux.
+When they fail, the recording is already there - just run `rr replay`.
+
+To mark a test as flaky, change its Makefile line from:
+```make
+$(1)/test_foo
+```
+to:
+```make
+$(RR_FLAKY) $(1)/test_foo
 ```
 
-When adding a new flaky test to the list, or when a flaky test fails:
-1. Add/keep the test in `FLAKY_C_TESTS` or `FLAKY_VALK_TESTS` in Makefile
-2. Run `make test-flaky` to get a recording
-3. Debug with `rr replay`
-4. Fix the root cause
-5. Remove from the flaky list once stable
+Remove `$(RR_FLAKY)` once the test is stable.
 
 ### Core Dumps (for crashes/SIGSEGV)
 Core dumps are already captured automatically via systemd-coredump:
@@ -183,23 +185,35 @@ make test-core        # Run tests with core dumps enabled
 ```
 
 ### macOS Alternatives (no rr)
-macOS doesn't have rr. Use these alternatives:
+rr requires Linux kernel features - it doesn't run on macOS, even on M1.
+
+**Options for M1 Mac users:**
+1. **Asahi Linux** - Dual-boot Linux on M1, rr works natively
+2. **Remote Linux machine** - SSH to any Linux box (x86 or ARM64), run rr there
+3. **Core dumps + lldb** - Post-mortem, no replay
+4. **TSAN** - Catches data races: `make test-c-tsan`
 
 ```bash
 # Core dumps (enable first: sudo sysctl kern.coredump=1)
 make cores                    # List /cores/
 lldb -c /cores/core.PID build/test_networking
 
-# Debug directly
-lldb -- build/test_networking
-
 # Run until failure, then debug
 for i in {1..100}; do build/test_networking || break; done
 lldb -- build/test_networking
-
-# Use Instruments for profiling/tracing
-xcrun xctrace record --template 'Time Profiler' --launch -- build/test_networking
 ```
+
+**Note:** Linux VMs on macOS don't work with rr (perf counters not virtualized).
+
+### Alternative: Deterministic Simulation Testing (DST)
+For async/event-loop code, a better long-term approach than rr is **Deterministic Simulation Testing**:
+- Control all non-determinism: time, randomness, I/O scheduling
+- Run tests single-threaded with a fake event loop
+- Inject faults deterministically (network errors, delays)
+- Reproduce any failure with a seed
+
+This is how FoundationDB, TigerBeetle, etc. achieve reliable async testing.
+See: https://notes.eatonphil.com/2024-08-20-deterministic-simulation-testing.html
 
 ## Debugging Hangs and Concurrency Issues
 
@@ -241,6 +255,86 @@ Only if rr is not available. Always remove after fixing.
 ```c
 fprintf(stderr, "[GC] checkpoint: phase=%d paused=%llu/%llu\n",
         phase, paused, registered);
+```
+
+## Flaky Test Debugging Workflow (Step-by-Step)
+
+When a flaky test fails, follow this exact workflow:
+
+### 1. Check if Recording Exists
+Tests marked `$(RR_FLAKY)` auto-record. Check for recording:
+```bash
+rr ls                              # List all recordings
+ls ~/.local/share/rr/              # Recording directory
+```
+
+### 2. If Recording Exists, Replay It
+```bash
+rr replay                          # Replay most recent
+rr replay ~/.local/share/rr/test_networking-0/  # Specific recording
+```
+
+### 3. In GDB (via rr replay), Find the Bug
+
+**For crashes:**
+```gdb
+run                                # Run to crash point
+bt                                 # Backtrace
+frame N                            # Select frame
+info locals                        # Show local variables
+```
+
+**For races/corruption - find who modified memory:**
+```gdb
+# 1. Run to the point where bad state is observed
+continue
+
+# 2. Inspect the corrupted value
+print some_variable
+
+# 3. Set watchpoint on that memory
+watch -l some_variable
+
+# 4. Run BACKWARDS to find who wrote it
+reverse-continue
+
+# 5. Now you're at the exact write - examine
+bt
+info threads
+```
+
+**For deadlocks:**
+```gdb
+# 1. Ctrl+C when hung
+# 2. See all threads
+info threads
+thread apply all bt
+
+# 3. Find what each thread is waiting on
+thread N
+frame M
+info locals
+```
+
+### 4. If No Recording, Capture One
+```bash
+# For a test not marked RR_FLAKY:
+make test-rr-until-fail TEST=test_foo MAX=100
+
+# Or manually:
+VALK_TEST_NO_FORK=1 rr record --chaos build/test_foo
+```
+
+### 5. Fix and Verify
+After fixing:
+```bash
+# Run the specific test many times to verify
+for i in {1..50}; do build/test_foo || echo "FAIL $i"; done
+
+# Run full test suite
+make test
+
+# If stable, remove $(RR_FLAKY) prefix from Makefile
 ```
 
 ## What NOT To Do

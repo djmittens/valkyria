@@ -1,6 +1,9 @@
 #include "aio_internal.h"
 #include "aio_request_ctx.h"
 
+extern valk_async_status_t valk_async_handle_get_status(valk_async_handle_t *handle);
+extern void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result);
+
 static void __schedule_timer_close_cb(uv_handle_t *handle) {
   UNUSED(handle);
 }
@@ -125,16 +128,28 @@ static void __schedule_timer_cb(uv_timer_t *handle) {
   VALK_GC_SAFE_POINT();
   
   valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)handle->data;
-  valk_lval_t *callback = valk_handle_resolve(&valk_global_handle_table, timer_data->callback_handle);
-
-  if (callback) {
-    valk_lval_t *args = valk_lval_nil();
-    valk_lval_t *result = valk_lval_eval_call(callback->fun.env, callback, args);
-    if (LVAL_TYPE(result) == LVAL_ERR) {
-      VALK_WARN("aio/schedule callback returned error: %s", result->str);
+  
+  bool cancelled = false;
+  if (timer_data->async_handle) {
+    valk_async_status_t status = valk_async_handle_get_status(timer_data->async_handle);
+    cancelled = (status == VALK_ASYNC_CANCELLED);
+  }
+  
+  if (!cancelled) {
+    valk_lval_t *callback = valk_handle_resolve(&valk_global_handle_table, timer_data->callback_handle);
+    if (callback) {
+      valk_lval_t *args = valk_lval_nil();
+      valk_lval_t *result = valk_lval_eval_call(callback->fun.env, callback, args);
+      if (LVAL_TYPE(result) == LVAL_ERR) {
+        VALK_WARN("aio/schedule callback returned error: %s", result->str);
+      }
     }
   }
 
+  if (timer_data->async_handle) {
+    valk_async_handle_complete(timer_data->async_handle, valk_lval_nil());
+  }
+  
   valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
   uv_timer_stop(handle);
   uv_close((uv_handle_t *)handle, __schedule_timer_close_cb);
@@ -167,9 +182,11 @@ static void __schedule_init_on_loop(void *ctx) {
 
 static _Atomic(u64) g_schedule_id = 0;
 
+extern valk_async_handle_t* valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env);
+extern valk_lval_t *valk_lval_handle(valk_async_handle_t *handle);
+
 valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
                                 valk_lval_t* callback, valk_lenv_t* env) {
-  UNUSED(env);
   // LCOV_EXCL_BR_START - defensive: callers validate sys before calling
   if (!sys || !sys->eventloop) {
     return valk_lval_err("aio/schedule: invalid AIO system");
@@ -185,12 +202,21 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
   }
   // LCOV_EXCL_STOP
 
+  valk_async_handle_t *async_handle = valk_async_handle_new(sys, env);
+  // LCOV_EXCL_START - allocation failure: requires OOM
+  if (!async_handle) {
+    return valk_lval_err("Failed to allocate async handle");
+  }
+  // LCOV_EXCL_STOP
+  async_handle->status = VALK_ASYNC_RUNNING;
+
   valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
 
   timer_data->callback = heap_callback;
   timer_data->callback_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
   timer_data->timer.data = timer_data;
   timer_data->schedule_id = schedule_id;
+  timer_data->async_handle = async_handle;
 
   valk_schedule_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_schedule_init_ctx_t));
   // LCOV_EXCL_START - region alloc failure: requires OOM
@@ -206,12 +232,10 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
   
   valk_aio_enqueue_task(sys, __schedule_init_on_loop, init_ctx);
 
-  return valk_lval_nil();
+  return valk_lval_handle(async_handle);
 }
 
-extern valk_async_handle_t* valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env);
 extern void valk_async_handle_free(valk_async_handle_t *handle);
-extern void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result);
 extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
 extern bool valk_async_handle_cancel(valk_async_handle_t *handle);
 extern void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_handle_t *child);
@@ -220,7 +244,6 @@ extern void valk_async_notify_done(valk_async_handle_t *handle);
 extern bool valk_async_is_resource_closed(valk_async_handle_t *handle);
 extern valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sys);
 extern void valk_standalone_async_done_callback(valk_async_handle_t *handle, void *ctx);
-extern valk_lval_t *valk_lval_handle(valk_async_handle_t *handle);
 
 #define VALK_ALL_CTX_MAGIC 0xA11C7821
 #define VALK_ALL_CTX_MAGIC_EARLY 0xA11C7821
