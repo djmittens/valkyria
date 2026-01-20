@@ -1,7 +1,20 @@
 ; Simple test framework for Valkyria
+; Supports both sync and async tests with timeout enforcement
+
+; Default timeouts (milliseconds)
+(def {*test-default-timeout-ms*} 5000)       ; 5 seconds per test
+(def {*test-default-suite-timeout-ms*} 60000) ; 60 seconds for entire suite
+
+; Atoms for tracking test state
+(def {*test-suite-timed-out*} (atom 0))
 
 (fun {test/context-new} {
-  {:passed 0 :failed 0 :skipped 0 :suite-name "Valkyria Test Suite" :skip-suite 0 :skip-reason "" :debug 0 :expected-exit 0}
+  {:passed 0 :failed 0 :skipped 0 :timed-out 0
+   :suite-name "Valkyria Test Suite" 
+   :skip-suite 0 :skip-reason "" 
+   :debug 0 :expected-exit 0
+   :timeout-ms *test-default-timeout-ms*
+   :suite-timeout-ms *test-default-suite-timeout-ms*}
 })
 
 (fun {test/debug ctx enabled} {
@@ -19,6 +32,14 @@
 
 (fun {test/expect-exit ctx code} {
   (plist/set ctx :expected-exit code)
+})
+
+(fun {test/timeout ctx ms} {
+  (plist/set ctx :timeout-ms ms)
+})
+
+(fun {test/suite-timeout ctx ms} {
+  (plist/set ctx :suite-timeout-ms ms)
 })
 
 (fun {test name body} {
@@ -52,6 +73,87 @@
     (*test-pad-dots-helper* (- width (len str)))
 })
 
+; Suite timeout callback - called if suite takes too long
+(fun {*test-suite-timeout-cb* suite-name} {
+  do
+    (atom/set! *test-suite-timed-out* 1)
+    (printf "\n\n⏰ SUITE TIMEOUT: %s exceeded time limit\n" suite-name)
+    (shutdown 1)
+})
+
+; Per-test timeout callback
+(fun {*test-timeout-cb* test-name timeout-atom} {
+  (if (== (atom/get timeout-atom) 0)
+    {do
+      (atom/set! timeout-atom 1)
+      (printf "\n⏰ TEST TIMEOUT: %s\n" test-name)}
+    {true})
+})
+
+; Run a single sync test with timeout (requires aio)
+(fun {*test-run-one-with-timeout* aio ctx test} {
+  do
+    (= {test-name} (eval (head test)))
+    (= {test-body} (head (tail test)))
+    (= {skip-suite} (plist/get ctx :skip-suite))
+    (= {debug} (plist/get ctx :debug))
+    (= {timeout-ms} (plist/get ctx :timeout-ms))
+
+    (if (== skip-suite 1)
+      {do
+        (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")
+        (plist/set ctx :skipped (+ (plist/get ctx :skipped) 1))}
+      {do
+        (if (== debug 1)
+          {do
+            (printf "[DEBUG] Running test: ")
+            (print test)
+            (printf "[DEBUG] Test name: %s\n" test-name)
+            (printf "[DEBUG] Test body: ")
+            (print test-body)}
+          {true})
+
+        ; Set up per-test timeout
+        (= {timed-out} (atom 0))
+        (= {timer-handle} (aio/schedule aio timeout-ms (\ {} {
+          (*test-timeout-cb* test-name timed-out)
+        })))
+
+        (= {start-time} (time-us {}))
+        (= {result} (eval test-body))
+        (= {end-time} (time-us {}))
+        (= {elapsed} (- end-time start-time))
+
+        ; Cancel timeout timer
+        (aio/cancel timer-handle)
+
+        ; Check if we timed out
+        (if (== (atom/get timed-out) 1)
+          {do
+            (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
+            (plist/set ctx :timed-out (+ (plist/get ctx :timed-out) 1))}
+          {do
+            (if (== debug 1)
+              {do
+                (printf "[DEBUG] Result: ")
+                (print result)
+                (if (error? result)
+                  {printf "[DEBUG] Result is an ERROR!\n"}
+                  {true})}
+              {true})
+
+            (= {passed} (if (== result true) {1} {0}))
+
+            (if (== passed 1)
+              {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
+              {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)})
+
+            (if (== passed 1)
+              {(plist/set ctx :passed (+ (plist/get ctx :passed) 1))}
+              {(plist/set ctx :failed (+ (plist/get ctx :failed) 1))})})})
+})
+
+; Run a single sync test without timeout (no aio)
 (fun {*test-run-one-ctx* ctx test} {
   do
     (= {test-name} (eval (head test)))
@@ -121,7 +223,8 @@
     {false}
     {(if (== (len arg) 0)
       {false}
-      {(*test-is-keyword* (head arg))})})
+      {(*test-is-keyword* (head arg))})}
+  )
 })
 
 (fun {*test-parse-args* args} {
@@ -160,11 +263,46 @@
   (if (plist/has? config :expected-exit)
     {(= {ctx} (plist/set ctx :expected-exit (plist/get config :expected-exit)))}
     {true})
+  (if (plist/has? config :timeout-ms)
+    {(= {ctx} (plist/set ctx :timeout-ms (plist/get config :timeout-ms)))}
+    {true})
+  (if (plist/has? config :suite-timeout-ms)
+    {(= {ctx} (plist/set ctx :suite-timeout-ms (plist/get config :suite-timeout-ms)))}
+    {true})
   ctx
 })
 
+; Print final results and exit
+(fun {*test-print-results-and-exit* ctx} {
+  do
+    (= {passed} (plist/get ctx :passed))
+    (= {failed} (plist/get ctx :failed))
+    (= {skipped} (plist/get ctx :skipped))
+    (= {timed-out} (plist/get ctx :timed-out))
+    (= {expected-exit} (plist/get ctx :expected-exit))
+
+    (printf "\n🏁 Test Results: ")
+    (if (> timed-out 0)
+      {printf "⏰ %ld timed out, " timed-out}
+      {true})
+    (if (> skipped 0)
+      {printf "⏭️  %ld skipped, " skipped}
+      {true})
+    (if (== (+ failed timed-out) 0)
+      {printf "✨ All %ld tests passed! ✨\n" passed}
+      {printf "⚠️  %ld passed, %ld failed\n" passed (+ failed timed-out)})
+
+    (= {actual-exit} (if (== (+ failed timed-out) 0) {0} {1}))
+
+    (if (== actual-exit expected-exit)
+      {(shutdown 0)}
+      {(shutdown actual-exit)})
+})
+
+; Main test runner - sync tests without aio (no per-test timeout, but has suite timeout awareness)
 (fun {test/run & args} {
   do
+    (atom/set! *test-suite-timed-out* 0)
     (= {parsed} (*test-parse-args* args))
     (= {tests} (head parsed))
     (= {config} (head (tail parsed)))
@@ -191,23 +329,54 @@
 
     (= {final-ctx} (foldl *test-run-one-ctx* ctx tests))
 
-    (= {passed} (plist/get final-ctx :passed))
-    (= {failed} (plist/get final-ctx :failed))
-    (= {skipped} (plist/get final-ctx :skipped))
-    (= {expected-exit} (plist/get final-ctx :expected-exit))
+    (*test-print-results-and-exit* final-ctx)
+})
 
-    (printf "\n🏁 Test Results: ")
-    (if (> skipped 0)
-      {printf "⏭️  %ld skipped\n" skipped}
-      {(if (== failed 0)
-        {printf "✨ All %ld tests passed! ✨\n" passed}
-        {printf "⚠️  %ld passed, %ld failed\n" passed failed})})
+; Sync test runner WITH timeout support (requires aio system)
+; Usage: (test/run-with-timeout aio tests {:suite-name "My Suite" :timeout-ms 5000})
+(fun {test/run-with-timeout aio & args} {
+  do
+    (atom/set! *test-suite-timed-out* 0)
+    (= {parsed} (*test-parse-args* args))
+    (= {tests} (head parsed))
+    (= {config} (head (tail parsed)))
+    (= {total} (len tests))
 
-    (= {actual-exit} (if (== failed 0) {0} {1}))
+    (= {ctx} (*test-ctx-from-config* config))
+    (= {expected-exit} (plist/get ctx :expected-exit))
+    (= {suite-timeout-ms} (plist/get ctx :suite-timeout-ms))
+    (= {timeout-ms} (plist/get ctx :timeout-ms))
 
-    (if (== actual-exit expected-exit)
-      {(shutdown 0)}
-      {(shutdown actual-exit)})
+    (if (== total 0)
+      {do
+        (printf "❌ No tests registered!\n")
+        (if (== expected-exit 1)
+          {(shutdown 0)}
+          {(shutdown 1)})}
+      {true})
+
+    (= {suite-name} (plist/get ctx :suite-name))
+    (= {skip-suite} (plist/get ctx :skip-suite))
+    (= {skip-reason} (plist/get ctx :skip-reason))
+
+    (if (== skip-suite 1)
+      {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
+      {printf "🧪 [%ld/%ld] %s (timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms})
+
+    ; Set up suite-level timeout
+    (= {suite-timer} (aio/schedule aio suite-timeout-ms (\ {} {
+      (*test-suite-timeout-cb* suite-name)
+    })))
+
+    ; Run all tests with individual timeouts
+    (= {final-ctx} (foldl (\ {ctx test} {(*test-run-one-with-timeout* aio ctx test)}) ctx tests))
+
+    ; Cancel suite timeout
+    (aio/cancel suite-timer)
+
+    ; Stop aio and print results
+    (aio/stop aio)
+    (*test-print-results-and-exit* final-ctx)
 })
 
 ; ============================================================================
@@ -216,12 +385,13 @@
 ; For tests that require the event loop (HTTP, timers, etc.)
 ; Usage:
 ;   (= {tests} (-> {} (test/async-add "test name" (\ {done} { ... (done true) }))))
-;   (test/run-async aio tests)
+;   (test/run-async aio tests {:timeout-ms 5000 :suite-timeout-ms 30000})
 ;   (aio/run aio)
 
 (def {*test-async-pending-atom*} (atom 0))
 (def {*test-async-passed-atom*} (atom 0))
 (def {*test-async-failed-atom*} (atom 0))
+(def {*test-async-timed-out-atom*} (atom 0))
 
 (fun {test-async name body} {
   (list name body)
@@ -231,34 +401,56 @@
   (join tests (list (test-async name body)))
 })
 
-(fun {*test-async-done-callback* test-name start-time passed} {
+(fun {*test-async-done-callback* test-name start-time timed-out-atom passed} {
   do
-    (= {end-time} (time-us {}))
-    (= {elapsed} (- end-time start-time))
-    
-    (if passed
+    ; Check if already timed out
+    (if (== (atom/get timed-out-atom) 1)
+      {true}  ; Already reported as timed out, ignore this callback
       {do
-        (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)
-        (atom/add! *test-async-passed-atom* 1)}
-      {do
-        (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
-        (atom/add! *test-async-failed-atom* 1)})
-    
-    (atom/sub! *test-async-pending-atom* 1)
+        (= {end-time} (time-us {}))
+        (= {elapsed} (- end-time start-time))
+        
+        (if passed
+          {do
+            (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)
+            (atom/add! *test-async-passed-atom* 1)}
+          {do
+            (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
+            (atom/add! *test-async-failed-atom* 1)})
+        
+        (atom/sub! *test-async-pending-atom* 1)})
     true
 })
 
-(fun {*test-start-async-one* aio test} {
+(fun {*test-async-timeout-callback* test-name timed-out-atom} {
+  (if (== (atom/get timed-out-atom) 0)
+    {do
+      (atom/set! timed-out-atom 1)
+      (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT\n")
+      (atom/add! *test-async-timed-out-atom* 1)
+      (atom/sub! *test-async-pending-atom* 1)}
+    {true})
+})
+
+(fun {*test-start-async-one* aio timeout-ms test} {
   do
     (= {test-name} (eval (head test)))
     (= {test-body} (eval (head (tail test))))
     (= {start-time} (time-us {}))
+    (= {timed-out} (atom 0))
+    
+    (atom/set! *test-current-name* test-name)
     
     (= {done-fn} (\ {passed} {
-      (*test-async-done-callback* test-name start-time passed)
+      (*test-async-done-callback* test-name start-time timed-out passed)
     }))
     
     (atom/add! *test-async-pending-atom* 1)
+    
+    ; Set up per-test timeout
+    (= {timer-handle} (aio/schedule aio timeout-ms (\ {} {
+      (*test-async-timeout-callback* test-name timed-out)
+    })))
     
     (aio/schedule aio 0 (\ {} {
       (test-body done-fn)
@@ -285,12 +477,20 @@
 })
 
 (fun {*test-async-ctx-from-config* config} {
-  (= {ctx} {:suite-name "Valkyria Test Suite" :expected-exit 0})
+  (= {ctx} {:suite-name "Valkyria Test Suite" :expected-exit 0 
+            :timeout-ms *test-default-timeout-ms* 
+            :suite-timeout-ms *test-default-suite-timeout-ms*})
   (if (plist/has? config :suite-name)
     {(= {ctx} (plist/set ctx :suite-name (plist/get config :suite-name)))}
     {true})
   (if (plist/has? config :expected-exit)
     {(= {ctx} (plist/set ctx :expected-exit (plist/get config :expected-exit)))}
+    {true})
+  (if (plist/has? config :timeout-ms)
+    {(= {ctx} (plist/set ctx :timeout-ms (plist/get config :timeout-ms)))}
+    {true})
+  (if (plist/has? config :suite-timeout-ms)
+    {(= {ctx} (plist/set ctx :suite-timeout-ms (plist/get config :suite-timeout-ms)))}
     {true})
   ctx
 })
@@ -300,6 +500,9 @@
     (atom/set! *test-async-passed-atom* 0)
     (atom/set! *test-async-failed-atom* 0)
     (atom/set! *test-async-pending-atom* 0)
+    (atom/set! *test-async-timed-out-atom* 0)
+    (atom/set! *test-suite-timed-out* 0)
+    
     (= {parsed} (*test-async-parse-args* args))
     (= {tests} (head parsed))
     (= {config} (head (tail parsed)))
@@ -308,6 +511,8 @@
     (= {ctx} (*test-async-ctx-from-config* config))
     (= {suite-name} (plist/get ctx :suite-name))
     (= {expected-exit} (plist/get ctx :expected-exit))
+    (= {timeout-ms} (plist/get ctx :timeout-ms))
+    (= {suite-timeout-ms} (plist/get ctx :suite-timeout-ms))
     
     (if (== total 0)
       {do
@@ -317,19 +522,24 @@
           {(shutdown 1)})}
       {true})
     
-    (printf "🧪 [%ld/%ld] %s (async)\n" total total suite-name)
+    (printf "🧪 [%ld/%ld] %s (async, timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms)
     
-    (map (\ {test} {(*test-start-async-one* aio test)}) tests)
+    ; Start all tests with individual timeouts
+    (map (\ {test} {(*test-start-async-one* aio timeout-ms test)}) tests)
     
-    (aio/schedule aio 30000 (\ {} {
+    ; Suite-level timeout
+    (aio/schedule aio suite-timeout-ms (\ {} {
       (if (> (atom/get *test-async-pending-atom*) 0)
         {do
-          (printf "\n❌ TIMEOUT: %ld tests still pending\n" (atom/get *test-async-pending-atom*))
+          (atom/set! *test-suite-timed-out* 1)
+          (printf "\n⏰ SUITE TIMEOUT: %ld tests still pending after %ldms\n" 
+                  (atom/get *test-async-pending-atom*) suite-timeout-ms)
           (aio/stop aio)
           (shutdown 1)}
         {true})
     }))
     
+    ; Check completion periodically
     (aio/schedule aio 100 (\ {} {
       (*test-async-check-complete* aio expected-exit)
     }))
@@ -344,16 +554,20 @@
     {do
       (= {passed} (atom/get *test-async-passed-atom*))
       (= {failed} (atom/get *test-async-failed-atom*))
+      (= {timed-out} (atom/get *test-async-timed-out-atom*))
       (printf "\n🏁 Test Results: ")
-      (if (== failed 0)
+      (if (> timed-out 0)
+        {printf "⏰ %ld timed out, " timed-out}
+        {true})
+      (if (== (+ failed timed-out) 0)
         {printf "✨ All %ld tests passed! ✨\n" passed}
-        {printf "⚠️  %ld passed, %ld failed\n" passed failed})
+        {printf "⚠️  %ld passed, %ld failed\n" passed (+ failed timed-out)})
       (aio/stop aio)
-      (= {actual-exit} (if (== failed 0) {0} {1}))
+      (= {actual-exit} (if (== (+ failed timed-out) 0) {0} {1}))
       (if (== actual-exit expected-exit)
         {(shutdown 0)}
         {(shutdown actual-exit)})}
     {(aio/schedule aio 100 (\ {} {(*test-async-check-complete* aio expected-exit)}))})
 })
 
-; Test module loaded - no debug output
+; Test module loaded

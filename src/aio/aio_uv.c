@@ -69,14 +69,16 @@ void __event_loop(void *arg) {
 
   valk_aio_task_queue_init(sys);
 
-  // Signal that event loop is ready (all slabs initialized)
-  uv_sem_post(&sys->startup_sem);
-
-  // Register with GC right before entering uv_run - this ensures the thread
-  // is only counted for GC when it can respond to async signals
+  // Register with GC BEFORE signaling ready - this prevents a race where
+  // the main thread triggers GC after sem_post but before we've registered.
+  // If GC starts STW with count=1 (main only), then we register (count=2),
+  // GC will wait for 2 threads but we haven't entered our safe point loop yet.
   if (!sys->config.thread_onboard_fn) {
     valk_gc_thread_register();
   }
+
+  // Signal that event loop is ready (all slabs initialized, GC registered)
+  uv_sem_post(&sys->startup_sem);
 
   sys->ops->loop->run(sys, VALK_IO_RUN_DEFAULT);
 

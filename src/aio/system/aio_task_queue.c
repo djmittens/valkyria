@@ -1,7 +1,25 @@
 #include "aio_internal.h"
 
 static void __task_queue_notify_cb(uv_async_t *handle) {
-  (void)handle;
+  valk_aio_system_t *sys = handle->data;
+  if (!sys || sys->shuttingDown) return;
+  
+  valk_aio_task_queue_t *tq = &sys->task_queue;
+  void *item;
+  int processed = 0;
+  const int max_per_iteration = 256;
+
+  while (processed < max_per_iteration) {
+    item = valk_chase_lev_steal(&tq->deque);
+    if (item == VALK_CHASE_LEV_EMPTY || item == VALK_CHASE_LEV_ABORT) break;
+
+    valk_aio_task_item_t *task = (valk_aio_task_item_t *)item;
+    if (task->fn) {
+      task->fn(task->ctx);
+    }
+    free(task);
+    processed++;
+  }
 }
 
 static void __task_queue_drain_cb(uv_check_t *handle) {

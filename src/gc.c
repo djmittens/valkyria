@@ -93,9 +93,9 @@ valk_gc_coordinator_t valk_gc_coord = {0};
 void valk_barrier_init(valk_barrier_t* b, sz count) {
   pthread_mutex_init(&b->mutex, nullptr);
   pthread_cond_init(&b->cond, nullptr);
-  b->count = count;
-  b->waiting = 0;
-  b->phase = 0;
+  atomic_store(&b->count, count);
+  atomic_store(&b->waiting, 0);
+  atomic_store(&b->phase, 0);
 }
 
 void valk_barrier_destroy(valk_barrier_t* b) {
@@ -103,16 +103,24 @@ void valk_barrier_destroy(valk_barrier_t* b) {
   pthread_cond_destroy(&b->cond);
 }
 
+void valk_barrier_reset(valk_barrier_t* b, sz count) {
+  pthread_mutex_lock(&b->mutex);
+  atomic_store(&b->count, count);
+  atomic_store(&b->waiting, 0);
+  pthread_mutex_unlock(&b->mutex);
+}
+
 void valk_barrier_wait(valk_barrier_t* b) {
   pthread_mutex_lock(&b->mutex);
-  sz my_phase = b->phase;
-  b->waiting++;
-  if (b->waiting == b->count) {
-    b->waiting = 0;
-    b->phase++;
+  sz my_phase = atomic_load(&b->phase);
+  sz waiting = atomic_fetch_add(&b->waiting, 1) + 1;
+  sz count = atomic_load(&b->count);
+  if (waiting == count) {
+    atomic_store(&b->waiting, 0);
+    atomic_fetch_add(&b->phase, 1);
     pthread_cond_broadcast(&b->cond);
   } else {
-    while (b->phase == my_phase) {
+    while (atomic_load(&b->phase) == my_phase) {
       pthread_cond_wait(&b->cond, &b->mutex);
     }
   }
@@ -309,10 +317,11 @@ void valk_gc_safe_point_slow(void) {
       pthread_mutex_unlock(&valk_gc_coord.lock);
     }
 
+    // Wait for THIS checkpoint to complete. Use a simple wait without re-checking
+    // the phase in a loop - if a new checkpoint starts after we wake, we'll handle
+    // it on the next VALK_GC_SAFE_POINT() call, not by re-entering the wait.
     pthread_mutex_lock(&valk_gc_coord.lock);
-    while (atomic_load(&valk_gc_coord.phase) == VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
-      pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
-    }
+    pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
     pthread_mutex_unlock(&valk_gc_coord.lock);
     return;
   }
@@ -364,10 +373,11 @@ void valk_gc_request_collection(void) {
   }
 
   if (valk_gc_coord.barrier_initialized) {
-    valk_barrier_destroy(&valk_gc_coord.barrier);
+    valk_barrier_reset(&valk_gc_coord.barrier, num_threads);
+  } else {
+    valk_barrier_init(&valk_gc_coord.barrier, num_threads);
+    valk_gc_coord.barrier_initialized = true;
   }
-  valk_barrier_init(&valk_gc_coord.barrier, num_threads);
-  valk_gc_coord.barrier_initialized = true;
 
   pthread_mutex_lock(&valk_gc_coord.lock);
   while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
@@ -768,7 +778,7 @@ void valk_gc_get_fragmentation(valk_gc_malloc_heap_t* heap, valk_fragmentation_t
 
   out->malloc_allocated = valk_gc_heap2_used_bytes(heap);
   out->malloc_limit = heap->hard_limit;
-  out->malloc_peak = heap->stats.peak_usage;
+  out->malloc_peak = atomic_load(&heap->stats.peak_usage);
 
   out->free_list_count = 0;
   out->free_list_bytes = 0;
@@ -791,7 +801,7 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
   fprintf(stderr, "Used bytes:       %zu bytes\n", stats.used_bytes);
   fprintf(stderr, "Committed bytes:  %zu bytes\n", stats.committed_bytes);
   fprintf(stderr, "Large objects:    %zu bytes\n", stats.large_object_bytes);
-  fprintf(stderr, "Peak usage:       %zu bytes\n", heap->stats.peak_usage);
+  fprintf(stderr, "Peak usage:       %zu bytes\n", atomic_load(&heap->stats.peak_usage));
   fprintf(stderr, "Collections:      %llu\n", (unsigned long long)stats.collections);
   fprintf(stderr, "Emergency GCs:    %llu\n", (unsigned long long)heap->stats.emergency_collections);
 
@@ -2415,10 +2425,9 @@ valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v) {
   
   // Note: scratch can be NULL when called from event loop thread
   // In that case, we conservatively copy all strings from scratch-allocated values
-  
-  // Request STW to prevent races with event loop thread reading environments
-  // while we mutate env->symbols.items and env->vals.items pointers
-  valk_checkpoint_request_stw();
+  //
+  // No STW needed - we're just copying values to heap, not modifying shared state.
+  // The original values remain valid until checkpoint resets the scratch arena.
   
   // Create a mini evacuation context
   valk_evacuation_ctx_t ctx = {
@@ -2457,9 +2466,6 @@ valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v) {
   }
   
   evac_ctx_free(&ctx);
-  
-  // Release STW - event loop can resume
-  valk_checkpoint_release_stw();
   
   return new_val;
 }
@@ -2775,8 +2781,10 @@ bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, u8 size_
   atomic_fetch_add(&list->used_slots, num_slots);
   u64 added_bytes = num_slots * list->slot_size;
   u64 new_used = atomic_fetch_add(&heap->used_bytes, added_bytes) + added_bytes;
-  if (new_used > heap->stats.peak_usage) {
-    heap->stats.peak_usage = new_used;
+  sz cur_peak = atomic_load(&heap->stats.peak_usage);
+  while (new_used > cur_peak) {
+    if (atomic_compare_exchange_weak(&heap->stats.peak_usage, &cur_peak, new_used))
+      break;
   }
   
   // Check if page is now full
@@ -2843,8 +2851,10 @@ static void *valk_gc_heap2_alloc_large(valk_gc_heap2_t *heap, u64 bytes) {
   
   atomic_fetch_add(&heap->large_object_bytes, alloc_size);
   u64 used = valk_gc_heap2_used_bytes(heap);
-  if (used > heap->stats.peak_usage) {
-    heap->stats.peak_usage = used;
+  sz cur_peak = atomic_load(&heap->stats.peak_usage);
+  while (used > cur_peak) {
+    if (atomic_compare_exchange_weak(&heap->stats.peak_usage, &cur_peak, used))
+      break;
   }
   
   return data;
@@ -3249,9 +3259,21 @@ static void mark_lval2(valk_lval_t *lval, valk_gc_mark_ctx2_t *ctx) {
   }
 }
 
+#define MARK_ENV_VISITED_MAX 128
+
 static void mark_env2(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx) {
+  valk_lenv_t *visited[MARK_ENV_VISITED_MAX];
+  u64 visited_count = 0;
+
   while (env != nullptr) {
-    if (!mark_ptr_only(env, ctx)) return;
+    for (u64 i = 0; i < visited_count; i++) {
+      if (visited[i] == env) return;
+    }
+    if (visited_count < MARK_ENV_VISITED_MAX) {
+      visited[visited_count++] = env;
+    }
+
+    mark_ptr_only(env, ctx);
     mark_ptr_only(env->symbols.items, ctx);
     mark_ptr_only(env->vals.items, ctx);
     for (u64 i = 0; i < env->symbols.count; i++) {
@@ -3612,8 +3634,18 @@ static void mark_lval2_parallel(valk_lval_t *lval, valk_gc_mark_ctx2_t *ctx) {
 }
 
 static void mark_env2_parallel(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx) {
+  valk_lenv_t *visited[MARK_ENV_VISITED_MAX];
+  u64 visited_count = 0;
+
   while (env != nullptr) {
-    if (!mark_ptr_only(env, ctx)) return;
+    for (u64 i = 0; i < visited_count; i++) {
+      if (visited[i] == env) return;
+    }
+    if (visited_count < MARK_ENV_VISITED_MAX) {
+      visited[visited_count++] = env;
+    }
+
+    mark_ptr_only(env, ctx);
     mark_ptr_only(env->symbols.items, ctx);
     mark_ptr_only(env->vals.items, ctx);
     for (u64 i = 0; i < env->symbols.count; i++) {
@@ -3785,10 +3817,11 @@ bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
   }
   
   if (valk_gc_coord.barrier_initialized) {
-    valk_barrier_destroy(&valk_gc_coord.barrier);
+    valk_barrier_reset(&valk_gc_coord.barrier, num_threads);
+  } else {
+    valk_barrier_init(&valk_gc_coord.barrier, num_threads);
+    valk_gc_coord.barrier_initialized = true;
   }
-  valk_barrier_init(&valk_gc_coord.barrier, num_threads);
-  valk_gc_coord.barrier_initialized = true;
   
   atomic_store(&__gc_heap2_current, heap);
   

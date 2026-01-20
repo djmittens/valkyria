@@ -8,27 +8,31 @@ Run `ralph query` to get:
 - `spec`: the current spec name (e.g., "construct-mode.md")
 - `tasks.done`: list of done tasks with their acceptance criteria
 
-## Step 2: Verify Done Tasks (MAX 5 PER ITERATION)
+## Step 2: Verify Each Done Task
 
-**IMPORTANT:** 
-- Do NOT spawn subagents
-- Verify **at most 5 tasks** per iteration
-- **Sort by complexity - simplest first:**
-  1. File existence checks (`test -f`) - instant
-  2. Grep/code inspection - fast  
-  3. Single commands (`make build`) - seconds
-  4. Test runs - slower
+For EACH done task, spawn a subagent to verify:
 
-For each task, verify based on `accept` criteria:
+```
+Task: "Verify task '{task.name}' meets its acceptance criteria: {task.accept}
 
-- "file exists" → `test -f <path>`
-- "make X" → run `make X`
-- "test passes" → run the test
-- code changes → grep/read to confirm
+1. Search codebase for the implementation
+2. Check if acceptance criteria is satisfied
+3. Run any tests mentioned in criteria
+
+Return JSON:
+{
+  \"task_id\": \"{task.id}\",
+  \"passed\": true | false,
+  \"evidence\": \"<what you found>\",
+  \"reason\": \"<why it failed>\"  // only if passed=false
+}"
+```
+
+**Run all verifications in parallel.**
 
 ## Step 3: Apply Results
 
-For each verified task:
+### For each task:
 
 **If passed** → `ralph task accept <task-id>`
 
@@ -40,25 +44,32 @@ For each verified task:
 2. **Architectural blocker** (cannot be done):
    `ralph issue add "Task <task-id> blocked: <why>"`
    `ralph task delete <task-id>`
+   
+Signs of architectural blocker:
+- "Cannot do X mid-execution"
+- Same rejection reason recurring
+- Requires changes outside this spec
 
-## Step 4: Check Completion
+## Step 4: Check for Gaps
 
-After verifying up to 5 tasks:
+Read the spec\'s **Acceptance Criteria section only** (not entire spec):
+`ralph/specs/<spec-name>` - scroll to "## Acceptance Criteria"
 
-- If more done tasks remain unverified:
-  ```
-  [RALPH] SPEC_INCOMPLETE: N tasks still need verification
-  ```
+For any unchecked criteria (`- [ ]`) not covered by existing tasks:
+```
+ralph task add '{"name": "...", "accept": "..."}\'
+```
 
-- If all tasks verified and accepted, check spec acceptance criteria:
-  Read `ralph/specs/<spec-name>` → "## Acceptance Criteria" section
-  
-  For any unchecked criteria (`- [ ]`) not covered by tasks:
-  ```
-  ralph task add '{"name": "...", "accept": "..."}\'
-  ```
+## Step 5: Final Decision
 
-- If all tasks accepted AND no gaps:
-  ```
-  [RALPH] SPEC_COMPLETE
-  ```
+If all tasks accepted and no new tasks created:
+```
+[RALPH] SPEC_COMPLETE
+```
+
+Otherwise:
+```
+[RALPH] SPEC_INCOMPLETE: <summary>
+```
+
+## EXIT after completing

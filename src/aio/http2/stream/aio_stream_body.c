@@ -149,14 +149,13 @@ void valk_stream_body_close(valk_stream_body_t *body) {
     return;
   }
 
-  if (body->state == VALK_STREAM_CLOSED || body->state == VALK_STREAM_CLOSING) {
+  valk_stream_state_e expected = VALK_STREAM_OPEN;
+  if (!atomic_compare_exchange_strong(&body->state, &expected, VALK_STREAM_CLOSING)) {
     return;
   }
 
   VALK_DEBUG("stream_body: closing id=%llu (http2_stream=%d)",
              (unsigned long long)body->id, body->stream_id);
-
-  body->state = VALK_STREAM_CLOSING;
 
   if (body->data_deferred) {
     body->data_deferred = false;
@@ -164,7 +163,7 @@ void valk_stream_body_close(valk_stream_body_t *body) {
     if (rv != 0) { // LCOV_EXCL_START -- nghttp2 internal: stream already closed
       VALK_DEBUG("stream_body: stream %d already closed, finishing body %llu immediately",
                  body->stream_id, (unsigned long long)body->id);
-      body->state = VALK_STREAM_CLOSED;
+      atomic_store(&body->state, VALK_STREAM_CLOSED);
       __stream_body_finish_close(body);
       return;
     } // LCOV_EXCL_STOP
@@ -178,7 +177,7 @@ void valk_stream_body_free(valk_stream_body_t *body) {
     return;
   }
 
-  if (body->state != VALK_STREAM_CLOSED) {
+  if (atomic_load(&body->state) != VALK_STREAM_CLOSED) {
     valk_stream_body_close(body);
   }
 
@@ -193,9 +192,10 @@ int valk_stream_body_write(valk_stream_body_t *body, const char *data, u64 len) 
     return -1;
   }
 
-  if (body->state != VALK_STREAM_OPEN) {
+  valk_stream_state_e state = atomic_load(&body->state);
+  if (state != VALK_STREAM_OPEN) {
     VALK_DEBUG("stream_body: write failed, body %llu not open (state=%d)",
-               body->id, body->state);
+               body->id, state);
     return -1;
   }
 
@@ -242,7 +242,7 @@ int valk_stream_body_write(valk_stream_body_t *body, const char *data, u64 len) 
     if (!nghttp2_session_find_stream(body->session, body->stream_id)) { // LCOV_EXCL_START
       VALK_DEBUG("stream_body: stream %d no longer exists, closing body %llu immediately",
                  body->stream_id, (unsigned long long)body->id);
-      body->state = VALK_STREAM_CLOSED;
+      atomic_store(&body->state, VALK_STREAM_CLOSED);
       __stream_body_finish_close(body);
       return -1;
     } // LCOV_EXCL_STOP
@@ -250,7 +250,7 @@ int valk_stream_body_write(valk_stream_body_t *body, const char *data, u64 len) 
     if (rv != 0) { // LCOV_EXCL_START -- nghttp2 internal: stream already closed
       VALK_DEBUG("stream_body: failed to resume stream %d: %s, closing body %llu immediately",
                  body->stream_id, nghttp2_strerror(rv), (unsigned long long)body->id);
-      body->state = VALK_STREAM_CLOSED;
+      atomic_store(&body->state, VALK_STREAM_CLOSED);
       __stream_body_finish_close(body);
       return -1;
     } // LCOV_EXCL_STOP
@@ -264,7 +264,7 @@ bool valk_stream_body_writable(valk_stream_body_t *body) {
   if (!body) {
     return false;
   }
-  if (body->state != VALK_STREAM_OPEN) {
+  if (atomic_load(&body->state) != VALK_STREAM_OPEN) {
     return false;
   }
   if (!body->session) { // LCOV_EXCL_BR_LINE -- defensive null check
@@ -309,7 +309,8 @@ static nghttp2_ssize __stream_data_read_callback(
     return 0;
   }
 
-  if (body->state == VALK_STREAM_CLOSED) {
+  valk_stream_state_e state = atomic_load(&body->state);
+  if (state == VALK_STREAM_CLOSED) {
     VALK_DEBUG("stream_body: body %llu closed, returning EOF",
                (unsigned long long)body->id);
     *data_flags |= NGHTTP2_DATA_FLAG_EOF;
@@ -329,10 +330,10 @@ static nghttp2_ssize __stream_data_read_callback(
   }
 
   if (!body->queue_head) {
-    if (body->state == VALK_STREAM_CLOSING) {
+    if (atomic_load(&body->state) == VALK_STREAM_CLOSING) {
       VALK_DEBUG("stream_body: body %llu closing with empty queue, finishing close",
                  (unsigned long long)body->id);
-      body->state = VALK_STREAM_CLOSED;
+      atomic_store(&body->state, VALK_STREAM_CLOSED);
       __stream_body_finish_close(body);
       *data_flags |= NGHTTP2_DATA_FLAG_EOF;
       return 0;
@@ -449,7 +450,7 @@ int valk_stream_body_cancel(valk_stream_body_t *body, u32 error_code) {
     return -1;
   }
 
-  if (body->state == VALK_STREAM_CLOSED) {
+  if (atomic_load(&body->state) == VALK_STREAM_CLOSED) {
     return 0;
   }
 

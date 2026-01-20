@@ -129,6 +129,7 @@ void test_system_start_with_config(VALK_TEST_ARGS()) {
                    "System should start with valid config");
 
   valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
 
   VALK_PASS();
 }

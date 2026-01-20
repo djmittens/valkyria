@@ -84,4 +84,4 @@
     (finish-test)
   }))
 })))
-  {:suite-name "Backpressure Timeout Coverage Test"})
+  {:suite-name "Backpressure Timeout Coverage Test" :timeout-ms 10000 :suite-timeout-ms 15000})

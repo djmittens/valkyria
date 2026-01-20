@@ -300,11 +300,6 @@ void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
   int wstatus;
   waitpid(pid, &wstatus, 0);
   if (WIFEXITED(wstatus)) {
-    //  TODO(networking): Probably should record the exit status at some point
-    if (WEXITSTATUS(wstatus)) {
-    } else {
-    }
-
     valk_ring_rewind(test->_stderr, sizeof(test->result));
     valk_ring_read(test->_stderr, sizeof(test->result), &test->result);
   } else if (WIFSIGNALED(wstatus)) {
@@ -443,6 +438,9 @@ void valk_testsuite_print(valk_test_suite_t *suite) {
         printf("🌀 %s%.*s  CRSH : in %llu(%s)\n", test->name, len - 3,
                DOT_FILL, (unsigned long long)(result->stopTime - result->startTime), precision);
         valk_print_io(test);
+        break;
+      default:
+        printf("❓ %s%.*s  UNKNOWN(type=%d)\n", test->name, len - 3, DOT_FILL, result->type);
         break;
     }
   }

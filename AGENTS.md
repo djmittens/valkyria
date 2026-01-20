@@ -100,6 +100,42 @@ When refactoring, eliminate these patterns:
 - Don't use sycophantic phrases like "Great question!"
 - Prioritize accuracy over validation
 
+## Debugging Hangs and Concurrency Issues
+
+### When Tests Hang
+1. **Identify the hanging test** - run tests individually with timeout:
+   ```bash
+   for test in test/*.valk; do
+     echo -n "$test: "
+     timeout 15 build/valk "$test" >/dev/null 2>&1 && echo "PASS" || echo "TIMEOUT"
+   done
+   ```
+
+2. **Narrow down the hang point** - add println statements to find where execution stops
+
+3. **Check for GC coordination deadlocks** - common patterns:
+   - Event loop thread stuck in `valk_gc_safe_point_slow()` waiting for `gc_done`
+   - Main thread stuck in `valk_checkpoint_request_stw()` waiting for threads to pause
+   - Race between checkpoint release and next checkpoint request
+
+### GC Coordination Architecture
+- Main thread calls `valk_checkpoint()` between top-level expressions (repl.c)
+- `valk_checkpoint_request_stw()` sets phase to CHECKPOINT_REQUESTED
+- Event loop threads respond via `__gc_wakeup_cb` -> `valk_gc_safe_point_slow()`
+- `valk_checkpoint_release_stw()` broadcasts `gc_done` to wake waiting threads
+
+### Key Concurrency Invariants
+- `valk_gc_thread_register()` must happen BEFORE `uv_sem_post` in event loop startup
+- `valk_gc_safe_point_slow()` must NOT re-enter wait loop if a new checkpoint starts
+- `uv_async_send()` to `gc_wakeup` wakes event loop for GC coordination
+
+### Adding Debug Output (TEMPORARY ONLY)
+```c
+fprintf(stderr, "[GC] checkpoint: phase=%d paused=%llu/%llu\n",
+        phase, paused, registered);
+```
+Always remove debug output after fixing the issue.
+
 ## What NOT To Do
 - Don't make changes without reading code first
 - Don't skip running tests after changes

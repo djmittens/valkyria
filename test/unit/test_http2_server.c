@@ -235,8 +235,11 @@ void test_cleanup_all_servers_with_servers(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_aio_system_t *sys = create_test_system();
 
-  valk_aio_http_server *srv1 = calloc(1, sizeof(valk_aio_http_server));
-  valk_aio_http_server *srv2 = calloc(1, sizeof(valk_aio_http_server));
+  sys->httpServers = valk_slab_new(sizeof(valk_aio_http_server), 4);
+  valk_aio_http_server *srv1 = (valk_aio_http_server *)valk_slab_aquire(sys->httpServers)->data;
+  valk_aio_http_server *srv2 = (valk_aio_http_server *)valk_slab_aquire(sys->httpServers)->data;
+  memset(srv1, 0, sizeof(*srv1));
+  memset(srv2, 0, sizeof(*srv2));
 
   srv1->sys = sys;
   srv1->port = 8080;
@@ -253,7 +256,6 @@ void test_cleanup_all_servers_with_servers(VALK_TEST_ARGS()) {
   srv1->next = srv2;
   srv2->prev = srv1;
   sys->serverList = srv1;
-  sys->httpServers = valk_slab_new(sizeof(valk_aio_http_server), 4);
 
   valk_aio_http2_cleanup_all_servers(sys);
 

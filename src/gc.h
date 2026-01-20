@@ -62,7 +62,7 @@ typedef struct {
   sz evacuation_bytes;          // Bytes received from scratch evacuation
   u64 evacuation_pointer_fixups; // Pointer updates during evacuation
   u64 emergency_collections;     // Emergency GCs triggered at hard limit
-  sz peak_usage;                // Maximum allocated_bytes ever reached
+  _Atomic sz peak_usage;        // Maximum allocated_bytes ever reached
 } valk_gc_heap_stats_t;
 
 // GC runtime metrics for observability (live counters, not telemetry snapshots)
@@ -470,9 +470,9 @@ typedef struct valk_gc_thread_info {
 typedef struct valk_barrier {
   pthread_mutex_t mutex;
   pthread_cond_t cond;
-  sz count;
-  sz waiting;
-  sz phase;
+  _Atomic sz count;
+  _Atomic sz waiting;
+  _Atomic sz phase;
 } valk_barrier_t;
 
 void valk_barrier_init(valk_barrier_t* b, sz count);

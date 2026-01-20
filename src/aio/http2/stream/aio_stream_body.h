@@ -27,7 +27,7 @@ struct valk_stream_chunk {
 
 struct valk_stream_body {
   u64 id;
-  valk_stream_state_e state;
+  _Atomic valk_stream_state_e state;
 
   valk_aio_handle_t *conn;
   nghttp2_session *session;

@@ -125,6 +125,7 @@ int main(void) {
 
   printf("[DEBUG] Stopping AIO system...\n");
   valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
 
   printf("[DEBUG] Test completed successfully!\n");
   return 0;
