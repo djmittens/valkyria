@@ -1,0 +1,23 @@
+(load "src/prelude.valk")
+
+; Minimal reproduction: closure capture bug when fun is passed to map
+;
+; BUG: When a named function defined with (fun {name args} body) is passed
+; to map, it does NOT capture variables from the enclosing scope.
+;
+; Expected: Should print "Processing a with 5000", "Processing b with 5000"
+; Actual: 5000 is not printed / wrong value appears
+
+(print "=== BUG DEMO: fun + map loses closure capture ===")
+(fun {outer items} {
+  (= {my-value} 5000)
+  
+  (fun {process item} {
+    (= {name} (eval item))
+    (print "Before printf, my-value =" my-value)
+    (printf "Processing %s with %ld\n" name my-value)
+  })
+  
+  (map process items)
+})
+(outer {"a" "b"})
