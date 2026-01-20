@@ -8,6 +8,25 @@ endif
 
 JOBS := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
+# Time-travel debugging support
+# Linux: rr record (set RR=1 or RR=chaos)
+# macOS: no rr, but we document lldb/Instruments alternatives
+# Usage: RR=1 make test-c TEST=test_networking
+#        RR=chaos make test-valk TEST=test/test_http_integration.valk
+ifdef RR
+  ifeq ($(UNAME), Darwin)
+    $(error rr is Linux-only. On macOS use: lldb -- build/$(TEST) or Instruments)
+  endif
+  ifeq ($(RR),chaos)
+    RR_PREFIX := rr record --chaos
+  else
+    RR_PREFIX := rr record
+  endif
+  export VALK_TEST_NO_FORK := 1
+else
+  RR_PREFIX :=
+endif
+
 # SSL Certificate Generation
 # Uses mkcert if available (browser-trusted), falls back to openssl (untrusted)
 # Install mkcert: https://github.com/FiloSottile/mkcert
@@ -143,10 +162,17 @@ asan: build-asan
 # Run C test suite with a given build directory
 # Usage: $(call run_tests_c,build-dir)
 # Note: Requires set -e in calling recipe for proper error handling with ASAN
+# If TEST is set, only run that test. If RR is set, prefix with rr record.
 define run_tests_c
 	@echo "=== Running C tests from $(1) ==="
 	@if [ -n "$$ASAN_OPTIONS" ]; then echo "ASAN_OPTIONS=$$ASAN_OPTIONS"; fi
-	$(1)/test_std
+	@if [ -n "$(RR_PREFIX)" ]; then echo "Recording with rr (VALK_TEST_NO_FORK=1)"; fi
+	@if [ -n "$(TEST)" ]; then \
+		echo "Running single test: $(TEST)"; \
+		$(RR_PREFIX) $(1)/$(TEST); \
+		exit 0; \
+	fi
+	$(RR_PREFIX) $(1)/test_std
 	$(1)/test_regression
 	$(1)/test_memory
 	$(1)/test_networking
@@ -209,10 +235,17 @@ endef
 # Run Valk/Lisp test suite with a given build directory
 # Usage: $(call run_tests_valk,build-dir)
 # Note: Requires set -e in calling recipe for proper error handling with ASAN
+# If TEST is set, only run that test. If RR is set, prefix with rr record.
 define run_tests_valk
 	@echo "=== Running Valk tests from $(1) ==="
 	@if [ -n "$$ASAN_OPTIONS" ]; then echo "ASAN_OPTIONS=$$ASAN_OPTIONS"; fi
-	$(1)/valk test/test_metrics.valk
+	@if [ -n "$(RR_PREFIX)" ]; then echo "Recording with rr (VALK_TEST_NO_FORK=1)"; fi
+	@if [ -n "$(TEST)" ]; then \
+		echo "Running single test: $(TEST)"; \
+		$(RR_PREFIX) $(1)/valk $(TEST); \
+		exit 0; \
+	fi
+	$(RR_PREFIX) $(1)/valk test/test_metrics.valk
 	$(1)/valk test/test_metrics_builtins_comprehensive.valk
 	$(1)/valk test/test_prelude.valk
 	$(1)/valk test/test_namespace.valk
@@ -539,3 +572,154 @@ test-stress-asan: build-asan
 		echo "Error types:"; \
 		grep "ERROR: AddressSanitizer" build/asan-stress.log* 2>/dev/null | sort -u | head -5; \
 	fi
+
+# ============================================================================
+# Time-Travel Debugging (Linux: rr, macOS: Instruments)
+# ============================================================================
+# Linux: rr records execution deterministically, replay with rr replay
+# macOS: No rr, use Instruments Time Profiler or lldb reversible debugging
+#
+# Quick usage:
+#   RR=1 make test-c TEST=test_networking      # Record single test
+#   RR=chaos make test-c TEST=test_networking  # Record with chaos mode
+#   make test-rr-until-fail TEST=test_networking MAX=100
+
+ifeq ($(UNAME), Linux)
+.PHONY: test-rr-check
+test-rr-check:
+	@if ! command -v rr >/dev/null 2>&1; then \
+		echo "ERROR: rr not installed. Install with: apt install rr"; \
+		exit 1; \
+	fi
+	@if [ "$$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo 99)" -gt 1 ]; then \
+		echo "ERROR: perf_event_paranoid too restrictive for rr"; \
+		echo "Fix with: echo 1 | sudo tee /proc/sys/kernel/perf_event_paranoid"; \
+		exit 1; \
+	fi
+	@echo "rr is ready"
+
+.ONESHELL:
+.PHONY: test-rr-until-fail
+test-rr-until-fail: test-rr-check build
+	@if [ -z "$(TEST)" ]; then \
+		echo "Usage: make test-rr-until-fail TEST=test_networking [MAX=100]"; \
+		exit 1; \
+	fi
+	set -e
+	max=$${MAX:-100}
+	echo "Running $(TEST) under rr until failure (max $$max iterations)..."
+	export VALK_TEST_NO_FORK=1
+	for i in $$(seq 1 $$max); do \
+		echo "[$$i/$$max] Recording..."; \
+		if ! rr record --chaos build/$(TEST) 2>&1; then \
+			echo ""; \
+			echo "╔══════════════════════════════════════════════════════════════╗"; \
+			echo "║  FAILURE on iteration $$i - recording saved!                 ║"; \
+			echo "╚══════════════════════════════════════════════════════════════╝"; \
+			echo ""; \
+			echo "Replay with: rr replay"; \
+			exit 0; \
+		fi; \
+	done
+	echo "No failure in $$max iterations"
+
+else
+# macOS stubs - explain alternatives
+.PHONY: test-rr-check
+test-rr-check:
+	@echo "rr is Linux-only. On macOS, use these alternatives:"
+	@echo ""
+	@echo "  For crashes:     lldb -- build/$(TEST)"
+	@echo "  For profiling:   xcrun xctrace record --template 'Time Profiler' --launch -- build/$(TEST)"
+	@echo "  For race detection: make test-c-tsan TEST=$(TEST)"
+	@echo ""
+	@exit 1
+
+.PHONY: test-rr-until-fail
+test-rr-until-fail:
+	@echo "rr is Linux-only. On macOS, run tests in a loop with lldb:"
+	@echo ""
+	@echo "  for i in {1..100}; do build/$(TEST) || { echo \"Failed on \$$i\"; break; }; done"
+	@echo ""
+	@echo "Then debug the failure with: lldb -- build/$(TEST)"
+	@exit 1
+endif
+
+# ============================================================================
+# Core Dump Analysis
+# ============================================================================
+# Linux: systemd-coredump captures crashes, use coredumpctl to debug
+# macOS: Core dumps go to /cores/, use lldb to debug
+
+.ONESHELL:
+.PHONY: test-core
+test-core: build
+	set -e
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running tests with core dumps enabled                       ║"
+ifeq ($(UNAME), Darwin)
+	@echo "║  On crash: lldb -c /cores/core.<pid> build/<test>            ║"
+else
+	@echo "║  On crash: coredumpctl debug <test>                          ║"
+endif
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	ulimit -c unlimited
+	export VALK_TEST_TIMEOUT_SECONDS=30
+	$(call run_tests_c,build)
+	$(call run_tests_valk,build)
+
+.ONESHELL:
+.PHONY: test-asan-abort
+test-asan-abort: build-asan
+	set -e
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running ASAN tests with abort_on_error=1                    ║"
+ifeq ($(UNAME), Darwin)
+	@echo "║  On failure: lldb -c /cores/core.<pid> build-asan/<test>     ║"
+else
+	@echo "║  On failure: coredumpctl debug <test>                        ║"
+endif
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	ulimit -c unlimited
+	export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
+	export LSAN_OPTIONS=verbosity=0:log_threads=1
+	$(call run_tests_c,build-asan)
+	$(call run_tests_valk,build-asan)
+
+.PHONY: cores
+cores:
+ifeq ($(UNAME), Darwin)
+	@echo "Recent core dumps in /cores/:"
+	@ls -lt /cores/ 2>/dev/null | head -20 || echo "No core dumps (or /cores/ not accessible)"
+	@echo ""
+	@echo "Debug with: lldb -c /cores/core.<pid> build/<binary>"
+else
+	@echo "Recent core dumps:"
+	@coredumpctl list --no-pager 2>/dev/null | grep -E "(valk|test_)" | tail -20 || \
+		echo "No core dumps found (or coredumpctl not available)"
+endif
+
+.PHONY: debug-core
+debug-core:
+ifeq ($(UNAME), Darwin)
+	@core=$$(ls -t /cores/core.* 2>/dev/null | head -1); \
+	if [ -z "$$core" ]; then \
+		echo "No core dumps found in /cores/"; \
+		echo "Enable with: sudo sysctl kern.coredump=1"; \
+		exit 1; \
+	fi; \
+	echo "Most recent core: $$core"; \
+	echo "Usage: lldb -c $$core build/<binary-that-crashed>"
+else
+	@exe=$$(coredumpctl list --no-pager 2>/dev/null | grep -E "(valk|test_)" | tail -1 | awk '{print $$NF}'); \
+	if [ -z "$$exe" ]; then \
+		echo "No core dumps found"; \
+		exit 1; \
+	fi; \
+	echo "Debugging most recent crash: $$exe"; \
+	coredumpctl debug "$$exe"
+endif

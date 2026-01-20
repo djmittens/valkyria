@@ -100,6 +100,77 @@ When refactoring, eliminate these patterns:
 - Don't use sycophantic phrases like "Great question!"
 - Prioritize accuracy over validation
 
+## Debugging Flaky Tests and Crashes
+
+### Approach: Post-Mortem, Not Logging
+Don't add logging to debug transient issues - you can never log enough, and logging changes timing.
+Instead, capture full execution state on failure via core dumps or rr recordings.
+
+### Core Dumps (for crashes/SIGSEGV)
+Core dumps are already captured automatically via systemd-coredump:
+```bash
+make cores                         # List recent crashes
+make debug-core                    # Debug most recent crash in GDB
+coredumpctl debug test_networking  # Debug specific crash
+```
+
+### Time-Travel Debugging with rr (for flaky tests)
+rr records execution deterministically. Replay unlimited times, step backwards, find root cause.
+
+```bash
+# Setup (one-time)
+apt install rr
+echo 1 | sudo tee /proc/sys/kernel/perf_event_paranoid
+
+# Record a single test
+RR=1 make test-c TEST=test_networking
+RR=1 make test-valk TEST=test/test_http_integration.valk
+
+# Record with chaos mode (exposes races)
+RR=chaos make test-c TEST=test_networking
+
+# Run until failure (for flaky tests)
+make test-rr-until-fail TEST=test_networking MAX=100
+
+# Replay the recording
+rr replay
+```
+
+Essential GDB commands in rr replay:
+```gdb
+reverse-continue     # Run backwards to previous breakpoint/watchpoint
+reverse-step         # Step backwards
+watch -l variable    # Hardware watchpoint - stops when value changes
+                     # Then reverse-continue to find who changed it
+when                 # Show current event number
+run 12345            # Jump to specific event
+```
+
+### ASAN/TSAN with Core Dumps
+```bash
+make test-asan-abort  # ASAN failures produce core dumps
+make test-core        # Run tests with core dumps enabled
+```
+
+### macOS Alternatives (no rr)
+macOS doesn't have rr. Use these alternatives:
+
+```bash
+# Core dumps (enable first: sudo sysctl kern.coredump=1)
+make cores                    # List /cores/
+lldb -c /cores/core.PID build/test_networking
+
+# Debug directly
+lldb -- build/test_networking
+
+# Run until failure, then debug
+for i in {1..100}; do build/test_networking || break; done
+lldb -- build/test_networking
+
+# Use Instruments for profiling/tracing
+xcrun xctrace record --template 'Time Profiler' --launch -- build/test_networking
+```
+
 ## Debugging Hangs and Concurrency Issues
 
 ### When Tests Hang
@@ -111,7 +182,13 @@ When refactoring, eliminate these patterns:
    done
    ```
 
-2. **Narrow down the hang point** - add println statements to find where execution stops
+2. **Use rr to capture the hang** (preferred over adding prints):
+   ```bash
+   RR=chaos make test-c TEST=test_networking
+   # When it hangs, Ctrl+C, then:
+   rr replay
+   # In GDB: info threads, thread apply all bt
+   ```
 
 3. **Check for GC coordination deadlocks** - common patterns:
    - Event loop thread stuck in `valk_gc_safe_point_slow()` waiting for `gc_done`
@@ -129,12 +206,12 @@ When refactoring, eliminate these patterns:
 - `valk_gc_safe_point_slow()` must NOT re-enter wait loop if a new checkpoint starts
 - `uv_async_send()` to `gc_wakeup` wakes event loop for GC coordination
 
-### Adding Debug Output (TEMPORARY ONLY)
+### Adding Debug Output (LAST RESORT)
+Only if rr is not available. Always remove after fixing.
 ```c
 fprintf(stderr, "[GC] checkpoint: phase=%d paused=%llu/%llu\n",
         phase, paused, registered);
 ```
-Always remove debug output after fixing the issue.
 
 ## What NOT To Do
 - Don't make changes without reading code first

@@ -15,6 +15,14 @@
 (fun {str-contains? haystack needle}
   {(> (len (str/split haystack needle)) 1)})
 
+(fun {get-header headers name} {
+  if (nil? headers)
+    {nil}
+    {if (== (head (head headers)) name)
+      {head (tail (head headers))}
+      {get-header (tail headers) name}}
+})
+
 (fun {str-starts-with? s prefix}
   {(= {prefix-len} (len prefix))
    (if (< (len s) prefix-len)
@@ -184,6 +192,42 @@
              {(do
                (print "Expected: JSON with memory key")
                (print "Got body:" body)
+               (done false)
+             )})})
+      }))
+  }))
+
+  (test-async "/debug/metrics/state returns Content-Type: application/json" (\ {done} {
+    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state"
+      (\ {resp} {
+        (if (error? resp)
+          {(do (print "Error:" resp) (done false))}
+          {(= {headers} (http2/response-headers resp))
+           (= {ct} (get-header headers "content-type"))
+           (if (== ct "application/json")
+             {(done true)}
+             {(do
+               (print "Expected: Content-Type: application/json")
+               (print "Got:" ct)
+               (done false)
+             )})})
+      }))
+  }))
+
+
+
+  (test-async "/metrics returns Content-Type: text/plain; version=0.0.4" (\ {done} {
+    (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics"
+      (\ {resp} {
+        (if (error? resp)
+          {(do (print "Error:" resp) (done false))}
+          {(= {headers} (http2/response-headers resp))
+           (= {ct} (get-header headers "content-type"))
+           (if (== ct "text/plain; version=0.0.4")
+             {(done true)}
+             {(do
+               (print "Expected: Content-Type: text/plain; version=0.0.4")
+               (print "Got:" ct)
                (done false)
              )})})
       }))

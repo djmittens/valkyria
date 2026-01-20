@@ -455,13 +455,23 @@ int valk_http2_send_response(nghttp2_session *session, int stream_id,
     content_type = ct_val->str;
   }
 
+  const char* cache_control = nullptr;
+  valk_lval_t* cc_val = valk_http2_qexpr_get(response_qexpr, ":cache-control");
+  if (cc_val && LVAL_TYPE(cc_val) == LVAL_STR) {
+    cache_control = cc_val->str;
+  }
+
   nghttp2_nv* headers;
   u64 header_count = 2;
+  if (cache_control) header_count++;
 
   VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
     headers = valk_mem_alloc(sizeof(nghttp2_nv) * header_count);
     headers[0] = (nghttp2_nv)MAKE_NV(":status", status, strlen(status));
     headers[1] = (nghttp2_nv)MAKE_NV("content-type", content_type, strlen(content_type));
+    if (cache_control) {
+      headers[2] = (nghttp2_nv)MAKE_NV("cache-control", cache_control, strlen(cache_control));
+    }
   }
 
   http_body_source_t *body_src;

@@ -1,0 +1,4 @@
+(def {aio} (aio/start))
+(mem/gc/collect)
+(println "done")
+(aio/stop aio)

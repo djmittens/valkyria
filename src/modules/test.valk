@@ -401,12 +401,13 @@
   (join tests (list (test-async name body)))
 })
 
-(fun {*test-async-done-callback* test-name start-time timed-out-atom passed} {
+(fun {*test-async-done-callback* test-name start-time timed-out-atom timer-handle passed} {
   do
     ; Check if already timed out
     (if (== (atom/get timed-out-atom) 1)
       {true}  ; Already reported as timed out, ignore this callback
       {do
+        (aio/cancel timer-handle)
         (= {end-time} (time-us {}))
         (= {elapsed} (- end-time start-time))
         
@@ -439,18 +440,16 @@
     (= {start-time} (time-us {}))
     (= {timed-out} (atom 0))
     
-    (atom/set! *test-current-name* test-name)
-    
-    (= {done-fn} (\ {passed} {
-      (*test-async-done-callback* test-name start-time timed-out passed)
-    }))
-    
     (atom/add! *test-async-pending-atom* 1)
     
-    ; Set up per-test timeout
+    ; Set up per-test timeout first so done-fn can cancel it
     (= {timer-handle} (aio/schedule aio timeout-ms (\ {} {
       (*test-async-timeout-callback* test-name timed-out)
     })))
+    
+    (= {done-fn} (\ {passed} {
+      (*test-async-done-callback* test-name start-time timed-out timer-handle passed)
+    }))
     
     (aio/schedule aio 0 (\ {} {
       (test-body done-fn)
