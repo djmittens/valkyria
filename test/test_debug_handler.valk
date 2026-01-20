@@ -23,6 +23,7 @@
      (if (>= idx total)
        (on-all-done (atom/get passed) (atom/get failed))
        (do
+         (debug/reset-state)
          (= {test} (nth idx tests))
          (= {test-name} (eval (head test)))
          (= {test-body} (eval (head (tail test))))
@@ -956,5 +957,97 @@
   }))
 ))
 
-(test/run-async aio main-tests
-  {:suite-name "Debug Handler Route Matching"})
+(def {*main-passed*} (atom 0))
+(def {*main-failed*} (atom 0))
+(def {*bc-passed*} (atom 0))
+(def {*bc-failed*} (atom 0))
+(def {*main-pending*} (atom 0))
+
+(fun {run-main-tests-then-broadcaster aio main-tests broadcaster-tests} {
+  (= {main-total} (len main-tests))
+  (atom/set! *main-pending* main-total)
+  (= {main-timeout-ms} 5000)
+
+  (printf "🧪 [%ld/%ld] Debug Handler Route Matching (main tests)\n" main-total main-total)
+
+  (fun {start-one-main-test test} {
+    (= {test-name} (eval (head test)))
+    (= {test-body} (eval (head (tail test))))
+    (= {start-time} (time-us {}))
+    (= {timed-out} (atom 0))
+
+    (= {timer-handle} (aio/schedule aio main-timeout-ms (\ {} {
+      (= {prev} (atom/get timed-out))
+      (if (== prev 0)
+        (do
+          (atom/set! timed-out 1)
+          (printf "  ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT\n")
+          (atom/add! *main-failed* 1)
+          (atom/sub! *main-pending* 1)
+          (check-main-done))
+        nil)})))
+
+    (= {done-fn} (\ {passed} {
+      (= {prev} (atom/get timed-out))
+      (atom/set! timed-out 2)
+      (if (!= prev 0)
+        nil
+        (do
+          (aio/cancel timer-handle)
+          (= {end-time} (time-us {}))
+          (= {elapsed} (- end-time start-time))
+          (if passed
+            (do
+              (printf "  ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(us)\n" elapsed)
+              (atom/add! *main-passed* 1))
+            (do
+              (printf "  ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(us)\n" elapsed)
+              (atom/add! *main-failed* 1)))
+          (atom/sub! *main-pending* 1)
+          (check-main-done)))}))
+
+    (aio/schedule aio 0 (\ {} (test-body done-fn)))
+  })
+
+  (fun {check-main-done} {
+    (= {pending} (atom/get *main-pending*))
+    (if (== pending 0)
+      (do
+        (printf "\n  Main tests done: %ld passed, %ld failed\n\n" 
+                (atom/get *main-passed*) (atom/get *main-failed*))
+        (aio/schedule aio 0 (\ {} (run-broadcaster-tests-sequentially))))
+      nil)
+  })
+
+  (fun {run-broadcaster-tests-sequentially} {
+    (printf "🧪 [%ld/%ld] Debug Handler Route Matching (broadcaster tests - sequential)\n" 
+            (len broadcaster-tests) (len broadcaster-tests))
+    (run-tests-sequentially aio broadcaster-tests (\ {passed failed} {
+      (atom/set! *bc-passed* passed)
+      (atom/set! *bc-failed* failed)
+      (print-final-results-and-exit)
+    }))
+  })
+
+  (fun {print-final-results-and-exit} {
+    (= {total-passed} (+ (atom/get *main-passed*) (atom/get *bc-passed*)))
+    (= {total-failed} (+ (atom/get *main-failed*) (atom/get *bc-failed*)))
+    (printf "\n🏁 Test Results: ")
+    (if (== total-failed 0)
+      (printf "All %ld tests passed!\n" total-passed)
+      (printf "%ld passed, %ld failed\n" total-passed total-failed))
+    (aio/stop aio)
+    (shutdown (if (== total-failed 0) 0 1))
+  })
+
+  (map start-one-main-test main-tests)
+
+  (aio/schedule aio 60000 (\ {} {
+    (printf "\nSUITE TIMEOUT: tests still pending\n")
+    (aio/stop aio)
+    (shutdown 1)}))
+
+  (aio/run aio)
+})
+
+(run-main-tests-then-broadcaster aio main-tests broadcaster-tests)
