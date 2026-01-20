@@ -101,16 +101,49 @@ This enables `aio/race` instead of callback + atom coordination.
   (\ {responses} {(process-responses responses)}))
 ```
 
-**Implementation:** Return the async handle instead of nil:
+**Implementation:** Follow the same pattern as `aio/sleep`:
+
+1. Create an async handle with `valk_async_handle_new(sys, e)`
+2. Start the async operation (connect, send request)
+3. In the completion callback (C code), call `valk_async_handle_complete(handle, response)`
+4. Return `valk_lval_handle(handle)` immediately
 
 ```c
 valk_lval_t *valk_builtin_http2_client_request(valk_lenv_t *e, valk_lval_t *a) {
-  // ... validation (no callback parameter) ...
+  // ... validation (4 args: aio host port path, NO callback) ...
   valk_async_handle_t *handle = valk_async_handle_new(sys, e);
-  // Connect and send request, complete handle with response
+  
+  // Store handle in context for completion callback
+  ctx->async_handle = handle;
+  
+  // Start async connect (existing code)
+  valk_aio_http2_connect_host(sys, host, port, ...);
+  
+  // Return handle immediately - Lisp code uses aio/then to get result
   return valk_lval_handle(handle);
 }
+
+// In response_done callback (C code):
+static void __http2_client_request_response_done(...) {
+  // ... existing response handling ...
+  valk_async_handle_complete(ctx->async_handle, response_lval);
+}
 ```
+
+**Do NOT add `aio/deferred` or similar primitives.** The C code owns the async handle and completes it directly. Lisp code never needs to "complete" a handle - that's the C runtime's job.
+
+### Anti-Patterns (DO NOT IMPLEMENT)
+
+The following approaches are **wrong** and should not be used:
+
+| Wrong Approach | Why It's Wrong |
+|----------------|----------------|
+| `aio/deferred` returning `{handle complete-fn fail-fn}` | Exposes handle completion to Lisp - C runtime should own this |
+| `aio/promise` or `aio/resolver` | Same problem - completion belongs in C |
+| Wrapper functions in Lisp that bridge callbacks to handles | Adds complexity; just fix the C API |
+| Keeping callback-based APIs and adding parallel future-based APIs | Maintenance burden; refactor the existing API |
+
+**The correct pattern is simple:** C code creates handle → starts async op → completes handle in C callback → returns handle to Lisp. This is exactly how `aio/sleep` works.
 
 ### Refactored Test Framework
 

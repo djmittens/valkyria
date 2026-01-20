@@ -111,16 +111,14 @@ void valk_async_propagate_context(valk_async_handle_t *handle, struct valk_regio
 struct valk_lval_t *valk_http2_client_request_impl(struct valk_lenv_t *e,
                                                     valk_aio_system_t *sys,
                                                     const char *host, int port,
-                                                    const char *path,
-                                                    struct valk_lval_t *callback);
+                                                    const char *path);
 
 // HTTP/2 client request with custom headers
 struct valk_lval_t *valk_http2_client_request_with_headers_impl(struct valk_lenv_t *e,
                                                     valk_aio_system_t *sys,
                                                     const char *host, int port,
                                                     const char *path,
-                                                    struct valk_lval_t *headers,
-                                                    struct valk_lval_t *callback);
+                                                    struct valk_lval_t *headers);
 
 // Top-level timer scheduling (no HTTP context required)
 struct valk_lval_t *valk_aio_schedule(valk_aio_system_t *sys, u64 delay_ms,

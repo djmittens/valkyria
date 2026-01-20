@@ -356,3 +356,18 @@ make test
 - Don't commit unless explicitly asked
 - Don't add unnecessary abstractions
 - Don't create documentation files unless asked
+
+## Avoid Over-Engineering
+
+**Follow existing patterns.** Before inventing new primitives or abstractions:
+1. Find similar existing code (e.g., `aio/sleep` for async operations)
+2. Follow that exact pattern
+3. If the spec says "refactor X to do Y", modify X directly - don't add a new Z
+
+**Symptoms of over-engineering:**
+- Creating new types/builtins when modifying existing ones would work
+- Adding Lisp-level wrappers around C functionality
+- Introducing "deferred", "promise", "resolver" patterns when C can complete handles directly
+- Task notes mention "complex" or "getting complex" - stop and simplify
+
+**When stuck:** Re-read the spec. The simplest interpretation is usually correct.

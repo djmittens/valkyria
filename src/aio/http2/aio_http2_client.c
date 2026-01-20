@@ -618,7 +618,6 @@ static _Atomic u64 g_client_request_id = 0;
 
 typedef struct {
   valk_aio_system_t *sys;
-  valk_handle_t callback_handle;
   valk_handle_t headers_handle;
   char *host;
   int port;
@@ -626,6 +625,7 @@ typedef struct {
   valk_aio_http2_client *client;
   valk_mem_arena_t *arena;
   u64 request_id;
+  valk_async_handle_t *async_handle;
 } valk_http2_client_request_ctx_t;
 
 static char *__client_arena_strdup(const char *s) {
@@ -652,11 +652,7 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
     VALK_ERROR("http2/client-request[%llu]: connection failed: %s", 
                (unsigned long long)ctx->request_id,
                LVAL_TYPE(err) == LVAL_ERR ? err->str : "unknown");
-    valk_lval_t *cb = valk_handle_resolve(&valk_global_handle_table, ctx->callback_handle);
-    if (cb) {
-      valk_lval_t *args = valk_lval_cons(err, valk_lval_nil());
-      valk_lval_eval_call(cb->fun.env, cb, args);
-    }
+    valk_async_handle_fail(ctx->async_handle, err);
     goto cleanup;
   }
 
@@ -664,12 +660,7 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
   if (!result || LVAL_TYPE(result) != LVAL_REF) {
     VALK_ERROR("http2/client-request[%llu]: invalid connect result", 
                (unsigned long long)ctx->request_id);
-    valk_lval_t *cb = valk_handle_resolve(&valk_global_handle_table, ctx->callback_handle);
-    if (cb) {
-      valk_lval_t *err = valk_lval_err("Invalid connect result");
-      valk_lval_t *args = valk_lval_cons(err, valk_lval_nil());
-      valk_lval_eval_call(cb->fun.env, cb, args);
-    }
+    valk_async_handle_fail(ctx->async_handle, valk_lval_err("Invalid connect result"));
     goto cleanup;
   }
   // LCOV_EXCL_BR_STOP
@@ -722,7 +713,6 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
   return;
 
 cleanup:
-  valk_handle_release(&valk_global_handle_table, ctx->callback_handle);
   valk_handle_release(&valk_global_handle_table, ctx->headers_handle);
   free(ctx->host);
   free(ctx->path);
@@ -738,7 +728,6 @@ static void __http2_client_request_response_done(valk_async_handle_t *handle, vo
   VALK_INFO("http2/client-request[%llu]: response_done status=%d", 
             (unsigned long long)ctx->request_id, status);
 
-  valk_lval_t *cb = valk_handle_resolve(&valk_global_handle_table, ctx->callback_handle);
   // LCOV_EXCL_BR_START response callback defensive paths
   if (status != VALK_ASYNC_COMPLETED) {
     valk_lval_t *err_val = atomic_load_explicit(&handle->error, memory_order_acquire);
@@ -746,29 +735,14 @@ static void __http2_client_request_response_done(valk_async_handle_t *handle, vo
     VALK_ERROR("http2/client-request[%llu]: request failed: %s",
                (unsigned long long)ctx->request_id,
                LVAL_TYPE(err) == LVAL_ERR ? err->str : "unknown");
-    if (cb) {
-      valk_lval_t *args = valk_lval_cons(err, valk_lval_nil());
-      VALK_INFO("http2/client-request[%llu]: calling error callback", 
-                (unsigned long long)ctx->request_id);
-      valk_lval_eval_call(cb->fun.env, cb, args);
-    } else {
-      VALK_ERROR("http2/client-request[%llu]: NO CALLBACK",
-                 (unsigned long long)ctx->request_id);
-    }
+    valk_async_handle_fail(ctx->async_handle, err);
   } else {
     valk_lval_t *result = atomic_load_explicit(&handle->result, memory_order_acquire);
-    if (cb) {
-      valk_lval_t *args = valk_lval_cons(result, valk_lval_nil());
-      VALK_INFO("http2/client-request[%llu]: calling success callback", 
-                (unsigned long long)ctx->request_id);
-      valk_lval_eval_call(cb->fun.env, cb, args);
-    } else {
-      VALK_ERROR("http2/client-request[%llu]: NO CALLBACK",
-                 (unsigned long long)ctx->request_id);
-    }
+    VALK_INFO("http2/client-request[%llu]: completing with result", 
+              (unsigned long long)ctx->request_id);
+    valk_async_handle_complete(ctx->async_handle, result);
   }
   // LCOV_EXCL_BR_STOP
-  valk_handle_release(&valk_global_handle_table, ctx->callback_handle);
   valk_handle_release(&valk_global_handle_table, ctx->headers_handle);
   free(ctx->host);
   free(ctx->path);
@@ -782,13 +756,13 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
                                              valk_aio_system_t *sys,
                                              const char *host, int port,
                                              const char *path,
-                                             valk_lval_t *headers,
-                                             valk_lval_t *callback) {
-  UNUSED(e);
+                                             valk_lval_t *headers) {
   u64 req_id = atomic_fetch_add(&g_client_request_id, 1);
   VALK_INFO("http2/client-request[%llu]: %s:%d%s (with %zu headers)", 
             (unsigned long long)req_id, host, port, path,
             headers ? valk_lval_list_count(headers) : 0);
+
+  valk_async_handle_t *async_handle = valk_async_handle_new(sys, e);
 
   valk_http2_client_request_ctx_t *ctx = malloc(sizeof(valk_http2_client_request_ctx_t));
   ctx->sys = sys;
@@ -798,17 +772,15 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
   ctx->client = nullptr;
   ctx->arena = nullptr;
   ctx->request_id = req_id;
+  ctx->async_handle = async_handle;
 
-  valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
   valk_lval_t *heap_headers = headers ? valk_evacuate_to_heap(headers) : nullptr;
-  
-  ctx->callback_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
   ctx->headers_handle = heap_headers 
     ? valk_handle_create(&valk_global_handle_table, heap_headers)
     : (valk_handle_t){0, 0};
 
-  VALK_INFO("http2/client-request[%llu]: callback handle created (was %p)", 
-            (unsigned long long)req_id, (void*)callback);
+  VALK_INFO("http2/client-request[%llu]: async_handle=%p created", 
+            (unsigned long long)req_id, (void*)async_handle);
 
   valk_async_handle_t *connect_handle = valk_aio_http2_connect_host(sys, host, port, host);
   atomic_store_explicit(&connect_handle->on_done, __http2_client_request_connect_done, memory_order_release);
@@ -817,15 +789,14 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
   VALK_INFO("http2/client-request[%llu]: connect_handle=%p created", 
             (unsigned long long)req_id, (void*)connect_handle);
 
-  return valk_lval_nil();
+  return valk_lval_handle(async_handle);
 }
 
 valk_lval_t *valk_http2_client_request_impl(valk_lenv_t *e,
                                              valk_aio_system_t *sys,
                                              const char *host, int port,
-                                             const char *path,
-                                             valk_lval_t *callback) {
-  return valk_http2_client_request_with_headers_impl(e, sys, host, port, path, nullptr, callback);
+                                             const char *path) {
+  return valk_http2_client_request_with_headers_impl(e, sys, host, port, path, nullptr);
 }
 
 // LCOV_EXCL_START unused connection reuse API - reserved for future use
