@@ -1,5 +1,6 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
+(load "src/modules/aio/sse.valk")
 
 (def {aio} (aio/start))
 
@@ -34,19 +35,15 @@
         {(do (print "Expected 1 (got :closed), got:" result) (done false))})}))
   }))
   (test-async "sse-open-outside-handler-fails" (\ {done} {
-    (= {result} (sse/open))
+    (= {result} (sse/open "not-a-request"))
     (done (error? result))
   }))
   (test-async "sse-open-with-args-fails" (\ {done} {
     (= {result} (sse/open "extra-arg"))
     (done (error? result))
   }))
-  (test-async "sse-send-no-args-fails" (\ {done} {
-    (= {result} (sse/send))
-    (done (error? result))
-  }))
-  (test-async "sse-send-one-arg-fails" (\ {done} {
-    (= {result} (sse/send "not-a-stream"))
+  (test-async "sse-send-wrong-stream-fails" (\ {done} {
+    (= {result} (sse/send "not-a-stream" "data"))
     (done (error? result))
   }))
   (test-async "sse-send-wrong-type-fails" (\ {done} {
@@ -57,28 +54,20 @@
     (= {result} (sse/send "a" "b" "c" "d"))
     (done (error? result))
   }))
-  (test-async "sse-close-no-args-fails" (\ {done} {
-    (= {result} (sse/close))
+  (test-async "sse-close-wrong-stream-fails" (\ {done} {
+    (= {result} (sse/close "not-a-stream"))
     (done (error? result))
   }))
   (test-async "sse-close-wrong-type-fails" (\ {done} {
     (= {result} (sse/close "not-a-stream"))
     (done (error? result))
   }))
-  (test-async "sse-writable-no-args-fails" (\ {done} {
-    (= {result} (sse/writable?))
-    (done (error? result))
-  }))
   (test-async "sse-writable-wrong-type-fails" (\ {done} {
     (= {result} (sse/writable? "not-a-stream"))
-    (done (error? result))
+    (done (== result 0))
   }))
-  (test-async "sse-on-drain-no-args-fails" (\ {done} {
-    (= {result} (sse/on-drain))
-    (done (error? result))
-  }))
-  (test-async "sse-on-drain-one-arg-fails" (\ {done} {
-    (= {result} (sse/on-drain "stream"))
+  (test-async "sse-on-drain-wrong-stream-fails" (\ {done} {
+    (= {result} (sse/on-drain "not-a-stream" (\ {} {})))
     (done (error? result))
   }))
   (test-async "sse-on-drain-wrong-stream-type-fails" (\ {done} {
@@ -105,8 +94,8 @@
     (= {result} (sse/set-timeout "stream" "not-a-number"))
     (done (error? result))
   }))
-  (test-async "sse-cancel-no-args-fails" (\ {done} {
-    (= {result} (sse/cancel))
+  (test-async "sse-cancel-wrong-stream-fails" (\ {done} {
+    (= {result} (sse/cancel "not-a-stream"))
     (done (error? result))
   }))
   (test-async "sse-cancel-wrong-type-fails" (\ {done} {
