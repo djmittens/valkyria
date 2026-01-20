@@ -39,11 +39,19 @@ void valk_chase_lev_init(valk_chase_lev_deque_t *deque, int64_t initial_size) {
   atomic_store_explicit(&deque->bottom, 0, memory_order_relaxed);
   valk_chase_lev_array_t *arr = valk_chase_lev_array_new(initial_size);
   atomic_store_explicit(&deque->array, arr, memory_order_relaxed);
+  deque->garbage = NULL;
 }
 
 void valk_chase_lev_destroy(valk_chase_lev_deque_t *deque) {
   valk_chase_lev_array_t *arr = atomic_load_explicit(&deque->array, memory_order_relaxed);
   valk_chase_lev_array_free(arr);
+  valk_chase_lev_garbage_t *g = deque->garbage;
+  while (g) {
+    valk_chase_lev_garbage_t *next = g->next;
+    valk_chase_lev_array_free(g->array);
+    free(g);
+    g = next;
+  }
 }
 
 void valk_chase_lev_push(valk_chase_lev_deque_t *deque, void *item) {
@@ -53,6 +61,10 @@ void valk_chase_lev_push(valk_chase_lev_deque_t *deque, void *item) {
 
   if (b - t > arr->size - 1) {
     valk_chase_lev_array_t *new_arr = valk_chase_lev_array_grow(arr, t, b);
+    valk_chase_lev_garbage_t *g = malloc(sizeof(valk_chase_lev_garbage_t));
+    g->array = arr;
+    g->next = deque->garbage;
+    deque->garbage = g;
     atomic_store_explicit(&deque->array, new_arr, memory_order_release);
     arr = new_arr;
   }

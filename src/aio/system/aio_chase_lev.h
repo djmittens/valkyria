@@ -9,10 +9,16 @@ typedef struct valk_chase_lev_array {
   _Atomic(void *) *buffer;
 } valk_chase_lev_array_t;
 
+typedef struct valk_chase_lev_garbage {
+  valk_chase_lev_array_t *array;
+  struct valk_chase_lev_garbage *next;
+} valk_chase_lev_garbage_t;
+
 typedef struct valk_chase_lev_deque {
   _Atomic(int64_t) top;
   _Atomic(int64_t) bottom;
   _Atomic(valk_chase_lev_array_t *) array;
+  valk_chase_lev_garbage_t *garbage;
 } valk_chase_lev_deque_t;
 
 #define VALK_CHASE_LEV_EMPTY ((void *)0)
