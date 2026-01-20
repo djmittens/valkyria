@@ -26,7 +26,7 @@
 
 (test/run-async aio (list
   (test-async "stream/closed future completes with :closed when stream closes" (\ {done} {
-    (http2/client-request aio "127.0.0.1" STREAM_CLOSED_PORT "/test-stream-closed" (\ {resp} {}))
+    (aio/then (http2/client-request aio "127.0.0.1" STREAM_CLOSED_PORT "/test-stream-closed") (\ {resp} {}))
     (aio/schedule aio 200 (\ {} {
       (= {result} (atom/get stream-closed-result))
       (if (== result 1)
