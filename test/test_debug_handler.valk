@@ -214,7 +214,22 @@
       }))
   }))
 
-
+  (test-async "/debug/metrics/state returns Cache-Control: no-cache" (\ {done} {
+    (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state"
+      (\ {resp} {
+        (if (error? resp)
+          {(do (print "Error:" resp) (done false))}
+          {(= {headers} (http2/response-headers resp))
+           (= {cc} (get-header headers "cache-control"))
+           (if (== cc "no-cache")
+             {(done true)}
+             {(do
+               (print "Expected: Cache-Control: no-cache")
+               (print "Got:" cc)
+               (done false)
+             )})})
+      }))
+  }))
 
   (test-async "/metrics returns Content-Type: text/plain; version=0.0.4" (\ {done} {
     (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics"
