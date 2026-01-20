@@ -515,3 +515,25 @@ test-stress-tsan: build-tsan
 		echo "Race locations:"; \
 		grep -A2 "WARNING: ThreadSanitizer" build/tsan-stress.log* 2>/dev/null | grep "#0" | sort -u | head -5; \
 	fi
+
+# Stress tests with ASAN - redirects output to file per AGENTS.md
+.ONESHELL:
+.PHONY: test-stress-asan
+test-stress-asan: build-asan
+	set -e
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running stress tests with AddressSanitizer (ASAN)           ║"
+	@echo "║  Output: build/asan-stress.log                               ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	export ASAN_OPTIONS="log_path=build/asan-stress.log:detect_leaks=1:halt_on_error=0:abort_on_error=0"
+	export LSAN_OPTIONS="verbosity=0:log_threads=1:suppressions=$(CURDIR)/lsan_suppressions.txt"
+	$(call run_tests_stress,build-asan) 2>&1 | tee build/asan-stress-stdout.log
+	@echo ""
+	@echo "=== ASAN Summary ==="
+	@echo "Errors found: $$(grep -c 'ERROR: AddressSanitizer' build/asan-stress.log* 2>/dev/null || echo 0)"
+	@if [ "$$(grep -c 'ERROR: AddressSanitizer' build/asan-stress.log* 2>/dev/null || echo 0)" -gt 0 ]; then \
+		echo "Error types:"; \
+		grep "ERROR: AddressSanitizer" build/asan-stress.log* 2>/dev/null | sort -u | head -5; \
+	fi
