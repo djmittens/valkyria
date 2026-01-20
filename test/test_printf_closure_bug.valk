@@ -1,22 +1,21 @@
 (load "src/prelude.valk")
 
-; Minimal reproduction: closure capture bug when fun is passed to map
+; Demonstration: inline lambda pattern for proper closure capture
 ;
-; BUG: When a named function defined with (fun {name args} body) is passed
-; to map, it does NOT capture variables from the enclosing scope.
+; FIX: When a named function needs to capture variables from enclosing scope,
+; use (= {name} (\ {args} body)) instead of (fun {name args} body).
+; The fun macro uses def (global scope), which doesn't capture locals.
 ;
-; Expected: Should print "Processing a with 5000", "Processing b with 5000"
-; Actual: 5000 is not printed / wrong value appears
+; Expected: "Processing a with 5000", "Processing b with 5000"
 
-(print "=== BUG DEMO: fun + map loses closure capture ===")
+(print "=== FIX: inline lambda captures closure correctly ===")
 (fun {outer items} {
   (= {my-value} 5000)
   
-  (fun {process item} {
+  (= {process} (\ {item} {
     (= {name} (eval item))
-    (print "Before printf, my-value =" my-value)
     (printf "Processing %s with %ld\n" name my-value)
-  })
+  }))
   
   (map process items)
 })
