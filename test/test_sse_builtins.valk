@@ -190,5 +190,23 @@
     (= {result} (sse/stream-count "extra"))
     (test/assert (error? result) "sse/stream-count with args should fail")
     true
+  })
+  (test "stream-closed-no-args-fails"
+    {do
+    (= {result} (stream/closed))
+    (test/assert (error? result) "stream/closed with no args should fail")
+    true
+  })
+  (test "stream-closed-wrong-type-fails"
+    {do
+    (= {result} (stream/closed "not-a-stream"))
+    (test/assert (error? result) "stream/closed with string should fail")
+    true
+  })
+  (test "stream-closed-too-many-args-fails"
+    {do
+    (= {result} (stream/closed "a" "b"))
+    (test/assert (error? result) "stream/closed with 2 args should fail")
+    true
   }))
   {:suite-name "SSE Builtins Error Cases"})
