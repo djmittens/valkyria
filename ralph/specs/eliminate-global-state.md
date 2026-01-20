@@ -1,28 +1,35 @@
 # Eliminate Global Mutable State
 
-## Problem
+## Overview
 
-The Valk codebase relies on global mutable state via `def`, which creates concurrency issues:
+Remove global mutable state from the Valk codebase to eliminate data races between the main thread and event loop thread. The current reliance on `def` for global variables creates concurrency issues since `valk_lenv_put` has no synchronization. Refactoring to explicit state passing and closures improves thread safety and code clarity.
 
-1. **Main thread** runs initial script setup
-2. **Event loop thread** runs callbacks (HTTP handlers, timers, async continuations)
-3. **`valk_lenv_put`** has no synchronization - direct array mutation
-4. **Data races** occur when both threads access the same environment
+## Requirements
 
-Current mitigations are incomplete:
+### Problem Analysis
+
+The codebase has two threads accessing shared state:
+
+| Thread | Role | State Access |
+|--------|------|--------------|
+| Main thread | Runs initial script setup | Writes globals via `def` |
+| Event loop thread | Runs callbacks (HTTP handlers, timers, async) | Reads/writes globals |
+
+`valk_lenv_put` performs direct array mutation without locks, causing data races.
+
+### Current Mitigations (Incomplete)
+
 - HTTP handlers use sandboxed envs that block `def` - but only for handlers
 - Async tests use atoms - but only for counters
 - Most code still uses `def` for globals
 
-## Principle
+### Design Principle
 
-**No globals should be a strict rule.** Pass state explicitly or use closures.
+**No globals should be a strict rule.** Pass state explicitly or use closures. Atoms are acceptable only for truly cross-thread state (e.g., async pending count).
 
-## Scope
+### Test Framework Globals (Worst Offender)
 
-### Phase 1: Test Framework (modules/test.valk)
-
-The test framework is the worst offender with 11 global variables:
+`src/modules/test.valk` has 11 global variables:
 
 ```lisp
 ; Sync test globals
@@ -43,41 +50,11 @@ The test framework is the worst offender with 11 global variables:
 (def {*test-async-failed-atom*} (atom 0))   ; OK
 ```
 
-**Refactor to:**
-- Create test context struct passed through all functions
-- Use builder pattern for test suite configuration
-- Atoms only for truly cross-thread state (async pending count)
+### Refactored Design: Test Context
 
-### Phase 2: Audit All .valk Files
+Replace globals with explicit context struct:
 
-Scan for `(def {*` pattern and refactor each instance.
-
-### Phase 3: Runtime Enforcement
-
-Consider adding runtime warning/error when `def` is used to mutate existing bindings (not just in sandboxed handlers).
-
-## Implementation Plan
-
-### Task 1: Refactor test/run (sync tests)
-
-Current:
 ```lisp
-(fun {test/run & args} {
-  do
-    (def {*test-passed*} 0)  ; MUTATION
-    ...
-})
-```
-
-New:
-```lisp
-(fun {test/run & args} {
-  (= {ctx} (test/context-new))
-  (fold test/run-one ctx *test-registry*)
-  (test/print-results ctx)
-  (test/exit-with-code ctx)
-})
-
 (fun {test/context-new} {
   {passed 0 failed 0 skipped 0 suite-name "Valkyria Test Suite"}
 })
@@ -86,73 +63,76 @@ New:
   ; Returns updated ctx with incremented counters
   ...
 })
+
+(fun {test/run & args} {
+  (= {ctx} (test/context-new))
+  (fold test/run-one ctx *test-registry*)
+  (test/print-results ctx)
+  (test/exit-with-code ctx)
+})
 ```
 
-### Task 2: Refactor test/run-async (async tests)
-
-Current approach with atoms is mostly correct, but context should still be explicit:
+### Refactored Design: Async Context
 
 ```lisp
+(fun {test/async-context-new} {
+  {pending (atom 0) passed (atom 0) failed (atom 0)}
+})
+
 (fun {test/run-async aio & args} {
   (= {ctx} (test/async-context-new))
   ...
 })
-
-(fun {test/async-context-new} {
-  {pending (atom 0) passed (atom 0) failed (atom 0)}
-})
 ```
 
-### Task 3: Refactor test registration
+### Refactored Design: Test Registration
 
-Current:
+Replace mutable registry with inline test lists:
+
+**Current (mutable):**
 ```lisp
 (fun {test/define name body} {
   (def {*test-registry*} (join *test-registry* ...))  ; MUTATION
 })
 ```
 
-New approach - return test list, don't mutate global:
+**New (immutable):**
 ```lisp
-; Tests are defined inline, not registered to global
+; Option 1: Inline list
 (test/run (list
   (test "name1" {body1})
   (test "name2" {body2})))
-```
 
-Or use a builder:
-```lisp
+; Option 2: Builder pattern
 (-> (test/suite "My Suite")
     (test/add "test1" {body1})
     (test/add "test2" {body2})
     (test/run))
 ```
 
-### Task 4: Audit other .valk files
+### Files to Audit
 
-Files to check:
-- src/prelude.valk - `nil`, `true`, `false` are OK (constants)
-- src/async_monadic.valk - aliases OK
-- src/async_handles.valk - check for mutable state
-- src/http_api.valk - check for mutable state
-- All test/*.valk files
+| File | Status | Notes |
+|------|--------|-------|
+| `src/modules/test.valk` | Needs refactor | 11 globals |
+| `src/prelude.valk` | OK | `nil`, `true`, `false` are constants |
+| `src/async_monadic.valk` | OK | Aliases only |
+| `src/async_handles.valk` | Audit | Check for mutable state |
+| `src/http_api.valk` | Audit | Check for mutable state |
+| `test/*.valk` | Audit | May use test framework globals |
 
-### Task 5: Add lint rule
+### CI Lint Rule
 
-Create a script that fails CI if `(def {*` pattern appears outside of:
+Add script that fails CI if `(def {*` pattern appears outside of:
 - Constant definitions (immutable after init)
 - Atom creation
 
 ## Acceptance Criteria
 
-- [ ] `modules/test.valk` has no mutable globals (only atoms for async)
-- [ ] All test files work with refactored framework
-- [ ] No `(def {*...*} ...)` mutations in src/*.valk (except atom creation)
-- [ ] CI lint check for global mutation pattern
-- [x] Document threading model in AGENTS.md or similar - Added docs/THREADING.md
-
-## Notes
-
-- This is a breaking change to the test framework API
-- Existing tests will need migration
-- Consider backwards compatibility shim during transition
+- [ ] `src/modules/test.valk` has no mutable globals (only atoms for cross-thread async counters)
+- [ ] `grep -c "def {\*" src/modules/test.valk` returns count matching only atom creations
+- [ ] All existing test files work with refactored framework (`make test` passes)
+- [ ] No `(def {*...*} ...)` mutations in `src/*.valk` (except atom creation)
+- [ ] CI lint check script exists and detects global mutation pattern
+- [ ] `docs/THREADING.md` documents the threading model and no-globals rule
+- [ ] Backwards compatibility: Old test API works during transition period (optional shim)
