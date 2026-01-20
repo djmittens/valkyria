@@ -270,6 +270,7 @@ define run_tests_valk
 
 	$(1)/valk test/stress/test_gc_stress.valk
 	$(1)/valk test/stress/test_networking_stress.valk
+	$(1)/valk test/stress/test_sse_concurrency_short.valk
 	@echo "=== All Valk tests passed ($(1)) ==="
 endef
 
