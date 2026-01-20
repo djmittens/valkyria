@@ -1,0 +1,85 @@
+; Test aio/schedule cancellation
+; Verifies that cancelling a scheduled timer prevents the callback from running
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/start))
+
+(test/run-async aio (list
+  (test-async "aio/schedule returns a handle" (\ {done} {
+    (= {h} (aio/schedule aio 1000 (\ {} {nil})))
+    (if (error? h)
+      {(do (print "Error:" h) (done false))}
+      {(do
+        (aio/cancel h)
+        (done true))})
+  }))
+
+  (test-async "aio/cancel on pending schedule returns true" (\ {done} {
+    (= {h} (aio/schedule aio 1000 (\ {} {nil})))
+    (= {result} (aio/cancel h))
+    (if (== result (quote :true))
+      {(done true)}
+      {(do (print "Expected :true, got:" result) (done false))})
+  }))
+
+  (test-async "cancelled schedule does not run callback" (\ {done} {
+    (= {callback-ran} (atom 0))
+    (= {h} (aio/schedule aio 50 (\ {} {
+      (atom/set! callback-ran 1)
+    })))
+    (aio/cancel h)
+    ; Wait longer than the scheduled delay
+    (aio/schedule aio 200 (\ {} {
+      (if (== (atom/get callback-ran) 0)
+        {(done true)}
+        {(do (print "Callback ran despite cancellation!") (done false))})
+    }))
+  }))
+
+  (test-async "aio/cancelled? returns true after cancel" (\ {done} {
+    (= {h} (aio/schedule aio 1000 (\ {} {nil})))
+    (aio/cancel h)
+    (= {result} (aio/cancelled? h))
+    (if (== result (quote :true))
+      {(done true)}
+      {(do (print "Expected :true, got:" result) (done false))})
+  }))
+
+  (test-async "aio/status after cancel shows cancelled" (\ {done} {
+    (= {h} (aio/schedule aio 1000 (\ {} {nil})))
+    (aio/cancel h)
+    ; Give time for status to update
+    (aio/schedule aio 50 (\ {} {
+      (= {status} (aio/status h))
+      (if (== status (quote :cancelled))
+        {(done true)}
+        {(do (print "Expected :cancelled, got:" status) (done false))})
+    }))
+  }))
+
+  (test-async "non-cancelled schedule runs callback" (\ {done} {
+    (= {callback-ran} (atom 0))
+    (aio/schedule aio 50 (\ {} {
+      (atom/set! callback-ran 1)
+    }))
+    ; Wait and verify callback ran
+    (aio/schedule aio 200 (\ {} {
+      (if (== (atom/get callback-ran) 1)
+        {(done true)}
+        {(do (print "Callback did not run!") (done false))})
+    }))
+  }))
+
+  (test-async "cancel on already-completed schedule returns false" (\ {done} {
+    (= {h} (aio/schedule aio 10 (\ {} {nil})))
+    ; Wait for it to complete
+    (aio/schedule aio 100 (\ {} {
+      (= {result} (aio/cancel h))
+      (if (== result (quote :false))
+        {(done true)}
+        {(do (print "Expected :false, got:" result) (done false))})
+    }))
+  }))
+) {:suite-name "aio/schedule cancellation tests"})

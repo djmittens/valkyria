@@ -15,7 +15,7 @@ JOBS := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 #
 # macOS has no rr equivalent. Debug flaky tests on Linux.
 ifeq ($(UNAME), Linux)
-  RR_FLAKY := rr record
+  RR_FLAKY := $(shell command -v rr >/dev/null 2>&1 && echo "rr record" || echo "")
   ifdef RR
     RR_PREFIX := rr record$(if $(filter chaos,$(RR)), --chaos)
     export VALK_TEST_NO_FORK := 1
@@ -282,6 +282,7 @@ define run_tests_valk
 	$(1)/valk test/test_http_client_server.valk
 	$(1)/valk test/test_async_http_handlers.valk
 	$(1)/valk test/test_aio_config.valk
+	$(1)/valk test/test_aio_schedule_cancel.valk
 	$(1)/valk test/test_backpressure.valk
 	$(1)/valk test/test_backpressure_timeout.valk
 	$(1)/valk test/test_pending_streams.valk
