@@ -134,17 +134,17 @@ run 12345            # Jump to specific event
 ```
 
 ### Known Flaky Tests (test/flaky.txt)
-Tests listed in `test/flaky.txt` are known to be flaky. Run them under rr:
+Tests listed in `FLAKY_C_TESTS` and `FLAKY_VALK_TESTS` in the Makefile are known to be flaky. Run them under rr:
 ```bash
 make test-flaky      # Run all flaky tests under rr, recordings saved on failure
 ```
 
 When adding a new flaky test to the list, or when a flaky test fails:
-1. Add/keep the test in `test/flaky.txt`
+1. Add/keep the test in `FLAKY_C_TESTS` or `FLAKY_VALK_TESTS` in Makefile
 2. Run `make test-flaky` to get a recording
 3. Debug with `rr replay`
 4. Fix the root cause
-5. Remove from `test/flaky.txt` once stable
+5. Remove from the flaky list once stable
 
 ### Core Dumps (for crashes/SIGSEGV)
 Core dumps are already captured automatically via systemd-coredump:

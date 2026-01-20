@@ -624,48 +624,33 @@ test-rr-until-fail: test-rr-check build
 	done
 	echo "No failure in $$max iterations (all recordings cleaned up)"
 
-# Run all known-flaky tests under rr (from test/flaky.txt)
-# Recordings are deleted on success, kept only on failure
+# Known flaky tests - run under rr to capture failures
+FLAKY_C_TESTS := test_networking test_aio_integration
+FLAKY_VALK_TESTS := test/test_http_integration.valk test/test_concurrent_requests.valk
+
+# Run flaky tests under rr (Linux only)
+# Uses existing RR_PREFIX mechanism, cleans up recordings on success
 .ONESHELL:
 .PHONY: test-flaky
 test-flaky: test-rr-check build
 	set -e
-	@echo ""
-	@echo "╔══════════════════════════════════════════════════════════════╗"
-	@echo "║  Running flaky tests under rr (from test/flaky.txt)         ║"
-	@echo "║  Recordings kept only on failure                            ║"
-	@echo "╚══════════════════════════════════════════════════════════════╝"
-	@echo ""
 	export VALK_TEST_NO_FORK=1
 	failed=""
-	while IFS= read -r test || [ -n "$$test" ]; do \
-		case "$$test" in \#*|"") continue;; esac; \
-		echo "=== Recording: $$test ==="; \
-		if echo "$$test" | grep -q "\.valk$$"; then \
-			if rr record build/valk "$$test"; then \
-				rr rm -f latest-trace 2>/dev/null || true; \
-			else \
-				echo "FAILED: $$test (recording kept)"; \
-				failed="$$failed $$test"; \
-			fi; \
-		else \
-			if rr record build/"$$test"; then \
-				rr rm -f latest-trace 2>/dev/null || true; \
-			else \
-				echo "FAILED: $$test (recording kept)"; \
-				failed="$$failed $$test"; \
-			fi; \
-		fi; \
-	done < test/flaky.txt
+	for test in $(FLAKY_C_TESTS); do \
+		echo "=== $$test ==="; \
+		if rr record build/$$test; then rr rm -f latest-trace 2>/dev/null || true; \
+		else failed="$$failed $$test"; fi; \
+	done
+	for test in $(FLAKY_VALK_TESTS); do \
+		echo "=== $$test ==="; \
+		if rr record build/valk $$test; then rr rm -f latest-trace 2>/dev/null || true; \
+		else failed="$$failed $$test"; fi; \
+	done
 	if [ -n "$$failed" ]; then \
-		echo ""; \
-		echo "╔══════════════════════════════════════════════════════════════╗"; \
-		echo "║  FAILURES RECORDED - debug with: rr replay                   ║"; \
-		echo "╚══════════════════════════════════════════════════════════════╝"; \
-		echo "Failed tests:$$failed"; \
+		echo "FAILED (recording kept):$$failed"; \
+		echo "Debug with: rr replay"; \
 		exit 1; \
 	fi
-	@echo "All flaky tests passed (recordings cleaned up)"
 
 else
 # macOS stubs - explain alternatives
