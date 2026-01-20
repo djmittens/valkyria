@@ -13,6 +13,8 @@
 #include "metrics_v2.h"
 #include "parser.h"
 
+extern void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result);
+
 static u64 g_stream_body_id = 0;
 
 #define STREAM_DEFAULT_QUEUE_MAX 1000
@@ -113,6 +115,11 @@ static void __stream_body_finish_close(valk_stream_body_t *body) {
 
   if (body->on_close) {
     body->on_close(body, body->user_data);
+  }
+
+  if (body->closed_handle) {
+    valk_async_handle_complete(body->closed_handle, valk_lval_sym(":closed"));
+    body->closed_handle = NULL;
   }
 
   valk_lval_t *lisp_on_close = valk_handle_resolve(&valk_global_handle_table, 

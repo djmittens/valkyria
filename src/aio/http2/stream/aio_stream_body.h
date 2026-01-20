@@ -65,6 +65,8 @@ struct valk_stream_body {
   valk_handle_t lisp_on_close_handle;
   valk_handle_t lisp_on_timeout_handle;
   struct valk_lenv_t *callback_env;
+
+  struct valk_async_handle_t *closed_handle;
 };
 
 valk_stream_body_t *valk_stream_body_new(

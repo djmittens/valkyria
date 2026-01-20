@@ -10,6 +10,7 @@
 #include "parser.h"
 
 void valk_http2_flush_pending(valk_aio_handle_t *conn);
+extern valk_async_handle_t *valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env);
 
 // LCOV_EXCL_START - defensive validation already covered by LVAL_TYPE check
 static valk_stream_body_t *get_stream_body(valk_lval_t *ref) {
@@ -324,6 +325,40 @@ static valk_lval_t *valk_builtin_stream_on_close(valk_lenv_t *e, valk_lval_t *a)
   return body_ref;
 }
 
+static valk_lval_t *valk_builtin_stream_closed(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("stream/closed: expected 1 argument, got %llu",
+                         (unsigned long long)valk_lval_list_count(a));
+  }
+
+  valk_lval_t *body_ref = valk_lval_list_nth(a, 0);
+  valk_stream_body_t *body = get_stream_body(body_ref);
+  if (!body) {
+    return valk_lval_err("stream/closed: argument must be stream body handle");
+  }
+
+  if (atomic_load(&body->state) == VALK_STREAM_CLOSED) {
+    valk_async_handle_t *handle = valk_async_handle_new(NULL, NULL);
+    handle->status = VALK_ASYNC_COMPLETED;
+    atomic_store_explicit(&handle->result, valk_lval_sym(":closed"), memory_order_release);
+    return valk_lval_handle(handle);
+  }
+
+  if (body->closed_handle) {
+    return valk_lval_handle(body->closed_handle);
+  }
+
+  valk_async_handle_t *handle = valk_async_handle_new(body->conn ? body->conn->sys : NULL, NULL);
+  body->closed_handle = handle;
+
+  VALK_DEBUG("stream: created closed future for body id=%llu",
+             (unsigned long long)body->id);
+
+  return valk_lval_handle(handle);
+}
+
 void valk_register_stream_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "stream/open", valk_builtin_stream_open);
   valk_lenv_put_builtin(env, "stream/write", valk_builtin_stream_write);
@@ -334,6 +369,7 @@ void valk_register_stream_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "stream/set-timeout", valk_builtin_stream_set_timeout);
   valk_lenv_put_builtin(env, "stream/cancel", valk_builtin_stream_cancel);
   valk_lenv_put_builtin(env, "stream/id", valk_builtin_stream_id);
+  valk_lenv_put_builtin(env, "stream/closed", valk_builtin_stream_closed);
 
   VALK_DEBUG("stream: registered builtins");
 }
