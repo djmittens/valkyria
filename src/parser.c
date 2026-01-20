@@ -613,12 +613,10 @@ u64 valk_lval_list_count(valk_lval_t* list) {
     if (count % 2 == 0 && slow) {
       slow = slow->cons.tail;
       if (slow == curr) {
-        fprintf(stderr, "DEBUG: cycle detected in list at count=%llu\n", count);
         abort();
       }
     }
     if (count > 10000) {
-      fprintf(stderr, "DEBUG: list_count > 10000, possible infinite loop\n");
       abort();
     }
   }
@@ -983,9 +981,6 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
   if (func->fun.builtin) {
     atomic_fetch_add(&g_eval_metrics.builtin_calls, 1);
     valk_lval_t* result = func->fun.builtin(env, args);
-    if (func->fun.name && strcmp(func->fun.name, "len") == 0) {
-      fprintf(stderr, "DEBUG: builtin len returned, result type=%s\n", valk_ltype_name(LVAL_TYPE(result)));
-    }
     atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
     // LCOV_EXCL_START - defensive check: builtins should never return NULL
     if (result == NULL) {
@@ -1364,9 +1359,6 @@ apply_cont:
           if (valk_lval_list_is_empty(frame.collect_arg.remaining)) {
             valk_lval_t* args_list = valk_lval_list(frame.collect_arg.args, frame.collect_arg.count);
             free(frame.collect_arg.args);
-            if (frame.collect_arg.func->fun.name && strcmp(frame.collect_arg.func->fun.name, "=") == 0) {
-              fprintf(stderr, "DEBUG: calling = with %llu args\n", valk_lval_list_count(args_list));
-            }
             valk_eval_result_t res = valk_eval_apply_func_iter(frame.env, frame.collect_arg.func, args_list);
             if (!res.is_thunk) {
               value = res.value;
