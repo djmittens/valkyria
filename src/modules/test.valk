@@ -403,8 +403,12 @@
 
 (fun {*test-async-done-callback* test-name start-time timed-out-atom timer-handle passed} {
   do
-    ; Check if already timed out
-    (if (== (atom/get timed-out-atom) 1)
+    ; Mark as done FIRST with value 2, then check if timeout already fired (value 1)
+    ; This prevents the timeout callback from firing after we're done
+    ; timed-out-atom: 0=pending, 1=timeout-fired, 2=done-fired
+    (= {prev-state} (atom/get timed-out-atom))
+    (atom/set! timed-out-atom 2)
+    (if (!= prev-state 0)
       {true}  ; Already reported as timed out, ignore this callback
       {do
         (aio/cancel timer-handle)
@@ -424,7 +428,10 @@
 })
 
 (fun {*test-async-timeout-callback* test-name timed-out-atom} {
-  (if (== (atom/get timed-out-atom) 0)
+  ; Check if test already completed (value != 0 means done or already timed out)
+  ; timed-out-atom: 0=pending, 1=timeout-fired, 2=done-fired
+  (= {prev-state} (atom/get timed-out-atom))
+  (if (== prev-state 0)
     {do
       (atom/set! timed-out-atom 1)
       (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT\n")
