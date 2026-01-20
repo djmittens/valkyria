@@ -3697,6 +3697,31 @@ static valk_lval_t* valk_builtin_str_replace(valk_lenv_t* e, valk_lval_t* a) {
   return res;
 }
 
+static valk_lval_t* valk_builtin_str_slice(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+
+  valk_lval_t* str_arg = valk_lval_list_nth(a, 0);
+  valk_lval_t* start_arg = valk_lval_list_nth(a, 1);
+  valk_lval_t* end_arg = valk_lval_list_nth(a, 2);
+
+  LVAL_ASSERT_TYPE(a, str_arg, LVAL_STR);
+  LVAL_ASSERT_TYPE(a, start_arg, LVAL_NUM);
+  LVAL_ASSERT_TYPE(a, end_arg, LVAL_NUM);
+
+  const char* str = str_arg->str;
+  i64 str_len = strlen(str);
+  i64 start = start_arg->num;
+  i64 end = end_arg->num;
+
+  if (start < 0) start = 0;
+  if (end > str_len) end = str_len;
+  if (start > end) start = end;
+
+  u64 slice_len = end - start;
+  return valk_lval_str_n(str + start, slice_len);
+}
+
 // Get current time in microseconds
 static valk_lval_t* valk_builtin_time_us(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -5145,6 +5170,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "make-string", valk_builtin_make_string);
   valk_lenv_put_builtin(env, "str/split", valk_builtin_str_split);
   valk_lenv_put_builtin(env, "str/replace", valk_builtin_str_replace);
+  valk_lenv_put_builtin(env, "str/slice", valk_builtin_str_slice);
   valk_lenv_put_builtin(env, "time-us", valk_builtin_time_us);
   valk_lenv_put_builtin(env, "sleep", valk_builtin_sleep);
   valk_lenv_put_builtin(env, "stack-depth", valk_builtin_stack_depth);

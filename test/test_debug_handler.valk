@@ -16,11 +16,11 @@
   {(= {total} (len tests))
    (= {passed} (atom 0))
    (= {failed} (atom 0))
-   (= {current-idx} (atom 0))
+   (= {current-idx} (atom 1))
 
    (fun {run-next-test} {
      (= {idx} (atom/get current-idx))
-     (if (>= idx total)
+     (if (> idx total)
        (on-all-done (atom/get passed) (atom/get failed))
        (do
          (debug/reset-state)
@@ -69,17 +69,6 @@
       {head (tail (head headers))}
       {get-header (tail headers) name}}
 })
-
-(fun {str-starts-with? s prefix}
-  {(= {prefix-len} (len prefix))
-   (if (< (len s) prefix-len)
-     {false}
-     {(== (head (str/split s (make-string prefix-len (ord (head (str/split prefix "")))))) "")})})
-
-(fun {first-char s}
-  {(if (> (len s) 0)
-     {(head (str/split (str (make-string 1 (ord s))) ""))}
-     {""})})
 
 (def {main-tests} (list
   (test-async "/debug returns HTML dashboard" (\ {done} {
