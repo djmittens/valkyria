@@ -1198,6 +1198,71 @@ static void test_on_close_callback_can_access_stream_state(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+typedef struct {
+  valk_stream_body_t *body;
+  pthread_barrier_t *barrier;
+} close_race_thread_arg_t;
+
+static void *close_race_thread(void *arg) {
+  close_race_thread_arg_t *ctx = arg;
+  pthread_barrier_wait(ctx->barrier);
+  valk_stream_body_close(ctx->body);
+  return nullptr;
+}
+
+static void test_stream_body_close_pthread_race(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  on_close_capture_t capture = {0};
+  pthread_mutex_init(&capture.mutex, nullptr);
+
+  valk_aio_handle_t *conn = calloc(1, sizeof(valk_aio_handle_t));
+  conn->magic = VALK_AIO_HANDLE_MAGIC;
+  conn->http.stream_bodies = nullptr;
+
+  valk_stream_body_t *body = calloc(1, sizeof(valk_stream_body_t));
+  body->state = VALK_STREAM_OPEN;
+  body->conn = conn;
+  body->stream_id = 123;
+  body->id = 77777;
+  body->queue_max = 100;
+  body->queue_len = 0;
+  body->on_close = cb_on_close_capture;
+  body->user_data = &capture;
+  body->next = nullptr;
+
+  valk_stream_body_register(body);
+
+  pthread_barrier_t barrier;
+  pthread_barrier_init(&barrier, nullptr, 2);
+
+  close_race_thread_arg_t arg1 = {.body = body, .barrier = &barrier};
+  close_race_thread_arg_t arg2 = {.body = body, .barrier = &barrier};
+
+  pthread_t t1, t2;
+  pthread_create(&t1, nullptr, close_race_thread, &arg1);
+  pthread_create(&t2, nullptr, close_race_thread, &arg2);
+
+  pthread_join(t1, nullptr);
+  pthread_join(t2, nullptr);
+
+  pthread_barrier_destroy(&barrier);
+
+  ASSERT_TRUE(body->state == VALK_STREAM_CLOSING || body->state == VALK_STREAM_CLOSED);
+
+  pthread_mutex_lock(&capture.mutex);
+  int callback_count = capture.callback_count;
+  pthread_mutex_unlock(&capture.mutex);
+
+  ASSERT_LE(callback_count, 1);
+
+  pthread_mutex_destroy(&capture.mutex);
+  free(body);
+  free(conn);
+
+  VALK_PASS();
+}
+
 static void test_on_close_callback_timing_vs_unregister(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -1275,6 +1340,7 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_on_close_callback_fires_once_on_close_all", test_on_close_callback_fires_once_on_close_all);
   valk_testsuite_add_test(suite, "test_on_close_callback_can_access_stream_state", test_on_close_callback_can_access_stream_state);
   valk_testsuite_add_test(suite, "test_on_close_callback_timing_vs_unregister", test_on_close_callback_timing_vs_unregister);
+  valk_testsuite_add_test(suite, "test_stream_body_close_pthread_race", test_stream_body_close_pthread_race);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
