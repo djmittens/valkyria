@@ -95,6 +95,19 @@
     (str "{\"metrics\":{\"aio\":" aio-json ",\"modular\":" modular-json ",\"vm\":" vm-json ",\"registry\":" registry-json "},\"memory\":" memory-json "}")
   })
 
+; Build diagnostics delta JSON for testing
+; Uses global delta collection (not per-subscriber baseline)
+; Returns: {"metrics": {...}, "memory": {...}}
+(fun {aio/debug-diagnostics-delta sys}
+  {
+    (= {delta} (metrics/collect-delta))
+    (= {delta-json} (metrics/delta-json delta))
+    (= {aio-json} (aio/metrics-json-compact sys))
+    (= {vm-json} (vm/metrics-json-compact))
+    (= {memory-json} (aio/diagnostics-state-json-compact sys))
+    (str "{\"metrics\":{\"aio\":" aio-json ",\"vm\":" vm-json ",\"modular\":" delta-json "},\"memory\":" memory-json "}")
+  })
+
 ; SSE handler for /debug/diagnostics/memory
 ; Uses shared broadcaster for efficient multi-client streaming
 (fun {aio/debug-diagnostics-sse-handler sys req}

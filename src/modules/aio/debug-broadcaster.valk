@@ -63,10 +63,10 @@
            (atom/set! debug/timer-running 0)
            nil)))}))
    (aio/interval sys debug/broadcast-interval-ms (\ {} {
-     (if (not (== (atom/get debug/session-id) my-session))
-       :stop
-       (if (== (atom/get closed) 1)
-         :stop
+      (if (not (== (atom/get debug/session-id) my-session))
+        :stop
+        (if (== (atom/get closed) 1)
+          :stop
          (do
            (= {current-tick} (atom/get debug/broadcast-tick))
            (= {my-last-tick} (atom/get last-tick))
