@@ -66,10 +66,13 @@ Break the original task into 2-5 smaller tasks that:
 
 For each subtask, **include `parent` to link back to the original task**:
 ```
-ralph task add '{"name": "Specific subtask", "notes": "What to do", "accept": "<measurable: command + expected result>", "parent": "<original-task-id>"}'
+ralph task add '{"name": "Specific subtask", "notes": "<DETAILED: file paths + approach, min 50 chars>", "accept": "<measurable: command + expected result>", "parent": "<original-task-id>"}'
 ```
 
-**IMPORTANT**: `accept` MUST be measurable - specify command to run and expected result (e.g., "make test passes", "file X exists", "grep Y returns Z").
+**IMPORTANT**: 
+- `notes` MUST include specific file paths and implementation details (minimum 50 chars)
+- `accept` MUST be measurable - specify command to run and expected result
+- Example notes: "Modify src/foo.c lines 100-150: Extract bar() function to new file src/bar.c. Update includes."
 
 Use `deps` to specify order if needed.
 

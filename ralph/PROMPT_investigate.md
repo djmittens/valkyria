@@ -29,7 +29,7 @@ Return a JSON object:
   \"resolution\": \"task\" | \"trivial\" | \"out_of_scope\",
   \"task\": {  // only if resolution is \"task\"
     \"name\": \"<fix description>\",
-    \"notes\": \"<root cause and approach>\",
+    \"notes\": \"<DETAILED: specific file paths, functions, and implementation approach - min 50 chars>\",
     \"accept\": \"<MEASURABLE: command + expected result, e.g. 'make test passes' or 'grep X file returns 1'>\",
     \"priority\": \"<inherit from issue priority above>\"
   },

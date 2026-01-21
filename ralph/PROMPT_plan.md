@@ -33,9 +33,22 @@ ralph task add '{"name": "Short task name", "notes": "Implementation details", "
 
 Task fields:
 - `name` (required): Short description of what to do (e.g., "Add unit tests for parser")
-- `notes` (required): Implementation details - what files to modify, what approach to take, relevant context
+- `notes` (required): **DETAILED** implementation guidance - MUST include specific file paths and approach
 - `accept` (required): **MEASURABLE** acceptance criteria - MUST specify concrete verification steps
 - `deps` (optional): List of task IDs this task depends on
+
+**CRITICAL: Notes MUST be detailed to minimize BUILD stage research.**
+
+Good `notes` examples:
+- "Modify src/aio/aio_combinators.c: Add valk_builtin_aio_within() that creates race between handle and sleep+timeout. Register in valk_lenv_put_builtins(). Pattern: race(handle, then(sleep(sys, ms), fail(timeout)))."
+- "Create test/test_aio_within.valk: Test cases for timeout before completion, completion before timeout, and handle failure. Use aio/sleep for timing control."
+- "Update src/parser.c line 450: Add 'aio/within' to builtin registration table after aio/race entry."
+
+Bad `notes` examples (WILL BE REJECTED):
+- "Add the feature" - no file paths, no approach
+- "Implement aio/within" - vague, no details
+- "Write tests" - which files? what to test?
+- "Update code as needed" - no specific files
 
 **CRITICAL: Acceptance criteria MUST be measurable and specific.**
 
@@ -52,7 +65,11 @@ Bad `accept` examples (WILL BE REJECTED):
 - "is implemented" - not measurable
 - "feature works" - how do you verify?
 
-**IMPORTANT**: Every task MUST have `notes` with implementation guidance. Tasks without `notes` will fail during BUILD.
+**IMPORTANT**: Every task MUST have:
+1. `notes` with SPECIFIC file paths and implementation approach (minimum 50 chars)
+2. `accept` with MEASURABLE verification steps (minimum 15 chars)
+
+Tasks without detailed `notes` will be REJECTED during validation.
 
 The command returns the new task ID (e.g., "Task added: t-1a2b - ..."). Use this ID when other tasks depend on it.
 
@@ -61,6 +78,7 @@ Rules:
 - Add tasks in dependency order - add prerequisite tasks first so you have their IDs
 - Be specific - "Add X to Y" not "Improve Z"
 - Tasks are for {{SPEC_FILE}} only
+- `notes` MUST include specific file paths (e.g., src/foo.c, test/test_bar.valk)
 - `accept` MUST be measurable (command to run, expected output, exit code)
 - Use `deps` when a task requires another task to be done first
 
