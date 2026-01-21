@@ -183,7 +183,8 @@ target_link_libraries(valkyria PRIVATE
   nghttp2::nghttp2
   ${LIBUV_LIBRARIES}
   OpenSSL::SSL
-  OpenSSL::Crypto)
+  OpenSSL::Crypto
+  m)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND BACKTRACE_LIBRARIES)
   target_link_libraries(valkyria PRIVATE ${BACKTRACE_LIBRARIES})

@@ -12,6 +12,7 @@ extern void valk_async_notify_race_parent(valk_async_handle_t *child);
 extern void valk_async_notify_any_parent(valk_async_handle_t *child);
 extern void valk_async_notify_all_settled_parent(valk_async_handle_t *child);
 extern void valk_async_notify_within_parent(valk_async_handle_t *child);
+extern void valk_async_notify_retry_parent(valk_async_handle_t *child);
 
 // LCOV_EXCL_BR_START - async callback defensive null checks
 bool valk_http_async_is_closed_callback(void *ctx) {
@@ -274,6 +275,7 @@ void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result
    valk_async_notify_any_parent(handle);
    valk_async_notify_all_settled_parent(handle);
    valk_async_notify_within_parent(handle);
+   valk_async_notify_retry_parent(handle);
    valk_async_notify_done(handle);
    valk_async_propagate_completion(handle);
 }
@@ -303,13 +305,14 @@ void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
      return;
    }
 
-   valk_async_notify_all_parent(handle);
-   valk_async_notify_race_parent(handle);
-   valk_async_notify_any_parent(handle);
-   valk_async_notify_all_settled_parent(handle);
-   valk_async_notify_within_parent(handle);
-   valk_async_notify_done(handle);
-   valk_async_propagate_completion(handle);
+    valk_async_notify_all_parent(handle);
+    valk_async_notify_race_parent(handle);
+    valk_async_notify_any_parent(handle);
+    valk_async_notify_all_settled_parent(handle);
+    valk_async_notify_within_parent(handle);
+    valk_async_notify_retry_parent(handle);
+    valk_async_notify_done(handle);
+    valk_async_propagate_completion(handle);
 }
 
 static void valk_async_cancel_task(void *ctx) {

@@ -1,3 +1,4 @@
+#include <math.h>
 #include "aio_internal.h"
 #include "aio_request_ctx.h"
 
@@ -284,7 +285,7 @@ extern void valk_standalone_async_done_callback(valk_async_handle_t *handle, voi
 #define VALK_ANY_CTX_MAGIC_EARLY 0xA4177821
 #define VALK_WITHIN_CTX_MAGIC 0xB1781821
 #define VALK_WITHIN_CTX_MAGIC_EARLY 0xB1781821
-
+#define VALK_RETRY_CTX_MAGIC 0xA37F7821
 
 void valk_async_propagate_completion(valk_async_handle_t *source);
 void valk_async_notify_all_parent(valk_async_handle_t *child);
@@ -292,6 +293,7 @@ void valk_async_notify_race_parent(valk_async_handle_t *child);
 void valk_async_notify_any_parent(valk_async_handle_t *child);
 void valk_async_notify_all_settled_parent(valk_async_handle_t *child);
 void valk_async_notify_within_parent(valk_async_handle_t *child);
+void valk_async_notify_retry_parent(valk_async_handle_t *child);
 
 static void __sleep_timer_cb(uv_timer_t *timer_handle) {
   valk_async_handle_uv_data_t *data = (valk_async_handle_uv_data_t *)timer_handle->data;
@@ -2533,6 +2535,247 @@ static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_handle(within_handle);
 }
 
+typedef struct {
+  u32 magic;
+  valk_async_handle_t *retry_handle;
+  valk_async_handle_t *current_attempt;
+  valk_async_handle_t *backoff_timer;
+  valk_aio_system_t *sys;
+  valk_lenv_t *env;
+  valk_lval_t *fn;
+  u64 max_attempts;
+  u64 current_attempt_num;
+  u64 base_delay_ms;
+  f64 backoff_multiplier;
+  valk_lval_t *last_error;
+  valk_mem_allocator_t *allocator;
+} valk_retry_ctx_t;
+
+static void valk_retry_ctx_cleanup(void *ctx) {
+  valk_retry_ctx_t *retry_ctx = (valk_retry_ctx_t *)ctx;
+  if (!retry_ctx) return;
+  retry_ctx->magic = 0;
+  if (retry_ctx->allocator && retry_ctx->allocator->type != VALK_ALLOC_MALLOC) return;
+  free(retry_ctx);
+}
+
+static void valk_async_retry_schedule_next(valk_retry_ctx_t *ctx);
+
+static void valk_async_retry_backoff_done(valk_async_handle_t *child) {
+  if (!child || !child->parent) return;
+
+  valk_async_handle_t *parent = child->parent;
+  if (!parent->uv_handle_ptr) return;
+
+  u32 *magic_ptr = (u32*)parent->uv_handle_ptr;
+  if (*magic_ptr != VALK_RETRY_CTX_MAGIC) return;
+
+  valk_retry_ctx_t *ctx = (valk_retry_ctx_t*)parent->uv_handle_ptr;
+  ctx->backoff_timer = NULL;
+  valk_async_retry_schedule_next(ctx);
+}
+
+static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
+  if (!child || !child->parent) return;
+
+  valk_async_handle_t *parent = child->parent;
+  if (!parent->uv_handle_ptr) return;
+
+  u32 *magic_ptr = (u32*)parent->uv_handle_ptr;
+  if (*magic_ptr != VALK_RETRY_CTX_MAGIC) return;
+
+  valk_retry_ctx_t *ctx = (valk_retry_ctx_t*)parent->uv_handle_ptr;
+  valk_async_status_t status = valk_async_handle_get_status(child);
+
+  if (status == VALK_ASYNC_COMPLETED) {
+    valk_lval_t *result = atomic_load_explicit(&child->result, memory_order_acquire);
+    atomic_store_explicit(&parent->status, VALK_ASYNC_COMPLETED, memory_order_release);
+    atomic_store_explicit(&parent->result, result, memory_order_release);
+    valk_async_notify_done(parent);
+    valk_async_propagate_completion(parent);
+    return;
+  }
+
+  if (status == VALK_ASYNC_FAILED || status == VALK_ASYNC_CANCELLED) {
+    ctx->last_error = atomic_load_explicit(&child->error, memory_order_acquire);
+    ctx->current_attempt_num++;
+
+    if (ctx->current_attempt_num >= ctx->max_attempts) {
+      atomic_store_explicit(&parent->status, VALK_ASYNC_FAILED, memory_order_release);
+      atomic_store_explicit(&parent->error, ctx->last_error, memory_order_release);
+      valk_async_notify_done(parent);
+      valk_async_propagate_completion(parent);
+      return;
+    }
+
+    u64 delay_ms = (u64)((f64)ctx->base_delay_ms * pow(ctx->backoff_multiplier, (f64)(ctx->current_attempt_num - 1)));
+    const u64 MAX_BACKOFF_MS = 30000;
+    if (delay_ms > MAX_BACKOFF_MS) delay_ms = MAX_BACKOFF_MS;
+
+    valk_async_handle_t *timer = valk_async_handle_new(ctx->sys, ctx->env);
+    if (!timer) {
+      atomic_store_explicit(&parent->status, VALK_ASYNC_FAILED, memory_order_release);
+      atomic_store_explicit(&parent->error, valk_lval_err("Failed to allocate backoff timer"), memory_order_release);
+      valk_async_notify_done(parent);
+      valk_async_propagate_completion(parent);
+      return;
+    }
+
+    valk_async_handle_uv_data_t *timer_data = aligned_alloc(alignof(valk_async_handle_uv_data_t), sizeof(valk_async_handle_uv_data_t));
+    if (!timer_data) {
+      valk_async_handle_free(timer);
+      atomic_store_explicit(&parent->status, VALK_ASYNC_FAILED, memory_order_release);
+      atomic_store_explicit(&parent->error, valk_lval_err("Failed to allocate timer data"), memory_order_release);
+      valk_async_notify_done(parent);
+      valk_async_propagate_completion(parent);
+      return;
+    }
+
+    timer_data->magic = VALK_UV_DATA_TIMER_MAGIC;
+    timer_data->handle = timer;
+    timer_data->uv.timer.data = timer_data;
+
+    timer->uv_handle_ptr = timer_data;
+    timer->status = VALK_ASYNC_RUNNING;
+    timer->parent = parent;
+
+    uv_timer_init(ctx->sys->eventloop, &timer_data->uv.timer);
+    uv_timer_start(&timer_data->uv.timer, __sleep_timer_cb, (unsigned long long)delay_ms, 0);
+
+    ctx->backoff_timer = timer;
+    valk_async_handle_add_child(parent, timer);
+  }
+}
+
+void valk_async_notify_retry_parent(valk_async_handle_t *child) {
+  if (!child || !child->parent) return;
+
+  valk_async_handle_t *parent = child->parent;
+  if (!parent->uv_handle_ptr) return;
+
+  u32 *magic_ptr = (u32*)parent->uv_handle_ptr;
+  if (*magic_ptr != VALK_RETRY_CTX_MAGIC) return;
+
+  valk_retry_ctx_t *ctx = (valk_retry_ctx_t*)parent->uv_handle_ptr;
+
+  if (child == ctx->backoff_timer) {
+    valk_async_retry_backoff_done(child);
+  } else if (child == ctx->current_attempt) {
+    valk_async_retry_attempt_completed(child);
+  }
+}
+
+static void valk_async_retry_schedule_next(valk_retry_ctx_t *ctx) {
+  valk_lval_t *args = valk_lval_nil();
+  valk_lval_t *result_val = valk_lval_eval_call(ctx->env, ctx->fn, args);
+
+  if (LVAL_TYPE(result_val) != LVAL_HANDLE) {
+    atomic_store_explicit(&ctx->retry_handle->status, VALK_ASYNC_FAILED, memory_order_release);
+    atomic_store_explicit(&ctx->retry_handle->error, valk_lval_err("aio/retry: fn must return a handle"), memory_order_release);
+    valk_async_notify_done(ctx->retry_handle);
+    valk_async_propagate_completion(ctx->retry_handle);
+    return;
+  }
+
+  valk_async_handle_t *attempt = result_val->async.handle;
+  ctx->current_attempt = attempt;
+  attempt->parent = ctx->retry_handle;
+  valk_async_handle_add_child(ctx->retry_handle, attempt);
+}
+
+static valk_lval_t* valk_builtin_aio_retry(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 3) {
+    return valk_lval_err("aio/retry: expected 3 arguments (sys fn opts)");
+  }
+
+  valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
+  valk_lval_t *fn = valk_lval_list_nth(a, 1);
+  valk_lval_t *opts = valk_lval_list_nth(a, 2);
+
+  if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/retry: first argument must be an aio_system");
+  }
+  if (LVAL_TYPE(fn) != LVAL_FUN) {
+    return valk_lval_err("aio/retry: second argument must be a function");
+  }
+  if (LVAL_TYPE(opts) != LVAL_QEXPR) {
+    return valk_lval_err("aio/retry: third argument must be a qexpr (options dict)");
+  }
+
+  valk_aio_system_t *sys = sys_arg->ref.ptr;
+
+  u64 max_attempts = 3;
+  u64 base_delay_ms = 100;
+  f64 backoff_multiplier = 2.0;
+
+  valk_lval_t *opts_iter = opts;
+  while (LVAL_TYPE(opts_iter) != LVAL_NIL) {
+    if (LVAL_TYPE(opts_iter) != LVAL_CONS && LVAL_TYPE(opts_iter) != LVAL_QEXPR) {
+      break;
+    }
+
+    valk_lval_t *key = valk_lval_head(opts_iter);
+    opts_iter = valk_lval_tail(opts_iter);
+    if (LVAL_TYPE(opts_iter) == LVAL_NIL) break;
+
+    valk_lval_t *val = valk_lval_head(opts_iter);
+    opts_iter = valk_lval_tail(opts_iter);
+
+    if (LVAL_TYPE(key) == LVAL_SYM) {
+      if (strcmp(key->str, ":max-attempts") == 0 && LVAL_TYPE(val) == LVAL_NUM) {
+        max_attempts = (u64)val->num;
+      } else if (strcmp(key->str, ":base-ms") == 0 && LVAL_TYPE(val) == LVAL_NUM) {
+        base_delay_ms = (u64)val->num;
+      } else if (strcmp(key->str, ":backoff") == 0 && LVAL_TYPE(val) == LVAL_SYM) {
+        if (strcmp(val->str, ":exponential") == 0) {
+          backoff_multiplier = 2.0;
+        } else if (strcmp(val->str, ":linear") == 0) {
+          backoff_multiplier = 1.0;
+        } else if (strcmp(val->str, ":none") == 0) {
+          backoff_multiplier = 1.0;
+        }
+      }
+    }
+  }
+
+  if (max_attempts == 0) max_attempts = 1;
+  if (backoff_multiplier < 1.0) backoff_multiplier = 1.0;
+
+  valk_async_handle_t *retry_handle = valk_async_handle_new(sys, e);
+  if (!retry_handle) {
+    return valk_lval_err("Failed to allocate retry handle");
+  }
+
+  valk_mem_allocator_t *allocator = valk_thread_ctx.allocator;
+  valk_retry_ctx_t *ctx = valk_mem_alloc(sizeof(valk_retry_ctx_t));
+  if (!ctx) {
+    valk_async_handle_free(retry_handle);
+    return valk_lval_err("Failed to allocate retry context");
+  }
+
+  ctx->magic = VALK_RETRY_CTX_MAGIC;
+  ctx->retry_handle = retry_handle;
+  ctx->current_attempt = NULL;
+  ctx->backoff_timer = NULL;
+  ctx->sys = sys;
+  ctx->env = e;
+  ctx->fn = fn;
+  ctx->max_attempts = max_attempts;
+  ctx->current_attempt_num = 0;
+  ctx->base_delay_ms = base_delay_ms;
+  ctx->backoff_multiplier = backoff_multiplier;
+  ctx->last_error = NULL;
+  ctx->allocator = allocator;
+
+  retry_handle->status = VALK_ASYNC_RUNNING;
+  retry_handle->uv_handle_ptr = ctx;
+  valk_async_handle_on_cleanup(retry_handle, valk_retry_ctx_cleanup, ctx);
+
+  valk_async_retry_schedule_next(ctx);
+
+  return valk_lval_handle(retry_handle);
+}
+
 static valk_lval_t* valk_builtin_aio_pool_stats(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   // LCOV_EXCL_START - aio/pool-stats arg validation: compile-time checks
@@ -2601,32 +2844,7 @@ static valk_lval_t* valk_builtin_aio_pool_stats(valk_lenv_t* e, valk_lval_t* a) 
   return valk_lval_qlist(result_items, 6);
 }
 
-static valk_lval_t* valk_builtin_aio_retry(valk_lenv_t* e, valk_lval_t* a) {
-  if (valk_lval_list_count(a) != 3) {
-    return valk_lval_err("aio/retry: expected 3 arguments (sys fn opts)");
-  }
-  
-  valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
-  valk_lval_t *fn = valk_lval_list_nth(a, 1);
-  valk_lval_t *opts = valk_lval_list_nth(a, 2);
-  
-  if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/retry: first argument must be an aio_system");
-  }
-  if (LVAL_TYPE(fn) != LVAL_FUN) {
-    return valk_lval_err("aio/retry: second argument must be a function");
-  }
-  if (LVAL_TYPE(opts) != LVAL_QEXPR) {
-    return valk_lval_err("aio/retry: third argument must be a qexpr (options dict)");
-  }
-  
-  UNUSED(opts);
-  
-  valk_lval_t *args = valk_lval_nil();
-  valk_lval_t *result = valk_lval_eval_call(e, fn, args);
-  
-  return result;
-}
+
 
 void valk_register_async_handle_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "aio/cancel", valk_builtin_aio_cancel);
