@@ -10,6 +10,7 @@ extern void valk_async_propagate_completion(valk_async_handle_t *source);
 extern void valk_async_notify_all_parent(valk_async_handle_t *child);
 extern void valk_async_notify_race_parent(valk_async_handle_t *child);
 extern void valk_async_notify_any_parent(valk_async_handle_t *child);
+extern void valk_async_notify_all_settled_parent(valk_async_handle_t *child);
 extern void valk_async_notify_within_parent(valk_async_handle_t *child);
 
 // LCOV_EXCL_BR_START - async callback defensive null checks
@@ -264,16 +265,17 @@ void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result
   if (!transitioned) {
     transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, VALK_ASYNC_COMPLETED);
   }
-  if (!transitioned) {
-    return;
-  }
+   if (!transitioned) {
+     return;
+   }
 
-  valk_async_notify_all_parent(handle);
-  valk_async_notify_race_parent(handle);
-  valk_async_notify_any_parent(handle);
-  valk_async_notify_within_parent(handle);
-  valk_async_notify_done(handle);
-  valk_async_propagate_completion(handle);
+   valk_async_notify_all_parent(handle);
+   valk_async_notify_race_parent(handle);
+   valk_async_notify_any_parent(handle);
+   valk_async_notify_all_settled_parent(handle);
+   valk_async_notify_within_parent(handle);
+   valk_async_notify_done(handle);
+   valk_async_propagate_completion(handle);
 }
 
 void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
@@ -297,16 +299,17 @@ void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
   if (!transitioned) {
     transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, VALK_ASYNC_FAILED);
   }
-  if (!transitioned) {
-    return;
-  }
+   if (!transitioned) {
+     return;
+   }
 
-  valk_async_notify_all_parent(handle);
-  valk_async_notify_race_parent(handle);
-  valk_async_notify_any_parent(handle);
-  valk_async_notify_within_parent(handle);
-  valk_async_notify_done(handle);
-  valk_async_propagate_completion(handle);
+   valk_async_notify_all_parent(handle);
+   valk_async_notify_race_parent(handle);
+   valk_async_notify_any_parent(handle);
+   valk_async_notify_all_settled_parent(handle);
+   valk_async_notify_within_parent(handle);
+   valk_async_notify_done(handle);
+   valk_async_propagate_completion(handle);
 }
 
 static void valk_async_cancel_task(void *ctx) {
