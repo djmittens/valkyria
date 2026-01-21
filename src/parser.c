@@ -4042,6 +4042,7 @@ typedef struct {
 } valk_atom_t;
 
 static valk_lval_t* valk_builtin_atom(valk_lenv_t* e, valk_lval_t* a) {
+  VALK_WARN("atom is deprecated: use aio/semaphore or aio/then chains");
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
@@ -4051,6 +4052,7 @@ static valk_lval_t* valk_builtin_atom(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_atom_get(valk_lenv_t* e, valk_lval_t* a) {
+  VALK_WARN("atom/get is deprecated: use aio/semaphore or aio/then chains");
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
@@ -4061,6 +4063,7 @@ static valk_lval_t* valk_builtin_atom_get(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_atom_set(valk_lenv_t* e, valk_lval_t* a) {
+  VALK_WARN("atom/set! is deprecated: use aio/semaphore or aio/then chains");
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
@@ -4074,6 +4077,7 @@ static valk_lval_t* valk_builtin_atom_set(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_atom_add(valk_lenv_t* e, valk_lval_t* a) {
+  VALK_WARN("atom/add! is deprecated: use aio/semaphore or aio/then chains");
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
@@ -4087,6 +4091,7 @@ static valk_lval_t* valk_builtin_atom_add(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_atom_sub(valk_lenv_t* e, valk_lval_t* a) {
+  VALK_WARN("atom/sub! is deprecated: use aio/semaphore or aio/then chains");
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
