@@ -19,11 +19,11 @@
 
 (test/run-async aio (list
   (test-async "SSE diagnostics handler is called for /debug/diagnostics/memory" (\ {done} {
-  (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/diagnostics/memory" (\ {resp} {}))
+  ; Start the SSE request (returns handle, but SSE never completes)
+  (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/diagnostics/memory")
   
-  ; Wait for response - if endpoint works, we get a response
-  (aio/schedule aio 500 (\ {} {
-    ; If we got here without crash, diagnostics endpoint worked
+  ; Wait 500ms - if endpoint works without crash, test passes
+  (aio/then (aio/sleep aio 500) (\ {_} {
     (done true)
   }))
 })))
