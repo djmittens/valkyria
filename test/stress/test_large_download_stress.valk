@@ -44,7 +44,7 @@
 
 (aio/schedule aio 500 (\ {} {
   (println "Testing 1MB download...")
-  (http2/client-request aio "127.0.0.1" test-port "/1mb"
+  (aio/then (http2/client-request aio "127.0.0.1" test-port "/1mb")
     (\ {resp} {
       (if (error? resp)
         {(do
@@ -62,7 +62,7 @@
                 (def {tests-failed} (+ tests-failed 1)))}))})
       
       (println "Testing 2MB download...")
-      (http2/client-request aio "127.0.0.1" test-port "/2mb"
+      (aio/then (http2/client-request aio "127.0.0.1" test-port "/2mb")
         (\ {resp} {
           (if (error? resp)
             {(do
@@ -80,7 +80,7 @@
                     (def {tests-failed} (+ tests-failed 1)))}))})
           
           (println "Testing 5MB download...")
-          (http2/client-request aio "127.0.0.1" test-port "/5mb"
+          (aio/then (http2/client-request aio "127.0.0.1" test-port "/5mb")
             (\ {resp} {
               (if (error? resp)
                 {(do

@@ -35,7 +35,7 @@
 ; Fire all requests concurrently
 (map (\ {_} {
   (= {t0} (time-us))
-  (http2/client-request aio cfg-host cfg-port cfg-path (\ {resp} {
+  (aio/then (http2/client-request aio cfg-host cfg-port cfg-path) (\ {resp} {
     (atom/add! completed 1)
     
     (if (error? resp)

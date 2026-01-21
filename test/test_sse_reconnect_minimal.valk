@@ -14,7 +14,7 @@
 (= {port} (http2/server-port server))
 
 (print "STEP1_START")
-(http2/client-request aio "127.0.0.1" port "/sse"
+(aio/then (http2/client-request aio "127.0.0.1" port "/sse")
   (\ {resp1} {
     (if (error? resp1)
       {(print "STEP1_ERROR" resp1)}
@@ -22,7 +22,7 @@
         (print "STEP1_DONE")
         (aio/schedule aio 50 (\ {} {
           (print "STEP2_START")
-          (http2/client-request aio "127.0.0.1" port "/sse"
+          (aio/then (http2/client-request aio "127.0.0.1" port "/sse")
             (\ {resp2} {
               (if (error? resp2)
                 {(print "STEP2_ERROR" resp2)}

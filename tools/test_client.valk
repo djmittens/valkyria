@@ -4,7 +4,7 @@
 (def {aio} (aio/start))
 (println "AIO started")
 
-(http2/client-request aio "localhost" 18443 "/" (\ {resp} {
+(aio/then (http2/client-request aio "localhost" 18443 "/") (\ {resp} {
   (println "Got response!")
   (if (error? resp)
     {(println resp)}
