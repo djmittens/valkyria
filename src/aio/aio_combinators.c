@@ -32,11 +32,27 @@ static void __interval_timer_cb(uv_timer_t *handle) {
   valk_interval_timer_t *timer_data = (valk_interval_timer_t *)handle->data;
   if (!timer_data || timer_data->stopped) return;
 
+  bool cancelled = false;
+  if (timer_data->async_handle) {
+    valk_async_status_t status = valk_async_handle_get_status(timer_data->async_handle);
+    cancelled = (status == VALK_ASYNC_CANCELLED);
+  }
+
+  if (cancelled) {
+    timer_data->stopped = true;
+    uv_timer_stop(handle);
+    uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    return;
+  }
+
   valk_lval_t *callback = valk_handle_resolve(&valk_global_handle_table, timer_data->callback_handle);
   if (!callback) {
     timer_data->stopped = true;
     uv_timer_stop(handle);
     uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    if (timer_data->async_handle) {
+      valk_async_handle_complete(timer_data->async_handle, valk_lval_nil());
+    }
     return;
   }
   valk_lval_t *args = valk_lval_nil();
@@ -50,6 +66,9 @@ static void __interval_timer_cb(uv_timer_t *handle) {
     timer_data->stopped = true;
     uv_timer_stop(handle);
     uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    if (timer_data->async_handle) {
+      valk_async_handle_complete(timer_data->async_handle, valk_lval_nil());
+    }
   }
 }
 // LCOV_EXCL_STOP
@@ -98,13 +117,25 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
   }
   // LCOV_EXCL_STOP
 
+  valk_async_handle_t *async_handle = valk_async_handle_new(sys, env);
+  // LCOV_EXCL_START - allocation failure: requires OOM
+  if (!async_handle) {
+    return valk_lval_err("Failed to allocate async handle");
+  }
+  // LCOV_EXCL_STOP
+  async_handle->status = VALK_ASYNC_RUNNING;
+
   valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
   
+  timer_data->magic = VALK_INTERVAL_TIMER_MAGIC;
   timer_data->callback = heap_callback;
   timer_data->callback_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
   timer_data->interval_id = __atomic_fetch_add(&g_interval_id, 1, __ATOMIC_RELAXED);
   timer_data->stopped = false;
+  timer_data->async_handle = async_handle;
   timer_data->timer.data = timer_data;
+
+  async_handle->uv_handle_ptr = timer_data;
 
   valk_interval_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_interval_init_ctx_t));
   // LCOV_EXCL_START - region alloc failure: requires OOM
@@ -120,7 +151,7 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
   
   valk_aio_enqueue_task(sys, __interval_init_on_loop, init_ctx);
 
-  return valk_lval_num((long)timer_data->interval_id);
+  return valk_lval_handle(async_handle);
 }
 
 // LCOV_EXCL_START - libuv timer callbacks: require event loop context

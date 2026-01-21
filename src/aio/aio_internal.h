@@ -113,6 +113,7 @@ typedef enum __aio_http_srv_e {
 } __aio_http_srv_e;
 
 #define VALK_UV_DATA_TIMER_MAGIC 0x71AE8721
+#define VALK_INTERVAL_TIMER_MAGIC 0x71AE8722
 
 typedef struct valk_async_handle_uv_data {
   u32 magic;
@@ -387,11 +388,13 @@ typedef struct {
 } valk_schedule_timer_t;
 
 typedef struct valk_interval_timer {
+  u32 magic;
   alignas(16) uv_timer_t timer;
   valk_lval_t *callback;
   valk_handle_t callback_handle;
   u64 interval_id;
   bool stopped;
+  valk_async_handle_t *async_handle;
 } valk_interval_timer_t;
 
 typedef struct {

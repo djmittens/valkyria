@@ -57,10 +57,13 @@ Read the spec's **Acceptance Criteria section only** (not entire spec):
 
 For any unchecked criteria (`- [ ]`) not covered by existing tasks, research what's needed and create a well-defined task:
 ```
-ralph task add '{"name": "<specific action>", "notes": "<implementation approach and relevant files>", "accept": "<how to verify>"}\'
+ralph task add '{"name": "<specific action>", "notes": "<implementation approach and relevant files>", "accept": "<measurable verification>"}\'
 ```
 
-**IMPORTANT**: Tasks must include `notes` with implementation guidance. Vague tasks will fail.
+**IMPORTANT**: 
+- Tasks must include `notes` with implementation guidance
+- `accept` MUST be measurable: command to run, expected exit code, or specific output to check
+- Vague acceptance like "works correctly" or "tests pass" will be REJECTED
 
 ## Step 5: Final Decision
 

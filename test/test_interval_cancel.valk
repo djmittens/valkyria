@@ -1,0 +1,66 @@
+; Test aio/interval cancellation functionality
+; Verifies that aio/interval returns a handle and aio/cancel works
+
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+(def {counter} (atom 0))
+(def {test-passed} (atom false))
+
+(println "=== Testing aio/interval Cancellation ===")
+
+; Create an interval that increments a counter every 20ms
+(def {interval-handle} (aio/interval aio 20 (\ {} {
+  (atom/add! counter 1)
+  nil
+})))
+
+; Verify interval returns a handle
+(if (handle? interval-handle)
+  (println "✓ aio/interval returns a handle")
+  (do
+    (println "✗ aio/interval did not return a handle")
+    (aio/stop aio)
+    (exit 1)))
+
+; Let it run for a bit then cancel
+(aio/schedule aio 100 (\ {} {
+  (= {count1} (atom/get counter))
+  (print "Counter before cancel:" count1)
+  
+  ; Should have some ticks by now
+  (if (> count1 0)
+    (do
+      (println "✓ Interval is working")
+      
+      ; Cancel the interval
+      (= {cancel-result} (aio/cancel interval-handle))
+      (if (= cancel-result :true)
+        (do
+          (println "✓ aio/cancel returned :true")
+          
+          ; Check if cancelled
+          (= {is-cancelled} (aio/cancelled? interval-handle))
+          (if (= is-cancelled :true)
+            (do
+              (println "✓ Interval handle is marked as cancelled")
+              (atom/set! test-passed true)
+              (aio/stop aio))
+            (do
+              (println "✗ Interval handle not marked as cancelled")
+              (aio/stop aio))))
+        (do
+          (println "✗ aio/cancel failed")
+          (aio/stop aio))))
+    (do
+      (println "✗ Interval not working")
+      (aio/stop aio)))
+}))
+
+(aio/run aio)
+
+(if (atom/get test-passed)
+  (do
+    (println "✓ All tests passed!")
+    (exit 0))
+  (exit 1))

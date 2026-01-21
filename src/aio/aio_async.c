@@ -328,8 +328,14 @@ static void valk_async_cancel_task(void *ctx) {
   if (handle->uv_handle_ptr) {
     u32 *magic_ptr = (u32*)handle->uv_handle_ptr;
     if (*magic_ptr == VALK_UV_DATA_TIMER_MAGIC) {
+      // Regular async timer (sleep, etc.)
       valk_async_handle_uv_data_t *uv_data = handle->uv_handle_ptr;
       uv_timer_stop(&uv_data->uv.timer);
+    } else if (*magic_ptr == VALK_INTERVAL_TIMER_MAGIC) {
+      // Interval timer
+      valk_interval_timer_t *timer_data = (valk_interval_timer_t*)handle->uv_handle_ptr;
+      timer_data->stopped = true;
+      uv_timer_stop(&timer_data->timer);
     }
   }
 

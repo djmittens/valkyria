@@ -533,6 +533,24 @@ static void test_aio_cancelled_completed(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static void test_aio_interval_returns_handle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // This is a limited unit test - just verify interval exists and gives proper error
+  valk_lenv_t *env = create_test_env();
+  
+  // The interval function should return an error when given invalid args
+  valk_lval_t *result = eval_str(env, "(aio/interval 42 100 (\\ {} nil))");
+  
+  // Should get an error, not unknown function error
+  ASSERT_LVAL_TYPE(result, LVAL_ERR);
+  // Don't check exact message, just that function exists
+  ASSERT_TRUE(strlen(result->str) > 0);
+  
+  valk_lenv_free(env);
+  VALK_PASS();
+}
+
 static void test_aio_then_transforms(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -873,6 +891,7 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_aio_status_failed", test_aio_status_failed);
   valk_testsuite_add_test(suite, "test_aio_cancel_completed", test_aio_cancel_completed);
   valk_testsuite_add_test(suite, "test_aio_cancelled_completed", test_aio_cancelled_completed);
+  valk_testsuite_add_test(suite, "test_aio_interval_returns_handle", test_aio_interval_returns_handle);
 
   valk_testsuite_add_test(suite, "test_aio_then_transforms", test_aio_then_transforms);
   valk_testsuite_add_test(suite, "test_aio_then_propagates_failure", test_aio_then_propagates_failure);

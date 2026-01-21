@@ -30,7 +30,7 @@ Return a JSON object:
   \"task\": {  // only if resolution is \"task\"
     \"name\": \"<fix description>\",
     \"notes\": \"<root cause and approach>\",
-    \"accept\": \"<how to verify>\",
+    \"accept\": \"<MEASURABLE: command + expected result, e.g. 'make test passes' or 'grep X file returns 1'>\",
     \"priority\": \"<inherit from issue priority above>\"
   },
   \"trivial_fix\": \"<description>\"  // only if resolution is \"trivial\"
@@ -44,8 +44,8 @@ After all subagents complete:
 
 1. Add all tasks in batch (include `created_from` to link back to issue, and `priority` from originating issue):
 ```
-ralph task add '{"name": "...", "notes": "...", "accept": "...", "created_from": "i-xxxx", "priority": "high|medium|low"}'
-ralph task add '{"name": "...", "notes": "...", "accept": "...", "created_from": "i-yyyy", "priority": "high|medium|low"}'
+ralph task add '{"name": "...", "notes": "...", "accept": "<measurable: command + expected result>", "created_from": "i-xxxx", "priority": "high|medium|low"}'
+ralph task add '{"name": "...", "notes": "...", "accept": "<measurable: command + expected result>", "created_from": "i-yyyy", "priority": "high|medium|low"}'
 ...
 ```
 
