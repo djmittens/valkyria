@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include "aio/aio.h"
+#include "gc.h"
 #include "aio/aio_async.h"
 #include "aio/aio_internal.h"
 #include "aio/http2/stream/aio_stream_body.h"
@@ -1200,12 +1201,12 @@ static void test_on_close_callback_can_access_stream_state(VALK_TEST_ARGS()) {
 
 typedef struct {
   valk_stream_body_t *body;
-  pthread_barrier_t *barrier;
+  valk_barrier_t *barrier;
 } close_race_thread_arg_t;
 
 static void *close_race_thread(void *arg) {
   close_race_thread_arg_t *ctx = arg;
-  pthread_barrier_wait(ctx->barrier);
+  valk_barrier_wait(ctx->barrier);
   valk_stream_body_close(ctx->body);
   return nullptr;
 }
@@ -1233,8 +1234,8 @@ static void test_stream_body_close_pthread_race(VALK_TEST_ARGS()) {
 
   valk_stream_body_register(body);
 
-  pthread_barrier_t barrier;
-  pthread_barrier_init(&barrier, nullptr, 2);
+  valk_barrier_t barrier;
+  valk_barrier_init(&barrier, 2);
 
   close_race_thread_arg_t arg1 = {.body = body, .barrier = &barrier};
   close_race_thread_arg_t arg2 = {.body = body, .barrier = &barrier};
@@ -1246,7 +1247,7 @@ static void test_stream_body_close_pthread_race(VALK_TEST_ARGS()) {
   pthread_join(t1, nullptr);
   pthread_join(t2, nullptr);
 
-  pthread_barrier_destroy(&barrier);
+  valk_barrier_destroy(&barrier);
 
   ASSERT_TRUE(body->state == VALK_STREAM_CLOSING || body->state == VALK_STREAM_CLOSED);
 
