@@ -1,0 +1,23 @@
+(load "src/prelude.valk")
+(load "src/modules/aio/debug.valk")
+
+(def {aio} (aio/start))
+
+(def {wrapped-handler}
+  (\ {req} {
+    ((aio/debug-handler aio) req)
+  }))
+
+(def {server} (http2/server-listen aio 0 wrapped-handler))
+(def {TEST_PORT} (http2/server-port server))
+
+(printf "Starting SSE endpoint test on port %d\n" TEST_PORT)
+
+; Test making a request to SSE endpoint synchronously - it should not crash
+(= {result} (aio/debug-handle-request aio {:path "/debug/diagnostics/memory"}))
+
+(printf "SSE endpoint returned: %s\n" (str result))
+
+; If we get here without crashing, the endpoint works
+(printf "SSE endpoint test completed successfully\n")
+(aio/stop aio)
