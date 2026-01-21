@@ -349,16 +349,15 @@
       {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
       {printf "🧪 [%ld/%ld] %s (timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms})
 
-    ; Set up suite-level timeout
-    (= {suite-timer} (aio/schedule aio suite-timeout-ms (\ {} {
-      (*test-suite-timeout-cb* suite-name)
-    })))
-
-    ; Run all tests with individual timeouts
-    (= {final-ctx} (foldl (\ {ctx test} {(*test-run-one-with-timeout* aio ctx test)}) ctx tests))
-
-    ; Cancel suite timeout
-    (aio/cancel suite-timer)
+    ; Run all tests with individual timeouts, racing against suite timeout
+    (= {test-handle} (aio/pure (foldl (\ {ctx test} {(*test-run-one-with-timeout* aio ctx test)}) ctx tests)))
+    (= {timeout-handle} (aio/then (aio/sleep aio suite-timeout-ms) (\ {_} {:suite-timeout})))
+    (= {race-result} (aio/race (list test-handle timeout-handle)))
+    (= {final-ctx} (if (== race-result :suite-timeout)
+                     {do
+                       (*test-suite-timeout-cb* suite-name)
+                       ctx}
+                     {race-result}))
 
     ; Stop aio and print results
     (aio/stop aio)

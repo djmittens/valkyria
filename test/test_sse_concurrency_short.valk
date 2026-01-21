@@ -61,8 +61,7 @@
                  (if (str-contains? body "event:")
                    {:status :ok :has-event true}
                    {:status :ok :has-event false}))))
-             (set! {*results*} (cons result *results*))
-             nil}))}))})
+             result}))}))})
 
 (fun {run-batch n}
   {(if (<= n 0)
