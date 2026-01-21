@@ -1,0 +1,12 @@
+; Minimal async test to verify timeout handling works  
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/start))
+
+(test/run-async aio (list
+  (test-async "simple async completion" (\ {done} {
+    ; Complete immediately with success
+    (done {:status :pass})
+  }))
+) {:timeout 1000})

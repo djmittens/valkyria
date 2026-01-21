@@ -35,11 +35,18 @@
     (aio/stop sys)
     (not (== h nil))
     })
-  (test "aio/within accepts timeout parameter"
-    {do
-    (def {sys} (aio/start))
-    (def {h} (aio/within (aio/pure 1) 50))
-    (aio/stop sys)
-    (not (== (aio/status h) nil))
-    }))
-  {:suite-name "aio/within Tests"})
+   (test "aio/within accepts timeout parameter"
+     {do
+     (def {sys} (aio/start))
+     (def {h} (aio/within (aio/pure 1) 50))
+     (aio/stop sys)
+     (not (== (aio/status h) nil))
+     })
+   (test "aio/within creates handle with timeout parameter"
+     {do
+     (def {sys} (aio/start))
+     (def {h} (aio/within (aio/never sys) 50))
+     (aio/stop sys)
+     (not (== h nil))
+     }))
+   {:suite-name "aio/within Tests"})
