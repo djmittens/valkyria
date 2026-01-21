@@ -52,13 +52,15 @@ Signs of architectural blocker:
 
 ## Step 4: Check for Gaps
 
-Read the spec\'s **Acceptance Criteria section only** (not entire spec):
+Read the spec's **Acceptance Criteria section only** (not entire spec):
 `ralph/specs/<spec-name>` - scroll to "## Acceptance Criteria"
 
-For any unchecked criteria (`- [ ]`) not covered by existing tasks:
+For any unchecked criteria (`- [ ]`) not covered by existing tasks, research what's needed and create a well-defined task:
 ```
-ralph task add '{"name": "...", "accept": "..."}\'
+ralph task add '{"name": "<specific action>", "notes": "<implementation approach and relevant files>", "accept": "<how to verify>"}\'
 ```
+
+**IMPORTANT**: Tasks must include `notes` with implementation guidance. Vague tasks will fail.
 
 ## Step 5: Final Decision
 

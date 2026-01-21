@@ -33,9 +33,11 @@ ralph task add '{"name": "Short task name", "notes": "Implementation details", "
 
 Task fields:
 - `name` (required): Short description of what to do (e.g., "Add unit tests for parser")
-- `notes` (optional): Implementation context, hints, relevant files
-- `accept` (optional): Acceptance criteria / test plan (e.g., "pytest tests/test_parser.py passes")
+- `notes` (required): Implementation details - what files to modify, what approach to take, relevant context
+- `accept` (required): Acceptance criteria - how to verify the task is done (e.g., "pytest tests/test_parser.py passes")
 - `deps` (optional): List of task IDs this task depends on
+
+**IMPORTANT**: Every task MUST have `notes` with implementation guidance. Tasks without `notes` will fail during BUILD.
 
 The command returns the new task ID (e.g., "Task added: t-1a2b - ..."). Use this ID when other tasks depend on it.
 
