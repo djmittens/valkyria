@@ -13,115 +13,120 @@
 (def {CYCLE_INTERVAL_MS} 500)
 (def {EVENTS_PER_CONNECTION} 3)
 
-(def {connections-opened} (atom 0))
-(def {connections-closed} (atom 0))
-(def {events-received} (atom 0))
-(def {errors-count} (atom 0))
-(def {test-running} (atom true))
-(def {active-connections} (atom 0))
+(def {connection-results} (list))
+(def {test-timer} nil)
+(def {status-timer} nil)
 
 (fun {str-contains? haystack needle}
   {(> (len (str/split haystack needle)) 1)})
+
+(def {sse-handler-state} {})
+(def {stream-counter} 0)
 
 (fun {stress-sse-handler req}
   {(= {path} (req/path req))
    (if (== path "/stress-sse")
      (do
        (= {stream} (sse/open req))
-       (= {events-sent} (atom 0))
-       (= {closed} (atom false))
        (= {sys} aio)
-       (stream/on-close stream (\ {} {(atom/set! closed true)}))
-       (aio/interval sys 50 (\ {}
-         {(if (atom/get closed)
-            :stop
-            (if (>= (atom/get events-sent) EVENTS_PER_CONNECTION)
-              (do
-                (stream/close stream)
-                :stop)
-              (do
-                (atom/set! events-sent (+ (atom/get events-sent) 1))
-                (= {n} (atom/get events-sent))
-                (if (== n 1)
-                  (do
-                    (= {state} (aio/debug-diagnostics-state sys))
-                    (stream/write stream (str "event: diagnostics\ndata: " state "\n\n")))
-                  (do
-                    (= {delta} (aio/debug-diagnostics-delta sys))
-                    (stream/write stream (str "event: diagnostics-delta\ndata: " delta "\n\n")))))))}))
+        (= {stream-counter} (+ stream-counter 1))
+        (= {stream-id} (str "stream-" stream-counter))
+       (= {sse-handler-state} (merge sse-handler-state {stream-id {:events 0}}))
+       
+       (fun {send-events}
+         {(= {stream-state} (get sse-handler-state stream-id))
+          (= {events-count} (get stream-state :events 0))
+          (if (>= events-count EVENTS_PER_CONNECTION)
+            (do
+              (stream/close stream)
+              :stop)
+            (do
+              (= {new-count} (+ events-count 1))
+              (= {sse-handler-state} (merge sse-handler-state {stream-id {:events new-count}}))
+              (if (== new-count 1)
+                (do
+                  (= {state} (aio/debug-diagnostics-state sys))
+                  (stream/write stream (str "event: diagnostics\ndata: " state "\n\n")))
+                (do
+                  (= {delta} (aio/debug-diagnostics-delta sys))
+                  (stream/write stream (str "event: diagnostics-delta\ndata: " delta "\n\n"))))
+              nil))})
+       
+       (= {interval-handle} (aio/interval sys 50 send-events))
+       (stream/on-close stream (\ {} {
+         (= {sse-handler-state} (merge sse-handler-state {stream-id nil}))
+         (aio/cancel interval-handle)}))
        :deferred)
      (aio/debug-handle-request aio req))})
 
 (def {server} (http2/server-listen aio 0 stress-sse-handler))
 (def {TEST_PORT} (http2/server-port server))
 
-(fun {log-status}
-  {(printf "Status: opened=%d closed=%d events=%d errors=%d active=%d\n"
-           (atom/get connections-opened)
-           (atom/get connections-closed)
-           (atom/get events-received)
-           (atom/get errors-count)
-           (atom/get active-connections))})
+(fun {log-status results}
+  {(= {opened} (len results))
+   (= {closed} (len (filter (\ {r} {(not (== (get r :status) :pending))}) results)))
+   (= {events} (fold + 0 (map (\ {r} {(get r :events 0)}) results)))
+   (= {errors} (len (filter (\ {r} {(== (get r :status) :error)}) results)))
+   (= {active} (- opened closed))
+   (printf "Status: opened=%d closed=%d events=%d errors=%d active=%d\n" opened closed events errors active)})
 
 (def {MAX_ACTIVE} 5)
 
-(fun {handle-response resp}
-  {(atom/set! active-connections (- (atom/get active-connections) 1))
-   (atom/set! connections-closed (+ (atom/get connections-closed) 1))
-   (if (error? resp)
-     (atom/set! errors-count (+ (atom/get errors-count) 1))
+(fun {create-connection-result resp}
+  {(if (error? resp)
+     {:events 0 :status :error :error resp}
      (do
        (= {body} (http2/response-body resp))
-       (if (str-contains? body "event:")
-         (atom/set! events-received (+ (atom/get events-received) 1))
-         nil)))})
+       (= {event-count} (if (str-contains? body "event:") 1 0))
+       {:events event-count :status :ok}))})
 
 (fun {create-sse-connection id}
-  {(if (not (atom/get test-running))
-     nil
-     (if (>= (atom/get active-connections) MAX_ACTIVE)
-       nil
-       (do
-         (atom/set! connections-opened (+ (atom/get connections-opened) 1))
-         (atom/set! active-connections (+ (atom/get active-connections) 1))
-         (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/stress-sse")
-           (\ {resp} {(handle-response resp)})))))})
+  {(aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/stress-sse")
+     (\ {resp} {(create-connection-result resp)}))})
 
-(fun {create-batch n}
-  {(if (<= n 0)
-     nil
-     (do
-       (create-sse-connection n)
-       (create-batch (- n 1))))})
-
-(fun {cycle-connections}
-  {(if (not (atom/get test-running))
-     nil
-     (do
-       (create-batch CONCURRENT_CONNECTIONS)
-       (aio/schedule aio CYCLE_INTERVAL_MS (\ {} {(cycle-connections)}))))})
+(fun {run-connection-cycle}
+  {(= {h1} (create-sse-connection 1))
+   (= {h2} (create-sse-connection 2))
+   (= {h3} (create-sse-connection 3))
+   (= {h4} (create-sse-connection 4))
+   (= {h5} (create-sse-connection 5))
+   (= {h6} (create-sse-connection 6))
+   (= {h7} (create-sse-connection 7))
+   (= {h8} (create-sse-connection 8))
+   (= {h9} (create-sse-connection 9))
+   (= {h10} (create-sse-connection 10))
+   (= {handles} (list h1 h2 h3 h4 h5 h6 h7 h8 h9 h10))
+   (= {connection-results} handles)
+   handles})
 
 (println "=== SSE Concurrency Stress Test ===")
 (printf "Testing %d concurrent SSE connections for %d seconds\n" CONCURRENT_CONNECTIONS (/ TEST_DURATION_MS 1000))
 (printf "Server running on port %d\n" TEST_PORT)
 (println "")
 
-(cycle-connections)
+(= {connection-handles} (run-connection-cycle))
+(= {all-results-handle} (aio/all connection-handles))
 
-(aio/interval aio 5000 (\ {}
-  {(if (atom/get test-running)
-     (do (log-status) nil)
-     :stop)}))
+(= {status-timer} (aio/interval aio 5000 (\ {}
+  {(if (== (aio/status all-results-handle) :pending)
+     (do (log-status connection-handles) nil)
+     :stop)})))
 
-(aio/schedule aio TEST_DURATION_MS (\ {}
+(= {test-timer} (aio/schedule aio TEST_DURATION_MS (\ {}
+  {(aio/cancel all-results-handle)
+   (aio/cancel status-timer)
+   nil})))
+
+(aio/then all-results-handle (\ {results}
   {(println "")
    (println "=== Test Complete ===")
-   (atom/set! test-running false)
-   (log-status)
-   (= {opened} (atom/get connections-opened))
-   (= {closed} (atom/get connections-closed))
-   (= {events} (atom/get events-received))
-   (= {errors} (atom/get errors-count))
+   (aio/cancel test-timer)
+   (aio/cancel status-timer)
+   (log-status connection-handles)
+   (= {opened} (len results))
+   (= {closed} (len (filter (\ {r} {(not (== (get r :status) :pending))}) results)))
+   (= {events} (fold + 0 (map (\ {r} {(get r :events 0)}) results)))
+   (= {errors} (len (filter (\ {r} {(== (get r :status) :error)}) results)))
    (println "")
    (= {error-threshold} (+ 1 (/ opened 100)))
    (if (and (> opened 0)

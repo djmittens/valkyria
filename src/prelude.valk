@@ -256,5 +256,12 @@
     {join (list (head (tail pl))) (plist/vals (tail (tail pl)))}
 })
 
+; 3-argument get function with default value
+; Usage: (get plist key default) => value or default
+(fun {get pl key default} {
+  (= {val} (plist/get pl key))
+  (if (== val nil) {default} {val})
+})
+
 ; Load async handles library (aio/delay, with-timeout, etc.)
 (load "src/async_handles.valk")

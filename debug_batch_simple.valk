@@ -1,0 +1,31 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+
+(fun {create-test-connection}
+  {(aio/then (aio/sleep aio 1) (\ {x} {:test "result"}))})
+
+(fun {create-batch-iter n acc}
+  {(if (<= n 0)
+     acc
+     (do
+       (= {new-handle} (create-test-connection))
+       (println (str "Created handle " n ", is handle? " (handle? new-handle)))
+       (create-batch-iter (- n 1) (cons new-handle acc))))})
+
+(println "Creating handles manually...")
+(= {h1} (create-test-connection))
+(= {h2} (create-test-connection))
+(= {batch} (list h1 h2))
+(println (str "Batch created, length: " (len batch)))
+
+(println "Calling aio/all...")
+(= {all-handle} (aio/all batch))
+(println "aio/all completed successfully")
+
+(aio/then all-handle (\ {results}
+  {(println "Results:")
+   (println results)
+   (aio/stop aio)}))
+
+(aio/run aio)
