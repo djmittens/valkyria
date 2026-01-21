@@ -1,8 +1,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <uv.h>
 
 #include "aio/aio.h"
+#include "aio/system/aio_system.h"
 #include "common.h"
 #include "gc.h"
 #include "memory.h"
@@ -778,6 +780,39 @@ static void test_aio_within_non_number_second_arg_error(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static void test_aio_within_actual_timeout(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t *sys = valk_aio_start();
+  ASSERT_NOT_NULL(sys);
+
+  valk_lenv_t *env = create_test_env();
+  valk_lenv_put(env, valk_lval_sym("sys"), valk_lval_ref("aio_system", sys, NULL));
+  
+  valk_lval_t *result = eval_str(env, "(aio/within (aio/sleep sys 100) 10)");
+
+  ASSERT_LVAL_TYPE(result, LVAL_HANDLE);
+  valk_async_handle_t *handle = result->async.handle;
+  ASSERT_NOT_NULL(handle);
+  
+  uv_loop_t *loop = valk_aio_get_event_loop(sys);
+  
+  for (int i = 0; i < 100 && handle->status == VALK_ASYNC_RUNNING; i++) {
+    uv_run(loop, UV_RUN_NOWAIT);
+    usleep(1000);
+  }
+
+  ASSERT_EQ(handle->status, VALK_ASYNC_FAILED);
+  valk_lval_t *error = handle->error;
+  ASSERT_LVAL_TYPE(error, LVAL_ERR);
+  ASSERT_STR_EQ(error->str, ":timeout");
+
+  valk_lenv_free(env);
+  valk_aio_stop(sys);
+  valk_aio_wait_for_shutdown(sys);
+  VALK_PASS();
+}
+
 static void test_aio_all_many_handles(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -908,6 +943,7 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_aio_within_wrong_args_error", test_aio_within_wrong_args_error);
   valk_testsuite_add_test(suite, "test_aio_within_non_handle_first_arg_error", test_aio_within_non_handle_first_arg_error);
   valk_testsuite_add_test(suite, "test_aio_within_non_number_second_arg_error", test_aio_within_non_number_second_arg_error);
+  valk_testsuite_add_test(suite, "test_aio_within_actual_timeout", test_aio_within_actual_timeout);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
