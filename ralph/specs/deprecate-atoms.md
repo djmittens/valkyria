@@ -2,7 +2,9 @@
 
 ## Overview
 
-Remove the `atom` primitive from Valk to eliminate mutable shared state that circumvents the monadic async API. Every current atom usage can be replaced with proper functional patterns: `aio/all` for result collection, `aio/semaphore` for rate limiting, `aio/race` for cancellation, and recursive `aio/then` chains for per-stream state. This improves code clarity and enforces the Finagle-style monadic programming model.
+Remove the `atom` primitive from Valk to eliminate mutable shared state that circumvents the monadic async API. The root cause of atom usage is **callback-based APIs** that force coordination via shared state. The fix is making all async APIs monadic (return handles), then using `aio/all` for result collection and `aio/race` for timeouts.
+
+**Key insight:** Atoms exist because callbacks can't compose. Fix the APIs, and atoms become unnecessary. No new primitives like `aio/semaphore` are needed - rate limiting belongs in filters/middleware, not as a low-level builtin.
 
 ## Requirements
 
@@ -29,42 +31,41 @@ typedef struct { _Atomic long value; } valk_atom_t;
 
 **All async APIs must be monadic (return handles/futures), not callback-based.**
 
-Callback-based APIs like `http2/client-request` (which returns `nil` and invokes a callback) cannot be composed with `aio/all`, `aio/race`, or `aio/then`. The monadic pattern requires every async operation to return a handle that can be:
+Callback-based APIs like `stream/on-close` force the use of atoms for coordination because:
+1. Two independent callbacks (done + timeout) need to know about each other
+2. Results from multiple callbacks must be aggregated somewhere
+3. There's no way to "wait" for a callback - you need shared state to signal completion
+
+The monadic pattern requires every async operation to return a handle that can be:
 - Passed to `aio/then` for sequencing
 - Collected with `aio/all` for parallel completion
 - Raced with `aio/race` for timeout/cancellation
 
-Existing callback-based APIs should be deprecated in favor of handle-returning equivalents.
+### Why NOT `aio/semaphore`
+
+The spec previously proposed `aio/semaphore` for rate limiting. This is wrong for several reasons:
+
+1. **Manual resource management** - `acquire`/`release` pairs are error-prone (what if you forget to release? what if an error occurs?)
+
+2. **Wrong abstraction layer** - In Finagle, rate limiting is a filter that wraps a service:
+   ```scala
+   val rateLimited = new RateLimitFilter(10).andThen(myService)
+   ```
+   The filter handles acquire/release internally. Users don't touch semaphores.
+
+3. **Doesn't fix the real problem** - Atoms exist because of callback-based APIs. Adding semaphores just adds another imperative primitive without fixing the underlying issue.
+
+4. **Already implemented, should be removed** - The existing `aio/semaphore` implementation in `aio_combinators.c` should be deleted.
 
 ### Replacement Patterns
 
 | Atom Usage | Replacement |
 |------------|-------------|
 | Counters | `aio/all` + reduce results |
-| Rate limiting | `aio/semaphore` (new builtin) |
 | Cancellation flags | `aio/race` with timeout |
-| Per-stream state | Recursive `aio/then` chains |
+| Per-stream state | Return values from handle chains |
 | Callback coordination | Handle-returning APIs (not callbacks) |
-
-### New Builtin: `aio/semaphore`
-
-**File:** `src/aio/aio_combinators.c`
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `aio/semaphore` | `aio n` → handle | Create semaphore with n permits |
-| `aio/semaphore-acquire` | `sem` → future | Returns future that completes when permit acquired |
-| `aio/semaphore-release` | `sem` → nil | Release permit |
-
-**Implementation:**
-```c
-typedef struct {
-  valk_aio_system_t *sys;
-  int max_permits;
-  int available;
-  // Queue of waiting handles
-} valk_semaphore_t;
-```
+| Rate limiting | Filter/middleware (future work, not needed for atom removal) |
 
 ### New Builtin: `stream/closed`
 
@@ -72,82 +73,23 @@ typedef struct {
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `stream/closed` | `stream` → handle | Returns future that completes with `:closed` when stream closes |
+| `stream/closed` | `stream` -> handle | Returns future that completes with `:closed` when stream closes |
 
-This enables `aio/race` instead of callback + atom coordination.
-
-### Refactor: `http2/client-request` to Return Handle
-
-**File:** `src/aio/http2/aio_http2_client.c`
-
-| Function | Old Signature | New Signature |
-|----------|---------------|---------------|
-| `http2/client-request` | `aio host port path callback` → nil | `aio host port path` → handle |
-| `http2/client-request-with-headers` | `aio host port path headers callback` → nil | `aio host port path headers` → handle |
-
-**Rationale:** Callback-based APIs cannot be composed with `aio/all`, `aio/race`, or `aio/then`. The callback parameter is removed; instead the function returns a handle that completes with the response.
-
+This replaces the callback-based `stream/on-close`. Instead of:
 ```lisp
-; Old (callback-based, incompatible with aio/all):
-(http2/client-request aio host port path (\ {resp} {...}))
-
-; New (monadic, composable):
-(aio/then (http2/client-request aio host port path)
-  (\ {resp} {...}))
-
-; Collect results from multiple concurrent requests:
-(aio/then
-  (aio/all (map (\ {url} {(http2/client-request aio host port url)}) urls))
-  (\ {responses} {(process-responses responses)}))
+(stream/on-close stream (\ {} {(atom/set! closed true)}))
 ```
 
-**Implementation:** Follow the same pattern as `aio/sleep`:
-
-1. Create an async handle with `valk_async_handle_new(sys, e)`
-2. Start the async operation (connect, send request)
-3. In the completion callback (C code), call `valk_async_handle_complete(handle, response)`
-4. Return `valk_lval_handle(handle)` immediately
-
-```c
-valk_lval_t *valk_builtin_http2_client_request(valk_lenv_t *e, valk_lval_t *a) {
-  // ... validation (4 args: aio host port path, NO callback) ...
-  valk_async_handle_t *handle = valk_async_handle_new(sys, e);
-  
-  // Store handle in context for completion callback
-  ctx->async_handle = handle;
-  
-  // Start async connect (existing code)
-  valk_aio_http2_connect_host(sys, host, port, ...);
-  
-  // Return handle immediately - Lisp code uses aio/then to get result
-  return valk_lval_handle(handle);
-}
-
-// In response_done callback (C code):
-static void __http2_client_request_response_done(...) {
-  // ... existing response handling ...
-  valk_async_handle_complete(ctx->async_handle, response_lval);
-}
+Use:
+```lisp
+(aio/race (list
+  (stream/closed stream)
+  (do-work-handle)))
 ```
-
-**Do NOT add `aio/deferred` or similar primitives.** The C code owns the async handle and completes it directly. Lisp code never needs to "complete" a handle - that's the C runtime's job.
-
-### Anti-Patterns (DO NOT IMPLEMENT)
-
-The following approaches are **wrong** and should not be used:
-
-| Wrong Approach | Why It's Wrong |
-|----------------|----------------|
-| `aio/deferred` returning `{handle complete-fn fail-fn}` | Exposes handle completion to Lisp - C runtime should own this |
-| `aio/promise` or `aio/resolver` | Same problem - completion belongs in C |
-| Wrapper functions in Lisp that bridge callbacks to handles | Adds complexity; just fix the C API |
-| Keeping callback-based APIs and adding parallel future-based APIs | Maintenance burden; refactor the existing API |
-
-**The correct pattern is simple:** C code creates handle → starts async op → completes handle in C callback → returns handle to Lisp. This is exactly how `aio/sleep` works.
 
 ### Refactored Test Framework
 
-**Current (imperative):**
+**Current (imperative with atoms):**
 ```lisp
 (def {*test-async-pending-atom*} (atom 0))
 (def {*test-async-passed-atom*} (atom 0))
@@ -180,47 +122,82 @@ Each test returns `{:status :pass}` or `{:status :fail :error msg}`.
   (aio/then (run-test test) (\ {r} {{:status :pass :result r}}))))
 ```
 
+### Refactored Stress Tests
+
+**Current (atoms for counters and coordination):**
+```lisp
+(def {connections-opened} (atom 0))
+(def {active-connections} (atom 0))
+...
+(atom/add! connections-opened 1)
+```
+
+**New (collect results with aio/all):**
+```lisp
+; Each connection returns its metrics
+(fun {run-connection aio id} {
+  (aio/then (http2/client-request aio host port path)
+    (\ {resp} {
+      {:id id :events (count-events resp) :status :ok}}))})
+
+; Collect all results
+(aio/then
+  (aio/all (map (\ {i} {(run-connection aio i)}) (range n)))
+  (\ {results} {
+    (def {total-events} (reduce + 0 (map :events results)))
+    (def {total-conns} (len results))
+    {:connections total-conns :events total-events}}))
+```
+
+For rate limiting (max N concurrent), use chunked execution rather than semaphores:
+```lisp
+; Run in batches of MAX_ACTIVE
+(fun {run-batch aio batch} {
+  (aio/all (map (\ {id} {(run-connection aio id)}) batch))})
+
+(aio/then
+  (aio/all (map (\ {batch} {(run-batch aio batch)}) (chunk ids MAX_ACTIVE)))
+  aggregate-results)
+```
+
 ### Deprecation Warning
 
 Add to each atom builtin in `src/parser.c`:
 ```c
 static valk_lval_t* valk_builtin_atom(valk_lenv_t* e, valk_lval_t* a) {
-  VALK_WARN("atom is deprecated: use aio/semaphore or aio/then chains");
+  VALK_WARN("atom is deprecated: use aio/all and aio/race instead");
   // ... existing implementation
 }
 ```
 
-### Files to Remove (Phase 5)
+### Files to Modify
 
-| File | Content |
-|------|---------|
-| `src/parser.c` lines ~4003-4063 | `valk_atom_t` struct and all atom builtins |
-| `src/parser.c` lines ~5177-5181 | Builtin registrations |
-| `test/test_atom_builtins.valk` | Entire file |
-| `test/test_parser_errors.c` lines ~1195-1215 | Atom error tests |
+| File | Change |
+|------|--------|
+| `src/aio/aio_combinators.c` | Remove `aio/semaphore*` builtins |
+| `src/parser.c` | Remove atom builtins (Phase 5), update deprecation message |
+| `src/modules/test.valk` | Refactor to use `aio/all` and `aio/race` |
+| `test/test_sse_concurrency_short.valk` | Refactor to collect results via `aio/all` |
+| `test/stress/test_sse_concurrency*.valk` | Same refactor |
+| `test/test_aio_semaphore.valk` | Delete |
+| `test/test_atom_builtins.valk` | Delete (Phase 5) |
 
 ### Phased Rollout
 
 | Phase | Description | Breaking? |
 |-------|-------------|-----------|
-| 1 | Add `aio/semaphore` and `stream/closed` | No |
-| 2 | Refactor test framework | No |
+| 1 | Add `stream/closed`, remove `aio/semaphore*` | No |
+| 2 | Refactor test framework to use `aio/all` + `aio/race` | No |
 | 3 | Refactor stress tests | No |
-| 4 | Add deprecation warnings | No (warnings only) |
+| 4 | Add deprecation warnings to atoms | No (warnings only) |
 | 5 | Remove atom builtins | **Yes** |
 
 ## Acceptance Criteria
 
-### Phase 1: New Abstractions
-- [ ] `aio/semaphore aio n` creates semaphore with n permits
-- [ ] `aio/semaphore-acquire sem` returns future that completes when permit acquired
-- [ ] `aio/semaphore-release sem` releases permit and returns nil
+### Phase 1: API Cleanup
 - [ ] `stream/closed stream` returns future that completes when stream closes
-- [ ] `http2/client-request aio host port path` returns handle (remove callback param)
-- [ ] `http2/client-request-with-headers aio host port path headers` returns handle
-- [ ] `test/test_aio_semaphore.valk` exists with tests for acquire/release/blocking
-- [ ] `test/test_sse_builtins.valk` has tests for `stream/closed`
-- [ ] All existing `http2/client-request` callers updated to use `aio/then`
+- [ ] `aio/semaphore*` builtins removed from `aio_combinators.c`
+- [ ] `test/test_aio_semaphore.valk` deleted
 - [ ] `make build` succeeds
 - [ ] `make test` passes
 
@@ -231,12 +208,10 @@ static valk_lval_t* valk_builtin_atom(valk_lenv_t* e, valk_lval_t* a) {
 - [ ] All existing async test files pass without modification
 
 ### Phase 3: Stress Test Refactor
-- [ ] `test/test_sse_concurrency_short.valk` uses `aio/semaphore` for rate limiting
 - [ ] `test/test_sse_concurrency_short.valk` uses `aio/all` for result collection
 - [ ] `grep -c "atom" test/test_sse_concurrency_short.valk` returns 0
 - [ ] `grep -c "atom" test/stress/test_sse_concurrency_short.valk` returns 0
 - [ ] `grep -c "atom" test/stress/test_sse_concurrency.valk` returns 0
-
 - [ ] All stress tests still validate concurrency (connections > 0, events > 0)
 
 ### Phase 4: Deprecation

@@ -20,12 +20,12 @@
 
 (aio/then (http2/client-request aio "127.0.0.1" port "/test1")
   (\ {resp1} {
-    (print "[TEST] Got resp1:" (str-slice (http2/response-body resp1) 0 20))
+    (print "[TEST] Got resp1:" (str/slice (http2/response-body resp1) 0 20))
     (aio/schedule aio 100 (\ {} {
       (print "[TEST] Making request2...")
       (aio/then (http2/client-request aio "127.0.0.1" port "/test2")
         (\ {resp2} {
-          (print "[TEST] Got resp2:" (str-slice (http2/response-body resp2) 0 20))
+          (print "[TEST] Got resp2:" (str/slice (http2/response-body resp2) 0 20))
           (aio/stop aio)
         }))
     }))
