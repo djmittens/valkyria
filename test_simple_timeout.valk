@@ -1,0 +1,28 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+
+(printf "Testing aio/within timeout...\n")
+
+; Test 1: Quick completion (should not timeout)
+(def {quick} (aio/within (aio/sleep aio 5) 100))
+(aio/then quick (\ {_} {
+  (def {status} (aio/status quick))
+  (printf "Quick test: status = %s\n" (symbol-to-string status))
+}))
+
+; Test 2: Timeout case (should timeout)  
+(def {slow} (aio/within (aio/sleep aio 100) 10))
+(aio/then slow (\ {_} {
+  (def {status} (aio/status slow))
+  (def {error} (if (== status (quote :failed)) (aio/error slow) nil))
+  (printf "Slow test: status = %s, error = %s\n" 
+          (symbol-to-string status) 
+          (if (== error nil) "nil" (symbol-to-string error)))
+}))
+
+; Wait a bit then stop
+(aio/then (aio/sleep aio 150) (\ {_} {
+  (printf "Stopping AIO...\n")
+  (aio/stop aio)
+}))

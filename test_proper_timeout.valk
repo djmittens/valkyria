@@ -1,0 +1,49 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+
+(printf "Testing aio/within with proper event loop management...\n")
+
+; Test: Quick completion should work
+(def {quick-handle} (aio/within (aio/sleep aio 5) 100))
+(printf "Quick handle created\n")
+
+; Test: Timeout should work  
+(def {slow-handle} (aio/sleep aio 1000))
+(printf "Slow handle created\n")
+
+(def {timeout-handle} (aio/within slow-handle 50))
+(printf "Timeout handle created\n")
+
+; Set up completion tracking
+(def {completed} 0)
+
+(aio/catch timeout-handle (\ {error} {
+  (printf "Timeout handle caught error: %s\n" error)  
+  (= {completed} (+ completed 1))
+}))
+
+(aio/then timeout-handle (\ {result} {
+  (printf "Timeout handle succeeded: %s\n" result)
+  (= {completed} (+ completed 1))  
+}))
+
+(aio/catch quick-handle (\ {error} {
+  (printf "Quick handle caught error: %s\n" error)
+  (= {completed} (+ completed 1))
+}))
+
+(aio/then quick-handle (\ {result} {
+  (printf "Quick handle succeeded: %s\n" result)
+  (= {completed} (+ completed 1))
+}))
+
+; Wait for operations to complete, then stop
+(aio/schedule aio 200 (\ {} {
+  (printf "Scheduled callback executing after 200ms\n")
+  (printf "Quick handle status: %s\n" (symbol-to-string (aio/status quick-handle)))
+  (printf "Timeout handle status: %s\n" (symbol-to-string (aio/status timeout-handle)))
+  (printf "Completed count: %ld\n" completed)
+  (aio/stop aio)
+}))
+

@@ -136,6 +136,10 @@ int main(int argc, char* argv[]) {
 
   // If script mode (and not forced REPL), cleanup and exit instead of entering REPL
   if (script_mode && !force_repl) {
+    // Wait for any running AIO systems to complete before exiting
+    // This ensures async operations like timers have a chance to finish
+    valk_aio_wait_for_all_systems();
+    
     valk_lval_t* sym = valk_lval_sym("aio");
     valk_lval_t* val = valk_lenv_get(env, sym);
     if (LVAL_TYPE(val) != LVAL_ERR && LVAL_TYPE(val) == LVAL_REF &&

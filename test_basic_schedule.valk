@@ -1,0 +1,12 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+
+(printf "Testing basic aio/schedule...\n")
+
+(aio/schedule aio 100 (\ {} {
+  (printf "Schedule callback fired!\n")
+  (aio/stop aio)
+}))
+
+(printf "Schedule set up, waiting...\n")

@@ -1,0 +1,39 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+
+(printf "Creating timeout test...\n")
+
+; Create a slow handle and wrap it with aio/within  
+(def {slow-handle} (aio/sleep aio 200))
+(def {timeout-handle} (aio/within slow-handle 50))
+
+(printf "Handles created, setting up callbacks...\n")
+
+; Add debug callbacks
+(aio/catch timeout-handle (\ {error} {
+  (printf "ERROR callback: %s\n" error)
+  ; Check if it's :timeout by converting to string and comparing
+  (if (== (symbol-to-string error) ":timeout")
+    {(printf "Got :timeout symbol!\n")}
+    {(printf "Got different error: %s\n" error)})
+}))
+
+(aio/then timeout-handle (\ {result} {
+  (printf "SUCCESS callback: %s\n" result)
+}))
+
+; Wait and check final state
+(aio/then (aio/sleep aio 300) (\ {_} {
+  (def {status} (aio/status timeout-handle))
+  (printf "Final status: %s\n" (symbol-to-string status))
+  
+  (if (== status (quote :failed))
+    {do
+      (def {error} (aio/error timeout-handle))  
+      (printf "Final error: %s\n" error)
+    }
+    {(printf "Not failed\n")})
+    
+  (aio/stop aio)
+}))

@@ -42,21 +42,28 @@
      (aio/stop sys)
      (not (== (aio/status h) nil))
      })
-    (test "aio/within creates handle with timeout parameter"
-      {do
-      (def {sys} (aio/start))
-      (def {h} (aio/within (aio/never sys) 50))
-      (aio/stop sys)
-      (not (== h nil))
-      })
-    (test "aio/within timeout behavior verification"
-      {do
-      (def {sys} (aio/start))
-      (def {slow-handle} (aio/sleep sys 100))
-      (def {timeout-handle} (aio/within slow-handle 10))
-      (def {status} (aio/status timeout-handle))
-      (aio/stop sys)
-      (or (== status (quote :running)) (== status (quote :failed)))
-      })
+     (test "aio/within creates handle with timeout parameter"
+       {do
+       (def {sys} (aio/start))
+       (def {h} (aio/within (aio/never sys) 50))
+       (aio/stop sys)
+       (not (== h nil))
+       })
 )
     {:suite-name "aio/within Tests"})
+
+; Async tests require test/run-async with aio system
+(def {aio} (aio/start))
+
+(test/run-async aio (list
+  (test-async "aio/within timeout behavior verification" (\ {done} {
+    (def {slow-handle} (aio/sleep aio 100))
+    (def {timeout-handle} (aio/within slow-handle 10))
+    (aio/then timeout-handle
+      (\ {result} {
+        (def {status} (aio/status timeout-handle))
+        (def {error} (aio/error timeout-handle))
+        (done (and (== status (quote :failed)) (== error (quote :timeout))))
+      }))
+  }))
+) {:suite-name "aio/within Async Tests"})

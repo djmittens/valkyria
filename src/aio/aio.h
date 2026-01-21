@@ -196,6 +196,12 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys);
 /// Called by the GC coordinator when requesting stop-the-world
 void valk_aio_wake_all_for_gc(void);
 
+/// @brief Check if any AIO systems are still running
+bool valk_aio_any_systems_running(void);
+
+/// @brief Wait for all running AIO systems to complete
+void valk_aio_wait_for_all_systems(void);
+
 typedef struct {
   void *arg;
   void (*onConnect)(void *arg, valk_aio_handle_t *);
