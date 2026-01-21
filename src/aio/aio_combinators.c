@@ -2601,7 +2601,32 @@ static valk_lval_t* valk_builtin_aio_pool_stats(valk_lenv_t* e, valk_lval_t* a) 
   return valk_lval_qlist(result_items, 6);
 }
 
-
+static valk_lval_t* valk_builtin_aio_retry(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 3) {
+    return valk_lval_err("aio/retry: expected 3 arguments (sys fn opts)");
+  }
+  
+  valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
+  valk_lval_t *fn = valk_lval_list_nth(a, 1);
+  valk_lval_t *opts = valk_lval_list_nth(a, 2);
+  
+  if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/retry: first argument must be an aio_system");
+  }
+  if (LVAL_TYPE(fn) != LVAL_FUN) {
+    return valk_lval_err("aio/retry: second argument must be a function");
+  }
+  if (LVAL_TYPE(opts) != LVAL_QEXPR) {
+    return valk_lval_err("aio/retry: third argument must be a qexpr (options dict)");
+  }
+  
+  UNUSED(opts);
+  
+  valk_lval_t *args = valk_lval_nil();
+  valk_lval_t *result = valk_lval_eval_call(e, fn, args);
+  
+  return result;
+}
 
 void valk_register_async_handle_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "aio/cancel", valk_builtin_aio_cancel);
@@ -2621,6 +2646,7 @@ void valk_register_async_handle_builtins(valk_lenv_t *env) {
    valk_lenv_put_builtin(env, "aio/any", valk_builtin_aio_any);
    valk_lenv_put_builtin(env, "aio/within", valk_builtin_aio_within);
    valk_lenv_put_builtin(env, "aio/on-cancel", valk_builtin_aio_on_cancel);
+   valk_lenv_put_builtin(env, "aio/retry", valk_builtin_aio_retry);
 
   valk_lenv_put_builtin(env, "aio/sleep", valk_builtin_aio_sleep);
   valk_lenv_put_builtin(env, "aio/let", valk_builtin_aio_let);
