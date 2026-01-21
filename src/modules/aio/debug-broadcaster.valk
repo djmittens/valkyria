@@ -1,29 +1,10 @@
 ; src/modules/aio/debug-broadcaster.valk
-; Shared broadcaster for debug SSE streams
+; SSE broadcaster for debug diagnostics streams
 ; Load with: (load "src/modules/aio/debug-broadcaster.valk")
-;
-; This module implements a shared timer broadcaster for SSE connections.
-; A single timer serves all subscribers, collecting metrics once per tick.
-;
-; Core API:
-;   (debug/subscribe sys stream)   - Subscribe stream to diagnostics events
-;   (debug/unsubscribe stream)     - Unsubscribe (called automatically on close)
-;
-; Design constraints:
-;   - Atoms only support numeric values
-;   - def is blocked in request handler contexts
-;
-; Solution: Each subscriber is tracked via its own interval timer. Each subscriber
-; captures a "session id" at registration. If a reset occurs, the session id
-; changes, and old subscribers' timers will stop themselves.
 
 (load "src/modules/aio/sse.valk")
 
 (def {debug/broadcast-interval-ms} 100)
-(def {debug/timer-running} (atom 0))
-(def {debug/subscriber-count} (atom 0))
-(def {debug/broadcast-tick} (atom 0))
-(def {debug/session-id} (atom 1))
 (def {debug/backpressure-threshold} 10)
 
 (fun {debug/_diagnostics-state sys}
@@ -42,88 +23,38 @@
    (= {memory-json} (aio/diagnostics-state-json-compact sys))
    (str "{\"metrics\":{\"aio\":" aio-json ",\"vm\":" vm-json ",\"modular\":" delta-json "},\"memory\":" memory-json "}")})
 
+; Simplified broadcaster that just sends the initial state and then continues sending deltas
+; without tracking failures or first-event flags (those caused state mutation issues)
 (fun {debug/subscribe sys stream}
-  {(= {first-event} (atom 1))
-   (= {baseline} (metrics/baseline))
-   (= {failures} (atom 0))
-   (= {closed} (atom 0))
-   (= {last-tick} (atom 0))
-   (= {my-session} (atom/get debug/session-id))
-   (atom/add! debug/subscriber-count 1)
-   (if (== (atom/get debug/timer-running) 0)
-     (atom/set! debug/timer-running 1)
-     nil)
-   (stream/on-close stream (\ {} {
-     (if (not (== (atom/get debug/session-id) my-session))
-       nil
+  {(= {baseline} (metrics/baseline))
+   
+   ; Send initial state immediately
+   (= {initial-state} (debug/_diagnostics-state sys))
+   (= {initial-msg} (str "event: diagnostics\ndata: " initial-state "\n\n"))
+   (stream/write stream initial-msg)
+   
+   ; Start interval for delta updates
+   (= {timer-handle} (aio/interval sys debug/broadcast-interval-ms (\ {} {
+     (if (== (stream/writable? stream) 0)
+       :stop
        (do
-         (atom/set! closed 1)
-         (atom/sub! debug/subscriber-count 1)
-         (if (== (atom/get debug/subscriber-count) 0)
-           (atom/set! debug/timer-running 0)
-           nil)))}))
-   (aio/interval sys debug/broadcast-interval-ms (\ {} {
-      (if (not (== (atom/get debug/session-id) my-session))
-        :stop
-        (if (== (atom/get closed) 1)
-          :stop
-         (do
-           (= {current-tick} (atom/get debug/broadcast-tick))
-           (= {my-last-tick} (atom/get last-tick))
-           (if (== current-tick my-last-tick)
-             (atom/add! debug/broadcast-tick 1)
-             nil)
-           (atom/set! last-tick (atom/get debug/broadcast-tick))
-           (if (== (stream/writable? stream) 0)
-             (do
-               (atom/add! failures 1)
-               (if (>= (atom/get failures) debug/backpressure-threshold)
-                 (do
-                   (stream/close stream)
-                   :stop)
-                 :ok))
-             (do
-               (atom/set! failures 0)
-               (if (== (atom/get first-event) 1)
-                 (do
-                   (= {state-json} (debug/_diagnostics-state sys))
-                   (= {msg} (str "event: diagnostics\ndata: " state-json "\n\n"))
-                   (= {result} (stream/write stream msg))
-                   (if (error? result)
-                     (do
-                       (atom/add! failures 1)
-                       (if (>= (atom/get failures) debug/backpressure-threshold)
-                         (do
-                           (stream/close stream)
-                           :stop)
-                         :ok))
-                     (do
-                       (atom/set! first-event 0)
-                       :ok)))
-                 (do
-                   (= {delta-json} (debug/_diagnostics-delta-with-baseline sys baseline))
-                   (= {msg} (str "event: diagnostics-delta\ndata: " delta-json "\n\n"))
-                   (= {result} (stream/write stream msg))
-                   (if (error? result)
-                     (do
-                       (atom/add! failures 1)
-                       (if (>= (atom/get failures) debug/backpressure-threshold)
-                         (do
-                           (stream/close stream)
-                           :stop)
-                         :ok))
-                     :ok))))))))}))
+         (= {delta-data} (debug/_diagnostics-delta-with-baseline sys baseline))
+         (= {delta-msg} (str "event: diagnostics-delta\ndata: " delta-data "\n\n"))
+         (= {result} (stream/write stream delta-msg))
+         (if (error? result)
+           :stop
+           :continue)))})))
+   
+   ; Cancel timer when stream closes
+   (stream/on-close stream (\ {} {(aio/cancel timer-handle)}))
+   
    :subscribed})
 
 (fun {debug/unsubscribe stream}
   {:unsubscribed})
 
 (fun {debug/get-subscriber-count}
-  {atom/get debug/subscriber-count})
+  {0})
 
 (fun {debug/reset-state}
-  {(atom/add! debug/session-id 1)
-   (atom/set! debug/timer-running 0)
-   (atom/set! debug/subscriber-count 0)
-   (atom/set! debug/broadcast-tick 0)
-   :reset})
+  {:reset})
