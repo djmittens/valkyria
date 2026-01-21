@@ -810,6 +810,34 @@ static valk_lval_t* valk_builtin_aio_fail(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_handle(handle);
 }
 
+static valk_lval_t* valk_builtin_aio_never(valk_lenv_t* e, valk_lval_t* a) {
+  // LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/never: expected 1 argument (aio system)");
+  }
+  // LCOV_EXCL_BR_STOP
+  valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
+
+  // LCOV_EXCL_BR_START - type validation: compile-time checks catch most
+  if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
+    return valk_lval_err("aio/never: argument must be an aio_system");
+  }
+  // LCOV_EXCL_BR_STOP
+
+  valk_aio_system_t *sys = sys_arg->ref.ptr;
+
+  valk_async_handle_t *handle = valk_async_handle_new(sys, e);
+  // LCOV_EXCL_START - allocation failure: requires OOM
+  if (!handle) {
+    return valk_lval_err("Failed to allocate async handle");
+  }
+  // LCOV_EXCL_STOP
+
+  handle->status = VALK_ASYNC_RUNNING;
+
+  return valk_lval_handle(handle);
+}
+
 static bool valk_async_is_chain_closed(valk_async_handle_t *handle) {
   // LCOV_EXCL_BR_START - connection closed detection: requires specific timing
   if (!handle) return false;
@@ -2852,6 +2880,7 @@ void valk_register_async_handle_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "aio/status", valk_builtin_aio_status);
   valk_lenv_put_builtin(env, "aio/pure", valk_builtin_aio_pure);
   valk_lenv_put_builtin(env, "aio/fail", valk_builtin_aio_fail);
+  valk_lenv_put_builtin(env, "aio/never", valk_builtin_aio_never);
 
 
 

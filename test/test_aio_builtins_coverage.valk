@@ -554,9 +554,35 @@
     (def {outer} (aio/race (list inner1 inner2)))
     (== (aio/status outer) (quote :completed))
   })
-  (test "aio/any with mix of success and failure"
-    {do
-    (def {h} (aio/any (list (aio/fail "e1") (aio/fail "e2") (aio/pure 42) (aio/fail "e3"))))
-    (== (aio/status h) (quote :completed))
-  }))
-  {:suite-name "AIO Builtins Coverage Tests"})
+   (test "aio/any with mix of success and failure"
+     {do
+     (def {h} (aio/any (list (aio/fail "e1") (aio/fail "e2") (aio/pure 42) (aio/fail "e3"))))
+     (== (aio/status h) (quote :completed))
+   })
+   (test "aio/never creates running handle that never completes"
+     {do
+     (= {sys} (aio/start))
+     (test/assert (not (== sys nil)) "aio/start should succeed")
+     (def {h} (aio/never sys))
+     (def {status} (aio/status h))
+     (aio/stop sys)
+     (== status (quote :running))
+   })
+   (test "aio/never can be cancelled"
+     {do
+     (= {sys} (aio/start))
+     (def {h} (aio/never sys))
+     (def {cancelled} (aio/cancel h))
+     (aio/stop sys)
+     (== cancelled (quote :true))
+   })
+   (test "aio/never in race with immediate value"
+     {do
+     (= {sys} (aio/start))
+     (def {never-handle} (aio/never sys))
+     (def {immediate-handle} (aio/pure 42))
+     (def {race-result} (aio/race (list never-handle immediate-handle)))
+     (aio/stop sys)
+     (== (aio/status race-result) (quote :completed))
+   }))
+   {:suite-name "AIO Builtins Coverage Tests"})
