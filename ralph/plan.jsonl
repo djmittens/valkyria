@@ -59,6 +59,7 @@
 {"t": "task", "id": "t-zt4n", "spec": "deprecate-atoms.md", "name": "Implement stream/closed builtin", "s": "p", "accept": "build/valk -e \"(aio/run (fn {aio} {(http2/server-listen aio 0 (fn {req} {(stream/closed (req/stream req))}))}))\" returns a handle (not error), make build succeeds", "priority": "high"}
 {"t": "task", "id": "t-thfx", "spec": "deprecate-atoms.md", "name": "Add stream/closed tests to test_sse_builtins.valk", "s": "p", "accept": "grep -c stream/closed test/test_sse_builtins.valk returns at least 1, build/valk test/test_sse_builtins.valk passes", "deps": ["t-zt4n"], "priority": "high"}
 {"t": "issue", "id": "i-u04g", "spec": "deprecate-atoms.md", "desc": "test_backpressure_timeout.valk is currently failing - covered by task t-59l6"}
+{"t": "issue", "id": "i-0jvx", "spec": "deprecate-atoms.md", "desc": "CRITICAL: ralph task done marks wrong tasks. The semaphore tasks (t-yup0, t-56j5, t-f5ji, t-3x88) are already complete (all builtins implemented, test file exists and passes) but ralph keeps marking other tasks as done instead. The next high-priority pending task should be t-83jv (Fix test/run-with-timeout)."}
 {"t": "reject", "id": "t-45oi", "done_at": "337f194", "reason": "File src/modules/test.valk still contains 35 occurrences of 'atom'. Acceptance criteria requires 0 occurrences."}
 {"t": "reject", "id": "t-45oi", "done_at": "5fe6c41", "reason": "grep -c atom src/modules/test.valk returns 35, not 0"}
 {"t": "reject", "id": "t-bnb5", "done_at": "96c12e0", "reason": "grep -c atom src/modules/test.valk returns 35, not 0"}
