@@ -251,12 +251,15 @@ extern void valk_standalone_async_done_callback(valk_async_handle_t *handle, voi
 #define VALK_RACE_CTX_MAGIC_EARLY 0x9ACE7821
 #define VALK_ANY_CTX_MAGIC 0xA4177821
 #define VALK_ANY_CTX_MAGIC_EARLY 0xA4177821
+#define VALK_WITHIN_CTX_MAGIC 0xB1781821
+#define VALK_WITHIN_CTX_MAGIC_EARLY 0xB1781821
 
 
 void valk_async_propagate_completion(valk_async_handle_t *source);
 void valk_async_notify_all_parent(valk_async_handle_t *child);
 void valk_async_notify_race_parent(valk_async_handle_t *child);
 void valk_async_notify_any_parent(valk_async_handle_t *child);
+void valk_async_notify_within_parent(valk_async_handle_t *child);
 
 static void __sleep_timer_cb(uv_timer_t *timer_handle) {
   valk_async_handle_uv_data_t *data = (valk_async_handle_uv_data_t *)timer_handle->data;
@@ -2098,6 +2101,158 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
   return scope_lval;
 }
 
+typedef struct {
+  u32 magic;
+  valk_async_handle_t *within_handle;
+  valk_async_handle_t *source_handle;
+  valk_async_handle_t *timeout_handle;
+  valk_mem_allocator_t *allocator;
+} valk_within_ctx_t;
+
+static void valk_within_ctx_cleanup(void *ctx) {
+  valk_within_ctx_t *within_ctx = (valk_within_ctx_t *)ctx;
+  if (!within_ctx) return;
+  within_ctx->magic = 0;
+  if (within_ctx->allocator && within_ctx->allocator->type != VALK_ALLOC_MALLOC) return;
+  free(within_ctx);
+}
+
+static void valk_async_within_child_resolved(valk_async_handle_t *child) {
+  if (!child || !child->parent) return;
+
+  valk_async_handle_t *parent = child->parent;
+  if (!parent->uv_handle_ptr) return;
+
+  valk_within_ctx_t *ctx = (valk_within_ctx_t*)parent->uv_handle_ptr;
+  if (ctx->magic != VALK_WITHIN_CTX_MAGIC) return;
+
+  valk_async_status_t child_status = valk_async_handle_get_status(child);
+  if (child_status != VALK_ASYNC_COMPLETED && child_status != VALK_ASYNC_FAILED) {
+    return;
+  }
+
+  valk_async_status_t new_status = (child_status == VALK_ASYNC_COMPLETED) ? 
+                                   VALK_ASYNC_COMPLETED : VALK_ASYNC_FAILED;
+
+  if (!valk_async_handle_try_transition(ctx->within_handle, VALK_ASYNC_RUNNING, new_status)) {
+    return;
+  }
+
+  if (child == ctx->source_handle) {
+    if (new_status == VALK_ASYNC_COMPLETED) {
+      atomic_store_explicit(&ctx->within_handle->result, 
+                           atomic_load_explicit(&child->result, memory_order_acquire), 
+                           memory_order_release);
+    } else {
+      atomic_store_explicit(&ctx->within_handle->error, 
+                           atomic_load_explicit(&child->error, memory_order_acquire), 
+                           memory_order_release);
+    }
+    valk_async_handle_cancel(ctx->timeout_handle);
+  } else if (child == ctx->timeout_handle) {
+    atomic_store_explicit(&ctx->within_handle->status, VALK_ASYNC_FAILED, memory_order_release);
+    atomic_store_explicit(&ctx->within_handle->error, valk_lval_err(":timeout"), memory_order_release);
+    valk_async_handle_cancel(ctx->source_handle);
+  }
+
+  valk_async_notify_done(ctx->within_handle);
+  valk_async_propagate_completion(ctx->within_handle);
+}
+
+void valk_async_notify_within_parent(valk_async_handle_t *child) {
+  if (!child || !child->parent) return;
+
+  valk_async_handle_t *parent = child->parent;
+  if (!parent->uv_handle_ptr) return;
+
+  u32 *magic_ptr = (u32*)parent->uv_handle_ptr;
+  if (*magic_ptr != VALK_WITHIN_CTX_MAGIC_EARLY) return;
+
+  valk_async_within_child_resolved(child);
+}
+
+static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("aio/within: expected 2 arguments (handle timeout-ms)");
+  }
+
+  valk_lval_t *source_lval = valk_lval_list_nth(a, 0);
+  valk_lval_t *timeout_lval = valk_lval_list_nth(a, 1);
+
+  if (LVAL_TYPE(source_lval) != LVAL_HANDLE) {
+    return valk_lval_err("aio/within: first argument must be a handle");
+  }
+  if (LVAL_TYPE(timeout_lval) != LVAL_NUM) {
+    return valk_lval_err("aio/within: second argument must be a number (timeout in ms)");
+  }
+
+  valk_async_handle_t *source = source_lval->async.handle;
+  u64 timeout_ms = (u64)timeout_lval->num;
+
+  valk_async_status_t source_status = valk_async_handle_get_status(source);
+  if (source_status == VALK_ASYNC_COMPLETED || source_status == VALK_ASYNC_FAILED || 
+      source_status == VALK_ASYNC_CANCELLED) {
+    return valk_lval_handle(source);
+  }
+
+  valk_aio_system_t *sys = source->sys;
+  if (!sys) {
+    return valk_lval_err("aio/within: source handle must have an AIO system");
+  }
+
+  valk_async_handle_t *timeout_handle = valk_async_handle_new(sys, e);
+  if (!timeout_handle) {
+    return valk_lval_err("Failed to allocate timeout handle");
+  }
+
+  valk_async_handle_uv_data_t *timer_data = aligned_alloc(alignof(valk_async_handle_uv_data_t), 
+                                                          sizeof(valk_async_handle_uv_data_t));
+  if (!timer_data) {
+    valk_async_handle_free(timeout_handle);
+    return valk_lval_err("Failed to allocate timer data");
+  }
+
+  timer_data->magic = VALK_UV_DATA_TIMER_MAGIC;
+  timer_data->handle = timeout_handle;
+  timer_data->uv.timer.data = timer_data;
+
+  timeout_handle->uv_handle_ptr = timer_data;
+  timeout_handle->status = VALK_ASYNC_RUNNING;
+
+  uv_timer_init(sys->eventloop, &timer_data->uv.timer);
+  uv_timer_start(&timer_data->uv.timer, __sleep_timer_cb, timeout_ms, 0);
+
+  valk_async_handle_t *within_handle = valk_async_handle_new(sys, e);
+  if (!within_handle) {
+    valk_async_handle_cancel(timeout_handle);
+    return valk_lval_err("Failed to allocate within handle");
+  }
+  within_handle->request_ctx = source->request_ctx;
+  within_handle->status = VALK_ASYNC_RUNNING;
+
+  valk_mem_allocator_t *allocator = valk_thread_ctx.allocator;
+  valk_within_ctx_t *ctx = valk_mem_alloc(sizeof(valk_within_ctx_t));
+  if (!ctx) {
+    valk_async_handle_cancel(timeout_handle);
+    valk_async_handle_free(within_handle);
+    return valk_lval_err("Failed to allocate within context");
+  }
+
+  ctx->magic = VALK_WITHIN_CTX_MAGIC;
+  ctx->within_handle = within_handle;
+  ctx->source_handle = source;
+  ctx->timeout_handle = timeout_handle;
+  ctx->allocator = allocator;
+  within_handle->uv_handle_ptr = ctx;
+
+  valk_async_handle_on_cleanup(within_handle, valk_within_ctx_cleanup, ctx);
+
+  valk_async_handle_add_child(within_handle, source);
+  valk_async_handle_add_child(within_handle, timeout_handle);
+
+  return valk_lval_handle(within_handle);
+}
+
 static valk_lval_t* valk_builtin_aio_pool_stats(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   // LCOV_EXCL_START - aio/pool-stats arg validation: compile-time checks
@@ -2183,6 +2338,7 @@ void valk_register_async_handle_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "aio/all", valk_builtin_aio_all);
   valk_lenv_put_builtin(env, "aio/race", valk_builtin_aio_race);
   valk_lenv_put_builtin(env, "aio/any", valk_builtin_aio_any);
+  valk_lenv_put_builtin(env, "aio/within", valk_builtin_aio_within);
   valk_lenv_put_builtin(env, "aio/on-cancel", valk_builtin_aio_on_cancel);
 
   valk_lenv_put_builtin(env, "aio/sleep", valk_builtin_aio_sleep);

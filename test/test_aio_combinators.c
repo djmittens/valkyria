@@ -683,6 +683,83 @@ static void test_aio_bracket_use_fails(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static void test_aio_within_completed_before_timeout(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = create_test_env();
+  valk_lval_t *result = eval_str(env, "(aio/within (aio/pure 42) 1000)");
+
+  ASSERT_LVAL_TYPE(result, LVAL_HANDLE);
+  valk_async_handle_t *handle = result->async.handle;
+  ASSERT_NOT_NULL(handle);
+  ASSERT_EQ(handle->status, VALK_ASYNC_COMPLETED);
+
+  valk_lval_t *value = handle->result;
+  ASSERT_LVAL_TYPE(value, LVAL_NUM);
+  ASSERT_EQ(value->num, 42);
+
+  valk_lenv_free(env);
+  VALK_PASS();
+}
+
+static void test_aio_within_failed_before_timeout(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = create_test_env();
+  valk_lval_t *result = eval_str(env, "(aio/within (aio/fail \"error\") 1000)");
+
+  ASSERT_LVAL_TYPE(result, LVAL_HANDLE);
+  valk_async_handle_t *handle = result->async.handle;
+  ASSERT_NOT_NULL(handle);
+  ASSERT_EQ(handle->status, VALK_ASYNC_FAILED);
+
+  valk_lval_t *error = handle->error;
+  ASSERT_LVAL_TYPE(error, LVAL_STR);
+  ASSERT_STR_EQ(error->str, "error");
+
+  valk_lenv_free(env);
+  VALK_PASS();
+}
+
+static void test_aio_within_wrong_args_error(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = create_test_env();
+  valk_lval_t *result = eval_str(env, "(aio/within)");
+
+  ASSERT_LVAL_TYPE(result, LVAL_ERR);
+  ASSERT_STR_CONTAINS(result->str, "aio/within: expected 2 arguments");
+
+  valk_lenv_free(env);
+  VALK_PASS();
+}
+
+static void test_aio_within_non_handle_first_arg_error(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = create_test_env();
+  valk_lval_t *result = eval_str(env, "(aio/within 42 1000)");
+
+  ASSERT_LVAL_TYPE(result, LVAL_ERR);
+  ASSERT_STR_CONTAINS(result->str, "aio/within: first argument must be a handle");
+
+  valk_lenv_free(env);
+  VALK_PASS();
+}
+
+static void test_aio_within_non_number_second_arg_error(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = create_test_env();
+  valk_lval_t *result = eval_str(env, "(aio/within (aio/pure 42) \"timeout\")");
+
+  ASSERT_LVAL_TYPE(result, LVAL_ERR);
+  ASSERT_STR_CONTAINS(result->str, "aio/within: second argument must be a number");
+
+  valk_lenv_free(env);
+  VALK_PASS();
+}
+
 static void test_aio_all_many_handles(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -806,6 +883,12 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_aio_on_cancel_registered", test_aio_on_cancel_registered);
   valk_testsuite_add_test(suite, "test_aio_bracket_success", test_aio_bracket_success);
   valk_testsuite_add_test(suite, "test_aio_bracket_use_fails", test_aio_bracket_use_fails);
+
+  valk_testsuite_add_test(suite, "test_aio_within_completed_before_timeout", test_aio_within_completed_before_timeout);
+  valk_testsuite_add_test(suite, "test_aio_within_failed_before_timeout", test_aio_within_failed_before_timeout);
+  valk_testsuite_add_test(suite, "test_aio_within_wrong_args_error", test_aio_within_wrong_args_error);
+  valk_testsuite_add_test(suite, "test_aio_within_non_handle_first_arg_error", test_aio_within_non_handle_first_arg_error);
+  valk_testsuite_add_test(suite, "test_aio_within_non_number_second_arg_error", test_aio_within_non_number_second_arg_error);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
