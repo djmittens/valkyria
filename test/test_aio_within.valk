@@ -1,0 +1,45 @@
+; Test suite for aio/within combinator  
+; Tests: aio/within adds timeout to async operations
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/run (list
+  (test "aio/within returns a handle"
+    {do
+    (def {sys} (aio/start))
+    (def {h} (aio/within (aio/pure 42) 100))
+    (aio/stop sys)
+    (not (== h nil))
+    })
+  (test "aio/within with immediate completion"
+    {do
+    (def {sys} (aio/start))
+    (def {h} (aio/within (aio/pure 42) 100))
+    (def {status} (aio/status h))
+    (aio/stop sys)
+    (== status (quote :completed))
+    })
+  (test "aio/within with immediate failure"
+    {do
+    (def {sys} (aio/start))
+    (def {h} (aio/within (aio/fail "error") 100))
+    (def {status} (aio/status h))
+    (aio/stop sys)
+    (== status (quote :failed))
+    })
+  (test "aio/within handles quick completion"
+    {do
+    (def {sys} (aio/start))
+    (def {h} (aio/within (aio/sleep sys 1) 100))
+    (aio/stop sys)
+    (not (== h nil))
+    })
+  (test "aio/within accepts timeout parameter"
+    {do
+    (def {sys} (aio/start))
+    (def {h} (aio/within (aio/pure 1) 50))
+    (aio/stop sys)
+    (not (== (aio/status h) nil))
+    }))
+  {:suite-name "aio/within Tests"})
