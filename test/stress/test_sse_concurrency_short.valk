@@ -84,7 +84,7 @@
        (do
          (atom/set! connections-opened (+ (atom/get connections-opened) 1))
          (atom/set! active-connections (+ (atom/get active-connections) 1))
-         (http2/client-request aio "127.0.0.1" TEST_PORT "/stress-sse"
+         (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/stress-sse")
            (\ {resp} {(handle-response resp)})))))})
 
 (fun {create-batch n}

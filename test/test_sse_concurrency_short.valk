@@ -14,6 +14,8 @@
 (def {EVENTS_PER_CONNECTION} 3)
 (def {MAX_ACTIVE} 5)
 
+(def {*results*} ())
+
 (fun {str-contains? haystack needle}
   {(> (len (str/split haystack needle)) 1)})
 
@@ -52,41 +54,44 @@
        {(aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/stress-sse")
           (\ {resp}
             {(aio/semaphore-release rate-limiter)
-             (if (error? resp)
+             (= {result} (if (error? resp)
                {:status :error}
                (do
                  (= {body} (http2/response-body resp))
                  (if (str-contains? body "event:")
                    {:status :ok :has-event true}
-                   {:status :ok :has-event false})))}))}))})
+                   {:status :ok :has-event false}))))
+             (set! {*results*} (cons result *results*))
+             nil}))}))})
 
-(fun {run-batch n handles}
+(fun {run-batch n}
   {(if (<= n 0)
-     handles
-     (run-batch (- n 1) (cons (create-sse-connection n) handles)))})
+     nil
+     (do
+       (create-sse-connection n)
+       (run-batch (- n 1))))})
 
-(fun {create-connections-for-duration duration-remaining handles}
+(fun {create-connections-for-duration duration-remaining}
   {(if (<= duration-remaining 0)
-     (aio/pure handles)
+     (aio/pure nil)
      (aio/then (aio/sleep aio CYCLE_INTERVAL_MS)
        (\ {_}
-         {(= {new-handles} (run-batch CONCURRENT_CONNECTIONS ()))
-          (create-connections-for-duration 
-            (- duration-remaining CYCLE_INTERVAL_MS)
-            (join handles new-handles))})))})
+         {(run-batch CONCURRENT_CONNECTIONS)
+          (create-connections-for-duration (- duration-remaining CYCLE_INTERVAL_MS))})))})
 
 (println "=== SSE Concurrency Stress Test (Short) ===")
 (printf "Testing %d concurrent SSE connections for %d seconds\n" CONCURRENT_CONNECTIONS (/ TEST_DURATION_MS 1000))
 (printf "Server running on port %d\n" TEST_PORT)
 (println "")
 
-(= {initial-batch} (run-batch CONCURRENT_CONNECTIONS ()))
+(run-batch CONCURRENT_CONNECTIONS)
 
-(aio/then (create-connections-for-duration (- TEST_DURATION_MS CYCLE_INTERVAL_MS) initial-batch)
-  (\ {all-handles}
-    {(aio/then (aio/all all-handles)
-       (\ {results}
-         {(println "")
+(aio/then (create-connections-for-duration (- TEST_DURATION_MS CYCLE_INTERVAL_MS))
+  (\ {_}
+    {(aio/then (aio/sleep aio 3000)
+       (\ {_}
+         {(= {results} *results*)
+          (println "")
           (println "=== Test Complete ===")
           (= {total} (len results))
           (= {errors} (len (filter (\ {r} {(== (get r :status) :error)}) results)))
