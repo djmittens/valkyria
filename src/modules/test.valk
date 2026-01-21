@@ -413,14 +413,12 @@
       (test-body done-fn)
     }))
     
-    ; Create a polling handle that waits for the test to complete
-    (= {poll-handle} (aio/then (aio/interval aio 10 (\ {} {
+    ; Create a polling handle using recursive aio/then chains with aio/sleep
+    (= {poll-fn} (\ {} {
       (if (== test-completed 1)
-        {:stop}
-        {:continue})
-    })) (\ {_} {
-      test-result
-    })))
+        {test-result}
+        {(aio/then (aio/sleep aio 10) (\ {_} {(poll-fn)}))}))
+    (= {poll-handle} (poll-fn))
     
     ; Apply timeout using aio/within and handle timeout error
     (aio/catch (aio/within poll-handle timeout-ms)
