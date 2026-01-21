@@ -2872,7 +2872,60 @@ static valk_lval_t* valk_builtin_aio_pool_stats(valk_lenv_t* e, valk_lval_t* a) 
   return valk_lval_qlist(result_items, 6);
 }
 
+static valk_lval_t* valk_builtin_aio_traverse(valk_lenv_t* e, valk_lval_t* a) {
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("aio/traverse: expected 2 arguments (list fn)");
+  }
+  valk_lval_t *list_arg = valk_lval_list_nth(a, 0);
+  valk_lval_t *fn_arg = valk_lval_list_nth(a, 1);
 
+  if (LVAL_TYPE(fn_arg) != LVAL_FUN) {
+    return valk_lval_err("aio/traverse: second argument must be a function");
+  }
+
+  valk_lval_t *handles = valk_lval_nil();
+  valk_lval_t *current = list_arg;
+  
+  while (LVAL_TYPE(current) != LVAL_NIL) {
+    if (LVAL_TYPE(current) != LVAL_CONS && LVAL_TYPE(current) != LVAL_QEXPR) {
+      return valk_lval_err("aio/traverse: first argument must be a list");
+    }
+    
+    valk_lval_t *item = valk_lval_head(current);
+    valk_lval_t *args = valk_lval_cons(item, valk_lval_nil());
+    valk_lval_t *handle = valk_lval_eval_call(e, fn_arg, args);
+    
+    if (LVAL_TYPE(handle) == LVAL_ERR) {
+      return handle;
+    }
+    
+    if (LVAL_TYPE(handle) != LVAL_HANDLE) {
+      return valk_lval_err("aio/traverse: function must return handles (got type %d for item)", LVAL_TYPE(handle));
+    }
+    
+    handles = valk_lval_cons(handle, handles);
+    current = valk_lval_tail(current);
+  }
+  
+  valk_lval_t *handles_reversed = valk_lval_nil();
+  while (LVAL_TYPE(handles) != LVAL_NIL) {
+    handles_reversed = valk_lval_cons(valk_lval_head(handles), handles_reversed);
+    handles = valk_lval_tail(handles);
+  }
+
+  valk_lval_t *list_call = valk_lval_cons(valk_lval_sym("list"), handles_reversed);
+  valk_lval_t *handles_list = valk_lval_eval(e, list_call);
+  
+  if (LVAL_TYPE(handles_list) == LVAL_ERR) {
+    return handles_list;
+  }
+
+  valk_lval_t *all_call = valk_lval_cons(
+    valk_lval_sym("aio/all"),
+    valk_lval_cons(handles_list, valk_lval_nil()));
+
+  return valk_lval_eval(e, all_call);
+}
 
 void valk_register_async_handle_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "aio/cancel", valk_builtin_aio_cancel);
@@ -2894,6 +2947,7 @@ void valk_register_async_handle_builtins(valk_lenv_t *env) {
    valk_lenv_put_builtin(env, "aio/within", valk_builtin_aio_within);
    valk_lenv_put_builtin(env, "aio/on-cancel", valk_builtin_aio_on_cancel);
    valk_lenv_put_builtin(env, "aio/retry", valk_builtin_aio_retry);
+   valk_lenv_put_builtin(env, "aio/traverse", valk_builtin_aio_traverse);
 
   valk_lenv_put_builtin(env, "aio/sleep", valk_builtin_aio_sleep);
   valk_lenv_put_builtin(env, "aio/let", valk_builtin_aio_let);
