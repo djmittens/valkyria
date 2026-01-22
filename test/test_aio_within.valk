@@ -4,84 +4,51 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-; First run sync tests
 (test/run (list
-  (test "aio/within returns a handle"
+  (test "aio/within creates handle"
     {do
     (def {sys} (aio/start))
     (def {h} (aio/within (aio/pure 42) 100))
     (aio/stop sys)
     (not (== h nil))
     })
-  (test "aio/within with immediate completion"
+  (test "aio/within completes without timeout"
     {do
     (def {sys} (aio/start))
-    (def {h} (aio/within (aio/pure 42) 100))
-    (def {status} (aio/status h))
+    ; Create a basic test - immediate completion should not timeout
+    (def {timeout-handle} (aio/within (aio/pure 42) 100))
+    (def {status} (aio/status timeout-handle))
     (aio/stop sys)
+    ; Test passes if handle completes successfully (no timeout needed for immediate value)
     (== status (quote :completed))
     })
-  (test "aio/within with immediate failure"
+  (test "aio/within timeout behavior with timing"
     {do
     (def {sys} (aio/start))
-    (def {h} (aio/within (aio/fail "error") 100))
-    (def {status} (aio/status h))
+    (def {start-time} (time/now))
+    
+    ; Create slow operation (100ms sleep) with short timeout (10ms) - should timeout in ~10ms
+    (def {timeout-handle} (aio/within (aio/sleep sys 100) 10))
+    
+    ; Wait synchronously for completion
+    (aio/wait timeout-handle)
+    
+    (def {end-time} (time/now))
+    (def {elapsed-ms} (- end-time start-time))
+    
+    ; Check results
+    (def {status} (aio/status timeout-handle))
+    (def {error} (aio/error timeout-handle))
+    
     (aio/stop sys)
-    (== status (quote :failed))
+    
+    ; Verify timeout behavior: should fail with timeout error in approximately 10ms, not 100ms
+    (and 
+      (== status (quote :failed))
+      (== error (quote :timeout))
+      (> elapsed-ms 8)    ; At least 8ms (some timing variance)
+      (< elapsed-ms 50)   ; But much less than the 100ms sleep duration
+    )
     })
-  (test "aio/within handles quick completion"
-    {do
-    (def {sys} (aio/start))
-    (def {h} (aio/within (aio/sleep sys 1) 100))
-    (aio/stop sys)
-    (not (== h nil))
-    })
-   (test "aio/within accepts timeout parameter"
-     {do
-     (def {sys} (aio/start))
-     (def {h} (aio/within (aio/pure 1) 50))
-     (aio/stop sys)
-     (not (== (aio/status h) nil))
-     })
-     (test "aio/within creates handle with timeout parameter"
-       {do
-       (def {sys} (aio/start))
-       (def {h} (aio/within (aio/never sys) 50))
-       (aio/stop sys)
-       (not (== h nil))
-       })
-     (test "aio/within timeout behavior verification"
-       {do
-       (def {sys} (aio/start))
-       (def {slow-handle} (aio/sleep sys 100))
-       (def {timeout-handle} (aio/within slow-handle 10))
-       ; Add several short sleeps to increase test time
-       (def {wait1} (aio/sleep sys 2))
-       (def {wait2} (aio/sleep sys 2))
-       (def {wait3} (aio/sleep sys 2))
-       (def {wait4} (aio/sleep sys 2))
-       (def {wait5} (aio/sleep sys 2))
-       (aio/stop sys)
-       ; Test passes if timeout handle was created properly
-       (not (== timeout-handle nil))
-       })
-)
-    {:suite-name "aio/within Tests"})
-
-; Async test to verify timeout behavior - using test-async framework
-(def {aio} (aio/start))
-
-(test/run-async aio (list
-  (test-async "aio/within timeout behavior verification" (\ {done} {
-    (def {slow-handle} (aio/sleep aio 100))
-    (def {timeout-handle} (aio/within slow-handle 10))
-    ; Use scheduled callback to check result after timeout period
-    (aio/schedule aio 50 (\ {} {
-      (def {status} (aio/status timeout-handle))
-      (def {error} (aio/error timeout-handle))
-      ; Return true if timeout worked, false otherwise
-      (done (and (== status (quote :failed)) (== error (quote :timeout))))
-    }))
-  }))
-) {:suite-name "aio/within Async Tests"})
+) {:suite-name "aio/within timeout tests"})
 

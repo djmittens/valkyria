@@ -1,11 +1,8 @@
 (load "src/prelude.valk")
 
 (def {aio} (aio/start))
-
-(printf "Testing basic timer...\n")
-
-; Test that timers work
-(aio/then (aio/sleep aio 100) (\ {_} {
-  (printf "Timer fired!\n")
+(aio/schedule aio 100 (\ {} {
+  (printf "Timer fired
+")
   (aio/stop aio)
 }))

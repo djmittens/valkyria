@@ -1,0 +1,15 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+(def {fast-handle} (aio/pure aio "success"))
+(def {timeout-handle} (aio/within fast-handle 50))
+
+(aio/then timeout-handle
+  (\ {result} {
+    (print "SUCCESS:" result)
+    (aio/stop aio)
+  })
+  (\ {error} {
+    (print "ERROR:" error)
+    (aio/stop aio)
+  }))

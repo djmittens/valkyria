@@ -1,0 +1,19 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Async test to verify timeout behavior - using test-async framework
+(def {aio} (aio/start))
+
+(test/run-async aio (list
+  (test-async "aio/within timeout behavior verification" (\ {done} {
+    (def {slow-handle} (aio/sleep aio 100))
+    (def {timeout-handle} (aio/within slow-handle 10))
+    ; Use scheduled callback to check result after timeout period
+    (aio/schedule aio 50 (\ {} {
+      (def {status} (aio/status timeout-handle))
+      (def {error} (aio/error timeout-handle))
+      ; Return true if timeout worked, false otherwise
+      (done (and (== status (quote :failed)) (== error (quote :timeout))))
+    }))
+  }))
+) {:suite-name "aio/within Async Tests"})

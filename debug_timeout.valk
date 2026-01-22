@@ -1,0 +1,19 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+
+(print "Testing simple timeout...")
+
+(def {slow-handle} (aio/sleep aio 200))
+(def {timeout-handle} (aio/within slow-handle 50))
+
+(print "Initial status:")
+(print (aio/status timeout-handle))
+
+(aio/schedule aio 75 (\ {} {
+  do 
+    (print "At 75ms (should be failed):")
+    (print (aio/status timeout-handle))
+    (print "Stopping...")
+    (aio/stop aio)
+}))

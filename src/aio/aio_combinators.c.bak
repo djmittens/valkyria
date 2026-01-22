@@ -2465,6 +2465,7 @@ static void __within_timeout_timer_cb(uv_timer_t *timer_handle) {
   valk_async_handle_t *timeout_handle = data->handle;
 
   valk_async_handle_fail(timeout_handle, valk_lval_sym(":timeout"));
+  valk_async_notify_within_parent(timeout_handle);
 
   uv_timer_stop(timer_handle);
   uv_close((uv_handle_t *)timer_handle, __sleep_timer_close_cb);
@@ -2521,19 +2522,13 @@ static void valk_async_within_child_resolved(valk_async_handle_t *child) {
 }
 
 void valk_async_notify_within_parent(valk_async_handle_t *child) {
-  if (!child || !child->parent) {
-    return;
-  }
+  if (!child || !child->parent) return;
 
   valk_async_handle_t *parent = child->parent;
-  if (!parent->uv_handle_ptr) {
-    return;
-  }
+  if (!parent->uv_handle_ptr) return;
 
-  valk_within_ctx_t *ctx = (valk_within_ctx_t*)parent->uv_handle_ptr;
-  if (ctx->magic != VALK_WITHIN_CTX_MAGIC) {
-    return;
-  }
+  u32 *magic_ptr = (u32*)parent->uv_handle_ptr;
+  if (*magic_ptr != VALK_WITHIN_CTX_MAGIC) return;
 
   valk_async_within_child_resolved(child);
 }
@@ -2587,7 +2582,7 @@ static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
   timeout_handle->status = VALK_ASYNC_RUNNING;
 
   uv_timer_init(sys->eventloop, &timer_data->uv.timer);
-  uv_timer_start(&timer_data->uv.timer, __within_timeout_timer_cb, (unsigned long long)timeout_ms, 0);
+  uv_timer_start(&timer_data->uv.timer, __within_timeout_timer_cb, timeout_ms, 0);
 
   valk_async_handle_t *within_handle = valk_async_handle_new(sys, e);
   if (!within_handle) {

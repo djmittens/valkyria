@@ -1,0 +1,62 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/start))
+
+(print "Starting timeout test with async framework...")
+(def {start-time} (time/now))
+
+; Test the async test framework approach
+(def {test-completed} 0)
+(def {test-result} :pending)
+
+; Set up done function
+(def {done-fn} (\ {passed} {
+  do
+    (print "Done function called with result:")
+    (print passed)
+    (= {test-result} passed)
+    (= {test-completed} 1)
+}))
+
+; Start the test
+(aio/schedule aio 0 (\ {} {
+  do
+    (print "Test started...")
+    (def {slow-handle} (aio/sleep aio 200))
+    (def {timeout-handle} (aio/within slow-handle 50))
+    
+    ; Schedule callback to check result after timeout
+    (aio/schedule aio 100 (\ {} {
+      do
+        (print "Checking timeout result...")
+        (print "Status:")
+        (print (aio/status timeout-handle))
+        (print "Error:")
+        (print (aio/error timeout-handle))
+        (done (and (== (aio/status timeout-handle) (quote :failed)) 
+                   (== (aio/error timeout-handle) (quote :timeout))))
+    }))
+}))
+
+; Poll for completion
+(def {poll-fn} (\ {} {
+  (if (== test-completed 1)
+    {test-result}
+    {(aio/then (aio/sleep aio 10) (\ {_} {(poll-fn)}))})}))
+
+(def {poll-handle} (poll-fn))
+
+; Use aio/within for timeout
+(def {final-handle} (aio/within poll-handle 2000))
+
+; Use aio/then to wait for completion instead of aio/wait
+(aio/then final-handle (\ {result} {
+  do
+    (def {end-time} (time/now))
+    (print "Test completed with result:")
+    (print result)
+    (print "Total runtime:")
+    (print (- end-time start-time))
+    (aio/stop aio)
+}))

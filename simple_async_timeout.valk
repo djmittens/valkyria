@@ -1,0 +1,15 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/start))
+
+(test/run-async aio (list
+  (test-async "timeout test" (\ {done} {
+    (def {slow-handle} (aio/sleep aio 100))
+    (def {timeout-handle} (aio/within slow-handle 10))
+    (aio/schedule aio 50 (\ {} {
+      (print "Status:") (print (aio/status timeout-handle))
+      (done (== (aio/status timeout-handle) (quote :failed)))
+    }))
+  }))
+) {})

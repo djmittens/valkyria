@@ -1,0 +1,34 @@
+; Comprehensive test suite for aio/within timeout behavior
+; Verifies timeout mechanism with operations that actually exceed timeout periods
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Test immediate scenarios first to verify the comprehensive test works
+(test/run (list
+  (test "aio/within with immediate timeout error"
+    {do
+    (def {sys} (aio/start))
+    (def {error-handle} (aio/fail "test-error"))
+    (def {timeout-handle} (aio/within error-handle 100))
+    (def {status} (aio/status timeout-handle))
+    (aio/stop sys)
+    (== status (quote :failed))
+    })
+  
+  (test "aio/within comprehensive timeout verification"
+    {do
+    (def {sys} (aio/start))
+    ; Use aio/never to create an operation that will definitely timeout
+    (def {never-handle} (aio/never sys))
+    (def {timeout-handle} (aio/within never-handle 1))
+    ; Give a tiny bit of time for timeout to process
+    (def {brief-wait} (aio/sleep sys 10))
+    (def {status} (aio/status timeout-handle))
+    (def {error} (aio/error timeout-handle))
+    (aio/stop sys)
+    ; Verify timeout occurred
+    (and (== status (quote :failed)) (== error (quote :timeout)))
+    })
+)
+{:suite-name "aio/within Comprehensive Timeout Tests"})

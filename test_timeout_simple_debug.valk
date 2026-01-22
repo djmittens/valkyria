@@ -1,0 +1,15 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+
+(print "Testing timeout handle status...")
+
+(def {slow-handle} (aio/sleep aio 200))
+(def {within-handle} (aio/within slow-handle 50))
+
+(aio/schedule aio 75 (\ {} {
+  do 
+    (print "Within handle status:")
+    (print (aio/status within-handle))
+    (aio/stop aio)
+}))

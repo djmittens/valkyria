@@ -1,0 +1,14 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+(def {slow-handle} (aio/sleep aio 200))
+(def {timeout-handle} (aio/within slow-handle 50))
+
+; Simple check using status polling after expected timeout
+(aio/schedule aio 100 (\ {} {
+  (print "Status after timeout should occur:")
+  (print (aio/status timeout-handle))
+  (print "Handle type check:")
+  (print (== (quote :failed) (aio/status timeout-handle)))
+  (aio/stop aio)
+}))

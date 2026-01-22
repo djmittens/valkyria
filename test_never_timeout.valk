@@ -1,0 +1,18 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+(print "aio started")
+
+(def {never-handle} (aio/never aio))
+(print "never handle created")
+
+(def {timeout-handle} (aio/within never-handle 100))
+(print "timeout handle created")
+(print "timeout handle status:" (aio/status timeout-handle))
+
+(aio/schedule aio 200 (\ {} {
+  (print "After 200ms - timeout handle status:" (aio/status timeout-handle))
+  (aio/stop aio)
+}))
+
+(print "scheduled check, event loop running")

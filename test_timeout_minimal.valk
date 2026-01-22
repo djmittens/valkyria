@@ -1,0 +1,25 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+
+(print "Testing aio/within timeout...")
+
+(def {slow-handle} (aio/sleep aio 200))
+(def {timeout-handle} (aio/within slow-handle 50))
+
+; Simple check using status polling
+(aio/schedule aio 100 (\ {} {
+  do
+    (print "Status after timeout should occur:")
+    (print (aio/status timeout-handle))
+    (print "Error:")
+    (print (aio/error timeout-handle))
+    
+    ; Cleanup and exit
+    (aio/schedule aio 10 (\ {} {
+      (aio/stop aio)
+    }))
+}))
+
+; Keep the event loop running
+(print "Event loop will run for 200ms...")
