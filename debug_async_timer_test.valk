@@ -1,0 +1,18 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/start))
+
+(test/run-async aio (list
+  (test-async "basic timer test" (\ {done} {
+    (def {timer1} (aio/sleep aio 10))
+    (aio/then timer1 (\ {result} {
+      (print "Timer1 completed!")
+      (print "Timer1 status:")
+      (print (aio/status timer1))
+      (done (:true))
+    }))
+  }))
+) {:suite-name "Timer Tests"})
+
+(aio/stop aio)

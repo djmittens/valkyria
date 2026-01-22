@@ -1,0 +1,14 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+
+; Test the timer directly
+(print "Testing direct timer...")
+(def {timer1} (aio/sleep aio 50))
+
+(aio/sleep aio 100) ; Wait longer than timer
+
+(print "Timer1 status:")
+(print (aio/status timer1))
+
+(aio/stop aio)

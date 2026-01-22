@@ -1,0 +1,23 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/start))
+
+(test/run-async aio (list
+  (test-async "aio/within timeout test" (\ {done} {
+    (def {slow-handle} (aio/sleep aio 200))
+    (def {timeout-handle} (aio/within slow-handle 50))
+    (aio/then timeout-handle (\ {result} {
+      (print "Timeout handle completed!")
+      (print "Timeout status:")
+      (print (aio/status timeout-handle))
+      (print "Timeout error:")
+      (print (aio/error timeout-handle))
+      (print "Slow handle status:")
+      (print (aio/status slow-handle))
+      (done (== (aio/status timeout-handle) (quote :failed)))
+    }))
+  }))
+) {:suite-name "Within Tests"})
+
+(aio/stop aio)
