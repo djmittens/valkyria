@@ -1,0 +1,17 @@
+; Simple debug timeout test
+(load "src/prelude.valk")
+
+; time/now - returns current time in milliseconds
+(fun {time/now} {/ (time-us) 1000})
+
+(def {sys} (aio/start))
+
+; Create timeout handle
+(def {timeout-handle} (aio/within (aio/sleep sys 100) 10))
+
+; Check immediate status
+(printf "Initial status: %s\n" (aio/status timeout-handle))
+
+(aio/stop sys)
+
+(printf "Final status: %s\n" (aio/status timeout-handle))
