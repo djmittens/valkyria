@@ -1172,56 +1172,6 @@ static void test_read_file_not_found(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-static void test_atom_wrong_type(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  setup_env();
-
-  valk_lval_t *result = parse_and_eval("(atom \"not-a-number\")");
-  ASSERT_LVAL_ERROR(result);
-
-  VALK_PASS();
-}
-
-static void test_atom_get_wrong_type(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  setup_env();
-
-  valk_lval_t *result = parse_and_eval("(atom/get 42)");
-  ASSERT_LVAL_ERROR(result);
-
-  VALK_PASS();
-}
-
-static void test_atom_set_wrong_type(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  setup_env();
-
-  valk_lval_t *result = parse_and_eval("(atom/set 42 1)");
-  ASSERT_LVAL_ERROR(result);
-
-  VALK_PASS();
-}
-
-static void test_atom_add_wrong_type(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  setup_env();
-
-  valk_lval_t *result = parse_and_eval("(atom/add 42 1)");
-  ASSERT_LVAL_ERROR(result);
-
-  VALK_PASS();
-}
-
-static void test_atom_sub_wrong_type(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  setup_env();
-
-  valk_lval_t *result = parse_and_eval("(atom/sub 42 1)");
-  ASSERT_LVAL_ERROR(result);
-
-  VALK_PASS();
-}
-
 static void test_http2_request_wrong_types(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
@@ -1682,7 +1632,7 @@ static void test_aio_schedule_wrong_second_type(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(aio/schedule (atom 0) \"100\" (\\ {} nil))");
+  valk_lval_t *result = parse_and_eval("(aio/schedule (metrics/baseline) \"100\" (\\ {} nil))");
   ASSERT_LVAL_ERROR(result);
 
   VALK_PASS();
@@ -1692,7 +1642,7 @@ static void test_aio_schedule_wrong_third_type(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(aio/schedule (atom 0) 100 42)");
+  valk_lval_t *result = parse_and_eval("(aio/schedule (metrics/baseline) 100 42)");
   ASSERT_LVAL_ERROR(result);
 
   VALK_PASS();
@@ -1702,7 +1652,7 @@ static void test_aio_schedule_wrong_count(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(aio/schedule (atom 0) 100)");
+  valk_lval_t *result = parse_and_eval("(aio/schedule (metrics/baseline) 100)");
   ASSERT_LVAL_ERROR(result);
 
   VALK_PASS();
@@ -1722,7 +1672,7 @@ static void test_aio_interval_wrong_second_type(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(aio/interval (atom 0) \"100\" (\\ {} nil))");
+  valk_lval_t *result = parse_and_eval("(aio/interval (metrics/baseline) \"100\" (\\ {} nil))");
   ASSERT_LVAL_ERROR(result);
 
   VALK_PASS();
@@ -1732,7 +1682,7 @@ static void test_aio_interval_wrong_third_type(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(aio/interval (atom 0) 100 42)");
+  valk_lval_t *result = parse_and_eval("(aio/interval (metrics/baseline) 100 42)");
   ASSERT_LVAL_ERROR(result);
 
   VALK_PASS();
@@ -1742,7 +1692,7 @@ static void test_aio_interval_wrong_count(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(aio/interval (atom 0) 100)");
+  valk_lval_t *result = parse_and_eval("(aio/interval (metrics/baseline) 100)");
   ASSERT_LVAL_ERROR(result);
 
   VALK_PASS();
@@ -1942,7 +1892,7 @@ static void test_http2_request_add_header_wrong_ref_type(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(http2/request-add-header (atom 0) \"name\" \"value\")");
+  valk_lval_t *result = parse_and_eval("(http2/request-add-header (metrics/baseline) \"name\" \"value\")");
   ASSERT_LVAL_ERROR(result);
 
   VALK_PASS();
@@ -2031,7 +1981,7 @@ static void test_aio_schedule_wrong_ref_type(VALK_TEST_ARGS()) {
   setup_env();
 
   // Use a valid function, then the error should be about the ref type
-  valk_lval_t *result = parse_and_eval("(aio/schedule (atom 0) 100 (\\ {} {}))");
+  valk_lval_t *result = parse_and_eval("(aio/schedule (metrics/baseline) 100 (\\ {} {}))");
   ASSERT_LVAL_ERROR(result);
   ASSERT_STR_CONTAINS(result->str, "AIO system");
 
@@ -2042,7 +1992,7 @@ static void test_aio_interval_wrong_ref_type(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(aio/interval (atom 0) 100 (\\ {} {}))");
+  valk_lval_t *result = parse_and_eval("(aio/interval (metrics/baseline) 100 (\\ {} {}))");
   ASSERT_LVAL_ERROR(result);
   ASSERT_STR_CONTAINS(result->str, "AIO system");
 
@@ -2053,7 +2003,7 @@ static void test_aio_run_wrong_ref_type(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(aio/run (atom 0))");
+  valk_lval_t *result = parse_and_eval("(aio/run (metrics/baseline))");
   ASSERT_LVAL_ERROR(result);
   ASSERT_STR_CONTAINS(result->str, "aio_system");
 
@@ -2064,7 +2014,7 @@ static void test_aio_stop_wrong_ref_type(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(aio/stop (atom 0))");
+  valk_lval_t *result = parse_and_eval("(aio/stop (metrics/baseline))");
   ASSERT_LVAL_ERROR(result);
   ASSERT_STR_CONTAINS(result->str, "aio_system");
 
@@ -2075,7 +2025,7 @@ static void test_aio_metrics_json_wrong_ref_type(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(aio/metrics-json (atom 0))");
+  valk_lval_t *result = parse_and_eval("(aio/metrics-json (metrics/baseline))");
   ASSERT_LVAL_ERROR(result);
   ASSERT_STR_CONTAINS(result->str, "aio_system");
 
@@ -2086,7 +2036,7 @@ static void test_aio_metrics_json_compact_wrong_ref_type(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(aio/metrics-json-compact (atom 0))");
+  valk_lval_t *result = parse_and_eval("(aio/metrics-json-compact (metrics/baseline))");
   ASSERT_LVAL_ERROR(result);
   ASSERT_STR_CONTAINS(result->str, "aio_system");
 
@@ -2097,7 +2047,7 @@ static void test_aio_systems_json_wrong_ref_type(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(aio/systems-json (atom 0))");
+  valk_lval_t *result = parse_and_eval("(aio/systems-json (metrics/baseline))");
   ASSERT_LVAL_ERROR(result);
   ASSERT_STR_CONTAINS(result->str, "aio_system");
 
@@ -2811,11 +2761,6 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_read_builtin_wrong_type", test_read_builtin_wrong_type);
   valk_testsuite_add_test(suite, "test_read_file_wrong_type", test_read_file_wrong_type);
   valk_testsuite_add_test(suite, "test_read_file_not_found", test_read_file_not_found);
-  valk_testsuite_add_test(suite, "test_atom_wrong_type", test_atom_wrong_type);
-  valk_testsuite_add_test(suite, "test_atom_get_wrong_type", test_atom_get_wrong_type);
-  valk_testsuite_add_test(suite, "test_atom_set_wrong_type", test_atom_set_wrong_type);
-  valk_testsuite_add_test(suite, "test_atom_add_wrong_type", test_atom_add_wrong_type);
-  valk_testsuite_add_test(suite, "test_atom_sub_wrong_type", test_atom_sub_wrong_type);
   valk_testsuite_add_test(suite, "test_http2_request_wrong_types", test_http2_request_wrong_types);
   valk_testsuite_add_test(suite, "test_http2_request_add_header_wrong_type", test_http2_request_add_header_wrong_type);
   valk_testsuite_add_test(suite, "test_http2_response_body_wrong_type", test_http2_response_body_wrong_type);

@@ -50,12 +50,40 @@ Signs of architectural blocker:
 - Same rejection reason recurring
 - Requires changes outside this spec
 
-## Step 4: Check for Gaps
+## Step 4: Verify Spec Acceptance Criteria
 
 Read the spec's **Acceptance Criteria section only** (not entire spec):
 `ralph/specs/<spec-name>` - scroll to "## Acceptance Criteria"
 
-For any unchecked criteria (`- [ ]`) not covered by existing tasks, research what's needed and create a well-defined task:
+### 4a: Verify Checked Criteria Still Pass
+
+For each **checked** criterion (`- [x]`), spawn a subagent to verify it still holds:
+
+```
+Task: "Verify spec acceptance criterion: {criterion_text}
+
+1. Search codebase for relevant implementation
+2. Run any tests or commands that verify this criterion
+3. Check that the implementation still satisfies this criterion
+
+Return JSON:
+{
+  \"criterion\": \"{criterion_text}\",
+  \"passed\": true | false,
+  \"evidence\": \"<what you found>\",
+  \"reason\": \"<why it failed>\"  // only if passed=false
+}"
+```
+
+**Run all verifications in parallel.**
+
+If any checked criterion no longer passes:
+- `ralph issue add "Spec criterion regressed: <criterion>. Reason: <why>"`
+- Uncheck it in the spec file
+
+### 4b: Create Tasks for Unchecked Criteria
+
+For any **unchecked** criteria (`- [ ]`) not covered by existing tasks, research what's needed and create a well-defined task:
 ```
 ralph task add '{"name": "<specific action>", "notes": "<DETAILED: file paths + approach>", "accept": "<measurable verification>"}\'
 ```

@@ -9,39 +9,29 @@
 
 (def {aio} (aio/start))
 
-(test/run (list
-  (test "aio/within creates handle"
-    {do
+(test/run-async aio (list
+  (test-async "aio/within creates handle" (\ {done} {
     (def {h} (aio/within (aio/pure 42) 100))
-    (not (== h nil))
-    })
-  (test "aio/within completes without timeout"
-    {do
-    ; Create a basic test - immediate completion should not timeout
+    (done (not (== h nil)))
+  }))
+  (test-async "aio/within completes without timeout" (\ {done} {
     (def {timeout-handle} (aio/within (aio/pure 42) 100))
     (def {status} (aio/status timeout-handle))
-    ; Test passes if handle completes successfully (no timeout needed for immediate value)
-    (== status (quote :completed))
-    })
-) {:suite-name "aio/within basic tests"})
-
-(test/run-async aio (list
+    (done (== status (quote :completed)))
+  }))
   (test-async "aio/within timeout behavior with timing" (\ {done} {
     (def {start-time} (time/now))
     
-    ; Create slow operation (100ms sleep) with short timeout (10ms) - should timeout in ~10ms
     (def {timeout-handle} (aio/within (aio/sleep aio 100) 10))
     
-    ; Use aio/catch to handle the timeout and measure time
     (aio/catch timeout-handle (\ {err} {
       (def {end-time} (time/now))
       (def {elapsed-ms} (- end-time start-time))
       
-      ; Verify timeout behavior: should fail with timeout error in approximately 10ms, not 100ms
       (if (and 
         (== err (quote :timeout))
-        (> elapsed-ms 8)    ; At least 8ms (some timing variance)
-        (< elapsed-ms 50)   ; But much less than the 100ms sleep duration
+        (> elapsed-ms 8)
+        (< elapsed-ms 50)
       )
         {(done true)}
         {(do
@@ -51,5 +41,5 @@
       )
     }))
   }))
-) {:suite-name "aio/within timeout tests"})
+) {:suite-name "aio/within async tests"})
 

@@ -20,35 +20,7 @@ If `reject` field is present, this task was previously attempted and rejected by
 
 Do NOT re-explore the whole codebase. Focus on fixing what's broken.
 
-## Step 3: Check if Already Done
-
-**CRITICAL: Before implementing anything, check if the acceptance criteria are already satisfied.**
-
-Run the acceptance criteria verification commands:
-```bash
-# Example: if accept is "make test passes"
-make test
-
-# Example: if accept is "grep -c 'aio/within' src/foo.c returns 1"
-grep -c 'aio/within' src/foo.c
-```
-
-**If acceptance criteria pass:**
-1. **DO NOT implement anything** - the work is already done
-2. **Mark the task as done immediately:**
-   ```
-   ralph task done
-   ```
-3. **EXIT** - do not search for "what to do next"
-
-This handles cases where:
-- Task was created for already-implemented features
-- Work was done manually outside ralph
-- Task is a duplicate
-
-**If acceptance criteria fail:** Continue to Step 4.
-
-## Step 4: Understand Context
+## Step 3: Understand Context
 
 1. Read the spec file: `ralph/specs/<spec>`
 2. Review `notes` for implementation hints
@@ -80,13 +52,13 @@ Task: "Find how X is implemented in the codebase. Search for Y, read relevant fi
 
 Each subagent gets a fresh context window. Use them liberally for exploration.
 
-## Step 5: Implement
+## Step 4: Implement
 
 Build the feature/fix. Rules:
 - Complete implementations only, no stubs
 - No code comments unless explicitly requested
 
-## Step 6: Check Acceptance Criteria
+## Step 5: Check Acceptance Criteria
 
 Before marking done, verify the task's acceptance criteria:
 1. Check **only** the `accept` criteria for this task
@@ -95,7 +67,7 @@ Before marking done, verify the task's acceptance criteria:
 
 If acceptance criteria pass, mark done. VERIFY stage will do the thorough spec check later.
 
-## Step 7: Complete
+## Step 6: Complete
 
 ```
 ralph task done

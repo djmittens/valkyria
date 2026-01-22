@@ -306,6 +306,32 @@ static void __sleep_timer_cb(uv_timer_t *timer_handle) {
   uv_close((uv_handle_t *)timer_handle, __sleep_timer_close_cb);
 }
 
+typedef struct {
+  valk_aio_system_t *sys;
+  valk_async_handle_uv_data_t *timer_data;
+  u64 delay_ms;
+} valk_sleep_init_ctx_t;
+
+// LCOV_EXCL_START
+static void __sleep_init_on_loop(void *ctx) {
+  valk_sleep_init_ctx_t *init_ctx = (valk_sleep_init_ctx_t *)ctx;
+  valk_async_handle_uv_data_t *timer_data = init_ctx->timer_data;
+  
+  uv_loop_t *loop = init_ctx->sys->eventloop;
+  int r = uv_timer_init(loop, &timer_data->uv.timer);
+  if (r != 0) {
+    valk_async_handle_fail(timer_data->handle, valk_lval_err("Failed to init timer"));
+    return;
+  }
+
+  r = uv_timer_start(&timer_data->uv.timer, __sleep_timer_cb, init_ctx->delay_ms, 0);
+  if (r != 0) {
+    valk_async_handle_fail(timer_data->handle, valk_lval_err("Failed to start timer"));
+    uv_close((uv_handle_t *)&timer_data->uv.timer, NULL);
+  }
+}
+// LCOV_EXCL_STOP
+
 
 
 static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
@@ -356,8 +382,19 @@ static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
   async_handle->uv_handle_ptr = timer_data;
   async_handle->status = VALK_ASYNC_RUNNING;
 
-  uv_timer_init(sys->eventloop, &timer_data->uv.timer);
-  uv_timer_start(&timer_data->uv.timer, __sleep_timer_cb, (unsigned long long)delay_ms, 0);
+  valk_sleep_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_sleep_init_ctx_t));
+  // LCOV_EXCL_START - region alloc failure: requires OOM
+  if (!init_ctx) {
+    valk_async_handle_fail(async_handle, valk_lval_err("Failed to allocate sleep init context"));
+    return valk_lval_handle(async_handle);
+  }
+  // LCOV_EXCL_STOP
+
+  init_ctx->sys = sys;
+  init_ctx->timer_data = timer_data;
+  init_ctx->delay_ms = delay_ms;
+
+  valk_aio_enqueue_task(sys, __sleep_init_on_loop, init_ctx);
 
   VALK_INFO("aio/sleep started: %llu ms, handle id=%llu", (unsigned long long)delay_ms, (unsigned long long)async_handle->id);
 
@@ -2470,6 +2507,32 @@ static void __within_timeout_timer_cb(uv_timer_t *timer_handle) {
   uv_close((uv_handle_t *)timer_handle, __sleep_timer_close_cb);
 }
 
+typedef struct {
+  valk_aio_system_t *sys;
+  valk_async_handle_uv_data_t *timer_data;
+  u64 timeout_ms;
+} valk_within_init_ctx_t;
+
+// LCOV_EXCL_START
+static void __within_init_on_loop(void *ctx) {
+  valk_within_init_ctx_t *init_ctx = (valk_within_init_ctx_t *)ctx;
+  valk_async_handle_uv_data_t *timer_data = init_ctx->timer_data;
+  
+  uv_loop_t *loop = init_ctx->sys->eventloop;
+  int r = uv_timer_init(loop, &timer_data->uv.timer);
+  if (r != 0) {
+    valk_async_handle_fail(timer_data->handle, valk_lval_err("Failed to init timer"));
+    return;
+  }
+
+  r = uv_timer_start(&timer_data->uv.timer, __within_timeout_timer_cb, init_ctx->timeout_ms, 0);
+  if (r != 0) {
+    valk_async_handle_fail(timer_data->handle, valk_lval_err("Failed to start timer"));
+    uv_close((uv_handle_t *)&timer_data->uv.timer, NULL);
+  }
+}
+// LCOV_EXCL_STOP
+
 static void valk_within_ctx_cleanup(void *ctx) {
   valk_within_ctx_t *within_ctx = (valk_within_ctx_t *)ctx;
   if (!within_ctx) return;
@@ -2586,8 +2649,17 @@ static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
   timeout_handle->uv_handle_ptr = timer_data;
   timeout_handle->status = VALK_ASYNC_RUNNING;
 
-  uv_timer_init(sys->eventloop, &timer_data->uv.timer);
-  uv_timer_start(&timer_data->uv.timer, __within_timeout_timer_cb, (unsigned long long)timeout_ms, 0);
+  valk_within_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_within_init_ctx_t));
+  if (!init_ctx) {
+    valk_async_handle_free(timeout_handle);
+    return valk_lval_err("Failed to allocate within init context");
+  }
+
+  init_ctx->sys = sys;
+  init_ctx->timer_data = timer_data;
+  init_ctx->timeout_ms = timeout_ms;
+
+  valk_aio_enqueue_task(sys, __within_init_on_loop, init_ctx);
 
   valk_async_handle_t *within_handle = valk_async_handle_new(sys, e);
   if (!within_handle) {
