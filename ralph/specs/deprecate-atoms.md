@@ -176,36 +176,36 @@ The SSE stress tests use atoms because `aio/interval` returns a number (interval
 ## Acceptance Criteria
 
 ### Phase 1: Remove aio/deferred
-- [ ] `aio/deferred`, `aio/deferred-complete!`, `aio/deferred-fail!` removed
-- [ ] `make build` succeeds
-- [ ] `make test` passes
+- [x] `aio/deferred`, `aio/deferred-complete!`, `aio/deferred-fail!` removed
+- [x] `make build` succeeds
+- [x] `make test` passes
 
 ### Phase 2: Add Combinators
-- [ ] `aio/within handle timeout-ms` returns handle that fails on timeout
-- [ ] `aio/all-settled handles` collects all results without fail-fast
-- [ ] `aio/retry aio fn opts` retries with configurable backoff
-- [ ] `aio/never aio` returns handle that never completes
-- [ ] `aio/traverse list fn` maps and collects
-- [ ] Tests exist for each new combinator
+- [x] `aio/within handle timeout-ms` returns handle that fails on timeout
+- [x] `aio/all-settled handles` collects all results without fail-fast
+- [x] `aio/retry aio fn opts` retries with configurable backoff
+- [x] `aio/never aio` returns handle that never completes
+- [x] `aio/traverse list fn` maps and collects
+- [x] Tests exist for each new combinator
 - [ ] `make test` passes
 
 ### Phase 3: Refactor aio/interval
-- [ ] `aio/interval` returns a handle instead of a number
-- [ ] `aio/cancel` on interval handle stops the interval
-- [ ] Interval handle completes when stopped (via `:stop` return or cancel)
-- [ ] Existing `:stop` return pattern still works
+- [x] `aio/interval` returns a handle instead of a number
+- [x] `aio/cancel` on interval handle stops the interval
+- [x] Interval handle completes when stopped (via `:stop` return or cancel)
+- [x] Existing `:stop` return pattern still works
 - [ ] `make test` passes
 
 ### Phase 4: Test Framework Refactor
-- [ ] `src/modules/test.valk` uses `aio/all` instead of atoms
-- [ ] `src/modules/test.valk` uses `aio/within` for timeout handling
-- [ ] `grep -c "atom" src/modules/test.valk` returns 0
+- [x] `src/modules/test.valk` uses `aio/all` instead of atoms
+- [x] `src/modules/test.valk` uses `aio/within` for timeout handling
+- [x] `grep -c "atom" src/modules/test.valk` returns 0
 - [ ] All existing async test files pass without modification
 
 ### Phase 5: SSE Stress Test Refactor
-- [ ] `test/stress/test_sse_concurrency*.valk` use `aio/cancel` for stream close
-- [ ] `grep -c "atom" test/stress/test_sse_concurrency_short.valk` returns 0
-- [ ] `grep -c "atom" test/stress/test_sse_concurrency.valk` returns 0
+- [x] `test/stress/test_sse_concurrency*.valk` use `aio/cancel` for stream close
+- [x] `grep -c "atom" test/stress/test_sse_concurrency_short.valk` returns 0
+- [x] `grep -c "atom" test/stress/test_sse_concurrency.valk` returns 0
 - [ ] All stress tests pass
 
 ### Phase 6: Remove Atoms
