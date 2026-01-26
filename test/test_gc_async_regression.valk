@@ -4,9 +4,8 @@
 
 (load "src/prelude.valk")
 (load "src/http_api.valk")
-(load "src/modules/test.valk")
 
-(def {aio} (aio/start))
+(= {aio} (aio/start))
 
 ; ============================================================================
 ; Parallel Timer Callback Crash (Fixed 2026-01-02)
@@ -14,34 +13,40 @@
 ; the GC checkpoint would crash with "value must not be null at apply_cont"
 ; Root cause: Phase 2 of GC could visit environments that Phase 1 hadn't
 ; processed, leading to un-forwarded scratch pointers being NULLed.
+;
+; This test verifies the fix by running 4+ parallel HTTP requests.
+; The timer callback aspect is tested by using aio/sleep to delay request start.
 ; ============================================================================
 
-(def {server-handler} (\ {req} { `{:status "200" :body "Hi"} }))
-(def {server} (http2/server-listen aio 0 server-handler))
-(def {port} (http2/server-port server))
+(= {server-handler} (\ {req} { `{:status "200" :body "Hi"} }))
+(= {server} (http2/server-listen aio 0 server-handler))
+(= {port} (http2/server-port server))
 
-(def {callbacks-completed} (atom 0))
+(printf "🧪 GC Async Regression Tests\n\n")
 
-(fun {spawn-request aio port done i total} {
-  (= {body} (\ {} {
-    (= {op} (http2/fetch aio "127.0.0.1" port "/"))
-    (op (\ {r} { 
-      (atom/add! callbacks-completed 1)
-      (if (>= (atom/get callbacks-completed) total)
-        {(done true)}
-        {nil})
+; Start test with a small delay to trigger timer machinery
+(aio/then (aio/sleep aio 1) (\ {_} {
+  ; Run 4 parallel HTTP requests (the bug occurred at 4+)
+  (aio/then 
+    (aio/all (list
+      (http2/client-request aio "127.0.0.1" port "/")
+      (http2/client-request aio "127.0.0.1" port "/")
+      (http2/client-request aio "127.0.0.1" port "/")
+      (http2/client-request aio "127.0.0.1" port "/")))
+    (\ {results} {
+      (= {count} (len results))
+      (if (== count 4)
+        {do 
+          (printf "✅ gc-parallel-timer-callbacks-no-crash\n")
+          (printf "\n🏁 Results: 1 passed, 0 failed\n")
+          (aio/stop aio)
+          (shutdown 0)}
+        {do
+          (printf "❌ gc-parallel-timer-callbacks-no-crash - expected 4 results, got %d\n" count)
+          (printf "\n🏁 Results: 0 passed, 1 failed\n")
+          (aio/stop aio)
+          (shutdown 1)})
     }))
-  }))
-  (aio/schedule aio 0 (\ {} { (body) }))
-})
+}))
 
-; Run all async tests
-(test/run-async aio (list
-  (test-async "gc-parallel-timer-callbacks-no-crash" (\ {done} {
-  (atom/set! callbacks-completed 0)
-  (spawn-request aio port done 1 4)
-  (spawn-request aio port done 2 4)
-  (spawn-request aio port done 3 4)
-  (spawn-request aio port done 4 4)
-})))
-  {:suite-name "GC Async Regression Tests"})
+(aio/run aio)
