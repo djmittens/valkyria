@@ -34,9 +34,9 @@ Return JSON:
 
 ### For each task:
 
-**If passed** → `ralph task accept <task-id>`
+**If passed** -> `ralph task accept <task-id>`
 
-**If failed** → Choose one:
+**If failed** -> Choose one:
 
 1. **Implementation bug** (can be fixed):
    `ralph task reject <task-id> "<reason>"`
@@ -52,23 +52,23 @@ Signs of architectural blocker:
 
 ## Step 4: Verify Spec Acceptance Criteria
 
-Read the spec's **Acceptance Criteria section only** (not entire spec):
+Read the spec\'s **Acceptance Criteria section only** (not entire spec):
 `ralph/specs/<spec-name>` - scroll to "## Acceptance Criteria"
 
-### 4a: Verify Checked Criteria Still Pass
+### 4a: Verify checked criteria still pass
 
 For each **checked** criterion (`- [x]`), spawn a subagent to verify it still holds:
 
 ```
-Task: "Verify spec acceptance criterion: {criterion_text}
+Task: "Verify spec criterion still passes: \'<criterion text>\'
 
-1. Search codebase for relevant implementation
-2. Run any tests or commands that verify this criterion
-3. Check that the implementation still satisfies this criterion
+1. Search codebase for the implementation
+2. Run any tests or commands that validate this criterion
+3. Check that the criterion is still satisfied
 
 Return JSON:
 {
-  \"criterion\": \"{criterion_text}\",
+  \"criterion\": \"<criterion text>\",
   \"passed\": true | false,
   \"evidence\": \"<what you found>\",
   \"reason\": \"<why it failed>\"  // only if passed=false
@@ -77,22 +77,19 @@ Return JSON:
 
 **Run all verifications in parallel.**
 
-If any checked criterion no longer passes:
-- `ralph issue add "Spec criterion regressed: <criterion>. Reason: <why>"`
-- Uncheck it in the spec file
+If any checked criterion fails:
+- Uncheck it in the spec (`- [x]` -> `- [ ]`)
+- Create a task to fix the regression:
+  ```
+  ralph task add '{"name": "Fix regression: <criterion>", "notes": "<DETAILED: what broke, file paths, approach>", "accept": "<measurable verification>"}'
+  ```
 
-### 4b: Create Tasks for Unchecked Criteria
+### 4b: Check for uncovered criteria
 
-For any **unchecked** criteria (`- [ ]`) not covered by existing tasks, research what's needed and create a well-defined task:
+For any **unchecked** criteria (`- [ ]`) not covered by existing tasks:
 ```
-ralph task add '{"name": "<specific action>", "notes": "<DETAILED: file paths + approach>", "accept": "<measurable verification>"}\'
+ralph task add '{"name": "...", "notes": "<DETAILED: file paths + approach>", "accept": "..."}'
 ```
-
-**IMPORTANT**: 
-- `notes` MUST include SPECIFIC file paths and implementation approach (minimum 50 chars)
-- `notes` should answer: Which files? What functions/lines? What pattern to use?
-- `accept` MUST be measurable: command to run, expected exit code, or specific output to check
-- Vague notes like "implement X" or acceptance like "works correctly" will be REJECTED
 
 ## Step 5: Final Decision
 
