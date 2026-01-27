@@ -1,0 +1,16 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/start))
+
+(print "Starting async test")
+
+(test/run-async aio (list
+  (test-async "simple async test" (\ {} {
+    (print "test body called")
+    (aio/then (aio/sleep aio 50) (\ {_} {
+      (print "sleep completed")
+      true
+    }))
+  })))
+  {:suite-name "Simple Async Test"})

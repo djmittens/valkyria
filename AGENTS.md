@@ -251,6 +251,82 @@ See: https://notes.eatonphil.com/2024-08-20-deterministic-simulation-testing.htm
    - Main thread stuck in `valk_checkpoint_request_stw()` waiting for threads to pause
    - Race between checkpoint release and next checkpoint request
 
+## Debugging Async Completion Hangs (CRITICAL)
+
+When async operations hang silently (no crash, just stops), the issue is almost always
+a **missing notification in the completion chain**. Do NOT just add debug prints everywhere.
+
+### Step 1: Trace the Expected Completion Path ON PAPER
+
+Before touching code, write out the chain:
+```
+handle A completes
+  → should notify parent B (what function?)
+  → B completes
+  → should notify parent C (what function?)
+  → C's callback fires
+```
+
+If you can't write this out, you don't understand the code well enough to fix it.
+
+### Step 2: Verify ALL Completion Paths Call ALL Notify Functions
+
+The canonical completion sequence is in `valk_async_handle_complete()` (aio_async.c):
+```c
+valk_async_notify_all_parent(handle);
+valk_async_notify_race_parent(handle);
+valk_async_notify_any_parent(handle);
+valk_async_notify_all_settled_parent(handle);
+valk_async_notify_within_parent(handle);
+valk_async_notify_retry_parent(handle);
+valk_async_notify_done(handle);
+valk_async_propagate_completion(handle);
+```
+
+**EVERY** completion path must call this SAME sequence. Check:
+- `valk_async_all_child_completed()` and `valk_async_all_child_completed_with_ctx()`
+- `valk_async_race_child_resolved()`
+- `valk_async_any_child_completed()`
+- Any other `*_child_*` or `*_with_ctx` functions
+
+If ANY of these is missing notify calls, parent combinators won't be notified.
+
+### Step 3: Add ONE Debug Print at the Boundary
+
+Don't trace every step. Add ONE print to answer: "Did the parent receive notification?"
+
+```c
+// In the parent's notification handler:
+fprintf(stderr, "[DBG] race_parent notified: child=%llu\n", child->id);
+```
+
+If this doesn't fire, the child's completion path is missing the notify call.
+
+### Common Async Hang Patterns
+
+| Symptom | Likely Cause |
+|---------|--------------|
+| `aio/all` completes but `aio/race` never fires | Missing `notify_race_parent` in all's completion |
+| `aio/within` source completes but within hangs | Missing `notify_within_parent` |
+| Wrapper completes but `aio/all` never finishes | `*_with_ctx` function missing notify calls |
+| Callback fires but next combinator hangs | Check `propagate_completion` is called |
+
+### Anti-Pattern: Adding More Code Without Understanding
+
+**WRONG approach:**
+1. Tests hang
+2. Add wrapper handles
+3. Add callbacks
+4. Add more state tracking
+5. Still hangs, code is now complex
+
+**RIGHT approach:**
+1. Tests hang
+2. Trace completion path on paper
+3. Find the ONE missing notify call
+4. Add it
+5. Tests pass
+
 ### GC Coordination Architecture
 - Main thread calls `valk_checkpoint()` between top-level expressions (repl.c)
 - `valk_checkpoint_request_stw()` sets phase to CHECKPOINT_REQUESTED
@@ -348,6 +424,25 @@ make test
 
 # If stable, remove $(RR_FLAKY) prefix from Makefile
 ```
+
+## Verify Checklist for Async Code Changes
+
+Before marking an async-related task complete, verify:
+
+- [ ] **Traced completion path on paper**: handle A → notifies → handle B → notifies → handle C
+- [ ] **Every `*_child_completed` or `*_with_ctx` function** calls the SAME notify sequence as `valk_async_handle_complete()`
+- [ ] **Tested with minimal case** that exercises the specific completion path (not just "run all tests")
+- [ ] **If tests hang**, identified WHERE in the chain notification stops - didn't just add more code
+- [ ] **Compared against working code**: if `aio/race` works but `aio/all` doesn't, diff their completion handlers
+
+### Red Flags That You're Debugging Wrong
+
+- Adding "wrapper handles" or "bridge callbacks" without understanding why originals don't work
+- Debug output shows "completed" but nothing happens after → missing parent notification
+- Spending >30 minutes adding code without tracing the actual notification flow
+- Task notes say "complex" or "still investigating" after multiple attempts
+
+**STOP and trace the completion path on paper before writing more code.**
 
 ## What NOT To Do
 - Don't make changes without reading code first

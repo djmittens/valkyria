@@ -1,0 +1,35 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/start))
+(printf "1. Created aio\n")
+
+(def {server-handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (printf "   Server: got request for %s\n" path)
+    `{:status "200" :body "Hello"}
+  }))
+
+(def {server} (http2/server-listen aio 0 server-handler))
+(def {test-port} (http2/server-port server))
+(printf "2. Server on port %d\n" test-port)
+
+(printf "3. Making request 1\n")
+(def {h1} (http2/client-request aio "127.0.0.1" test-port "/a"))
+(printf "4. Making request 2\n")
+(def {h2} (http2/client-request aio "127.0.0.1" test-port "/b"))
+(printf "5. Making request 3\n")
+(def {h3} (http2/client-request aio "127.0.0.1" test-port "/c"))
+
+(printf "6. Calling aio/all\n")
+(def {all-h} (aio/all (list h1 h2 h3)))
+
+(printf "7. Setting up then\n")
+(aio/then all-h (\ {results} {
+  (printf "8. All completed with %d results\n" (len results))
+  (aio/stop aio)
+}))
+
+(printf "9. Calling aio/run\n")
+(aio/run aio)
+(printf "10. Done\n")

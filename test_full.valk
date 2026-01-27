@@ -1,0 +1,7 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(def {aio} (aio/start))
+(printf "1\n")
+(aio/pure true)
+(printf "2\n")
+(aio/stop aio)

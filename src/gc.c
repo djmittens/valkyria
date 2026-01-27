@@ -2295,6 +2295,11 @@ static void valk_checkpoint_request_stw(void) {
 
   pthread_mutex_lock(&valk_gc_coord.lock);
   while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
+    u64 current_registered = atomic_load(&valk_gc_coord.threads_registered);
+    if (current_registered < num_threads) {
+      num_threads = current_registered;
+      if (num_threads <= 1) break;
+    }
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_nsec += 100000000;

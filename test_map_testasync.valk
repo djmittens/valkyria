@@ -1,0 +1,20 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/start))
+
+(printf "Creating tests\n")
+(def {tests} (list
+  (test-async "test1" (\ {} {(aio/pure true)}))
+  (test-async "test2" (\ {} {(aio/pure true)}))
+  (test-async "test3" (\ {} {(aio/pure true)}))
+))
+
+(printf "Mapping over tests\n")
+(def {handles} (map (\ {t} {
+  (printf "Processing test: %s\n" (str (head t)))
+  (*test-run-async-one* aio 5000 t)
+}) tests))
+(printf "Map done, count=%d\n" (len handles))
+
+(aio/stop aio)
