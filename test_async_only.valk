@@ -2,7 +2,7 @@
 (load "src/modules/test.valk")
 
 ; Async test to verify timeout behavior - using test-async framework
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (test/run-async aio (list
   (test-async "aio/within timeout behavior verification" (\ {done} {

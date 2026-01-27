@@ -8,7 +8,7 @@
 
 (println "Starting test server on port 18443...")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (def {handler}
   (\ {req} {

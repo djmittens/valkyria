@@ -14,7 +14,7 @@
 (def {str-50kb} (make-string (/ SIZE_50KB 64) pattern))
 (def {str-100kb} (make-string (/ SIZE_100KB 64) pattern))
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (def {server-handler}
   (\ {req} {

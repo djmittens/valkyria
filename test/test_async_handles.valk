@@ -180,7 +180,7 @@
   })
   (test "delay-value returns handle"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {h} (delay-value sys 1 42))
     (def {status} (aio/status h))
     (aio/stop sys)
@@ -188,7 +188,7 @@
   })
   (test "with-timeout on completed handle"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {h} (aio/pure 42))
     (def {result} (with-timeout sys 1000 h))
     (aio/stop sys)
@@ -196,7 +196,7 @@
   })
   (test "with-timeout passes handle to race"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {h} (aio/pure "test-value"))
     (def {result} (with-timeout sys 5000 h))
     (aio/stop sys)
@@ -204,7 +204,7 @@
   })
   (test "retry-backoff with n=0 calls function once"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {call-count} 0)
     (def {result} (retry-backoff sys 0 10 (\ {} {
       (def {call-count} (+ call-count 1))
@@ -215,7 +215,7 @@
   })
   (test "retry-backoff with n>0 and failure triggers catch path"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {result} (retry-backoff sys 1 1 (\ {} {
       (aio/fail "transient-error")
     })))
@@ -225,7 +225,7 @@
   })
   (test "retry-backoff with n>0 and success returns immediately"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {result} (retry-backoff sys 3 10 (\ {} {
       (aio/pure "first-try-success")
     })))
@@ -234,14 +234,14 @@
   })
   (test "graceful-shutdown with empty handle list"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {result} (graceful-shutdown sys () 1000))
     (aio/stop sys)
     (== (aio/status result) :completed)
   })
   (test "graceful-shutdown with completed handles"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {handles} (list (aio/pure 1) (aio/pure 2)))
     (def {result} (graceful-shutdown sys handles 1000))
     (aio/stop sys)

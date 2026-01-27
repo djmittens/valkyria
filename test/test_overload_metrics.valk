@@ -30,20 +30,20 @@
   })
   (test "aio/start creates valid system"
     {do
-    (= {aio} (aio/start))
+    (= {aio} (aio/await (aio/start)))
     (test/assert (!= aio nil) "aio/start should return a system")
     true
   })
   (test "aio/metrics-prometheus returns valid output"
     {do
-    (= {aio} (aio/start))
+    (= {aio} (aio/await (aio/start)))
     (= {result} (aio/metrics-prometheus aio))
     (test/assert (string? result) "aio/metrics-prometheus should return a string")
     true
   })
   (test "aio/metrics-json returns valid output"
     {do
-    (= {aio} (aio/start))
+    (= {aio} (aio/await (aio/start)))
     (= {result} (aio/metrics-json aio))
     (test/assert (string? result) "aio/metrics-json should return a string")
     (test/assert (> (len result) 0) "aio/metrics-json should return non-empty string")

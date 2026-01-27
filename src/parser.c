@@ -9,6 +9,7 @@
 #include <uv.h>
 
 #include "aio/aio.h"
+#include "aio/aio_async.h"
 #include "aio/http2/aio_http2_client.h"
 #include "aio/http2/stream/aio_stream_body.h"
 #include "collections.h"
@@ -4354,7 +4355,16 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
     ref = valk_lval_ref("aio_system", sys, NULL);
   }
 
-  return ref;
+  // Create a startup handle that completes with the system ref.
+  // This ensures users must await/then to get the system, guaranteeing
+  // the event loop is running before any scheduling can occur.
+  valk_async_handle_t* startup_handle = valk_async_handle_new(sys, e);
+  if (!startup_handle) {
+    return valk_lval_err("Failed to allocate startup handle");
+  }
+  valk_async_handle_complete(startup_handle, ref);
+
+  return valk_lval_handle(startup_handle);
 }
 
 // aio/run: (aio/run aio-system) -> nil (returns when system shuts down)

@@ -7,7 +7,7 @@
 (test/run (list
   (test "aio/retry returns a handle"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {h} (aio/retry sys
       (\ {} {(aio/pure 42)})
       {:max-attempts 3 :backoff :exponential :base-ms 10}))
@@ -16,7 +16,7 @@
     })
   (test "aio/retry with exponential backoff"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {h} (aio/retry sys
       (\ {} {(aio/pure 1)})
       {:max-attempts 3 :backoff :exponential :base-ms 5}))
@@ -26,7 +26,7 @@
     })
   (test "aio/retry with linear backoff"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {h} (aio/retry sys
       (\ {} {(aio/pure 1)})
       {:max-attempts 3 :backoff :linear :base-ms 5}))
@@ -36,7 +36,7 @@
     })
   (test "aio/retry with no backoff"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {h} (aio/retry sys
       (\ {} {(aio/pure 1)})
       {:max-attempts 3 :backoff :none :base-ms 5}))

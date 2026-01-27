@@ -4,7 +4,7 @@
 ; time/now - returns current time in milliseconds
 (fun {time/now} {/ (time-us) 1000})
 
-(def {sys} (aio/start))
+(def {sys} (aio/await (aio/start)))
 
 ; Create timeout handle
 (def {timeout-handle} (aio/within (aio/sleep sys 100) 10))

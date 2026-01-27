@@ -81,7 +81,7 @@
 ;   • Consistent ratios: arena-pool >= connections × streams-per-conn / 4
 ;
 ; For production or extreme load testing, increase max-connections and arena-pool-size.
-(def {sys} (aio/start {:max-connections 8         ; Low connection limit
+(def {sys} (aio/await (aio/start {:max-connections 8         ; Low connection limit
                        :max-concurrent-streams 8  ; Low streams per connection
                        :max-handles 128           ; Small handle pool
                        :max-servers 3             ; Just enough for demo
@@ -89,7 +89,7 @@
                        :arena-pool-size 24        ; 24 × 4MB = 96MB (3x a full connection)
                        :max-request-body-size 1048576  ; 1MB max request
                        :backpressure-list-max 50
-                       :pending-stream-pool-size 24}))
+                       :pending-stream-pool-size 24})))
 
 (println "  ✓ AIO system ready (mellow demo config)")
 (println "    • max-connections: 8")

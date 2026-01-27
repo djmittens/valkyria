@@ -4,7 +4,7 @@
 ; time/now - returns current time in milliseconds
 (fun {time/now} {/ (time-us) 1000})
 
-(def {sys} (aio/start))
+(def {sys} (aio/await (aio/start)))
 (def {start-time} (time/now))
 
 ; Create slow operation (100ms sleep) with short timeout (10ms) - should timeout in ~10ms

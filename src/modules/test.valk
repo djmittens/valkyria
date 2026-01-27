@@ -397,6 +397,15 @@
     ; Call the test body to get the handle
     (= {test-handle} (test-body))
     
+    ; Validate that test body returned a handle - fail fast if not
+    (if (not (handle? test-handle))
+      {(do
+        (printf "\n\nFATAL: test-async body must return a handle!\n")
+        (printf "  Test: %s\n" test-name)
+        (printf "  Got:  %s\n\n" (str test-handle))
+        (shutdown 1))}
+      {true})
+    
     ; Transform the test result into standardized format with timing
     (= {result-handle} (aio/then test-handle (\ {result} {
       (= {end-time} (time-us {}))

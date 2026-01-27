@@ -4,6 +4,7 @@
 
 extern valk_async_status_t valk_async_handle_get_status(valk_async_handle_t *handle);
 extern void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result);
+extern valk_lval_t *valk_async_handle_await(valk_async_handle_t *handle);
 
 static void __schedule_timer_close_cb(uv_handle_t *handle) {
   UNUSED(handle);
@@ -43,6 +44,9 @@ static void __interval_timer_cb(uv_timer_t *handle) {
     timer_data->stopped = true;
     uv_timer_stop(handle);
     uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    if (timer_data->async_handle) {
+      timer_data->async_handle->uv_handle_ptr = NULL;
+    }
     return;
   }
 
@@ -52,6 +56,7 @@ static void __interval_timer_cb(uv_timer_t *handle) {
     uv_timer_stop(handle);
     uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
     if (timer_data->async_handle) {
+      timer_data->async_handle->uv_handle_ptr = NULL;
       valk_async_handle_complete(timer_data->async_handle, valk_lval_nil());
     }
     return;
@@ -68,6 +73,7 @@ static void __interval_timer_cb(uv_timer_t *handle) {
     uv_timer_stop(handle);
     uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
     if (timer_data->async_handle) {
+      timer_data->async_handle->uv_handle_ptr = NULL;
       valk_async_handle_complete(timer_data->async_handle, valk_lval_nil());
     }
   }
@@ -167,24 +173,26 @@ static void __schedule_timer_cb(uv_timer_t *handle) {
     cancelled = (status == VALK_ASYNC_CANCELLED);
   }
   
+  valk_lval_t *cb_result = valk_lval_nil();
   if (!cancelled) {
     valk_lval_t *callback = valk_handle_resolve(&valk_global_handle_table, timer_data->callback_handle);
     if (callback) {
       valk_lval_t *args = valk_lval_nil();
-      valk_lval_t *result = valk_lval_eval_call(callback->fun.env, callback, args);
-      if (LVAL_TYPE(result) == LVAL_ERR) {
-        VALK_WARN("aio/schedule callback returned error: %s", result->str);
+      cb_result = valk_lval_eval_call(callback->fun.env, callback, args);
+      if (LVAL_TYPE(cb_result) == LVAL_ERR) {
+        VALK_WARN("aio/schedule callback returned error: %s", cb_result->str);
       }
     }
   }
 
-  if (timer_data->async_handle) {
-    valk_async_handle_complete(timer_data->async_handle, valk_lval_nil());
-  }
-  
   valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
   uv_timer_stop(handle);
   uv_close((uv_handle_t *)handle, __schedule_timer_close_cb);
+
+  if (timer_data->async_handle) {
+    timer_data->async_handle->uv_handle_ptr = NULL;
+    valk_async_handle_complete(timer_data->async_handle, cb_result);
+  }
 }
 
 typedef struct {
@@ -299,11 +307,13 @@ static void __sleep_timer_cb(uv_timer_t *timer_handle) {
   valk_async_handle_uv_data_t *data = (valk_async_handle_uv_data_t *)timer_handle->data;
   valk_async_handle_t *async_handle = data->handle;
 
-  valk_lval_t *result = valk_lval_nil();
-  valk_async_handle_complete(async_handle, result);
-
   uv_timer_stop(timer_handle);
   uv_close((uv_handle_t *)timer_handle, __sleep_timer_close_cb);
+
+  async_handle->uv_handle_ptr = NULL;
+
+  valk_lval_t *result = valk_lval_nil();
+  valk_async_handle_complete(async_handle, result);
 }
 
 typedef struct {
@@ -887,6 +897,19 @@ static valk_lval_t* valk_builtin_aio_fail(valk_lenv_t* e, valk_lval_t* a) {
   valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_FAILED);
 
   return valk_lval_handle(handle);
+}
+
+static valk_lval_t* valk_builtin_aio_await(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  if (valk_lval_list_count(a) != 1) {
+    return valk_lval_err("aio/await: expected 1 argument (handle)");
+  }
+  valk_lval_t *handle_arg = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(handle_arg) != LVAL_HANDLE) {
+    return valk_lval_err("aio/await: argument must be a handle");
+  }
+  valk_async_handle_t *handle = handle_arg->async.handle;
+  return valk_async_handle_await(handle);
 }
 
 static valk_lval_t* valk_builtin_aio_never(valk_lenv_t* e, valk_lval_t* a) {
@@ -2767,8 +2790,6 @@ static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
   init_ctx->timer_data = timer_data;
   init_ctx->timeout_ms = timeout_ms;
 
-  valk_aio_enqueue_task(sys, __within_init_on_loop, init_ctx);
-
   valk_async_handle_t *within_handle = valk_async_handle_new(sys, e);
   if (!within_handle) {
     valk_async_handle_cancel(timeout_handle);
@@ -2795,6 +2816,13 @@ static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
 
   valk_async_handle_add_child(within_handle, source);
   valk_async_handle_add_child(within_handle, timeout_handle);
+
+  valk_aio_enqueue_task(sys, __within_init_on_loop, init_ctx);
+
+  source_status = valk_async_handle_get_status(source);
+  if (source_status == VALK_ASYNC_COMPLETED || source_status == VALK_ASYNC_FAILED) {
+    valk_async_within_child_resolved(source);
+  }
 
   return valk_lval_handle(within_handle);
 }
@@ -3170,6 +3198,7 @@ void valk_register_async_handle_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "aio/pure", valk_builtin_aio_pure);
   valk_lenv_put_builtin(env, "aio/fail", valk_builtin_aio_fail);
   valk_lenv_put_builtin(env, "aio/never", valk_builtin_aio_never);
+  valk_lenv_put_builtin(env, "aio/await", valk_builtin_aio_await);
 
 
 

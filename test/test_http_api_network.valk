@@ -16,7 +16,7 @@
 
 (load "src/http_api.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (def {server-handler}
   (\ {req} {
@@ -82,4 +82,6 @@
       (== (http2/response-ok? resp) 0)
     }))
   })))
-  {:suite-name "HTTP API Network Tests"})
+  {:suite-name "HTTP API Network Tests"
+   :timeout-ms 2000
+   :suite-timeout-ms 30000})

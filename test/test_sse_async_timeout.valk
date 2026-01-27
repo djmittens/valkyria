@@ -6,7 +6,7 @@
 (load "src/modules/test.valk")
 (load "src/modules/aio/sse.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (def {handler}
   (\ {req} {

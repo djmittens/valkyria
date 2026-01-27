@@ -7,7 +7,7 @@
 (load "src/modules/test.valk")
 (load "src/modules/aio/debug.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (fun {str-contains? haystack needle}
   {(> (len (str/split haystack needle)) 1)})

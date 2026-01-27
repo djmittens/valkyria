@@ -10,17 +10,17 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(def {server-aio} (aio/start {
+(def {server-aio} (aio/await (aio/start {
   :max-connections 8
   :tcp-buffer-pool-size 48
   :backpressure-timeout-ms 60000
   :backpressure-list-max 10
-}))
+})))
 
-(def {client-aio} (aio/start {
+(def {client-aio} (aio/await (aio/start {
   :max-connections 16
   :tcp-buffer-pool-size 128
-}))
+})))
 
 (def {handler}
   (\ {req} {

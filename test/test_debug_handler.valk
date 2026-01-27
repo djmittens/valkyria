@@ -5,7 +5,7 @@
 (load "src/modules/test.valk")
 (load "src/modules/aio/debug.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 (def {test-handler} (aio/debug-handler aio))
 (def {server} (http2/server-listen aio 0 test-handler))
 (def {TEST_PORT} (http2/server-port server))

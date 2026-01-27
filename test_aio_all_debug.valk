@@ -1,6 +1,6 @@
 (load "src/prelude.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 (printf "1. Created aio\n")
 (def {h1} (aio/sleep aio 10))
 (printf "2. Created h1\n")

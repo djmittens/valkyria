@@ -15,21 +15,21 @@
 (test/run (list
   (test "aio/start creates system"
     {do
-    (= {aio} (aio/start))
+    (= {aio} (aio/await (aio/start)))
     (test/assert (!= aio nil) "aio/start should return a system")
     true
   })
   (test "multiple aio systems can be created"
     {do
-    (= {aio1} (aio/start))
-    (= {aio2} (aio/start))
+    (= {aio1} (aio/await (aio/start)))
+    (= {aio2} (aio/await (aio/start)))
     (test/assert (!= aio1 nil) "first aio/start should return a system")
     (test/assert (!= aio2 nil) "second aio/start should return a system")
     true
   })
   (test "metrics available after aio/start"
     {do
-    (= {aio} (aio/start))
+    (= {aio} (aio/await (aio/start)))
     (= {json} (aio/metrics-json aio))
     (= {prom} (aio/metrics-prometheus aio))
     (test/assert (string? json) "aio/metrics-json should return string")

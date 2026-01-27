@@ -5,7 +5,7 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (def {handler}
   (\ {req} {

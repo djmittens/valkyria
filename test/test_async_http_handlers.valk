@@ -6,7 +6,7 @@
 (load "src/modules/test.valk")
 (load "src/async_handles.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 ; ============================================================================
 ; Handler definitions

@@ -34,7 +34,7 @@
 ; ============================================================================
 
 ; Create a mock AIO system for testing
-(def {mock-sys} (aio/start))
+(def {mock-sys} (aio/await (aio/start)))
 
 ; Test: /debug/ route returns dashboard HTML
 
@@ -129,7 +129,7 @@
     {do
     ; Check that the handler can be called (it's a function)
     ; We verify by calling it and checking we get a response
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (= {resp} (aio/debug-handle-request sys {:path "/debug/"}))
     (test/assert (!= resp nil) "aio/debug-handle-request should work")
     true

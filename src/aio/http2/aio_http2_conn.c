@@ -14,6 +14,7 @@ typedef struct {
 
 extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
 extern valk_lval_t *valk_lval_err(const char *fmt, ...);
+extern void valk_http2_fail_pending_client_requests(valk_aio_handle_t *conn);
 
 static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
   return conn->sys ? conn->sys->ops->tcp : nullptr; // LCOV_EXCL_BR_LINE defensive null check
@@ -674,5 +675,10 @@ void valk_http2_conn_on_disconnect(valk_aio_handle_t *handle) {
   __disconnect_update_metrics(handle);
   __disconnect_release_orphaned_arenas(handle);
   valk_aio_ssl_free(&handle->http.io.ssl);
+  
+  if (!handle->http.server) {
+    valk_http2_fail_pending_client_requests(handle);
+  }
+  
   __disconnect_cleanup_session(handle);
 }

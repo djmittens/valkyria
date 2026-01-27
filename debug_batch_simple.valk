@@ -1,6 +1,6 @@
 (load "src/prelude.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (fun {create-test-connection}
   {(aio/then (aio/sleep aio 1) (\ {x} {:test "result"}))})

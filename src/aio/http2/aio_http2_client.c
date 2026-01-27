@@ -133,6 +133,51 @@ typedef struct {
   valk_async_handle_t *handle;
 } __http2_client_req_res_t;
 
+typedef struct __pending_client_request {
+  struct __pending_client_request *next;
+  valk_async_handle_t *handle;
+} __pending_client_request_t;
+
+static void __add_pending_request(valk_aio_handle_t *conn, valk_async_handle_t *handle) {
+  __pending_client_request_t *pending = malloc(sizeof(__pending_client_request_t));
+  pending->handle = handle;
+  pending->next = (__pending_client_request_t *)conn->http.pending_client_requests;
+  conn->http.pending_client_requests = pending;
+}
+
+static void __remove_pending_request(valk_aio_handle_t *conn, valk_async_handle_t *handle) {
+  __pending_client_request_t **pp = (__pending_client_request_t **)&conn->http.pending_client_requests;
+  while (*pp) {
+    if ((*pp)->handle == handle) {
+      __pending_client_request_t *to_free = *pp;
+      *pp = (*pp)->next;
+      free(to_free);
+      return;
+    }
+    pp = &(*pp)->next;
+  }
+}
+
+void valk_http2_fail_pending_client_requests(valk_aio_handle_t *conn) {
+  if (!conn) return;
+  __pending_client_request_t *p = (__pending_client_request_t *)conn->http.pending_client_requests;
+  conn->http.pending_client_requests = NULL;
+  while (p) {
+    __pending_client_request_t *next = p->next;
+    valk_async_handle_t *handle = p->handle;
+    free(p);
+    
+    if (handle) {
+      valk_async_status_t status = valk_async_handle_get_status(handle);
+      if (!valk_async_handle_is_terminal(status)) {
+        VALK_WARN("Failing pending client request due to connection disconnect");
+        valk_async_handle_fail(handle, valk_lval_err("Connection closed before request could be sent"));
+      }
+    }
+    p = next;
+  }
+}
+
 // LCOV_EXCL_START libuv ref-free callback, invoked by GC during lval cleanup
 static void __valk_http2_response_body_free(void *ptr) {
   if (!ptr) return;
@@ -148,11 +193,14 @@ static int __http_client_on_stream_close_callback(nghttp2_session *session,
                                                   i32 stream_id,
                                                   u32 error_code,
                                                   void *user_data) {
-  UNUSED(user_data);
+  valk_aio_http2_client *client = user_data;
   VALK_INFO("Client stream close: stream_id=%d, error_code=%u", stream_id, error_code);
   __http2_client_req_res_t *reqres =
       nghttp2_session_get_stream_user_data(session, stream_id);
   if (reqres) { // LCOV_EXCL_BR_LINE nghttp2 callback, reqres always set for client streams
+    if (client && client->connection && reqres->handle) {
+      __remove_pending_request(client->connection, reqres->handle);
+    }
     if (error_code != NGHTTP2_NO_ERROR) {
       char errmsg[256];
       snprintf(errmsg, sizeof(errmsg), "HTTP/2 stream error: %s (code=%u)",
@@ -442,6 +490,8 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
   __http2_client_req_res_t *reqres = malloc(sizeof(__http2_client_req_res_t));
   reqres->req = ctx->req;
   reqres->handle = handle;
+  
+  __add_pending_request(conn, handle);
 
   valk_mem_allocator_t *alloc = ctx->req->allocator;
   valk_http2_response_t *res;

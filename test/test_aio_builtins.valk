@@ -7,21 +7,21 @@
 (test/run (list
   (test "aio/metrics returns metrics qexpr"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {result} (aio/metrics sys))
     (aio/stop sys)
     (not (nil? result))
   })
   (test "aio/metrics-json returns valid result"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {result} (aio/metrics-json sys))
     (aio/stop sys)
     (and (not (nil? result)) (not (error? result)))
   })
   (test "aio/metrics-prometheus returns valid result"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {result} (aio/metrics-prometheus sys))
     (aio/stop sys)
     (and (not (nil? result)) (not (error? result)))

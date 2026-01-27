@@ -1,5 +1,5 @@
 (load "src/prelude.valk")
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 (def {inner-h} (aio/sleep aio 50))
 (def {then-h} (aio/then inner-h (\ {_} { (printf "then cb\n") true })))
 (def {all-h} (aio/all (list then-h)))

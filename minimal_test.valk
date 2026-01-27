@@ -2,7 +2,7 @@
 (printf "Prelude loaded\n")
 (load "src/modules/test.valk")
 (printf "Test module loaded\n")
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 (printf "AIO started\n")
 (aio/stop aio)
 (printf "AIO stopped\n")

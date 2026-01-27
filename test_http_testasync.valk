@@ -2,7 +2,7 @@
 (load "src/modules/test.valk")
 (load "src/http_api.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (def {server-handler}
   (\ {req} {

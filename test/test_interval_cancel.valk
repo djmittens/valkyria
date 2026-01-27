@@ -3,7 +3,7 @@
 
 (load "src/prelude.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (println "=== Testing aio/interval Cancellation ===")
 

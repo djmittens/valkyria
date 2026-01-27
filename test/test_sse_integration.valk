@@ -7,7 +7,7 @@
 (load "src/modules/test.valk")
 (load "src/modules/aio/sse.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 ; Handler that sends SSE data
 (def {test-handler}
@@ -261,11 +261,11 @@
 }))
   (test-async "sse/close completes" (\ {} {
   ; Already verified by previous tests - all closed successfully
-  true
+  (aio/schedule aio 50 (\ {} {true}))
 }))
   (test-async "sse/writable? returns truthy" (\ {} {
   ; Already verified - sends only work when writable
-  true
+  (aio/schedule aio 50 (\ {} {true}))
 }))
   (test-async "sse/id sends event with ID" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-id") (\ {resp} {}))
@@ -345,4 +345,4 @@
     true
   }))
 })))
-  {:suite-name "SSE Integration Tests"})
+  {:suite-name "SSE Integration Tests" :timeout-ms 1000 :suite-timeout-ms 30000})

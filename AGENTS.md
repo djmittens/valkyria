@@ -251,6 +251,12 @@ See: https://notes.eatonphil.com/2024-08-20-deterministic-simulation-testing.htm
    - Main thread stuck in `valk_checkpoint_request_stw()` waiting for threads to pause
    - Race between checkpoint release and next checkpoint request
 
+4. **Check for shutdown ordering bugs** - if hang occurs at process exit:
+   - `valk_aio_wait_for_shutdown()` waits for event loop thread to exit
+   - Event loop only exits when `valk_aio_stop()` signals it
+   - If wait is called before stop, hang forever
+   - The `valk_aio_wait_for_shutdown()` function now auto-calls stop with a warning
+
 ## Debugging Async Completion Hangs (CRITICAL)
 
 When async operations hang silently (no crash, just stops), the issue is almost always

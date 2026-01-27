@@ -1,4 +1,4 @@
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 (mem/gc/collect)
 (println "done")
 (aio/stop aio)

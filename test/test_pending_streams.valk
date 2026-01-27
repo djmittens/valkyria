@@ -4,13 +4,13 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(def {aio} (aio/start {
+(def {aio} (aio/await (aio/start {
   :max-connections 16
   :tcp-buffer-pool-size 48
   :arena-pool-size 8
   :arena-size 1048576
   :pending-stream-pool-size 32
-}))
+})))
 
 (def {handler}
   (\ {req} {

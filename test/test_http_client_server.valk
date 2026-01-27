@@ -11,7 +11,7 @@
     {0})
 })
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (def {server-handler}
   (\ {req} {

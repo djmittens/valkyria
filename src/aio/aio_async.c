@@ -336,12 +336,20 @@ static void valk_async_cancel_task(void *ctx) {
     if (*magic_ptr == VALK_UV_DATA_TIMER_MAGIC) {
       // Regular async timer (sleep, etc.)
       valk_async_handle_uv_data_t *uv_data = handle->uv_handle_ptr;
-      uv_timer_stop(&uv_data->uv.timer);
+      // Only stop if timer is active AND not closing - stopping an already-stopped
+      // timer causes uv__queue_remove on an invalid queue node
+      if (uv_is_active((uv_handle_t*)&uv_data->uv.timer) &&
+          !uv_is_closing((uv_handle_t*)&uv_data->uv.timer)) {
+        uv_timer_stop(&uv_data->uv.timer);
+      }
     } else if (*magic_ptr == VALK_INTERVAL_TIMER_MAGIC) {
       // Interval timer
       valk_interval_timer_t *timer_data = (valk_interval_timer_t*)handle->uv_handle_ptr;
       timer_data->stopped = true;
-      uv_timer_stop(&timer_data->timer);
+      if (uv_is_active((uv_handle_t*)&timer_data->timer) &&
+          !uv_is_closing((uv_handle_t*)&timer_data->timer)) {
+        uv_timer_stop(&timer_data->timer);
+      }
     }
   }
 
