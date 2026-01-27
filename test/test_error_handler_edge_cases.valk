@@ -39,34 +39,22 @@
 (def {port3} (http2/server-port server3))
 
 (test/run-async aio (list
-  (test-async "error-returning handler: server starts successfully" (\ {done} {
+  (test-async "error-returning handler: server starts successfully" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" port1 "/")
     (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {do
-          (= {status} (http2/response-status resp))
-          (done (== status "200"))})
+      (if (error? resp) {false} {(== (http2/response-status resp) "200")})
     }))
 }))
-  (test-async "number-returning handler: server starts successfully" (\ {done} {
+  (test-async "number-returning handler: server starts successfully" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" port2 "/")
     (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {do
-          (= {status} (http2/response-status resp))
-          (done (== status "200"))})
+      (if (error? resp) {false} {(== (http2/response-status resp) "200")})
     }))
 }))
-  (test-async "list-returning handler: server starts successfully" (\ {done} {
+  (test-async "list-returning handler: server starts successfully" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" port3 "/")
     (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {do
-          (= {status} (http2/response-status resp))
-          (done (== status "200"))})
+      (if (error? resp) {false} {(== (http2/response-status resp) "200")})
     }))
 })))
   {:suite-name "Error Handler Edge Cases"})

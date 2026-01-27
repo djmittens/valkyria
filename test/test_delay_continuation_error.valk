@@ -21,14 +21,12 @@
 (def {test-port} (http2/server-port server))
 
 (test/run-async aio (list
-  (test-async "error in aio/delay continuation returns 500" (\ {done} {
+  (test-async "error in aio/delay continuation returns 500" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" test-port "/delay-err")
     (\ {resp} {
       (if (error? resp)
-        {(done false)}
-        {do
-          (= {status} (http2/response-status resp))
-          (done (== status "500"))})
+        {false}
+        {(== (http2/response-status resp) "500")})
     }))
 })))
   {:suite-name "aio/delay Continuation Error Tests"})

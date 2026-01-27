@@ -11,8 +11,6 @@
 }))
 
 (def {custom-headers-received} 0)
-(def {responses-received} 0)
-(def {test-callback} nil)
 
 (fun {has-test-header headers}
   {if (nil? headers)
@@ -38,27 +36,20 @@
 (def {server} (http2/server-listen aio 0 handler))
 (def {test-port} (http2/server-port server))
 
-(fun {on-response resp} {
-  (def {responses-received} (+ responses-received 1))
-  (if (== responses-received 4)
-    {(test-callback (>= custom-headers-received 4))}
-    {nil})
-})
-
 (test/run-async aio (list
-  (test-async "custom headers received with multiple concurrent requests" (\ {done} {
-  (def {test-callback} done)
-  
-  (aio/then (http2/client-request-with-headers aio "127.0.0.1" test-port "/r1" 
-    {{"x-test-header" "v1"}}) on-response)
-  
-  (aio/then (http2/client-request-with-headers aio "127.0.0.1" test-port "/r2" 
-    {{"x-test-header" "v2"}}) on-response)
+  (test-async "custom headers received with multiple concurrent requests" (\ {} {
+    (= {requests} (list
+      (http2/client-request-with-headers aio "127.0.0.1" test-port "/r1" 
+        {{"x-test-header" "v1"}})
+      (http2/client-request-with-headers aio "127.0.0.1" test-port "/r2" 
+        {{"x-test-header" "v2"}})
+      (http2/client-request-with-headers aio "127.0.0.1" test-port "/r3" 
+        {{"x-test-header" "v3"}})
+      (http2/client-request-with-headers aio "127.0.0.1" test-port "/r4" 
+        {{"x-test-header" "v4"}})))
     
-  (aio/then (http2/client-request-with-headers aio "127.0.0.1" test-port "/r3" 
-    {{"x-test-header" "v3"}}) on-response)
-    
-  (aio/then (http2/client-request-with-headers aio "127.0.0.1" test-port "/r4" 
-    {{"x-test-header" "v4"}}) on-response)
-})))
+    (aio/then (aio/all requests) (\ {results} {
+      (>= custom-headers-received 4)
+    }))
+  })))
   {:suite-name "Pending Stream Headers Tests"})

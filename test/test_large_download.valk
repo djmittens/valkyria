@@ -30,37 +30,16 @@
 (def {test-port} (http2/server-port server))
 
 (test/run-async aio (list
-  (test-async "10KB download" (\ {done} {
+  (test-async "10KB download" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" test-port "/10kb")
-    (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {do
-          (= {body} (http2/response-body resp))
-          (= {body-len} (len body))
-          (done (== body-len SIZE_10KB))})
-    }))
+    (\ {resp} {(if (error? resp) {false} {(== (len (http2/response-body resp)) SIZE_10KB)})}))
 }))
-  (test-async "50KB download" (\ {done} {
+  (test-async "50KB download" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" test-port "/50kb")
-    (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {do
-          (= {body} (http2/response-body resp))
-          (= {body-len} (len body))
-          (done (== body-len SIZE_50KB))})
-    }))
+    (\ {resp} {(if (error? resp) {false} {(== (len (http2/response-body resp)) SIZE_50KB)})}))
 }))
-  (test-async "100KB download" (\ {done} {
+  (test-async "100KB download" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" test-port "/100kb")
-    (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {do
-          (= {body} (http2/response-body resp))
-          (= {body-len} (len body))
-          (done (== body-len SIZE_100KB))})
-    }))
+    (\ {resp} {(if (error? resp) {false} {(== (len (http2/response-body resp)) SIZE_100KB)})}))
 })))
   {:suite-name "Large Download Tests"})

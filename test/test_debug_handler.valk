@@ -69,364 +69,364 @@
 })
 
 (def {main-tests} (list
-  (test-async "/debug returns HTML dashboard" (\ {done} {
+  (test-async "/debug returns HTML dashboard" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "<!DOCTYPE"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: status=200, HTML body")
                (print "Got status:" status)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/debug/ returns HTML dashboard" (\ {done} {
+  (test-async "/debug/ returns HTML dashboard" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "<!DOCTYPE"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: status=200, HTML body")
                (print "Got status:" status)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/debug/metrics returns JSON with aio_metrics" (\ {done} {
+  (test-async "/debug/metrics returns JSON with aio_metrics" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "aio_metrics"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: status=200, JSON with aio_metrics")
                (print "Got status:" status)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/debug/metrics/state returns diagnostics JSON" (\ {done} {
+  (test-async "/debug/metrics/state returns diagnostics JSON" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "\"metrics\""))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: status=200, JSON with metrics key")
                (print "Got status:" status)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/debug/metrics/state has metrics.aio structure" (\ {done} {
+  (test-async "/debug/metrics/state has metrics.aio structure" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "\"aio\":"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: JSON with metrics.aio key")
                (print "Got body:" body)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/debug/metrics/state has metrics.modular structure" (\ {done} {
+  (test-async "/debug/metrics/state has metrics.modular structure" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "\"modular\":"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: JSON with metrics.modular key")
                (print "Got body:" body)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/debug/metrics/state has metrics.vm structure" (\ {done} {
+  (test-async "/debug/metrics/state has metrics.vm structure" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "\"vm\":"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: JSON with metrics.vm key")
                (print "Got body:" body)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/debug/metrics/state has metrics.registry structure" (\ {done} {
+  (test-async "/debug/metrics/state has metrics.registry structure" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "\"registry\":"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: JSON with metrics.registry key")
                (print "Got body:" body)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/debug/metrics/state has memory structure" (\ {done} {
+  (test-async "/debug/metrics/state has memory structure" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "\"memory\":"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: JSON with memory key")
                (print "Got body:" body)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/debug/metrics/state returns Content-Type: application/json" (\ {done} {
+  (test-async "/debug/metrics/state returns Content-Type: application/json" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {headers} (http2/response-headers resp))
            (= {ct} (get-header headers "content-type"))
            (if (== ct "application/json")
-             {(done true)}
+             {true}
              {(do
                (print "Expected: Content-Type: application/json")
                (print "Got:" ct)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/debug/metrics/state returns Cache-Control: no-cache" (\ {done} {
+  (test-async "/debug/metrics/state returns Cache-Control: no-cache" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/metrics/state")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {headers} (http2/response-headers resp))
            (= {cc} (get-header headers "cache-control"))
            (if (== cc "no-cache, no-store, must-revalidate")
-             {(done true)}
+             {true}
              {(do
                (print "Expected: Cache-Control: no-cache, no-store, must-revalidate")
                (print "Got:" cc)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/metrics returns Content-Type: text/plain; version=0.0.4" (\ {done} {
+  (test-async "/metrics returns Content-Type: text/plain; version=0.0.4" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {headers} (http2/response-headers resp))
            (= {ct} (get-header headers "content-type"))
            (if (== ct "text/plain; version=0.0.4")
-             {(done true)}
+             {true}
              {(do
                (print "Expected: Content-Type: text/plain; version=0.0.4")
                (print "Got:" ct)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/metrics returns Prometheus format" (\ {done} {
+  (test-async "/metrics returns Prometheus format" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (== status "200")
-             {(done true)}
+             {true}
              {(do
                (print "Expected: status=200")
                (print "Got status:" status)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/metrics contains valk_gc_ metrics" (\ {done} {
+  (test-async "/metrics contains valk_gc_ metrics" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (and (str-contains? body "valk_gc_cycles_total")
                          (str-contains? body "valk_gc_heap_used_bytes")))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: body to contain valk_gc_ metrics")
                (print "Got body snippet:" (if (> (len body) 300) (str (str/slice body 0 300) "...") body))
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/metrics contains http_ metrics" (\ {done} {
+  (test-async "/metrics contains http_ metrics" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "http_"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: body to contain http_ metrics")
                (print "Got body snippet:" (if (> (len body) 500) (str (str/slice body 0 500) "...") body))
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/metrics has valid Prometheus HELP lines" (\ {done} {
+  (test-async "/metrics has valid Prometheus HELP lines" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "# HELP"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: body to contain '# HELP' lines")
                (print "Got body snippet:" (if (> (len body) 300) (str (str/slice body 0 300) "...") body))
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/metrics has valid Prometheus TYPE lines" (\ {done} {
+  (test-async "/metrics has valid Prometheus TYPE lines" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "# TYPE"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: body to contain '# TYPE' lines")
                (print "Got body snippet:" (if (> (len body) 300) (str (str/slice body 0 300) "...") body))
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/metrics TYPE lines have valid metric types" (\ {done} {
+  (test-async "/metrics TYPE lines have valid metric types" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (= {has-counter} (str-contains? body "counter"))
            (= {has-gauge} (str-contains? body "gauge"))
            (if (and (== status "200")
                     (or has-counter has-gauge))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: body to contain 'counter' or 'gauge' type declarations")
                (print "has-counter:" has-counter "has-gauge:" has-gauge)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/metrics contains valk_eval_total metric" (\ {done} {
+  (test-async "/metrics contains valk_eval_total metric" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "valk_eval_total"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: body to contain valk_eval_total metric")
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/metrics contains valk_loop_iterations_total metric" (\ {done} {
+  (test-async "/metrics contains valk_loop_iterations_total metric" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/metrics")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "valk_loop_iterations_total"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: body to contain valk_loop_iterations_total metric")
-               (done false)
+               false
              )})})
       }))
   }))
 
-   (test-async "/debug/diagnostics/memory SSE endpoint responds" (\ {done} {
+   (test-async "/debug/diagnostics/memory SSE endpoint responds" (\ {} {
     ; Create a custom handler that opens SSE and closes after first event
     (= {test-closed} (atom false))
     (= {test-sse-respond-handler}
@@ -445,14 +445,14 @@
     (aio/then (http2/client-request aio "127.0.0.1" test-port-respond "/test-sse-respond")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {body} (http2/response-body resp))
            (if (str-contains? body "event: test")
-             {(done true)}
-             {(do (print "Expected SSE event") (done false))})})}))
+             {true}
+             {(do (print "Expected SSE event") false)})})}))
   }))
 
-  (test-async "/debug/diagnostics/memory SSE first event is 'diagnostics'" (\ {done} {
+  (test-async "/debug/diagnostics/memory SSE first event is 'diagnostics'" (\ {} {
     (= {captured-body} (atom ""))
     (= {closed} (atom false))
     (= {test-sse-handler}
@@ -484,18 +484,18 @@
     (aio/then (http2/client-request aio "127.0.0.1" test-port "/test-sse-capture")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {body} (http2/response-body resp))
            (if (str-contains? body "event: diagnostics\n")
-             {(done true)}
+             {true}
              {(do
                (print "Expected: body to contain 'event: diagnostics'")
                (print "Got body:" (if (> (len body) 200) (str (str/slice body 0 200) "...") body))
-               (done false)
+               false
              )})})}))
   }))
 
-  (test-async "/debug/diagnostics/memory SSE second event is 'diagnostics-delta'" (\ {done} {
+  (test-async "/debug/diagnostics/memory SSE second event is 'diagnostics-delta'" (\ {} {
     (= {closed2} (atom false))
     (= {events-sent} (atom 0))
     (= {test-sse-handler2}
@@ -529,18 +529,18 @@
     (aio/then (http2/client-request aio "127.0.0.1" test-port2 "/test-sse-capture2")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {body} (http2/response-body resp))
            (if (str-contains? body "event: diagnostics-delta\n")
-             {(done true)}
+             {true}
              {(do
                (print "Expected: body to contain 'event: diagnostics-delta'")
                (print "Got body:" (if (> (len body) 200) (str (str/slice body 0 200) "...") body))
-               (done false)
+               false
              )})})}))
   }))
 
-  (test-async "/debug/diagnostics/memory SSE events have valid JSON" (\ {done} {
+  (test-async "/debug/diagnostics/memory SSE events have valid JSON" (\ {} {
     (= {closed3} (atom false))
     (= {events-sent3} (atom 0))
     (= {test-sse-handler3}
@@ -574,62 +574,62 @@
     (aio/then (http2/client-request aio "127.0.0.1" test-port3 "/test-sse-capture3")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {body} (http2/response-body resp))
            (= {has-diagnostics} (str-contains? body "event: diagnostics\n"))
            (= {has-delta} (str-contains? body "event: diagnostics-delta\n"))
            (= {has-metrics} (str-contains? body "\"metrics\":"))
            (= {has-memory} (str-contains? body "\"memory\":"))
            (if (and has-diagnostics (and has-delta (and has-metrics has-memory)))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: both event types with metrics and memory keys")
                (print "has-diagnostics:" has-diagnostics)
                (print "has-delta:" has-delta)
                (print "has-metrics:" has-metrics)
                (print "has-memory:" has-memory)
-               (done false)
+               false
              )})})}))
   }))
 
-  (test-async "/debug/slab/buckets returns JSON" (\ {done} {
+  (test-async "/debug/slab/buckets returns JSON" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/slab/buckets")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "{"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: status=200, JSON body")
                (print "Got status:" status)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "/unknown routes redirect to /debug/" (\ {done} {
+  (test-async "/unknown routes redirect to /debug/" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/unknown/route")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {status} (http2/response-status resp))
            (= {body} (http2/response-body resp))
            (if (and (== status "200")
                     (str-contains? body "url=/debug/"))
-             {(done true)}
+             {true}
              {(do
                (print "Expected: status=200, redirect meta tag to /debug/")
                (print "Got status:" status)
                (print "Got body:" body)
-               (done false)
+               false
              )})})
       }))
   }))
 
-  (test-async "SSE handler lifecycle: reconnect works after disconnect" (\ {done} {
+  (test-async "SSE handler lifecycle: reconnect works after disconnect" (\ {} {
     (= {closed-lifecycle} (atom false))
     (= {events-sent-lifecycle} (atom 0))
     (= {connection-count} (atom 0))
@@ -658,30 +658,30 @@
     (aio/then (http2/client-request aio "127.0.0.1" test-port-lifecycle "/test-sse-lifecycle")
       (\ {resp1} {
         (if (error? resp1)
-          {(do (print "First connection error:" resp1) (done false))}
+          {(do (print "First connection error:" resp1) false)}
           {(= {body1} (http2/response-body resp1))
            (if (str-contains? body1 "event: diagnostics")
              {(aio/schedule aio 100 (\ {} {
                (aio/then (http2/client-request aio "127.0.0.1" test-port-lifecycle "/test-sse-lifecycle")
                  (\ {resp2} {
                    (if (error? resp2)
-                     {(do (print "Second connection error:" resp2) (done false))}
+                     {(do (print "Second connection error:" resp2) false)}
                      {(= {body2} (http2/response-body resp2))
                       (= {conns} (atom/get connection-count))
                       (if (and (str-contains? body2 "event: diagnostics") (== conns 2))
-                        {(done true)}
+                        {true}
                         {(do
                           (print "Expected: second connection to receive events, got" conns "connections")
                           (print "Body2:" (if (> (len body2) 100) (str (str/slice body2 0 100) "...") body2))
-                          (done false)
+                          false
                         )})})}))}))}
              {(do
                (print "First connection didn't receive event")
-               (done false)
+               false
              )})})}))
   }))
 
-  (test-async "SSE handler lifecycle: timer stops after disconnect (no duplicate events)" (\ {done} {
+  (test-async "SSE handler lifecycle: timer stops after disconnect (no duplicate events)" (\ {} {
     (= {event-counter} (atom 0))
     (= {test-sse-timer-handler}
       (\ {req} {
@@ -710,44 +710,44 @@
     (aio/then (http2/client-request aio "127.0.0.1" test-port-timer "/test-sse-timer-stop")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Connection error:" resp) (done false))}
+          {(do (print "Connection error:" resp) false)}
           {(= {body} (http2/response-body resp))
            (= {final-count} (atom/get event-counter))
            (aio/schedule aio 200 (\ {} {
              (= {post-count} (atom/get event-counter))
              (if (== final-count post-count)
-               {(done true)}
+               {true}
                {(do
                  (print "Timer continued after disconnect! final:" final-count "post:" post-count)
-                 (done false)
+                 false
                )})})})}))
       )
   }))
 
-  (test-async "debug/reset-state: session ID increments after reset" (\ {done} {
+  (test-async "debug/reset-state: session ID increments after reset" (\ {} {
     (= {session-before} (atom/get debug/session-id))
     (debug/reset-state)
     (= {session-after} (atom/get debug/session-id))
     (if (== session-after (+ session-before 1))
-      {(done true)}
+      {true}
       {(do
         (print "Expected session ID to increment by 1")
         (print "before:" session-before "after:" session-after)
-        (done false))})
+        false)})
   }))
 
-  (test-async "debug/reset-state: subscriber count resets to zero" (\ {done} {
+  (test-async "debug/reset-state: subscriber count resets to zero" (\ {} {
     (debug/reset-state)
     (= {count-after-reset} (debug/get-subscriber-count))
     (if (== count-after-reset 0)
-      {(done true)}
+      {true}
       {(do
         (print "Expected subscriber count to be 0 after reset")
         (print "Got:" count-after-reset)
-        (done false))})
+        false)})
   }))
 
-  (test-async "debug/reset-state: old subscribers stop after session ID change" (\ {done} {
+  (test-async "debug/reset-state: old subscribers stop after session ID change" (\ {} {
     (debug/reset-state)
     (= {old-session} (atom/get debug/session-id))
     (= {event-count} (atom 0))
@@ -770,16 +770,16 @@
       (\ {resp} {
         (= {new-session} (atom/get debug/session-id))
         (if (> new-session old-session)
-          {(done true)}
+          {true}
           {(do
             (print "Expected session ID to have incremented after reset")
             (print "old:" old-session "new:" new-session)
-            (done false))})}))
+            false)})}))
   }))
 ))
 
 (def {broadcaster-tests} (list
-  (test-async "Broadcaster: multiple connections both receive SSE events" (\ {done} {
+  (test-async "Broadcaster: multiple connections both receive SSE events" (\ {} {
     (debug/reset-state)
     (= {conn1-received} (atom false))
     (= {conn2-received} (atom false))
@@ -807,10 +807,10 @@
           nil)
         (if (== (atom/get connections-complete) 2)
           {(if (and (atom/get conn1-received) (atom/get conn2-received))
-             {(done true)}
+             {true}
              {(do (print "Expected both to receive events")
                   (print "conn1:" (atom/get conn1-received) "conn2:" (atom/get conn2-received))
-                  (done false))})}
+                  false)})}
           nil)}))
     (aio/then (http2/client-request aio "127.0.0.1" bc-port "/bc-multi")
       (\ {resp2} {
@@ -823,18 +823,18 @@
           nil)
         (if (== (atom/get connections-complete) 2)
           {(if (and (atom/get conn1-received) (atom/get conn2-received))
-             {(done true)}
+             {true}
              {(do (print "Expected both to receive events")
                   (print "conn1:" (atom/get conn1-received) "conn2:" (atom/get conn2-received))
-                  (done false))})}
+                  false)})}
           nil)}))
     (aio/schedule aio 2000 (\ {} {
       (if (< (atom/get connections-complete) 2)
-        {(do (print "Timeout: only" (atom/get connections-complete) "connections complete") (done false))}
+        {(do (print "Timeout: only" (atom/get connections-complete) "connections complete") false)}
         nil)}))
   }))
 
-  (test-async "Broadcaster: subscriber receives events until disconnect" (\ {done} {
+  (test-async "Broadcaster: subscriber receives events until disconnect" (\ {} {
     (debug/reset-state)
     (= {bc-event-handler}
       (\ {req} {
@@ -851,14 +851,14 @@
     (aio/then (http2/client-request aio "127.0.0.1" bc-port2 "/bc-event")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {body} (http2/response-body resp))
            (if (str-contains? body "event: diagnostics")
-             {(done true)}
-             {(do (print "No events received") (done false))})})}))
+             {true}
+             {(do (print "No events received") false)})})}))
   }))
 
-  (test-async "Broadcaster: subscriber count increases when subscribing" (\ {done} {
+  (test-async "Broadcaster: subscriber count increases when subscribing" (\ {} {
     (debug/reset-state)
     (= {count-before} (atom 0))
     (= {count-after} (atom 0))
@@ -881,14 +881,14 @@
         (= {before} (atom/get count-before))
         (= {after} (atom/get count-after))
         (if (== after (+ before 1))
-          {(done true)}
+          {true}
           {(do
             (print "Expected subscriber count to increase by 1")
             (print "before:" before "after:" after)
-            (done false))})}))
+            false)})}))
   }))
 
-  (test-async "Broadcaster: subscriber receives first and delta events" (\ {done} {
+  (test-async "Broadcaster: subscriber receives first and delta events" (\ {} {
     (debug/reset-state)
     (= {bc-delta-handler}
       (\ {req} {
@@ -905,18 +905,18 @@
     (aio/then (http2/client-request aio "127.0.0.1" bc-port4 "/bc-delta")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {body} (http2/response-body resp))
            (= {has-full} (str-contains? body "event: diagnostics\n"))
            (= {has-delta} (str-contains? body "event: diagnostics-delta\n"))
            (if (and has-full has-delta)
-             {(done true)}
+             {true}
              {(do (print "Expected both full and delta events")
                   (print "has-full:" has-full "has-delta:" has-delta)
-                  (done false))})})}))
+                  false)})})}))
   }))
 
-  (test-async "debug/reset-state: new subscribers work after reset" (\ {done} {
+  (test-async "debug/reset-state: new subscribers work after reset" (\ {} {
     (debug/reset-state)
     (= {bc-new-handler}
       (\ {req} {
@@ -933,14 +933,14 @@
     (aio/then (http2/client-request aio "127.0.0.1" bc-port-new "/bc-new-sub")
       (\ {resp} {
         (if (error? resp)
-          {(do (print "Error:" resp) (done false))}
+          {(do (print "Error:" resp) false)}
           {(= {body} (http2/response-body resp))
            (if (str-contains? body "event: diagnostics")
-             {(done true)}
+             {true}
              {(do
                (print "Expected new subscriber to receive events after reset")
                (print "Got body:" (if (> (len body) 100) (str (str/slice body 0 100) "...") body))
-               (done false))})})}))
+               false)})})}))
   }))
 ))
 

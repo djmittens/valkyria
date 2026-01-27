@@ -188,314 +188,314 @@
 
 (test/run-async aio (list
   ; sse/send tests
-  (test-async "sse/send 'hello' -> 'data: hello\\n\\n'" (\ {done} {
+  (test-async "sse/send 'hello' -> 'data: hello\\n\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/send-simple")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "data: hello\n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
-  (test-async "sse/send 'a\\nb' -> 'data: a\\ndata: b\\n\\n'" (\ {done} {
+  (test-async "sse/send 'a\\nb' -> 'data: a\\ndata: b\\n\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/send-multiline")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "data: a\ndata: b\n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
-  (test-async "sse/send '' -> 'data: \\n\\n'" (\ {done} {
+  (test-async "sse/send '' -> 'data: \\n\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/send-empty")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "data: \n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
-  (test-async "sse/send 'line1\\nline2\\nline3' -> 'data: line1\\ndata: line2\\ndata: line3\\n\\n'" (\ {done} {
+  (test-async "sse/send 'line1\\nline2\\nline3' -> 'data: line1\\ndata: line2\\ndata: line3\\n\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/send-three-lines")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "data: line1\ndata: line2\ndata: line3\n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
   ; sse/event tests
-  (test-async "sse/event 'msg' 'data' -> 'event: msg\\ndata: data\\n\\n'" (\ {done} {
+  (test-async "sse/event 'msg' 'data' -> 'event: msg\\ndata: data\\n\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/event-simple")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "event: msg\ndata: data\n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
-  (test-async "sse/event 'msg' 'a\\nb' -> 'event: msg\\ndata: a\\ndata: b\\n\\n'" (\ {done} {
+  (test-async "sse/event 'msg' 'a\\nb' -> 'event: msg\\ndata: a\\ndata: b\\n\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/event-multiline")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "event: msg\ndata: a\ndata: b\n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
-  (test-async "sse/event 'update' '' -> 'event: update\\ndata: \\n\\n'" (\ {done} {
+  (test-async "sse/event 'update' '' -> 'event: update\\ndata: \\n\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/event-empty-data")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "event: update\ndata: \n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
-  (test-async "sse/event multi-line -> data prefix per line" (\ {done} {
+  (test-async "sse/event multi-line -> data prefix per line" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/event-three-lines")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "event: notification\ndata: line1\ndata: line2\ndata: line3\n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
               )})})
       }))
   }))
   
   ; sse/id tests
-  (test-async "sse/id '123' 'data' -> 'id: 123\\ndata: data\\n\\n'" (\ {done} {
+  (test-async "sse/id '123' 'data' -> 'id: 123\\ndata: data\\n\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/id-simple")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "id: 123\ndata: data\n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
-  (test-async "sse/id 'evt-456' 'a\\nb' -> 'id: evt-456\\ndata: a\\ndata: b\\n\\n'" (\ {done} {
+  (test-async "sse/id 'evt-456' 'a\\nb' -> 'id: evt-456\\ndata: a\\ndata: b\\n\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/id-multiline")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "id: evt-456\ndata: a\ndata: b\n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
   ; sse/full tests
-  (test-async "sse/full 'msg' '123' 'data' -> 'id: 123\\nevent: msg\\ndata: data\\n\\n'" (\ {done} {
+  (test-async "sse/full 'msg' '123' 'data' -> 'id: 123\\nevent: msg\\ndata: data\\n\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/full-simple")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "id: 123\nevent: msg\ndata: data\n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
-  (test-async "sse/full multiline -> 'id: evt-789\\nevent: update\\ndata: line1\\ndata: line2\\n\\n'" (\ {done} {
+  (test-async "sse/full multiline -> 'id: evt-789\\nevent: update\\ndata: line1\\ndata: line2\\n\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/full-multiline")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "id: evt-789\nevent: update\ndata: line1\ndata: line2\n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
   ; sse/retry tests
-  (test-async "sse/retry 5000 -> 'retry: 5000\\n\\n'" (\ {done} {
+  (test-async "sse/retry 5000 -> 'retry: 5000\\n\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/retry-simple")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "retry: 5000\n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
-  (test-async "sse/retry 0 -> 'retry: 0\\n\\n'" (\ {done} {
+  (test-async "sse/retry 0 -> 'retry: 0\\n\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/retry-zero")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} "retry: 0\n\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
   ; sse/comment tests
-  (test-async "sse/comment 'ping' -> ': ping\\n'" (\ {done} {
+  (test-async "sse/comment 'ping' -> ': ping\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/comment-simple")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} ": ping\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
-  (test-async "sse/comment multiline -> ': line1\\n: line2\\n'" (\ {done} {
+  (test-async "sse/comment multiline -> ': line1\\n: line2\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/comment-multiline")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} ": line1\n: line2\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
-  (test-async "sse/comment '' -> ': \\n'" (\ {done} {
+  (test-async "sse/comment '' -> ': \\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/comment-empty")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} ": \n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   }))
   
   ; sse/heartbeat test
-  (test-async "sse/heartbeat -> ':\\n'" (\ {done} {
+  (test-async "sse/heartbeat -> ':\\n'" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/heartbeat")
       (\ {resp} {
         (if (error? resp)
-          {(done false)}
+          {false}
           {(= {body} (http2/response-body resp))
            (= {expected} ":\n")
            (if (== body expected)
-             {(done true)}
+             {true}
              {(do
                (print "Expected:" expected)
                (print "Got:" body)
-               (done false)
+               false
              )})})
       }))
   })))

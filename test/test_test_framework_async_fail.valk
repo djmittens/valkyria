@@ -4,7 +4,7 @@
 (def {aio} (aio/start))
 
 (test/run-async aio (list
-  (test-async "this test will fail" (\ {done} {
-  (done false)
-})))
+  (test-async "this test will fail" (\ {} {
+    (aio/then (aio/sleep aio 1) (\ {_} {false}))
+  })))
   {:suite-name "Test Framework Async Fail" :expected-exit 1})

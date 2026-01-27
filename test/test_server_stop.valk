@@ -12,34 +12,22 @@
   }))
 
 (test/run-async aio (list
-  (test-async "server-stop completes successfully" (\ {done} {
-  (= {server} (http2/server-listen aio 0 simple-handler))
-  (= {port} (http2/server-port server))
-  (= {stop-handle} (http2/server-stop server))
-  (aio/then stop-handle (\ {result} {
-    (done (nil? result))
+  (test-async "server-stop completes successfully" (\ {} {
+    (= {server} (http2/server-listen aio 0 simple-handler))
+    (aio/then (http2/server-stop server) (\ {result} {(nil? result)}))
   }))
-}))
-  (test-async "stopped server rejects new connections" (\ {done} {
-  (= {server} (http2/server-listen aio 0 simple-handler))
-  (= {port} (http2/server-port server))
-  (= {stop-handle} (http2/server-stop server))
-  (aio/then stop-handle (\ {_} {
-    (aio/then (http2/client-request aio "127.0.0.1" port "/")
-      (\ {resp} {
-        (done (error? resp))
-      }))
-  }))
-}))
-  (test-async "double stop is idempotent" (\ {done} {
-  (= {server} (http2/server-listen aio 0 simple-handler))
-  (= {port} (http2/server-port server))
-  (= {stop-handle} (http2/server-stop server))
-  (aio/then stop-handle (\ {_} {
-    (= {stop-handle2} (http2/server-stop server))
-    (aio/then stop-handle2 (\ {result2} {
-      (done (nil? result2))
+  (test-async "stopped server rejects new connections" (\ {} {
+    (= {server} (http2/server-listen aio 0 simple-handler))
+    (= {port} (http2/server-port server))
+    (aio/then (http2/server-stop server) (\ {_} {
+      (aio/then (http2/client-request aio "127.0.0.1" port "/")
+        (\ {resp} {(error? resp)}))
     }))
   }))
-})))
+  (test-async "double stop is idempotent" (\ {} {
+    (= {server} (http2/server-listen aio 0 simple-handler))
+    (aio/then (http2/server-stop server) (\ {_} {
+      (aio/then (http2/server-stop server) (\ {result2} {(nil? result2)}))
+    }))
+  })))
   {:suite-name "HTTP/2 Server Stop Tests"})

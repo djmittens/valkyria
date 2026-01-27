@@ -233,116 +233,116 @@
 ; Test 19: sse/handler wrapper creates working handler
 
 (test/run-async aio (list
-  (test-async "sse/open creates stream" (\ {done} {
+  (test-async "sse/open creates stream" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-basic") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
     ; If we got here without crash, SSE open worked
-    (done true)
+    true
   }))
 }))
-  (test-async "Multiple sse/send calls work" (\ {done} {
+  (test-async "Multiple sse/send calls work" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-multi") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
     ; If we got here without crash, multiple sends worked
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/event sends typed events" (\ {done} {
+  (test-async "sse/event sends typed events" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-typed") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/on-drain callback is registered" (\ {done} {
+  (test-async "sse/on-drain callback is registered" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-on-drain") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/close completes" (\ {done} {
+  (test-async "sse/close completes" (\ {} {
   ; Already verified by previous tests - all closed successfully
-  (done true)
+  true
 }))
-  (test-async "sse/writable? returns truthy" (\ {done} {
+  (test-async "sse/writable? returns truthy" (\ {} {
   ; Already verified - sends only work when writable
-  (done true)
+  true
 }))
-  (test-async "sse/id sends event with ID" (\ {done} {
+  (test-async "sse/id sends event with ID" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-id") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/retry sends retry directive" (\ {done} {
+  (test-async "sse/retry sends retry directive" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-retry") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/json sends JSON data" (\ {done} {
+  (test-async "sse/json sends JSON data" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-json") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/json-event sends typed JSON" (\ {done} {
+  (test-async "sse/json-event sends typed JSON" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-json-event") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/full sends complete event" (\ {done} {
+  (test-async "sse/full sends complete event" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-full") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/full rejects newlines in event-type" (\ {done} {
+  (test-async "sse/full rejects newlines in event-type" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-full-invalid") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/comment sends comment" (\ {done} {
+  (test-async "sse/comment sends comment" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-comment") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/heartbeat sends heartbeat" (\ {done} {
+  (test-async "sse/heartbeat sends heartbeat" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-heartbeat") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/writable? returns status" (\ {done} {
+  (test-async "sse/writable? returns status" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-writable") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/cancel cancels stream" (\ {done} {
+  (test-async "sse/cancel cancels stream" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-cancel") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/message alias works" (\ {done} {
+  (test-async "sse/message alias works" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-message") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/event rejects newlines in event-type" (\ {done} {
+  (test-async "sse/event rejects newlines in event-type" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-event-invalid") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 }))
-  (test-async "sse/handler wrapper works" (\ {done} {
+  (test-async "sse/handler wrapper works" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/sse-wrapped") (\ {resp} {}))
   (aio/schedule aio 300 (\ {} {
-    (done true)
+    true
   }))
 })))
   {:suite-name "SSE Integration Tests"})
