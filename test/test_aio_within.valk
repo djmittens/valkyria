@@ -3,7 +3,7 @@
 
 (load "src/prelude.valk")
 
-(= {aio} (aio/start))
+(= {aio} (aio/await (aio/start)))
 
 ; Test 1: aio/within creates handle
 (= {h1} (aio/within (aio/pure 42) 100))

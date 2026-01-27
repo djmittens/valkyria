@@ -9,6 +9,7 @@
 #include <uv.h>
 
 #include "aio/aio.h"
+#include "aio/aio_async.h"
 #include "aio/http2/aio_http2_client.h"
 #include "aio/http2/stream/aio_stream_body.h"
 #include "collections.h"
@@ -4037,73 +4038,6 @@ static valk_lval_t* valk_builtin_ref_p(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_num(LVAL_TYPE(v) == LVAL_REF ? 1 : 0);
 }
 
-typedef struct {
-  _Atomic long value;
-} valk_atom_t;
-
-static valk_lval_t* __attribute__((unused)) valk_builtin_atom(valk_lenv_t* e, valk_lval_t* a) {
-  VALK_WARN("atom is deprecated: use aio/semaphore or aio/then chains");
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
-  valk_atom_t* atom = malloc(sizeof(valk_atom_t));
-  atomic_store(&atom->value, valk_lval_list_nth(a, 0)->num);
-  return valk_lval_ref("atom", atom, free);
-}
-
-static valk_lval_t* __attribute__((unused)) valk_builtin_atom_get(valk_lenv_t* e, valk_lval_t* a) {
-  VALK_WARN("atom/get is deprecated: use aio/semaphore or aio/then chains");
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-  LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 0)->ref.type, "atom") == 0,
-              "Expected atom ref, got %s", valk_lval_list_nth(a, 0)->ref.type);
-  valk_atom_t* atom = valk_lval_list_nth(a, 0)->ref.ptr;
-  return valk_lval_num(atomic_load(&atom->value));
-}
-
-static valk_lval_t* __attribute__((unused)) valk_builtin_atom_set(valk_lenv_t* e, valk_lval_t* a) {
-  VALK_WARN("atom/set! is deprecated: use aio/semaphore or aio/then chains");
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 2);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-  LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 0)->ref.type, "atom") == 0,
-              "Expected atom ref, got %s", valk_lval_list_nth(a, 0)->ref.type);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
-  valk_atom_t* atom = valk_lval_list_nth(a, 0)->ref.ptr;
-  long new_val = valk_lval_list_nth(a, 1)->num;
-  atomic_store(&atom->value, new_val);
-  return valk_lval_num(new_val);
-}
-
-static valk_lval_t* __attribute__((unused)) valk_builtin_atom_add(valk_lenv_t* e, valk_lval_t* a) {
-  VALK_WARN("atom/add! is deprecated: use aio/semaphore or aio/then chains");
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 2);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-  LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 0)->ref.type, "atom") == 0,
-              "Expected atom ref, got %s", valk_lval_list_nth(a, 0)->ref.type);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
-  valk_atom_t* atom = valk_lval_list_nth(a, 0)->ref.ptr;
-  long delta = valk_lval_list_nth(a, 1)->num;
-  long old_val = atomic_fetch_add(&atom->value, delta);
-  return valk_lval_num(old_val + delta);
-}
-
-static valk_lval_t* __attribute__((unused)) valk_builtin_atom_sub(valk_lenv_t* e, valk_lval_t* a) {
-  VALK_WARN("atom/sub! is deprecated: use aio/semaphore or aio/then chains");
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 2);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-  LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 0)->ref.type, "atom") == 0,
-              "Expected atom ref, got %s", valk_lval_list_nth(a, 0)->ref.type);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
-  valk_atom_t* atom = valk_lval_list_nth(a, 0)->ref.ptr;
-  long delta = valk_lval_list_nth(a, 1)->num;
-  long old_val = atomic_fetch_sub(&atom->value, delta);
-  return valk_lval_num(old_val - delta);
-}
-
 static void __valk_http2_request_release(void* arg) {
   valk_http2_request_t* req = (valk_http2_request_t*)arg;
   // The request and all of its allocations live inside the region's arena.
@@ -4421,7 +4355,16 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
     ref = valk_lval_ref("aio_system", sys, NULL);
   }
 
-  return ref;
+  // Create a startup handle that completes with the system ref.
+  // This ensures users must await/then to get the system, guaranteeing
+  // the event loop is running before any scheduling can occur.
+  valk_async_handle_t* startup_handle = valk_async_handle_new(sys, e);
+  if (!startup_handle) {
+    return valk_lval_err("Failed to allocate startup handle");
+  }
+  valk_async_handle_complete(startup_handle, ref);
+
+  return valk_lval_handle(startup_handle);
 }
 
 // aio/run: (aio/run aio-system) -> nil (returns when system shuts down)

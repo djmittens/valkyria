@@ -272,6 +272,8 @@ struct valk_aio_handle_t {
 
     valk_stream_body_t *stream_bodies;
     u32 active_arena_head;
+    
+    void *pending_client_requests;
   } http;
 };
 

@@ -8,7 +8,7 @@
 (test/run (list
   (test "aio/within with immediate timeout error"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     (def {error-handle} (aio/fail "test-error"))
     (def {timeout-handle} (aio/within error-handle 100))
     (def {status} (aio/status timeout-handle))
@@ -18,7 +18,7 @@
   
   (test "aio/within comprehensive timeout verification"
     {do
-    (def {sys} (aio/start))
+    (def {sys} (aio/await (aio/start)))
     ; Use aio/never to create an operation that will definitely timeout
     (def {never-handle} (aio/never sys))
     (def {timeout-handle} (aio/within never-handle 1))

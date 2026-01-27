@@ -1,0 +1,15 @@
+(load "src/prelude.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+; Just sleep + then, no aio/all
+(= {h} (aio/then (aio/sleep aio 50) (\ {_} {:done})))
+(printf "h status: %s\n" (str (aio/status h)))
+
+(aio/then h (\ {result} {
+  (printf "result: %s\n" (str result))
+  (aio/stop aio)
+}))
+
+(aio/run aio)
+(printf "done\n")

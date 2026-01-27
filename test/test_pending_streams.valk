@@ -4,13 +4,13 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(def {aio} (aio/start {
+(def {aio} (aio/await (aio/start {
   :max-connections 16
   :tcp-buffer-pool-size 48
   :arena-pool-size 8
   :arena-size 1048576
   :pending-stream-pool-size 32
-}))
+})))
 
 (def {handler}
   (\ {req} {
@@ -23,46 +23,37 @@
 (def {server} (http2/server-listen aio 0 handler))
 (def {test-port} (http2/server-port server))
 
-(def {requests-completed} 0)
-(def {batch1-done} 0)
-(def {batch2-done} 0)
-(def {batch1-callback} nil)
-(def {batch2-callback} nil)
-
-(fun {send-request path batch-id} {
-  (aio/then (http2/client-request aio "127.0.0.1" test-port path) (\ {r} {
-    (if (not (error? r)) 
-      {(def {requests-completed} (+ requests-completed 1))}
-      {nil})
-    (if (== batch-id 1)
-      {do
-        (def {batch1-done} (+ batch1-done 1))
-        (if (== batch1-done 4)
-          {(batch1-callback (>= requests-completed 2))}
-          {nil})}
-      {do
-        (def {batch2-done} (+ batch2-done 1))
-        (if (== batch2-done 4)
-          {(batch2-callback (>= requests-completed 4))}
-          {nil})})
-  }))
+(fun {send-request path} {
+  (http2/client-request aio "127.0.0.1" test-port path)
 })
 
 (test/run-async aio (list
-  (test-async "concurrent requests batch 1" (\ {done} {
-  (def {batch1-callback} done)
-  (send-request "/stream1" 1)
-  (send-request "/stream2" 1)
-  (send-request "/stream3" 1)
-  (send-request "/stream4" 1)
-}))
-  (test-async "concurrent requests batch 2" (\ {done} {
-  (def {batch2-callback} done)
-  (aio/schedule aio 200 (\ {} {
-    (send-request "/stream5" 2)
-    (send-request "/stream6" 2)
-    (send-request "/stream7" 2)
-    (send-request "/stream8" 2)
+  (test-async "concurrent requests batch 1" (\ {} {
+    (= {requests} (list
+      (send-request "/stream1")
+      (send-request "/stream2")
+      (send-request "/stream3")
+      (send-request "/stream4")))
+    (aio/then (aio/all requests) (\ {results} {
+      (= {completed} (foldl (\ {count r} {
+        (if (not (error? r)) {(+ count 1)} {count})
+      }) 0 results))
+      (>= completed 2)
+    }))
   }))
-})))
+  (test-async "concurrent requests batch 2" (\ {} {
+    (aio/then (aio/sleep aio 200) (\ {_} {
+      (= {requests} (list
+        (send-request "/stream5")
+        (send-request "/stream6")
+        (send-request "/stream7")
+        (send-request "/stream8")))
+      (aio/then (aio/all requests) (\ {results} {
+        (= {completed} (foldl (\ {count r} {
+          (if (not (error? r)) {(+ count 1)} {count})
+        }) 0 results))
+        (>= completed 2)
+      }))
+    }))
+  })))
   {:suite-name "Pending Streams Coverage Tests"})

@@ -491,7 +491,7 @@
   })
   (test "aio/sleep creates handle"
     {do
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (test/assert (not (== sys nil)) "aio/start should succeed")
     (def {h} (aio/sleep sys 1))
     (def {status} (aio/status h))
@@ -501,14 +501,14 @@
   })
   (test "aio/sleep with zero delay"
     {do
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (def {h} (aio/sleep sys 0))
     (aio/stop sys)
     true
   })
   (test "aio/schedule runs callback"
     {do
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (test/assert (not (== sys nil)) "aio/start should succeed")
     (def {result} (aio/schedule sys 1 (\ {} {42})))
     (aio/stop sys)
@@ -516,14 +516,14 @@
   })
   (test "aio/schedule with zero delay"
     {do
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (def {result} (aio/schedule sys 0 (\ {} {"immediate"})))
     (aio/stop sys)
     true
   })
   (test "aio/pool-stats returns stats"
     {do
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (def {stats} (aio/pool-stats sys))
     (aio/stop sys)
     (not (== stats nil))
@@ -561,7 +561,7 @@
    })
    (test "aio/never creates running handle that never completes"
      {do
-     (= {sys} (aio/start))
+     (= {sys} (aio/await (aio/start)))
      (test/assert (not (== sys nil)) "aio/start should succeed")
      (def {h} (aio/never sys))
      (def {status} (aio/status h))
@@ -570,7 +570,7 @@
    })
    (test "aio/never can be cancelled"
      {do
-     (= {sys} (aio/start))
+     (= {sys} (aio/await (aio/start)))
      (def {h} (aio/never sys))
      (def {cancelled} (aio/cancel h))
      (aio/stop sys)
@@ -578,7 +578,7 @@
    })
    (test "aio/never in race with immediate value"
      {do
-     (= {sys} (aio/start))
+     (= {sys} (aio/await (aio/start)))
      (def {never-handle} (aio/never sys))
      (def {immediate-handle} (aio/pure 42))
      (def {race-result} (aio/race (list never-handle immediate-handle)))

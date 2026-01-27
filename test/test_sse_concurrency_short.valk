@@ -6,7 +6,7 @@
 (load "src/modules/test.valk")
 (load "src/modules/aio/debug.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (def {CONCURRENT_CONNECTIONS} 10)
 (def {TEST_DURATION_MS} 10000)

@@ -28,42 +28,42 @@
   })
   (test "vm-metrics-json-with-sys"
     {do
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (= {json} (vm/metrics-json sys))
     (test/assert (not (== json nil)) "vm/metrics-json with sys returns non-nil")
     true
   })
   (test "vm-metrics-prometheus-with-sys"
     {do
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (= {prom} (vm/metrics-prometheus sys))
     (test/assert (not (== prom nil)) "vm/metrics-prometheus with sys returns non-nil")
     true
   })
   (test "vm-metrics-json-compact-with-sys"
     {do
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (= {json} (vm/metrics-json-compact sys))
     (test/assert (not (== json nil)) "vm/metrics-json-compact with sys returns non-nil")
     true
   })
   (test "vm-metrics-json-too-many-args"
     {do
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (= {result} (vm/metrics-json sys sys))
     (test/assert (error? result) "vm/metrics-json with 2 args returns error")
     true
   })
   (test "vm-metrics-prometheus-too-many-args"
     {do
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (= {result} (vm/metrics-prometheus sys sys))
     (test/assert (error? result) "vm/metrics-prometheus with 2 args returns error")
     true
   })
   (test "vm-metrics-json-compact-too-many-args"
     {do
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (= {result} (vm/metrics-json-compact sys sys))
     (test/assert (error? result) "vm/metrics-json-compact with 2 args returns error")
     true

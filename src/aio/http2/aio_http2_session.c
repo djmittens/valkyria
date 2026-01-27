@@ -529,20 +529,23 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
 
   bool was_sse_stream = valk_http2_metrics_on_sse_stream_close(conn, stream_id);
 
+  bool has_stream_body = valk_stream_body_exists_for_stream(conn, stream_id);
   valk_stream_body_close_by_stream_id(conn, stream_id);
 
   if (req && valk_arena_ref_valid(req->arena_ref)) {
     req->bytes_sent += stream_body_bytes;
     valk_http2_metrics_on_stream_close(conn, req, error_code, was_sse_stream, stream_body_bytes);
-    valk_http2_metrics_on_arena_release(conn);
-    u32 slot = req->arena_ref.slot;
-    valk_http2_remove_from_active_arenas(conn, slot);
-    valk_arena_ref_release(&req->arena_ref, conn->http.server->sys->httpStreamArenas);
-    u64 arena_num_free = __atomic_load_n(&conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
-    VALK_INFO("Arena RELEASED (stream close) for stream %d (slot=%u, now %llu free)", stream_id, slot, arena_num_free);
+    if (!has_stream_body) {
+      valk_http2_metrics_on_arena_release(conn);
+      u32 slot = req->arena_ref.slot;
+      valk_http2_remove_from_active_arenas(conn, slot);
+      valk_arena_ref_release(&req->arena_ref, conn->http.server->sys->httpStreamArenas);
+      u64 arena_num_free = __atomic_load_n(&conn->http.server->sys->httpStreamArenas->numFree, __ATOMIC_ACQUIRE);
+      VALK_INFO("Arena RELEASED (stream close) for stream %d (slot=%u, now %llu free)", stream_id, slot, arena_num_free);
 
-    if (conn->http.arena_backpressure) {
-      valk_http2_exit_arena_backpressure(conn);
+      if (conn->http.arena_backpressure) {
+        valk_http2_exit_arena_backpressure(conn);
+      }
     }
   }
   else if (req && !valk_arena_ref_valid(req->arena_ref)) {

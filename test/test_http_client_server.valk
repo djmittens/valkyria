@@ -11,7 +11,7 @@
     {0})
 })
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (def {server-handler}
   (\ {req} {
@@ -22,28 +22,16 @@
 (def {test-port} (http2/server-port server))
 
 (test/run-async aio (list
-  (test-async "basic request returns status 200" (\ {done} {
+  (test-async "basic request returns status 200" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" test-port "/")
-    (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {(done (== (http2/response-status resp) "200"))})
-    }))
+    (\ {resp} {(if (error? resp) {false} {(== (http2/response-status resp) "200")})}))
 }))
-  (test-async "response body is correct" (\ {done} {
+  (test-async "response body is correct" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" test-port "/")
-    (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {(done (== (http2/response-body resp) "Hello, World!"))})
-    }))
+    (\ {resp} {(if (error? resp) {false} {(== (http2/response-body resp) "Hello, World!")})}))
 }))
-  (test-async "response-ok? returns true for 200" (\ {done} {
+  (test-async "response-ok? returns true for 200" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" test-port "/")
-    (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {(done (== 1 (http2/response-ok? resp)))})
-    }))
+    (\ {resp} {(if (error? resp) {false} {(== 1 (http2/response-ok? resp))})}))
 })))
   {:suite-name "HTTP Client-Server Integration Tests"})

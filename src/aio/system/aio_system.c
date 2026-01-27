@@ -75,6 +75,9 @@ void valk_aio_wait_for_all_systems(void) {
   pthread_mutex_unlock(&g_aio_systems_lock);
   
   for (int i = 0; i < count; i++) {
+    valk_aio_stop(systems[i]);
+  }
+  for (int i = 0; i < count; i++) {
     valk_aio_wait_for_shutdown(systems[i]);
   }
 }
@@ -341,6 +344,11 @@ bool valk_aio_is_shutting_down(valk_aio_system_t *sys) {
 
 void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
   if (!sys) return;
+
+  if (!sys->shuttingDown) {
+    VALK_WARN("valk_aio_wait_for_shutdown: system not stopping, calling valk_aio_stop() automatically");
+    valk_aio_stop(sys);
+  }
 
   valk_aio_unregister_system(sys);
 

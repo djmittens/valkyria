@@ -93,6 +93,21 @@ u64 valk_stream_body_get_bytes_sent(valk_aio_handle_t *conn, i32 stream_id) {
   return 0;
 }
 
+bool valk_stream_body_exists_for_stream(valk_aio_handle_t *conn, i32 stream_id) {
+  if (!conn) {
+    return false;
+  }
+
+  valk_stream_body_t *body = conn->http.stream_bodies;
+  while (body) {
+    if (body->stream_id == stream_id) {
+      return true;
+    }
+    body = body->next;
+  }
+  return false;
+}
+
 // LCOV_EXCL_START -- requires HTTP/2 session integration with stream bodies
 void valk_stream_body_check_orphaned(valk_aio_handle_t *conn) {
   if (!conn || !conn->http.session) {

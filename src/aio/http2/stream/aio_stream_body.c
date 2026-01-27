@@ -145,9 +145,9 @@ static void __stream_body_finish_close(valk_stream_body_t *body) {
     body->lisp_on_timeout_handle = (valk_handle_t){0, 0};
   }
 
-  valk_http2_release_stream_arena(body->conn, body->stream_id);
-
   valk_stream_body_unregister(body);
+
+  valk_http2_release_stream_arena(body->conn, body->stream_id);
 }
 // LCOV_EXCL_STOP
 

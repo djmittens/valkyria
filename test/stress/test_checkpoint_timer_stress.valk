@@ -3,7 +3,7 @@
 
 (load "src/prelude.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 (def {counter} (atom 0))
 (def {iterations} 50)
 (def {test-passed} (atom false))

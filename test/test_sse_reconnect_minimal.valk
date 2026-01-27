@@ -1,7 +1,7 @@
 (load "src/prelude.valk")
 (load "src/modules/aio/sse.valk")
 
-(= {aio} (aio/start))
+(= {aio} (aio/await (aio/start)))
 
 (= {handler} (\ {req} {
   (= {stream} (sse/open req))

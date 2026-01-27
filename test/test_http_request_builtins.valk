@@ -4,9 +4,7 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(def {aio} (aio/start))
-
-(def {test-results} {})
+(def {aio} (aio/await (aio/start)))
 
 (def {method-handler}
   (\ {req} {
@@ -111,81 +109,42 @@
 (def {server} (http2/server-listen aio 0 router))
 (def {TEST_PORT} (http2/server-port server))
 
-(fun {make-test path expected-body done} {
-  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT path)
-    (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {(do
-          (= {body} (http2/response-body resp))
-          (done (== body expected-body)))})
-    }))
-})
-
 (test/run-async aio (list
-  (test-async "req/path returns request path" (\ {done} {
-  (make-test "/path" "/path" done)
+  (test-async "req/path returns request path" (\ {} {
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/path")
+    (\ {resp} {(if (error? resp) {false} {(== (http2/response-body resp) "/path")})}))
 }))
-  (test-async "req/headers returns headers list" (\ {done} {
+  (test-async "req/headers returns headers list" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/headers")
-    (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {(do
-          (= {body} (http2/response-body resp))
-          (= {count} (int body))
-          (done (> count 0)))})
-    }))
+    (\ {resp} {(if (error? resp) {false} {(> (int (http2/response-body resp)) 0)})}))
 }))
-  (test-async "req/header returns header value" (\ {done} {
+  (test-async "req/header returns header value" (\ {} {
   (aio/then (http2/client-request-with-headers aio "127.0.0.1" TEST_PORT "/header"
     {{"user-agent" "TestAgent/1.0"}})
-    (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {(do
-          (= {body} (http2/response-body resp))
-          (done (== body "TestAgent/1.0")))})
-    }))
+    (\ {resp} {(if (error? resp) {false} {(== (http2/response-body resp) "TestAgent/1.0")})}))
 }))
-  (test-async "req/header returns nil for missing header" (\ {done} {
-  (make-test "/header-missing" "header-missing" done)
+  (test-async "req/header returns nil for missing header" (\ {} {
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/header-missing")
+    (\ {resp} {(if (error? resp) {false} {(== (http2/response-body resp) "header-missing")})}))
 }))
-  (test-async "req/body returns nil for GET without body" (\ {done} {
-  (make-test "/body" "no-body" done)
+  (test-async "req/body returns nil for GET without body" (\ {} {
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/body")
+    (\ {resp} {(if (error? resp) {false} {(== (http2/response-body resp) "no-body")})}))
 }))
-  (test-async "req/stream-id returns stream id" (\ {done} {
+  (test-async "req/stream-id returns stream id" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/stream-id")
-    (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {(do
-          (= {body} (http2/response-body resp))
-          (= {sid} (int body))
-          (done (> sid 0)))})
-    }))
+    (\ {resp} {(if (error? resp) {false} {(> (int (http2/response-body resp)) 0)})}))
 }))
-  (test-async "req/authority returns authority" (\ {done} {
+  (test-async "req/authority returns authority" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/authority")
-    (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {(do
-          (= {body} (http2/response-body resp))
-          (done (!= body "")))})
-    }))
+    (\ {resp} {(if (error? resp) {false} {(!= (http2/response-body resp) "")})}))
 }))
-  (test-async "req/scheme returns scheme" (\ {done} {
+  (test-async "req/scheme returns scheme" (\ {} {
   (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/scheme")
-    (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {(do
-          (= {body} (http2/response-body resp))
-          (done (!= body "")))})
-    }))
+    (\ {resp} {(if (error? resp) {false} {(!= (http2/response-body resp) "")})}))
 }))
-  (test-async "all request builtins work together" (\ {done} {
-  (make-test "/all" "all-ok" done)
+  (test-async "all request builtins work together" (\ {} {
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/all")
+    (\ {resp} {(if (error? resp) {false} {(== (http2/response-body resp) "all-ok")})}))
 })))
   {:suite-name "HTTP Request Builtins Coverage"})

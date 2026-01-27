@@ -8,97 +8,96 @@ You must break it down into smaller subtasks.
 Run `ralph query` to see the task that needs decomposition.
 The `next.task` field shows:
 - `name`: The task that failed
+- `notes`: Original implementation guidance
 - `kill_reason`: Why it was killed ("timeout" or "context_limit")
 - `kill_log`: Path to the log from the failed iteration
 
-## Step 2: Review the Failed Iteration Log (if available)
+## Step 2: Review the Failed Iteration Log
 
-If `kill_log` is provided in the task, review it to understand what went wrong.
-
-**CRITICAL**: The log file may be HUGE (it killed the previous iteration's context!). 
-NEVER read the entire file. Always use head/tail:
+**CRITICAL**: Log may be HUGE. NEVER read entire file:
 
 ```bash
-# First check the size
 wc -l <kill_log_path>
-
-# Read ONLY the header (first 50 lines) - shows what task started
 head -50 <kill_log_path>
-
-# Read ONLY the tail (last 100 lines) - shows where it stopped  
 tail -100 <kill_log_path>
-
-# If you need to search for specific content
-grep -n -E "error|Error|ERROR|failed|FAILED" <kill_log_path> | head -20
 ```
 
-From this limited sample, determine:
-- What work was started but not completed
-- Where the iteration got stuck or ran out of context
-- Which files were being modified
-- Any partial progress that was made
-- **What output flooded the context** (e.g., sanitizer output, verbose test logs)
-  - This is important! Subtasks may need to suppress or redirect verbose output
+Determine: what was completed, what caused context explosion, partial progress.
 
-If no `kill_log` is provided, skip this step and proceed to analyze the task based on its description.
+## Step 3: Research the Breakdown
 
-## Step 3: Analyze the Task
-
-Use subagents to understand what the task requires:
+Use subagent to analyze:
 
 ```
-Task: "Analyze what's needed to implement: [task name]
+Task: "Analyze how to decompose: [task name]
+Original notes: [task notes]
 
-Research the codebase and report:
-1. Which files need to be modified
-2. What are the distinct pieces of work
-3. What order should they be done in
-4. Any dependencies between pieces"
+Return JSON:
+{
+  \"remaining_work\": [
+    {\"subtask\": \"<specific piece>\", \"files\": [{\"path\": \"file.py\", \"lines\": \"100-150\"}], \"effort\": \"small|medium\"}
+  ],
+  \"context_risks\": \"<what caused explosion>\",
+  \"mitigation\": \"<how subtasks avoid it>\"
+}"
 ```
 
-## Step 4: Create Subtasks
+## Step 4: Create Subtasks with Full Context
 
-Break the original task into 2-5 smaller tasks that:
-- Can each be completed in ONE iteration
-- Have clear, specific scope
-- Together accomplish the original task
-- Account for any partial progress from the failed iteration
+Each subtask MUST include:
 
-For each subtask, **include `parent` to link back to the original task**:
+1. **Source locations**: Exact file paths with line numbers
+2. **What to do**: Specific bounded action
+3. **How to do it**: Implementation approach
+4. **Context from parent**: What was learned
+5. **Risk mitigation**: How to avoid re-kill
+
+**Template:**
 ```
-ralph task add '{"name": "Specific subtask", "notes": "<DETAILED: file paths + approach, min 50 chars>", "accept": "<measurable: command + expected result>", "parent": "<original-task-id>"}'
+ralph task add '{"name": "Specific subtask", "notes": "Source: <file> lines <N-M>. <Action>. Imports: <list>. Context from parent: <findings>. Risk mitigation: <avoid context explosion by...>", "accept": "<measurable>", "parent": "<task-id>"}'
 ```
 
-**IMPORTANT**: 
-- `notes` MUST include specific file paths and implementation details (minimum 50 chars)
-- `accept` MUST be measurable - specify command to run and expected result
-- Example notes: "Modify src/foo.c lines 100-150: Extract bar() function to new file src/bar.c. Update includes."
-
-Use `deps` to specify order if needed.
-
-## Step 5: Remove the Original Task
-
-After adding all subtasks, delete the original oversized task:
+**Example:**
+```json
+{
+  "name": "Create fallback.py with DashboardState dataclass",
+  "notes": "Source: powerplant/ralph lines 4022-4045 (DashboardState only). Create ralph/tui/fallback.py with just dataclass. Imports: dataclass, field, Optional, deque. Risk mitigation: Don't extract full class yet - just dataclass.",
+  "accept": "python3 -c 'from ralph.tui.fallback import DashboardState' exits 0",
+  "parent": "t-original"
+}
 ```
-ralph task delete <task-id>
+
+## Step 5: Delete Original Task
+
+```
+ralph task delete <original-task-id>
 ```
 
 ## Step 6: Report
 
 ```
 [RALPH] === DECOMPOSE COMPLETE ===
-[RALPH] Original: <original task name>
+[RALPH] Original: <task name>
 [RALPH] Kill reason: <timeout|context_limit>
+[RALPH] Context risk: <what caused explosion>
+[RALPH] Mitigation: <how subtasks avoid it>
 [RALPH] Split into: N subtasks
 ```
 
-Then EXIT to let the build loop process the new subtasks.
+## Validation
+
+Subtasks are validated. REJECTED if:
+- Notes < 50 chars or missing source line numbers
+- Modification tasks without specific locations
+- Acceptance criteria is vague
 
 ## Rules
 
-- ALWAYS read the log file first to understand what happened
-- Each subtask should be completable in ONE iteration (< 100k tokens)
-- Be specific: "Add X to file Y" not "Implement feature Z"
-- `accept` MUST be measurable (vague criteria like "works correctly" will be REJECTED)
-- If a subtask is still too big, it will be killed and decomposed again
-- DO NOT try to implement anything - just create the task breakdown
+1. ALWAYS review kill log first (head/tail only!)
+2. Each subtask < 100k tokens - completable in ONE iteration
+3. Preserve context from parent task notes
+4. Include line numbers for every subtask
+5. Measurable acceptance criteria
+6. Include risk mitigation for each subtask
+7. Maximum decomposition depth: 3 levels
+8. DO NOT implement - just create task breakdown

@@ -16,7 +16,7 @@
 
 (load "src/http_api.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (def {server-handler}
   (\ {req} {
@@ -30,88 +30,58 @@
 (def {test-port} (http2/server-port server))
 
 (test/run-async aio (list
-  (test-async "http2/client-request returns async handle" (\ {aio} {
-    (= {h} (http2/client-request aio "127.0.0.1" test-port "/"))
-    (aio/then h (\ {resp} {
+  (test-async "http2/client-request returns response" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/") (\ {resp} {
       (and (not (error? resp)) (== (http2/response-status resp) "200"))
     }))
   }))
-  (test-async "http2/client-request body extraction" (\ {aio} {
-    (= {h} (http2/client-request aio "127.0.0.1" test-port "/"))
-    (aio/then h (\ {resp} {
+  (test-async "http2/client-request returns body" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/") (\ {resp} {
       (not (error? (http2/response-body resp)))
     }))
   }))
-  (test-async "http2/response-ok? returns true for 200" (\ {aio} {
-    (= {h} (http2/client-request aio "127.0.0.1" test-port "/"))
-    (aio/then h (\ {resp} {
-      (http2/response-ok? resp)
+  (test-async "http2/client-request status is 200 for good path" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/") (\ {resp} {
+      (== (http2/response-status resp) "200")
     }))
   }))
-  (test-async "http2/health-check returns true for healthy endpoint" (\ {aio} {
-    (= {h} (http2/client-request aio "127.0.0.1" test-port "/"))
-    (aio/then h (\ {resp} {
-      (http2/response-ok? resp)
+  (test-async "http2/client-request status is 500 for error path" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/error") (\ {resp} {
+      (== (http2/response-status resp) "500")
     }))
   }))
-  (test-async "http2/client-request with path works" (\ {aio} {
-    (= {h} (http2/client-request aio "127.0.0.1" test-port "/"))
-    (aio/then h (\ {resp} {
-      (not (error? resp))
-    }))
-  }))
-  (test-async "multiple requests complete" (\ {aio} {
-    (= {h1} (http2/client-request aio "127.0.0.1" test-port "/"))
-    (= {h2} (http2/client-request aio "127.0.0.1" test-port "/"))
-    (aio/then (aio/all (list h1 h2)) (\ {results} {
-      (== (len results) 2)
-    }))
-  }))
-  (test-async "aio/all collects multiple request results" (\ {aio} {
-    (= {handles} (list
-      (http2/client-request aio "127.0.0.1" test-port "/")
-      (http2/client-request aio "127.0.0.1" test-port "/")))
-    (aio/then (aio/all handles) (\ {results} {
-      (not (error? results))
-    }))
-  }))
-  (test-async "sequential requests work" (\ {aio} {
-    (= {h1} (http2/client-request aio "127.0.0.1" test-port "/"))
-    (aio/then h1 (\ {resp1} {
-      (= {h2} (http2/client-request aio "127.0.0.1" test-port "/"))
-      (aio/then h2 (\ {resp2} {
-        (and (not (error? resp1)) (not (error? resp2)))
+  (test-async "multiple sequential requests work" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/") (\ {resp1} {
+      (= {status1} (http2/response-status resp1))
+      (aio/then (http2/client-request aio "127.0.0.1" test-port "/") (\ {resp2} {
+        (and (== status1 "200")
+             (== (http2/response-status resp2) "200"))
       }))
     }))
   }))
-  (test-async "batch requests with aio/all" (\ {aio} {
+  (test-async "aio/all collects multiple request results" (\ {} {
     (= {handles} (list
       (http2/client-request aio "127.0.0.1" test-port "/")
       (http2/client-request aio "127.0.0.1" test-port "/")))
-    (aio/then (aio/all handles) (\ {results} {
-      (not (error? results))
+    (aio/then (aio/all handles) (\ {responses} {
+      (== (len responses) 2)
     }))
   }))
-  (test-async "aio/all-settled collects results" (\ {aio} {
-    (= {handles} (list
-      (http2/client-request aio "127.0.0.1" test-port "/")
-      (http2/client-request aio "127.0.0.1" test-port "/")))
-    (aio/then (aio/all-settled handles) (\ {results} {
-      (== (len results) 2)
+  (test-async "aio/retry with http2/client-request" (\ {} {
+    (aio/then (aio/retry aio (\ {} {(http2/client-request aio "127.0.0.1" test-port "/")}) {:max-attempts 2}) (\ {resp} {
+      (== (http2/response-status resp) "200")
     }))
   }))
-  (test-async "aggregate pattern works" (\ {aio} {
-    (= {handles} (list
-      (http2/client-request aio "127.0.0.1" test-port "/")
-      (http2/client-request aio "127.0.0.1" test-port "/")))
-    (aio/then (aio/all handles) (\ {results} {
-      (== (len results) 2)
+  (test-async "http2/response-ok? returns 1 for 200" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/") (\ {resp} {
+      (== (http2/response-ok? resp) 1)
     }))
   }))
-  (test-async "error response returns 500" (\ {aio} {
-    (= {h} (http2/client-request aio "127.0.0.1" test-port "/error"))
-    (aio/then h (\ {resp} {
-      (and (not (error? resp)) (== (http2/response-status resp) "500"))
+  (test-async "http2/response-ok? returns 0 for 500" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/error") (\ {resp} {
+      (== (http2/response-ok? resp) 0)
     }))
   })))
-  {:suite-name "HTTP API Network Tests"})
+  {:suite-name "HTTP API Network Tests"
+   :timeout-ms 2000
+   :suite-timeout-ms 30000})

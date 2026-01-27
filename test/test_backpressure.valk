@@ -10,17 +10,17 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(def {server-aio} (aio/start {
+(def {server-aio} (aio/await (aio/start {
   :max-connections 8
   :tcp-buffer-pool-size 48
   :backpressure-timeout-ms 60000
   :backpressure-list-max 10
-}))
+})))
 
-(def {client-aio} (aio/start {
+(def {client-aio} (aio/await (aio/start {
   :max-connections 16
   :tcp-buffer-pool-size 128
-}))
+})))
 
 (def {handler}
   (\ {req} {
@@ -30,52 +30,52 @@
 (def {server} (http2/server-listen server-aio 0 handler))
 (def {test-port} (http2/server-port server))
 
-(def {requests-completed} 0)
-(def {requests-started} 0)
-(def {errors} 0)
-(def {target} 14)
-(def {test-done-callback} nil)
-
-(fun {check-done} {
-  (if (>= (+ requests-completed errors) target)
-    {do
-      (aio/stop server-aio)
-      (test-done-callback (>= requests-completed 10))}
-    {true})
-})
-
-(fun {send-request} {
-  (def {requests-started} (+ requests-started 1))
-  (aio/then (http2/client-request client-aio "127.0.0.1" test-port "/")
-    (\ {resp} {
-      (if (error? resp)
-        {(def {errors} (+ errors 1))}
-        {(def {requests-completed} (+ requests-completed 1))})
-      (check-done)
-    }))
-})
-
 (test/run-async client-aio (list
-  (test-async "backpressure recovery with 14 requests" (\ {done} {
-  (def {test-done-callback} done)
-  
-  (aio/schedule client-aio 50 (\ {} {
-    (send-request) (send-request)
-    (send-request) (send-request)
-  }))
-  
-  (aio/schedule client-aio 80 (\ {} {
-    (send-request) (send-request)
-    (send-request) (send-request)
-  }))
-  
-  (aio/schedule client-aio 300 (\ {} {
-    (send-request) (send-request)
-    (send-request) (send-request)
-  }))
-  
-  (aio/schedule client-aio 600 (\ {} {
-    (send-request) (send-request)
-  }))
-})))
+  (test-async "backpressure recovery with 14 requests" (\ {} {
+    (= {request-handles} (list
+      (aio/then (aio/sleep client-aio 50) (\ {_} {
+        (list 
+          (http2/client-request client-aio "127.0.0.1" test-port "/")
+          (http2/client-request client-aio "127.0.0.1" test-port "/")
+          (http2/client-request client-aio "127.0.0.1" test-port "/")
+          (http2/client-request client-aio "127.0.0.1" test-port "/"))
+      }))
+      (aio/then (aio/sleep client-aio 80) (\ {_} {
+        (list
+          (http2/client-request client-aio "127.0.0.1" test-port "/")
+          (http2/client-request client-aio "127.0.0.1" test-port "/")
+          (http2/client-request client-aio "127.0.0.1" test-port "/")
+          (http2/client-request client-aio "127.0.0.1" test-port "/"))
+      }))
+      (aio/then (aio/sleep client-aio 300) (\ {_} {
+        (list
+          (http2/client-request client-aio "127.0.0.1" test-port "/")
+          (http2/client-request client-aio "127.0.0.1" test-port "/")
+          (http2/client-request client-aio "127.0.0.1" test-port "/")
+          (http2/client-request client-aio "127.0.0.1" test-port "/"))
+      }))
+      (aio/then (aio/sleep client-aio 600) (\ {_} {
+        (list
+          (http2/client-request client-aio "127.0.0.1" test-port "/")
+          (http2/client-request client-aio "127.0.0.1" test-port "/"))
+      }))))
+    
+    (aio/then (aio/all-settled request-handles) (\ {batch-results} {
+      (= {all-requests} (foldl (\ {acc batch} {
+        (if (plist/has? batch :value)
+          {(join acc (plist/get batch :value))}
+          {acc})
+      }) {} batch-results))
+      
+      (aio/then (aio/all-settled all-requests) (\ {results} {
+        (= {completed} (foldl (\ {count r} {
+          (if (and (plist/has? r :value) (not (error? (plist/get r :value))))
+            {(+ count 1)}
+            {count})
+        }) 0 results))
+        (aio/stop server-aio)
+        (>= completed 10)
+      }))
+    }))
+  })))
   {:suite-name "Backpressure Resume Test"})

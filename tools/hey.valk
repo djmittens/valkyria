@@ -18,7 +18,7 @@
 ; ============================================================================
 ; Implementation
 ; ============================================================================
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 ; Counters (using atoms for thread-safe updates)
 (def {completed} (atom 0))

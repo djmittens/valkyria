@@ -7,7 +7,7 @@
 (test/run (list
   (test "aio/never creates running handle that never completes"
   {do
-  (= {sys} (aio/start))
+  (= {sys} (aio/await (aio/start)))
   (def {h} (aio/never sys))
   (def {status} (aio/status h))
   (aio/stop sys)
@@ -16,7 +16,7 @@
 
   (test "aio/race with aio/never vs immediate value - immediate wins"
     {do
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (def {never-handle} (aio/never sys))
     (def {immediate-handle} (aio/pure 42))
     (def {race-result} (aio/race (list never-handle immediate-handle)))
@@ -26,7 +26,7 @@
 
   (test "aio/cancel on aio/never returns true"
     {do
-    (= {sys} (aio/start))
+    (= {sys} (aio/await (aio/start)))
     (def {h} (aio/never sys))
     (def {cancel-result} (aio/cancel h))
     (aio/stop sys)

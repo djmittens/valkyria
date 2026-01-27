@@ -1,6 +1,6 @@
 (load "src/prelude.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 (def {slow-handle} (aio/sleep aio 200))
 (def {timeout-handle} (aio/within slow-handle 50))
 

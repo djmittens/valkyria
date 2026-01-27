@@ -3,64 +3,55 @@
 
 (load "src/prelude.valk")
 
-(def {aio} (aio/start))
-(def {counter} (atom 0))
-(def {test-passed} (atom false))
+(def {aio} (aio/await (aio/start)))
 
 (println "=== Testing aio/interval Cancellation ===")
 
-; Create an interval that increments a counter every 20ms
+; Test 1: aio/interval returns a handle
 (def {interval-handle} (aio/interval aio 20 (\ {} {
-  (atom/add! counter 1)
   nil
 })))
 
-; Verify interval returns a handle
 (if (handle? interval-handle)
-  (println "✓ aio/interval returns a handle")
+  (println "  aio/interval returns a handle")
   (do
-    (println "✗ aio/interval did not return a handle")
+    (println "  FAIL: aio/interval did not return a handle")
     (aio/stop aio)
     (exit 1)))
 
-; Let it run for a bit then cancel
-(aio/schedule aio 100 (\ {} {
-  (= {count1} (atom/get counter))
-  (print "Counter before cancel:" count1)
+; Let the interval run for a bit then test cancellation via aio/then + aio/sleep
+(aio/then (aio/sleep aio 100) (\ {_} {
+  ; Test 2: Cancel the interval
+  (= {cancel-result} (aio/cancel interval-handle))
+  (if (== cancel-result (quote :true))
+    (println "  aio/cancel returned :true")
+    (do
+      (println "  FAIL: aio/cancel did not return :true")
+      (aio/stop aio)
+      (exit 1)))
   
-  ; Should have some ticks by now
-  (if (> count1 0)
+  ; Test 3: Check if cancelled
+  (= {is-cancelled} (aio/cancelled? interval-handle))
+  (if (== is-cancelled (quote :true))
+    (println "  Interval handle is marked as cancelled")
     (do
-      (println "✓ Interval is working")
-      
-      ; Cancel the interval
-      (= {cancel-result} (aio/cancel interval-handle))
-      (if (= cancel-result :true)
-        (do
-          (println "✓ aio/cancel returned :true")
-          
-          ; Check if cancelled
-          (= {is-cancelled} (aio/cancelled? interval-handle))
-          (if (= is-cancelled :true)
-            (do
-              (println "✓ Interval handle is marked as cancelled")
-              (atom/set! test-passed true)
-              (aio/stop aio))
-            (do
-              (println "✗ Interval handle not marked as cancelled")
-              (aio/stop aio))))
-        (do
-          (println "✗ aio/cancel failed")
-          (aio/stop aio))))
+      (println "  FAIL: Interval handle not marked as cancelled")
+      (aio/stop aio)
+      (exit 1)))
+  
+  ; Test 4: Verify status is cancelled
+  (= {status} (aio/status interval-handle))
+  (if (== status (quote :cancelled))
+    (println "  Interval status is :cancelled")
     (do
-      (println "✗ Interval not working")
-      (aio/stop aio)))
+      (print "  FAIL: Interval status is not :cancelled, got:" status)
+      (aio/stop aio)
+      (exit 1)))
+  
+  ; All tests passed
+  (println "  All tests passed!")
+  (aio/stop aio)
 }))
 
 (aio/run aio)
-
-(if (atom/get test-passed)
-  (do
-    (println "✓ All tests passed!")
-    (exit 0))
-  (exit 1))
+(exit 0)

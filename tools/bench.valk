@@ -49,7 +49,7 @@
 ; ============================================================================
 ; AIO Setup
 ; ============================================================================
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 (def {start-time} (atom 0))
 
 ; Store client connection (will be set after connect)

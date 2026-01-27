@@ -4,7 +4,7 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 (def {received-headers} nil)
 
 (def {handler}
@@ -18,13 +18,13 @@
 (def {test-port} (http2/server-port server))
 
 (test/run-async aio (list
-  (test-async "custom headers are received by server" (\ {done} {
-  (aio/then (http2/client-request-with-headers aio "127.0.0.1" test-port "/test" 
-    {{"x-custom-header" "test-value"} {"user-agent" "TestClient/1.0"}})
-    (\ {resp} {
-      (if (error? resp)
-        {(done false)}
-        {(done (== (http2/response-status resp) "200"))})
-    }))
-})))
+  (test-async "custom headers are received by server" (\ {} {
+    (aio/then (http2/client-request-with-headers aio "127.0.0.1" test-port "/test" 
+      {{"x-custom-header" "test-value"} {"user-agent" "TestClient/1.0"}})
+      (\ {resp} {
+        (if (error? resp)
+          {false}
+          {(== (http2/response-status resp) "200")})
+      }))
+  })))
   {:suite-name "Client Headers Tests"})

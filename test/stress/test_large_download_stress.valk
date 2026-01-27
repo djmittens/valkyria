@@ -23,7 +23,7 @@
 (printf "  5MB:  %d bytes\n" (len str-5mb))
 (println "")
 
-(def {aio} (aio/start))
+(def {aio} (aio/await (aio/start)))
 
 (def {server-handler}
   (\ {req} {

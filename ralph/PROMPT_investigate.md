@@ -1,105 +1,87 @@
 # INVESTIGATE Stage
 
-Issues were discovered during build. Research and resolve ALL of them in parallel.
+Issues were discovered during build or verification. Research and resolve ALL of them in parallel.
 
 ## Step 1: Get All Issues
 
 Run `ralph query issues` to see all pending issues.
 
-## Step 2: Parallel Investigation
+## Step 2: Parallel Investigation with Structured Output
 
-Use the Task tool to investigate ALL issues in parallel. Launch one subagent per issue:
+Use the Task tool to investigate ALL issues in parallel. Each subagent MUST return structured findings:
 
 ```
-For each issue, launch a Task with prompt:
-"Investigate this issue: <issue description>
-Issue priority: <issue priority or 'medium' if not set>
+Task: "Investigate this issue: <issue description>
+Issue ID: <id>
+Issue priority: <priority or 'medium'>
 
-1. Read relevant code to understand the problem
-2. Determine root cause
-3. Decide resolution:
-   - If fix is non-trivial: describe the fix task needed
-   - If fix is trivial: describe the simple fix
-   - If out of scope: explain why
-
-Return a JSON object:
+Analyze the codebase and return a JSON object:
 {
   \"issue_id\": \"<id>\",
-  \"root_cause\": \"<what you found>\",
+  \"root_cause\": \"<specific file:line reference>\",
   \"resolution\": \"task\" | \"trivial\" | \"out_of_scope\",
-  \"task\": {  // only if resolution is \"task\"
-    \"name\": \"<fix description>\",
-    \"notes\": \"<DETAILED: specific file paths, functions, and implementation approach - min 50 chars>\",
-    \"accept\": \"<MEASURABLE: command + expected result, e.g. 'make test passes' or 'grep X file returns 1'>\",
-    \"priority\": \"<inherit from issue priority above>\"
-  },
-  \"trivial_fix\": \"<description>\"  // only if resolution is \"trivial\"
-}
-"
+  \"task\": {
+    \"name\": \"<specific fix>\",
+    \"notes\": \"Root cause: <file:line>. Fix: <approach>. Imports: <needed>. Risk: <side effects>.\",
+    \"accept\": \"<measurable command + expected result>\",
+    \"priority\": \"<from issue>\",
+    \"research\": {\"files_analyzed\": [\"path:lines\"], \"root_cause_location\": \"file:line\"}
+  }
+}"
 ```
 
-## Step 3: Collect Results and Apply
+## Step 3: Create Tasks with Full Context
 
-After all subagents complete:
+After subagents complete, create tasks preserving research:
 
-1. Add all tasks in batch (include `created_from` to link back to issue, and `priority` from originating issue):
 ```
-ralph task add '{"name": "...", "notes": "...", "accept": "<measurable: command + expected result>", "created_from": "i-xxxx", "priority": "high|medium|low"}'
-ralph task add '{"name": "...", "notes": "...", "accept": "<measurable: command + expected result>", "created_from": "i-yyyy", "priority": "high|medium|low"}'
-...
+ralph task add '{"name": "Fix: <desc>", "notes": "Root cause: <file:line>. Fix: <approach>. Pattern: <similar code>. Risk: <effects>.", "accept": "<measurable>", "created_from": "<issue-id>", "priority": "<from issue>", "research": {"files_analyzed": ["path:lines"], "root_cause_location": "file:line"}}'
 ```
 
-2. Clear all issues in one command:
+### Task Notes Template for Issues
+
+```
+Root cause: <file:line - specific problem>. 
+Current behavior: <what happens>. Expected: <what should happen>. 
+Fix approach: <how to fix>. Similar pattern: <existing code ref>. 
+Imports needed: <any>. Risk: <side effects>.
+```
+
+## Step 4: Clear Issues
+
 ```
 ralph issue done-all
 ```
 
-Or if only clearing specific issues:
-```
-ralph issue done-ids i-abc1 i-def2 i-ghi3
-```
-
-## Step 4: Report Summary
+## Step 5: Report
 
 ```
 [RALPH] === INVESTIGATE COMPLETE ===
 [RALPH] Processed: N issues
-[RALPH] Tasks created: X
-[RALPH] Trivial fixes: Y
-[RALPH] Out of scope: Z
+[RALPH] Tasks created: X (with full context)
 ```
 
 ## Handling Auto-Generated Pattern Issues
 
-Issues starting with "REPEATED REJECTION" or "COMMON FAILURE PATTERN" are auto-generated from rejection analysis.
-These require special handling:
+**REPEATED REJECTION issues:** Same task failed 3+ times
+- Create HIGH PRIORITY blocking task addressing root cause
+- Notes MUST include: which task fails, rejection pattern, how new task unblocks it
 
-**For REPEATED REJECTION issues:**
-1. The same task has failed 3+ times with similar errors
-2. Read the spec and task to understand what's expected
-3. Compare with rejection reasons to find the gap
-4. Usually indicates: missing prerequisite, wrong approach, or spec ambiguity
-5. Create a HIGH PRIORITY blocking task that addresses the root cause
-6. Consider if the failing task's `deps` should include the new task
+**COMMON FAILURE PATTERN issues:** Multiple tasks fail same way
+- Create single HIGH PRIORITY task fixing root cause
+- Notes MUST include: error pattern, affected tasks, fix approach
 
-**For COMMON FAILURE PATTERN issues:**
-1. Multiple different tasks fail with the same error type
-2. This strongly indicates a missing prerequisite that all tasks need
-3. Read the spec section about the failing functionality
-4. The error message tells you what's missing (e.g., "argument count mismatch" = API changed)
-5. Create a single HIGH PRIORITY task to fix the root cause
-6. Mark existing failing tasks as depending on this new task using `ralph task add '{"deps": [...]}'`
+## Validation
 
-**Example:**
-If multiple tasks fail with "grep returns 0, expected 1" and they all involve `aio/then`, likely:
-- The API wasn't changed to return handles yet
-- A prerequisite C implementation task is missing
-- Create: `ralph task add '{"name": "Refactor X to return handle", "priority": "high", "notes": "..."}'`
+Tasks from issues are validated. REJECTED if:
+- Notes < 50 chars or missing root cause location
+- Acceptance criteria is vague
+- Missing file:line references
 
-## IMPORTANT
+## Rules
 
-- Launch ALL investigations in parallel using multiple Task tool calls in a single message
-- Wait for all results before applying any changes
-- Do NOT make code changes during investigation - only create tasks
-- Use `ralph issue done-all` to clear all issues at once
-- EXIT after all issues are resolved
+- Launch ALL investigations in parallel
+- Preserve research in notes with file:line references
+- Measurable acceptance for every task
+- Use `created_from` to link to source issue
+- EXIT after all issues resolved

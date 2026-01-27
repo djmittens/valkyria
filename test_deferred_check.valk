@@ -1,1 +1,1 @@
-(def {aio} (aio/start)) (aio/deferred aio)
+(def {aio} (aio/await (aio/start))) (aio/deferred aio)
