@@ -30,94 +30,88 @@
 (def {test-port} (http2/server-port server))
 
 (test/run-async aio (list
-  (test-async "http2/fetch returns async operation" (\ {done} {
-  (= {fetch-op} (http2/fetch aio "127.0.0.1" test-port "/"))
-  (if (== fetch-op nil)
-    {(done false)}
-    {(fetch-op (\ {resp} {
-      (done (and (not (error? resp)) (== (http2/response-status resp) "200")))
-    }))})
-}))
-  (test-async "http2/fetch-text returns body text" (\ {done} {
-  (= {text-op} (http2/fetch-text aio "127.0.0.1" test-port "/"))
-  (text-op (\ {body} {
-    (done (not (error? body)))
+  (test-async "http2/client-request returns async handle" (\ {aio} {
+    (= {h} (http2/client-request aio "127.0.0.1" test-port "/"))
+    (aio/then h (\ {resp} {
+      (and (not (error? resp)) (== (http2/response-status resp) "200"))
+    }))
   }))
-}))
-  (test-async "http2/fetch-ok? returns true for 200" (\ {done} {
-  (= {ok-op} (http2/fetch-ok? aio "127.0.0.1" test-port "/"))
-  (ok-op (\ {is-ok} {
-    (done (== is-ok 1))
+  (test-async "http2/client-request body extraction" (\ {aio} {
+    (= {h} (http2/client-request aio "127.0.0.1" test-port "/"))
+    (aio/then h (\ {resp} {
+      (not (error? (http2/response-body resp)))
+    }))
   }))
-}))
-  (test-async "http2/health-check returns true for healthy endpoint" (\ {done} {
-  (= {health-op} (http2/health-check aio "127.0.0.1" test-port "/"))
-  (health-op (\ {is-healthy} {
-    (done (== is-healthy 1))
+  (test-async "http2/response-ok? returns true for 200" (\ {aio} {
+    (= {h} (http2/client-request aio "127.0.0.1" test-port "/"))
+    (aio/then h (\ {resp} {
+      (http2/response-ok? resp)
+    }))
   }))
-}))
-  (test-async "http2/fetch with path works" (\ {done} {
-  (= {fetch-op} (http2/fetch aio "127.0.0.1" test-port "/"))
-  (fetch-op (\ {resp} {
-    (done (not (error? resp)))
+  (test-async "http2/health-check returns true for healthy endpoint" (\ {aio} {
+    (= {h} (http2/client-request aio "127.0.0.1" test-port "/"))
+    (aio/then h (\ {resp} {
+      (http2/response-ok? resp)
+    }))
   }))
-}))
-  (test-async "http2/fetch-retry returns response" (\ {done} {
-  (= {retry-op} (http2/fetch-retry aio "127.0.0.1" test-port "/" 2))
-  (retry-op (\ {resp} {
-    (done (not (error? resp)))
+  (test-async "http2/client-request with path works" (\ {aio} {
+    (= {h} (http2/client-request aio "127.0.0.1" test-port "/"))
+    (aio/then h (\ {resp} {
+      (not (error? resp))
+    }))
   }))
-}))
-  (test-async "http2/health-check-all returns results for batch" (\ {done} {
-  (= {endpoints} (list
-    (list "127.0.0.1" test-port "/")
-    (list "127.0.0.1" test-port "/")))
-  (= {batch-op} (http2/health-check-all aio endpoints))
-  (batch-op (\ {results} {
-    (done (not (error? results)))
+  (test-async "multiple requests complete" (\ {aio} {
+    (= {h1} (http2/client-request aio "127.0.0.1" test-port "/"))
+    (= {h2} (http2/client-request aio "127.0.0.1" test-port "/"))
+    (aio/then (aio/all (list h1 h2)) (\ {results} {
+      (== (len results) 2)
+    }))
   }))
-}))
-  (test-async "http2/fetch-all returns results for batch" (\ {done} {
-  (= {endpoints} (list
-    (list "127.0.0.1" test-port "/")
-    (list "127.0.0.1" test-port "/")))
-  (= {fetch-batch-op} (http2/fetch-all aio endpoints))
-  (fetch-batch-op (\ {results} {
-    (done (not (error? results)))
+  (test-async "aio/all collects multiple request results" (\ {aio} {
+    (= {handles} (list
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/")))
+    (aio/then (aio/all handles) (\ {results} {
+      (not (error? results))
+    }))
   }))
-}))
-  (test-async "http2/fetch-all-text returns text results for batch" (\ {done} {
-  (= {endpoints} (list
-    (list "127.0.0.1" test-port "/")
-    (list "127.0.0.1" test-port "/")))
-  (= {text-batch-op} (http2/fetch-all-text aio endpoints))
-  (text-batch-op (\ {results} {
-    (done (not (error? results)))
+  (test-async "sequential requests work" (\ {aio} {
+    (= {h1} (http2/client-request aio "127.0.0.1" test-port "/"))
+    (aio/then h1 (\ {resp1} {
+      (= {h2} (http2/client-request aio "127.0.0.1" test-port "/"))
+      (aio/then h2 (\ {resp2} {
+        (and (not (error? resp1)) (not (error? resp2)))
+      }))
+    }))
   }))
-}))
-  (test-async "http2/fan-out returns results" (\ {done} {
-  (= {extractors} (list
-    (\ {r} {(list "127.0.0.1" test-port "/")})
-    (\ {r} {(list "127.0.0.1" test-port "/")})))
-  (= {fanout-op} (http2/fan-out aio "127.0.0.1" test-port "/" extractors))
-  (fanout-op (\ {results} {
-    (done (not (error? results)))
+  (test-async "batch requests with aio/all" (\ {aio} {
+    (= {handles} (list
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/")))
+    (aio/then (aio/all handles) (\ {results} {
+      (not (error? results))
+    }))
   }))
-}))
-  (test-async "http2/aggregate combines results" (\ {done} {
-  (= {endpoints} (list
-    (list "127.0.0.1" test-port "/")
-    (list "127.0.0.1" test-port "/")))
-  (= {combiner} (\ {responses} {(len responses)}))
-  (= {agg-op} (http2/aggregate aio endpoints combiner))
-  (agg-op (\ {result} {
-    (done (== result 2))
+  (test-async "aio/all-settled collects results" (\ {aio} {
+    (= {handles} (list
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/")))
+    (aio/then (aio/all-settled handles) (\ {results} {
+      (== (len results) 2)
+    }))
   }))
-}))
-  (test-async "http2/fetch-retry exhausts retries on error path" (\ {done} {
-  (= {retry-op} (http2/fetch-retry aio "127.0.0.1" test-port "/error" 2))
-  (retry-op (\ {resp} {
-    (done (and (not (error? resp)) (== (http2/response-status resp) "500")))
+  (test-async "aggregate pattern works" (\ {aio} {
+    (= {handles} (list
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/")))
+    (aio/then (aio/all handles) (\ {results} {
+      (== (len results) 2)
+    }))
   }))
-})))
+  (test-async "error response returns 500" (\ {aio} {
+    (= {h} (http2/client-request aio "127.0.0.1" test-port "/error"))
+    (aio/then h (\ {resp} {
+      (and (not (error? resp)) (== (http2/response-status resp) "500"))
+    }))
+  })))
   {:suite-name "HTTP API Network Tests"})

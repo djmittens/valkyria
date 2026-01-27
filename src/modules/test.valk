@@ -393,40 +393,22 @@
     (= {test-body} (eval (head (tail test))))
     (= {start-time} (time-us {}))
     
-    ; Create a handle that will track completion via interval polling
-    ; The test function will modify a closure variable to signal completion
-    (= {test-completed} 0)
-    (= {test-result} :pending)
+    ; Test body receives aio and returns a handle that resolves to true/false
+    ; This avoids the closure capture-by-value problem with done callbacks
+    (= {result-handle} (test-body aio))
     
-    ; Set up the done function that the test will call
-    (= {done-fn} (\ {passed} {
-      do
-        (= {end-time} (time-us {}))
-        (= {elapsed} (- end-time start-time))
-        (= {status} (if passed {:pass} {:fail}))
-        (= {test-result} {:status status :name test-name :elapsed elapsed})
-        (= {test-completed} 1)
-    }))
+    ; Apply timeout and convert result to test result format
+    (= {timeout-handle} (aio/then (aio/sleep aio timeout-ms) (\ {_} {:timeout})))
+    (= {timed-result} (aio/race (list result-handle timeout-handle)))
     
-    ; Start the test asynchronously
-    (aio/schedule aio 0 (\ {} {
-      (test-body done-fn)
-    }))
-    
-    ; Create a polling handle that waits for the test to complete
-    (= {poll-fn} (\ {} {
-      (if (== test-completed 1)
-        {test-result}
-        {(aio/then (aio/sleep aio 10) (\ {_} {(poll-fn)}))})}))
-    (= {poll-handle} (poll-fn))
-    
-    ; Apply timeout using aio/within and handle timeout error
-    (aio/catch (aio/within poll-handle timeout-ms)
-               (\ {err} {
-                 (= {end-time} (time-us {}))
-                 (= {elapsed} (- end-time start-time))
-                 {:status :timeout :name test-name :elapsed elapsed}
-               }))
+    (aio/then timed-result (\ {result} {
+      (= {end-time} (time-us {}))
+      (= {elapsed} (- end-time start-time))
+      (if (== result :timeout)
+        {:status :timeout :name test-name :elapsed elapsed}
+        {(if result
+          {:status :pass :name test-name :elapsed elapsed}
+          {:status :fail :name test-name :elapsed elapsed})})}))
 })
 
 (fun {*test-async-parse-args* args} {
