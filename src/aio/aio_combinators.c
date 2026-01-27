@@ -1055,9 +1055,8 @@ static void valk_async_propagate_single(void *ctx) {
             } else if (inner_status == VALK_ASYNC_CANCELLED) {
               atomic_store_explicit(&child->status, VALK_ASYNC_CANCELLED, memory_order_release);
             } else {
-              valk_async_handle_add_child(inner, child);
-              child->parent = inner;
               child->on_complete = NULL;
+              valk_async_handle_add_child(inner, child);
               valk_async_done_fn child_on_done = atomic_load_explicit(&child->on_done, memory_order_acquire);
               valk_async_done_fn inner_on_done = atomic_load_explicit(&inner->on_done, memory_order_acquire);
               if (child_on_done && !inner_on_done) {
@@ -1570,8 +1569,6 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
       wrapper->on_complete = valk_evacuate_to_heap(valk_lval_lambda(e,
         valk_lval_qcons(valk_lval_sym("x"), valk_lval_nil()),
         valk_lval_sym("x")));
-      wrapper->parent = handle;
-      valk_async_handle_add_child(handle, wrapper);
       handles[i] = wrapper;
       valk_chunked_ptrs_push(&all_handle->children, wrapper, all_handle->region);
 
@@ -1582,6 +1579,7 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
         atomic_store_explicit(&wrapper->on_done, valk_all_wrapper_on_done, memory_order_release);
         atomic_store_explicit(&wrapper->on_done_ctx, wrapper_ctx, memory_order_relaxed);
       }
+      valk_async_handle_add_child(handle, wrapper);
     } else {
       handles[i] = handle;
       valk_async_handle_add_child(all_handle, handle);

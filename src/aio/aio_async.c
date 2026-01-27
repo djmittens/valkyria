@@ -405,6 +405,21 @@ void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_handle_
     child->request_ctx = parent->request_ctx;
   }
   valk_chunked_ptrs_push(&parent->children, child, parent->region);
+  
+  valk_async_status_t parent_status = valk_async_handle_get_status(parent);
+  if (valk_async_handle_is_terminal(parent_status)) {
+    valk_async_propagate_completion(parent);
+  }
+  
+  valk_async_status_t child_status = valk_async_handle_get_status(child);
+  if (valk_async_handle_is_terminal(child_status)) {
+    valk_async_notify_all_parent(child);
+    valk_async_notify_race_parent(child);
+    valk_async_notify_any_parent(child);
+    valk_async_notify_all_settled_parent(child);
+    valk_async_notify_within_parent(child);
+    valk_async_notify_retry_parent(child);
+  }
 }
 
 static void valk_async_propagate_context_impl(valk_async_handle_t *handle, valk_region_t *region, valk_lenv_t *env, valk_request_ctx_t *request_ctx, valk_aio_system_t *expected_sys) {
