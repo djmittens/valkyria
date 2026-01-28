@@ -66,6 +66,27 @@ struct valk_async_handle_t {
 
   valk_async_cleanup_fn cleanup_fn;
   void *cleanup_ctx;
+
+  valk_async_on_child_fn on_child_completed;
+  valk_async_on_child_fn on_child_failed;
+
+  union {
+    struct {
+      struct valk_lval_t **results;
+      u64 completed;
+    } all;
+    struct {
+      u64 failed_count;
+      struct valk_lval_t *last_error;
+    } any;
+    struct {
+      struct valk_lval_t *fn;
+      u64 max_attempts;
+      u64 current_attempt;
+      u64 base_delay_ms;
+      f64 backoff_multiplier;
+    } retry;
+  } combinator;
 };
 
 valk_async_handle_t *valk_async_handle_new(struct valk_aio_system *sys, struct valk_lenv_t *env);
