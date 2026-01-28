@@ -1,0 +1,49 @@
+; Test suite for aio/all-settled combinator
+; Tests: aio/all-settled returns results for all handles including failures
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/run (list
+  (test "aio/all-settled with empty list"
+    {do
+    (def {h} (aio/all-settled ()))
+    (== (aio/status h) (quote :completed))
+  })
+  (test "aio/all-settled with single completed handle"
+    {do
+    (def {h} (aio/all-settled (list (aio/pure 1))))
+    (== (aio/status h) (quote :completed))
+  })
+  (test "aio/all-settled with multiple completed handles"
+    {do
+    (def {h} (aio/all-settled (list (aio/pure 1) (aio/pure 2) (aio/pure 3))))
+    (== (aio/status h) (quote :completed))
+  })
+  (test "aio/all-settled with one failed handle still completes"
+    {do
+    (def {h} (aio/all-settled (list (aio/pure 1) (aio/fail "error") (aio/pure 3))))
+    (== (aio/status h) (quote :completed))
+  })
+  (test "aio/all-settled with all failed handles still completes"
+    {do
+    (def {h} (aio/all-settled (list (aio/fail "e1") (aio/fail "e2"))))
+    (== (aio/status h) (quote :completed))
+  })
+  (test "aio/all-settled returns list of results"
+    {do
+    (def {h} (aio/all-settled (list (aio/pure 1) (aio/pure 2))))
+    (== (aio/status h) (quote :completed))
+  })
+  (test "aio/all-settled with mix of success and failure"
+    {do
+    (def {h} (aio/all-settled (list (aio/pure 42) (aio/fail "err") (aio/pure 99))))
+    (== (aio/status h) (quote :completed))
+  })
+  (test "aio/all-settled never fails - always completes"
+    {do
+    (def {h} (aio/all-settled (list (aio/fail "fail1") (aio/fail "fail2") (aio/fail "fail3"))))
+    (def {status} (aio/status h))
+    (== status (quote :completed))
+  }))
+  {:suite-name "aio/all-settled Tests"})

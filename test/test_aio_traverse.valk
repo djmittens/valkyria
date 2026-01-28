@@ -1,0 +1,21 @@
+;; Test aio/traverse combinator
+
+;; Basic test: traverse a list with identity function
+(= {result} (aio/traverse '(1 2 3) (\ {x} {(aio/pure x)})))
+(if (== result ())
+  {(print "ERROR: aio/traverse returned nil")}
+  {(print "OK: aio/traverse returns handle")})
+
+;; Test with more complex transformation
+(= {increment_result} (aio/traverse '(1 2 3) (\ {x} {(aio/pure (+ x 1))})))
+(if (== increment_result ())
+  {(print "ERROR: aio/traverse increment test failed")}
+  {(print "OK: aio/traverse increment test returned handle")})
+
+;; Test with empty list
+(= {empty_result} (aio/traverse () (\ {x} {(aio/pure x)})))
+(if (== empty_result ())
+  {(print "ERROR: aio/traverse empty list test failed")}
+  {(print "OK: aio/traverse empty list test returned handle")})
+
+(print "aio/traverse tests completed")

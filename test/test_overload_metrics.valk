@@ -1,0 +1,52 @@
+; Test: Metrics Verification for Overload
+; Run with: ./build/valk test/test_overload_metrics.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Test: metrics/prometheus output is valid string
+
+; Test: metrics/json output is valid string
+
+; Test: aio/start creates valid system
+
+; Test: aio/metrics-prometheus works with aio system
+
+; Test: aio/metrics-json works with aio system
+
+(test/run (list
+  (test "metrics/prometheus returns valid output"
+    {do
+    (= {result} (metrics/prometheus))
+    (test/assert (string? result) "metrics/prometheus should return a string")
+    true
+  })
+  (test "metrics/json returns valid output"
+    {do
+    (= {result} (metrics/json))
+    (test/assert (string? result) "metrics/json should return a string")
+    (test/assert (> (len result) 0) "metrics/json should return non-empty string")
+    true
+  })
+  (test "aio/start creates valid system"
+    {do
+    (= {aio} (aio/await (aio/start)))
+    (test/assert (!= aio nil) "aio/start should return a system")
+    true
+  })
+  (test "aio/metrics-prometheus returns valid output"
+    {do
+    (= {aio} (aio/await (aio/start)))
+    (= {result} (aio/metrics-prometheus aio))
+    (test/assert (string? result) "aio/metrics-prometheus should return a string")
+    true
+  })
+  (test "aio/metrics-json returns valid output"
+    {do
+    (= {aio} (aio/await (aio/start)))
+    (= {result} (aio/metrics-json aio))
+    (test/assert (string? result) "aio/metrics-json should return a string")
+    (test/assert (> (len result) 0) "aio/metrics-json should return non-empty string")
+    true
+  }))
+  {:suite-name "Overload Metrics Tests"})

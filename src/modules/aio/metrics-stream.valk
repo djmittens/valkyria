@@ -1,0 +1,86 @@
+; src/modules/aio/metrics-stream.valk
+; Metrics streaming utilities for real-time monitoring
+; Load with: (load "src/modules/aio/metrics-stream.valk")
+;
+; This module provides utilities for metrics streaming. The actual SSE
+; streaming is handled by the C-level SSE registry system for efficiency.
+;
+; Available functions:
+;   - metrics/snapshot-json  - Get current metrics state as JSON
+;   - metrics/delta-snapshot - Collect and return a metrics delta as JSON
+;
+; For SSE streaming of diagnostics, use the built-in :sse-handler :memory-diagnostics
+; pattern in debug.valk which uses the C-level timer and SSE infrastructure.
+
+; Get the current metrics state as a JSON string
+; Usage: (metrics/snapshot-json)
+; Returns: JSON string with full metrics state
+;
+; This is a convenience wrapper around (metrics/json) that provides
+; a semantic name for the operation.
+;
+; Example:
+;   (def {state} (metrics/snapshot-json))
+;   ; Returns: {"uptime_seconds":123.45,"counters":[...],...}
+(fun {metrics/snapshot-json}
+  {metrics/json})
+
+; Collect a metrics delta and return it as JSON
+; Usage: (metrics/delta-snapshot)
+; Returns: JSON string with metrics that changed since last collection
+;
+; This collects a delta from the metrics registry and encodes it to JSON.
+; The delta includes only metrics that changed since the previous call.
+;
+; Example:
+;   (def {delta-json} (metrics/delta-snapshot))
+;   ; Returns: {"ts":...,"changed":3,"deltas":[...],...}
+(fun {metrics/delta-snapshot}
+  {
+    (= {delta} (metrics/collect-delta))
+    (metrics/delta-json delta)
+  })
+
+; Create a response map for /debug/diagnostics/memory SSE endpoint
+; Usage: (diagnostics/sse-response)
+; Returns: Response map that triggers SSE diagnostics streaming
+;
+; This returns the response map needed to trigger the C-level SSE
+; diagnostics streaming system, which handles the timer-based updates
+; efficiently without requiring Lisp-level interval support.
+;
+; The C-level system streams combined memory and metrics diagnostics
+; at 10Hz (100ms interval) for real-time dashboard updates.
+;
+; Example:
+;   (match path
+;     "/debug/diagnostics/memory" (diagnostics/sse-response)
+;     ...)
+(fun {diagnostics/sse-response}
+  {`{:status "200"
+     :content-type "text/event-stream; charset=utf-8"
+     :cache-control "no-cache"
+     :connection "keep-alive"
+     :body-type :sse-stream
+     :sse-handler :memory-diagnostics}})
+
+; Create a one-shot metrics SSE endpoint
+; Usage: (metrics/single-shot-handler req)
+; Returns: Response with current metrics state sent as SSE event
+;
+; This handler opens an SSE stream, sends the current metrics state
+; as a single event, and returns. The stream stays open for the client
+; to receive the event, but no further updates are sent.
+;
+; For continuous metrics streaming, use the C-level diagnostics system.
+;
+; Example:
+;   (match path
+;     "/metrics/snapshot" (metrics/single-shot-handler req)
+;     ...)
+(fun {metrics/single-shot-handler req ctx}
+  {
+    (= {stream} (sse/open ctx))
+    (sse/send stream "metrics" (metrics/json))
+    :deferred
+  })

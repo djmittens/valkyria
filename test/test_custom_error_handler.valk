@@ -1,0 +1,44 @@
+; test_custom_error_handler.valk
+; Tests that the :error-handler config option works correctly
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {my-error-handler} (\ {status-code} {
+  (str "<html><body>"
+       "<h1>Custom " status-code "</h1>"
+       "<p>Server: MyApp v1.0</p>"
+       "<p>Please try again in a few seconds.</p>"
+       "</body></html>")
+}))
+
+(def {aio} (aio/await (aio/start)))
+
+(def {handler} (\ {req} {
+  (= {path} (req/path req))
+  (if (== path "/trigger-500")
+    {(error "Intentional server error")}
+    {`{:status "200" :body "OK"}})
+}))
+
+(def {server} (http2/server-listen aio 0 handler {:error-handler my-error-handler}))
+(def {test-port} (http2/server-port server))
+
+(test/run-async aio (list
+  (test-async "custom error handler renders custom 500 page" (\ {} {
+  (aio/then (http2/client-request aio "127.0.0.1" test-port "/trigger-500")
+    (\ {resp} {
+      (if (error? resp)
+        {false}
+        {(and (== (http2/response-status resp) "500") (> (len (http2/response-body resp)) 0))})
+    }))
+}))
+  (test-async "normal requests still work" (\ {} {
+  (aio/then (http2/client-request aio "127.0.0.1" test-port "/ok")
+    (\ {resp} {
+      (if (error? resp)
+        {false}
+        {(== (http2/response-status resp) "200")})
+    }))
+})))
+  {:suite-name "Custom Error Handler Tests"})

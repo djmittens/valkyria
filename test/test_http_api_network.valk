@@ -1,0 +1,87 @@
+; HTTP API Network Integration Tests
+; Tests http_api.valk functions that require real network connections
+; Starts a local server and tests the high-level fetch functions
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(fun {reverse l} {
+  (= {reverse-helper} (\ {acc remaining} {
+    (if (== remaining nil)
+      {acc}
+      {(reverse-helper (join (list (head remaining)) acc) (tail remaining))})
+  }))
+  (reverse-helper nil l)
+})
+
+(load "src/http_api.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(def {server-handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (if (== path "/error")
+      {`{:status "500" :body "Internal Server Error"}}
+      {`{:status "200" :body "Hello from test server"}})
+  }))
+
+(def {server} (http2/server-listen aio 0 server-handler))
+(def {test-port} (http2/server-port server))
+
+(test/run-async aio (list
+  (test-async "http2/client-request returns response" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/") (\ {resp} {
+      (and (not (error? resp)) (== (http2/response-status resp) "200"))
+    }))
+  }))
+  (test-async "http2/client-request returns body" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/") (\ {resp} {
+      (not (error? (http2/response-body resp)))
+    }))
+  }))
+  (test-async "http2/client-request status is 200 for good path" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/") (\ {resp} {
+      (== (http2/response-status resp) "200")
+    }))
+  }))
+  (test-async "http2/client-request status is 500 for error path" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/error") (\ {resp} {
+      (== (http2/response-status resp) "500")
+    }))
+  }))
+  (test-async "multiple sequential requests work" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/") (\ {resp1} {
+      (= {status1} (http2/response-status resp1))
+      (aio/then (http2/client-request aio "127.0.0.1" test-port "/") (\ {resp2} {
+        (and (== status1 "200")
+             (== (http2/response-status resp2) "200"))
+      }))
+    }))
+  }))
+  (test-async "aio/all collects multiple request results" (\ {} {
+    (= {handles} (list
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/")))
+    (aio/then (aio/all handles) (\ {responses} {
+      (== (len responses) 2)
+    }))
+  }))
+  (test-async "aio/retry with http2/client-request" (\ {} {
+    (aio/then (aio/retry aio (\ {} {(http2/client-request aio "127.0.0.1" test-port "/")}) {:max-attempts 2}) (\ {resp} {
+      (== (http2/response-status resp) "200")
+    }))
+  }))
+  (test-async "http2/response-ok? returns 1 for 200" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/") (\ {resp} {
+      (== (http2/response-ok? resp) 1)
+    }))
+  }))
+  (test-async "http2/response-ok? returns 0 for 500" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" test-port "/error") (\ {resp} {
+      (== (http2/response-ok? resp) 0)
+    }))
+  })))
+  {:suite-name "HTTP API Network Tests"
+   :timeout-ms 2000
+   :suite-timeout-ms 30000})

@@ -1,0 +1,87 @@
+; Concurrent Request Stress Test
+; Makes many concurrent requests to exercise request handling paths
+; Exercises: pending streams, arena allocation, response sending
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(def {handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (if (== path "/json")
+      {{:status "200" :content-type "application/json" :body "{\"ok\":true}"}}
+      {(if (== path "/html")
+        {{:status "200" :content-type "text/html" :body "<h1>Hello</h1>"}}
+        {(if (== path "/error")
+          {{:status "500" :body "Error"}}
+          {{:status "200" :body "OK"}})})})
+  }))
+
+(def {server} (http2/server-listen aio 0 handler))
+(def {test-port} (http2/server-port server))
+
+(test/run-async aio (list
+  (test-async "50 concurrent requests complete" (\ {} {
+    (= {request-handles} (list
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      (http2/client-request aio "127.0.0.1" test-port "/error")
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      (http2/client-request aio "127.0.0.1" test-port "/error")
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      (http2/client-request aio "127.0.0.1" test-port "/error")
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      (http2/client-request aio "127.0.0.1" test-port "/error")
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      (http2/client-request aio "127.0.0.1" test-port "/error")
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/json")
+      (http2/client-request aio "127.0.0.1" test-port "/html")))
+    
+    (aio/then (aio/all-settled request-handles) (\ {results} {
+      (== (len results) 50)
+    }))
+  })))
+  {:suite-name "Concurrent Request Stress Test"})

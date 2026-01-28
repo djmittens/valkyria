@@ -1,0 +1,19 @@
+; Simple client test
+(load "src/prelude.valk")
+
+(def {aio} (aio/await (aio/start)))
+(println "AIO started")
+
+(aio/then (http2/client-request aio "localhost" 18443 "/") (\ {resp} {
+  (println "Got response!")
+  (if (error? resp)
+    {(println resp)}
+    {(printf "Status: %s\n" (http2/response-status resp))})
+  (println "Stopping aio...")
+  (aio/stop aio)
+  (println "aio stopped")
+}))
+
+(println "Request sent, running event loop...")
+(aio/run aio)
+(println "Done")

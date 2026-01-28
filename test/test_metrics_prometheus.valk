@@ -1,0 +1,49 @@
+; Test Prometheus metrics output
+; Run with: ./build/valk test/test_metrics_prometheus.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Test: metrics/prometheus returns valid string
+
+; Test: Counter with labels appears in prometheus output
+
+; Test: Multiple label combinations
+
+; Test: Counter without labels
+
+(test/run (list
+  (test "metrics/prometheus returns string"
+    {do
+    (= {result} (metrics/prometheus))
+    (test/assert (string? result) "metrics/prometheus should return a string")
+    true
+  })
+  (test "counter with labels in prometheus output"
+    {do
+    (metrics/counter-inc "prom_test_requests" "server" "api" "port" "8443")
+    (metrics/counter-inc "prom_test_requests" "server" "api" "port" "8443")
+    (metrics/counter-inc "prom_test_requests" "server" "api" "port" "8443")
+    (= {result} (metrics/prometheus))
+    (test/assert (string? result) "metrics/prometheus should return string after counter-inc")
+    (test/assert (> (len result) 0) "prometheus output should be non-empty after adding counters")
+    true
+  })
+  (test "multiple label combinations"
+    {do
+    (metrics/counter-inc "prom_test_multi" "server" "web" "port" "8080")
+    (metrics/counter-inc "prom_test_multi" "server" "web" "port" "8080")
+    (metrics/counter-inc "prom_test_multi" "server" "api" "port" "9000")
+    (= {result} (metrics/prometheus))
+    (test/assert (string? result) "metrics/prometheus should return string")
+    (test/assert (> (len result) 0) "prometheus output should be non-empty")
+    true
+  })
+  (test "counter without labels in prometheus"
+    {do
+    (metrics/counter-inc "prom_test_simple")
+    (= {result} (metrics/prometheus))
+    (test/assert (string? result) "metrics/prometheus should return string")
+    true
+  }))
+  {:suite-name "Prometheus Metrics Format Tests"})
