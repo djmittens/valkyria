@@ -1368,7 +1368,7 @@ typedef struct {
   valk_lval_t **results;
   valk_async_handle_t **handles;
   u64 total;
-  u64 completed;
+  _Atomic(u64) completed;
   valk_mem_allocator_t *allocator;
 } valk_all_ctx_t;
 
@@ -1549,7 +1549,7 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
   ctx->results = results;
   ctx->handles = handles;
   ctx->total = count;
-  ctx->completed = completed;
+  atomic_store(&ctx->completed, completed);
   ctx->allocator = &valk_malloc_allocator;
   all_handle->uv_handle_ptr = ctx;
 
@@ -1623,9 +1623,9 @@ static void valk_async_all_child_completed(valk_async_handle_t *child) {
   if (idx < 0) return;
 
   ctx->results[idx] = atomic_load_explicit(&child->result, memory_order_acquire);
-  ctx->completed++;
+  u64 new_completed = atomic_fetch_add(&ctx->completed, 1) + 1;
 
-  if (ctx->completed == ctx->total) {
+  if (new_completed == ctx->total) {
     if (!valk_async_handle_try_transition(ctx->all_handle, VALK_ASYNC_RUNNING, VALK_ASYNC_COMPLETED)) {
       return;
     }
@@ -1689,9 +1689,9 @@ static void valk_async_all_child_completed_with_ctx(valk_all_ctx_t *ctx, u64 idx
   }
 
   ctx->results[idx] = atomic_load_explicit(&child->result, memory_order_acquire);
-  ctx->completed++;
+  u64 new_completed = atomic_fetch_add(&ctx->completed, 1) + 1;
 
-  if (ctx->completed == ctx->total) {
+  if (new_completed == ctx->total) {
     if (!valk_async_handle_try_transition(ctx->all_handle, VALK_ASYNC_RUNNING, VALK_ASYNC_COMPLETED)) {
       return;
     }
@@ -2180,7 +2180,7 @@ typedef struct {
   valk_lval_t **results;
   valk_async_handle_t **handles;
   u64 total;
-  u64 completed;
+  _Atomic(u64) completed;
   valk_mem_allocator_t *allocator;
 } valk_all_settled_ctx_t;
 
@@ -2250,9 +2250,9 @@ static void valk_async_all_settled_child_completed(valk_async_handle_t *child) {
   }
 
   ctx->results[idx] = result_obj;
-  ctx->completed++;
+  u64 new_completed = atomic_fetch_add(&ctx->completed, 1) + 1;
 
-  if (ctx->completed == ctx->total) {
+  if (new_completed == ctx->total) {
     if (!valk_async_handle_try_transition(ctx->all_settled_handle, VALK_ASYNC_RUNNING, VALK_ASYNC_COMPLETED)) {
       return;
     }
@@ -2400,7 +2400,7 @@ static valk_lval_t* valk_builtin_aio_all_settled(valk_lenv_t* e, valk_lval_t* a)
   ctx->results = results;
   ctx->handles = handles;
   ctx->total = count;
-  ctx->completed = completed;
+  atomic_store(&ctx->completed, completed);
   ctx->allocator = &valk_malloc_allocator;
   as_handle->uv_handle_ptr = ctx;
 
