@@ -608,7 +608,7 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
     void* saved_heap = valk_thread_ctx.heap;
     valk_thread_ctx.heap = nullptr;
     VALK_WITH_ALLOC(&valk_malloc_allocator) {
-      srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)lisp_handler)->fun.env);
+      srv->sandbox_env = valk_lenv_sandboxed(heap_handler->fun.env);
     }
     valk_thread_ctx.heap = saved_heap;
   } else {
@@ -665,7 +665,7 @@ void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_
     void* saved_heap = valk_thread_ctx.heap;
     valk_thread_ctx.heap = nullptr;
     VALK_WITH_ALLOC(&valk_malloc_allocator) {
-      srv->sandbox_env = valk_lenv_sandboxed(((valk_lval_t*)handler_fn)->fun.env);
+      srv->sandbox_env = valk_lenv_sandboxed(heap_handler->fun.env);
     }
     valk_thread_ctx.heap = saved_heap;
     // LCOV_EXCL_STOP

@@ -89,6 +89,8 @@ typedef struct {
 // LCOV_EXCL_START - libuv timer init callback: requires event loop context
 static void __interval_init_on_loop(void *ctx) {
   valk_interval_init_ctx_t *init_ctx = (valk_interval_init_ctx_t *)ctx;
+  if (!init_ctx || !init_ctx->sys) return;
+  
   valk_interval_timer_t *timer_data = init_ctx->timer_data;
   
   uv_loop_t *loop = init_ctx->sys->eventloop;
@@ -203,6 +205,8 @@ typedef struct {
 
 static void __schedule_init_on_loop(void *ctx) {
   valk_schedule_init_ctx_t *init_ctx = (valk_schedule_init_ctx_t *)ctx;
+  if (!init_ctx || !init_ctx->sys) return;
+  
   valk_schedule_timer_t *timer_data = init_ctx->timer_data;
   
   uv_loop_t *loop = init_ctx->sys->eventloop;
@@ -285,23 +289,20 @@ extern bool valk_async_is_resource_closed(valk_async_handle_t *handle);
 extern valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sys);
 extern void valk_standalone_async_done_callback(valk_async_handle_t *handle, void *ctx);
 
-#define VALK_ALL_CTX_MAGIC 0xA11C7821
-#define VALK_ALL_CTX_MAGIC_EARLY 0xA11C7821
-#define VALK_RACE_CTX_MAGIC 0x9ACE7821
-#define VALK_RACE_CTX_MAGIC_EARLY 0x9ACE7821
-#define VALK_ANY_CTX_MAGIC 0xA4177821
-#define VALK_ANY_CTX_MAGIC_EARLY 0xA4177821
-#define VALK_WITHIN_CTX_MAGIC 0xB1781821
-#define VALK_WITHIN_CTX_MAGIC_EARLY 0xB1781821
-#define VALK_RETRY_CTX_MAGIC 0xA37F7821
-
 void valk_async_propagate_completion(valk_async_handle_t *source);
-void valk_async_notify_all_parent(valk_async_handle_t *child);
-void valk_async_notify_race_parent(valk_async_handle_t *child);
-void valk_async_notify_any_parent(valk_async_handle_t *child);
-void valk_async_notify_all_settled_parent(valk_async_handle_t *child);
-void valk_async_notify_within_parent(valk_async_handle_t *child);
-void valk_async_notify_retry_parent(valk_async_handle_t *child);
+
+void valk_async_notify_parent(valk_async_handle_t *child) {
+  if (!child || !child->parent) return;
+  valk_async_handle_t *parent = child->parent;
+  
+  valk_async_status_t status = valk_async_handle_get_status(child);
+  
+  if (status == VALK_ASYNC_COMPLETED && parent->on_child_completed) {
+    parent->on_child_completed(child);
+  } else if ((status == VALK_ASYNC_FAILED || status == VALK_ASYNC_CANCELLED) && parent->on_child_failed) {
+    parent->on_child_failed(child);
+  }
+}
 
 static void __sleep_timer_cb(uv_timer_t *timer_handle) {
   valk_async_handle_uv_data_t *data = (valk_async_handle_uv_data_t *)timer_handle->data;
@@ -325,6 +326,8 @@ typedef struct {
 // LCOV_EXCL_START
 static void __sleep_init_on_loop(void *ctx) {
   valk_sleep_init_ctx_t *init_ctx = (valk_sleep_init_ctx_t *)ctx;
+  if (!init_ctx || !init_ctx->sys) return;
+  
   valk_async_handle_uv_data_t *timer_data = init_ctx->timer_data;
   
   uv_loop_t *loop = init_ctx->sys->eventloop;
@@ -1045,12 +1048,7 @@ static void valk_async_propagate_single(void *ctx) {
             } else if (inner_status == VALK_ASYNC_FAILED) {
               atomic_store_explicit(&child->status, VALK_ASYNC_FAILED, memory_order_release);
               child->error = inner->error;
-              valk_async_notify_all_parent(child);
-              valk_async_notify_race_parent(child);
-              valk_async_notify_any_parent(child);
-              valk_async_notify_all_settled_parent(child);
-              valk_async_notify_within_parent(child);
-              valk_async_notify_retry_parent(child);
+              valk_async_notify_parent(child);
               valk_async_notify_done(child);
             } else if (inner_status == VALK_ASYNC_CANCELLED) {
               atomic_store_explicit(&child->status, VALK_ASYNC_CANCELLED, memory_order_release);
@@ -1082,12 +1080,7 @@ static void valk_async_propagate_single(void *ctx) {
           atomic_store_explicit(&child->status, VALK_ASYNC_COMPLETED, memory_order_release);
           child->result = source->result;
         }
-        valk_async_notify_all_parent(child);
-        valk_async_notify_race_parent(child);
-        valk_async_notify_any_parent(child);
-        valk_async_notify_all_settled_parent(child);
-        valk_async_notify_within_parent(child);
-        valk_async_notify_retry_parent(child);
+        valk_async_notify_parent(child);
         valk_async_notify_done(child);
         valk_async_schedule_propagate(child);
       } else if (source_status == VALK_ASYNC_FAILED) {
@@ -1114,12 +1107,7 @@ static void valk_async_propagate_single(void *ctx) {
           atomic_store_explicit(&child->status, VALK_ASYNC_FAILED, memory_order_release);
           child->error = source->error;
         }
-        valk_async_notify_all_parent(child);
-        valk_async_notify_race_parent(child);
-        valk_async_notify_any_parent(child);
-        valk_async_notify_all_settled_parent(child);
-        valk_async_notify_within_parent(child);
-        valk_async_notify_retry_parent(child);
+        valk_async_notify_parent(child);
         valk_async_notify_done(child);
         valk_async_schedule_propagate(child);
       }
@@ -1362,6 +1350,13 @@ static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_handle(finally_handle);
 }
 
+#define VALK_ALL_CTX_MAGIC 0xA11C7821
+#define VALK_RACE_CTX_MAGIC 0x9ACE7821
+#define VALK_ANY_CTX_MAGIC 0xA4177821
+#define VALK_WITHIN_CTX_MAGIC 0xB1781821
+#define VALK_RETRY_CTX_MAGIC 0xA37F7821
+#define VALK_ALL_SETTLED_CTX_MAGIC 0xA11C5E7D
+
 typedef struct {
   u32 magic;
   valk_async_handle_t *all_handle;
@@ -1389,9 +1384,9 @@ static void valk_all_ctx_cleanup(void *ctx) {
 }
 
 static void valk_async_all_child_completed(valk_async_handle_t *child);
-static void valk_async_all_child_failed(valk_async_handle_t *child, valk_lval_t *error);
+static void valk_async_all_child_failed(valk_async_handle_t *child);
 static void valk_async_all_child_completed_with_ctx(valk_all_ctx_t *ctx, u64 idx, valk_async_handle_t *child);
-static void valk_async_all_child_failed_with_ctx(valk_all_ctx_t *ctx, valk_async_handle_t *child, valk_lval_t *error);
+static void valk_async_all_child_failed_with_ctx(valk_all_ctx_t *ctx, valk_async_handle_t *child);
 
 static void valk_all_wrapper_on_done(valk_async_handle_t *handle, void *ctx) {
   valk_all_wrapper_ctx_t *wrapper_ctx = (valk_all_wrapper_ctx_t *)ctx;
@@ -1404,7 +1399,7 @@ static void valk_all_wrapper_on_done(valk_async_handle_t *handle, void *ctx) {
   if (status == VALK_ASYNC_COMPLETED) {
     valk_async_all_child_completed_with_ctx(wrapper_ctx->all_ctx, wrapper_ctx->index, handle);
   } else if (status == VALK_ASYNC_FAILED) {
-    valk_async_all_child_failed_with_ctx(wrapper_ctx->all_ctx, handle, handle->error);
+    valk_async_all_child_failed_with_ctx(wrapper_ctx->all_ctx, handle);
   }
   free(wrapper_ctx);
 }
@@ -1552,6 +1547,8 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
   atomic_store(&ctx->completed, completed);
   ctx->allocator = &valk_malloc_allocator;
   all_handle->uv_handle_ptr = ctx;
+  all_handle->on_child_completed = valk_async_all_child_completed;
+  all_handle->on_child_failed = valk_async_all_child_failed;
 
   valk_async_handle_on_cleanup(all_handle, valk_all_ctx_cleanup, ctx);
 
@@ -1638,12 +1635,13 @@ static void valk_async_all_child_completed(valk_async_handle_t *child) {
     valk_lval_t *heap_result = valk_evacuate_to_heap(result_list);
     atomic_store_explicit(&ctx->all_handle->result, heap_result, memory_order_release);
 
+    valk_async_notify_parent(ctx->all_handle);
     valk_async_notify_done(ctx->all_handle);
     valk_async_propagate_completion(ctx->all_handle);
   }
 }
 
-static void valk_async_all_child_failed(valk_async_handle_t *child, valk_lval_t *error) {
+static void valk_async_all_child_failed(valk_async_handle_t *child) {
   valk_all_ctx_t *ctx = valk_async_get_all_ctx(child);
   if (!ctx) return;
 
@@ -1651,6 +1649,7 @@ static void valk_async_all_child_failed(valk_async_handle_t *child, valk_lval_t 
     return;
   }
 
+  valk_lval_t *error = atomic_load_explicit(&child->error, memory_order_acquire);
   atomic_store_explicit(&ctx->all_handle->error, error, memory_order_release);
 
   for (u64 i = 0; i < ctx->total; i++) {
@@ -1661,24 +1660,9 @@ static void valk_async_all_child_failed(valk_async_handle_t *child, valk_lval_t 
     }
   }
 
+  valk_async_notify_parent(ctx->all_handle);
   valk_async_notify_done(ctx->all_handle);
   valk_async_propagate_completion(ctx->all_handle);
-}
-
-void valk_async_notify_all_parent(valk_async_handle_t *child) {
-  if (!child || !child->parent) return;
-
-  valk_async_handle_t *parent = child->parent;
-  if (!parent->uv_handle_ptr) return;
-
-  u32 *magic_ptr = (u32*)parent->uv_handle_ptr;
-  if (*magic_ptr != VALK_ALL_CTX_MAGIC_EARLY) return;
-
-  if (child->status == VALK_ASYNC_COMPLETED) {
-    valk_async_all_child_completed(child);
-  } else if (child->status == VALK_ASYNC_FAILED) {
-    valk_async_all_child_failed(child, child->error);
-  }
 }
 
 static void valk_async_all_child_completed_with_ctx(valk_all_ctx_t *ctx, u64 idx, valk_async_handle_t *child) {
@@ -1704,24 +1688,20 @@ static void valk_async_all_child_completed_with_ctx(valk_all_ctx_t *ctx, u64 idx
     valk_lval_t *heap_result = valk_evacuate_to_heap(result_list);
     atomic_store_explicit(&ctx->all_handle->result, heap_result, memory_order_release);
 
-    valk_async_notify_all_parent(ctx->all_handle);
-    valk_async_notify_race_parent(ctx->all_handle);
-    valk_async_notify_any_parent(ctx->all_handle);
-    valk_async_notify_all_settled_parent(ctx->all_handle);
-    valk_async_notify_within_parent(ctx->all_handle);
-    valk_async_notify_retry_parent(ctx->all_handle);
+    valk_async_notify_parent(ctx->all_handle);
     valk_async_notify_done(ctx->all_handle);
     valk_async_propagate_completion(ctx->all_handle);
   }
 }
 
-static void valk_async_all_child_failed_with_ctx(valk_all_ctx_t *ctx, valk_async_handle_t *child, valk_lval_t *error) {
+static void valk_async_all_child_failed_with_ctx(valk_all_ctx_t *ctx, valk_async_handle_t *child) {
   if (!ctx) return;
 
   if (!valk_async_handle_try_transition(ctx->all_handle, VALK_ASYNC_RUNNING, VALK_ASYNC_FAILED)) {
     return;
   }
 
+  valk_lval_t *error = atomic_load_explicit(&child->error, memory_order_acquire);
   atomic_store_explicit(&ctx->all_handle->error, error, memory_order_release);
 
   for (u64 i = 0; i < ctx->total; i++) {
@@ -1732,6 +1712,7 @@ static void valk_async_all_child_failed_with_ctx(valk_all_ctx_t *ctx, valk_async
     }
   }
 
+  valk_async_notify_parent(ctx->all_handle);
   valk_async_notify_done(ctx->all_handle);
   valk_async_propagate_completion(ctx->all_handle);
 }
@@ -1791,20 +1772,9 @@ static void valk_async_race_child_resolved(valk_async_handle_t *child) {
     }
   }
 
+  valk_async_notify_parent(ctx->race_handle);
   valk_async_notify_done(ctx->race_handle);
   valk_async_propagate_completion(ctx->race_handle);
-}
-
-void valk_async_notify_race_parent(valk_async_handle_t *child) {
-  if (!child || !child->parent) return;
-
-  valk_async_handle_t *parent = child->parent;
-  if (!parent->uv_handle_ptr) return;
-
-  u32 *magic_ptr = (u32*)parent->uv_handle_ptr;
-  if (*magic_ptr != VALK_RACE_CTX_MAGIC_EARLY) return;
-
-  valk_async_race_child_resolved(child);
 }
 // LCOV_EXCL_STOP
 
@@ -1920,6 +1890,8 @@ static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
   ctx->total = count;
   ctx->allocator = &valk_malloc_allocator;
   race_handle->uv_handle_ptr = ctx;
+  race_handle->on_child_completed = valk_async_race_child_resolved;
+  race_handle->on_child_failed = valk_async_race_child_resolved;
 
   valk_async_handle_on_cleanup(race_handle, valk_race_ctx_cleanup, ctx);
 
@@ -1977,58 +1949,34 @@ static void valk_async_any_child_success(valk_async_handle_t *child) {
     }
   }
 
+  valk_async_notify_parent(ctx->any_handle);
   valk_async_notify_done(ctx->any_handle);
   valk_async_propagate_completion(ctx->any_handle);
 }
 
-static void valk_async_any_child_failed(valk_async_handle_t *child, valk_lval_t *error) {
+static void valk_async_any_child_failed(valk_async_handle_t *child) {
   if (!child || !child->parent) return;
 
   valk_async_handle_t *parent = child->parent;
   if (!parent->uv_handle_ptr) return;
 
   valk_any_ctx_t *ctx = (valk_any_ctx_t*)parent->uv_handle_ptr;
-  if (ctx->magic != VALK_ANY_CTX_MAGIC) return;
 
   if (valk_async_handle_is_terminal(valk_async_handle_get_status(ctx->any_handle))) {
     return;
   }
 
   ctx->failed_count++;
-  ctx->last_error = error;
+  ctx->last_error = atomic_load_explicit(&child->error, memory_order_acquire);
 
   if (ctx->failed_count == ctx->total) {
     if (!valk_async_handle_try_transition(ctx->any_handle, VALK_ASYNC_RUNNING, VALK_ASYNC_FAILED)) {
       return;
     }
     atomic_store_explicit(&ctx->any_handle->error, ctx->last_error, memory_order_release);
+    valk_async_notify_parent(ctx->any_handle);
     valk_async_notify_done(ctx->any_handle);
     valk_async_propagate_completion(ctx->any_handle);
-  }
-}
-
-void valk_async_notify_any_parent(valk_async_handle_t *child) {
-  if (!child || !child->parent) {
-    VALK_DEBUG("notify_any_parent: child=%p, parent=%p", (void*)child, child ? (void*)child->parent : NULL);
-    return;
-  }
-
-  valk_async_handle_t *parent = child->parent;
-  if (!parent->uv_handle_ptr) {
-    VALK_DEBUG("notify_any_parent: parent has no uv_handle_ptr");
-    return;
-  }
-
-  u32 *magic_ptr = (u32*)parent->uv_handle_ptr;
-  VALK_DEBUG("notify_any_parent: magic=0x%08x, expected=0x%08x", *magic_ptr, VALK_ANY_CTX_MAGIC_EARLY);
-  if (*magic_ptr != VALK_ANY_CTX_MAGIC_EARLY) return;
-
-  valk_async_status_t child_status = atomic_load_explicit(&child->status, memory_order_acquire);
-  VALK_INFO("notify_any_parent: found any context, child status=%d", child_status);
-  if (child_status == VALK_ASYNC_COMPLETED) {
-    valk_async_any_child_success(child);
-  } else if (child_status == VALK_ASYNC_FAILED) {
-    valk_async_any_child_failed(child, atomic_load_explicit(&child->error, memory_order_acquire));
   }
 }
 // LCOV_EXCL_STOP
@@ -2152,10 +2100,12 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
   ctx->any_handle = any_handle;
   ctx->handles = handles;
   ctx->total = count;
-  ctx->failed_count = failed_count;
-  ctx->last_error = last_error;
+  ctx->failed_count = 0;
+  ctx->last_error = NULL;
   ctx->allocator = &valk_malloc_allocator;
   any_handle->uv_handle_ptr = ctx;
+  any_handle->on_child_completed = valk_async_any_child_success;
+  any_handle->on_child_failed = valk_async_any_child_failed;
 
   valk_async_handle_on_cleanup(any_handle, valk_any_ctx_cleanup, ctx);
 
@@ -2171,7 +2121,6 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
    return valk_lval_handle(any_handle);
 }
 
-#define VALK_ALL_SETTLED_CTX_MAGIC 0xA11C5E7D
 #define VALK_ALL_SETTLED_CTX_MAGIC_EARLY 0xA11C5E7D
 
 typedef struct {
@@ -2265,21 +2214,10 @@ static void valk_async_all_settled_child_completed(valk_async_handle_t *child) {
     valk_lval_t *heap_result = valk_evacuate_to_heap(result_list);
     atomic_store_explicit(&ctx->all_settled_handle->result, heap_result, memory_order_release);
 
+    valk_async_notify_parent(ctx->all_settled_handle);
     valk_async_notify_done(ctx->all_settled_handle);
     valk_async_propagate_completion(ctx->all_settled_handle);
   }
-}
-
-void valk_async_notify_all_settled_parent(valk_async_handle_t *child) {
-  if (!child || !child->parent) return;
-
-  valk_async_handle_t *parent = child->parent;
-  if (!parent->uv_handle_ptr) return;
-
-  u32 *magic_ptr = (u32*)parent->uv_handle_ptr;
-  if (*magic_ptr != VALK_ALL_SETTLED_CTX_MAGIC_EARLY) return;
-
-  valk_async_all_settled_child_completed(child);
 }
 
 static valk_lval_t* valk_builtin_aio_all_settled(valk_lenv_t* e, valk_lval_t* a) {
@@ -2403,6 +2341,8 @@ static valk_lval_t* valk_builtin_aio_all_settled(valk_lenv_t* e, valk_lval_t* a)
   atomic_store(&ctx->completed, completed);
   ctx->allocator = &valk_malloc_allocator;
   as_handle->uv_handle_ptr = ctx;
+  as_handle->on_child_completed = valk_async_all_settled_child_completed;
+  as_handle->on_child_failed = valk_async_all_settled_child_completed;
 
   valk_async_handle_on_cleanup(as_handle, valk_all_settled_ctx_cleanup, ctx);
 
@@ -2646,6 +2586,8 @@ typedef struct {
 // LCOV_EXCL_START
 static void __within_init_on_loop(void *ctx) {
   valk_within_init_ctx_t *init_ctx = (valk_within_init_ctx_t *)ctx;
+  if (!init_ctx || !init_ctx->sys) return;
+  
   valk_async_handle_uv_data_t *timer_data = init_ctx->timer_data;
   
   uv_loop_t *loop = init_ctx->sys->eventloop;
@@ -2708,26 +2650,9 @@ static void valk_async_within_child_resolved(valk_async_handle_t *child) {
     valk_async_handle_cancel(ctx->source_handle);
   }
 
+  valk_async_notify_parent(ctx->within_handle);
   valk_async_notify_done(ctx->within_handle);
   valk_async_propagate_completion(ctx->within_handle);
-}
-
-void valk_async_notify_within_parent(valk_async_handle_t *child) {
-  if (!child || !child->parent) {
-    return;
-  }
-
-  valk_async_handle_t *parent = child->parent;
-  if (!parent->uv_handle_ptr) {
-    return;
-  }
-
-  valk_within_ctx_t *ctx = (valk_within_ctx_t*)parent->uv_handle_ptr;
-  if (ctx->magic != VALK_WITHIN_CTX_MAGIC) {
-    return;
-  }
-
-  valk_async_within_child_resolved(child);
 }
 
 static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
@@ -2809,6 +2734,8 @@ static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
   ctx->timeout_handle = timeout_handle;
   ctx->allocator = &valk_malloc_allocator;
   within_handle->uv_handle_ptr = ctx;
+  within_handle->on_child_completed = valk_async_within_child_resolved;
+  within_handle->on_child_failed = valk_async_within_child_resolved;
 
   valk_async_handle_on_cleanup(within_handle, valk_within_ctx_cleanup, ctx);
 
@@ -2881,6 +2808,7 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
     valk_lval_t *result = atomic_load_explicit(&child->result, memory_order_acquire);
     atomic_store_explicit(&parent->status, VALK_ASYNC_COMPLETED, memory_order_release);
     atomic_store_explicit(&parent->result, result, memory_order_release);
+    valk_async_notify_parent(parent);
     valk_async_notify_done(parent);
     valk_async_propagate_completion(parent);
     return;
@@ -2893,6 +2821,7 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
     if (ctx->current_attempt_num >= ctx->max_attempts) {
       atomic_store_explicit(&parent->status, VALK_ASYNC_FAILED, memory_order_release);
       atomic_store_explicit(&parent->error, ctx->last_error, memory_order_release);
+      valk_async_notify_parent(parent);
       valk_async_notify_done(parent);
       valk_async_propagate_completion(parent);
       return;
@@ -2906,6 +2835,7 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
     if (!timer) {
       atomic_store_explicit(&parent->status, VALK_ASYNC_FAILED, memory_order_release);
       atomic_store_explicit(&parent->error, valk_lval_err("Failed to allocate backoff timer"), memory_order_release);
+      valk_async_notify_parent(parent);
       valk_async_notify_done(parent);
       valk_async_propagate_completion(parent);
       return;
@@ -2916,6 +2846,7 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
       valk_async_handle_free(timer);
       atomic_store_explicit(&parent->status, VALK_ASYNC_FAILED, memory_order_release);
       atomic_store_explicit(&parent->error, valk_lval_err("Failed to allocate timer data"), memory_order_release);
+      valk_async_notify_parent(parent);
       valk_async_notify_done(parent);
       valk_async_propagate_completion(parent);
       return;
@@ -2937,14 +2868,11 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
   }
 }
 
-void valk_async_notify_retry_parent(valk_async_handle_t *child) {
+static void valk_async_notify_retry_child(valk_async_handle_t *child) {
   if (!child || !child->parent) return;
 
   valk_async_handle_t *parent = child->parent;
   if (!parent->uv_handle_ptr) return;
-
-  u32 *magic_ptr = (u32*)parent->uv_handle_ptr;
-  if (*magic_ptr != VALK_RETRY_CTX_MAGIC) return;
 
   valk_retry_ctx_t *ctx = (valk_retry_ctx_t*)parent->uv_handle_ptr;
 
@@ -2962,6 +2890,7 @@ static void valk_async_retry_schedule_next(valk_retry_ctx_t *ctx) {
   if (LVAL_TYPE(result_val) != LVAL_HANDLE) {
     atomic_store_explicit(&ctx->retry_handle->status, VALK_ASYNC_FAILED, memory_order_release);
     atomic_store_explicit(&ctx->retry_handle->error, valk_lval_err("aio/retry: fn must return a handle"), memory_order_release);
+    valk_async_notify_parent(ctx->retry_handle);
     valk_async_notify_done(ctx->retry_handle);
     valk_async_propagate_completion(ctx->retry_handle);
     return;
@@ -3058,6 +2987,8 @@ static valk_lval_t* valk_builtin_aio_retry(valk_lenv_t* e, valk_lval_t* a) {
 
   retry_handle->status = VALK_ASYNC_RUNNING;
   retry_handle->uv_handle_ptr = ctx;
+  retry_handle->on_child_completed = valk_async_notify_retry_child;
+  retry_handle->on_child_failed = valk_async_notify_retry_child;
   valk_async_handle_on_cleanup(retry_handle, valk_retry_ctx_cleanup, ctx);
 
   valk_async_retry_schedule_next(ctx);
