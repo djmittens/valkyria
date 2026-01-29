@@ -1,0 +1,361 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/run (list
+  (test "counter-create-basic"
+    {do
+    (= {c} (metrics/counter "test_basic_counter"))
+    (test/assert (! (error? c)) "counter creation should succeed")
+    true
+  })
+  (test "counter-create-with-labels"
+    {do
+    (= {c} (metrics/counter "test_labeled_counter" "method" "GET" "path" "/api"))
+    (test/assert (! (error? c)) "labeled counter creation should succeed")
+    true
+  })
+  (test "counter-inc-by-1"
+    {do
+    (= {c} (metrics/counter "test_inc_counter"))
+    (= {result} (metrics/counter-inc c))
+    (test/assert (! (error? result)) "counter-inc should succeed")
+    true
+  })
+  (test "counter-inc-by-n"
+    {do
+    (= {c} (metrics/counter "test_inc_n_counter"))
+    (= {result} (metrics/counter-inc c 10))
+    (test/assert (! (error? result)) "counter-inc by n should succeed")
+    true
+  })
+  (test "counter-inc-wrong-type"
+    {do
+    (= {result} (metrics/counter-inc "not-a-counter"))
+    (test/assert (error? result) "counter-inc with string should fail")
+    true
+  })
+  (test "counter-inc-wrong-n-type"
+    {do
+    (= {c} (metrics/counter "test_wrong_n_counter"))
+    (= {result} (metrics/counter-inc c "ten"))
+    (test/assert (error? result) "counter-inc with string n should fail")
+    true
+  })
+  (test "gauge-create-basic"
+    {do
+    (= {g} (metrics/gauge "test_basic_gauge"))
+    (test/assert (! (error? g)) "gauge creation should succeed")
+    true
+  })
+  (test "gauge-create-with-labels"
+    {do
+    (= {g} (metrics/gauge "test_labeled_gauge" "region" "us-west"))
+    (test/assert (! (error? g)) "labeled gauge creation should succeed")
+    true
+  })
+  (test "gauge-set"
+    {do
+    (= {g} (metrics/gauge "test_set_gauge"))
+    (= {result} (metrics/gauge-set g 42))
+    (test/assert (! (error? result)) "gauge-set should succeed")
+    true
+  })
+  (test "gauge-set-negative"
+    {do
+    (= {g} (metrics/gauge "test_negative_gauge"))
+    (= {result} (metrics/gauge-set g -100))
+    (test/assert (! (error? result)) "gauge-set with negative should succeed")
+    true
+  })
+  (test "gauge-set-wrong-type"
+    {do
+    (= {result} (metrics/gauge-set "not-a-gauge" 42))
+    (test/assert (error? result) "gauge-set with string should fail")
+    true
+  })
+  (test "gauge-set-wrong-value-type"
+    {do
+    (= {g} (metrics/gauge "test_wrong_value_gauge"))
+    (= {result} (metrics/gauge-set g "forty-two"))
+    (test/assert (error? result) "gauge-set with string value should fail")
+    true
+  })
+  (test "gauge-inc"
+    {do
+    (= {g} (metrics/gauge "test_inc_gauge"))
+    (metrics/gauge-set g 0)
+    (= {result} (metrics/gauge-inc g))
+    (test/assert (! (error? result)) "gauge-inc should succeed")
+    true
+  })
+  (test "gauge-inc-wrong-type"
+    {do
+    (= {result} (metrics/gauge-inc "not-a-gauge"))
+    (test/assert (error? result) "gauge-inc with string should fail")
+    true
+  })
+  (test "gauge-dec"
+    {do
+    (= {g} (metrics/gauge "test_dec_gauge"))
+    (metrics/gauge-set g 10)
+    (= {result} (metrics/gauge-dec g))
+    (test/assert (! (error? result)) "gauge-dec should succeed")
+    true
+  })
+  (test "gauge-dec-wrong-type"
+    {do
+    (= {result} (metrics/gauge-dec "not-a-gauge"))
+    (test/assert (error? result) "gauge-dec with string should fail")
+    true
+  })
+  (test "histogram-create-default-buckets"
+    {do
+    (= {h} (metrics/histogram "test_default_histogram"))
+    (test/assert (! (error? h)) "histogram creation should succeed")
+    true
+  })
+  (test "histogram-create-with-labels"
+    {do
+    (= {h} (metrics/histogram "test_labeled_histogram" "endpoint" "/api/v1"))
+    (test/assert (! (error? h)) "labeled histogram creation should succeed")
+    true
+  })
+  (test "histogram-observe"
+    {do
+    (= {h} (metrics/histogram "test_observe_histogram"))
+    (= {result} (metrics/histogram-observe h 1000))
+    (test/assert (! (error? result)) "histogram-observe should succeed")
+    true
+  })
+  (test "histogram-observe-multiple"
+    {do
+    (= {h} (metrics/histogram "test_multi_observe_histogram"))
+    (metrics/histogram-observe h 100)
+    (metrics/histogram-observe h 500)
+    (metrics/histogram-observe h 1000)
+    (metrics/histogram-observe h 5000)
+    (metrics/histogram-observe h 10000)
+    (test/assert true "multiple observations should succeed")
+    true
+  })
+  (test "histogram-observe-wrong-type"
+    {do
+    (= {result} (metrics/histogram-observe "not-a-histogram" 1000))
+    (test/assert (error? result) "histogram-observe with string should fail")
+    true
+  })
+  (test "histogram-observe-wrong-value-type"
+    {do
+    (= {h} (metrics/histogram "test_wrong_obs_histogram"))
+    (= {result} (metrics/histogram-observe h "thousand"))
+    (test/assert (error? result) "histogram-observe with string value should fail")
+    true
+  })
+  (test "metrics-json-returns-string"
+    {do
+    (= {json} (metrics/json))
+    (test/assert (! (error? json)) "metrics/json should not error")
+    (test/assert (str? json) "metrics/json should return string")
+    true
+  })
+  (test "metrics-prometheus-returns-string"
+    {do
+    (= {prom} (metrics/prometheus))
+    (test/assert (! (error? prom)) "metrics/prometheus should not error")
+    (test/assert (str? prom) "metrics/prometheus should return string")
+    true
+  })
+  (test "metrics-collect-delta"
+    {do
+    (= {delta} (metrics/collect-delta))
+    (test/assert (! (error? delta)) "metrics/collect-delta should not error")
+    true
+  })
+  (test "metrics-delta-json"
+    {do
+    (= {delta} (metrics/collect-delta))
+    (= {json} (metrics/delta-json delta))
+    (test/assert (! (error? json)) "metrics/delta-json should not error")
+    (test/assert (str? json) "metrics/delta-json should return string")
+    true
+  })
+  (test "counter-name-must-be-string"
+    {do
+    (= {result} (metrics/counter 123))
+    (test/assert (error? result) "counter with numeric name should fail")
+    true
+  })
+  (test "gauge-name-must-be-string"
+    {do
+    (= {result} (metrics/gauge 123))
+    (test/assert (error? result) "gauge with numeric name should fail")
+    true
+  })
+  (test "histogram-name-must-be-string"
+    {do
+    (= {result} (metrics/histogram 123))
+    (test/assert (error? result) "histogram with numeric name should fail")
+    true
+  })
+  (test "counter-labels-must-be-strings"
+    {do
+    (= {result} (metrics/counter "test" 123 "value"))
+    (test/assert (error? result) "counter with numeric label key should fail")
+    true
+  })
+  (test "gauge-labels-must-be-strings"
+    {do
+    (= {result} (metrics/gauge "test" 123 "value"))
+    (test/assert (error? result) "gauge with numeric label key should fail")
+    true
+  })
+  (test "histogram-labels-must-be-strings"
+    {do
+    (= {result} (metrics/histogram "test" 123 "value"))
+    (test/assert (error? result) "histogram with numeric label key should fail")
+    true
+  })
+  (test "counter-inc-no-args-fails"
+    {do
+    (= {result} (metrics/counter-inc))
+    (test/assert (error? result) "counter-inc with no args should fail")
+    true
+  })
+  (test "gauge-set-no-args-fails"
+    {do
+    (= {result} (metrics/gauge-set))
+    (test/assert (error? result) "gauge-set with no args should fail")
+    true
+  })
+  (test "gauge-set-one-arg-fails"
+    {do
+    (= {g} (metrics/gauge "one_arg_test"))
+    (= {result} (metrics/gauge-set g))
+    (test/assert (error? result) "gauge-set with one arg should fail")
+    true
+  })
+  (test "gauge-inc-no-args-fails"
+    {do
+    (= {result} (metrics/gauge-inc))
+    (test/assert (error? result) "gauge-inc with no args should fail")
+    true
+  })
+  (test "gauge-dec-no-args-fails"
+    {do
+    (= {result} (metrics/gauge-dec))
+    (test/assert (error? result) "gauge-dec with no args should fail")
+    true
+  })
+  (test "histogram-observe-no-args-fails"
+    {do
+    (= {result} (metrics/histogram-observe))
+    (test/assert (error? result) "histogram-observe with no args should fail")
+    true
+  })
+  (test "histogram-observe-one-arg-fails"
+    {do
+    (= {h} (metrics/histogram "one_arg_hist"))
+    (= {result} (metrics/histogram-observe h))
+    (test/assert (error? result) "histogram-observe with one arg should fail")
+    true
+  })
+  (test "metrics-json-with-args-fails"
+    {do
+    (= {result} (metrics/json "extra-arg"))
+    (test/assert (error? result) "metrics/json with args should fail")
+    true
+  })
+  (test "metrics-prometheus-with-args-fails"
+    {do
+    (= {result} (metrics/prometheus "extra-arg"))
+    (test/assert (error? result) "metrics/prometheus with args should fail")
+    true
+  })
+  (test "metrics-collect-delta-with-args-fails"
+    {do
+    (= {result} (metrics/collect-delta "extra-arg"))
+    (test/assert (error? result) "metrics/collect-delta with args should fail")
+    true
+  })
+  (test "metrics-delta-json-wrong-type"
+    {do
+    (= {result} (metrics/delta-json "not-a-delta"))
+    (test/assert (error? result) "metrics/delta-json with string should fail")
+    true
+  })
+  (test "counter-inc-too-many-args"
+    {do
+    (= {c} (metrics/counter "too_many_args_counter"))
+    (= {result} (metrics/counter-inc c 1 2 3))
+    (test/assert (error? result) "counter-inc with too many args should fail")
+    true
+  })
+  (test "metrics-baseline-create"
+    {do
+    (= {baseline} (metrics/baseline))
+    (test/assert (! (error? baseline)) "metrics/baseline should succeed")
+    true
+  })
+  (test "metrics-baseline-with-args-fails"
+    {do
+    (= {result} (metrics/baseline "extra-arg"))
+    (test/assert (error? result) "metrics/baseline with args should fail")
+    true
+  })
+  (test "metrics-collect-delta-stateless"
+    {do
+    (= {baseline} (metrics/baseline))
+    (= {delta} (metrics/collect-delta-stateless baseline))
+    (test/assert (! (error? delta)) "metrics/collect-delta-stateless should succeed")
+    true
+  })
+  (test "metrics-collect-delta-stateless-no-args-fails"
+    {do
+    (= {result} (metrics/collect-delta-stateless))
+    (test/assert (error? result) "metrics/collect-delta-stateless without args should fail")
+    true
+  })
+  (test "metrics-collect-delta-stateless-wrong-type-fails"
+    {do
+    (= {result} (metrics/collect-delta-stateless "not-a-baseline"))
+    (test/assert (error? result) "metrics/collect-delta-stateless with string should fail")
+    true
+  })
+  (test "metrics-collect-delta-stateless-produces-json"
+    {do
+    (= {baseline} (metrics/baseline))
+    (= {delta} (metrics/collect-delta-stateless baseline))
+    (= {json} (metrics/delta-json delta))
+    (test/assert (! (error? json)) "delta-json on stateless delta should succeed")
+    (test/assert (str? json) "delta-json should return string")
+    true
+  })
+  (test "metrics-collect-delta-stateless-tracks-changes"
+    {do
+    (= {c} (metrics/counter "stateless_test_counter"))
+    (= {baseline} (metrics/baseline))
+    (= {delta1} (metrics/collect-delta-stateless baseline))
+    (= {json1} (metrics/delta-json delta1))
+    (metrics/counter-inc c 10)
+    (= {delta2} (metrics/collect-delta-stateless baseline))
+    (= {json2} (metrics/delta-json delta2))
+    (test/assert (str? json2) "should produce valid json after change")
+    true
+  })
+  (test "metrics-collect-delta-stateless-isolation"
+    {do
+    (= {c} (metrics/counter "isolation_test_counter"))
+    (= {baseline1} (metrics/baseline))
+    (= {baseline2} (metrics/baseline))
+    (= {delta1-init} (metrics/collect-delta-stateless baseline1))
+    (= {delta2-init} (metrics/collect-delta-stateless baseline2))
+    (metrics/counter-inc c 5)
+    (= {delta1-after} (metrics/collect-delta-stateless baseline1))
+    (= {delta2-after} (metrics/collect-delta-stateless baseline2))
+    (= {json1} (metrics/delta-json delta1-after))
+    (= {json2} (metrics/delta-json delta2-after))
+    (test/assert (str? json1) "baseline1 should produce valid json")
+    (test/assert (str? json2) "baseline2 should produce valid json")
+    true
+  }))
+  {:suite-name "Metrics Builtins Comprehensive"})

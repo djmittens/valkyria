@@ -1,0 +1,96 @@
+(load "src/prelude.valk")
+(load "src/modules/aio/sse.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(printf "🧪 SSE Builtins Tests\n\n")
+
+(= {handler} (\ {req} {
+  (= {path} (req/path req))
+  (if (== path "/test-stream-closed")
+    {(do
+      (= {stream} (sse/open req))
+      (= {closed-future} (stream/closed stream))
+      (aio/then closed-future (\ {result} {
+        (if (== result (quote :closed))
+          {(print "✅ stream/closed future completes with :closed")}
+          {(do (print "❌ stream/closed - expected :closed, got:" result) (shutdown 1))})
+      }))
+      (stream/write stream "data: test\n\n")
+      (stream/close stream)
+      :deferred)}
+    {{:status "404" :body "Not found"}})}))
+
+(= {server} (http2/server-listen aio 0 handler))
+(= {port} (http2/server-port server))
+
+(aio/then (http2/client-request aio "127.0.0.1" port "/test-stream-closed") (\ {_} {}))
+
+(aio/schedule aio 300 (\ {} {
+  (= {passed} 0)
+  (= {failed} 0)
+  
+  (if (error? (sse/open "not-a-request"))
+    {do (print "✅ sse/open outside handler fails") (= {passed} (+ passed 1))}
+    {do (print "❌ sse/open outside handler fails") (= {failed} (+ failed 1))})
+  
+  (if (error? (sse/send "not-a-stream" "data"))
+    {do (print "✅ sse/send wrong stream fails") (= {passed} (+ passed 1))}
+    {do (print "❌ sse/send wrong stream fails") (= {failed} (+ failed 1))})
+  
+  (if (error? (sse/close "not-a-stream"))
+    {do (print "✅ sse/close wrong stream fails") (= {passed} (+ passed 1))}
+    {do (print "❌ sse/close wrong stream fails") (= {failed} (+ failed 1))})
+  
+  (if (== (sse/writable? "not-a-stream") 0)
+    {do (print "✅ sse/writable? wrong type returns 0") (= {passed} (+ passed 1))}
+    {do (print "❌ sse/writable? wrong type returns 0") (= {failed} (+ failed 1))})
+  
+  (if (error? (sse/on-drain "not-a-stream" (\ {} {})))
+    {do (print "✅ sse/on-drain wrong stream fails") (= {passed} (+ passed 1))}
+    {do (print "❌ sse/on-drain wrong stream fails") (= {failed} (+ failed 1))})
+  
+  (if (error? (sse/on-drain "stream" "not-a-function"))
+    {do (print "✅ sse/on-drain wrong callback type fails") (= {passed} (+ passed 1))}
+    {do (print "❌ sse/on-drain wrong callback type fails") (= {failed} (+ failed 1))})
+  
+  (if (error? (sse/cancel "not-a-stream"))
+    {do (print "✅ sse/cancel wrong stream fails") (= {passed} (+ passed 1))}
+    {do (print "❌ sse/cancel wrong stream fails") (= {failed} (+ failed 1))})
+  
+  (if (error? (sse/event "not-a-stream" "type" "data"))
+    {do (print "✅ sse/event wrong stream fails") (= {passed} (+ passed 1))}
+    {do (print "❌ sse/event wrong stream fails") (= {failed} (+ failed 1))})
+  
+  (if (error? (sse/id "not-a-stream" "id" "data"))
+    {do (print "✅ sse/id wrong stream fails") (= {passed} (+ passed 1))}
+    {do (print "❌ sse/id wrong stream fails") (= {failed} (+ failed 1))})
+  
+  (if (error? (sse/retry "not-a-stream" 1000))
+    {do (print "✅ sse/retry wrong stream fails") (= {passed} (+ passed 1))}
+    {do (print "❌ sse/retry wrong stream fails") (= {failed} (+ failed 1))})
+  
+  (if (error? (sse/comment "not-a-stream" "comment"))
+    {do (print "✅ sse/comment wrong stream fails") (= {passed} (+ passed 1))}
+    {do (print "❌ sse/comment wrong stream fails") (= {failed} (+ failed 1))})
+  
+  (if (error? (sse/heartbeat "not-a-stream"))
+    {do (print "✅ sse/heartbeat wrong stream fails") (= {passed} (+ passed 1))}
+    {do (print "❌ sse/heartbeat wrong stream fails") (= {failed} (+ failed 1))})
+  
+  (if (error? (stream/closed))
+    {do (print "✅ stream/closed no args fails") (= {passed} (+ passed 1))}
+    {do (print "❌ stream/closed no args fails") (= {failed} (+ failed 1))})
+  
+  (if (error? (stream/closed "not-a-stream"))
+    {do (print "✅ stream/closed wrong type fails") (= {passed} (+ passed 1))}
+    {do (print "❌ stream/closed wrong type fails") (= {failed} (+ failed 1))})
+  
+  (printf "\n🏁 Results: %ld passed, %ld failed\n" (+ passed 1) failed)
+  (aio/stop aio)
+  (if (== failed 0)
+    {(shutdown 0)}
+    {(shutdown 1)})
+}))
+
+(aio/run aio)

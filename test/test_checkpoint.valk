@@ -1,0 +1,25 @@
+; Checkpoint API Tests (Phase 4)
+; Run with: ./build/valk test/test_checkpoint.valk
+;
+; NOTE: Checkpoint is NOT exposed to user code. It happens automatically
+; at safe points (between top-level expressions) in the REPL. These tests
+; verify the read-only introspection APIs work correctly.
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Test arena-capacity returns a positive number
+
+; Test arena-usage returns a non-negative number
+
+; Test arena-usage is less than capacity
+
+; Run all tests
+(test/run (list
+  (test "arena-capacity-positive"
+    {> (mem/arena/capacity) 0})
+  (test "arena-usage-returns-number"
+    {>= (mem/arena/usage) 0})
+  (test "arena-usage-less-than-capacity"
+    {< (mem/arena/usage) (mem/arena/capacity)}))
+  {:suite-name "Checkpoint API Tests"})

@@ -1,0 +1,17 @@
+(load "src/prelude.valk")
+(def {aio} (aio/await (aio/start)))
+(def {inner-h} (aio/sleep aio 50))
+(def {then-h} (aio/then inner-h (\ {_} { (printf "then cb\n") true })))
+(def {all-h} (aio/all (list then-h)))
+
+; Check all-h status after inner completes
+(aio/then inner-h (\ {_} {
+  (printf "inner done\n")
+  (printf "all-h status = %s\n" (str (aio/status all-h)))
+  (printf "then-h status = %s\n" (str (aio/status then-h)))
+  (aio/stop aio)
+}))
+
+(printf "Starting run\n")
+(aio/run aio)
+(printf "Done\n")

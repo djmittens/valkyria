@@ -1,0 +1,397 @@
+; Parser Branch Coverage Tests
+; These tests specifically target uncovered branches in parser.c
+; Run with: ./build/valk test/test_parser_branch_coverage.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; === Select builtin edge cases ===
+
+; === If builtin edge cases ===
+
+; === Printf edge cases ===
+; Note: printf tests use the format string carefully to avoid parse errors
+
+; === Lambda/function edge cases ===
+
+; === Do builtin edge cases ===
+
+; === Eval and apply edge cases ===
+
+; === Quasiquote edge cases ===
+
+; === String operations edge cases ===
+
+; === List operations edge cases ===
+
+; === Math operations edge cases ===
+
+; === Comparison edge cases ===
+
+; === Repeat builtin ===
+
+; === Range edge cases ===
+
+; === Env lookup edge cases ===
+
+; === Def vs = (put) ===
+
+; === Print builtin edge cases ===
+
+; === Error propagation ===
+
+; === Body evaluation edge cases ===
+
+(test/run (list
+  (test "select-no-match-all-false"
+    {do
+    (= {result} (select
+      {false "never1"}
+      {false "never2"}
+      {false "never3"}))
+    (test/assert (error? result) "select with no match should error")
+    true
+  })
+  (test "select-empty"
+    {do
+    (= {result} (eval (read "(select)")))
+    (test/assert (error? result) "empty select should error")
+    true
+  })
+  (test "select-bad-clause-not-list"
+    {do
+    (= {result} (eval (read "(select 123)")))
+    (test/assert (error? result) "select with non-list clause should error")
+    true
+  })
+  (test "select-clause-wrong-length"
+    {do
+    (= {result} (eval (read "(select {true})")))
+    (test/assert (error? result) "select clause with 1 element should error")
+    true
+  })
+  (test "select-condition-error-propagates"
+    {do
+    (= {result} (select {(/ 1 0) "never"}))
+    (test/assert (error? result) "select with error in condition propagates")
+    true
+  })
+  (test "select-condition-non-number"
+    {do
+    (= {result} (eval (read "(select {\"not-a-number\" 42})")))
+    (test/assert (error? result) "select with non-number condition should error")
+    true
+  })
+  (test "if-non-boolean-condition"
+    {do
+    (= {result} (if 42 "truthy" "falsy"))
+    (test/assert-eq "truthy" result "non-zero treated as true")
+    (= {result2} (if 0 "truthy" "falsy"))
+    (test/assert-eq "falsy" result2 "zero treated as false")
+    true
+  })
+  (test "if-condition-is-zero"
+    {do
+    (= {result} (if (- 1 1) "true" "false"))
+    (test/assert-eq "false" result "computed zero is false")
+    true
+  })
+  (test "if-branches-are-nil"
+    {do
+    (= {result} (if true nil nil))
+    (test/assert (== result nil) "if with nil branches works")
+    true
+  })
+  (test "printf-basic"
+    {do
+    (printf "hello world
+")
+    true
+  })
+  (test "printf-string-format"
+    {do
+    (printf "name: %s
+" "test")
+    true
+  })
+  (test "printf-number-format"
+    {do
+    (printf "value: %d
+" 42)
+    true
+  })
+  (test "printf-ld-format"
+    {do
+    (printf "value: %ld
+" 12345678901234)
+    true
+  })
+  (test "lambda-ampersand-at-end-error"
+    {do
+    (= {result} (eval (read "(\ {x &} {x})")))
+    (test/assert (error? result) "& at end of formals should error")
+    true
+  })
+  (test "lambda-call-with-extra-args-error"
+    {do
+    (= {f} (\ {x} {x}))
+    (= {result} (f 1 2 3))
+    (test/assert (error? result) "too many args without varargs errors")
+    true
+  })
+  (test "lambda-varargs-only"
+    {do
+    (= {f} (\ {& all} {len all}))
+    (test/assert-eq 0 (f) "varargs-only with no args")
+    (test/assert-eq 3 (f 1 2 3) "varargs-only with args")
+    true
+  })
+  (test "lambda-partial-then-complete"
+    {do
+    (= {add3} (\ {a b c} {+ (+ a b) c}))
+    (= {p1} (add3 1))
+    (= {p2} (p1 2))
+    (= {result} (p2 3))
+    (test/assert-eq 6 result "chained partial application")
+    true
+  })
+  (test "lambda-partial-with-varargs"
+    {do
+    (= {f} (\ {x & rest} {cons x rest}))
+    (= {g} (f 1))
+    (= {result} (g 2 3 4))
+    (test/assert-eq 4 (len result) "partial with varargs collects rest")
+    true
+  })
+  (test "do-single-expression"
+    {do
+    (= {result} (do 42))
+    (test/assert-eq 42 result "do with single expression")
+    true
+  })
+  (test "do-side-effects-before-last"
+    {do
+    (= {counter} 0)
+    (= {result} (do
+      (def {counter} 1)
+      (def {counter} 2)
+      (def {counter} 3)
+      counter))
+    (test/assert-eq 3 result "do evaluates all but returns last")
+    true
+  })
+  (test "eval-self-evaluating"
+    {do
+    (test/assert-eq 42 (eval 42) "eval number is identity")
+    (test/assert-eq "hi" (eval "hi") "eval string is identity")
+    true
+  })
+  (test "apply-non-function"
+    {do
+    (= {result} (eval (read "(42 1 2 3)")))
+    (test/assert (error? result) "applying non-function errors")
+    true
+  })
+  (test "builtin-returned-null-protection"
+    {do
+    (test/assert-eq 3 (+ 1 2) "builtins return values not null")
+    true
+  })
+  (test "quasiquote-multiple-unquotes"
+    {do
+    (= {a} 1)
+    (= {b} 2)
+    (= {c} 3)
+    (= {result} `{,a ,b ,c})
+    (test/assert-eq 3 (len result) "multiple unquotes")
+    (test/assert-eq 1 (nth 1 result) "first unquote")
+    (test/assert-eq 2 (nth 2 result) "second unquote")
+    (test/assert-eq 3 (nth 3 result) "third unquote")
+    true
+  })
+  (test "quasiquote-splice-empty"
+    {do
+    (= {empty} {})
+    (= {result} `{before ,@empty after})
+    (test/assert-eq 2 (len result) "splice empty list")
+    true
+  })
+  (test "quasiquote-nested"
+    {do
+    (= {x} 5)
+    (= {result} `{outer `{inner ,x}})
+    (test/assert-eq 2 (len result) "nested quasiquote structure")
+    true
+  })
+  (test "str-to-num-valid"
+    {do
+    (test/assert-eq 42 (str->num "42") "parse positive")
+    (test/assert-eq -17 (str->num "-17") "parse negative")
+    (test/assert-eq 0 (str->num "0") "parse zero")
+    true
+  })
+  (test "str-to-num-invalid"
+    {do
+    (= {result} (str->num "not-a-number"))
+    (test/assert (error? result) "invalid number string errors")
+    true
+  })
+  (test "str-to-num-wrong-type"
+    {do
+    (= {result} (str->num 42))
+    (test/assert (error? result) "str->num with number errors")
+    true
+  })
+  (test "nth-negative-index"
+    {do
+    (= {result} (nth -1 {1 2 3}))
+    (test/assert (error? result) "negative index errors")
+    true
+  })
+  (test "nth-zero-index"
+    {do
+    (= {result} (nth 0 {1 2 3}))
+    (test/assert (error? result) "zero index errors (1-based)")
+    true
+  })
+  (test "init-single-element"
+    {do
+    (= {result} (init {1}))
+    (test/assert (== result nil) "init of single element is nil")
+    true
+  })
+  (test "last-single-element"
+    {do
+    (= {result} (last {42}))
+    (test/assert-eq 42 result "last of single element")
+    true
+  })
+  (test "divide-negative"
+    {do
+    (= {result} (/ -10 3))
+    (test/assert-eq -3 result "divide with negative")
+    true
+  })
+  (test "multiply-negative"
+    {do
+    (= {result} (* -5 3))
+    (test/assert-eq -15 result "multiply with negative")
+    true
+  })
+  (test "subtract-to-negative"
+    {do
+    (= {result} (- 3 10))
+    (test/assert-eq -7 result "subtract to negative")
+    true
+  })
+  (test "ord-different-types"
+    {do
+    (= {result} (ord 1 "a"))
+    (test/assert (error? result) "ord different types errors")
+    true
+  })
+  (test "cmp-chained"
+    {do
+    (test/assert (< 1 2 3 4) "chained less than")
+    (test/assert (not (< 1 2 5 3)) "chained less than fails")
+    (test/assert (> 4 3 2 1) "chained greater than")
+    (test/assert (<= 1 1 2 3) "chained less equal")
+    (test/assert (>= 3 2 2 1) "chained greater equal")
+    true
+  })
+  (test "repeat-zero-times"
+    {do
+    (= {result} (repeat 0 42))
+    (test/assert (== result nil) "repeat 0 times is nil")
+    true
+  })
+  (test "repeat-negative-times"
+    {do
+    (= {result} (repeat -5 42))
+    (test/assert (== result nil) "repeat negative times is nil")
+    true
+  })
+  (test "range-single-element"
+    {do
+    (= {result} (range 0 1))
+    (test/assert-eq 1 (len result) "range 0 1 has one element")
+    (test/assert-eq 0 (nth 1 result) "range starts at 0")
+    true
+  })
+  (test "range-crossing-zero"
+    {do
+    (= {result} (range -2 2))
+    (test/assert-eq 4 (len result) "range crossing zero")
+    (test/assert-eq -2 (nth 1 result) "starts at -2")
+    (test/assert-eq 1 (nth 4 result) "ends at 1")
+    true
+  })
+  (test "keyword-self-evaluating"
+    {do
+    (test/assert-eq :foo :foo "keywords are self-evaluating")
+    (test/assert-eq :bar (eval :bar) "eval keyword is itself")
+    true
+  })
+  (test "symbol-not-found"
+    {do
+    (= {result} (eval (read "nonexistent-symbol-xyz")))
+    (test/assert (error? result) "undefined symbol errors")
+    true
+  })
+  (test "def-creates-global"
+    {do
+    (def {global-test-var} 123)
+    (test/assert-eq 123 global-test-var "def creates global")
+    true
+  })
+  (test "def-wrong-args-count"
+    {do
+    (= {result} (eval (read "(def {x})")))
+    (test/assert (error? result) "def without value errors")
+    true
+  })
+  (test "print-multiple-args"
+    {do
+    (print "hello" 42 "world")
+    true
+  })
+  (test "print-list"
+    {do
+    (print {1 2 3})
+    true
+  })
+  (test "print-lambda"
+    {do
+    (= {f} (\ {x} {x}))
+    (print f)
+    true
+  })
+  (test "nested-error-propagation"
+    {do
+    (= {result} (+ 1 (/ 1 0)))
+    (test/assert (error? result) "error propagates through +")
+    true
+  })
+  (test "list-with-error"
+    {do
+    (= {result} (list 1 2 (/ 1 0) 4))
+    (test/assert (error? result) "error in list propagates")
+    true
+  })
+  (test "lambda-multi-expr-body"
+    {do
+    (= {f} (\ {x}
+      {(def {temp} (* x 2))
+       (+ temp 1)}))
+    (= {result} (f 5))
+    (test/assert-eq 11 result "multi-expr body returns last")
+    true
+  })
+  (test "lambda-single-list-body"
+    {do
+    (= {f} (\ {} {+ 1 2}))
+    (= {result} (f))
+    (test/assert-eq 3 result "single list body evaluates")
+    true
+  }))
+  {:suite-name "Parser Branch Coverage Tests"})
