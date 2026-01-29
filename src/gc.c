@@ -3815,6 +3815,12 @@ bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
     return false;
   }
   
+  valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
+  if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected,
+                                       VALK_GC_PHASE_STW_REQUESTED)) {
+    return false;
+  }
+  
   if (valk_gc_coord.barrier_initialized) {
     valk_barrier_reset(&valk_gc_coord.barrier, num_threads);
   } else {
@@ -3825,12 +3831,6 @@ bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
   atomic_store(&__gc_heap2_current, heap);
   
   atomic_thread_fence(memory_order_seq_cst);
-  
-  valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
-  if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected,
-                                       VALK_GC_PHASE_STW_REQUESTED)) {
-    return false;
-  }
   
   valk_aio_wake_all_for_gc();
   

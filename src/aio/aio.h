@@ -73,20 +73,35 @@ struct valk_async_handle_t {
   union {
     struct {
       struct valk_lval_t **results;
-      u64 completed;
+      struct valk_async_handle_t **handles;
+      u64 total;
+      _Atomic(u64) completed;
     } all;
     struct {
+      struct valk_async_handle_t **handles;
+      u64 total;
+    } race;
+    struct {
+      struct valk_async_handle_t **handles;
+      u64 total;
       u64 failed_count;
       struct valk_lval_t *last_error;
     } any;
     struct {
+      struct valk_async_handle_t *source_handle;
+      struct valk_async_handle_t *timeout_handle;
+    } within;
+    struct {
+      struct valk_async_handle_t *current_attempt;
+      struct valk_async_handle_t *backoff_timer;
       struct valk_lval_t *fn;
       u64 max_attempts;
-      u64 current_attempt;
+      u64 current_attempt_num;
       u64 base_delay_ms;
       f64 backoff_multiplier;
+      struct valk_lval_t *last_error;
     } retry;
-  } combinator;
+  } comb;
 };
 
 valk_async_handle_t *valk_async_handle_new(struct valk_aio_system *sys, struct valk_lenv_t *env);
