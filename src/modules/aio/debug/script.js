@@ -2608,6 +2608,8 @@
     var iterNow = getMetricValue(counters, 'event_loop_iterations', loopLabels);
     var idleNow = getMetricValue(gauges, 'event_loop_idle_us', loopLabels);
     var handlesNow = getMetricValue(gauges, 'event_loop_handles', loopLabels);
+    var busyPctNow = getMetricValue(gauges, 'event_loop_busy_pct', loopLabels);
+    var iterRateNow = getMetricValue(gauges, 'event_loop_iter_rate', loopLabels);
 
     // Track previous values for rate calculation
     var now = Date.now();
@@ -2645,15 +2647,19 @@
     var iterDelta = iterNow - (prev.iter || 0);
     var iterRate = iterDelta >= 0 ? iterDelta / dt : 0;
 
-    // Utilization from idle time delta
-    var idleDelta = idleNow - (prev.idle || 0);
-    var dtUs = dt * 1e6;
+    // Utilization: prefer server-computed busy_pct (updated each maintenance tick)
+    // Falls back to client-side computation from idle time delta
     var utilPct = 0;
-    if (idleDelta >= 0 && idleDelta <= dtUs * 2) {
-      // Normal: idle_delta should be close to dt (if ~100% idle, idle_delta ≈ dt)
-      utilPct = Math.max(0, Math.min(100, 100 - (idleDelta / dtUs) * 100));
+    if (busyPctNow !== null && busyPctNow !== undefined) {
+      utilPct = busyPctNow;
+    } else {
+      // Fallback: compute from idle time delta
+      var idleDelta = idleNow - (prev.idle || 0);
+      var dtUs = dt * 1e6;
+      if (idleDelta >= 0 && idleDelta <= dtUs * 2) {
+        utilPct = Math.max(0, Math.min(100, 100 - (idleDelta / dtUs) * 100));
+      }
     }
-    // If idle_delta is negative (wrap) or huge (first real data), show 0%
 
     // Update utilization bar and label
     var utilFill = panel.querySelector('.aio-sys-util-fill');
@@ -2665,10 +2671,11 @@
       utilFill.classList.toggle('critical', utilPct > 90);
     }
 
-    // Update iteration rate
+    // Update iteration rate: prefer server-computed rate
     var rateEl = panel.querySelector('.aio-sys-iter-rate');
     if (rateEl) {
-      rateEl.textContent = fmtCompact(Math.round(iterRate));
+      var displayRate = (iterRateNow !== null && iterRateNow !== undefined) ? iterRateNow : iterRate;
+      rateEl.textContent = fmtCompact(Math.round(displayRate));
     }
 
     // Update handles from modular metrics
@@ -2679,14 +2686,26 @@
     panel.querySelector('.aio-sys-servers').textContent = (sysStats.servers || 0) + ' servers';
 
     // Animate pulse dots based on activity (iter rate)
+    // Use server-computed rate for stability, with smoothing to prevent jitter
     var pulseDots = panel.querySelectorAll('.pulse-dot');
-    var activityLevel = Math.min(5, Math.ceil(iterRate / 5)); // 0-5 dots lit based on rate (idle ~10/s)
+    var displayRate = (iterRateNow !== null && iterRateNow !== undefined) ? iterRateNow : iterRate;
+    // Map rate to 0-5 dots: 0=idle, 5=very busy
+    // Thresholds: 0-2=0dots, 3-10=1dot, 11-50=2dots, 51-200=3dots, 201-1000=4dots, 1000+=5dots
+    var targetLevel = 0;
+    if (displayRate > 1000) targetLevel = 5;
+    else if (displayRate > 200) targetLevel = 4;
+    else if (displayRate > 50) targetLevel = 3;
+    else if (displayRate > 10) targetLevel = 2;
+    else if (displayRate > 2) targetLevel = 1;
+    // Smooth transitions: only change by 1 level per update to avoid jumping
+    var prevLevel = panel._pulseLevel || 0;
+    var activityLevel;
+    if (targetLevel > prevLevel) activityLevel = prevLevel + 1;
+    else if (targetLevel < prevLevel) activityLevel = prevLevel - 1;
+    else activityLevel = targetLevel;
+    panel._pulseLevel = activityLevel;
     for (var i = 0; i < pulseDots.length; i++) {
       pulseDots[i].classList.toggle('active', i < activityLevel);
-      // Add staggered animation for visual interest
-      if (i < activityLevel && iterRate > 0) {
-        pulseDots[i].style.animationDelay = (i * 0.1) + 's';
-      }
     }
 
     // Update queue stats (pending requests + pending responses)

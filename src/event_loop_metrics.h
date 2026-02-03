@@ -20,11 +20,15 @@ typedef struct {
   valk_gauge_v2_t *events_waiting;    // Events currently waiting
   valk_gauge_v2_t *idle_time_us;      // Cumulative idle time in microseconds
   valk_gauge_v2_t *handles;           // Active handle count
+  valk_gauge_v2_t *busy_pct;          // Busy percentage (0-100) computed from idle delta
+  valk_gauge_v2_t *iter_rate;         // Iterations per second (computed from delta)
   const char *loop_name;              // For debugging
 
   // Previous values for delta tracking (counters are monotonic from libuv)
   u64 prev_iterations;
   u64 prev_events;
+  u64 prev_idle_ns;                   // Previous idle time for busy% calculation
+  u64 prev_update_ns;                 // Previous update timestamp (hrtime)
 } valk_event_loop_metrics_v2_t;
 
 // ============================================================================

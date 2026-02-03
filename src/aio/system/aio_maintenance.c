@@ -41,6 +41,8 @@ static void __maintenance_timer_cb(uv_timer_t *timer) {
   valk_maintenance_check_connection_timeouts(sys, now);
   valk_maintenance_check_backpressure_timeouts(sys, now);
   valk_maintenance_check_orphaned_streams(sys);
+  valk_aio_update_loop_metrics(sys);
+  valk_aio_update_queue_stats(sys);
 }
 
 void valk_maintenance_timer_init(valk_aio_system_t *sys) {

@@ -1856,7 +1856,8 @@ typedef struct {
   _Atomic bool *start_flag;
   _Atomic bool *gc_done_flag;
   _Atomic int *participated_count;
-  void **rooted_ptrs;
+  _Atomic int *corruption_count;
+  valk_lval_t **rooted_vals;
   int rooted_count;
 } true_parallel_gc_args_t;
 
@@ -1867,9 +1868,13 @@ static void *true_parallel_gc_worker(void *arg) {
   valk_gc_thread_register();
   
   for (int i = 0; i < args->rooted_count; i++) {
-    args->rooted_ptrs[i] = valk_gc_heap2_alloc(args->heap, 64);
-    if (args->rooted_ptrs[i]) {
-      memset(args->rooted_ptrs[i], args->thread_id + 1, 64);
+    valk_lval_t *val = valk_gc_heap2_alloc(args->heap, sizeof(valk_lval_t));
+    if (val) {
+      memset(val, 0, sizeof(valk_lval_t));
+      val->flags = LVAL_NUM;
+      val->num = (args->thread_id + 1) * 1000 + i;
+      args->rooted_vals[i] = val;
+      valk_gc_root_push(val);
     }
   }
   
@@ -1887,10 +1892,11 @@ static void *true_parallel_gc_worker(void *arg) {
   atomic_fetch_add(args->participated_count, 1);
   
   for (int i = 0; i < args->rooted_count; i++) {
-    if (args->rooted_ptrs[i]) {
-      u8 *data = (u8 *)args->rooted_ptrs[i];
-      if (data[0] != (u8)(args->thread_id + 1)) {
-        fprintf(stderr, "Thread %d: data corrupted!\n", args->thread_id);
+    valk_lval_t *val = args->rooted_vals[i];
+    if (val) {
+      i64 expected = (args->thread_id + 1) * 1000 + i;
+      if (val->flags != LVAL_NUM || val->num != expected) {
+        atomic_fetch_add(args->corruption_count, 1);
       }
     }
   }
@@ -1913,20 +1919,23 @@ void test_gc_heap2_true_parallel_gc(VALK_TEST_ARGS()) {
   const int rooted_per_thread = 100;
   pthread_t workers[3];
   true_parallel_gc_args_t args[3];
-  void *rooted_ptrs[3][100];
+  valk_lval_t *rooted_vals[3][100];
   _Atomic int ready_count = 0;
   _Atomic bool start_flag = false;
   _Atomic bool gc_done_flag = false;
   _Atomic int participated_count = 0;
+  _Atomic int corruption_count = 0;
   
   for (int i = 0; i < num_workers; i++) {
+    memset(rooted_vals[i], 0, sizeof(rooted_vals[i]));
     args[i].heap = heap;
     args[i].thread_id = i;
     args[i].ready_count = &ready_count;
     args[i].start_flag = &start_flag;
     args[i].gc_done_flag = &gc_done_flag;
     args[i].participated_count = &participated_count;
-    args[i].rooted_ptrs = rooted_ptrs[i];
+    args[i].corruption_count = &corruption_count;
+    args[i].rooted_vals = rooted_vals[i];
     args[i].rooted_count = rooted_per_thread;
     pthread_create(&workers[i], nullptr, true_parallel_gc_worker, &args[i]);
   }
@@ -1966,6 +1975,9 @@ void test_gc_heap2_true_parallel_gc(VALK_TEST_ARGS()) {
   
   u64 parallel_cycles = atomic_load(&valk_gc_coord.parallel_cycles);
   VALK_TEST_ASSERT(parallel_cycles >= 1, "Should have parallel GC cycle");
+  
+  int corrupted = atomic_load(&corruption_count);
+  VALK_TEST_ASSERT(corrupted == 0, "Worker data should not be corrupted by GC");
   
   valk_gc_thread_unregister();
   valk_gc_heap2_destroy(heap);

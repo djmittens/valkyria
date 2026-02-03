@@ -54,10 +54,12 @@ void valk_aio_task_queue_init(valk_aio_system_t *sys) {
 
   uv_async_init(sys->eventloop, &tq->notify, __task_queue_notify_cb);
   tq->notify.data = sys;
+  uv_unref((uv_handle_t *)&tq->notify);
 
   uv_check_init(sys->eventloop, &tq->drain_check);
   tq->drain_check.data = sys;
   uv_check_start(&tq->drain_check, __task_queue_drain_cb);
+  uv_unref((uv_handle_t *)&tq->drain_check);
 
   tq->initialized = true;
 }
