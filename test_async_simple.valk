@@ -1,7 +1,0 @@
-(load "src/prelude.valk")
-(def {aio} (aio/await (aio/start)))
-(def {h} (aio/sleep aio 100))
-(aio/then h (\ {_} {(print "sleep done") (aio/stop aio)}))
-(print "starting aio/run")
-(aio/run aio)
-(print "aio/run returned")

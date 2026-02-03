@@ -306,6 +306,23 @@ define run_tests_valk
 	$(1)/valk test/test_parser_branch_coverage.valk
 	$(1)/valk test/test_parser_coverage_supplement.valk
 	$(1)/valk test/test_gc_and_log_builtins.valk
+	$(1)/valk test/test_large_download.valk
+	$(1)/valk test/test_large_response.valk
+	$(1)/valk test/test_aio_never.valk
+	$(1)/valk test/test_aio_traverse.valk
+	$(1)/valk test/test_interval_cancel.valk
+	$(1)/valk test/test_sse_format.valk
+	$(1)/valk test/test_sse_reconnect_minimal.valk
+	$(1)/valk test/test_printf_closure_bug.valk
+	$(1)/valk test/test_metrics_prometheus.valk
+	$(1)/valk test/test_overload.valk
+	$(1)/valk test/test_overload_metrics.valk
+	$(1)/valk test/test_delay_error.valk
+	$(1)/valk test/test_delay_continuation_error.valk
+	$(1)/valk test/test_make_string.valk
+	$(1)/valk test/test_coverage_integration.valk
+	$(1)/valk test/test_custom_error_handler.valk
+	$(1)/valk test/test_debug_handler.valk
 
 	$(1)/valk test/stress/test_gc_stress.valk
 	$(1)/valk test/stress/test_networking_stress.valk

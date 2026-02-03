@@ -1,6 +1,0 @@
-(load "src/prelude.valk")
-(load "src/modules/test.valk")
-
-(test/run (list
-  (test "simple sync test" (== 1 1)))
-  {})
