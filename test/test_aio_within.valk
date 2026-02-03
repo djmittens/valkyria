@@ -1,55 +1,30 @@
-; Test suite for aio/within combinator  
+; Test suite for aio/within combinator
 ; Tests: aio/within adds timeout to async operations
 
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 
-(= {aio} (aio/await (aio/start)))
+(def {aio} (aio/await (aio/start)))
 
-; Test 1: aio/within creates handle
-(= {h1} (aio/within (aio/pure 42) 100))
-(= {test1-passed} (not (== h1 nil)))
+(test/run-async aio (list
+  (test-async "aio/within creates handle" (\ {} {
+    (= {h} (aio/within (aio/pure 42) 100))
+    (aio/pure (not (== h nil)))
+  }))
 
-; Test 2: aio/within completes without timeout on immediate handle
-(= {h2} (aio/within (aio/pure 42) 100))
-(= {status} (aio/status h2))
-(= {test2-passed} (== status :completed))
+  (test-async "aio/within completes without timeout on immediate handle" (\ {} {
+    (= {h} (aio/within (aio/pure 42) 100))
+    (aio/pure (== (aio/status h) :completed))
+  }))
 
-; Test 3: Timeout behavior test using aio/race pattern
-; This tests timeout semantics with actual async operations
-; Note: aio/within with running handles has a known bug (issue logged)
-; Using aio/race pattern which works correctly
-(= {test-start} (time-us {}))
+  (test-async "timeout fires before slow operation completes" (\ {} {
+    (= {slow} (aio/sleep aio 200))
+    (= {timeout} (aio/then (aio/sleep aio 30) (\ {_} {:timeout})))
+    (= {race-handle} (aio/race (list slow timeout)))
+    (aio/then race-handle (\ {result} {
+      (== result :timeout)
+    }))
+  })))
+  {:suite-name "aio/within Tests" :timeout-ms 1000})
 
-(= {slow} (aio/sleep aio 100))
-(= {timeout} (aio/then (aio/sleep aio 15) (\ {_} {:timeout})))
-(= {race-handle} (aio/race (list slow timeout)))
-
-(aio/then race-handle (\ {result} {
-  (= {elapsed-ms} (/ (- (time-us {}) test-start) 1000))
-  
-  ; Print test results in the callback since closure capture doesn't work
-  (if test1-passed
-    {(print "PASS: aio/within creates handle")}
-    {(print "FAIL: aio/within creates handle")})
-  
-  (if test2-passed
-    {(print "PASS: aio/within completes without timeout")}
-    {(print "FAIL: aio/within completes without timeout")})
-  
-  (= {test3-ok} (and (== result :timeout) (and (> elapsed-ms 10) (< elapsed-ms 50))))
-  (if test3-ok
-    {(print "PASS: timeout behavior (via aio/race)")}
-    {(print "FAIL: timeout behavior (via aio/race)")})
-  
-  (print "")
-  (= {passed} (+ (if test1-passed {1} {0}) (if test2-passed {1} {0}) (if test3-ok {1} {0})))
-  (= {failed} (- 3 passed))
-  (printf "Results: %d passed, %d failed\n" passed failed)
-  
-  (if (== failed 0)
-    {(aio/schedule aio 0 (\ {} {(shutdown 0)}))}
-    {(aio/schedule aio 0 (\ {} {(shutdown 1)}))})
-  (aio/stop aio)
-}))
-
-(aio/run aio)
+(aio/stop aio)

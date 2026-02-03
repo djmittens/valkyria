@@ -5,13 +5,23 @@
 (load "src/modules/test.valk")
 
 (def {aio} (aio/await (aio/start)))
-(def {received-headers} nil)
 
+; Helper to find header value by name
+(fun {get-header-value headers name}
+  {if (nil? headers)
+    {nil}
+    {do
+      (= {pair} (head headers))
+      (if (== (head pair) name)
+        {(head (tail pair))}
+        {get-header-value (tail headers) name})}})
+
+; Handler echoes back a specific header value in the body to verify it was received
 (def {handler}
   (\ {req} {
     (= {headers} (req/headers req))
-    (def {received-headers} headers)
-    `{:status "200" :body "OK"}
+    (= {custom-val} (get-header-value headers "x-custom-header"))
+    (list :status "200" :body (if (nil? custom-val) {"no-header"} {custom-val}))
   }))
 
 (def {server} (http2/server-listen aio 0 handler))
@@ -24,7 +34,7 @@
       (\ {resp} {
         (if (error? resp)
           {false}
-          {(== (http2/response-status resp) "200")})
+          {(== (http2/response-body resp) "test-value")})
       }))
   })))
   {:suite-name "Client Headers Tests"})

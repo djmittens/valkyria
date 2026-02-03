@@ -55,6 +55,7 @@ struct valk_stream_body {
   u64 created_at_ms;
   u64 last_activity_ms;
   u64 idle_timeout_ms;
+  u64 max_session_ms;
 
   void (*on_drain)(valk_stream_body_t *body, void *user_data);
   void (*on_close)(valk_stream_body_t *body, void *user_data);
@@ -92,8 +93,10 @@ bool valk_stream_body_writable(valk_stream_body_t *body);
 u64 valk_stream_body_queue_len(valk_stream_body_t *body);
 
 void valk_stream_body_set_idle_timeout(valk_stream_body_t *body, u64 timeout_ms);
+void valk_stream_body_set_max_session(valk_stream_body_t *body, u64 max_session_ms);
 void valk_stream_body_touch_activity(valk_stream_body_t *body);
 bool valk_stream_body_is_idle_expired(valk_stream_body_t *body);
+bool valk_stream_body_is_session_expired(valk_stream_body_t *body);
 
 int valk_stream_body_cancel(valk_stream_body_t *body, u32 error_code);
 

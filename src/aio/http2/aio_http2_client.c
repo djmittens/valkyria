@@ -179,13 +179,25 @@ void valk_http2_fail_pending_client_requests(valk_aio_handle_t *conn) {
 }
 
 // LCOV_EXCL_START libuv ref-free callback, invoked by GC during lval cleanup
-static void __valk_http2_response_body_free(void *ptr) {
+static void __valk_http2_response_free(void *ptr) {
   if (!ptr) return;
   valk_http2_response_t *res = ptr;
   if (res->body) {
     free(res->body);
     res->body = nullptr;
   }
+  if (res->status) {
+    free((void*)res->status);
+  }
+  for (u64 i = 0; i < res->headers.count; i++) {
+    if (res->headers.items[i].name) free(res->headers.items[i].name);
+    if (res->headers.items[i].value) free(res->headers.items[i].value);
+  }
+  if (res->headers.items) {
+    free(res->headers.items);
+    res->headers.items = nullptr;
+  }
+  free(res);
 }
 // LCOV_EXCL_STOP
 
@@ -207,7 +219,7 @@ static int __http_client_on_stream_close_callback(nghttp2_session *session,
                nghttp2_http2_strerror(error_code), error_code);
       valk_async_handle_fail(reqres->handle, valk_lval_err("%s", errmsg));
     } else {
-      valk_lval_t *result = valk_lval_ref("success", reqres->res, __valk_http2_response_body_free);
+      valk_lval_t *result = valk_lval_ref("success", reqres->res, __valk_http2_response_free);
       valk_async_handle_complete(reqres->handle, result);
       reqres->res = nullptr;
     }
@@ -493,16 +505,12 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
   
   __add_pending_request(conn, handle);
 
-  valk_mem_allocator_t *alloc = ctx->req->allocator;
-  valk_http2_response_t *res;
-  VALK_WITH_ALLOC(alloc) {
-    res = valk_mem_alloc(sizeof(valk_http2_response_t));
-    memset(res, 0, sizeof(valk_http2_response_t));
-    res->allocator = alloc;
-    res->headers.items = valk_mem_alloc(sizeof(struct valk_http2_header_t) * 8);
-    res->headers.count = 0;
-    res->headers.capacity = 8;
-  }
+  valk_http2_response_t *res = malloc(sizeof(valk_http2_response_t));
+  memset(res, 0, sizeof(valk_http2_response_t));
+  res->allocator = nullptr;
+  res->headers.items = malloc(sizeof(struct valk_http2_header_t) * 8);
+  res->headers.count = 0;
+  res->headers.capacity = 8;
   u64 client_response_limit = 64 * 1024 * 1024;
   res->body = malloc(client_response_limit);
   res->bodyLen = 0;
@@ -510,6 +518,7 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
 
   reqres->res = res;
 
+  valk_mem_allocator_t *alloc = ctx->req->allocator;
   VALK_WITH_ALLOC(alloc) {
     const u64 NUM_PSEUDO_HEADERS = 4;
     u64 trace_header_count = 0;

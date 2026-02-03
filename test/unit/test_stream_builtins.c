@@ -32,6 +32,7 @@ static valk_stream_body_t *create_test_body(valk_aio_handle_t *conn, i32 stream_
   body->bytes_sent = 0;
   body->last_activity_ms = 0;
   body->idle_timeout_ms = 0;
+  body->max_session_ms = 0;
   body->queue_max = 16;
   body->queue_len = 0;
   body->lisp_on_drain_handle = (valk_handle_t){0};
@@ -265,7 +266,7 @@ void test_stream_close_success(VALK_TEST_ARGS()) {
   valk_lval_t *args = valk_lval_list((valk_lval_t*[]){make_stream_body_ref(body)}, 1);
   valk_lval_t *result = call_builtin(env, "stream/close", args);
 
-  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+  ASSERT_LVAL_TYPE(result, LVAL_HANDLE);
   ASSERT_EQ(body->state, VALK_STREAM_CLOSING);
 
   free_test_body(body);
@@ -486,6 +487,93 @@ void test_stream_set_timeout_success(VALK_TEST_ARGS()) {
 
   ASSERT_LVAL_TYPE(result, LVAL_REF);
   ASSERT_EQ(body->idle_timeout_ms, 5000);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_stream_set_max_session_wrong_arg_count_zero(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = create_test_env();
+  valk_lval_t *args = valk_lval_nil();
+  valk_lval_t *result = call_builtin(env, "stream/set-max-session", args);
+
+  ASSERT_LVAL_TYPE(result, LVAL_ERR);
+  ASSERT_STR_CONTAINS(result->str, "expected 2 arguments");
+
+  VALK_PASS();
+}
+
+void test_stream_set_max_session_wrong_arg_count_one(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = create_test_env();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){make_stream_body_ref(body)}, 1);
+  valk_lval_t *result = call_builtin(env, "stream/set-max-session", args);
+
+  ASSERT_LVAL_TYPE(result, LVAL_ERR);
+  ASSERT_STR_CONTAINS(result->str, "expected 2 arguments");
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_stream_set_max_session_invalid_body(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = create_test_env();
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){
+    valk_lval_num(42),
+    valk_lval_num(1800000)
+  }, 2);
+  valk_lval_t *result = call_builtin(env, "stream/set-max-session", args);
+
+  ASSERT_LVAL_TYPE(result, LVAL_ERR);
+  ASSERT_STR_CONTAINS(result->str, "must be stream body handle");
+
+  VALK_PASS();
+}
+
+void test_stream_set_max_session_not_number(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = create_test_env();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){
+    make_stream_body_ref(body),
+    valk_lval_str("not a number")
+  }, 2);
+  valk_lval_t *result = call_builtin(env, "stream/set-max-session", args);
+
+  ASSERT_LVAL_TYPE(result, LVAL_ERR);
+  ASSERT_STR_CONTAINS(result->str, "must be a number");
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_stream_set_max_session_success(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = create_test_env();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  valk_lval_t *body_ref = make_stream_body_ref(body);
+  valk_lval_t *args = valk_lval_list((valk_lval_t*[]){
+    body_ref,
+    valk_lval_num(1800000)
+  }, 2);
+  valk_lval_t *result = call_builtin(env, "stream/set-max-session", args);
+
+  ASSERT_LVAL_TYPE(result, LVAL_REF);
+  ASSERT_EQ(body->max_session_ms, 1800000);
 
   free_test_body(body);
   free_test_conn(conn);
@@ -791,7 +879,7 @@ void test_stream_cancel_already_closed(VALK_TEST_ARGS()) {
   valk_lval_t *args = valk_lval_list((valk_lval_t*[]){make_stream_body_ref(body)}, 1);
   valk_lval_t *result = call_builtin(env, "stream/cancel", args);
 
-  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+  ASSERT_LVAL_TYPE(result, LVAL_HANDLE);
 
   free_test_body(body);
   free_test_conn(conn);
@@ -813,7 +901,7 @@ void test_stream_cancel_no_session(VALK_TEST_ARGS()) {
   valk_lval_t *args = valk_lval_list((valk_lval_t*[]){make_stream_body_ref(body)}, 1);
   valk_lval_t *result = call_builtin(env, "stream/cancel", args);
 
-  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+  ASSERT_LVAL_TYPE(result, LVAL_HANDLE);
   ASSERT_EQ(body->state, VALK_STREAM_CLOSING);
 
   free_test_body(body);
@@ -935,6 +1023,12 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_stream_set_timeout_invalid_body", test_stream_set_timeout_invalid_body);
   valk_testsuite_add_test(suite, "test_stream_set_timeout_not_number", test_stream_set_timeout_not_number);
   valk_testsuite_add_test(suite, "test_stream_set_timeout_success", test_stream_set_timeout_success);
+
+  valk_testsuite_add_test(suite, "test_stream_set_max_session_wrong_arg_count_zero", test_stream_set_max_session_wrong_arg_count_zero);
+  valk_testsuite_add_test(suite, "test_stream_set_max_session_wrong_arg_count_one", test_stream_set_max_session_wrong_arg_count_one);
+  valk_testsuite_add_test(suite, "test_stream_set_max_session_invalid_body", test_stream_set_max_session_invalid_body);
+  valk_testsuite_add_test(suite, "test_stream_set_max_session_not_number", test_stream_set_max_session_not_number);
+  valk_testsuite_add_test(suite, "test_stream_set_max_session_success", test_stream_set_max_session_success);
 
   valk_testsuite_add_test(suite, "test_stream_cancel_wrong_arg_count", test_stream_cancel_wrong_arg_count);
   valk_testsuite_add_test(suite, "test_stream_cancel_invalid_body", test_stream_cancel_invalid_body);

@@ -2,56 +2,40 @@
 ; Verifies that aio/interval returns a handle and aio/cancel works
 
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 
 (def {aio} (aio/await (aio/start)))
 
-(println "=== Testing aio/interval Cancellation ===")
+(test/run-async aio (list
+  (test-async "aio/interval returns a handle" (\ {} {
+    (= {h} (aio/interval aio 100 (\ {} {nil})))
+    (= {is-handle} (handle? h))
+    (aio/cancel h)
+    (aio/pure is-handle)
+  }))
 
-; Test 1: aio/interval returns a handle
-(def {interval-handle} (aio/interval aio 20 (\ {} {
-  nil
-})))
+  (test-async "aio/cancel on interval returns :true" (\ {} {
+    (= {h} (aio/interval aio 100 (\ {} {nil})))
+    (aio/then (aio/sleep aio 50) (\ {_} {
+      (== (aio/cancel h) :true)
+    }))
+  }))
 
-(if (handle? interval-handle)
-  (println "  aio/interval returns a handle")
-  (do
-    (println "  FAIL: aio/interval did not return a handle")
-    (aio/stop aio)
-    (exit 1)))
+  (test-async "aio/cancelled? returns :true after cancel" (\ {} {
+    (= {h} (aio/interval aio 100 (\ {} {nil})))
+    (aio/then (aio/sleep aio 50) (\ {_} {(do
+      (aio/cancel h)
+      (== (aio/cancelled? h) :true))
+    }))
+  }))
 
-; Let the interval run for a bit then test cancellation via aio/then + aio/sleep
-(aio/then (aio/sleep aio 100) (\ {_} {
-  ; Test 2: Cancel the interval
-  (= {cancel-result} (aio/cancel interval-handle))
-  (if (== cancel-result (quote :true))
-    (println "  aio/cancel returned :true")
-    (do
-      (println "  FAIL: aio/cancel did not return :true")
-      (aio/stop aio)
-      (exit 1)))
-  
-  ; Test 3: Check if cancelled
-  (= {is-cancelled} (aio/cancelled? interval-handle))
-  (if (== is-cancelled (quote :true))
-    (println "  Interval handle is marked as cancelled")
-    (do
-      (println "  FAIL: Interval handle not marked as cancelled")
-      (aio/stop aio)
-      (exit 1)))
-  
-  ; Test 4: Verify status is cancelled
-  (= {status} (aio/status interval-handle))
-  (if (== status (quote :cancelled))
-    (println "  Interval status is :cancelled")
-    (do
-      (print "  FAIL: Interval status is not :cancelled, got:" status)
-      (aio/stop aio)
-      (exit 1)))
-  
-  ; All tests passed
-  (println "  All tests passed!")
-  (aio/stop aio)
-}))
+  (test-async "aio/status after cancel shows :cancelled" (\ {} {
+    (= {h} (aio/interval aio 100 (\ {} {nil})))
+    (aio/then (aio/sleep aio 50) (\ {_} {(do
+      (aio/cancel h)
+      (== (aio/status h) :cancelled))
+    }))
+  })))
+  {:suite-name "aio/interval Cancellation Tests" :timeout-ms 1000})
 
-(aio/run aio)
-(exit 0)
+(aio/stop aio)

@@ -2,82 +2,56 @@
 ; Verifies that cancelling a scheduled timer prevents the callback from running
 
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 
-(= {aio} (aio/await (aio/start)))
-(= {tests-passed} 0)
-(= {tests-failed} 0)
+(def {aio} (aio/await (aio/start)))
 
-(printf "🧪 aio/schedule cancellation tests\n\n")
-
-; Run all tests inside the event loop to ensure proper async behavior
-(aio/then (aio/sleep aio 1) (\ {_} {
-  ; Test 1: aio/schedule returns a handle
-  (= {h1} (aio/schedule aio 1000 (\ {} {nil})))
-  (if (not (error? h1))
-    {do (printf "✅ aio/schedule returns a handle\n") (= {tests-passed} (+ tests-passed 1))}
-    {do (printf "❌ aio/schedule returns a handle - got error: %s\n" h1) (= {tests-failed} (+ tests-failed 1))})
-  (aio/cancel h1)
-  
-  ; Test 2: aio/cancel on pending schedule returns true
-  (= {h2} (aio/schedule aio 1000 (\ {} {nil})))
-  (= {cancel-result} (aio/cancel h2))
-  (if (== cancel-result (quote :true))
-    {do (printf "✅ aio/cancel on pending schedule returns true\n") (= {tests-passed} (+ tests-passed 1))}
-    {do (printf "❌ aio/cancel on pending schedule returns true - got: %s\n" cancel-result) (= {tests-failed} (+ tests-failed 1))})
-  
-  ; Test 3: aio/cancelled? returns true after cancel
-  (= {h3} (aio/schedule aio 1000 (\ {} {nil})))
-  (aio/cancel h3)
-  (= {cancelled-result} (aio/cancelled? h3))
-  (if (== cancelled-result (quote :true))
-    {do (printf "✅ aio/cancelled? returns true after cancel\n") (= {tests-passed} (+ tests-passed 1))}
-    {do (print "❌ aio/cancelled? returns true after cancel - got:" cancelled-result) (= {tests-failed} (+ tests-failed 1))})
-  
-  ; Test 4: aio/status after cancel shows cancelled
-  (= {h4} (aio/schedule aio 1000 (\ {} {nil})))
-  (aio/cancel h4)
-  (= {status4} (aio/status h4))
-  (if (== status4 (quote :cancelled))
-    {do (printf "✅ aio/status after cancel shows cancelled\n") (= {tests-passed} (+ tests-passed 1))}
-    {do (print "❌ aio/status after cancel shows cancelled - got:" status4) (= {tests-failed} (+ tests-failed 1))})
-  
-  ; Test 5: cancelled schedule does not run callback 
-  (= {h5} (aio/schedule aio 50 (\ {} {"ran"})))
-  (aio/cancel h5)
-  
-  ; Test 6: non-cancelled schedule runs callback
-  (= {h6} (aio/schedule aio 50 (\ {} {"ran"})))
-  
-  ; Test 7: cancel on already-completed schedule returns false - set up timer
-  (= {h7} (aio/schedule aio 10 (\ {} {"completed"})))
-  
-  ; Wait for timers to fire and then check results
-  (aio/then (aio/sleep aio 200) (\ {_} {
-    ; Test 5 check: cancelled handle should be :cancelled
-    (if (== (aio/status h5) (quote :cancelled))
-      {do (printf "✅ cancelled schedule does not run callback\n") (= {tests-passed} (+ tests-passed 1))}
-      {do (printf "❌ cancelled schedule does not run callback - status: %s\n" (aio/status h5)) (= {tests-failed} (+ tests-failed 1))})
-    
-    ; Test 6 check: non-cancelled handle should be :completed
-    (if (== (aio/status h6) (quote :completed))
-      {do (printf "✅ non-cancelled schedule runs callback\n") (= {tests-passed} (+ tests-passed 1))}
-      {do (printf "❌ non-cancelled schedule runs callback - status: %s\n" (aio/status h6)) (= {tests-failed} (+ tests-failed 1))})
-    
-    ; Test 7 check: cancel on completed handle should return :false
-    (= {cancel7} (aio/cancel h7))
-    (if (== cancel7 (quote :false))
-      {do (printf "✅ cancel on already-completed schedule returns false\n") (= {tests-passed} (+ tests-passed 1))}
-      {do (printf "❌ cancel on already-completed schedule returns false - got: %s\n" cancel7) (= {tests-failed} (+ tests-failed 1))})
-    
-    ; Print summary
-    (printf "\n🏁 Results: %ld passed, %ld failed\n" tests-passed tests-failed)
-    
-    ; Exit with appropriate code
-    (aio/stop aio)
-    (if (== tests-failed 0)
-      {(shutdown 0)}
-      {(shutdown 1)})
+(test/run-async aio (list
+  (test-async "aio/schedule returns a handle" (\ {} {
+    (= {h} (aio/schedule aio 1000 (\ {} {nil})))
+    (aio/cancel h)
+    (aio/pure (not (error? h)))
   }))
-}))
 
-(aio/run aio)
+  (test-async "aio/cancel on pending schedule returns :true" (\ {} {
+    (= {h} (aio/schedule aio 1000 (\ {} {nil})))
+    (= {result} (aio/cancel h))
+    (aio/pure (== result :true))
+  }))
+
+  (test-async "aio/cancelled? returns :true after cancel" (\ {} {
+    (= {h} (aio/schedule aio 1000 (\ {} {nil})))
+    (aio/cancel h)
+    (aio/pure (== (aio/cancelled? h) :true))
+  }))
+
+  (test-async "aio/status after cancel shows :cancelled" (\ {} {
+    (= {h} (aio/schedule aio 1000 (\ {} {nil})))
+    (aio/cancel h)
+    (aio/pure (== (aio/status h) :cancelled))
+  }))
+
+  (test-async "cancelled schedule does not run callback" (\ {} {
+    (= {h} (aio/schedule aio 50 (\ {} {"ran"})))
+    (aio/cancel h)
+    (aio/then (aio/sleep aio 100) (\ {_} {
+      (== (aio/status h) :cancelled)
+    }))
+  }))
+
+  (test-async "non-cancelled schedule runs callback" (\ {} {
+    (= {h} (aio/schedule aio 50 (\ {} {"ran"})))
+    (aio/then (aio/sleep aio 100) (\ {_} {
+      (== (aio/status h) :completed)
+    }))
+  }))
+
+  (test-async "cancel on already-completed schedule returns :false" (\ {} {
+    (= {h} (aio/schedule aio 10 (\ {} {"completed"})))
+    (aio/then (aio/sleep aio 100) (\ {_} {
+      (== (aio/cancel h) :false)
+    }))
+  })))
+  {:suite-name "aio/schedule Cancellation Tests" :timeout-ms 5000})
+
+(aio/stop aio)

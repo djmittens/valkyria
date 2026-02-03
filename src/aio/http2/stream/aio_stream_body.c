@@ -451,6 +451,24 @@ bool valk_stream_body_is_idle_expired(valk_stream_body_t *body) {
   return idle_time >= body->idle_timeout_ms;
 }
 
+void valk_stream_body_set_max_session(valk_stream_body_t *body, u64 max_session_ms) {
+  if (!body) {
+    return;
+  }
+  body->max_session_ms = max_session_ms;
+  VALK_DEBUG("stream_body: body %llu max session set to %llu ms",
+             (unsigned long long)body->id, (unsigned long long)max_session_ms);
+}
+
+bool valk_stream_body_is_session_expired(valk_stream_body_t *body) {
+  if (!body || body->max_session_ms == 0) {
+    return false;
+  }
+  u64 now = __get_current_time_ms();
+  u64 session_time = now - body->created_at_ms;
+  return session_time >= body->max_session_ms;
+}
+
 // LCOV_EXCL_START -- requires nghttp2 session integration to test RST_STREAM path
 int valk_stream_body_cancel(valk_stream_body_t *body, u32 error_code) {
   if (!body) {

@@ -536,7 +536,7 @@ void valk_http2_enter_arena_backpressure(valk_aio_handle_t *conn) {
   };
   int rv = nghttp2_submit_settings(conn->http.session, NGHTTP2_FLAG_NONE, iv, 1);
   if (rv == 0) {
-    nghttp2_session_send(conn->http.session);
+    valk_http2_continue_pending_send(conn);
     VALK_INFO("Entered arena backpressure on connection (max_streams=%d)",
               conn->http.active_streams);
   }
@@ -555,7 +555,7 @@ void valk_http2_exit_arena_backpressure(valk_aio_handle_t *conn) {
   };
   int rv = nghttp2_submit_settings(conn->http.session, NGHTTP2_FLAG_NONE, iv, 1);
   if (rv == 0) {
-    nghttp2_session_send(conn->http.session);
+    valk_http2_continue_pending_send(conn);
     VALK_INFO("Exited arena backpressure on connection (max_streams=%u)", max_streams);
   }
 }

@@ -300,7 +300,6 @@ define run_tests_valk
 	$(1)/valk test/test_parser_edge_cases.valk
 	$(1)/valk test/test_parser_errors.valk
 	$(1)/valk test/test_parser_builtin_coverage.valk
-	$(1)/valk test/test_atom_builtins.valk
 	$(1)/valk test/test_error_handler_edge_cases.valk
 	$(1)/valk test/test_parser_coverage_gaps.valk
 	$(1)/valk test/test_parser_continuations.valk

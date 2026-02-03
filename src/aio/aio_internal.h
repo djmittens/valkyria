@@ -352,7 +352,6 @@ struct valk_aio_http_server {
   int port;
   valk_http2_handler_t handler;
   valk_handle_t lisp_handler_handle;
-  valk_lenv_t* sandbox_env;
   valk_http_server_config_t config;
   valk_server_metrics_t metrics;
   u16 owner_idx;

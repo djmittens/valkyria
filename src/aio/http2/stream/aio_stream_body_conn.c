@@ -129,6 +129,10 @@ void valk_stream_body_check_orphaned(valk_aio_handle_t *conn) {
                 "this indicates a missing cleanup path, please report",
                 (unsigned long long)body->id, body->stream_id);
       valk_stream_body_close(body);
+    } else if (valk_stream_body_is_session_expired(body)) {
+      VALK_INFO("stream_body: max session timeout for id=%llu http2_stream=%d, closing",
+                (unsigned long long)body->id, body->stream_id);
+      valk_stream_body_cancel(body, NGHTTP2_NO_ERROR);
     } else if (valk_stream_body_is_idle_expired(body)) {
       VALK_INFO("stream_body: idle timeout for id=%llu http2_stream=%d, closing",
                 (unsigned long long)body->id, body->stream_id);

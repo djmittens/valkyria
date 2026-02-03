@@ -194,10 +194,16 @@ static valk_lval_t *valk_builtin_stream_close(valk_lenv_t *e, valk_lval_t *a) {
     return valk_lval_err("stream/close: argument must be stream body handle");
   }
 
+  valk_async_handle_t *handle = body->closed_handle;
+  if (!handle) {
+    handle = valk_async_handle_new(body->conn ? body->conn->sys : NULL, NULL);
+    body->closed_handle = handle;
+  }
+
   VALK_DEBUG("stream: closing body id=%llu", (unsigned long long)body->id);
   valk_stream_body_close(body);
 
-  return valk_lval_nil();
+  return valk_lval_handle(handle);
 }
 
 static valk_lval_t *valk_builtin_stream_on_drain(valk_lenv_t *e, valk_lval_t *a) {
@@ -256,6 +262,32 @@ static valk_lval_t *valk_builtin_stream_set_timeout(valk_lenv_t *e, valk_lval_t 
   return body_ref;
 }
 
+static valk_lval_t *valk_builtin_stream_set_max_session(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+
+  if (valk_lval_list_count(a) != 2) {
+    return valk_lval_err("stream/set-max-session: expected 2 arguments, got %llu",
+                         (unsigned long long)valk_lval_list_count(a));
+  }
+
+  valk_lval_t *body_ref = valk_lval_list_nth(a, 0);
+  valk_lval_t *max_session_arg = valk_lval_list_nth(a, 1);
+
+  valk_stream_body_t *body = get_stream_body(body_ref);
+  if (!body) {
+    return valk_lval_err("stream/set-max-session: first argument must be stream body handle");
+  }
+
+  if (LVAL_TYPE(max_session_arg) != LVAL_NUM) {
+    return valk_lval_err("stream/set-max-session: second argument must be a number (milliseconds)");
+  }
+
+  u64 max_session_ms = (u64)max_session_arg->num;
+  valk_stream_body_set_max_session(body, max_session_ms);
+
+  return body_ref;
+}
+
 static valk_lval_t *valk_builtin_stream_cancel(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
 
@@ -270,12 +302,18 @@ static valk_lval_t *valk_builtin_stream_cancel(valk_lenv_t *e, valk_lval_t *a) {
     return valk_lval_err("stream/cancel: argument must be stream body handle");
   }
 
+  valk_async_handle_t *handle = body->closed_handle;
+  if (!handle) {
+    handle = valk_async_handle_new(body->conn ? body->conn->sys : NULL, NULL);
+    body->closed_handle = handle;
+  }
+
   int rv = valk_stream_body_cancel(body, 0x8);
   if (rv < 0) { // LCOV_EXCL_BR_LINE - defensive: cancel only fails if body is null, already checked above
     return valk_lval_err("stream/cancel: failed to cancel stream");
   }
 
-  return valk_lval_nil();
+  return valk_lval_handle(handle);
 }
 
 static valk_lval_t *valk_builtin_stream_id(valk_lenv_t *e, valk_lval_t *a) {
@@ -367,6 +405,7 @@ void valk_register_stream_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "stream/on-drain", valk_builtin_stream_on_drain);
   valk_lenv_put_builtin(env, "stream/on-close", valk_builtin_stream_on_close);
   valk_lenv_put_builtin(env, "stream/set-timeout", valk_builtin_stream_set_timeout);
+  valk_lenv_put_builtin(env, "stream/set-max-session", valk_builtin_stream_set_max_session);
   valk_lenv_put_builtin(env, "stream/cancel", valk_builtin_stream_cancel);
   valk_lenv_put_builtin(env, "stream/id", valk_builtin_stream_id);
   valk_lenv_put_builtin(env, "stream/closed", valk_builtin_stream_closed);

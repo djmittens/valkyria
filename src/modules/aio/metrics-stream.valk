@@ -82,5 +82,5 @@
   {
     (= {stream} (sse/open ctx))
     (sse/send stream "metrics" (metrics/json))
-    :deferred
+    (sse/close stream)
   })

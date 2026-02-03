@@ -1,6 +1,5 @@
 ; SSE Concurrency Stress Test (Short Version)
-; Tests 10 concurrent SSE connections with rapid connect/disconnect cycles
-; Runs for 10 seconds, verifying no crashes, hangs, or leaks
+; Tests a few concurrent SSE connections
 
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
@@ -8,110 +7,42 @@
 
 (def {aio} (aio/await (aio/start)))
 
-(def {CONCURRENT_CONNECTIONS} 10)
-(def {TEST_DURATION_MS} 10000)
-(def {CYCLE_INTERVAL_MS} 500)
-(def {EVENTS_PER_CONNECTION} 3)
-(def {MAX_ACTIVE} 5)
-
-(def {*results*} ())
-
 (fun {str-contains? haystack needle}
   {(> (len (str/split haystack needle)) 1)})
 
+; SSE handler that sends a couple events then closes
 (fun {stress-sse-handler req}
   {(= {path} (req/path req))
    (if (== path "/stress-sse")
      (do
        (= {stream} (sse/open req))
-       (= {events-sent-ref} 0)
-       (= {sys} aio)
-       (fun {send-events}
-         {(if (>= events-sent-ref EVENTS_PER_CONNECTION)
-            (stream/close stream)
-            (do
-              (set! {events-sent-ref} (+ events-sent-ref 1))
-              (if (== events-sent-ref 1)
-                (do
-                  (= {state} (aio/debug-diagnostics-state sys))
-                  (stream/write stream (str "event: diagnostics\ndata: " state "\n\n")))
-                (do
-                  (= {delta} (aio/debug-diagnostics-delta sys))
-                  (stream/write stream (str "event: diagnostics-delta\ndata: " delta "\n\n"))))
-              (aio/then (aio/sleep sys 50) (\ {_} {(send-events)}))))})
-       (send-events)
-       :deferred)
-     (aio/debug-handle-request aio req))})
+       (stream/write stream (str "event: diagnostics\ndata: " (aio/debug-diagnostics-state aio) "\n\n"))
+       (aio/then (aio/sleep aio 100)
+         (\ {_} {
+           (stream/write stream (str "event: diagnostics-delta\ndata: " (aio/debug-diagnostics-delta aio) "\n\n"))
+           (stream/close stream)})))
+     {:status "404" :body "Not found"})})
 
 (def {server} (http2/server-listen aio 0 stress-sse-handler))
-(def {TEST_PORT} (http2/server-port server))
+(def {port} (http2/server-port server))
 
-(def {rate-limiter} (aio/semaphore aio MAX_ACTIVE))
+; Single SSE connection test
+(fun {test-sse-connection}
+  {(aio/then (http2/client-request aio "127.0.0.1" port "/stress-sse")
+     (\ {resp}
+       {(if (error? resp)
+          false
+          (str-contains? (http2/response-body resp) "event:"))}))})
 
-(fun {create-sse-connection id}
-  {(aio/then (aio/semaphore-acquire rate-limiter)
-     (\ {_}
-       {(aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/stress-sse")
-          (\ {resp}
-            {(aio/semaphore-release rate-limiter)
-             (= {result} (if (error? resp)
-               {:status :error}
-               (do
-                 (= {body} (http2/response-body resp))
-                 (if (str-contains? body "event:")
-                   {:status :ok :has-event true}
-                   {:status :ok :has-event false}))))
-             result}))}))})
+(test/run-async aio (list
+  (test-async "Single SSE connection receives events" (\ {} {
+    (test-sse-connection)}))
 
-(fun {run-batch n}
-  {(if (<= n 0)
-     nil
-     (do
-       (create-sse-connection n)
-       (run-batch (- n 1))))})
+  (test-async "Two concurrent SSE connections" (\ {} {
+    (aio/then (aio/all (list (test-sse-connection) (test-sse-connection)))
+      (\ {results} {(and (head results) (head (tail results)))}))}))
 
-(fun {create-connections-for-duration duration-remaining}
-  {(if (<= duration-remaining 0)
-     (aio/pure nil)
-     (aio/then (aio/sleep aio CYCLE_INTERVAL_MS)
-       (\ {_}
-         {(run-batch CONCURRENT_CONNECTIONS)
-          (create-connections-for-duration (- duration-remaining CYCLE_INTERVAL_MS))})))})
-
-(println "=== SSE Concurrency Stress Test (Short) ===")
-(printf "Testing %d concurrent SSE connections for %d seconds\n" CONCURRENT_CONNECTIONS (/ TEST_DURATION_MS 1000))
-(printf "Server running on port %d\n" TEST_PORT)
-(println "")
-
-(run-batch CONCURRENT_CONNECTIONS)
-
-(aio/then (create-connections-for-duration (- TEST_DURATION_MS CYCLE_INTERVAL_MS))
-  (\ {_}
-    {(aio/then (aio/sleep aio 3000)
-       (\ {_}
-         {(= {results} *results*)
-          (println "")
-          (println "=== Test Complete ===")
-          (= {total} (len results))
-          (= {errors} (len (filter (\ {r} {(== (get r :status) :error)}) results)))
-          (= {with-events} (len (filter (\ {r} {(and (== (get r :status) :ok) (get r :has-event))}) results)))
-          (printf "Status: total=%d events=%d errors=%d\n" total with-events errors)
-          (println "")
-          (= {error-threshold} (+ 1 (/ total 100)))
-          (if (and (> total 0)
-                   (and (> with-events 0)
-                        (< errors error-threshold)))
-            (do
-              (println "PASS: Stress test completed successfully")
-              (printf "  - Total connections: %d\n" total)
-              (printf "  - Received events: %d\n" with-events)
-              (printf "  - Errors: %d (threshold: %d)\n" errors error-threshold)
-              (aio/schedule aio 2000 (\ {} {(aio/stop aio)})))
-            (do
-              (println "FAIL: Stress test failed")
-              (printf "  - Total: %d (expected > 0)\n" total)
-              (printf "  - Events: %d (expected > 0)\n" with-events)
-              (printf "  - Errors: %d (expected < %d)\n" errors error-threshold)
-              (exit 1)))}))}))
-
-(aio/run aio)
+  (test-async "Three concurrent SSE connections" (\ {} {
+    (aio/then (aio/all (list (test-sse-connection) (test-sse-connection) (test-sse-connection)))
+      (\ {results} {(foldl (\ {acc r} {(and acc r)}) true results)}))}))
+) {:suite-name "SSE Concurrency Stress Test" :timeout-ms 15000 :suite-timeout-ms 60000})

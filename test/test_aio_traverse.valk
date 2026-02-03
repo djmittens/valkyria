@@ -1,21 +1,26 @@
-;; Test aio/traverse combinator
+; Test aio/traverse combinator
+; Traverses a list applying an async function to each element
 
-;; Basic test: traverse a list with identity function
-(= {result} (aio/traverse '(1 2 3) (\ {x} {(aio/pure x)})))
-(if (== result ())
-  {(print "ERROR: aio/traverse returned nil")}
-  {(print "OK: aio/traverse returns handle")})
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
 
-;; Test with more complex transformation
-(= {increment_result} (aio/traverse '(1 2 3) (\ {x} {(aio/pure (+ x 1))})))
-(if (== increment_result ())
-  {(print "ERROR: aio/traverse increment test failed")}
-  {(print "OK: aio/traverse increment test returned handle")})
+(def {aio} (aio/await (aio/start)))
 
-;; Test with empty list
-(= {empty_result} (aio/traverse () (\ {x} {(aio/pure x)})))
-(if (== empty_result ())
-  {(print "ERROR: aio/traverse empty list test failed")}
-  {(print "OK: aio/traverse empty list test returned handle")})
+(test/run-async aio (list
+  (test-async "aio/traverse returns handle" (\ {} {
+    (= {result} (aio/traverse '(1 2 3) (\ {x} {(aio/pure x)})))
+    (aio/pure (not (== result ())))
+  }))
 
-(print "aio/traverse tests completed")
+  (test-async "aio/traverse with transformation" (\ {} {
+    (= {result} (aio/traverse '(1 2 3) (\ {x} {(aio/pure (+ x 1))})))
+    (aio/pure (not (== result ())))
+  }))
+
+  (test-async "aio/traverse with empty list" (\ {} {
+    (= {result} (aio/traverse () (\ {x} {(aio/pure x)})))
+    (aio/pure (not (== result ())))
+  })))
+  {:suite-name "aio/traverse Tests" :timeout-ms 1000})
+
+(aio/stop aio)

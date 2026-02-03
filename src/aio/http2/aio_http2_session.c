@@ -259,30 +259,27 @@ int valk_http2_client_on_header_cb(nghttp2_session *session,
       nghttp2_session_get_stream_user_data(session, frame->hd.stream_id);
 
   if (reqres && reqres->res) {
-    valk_mem_allocator_t *alloc = reqres->res->allocator;
-    VALK_WITH_ALLOC(alloc) {
-      if (namelen == 7 && memcmp(name, ":status", 7) == 0) {
-        char *st = valk_mem_alloc(valuelen + 1);
-        memcpy(st, value, valuelen);
-        st[valuelen] = '\0';
-        reqres->res->status = st;
-      } else {
-        struct valk_http2_header_t h = {0};
-        h.name = valk_mem_alloc(namelen + 1);
-        h.value = valk_mem_alloc(valuelen + 1);
-        memcpy(h.name, name, namelen);
-        memcpy(h.value, value, valuelen);
-        h.name[namelen] = '\0';
-        h.value[valuelen] = '\0';
-        h.nameLen = namelen;
-        h.valueLen = valuelen;
-        if (reqres->res->headers.count >= reqres->res->headers.capacity) {
-          u64 new_cap = reqres->res->headers.capacity == 0 ? 8 : reqres->res->headers.capacity * 2;
-          reqres->res->headers.items = valk_mem_realloc(reqres->res->headers.items, new_cap * sizeof(struct valk_http2_header_t));
-          reqres->res->headers.capacity = new_cap;
-        }
-        reqres->res->headers.items[reqres->res->headers.count++] = h;
+    if (namelen == 7 && memcmp(name, ":status", 7) == 0) {
+      char *st = malloc(valuelen + 1);
+      memcpy(st, value, valuelen);
+      st[valuelen] = '\0';
+      reqres->res->status = st;
+    } else {
+      struct valk_http2_header_t h = {0};
+      h.name = malloc(namelen + 1);
+      h.value = malloc(valuelen + 1);
+      memcpy(h.name, name, namelen);
+      memcpy(h.value, value, valuelen);
+      h.name[namelen] = '\0';
+      h.value[valuelen] = '\0';
+      h.nameLen = namelen;
+      h.valueLen = valuelen;
+      if (reqres->res->headers.count >= reqres->res->headers.capacity) {
+        u64 new_cap = reqres->res->headers.capacity == 0 ? 8 : reqres->res->headers.capacity * 2;
+        reqres->res->headers.items = realloc(reqres->res->headers.items, new_cap * sizeof(struct valk_http2_header_t));
+        reqres->res->headers.capacity = new_cap;
       }
+      reqres->res->headers.items[reqres->res->headers.count++] = h;
     }
   }
   return 0;
@@ -711,7 +708,7 @@ static int __handle_request_headers(nghttp2_session *session,
     __send_default_response(session, frame->hd.stream_id, req->stream_arena);
     return 0;
   }
-  valk_lenv_t *env = conn->http.server->sandbox_env;
+  valk_lenv_t *env = handler->fun.env;
   valk_lval_t *response;
 
   req->request_ctx = __http2_create_request_ctx(req);

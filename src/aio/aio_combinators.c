@@ -1501,6 +1501,9 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
       }
       iter = valk_lval_tail(iter);
     }
+    valk_async_notify_parent(all_handle);
+    valk_async_notify_done(all_handle);
+    valk_async_propagate_completion(all_handle);
     return valk_lval_handle(all_handle);
   }
 
@@ -1558,6 +1561,25 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
     valk_async_status_t h_status = atomic_load_explicit(&handle->status, memory_order_acquire);
     if (h_status == VALK_ASYNC_COMPLETED) {
       handles[i] = handle;
+      // Handle may have completed between first pass and now - update result and counter
+      if (!ctx->results[i]) {
+        ctx->results[i] = atomic_load_explicit(&handle->result, memory_order_acquire);
+        u64 new_completed = atomic_fetch_add(&ctx->completed, 1) + 1;
+        if (new_completed == ctx->total) {
+          // All done! Complete the all_handle
+          if (valk_async_handle_try_transition(ctx->all_handle, VALK_ASYNC_RUNNING, VALK_ASYNC_COMPLETED)) {
+            valk_lval_t *result_list = valk_lval_nil();
+            for (u64 j = ctx->total; j > 0; j--) {
+              result_list = valk_lval_cons(ctx->results[j-1], result_list);
+            }
+            valk_lval_t *heap_result = valk_evacuate_to_heap(result_list);
+            atomic_store_explicit(&ctx->all_handle->result, heap_result, memory_order_release);
+            valk_async_notify_parent(ctx->all_handle);
+            valk_async_notify_done(ctx->all_handle);
+            valk_async_propagate_completion(ctx->all_handle);
+          }
+        }
+      }
     } else if (handle->parent != NULL) {
       valk_async_handle_t *wrapper = valk_async_handle_new(handle->sys, e);
       wrapper->status = VALK_ASYNC_RUNNING;

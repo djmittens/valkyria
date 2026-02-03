@@ -1,4 +1,17 @@
-(def {aio} (aio/await (aio/start)))
-(mem/gc/collect)
-(println "done")
-(aio/stop aio)
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/run (list
+  (test "GC threshold returns value in valid range"
+    {do
+    (def {thresh} (mem/gc/threshold))
+    (and (>= thresh 0) (<= thresh 100))
+  })
+  (test "GC usage returns non-negative percentage"
+    {do
+    (def {usage} (mem/gc/usage))
+    (and (>= usage 0) (<= usage 100))
+  })
+  (test "GC min-interval returns non-negative value"
+    {(>= (mem/gc/min-interval) 0)}))
+  {:suite-name "GC AIO Integration"})

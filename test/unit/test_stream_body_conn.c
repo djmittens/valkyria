@@ -4,6 +4,7 @@
 #include "../../src/aio/aio_internal.h"
 
 #include <unistd.h>
+#include <uv.h>
 
 static valk_stream_body_t *create_test_body(valk_aio_handle_t *conn, i32 stream_id) {
   valk_stream_body_t *body = calloc(1, sizeof(valk_stream_body_t));
@@ -15,6 +16,7 @@ static valk_stream_body_t *create_test_body(valk_aio_handle_t *conn, i32 stream_
   body->bytes_sent = 0;
   body->last_activity_ms = 0;
   body->idle_timeout_ms = 0;
+  body->max_session_ms = 0;
   return body;
 }
 
@@ -500,6 +502,82 @@ void test_is_idle_expired_actual_expired(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_set_max_session_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_stream_body_set_max_session(nullptr, 5000);
+  VALK_PASS();
+}
+
+void test_set_max_session(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+
+  valk_stream_body_set_max_session(body, 1800000);
+  ASSERT_EQ(body->max_session_ms, 1800000);
+
+  valk_stream_body_set_max_session(body, 0);
+  ASSERT_EQ(body->max_session_ms, 0);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_is_session_expired_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  bool expired = valk_stream_body_is_session_expired(nullptr);
+  ASSERT_FALSE(expired);
+  VALK_PASS();
+}
+
+void test_is_session_expired_zero_max(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->max_session_ms = 0;
+  body->created_at_ms = 0;
+
+  bool expired = valk_stream_body_is_session_expired(body);
+  ASSERT_FALSE(expired);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_is_session_expired_not_expired(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->max_session_ms = 10000;
+  body->created_at_ms = uv_hrtime() / 1000000;
+
+  bool expired = valk_stream_body_is_session_expired(body);
+  ASSERT_FALSE(expired);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
+void test_is_session_expired_actual_expired(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_handle_t *conn = create_test_conn();
+  valk_stream_body_t *body = create_test_body(conn, 1);
+  body->max_session_ms = 1;
+  body->created_at_ms = 0;
+
+  usleep(2000);
+
+  bool expired = valk_stream_body_is_session_expired(body);
+  ASSERT_TRUE(expired);
+
+  free_test_body(body);
+  free_test_conn(conn);
+  VALK_PASS();
+}
+
 void test_write_null_data(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_aio_handle_t *conn = create_test_conn();
@@ -729,6 +807,12 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_cancel_already_closed", test_cancel_already_closed);
 
   valk_testsuite_add_test(suite, "test_is_idle_expired_actual_expired", test_is_idle_expired_actual_expired);
+  valk_testsuite_add_test(suite, "test_set_max_session_null", test_set_max_session_null);
+  valk_testsuite_add_test(suite, "test_set_max_session", test_set_max_session);
+  valk_testsuite_add_test(suite, "test_is_session_expired_null", test_is_session_expired_null);
+  valk_testsuite_add_test(suite, "test_is_session_expired_zero_max", test_is_session_expired_zero_max);
+  valk_testsuite_add_test(suite, "test_is_session_expired_not_expired", test_is_session_expired_not_expired);
+  valk_testsuite_add_test(suite, "test_is_session_expired_actual_expired", test_is_session_expired_actual_expired);
   valk_testsuite_add_test(suite, "test_write_null_data", test_write_null_data);
   valk_testsuite_add_test(suite, "test_write_closed_body", test_write_closed_body);
   valk_testsuite_add_test(suite, "test_write_closing_body", test_write_closing_body);

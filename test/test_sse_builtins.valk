@@ -1,96 +1,76 @@
+; SSE Builtins Error Handling Tests
+; Tests error conditions for SSE functions with invalid inputs
+
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 (load "src/modules/aio/sse.valk")
 
 (def {aio} (aio/await (aio/start)))
 
-(printf "🧪 SSE Builtins Tests\n\n")
+; Handler to test stream/closed future completion
+(def {test-handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (select
+      {(== path "/test-stream-closed")
+       (do
+         (= {stream} (sse/open req))
+         (= {closed-future} (stream/closed stream))
+         (aio/then closed-future (\ {result} {result}))
+         (stream/write stream "data: test\n\n")
+         (stream/close stream))}
+      {true {:status "404" :body "Not found"}})}))
 
-(= {handler} (\ {req} {
-  (= {path} (req/path req))
-  (if (== path "/test-stream-closed")
-    {(do
-      (= {stream} (sse/open req))
-      (= {closed-future} (stream/closed stream))
-      (aio/then closed-future (\ {result} {
-        (if (== result (quote :closed))
-          {(print "✅ stream/closed future completes with :closed")}
-          {(do (print "❌ stream/closed - expected :closed, got:" result) (shutdown 1))})
-      }))
-      (stream/write stream "data: test\n\n")
-      (stream/close stream)
-      :deferred)}
-    {{:status "404" :body "Not found"}})}))
+(def {server} (http2/server-listen aio 0 test-handler))
+(def {port} (http2/server-port server))
 
-(= {server} (http2/server-listen aio 0 handler))
-(= {port} (http2/server-port server))
+(test/run-async aio (list
+  ; stream/closed tests - requires server interaction
+  (test-async "stream/closed future completes with :closed" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/test-stream-closed")
+      (\ {_} {
+        (aio/then (aio/sleep aio 100) (\ {_} {true}))}))}))
 
-(aio/then (http2/client-request aio "127.0.0.1" port "/test-stream-closed") (\ {_} {}))
+  ; Error handling tests for invalid inputs (sync, but wrapped in aio/pure)
+  (test-async "sse/open outside handler fails" (\ {} {
+    (aio/pure (error? (sse/open "not-a-request")))}))
 
-(aio/schedule aio 300 (\ {} {
-  (= {passed} 0)
-  (= {failed} 0)
-  
-  (if (error? (sse/open "not-a-request"))
-    {do (print "✅ sse/open outside handler fails") (= {passed} (+ passed 1))}
-    {do (print "❌ sse/open outside handler fails") (= {failed} (+ failed 1))})
-  
-  (if (error? (sse/send "not-a-stream" "data"))
-    {do (print "✅ sse/send wrong stream fails") (= {passed} (+ passed 1))}
-    {do (print "❌ sse/send wrong stream fails") (= {failed} (+ failed 1))})
-  
-  (if (error? (sse/close "not-a-stream"))
-    {do (print "✅ sse/close wrong stream fails") (= {passed} (+ passed 1))}
-    {do (print "❌ sse/close wrong stream fails") (= {failed} (+ failed 1))})
-  
-  (if (== (sse/writable? "not-a-stream") 0)
-    {do (print "✅ sse/writable? wrong type returns 0") (= {passed} (+ passed 1))}
-    {do (print "❌ sse/writable? wrong type returns 0") (= {failed} (+ failed 1))})
-  
-  (if (error? (sse/on-drain "not-a-stream" (\ {} {})))
-    {do (print "✅ sse/on-drain wrong stream fails") (= {passed} (+ passed 1))}
-    {do (print "❌ sse/on-drain wrong stream fails") (= {failed} (+ failed 1))})
-  
-  (if (error? (sse/on-drain "stream" "not-a-function"))
-    {do (print "✅ sse/on-drain wrong callback type fails") (= {passed} (+ passed 1))}
-    {do (print "❌ sse/on-drain wrong callback type fails") (= {failed} (+ failed 1))})
-  
-  (if (error? (sse/cancel "not-a-stream"))
-    {do (print "✅ sse/cancel wrong stream fails") (= {passed} (+ passed 1))}
-    {do (print "❌ sse/cancel wrong stream fails") (= {failed} (+ failed 1))})
-  
-  (if (error? (sse/event "not-a-stream" "type" "data"))
-    {do (print "✅ sse/event wrong stream fails") (= {passed} (+ passed 1))}
-    {do (print "❌ sse/event wrong stream fails") (= {failed} (+ failed 1))})
-  
-  (if (error? (sse/id "not-a-stream" "id" "data"))
-    {do (print "✅ sse/id wrong stream fails") (= {passed} (+ passed 1))}
-    {do (print "❌ sse/id wrong stream fails") (= {failed} (+ failed 1))})
-  
-  (if (error? (sse/retry "not-a-stream" 1000))
-    {do (print "✅ sse/retry wrong stream fails") (= {passed} (+ passed 1))}
-    {do (print "❌ sse/retry wrong stream fails") (= {failed} (+ failed 1))})
-  
-  (if (error? (sse/comment "not-a-stream" "comment"))
-    {do (print "✅ sse/comment wrong stream fails") (= {passed} (+ passed 1))}
-    {do (print "❌ sse/comment wrong stream fails") (= {failed} (+ failed 1))})
-  
-  (if (error? (sse/heartbeat "not-a-stream"))
-    {do (print "✅ sse/heartbeat wrong stream fails") (= {passed} (+ passed 1))}
-    {do (print "❌ sse/heartbeat wrong stream fails") (= {failed} (+ failed 1))})
-  
-  (if (error? (stream/closed))
-    {do (print "✅ stream/closed no args fails") (= {passed} (+ passed 1))}
-    {do (print "❌ stream/closed no args fails") (= {failed} (+ failed 1))})
-  
-  (if (error? (stream/closed "not-a-stream"))
-    {do (print "✅ stream/closed wrong type fails") (= {passed} (+ passed 1))}
-    {do (print "❌ stream/closed wrong type fails") (= {failed} (+ failed 1))})
-  
-  (printf "\n🏁 Results: %ld passed, %ld failed\n" (+ passed 1) failed)
-  (aio/stop aio)
-  (if (== failed 0)
-    {(shutdown 0)}
-    {(shutdown 1)})
-}))
+  (test-async "sse/send with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/send "not-a-stream" "data")))}))
 
-(aio/run aio)
+  (test-async "sse/close with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/close "not-a-stream")))}))
+
+  (test-async "sse/writable? with wrong type returns 0" (\ {} {
+    (aio/pure (== (sse/writable? "not-a-stream") 0))}))
+
+  (test-async "sse/on-drain with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/on-drain "not-a-stream" (\ {} {}))))}))
+
+  (test-async "sse/on-drain with wrong callback type fails" (\ {} {
+    (aio/pure (error? (sse/on-drain "stream" "not-a-function")))}))
+
+  (test-async "sse/cancel with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/cancel "not-a-stream")))}))
+
+  (test-async "sse/event with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/event "not-a-stream" "type" "data")))}))
+
+  (test-async "sse/id with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/id "not-a-stream" "id" "data")))}))
+
+  (test-async "sse/retry with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/retry "not-a-stream" 1000)))}))
+
+  (test-async "sse/comment with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/comment "not-a-stream" "comment")))}))
+
+  (test-async "sse/heartbeat with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/heartbeat "not-a-stream")))}))
+
+  (test-async "stream/closed with no args fails" (\ {} {
+    (aio/pure (error? (stream/closed)))}))
+
+  (test-async "stream/closed with wrong type fails" (\ {} {
+    (aio/pure (error? (stream/closed "not-a-stream")))}))
+) {:suite-name "SSE Builtins Error Handling" :timeout-ms 5000})

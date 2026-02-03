@@ -1,38 +1,42 @@
+; SSE Reconnect/Sequential Request Test
+; Tests that multiple sequential SSE requests work correctly
+
 (load "src/prelude.valk")
+(load "src/modules/test.valk")
 (load "src/modules/aio/sse.valk")
 
-(= {aio} (aio/await (aio/start)))
+(def {aio} (aio/await (aio/start)))
 
-(= {handler} (\ {req} {
-  (= {stream} (sse/open req))
-  (stream/write stream "data: event-data\n\n")
-  (stream/close stream)
-  :deferred
-}))
+(def {handler}
+  (\ {req} {
+    (= {stream} (sse/open req))
+    (stream/write stream "data: event-data\n\n")
+    (stream/close stream)}))
 
-(= {server} (http2/server-listen aio 0 handler))
-(= {port} (http2/server-port server))
+(def {server} (http2/server-listen aio 0 handler))
+(def {port} (http2/server-port server))
 
-(print "STEP1_START")
-(aio/then (http2/client-request aio "127.0.0.1" port "/sse")
-  (\ {resp1} {
-    (if (error? resp1)
-      {(print "STEP1_ERROR" resp1)}
-      {(do
-        (print "STEP1_DONE")
-        (aio/schedule aio 50 (\ {} {
-          (print "STEP2_START")
-          (aio/then (http2/client-request aio "127.0.0.1" port "/sse")
-            (\ {resp2} {
-              (if (error? resp2)
-                {(print "STEP2_ERROR" resp2)}
-                {(do
-                  (print "STEP2_DONE")
-                  (http2/server-close server)
-                  (aio/stop aio))})}))
-        }))
-      )})
-  }))
+; Helper to check response is valid 200
+(fun {check-response resp} {
+  (if (error? resp)
+    {false}
+    {(== (http2/response-status resp) "200")})})
 
-(aio/run aio)
-(print "TEST_COMPLETE")
+(test/run-async aio (list
+  (test-async "first SSE request completes with 200" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse")
+      (\ {resp} {(check-response resp)}))}))
+
+  (test-async "second SSE request after delay completes" (\ {} {
+    (aio/then (aio/sleep aio 50) 
+      (\ {_} {
+        (aio/then (http2/client-request aio "127.0.0.1" port "/sse")
+          (\ {resp} {(check-response resp)}))}))}))
+
+  (test-async "SSE response contains expected data" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse")
+      (\ {resp} {
+        (if (error? resp)
+          {false}
+          {(== (http2/response-body resp) "data: event-data\n\n")})}))}))
+) {:suite-name "SSE Sequential Request Tests" :timeout-ms 5000})

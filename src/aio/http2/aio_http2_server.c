@@ -416,29 +416,6 @@ extern void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t 
 extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
 
 // LCOV_EXCL_START internal cleanup - only called during server cleanup
-static void __valk_sandbox_env_free(valk_lenv_t *env) {
-  if (!env) return;
-
-  for (u64 i = 0; i < env->symbols.count; i++) {
-    if (env->symbols.items && env->symbols.items[i]) {
-      free(env->symbols.items[i]);
-    }
-    if (env->vals.items && env->vals.items[i]) {
-      valk_lval_t *lval = env->vals.items[i];
-      if (LVAL_TYPE(lval) == LVAL_SYM || LVAL_TYPE(lval) == LVAL_STR ||
-          LVAL_TYPE(lval) == LVAL_ERR) {
-        if (lval->str) free(lval->str);
-      }
-      free(lval);
-    }
-  }
-  if (env->symbols.items) free(env->symbols.items);
-  if (env->vals.items) free(env->vals.items);
-  free(env);
-}
-// LCOV_EXCL_STOP
-
-// LCOV_EXCL_START internal cleanup - only called during server cleanup
 static void __valk_aio_http2_server_cleanup(valk_aio_http_server *srv) {
   if (!srv || !srv->sys) return;
   valk_aio_system_stats_v2_on_server_stop(
@@ -447,8 +424,6 @@ static void __valk_aio_http2_server_cleanup(valk_aio_http_server *srv) {
     valk_handle_release(&valk_global_handle_table, srv->lisp_handler_handle);
     srv->lisp_handler_handle = (valk_handle_t){0, 0};
   }
-  __valk_sandbox_env_free(srv->sandbox_env);
-  srv->sandbox_env = nullptr;
   SSL_CTX_free(srv->ssl_ctx);
   srv->ssl_ctx = nullptr;
 }
@@ -605,12 +580,6 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
   if (lisp_handler) {
     valk_lval_t *heap_handler = valk_evacuate_to_heap((valk_lval_t*)lisp_handler);
     srv->lisp_handler_handle = valk_handle_create(&valk_global_handle_table, heap_handler);
-    void* saved_heap = valk_thread_ctx.heap;
-    valk_thread_ctx.heap = nullptr;
-    VALK_WITH_ALLOC(&valk_malloc_allocator) {
-      srv->sandbox_env = valk_lenv_sandboxed(heap_handler->fun.env);
-    }
-    valk_thread_ctx.heap = saved_heap;
   } else {
     srv->lisp_handler_handle = (valk_handle_t){0, 0};
   }
@@ -656,18 +625,10 @@ void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_
   if (srv->lisp_handler_handle.generation > 0) { // LCOV_EXCL_BR_LINE requires GC heap handler setup
     valk_handle_release(&valk_global_handle_table, srv->lisp_handler_handle);
   }
-  __valk_sandbox_env_free(srv->sandbox_env);
-  srv->sandbox_env = nullptr;
   if (handler_fn) { // LCOV_EXCL_BR_LINE requires GC heap handler setup
     // LCOV_EXCL_START requires full GC heap for handler evacuation
     valk_lval_t *heap_handler = valk_evacuate_to_heap((valk_lval_t*)handler_fn);
     srv->lisp_handler_handle = valk_handle_create(&valk_global_handle_table, heap_handler);
-    void* saved_heap = valk_thread_ctx.heap;
-    valk_thread_ctx.heap = nullptr;
-    VALK_WITH_ALLOC(&valk_malloc_allocator) {
-      srv->sandbox_env = valk_lenv_sandboxed(heap_handler->fun.env);
-    }
-    valk_thread_ctx.heap = saved_heap;
     // LCOV_EXCL_STOP
   } else {
     srv->lisp_handler_handle = (valk_handle_t){0, 0};

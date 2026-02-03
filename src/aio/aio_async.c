@@ -74,6 +74,9 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
   valk_async_status_t done_status = valk_async_handle_get_status(handle);
   if (done_status == VALK_ASYNC_COMPLETED) {
     valk_lval_t *result = atomic_load_explicit(&handle->result, memory_order_acquire);
+    if (LVAL_TYPE(result) == LVAL_SYM && strcmp(result->str, ":closed") == 0) {
+      goto cleanup;
+    }
     if (LVAL_TYPE(result) == LVAL_ERR) {
       VALK_WARN("Handle completed with error for stream %d: %s", stream_id, result->str);
       VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {

@@ -19,7 +19,7 @@
         (aio/schedule aio 100 (\ {} {
           (sse/close stream)
         }))
-        :deferred
+        (stream/closed stream)
       )}
       {`{:status "200" :body "OK"}}
     )

@@ -24,11 +24,16 @@
 ;   (sse/heartbeat stream)          - Send empty comment (keep-alive)
 ;   (sse/handler body-fn)           - Create SSE endpoint handler
 
+; Default max session: 30 minutes (DoS protection)
+(def {sse/default-max-session-ms} 1800000)
+
 (fun {sse/open request}
-  {stream/open request 
-    {:status "200"
-     :content-type "text/event-stream"
-     :cache-control "no-cache"}})
+  {(= {stream} (stream/open request 
+                {:status "200"
+                 :content-type "text/event-stream"
+                 :cache-control "no-cache"}))
+   (stream/set-max-session stream sse/default-max-session-ms)
+   stream})
 
 ; Internal helper: format multi-line data per SSE spec
 ; Each line must be prefixed with "data: " and events end with double newline
@@ -86,18 +91,19 @@
 (fun {sse/message stream data} {sse/send stream data})
 
 ; JSON helpers
+; Note: Uses str to serialize data. For proper JSON, implement json/encode.
 (fun {sse/json stream data}
-  {sse/send stream (json/encode data)})
+  {sse/send stream (str data)})
 
 (fun {sse/json-event stream event-type data}
-  {sse/event stream event-type (json/encode data)})
+  {sse/event stream event-type (str data)})
 
 ; Handler wrapper - creates SSE endpoint from body function
 ; Usage: (def {handler} (sse/handler (\ {stream req} { ... })))
+; body-fn should call stream/close when done; handler returns completion handle
 (fun {sse/handler body-fn}
   {\ {req}
-    {
+    {(do
       (= {stream} (sse/open req))
       (body-fn stream req)
-      :deferred
-    }})
+      (stream/closed stream))}})

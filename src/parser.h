@@ -255,7 +255,6 @@ static inline void valk_lval_println(valk_lval_t *val) {
 
 //// LEnv Constructors ////
 valk_lenv_t *valk_lenv_empty(void);
-valk_lenv_t* valk_lenv_sandboxed(valk_lenv_t* parent);
 void valk_lenv_init(valk_lenv_t *env);
 void valk_lenv_free(valk_lenv_t *env);  // Free malloc-allocated environments
 //// END LEnv Constructors ////
