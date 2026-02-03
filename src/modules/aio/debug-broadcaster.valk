@@ -18,10 +18,8 @@
 (fun {debug/_diagnostics-delta-with-baseline sys baseline}
   {(= {delta} (metrics/collect-delta-stateless baseline))
    (= {delta-json} (metrics/delta-json delta))
-   (= {aio-json} (aio/metrics-json-compact sys))
-   (= {vm-json} (vm/metrics-json-compact))
    (= {memory-json} (aio/diagnostics-state-json-compact sys))
-   (str "{\"metrics\":{\"aio\":" aio-json ",\"vm\":" vm-json ",\"modular\":" delta-json "},\"memory\":" memory-json "}")})
+   (str "{\"metrics\":{\"modular\":" delta-json "},\"memory\":" memory-json "}")})
 
 ; Simplified broadcaster that just sends the initial state and then continues sending deltas
 ; without tracking failures or first-event flags (those caused state mutation issues)
