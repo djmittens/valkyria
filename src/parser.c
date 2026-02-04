@@ -606,19 +606,9 @@ int valk_lval_list_is_empty(valk_lval_t* list) {
 u64 valk_lval_list_count(valk_lval_t* list) {
   u64 count = 0;
   valk_lval_t* curr = list;
-  valk_lval_t* slow = list;
   while (curr != nullptr && !valk_lval_list_is_empty(curr)) {
     count++;
     curr = curr->cons.tail;
-    if (count % 2 == 0 && slow) {
-      slow = slow->cons.tail;
-      if (slow == curr) {
-        abort();
-      }
-    }
-    if (count > 10000) {
-      abort();
-    }
   }
   return count;
 }

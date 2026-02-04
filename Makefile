@@ -350,9 +350,6 @@ test: test-c test-valk
 .ONESHELL:
 .PHONY: test-c
 test-c: export VALK_TEST_TIMEOUT_SECONDS=5
-ifeq ($(UNAME), Linux)
-test-c: export VALK_TEST_NO_FORK=1
-endif
 test-c: build
 	set -e
 	$(call run_tests_c,build)
@@ -393,6 +390,196 @@ test-valk-asan: build-asan
 	export LSAN_OPTIONS=verbosity=0:log_threads=1:suppressions=$(CURDIR)/lsan_suppressions.txt
 	$(call run_tests_valk,build-asan)
 
+# ============================================================================
+# Parallel Test Execution (GNU Parallel)
+# ============================================================================
+# Runs tests in parallel for faster execution. Uses dynamic port binding so
+# tests don't conflict. Requires GNU parallel to be installed.
+#
+# Usage:
+#   make test-parallel       # Run all tests in parallel (C + Valk)
+#   make test-c-parallel     # Run C tests in parallel
+#   make test-valk-parallel  # Run Valk tests in parallel
+#   JOBS=8 make test-parallel # Use 8 parallel jobs
+#
+# Note: Serial tests still available via `make test` for debugging
+
+# Parallel job count
+# C tests: can use many jobs since they're isolated
+# Valk tests: use fewer jobs to avoid network/resource contention
+PARALLEL_JOBS ?= $(JOBS)
+PARALLEL_JOBS_VALK ?= $(shell echo $$(( ($(JOBS) + 1) / 2 )))
+
+# C tests to run in parallel (same list as run_tests_c, minus conditionals)
+C_TESTS_PARALLEL_SAFE = \
+	test_std test_regression test_memory test_networking test_large_response \
+	test_per_stream_arena test_debug test_loop_metrics test_eval_metrics \
+	test_pool_metrics test_metrics_delta test_event_loop_metrics_unit \
+	test_metrics_v2 test_metrics_builtins test_aio_backpressure \
+	test_aio_uv_coverage test_aio_integration test_aio_combinators \
+	test_aio_load_shedding test_aio_config test_aio_uv_unit test_aio_alloc_unit \
+	test_aio_ssl_unit test_gc_aio test_memory_unit test_log \
+	test_parser_unit test_parser_errors test_pressure test_conn_io \
+	test_aio_timer_unit test_io_timer_ops_unit test_thread_posix_unit \
+	test_aio_handle_diag test_chase_lev_unit test_gc_unit test_task_queue_unit \
+	test_request_ctx_unit test_ctx_builtins_unit test_http_builtins_unit \
+	test_stream_body_conn_unit test_backpressure_list_unit test_conn_fsm_unit \
+	test_stream_builtins_unit test_stream_body_integration test_http2_conn_unit \
+	test_http2_server_unit test_aio_async_unit test_conn_admission_unit
+C_TESTS_LIST = $(C_TESTS_PARALLEL_SAFE)
+
+# Valk tests to run in parallel (same list as run_tests_valk)
+VALK_TESTS_LIST = \
+	test/test_metrics.valk test/test_metrics_builtins_comprehensive.valk \
+	test/test_prelude.valk test/test_namespace.valk test/test_varargs.valk \
+	test/test_async_monadic_suite.valk test/test_aio_builtins_coverage.valk \
+	test/test_do_suite.valk test/test_gc_suite.valk test/test_crash_regressions.valk \
+	test/test_http_minimal.valk test/test_http_integration.valk \
+	test/test_http_api_network.valk test/test_checkpoint.valk \
+	test/test_integration.valk test/test_quasiquote.valk \
+	test/test_string_builtins.valk test/test_memory_builtins.valk \
+	test/test_read_file.valk test/test_aio_debug.valk test/test_test_framework.valk \
+	test/test_test_framework_skip.valk test/test_test_framework_fail.valk \
+	test/test_test_framework_empty.valk test/test_test_framework_async_fail.valk \
+	test/test_sse.valk test/test_sse_builtins.valk test/test_sse_integration.valk \
+	test/test_sse_async_timeout.valk test/test_sse_diagnostics_endpoint.valk \
+	test/test_http_client_server.valk test/test_async_http_handlers.valk \
+	test/test_aio_config.valk test/test_aio_schedule_cancel.valk \
+	test/test_aio_retry.valk test/test_backpressure.valk \
+	test/test_backpressure_timeout.valk test/test_pending_streams.valk \
+	test/test_pending_stream_headers.valk test/test_concurrent_requests.valk \
+	test/test_gc_async_regression.valk test/test_arena_out_of_order.valk \
+	test/test_client_headers.valk test/test_http2_client_request_errors.valk \
+	test/test_sequential_map.valk test/test_async_handles.valk \
+	test/test_ctx_builtins.valk test/test_vm_metrics.valk \
+	test/test_parser_edge_cases.valk test/test_parser_errors.valk \
+	test/test_parser_builtin_coverage.valk test/test_error_handler_edge_cases.valk \
+	test/test_parser_coverage_gaps.valk test/test_parser_continuations.valk \
+	test/test_parser_branch_coverage.valk test/test_parser_coverage_supplement.valk \
+	test/test_gc_and_log_builtins.valk test/test_large_download.valk \
+	test/test_large_response.valk test/test_aio_never.valk \
+	test/test_aio_traverse.valk test/test_interval_cancel.valk \
+	test/test_sse_format.valk test/test_sse_reconnect_minimal.valk \
+	test/test_printf_closure_bug.valk test/test_metrics_prometheus.valk \
+	test/test_overload.valk test/test_overload_metrics.valk \
+	test/test_delay_error.valk test/test_delay_continuation_error.valk \
+	test/test_make_string.valk test/test_coverage_integration.valk \
+	test/test_custom_error_handler.valk test/test_debug_handler.valk \
+	test/stress/test_gc_stress.valk test/stress/test_networking_stress.valk \
+	test/stress/test_sse_concurrency_short.valk
+
+.PHONY: test-parallel
+test-parallel: test-c-parallel test-valk-parallel
+
+.ONESHELL:
+.PHONY: test-c-parallel
+test-c-parallel: export VALK_TEST_TIMEOUT_SECONDS=5
+test-c-parallel: build
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running C tests in PARALLEL ($(PARALLEL_JOBS) jobs)                       ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@if ! command -v parallel >/dev/null 2>&1; then \
+		echo "ERROR: GNU parallel not installed. Install with: apt install parallel"; \
+		exit 1; \
+	fi
+	@echo "Running parallel-safe tests (fork enabled)..."
+	@echo "$(C_TESTS_PARALLEL_SAFE)" | tr ' ' '\n' | sed 's|^|build/|' | \
+		parallel --jobs $(PARALLEL_JOBS) --halt now,fail=1 '{} >/dev/null 2>&1 && echo "PASS: {/}" || { echo "FAIL: {/}"; exit 1; }'
+	@echo "=== All C tests passed (parallel) ==="
+
+# Verbose parallel C tests (shows full output on failure)
+.ONESHELL:
+.PHONY: test-c-parallel-verbose
+test-c-parallel-verbose: export VALK_TEST_TIMEOUT_SECONDS=30
+test-c-parallel-verbose: build
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running C tests in PARALLEL (verbose, $(PARALLEL_JOBS) jobs)              ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@if ! command -v parallel >/dev/null 2>&1; then \
+		echo "ERROR: GNU parallel not installed. Install with: apt install parallel"; \
+		exit 1; \
+	fi
+	@echo "$(C_TESTS_LIST)" | tr ' ' '\n' | sed 's|^|build/|' | \
+		parallel --jobs $(PARALLEL_JOBS) --halt now,fail=1 --tag --line-buffer {}
+	@echo "=== All C tests passed (parallel) ==="
+
+.ONESHELL:
+.PHONY: test-valk-parallel
+test-valk-parallel: export VALK_TEST_TIMEOUT_SECONDS=5
+test-valk-parallel: build
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running Valk tests in PARALLEL ($(PARALLEL_JOBS_VALK) jobs)                     ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@if ! command -v parallel >/dev/null 2>&1; then \
+		echo "ERROR: GNU parallel not installed. Install with: apt install parallel"; \
+		exit 1; \
+	fi
+	@echo "$(VALK_TESTS_LIST)" | tr ' ' '\n' | \
+		parallel --jobs $(PARALLEL_JOBS_VALK) --halt now,fail=1 'build/valk {} >/dev/null 2>&1 && echo "PASS: {/}" || { echo "FAIL: {/}"; exit 1; }'
+	@echo "=== All Valk tests passed (parallel) ==="
+
+# Verbose parallel Valk tests (shows full output on failure)
+.ONESHELL:
+.PHONY: test-valk-parallel-verbose
+test-valk-parallel-verbose: export VALK_TEST_TIMEOUT_SECONDS=30
+test-valk-parallel-verbose: build
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running Valk tests in PARALLEL (verbose, $(PARALLEL_JOBS_VALK) jobs)            ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@if ! command -v parallel >/dev/null 2>&1; then \
+		echo "ERROR: GNU parallel not installed. Install with: apt install parallel"; \
+		exit 1; \
+	fi
+	@echo "$(VALK_TESTS_LIST)" | tr ' ' '\n' | \
+		parallel --jobs $(PARALLEL_JOBS_VALK) --halt now,fail=1 --tag --line-buffer 'build/valk {}'
+	@echo "=== All Valk tests passed (parallel) ==="
+
+# Profile tests to find slowest ones
+# Outputs a timing report sorted by duration
+.ONESHELL:
+.PHONY: test-profile
+test-profile: export VALK_TEST_TIMEOUT_SECONDS=30
+test-profile: build
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Profiling all tests                                         ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@if ! command -v parallel >/dev/null 2>&1; then \
+		echo "ERROR: GNU parallel not installed. Install with: apt install parallel"; \
+		exit 1; \
+	fi
+	@mkdir -p build/test-profile
+	@rm -f build/test-profile/times.txt
+	@echo "Running C tests..."
+	@echo "$(C_TESTS_LIST)" | tr ' ' '\n' | sed 's|^|build/|' | \
+		parallel --jobs $(PARALLEL_JOBS) \
+		'start=$$(date +%s%N); {} >/dev/null 2>&1; end=$$(date +%s%N); echo "$$((end - start)) {}"' \
+		>> build/test-profile/times.txt
+	@echo "Running Valk tests..."
+	@echo "$(VALK_TESTS_LIST)" | tr ' ' '\n' | \
+		parallel --jobs $(PARALLEL_JOBS_VALK) \
+		'start=$$(date +%s%N); build/valk {} >/dev/null 2>&1; end=$$(date +%s%N); echo "$$((end - start)) build/valk {}"' \
+		>> build/test-profile/times.txt
+	@echo ""
+	@echo "=== Test Profile Results ==="
+	@echo ""
+	@echo "Slowest 20 tests:"
+	@sort -rn build/test-profile/times.txt | head -20 | \
+		awk '{ns=$$1; $$1=""; ms=ns/1000000; printf "  %7.0fms %s\n", ms, $$0}'
+	@echo ""
+	@total=$$(awk '{sum+=$$1} END {printf "%.1f", sum/1000000000}' build/test-profile/times.txt); \
+	count=$$(wc -l < build/test-profile/times.txt); \
+	echo "Total: $$count tests, $${total}s combined execution time"
+
 # C tests with TSAN enabled (catches data races)
 .ONESHELL:
 .PHONY: test-c-tsan
@@ -400,7 +587,7 @@ test-c-tsan: build-tsan
 	set -e
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════╗"
-	@echo "║  Running C tests with ThreadSanitizer (TSAN) enabled        ║"
+	@echo "║  Running C tests with ThreadSanitizer (TSAN) enabled         ║"
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 	@echo ""
 	export TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1
@@ -413,7 +600,7 @@ test-valk-tsan: build-tsan
 	set -e
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════╗"
-	@echo "║  Running Valk tests with ThreadSanitizer (TSAN) enabled     ║"
+	@echo "║  Running Valk tests with ThreadSanitizer (TSAN) enabled      ║"
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 	@echo ""
 	export TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1
@@ -426,7 +613,7 @@ test-examples: build
 	set -e
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════╗"
-	@echo "║  Running example demos as tests                             ║"
+	@echo "║  Running example demos as tests                              ║"
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 	@echo ""
 	$(call run_examples,build)
@@ -438,7 +625,7 @@ test-examples-asan: build-asan
 	set -e
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════╗"
-	@echo "║  Running example demos with ASAN                            ║"
+	@echo "║  Running example demos with ASAN                             ║"
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 	@echo ""
 	export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
@@ -452,8 +639,8 @@ test-all:
 	set -e
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════╗"
-	@echo "║  COMPREHENSIVE TEST SUITE                                   ║"
-	@echo "║  Running all tests with and without ASAN + examples         ║"
+	@echo "║  COMPREHENSIVE TEST SUITE                                    ║"
+	@echo "║  Running all tests with and without ASAN + examples          ║"
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 	@echo ""
 	$(MAKE) test-c
@@ -484,7 +671,9 @@ coverage-reset:
 	rm -f build-coverage/coverage-valk.txt build-coverage/coverage-valk.info
 
 .ONESHELL:
+.ONESHELL:
 .PHONY: coverage-tests
+coverage-tests: export VALK_TEST_TIMEOUT_SECONDS=30
 coverage-tests: build-coverage coverage-reset
 	set -e
 	@echo ""
@@ -492,8 +681,6 @@ coverage-tests: build-coverage coverage-reset
 	@echo "║  Running all tests with coverage instrumentation            ║"
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 	@echo ""
-	export VALK_COVERAGE=1
-	export VALK_TEST_TIMEOUT_SECONDS=30
 	@echo "=== Ensuring SSL certs exist in build/ for tests ==="
 	@mkdir -p build
 	$(call gen_ssl_certs,build)
@@ -521,7 +708,6 @@ coverage-report:
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 
 .PHONY: coverage
-coverage: export VALK_COVERAGE=1
 coverage: build-coverage coverage-tests coverage-report coverage-check
 	@echo "=== Coverage collection complete ==="
 

@@ -3988,28 +3988,16 @@ void valk_gc_reset_after_fork(void) {
   __runtime_heap = nullptr;
   __runtime_initialized = false;
 
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
-  atomic_store(&valk_gc_coord.threads_registered, 0);
-  atomic_store(&valk_gc_coord.threads_paused, 0);
-  valk_gc_coord.barrier_initialized = false;
-
-  for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
-    valk_gc_coord.threads[i].ctx = nullptr;
-    valk_gc_coord.threads[i].active = false;
-  }
-
-  atomic_store(&valk_gc_coord.parallel_cycles, 0);
-  atomic_store(&valk_gc_coord.parallel_pause_us_total, 0);
+  valk_gc_coordinator_init();
 
   atomic_store(&__gc_heap2_idle_count, 0);
   atomic_store(&__gc_heap2_terminated, false);
   atomic_store(&__gc_heap2_current, nullptr);
 
-  pthread_mutex_lock(&g_live_heaps_lock);
+  pthread_mutex_init(&g_live_heaps_lock, nullptr);
   for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) {
     g_live_heaps[i] = nullptr;
   }
-  pthread_mutex_unlock(&g_live_heaps_lock);
 
   valk_thread_ctx.heap = nullptr;
   valk_thread_ctx.scratch = nullptr;
