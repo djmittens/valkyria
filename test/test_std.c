@@ -201,6 +201,7 @@ int main(int argc, const char **argv) {
   valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(0);
   valk_thread_ctx.allocator = (void *)gc_heap;
   valk_thread_ctx.heap = gc_heap;
+  valk_gc_thread_register();
 
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
@@ -242,9 +243,9 @@ int main(int argc, const char **argv) {
   // Final GC collection before destroying heap
   // This collects any remaining unreachable objects
   valk_gc_malloc_set_root(gc_heap, nullptr);
-  valk_gc_malloc_collect(gc_heap, nullptr);  // No additional roots in cleanup
+  valk_gc_malloc_collect(gc_heap, nullptr);
 
-  // Clean up GC heap to avoid memory leaks
+  valk_gc_thread_unregister();
   valk_gc_malloc_heap_destroy(gc_heap);
 
   return res;

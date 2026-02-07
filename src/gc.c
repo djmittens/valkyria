@@ -130,31 +130,6 @@ void valk_barrier_wait(valk_barrier_t* b) {
   pthread_mutex_unlock(&b->mutex);
 }
 
-// LCOV_EXCL_BR_START - GC marking null checks and CAS loops
-// Atomic mark bit operations
-bool valk_gc_try_mark(valk_lval_t* obj) {
-  if (obj == nullptr) return false;
-  u64 expected = atomic_load_explicit(&obj->flags, memory_order_relaxed);
-  do {
-    if (expected & LVAL_FLAG_GC_MARK) {
-      return false;
-    }
-  } while (!atomic_compare_exchange_weak_explicit(
-      &obj->flags, &expected, expected | LVAL_FLAG_GC_MARK,
-      memory_order_acq_rel, memory_order_relaxed));
-  return true;
-}
-
-bool valk_gc_is_marked(valk_lval_t* obj) {
-  if (obj == nullptr) return true;
-  return (atomic_load_explicit(&obj->flags, memory_order_acquire) & LVAL_FLAG_GC_MARK) != 0;
-}
-
-void valk_gc_clear_mark(valk_lval_t* obj) {
-  if (obj == nullptr) return;
-  atomic_fetch_and_explicit(&obj->flags, ~LVAL_FLAG_GC_MARK, memory_order_release);
-}
-
 // Mark queue: thin wrappers around dynamic Chase-Lev deque (aio_chase_lev.h)
 void valk_gc_mark_queue_init(valk_gc_mark_queue_t* q) {
   valk_chase_lev_init(q, VALK_GC_MARK_QUEUE_INITIAL_SIZE);
@@ -270,11 +245,10 @@ void valk_gc_safe_point_slow(void) {
       pthread_mutex_unlock(&valk_gc_coord.lock);
     }
 
-    // Wait for THIS checkpoint to complete. Use a simple wait without re-checking
-    // the phase in a loop - if a new checkpoint starts after we wake, we'll handle
-    // it on the next VALK_GC_SAFE_POINT() call, not by re-entering the wait.
     pthread_mutex_lock(&valk_gc_coord.lock);
-    pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
+    while (atomic_load(&valk_gc_coord.phase) == VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
+      pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
+    }
     pthread_mutex_unlock(&valk_gc_coord.lock);
     return;
   }
@@ -308,67 +282,7 @@ void valk_gc_safe_point_slow(void) {
 static _Atomic u32 __page_id_counter = 0;
 
 // ============================================================================
-// Phase 2: GC Triggering and Participation
-// ============================================================================
-
-// LCOV_EXCL_START - Parallel GC STW coordination requires multi-threaded test infrastructure
-void valk_gc_request_collection(void) {
-  valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
-  if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected,
-                                       VALK_GC_PHASE_STW_REQUESTED)) {
-    return;
-  }
-
-  u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
-  if (num_threads == 0) {
-    atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
-    return;
-  }
-
-  if (valk_gc_coord.barrier_initialized) {
-    valk_barrier_reset(&valk_gc_coord.barrier, num_threads);
-  } else {
-    valk_barrier_init(&valk_gc_coord.barrier, num_threads);
-    valk_gc_coord.barrier_initialized = true;
-  }
-
-  pthread_mutex_lock(&valk_gc_coord.lock);
-  while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_nsec += 100000000;
-    if (ts.tv_nsec >= 1000000000) {
-      ts.tv_sec++;
-      ts.tv_nsec -= 1000000000;
-    }
-    pthread_cond_timedwait(&valk_gc_coord.all_paused, &valk_gc_coord.lock, &ts);
-  }
-  pthread_mutex_unlock(&valk_gc_coord.lock);
-}
-
-void valk_gc_participate(void) {
-  valk_barrier_wait(&valk_gc_coord.barrier);
-
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_MARKING);
-  valk_gc_parallel_mark();
-
-  valk_barrier_wait(&valk_gc_coord.barrier);
-
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_SWEEPING);
-
-  valk_barrier_wait(&valk_gc_coord.barrier);
-
-  pthread_mutex_lock(&valk_gc_coord.lock);
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
-  pthread_cond_broadcast(&valk_gc_coord.gc_done);
-  pthread_mutex_unlock(&valk_gc_coord.lock);
-
-  atomic_fetch_add(&valk_gc_coord.parallel_cycles, 1);
-}
-// LCOV_EXCL_STOP
-
-// ============================================================================
-// Phase 3: Root Enumeration
+// Phase 2: Root Enumeration
 // ============================================================================
 
 // LCOV_EXCL_BR_START - defensive null checks in root iteration
@@ -417,176 +331,6 @@ void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
 // ============================================================================
 // Phase 4: Parallel Mark
 // ============================================================================
-
-// LCOV_EXCL_START - Parallel GC marking infrastructure requires multi-threaded coordination
-static void mark_and_push(valk_lval_t *obj, void *ctx);
-static void mark_children(valk_lval_t *obj, valk_gc_mark_queue_t *queue);
-static void mark_env_parallel(valk_lenv_t *env, valk_gc_mark_queue_t *queue);
-
-static void mark_env_parallel(valk_lenv_t *env, valk_gc_mark_queue_t *queue) {
-  if (env == nullptr) return;
-
-  for (u64 i = 0; i < env->vals.count; i++) {
-    mark_and_push(env->vals.items[i], queue);
-  }
-
-  mark_env_parallel(env->parent, queue);
-}
-
-static void mark_children(valk_lval_t *obj, valk_gc_mark_queue_t *queue) {
-  if (obj == nullptr) return;
-  switch (LVAL_TYPE(obj)) {
-    case LVAL_CONS:
-      mark_and_push(obj->cons.head, queue);
-      mark_and_push(obj->cons.tail, queue);
-      break;
-    case LVAL_FUN:
-      if (obj->fun.builtin == nullptr) {
-        mark_and_push(obj->fun.formals, queue);
-        mark_and_push(obj->fun.body, queue);
-        if (obj->fun.env) mark_env_parallel(obj->fun.env, queue);
-      }
-      break;
-    case LVAL_HANDLE:
-      if (obj->async.handle) {
-        mark_and_push(obj->async.handle->on_complete, queue);
-        mark_and_push(obj->async.handle->on_error, queue);
-        mark_and_push(obj->async.handle->on_cancel, queue);
-        mark_and_push(atomic_load_explicit(&obj->async.handle->result, memory_order_acquire), queue);
-        mark_and_push(atomic_load_explicit(&obj->async.handle->error, memory_order_acquire), queue);
-        if (obj->async.handle->env) mark_env_parallel(obj->async.handle->env, queue);
-      }
-      break;
-    default:
-      break;
-  }
-}
-
-static void mark_and_push(valk_lval_t *obj, void *ctx) {
-  valk_gc_mark_queue_t *queue = ctx;
-
-  if (obj == nullptr) return;
-  if (obj->flags & LVAL_FLAG_IMMORTAL) return;
-  if (!valk_gc_try_mark(obj)) return;
-
-  valk_gc_mark_queue_push(queue, obj);
-}
-
-// OWST-style termination detection for Phase 0 parallel mark
-static _Atomic u64 __gc_offered = 0;
-static _Atomic bool __gc_terminated = false;
-static pthread_mutex_t __gc_term_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t __gc_term_cond = PTHREAD_COND_INITIALIZER;
-
-bool valk_gc_check_termination(void) {
-  u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
-
-  pthread_mutex_lock(&__gc_term_lock);
-  u64 offered = atomic_fetch_add(&__gc_offered, 1) + 1;
-
-  if (offered == num_threads) {
-    bool all_empty = true;
-    for (u64 i = 0; i < num_threads; i++) {
-      if (!valk_gc_coord.threads[i].active) continue;
-      if (!valk_gc_mark_queue_empty(&valk_gc_coord.threads[i].mark_queue)) {
-        all_empty = false;
-        break;
-      }
-    }
-    if (all_empty) {
-      atomic_store(&__gc_terminated, true);
-      pthread_cond_broadcast(&__gc_term_cond);
-      pthread_mutex_unlock(&__gc_term_lock);
-      return true;
-    }
-  }
-
-  while (!atomic_load(&__gc_terminated)) {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_nsec += 1000000;  // 1ms timeout
-    if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
-    pthread_cond_timedwait(&__gc_term_cond, &__gc_term_lock, &ts);
-
-    if (atomic_load(&__gc_terminated)) {
-      pthread_mutex_unlock(&__gc_term_lock);
-      return true;
-    }
-
-    bool found_work = false;
-    for (u64 i = 0; i < num_threads; i++) {
-      if (!valk_gc_coord.threads[i].active) continue;
-      if (!valk_gc_mark_queue_empty(&valk_gc_coord.threads[i].mark_queue)) {
-        found_work = true;
-        break;
-      }
-    }
-    if (found_work) {
-      atomic_fetch_sub(&__gc_offered, 1);
-      pthread_cond_signal(&__gc_term_cond);
-      pthread_mutex_unlock(&__gc_term_lock);
-      return false;
-    }
-  }
-
-  pthread_mutex_unlock(&__gc_term_lock);
-  return true;
-}
-
-void valk_gc_parallel_mark(void) {
-  if (!valk_thread_ctx.gc_registered) return;
-
-  u64 my_id = valk_thread_ctx.gc_thread_id;
-  valk_gc_mark_queue_t *my_queue = &valk_gc_coord.threads[my_id].mark_queue;
-
-  atomic_store(&__gc_offered, 0);
-  atomic_store(&__gc_terminated, false);
-
-  valk_gc_mark_queue_init(my_queue);
-
-  valk_gc_visit_thread_roots(mark_and_push, my_queue);
-
-  if (my_id == 0) {
-    valk_gc_visit_global_roots(mark_and_push, my_queue);
-  }
-
-  valk_barrier_wait(&valk_gc_coord.barrier);
-
-  while (true) {
-    valk_lval_t *obj;
-    while ((obj = valk_gc_mark_queue_pop(my_queue)) != nullptr) {
-      mark_children(obj, my_queue);
-    }
-
-    bool found_work = false;
-    u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
-
-    for (u64 i = 1; i <= num_threads; i++) {
-      u64 victim = (my_id + i) % num_threads;
-      if (!valk_gc_coord.threads[victim].active) continue;
-
-      obj = valk_gc_mark_queue_steal(&valk_gc_coord.threads[victim].mark_queue);
-      if (obj != nullptr) {
-        mark_children(obj, my_queue);
-        found_work = true;
-        break;
-      }
-    }
-
-    if (!found_work) {
-      if (valk_gc_check_termination()) {
-        break;
-      }
-    }
-  }
-}
-// LCOV_EXCL_STOP
-
-
-
-// Forward declarations
-static void valk_gc_mark_lval(valk_lval_t* v);
-static void valk_gc_mark_env(valk_lenv_t* env);
 
 // ============================================================================
 // GC Heap - Legacy API wrappers around valk_gc_heap2_t
@@ -1538,66 +1282,6 @@ static valk_lval_t* evac_worklist_pop(valk_evacuation_ctx_t* ctx) {
   return ctx->worklist[--ctx->worklist_count];
 }
 // LCOV_EXCL_BR_STOP
-
-// ============================================================================
-// GC Marking Functions (legacy wrappers for heap2)
-// ============================================================================
-
-// LCOV_EXCL_BR_START - GC marking null checks and type dispatch
-static void valk_gc_mark_lval(valk_lval_t* v) {
-  if (v == nullptr) return;
-  if (v->flags & LVAL_FLAG_IMMORTAL) return;
-  if (LVAL_ALLOC(v) != LVAL_ALLOC_HEAP) return;
-  if (v->flags & LVAL_FLAG_GC_MARK) return;
-  v->flags |= LVAL_FLAG_GC_MARK;
-
-  switch (LVAL_TYPE(v)) {
-    case LVAL_FUN:
-      if (v->fun.env) valk_gc_mark_env(v->fun.env);
-      valk_gc_mark_lval(v->fun.formals);
-      valk_gc_mark_lval(v->fun.body);
-      break;
-    case LVAL_CONS:
-      valk_gc_mark_lval(v->cons.head);
-      valk_gc_mark_lval(v->cons.tail);
-      break;
-    case LVAL_HANDLE:
-      if (v->async.handle) {
-        valk_gc_mark_lval(v->async.handle->on_complete);
-        valk_gc_mark_lval(v->async.handle->on_error);
-        valk_gc_mark_lval(v->async.handle->on_cancel);
-        valk_gc_mark_lval(atomic_load_explicit(&v->async.handle->result, memory_order_acquire));
-        valk_gc_mark_lval(atomic_load_explicit(&v->async.handle->error, memory_order_acquire));
-        if (v->async.handle->env) valk_gc_mark_env(v->async.handle->env);
-      }
-      break;
-    default:
-      break;
-  }
-}
-
-static void valk_gc_mark_env(valk_lenv_t* env) {
-  if (env == nullptr) return;
-  for (u64 i = 0; i < env->vals.count; i++) {
-    valk_gc_mark_lval(env->vals.items[i]);
-  }
-  if (env->parent) valk_gc_mark_env(env->parent);
-}
-// LCOV_EXCL_BR_STOP
-
-// ============================================================================
-// External GC marking functions
-// ============================================================================
-
-// Mark an lval and all its children (wrapper around internal function)
-void valk_gc_mark_lval_external(valk_lval_t* v) {
-  valk_gc_mark_lval(v);
-}
-
-// Mark an environment and all its contents (wrapper around internal function)
-void valk_gc_mark_env_external(valk_lenv_t* env) {
-  valk_gc_mark_env(env);
-}
 
 // Check if checkpoint should be triggered
 bool valk_should_checkpoint(valk_mem_arena_t* scratch, float threshold) {
@@ -2875,8 +2559,12 @@ void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes) {
     valk_gc_tlab2_init(valk_gc_local_tlab);
   }
   
-  if (valk_gc_local_tlab->owner_heap != heap) {
-    if (valk_gc_local_tlab->owner_heap && valk_gc_is_heap_alive(valk_gc_local_tlab->owner_heap)) {
+  if (valk_gc_local_tlab->owner_heap != heap ||
+      valk_gc_local_tlab->owner_generation != heap->generation) {
+    if (valk_gc_local_tlab->owner_heap == heap &&
+        valk_gc_local_tlab->owner_generation != heap->generation) {
+      valk_gc_tlab2_abandon(valk_gc_local_tlab);
+    } else if (valk_gc_local_tlab->owner_heap && valk_gc_is_heap_alive(valk_gc_local_tlab->owner_heap)) {
       valk_gc_tlab2_reset(valk_gc_local_tlab);
     } else {
       valk_gc_tlab2_abandon(valk_gc_local_tlab);
@@ -3446,7 +3134,11 @@ static pthread_cond_t __gc_heap2_term_cond = PTHREAD_COND_INITIALIZER;
 sz valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
   if (!heap) return 0;
 
+  VALK_ASSERT(atomic_load(&valk_gc_coord.threads_registered) > 0,
+              "GC collect requires at least one registered thread");
+
   if (!valk_gc_heap2_request_stw(heap)) {
+    VALK_GC_SAFE_POINT();
     return 0;
   }
 
@@ -3476,6 +3168,7 @@ sz valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
   if (valk_thread_ctx.gc_thread_id == 0) {
     valk_gc_rebuild_partial_lists(heap);
     valk_gc_reclaim_empty_pages(heap);
+    heap->generation = atomic_fetch_add(&g_heap_generation, 1);
   }
 
   atomic_store(&valk_gc_coord.threads_paused, 0);
@@ -3863,11 +3556,6 @@ void valk_gc_reset_after_fork(void) {
   __runtime_initialized = false;
 
   valk_gc_coordinator_init();
-
-  atomic_store(&__gc_offered, 0);
-  atomic_store(&__gc_terminated, false);
-  pthread_mutex_init(&__gc_term_lock, nullptr);
-  pthread_cond_init(&__gc_term_cond, nullptr);
 
   atomic_store(&__gc_heap2_offered, 0);
   atomic_store(&__gc_heap2_terminated, false);

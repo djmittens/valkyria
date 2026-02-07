@@ -50,6 +50,7 @@ void test_gc_metrics_after_collection(VALK_TEST_ARGS()) {
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)heap;
   valk_thread_ctx.heap = heap;
+  valk_gc_thread_register();
 
   // Create a simple environment
   valk_lenv_t* env = valk_lenv_empty();
@@ -76,6 +77,7 @@ void test_gc_metrics_after_collection(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(cycles == 2, "cycles should be 2 after second collection, got %llu",
                    (unsigned long long)cycles);
 
+  valk_gc_thread_unregister();
   valk_thread_ctx = old_ctx;
   valk_gc_malloc_heap_destroy(heap);
   VALK_PASS();
@@ -90,6 +92,7 @@ void test_gc_pause_time_recorded(VALK_TEST_ARGS()) {
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)heap;
   valk_thread_ctx.heap = heap;
+  valk_gc_thread_register();
 
   valk_lenv_t* env = valk_lenv_empty();
   valk_gc_malloc_set_root(heap, env);
@@ -118,6 +121,7 @@ void test_gc_pause_time_recorded(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(pause_us_max == pause_us_total,
                    "pause_us_max should equal pause_us_total after first collection");
 
+  valk_gc_thread_unregister();
   valk_thread_ctx = old_ctx;
   valk_gc_malloc_heap_destroy(heap);
   VALK_PASS();
@@ -132,6 +136,7 @@ void test_gc_reclaimed_bytes(VALK_TEST_ARGS()) {
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)heap;
   valk_thread_ctx.heap = heap;
+  valk_gc_thread_register();
 
   valk_lenv_t* env = valk_lenv_empty();
   valk_gc_malloc_set_root(heap, env);
@@ -158,6 +163,7 @@ void test_gc_reclaimed_bytes(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(allocated_after < allocated_before,
                    "allocated_bytes should decrease after GC");
 
+  valk_gc_thread_unregister();
   valk_thread_ctx = old_ctx;
   valk_gc_malloc_heap_destroy(heap);
   VALK_PASS();
@@ -172,6 +178,7 @@ void test_gc_max_pause_tracking(VALK_TEST_ARGS()) {
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)heap;
   valk_thread_ctx.heap = heap;
+  valk_gc_thread_register();
 
   valk_lenv_t* env = valk_lenv_empty();
   valk_gc_malloc_set_root(heap, env);
@@ -207,6 +214,7 @@ void test_gc_max_pause_tracking(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(pause_us_total >= pause_us_max_2,
                    "pause_us_total should be >= pause_us_max");
 
+  valk_gc_thread_unregister();
   valk_thread_ctx = old_ctx;
   valk_gc_malloc_heap_destroy(heap);
   VALK_PASS();

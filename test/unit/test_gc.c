@@ -507,32 +507,6 @@ void test_gc_print_stats_null(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_mark_lval_external(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-
-  valk_lval_t *val = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  val->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
-  val->num = 42;
-
-  valk_gc_mark_lval_external(val);
-
-  VALK_TEST_ASSERT((val->flags & LVAL_FLAG_GC_MARK) != 0, "Should be marked");
-
-  valk_gc_malloc_heap_destroy(heap);
-
-  VALK_PASS();
-}
-
-void test_gc_mark_lval_external_null(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_mark_lval_external(nullptr);
-
-  VALK_PASS();
-}
-
 void test_gc_should_checkpoint_null_scratch(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -555,14 +529,6 @@ void test_gc_should_checkpoint_high_threshold(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(should == true, "85% full should trigger checkpoint");
 
   free(scratch);
-
-  VALK_PASS();
-}
-
-void test_gc_mark_env_external(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_mark_env_external(nullptr);
 
   VALK_PASS();
 }
@@ -3524,95 +3490,6 @@ void test_gc_barrier_destroy_explicit(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_mark_cons_type(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_coordinator_init();
-  valk_gc_thread_register();
-
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-
-  valk_lval_t *head = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  head->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
-  head->num = 42;
-
-  valk_lval_t *tail = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  tail->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
-  tail->num = 99;
-
-  valk_lval_t *cons = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  cons->flags = LVAL_CONS | LVAL_ALLOC_HEAP;
-  cons->cons.head = head;
-  cons->cons.tail = tail;
-
-  valk_gc_root_push(cons);
-
-  valk_gc_clear_mark(cons);
-  valk_gc_clear_mark(head);
-  valk_gc_clear_mark(tail);
-
-  valk_gc_mark_lval_external(cons);
-
-  VALK_TEST_ASSERT(valk_gc_is_marked(cons), "CONS should be marked");
-  VALK_TEST_ASSERT(valk_gc_is_marked(head), "CONS head should be marked");
-  VALK_TEST_ASSERT(valk_gc_is_marked(tail), "CONS tail should be marked");
-
-  valk_gc_malloc_heap_destroy(heap);
-  valk_gc_thread_unregister();
-
-  VALK_PASS();
-}
-
-void test_gc_mark_fun_type(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_coordinator_init();
-  valk_gc_thread_register();
-
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-
-  valk_lval_t *formals = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  formals->flags = LVAL_QEXPR | LVAL_ALLOC_HEAP;
-  formals->cons.head = nullptr;
-  formals->cons.tail = nullptr;
-
-  valk_lval_t *body = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  body->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
-  body->num = 100;
-
-  valk_lenv_t *env = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lenv_t));
-  memset(env, 0, sizeof(valk_lenv_t));
-  env->parent = nullptr;
-  env->vals.items = nullptr;
-  env->vals.count = 0;
-  env->vals.capacity = 0;
-
-  valk_lval_t *fun = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  fun->flags = LVAL_FUN | LVAL_ALLOC_HEAP;
-  fun->fun.builtin = nullptr;
-  fun->fun.formals = formals;
-  fun->fun.body = body;
-  fun->fun.env = env;
-  fun->fun.name = nullptr;
-
-  valk_gc_root_push(fun);
-
-  valk_gc_clear_mark(fun);
-  valk_gc_clear_mark(formals);
-  valk_gc_clear_mark(body);
-
-  valk_gc_mark_lval_external(fun);
-
-  VALK_TEST_ASSERT(valk_gc_is_marked(fun), "FUN should be marked");
-  VALK_TEST_ASSERT(valk_gc_is_marked(formals), "FUN formals should be marked");
-  VALK_TEST_ASSERT(valk_gc_is_marked(body), "FUN body should be marked");
-
-  valk_gc_malloc_heap_destroy(heap);
-  valk_gc_thread_unregister();
-
-  VALK_PASS();
-}
-
 void test_gc_ptr_map_collision_handling(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -3776,12 +3653,9 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_memory_print_stats_null_heap", test_gc_memory_print_stats_null_heap);
   valk_testsuite_add_test(suite, "test_gc_collect_with_additional_root", test_gc_collect_with_additional_root);
   valk_testsuite_add_test(suite, "test_gc_print_stats_null", test_gc_print_stats_null);
-  valk_testsuite_add_test(suite, "test_gc_mark_lval_external", test_gc_mark_lval_external);
-  valk_testsuite_add_test(suite, "test_gc_mark_lval_external_null", test_gc_mark_lval_external_null);
 
   valk_testsuite_add_test(suite, "test_gc_should_checkpoint_null_scratch", test_gc_should_checkpoint_null_scratch);
   valk_testsuite_add_test(suite, "test_gc_should_checkpoint_high_threshold", test_gc_should_checkpoint_high_threshold);
-  valk_testsuite_add_test(suite, "test_gc_mark_env_external", test_gc_mark_env_external);
   valk_testsuite_add_test(suite, "test_gc_checkpoint_null_args", test_gc_checkpoint_null_args);
   valk_testsuite_add_test(suite, "test_gc_should_collect_rate_limiting", test_gc_should_collect_rate_limiting);
   valk_testsuite_add_test(suite, "test_gc_should_collect_above_threshold", test_gc_should_collect_above_threshold);
@@ -3943,8 +3817,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_region_session_lifetime", test_gc_region_session_lifetime);
   valk_testsuite_add_test(suite, "test_gc_visit_env_roots_nested", test_gc_visit_env_roots_nested);
   valk_testsuite_add_test(suite, "test_gc_barrier_destroy_explicit", test_gc_barrier_destroy_explicit);
-  valk_testsuite_add_test(suite, "test_gc_mark_cons_type", test_gc_mark_cons_type);
-  valk_testsuite_add_test(suite, "test_gc_mark_fun_type", test_gc_mark_fun_type);
   valk_testsuite_add_test(suite, "test_gc_ptr_map_collision_handling", test_gc_ptr_map_collision_handling);
   valk_testsuite_add_test(suite, "test_gc_region_alloc_limit_overflow", test_gc_region_alloc_limit_overflow);
   valk_testsuite_add_test(suite, "test_gc_region_limit_exceeds_allocation", test_gc_region_limit_exceeds_allocation);

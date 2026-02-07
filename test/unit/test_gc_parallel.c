@@ -23,99 +23,6 @@ void test_gc_coordinator_init(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_atomic_mark_single(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-  valk_lval_t *val = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  val->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
-  val->num = 42;
-
-  VALK_TEST_ASSERT(!valk_gc_is_marked(val), "Should not be marked initially");
-
-  bool first = valk_gc_try_mark(val);
-  VALK_TEST_ASSERT(first == true, "First mark should succeed");
-  VALK_TEST_ASSERT(valk_gc_is_marked(val), "Should be marked after try_mark");
-
-  bool second = valk_gc_try_mark(val);
-  VALK_TEST_ASSERT(second == false, "Second mark should fail");
-
-  valk_gc_clear_mark(val);
-  VALK_TEST_ASSERT(!valk_gc_is_marked(val), "Should not be marked after clear");
-
-  valk_gc_malloc_heap_destroy(heap);
-
-  VALK_PASS();
-}
-
-void test_gc_atomic_mark_null(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  bool result = valk_gc_try_mark(nullptr);
-  VALK_TEST_ASSERT(result == false, "try_mark(nullptr) should return false");
-
-  bool is_marked = valk_gc_is_marked(nullptr);
-  VALK_TEST_ASSERT(is_marked == true, "is_marked(nullptr) should return true");
-
-  valk_gc_clear_mark(nullptr);
-
-  VALK_PASS();
-}
-
-typedef struct {
-  valk_lval_t *val;
-  int success_count;
-  int attempts;
-} mark_race_ctx_t;
-
-static void *mark_race_thread(void *arg) {
-  mark_race_ctx_t *ctx = arg;
-  int local_success = 0;
-  for (int i = 0; i < ctx->attempts; i++) {
-    if (valk_gc_try_mark(ctx->val)) {
-      local_success++;
-    }
-    valk_gc_clear_mark(ctx->val);
-  }
-  ctx->success_count = local_success;
-  return nullptr;
-}
-
-void test_gc_atomic_mark_multithread(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-  valk_lval_t *val = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  val->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
-
-  const int NUM_THREADS = 4;
-  const int ATTEMPTS = 1000;
-  pthread_t threads[NUM_THREADS];
-  mark_race_ctx_t ctxs[NUM_THREADS];
-
-  for (int i = 0; i < NUM_THREADS; i++) {
-    ctxs[i].val = val;
-    ctxs[i].success_count = 0;
-    ctxs[i].attempts = ATTEMPTS;
-    pthread_create(&threads[i], nullptr, mark_race_thread, &ctxs[i]);
-  }
-
-  for (int i = 0; i < NUM_THREADS; i++) {
-    pthread_join(threads[i], nullptr);
-  }
-
-  int total_success = 0;
-  for (int i = 0; i < NUM_THREADS; i++) {
-    total_success += ctxs[i].success_count;
-  }
-
-  VALK_TEST_ASSERT(total_success > 0, "At least some marks should succeed");
-
-  valk_gc_malloc_heap_destroy(heap);
-
-  VALK_PASS();
-}
-
 void test_gc_barrier_basic(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -567,64 +474,6 @@ void test_gc_visit_thread_roots(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-// ============================================================================
-// Phase 4 Tests: Parallel Mark
-// ============================================================================
-
-void test_gc_termination_check(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_coordinator_init();
-  valk_gc_thread_register();
-
-  bool terminated = valk_gc_check_termination();
-  VALK_TEST_ASSERT(terminated == true, 
-                   "With empty queues and 1 registered thread, should terminate");
-
-  valk_gc_thread_unregister();
-
-  VALK_PASS();
-}
-
-void test_gc_mark_linked_list(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_gc_coordinator_init();
-  valk_gc_thread_register();
-
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-
-  const int LIST_LEN = 100;
-  valk_lval_t *nodes[LIST_LEN];
-  
-  for (int i = 0; i < LIST_LEN; i++) {
-    nodes[i] = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-    nodes[i]->flags = LVAL_CONS;
-    nodes[i]->cons.head = nullptr;
-    nodes[i]->cons.tail = (i > 0) ? nodes[i-1] : nullptr;
-  }
-
-  valk_gc_root_push(nodes[LIST_LEN - 1]);
-
-  valk_barrier_init(&valk_gc_coord.barrier, 1);
-  valk_gc_coord.barrier_initialized = true;
-
-  valk_gc_parallel_mark();
-
-  for (int i = 0; i < LIST_LEN; i++) {
-    VALK_TEST_ASSERT(valk_gc_is_marked(nodes[i]), "node[%d] should be marked", i);
-  }
-
-  for (int i = 0; i < LIST_LEN; i++) {
-    valk_gc_clear_mark(nodes[i]);
-  }
-
-  valk_gc_malloc_heap_destroy(heap);
-  valk_gc_thread_unregister();
-
-  VALK_PASS();
-}
-
 void test_gc_safe_point_with_stw(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_gc_coordinator_init();
@@ -649,9 +498,6 @@ int main(void) {
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
 
   valk_testsuite_add_test(suite, "test_gc_coordinator_init", test_gc_coordinator_init);
-  valk_testsuite_add_test(suite, "test_gc_atomic_mark_single", test_gc_atomic_mark_single);
-  valk_testsuite_add_test(suite, "test_gc_atomic_mark_null", test_gc_atomic_mark_null);
-  valk_testsuite_add_test(suite, "test_gc_atomic_mark_multithread", test_gc_atomic_mark_multithread);
   valk_testsuite_add_test(suite, "test_gc_barrier_basic", test_gc_barrier_basic);
   valk_testsuite_add_test(suite, "test_gc_barrier_multithread", test_gc_barrier_multithread);
   valk_testsuite_add_test(suite, "test_gc_mark_queue_init", test_gc_mark_queue_init);
@@ -663,12 +509,9 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_mark_queue_concurrent_steal", test_gc_mark_queue_concurrent_steal);
   valk_testsuite_add_test(suite, "test_gc_phase_transitions", test_gc_phase_transitions);
   valk_testsuite_add_test(suite, "test_gc_root_stack_init", test_gc_root_stack_init);
-  
   valk_testsuite_add_test(suite, "test_gc_root_push_pop", test_gc_root_push_pop);
   valk_testsuite_add_test(suite, "test_gc_root_scoped", test_gc_root_scoped);
   valk_testsuite_add_test(suite, "test_gc_visit_thread_roots", test_gc_visit_thread_roots);
-  valk_testsuite_add_test(suite, "test_gc_termination_check", test_gc_termination_check);
-  valk_testsuite_add_test(suite, "test_gc_mark_linked_list", test_gc_mark_linked_list);
   valk_testsuite_add_test(suite, "test_gc_safe_point_with_stw", test_gc_safe_point_with_stw);
 
   int result = valk_testsuite_run(suite);

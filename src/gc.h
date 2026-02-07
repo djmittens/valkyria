@@ -401,21 +401,8 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
 // (e.g., callbacks that may fire before next checkpoint)
 valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v);
 
-// Add a value to the GC heap's object list (for evacuated values)
-void valk_gc_add_to_objects(valk_gc_malloc_heap_t* heap, valk_lval_t* v);
-
 // ============================================================================
-// External GC marking functions
-// ============================================================================
-
-// Mark an lval and all its children
-void valk_gc_mark_lval_external(valk_lval_t* v);
-
-// Mark an environment and all its contents
-void valk_gc_mark_env_external(valk_lenv_t* env);
-
-// ============================================================================
-// Parallel GC Infrastructure (Phase 0)
+// Parallel GC Infrastructure
 // ============================================================================
 
 #define VALK_GC_MAX_THREADS 64
@@ -428,13 +415,6 @@ typedef enum {
   VALK_GC_PHASE_MARKING,
   VALK_GC_PHASE_SWEEPING,
 } valk_gc_phase_e;
-
-// Atomic mark bit operations (thread-safe for parallel marking)
-// Uses compare-and-swap to ensure exactly one thread marks each object
-// Implemented in gc.c (need full type definition)
-bool valk_gc_try_mark(valk_lval_t* obj);
-bool valk_gc_is_marked(valk_lval_t* obj);
-void valk_gc_clear_mark(valk_lval_t* obj);
 
 // Work-stealing mark queue (backed by dynamic Chase-Lev deque from aio_chase_lev.h)
 #include "aio_chase_lev.h"
@@ -716,7 +696,7 @@ typedef struct valk_gc_tlab2 {
 // Main heap structure with size classes
 struct valk_gc_heap2 {
   valk_mem_allocator_e type;            // VALK_ALLOC_GC_HEAP
-  u64 generation;                       // Unique generation for this heap instance
+  _Atomic u64 generation;                // Bumped after each GC cycle to invalidate TLABs
   void *base;                           // mmap'd base (PROT_NONE reserved)
   sz reserved;                      // Total virtual reservation
   
@@ -927,9 +907,6 @@ typedef void (*valk_gc_root_visitor_t)(valk_lval_t *root, void *ctx);
 void valk_gc_visit_thread_roots(valk_gc_root_visitor_t visitor, void *ctx);
 void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx);
 void valk_gc_visit_env_roots(valk_lenv_t *env, valk_gc_root_visitor_t visitor, void *ctx);
-
-void valk_gc_parallel_mark(void);
-bool valk_gc_check_termination(void);
 
 // ============================================================================
 // Root Stack Inline Implementations
