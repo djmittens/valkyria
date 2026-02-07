@@ -186,9 +186,9 @@ void test_gc_mark_queue_init(VALK_TEST_ARGS()) {
   valk_gc_mark_queue_t queue;
   valk_gc_mark_queue_init(&queue);
 
-  VALK_TEST_ASSERT(atomic_load(&queue.top) == 0, "top should be 0");
-  VALK_TEST_ASSERT(atomic_load(&queue.bottom) == 0, "bottom should be 0");
   VALK_TEST_ASSERT(valk_gc_mark_queue_empty(&queue), "Queue should be empty");
+
+  valk_gc_mark_queue_destroy(&queue);
 
   VALK_PASS();
 }
@@ -209,8 +209,7 @@ void test_gc_mark_queue_push_pop(VALK_TEST_ARGS()) {
   valk_gc_mark_queue_init(&queue);
 
   for (int i = 0; i < 10; i++) {
-    bool pushed = valk_gc_mark_queue_push(&queue, vals[i]);
-    VALK_TEST_ASSERT(pushed, "Push %d should succeed", i);
+    valk_gc_mark_queue_push(&queue, vals[i]);
   }
 
   VALK_TEST_ASSERT(!valk_gc_mark_queue_empty(&queue), "Queue should not be empty");
@@ -225,6 +224,7 @@ void test_gc_mark_queue_push_pop(VALK_TEST_ARGS()) {
   valk_lval_t *empty_pop = valk_gc_mark_queue_pop(&queue);
   VALK_TEST_ASSERT(empty_pop == nullptr, "Pop from empty queue should return nullptr");
 
+  valk_gc_mark_queue_destroy(&queue);
   valk_gc_malloc_heap_destroy(heap);
 
   VALK_PASS();
@@ -258,12 +258,13 @@ void test_gc_mark_queue_steal(VALK_TEST_ARGS()) {
   valk_lval_t *popped = valk_gc_mark_queue_pop(&queue);
   VALK_TEST_ASSERT(popped == vals[4], "Pop should return last element (LIFO)");
 
+  valk_gc_mark_queue_destroy(&queue);
   valk_gc_malloc_heap_destroy(heap);
 
   VALK_PASS();
 }
 
-void test_gc_mark_queue_full(VALK_TEST_ARGS()) {
+void test_gc_mark_queue_dynamic_growth(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(100 * 1024 * 1024);
@@ -271,18 +272,27 @@ void test_gc_mark_queue_full(VALK_TEST_ARGS()) {
   valk_gc_mark_queue_t queue;
   valk_gc_mark_queue_init(&queue);
 
+  const size_t COUNT = VALK_GC_MARK_QUEUE_INITIAL_SIZE + 100;
   int pushed = 0;
-  for (size_t i = 0; i < VALK_GC_MARK_QUEUE_SIZE + 100; i++) {
+  for (size_t i = 0; i < COUNT; i++) {
     valk_lval_t *val = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
     val->flags = LVAL_NUM;
-    if (valk_gc_mark_queue_push(&queue, val)) {
-      pushed++;
-    }
+    valk_gc_mark_queue_push(&queue, val);
+    pushed++;
   }
 
-  VALK_TEST_ASSERT(pushed == VALK_GC_MARK_QUEUE_SIZE, 
-                   "Should push exactly VALK_GC_MARK_QUEUE_SIZE items (pushed=%d)", pushed);
+  VALK_TEST_ASSERT((size_t)pushed == COUNT,
+                   "Should push all items (pushed=%d, expected=%zu)", pushed, COUNT);
 
+  int popped = 0;
+  while (valk_gc_mark_queue_pop(&queue) != nullptr) {
+    popped++;
+  }
+
+  VALK_TEST_ASSERT(pushed == popped,
+                   "Should pop all pushed items (pushed=%d, popped=%d)", pushed, popped);
+
+  valk_gc_mark_queue_destroy(&queue);
   valk_gc_malloc_heap_destroy(heap);
 
   VALK_PASS();
@@ -393,6 +403,7 @@ void test_gc_mark_queue_concurrent_steal(VALK_TEST_ARGS()) {
                    "Total processed should equal NUM_VALS (got %d, expected %d)", 
                    total, NUM_VALS);
 
+  valk_gc_mark_queue_destroy(&queue);
   valk_gc_malloc_heap_destroy(heap);
 
   VALK_PASS();
@@ -646,7 +657,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_mark_queue_init", test_gc_mark_queue_init);
   valk_testsuite_add_test(suite, "test_gc_mark_queue_push_pop", test_gc_mark_queue_push_pop);
   valk_testsuite_add_test(suite, "test_gc_mark_queue_steal", test_gc_mark_queue_steal);
-  valk_testsuite_add_test(suite, "test_gc_mark_queue_full", test_gc_mark_queue_full);
+  valk_testsuite_add_test(suite, "test_gc_mark_queue_dynamic_growth", test_gc_mark_queue_dynamic_growth);
   valk_testsuite_add_test(suite, "test_gc_thread_register_unregister", test_gc_thread_register_unregister);
   valk_testsuite_add_test(suite, "test_gc_safe_point_idle", test_gc_safe_point_idle);
   valk_testsuite_add_test(suite, "test_gc_mark_queue_concurrent_steal", test_gc_mark_queue_concurrent_steal);

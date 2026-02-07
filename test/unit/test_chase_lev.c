@@ -229,7 +229,6 @@ static void *stealer_thread(void *arg) {
 
 void test_chase_lev_concurrent_steal(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("concurrent test needs fork isolation");
 
   valk_chase_lev_deque_t deque;
   valk_chase_lev_init(&deque, 64);
@@ -272,7 +271,6 @@ void test_chase_lev_concurrent_steal(VALK_TEST_ARGS()) {
 
 void test_chase_lev_stress_push_pop(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("stress test needs fork isolation");
 
   valk_chase_lev_deque_t deque;
   valk_chase_lev_init(&deque, 8);
@@ -369,7 +367,6 @@ static void *cas_contention_popper(void *arg) {
 
 void test_chase_lev_cas_contention(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("concurrent test needs fork isolation");
 
   valk_chase_lev_deque_t deque;
   valk_chase_lev_init(&deque, 4);

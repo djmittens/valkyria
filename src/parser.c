@@ -4729,7 +4729,10 @@ static valk_lval_t* valk_builtin_http2_server_stop(valk_lenv_t* e,
 
   valk_aio_http_server* srv = (valk_aio_http_server*)server_ref->ref.ptr;
   if (valk_aio_http2_server_is_stopped(srv)) {
-    return valk_lval_err("http2/server-stop: server already stopped");
+    valk_aio_system_t* sys = srv->sys;
+    valk_async_handle_t* handle = valk_async_handle_new(sys, nullptr);
+    valk_async_handle_complete(handle, valk_lval_nil());
+    return valk_lval_handle(handle);
   }
 
   valk_async_handle_t* stop_handle = valk_aio_http2_stop(srv);

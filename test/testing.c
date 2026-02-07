@@ -14,6 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "aio.h"
 #include "collections.h"
 #include "common.h"
 #include "gc.h"
@@ -163,9 +164,10 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
     // Install SIGUSR1 handler for timeout diagnostics
     signal(SIGUSR1, valk_timeout_signal_handler);
 
-    // Reset all global GC state after fork - critical for test isolation
-    // This clears stale pointers to parent's heaps, TLABs, and GC coordinator state
+    // Reset all global state after fork - critical for test isolation
+    // This reinitializes pthread primitives which are undefined after fork
     valk_gc_reset_after_fork();
+    valk_aio_reset_after_fork();
     
     // Reinitialize thread-local allocator after fork
     valk_mem_init_malloc();

@@ -238,6 +238,10 @@ bool valk_aio_any_systems_running(void);
 /// @brief Wait for all running AIO systems to complete
 void valk_aio_wait_for_all_systems(void);
 
+/// @brief Reset AIO global state after fork
+/// Must be called in child process after fork() to reinitialize pthread primitives
+void valk_aio_reset_after_fork(void);
+
 typedef struct {
   void *arg;
   void (*onConnect)(void *arg, valk_aio_handle_t *);

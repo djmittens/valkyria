@@ -336,9 +336,19 @@ void test_arena_stats(VALK_TEST_ARGS()) {
 // Test GC heap hard limit
 void test_gc_heap_hard_limit(VALK_TEST_ARGS()) {
   VALK_TEST();
-  // TLAB is thread-local static, causing issues with multiple heaps in same test.
-  // Skip until we implement per-heap TLAB or test isolation.
-  VALK_SKIP("heap2 TLABs are thread-local static - needs refactoring for test isolation");
+
+  sz hard_limit = 2 * 1024 * 1024;
+  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(hard_limit);
+  VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
+  VALK_TEST_ASSERT(heap->hard_limit == hard_limit, "Hard limit should match");
+
+  valk_gc_set_hard_limit(heap, hard_limit * 2);
+  VALK_TEST_ASSERT(heap->hard_limit == hard_limit * 2, "Hard limit should be updated");
+
+  VALK_TEST_ASSERT(heap->stats.peak_usage == 0, "peak_usage should start at 0");
+
+  valk_gc_malloc_heap_destroy(heap);
+  VALK_PASS();
 }
 
 // Test GC heap statistics tracking

@@ -155,84 +155,33 @@ void valk_gc_clear_mark(valk_lval_t* obj) {
   atomic_fetch_and_explicit(&obj->flags, ~LVAL_FLAG_GC_MARK, memory_order_release);
 }
 
-// Chase-Lev work-stealing deque implementation
+// Mark queue: thin wrappers around dynamic Chase-Lev deque (aio_chase_lev.h)
 void valk_gc_mark_queue_init(valk_gc_mark_queue_t* q) {
-  atomic_store(&q->top, 0);
-  atomic_store(&q->bottom, 0);
-  for (u64 i = 0; i < VALK_GC_MARK_QUEUE_SIZE; i++) {
-    atomic_store(&q->items[i], nullptr);
-  }
+  valk_chase_lev_init(q, VALK_GC_MARK_QUEUE_INITIAL_SIZE);
 }
 
-bool valk_gc_mark_queue_push(valk_gc_mark_queue_t* q, valk_lval_t* val) {
-  sz b = atomic_load_explicit(&q->bottom, memory_order_relaxed);
-  sz t = atomic_load_explicit(&q->top, memory_order_acquire);
-  
-  if (b - t >= VALK_GC_MARK_QUEUE_SIZE) {
-    return false;  // Queue full
-  }
-  
-  atomic_store_explicit(&q->items[b % VALK_GC_MARK_QUEUE_SIZE], val,
-                        memory_order_relaxed);
-  atomic_thread_fence(memory_order_release);
-  atomic_store_explicit(&q->bottom, b + 1, memory_order_relaxed);
-  return true;
+void valk_gc_mark_queue_destroy(valk_gc_mark_queue_t* q) {
+  valk_chase_lev_destroy(q);
+}
+
+void valk_gc_mark_queue_push(valk_gc_mark_queue_t* q, valk_lval_t* val) {
+  valk_chase_lev_push(q, val);
 }
 
 valk_lval_t* valk_gc_mark_queue_pop(valk_gc_mark_queue_t* q) {
-  sz b = atomic_load_explicit(&q->bottom, memory_order_relaxed);
-  sz t = atomic_load_explicit(&q->top, memory_order_relaxed);
-  
-  if (t >= b) {
-    return nullptr;
-  }
-  
-  b = b - 1;
-  atomic_store_explicit(&q->bottom, b, memory_order_relaxed);
-  atomic_thread_fence(memory_order_seq_cst);
-  
-  t = atomic_load_explicit(&q->top, memory_order_relaxed);
-  
-  if (t <= b) {
-    valk_lval_t* val = atomic_load_explicit(
-        &q->items[b % VALK_GC_MARK_QUEUE_SIZE], memory_order_relaxed);
-    
-    if (t == b) {
-      if (!atomic_compare_exchange_strong(&q->top, &t, t + 1)) {
-        val = nullptr;
-      }
-      atomic_store_explicit(&q->bottom, b + 1, memory_order_relaxed);
-    }
-    return val;
-  }
-  
-  atomic_store_explicit(&q->bottom, b + 1, memory_order_relaxed);
-  return nullptr;
+  void *v = valk_chase_lev_pop(q);
+  if (v == VALK_CHASE_LEV_EMPTY) return nullptr;
+  return v;
 }
 
 valk_lval_t* valk_gc_mark_queue_steal(valk_gc_mark_queue_t* q) {
-  sz t = atomic_load_explicit(&q->top, memory_order_acquire);
-  atomic_thread_fence(memory_order_seq_cst);
-  sz b = atomic_load_explicit(&q->bottom, memory_order_acquire);
-  
-  if (t >= b) {
-    return nullptr;
-  }
-  
-  valk_lval_t* val = atomic_load_explicit(
-      &q->items[t % VALK_GC_MARK_QUEUE_SIZE], memory_order_relaxed);
-  
-  if (!atomic_compare_exchange_strong(&q->top, &t, t + 1)) {
-    return nullptr;
-  }
-  
-  return val;
+  void *v = valk_chase_lev_steal(q);
+  if (v == VALK_CHASE_LEV_EMPTY || v == VALK_CHASE_LEV_ABORT) return nullptr;
+  return v;
 }
 
 bool valk_gc_mark_queue_empty(valk_gc_mark_queue_t* q) {
-  sz t = atomic_load_explicit(&q->top, memory_order_acquire);
-  sz b = atomic_load_explicit(&q->bottom, memory_order_acquire);
-  return t >= b;
+  return valk_chase_lev_empty(q);
 }
 // LCOV_EXCL_BR_STOP
 
@@ -289,6 +238,7 @@ void valk_gc_thread_unregister(void) {
   VALK_GC_SAFE_POINT();
   
   u64 idx = valk_thread_ctx.gc_thread_id;
+  valk_gc_mark_queue_destroy(&valk_gc_coord.threads[idx].mark_queue);
   valk_gc_coord.threads[idx].active = false;
   valk_gc_coord.threads[idx].ctx = nullptr;
   
@@ -519,47 +469,68 @@ static void mark_and_push(valk_lval_t *obj, void *ctx) {
   if (obj->flags & LVAL_FLAG_IMMORTAL) return;
   if (!valk_gc_try_mark(obj)) return;
 
-  if (!valk_gc_mark_queue_push(queue, obj)) {
-    mark_children(obj, queue);
-  }
+  valk_gc_mark_queue_push(queue, obj);
 }
 
-static _Atomic u64 __gc_idle_count = 0;
+// OWST-style termination detection for Phase 0 parallel mark
+static _Atomic u64 __gc_offered = 0;
 static _Atomic bool __gc_terminated = false;
+static pthread_mutex_t __gc_term_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t __gc_term_cond = PTHREAD_COND_INITIALIZER;
 
 bool valk_gc_check_termination(void) {
   u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
-  u64 idle = atomic_fetch_add(&__gc_idle_count, 1) + 1;
 
-  if (idle == num_threads) {
+  pthread_mutex_lock(&__gc_term_lock);
+  u64 offered = atomic_fetch_add(&__gc_offered, 1) + 1;
+
+  if (offered == num_threads) {
     bool all_empty = true;
     for (u64 i = 0; i < num_threads; i++) {
       if (!valk_gc_coord.threads[i].active) continue;
-      valk_gc_mark_queue_t *q = &valk_gc_coord.threads[i].mark_queue;
-      if (!valk_gc_mark_queue_empty(q)) {
+      if (!valk_gc_mark_queue_empty(&valk_gc_coord.threads[i].mark_queue)) {
         all_empty = false;
         break;
       }
     }
-
     if (all_empty) {
       atomic_store(&__gc_terminated, true);
-    }
-  }
-
-  for (int i = 0; i < 100; i++) {
-    if (atomic_load(&__gc_terminated)) {
+      pthread_cond_broadcast(&__gc_term_cond);
+      pthread_mutex_unlock(&__gc_term_lock);
       return true;
     }
-#if defined(__x86_64__) || defined(__i386__)
-    __builtin_ia32_pause();
-#else
-    sched_yield();
-#endif
   }
 
-  atomic_fetch_sub(&__gc_idle_count, 1);
-  return false;
+  while (!atomic_load(&__gc_terminated)) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_nsec += 1000000;  // 1ms timeout
+    if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
+    pthread_cond_timedwait(&__gc_term_cond, &__gc_term_lock, &ts);
+
+    if (atomic_load(&__gc_terminated)) {
+      pthread_mutex_unlock(&__gc_term_lock);
+      return true;
+    }
+
+    bool found_work = false;
+    for (u64 i = 0; i < num_threads; i++) {
+      if (!valk_gc_coord.threads[i].active) continue;
+      if (!valk_gc_mark_queue_empty(&valk_gc_coord.threads[i].mark_queue)) {
+        found_work = true;
+        break;
+      }
+    }
+    if (found_work) {
+      atomic_fetch_sub(&__gc_offered, 1);
+      pthread_cond_signal(&__gc_term_cond);
+      pthread_mutex_unlock(&__gc_term_lock);
+      return false;
+    }
+  }
+
+  pthread_mutex_unlock(&__gc_term_lock);
+  return true;
 }
 
 void valk_gc_parallel_mark(void) {
@@ -568,7 +539,7 @@ void valk_gc_parallel_mark(void) {
   u64 my_id = valk_thread_ctx.gc_thread_id;
   valk_gc_mark_queue_t *my_queue = &valk_gc_coord.threads[my_id].mark_queue;
 
-  atomic_store(&__gc_idle_count, 0);
+  atomic_store(&__gc_offered, 0);
   atomic_store(&__gc_terminated, false);
 
   valk_gc_mark_queue_init(my_queue);
@@ -581,14 +552,10 @@ void valk_gc_parallel_mark(void) {
 
   valk_barrier_wait(&valk_gc_coord.barrier);
 
-  u64 idle_spins = 0;
-  const u64 MAX_IDLE_SPINS = 1000;
-
   while (true) {
     valk_lval_t *obj;
     while ((obj = valk_gc_mark_queue_pop(my_queue)) != nullptr) {
       mark_children(obj, my_queue);
-      idle_spins = 0;
     }
 
     bool found_work = false;
@@ -602,20 +569,14 @@ void valk_gc_parallel_mark(void) {
       if (obj != nullptr) {
         mark_children(obj, my_queue);
         found_work = true;
-        idle_spins = 0;
         break;
       }
     }
 
     if (!found_work) {
-      idle_spins++;
-      if (idle_spins >= MAX_IDLE_SPINS) {
-        if (valk_gc_check_termination()) {
-          break;
-        }
-        idle_spins = 0;
+      if (valk_gc_check_termination()) {
+        break;
       }
-      sched_yield();
     }
   }
 }
@@ -697,12 +658,10 @@ void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, sz bytes) {
 // Legacy GC API - Implemented using valk_gc_heap2_t
 // ============================================================================
 
-// Perform mark & sweep collection (delegates to heap2)
-// Uses collect_auto which coordinates STW with other threads when multi-threaded
 sz valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root) {
   if (!heap) return 0;
   (void)additional_root;
-  return valk_gc_heap2_collect_auto(heap);
+  return valk_gc_heap2_collect(heap);
 }
 
 // Destroy heap (delegates to heap2)
@@ -2838,7 +2797,7 @@ static void *valk_gc_heap2_alloc_large(valk_gc_heap2_t *heap, u64 bytes) {
     }
   } else if (current + alloc_size > heap->soft_limit) {
     if (!heap->in_emergency_gc && !atomic_load(&heap->gc_in_progress)) {
-      valk_gc_heap2_collect_auto(heap);
+      valk_gc_heap2_collect(heap);
     }
   }
   
@@ -2906,7 +2865,7 @@ void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes) {
     }
   } else if (current + alloc_size > heap->soft_limit) {
     if (!heap->in_emergency_gc && !atomic_load(&heap->gc_in_progress)) {
-      valk_gc_heap2_collect_auto(heap);
+      valk_gc_heap2_collect(heap);
     }
   }
 
@@ -3128,7 +3087,8 @@ sz valk_gc_sweep_page2(valk_gc_page2_t *page) {
           // LCOV_EXCL_BR_START - LVAL_REF finalizer requires integration with ref creation API
           if (slot_size >= sizeof(valk_lval_t)) {
             valk_lval_t *v = (valk_lval_t *)ptr;
-            if (LVAL_TYPE(v) == LVAL_REF && v->ref.free != nullptr) {
+            u64 flags = atomic_load_explicit(&v->flags, memory_order_acquire);
+            if ((valk_ltype_e)(flags & LVAL_TYPE_MASK) == LVAL_REF && v->ref.free != nullptr) {
               v->ref.free(v->ref.ptr);
             }
           }
@@ -3260,9 +3220,7 @@ static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx2_t *ctx) {
 static void mark_lval2(valk_lval_t *lval, valk_gc_mark_ctx2_t *ctx) {
   if (lval == nullptr) return;
   if (!mark_ptr_only(lval, ctx)) return;
-  if (!valk_gc_mark_queue_push(ctx->queue, lval)) {
-    mark_children2(lval, ctx);
-  }
+  valk_gc_mark_queue_push(ctx->queue, lval);
 }
 
 #define MARK_ENV_VISITED_MAX 128
@@ -3367,6 +3325,8 @@ void valk_gc_heap2_mark_roots(valk_gc_heap2_t *heap) {
   while ((obj = valk_gc_mark_queue_pop(&local_queue)) != nullptr) {
     mark_children2(obj, &ctx);
   }
+
+  valk_gc_mark_queue_destroy(&local_queue);
 }
 
 // ============================================================================
@@ -3477,85 +3437,87 @@ void valk_gc_oom_abort(valk_gc_heap2_t *heap, sz requested) {
 }
 // LCOV_EXCL_STOP
 
+static _Atomic u64 __gc_heap2_offered = 0;
+static _Atomic bool __gc_heap2_terminated = false;
+static _Atomic(valk_gc_heap2_t *) __gc_heap2_current = nullptr;
+static pthread_mutex_t __gc_heap2_term_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t __gc_heap2_term_cond = PTHREAD_COND_INITIALIZER;
+
 sz valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
   if (!heap) return 0;
-  
+
+  if (!valk_gc_heap2_request_stw(heap)) {
+    return 0;
+  }
+
+  u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
   u64 start_ns = uv_hrtime();
-  
+
   atomic_store(&heap->gc_in_progress, true);
   atomic_fetch_add(&heap->collections, 1);
-  
-  sz bytes_before = valk_gc_heap2_used_bytes(heap);
-  sz freed_slots_total = 0;
-  sz freed_large = 0;
-  
-  valk_gc_heap2_mark_roots(heap);
-  
-  for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
-    valk_gc_page_list_t *list = &heap->classes[c];
-    
-    for (valk_gc_page2_t *page = list->all_pages; page != nullptr; page = page->next) {
-      sz freed = valk_gc_sweep_page2(page);
-      freed_slots_total += freed;
-      atomic_fetch_sub(&list->used_slots, freed);
-    }
+
+  u64 bytes_before = valk_gc_heap2_used_bytes(heap);
+
+  atomic_store(&__gc_heap2_offered, 0);
+  atomic_store(&__gc_heap2_terminated, false);
+
+  valk_barrier_wait(&valk_gc_coord.barrier);
+
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_MARKING);
+  valk_gc_heap2_parallel_mark(heap);
+
+  valk_barrier_wait(&valk_gc_coord.barrier);
+
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_SWEEPING);
+  valk_gc_heap2_parallel_sweep(heap);
+
+  valk_barrier_wait(&valk_gc_coord.barrier);
+
+  if (valk_thread_ctx.gc_thread_id == 0) {
+    valk_gc_rebuild_partial_lists(heap);
+    valk_gc_reclaim_empty_pages(heap);
   }
-  
-  freed_large = valk_gc_sweep_large_objects(heap);
-  
-  valk_gc_rebuild_partial_lists(heap);
-  
-  sz pages_reclaimed = valk_gc_reclaim_empty_pages(heap);
-  
-  sz bytes_after = valk_gc_heap2_used_bytes(heap);
-  sz reclaimed = 0;
+
+  atomic_store(&valk_gc_coord.threads_paused, 0);
+  pthread_mutex_lock(&valk_gc_coord.lock);
+  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+  pthread_cond_broadcast(&valk_gc_coord.gc_done);
+  pthread_mutex_unlock(&valk_gc_coord.lock);
+
+  valk_barrier_wait(&valk_gc_coord.barrier);
+
+  u64 bytes_after = valk_gc_heap2_used_bytes(heap);
+  u64 reclaimed = 0;
   if (bytes_before > bytes_after) {
     reclaimed = bytes_before - bytes_after;
   }
-  
+
   atomic_fetch_add(&heap->bytes_reclaimed_total, reclaimed);
   atomic_store(&heap->gc_in_progress, false);
-  
+
   u64 end_ns = uv_hrtime();
   u64 pause_us = (end_ns - start_ns) / 1000;
-  
+
   atomic_fetch_add(&heap->runtime_metrics.cycles_total, 1);
   atomic_fetch_add(&heap->runtime_metrics.pause_us_total, pause_us);
   atomic_fetch_add(&heap->runtime_metrics.reclaimed_bytes_total, reclaimed);
   atomic_store(&heap->runtime_metrics.last_heap_before_gc, bytes_before);
   atomic_store(&heap->runtime_metrics.last_reclaimed, reclaimed);
-  
+
   u64 current_max = atomic_load(&heap->runtime_metrics.pause_us_max);
   while (pause_us > current_max) {
     if (atomic_compare_exchange_weak(&heap->runtime_metrics.pause_us_max, &current_max, pause_us)) {
       break;
     }
   }
-  
-  VALK_DEBUG("GC cycle complete: reclaimed %zu bytes (%zu slots + %zu large, %zu empty pages) in %llu us",
-             reclaimed, freed_slots_total, freed_large, pages_reclaimed, (unsigned long long)pause_us);
-  
-  return reclaimed;
-}
 
-sz valk_gc_heap2_collect_auto(valk_gc_heap2_t *heap) {
-  if (!heap) return 0;
-  
-  u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
-  
-  if (num_threads <= 1) {
-    return valk_gc_heap2_collect(heap);
-  }
-  
-  if (!valk_thread_ctx.gc_registered) {
-    return valk_gc_heap2_collect(heap);
-  }
-  
-  if (!valk_gc_heap2_request_stw(heap)) {
-    return valk_gc_heap2_collect(heap);
-  }
-  
-  return valk_gc_heap2_parallel_collect(heap);
+  atomic_fetch_add(&valk_gc_coord.parallel_cycles, 1);
+  atomic_fetch_add(&valk_gc_coord.parallel_pause_us_total, pause_us);
+
+  VALK_DEBUG("GC cycle complete: reclaimed %zu bytes in %llu us (%zu threads)",
+             reclaimed, (unsigned long long)pause_us, num_threads);
+
+  return reclaimed;
 }
 // LCOV_EXCL_BR_STOP
 
@@ -3570,7 +3532,7 @@ static bool valk_gc_heap2_try_emergency_gc(valk_gc_heap2_t *heap, u64 needed) {
   VALK_WARN("Emergency GC: need %zu bytes, used %zu / %zu",
             needed, valk_gc_heap2_used_bytes(heap), heap->hard_limit);
 
-  u64 reclaimed = valk_gc_heap2_collect_auto(heap);
+  u64 reclaimed = valk_gc_heap2_collect(heap);
 
   heap->in_emergency_gc = false;
 
@@ -3588,43 +3550,61 @@ static bool valk_gc_heap2_try_emergency_gc(valk_gc_heap2_t *heap, u64 needed) {
 // Phase 7: Parallel Mark/Sweep for heap2
 // ============================================================================
 
-static _Atomic u64 __gc_heap2_idle_count = 0;
-static _Atomic bool __gc_heap2_terminated = false;
-static _Atomic(valk_gc_heap2_t *) __gc_heap2_current = nullptr;
+// OWST-style termination detection for parallel mark
 
-static bool valk_gc_heap2_check_termination(void) {
+static bool valk_gc_heap2_offer_termination(void) {
   u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
-  u64 idle = atomic_fetch_add(&__gc_heap2_idle_count, 1) + 1;
-  
-  if (idle == num_threads) {
+
+  pthread_mutex_lock(&__gc_heap2_term_lock);
+  u64 offered = atomic_fetch_add(&__gc_heap2_offered, 1) + 1;
+
+  if (offered == num_threads) {
     bool all_empty = true;
     for (u64 i = 0; i < num_threads; i++) {
       if (!valk_gc_coord.threads[i].active) continue;
-      valk_gc_mark_queue_t *q = &valk_gc_coord.threads[i].mark_queue;
-      if (!valk_gc_mark_queue_empty(q)) {
+      if (!valk_gc_mark_queue_empty(&valk_gc_coord.threads[i].mark_queue)) {
         all_empty = false;
         break;
       }
     }
-    
     if (all_empty) {
       atomic_store(&__gc_heap2_terminated, true);
-    }
-  }
-  
-  for (int i = 0; i < 16; i++) {
-    if (atomic_load(&__gc_heap2_terminated)) {
+      pthread_cond_broadcast(&__gc_heap2_term_cond);
+      pthread_mutex_unlock(&__gc_heap2_term_lock);
       return true;
     }
-#if defined(__x86_64__) || defined(__i386__)
-    __builtin_ia32_pause();
-#else
-    sched_yield();
-#endif
   }
-  
-  atomic_fetch_sub(&__gc_heap2_idle_count, 1);
-  return false;
+
+  while (!atomic_load(&__gc_heap2_terminated)) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_nsec += 1000000;  // 1ms timeout
+    if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
+    pthread_cond_timedwait(&__gc_heap2_term_cond, &__gc_heap2_term_lock, &ts);
+
+    if (atomic_load(&__gc_heap2_terminated)) {
+      pthread_mutex_unlock(&__gc_heap2_term_lock);
+      return true;
+    }
+
+    bool found_work = false;
+    for (u64 i = 0; i < num_threads; i++) {
+      if (!valk_gc_coord.threads[i].active) continue;
+      if (!valk_gc_mark_queue_empty(&valk_gc_coord.threads[i].mark_queue)) {
+        found_work = true;
+        break;
+      }
+    }
+    if (found_work) {
+      atomic_fetch_sub(&__gc_heap2_offered, 1);
+      pthread_cond_signal(&__gc_heap2_term_cond);
+      pthread_mutex_unlock(&__gc_heap2_term_lock);
+      return false;
+    }
+  }
+
+  pthread_mutex_unlock(&__gc_heap2_term_lock);
+  return true;
 }
 
 // LCOV_EXCL_START - Heap2 parallel mark/sweep requires multi-threaded STW coordination
@@ -3634,9 +3614,7 @@ static void mark_env2_parallel(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx);
 static void mark_lval2_parallel(valk_lval_t *lval, valk_gc_mark_ctx2_t *ctx) {
   if (lval == nullptr) return;
   if (!mark_ptr_only(lval, ctx)) return;
-  if (!valk_gc_mark_queue_push(ctx->queue, lval)) {
-    mark_children2_parallel(lval, ctx);
-  }
+  valk_gc_mark_queue_push(ctx->queue, lval);
 }
 
 static void mark_env2_parallel(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx) {
@@ -3729,14 +3707,10 @@ void valk_gc_heap2_parallel_mark(valk_gc_heap2_t *heap) {
   
   valk_barrier_wait(&valk_gc_coord.barrier);
   
-  u64 idle_spins = 0;
-  const u64 MAX_IDLE_SPINS = 64;
-  
   while (true) {
     valk_lval_t *obj;
     while ((obj = valk_gc_mark_queue_pop(my_queue)) != nullptr) {
       mark_children2_parallel(obj, &ctx);
-      idle_spins = 0;
     }
     
     bool found_work = false;
@@ -3750,20 +3724,14 @@ void valk_gc_heap2_parallel_mark(valk_gc_heap2_t *heap) {
       if (obj != nullptr) {
         mark_children2_parallel(obj, &ctx);
         found_work = true;
-        idle_spins = 0;
         break;
       }
     }
     
     if (!found_work) {
-      idle_spins++;
-      if (idle_spins >= MAX_IDLE_SPINS) {
-        if (valk_gc_heap2_check_termination()) {
-          break;
-        }
-        idle_spins = 0;
+      if (valk_gc_heap2_offer_termination()) {
+        break;
       }
-      sched_yield();
     }
   }
 }
@@ -3854,100 +3822,6 @@ bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
   return true;
 }
 
-sz valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap) {
-  if (!heap) return 0;
-  
-  u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
-  
-  if (num_threads <= 1) {
-    return valk_gc_heap2_collect(heap);
-  }
-  
-  if (!valk_thread_ctx.gc_registered) {
-    return valk_gc_heap2_collect(heap);
-  }
-  
-  u64 start_ns = uv_hrtime();
-  
-  atomic_store(&heap->gc_in_progress, true);
-  atomic_fetch_add(&heap->collections, 1);
-  
-  u64 bytes_before = valk_gc_heap2_used_bytes(heap);
-  
-  atomic_store(&__gc_heap2_idle_count, 0);
-  atomic_store(&__gc_heap2_terminated, false);
-  
-  // BARRIER 1: Sync before mark phase
-  // All threads (initiator + workers) must hit this barrier before marking starts
-  // Workers enter via valk_gc_participate_in_parallel_gc()
-  valk_barrier_wait(&valk_gc_coord.barrier);
-
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_MARKING);
-  valk_gc_heap2_parallel_mark(heap);
-  
-  // BARRIER 2: Sync after mark phase
-  // Ensures all marking is complete before sweep begins
-  valk_barrier_wait(&valk_gc_coord.barrier);
-  
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_SWEEPING);
-  valk_gc_heap2_parallel_sweep(heap);
-  
-  // BARRIER 3: Sync after sweep phase
-  // Ensures all sweeping is complete before page reclamation
-  valk_barrier_wait(&valk_gc_coord.barrier);
-  
-  if (valk_thread_ctx.gc_thread_id == 0) {
-    valk_gc_rebuild_partial_lists(heap);
-    valk_gc_reclaim_empty_pages(heap);
-  }
-  
-  // Set phase to IDLE and broadcast BEFORE barrier 4
-  // This ensures all threads see IDLE phase when they pass the barrier
-  atomic_store(&valk_gc_coord.threads_paused, 0);
-  pthread_mutex_lock(&valk_gc_coord.lock);
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
-  pthread_cond_broadcast(&valk_gc_coord.gc_done);
-  pthread_mutex_unlock(&valk_gc_coord.lock);
-  
-  // BARRIER 4: Sync after reclamation and phase reset
-  // All threads pass this barrier together, ensuring they all see IDLE phase
-  // before any can start a new GC/checkpoint
-  valk_barrier_wait(&valk_gc_coord.barrier);
-  
-  u64 bytes_after = valk_gc_heap2_used_bytes(heap);
-  u64 reclaimed = 0;
-  if (bytes_before > bytes_after) {
-    reclaimed = bytes_before - bytes_after;
-  }
-  
-  atomic_fetch_add(&heap->bytes_reclaimed_total, reclaimed);
-  atomic_store(&heap->gc_in_progress, false);
-  
-  u64 end_ns = uv_hrtime();
-  u64 pause_us = (end_ns - start_ns) / 1000;
-  
-  atomic_fetch_add(&heap->runtime_metrics.cycles_total, 1);
-  atomic_fetch_add(&heap->runtime_metrics.pause_us_total, pause_us);
-  atomic_fetch_add(&heap->runtime_metrics.reclaimed_bytes_total, reclaimed);
-  atomic_store(&heap->runtime_metrics.last_heap_before_gc, bytes_before);
-  atomic_store(&heap->runtime_metrics.last_reclaimed, reclaimed);
-  
-  u64 current_max = atomic_load(&heap->runtime_metrics.pause_us_max);
-  while (pause_us > current_max) {
-    if (atomic_compare_exchange_weak(&heap->runtime_metrics.pause_us_max, &current_max, pause_us)) {
-      break;
-    }
-  }
-  
-  atomic_fetch_add(&valk_gc_coord.parallel_cycles, 1);
-  atomic_fetch_add(&valk_gc_coord.parallel_pause_us_total, pause_us);
-  
-  VALK_DEBUG("Parallel GC heap2 cycle complete: reclaimed %zu bytes in %llu us (%zu threads)",
-             reclaimed, (unsigned long long)pause_us, num_threads);
-  
-  return reclaimed;
-}
-
 static void valk_gc_participate_in_parallel_gc(void) {
   valk_gc_heap2_t *heap = atomic_load(&__gc_heap2_current);
   if (!heap) {
@@ -3990,9 +3864,16 @@ void valk_gc_reset_after_fork(void) {
 
   valk_gc_coordinator_init();
 
-  atomic_store(&__gc_heap2_idle_count, 0);
+  atomic_store(&__gc_offered, 0);
+  atomic_store(&__gc_terminated, false);
+  pthread_mutex_init(&__gc_term_lock, nullptr);
+  pthread_cond_init(&__gc_term_cond, nullptr);
+
+  atomic_store(&__gc_heap2_offered, 0);
   atomic_store(&__gc_heap2_terminated, false);
   atomic_store(&__gc_heap2_current, nullptr);
+  pthread_mutex_init(&__gc_heap2_term_lock, nullptr);
+  pthread_cond_init(&__gc_heap2_term_cond, nullptr);
 
   pthread_mutex_init(&g_live_heaps_lock, nullptr);
   for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) {

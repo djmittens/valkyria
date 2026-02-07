@@ -82,6 +82,13 @@ void valk_aio_wait_for_all_systems(void) {
   }
 }
 
+void valk_aio_reset_after_fork(void) {
+  pthread_mutex_init(&g_aio_systems_lock, nullptr);
+  for (int i = 0; i < VALK_AIO_MAX_SYSTEMS; i++) {
+    g_aio_systems[i] = nullptr;
+  }
+}
+
 static void __gc_wakeup_cb(uv_async_t *handle) {
   valk_aio_system_t *sys = (valk_aio_system_t *)handle->data;
   if (!sys) return;

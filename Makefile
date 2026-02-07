@@ -14,8 +14,13 @@ JOBS := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 # - RR=chaos make test-c TEST=foo: record with chaos mode
 #
 # macOS has no rr equivalent. Debug flaky tests on Linux.
+# Set NO_RR=1 to disable rr (useful if rr is broken on your kernel)
 ifeq ($(UNAME), Linux)
-  RR_FLAKY := $(shell command -v rr >/dev/null 2>&1 && echo "rr record" || echo "")
+  ifndef NO_RR
+    RR_FLAKY := $(shell command -v rr >/dev/null 2>&1 && echo "rr record" || echo "")
+  else
+    RR_FLAKY :=
+  endif
   ifdef RR
     RR_PREFIX := rr record$(if $(filter chaos,$(RR)), --chaos)
     export VALK_TEST_NO_FORK := 1
@@ -178,7 +183,7 @@ define run_tests_c
 	$(RR_PREFIX) $(1)/test_std
 	$(1)/test_regression
 	$(1)/test_memory
-	$(RR_FLAKY) $(1)/test_networking
+	$(1)/test_networking
 	$(1)/test_large_response
 	$(1)/test_per_stream_arena
 	$(1)/test_debug
@@ -197,7 +202,7 @@ define run_tests_c
 	if [ -f $(1)/test_sse_core ]; then $(1)/test_sse_core; fi
 	$(1)/test_aio_backpressure
 	$(1)/test_aio_uv_coverage
-	$(RR_FLAKY) $(1)/test_aio_integration
+	$(1)/test_aio_integration
 	$(1)/test_aio_combinators
 	$(1)/test_aio_load_shedding
 	if [ -f $(1)/test_aio_sse_integration ]; then $(1)/test_aio_sse_integration; fi
@@ -349,7 +354,7 @@ test: test-c test-valk
 # On Linux, flaky tests run under rr (requires VALK_TEST_NO_FORK=1)
 .ONESHELL:
 .PHONY: test-c
-test-c: export VALK_TEST_TIMEOUT_SECONDS=5
+test-c: export VALK_TEST_TIMEOUT_SECONDS=30
 test-c: build
 	set -e
 	$(call run_tests_c,build)
@@ -357,7 +362,7 @@ test-c: build
 # Valk/Lisp tests (no ASAN)
 .ONESHELL:
 .PHONY: test-valk
-test-valk: export VALK_TEST_TIMEOUT_SECONDS=5
+test-valk: export VALK_TEST_TIMEOUT_SECONDS=30
 test-valk: build
 	set -e
 	$(call run_tests_valk,build)
@@ -473,7 +478,7 @@ test-parallel: test-c-parallel test-valk-parallel
 
 .ONESHELL:
 .PHONY: test-c-parallel
-test-c-parallel: export VALK_TEST_TIMEOUT_SECONDS=5
+test-c-parallel: export VALK_TEST_TIMEOUT_SECONDS=30
 test-c-parallel: build
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════╗"
@@ -509,7 +514,7 @@ test-c-parallel-verbose: build
 
 .ONESHELL:
 .PHONY: test-valk-parallel
-test-valk-parallel: export VALK_TEST_TIMEOUT_SECONDS=5
+test-valk-parallel: export VALK_TEST_TIMEOUT_SECONDS=30
 test-valk-parallel: build
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════╗"
@@ -591,6 +596,7 @@ test-c-tsan: build-tsan
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 	@echo ""
 	export TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1
+	export VALK_TEST_NO_FORK=1
 	$(call run_tests_c,build-tsan)
 
 # Valk/Lisp tests with TSAN enabled

@@ -436,20 +436,18 @@ bool valk_gc_try_mark(valk_lval_t* obj);
 bool valk_gc_is_marked(valk_lval_t* obj);
 void valk_gc_clear_mark(valk_lval_t* obj);
 
-// Work-stealing mark queue (Chase-Lev deque)
-#define VALK_GC_MARK_QUEUE_SIZE 8192
+// Work-stealing mark queue (backed by dynamic Chase-Lev deque from aio_chase_lev.h)
+#include "aio_chase_lev.h"
 
-typedef struct valk_gc_mark_queue {
-  _Atomic(valk_lval_t*) items[VALK_GC_MARK_QUEUE_SIZE];
-  _Atomic sz top;     // Thieves steal from here (FIFO end)
-  _Atomic sz bottom;  // Owner pushes/pops here (LIFO end)
-} valk_gc_mark_queue_t;
+#define VALK_GC_MARK_QUEUE_INITIAL_SIZE 8192
 
-// Initialize mark queue
+typedef valk_chase_lev_deque_t valk_gc_mark_queue_t;
+
 void valk_gc_mark_queue_init(valk_gc_mark_queue_t* q);
+void valk_gc_mark_queue_destroy(valk_gc_mark_queue_t* q);
 
 // Owner operations (local thread only, lock-free)
-bool valk_gc_mark_queue_push(valk_gc_mark_queue_t* q, valk_lval_t* val);
+void valk_gc_mark_queue_push(valk_gc_mark_queue_t* q, valk_lval_t* val);
 valk_lval_t* valk_gc_mark_queue_pop(valk_gc_mark_queue_t* q);
 
 // Thief operation (other threads, lock-free)
@@ -872,12 +870,9 @@ typedef struct valk_gc_stats2 {
 // Get heap statistics
 void valk_gc_heap2_get_stats(valk_gc_heap2_t *heap, valk_gc_stats2_t *out);
 
-// Run a full GC collection cycle (mark + sweep)
-// Returns bytes reclaimed
+// Run a full STW GC collection cycle (parallel mark + sweep)
+// Requires at least one gc-registered thread (the caller)
 sz valk_gc_heap2_collect(valk_gc_heap2_t *heap);
-
-// Auto-select single-threaded or parallel collection based on registered threads
-sz valk_gc_heap2_collect_auto(valk_gc_heap2_t *heap);
 
 // Reset all TLABs after GC
 void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab);
@@ -908,8 +903,6 @@ void valk_gc_heap2_mark_roots(valk_gc_heap2_t *heap);
 void valk_gc_heap2_parallel_mark(valk_gc_heap2_t *heap);
 
 void valk_gc_heap2_parallel_sweep(valk_gc_heap2_t *heap);
-
-sz valk_gc_heap2_parallel_collect(valk_gc_heap2_t *heap);
 
 bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap);
 

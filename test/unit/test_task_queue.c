@@ -18,8 +18,10 @@ static void task_with_context(void *ctx) {
   atomic_fetch_add(&g_task_executed, 1);
 }
 
-static void drain_loop(uv_loop_t *loop) {
+static void drain_loop(uv_loop_t *loop, valk_aio_system_t *sys) {
+  uv_ref((uv_handle_t*)&sys->task_queue.notify);
   uv_run(loop, UV_RUN_NOWAIT);
+  uv_unref((uv_handle_t*)&sys->task_queue.notify);
 }
 
 void test_task_queue_empty_null(VALK_TEST_ARGS()) {
@@ -59,7 +61,6 @@ void test_task_queue_enqueue_null_fn(VALK_TEST_ARGS()) {
 
 void test_task_queue_init_shutdown(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("modifies global state");
 
   uv_loop_t loop;
   uv_loop_init(&loop);
@@ -82,7 +83,6 @@ void test_task_queue_init_shutdown(VALK_TEST_ARGS()) {
 
 void test_task_queue_double_init(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("modifies global state");
 
   uv_loop_t loop;
   uv_loop_init(&loop);
@@ -116,7 +116,6 @@ void test_task_queue_shutdown_not_initialized(VALK_TEST_ARGS()) {
 
 void test_task_queue_enqueue_single(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("modifies global state");
 
   uv_loop_t loop;
   uv_loop_init(&loop);
@@ -132,7 +131,7 @@ void test_task_queue_enqueue_single(VALK_TEST_ARGS()) {
   ASSERT_FALSE(valk_aio_task_queue_empty(&sys));
   ASSERT_EQ(valk_aio_task_queue_size(&sys), 1);
 
-  drain_loop(&loop);
+  drain_loop(&loop, &sys);
 
   ASSERT_EQ(atomic_load(&g_task_executed), 1);
   ASSERT_TRUE(valk_aio_task_queue_empty(&sys));
@@ -145,7 +144,6 @@ void test_task_queue_enqueue_single(VALK_TEST_ARGS()) {
 
 void test_task_queue_enqueue_multiple(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("modifies global state");
 
   uv_loop_t loop;
   uv_loop_init(&loop);
@@ -163,7 +161,7 @@ void test_task_queue_enqueue_multiple(VALK_TEST_ARGS()) {
 
   ASSERT_EQ(valk_aio_task_queue_size(&sys), 10);
 
-  drain_loop(&loop);
+  drain_loop(&loop, &sys);
 
   ASSERT_EQ(atomic_load(&g_task_executed), 10);
   ASSERT_TRUE(valk_aio_task_queue_empty(&sys));
@@ -176,7 +174,6 @@ void test_task_queue_enqueue_multiple(VALK_TEST_ARGS()) {
 
 void test_task_queue_with_context(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("modifies global state");
 
   uv_loop_t loop;
   uv_loop_init(&loop);
@@ -192,7 +189,7 @@ void test_task_queue_with_context(VALK_TEST_ARGS()) {
   int ctx_value = 42;
   valk_aio_enqueue_task(&sys, task_with_context, &ctx_value);
 
-  drain_loop(&loop);
+  drain_loop(&loop, &sys);
 
   ASSERT_EQ(atomic_load(&g_task_executed), 1);
   ASSERT_EQ(atomic_load(&g_task_ctx_value), 42);
@@ -205,7 +202,6 @@ void test_task_queue_with_context(VALK_TEST_ARGS()) {
 
 void test_task_queue_shutdown_drains(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("modifies global state");
 
   uv_loop_t loop;
   uv_loop_init(&loop);
@@ -232,7 +228,6 @@ void test_task_queue_shutdown_drains(VALK_TEST_ARGS()) {
 
 void test_task_queue_shuttingdown_flag(VALK_TEST_ARGS()) {
   VALK_TEST();
-  VALK_SKIP_NO_FORK("modifies global state");
 
   uv_loop_t loop;
   uv_loop_init(&loop);
@@ -248,12 +243,12 @@ void test_task_queue_shuttingdown_flag(VALK_TEST_ARGS()) {
 
   sys.shuttingDown = true;
 
-  drain_loop(&loop);
+  drain_loop(&loop, &sys);
 
   ASSERT_EQ(atomic_load(&g_task_executed), 0);
 
   sys.shuttingDown = false;
-  drain_loop(&loop);
+  drain_loop(&loop, &sys);
 
   ASSERT_EQ(atomic_load(&g_task_executed), 1);
 

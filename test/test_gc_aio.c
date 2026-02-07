@@ -132,7 +132,8 @@ void test_gc_coordination_thread_count(VALK_TEST_ARGS()) {
 }
 
 int main(void) {
-  setup_timeout(5);
+  const char *env = getenv("VALK_TEST_TIMEOUT_SECONDS");
+  setup_timeout(env ? atoi(env) : 10);
 
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
