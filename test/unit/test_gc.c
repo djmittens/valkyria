@@ -1348,25 +1348,6 @@ void test_gc_heap2_mark_large_object_via_ctx(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_heap2_mark_roots_empty(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  
-  valk_gc_heap2_t *heap = valk_gc_heap2_create(64 * 1024 * 1024);
-  
-  valk_gc_heap2_mark_roots(heap);
-  
-  valk_gc_heap2_destroy(heap);
-  
-  VALK_PASS();
-}
-
-void test_gc_heap2_mark_roots_null(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  
-  valk_gc_heap2_mark_roots(nullptr);
-  
-  VALK_PASS();
-}
 
 void test_gc_reclaim_empty_pages_null(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -2715,8 +2696,8 @@ void test_gc_get_fragmentation(VALK_TEST_ARGS()) {
   valk_fragmentation_t frag;
   valk_gc_get_fragmentation(heap, &frag);
 
-  VALK_TEST_ASSERT(frag.malloc_limit == 10 * 1024 * 1024, "malloc_limit should match heap size");
-  VALK_TEST_ASSERT(frag.malloc_allocated > 0, "malloc_allocated should be > 0");
+  VALK_TEST_ASSERT(frag.heap_limit == 10 * 1024 * 1024, "heap_limit should match heap size");
+  VALK_TEST_ASSERT(frag.heap_allocated > 0, "heap_allocated should be > 0");
 
   valk_gc_malloc_heap_destroy(heap);
 
@@ -3700,8 +3681,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_heap2_mark_object_null", test_gc_heap2_mark_object_null);
   valk_testsuite_add_test(suite, "test_gc_heap2_mark_object_not_in_heap", test_gc_heap2_mark_object_not_in_heap);
   valk_testsuite_add_test(suite, "test_gc_heap2_mark_large_object_via_ctx", test_gc_heap2_mark_large_object_via_ctx);
-  valk_testsuite_add_test(suite, "test_gc_heap2_mark_roots_empty", test_gc_heap2_mark_roots_empty);
-  valk_testsuite_add_test(suite, "test_gc_heap2_mark_roots_null", test_gc_heap2_mark_roots_null);
+
 
   // Phase 5: Page reclamation tests
   valk_testsuite_add_test(suite, "test_gc_reclaim_empty_pages_null", test_gc_reclaim_empty_pages_null);

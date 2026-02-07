@@ -169,19 +169,9 @@ void valk_gc_get_pause_histogram(valk_gc_malloc_heap_t* heap,
                                   u64* pause_16ms_plus);
 
 typedef struct {
-  sz lval_slab_used;
-  sz lval_slab_total;
-  sz lval_slab_peak;
-  sz lenv_slab_used;
-  sz lenv_slab_total;
-  sz lenv_slab_peak;
-  sz malloc_allocated;
-  sz malloc_limit;
-  sz malloc_peak;
-  u64 free_list_count;
-  sz free_list_bytes;
-  double lval_fragmentation;
-  double lenv_fragmentation;
+  sz heap_allocated;
+  sz heap_limit;
+  sz heap_peak;
 } valk_fragmentation_t;
 
 void valk_gc_get_fragmentation(valk_gc_malloc_heap_t* heap, valk_fragmentation_t* out);
@@ -462,6 +452,7 @@ typedef struct valk_gc_coordinator {
   _Atomic valk_gc_phase_e phase;
   _Atomic u64 threads_registered;
   _Atomic u64 threads_paused;
+  _Atomic u64 checkpoint_epoch;
   
   pthread_mutex_t lock;
   pthread_cond_t all_paused;   // Signaled when all threads at safe point
@@ -874,7 +865,6 @@ typedef struct valk_gc_mark_ctx2 {
 } valk_gc_mark_ctx2_t;
 
 void valk_gc_heap2_mark_object(valk_gc_mark_ctx2_t *ctx, void *ptr);
-void valk_gc_heap2_mark_roots(valk_gc_heap2_t *heap);
 
 // ============================================================================
 // Phase 7: Parallel Mark/Sweep for heap2
