@@ -16,15 +16,10 @@ valk_metrics_registry_t g_metrics;
 // TIMESTAMP UTILITIES
 // ============================================================================
 
-static u64 get_timestamp_us(void) {
+u64 valk_metrics_now_us(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
-}
-
-// Public API for timestamp (used by inline functions in header)
-u64 valk_metrics_now_us(void) {
-  return get_timestamp_us();
 }
 
 // ============================================================================
@@ -93,7 +88,7 @@ void valk_metrics_registry_init(void) {
   valk_mutex_init(&g_metrics.pool_lock);
 
   g_metrics.snapshot_interval_us = 1000000;
-  g_metrics.start_time_us = get_timestamp_us();
+  g_metrics.start_time_us = valk_metrics_now_us();
   g_metrics.last_snapshot_time = g_metrics.start_time_us;
   g_metrics.eviction_threshold_us = VALK_EVICTION_THRESHOLD_US;
 
@@ -192,7 +187,7 @@ valk_counter_v2_t *valk_counter_get_or_create(const char *name,
   if (idx == VALK_INVALID_SLOT) return nullptr; // LCOV_EXCL_BR_LINE
 
   valk_counter_v2_t *c = &g_metrics.counters[idx];
-  u64 now = get_timestamp_us();
+  u64 now = valk_metrics_now_us();
 
   c->name = iname;
   c->help = intern_string(help);
@@ -233,7 +228,7 @@ valk_gauge_v2_t *valk_gauge_get_or_create(const char *name,
   if (idx == VALK_INVALID_SLOT) return nullptr; // LCOV_EXCL_BR_LINE
 
   valk_gauge_v2_t *g = &g_metrics.gauges[idx];
-  u64 now = get_timestamp_us();
+  u64 now = valk_metrics_now_us();
 
   g->name = iname;
   g->help = intern_string(help);
@@ -278,7 +273,7 @@ valk_histogram_v2_t *valk_histogram_get_or_create(
   if (idx == VALK_INVALID_SLOT) return nullptr; // LCOV_EXCL_BR_LINE
 
   valk_histogram_v2_t *h = &g_metrics.histograms[idx];
-  u64 now = get_timestamp_us();
+  u64 now = valk_metrics_now_us();
 
   h->name = iname;
   h->help = intern_string(help);
@@ -332,7 +327,7 @@ static u64 evict_stale_metrics_of_type(void *array, u64 elem_size, u64 count,
 }
 
 u64 valk_metrics_evict_stale(void) {
-  u64 now = get_timestamp_us();
+  u64 now = valk_metrics_now_us();
   u64 threshold = g_metrics.eviction_threshold_us;
 
   u64 counters_evicted = evict_stale_metrics_of_type(
@@ -495,7 +490,7 @@ static u64 count_free_list(valk_free_list_t *fl, u32 *next_free, u64 max_slots) 
 void valk_registry_stats_collect(valk_registry_stats_t *stats) {
   if (!stats) return;
 
-  u64 start = get_timestamp_us();
+  u64 start = valk_metrics_now_us();
   memset(stats, 0, sizeof(*stats));
 
   // High water marks (slots ever allocated)
@@ -559,7 +554,7 @@ void valk_registry_stats_collect(valk_registry_stats_t *stats) {
                                            VALK_REGISTRY_MAX_SUMMARIES);
 
   // Timing
-  u64 end = get_timestamp_us();
+  u64 end = valk_metrics_now_us();
   stats->last_collect_time_us = end;
   stats->collect_duration_us = end - start;
 }

@@ -48,20 +48,6 @@ void valk_aio_wake_all_for_gc(void) {
   pthread_mutex_unlock(&g_aio_systems_lock);
 }
 
-bool valk_aio_any_systems_running(void) {
-  pthread_mutex_lock(&g_aio_systems_lock);
-  bool found = false;
-  for (int i = 0; i < VALK_AIO_MAX_SYSTEMS; i++) {
-    valk_aio_system_t *sys = g_aio_systems[i];
-    if (sys && !sys->shuttingDown) {
-      found = true;
-      break;
-    }
-  }
-  pthread_mutex_unlock(&g_aio_systems_lock);
-  return found;
-}
-
 void valk_aio_wait_for_all_systems(void) {
   valk_aio_system_t *systems[VALK_AIO_MAX_SYSTEMS];
   int count = 0;

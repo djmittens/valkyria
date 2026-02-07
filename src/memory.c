@@ -183,6 +183,8 @@ static inline valk_slab_item_t *valk_slab_item_at(valk_slab_t *self,
   return (void *)&((char *)self->heap)[freeLen + itemsLen];
 }
 
+static void valk_slab_init(valk_slab_t *self, sz itemSize, sz numItems);
+
 valk_slab_t *valk_slab_new(sz itemSize, sz numItems) {
   sz slabSize = valk_slab_size(itemSize, numItems);
   VALK_DEBUG("Slab size = %zu (%.2f MB)", slabSize, (double)slabSize / 1024 / 1024);
@@ -203,7 +205,7 @@ valk_slab_t *valk_slab_new(sz itemSize, sz numItems) {
   return res;
 }
 
-void valk_slab_init(valk_slab_t *self, sz itemSize, sz numItems) {
+static void valk_slab_init(valk_slab_t *self, sz itemSize, sz numItems) {
   // TODO(networking): do like mmap and some platform specific slab code
   self->type = VALK_ALLOC_SLAB;
 

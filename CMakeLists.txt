@@ -85,10 +85,24 @@ find_package(OpenSSL REQUIRED)
 ## LIB
 set(VALKYRIA_SOURCES
   src/parser.c
+  src/builtins_math.c
+  src/builtins_list.c
+  src/builtins_string.c
+  src/builtins_env.c
+  src/builtins_io.c
+  src/builtins_mem.c
+  src/builtins_http.c
+  src/builtins_aio.c
+  src/builtins_server.c
   src/memory.c
   src/valk_thread_posix.c
 
   src/gc.c
+  src/gc_heap.c
+  src/gc_evacuation.c
+  src/gc_mark.c
+  src/gc_region.c
+  src/gc_stats.c
   src/debug.c
   src/log.c
   src/coverage.c
@@ -98,6 +112,15 @@ set(VALKYRIA_SOURCES
   src/aio/aio_alloc.c
   src/aio/aio_async.c
   src/aio/aio_combinators.c
+  src/aio/aio_comb_timers.c
+  src/aio/aio_comb_syntax.c
+  src/aio/aio_comb_handle.c
+  src/aio/aio_comb_propagate.c
+  src/aio/aio_comb_chain.c
+  src/aio/aio_comb_collection.c
+  src/aio/aio_comb_resource.c
+  src/aio/aio_comb_timeout.c
+  src/aio/aio_comb_util.c
   src/aio/aio_ops.c
   src/aio/aio_http_builtins.c
   # AIO system lifecycle (src/aio/system/)

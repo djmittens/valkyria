@@ -182,7 +182,6 @@ valk_lval_t *valk_lval_handle(valk_async_handle_t *handle);
 // valk_lval_t *valk_lval_copy(valk_lval_t *lval);
 valk_lval_t *valk_lval_copy(valk_lval_t *lval);
 
-void valk_lval_finalize(valk_lval_t *lval);
 int valk_lval_eq(valk_lval_t *x, valk_lval_t *y);
 
 // Helper functions for cons-based lists
@@ -196,9 +195,6 @@ valk_lval_t *valk_lval_join(valk_lval_t *a, valk_lval_t *b);
 valk_lval_t *valk_lval_eval(valk_lenv_t *env, valk_lval_t *lval);
 valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
                                  valk_lval_t *args);
-
-// Quasiquote expansion (used by trampoline eval)
-valk_lval_t *valk_quasiquote_expand(valk_lenv_t *env, valk_lval_t *form);
 
 void valk_lval_print(valk_lval_t *val);
 
@@ -214,8 +210,7 @@ typedef struct {
   u16 file_id;
 } valk_parse_ctx_t;
 
-valk_lval_t *valk_lval_read_ctx(valk_parse_ctx_t *ctx);
-valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx);
+
 
 #define LVAL_SET_SOURCE_LOC(lval, fid, ln, col) do { \
   (lval)->cov_file_id = (fid); \
@@ -255,7 +250,6 @@ static inline void valk_lval_println(valk_lval_t *val) {
 
 //// LEnv Constructors ////
 valk_lenv_t *valk_lenv_empty(void);
-void valk_lenv_init(valk_lenv_t *env);
 void valk_lenv_free(valk_lenv_t *env);  // Free malloc-allocated environments
 //// END LEnv Constructors ////
 valk_lenv_t *valk_lenv_copy(valk_lenv_t *env);
@@ -298,138 +292,4 @@ extern valk_eval_metrics_t g_eval_metrics;
 // Initialize interpreter metrics (call at startup)
 void valk_eval_metrics_init(void);
 
-// ============================================================================
-// Iterative Evaluator (Stack-based, no C recursion)
-// ============================================================================
-
-// Continuation types - what to do after evaluating an expression
-typedef enum {
-  CONT_DONE,           // Return final value
-  CONT_EVAL_ARGS,      // Function evaluated, now evaluate arguments
-  CONT_COLLECT_ARG,    // Collecting evaluated arguments one by one
-  CONT_APPLY_FUNC,     // All args collected, apply function
-  CONT_IF_BRANCH,      // Condition evaluated, pick and eval branch
-  CONT_DO_NEXT,        // Evaluated one expr in do-sequence
-  CONT_SELECT_CHECK,   // Evaluated condition in select clause
-  CONT_BODY_NEXT,      // Evaluated one expr in function body
-  CONT_SINGLE_ELEM,    // Single-element list: if result is function, call it
-  CONT_LAMBDA_DONE,    // Lambda body evaluated, decrement call depth
-  CONT_CTX_DEADLINE,   // ctx/with-deadline: timeout evaluated, now eval body
-  CONT_CTX_WITH,       // ctx/with: key/value evaluated, now eval body
-} valk_cont_kind_e;
-
-// Continuation frame - represents pending work after evaluating something
-typedef struct valk_cont_frame {
-  valk_cont_kind_e kind;
-  valk_lenv_t *env;
-  
-  union {
-    // CONT_EVAL_ARGS: function position evaluated, need to eval args
-    struct {
-      valk_lval_t *func;       // Evaluated function
-      valk_lval_t *remaining;  // Remaining unevaluated args (cons list)
-    } eval_args;
-    
-    // CONT_COLLECT_ARG: collecting evaluated args
-    struct {
-      valk_lval_t *func;       // Function to call
-      valk_lval_t **args;      // Array of evaluated args so far
-      u64 count;               // Number of args collected
-      u64 capacity;            // Capacity of args array
-      valk_lval_t *remaining;  // Remaining unevaluated args
-    } collect_arg;
-    
-    // CONT_IF_BRANCH: condition evaluated, branches pending
-    struct {
-      valk_lval_t *true_branch;
-      valk_lval_t *false_branch;
-    } if_branch;
-    
-    // CONT_DO_NEXT: in a do sequence
-    struct {
-      valk_lval_t *remaining;  // Remaining expressions to evaluate
-    } do_next;
-    
-    // CONT_SELECT_CHECK: checking select clause condition
-    struct {
-      valk_lval_t *result_expr;   // Result if condition true
-      valk_lval_t *remaining;     // Remaining clauses
-      valk_lval_t *original_args; // Original args for error messages
-    } select_check;
-    
-    // CONT_BODY_NEXT: function body sequence
-    struct {
-      valk_lval_t *remaining;  // Remaining body expressions
-      valk_lenv_t *call_env;   // Function's local environment
-    } body_next;
-
-    // CONT_CTX_DEADLINE: ctx/with-deadline body pending
-    struct {
-      valk_lval_t *body;                    // Body to evaluate
-      struct valk_request_ctx *old_ctx;     // Previous request context to restore
-    } ctx_deadline;
-
-    // CONT_CTX_WITH: ctx/with body pending
-    struct {
-      valk_lval_t *value_expr;              // Value expression (unevaluated)
-      valk_lval_t *body;                    // Body to evaluate
-      struct valk_request_ctx *old_ctx;     // Previous request context to restore
-    } ctx_with;
-  };
-} valk_cont_frame_t;
-
-// Evaluation stack - explicit stack of continuations
-#define VALK_EVAL_STACK_INIT_CAP 64
-
-typedef struct {
-  valk_cont_frame_t *frames;
-  u64 count;
-  u64 capacity;
-} valk_eval_stack_t;
-
-// Stack operations
-void valk_eval_stack_init(valk_eval_stack_t *stack);
-void valk_eval_stack_push(valk_eval_stack_t *stack, valk_cont_frame_t frame);
-valk_cont_frame_t valk_eval_stack_pop(valk_eval_stack_t *stack);
-void valk_eval_stack_destroy(valk_eval_stack_t *stack);
-
-// Evaluation result - either a value or a thunk (expression to evaluate)
-typedef struct {
-  bool is_thunk;
-  union {
-    valk_lval_t *value;
-    struct {
-      valk_lval_t *expr;
-      valk_lenv_t *env;
-      valk_lval_t *remaining_body;  // For multi-expression bodies
-      valk_lenv_t *call_env;        // Environment for body evaluation
-    } thunk;
-  };
-} valk_eval_result_t;
-
-// Create a value result
-static inline valk_eval_result_t valk_eval_value(valk_lval_t *val) {
-  return (valk_eval_result_t){.is_thunk = false, .value = val};
-}
-
-// Create a thunk result (single expression)
-static inline valk_eval_result_t valk_eval_thunk(valk_lval_t *expr, valk_lenv_t *env) {
-  return (valk_eval_result_t){
-    .is_thunk = true,
-    .thunk = {.expr = expr, .env = env, .remaining_body = nullptr, .call_env = nullptr}
-  };
-}
-
-// Create a thunk result with body sequence
-static inline valk_eval_result_t valk_eval_thunk_body(valk_lval_t *expr, valk_lenv_t *env,
-                                                       valk_lval_t *remaining, valk_lenv_t *call_env) {
-  return (valk_eval_result_t){
-    .is_thunk = true,
-    .thunk = {.expr = expr, .env = env, .remaining_body = remaining, .call_env = call_env}
-  };
-}
-
-// Get current interpreter metrics (thread-safe)
-void valk_eval_metrics_get(u64* evals, u64* func_calls,
-                            u64* builtin_calls, u32* stack_max,
-                            u64* closures, u64* lookups);
+#include "eval_internal.h"

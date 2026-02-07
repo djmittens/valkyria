@@ -12,7 +12,6 @@ u64 valk_http2_conn_write_buf_append(valk_aio_handle_t *conn, const u8 *data, u6
 int valk_http2_conn_write_buf_flush(valk_aio_handle_t *conn);
 
 void valk_http2_conn_alloc_callback(uv_handle_t *handle, u64 suggested_size, uv_buf_t *buf);
-void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf);
 void valk_http2_conn_tcp_read_impl(valk_aio_handle_t *conn, ssize_t nread, const void *buf_base);
 void valk_http2_conn_handle_closed_cb(uv_handle_t *handle);
 

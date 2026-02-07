@@ -30,32 +30,6 @@
     (arr)->items[(arr)->count++] = (elem);                                     \
   } while (0)
 
-/// @brief Swap an element out at idx
-/// Put the end element in the place of the specified element, returning it as a
-/// result
-/// This will mess up the order the array but its more performant than pop
-/// as it wont have to copy any other element
-///
-/// Example:
-/// idx = 2
-/// [ a b c d e f]
-///       ^
-/// [ a b d e f] c
-/// return c
-///
-/// @param[in] arr the dynamic array to perform the operation
-/// @param[in] idx the id of the element to swap to
-/// @return the value swapped out
-#define da_xpop(arr, idx)                                                      \
-  ({                                                                           \
-    VALK_ASSERT(0, "Not implemented yet");                                     \
-    VALK_ASSERT((arr)->count > 0, "Cannot pop from empty array %ld",           \
-                (arr)->count);                                                 \
-    int idx = (arr)->count;                                                    \
-    if ((arr)->count == (arr->capacity)) {                                     \
-    }                                                                          \
-  })
-
 #define valk_dll_insert_node(target, node)                                    \
   do {                                                                         \
     if ((node) != nullptr) {                                                   \

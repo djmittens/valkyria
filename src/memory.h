@@ -152,7 +152,6 @@ _Static_assert(offsetof(valk_slab_t, heap) % 16 == 0,
                "heap must be 16-byte aligned for AIO handle storage");
 
 valk_slab_t *valk_slab_new(sz itemSize, sz numItems);
-void valk_slab_init(valk_slab_t *self, sz itemSize, sz numItems);
 
 void valk_slab_free(valk_slab_t *self);
 

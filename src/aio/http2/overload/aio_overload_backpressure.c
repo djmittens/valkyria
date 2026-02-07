@@ -1,21 +1,8 @@
 #include "aio_overload_backpressure.h"
 #include "aio_internal.h"
+#include "aio_tcp_helpers.h"
 
 #include "log.h"
-
-static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
-  return conn->sys ? conn->sys->ops->tcp : nullptr;
-}
-
-static inline valk_io_tcp_t *__conn_tcp(valk_aio_handle_t *conn) {
-  return &conn->uv.tcp;
-}
-
-static inline bool __vtable_is_closing(valk_aio_handle_t *conn) {
-  const valk_io_tcp_ops_t *tcp = __tcp_ops(conn);
-  if (!tcp) return true;
-  return tcp->is_closing(__conn_tcp(conn));
-}
 
 void valk_backpressure_list_init(valk_backpressure_list_t *list, u64 max_size, u32 timeout_ms) {
   if (!list) return;

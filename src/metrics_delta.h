@@ -134,18 +134,4 @@ u64 valk_delta_to_prometheus(const valk_delta_snapshot_t *snap,
 u64 valk_metrics_v2_to_json(valk_metrics_registry_t *registry,
                                char *buf, u64 buf_size);
 
-// ============================================================================
-// COMPRESSION STRATEGIES
-// ============================================================================
-
-// RLE encoding for histogram bucket deltas
-// Format: "bucket_idx:delta,bucket_idx:delta,..." (skip zeros)
-u64 valk_histogram_delta_rle(const u64 *deltas, u64 count,
-                                 char *buf, u64 buf_size);
-
-// Sparse gauge encoding (only non-zero changes)
-// Format: "name:value,name:value,..."
-u64 valk_gauge_delta_sparse(const valk_metric_delta_t *deltas,
-                                u64 count, char *buf, u64 buf_size);
-
 #endif // VALK_METRICS_DELTA_H

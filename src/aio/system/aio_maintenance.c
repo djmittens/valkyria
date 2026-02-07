@@ -3,26 +3,7 @@
 #include "aio_overload_backpressure.h"
 #include "aio_http2_conn.h"
 #include "aio_stream_body.h"
-
-static inline const valk_io_tcp_ops_t *__tcp_ops(valk_aio_handle_t *conn) {
-  return conn->sys ? conn->sys->ops->tcp : nullptr; // LCOV_EXCL_BR_LINE
-}
-
-static inline valk_io_tcp_t *__conn_tcp(valk_aio_handle_t *conn) {
-  return &conn->uv.tcp;
-}
-
-static inline bool __vtable_is_closing(valk_aio_handle_t *conn) {
-  const valk_io_tcp_ops_t *tcp = __tcp_ops(conn);
-  if (!tcp) return true; // LCOV_EXCL_BR_LINE
-  return tcp->is_closing(__conn_tcp(conn));
-}
-
-static inline void __vtable_close(valk_aio_handle_t *conn, valk_io_close_cb cb) {
-  const valk_io_tcp_ops_t *tcp = __tcp_ops(conn);
-  if (!tcp) return; // LCOV_EXCL_BR_LINE
-  tcp->close(__conn_tcp(conn), cb);
-}
+#include "aio_tcp_helpers.h"
 
 static void __maintenance_timer_close_cb(uv_handle_t *handle) {
   UNUSED(handle);

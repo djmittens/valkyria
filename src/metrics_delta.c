@@ -18,11 +18,7 @@
 // TIMESTAMP UTILITIES
 // ============================================================================
 
-static u64 get_timestamp_us(void) {
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
-}
+
 
 // ============================================================================
 // DELTA SNAPSHOT MANAGEMENT
@@ -89,7 +85,7 @@ void valk_metrics_baseline_sync(valk_metrics_baseline_t *baseline,
     }
   }
 
-  baseline->last_collect_time = get_timestamp_us();
+  baseline->last_collect_time = valk_metrics_now_us();
   baseline->initialized = true;
 }
 
@@ -97,7 +93,7 @@ void valk_metrics_baseline_sync(valk_metrics_baseline_t *baseline,
 u64 valk_delta_snapshot_collect_stateless(valk_delta_snapshot_t *snap,
                                               valk_metrics_registry_t *registry,
                                               valk_metrics_baseline_t *baseline) {
-  u64 now = get_timestamp_us();
+  u64 now = valk_metrics_now_us();
 
   // If baseline not initialized, sync it first
   if (!baseline->initialized) {
@@ -210,7 +206,7 @@ u64 valk_delta_snapshot_collect_stateless(valk_delta_snapshot_t *snap,
 
 u64 valk_delta_snapshot_collect(valk_delta_snapshot_t *snap,
                                     valk_metrics_registry_t *registry) {
-  u64 now = get_timestamp_us();
+  u64 now = valk_metrics_now_us();
 
   snap->timestamp_us = now;
   snap->prev_timestamp_us = registry->last_snapshot_time;
@@ -538,7 +534,7 @@ u64 valk_metrics_v2_to_json(valk_metrics_registry_t *registry,
   int n;
 
   VALK_BUF_PRINTF(p, end, buf_size, "{\"uptime_seconds\":%.2f,",
-               (double)(get_timestamp_us() - registry->start_time_us) / 1e6);
+               (double)(valk_metrics_now_us() - registry->start_time_us) / 1e6);
 
   VALK_BUF_PRINTF(p, end, buf_size, "\"counters\":[");
 

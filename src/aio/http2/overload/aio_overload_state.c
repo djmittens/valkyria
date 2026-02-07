@@ -1,9 +1,5 @@
 #include "aio_overload_state.h"
 
-static float __attribute__((unused)) fmaxf_safe(float a, float b) {
-  return (a > b) ? a : b;
-}
-
 valk_pressure_config_t valk_pressure_config_default(void) {
   return (valk_pressure_config_t){
     .high_watermark = 0.85f,

@@ -24,9 +24,6 @@ void valk_async_handle_complete(valk_async_handle_t *handle, struct valk_lval_t 
 void valk_async_handle_fail(valk_async_handle_t *handle, struct valk_lval_t *error);
 bool valk_async_handle_cancel(valk_async_handle_t *handle);
 void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_handle_t *child);
-void valk_async_propagate_allocator(valk_async_handle_t *handle,
-                                     struct valk_mem_allocator *allocator,
-                                     struct valk_lenv_t *env);
 
 struct valk_lval_t *valk_lval_handle(valk_async_handle_t *handle);
 struct valk_lval_t *valk_async_status_to_sym(valk_async_status_t status);
