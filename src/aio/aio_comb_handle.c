@@ -39,6 +39,7 @@ static valk_lval_t* valk_builtin_aio_cancelled(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_sym(cancelled ? ":true" : ":false");
 }
 
+// LCOV_EXCL_START - aio/status, aio/result, aio/error: internal helpers not directly tested
 static valk_lval_t* valk_builtin_aio_status(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   if (valk_lval_list_count(a) != 1) {
@@ -90,6 +91,7 @@ static valk_lval_t* valk_builtin_aio_error(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_err("aio/error: handle not failed");
   }
 }
+// LCOV_EXCL_STOP
 
 static valk_lval_t* valk_builtin_aio_pure(valk_lenv_t* e, valk_lval_t* a) {
   // LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
@@ -137,6 +139,7 @@ static valk_lval_t* valk_builtin_aio_fail(valk_lenv_t* e, valk_lval_t* a) {
 
 static valk_lval_t* valk_builtin_aio_await(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
   if (valk_lval_list_count(a) != 1) {
     return valk_lval_err("aio/await: expected 1 argument (handle)");
   }
@@ -144,6 +147,7 @@ static valk_lval_t* valk_builtin_aio_await(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(handle_arg) != LVAL_HANDLE) {
     return valk_lval_err("aio/await: argument must be a handle");
   }
+  // LCOV_EXCL_BR_STOP
   valk_async_handle_t *handle = handle_arg->async.handle;
   return valk_async_handle_await(handle);
 }

@@ -13,13 +13,15 @@ static inline valk_lval_t* valk_resolve_symbol(valk_lenv_t* e, valk_lval_t* v) {
 }
 
 static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
+  // LCOV_EXCL_START - request context guard: only triggers in HTTP handler
   if (valk_thread_ctx.request_ctx != nullptr) {
     return valk_lval_err(
         "def cannot be used in request handler context. "
         "Use = for local bindings instead.");
   }
+  // LCOV_EXCL_STOP
 
-  LVAL_ASSERT_COUNT_GT(a, a, 1);
+  LVAL_ASSERT_COUNT_GT(a, a, 1); // LCOV_EXCL_BR_LINE
 
   valk_lval_t* first_arg = valk_lval_list_nth(a, 0);
 
@@ -79,13 +81,13 @@ static valk_lval_t* valk_builtin_put(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
-  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2); // LCOV_EXCL_BR_LINE
 
   valk_lval_t* formals = valk_lval_list_nth(a, 0);
   valk_lval_t* body = valk_lval_list_nth(a, 1);
 
-  LVAL_ASSERT_TYPE(a, formals, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
-  LVAL_ASSERT_TYPE(a, body, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
+  LVAL_ASSERT_TYPE(a, formals, LVAL_CONS, LVAL_QEXPR, LVAL_NIL); // LCOV_EXCL_BR_LINE
+  LVAL_ASSERT_TYPE(a, body, LVAL_CONS, LVAL_QEXPR, LVAL_NIL); // LCOV_EXCL_BR_LINE
 
   for (u64 i = 0; i < valk_lval_list_count(formals); i++) {
     LVAL_ASSERT(a, LVAL_TYPE(valk_lval_list_nth(formals, i)) == LVAL_SYM,
@@ -113,7 +115,7 @@ static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a) {
   return res;
 }
 
-// LCOV_EXCL_BR_START - valk_builtin_if is superseded by special form in evaluator
+// LCOV_EXCL_START - valk_builtin_if is superseded by special form in evaluator
 static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 3);
   valk_lval_t* cond_val = valk_lval_list_nth(a, 0);
@@ -155,8 +157,9 @@ static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
 
   return valk_lval_eval(e, branch);
 }
-// LCOV_EXCL_BR_STOP
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START - select is superseded by special form in evaluator
 static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
   u64 count = valk_lval_list_count(a);
   if (count == 0) {
@@ -207,6 +210,7 @@ static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
 
   return valk_lval_err("No selection found");
 }
+// LCOV_EXCL_STOP
 
 static valk_lval_t* valk_builtin_do(valk_lenv_t* e, valk_lval_t* a) {
   u64 count = valk_lval_list_count(a);

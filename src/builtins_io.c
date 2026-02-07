@@ -71,19 +71,23 @@ static valk_lval_t* valk_builtin_read_file(valk_lenv_t* e, valk_lval_t* a) {
   u64 length = ftell(f);
   fseek(f, 0, SEEK_SET);
 
+  // LCOV_EXCL_START - ftell overflow and partial fread are platform failures
   if (length == UINT64_MAX) {
     fclose(f);
     LVAL_RAISE(a, "File is too large (%s)", filename);
   }
+  // LCOV_EXCL_STOP
 
   char* content = calloc(length + 1, sizeof(char));
   u64 read_len = fread(content, 1, length, f);
   fclose(f);
 
+  // LCOV_EXCL_START - partial fread requires I/O failure mid-read
   if (read_len != length) {
     free(content);
     LVAL_RAISE(a, "Failed to read file (%s)", filename);
   }
+  // LCOV_EXCL_STOP
 
   valk_lval_t* result = valk_lval_str(content);
   free(content);

@@ -2640,6 +2640,246 @@ static void test_str_to_num_valid(VALK_TEST_ARGS()) {
 }
 
 // ============================================================================
+// Coverage Gap Tests: builtins_mem.c
+// ============================================================================
+
+static void test_gc_stats(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(mem/gc/stats)");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_set_heap_hard_limit_below_usage(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(mem/heap/set-hard-limit 1)");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Coverage Gap Tests: builtins_io.c
+// ============================================================================
+
+static void test_load_nonexistent_file(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(load \"nonexistent_file_xyz.valk\")");
+  ASSERT_LVAL_ERROR(result);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Coverage Gap Tests: builtins_math.c (ord builtin)
+// ============================================================================
+
+static void test_ord_mixed_types(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(ord 1 \"a\")");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "ord requires");
+
+  VALK_PASS();
+}
+
+static void test_ord_non_num_non_str(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(ord {} {})");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "ord requires");
+
+  VALK_PASS();
+}
+
+static void test_ord_num_num(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(ord 5 3)");
+  ASSERT_LVAL_NUM(result, 1);
+
+  result = parse_and_eval("(ord 3 5)");
+  ASSERT_LVAL_NUM(result, -1);
+
+  result = parse_and_eval("(ord 5 5)");
+  ASSERT_LVAL_NUM(result, 0);
+
+  VALK_PASS();
+}
+
+static void test_ord_str_str(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(ord \"b\" \"a\")");
+  ASSERT_TRUE(result->num > 0);
+
+  result = parse_and_eval("(ord \"a\" \"b\")");
+  ASSERT_TRUE(result->num < 0);
+
+  result = parse_and_eval("(ord \"a\" \"a\")");
+  ASSERT_LVAL_NUM(result, 0);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Coverage Gap Tests: builtins_string.c
+// ============================================================================
+
+static void test_str_slice_basic(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/slice \"hello\" 1 3)");
+  ASSERT_LVAL_TYPE(result, LVAL_STR);
+  ASSERT_STR_EQ(result->str, "el");
+
+  VALK_PASS();
+}
+
+static void test_str_slice_full_string(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/slice \"hello\" 0 5)");
+  ASSERT_LVAL_TYPE(result, LVAL_STR);
+  ASSERT_STR_EQ(result->str, "hello");
+
+  VALK_PASS();
+}
+
+static void test_str_slice_negative_start(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/slice \"hello\" -1 3)");
+  ASSERT_LVAL_TYPE(result, LVAL_STR);
+  ASSERT_STR_EQ(result->str, "hel");
+
+  VALK_PASS();
+}
+
+static void test_str_slice_end_beyond_length(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/slice \"hello\" 2 100)");
+  ASSERT_LVAL_TYPE(result, LVAL_STR);
+  ASSERT_STR_EQ(result->str, "llo");
+
+  VALK_PASS();
+}
+
+static void test_str_slice_start_beyond_end(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str/slice \"hello\" 5 2)");
+  ASSERT_LVAL_TYPE(result, LVAL_STR);
+  ASSERT_STR_EQ(result->str, "");
+
+  VALK_PASS();
+}
+
+static void test_str_of_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(str (cons 1 (cons 2 ())))");
+  ASSERT_LVAL_TYPE(result, LVAL_STR);
+  ASSERT_STR_CONTAINS(result->str, "1");
+  ASSERT_STR_CONTAINS(result->str, "2");
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Coverage Gap Tests: builtins_env.c (select)
+// ============================================================================
+
+static void test_select_no_clauses(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(select)");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "No selection found");
+
+  VALK_PASS();
+}
+
+static void test_select_no_match(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(select {0 \"a\"} {0 \"b\"})");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "No selection found");
+
+  VALK_PASS();
+}
+
+static void test_select_match(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(select {0 \"a\"} {1 42})");
+  ASSERT_LVAL_NUM(result, 42);
+
+  VALK_PASS();
+}
+
+// ============================================================================
+// Coverage Gap Tests: aio_comb_util.c (aio/traverse arg validation)
+// ============================================================================
+
+static void test_aio_traverse_wrong_count(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/traverse)");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "expected 2 arguments");
+
+  VALK_PASS();
+}
+
+static void test_aio_traverse_fn_arg_wrong_type(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/traverse '(1) 42)");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "must be a function");
+
+  VALK_PASS();
+}
+
+static void test_aio_traverse_list_arg_not_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(aio/traverse 42 +)");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "must be a list");
+
+  VALK_PASS();
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -2897,6 +3137,37 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_str_multi_values", test_str_multi_values);
   valk_testsuite_add_test(suite, "test_make_string", test_make_string);
   valk_testsuite_add_test(suite, "test_str_to_num_valid", test_str_to_num_valid);
+
+  // Coverage gap tests: builtins_mem.c
+  valk_testsuite_add_test(suite, "test_gc_stats", test_gc_stats);
+  valk_testsuite_add_test(suite, "test_set_heap_hard_limit_below_usage", test_set_heap_hard_limit_below_usage);
+
+  // Coverage gap tests: builtins_io.c
+  valk_testsuite_add_test(suite, "test_load_nonexistent_file", test_load_nonexistent_file);
+
+  // Coverage gap tests: builtins_math.c (ord)
+  valk_testsuite_add_test(suite, "test_ord_mixed_types", test_ord_mixed_types);
+  valk_testsuite_add_test(suite, "test_ord_non_num_non_str", test_ord_non_num_non_str);
+  valk_testsuite_add_test(suite, "test_ord_num_num", test_ord_num_num);
+  valk_testsuite_add_test(suite, "test_ord_str_str", test_ord_str_str);
+
+  // Coverage gap tests: builtins_string.c (str/slice, dotted pair)
+  valk_testsuite_add_test(suite, "test_str_slice_basic", test_str_slice_basic);
+  valk_testsuite_add_test(suite, "test_str_slice_full_string", test_str_slice_full_string);
+  valk_testsuite_add_test(suite, "test_str_slice_negative_start", test_str_slice_negative_start);
+  valk_testsuite_add_test(suite, "test_str_slice_end_beyond_length", test_str_slice_end_beyond_length);
+  valk_testsuite_add_test(suite, "test_str_slice_start_beyond_end", test_str_slice_start_beyond_end);
+  valk_testsuite_add_test(suite, "test_str_of_list", test_str_of_list);
+
+  // Coverage gap tests: builtins_env.c (select)
+  valk_testsuite_add_test(suite, "test_select_no_clauses", test_select_no_clauses);
+  valk_testsuite_add_test(suite, "test_select_no_match", test_select_no_match);
+  valk_testsuite_add_test(suite, "test_select_match", test_select_match);
+
+  // Coverage gap tests: aio_comb_util.c (aio/traverse)
+  valk_testsuite_add_test(suite, "test_aio_traverse_wrong_count", test_aio_traverse_wrong_count);
+  valk_testsuite_add_test(suite, "test_aio_traverse_fn_arg_wrong_type", test_aio_traverse_fn_arg_wrong_type);
+  valk_testsuite_add_test(suite, "test_aio_traverse_list_arg_not_list", test_aio_traverse_list_arg_not_list);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

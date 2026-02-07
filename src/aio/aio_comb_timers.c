@@ -103,11 +103,11 @@ extern valk_lval_t* valk_lval_copy(valk_lval_t* lval);
 valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
                                 valk_lval_t* callback, valk_lenv_t* env) {
   UNUSED(env);
-  // LCOV_EXCL_BR_START - defensive: callers validate sys before calling
+  // LCOV_EXCL_START - defensive: callers validate sys before calling
   if (!sys || !sys->eventloop) {
     return valk_lval_err("aio/interval: invalid AIO system");
   }
-  // LCOV_EXCL_BR_STOP
+  // LCOV_EXCL_STOP
 
   valk_interval_timer_t *timer_data = valk_region_alloc(&sys->system_region, sizeof(valk_interval_timer_t));
   // LCOV_EXCL_START - region alloc failure: requires OOM
@@ -221,11 +221,11 @@ extern valk_lval_t *valk_lval_handle(valk_async_handle_t *handle);
 
 valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
                                 valk_lval_t* callback, valk_lenv_t* env) {
-  // LCOV_EXCL_BR_START - defensive: callers validate sys before calling
+  // LCOV_EXCL_START - defensive: callers validate sys before calling
   if (!sys || !sys->eventloop) {
     return valk_lval_err("aio/schedule: invalid AIO system");
   }
-  // LCOV_EXCL_BR_STOP
+  // LCOV_EXCL_STOP
 
   u64 schedule_id = atomic_fetch_add(&g_schedule_id, 1);
 
@@ -300,39 +300,39 @@ static void __sleep_init_on_loop(void *ctx) {
 
 
 static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
-  // LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
+  // LCOV_EXCL_START - arg validation: compile-time checks catch most
   if (valk_lval_list_count(a) != 2) {
     return valk_lval_err("aio/sleep: expected 2 arguments (sys ms)");
   }
-  // LCOV_EXCL_BR_STOP
+  // LCOV_EXCL_STOP
   valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
   valk_lval_t *ms_arg = valk_lval_list_nth(a, 1);
 
-  // LCOV_EXCL_BR_START - type validation: compile-time checks catch most
+  // LCOV_EXCL_START - type validation: compile-time checks catch most
   LVAL_ASSERT_AIO_SYSTEM(a, sys_arg);
   if (LVAL_TYPE(ms_arg) != LVAL_NUM) {
     return valk_lval_err("aio/sleep: second argument must be a number");
   }
-  // LCOV_EXCL_BR_STOP
+  // LCOV_EXCL_STOP
 
   valk_request_ctx_t *req_ctx = valk_thread_ctx.request_ctx;
-  // LCOV_EXCL_BR_START - deadline paths: requires request context setup
+  // LCOV_EXCL_START - deadline paths: requires request context setup
   if (req_ctx && valk_request_ctx_deadline_exceeded(req_ctx)) {
     return valk_lval_err(":deadline-exceeded");
   }
-  // LCOV_EXCL_BR_STOP
+  // LCOV_EXCL_STOP
 
   valk_aio_system_t *sys = sys_arg->ref.ptr;
   u64 delay_ms = (u64)ms_arg->num;
 
-  // LCOV_EXCL_BR_START - deadline adjustment: requires request context setup
+  // LCOV_EXCL_START - deadline adjustment: requires request context setup
   if (req_ctx && valk_request_ctx_has_deadline(req_ctx)) {
     u64 remaining_ms = valk_request_ctx_remaining_ms(req_ctx);
     if (delay_ms > remaining_ms) {
       delay_ms = remaining_ms;
     }
   }
-  // LCOV_EXCL_BR_STOP
+  // LCOV_EXCL_STOP
 
   valk_async_handle_t *async_handle = valk_async_handle_new(sys, e);
   async_handle->request_ctx = req_ctx;

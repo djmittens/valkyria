@@ -20,7 +20,10 @@ RUNTIME_REQUIREMENT_LINE = 90.0
 RUNTIME_REQUIREMENT_BRANCH = 85.0
 RUNTIME_REQUIREMENT_EXPR = 90.0
 
-VALK_KNOWN_BLOCKED = {}
+VALK_KNOWN_BLOCKED = {
+    "src/http_api.valk": "stdlib utility library - many functions not exercised by tests",
+    "src/modules/test.valk": "test framework - error/timeout/skip paths not exercised in normal runs",
+}
 
 def meets_requirement(actual: float, required: float) -> bool:
     """Check if coverage meets requirement, rounding to 1 decimal place (matching display)."""

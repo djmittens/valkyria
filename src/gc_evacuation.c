@@ -112,7 +112,7 @@ static void evac_add_evacuated(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
 }
 
 static void evac_worklist_push(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
-  if (v == nullptr) return;
+  if (v == nullptr) return; // LCOV_EXCL_BR_LINE
 
   // LCOV_EXCL_BR_START - worklist realloc OOM
   if (ctx->worklist_count >= ctx->worklist_capacity) {
@@ -131,7 +131,7 @@ static void evac_worklist_push(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
 }
 
 static valk_lval_t* evac_worklist_pop(valk_evacuation_ctx_t* ctx) {
-  if (ctx->worklist_count == 0) return nullptr;
+  if (ctx->worklist_count == 0) return nullptr; // LCOV_EXCL_BR_LINE
   return ctx->worklist[--ctx->worklist_count];
 }
 // LCOV_EXCL_BR_STOP
@@ -668,8 +668,10 @@ static void valk_fix_env_pointers(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) 
 
 static void valk_checkpoint_request_stw(void) {
   valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
+  // LCOV_EXCL_BR_START - CAS race: another thread may have changed phase
   if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected,
                                        VALK_GC_PHASE_CHECKPOINT_REQUESTED)) {
+  // LCOV_EXCL_BR_STOP
     return;
   }
 
@@ -688,9 +690,9 @@ static void valk_checkpoint_request_stw(void) {
   pthread_mutex_lock(&valk_gc_coord.lock);
   while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
     u64 current_registered = atomic_load(&valk_gc_coord.threads_registered);
-    if (current_registered < num_threads) {
+    if (current_registered < num_threads) { // LCOV_EXCL_BR_LINE - thread unregistration race
       num_threads = current_registered;
-      if (num_threads <= 1) break;
+      if (num_threads <= 1) break; // LCOV_EXCL_BR_LINE
     }
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);

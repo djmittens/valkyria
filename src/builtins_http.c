@@ -15,6 +15,7 @@ static void __valk_http2_request_release(void* arg) {
   free(arena);
 }
 
+// LCOV_EXCL_BR_START - http2/request arg validation
 static valk_lval_t* valk_builtin_http2_request(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 4);
@@ -22,6 +23,7 @@ static valk_lval_t* valk_builtin_http2_request(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_STR);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 3), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
 
   u64 arena_bytes =
       sizeof(valk_mem_arena_t) + (8 * 1024 * 1024) + (64 * 1024);
@@ -58,12 +60,13 @@ static valk_lval_t* valk_builtin_http2_request(valk_lenv_t* e, valk_lval_t* a) {
     req->body = (u8*)"";
     req->bodyLen = 0;
     req->bodyCapacity = 0;
-    da_init(&req->headers);
+    da_init(&req->headers); // LCOV_EXCL_BR_LINE
   }
 
   return valk_lval_ref("http2_request", req, __valk_http2_request_release);
 }
 
+// LCOV_EXCL_BR_START - http2/request-add-header arg validation
 static valk_lval_t* valk_builtin_http2_request_add_header(valk_lenv_t* e,
                                                           valk_lval_t* a) {
   UNUSED(e);
@@ -75,6 +78,7 @@ static valk_lval_t* valk_builtin_http2_request_add_header(valk_lenv_t* e,
               valk_lval_list_nth(a, 0)->ref.type);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
 
   valk_http2_request_t* req = valk_lval_list_nth(a, 0)->ref.ptr;
 
@@ -90,12 +94,13 @@ static valk_lval_t* valk_builtin_http2_request_add_header(valk_lenv_t* e,
     hdr.value = v;
     hdr.nameLen = nlen;
     hdr.valueLen = vlen;
-    da_add(&req->headers, hdr);
+    da_add(&req->headers, hdr); // LCOV_EXCL_BR_LINE
   }
 
   return valk_lval_nil();
 }
 
+// LCOV_EXCL_BR_START - http2/response-body arg validation
 static valk_lval_t* valk_builtin_http2_response_body(valk_lenv_t* e,
                                                      valk_lval_t* a) {
   UNUSED(e);
@@ -103,13 +108,15 @@ static valk_lval_t* valk_builtin_http2_response_body(valk_lenv_t* e,
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
   LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 0)->ref.type, "success") == 0,
               "Argument must be a success ref holding a response");
+  // LCOV_EXCL_BR_STOP
   valk_http2_response_t* res = valk_lval_list_nth(a, 0)->ref.ptr;
-  if (!res || !res->body) {
+  if (!res || !res->body) { // LCOV_EXCL_BR_LINE
     return valk_lval_str("");
   }
   return valk_lval_str_n((const char*)res->body, res->bodyLen);
 }
 
+// LCOV_EXCL_BR_START - http2/response-status arg validation
 static valk_lval_t* valk_builtin_http2_response_status(valk_lenv_t* e,
                                                        valk_lval_t* a) {
   UNUSED(e);
@@ -117,11 +124,13 @@ static valk_lval_t* valk_builtin_http2_response_status(valk_lenv_t* e,
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
   LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 0)->ref.type, "success") == 0,
               "Argument must be a success ref holding a response");
+  // LCOV_EXCL_BR_STOP
   valk_http2_response_t* res = valk_lval_list_nth(a, 0)->ref.ptr;
-  if (!res || !res->status) return valk_lval_str("");
+  if (!res || !res->status) return valk_lval_str(""); // LCOV_EXCL_BR_LINE
   return valk_lval_str((const char*)res->status);
 }
 
+// LCOV_EXCL_BR_START - http2/response-headers arg validation
 static valk_lval_t* valk_builtin_http2_response_headers(valk_lenv_t* e,
                                                         valk_lval_t* a) {
   UNUSED(e);
@@ -129,9 +138,10 @@ static valk_lval_t* valk_builtin_http2_response_headers(valk_lenv_t* e,
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
   LVAL_ASSERT(a, strcmp(valk_lval_list_nth(a, 0)->ref.type, "success") == 0,
               "Argument must be a success ref holding a response");
+  // LCOV_EXCL_BR_STOP
   valk_http2_response_t* res = valk_lval_list_nth(a, 0)->ref.ptr;
   valk_lval_t* lst = valk_lval_nil();
-  if (!res) return lst;
+  if (!res) return lst; // LCOV_EXCL_BR_LINE
 
   for (u64 i = 0; i < res->headers.count; ++i) {
     struct valk_http2_header_t* h = &res->headers.items[i];
@@ -187,6 +197,7 @@ static valk_lval_t* valk_builtin_http2_mock_response(valk_lenv_t* e,
   resp->headersReceived = true;
   resp->bodyReceived = true;
 
+  // LCOV_EXCL_BR_START - mock response header parsing: test helper
   if (argc == 3) {
     valk_lval_t* headers = valk_lval_list_nth(a, 2);
     if (LVAL_TYPE(headers) != LVAL_NIL) {
@@ -221,6 +232,7 @@ static valk_lval_t* valk_builtin_http2_mock_response(valk_lenv_t* e,
       }
     }
   }
+  // LCOV_EXCL_BR_STOP
 
   return valk_lval_ref("success", resp, __valk_mock_response_free);
 }

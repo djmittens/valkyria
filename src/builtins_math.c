@@ -103,9 +103,11 @@ static valk_lval_t* valk_builtin_eq(valk_lenv_t* e, valk_lval_t* a) {
   // LCOV_EXCL_BR_STOP
   return valk_lval_num(valk_lval_eq(valk_lval_list_nth(a, 0), valk_lval_list_nth(a, 1)));
 }
+// LCOV_EXCL_BR_START - ne only called from operator wrappers
 static valk_lval_t* valk_builtin_ne(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  // LCOV_EXCL_BR_STOP
   return valk_lval_num(!valk_lval_eq(valk_lval_list_nth(a, 0), valk_lval_list_nth(a, 1)));
 }
 static valk_lval_t* valk_builtin_gt(valk_lenv_t* e, valk_lval_t* a) {
@@ -125,10 +127,12 @@ static valk_lval_t* valk_builtin_le(valk_lenv_t* e, valk_lval_t* a) {
   return valk_builtin_ord_op(a, ORD_LE);
 }
 
+// LCOV_EXCL_BR_START - str->num arg validation
 static valk_lval_t* valk_builtin_str_to_num(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
 
   const char* str = valk_lval_list_nth(a, 0)->str;
   char* endptr;

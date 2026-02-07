@@ -289,10 +289,10 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
 // LCOV_EXCL_STOP
 
 valk_lval_t *valk_region_promote_lval(valk_region_t *target, valk_lval_t *val) {
-  if (!target || !val) return val;
+  if (!target || !val) return val; // LCOV_EXCL_BR_LINE
 
   valk_lifetime_e val_lifetime = valk_allocator_lifetime(val->origin_allocator);
-  if (valk_lifetime_can_reference(target->lifetime, val_lifetime)) {
+  if (valk_lifetime_can_reference(target->lifetime, val_lifetime)) { // LCOV_EXCL_BR_LINE
     return val;
   }
 
@@ -307,7 +307,7 @@ valk_lval_t *valk_region_promote_lval(valk_region_t *target, valk_lval_t *val) {
 }
 
 valk_lval_t *valk_region_ensure_safe_ref(valk_lval_t *parent, valk_lval_t *child) {
-  if (!parent || !child) return child;
+  if (!parent || !child) return child; // LCOV_EXCL_BR_LINE
 
   void *parent_alloc = parent->origin_allocator;
   void *child_alloc = child->origin_allocator;
@@ -319,7 +319,7 @@ valk_lval_t *valk_region_ensure_safe_ref(valk_lval_t *parent, valk_lval_t *child
   }
 
   valk_mem_allocator_t *alloc = (valk_mem_allocator_t *)parent_alloc;
-  if (alloc->type == VALK_ALLOC_REGION) {
+  if (alloc->type == VALK_ALLOC_REGION) { // LCOV_EXCL_BR_LINE
     return valk_region_promote_lval((valk_region_t *)parent_alloc, child);
   }
 

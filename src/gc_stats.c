@@ -215,6 +215,7 @@ void valk_repl_set_eval_delta(i64 heap, i64 scratch, i64 lval, i64 lenv) {
 // Diagnostic Dump for Debugging Hangs
 // ============================================================================
 
+// LCOV_EXCL_START - diagnostic dump only called on test timeout, untestable
 static const char *valk_gc_phase_name(valk_gc_phase_e phase) {
   switch (phase) {
     case VALK_GC_PHASE_IDLE: return "IDLE";
@@ -320,3 +321,4 @@ void valk_diag_dump_on_timeout(void) {
 
   fflush(stderr);
 }
+// LCOV_EXCL_STOP

@@ -80,6 +80,7 @@ static valk_lval_t* valk_builtin_aio_traverse(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t *handles = valk_lval_nil();
   valk_lval_t *current = list_arg;
   
+  // LCOV_EXCL_BR_START - traverse iteration: type checks validated by caller
   while (LVAL_TYPE(current) != LVAL_NIL) {
     if (LVAL_TYPE(current) != LVAL_CONS && LVAL_TYPE(current) != LVAL_QEXPR) {
       return valk_lval_err("aio/traverse: first argument must be a list");
@@ -96,6 +97,7 @@ static valk_lval_t* valk_builtin_aio_traverse(valk_lenv_t* e, valk_lval_t* a) {
     if (LVAL_TYPE(handle) != LVAL_HANDLE) {
       return valk_lval_err("aio/traverse: function must return handles (got type %d for item)", LVAL_TYPE(handle));
     }
+  // LCOV_EXCL_BR_STOP
     
     handles = valk_lval_cons(handle, handles);
     current = valk_lval_tail(current);
@@ -110,7 +112,7 @@ static valk_lval_t* valk_builtin_aio_traverse(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t *list_call = valk_lval_cons(valk_lval_sym("list"), handles_reversed);
   valk_lval_t *handles_list = valk_lval_eval(e, list_call);
   
-  if (LVAL_TYPE(handles_list) == LVAL_ERR) {
+  if (LVAL_TYPE(handles_list) == LVAL_ERR) { // LCOV_EXCL_BR_LINE
     return handles_list;
   }
 

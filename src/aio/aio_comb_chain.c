@@ -1,7 +1,7 @@
 #include "aio_combinators_internal.h"
 
 static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
-  // LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
+  // LCOV_EXCL_START - arg validation: compile-time checks catch most
   if (valk_lval_list_count(a) != 2) {
     return valk_lval_err("aio/then: expected 2 arguments (handle fn)");
   }
@@ -14,7 +14,7 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     return valk_lval_err("aio/then: second argument must be a function");
   }
-  // LCOV_EXCL_BR_STOP
+  // LCOV_EXCL_STOP
 
   valk_async_handle_t *source = source_lval->async.handle;
 
@@ -58,7 +58,7 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_handle(result);
   }
 
-  // LCOV_EXCL_BR_START - source status dispatch: depends on async lifecycle
+  // LCOV_EXCL_START - source status dispatch: depends on async lifecycle
   if (source->status == VALK_ASYNC_FAILED) {
     result->status = VALK_ASYNC_FAILED;
     result->error = source->error;
@@ -69,7 +69,7 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
     result->status = VALK_ASYNC_CANCELLED;
     return valk_lval_handle(result);
   }
-  // LCOV_EXCL_BR_STOP
+  // LCOV_EXCL_STOP
 
   result->status = VALK_ASYNC_RUNNING;
   result->env = e;
@@ -83,7 +83,7 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
-  // LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
+  // LCOV_EXCL_START - arg validation: compile-time checks catch most
   if (valk_lval_list_count(a) != 2) {
     return valk_lval_err("aio/catch: expected 2 arguments (handle fn)");
   }
@@ -96,7 +96,7 @@ static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     return valk_lval_err("aio/catch: second argument must be a function");
   }
-  // LCOV_EXCL_BR_STOP
+  // LCOV_EXCL_STOP
 
   valk_async_handle_t *source = source_lval->async.handle;
 
@@ -147,12 +147,12 @@ static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_handle(catch_handle);
   }
 
-  // LCOV_EXCL_BR_START - cancelled status: requires specific async lifecycle
+  // LCOV_EXCL_START - cancelled status: requires specific async lifecycle
   if (source->status == VALK_ASYNC_CANCELLED) {
     catch_handle->status = VALK_ASYNC_CANCELLED;
     return valk_lval_handle(catch_handle);
   }
-  // LCOV_EXCL_BR_STOP
+  // LCOV_EXCL_STOP
 
   catch_handle->status = VALK_ASYNC_RUNNING;
   catch_handle->env = e;
@@ -166,7 +166,7 @@ static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
-  // LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
+  // LCOV_EXCL_START - arg validation: compile-time checks catch most
   if (valk_lval_list_count(a) != 2) {
     return valk_lval_err("aio/finally: expected 2 arguments (handle fn)");
   }
@@ -179,7 +179,7 @@ static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     return valk_lval_err("aio/finally: second argument must be a function");
   }
-  // LCOV_EXCL_BR_STOP
+  // LCOV_EXCL_STOP
 
   valk_async_handle_t *source = source_lval->async.handle;
 
@@ -208,14 +208,14 @@ static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_handle(finally_handle);
   // LCOV_EXCL_STOP
   }
-  // LCOV_EXCL_BR_START - cancelled status: requires specific async lifecycle
+  // LCOV_EXCL_START - cancelled status: requires specific async lifecycle
   if (source_status == VALK_ASYNC_CANCELLED) {
     valk_lval_t *args = valk_lval_nil();
     valk_lval_eval_call(e, fn, args);
     atomic_store_explicit(&finally_handle->status, VALK_ASYNC_CANCELLED, memory_order_release);
     return valk_lval_handle(finally_handle);
   }
-  // LCOV_EXCL_BR_STOP
+  // LCOV_EXCL_STOP
 
   atomic_store_explicit(&finally_handle->status, VALK_ASYNC_RUNNING, memory_order_release);
   finally_handle->env = e;

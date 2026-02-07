@@ -45,8 +45,8 @@ valk_slab_t *valk_slab_new(sz itemSize, sz numItems) {
   void *mem = mmap(nullptr, mmapSize, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (mem == MAP_FAILED) { // LCOV_EXCL_BR_LINE
-    VALK_ERROR("mmap failed for slab of %zu bytes", mmapSize);
-    return nullptr;
+    VALK_ERROR("mmap failed for slab of %zu bytes", mmapSize); // LCOV_EXCL_LINE
+    return nullptr; // LCOV_EXCL_LINE
   }
   
   valk_slab_t *res = mem;
@@ -297,7 +297,7 @@ static bool delta_add_run(valk_bitmap_delta_t *delta, sz offset, sz count, u8 by
   if (delta->run_count >= delta->run_capacity) {
     sz new_cap = delta->run_capacity ? delta->run_capacity * 2 : 64;
     valk_bitmap_delta_run_t *new_runs = realloc(delta->runs, new_cap * sizeof(valk_bitmap_delta_run_t));
-    if (!new_runs) return false;
+    if (!new_runs) return false; // LCOV_EXCL_BR_LINE - realloc OOM
     delta->runs = new_runs;
     delta->run_capacity = new_cap;
   }
@@ -312,7 +312,7 @@ bool valk_bitmap_delta_compute(const valk_slab_bitmap_t *curr,
                                 const valk_slab_bitmap_t *prev,
                                 valk_bitmap_delta_t *out) {
   if (!curr || !prev || !out) return false;
-  if (!curr->data || !prev->data) return false;
+  if (!curr->data || !prev->data) return false; // LCOV_EXCL_BR_LINE
   if (curr->bytes != prev->bytes) return false;
 
   valk_bitmap_delta_init(out);
@@ -335,9 +335,9 @@ bool valk_bitmap_delta_compute(const valk_slab_bitmap_t *curr,
       run_len++;
     }
 
-    if (!delta_add_run(out, run_start, run_len, xor_byte)) {
-      valk_bitmap_delta_free(out);
-      return false;
+    if (!delta_add_run(out, run_start, run_len, xor_byte)) { // LCOV_EXCL_BR_LINE - OOM in delta_add_run
+      valk_bitmap_delta_free(out); // LCOV_EXCL_LINE
+      return false; // LCOV_EXCL_LINE
     }
     i += run_len;
   }
@@ -345,6 +345,7 @@ bool valk_bitmap_delta_compute(const valk_slab_bitmap_t *curr,
   return true;
 }
 
+// LCOV_EXCL_BR_START - RLE serialization buffer overflow guards
 sz valk_bitmap_delta_to_rle(const valk_bitmap_delta_t *delta,
                                  char *buf, sz buf_size) {
   if (!delta || !buf || buf_size < 4) {
@@ -379,20 +380,21 @@ sz valk_bitmap_delta_to_rle(const valk_bitmap_delta_t *delta,
   *p = '\0';
   return p - buf;
 }
+// LCOV_EXCL_BR_STOP
 
 sz valk_slab_bitmap_buckets(valk_slab_t *slab,
                                  sz start_slot, sz end_slot,
                                  sz num_buckets,
                                  valk_bitmap_bucket_t *out_buckets) {
-  if (!slab || !out_buckets || num_buckets == 0) return 0;
-  if (!slab->usage_bitmap) return 0;
+  if (!slab || !out_buckets || num_buckets == 0) return 0; // LCOV_EXCL_BR_LINE
+  if (!slab->usage_bitmap) return 0; // LCOV_EXCL_BR_LINE
 
   if (end_slot > slab->numItems) end_slot = slab->numItems;
   if (start_slot >= end_slot) return 0;
 
   sz total_slots = end_slot - start_slot;
   sz slots_per_bucket = (total_slots + num_buckets - 1) / num_buckets;
-  if (slots_per_bucket == 0) slots_per_bucket = 1;
+  if (slots_per_bucket == 0) slots_per_bucket = 1; // LCOV_EXCL_BR_LINE
 
   for (sz b = 0; b < num_buckets; b++) {
     out_buckets[b].used = 0;
@@ -405,7 +407,7 @@ sz valk_slab_bitmap_buckets(valk_slab_t *slab,
     bool is_used = (slab->usage_bitmap[byte_idx] & bit_mask) != 0;
 
     sz bucket_idx = (slot - start_slot) / slots_per_bucket;
-    if (bucket_idx >= num_buckets) bucket_idx = num_buckets - 1;
+    if (bucket_idx >= num_buckets) bucket_idx = num_buckets - 1; // LCOV_EXCL_BR_LINE
 
     if (is_used) {
       out_buckets[bucket_idx].used++;

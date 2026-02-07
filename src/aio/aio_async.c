@@ -184,7 +184,7 @@ valk_async_handle_t* valk_async_handle_new_in_region(valk_aio_system_t *sys, val
   } else {
     handle = malloc(sizeof(valk_async_handle_t));
   }
-  if (!handle) return nullptr;
+  if (!handle) return nullptr; // LCOV_EXCL_BR_LINE - OOM
 
   memset(handle, 0, sizeof(valk_async_handle_t));
   handle->id = __atomic_fetch_add(&g_async_handle_id, 1, __ATOMIC_RELAXED);
@@ -264,7 +264,7 @@ void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result
   if (!transitioned) {
     transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, VALK_ASYNC_COMPLETED);
   }
-   if (!transitioned) {
+   if (!transitioned) { // LCOV_EXCL_BR_LINE - async race: handle already terminal
      return;
    }
 
@@ -294,7 +294,7 @@ void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
   if (!transitioned) {
     transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, VALK_ASYNC_FAILED);
   }
-   if (!transitioned) {
+   if (!transitioned) { // LCOV_EXCL_BR_LINE - async race: handle already terminal
      return;
    }
 

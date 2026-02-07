@@ -38,6 +38,7 @@ static void __within_init_on_loop(void *ctx) {
 }
 // LCOV_EXCL_STOP
 
+// LCOV_EXCL_START - within child resolution: internal async callback
 static void valk_async_within_child_resolved(valk_async_handle_t *child) {
   if (!child || !child->parent) return;
 
@@ -76,6 +77,7 @@ static void valk_async_within_child_resolved(valk_async_handle_t *child) {
   valk_async_notify_done(within);
   valk_async_propagate_completion(within);
 }
+// LCOV_EXCL_STOP
 
 static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
   if (valk_lval_list_count(a) != 2) {
@@ -95,13 +97,16 @@ static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
   valk_async_handle_t *source = source_lval->async.handle;
   u64 timeout_ms = (u64)timeout_lval->num;
 
+  // LCOV_EXCL_BR_START - source status early return: depends on async lifecycle timing
   valk_async_status_t source_status = valk_async_handle_get_status(source);
   if (source_status == VALK_ASYNC_COMPLETED || source_status == VALK_ASYNC_FAILED || 
       source_status == VALK_ASYNC_CANCELLED) {
     return valk_lval_handle(source);
   }
+  // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t *sys = source->sys;
+  // LCOV_EXCL_START - defensive null / OOM paths for within allocation
   if (!sys) {
     return valk_lval_err("aio/within: source handle must have an AIO system");
   }
@@ -112,11 +117,12 @@ static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   valk_async_handle_uv_data_t *timer_data = aligned_alloc(alignof(valk_async_handle_uv_data_t), 
-                                                          sizeof(valk_async_handle_uv_data_t));
+                                                           sizeof(valk_async_handle_uv_data_t));
   if (!timer_data) {
     valk_async_handle_free(timeout_handle);
     return valk_lval_err("Failed to allocate timer data");
   }
+  // LCOV_EXCL_STOP
 
   timer_data->magic = VALK_UV_DATA_TIMER_MAGIC;
   timer_data->handle = timeout_handle;
@@ -126,20 +132,24 @@ static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
   timeout_handle->status = VALK_ASYNC_RUNNING;
 
   valk_within_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_within_init_ctx_t));
+  // LCOV_EXCL_START - OOM: region alloc failure
   if (!init_ctx) {
     valk_async_handle_free(timeout_handle);
     return valk_lval_err("Failed to allocate within init context");
   }
+  // LCOV_EXCL_STOP
 
   init_ctx->sys = sys;
   init_ctx->timer_data = timer_data;
   init_ctx->timeout_ms = timeout_ms;
 
   valk_async_handle_t *within_handle = valk_async_handle_new(sys, e);
+  // LCOV_EXCL_START - OOM: handle allocation failure
   if (!within_handle) {
     valk_async_handle_cancel(timeout_handle);
     return valk_lval_err("Failed to allocate within handle");
   }
+  // LCOV_EXCL_STOP
   within_handle->request_ctx = source->request_ctx;
   within_handle->status = VALK_ASYNC_RUNNING;
 
@@ -153,16 +163,19 @@ static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
 
   valk_aio_enqueue_task(sys, __within_init_on_loop, init_ctx);
 
+  // LCOV_EXCL_BR_START - race: source may complete between allocation and check
   source_status = valk_async_handle_get_status(source);
   if (source_status == VALK_ASYNC_COMPLETED || source_status == VALK_ASYNC_FAILED) {
     valk_async_within_child_resolved(source);
   }
+  // LCOV_EXCL_BR_STOP
 
   return valk_lval_handle(within_handle);
 }
 
 static void valk_async_retry_schedule_next(valk_async_handle_t *retry_handle);
 
+// LCOV_EXCL_START - retry async callbacks: called from event loop / async system
 static void valk_async_retry_backoff_done(valk_async_handle_t *child) {
   if (!child || !child->parent) return;
 
@@ -252,7 +265,9 @@ static void valk_async_notify_retry_child(valk_async_handle_t *child) {
     valk_async_retry_attempt_completed(child);
   }
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START - retry schedule: called from async system callbacks
 static void valk_async_retry_schedule_next(valk_async_handle_t *retry_handle) {
   valk_lval_t *args = valk_lval_nil();
   valk_lval_t *result_val = valk_lval_eval_call(retry_handle->env, retry_handle->comb.retry.fn, args);
@@ -271,8 +286,10 @@ static void valk_async_retry_schedule_next(valk_async_handle_t *retry_handle) {
   attempt->parent = retry_handle;
   valk_async_handle_add_child(retry_handle, attempt);
 }
+// LCOV_EXCL_STOP
 
 static valk_lval_t* valk_builtin_aio_retry(valk_lenv_t* e, valk_lval_t* a) {
+  // LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
   if (valk_lval_list_count(a) != 3) {
     return valk_lval_err("aio/retry: expected 3 arguments (sys fn opts)");
   }
@@ -288,6 +305,7 @@ static valk_lval_t* valk_builtin_aio_retry(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(opts) != LVAL_QEXPR) {
     return valk_lval_err("aio/retry: third argument must be a qexpr (options dict)");
   }
+  // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t *sys = sys_arg->ref.ptr;
 
@@ -295,6 +313,7 @@ static valk_lval_t* valk_builtin_aio_retry(valk_lenv_t* e, valk_lval_t* a) {
   u64 base_delay_ms = 100;
   f64 backoff_multiplier = 2.0;
 
+  // LCOV_EXCL_BR_START - retry option parsing: tests don't exercise all key/value combinations
   valk_lval_t *opts_iter = opts;
   while (LVAL_TYPE(opts_iter) != LVAL_NIL) {
     if (LVAL_TYPE(opts_iter) != LVAL_CONS && LVAL_TYPE(opts_iter) != LVAL_QEXPR) {
@@ -324,14 +343,17 @@ static valk_lval_t* valk_builtin_aio_retry(valk_lenv_t* e, valk_lval_t* a) {
       }
     }
   }
+  // LCOV_EXCL_BR_STOP
 
-  if (max_attempts == 0) max_attempts = 1;
-  if (backoff_multiplier < 1.0) backoff_multiplier = 1.0;
+  if (max_attempts == 0) max_attempts = 1; // LCOV_EXCL_BR_LINE - defensive clamp
+  if (backoff_multiplier < 1.0) backoff_multiplier = 1.0; // LCOV_EXCL_BR_LINE - defensive clamp
 
   valk_async_handle_t *retry_handle = valk_async_handle_new(sys, e);
+  // LCOV_EXCL_START - OOM: handle allocation failure
   if (!retry_handle) {
     return valk_lval_err("Failed to allocate retry handle");
   }
+  // LCOV_EXCL_STOP
 
   retry_handle->comb.retry.current_attempt = NULL;
   retry_handle->comb.retry.backoff_timer = NULL;

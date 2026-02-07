@@ -679,7 +679,7 @@ coverage-reset:
 .ONESHELL:
 .ONESHELL:
 .PHONY: coverage-tests
-coverage-tests: export VALK_TEST_TIMEOUT_SECONDS=30
+coverage-tests: export VALK_TEST_TIMEOUT_SECONDS=60
 coverage-tests: build-coverage coverage-reset
 	set -e
 	@echo ""

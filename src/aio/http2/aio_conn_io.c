@@ -53,6 +53,7 @@ u64 valk_conn_io_read_buf_size(valk_conn_io_t *io) {
   return io->buf_size;
 }
 
+// LCOV_EXCL_BR_START - write buffer acquire failure: requires slab exhaustion
 bool valk_conn_io_write_buf_acquire(valk_conn_io_t *io, valk_slab_t *slab) {
   if (io->write_buf) return true;
   if (!slab) return false;
@@ -68,6 +69,7 @@ bool valk_conn_io_write_buf_acquire(valk_conn_io_t *io, valk_slab_t *slab) {
   io->write_flush_pending = false;
   return true;
 }
+// LCOV_EXCL_BR_STOP
 
 u8 *valk_conn_io_write_buf_data(valk_conn_io_t *io) {
   if (!io->write_buf) return nullptr;
@@ -134,7 +136,7 @@ static void __conn_io_flush_cb(valk_io_write_req_t *req, int status) {
 }
 // LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_BR_START - flush guard conditions
+// LCOV_EXCL_BR_START - flush guard conditions and write failure paths
 int valk_conn_io_flush(valk_conn_io_t *io, valk_aio_handle_t *conn,
                        valk_conn_io_flush_cb cb, void *ctx) {
   if (!io->write_buf || io->write_pos == 0) {
@@ -149,7 +151,6 @@ int valk_conn_io_flush(valk_conn_io_t *io, valk_aio_handle_t *conn,
   if (!sys || !sys->ops || !sys->ops->tcp) {
     return -1;
   }
-// LCOV_EXCL_BR_STOP
   
   if (sys->ops->tcp->is_closing(&conn->uv.tcp)) {
     return -1;
@@ -177,3 +178,4 @@ int valk_conn_io_flush(valk_conn_io_t *io, valk_aio_handle_t *conn,
   
   return 0;
 }
+// LCOV_EXCL_BR_STOP

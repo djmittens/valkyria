@@ -53,8 +53,8 @@ static valk_lval_t* valk_builtin_heap_usage(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
   valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
-  if (heap == NULL) {
-    return valk_lval_num(0);
+  if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
+    return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
   return valk_lval_num((long)valk_gc_heap2_used_bytes(heap));
 }
@@ -118,8 +118,8 @@ static valk_lval_t* valk_builtin_gc_threshold_pct(valk_lenv_t* e, valk_lval_t* a
   UNUSED(e);
   UNUSED(a);
   valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
-  if (heap == NULL) {
-    return valk_lval_num(0);
+  if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
+    return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
   return valk_lval_num((long)heap->gc_threshold_pct);
 }
@@ -135,8 +135,8 @@ static valk_lval_t* valk_builtin_set_gc_threshold_pct(valk_lenv_t* e,
   if (new_pct > 100) new_pct = 100;
 
   valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
-  if (heap == NULL) {
-    return valk_lval_num(0);
+  if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
+    return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
 
   u8 old_pct = heap->gc_threshold_pct;
@@ -148,8 +148,8 @@ static valk_lval_t* valk_builtin_gc_usage_pct(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
   valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
-  if (heap == NULL) {
-    return valk_lval_num(0);
+  if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
+    return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
   return valk_lval_num((long)valk_gc_heap_usage_pct(heap));
 }
@@ -158,8 +158,8 @@ static valk_lval_t* valk_builtin_gc_min_interval(valk_lenv_t* e, valk_lval_t* a)
   UNUSED(e);
   UNUSED(a);
   valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
-  if (heap == NULL) {
-    return valk_lval_num(0);
+  if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
+    return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
   return valk_lval_num((long)heap->min_gc_interval_ms);
 }
@@ -174,8 +174,8 @@ static valk_lval_t* valk_builtin_set_gc_min_interval(valk_lenv_t* e,
   if (new_ms < 0) new_ms = 0;
 
   valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
-  if (heap == NULL) {
-    return valk_lval_num(0);
+  if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
+    return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
 
   u32 old_ms = heap->min_gc_interval_ms;
@@ -214,8 +214,8 @@ static valk_lval_t* valk_builtin_checkpoint_stats(valk_lenv_t* e,
   valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
   valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
 
-  if (scratch == NULL || heap == NULL) {
-    return valk_lval_nil();
+  if (scratch == NULL || heap == NULL) {  // LCOV_EXCL_BR_LINE - always initialized in runtime
+    return valk_lval_nil();  // LCOV_EXCL_LINE
   }
 
   valk_lval_t* stats[4] = {
@@ -231,8 +231,8 @@ static valk_lval_t* valk_builtin_arena_usage(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(a);
 
   valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
-  if (scratch == NULL) {
-    return valk_lval_num(0);
+  if (scratch == NULL) {  // LCOV_EXCL_BR_LINE - scratch arena always initialized in runtime
+    return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
   return valk_lval_num((long)scratch->offset);
 }
@@ -243,8 +243,8 @@ static valk_lval_t* valk_builtin_arena_capacity(valk_lenv_t* e,
   UNUSED(a);
 
   valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
-  if (scratch == NULL) {
-    return valk_lval_num(0);
+  if (scratch == NULL) {  // LCOV_EXCL_BR_LINE - scratch arena always initialized in runtime
+    return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
   return valk_lval_num((long)scratch->capacity);
 }
@@ -255,8 +255,8 @@ static valk_lval_t* valk_builtin_arena_high_water(valk_lenv_t* e,
   UNUSED(a);
 
   valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
-  if (scratch == NULL) {
-    return valk_lval_num(0);
+  if (scratch == NULL) {  // LCOV_EXCL_BR_LINE - scratch arena always initialized in runtime
+    return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
   return valk_lval_num((long)scratch->stats.high_water_mark);
 }
