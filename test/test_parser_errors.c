@@ -2005,7 +2005,7 @@ static void test_aio_run_wrong_ref_type(VALK_TEST_ARGS()) {
 
   valk_lval_t *result = parse_and_eval("(aio/run (metrics/baseline))");
   ASSERT_LVAL_ERROR(result);
-  ASSERT_STR_CONTAINS(result->str, "aio_system");
+  ASSERT_STR_CONTAINS(result->str, "AIO system");
 
   VALK_PASS();
 }
@@ -2016,7 +2016,7 @@ static void test_aio_stop_wrong_ref_type(VALK_TEST_ARGS()) {
 
   valk_lval_t *result = parse_and_eval("(aio/stop (metrics/baseline))");
   ASSERT_LVAL_ERROR(result);
-  ASSERT_STR_CONTAINS(result->str, "aio_system");
+  ASSERT_STR_CONTAINS(result->str, "AIO system");
 
   VALK_PASS();
 }
@@ -2027,7 +2027,7 @@ static void test_aio_metrics_json_wrong_ref_type(VALK_TEST_ARGS()) {
 
   valk_lval_t *result = parse_and_eval("(aio/metrics-json (metrics/baseline))");
   ASSERT_LVAL_ERROR(result);
-  ASSERT_STR_CONTAINS(result->str, "aio_system");
+  ASSERT_STR_CONTAINS(result->str, "AIO system");
 
   VALK_PASS();
 }
@@ -2038,7 +2038,7 @@ static void test_aio_metrics_json_compact_wrong_ref_type(VALK_TEST_ARGS()) {
 
   valk_lval_t *result = parse_and_eval("(aio/metrics-json-compact (metrics/baseline))");
   ASSERT_LVAL_ERROR(result);
-  ASSERT_STR_CONTAINS(result->str, "aio_system");
+  ASSERT_STR_CONTAINS(result->str, "AIO system");
 
   VALK_PASS();
 }
@@ -2049,7 +2049,7 @@ static void test_aio_systems_json_wrong_ref_type(VALK_TEST_ARGS()) {
 
   valk_lval_t *result = parse_and_eval("(aio/systems-json (metrics/baseline))");
   ASSERT_LVAL_ERROR(result);
-  ASSERT_STR_CONTAINS(result->str, "aio_system");
+  ASSERT_STR_CONTAINS(result->str, "AIO system");
 
   VALK_PASS();
 }

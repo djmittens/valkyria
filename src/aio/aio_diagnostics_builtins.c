@@ -1,4 +1,5 @@
 #include "aio_internal.h"
+#include "builtins_internal.h"
 #include "common.h"
 #include "log.h"
 #include "memory.h"
@@ -19,9 +20,7 @@ static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a
   }
 
   valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
-  if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/slab-buckets: first argument must be an aio_system");
-  }
+  LVAL_ASSERT_AIO_SYSTEM(a, sys_arg);
   valk_aio_system_t *sys = (valk_aio_system_t *)sys_arg->ref.ptr;
 
   valk_lval_t *name_arg = valk_lval_list_nth(a, 1);
@@ -250,9 +249,7 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk
   }
 
   valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
-  if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/diagnostics-state-json: argument must be an aio_system");
-  }
+  LVAL_ASSERT_AIO_SYSTEM(a, sys_arg);
 
   valk_aio_system_t *sys = (valk_aio_system_t *)sys_arg->ref.ptr;
 
@@ -390,9 +387,7 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json_compact(valk_lenv_t 
   }
 
   valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
-  if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/diagnostics-state-json-compact: argument must be an aio_system");
-  }
+  LVAL_ASSERT_AIO_SYSTEM(a, sys_arg);
 
   valk_aio_system_t *sys = (valk_aio_system_t *)sys_arg->ref.ptr;
 

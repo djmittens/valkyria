@@ -7,9 +7,7 @@ static valk_lval_t* valk_builtin_aio_pool_stats(valk_lenv_t* e, valk_lval_t* a) 
     return valk_lval_err("aio/pool-stats: expected 1 argument (aio system)");
   }
   valk_lval_t *aio_ref = valk_lval_list_nth(a, 0);
-  if (LVAL_TYPE(aio_ref) != LVAL_REF || strcmp(aio_ref->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/pool-stats: argument must be aio system");
-  }
+  LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
   // LCOV_EXCL_STOP
 
   valk_aio_system_t *sys = aio_ref->ref.ptr;

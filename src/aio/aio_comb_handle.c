@@ -157,9 +157,7 @@ static valk_lval_t* valk_builtin_aio_never(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
 
   // LCOV_EXCL_BR_START - type validation: compile-time checks catch most
-  if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/never: argument must be an aio_system");
-  }
+  LVAL_ASSERT_AIO_SYSTEM(a, sys_arg);
   // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t *sys = sys_arg->ref.ptr;

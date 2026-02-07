@@ -85,6 +85,10 @@ find_package(OpenSSL REQUIRED)
 ## LIB
 set(VALKYRIA_SOURCES
   src/parser.c
+  src/lval.c
+  src/eval.c
+  src/lenv.c
+  src/reader.c
   src/builtins_math.c
   src/builtins_list.c
   src/builtins_string.c
@@ -95,6 +99,8 @@ set(VALKYRIA_SOURCES
   src/builtins_aio.c
   src/builtins_server.c
   src/memory.c
+  src/slab.c
+  src/memory_os.c
   src/valk_thread_posix.c
 
   src/gc.c

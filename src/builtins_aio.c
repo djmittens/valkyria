@@ -79,11 +79,8 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
 static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "Argument must be aio_system");
+  LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
 
   valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
   (void)valk_thread_ctx.heap;
@@ -103,12 +100,8 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
 static valk_lval_t* valk_builtin_aio_stop(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  if (strcmp(aio_ref->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/stop: argument must be an aio_system");
-  }
+  LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
 
   valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
   valk_aio_stop(sys);
@@ -118,12 +111,8 @@ static valk_lval_t* valk_builtin_aio_stop(valk_lenv_t* e, valk_lval_t* a) {
 static valk_lval_t* valk_builtin_aio_on_loop_thread(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  if (strcmp(aio_ref->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/on-loop-thread?: argument must be an aio_system");
-  }
+  LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
 
   valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
   bool on_loop = uv_thread_self() == sys->loopThread;
@@ -134,11 +123,8 @@ static valk_lval_t* valk_builtin_aio_metrics_json(valk_lenv_t* e,
                                                    valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "Argument must be aio_system");
+  LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
 
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_update_queue_stats(sys);
@@ -155,11 +141,8 @@ static valk_lval_t* valk_builtin_aio_metrics_json_compact(valk_lenv_t* e,
                                                            valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "Argument must be aio_system");
+  LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
 
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_update_queue_stats(sys);
@@ -176,11 +159,8 @@ static valk_lval_t* valk_builtin_aio_systems_json(valk_lenv_t* e,
                                                    valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
-
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "Argument must be aio_system");
+  LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
 
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_update_queue_stats(sys);
@@ -208,9 +188,7 @@ static valk_lval_t* vm_metrics_extract_sys(valk_lval_t* a, const char* name,
 
   if (argc == 1) {
     valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
-    if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
-      return valk_lval_err("%s: argument must be an aio_system", name);
-    }
+    LVAL_ASSERT_AIO_SYSTEM(a, sys_arg);
     *out_sys = (valk_aio_system_t *)sys_arg->ref.ptr;
   }
 
@@ -274,13 +252,9 @@ static valk_lval_t* valk_builtin_aio_schedule(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* delay_arg = valk_lval_list_nth(a, 1);
   valk_lval_t* callback = valk_lval_list_nth(a, 2);
 
-  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
+  LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
   LVAL_ASSERT_TYPE(a, delay_arg, LVAL_NUM);
   LVAL_ASSERT_TYPE(a, callback, LVAL_FUN);
-
-  if (strcmp(aio_ref->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/schedule: first argument must be an AIO system");
-  }
 
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   u64 delay_ms = (u64)delay_arg->num;
@@ -294,13 +268,9 @@ static valk_lval_t* valk_builtin_aio_interval(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* interval_arg = valk_lval_list_nth(a, 1);
   valk_lval_t* callback = valk_lval_list_nth(a, 2);
 
-  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
+  LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
   LVAL_ASSERT_TYPE(a, interval_arg, LVAL_NUM);
   LVAL_ASSERT_TYPE(a, callback, LVAL_FUN);
-
-  if (strcmp(aio_ref->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/interval: first argument must be an AIO system");
-  }
 
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   u64 interval_ms = (u64)interval_arg->num;

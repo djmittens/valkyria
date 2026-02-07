@@ -281,9 +281,7 @@ static valk_lval_t* valk_builtin_aio_retry(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t *fn = valk_lval_list_nth(a, 1);
   valk_lval_t *opts = valk_lval_list_nth(a, 2);
 
-  if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/retry: first argument must be an aio_system");
-  }
+  LVAL_ASSERT_AIO_SYSTEM(a, sys_arg);
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     return valk_lval_err("aio/retry: second argument must be a function");
   }

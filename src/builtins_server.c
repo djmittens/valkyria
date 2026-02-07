@@ -183,9 +183,7 @@ static valk_lval_t* valk_builtin_http2_client_request(valk_lenv_t* e,
   LVAL_ASSERT_COUNT_EQ(a, a, 4);
 
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "First argument must be aio_system");
+  LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
 
   valk_lval_t* host_arg = valk_lval_list_nth(a, 1);
   LVAL_ASSERT_TYPE(a, host_arg, LVAL_STR);
@@ -209,9 +207,7 @@ static valk_lval_t* valk_builtin_http2_client_request_with_headers(valk_lenv_t* 
   LVAL_ASSERT_COUNT_EQ(a, a, 5);
 
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "First argument must be aio_system");
+  LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
 
   valk_lval_t* host_arg = valk_lval_list_nth(a, 1);
   LVAL_ASSERT_TYPE(a, host_arg, LVAL_STR);
@@ -264,9 +260,7 @@ static valk_lval_t* valk_builtin_http2_connect(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 4);
 
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, aio_ref, LVAL_REF);
-  LVAL_ASSERT(a, strcmp(aio_ref->ref.type, "aio_system") == 0,
-              "First argument must be aio_system");
+  LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
 
   valk_lval_t* host_arg = valk_lval_list_nth(a, 1);
   LVAL_ASSERT_TYPE(a, host_arg, LVAL_STR);

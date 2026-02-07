@@ -83,6 +83,15 @@
               "Invalid argument count, Actual[%zu] >= Expected[%zu]", \
               valk_lval_list_count(lval), (u64)_count)
 
+#include <string.h>
+
+#define LVAL_ASSERT_AIO_SYSTEM(args, _ref)                                           \
+  do {                                                                               \
+    if (LVAL_TYPE(_ref) != LVAL_REF || strcmp((_ref)->ref.type, "aio_system") != 0) { \
+      LVAL_RAISE(args, "Expected AIO system reference");                              \
+    }                                                                                \
+  } while (0)
+
 valk_lval_t* valk_plist_get(valk_lval_t* plist, const char* key_str);
 valk_lval_t* valk_qexpr_to_cons(valk_lval_t* qexpr);
 valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a);

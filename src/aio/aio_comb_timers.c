@@ -309,9 +309,7 @@ static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t *ms_arg = valk_lval_list_nth(a, 1);
 
   // LCOV_EXCL_BR_START - type validation: compile-time checks catch most
-  if (LVAL_TYPE(sys_arg) != LVAL_REF || strcmp(sys_arg->ref.type, "aio_system") != 0) {
-    return valk_lval_err("aio/sleep: first argument must be an aio_system");
-  }
+  LVAL_ASSERT_AIO_SYSTEM(a, sys_arg);
   if (LVAL_TYPE(ms_arg) != LVAL_NUM) {
     return valk_lval_err("aio/sleep: second argument must be a number");
   }

@@ -4,6 +4,7 @@
 #include <math.h>
 #include "aio_internal.h"
 #include "aio_request_ctx.h"
+#include "builtins_internal.h"
 
 extern valk_async_status_t valk_async_handle_get_status(valk_async_handle_t *handle);
 extern void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result);
