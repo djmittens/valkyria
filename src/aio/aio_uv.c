@@ -82,6 +82,12 @@ void __event_loop(void *arg) {
 
   sys->ops->loop->run(sys, VALK_IO_RUN_DEFAULT);
 
+  // Unregister from GC before drain loop - the drain loop doesn't allocate
+  // GC-managed objects, and staying registered causes deadlock: main thread
+  // triggers GC STW, waits for this thread to respond, but gc_wakeup is
+  // skipped (shuttingDown=true) so this thread never enters safe_point.
+  valk_gc_thread_unregister();
+
   // =========================================================================
   // Graceful Shutdown (modeled after Finagle/Netty)
   // =========================================================================
@@ -158,8 +164,6 @@ void __event_loop(void *arg) {
     valk_gc_malloc_heap_destroy(sys->loop_gc_heap);
     sys->loop_gc_heap = nullptr;
   }
-  
-  valk_gc_thread_unregister();
 }
 
 static void __uv_handle_closed_cb(uv_handle_t *handle) {

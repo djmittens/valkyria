@@ -245,16 +245,16 @@ void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result
   VALK_DEBUG("valk_async_handle_complete: handle=%p, id=%llu", (void*)handle, handle ? handle->id : 0);
   if (!handle) return;
 
+  valk_async_status_t current = valk_async_handle_get_status(handle);
+  if (valk_async_handle_is_terminal(current)) {
+    VALK_DEBUG("  handle already in terminal state: %d", current);
+    return;
+  }
+
   if (valk_async_is_resource_closed(handle)) {
     VALK_INFO("Async handle %llu: resource closed during completion, aborting", (unsigned long long)handle->id);
     valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_CANCELLED);
     valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, VALK_ASYNC_CANCELLED);
-    return;
-  }
-
-  valk_async_status_t current = valk_async_handle_get_status(handle);
-  if (valk_async_handle_is_terminal(current)) {
-    VALK_DEBUG("  handle already in terminal state: %d", current);
     return;
   }
 
@@ -276,15 +276,15 @@ void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result
 void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
   if (!handle) return;
 
+  valk_async_status_t current = valk_async_handle_get_status(handle);
+  if (valk_async_handle_is_terminal(current)) {
+    return;
+  }
+
   if (valk_async_is_resource_closed(handle)) {
     VALK_INFO("Async handle %llu: resource closed during failure, aborting", (unsigned long long)handle->id);
     valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_CANCELLED);
     valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, VALK_ASYNC_CANCELLED);
-    return;
-  }
-
-  valk_async_status_t current = valk_async_handle_get_status(handle);
-  if (valk_async_handle_is_terminal(current)) {
     return;
   }
 
