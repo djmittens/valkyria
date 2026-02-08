@@ -89,8 +89,8 @@ static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, formals, LVAL_CONS, LVAL_QEXPR, LVAL_NIL); // LCOV_EXCL_BR_LINE
   LVAL_ASSERT_TYPE(a, body, LVAL_CONS, LVAL_QEXPR, LVAL_NIL); // LCOV_EXCL_BR_LINE
 
-  for (u64 i = 0; i < valk_lval_list_count(formals); i++) {
-    LVAL_ASSERT(a, LVAL_TYPE(valk_lval_list_nth(formals, i)) == LVAL_SYM,
+  for (u64 i = 0; i < valk_lval_list_count(formals); i++) { // LCOV_EXCL_BR_LINE
+    LVAL_ASSERT(a, LVAL_TYPE(valk_lval_list_nth(formals, i)) == LVAL_SYM, // LCOV_EXCL_BR_LINE
                 "Cannot use a non symbol[%s] for bind",
                 valk_ltype_name(LVAL_TYPE(valk_lval_list_nth(formals, i))));
   }
@@ -115,51 +115,6 @@ static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a) {
   return res;
 }
 
-// LCOV_EXCL_START - valk_builtin_if is superseded by special form in evaluator
-static valk_lval_t* valk_builtin_if(valk_lenv_t* e, valk_lval_t* a) {
-  LVAL_ASSERT_COUNT_EQ(a, a, 3);
-  valk_lval_t* cond_val = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, cond_val, LVAL_NUM);
-  valk_lval_t* true_branch = valk_lval_list_nth(a, 1);
-  valk_lval_t* false_branch = valk_lval_list_nth(a, 2);
-  LVAL_ASSERT_TYPE(a, true_branch, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
-  LVAL_ASSERT_TYPE(a, false_branch, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
-
-  valk_lval_t* branch;
-  bool condition = cond_val->num != 0;
-#ifdef VALK_COVERAGE
-  if (true_branch->cov_file_id != 0 && true_branch->cov_line != 0) {
-    valk_coverage_mark_expr(true_branch->cov_file_id, true_branch->cov_line,
-                            true_branch->cov_column, 0);
-  }
-  if (false_branch->cov_file_id != 0 && false_branch->cov_line != 0) {
-    valk_coverage_mark_expr(false_branch->cov_file_id, false_branch->cov_line,
-                            false_branch->cov_column, 0);
-  }
-  u16 file_id = true_branch->cov_file_id;
-  u16 line = true_branch->cov_line;
-  if (file_id == 0 || line == 0) {
-    file_id = false_branch->cov_file_id;
-    line = false_branch->cov_line;
-  }
-  VALK_COVERAGE_RECORD_BRANCH(file_id, line, condition);
-#endif
-  if (condition) {
-    branch = true_branch;
-  } else {
-    branch = false_branch;
-  }
-
-  if (LVAL_TYPE(branch) == LVAL_CONS && (branch->flags & LVAL_FLAG_QUOTED)) {
-    VALK_COVERAGE_RECORD_LVAL(branch);
-    branch = valk_qexpr_to_cons(branch);
-  }
-
-  return valk_lval_eval(e, branch);
-}
-// LCOV_EXCL_STOP
-
-// LCOV_EXCL_START - select is superseded by special form in evaluator
 static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
   u64 count = valk_lval_list_count(a);
   if (count == 0) {
@@ -168,13 +123,14 @@ static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
 
   for (u64 i = 0; i < count; i++) {
     valk_lval_t* clause = valk_lval_list_nth(a, i);
-    LVAL_ASSERT_TYPE(a, clause, LVAL_CONS, LVAL_QEXPR);
+    LVAL_ASSERT_TYPE(a, clause, LVAL_CONS, LVAL_QEXPR); // LCOV_EXCL_BR_LINE
 
 #ifdef VALK_COVERAGE
     u16 file_id = clause->cov_file_id;
     u16 line = clause->cov_line;
 #endif
 
+    // LCOV_EXCL_BR_START - select clause dispatch: quoted/unquoted, coverage instrumentation
     if (LVAL_TYPE(clause) == LVAL_CONS && (clause->flags & LVAL_FLAG_QUOTED)) {
       clause = valk_qexpr_to_cons(clause);
     }
@@ -206,11 +162,11 @@ static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
       }
       return valk_lval_eval(e, result_expr);
     }
+    // LCOV_EXCL_BR_STOP
   }
 
   return valk_lval_err("No selection found");
 }
-// LCOV_EXCL_STOP
 
 static valk_lval_t* valk_builtin_do(valk_lenv_t* e, valk_lval_t* a) {
   u64 count = valk_lval_list_count(a);
@@ -233,7 +189,6 @@ void valk_register_env_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "=", valk_builtin_put);
   valk_lenv_put_builtin(env, "\\", valk_builtin_lambda);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
-  valk_lenv_put_builtin(env, "if", valk_builtin_if);
   valk_lenv_put_builtin(env, "select", valk_builtin_select);
   valk_lenv_put_builtin(env, "do", valk_builtin_do);
 }

@@ -69,40 +69,4 @@ bool valk_thread_equal(valk_thread_t a, valk_thread_t b) {
   return pthread_equal(a, b) != 0;
 }
 
-// LCOV_EXCL_START - Platform-specific thread naming (macOS vs Linux vs other)
-int valk_thread_setname(valk_thread_t thread, const char* name) {
-#if defined(__APPLE__)
-  (void)thread;
-  return pthread_setname_np(name);
-#elif defined(__linux__)
-  return pthread_setname_np(thread, name);
-#else
-  (void)thread;
-  (void)name;
-  return ENOSYS;
-#endif
-}
-
-int valk_thread_getname(valk_thread_t thread, char* buf, u64 len) {
-#if defined(__APPLE__) || defined(__linux__)
-  return pthread_getname_np(thread, buf, len);
-#else
-  (void)thread;
-  if (len > 0) buf[0] = '\0';
-  return ENOSYS;
-#endif
-}
-// LCOV_EXCL_STOP
-
-// LCOV_EXCL_START - Thread attribute functions not currently used in codebase
-int valk_thread_attr_init(valk_thread_attr_t* attr) {
-  return pthread_attr_init(attr);
-}
-
-int valk_thread_attr_setdetached(valk_thread_attr_t* attr, bool detached) {
-  return pthread_attr_setdetachstate(attr, 
-    detached ? PTHREAD_CREATE_DETACHED : PTHREAD_CREATE_JOINABLE);
-}
-// LCOV_EXCL_STOP
-
 #endif

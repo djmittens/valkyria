@@ -576,13 +576,98 @@
      (aio/stop sys)
      (== cancelled (quote :true))
    })
-   (test "aio/never in race with immediate value"
-     {do
-     (= {sys} (aio/await (aio/start)))
-     (def {never-handle} (aio/never sys))
-     (def {immediate-handle} (aio/pure 42))
-     (def {race-result} (aio/race (list never-handle immediate-handle)))
-     (aio/stop sys)
-     (== (aio/status race-result) (quote :completed))
-   }))
-   {:suite-name "AIO Builtins Coverage Tests"})
+    (test "aio/never in race with immediate value"
+      {do
+      (= {sys} (aio/await (aio/start)))
+      (def {never-handle} (aio/never sys))
+      (def {immediate-handle} (aio/pure 42))
+      (def {race-result} (aio/race (list never-handle immediate-handle)))
+      (aio/stop sys)
+      (== (aio/status race-result) (quote :completed))
+    })
+
+    ; ============================================================================
+    ; aio/then - transform error path (fn returns error)
+    ; ============================================================================
+    (test "aio/then transform that returns error"
+      {do
+      (def {h} (aio/pure 5))
+      (def {h2} (aio/then h (\ {x} {(error "transform error")})))
+      (== (aio/status h2) (quote :failed))
+    })
+
+    ; ============================================================================
+    ; aio/catch - recovery returns non-handle value
+    ; ============================================================================
+    (test "aio/catch recovery returns plain value"
+      {do
+      (def {h} (aio/fail "error"))
+      (def {h2} (aio/catch h (\ {err} {42})))
+      (== (aio/status h2) (quote :completed))
+    })
+    (test "aio/catch recovery returns error"
+      {do
+      (def {h} (aio/fail "error"))
+      (def {h2} (aio/catch h (\ {err} {(error "recovery error")})))
+      (== (aio/status h2) (quote :failed))
+    })
+
+    ; ============================================================================
+    ; aio/result - extract result from completed handle
+    ; ============================================================================
+    (test "aio/result on completed handle"
+      {do
+      (def {h} (aio/pure 42))
+      (== (aio/result h) 42)
+    })
+    (test "aio/result on failed handle returns error"
+      {do
+      (= {result} (aio/result (aio/fail "oops")))
+      (error? result)
+    })
+    (test "aio/result with string value"
+      {do
+      (def {h} (aio/pure "hello"))
+      (== (aio/result h) "hello")
+    })
+
+    (test "aio/result with no args returns error"
+      {do
+      (= {result} (aio/result))
+      (error? result)
+    })
+    (test "aio/result with non-handle returns error"
+      {do
+      (= {result} (aio/result 42))
+      (error? result)
+    })
+
+    ; ============================================================================
+    ; aio/error - extract error from failed handle
+    ; ============================================================================
+    (test "aio/error on failed handle"
+      {do
+      (def {h} (aio/fail "bad"))
+      (== (aio/error h) "bad")
+    })
+    (test "aio/error on completed handle returns error"
+      {do
+      (= {result} (aio/error (aio/pure 42)))
+      (error? result)
+    })
+    (test "aio/error with symbol error"
+      {do
+      (def {h} (aio/fail (quote :timeout)))
+      (== (aio/error h) (quote :timeout))
+    })
+    (test "aio/error with no args returns error"
+      {do
+      (= {result} (aio/error))
+      (error? result)
+    })
+    (test "aio/error with non-handle returns error"
+      {do
+      (= {result} (aio/error 42))
+      (error? result)
+    }))
+    {:suite-name "AIO Builtins Coverage Tests"})

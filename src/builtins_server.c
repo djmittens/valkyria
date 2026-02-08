@@ -290,25 +290,6 @@ static valk_lval_t* valk_builtin_http2_connect(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_nil();
 }
 
-static valk_lval_t* valk_builtin_http2_request_on_conn(valk_lenv_t* e, valk_lval_t* a) {
-  LVAL_ASSERT_COUNT_EQ(a, a, 3);
-
-  valk_lval_t* client_ref = valk_lval_list_nth(a, 0);
-  LVAL_ASSERT_TYPE(a, client_ref, LVAL_REF);
-  LVAL_ASSERT(a, strcmp(client_ref->ref.type, "http2_client") == 0,
-              "First argument must be http2_client");
-
-  valk_lval_t* path_arg = valk_lval_list_nth(a, 1);
-  LVAL_ASSERT_TYPE(a, path_arg, LVAL_STR);
-
-  valk_lval_t* callback = valk_lval_list_nth(a, 2);
-  LVAL_ASSERT_TYPE(a, callback, LVAL_FUN);
-
-  valk_aio_http2_client* client = client_ref->ref.ptr;
-  const char* path = path_arg->str;
-
-  return valk_http2_client_request_on_conn_impl(e, client, path, callback);
-}
 // LCOV_EXCL_STOP
 
 void valk_register_server_builtins(valk_lenv_t* env) {
@@ -326,6 +307,4 @@ void valk_register_server_builtins(valk_lenv_t* env) {
                         valk_builtin_http2_client_request_with_headers);
   valk_lenv_put_builtin(env, "http2/connect",
                         valk_builtin_http2_connect);
-  valk_lenv_put_builtin(env, "http2/request-on-conn",
-                        valk_builtin_http2_request_on_conn);
 }

@@ -530,19 +530,6 @@ apply_cont:
           valk_lval_t* func = value;
           valk_lval_t* remaining = frame.eval_args.remaining;
           
-          // LCOV_EXCL_START - dead code: CONT_EVAL_ARGS is only pushed when count > 1
-          if (valk_lval_list_is_empty(remaining)) {
-            valk_eval_result_t res = valk_eval_apply_func_iter(frame.env, func, valk_lval_nil());
-            if (!res.is_thunk) {
-              value = res.value;
-              goto apply_cont;
-            } else {
-              SETUP_THUNK_CONTINUATION(res, &stack, frame.env, expr, cur_env);
-              continue;
-            }
-          }
-          // LCOV_EXCL_STOP
-          
           u64 arg_count = valk_lval_list_count(remaining);
           valk_lval_t** args = malloc(sizeof(valk_lval_t*) * arg_count);
           
@@ -612,25 +599,6 @@ apply_cont:
           cur_env = frame.env;
           continue;
         }
-        
-        // LCOV_EXCL_START - Dead code: CONT_DO_NEXT is never initialized (do is a builtin)
-        case CONT_DO_NEXT: {
-          if (LVAL_TYPE(value) == LVAL_ERR) goto apply_cont;
-
-          if (valk_lval_list_is_empty(frame.do_next.remaining)) {
-            goto apply_cont;
-          }
-
-          valk_eval_stack_push(&stack, (valk_cont_frame_t){
-            .kind = CONT_DO_NEXT,
-            .env = frame.env,
-            .do_next = {.remaining = frame.do_next.remaining->cons.tail}
-          });
-          expr = frame.do_next.remaining->cons.head;
-          cur_env = frame.env;
-          continue;
-        }
-        // LCOV_EXCL_STOP
         
         case CONT_BODY_NEXT: {
           if (LVAL_TYPE(value) == LVAL_ERR) {

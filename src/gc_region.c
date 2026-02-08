@@ -227,22 +227,21 @@ bool valk_region_write_barrier(void *parent_allocator, void *child_allocator,
 }
 // LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START - region copy requires specific inter-region promotion scenario with complex values
 static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_t *src,
                                                 valk_ptr_map_t *copied) {
-  if (!src) return nullptr;
+  if (!src) return nullptr; // LCOV_EXCL_BR_LINE - null elements in recursive copy
 
   valk_lval_t *existing = valk_ptr_map_get(copied, src);
-  if (existing) return existing;
+  if (existing) return existing; // LCOV_EXCL_BR_LINE - shared references in recursive copy
 
   valk_lifetime_e src_lifetime = valk_allocator_lifetime(src->origin_allocator);
-  if (valk_lifetime_can_reference(target->lifetime, src_lifetime)) {
+  if (valk_lifetime_can_reference(target->lifetime, src_lifetime)) { // LCOV_EXCL_BR_LINE - mixed-lifetime structures
     return src;
   }
 
   sz lval_size = sizeof(valk_lval_t);
   valk_lval_t *copy = valk_region_alloc(target, lval_size);
-  if (!copy) return nullptr;
+  if (!copy) return nullptr; // LCOV_EXCL_BR_LINE - OOM
 
   memcpy(copy, src, lval_size);
   copy->origin_allocator = target;
@@ -261,7 +260,7 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
       if (src->fun.name) {
         sz len = strlen(src->fun.name) + 1;
         copy->fun.name = valk_region_alloc(target, len);
-        if (copy->fun.name) memcpy(copy->fun.name, src->fun.name, len);
+        if (copy->fun.name) memcpy(copy->fun.name, src->fun.name, len); // LCOV_EXCL_BR_LINE - OOM
       }
       copy->fun.formals = region_copy_lval_recursive(target, src->fun.formals, copied);
       copy->fun.body = region_copy_lval_recursive(target, src->fun.body, copied);
@@ -273,7 +272,7 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
       if (src->str) {
         sz len = strlen(src->str) + 1;
         copy->str = valk_region_alloc(target, len);
-        if (copy->str) memcpy(copy->str, src->str, len);
+        if (copy->str) memcpy(copy->str, src->str, len); // LCOV_EXCL_BR_LINE - OOM
       }
       break;
 
@@ -286,7 +285,6 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
 
   return copy;
 }
-// LCOV_EXCL_STOP
 
 valk_lval_t *valk_region_promote_lval(valk_region_t *target, valk_lval_t *val) {
   if (!target || !val) return val; // LCOV_EXCL_BR_LINE

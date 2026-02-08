@@ -43,5 +43,24 @@
     (aio/stop sys)
     (def {status} (aio/status h))
     (not (== status nil))
+    })
+  (test "aio/retry with wrong arg count returns error"
+    {do
+    (= {result} (aio/retry))
+    (error? result)
+    })
+  (test "aio/retry with non-function second arg returns error"
+    {do
+    (def {sys} (aio/await (aio/start)))
+    (= {result} (aio/retry sys 42 {:max-attempts 1}))
+    (aio/stop sys)
+    (error? result)
+    })
+  (test "aio/retry with non-qexpr third arg returns error"
+    {do
+    (def {sys} (aio/await (aio/start)))
+    (= {result} (aio/retry sys (\ {} {(aio/pure 1)}) 42))
+    (aio/stop sys)
+    (error? result)
     }))
   {:suite-name "aio/retry Tests"})

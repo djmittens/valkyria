@@ -94,7 +94,6 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
   fprintf(stderr, "Emergency GCs:    %llu\n", (unsigned long long)heap->stats.emergency_collections);
 
   fprintf(stderr, "--- Per-Class Usage ---\n");
-  // LCOV_EXCL_START - conditional output formatting for debug/diagnostic use
   for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     if (stats.class_total_slots[c] > 0) {
       u64 pct = (stats.class_used_slots[c] * 100) / stats.class_total_slots[c];
@@ -104,6 +103,7 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
     }
   }
 
+  // LCOV_EXCL_START - evacuation stats only appear after checkpoint
   if (heap->stats.evacuations_from_scratch > 0) {
     fprintf(stderr, "--- Evacuation Stats ---\n");
     fprintf(stderr, "Values evacuated: %llu\n", (unsigned long long)heap->stats.evacuations_from_scratch);

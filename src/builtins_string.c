@@ -136,7 +136,6 @@ static valk_lval_t* valk_builtin_printf(valk_lenv_t* e, valk_lval_t* a) {
   const char* fmt = valk_lval_list_nth(a, 0)->str;
   u64 arg_idx = 1;
 
-  // LCOV_EXCL_BR_START - printf format parsing: many format specifier branches
   for (const char* p = fmt; *p != '\0'; p++) {
     if (*p == '%' && *(p + 1) != '\0') {
       p++;
@@ -181,7 +180,6 @@ static valk_lval_t* valk_builtin_printf(valk_lenv_t* e, valk_lval_t* a) {
       putchar(*p);
     }
   }
-  // LCOV_EXCL_BR_STOP
 
   return valk_lval_nil();
 }

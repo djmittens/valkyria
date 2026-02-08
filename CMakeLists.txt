@@ -105,7 +105,10 @@ set(VALKYRIA_SOURCES
 
   src/gc.c
   src/gc_heap.c
+  src/gc_heap_sweep.c
+  src/gc_heap_lifecycle.c
   src/gc_evacuation.c
+  src/gc_checkpoint.c
   src/gc_mark.c
   src/gc_region.c
   src/gc_stats.c
@@ -124,6 +127,10 @@ set(VALKYRIA_SOURCES
   src/aio/aio_comb_propagate.c
   src/aio/aio_comb_chain.c
   src/aio/aio_comb_collection.c
+  src/aio/aio_comb_all.c
+  src/aio/aio_comb_race.c
+  src/aio/aio_comb_any.c
+  src/aio/aio_comb_all_settled.c
   src/aio/aio_comb_resource.c
   src/aio/aio_comb_timeout.c
   src/aio/aio_comb_util.c

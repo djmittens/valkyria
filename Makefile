@@ -315,6 +315,7 @@ define run_tests_valk
 	$(1)/valk test/test_large_response.valk
 	$(1)/valk test/test_aio_never.valk
 	$(1)/valk test/test_aio_traverse.valk
+	$(1)/valk test/test_aio_all_settled.valk
 	$(1)/valk test/test_interval_cancel.valk
 	$(1)/valk test/test_sse_format.valk
 	$(1)/valk test/test_sse_reconnect_minimal.valk
@@ -463,7 +464,8 @@ VALK_TESTS_LIST = \
 	test/test_parser_branch_coverage.valk test/test_parser_coverage_supplement.valk \
 	test/test_gc_and_log_builtins.valk test/test_large_download.valk \
 	test/test_large_response.valk test/test_aio_never.valk \
-	test/test_aio_traverse.valk test/test_interval_cancel.valk \
+	test/test_aio_traverse.valk test/test_aio_all_settled.valk \
+	test/test_interval_cancel.valk \
 	test/test_sse_format.valk test/test_sse_reconnect_minimal.valk \
 	test/test_printf_closure_bug.valk test/test_metrics_prometheus.valk \
 	test/test_overload.valk test/test_overload_metrics.valk \

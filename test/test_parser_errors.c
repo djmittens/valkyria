@@ -2880,6 +2880,124 @@ static void test_aio_traverse_list_arg_not_list(VALK_TEST_ARGS()) {
 }
 
 // ============================================================================
+// Coverage Gap Tests: builtins_string.c (printf format parsing)
+// ============================================================================
+
+static void test_printf_format_int(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"%d\" 42)");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_printf_format_ld(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"%ld\" 99)");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_printf_format_string(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"%s\" \"hello\")");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_printf_format_percent(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"100%%\")");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_printf_format_multiple(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"%s=%d\" \"x\" 42)");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_printf_format_default(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"%z\")");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+static void test_printf_format_not_enough_args_d(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"%d\")");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "not enough arguments");
+
+  VALK_PASS();
+}
+
+static void test_printf_format_not_enough_args_s(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"%s\")");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "not enough arguments");
+
+  VALK_PASS();
+}
+
+static void test_printf_format_wrong_type_s(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"%s\" 42)");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "requires string");
+
+  VALK_PASS();
+}
+
+static void test_printf_format_wrong_type_d(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"%d\" \"hello\")");
+  ASSERT_LVAL_ERROR(result);
+  ASSERT_STR_CONTAINS(result->str, "requires number");
+
+  VALK_PASS();
+}
+
+static void test_printf_plain_text(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  valk_lval_t *result = parse_and_eval("(printf \"hello world\")");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
+
+  VALK_PASS();
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -3168,6 +3286,19 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_aio_traverse_wrong_count", test_aio_traverse_wrong_count);
   valk_testsuite_add_test(suite, "test_aio_traverse_fn_arg_wrong_type", test_aio_traverse_fn_arg_wrong_type);
   valk_testsuite_add_test(suite, "test_aio_traverse_list_arg_not_list", test_aio_traverse_list_arg_not_list);
+
+  // Coverage gap tests: builtins_string.c (printf format parsing)
+  valk_testsuite_add_test(suite, "test_printf_format_int", test_printf_format_int);
+  valk_testsuite_add_test(suite, "test_printf_format_ld", test_printf_format_ld);
+  valk_testsuite_add_test(suite, "test_printf_format_string", test_printf_format_string);
+  valk_testsuite_add_test(suite, "test_printf_format_percent", test_printf_format_percent);
+  valk_testsuite_add_test(suite, "test_printf_format_multiple", test_printf_format_multiple);
+  valk_testsuite_add_test(suite, "test_printf_format_default", test_printf_format_default);
+  valk_testsuite_add_test(suite, "test_printf_format_not_enough_args_d", test_printf_format_not_enough_args_d);
+  valk_testsuite_add_test(suite, "test_printf_format_not_enough_args_s", test_printf_format_not_enough_args_s);
+  valk_testsuite_add_test(suite, "test_printf_format_wrong_type_s", test_printf_format_wrong_type_s);
+  valk_testsuite_add_test(suite, "test_printf_format_wrong_type_d", test_printf_format_wrong_type_d);
+  valk_testsuite_add_test(suite, "test_printf_format_plain_text", test_printf_plain_text);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

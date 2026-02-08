@@ -1878,6 +1878,147 @@ void test_region_promote_lval(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_region_promote_lval_string(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
+  valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
+
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)request) {
+    valk_lval_t *str = valk_lval_str("hello world");
+    ASSERT_NOT_NULL(str);
+
+    valk_lval_t *promoted = valk_region_promote_lval(session, str);
+    ASSERT_NOT_NULL(promoted);
+    ASSERT_LVAL_STR(promoted, "hello world");
+    ASSERT_EQ(promoted->origin_allocator, session);
+  }
+
+  valk_region_destroy(request);
+  valk_region_destroy(session);
+
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_region_promote_lval_symbol(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
+  valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
+
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)request) {
+    valk_lval_t *sym = valk_lval_sym("my-symbol");
+    ASSERT_NOT_NULL(sym);
+
+    valk_lval_t *promoted = valk_region_promote_lval(session, sym);
+    ASSERT_NOT_NULL(promoted);
+    ASSERT_EQ(LVAL_TYPE(promoted), LVAL_SYM);
+    ASSERT_STR_CONTAINS(promoted->str, "my-symbol");
+    ASSERT_EQ(promoted->origin_allocator, session);
+  }
+
+  valk_region_destroy(request);
+  valk_region_destroy(session);
+
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_region_promote_lval_cons(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
+  valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
+
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)request) {
+    valk_lval_t *list = valk_lval_cons(valk_lval_num(1),
+                          valk_lval_cons(valk_lval_num(2), valk_lval_nil()));
+    ASSERT_NOT_NULL(list);
+
+    valk_lval_t *promoted = valk_region_promote_lval(session, list);
+    ASSERT_NOT_NULL(promoted);
+    ASSERT_EQ(LVAL_TYPE(promoted), LVAL_CONS);
+    ASSERT_EQ(promoted->origin_allocator, session);
+
+    valk_lval_t *head = promoted->cons.head;
+    ASSERT_NOT_NULL(head);
+    ASSERT_LVAL_NUM(head, 1);
+  }
+
+  valk_region_destroy(request);
+  valk_region_destroy(session);
+
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_region_promote_lval_error(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
+  valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
+
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)request) {
+    valk_lval_t *err = valk_lval_err("test error message");
+    ASSERT_NOT_NULL(err);
+
+    valk_lval_t *promoted = valk_region_promote_lval(session, err);
+    ASSERT_NOT_NULL(promoted);
+    ASSERT_EQ(LVAL_TYPE(promoted), LVAL_ERR);
+    ASSERT_STR_CONTAINS(promoted->str, "test error message");
+    ASSERT_EQ(promoted->origin_allocator, session);
+  }
+
+  valk_region_destroy(request);
+  valk_region_destroy(session);
+
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
+void test_region_promote_lval_lambda(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_runtime_init(&cfg);
+
+  valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
+  valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
+
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)request) {
+    valk_lenv_t *env = valk_lenv_empty();
+    valk_lval_t *formals = valk_lval_qcons(valk_lval_sym("x"), valk_lval_nil());
+    valk_lval_t *body = valk_lval_cons(valk_lval_sym("+"), valk_lval_cons(valk_lval_sym("x"), valk_lval_cons(valk_lval_num(1), valk_lval_nil())));
+    valk_lval_t *lambda = valk_lval_lambda(env, formals, body);
+    ASSERT_NOT_NULL(lambda);
+    ASSERT_EQ(LVAL_TYPE(lambda), LVAL_FUN);
+
+    valk_lval_t *promoted = valk_region_promote_lval(session, lambda);
+    ASSERT_NOT_NULL(promoted);
+    ASSERT_EQ(LVAL_TYPE(promoted), LVAL_FUN);
+    ASSERT_EQ(promoted->origin_allocator, session);
+  }
+
+  valk_region_destroy(request);
+  valk_region_destroy(session);
+
+  valk_runtime_shutdown();
+  VALK_PASS();
+}
+
 void test_region_init_embedded(VALK_TEST_ARGS()) {
   VALK_TEST();
   
@@ -2249,6 +2390,64 @@ void test_bitmap_delta_compute_size_mismatch(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// ============================================================================
+// Coverage Gap Tests: gc_stats.c per-class usage loop
+// ============================================================================
+
+void test_gc_heap_print_stats_with_allocations(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_malloc_heap_t *heap = valk_gc_heap2_create(1024 * 1024);
+  ASSERT_NOT_NULL(heap);
+
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)heap;
+  valk_thread_ctx.heap = heap;
+
+  VALK_WITH_ALLOC((void *)heap) {
+    for (int i = 0; i < 10; i++) {
+      void *p = valk_gc_heap2_alloc(heap, 32);
+      ASSERT_NOT_NULL(p);
+    }
+  }
+
+  valk_gc_malloc_print_stats(heap);
+
+  valk_thread_ctx = old_ctx;
+  valk_gc_heap2_destroy(heap);
+  VALK_PASS();
+}
+
+// ============================================================================
+// Coverage Gap Tests: gc_heap.c large object realloc
+// ============================================================================
+
+void test_gc_heap_large_object_realloc(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_malloc_heap_t *heap = valk_gc_heap2_create(4 * 1024 * 1024);
+  ASSERT_NOT_NULL(heap);
+
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)heap;
+  valk_thread_ctx.heap = heap;
+
+  void *large = valk_gc_heap2_alloc(heap, 64 * 1024);
+  ASSERT_NOT_NULL(large);
+  memset(large, 0xAB, 64 * 1024);
+
+  void *resized = valk_gc_heap2_realloc(heap, large, 128 * 1024);
+  ASSERT_NOT_NULL(resized);
+
+  u8 *bytes = (u8 *)resized;
+  ASSERT_EQ(bytes[0], 0xAB);
+  ASSERT_EQ(bytes[1000], 0xAB);
+
+  valk_thread_ctx = old_ctx;
+  valk_gc_heap2_destroy(heap);
+  VALK_PASS();
+}
+
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
@@ -2345,6 +2544,11 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_allocator_lifetime_detection", test_allocator_lifetime_detection);
   valk_testsuite_add_test(suite, "test_region_write_barrier", test_region_write_barrier);
   valk_testsuite_add_test(suite, "test_region_promote_lval", test_region_promote_lval);
+  valk_testsuite_add_test(suite, "test_region_promote_lval_string", test_region_promote_lval_string);
+  valk_testsuite_add_test(suite, "test_region_promote_lval_symbol", test_region_promote_lval_symbol);
+  valk_testsuite_add_test(suite, "test_region_promote_lval_cons", test_region_promote_lval_cons);
+  valk_testsuite_add_test(suite, "test_region_promote_lval_error", test_region_promote_lval_error);
+  valk_testsuite_add_test(suite, "test_region_promote_lval_lambda", test_region_promote_lval_lambda);
   valk_testsuite_add_test(suite, "test_region_init_embedded", test_region_init_embedded);
 
   // Branch coverage improvement tests
@@ -2359,6 +2563,10 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_buffer_is_full", test_buffer_is_full);
   valk_testsuite_add_test(suite, "test_slab_bitmap_snapshot_no_bitmap", test_slab_bitmap_snapshot_no_bitmap);
   valk_testsuite_add_test(suite, "test_bitmap_delta_compute_size_mismatch", test_bitmap_delta_compute_size_mismatch);
+
+  // Coverage gap tests
+  valk_testsuite_add_test(suite, "test_gc_heap_print_stats_with_allocations", test_gc_heap_print_stats_with_allocations);
+  valk_testsuite_add_test(suite, "test_gc_heap_large_object_realloc", test_gc_heap_large_object_realloc);
 
   // load fixtures
   // valk_lval_t *ast = valk_parse_file("src/prelude.valk");

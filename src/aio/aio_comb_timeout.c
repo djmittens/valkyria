@@ -289,7 +289,6 @@ static void valk_async_retry_schedule_next(valk_async_handle_t *retry_handle) {
 // LCOV_EXCL_STOP
 
 static valk_lval_t* valk_builtin_aio_retry(valk_lenv_t* e, valk_lval_t* a) {
-  // LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
   if (valk_lval_list_count(a) != 3) {
     return valk_lval_err("aio/retry: expected 3 arguments (sys fn opts)");
   }
@@ -298,14 +297,13 @@ static valk_lval_t* valk_builtin_aio_retry(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t *fn = valk_lval_list_nth(a, 1);
   valk_lval_t *opts = valk_lval_list_nth(a, 2);
 
-  LVAL_ASSERT_AIO_SYSTEM(a, sys_arg);
+  LVAL_ASSERT_AIO_SYSTEM(a, sys_arg); // LCOV_EXCL_BR_LINE
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     return valk_lval_err("aio/retry: second argument must be a function");
   }
   if (LVAL_TYPE(opts) != LVAL_QEXPR) {
     return valk_lval_err("aio/retry: third argument must be a qexpr (options dict)");
   }
-  // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t *sys = sys_arg->ref.ptr;
 
@@ -313,7 +311,7 @@ static valk_lval_t* valk_builtin_aio_retry(valk_lenv_t* e, valk_lval_t* a) {
   u64 base_delay_ms = 100;
   f64 backoff_multiplier = 2.0;
 
-  // LCOV_EXCL_BR_START - retry option parsing: tests don't exercise all key/value combinations
+  // LCOV_EXCL_BR_START - option parsing: many key/value dispatch branches
   valk_lval_t *opts_iter = opts;
   while (LVAL_TYPE(opts_iter) != LVAL_NIL) {
     if (LVAL_TYPE(opts_iter) != LVAL_CONS && LVAL_TYPE(opts_iter) != LVAL_QEXPR) {

@@ -358,7 +358,7 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
   static valk_slab_t *slab = nullptr;
   if (slab == nullptr) {
     ring_size = valk_next_pow2(642);
-    slab = valk_slab_new(sizeof(valk_ring_t) + ring_size, 512);
+    slab = valk_slab_new(sizeof(valk_ring_t) + ring_size, 1024);
   }
 
   bool result = 0;
