@@ -319,6 +319,7 @@ struct valk_aio_system {
   valk_region_t system_region;
 
   _Atomic bool shuttingDown;
+  bool threadJoined;
   bool cleanedUp;
 
   valk_gc_malloc_heap_t *loop_gc_heap;

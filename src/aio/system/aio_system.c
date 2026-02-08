@@ -345,8 +345,10 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
 
   valk_aio_unregister_system(sys);
 
-  if (!valk_thread_equal(valk_thread_self(), (valk_thread_t)sys->loopThread)) {
+  if (!sys->threadJoined &&
+      !valk_thread_equal(valk_thread_self(), (valk_thread_t)sys->loopThread)) {
     uv_thread_join(&sys->loopThread);
+    sys->threadJoined = true;
   }
 
   free(sys->http_queue.request_items);

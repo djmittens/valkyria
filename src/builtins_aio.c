@@ -85,16 +85,17 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
 
   valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
-  (void)valk_thread_ctx.heap;
 
   while (!valk_aio_is_shutting_down(sys)) { // LCOV_EXCL_BR_LINE - run loop exit condition
     VALK_GC_SAFE_POINT();
     uv_sleep(100);
   }
 
-  valk_aio_wait_for_shutdown(sys);
-
-  aio_ref->ref.ptr = nullptr;
+  if (!sys->threadJoined &&
+      !valk_thread_equal(valk_thread_self(), (valk_thread_t)sys->loopThread)) {
+    uv_thread_join(&sys->loopThread);
+    sys->threadJoined = true;
+  }
 
   return valk_lval_nil();
 }
@@ -307,27 +308,16 @@ static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
     LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
     code = (int)valk_lval_list_nth(a, 0)->num;
   }
-  valk_lval_t* mode = valk_lenv_get(e, valk_lval_sym("VALK_MODE"));
-  int has_mode = (LVAL_TYPE(mode) == LVAL_STR);
 
-  if (has_mode &&
-      (strcmp(mode->str, "repl") == 0 || strcmp(mode->str, "test") == 0)) {
-    return valk_lval_num(code);
-  }
+  valk_lenv_def(e, valk_lval_sym("VALK_EXIT_CODE"), valk_lval_num(code));
 
-  // LCOV_EXCL_START - exit path terminates process
   valk_lval_t* val = valk_lenv_get(e, valk_lval_sym("aio"));
   if (LVAL_TYPE(val) != LVAL_ERR && LVAL_TYPE(val) == LVAL_REF &&
       strcmp(val->ref.type, "aio_system") == 0 && val->ref.ptr) {
     valk_aio_stop((valk_aio_system_t*)val->ref.ptr);
   }
 
-  fflush(stdout);
-  fflush(stderr);
-  printf("About to exit with code %d\n", code);
-  fflush(stdout);
-  exit(code);
-  // LCOV_EXCL_STOP
+  return valk_lval_num(code);
 }
 
 void valk_register_aio_builtins(valk_lenv_t* env) {

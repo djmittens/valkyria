@@ -372,6 +372,8 @@ bool valk_async_handle_cancel(valk_async_handle_t *handle) {
     return false;
   }
 
+  atomic_store_explicit(&handle->cancel_requested, 1, memory_order_release);
+
   valk_aio_system_t *sys = handle->sys;
   if (sys) {
     if (uv_thread_self() == sys->loopThread) {

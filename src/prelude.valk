@@ -213,7 +213,7 @@
 ; Get value for key from plist, returns nil if not found
 ; Usage: (plist/get {:name "Alice" :age 30} :name) => "Alice"
 (fun {plist/get pl key} {
-  if (== pl nil)
+  if (or (== pl nil) (or (not (list? pl)) (== (len pl) 0)))
     {nil}
     {if (== (head pl) key)
       {head (tail pl)}
@@ -223,7 +223,7 @@
 ; Set/update a key in plist, returns new plist
 ; Usage: (plist/set {:name "Alice"} :age 30) => {:name "Alice" :age 30}
 (fun {plist/set pl key val} {
-  if (== pl nil)
+  if (or (== pl nil) (or (not (list? pl)) (== (len pl) 0)))
     {list key val}
     {if (== (head pl) key)
       {join (list key val) (tail (tail pl))}
@@ -233,7 +233,7 @@
 ; Check if key exists in plist
 ; Usage: (plist/has? {:name "Alice"} :name) => true
 (fun {plist/has? pl key} {
-  if (== pl nil)
+  if (or (== pl nil) (or (not (list? pl)) (== (len pl) 0)))
     {false}
     {if (== (head pl) key)
       {true}

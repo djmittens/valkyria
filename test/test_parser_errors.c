@@ -1930,9 +1930,11 @@ static void test_shutdown_with_code(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  // Shutdown in REPL mode returns the code instead of exiting
-  parse_and_eval("(def {VALK_MODE} \"repl\")");
   valk_lval_t *result = parse_and_eval("(shutdown 42)");
+  ASSERT_LVAL_TYPE(result, LVAL_NUM);
+  ASSERT_LVAL_NUM(result, 42);
+
+  result = parse_and_eval("VALK_EXIT_CODE");
   ASSERT_LVAL_TYPE(result, LVAL_NUM);
   ASSERT_LVAL_NUM(result, 42);
 
@@ -1943,9 +1945,11 @@ static void test_shutdown_without_code(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  // Shutdown in REPL mode returns 0 if no code given
-  parse_and_eval("(def {VALK_MODE} \"repl\")");
   valk_lval_t *result = parse_and_eval("(shutdown)");
+  ASSERT_LVAL_TYPE(result, LVAL_NUM);
+  ASSERT_LVAL_NUM(result, 0);
+
+  result = parse_and_eval("VALK_EXIT_CODE");
   ASSERT_LVAL_TYPE(result, LVAL_NUM);
   ASSERT_LVAL_NUM(result, 0);
 

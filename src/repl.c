@@ -82,10 +82,6 @@ int main(int argc, char* argv[]) {
   sigemptyset(&sa.sa_mask);
   sigaction(SIGUSR1, &sa, nullptr);
 
-  // If we got here, we processed files but did not request exit; drop into
-  // REPL. Set mode to repl now so shutdown inside REPL performs teardown.
-  valk_lenv_put(env, valk_lval_sym("VALK_MODE"), valk_lval_str("init"));
-
   // AIO system is NOT auto-created. Scripts must explicitly call (aio/start)
   // with their desired configuration to use async/networking features.
   // This avoids singleton confusion and ensures config is always explicit.
@@ -136,16 +132,15 @@ int main(int argc, char* argv[]) {
 
   // If script mode (and not forced REPL), cleanup and exit instead of entering REPL
   if (script_mode && !force_repl) {
-    // Wait for any running AIO systems to complete before exiting
-    // This ensures async operations like timers have a chance to finish
-    valk_aio_wait_for_all_systems();
-    
-    valk_lval_t* sym = valk_lval_sym("aio");
-    valk_lval_t* val = valk_lenv_get(env, sym);
-    if (LVAL_TYPE(val) != LVAL_ERR && LVAL_TYPE(val) == LVAL_REF &&
-        strcmp(val->ref.type, "aio_system") == 0) {
-      valk_aio_stop((valk_aio_system_t*)val->ref.ptr);
+    int exit_code = EXIT_SUCCESS;
+    valk_lval_t* exit_val = valk_lenv_get(env, valk_lval_sym("VALK_EXIT_CODE"));
+    if (LVAL_TYPE(exit_val) == LVAL_NUM) {
+      exit_code = (int)exit_val->num;
     }
+
+    // Wait for any running AIO systems to complete before exiting
+    // This stops, joins threads, and frees all registered AIO systems
+    valk_aio_wait_for_all_systems();
 
     if (valk_coverage_enabled()) {
       valk_coverage_report(valk_coverage_output_path());
@@ -155,12 +150,8 @@ int main(int argc, char* argv[]) {
     free(scratch);
     valk_runtime_shutdown();
 
-    return EXIT_SUCCESS;
+    return exit_code;
   }
-
-  // If we got here, we processed no files; drop into REPL.
-  // Set mode to repl now so shutdown inside REPL performs teardown.
-  valk_lenv_put(env, valk_lval_sym("VALK_MODE"), valk_lval_str("repl"));
 
   // This is the L in repL
   while ((input = readline("valkyria> ")) != nullptr) {

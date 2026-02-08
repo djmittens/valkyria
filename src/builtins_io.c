@@ -16,8 +16,6 @@ static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
     valk_lval_println(expr);
     return expr;
   }
-  valk_lval_t* prev_mode = valk_lenv_get(e, valk_lval_sym("VALK_MODE"));
-  valk_lenv_put(e, valk_lval_sym("VALK_MODE"), valk_lval_str("load"));
   valk_lval_t* last = nullptr;
   while (valk_lval_list_count(expr)) {
     valk_lval_t* x = valk_lval_eval(e, valk_lval_pop(expr, 0));
@@ -33,12 +31,6 @@ static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
       valk_gc_malloc_collect(gc_heap, NULL);
     }
   }
-  if (LVAL_TYPE(prev_mode) == LVAL_STR) {
-    valk_lenv_put(e, valk_lval_sym("VALK_MODE"), prev_mode);
-  } else {
-    valk_lenv_put(e, valk_lval_sym("VALK_MODE"), valk_lval_str(""));
-  }
-
   if (last) {
     valk_lenv_put(e, valk_lval_sym("VALK_LAST_VALUE"), last);
   }

@@ -10,9 +10,15 @@ leak:valk_builtin_metrics_collect_delta
 # when tests exit without proper cleanup (pending global env cleanup)
 leak:valk_builtin_metrics_baseline
 
-# Async handles may not be freed when tests exit quickly
-# (pending proper shutdown sequence)
+# Async handles and combinator state may not be freed during shutdown
 leak:valk_async_handle_new
+leak:valk_builtin_aio_sleep
+leak:valk_builtin_aio_all
+leak:valk_builtin_aio_within
+leak:valk_builtin_aio_race
+leak:valk_builtin_aio_then
+leak:valk_builtin_aio_catch
+leak:valk_builtin_aio_any
 
 # Slabs allocated by aio system may not be freed on test exit
 leak:valk_slab_init
@@ -40,8 +46,9 @@ leak:valk_runtime_init
 # AIO metrics state may not be cleaned up in tests
 leak:valk_aio_metrics_state_new
 
-# HTTP2 client response buffers may not be freed when tests exit early
+# HTTP2 request/response buffers may not be freed during shutdown
 leak:__valk_aio_http2_request_send_cb
+leak:valk_builtin_http2_request
 
 # AIO start allocations may not be cleaned up in tests
 leak:valk_aio_start

@@ -50,7 +50,12 @@ static valk_lval_t* valk_builtin_aio_status(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   valk_async_handle_t *handle = handle_lval->async.handle;
-  return valk_async_status_to_sym(handle->status);
+  valk_async_status_t status = valk_async_handle_get_status(handle);
+  if (!valk_async_handle_is_terminal(status) &&
+      valk_async_handle_is_cancelled(handle)) {
+    return valk_lval_sym(":cancelled");
+  }
+  return valk_async_status_to_sym(status);
 }
 
 static valk_lval_t* valk_builtin_aio_result(valk_lenv_t* e, valk_lval_t* a) {

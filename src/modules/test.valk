@@ -304,19 +304,18 @@
         (if (== expected-exit 1)
           {(shutdown 0)}
           {(shutdown 1)})}
-      {true})
+      {do
+        (= {suite-name} (plist/get ctx :suite-name))
+        (= {skip-suite} (plist/get ctx :skip-suite))
+        (= {skip-reason} (plist/get ctx :skip-reason))
 
-    (= {suite-name} (plist/get ctx :suite-name))
-    (= {skip-suite} (plist/get ctx :skip-suite))
-    (= {skip-reason} (plist/get ctx :skip-reason))
+        (if (== skip-suite 1)
+          {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
+          {printf "🧪 [%ld/%ld] %s\n" total total suite-name})
 
-    (if (== skip-suite 1)
-      {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
-      {printf "🧪 [%ld/%ld] %s\n" total total suite-name})
+        (= {final-ctx} (foldl *test-run-one-ctx* ctx tests))
 
-    (= {final-ctx} (foldl *test-run-one-ctx* ctx tests))
-
-    (*test-print-results-and-exit* final-ctx)
+        (*test-print-results-and-exit* final-ctx)})
 })
 
 ; Sync test runner WITH timeout support (requires aio system)
@@ -339,29 +338,28 @@
         (if (== expected-exit 1)
           {(shutdown 0)}
           {(shutdown 1)})}
-      {true})
+      {do
+        (= {suite-name} (plist/get ctx :suite-name))
+        (= {skip-suite} (plist/get ctx :skip-suite))
+        (= {skip-reason} (plist/get ctx :skip-reason))
 
-    (= {suite-name} (plist/get ctx :suite-name))
-    (= {skip-suite} (plist/get ctx :skip-suite))
-    (= {skip-reason} (plist/get ctx :skip-reason))
+        (if (== skip-suite 1)
+          {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
+          {printf "🧪 [%ld/%ld] %s (timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms})
 
-    (if (== skip-suite 1)
-      {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
-      {printf "🧪 [%ld/%ld] %s (timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms})
+        ; Run all tests with individual timeouts, racing against suite timeout
+        (= {test-handle} (aio/pure (foldl (\ {ctx test} {(*test-run-one-with-timeout* aio ctx test)}) ctx tests)))
+        (= {timeout-handle} (aio/then (aio/sleep aio suite-timeout-ms) (\ {_} {:suite-timeout})))
+        (= {race-result} (aio/race (list test-handle timeout-handle)))
+        (= {final-ctx} (if (== race-result :suite-timeout)
+                         {do
+                           (*test-suite-timeout-cb* suite-name)
+                           ctx}
+                         {race-result}))
 
-    ; Run all tests with individual timeouts, racing against suite timeout
-    (= {test-handle} (aio/pure (foldl (\ {ctx test} {(*test-run-one-with-timeout* aio ctx test)}) ctx tests)))
-    (= {timeout-handle} (aio/then (aio/sleep aio suite-timeout-ms) (\ {_} {:suite-timeout})))
-    (= {race-result} (aio/race (list test-handle timeout-handle)))
-    (= {final-ctx} (if (== race-result :suite-timeout)
-                     {do
-                       (*test-suite-timeout-cb* suite-name)
-                       ctx}
-                     {race-result}))
-
-    ; Stop aio and print results
-    (aio/stop aio)
-    (*test-print-results-and-exit* final-ctx)
+        ; Stop aio and print results
+        (aio/stop aio)
+        (*test-print-results-and-exit* final-ctx)})
 })
 
 ; ============================================================================
@@ -412,8 +410,10 @@
       (= {elapsed} (- end-time start-time))
       (= {passed} (if (== result true) {1} 
                     {(if (== result :pass) {1}
-                      {(if (plist/has? result :status) 
-                        {(== (plist/get result :status) :pass)}
+                      {(if (list? result)
+                        {(if (plist/has? result :status) 
+                          {(== (plist/get result :status) :pass)}
+                          {0})}
                         {0})})}))
       (if (== passed 1)
         (list :status :pass :name test-name :elapsed elapsed)
@@ -490,73 +490,70 @@
         (if (== expected-exit 1)
           {(shutdown 0)}
           {(shutdown 1)})}
-      {true})
-    
-    (printf "🧪 [%ld/%ld] %s (async, timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms)
-    
-    ; Create handles for all tests
-    (= {test-handles} (map (\ {test} {(*test-run-async-one* aio timeout-ms test)}) tests))
-    
-    ; Use aio/all to collect all test results, with suite timeout
-    (= {all-tests-handle} (aio/all test-handles))
-    (= {suite-timeout-handle} (aio/then (aio/sleep aio suite-timeout-ms) (\ {_} {:suite-timeout})))
-    (= {race-result} (aio/race (list all-tests-handle suite-timeout-handle)))
-    
-    ; Process results
-    (= {results-handle} (aio/then race-result (\ {result} {
-      (if (== result :suite-timeout)
-        {do
-          (printf "\n⏰ SUITE TIMEOUT: Suite exceeded %ldms\n" suite-timeout-ms)
-          (aio/stop aio)
-          (shutdown 1)}
-        {do
-          ; Print individual test results and aggregate counts using foldl
-          (= {counts} (foldl (\ {acc test-result} {
-            (= {status} (plist/get test-result :status))
-            (= {name} (plist/get test-result :name))
-            (= {elapsed} (plist/get test-result :elapsed))
-            (= {passed} (plist/get acc :passed))
-            (= {failed} (plist/get acc :failed))
-            (= {timed-out} (plist/get acc :timed-out))
-            (select
-              {(== status :pass) (do 
-                (printf "✅ ") (*test-pad-dots* name 97) (printf "  PASS : in %ld(µs)\n" elapsed)
-                (plist/set acc :passed (+ passed 1)))}
-              {(== status :fail) (do 
-                (printf "❌ ") (*test-pad-dots* name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
-                (plist/set acc :failed (+ failed 1)))}
-              {(== status :timeout) (do 
-                (printf "⏰ ") (*test-pad-dots* name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
-                (plist/set acc :timed-out (+ timed-out 1)))}
-              {true (do 
-                (printf "❓ ") (*test-pad-dots* name 97) (printf "  UNKNOWN : %s\n" (str status))
-                (plist/set acc :failed (+ failed 1)))})
-          }) {:passed 0 :failed 0 :timed-out 0} result))
-          
-          (= {passed} (plist/get counts :passed))
-          (= {failed} (plist/get counts :failed))
-          (= {timed-out} (plist/get counts :timed-out))
-          
-          ; Print final results
-          (printf "\n🏁 Test Results: ")
-          (if (> timed-out 0)
-            {printf "⏰ %ld timed out, " timed-out}
-            {true})
-          (if (== (+ failed timed-out) 0)
-            {printf "✨ All %ld tests passed! ✨\n" passed}
-            {printf "⚠️  %ld passed, %ld failed\n" passed (+ failed timed-out)})
-          
-          (aio/stop aio)
-          (= {actual-exit} (if (== (+ failed timed-out) 0) {0} {1}))
-          (if (== actual-exit expected-exit)
-            {(shutdown 0)}
-            {(shutdown actual-exit)})})
-    })))
-    
-    (= {on-loop} (aio/on-loop-thread? aio))
-    (if on-loop
-      {true}
-      {(aio/run aio)})
+      {do
+        (printf "🧪 [%ld/%ld] %s (async, timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms)
+        
+        ; Create handles for all tests
+        (= {test-handles} (map (\ {test} {(*test-run-async-one* aio timeout-ms test)}) tests))
+        
+        ; Use aio/all to collect all test results, with suite timeout
+        (= {all-tests-handle} (aio/all test-handles))
+        (= {suite-timeout-handle} (aio/then (aio/sleep aio suite-timeout-ms) (\ {_} {:suite-timeout})))
+        (= {race-result} (aio/race (list all-tests-handle suite-timeout-handle)))
+        
+        ; Process results
+        (= {results-handle} (aio/then race-result (\ {result} {
+          (if (== result :suite-timeout)
+            {do
+              (printf "\n⏰ SUITE TIMEOUT: Suite exceeded %ldms\n" suite-timeout-ms)
+              (shutdown 1)}
+            {do
+              ; Print individual test results and aggregate counts using foldl
+              (= {counts} (foldl (\ {acc test-result} {
+                (= {status} (plist/get test-result :status))
+                (= {name} (plist/get test-result :name))
+                (= {elapsed} (plist/get test-result :elapsed))
+                (= {passed} (plist/get acc :passed))
+                (= {failed} (plist/get acc :failed))
+                (= {timed-out} (plist/get acc :timed-out))
+                (select
+                  {(== status :pass) (do 
+                    (printf "✅ ") (*test-pad-dots* name 97) (printf "  PASS : in %ld(µs)\n" elapsed)
+                    (plist/set acc :passed (+ passed 1)))}
+                  {(== status :fail) (do 
+                    (printf "❌ ") (*test-pad-dots* name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
+                    (plist/set acc :failed (+ failed 1)))}
+                  {(== status :timeout) (do 
+                    (printf "⏰ ") (*test-pad-dots* name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
+                    (plist/set acc :timed-out (+ timed-out 1)))}
+                  {true (do 
+                    (printf "❓ ") (*test-pad-dots* name 97) (printf "  UNKNOWN : %s\n" (str status))
+                    (plist/set acc :failed (+ failed 1)))})
+              }) {:passed 0 :failed 0 :timed-out 0} result))
+              
+              (= {passed} (plist/get counts :passed))
+              (= {failed} (plist/get counts :failed))
+              (= {timed-out} (plist/get counts :timed-out))
+              
+              ; Print final results
+              (printf "\n🏁 Test Results: ")
+              (if (> timed-out 0)
+                {printf "⏰ %ld timed out, " timed-out}
+                {true})
+              (if (== (+ failed timed-out) 0)
+                {printf "✨ All %ld tests passed! ✨\n" passed}
+                {printf "⚠️  %ld passed, %ld failed\n" passed (+ failed timed-out)})
+              
+              (= {actual-exit} (if (== (+ failed timed-out) 0) {0} {1}))
+              (if (== actual-exit expected-exit)
+                {(shutdown 0)}
+                {(shutdown actual-exit)})})
+        })))
+        
+        (= {on-loop} (aio/on-loop-thread? aio))
+        (if on-loop
+          {true}
+          {(aio/run aio)})})
 })
 
 
