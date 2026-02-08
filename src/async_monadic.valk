@@ -1,0 +1,388 @@
+; Monadic Async API - Higher-level combinators for async operations
+; Provides map, fold, collect, and other functional primitives for async
+;
+; Type definitions:
+;   Async a       = (a -> ()) -> ()      ; Continuation-passing async operation
+;   AsyncFn a b   = a -> Async b         ; Function returning async operation
+;
+; Convention: Functions named `async-fn` take a value and return Async.
+;             Functions named `async-op` are already Async values.
+
+; === Core Monadic Operations ===
+
+; async/pure: Wrap a pure value in an async context
+; Type: a -> Async a
+(fun {async/pure value} {
+  (\ {k} {(k value)})
+})
+
+; async/bind: Monadic bind for async (flatMap/chain)
+; Type: Async a -> (a -> Async b) -> Async b
+(fun {async/bind async-op f} {
+  (\ {k} {
+    (async-op (\ {result} {
+      do
+      (= {next-async} (f result))
+      (next-async k)
+    }))
+  })
+})
+
+; === Collection Operations ===
+
+; async/map-list: Map an async function over a list sequentially
+; Type: (a -> Async b) -> List a -> Async (List b)
+(fun {async/map-list async-fn items} {
+  (\ {k} {
+    (= {process-items} (\ {remaining acc} {
+      (if (== remaining ())
+        {(k (reverse acc))}
+        {do
+         (= {item} (head remaining))
+         (= {rest} (tail remaining))
+         (= {async-op} (async-fn item))
+         (async-op (\ {result} {
+           (process-items rest (join (list result) acc))
+         }))})
+    }))
+    (process-items items ())
+  })
+})
+
+; async/filter-list: Filter list with async predicate
+; Type: (a -> Async Bool) -> List a -> Async (List a)
+(fun {async/filter-list async-pred items} {
+  (\ {k} {
+    (= {process-items} (\ {remaining acc} {
+      (if (== remaining ())
+        {(k (reverse acc))}
+        {do
+         (= {item} (head remaining))
+         (= {rest} (tail remaining))
+         (= {async-op} (async-pred item))
+         (async-op (\ {keep} {
+           (if keep
+             {(process-items rest (join (list item) acc))}
+             {(process-items rest acc)})
+         }))})
+    }))
+    (process-items items ())
+  })
+})
+
+; async/fold-list: Fold (reduce) over a list with async function
+; Type: (b -> a -> Async b) -> b -> List a -> Async b
+(fun {async/fold-list async-fn init items} {
+  (\ {k} {
+    (= {process-items} (\ {remaining acc} {
+      (if (== remaining ())
+        {(k acc)}
+        {do
+         (= {item} (head remaining))
+         (= {rest} (tail remaining))
+         (= {async-op} (async-fn acc item))
+         (async-op (\ {new-acc} {
+           (process-items rest new-acc)
+         }))})
+    }))
+    (process-items items init)
+  })
+})
+
+; async/collect: Execute multiple async operations and collect results
+; Type: List (Async a) -> Async (List a)
+(fun {async/collect async-ops} {
+  (\ {k} {
+    (= {process-ops} (\ {remaining acc} {
+      (if (== remaining ())
+        {(k (reverse acc))}
+        {do
+         (= {op} (head remaining))
+         (= {rest} (tail remaining))
+         (op (\ {result} {
+           (process-ops rest (join (list result) acc))
+         }))})
+    }))
+    (process-ops async-ops ())
+  })
+})
+
+; async/sequence: Execute async operations in sequence, return last result
+; Type: List (Async a) -> Async a
+(fun {async/sequence async-ops} {
+  (\ {k} {
+    (= {process-ops} (\ {remaining last-result} {
+      (if (== remaining ())
+        {(k last-result)}
+        {do
+         (= {op} (head remaining))
+         (= {rest} (tail remaining))
+         (op (\ {result} {
+           (process-ops rest result)
+         }))})
+    }))
+    (process-ops async-ops nil)
+  })
+})
+
+; === Parallel-Style Operations (execute sequentially but return all) ===
+
+; async/all: Execute all async ops and return all results
+; Type: List (Async a) -> Async (List a)
+(def {async/all} async/collect)
+
+; async/race: Return the first result (simplified - just returns first op result)
+; Type: List (Async a) -> Async a
+(fun {async/race async-ops} {
+  (\ {k} {
+    (if (== async-ops ())
+      {(k nil)}
+      {do
+       (= {first-op} (head async-ops))
+       (first-op k)})
+  })
+})
+
+; === Conditional Operations ===
+
+; async/when: Execute async op only if condition is true
+; Type: Bool -> Async a -> Async (Maybe a)
+(fun {async/when condition async-op} {
+  (\ {k} {
+    (if condition
+      {(async-op k)}
+      {(k nil)})
+  })
+})
+
+; async/unless: Execute async op only if condition is false
+; Type: Bool -> Async a -> Async (Maybe a)
+(fun {async/unless condition async-op} {
+  (\ {k} {
+    (if condition
+      {(k nil)}
+      {(async-op k)})
+  })
+})
+
+; === Utility Operations ===
+
+; async/tap: Execute async op for side effects, return original value
+; Type: a -> (a -> Async b) -> Async a
+(fun {async/tap value async-fn} {
+  (\ {k} {
+    (= {async-op} (async-fn value))
+    (async-op (\ {_} {(k value)}))
+  })
+})
+
+; async/const: Always return same value, ignoring async op result
+; Type: a -> Async b -> Async a
+(fun {async/const value async-op} {
+  (\ {k} {
+    (async-op (\ {_} {(k value)}))
+  })
+})
+
+; === Combinators ===
+
+; async/pipe: Compose async operations left-to-right
+; Type: a -> List (a -> Async a) -> Async a
+(fun {async/pipe initial-value async-fns} {
+  (\ {k} {
+    (= {process-fns} (\ {remaining current-value} {
+      (if (== remaining ())
+        {(k current-value)}
+        {do
+         (= {fn} (head remaining))
+         (= {rest} (tail remaining))
+         (= {async-op} (fn current-value))
+         (async-op (\ {result} {
+           (process-fns rest result)
+         }))})
+    }))
+    (process-fns async-fns initial-value)
+  })
+})
+
+; async/compose: Function composition for async functions (left-to-right)
+; Type: (a -> Async b) -> (b -> Async c) -> (a -> Async c)
+(fun {async/compose f g} {
+  (\ {x} {
+    (\ {k} {
+      (= {f-op} (f x))
+      (f-op (\ {fx} {
+        (= {g-op} (g fx))
+        (g-op k)
+      }))
+    })
+  })
+})
+
+; === Error Handling ===
+
+; async/try: Try async operation, wrap result in tagged tuple
+; Type: Async a -> Async (Result a)
+; where Result a = ("ok", a) | ("error", Error)
+(fun {async/try async-op} {
+  (\ {k} {
+    (async-op (\ {result} {
+      (k (list "ok" result))
+    }))
+  })
+})
+
+; async/try-result: Normalize result to tagged tuple format
+; Type: Async a -> Async (Result a)
+(fun {async/try-result async-op} {
+  (\ {k} {
+    (async-op (\ {result} {
+      ; If result is a list with "ok" or "error" tag, pass through
+      ; Otherwise wrap in "ok"
+      (if (list? result)
+        {(if (== (len result) 2)
+          {do
+           (= {tag} (head result))
+           (if (or (== tag "ok") (== tag "error"))
+             {(k result)}
+             {(k (list "ok" result))})}
+          {(k (list "ok" result))})}
+        {(k (list "ok" result))})
+    }))
+  })
+})
+
+; async/recover: Recover from error with fallback async operation
+; Type: Async a -> Async a -> Async a
+(fun {async/recover async-op fallback-async} {
+  (\ {k} {
+    do
+    (= {try-result} (async/try-result async-op))
+    (try-result (\ {result} {
+      do
+      (= {tag} (head result))
+      (if (== tag "ok")
+        {(k (nth 2 result))}
+        {(fallback-async k)})
+    }))
+  })
+})
+
+; === Synchronous Execution ===
+
+; async/run: Execute a PURE async operation synchronously
+; Type: Async a -> a
+; NOTE: This only works for pure async operations (async/pure, async/bind chains
+; that don't involve actual I/O). For I/O operations, use aio/run which runs
+; the event loop.
+; Implementation: Uses identity continuation - for pure ops, the result flows back directly.
+(fun {async/run async-op} {
+  (async-op (\ {x} {x}))
+})
+
+; === Higher-Level Patterns ===
+
+; async/traverse: Map and collect in one operation
+; Type: (a -> Async b) -> List a -> Async (List b)
+(def {async/traverse} async/map-list)
+
+; async/zip-with: Zip two lists with an async binary function
+; Type: (a -> b -> Async c) -> List a -> List b -> Async (List c)
+(fun {async/zip-with async-fn list1 list2} {
+  (\ {k} {
+    (= {process-pairs} (\ {rem1 rem2 acc} {
+      (if (== rem1 ())
+        {(k (reverse acc))}
+        {(if (== rem2 ())
+          {(k (reverse acc))}
+          {do
+           (= {item1} (head rem1))
+           (= {item2} (head rem2))
+           (= {rest1} (tail rem1))
+           (= {rest2} (tail rem2))
+           (= {async-op} (async-fn item1 item2))
+           (async-op (\ {result} {
+             (process-pairs rest1 rest2 (join (list result) acc))
+           }))})})
+    }))
+    (process-pairs list1 list2 ())
+  })
+})
+
+; async/replicate: Replicate an async operation n times
+; Type: Int -> Async a -> Async (List a)
+(fun {async/replicate n async-op} {
+  (\ {k} {
+    (= {process-n} (\ {remaining acc} {
+      (if (== remaining 0)
+        {(k (reverse acc))}
+        {(async-op (\ {result} {
+           (process-n (- remaining 1) (join (list result) acc))
+         }))})
+    }))
+    (process-n n ())
+  })
+})
+
+; async/while: Execute async operation while condition returns true
+; Type: (Int -> Bool) -> Async a -> Async (List a)
+(fun {async/while condition-fn async-op} {
+  (\ {k} {
+    (= {loop} (\ {iteration acc} {
+      (if (condition-fn iteration)
+        {(async-op (\ {result} {
+          (loop (+ iteration 1) (join acc (list result)))
+        }))}
+        {(k acc)})
+    }))
+    (loop 0 ())
+  })
+})
+
+; async/forever: Execute async operation indefinitely (until external stop)
+; Type: Async a -> Async (List a)  ; NOTE: Never terminates normally
+(fun {async/forever async-op} {
+  (async/while (\ {_} {true}) async-op)
+})
+
+; async/take: Take first n results from repeated async operation
+; Type: Int -> Async a -> Async (List a)
+(fun {async/take n async-op} {
+  (async/replicate n async-op)
+})
+
+; async/partition: Partition list and process each partition with async op
+; Type: Int -> List a -> (List a -> Async b) -> Async (List b)
+(fun {async/partition size items async-fn} {
+  (\ {k} {
+    do
+    ; Helper to partition a list
+    (= {partition-list} (\ {lst sz} {
+      (if (== lst ())
+        {()}
+        {do
+         (= {chunk} (take sz lst))
+         (= {rest} (drop sz lst))
+         (join (list chunk) (partition-list rest sz))})
+    }))
+
+    (= {partitions} (partition-list items size))
+
+    ; Process each partition
+    (= {process-partitions} (\ {remaining acc} {
+      (if (== remaining ())
+        {(k (reverse acc))}
+        {do
+         (= {partition} (head remaining))
+         (= {rest} (tail remaining))
+         (= {async-op} (async-fn partition))
+         (async-op (\ {result} {
+           (process-partitions rest (join (list result) acc))
+         }))})
+    }))
+
+    (process-partitions partitions ())
+  })
+})
+
+; Monadic async API loaded

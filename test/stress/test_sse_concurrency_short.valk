@@ -1,0 +1,63 @@
+; SSE Concurrency Stress Test (Short Version for CI)
+; Tests 10 concurrent SSE connections
+; Suitable for regular CI runs
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/modules/aio/debug.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(def {CONCURRENT_CONNECTIONS} 10)
+
+(fun {str-contains? haystack needle}
+  {(> (len (str/split haystack needle)) 1)})
+
+; SSE handler that sends a couple events then closes
+(fun {stress-sse-handler req}
+  {(= {path} (req/path req))
+   (if (== path "/stress-sse")
+     (do
+       (= {stream} (sse/open req))
+       (stream/write stream (str "event: diagnostics\ndata: " (aio/debug-diagnostics-state aio) "\n\n"))
+       (aio/then (aio/sleep aio 100)
+         (\ {_} {
+           (stream/write stream (str "event: diagnostics-delta\ndata: " (aio/debug-diagnostics-delta aio) "\n\n"))
+           (stream/close stream)})))
+     {:status "404" :body "Not found"})})
+
+(def {server} (http2/server-listen aio 0 stress-sse-handler))
+(def {port} (http2/server-port server))
+
+; Single SSE connection test
+(fun {test-sse-connection}
+  {(aio/then (http2/client-request aio "127.0.0.1" port "/stress-sse")
+     (\ {resp}
+       {(if (error? resp)
+          false
+          (str-contains? (http2/response-body resp) "event:"))}))})
+
+(fun {run-batch n}
+  {(if (<= n 0)
+     (list)
+     (cons (test-sse-connection) (run-batch (- n 1))))})
+
+(test/run-async aio (list
+  (test-async "Single SSE connection receives events" (\ {} {
+    (test-sse-connection)}))
+
+  (test-async "10 concurrent SSE connections" (\ {} {
+    (aio/then (aio/all (run-batch CONCURRENT_CONNECTIONS))
+      (\ {results}
+        {(= {ok-count} (len (filter (\ {r} {r}) results)))
+         (>= ok-count 8)}))}))
+
+  (test-async "Two batches of concurrent connections" (\ {} {
+    (aio/then (aio/all (run-batch CONCURRENT_CONNECTIONS))
+      (\ {results1}
+        {(aio/then (aio/all (run-batch CONCURRENT_CONNECTIONS))
+          (\ {results2}
+            {(= {ok1} (len (filter (\ {r} {r}) results1)))
+             (= {ok2} (len (filter (\ {r} {r}) results2)))
+             (and (>= ok1 8) (>= ok2 8))}))}))}))
+) {:suite-name "SSE Concurrency Stress Test (Short)" :timeout-ms 30000 :suite-timeout-ms 120000})

@@ -1,0 +1,52 @@
+; Tests for read-file builtin and debug assets loading
+; Run with: ./build/valk test/test_read_file.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Test: read-file content is not empty
+
+; Test: read-file loads CSS correctly
+
+; Test: read-file loads JS correctly
+
+; Test: str concatenation of multiple files works
+
+; Test: debug.valk module loads successfully
+
+; Run all tests
+(test/run (list
+  (test "read-file-content-not-empty"
+    {do
+    (= {content} (read-file "src/modules/aio/debug/head.html"))
+    (test/assert (> (len content) 0) "read-file should return non-empty content")
+  })
+  (test "read-file-loads-css"
+    {do
+    (= {css} (read-file "src/modules/aio/debug/style.css"))
+    (test/assert (> (len css) 100) "style.css should have substantial content")
+  })
+  (test "read-file-loads-js"
+    {do
+    (= {js} (read-file "src/modules/aio/debug/script.js"))
+    (test/assert (> (len js) 100) "script.js should have substantial content")
+  })
+  (test "str-concat-files"
+    {do
+    (= {path} "src/modules/aio/debug/")
+    (= {head} (read-file (str path "head.html")))
+    (= {style} (read-file (str path "style.css")))
+    (= {body} (read-file (str path "body.html")))
+    (= {script} (read-file (str path "script.js")))
+    (= {footer} (read-file (str path "footer.html")))
+    (= {total} (str head style body script footer))
+    ; Total should be sum of all parts
+    (= {expected-len} (+ (len head) (len style) (len body) (len script) (len footer)))
+    (test/assert-eq expected-len (len total) "concatenated length should match sum of parts")
+  })
+  (test "debug-module-loads"
+    {do
+    (load "src/modules/aio/debug.valk")
+    (test/assert (> (len aio/debug-html-content) 1000) "debug HTML content should be loaded")
+  }))
+  {:suite-name "read-file Tests"})

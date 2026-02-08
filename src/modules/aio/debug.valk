@@ -1,0 +1,157 @@
+; src/modules/aio/debug.valk
+; Debug dashboard routes for Valkyria AIO system
+; Load with: (load "src/modules/aio/debug.valk")
+
+(load "src/modules/aio/sse.valk")
+(load "src/modules/aio/debug-broadcaster.valk")
+
+; Base path for debug assets (relative to where valk is run from)
+(def {aio/debug-assets-path} "src/modules/aio/debug/")
+
+; Load and cache the HTML content from external files at module load time
+; Files are: head.html + style.css + body.html + script.js + footer.html
+(def {aio/debug-html-content}
+  (str
+    (read-file (str aio/debug-assets-path "head.html"))
+    (read-file (str aio/debug-assets-path "style.css"))
+    (read-file (str aio/debug-assets-path "body.html"))
+    (read-file (str aio/debug-assets-path "script.js"))
+    (read-file (str aio/debug-assets-path "footer.html"))))
+
+; Helper: Merge AIO metrics, modular metrics, and VM metrics into combined JSON
+; The AIO metrics JSON is a single object, the modular metrics JSON is also an object,
+; and the VM metrics JSON is also an object.
+; We need to merge them into a single JSON object with three top-level keys.
+; Note: aio_systems is now an array to support multiple AIO systems in the future.
+(fun {aio/debug-merge-metrics-json sys}
+  {
+    (= {aio-json} (aio/metrics-json sys))
+    (= {aio-systems-json} (aio/systems-json sys))
+    (= {modular-json} (metrics/json))
+    (= {vm-json} (vm/metrics-json))
+    ; Create combined JSON with all metrics systems
+    ; aio_metrics is kept for backwards compatibility, aio_systems is the new array format
+    (str "{\"aio_metrics\":" aio-json ",\"aio_systems\":" aio-systems-json ",\"modular_metrics\":" modular-json ",\"vm_metrics\":" vm-json "}")
+  })
+
+; Helper: Parse a single query param and update the config plist
+(fun {aio/debug-parse-param config param}
+  {(= {kv} (str/split param "="))
+   (if (== (len kv) 2)
+     {(= {k} (head kv))
+      (= {v} (head (tail kv)))
+      (select
+        {(== k "slab") (plist/set config :slab v)}
+        {(== k "start") (plist/set config :start (int v))}
+        {(== k "end") (plist/set config :end (int v))}
+        {(== k "buckets") (plist/set config :buckets (int v))}
+        {otherwise config})}
+     config)})
+
+; Helper: Handle slab bucket query for zoom visualization
+; Query params: slab=name&start=N&end=N&buckets=N
+(fun {aio/debug-handle-slab-buckets sys query}
+  {
+    ; Parse query params (format: "slab=tcp_buffers&start=0&end=1000&buckets=100")
+    (= {params} (if query (str/split query "&") {}))
+
+    ; Defaults
+    (= {defaults} {:slab "tcp_buffers" :start 0 :end 10000 :buckets 100})
+
+    ; Parse params functionally
+    (= {config} (foldl aio/debug-parse-param defaults params))
+
+    ; Extract parsed values
+    (= {slab-name} (plist/get config :slab))
+    (= {start-val} (plist/get config :start))
+    (= {end-val} (plist/get config :end))
+    (= {num-buckets} (plist/get config :buckets))
+
+    ; Call the builtin
+    (= {result} (aio/slab-buckets sys slab-name start-val end-val num-buckets))
+
+    `{:status "200" :content-type "application/json" :cache-control "no-cache" :body ,result}
+  })
+
+; Helper: Merge AIO metrics, modular metrics, and VM metrics into combined Prometheus format
+; All return Prometheus text format, so we can just concatenate them with separators
+(fun {aio/debug-merge-metrics-prometheus sys}
+  {
+    (= {aio-prom} (aio/metrics-prometheus sys))
+    (= {sys-prom} (aio/system-stats-prometheus sys))
+    (= {modular-prom} (metrics/prometheus))
+    (= {vm-prom} (vm/metrics-prometheus))
+    ; Concatenate all Prometheus outputs with comment separators
+    (str aio-prom "\n# AIO system stats\n" sys-prom "\n# Modular metrics\n" modular-prom "\n# VM metrics\n" vm-prom)
+  })
+
+; Build diagnostics state JSON for the dashboard
+; Returns: {"metrics": {...}, "memory": {...}}
+(fun {aio/debug-diagnostics-state sys}
+  {
+    ; Metrics are updated continuously, no explicit update needed
+    (= {aio-json} (aio/metrics-json sys))
+    (= {modular-json} (metrics/json))
+    (= {vm-json} (vm/metrics-json))
+    (= {registry-json} (metrics/registry-json))
+    (= {memory-json} (aio/diagnostics-state-json sys))
+    (str "{\"metrics\":{\"aio\":" aio-json ",\"modular\":" modular-json ",\"vm\":" vm-json ",\"registry\":" registry-json "},\"memory\":" memory-json "}")
+  })
+
+; Build diagnostics delta JSON for testing
+; Uses global delta collection (not per-subscriber baseline)
+; Returns: {"metrics": {...}, "memory": {...}}
+(fun {aio/debug-diagnostics-delta sys}
+  {
+    (= {delta} (metrics/collect-delta))
+    (= {delta-json} (metrics/delta-json delta))
+    (= {aio-json} (aio/metrics-json-compact sys))
+    (= {vm-json} (vm/metrics-json-compact))
+    (= {memory-json} (aio/diagnostics-state-json-compact sys))
+    (str "{\"metrics\":{\"aio\":" aio-json ",\"vm\":" vm-json ",\"modular\":" delta-json "},\"memory\":" memory-json "}")
+  })
+
+; SSE handler for /debug/diagnostics/memory
+; Uses shared broadcaster for efficient multi-client streaming
+(fun {aio/debug-diagnostics-sse-handler sys req}
+  {(if (not (ref? req))
+     `{:status "200" 
+       :content-type "text/event-stream; charset=utf-8" 
+       :cache-control "no-cache" 
+       :body-type :sse-stream}
+     (do
+       (= {stream} (sse/open req))
+       (debug/subscribe sys stream)
+       (stream/closed stream)))})
+
+; Create a debug handler that routes debug requests
+; Returns nil if the request doesn't match any debug routes
+; Usage: (aio/debug-handle-request sys req) => response map or nil
+(fun {aio/debug-handle-request sys req}
+  {
+    ; Extract request path - support both ref (runtime) and qexpr (testing)
+    (= {path} (if (ref? req)
+                {(req/path req)}
+                {(plist/get req :path)}))
+
+    ; Extract query parameters if present
+    (= {query} nil)
+
+    ; Route to appropriate debug endpoint
+    ; Handle both /debug and /debug/ for the dashboard
+    (select
+      {(or (== path "/debug") (== path "/debug/")) `{:status "200" :content-type "text/html; charset=utf-8" :body ,aio/debug-html-content}}
+      {(== path "/debug/metrics") `{:status "200" :content-type "application/json" :body ,(aio/debug-merge-metrics-json sys)}}
+      {(== path "/debug/metrics/state") `{:status "200" :content-type "application/json" :cache-control "no-cache, no-store, must-revalidate" :body ,(aio/debug-diagnostics-state sys)}}
+      {(== path "/metrics") `{:status "200" :content-type "text/plain; version=0.0.4" :body ,(aio/debug-merge-metrics-prometheus sys)}}
+      {(== path "/debug/diagnostics/memory") (aio/debug-diagnostics-sse-handler sys req)}
+      {(== path "/debug/slab/buckets") (aio/debug-handle-slab-buckets sys query)}
+      {otherwise `{:status "200" :content-type "text/html; charset=utf-8" :body "<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"0;url=/debug/\"></head></html>"}})
+  })
+
+(fun {aio/debug-handler sys}
+  {
+    (= {captured-sys} sys)
+    (\ {req} {aio/debug-handle-request captured-sys req})
+  })
+

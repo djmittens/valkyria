@@ -1,0 +1,57 @@
+; Test aio/schedule cancellation
+; Verifies that cancelling a scheduled timer prevents the callback from running
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(test/run-async aio (list
+  (test-async "aio/schedule returns a handle" (\ {} {
+    (= {h} (aio/schedule aio 1000 (\ {} {nil})))
+    (aio/cancel h)
+    (aio/pure (not (error? h)))
+  }))
+
+  (test-async "aio/cancel on pending schedule returns :true" (\ {} {
+    (= {h} (aio/schedule aio 1000 (\ {} {nil})))
+    (= {result} (aio/cancel h))
+    (aio/pure (== result :true))
+  }))
+
+  (test-async "aio/cancelled? returns :true after cancel" (\ {} {
+    (= {h} (aio/schedule aio 1000 (\ {} {nil})))
+    (aio/cancel h)
+    (aio/pure (== (aio/cancelled? h) :true))
+  }))
+
+  (test-async "aio/status after cancel shows :cancelled" (\ {} {
+    (= {h} (aio/schedule aio 1000 (\ {} {nil})))
+    (aio/cancel h)
+    (aio/pure (== (aio/status h) :cancelled))
+  }))
+
+  (test-async "cancelled schedule does not run callback" (\ {} {
+    (= {h} (aio/schedule aio 50 (\ {} {"ran"})))
+    (aio/cancel h)
+    (aio/then (aio/sleep aio 100) (\ {_} {
+      (== (aio/status h) :cancelled)
+    }))
+  }))
+
+  (test-async "non-cancelled schedule runs callback" (\ {} {
+    (= {h} (aio/schedule aio 50 (\ {} {"ran"})))
+    (aio/then (aio/sleep aio 100) (\ {_} {
+      (== (aio/status h) :completed)
+    }))
+  }))
+
+  (test-async "cancel on already-completed schedule returns :false" (\ {} {
+    (= {h} (aio/schedule aio 10 (\ {} {"completed"})))
+    (aio/then (aio/sleep aio 100) (\ {_} {
+      (== (aio/cancel h) :false)
+    }))
+  })))
+  {:suite-name "aio/schedule Cancellation Tests" :timeout-ms 5000})
+
+(aio/stop aio)

@@ -1,0 +1,43 @@
+; Crash Regression Test Suite
+; Tests for bugs that previously caused crashes
+; These are CRITICAL regressions that must never return
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; ============================================================================
+; Do Block with test/define Crashes
+; ============================================================================
+
+; Run all crash regression tests
+(test/run (list
+  (test "crash-regression-do-in-test-define"
+    {do
+    (def {result} true)
+    (== result true)
+  })
+  (test "crash-regression-simple-do"
+    {do
+    (def {x} 5)
+    (== x 5)
+  })
+  (test "crash-regression-multiple-do-expressions"
+    {do
+    (def {a} 1)
+    (def {b} 2)
+    (== (+ a b) 3)
+  })
+  (test "crash-regression-do-with-assignment"
+    {do
+    (= {x} 10)
+    (= {y} 20)
+    (== (+ x y) 30)
+  })
+  (test "crash-regression-nested-do-blocks"
+    {do
+    (def {outer} (do
+      (def {inner} 42)
+      inner))
+    (== outer 42)
+  }))
+  {:suite-name "Crash Regression Tests"})

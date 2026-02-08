@@ -1,0 +1,133 @@
+; String Builtin Tests
+; Run with: ./build/valk test/test_string_builtins.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; ============================================================================
+; str/split tests
+; ============================================================================
+
+; ============================================================================
+; str/replace tests
+; ============================================================================
+
+; ============================================================================
+; str->num tests
+; ============================================================================
+
+; Run all tests
+(test/run (list
+  (test "str-split-basic"
+    {do
+    (= {parts} (str/split "a,b,c" ","))
+    (test/assert-eq 3 (len parts) "should split into 3 parts")
+    (test/assert-eq "a" (nth 1 parts) "first part should be 'a'")
+    (test/assert-eq "b" (nth 2 parts) "second part should be 'b'")
+    (test/assert-eq "c" (nth 3 parts) "third part should be 'c'")
+    true
+  })
+  (test "str-split-no-delimiter"
+    {do
+    (= {parts} (str/split "hello" ","))
+    (test/assert-eq 1 (len parts) "no delimiter should return 1 part")
+    (test/assert-eq "hello" (nth 1 parts) "part should be original string")
+    true
+  })
+  (test "str-split-empty-string"
+    {do
+    (= {parts} (str/split "" ","))
+    (test/assert-eq 1 (len parts) "empty string should return 1 part")
+    (test/assert-eq "" (nth 1 parts) "part should be empty string")
+    true
+  })
+  (test "str-split-consecutive-delimiters"
+    {do
+    (= {parts} (str/split "a,,b" ","))
+    (test/assert-eq 3 (len parts) "consecutive delimiters should create empty part")
+    (test/assert-eq "a" (nth 1 parts) "first part should be 'a'")
+    (test/assert-eq "" (nth 2 parts) "middle part should be empty")
+    (test/assert-eq "b" (nth 3 parts) "third part should be 'b'")
+    true
+  })
+  (test "str-split-delimiter-at-ends"
+    {do
+    (= {parts} (str/split ",a,b," ","))
+    (test/assert-eq 4 (len parts) "delimiter at ends should create empty parts")
+    (test/assert-eq "" (nth 1 parts) "first part should be empty")
+    (test/assert-eq "a" (nth 2 parts) "second part should be 'a'")
+    (test/assert-eq "b" (nth 3 parts) "third part should be 'b'")
+    (test/assert-eq "" (nth 4 parts) "last part should be empty")
+    true
+  })
+  (test "str-split-multi-char-delimiter"
+    {do
+    (= {parts} (str/split "a::b::c" "::"))
+    (test/assert-eq 3 (len parts) "multi-char delimiter should work")
+    (test/assert-eq "a" (nth 1 parts) "first part correct")
+    (test/assert-eq "b" (nth 2 parts) "second part correct")
+    (test/assert-eq "c" (nth 3 parts) "third part correct")
+    true
+  })
+  (test "str-replace-basic"
+    {do
+    (= {result} (str/replace "hello world" "world" "valk"))
+    (test/assert-eq "hello valk" result "should replace substring")
+    true
+  })
+  (test "str-replace-no-match"
+    {do
+    (= {result} (str/replace "hello world" "xyz" "abc"))
+    (test/assert-eq "hello world" result "no match should return original")
+    true
+  })
+  (test "str-replace-multiple-occurrences"
+    {do
+    (= {result} (str/replace "a b a b a" "a" "x"))
+    (test/assert-eq "x b x b x" result "should replace all occurrences")
+    true
+  })
+  (test "str-replace-to-empty"
+    {do
+    (= {result} (str/replace "a-b-c" "-" ""))
+    (test/assert-eq "abc" result "should remove all occurrences")
+    true
+  })
+  (test "str-replace-from-shorter-to-longer"
+    {do
+    (= {result} (str/replace "ab" "a" "xxx"))
+    (test/assert-eq "xxxb" result "replacement can be longer")
+    true
+  })
+  (test "str-replace-from-longer-to-shorter"
+    {do
+    (= {result} (str/replace "xxxb" "xxx" "a"))
+    (test/assert-eq "ab" result "replacement can be shorter")
+    true
+  })
+  (test "str-replace-empty-search-error"
+    {do
+    (= {result} (error? (str/replace "hello" "" "x")))
+    (test/assert result "empty search string should error")
+    true
+  })
+  (test "str-to-num-basic"
+    {do
+    (test/assert-eq 42 (str->num "42") "should convert positive integer")
+    (test/assert-eq 0 (str->num "0") "should convert zero")
+    (test/assert-eq 123456 (str->num "123456") "should convert larger numbers")
+    true
+  })
+  (test "str-to-num-negative"
+    {do
+    (test/assert-eq -42 (str->num "-42") "should convert negative integer")
+    (test/assert-eq -1 (str->num "-1") "should convert negative one")
+    true
+  })
+  (test "str-to-num-invalid"
+    {do
+    (= {result} (error? (str->num "abc")))
+    (test/assert result "non-numeric string should error")
+    true
+  }))
+  {:suite-name "String Builtin Tests"})

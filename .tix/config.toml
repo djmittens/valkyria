@@ -1,0 +1,9 @@
+[repo]
+main_branch = "main"
+plan_file = "ralph/plan.jsonl"
+
+[display]
+color = true
+
+[cache]
+auto_rebuild = true
