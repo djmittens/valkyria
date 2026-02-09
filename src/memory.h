@@ -298,11 +298,9 @@ struct valk_lenv_t;
 struct valk_gc_mark_queue;
 struct valk_lval_t;
 
-struct valk_gc_tlab;
-
 typedef struct {
   valk_mem_allocator_t *allocator;
-  void *heap;                     // Fallback GC heap for arena overflow (valk_gc_malloc_heap_t*)
+  void *heap;                     // Fallback GC heap for arena overflow (valk_gc_heap_t*)
   valk_mem_arena_t *scratch;      // Scratch arena for temporary allocations
   struct valk_lenv_t *root_env;   // Root environment for checkpoint evacuation
   float checkpoint_threshold;     // Threshold for automatic checkpointing (0.0-1.0)

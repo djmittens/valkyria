@@ -73,7 +73,7 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   ctx->env = valk_lenv_empty();
   valk_lenv_builtins(ctx->env);
   valk_thread_ctx.root_env = ctx->env;
-  valk_gc_malloc_set_root(valk_thread_ctx.heap, ctx->env);
+  valk_gc_set_root(valk_thread_ctx.heap, ctx->env);
 
   while (valk_lval_list_count(prelude_ast)) {
     valk_lval_t *x = valk_lval_eval(ctx->env, valk_lval_pop(prelude_ast, 0));

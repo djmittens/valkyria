@@ -33,7 +33,7 @@ int valk_runtime_init(valk_runtime_config_t *config);
 void valk_runtime_shutdown(void);
 void valk_runtime_thread_onboard(void);
 valk_thread_onboard_fn valk_runtime_get_onboard_fn(void);
-valk_gc_heap2_t *valk_runtime_get_heap(void);
+valk_gc_heap_t *valk_runtime_get_heap(void);
 bool valk_runtime_is_initialized(void);
 
 void valk_gc_reset_after_fork(void);
@@ -52,36 +52,32 @@ typedef struct valk_gc_header_t {
 struct valk_slab_t;
 
 // ============================================================================
-// Legacy GC API (wrappers around heap2)
+// GC Heap API
 // ============================================================================
 
-valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(sz hard_limit);
-void valk_gc_set_hard_limit(valk_gc_malloc_heap_t* heap, sz limit);
-void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, sz bytes);
-void valk_gc_malloc_set_root(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env);
-sz valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root);
-bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap);
-u8 valk_gc_heap_usage_pct(valk_gc_malloc_heap_t* heap);
-void valk_gc_set_thresholds(valk_gc_malloc_heap_t* heap,
+void valk_gc_set_hard_limit(valk_gc_heap_t* heap, sz limit);
+void valk_gc_set_root(valk_gc_heap_t* heap, valk_lenv_t* root_env);
+bool valk_gc_should_collect(valk_gc_heap_t* heap);
+u8 valk_gc_heap_usage_pct(valk_gc_heap_t* heap);
+void valk_gc_set_thresholds(valk_gc_heap_t* heap,
                             u8 threshold_pct, u8 target_pct, u32 min_interval_ms);
-void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap);
-void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap, FILE* out);
-void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap);
+void valk_gc_print_stats(valk_gc_heap_t* heap);
+void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_heap_t* heap, FILE* out);
 
 // ============================================================================
 // GC Metrics Export
 // ============================================================================
 
-void valk_gc_get_runtime_metrics(valk_gc_malloc_heap_t* heap,
+void valk_gc_get_runtime_metrics(valk_gc_heap_t* heap,
                                   u64* cycles, u64* pause_us_total,
                                   u64* pause_us_max, sz* reclaimed,
                                   sz* heap_used, sz* heap_total);
-sz valk_gc_get_allocated_bytes_total(valk_gc_malloc_heap_t* heap);
-u8 valk_gc_get_last_efficiency(valk_gc_malloc_heap_t* heap);
-void valk_gc_get_survival_histogram(valk_gc_malloc_heap_t* heap,
+sz valk_gc_get_allocated_bytes_total(valk_gc_heap_t* heap);
+u8 valk_gc_get_last_efficiency(valk_gc_heap_t* heap);
+void valk_gc_get_survival_histogram(valk_gc_heap_t* heap,
                                      u64* gen_0, u64* gen_1_5,
                                      u64* gen_6_20, u64* gen_21_plus);
-void valk_gc_get_pause_histogram(valk_gc_malloc_heap_t* heap,
+void valk_gc_get_pause_histogram(valk_gc_heap_t* heap,
                                   u64* pause_0_1ms, u64* pause_1_5ms,
                                   u64* pause_5_10ms, u64* pause_10_16ms,
                                   u64* pause_16ms_plus);
@@ -92,7 +88,7 @@ typedef struct {
   sz heap_peak;
 } valk_fragmentation_t;
 
-void valk_gc_get_fragmentation(valk_gc_malloc_heap_t* heap, valk_fragmentation_t* out);
+void valk_gc_get_fragmentation(valk_gc_heap_t* heap, valk_fragmentation_t* out);
 
 // ============================================================================
 // Memory Snapshot for REPL Eval Tracking
@@ -105,7 +101,7 @@ typedef struct {
   u64 lenv_count;
 } valk_repl_mem_snapshot_t;
 
-void valk_repl_mem_take_snapshot(valk_gc_malloc_heap_t* heap, valk_mem_arena_t* scratch,
+void valk_repl_mem_take_snapshot(valk_gc_heap_t* heap, valk_mem_arena_t* scratch,
                                  valk_repl_mem_snapshot_t* out);
 void valk_repl_mem_snapshot_delta(valk_repl_mem_snapshot_t* before, valk_repl_mem_snapshot_t* after,
                                   i64* heap_delta, i64* scratch_delta,
@@ -147,7 +143,7 @@ typedef struct valk_region {
   valk_lifetime_e lifetime;
   struct valk_region *parent;
   valk_mem_arena_t *arena;
-  valk_gc_heap2_t *gc_heap;
+  valk_gc_heap_t *gc_heap;
   bool owns_arena;
   valk_region_stats_t stats;
 } valk_region_t;
@@ -239,7 +235,7 @@ extern valk_handle_table_t valk_global_handle_table;
 
 typedef struct {
   valk_mem_arena_t* scratch;
-  valk_gc_malloc_heap_t* heap;
+  valk_gc_heap_t* heap;
   valk_lval_t** worklist;
   sz worklist_count;
   sz worklist_capacity;
@@ -259,7 +255,7 @@ typedef struct {
 #define VALK_CHECKPOINT_THRESHOLD_DEFAULT 0.75f
 
 bool valk_should_checkpoint(valk_mem_arena_t* scratch, float threshold);
-void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
+void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_heap_t* heap,
                      valk_lenv_t* root_env);
 valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v);
 
@@ -349,15 +345,15 @@ void valk_gc_participate_in_parallel_gc(void);
 // Mark Context
 // ============================================================================
 
-typedef struct valk_gc_mark_ctx2 {
-  valk_gc_heap2_t *heap;
+typedef struct valk_gc_mark_ctx {
+  valk_gc_heap_t *heap;
   valk_gc_mark_queue_t *queue;
-} valk_gc_mark_ctx2_t;
+} valk_gc_mark_ctx_t;
 
-void valk_gc_heap2_mark_object(valk_gc_mark_ctx2_t *ctx, void *ptr);
-void valk_gc_heap2_parallel_mark(valk_gc_heap2_t *heap);
-void valk_gc_heap2_parallel_sweep(valk_gc_heap2_t *heap);
-bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap);
+void valk_gc_heap_mark_object(valk_gc_mark_ctx_t *ctx, void *ptr);
+void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap);
+void valk_gc_heap_parallel_sweep(valk_gc_heap_t *heap);
+bool valk_gc_heap_request_stw(valk_gc_heap_t *heap);
 
 // ============================================================================
 // Root Enumeration

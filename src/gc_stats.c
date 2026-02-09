@@ -12,7 +12,7 @@
 // GC Runtime Metrics Export
 // ============================================================================
 
-void valk_gc_get_runtime_metrics(valk_gc_malloc_heap_t* heap,
+void valk_gc_get_runtime_metrics(valk_gc_heap_t* heap,
                                   u64* cycles, u64* pause_us_total,
                                   u64* pause_us_max, sz* reclaimed,
                                   sz* heap_used, sz* heap_total) {
@@ -23,16 +23,16 @@ void valk_gc_get_runtime_metrics(valk_gc_malloc_heap_t* heap,
   if (pause_us_max) *pause_us_max = atomic_load(&heap->runtime_metrics.pause_us_max);
   if (reclaimed) *reclaimed = atomic_load(&heap->runtime_metrics.reclaimed_bytes_total);
 
-  if (heap_used) *heap_used = valk_gc_heap2_used_bytes(heap);
+  if (heap_used) *heap_used = valk_gc_heap_used_bytes(heap);
   if (heap_total) *heap_total = heap->hard_limit;
 }
 
-sz valk_gc_get_allocated_bytes_total(valk_gc_malloc_heap_t* heap) {
+sz valk_gc_get_allocated_bytes_total(valk_gc_heap_t* heap) {
   if (!heap) return 0;
   return atomic_load(&heap->runtime_metrics.allocated_bytes_total);
 }
 
-u8 valk_gc_get_last_efficiency(valk_gc_malloc_heap_t* heap) {
+u8 valk_gc_get_last_efficiency(valk_gc_heap_t* heap) {
   if (!heap) return 0;
   sz before = atomic_load(&heap->runtime_metrics.last_heap_before_gc);
   sz reclaimed = atomic_load(&heap->runtime_metrics.last_reclaimed);
@@ -41,7 +41,7 @@ u8 valk_gc_get_last_efficiency(valk_gc_malloc_heap_t* heap) {
   return (u8)(pct > 100 ? 100 : pct);
 }
 
-void valk_gc_get_survival_histogram(valk_gc_malloc_heap_t* heap,
+void valk_gc_get_survival_histogram(valk_gc_heap_t* heap,
                                      u64* gen_0, u64* gen_1_5,
                                      u64* gen_6_20, u64* gen_21_plus) {
   if (!heap) return;
@@ -51,7 +51,7 @@ void valk_gc_get_survival_histogram(valk_gc_malloc_heap_t* heap,
   if (gen_21_plus) *gen_21_plus = atomic_load(&heap->runtime_metrics.survival_gen_21_plus);
 }
 
-void valk_gc_get_pause_histogram(valk_gc_malloc_heap_t* heap,
+void valk_gc_get_pause_histogram(valk_gc_heap_t* heap,
                                   u64* pause_0_1ms, u64* pause_1_5ms,
                                   u64* pause_5_10ms, u64* pause_10_16ms,
                                   u64* pause_16ms_plus) {
@@ -63,24 +63,24 @@ void valk_gc_get_pause_histogram(valk_gc_malloc_heap_t* heap,
   if (pause_16ms_plus) *pause_16ms_plus = atomic_load(&heap->runtime_metrics.pause_16ms_plus);
 }
 
-void valk_gc_get_fragmentation(valk_gc_malloc_heap_t* heap, valk_fragmentation_t* out) {
+void valk_gc_get_fragmentation(valk_gc_heap_t* heap, valk_fragmentation_t* out) {
   if (!heap || !out) return;
   memset(out, 0, sizeof(*out));
 
-  out->heap_allocated = valk_gc_heap2_used_bytes(heap);
+  out->heap_allocated = valk_gc_heap_used_bytes(heap);
   out->heap_limit = heap->hard_limit;
   out->heap_peak = atomic_load(&heap->stats.peak_usage);
 }
 
 // ============================================================================
-// GC Statistics Printing (heap2)
+// GC Statistics Printing (heap)
 // ============================================================================
 
-void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
+void valk_gc_print_stats(valk_gc_heap_t* heap) {
   if (heap == nullptr) return;
 
-  valk_gc_stats2_t stats;
-  valk_gc_heap2_get_stats(heap, &stats);
+  valk_gc_stats_t stats;
+  valk_gc_heap_get_stats(heap, &stats);
 
   fprintf(stderr, "\n=== GC Heap Statistics ===\n");
   u8 usage_pct = valk_gc_heap_usage_pct(heap);
@@ -114,7 +114,7 @@ void valk_gc_malloc_print_stats(valk_gc_malloc_heap_t* heap) {
   fprintf(stderr, "=========================\n\n");
 }
 
-void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap, FILE* out) {
+void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_heap_t* heap, FILE* out) {
   if (out == nullptr) out = stderr;
 
   fprintf(out, "\n=== Memory Statistics ===\n");
@@ -142,11 +142,11 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* h
   }
 
   if (heap != nullptr) {
-    valk_gc_stats2_t stats;
-    valk_gc_heap2_get_stats(heap, &stats);
+    valk_gc_stats_t stats;
+    valk_gc_heap_get_stats(heap, &stats);
 
     double usage = (double)stats.used_bytes / heap->hard_limit * 100.0;
-    fprintf(out, "GC Heap (heap2):\n");
+    fprintf(out, "GC Heap (heap):\n");
     fprintf(out, "  Usage:       %.1f%% (%zu / %zu bytes)\n",
             usage, stats.used_bytes, heap->hard_limit);
     fprintf(out, "  Committed:   %zu bytes\n", stats.committed_bytes);
@@ -163,13 +163,13 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* h
 // Memory Snapshot for REPL Eval Tracking
 // ============================================================================
 
-void valk_repl_mem_take_snapshot(valk_gc_malloc_heap_t* heap, valk_mem_arena_t* scratch,
+void valk_repl_mem_take_snapshot(valk_gc_heap_t* heap, valk_mem_arena_t* scratch,
                                  valk_repl_mem_snapshot_t* out) {
   if (!out) return;
   memset(out, 0, sizeof(*out));
 
   if (heap) {
-    out->heap_used_bytes = valk_gc_heap2_used_bytes(heap);
+    out->heap_used_bytes = valk_gc_heap_used_bytes(heap);
     out->lval_count = 0;
     out->lenv_count = 0;
   }

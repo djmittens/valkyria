@@ -44,7 +44,7 @@ static valk_lval_t* valk_builtin_memory_stats(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
   valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
   valk_memory_print_stats(scratch, heap, stdout);
   return valk_lval_nil();
 }
@@ -52,30 +52,30 @@ static valk_lval_t* valk_builtin_memory_stats(valk_lenv_t* e, valk_lval_t* a) {
 static valk_lval_t* valk_builtin_heap_usage(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
   if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
     return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
-  return valk_lval_num((long)valk_gc_heap2_used_bytes(heap));
+  return valk_lval_num((long)valk_gc_heap_used_bytes(heap));
 }
 
 static valk_lval_t* valk_builtin_gc_stats(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
-  valk_gc_malloc_print_stats(heap);
+  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
+  valk_gc_print_stats(heap);
   return valk_lval_nil();
 }
 
 static valk_lval_t* valk_builtin_gc_collect(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
   if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
     return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
   u64 reclaimed =
-      valk_gc_malloc_collect(heap, NULL);
+      valk_gc_heap_collect(heap);
   return valk_lval_num((long)reclaimed);
 }
 
@@ -83,7 +83,7 @@ static valk_lval_t* valk_builtin_heap_hard_limit(valk_lenv_t* e,
                                                  valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
   if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
     return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
@@ -96,7 +96,7 @@ static valk_lval_t* valk_builtin_set_heap_hard_limit(valk_lenv_t* e,
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
 
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
   if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
     return valk_lval_err("No GC heap available");  // LCOV_EXCL_LINE
   }
@@ -104,10 +104,10 @@ static valk_lval_t* valk_builtin_set_heap_hard_limit(valk_lenv_t* e,
   u64 new_limit = (u64)valk_lval_list_nth(a, 0)->num;
   u64 old_limit = heap->hard_limit;
 
-  if (new_limit < valk_gc_heap2_used_bytes(heap)) {
+  if (new_limit < valk_gc_heap_used_bytes(heap)) {
     return valk_lval_err(
         "Cannot set hard limit below current usage (%zu < %zu)", new_limit,
-        valk_gc_heap2_used_bytes(heap));
+        valk_gc_heap_used_bytes(heap));
   }
 
   valk_gc_set_hard_limit(heap, new_limit);
@@ -117,7 +117,7 @@ static valk_lval_t* valk_builtin_set_heap_hard_limit(valk_lenv_t* e,
 static valk_lval_t* valk_builtin_gc_threshold_pct(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
   if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
     return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
@@ -134,7 +134,7 @@ static valk_lval_t* valk_builtin_set_gc_threshold_pct(valk_lenv_t* e,
   if (new_pct < 1) new_pct = 1;
   if (new_pct > 100) new_pct = 100;
 
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
   if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
     return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
@@ -147,7 +147,7 @@ static valk_lval_t* valk_builtin_set_gc_threshold_pct(valk_lenv_t* e,
 static valk_lval_t* valk_builtin_gc_usage_pct(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
   if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
     return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
@@ -157,7 +157,7 @@ static valk_lval_t* valk_builtin_gc_usage_pct(valk_lenv_t* e, valk_lval_t* a) {
 static valk_lval_t* valk_builtin_gc_min_interval(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
   if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
     return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
@@ -173,7 +173,7 @@ static valk_lval_t* valk_builtin_set_gc_min_interval(valk_lenv_t* e,
   long new_ms = valk_lval_list_nth(a, 0)->num;
   if (new_ms < 0) new_ms = 0;
 
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
   if (heap == NULL) {  // LCOV_EXCL_BR_LINE - GC heap always initialized in runtime
     return valk_lval_num(0);  // LCOV_EXCL_LINE
   }
@@ -212,7 +212,7 @@ static valk_lval_t* valk_builtin_checkpoint_stats(valk_lenv_t* e,
   UNUSED(a);
 
   valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
-  valk_gc_malloc_heap_t* heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
 
   if (scratch == NULL || heap == NULL) {  // LCOV_EXCL_BR_LINE - always initialized in runtime
     return valk_lval_nil();  // LCOV_EXCL_LINE

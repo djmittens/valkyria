@@ -104,9 +104,9 @@ static inline bool valk_gc_bitmap_test_atomic(const u8 *bitmap, u32 idx) {
 // Page Structure
 // ============================================================================
 
-typedef struct valk_gc_page2 {
-  struct valk_gc_page2 *next;
-  struct valk_gc_page2 *next_partial;
+typedef struct valk_gc_page {
+  struct valk_gc_page *next;
+  struct valk_gc_page *next_partial;
   u32 page_id;
   u8 size_class;
   bool reclaimed;
@@ -114,38 +114,38 @@ typedef struct valk_gc_page2 {
   _Atomic u32 num_allocated;
   u16 slots_per_page;
   u16 bitmap_bytes;
-} valk_gc_page2_t;
+} valk_gc_page_t;
 
-static inline u8 *valk_gc_page2_alloc_bitmap(valk_gc_page2_t *page) {
+static inline u8 *valk_gc_page_alloc_bitmap(valk_gc_page_t *page) {
   return (u8 *)(page + 1);
 }
 
-static inline u8 *valk_gc_page2_mark_bitmap(valk_gc_page2_t *page) {
+static inline u8 *valk_gc_page_mark_bitmap(valk_gc_page_t *page) {
   return (u8 *)(page + 1) + page->bitmap_bytes;
 }
 
-static inline u8 *valk_gc_page2_slots(valk_gc_page2_t *page) {
+static inline u8 *valk_gc_page_slots(valk_gc_page_t *page) {
   u8 *after_bitmaps = (u8 *)(page + 1) + 2 * page->bitmap_bytes;
   uptr addr = (uptr)after_bitmaps;
   addr = (addr + 63) & ~63ULL;
   return (u8 *)addr;
 }
 
-static inline void *valk_gc_page2_slot_ptr(valk_gc_page2_t *page, u32 slot_idx) {
+static inline void *valk_gc_page_slot_ptr(valk_gc_page_t *page, u32 slot_idx) {
   u16 slot_size = valk_gc_size_classes[page->size_class];
-  return valk_gc_page2_slots(page) + slot_idx * slot_size;
+  return valk_gc_page_slots(page) + slot_idx * slot_size;
 }
 
-static inline bool valk_gc_page2_try_mark(valk_gc_page2_t *page, u32 slot) {
-  return valk_gc_bitmap_try_set_atomic(valk_gc_page2_mark_bitmap(page), slot);
+static inline bool valk_gc_page_try_mark(valk_gc_page_t *page, u32 slot) {
+  return valk_gc_bitmap_try_set_atomic(valk_gc_page_mark_bitmap(page), slot);
 }
 
-static inline bool valk_gc_page2_is_marked(valk_gc_page2_t *page, u32 slot) {
-  return valk_gc_bitmap_test_atomic(valk_gc_page2_mark_bitmap(page), slot);
+static inline bool valk_gc_page_is_marked(valk_gc_page_t *page, u32 slot) {
+  return valk_gc_bitmap_test_atomic(valk_gc_page_mark_bitmap(page), slot);
 }
 
-static inline bool valk_gc_page2_is_allocated(valk_gc_page2_t *page, u32 slot) {
-  return valk_gc_bitmap_test(valk_gc_page2_alloc_bitmap(page), slot);
+static inline bool valk_gc_page_is_allocated(valk_gc_page_t *page, u32 slot) {
+  return valk_gc_bitmap_test(valk_gc_page_alloc_bitmap(page), slot);
 }
 
 // ============================================================================
@@ -154,8 +154,8 @@ static inline bool valk_gc_page2_is_allocated(valk_gc_page2_t *page, u32 slot) {
 
 typedef struct valk_gc_page_list {
   pthread_mutex_t lock;
-  valk_gc_page2_t *all_pages;
-  valk_gc_page2_t *partial_pages;
+  valk_gc_page_t *all_pages;
+  valk_gc_page_t *partial_pages;
   sz num_pages;
   _Atomic sz total_slots;
   _Atomic sz used_slots;
@@ -182,15 +182,15 @@ typedef struct valk_gc_large_obj {
 // TLAB (Thread-Local Allocation Buffer)
 // ============================================================================
 
-typedef struct valk_gc_tlab2 {
-  struct valk_gc_heap2 *owner_heap;
+typedef struct valk_gc_tlab {
+  struct valk_gc_heap *owner_heap;
   u64 owner_generation;
   struct {
-    valk_gc_page2_t *page;
+    valk_gc_page_t *page;
     u32 next_slot;
     u32 limit_slot;
   } classes[VALK_GC_NUM_SIZE_CLASSES];
-} valk_gc_tlab2_t;
+} valk_gc_tlab_t;
 
 // ============================================================================
 // GC Heap Statistics
@@ -241,7 +241,7 @@ typedef struct {
 // Main Heap Structure
 // ============================================================================
 
-struct valk_gc_heap2 {
+struct valk_gc_heap {
   valk_mem_allocator_e type;
   _Atomic u64 generation;
   void *base;
@@ -275,10 +275,9 @@ struct valk_gc_heap2 {
   valk_gc_runtime_metrics_t runtime_metrics;
 };
 
-typedef struct valk_gc_heap2 valk_gc_heap2_t;
-typedef valk_gc_heap2_t valk_gc_malloc_heap_t;
+typedef struct valk_gc_heap valk_gc_heap_t;
 
-static inline sz valk_gc_heap2_used_bytes(valk_gc_heap2_t *heap) {
+static inline sz valk_gc_heap_used_bytes(valk_gc_heap_t *heap) {
   sz total = atomic_load(&heap->large_object_bytes);
   for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     total += atomic_load(&heap->classes[c].used_slots) * valk_gc_size_classes[c];
@@ -291,7 +290,7 @@ static inline sz valk_gc_heap2_used_bytes(valk_gc_heap2_t *heap) {
 // ============================================================================
 
 typedef struct valk_gc_ptr_location {
-  valk_gc_page2_t *page;
+  valk_gc_page_t *page;
   u32 slot;
   u8 size_class;
   bool is_valid;
@@ -301,7 +300,7 @@ typedef struct valk_gc_ptr_location {
 // GC Statistics Snapshot
 // ============================================================================
 
-typedef struct valk_gc_stats2 {
+typedef struct valk_gc_stats {
   sz used_bytes;
   sz committed_bytes;
   sz large_object_bytes;
@@ -311,53 +310,53 @@ typedef struct valk_gc_stats2 {
   sz class_total_slots[VALK_GC_NUM_SIZE_CLASSES];
   u64 collections;
   sz bytes_reclaimed_total;
-} valk_gc_stats2_t;
+} valk_gc_stats_t;
 
 // ============================================================================
 // Heap API
 // ============================================================================
 
-valk_gc_heap2_t *valk_gc_heap2_create(sz hard_limit);
-void valk_gc_heap2_destroy(valk_gc_heap2_t *heap);
-void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes);
-void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, sz new_size);
+valk_gc_heap_t *valk_gc_heap_create(sz hard_limit);
+void valk_gc_heap_destroy(valk_gc_heap_t *heap);
+void *valk_gc_heap_alloc(valk_gc_heap_t *heap, sz bytes);
+void *valk_gc_heap_realloc(valk_gc_heap_t *heap, void *ptr, sz new_size);
 
-void valk_gc_tlab2_init(valk_gc_tlab2_t *tlab);
-void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab);
-void valk_gc_tlab2_abandon(valk_gc_tlab2_t *tlab);
-void valk_gc_tlab2_invalidate_heap(valk_gc_heap2_t *heap);
+void valk_gc_tlab_init(valk_gc_tlab_t *tlab);
+void valk_gc_tlab_reset(valk_gc_tlab_t *tlab);
+void valk_gc_tlab_abandon(valk_gc_tlab_t *tlab);
+void valk_gc_tlab_invalidate_heap(valk_gc_heap_t *heap);
 
-static inline void *valk_gc_tlab2_alloc(valk_gc_tlab2_t *tlab, u8 size_class) {
+static inline void *valk_gc_tlab_alloc(valk_gc_tlab_t *tlab, u8 size_class) {
   if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return nullptr;
-  valk_gc_page2_t *page = tlab->classes[size_class].page;
+  valk_gc_page_t *page = tlab->classes[size_class].page;
   if (__builtin_expect(page != nullptr &&
                        !page->reclaimed &&
                        tlab->classes[size_class].next_slot <
                        tlab->classes[size_class].limit_slot, 1)) {
     u32 slot = tlab->classes[size_class].next_slot++;
-    return valk_gc_page2_slot_ptr(page, slot);
+    return valk_gc_page_slot_ptr(page, slot);
   }
   return nullptr;
 }
 
-bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, u8 size_class);
+bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_class);
 
-bool valk_gc_ptr_to_location(valk_gc_heap2_t *heap, void *ptr, valk_gc_ptr_location_t *out);
-bool valk_gc_mark_large_object(valk_gc_heap2_t *heap, void *ptr);
-sz valk_gc_sweep_page2(valk_gc_page2_t *page);
-sz valk_gc_sweep_large_objects(valk_gc_heap2_t *heap);
-void valk_gc_rebuild_partial_lists(valk_gc_heap2_t *heap);
-sz valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap);
+bool valk_gc_ptr_to_location(valk_gc_heap_t *heap, void *ptr, valk_gc_ptr_location_t *out);
+bool valk_gc_mark_large_object(valk_gc_heap_t *heap, void *ptr);
+sz valk_gc_sweep_page(valk_gc_page_t *page);
+sz valk_gc_sweep_large_objects(valk_gc_heap_t *heap);
+void valk_gc_rebuild_partial_lists(valk_gc_heap_t *heap);
+sz valk_gc_reclaim_empty_pages(valk_gc_heap_t *heap);
 
-void valk_gc_heap2_get_stats(valk_gc_heap2_t *heap, valk_gc_stats2_t *out);
-sz valk_gc_heap2_collect(valk_gc_heap2_t *heap);
+void valk_gc_heap_get_stats(valk_gc_heap_t *heap, valk_gc_stats_t *out);
+sz valk_gc_heap_collect(valk_gc_heap_t *heap);
 
 __attribute__((noreturn))
-void valk_gc_oom_abort(valk_gc_heap2_t *heap, sz requested);
+void valk_gc_oom_abort(valk_gc_heap_t *heap, sz requested);
 
 u64 valk_gc_heap_next_generation(void);
 void valk_gc_heap_reset_after_fork(void);
 
-void valk_gc_register_heap(valk_gc_heap2_t *heap);
-void valk_gc_unregister_heap(valk_gc_heap2_t *heap);
+void valk_gc_register_heap(valk_gc_heap_t *heap);
+void valk_gc_unregister_heap(valk_gc_heap_t *heap);
 void valk_gc_page_list_init(valk_gc_page_list_t *list, u8 size_class);

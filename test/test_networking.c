@@ -143,7 +143,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);
   valk_thread_ctx.root_env = env;
-  valk_gc_malloc_set_root(valk_thread_ctx.heap, env);
+  valk_gc_set_root(valk_thread_ctx.heap, env);
   printf("[test] Env created, evaluating prelude...\n");
   fflush(stdout);
 

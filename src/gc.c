@@ -13,7 +13,7 @@
 // Runtime Initialization
 // ============================================================================
 
-static valk_gc_malloc_heap_t *__runtime_heap = nullptr;
+static valk_gc_heap_t *__runtime_heap = nullptr;
 static bool __runtime_initialized = false;
 
 // LCOV_EXCL_BR_START - runtime init/shutdown defensive checks
@@ -28,7 +28,7 @@ int valk_runtime_init(valk_runtime_config_t *config) {
 
   valk_runtime_config_t cfg = config ? *config : valk_runtime_config_default();
 
-  __runtime_heap = valk_gc_heap2_create(cfg.gc_heap_size);
+  __runtime_heap = valk_gc_heap_create(cfg.gc_heap_size);
   if (!__runtime_heap) {
     VALK_ERROR("Failed to create runtime GC heap");
     return -1;
@@ -45,7 +45,7 @@ void valk_runtime_shutdown(void) {
   if (!__runtime_initialized) return;
 
   if (__runtime_heap) {
-    valk_gc_heap2_destroy(__runtime_heap);
+    valk_gc_heap_destroy(__runtime_heap);
     __runtime_heap = nullptr;
   }
 
@@ -72,7 +72,7 @@ valk_thread_onboard_fn valk_runtime_get_onboard_fn(void) {
   return valk_runtime_thread_onboard;
 }
 
-valk_gc_heap2_t *valk_runtime_get_heap(void) {
+valk_gc_heap_t *valk_runtime_get_heap(void) {
   return __runtime_heap;
 }
 
@@ -328,17 +328,9 @@ void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
 }
 // LCOV_EXCL_BR_STOP
 
-// ============================================================================
-// Legacy GC API (wrappers around heap2)
-// ============================================================================
-
-valk_gc_malloc_heap_t* valk_gc_malloc_heap_init(sz hard_limit) {
-  return valk_gc_heap2_create(hard_limit);
-}
-
-void valk_gc_set_hard_limit(valk_gc_malloc_heap_t* heap, sz limit) {
+void valk_gc_set_hard_limit(valk_gc_heap_t* heap, sz limit) {
   if (!heap) return;
-  sz used = valk_gc_heap2_used_bytes(heap);
+  sz used = valk_gc_heap_used_bytes(heap);
   if (limit < used) {
     VALK_WARN("Cannot set hard limit below current usage (%zu < %zu)", limit, used);
     return;
@@ -347,18 +339,18 @@ void valk_gc_set_hard_limit(valk_gc_malloc_heap_t* heap, sz limit) {
   heap->soft_limit = (limit * 3) / 4;
 }
 
-void valk_gc_malloc_set_root(valk_gc_malloc_heap_t* heap, valk_lenv_t* root_env) {
+void valk_gc_set_root(valk_gc_heap_t* heap, valk_lenv_t* root_env) {
   if (heap) heap->root_env = root_env;
 }
 
-u8 valk_gc_heap_usage_pct(valk_gc_malloc_heap_t* heap) {
+u8 valk_gc_heap_usage_pct(valk_gc_heap_t* heap) {
   if (!heap || heap->hard_limit == 0) return 0;
-  sz used = valk_gc_heap2_used_bytes(heap);
+  sz used = valk_gc_heap_used_bytes(heap);
   u8 pct = (u8)((used * 100) / heap->hard_limit);
   return pct > 100 ? 100 : pct;
 }
 
-void valk_gc_set_thresholds(valk_gc_malloc_heap_t* heap,
+void valk_gc_set_thresholds(valk_gc_heap_t* heap,
                             u8 threshold_pct,
                             u8 target_pct,
                             u32 min_interval_ms) {
@@ -369,7 +361,7 @@ void valk_gc_set_thresholds(valk_gc_malloc_heap_t* heap,
 }
 
 // LCOV_EXCL_BR_START - rate limiting branches depend on timing state
-bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap) {
+bool valk_gc_should_collect(valk_gc_heap_t* heap) {
   if (!heap) return false;
   u8 usage_pct = valk_gc_heap_usage_pct(heap);
   if (usage_pct < heap->gc_threshold_pct) return false;
@@ -381,20 +373,6 @@ bool valk_gc_malloc_should_collect(valk_gc_malloc_heap_t* heap) {
   return true;
 }
 // LCOV_EXCL_BR_STOP
-
-void* valk_gc_malloc_heap_alloc(valk_gc_malloc_heap_t* heap, sz bytes) {
-  return valk_gc_heap2_alloc(heap, bytes);
-}
-
-sz valk_gc_malloc_collect(valk_gc_malloc_heap_t* heap, valk_lval_t* additional_root) {
-  if (!heap) return 0;
-  (void)additional_root;
-  return valk_gc_heap2_collect(heap);
-}
-
-void valk_gc_malloc_heap_destroy(valk_gc_malloc_heap_t* heap) {
-  valk_gc_heap2_destroy(heap);
-}
 
 // ============================================================================
 // Pointer Map - hashmap for src->dst tracking during evacuation

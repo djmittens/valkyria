@@ -9,7 +9,7 @@
 void test_gc_metrics_init(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t* heap = valk_gc_heap_create(0);
 
   VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
 
@@ -37,7 +37,7 @@ void test_gc_metrics_init(VALK_TEST_ARGS()) {
                    "heap_total should be positive (got %zu)",
                    heap_total);
 
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -45,7 +45,7 @@ void test_gc_metrics_init(VALK_TEST_ARGS()) {
 void test_gc_metrics_after_collection(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t* heap = valk_gc_heap_create(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)heap;
@@ -54,14 +54,14 @@ void test_gc_metrics_after_collection(VALK_TEST_ARGS()) {
 
   // Create a simple environment
   valk_lenv_t* env = valk_lenv_empty();
-  valk_gc_malloc_set_root(heap, env);
+  valk_gc_set_root(heap, env);
 
   // Add some data
   valk_lenv_put(env, valk_lval_sym("x"), valk_lval_num(42));
   valk_lenv_put(env, valk_lval_sym("y"), valk_lval_num(100));
 
   // Run collection
-  valk_gc_malloc_collect(heap, nullptr);
+  valk_gc_heap_collect(heap);
 
   // Get metrics
   u64 cycles = 0;
@@ -71,7 +71,7 @@ void test_gc_metrics_after_collection(VALK_TEST_ARGS()) {
                    (unsigned long long)cycles);
 
   // Run another collection
-  valk_gc_malloc_collect(heap, nullptr);
+  valk_gc_heap_collect(heap);
   valk_gc_get_runtime_metrics(heap, &cycles, nullptr, nullptr, nullptr, nullptr, nullptr);
 
   VALK_TEST_ASSERT(cycles == 2, "cycles should be 2 after second collection, got %llu",
@@ -79,7 +79,7 @@ void test_gc_metrics_after_collection(VALK_TEST_ARGS()) {
 
   valk_gc_thread_unregister();
   valk_thread_ctx = old_ctx;
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -87,7 +87,7 @@ void test_gc_metrics_after_collection(VALK_TEST_ARGS()) {
 void test_gc_pause_time_recorded(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t* heap = valk_gc_heap_create(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)heap;
@@ -95,7 +95,7 @@ void test_gc_pause_time_recorded(VALK_TEST_ARGS()) {
   valk_gc_thread_register();
 
   valk_lenv_t* env = valk_lenv_empty();
-  valk_gc_malloc_set_root(heap, env);
+  valk_gc_set_root(heap, env);
   for (int i = 0; i < 100; i++) {
     char name[32];
     snprintf(name, sizeof(name), "var_%d", i);
@@ -103,7 +103,7 @@ void test_gc_pause_time_recorded(VALK_TEST_ARGS()) {
   }
 
   // Run collection
-  valk_gc_malloc_collect(heap, nullptr);
+  valk_gc_heap_collect(heap);
 
   // Get pause time metrics
   u64 pause_us_total = 0;
@@ -123,7 +123,7 @@ void test_gc_pause_time_recorded(VALK_TEST_ARGS()) {
 
   valk_gc_thread_unregister();
   valk_thread_ctx = old_ctx;
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -131,7 +131,7 @@ void test_gc_pause_time_recorded(VALK_TEST_ARGS()) {
 void test_gc_reclaimed_bytes(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t* heap = valk_gc_heap_create(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)heap;
@@ -139,20 +139,20 @@ void test_gc_reclaimed_bytes(VALK_TEST_ARGS()) {
   valk_gc_thread_register();
 
   valk_lenv_t* env = valk_lenv_empty();
-  valk_gc_malloc_set_root(heap, env);
+  valk_gc_set_root(heap, env);
   // Use non-lval size to avoid slab allocator (so bytes are tracked)
   for (int i = 0; i < 10; i++) {
-    void* ptr = valk_gc_malloc_heap_alloc(heap, 1024);  // 1KB each
+    void* ptr = valk_gc_heap_alloc(heap, 1024);  // 1KB each
     VALK_TEST_ASSERT(ptr != nullptr, "Allocation should succeed");
     // Don't add to environment - these will be garbage
   }
 
-  size_t allocated_before = valk_gc_heap2_used_bytes(heap);
+  size_t allocated_before = valk_gc_heap_used_bytes(heap);
 
   // Run collection - should reclaim the unreferenced allocations
-  valk_gc_malloc_collect(heap, nullptr);
+  valk_gc_heap_collect(heap);
 
-  size_t allocated_after = valk_gc_heap2_used_bytes(heap);
+  size_t allocated_after = valk_gc_heap_used_bytes(heap);
 
   // Get reclaimed bytes metric
   sz reclaimed = 0;
@@ -165,7 +165,7 @@ void test_gc_reclaimed_bytes(VALK_TEST_ARGS()) {
 
   valk_gc_thread_unregister();
   valk_thread_ctx = old_ctx;
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -173,7 +173,7 @@ void test_gc_reclaimed_bytes(VALK_TEST_ARGS()) {
 void test_gc_max_pause_tracking(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t* heap = valk_gc_heap_create(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)heap;
@@ -181,10 +181,10 @@ void test_gc_max_pause_tracking(VALK_TEST_ARGS()) {
   valk_gc_thread_register();
 
   valk_lenv_t* env = valk_lenv_empty();
-  valk_gc_malloc_set_root(heap, env);
+  valk_gc_set_root(heap, env);
 
   // First collection with minimal work
-  valk_gc_malloc_collect(heap, nullptr);
+  valk_gc_heap_collect(heap);
 
   u64 pause_us_max_1 = 0;
   valk_gc_get_runtime_metrics(heap, nullptr, nullptr, &pause_us_max_1, nullptr, nullptr, nullptr);
@@ -197,7 +197,7 @@ void test_gc_max_pause_tracking(VALK_TEST_ARGS()) {
   }
 
   // Second collection with more work - might be slower
-  valk_gc_malloc_collect(heap, nullptr);
+  valk_gc_heap_collect(heap);
 
   u64 pause_us_max_2 = 0;
   u64 pause_us_total = 0;
@@ -216,7 +216,7 @@ void test_gc_max_pause_tracking(VALK_TEST_ARGS()) {
 
   valk_gc_thread_unregister();
   valk_thread_ctx = old_ctx;
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -246,12 +246,12 @@ void test_gc_metrics_null_heap(VALK_TEST_ARGS()) {
 void test_gc_metrics_null_outputs(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t* heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t* heap = valk_gc_heap_create(0);
 
   // Should not crash with nullptr output parameters
   valk_gc_get_runtime_metrics(heap, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
 
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 

@@ -130,7 +130,7 @@ static void valk_checkpoint_release_stw(void) {
 }
 
 // LCOV_EXCL_BR_START - checkpoint null checks and iteration
-void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_malloc_heap_t* heap,
+void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_heap_t* heap,
                      valk_lenv_t* root_env) {
   if (scratch == nullptr || heap == nullptr) {
     VALK_WARN("Checkpoint called with nullptr scratch or heap");

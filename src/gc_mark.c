@@ -12,23 +12,23 @@
 // Mark Phase Internals
 // ============================================================================
 
-// LCOV_EXCL_BR_START - heap2 mark phase null checks and type dispatch
-static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx);
-static void mark_env2(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx);
+// LCOV_EXCL_BR_START - heap mark phase null checks and type dispatch
+static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx);
+static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx);
 
-static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx2_t *ctx) {
+static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx_t *ctx) {
   if (ptr == nullptr) return false;
 
   valk_gc_ptr_location_t loc;
   if (valk_gc_ptr_to_location(ctx->heap, ptr, &loc)) {
-    return valk_gc_page2_try_mark(loc.page, loc.slot);
+    return valk_gc_page_try_mark(loc.page, loc.slot);
   } else {
     return valk_gc_mark_large_object(ctx->heap, ptr);
   }
 }
 
 // LCOV_EXCL_START - Heap2 marking with complex types requires runtime context from real GC cycle
-static void mark_lval2(valk_lval_t *lval, valk_gc_mark_ctx2_t *ctx) {
+static void mark_lval(valk_lval_t *lval, valk_gc_mark_ctx_t *ctx) {
   if (lval == nullptr) return;
   if (!mark_ptr_only(lval, ctx)) return;
   valk_gc_mark_queue_push(ctx->queue, lval);
@@ -36,7 +36,7 @@ static void mark_lval2(valk_lval_t *lval, valk_gc_mark_ctx2_t *ctx) {
 
 #define MARK_ENV_VISITED_MAX 128
 
-static void mark_env2(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx) {
+static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx) {
   valk_lenv_t *visited[MARK_ENV_VISITED_MAX];
   u64 visited_count = 0;
 
@@ -55,35 +55,35 @@ static void mark_env2(valk_lenv_t *env, valk_gc_mark_ctx2_t *ctx) {
       mark_ptr_only(env->symbols.items[i], ctx);
     }
     for (u64 i = 0; i < env->vals.count; i++) {
-      mark_lval2(env->vals.items[i], ctx);
+      mark_lval(env->vals.items[i], ctx);
     }
     env = env->parent;
   }
 }
 
-static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
+static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx) {
   if (obj == nullptr) return;
   switch (LVAL_TYPE(obj)) {
     case LVAL_CONS:
-      mark_lval2(obj->cons.head, ctx);
-      mark_lval2(obj->cons.tail, ctx);
+      mark_lval(obj->cons.head, ctx);
+      mark_lval(obj->cons.tail, ctx);
       break;
     case LVAL_FUN:
       if (obj->fun.builtin == nullptr) {
-        mark_lval2(obj->fun.formals, ctx);
-        mark_lval2(obj->fun.body, ctx);
-        if (obj->fun.env) mark_env2(obj->fun.env, ctx);
+        mark_lval(obj->fun.formals, ctx);
+        mark_lval(obj->fun.body, ctx);
+        if (obj->fun.env) mark_env(obj->fun.env, ctx);
       }
       mark_ptr_only(obj->fun.name, ctx);
       break;
     case LVAL_HANDLE:
       if (obj->async.handle) {
-        mark_lval2(obj->async.handle->on_complete, ctx);
-        mark_lval2(obj->async.handle->on_error, ctx);
-        mark_lval2(obj->async.handle->on_cancel, ctx);
-        mark_lval2(atomic_load_explicit(&obj->async.handle->result, memory_order_acquire), ctx);
-        mark_lval2(atomic_load_explicit(&obj->async.handle->error, memory_order_acquire), ctx);
-        if (obj->async.handle->env) mark_env2(obj->async.handle->env, ctx);
+        mark_lval(obj->async.handle->on_complete, ctx);
+        mark_lval(obj->async.handle->on_error, ctx);
+        mark_lval(obj->async.handle->on_cancel, ctx);
+        mark_lval(atomic_load_explicit(&obj->async.handle->result, memory_order_acquire), ctx);
+        mark_lval(atomic_load_explicit(&obj->async.handle->error, memory_order_acquire), ctx);
+        if (obj->async.handle->env) mark_env(obj->async.handle->env, ctx);
       }
       break;
     case LVAL_SYM:
@@ -101,12 +101,12 @@ static void mark_children2(valk_lval_t *obj, valk_gc_mark_ctx2_t *ctx) {
 // LCOV_EXCL_STOP
 
 static void mark_root_visitor2(valk_lval_t *val, void *user) {
-  valk_gc_mark_ctx2_t *ctx = user;
-  mark_lval2(val, ctx);
+  valk_gc_mark_ctx_t *ctx = user;
+  mark_lval(val, ctx);
 }
 
-void valk_gc_heap2_mark_object(valk_gc_mark_ctx2_t *ctx, void *ptr) {
-  mark_lval2(ptr, ctx);
+void valk_gc_heap_mark_object(valk_gc_mark_ctx_t *ctx, void *ptr) {
+  mark_lval(ptr, ctx);
 }
 // LCOV_EXCL_BR_STOP
 
@@ -114,18 +114,18 @@ void valk_gc_heap2_mark_object(valk_gc_mark_ctx2_t *ctx, void *ptr) {
 // OWST Termination Detection
 // ============================================================================
 
-static _Atomic u64 __gc_heap2_offered = 0;
-static _Atomic bool __gc_heap2_terminated = false;
-static _Atomic(valk_gc_heap2_t *) __gc_heap2_current = nullptr;
-static pthread_mutex_t __gc_heap2_term_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t __gc_heap2_term_cond = PTHREAD_COND_INITIALIZER;
+static _Atomic u64 __gc_heap_offered = 0;
+static _Atomic bool __gc_heap_terminated = false;
+static _Atomic(valk_gc_heap_t *) __gc_heap_current = nullptr;
+static pthread_mutex_t __gc_heap_term_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t __gc_heap_term_cond = PTHREAD_COND_INITIALIZER;
 
 // LCOV_EXCL_START - OWST termination requires multi-threaded GC timing impossible to reliably test
-static bool valk_gc_heap2_offer_termination(void) {
+static bool valk_gc_heap_offer_termination(void) {
   u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
 
-  pthread_mutex_lock(&__gc_heap2_term_lock);
-  u64 offered = atomic_fetch_add(&__gc_heap2_offered, 1) + 1;
+  pthread_mutex_lock(&__gc_heap_term_lock);
+  u64 offered = atomic_fetch_add(&__gc_heap_offered, 1) + 1;
 
   if (offered == num_threads) {
     bool all_empty = true;
@@ -137,22 +137,22 @@ static bool valk_gc_heap2_offer_termination(void) {
       }
     }
     if (all_empty) {
-      atomic_store(&__gc_heap2_terminated, true);
-      pthread_cond_broadcast(&__gc_heap2_term_cond);
-      pthread_mutex_unlock(&__gc_heap2_term_lock);
+      atomic_store(&__gc_heap_terminated, true);
+      pthread_cond_broadcast(&__gc_heap_term_cond);
+      pthread_mutex_unlock(&__gc_heap_term_lock);
       return true;
     }
   }
 
-  while (!atomic_load(&__gc_heap2_terminated)) {
+  while (!atomic_load(&__gc_heap_terminated)) {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_nsec += 1000000;
     if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
-    pthread_cond_timedwait(&__gc_heap2_term_cond, &__gc_heap2_term_lock, &ts);
+    pthread_cond_timedwait(&__gc_heap_term_cond, &__gc_heap_term_lock, &ts);
 
-    if (atomic_load(&__gc_heap2_terminated)) {
-      pthread_mutex_unlock(&__gc_heap2_term_lock);
+    if (atomic_load(&__gc_heap_terminated)) {
+      pthread_mutex_unlock(&__gc_heap_term_lock);
       return true;
     }
 
@@ -165,14 +165,14 @@ static bool valk_gc_heap2_offer_termination(void) {
       }
     }
     if (found_work) {
-      atomic_fetch_sub(&__gc_heap2_offered, 1);
-      pthread_cond_signal(&__gc_heap2_term_cond);
-      pthread_mutex_unlock(&__gc_heap2_term_lock);
+      atomic_fetch_sub(&__gc_heap_offered, 1);
+      pthread_cond_signal(&__gc_heap_term_cond);
+      pthread_mutex_unlock(&__gc_heap_term_lock);
       return false;
     }
   }
 
-  pthread_mutex_unlock(&__gc_heap2_term_lock);
+  pthread_mutex_unlock(&__gc_heap_term_lock);
   return true;
 }
 // LCOV_EXCL_STOP
@@ -182,7 +182,7 @@ static bool valk_gc_heap2_offer_termination(void) {
 // ============================================================================
 
 // LCOV_EXCL_START - Heap2 parallel mark/sweep requires multi-threaded STW coordination
-void valk_gc_heap2_parallel_mark(valk_gc_heap2_t *heap) {
+void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap) {
   if (!heap) return;
   if (!valk_thread_ctx.gc_registered) return;
 
@@ -191,7 +191,7 @@ void valk_gc_heap2_parallel_mark(valk_gc_heap2_t *heap) {
 
   valk_gc_mark_queue_init(my_queue);
 
-  valk_gc_mark_ctx2_t ctx = {
+  valk_gc_mark_ctx_t ctx = {
     .heap = heap,
     .queue = my_queue
   };
@@ -207,7 +207,7 @@ void valk_gc_heap2_parallel_mark(valk_gc_heap2_t *heap) {
   while (true) {
     valk_lval_t *obj;
     while ((obj = valk_gc_mark_queue_pop(my_queue)) != nullptr) {
-      mark_children2(obj, &ctx);
+      mark_children(obj, &ctx);
     }
 
     bool found_work = false;
@@ -219,21 +219,21 @@ void valk_gc_heap2_parallel_mark(valk_gc_heap2_t *heap) {
 
       obj = valk_gc_mark_queue_steal(&valk_gc_coord.threads[victim].mark_queue);
       if (obj != nullptr) {
-        mark_children2(obj, &ctx);
+        mark_children(obj, &ctx);
         found_work = true;
         break;
       }
     }
 
     if (!found_work) {
-      if (valk_gc_heap2_offer_termination()) {
+      if (valk_gc_heap_offer_termination()) {
         break;
       }
     }
   }
 }
 
-void valk_gc_heap2_parallel_sweep(valk_gc_heap2_t *heap) {
+void valk_gc_heap_parallel_sweep(valk_gc_heap_t *heap) {
   if (!heap) return;
   if (!valk_thread_ctx.gc_registered) return;
 
@@ -251,14 +251,14 @@ void valk_gc_heap2_parallel_sweep(valk_gc_heap2_t *heap) {
     u64 my_end = (my_id + 1) * pages_per_thread;
     if (my_end > num_pages) my_end = num_pages;
 
-    valk_gc_page2_t *page = list->all_pages;
+    valk_gc_page_t *page = list->all_pages;
     for (u64 i = 0; i < my_start && page != nullptr; i++) {
       page = page->next;
     }
 
     u64 freed_slots = 0;
     for (u64 i = my_start; i < my_end && page != nullptr; i++) {
-      freed_slots += valk_gc_sweep_page2(page);
+      freed_slots += valk_gc_sweep_page(page);
       page = page->next;
     }
 
@@ -276,7 +276,7 @@ void valk_gc_heap2_parallel_sweep(valk_gc_heap2_t *heap) {
 // STW Request
 // ============================================================================
 
-bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
+bool valk_gc_heap_request_stw(valk_gc_heap_t *heap) {
   if (!heap) return false;
 
   u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
@@ -295,7 +295,7 @@ bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
     valk_gc_coord.barrier_initialized = true;
   }
 
-  atomic_store(&__gc_heap2_current, heap);
+  atomic_store(&__gc_heap_current, heap);
 
   atomic_thread_fence(memory_order_seq_cst);
 
@@ -332,7 +332,7 @@ bool valk_gc_heap2_request_stw(valk_gc_heap2_t *heap) {
 // ============================================================================
 
 void valk_gc_participate_in_parallel_gc(void) {
-  valk_gc_heap2_t *heap = atomic_load(&__gc_heap2_current);
+  valk_gc_heap_t *heap = atomic_load(&__gc_heap_current);
   if (!heap) {
     pthread_mutex_lock(&valk_gc_coord.lock);
     while (atomic_load(&valk_gc_coord.phase) != VALK_GC_PHASE_IDLE) {
@@ -343,9 +343,9 @@ void valk_gc_participate_in_parallel_gc(void) {
   }
 
   valk_barrier_wait(&valk_gc_coord.barrier);
-  valk_gc_heap2_parallel_mark(heap);
+  valk_gc_heap_parallel_mark(heap);
   valk_barrier_wait(&valk_gc_coord.barrier);
-  valk_gc_heap2_parallel_sweep(heap);
+  valk_gc_heap_parallel_sweep(heap);
   valk_barrier_wait(&valk_gc_coord.barrier);
   valk_barrier_wait(&valk_gc_coord.barrier);
 }
@@ -355,14 +355,14 @@ void valk_gc_participate_in_parallel_gc(void) {
 // GC Collection Cycle
 // ============================================================================
 
-sz valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
+sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
   if (!heap) return 0;
 
   VALK_ASSERT(atomic_load(&valk_gc_coord.threads_registered) > 0, // LCOV_EXCL_BR_LINE
               "GC collect requires at least one registered thread");
 
   // LCOV_EXCL_START - STW request contention: requires concurrent GC requests
-  if (!valk_gc_heap2_request_stw(heap)) {
+  if (!valk_gc_heap_request_stw(heap)) {
     VALK_GC_SAFE_POINT();
     return 0;
   }
@@ -374,20 +374,20 @@ sz valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
   atomic_store(&heap->gc_in_progress, true);
   atomic_fetch_add(&heap->collections, 1);
 
-  u64 bytes_before = valk_gc_heap2_used_bytes(heap);
+  u64 bytes_before = valk_gc_heap_used_bytes(heap);
 
-  atomic_store(&__gc_heap2_offered, 0);
-  atomic_store(&__gc_heap2_terminated, false);
+  atomic_store(&__gc_heap_offered, 0);
+  atomic_store(&__gc_heap_terminated, false);
 
   valk_barrier_wait(&valk_gc_coord.barrier);
 
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_MARKING);
-  valk_gc_heap2_parallel_mark(heap);
+  valk_gc_heap_parallel_mark(heap);
 
   valk_barrier_wait(&valk_gc_coord.barrier);
 
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_SWEEPING);
-  valk_gc_heap2_parallel_sweep(heap);
+  valk_gc_heap_parallel_sweep(heap);
 
   valk_barrier_wait(&valk_gc_coord.barrier);
 
@@ -405,7 +405,7 @@ sz valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
 
   valk_barrier_wait(&valk_gc_coord.barrier);
 
-  u64 bytes_after = valk_gc_heap2_used_bytes(heap);
+  u64 bytes_after = valk_gc_heap_used_bytes(heap);
   u64 reclaimed = 0;
   if (bytes_before > bytes_after) {
     reclaimed = bytes_before - bytes_after;
@@ -441,10 +441,10 @@ sz valk_gc_heap2_collect(valk_gc_heap2_t *heap) {
 
 // LCOV_EXCL_START - fork safety function requires actual fork()
 void valk_gc_mark_reset_after_fork(void) {
-  atomic_store(&__gc_heap2_offered, 0);
-  atomic_store(&__gc_heap2_terminated, false);
-  atomic_store(&__gc_heap2_current, nullptr);
-  pthread_mutex_init(&__gc_heap2_term_lock, nullptr);
-  pthread_cond_init(&__gc_heap2_term_cond, nullptr);
+  atomic_store(&__gc_heap_offered, 0);
+  atomic_store(&__gc_heap_terminated, false);
+  atomic_store(&__gc_heap_current, nullptr);
+  pthread_mutex_init(&__gc_heap_term_lock, nullptr);
+  pthread_cond_init(&__gc_heap_term_cond, nullptr);
 }
 // LCOV_EXCL_STOP

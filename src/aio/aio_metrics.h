@@ -55,7 +55,7 @@ typedef struct {
 } valk_vm_metrics_t;
 
 void valk_vm_metrics_collect(valk_vm_metrics_t* out,
-                              valk_gc_malloc_heap_t* heap,
+                              valk_gc_heap_t* heap,
                               struct uv_loop_s* loop);
 
 char* valk_vm_metrics_to_json(const valk_vm_metrics_t* m,
@@ -77,7 +77,7 @@ typedef struct {
 void valk_event_loop_metrics_get(struct uv_loop_s* loop, valk_event_loop_metrics_t* out);
 
 typedef struct valk_aio_metrics_state {
-  valk_gc_malloc_heap_t *gc_heap;
+  valk_gc_heap_t *gc_heap;
   valk_mem_arena_t *scratch_arena;
   void *metrics_v2;
   void *system_stats_v2;

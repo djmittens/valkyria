@@ -333,7 +333,7 @@ valk_async_handle_t *valk_aio_http2_request_send(valk_http2_request_t *req,
 void valk_aio_update_queue_stats(valk_aio_system_t* sys);
 
 // Get GC heap from AIO system
-valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
+valk_gc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
 
 // Get scratch arena from AIO system (for diagnostics)
 valk_mem_arena_t* valk_aio_get_scratch_arena(valk_aio_system_t* sys);

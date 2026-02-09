@@ -24,11 +24,11 @@ static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
     } else {
       last = x;
     }
-    valk_gc_malloc_heap_t* gc_heap =
-        (valk_gc_malloc_heap_t*)valk_thread_ctx.allocator;
+    valk_gc_heap_t* gc_heap =
+        (valk_gc_heap_t*)valk_thread_ctx.allocator;
     if (gc_heap->type == VALK_ALLOC_GC_HEAP &&
-        valk_gc_malloc_should_collect(gc_heap)) {
-      valk_gc_malloc_collect(gc_heap, NULL);
+        valk_gc_should_collect(gc_heap)) {
+      valk_gc_heap_collect(gc_heap);
     }
   }
   if (last) {

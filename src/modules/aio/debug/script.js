@@ -5333,7 +5333,7 @@
       var heapUsed, heapTotal;
       
       if (gc.tiers && gc.tiers.length > 0) {
-        var heapTier = this.findTier(gc.tiers, 'heap2') || {};
+        var heapTier = this.findTier(gc.tiers, 'heap') || {};
         heapUsed = heapTier.bytes_used || 0;
         heapTotal = heapTier.bytes_total || 1;
       } else {
@@ -5615,9 +5615,9 @@
     }
 
     updateTieredHeap(gc) {
-      // Find heap2 tier (the new parallel GC heap)
+      // Find heap tier (the new parallel GC heap)
       var tiers = gc.tiers || [];
-      var heapTier = this.findTier(tiers, 'heap2') || {};
+      var heapTier = this.findTier(tiers, 'heap') || {};
 
       // Heap metrics
       var heapUsed = heapTier.bytes_used || 0;

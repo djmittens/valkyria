@@ -20,7 +20,7 @@ static void setup_timeout(int seconds) {
   signal(SIGALRM, alarm_handler);
 }
 
-static valk_gc_malloc_heap_t *heap = NULL;
+static valk_gc_heap_t *heap = NULL;
 static valk_aio_system_t *sys = NULL;
 
 static void setup_gc_and_aio(void) {
@@ -28,7 +28,7 @@ static void setup_gc_and_aio(void) {
   valk_gc_coordinator_init();
   valk_gc_thread_register();
 
-  heap = valk_gc_malloc_heap_init(0);
+  heap = valk_gc_heap_create(0);
   valk_thread_ctx.heap = heap;
 
   sys = valk_aio_start();
@@ -53,7 +53,7 @@ void test_gc_after_aio_start(VALK_TEST_ARGS()) {
   u64 registered = atomic_load(&valk_gc_coord.threads_registered);
   VALK_TEST_ASSERT(registered >= 2, "Expected at least 2 threads registered (main + event loop), got %llu", (unsigned long long)registered);
 
-  sz reclaimed = valk_gc_malloc_collect(heap, NULL);
+  sz reclaimed = valk_gc_heap_collect(heap);
   (void)reclaimed;
 
   teardown_gc_and_aio();
@@ -69,7 +69,7 @@ void test_multiple_gc_cycles_with_aio(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(sys != NULL, "Failed to start AIO system");
 
   for (int i = 0; i < 5; i++) {
-    valk_gc_malloc_collect(heap, NULL);
+    valk_gc_heap_collect(heap);
     usleep(10000);
   }
 
@@ -85,7 +85,7 @@ void test_allocation_triggers_auto_gc(VALK_TEST_ARGS()) {
   valk_gc_coordinator_init();
   valk_gc_thread_register();
 
-  valk_gc_malloc_heap_t *small_heap = valk_gc_malloc_heap_init(1024 * 1024);
+  valk_gc_heap_t *small_heap = valk_gc_heap_create(1024 * 1024);
   valk_thread_ctx.heap = small_heap;
 
   valk_aio_system_t *local_sys = valk_aio_start();
@@ -95,7 +95,7 @@ void test_allocation_triggers_auto_gc(VALK_TEST_ARGS()) {
   u64 gc_cycles_before = atomic_load(&valk_gc_coord.parallel_cycles);
 
   for (int i = 0; i < 100; i++) {
-    valk_gc_heap2_alloc(small_heap, 16384);
+    valk_gc_heap_alloc(small_heap, 16384);
   }
 
   u64 gc_cycles_after = atomic_load(&valk_gc_coord.parallel_cycles);
@@ -121,7 +121,7 @@ void test_gc_coordination_thread_count(VALK_TEST_ARGS()) {
   u64 paused_before_gc = atomic_load(&valk_gc_coord.threads_paused);
   VALK_TEST_ASSERT(paused_before_gc == 0, "No threads should be paused before GC, got %llu", (unsigned long long)paused_before_gc);
 
-  valk_gc_malloc_collect(heap, NULL);
+  valk_gc_heap_collect(heap);
 
   u64 paused_after_gc = atomic_load(&valk_gc_coord.threads_paused);
   VALK_TEST_ASSERT(paused_after_gc == 0, "No threads should be paused after GC completes, got %llu", (unsigned long long)paused_after_gc);

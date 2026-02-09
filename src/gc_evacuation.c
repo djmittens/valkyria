@@ -611,7 +611,7 @@ valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v) {
   if (LVAL_ALLOC(v) != LVAL_ALLOC_SCRATCH) return v;
 
   valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
-  valk_gc_malloc_heap_t* heap = valk_thread_ctx.heap;
+  valk_gc_heap_t* heap = valk_thread_ctx.heap;
 
   if (!heap) heap = valk_runtime_get_heap();
 

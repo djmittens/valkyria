@@ -136,7 +136,7 @@ void *valk_region_alloc(valk_region_t *region, sz bytes) {
 
     case VALK_LIFETIME_SESSION:
       if (region->gc_heap) {
-        ptr = valk_gc_heap2_alloc(region->gc_heap, bytes);
+        ptr = valk_gc_heap_alloc(region->gc_heap, bytes);
       }
       break;
 
