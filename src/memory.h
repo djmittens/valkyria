@@ -300,6 +300,7 @@ struct valk_lval_t;
 
 typedef struct {
   valk_mem_allocator_t *allocator;
+  struct valk_system *system;     // Owning valk_system_t (set during thread onboard)
   void *heap;                     // Fallback GC heap for arena overflow (valk_gc_heap_t*)
   valk_mem_arena_t *scratch;      // Scratch arena for temporary allocations
   struct valk_lenv_t *root_env;   // Root environment for checkpoint evacuation

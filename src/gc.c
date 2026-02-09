@@ -84,7 +84,8 @@ bool valk_runtime_is_initialized(void) {
 // Parallel GC Infrastructure
 // ============================================================================
 
-valk_gc_coordinator_t valk_gc_coord = {0};
+static valk_system_t __system_storage = {0};
+valk_system_t *valk_sys = &__system_storage;
 
 void valk_barrier_init(valk_barrier_t* b, sz count) {
   pthread_mutex_init(&b->mutex, nullptr);
@@ -172,6 +173,8 @@ void valk_gc_coordinator_init(void) {
   for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
     valk_gc_coord.threads[i].ctx = nullptr;
     valk_gc_coord.threads[i].active = false;
+    valk_gc_coord.threads[i].wake_fn = nullptr;
+    valk_gc_coord.threads[i].wake_ctx = nullptr;
     valk_gc_mark_queue_init(&valk_gc_coord.threads[i].mark_queue);
   }
 
@@ -460,7 +463,7 @@ void *valk_ptr_map_get(valk_ptr_map_t *map, void *src) {
 // ============================================================================
 
 // LCOV_EXCL_BR_START - handle table internal defensive checks
-valk_handle_table_t valk_global_handle_table = {0};
+
 
 void valk_handle_table_init(valk_handle_table_t *table) {
   pthread_mutex_init(&table->lock, nullptr);

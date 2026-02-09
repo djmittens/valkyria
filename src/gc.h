@@ -18,14 +18,15 @@ typedef struct valk_lval_t valk_lval_t;
 // ============================================================================
 
 typedef struct {
-  sz gc_heap_size;
-} valk_runtime_config_t;
+  u64 gc_heap_size;
+} valk_system_config_t;
 
-static inline valk_runtime_config_t valk_runtime_config_default(void) {
-  return (valk_runtime_config_t){
-    .gc_heap_size = 4ULL * 1024 * 1024 * 1024,
-  };
+static inline valk_system_config_t valk_system_config_default(void) {
+  return (valk_system_config_t){.gc_heap_size = 0};
 }
+
+typedef valk_system_config_t valk_runtime_config_t;
+#define valk_runtime_config_default valk_system_config_default
 
 typedef void (*valk_thread_onboard_fn)(void);
 
@@ -227,7 +228,7 @@ void valk_handle_release(valk_handle_table_t *table, valk_handle_t h);
 void valk_handle_table_visit(valk_handle_table_t *table,
                              void (*visitor)(valk_lval_t*, void*), void *ctx);
 
-extern valk_handle_table_t valk_global_handle_table;
+
 
 // ============================================================================
 // Evacuation Context
@@ -263,7 +264,9 @@ valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v);
 // Parallel GC Infrastructure
 // ============================================================================
 
-#define VALK_GC_MAX_THREADS 64
+#define VALK_SYSTEM_MAX_THREADS 64
+#define VALK_SYSTEM_MAX_SUBSYSTEMS 16
+#define VALK_GC_MAX_THREADS VALK_SYSTEM_MAX_THREADS
 
 typedef enum {
   VALK_GC_PHASE_IDLE = 0,
@@ -291,6 +294,8 @@ typedef struct valk_gc_thread_info {
   pthread_t thread_id;
   bool active;
   valk_gc_mark_queue_t mark_queue;
+  void (*wake_fn)(void *wake_ctx);
+  void *wake_ctx;
 } valk_gc_thread_info_t;
 
 typedef struct valk_barrier {
@@ -306,7 +311,17 @@ void valk_barrier_destroy(valk_barrier_t* b);
 void valk_barrier_wait(valk_barrier_t* b);
 void valk_barrier_reset(valk_barrier_t* b, sz count);
 
-typedef struct valk_gc_coordinator {
+typedef struct {
+  void (*stop)(void *ctx);
+  void (*wait)(void *ctx);
+  void (*destroy)(void *ctx);
+  void *ctx;
+} valk_subsystem_t;
+
+typedef struct valk_system {
+  valk_gc_heap_t *heap;
+  valk_handle_table_t handle_table;
+
   _Atomic valk_gc_phase_e phase;
   _Atomic u64 threads_registered;
   _Atomic u64 threads_paused;
@@ -318,13 +333,26 @@ typedef struct valk_gc_coordinator {
   valk_barrier_t barrier;
   bool barrier_initialized;
 
-  valk_gc_thread_info_t threads[VALK_GC_MAX_THREADS];
+  valk_gc_thread_info_t threads[VALK_SYSTEM_MAX_THREADS];
 
   _Atomic u64 parallel_cycles;
   _Atomic u64 parallel_pause_us_total;
-} valk_gc_coordinator_t;
 
-extern valk_gc_coordinator_t valk_gc_coord;
+  pthread_mutex_t subsystems_lock;
+  valk_subsystem_t subsystems[VALK_SYSTEM_MAX_SUBSYSTEMS];
+  int subsystem_count;
+
+  _Atomic bool shutting_down;
+  int exit_code;
+  bool initialized;
+} valk_system_t;
+
+typedef valk_system_t valk_gc_coordinator_t;
+
+extern valk_system_t *valk_sys;
+
+#define valk_gc_coord (*valk_sys)
+#define valk_global_handle_table (valk_sys->handle_table)
 
 void valk_gc_coordinator_init(void);
 void valk_gc_thread_register(void);
