@@ -2,7 +2,6 @@
 #include "parser.h"
 #include "memory.h"
 #include "log.h"
-#include "aio/aio.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -92,41 +91,25 @@ static void valk_checkpoint_request_stw(void) {
     return;
   }
 
-  atomic_fetch_add(&valk_gc_coord.checkpoint_epoch, 1);
-
-  valk_aio_wake_all_for_gc();
-
-  atomic_fetch_add(&valk_gc_coord.threads_paused, 1);
-
-  pthread_mutex_lock(&valk_gc_coord.lock);
-  while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
-    u64 current_registered = atomic_load(&valk_gc_coord.threads_registered);
-    if (current_registered < num_threads) { // LCOV_EXCL_BR_LINE - thread unregistration race
-      num_threads = current_registered;
-      if (num_threads <= 1) break; // LCOV_EXCL_BR_LINE
-    }
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_nsec += 100000000;
-    if (ts.tv_nsec >= 1000000000) {
-      ts.tv_sec++;
-      ts.tv_nsec -= 1000000000;
-    }
-    pthread_cond_timedwait(&valk_gc_coord.all_paused, &valk_gc_coord.lock, &ts);
+  if (valk_gc_coord.barrier_initialized) {
+    valk_barrier_reset(&valk_gc_coord.barrier, num_threads);
+  } else {
+    valk_barrier_init(&valk_gc_coord.barrier, num_threads);
+    valk_gc_coord.barrier_initialized = true;
   }
-  pthread_mutex_unlock(&valk_gc_coord.lock);
+
+  valk_system_wake_threads(valk_sys);
+
+  valk_barrier_wait(&valk_gc_coord.barrier);
 }
 
 static void valk_checkpoint_release_stw(void) {
   valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
   if (phase != VALK_GC_PHASE_CHECKPOINT_REQUESTED) return;
 
-  atomic_store(&valk_gc_coord.threads_paused, 0);
-
-  pthread_mutex_lock(&valk_gc_coord.lock);
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
-  pthread_cond_broadcast(&valk_gc_coord.gc_done);
-  pthread_mutex_unlock(&valk_gc_coord.lock);
+
+  valk_barrier_wait(&valk_gc_coord.barrier);
 }
 
 // LCOV_EXCL_BR_START - checkpoint null checks and iteration

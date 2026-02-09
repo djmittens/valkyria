@@ -17,8 +17,6 @@ void test_gc_coordinator_init(VALK_TEST_ARGS()) {
                    "Phase should be IDLE after init");
   VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.threads_registered) == 1,
                    "threads_registered should be 1");
-  VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.threads_paused) == 0,
-                   "threads_paused should be 0");
 
   VALK_PASS();
 }
@@ -477,12 +475,7 @@ void test_gc_safe_point_with_stw(VALK_TEST_ARGS()) {
   
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
   
-  size_t paused_before = atomic_load(&valk_gc_coord.threads_paused);
   VALK_GC_SAFE_POINT();
-  size_t paused_after = atomic_load(&valk_gc_coord.threads_paused);
-  
-  VALK_TEST_ASSERT(paused_before == paused_after, 
-                   "idle safe point should not change pause count");
   
   valk_gc_thread_unregister();
   

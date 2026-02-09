@@ -230,7 +230,6 @@ static const char *valk_gc_phase_name(valk_gc_phase_e phase) {
 void valk_diag_dump_on_timeout(void) {
   valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
   u64 registered = atomic_load(&valk_gc_coord.threads_registered);
-  u64 paused = atomic_load(&valk_gc_coord.threads_paused);
 
   fprintf(stderr, "\n");
   fprintf(stderr, "╔══════════════════════════════════════════════════════════════╗\n");
@@ -241,16 +240,11 @@ void valk_diag_dump_on_timeout(void) {
   fprintf(stderr, "=== GC Coordinator State ===\n");
   fprintf(stderr, "  phase:              %s (%d)\n", valk_gc_phase_name(phase), phase);
   fprintf(stderr, "  threads_registered: %llu\n", (unsigned long long)registered);
-  fprintf(stderr, "  threads_paused:     %llu\n", (unsigned long long)paused);
   fprintf(stderr, "  barrier_init:       %s\n", valk_gc_coord.barrier_initialized ? "yes" : "no");
   fprintf(stderr, "\n");
 
   if (phase != VALK_GC_PHASE_IDLE) {
     fprintf(stderr, "  *** GC is NOT idle - possible deadlock in GC coordination ***\n");
-    if (paused < registered) {
-      fprintf(stderr, "  *** Waiting for %llu threads to reach safe point ***\n",
-              (unsigned long long)(registered - paused));
-    }
     fprintf(stderr, "\n");
   }
 

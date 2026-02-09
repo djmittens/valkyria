@@ -27,9 +27,8 @@ int main(void) {
   // Small sleep to let event loop stabilize
   usleep(50000);
   
-  printf("Before GC: threads_registered=%llu, threads_paused=%llu, phase=%d\n",
+  printf("Before GC: threads_registered=%llu, phase=%d\n",
          (unsigned long long)atomic_load(&valk_gc_coord.threads_registered),
-         (unsigned long long)atomic_load(&valk_gc_coord.threads_paused),
          atomic_load(&valk_gc_coord.phase));
   
   printf("Calling gc_collect...\n");

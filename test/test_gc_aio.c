@@ -114,13 +114,7 @@ void test_gc_coordination_thread_count(VALK_TEST_ARGS()) {
   u64 registered = atomic_load(&valk_gc_coord.threads_registered);
   VALK_TEST_ASSERT(registered >= 2, "Expected at least 2 threads (main + event loop), got %llu", (unsigned long long)registered);
 
-  u64 paused_before_gc = atomic_load(&valk_gc_coord.threads_paused);
-  VALK_TEST_ASSERT(paused_before_gc == 0, "No threads should be paused before GC, got %llu", (unsigned long long)paused_before_gc);
-
   valk_gc_heap_collect(heap);
-
-  u64 paused_after_gc = atomic_load(&valk_gc_coord.threads_paused);
-  VALK_TEST_ASSERT(paused_after_gc == 0, "No threads should be paused after GC completes, got %llu", (unsigned long long)paused_after_gc);
 
   teardown_gc_and_aio();
 

@@ -326,12 +326,7 @@ typedef struct valk_system {
 
   _Atomic valk_gc_phase_e phase;
   _Atomic u64 threads_registered;
-  _Atomic u64 threads_paused;
-  _Atomic u64 checkpoint_epoch;
 
-  pthread_mutex_t lock;
-  pthread_cond_t all_paused;
-  pthread_cond_t gc_done;
   valk_barrier_t barrier;
   bool barrier_initialized;
 

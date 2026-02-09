@@ -1,7 +1,15 @@
 #include "aio_internal.h"
+#include "gc.h"
 #include <execinfo.h>
 
 u64 g_async_handle_id = 0;
+
+static void __aio_gc_wake(void *ctx) {
+  valk_aio_system_t *sys = ctx;
+  if (sys && sys->eventloop && !sys->shuttingDown) {
+    uv_async_send(&sys->gc_wakeup);
+  }
+}
 
 static void __uv_handle_closed_cb(uv_handle_t *handle);
 static void __aio_uv_walk_close(uv_handle_t *h, void *arg);
@@ -29,6 +37,11 @@ void __event_loop(void *arg) {
 
   if (sys->config.thread_onboard_fn) {
     sys->config.thread_onboard_fn();
+    if (valk_sys && valk_thread_ctx.gc_registered) {
+      u64 idx = valk_thread_ctx.gc_thread_id;
+      valk_sys->threads[idx].wake_fn = __aio_gc_wake;
+      valk_sys->threads[idx].wake_ctx = sys;
+    }
     VALK_DEBUG("Event loop thread onboarded via config callback");
   } else {
     valk_mem_init_malloc();
@@ -75,6 +88,11 @@ void __event_loop(void *arg) {
   // GC will wait for 2 threads but we haven't entered our safe point loop yet.
   if (!sys->config.thread_onboard_fn) {
     valk_gc_thread_register();
+    if (valk_sys && valk_thread_ctx.gc_registered) {
+      u64 idx = valk_thread_ctx.gc_thread_id;
+      valk_sys->threads[idx].wake_fn = __aio_gc_wake;
+      valk_sys->threads[idx].wake_ctx = sys;
+    }
   }
 
   // Signal that event loop is ready (all slabs initialized, GC registered)

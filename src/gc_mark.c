@@ -1,8 +1,8 @@
 #include "gc.h"
 #include "parser.h"
 #include "memory.h"
+#include "async_handle.h"
 #include "log.h"
-#include "aio/aio.h"
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
@@ -299,30 +299,9 @@ bool valk_gc_heap_request_stw(valk_gc_heap_t *heap) {
 
   atomic_thread_fence(memory_order_seq_cst);
 
-  valk_aio_wake_all_for_gc();
+  valk_system_wake_threads(valk_sys);
 
-  atomic_fetch_add(&valk_gc_coord.threads_paused, 1);
-
-  if (num_threads > 1) {
-    pthread_mutex_lock(&valk_gc_coord.lock);
-    while (atomic_load(&valk_gc_coord.threads_paused) < num_threads) {
-      u64 current_registered = atomic_load(&valk_gc_coord.threads_registered);
-      if (current_registered < num_threads) {
-        num_threads = current_registered;
-        valk_barrier_reset(&valk_gc_coord.barrier, num_threads);
-        if (num_threads <= 1) break;
-      }
-      struct timespec ts;
-      clock_gettime(CLOCK_REALTIME, &ts);
-      ts.tv_nsec += 100000000;
-      if (ts.tv_nsec >= 1000000000) {
-        ts.tv_sec++;
-        ts.tv_nsec -= 1000000000;
-      }
-      pthread_cond_timedwait(&valk_gc_coord.all_paused, &valk_gc_coord.lock, &ts);
-    }
-    pthread_mutex_unlock(&valk_gc_coord.lock);
-  }
+  valk_barrier_wait(&valk_gc_coord.barrier);
 
   return true;
 }
@@ -333,19 +312,11 @@ bool valk_gc_heap_request_stw(valk_gc_heap_t *heap) {
 
 void valk_gc_participate_in_parallel_gc(void) {
   valk_gc_heap_t *heap = atomic_load(&__gc_heap_current);
-  if (!heap) {
-    pthread_mutex_lock(&valk_gc_coord.lock);
-    while (atomic_load(&valk_gc_coord.phase) != VALK_GC_PHASE_IDLE) {
-      pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
-    }
-    pthread_mutex_unlock(&valk_gc_coord.lock);
-    return;
-  }
 
   valk_barrier_wait(&valk_gc_coord.barrier);
-  valk_gc_heap_parallel_mark(heap);
+  if (heap) valk_gc_heap_parallel_mark(heap);
   valk_barrier_wait(&valk_gc_coord.barrier);
-  valk_gc_heap_parallel_sweep(heap);
+  if (heap) valk_gc_heap_parallel_sweep(heap);
   valk_barrier_wait(&valk_gc_coord.barrier);
   valk_barrier_wait(&valk_gc_coord.barrier);
 }
@@ -397,11 +368,7 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
     heap->generation = valk_gc_heap_next_generation();
   }
 
-  atomic_store(&valk_gc_coord.threads_paused, 0);
-  pthread_mutex_lock(&valk_gc_coord.lock);
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
-  pthread_cond_broadcast(&valk_gc_coord.gc_done);
-  pthread_mutex_unlock(&valk_gc_coord.lock);
 
   valk_barrier_wait(&valk_gc_coord.barrier);
 

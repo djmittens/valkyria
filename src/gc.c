@@ -2,7 +2,6 @@
 #include "parser.h"
 #include "memory.h"
 #include "log.h"
-#include "aio/aio.h"
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
@@ -19,12 +18,6 @@ valk_system_t *valk_sys = &__system_storage;
 static void __system_init_coordinator(valk_system_t *sys) {
   atomic_store(&sys->phase, VALK_GC_PHASE_IDLE);
   atomic_store(&sys->threads_registered, 0);
-  atomic_store(&sys->threads_paused, 0);
-  atomic_store(&sys->checkpoint_epoch, 0);
-
-  pthread_mutex_init(&sys->lock, nullptr);
-  pthread_cond_init(&sys->all_paused, nullptr);
-  pthread_cond_init(&sys->gc_done, nullptr);
   sys->barrier_initialized = false;
 
   for (u64 i = 0; i < VALK_SYSTEM_MAX_THREADS; i++) {
@@ -86,9 +79,6 @@ void valk_system_destroy(valk_system_t *sys) {
     valk_gc_mark_queue_destroy(&sys->threads[i].mark_queue);
   }
 
-  pthread_mutex_destroy(&sys->lock);
-  pthread_cond_destroy(&sys->all_paused);
-  pthread_cond_destroy(&sys->gc_done);
   pthread_mutex_destroy(&sys->subsystems_lock);
 
   sys->initialized = false;
@@ -326,23 +316,8 @@ void valk_gc_safe_point_slow(void) {
   valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
 
   if (phase == VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
-    u64 my_epoch = atomic_load(&valk_gc_coord.checkpoint_epoch);
-
-    u64 paused = atomic_fetch_add(&valk_gc_coord.threads_paused, 1) + 1;
-    u64 registered = atomic_load(&valk_gc_coord.threads_registered);
-
-    if (paused == registered) {
-      pthread_mutex_lock(&valk_gc_coord.lock);
-      pthread_cond_signal(&valk_gc_coord.all_paused);
-      pthread_mutex_unlock(&valk_gc_coord.lock);
-    }
-
-    pthread_mutex_lock(&valk_gc_coord.lock);
-    while (atomic_load(&valk_gc_coord.phase) == VALK_GC_PHASE_CHECKPOINT_REQUESTED &&
-           atomic_load(&valk_gc_coord.checkpoint_epoch) == my_epoch) {
-      pthread_cond_wait(&valk_gc_coord.gc_done, &valk_gc_coord.lock);
-    }
-    pthread_mutex_unlock(&valk_gc_coord.lock);
+    valk_barrier_wait(&valk_gc_coord.barrier);
+    valk_barrier_wait(&valk_gc_coord.barrier);
     return;
   }
 
@@ -354,15 +329,7 @@ void valk_gc_safe_point_slow(void) {
                       valk_thread_ctx.root_env);
     }
 
-    u64 paused = atomic_fetch_add(&valk_gc_coord.threads_paused, 1) + 1;
-    u64 registered = atomic_load(&valk_gc_coord.threads_registered);
-
-    if (paused == registered) {
-      pthread_mutex_lock(&valk_gc_coord.lock);
-      pthread_cond_signal(&valk_gc_coord.all_paused);
-      pthread_mutex_unlock(&valk_gc_coord.lock);
-    }
-
+    valk_barrier_wait(&valk_gc_coord.barrier);
     valk_gc_participate_in_parallel_gc();
   }
 }
