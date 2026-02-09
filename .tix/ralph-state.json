@@ -1,6 +1,4 @@
 {
-  "stage": "DECOMPOSE",
-  "spec": "system-refactor-00-heap-rename.md",
-  "decompose_target": "t-xni025",
-  "decompose_reason": "unknown"
+  "stage": "BUILD",
+  "spec": "system-refactor-00-heap-rename.md"
 }
