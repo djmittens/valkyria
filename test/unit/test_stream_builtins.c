@@ -738,8 +738,7 @@ void test_get_stream_body_wrong_type_string(VALK_TEST_ARGS()) {
 void test_stream_on_drain_success_with_runtime(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_lenv_t *env = create_test_env();
   valk_aio_handle_t *conn = create_test_conn();
@@ -760,7 +759,7 @@ void test_stream_on_drain_success_with_runtime(VALK_TEST_ARGS()) {
   valk_handle_release(&valk_global_handle_table, body->lisp_on_drain_handle);
   free_test_body(body);
   free_test_conn(conn);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
 
   VALK_PASS();
 }
@@ -768,8 +767,7 @@ void test_stream_on_drain_success_with_runtime(VALK_TEST_ARGS()) {
 void test_stream_on_drain_replaces_existing(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_lenv_t *env = create_test_env();
   valk_aio_handle_t *conn = create_test_conn();
@@ -795,7 +793,7 @@ void test_stream_on_drain_replaces_existing(VALK_TEST_ARGS()) {
   valk_handle_release(&valk_global_handle_table, body->lisp_on_drain_handle);
   free_test_body(body);
   free_test_conn(conn);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
 
   VALK_PASS();
 }
@@ -803,8 +801,7 @@ void test_stream_on_drain_replaces_existing(VALK_TEST_ARGS()) {
 void test_stream_on_close_success_with_runtime(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_lenv_t *env = create_test_env();
   valk_aio_handle_t *conn = create_test_conn();
@@ -825,7 +822,7 @@ void test_stream_on_close_success_with_runtime(VALK_TEST_ARGS()) {
   valk_handle_release(&valk_global_handle_table, body->lisp_on_close_handle);
   free_test_body(body);
   free_test_conn(conn);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
 
   VALK_PASS();
 }
@@ -833,8 +830,7 @@ void test_stream_on_close_success_with_runtime(VALK_TEST_ARGS()) {
 void test_stream_on_close_replaces_existing(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_lenv_t *env = create_test_env();
   valk_aio_handle_t *conn = create_test_conn();
@@ -860,7 +856,7 @@ void test_stream_on_close_replaces_existing(VALK_TEST_ARGS()) {
   valk_handle_release(&valk_global_handle_table, body->lisp_on_close_handle);
   free_test_body(body);
   free_test_conn(conn);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
 
   VALK_PASS();
 }
@@ -868,8 +864,7 @@ void test_stream_on_close_replaces_existing(VALK_TEST_ARGS()) {
 void test_stream_cancel_already_closed(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_lenv_t *env = create_test_env();
   valk_aio_handle_t *conn = create_test_conn();
@@ -883,15 +878,14 @@ void test_stream_cancel_already_closed(VALK_TEST_ARGS()) {
 
   free_test_body(body);
   free_test_conn(conn);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_stream_cancel_no_session(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_lenv_t *env = create_test_env();
   valk_aio_handle_t *conn = create_test_conn();
@@ -906,15 +900,14 @@ void test_stream_cancel_no_session(VALK_TEST_ARGS()) {
 
   free_test_body(body);
   free_test_conn(conn);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_stream_write_body_closed(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_lenv_t *env = create_test_env();
   valk_aio_handle_t *conn = create_test_conn();
@@ -932,15 +925,14 @@ void test_stream_write_body_closed(VALK_TEST_ARGS()) {
 
   free_test_body(body);
   free_test_conn(conn);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_stream_write_body_closing(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_lenv_t *env = create_test_env();
   valk_aio_handle_t *conn = create_test_conn();
@@ -958,15 +950,14 @@ void test_stream_write_body_closing(VALK_TEST_ARGS()) {
 
   free_test_body(body);
   free_test_conn(conn);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_stream_write_queue_full(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_lenv_t *env = create_test_env();
   valk_aio_handle_t *conn = create_test_conn();
@@ -984,7 +975,7 @@ void test_stream_write_queue_full(VALK_TEST_ARGS()) {
 
   free_test_body(body);
   free_test_conn(conn);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 

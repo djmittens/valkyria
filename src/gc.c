@@ -10,82 +10,229 @@
 #include <uv.h>
 
 // ============================================================================
-// Runtime Initialization
-// ============================================================================
-
-static valk_gc_heap_t *__runtime_heap = nullptr;
-static bool __runtime_initialized = false;
-
-// LCOV_EXCL_BR_START - runtime init/shutdown defensive checks
-int valk_runtime_init(valk_runtime_config_t *config) {
-  if (__runtime_initialized) {
-    VALK_WARN("Runtime already initialized");
-    return 0;
-  }
-
-  valk_gc_coordinator_init();
-  valk_handle_table_init(&valk_global_handle_table);
-
-  valk_runtime_config_t cfg = config ? *config : valk_runtime_config_default();
-
-  __runtime_heap = valk_gc_heap_create(cfg.gc_heap_size);
-  if (!__runtime_heap) {
-    VALK_ERROR("Failed to create runtime GC heap");
-    return -1;
-  }
-
-  valk_runtime_thread_onboard();
-
-  __runtime_initialized = true;
-  VALK_INFO("Runtime initialized: gc_heap_size=%zu", cfg.gc_heap_size);
-  return 0;
-}
-
-void valk_runtime_shutdown(void) {
-  if (!__runtime_initialized) return;
-
-  if (__runtime_heap) {
-    valk_gc_heap_destroy(__runtime_heap);
-    __runtime_heap = nullptr;
-  }
-
-  __runtime_initialized = false;
-  VALK_INFO("Runtime shutdown complete");
-}
-
-void valk_runtime_thread_onboard(void) {
-  if (!__runtime_heap) {
-    VALK_ERROR("Cannot onboard thread: runtime not initialized");
-    return;
-  }
-
-  valk_mem_init_malloc();
-  valk_thread_ctx.heap = __runtime_heap;
-  valk_gc_thread_register();
-
-  VALK_DEBUG("Thread onboarded to runtime heap: %p (gc_thread_id=%llu)",
-             __runtime_heap, (unsigned long long)valk_thread_ctx.gc_thread_id);
-}
-// LCOV_EXCL_BR_STOP
-
-valk_thread_onboard_fn valk_runtime_get_onboard_fn(void) {
-  return valk_runtime_thread_onboard;
-}
-
-valk_gc_heap_t *valk_runtime_get_heap(void) {
-  return __runtime_heap;
-}
-
-bool valk_runtime_is_initialized(void) {
-  return __runtime_initialized;
-}
-
-// ============================================================================
-// Parallel GC Infrastructure
+// System Lifecycle
 // ============================================================================
 
 static valk_system_t __system_storage = {0};
 valk_system_t *valk_sys = &__system_storage;
+
+static void __system_init_coordinator(valk_system_t *sys) {
+  atomic_store(&sys->phase, VALK_GC_PHASE_IDLE);
+  atomic_store(&sys->threads_registered, 0);
+  atomic_store(&sys->threads_paused, 0);
+  atomic_store(&sys->checkpoint_epoch, 0);
+
+  pthread_mutex_init(&sys->lock, nullptr);
+  pthread_cond_init(&sys->all_paused, nullptr);
+  pthread_cond_init(&sys->gc_done, nullptr);
+  sys->barrier_initialized = false;
+
+  for (u64 i = 0; i < VALK_SYSTEM_MAX_THREADS; i++) {
+    sys->threads[i].ctx = nullptr;
+    sys->threads[i].active = false;
+    sys->threads[i].wake_fn = nullptr;
+    sys->threads[i].wake_ctx = nullptr;
+    memset(&sys->threads[i].mark_queue, 0, sizeof(sys->threads[i].mark_queue));
+  }
+
+  atomic_store(&sys->parallel_cycles, 0);
+  atomic_store(&sys->parallel_pause_us_total, 0);
+}
+
+// LCOV_EXCL_BR_START - system create/destroy defensive checks
+valk_system_t *valk_system_create(valk_system_config_t *config) {
+  valk_system_t *sys = calloc(1, sizeof(valk_system_t));
+  if (!sys) return nullptr;
+
+  __system_init_coordinator(sys);
+  valk_handle_table_init(&sys->handle_table);
+  pthread_mutex_init(&sys->subsystems_lock, nullptr);
+  sys->subsystem_count = 0;
+  atomic_store(&sys->shutting_down, false);
+  sys->exit_code = 0;
+
+  valk_system_config_t cfg = config ? *config : valk_system_config_default();
+  sys->heap = valk_gc_heap_create(cfg.gc_heap_size);
+  if (!sys->heap) {
+    VALK_ERROR("Failed to create system GC heap");
+    free(sys);
+    return nullptr;
+  }
+
+  valk_sys = sys;
+  sys->initialized = true;
+
+  valk_system_register_thread(sys, nullptr, nullptr);
+
+  VALK_INFO("System created: gc_heap_size=%llu", (unsigned long long)cfg.gc_heap_size);
+  return sys;
+}
+
+void valk_system_destroy(valk_system_t *sys) {
+  if (!sys) return;
+
+  if (sys->heap) {
+    valk_gc_heap_destroy(sys->heap);
+    sys->heap = nullptr;
+  }
+
+  valk_handle_table_free(&sys->handle_table);
+
+  if (sys->barrier_initialized) {
+    valk_barrier_destroy(&sys->barrier);
+  }
+
+  for (u64 i = 0; i < VALK_SYSTEM_MAX_THREADS; i++) {
+    valk_gc_mark_queue_destroy(&sys->threads[i].mark_queue);
+  }
+
+  pthread_mutex_destroy(&sys->lock);
+  pthread_cond_destroy(&sys->all_paused);
+  pthread_cond_destroy(&sys->gc_done);
+  pthread_mutex_destroy(&sys->subsystems_lock);
+
+  sys->initialized = false;
+
+  if (valk_sys == sys) {
+    valk_sys = &__system_storage;
+    memset(&__system_storage, 0, sizeof(__system_storage));
+  }
+
+  if (sys != &__system_storage) {
+    free(sys);
+  }
+  VALK_INFO("System destroyed");
+}
+
+void valk_system_shutdown(valk_system_t *sys, u64 deadline_ms) {
+  if (!sys) return;
+  atomic_store(&sys->shutting_down, true);
+
+  pthread_mutex_lock(&sys->subsystems_lock);
+  for (int i = 0; i < sys->subsystem_count; i++) {
+    if (sys->subsystems[i].stop) {
+      sys->subsystems[i].stop(sys->subsystems[i].ctx);
+    }
+  }
+  pthread_mutex_unlock(&sys->subsystems_lock);
+
+  u64 deadline_us = deadline_ms * 1000;
+  u64 start = uv_hrtime() / 1000;
+  while (atomic_load(&sys->threads_registered) > 1) {
+    u64 now = uv_hrtime() / 1000;
+    if (now - start >= deadline_us) {
+      VALK_WARN("Shutdown deadline exceeded, %llu threads still registered",
+                (unsigned long long)atomic_load(&sys->threads_registered));
+      break;
+    }
+    usleep(1000);
+  }
+
+  pthread_mutex_lock(&sys->subsystems_lock);
+  for (int i = 0; i < sys->subsystem_count; i++) {
+    if (sys->subsystems[i].wait) {
+      sys->subsystems[i].wait(sys->subsystems[i].ctx);
+    }
+    if (sys->subsystems[i].destroy) {
+      sys->subsystems[i].destroy(sys->subsystems[i].ctx);
+    }
+  }
+  sys->subsystem_count = 0;
+  pthread_mutex_unlock(&sys->subsystems_lock);
+
+  VALK_INFO("System shutdown complete");
+}
+
+void valk_system_register_thread(valk_system_t *sys,
+                                 void (*wake_fn)(void *), void *wake_ctx) {
+  valk_mem_init_malloc();
+  valk_thread_ctx.system = sys;
+  valk_thread_ctx.heap = sys->heap;
+
+  u64 idx = atomic_fetch_add(&sys->threads_registered, 1);
+  if (idx >= VALK_SYSTEM_MAX_THREADS) {
+    VALK_ERROR("Too many threads registered (max %d)", VALK_SYSTEM_MAX_THREADS);
+    atomic_fetch_sub(&sys->threads_registered, 1);
+    return;
+  }
+
+  valk_thread_ctx.gc_thread_id = idx;
+  valk_thread_ctx.gc_registered = true;
+
+  valk_thread_ctx.root_stack = malloc(sizeof(valk_lval_t*) * 256);
+  valk_thread_ctx.root_stack_capacity = 256;
+  valk_thread_ctx.root_stack_count = 0;
+
+  sys->threads[idx].ctx = &valk_thread_ctx;
+  sys->threads[idx].thread_id = pthread_self();
+  sys->threads[idx].active = true;
+  sys->threads[idx].wake_fn = wake_fn;
+  sys->threads[idx].wake_ctx = wake_ctx;
+  valk_gc_mark_queue_init(&sys->threads[idx].mark_queue);
+
+  VALK_DEBUG("Thread registered: idx=%llu", (unsigned long long)idx);
+}
+
+void valk_system_unregister_thread(valk_system_t *sys) {
+  if (!valk_thread_ctx.gc_registered) return;
+
+  VALK_GC_SAFE_POINT();
+
+  u64 idx = valk_thread_ctx.gc_thread_id;
+  sys->threads[idx].active = false;
+  sys->threads[idx].ctx = nullptr;
+  sys->threads[idx].wake_fn = nullptr;
+  sys->threads[idx].wake_ctx = nullptr;
+
+  atomic_fetch_sub(&sys->threads_registered, 1);
+
+  if (valk_thread_ctx.root_stack) {
+    free(valk_thread_ctx.root_stack);
+    valk_thread_ctx.root_stack = nullptr;
+  }
+  valk_thread_ctx.gc_registered = false;
+
+  VALK_DEBUG("Thread unregistered: idx=%llu", (unsigned long long)idx);
+}
+
+void valk_system_add_subsystem(valk_system_t *sys,
+                               void (*stop)(void *), void (*wait)(void *),
+                               void (*destroy)(void *), void *ctx) {
+  pthread_mutex_lock(&sys->subsystems_lock);
+  if (sys->subsystem_count < VALK_SYSTEM_MAX_SUBSYSTEMS) {
+    sys->subsystems[sys->subsystem_count++] = (valk_subsystem_t){
+      .stop = stop, .wait = wait, .destroy = destroy, .ctx = ctx
+    };
+  } else {
+    VALK_WARN("Max subsystems reached (%d)", VALK_SYSTEM_MAX_SUBSYSTEMS);
+  }
+  pthread_mutex_unlock(&sys->subsystems_lock);
+}
+
+void valk_system_remove_subsystem(valk_system_t *sys, void *ctx) {
+  pthread_mutex_lock(&sys->subsystems_lock);
+  for (int i = 0; i < sys->subsystem_count; i++) {
+    if (sys->subsystems[i].ctx == ctx) {
+      sys->subsystems[i] = sys->subsystems[--sys->subsystem_count];
+      break;
+    }
+  }
+  pthread_mutex_unlock(&sys->subsystems_lock);
+}
+
+void valk_system_wake_threads(valk_system_t *sys) {
+  u64 n = atomic_load(&sys->threads_registered);
+  for (u64 i = 0; i < n && i < VALK_SYSTEM_MAX_THREADS; i++) {
+    if (sys->threads[i].active && sys->threads[i].wake_fn) {
+      sys->threads[i].wake_fn(sys->threads[i].wake_ctx);
+    }
+  }
+}
+// LCOV_EXCL_BR_STOP
+
+// ============================================================================
+// Parallel GC Infrastructure
+// ============================================================================
 
 void valk_barrier_init(valk_barrier_t* b, sz count) {
   pthread_mutex_init(&b->mutex, nullptr);
@@ -157,79 +304,16 @@ bool valk_gc_mark_queue_empty(valk_gc_mark_queue_t* q) {
 }
 
 // ============================================================================
-// Coordinator Initialization
+// Legacy Wrappers (thin shims for old call sites)
 // ============================================================================
 
-void valk_gc_coordinator_init(void) {
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
-  atomic_store(&valk_gc_coord.threads_registered, 0);
-  atomic_store(&valk_gc_coord.threads_paused, 0);
-
-  pthread_mutex_init(&valk_gc_coord.lock, nullptr);
-  pthread_cond_init(&valk_gc_coord.all_paused, nullptr);
-  pthread_cond_init(&valk_gc_coord.gc_done, nullptr);
-  valk_gc_coord.barrier_initialized = false;
-
-  for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
-    valk_gc_coord.threads[i].ctx = nullptr;
-    valk_gc_coord.threads[i].active = false;
-    valk_gc_coord.threads[i].wake_fn = nullptr;
-    valk_gc_coord.threads[i].wake_ctx = nullptr;
-    valk_gc_mark_queue_init(&valk_gc_coord.threads[i].mark_queue);
-  }
-
-  atomic_store(&valk_gc_coord.parallel_cycles, 0);
-  atomic_store(&valk_gc_coord.parallel_pause_us_total, 0);
-}
-
-// ============================================================================
-// Thread Registration
-// ============================================================================
-
-// LCOV_EXCL_BR_START - thread registration error paths
+// LCOV_EXCL_BR_START - legacy wrapper branch coverage
 void valk_gc_thread_register(void) {
-  u64 idx = atomic_fetch_add(&valk_gc_coord.threads_registered, 1);
-
-  if (idx >= VALK_GC_MAX_THREADS) {
-    VALK_ERROR("Too many threads registered with GC (max %d)", VALK_GC_MAX_THREADS);
-    atomic_fetch_sub(&valk_gc_coord.threads_registered, 1);
-    return;
-  }
-
-  valk_thread_ctx.gc_thread_id = idx;
-  valk_thread_ctx.gc_registered = true;
-
-  valk_thread_ctx.root_stack = malloc(sizeof(valk_lval_t*) * 256);
-  valk_thread_ctx.root_stack_capacity = 256;
-  valk_thread_ctx.root_stack_count = 0;
-
-  valk_gc_coord.threads[idx].ctx = &valk_thread_ctx;
-  valk_gc_coord.threads[idx].thread_id = pthread_self();
-  valk_gc_coord.threads[idx].active = true;
-  valk_gc_mark_queue_init(&valk_gc_coord.threads[idx].mark_queue);
-
-  VALK_DEBUG("Thread registered with GC: idx=%zu", idx);
+  valk_system_register_thread(valk_sys, nullptr, nullptr);
 }
 
 void valk_gc_thread_unregister(void) {
-  if (!valk_thread_ctx.gc_registered) return;
-
-  VALK_GC_SAFE_POINT();
-
-  u64 idx = valk_thread_ctx.gc_thread_id;
-  valk_gc_mark_queue_destroy(&valk_gc_coord.threads[idx].mark_queue);
-  valk_gc_coord.threads[idx].active = false;
-  valk_gc_coord.threads[idx].ctx = nullptr;
-
-  atomic_fetch_sub(&valk_gc_coord.threads_registered, 1);
-
-  if (valk_thread_ctx.root_stack) {
-    free(valk_thread_ctx.root_stack);
-    valk_thread_ctx.root_stack = nullptr;
-  }
-  valk_thread_ctx.gc_registered = false;
-
-  VALK_DEBUG("Thread unregistered from GC: idx=%zu", idx);
+  valk_system_unregister_thread(valk_sys);
 }
 // LCOV_EXCL_BR_STOP
 
@@ -578,15 +662,15 @@ void valk_handle_table_visit(valk_handle_table_t *table,
 
 // LCOV_EXCL_START - fork safety function requires actual fork() which is unsafe in test harness
 void valk_gc_reset_after_fork(void) {
-  __runtime_heap = nullptr;
-  __runtime_initialized = false;
-
-  valk_gc_coordinator_init();
+  if (valk_sys) {
+    __system_init_coordinator(valk_sys);
+  }
 
   valk_gc_mark_reset_after_fork();
   valk_gc_heap_reset_after_fork();
 
   valk_thread_ctx.heap = nullptr;
+  valk_thread_ctx.system = nullptr;
   valk_thread_ctx.scratch = nullptr;
   valk_thread_ctx.root_env = nullptr;
   valk_thread_ctx.gc_registered = false;

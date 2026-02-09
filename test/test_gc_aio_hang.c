@@ -19,9 +19,7 @@ int main(void) {
   alarm(5);
   signal(SIGALRM, alarm_handler);
 
-  valk_mem_init_malloc();
-  valk_gc_coordinator_init();
-  valk_gc_thread_register();
+  valk_system_create(NULL);
 
   valk_gc_heap_t *heap = valk_gc_heap_create(0);
   valk_thread_ctx.heap = heap;

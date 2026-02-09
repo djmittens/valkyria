@@ -15,6 +15,10 @@
 
 #define LISP_50MB_RESPONSE_SIZE 52428800
 
+static void __test_thread_onboard(void) {
+  if (valk_sys) valk_system_register_thread(valk_sys, NULL, NULL);
+}
+
 void test_demo_socket_server(VALK_TEST_ARGS()) {
   valk_aio_system_t *sys = valk_aio_start();
 
@@ -118,12 +122,9 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   printf("[test] Initializing runtime...\n");
   fflush(stdout);
   
-  valk_runtime_config_t cfg = valk_runtime_config_default();
+  valk_system_config_t cfg = valk_system_config_default();
   cfg.gc_heap_size = 1024ULL * 1024 * 1024;
-  if (valk_runtime_init(&cfg) != 0) {
-    VALK_FAIL("Failed to initialize runtime");
-    return;
-  }
+  valk_system_create(&cfg);
   printf("[test] Runtime initialized, heap=%p\n", valk_thread_ctx.heap);
   fflush(stdout);
 
@@ -189,7 +190,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   valk_mem_init_malloc();
 
   valk_aio_system_config_t aio_cfg = valk_aio_config_large_payload();
-  aio_cfg.thread_onboard_fn = valk_runtime_get_onboard_fn();
+  aio_cfg.thread_onboard_fn = __test_thread_onboard;
   valk_aio_system_t *sys = valk_aio_start_with_config(&aio_cfg);
 
   valk_async_handle_t *hserv = valk_aio_http2_listen(
@@ -268,7 +269,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
 
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
 
   VALK_PASS();
 }

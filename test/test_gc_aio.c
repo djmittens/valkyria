@@ -24,9 +24,7 @@ static valk_gc_heap_t *heap = NULL;
 static valk_aio_system_t *sys = NULL;
 
 static void setup_gc_and_aio(void) {
-  valk_mem_init_malloc();
-  valk_gc_coordinator_init();
-  valk_gc_thread_register();
+  valk_system_create(NULL);
 
   heap = valk_gc_heap_create(0);
   valk_thread_ctx.heap = heap;
@@ -81,9 +79,7 @@ void test_multiple_gc_cycles_with_aio(VALK_TEST_ARGS()) {
 void test_allocation_triggers_auto_gc(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_mem_init_malloc();
-  valk_gc_coordinator_init();
-  valk_gc_thread_register();
+  valk_system_create(NULL);
 
   valk_gc_heap_t *small_heap = valk_gc_heap_create(1024 * 1024);
   valk_thread_ctx.heap = small_heap;

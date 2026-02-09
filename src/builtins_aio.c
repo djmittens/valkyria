@@ -12,6 +12,10 @@
 #include "metrics_delta.h"
 #include "metrics_v2.h"
 
+static void __aio_thread_onboard(void) {
+  if (valk_sys) valk_system_register_thread(valk_sys, nullptr, nullptr);
+}
+
 static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   int argc = valk_lval_list_count(a);
@@ -20,8 +24,8 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
   valk_aio_system_t* sys;
   valk_aio_system_config_t config = valk_aio_system_config_default();
 
-  if (valk_runtime_is_initialized()) { // LCOV_EXCL_BR_LINE - runtime init state
-    config.thread_onboard_fn = valk_runtime_get_onboard_fn();
+  if (valk_sys && valk_sys->initialized) { // LCOV_EXCL_BR_LINE - runtime init state
+    config.thread_onboard_fn = __aio_thread_onboard;
   }
 
   // LCOV_EXCL_BR_START - config parsing: optional keys may be absent or wrong type

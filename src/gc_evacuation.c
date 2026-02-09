@@ -613,7 +613,7 @@ valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v) {
   valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
   valk_gc_heap_t* heap = valk_thread_ctx.heap;
 
-  if (!heap) heap = valk_runtime_get_heap();
+  if (!heap && valk_sys) heap = valk_sys->heap;
 
   if (!heap) {
     VALK_ERROR("valk_evacuate_to_heap: no heap available (scratch=%p, heap=%p, v alloc=%u)",

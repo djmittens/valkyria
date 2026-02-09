@@ -23,7 +23,7 @@ void valk_region_init(valk_region_t *region, valk_lifetime_e lifetime,
   memset(&region->stats, 0, sizeof(region->stats));
 
   if (lifetime == VALK_LIFETIME_SESSION) {
-    region->gc_heap = valk_runtime_get_heap();
+    region->gc_heap = valk_sys ? valk_sys->heap : nullptr;
   }
 }
 
@@ -45,7 +45,7 @@ valk_region_t *valk_region_create(valk_lifetime_e lifetime, valk_region_t *paren
       break;
 
     case VALK_LIFETIME_SESSION:
-      region->gc_heap = valk_runtime_get_heap();
+      region->gc_heap = valk_sys ? valk_sys->heap : nullptr;
       break;
 
     case VALK_LIFETIME_REQUEST:
@@ -80,7 +80,7 @@ valk_region_t *valk_region_create_with_arena(valk_lifetime_e lifetime,
   memset(&region->stats, 0, sizeof(region->stats));
 
   if (lifetime == VALK_LIFETIME_SESSION) {
-    region->gc_heap = valk_runtime_get_heap();
+    region->gc_heap = valk_sys ? valk_sys->heap : nullptr;
   }
 
   return region;

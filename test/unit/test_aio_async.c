@@ -31,8 +31,7 @@ void test_async_handle_new_null_sys_and_region(VALK_TEST_ARGS()) {
 void test_async_handle_new_with_sys(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_aio_system_t fake_sys = {0};
   sz arena_size = sizeof(valk_mem_arena_t) + 4096;
@@ -47,7 +46,7 @@ void test_async_handle_new_with_sys(VALK_TEST_ARGS()) {
 
   valk_mem_arena_reset(arena);
   free(arena);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
@@ -202,8 +201,7 @@ void test_async_handle_complete_null(VALK_TEST_ARGS()) {
 void test_async_handle_complete_transitions_pending_to_completed(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -216,15 +214,14 @@ void test_async_handle_complete_transitions_pending_to_completed(VALK_TEST_ARGS(
   ASSERT_EQ(atomic_load_explicit(&handle->result, memory_order_acquire), result);
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_async_handle_complete_already_terminal(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -240,7 +237,7 @@ void test_async_handle_complete_already_terminal(VALK_TEST_ARGS()) {
   ASSERT_EQ(atomic_load_explicit(&handle->result, memory_order_acquire), result1);
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
@@ -255,8 +252,7 @@ void test_async_handle_fail_null(VALK_TEST_ARGS()) {
 void test_async_handle_fail_transitions_pending_to_failed(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -269,15 +265,14 @@ void test_async_handle_fail_transitions_pending_to_failed(VALK_TEST_ARGS()) {
   ASSERT_EQ(atomic_load_explicit(&handle->error, memory_order_acquire), err);
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_async_handle_fail_already_terminal(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -292,7 +287,7 @@ void test_async_handle_fail_already_terminal(VALK_TEST_ARGS()) {
   ASSERT_NULL(atomic_load_explicit(&handle->error, memory_order_acquire));
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
@@ -308,8 +303,7 @@ void test_async_handle_cancel_null(VALK_TEST_ARGS()) {
 void test_async_handle_cancel_already_terminal(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -322,7 +316,7 @@ void test_async_handle_cancel_already_terminal(VALK_TEST_ARGS()) {
   ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_COMPLETED);
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
@@ -515,8 +509,7 @@ void test_async_propagate_context_sets_all(VALK_TEST_ARGS()) {
 void test_async_status_to_sym(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_lval_t *pending = valk_async_status_to_sym(VALK_ASYNC_PENDING);
   ASSERT_EQ(pending->flags & LVAL_TYPE_MASK, LVAL_SYM);
@@ -537,28 +530,26 @@ void test_async_status_to_sym(VALK_TEST_ARGS()) {
   valk_lval_t *unknown = valk_async_status_to_sym((valk_async_status_t)99);
   ASSERT_STR_EQ(unknown->str, ":unknown");
 
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_async_handle_await_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_lval_t *result = valk_async_handle_await(NULL);
   ASSERT_EQ(result->flags & LVAL_TYPE_MASK, LVAL_ERR);
 
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_async_handle_await_already_completed(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -570,15 +561,14 @@ void test_async_handle_await_already_completed(VALK_TEST_ARGS()) {
   ASSERT_EQ(awaited, result);
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_async_handle_await_already_failed(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -590,15 +580,14 @@ void test_async_handle_await_already_failed(VALK_TEST_ARGS()) {
   ASSERT_EQ(awaited, err);
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_async_handle_await_already_cancelled(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -610,15 +599,14 @@ void test_async_handle_await_already_cancelled(VALK_TEST_ARGS()) {
   ASSERT_EQ(awaited->flags & LVAL_TYPE_MASK, LVAL_ERR);
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_lval_handle(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -629,7 +617,7 @@ void test_lval_handle(VALK_TEST_ARGS()) {
   ASSERT_EQ(lval->async.handle, handle);
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
@@ -689,8 +677,7 @@ void test_async_handle_unref_with_children(VALK_TEST_ARGS()) {
 void test_async_handle_complete_from_running(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -705,15 +692,14 @@ void test_async_handle_complete_from_running(VALK_TEST_ARGS()) {
   ASSERT_EQ(atomic_load_explicit(&handle->result, memory_order_acquire), result);
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_async_handle_fail_from_running(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -728,7 +714,7 @@ void test_async_handle_fail_from_running(VALK_TEST_ARGS()) {
   ASSERT_EQ(atomic_load_explicit(&handle->error, memory_order_acquire), err);
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
@@ -873,8 +859,7 @@ void test_async_propagate_context_does_not_overwrite(VALK_TEST_ARGS()) {
 void test_async_await_failed_no_error(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -888,15 +873,14 @@ void test_async_await_failed_no_error(VALK_TEST_ARGS()) {
   ASSERT_STR_CONTAINS(awaited->str, "async operation failed");
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_async_handle_await_timeout_already_completed(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -908,15 +892,14 @@ void test_async_handle_await_timeout_already_completed(VALK_TEST_ARGS()) {
   ASSERT_EQ(awaited, result);
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_async_handle_await_timeout_already_failed(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
@@ -928,7 +911,7 @@ void test_async_handle_await_timeout_already_failed(VALK_TEST_ARGS()) {
   ASSERT_EQ(awaited, err);
 
   valk_async_handle_free(handle);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 

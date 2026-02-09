@@ -213,6 +213,7 @@ define run_tests_c
 	if [ -f $(1)/test_coverage_unit ]; then $(1)/test_coverage_unit; fi
 	$(1)/test_gc_unit
 	$(1)/test_gc_aio
+	$(1)/test_system
 	$(1)/test_memory_unit
 	$(1)/test_log
 	$(1)/test_parser_unit
@@ -424,7 +425,7 @@ C_TESTS_PARALLEL_SAFE = \
 	test_metrics_v2 test_metrics_builtins test_aio_backpressure \
 	test_aio_uv_coverage test_aio_integration test_aio_combinators \
 	test_aio_load_shedding test_aio_config test_aio_uv_unit test_aio_alloc_unit \
-	test_aio_ssl_unit test_gc_aio test_memory_unit test_log \
+	test_aio_ssl_unit test_gc_aio test_system test_memory_unit test_log \
 	test_parser_unit test_parser_errors test_pressure test_conn_io \
 	test_aio_timer_unit test_io_timer_ops_unit test_thread_posix_unit \
 	test_aio_handle_diag test_chase_lev_unit test_gc_unit test_task_queue_unit \

@@ -44,19 +44,20 @@ typedef struct {
   int port;
 } test_context_t;
 
+static void __test_thread_onboard(void) {
+  if (valk_sys) valk_system_register_thread(valk_sys, NULL, NULL);
+}
+
 static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   (void)_suite;
   
   printf("[test] Initializing runtime...\n");
   fflush(stdout);
   
-  // Initialize runtime with GC heap - this registers main thread with GC
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  cfg.gc_heap_size = 1024ULL * 1024 * 1024;  // 1GB for large response tests
-  if (valk_runtime_init(&cfg) != 0) {
-    VALK_FAIL("Failed to initialize runtime");
-    return false;
-  }
+  // Initialize system with GC heap - this registers main thread with GC
+  valk_system_config_t sys_cfg = valk_system_config_default();
+  sys_cfg.gc_heap_size = 1024ULL * 1024 * 1024;  // 1GB for large response tests
+  valk_system_create(&sys_cfg);
   printf("[test] Runtime initialized, heap=%p\n", valk_thread_ctx.heap);
   fflush(stdout);
 
@@ -117,7 +118,7 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   printf("[test] Starting AIO system...\n");
   fflush(stdout);
   valk_aio_system_config_t aio_cfg = valk_aio_config_large_payload();
-  aio_cfg.thread_onboard_fn = valk_runtime_get_onboard_fn();
+  aio_cfg.thread_onboard_fn = __test_thread_onboard;
   ctx->sys = valk_aio_start_with_config(&aio_cfg);
 
   printf("[test] Starting server...\n");
@@ -161,7 +162,7 @@ static void cleanup_test_context(test_context_t *ctx) {
     valk_aio_stop(ctx->sys);
     valk_aio_wait_for_shutdown(ctx->sys);
   }
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
 }
 
 // Parameterized test for large response handling

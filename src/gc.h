@@ -14,8 +14,10 @@ typedef struct valk_lenv_t valk_lenv_t;
 typedef struct valk_lval_t valk_lval_t;
 
 // ============================================================================
-// Runtime Initialization API
+// System API
 // ============================================================================
+
+typedef struct valk_system valk_system_t;
 
 typedef struct {
   u64 gc_heap_size;
@@ -25,17 +27,17 @@ static inline valk_system_config_t valk_system_config_default(void) {
   return (valk_system_config_t){.gc_heap_size = 0};
 }
 
-typedef valk_system_config_t valk_runtime_config_t;
-#define valk_runtime_config_default valk_system_config_default
-
-typedef void (*valk_thread_onboard_fn)(void);
-
-int valk_runtime_init(valk_runtime_config_t *config);
-void valk_runtime_shutdown(void);
-void valk_runtime_thread_onboard(void);
-valk_thread_onboard_fn valk_runtime_get_onboard_fn(void);
-valk_gc_heap_t *valk_runtime_get_heap(void);
-bool valk_runtime_is_initialized(void);
+valk_system_t *valk_system_create(valk_system_config_t *config);
+void valk_system_destroy(valk_system_t *sys);
+void valk_system_shutdown(valk_system_t *sys, u64 deadline_ms);
+void valk_system_register_thread(valk_system_t *sys,
+                                 void (*wake_fn)(void *), void *wake_ctx);
+void valk_system_unregister_thread(valk_system_t *sys);
+void valk_system_add_subsystem(valk_system_t *sys,
+                               void (*stop)(void *), void (*wait)(void *),
+                               void (*destroy)(void *), void *ctx);
+void valk_system_remove_subsystem(valk_system_t *sys, void *ctx);
+void valk_system_wake_threads(valk_system_t *sys);
 
 void valk_gc_reset_after_fork(void);
 void valk_gc_mark_reset_after_fork(void);
@@ -354,7 +356,6 @@ extern valk_system_t *valk_sys;
 #define valk_gc_coord (*valk_sys)
 #define valk_global_handle_table (valk_sys->handle_table)
 
-void valk_gc_coordinator_init(void);
 void valk_gc_thread_register(void);
 void valk_gc_thread_unregister(void);
 

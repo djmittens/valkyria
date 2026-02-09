@@ -11,12 +11,12 @@
 void test_gc_coordinator_init(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_coordinator_init();
+  valk_system_create(NULL);
 
   VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.phase) == VALK_GC_PHASE_IDLE,
                    "Phase should be IDLE after init");
-  VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.threads_registered) == 0,
-                   "threads_registered should be 0");
+  VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.threads_registered) == 1,
+                   "threads_registered should be 1");
   VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.threads_paused) == 0,
                    "threads_paused should be 0");
 
@@ -208,7 +208,8 @@ void test_gc_mark_queue_dynamic_growth(VALK_TEST_ARGS()) {
 void test_gc_thread_register_unregister(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_coordinator_init();
+  valk_system_create(NULL);
+  valk_gc_thread_unregister();
 
   size_t before = atomic_load(&valk_gc_coord.threads_registered);
 
@@ -230,7 +231,7 @@ void test_gc_thread_register_unregister(VALK_TEST_ARGS()) {
 void test_gc_safe_point_idle(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_coordinator_init();
+  valk_system_create(NULL);
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
 
   VALK_GC_SAFE_POINT();
@@ -319,7 +320,7 @@ void test_gc_mark_queue_concurrent_steal(VALK_TEST_ARGS()) {
 void test_gc_phase_transitions(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_coordinator_init();
+  valk_system_create(NULL);
 
   VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.phase) == VALK_GC_PHASE_IDLE,
                    "Should start IDLE");
@@ -349,8 +350,7 @@ void test_gc_phase_transitions(VALK_TEST_ARGS()) {
 void test_gc_root_stack_init(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_coordinator_init();
-  valk_gc_thread_register();
+  valk_system_create(NULL);
 
   VALK_TEST_ASSERT(valk_thread_ctx.root_stack != nullptr, "root_stack should be allocated");
   VALK_TEST_ASSERT(valk_thread_ctx.root_stack_capacity == 256, "capacity should be 256");
@@ -370,8 +370,7 @@ void test_gc_root_stack_init(VALK_TEST_ARGS()) {
 void test_gc_root_push_pop(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_coordinator_init();
-  valk_gc_thread_register();
+  valk_system_create(NULL);
 
   valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
   valk_lval_t *val1 = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
@@ -404,8 +403,7 @@ void test_gc_root_push_pop(VALK_TEST_ARGS()) {
 void test_gc_root_scoped(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_coordinator_init();
-  valk_gc_thread_register();
+  valk_system_create(NULL);
 
   valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
   valk_lval_t *val = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
@@ -441,8 +439,7 @@ static void root_visitor_fn(valk_lval_t *root, void *c) {
 void test_gc_visit_thread_roots(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_coordinator_init();
-  valk_gc_thread_register();
+  valk_system_create(NULL);
 
   valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
   valk_lval_t *val1 = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
@@ -476,8 +473,7 @@ void test_gc_visit_thread_roots(VALK_TEST_ARGS()) {
 
 void test_gc_safe_point_with_stw(VALK_TEST_ARGS()) {
   VALK_TEST();
-  valk_gc_coordinator_init();
-  valk_gc_thread_register();
+  valk_system_create(NULL);
   
   atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
   

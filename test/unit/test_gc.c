@@ -1816,12 +1816,10 @@ void test_gc_heap_parallel_gc_stress(VALK_TEST_ARGS()) {
 void test_gc_heap_parallel_gc_stw(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_gc_coordinator_init();
+  valk_system_create(NULL);
   
   valk_gc_heap_t *heap = valk_gc_heap_create(256 * 1024 * 1024);
   VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
-  
-  valk_gc_thread_register();
   
   for (int i = 0; i < 1000; i++) {
     void *p = valk_gc_heap_alloc(heap, 128);
@@ -1905,12 +1903,10 @@ static void *true_parallel_gc_worker(void *arg) {
 void test_gc_heap_true_parallel_gc(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_gc_coordinator_init();
+  valk_system_create(NULL);
   
   valk_gc_heap_t *heap = valk_gc_heap_create(256 * 1024 * 1024);
   VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
-  
-  valk_gc_thread_register();
   
   const int num_workers = 3;
   const int rooted_per_thread = 100;
@@ -2027,12 +2023,10 @@ static void *root_marking_worker(void *arg) {
 void test_gc_parallel_thread_local_roots(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_gc_coordinator_init();
+  valk_system_create(NULL);
   
   valk_gc_heap_t *heap = valk_gc_heap_create(256 * 1024 * 1024);
   VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
-  
-  valk_gc_thread_register();
   
   const int num_workers = 3;
   pthread_t workers[3];
@@ -3394,8 +3388,7 @@ void test_gc_region_create_with_arena(VALK_TEST_ARGS()) {
 void test_gc_region_session_lifetime(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t config = valk_runtime_config_default();
-  valk_runtime_init(&config);
+  valk_system_create(NULL);
 
   valk_region_t *region = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
   VALK_TEST_ASSERT(region != nullptr, "Session region should be created");
@@ -3406,7 +3399,7 @@ void test_gc_region_session_lifetime(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(ptr != nullptr, "Allocation from session region should succeed");
 
   valk_region_destroy(region);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
 
   VALK_PASS();
 }
@@ -3504,8 +3497,7 @@ void test_gc_ptr_map_collision_handling(VALK_TEST_ARGS()) {
 void test_gc_region_alloc_limit_overflow(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t config = valk_runtime_config_default();
-  valk_runtime_init(&config);
+  valk_system_create(NULL);
 
   valk_region_t *parent = valk_region_create(VALK_LIFETIME_SCRATCH, nullptr);
   VALK_TEST_ASSERT(parent != nullptr, "Parent region should be created");
@@ -3529,7 +3521,7 @@ void test_gc_region_alloc_limit_overflow(VALK_TEST_ARGS()) {
   valk_region_destroy(child);
   valk_region_destroy(parent);
 
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
 
   VALK_PASS();
 }
@@ -3554,15 +3546,11 @@ void test_gc_region_limit_exceeds_allocation(VALK_TEST_ARGS()) {
 void test_gc_runtime_double_init(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t config = valk_runtime_config_default();
+  valk_system_create(NULL);
 
-  int result1 = valk_runtime_init(&config);
-  VALK_TEST_ASSERT(result1 == 0, "First init should succeed");
+  valk_system_create(NULL);
 
-  int result2 = valk_runtime_init(&config);
-  VALK_TEST_ASSERT(result2 == 0, "Second init should return 0 (already initialized)");
-
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
 
   VALK_PASS();
 }
@@ -3570,10 +3558,9 @@ void test_gc_runtime_double_init(VALK_TEST_ARGS()) {
 void test_gc_evacuate_to_heap_already_on_heap(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t config = valk_runtime_config_default();
-  valk_runtime_init(&config);
+  valk_system_create(NULL);
 
-  valk_gc_heap_t *heap = valk_runtime_get_heap();
+  valk_gc_heap_t *heap = valk_sys->heap;
 
   valk_lval_t *val = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
   val->flags = LVAL_NUM | LVAL_ALLOC_HEAP;
@@ -3582,7 +3569,7 @@ void test_gc_evacuate_to_heap_already_on_heap(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_evacuate_to_heap(val);
   VALK_TEST_ASSERT(result == val, "Already-on-heap value should return same pointer");
 
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
 
   VALK_PASS();
 }

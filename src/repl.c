@@ -35,20 +35,19 @@ int main(int argc, char* argv[]) {
   char* input;
   u64 const SCRATCH_ARENA_BYTES = 4 * 1024 * 1024;
 
-  // Initialize runtime with GC heap
-  // Check for hard limit env var
-  valk_runtime_config_t runtime_cfg = valk_runtime_config_default();
+  valk_system_config_t sys_cfg = valk_system_config_default();
   const char* hard_limit_env = getenv("VALK_HEAP_HARD_LIMIT");
   if (hard_limit_env && hard_limit_env[0] != '\0') {
-    runtime_cfg.gc_heap_size = strtoull(hard_limit_env, nullptr, 10);
+    sys_cfg.gc_heap_size = strtoull(hard_limit_env, nullptr, 10);
   }
 
-  if (valk_runtime_init(&runtime_cfg) != 0) {
-    fprintf(stderr, "Failed to initialize runtime\n");
+  valk_system_t* sys = valk_system_create(&sys_cfg);
+  if (!sys) {
+    fprintf(stderr, "Failed to create system\n");
     return EXIT_FAILURE;
   }
 
-  valk_gc_heap_t* gc_heap = (valk_gc_heap_t*)valk_runtime_get_heap();
+  valk_gc_heap_t* gc_heap = sys->heap;
 
   valk_mem_arena_t* scratch = malloc(SCRATCH_ARENA_BYTES);
   valk_mem_arena_init(scratch, SCRATCH_ARENA_BYTES - sizeof(*scratch));
@@ -148,7 +147,8 @@ int main(int argc, char* argv[]) {
     }
 
     free(scratch);
-    valk_runtime_shutdown();
+    valk_system_shutdown(sys, 5000);
+    valk_system_destroy(sys);
 
     return exit_code;
   }
@@ -215,7 +215,8 @@ int main(int argc, char* argv[]) {
   }
 
   free(scratch);
-  valk_runtime_shutdown();
+  valk_system_shutdown(sys, 5000);
+  valk_system_destroy(sys);
 
   return EXIT_SUCCESS;
 }

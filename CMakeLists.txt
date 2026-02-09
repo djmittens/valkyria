@@ -314,6 +314,10 @@ add_executable(test_gc_aio test/test_gc_aio.c test/testing.c)
 target_link_libraries(test_gc_aio PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_gc_aio src/)
 
+add_executable(test_system test/test_system.c test/testing.c)
+target_link_libraries(test_system PRIVATE "-lc" valkyria)
+include_directories(test_system src/)
+
 add_executable(test_aio_config test/test_aio_config.c test/testing.c)
 target_link_libraries(test_aio_config PRIVATE "-lc" valkyria)
 include_directories(test_aio_config src/)

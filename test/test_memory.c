@@ -1663,8 +1663,7 @@ void test_gc_heap_allocator_api(VALK_TEST_ARGS()) {
 void test_region_create_destroy(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
   
   valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
   ASSERT_NOT_NULL(region);
@@ -1675,15 +1674,14 @@ void test_region_create_destroy(VALK_TEST_ARGS()) {
   
   valk_region_destroy(region);
   
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_region_stats_tracking(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
   
   valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
   ASSERT_NOT_NULL(region);
@@ -1708,15 +1706,14 @@ void test_region_stats_tracking(VALK_TEST_ARGS()) {
   
   valk_region_destroy(region);
   
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_region_memory_limit(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
   
   valk_region_t *parent = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
   valk_region_t *child = valk_region_create(VALK_LIFETIME_REQUEST, parent);
@@ -1741,15 +1738,14 @@ void test_region_memory_limit(VALK_TEST_ARGS()) {
   valk_region_destroy(child);
   valk_region_destroy(parent);
   
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_region_reset_preserves_limit(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
   
   valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
   ASSERT_NOT_NULL(region);
@@ -1767,7 +1763,7 @@ void test_region_reset_preserves_limit(VALK_TEST_ARGS()) {
   
   valk_region_destroy(region);
   
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
@@ -1805,8 +1801,7 @@ void test_lifetime_reference_rules(VALK_TEST_ARGS()) {
 void test_allocator_lifetime_detection(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
   
   valk_region_t *session_region = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
   valk_region_t *request_region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
@@ -1819,15 +1814,14 @@ void test_allocator_lifetime_detection(VALK_TEST_ARGS()) {
   valk_region_destroy(request_region);
   valk_region_destroy(session_region);
   
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_region_write_barrier(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
   
   valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
   valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
@@ -1845,15 +1839,14 @@ void test_region_write_barrier(VALK_TEST_ARGS()) {
   valk_region_destroy(request);
   valk_region_destroy(session);
   
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_region_promote_lval(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
   
   valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
   valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
@@ -1874,15 +1867,14 @@ void test_region_promote_lval(VALK_TEST_ARGS()) {
   valk_region_destroy(request);
   valk_region_destroy(session);
   
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_region_promote_lval_string(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
   valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
@@ -1900,15 +1892,14 @@ void test_region_promote_lval_string(VALK_TEST_ARGS()) {
   valk_region_destroy(request);
   valk_region_destroy(session);
 
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_region_promote_lval_symbol(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
   valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
@@ -1927,15 +1918,14 @@ void test_region_promote_lval_symbol(VALK_TEST_ARGS()) {
   valk_region_destroy(request);
   valk_region_destroy(session);
 
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_region_promote_lval_cons(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
   valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
@@ -1958,15 +1948,14 @@ void test_region_promote_lval_cons(VALK_TEST_ARGS()) {
   valk_region_destroy(request);
   valk_region_destroy(session);
 
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_region_promote_lval_error(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
   valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
@@ -1985,15 +1974,14 @@ void test_region_promote_lval_error(VALK_TEST_ARGS()) {
   valk_region_destroy(request);
   valk_region_destroy(session);
 
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_region_promote_lval_lambda(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
   valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
@@ -2015,15 +2003,14 @@ void test_region_promote_lval_lambda(VALK_TEST_ARGS()) {
   valk_region_destroy(request);
   valk_region_destroy(session);
 
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
 void test_region_init_embedded(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
   
   sz arena_size = sizeof(valk_mem_arena_t) + 4096;
   valk_mem_arena_t *arena = malloc(arena_size);
@@ -2044,7 +2031,7 @@ void test_region_init_embedded(VALK_TEST_ARGS()) {
   
   free(arena);
 
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
@@ -2063,8 +2050,7 @@ void test_allocator_type_string_region(VALK_TEST_ARGS()) {
 void test_region_allocator_api(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
   ASSERT_NOT_NULL(region);
@@ -2102,7 +2088,7 @@ void test_region_allocator_api(VALK_TEST_ARGS()) {
   valk_mem_allocator_free((valk_mem_allocator_t*)region, ptr1);
 
   valk_region_destroy(region);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
@@ -2110,8 +2096,7 @@ void test_region_allocator_api(VALK_TEST_ARGS()) {
 void test_region_allocator_realloc_null_ptr(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
   ASSERT_NOT_NULL(region);
@@ -2121,7 +2106,7 @@ void test_region_allocator_realloc_null_ptr(VALK_TEST_ARGS()) {
   ASSERT_NOT_NULL(ptr);
 
   valk_region_destroy(region);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
@@ -2129,8 +2114,7 @@ void test_region_allocator_realloc_null_ptr(VALK_TEST_ARGS()) {
 void test_region_gc_heap_realloc(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   // Create a region with gc_heap backing instead of arena
   valk_region_t region;
@@ -2163,7 +2147,7 @@ void test_region_gc_heap_realloc(VALK_TEST_ARGS()) {
     valk_gc_heap_destroy((valk_gc_heap_t*)region.gc_heap);
   }
 
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
@@ -2294,8 +2278,7 @@ void test_chunked_ptrs_malloc(VALK_TEST_ARGS()) {
 void test_chunked_ptrs_region(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_runtime_config_t cfg = valk_runtime_config_default();
-  valk_runtime_init(&cfg);
+  valk_system_create(NULL);
 
   valk_region_t *region = valk_region_create(VALK_LIFETIME_REQUEST, nullptr);
   ASSERT_NOT_NULL(region);
@@ -2322,7 +2305,7 @@ void test_chunked_ptrs_region(VALK_TEST_ARGS()) {
   valk_chunked_ptrs_free(&ptrs);
 
   valk_region_destroy(region);
-  valk_runtime_shutdown();
+  valk_system_destroy(valk_sys);
   VALK_PASS();
 }
 
