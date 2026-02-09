@@ -1,6 +1,7 @@
 #include "gc.h"
 #include "parser.h"
 #include "memory.h"
+#include "metrics_v2.h"
 #include "log.h"
 #include <stdlib.h>
 #include <string.h>
@@ -51,6 +52,8 @@ valk_system_t *valk_system_create(valk_system_config_t *config) {
     free(sys);
     return nullptr;
   }
+
+  valk_metrics_registry_init();
 
   valk_sys = sys;
   sys->initialized = true;

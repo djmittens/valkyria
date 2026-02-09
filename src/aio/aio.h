@@ -137,16 +137,9 @@ bool valk_aio_is_shutting_down(valk_aio_system_t *sys);
 /// @brief Wait for shutdown to complete and cleanup resources
 void valk_aio_wait_for_shutdown(valk_aio_system_t *sys);
 
-/// @brief Wake all AIO event loops for GC synchronization
-/// Called by the GC coordinator when requesting stop-the-world
-void valk_aio_wake_all_for_gc(void);
+/// @brief Free the AIO system struct (called after wait_for_shutdown)
+void valk_aio_destroy(valk_aio_system_t *sys);
 
-/// @brief Wait for all running AIO systems to complete
-void valk_aio_wait_for_all_systems(void);
-
-/// @brief Reset AIO global state after fork
-/// Must be called in child process after fork() to reinitialize pthread primitives
-void valk_aio_reset_after_fork(void);
 
 typedef struct {
   void *arg;

@@ -322,7 +322,7 @@ struct valk_aio_system {
   bool threadJoined;
   bool cleanedUp;
 
-  valk_gc_heap_t *loop_gc_heap;
+
 
   uv_timer_t maintenance_timer;
 

@@ -12,6 +12,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config);
 void valk_aio_stop(valk_aio_system_t *sys);
 bool valk_aio_is_shutting_down(valk_aio_system_t *sys);
 void valk_aio_wait_for_shutdown(valk_aio_system_t *sys);
+void valk_aio_destroy(valk_aio_system_t *sys);
 
 const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg);
 int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg);

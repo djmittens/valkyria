@@ -7,80 +7,13 @@
 
 extern void __event_loop(void *arg);
 extern void __aio_uv_stop(uv_async_t *h);
-
-#define VALK_AIO_MAX_SYSTEMS 16
-static valk_aio_system_t *g_aio_systems[VALK_AIO_MAX_SYSTEMS];
-static pthread_mutex_t g_aio_systems_lock = PTHREAD_MUTEX_INITIALIZER;
-
-static void __gc_wakeup_cb(uv_async_t *handle);
-
-void valk_aio_register_system(valk_aio_system_t *sys) {
-  pthread_mutex_lock(&g_aio_systems_lock);
-  for (int i = 0; i < VALK_AIO_MAX_SYSTEMS; i++) {
-    if (g_aio_systems[i] == nullptr) {
-      g_aio_systems[i] = sys;
-      break;
-    }
-  }
-  pthread_mutex_unlock(&g_aio_systems_lock);
-}
-
-void valk_aio_unregister_system(valk_aio_system_t *sys) {
-  pthread_mutex_lock(&g_aio_systems_lock);
-  for (int i = 0; i < VALK_AIO_MAX_SYSTEMS; i++) {
-    if (g_aio_systems[i] == sys) {
-      g_aio_systems[i] = nullptr;
-      break;
-    }
-  }
-  pthread_mutex_unlock(&g_aio_systems_lock);
-}
-
-// LCOV_EXCL_START - GC coordination only triggered during concurrent STW collection
-void valk_aio_wake_all_for_gc(void) {
-  pthread_mutex_lock(&g_aio_systems_lock);
-  for (int i = 0; i < VALK_AIO_MAX_SYSTEMS; i++) {
-    valk_aio_system_t *sys = g_aio_systems[i];
-    if (sys && sys->eventloop && !sys->shuttingDown) {
-      uv_async_send(&sys->gc_wakeup);
-    }
-  }
-  pthread_mutex_unlock(&g_aio_systems_lock);
-}
-
-void valk_aio_wait_for_all_systems(void) {
-  valk_aio_system_t *systems[VALK_AIO_MAX_SYSTEMS];
-  int count = 0;
-  
-  pthread_mutex_lock(&g_aio_systems_lock);
-  for (int i = 0; i < VALK_AIO_MAX_SYSTEMS; i++) {
-    if (g_aio_systems[i]) {
-      systems[count++] = g_aio_systems[i];
-    }
-  }
-  pthread_mutex_unlock(&g_aio_systems_lock);
-  
-  for (int i = 0; i < count; i++) {
-    valk_aio_stop(systems[i]);
-  }
-  for (int i = 0; i < count; i++) {
-    valk_aio_wait_for_shutdown(systems[i]);
-  }
-}
-
-void valk_aio_reset_after_fork(void) {
-  pthread_mutex_init(&g_aio_systems_lock, nullptr);
-  for (int i = 0; i < VALK_AIO_MAX_SYSTEMS; i++) {
-    g_aio_systems[i] = nullptr;
-  }
-}
+void valk_aio_destroy(valk_aio_system_t *sys);
 
 static void __gc_wakeup_cb(uv_async_t *handle) {
   valk_aio_system_t *sys = (valk_aio_system_t *)handle->data;
-  if (!sys) return;
+  if (!sys) return; // LCOV_EXCL_BR_LINE
   valk_gc_safe_point_slow();
 }
-// LCOV_EXCL_STOP
 
 const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg) {
   if (cfg->max_connections < 1 || cfg->max_connections > 100000)
@@ -304,7 +237,13 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
   sys->gc_wakeup.data = sys;
   uv_unref((uv_handle_t *)&sys->gc_wakeup);
 
-  valk_aio_register_system(sys);
+  if (valk_sys->initialized) {
+    valk_system_add_subsystem(valk_sys,
+                             (void(*)(void*))valk_aio_stop,
+                             (void(*)(void*))valk_aio_wait_for_shutdown,
+                             (void(*)(void*))valk_aio_destroy,
+                             sys);
+  }
 
   if (uv_sem_init(&sys->startup_sem, 0) != 0) {
     VALK_ERROR("Failed to initialize startup semaphore");
@@ -343,8 +282,6 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
     valk_aio_stop(sys);
   }
 
-  valk_aio_unregister_system(sys);
-
   if (!sys->threadJoined &&
       !valk_thread_equal(valk_thread_self(), (valk_thread_t)sys->loopThread)) {
     uv_thread_join(&sys->loopThread);
@@ -379,6 +316,10 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
   uv_sem_destroy(&sys->startup_sem);
 
   sys->cleanedUp = true;
+}
+
+void valk_aio_destroy(valk_aio_system_t *sys) {
+  if (!sys) return;
   free(sys);
 }
 

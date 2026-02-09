@@ -35,25 +35,10 @@ static void __backpressure_list_remove(valk_aio_handle_t *conn) {
 void __event_loop(void *arg) {
   valk_aio_system_t *sys = arg;
 
-  if (sys->config.thread_onboard_fn) {
-    sys->config.thread_onboard_fn();
-    if (valk_sys && valk_thread_ctx.gc_registered) {
-      u64 idx = valk_thread_ctx.gc_thread_id;
-      valk_sys->threads[idx].wake_fn = __aio_gc_wake;
-      valk_sys->threads[idx].wake_ctx = sys;
-    }
-    VALK_DEBUG("Event loop thread onboarded via config callback");
+  if (valk_sys->initialized) {
+    valk_system_register_thread(valk_sys, __aio_gc_wake, sys);
   } else {
     valk_mem_init_malloc();
-
-    valk_gc_heap_t *gc_heap = valk_gc_heap_create(0);
-    if (!gc_heap) { // LCOV_EXCL_BR_LINE
-      VALK_ERROR("Failed to create event loop GC heap");
-    } else {
-      valk_thread_ctx.heap = gc_heap;
-      sys->loop_gc_heap = gc_heap;
-      VALK_DEBUG("Created event loop GC heap: %p", gc_heap);
-    }
   }
 
   VALK_DEBUG("Initializing UV event loop thread");
@@ -82,29 +67,14 @@ void __event_loop(void *arg) {
 
   valk_aio_task_queue_init(sys);
 
-  // Register with GC BEFORE signaling ready - this prevents a race where
-  // the main thread triggers GC after sem_post but before we've registered.
-  // If GC starts STW with count=1 (main only), then we register (count=2),
-  // GC will wait for 2 threads but we haven't entered our safe point loop yet.
-  if (!sys->config.thread_onboard_fn) {
-    valk_gc_thread_register();
-    if (valk_sys && valk_thread_ctx.gc_registered) {
-      u64 idx = valk_thread_ctx.gc_thread_id;
-      valk_sys->threads[idx].wake_fn = __aio_gc_wake;
-      valk_sys->threads[idx].wake_ctx = sys;
-    }
-  }
-
   // Signal that event loop is ready (all slabs initialized, GC registered)
   uv_sem_post(&sys->startup_sem);
 
   sys->ops->loop->run(sys, VALK_IO_RUN_DEFAULT);
 
-  // Unregister from GC before drain loop - the drain loop doesn't allocate
-  // GC-managed objects, and staying registered causes deadlock: main thread
-  // triggers GC STW, waits for this thread to respond, but gc_wakeup is
-  // skipped (shuttingDown=true) so this thread never enters safe_point.
-  valk_gc_thread_unregister();
+  if (valk_sys->initialized) {
+    valk_system_unregister_thread(valk_sys);
+  }
 
   // =========================================================================
   // Graceful Shutdown (modeled after Finagle/Netty)
@@ -177,11 +147,6 @@ void __event_loop(void *arg) {
 
   valk_slab_free(sys->tcpBufferSlab);
   valk_slab_free(sys->httpStreamArenas);
-
-  if (sys->loop_gc_heap) {
-    valk_gc_heap_destroy(sys->loop_gc_heap);
-    sys->loop_gc_heap = nullptr;
-  }
 }
 
 static void __uv_handle_closed_cb(uv_handle_t *handle) {

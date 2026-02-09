@@ -167,7 +167,6 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
     // Reset all global state after fork - critical for test isolation
     // This reinitializes pthread primitives which are undefined after fork
     valk_gc_reset_after_fork();
-    valk_aio_reset_after_fork();
     
     // Reinitialize thread-local allocator after fork
     valk_mem_init_malloc();

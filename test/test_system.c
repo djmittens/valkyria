@@ -160,6 +160,7 @@ void test_barrier_two_threads_no_deadlock(VALK_TEST_ARGS()) {
 
   valk_aio_stop(aio);
   valk_aio_wait_for_shutdown(aio);
+  valk_aio_destroy(aio);
   valk_system_destroy(sys);
   VALK_PASS();
 }
@@ -188,6 +189,7 @@ void test_checkpoint_does_not_deadlock_with_aio(VALK_TEST_ARGS()) {
 
   valk_aio_stop(aio);
   valk_aio_wait_for_shutdown(aio);
+  valk_aio_destroy(aio);
   valk_thread_ctx.scratch = nullptr;
   valk_system_destroy(sys);
   VALK_PASS();
@@ -213,6 +215,105 @@ void test_gc_phase_returns_to_idle(VALK_TEST_ARGS()) {
 
   valk_aio_stop(aio);
   valk_aio_wait_for_shutdown(aio);
+  valk_aio_destroy(aio);
+  valk_system_destroy(sys);
+  VALK_PASS();
+}
+
+void test_aio_registers_as_subsystem(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_system_t *sys = valk_system_create(nullptr);
+  ASSERT_NOT_NULL(sys);
+
+  valk_aio_system_t *aio = valk_aio_start();
+  ASSERT_NOT_NULL(aio);
+  usleep(50000);
+
+  ASSERT_TRUE(sys->subsystem_count >= 1);
+
+  valk_aio_stop(aio);
+  valk_aio_wait_for_shutdown(aio);
+  valk_aio_destroy(aio);
+  valk_system_destroy(sys);
+  VALK_PASS();
+}
+
+void test_event_loop_thread_has_wake_fn(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_system_t *sys = valk_system_create(nullptr);
+  ASSERT_NOT_NULL(sys);
+
+  valk_aio_system_t *aio = valk_aio_start();
+  ASSERT_NOT_NULL(aio);
+  usleep(50000);
+
+  bool found_wake_fn = false;
+  u64 n = atomic_load(&sys->threads_registered);
+  for (u64 i = 0; i < n; i++) {
+    if (sys->threads[i].active && sys->threads[i].wake_fn != nullptr) {
+      found_wake_fn = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(found_wake_fn);
+
+  valk_aio_stop(aio);
+  valk_aio_wait_for_shutdown(aio);
+  valk_aio_destroy(aio);
+  valk_system_destroy(sys);
+  VALK_PASS();
+}
+
+void test_event_loop_shares_system_heap(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_system_t *sys = valk_system_create(nullptr);
+  ASSERT_NOT_NULL(sys);
+
+  valk_aio_system_t *aio = valk_aio_start();
+  ASSERT_NOT_NULL(aio);
+  usleep(50000);
+
+  bool found_shared_heap = false;
+  u64 n = atomic_load(&sys->threads_registered);
+  for (u64 i = 1; i < n; i++) {
+    if (sys->threads[i].active && sys->threads[i].ctx) {
+      valk_thread_context_t *ctx = (valk_thread_context_t *)sys->threads[i].ctx;
+      if (ctx->heap == sys->heap) {
+        found_shared_heap = true;
+        break;
+      }
+    }
+  }
+  ASSERT_TRUE(found_shared_heap);
+
+  valk_aio_stop(aio);
+  valk_aio_wait_for_shutdown(aio);
+  valk_aio_destroy(aio);
+  valk_system_destroy(sys);
+  VALK_PASS();
+}
+
+void test_system_shutdown_stops_aio(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_system_t *sys = valk_system_create(nullptr);
+  ASSERT_NOT_NULL(sys);
+
+  valk_aio_system_t *aio = valk_aio_start();
+  ASSERT_NOT_NULL(aio);
+  usleep(50000);
+
+  ASSERT_TRUE(sys->subsystem_count >= 1);
+  ASSERT_TRUE(atomic_load(&sys->threads_registered) >= 2);
+
+  valk_system_shutdown(sys, 5000);
+
+  ASSERT_EQ(atomic_load(&sys->threads_registered), 1);
+  ASSERT_EQ(sys->subsystem_count, 0);
+
   valk_system_destroy(sys);
   VALK_PASS();
 }
@@ -240,6 +341,14 @@ int main(void) {
                           test_checkpoint_does_not_deadlock_with_aio);
   valk_testsuite_add_test(suite, "test_gc_phase_returns_to_idle",
                           test_gc_phase_returns_to_idle);
+  valk_testsuite_add_test(suite, "test_aio_registers_as_subsystem",
+                          test_aio_registers_as_subsystem);
+  valk_testsuite_add_test(suite, "test_event_loop_thread_has_wake_fn",
+                          test_event_loop_thread_has_wake_fn);
+  valk_testsuite_add_test(suite, "test_event_loop_shares_system_heap",
+                          test_event_loop_shares_system_heap);
+  valk_testsuite_add_test(suite, "test_system_shutdown_stops_aio",
+                          test_system_shutdown_stops_aio);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

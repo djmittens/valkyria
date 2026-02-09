@@ -137,10 +137,6 @@ int main(int argc, char* argv[]) {
       exit_code = (int)exit_val->num;
     }
 
-    // Wait for any running AIO systems to complete before exiting
-    // This stops, joins threads, and frees all registered AIO systems
-    valk_aio_wait_for_all_systems();
-
     if (valk_coverage_enabled()) {
       valk_coverage_report(valk_coverage_output_path());
       valk_coverage_reset();
