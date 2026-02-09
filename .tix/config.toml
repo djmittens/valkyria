@@ -1,6 +1,6 @@
 [repo]
 main_branch = "main"
-plan_file = "ralph/plan.jsonl"
+plan_file = ".tix/plan.jsonl"
 
 [display]
 color = true
