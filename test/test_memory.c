@@ -60,7 +60,7 @@ void test_slab_alloc(VALK_TEST_ARGS()) {
   const char msg[] = "Get fucked";
 
   int itemLen = sizeof(test_box_t) + sizeof(msg);
-  size_t numItems = rand() % 1000;
+  size_t numItems = rand() % 999 + 1;
   valk_slab_t *slab = valk_slab_new(itemLen, numItems);
 
   test_box_t *boxes[numItems];

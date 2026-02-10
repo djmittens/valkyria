@@ -45,6 +45,12 @@ jobs:
           # libbacktrace.a lives under /usr/lib/gcc/<triple>/14/ - symlink so CMake find_library can find it
           sudo ln -sf /usr/lib/gcc/$(gcc -dumpmachine)/14/libbacktrace.a /usr/lib/libbacktrace.a
       
+      - name: System Info
+        run: |
+          ulimit -a
+          cat /proc/meminfo 2>/dev/null | head -5 || sysctl hw.memsize 2>/dev/null || true
+          uname -m
+
       - name: Build with Coverage
         run: |
           make build-coverage

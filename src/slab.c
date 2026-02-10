@@ -1,5 +1,6 @@
 #include "memory.h"
 
+#include <errno.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -45,7 +46,7 @@ valk_slab_t *valk_slab_new(sz itemSize, sz numItems) {
   void *mem = mmap(nullptr, mmapSize, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (mem == MAP_FAILED) { // LCOV_EXCL_BR_LINE
-    VALK_ERROR("mmap failed for slab of %zu bytes", mmapSize); // LCOV_EXCL_LINE
+    VALK_ERROR("mmap failed for slab of %zu bytes: %s", mmapSize, strerror(errno)); // LCOV_EXCL_LINE
     return nullptr; // LCOV_EXCL_LINE
   }
   
