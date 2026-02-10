@@ -91,13 +91,16 @@ char* valk_vm_metrics_to_json(const valk_vm_metrics_t* m,
 
   n = snprintf(p, end - p,
     "{\"gc\":{\"cycles_total\":%llu,\"pause_us_total\":%llu,\"pause_us_max\":%llu,"
-    "\"pause_ms_avg\":%.3f,\"reclaimed_bytes_total\":%llu,\"heap_used_bytes\":%llu,"
+    "\"pause_ms_avg\":%.3f,\"reclaimed_bytes_total\":%llu,\"allocated_bytes_total\":%llu,"
+    "\"efficiency_pct\":%u,\"heap_used_bytes\":%llu,"
     "\"heap_total_bytes\":%llu,\"heap_utilization_pct\":%.2f,\"large_object_bytes\":%llu,",
     (unsigned long long)m->gc_cycles,
     (unsigned long long)m->gc_pause_us_total,
     (unsigned long long)m->gc_pause_us_max,
     m->gc_cycles > 0 ? (double)m->gc_pause_us_total / m->gc_cycles / 1000.0 : 0.0,
     (unsigned long long)m->gc_reclaimed_bytes,
+    (unsigned long long)m->gc_allocated_bytes,
+    m->gc_efficiency_pct,
     (unsigned long long)m->gc_heap_used,
     (unsigned long long)m->gc_heap_total,
     heap_util,
@@ -144,7 +147,7 @@ char* valk_vm_metrics_to_json(const valk_vm_metrics_t* m,
     "\"interpreter\":{\"evals_total\":%llu,\"function_calls\":%llu,\"builtin_calls\":%llu,"
     "\"stack_depth_max\":%u,\"closures_created\":%llu,\"env_lookups\":%llu},"
     "\"event_loop\":{\"iterations\":%llu,\"events_processed\":%llu,"
-    "\"idle_time_us\":%llu,\"idle_time_pct\":%.2f}}",
+    "\"idle_time_us\":%llu}}",
     (unsigned long long)m->eval_total,
     (unsigned long long)m->function_calls,
     (unsigned long long)m->builtin_calls,
@@ -153,8 +156,7 @@ char* valk_vm_metrics_to_json(const valk_vm_metrics_t* m,
     (unsigned long long)m->env_lookups,
     (unsigned long long)m->loop_count,
     (unsigned long long)m->events_processed,
-    (unsigned long long)m->idle_time_us,
-    0.0);
+    (unsigned long long)m->idle_time_us);
   if (n < 0 || p + n >= end) goto truncated;
   // LCOV_EXCL_BR_STOP
 

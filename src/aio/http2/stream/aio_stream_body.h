@@ -78,6 +78,7 @@ valk_stream_body_t *valk_stream_body_new(
     valk_mem_arena_t *arena);
 
 void valk_stream_body_close(valk_stream_body_t *body);
+void valk_stream_body_force_close(valk_stream_body_t *body);
 void valk_stream_body_free(valk_stream_body_t *body);
 
 void valk_stream_body_register(valk_stream_body_t *body);

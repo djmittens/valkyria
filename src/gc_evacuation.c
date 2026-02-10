@@ -314,7 +314,8 @@ void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
     case LVAL_STR:
     case LVAL_SYM:
     case LVAL_ERR:
-      if (v->str != nullptr) {
+      if (v->str != nullptr &&
+          (ctx->scratch == nullptr || valk_ptr_in_arena(ctx->scratch, v->str))) {
         u64 len = strlen(v->str) + 1;
         char* new_str = nullptr;
         VALK_WITH_ALLOC((void*)ctx->heap) { new_str = valk_mem_alloc(len); }

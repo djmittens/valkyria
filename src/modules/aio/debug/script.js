@@ -3695,7 +3695,7 @@
     var errorRate = totalReqNow > 0 ? ((totalReq4xx + totalReq5xx) / totalReqNow) * 100 : 0;
     pushHistory(history.errorRate, errorRate);
 
-    // Average latency across all servers
+    // Average latency across all servers (per-interval, not all-time)
     var totalLatencySum = 0;
     var totalLatencyCount = 0;
     serverKeys.forEach(function(key) {
@@ -3707,7 +3707,14 @@
       }
     });
     // sum_us is in microseconds, convert to milliseconds
-    var avgLatency = totalLatencyCount > 0 ? (totalLatencySum / totalLatencyCount) / 1000 : 0;
+    var avgLatency;
+    if (prevMetrics && prevMetrics.latencyCount != null) {
+      var deltaSum = totalLatencySum - prevMetrics.latencySum;
+      var deltaCount = totalLatencyCount - prevMetrics.latencyCount;
+      avgLatency = deltaCount > 0 ? (deltaSum / deltaCount) / 1000 : 0;
+    } else {
+      avgLatency = totalLatencyCount > 0 ? (totalLatencySum / totalLatencyCount) / 1000 : 0;
+    }
     pushHistory(history.latency, avgLatency);
 
     // Heap usage
@@ -3852,6 +3859,8 @@
       allocBytesTotal: gc.allocated_bytes_total || 0,
       reclaimBytesTotal: gc.reclaimed_bytes_total || 0,
       evalsTotal: evalsTotal,
+      latencySum: totalLatencySum,
+      latencyCount: totalLatencyCount,
       timestamp: now
     };
 
@@ -3944,6 +3953,9 @@
       this.maxReconnectAttempts = 10;
       this.lastEventId = null;
       this.isClosing = false;  // Flag to suppress errors during page unload
+      this.reconnectWatchdog = null;  // Watchdog timer for stalled auto-retry
+      this.lastEventTime = 0;  // Timestamp of last received SSE event
+      this.livenessInterval = null;  // Periodic liveness check
 
       // DOM references
       this.grids = {};
@@ -4024,6 +4036,7 @@
         // Listen for full diagnostics event (sent on initial connect)
         // Still needed for backwards compatibility or if fresh state fetch failed
         self.eventSource.addEventListener('diagnostics', function(e) {
+          self.lastEventTime = Date.now();
           self.lastEventId = e.lastEventId;
           var data = JSON.parse(e.data);
 
@@ -4060,6 +4073,7 @@
 
         // Listen for delta diagnostics events (sent after first full event)
         self.eventSource.addEventListener('diagnostics-delta', function(e) {
+          self.lastEventTime = Date.now();
           self.lastEventId = e.lastEventId;
           var delta = JSON.parse(e.data);
           self.applyDelta(delta);
@@ -4072,6 +4086,9 @@
         });
 
         self.eventSource.onopen = function() {
+          self.clearReconnectWatchdog();
+          self.lastEventTime = Date.now();
+          self.startLivenessCheck();
           var wasReconnect = self.reconnectAttempts > 0;
           self.reconnectAttempts = 0;
           self.updateConnectionStatus(true);
@@ -4094,7 +4111,23 @@
 
           self.updateConnectionStatus(false);
           if (self.eventSource.readyState === EventSource.CLOSED) {
+            self.clearReconnectWatchdog();
             self.scheduleReconnect();
+          } else if (self.eventSource.readyState === EventSource.CONNECTING) {
+            // Browser is auto-retrying, but this can silently stall
+            // (e.g. HTTP/2 connection torn down by another tab's refresh).
+            // Set a watchdog: if no successful event arrives within 3s,
+            // tear down and do a full manual reconnect.
+            if (!self.reconnectWatchdog) {
+              self.reconnectWatchdog = setTimeout(function() {
+                self.reconnectWatchdog = null;
+                if (self.eventSource && self.eventSource.readyState !== EventSource.OPEN) {
+                  self.eventSource.close();
+                  self.reconnectAttempts = 0;
+                  self.scheduleReconnect();
+                }
+              }, 3000);
+            }
           }
         };
       });
@@ -4223,10 +4256,11 @@
         // Apply VM metrics - handle both full and compact formats
         if (delta.metrics.vm) {
           if (!metrics.vm) metrics.vm = {};
+          // Full format: {gc: {cycles_total, pause_us_total, ...}, interpreter: {...}, event_loop: {...}}
           // Compact format: {gc: {heap_used, heap_pct, cycles}, interp: {...}, loop: {...}}
           if (delta.metrics.vm.gc) {
             if (!metrics.vm.gc) metrics.vm.gc = {};
-            // Compact gc uses short names
+            // Compact gc uses short names - map them
             if (typeof delta.metrics.vm.gc.heap_used !== 'undefined') {
               metrics.vm.gc.heap_used_bytes = delta.metrics.vm.gc.heap_used;
             }
@@ -4236,10 +4270,16 @@
             if (typeof delta.metrics.vm.gc.cycles !== 'undefined') {
               metrics.vm.gc.cycles_total = delta.metrics.vm.gc.cycles;
             }
-            // Also copy any full-format fields
+            // Copy all fields (works for both full and compact - full has
+            // cycles_total, pause_histogram, survival, size_classes, etc.)
             Object.assign(metrics.vm.gc, delta.metrics.vm.gc);
           }
-          // Compact interp section
+          // Full format: interpreter
+          if (delta.metrics.vm.interpreter) {
+            if (!metrics.vm.interpreter) metrics.vm.interpreter = {};
+            Object.assign(metrics.vm.interpreter, delta.metrics.vm.interpreter);
+          }
+          // Compact format: interp (short names)
           if (delta.metrics.vm.interp) {
             if (!metrics.vm.interpreter) metrics.vm.interpreter = {};
             if (typeof delta.metrics.vm.interp.evals !== 'undefined') {
@@ -4251,6 +4291,11 @@
             if (typeof delta.metrics.vm.interp.builtins !== 'undefined') {
               metrics.vm.interpreter.builtin_calls = delta.metrics.vm.interp.builtins;
             }
+          }
+          // Full format: event_loop
+          if (delta.metrics.vm.event_loop) {
+            if (!metrics.vm.event_loop) metrics.vm.event_loop = {};
+            Object.assign(metrics.vm.event_loop, delta.metrics.vm.event_loop);
           }
         }
 
@@ -4431,6 +4476,40 @@
       }
       if (memoryUpdated) {
         this.handleMemoryUpdate(this.fullState.memory);
+      }
+    }
+
+    clearReconnectWatchdog() {
+      if (this.reconnectWatchdog) {
+        clearTimeout(this.reconnectWatchdog);
+        this.reconnectWatchdog = null;
+      }
+    }
+
+    startLivenessCheck() {
+      this.stopLivenessCheck();
+      var self = this;
+      // Server sends deltas every 100ms. If we haven't received anything
+      // in 2s, the connection is silently dead (e.g. HTTP/2 connection
+      // torn down by another tab's refresh). Force a full reconnect.
+      this.livenessInterval = setInterval(function() {
+        if (self.isClosing) return;
+        var elapsed = Date.now() - self.lastEventTime;
+        if (elapsed > 2000 && self.eventSource) {
+          self.stopLivenessCheck();
+          self.clearReconnectWatchdog();
+          self.eventSource.close();
+          self.eventSource = null;
+          self.reconnectAttempts = 0;
+          self.connect();
+        }
+      }, 1000);
+    }
+
+    stopLivenessCheck() {
+      if (this.livenessInterval) {
+        clearInterval(this.livenessInterval);
+        this.livenessInterval = null;
       }
     }
 
@@ -4861,7 +4940,7 @@
           pause_us_total: vm.gc ? vm.gc.pause_us_total : 0,
           pause_us_max: vm.gc ? vm.gc.pause_us_max : 0,
           reclaimed_bytes_total: vm.gc ? vm.gc.reclaimed_bytes_total : 0,
-          allocated_bytes_total: vm.gc ? vm.gc.allocated_bytes : 0,
+          allocated_bytes_total: vm.gc ? (vm.gc.allocated_bytes_total || 0) : 0,
           efficiency_pct: vm.gc ? vm.gc.efficiency_pct : 0,
           heap_used_bytes: vm.gc ? vm.gc.heap_used_bytes : 0,
           heap_total_bytes: vm.gc ? vm.gc.heap_total_bytes : 0,
@@ -5657,6 +5736,8 @@
     }
 
     disconnect() {
+      this.stopLivenessCheck();
+      this.clearReconnectWatchdog();
       if (this.eventSource) {
         this.isClosing = true;
         this.eventSource.close();

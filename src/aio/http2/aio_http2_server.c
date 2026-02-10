@@ -315,6 +315,7 @@ static void __http_server_accept_impl(valk_aio_handle_t *hndl, int status) {
     return;
   }
 
+  fprintf(stderr, "[DBG] accept conn=%p\n", (void*)conn);
   __accept_finalize(conn, srv);
 }
 // LCOV_EXCL_STOP

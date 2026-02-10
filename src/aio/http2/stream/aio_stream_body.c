@@ -88,6 +88,8 @@ valk_stream_body_t *valk_stream_body_new(
   data_prd_out->source.ptr = body;
   data_prd_out->read_callback = __stream_data_read_callback;
 
+  fprintf(stderr, "[DBG] body_new id=%llu stream=%d conn=%p\n",
+          (unsigned long long)body->id, stream_id, (void*)conn);
   VALK_DEBUG("stream_body: created id=%llu, http2_stream=%d, arena=%p",
              (unsigned long long)body->id, stream_id, (void*)arena);
 
@@ -118,6 +120,8 @@ static void __stream_body_finish_close(valk_stream_body_t *body) {
   }
 
   if (body->closed_handle) {
+    body->closed_handle->is_closed = nullptr;
+    body->closed_handle->is_closed_ctx = nullptr;
     valk_async_handle_complete(body->closed_handle, valk_lval_sym(":closed"));
     body->closed_handle = NULL;
   }
@@ -176,6 +180,16 @@ void valk_stream_body_close(valk_stream_body_t *body) {
     } // LCOV_EXCL_STOP
   }
   valk_http2_flush_pending(body->conn);
+}
+
+void valk_stream_body_force_close(valk_stream_body_t *body) {
+  if (!body) return;
+
+  valk_stream_state_e state = atomic_load(&body->state);
+  if (state == VALK_STREAM_CLOSED) return;
+
+  atomic_store(&body->state, VALK_STREAM_CLOSED);
+  __stream_body_finish_close(body);
 }
 
 // LCOV_EXCL_START -- cleanup function, tested via HTTP/2 integration

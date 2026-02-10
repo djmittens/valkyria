@@ -623,6 +623,12 @@ static void __disconnect_cleanup_session(valk_aio_handle_t *handle) {
 }
 
 void valk_http2_conn_on_disconnect(valk_aio_handle_t *handle) {
+  fprintf(stderr, "[DBG] disconnect conn=%p active_streams=%d bodies=",
+          (void*)handle, handle->http.active_streams);
+  { valk_stream_body_t *b = handle->http.stream_bodies;
+    while (b) { fprintf(stderr, "%llu ", (unsigned long long)b->id); b = b->next; }
+  }
+  fprintf(stderr, "\n");
   VALK_DEBUG("HTTP/2 disconnect called");
 
   __backpressure_list_remove(handle);

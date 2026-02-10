@@ -64,7 +64,7 @@ void valk_stream_body_close_all(valk_aio_handle_t *conn) {
 
   while (body) {
     valk_stream_body_t *next = body->next;
-    valk_stream_body_close(body);
+    valk_stream_body_force_close(body);
     body = next;
     count++;
   }

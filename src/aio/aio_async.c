@@ -111,7 +111,15 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
   // LCOV_EXCL_BR_STOP
 
 cleanup:
-  (void)0;
+  if (valk_arena_ref_valid(http->arena_ref)) {
+    valk_slab_t *pool = nullptr;
+    if (http->conn && http->conn->http.server && http->conn->http.server->sys) {
+      pool = http->conn->http.server->sys->httpStreamArenas;
+    }
+    if (pool) {
+      valk_arena_ref_release(&http->arena_ref, pool);
+    }
+  }
 }
 
 // LCOV_EXCL_START - standalone async context: used for non-HTTP async ops

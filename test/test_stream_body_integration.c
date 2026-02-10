@@ -707,16 +707,12 @@ static void test_stream_write_after_close_all_fails(VALK_TEST_ARGS()) {
 
   valk_stream_body_close_all(conn);
 
+  ASSERT_EQ(atomic_load(&body->state), VALK_STREAM_CLOSED);
+  ASSERT_EQ(body->queue_len, 0);
+  ASSERT_TRUE(body->queue_head == nullptr);
+
   int rv2 = valk_stream_body_write(body, "after close", 11);
   ASSERT_EQ(rv2, -1);
-  ASSERT_EQ(body->queue_len, 1);
-
-  valk_stream_chunk_t *chunk = body->queue_head;
-  while (chunk) {
-    valk_stream_chunk_t *next = chunk->next;
-    free(chunk);
-    chunk = next;
-  }
 
   free(body);
   free(conn);
