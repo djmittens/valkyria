@@ -12,37 +12,9 @@ extern void valk_async_notify_parent(valk_async_handle_t *child);
 static void __run_resource_cleanups(valk_async_handle_t *handle);
 
 // LCOV_EXCL_BR_START - async callback defensive null checks
-bool valk_http_async_is_closed_callback(void *ctx) {
-  if (!ctx) return false;
-  valk_http_async_ctx_t *http = (valk_http_async_ctx_t*)ctx;
-  if (!http->conn) return false;
-
-  valk_aio_handle_t *conn = http->conn;
-  return conn->http.state == VALK_CONN_CLOSING ||
-         conn->http.state == VALK_CONN_CLOSED ||
-         !conn->http.session;
-}
-
-static void clear_is_closed_ctx_recursive(valk_async_handle_t *handle, void *ctx) {
-  if (!handle) return;
-  if (handle->is_closed_ctx == ctx) {
-    handle->is_closed = nullptr;
-    handle->is_closed_ctx = nullptr;
-  }
-  u32 count = valk_chunked_ptrs_count(&handle->children);
-  for (u32 i = 0; i < count; i++) {
-    clear_is_closed_ctx_recursive(valk_chunked_ptrs_get(&handle->children, i), ctx);
-  }
-}
-
 void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
   if (!ctx) return;
   valk_http_async_ctx_t *http = (valk_http_async_ctx_t*)ctx;
-
-  // Clear is_closed callback from entire handle tree since we're about to free ctx
-  valk_async_handle_t *root = handle;
-  while (root->parent) root = root->parent;
-  clear_is_closed_ctx_recursive(root, ctx);
 
   valk_aio_handle_t *conn = http->conn;
   valk_mem_arena_t *arena = http->arena;
@@ -53,31 +25,14 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
       conn->http.state == VALK_CONN_CLOSED || !conn->http.session) {
     VALK_INFO("Async handle %llu: connection closed, skipping HTTP response for stream %d",
               handle->id, stream_id);
-    goto cleanup;
-  }
-
-  valk_http2_server_request_t *stream_req =
-      nghttp2_session_get_stream_user_data(session, stream_id);
-  if (!stream_req) {
-    VALK_INFO("Async handle %llu: stream %d no longer exists, skipping HTTP response",
-              handle->id, stream_id);
-    goto cleanup;
-  }
-
-  if (arena && stream_req->stream_arena != arena) {
-    VALK_INFO("Async handle %llu: stream %d arena mismatch, skipping", (unsigned long long)handle->id, stream_id);
-    goto cleanup;
-  }
-
-  if (arena && valk_arena_ref_valid(http->arena_ref)) {
-    valk_arena_ref_give(&stream_req->arena_ref, valk_arena_ref_take(&http->arena_ref));
+    return;
   }
 
   valk_async_status_t done_status = valk_async_handle_get_status(handle);
   if (done_status == VALK_ASYNC_COMPLETED) {
     valk_lval_t *result = atomic_load_explicit(&handle->result, memory_order_acquire);
     if (LVAL_TYPE(result) == LVAL_SYM && strcmp(result->str, ":closed") == 0) {
-      goto cleanup;
+      return;
     }
     if (LVAL_TYPE(result) == LVAL_ERR) {
       VALK_WARN("Handle completed with error for stream %d: %s", stream_id, result->str);
@@ -111,17 +66,6 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
     valk_http2_continue_pending_send(conn);
   }
   // LCOV_EXCL_BR_STOP
-
-cleanup:
-  if (valk_arena_ref_valid(http->arena_ref)) {
-    valk_slab_t *pool = nullptr;
-    if (http->conn && http->conn->http.server && http->conn->http.server->sys) {
-      pool = http->conn->http.server->sys->httpStreamArenas;
-    }
-    if (pool) {
-      valk_arena_ref_release(&http->arena_ref, pool);
-    }
-  }
 }
 
 // LCOV_EXCL_START - standalone async context: used for non-HTTP async ops
@@ -169,14 +113,6 @@ void valk_async_notify_done(valk_async_handle_t *handle) {
     void *ctx = atomic_exchange_explicit(&handle->on_done_ctx, nullptr, memory_order_relaxed);
     on_done(handle, ctx);
   }
-}
-
-bool valk_async_is_resource_closed(valk_async_handle_t *handle) {
-  if (!handle) return false;
-  if (handle->is_closed) {
-    return handle->is_closed(handle->is_closed_ctx);
-  }
-  return false;
 }
 
 valk_async_handle_t* valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env) {

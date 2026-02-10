@@ -380,54 +380,11 @@ void test_async_handle_add_child_propagates_request_ctx(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_async_is_resource_closed_null(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  bool closed = valk_async_is_resource_closed(NULL);
-  ASSERT_FALSE(closed);
-
-  VALK_PASS();
-}
-
-void test_async_is_resource_closed_no_callback(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_async_handle_t handle = {0};
-  bool closed = valk_async_is_resource_closed(&handle);
-  ASSERT_FALSE(closed);
-
-  VALK_PASS();
-}
-
-static bool test_is_closed_result = false;
-static bool test_is_closed_callback(void *ctx) {
-  (void)ctx;
-  return test_is_closed_result;
-}
-
-void test_async_is_resource_closed_with_callback(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_async_handle_t handle = {0};
-  handle.is_closed = test_is_closed_callback;
-
-  test_is_closed_result = false;
-  ASSERT_FALSE(valk_async_is_resource_closed(&handle));
-
-  test_is_closed_result = true;
-  ASSERT_TRUE(valk_async_is_resource_closed(&handle));
-
-  VALK_PASS();
-}
-
 void test_async_complete_resource_closed(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
-
-  handle->is_closed = test_is_closed_callback;
-  test_is_closed_result = true;
 
   valk_lval_t *result = valk_lval_num(42);
   valk_async_handle_complete(handle, result);
@@ -444,9 +401,6 @@ void test_async_fail_resource_closed(VALK_TEST_ARGS()) {
 
   valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
   ASSERT_NOT_NULL(handle);
-
-  handle->is_closed = test_is_closed_callback;
-  test_is_closed_result = true;
 
   valk_lval_t *err = valk_lval_err("test error");
   valk_async_handle_fail(handle, err);
@@ -729,9 +683,6 @@ void test_async_complete_resource_closed_from_running(VALK_TEST_ARGS()) {
   valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_RUNNING);
   ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_RUNNING);
 
-  handle->is_closed = test_is_closed_callback;
-  test_is_closed_result = true;
-
   valk_lval_t *result = valk_lval_num(42);
   valk_async_handle_complete(handle, result);
 
@@ -750,9 +701,6 @@ void test_async_fail_resource_closed_from_running(VALK_TEST_ARGS()) {
 
   valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_RUNNING);
   ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_RUNNING);
-
-  handle->is_closed = test_is_closed_callback;
-  test_is_closed_result = true;
 
   valk_lval_t *err = valk_lval_err("test error");
   valk_async_handle_fail(handle, err);
@@ -1061,9 +1009,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "async_handle_add_child_null", test_async_handle_add_child_null);
   valk_testsuite_add_test(suite, "async_handle_add_child_sets_parent", test_async_handle_add_child_sets_parent);
   valk_testsuite_add_test(suite, "async_handle_add_child_propagates_ctx", test_async_handle_add_child_propagates_request_ctx);
-  valk_testsuite_add_test(suite, "async_is_resource_closed_null", test_async_is_resource_closed_null);
-  valk_testsuite_add_test(suite, "async_is_resource_closed_no_callback", test_async_is_resource_closed_no_callback);
-  valk_testsuite_add_test(suite, "async_is_resource_closed_with_callback", test_async_is_resource_closed_with_callback);
   valk_testsuite_add_test(suite, "async_complete_resource_closed", test_async_complete_resource_closed);
   valk_testsuite_add_test(suite, "async_fail_resource_closed", test_async_fail_resource_closed);
   valk_testsuite_add_test(suite, "async_propagate_region_null", test_async_propagate_region_null);

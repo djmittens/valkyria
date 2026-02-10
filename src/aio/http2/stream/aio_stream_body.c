@@ -120,8 +120,6 @@ static void __stream_body_finish_close(valk_stream_body_t *body) {
   }
 
   if (body->closed_handle) {
-    body->closed_handle->is_closed = nullptr;
-    body->closed_handle->is_closed_ctx = nullptr;
     valk_async_handle_complete(body->closed_handle, valk_lval_sym(":closed"));
     body->closed_handle = NULL;
   }

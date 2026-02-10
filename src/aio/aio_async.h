@@ -29,10 +29,8 @@ struct valk_lval_t *valk_lval_handle(valk_async_handle_t *handle);
 struct valk_lval_t *valk_async_status_to_sym(valk_async_status_t status);
 
 void valk_async_notify_done(valk_async_handle_t *handle);
-bool valk_async_is_resource_closed(valk_async_handle_t *handle);
 
 void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx);
-bool valk_http_async_is_closed_callback(void *ctx);
 
 valk_standalone_async_ctx_t *valk_standalone_async_ctx_new(struct valk_aio_system *sys);
 void valk_standalone_async_done_callback(valk_async_handle_t *handle, void *ctx);

@@ -18,7 +18,6 @@ extern bool valk_async_handle_cancel(valk_async_handle_t *handle);
 extern void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_handle_t *child);
 extern void valk_async_propagate_region(valk_async_handle_t *handle, valk_region_t *region, valk_lenv_t *env);
 extern void valk_async_notify_done(valk_async_handle_t *handle);
-extern bool valk_async_is_resource_closed(valk_async_handle_t *handle);
 extern valk_standalone_async_ctx_t* valk_standalone_async_ctx_new(valk_aio_system_t *sys);
 extern void valk_standalone_async_done_callback(valk_async_handle_t *handle, void *ctx);
 extern valk_lval_t* valk_async_status_to_sym(valk_async_status_t status);

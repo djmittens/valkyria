@@ -537,50 +537,6 @@ static void __disconnect_update_metrics(valk_aio_handle_t *handle) {
   // LCOV_EXCL_BR_STOP
 }
 
-static void __disconnect_release_orphaned_arenas(valk_aio_handle_t *handle) {
-  if (!handle->http.server || !handle->http.server->sys) return; // LCOV_EXCL_BR_LINE client connections
-
-  valk_slab_t *slab = handle->http.server->sys->httpStreamArenas;
-  u64 orphaned_count = 0;
-  u32 slot = handle->http.active_arena_head;
-
-  // LCOV_EXCL_START orphaned arena cleanup - requires abrupt disconnect with pending streams
-  while (slot != UINT32_MAX && slot < slab->numItems) {
-    u64 stride = valk_slab_item_stride(slab->itemSize);
-    valk_slab_item_t *item = (valk_slab_item_t *)&slab->heap[stride * slot];
-    valk_mem_arena_t *arena = (valk_mem_arena_t *)item->data;
-    valk_http2_server_request_t *req = (valk_http2_server_request_t *)&arena->heap[0];
-
-    if (req->arena_ref.slot == UINT32_MAX) {
-      VALK_DEBUG("Arena slot %u already released (sentinel found), skipping", slot);
-      break;
-    }
-    if (req->conn != handle) break;
-
-    u32 next_slot = req->next_arena_slot;
-
-    if (req->arena_ref.slab_item != item) {
-      VALK_WARN("Arena slot %u already released or corrupted (item=%p, expected=%p)",
-                slot, (void*)req->arena_ref.slab_item, (void*)item);
-      break;
-    }
-
-    VALK_DEBUG("Releasing orphaned arena slot %u on disconnect", slot);
-    valk_arena_ref_release(&req->arena_ref, slab);
-    valk_aio_system_stats_v2_on_arena_release(
-        (valk_aio_system_stats_v2_t*)handle->http.server->sys->metrics_state->system_stats_v2);
-    orphaned_count++;
-    slot = next_slot;
-  }
-  // LCOV_EXCL_STOP
-
-  handle->http.active_arena_head = UINT32_MAX;
-  if (orphaned_count > 0) { // LCOV_EXCL_BR_LINE typically no orphaned arenas
-    VALK_DEBUG("Released %llu orphaned stream arenas on disconnect (normal for abrupt close)",
-               (unsigned long long)orphaned_count);
-  }
-}
-
 static void __disconnect_close_server_streams(valk_aio_handle_t *handle, nghttp2_session *session) {
   i32 last_stream_id = nghttp2_session_get_last_proc_stream_id(session);
   for (i32 stream_id = 1; stream_id <= last_stream_id; stream_id += 2) {
@@ -623,12 +579,6 @@ static void __disconnect_cleanup_session(valk_aio_handle_t *handle) {
 }
 
 void valk_http2_conn_on_disconnect(valk_aio_handle_t *handle) {
-  fprintf(stderr, "[DBG] disconnect conn=%p active_streams=%d bodies=",
-          (void*)handle, handle->http.active_streams);
-  { valk_stream_body_t *b = handle->http.stream_bodies;
-    while (b) { fprintf(stderr, "%llu ", (unsigned long long)b->id); b = b->next; }
-  }
-  fprintf(stderr, "\n");
   VALK_DEBUG("HTTP/2 disconnect called");
 
   __backpressure_list_remove(handle);
@@ -641,7 +591,6 @@ void valk_http2_conn_on_disconnect(valk_aio_handle_t *handle) {
   }
 
   __disconnect_update_metrics(handle);
-  __disconnect_release_orphaned_arenas(handle);
   valk_aio_ssl_free(&handle->http.io.ssl);
   
   if (!handle->http.server) {

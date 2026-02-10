@@ -146,7 +146,6 @@ typedef struct valk_http_async_ctx {
   i32 stream_id;
   struct valk_aio_handle_t *conn;
   valk_mem_arena_t *arena;
-  valk_arena_ref_t arena_ref;
 } valk_http_async_ctx_t;
 
 typedef struct valk_standalone_async_ctx {
@@ -192,6 +191,7 @@ typedef struct valk_http2_server_request {
   int status_code;
   u64 response_sent_time_us;
   bool response_complete;
+  bool has_async_handler;
   struct valk_sse_stream_entry *sse_entry;
   struct valk_request_ctx *request_ctx;
 } valk_http2_server_request_t;

@@ -40,9 +40,6 @@ struct valk_async_handle_t {
   _Atomic(valk_async_done_fn) on_done;
   _Atomic(void *) on_done_ctx;
 
-  valk_async_is_closed_fn is_closed;
-  void *is_closed_ctx;
-
   struct valk_async_handle_t *parent;
   valk_chunked_ptrs_t children;
 

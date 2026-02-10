@@ -6,13 +6,14 @@
 #include "../aio_request_ctx.h"
 
 extern void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx);
-extern bool valk_http_async_is_closed_callback(void *ctx);
+
 extern void valk_async_propagate_region(valk_async_handle_t *handle, valk_region_t *region, valk_lenv_t *env);
 extern valk_async_handle_t* valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env);
 extern void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result);
 extern void valk_async_handle_free(valk_async_handle_t *handle);
 extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
 extern bool valk_async_handle_cancel(valk_async_handle_t *handle);
+extern void valk_async_handle_on_resource_cleanup(valk_async_handle_t *handle, void (*fn)(void *data, void *ctx), void *data, void *ctx);
 
 static const char *__http2_get_header(valk_http2_server_request_t *req, const char *name) {
   if (!req || !name) return nullptr; // LCOV_EXCL_BR_LINE defensive null check
@@ -532,7 +533,7 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
   if (req && valk_arena_ref_valid(req->arena_ref)) {
     req->bytes_sent += stream_body_bytes;
     valk_http2_metrics_on_stream_close(conn, req, error_code, was_sse_stream, stream_body_bytes);
-    if (!has_stream_body) {
+    if (!has_stream_body && !req->has_async_handler) {
       valk_http2_metrics_on_arena_release(conn);
       u32 slot = req->arena_ref.slot;
       valk_http2_remove_from_active_arenas(conn, slot);
@@ -599,7 +600,6 @@ static valk_http_async_ctx_t *__create_async_ctx(nghttp2_session *session,
   ctx->stream_id = stream_id;
   ctx->conn = conn;
   ctx->arena = arena;
-  ctx->arena_ref = VALK_ARENA_REF_EMPTY;
   return ctx;
 }
 
@@ -640,11 +640,8 @@ static int __async_state_cancelled(async_response_ctx_t *ctx) {
 }
 
 static int __async_state_pending(async_response_ctx_t *ctx) {
+  UNUSED(ctx);
   VALK_DEBUG("Handle pending/running, will send response when complete");
-  valk_http2_remove_from_active_arenas(ctx->conn, ctx->req->arena_ref.slot);
-  if (ctx->http_ctx) {
-    valk_arena_ref_give(&ctx->http_ctx->arena_ref, valk_arena_ref_take(&ctx->req->arena_ref));
-  }
   return 1;
 }
 
@@ -658,6 +655,18 @@ static const async_state_handler_t async_state_handlers[] = {
   [VALK_ASYNC_CANCELLED] = __async_state_cancelled,
 };
 
+static void __release_arena_cleanup(void *data, void *ctx) {
+  valk_http2_server_request_t *req = (valk_http2_server_request_t *)data;
+  valk_aio_handle_t *conn = (valk_aio_handle_t *)ctx;
+  if (!valk_arena_ref_valid(req->arena_ref)) return;
+  valk_http2_metrics_on_arena_release(conn);
+  valk_http2_remove_from_active_arenas(conn, req->arena_ref.slot);
+  valk_arena_ref_release(&req->arena_ref, conn->http.server->sys->httpStreamArenas);
+  if (conn->http.arena_backpressure) {
+    valk_http2_exit_arena_backpressure(conn);
+  }
+}
+
 static int __handle_async_response(nghttp2_session *session, i32 stream_id,
                                    valk_aio_handle_t *conn,
                                    valk_http2_server_request_t *req,
@@ -666,13 +675,15 @@ static int __handle_async_response(nghttp2_session *session, i32 stream_id,
   handle->region = &req->region;
   handle->env = env;
 
+  req->has_async_handler = true;
+
   valk_http_async_ctx_t *http_ctx = __create_async_ctx(session, stream_id, conn, req->stream_arena, &req->region);
   if (http_ctx) {
     handle->on_done = valk_http_async_done_callback;
     handle->on_done_ctx = http_ctx;
-    handle->is_closed = valk_http_async_is_closed_callback;
-    handle->is_closed_ctx = http_ctx;
   }
+
+  valk_async_handle_on_resource_cleanup(handle, __release_arena_cleanup, req, conn);
 
   for (valk_async_handle_t *p = handle->parent; p != nullptr; p = p->parent) {
     valk_async_propagate_region(p, handle->region, env);

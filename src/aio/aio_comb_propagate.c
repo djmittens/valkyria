@@ -13,35 +13,6 @@ void valk_async_notify_parent(valk_async_handle_t *child) {
   }
 }
 
-static bool valk_async_is_chain_closed(valk_async_handle_t *handle) {
-  // LCOV_EXCL_BR_START - connection closed detection: requires specific timing
-  if (!handle) return false;
-
-  if (valk_async_is_resource_closed(handle)) {
-    return true;
-  }
-
-  valk_async_handle_t *p = handle->parent;
-  int depth = 0;
-  while (p && depth < 100) {
-    if (valk_async_is_resource_closed(p)) {
-      return true;
-    }
-    p = p->parent;
-    depth++;
-  }
-
-  u32 child_count = valk_chunked_ptrs_count(&handle->children);
-  for (u32 i = 0; i < child_count && i < 100; i++) {
-    valk_async_handle_t *child = valk_chunked_ptrs_get(&handle->children, i);
-    if (child && valk_async_is_resource_closed(child)) {
-      return true;
-    }
-  }
-  return false;
-  // LCOV_EXCL_BR_STOP
-}
-
 static void valk_async_propagate_single(void *ctx);
 
 static void valk_async_schedule_propagate(valk_async_handle_t *child) {
@@ -67,13 +38,6 @@ static void valk_async_propagate_single(void *ctx) {
   VALK_INFO("Propagating from handle %llu (status=%d, children=%u)",
             source->id, valk_async_handle_get_status(source), children_count);
 
-  // LCOV_EXCL_BR_START - chain closed detection: requires specific timing
-  if (valk_async_is_chain_closed(source)) {
-    VALK_INFO("Async propagation: connection closed, aborting propagation");
-    return;
-  }
-  // LCOV_EXCL_BR_STOP
-
   valk_async_status_t source_status = valk_async_handle_get_status(source);
 
   // LCOV_EXCL_START - async propagation: complex internal state machine
@@ -86,13 +50,6 @@ static void valk_async_propagate_single(void *ctx) {
               (void*)child->on_complete);
     if (child_status == VALK_ASYNC_RUNNING &&
         (child->parent == source || child->on_complete != NULL)) {
-
-      if (valk_async_is_chain_closed(child)) {
-        VALK_INFO("Async propagation: child connection closed, cancelling child , handle %llu", (unsigned long long)child->id);
-        valk_async_handle_try_transition(child, VALK_ASYNC_RUNNING, VALK_ASYNC_CANCELLED);
-        continue;
-      }
-
       if (source_status == VALK_ASYNC_COMPLETED) {
         if (child->on_complete && child->env) {
           valk_lval_t *args;
@@ -131,14 +88,10 @@ static void valk_async_propagate_single(void *ctx) {
                 void *child_ctx = atomic_load_explicit(&child->on_done_ctx, memory_order_relaxed);
                 atomic_store_explicit(&inner->on_done, child_on_done, memory_order_release);
                 atomic_store_explicit(&inner->on_done_ctx, child_ctx, memory_order_relaxed);
-                inner->is_closed = child->is_closed;
-                inner->is_closed_ctx = child->is_closed_ctx;
                 inner->region = child->region;
                 inner->env = child->env;
                 atomic_store_explicit(&child->on_done, NULL, memory_order_relaxed);
                 atomic_store_explicit(&child->on_done_ctx, NULL, memory_order_relaxed);
-                child->is_closed = NULL;
-                child->is_closed_ctx = NULL;
               }
               continue;
             }
