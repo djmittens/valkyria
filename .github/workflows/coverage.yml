@@ -41,7 +41,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config libssl-dev libuv1-dev libedit-dev libbacktrace-dev gcovr
+          sudo apt-get install -y cmake ninja-build pkg-config libssl-dev libuv1-dev libedit-dev libgcc-14-dev gcovr
+          # libbacktrace.a lives under /usr/lib/gcc/<triple>/14/ - symlink so CMake find_library can find it
+          sudo ln -sf /usr/lib/gcc/$(gcc -dumpmachine)/14/libbacktrace.a /usr/lib/libbacktrace.a
       
       - name: Build with Coverage
         run: |

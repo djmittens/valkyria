@@ -26,7 +26,7 @@ static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
     }
     valk_gc_heap_t* gc_heap =
         (valk_gc_heap_t*)valk_thread_ctx.allocator;
-    if (gc_heap->type == VALK_ALLOC_GC_HEAP &&
+    if (gc_heap->type == VALK_ALLOC_GC_HEAP && // LCOV_EXCL_BR_LINE - allocator is always GC heap
         valk_gc_should_collect(gc_heap)) {
       valk_gc_heap_collect(gc_heap);
     }

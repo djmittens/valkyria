@@ -224,6 +224,72 @@
     (test/assert (error? result) "reading nonexistent file errors")
     true
   })
+  (test "read-wrong-arg-count"
+    {do
+    (= {result} (read))
+    (test/assert (error? result) "read with no args errors")
+    true
+  })
+  (test "read-wrong-arg-type"
+    {do
+    (= {result} (read 42))
+    (test/assert (error? result) "read with number errors")
+    true
+  })
+  (test "read-file-wrong-arg-count"
+    {do
+    (= {result} (read-file))
+    (test/assert (error? result) "read-file with no args errors")
+    true
+  })
+  (test "read-file-wrong-arg-type"
+    {do
+    (= {result} (read-file 42))
+    (test/assert (error? result) "read-file with number errors")
+    true
+  })
+  (test "error-wrong-arg-count"
+    {do
+    (= {result} (error))
+    (test/assert (error? result) "error with no args errors")
+    true
+  })
+  (test "error-wrong-arg-type"
+    {do
+    (= {result} (error 42))
+    (test/assert (error? result) "error with number errors")
+    true
+  })
+  (test "error?-wrong-arg-count"
+    {do
+    (= {result} (error? 1 2))
+    (test/assert (error? result) "error? with 2 args errors")
+    true
+  })
+  (test "list?-wrong-arg-count"
+    {do
+    (= {result} (list? 1 2))
+    (test/assert (error? result) "list? with 2 args errors")
+    true
+  })
+  (test "ref?-wrong-arg-count"
+    {do
+    (= {result} (ref? 1 2))
+    (test/assert (error? result) "ref? with 2 args errors")
+    true
+  })
+  (test "load-file-with-eval-error"
+    {do
+    (= {result} (load "test/fixtures/load_with_error.valk"))
+    (test/assert (not (error? result)) "load continues past errors")
+    true
+  })
+  (test "load-file-all-errors"
+    {do
+    (= {result} (load "test/fixtures/load_all_errors.valk"))
+    (test/assert (not (error? result)) "load with all errors returns nil")
+    true
+  })
   (test "str-to-num-float"
     {do
     (= {result} (str->num "314"))
