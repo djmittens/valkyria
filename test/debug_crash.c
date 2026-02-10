@@ -62,7 +62,7 @@ int main(void) {
       .onBody = cb_onBody,
   };
 
-  u8 buf[sizeof(valk_mem_arena_t) + (24048 + (int)8e6)];
+  alignas(max_align_t) u8 buf[sizeof(valk_mem_arena_t) + (24048 + (int)8e6)];
   valk_mem_arena_t *arena = (void *)buf;
   valk_mem_arena_init(arena, (24048 + (int)8e6));
   valk_http2_request_t *req;

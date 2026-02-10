@@ -100,7 +100,7 @@ static test_response_t send_request(valk_aio_system_t *sys, int port,
   test_response_t result = {0};
 
   // Build request
-  u8 req_buf[sizeof(valk_mem_arena_t) + 8192];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 8192];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 8192);
 

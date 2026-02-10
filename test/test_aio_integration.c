@@ -81,7 +81,7 @@ static void test_basic_http2_connection(VALK_TEST_ARGS()) {
   
   valk_aio_http2_client *client = client_result->ref.ptr;
   
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
   
@@ -209,7 +209,7 @@ static void test_multiple_requests_single_connection(VALK_TEST_ARGS()) {
   valk_aio_http2_client *client = client_result->ref.ptr;
   
   for (int i = 0; i < 5; i++) {
-    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+    alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
     
@@ -276,7 +276,7 @@ static void test_multiple_concurrent_clients(VALK_TEST_ARGS()) {
   }
   
   for (int i = 0; i < NUM_CLIENTS; i++) {
-    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+    alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
     
@@ -461,7 +461,7 @@ static void test_metrics_available(VALK_TEST_ARGS()) {
   
   valk_aio_http2_client *client = client_result->ref.ptr;
   
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
   

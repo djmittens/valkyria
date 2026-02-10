@@ -146,7 +146,7 @@ static void test_stream_body_write_queues_data(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 

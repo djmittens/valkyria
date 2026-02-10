@@ -33,7 +33,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
       .onBody = cb_onBody,
   };
 
-  u8 buf[sizeof(valk_mem_arena_t) + (24048 + (int)8e6)];
+  alignas(max_align_t) u8 buf[sizeof(valk_mem_arena_t) + (24048 + (int)8e6)];
   valk_mem_arena_t *arena = (void *)buf;
   valk_mem_arena_init(arena, (24048 + (int)8e6));
   valk_http2_request_t *req;
@@ -222,7 +222,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   valk_aio_http2_client *client = client_result->ref.ptr;
   printf("[test] Client connected\n");
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   memset(req_buf, 0, sizeof(req_buf));
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);

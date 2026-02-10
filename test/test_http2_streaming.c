@@ -308,7 +308,7 @@ static void test_http2_concurrent_requests_same_connection(VALK_TEST_ARGS()) {
   valk_async_handle_t *request_handles[NUM_CONCURRENT_REQUESTS];
 
   for (int i = 0; i < NUM_CONCURRENT_REQUESTS; i++) {
-    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+    alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
 
@@ -373,7 +373,7 @@ static void test_http2_large_request_body(VALK_TEST_ARGS()) {
   ASSERT_NOT_NULL(large_body);
   memset(large_body, 'X', LARGE_BODY_SIZE);
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -431,7 +431,7 @@ static void test_http2_empty_request_body(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -489,7 +489,7 @@ static void test_http2_different_methods(VALK_TEST_ARGS()) {
   const char *methods[] = {"GET", "POST", "PUT", "DELETE"};
 
   for (int i = 0; i < 4; i++) {
-    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+    alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
 

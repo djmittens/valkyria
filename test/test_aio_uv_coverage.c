@@ -406,7 +406,7 @@ static void test_request_with_custom_headers(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 8192];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 8192];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 8192);
 
@@ -463,7 +463,7 @@ static void test_multiple_paths(VALK_TEST_ARGS()) {
   const char *paths[] = {"/", "/api", "/api/v1", "/health", "/metrics"};
 
   for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
-    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+    alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
 
@@ -585,7 +585,7 @@ static void test_connect_with_hostname(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -683,7 +683,7 @@ static void test_handle_diagnostics(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -801,7 +801,7 @@ int port = valk_aio_http2_server_get_port_from_ref(result);
 
     valk_aio_http2_client *client = client_result->ref.ptr;
 
-    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+    alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
 
@@ -879,7 +879,7 @@ static void test_server_with_config(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -927,7 +927,7 @@ static void test_many_headers(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 16384];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 16384];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 16384);
 
@@ -1034,7 +1034,7 @@ static void test_post_request(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 8192];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 8192];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 8192);
 
@@ -1083,7 +1083,7 @@ static void test_put_request(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 8192];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 8192];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 8192);
 
@@ -1132,7 +1132,7 @@ static void test_delete_request(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -1181,7 +1181,7 @@ static void test_sequential_requests(VALK_TEST_ARGS()) {
   valk_aio_http2_client *client = client_result->ref.ptr;
 
   for (int i = 0; i < 10; i++) {
-    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+    alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
 
@@ -1297,7 +1297,7 @@ static void test_multiple_clients_sequential(VALK_TEST_ARGS()) {
     valk_aio_http2_client *client = client_result->ref.ptr;
 
     for (int r = 0; r < 3; r++) {
-      u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+      alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
       valk_mem_arena_t *req_arena = (void *)req_buf;
       valk_mem_arena_init(req_arena, 4096);
 
@@ -1352,7 +1352,7 @@ static void test_head_request(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -1400,7 +1400,7 @@ static void test_options_request(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -1448,7 +1448,7 @@ static void test_long_path(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 8192];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 8192];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 8192);
 
@@ -1504,7 +1504,7 @@ static void test_query_string(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -1703,7 +1703,7 @@ static void test_handle_diagnostics_all_kinds(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -1904,7 +1904,7 @@ static void test_response_with_status(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -1956,7 +1956,7 @@ static void test_localhost_hostname(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -2072,7 +2072,7 @@ static void test_many_parallel_clients(VALK_TEST_ARGS()) {
   }
 
   valk_async_handle_t *hreqs[NUM_CLIENTS];
-  u8 req_bufs[NUM_CLIENTS][sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_bufs[NUM_CLIENTS][sizeof(valk_mem_arena_t) + 4096];
   for (int i = 0; i < NUM_CLIENTS; i++) {
     valk_mem_arena_t *req_arena = (void *)req_bufs[i];
     valk_mem_arena_init(req_arena, 4096);
@@ -2125,7 +2125,7 @@ static void __attribute__((unused)) test_many_streams_per_client(VALK_TEST_ARGS(
   valk_async_handle_t *hreqs[NUM_STREAMS];
 
   for (int i = 0; i < NUM_STREAMS; i++) {
-    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+    alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
 
@@ -2220,7 +2220,7 @@ static void __attribute__((unused)) test_burst_requests(VALK_TEST_ARGS()) {
     valk_async_handle_t *hreqs[BURST_SIZE];
 
     for (int i = 0; i < BURST_SIZE; i++) {
-      u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+      alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
       valk_mem_arena_t *req_arena = (void *)req_buf;
       valk_mem_arena_init(req_arena, 4096);
 
@@ -2271,7 +2271,7 @@ static void test_empty_body_post(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -2319,7 +2319,7 @@ static void test_special_characters_in_path(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -2373,7 +2373,7 @@ static void test_binary_body(VALK_TEST_ARGS()) {
     binary_body[i] = (char)i;
   }
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -2435,7 +2435,7 @@ static void test_patch_request(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -2484,7 +2484,7 @@ static void test_connection_metrics(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -2609,7 +2609,7 @@ void test_backpressure_under_load(VALK_TEST_ARGS()) {
   ASSERT_GT(connected, 0);
 
   for (int c = 0; c < connected; c++) {
-    u8 req_buf[sizeof(valk_mem_arena_t) + 8192];
+    alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 8192];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 8192);
 
@@ -2665,7 +2665,7 @@ void test_backpressure_event_driven_resume(VALK_TEST_ARGS()) {
 
   #define NUM_STREAMS 6
   valk_async_handle_t *stream_hreqs[NUM_STREAMS];
-  u8 req_bufs[NUM_STREAMS][sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_bufs[NUM_STREAMS][sizeof(valk_mem_arena_t) + 4096];
 
   for (int i = 0; i < NUM_STREAMS; i++) {
     valk_mem_arena_t *req_arena = (void *)req_bufs[i];
@@ -2722,7 +2722,7 @@ void test_abrupt_client_disconnect(VALK_TEST_ARGS()) {
 
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
 
@@ -2935,7 +2935,7 @@ void test_ssl_connection_state_transitions(VALK_TEST_ARGS()) {
     ASSERT_TRUE(LVAL_TYPE(client_result) != LVAL_ERR);
     valk_aio_http2_client *client = client_result->ref.ptr;
 
-    u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+    alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
     valk_http2_request_t *req = create_request(req_arena, "GET", "/");
@@ -2988,7 +2988,7 @@ void test_connection_closing_state_handling(VALK_TEST_ARGS()) {
   ASSERT_TRUE(LVAL_TYPE(client_result) != LVAL_ERR);
   valk_aio_http2_client *client = client_result->ref.ptr;
 
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
   valk_http2_request_t *req = create_request(req_arena, "GET", "/");

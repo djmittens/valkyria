@@ -795,10 +795,7 @@ static void test_aio_within_actual_timeout(VALK_TEST_ARGS()) {
   valk_async_handle_t *handle = result->async.handle;
   ASSERT_NOT_NULL(handle);
   
-  uv_loop_t *loop = valk_aio_get_event_loop(sys);
-  
-  for (int i = 0; i < 100 && handle->status == VALK_ASYNC_RUNNING; i++) {
-    uv_run(loop, UV_RUN_NOWAIT);
+  for (int i = 0; i < 500 && handle->status == VALK_ASYNC_RUNNING; i++) {
     usleep(1000);
   }
 

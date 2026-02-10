@@ -198,6 +198,11 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
     }
 
 #if defined(__GNUC__) && defined(VALK_COVERAGE_BUILD)
+    int devnull = open("/dev/null", O_WRONLY);
+    if (devnull >= 0) {
+      dup2(devnull, STDERR_FILENO);
+      close(devnull);
+    }
     __gcov_dump();
 #endif
     _exit(0);

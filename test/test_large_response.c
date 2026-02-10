@@ -171,7 +171,7 @@ static bool test_large_response_size(test_context_t *ctx, const char *path,
                                      size_t expected_size, VALK_TEST_ARGS()) {
   (void)_suite;
   // Build request
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   memset(req_buf, 0, sizeof(req_buf));  // Zero to avoid stale pointer warnings
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
@@ -334,7 +334,7 @@ void test_response_small(VALK_TEST_ARGS()) {
   }
 
   // Build request for /health endpoint (small response)
-  u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
+  alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
   memset(req_buf, 0, sizeof(req_buf));  // Zero to avoid stale pointer warnings
   valk_mem_arena_t *req_arena = (void *)req_buf;
   valk_mem_arena_init(req_arena, 4096);
