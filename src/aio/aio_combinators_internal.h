@@ -26,7 +26,8 @@ void valk_async_notify_parent(valk_async_handle_t *child);
 void valk_async_propagate_completion(valk_async_handle_t *source);
 
 static inline void __sleep_timer_close_cb(uv_handle_t *handle) {
-  UNUSED(handle);
+  valk_async_handle_uv_data_t *data = (valk_async_handle_uv_data_t *)handle->data;
+  if (data) free(data);
 }
 
 static inline void __sleep_timer_cb(uv_timer_t *timer_handle) {

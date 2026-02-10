@@ -1,7 +1,12 @@
 #include "aio_combinators_internal.h"
 
+extern void valk_async_handle_on_resource_cleanup(valk_async_handle_t *handle, void (*fn)(void *data, void *ctx), void *data, void *ctx);
+
 static void __schedule_timer_close_cb(uv_handle_t *handle) {
-  UNUSED(handle);
+  valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)handle->data;
+  if (timer_data) {
+    timer_data->async_handle = NULL;
+  }
 }
 
 static u64 g_interval_id = 1;
@@ -13,6 +18,18 @@ static void __interval_timer_close_cb(uv_handle_t *handle) {
 
   if (timer_data->callback) {
     valk_handle_release(&valk_sys->handle_table, timer_data->callback_handle);
+  }
+}
+
+static void __interval_cleanup(void *data, void *ctx) {
+  UNUSED(ctx);
+  valk_interval_timer_t *timer_data = (valk_interval_timer_t *)data;
+  if (!timer_data || timer_data->stopped) return;
+  timer_data->stopped = true;
+  uv_timer_stop(&timer_data->timer);
+  uv_close((uv_handle_t *)&timer_data->timer, __interval_timer_close_cb);
+  if (timer_data->async_handle) {
+    timer_data->async_handle->uv_handle_ptr = NULL;
   }
 }
 
@@ -136,6 +153,8 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
 
   async_handle->uv_handle_ptr = timer_data;
 
+  valk_async_handle_on_resource_cleanup(async_handle, __interval_cleanup, timer_data, NULL);
+
   valk_interval_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_interval_init_ctx_t));
   // LCOV_EXCL_START - region alloc failure: requires OOM
   if (!init_ctx) {
@@ -151,6 +170,20 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
   valk_aio_enqueue_task(sys, __interval_init_on_loop, init_ctx);
 
   return valk_lval_handle(async_handle);
+}
+
+static void __schedule_cleanup(void *data, void *ctx) {
+  UNUSED(ctx);
+  valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)data;
+  if (!timer_data) return;
+  if (uv_is_active((uv_handle_t *)&timer_data->timer)) {
+    uv_timer_stop(&timer_data->timer);
+    valk_handle_release(&valk_sys->handle_table, timer_data->callback_handle);
+    uv_close((uv_handle_t *)&timer_data->timer, __schedule_timer_close_cb);
+    if (timer_data->async_handle) {
+      timer_data->async_handle->uv_handle_ptr = NULL;
+    }
+  }
 }
 
 // LCOV_EXCL_START - libuv timer callbacks: require event loop context
@@ -252,6 +285,8 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
   timer_data->schedule_id = schedule_id;
   timer_data->async_handle = async_handle;
 
+  valk_async_handle_on_resource_cleanup(async_handle, __schedule_cleanup, timer_data, NULL);
+
   valk_schedule_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_schedule_init_ctx_t));
   // LCOV_EXCL_START - region alloc failure: requires OOM
   if (!init_ctx) {
@@ -276,6 +311,18 @@ typedef struct {
 } valk_sleep_init_ctx_t;
 
 // LCOV_EXCL_START
+static void __sleep_cleanup(void *data, void *ctx) {
+  UNUSED(ctx);
+  valk_async_handle_uv_data_t *timer_data = (valk_async_handle_uv_data_t *)data;
+  if (!timer_data) return;
+  if (uv_is_active((uv_handle_t *)&timer_data->uv.timer)) {
+    uv_timer_stop(&timer_data->uv.timer);
+    uv_close((uv_handle_t *)&timer_data->uv.timer, __sleep_timer_close_cb);
+  } else if (!uv_is_closing((uv_handle_t *)&timer_data->uv.timer)) {
+    free(timer_data);
+  }
+}
+
 static void __sleep_init_on_loop(void *ctx) {
   valk_sleep_init_ctx_t *init_ctx = (valk_sleep_init_ctx_t *)ctx;
   if (!init_ctx || !init_ctx->sys) return;
@@ -344,6 +391,8 @@ static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
 
   async_handle->uv_handle_ptr = timer_data;
   async_handle->status = VALK_ASYNC_RUNNING;
+
+  valk_async_handle_on_resource_cleanup(async_handle, __sleep_cleanup, timer_data, NULL);
 
   valk_sleep_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_sleep_init_ctx_t));
   // LCOV_EXCL_START - region alloc failure: requires OOM

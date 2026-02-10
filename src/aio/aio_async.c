@@ -9,7 +9,7 @@ extern void valk_http2_continue_pending_send(valk_aio_handle_t *conn);
 extern void valk_async_propagate_completion(valk_async_handle_t *source);
 extern void valk_async_notify_parent(valk_async_handle_t *child);
 
-static void __run_resource_cleanups(valk_async_handle_t *handle);
+void valk_async_handle_run_resource_cleanups(valk_async_handle_t *handle);
 
 // LCOV_EXCL_BR_START - async callback defensive null checks
 void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
@@ -167,7 +167,7 @@ void valk_async_handle_unref(valk_async_handle_t *handle) {
     handle->cleanup_fn(handle->cleanup_ctx);
   }
 
-  __run_resource_cleanups(handle);
+  valk_async_handle_run_resource_cleanups(handle);
 
   u32 count = valk_chunked_ptrs_count(&handle->children);
   for (u32 i = 0; i < count; i++) {
@@ -189,7 +189,7 @@ void valk_async_handle_on_cleanup(valk_async_handle_t *handle,
   handle->cleanup_ctx = ctx;
 }
 
-static void __run_resource_cleanups(valk_async_handle_t *handle) {
+void valk_async_handle_run_resource_cleanups(valk_async_handle_t *handle) {
   if (!handle || !handle->resource_cleanup_count) return;
   for (i32 i = (i32)handle->resource_cleanup_count - 1; i >= 0; i--) {
     valk_async_cleanup_entry_t *entry = &handle->resource_cleanups[i];
@@ -228,7 +228,7 @@ static bool __reach_terminal(valk_async_handle_t *handle, valk_async_status_t ne
   valk_async_notify_parent(handle);
   valk_async_notify_done(handle);
   valk_async_propagate_completion(handle);
-  __run_resource_cleanups(handle);
+  valk_async_handle_run_resource_cleanups(handle);
   return true;
 }
 

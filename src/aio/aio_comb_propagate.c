@@ -1,5 +1,7 @@
 #include "aio_combinators_internal.h"
 
+extern void valk_async_handle_run_resource_cleanups(valk_async_handle_t *handle);
+
 void valk_async_notify_parent(valk_async_handle_t *child) {
   if (!child || !child->parent) return;
   valk_async_handle_t *parent = child->parent;
@@ -105,6 +107,7 @@ static void valk_async_propagate_single(void *ctx) {
         }
         valk_async_notify_parent(child);
         valk_async_notify_done(child);
+        valk_async_handle_run_resource_cleanups(child);
         valk_async_schedule_propagate(child);
       } else if (source_status == VALK_ASYNC_FAILED) {
         if (child->on_error && child->env) {
@@ -132,6 +135,7 @@ static void valk_async_propagate_single(void *ctx) {
         }
         valk_async_notify_parent(child);
         valk_async_notify_done(child);
+        valk_async_handle_run_resource_cleanups(child);
         valk_async_schedule_propagate(child);
       }
     }

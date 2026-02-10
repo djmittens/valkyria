@@ -297,6 +297,8 @@ define run_tests_valk
 	$(1)/valk test/test_concurrent_requests.valk
 	$(1)/valk test/test_gc_async_regression.valk
 	$(1)/valk test/test_arena_out_of_order.valk
+	$(1)/valk test/test_arena_pool_leak.valk
+	$(1)/valk test/test_sleep_timer_leak.valk
 	$(1)/valk test/test_client_headers.valk
 	$(1)/valk test/test_http2_client_request_errors.valk
 	$(1)/valk test/test_sequential_map.valk
@@ -458,6 +460,7 @@ VALK_TESTS_LIST = \
 	test/test_backpressure_timeout.valk test/test_pending_streams.valk \
 	test/test_pending_stream_headers.valk test/test_concurrent_requests.valk \
 	test/test_gc_async_regression.valk test/test_arena_out_of_order.valk \
+	test/test_arena_pool_leak.valk test/test_sleep_timer_leak.valk \
 	test/test_client_headers.valk test/test_http2_client_request_errors.valk \
 	test/test_sequential_map.valk test/test_async_handles.valk \
 	test/test_ctx_builtins.valk test/test_vm_metrics.valk \

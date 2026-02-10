@@ -11,6 +11,17 @@
 
 void valk_http2_flush_pending(valk_aio_handle_t *conn);
 extern valk_async_handle_t *valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env);
+extern void valk_async_handle_on_resource_cleanup(valk_async_handle_t *handle, void (*fn)(void *data, void *ctx), void *data, void *ctx);
+
+static void __stream_body_cleanup(void *data, void *ctx) {
+  UNUSED(ctx);
+  valk_stream_body_t *body = (valk_stream_body_t *)data;
+  if (!body) return;
+  valk_stream_state_e state = atomic_load(&body->state);
+  if (state != VALK_STREAM_CLOSED) {
+    valk_stream_body_force_close(body);
+  }
+}
 
 // LCOV_EXCL_START - defensive validation already covered by LVAL_TYPE check
 static valk_stream_body_t *get_stream_body(valk_lval_t *ref) {
@@ -198,6 +209,7 @@ static valk_lval_t *valk_builtin_stream_close(valk_lenv_t *e, valk_lval_t *a) {
   if (!handle) {
     handle = valk_async_handle_new(body->conn ? body->conn->sys : NULL, NULL);
     body->closed_handle = handle;
+    valk_async_handle_on_resource_cleanup(handle, __stream_body_cleanup, body, NULL);
   }
 
   VALK_DEBUG("stream: closing body id=%llu", (unsigned long long)body->id);
@@ -306,6 +318,7 @@ static valk_lval_t *valk_builtin_stream_cancel(valk_lenv_t *e, valk_lval_t *a) {
   if (!handle) {
     handle = valk_async_handle_new(body->conn ? body->conn->sys : NULL, NULL);
     body->closed_handle = handle;
+    valk_async_handle_on_resource_cleanup(handle, __stream_body_cleanup, body, NULL);
   }
 
   int rv = valk_stream_body_cancel(body, 0x8);
@@ -390,6 +403,7 @@ static valk_lval_t *valk_builtin_stream_closed(valk_lenv_t *e, valk_lval_t *a) {
 
   valk_async_handle_t *handle = valk_async_handle_new(body->conn ? body->conn->sys : NULL, NULL);
   body->closed_handle = handle;
+  valk_async_handle_on_resource_cleanup(handle, __stream_body_cleanup, body, NULL);
 
   VALK_DEBUG("stream: created closed future for body id=%llu",
              (unsigned long long)body->id);
