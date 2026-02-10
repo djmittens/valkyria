@@ -10,6 +10,12 @@ struct valk_lenv_t;
 struct valk_region;
 struct valk_request_ctx;
 
+typedef struct {
+  void (*fn)(void *data, void *ctx);
+  void *data;
+  void *ctx;
+} valk_async_cleanup_entry_t;
+
 struct valk_async_handle_t {
   u64 id;
   _Atomic valk_async_status_t status;
@@ -47,6 +53,10 @@ struct valk_async_handle_t {
 
   valk_async_cleanup_fn cleanup_fn;
   void *cleanup_ctx;
+
+  valk_async_cleanup_entry_t *resource_cleanups;
+  u16 resource_cleanup_count;
+  u16 resource_cleanup_capacity;
 
   valk_async_on_child_fn on_child_completed;
   valk_async_on_child_fn on_child_failed;

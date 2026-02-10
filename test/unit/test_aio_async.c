@@ -432,7 +432,8 @@ void test_async_complete_resource_closed(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_lval_num(42);
   valk_async_handle_complete(handle, result);
 
-  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_CANCELLED);
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_COMPLETED);
+  ASSERT_EQ(atomic_load_explicit(&handle->result, memory_order_acquire), result);
 
   valk_async_handle_free(handle);
   VALK_PASS();
@@ -450,7 +451,8 @@ void test_async_fail_resource_closed(VALK_TEST_ARGS()) {
   valk_lval_t *err = valk_lval_err("test error");
   valk_async_handle_fail(handle, err);
 
-  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_CANCELLED);
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_FAILED);
+  ASSERT_EQ(atomic_load_explicit(&handle->error, memory_order_acquire), err);
 
   valk_async_handle_free(handle);
   VALK_PASS();
@@ -733,7 +735,8 @@ void test_async_complete_resource_closed_from_running(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_lval_num(42);
   valk_async_handle_complete(handle, result);
 
-  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_CANCELLED);
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_COMPLETED);
+  ASSERT_EQ(atomic_load_explicit(&handle->result, memory_order_acquire), result);
 
   valk_async_handle_free(handle);
   VALK_PASS();
@@ -754,7 +757,8 @@ void test_async_fail_resource_closed_from_running(VALK_TEST_ARGS()) {
   valk_lval_t *err = valk_lval_err("test error");
   valk_async_handle_fail(handle, err);
 
-  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_CANCELLED);
+  ASSERT_EQ(valk_async_handle_get_status(handle), VALK_ASYNC_FAILED);
+  ASSERT_EQ(atomic_load_explicit(&handle->error, memory_order_acquire), err);
 
   valk_async_handle_free(handle);
   VALK_PASS();
@@ -932,6 +936,102 @@ void test_async_handle_cancel_from_running_no_sys(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static int g_rc_order[8];
+static int g_rc_count = 0;
+
+static void rc_cleanup_fn(void *data, void *ctx) {
+  (void)ctx;
+  g_rc_order[g_rc_count++] = *(int*)data;
+}
+
+void test_resource_cleanup_runs_on_complete(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  g_rc_count = 0;
+  static int val1 = 1, val2 = 2;
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_async_handle_on_resource_cleanup(handle, rc_cleanup_fn, &val1, NULL);
+  valk_async_handle_on_resource_cleanup(handle, rc_cleanup_fn, &val2, NULL);
+
+  valk_lval_t *result = valk_lval_num(42);
+  valk_async_handle_complete(handle, result);
+
+  ASSERT_EQ(g_rc_count, 2);
+  ASSERT_EQ(g_rc_order[0], 2);
+  ASSERT_EQ(g_rc_order[1], 1);
+
+  valk_async_handle_free(handle);
+  VALK_PASS();
+}
+
+void test_resource_cleanup_runs_on_fail(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  g_rc_count = 0;
+  static int val = 10;
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_async_handle_on_resource_cleanup(handle, rc_cleanup_fn, &val, NULL);
+
+  valk_lval_t *err = valk_lval_err("test error");
+  valk_async_handle_fail(handle, err);
+
+  ASSERT_EQ(g_rc_count, 1);
+  ASSERT_EQ(g_rc_order[0], 10);
+
+  valk_async_handle_free(handle);
+  VALK_PASS();
+}
+
+void test_resource_cleanup_runs_on_cancel(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  g_rc_count = 0;
+  static int val = 20;
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_async_handle_on_resource_cleanup(handle, rc_cleanup_fn, &val, NULL);
+
+  valk_async_handle_cancel(handle);
+
+  ASSERT_EQ(g_rc_count, 1);
+  ASSERT_EQ(g_rc_order[0], 20);
+
+  valk_async_handle_free(handle);
+  VALK_PASS();
+}
+
+void test_resource_cleanup_no_double_run(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  g_rc_count = 0;
+  static int val = 30;
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_async_handle_on_resource_cleanup(handle, rc_cleanup_fn, &val, NULL);
+
+  valk_lval_t *result = valk_lval_num(42);
+  valk_async_handle_complete(handle, result);
+
+  ASSERT_EQ(g_rc_count, 1);
+
+  valk_async_handle_complete(handle, result);
+
+  ASSERT_EQ(g_rc_count, 1);
+
+  valk_async_handle_free(handle);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
 
@@ -990,6 +1090,10 @@ int main(void) {
   valk_testsuite_add_test(suite, "async_await_timeout_already_completed", test_async_handle_await_timeout_already_completed);
   valk_testsuite_add_test(suite, "async_await_timeout_already_failed", test_async_handle_await_timeout_already_failed);
   valk_testsuite_add_test(suite, "async_cancel_from_running_no_sys", test_async_handle_cancel_from_running_no_sys);
+  valk_testsuite_add_test(suite, "resource_cleanup_runs_on_complete", test_resource_cleanup_runs_on_complete);
+  valk_testsuite_add_test(suite, "resource_cleanup_runs_on_fail", test_resource_cleanup_runs_on_fail);
+  valk_testsuite_add_test(suite, "resource_cleanup_runs_on_cancel", test_resource_cleanup_runs_on_cancel);
+  valk_testsuite_add_test(suite, "resource_cleanup_no_double_run", test_resource_cleanup_no_double_run);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

@@ -37,6 +37,8 @@ bool valk_http_async_is_closed_callback(void *ctx);
 valk_standalone_async_ctx_t *valk_standalone_async_ctx_new(struct valk_aio_system *sys);
 void valk_standalone_async_done_callback(valk_async_handle_t *handle, void *ctx);
 
+void valk_async_handle_on_resource_cleanup(valk_async_handle_t *handle, void (*fn)(void *data, void *ctx), void *data, void *ctx);
+
 void valk_register_async_handle_builtins(struct valk_lenv_t *env);
 
 struct valk_lval_t *valk_async_handle_await(valk_async_handle_t *handle);
