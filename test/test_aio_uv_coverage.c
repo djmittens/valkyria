@@ -3027,10 +3027,6 @@ void test_http2_flush_pending_null(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-static void fork_child_init(void) {
-  valk_aio_ssl_fork_reset();
-}
-
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
@@ -3038,7 +3034,6 @@ int main(int argc, const char **argv) {
   valk_mem_init_malloc();
 
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
-  suite->fork_child_handler = fork_child_init;
 
   valk_testsuite_add_test(suite, "test_config_validation_max_connections", test_config_validation_max_connections);
   valk_testsuite_add_test(suite, "test_config_validation_max_streams", test_config_validation_max_streams);

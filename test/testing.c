@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "aio.h"
+#include "aio_ssl.h"
 #include "collections.h"
 #include "common.h"
 #include "gc.h"
@@ -171,7 +172,10 @@ int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
     // Reinitialize thread-local allocator after fork
     valk_mem_init_malloc();
     
-    // Call suite-specific fork handler if set (e.g., for SSL reinitialization)
+    // Reset SSL/allocator state inherited from parent process
+    valk_aio_ssl_fork_reset();
+
+    // Call suite-specific fork handler if set
     if (suite->fork_child_handler) {
       suite->fork_child_handler();
     }

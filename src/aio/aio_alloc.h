@@ -11,6 +11,9 @@
 // Initialize tracking allocators - must be called before any SSL/nghttp2/libuv usage
 void valk_aio_alloc_init(void);
 
+// Reset allocator state after fork - allows re-initialization in child process
+void valk_aio_alloc_fork_reset(void);
+
 // Get current memory usage stats
 u64 valk_aio_ssl_bytes_used(void);
 u64 valk_aio_nghttp2_bytes_used(void);
