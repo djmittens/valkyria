@@ -669,6 +669,57 @@ test-all:
 	@echo "║  ALL TESTS PASSED                                           ║"
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 
+# ============================================================================
+# TLA+ Model Checking
+# ============================================================================
+# Runs all TLA+ formal models and reports pass/fail.
+# Requires Java 21: /usr/lib/jvm/java-21-openjdk/bin/java
+TLA_JAVA := /usr/lib/jvm/java-21-openjdk/bin/java
+TLA_JAR  := tools/tla2tools.jar
+TLA_CMD  := $(TLA_JAVA) -XX:+UseParallelGC -Xmx16g -cp $(TLA_JAR) tlc2.TLC -workers auto -nowarning
+
+TLA_SPECS := \
+	tla/ValkGC:tla/ValkGC.cfg \
+	tla/ValkScheduler:tla/ValkScheduler.cfg \
+	tla/ValkScheduler:tla/ValkSchedulerMulti.cfg \
+	tla/ValkAsyncCrossPool:tla/ValkAsyncCrossPool.cfg \
+	tla/ValkAsyncCrossPoolAll:tla/ValkAsyncCrossPoolAll.cfg \
+	tla/ValkAsyncMultiLevel:tla/ValkAsyncMultiLevel.cfg \
+	tla/ValkGCAsync:tla/ValkGCAsync.cfg \
+	tla/ValkSchedAsync:tla/ValkSchedAsync.cfg \
+	tla/ValkSchedAsyncDispatch:tla/ValkSchedAsyncDispatch.cfg \
+	tla/AsyncHandleAll:tla/AsyncHandleAll.cfg \
+	tla/AsyncHandleRace:tla/AsyncHandleRace.cfg \
+	tla/AsyncHandleWithin:tla/AsyncHandleWithin.cfg \
+	tla/AsyncHandleCancelTree:tla/AsyncHandleCancelTree.cfg
+
+.ONESHELL:
+.PHONY: tla
+tla:
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║  Running TLA+ model checker on all formal models             ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@pass=0; fail=0; \
+	for spec in $(TLA_SPECS); do \
+		mod=$${spec%%:*}; cfg=$${spec#*:}; \
+		printf "  %-50s " "$$cfg:"; \
+		result=$$($(TLA_CMD) "$$mod" -config "$$cfg" 2>&1); \
+		if echo "$$result" | grep -q "No error has been found"; then \
+			states=$$(echo "$$result" | grep "distinct states found" | grep -oP '\d+ distinct' | head -1); \
+			echo "PASS ($$states)"; \
+			pass=$$((pass + 1)); \
+		else \
+			echo "FAIL"; \
+			echo "$$result" | grep -A2 "Error:" | head -6; \
+			fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	echo "=== $$pass passed, $$fail failed ==="; \
+	if [ $$fail -gt 0 ]; then exit 1; fi
+
 .PHONY: todo
 todo:
 	rg "TODO\($(shell git rev-parse --abbrev-ref HEAD)\)"
