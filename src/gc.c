@@ -334,6 +334,58 @@ void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
 
 
 // ============================================================================
+// Legacy GC API (wrappers around heap2)
+// ============================================================================
+
+void valk_gc_set_hard_limit(valk_gc_heap_t* heap, sz limit) {
+  if (heap) {
+    heap->hard_limit = limit;
+  }
+}
+
+void valk_gc_set_root(valk_gc_heap_t* heap, valk_lenv_t* root_env) {
+  if (heap) {
+    heap->root_env = root_env;
+  }
+}
+
+bool valk_gc_should_collect(valk_gc_heap_t* heap) {
+  if (!heap || heap->gc_threshold_pct == 0) return false;
+  
+  sz used = valk_gc_heap_used_bytes(heap);
+  if (used == 0) return false;
+  
+  u8 usage_pct = (u8)((used * 100) / heap->hard_limit);
+  if (usage_pct >= heap->gc_threshold_pct) {
+    return true;
+  }
+  
+  return false;
+}
+
+u8 valk_gc_heap_usage_pct(valk_gc_heap_t* heap) {
+  if (!heap || heap->hard_limit == 0) return 0;
+  
+  sz used = valk_gc_heap_used_bytes(heap);
+  if (used >= heap->hard_limit) {
+    return 100;
+  }
+  
+  u8 pct = (u8)((used * 100) / heap->hard_limit);
+  return pct;
+}
+
+void valk_gc_set_thresholds(valk_gc_heap_t* heap,
+                            u8 threshold_pct, u8 target_pct, u32 min_interval_ms) {
+  if (heap) {
+    heap->gc_threshold_pct = threshold_pct;
+    heap->gc_target_pct = target_pct;
+    heap->min_gc_interval_ms = min_interval_ms;
+  }
+}
+
+
+// ============================================================================
 // Pointer Map - hashmap for src->dst tracking during evacuation
 // ============================================================================
 
