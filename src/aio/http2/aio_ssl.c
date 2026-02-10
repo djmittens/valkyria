@@ -24,9 +24,7 @@ void valk_aio_ssl_start() {
 }
 
 void valk_aio_ssl_fork_reset() {
-  ssl_uninitialized = true;
   valk_aio_alloc_fork_reset();
-  OPENSSL_cleanup();
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L
   RAND_poll();
 #endif

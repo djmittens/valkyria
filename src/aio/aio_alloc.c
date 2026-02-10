@@ -268,7 +268,6 @@ nghttp2_mem *valk_aio_nghttp2_mem(void) {
 }
 
 void valk_aio_alloc_fork_reset(void) {
-  atomic_store(&__alloc_initialized, false);
   atomic_store(&__ssl_bytes_used, 0);
   atomic_store(&__nghttp2_bytes_used, 0);
   atomic_store(&__libuv_bytes_used, 0);
