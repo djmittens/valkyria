@@ -38,8 +38,6 @@ static void valk_slab_init(valk_slab_t *self, sz itemSize, sz numItems);
 
 valk_slab_t *valk_slab_new(sz itemSize, sz numItems) {
   sz slabSize = valk_slab_size(itemSize, numItems);
-  VALK_DEBUG("Slab size = %zu (%.2f MB)", slabSize, (double)slabSize / 1024 / 1024);
-  
   sz pageSize = 4096;
   sz mmapSize = (slabSize + pageSize - 1) & ~(pageSize - 1);
   
@@ -104,7 +102,6 @@ sz valk_slab_item_stride(sz itemSize) {
 
 sz valk_slab_size(sz itemSize, sz numItems) {
   sz stride = valk_slab_item_stride(itemSize);
-  VALK_DEBUG("Slab stride = %zu", stride);
   const sz freelen = sizeof(u64) * numItems;
 
   return sizeof(valk_slab_t) + freelen + (stride * numItems);
