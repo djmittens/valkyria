@@ -316,11 +316,11 @@ void valk_gc_thread_unregister(void) {
 
 // LCOV_EXCL_START - safe point slow path requires STW coordination from parallel GC
 void valk_gc_safe_point_slow(void) {
-  valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
+  valk_gc_phase_e phase = atomic_load(&valk_sys->phase);
 
   if (phase == VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
-    valk_barrier_wait(&valk_gc_coord.barrier);
-    valk_barrier_wait(&valk_gc_coord.barrier);
+    valk_barrier_wait(&valk_sys->barrier);
+    valk_barrier_wait(&valk_sys->barrier);
     return;
   }
 
@@ -332,7 +332,7 @@ void valk_gc_safe_point_slow(void) {
                       valk_thread_ctx.root_env);
     }
 
-    valk_barrier_wait(&valk_gc_coord.barrier);
+    valk_barrier_wait(&valk_sys->barrier);
     valk_gc_participate_in_parallel_gc();
   }
 }
@@ -372,11 +372,11 @@ void valk_gc_visit_env_roots(valk_lenv_t *env, valk_gc_root_visitor_t visitor, v
 
 // LCOV_EXCL_BR_START - defensive null checks in global root iteration
 void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
-  valk_handle_table_visit(&valk_global_handle_table, visitor, ctx);
+  valk_handle_table_visit(&valk_sys->handle_table, visitor, ctx);
 
   for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
-    if (valk_gc_coord.threads[i].active && valk_gc_coord.threads[i].ctx != nullptr) {
-      valk_thread_context_t *tc = valk_gc_coord.threads[i].ctx;
+    if (valk_sys->threads[i].active && valk_sys->threads[i].ctx != nullptr) {
+      valk_thread_context_t *tc = valk_sys->threads[i].ctx;
       if (tc->root_env != nullptr) {
         valk_gc_visit_env_roots(tc->root_env, visitor, ctx);
       }

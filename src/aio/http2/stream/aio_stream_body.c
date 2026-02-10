@@ -122,7 +122,7 @@ static void __stream_body_finish_close(valk_stream_body_t *body) {
     body->closed_handle = NULL;
   }
 
-  valk_lval_t *lisp_on_close = valk_handle_resolve(&valk_global_handle_table, 
+  valk_lval_t *lisp_on_close = valk_handle_resolve(&valk_sys->handle_table, 
                                                     body->lisp_on_close_handle);
   if (lisp_on_close && body->callback_env) {
     valk_lval_t *args = valk_lval_nil();
@@ -133,15 +133,15 @@ static void __stream_body_finish_close(valk_stream_body_t *body) {
   }
 
   if (body->lisp_on_drain_handle.generation > 0) {
-    valk_handle_release(&valk_global_handle_table, body->lisp_on_drain_handle);
+    valk_handle_release(&valk_sys->handle_table, body->lisp_on_drain_handle);
     body->lisp_on_drain_handle = (valk_handle_t){0, 0};
   }
   if (body->lisp_on_close_handle.generation > 0) {
-    valk_handle_release(&valk_global_handle_table, body->lisp_on_close_handle);
+    valk_handle_release(&valk_sys->handle_table, body->lisp_on_close_handle);
     body->lisp_on_close_handle = (valk_handle_t){0, 0};
   }
   if (body->lisp_on_timeout_handle.generation > 0) {
-    valk_handle_release(&valk_global_handle_table, body->lisp_on_timeout_handle);
+    valk_handle_release(&valk_sys->handle_table, body->lisp_on_timeout_handle);
     body->lisp_on_timeout_handle = (valk_handle_t){0, 0};
   }
 
@@ -405,7 +405,7 @@ static nghttp2_ssize __stream_data_read_callback(
                  (unsigned long long)body->id, (unsigned long long)body->queue_len);
       body->on_drain(body, body->user_data);
     }
-    valk_lval_t *lisp_on_drain = valk_handle_resolve(&valk_global_handle_table,
+    valk_lval_t *lisp_on_drain = valk_handle_resolve(&valk_sys->handle_table,
                                                       body->lisp_on_drain_handle);
     if (lisp_on_drain && body->callback_env) {
       VALK_DEBUG("stream_body: body %llu calling lisp_on_drain (queue_len=%llu)",

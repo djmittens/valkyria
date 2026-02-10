@@ -228,8 +228,8 @@ static const char *valk_gc_phase_name(valk_gc_phase_e phase) {
 }
 
 void valk_diag_dump_on_timeout(void) {
-  valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
-  u64 registered = atomic_load(&valk_gc_coord.threads_registered);
+  valk_gc_phase_e phase = atomic_load(&valk_sys->phase);
+  u64 registered = atomic_load(&valk_sys->threads_registered);
 
   fprintf(stderr, "\n");
   fprintf(stderr, "╔══════════════════════════════════════════════════════════════╗\n");
@@ -240,7 +240,7 @@ void valk_diag_dump_on_timeout(void) {
   fprintf(stderr, "=== GC Coordinator State ===\n");
   fprintf(stderr, "  phase:              %s (%d)\n", valk_gc_phase_name(phase), phase);
   fprintf(stderr, "  threads_registered: %llu\n", (unsigned long long)registered);
-  fprintf(stderr, "  barrier_init:       %s\n", valk_gc_coord.barrier_initialized ? "yes" : "no");
+  fprintf(stderr, "  barrier_init:       %s\n", valk_sys->barrier_initialized ? "yes" : "no");
   fprintf(stderr, "\n");
 
   if (phase != VALK_GC_PHASE_IDLE) {
@@ -250,11 +250,11 @@ void valk_diag_dump_on_timeout(void) {
 
   fprintf(stderr, "=== Registered Threads ===\n");
   for (u64 i = 0; i < VALK_GC_MAX_THREADS && i < 16; i++) {
-    if (valk_gc_coord.threads[i].active) {
-      valk_thread_context_t *tc = valk_gc_coord.threads[i].ctx;
+    if (valk_sys->threads[i].active) {
+      valk_thread_context_t *tc = valk_sys->threads[i].ctx;
       fprintf(stderr, "  [%llu] pthread=%lu active=yes",
               (unsigned long long)i,
-              (unsigned long)valk_gc_coord.threads[i].thread_id);
+              (unsigned long)valk_sys->threads[i].thread_id);
       if (tc) {
         fprintf(stderr, " gc_id=%llu", (unsigned long long)tc->gc_thread_id);
       }

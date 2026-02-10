@@ -79,37 +79,37 @@ static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
 static void valk_checkpoint_request_stw(void) {
   valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
   // LCOV_EXCL_BR_START - CAS race: another thread may have changed phase
-  if (!atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected,
+  if (!atomic_compare_exchange_strong(&valk_sys->phase, &expected,
                                        VALK_GC_PHASE_CHECKPOINT_REQUESTED)) {
   // LCOV_EXCL_BR_STOP
     return;
   }
 
-  u64 num_threads = atomic_load(&valk_gc_coord.threads_registered);
+  u64 num_threads = atomic_load(&valk_sys->threads_registered);
   if (num_threads <= 1) {
-    atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+    atomic_store(&valk_sys->phase, VALK_GC_PHASE_IDLE);
     return;
   }
 
-  if (valk_gc_coord.barrier_initialized) {
-    valk_barrier_reset(&valk_gc_coord.barrier, num_threads);
+  if (valk_sys->barrier_initialized) {
+    valk_barrier_reset(&valk_sys->barrier, num_threads);
   } else {
-    valk_barrier_init(&valk_gc_coord.barrier, num_threads);
-    valk_gc_coord.barrier_initialized = true;
+    valk_barrier_init(&valk_sys->barrier, num_threads);
+    valk_sys->barrier_initialized = true;
   }
 
   valk_system_wake_threads(valk_sys);
 
-  valk_barrier_wait(&valk_gc_coord.barrier);
+  valk_barrier_wait(&valk_sys->barrier);
 }
 
 static void valk_checkpoint_release_stw(void) {
-  valk_gc_phase_e phase = atomic_load(&valk_gc_coord.phase);
+  valk_gc_phase_e phase = atomic_load(&valk_sys->phase);
   if (phase != VALK_GC_PHASE_CHECKPOINT_REQUESTED) return;
 
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+  atomic_store(&valk_sys->phase, VALK_GC_PHASE_IDLE);
 
-  valk_barrier_wait(&valk_gc_coord.barrier);
+  valk_barrier_wait(&valk_sys->barrier);
 }
 
 // LCOV_EXCL_BR_START - checkpoint null checks and iteration

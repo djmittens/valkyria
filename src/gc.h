@@ -344,19 +344,14 @@ typedef struct valk_system {
   bool initialized;
 } valk_system_t;
 
-typedef valk_system_t valk_gc_coordinator_t;
-
 extern valk_system_t *valk_sys;
-
-#define valk_gc_coord (*valk_sys)
-#define valk_global_handle_table (valk_sys->handle_table)
 
 void valk_gc_thread_register(void);
 void valk_gc_thread_unregister(void);
 
 #define VALK_GC_SAFE_POINT() \
   do { \
-    if (__builtin_expect(atomic_load_explicit(&valk_gc_coord.phase, \
+    if (__builtin_expect(atomic_load_explicit(&valk_sys->phase, \
                          memory_order_acquire) != VALK_GC_PHASE_IDLE, 0)) { \
       valk_gc_safe_point_slow(); \
     } \

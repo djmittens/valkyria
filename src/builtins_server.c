@@ -233,9 +233,9 @@ static void valk_http2_connect_done_callback(valk_async_handle_t* handle, void* 
   VALK_GC_SAFE_POINT();
 
   valk_handle_t callback_handle = {.index = (u32)(uintptr_t)ctx_ptr, .generation = 0};
-  valk_lval_t* cb = valk_handle_resolve(&valk_global_handle_table, callback_handle);
+  valk_lval_t* cb = valk_handle_resolve(&valk_sys->handle_table, callback_handle);
   if (!cb) {
-    valk_handle_release(&valk_global_handle_table, callback_handle);
+    valk_handle_release(&valk_sys->handle_table, callback_handle);
     return;
   }
 
@@ -252,7 +252,7 @@ static void valk_http2_connect_done_callback(valk_async_handle_t* handle, void* 
 
   valk_lval_t* args = valk_lval_cons(result, valk_lval_nil());
   valk_lval_eval_call(cb->fun.env, cb, args);
-  valk_handle_release(&valk_global_handle_table, callback_handle);
+  valk_handle_release(&valk_sys->handle_table, callback_handle);
 }
 
 static valk_lval_t* valk_builtin_http2_connect(valk_lenv_t* e, valk_lval_t* a) {
@@ -276,11 +276,11 @@ static valk_lval_t* valk_builtin_http2_connect(valk_lenv_t* e, valk_lval_t* a) {
   int port = (int)port_arg->num;
 
   valk_lval_t* heap_callback = valk_evacuate_to_heap(callback);
-  valk_handle_t callback_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
+  valk_handle_t callback_handle = valk_handle_create(&valk_sys->handle_table, heap_callback);
 
   valk_async_handle_t* connect_handle = valk_aio_http2_connect_host(sys, host, port, host);
   if (!connect_handle) {
-    valk_handle_release(&valk_global_handle_table, callback_handle);
+    valk_handle_release(&valk_sys->handle_table, callback_handle);
     return valk_lval_err("Failed to initiate connection");
   }
 

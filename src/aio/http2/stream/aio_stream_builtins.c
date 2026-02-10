@@ -224,10 +224,10 @@ static valk_lval_t *valk_builtin_stream_on_drain(valk_lenv_t *e, valk_lval_t *a)
   }
 
   if (body->lisp_on_drain_handle.generation > 0) {
-    valk_handle_release(&valk_global_handle_table, body->lisp_on_drain_handle);
+    valk_handle_release(&valk_sys->handle_table, body->lisp_on_drain_handle);
   }
   valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
-  body->lisp_on_drain_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
+  body->lisp_on_drain_handle = valk_handle_create(&valk_sys->handle_table, heap_callback);
   body->callback_env = e;
 
   VALK_DEBUG("stream: registered on-drain callback for body id=%llu",
@@ -351,10 +351,10 @@ static valk_lval_t *valk_builtin_stream_on_close(valk_lenv_t *e, valk_lval_t *a)
   }
 
   if (body->lisp_on_close_handle.generation > 0) {
-    valk_handle_release(&valk_global_handle_table, body->lisp_on_close_handle);
+    valk_handle_release(&valk_sys->handle_table, body->lisp_on_close_handle);
   }
   valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
-  body->lisp_on_close_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
+  body->lisp_on_close_handle = valk_handle_create(&valk_sys->handle_table, heap_callback);
   body->callback_env = e;
 
   VALK_DEBUG("stream: registered on-close callback for body id=%llu",

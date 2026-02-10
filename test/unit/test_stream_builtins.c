@@ -756,7 +756,7 @@ void test_stream_on_drain_success_with_runtime(VALK_TEST_ARGS()) {
   ASSERT_TRUE(body->lisp_on_drain_handle.generation > 0);
   ASSERT_EQ(body->callback_env, env);
 
-  valk_handle_release(&valk_global_handle_table, body->lisp_on_drain_handle);
+  valk_handle_release(&valk_sys->handle_table, body->lisp_on_drain_handle);
   free_test_body(body);
   free_test_conn(conn);
   valk_system_destroy(valk_sys);
@@ -790,7 +790,7 @@ void test_stream_on_drain_replaces_existing(VALK_TEST_ARGS()) {
 
   ASSERT_TRUE(body->lisp_on_drain_handle.generation > old_generation);
 
-  valk_handle_release(&valk_global_handle_table, body->lisp_on_drain_handle);
+  valk_handle_release(&valk_sys->handle_table, body->lisp_on_drain_handle);
   free_test_body(body);
   free_test_conn(conn);
   valk_system_destroy(valk_sys);
@@ -819,7 +819,7 @@ void test_stream_on_close_success_with_runtime(VALK_TEST_ARGS()) {
   ASSERT_TRUE(body->lisp_on_close_handle.generation > 0);
   ASSERT_EQ(body->callback_env, env);
 
-  valk_handle_release(&valk_global_handle_table, body->lisp_on_close_handle);
+  valk_handle_release(&valk_sys->handle_table, body->lisp_on_close_handle);
   free_test_body(body);
   free_test_conn(conn);
   valk_system_destroy(valk_sys);
@@ -853,7 +853,7 @@ void test_stream_on_close_replaces_existing(VALK_TEST_ARGS()) {
 
   ASSERT_TRUE(body->lisp_on_close_handle.generation > old_generation);
 
-  valk_handle_release(&valk_global_handle_table, body->lisp_on_close_handle);
+  valk_handle_release(&valk_sys->handle_table, body->lisp_on_close_handle);
   free_test_body(body);
   free_test_conn(conn);
   valk_system_destroy(valk_sys);

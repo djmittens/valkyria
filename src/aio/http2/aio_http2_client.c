@@ -713,7 +713,7 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
     req->path = __client_arena_strdup(ctx->path);
     da_init(&req->headers); // LCOV_EXCL_BR_LINE da_init macro
 
-    valk_lval_t *headers = valk_handle_resolve(&valk_global_handle_table, ctx->headers_handle);
+    valk_lval_t *headers = valk_handle_resolve(&valk_sys->handle_table, ctx->headers_handle);
     // LCOV_EXCL_BR_START header parsing defensive checks
     if (headers && LVAL_TYPE(headers) == LVAL_QEXPR) {
       for (u64 i = 0; i < valk_lval_list_count(headers); i++) {
@@ -741,7 +741,7 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
   return;
 
 cleanup:
-  valk_handle_release(&valk_global_handle_table, ctx->headers_handle);
+  valk_handle_release(&valk_sys->handle_table, ctx->headers_handle);
   free(ctx->host);
   free(ctx->path);
   free(ctx);
@@ -771,7 +771,7 @@ static void __http2_client_request_response_done(valk_async_handle_t *handle, vo
     valk_async_handle_complete(ctx->async_handle, result);
   }
   // LCOV_EXCL_BR_STOP
-  valk_handle_release(&valk_global_handle_table, ctx->headers_handle);
+  valk_handle_release(&valk_sys->handle_table, ctx->headers_handle);
   free(ctx->host);
   free(ctx->path);
   if (ctx->arena) { // LCOV_EXCL_BR_LINE defensive null check
@@ -804,7 +804,7 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
 
   valk_lval_t *heap_headers = headers ? valk_evacuate_to_heap(headers) : nullptr;
   ctx->headers_handle = heap_headers 
-    ? valk_handle_create(&valk_global_handle_table, heap_headers)
+    ? valk_handle_create(&valk_sys->handle_table, heap_headers)
     : (valk_handle_t){0, 0};
 
   VALK_INFO("http2/client-request[%llu]: async_handle=%p created", 

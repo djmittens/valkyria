@@ -13,9 +13,9 @@ void test_gc_coordinator_init(VALK_TEST_ARGS()) {
 
   valk_system_create(NULL);
 
-  VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.phase) == VALK_GC_PHASE_IDLE,
+  VALK_TEST_ASSERT(atomic_load(&valk_sys->phase) == VALK_GC_PHASE_IDLE,
                    "Phase should be IDLE after init");
-  VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.threads_registered) == 1,
+  VALK_TEST_ASSERT(atomic_load(&valk_sys->threads_registered) == 1,
                    "threads_registered should be 1");
 
   VALK_PASS();
@@ -209,19 +209,19 @@ void test_gc_thread_register_unregister(VALK_TEST_ARGS()) {
   valk_system_create(NULL);
   valk_gc_thread_unregister();
 
-  size_t before = atomic_load(&valk_gc_coord.threads_registered);
+  size_t before = atomic_load(&valk_sys->threads_registered);
 
   valk_gc_thread_register();
   VALK_TEST_ASSERT(valk_thread_ctx.gc_registered, "Should be registered");
-  VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.threads_registered) == before + 1,
+  VALK_TEST_ASSERT(atomic_load(&valk_sys->threads_registered) == before + 1,
                    "threads_registered should increase");
 
   size_t my_id = valk_thread_ctx.gc_thread_id;
-  VALK_TEST_ASSERT(valk_gc_coord.threads[my_id].active, "Thread slot should be active");
+  VALK_TEST_ASSERT(valk_sys->threads[my_id].active, "Thread slot should be active");
 
   valk_gc_thread_unregister();
   VALK_TEST_ASSERT(!valk_thread_ctx.gc_registered, "Should be unregistered");
-  VALK_TEST_ASSERT(!valk_gc_coord.threads[my_id].active, "Thread slot should be inactive");
+  VALK_TEST_ASSERT(!valk_sys->threads[my_id].active, "Thread slot should be inactive");
 
   VALK_PASS();
 }
@@ -230,7 +230,7 @@ void test_gc_safe_point_idle(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_system_create(NULL);
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+  atomic_store(&valk_sys->phase, VALK_GC_PHASE_IDLE);
 
   VALK_GC_SAFE_POINT();
 
@@ -320,26 +320,26 @@ void test_gc_phase_transitions(VALK_TEST_ARGS()) {
 
   valk_system_create(NULL);
 
-  VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.phase) == VALK_GC_PHASE_IDLE,
+  VALK_TEST_ASSERT(atomic_load(&valk_sys->phase) == VALK_GC_PHASE_IDLE,
                    "Should start IDLE");
 
   valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
-  bool cas = atomic_compare_exchange_strong(&valk_gc_coord.phase, &expected,
+  bool cas = atomic_compare_exchange_strong(&valk_sys->phase, &expected,
                                              VALK_GC_PHASE_STW_REQUESTED);
   VALK_TEST_ASSERT(cas, "CAS to STW_REQUESTED should succeed");
-  VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.phase) == VALK_GC_PHASE_STW_REQUESTED,
+  VALK_TEST_ASSERT(atomic_load(&valk_sys->phase) == VALK_GC_PHASE_STW_REQUESTED,
                    "Phase should be STW_REQUESTED");
 
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_MARKING);
-  VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.phase) == VALK_GC_PHASE_MARKING,
+  atomic_store(&valk_sys->phase, VALK_GC_PHASE_MARKING);
+  VALK_TEST_ASSERT(atomic_load(&valk_sys->phase) == VALK_GC_PHASE_MARKING,
                    "Phase should be MARKING");
 
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_SWEEPING);
-  VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.phase) == VALK_GC_PHASE_SWEEPING,
+  atomic_store(&valk_sys->phase, VALK_GC_PHASE_SWEEPING);
+  VALK_TEST_ASSERT(atomic_load(&valk_sys->phase) == VALK_GC_PHASE_SWEEPING,
                    "Phase should be SWEEPING");
 
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
-  VALK_TEST_ASSERT(atomic_load(&valk_gc_coord.phase) == VALK_GC_PHASE_IDLE,
+  atomic_store(&valk_sys->phase, VALK_GC_PHASE_IDLE);
+  VALK_TEST_ASSERT(atomic_load(&valk_sys->phase) == VALK_GC_PHASE_IDLE,
                    "Phase should be IDLE again");
 
   VALK_PASS();
@@ -473,7 +473,7 @@ void test_gc_safe_point_with_stw(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_system_create(NULL);
   
-  atomic_store(&valk_gc_coord.phase, VALK_GC_PHASE_IDLE);
+  atomic_store(&valk_sys->phase, VALK_GC_PHASE_IDLE);
   
   VALK_GC_SAFE_POINT();
   

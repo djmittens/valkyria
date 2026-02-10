@@ -48,7 +48,7 @@ void test_gc_after_aio_start(VALK_TEST_ARGS()) {
 
   VALK_TEST_ASSERT(sys != NULL, "Failed to start AIO system");
 
-  u64 registered = atomic_load(&valk_gc_coord.threads_registered);
+  u64 registered = atomic_load(&valk_sys->threads_registered);
   VALK_TEST_ASSERT(registered >= 2, "Expected at least 2 threads registered (main + event loop), got %llu", (unsigned long long)registered);
 
   sz reclaimed = valk_gc_heap_collect(heap);
@@ -88,13 +88,13 @@ void test_allocation_triggers_auto_gc(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(local_sys != NULL, "Failed to start AIO system");
   usleep(100000);
 
-  u64 gc_cycles_before = atomic_load(&valk_gc_coord.parallel_cycles);
+  u64 gc_cycles_before = atomic_load(&valk_sys->parallel_cycles);
 
   for (int i = 0; i < 100; i++) {
     valk_gc_heap_alloc(small_heap, 16384);
   }
 
-  u64 gc_cycles_after = atomic_load(&valk_gc_coord.parallel_cycles);
+  u64 gc_cycles_after = atomic_load(&valk_sys->parallel_cycles);
 
   valk_aio_stop(local_sys);
   valk_aio_wait_for_shutdown(local_sys);
@@ -111,7 +111,7 @@ void test_gc_coordination_thread_count(VALK_TEST_ARGS()) {
 
   VALK_TEST_ASSERT(sys != NULL, "Failed to start AIO system");
 
-  u64 registered = atomic_load(&valk_gc_coord.threads_registered);
+  u64 registered = atomic_load(&valk_sys->threads_registered);
   VALK_TEST_ASSERT(registered >= 2, "Expected at least 2 threads (main + event loop), got %llu", (unsigned long long)registered);
 
   valk_gc_heap_collect(heap);

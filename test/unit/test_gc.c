@@ -1945,7 +1945,7 @@ void test_gc_heap_true_parallel_gc(VALK_TEST_ARGS()) {
   size_t before = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(before > 0, "Should have allocated bytes");
   
-  size_t num_registered = atomic_load(&valk_gc_coord.threads_registered);
+  size_t num_registered = atomic_load(&valk_sys->threads_registered);
   VALK_TEST_ASSERT(num_registered == 4, "Should have 4 registered threads");
   
   atomic_store(&start_flag, true);
@@ -1966,7 +1966,7 @@ void test_gc_heap_true_parallel_gc(VALK_TEST_ARGS()) {
   valk_gc_heap_get_stats(heap, &stats);
   VALK_TEST_ASSERT(stats.collections >= 1, "Should have at least 1 collection");
   
-  u64 parallel_cycles = atomic_load(&valk_gc_coord.parallel_cycles);
+  u64 parallel_cycles = atomic_load(&valk_sys->parallel_cycles);
   VALK_TEST_ASSERT(parallel_cycles >= 1, "Should have parallel GC cycle");
   
   int corrupted = atomic_load(&corruption_count);

@@ -296,6 +296,17 @@ void test_event_loop_shares_system_heap(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_thread_context_has_system_pointer(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_system_t *sys = valk_system_create(nullptr);
+  ASSERT_NOT_NULL(sys);
+  ASSERT_TRUE(valk_thread_ctx.system == sys);
+
+  valk_system_destroy(sys);
+  VALK_PASS();
+}
+
 void test_system_shutdown_stops_aio(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -347,6 +358,8 @@ int main(void) {
                           test_event_loop_thread_has_wake_fn);
   valk_testsuite_add_test(suite, "test_event_loop_shares_system_heap",
                           test_event_loop_shares_system_heap);
+  valk_testsuite_add_test(suite, "test_thread_context_has_system_pointer",
+                          test_thread_context_has_system_pointer);
   valk_testsuite_add_test(suite, "test_system_shutdown_stops_aio",
                           test_system_shutdown_stops_aio);
 

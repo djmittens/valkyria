@@ -347,7 +347,7 @@ static void __http_shutdown_cb(valk_aio_handle_t *hndl) {
   
   if (srv->state == VALK_SRV_CLOSING || srv->state == VALK_SRV_CLOSED) {
     if (sys->shuttingDown && srv->lisp_handler_handle.generation > 0) {
-      valk_handle_release(&valk_global_handle_table, srv->lisp_handler_handle);
+      valk_handle_release(&valk_sys->handle_table, srv->lisp_handler_handle);
       srv->lisp_handler_handle = (valk_handle_t){0, 0};
     }
     return;
@@ -358,7 +358,7 @@ static void __http_shutdown_cb(valk_aio_handle_t *hndl) {
 
   if (sys->shuttingDown) {
     if (srv->lisp_handler_handle.generation > 0) {
-      valk_handle_release(&valk_global_handle_table, srv->lisp_handler_handle);
+      valk_handle_release(&valk_sys->handle_table, srv->lisp_handler_handle);
       srv->lisp_handler_handle = (valk_handle_t){0, 0};
     }
     srv->state = VALK_SRV_CLOSED;
@@ -384,7 +384,7 @@ static void __valk_aio_http2_server_cleanup(valk_aio_http_server *srv) {
   valk_aio_system_stats_v2_on_server_stop(
       (valk_aio_system_stats_v2_t*)srv->sys->metrics_state->system_stats_v2);
   if (srv->lisp_handler_handle.generation > 0) {
-    valk_handle_release(&valk_global_handle_table, srv->lisp_handler_handle);
+    valk_handle_release(&valk_sys->handle_table, srv->lisp_handler_handle);
     srv->lisp_handler_handle = (valk_handle_t){0, 0};
   }
   SSL_CTX_free(srv->ssl_ctx);
@@ -542,7 +542,7 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
   }
   if (lisp_handler) {
     valk_lval_t *heap_handler = valk_evacuate_to_heap((valk_lval_t*)lisp_handler);
-    srv->lisp_handler_handle = valk_handle_create(&valk_global_handle_table, heap_handler);
+    srv->lisp_handler_handle = valk_handle_create(&valk_sys->handle_table, heap_handler);
   } else {
     srv->lisp_handler_handle = (valk_handle_t){0, 0};
   }
@@ -586,12 +586,12 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
 
 void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_fn) {
   if (srv->lisp_handler_handle.generation > 0) { // LCOV_EXCL_BR_LINE requires GC heap handler setup
-    valk_handle_release(&valk_global_handle_table, srv->lisp_handler_handle);
+    valk_handle_release(&valk_sys->handle_table, srv->lisp_handler_handle);
   }
   if (handler_fn) { // LCOV_EXCL_BR_LINE requires GC heap handler setup
     // LCOV_EXCL_START requires full GC heap for handler evacuation
     valk_lval_t *heap_handler = valk_evacuate_to_heap((valk_lval_t*)handler_fn);
-    srv->lisp_handler_handle = valk_handle_create(&valk_global_handle_table, heap_handler);
+    srv->lisp_handler_handle = valk_handle_create(&valk_sys->handle_table, heap_handler);
     // LCOV_EXCL_STOP
   } else {
     srv->lisp_handler_handle = (valk_handle_t){0, 0};

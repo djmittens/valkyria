@@ -12,7 +12,7 @@ static void __interval_timer_close_cb(uv_handle_t *handle) {
   if (!timer_data) return;
 
   if (timer_data->callback) {
-    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
+    valk_handle_release(&valk_sys->handle_table, timer_data->callback_handle);
   }
 }
 
@@ -40,7 +40,7 @@ static void __interval_timer_cb(uv_timer_t *handle) {
     return;
   }
 
-  valk_lval_t *callback = valk_handle_resolve(&valk_global_handle_table, timer_data->callback_handle);
+  valk_lval_t *callback = valk_handle_resolve(&valk_sys->handle_table, timer_data->callback_handle);
   if (!callback) {
     timer_data->stopped = true;
     uv_timer_stop(handle);
@@ -86,13 +86,13 @@ static void __interval_init_on_loop(void *ctx) {
   uv_loop_t *loop = init_ctx->sys->eventloop;
   int r = uv_timer_init(loop, &timer_data->timer);
   if (r != 0) {
-    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
+    valk_handle_release(&valk_sys->handle_table, timer_data->callback_handle);
     return;
   }
 
   r = uv_timer_start(&timer_data->timer, __interval_timer_cb, init_ctx->interval_ms, init_ctx->interval_ms);
   if (r != 0) {
-    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
+    valk_handle_release(&valk_sys->handle_table, timer_data->callback_handle);
     uv_close((uv_handle_t *)&timer_data->timer, NULL);
   }
 }
@@ -128,7 +128,7 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
   
   timer_data->magic = VALK_INTERVAL_TIMER_MAGIC;
   timer_data->callback = heap_callback;
-  timer_data->callback_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
+  timer_data->callback_handle = valk_handle_create(&valk_sys->handle_table, heap_callback);
   timer_data->interval_id = __atomic_fetch_add(&g_interval_id, 1, __ATOMIC_RELAXED);
   timer_data->stopped = false;
   timer_data->async_handle = async_handle;
@@ -139,7 +139,7 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
   valk_interval_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_interval_init_ctx_t));
   // LCOV_EXCL_START - region alloc failure: requires OOM
   if (!init_ctx) {
-    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
+    valk_handle_release(&valk_sys->handle_table, timer_data->callback_handle);
     return valk_lval_err("Failed to allocate interval init context");
   }
   // LCOV_EXCL_STOP
@@ -167,7 +167,7 @@ static void __schedule_timer_cb(uv_timer_t *handle) {
   
   valk_lval_t *cb_result = valk_lval_nil();
   if (!cancelled) {
-    valk_lval_t *callback = valk_handle_resolve(&valk_global_handle_table, timer_data->callback_handle);
+    valk_lval_t *callback = valk_handle_resolve(&valk_sys->handle_table, timer_data->callback_handle);
     if (callback) {
       valk_lval_t *args = valk_lval_nil();
       cb_result = valk_lval_eval_call(callback->fun.env, callback, args);
@@ -177,7 +177,7 @@ static void __schedule_timer_cb(uv_timer_t *handle) {
     }
   }
 
-  valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
+  valk_handle_release(&valk_sys->handle_table, timer_data->callback_handle);
   uv_timer_stop(handle);
   uv_close((uv_handle_t *)handle, __schedule_timer_close_cb);
 
@@ -202,13 +202,13 @@ static void __schedule_init_on_loop(void *ctx) {
   uv_loop_t *loop = init_ctx->sys->eventloop;
   int r = uv_timer_init(loop, &timer_data->timer);
   if (r != 0) {
-    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
+    valk_handle_release(&valk_sys->handle_table, timer_data->callback_handle);
     return;
   }
 
   r = uv_timer_start(&timer_data->timer, __schedule_timer_cb, init_ctx->delay_ms, 0);
   if (r != 0) {
-    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
+    valk_handle_release(&valk_sys->handle_table, timer_data->callback_handle);
     uv_close((uv_handle_t *)&timer_data->timer, NULL);
   }
 }
@@ -247,7 +247,7 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
   valk_lval_t *heap_callback = valk_evacuate_to_heap(callback);
 
   timer_data->callback = heap_callback;
-  timer_data->callback_handle = valk_handle_create(&valk_global_handle_table, heap_callback);
+  timer_data->callback_handle = valk_handle_create(&valk_sys->handle_table, heap_callback);
   timer_data->timer.data = timer_data;
   timer_data->schedule_id = schedule_id;
   timer_data->async_handle = async_handle;
@@ -255,7 +255,7 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
   valk_schedule_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_schedule_init_ctx_t));
   // LCOV_EXCL_START - region alloc failure: requires OOM
   if (!init_ctx) {
-    valk_handle_release(&valk_global_handle_table, timer_data->callback_handle);
+    valk_handle_release(&valk_sys->handle_table, timer_data->callback_handle);
     return valk_lval_err("Failed to allocate schedule init context");
   }
   // LCOV_EXCL_STOP

@@ -702,7 +702,7 @@ static int __handle_request_headers(nghttp2_session *session,
     return 0;
   }
 
-  valk_lval_t *handler = valk_handle_resolve(&valk_global_handle_table, 
+  valk_lval_t *handler = valk_handle_resolve(&valk_sys->handle_table, 
                                               conn->http.server->lisp_handler_handle);
   if (!conn->http.server || !handler) {
     __send_default_response(session, frame->hd.stream_id, req->stream_arena);
