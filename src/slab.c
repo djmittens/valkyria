@@ -74,6 +74,8 @@ static void valk_slab_init(valk_slab_t *self, sz itemSize, sz numItems) {
   __atomic_store_n(&self->numFree, numItems, __ATOMIC_RELAXED);
   __atomic_store_n(&self->overflowCount, 0, __ATOMIC_RELAXED);
   __atomic_store_n(&self->peakUsed, 0, __ATOMIC_RELAXED);
+  atomic_store_explicit(&self->total_acquires, 0, memory_order_relaxed);
+  atomic_store_explicit(&self->total_releases, 0, memory_order_relaxed);
 
   sz bitmap_bytes = (numItems + 7) / 8;
   // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI) - 0-size calloc is valid edge case
@@ -171,6 +173,8 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   } while (!__atomic_compare_exchange_n(&self->peakUsed, &current_peak, used, // LCOV_EXCL_BR_LINE
                                          false, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
 
+  atomic_fetch_add_explicit(&self->total_acquires, 1, memory_order_relaxed);
+
   return res;
 
 #else
@@ -222,6 +226,8 @@ void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
                                         __ATOMIC_ACQ_REL, __ATOMIC_RELAXED));
 
   __atomic_fetch_add(&self->numFree, 1, __ATOMIC_RELAXED);
+
+  atomic_fetch_add_explicit(&self->total_releases, 1, memory_order_relaxed);
 
 #else
   for (u64 i = 0; i < self->numItems; ++i) {

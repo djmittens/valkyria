@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include "types.h"
 
@@ -139,6 +140,9 @@ typedef struct {  // extends valk_mem_allocator_t;
   sz mmap_size;  // Size of mmap'd region (0 if not mmap'd)
   // treiber list top
 
+  _Atomic u64 total_acquires;
+  _Atomic u64 total_releases;
+
   u64 bitmap_version;
   u8 *usage_bitmap;
 
@@ -178,6 +182,25 @@ void valk_slab_release_ptr(valk_slab_t *self, void *data);
 /// @return Current count of free items (may change due to concurrent access)
 static inline sz valk_slab_available(valk_slab_t *self) {
   return __atomic_load_n(&self->numFree, __ATOMIC_ACQUIRE);
+}
+
+typedef struct {
+  u64 acquires;
+  u64 releases;
+} valk_slab_snapshot_t;
+
+static inline valk_slab_snapshot_t valk_slab_snapshot(valk_slab_t *slab) {
+  return (valk_slab_snapshot_t){
+    .acquires = atomic_load_explicit(&slab->total_acquires, memory_order_relaxed),
+    .releases = atomic_load_explicit(&slab->total_releases, memory_order_relaxed),
+  };
+}
+
+static inline bool valk_slab_snapshot_balanced(valk_slab_t *slab, valk_slab_snapshot_t before) {
+  valk_slab_snapshot_t after = valk_slab_snapshot(slab);
+  u64 delta_acq = after.acquires - before.acquires;
+  u64 delta_rel = after.releases - before.releases;
+  return delta_acq == delta_rel;
 }
 
 typedef struct {

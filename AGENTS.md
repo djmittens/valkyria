@@ -74,6 +74,21 @@ When refactoring, eliminate these patterns:
 - **Atomic loads/stores**: Unnecessary with stop-the-world GC
 - **Debug fprintf/tracing**: Remove or gate behind compile-time flag
 
+## Async Resource Pattern (MANDATORY)
+
+Every C resource created inside an async handler MUST be registered for cleanup:
+
+    valk_async_handle_on_resource_cleanup(handle, cleanup_fn, resource, ctx);
+
+This includes: arenas, timers, stream bodies, slab items, file descriptors.
+
+If you create a resource and don't register cleanup, the debug build will
+assert and tests will fail with arena pool count mismatches.
+
+The cleanup function runs when the handle reaches any terminal state
+(completed, failed, cancelled). It runs AFTER on_done, so the resource
+is still valid during response sending.
+
 ## Required Workflow (CRITICAL - MUST FOLLOW)
 
 ### Before ANY Code Change

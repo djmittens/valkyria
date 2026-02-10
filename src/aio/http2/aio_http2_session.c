@@ -15,6 +15,8 @@ extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *err
 extern bool valk_async_handle_cancel(valk_async_handle_t *handle);
 extern void valk_async_handle_on_resource_cleanup(valk_async_handle_t *handle, void (*fn)(void *data, void *ctx), void *data, void *ctx);
 
+#include "../aio_async.h"
+
 static const char *__http2_get_header(valk_http2_server_request_t *req, const char *name) {
   if (!req || !name) return nullptr; // LCOV_EXCL_BR_LINE defensive null check
   size_t name_len = strlen(name);
@@ -684,6 +686,8 @@ static int __handle_async_response(nghttp2_session *session, i32 stream_id,
   }
 
   valk_async_handle_on_resource_cleanup(handle, __release_arena_cleanup, req, conn);
+
+  VALK_ASSERT_HAS_CLEANUP(handle);
 
   for (valk_async_handle_t *p = handle->parent; p != nullptr; p = p->parent) {
     valk_async_propagate_region(p, handle->region, env);
