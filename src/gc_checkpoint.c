@@ -77,10 +77,16 @@ static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
 // LCOV_EXCL_STOP
 
 static void valk_checkpoint_request_stw(void) {
+  // Use CHECKPOINT_PREPARING to claim exclusive ownership of the checkpoint
+  // sequence without yet signaling worker threads.  The VALK_GC_SAFE_POINT
+  // macro only fires on phase != IDLE, but valk_gc_safe_point_slow() only
+  // enters the barrier path when phase == CHECKPOINT_REQUESTED.  By first
+  // CASing to PREPARING, we can safely reset the barrier before any worker
+  // thread touches it.
   valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
   // LCOV_EXCL_BR_START - CAS race: another thread may have changed phase
   if (!atomic_compare_exchange_strong(&valk_sys->phase, &expected,
-                                       VALK_GC_PHASE_CHECKPOINT_REQUESTED)) {
+                                       VALK_GC_PHASE_CHECKPOINT_PREPARING)) {
   // LCOV_EXCL_BR_STOP
     return;
   }
@@ -97,6 +103,12 @@ static void valk_checkpoint_request_stw(void) {
     valk_barrier_init(&valk_sys->barrier, num_threads);
     valk_sys->barrier_initialized = true;
   }
+
+  // Barrier is now ready — publish CHECKPOINT_REQUESTED so worker threads
+  // enter the barrier path in valk_gc_safe_point_slow().
+  atomic_store_explicit(&valk_sys->phase,
+                        VALK_GC_PHASE_CHECKPOINT_REQUESTED,
+                        memory_order_release);
 
   valk_system_wake_threads(valk_sys);
 
