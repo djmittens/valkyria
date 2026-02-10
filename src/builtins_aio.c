@@ -285,18 +285,6 @@ static valk_lval_t* valk_builtin_aio_interval(valk_lenv_t* e, valk_lval_t* a) {
   return valk_aio_interval(sys, interval_ms, callback, e);
 }
 
-// LCOV_EXCL_START - exit() terminates process, cannot be unit tested
-static valk_lval_t* valk_builtin_exit(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
-  int code = (int)valk_lval_list_nth(a, 0)->num;
-  fflush(stdout);
-  fflush(stderr);
-  exit(code);
-}
-// LCOV_EXCL_STOP
-
 static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_LE(a, a, 1);
   int code = 0;
@@ -306,13 +294,6 @@ static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   valk_lenv_def(e, valk_lval_sym("VALK_EXIT_CODE"), valk_lval_num(code));
-
-  valk_lval_t* val = valk_lenv_get(e, valk_lval_sym("aio"));
-  if (LVAL_TYPE(val) != LVAL_ERR && LVAL_TYPE(val) == LVAL_REF &&
-      strcmp(val->ref.type, "aio_system") == 0 && val->ref.ptr) {
-    valk_aio_stop((valk_aio_system_t*)val->ref.ptr);
-  }
-
   return valk_lval_num(code);
 }
 
@@ -332,6 +313,6 @@ void valk_register_aio_builtins(valk_lenv_t* env) {
                         valk_builtin_vm_metrics_json_compact);
   valk_lenv_put_builtin(env, "vm/metrics-prometheus",
                         valk_builtin_vm_metrics_prometheus);
-  valk_lenv_put_builtin(env, "exit", valk_builtin_exit);
+  valk_lenv_put_builtin(env, "exit", valk_builtin_shutdown);
   valk_lenv_put_builtin(env, "shutdown", valk_builtin_shutdown);
 }

@@ -330,6 +330,8 @@ define run_tests_valk
 	$(1)/valk test/test_coverage_integration.valk
 	$(1)/valk test/test_custom_error_handler.valk
 	$(1)/valk test/test_debug_handler.valk
+	$(1)/valk test/test_shutdown.valk
+	$(1)/valk test/test_exit_alias.valk
 
 	$(1)/valk test/stress/test_gc_stress.valk
 	$(1)/valk test/stress/test_networking_stress.valk
@@ -473,6 +475,7 @@ VALK_TESTS_LIST = \
 	test/test_delay_error.valk test/test_delay_continuation_error.valk \
 	test/test_make_string.valk test/test_coverage_integration.valk \
 	test/test_custom_error_handler.valk test/test_debug_handler.valk \
+	test/test_shutdown.valk test/test_exit_alias.valk \
 	test/stress/test_gc_stress.valk test/stress/test_networking_stress.valk \
 	test/stress/test_sse_concurrency_short.valk
 

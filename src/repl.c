@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "aio/aio.h"
 #include "coverage.h"
 #include "gc.h"
 #include "log.h"
@@ -200,14 +199,6 @@ int main(int argc, char* argv[]) {
     if (valk_gc_should_collect(gc_heap)) {
       valk_gc_heap_collect(gc_heap);  // No additional roots in REPL
     }
-  }
-
-  // Gracefully stop AIO on REPL exit if present
-  valk_lval_t* sym = valk_lval_sym("aio");
-  valk_lval_t* val = valk_lenv_get(env, sym);
-  if (LVAL_TYPE(val) != LVAL_ERR && LVAL_TYPE(val) == LVAL_REF &&
-      strcmp(val->ref.type, "aio_system") == 0) {
-    valk_aio_stop((valk_aio_system_t*)val->ref.ptr);
   }
 
   free(scratch);
