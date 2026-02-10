@@ -338,7 +338,7 @@ void test_gc_heap_hard_limit(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   sz hard_limit = 2 * 1024 * 1024;
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(hard_limit);
+  valk_gc_heap_t *heap = valk_gc_heap_create(hard_limit);
   VALK_TEST_ASSERT(heap != NULL, "Heap should be created");
   VALK_TEST_ASSERT(heap->hard_limit == hard_limit, "Hard limit should match");
 
@@ -347,7 +347,7 @@ void test_gc_heap_hard_limit(VALK_TEST_ARGS()) {
 
   VALK_TEST_ASSERT(heap->stats.peak_usage == 0, "peak_usage should start at 0");
 
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -355,12 +355,12 @@ void test_gc_heap_hard_limit(VALK_TEST_ARGS()) {
 void test_gc_heap_stats(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
 
   // Allocate something
-  void *ptr = valk_gc_malloc_heap_alloc(heap, 123);
+  void *ptr = valk_gc_heap_alloc(heap, 123);
   VALK_TEST_ASSERT(ptr != nullptr, "Allocation should succeed");
-  VALK_TEST_ASSERT(valk_gc_heap2_used_bytes(heap) > 0,
+  VALK_TEST_ASSERT(valk_gc_heap_used_bytes(heap) > 0,
                    "used_bytes should be > 0");
   VALK_TEST_ASSERT(heap->stats.peak_usage > 0,
                    "peak_usage should be tracked");
@@ -368,11 +368,11 @@ void test_gc_heap_stats(VALK_TEST_ARGS()) {
   size_t peak = heap->stats.peak_usage;
 
   // Allocate more
-  valk_gc_malloc_heap_alloc(heap, 456);  // result intentionally unused
+  valk_gc_heap_alloc(heap, 456);  // result intentionally unused
   VALK_TEST_ASSERT(heap->stats.peak_usage >= peak,
                    "peak_usage should only increase");
 
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -385,7 +385,7 @@ void test_arena_overflow_fallback(VALK_TEST_ARGS()) {
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
 
   // Set up thread context with fallback heap
   valk_thread_context_t old_ctx = valk_thread_ctx;
@@ -436,7 +436,7 @@ void test_arena_overflow_fallback(VALK_TEST_ARGS()) {
   valk_thread_ctx = old_ctx;
 
   free(arena);
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -529,7 +529,7 @@ void test_checkpoint_empty(VALK_TEST_ARGS()) {
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)heap;
@@ -550,7 +550,7 @@ void test_checkpoint_empty(VALK_TEST_ARGS()) {
 
   valk_thread_ctx = old_ctx;
   free(arena);
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -563,14 +563,14 @@ void test_checkpoint_evacuate_number(VALK_TEST_ARGS()) {
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
   valk_thread_ctx.heap = heap;
   VALK_WITH_ALLOC((void *)heap) {
     valk_lenv_t *env = valk_lenv_empty();
-    valk_gc_malloc_set_root(heap, env);
+    valk_gc_set_root(heap, env);
 
     // Allocate a number in scratch arena
     VALK_WITH_ALLOC((void *)arena) {
@@ -619,7 +619,7 @@ void test_checkpoint_evacuate_number(VALK_TEST_ARGS()) {
 
   valk_thread_ctx = old_ctx;
   free(arena);
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -632,7 +632,7 @@ void test_checkpoint_evacuate_list(VALK_TEST_ARGS()) {
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
@@ -640,7 +640,7 @@ void test_checkpoint_evacuate_list(VALK_TEST_ARGS()) {
 
   VALK_WITH_ALLOC((void *)heap) {
     valk_lenv_t *env = valk_lenv_empty();
-    valk_gc_malloc_set_root(heap, env);
+    valk_gc_set_root(heap, env);
     VALK_WITH_ALLOC((void *)arena) {
       valk_lval_t *nums[3] = {
         valk_lval_num(1),
@@ -688,7 +688,7 @@ void test_checkpoint_evacuate_list(VALK_TEST_ARGS()) {
 
   valk_thread_ctx = old_ctx;
   free(arena);
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -700,7 +700,7 @@ void test_checkpoint_stats(VALK_TEST_ARGS()) {
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
@@ -708,7 +708,7 @@ void test_checkpoint_stats(VALK_TEST_ARGS()) {
 
   VALK_WITH_ALLOC((void *)heap) {
     valk_lenv_t *env = valk_lenv_empty();
-    valk_gc_malloc_set_root(heap, env);
+    valk_gc_set_root(heap, env);
     VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 0,
                      "Initial checkpoints should be 0");
     VALK_TEST_ASSERT(heap->stats.evacuations_from_scratch == 0,
@@ -749,7 +749,7 @@ void test_checkpoint_stats(VALK_TEST_ARGS()) {
 
   valk_thread_ctx = old_ctx;
   free(arena);
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -761,7 +761,7 @@ void test_checkpoint_nil_cons(VALK_TEST_ARGS()) {
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
@@ -769,7 +769,7 @@ void test_checkpoint_nil_cons(VALK_TEST_ARGS()) {
 
   VALK_WITH_ALLOC((void *)heap) {
     valk_lenv_t *env = valk_lenv_empty();
-    valk_gc_malloc_set_root(heap, env);
+    valk_gc_set_root(heap, env);
     VALK_WITH_ALLOC((void *)arena) {
       valk_lval_t *nil_cons = valk_lval_cons(valk_lval_nil(), valk_lval_nil());
       valk_lenv_put(env, valk_lval_sym("nil_cons"), nil_cons);
@@ -790,7 +790,7 @@ void test_checkpoint_nil_cons(VALK_TEST_ARGS()) {
 
   valk_thread_ctx = old_ctx;
   free(arena);
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -802,7 +802,7 @@ void test_checkpoint_deep_env_chain(VALK_TEST_ARGS()) {
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
@@ -812,7 +812,7 @@ void test_checkpoint_deep_env_chain(VALK_TEST_ARGS()) {
 
   VALK_WITH_ALLOC((void *)heap) {
     valk_lenv_t *root_env = valk_lenv_empty();
-    valk_gc_malloc_set_root(heap, root_env);
+    valk_gc_set_root(heap, root_env);
 
     // Build chain of nested environments in scratch and store values
     // Each level stores a number to verify the chain survives
@@ -843,7 +843,7 @@ void test_checkpoint_deep_env_chain(VALK_TEST_ARGS()) {
 
   valk_thread_ctx = old_ctx;
   free(arena);
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -855,7 +855,7 @@ void test_checkpoint_many_bindings(VALK_TEST_ARGS()) {
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
@@ -865,7 +865,7 @@ void test_checkpoint_many_bindings(VALK_TEST_ARGS()) {
 
   VALK_WITH_ALLOC((void *)heap) {
     valk_lenv_t *env = valk_lenv_empty();
-    valk_gc_malloc_set_root(heap, env);
+    valk_gc_set_root(heap, env);
 
     // Create many bindings in scratch
     VALK_WITH_ALLOC((void *)arena) {
@@ -895,7 +895,7 @@ void test_checkpoint_many_bindings(VALK_TEST_ARGS()) {
 
   valk_thread_ctx = old_ctx;
   free(arena);
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -1211,7 +1211,7 @@ void test_checkpoint_closure(VALK_TEST_ARGS()) {
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
@@ -1219,7 +1219,7 @@ void test_checkpoint_closure(VALK_TEST_ARGS()) {
 
   VALK_WITH_ALLOC((void *)heap) {
     valk_lenv_t *env = valk_lenv_empty();
-    valk_gc_malloc_set_root(heap, env);
+    valk_gc_set_root(heap, env);
     VALK_WITH_ALLOC((void *)arena) {
       // Create captured environment with a value
       valk_lenv_t *captured = valk_lenv_empty();
@@ -1257,7 +1257,7 @@ void test_checkpoint_closure(VALK_TEST_ARGS()) {
 
   valk_thread_ctx = old_ctx;
   free(arena);
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -1648,7 +1648,7 @@ void test_malloc_allocator_api(VALK_TEST_ARGS()) {
 void test_gc_heap_allocator_api(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+  valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
 
   void *ptr = valk_mem_allocator_alloc((valk_mem_allocator_t*)heap, 128);
   VALK_TEST_ASSERT(ptr != nullptr, "GC heap alloc should succeed");
@@ -1656,7 +1656,7 @@ void test_gc_heap_allocator_api(VALK_TEST_ARGS()) {
   void *ptr2 = valk_mem_allocator_calloc((valk_mem_allocator_t*)heap, 4, 32);
   VALK_TEST_ASSERT(ptr2 != nullptr, "GC heap calloc should succeed");
 
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -2137,7 +2137,7 @@ void test_region_gc_heap_realloc(VALK_TEST_ARGS()) {
   memset(&region, 0, sizeof(region));
   region.type = VALK_ALLOC_REGION;
   region.lifetime = VALK_LIFETIME_SESSION;
-  region.gc_heap = (struct valk_gc_heap2*)valk_gc_malloc_heap_init(0);
+  region.gc_heap = (struct valk_gc_heap*)valk_gc_heap_create(0);
   region.arena = nullptr;
   region.owns_arena = false;
 
@@ -2160,7 +2160,7 @@ void test_region_gc_heap_realloc(VALK_TEST_ARGS()) {
 
   // Clean up gc_heap manually
   if (region.gc_heap) {
-    valk_gc_malloc_heap_destroy((valk_gc_malloc_heap_t*)region.gc_heap);
+    valk_gc_heap_destroy((valk_gc_heap_t*)region.gc_heap);
   }
 
   valk_runtime_shutdown();
@@ -2397,7 +2397,7 @@ void test_bitmap_delta_compute_size_mismatch(VALK_TEST_ARGS()) {
 void test_gc_heap_print_stats_with_allocations(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_heap2_create(1024 * 1024);
+  valk_gc_heap_t *heap = valk_gc_heap_create(1024 * 1024);
   ASSERT_NOT_NULL(heap);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
@@ -2406,15 +2406,15 @@ void test_gc_heap_print_stats_with_allocations(VALK_TEST_ARGS()) {
 
   VALK_WITH_ALLOC((void *)heap) {
     for (int i = 0; i < 10; i++) {
-      void *p = valk_gc_heap2_alloc(heap, 32);
+      void *p = valk_gc_heap_alloc(heap, 32);
       ASSERT_NOT_NULL(p);
     }
   }
 
-  valk_gc_malloc_print_stats(heap);
+  valk_gc_print_stats(heap);
 
   valk_thread_ctx = old_ctx;
-  valk_gc_heap2_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 
@@ -2425,18 +2425,18 @@ void test_gc_heap_print_stats_with_allocations(VALK_TEST_ARGS()) {
 void test_gc_heap_large_object_realloc(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_heap2_create(4 * 1024 * 1024);
+  valk_gc_heap_t *heap = valk_gc_heap_create(4 * 1024 * 1024);
   ASSERT_NOT_NULL(heap);
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)heap;
   valk_thread_ctx.heap = heap;
 
-  void *large = valk_gc_heap2_alloc(heap, 64 * 1024);
+  void *large = valk_gc_heap_alloc(heap, 64 * 1024);
   ASSERT_NOT_NULL(large);
   memset(large, 0xAB, 64 * 1024);
 
-  void *resized = valk_gc_heap2_realloc(heap, large, 128 * 1024);
+  void *resized = valk_gc_heap_realloc(heap, large, 128 * 1024);
   ASSERT_NOT_NULL(resized);
 
   u8 *bytes = (u8 *)resized;
@@ -2444,7 +2444,7 @@ void test_gc_heap_large_object_realloc(VALK_TEST_ARGS()) {
   ASSERT_EQ(bytes[1000], 0xAB);
 
   valk_thread_ctx = old_ctx;
-  valk_gc_heap2_destroy(heap);
+  valk_gc_heap_destroy(heap);
   VALK_PASS();
 }
 

@@ -23,7 +23,7 @@ int main(void) {
   valk_gc_coordinator_init();
   valk_gc_thread_register();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(0);
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
   valk_thread_ctx.heap = heap;
 
   valk_aio_system_t *sys = valk_aio_start();
@@ -34,7 +34,7 @@ int main(void) {
 
   usleep(100000);
 
-  valk_gc_malloc_collect(heap, NULL);
+  valk_gc_heap_collect(heap);
 
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);

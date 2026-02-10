@@ -276,7 +276,7 @@ void test_owner_registry_null_system(VALK_TEST_ARGS()) {
 void test_aio_get_gc_heap_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_aio_get_gc_heap(nullptr);
+  valk_gc_heap_t *heap = valk_aio_get_gc_heap(nullptr);
   ASSERT_NULL(heap);
 
   VALK_PASS();

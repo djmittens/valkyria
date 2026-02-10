@@ -15,7 +15,7 @@
 
 // Global pointers for signal handler (Phase 8: Telemetry)
 static valk_mem_arena_t* g_scratch_for_signal = nullptr;
-static valk_gc_malloc_heap_t* g_heap_for_signal = nullptr;
+static valk_gc_heap_t* g_heap_for_signal = nullptr;
 
 // Per-evaluation memory tracking for REPL profile dashboard
 static valk_repl_mem_snapshot_t g_last_eval_before;
@@ -48,7 +48,7 @@ int main(int argc, char* argv[]) {
     return EXIT_FAILURE;
   }
 
-  valk_gc_malloc_heap_t* gc_heap = (valk_gc_malloc_heap_t*)valk_runtime_get_heap();
+  valk_gc_heap_t* gc_heap = (valk_gc_heap_t*)valk_runtime_get_heap();
 
   valk_mem_arena_t* scratch = malloc(SCRATCH_ARENA_BYTES);
   valk_mem_arena_init(scratch, SCRATCH_ARENA_BYTES - sizeof(*scratch));
@@ -68,7 +68,7 @@ int main(int argc, char* argv[]) {
   valk_lenv_builtins(env);
 
   // Set root environment for GC marking and checkpoint evacuation
-  valk_gc_malloc_set_root(gc_heap, env);
+  valk_gc_set_root(gc_heap, env);
   valk_thread_ctx.root_env = env;
 
   // Set up SIGUSR1 handler for runtime memory stats (Phase 8: Telemetry)
@@ -122,8 +122,8 @@ int main(int argc, char* argv[]) {
           valk_checkpoint(scratch, gc_heap, env);
 
           // GC safe point: expression evaluated, env and remaining AST (res) are live
-          if (valk_gc_malloc_should_collect(gc_heap)) {
-            valk_gc_malloc_collect(gc_heap, res);  // Mark res as additional root
+          if (valk_gc_should_collect(gc_heap)) {
+            valk_gc_heap_collect(gc_heap);  // Mark res as additional root
           }
         }
       }
@@ -201,8 +201,8 @@ int main(int argc, char* argv[]) {
     // GC safe point: all evaluation done, scratch reset, only environment is
     // live Classic Lisp approach - collect between expressions, never during
     // evaluation
-    if (valk_gc_malloc_should_collect(gc_heap)) {
-      valk_gc_malloc_collect(gc_heap, nullptr);  // No additional roots in REPL
+    if (valk_gc_should_collect(gc_heap)) {
+      valk_gc_heap_collect(gc_heap);  // No additional roots in REPL
     }
   }
 

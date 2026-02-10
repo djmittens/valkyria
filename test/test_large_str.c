@@ -9,7 +9,7 @@
 void test_2mb_string_concat(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(64 * 1024 * 1024);
+  valk_gc_heap_t *heap = valk_gc_heap_create(64 * 1024 * 1024);
   VALK_TEST_ASSERT(heap != nullptr, "GC heap should be created");
 
   valk_thread_context_t old_ctx = valk_thread_ctx;
@@ -88,7 +88,7 @@ void test_2mb_string_concat(VALK_TEST_ARGS()) {
   free(mb2_buf);
 
   valk_thread_ctx = old_ctx;
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
 
   VALK_PASS();
 }

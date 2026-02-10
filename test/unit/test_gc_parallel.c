@@ -103,11 +103,11 @@ void test_gc_mark_queue_init(VALK_TEST_ARGS()) {
 void test_gc_mark_queue_push_pop(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+  valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
 
   valk_lval_t *vals[10];
   for (int i = 0; i < 10; i++) {
-    vals[i] = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+    vals[i] = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
     vals[i]->flags = LVAL_NUM;
     vals[i]->num = i;
   }
@@ -132,7 +132,7 @@ void test_gc_mark_queue_push_pop(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(empty_pop == nullptr, "Pop from empty queue should return nullptr");
 
   valk_gc_mark_queue_destroy(&queue);
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
 
   VALK_PASS();
 }
@@ -140,11 +140,11 @@ void test_gc_mark_queue_push_pop(VALK_TEST_ARGS()) {
 void test_gc_mark_queue_steal(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+  valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
 
   valk_lval_t *vals[5];
   for (int i = 0; i < 5; i++) {
-    vals[i] = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+    vals[i] = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
     vals[i]->flags = LVAL_NUM;
     vals[i]->num = i;
   }
@@ -166,7 +166,7 @@ void test_gc_mark_queue_steal(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(popped == vals[4], "Pop should return last element (LIFO)");
 
   valk_gc_mark_queue_destroy(&queue);
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
 
   VALK_PASS();
 }
@@ -174,7 +174,7 @@ void test_gc_mark_queue_steal(VALK_TEST_ARGS()) {
 void test_gc_mark_queue_dynamic_growth(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(100 * 1024 * 1024);
+  valk_gc_heap_t *heap = valk_gc_heap_create(100 * 1024 * 1024);
 
   valk_gc_mark_queue_t queue;
   valk_gc_mark_queue_init(&queue);
@@ -182,7 +182,7 @@ void test_gc_mark_queue_dynamic_growth(VALK_TEST_ARGS()) {
   const size_t COUNT = VALK_GC_MARK_QUEUE_INITIAL_SIZE + 100;
   int pushed = 0;
   for (size_t i = 0; i < COUNT; i++) {
-    valk_lval_t *val = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+    valk_lval_t *val = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
     val->flags = LVAL_NUM;
     valk_gc_mark_queue_push(&queue, val);
     pushed++;
@@ -200,7 +200,7 @@ void test_gc_mark_queue_dynamic_growth(VALK_TEST_ARGS()) {
                    "Should pop all pushed items (pushed=%d, popped=%d)", pushed, popped);
 
   valk_gc_mark_queue_destroy(&queue);
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
 
   VALK_PASS();
 }
@@ -260,12 +260,12 @@ static void *stealer_thread(void *arg) {
 void test_gc_mark_queue_concurrent_steal(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
+  valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
 
   const int NUM_VALS = 100;
   valk_lval_t *vals[NUM_VALS];
   for (int i = 0; i < NUM_VALS; i++) {
-    vals[i] = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+    vals[i] = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
     vals[i]->flags = LVAL_NUM;
     vals[i]->num = i;
   }
@@ -311,7 +311,7 @@ void test_gc_mark_queue_concurrent_steal(VALK_TEST_ARGS()) {
                    total, NUM_VALS);
 
   valk_gc_mark_queue_destroy(&queue);
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
 
   VALK_PASS();
 }
@@ -373,9 +373,9 @@ void test_gc_root_push_pop(VALK_TEST_ARGS()) {
   valk_gc_coordinator_init();
   valk_gc_thread_register();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-  valk_lval_t *val1 = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  valk_lval_t *val2 = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
+  valk_lval_t *val1 = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
+  valk_lval_t *val2 = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
   val1->flags = LVAL_NUM;
   val2->flags = LVAL_NUM;
 
@@ -395,7 +395,7 @@ void test_gc_root_push_pop(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(valk_thread_ctx.root_stack_count == before, "cleanup should restore");
 
   (void)r2;
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   valk_gc_thread_unregister();
 
   VALK_PASS();
@@ -407,8 +407,8 @@ void test_gc_root_scoped(VALK_TEST_ARGS()) {
   valk_gc_coordinator_init();
   valk_gc_thread_register();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-  valk_lval_t *val = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
+  valk_lval_t *val = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
   val->flags = LVAL_NUM;
 
   size_t before = valk_thread_ctx.root_stack_count;
@@ -422,7 +422,7 @@ void test_gc_root_scoped(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(valk_thread_ctx.root_stack_count == before, 
                    "Should auto-pop on scope exit");
 
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   valk_gc_thread_unregister();
 
   VALK_PASS();
@@ -444,9 +444,9 @@ void test_gc_visit_thread_roots(VALK_TEST_ARGS()) {
   valk_gc_coordinator_init();
   valk_gc_thread_register();
 
-  valk_gc_malloc_heap_t *heap = valk_gc_malloc_heap_init(10 * 1024 * 1024);
-  valk_lval_t *val1 = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
-  valk_lval_t *val2 = valk_gc_malloc_heap_alloc(heap, sizeof(valk_lval_t));
+  valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
+  valk_lval_t *val1 = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
+  valk_lval_t *val2 = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
   val1->flags = LVAL_NUM;
   val1->num = 42;
   val2->flags = LVAL_NUM;
@@ -468,7 +468,7 @@ void test_gc_visit_thread_roots(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(found_val1, "Should find val1");
   VALK_TEST_ASSERT(found_val2, "Should find val2");
 
-  valk_gc_malloc_heap_destroy(heap);
+  valk_gc_heap_destroy(heap);
   valk_gc_thread_unregister();
 
   VALK_PASS();

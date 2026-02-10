@@ -7,8 +7,8 @@
 #include <sys/mman.h>
 
 // LCOV_EXCL_BR_START - heap creation calloc/mmap failures
-valk_gc_heap2_t *valk_gc_heap2_create(sz hard_limit) {
-  valk_gc_heap2_t *heap = calloc(1, sizeof(valk_gc_heap2_t));
+valk_gc_heap_t *valk_gc_heap_create(sz hard_limit) {
+  valk_gc_heap_t *heap = calloc(1, sizeof(valk_gc_heap_t));
   if (!heap) {
     VALK_ERROR("Failed to allocate heap structure");
     return nullptr;
@@ -61,10 +61,10 @@ valk_gc_heap2_t *valk_gc_heap2_create(sz hard_limit) {
   return heap;
 }
 
-void valk_gc_heap2_destroy(valk_gc_heap2_t *heap) {
+void valk_gc_heap_destroy(valk_gc_heap_t *heap) {
   if (!heap) return;
 
-  valk_gc_tlab2_invalidate_heap(heap);
+  valk_gc_tlab_invalidate_heap(heap);
   valk_gc_unregister_heap(heap);
 
   for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
@@ -92,11 +92,11 @@ void valk_gc_heap2_destroy(valk_gc_heap2_t *heap) {
   free(heap);
 }
 
-void valk_gc_heap2_get_stats(valk_gc_heap2_t *heap, valk_gc_stats2_t *out) {
+void valk_gc_heap_get_stats(valk_gc_heap_t *heap, valk_gc_stats_t *out) {
   if (!heap || !out) return; // LCOV_EXCL_BR_LINE
 
   memset(out, 0, sizeof(*out));
-  out->used_bytes = valk_gc_heap2_used_bytes(heap);
+  out->used_bytes = valk_gc_heap_used_bytes(heap);
   out->committed_bytes = atomic_load(&heap->committed_bytes);
   out->large_object_bytes = atomic_load(&heap->large_object_bytes);
   out->hard_limit = heap->hard_limit;
@@ -112,7 +112,7 @@ void valk_gc_heap2_get_stats(valk_gc_heap2_t *heap, valk_gc_stats2_t *out) {
 
 // LCOV_EXCL_START - OOM abort is intentionally untestable
 __attribute__((noreturn))
-void valk_gc_oom_abort(valk_gc_heap2_t *heap, sz requested) {
+void valk_gc_oom_abort(valk_gc_heap_t *heap, sz requested) {
   fprintf(stderr, "\n");
   fprintf(stderr, "================================================================\n");
   fprintf(stderr, "                    FATAL: OUT OF MEMORY                        \n");
@@ -120,8 +120,8 @@ void valk_gc_oom_abort(valk_gc_heap2_t *heap, sz requested) {
   fprintf(stderr, " Requested:    %12zu bytes\n", requested);
 
   if (heap) {
-    valk_gc_stats2_t stats;
-    valk_gc_heap2_get_stats(heap, &stats);
+    valk_gc_stats_t stats;
+    valk_gc_heap_get_stats(heap, &stats);
 
     fprintf(stderr, " Used:         %12zu bytes\n", stats.used_bytes);
     fprintf(stderr, " Hard Limit:   %12zu bytes\n", stats.hard_limit);

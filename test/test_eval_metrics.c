@@ -14,25 +14,25 @@
 // Helper: Set up GC heap for test
 //-----------------------------------------------------------------------------
 typedef struct {
-  valk_gc_malloc_heap_t* heap;
+  valk_gc_heap_t* heap;
   valk_thread_context_t old_ctx;
   valk_lenv_t* env;
 } test_gc_ctx_t;
 
 static test_gc_ctx_t test_setup_gc(void) {
   test_gc_ctx_t ctx;
-  ctx.heap = valk_gc_malloc_heap_init(0);
+  ctx.heap = valk_gc_heap_create(0);
   ctx.old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void*)ctx.heap;
   valk_thread_ctx.heap = ctx.heap;
   ctx.env = valk_lenv_empty();
-  valk_gc_malloc_set_root(ctx.heap, ctx.env);
+  valk_gc_set_root(ctx.heap, ctx.env);
   return ctx;
 }
 
 static void test_teardown_gc(test_gc_ctx_t* ctx) {
   valk_thread_ctx = ctx->old_ctx;
-  valk_gc_malloc_heap_destroy(ctx->heap);
+  valk_gc_heap_destroy(ctx->heap);
 }
 
 //-----------------------------------------------------------------------------

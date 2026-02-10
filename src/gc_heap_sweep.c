@@ -7,7 +7,7 @@
 #include <sys/mman.h>
 
 // LCOV_EXCL_BR_START - pointer location search and validation
-bool valk_gc_ptr_to_location(valk_gc_heap2_t *heap, void *ptr, valk_gc_ptr_location_t *out) {
+bool valk_gc_ptr_to_location(valk_gc_heap_t *heap, void *ptr, valk_gc_ptr_location_t *out) {
   if (!heap || !ptr || !out) {
     if (out) out->is_valid = false;
     return false;
@@ -36,9 +36,9 @@ bool valk_gc_ptr_to_location(valk_gc_heap2_t *heap, void *ptr, valk_gc_ptr_locat
         }
 
         u64 page_idx = offset_in_region / list->page_size;
-        valk_gc_page2_t *page = (valk_gc_page2_t *)(base + list->region_start + page_idx * list->page_size);
+        valk_gc_page_t *page = (valk_gc_page_t *)(base + list->region_start + page_idx * list->page_size);
 
-        u8 *slots_start = valk_gc_page2_slots(page);
+        u8 *slots_start = valk_gc_page_slots(page);
         if (addr < slots_start) {
           return false;
         }
@@ -64,8 +64,8 @@ bool valk_gc_ptr_to_location(valk_gc_heap2_t *heap, void *ptr, valk_gc_ptr_locat
     valk_gc_page_list_t *list = &heap->classes[c];
     u16 slot_size = valk_gc_size_classes[c];
 
-    for (valk_gc_page2_t *page = list->all_pages; page != nullptr; page = page->next) {
-      u8 *slots_start = valk_gc_page2_slots(page);
+    for (valk_gc_page_t *page = list->all_pages; page != nullptr; page = page->next) {
+      u8 *slots_start = valk_gc_page_slots(page);
       u8 *slots_end = slots_start + page->slots_per_page * slot_size;
 
       if ((u8 *)ptr >= slots_start && (u8 *)ptr < slots_end) {
@@ -87,7 +87,7 @@ bool valk_gc_ptr_to_location(valk_gc_heap2_t *heap, void *ptr, valk_gc_ptr_locat
 // LCOV_EXCL_BR_STOP
 
 // LCOV_EXCL_BR_START - large object marking and sweep iteration
-bool valk_gc_mark_large_object(valk_gc_heap2_t *heap, void *ptr) {
+bool valk_gc_mark_large_object(valk_gc_heap_t *heap, void *ptr) {
   if (!heap || !ptr) return false;
 
   pthread_mutex_lock(&heap->large_lock);
@@ -105,15 +105,15 @@ bool valk_gc_mark_large_object(valk_gc_heap2_t *heap, void *ptr) {
   return false;
 }
 
-sz valk_gc_sweep_page2(valk_gc_page2_t *page) {
+sz valk_gc_sweep_page(valk_gc_page_t *page) {
   if (!page) return 0;
 
   sz freed = 0;
   u16 slots = page->slots_per_page;
   u16 slot_size = valk_gc_size_classes[page->size_class];
 
-  u8 *alloc_bitmap = valk_gc_page2_alloc_bitmap(page);
-  u8 *mark_bitmap = valk_gc_page2_mark_bitmap(page);
+  u8 *alloc_bitmap = valk_gc_page_alloc_bitmap(page);
+  u8 *mark_bitmap = valk_gc_page_mark_bitmap(page);
 
   u64 num_words = (slots + 63) / 64;
 
@@ -135,7 +135,7 @@ sz valk_gc_sweep_page2(valk_gc_page2_t *page) {
         u64 slot = w * 64 + bit;
 
         if (slot < slots) {
-          void *ptr = valk_gc_page2_slot_ptr(page, (u32)slot);
+          void *ptr = valk_gc_page_slot_ptr(page, (u32)slot);
 
           // LCOV_EXCL_BR_START - LVAL_REF finalizer requires integration with ref creation API
           if (slot_size >= sizeof(valk_lval_t)) {
@@ -161,7 +161,7 @@ sz valk_gc_sweep_page2(valk_gc_page2_t *page) {
   return freed;
 }
 
-sz valk_gc_sweep_large_objects(valk_gc_heap2_t *heap) {
+sz valk_gc_sweep_large_objects(valk_gc_heap_t *heap) {
   if (!heap) return 0; // LCOV_EXCL_BR_LINE
 
   sz freed = 0;
@@ -193,7 +193,7 @@ sz valk_gc_sweep_large_objects(valk_gc_heap2_t *heap) {
 // LCOV_EXCL_BR_STOP
 
 // LCOV_EXCL_BR_START - page list rebuild and reclaim iteration
-void valk_gc_rebuild_partial_lists(valk_gc_heap2_t *heap) {
+void valk_gc_rebuild_partial_lists(valk_gc_heap_t *heap) {
   if (!heap) return;
 
   for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
@@ -203,7 +203,7 @@ void valk_gc_rebuild_partial_lists(valk_gc_heap2_t *heap) {
 
     list->partial_pages = nullptr;
 
-    for (valk_gc_page2_t *page = list->all_pages; page != nullptr; page = page->next) {
+    for (valk_gc_page_t *page = list->all_pages; page != nullptr; page = page->next) {
       u32 allocated = atomic_load(&page->num_allocated);
 
       if (allocated < page->slots_per_page) {
@@ -216,7 +216,7 @@ void valk_gc_rebuild_partial_lists(valk_gc_heap2_t *heap) {
   }
 }
 
-sz valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap) {
+sz valk_gc_reclaim_empty_pages(valk_gc_heap_t *heap) {
   if (!heap) return 0;
 
   sz pages_reclaimed = 0;
@@ -226,7 +226,7 @@ sz valk_gc_reclaim_empty_pages(valk_gc_heap2_t *heap) {
 
     pthread_mutex_lock(&list->lock);
 
-    for (valk_gc_page2_t *page = list->all_pages; page != nullptr; page = page->next) {
+    for (valk_gc_page_t *page = list->all_pages; page != nullptr; page = page->next) {
       u32 allocated = atomic_load(&page->num_allocated);
 
       if (allocated == 0 && !page->reclaimed) {

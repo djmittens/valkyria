@@ -26,7 +26,7 @@ void valk_event_loop_metrics_get(uv_loop_t* loop, valk_event_loop_metrics_t* out
 }
 
 void valk_vm_metrics_collect(valk_vm_metrics_t* out,
-                              valk_gc_malloc_heap_t* heap,
+                              valk_gc_heap_t* heap,
                               struct uv_loop_s* loop) {
   if (!out) return;
   memset(out, 0, sizeof(*out));
@@ -42,8 +42,8 @@ void valk_vm_metrics_collect(valk_vm_metrics_t* out,
     out->gc_allocated_bytes = valk_gc_get_allocated_bytes_total(heap);
     out->gc_efficiency_pct = valk_gc_get_last_efficiency(heap);
 
-    valk_gc_stats2_t gc_stats;
-    valk_gc_heap2_get_stats(heap, &gc_stats);
+    valk_gc_stats_t gc_stats;
+    valk_gc_heap_get_stats(heap, &gc_stats);
     out->gc_large_object_bytes = gc_stats.large_object_bytes;
     for (int i = 0; i < VALK_VM_SIZE_CLASSES; i++) {
       out->size_class_used[i] = gc_stats.class_used_slots[i];

@@ -15,7 +15,7 @@ static void valk_lenv_init(valk_lenv_t* env);
 valk_lenv_t* valk_lenv_empty(void) {
   valk_lenv_t* res;
   if (valk_thread_ctx.heap != NULL) {
-    res = valk_gc_malloc_heap_alloc(valk_thread_ctx.heap, sizeof(valk_lenv_t));
+    res = valk_gc_heap_alloc(valk_thread_ctx.heap, sizeof(valk_lenv_t));
   } else {
     res = valk_mem_alloc(sizeof(valk_lenv_t));
   }

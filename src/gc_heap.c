@@ -16,10 +16,10 @@ u64 valk_gc_heap_next_generation(void) {
 }
 
 #define VALK_GC_MAX_LIVE_HEAPS 64
-static valk_gc_heap2_t *g_live_heaps[VALK_GC_MAX_LIVE_HEAPS];
+static valk_gc_heap_t *g_live_heaps[VALK_GC_MAX_LIVE_HEAPS];
 static pthread_mutex_t g_live_heaps_lock = PTHREAD_MUTEX_INITIALIZER;
 
-void valk_gc_register_heap(valk_gc_heap2_t *heap) {
+void valk_gc_register_heap(valk_gc_heap_t *heap) {
   pthread_mutex_lock(&g_live_heaps_lock);
   for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) { // LCOV_EXCL_BR_LINE
     if (g_live_heaps[i] == nullptr) {
@@ -31,7 +31,7 @@ void valk_gc_register_heap(valk_gc_heap2_t *heap) {
 }
 
 // LCOV_EXCL_START - heap unregister/alive check used internally by TLAB operations
-void valk_gc_unregister_heap(valk_gc_heap2_t *heap) {
+void valk_gc_unregister_heap(valk_gc_heap_t *heap) {
   pthread_mutex_lock(&g_live_heaps_lock);
   for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) {
     if (g_live_heaps[i] == heap) {
@@ -42,7 +42,7 @@ void valk_gc_unregister_heap(valk_gc_heap2_t *heap) {
   pthread_mutex_unlock(&g_live_heaps_lock);
 }
 
-static bool valk_gc_is_heap_alive(valk_gc_heap2_t *heap) {
+static bool valk_gc_is_heap_alive(valk_gc_heap_t *heap) {
   if (!heap) return false;
   pthread_mutex_lock(&g_live_heaps_lock);
   bool alive = false;
@@ -72,7 +72,7 @@ void valk_gc_page_list_init(valk_gc_page_list_t *list, u8 size_class) {
   list->page_size = valk_gc_page_total_size(size_class);
 }
 
-void valk_gc_tlab2_init(valk_gc_tlab2_t *tlab) {
+void valk_gc_tlab_init(valk_gc_tlab_t *tlab) {
   tlab->owner_heap = nullptr;
   for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     tlab->classes[c].page = nullptr;
@@ -81,7 +81,7 @@ void valk_gc_tlab2_init(valk_gc_tlab2_t *tlab) {
   }
 }
 
-void valk_gc_tlab2_abandon(valk_gc_tlab2_t *tlab) {
+void valk_gc_tlab_abandon(valk_gc_tlab_t *tlab) {
   if (!tlab) return; // LCOV_EXCL_BR_LINE
   for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     tlab->classes[c].page = nullptr;
@@ -91,13 +91,13 @@ void valk_gc_tlab2_abandon(valk_gc_tlab2_t *tlab) {
   tlab->owner_heap = nullptr;
 }
 
-void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab) {
+void valk_gc_tlab_reset(valk_gc_tlab_t *tlab) {
   if (!tlab) return; // LCOV_EXCL_BR_LINE
 
-  valk_gc_heap2_t *heap = tlab->owner_heap;
+  valk_gc_heap_t *heap = tlab->owner_heap;
 
   for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
-    valk_gc_page2_t *page = tlab->classes[c].page;
+    valk_gc_page_t *page = tlab->classes[c].page;
     u32 next = tlab->classes[c].next_slot;
     u32 limit = tlab->classes[c].limit_slot;
 
@@ -105,7 +105,7 @@ void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab) {
     if (page && heap && next < limit) {
       u32 unused = limit - next;
       valk_gc_page_list_t *list = &heap->classes[c];
-      u8 *bitmap = valk_gc_page2_alloc_bitmap(page);
+      u8 *bitmap = valk_gc_page_alloc_bitmap(page);
 
       pthread_mutex_lock(&list->lock);
       for (u32 i = next; i < limit; i++) {
@@ -125,16 +125,16 @@ void valk_gc_tlab2_reset(valk_gc_tlab2_t *tlab) {
   tlab->owner_heap = nullptr;
 }
 
-static __thread valk_gc_tlab2_t *valk_gc_local_tlab = nullptr;
+static __thread valk_gc_tlab_t *valk_gc_local_tlab = nullptr;
 
-void valk_gc_tlab2_invalidate_heap(valk_gc_heap2_t *heap) {
+void valk_gc_tlab_invalidate_heap(valk_gc_heap_t *heap) {
   if (!valk_gc_local_tlab) return;
   if (valk_gc_local_tlab->owner_heap == heap) {
-    valk_gc_tlab2_abandon(valk_gc_local_tlab);
+    valk_gc_tlab_abandon(valk_gc_local_tlab);
   }
 }
 
-static valk_gc_page2_t *valk_gc_page2_alloc(valk_gc_heap2_t *heap, u8 size_class) {
+static valk_gc_page_t *valk_gc_page_alloc(valk_gc_heap_t *heap, u8 size_class) {
   if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return nullptr; // LCOV_EXCL_BR_LINE
 
   valk_gc_page_list_t *list = &heap->classes[size_class];
@@ -170,24 +170,24 @@ static valk_gc_page2_t *valk_gc_page2_alloc(valk_gc_heap2_t *heap, u8 size_class
   }
   // LCOV_EXCL_BR_STOP
 
-  valk_gc_page2_t *page = (valk_gc_page2_t *)addr;
+  valk_gc_page_t *page = (valk_gc_page_t *)addr;
 
-  memset(page, 0, sizeof(valk_gc_page2_t));
+  memset(page, 0, sizeof(valk_gc_page_t));
   page->page_id = atomic_fetch_add(&__page_id_counter, 1);
   page->size_class = size_class;
   page->slots_per_page = slots;
   page->bitmap_bytes = bitmap_bytes;
   atomic_store(&page->num_allocated, 0);
 
-  memset(valk_gc_page2_alloc_bitmap(page), 0, bitmap_bytes);
-  memset(valk_gc_page2_mark_bitmap(page), 0, bitmap_bytes);
+  memset(valk_gc_page_alloc_bitmap(page), 0, bitmap_bytes);
+  memset(valk_gc_page_mark_bitmap(page), 0, bitmap_bytes);
 
   return page;
 }
 
 // LCOV_EXCL_BR_START - TLAB refill internal bitmap search and page management
-static u32 valk_gc_page2_find_free_slots(valk_gc_page2_t *page, u32 count) {
-  u8 *bitmap = valk_gc_page2_alloc_bitmap(page);
+static u32 valk_gc_page_find_free_slots(valk_gc_page_t *page, u32 count) {
+  u8 *bitmap = valk_gc_page_alloc_bitmap(page);
   u16 slots = page->slots_per_page;
 
   for (u32 i = 0; i < slots; i++) {
@@ -206,19 +206,19 @@ static u32 valk_gc_page2_find_free_slots(valk_gc_page2_t *page, u32 count) {
   return UINT32_MAX;
 }
 
-bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, u8 size_class) {
+bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_class) {
   if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return false;
 
   valk_gc_page_list_t *list = &heap->classes[size_class];
 
   pthread_mutex_lock(&list->lock);
 
-  valk_gc_page2_t *page = list->partial_pages;
+  valk_gc_page_t *page = list->partial_pages;
   u32 start_slot = 0;
   u32 num_slots = VALK_GC_TLAB_SLOTS;
 
   if (page) {
-    start_slot = valk_gc_page2_find_free_slots(page, num_slots);
+    start_slot = valk_gc_page_find_free_slots(page, num_slots);
     if (start_slot == UINT32_MAX) {
       list->partial_pages = page->next_partial;
       page = nullptr;
@@ -228,8 +228,8 @@ bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, u8 size_
       page->slots_per_page = list->slots_per_page;
       page->bitmap_bytes = valk_gc_bitmap_bytes(size_class);
       atomic_store(&page->num_allocated, 0);
-      memset(valk_gc_page2_alloc_bitmap(page), 0, page->bitmap_bytes);
-      memset(valk_gc_page2_mark_bitmap(page), 0, page->bitmap_bytes);
+      memset(valk_gc_page_alloc_bitmap(page), 0, page->bitmap_bytes);
+      memset(valk_gc_page_mark_bitmap(page), 0, page->bitmap_bytes);
       atomic_fetch_add(&heap->committed_bytes, list->page_size);
       page->reclaimed = false;
     }
@@ -238,7 +238,7 @@ bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, u8 size_
 
   if (!page) {
     pthread_mutex_unlock(&list->lock);
-    page = valk_gc_page2_alloc(heap, size_class);
+    page = valk_gc_page_alloc(heap, size_class);
     if (!page) return false;
     pthread_mutex_lock(&list->lock);
 
@@ -256,7 +256,7 @@ bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, u8 size_
     num_slots = page->slots_per_page - start_slot;
   }
 
-  u8 *bitmap = valk_gc_page2_alloc_bitmap(page);
+  u8 *bitmap = valk_gc_page_alloc_bitmap(page);
   for (u32 i = start_slot; i < start_slot + num_slots; i++) {
     valk_gc_bitmap_set(bitmap, i);
   }
@@ -271,7 +271,7 @@ bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, u8 size_
   }
 
   if (atomic_load(&page->num_allocated) >= page->slots_per_page) {
-    valk_gc_page2_t **pp = &list->partial_pages;
+    valk_gc_page_t **pp = &list->partial_pages;
     while (*pp && *pp != page) {
       pp = &(*pp)->next_partial;
     }
@@ -290,21 +290,21 @@ bool valk_gc_tlab2_refill(valk_gc_tlab2_t *tlab, valk_gc_heap2_t *heap, u8 size_
 }
 // LCOV_EXCL_BR_STOP
 
-static bool valk_gc_heap2_try_emergency_gc(valk_gc_heap2_t *heap, u64 needed);
+static bool valk_gc_heap_try_emergency_gc(valk_gc_heap_t *heap, u64 needed);
 
 // LCOV_EXCL_BR_START - large object mmap/malloc failures and OOM paths
-static void *valk_gc_heap2_alloc_large(valk_gc_heap2_t *heap, u64 bytes) {
+static void *valk_gc_heap_alloc_large(valk_gc_heap_t *heap, u64 bytes) {
   u64 alloc_size = (bytes + 4095) & ~4095ULL;
 
-  u64 current = valk_gc_heap2_used_bytes(heap);
+  u64 current = valk_gc_heap_used_bytes(heap);
 
   if (current + alloc_size > heap->hard_limit) {
-    if (!valk_gc_heap2_try_emergency_gc(heap, alloc_size)) {
+    if (!valk_gc_heap_try_emergency_gc(heap, alloc_size)) {
       valk_gc_oom_abort(heap, bytes);
     }
   } else if (current + alloc_size > heap->soft_limit) {
     if (!heap->in_emergency_gc && !atomic_load(&heap->gc_in_progress)) {
-      valk_gc_heap2_collect(heap);
+      valk_gc_heap_collect(heap);
     }
   }
 
@@ -330,7 +330,7 @@ static void *valk_gc_heap2_alloc_large(valk_gc_heap2_t *heap, u64 bytes) {
   pthread_mutex_unlock(&heap->large_lock);
 
   atomic_fetch_add(&heap->large_object_bytes, alloc_size);
-  u64 used = valk_gc_heap2_used_bytes(heap);
+  u64 used = valk_gc_heap_used_bytes(heap);
   sz cur_peak = atomic_load(&heap->stats.peak_usage);
   while (used > cur_peak) {
     if (atomic_compare_exchange_weak(&heap->stats.peak_usage, &cur_peak, used))
@@ -342,63 +342,63 @@ static void *valk_gc_heap2_alloc_large(valk_gc_heap2_t *heap, u64 bytes) {
 // LCOV_EXCL_BR_STOP
 
 // LCOV_EXCL_BR_START - heap alloc OOM and TLAB failure paths
-void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes) {
+void *valk_gc_heap_alloc(valk_gc_heap_t *heap, sz bytes) {
   if (bytes == 0) return nullptr;
 
   if (bytes > VALK_GC_LARGE_THRESHOLD) {
-    return valk_gc_heap2_alloc_large(heap, bytes);
+    return valk_gc_heap_alloc_large(heap, bytes);
   }
 
   u8 size_class = valk_gc_size_class(bytes);
   if (size_class == UINT8_MAX) {
-    return valk_gc_heap2_alloc_large(heap, bytes);
+    return valk_gc_heap_alloc_large(heap, bytes);
   }
 
   sz alloc_size = valk_gc_size_classes[size_class];
-  sz current = valk_gc_heap2_used_bytes(heap);
+  sz current = valk_gc_heap_used_bytes(heap);
 
   if (current + alloc_size > heap->hard_limit) {
-    if (!valk_gc_heap2_try_emergency_gc(heap, alloc_size)) {
+    if (!valk_gc_heap_try_emergency_gc(heap, alloc_size)) {
       valk_gc_oom_abort(heap, bytes);
     }
   } else if (current + alloc_size > heap->soft_limit) {
     if (!heap->in_emergency_gc && !atomic_load(&heap->gc_in_progress)) {
-      valk_gc_heap2_collect(heap);
+      valk_gc_heap_collect(heap);
     }
   }
 
   if (!valk_gc_local_tlab) {
-    valk_gc_local_tlab = malloc(sizeof(valk_gc_tlab2_t));
+    valk_gc_local_tlab = malloc(sizeof(valk_gc_tlab_t));
     if (!valk_gc_local_tlab) return nullptr;
-    valk_gc_tlab2_init(valk_gc_local_tlab);
+    valk_gc_tlab_init(valk_gc_local_tlab);
   }
 
   if (valk_gc_local_tlab->owner_heap != heap ||
       valk_gc_local_tlab->owner_generation != heap->generation) {
     if (valk_gc_local_tlab->owner_heap == heap &&
         valk_gc_local_tlab->owner_generation != heap->generation) {
-      valk_gc_tlab2_abandon(valk_gc_local_tlab);
+      valk_gc_tlab_abandon(valk_gc_local_tlab);
     } else if (valk_gc_local_tlab->owner_heap && valk_gc_is_heap_alive(valk_gc_local_tlab->owner_heap)) {
-      valk_gc_tlab2_reset(valk_gc_local_tlab);
+      valk_gc_tlab_reset(valk_gc_local_tlab);
     } else {
-      valk_gc_tlab2_abandon(valk_gc_local_tlab);
+      valk_gc_tlab_abandon(valk_gc_local_tlab);
     }
     valk_gc_local_tlab->owner_heap = heap;
     valk_gc_local_tlab->owner_generation = heap->generation;
   }
 
-  void *ptr = valk_gc_tlab2_alloc(valk_gc_local_tlab, size_class);
+  void *ptr = valk_gc_tlab_alloc(valk_gc_local_tlab, size_class);
   if (ptr) {
     memset(ptr, 0, alloc_size);
     return ptr;
   }
 
-  if (!valk_gc_tlab2_refill(valk_gc_local_tlab, heap, size_class)) {
+  if (!valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) {
     VALK_ERROR("Failed to refill TLAB for class %d", size_class);
     return nullptr;
   }
 
-  ptr = valk_gc_tlab2_alloc(valk_gc_local_tlab, size_class);
+  ptr = valk_gc_tlab_alloc(valk_gc_local_tlab, size_class);
   if (ptr) {
     memset(ptr, 0, alloc_size);
   }
@@ -406,9 +406,9 @@ void *valk_gc_heap2_alloc(valk_gc_heap2_t *heap, sz bytes) {
 }
 // LCOV_EXCL_BR_STOP
 
-void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, sz new_size) {
+void *valk_gc_heap_realloc(valk_gc_heap_t *heap, void *ptr, sz new_size) {
   if (ptr == nullptr) {
-    return valk_gc_heap2_alloc(heap, new_size);
+    return valk_gc_heap_alloc(heap, new_size);
   }
   if (new_size == 0) {
     return nullptr;
@@ -420,7 +420,7 @@ void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, sz new_size) {
     if (new_size <= old_size) {
       return ptr;
     }
-    void *new_ptr = valk_gc_heap2_alloc(heap, new_size);
+    void *new_ptr = valk_gc_heap_alloc(heap, new_size);
     if (new_ptr) { // LCOV_EXCL_BR_LINE - OOM after successful alloc
       memcpy(new_ptr, ptr, old_size);
     }
@@ -436,7 +436,7 @@ void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, sz new_size) {
       if (new_size <= old_size) {
         return ptr;
       }
-      void *new_ptr = valk_gc_heap2_alloc(heap, new_size);
+      void *new_ptr = valk_gc_heap_alloc(heap, new_size);
       if (new_ptr) { // LCOV_EXCL_BR_LINE - OOM after successful alloc
         memcpy(new_ptr, ptr, old_size);
       }
@@ -445,7 +445,7 @@ void *valk_gc_heap2_realloc(valk_gc_heap2_t *heap, void *ptr, sz new_size) {
   }
   pthread_mutex_unlock(&heap->large_lock);
 
-  VALK_WARN("valk_gc_heap2_realloc: pointer %p not found in heap", ptr);
+  VALK_WARN("valk_gc_heap_realloc: pointer %p not found in heap", ptr);
   return nullptr;
 }
 
@@ -459,7 +459,7 @@ void valk_gc_heap_reset_after_fork(void) {
 // LCOV_EXCL_STOP
 
 // LCOV_EXCL_START - emergency GC triggered at hard limit requires specific memory pressure conditions
-static bool valk_gc_heap2_try_emergency_gc(valk_gc_heap2_t *heap, u64 needed) {
+static bool valk_gc_heap_try_emergency_gc(valk_gc_heap_t *heap, u64 needed) {
   if (heap->in_emergency_gc) {
     return false;
   }
@@ -467,13 +467,13 @@ static bool valk_gc_heap2_try_emergency_gc(valk_gc_heap2_t *heap, u64 needed) {
   heap->in_emergency_gc = true;
 
   VALK_WARN("Emergency GC: need %zu bytes, used %zu / %zu",
-            needed, valk_gc_heap2_used_bytes(heap), heap->hard_limit);
+            needed, valk_gc_heap_used_bytes(heap), heap->hard_limit);
 
-  u64 reclaimed = valk_gc_heap2_collect(heap);
+  u64 reclaimed = valk_gc_heap_collect(heap);
 
   heap->in_emergency_gc = false;
 
-  u64 after = valk_gc_heap2_used_bytes(heap);
+  u64 after = valk_gc_heap_used_bytes(heap);
   if (after + needed <= heap->hard_limit) {
     VALK_INFO("Emergency GC recovered %zu bytes, allocation can proceed", reclaimed);
     return true;

@@ -285,7 +285,7 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
       sys->config.queue_capacity,
       sys->name);
   if (sys->metrics_state) {
-    sys->metrics_state->gc_heap = (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+    sys->metrics_state->gc_heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
     sys->metrics_state->scratch_arena = valk_thread_ctx.scratch;
   }
   memset(&sys->owner_registry, 0, sizeof(sys->owner_registry));
@@ -473,9 +473,9 @@ void valk_aio_set_name(valk_aio_system_t* sys, const char* name) {
   snprintf(sys->name, sizeof(sys->name), "%s", name);
 }
 
-valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys) {
+valk_gc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys) {
   if (!sys || !sys->metrics_state) return nullptr;
-  return (valk_gc_malloc_heap_t*)sys->metrics_state->gc_heap;
+  return (valk_gc_heap_t*)sys->metrics_state->gc_heap;
 }
 
 valk_mem_arena_t* valk_aio_get_scratch_arena(valk_aio_system_t* sys) {

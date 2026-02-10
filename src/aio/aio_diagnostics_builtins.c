@@ -262,10 +262,10 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json(valk_lenv_t *e, valk
   valk_process_memory_t pm = {0};
   valk_process_memory_collect(&pm);
 
-  valk_gc_malloc_heap_t *heap = valk_aio_get_gc_heap(sys);
+  valk_gc_heap_t *heap = valk_aio_get_gc_heap(sys);
   u64 gc_used = 0, gc_total = 0;
   if (heap) {
-    gc_used = valk_gc_heap2_used_bytes(heap);
+    gc_used = valk_gc_heap_used_bytes(heap);
     gc_total = heap->hard_limit;
   }
 
@@ -394,8 +394,8 @@ static valk_lval_t *valk_builtin_aio_diagnostics_state_json_compact(valk_lenv_t 
   valk_process_memory_t pm = {0};
   valk_process_memory_collect(&pm);
 
-  valk_gc_malloc_heap_t *heap = valk_aio_get_gc_heap(sys);
-  u64 gc_used = heap ? valk_gc_heap2_used_bytes(heap) : 0;
+  valk_gc_heap_t *heap = valk_aio_get_gc_heap(sys);
+  u64 gc_used = heap ? valk_gc_heap_used_bytes(heap) : 0;
 
   char buf[128];
   int n = snprintf(buf, sizeof(buf),

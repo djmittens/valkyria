@@ -33,7 +33,7 @@ void __event_loop(void *arg) {
   } else {
     valk_mem_init_malloc();
 
-    valk_gc_malloc_heap_t *gc_heap = valk_gc_malloc_heap_init(0);
+    valk_gc_heap_t *gc_heap = valk_gc_heap_create(0);
     if (!gc_heap) { // LCOV_EXCL_BR_LINE
       VALK_ERROR("Failed to create event loop GC heap");
     } else {
@@ -161,7 +161,7 @@ void __event_loop(void *arg) {
   valk_slab_free(sys->httpStreamArenas);
 
   if (sys->loop_gc_heap) {
-    valk_gc_malloc_heap_destroy(sys->loop_gc_heap);
+    valk_gc_heap_destroy(sys->loop_gc_heap);
     sys->loop_gc_heap = nullptr;
   }
 }

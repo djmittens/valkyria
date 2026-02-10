@@ -22,5 +22,5 @@ void valk_aio_set_name(valk_aio_system_t* sys, const char* name);
 void valk_aio_update_loop_metrics(valk_aio_system_t* sys);
 
 void valk_aio_update_queue_stats(valk_aio_system_t* sys);
-valk_gc_malloc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
+valk_gc_heap_t* valk_aio_get_gc_heap(valk_aio_system_t* sys);
 valk_mem_arena_t* valk_aio_get_scratch_arena(valk_aio_system_t* sys);

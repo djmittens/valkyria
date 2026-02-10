@@ -218,12 +218,12 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes) {
 
       // Allocate from heap instead - value will have LVAL_ALLOC_HEAP flag
       // and will be in GC object list, so no evacuation needed
-      valk_gc_malloc_heap_t *heap = (valk_gc_malloc_heap_t *)valk_thread_ctx.heap;
+      valk_gc_heap_t *heap = (valk_gc_heap_t *)valk_thread_ctx.heap;
       if (heap == nullptr) { // LCOV_EXCL_BR_LINE
         VALK_ERROR("Scratch overflow but no heap available!");
         abort();
       }
-      return valk_gc_malloc_heap_alloc(heap, bytes);
+      return valk_gc_heap_alloc(heap, bytes);
     }
 
     // LCOV_EXCL_BR_START - CAS retry loop
@@ -332,7 +332,7 @@ void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, sz bytes) {
     case VALK_ALLOC_MALLOC:
       return malloc(bytes);
     case VALK_ALLOC_GC_HEAP: {
-      return valk_gc_malloc_heap_alloc((valk_gc_malloc_heap_t *)self, bytes);
+      return valk_gc_heap_alloc((valk_gc_heap_t *)self, bytes);
     }
     case VALK_ALLOC_REGION: {
       return valk_region_alloc((valk_region_t *)self, bytes);
@@ -369,7 +369,7 @@ void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, sz num,
       res = calloc(num, size);
       break;
     case VALK_ALLOC_GC_HEAP:
-      res = valk_gc_malloc_heap_alloc((valk_gc_malloc_heap_t *)self, num * size);
+      res = valk_gc_heap_alloc((valk_gc_heap_t *)self, num * size);
       memset(res, 0, num * size);
       break;
     case VALK_ALLOC_REGION:
@@ -421,7 +421,7 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
       return ptr;
     }
     case VALK_ALLOC_GC_HEAP: {
-      return valk_gc_heap2_realloc((valk_gc_heap2_t *)self, ptr, new_size);
+      return valk_gc_heap_realloc((valk_gc_heap_t *)self, ptr, new_size);
     }
     case VALK_ALLOC_MALLOC:
       return realloc(ptr, new_size);
@@ -440,7 +440,7 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
         return np;
       }
       if (region->gc_heap) {
-        return valk_gc_heap2_realloc(region->gc_heap, ptr, new_size);
+        return valk_gc_heap_realloc(region->gc_heap, ptr, new_size);
       }
       return nullptr;  // LCOV_EXCL_LINE - region with no backing
     }

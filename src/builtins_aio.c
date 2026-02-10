@@ -199,9 +199,9 @@ static valk_lval_t* vm_metrics_extract_sys(valk_lval_t* a, const char* name,
   }
 
   valk_aio_system_t *sys = *out_sys;
-  valk_gc_malloc_heap_t* heap = sys && valk_aio_get_gc_heap(sys)
+  valk_gc_heap_t* heap = sys && valk_aio_get_gc_heap(sys)
     ? valk_aio_get_gc_heap(sys)
-    : (valk_gc_malloc_heap_t*)valk_thread_ctx.heap;
+    : (valk_gc_heap_t*)valk_thread_ctx.heap;
 // LCOV_EXCL_BR_STOP
 
   valk_vm_metrics_collect(out_vm, heap, sys ? valk_aio_get_event_loop(sys) : NULL);
