@@ -10,10 +10,10 @@ void test_config_defaults(VALK_TEST_ARGS()) {
   valk_aio_system_config_t cfg = valk_aio_system_config_default();
   valk_aio_system_config_resolve(&cfg);
 
-  VALK_TEST_ASSERT(cfg.max_connections == 100,
-                   "Default max_connections should be 100, got %u", cfg.max_connections);
-  VALK_TEST_ASSERT(cfg.max_concurrent_streams == 100,
-                   "Default max_concurrent_streams should be 100, got %u", cfg.max_concurrent_streams);
+  VALK_TEST_ASSERT(cfg.max_connections == 16,
+                   "Default max_connections should be 16, got %u", cfg.max_connections);
+  VALK_TEST_ASSERT(cfg.max_concurrent_streams == 32,
+                   "Default max_concurrent_streams should be 32, got %u", cfg.max_concurrent_streams);
   VALK_TEST_ASSERT(cfg.max_connections_per_client == 2,
                    "Default max_connections_per_client should be 2, got %u", cfg.max_connections_per_client);
 
@@ -23,8 +23,8 @@ void test_config_defaults(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(cfg.tcp_buffer_pool_size == expected_tcp,
                    "Default tcp_buffer_pool_size should be %u, got %u", expected_tcp, cfg.tcp_buffer_pool_size);
 
-  VALK_TEST_ASSERT(cfg.arena_size == 64 * 1024 * 1024,
-                   "Default arena_size should be 64MB, got %zu", cfg.arena_size);
+  VALK_TEST_ASSERT(cfg.arena_size == 4 * 1024 * 1024,
+                   "Default arena_size should be 4MB, got %zu", cfg.arena_size);
   VALK_TEST_ASSERT(cfg.max_request_body_size == 8 * 1024 * 1024,
                    "Default max_request_body_size should be 8MB, got %zu", cfg.max_request_body_size);
 
@@ -51,8 +51,8 @@ void test_config_derivation_streams(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(cfg.tcp_buffer_pool_size == expected_tcp,
                    "tcp_buffer_pool_size should be %u, got %u", expected_tcp, cfg.tcp_buffer_pool_size);
 
-  VALK_TEST_ASSERT(cfg.arena_pool_size >= 64 && cfg.arena_pool_size <= 1024,
-                   "arena_pool_size should be in range [64, 1024], got %u", cfg.arena_pool_size);
+  VALK_TEST_ASSERT(cfg.arena_pool_size == 10000,
+                   "arena_pool_size should be capped at 10000 for 500*50, got %u", cfg.arena_pool_size);
 
   VALK_PASS();
 }

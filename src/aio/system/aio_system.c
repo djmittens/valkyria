@@ -62,8 +62,8 @@ const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg)
 }
 
 int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
-  if (cfg->max_connections == 0) cfg->max_connections = 100;
-  if (cfg->max_concurrent_streams == 0) cfg->max_concurrent_streams = 100;
+  if (cfg->max_connections == 0) cfg->max_connections = 16;
+  if (cfg->max_concurrent_streams == 0) cfg->max_concurrent_streams = 32;
 
   if (cfg->max_handles == 0) cfg->max_handles = 2056;
   if (cfg->max_servers == 0) cfg->max_servers = 8;
@@ -79,13 +79,12 @@ int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
   }
 
   if (cfg->arena_pool_size == 0) {
-    cfg->arena_pool_size = cfg->max_connections * 4;
-    if (cfg->arena_pool_size > 1024) cfg->arena_pool_size = 1024;
-    if (cfg->arena_pool_size < 64) cfg->arena_pool_size = 64;
+    u64 derived = (u64)cfg->max_connections * cfg->max_concurrent_streams;
+    cfg->arena_pool_size = derived > 10000 ? 10000 : (u32)derived;
   }
 
   if (cfg->arena_size == 0)
-    cfg->arena_size = 64 * 1024 * 1024;
+    cfg->arena_size = 4 * 1024 * 1024;
 
   if (cfg->max_request_body_size == 0)
     cfg->max_request_body_size = 8 * 1024 * 1024;

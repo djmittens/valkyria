@@ -350,14 +350,14 @@ static void test_config_resolve_defaults(VALK_TEST_ARGS()) {
   int res = valk_aio_system_config_resolve(&cfg);
   ASSERT_EQ(res, 0);
 
-  ASSERT_EQ(cfg.max_connections, 100);
-  ASSERT_EQ(cfg.max_concurrent_streams, 100);
+  ASSERT_EQ(cfg.max_connections, 16);
+  ASSERT_EQ(cfg.max_concurrent_streams, 32);
   ASSERT_EQ(cfg.max_handles, 2056);
   ASSERT_EQ(cfg.max_servers, 8);
   ASSERT_EQ(cfg.max_clients, 8);
   ASSERT_GT(cfg.tcp_buffer_pool_size, 0);
   ASSERT_GT(cfg.arena_pool_size, 0);
-  ASSERT_EQ(cfg.arena_size, 64 * 1024 * 1024);
+  ASSERT_EQ(cfg.arena_size, 4 * 1024 * 1024);
   ASSERT_EQ(cfg.max_request_body_size, 8 * 1024 * 1024);
   ASSERT_GT(cfg.queue_capacity, 0);
   ASSERT_DOUBLE_EQ(cfg.buffer_high_watermark, 0.85f, 0.01f);
