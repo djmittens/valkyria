@@ -95,9 +95,7 @@ static void valk_async_all_settled_child_completed(valk_async_handle_t *child) {
     valk_lval_t *heap_result = valk_evacuate_to_heap(result_list);
     atomic_store_explicit(&ctx->all_settled_handle->result, heap_result, memory_order_release);
 
-    valk_async_notify_parent(ctx->all_settled_handle);
-    valk_async_notify_done(ctx->all_settled_handle);
-    valk_async_propagate_completion(ctx->all_settled_handle);
+    valk_async_handle_finish(ctx->all_settled_handle);
   }
 }
 // LCOV_EXCL_STOP

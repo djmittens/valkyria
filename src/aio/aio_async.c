@@ -218,6 +218,13 @@ void valk_async_handle_on_resource_cleanup(valk_async_handle_t *handle,
   };
 }
 
+void valk_async_handle_finish(valk_async_handle_t *handle) {
+  valk_async_notify_parent(handle);
+  valk_async_notify_done(handle);
+  valk_async_propagate_completion(handle);
+  valk_async_handle_run_resource_cleanups(handle);
+}
+
 static bool __reach_terminal(valk_async_handle_t *handle, valk_async_status_t new_status) {
   bool transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, new_status);
   if (!transitioned) {
@@ -225,10 +232,7 @@ static bool __reach_terminal(valk_async_handle_t *handle, valk_async_status_t ne
   }
   if (!transitioned) return false;
 
-  valk_async_notify_parent(handle);
-  valk_async_notify_done(handle);
-  valk_async_propagate_completion(handle);
-  valk_async_handle_run_resource_cleanups(handle);
+  valk_async_handle_finish(handle);
   return true;
 }
 

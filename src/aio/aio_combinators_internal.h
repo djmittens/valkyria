@@ -24,6 +24,7 @@ extern valk_lval_t* valk_async_status_to_sym(valk_async_status_t status);
 
 void valk_async_notify_parent(valk_async_handle_t *child);
 void valk_async_propagate_completion(valk_async_handle_t *source);
+void valk_async_handle_finish(valk_async_handle_t *handle);
 
 static inline void __sleep_timer_close_cb(uv_handle_t *handle) {
   valk_async_handle_uv_data_t *data = (valk_async_handle_uv_data_t *)handle->data;

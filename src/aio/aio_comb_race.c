@@ -56,9 +56,7 @@ static void valk_async_race_child_resolved(valk_async_handle_t *child) {
     }
   }
 
-  valk_async_notify_parent(ctx->race_handle);
-  valk_async_notify_done(ctx->race_handle);
-  valk_async_propagate_completion(ctx->race_handle);
+  valk_async_handle_finish(ctx->race_handle);
 }
 // LCOV_EXCL_STOP
 

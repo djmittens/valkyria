@@ -7,8 +7,8 @@ typedef struct {
   valk_async_handle_t *any_handle;
   valk_async_handle_t **handles;
   u64 total;
-  u64 failed_count;
-  valk_lval_t *last_error;
+  _Atomic(u64) failed_count;
+  _Atomic(valk_lval_t *) last_error;
   valk_mem_allocator_t *allocator;
 } valk_any_ctx_t;
 
@@ -44,9 +44,7 @@ static void valk_async_any_child_success(valk_async_handle_t *child) {
     }
   }
 
-  valk_async_notify_parent(ctx->any_handle);
-  valk_async_notify_done(ctx->any_handle);
-  valk_async_propagate_completion(ctx->any_handle);
+  valk_async_handle_finish(ctx->any_handle);
 }
 
 static void valk_async_any_child_failed(valk_async_handle_t *child) {
@@ -61,17 +59,15 @@ static void valk_async_any_child_failed(valk_async_handle_t *child) {
     return;
   }
 
-  ctx->failed_count++;
-  ctx->last_error = atomic_load_explicit(&child->error, memory_order_acquire);
+  u64 new_failed = atomic_fetch_add(&ctx->failed_count, 1) + 1;
+  atomic_store_explicit(&ctx->last_error, atomic_load_explicit(&child->error, memory_order_acquire), memory_order_release);
 
-  if (ctx->failed_count == ctx->total) {
+  if (new_failed == ctx->total) {
     if (!valk_async_handle_try_transition(ctx->any_handle, VALK_ASYNC_RUNNING, VALK_ASYNC_FAILED)) {
       return;
     }
-    atomic_store_explicit(&ctx->any_handle->error, ctx->last_error, memory_order_release);
-    valk_async_notify_parent(ctx->any_handle);
-    valk_async_notify_done(ctx->any_handle);
-    valk_async_propagate_completion(ctx->any_handle);
+    atomic_store_explicit(&ctx->any_handle->error, atomic_load_explicit(&ctx->last_error, memory_order_acquire), memory_order_release);
+    valk_async_handle_finish(ctx->any_handle);
   }
 }
 // LCOV_EXCL_STOP
@@ -195,8 +191,8 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
   ctx->any_handle = any_handle;
   ctx->handles = handles;
   ctx->total = count;
-  ctx->failed_count = 0;
-  ctx->last_error = NULL;
+  atomic_store(&ctx->failed_count, 0);
+  atomic_store(&ctx->last_error, NULL);
   ctx->allocator = &valk_malloc_allocator;
   any_handle->uv_handle_ptr = ctx;
   any_handle->on_child_completed = valk_async_any_child_success;

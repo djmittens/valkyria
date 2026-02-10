@@ -68,14 +68,11 @@ static void valk_async_within_child_resolved(valk_async_handle_t *child) {
     }
     valk_async_handle_cancel(within->comb.within.timeout_handle);
   } else if (child == within->comb.within.timeout_handle) {
-    atomic_store_explicit(&within->status, VALK_ASYNC_FAILED, memory_order_release);
     atomic_store_explicit(&within->error, valk_lval_err(":timeout"), memory_order_release);
     valk_async_handle_cancel(within->comb.within.source_handle);
   }
 
-  valk_async_notify_parent(within);
-  valk_async_notify_done(within);
-  valk_async_propagate_completion(within);
+  valk_async_handle_finish(within);
 }
 // LCOV_EXCL_STOP
 
@@ -194,9 +191,7 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
     valk_lval_t *result = atomic_load_explicit(&child->result, memory_order_acquire);
     atomic_store_explicit(&parent->status, VALK_ASYNC_COMPLETED, memory_order_release);
     atomic_store_explicit(&parent->result, result, memory_order_release);
-    valk_async_notify_parent(parent);
-    valk_async_notify_done(parent);
-    valk_async_propagate_completion(parent);
+    valk_async_handle_finish(parent);
     return;
   }
 
@@ -207,9 +202,7 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
     if (parent->comb.retry.current_attempt_num >= parent->comb.retry.max_attempts) {
       atomic_store_explicit(&parent->status, VALK_ASYNC_FAILED, memory_order_release);
       atomic_store_explicit(&parent->error, parent->comb.retry.last_error, memory_order_release);
-      valk_async_notify_parent(parent);
-      valk_async_notify_done(parent);
-      valk_async_propagate_completion(parent);
+      valk_async_handle_finish(parent);
       return;
     }
 
@@ -221,9 +214,7 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
     if (!timer) {
       atomic_store_explicit(&parent->status, VALK_ASYNC_FAILED, memory_order_release);
       atomic_store_explicit(&parent->error, valk_lval_err("Failed to allocate backoff timer"), memory_order_release);
-      valk_async_notify_parent(parent);
-      valk_async_notify_done(parent);
-      valk_async_propagate_completion(parent);
+      valk_async_handle_finish(parent);
       return;
     }
 
@@ -232,9 +223,7 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
       valk_async_handle_free(timer);
       atomic_store_explicit(&parent->status, VALK_ASYNC_FAILED, memory_order_release);
       atomic_store_explicit(&parent->error, valk_lval_err("Failed to allocate timer data"), memory_order_release);
-      valk_async_notify_parent(parent);
-      valk_async_notify_done(parent);
-      valk_async_propagate_completion(parent);
+      valk_async_handle_finish(parent);
       return;
     }
 
@@ -275,9 +264,7 @@ static void valk_async_retry_schedule_next(valk_async_handle_t *retry_handle) {
   if (LVAL_TYPE(result_val) != LVAL_HANDLE) {
     atomic_store_explicit(&retry_handle->status, VALK_ASYNC_FAILED, memory_order_release);
     atomic_store_explicit(&retry_handle->error, valk_lval_err("aio/retry: fn must return a handle"), memory_order_release);
-    valk_async_notify_parent(retry_handle);
-    valk_async_notify_done(retry_handle);
-    valk_async_propagate_completion(retry_handle);
+    valk_async_handle_finish(retry_handle);
     return;
   }
 

@@ -43,6 +43,7 @@ struct valk_lval_t *valk_async_handle_await(valk_async_handle_t *handle);
 struct valk_lval_t *valk_async_handle_await_timeout(valk_async_handle_t *handle, u32 timeout_ms);
 
 void valk_async_handle_run_resource_cleanups(valk_async_handle_t *handle);
+void valk_async_handle_finish(valk_async_handle_t *handle);
 
 #define VALK_ASSERT_HAS_CLEANUP(handle) \
   VALK_ASSERT((handle)->resource_cleanup_count > 0, \

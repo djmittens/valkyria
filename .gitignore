@@ -29,3 +29,7 @@ tla/states/
 # Ralph Wiggum
 build/ralph-logs/
 .tix/cache.db
+
+# Session artifacts
+session-*.md
+states/

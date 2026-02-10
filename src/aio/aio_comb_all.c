@@ -151,9 +151,7 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
       }
       iter = valk_lval_tail(iter);
     }
-    valk_async_notify_parent(all_handle);
-    valk_async_notify_done(all_handle);
-    valk_async_propagate_completion(all_handle);
+    valk_async_handle_finish(all_handle);
     return valk_lval_handle(all_handle);
   }
   // LCOV_EXCL_STOP
@@ -224,9 +222,7 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
             }
             valk_lval_t *heap_result = valk_evacuate_to_heap(result_list);
             atomic_store_explicit(&ctx->all_handle->result, heap_result, memory_order_release);
-            valk_async_notify_parent(ctx->all_handle);
-            valk_async_notify_done(ctx->all_handle);
-            valk_async_propagate_completion(ctx->all_handle);
+            valk_async_handle_finish(ctx->all_handle);
           }
         }
       }
@@ -306,9 +302,7 @@ static void valk_async_all_child_completed(valk_async_handle_t *child) {
     valk_lval_t *heap_result = valk_evacuate_to_heap(result_list);
     atomic_store_explicit(&ctx->all_handle->result, heap_result, memory_order_release);
 
-    valk_async_notify_parent(ctx->all_handle);
-    valk_async_notify_done(ctx->all_handle);
-    valk_async_propagate_completion(ctx->all_handle);
+    valk_async_handle_finish(ctx->all_handle);
   }
 }
 
@@ -331,9 +325,7 @@ static void valk_async_all_child_failed(valk_async_handle_t *child) {
     }
   }
 
-  valk_async_notify_parent(ctx->all_handle);
-  valk_async_notify_done(ctx->all_handle);
-  valk_async_propagate_completion(ctx->all_handle);
+  valk_async_handle_finish(ctx->all_handle);
 }
 
 static void valk_async_all_child_completed_with_ctx(valk_all_ctx_t *ctx, u64 idx, valk_async_handle_t *child) {
@@ -359,9 +351,7 @@ static void valk_async_all_child_completed_with_ctx(valk_all_ctx_t *ctx, u64 idx
     valk_lval_t *heap_result = valk_evacuate_to_heap(result_list);
     atomic_store_explicit(&ctx->all_handle->result, heap_result, memory_order_release);
 
-    valk_async_notify_parent(ctx->all_handle);
-    valk_async_notify_done(ctx->all_handle);
-    valk_async_propagate_completion(ctx->all_handle);
+    valk_async_handle_finish(ctx->all_handle);
   }
 }
 
@@ -383,9 +373,7 @@ static void valk_async_all_child_failed_with_ctx(valk_all_ctx_t *ctx, valk_async
     }
   }
 
-  valk_async_notify_parent(ctx->all_handle);
-  valk_async_notify_done(ctx->all_handle);
-  valk_async_propagate_completion(ctx->all_handle);
+  valk_async_handle_finish(ctx->all_handle);
 }
 // LCOV_EXCL_STOP
 

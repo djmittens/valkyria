@@ -77,8 +77,6 @@ static void valk_async_propagate_single(void *ctx) {
             } else if (inner_status == VALK_ASYNC_FAILED) {
               atomic_store_explicit(&child->status, VALK_ASYNC_FAILED, memory_order_release);
               child->error = inner->error;
-              valk_async_notify_parent(child);
-              valk_async_notify_done(child);
             } else if (inner_status == VALK_ASYNC_CANCELLED) {
               atomic_store_explicit(&child->status, VALK_ASYNC_CANCELLED, memory_order_release);
             } else {
